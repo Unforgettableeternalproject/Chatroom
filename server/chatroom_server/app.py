@@ -214,20 +214,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchall()
         return {"room": dict(room), "participants": [dict(m) for m in members]}
 
-    @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
-    async def archive_room(room_id: str):
-        await _room_or_404(room_id)
+    async def _archive(room_id: str, reason: str) -> None:
         db = app.state.db
+        # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
+        await _post_message(room_id, None, reason, kind="system")
         await db.execute(
             "UPDATE room SET status='archived', archived_at=? WHERE id=?", (_now(), room_id)
         )
         await db.commit()
         await events.notify(room_id)
+
+    @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
+    async def archive_room(room_id: str):
+        await _room_or_404(room_id)
+        await _archive(room_id, "聊天室已被手動封存")
         return {"ok": True}
 
     @app.post("/api/rooms/{room_id}/unarchive", dependencies=[Depends(require_auth)])
     async def unarchive_room(room_id: str):
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
+        if room["status"] == "active":
+            return {"ok": True, "already_active": True}
         db = app.state.db
         # 更新 activated_at：sweeper 只看解封後才加入的 agent，避免解封立即被封回
         await db.execute(
@@ -235,7 +242,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             (_now(), room_id),
         )
         await db.commit()
-        return {"ok": True}
+        await _post_message(room_id, None, "聊天室已解除封存", kind="system")
+        return {"ok": True, "already_active": False}
 
     # ---------- 成員 ----------
 
@@ -562,12 +570,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     )
                 ).fetchall()
                 for r in empty:
-                    await db.execute(
-                        "UPDATE room SET status='archived', archived_at=? WHERE id=?",
-                        (_now(), r["id"]),
-                    )
-                    await db.commit()
-                    await events.notify(r["id"])
+                    await _archive(r["id"], "聊天室內已無 agent，自動封存")
             except Exception:  # sweeper 絕不因單次錯誤而死
                 pass
 

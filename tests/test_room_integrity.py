@@ -133,3 +133,24 @@ async def test_archived_room_semantics(tmp_path):
             assert (
                 await client.post(f"/api/rooms/{room_id}/leave", headers=headers)
             ).status_code == 200
+
+
+async def test_archive_unarchive_system_messages_and_idempotency(tmp_path):
+    """archive/unarchive 留下 system 時間軸標記；對 active 房解封為冪等。"""
+    app, client = await _make_client(tmp_path, "sysmsg")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            await _join(client, room_id, "s1")
+
+            r = await client.post(f"/api/rooms/{room_id}/unarchive")
+            assert r.json()["already_active"] is True
+
+            await client.post(f"/api/rooms/{room_id}/archive")
+            await client.post(f"/api/rooms/{room_id}/unarchive")
+            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            contents = [m["content"] for m in msgs if m["kind"] == "system"]
+            assert "聊天室已被手動封存" in contents
+            assert "聊天室已解除封存" in contents
+            # 冪等解封不會多留一則訊息
+            assert contents.count("聊天室已解除封存") == 1
