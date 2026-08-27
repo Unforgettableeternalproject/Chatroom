@@ -11,7 +11,9 @@ import json
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import (
+    Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field
 
 from .config import Config
@@ -433,6 +435,78 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(404, "assignment not found or already resolved")
         await db.commit()
         return {"ok": True}
+
+    # ---------- WebSocket（UI 即時通道） ----------
+
+    @app.websocket("/ws")
+    async def ws_endpoint(ws: WebSocket):
+        """UI 即時通道。
+
+        客戶端指令（JSON）：
+            {"type": "subscribe", "room_id": "...", "after_seq": 0}
+            {"type": "unsubscribe", "room_id": "..."}
+            {"type": "ping"}
+        伺服器事件：
+            {"type": "messages", "room_id", "room_status", "messages": [...]}
+            {"type": "pong"}
+        """
+        if cfg.api_token and ws.query_params.get("token") != cfg.api_token:
+            await ws.close(code=4401)
+            return
+        await ws.accept()
+        db = app.state.db
+        send_lock = asyncio.Lock()  # 多房間 pump 併發送出時避免交錯
+        pumps: dict[str, asyncio.Task] = {}
+
+        async def pump(room_id: str, after_seq: int) -> None:
+            last = after_seq
+            while True:
+                rows = await (
+                    await db.execute(
+                        "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq"
+                        " LIMIT 200",
+                        (room_id, last),
+                    )
+                ).fetchall()
+                if rows:
+                    msgs = await _message_rows_to_json(rows, db)
+                    last = msgs[-1]["seq"]
+                    room = await (
+                        await db.execute(
+                            "SELECT status FROM room WHERE id=?", (room_id,)
+                        )
+                    ).fetchone()
+                    async with send_lock:
+                        await ws.send_json({
+                            "type": "messages", "room_id": room_id,
+                            "room_status": room["status"] if room else None,
+                            "messages": msgs,
+                        })
+                else:
+                    await events.wait(room_id, 30.0)
+
+        try:
+            while True:
+                data = await ws.receive_json()
+                kind = data.get("type")
+                if kind == "subscribe":
+                    rid = data["room_id"]
+                    if rid not in pumps:
+                        pumps[rid] = asyncio.create_task(
+                            pump(rid, int(data.get("after_seq", 0)))
+                        )
+                elif kind == "unsubscribe":
+                    task = pumps.pop(data.get("room_id", ""), None)
+                    if task:
+                        task.cancel()
+                elif kind == "ping":
+                    async with send_lock:
+                        await ws.send_json({"type": "pong"})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            for task in pumps.values():
+                task.cancel()
 
     # ---------- Presence sweeper ----------
 
