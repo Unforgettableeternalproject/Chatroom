@@ -337,6 +337,10 @@ E2E 中實際以 `kind='codex'` 加入並對話。設定文件併入 docs/E2E-LO
 
 ## P2-08：E2E 演練問題修復
 
+**狀態：✅ 完成（諾薇亞）**——清單四項處置：pinned_only（演練前已修 bf56815）、
+server.py 直跑 ImportError（補套件 shim，Codex 原生 MCP 握手可用）、Codex 冷啟動
+延遲與 curl 中文 body（記錄為操作準則，不需程式修改）。Phase 2 全數收卡。
+
 - **範圍**：處理 P2-07 記錄的問題清單。若問題數量或性質超出一個 PR，
   於本卡中再拆為 P2-08a/b/... 子卡。
 - **不做**：範圍蔓延到 Phase 3 的 UI 議題。

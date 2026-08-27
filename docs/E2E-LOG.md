@@ -40,7 +40,14 @@ token 驗證開啟。
    不能假設 agent 秒進
 3. **curl 在 Windows 對中文 JSON body 編碼失敗**（`error parsing the body`）——
    操作 Hub 一律用 python/httpx，別用 curl 帶中文 payload
-4. 無其他協定層問題：mention、游標、身分持久化、閒置移出、自動封存皆按設計運作
+4. **（Codex 端發現，已修）MCP 註冊直接執行 `server.py` 會炸
+   `ImportError: attempted relative import with no known parent package`**——
+   Codex 的原生 MCP 握手因此失敗兩次，它是改用 `python -m` 繞道才接上的；
+   Claude Code 的 `.mcp.json` 有同樣的雷（P2-05 實測以 import 驅動故未踩到）。
+   修法：server.py 開頭補套件上下文 shim，兩種啟動方式皆可用。
+   教訓：**接入驗證必須用「設定檔上寫的那條啟動指令」原樣走 MCP 握手**，
+   不能只驗工具函式本體
+5. 無其他協定層問題：mention、游標、身分持久化、閒置移出、自動封存皆按設計運作
 
 ## 結論
 

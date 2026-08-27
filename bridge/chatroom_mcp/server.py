@@ -22,14 +22,21 @@ from __future__ import annotations
 
 import functools
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from mcp.server.mcpserver import MCPServer
 
-from .hub import HubClient, HubError
-from .state import BridgeState
+# MCP 設定常以「python server.py」直接執行本檔，此時沒有套件上下文，
+# 相對匯入會炸 ImportError——補上父目錄與 __package__ 讓兩種啟動方式都能用
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    __package__ = "chatroom_mcp"
+
+from .hub import HubClient, HubError  # noqa: E402
+from .state import BridgeState  # noqa: E402
 
 
 def _session_key() -> str:
