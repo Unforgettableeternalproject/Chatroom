@@ -141,6 +141,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         reply_to: str | None = None,
     ) -> dict:
         db = app.state.db
+        # reply 目標必須存在且屬於同一房間，否則會把他房的內容洩進本房時間軸
+        if reply_to is not None:
+            target = await (
+                await db.execute(
+                    "SELECT 1 FROM message WHERE id=? AND room_id=?", (reply_to, room_id)
+                )
+            ).fetchone()
+            if target is None:
+                raise _err(422, "reply_target_not_found",
+                           "reply_to 指向的訊息不存在或不在這個房間")
         # 以 room.next_seq 發放房內序號（單一寫入者事務內遞增，避免併發重號）
         cur = await db.execute(
             "UPDATE room SET next_seq = next_seq + 1 WHERE id=? RETURNING next_seq - 1",
@@ -174,8 +184,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 orig = await (
                     await db.execute(
                         "SELECT m.content, m.deleted, p.display_name FROM message m"
-                        " LEFT JOIN participant p ON p.id=m.sender_id WHERE m.id=?",
-                        (r["reply_to"],),
+                        " LEFT JOIN participant p ON p.id=m.sender_id"
+                        " WHERE m.id=? AND m.room_id=?",  # 寫入已驗同房，這裡是縱深防禦
+                        (r["reply_to"], r["room_id"]),
                     )
                 ).fetchone()
                 if orig:
