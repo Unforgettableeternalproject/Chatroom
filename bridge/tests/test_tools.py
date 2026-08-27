@@ -247,6 +247,18 @@ def test_pinned_only_does_not_advance_cursor(fake_hub):
     assert srv.state().last_seq(ROOM) == 0
 
 
+def test_pinned_only_reads_whole_room_not_from_cursor(fake_hub):
+    """P2-05 實測抓到的 bug：游標推進後，比游標舊的釘選要仍然看得到。"""
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/messages", {"messages": [{"seq": 2, "pinned": True}]}
+    )
+    srv.state().set_last_seq(ROOM, 9)  # 游標已在釘選訊息之後
+    result = srv.chatroom_read(ROOM, pinned_only=True)
+    assert result["ok"] is True
+    assert result["after_seq"] == 0  # 釘選牆從頭掃整個房間
+    assert srv.state().last_seq(ROOM) == 9  # 且不動游標
+
+
 def test_wait_advances_cursor_from_last_seq(fake_hub):
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",

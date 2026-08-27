@@ -223,11 +223,16 @@ def chatroom_read(
     """讀取聊天室訊息（增量）。
 
     ``after_seq`` 省略時自動沿用本機記住的讀取游標，連續呼叫不重複也不遺漏；
-    想重讀歷史時明確傳 0。``pinned_only=true`` 只看釘選訊息，這種讀取**不會**
-    推進游標（否則會跳過未釘選的訊息）。
+    想重讀歷史時明確傳 0。``pinned_only=true`` 只看釘選訊息——這種讀取預設從
+    頭掃整個房間（釘選牆語意，不從游標起算），也**不會**推進游標
+    （否則會跳過未釘選的訊息）。
     回傳 ``messages`` 與 ``next_after_seq``（下次可用的游標位置）。
     """
-    effective = state().last_seq(room_id) if after_seq is None else after_seq
+    if after_seq is not None:
+        effective = after_seq
+    else:
+        # 釘選牆要看整房的釘選；游標只服務一般增量讀取
+        effective = 0 if pinned_only else state().last_seq(room_id)
     data = _room_request(
         room_id,
         "GET",

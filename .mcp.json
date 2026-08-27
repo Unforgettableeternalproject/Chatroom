@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "chatroom": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["bridge/chatroom_mcp/server.py"],
+      "env": {
+        "CHATROOM_URL": "http://127.0.0.1:8787",
+        "CHATROOM_TOKEN": "${CHATROOM_TOKEN}",
+        "CHATROOM_AGENT_KIND": "claude"
+      }
+    }
+  }
+}
