@@ -67,11 +67,30 @@ CREATE TABLE IF NOT EXISTS assignment (
 CREATE INDEX IF NOT EXISTS idx_assignment_target ON assignment(target_session_key, status);
 """
 
+# 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
+# 這裡列出各版本新增的欄位，open_db 時缺哪補哪（可重入）。
+# 注意：ALTER TABLE ADD COLUMN 的 NOT NULL 欄位必須帶 DEFAULT。
+MIGRATIONS: list[tuple[str, str, str]] = [
+    # (table, column, 完整欄位定義)
+    ("room", "activated_at", "activated_at TEXT"),
+    ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
+]
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """為舊版 DB 補上後續版本新增的欄位（冪等）。"""
+    for table, column, ddl in MIGRATIONS:
+        rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+        existing = {r["name"] for r in rows}
+        if column not in existing:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
 
 async def open_db(path: str) -> aiosqlite.Connection:
-    """開啟資料庫並確保 schema 存在。"""
+    """開啟資料庫並確保 schema 存在（含舊版 DB 的欄位升級）。"""
     db = await aiosqlite.connect(path)
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
+    await _migrate(db)
     await db.commit()
     return db
