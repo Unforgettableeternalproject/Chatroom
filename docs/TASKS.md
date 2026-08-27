@@ -122,6 +122,8 @@
 
 ## P1-06：訊息分頁邊界與 `has_more`
 
+**狀態：✅ 完成（諾薇亞，aaf73f4）**——互斥的 after_seq/before_seq、非法 limit 一律 422。
+
 - **範圍**：`GET /api/rooms/{id}/messages` 補上分頁契約——回傳
   `has_more` / `next_after_seq`；新增 `before_seq` 支援往回捲（UI 載入歷史）；
   `limit` 上下界與非法值處理；`updates` 內硬編碼的 `LIMIT 200` 抽成設定。
@@ -137,6 +139,8 @@
 
 ## P1-07：Assignment 過期機制
 
+**狀態：✅ 完成（諾薇亞，aaf73f4）**
+
 - **範圍**：`assignment.status` 定義了 `expired` 但沒有任何程式碼會產生它。
   在 sweeper 內加入：pending 超過 `CHATROOM_ASSIGNMENT_TTL`（預設 24h）→ `expired`。
   `GET /api/assignments` 明確只回 pending。
@@ -150,6 +154,8 @@
 - **規模**：S
 
 ## P1-08：認證與錯誤回應一致化
+
+**狀態：✅ 完成（諾薇亞，aaf73f4）**——錯誤格式定案：沿用 FastAPI 預設 `{"detail": ...}`。
 
 - **範圍**：統一錯誤格式（`{"error": {"code", "message"}}` 或明確沿用 FastAPI
   預設但補齊語意）；補齊 token 驗證測試；`api_token` 為空時在啟動 log 明確警告
@@ -165,6 +171,8 @@
 
 ## P1-09：結構化日誌
 
+**狀態：✅ 完成（諾薇亞，aaf73f4）**——sweeper 抽出 `_sweep_once()`，P1-02 的殘項一併補測。
+
 - **範圍**：導入 `logging`，取代 sweeper 中的裸 `except Exception: pass`；
   記錄請求層級的關鍵事件（join / leave / archive / sweep 結果 / WS 連斷）；
   log level 由環境變數控制。
@@ -178,6 +186,16 @@
 - **規模**：S
 
 ## P1-10：Hub 測試覆蓋補完與 CI 腳本
+
+**狀態：✅ 完成（諾薇亞）**——28 tests，`server/chatroom_server` 覆蓋率 94%（app.py 96%）；
+一鍵腳本 `scripts/test.ps1 [-Coverage]`。
+
+## P1-11（追加）：既有訊息變更的推播傳遞（奈也 R-4）
+
+**狀態：✅ 完成（諾薇亞，b4c8652）**——`message.update_seq` 與訊息 seq 共用房間計數器，
+updates/WS 增量查詢改看 `max(seq, update_seq)`，釘選/軟刪除會推播到所有 client。
+同 commit 補齊奈也盤點的契約缺口：房間指派列表端點、房間列表 last_seq/last_activity_at、
+reply_preview 原文摘要。（他點名的 `before_seq` 缺口在他讀碼當下已由 P1-06 補上。）
 
 - **範圍**：補齊命名池（無 preferred_name、名字池耗盡）、long-poll 逾時路徑、
   重入後 `last_seen_at` 更新、軟刪除訊息在 `updates` 中的呈現等未覆蓋分支；
