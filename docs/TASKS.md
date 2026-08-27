@@ -216,6 +216,10 @@ reply_preview 原文摘要。（他點名的 `before_seq` 缺口在他讀碼當�
 
 ## P2-01：Bridge 補齊指派相關工具
 
+**狀態：✅ 完成（布萊絲，5c664a5）**——與卡面一處偏離：`chatroom_list_rooms` 的
+pending 指派改由 `/api/assignments` 供應，因為 `/api/rooms` 回的是 assignment
+原始列（沒有 room_name）。該端點失敗時會退回精簡版，不讓列房間整個失敗。
+
 - **範圍**：新增 `chatroom_assignments`（查自己的 pending 指派）、
   `chatroom_resolve_assignment`（accept / decline）、`chatroom_heartbeat`。
   工具描述用繁體中文寫清楚使用時機，讓 agent 知道何時該呼叫。
@@ -229,6 +233,10 @@ reply_preview 原文摘要。（他點名的 `before_seq` 缺口在他讀碼當�
 
 ## P2-02：Bridge 錯誤處理與友善訊息
 
+**狀態：✅ 完成（布萊絲，5c664a5）**——成功回傳一併加上 `"ok": true`，讓 agent
+只需檢查一個欄位；身分類失效另附 `"need_rejoin": true`。驗收 1 的「Hub 未啟動」
+以 `MockTransport` 拋 `httpx.ConnectError` 模擬，未起真伺服器。
+
 - **範圍**：目前一律 `raise_for_status()`，agent 只看到 HTTP 例外堆疊。
   改為捕捉並回傳結構化結果（`{"ok": false, "reason": "房間已封存，無法發言"}`），
   涵蓋 401 / 403 / 404 / 409 / 連線失敗 / 逾時。
@@ -241,6 +249,11 @@ reply_preview 原文摘要。（他點名的 `before_seq` 缺口在他讀碼當�
 - **規模**：M
 
 ## P2-03：Bridge 的 cursor 與身分續存
+
+**狀態：✅ 完成（布萊絲，5c664a5）**——補充兩條卡面沒寫但必要的規則：游標只前進
+不後退（明確傳 `after_seq=0` 重讀歷史不會把游標倒退），以及 `pinned_only` 讀取
+不推進游標（否則中間未釘選的訊息會永遠讀不到）。狀態檔損毀會改名為
+`state.json.corrupt` 保留現場再重建，而非直接覆寫。
 
 - **範圍**：`_identities` 只活在進程記憶體中，bridge 重啟即失去房間身分；
   `after_seq` 完全交給 agent 記憶，容易漏讀或重讀。
@@ -256,6 +269,10 @@ reply_preview 原文摘要。（他點名的 `before_seq` 缺口在他讀碼當�
 - **規模**：M
 
 ## P2-04：Bridge 打包與啟動入口
+
+**狀態：✅ 完成（布萊絲，1912fb0）**——`bridge/pyproject.toml`（hatchling）+
+console script `chatroom-mcp`，已於乾淨 venv 驗證安裝與 entry point 載入。
+相依採帶主版本上界的區間而非 `==`，避免與根目錄 `requirements.txt` 打架。
 
 - **範圍**：加上 `pyproject.toml`（或 `bridge/pyproject.toml`）與 console script
   entry point，讓 MCP 設定能以單一指令啟動；釘住相依版本。
