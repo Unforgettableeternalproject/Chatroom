@@ -345,6 +345,14 @@ console script `chatroom-mcp`，已於乾淨 venv 驗證安裝與 entry point �
 
 ## P3-01：Flutter 開發環境安裝與驗證
 
+**狀態：✅ 完成（派翠西亞）**——Flutter 3.47.1 stable @ `C:\Users\Bernie\dev\flutter`
+（官方 zip；winget 會與 `flutter upgrade` 打架故不用）。Windows desktop 實測可
+release build；Android toolchain 刻意未裝。詳見 docs/SETUP-FLUTTER.md。
+⚠️ 踩坑兩則：HKCU PATH 是 REG_EXPAND_SZ，不可用 setx（1024 截斷）或
+SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
+`No CMAKE_CXX_COMPILER` 或 `FTK1011` 先懷疑路徑超過 MAX_PATH（LongPathsEnabled
+救不了 MSBuild FileTracker），不是工具鏈問題。
+
 - **範圍**：在 Windows 安裝 Flutter SDK（stable channel）、設定 PATH、
   安裝所需 toolchain（Windows desktop 一定要；Android 視是否要上手機而定），
   執行 `flutter doctor` 直到無阻斷性問題；把安裝步驟與版本寫入 `docs/SETUP-FLUTTER.md`。
