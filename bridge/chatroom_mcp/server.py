@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 HUB_URL = os.environ.get("CHATROOM_URL", "http://127.0.0.1:8787")
 TOKEN = os.environ.get("CHATROOM_TOKEN", "")
@@ -38,7 +38,7 @@ def _session_key() -> str:
 SESSION_KEY = _session_key()
 AGENT_KIND = os.environ.get("CHATROOM_AGENT_KIND", "other")
 
-mcp = FastMCP("chatroom")
+mcp = MCPServer("chatroom")
 # room_id -> participant_id（本進程生命週期內的房間身分）
 _identities: dict[str, str] = {}
 
