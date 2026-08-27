@@ -237,7 +237,8 @@ def chatroom_read(
     )
     messages = data.get("messages", [])
     if messages and not pinned_only:
-        state().set_last_seq(room_id, messages[-1]["seq"])
+        # P1-06 後 Hub 回傳權威 next_after_seq；缺欄位時（舊版 Hub）退回自算
+        state().set_last_seq(room_id, data.get("next_after_seq", messages[-1]["seq"]))
     data["after_seq"] = effective
     data["next_after_seq"] = state().last_seq(room_id) if not pinned_only else effective
     return data

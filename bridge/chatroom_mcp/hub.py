@@ -5,7 +5,8 @@ bridge 的唯一職責是把 Hub 的 HTTP 語意翻成 agent 看得懂的話。�
 也可能誤以為是自己的工具壞了。這裡把所有失敗收斂成 :class:`HubError`，
 由 server 層轉成 ``{"ok": false, "reason": "<繁中說明>"}``。
 
-錯誤格式契約：Hub 沿用 FastAPI 預設的 ``{"detail": ...}``，本模組據此轉譯。
+錯誤格式契約：Hub 的 detail 為 ``{"code", "message"}``——轉譯一律以機器可讀的
+``code`` 為準；字串比對只是對舊版 Hub（純字串 detail）的退路，不得再擴充。
 """
 
 from __future__ import annotations
@@ -45,9 +46,11 @@ class HubError(Exception):
 
 
 def _detail_text(detail: Any) -> str:
-    """把 FastAPI 的 detail（字串或驗證錯誤陣列）壓成一行字。"""
+    """把 FastAPI 的 detail（code/message 物件、字串或驗證錯誤陣列）壓成一行字。"""
     if detail is None:
         return ""
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("code") or detail)
     if isinstance(detail, str):
         return detail
     if isinstance(detail, list):
@@ -63,12 +66,16 @@ def _detail_text(detail: Any) -> str:
 
 
 def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
-    """把 HTTP 狀態碼 + detail 轉成有行動指引的中文說明。"""
+    """把 HTTP 狀態碼 + detail 轉成有行動指引的中文說明。
+
+    以 detail["code"] 為判斷依據；純字串 detail 走子字串退路（舊版 Hub）。
+    """
+    code = detail.get("code") if isinstance(detail, dict) else None
     text = _detail_text(detail)
     low = text.lower()
 
     if status == 401:
-        if "participant" in low:
+        if code == "participant_header_required" or (code is None and "participant" in low):
             return HubError(
                 "尚未取得房間身分：請先用 chatroom_join 加入該房間再試一次。",
                 status=status, detail=detail, identity_invalid=True,
@@ -80,7 +87,7 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
         )
 
     if status == 403:
-        if "does not belong" in low:
+        if code == "participant_wrong_room" or (code is None and "does not belong" in low):
             return HubError(
                 "這個身分不屬於指定的房間；同一個 participant_id 不能跨房使用，"
                 "請對該房間重新呼叫 chatroom_join。",
@@ -93,17 +100,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
         )
 
     if status == 404:
-        if "room" in low:
+        if code == "room_not_found" or (code is None and "room" in low):
             return HubError(
                 "找不到這個聊天室：room_id 可能有誤，或房間已被刪除。"
                 "可用 chatroom_list_rooms 確認現有房間。",
                 status=status, detail=detail,
             )
-        if "message" in low:
+        if code == "message_not_found" or (code is None and "message" in low):
             return HubError(
                 "找不到這則訊息：message_id 可能有誤。", status=status, detail=detail
             )
-        if "assignment" in low:
+        if code == "assignment_not_found" or (code is None and "assignment" in low):
             return HubError(
                 "找不到這筆指派，或它已經被處理過了。"
                 "可用 chatroom_assignments 重新確認待處理清單。",
@@ -113,7 +120,7 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                         status=status, detail=detail)
 
     if status == 409:
-        if "archiv" in low:
+        if code == "room_archived" or (code is None and "archiv" in low):
             return HubError(
                 "這個聊天室已封存，只能讀取、不能寫入。"
                 "若確定要繼續使用，需由人類在 UI 或 API 端解除封存。",

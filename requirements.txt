@@ -1,4 +1,4 @@
-# Chatroom Hub + MCP Bridge 依賴（Python 3.12，安裝於專案自帶 .venv）
+﻿# Chatroom Hub + MCP Bridge 依賴（Python 3.12，安裝於專案自帶 .venv）
 fastapi
 uvicorn[standard]
 aiosqlite

@@ -34,6 +34,12 @@ def _uid() -> str:
     return uuid.uuid4().hex
 
 
+def _err(status: int, code: str, message: str) -> HTTPException:
+    """機器可讀錯誤：detail 為 {"code", "message"}，code 是穩定契約，
+    message 僅供人讀——client 不得對 message 做字串比對。"""
+    return HTTPException(status, {"code": code, "message": message})
+
+
 # ---------- 請求模型 ----------
 
 class RoomCreate(BaseModel):
@@ -91,7 +97,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not cfg.api_token:
             return
         if authorization != f"Bearer {cfg.api_token}":
-            raise HTTPException(401, "invalid token")
+            raise _err(401, "invalid_token", "token 無效或未提供")
 
     # ---------- 內部工具 ----------
 
@@ -99,14 +105,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         row = await (await db.execute("SELECT * FROM room WHERE id=?", (room_id,))).fetchone()
         if row is None:
-            raise HTTPException(404, "room not found")
+            raise _err(404, "room_not_found", "找不到這個聊天室")
         if not allow_archived and row["status"] != "active":
-            raise HTTPException(409, "room is archived")
+            raise _err(409, "room_archived", "聊天室已封存，唯讀")
         return row
 
     async def _participant(participant_id: str | None, room_id: str | None = None):
         if not participant_id:
-            raise HTTPException(401, "X-Participant-Id header required")
+            raise _err(401, "participant_header_required",
+                       "此端點需要 X-Participant-Id 標頭")
         db = app.state.db
         row = await (
             await db.execute(
@@ -114,10 +121,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchone()
         if row is None:
-            raise HTTPException(403, "participant not active")
+            raise _err(403, "participant_not_active",
+                       "身分已失效（可能因閒置被移出房間），請重新加入")
         # participant 是房間層級身分，不可跨房使用
         if room_id is not None and row["room_id"] != room_id:
-            raise HTTPException(403, "participant does not belong to this room")
+            raise _err(403, "participant_wrong_room", "此身分不屬於這個房間")
         await db.execute(
             "UPDATE participant SET last_seen_at=? WHERE id=?", (_now(), participant_id)
         )
@@ -235,9 +243,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         rooms = [dict(r) for r in rows]
         pending = []
         if session_key:
+            # 與 GET /api/assignments 同形（含房名），client 不必打兩個端點
             arows = await (
                 await db.execute(
-                    "SELECT * FROM assignment WHERE target_session_key=? AND status='pending'",
+                    "SELECT a.*, r.name AS room_name, r.topic AS room_topic"
+                    " FROM assignment a JOIN room r ON r.id=a.room_id"
+                    " WHERE a.target_session_key=? AND a.status='pending'",
                     (session_key,),
                 )
             ).fetchall()
@@ -371,7 +382,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         兩者互斥；回傳一律以 seq 遞增排列。"""
         await _room_or_404(room_id, allow_archived=True)
         if before_seq is not None and after_seq:
-            raise HTTPException(422, "after_seq 與 before_seq 不可同時使用")
+            raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
         db = app.state.db
         cond = "room_id=?"
         params: list = [room_id]
@@ -441,7 +452,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.execute("SELECT room_id FROM message WHERE id=?", (message_id,))
         ).fetchone()
         if row is None:
-            raise HTTPException(404, "message not found")
+            raise _err(404, "message_not_found", "找不到這則訊息")
         return row["room_id"]
 
     @app.post("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
@@ -527,7 +538,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (body.status, _now(), assignment_id),
         )
         if await cur.fetchone() is None:
-            raise HTTPException(404, "assignment not found or already resolved")
+            raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
         await db.commit()
         return {"ok": True}
 

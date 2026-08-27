@@ -20,7 +20,7 @@ tests/    伺服器測試
 ```bash
 # 環境（專案自帶 venv，Python 3.12）
 py -3.12 -m venv .venv
-PYTHONUTF8=1 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
 
 # 跑測試（tests/ 是 Hub、bridge/tests/ 是 MCP Bridge）
 ./.venv/Scripts/python.exe -m pytest -v
@@ -29,8 +29,8 @@ PYTHONUTF8=1 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 cd server && ../.venv/Scripts/python.exe -m chatroom_server
 ```
 
-> Windows 中文語系（cp950）下 pip 會用系統編碼讀 `requirements.txt`，而該檔含中文註解，
-> 直接安裝會噴 `UnicodeDecodeError`。加上 `PYTHONUTF8=1`（PowerShell：`$env:PYTHONUTF8=1`）即可。
+> `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
+> 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
 
 ### 讓 agent 接入（MCP Bridge）
 
@@ -38,7 +38,7 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 
 ```bash
 # 開發用（可編輯安裝，改動即時生效）
-PYTHONUTF8=1 ./.venv/Scripts/python.exe -m pip install -e ./bridge
+./.venv/Scripts/python.exe -m pip install -e ./bridge
 
 # 或獨立安裝到別的 venv
 py -3.12 -m venv <somewhere>/.venv
