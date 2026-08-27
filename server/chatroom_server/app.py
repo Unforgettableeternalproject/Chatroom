@@ -96,7 +96,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(409, "room is archived")
         return row
 
-    async def _participant(participant_id: str | None):
+    async def _participant(participant_id: str | None, room_id: str | None = None):
         if not participant_id:
             raise HTTPException(401, "X-Participant-Id header required")
         db = app.state.db
@@ -107,6 +107,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise HTTPException(403, "participant not active")
+        # participant 是房間層級身分，不可跨房使用
+        if room_id is not None and row["room_id"] != room_id:
+            raise HTTPException(403, "participant does not belong to this room")
         await db.execute(
             "UPDATE participant SET last_seen_at=? WHERE id=?", (_now(), participant_id)
         )
@@ -167,9 +170,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def create_room(body: RoomCreate):
         db = app.state.db
         room_id = _uid()
+        now = _now()
         await db.execute(
-            "INSERT INTO room (id, name, topic, created_at) VALUES (?,?,?,?)",
-            (room_id, body.name, body.topic, _now()),
+            "INSERT INTO room (id, name, topic, created_at, activated_at) VALUES (?,?,?,?,?)",
+            (room_id, body.name, body.topic, now, now),
         )
         await db.commit()
         return {"id": room_id, "name": body.name, "topic": body.topic, "status": "active"}
@@ -225,8 +229,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def unarchive_room(room_id: str):
         await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
+        # 更新 activated_at：sweeper 只看解封後才加入的 agent，避免解封立即被封回
         await db.execute(
-            "UPDATE room SET status='active', archived_at=NULL WHERE id=?", (room_id,)
+            "UPDATE room SET status='active', archived_at=NULL, activated_at=? WHERE id=?",
+            (_now(), room_id),
         )
         await db.commit()
         return {"ok": True}
@@ -275,7 +281,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
     async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
-        p = await _participant(x_participant_id)
+        # 封存房也允許離開（唯讀例外），故不檢查房間狀態
+        p = await _participant(x_participant_id, room_id)
         db = app.state.db
         await db.execute(
             "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
@@ -286,7 +293,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/heartbeat", dependencies=[Depends(require_auth)])
     async def heartbeat(room_id: str, x_participant_id: str | None = Header(default=None)):
-        await _participant(x_participant_id)
+        await _participant(x_participant_id, room_id)
         return {"ok": True}
 
     # ---------- 訊息 ----------
@@ -296,7 +303,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str, body: MessagePost, x_participant_id: str | None = Header(default=None)
     ):
         await _room_or_404(room_id)
-        p = await _participant(x_participant_id)
+        p = await _participant(x_participant_id, room_id)
         return await _post_message(
             room_id, p["id"], body.content, mentions=body.mentions, reply_to=body.reply_to
         )
@@ -329,7 +336,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         me = None
         if x_participant_id:
-            me = await _participant(x_participant_id)
+            me = await _participant(x_participant_id, room_id)
 
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
         while True:
@@ -351,34 +358,39 @@ def create_app(config: Config | None = None) -> FastAPI:
                 return {"messages": [], "you_were_mentioned": False, "last_seq": after_seq}
             await events.wait(room_id, remaining)
 
-    @app.post("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
-    async def pin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
-        p = await _participant(x_participant_id)
+    async def _message_room(message_id: str) -> str:
         db = app.state.db
-        cur = await db.execute(
-            "UPDATE message SET pinned=1, pinned_by=? WHERE id=? RETURNING room_id",
-            (p["id"], message_id),
-        )
-        row = await cur.fetchone()
+        row = await (
+            await db.execute("SELECT room_id FROM message WHERE id=?", (message_id,))
+        ).fetchone()
         if row is None:
             raise HTTPException(404, "message not found")
+        return row["room_id"]
+
+    @app.post("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
+    async def pin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
+        room_id = await _message_room(message_id)
+        await _room_or_404(room_id)  # 封存房唯讀，禁止釘選
+        p = await _participant(x_participant_id, room_id)
+        db = app.state.db
+        await db.execute(
+            "UPDATE message SET pinned=1, pinned_by=? WHERE id=?", (p["id"], message_id)
+        )
         await db.commit()
-        await events.notify(row["room_id"])
+        await events.notify(room_id)
         return {"ok": True}
 
     @app.delete("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
     async def unpin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
-        await _participant(x_participant_id)
+        room_id = await _message_room(message_id)
+        await _room_or_404(room_id)  # 封存房唯讀，禁止取消釘選
+        await _participant(x_participant_id, room_id)
         db = app.state.db
-        cur = await db.execute(
-            "UPDATE message SET pinned=0, pinned_by=NULL WHERE id=? RETURNING room_id",
-            (message_id,),
+        await db.execute(
+            "UPDATE message SET pinned=0, pinned_by=NULL WHERE id=?", (message_id,)
         )
-        row = await cur.fetchone()
-        if row is None:
-            raise HTTPException(404, "message not found")
         await db.commit()
-        await events.notify(row["room_id"])
+        await events.notify(room_id)
         return {"ok": True}
 
     @app.delete("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
@@ -536,12 +548,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                         p["room_id"], None,
                         f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
                     )
-                # 封存：active 房間中已無任何 active agent（曾有人加入過才算）
+                # 封存：active 房間中已無任何 active agent。
+                # 只計入「本次 active 期間（activated_at 之後）」加入過的 agent，
+                # 否則解封後會因舊成員紀錄被 sweeper 立刻封回去
                 empty = await (
                     await db.execute(
                         "SELECT r.id FROM room r WHERE r.status='active'"
                         " AND EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                        "             AND p.role='agent')"
+                        "             AND p.role='agent'"
+                        "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
                         " AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
                         "                 AND p.role='agent' AND p.status='active')",
                     )

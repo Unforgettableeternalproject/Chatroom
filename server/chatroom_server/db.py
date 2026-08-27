@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS room (
     status      TEXT NOT NULL DEFAULT 'active',   -- active / archived
     next_seq    INTEGER NOT NULL DEFAULT 1,       -- 訊息序號發放計數器
     created_at  TEXT NOT NULL,
+    activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
     archived_at TEXT
 );
 
