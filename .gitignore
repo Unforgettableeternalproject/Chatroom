@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 資料庫（本機狀態，不入版控）
+*.db
+*.db-wal
+*.db-shm
+
+# Flutter / Dart
+app/build/
+app/.dart_tool/
+app/.flutter-plugins*
+app/ios/Pods/
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+
+# 本機設定（含 token）
+.env
+config.local.json
+
+# Agent相關檔案
+CLAUDE.md
