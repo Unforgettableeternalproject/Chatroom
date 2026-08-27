@@ -161,16 +161,46 @@ def create_app(config: Config | None = None) -> FastAPI:
                     )
                 ).fetchone()
                 sender_name = p["display_name"] if p else None
+            reply_preview = None
+            if r["reply_to"]:
+                orig = await (
+                    await db.execute(
+                        "SELECT m.content, m.deleted, p.display_name FROM message m"
+                        " LEFT JOIN participant p ON p.id=m.sender_id WHERE m.id=?",
+                        (r["reply_to"],),
+                    )
+                ).fetchone()
+                if orig:
+                    reply_preview = {
+                        "sender_name": orig["display_name"],
+                        "excerpt": "" if orig["deleted"] else orig["content"][:80],
+                        "deleted": bool(orig["deleted"]),
+                    }
             out.append({
-                "id": r["id"], "seq": r["seq"], "kind": r["kind"],
+                "id": r["id"], "seq": r["seq"], "update_seq": r["update_seq"],
+                "kind": r["kind"],
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 "content": "" if r["deleted"] else r["content"],
                 "mentions": json.loads(r["mentions"]),
-                "reply_to": r["reply_to"],
+                "reply_to": r["reply_to"], "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
                 "created_at": r["created_at"],
             })
         return out
+
+    async def _touch_message(message_id: str, room_id: str) -> None:
+        """訊息狀態變更（釘選/刪除）時領新序號，讓增量 cursor 能掃到並推播。"""
+        db = app.state.db
+        cur = await db.execute(
+            "UPDATE room SET next_seq = next_seq + 1 WHERE id=? RETURNING next_seq - 1",
+            (room_id,),
+        )
+        useq = (await cur.fetchone())[0]
+        await db.execute(
+            "UPDATE message SET update_seq=? WHERE id=?", (useq, message_id)
+        )
+        await db.commit()
+        await events.notify(room_id)
 
     # ---------- 房間 ----------
 
@@ -191,9 +221,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         rows = await (
             await db.execute(
-                "SELECT r.*, (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
-                " AND p.status='active') AS member_count FROM room r WHERE r.status=?"
-                " ORDER BY r.created_at DESC",
+                "SELECT r.*,"
+                " (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
+                "  AND p.status='active') AS member_count,"
+                " r.next_seq - 1 AS last_seq,"
+                " (SELECT m.created_at FROM message m WHERE m.room_id=r.id"
+                "  ORDER BY m.seq DESC LIMIT 1) AS last_activity_at"
+                " FROM room r WHERE r.status=?"
+                " ORDER BY last_activity_at DESC",
                 (status,),
             )
         ).fetchall()
@@ -379,9 +414,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
         while True:
+            # max(seq, update_seq)：新訊息與既有訊息的狀態變更（釘選/刪除）
+            # 共用同一個 cursor，client 只要回傳 last_seq 就不會漏
             rows = await (
                 await db.execute(
-                    "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq LIMIT ?",
+                    "SELECT * FROM message WHERE room_id=? AND MAX(seq, update_seq)>?"
+                    " ORDER BY MAX(seq, update_seq) LIMIT ?",
                     (room_id, after_seq, cfg.updates_batch_limit),
                 )
             ).fetchall()
@@ -391,7 +429,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     me["display_name"] in m["mentions"] for m in msgs
                 )
                 return {"messages": msgs, "you_were_mentioned": mentioned,
-                        "last_seq": msgs[-1]["seq"]}
+                        "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs)}
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 return {"messages": [], "you_were_mentioned": False, "last_seq": after_seq}
@@ -415,8 +453,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE message SET pinned=1, pinned_by=? WHERE id=?", (p["id"], message_id)
         )
-        await db.commit()
-        await events.notify(room_id)
+        await _touch_message(message_id, room_id)
         return {"ok": True}
 
     @app.delete("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
@@ -428,22 +465,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE message SET pinned=0, pinned_by=NULL WHERE id=?", (message_id,)
         )
-        await db.commit()
-        await events.notify(room_id)
+        await _touch_message(message_id, room_id)
         return {"ok": True}
 
     @app.delete("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
     async def delete_message(message_id: str):
         # 人類管控用的軟刪除；不驗證 participant，靠 API token
+        room_id = await _message_room(message_id)
         db = app.state.db
-        cur = await db.execute(
-            "UPDATE message SET deleted=1 WHERE id=? RETURNING room_id", (message_id,)
-        )
-        row = await cur.fetchone()
-        if row is None:
-            raise HTTPException(404, "message not found")
-        await db.commit()
-        await events.notify(row["room_id"])
+        await db.execute("UPDATE message SET deleted=1 WHERE id=?", (message_id,))
+        await _touch_message(message_id, room_id)
         return {"ok": True}
 
     # ---------- 指派 ----------
@@ -460,6 +491,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         return {"id": aid}
+
+    @app.get("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
+    async def list_room_assignments(room_id: str):
+        """房間視角的指派列表（UI 檢視用，含所有狀態）。"""
+        await _room_or_404(room_id, allow_archived=True)
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT * FROM assignment WHERE room_id=? ORDER BY created_at DESC",
+                (room_id,),
+            )
+        ).fetchall()
+        return {"assignments": [dict(r) for r in rows]}
 
     @app.get("/api/assignments", dependencies=[Depends(require_auth)])
     async def list_assignments(session_key: str):
@@ -516,14 +560,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             while True:
                 rows = await (
                     await db.execute(
-                        "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq"
-                        " LIMIT ?",
+                        "SELECT * FROM message WHERE room_id=?"
+                        " AND MAX(seq, update_seq)>?"
+                        " ORDER BY MAX(seq, update_seq) LIMIT ?",
                         (room_id, last, cfg.updates_batch_limit),
                     )
                 ).fetchall()
                 if rows:
                     msgs = await _message_rows_to_json(rows, db)
-                    last = msgs[-1]["seq"]
+                    last = max(max(m["seq"], m["update_seq"]) for m in msgs)
                     room = await (
                         await db.execute(
                             "SELECT status FROM room WHERE id=?", (room_id,)

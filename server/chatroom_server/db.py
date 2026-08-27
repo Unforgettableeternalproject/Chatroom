@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS message (
     pinned     INTEGER NOT NULL DEFAULT 0,
     pinned_by  TEXT,
     deleted    INTEGER NOT NULL DEFAULT 0,
+    -- 釘選/刪除等變更時從房間計數器領的新序號；推播用 max(seq, update_seq)
+    -- 判斷增量，讓既有訊息的狀態變更也能被同一個 cursor 掃到
+    update_seq INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     UNIQUE(room_id, seq)
 );
