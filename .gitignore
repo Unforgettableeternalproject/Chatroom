@@ -26,3 +26,5 @@ config.local.json
 
 # Agent相關檔案
 CLAUDE.md
+# Claude 工作目錄（含 subagent worktrees）
+.claude/

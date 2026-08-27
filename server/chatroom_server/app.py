@@ -8,6 +8,7 @@ WebSocket 通道留待 Phase 1（UI 開工前）。
 import asyncio
 import contextlib
 import json
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -20,6 +21,9 @@ from .config import Config
 from .db import open_db
 from .events import RoomEvents
 from .naming import generate_name
+
+
+logger = logging.getLogger("chatroom")
 
 
 def _now() -> str:
@@ -63,11 +67,15 @@ class AssignmentResolve(BaseModel):
 
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or Config()
+    logger.setLevel(cfg.log_level.upper())
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        if not cfg.api_token:
+            logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用")
         app.state.db = await open_db(cfg.db_path)
         sweeper = asyncio.create_task(_sweeper())
+        app.state.sweeper_task = sweeper
         try:
             yield
         finally:
@@ -320,17 +328,40 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def read_messages(
         room_id: str,
         after_seq: int = 0,
-        limit: int = Query(default=100, le=500),
+        before_seq: int | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
     ):
+        """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
+        兩者互斥；回傳一律以 seq 遞增排列。"""
         await _room_or_404(room_id, allow_archived=True)
+        if before_seq is not None and after_seq:
+            raise HTTPException(422, "after_seq 與 before_seq 不可同時使用")
         db = app.state.db
-        sql = "SELECT * FROM message WHERE room_id=? AND seq>?"
+        cond = "room_id=?"
+        params: list = [room_id]
         if pinned_only:
-            sql += " AND pinned=1"
-        sql += " ORDER BY seq LIMIT ?"
-        rows = await (await db.execute(sql, (room_id, after_seq, limit))).fetchall()
-        return {"messages": await _message_rows_to_json(rows, db)}
+            cond += " AND pinned=1"
+        if before_seq is not None:
+            cond += " AND seq<?"
+            params.append(before_seq)
+            sql = f"SELECT * FROM message WHERE {cond} ORDER BY seq DESC LIMIT ?"
+        else:
+            cond += " AND seq>?"
+            params.append(after_seq)
+            sql = f"SELECT * FROM message WHERE {cond} ORDER BY seq LIMIT ?"
+        # 多取一筆判斷 has_more，避免第二次 COUNT 查詢
+        rows = await (await db.execute(sql, (*params, limit + 1))).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        if before_seq is not None:
+            rows = list(reversed(rows))
+        msgs = await _message_rows_to_json(rows, db)
+        out: dict = {"messages": msgs, "has_more": has_more}
+        if msgs:
+            out["next_after_seq"] = msgs[-1]["seq"]
+            out["next_before_seq"] = msgs[0]["seq"]
+        return out
 
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
@@ -350,8 +381,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         while True:
             rows = await (
                 await db.execute(
-                    "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq LIMIT 200",
-                    (room_id, after_seq),
+                    "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq LIMIT ?",
+                    (room_id, after_seq, cfg.updates_batch_limit),
                 )
             ).fetchall()
             if rows:
@@ -471,9 +502,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             {"type": "pong"}
         """
         if cfg.api_token and ws.query_params.get("token") != cfg.api_token:
+            logger.info("ws: 拒絕連線（token 驗證失敗）")
             await ws.close(code=4401)
             return
         await ws.accept()
+        logger.info("ws: 連線建立")
         db = app.state.db
         send_lock = asyncio.Lock()  # 多房間 pump 併發送出時避免交錯
         pumps: dict[str, asyncio.Task] = {}
@@ -484,8 +517,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 rows = await (
                     await db.execute(
                         "SELECT * FROM message WHERE room_id=? AND seq>? ORDER BY seq"
-                        " LIMIT 200",
-                        (room_id, last),
+                        " LIMIT ?",
+                        (room_id, last, cfg.updates_batch_limit),
                     )
                 ).fetchall()
                 if rows:
@@ -525,54 +558,69 @@ def create_app(config: Config | None = None) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
+            logger.info("ws: 連線結束，清理 %d 個房間訂閱", len(pumps))
             for task in pumps.values():
                 task.cancel()
 
     # ---------- Presence sweeper ----------
 
+    async def _sweep_once() -> None:
+        """單輪掃描：移除閒置 agent、過期 pending 指派、封存無 agent 房間。"""
+        db = app.state.db
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(seconds=cfg.idle_timeout)).isoformat()
+        idle = await (
+            await db.execute(
+                "SELECT id, room_id, display_name FROM participant"
+                " WHERE status='active' AND role='agent' AND last_seen_at < ?",
+                (cutoff,),
+            )
+        ).fetchall()
+        for p in idle:
+            await db.execute(
+                "UPDATE participant SET status='removed', left_at=? WHERE id=?",
+                (_now(), p["id"]),
+            )
+            await db.commit()
+            logger.info("sweep: 移除閒置 agent %s（room=%s）", p["display_name"], p["room_id"])
+            await _post_message(
+                p["room_id"], None,
+                f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
+            )
+        # 過期 pending 指派
+        a_cutoff = (now - timedelta(seconds=cfg.assignment_ttl)).isoformat()
+        await db.execute(
+            "UPDATE assignment SET status='expired', resolved_at=?"
+            " WHERE status='pending' AND created_at < ?",
+            (_now(), a_cutoff),
+        )
+        await db.commit()
+        # 封存：active 房間中已無任何 active agent。
+        # 只計入「本次 active 期間（activated_at 之後）」加入過的 agent，
+        # 否則解封後會因舊成員紀錄被 sweeper 立刻封回去
+        empty = await (
+            await db.execute(
+                "SELECT r.id FROM room r WHERE r.status='active'"
+                " AND EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
+                "             AND p.role='agent'"
+                "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
+                " AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
+                "                 AND p.role='agent' AND p.status='active')",
+            )
+        ).fetchall()
+        for r in empty:
+            logger.info("sweep: 自動封存房間 %s", r["id"])
+            await _archive(r["id"], "聊天室內已無 agent，自動封存")
+
     async def _sweeper() -> None:
-        """定期移除閒置 agent；沒有 active agent 的房間自動封存。"""
         while True:
             await asyncio.sleep(cfg.sweep_interval)
             try:
-                db = app.state.db
-                cutoff = (
-                    datetime.now(timezone.utc) - timedelta(seconds=cfg.idle_timeout)
-                ).isoformat()
-                idle = await (
-                    await db.execute(
-                        "SELECT id, room_id, display_name FROM participant"
-                        " WHERE status='active' AND role='agent' AND last_seen_at < ?",
-                        (cutoff,),
-                    )
-                ).fetchall()
-                for p in idle:
-                    await db.execute(
-                        "UPDATE participant SET status='removed', left_at=? WHERE id=?",
-                        (_now(), p["id"]),
-                    )
-                    await db.commit()
-                    await _post_message(
-                        p["room_id"], None,
-                        f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
-                    )
-                # 封存：active 房間中已無任何 active agent。
-                # 只計入「本次 active 期間（activated_at 之後）」加入過的 agent，
-                # 否則解封後會因舊成員紀錄被 sweeper 立刻封回去
-                empty = await (
-                    await db.execute(
-                        "SELECT r.id FROM room r WHERE r.status='active'"
-                        " AND EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                        "             AND p.role='agent'"
-                        "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
-                        " AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                        "                 AND p.role='agent' AND p.status='active')",
-                    )
-                ).fetchall()
-                for r in empty:
-                    await _archive(r["id"], "聊天室內已無 agent，自動封存")
+                await _sweep_once()
             except Exception:  # sweeper 絕不因單次錯誤而死
-                pass
+                logger.exception("sweeper 單輪執行失敗，下一輪續行")
+
+    app.state.sweep_once = _sweep_once  # 測試可直接觸發單輪掃描
 
     @app.get("/api/health")
     async def health():
