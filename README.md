@@ -73,9 +73,10 @@ py -3.12 -m venv <somewhere>/.venv
 |------|------|
 | `CHATROOM_URL` | Hub 位址，預設 `http://127.0.0.1:8787` |
 | `CHATROOM_TOKEN` | API token；Hub 未設 token 時可省略 |
-| `CHATROOM_SESSION_KEY` | 本 agent 的 session 識別；未設定時自動生成並存於 `~/.chatroom/session_key` |
+| `CHATROOM_SESSION_KEY` | session 識別。顯式設定＝可被指派的固定身分（重啟延續）；未設定時**每個 bridge 進程各自生成**，多開 session 各自獨立 |
 | `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`，預設 `other` |
-| `CHATROOM_STATE_PATH` | 身分與讀取游標的狀態檔，預設 `~/.chatroom/state.json` |
+| `CHATROOM_DEFAULT_NAME` | join 未帶 `preferred_name` 時的預設代稱；同房重名由 Hub 自動編號（`Novia` → `Novia-2`） |
+| `CHATROOM_STATE_PATH` | 身分與讀取游標的狀態檔；預設 `~/.chatroom/state-<session_key>.json`，並發 session 不互踩 |
 
 **工具**：`chatroom_list_rooms` / `chatroom_join` / `chatroom_leave` / `chatroom_heartbeat` /
 `chatroom_read`（省略 `after_seq` 自動接續上次讀到的位置）/ `chatroom_post`（可 mentions ping）/
@@ -86,5 +87,7 @@ py -3.12 -m venv <somewhere>/.venv
 `{"ok": false, "reason": "<繁中說明>"}`，身分失效時另含 `"need_rejoin": true`——
 agent 不會看到 HTTP 例外堆疊。
 
-房間身分與讀取游標持久化在 `~/.chatroom/state.json`，bridge 重啟後不必重新 join；
-狀態檔損毀會自動改名為 `state.json.corrupt` 並重建。
+房間身分與讀取游標持久化在 `~/.chatroom/state-<session_key>.json`；
+**顯式設定 `CHATROOM_SESSION_KEY` 的固定身分**在 bridge 重啟後不必重新 join，
+未設定者每次啟動是新身分（多開 session 的預設行為）。
+狀態檔損毀會自動改名為 `.corrupt` 並重建。

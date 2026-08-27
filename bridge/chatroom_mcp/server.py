@@ -5,10 +5,14 @@
 設定來源（環境變數）：
     CHATROOM_URL          Hub 位址，預設 http://127.0.0.1:8787
     CHATROOM_TOKEN        API token（Hub 未設 token 時可省略）
-    CHATROOM_SESSION_KEY  本 agent 的 session 識別；未設定時自動生成並
-                          存於 ~/.chatroom/session_key 以求跨次穩定
+    CHATROOM_SESSION_KEY  本 agent 的 session 識別。顯式設定＝可被指派的固定身分
+                          （重啟延續）；未設定時每個 bridge 進程各自生成
+                          （多開 session 各自獨立，重啟即新身分）
     CHATROOM_AGENT_KIND   claude / codex / human / other，預設 other
-    CHATROOM_STATE_PATH   身分與游標狀態檔位置，預設 ~/.chatroom/state.json
+    CHATROOM_DEFAULT_NAME join 未帶 preferred_name 時的預設代稱；
+                          房內重名由 Hub 自動編號（Novia → Novia-2）
+    CHATROOM_STATE_PATH   身分與游標狀態檔位置；預設跟著 session_key 走
+                          （~/.chatroom/state-<key>.json），並發 session 不互踩
 
 所有工具都回傳字典，成功時含 ``"ok": true``，失敗時為
 ``{"ok": false, "reason": "<繁體中文說明>"}``——agent 永遠不會看到 HTTP 堆疊。
@@ -39,23 +43,26 @@ from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 
 
+AGENT_KIND = os.environ.get("CHATROOM_AGENT_KIND", "other")
+# join 未指定 preferred_name 時的預設代稱；房內重名由 Hub 自動加 -2 編號
+DEFAULT_NAME = os.environ.get("CHATROOM_DEFAULT_NAME", "")
+
+
 def _session_key() -> str:
+    """本 bridge 進程的 session 識別。
+
+    顯式設定 ``CHATROOM_SESSION_KEY`` 代表「可被指派的固定身分」（如 codex-main），
+    重啟後身分與游標延續。未設定時**每個進程各自生成**——多開 session 必須是
+    不同的 participant；若沿用舊版的機器層級共用 keyfile，多個 session 會因
+    join 冪等而合併成同一個身分，訊息混流、state 檔互踩。
+    """
     env = os.environ.get("CHATROOM_SESSION_KEY")
     if env:
         return env
-    keyfile = Path.home() / ".chatroom" / "session_key"
-    if keyfile.exists():
-        existing = keyfile.read_text(encoding="utf-8").strip()
-        if existing:
-            return existing
-    keyfile.parent.mkdir(parents=True, exist_ok=True)
-    key = uuid.uuid4().hex
-    keyfile.write_text(key, encoding="utf-8")
-    return key
+    return f"{AGENT_KIND}-{uuid.uuid4().hex[:12]}"
 
 
 SESSION_KEY = _session_key()
-AGENT_KIND = os.environ.get("CHATROOM_AGENT_KIND", "other")
 
 mcp = MCPServer("chatroom")
 
@@ -75,7 +82,13 @@ def hub() -> HubClient:
 def state() -> BridgeState:
     global _state
     if _state is None:
-        _state = BridgeState()
+        if os.environ.get("CHATROOM_STATE_PATH"):
+            _state = BridgeState()  # 顯式路徑（測試/特殊部署）
+        else:
+            # state 檔跟著 session_key 走：並發 session 各寫各的，不互踩
+            _state = BridgeState(
+                Path.home() / ".chatroom" / f"state-{SESSION_KEY[:16]}.json"
+            )
     return _state
 
 
@@ -181,7 +194,7 @@ def chatroom_join(room_id: str, preferred_name: str = "") -> dict:
         json={
             "kind": AGENT_KIND,
             "session_key": SESSION_KEY,
-            "preferred_name": preferred_name or None,
+            "preferred_name": preferred_name or DEFAULT_NAME or None,
             "role": "agent",
         },
     )

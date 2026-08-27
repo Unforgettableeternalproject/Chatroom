@@ -247,6 +247,35 @@ def test_pinned_only_does_not_advance_cursor(fake_hub):
     assert srv.state().last_seq(ROOM) == 0
 
 
+def test_session_key_ephemeral_per_process_and_env_override(monkeypatch):
+    """未顯式設定時每次生成都不同——多開 session 不得共用身分（join 冪等會合併）。"""
+    monkeypatch.delenv("CHATROOM_SESSION_KEY", raising=False)
+    k1, k2 = srv._session_key(), srv._session_key()
+    assert k1 != k2
+    assert k1.startswith(srv.AGENT_KIND + "-")
+    monkeypatch.setenv("CHATROOM_SESSION_KEY", "codex-main")
+    assert srv._session_key() == "codex-main"
+
+
+def test_join_uses_default_name_when_no_preference(fake_hub, monkeypatch):
+    """CHATROOM_DEFAULT_NAME 讓每個 session 以同一代稱進房，由 Hub 自動編號。"""
+    import json as _json
+
+    monkeypatch.setattr(srv, "DEFAULT_NAME", "Novia")
+    fake_hub.json(
+        "POST", f"/api/rooms/{ROOM}/join",
+        {"participant_id": "p1", "display_name": "Novia-2", "rejoined": False},
+    )
+    result = srv.chatroom_join(ROOM)
+    assert result["ok"] is True and result["display_name"] == "Novia-2"
+    body = _json.loads(fake_hub.calls[-1].content)
+    assert body["preferred_name"] == "Novia"
+    # 明確給 preferred_name 時優先於預設代稱
+    srv.chatroom_join(ROOM, preferred_name="Echo")
+    body = _json.loads(fake_hub.calls[-1].content)
+    assert body["preferred_name"] == "Echo"
+
+
 def test_pinned_only_reads_whole_room_not_from_cursor(fake_hub):
     """P2-05 實測抓到的 bug：游標推進後，比游標舊的釘選要仍然看得到。"""
     fake_hub.json(
