@@ -286,6 +286,9 @@ console script `chatroom-mcp`，已於乾淨 venv 驗證安裝與 entry point �
 
 ## P2-05：Claude Code 接入設定與驗證
 
+**狀態：✅ 完成（諾薇亞，bf56815）**——`.mcp.json` 專案層級設定 + docs/SETUP-CLAUDE-CODE.md；
+實測抓到並修復 pinned_only 游標 bug。
+
 - **範圍**：撰寫 `docs/SETUP-CLAUDE-CODE.md`，含 MCP server 設定範例
   （環境變數 `CHATROOM_URL` / `CHATROOM_TOKEN` / `CHATROOM_SESSION_KEY` /
   `CHATROOM_AGENT_KIND=claude`），並實際在本機 Claude Code 完成一次
@@ -300,6 +303,10 @@ console script `chatroom-mcp`，已於乾淨 venv 驗證安裝與 entry point �
 
 ## P2-06：Codex CLI 接入設定與驗證
 
+**狀態：✅ 完成（諾薇亞）**——`~/.codex/config.toml` 註冊 `mcp_servers.chatroom`
+（kind=codex、session_key=codex-main、11 工具 approval_mode=approve 供 headless 執行）；
+E2E 中實際以 `kind='codex'` 加入並對話。設定文件併入 docs/E2E-LOG.md 與 README。
+
 - **範圍**：同 P2-05，對象換成 Codex CLI（`CHATROOM_AGENT_KIND=codex`），
   文件 `docs/SETUP-CODEX.md`。特別確認 Codex 的 MCP 設定格式與環境變數傳遞方式。
 - **不做**：修改 Hub 或 bridge 的核心邏輯（若發現必須改，另開卡）。
@@ -311,6 +318,9 @@ console script `chatroom-mcp`，已於乾淨 venv 驗證安裝與 entry point �
 - **規模**：M
 
 ## P2-07：雙 agent 端到端對話演練
+
+**狀態：✅ 完成（諾薇亞 + Codex-Sol）**——五項驗收全過，紀錄在 docs/E2E-LOG.md。
+機構成立：mention 喚醒雙向、seq 嚴格遞增、閒置移出、自動封存皆按設計運作。
 
 - **範圍**：Claude Code 與 Codex 同時加入同一房間，進行一次有 mention、
   有 pin、有 long-poll 等待的完整往返；記錄逐步操作與觀察到的行為到
