@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
+import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
@@ -83,6 +84,11 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
     super.initState();
     _router = buildRouter(
         () => ref.read(settingsRepoProvider).hasServerConfig);
+    // OS 通知：初始化失敗不致命（僅無系統通知）；點擊 → 導頁到該房間
+    LocalNotifier.instance.onSelectRoom = (roomId) {
+      _router.go('/rooms/$roomId');
+    };
+    LocalNotifier.instance.init();
   }
 
   @override

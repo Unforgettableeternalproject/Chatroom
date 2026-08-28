@@ -10,6 +10,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
+import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 
@@ -272,6 +273,44 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   onChanged: (v) => ref
                       .read(appConfigProvider.notifier)
                       .setThemeMode(v ? ThemeModePref.dark : ThemeModePref.light),
+                ),
+              ]),
+              const SizedBox(height: 22),
+              Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('系統通知',
+                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                      const SizedBox(height: 3),
+                      Text('已加入的聊天室有新訊息時',
+                          style:
+                              UepText.serif(size: 12, color: s.inkMute)),
+                    ],
+                  ),
+                ),
+                DropdownButton<NotifyModePref>(
+                  value: ref.watch(settingsRepoProvider).notifyMode,
+                  underline: const SizedBox.shrink(),
+                  style: UepText.sans(size: 13, color: s.ink),
+                  dropdownColor: s.bgCard,
+                  items: const [
+                    DropdownMenuItem(
+                        value: NotifyModePref.all, child: Text('所有訊息')),
+                    DropdownMenuItem(
+                        value: NotifyModePref.mentions,
+                        child: Text('僅提及我時')),
+                    DropdownMenuItem(
+                        value: NotifyModePref.off, child: Text('關閉')),
+                  ],
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    await ref.read(settingsRepoProvider).setNotifyMode(v);
+                    // 通知中心即時吃到新模式，不必重啟 app
+                    ref.read(notificationCenterProvider).mode = v;
+                    setState(() {});
+                  },
                 ),
               ]),
               const SizedBox(height: 22),

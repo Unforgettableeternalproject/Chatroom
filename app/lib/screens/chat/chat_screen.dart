@@ -12,6 +12,7 @@ import '../../models/message.dart';
 import '../../models/participant.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
+import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
@@ -50,6 +51,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     _scroll.addListener(_onScroll);
     _startHeartbeat();
+    // 通知抑制：正在看的房間不彈系統通知
+    ref.read(notificationCenterProvider).activeRoomId = widget.roomId;
     if (widget.focusSeq != null) {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _focusOn(widget.focusSeq!));
@@ -65,6 +68,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _lastSeenCount = 0;
       _lastSystemCount = null;
       _startHeartbeat();
+      ref.read(notificationCenterProvider).activeRoomId = widget.roomId;
     }
     if (widget.focusSeq != null && widget.focusSeq != old.focusSeq) {
       _focusOn(widget.focusSeq!);
@@ -73,6 +77,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    // 離開聊天畫面後該房恢復可通知；只清掉仍屬於自己的值
+    final center = ref.read(notificationCenterProvider);
+    if (center.activeRoomId == widget.roomId) center.activeRoomId = null;
     _heartbeat?.cancel();
     _highlightTimer?.cancel();
     _scroll.dispose();

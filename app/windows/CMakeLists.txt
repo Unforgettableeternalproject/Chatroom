@@ -38,6 +38,11 @@ add_definitions(-DUNICODE -D_UNICODE)
 # plugin 目錄繼承，不需修改 pub cache。
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
+# flutter_local_notifications_windows 仍使用 <experimental/coroutine>，
+# MSVC 14.5x 起將其棄用升級為 hard error（STL1011）。依官方指示定義
+# 抑制巨集，等 plugin 上游改用 C++20 <coroutine> 後即可移除。
+add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

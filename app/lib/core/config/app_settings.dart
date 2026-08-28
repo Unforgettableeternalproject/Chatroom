@@ -19,7 +19,9 @@ class SettingsRepository {
   static const _kDeviceKey = 'chatroom.device_session_key';
   static const _kLastReadPrefix = 'chatroom.last_read.';
   static const _kParticipantPrefix = 'chatroom.participant.';
+  static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
+  static const _kNotifyMode = 'chatroom.notify_mode';
 
   static Future<SettingsRepository> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -59,6 +61,14 @@ class SettingsRepository {
   Future<void> setPreferredName(String name) =>
       _prefs.setString(_kPreferredName, name.trim());
 
+  /// 通知模式：預設通知所有新訊息（被 @mention 一律通知）。
+  NotifyModePref get notifyMode => NotifyModePref.values.firstWhere(
+        (m) => m.name == _prefs.getString(_kNotifyMode),
+        orElse: () => NotifyModePref.all,
+      );
+  Future<void> setNotifyMode(NotifyModePref mode) =>
+      _prefs.setString(_kNotifyMode, mode.name);
+
   // ---------- 房間層級快取 ----------
 
   int lastReadSeq(String roomId) => _prefs.getInt('$_kLastReadPrefix$roomId') ?? 0;
@@ -75,6 +85,12 @@ class SettingsRepository {
     }
   }
 
+  /// 我在該房的顯示名稱（mention 比對用；join 成功時寫入）。
+  String? displayName(String roomId) =>
+      _prefs.getString('$_kDisplayNamePrefix$roomId');
+  Future<void> setDisplayName(String roomId, String name) =>
+      _prefs.setString('$_kDisplayNamePrefix$roomId', name);
+
   /// 最近見過的 agent session_key（指派畫面的快選來源）。
   List<String> get seenSessionKeys =>
       _prefs.getStringList(_kSeenSessionKeys) ?? const [];
@@ -88,3 +104,6 @@ class SettingsRepository {
 }
 
 enum ThemeModePref { dark, light }
+
+/// 通知模式：off 不通知、mentions 僅被 @mention、all 所有新訊息。
+enum NotifyModePref { off, mentions, all }

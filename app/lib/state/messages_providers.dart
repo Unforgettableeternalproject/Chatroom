@@ -42,9 +42,10 @@ final identityProvider = FutureProvider.autoDispose
     role: 'human',
     preferredName: config.preferredName.isEmpty ? null : config.preferredName,
   );
-  await ref
-      .read(settingsRepoProvider)
-      .setParticipantId(roomId, result.participantId);
+  final settings = ref.read(settingsRepoProvider);
+  await settings.setParticipantId(roomId, result.participantId);
+  // 顯示名稱供通知中心做 mention 比對（房內重名時 Hub 會改名，以實際值為準）
+  await settings.setDisplayName(roomId, result.displayName);
   return (
     participantId: result.participantId,
     displayName: result.displayName,

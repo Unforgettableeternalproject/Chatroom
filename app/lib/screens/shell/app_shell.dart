@@ -9,6 +9,7 @@ import '../../core/config/app_settings.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
+import '../../state/notification_providers.dart';
 import '../../widgets/connection_pill.dart';
 import '../rooms/room_list_screen.dart';
 
@@ -51,10 +52,15 @@ class _AppShellState extends ConsumerState<AppShell>
     if (state == AppLifecycleState.resumed) {
       ref.read(realtimeServiceProvider).retryNow();
     }
+    // 前景狀態餵給通知中心：失焦/背景時才彈系統通知
+    ref.read(notificationCenterProvider).foreground =
+        state == AppLifecycleState.resumed;
   }
 
   @override
   Widget build(BuildContext context) {
+    // 啟動通知管線（跟隨已加入房間 → OS 通知 / 未讀刷新）
+    ref.watch(notificationBootstrapProvider);
     final s = context.uep;
     final wide = MediaQuery.sizeOf(context).width >= 900;
     final themeMode =
