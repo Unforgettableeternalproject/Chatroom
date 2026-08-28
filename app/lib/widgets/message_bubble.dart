@@ -1,0 +1,294 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../core/theme/uep_theme.dart';
+import '../core/theme/uep_tokens.dart';
+import '../core/util/relative_time.dart';
+import '../models/message.dart';
+import 'kind_badge.dart';
+import 'markdown_body.dart';
+
+/// 訊息操作回呼（由 ChatScreen 提供實作）。
+class MessageActions {
+  const MessageActions({
+    required this.onReply,
+    required this.onTogglePin,
+    required this.onDelete,
+    this.enabled = true,
+  });
+
+  final void Function(Message) onReply;
+  final void Function(Message) onTogglePin;
+  final void Function(Message) onDelete;
+
+  /// 封存房間：釘選 / 刪除 / 回覆停用（P3-08 條件 4）。
+  final bool enabled;
+}
+
+/// A 標準氣泡（設計稿定案變體）：左側 kind 色軸 + 卡片氣泡。
+/// 自己的訊息靠右、金色系、無色軸。
+class MessageBubble extends StatelessWidget {
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.isSelf,
+    required this.senderKind,
+    this.actions,
+    this.highlighted = false,
+  });
+
+  final Message message;
+  final bool isSelf;
+  final String senderKind;
+  final MessageActions? actions;
+
+  /// focusSeq 跳轉的高亮。
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final color = kindColor(senderKind, context: context);
+    final name = message.senderName ?? '（未知）';
+    final time = clockTime(message.createdAt);
+
+    final header = Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        if (isSelf) ...[
+          Text(time, style: UepText.mono(size: 9, color: s.inkMute)),
+          const SizedBox(width: 8),
+          KindBadge(kind: senderKind),
+          const SizedBox(width: 8),
+          Text(name,
+              style: UepText.sans(
+                  size: 13, weight: FontWeight.w600, color: s.inkTitle)),
+        ] else ...[
+          Text(name,
+              style: UepText.sans(
+                  size: 13,
+                  weight: FontWeight.w600,
+                  color: message.deleted ? s.inkMute : s.inkTitle)),
+          const SizedBox(width: 8),
+          KindBadge(kind: senderKind),
+          const SizedBox(width: 8),
+          Text(time, style: UepText.mono(size: 9, color: s.inkMute)),
+          if (message.pinned) ...[
+            const SizedBox(width: 8),
+            Text('❖ 已釘選',
+                style: UepText.mono(
+                    size: 9, color: UepColors.gold, letterSpacing: 1.0)),
+          ],
+        ],
+      ],
+    );
+
+    final Widget body;
+    if (message.deleted) {
+      body = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
+        decoration: BoxDecoration(
+          border: Border.all(color: s.lineStrong, style: BorderStyle.solid),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text('訊息已刪除',
+            style: UepText.mono(size: 11, color: s.inkMute, letterSpacing: .8)),
+      );
+    } else {
+      body = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+        decoration: BoxDecoration(
+          color: isSelf ? UepColors.gold.withValues(alpha: .10) : s.bgCard,
+          border: Border.all(
+            color: highlighted
+                ? UepColors.gold
+                : isSelf
+                    ? UepColors.gold.withValues(alpha: .28)
+                    : message.pinned
+                        ? UepColors.gold.withValues(alpha: .22)
+                        : s.line,
+          ),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (message.replyPreview != null) ...[
+              _ReplyQuote(preview: message.replyPreview!),
+              const SizedBox(height: 9),
+            ],
+            UepMarkdownBody(data: message.content),
+          ],
+        ),
+      );
+    }
+
+    final bubble = isSelf
+        ? body
+        : Container(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: message.deleted ? s.hairline : color,
+                  width: 2,
+                ),
+              ),
+            ),
+            padding: const EdgeInsets.only(left: 11),
+            child: body,
+          );
+
+    final column = Column(
+      crossAxisAlignment:
+          isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(left: isSelf ? 0 : 13),
+          child: header,
+        ),
+        const SizedBox(height: 6),
+        bubble,
+      ],
+    );
+
+    return Align(
+      alignment: isSelf ? Alignment.centerRight : Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: isSelf ? 620 : 660),
+        child: _ContextMenuRegion(
+          message: message,
+          actions: actions,
+          child: column,
+        ),
+      ),
+    );
+  }
+}
+
+class _ReplyQuote extends StatelessWidget {
+  const _ReplyQuote({required this.preview});
+
+  final ReplyPreview preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(left: BorderSide(color: s.hairlineStrong, width: 2)),
+      ),
+      padding: const EdgeInsets.only(left: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('回覆 ${preview.senderName ?? '（未知）'}',
+              style:
+                  UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.0)),
+          const SizedBox(height: 2),
+          Text(
+            preview.deleted ? '（原訊息已刪除）' : preview.excerpt,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 右鍵 / 長按叫出訊息管理選單（設計稿 MESSAGE #seq 選單）。
+class _ContextMenuRegion extends StatelessWidget {
+  const _ContextMenuRegion({
+    required this.child,
+    required this.message,
+    required this.actions,
+  });
+
+  final Widget child;
+  final Message message;
+  final MessageActions? actions;
+
+  Future<void> _showMenu(BuildContext context, Offset globalPos) async {
+    final a = actions;
+    if (a == null || message.deleted || message.isSystem) return;
+    final s = context.uep;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPos.dx,
+        globalPos.dy,
+        overlay.size.width - globalPos.dx,
+        overlay.size.height - globalPos.dy,
+      ),
+      color: s.bgCard,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: s.lineStrong),
+      ),
+      items: [
+        PopupMenuItem(
+          enabled: false,
+          height: 30,
+          child: Text('MESSAGE #${message.seq}',
+              style:
+                  UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 2)),
+        ),
+        PopupMenuItem(
+          value: 'pin',
+          enabled: a.enabled,
+          height: 36,
+          child: Text(message.pinned ? '❖　取消釘選' : '❖　釘選',
+              style: UepText.sans(size: 12.5, color: s.ink)),
+        ),
+        PopupMenuItem(
+          value: 'reply',
+          enabled: a.enabled,
+          height: 36,
+          child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
+        ),
+        PopupMenuItem(
+          value: 'copy',
+          height: 36,
+          child:
+              Text('⧉　複製內容', style: UepText.sans(size: 12.5, color: s.ink)),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'delete',
+          enabled: a.enabled,
+          height: 36,
+          child: Text('✕　刪除（需確認）',
+              style: UepText.sans(size: 12.5, color: UepColors.errorText)),
+        ),
+      ],
+    );
+    switch (choice) {
+      case 'pin':
+        a.onTogglePin(message);
+      case 'reply':
+        a.onReply(message);
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: message.content));
+      case 'delete':
+        a.onDelete(message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onSecondaryTapUp: (d) => _showMenu(context, d.globalPosition),
+      onLongPressStart: (d) => _showMenu(context, d.globalPosition),
+      child: child,
+    );
+  }
+}
