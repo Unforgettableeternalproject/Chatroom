@@ -25,7 +25,9 @@ participant_id 是「每房間」的身分：join 後由 bridge 寫入本機狀�
 from __future__ import annotations
 
 import functools
+import hashlib
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -64,6 +66,20 @@ def _session_key() -> str:
 
 SESSION_KEY = _session_key()
 
+
+def _state_filename(session_key: str) -> str:
+    """session_key → 安全的 state 檔名。
+
+    直接拿 key 前綴當檔名有兩個洞：前綴相同的兩把固定 key 會共用同一個檔案、
+    互相覆蓋身分與游標；key 含路徑分隔符或 Windows 非法字元時路徑直接壞掉。
+    改成「可讀 slug + 全長雜湊」——slug 只為了人眼辨識，唯一性靠雜湊保證。
+    """
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "", session_key)[:24]
+    if slug:
+        return f"state-{slug}-{digest}.json"
+    return f"state-{digest}.json"
+
 mcp = MCPServer("chatroom")
 
 # ---------- 相依物件（延後建立，方便測試注入） ----------
@@ -87,7 +103,7 @@ def state() -> BridgeState:
         else:
             # state 檔跟著 session_key 走：並發 session 各寫各的，不互踩
             _state = BridgeState(
-                Path.home() / ".chatroom" / f"state-{SESSION_KEY[:16]}.json"
+                Path.home() / ".chatroom" / _state_filename(SESSION_KEY)
             )
     return _state
 
@@ -375,6 +391,13 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
 
 
 def main() -> None:
+    # token 缺席時每次呼叫才報 401 會讓人誤以為 Hub 或指派壞了——啟動就把話說清楚
+    if not os.environ.get("CHATROOM_TOKEN"):
+        print(
+            "[chatroom-mcp] CHATROOM_TOKEN 未設定：若 Hub 有啟用 token，"
+            "所有工具呼叫都會被拒絕。請在啟動 agent 前於 shell 設定該環境變數。",
+            file=sys.stderr,
+        )
     mcp.run()
 
 

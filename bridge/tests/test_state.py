@@ -96,3 +96,40 @@ def test_save_is_atomic_and_leaves_no_tmp(tmp_path):
     st.set_identity("room-a", "pid-1", "Aster")
     assert not (tmp_path / "state.json.tmp").exists()
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+
+
+# ---------- P3 審核修正：state 檔名的碰撞與非法字元 ----------
+
+
+def test_state_filename_no_prefix_collision():
+    """前 16 字元相同的兩把固定 key 不可共用同一個 state 檔。"""
+    from chatroom_mcp.server import _state_filename
+
+    a = _state_filename("codex-main-alpha-001")
+    b = _state_filename("codex-main-alpha-002")
+    assert a != b
+
+
+def test_state_filename_is_deterministic():
+    from chatroom_mcp.server import _state_filename
+
+    assert _state_filename("codex-main") == _state_filename("codex-main")
+
+
+def test_state_filename_strips_invalid_characters():
+    """key 含路徑分隔符 / Windows 非法字元時，檔名仍然合法且不含分隔符。"""
+    from chatroom_mcp.server import _state_filename
+
+    name = _state_filename('a/b' + chr(92) + 'c:d*e?f"g<h>i|j')
+    for ch in ['/', chr(92), ':', '*', '?', '"', '<', '>', '|']:
+        assert ch not in name
+    assert name.startswith("state-") and name.endswith(".json")
+
+
+def test_state_filename_all_invalid_falls_back_to_digest():
+    from chatroom_mcp.server import _state_filename
+
+    name = _state_filename("///:::")
+    assert name.startswith("state-") and name.endswith(".json")
+    # 兩把不同的全非法 key 也不可撞名
+    assert name != _state_filename(":::///x")
