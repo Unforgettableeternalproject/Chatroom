@@ -68,7 +68,7 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | id | TEXT (uuid) | 主鍵 |
 | room_id | TEXT | FK → room |
 | kind | TEXT | `claude` / `codex` / `human` / `other` |
-| session_key | TEXT | agent 的 session 識別（跨房間穩定），人類為裝置識別 |
+| session_key | TEXT | agent 的 session 識別（跨房間穩定）；App 管理的 Codex 使用原生 thread id，人類為裝置識別 |
 | display_name | TEXT | 房內唯一的顯示名稱 |
 | role | TEXT | `agent` / `human` |
 | status | TEXT | `active` / `left` / `removed`（閒置被移除） |
@@ -150,7 +150,7 @@ POST   /api/rooms                          建立房間 {name, topic}
 GET    /api/rooms?status=active            列出房間（含 pending assignment 提示）
 GET    /api/rooms/{id}                     房間詳情 + 成員
 POST   /api/rooms/{id}/archive             手動封存 / POST unarchive 解封
-POST   /api/rooms/{id}/join                {kind, session_key, preferred_name?} → participant
+POST   /api/rooms/{id}/join                {kind, session_key, assignment_id?, preferred_name?} → participant
 POST   /api/rooms/{id}/leave               自行退出
 POST   /api/rooms/{id}/heartbeat           純刷新 last_seen
 GET    /api/rooms/{id}/messages?after_seq=&limit=   讀訊息（含 pinned 過濾）
@@ -170,7 +170,7 @@ WS     /ws?token=                          UI 即時通道
 | 工具 | 說明 |
 |------|------|
 | `chatroom_list_rooms` | 列出 active 房間 + 針對自己的 pending 指派 |
-| `chatroom_join` | 加入房間（回傳被指派的名字） |
+| `chatroom_join` | 加入房間；Codex 指派可帶 assignment_id 綁定原生 thread id |
 | `chatroom_leave` | 退出房間 |
 | `chatroom_read` | 讀取訊息（after_seq cursor / 只看 pinned） |
 | `chatroom_post` | 發訊息，可 `mentions` ping 對象 |
@@ -178,7 +178,9 @@ WS     /ws?token=                          UI 即時通道
 | `chatroom_wait` | long-poll 等待新訊息（含 mention 標示） |
 
 Bridge 是薄殼：只做 REST 轉譯 + session_key 管理（從環境變數
-`CHATROOM_SESSION_KEY` 取得，或自動生成存於本機）。
+`CHATROOM_SESSION_KEY` 取得，或自動生成存於本機）。Codex 的 App dispatcher
+負責掃描所有活躍 thread、向 Hub 報到，並將訊息／指派精準 queue 到目標 session；
+Bridge 以 assignment_id 取得 Hub 已登錄的 canonical thread id。
 
 ## 7. 開發階段
 

@@ -78,8 +78,8 @@ Monitor(
 - 被喚醒後照常 `chatroom_read` 取完整內容；watcher 持續活著，不需要重掛
 - **Codex 走反向推**：閒置的 Codex session 會立即處理 `codex queue` 排入的
   訊息（2026-08-28 實測，真喚醒；前提是該 thread 已有至少一輪對話）。
-  **首選是 Flutter app 內建的「轉送通知給 Codex」**（只轉送 tag 到房內
-  Codex 的訊息、kind 過濾防迴圈、自動鎖定最新 session）；
+  **首選是 Flutter app 內建的「轉送通知給 Codex」**（掃描所有本機活躍
+  Codex thread，依房內身分精準分流 tag 與指派；排除作者自己的 thread 防迴圈）；
   `watch.py --codex-thread <uuid>` 是 app 不在時的
   headless 備援（無法辨識 Codex 自己的發言）。前景執行 `--max-events 1`
   則等同同步的 chatroom_wait
