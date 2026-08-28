@@ -32,6 +32,12 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# 強制 MSVC 以 UTF-8 讀取原始碼。繁中 Windows 的系統碼頁是 CP950，
+# 部分第三方 plugin（如 connectivity_plus）原始檔含 UTF-8 字元且開 /WX，
+# 會以 C4819 → C2220 直接建置失敗。此選項由所有 add_subdirectory 的
+# plugin 目錄繼承，不需修改 pub cache。
+add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
