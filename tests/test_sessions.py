@@ -69,6 +69,25 @@ async def test_touch_without_kind_keeps_existing(client):
     assert s["label"] == "Worker"
 
 
+async def test_kind_inferred_from_key_prefix(client):
+    """舊版 bridge 不自報 kind：identity.py 的 key 帶 kind 前綴，從前綴推斷。"""
+    await client.get("/api/assignments", params={"session_key": "claude-abc123"})
+    await client.get("/api/assignments", params={"session_key": "mystery-key"})
+
+    r = await client.get("/api/sessions")
+    kinds = {s["session_key"]: s["kind"] for s in r.json()["sessions"]}
+    assert kinds["claude-abc123"] == "claude"
+    assert kinds["mystery-key"] == "other"  # 前綴不認得就維持 other
+
+    # 之後 caller 真的自報時照樣覆寫
+    await client.get(
+        "/api/assignments", params={"session_key": "mystery-key", "kind": "codex"}
+    )
+    r = await client.get("/api/sessions")
+    kinds = {s["session_key"]: s["kind"] for s in r.json()["sessions"]}
+    assert kinds["mystery-key"] == "codex"
+
+
 async def test_join_registers_session_and_lists_room(client):
     r = await client.post("/api/rooms", json={"name": "作戰室"})
     room_id = r.json()["id"]

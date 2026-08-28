@@ -149,6 +149,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
         舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。"""
         db = app.state.db
+        if not kind:
+            # 舊版 bridge 不自報 kind，但 identity.py 生成的 key 天生帶
+            # kind 前綴（claude-xxx / codex-xxx）——從前綴推斷，之後
+            # caller 真的自報時仍會覆寫
+            prefix = session_key.split("-", 1)[0]
+            if prefix in ("claude", "codex", "human"):
+                kind = prefix
         now = _now()
         await db.execute(
             "INSERT INTO session (session_key, kind, label, first_seen_at, last_seen_at)"
