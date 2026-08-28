@@ -712,7 +712,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             (_now(), a_cutoff),
         )
         await db.commit()
-        # 封存：active 房間中已無任何 active agent。
+        # 封存：active 房間中已無任何 active agent，且 active 人類不超過一人
+        # ——兩個以上的人類仍在對話時，agent 離場不該把房間收走。
         # 只計入「本次 active 期間（activated_at 之後）」加入過的 agent，
         # 否則解封後會因舊成員紀錄被 sweeper 立刻封回去
         empty = await (
@@ -722,7 +723,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "             AND p.role='agent'"
                 "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
                 " AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                "                 AND p.role='agent' AND p.status='active')",
+                "                 AND p.role='agent' AND p.status='active')"
+                " AND (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
+                "      AND p.role='human' AND p.status='active') <= 1",
             )
         ).fetchall()
         for r in empty:

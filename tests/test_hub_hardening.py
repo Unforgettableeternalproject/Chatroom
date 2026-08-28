@@ -164,8 +164,42 @@ async def test_sweep_keeps_human(tmp_path):
             detail = (await client.get(f"/api/rooms/{room_id}")).json()
             by_name = {p["display_name"]: p["status"] for p in detail["participants"]}
             assert by_name == {"Xavier": "active", "Nova": "removed"}
-            # 房內只剩 human → 仍會封存（封存只看 agent）
+            # 房內只剩「一個」human → 封存（沒有對話對象）
             assert detail["room"]["status"] == "archived"
+
+
+async def test_sweep_spares_room_with_multiple_humans(tmp_path):
+    """兩個以上人類仍在對話時，agent 離場不得觸發自動封存。"""
+    app = _app(tmp_path, "humans2", idle_timeout=0.0, sweep_interval=3600)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            await _join(client, room_id, "h1", "Xavier", kind="human", role="human")
+            await _join(client, room_id, "h2", "Bernie", kind="human", role="human")
+            agent = await _join(client, room_id, "a1", "Nova")
+            # agent 主動離開（比閒置移除更直接）
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": agent["participant_id"]},
+            )
+            await app.state.sweep_once()
+            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            assert detail["room"]["status"] == "active"
+
+            # 其中一個人類也走了 → 只剩一人，下一輪才封存
+            h2 = next(
+                p for p in detail["participants"] if p["display_name"] == "Bernie"
+            )
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": h2["id"]},
+            )
+            await app.state.sweep_once()
+            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+                "status"
+            ] == "archived"
 
 
 # ---------- P1-08 認證 ----------
