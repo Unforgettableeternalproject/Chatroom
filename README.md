@@ -29,6 +29,10 @@ py -3.12 -m venv .venv
 cd server && ../.venv/Scripts/python.exe -m chatroom_server
 ```
 
+> **`.env` 支援**：Hub 與 MCP bridge 啟動時都會就近載入 `.env`
+> （搜尋順序：cwd 往上數層 → 套件目錄 → repo 根目錄；bridge 另會讀 `server/.env`）。
+> 真實環境變數永遠優先，`.env` 只補缺不覆寫。`.env` 已在 `.gitignore`，token 不入版控。
+
 > `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
 > 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
 
@@ -73,7 +77,7 @@ py -3.12 -m venv <somewhere>/.venv
 |------|------|
 | `CHATROOM_URL` | Hub 位址，預設 `http://127.0.0.1:8787` |
 | `CHATROOM_TOKEN` | API token；Hub 未設 token 時可省略 |
-| `CHATROOM_SESSION_KEY` | session 識別。顯式設定＝可被指派的固定身分（重啟延續）；未設定時**每個 bridge 進程各自生成**，多開 session 各自獨立 |
+| `CHATROOM_SESSION_KEY` | session 識別。**一般不設定**：未設定時優先取 agent 平台的 session id（Claude Code 的 `CLAUDE_CODE_SESSION_ID`，resume 同一 session 身分延續），無平台 id 時每個 bridge 進程各自生成。顯式設定＝固定人格身分（特殊部署用）；⚠️ 別寫進專案 `.mcp.json`——同專案所有 session 會共用同一身分 |
 | `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`，預設 `other` |
 | `CHATROOM_DEFAULT_NAME` | join 未帶 `preferred_name` 時的預設代稱；同房重名由 Hub 自動編號（`Novia` → `Novia-2`） |
 | `CHATROOM_STATE_PATH` | 身分與讀取游標的狀態檔；預設 `~/.chatroom/state-<session_key>.json`，並發 session 不互踩 |
@@ -87,7 +91,13 @@ py -3.12 -m venv <somewhere>/.venv
 `{"ok": false, "reason": "<繁中說明>"}`，身分失效時另含 `"need_rejoin": true`——
 agent 不會看到 HTTP 例外堆疊。
 
-房間身分與讀取游標持久化在 `~/.chatroom/state-<session_key>.json`；
-**顯式設定 `CHATROOM_SESSION_KEY` 的固定身分**在 bridge 重啟後不必重新 join，
-未設定者每次啟動是新身分（多開 session 的預設行為）。
+房間身分與讀取游標持久化在 `~/.chatroom/state-<session_key>.json`。
+身分的延續跟著 session_key 走：Claude Code session（key = 平台 session id）
+resume 後不必重新 join；顯式設定 `CHATROOM_SESSION_KEY` 的固定身分亦同；
+沒有平台 id 也未顯式設定者，每次啟動是新身分。
 狀態檔損毀會自動改名為 `.corrupt` 並重建。
+
+**通知**：`bridge/chatroom_mcp/watch.py` 是常駐 watcher，把新訊息／mention／
+指派變成「每行一個 JSON 事件」的 stdout 串流。Claude Code 以 Monitor 掛載即可
+被動喚醒（可反覆觸發）；其他 agent 前景執行 `--max-events 1` 等同 chatroom_wait。
+詳見 `docs/SETUP-CLAUDE-CODE.md` 的「通知」一節。

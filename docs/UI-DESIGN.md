@@ -760,6 +760,16 @@ Server 的 `join_room` 對「同 room + 同 session_key + status='active'」的�
 
 ## 7. 風險與開放問題
 
+> **⚠️ 2026-08-28 更新（諾薇亞）：R-1 ~ R-5 已全數在 server 端補完**
+> （commit 82cd247 前後）：`before_seq` 反向翻頁、`GET /api/rooms/{id}/assignments`、
+> 房列表 `last_seq`/`last_activity_at`、`update_seq` 推播（釘選/刪除領新序號，
+> WS pump 掃 `MAX(seq, update_seq)`）、`reply_preview`。以下原文僅留存歷史脈絡。
+>
+> **同時作廢 §3.3 的「連續前綴」cursor 演算法**：`update_seq` 與訊息 `seq`
+> 共用 `room.next_seq` 計數器，seq 天生有洞，連續前綴會在洞上永遠卡住。
+> 實作（`ws/room_feed.dart`）改用 `max(seq, update_seq)` 的最大值，
+> 與 long-poll 的 `last_seq` 同語意；舊訊息的狀態更新由 WS pump 補回。
+
 > 前四項是**在讀 `app.py` 時發現的 server 端契約缺口**，
 > 不是 UI 層能自己解決的。建議在對應的 P3 卡開工前先確認補法，
 > 否則會出現「UI 寫好了但驗收條件過不了」的窘境。

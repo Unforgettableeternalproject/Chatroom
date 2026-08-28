@@ -381,6 +381,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-02：`app/` 專案骨架與設定畫面
 
+**狀態：🔨 程式碼完成（08/28，諾薇亞）**——analyze 0 issues、tests 綠；實機驗收待 Windows 開發人員模式開啟後建置。
+
 - **範圍**：在 `app/` 建立 Flutter 專案，決定並落地狀態管理方案（於 PR 說明選型理由）、
   資料夾結構、主題（含深色）；實作「伺服器設定」畫面：server URL + API token，
   持久化於本機安全儲存，附連線測試按鈕（打 `/api/health`）。
@@ -395,6 +397,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-03：API client 層
 
+**狀態：🔨 程式碼完成（08/28）**——含 before_seq/reply_preview/update_seq 等 server 補卡欄位；錯誤轉譯有單元測試。
+
 - **範圍**：以 Hub 的 OpenAPI 為準，實作 Dart 端的 REST client 與資料模型
   （Room / Participant / Message / Assignment），統一錯誤轉譯為 app 層例外。
 - **不做**：WebSocket（P3-04）、UI。
@@ -408,6 +412,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-04：WebSocket 即時連線層
 
+**狀態：🔨 程式碼完成（08/28）**——狀態機 + 退避 + 補訊有 fake connector 測試。cursor 改用 max(seq, update_seq)（seq 有洞，連續前綴會卡死）。
+
 - **範圍**：連上 `/ws`，管理訂閱、自動重連（指數退避）、斷線期間以 REST
   `after_seq` 補齊漏掉的訊息。
 - **不做**：離線編輯佇列。
@@ -419,6 +425,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 - **規模**：L
 
 ## P3-05：房間列表畫面
+
+**狀態：🔨 程式碼完成（08/28）**——待實機驗收。
 
 - **範圍**：列出 active 房間（名稱、主題、成員數、最後活動時間），
   支援切換檢視封存房間、建立新房間、封存 / 解封操作。
@@ -432,6 +440,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 - **規模**：M
 
 ## P3-06：聊天視圖
+
+**狀態：🔨 程式碼完成（08/28）**——待實機驗收（250 則捲動流暢度）。
 
 - **範圍**：訊息串（依 seq 排序）、system 訊息與 chat 訊息視覺區分、
   Markdown 渲染、發送者名稱與時間、往上捲載入歷史（用 `before_seq`）、
@@ -447,6 +457,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-07：人類發言與 mention
 
+**狀態：🔨 程式碼完成（08/28）**——待實機驗收（跨系統 mention 驗證）。
+
 - **範圍**：人類以 `role='human'` join 房間取得身分（裝置識別作 session_key），
   輸入框發送訊息、`@` 自動完成房內成員以填入 `mentions`、回覆某則訊息。
 - **不做**：附件、表情反應。
@@ -461,6 +473,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-08：釘選牆與訊息管理
 
+**狀態：🔨 程式碼完成（08/28）**——待雙 client 實機驗收。
+
 - **範圍**：釘選訊息的獨立檢視、在聊天視圖中釘選 / 取消釘選、軟刪除訊息
   （含確認對話框與刪除後的占位呈現）。
 - **不做**：編輯訊息、硬刪除。
@@ -474,6 +488,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 
 ## P3-09：指派操作畫面
 
+**狀態：🔨 程式碼完成（08/28）**——accepted 轉態靠 10 秒輪詢。待實機驗收。
+
 - **範圍**：對房間建立指派（輸入 target session_key + note）、
   檢視房間的指派狀態（pending / accepted / declined / expired）。
   提供最近見過的 session_key 快選，減少手抄 uuid 的痛苦。
@@ -486,6 +502,8 @@ SetEnvironmentVariable（打壞型別害 nvm/pnpm 死掉）；Windows build 報
 - **規模**：M
 
 ## P3-10：UI 打包與手動測試清單
+
+**狀態：🔨 進行中（08/28）**——UI-TEST-CHECKLIST.md 與 BUILD.md 已寫；release 建置被 Windows 開發人員模式（symlink）擋住，待開啟。
 
 - **範圍**：產出 Windows desktop 建置（以及若環境允許的 Android APK）；
   撰寫 `docs/UI-TEST-CHECKLIST.md` 手動測試清單並執行一輪。

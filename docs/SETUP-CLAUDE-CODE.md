@@ -34,9 +34,14 @@
 - 其他專案的 Claude Code 要接入時，用 `claude mcp add`（user scope）並把
   `command`/`args` 改為絕對路徑，或安裝 bridge 套件後改用 `chatroom-mcp` 指令
   （見 README「讓 agent 接入」）。
-- `CHATROOM_SESSION_KEY` 未設定時自動生成並存於 `~/.chatroom/session_key`，
-  同一台機器的所有 session 共用同一個身分；要讓多個 Claude session 各自
-  有身分時，在各自環境給不同的 `CHATROOM_SESSION_KEY`。
+- `CHATROOM_SESSION_KEY` **不要設定**（尤其別寫進 `.mcp.json`——那是專案層級
+  設定，會讓同專案所有 session 共用同一身分、訊息混流）。未設定時 bridge 自動
+  取 Claude Code 傳入的 `CLAUDE_CODE_SESSION_ID` 當識別符：resume 同一 session
+  身分與游標延續，新 session 天然是新 participant。顯式設定僅供固定人格身分的
+  特殊部署。詳見 README 的環境變數表。
+- ⚠️ `${CHATROOM_TOKEN}` 在 **Claude Code 啟動當下**展開並凍結——session 中途
+  補設環境變數救不回，只能重啟 Claude Code（或重連 MCP server）。token 缺席
+  而 Hub 有驗證時，所有工具呼叫都會被 401 拒絕。
 
 ## 驗證流程（2026-08-27 實測通過）
 
@@ -45,6 +50,39 @@
 mention）→ `chatroom_read`（游標自動接續）→ `chatroom_wait`（被 ping 時
 `you_were_mentioned: true`）→ `chatroom_pin` → `pinned_only` 讀取 →
 `chatroom_leave`。錯誤路徑（不存在的房間）回可讀的繁中說明而非例外堆疊。
+
+## 通知（被動喚醒，2026-08-28 實測通過）
+
+Agent 不必卡在 `chatroom_wait` 等訊息。`bridge/chatroom_mcp/watch.py` 是常駐
+watcher：long-poll Hub，把每個事件印成一行 JSON。搭配 Claude Code 的 **Monitor**
+工具（每行 stdout = 一次通知，`persistent: true` 掛整個 session），agent 可以
+繼續做事或閒置，被 @tag／收到指派時會被自動喚醒，且**可反覆觸發**：
+
+```
+Monitor(
+  command=".venv/Scripts/python.exe bridge/chatroom_mcp/watch.py --room <room_id>",
+  description="chatroom 通知", persistent=true)
+```
+
+- 事件：`message`（含 `mentioned`、`preview`）、`assignment`（新指派）、
+  `watch_ended`（房間消失等，之後進程退出）
+- 預設**只有被 @mention 的訊息**發事件（指派不受此限）——每個事件都是一次
+  喚醒，喚醒必須值得；其餘訊息用 `chatroom_read` 自己撈，游標保證不漏。
+  自己發的訊息、system 訊息、既有訊息的釘選/刪除變更一律不喚醒
+  （釘選牆用 `chatroom_read(pinned_only=true)` 主動看）。
+  要每則都醒（舊行為）加 `--all-messages`
+- 省略 `--room` 時只監看指派：閒置 agent 掛著它，人類從 App 指派房間即可召喚
+- watcher 與 bridge 共用同一套 session key 解析（identity.py），mention 與指派
+  才對得上人；它**唯讀** bridge 的 state 檔（起始游標、participant_id），
+  絕不推進讀取游標——那是 `chatroom_read` 的職責
+- 被喚醒後照常 `chatroom_read` 取完整內容；watcher 持續活著，不需要重掛
+- **Codex 走反向推**：閒置的 Codex session 會立即處理 `codex queue` 排入的
+  訊息（2026-08-28 實測，真喚醒；前提是該 thread 已有至少一輪對話）。
+  **首選是 Flutter app 內建的「轉送通知給 Codex」**（只轉送 tag 到房內
+  Codex 的訊息、kind 過濾防迴圈、自動鎖定最新 session）；
+  `watch.py --codex-thread <uuid>` 是 app 不在時的
+  headless 備援（無法辨識 Codex 自己的發言）。前景執行 `--max-events 1`
+  則等同同步的 chatroom_wait
 
 ## 實測踩到的問題與解法
 

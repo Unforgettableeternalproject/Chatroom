@@ -5,9 +5,10 @@
 設定來源（環境變數）：
     CHATROOM_URL          Hub 位址，預設 http://127.0.0.1:8787
     CHATROOM_TOKEN        API token（Hub 未設 token 時可省略）
-    CHATROOM_SESSION_KEY  本 agent 的 session 識別。顯式設定＝可被指派的固定身分
-                          （重啟延續）；未設定時每個 bridge 進程各自生成
-                          （多開 session 各自獨立，重啟即新身分）
+    CHATROOM_SESSION_KEY  本 agent 的 session 識別。顯式設定＝固定人格身分
+                          （特殊部署用）；未設定時優先取 agent 平台的
+                          session id（Claude Code 的 CLAUDE_CODE_SESSION_ID），
+                          再退回每進程各自生成（多開 session 各自獨立）
     CHATROOM_AGENT_KIND   claude / codex / human / other，預設 other
     CHATROOM_DEFAULT_NAME join 未帶 preferred_name 時的預設代稱；
                           房內重名由 Hub 自動編號（Novia → Novia-2）
@@ -27,7 +28,6 @@ from __future__ import annotations
 import functools
 import os
 import sys
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,9 +39,14 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "chatroom_mcp"
 
+from . import identity  # noqa: E402
+from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 
+# 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
+# CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
+load_env_file()
 
 AGENT_KIND = os.environ.get("CHATROOM_AGENT_KIND", "other")
 # join 未指定 preferred_name 時的預設代稱；房內重名由 Hub 自動加 -2 編號
@@ -49,20 +54,16 @@ DEFAULT_NAME = os.environ.get("CHATROOM_DEFAULT_NAME", "")
 
 
 def _session_key() -> str:
-    """本 bridge 進程的 session 識別。
-
-    顯式設定 ``CHATROOM_SESSION_KEY`` 代表「可被指派的固定身分」（如 codex-main），
-    重啟後身分與游標延續。未設定時**每個進程各自生成**——多開 session 必須是
-    不同的 participant；若沿用舊版的機器層級共用 keyfile，多個 session 會因
-    join 冪等而合併成同一個身分，訊息混流、state 檔互踩。
-    """
-    env = os.environ.get("CHATROOM_SESSION_KEY")
-    if env:
-        return env
-    return f"{AGENT_KIND}-{uuid.uuid4().hex[:12]}"
+    """本 bridge 進程的 session 識別。解析邏輯見 identity.session_key。"""
+    return identity.session_key(AGENT_KIND)
 
 
 SESSION_KEY = _session_key()
+
+
+def _state_filename(session_key: str) -> str:
+    """session_key → 安全的 state 檔名。見 identity.state_filename。"""
+    return identity.state_filename(session_key)
 
 mcp = MCPServer("chatroom")
 
@@ -87,7 +88,7 @@ def state() -> BridgeState:
         else:
             # state 檔跟著 session_key 走：並發 session 各寫各的，不互踩
             _state = BridgeState(
-                Path.home() / ".chatroom" / f"state-{SESSION_KEY[:16]}.json"
+                Path.home() / ".chatroom" / _state_filename(SESSION_KEY)
             )
     return _state
 
@@ -101,6 +102,18 @@ def configure(
         _hub = hub_client
     if bridge_state is not None:
         _state = bridge_state
+
+
+def _presence_params() -> dict[str, str]:
+    """帶 session_key 的查詢參數，順便向 Hub 自報 kind 與代稱。
+
+    Hub 據此維護 session 名錄（指派 UI 的掃描來源）；label 用
+    CHATROOM_DEFAULT_NAME，讓使用者在清單上認得出這個 session 是誰。
+    """
+    params = {"session_key": SESSION_KEY, "kind": AGENT_KIND}
+    if DEFAULT_NAME:
+        params["label"] = DEFAULT_NAME
+    return params
 
 
 # ---------- 共用請求包裝 ----------
@@ -161,12 +174,12 @@ def chatroom_list_rooms() -> dict:
     （含 room_name / room_topic / note，說明邀你進去做什麼）。
     已加入過的房間會附上 ``you_joined_as``，也就是你在該房的顯示名稱。
     """
-    data = hub().request("GET", "/api/rooms", params={"session_key": SESSION_KEY})
+    data = hub().request("GET", "/api/rooms", params=_presence_params())
     # /api/rooms 的 pending_assignments 只有原始欄位；/api/assignments 有 join 房名，
     # 對 agent 更可讀，取得成功就用它替換
     try:
         richer = hub().request(
-            "GET", "/api/assignments", params={"session_key": SESSION_KEY}
+            "GET", "/api/assignments", params=_presence_params()
         )
         data["pending_assignments"] = richer.get("assignments", [])
     except HubError:
@@ -175,6 +188,9 @@ def chatroom_list_rooms() -> dict:
         name = state().display_name(room.get("id", ""))
         if name:
             room["you_joined_as"] = name
+    # key 是動態的（session id 或每進程生成），要讓使用者能指派就得先讓
+    # agent 說得出自己是哪一把 key
+    data["your_session_key"] = SESSION_KEY
     return data
 
 
@@ -185,6 +201,8 @@ def chatroom_join(room_id: str, preferred_name: str = "") -> dict:
 
     發言、釘選、heartbeat 之前都必須先加入。可提供 ``preferred_name`` 作為偏好名稱，
     房內重名時 Hub 會自動調整；回傳實際被指派的 ``display_name``。
+    若這個房間有針對你的指派且指派者已幫你取名，會以那個名字為準
+    （回傳含 ``name_from_assignment: true``），不必覺得奇怪。
     同一個 session 重複加入同一房間是冪等的（回傳 ``rejoined: true``）。
     身分會寫入本機狀態檔，bridge 重啟後不需要重新加入。
     """
@@ -353,8 +371,15 @@ def chatroom_assignments() -> dict:
     （邀你進去做什麼）。開始新一輪工作前值得查一次。
     回應方式：chatroom_resolve_assignment，或直接 chatroom_join
     （加入該房間時 Hub 會自動把對應指派標記為 accepted）。
+    指派若帶 ``assigned_name``，表示指派者已幫你取好房內名稱，
+    加入該房間時 Hub 會以它命名（優先於你自己的 preferred_name）。
+    回傳另含 ``your_session_key``——想請人指派工作給你時，把這把 key 告訴對方。
     """
-    return hub().request("GET", "/api/assignments", params={"session_key": SESSION_KEY})
+    data = hub().request(
+        "GET", "/api/assignments", params=_presence_params()
+    )
+    data["your_session_key"] = SESSION_KEY
+    return data
 
 
 @mcp.tool()
@@ -375,6 +400,13 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
 
 
 def main() -> None:
+    # token 缺席時每次呼叫才報 401 會讓人誤以為 Hub 或指派壞了——啟動就把話說清楚
+    if not os.environ.get("CHATROOM_TOKEN"):
+        print(
+            "[chatroom-mcp] CHATROOM_TOKEN 未設定：若 Hub 有啟用 token，"
+            "所有工具呼叫都會被拒絕。請在啟動 agent 前於 shell 設定該環境變數。",
+            file=sys.stderr,
+        )
     mcp.run()
 
 

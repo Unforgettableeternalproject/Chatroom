@@ -23,6 +23,19 @@ class Config:
     assignment_ttl: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_ASSIGNMENT_TTL", "86400"))
     )
+    # 自動封存前的倒數緩衝（秒）：條件成立後先倒數，期間條件解除即取消
+    archive_grace: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_ARCHIVE_GRACE", "60"))
+    )
+    # session 名錄：last_seen 在此窗內視為 active（秒）。watcher 的指派輪詢
+    # 週期約 15~65 秒，窗口取其兩倍餘裕
+    session_active_window: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_SESSION_ACTIVE_WINDOW", "180"))
+    )
+    # session 名錄：超過此時間未見的 session 不再列出（秒），預設 24 小時
+    session_ttl: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_SESSION_TTL", "86400"))
+    )
     # updates long-poll / WS 單批推送的訊息數上限
     updates_batch_limit: int = field(
         default_factory=lambda: int(os.environ.get("CHATROOM_UPDATES_LIMIT", "200"))

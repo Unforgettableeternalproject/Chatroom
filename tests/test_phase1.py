@@ -57,7 +57,7 @@ def test_ws_rejects_bad_token(tmp_path):
 async def test_sweeper_removes_idle_agent_and_archives(tmp_path):
     cfg = Config(
         db_path=str(tmp_path / "sweep.db"), api_token="",
-        idle_timeout=0.1, sweep_interval=0.05,
+        idle_timeout=0.1, sweep_interval=0.05, archive_grace=0.05,
     )
     app = create_app(cfg)
     async with AsyncClient(

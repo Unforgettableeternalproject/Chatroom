@@ -32,7 +32,8 @@ async def _join(client, room_id, session_key, name=None, kind="claude"):
 async def test_unarchive_survives_sweeper(tmp_path):
     """P1-03：解封後房內沒有 active agent，不該被 sweeper 立刻封回去。"""
     app, client = await _make_client(
-        tmp_path, "unarchive", idle_timeout=0.05, sweep_interval=0.05
+        tmp_path, "unarchive", idle_timeout=0.05, sweep_interval=0.05,
+        archive_grace=0.05,
     )
     async with client:
         async with app.router.lifespan_context(app):

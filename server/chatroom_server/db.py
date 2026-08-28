@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS room (
     next_seq    INTEGER NOT NULL DEFAULT 1,       -- 訊息序號發放計數器
     created_at  TEXT NOT NULL,
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
-    archived_at TEXT
+    archived_at TEXT,
+    creator_session_key TEXT,                     -- 建立者（管理員）的 session；不外流
+    archive_pending_since TEXT                    -- 自動封存倒數的起點；NULL = 未在倒數
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -27,7 +29,8 @@ CREATE TABLE IF NOT EXISTS participant (
     status       TEXT NOT NULL DEFAULT 'active',  -- active / left / removed
     joined_at    TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    left_at      TEXT
+    left_at      TEXT,
+    join_ip      TEXT                              -- 加入時的來源 IP（重名消歧用）
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -60,11 +63,24 @@ CREATE TABLE IF NOT EXISTS assignment (
     room_id            TEXT NOT NULL REFERENCES room(id),
     target_session_key TEXT NOT NULL,
     note               TEXT NOT NULL DEFAULT '',
+    -- 指派者預先取的名字；agent 依此指派加入時優先於自取名與名字池
+    assigned_name      TEXT NOT NULL DEFAULT '',
     status             TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/expired
     created_at         TEXT NOT NULL,
     resolved_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assignment_target ON assignment(target_session_key, status);
+
+-- Hub 見過的 session 名錄：bridge/watcher 帶 session_key 的呼叫都會 upsert。
+-- 指派 UI 據此列出「掃描到的 session」，不必使用者手抄 key。
+CREATE TABLE IF NOT EXISTS session (
+    session_key   TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL DEFAULT 'other',  -- claude / codex / human / other
+    label         TEXT NOT NULL DEFAULT '',       -- bridge 自報的代稱（CHATROOM_DEFAULT_NAME）
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_seen ON session(last_seen_at);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
@@ -74,6 +90,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column, 完整欄位定義)
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
+    ("participant", "join_ip", "join_ip TEXT"),
+    ("room", "creator_session_key", "creator_session_key TEXT"),
+    ("room", "archive_pending_since", "archive_pending_since TEXT"),
+    ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
 ]
 
 

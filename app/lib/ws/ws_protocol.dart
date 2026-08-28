@@ -1,0 +1,50 @@
+import 'dart:convert';
+
+import '../models/message.dart';
+import '../models/ws_event.dart';
+
+/// WS 協定的唯一定義處。server 的 /ws 是純 JSON text frame：
+/// 指令 subscribe / unsubscribe / ping，事件 messages / pong。
+class WsProtocol {
+  WsProtocol._();
+
+  static String subscribe(String roomId, int afterSeq) =>
+      jsonEncode({'type': 'subscribe', 'room_id': roomId, 'after_seq': afterSeq});
+
+  static String unsubscribe(String roomId) =>
+      jsonEncode({'type': 'unsubscribe', 'room_id': roomId});
+
+  static String ping() => jsonEncode({'type': 'ping'});
+
+  static WsEvent decode(String raw) {
+    final data = jsonDecode(raw);
+    if (data is! Map<String, dynamic>) return const WsUnknownEvent('?');
+    switch (data['type']) {
+      case 'messages':
+        return WsMessagesEvent(
+          roomId: data['room_id'] as String,
+          roomStatus: data['room_status'] as String?,
+          messages: ((data['messages'] as List?) ?? const [])
+              .map((e) => Message.fromJson(e as Map<String, dynamic>))
+              .toList(),
+        );
+      case 'pong':
+        return const WsPongEvent();
+      default:
+        return WsUnknownEvent('${data['type']}');
+    }
+  }
+
+  /// http(s) base URL → ws(s) /ws URL（token 走 query string，
+  /// ⚠️ 這條 URL 絕不可進 log——redacting_logger 會遮，但別依賴它）。
+  static Uri wsUri(String baseUrl, String? token) {
+    final base = Uri.parse(baseUrl);
+    return base.replace(
+      scheme: base.scheme == 'https' ? 'wss' : 'ws',
+      path: '/ws',
+      queryParameters: {
+        if (token != null && token.isNotEmpty) 'token': token,
+      },
+    );
+  }
+}
