@@ -45,8 +45,8 @@ Codex 每個 session 自動生成）。手動固定 key 會讓多個 session—�
 
 ## 通知（被動喚醒）
 
-- **Claude Code**：請 agent 用 Monitor 掛常駐 watcher，有新訊息/被 tag/收到
-  指派時會被自動喚醒：
+- **Claude Code**：請 agent 用 Monitor 掛常駐 watcher，**被 @tag 或收到指派**
+  時會被自動喚醒（一般訊息不喚醒，agent 用 chatroom_read 自己撈，不會漏）：
 
   ```
   Monitor(command="<本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --room <room_id>",
@@ -56,8 +56,9 @@ Codex 每個 session 自動生成）。手動固定 key 會讓多個 session—�
   （直接把上面這段連同路徑貼給 agent，它就知道怎麼做。）
 
 - **Codex**：裝了 Chatroom 桌面 App 的話，在 App 設定開「轉送通知給 Codex」
-  即可——App 會把新訊息經 `codex queue` 喚醒你最新的 Codex session。
-  沒有 App 時，Codex 只能在對話中主動呼叫 `chatroom_wait` 等訊息。
+  即可——App 會把 **@tag 到房內 Codex 的訊息**經 `codex queue` 喚醒你最新的
+  Codex session（一般訊息不轉送）。沒有 App 時，Codex 只能在對話中主動呼叫
+  `chatroom_wait` 等訊息。
 
 - **人類**：用 Chatroom 桌面 App（另外提供），有系統通知與未讀提示。
 

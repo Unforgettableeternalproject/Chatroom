@@ -20,13 +20,22 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
     (roomId) async {
       final detail = await api.detail(roomId);
       final kinds = <String, String>{};
+      final codexNames = <String>{};
+      final allNames = <String>{};
       for (final p in detail.participants) {
         kinds[p.id] = p.kind;
         for (final alias in p.aliasIds) {
           kinds[alias] = p.kind; // 改名重進的舊 id 也對得上
         }
+        allNames.add(p.displayName);
+        final prev = p.previousName;
+        if (prev != null) allNames.add(prev);
+        if (p.kind == 'codex' && p.status == 'active') {
+          codexNames.add(p.displayName);
+        }
       }
-      return kinds;
+      return RoomMembers(
+          kinds: kinds, codexNames: codexNames, allNames: allNames);
     },
   );
   dispatcher

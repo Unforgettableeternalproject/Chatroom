@@ -332,7 +332,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             style:
                                 UepText.sans(size: 13.5, color: s.inkTitle)),
                         const SizedBox(height: 3),
-                        Text('新訊息經 codex queue 喚醒本機 Codex session',
+                        Text('被 @tag 到房內 Codex 的訊息經 codex queue 喚醒本機 Codex session',
                             style:
                                 UepText.serif(size: 12, color: s.inkMute)),
                       ],

@@ -20,8 +20,15 @@
      "room_name": ..., "note": ...}
     {"event": "watch_ended", "reason": "..."}    # 之後進程退出
 
-預設行為刻意收斂雜訊：**自己發的訊息**與**system 訊息**（加入/離開）不發事件
-——每個事件都會喚醒 agent 一次，喚醒必須值得。
+預設行為刻意收斂雜訊——每個事件都會喚醒 agent 一次，喚醒必須值得：
+
+- **只有被 @mention 的訊息**才發 message 事件（指派事件不受此限）；
+  其餘訊息留給 agent 用 chatroom_read / chatroom_wait 自己撈（游標保證不漏）
+- **自己發的訊息**與**system 訊息**（加入/離開）不發事件
+- **既有訊息的狀態變更**（釘選/軟刪除）不發事件——釘選牆是「額外可撈」
+  的東西（chatroom_read pinned_only），不是喚醒的理由
+
+要每則訊息都喚醒（舊行為）用 ``--all-messages``。
 
 身分解析與 bridge 主體共用（identity.session_key）：同一個 session 的
 watcher 與 MCP bridge 是同一把 session_key，指派與 mention 才對得上人。
@@ -126,6 +133,7 @@ class Watcher:
         self.seen_assignments: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
+        self._warned_no_name = False
         # Codex 沒有 Monitor 那種自掛機制，只能反向推：事件經 codex queue
         # 注入其 session（前提：該 thread 已有至少一輪對話，否則 queue 讀不到）
         self.codex_argv = _resolve_codex_argv() if args.codex_thread else None
@@ -134,6 +142,13 @@ class Watcher:
 
     def poll_room(self) -> None:
         assert self.room_id
+        if self.participant_id is None or self.display_name is None:
+            # bridge 可能在 watcher 啟動後才 join——每輪補讀身分（游標不動，
+            # 起始游標在 __init__ 已定案，中途改會漏或重看）
+            pid, name, _ = _read_bridge_state(self.session_key, self.room_id)
+            self.participant_id = self.participant_id or pid
+            self.display_name = self.display_name or name
+        prev = self.after_seq
         data = self.hub.request(
             "GET",
             f"/api/rooms/{self.room_id}/updates",
@@ -145,6 +160,11 @@ class Watcher:
         if isinstance(last, int):
             self.after_seq = max(self.after_seq, last)
         for m in data.get("messages", []):
+            seq = m.get("seq")
+            if isinstance(seq, int) and seq <= prev:
+                # 既有訊息的狀態變更（釘選/軟刪除領 update_seq 重新入流）
+                # 不喚醒——釘選牆用 chatroom_read(pinned_only) 主動撈
+                continue
             if m.get("kind") == "system" and not self.args.include_system:
                 continue
             if m.get("sender_id") and m["sender_id"] == self.participant_id:
@@ -152,7 +172,14 @@ class Watcher:
             mentioned = bool(
                 self.display_name and self.display_name in (m.get("mentions") or [])
             )
-            if self.args.mentions_only and not mentioned:
+            if not self.args.all_messages and not mentioned:
+                if self.display_name is None and not self._warned_no_name:
+                    _log(
+                        "state 無 display_name（尚未 join？）——預設只通知"
+                        " @mention，將收不到任何訊息事件；join 後自動生效，"
+                        "或改用 --all-messages 全收"
+                    )
+                    self._warned_no_name = True
                 continue
             self.emit(
                 {
@@ -276,8 +303,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="起始游標；預設沿用 bridge state 的讀取游標（唯讀）",
     )
     p.add_argument(
-        "--mentions-only", action="store_true",
-        help="只在被 @mention 時發事件（需要已 join 過、state 檔有 display_name）",
+        "--all-messages", action="store_true",
+        help="每則訊息都發事件（舊行為）；預設只在被 @mention 時發，"
+             "其餘訊息由 agent 用 chatroom_read 自行讀取",
     )
     p.add_argument(
         "--include-system", action="store_true",

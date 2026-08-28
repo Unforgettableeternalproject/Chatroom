@@ -8,17 +8,39 @@ import 'notification_center.dart';
 
 final _log = Logger('codex_dispatch');
 
-/// 把聊天室新訊息經 `codex queue` 轉送進本機的 Codex session（外部喚醒）。
+/// 房內成員快照：mention 過濾與防迴圈都靠它。
+class RoomMembers {
+  const RoomMembers({
+    this.kinds = const {},
+    this.codexNames = const {},
+    this.allNames = const {},
+  });
+
+  /// participant_id（含 alias id）→ kind。
+  final Map<String, String> kinds;
+
+  /// active 的 Codex 成員 display_name（mention 過濾的比對集）。
+  final Set<String> codexNames;
+
+  /// 所有已知成員名（判斷快取是否過期：tag 到不認識的名字就重查）。
+  final Set<String> allNames;
+}
+
+/// 把聊天室訊息經 `codex queue` 轉送進本機的 Codex session（外部喚醒）。
 ///
 /// 這讓 app 同時是「人類看聊天室的視窗」與「本機 agent 的通知樞紐」——
 /// 不需要另外掛 watcher 進程。桌面限定（手機上沒有 codex CLI）。
 ///
+/// 只轉送 **有 @tag 到房內 Codex 成員** 的訊息——喚醒是打擾，必須值得；
+/// 沒被 tag 的訊息 Codex 之後用 chatroom_read 自己撈（游標保證不漏）。
+///
 /// 防迴圈：Codex 自己發的訊息不轉送（sender 的 kind=codex 就略過），
-/// 否則 Codex 會被自己的發言反覆喚醒。sender→kind 的對照從房間詳情取得，
-/// 未知的 sender 出現時查一次並快取（含 alias_ids，改名重進也對得上）。
+/// 否則 Codex 會被自己的發言反覆喚醒。成員對照從房間詳情取得，
+/// 出現未知的 sender 或 mention 名字時查一次並快取（含 alias_ids，
+/// 改名重進也對得上）。
 class CodexDispatcher {
   CodexDispatcher(
-    this._fetchSenderKinds, {
+    this._fetchMembers, {
     Future<bool> Function(List<String> argv)? runProcess,
     List<String>? Function()? codexArgvResolver,
     String? codexHome,
@@ -28,8 +50,8 @@ class CodexDispatcher {
             '${Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? ''}'
                 '${Platform.pathSeparator}.codex';
 
-  /// roomId → (participant_id → kind)，含 alias id。
-  final Future<Map<String, String>> Function(String roomId) _fetchSenderKinds;
+  /// roomId → 房內成員快照。
+  final Future<RoomMembers> Function(String roomId) _fetchMembers;
   final Future<bool> Function(List<String> argv) _runProcess;
   final List<String>? Function() _codexArgvResolver;
   final String _codexHome;
@@ -39,15 +61,17 @@ class CodexDispatcher {
   /// 指定 thread id；留空 = 自動抓最新的活躍 Codex session。
   String threadOverride = '';
 
-  final Map<String, Map<String, String>> _kindCache = {};
+  final Map<String, RoomMembers> _memberCache = {};
 
   Future<void> handle(RoomFreshBatch batch) async {
     if (!enabled) return;
+    final members = await _members(batch.roomId, batch.messages);
     final msgs = <Message>[];
-    final kinds = await _senderKinds(batch.roomId, batch.messages);
     for (final m in batch.messages) {
-      final kind = m.senderId == null ? null : kinds[m.senderId];
+      final kind = m.senderId == null ? null : members.kinds[m.senderId];
       if (kind == 'codex') continue; // 防迴圈：不拿 Codex 的話喚醒 Codex
+      // 只轉送有 tag 到房內 Codex 的訊息；其餘 Codex 自己用 chatroom_read 撈
+      if (!m.mentions.any(members.codexNames.contains)) continue;
       msgs.add(m);
     }
     if (msgs.isEmpty) return;
@@ -80,18 +104,20 @@ class CodexDispatcher {
     if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
   }
 
-  Future<Map<String, String>> _senderKinds(
-      String roomId, List<Message> messages) async {
-    var cached = _kindCache[roomId];
-    final unknown = messages.any(
-        (m) => m.senderId != null && !(cached?.containsKey(m.senderId) ?? false));
-    if (cached == null || unknown) {
+  Future<RoomMembers> _members(String roomId, List<Message> messages) async {
+    var cached = _memberCache[roomId];
+    // 過期條件：未知 sender，或 tag 到不認識的名字（剛加入的成員）
+    final stale = cached == null ||
+        messages.any((m) =>
+            (m.senderId != null && !cached!.kinds.containsKey(m.senderId)) ||
+            m.mentions.any((n) => !cached!.allNames.contains(n)));
+    if (stale) {
       try {
-        cached = await _fetchSenderKinds(roomId);
-        _kindCache[roomId] = cached;
+        cached = await _fetchMembers(roomId);
+        _memberCache[roomId] = cached;
       } catch (e) {
-        _log.warning('取得成員 kind 失敗（$roomId）：$e');
-        cached ??= const {};
+        _log.warning('取得房間成員失敗（$roomId）：$e');
+        cached ??= const RoomMembers();
       }
     }
     return cached;

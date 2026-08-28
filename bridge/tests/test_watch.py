@@ -35,7 +35,7 @@ def events_from(capsys) -> list[dict]:
 
 
 def test_emits_message_events_and_advances_cursor(fake_hub, tmp_path, monkeypatch, capsys):
-    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM)
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM, "--all-messages")
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",
         {"messages": [
@@ -55,7 +55,7 @@ def test_emits_message_events_and_advances_cursor(fake_hub, tmp_path, monkeypatc
 def test_skips_own_and_system_messages(fake_hub, tmp_path, monkeypatch, capsys):
     """自己發的與 system 訊息不喚醒 agent——每個事件都是一次打擾。"""
     w = make_watcher(
-        fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+        fake_hub, tmp_path, monkeypatch, "--room", ROOM, "--all-messages",
         state={ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 0}},
     )
     fake_hub.json(
@@ -75,9 +75,10 @@ def test_skips_own_and_system_messages(fake_hub, tmp_path, monkeypatch, capsys):
     assert w.after_seq == 3  # 被略過的訊息仍推進游標，不會下輪重看
 
 
-def test_mentions_only_filter(fake_hub, tmp_path, monkeypatch, capsys):
+def test_default_emits_only_mentions(fake_hub, tmp_path, monkeypatch, capsys):
+    """預設只有被 @mention 的訊息喚醒；其餘留給 chatroom_read 自己撈。"""
     w = make_watcher(
-        fake_hub, tmp_path, monkeypatch, "--room", ROOM, "--mentions-only",
+        fake_hub, tmp_path, monkeypatch, "--room", ROOM,
         state={ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 0}},
     )
     fake_hub.json(
@@ -94,6 +95,61 @@ def test_mentions_only_filter(fake_hub, tmp_path, monkeypatch, capsys):
     assert len(ev) == 1
     assert ev[0]["mentioned"] is True
     assert ev[0]["seq"] == 2
+    assert w.after_seq == 2  # 被過濾的訊息仍推進游標
+
+
+def test_pin_update_does_not_wake(fake_hub, tmp_path, monkeypatch, capsys):
+    """既有訊息的釘選/刪除變更（seq 落在游標之前）不發事件——
+    即使那則舊訊息當初有 @mention 自己。釘選牆是主動撈的東西。"""
+    w = make_watcher(
+        fake_hub, tmp_path, monkeypatch, "--room", ROOM, "--all-messages",
+        state={ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 5}},
+    )
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [
+            # 舊訊息 seq=3 被釘選，領了 update_seq=6 重新入流
+            {"seq": 3, "update_seq": 6, "kind": "chat", "sender_id": "p9",
+             "sender_name": "Bernie", "content": "老訊息被釘選",
+             "mentions": ["Novia"], "pinned": True},
+            {"seq": 7, "kind": "chat", "sender_id": "p9", "sender_name": "Bernie",
+             "content": "新訊息", "mentions": []},
+        ], "you_were_mentioned": True, "last_seq": 7},
+    )
+    w.poll_room()
+    ev = events_from(capsys)
+    assert [e["preview"] for e in ev] == ["新訊息"]
+    assert w.after_seq == 7
+
+
+def test_identity_reloaded_after_late_join(fake_hub, tmp_path, monkeypatch, capsys):
+    """watcher 先啟動、bridge 後 join：下一輪 poll 補讀 state 取得
+    display_name，mention 過濾隨即生效（否則永遠收不到 tag）。"""
+    state_path = tmp_path / "watch-state.json"
+    monkeypatch.setenv("CHATROOM_STATE_PATH", str(state_path))
+    args = watch.build_parser().parse_args(["--room", ROOM])
+    w = watch.Watcher(args)
+    w.hub = HubClient(base_url="http://hub.test", token="",
+                      transport=fake_hub.transport)
+    assert w.display_name is None
+    # bridge 事後 join，寫入 state
+    state_path.write_text(
+        json.dumps({"version": 1, "rooms": {
+            ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 0}
+        }}),
+        encoding="utf-8",
+    )
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [
+            {"seq": 1, "kind": "chat", "sender_id": "p9", "sender_name": "Bernie",
+             "content": "@Novia 在嗎", "mentions": ["Novia"]},
+        ], "you_were_mentioned": True, "last_seq": 1},
+    )
+    w.poll_room()
+    ev = events_from(capsys)
+    assert len(ev) == 1
+    assert ev[0]["mentioned"] is True
 
 
 def test_cursor_starts_from_bridge_state(fake_hub, tmp_path, monkeypatch):
@@ -134,7 +190,7 @@ def test_run_ends_cleanly_when_room_gone(fake_hub, tmp_path, monkeypatch, capsys
 def test_max_events_stops_process(fake_hub, tmp_path, monkeypatch, capsys):
     """--max-events 1 = Codex 的同步等待模式：收到第一個事件就返回。"""
     w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
-                     "--no-assignments", "--max-events", "1")
+                     "--no-assignments", "--max-events", "1", "--all-messages")
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",
         {"messages": [{"seq": 1, "kind": "chat", "sender_id": "p9",
@@ -159,7 +215,7 @@ def test_codex_dispatch_queues_event_without_shell(fake_hub, tmp_path, monkeypat
     monkeypatch.setattr(watch.subprocess, "run",
                         lambda argv, **kw: calls.append(argv) or Done())
     w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
-                     "--codex-thread", "thread-uuid")
+                     "--codex-thread", "thread-uuid", "--all-messages")
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",
         {"messages": [{"seq": 1, "kind": "chat", "sender_id": "p9",
@@ -182,7 +238,7 @@ def test_codex_dispatch_failure_does_not_kill_watcher(fake_hub, tmp_path, monkey
     monkeypatch.setattr(watch.subprocess, "run",
                         lambda argv, **kw: (_ for _ in ()).throw(OSError("gone")))
     w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
-                     "--codex-thread", "thread-uuid")
+                     "--codex-thread", "thread-uuid", "--all-messages")
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",
         {"messages": [{"seq": 1, "kind": "chat", "sender_id": "p9",
@@ -196,7 +252,8 @@ def test_codex_dispatch_failure_does_not_kill_watcher(fake_hub, tmp_path, monkey
 def test_watcher_never_writes_bridge_state(fake_hub, tmp_path, monkeypatch, capsys):
     """watcher 是唯讀觀察者：state 檔推進游標是 chatroom_read 的職責。"""
     state_before = {ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 1}}
-    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM, state=state_before)
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     "--all-messages", state=state_before)
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/updates",
         {"messages": [{"seq": 9, "kind": "chat", "sender_id": "p9",

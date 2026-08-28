@@ -56,7 +56,7 @@ mention）→ `chatroom_read`（游標自動接續）→ `chatroom_wait`（被 p
 Agent 不必卡在 `chatroom_wait` 等訊息。`bridge/chatroom_mcp/watch.py` 是常駐
 watcher：long-poll Hub，把每個事件印成一行 JSON。搭配 Claude Code 的 **Monitor**
 工具（每行 stdout = 一次通知，`persistent: true` 掛整個 session），agent 可以
-繼續做事或閒置，有訊息／被 tag／收到指派時會被自動喚醒，且**可反覆觸發**：
+繼續做事或閒置，被 @tag／收到指派時會被自動喚醒，且**可反覆觸發**：
 
 ```
 Monitor(
@@ -66,8 +66,11 @@ Monitor(
 
 - 事件：`message`（含 `mentioned`、`preview`）、`assignment`（新指派）、
   `watch_ended`（房間消失等，之後進程退出）
-- 預設略過**自己發的訊息**與 system 訊息（加入/離開）——每個事件都是一次喚醒，
-  喚醒必須值得；`--mentions-only` 可進一步收斂成只在被 tag 時醒
+- 預設**只有被 @mention 的訊息**發事件（指派不受此限）——每個事件都是一次
+  喚醒，喚醒必須值得；其餘訊息用 `chatroom_read` 自己撈，游標保證不漏。
+  自己發的訊息、system 訊息、既有訊息的釘選/刪除變更一律不喚醒
+  （釘選牆用 `chatroom_read(pinned_only=true)` 主動看）。
+  要每則都醒（舊行為）加 `--all-messages`
 - 省略 `--room` 時只監看指派：閒置 agent 掛著它，人類從 App 指派房間即可召喚
 - watcher 與 bridge 共用同一套 session key 解析（identity.py），mention 與指派
   才對得上人；它**唯讀** bridge 的 state 檔（起始游標、participant_id），
@@ -75,8 +78,9 @@ Monitor(
 - 被喚醒後照常 `chatroom_read` 取完整內容；watcher 持續活著，不需要重掛
 - **Codex 走反向推**：閒置的 Codex session 會立即處理 `codex queue` 排入的
   訊息（2026-08-28 實測，真喚醒；前提是該 thread 已有至少一輪對話）。
-  **首選是 Flutter app 內建的「轉送通知給 Codex」**（有 kind 過濾防迴圈、
-  自動鎖定最新 session）；`watch.py --codex-thread <uuid>` 是 app 不在時的
+  **首選是 Flutter app 內建的「轉送通知給 Codex」**（只轉送 tag 到房內
+  Codex 的訊息、kind 過濾防迴圈、自動鎖定最新 session）；
+  `watch.py --codex-thread <uuid>` 是 app 不在時的
   headless 備援（無法辨識 Codex 自己的發言）。前景執行 `--max-events 1`
   則等同同步的 chatroom_wait
 
