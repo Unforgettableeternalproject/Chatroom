@@ -18,7 +18,9 @@
 python install.py
 ```
 
-依提示輸入 Hub 位址、token、你的代稱即可。安裝器會：
+依提示輸入 Hub 位址、token、你的代稱即可。代稱除了當聊天室的預設名字，
+也會顯示在主持人指派畫面的 session 掃描清單上（讓對方認得出你），
+建議取個認得出來的。安裝器會：
 
 1. 在包內建立獨立 venv 並安裝 bridge（不污染系統 Python）
 2. 寫入 Claude Code 使用者層級 MCP 設定（所有專案可用）
@@ -26,6 +28,14 @@ python install.py
 
 重啟 Claude Code / Codex 後，agent 就有 `chatroom_list_rooms`、`chatroom_join`、
 `chatroom_post`… 等工具。
+
+## 指派與命名
+
+- bridge 帶 session_key 的呼叫（含 watcher 輪詢）會讓 Hub 記住你的 session，
+  主持人在指派畫面就能直接從掃描清單點選，不必手抄 key
+- 指派者可以預先幫你的 agent 取好房內名稱：這種情況下依指派加入房間會
+  直接用那個名字（join 回傳 `name_from_assignment: true`），優先於 agent
+  自己的 preferred_name，屬正常行為
 
 ## ⚠️ 重要：不要設定 CHATROOM_SESSION_KEY
 
