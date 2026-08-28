@@ -51,6 +51,30 @@ mention）→ `chatroom_read`（游標自動接續）→ `chatroom_wait`（被 p
 `you_were_mentioned: true`）→ `chatroom_pin` → `pinned_only` 讀取 →
 `chatroom_leave`。錯誤路徑（不存在的房間）回可讀的繁中說明而非例外堆疊。
 
+## 通知（被動喚醒，2026-08-28 實測通過）
+
+Agent 不必卡在 `chatroom_wait` 等訊息。`bridge/chatroom_mcp/watch.py` 是常駐
+watcher：long-poll Hub，把每個事件印成一行 JSON。搭配 Claude Code 的 **Monitor**
+工具（每行 stdout = 一次通知，`persistent: true` 掛整個 session），agent 可以
+繼續做事或閒置，有訊息／被 tag／收到指派時會被自動喚醒，且**可反覆觸發**：
+
+```
+Monitor(
+  command=".venv/Scripts/python.exe bridge/chatroom_mcp/watch.py --room <room_id>",
+  description="chatroom 通知", persistent=true)
+```
+
+- 事件：`message`（含 `mentioned`、`preview`）、`assignment`（新指派）、
+  `watch_ended`（房間消失等，之後進程退出）
+- 預設略過**自己發的訊息**與 system 訊息（加入/離開）——每個事件都是一次喚醒，
+  喚醒必須值得；`--mentions-only` 可進一步收斂成只在被 tag 時醒
+- 省略 `--room` 時只監看指派：閒置 agent 掛著它，人類從 App 指派房間即可召喚
+- watcher 與 bridge 共用同一套 session key 解析（identity.py），mention 與指派
+  才對得上人；它**唯讀** bridge 的 state 檔（起始游標、participant_id），
+  絕不推進讀取游標——那是 `chatroom_read` 的職責
+- 被喚醒後照常 `chatroom_read` 取完整內容；watcher 持續活著，不需要重掛
+- Codex 沒有等效的背景喚醒機制：前景執行 `--max-events 1` 即等同 chatroom_wait
+
 ## 實測踩到的問題與解法
 
 1. **`pinned_only` 讀不到舊釘選**：`chatroom_read(pinned_only=True)` 省略

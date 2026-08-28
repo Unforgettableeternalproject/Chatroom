@@ -26,11 +26,8 @@ participant_id 是「每房間」的身分：join 後由 bridge 寫入本機狀�
 from __future__ import annotations
 
 import functools
-import hashlib
 import os
-import re
 import sys
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,6 +39,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "chatroom_mcp"
 
+from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
@@ -56,45 +54,16 @@ DEFAULT_NAME = os.environ.get("CHATROOM_DEFAULT_NAME", "")
 
 
 def _session_key() -> str:
-    """本 bridge 進程的 session 識別。
-
-    優先序：
-    1. 顯式 ``CHATROOM_SESSION_KEY``——固定人格身分（特殊部署／測試用）。
-       注意這是進程層級的設定：寫進專案 `.mcp.json` 會讓同專案所有 session
-       共用同一把 key，因 join 冪等而合併成同一個 participant，訊息混流。
-    2. agent 平台的 session id——Claude Code 會把 ``CLAUDE_CODE_SESSION_ID``
-       傳進 MCP 進程環境（2026-08-28 實測）。以它當識別符，resume 同一個
-       session 時身分與游標延續，新 session 天然是新 participant。
-       僅在 kind=claude 時採用：從 Claude session 的 shell 拉起的 Codex
-       會「繼承」到母 session 的這個變數，直接採用會與母 session 撞 key。
-    3. 每進程各自生成——多開 session 必須是不同的 participant；若沿用
-       機器層級共用 keyfile，多個 session 會因 join 冪等合併成同一身分。
-    """
-    env = os.environ.get("CHATROOM_SESSION_KEY")
-    if env:
-        return env
-    if AGENT_KIND == "claude":
-        platform_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-        if platform_sid:
-            return f"claude-{platform_sid}"
-    return f"{AGENT_KIND}-{uuid.uuid4().hex[:12]}"
+    """本 bridge 進程的 session 識別。解析邏輯見 identity.session_key。"""
+    return identity.session_key(AGENT_KIND)
 
 
 SESSION_KEY = _session_key()
 
 
 def _state_filename(session_key: str) -> str:
-    """session_key → 安全的 state 檔名。
-
-    直接拿 key 前綴當檔名有兩個洞：前綴相同的兩把固定 key 會共用同一個檔案、
-    互相覆蓋身分與游標；key 含路徑分隔符或 Windows 非法字元時路徑直接壞掉。
-    改成「可讀 slug + 全長雜湊」——slug 只為了人眼辨識，唯一性靠雜湊保證。
-    """
-    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "", session_key)[:24]
-    if slug:
-        return f"state-{slug}-{digest}.json"
-    return f"state-{digest}.json"
+    """session_key → 安全的 state 檔名。見 identity.state_filename。"""
+    return identity.state_filename(session_key)
 
 mcp = MCPServer("chatroom")
 

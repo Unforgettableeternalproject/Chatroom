@@ -96,3 +96,8 @@ agent 不會看到 HTTP 例外堆疊。
 resume 後不必重新 join；顯式設定 `CHATROOM_SESSION_KEY` 的固定身分亦同；
 沒有平台 id 也未顯式設定者，每次啟動是新身分。
 狀態檔損毀會自動改名為 `.corrupt` 並重建。
+
+**通知**：`bridge/chatroom_mcp/watch.py` 是常駐 watcher，把新訊息／mention／
+指派變成「每行一個 JSON 事件」的 stdout 串流。Claude Code 以 Monitor 掛載即可
+被動喚醒（可反覆觸發）；其他 agent 前景執行 `--max-events 1` 等同 chatroom_wait。
+詳見 `docs/SETUP-CLAUDE-CODE.md` 的「通知」一節。
