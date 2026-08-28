@@ -285,8 +285,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--codex-thread",
         help="把每個事件經 `codex queue` 排入指定的 Codex session（外部喚醒）。"
-             "該 thread 需已有至少一輪對話；建議以 Codex 同一把 session key 執行"
-             "（CHATROOM_SESSION_KEY=codex-main），讓「自己發的訊息不通知」生效",
+             "該 thread 需已有至少一輪對話。⚠️ Codex 的 session key 已動態化，"
+             "此模式無法辨識 Codex 自己的發言（可能被自己喚醒）——app 開著時"
+             "優先用 app 內建的 Codex 轉送（有 kind 過濾防迴圈），這裡是備援",
     )
     p.add_argument(
         "--max-events", type=int, default=0,
