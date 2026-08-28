@@ -5,9 +5,10 @@
 設定來源（環境變數）：
     CHATROOM_URL          Hub 位址，預設 http://127.0.0.1:8787
     CHATROOM_TOKEN        API token（Hub 未設 token 時可省略）
-    CHATROOM_SESSION_KEY  本 agent 的 session 識別。顯式設定＝可被指派的固定身分
-                          （重啟延續）；未設定時每個 bridge 進程各自生成
-                          （多開 session 各自獨立，重啟即新身分）
+    CHATROOM_SESSION_KEY  本 agent 的 session 識別。顯式設定＝固定人格身分
+                          （特殊部署用）；未設定時優先取 agent 平台的
+                          session id（Claude Code 的 CLAUDE_CODE_SESSION_ID），
+                          再退回每進程各自生成（多開 session 各自獨立）
     CHATROOM_AGENT_KIND   claude / codex / human / other，預設 other
     CHATROOM_DEFAULT_NAME join 未帶 preferred_name 時的預設代稱；
                           房內重名由 Hub 自動編號（Novia → Novia-2）
@@ -57,14 +58,25 @@ DEFAULT_NAME = os.environ.get("CHATROOM_DEFAULT_NAME", "")
 def _session_key() -> str:
     """本 bridge 進程的 session 識別。
 
-    顯式設定 ``CHATROOM_SESSION_KEY`` 代表「可被指派的固定身分」（如 codex-main），
-    重啟後身分與游標延續。未設定時**每個進程各自生成**——多開 session 必須是
-    不同的 participant；若沿用舊版的機器層級共用 keyfile，多個 session 會因
-    join 冪等而合併成同一個身分，訊息混流、state 檔互踩。
+    優先序：
+    1. 顯式 ``CHATROOM_SESSION_KEY``——固定人格身分（特殊部署／測試用）。
+       注意這是進程層級的設定：寫進專案 `.mcp.json` 會讓同專案所有 session
+       共用同一把 key，因 join 冪等而合併成同一個 participant，訊息混流。
+    2. agent 平台的 session id——Claude Code 會把 ``CLAUDE_CODE_SESSION_ID``
+       傳進 MCP 進程環境（2026-08-28 實測）。以它當識別符，resume 同一個
+       session 時身分與游標延續，新 session 天然是新 participant。
+       僅在 kind=claude 時採用：從 Claude session 的 shell 拉起的 Codex
+       會「繼承」到母 session 的這個變數，直接採用會與母 session 撞 key。
+    3. 每進程各自生成——多開 session 必須是不同的 participant；若沿用
+       機器層級共用 keyfile，多個 session 會因 join 冪等合併成同一身分。
     """
     env = os.environ.get("CHATROOM_SESSION_KEY")
     if env:
         return env
+    if AGENT_KIND == "claude":
+        platform_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        if platform_sid:
+            return f"claude-{platform_sid}"
     return f"{AGENT_KIND}-{uuid.uuid4().hex[:12]}"
 
 
@@ -195,6 +207,9 @@ def chatroom_list_rooms() -> dict:
         name = state().display_name(room.get("id", ""))
         if name:
             room["you_joined_as"] = name
+    # key 是動態的（session id 或每進程生成），要讓使用者能指派就得先讓
+    # agent 說得出自己是哪一把 key
+    data["your_session_key"] = SESSION_KEY
     return data
 
 
@@ -373,8 +388,13 @@ def chatroom_assignments() -> dict:
     （邀你進去做什麼）。開始新一輪工作前值得查一次。
     回應方式：chatroom_resolve_assignment，或直接 chatroom_join
     （加入該房間時 Hub 會自動把對應指派標記為 accepted）。
+    回傳另含 ``your_session_key``——想請人指派工作給你時，把這把 key 告訴對方。
     """
-    return hub().request("GET", "/api/assignments", params={"session_key": SESSION_KEY})
+    data = hub().request(
+        "GET", "/api/assignments", params={"session_key": SESSION_KEY}
+    )
+    data["your_session_key"] = SESSION_KEY
+    return data
 
 
 @mcp.tool()

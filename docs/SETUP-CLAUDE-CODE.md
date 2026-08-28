@@ -34,9 +34,11 @@
 - 其他專案的 Claude Code 要接入時，用 `claude mcp add`（user scope）並把
   `command`/`args` 改為絕對路徑，或安裝 bridge 套件後改用 `chatroom-mcp` 指令
   （見 README「讓 agent 接入」）。
-- `CHATROOM_SESSION_KEY` 未設定時**每個 bridge 進程各自生成**（多開 session
-  各自獨立，重啟即新身分）；顯式設定代表「可被指派的固定身分」，重啟後身分
-  與游標延續。詳見 README 的環境變數表。
+- `CHATROOM_SESSION_KEY` **不要設定**（尤其別寫進 `.mcp.json`——那是專案層級
+  設定，會讓同專案所有 session 共用同一身分、訊息混流）。未設定時 bridge 自動
+  取 Claude Code 傳入的 `CLAUDE_CODE_SESSION_ID` 當識別符：resume 同一 session
+  身分與游標延續，新 session 天然是新 participant。顯式設定僅供固定人格身分的
+  特殊部署。詳見 README 的環境變數表。
 - ⚠️ `${CHATROOM_TOKEN}` 在 **Claude Code 啟動當下**展開並凍結——session 中途
   補設環境變數救不回，只能重啟 Claude Code（或重連 MCP server）。token 缺席
   而 Hub 有驗證時，所有工具呼叫都會被 401 拒絕。

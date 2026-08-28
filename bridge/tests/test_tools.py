@@ -86,6 +86,8 @@ def test_assignments_lists_pending(fake_hub):
     assert result["ok"] is True
     assert result["assignments"][0]["room_name"] == "設計討論"
     assert fake_hub.calls[-1].url.params["session_key"] == srv.SESSION_KEY
+    # key 是動態的，agent 得能告訴使用者「指派給哪一把 key」
+    assert result["your_session_key"] == srv.SESSION_KEY
 
 
 def test_resolve_assignment_accept_and_decline(fake_hub):
@@ -250,11 +252,36 @@ def test_pinned_only_does_not_advance_cursor(fake_hub):
 def test_session_key_ephemeral_per_process_and_env_override(monkeypatch):
     """未顯式設定時每次生成都不同——多開 session 不得共用身分（join 冪等會合併）。"""
     monkeypatch.delenv("CHATROOM_SESSION_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     k1, k2 = srv._session_key(), srv._session_key()
     assert k1 != k2
     assert k1.startswith(srv.AGENT_KIND + "-")
     monkeypatch.setenv("CHATROOM_SESSION_KEY", "codex-main")
     assert srv._session_key() == "codex-main"
+
+
+def test_session_key_prefers_claude_session_id(monkeypatch):
+    """kind=claude 時採用 Claude Code 的 session id——resume 延續、新 session 新身分。"""
+    monkeypatch.delenv("CHATROOM_SESSION_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc-123")
+    monkeypatch.setattr(srv, "AGENT_KIND", "claude")
+    assert srv._session_key() == "claude-abc-123"
+    # 同一 session 內重算必須穩定（不是每次呼叫換一把）
+    assert srv._session_key() == srv._session_key()
+    # 顯式 CHATROOM_SESSION_KEY 仍優先於平台 session id
+    monkeypatch.setenv("CHATROOM_SESSION_KEY", "novia-fixed")
+    assert srv._session_key() == "novia-fixed"
+
+
+def test_session_key_ignores_claude_session_id_for_other_kinds(monkeypatch):
+    """Codex 從 Claude session 的 shell 拉起會繼承 CLAUDE_CODE_SESSION_ID，
+    採用它會與母 session 的 bridge 撞 key——非 claude kind 一律忽略。"""
+    monkeypatch.delenv("CHATROOM_SESSION_KEY", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc-123")
+    monkeypatch.setattr(srv, "AGENT_KIND", "codex")
+    key = srv._session_key()
+    assert "abc-123" not in key
+    assert key.startswith("codex-")
 
 
 def test_join_uses_default_name_when_no_preference(fake_hub, monkeypatch):
