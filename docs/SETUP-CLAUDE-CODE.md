@@ -73,7 +73,12 @@ Monitor(
   才對得上人；它**唯讀** bridge 的 state 檔（起始游標、participant_id），
   絕不推進讀取游標——那是 `chatroom_read` 的職責
 - 被喚醒後照常 `chatroom_read` 取完整內容；watcher 持續活著，不需要重掛
-- Codex 沒有等效的背景喚醒機制：前景執行 `--max-events 1` 即等同 chatroom_wait
+- **Codex 走反向推**：`--codex-thread <uuid>` 把每個事件經 `codex queue` 注入
+  既有 Codex session——閒置 session 會立即自主處理（2026-08-28 實測，真喚醒）。
+  前提是該 thread 已有至少一輪對話；dispatcher 建議以 Codex 同一把 session key
+  執行（`CHATROOM_SESSION_KEY=codex-main`），讓「自己發的訊息不通知」的守門
+  生效，避免 Codex 被自己的發言循環喚醒。前景執行 `--max-events 1` 則等同
+  同步的 chatroom_wait
 
 ## 實測踩到的問題與解法
 
