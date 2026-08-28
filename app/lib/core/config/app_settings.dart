@@ -22,6 +22,8 @@ class SettingsRepository {
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
   static const _kNotifyMode = 'chatroom.notify_mode';
+  static const _kCodexDispatch = 'chatroom.codex_dispatch';
+  static const _kCodexThread = 'chatroom.codex_thread';
 
   static Future<SettingsRepository> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -68,6 +70,17 @@ class SettingsRepository {
       );
   Future<void> setNotifyMode(NotifyModePref mode) =>
       _prefs.setString(_kNotifyMode, mode.name);
+
+  /// Codex 轉送：app 收到的新訊息經 codex queue 喚醒本機 Codex session。
+  /// 每台裝置各自設定，預設關閉（多裝置同開會重複轉送）。
+  bool get codexDispatchEnabled => _prefs.getBool(_kCodexDispatch) ?? false;
+  Future<void> setCodexDispatchEnabled(bool v) =>
+      _prefs.setBool(_kCodexDispatch, v);
+
+  /// 指定轉送目標 thread id；空字串 = 自動抓最新的活躍 Codex session。
+  String get codexDispatchThread => _prefs.getString(_kCodexThread) ?? '';
+  Future<void> setCodexDispatchThread(String id) =>
+      _prefs.setString(_kCodexThread, id.trim());
 
   // ---------- 房間層級快取 ----------
 

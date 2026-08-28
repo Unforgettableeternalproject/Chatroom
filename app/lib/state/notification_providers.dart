@@ -1,11 +1,39 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../notifications/codex_dispatcher.dart';
 import '../notifications/local_notifier.dart';
 import '../notifications/notification_center.dart';
 import 'app_providers.dart';
 import 'rooms_providers.dart';
+
+/// 桌面平台才有 codex CLI 可呼叫。
+bool get _canDispatchCodex =>
+    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
+  final api = ref.watch(roomsApiProvider);
+  final settings = ref.read(settingsRepoProvider);
+  final dispatcher = CodexDispatcher(
+    (roomId) async {
+      final detail = await api.detail(roomId);
+      final kinds = <String, String>{};
+      for (final p in detail.participants) {
+        kinds[p.id] = p.kind;
+        for (final alias in p.aliasIds) {
+          kinds[alias] = p.kind; // 改名重進的舊 id 也對得上
+        }
+      }
+      return kinds;
+    },
+  );
+  dispatcher
+    ..enabled = _canDispatchCodex && settings.codexDispatchEnabled
+    ..threadOverride = settings.codexDispatchThread;
+  return dispatcher;
+});
 
 final notificationCenterProvider = Provider<NotificationCenter>((ref) {
   final service = ref.watch(realtimeServiceProvider);
@@ -47,6 +75,10 @@ final notificationBootstrapProvider = Provider<void>((ref) {
 
   final notifSub = center.notifications.listen(LocalNotifier.instance.show);
 
+  // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）
+  final dispatcher = ref.watch(codexDispatcherProvider);
+  final codexSub = center.fresh.listen(dispatcher.handle);
+
   // 活動 → 刷新房間列表。節流：一批訊息只打一次 REST
   Timer? refreshDebounce;
   final activitySub = center.activity.listen((_) {
@@ -58,6 +90,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
 
   ref.onDispose(() {
     notifSub.cancel();
+    codexSub.cancel();
     activitySub.cancel();
     refreshDebounce?.cancel();
   });

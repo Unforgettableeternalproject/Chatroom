@@ -4,6 +4,20 @@ import '../core/config/app_settings.dart';
 import '../models/message.dart';
 import '../ws/room_feed.dart';
 
+/// 一個房間的一批「新的非自己訊息」——未經通知模式/抑制過濾的原始事件，
+/// 供 Codex 轉送等下游自行過濾（例如剔除 Codex 自己的發言防迴圈）。
+class RoomFreshBatch {
+  const RoomFreshBatch({
+    required this.roomId,
+    required this.roomName,
+    required this.messages,
+  });
+
+  final String roomId;
+  final String roomName;
+  final List<Message> messages;
+}
+
 /// 要送到 OS 的一則通知（一個房間的一批新訊息合併成一則，避免轟炸）。
 class RoomNotification {
   const RoomNotification({
@@ -43,12 +57,16 @@ class NotificationCenter {
 
   final _notifications = StreamController<RoomNotification>.broadcast();
   final _activity = StreamController<String>.broadcast();
+  final _fresh = StreamController<RoomFreshBatch>.broadcast();
 
   /// 該送去 OS 的通知（已套用模式與抑制規則）。
   Stream<RoomNotification> get notifications => _notifications.stream;
 
   /// 房間有新的非自己訊息（不論通知與否）——未讀提示刷新用。
   Stream<String> get activity => _activity.stream;
+
+  /// 未過濾的新訊息批次（不受通知模式與正在看的房影響）。
+  Stream<RoomFreshBatch> get fresh => _fresh.stream;
 
   Set<String> get followedRoomIds => _rooms.keys.toSet();
 
@@ -122,6 +140,10 @@ class NotificationCenter {
     if (fresh.isEmpty) return;
 
     if (!_activity.isClosed) _activity.add(roomId);
+    if (!_fresh.isClosed) {
+      _fresh.add(RoomFreshBatch(
+          roomId: roomId, roomName: room.roomName, messages: fresh));
+    }
 
     if (mode == NotifyModePref.off) return;
     final myName = room.myDisplayName;
@@ -160,6 +182,7 @@ class NotificationCenter {
     }
     _notifications.close();
     _activity.close();
+    _fresh.close();
   }
 }
 

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +27,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _urlController;
   late final TextEditingController _tokenController;
   late final TextEditingController _nameController;
+  late final TextEditingController _codexThreadController;
   bool _showToken = false;
   String? _testResult;
   bool _testOk = false;
@@ -38,6 +41,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _urlController = TextEditingController(text: config.serverUrl);
     _tokenController = TextEditingController(text: config.token);
     _nameController = TextEditingController(text: config.preferredName);
+    _codexThreadController = TextEditingController(
+        text: ref.read(settingsRepoProvider).codexDispatchThread);
     // 髒狀態驅動儲存/復原按鈕的啟用與提示
     for (final c in [_urlController, _tokenController, _nameController]) {
       c.addListener(() => setState(() => _justSaved = false));
@@ -73,6 +78,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _urlController.dispose();
     _tokenController.dispose();
     _nameController.dispose();
+    _codexThreadController.dispose();
     super.dispose();
   }
 
@@ -313,6 +319,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   },
                 ),
               ]),
+              if (Platform.isWindows ||
+                  Platform.isLinux ||
+                  Platform.isMacOS) ...[
+                const SizedBox(height: 22),
+                Row(children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('轉送通知給 Codex',
+                            style:
+                                UepText.sans(size: 13.5, color: s.inkTitle)),
+                        const SizedBox(height: 3),
+                        Text('新訊息經 codex queue 喚醒本機 Codex session',
+                            style:
+                                UepText.serif(size: 12, color: s.inkMute)),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value:
+                        ref.watch(settingsRepoProvider).codexDispatchEnabled,
+                    activeThumbColor: UepColors.gold,
+                    activeTrackColor: UepColors.gold.withValues(alpha: .28),
+                    onChanged: (v) async {
+                      await ref
+                          .read(settingsRepoProvider)
+                          .setCodexDispatchEnabled(v);
+                      ref.read(codexDispatcherProvider).enabled = v;
+                      setState(() {});
+                    },
+                  ),
+                ]),
+                if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
+                  const SizedBox(height: 8),
+                  _box(
+                    context,
+                    TextField(
+                      controller: _codexThreadController,
+                      style: UepText.sans(size: 13, color: s.ink),
+                      decoration: _inputDecoration(
+                          '目標 thread id（留空＝自動抓最新的 Codex session）', s),
+                      onSubmitted: (v) async {
+                        await ref
+                            .read(settingsRepoProvider)
+                            .setCodexDispatchThread(v);
+                        ref.read(codexDispatcherProvider).threadOverride =
+                            v.trim();
+                      },
+                    ),
+                  ),
+                ],
+              ],
               const SizedBox(height: 22),
               _FieldLabel('顯示名稱（進房時的 PREFERRED NAME）'),
               _box(
