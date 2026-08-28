@@ -13,7 +13,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import (
-    Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect,
+    Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket,
+    WebSocketDisconnect,
 )
 from pydantic import BaseModel, Field
 
@@ -270,14 +271,61 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def get_room(room_id: str):
         room = await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
-        members = await (
+        rows = await (
             await db.execute(
-                "SELECT id, kind, display_name, role, status, joined_at, last_seen_at"
+                "SELECT id, kind, display_name, role, status, joined_at,"
+                " last_seen_at, session_key, join_ip"
                 " FROM participant WHERE room_id=? ORDER BY joined_at",
                 (room_id,),
             )
         ).fetchall()
-        return {"room": dict(room), "participants": [dict(m) for m in members]}
+        # 同一 session 多筆紀錄（離開後換名重進）只回代表列：active 優先、
+        # 否則取最後一筆。最近一個不同的舊名放 previous_name，舊列 id 收進
+        # alias_ids 讓 client 仍能對回歷史訊息的 kind。session_key 不外流。
+        grouped: dict[str, list] = {}
+        for r in rows:
+            grouped.setdefault(r["session_key"], []).append(r)
+        participants = []
+        for group in grouped.values():
+            rep = next((g for g in group if g["status"] == "active"), group[-1])
+            others = [g for g in group if g["id"] != rep["id"]]
+            entry = {
+                k: rep[k]
+                for k in (
+                    "id", "kind", "display_name", "role", "status",
+                    "joined_at", "last_seen_at",
+                )
+            }
+            prev = next(
+                (
+                    g["display_name"]
+                    for g in reversed(others)
+                    if g["display_name"] != rep["display_name"]
+                ),
+                None,
+            )
+            if prev:
+                entry["previous_name"] = prev
+            if others:
+                entry["alias_ids"] = [g["id"] for g in others]
+            participants.append((entry, rep))
+        participants.sort(key=lambda pair: pair[0]["joined_at"])
+        # 名稱唯一性只約束 active 成員；active 與已離開之間仍可能重名。
+        # 重名時附消歧提示：人類給來源 IP、agent 給 session 片段。
+        # 取「尾」8 碼不取頭——固定身分 key 慣用共同前綴（codex-main / codex-dev），
+        # 頭碼會撞在一起；也不外洩整把 key（它同時是指派目標）
+        name_counts: dict[str, int] = {}
+        for entry, _ in participants:
+            name_counts[entry["display_name"]] = (
+                name_counts.get(entry["display_name"], 0) + 1
+            )
+        for entry, rep in participants:
+            if name_counts[entry["display_name"]] > 1:
+                if rep["role"] == "human" and rep["join_ip"]:
+                    entry["distinct_hint"] = rep["join_ip"]
+                else:
+                    entry["distinct_hint"] = rep["session_key"][-8:]
+        return {"room": dict(room), "participants": [e for e, _ in participants]}
 
     async def _archive(room_id: str, reason: str) -> None:
         db = app.state.db
@@ -313,7 +361,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- 成員 ----------
 
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
-    async def join_room(room_id: str, body: JoinRequest):
+    async def join_room(room_id: str, body: JoinRequest, request: Request):
         await _room_or_404(room_id)
         db = app.state.db
         # 同一 session 已在房內 → 冪等返回既有身分
@@ -336,10 +384,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         name = generate_name({r["display_name"] for r in taken_rows}, body.preferred_name)
         pid = _uid()
         now = _now()
+        join_ip = request.client.host if request.client else None
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at) VALUES (?,?,?,?,?,?,?,?)",
-            (pid, room_id, body.kind, body.session_key, name, body.role, now, now),
+            " joined_at, last_seen_at, join_ip) VALUES (?,?,?,?,?,?,?,?,?)",
+            (pid, room_id, body.kind, body.session_key, name, body.role, now, now,
+             join_ip),
         )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成

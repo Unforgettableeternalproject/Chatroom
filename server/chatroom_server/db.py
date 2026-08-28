@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS participant (
     status       TEXT NOT NULL DEFAULT 'active',  -- active / left / removed
     joined_at    TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    left_at      TEXT
+    left_at      TEXT,
+    join_ip      TEXT                              -- 加入時的來源 IP（重名消歧用）
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -74,6 +75,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column, 完整欄位定義)
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
+    ("participant", "join_ip", "join_ip TEXT"),
 ]
 
 
