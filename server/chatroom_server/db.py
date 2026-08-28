@@ -63,11 +63,24 @@ CREATE TABLE IF NOT EXISTS assignment (
     room_id            TEXT NOT NULL REFERENCES room(id),
     target_session_key TEXT NOT NULL,
     note               TEXT NOT NULL DEFAULT '',
+    -- 指派者預先取的名字；agent 依此指派加入時優先於自取名與名字池
+    assigned_name      TEXT NOT NULL DEFAULT '',
     status             TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/expired
     created_at         TEXT NOT NULL,
     resolved_at        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assignment_target ON assignment(target_session_key, status);
+
+-- Hub 見過的 session 名錄：bridge/watcher 帶 session_key 的呼叫都會 upsert。
+-- 指派 UI 據此列出「掃描到的 session」，不必使用者手抄 key。
+CREATE TABLE IF NOT EXISTS session (
+    session_key   TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL DEFAULT 'other',  -- claude / codex / human / other
+    label         TEXT NOT NULL DEFAULT '',       -- bridge 自報的代稱（CHATROOM_DEFAULT_NAME）
+    first_seen_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_seen ON session(last_seen_at);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
@@ -80,6 +93,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("participant", "join_ip", "join_ip TEXT"),
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),
+    ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
 ]
 
 

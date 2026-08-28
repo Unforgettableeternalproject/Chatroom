@@ -104,6 +104,18 @@ def configure(
         _state = bridge_state
 
 
+def _presence_params() -> dict[str, str]:
+    """帶 session_key 的查詢參數，順便向 Hub 自報 kind 與代稱。
+
+    Hub 據此維護 session 名錄（指派 UI 的掃描來源）；label 用
+    CHATROOM_DEFAULT_NAME，讓使用者在清單上認得出這個 session 是誰。
+    """
+    params = {"session_key": SESSION_KEY, "kind": AGENT_KIND}
+    if DEFAULT_NAME:
+        params["label"] = DEFAULT_NAME
+    return params
+
+
 # ---------- 共用請求包裝 ----------
 
 
@@ -162,12 +174,12 @@ def chatroom_list_rooms() -> dict:
     （含 room_name / room_topic / note，說明邀你進去做什麼）。
     已加入過的房間會附上 ``you_joined_as``，也就是你在該房的顯示名稱。
     """
-    data = hub().request("GET", "/api/rooms", params={"session_key": SESSION_KEY})
+    data = hub().request("GET", "/api/rooms", params=_presence_params())
     # /api/rooms 的 pending_assignments 只有原始欄位；/api/assignments 有 join 房名，
     # 對 agent 更可讀，取得成功就用它替換
     try:
         richer = hub().request(
-            "GET", "/api/assignments", params={"session_key": SESSION_KEY}
+            "GET", "/api/assignments", params=_presence_params()
         )
         data["pending_assignments"] = richer.get("assignments", [])
     except HubError:
@@ -189,6 +201,8 @@ def chatroom_join(room_id: str, preferred_name: str = "") -> dict:
 
     發言、釘選、heartbeat 之前都必須先加入。可提供 ``preferred_name`` 作為偏好名稱，
     房內重名時 Hub 會自動調整；回傳實際被指派的 ``display_name``。
+    若這個房間有針對你的指派且指派者已幫你取名，會以那個名字為準
+    （回傳含 ``name_from_assignment: true``），不必覺得奇怪。
     同一個 session 重複加入同一房間是冪等的（回傳 ``rejoined: true``）。
     身分會寫入本機狀態檔，bridge 重啟後不需要重新加入。
     """
@@ -357,10 +371,12 @@ def chatroom_assignments() -> dict:
     （邀你進去做什麼）。開始新一輪工作前值得查一次。
     回應方式：chatroom_resolve_assignment，或直接 chatroom_join
     （加入該房間時 Hub 會自動把對應指派標記為 accepted）。
+    指派若帶 ``assigned_name``，表示指派者已幫你取好房內名稱，
+    加入該房間時 Hub 會以它命名（優先於你自己的 preferred_name）。
     回傳另含 ``your_session_key``——想請人指派工作給你時，把這把 key 告訴對方。
     """
     data = hub().request(
-        "GET", "/api/assignments", params={"session_key": SESSION_KEY}
+        "GET", "/api/assignments", params=_presence_params()
     )
     data["your_session_key"] = SESSION_KEY
     return data

@@ -8,6 +8,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
+import '../../models/agent_session.dart';
 import '../../models/assignment.dart';
 import '../../state/app_providers.dart';
 import '../../state/assignments_providers.dart';
@@ -27,6 +28,7 @@ class AssignmentScreen extends ConsumerStatefulWidget {
 
 class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   final _target = TextEditingController();
+  final _name = TextEditingController();
   final _note = TextEditingController();
   Timer? _poll;
   bool _submitting = false;
@@ -34,9 +36,11 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   @override
   void initState() {
     super.initState();
-    // agent 接受指派沒有 WS 事件，開著畫面時輪詢（10s）
+    // agent 接受指派沒有 WS 事件，開著畫面時輪詢（10s）；
+    // session 掃描清單（active/idle 狀態）一併刷新
     _poll = Timer.periodic(const Duration(seconds: 10), (_) {
       ref.invalidate(roomAssignmentsProvider(widget.roomId));
+      ref.invalidate(agentSessionsProvider);
     });
   }
 
@@ -44,6 +48,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   void dispose() {
     _poll?.cancel();
     _target.dispose();
+    _name.dispose();
     _note.dispose();
     super.dispose();
   }
@@ -52,15 +57,18 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
     final target = _target.text.trim();
     if (target.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('請輸入目標 session key')));
+          const SnackBar(content: Text('請從掃描清單選擇對象，或輸入 session key')));
       return;
     }
     setState(() => _submitting = true);
     try {
       await ref.read(assignmentsApiProvider).create(widget.roomId,
-          targetSessionKey: target, note: _note.text.trim());
+          targetSessionKey: target,
+          note: _note.text.trim(),
+          assignedName: _name.text.trim());
       await ref.read(settingsRepoProvider).rememberSessionKeys([target]);
       _target.clear();
+      _name.clear();
       _note.clear();
       ref.invalidate(roomAssignmentsProvider(widget.roomId));
     } on ApiException catch (e) {
@@ -118,16 +126,29 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                   children: [
                     MonoLabel('NEW ASSIGNMENT', letterSpacing: 2.2),
                     const SizedBox(height: 14),
+                    Row(children: [
+                      MonoLabel('掃描到的 SESSION',
+                          color: s.inkSoft, letterSpacing: 1.4),
+                      const Spacer(),
+                      InkWell(
+                        onTap: () => ref.invalidate(agentSessionsProvider),
+                        child: Icon(Icons.refresh, size: 14, color: s.inkMute),
+                      ),
+                    ]),
+                    const SizedBox(height: 6),
+                    _buildSessionScan(),
+                    const SizedBox(height: 14),
                     MonoLabel('TARGET SESSION',
                         color: s.inkSoft, letterSpacing: 1.4),
                     const SizedBox(height: 6),
                     _inputBox(
                       TextField(
                         controller: _target,
+                        onChanged: (_) => setState(() {}),
                         style:
                             UepText.code(size: 12, color: s.ink, height: 1.4),
                         decoration: _decoration(
-                            'agent 的 session_key（如 codex-worklog-02）'),
+                            '點上方清單自動填入，或手動輸入 session_key'),
                       ),
                     ),
                     if (recent.isNotEmpty) ...[
@@ -135,7 +156,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       Wrap(spacing: 6, runSpacing: 6, children: [
                         for (final key in recent.take(8))
                           InkWell(
-                            onTap: () => _target.text = key,
+                            onTap: () => setState(() => _target.text = key),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 3),
@@ -152,6 +173,20 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                           ),
                       ]),
                     ],
+                    const SizedBox(height: 14),
+                    MonoLabel('命名（選填）', color: s.inkSoft, letterSpacing: 1.4),
+                    const SizedBox(height: 6),
+                    _inputBox(
+                      TextField(
+                        controller: _name,
+                        maxLength: 32,
+                        style:
+                            UepText.code(size: 12, color: s.ink, height: 1.4),
+                        decoration: _decoration(
+                                '幫這個 agent 取房內名稱；留空則由 agent 自取或自動生成')
+                            .copyWith(counterText: ''),
+                      ),
+                    ),
                     const SizedBox(height: 14),
                     MonoLabel('NOTE', color: s.inkSoft, letterSpacing: 1.4),
                     const SizedBox(height: 6),
@@ -213,6 +248,46 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
     );
   }
 
+  /// 掃描到的 agent session 清單：點選即填入 TARGET SESSION。
+  Widget _buildSessionScan() {
+    final s = context.uep;
+    final sessionsAsync = ref.watch(agentSessionsProvider);
+    return sessionsAsync.when(
+      loading: () => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(children: [
+          const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.5, color: UepColors.gold)),
+          const SizedBox(width: 8),
+          MonoLabel('掃描中…', size: 9, color: s.inkMute),
+        ]),
+      ),
+      error: (e, _) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: MonoLabel('掃描失敗，可手動輸入 session key',
+            size: 9, color: UepColors.errorText),
+      ),
+      data: (sessions) => sessions.isEmpty
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: MonoLabel('目前沒有掃描到任何 agent session',
+                  size: 9, color: s.inkMute),
+            )
+          : Column(children: [
+              for (final session in sessions)
+                _SessionRow(
+                  session: session,
+                  selected: _target.text.trim() == session.sessionKey,
+                  onTap: () =>
+                      setState(() => _target.text = session.sessionKey),
+                ),
+            ]),
+    );
+  }
+
   Widget _inputBox(Widget child) {
     final s = context.uep;
     return Container(
@@ -233,6 +308,88 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         hintStyle: UepText.serif(size: 12.5, color: context.uep.inkMute),
         contentPadding: const EdgeInsets.symmetric(vertical: 10),
       );
+}
+
+class _SessionRow extends StatelessWidget {
+  const _SessionRow({
+    required this.session,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final AgentSession session;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final active = session.status == 'active';
+    final statusColor = active ? UepColors.success : s.inkMute;
+    final keyTail = session.sessionKey.length > 12
+        ? '…${session.sessionKey.substring(session.sessionKey.length - 12)}'
+        : session.sessionKey;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? s.bgSunken : null,
+          border: Border.all(
+              color: selected ? UepColors.gold : s.line,
+              width: selected ? 1.2 : 1),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(children: [
+          // 狀態燈：active 實心、idle 空心
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active ? statusColor : null,
+              border: Border.all(color: statusColor),
+            ),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Flexible(
+                    child: Text(session.displayTitle,
+                        overflow: TextOverflow.ellipsis,
+                        style: UepText.code(
+                            size: 12, color: s.ink, height: 1.3)),
+                  ),
+                  const SizedBox(width: 8),
+                  KindBadge(kind: session.kind, compact: true),
+                ]),
+                const SizedBox(height: 2),
+                Text(
+                  session.rooms.isNotEmpty
+                      ? '在「${session.rooms.first.roomName}」'
+                          '為 ${session.rooms.first.displayName}'
+                          '${session.rooms.length > 1 ? '（+${session.rooms.length - 1} 房）' : ''}'
+                      : keyTail,
+                  overflow: TextOverflow.ellipsis,
+                  style: UepText.mono(size: 9, color: s.inkMute),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          MonoLabel(active ? 'ACTIVE' : 'IDLE',
+              size: 8.5, color: statusColor, letterSpacing: 1.4),
+          const SizedBox(width: 10),
+          Text(relativeTime(session.lastSeenAt),
+              style: UepText.mono(size: 9, color: s.inkMute)),
+        ]),
+      ),
+    );
+  }
 }
 
 class _AssignmentRow extends StatelessWidget {
@@ -267,8 +424,20 @@ class _AssignmentRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(assignment.targetSessionKey,
-                    style: UepText.code(size: 11.5, color: s.ink, height: 1.4)),
+                Row(children: [
+                  Flexible(
+                    child: Text(assignment.targetSessionKey,
+                        overflow: TextOverflow.ellipsis,
+                        style: UepText.code(
+                            size: 11.5, color: s.ink, height: 1.4)),
+                  ),
+                  if (assignment.assignedName.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Text('→ ${assignment.assignedName}',
+                        style: UepText.code(
+                            size: 11, color: UepColors.gold, height: 1.4)),
+                  ],
+                ]),
                 if (assignment.note.isNotEmpty) ...[
                   const SizedBox(height: 3),
                   Text(assignment.note,

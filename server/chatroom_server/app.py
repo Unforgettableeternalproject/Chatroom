@@ -66,6 +66,8 @@ class MessagePost(BaseModel):
 class AssignmentCreate(BaseModel):
     target_session_key: str
     note: str = ""
+    # 指派者預先取的名字：agent 依此指派加入房間時，優先於自取名與名字池
+    assigned_name: str = Field(default="", max_length=32)
 
 
 class AssignmentResolve(BaseModel):
@@ -140,6 +142,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         return row
+
+    async def _touch_session(
+        session_key: str, kind: str | None = None, label: str | None = None
+    ) -> None:
+        """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
+        舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。"""
+        db = app.state.db
+        now = _now()
+        await db.execute(
+            "INSERT INTO session (session_key, kind, label, first_seen_at, last_seen_at)"
+            " VALUES (?,?,?,?,?)"
+            " ON CONFLICT(session_key) DO UPDATE SET"
+            " last_seen_at=excluded.last_seen_at,"
+            " kind=CASE WHEN excluded.kind!='' THEN excluded.kind ELSE session.kind END,"
+            " label=CASE WHEN excluded.label!='' THEN excluded.label ELSE session.label END",
+            (session_key, kind or "", label or "", now, now),
+        )
+        # 首次插入時 kind 空字串會落庫，補回預設值
+        await db.execute(
+            "UPDATE session SET kind='other' WHERE session_key=? AND kind=''",
+            (session_key,),
+        )
+        await db.commit()
 
     async def _post_message(
         room_id: str,
@@ -246,8 +271,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"id": room_id, "name": body.name, "topic": body.topic, "status": "active"}
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
-    async def list_rooms(status: str = "active", session_key: str | None = None):
+    async def list_rooms(
+        status: str = "active",
+        session_key: str | None = None,
+        kind: str | None = None,
+        label: str | None = None,
+    ):
         db = app.state.db
+        if session_key:
+            await _touch_session(session_key, kind, label)
         rows = await (
             await db.execute(
                 "SELECT r.*,"
@@ -415,7 +447,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id,),
             )
         ).fetchall()
-        name = generate_name({r["display_name"] for r in taken_rows}, body.preferred_name)
+        # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
+        assigned = await (
+            await db.execute(
+                "SELECT assigned_name FROM assignment WHERE room_id=?"
+                " AND target_session_key=? AND status='pending' AND assigned_name!=''"
+                " ORDER BY created_at DESC LIMIT 1",
+                (room_id, body.session_key),
+            )
+        ).fetchone()
+        preferred = assigned["assigned_name"] if assigned else body.preferred_name
+        name = generate_name({r["display_name"] for r in taken_rows}, preferred)
         pid = _uid()
         now = _now()
         join_ip = request.client.host if request.client else None
@@ -433,8 +475,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, body.session_key),
         )
         await db.commit()
+        await _touch_session(body.session_key, body.kind)
         await _post_message(room_id, None, f"{name} 加入了聊天室", kind="system")
-        return {"participant_id": pid, "display_name": name, "rejoined": False}
+        out = {"participant_id": pid, "display_name": name, "rejoined": False}
+        if assigned:
+            # 讓 agent 知道名字來自指派者，而非自己的 preferred_name
+            out["name_from_assignment"] = True
+        return out
 
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
     async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
@@ -630,9 +677,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         aid = _uid()
         await db.execute(
-            "INSERT INTO assignment (id, room_id, target_session_key, note, created_at)"
-            " VALUES (?,?,?,?,?)",
-            (aid, room_id, body.target_session_key, body.note, _now()),
+            "INSERT INTO assignment (id, room_id, target_session_key, note,"
+            " assigned_name, created_at) VALUES (?,?,?,?,?,?)",
+            (aid, room_id, body.target_session_key, body.note,
+             body.assigned_name.strip(), _now()),
         )
         await db.commit()
         return {"id": aid}
@@ -651,7 +699,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"assignments": [dict(r) for r in rows]}
 
     @app.get("/api/assignments", dependencies=[Depends(require_auth)])
-    async def list_assignments(session_key: str):
+    async def list_assignments(
+        session_key: str, kind: str | None = None, label: str | None = None
+    ):
+        # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
+        await _touch_session(session_key, kind, label)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -675,6 +727,69 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
         await db.commit()
         return {"ok": True}
+
+    # ---------- Session 名錄 ----------
+
+    @app.get("/api/sessions", dependencies=[Depends(require_auth)])
+    async def list_sessions(include_human: bool = False):
+        """列出 Hub 見過且仍在存活窗內的 session（指派 UI 的掃描來源）。
+
+        status：last_seen 在 active window 內為 ``active``，否則 ``idle``；
+        超過 session_ttl 的不列出。附上該 session 目前所在的房間與房內名稱，
+        以及最近一次使用過的顯示名稱，讓使用者認得出「這是誰」。
+        """
+        db = app.state.db
+        now = datetime.now(timezone.utc)
+        ttl_cutoff = (now - timedelta(seconds=cfg.session_ttl)).isoformat()
+        active_cutoff = (now - timedelta(seconds=cfg.session_active_window)).isoformat()
+        cond = "last_seen_at >= ?"
+        params: list = [ttl_cutoff]
+        if not include_human:
+            cond += " AND kind != 'human'"
+        rows = await (
+            await db.execute(
+                f"SELECT * FROM session WHERE {cond} ORDER BY last_seen_at DESC",
+                params,
+            )
+        ).fetchall()
+        sessions = []
+        for r in rows:
+            # 目前活躍中的房間身分（display_name 就是這個 session 在房內的名字）
+            proom = await (
+                await db.execute(
+                    "SELECT p.display_name, p.room_id, ro.name AS room_name"
+                    " FROM participant p JOIN room ro ON ro.id=p.room_id"
+                    " WHERE p.session_key=? AND p.status='active'"
+                    " ORDER BY p.last_seen_at DESC",
+                    (r["session_key"],),
+                )
+            ).fetchall()
+            last_name = None
+            if not proom:
+                # 不在任何房內時，用最近一次的房內名稱幫助辨識
+                prev = await (
+                    await db.execute(
+                        "SELECT display_name FROM participant WHERE session_key=?"
+                        " ORDER BY last_seen_at DESC LIMIT 1",
+                        (r["session_key"],),
+                    )
+                ).fetchone()
+                last_name = prev["display_name"] if prev else None
+            sessions.append({
+                "session_key": r["session_key"],
+                "kind": r["kind"],
+                "label": r["label"],
+                "status": "active" if r["last_seen_at"] >= active_cutoff else "idle",
+                "first_seen_at": r["first_seen_at"],
+                "last_seen_at": r["last_seen_at"],
+                "rooms": [
+                    {"room_id": p["room_id"], "room_name": p["room_name"],
+                     "display_name": p["display_name"]}
+                    for p in proom
+                ],
+                "last_display_name": last_name,
+            })
+        return {"sessions": sessions}
 
     # ---------- WebSocket（UI 即時通道） ----------
 

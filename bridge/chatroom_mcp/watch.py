@@ -168,23 +168,28 @@ class Watcher:
             )
 
     def poll_assignments(self) -> None:
-        data = self.hub.request(
-            "GET", "/api/assignments", params={"session_key": self.session_key}
-        )
+        # kind/label 一併自報：這條輪詢是 Hub session 名錄（指派 UI 掃描
+        # 來源）的主要心跳，watcher 掛著時 session 就會顯示為 active
+        params = {"session_key": self.session_key, "kind": identity.agent_kind()}
+        label = os.environ.get("CHATROOM_DEFAULT_NAME", "")
+        if label:
+            params["label"] = label
+        data = self.hub.request("GET", "/api/assignments", params=params)
         for a in data.get("assignments", []):
             aid = a.get("id")
             if not aid or aid in self.seen_assignments:
                 continue
             self.seen_assignments.add(aid)
-            self.emit(
-                {
-                    "event": "assignment",
-                    "assignment_id": aid,
-                    "room_id": a.get("room_id"),
-                    "room_name": a.get("room_name"),
-                    "note": _preview(a.get("note") or ""),
-                }
-            )
+            event = {
+                "event": "assignment",
+                "assignment_id": aid,
+                "room_id": a.get("room_id"),
+                "room_name": a.get("room_name"),
+                "note": _preview(a.get("note") or ""),
+            }
+            if a.get("assigned_name"):
+                event["assigned_name"] = a["assigned_name"]
+            self.emit(event)
 
     def maybe_heartbeat(self) -> None:
         """掛著聽卻被 presence sweeper 當閒置踢出去就本末倒置了——定期報平安。"""

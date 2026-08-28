@@ -7,6 +7,7 @@ class Assignment {
     required this.roomId,
     required this.targetSessionKey,
     required this.note,
+    this.assignedName = '',
     required this.status,
     required this.createdAt,
     this.resolvedAt,
@@ -18,6 +19,9 @@ class Assignment {
   final String roomId;
   final String targetSessionKey;
   final String note;
+
+  /// 指派者預先幫 agent 取的房內名稱；空字串表示交由 agent/名字池決定。
+  final String assignedName;
   final String status; // pending | accepted | declined | expired
   final String createdAt;
   final String? resolvedAt;
@@ -31,6 +35,7 @@ class Assignment {
         roomId: (json['room_id'] as String?) ?? '',
         targetSessionKey: (json['target_session_key'] as String?) ?? '',
         note: (json['note'] as String?) ?? '',
+        assignedName: (json['assigned_name'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'pending',
         createdAt: (json['created_at'] as String?) ?? '',
         resolvedAt: json['resolved_at'] as String?,

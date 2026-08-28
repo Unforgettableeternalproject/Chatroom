@@ -100,6 +100,7 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | id | TEXT (uuid) | 主鍵 |
 | room_id | TEXT | 要加入的房間 |
 | target_session_key | TEXT | 被指派的 agent session |
+| assigned_name | TEXT | 指派者預先取的房內名稱；agent 依此指派加入時優先於自取名與名字池 |
 | note | TEXT | 給 agent 的說明（為什麼請你加入） |
 | status | TEXT | `pending` / `accepted` / `declined` / `expired` |
 | created_at / resolved_at | TEXT (ISO) | |
@@ -157,8 +158,9 @@ POST   /api/rooms/{id}/messages            {content, mentions?, reply_to?} 發�
 GET    /api/rooms/{id}/updates?after_seq=&timeout=  long-poll 通知
 POST   /api/messages/{id}/pin              釘選 / DELETE 取消釘選
 DELETE /api/messages/{id}                  軟刪除（人類管控）
-POST   /api/rooms/{id}/assignments         指派 {target_session_key, note}
-GET    /api/assignments?session_key=       查詢針對自己的指派
+POST   /api/rooms/{id}/assignments         指派 {target_session_key, note, assigned_name?}
+GET    /api/assignments?session_key=&kind=&label=  查詢針對自己的指派（順便 upsert session 名錄）
+GET    /api/sessions?include_human=        列出 Hub 見過且存活的 session（指派 UI 掃描來源；active/idle）
 POST   /api/assignments/{id}/resolve       {status: accepted/declined}
 WS     /ws?token=                          UI 即時通道
 ```
