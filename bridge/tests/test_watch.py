@@ -146,6 +146,53 @@ def test_max_events_stops_process(fake_hub, tmp_path, monkeypatch, capsys):
     assert [e["event"] for e in ev] == ["message", "watch_ended"]
 
 
+def test_codex_dispatch_queues_event_without_shell(fake_hub, tmp_path, monkeypatch, capsys):
+    """--codex-thread：事件以 argv 直接傳給 codex queue，不經 shell（注入面）。"""
+    monkeypatch.setattr(watch, "_resolve_codex_argv", lambda: ["codex-bin"])
+    calls = []
+
+    class Done:
+        returncode = 0
+        stdout = "Queued message x"
+        stderr = ""
+
+    monkeypatch.setattr(watch.subprocess, "run",
+                        lambda argv, **kw: calls.append(argv) or Done())
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     "--codex-thread", "thread-uuid")
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [{"seq": 1, "kind": "chat", "sender_id": "p9",
+                       "sender_name": "Bernie", "content": 'a"b & c', "mentions": []}],
+         "you_were_mentioned": False, "last_seq": 1},
+    )
+    w.poll_room()
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:2] == ["codex-bin", "queue"]
+    assert argv[argv.index("--thread") + 1] == "thread-uuid"
+    message = argv[argv.index("--message") + 1]
+    assert message.startswith("[chatroom 通知] ")
+    assert json.loads(message.removeprefix("[chatroom 通知] "))["preview"] == 'a"b & c'
+
+
+def test_codex_dispatch_failure_does_not_kill_watcher(fake_hub, tmp_path, monkeypatch, capsys):
+    """queue 失敗（Codex 沒開等）只記 stderr，事件照樣輸出、watcher 續命。"""
+    monkeypatch.setattr(watch, "_resolve_codex_argv", lambda: ["codex-bin"])
+    monkeypatch.setattr(watch.subprocess, "run",
+                        lambda argv, **kw: (_ for _ in ()).throw(OSError("gone")))
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     "--codex-thread", "thread-uuid")
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [{"seq": 1, "kind": "chat", "sender_id": "p9",
+                       "sender_name": "Bernie", "content": "hi", "mentions": []}],
+         "you_were_mentioned": False, "last_seq": 1},
+    )
+    w.poll_room()
+    assert len(events_from(capsys)) == 1  # stdout 事件流不受影響
+
+
 def test_watcher_never_writes_bridge_state(fake_hub, tmp_path, monkeypatch, capsys):
     """watcher 是唯讀觀察者：state 檔推進游標是 chatroom_read 的職責。"""
     state_before = {ROOM: {"participant_id": "me", "display_name": "Novia", "last_seq": 1}}

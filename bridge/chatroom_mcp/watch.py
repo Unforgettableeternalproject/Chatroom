@@ -8,8 +8,9 @@
       Monitor(command=".venv/Scripts/python.exe bridge/chatroom_mcp/watch.py --room <id>",
               persistent=true, description="chatroom 通知")
 
-- **Codex / 其他 agent**：沒有等效的背景喚醒機制，直接前景執行、等第一行
-  輸出即等同 chatroom_wait（可配 --max-events 1）。
+- **Codex**：沒有自掛機制，改由 watcher 反向推——`--codex-thread <uuid>` 把
+  每個事件經 `codex queue` 注入既有 session（閒置 session 會立即處理，
+  2026-08-28 實測）。也可前景執行 --max-events 1 當同步 wait。
 
 事件格式（一行一個 JSON 物件）：
 
@@ -32,6 +33,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -68,6 +72,26 @@ def _preview(content: str) -> str:
     return flat
 
 
+def _resolve_codex_argv() -> list[str]:
+    """找出可直接 spawn 的 codex 呼叫方式（不經過 shell）。
+
+    Windows 上 `codex` 是 npm shim（.cmd），子進程執行 .cmd 必須經過 cmd.exe，
+    而事件內容（聊天訊息）是不可信輸入，經 cmd 轉義等於開命令注入面。
+    改抓 shim 同目錄的 node.exe + codex.js 直接執行，全程 argv 傳遞、零 shell。
+    """
+    exe = shutil.which("codex")
+    if not exe:
+        raise SystemExit("[watch] 找不到 codex CLI，--codex-thread 無法使用")
+    path = Path(exe)
+    if os.name == "nt" and path.suffix.lower() != ".exe":
+        base = path.parent
+        js = base / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+        if js.exists():
+            node = base / "node.exe"
+            return [str(node) if node.exists() else "node", str(js)]
+    return [str(path)]
+
+
 def _read_bridge_state(session_key: str, room_id: str) -> tuple[str | None, str | None, int]:
     """從 bridge state 檔讀 (participant_id, display_name, last_seq)。唯讀。"""
     path = identity.state_path(session_key)
@@ -102,6 +126,9 @@ class Watcher:
         self.seen_assignments: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
+        # Codex 沒有 Monitor 那種自掛機制，只能反向推：事件經 codex queue
+        # 注入其 session（前提：該 thread 已有至少一輪對話，否則 queue 讀不到）
+        self.codex_argv = _resolve_codex_argv() if args.codex_thread else None
 
     # ---------- 各事件來源 ----------
 
@@ -182,6 +209,29 @@ class Watcher:
     def emit(self, event: dict[str, Any]) -> None:
         _emit(event)
         self.emitted += 1
+        if self.codex_argv:
+            self.dispatch_codex(event)
+
+    def dispatch_codex(self, event: dict[str, Any]) -> None:
+        """把事件排入 Codex session 的佇列（外部喚醒，2026-08-28 實測閒置 session
+        會立即處理）。失敗只記 stderr 不中斷——通知丟一則不該讓 watcher 死掉。"""
+        text = "[chatroom 通知] " + json.dumps(event, ensure_ascii=False)
+        argv = [
+            *self.codex_argv, "queue",
+            "--thread", self.args.codex_thread, "--message", text,
+        ]
+        try:
+            done = subprocess.run(
+                argv, capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace",
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log(f"codex queue 失敗：{exc}")
+            return
+        if done.returncode != 0:
+            _log(f"codex queue 失敗（exit {done.returncode}）：{done.stderr.strip()}")
+        else:
+            _log(f"codex queue OK：{done.stdout.strip()}")
 
     # ---------- 主迴圈 ----------
 
@@ -231,6 +281,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-assignments", dest="assignments", action="store_false",
         help="不監看指派（預設會一併監看）",
+    )
+    p.add_argument(
+        "--codex-thread",
+        help="把每個事件經 `codex queue` 排入指定的 Codex session（外部喚醒）。"
+             "該 thread 需已有至少一輪對話；建議以 Codex 同一把 session key 執行"
+             "（CHATROOM_SESSION_KEY=codex-main），讓「自己發的訊息不通知」生效",
     )
     p.add_argument(
         "--max-events", type=int, default=0,
