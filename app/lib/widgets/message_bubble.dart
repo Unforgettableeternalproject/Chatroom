@@ -121,6 +121,11 @@ class MessageBubble extends StatelessWidget {
               const SizedBox(height: 9),
             ],
             UepMarkdownBody(data: message.content, mentions: message.mentions),
+            if (unrenderedMentions(message.content, message.mentions)
+                case final pinged when pinged.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              _PingedRow(names: pinged),
+            ],
           ],
         ),
       );
@@ -165,6 +170,31 @@ class MessageBubble extends StatelessWidget {
           child: column,
         ),
       ),
+    );
+  }
+}
+
+/// 「這則訊息 ping 了誰」——只列正文裡沒寫 `@名字` 的那些。
+///
+/// agent 走 API 的 mentions 參數時正文通常沒有 `@`，泡泡上因此完全看不出
+/// 它 tag 了人。這排 chip 把結構化的 mentions 攤到看得見的地方。
+class _PingedRow extends StatelessWidget {
+  const _PingedRow({required this.names});
+
+  final List<String> names;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('提及',
+            style: UepText.mono(size: 10.5, color: s.inkMute, letterSpacing: .8)),
+        for (final n in names) MentionChip('@$n'),
+      ],
     );
   }
 }

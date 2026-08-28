@@ -70,17 +70,21 @@ class UepMarkdownBody extends StatelessWidget {
   }
 }
 
+/// 「@ + mentions 中任一名字」的比對式。
+///
+/// 名字先逐一 RegExp.escape、長的在前——「Nova-2」要贏過「Nova」。渲染 chip
+/// 與判斷「哪些 mention 沒出現在正文」共用這一份：兩邊若各自實作，
+/// `'@Nova-2'.contains('@Nova')` 這種前綴包含就會讓 Nova 被當成已渲染而從
+/// 泡泡上消失（實際發生過，測試抓到）。
+String mentionPattern(List<String> names) {
+  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
+  return '@(?:${sorted.map(RegExp.escape).join('|')})';
+}
+
 /// 比對「@ + mentions 中任一名字」的 inline syntax。
-/// 名字先逐一 RegExp.escape、長的在前——「Nova-2」要贏過「Nova」。
 class _MentionSyntax extends md.InlineSyntax {
   _MentionSyntax(List<String> names)
-      : super(_patternFor(names), caseSensitive: true);
-
-  static String _patternFor(List<String> names) {
-    final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
-    final joined = sorted.map(RegExp.escape).join('|');
-    return '@(?:$joined)';
-  }
+      : super(mentionPattern(names), caseSensitive: true);
 
   @override
   bool onMatch(md.InlineParser parser, Match match) {
@@ -89,10 +93,17 @@ class _MentionSyntax extends md.InlineSyntax {
   }
 }
 
-/// mention chip：金色細框 + 淡底，把 @名字 從內文中框出來。
-class _MentionChipBuilder extends MarkdownElementBuilder {
+/// mention chip：金色細框 + 淡底。
+///
+/// 兩處共用——內文裡的 `@名字`，以及泡泡底下那排「正文沒寫 @ 的 mentions」
+/// （agent 走 API 的 `mentions` 參數時是常態）。樣式只有一份，不會漂移。
+class MentionChip extends StatelessWidget {
+  const MentionChip(this.label, {super.key});
+
+  final String label;
+
   @override
-  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+  Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 1),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -102,11 +113,36 @@ class _MentionChipBuilder extends MarkdownElementBuilder {
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
-        element.textContent,
+        label,
         style: UepText.sans(
-            size: 12.5, weight: FontWeight.w600, color: UepColors.gold)
+                size: 12.5, weight: FontWeight.w600, color: UepColors.gold)
             .copyWith(height: 1.3),
       ),
     );
   }
+}
+
+/// 把內文中比對到的 `@名字` 交給 [MentionChip] 呈現。
+class _MentionChipBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    return MentionChip(element.textContent);
+  }
+}
+
+/// 這則訊息裡「有被 ping、但正文沒有出現 `@名字`」的對象。
+///
+/// mention 在這個系統裡是結構化欄位（`chatroom_post(mentions=[...])`），與正文
+/// 寫不寫 `@` 無關。人類在 App 用 mention_field 打字會把 `@名字` 帶進正文，
+/// 所以看得到 chip；agent 直接帶 mentions 參數則不會——泡泡上因此完全看不出
+/// 這則訊息 tag 了人，即使收件端的 `mentioned` 判定是 true。這個函式補的就是
+/// 那段落差（2026-08-29 實機發現）。
+List<String> unrenderedMentions(String content, List<String> mentions) {
+  if (mentions.isEmpty) return const [];
+  // 走與渲染同一條比對式，結果才會互補而不是各說各話
+  final rendered = RegExp(mentionPattern(mentions), caseSensitive: true)
+      .allMatches(content)
+      .map((m) => m[0]!.substring(1))
+      .toSet();
+  return [for (final n in mentions) if (!rendered.contains(n)) n];
 }
