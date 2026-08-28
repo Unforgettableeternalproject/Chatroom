@@ -9,6 +9,11 @@
   「Building with plugins requires symlink support」中止。
 - ⚠️ 路徑長度：出現 `FTK1011` 或莫名的 `No CMAKE_CXX_COMPILER` 時，
   先懷疑 MAX_PATH（見 SETUP-FLUTTER.md），不是工具鏈。
+- ⚠️ 「generator does not match the generator used previously」：
+  VS 換版後 CMakeCache 過期，刪 `app\build\windows` 重建即可。
+- ⚠️ 繁中系統碼頁（CP950）的 C4819 編碼警告被 plugin 的 /WX 變成錯誤：
+  已在 `app/windows/CMakeLists.txt` 全域加 MSVC `/utf-8` 修掉，
+  不要移除那段（connectivity_plus 等含 UTF-8 原始碼的 plugin 都會踩）。
 
 ## Windows desktop（主要目標）
 
