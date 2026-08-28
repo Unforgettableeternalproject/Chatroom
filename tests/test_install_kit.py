@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -205,6 +207,80 @@ def test_env_file_is_where_the_watcher_looks(inst, kit_dir, monkeypatch):
     watcher_dir.mkdir(parents=True)
     assert load_env_file(start=watcher_dir) == expected
     assert os.environ["CHATROOM_URL"] == "http://hub:8787"
+
+
+# ---------- pip 中斷後的殘骸還原 ----------
+
+
+def test_restores_leftovers_when_new_version_missing(inst, tmp_path):
+    """pip 沒回滾時，venv 裡會完全不存在 chatroom_mcp。
+
+    當下毫無症狀（bridge 進程已把模組載入記憶體），下次重啟 agent 才炸
+    ModuleNotFoundError——那時沒人會聯想到幾天前那次失敗的安裝。
+    """
+    (tmp_path / "~hatroom_mcp").mkdir()
+    (tmp_path / "~hatroom_mcp" / "server.py").write_text("x", encoding="utf-8")
+    (tmp_path / "~hatroom_mcp-0.1.0.dist-info").mkdir()
+
+    restored = inst.restore_pip_leftovers(tmp_path)
+
+    assert sorted(restored) == ["chatroom_mcp", "chatroom_mcp-0.1.0.dist-info"]
+    assert (tmp_path / "chatroom_mcp" / "server.py").is_file()
+    assert not list(tmp_path.glob("~*"))
+
+
+def test_discards_leftovers_when_new_version_landed(inst, tmp_path):
+    """新版已就位時殘骸只是垃圾——還原回去會蓋掉新版。"""
+    (tmp_path / "~hatroom_mcp").mkdir()
+    (tmp_path / "chatroom_mcp").mkdir()
+    (tmp_path / "chatroom_mcp" / "new.py").write_text("new", encoding="utf-8")
+
+    assert inst.restore_pip_leftovers(tmp_path) == []
+    assert (tmp_path / "chatroom_mcp" / "new.py").is_file()
+    assert not list(tmp_path.glob("~*"))
+
+
+def test_leaves_other_packages_leftovers_alone(inst, tmp_path):
+    """只收拾自己的殘骸；別人的備份不歸這支安裝器管。"""
+    (tmp_path / "~equests").mkdir()
+    (tmp_path / "~ttpx-0.27.0.dist-info").mkdir()
+
+    assert inst.restore_pip_leftovers(tmp_path) == []
+    assert (tmp_path / "~equests").is_dir()
+    assert (tmp_path / "~ttpx-0.27.0.dist-info").is_dir()
+
+
+def test_no_leftovers_is_a_noop(inst, tmp_path):
+    (tmp_path / "chatroom_mcp").mkdir()
+    assert inst.restore_pip_leftovers(tmp_path) == []
+
+
+def test_site_packages_resolves_for_a_real_interpreter(inst):
+    """殘骸還原找不到 site-packages 就等於沒做——用真的直譯器驗一次。"""
+    site = inst.site_packages(Path(sys.executable))
+    assert site is not None and site.is_dir()
+
+
+def test_locked_exe_failure_explains_the_real_cause(
+    inst, tmp_path, capsys, monkeypatch
+):
+    """pip 的原始 OSError 看不出跟 agent 有關，使用者會往別的方向查。"""
+    (tmp_path / "~hatroom_mcp").mkdir()
+    monkeypatch.setattr(inst, "site_packages", lambda py: tmp_path)
+    done = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="",
+        stderr="ERROR: Could not install packages due to an OSError: "
+               "[WinError 32] 程序無法存取檔案，因為檔案正由另一個程序使用。",
+    )
+
+    with pytest.raises(SystemExit):
+        inst._report_install_failure(
+            done, Path(sys.executable), tmp_path / "chatroom-mcp.exe")
+
+    out = capsys.readouterr().out
+    assert "已還原" in out  # 先把 venv 修回可用，才談失敗原因
+    assert "關閉" in out and "chatroom-mcp.exe" in out
+    assert (tmp_path / "chatroom_mcp").is_dir()
 
 
 # ---------- watcher 的身分旗標 ----------

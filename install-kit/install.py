@@ -79,6 +79,43 @@ def check_hub(url: str, token: str) -> bool:
     return False
 
 
+PKG_NAME = "chatroom_mcp"
+
+
+def site_packages(py: Path) -> Path | None:
+    done = subprocess.run(
+        [str(py), "-c",
+         "import sysconfig;print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True, text=True,
+    )
+    if done.returncode != 0:
+        return None
+    path = Path(done.stdout.strip())
+    return path if path.is_dir() else None
+
+
+def restore_pip_leftovers(site: Path) -> list[str]:
+    """把 pip 中斷時留下的 ``~`` 備份還原回去，回傳還原的項目名。
+
+    pip 升級時先把舊目錄的第一個字元換成 ``~`` 當備份（``chatroom_mcp`` →
+    ``~hatroom_mcp``），再解壓新版。中途失敗時它**不會回滾**，於是 venv 裡
+    根本不存在 ``chatroom_mcp`` 這個模組。當下毫無症狀——bridge 進程早已把
+    模組載入記憶體——直到下次重啟 agent 才炸 ``ModuleNotFoundError``，而那時
+    沒人會把它跟幾天前那次失敗的安裝聯想在一起（2026-08-29 實機回報）。
+
+    安裝失敗可以接受；讓失敗後的狀態比動手前更糟不行。
+    """
+    restored: list[str] = []
+    for leftover in site.glob(f"~{PKG_NAME[1:]}*"):
+        target = site / (PKG_NAME[0] + leftover.name[1:])
+        if target.exists():
+            shutil.rmtree(leftover, ignore_errors=True)  # 新版已就位，殘骸是垃圾
+            continue
+        leftover.rename(target)
+        restored.append(target.name)
+    return restored
+
+
 def install_bridge() -> Path:
     """建立 venv 並安裝 bridge，回傳 chatroom-mcp 執行檔路徑。"""
     bridge_src = KIT_DIR / "bridge"
@@ -88,18 +125,40 @@ def install_bridge() -> Path:
         print("• 建立虛擬環境…")
         subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
     py = scripts_dir() / ("python.exe" if sys.platform == "win32" else "python")
-    print("• 安裝 bridge（含 mcp / httpx 相依，需要網路）…")
-    subprocess.run(
-        [str(py), "-m", "pip", "install", "--disable-pip-version-check",
-         "-q", "--upgrade", str(bridge_src)],
-        check=True,
-    )
     exe = scripts_dir() / (
         "chatroom-mcp.exe" if sys.platform == "win32" else "chatroom-mcp")
+    print("• 安裝 bridge（含 mcp / httpx 相依，需要網路）…")
+    done = subprocess.run(
+        [str(py), "-m", "pip", "install", "--disable-pip-version-check",
+         "-q", "--upgrade", str(bridge_src)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if done.returncode != 0:
+        _report_install_failure(done, py, exe)
     if not exe.exists():
         die(f"安裝後找不到 {exe}")
     print(f"✅ bridge 安裝完成：{exe}")
     return exe
+
+
+def _report_install_failure(
+    done: subprocess.CompletedProcess[str], py: Path, exe: Path
+) -> "NoReturn":  # noqa: F821
+    """pip 失敗：先把 venv 修回可用狀態，再說明真正的原因。"""
+    output = f"{done.stdout}\n{done.stderr}".strip()
+    site = site_packages(py)
+    restored = restore_pip_leftovers(site) if site else []
+    print(output)
+    print()
+    if restored:
+        print(f"• 已還原 pip 中斷留下的殘骸：{'、'.join(restored)}")
+        print("  （venv 回到安裝前的可用狀態，舊版 bridge 仍能運作）")
+    # Windows 不給執行中 image 的 DELETE 權限，連改名都不行——升級的人幾乎
+    #一定開著 agent，而 agent 正持有這支 exe，所以這是升級路徑的預設情境
+    if "WinError 32" in output or "being used by another process" in output:
+        die(f"{exe.name} 正被執行中的 agent 持有，pip 無法覆寫它。\n"
+            "   請**完全關閉** Claude Code / Codex（含背景 watcher）後再重跑本安裝器。")
+    die("pip 安裝失敗，原因見上方輸出。")
 
 
 def mcp_env(url: str, token: str, kind: str, name: str) -> dict[str, str]:

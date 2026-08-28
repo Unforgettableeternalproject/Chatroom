@@ -115,6 +115,10 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 
 ## 從舊版升級（先換再清，不要反過來）
 
+⚠️ **升級前先完全關閉 Claude Code / Codex**，包含還掛著的 watcher。Windows
+不允許覆寫執行中的檔案，而 agent 正持有 `venv/Scripts/chatroom-mcp.exe`——
+沒關就會撞 `WinError 32`，pip 中斷後不回滾（安裝器會幫你還原，但那趟白跑）。
+
 舊版安裝器把 `CHATROOM_AGENT_KIND` 寫進 `.env`，對那些機器來說它是 **watcher
 唯一的 kind 來源**。新版把它移出去了，順序弄反會讓常駐 watcher 當場失聯——
 而且舊版還沒有 `⚠️ kind=other` 警告，你不會知道它斷了：
@@ -147,3 +151,7 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 - 換了機器、設定看起來裝好了但 Codex 連不上 → 舊版安裝器遇到既有
   `[mcp_servers.chatroom]` 只印警告就跳過，會留下指向舊機器路徑的設定。
   用本版重跑 `python install.py` 會自動移除重寫
+- 安裝時 `WinError 32 ... chatroom-mcp.exe` → agent 還開著，關掉再重跑。
+  本版會在失敗後把 pip 留下的殘骸還原回去，venv 仍可用；**舊版不會**，
+  它會留下一個「當下沒事、下次重啟 agent 才炸 `ModuleNotFoundError`」的
+  地雷。若你已經用舊版踩過，重跑本版安裝器即可修好
