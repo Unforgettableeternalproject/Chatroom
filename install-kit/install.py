@@ -14,7 +14,10 @@ Codex CLI 的 MCP 設定。只用 Python 標準庫，Python 3.12+。
 - **絕不寫入 CHATROOM_SESSION_KEY**——身分由各 agent 平台的 session 決定
   （Claude Code 用 CLAUDE_CODE_SESSION_ID；Codex 每 session 自動生成）。
   固定 key 會讓多個 session／多台機器合併成同一個聊天室身分。
-- 冪等：重跑只更新，不重複追加；Codex 設定寫入前先備份。
+- 冪等：重跑只更新，不重複追加；Codex 設定寫入前先備份，既有 chatroom 區塊
+  移除後重寫（換機重裝時舊機器的路徑不能留著，見 setup_codex）。
+- 除了 MCP 設定，另外寫一份 kit 根目錄 `.env` 給 watcher——它是獨立進程，
+  讀不到 MCP client 傳給 bridge 的 env（見 write_env_file）。
 """
 
 from __future__ import annotations
@@ -110,6 +113,45 @@ def mcp_env(url: str, token: str, kind: str, name: str) -> dict[str, str]:
     return env
 
 
+ENV_FILE_HEADER = """\
+# 由 install.py 產生——**watcher 專用**，不要手動加 session key。
+#
+# watch.py 是 Monitor／排程拉起的獨立進程，繼承的是 agent 主進程的環境，
+# 拿不到 MCP client 設定裡的 env（那份只給 bridge 進程）。缺了這些值，
+# watcher 會退回預設 Hub 位址與隨機身分，而且**不會報錯**——只是安靜地
+# 什麼通知都不發。載入器是「真實環境變數優先、只補缺不覆寫」，
+# 所以這個檔對已有 env 的 bridge 進程沒有任何影響。
+#
+# ⚠️ 內含 token，請勿提交版控或轉傳。
+# ⚠️ 絕不要在這裡加 CHATROOM_SESSION_KEY——身分由 session 決定，
+#    寫死會讓多個 session 合併成同一個聊天室身分。
+"""
+
+
+def write_env_file(url: str, token: str, kind: str, name: str) -> Path:
+    """在 kit 根目錄寫一份 .env 給 watcher 用。
+
+    位置必須是 kit 根目錄（bridge/ 的上一層）——envfile.load_env_file 的
+    候選清單裡有「bridge 套件的 repo 根」，解壓後的 kit 剛好落在那個位置。
+    """
+    path = KIT_DIR / ".env"
+    values = mcp_env(url, token, kind, name)
+    body = "".join(f"{k}={v}\n" for k, v in values.items())
+    content = ENV_FILE_HEADER + body
+    if path.is_file() and path.read_text(encoding="utf-8-sig") == content:
+        print(f"• watcher 用 .env 已是最新：{path}")
+        return path
+    if path.is_file():
+        backup = path.with_name(f".env.bak-{datetime.now():%Y%m%d%H%M%S}")
+        shutil.copy2(path, backup)
+        print(f"• 已備份原 .env → {backup.name}")
+    path.write_text(content, encoding="utf-8")
+    if sys.platform != "win32":
+        path.chmod(0o600)
+    print(f"✅ watcher 用 .env 已寫入：{path}")
+    return path
+
+
 def setup_claude(exe: Path, url: str, token: str, name: str, mode: str) -> None:
     config = {"command": str(exe), "args": [],
               "env": mcp_env(url, token, "claude", name)}
@@ -132,35 +174,63 @@ def setup_claude(exe: Path, url: str, token: str, name: str, mode: str) -> None:
     print(f"  claude mcp add-json chatroom '{payload}' --scope user")
 
 
+CODEX_TABLE = "mcp_servers.chatroom"
+
+
+def strip_codex_block(text: str) -> tuple[str, bool]:
+    """移除既有的 ``[mcp_servers.chatroom]`` 及其子表，回傳 (剩餘內容, 是否移除)。
+
+    只認裸寫的表頭（``[mcp_servers.chatroom]`` / ``[mcp_servers.chatroom.env]``）。
+    引號形式（``[mcp_servers."chatroom"]``）不處理——TOML 合法但沒人手寫，
+    為它引進一個 TOML parser 不划算；真遇到會在寫入後由 Codex 自己報重複表頭。
+    """
+    out: list[str] = []
+    removed = False
+    skipping = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            table = stripped[1:-1].strip()
+            if table == CODEX_TABLE or table.startswith(f"{CODEX_TABLE}."):
+                skipping = True
+                removed = True
+                continue
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "".join(out), removed
+
+
 def setup_codex(exe: Path, url: str, token: str, name: str,
                 config_path: Path) -> None:
     block_lines = [
         "",
-        "[mcp_servers.chatroom]",
+        f"[{CODEX_TABLE}]",
         f"command = '{exe}'",
         "args = []",
         "",
-        "[mcp_servers.chatroom.env]",
+        f"[{CODEX_TABLE}.env]",
     ]
     for k, v in mcp_env(url, token, "codex", name).items():
         block_lines.append(f'{k} = "{v}"')
     block = "\n".join(block_lines) + "\n"
 
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    if "[mcp_servers.chatroom]" in existing:
-        print(f"⚠️ {config_path} 已有 chatroom 設定，未改動。"
-              "若要重設請先手動移除該區塊（含 [mcp_servers.chatroom.env]）。")
-        print("  期望的內容如下：")
-        print(block)
-        return
+    # 舊行為是「偵測到既有區塊就只印警告」，但換機重裝正是本 kit 的主要情境：
+    # 帳號同步過來的設定往往指向舊機器不存在的路徑，跳過就等於裝出一個壞環境，
+    # 而主流程照樣印「完成」。改成比照 setup_claude 走 remove → add 的冪等路徑。
+    remainder, removed = strip_codex_block(existing)
     if existing:
         backup = config_path.with_suffix(
             f".toml.bak-{datetime.now():%Y%m%d%H%M%S}")
         shutil.copy2(config_path, backup)
         print(f"• 已備份原設定 → {backup.name}")
+    if removed:
+        print("• 偵測到既有 chatroom 區塊（可能指向舊機器路徑）——移除後重寫")
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("a", encoding="utf-8") as f:
-        f.write(block)
+    head = remainder.rstrip("\n")
+    config_path.write_text(
+        (head + "\n" if head else "") + block, encoding="utf-8")
     print(f"✅ Codex 設定完成：{config_path}")
 
 
@@ -205,6 +275,14 @@ def main() -> None:
         setup_claude(exe, url, token, name, args.claude)
     if "codex" in targets:
         setup_codex(exe, url, token, name, args.codex_config)
+
+    print()
+    if "claude" in targets:
+        # watcher（Monitor 拉起的獨立進程）拿不到 MCP 設定裡的 env，只能靠這份
+        write_env_file(url, token, "claude", name)
+    else:
+        print("• 只裝了 Codex，未產生 watcher 用 .env"
+              "（Codex 的通知轉送由桌面 App 負責，不經 watch.py）")
 
     print("\n=== 完成 ===")
     print("重啟 Claude Code / Codex 後即可使用 chatroom_* 工具。")

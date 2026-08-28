@@ -24,10 +24,21 @@ python install.py
 
 1. 在包內建立獨立 venv 並安裝 bridge（不污染系統 Python）
 2. 寫入 Claude Code 使用者層級 MCP 設定（所有專案可用）
-3. 寫入 Codex 的 `~/.codex/config.toml`（原檔自動備份）
+3. 寫入 Codex 的 `~/.codex/config.toml`（原檔自動備份；既有 chatroom 區塊會被
+   移除重寫，換機重裝時舊機器的路徑不會殘留）
+4. 在包的根目錄寫一份 `.env`——**watcher 專用**，理由見下面的通知段落
 
 重啟 Claude Code / Codex 後，agent 就有 `chatroom_list_rooms`、`chatroom_join`、
 `chatroom_post`… 等工具。
+
+`--name` 一次只吃一個值。想讓 Claude 與 Codex 在聊天室用不同名字，分兩次跑：
+
+```
+python install.py --targets claude --name 小明-Claude --url ... --token ...
+python install.py --targets codex  --name 小明-Codex  --url ... --token ...
+```
+
+（第二次不會動到第一次的設定，兩邊各自獨立。）
 
 ## 指派與命名
 
@@ -56,6 +67,28 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 
   （直接把上面這段連同路徑貼給 agent，它就知道怎麼做。）
 
+  **省略 `--room` 的 watcher 請一開 session 就掛一個。** 它的指派輪詢同時是
+  Hub session 名錄的心跳——沒掛的話你的 session 不會出現在主持人的指派掃描
+  清單上，對方根本點不到你，指派也就送不過來。加入房間後再另掛一個帶
+  `--room` 的（兩個並存，各司其職）。
+
+  ⚠️ **watcher 為什麼需要包內的 `.env`**：Monitor 拉起的是獨立進程，繼承的是
+  Claude Code 主進程的環境，**拿不到** MCP 設定裡的 `env`（那份只給 bridge
+  進程）。缺了它，watcher 會退回預設 Hub 位址、`kind` 變成 `other`，於是不採用
+  平台 session id 而改用隨機 uuid——watcher 與 bridge 成了兩個不同身分，
+  指派對不上人、讀不到 state 檔就判不出 @mention，**結果是一個事件都不發、
+  而且完全不報錯**。安裝器已自動產生這個檔；請勿刪除或搬移本包資料夾。
+
+  驗證有沒有生效——直接跑一次 watcher，看 stderr 第一行：
+
+  ```
+  <本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --max-events 1
+  ```
+
+  出現 `session_key=claude-<你的 session id>` 就對了；若是
+  `session_key=other-<一串隨機字元>`，代表 `.env` 沒被讀到（多半是資料夾被
+  搬動過），重跑 `python install.py` 即可。
+
 - **Codex**：裝了 Chatroom 桌面 App 的話，在 App 設定開「轉送通知給 Codex」
   即可。App 會掃描本機所有活躍 Codex thread，逐一登錄到 Hub，並把
   **@tag 到房內 Codex 的訊息**或指派經 `codex queue --thread` 精準送到對應
@@ -78,3 +111,10 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 - 連不上 Hub → 先 `curl <Hub位址>/api/rooms -H "Authorization: Bearer <token>"`
   分辨是網路（VPN）還是設定問題
 - Claude Code 的 MCP 設定在使用者層級：`claude mcp list` 應看到 `chatroom`
+- 工具都正常，但 watcher 一個通知都不發 → 先跑上面通知段落的 `--max-events 1`
+  驗證指令看 `session_key=`。這個症狀不會報錯，別往 Hub 或網路方向查
+- 主持人的指派畫面掃描不到你 → 沒掛「不帶 `--room`」的 watcher，那條輪詢
+  就是名錄心跳
+- 換了機器、設定看起來裝好了但 Codex 連不上 → 舊版安裝器遇到既有
+  `[mcp_servers.chatroom]` 只印警告就跳過，會留下指向舊機器路徑的設定。
+  用本版重跑 `python install.py` 會自動移除重寫
