@@ -152,7 +152,8 @@ async def test_assignment_expiry(tmp_path):
 # ---------- P1-02 補：human 不被移除（用 sweep_once，不靠 sleep） ----------
 
 async def test_sweep_keeps_human(tmp_path):
-    app = _app(tmp_path, "human", idle_timeout=0.0, sweep_interval=3600)
+    app = _app(tmp_path, "human", idle_timeout=0.0, sweep_interval=3600,
+               archive_grace=0.0)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -160,7 +161,8 @@ async def test_sweep_keeps_human(tmp_path):
             room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
             await _join(client, room_id, "h1", "Xavier", kind="human", role="human")
             await _join(client, room_id, "a1", "Nova")
-            await app.state.sweep_once()
+            await app.state.sweep_once()  # 移除閒置 agent + 起算封存倒數
+            await app.state.sweep_once()  # 倒數（grace=0）到期 → 封存
             detail = (await client.get(f"/api/rooms/{room_id}")).json()
             by_name = {p["display_name"]: p["status"] for p in detail["participants"]}
             assert by_name == {"Xavier": "active", "Nova": "removed"}
@@ -170,7 +172,8 @@ async def test_sweep_keeps_human(tmp_path):
 
 async def test_sweep_spares_room_with_multiple_humans(tmp_path):
     """兩個以上人類仍在對話時，agent 離場不得觸發自動封存。"""
-    app = _app(tmp_path, "humans2", idle_timeout=0.0, sweep_interval=3600)
+    app = _app(tmp_path, "humans2", idle_timeout=0.0, sweep_interval=3600,
+               archive_grace=0.0)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -185,10 +188,11 @@ async def test_sweep_spares_room_with_multiple_humans(tmp_path):
                 headers={"X-Participant-Id": agent["participant_id"]},
             )
             await app.state.sweep_once()
+            await app.state.sweep_once()  # 兩輪都不得起算封存（兩個人類在場）
             detail = (await client.get(f"/api/rooms/{room_id}")).json()
             assert detail["room"]["status"] == "active"
 
-            # 其中一個人類也走了 → 只剩一人，下一輪才封存
+            # 其中一個人類也走了 → 只剩一人，倒數起算 + 到期後封存
             h2 = next(
                 p for p in detail["participants"] if p["display_name"] == "Bernie"
             )
@@ -196,6 +200,10 @@ async def test_sweep_spares_room_with_multiple_humans(tmp_path):
                 f"/api/rooms/{room_id}/leave",
                 headers={"X-Participant-Id": h2["id"]},
             )
+            await app.state.sweep_once()
+            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+                "status"
+            ] == "active"  # 倒數中，尚未封存
             await app.state.sweep_once()
             assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
                 "status"

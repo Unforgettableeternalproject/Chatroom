@@ -46,6 +46,8 @@ def _err(status: int, code: str, message: str) -> HTTPException:
 class RoomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     topic: str = ""
+    # 建立者的 session（管理員身分：可移出成員）。省略時房間沒有管理員
+    session_key: str | None = Field(default=None, max_length=128)
 
 
 class JoinRequest(BaseModel):
@@ -110,6 +112,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not allow_archived and row["status"] != "active":
             raise _err(409, "room_archived", "聊天室已封存，唯讀")
         return row
+
+    def _room_public(row) -> dict:
+        """room row → 對外回應；管理員 session key 不外流。"""
+        d = dict(row)
+        d.pop("creator_session_key", None)
+        return d
 
     async def _participant(participant_id: str | None, room_id: str | None = None):
         if not participant_id:
@@ -230,8 +238,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id = _uid()
         now = _now()
         await db.execute(
-            "INSERT INTO room (id, name, topic, created_at, activated_at) VALUES (?,?,?,?,?)",
-            (room_id, body.name, body.topic, now, now),
+            "INSERT INTO room (id, name, topic, created_at, activated_at,"
+            " creator_session_key) VALUES (?,?,?,?,?,?)",
+            (room_id, body.name, body.topic, now, now, body.session_key),
         )
         await db.commit()
         return {"id": room_id, "name": body.name, "topic": body.topic, "status": "active"}
@@ -252,7 +261,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (status,),
             )
         ).fetchall()
-        rooms = [dict(r) for r in rows]
+        rooms = [_room_public(r) for r in rows]
         pending = []
         if session_key:
             # 與 GET /api/assignments 同形（含房名），client 不必打兩個端點
@@ -268,7 +277,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"rooms": rooms, "pending_assignments": pending}
 
     @app.get("/api/rooms/{room_id}", dependencies=[Depends(require_auth)])
-    async def get_room(room_id: str):
+    async def get_room(
+        room_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         room = await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
         rows = await (
@@ -325,14 +337,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                     entry["distinct_hint"] = rep["join_ip"]
                 else:
                     entry["distinct_hint"] = rep["session_key"][-8:]
-        return {"room": dict(room), "participants": [e for e, _ in participants]}
+        # 管理員判定走 X-Session-Key 標頭，不把 creator key 丟給所有成員比對
+        is_admin = bool(room["creator_session_key"]) and (
+            x_session_key == room["creator_session_key"]
+        )
+        return {
+            "room": _room_public(room),
+            "participants": [e for e, _ in participants],
+            "you_are_admin": is_admin,
+        }
 
     async def _archive(room_id: str, reason: str) -> None:
         db = app.state.db
         # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
         await _post_message(room_id, None, reason, kind="system")
         await db.execute(
-            "UPDATE room SET status='archived', archived_at=? WHERE id=?", (_now(), room_id)
+            "UPDATE room SET status='archived', archived_at=?,"
+            " archive_pending_since=NULL WHERE id=?",
+            (_now(), room_id),
         )
         await db.commit()
         await events.notify(room_id)
@@ -351,7 +373,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         # 更新 activated_at：sweeper 只看解封後才加入的 agent，避免解封立即被封回
         await db.execute(
-            "UPDATE room SET status='active', archived_at=NULL, activated_at=? WHERE id=?",
+            "UPDATE room SET status='active', archived_at=NULL, activated_at=?,"
+            " archive_pending_since=NULL WHERE id=?",
             (_now(), room_id),
         )
         await db.commit()
@@ -364,6 +387,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def join_room(room_id: str, body: JoinRequest, request: Request):
         await _room_or_404(room_id)
         db = app.state.db
+        # 被管理員移出的 session 不得重新加入——否則 client 的斷線自癒
+        # （身分失效即自動 rejoin）會立刻把被踢的人加回來
+        kicked = await (
+            await db.execute(
+                "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
+                " AND status='kicked'",
+                (room_id, body.session_key),
+            )
+        ).fetchone()
+        if kicked:
+            raise _err(403, "kicked", "你已被管理員移出此聊天室，無法重新加入")
         # 同一 session 已在房內 → 冪等返回既有身分
         existing = await (
             await db.execute(
@@ -412,6 +446,45 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室", kind="system")
+        return {"ok": True}
+
+    @app.post(
+        "/api/rooms/{room_id}/participants/{target_id}/kick",
+        dependencies=[Depends(require_auth)],
+    )
+    async def kick_participant(
+        room_id: str,
+        target_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """管理員（建立者）移出成員。被移出的 session 之後無法重新加入。"""
+        room = await _room_or_404(room_id)
+        me = await _participant(x_participant_id, room_id)
+        if not room["creator_session_key"] or (
+            me["session_key"] != room["creator_session_key"]
+        ):
+            raise _err(403, "not_admin", "只有聊天室建立者可以移出成員")
+        if target_id == me["id"]:
+            raise _err(422, "cannot_kick_self", "不能移出自己，請改用離開")
+        db = app.state.db
+        target = await (
+            await db.execute(
+                "SELECT * FROM participant WHERE id=? AND room_id=?"
+                " AND status='active'",
+                (target_id, room_id),
+            )
+        ).fetchone()
+        if target is None:
+            raise _err(404, "participant_not_found", "找不到這個成員，或已不在房內")
+        await db.execute(
+            "UPDATE participant SET status='kicked', left_at=? WHERE id=?",
+            (_now(), target_id),
+        )
+        await db.commit()
+        await _post_message(
+            room_id, None,
+            f"{target['display_name']} 已被管理員移出聊天室", kind="system",
+        )
         return {"ok": True}
 
     @app.post("/api/rooms/{room_id}/heartbeat", dependencies=[Depends(require_auth)])
@@ -718,7 +791,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 否則解封後會因舊成員紀錄被 sweeper 立刻封回去
         empty = await (
             await db.execute(
-                "SELECT r.id FROM room r WHERE r.status='active'"
+                "SELECT r.id, r.archive_pending_since FROM room r"
+                " WHERE r.status='active'"
                 " AND EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
                 "             AND p.role='agent'"
                 "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
@@ -728,9 +802,42 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "      AND p.role='human' AND p.status='active') <= 1",
             )
         ).fetchall()
+        # 封存走倒數而非立即執行：條件首次成立時起算，期間有人（agent）
+        # 回來就取消。踢人、agent 短暫斷線都不該讓房間瞬間消失。
+        matched_ids = set()
         for r in empty:
-            logger.info("sweep: 自動封存房間 %s", r["id"])
-            await _archive(r["id"], "聊天室內已無 agent，自動封存")
+            matched_ids.add(r["id"])
+            pending = r["archive_pending_since"]
+            if pending is None:
+                await db.execute(
+                    "UPDATE room SET archive_pending_since=? WHERE id=?",
+                    (now.isoformat(), r["id"]),
+                )
+                await db.commit()
+                await _post_message(
+                    r["id"], None,
+                    f"聊天室內已無 agent，將於 {int(cfg.archive_grace)} 秒後自動封存",
+                    kind="system",
+                )
+            elif (now - datetime.fromisoformat(pending)).total_seconds() >= (
+                cfg.archive_grace
+            ):
+                logger.info("sweep: 自動封存房間 %s", r["id"])
+                await _archive(r["id"], "聊天室內已無 agent，自動封存")
+        # 條件已解除的房間取消倒數
+        stale = await (
+            await db.execute(
+                "SELECT id FROM room WHERE status='active'"
+                " AND archive_pending_since IS NOT NULL",
+            )
+        ).fetchall()
+        for r in stale:
+            if r["id"] not in matched_ids:
+                await db.execute(
+                    "UPDATE room SET archive_pending_since=NULL WHERE id=?",
+                    (r["id"],),
+                )
+        await db.commit()
 
     async def _sweeper() -> None:
         while True:

@@ -23,6 +23,10 @@ class Config:
     assignment_ttl: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_ASSIGNMENT_TTL", "86400"))
     )
+    # 自動封存前的倒數緩衝（秒）：條件成立後先倒數，期間條件解除即取消
+    archive_grace: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_ARCHIVE_GRACE", "60"))
+    )
     # updates long-poll / WS 單批推送的訊息數上限
     updates_batch_limit: int = field(
         default_factory=lambda: int(os.environ.get("CHATROOM_UPDATES_LIMIT", "200"))

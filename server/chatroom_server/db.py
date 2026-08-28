@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS room (
     next_seq    INTEGER NOT NULL DEFAULT 1,       -- 訊息序號發放計數器
     created_at  TEXT NOT NULL,
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
-    archived_at TEXT
+    archived_at TEXT,
+    creator_session_key TEXT,                     -- 建立者（管理員）的 session；不外流
+    archive_pending_since TEXT                    -- 自動封存倒數的起點；NULL = 未在倒數
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -76,6 +78,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
     ("participant", "join_ip", "join_ip TEXT"),
+    ("room", "creator_session_key", "creator_session_key TEXT"),
+    ("room", "archive_pending_since", "archive_pending_since TEXT"),
 ]
 
 
