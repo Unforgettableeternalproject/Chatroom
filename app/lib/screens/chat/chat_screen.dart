@@ -348,7 +348,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       enabled: !archived,
     );
 
-    final kindById = {for (final p in members) p.id: p.kind};
+    final kindById = {
+      for (final p in members) ...{
+        p.id: p.kind,
+        // 同 session 的舊身分（換名重進前）沿用同一 kind
+        for (final alias in p.aliasIds) alias: p.kind,
+      },
+    };
 
     final wide = MediaQuery.sizeOf(context).width >= 1200;
 
@@ -481,7 +487,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           backgroundColor: s.bgSoft,
           child: SafeArea(
             child: _MembersPanel(
-                roomId: roomId, members: members, myId: myId),
+                roomId: roomId,
+                members: members,
+                myId: myId,
+                archived: archived),
           ),
         ),
         body: chatColumn,
@@ -497,7 +506,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             color: s.bgSoft,
             border: Border(left: BorderSide(color: s.line)),
           ),
-          child: _MembersPanel(roomId: roomId, members: members, myId: myId),
+          child: _MembersPanel(
+              roomId: roomId,
+              members: members,
+              myId: myId,
+              archived: archived),
         ),
       ]),
     );
@@ -653,11 +666,11 @@ class _HeaderAction extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(border: Border.all(color: s.line)),
         child: Text(label.toUpperCase(),
             style: UepText.mono(
-                size: 9, color: s.inkSoft, letterSpacing: 1.4)),
+                size: 10, color: s.inkSoft, letterSpacing: 1.4)),
       ),
     );
   }
@@ -785,11 +798,13 @@ class _MembersPanel extends ConsumerWidget {
     required this.roomId,
     required this.members,
     required this.myId,
+    required this.archived,
   });
 
   final String roomId;
   final List<Participant> members;
   final String? myId;
+  final bool archived;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -828,18 +843,20 @@ class _MembersPanel extends ConsumerWidget {
           ],
         ),
       ),
-      Container(
-        padding: const EdgeInsets.all(14),
-        decoration:
-            BoxDecoration(border: Border(top: BorderSide(color: s.line))),
-        child: UepButton(
-          label: '指派 AGENT 加入',
-          variant: UepButtonVariant.outline,
-          small: true,
-          expand: true,
-          onPressed: () => context.go('/rooms/$roomId/assign'),
+      // 封存房唯讀，指派入口一併收起
+      if (!archived)
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration:
+              BoxDecoration(border: Border(top: BorderSide(color: s.line))),
+          child: UepButton(
+            label: '指派 AGENT 加入',
+            variant: UepButtonVariant.outline,
+            small: true,
+            expand: true,
+            onPressed: () => context.go('/rooms/$roomId/assign'),
+          ),
         ),
-      ),
     ]);
   }
 }
@@ -904,6 +921,22 @@ class _MemberTile extends StatelessWidget {
                   ),
                   const SizedBox(width: 7),
                   KindBadge(kind: p.kind, compact: true),
+                  if (p.previousName != null) ...[
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text('（原：${p.previousName}）',
+                          overflow: TextOverflow.ellipsis,
+                          style: UepText.serif(size: 11, color: s.inkMute)),
+                    ),
+                  ],
+                  if (p.distinctHint != null) ...[
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text('（${p.distinctHint}）',
+                          overflow: TextOverflow.ellipsis,
+                          style: UepText.mono(size: 9, color: s.inkMute)),
+                    ),
+                  ],
                 ]),
                 const SizedBox(height: 3),
                 Text(subtitle,

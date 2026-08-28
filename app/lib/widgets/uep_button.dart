@@ -26,10 +26,11 @@ class UepButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    // 尺寸經首輪驗收放大一級：原版（h14/18、9.5/10.5pt）在桌面視窗上偏小
     final pad = EdgeInsets.symmetric(
-        horizontal: small ? 14 : 18, vertical: small ? 7 : 10);
+        horizontal: small ? 18 : 24, vertical: small ? 10 : 13);
     final textStyle = UepText.mono(
-      size: small ? 9.5 : 10.5,
+      size: small ? 10.5 : 12,
       weight: FontWeight.w500,
       letterSpacing: 1.6,
     );

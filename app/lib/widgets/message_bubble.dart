@@ -241,33 +241,35 @@ class _ContextMenuRegion extends StatelessWidget {
               style:
                   UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 2)),
         ),
-        PopupMenuItem(
-          value: 'pin',
-          enabled: a.enabled,
-          height: 36,
-          child: Text(message.pinned ? '❖　取消釘選' : '❖　釘選',
-              style: UepText.sans(size: 12.5, color: s.ink)),
-        ),
-        PopupMenuItem(
-          value: 'reply',
-          enabled: a.enabled,
-          height: 36,
-          child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
-        ),
+        // 封存房唯讀：只留複製，不列出一排停用的動作
+        if (a.enabled) ...[
+          PopupMenuItem(
+            value: 'pin',
+            height: 36,
+            child: Text(message.pinned ? '❖　取消釘選' : '❖　釘選',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
+          PopupMenuItem(
+            value: 'reply',
+            height: 36,
+            child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
+        ],
         PopupMenuItem(
           value: 'copy',
           height: 36,
           child:
               Text('⧉　複製內容', style: UepText.sans(size: 12.5, color: s.ink)),
         ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'delete',
-          enabled: a.enabled,
-          height: 36,
-          child: Text('✕　刪除（需確認）',
-              style: UepText.sans(size: 12.5, color: UepColors.errorText)),
-        ),
+        if (a.enabled) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: 'delete',
+            height: 36,
+            child: Text('✕　刪除（需確認）',
+                style: UepText.sans(size: 12.5, color: UepColors.errorText)),
+          ),
+        ],
       ],
     );
     switch (choice) {

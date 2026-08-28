@@ -28,6 +28,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String? _testResult;
   bool _testOk = false;
   bool _testing = false;
+  bool _justSaved = false;
 
   @override
   void initState() {
@@ -36,6 +37,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _urlController = TextEditingController(text: config.serverUrl);
     _tokenController = TextEditingController(text: config.token);
     _nameController = TextEditingController(text: config.preferredName);
+    // 髒狀態驅動儲存/復原按鈕的啟用與提示
+    for (final c in [_urlController, _tokenController, _nameController]) {
+      c.addListener(() => setState(() => _justSaved = false));
+    }
+  }
+
+  /// 欄位內容與已儲存設定是否有出入。
+  bool get _dirty {
+    final config = ref.read(appConfigProvider);
+    return _urlController.text.trim() != config.serverUrl ||
+        _tokenController.text.trim() != config.token ||
+        _nameController.text.trim() != config.preferredName;
+  }
+
+  Future<void> _save() async {
+    final notifier = ref.read(appConfigProvider.notifier);
+    await notifier.setServer(
+        url: _urlController.text.trim(), token: _tokenController.text.trim());
+    await notifier.setPreferredName(_nameController.text);
+    if (mounted) setState(() => _justSaved = true);
+  }
+
+  void _revert() {
+    final config = ref.read(appConfigProvider);
+    _urlController.text = config.serverUrl;
+    _tokenController.text = config.token;
+    _nameController.text = config.preferredName;
+    setState(() {});
   }
 
   @override
@@ -46,18 +75,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     super.dispose();
   }
 
-  Future<void> _saveAndTest() async {
+  /// 只測試，不儲存——儲存是「儲存設定」按鈕的職責，
+  /// 混在一起會讓人分不清設定到底套用了沒（驗收回饋）。
+  Future<void> _testConnection() async {
     setState(() {
       _testing = true;
       _testResult = null;
     });
     final url = _urlController.text.trim();
     final token = _tokenController.text.trim();
-    await ref
-        .read(appConfigProvider.notifier)
-        .setServer(url: url, token: token);
-    await ref.read(appConfigProvider.notifier)
-        .setPreferredName(_nameController.text);
     try {
       // 用當下輸入值建臨時 client（不等 provider 重建）
       final dio = createApiDio(baseUrl: url, token: token);
@@ -184,7 +210,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 UepButton(
                   label: '測試連線',
                   small: true,
-                  onPressed: _testing ? null : _saveAndTest,
+                  variant: UepButtonVariant.outline,
+                  onPressed: _testing ? null : _testConnection,
                 ),
                 const SizedBox(width: 14),
                 if (_testing)
@@ -256,11 +283,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   style: UepText.sans(size: 13, color: s.ink),
                   decoration:
                       _inputDecoration('留空則由 Hub 隨機指派代稱', s),
-                  onSubmitted: (v) => ref
-                      .read(appConfigProvider.notifier)
-                      .setPreferredName(v),
+                  onSubmitted: (_) => _save(),
                 ),
               ),
+              const SizedBox(height: 20),
+              Row(children: [
+                UepButton(
+                  label: '儲存設定',
+                  small: true,
+                  onPressed: _dirty ? _save : null,
+                ),
+                const SizedBox(width: 12),
+                UepButton(
+                  label: '復原',
+                  variant: UepButtonVariant.outline,
+                  small: true,
+                  onPressed: _dirty ? _revert : null,
+                ),
+                const SizedBox(width: 14),
+                if (_dirty)
+                  Text('有尚未儲存的變更',
+                      style: UepText.serif(
+                          size: 12.5, color: UepColors.gold, height: 1.4))
+                else if (_justSaved)
+                  Text('✓ 已儲存',
+                      style: UepText.serif(
+                          size: 12.5, color: UepColors.success, height: 1.4)),
+              ]),
               const SizedBox(height: 22),
               _FieldLabel('本機裝置識別'),
               Container(

@@ -26,6 +26,13 @@ class RoomListPane extends ConsumerStatefulWidget {
 
 class _RoomListPaneState extends ConsumerState<RoomListPane> {
   String _status = 'active';
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   Future<void> _refresh() async {
     ref.invalidate(roomListProvider);
@@ -89,6 +96,39 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
               status: _status,
               onChanged: (v) => setState(() => _status = v),
             ),
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: s.bgSunken,
+                border: Border.all(color: s.line),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(children: [
+                Icon(Icons.search, size: 14, color: s.inkMute),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    onChanged: (_) => setState(() {}),
+                    style: UepText.sans(size: 12.5, color: s.ink),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      hintText: '搜尋聊天室…',
+                      hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                      contentPadding:
+                          const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+                if (_search.text.isNotEmpty)
+                  InkWell(
+                    onTap: () => setState(_search.clear),
+                    child: Icon(Icons.close, size: 13, color: s.inkMute),
+                  ),
+              ]),
+            ),
           ]),
         ),
         Expanded(
@@ -103,29 +143,42 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: UepColors.gold))),
               error: (e, _) => ErrorState(error: e, onRetry: _refresh),
-              data: (rooms) => rooms.isEmpty
-                  ? ListView(children: [
-                      const SizedBox(height: 120),
-                      EmptyState(
-                        title: _status == 'active'
-                            ? '目前沒有進行中的聊天室'
-                            : '沒有已封存的聊天室',
-                        subtitle: _status == 'active'
-                            ? '按下方「建立房間」開一間，\n再用指派把 agent 請進來'
-                            : null,
-                      ),
-                    ])
-                  : ListView.builder(
-                      itemCount: rooms.length,
-                      itemBuilder: (context, i) => _RoomTile(
-                        room: rooms[i],
-                        selected: rooms[i].id == widget.selectedRoomId,
-                        onTap: () => context.go('/rooms/${rooms[i].id}'),
-                        onToggleArchive: () => _toggleArchive(rooms[i]),
-                        onAssign: () =>
-                            context.go('/rooms/${rooms[i].id}/assign'),
-                      ),
+              data: (allRooms) {
+                final query = _search.text.trim().toLowerCase();
+                final rooms = query.isEmpty
+                    ? allRooms
+                    : allRooms
+                        .where((r) =>
+                            r.name.toLowerCase().contains(query) ||
+                            r.topic.toLowerCase().contains(query))
+                        .toList();
+                if (rooms.isEmpty) {
+                  return ListView(children: [
+                    const SizedBox(height: 120),
+                    EmptyState(
+                      title: query.isNotEmpty
+                          ? '沒有符合「${_search.text.trim()}」的聊天室'
+                          : _status == 'active'
+                              ? '目前沒有進行中的聊天室'
+                              : '沒有已封存的聊天室',
+                      subtitle: query.isEmpty && _status == 'active'
+                          ? '按下方「建立房間」開一間，\n再用指派把 agent 請進來'
+                          : null,
                     ),
+                  ]);
+                }
+                return ListView.builder(
+                  itemCount: rooms.length,
+                  itemBuilder: (context, i) => _RoomTile(
+                    room: rooms[i],
+                    selected: rooms[i].id == widget.selectedRoomId,
+                    onTap: () => context.go('/rooms/${rooms[i].id}'),
+                    onToggleArchive: () => _toggleArchive(rooms[i]),
+                    onAssign: () =>
+                        context.go('/rooms/${rooms[i].id}/assign'),
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -246,7 +299,12 @@ class _RoomTile extends ConsumerWidget {
                       style: UepText.sans(
                           size: 13.5,
                           weight: FontWeight.w600,
-                          color: selected ? s.inkTitle : s.ink),
+                          // 封存房整體灰掉，與進行中的房間一眼區分
+                          color: room.isArchived
+                              ? s.inkMute
+                              : selected
+                                  ? s.inkTitle
+                                  : s.ink),
                     ),
                   ),
                   if (unread) ...[
@@ -281,16 +339,12 @@ class _RoomTile extends ConsumerWidget {
             Row(children: [
               MonoLabel('${room.memberCount} MEMBERS',
                   size: 9, letterSpacing: 1.0),
-              const SizedBox(width: 8),
-              Container(
-                width: 3,
-                height: 3,
-                decoration:
-                    BoxDecoration(shape: BoxShape.circle, color: s.inkMute),
-              ),
-              const SizedBox(width: 8),
-              MonoLabel(zone.name,
-                  size: 9, color: palette.soft, letterSpacing: 1.0),
+              if (room.isArchived) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.inventory_2_outlined, size: 11, color: s.inkMute),
+                const SizedBox(width: 4),
+                MonoLabel('已封存', size: 9, letterSpacing: 1.0),
+              ],
             ]),
           ],
         ),
