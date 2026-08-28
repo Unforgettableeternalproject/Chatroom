@@ -45,11 +45,20 @@ class AssignmentsApi {
       });
 
   /// session 視角的待處理指派（含 room_name / room_topic）。
-  Future<List<Assignment>> listForSession(String sessionKey) =>
+  Future<List<Assignment>> listForSession(
+    String sessionKey, {
+    String? kind,
+    String? label,
+  }) =>
       unwrap(() async {
+        final nonEmptyLabel = label?.isNotEmpty == true ? label : null;
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/assignments',
-          queryParameters: {'session_key': sessionKey},
+          queryParameters: {
+            'session_key': sessionKey,
+            'kind': ?kind,
+            'label': ?nonEmptyLabel,
+          },
         );
         return ((res.data?['assignments'] as List?) ?? const [])
             .map((e) => Assignment.fromJson(e as Map<String, dynamic>))

@@ -360,7 +360,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       controller: _codexThreadController,
                       style: UepText.sans(size: 13, color: s.ink),
                       decoration: _inputDecoration(
-                          '目標 thread id（留空＝自動抓最新的 Codex session）', s),
+                          '診斷覆寫 thread id（留空＝依房內成員分流所有 session）', s),
                       onSubmitted: (v) async {
                         await ref
                             .read(settingsRepoProvider)

@@ -14,11 +14,12 @@ bool get _canDispatchCodex =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
-  final api = ref.watch(roomsApiProvider);
+  final roomsApi = ref.watch(roomsApiProvider);
+  final assignmentsApi = ref.watch(assignmentsApiProvider);
   final settings = ref.read(settingsRepoProvider);
   final dispatcher = CodexDispatcher(
     (roomId) async {
-      final detail = await api.detail(roomId);
+      final detail = await roomsApi.detail(roomId);
       final kinds = <String, String>{};
       final codexNames = <String>{};
       final allNames = <String>{};
@@ -35,7 +36,21 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
         }
       }
       return RoomMembers(
-          kinds: kinds, codexNames: codexNames, allNames: allNames);
+        kinds: kinds,
+        codexNames: codexNames,
+        allNames: allNames,
+      );
+    },
+    fetchSessions: assignmentsApi.scanSessions,
+    fetchAssignments: (threadId) {
+      final tail = threadId.length > 8
+          ? threadId.substring(threadId.length - 8)
+          : threadId;
+      return assignmentsApi.listForSession(
+        threadId,
+        kind: 'codex',
+        label: 'Codex-$tail',
+      );
     },
   );
   dispatcher
@@ -87,6 +102,13 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）
   final dispatcher = ref.watch(codexDispatcherProvider);
   final codexSub = center.fresh.listen(dispatcher.handle);
+  // writer locks 是本機 Codex session 的存活名錄。逐一向 Hub 報到並查指派，
+  // 才能讓 UI 選到每個 thread，且把 assignment 精準 queue 給被選中的 session。
+  unawaited(dispatcher.pollAssignments());
+  final codexAssignmentPoll = Timer.periodic(
+    const Duration(seconds: 10),
+    (_) => unawaited(dispatcher.pollAssignments()),
+  );
 
   // 活動 → 刷新房間列表。節流：一批訊息只打一次 REST
   Timer? refreshDebounce;
@@ -100,6 +122,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   ref.onDispose(() {
     notifSub.cancel();
     codexSub.cancel();
+    codexAssignmentPoll.cancel();
     activitySub.cancel();
     refreshDebounce?.cancel();
   });

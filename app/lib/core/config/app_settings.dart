@@ -77,7 +77,7 @@ class SettingsRepository {
   Future<void> setCodexDispatchEnabled(bool v) =>
       _prefs.setBool(_kCodexDispatch, v);
 
-  /// 指定轉送目標 thread id；空字串 = 自動抓最新的活躍 Codex session。
+  /// 診斷用單一轉送目標；空字串 = 掃描並依房內身分分流所有活躍 Codex session。
   String get codexDispatchThread => _prefs.getString(_kCodexThread) ?? '';
   Future<void> setCodexDispatchThread(String id) =>
       _prefs.setString(_kCodexThread, id.trim());
