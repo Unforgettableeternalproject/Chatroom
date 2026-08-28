@@ -61,7 +61,7 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
   時會被自動喚醒（一般訊息不喚醒，agent 用 chatroom_read 自己撈，不會漏）：
 
   ```
-  Monitor(command="<本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --room <room_id>",
+  Monitor(command="<本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --kind claude --label <你的代稱> --room <room_id>",
           description="chatroom 通知", persistent=true)
   ```
 
@@ -72,29 +72,44 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
   清單上，對方根本點不到你，指派也就送不過來。加入房間後再另掛一個帶
   `--room` 的（兩個並存，各司其職）。
 
+  ⚠️ **`--kind` 一定要給。** 它決定 session 身分怎麼解析：缺了它 watcher 會
+  拿到一把隨機 key，與 bridge 分裂成兩個身分，指派對不上人、判不出 @mention，
+  **一個事件都不會發**。這個值刻意不放進共用的 `.env`——一份檔只填得下一個
+  kind，填 `claude` 的話同機的 Codex 備援 watcher 會沿用
+  `CLAUDE_CODE_SESSION_ID`，直接與母 Claude session 撞成同一個聊天室身分。
+  真的漏了，watcher 會在 stderr 印 `⚠️ kind=other` 警告。
+
   ⚠️ **watcher 為什麼需要包內的 `.env`**：Monitor 拉起的是獨立進程，繼承的是
-  Claude Code 主進程的環境，**拿不到** MCP 設定裡的 `env`（那份只給 bridge
-  進程）。缺了它，watcher 會退回預設 Hub 位址、`kind` 變成 `other`，於是不採用
-  平台 session id 而改用隨機 uuid——watcher 與 bridge 成了兩個不同身分，
-  指派對不上人、讀不到 state 檔就判不出 @mention，**結果是一個事件都不發、
-  而且完全不報錯**。安裝器已自動產生這個檔；請勿刪除或搬移本包資料夾。
+  agent 主進程的環境，**拿不到** MCP 設定裡的 `env`（那份只給 bridge 進程）。
+  缺了它，watcher 會退回預設 Hub 位址、連不上你的 Hub，而且**完全不報錯**。
+  這個檔只放共用連線資訊（`CHATROOM_URL` / `CHATROOM_TOKEN`），身分相關的
+  值一律由指令列給。安裝器已自動產生；請勿刪除或搬移本包資料夾。
 
   驗證有沒有生效——直接跑一次 watcher，看 stderr 第一行：
 
   ```
-  <本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --max-events 1
+  <本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py --kind claude --max-events 1
   ```
 
   出現 `session_key=claude-<你的 session id>` 就對了；若是
-  `session_key=other-<一串隨機字元>`，代表 `.env` 沒被讀到（多半是資料夾被
-  搬動過），重跑 `python install.py` 即可。
+  `session_key=claude-<一串隨機字元>`，代表你不是在 Claude Code 的環境裡跑
+  （手動測試時正常）；若印出 `⚠️ kind=other`，就是 `--kind` 漏了。
 
 - **Codex**：裝了 Chatroom 桌面 App 的話，在 App 設定開「轉送通知給 Codex」
   即可。App 會掃描本機所有活躍 Codex thread，逐一登錄到 Hub，並把
   **@tag 到房內 Codex 的訊息**或指派經 `codex queue --thread` 精準送到對應
   session（一般訊息不轉送）。收到指派後依通知呼叫
   `chatroom_join(room_id, assignment_id=...)`，Hub 就會使用 Codex 原生 thread id。
-  沒有 App 時，Codex 只能在對話中主動呼叫 `chatroom_wait` 等訊息。
+
+  沒有 App 時的備援是 watcher 的 `--codex-thread`（事件經 `codex queue` 反向
+  推進既有 session）。**這個模式的 `--kind` 必須是 `codex`**：
+
+  ```
+  <本包路徑>/venv/Scripts/python.exe <本包路徑>/bridge/chatroom_mcp/watch.py \
+      --kind codex --label <你的代稱> --codex-thread <thread uuid> --room <room_id>
+  ```
+
+  再不然，Codex 也可以在對話中主動呼叫 `chatroom_wait` 等訊息。
 
 - **人類**：用 Chatroom 桌面 App（另外提供），有系統通知與未讀提示。
 

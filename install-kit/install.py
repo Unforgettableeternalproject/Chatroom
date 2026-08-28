@@ -114,28 +114,41 @@ def mcp_env(url: str, token: str, kind: str, name: str) -> dict[str, str]:
 
 
 ENV_FILE_HEADER = """\
-# 由 install.py 產生——**watcher 專用**，不要手動加 session key。
+# 由 install.py 產生——**watcher 專用的連線資訊**。
 #
 # watch.py 是 Monitor／排程拉起的獨立進程，繼承的是 agent 主進程的環境，
 # 拿不到 MCP client 設定裡的 env（那份只給 bridge 進程）。缺了這些值，
-# watcher 會退回預設 Hub 位址與隨機身分，而且**不會報錯**——只是安靜地
-# 什麼通知都不發。載入器是「真實環境變數優先、只補缺不覆寫」，
-# 所以這個檔對已有 env 的 bridge 進程沒有任何影響。
+# watcher 會退回預設 Hub 位址，而且**不會報錯**——只是安靜地什麼通知
+# 都不發。載入器是「真實環境變數優先、只補缺不覆寫」，所以這個檔對
+# 已有 env 的 bridge 進程沒有任何影響。
+#
+# ⚠️ 這裡只放跨 agent 共用的連線資訊。**身分相關的值不要寫進來**：
+#    - CHATROOM_AGENT_KIND：一份共用檔只能填一個 kind，另一種 agent 的
+#      watcher 就會頂著錯誤身分跑。填 claude 時，同機的 Codex 備援
+#      watcher（--codex-thread）會沿用 CLAUDE_CODE_SESSION_ID，直接與
+#      母 Claude session 撞成同一個 participant。改用 watch.py --kind。
+#    - CHATROOM_DEFAULT_NAME：同理，用 watch.py --label。
+#    - CHATROOM_SESSION_KEY：身分由 session 決定，寫死會讓多個 session
+#      合併成同一個聊天室身分。
 #
 # ⚠️ 內含 token，請勿提交版控或轉傳。
-# ⚠️ 絕不要在這裡加 CHATROOM_SESSION_KEY——身分由 session 決定，
-#    寫死會讓多個 session 合併成同一個聊天室身分。
 """
 
 
-def write_env_file(url: str, token: str, kind: str, name: str) -> Path:
-    """在 kit 根目錄寫一份 .env 給 watcher 用。
+def write_env_file(url: str, token: str) -> Path:
+    """在 kit 根目錄寫一份 .env 給 watcher 用（只放 URL/TOKEN）。
 
     位置必須是 kit 根目錄（bridge/ 的上一層）——envfile.load_env_file 的
     候選清單裡有「bridge 套件的 repo 根」，解壓後的 kit 剛好落在那個位置。
+
+    kind 與 name 刻意不寫：它們是 per-agent 的身分資訊，塞進共用檔就得在
+    claude 與 codex 之間二選一，選哪個都會讓另一種 watcher 頂著錯誤身分跑
+    （詳見 ENV_FILE_HEADER）。那兩個值由 watch.py 的 --kind / --label 給。
     """
     path = KIT_DIR / ".env"
-    values = mcp_env(url, token, kind, name)
+    values = {"CHATROOM_URL": url}
+    if token:
+        values["CHATROOM_TOKEN"] = token
     body = "".join(f"{k}={v}\n" for k, v in values.items())
     content = ENV_FILE_HEADER + body
     if path.is_file() and path.read_text(encoding="utf-8-sig") == content:
@@ -277,12 +290,9 @@ def main() -> None:
         setup_codex(exe, url, token, name, args.codex_config)
 
     print()
-    if "claude" in targets:
-        # watcher（Monitor 拉起的獨立進程）拿不到 MCP 設定裡的 env，只能靠這份
-        write_env_file(url, token, "claude", name)
-    else:
-        print("• 只裝了 Codex，未產生 watcher 用 .env"
-              "（Codex 的通知轉送由桌面 App 負責，不經 watch.py）")
+    # watcher（Monitor 拉起的獨立進程）拿不到 MCP 設定裡的 env，只能靠這份。
+    # 兩種 target 都需要：Codex 的 --codex-thread 備援模式同樣是獨立進程。
+    write_env_file(url, token)
 
     print("\n=== 完成 ===")
     print("重啟 Claude Code / Codex 後即可使用 chatroom_* 工具。")

@@ -129,30 +129,41 @@ def kit_dir(inst, tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_env_file_has_watcher_values_and_no_session_key(inst, kit_dir):
-    path = inst.write_env_file("http://hub:8787", "TOK", "claude", "諾薇亞")
-    assert path == kit_dir / ".env"
-    lines = path.read_text(encoding="utf-8").splitlines()
-    values = dict(
-        line.split("=", 1) for line in lines if line and not line.startswith("#")
+def _env_values(path: Path) -> dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
     )
-    assert values == {
+
+
+def test_env_file_carries_connection_info_only(inst, kit_dir):
+    """.env 只放跨 agent 共用的連線資訊，身分相關的值一律不寫。
+
+    ``CHATROOM_AGENT_KIND`` 寫進共用檔就得在 claude 與 codex 之間二選一：填
+    claude 時，同機用 ``--codex-thread`` 跑的 Codex watcher 會沿用
+    ``CLAUDE_CODE_SESSION_ID``，與母 Claude session 撞成同一個 participant
+    ——正是 identity.session_key 的註解要防的事（2026-08-29 實測複現）。
+    """
+    path = inst.write_env_file("http://hub:8787", "TOK")
+    assert path == kit_dir / ".env"
+    assert _env_values(path) == {
         "CHATROOM_URL": "http://hub:8787",
-        "CHATROOM_AGENT_KIND": "claude",
-        "CHATROOM_DEFAULT_NAME": "諾薇亞",
         "CHATROOM_TOKEN": "TOK",
     }
-    # 固定 session key 會讓多個 session 合併成同一個聊天室身分——絕不能寫
-    assert "CHATROOM_SESSION_KEY" not in values
+
+
+def test_env_file_omits_empty_token(inst, kit_dir):
+    assert "CHATROOM_TOKEN" not in _env_values(inst.write_env_file("http://hub:8787", ""))
 
 
 def test_env_file_backs_up_only_on_change(inst, kit_dir):
-    inst.write_env_file("http://hub:8787", "TOK", "claude", "諾薇亞")
-    inst.write_env_file("http://hub:8787", "TOK", "claude", "諾薇亞")
+    inst.write_env_file("http://hub:8787", "TOK")
+    inst.write_env_file("http://hub:8787", "TOK")
     assert not list(kit_dir.glob(".env.bak-*"))
-    inst.write_env_file("http://hub2:8787", "TOK", "claude", "諾薇亞")
+    inst.write_env_file("http://hub2:8787", "TOK")
     assert list(kit_dir.glob(".env.bak-*"))
-    assert "CHATROOM_URL=http://hub2:8787" in (kit_dir / ".env").read_text(encoding="utf-8")
+    assert _env_values(kit_dir / ".env")["CHATROOM_URL"] == "http://hub2:8787"
 
 
 def test_env_file_is_where_the_watcher_looks(inst, kit_dir, monkeypatch):
@@ -163,14 +174,58 @@ def test_env_file_is_where_the_watcher_looks(inst, kit_dir, monkeypatch):
     """
     from chatroom_mcp.envfile import load_env_file
 
-    expected = inst.write_env_file("http://hub:8787", "TOK", "claude", "諾薇亞")
-    for key in ("CHATROOM_URL", "CHATROOM_TOKEN", "CHATROOM_AGENT_KIND",
-                "CHATROOM_DEFAULT_NAME"):
+    expected = inst.write_env_file("http://hub:8787", "TOK")
+    for key in ("CHATROOM_URL", "CHATROOM_TOKEN"):
         monkeypatch.delenv(key, raising=False)
 
     watcher_dir = kit_dir / "bridge" / "chatroom_mcp"
     watcher_dir.mkdir(parents=True)
     assert load_env_file(start=watcher_dir) == expected
-    # kind 沒補上的話 session_key() 不會採用 CLAUDE_CODE_SESSION_ID，
-    # watcher 就會拿到一把與 bridge 不同的隨機身分
-    assert os.environ["CHATROOM_AGENT_KIND"] == "claude"
+    assert os.environ["CHATROOM_URL"] == "http://hub:8787"
+
+
+# ---------- watcher 的身分旗標 ----------
+
+
+@pytest.fixture
+def clean_identity_env(monkeypatch):
+    for key in ("CHATROOM_SESSION_KEY", "CHATROOM_AGENT_KIND",
+                "CHATROOM_DEFAULT_NAME", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_codex_watcher_does_not_collide_with_parent_claude_session(clean_identity_env):
+    """從 Claude session 拉起的 Codex watcher 不可與母 session 撞 key。
+
+    這是 ``.env`` 不能寫 ``CHATROOM_AGENT_KIND`` 的理由本身：kind 一旦被共用檔
+    填成 claude，下面兩個 session_key 會完全相同，兩個 agent 合併成同一個
+    participant，訊息混流。
+    """
+    from chatroom_mcp import identity
+
+    os.environ["CLAUDE_CODE_SESSION_ID"] = "MOTHER"
+    mother = identity.session_key("claude")
+    codex = identity.session_key("codex")
+    assert mother == "claude-MOTHER"
+    assert codex != mother and codex.startswith("codex-")
+
+
+def test_watch_kind_flag_overrides_env_file_value(clean_identity_env):
+    """命令列的 --kind 要蓋得過 .env 補進來的值（顯式 > 檔案）。"""
+    from chatroom_mcp import identity, watch
+
+    os.environ["CHATROOM_AGENT_KIND"] = "claude"  # 模擬舊版 .env 留下的值
+    os.environ["CLAUDE_CODE_SESSION_ID"] = "MOTHER"
+    args = watch.build_parser().parse_args(["--kind", "codex", "--label", "諾薇亞"])
+    # main() 在 load_env_file 之後套用旗標，這裡直接驗證那段語意
+    os.environ["CHATROOM_AGENT_KIND"] = args.kind
+    os.environ["CHATROOM_DEFAULT_NAME"] = args.label
+    assert identity.agent_kind() == "codex"
+    assert identity.session_key() != "claude-MOTHER"
+
+
+def test_watch_rejects_unknown_kind():
+    from chatroom_mcp import watch
+
+    with pytest.raises(SystemExit):
+        watch.build_parser().parse_args(["--kind", "gemini"])

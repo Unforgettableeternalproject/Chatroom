@@ -5,12 +5,18 @@
 - **Claude Code**：用 Monitor 掛載（persistent），每行輸出即時變成一次通知，
   agent 不必卡在 chatroom_wait 也能被喚醒，且可反覆觸發::
 
-      Monitor(command=".venv/Scripts/python.exe bridge/chatroom_mcp/watch.py --room <id>",
+      Monitor(command=".venv/Scripts/python.exe bridge/chatroom_mcp/watch.py --kind claude --room <id>",
               persistent=true, description="chatroom 通知")
 
 - **Codex**：沒有自掛機制，改由 watcher 反向推——`--codex-thread <uuid>` 把
   每個事件經 `codex queue` 注入既有 session（閒置 session 會立即處理，
-  2026-08-28 實測）。也可前景執行 --max-events 1 當同步 wait。
+  2026-08-28 實測）。也可前景執行 --max-events 1 當同步 wait::
+
+      watch.py --kind codex --codex-thread <uuid>
+
+`--kind` 決定身分怎麼解析，**必須由呼叫端顯式給**，不能靠共用的 .env 補：
+一份檔只填得下一個 kind，填 claude 時同機的 Codex watcher 會沿用
+CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant。
 
 事件格式（一行一個 JSON 物件）：
 
@@ -56,9 +62,12 @@ from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 
-# Windows 主控台預設 cp950，事件含中文或特殊字元會直接 UnicodeEncodeError
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+# Windows 主控台預設 cp950，事件含中文或特殊字元會直接 UnicodeEncodeError。
+# stderr 一併處理——所有 [watch] 診斷訊息都是中文，只轉 stdout 的話那些訊息
+# 會以 cp950 寫出，emoji 退化成 \uXXXX 字面，讀 log 的人看到的是亂碼。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 PREVIEW_LEN = 160
 TRANSIENT_RETRY_SECS = 5.0
@@ -272,6 +281,16 @@ class Watcher:
         _log(
             f"session_key={self.session_key} room={target} after_seq={self.after_seq}"
         )
+        # kind 沒解析出來 = 身分退回隨機 key，與 bridge 分裂成兩個 session：
+        # 指派對不上人、讀不到 state 檔就判不出 mention，結果是一個事件都不發。
+        # 這種失效完全靜默，不主動喊出來就只能靠人盯著上面那行自己看出異常。
+        if identity.agent_kind() == "other" and not os.environ.get(
+            "CHATROOM_SESSION_KEY"
+        ):
+            _log(
+                "⚠️ kind=other——身分是隨機 key，與 bridge 對不上，"
+                "指派與 @mention 都不會觸發。請補 --kind claude|codex"
+            )
         while True:
             try:
                 if self.room_id:
@@ -338,12 +357,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--heartbeat", type=float, default=600.0,
         help="每 N 秒替已 join 的房間刷 heartbeat（0=關閉）",
     )
+    p.add_argument(
+        "--kind", choices=["claude", "codex"],
+        help="本 watcher 服務的 agent 種類（決定 session 身分怎麼解析）。"
+             "省略時取環境變數 CHATROOM_AGENT_KIND。⚠️ 不要靠共用的 .env 補"
+             "這個值——一份檔只能填一個 kind，另一種 agent 的 watcher 就會"
+             "頂著錯的身分跑（填 claude 時 Codex watcher 會沿用"
+             "CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞 key）",
+    )
+    p.add_argument(
+        "--label",
+        help="指派掃描清單上顯示的名稱；省略時取 CHATROOM_DEFAULT_NAME",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_env_file()
+    load_env_file()  # 只補缺，不覆寫——所以命令列的顯式值要在它之後才蓋得掉
     args = build_parser().parse_args(argv)
+    if args.kind:
+        os.environ["CHATROOM_AGENT_KIND"] = args.kind
+    if args.label:
+        os.environ["CHATROOM_DEFAULT_NAME"] = args.label
     return Watcher(args).run()
 
 
