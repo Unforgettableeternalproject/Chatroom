@@ -8,6 +8,40 @@ import '../models/participant.dart';
 import 'kind_badge.dart';
 import 'uep_button.dart';
 
+/// 從送出內容萃取被 @ 提及的成員名單。
+///
+/// 必須最長優先比對——房內天然存在前綴重名（Nova 與 Nova-2 由 Hub 自動編號），
+/// 用 contains('@$name') 會讓「@Nova-2」同時 ping 到 Nova。
+/// 比對成功後還要檢查右邊界：下一個字元若仍是名字字元（英數 / - / _），
+/// 代表 @ 後面其實是更長的字串（@Nova-25 不算提及 Nova-2）。
+List<String> extractMentions(String content, Iterable<String> memberNames) {
+  final names = memberNames.toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
+  final nameChar = RegExp(r'[A-Za-z0-9_-]');
+  final found = <String>{};
+  var i = 0;
+  while (i < content.length) {
+    if (content[i] != '@') {
+      i++;
+      continue;
+    }
+    var matched = false;
+    for (final name in names) {
+      if (name.isEmpty) continue;
+      final end = i + 1 + name.length;
+      if (end > content.length) continue;
+      if (content.substring(i + 1, end) != name) continue;
+      if (end < content.length && nameChar.hasMatch(content[end])) continue;
+      found.add(name);
+      i = end;
+      matched = true;
+      break;
+    }
+    if (!matched) i++;
+  }
+  return found.toList();
+}
+
 /// 訊息輸入區：回覆預覽 + @ 自動完成 + ENTER 送出 / SHIFT+ENTER 換行。
 class MessageComposer extends StatefulWidget {
   const MessageComposer({
@@ -111,12 +145,8 @@ class _MessageComposerState extends State<MessageComposer> {
   }
 
   /// 送出時從文字內容萃取仍存在的 @成員 名單。
-  List<String> _extractMentions(String content) {
-    return widget.members
-        .map((p) => p.displayName)
-        .where((name) => content.contains('@$name'))
-        .toList();
-  }
+  List<String> _extractMentions(String content) =>
+      extractMentions(content, widget.members.map((p) => p.displayName));
 
   Future<void> _send() async {
     final content = _controller.text.trim();

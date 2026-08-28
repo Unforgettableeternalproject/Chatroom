@@ -17,6 +17,18 @@ class MessagePage {
   final int? nextBeforeSeq;
 }
 
+class UpdatesResult {
+  const UpdatesResult({
+    required this.messages,
+    required this.youWereMentioned,
+    required this.lastSeq,
+  });
+
+  final List<Message> messages;
+  final bool youWereMentioned;
+  final int lastSeq;
+}
+
 class PostResult {
   const PostResult({required this.id, required this.seq});
   final String id;
@@ -55,6 +67,35 @@ class MessagesApi {
           hasMore: (res.data?['has_more'] as bool?) ?? false,
           nextAfterSeq: res.data?['next_after_seq'] as int?,
           nextBeforeSeq: res.data?['next_before_seq'] as int?,
+        );
+      });
+
+  /// long-poll：有 MAX(seq, update_seq) > after_seq 的訊息立即返回，
+  /// 否則掛起到 timeout 秒（Hub 上限 55）。WS 之外的補訊備援通道。
+  /// 帶 participantId 時回應才會計算 you_were_mentioned。
+  Future<UpdatesResult> updates(
+    String roomId, {
+    int afterSeq = 0,
+    double timeout = 25.0,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/rooms/$roomId/updates',
+          queryParameters: {'after_seq': afterSeq, 'timeout': timeout},
+          options: Options(
+            headers: {'X-Participant-Id': ?participantId},
+            // dio 全域 receiveTimeout 30s 貼著 long-poll 上限，個別放寬
+            receiveTimeout: Duration(seconds: timeout.ceil() + 10),
+          ),
+        );
+        return UpdatesResult(
+          messages: ((res.data?['messages'] as List?) ?? const [])
+              .map((e) => Message.fromJson(e as Map<String, dynamic>))
+              .toList(),
+          youWereMentioned:
+              (res.data?['you_were_mentioned'] as bool?) ?? false,
+          lastSeq: (res.data?['last_seq'] as int?) ?? afterSeq,
         );
       });
 

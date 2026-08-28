@@ -29,4 +29,23 @@ class AssignmentsApi {
             .map((e) => Assignment.fromJson(e as Map<String, dynamic>))
             .toList();
       });
+
+  /// session 視角的待處理指派（含 room_name / room_topic）。
+  Future<List<Assignment>> listForSession(String sessionKey) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/assignments',
+          queryParameters: {'session_key': sessionKey},
+        );
+        return ((res.data?['assignments'] as List?) ?? const [])
+            .map((e) => Assignment.fromJson(e as Map<String, dynamic>))
+            .toList();
+      });
+
+  /// 處理一筆指派：accept=true 標為 accepted，false 標為 declined。
+  Future<void> resolve(String assignmentId, {required bool accept}) =>
+      unwrap(() => _dio.post(
+            '/api/assignments/$assignmentId/resolve',
+            data: {'status': accept ? 'accepted' : 'declined'},
+          ));
 }

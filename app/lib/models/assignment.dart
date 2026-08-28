@@ -10,6 +10,8 @@ class Assignment {
     required this.status,
     required this.createdAt,
     this.resolvedAt,
+    this.roomName,
+    this.roomTopic,
   });
 
   final String id;
@@ -20,6 +22,10 @@ class Assignment {
   final String createdAt;
   final String? resolvedAt;
 
+  /// 只有 GET /api/assignments（session 視角）會帶房名/主題，房間視角為 null。
+  final String? roomName;
+  final String? roomTopic;
+
   factory Assignment.fromJson(Map<String, dynamic> json) => Assignment(
         id: json['id'] as String,
         roomId: (json['room_id'] as String?) ?? '',
@@ -28,6 +34,8 @@ class Assignment {
         status: (json['status'] as String?) ?? 'pending',
         createdAt: (json['created_at'] as String?) ?? '',
         resolvedAt: json['resolved_at'] as String?,
+        roomName: json['room_name'] as String?,
+        roomTopic: json['room_topic'] as String?,
       );
 
   @override

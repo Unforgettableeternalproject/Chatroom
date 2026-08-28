@@ -215,4 +215,31 @@ void main() {
     final again = service.subscribe('r1');
     expect(identical(feed, again), isTrue, reason: '保留期內不應重建 store');
   });
+
+  test('退避期間 retryNow 緊接 stop 不可 double-complete（Codex blocker）', () async {
+    await service.dispose();
+    // 連不上 + 長退避：讓服務停在 Reconnecting 等待 skip completer
+    service = RealtimeService(
+      messagesApi: api,
+      wsUriBuilder: () => Uri.parse('ws://test/ws'),
+      connector: (uri) async => throw Exception('握手失敗'),
+      policy: _FixedPolicy(const Duration(minutes: 5)),
+    );
+    service.start();
+    await _waitFor(() => service.status is Reconnecting);
+
+    // retryNow 已 complete skip、_backoff 尚未醒來清 null——此刻 stop 進場
+    service.retryNow();
+    await service.stop(); // 修復前這裡丟 StateError: Future already completed
+
+    expect(service.status, isA<Disconnected>());
+  });
+}
+
+class _FixedPolicy extends ReconnectPolicy {
+  _FixedPolicy(this.delay);
+  final Duration delay;
+
+  @override
+  Duration delayFor(int attempt) => delay;
 }

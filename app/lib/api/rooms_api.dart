@@ -1,12 +1,20 @@
 import 'package:dio/dio.dart';
 
+import '../models/assignment.dart';
 import '../models/participant.dart';
 import '../models/room.dart';
 import 'api_client.dart';
 
 class RoomListResult {
-  const RoomListResult({required this.rooms});
+  const RoomListResult({
+    required this.rooms,
+    this.pendingAssignments = const [],
+  });
+
   final List<Room> rooms;
+
+  /// 帶 session_key 查詢時，Hub 一併回傳指派給該 session 的 pending 邀請。
+  final List<Assignment> pendingAssignments;
 }
 
 class RoomDetail {
@@ -45,15 +53,24 @@ class RoomsApi {
         );
       });
 
-  Future<RoomListResult> list({String status = 'active'}) => unwrap(() async {
+  Future<RoomListResult> list({String status = 'active', String? sessionKey}) =>
+      unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/rooms',
-          queryParameters: {'status': status},
+          queryParameters: {
+            'status': status,
+            if (sessionKey != null && sessionKey.isNotEmpty)
+              'session_key': sessionKey,
+          },
         );
         final rooms = ((res.data?['rooms'] as List?) ?? const [])
             .map((e) => Room.fromJson(e as Map<String, dynamic>))
             .toList();
-        return RoomListResult(rooms: rooms);
+        final pending = ((res.data?['pending_assignments'] as List?) ??
+                const [])
+            .map((e) => Assignment.fromJson(e as Map<String, dynamic>))
+            .toList();
+        return RoomListResult(rooms: rooms, pendingAssignments: pending);
       });
 
   Future<Room> create({required String name, String topic = ''}) =>

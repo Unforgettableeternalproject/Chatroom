@@ -104,7 +104,10 @@ class RealtimeService {
 
   Future<void> stop({String reason = 'manual'}) async {
     _desired = false;
-    _backoffSkip?.complete();
+    // retryNow() 可能已 complete 過同一個 completer 而 _backoff() 尚未清 null，
+    // 無條件 complete 會 double-complete 丟 StateError
+    final skip = _backoffSkip;
+    if (skip != null && !skip.isCompleted) skip.complete();
     _backoffSkip = null;
     await _closeConn();
     await _loop;
