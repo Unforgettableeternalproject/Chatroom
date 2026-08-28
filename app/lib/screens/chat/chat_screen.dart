@@ -490,7 +490,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 roomId: roomId,
                 members: members,
                 myId: myId,
-                archived: archived),
+                archived: archived,
+                youAreAdmin: detailAsync.value?.youAreAdmin ?? false),
           ),
         ),
         body: chatColumn,
@@ -510,7 +511,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               roomId: roomId,
               members: members,
               myId: myId,
-              archived: archived),
+              archived: archived,
+              youAreAdmin: detailAsync.value?.youAreAdmin ?? false),
         ),
       ]),
     );
@@ -799,12 +801,56 @@ class _MembersPanel extends ConsumerWidget {
     required this.members,
     required this.myId,
     required this.archived,
+    required this.youAreAdmin,
   });
 
   final String roomId;
   final List<Participant> members;
   final String? myId;
   final bool archived;
+  final bool youAreAdmin;
+
+  Future<void> _kick(
+      BuildContext context, WidgetRef ref, Participant p) async {
+    final s = context.uep;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('將 ${p.displayName} 移出聊天室？',
+            style: UepText.display(size: 22, color: s.inkTitle)),
+        content: Text(
+          '被移出後，這個 session 將無法重新加入此聊天室。此操作無法復原。',
+          style: UepText.serif(size: 13.5, color: s.inkSoft),
+        ),
+        actions: [
+          UepButton(
+            label: '取消',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: '移出',
+            variant: UepButtonVariant.danger,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (!(confirmed ?? false) || myId == null) return;
+    try {
+      await ref
+          .read(roomsApiProvider)
+          .kick(roomId, targetId: p.id, participantId: myId!);
+      ref.invalidate(roomDetailProvider(roomId));
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -830,7 +876,13 @@ class _MembersPanel extends ConsumerWidget {
             MonoLabel('ACTIVE', size: 8.5, letterSpacing: 2.2),
             const SizedBox(height: 8),
             for (final p in active)
-              _MemberTile(p: p, isSelf: p.id == myId),
+              _MemberTile(
+                p: p,
+                isSelf: p.id == myId,
+                onKick: youAreAdmin && p.id != myId && !archived
+                    ? () => _kick(context, ref, p)
+                    : null,
+              ),
             if (gone.isNotEmpty) ...[
               const SizedBox(height: 16),
               MonoLabel('已離開', size: 8.5, letterSpacing: 2.2),
@@ -863,11 +915,17 @@ class _MembersPanel extends ConsumerWidget {
 
 class _MemberTile extends StatelessWidget {
   const _MemberTile(
-      {required this.p, required this.isSelf, this.inactive = false});
+      {required this.p,
+      required this.isSelf,
+      this.inactive = false,
+      this.onKick});
 
   final Participant p;
   final bool isSelf;
   final bool inactive;
+
+  /// 管理員視角的移出動作；null 表示不顯示。
+  final VoidCallback? onKick;
 
   @override
   Widget build(BuildContext context) {
@@ -881,7 +939,11 @@ class _MemberTile extends StatelessWidget {
 
     String subtitle;
     if (inactive) {
-      subtitle = p.status == 'removed' ? '因閒置移出' : '已離開';
+      subtitle = switch (p.status) {
+        'removed' => '因閒置移出',
+        'kicked' => '被管理員移出',
+        _ => '已離開',
+      };
     } else if (isSelf) {
       subtitle = '你 · 管控權';
     } else if (isIdle) {
@@ -961,6 +1023,14 @@ class _MemberTile extends StatelessWidget {
                         : UepColors.success,
                 border: isIdle ? Border.all(color: s.inkMute) : null,
               ),
+            ),
+          if (onKick != null)
+            IconButton(
+              tooltip: '移出聊天室',
+              visualDensity: VisualDensity.compact,
+              onPressed: onKick,
+              icon: Icon(Icons.person_remove_outlined,
+                  size: 14, color: s.inkMute),
             ),
         ]),
       ),

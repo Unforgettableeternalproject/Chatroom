@@ -18,9 +18,17 @@ class RoomListResult {
 }
 
 class RoomDetail {
-  const RoomDetail({required this.room, required this.participants});
+  const RoomDetail({
+    required this.room,
+    required this.participants,
+    this.youAreAdmin = false,
+  });
+
   final Room room;
   final List<Participant> participants;
+
+  /// 帶 X-Session-Key 查詢且與建立者相符時為 true（可移出成員）。
+  final bool youAreAdmin;
 }
 
 class JoinResult {
@@ -73,24 +81,49 @@ class RoomsApi {
         return RoomListResult(rooms: rooms, pendingAssignments: pending);
       });
 
-  Future<Room> create({required String name, String topic = ''}) =>
+  Future<Room> create({
+    required String name,
+    String topic = '',
+    String? sessionKey,
+  }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/rooms',
-          data: {'name': name, 'topic': topic},
+          data: {
+            'name': name,
+            'topic': topic,
+            // 建立者 session：Hub 以此認定管理員（可移出成員）
+            'session_key': ?sessionKey,
+          },
         );
         return Room.fromJson(res.data!);
       });
 
-  Future<RoomDetail> detail(String roomId) => unwrap(() async {
-        final res = await _dio.get<Map<String, dynamic>>('/api/rooms/$roomId');
+  Future<RoomDetail> detail(String roomId, {String? sessionKey}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/rooms/$roomId',
+          options: Options(headers: {'X-Session-Key': ?sessionKey}),
+        );
         return RoomDetail(
           room: Room.fromJson(res.data!['room'] as Map<String, dynamic>),
           participants: ((res.data!['participants'] as List?) ?? const [])
               .map((e) => Participant.fromJson(e as Map<String, dynamic>))
               .toList(),
+          youAreAdmin: (res.data!['you_are_admin'] as bool?) ?? false,
         );
       });
+
+  /// 管理員移出成員（被移出的 session 無法重新加入該房）。
+  Future<void> kick(
+    String roomId, {
+    required String targetId,
+    required String participantId,
+  }) =>
+      unwrap(() => _dio.post(
+            '/api/rooms/$roomId/participants/$targetId/kick',
+            options: Options(headers: {'X-Participant-Id': participantId}),
+          ));
 
   Future<void> archive(String roomId) =>
       unwrap(() => _dio.post('/api/rooms/$roomId/archive'));

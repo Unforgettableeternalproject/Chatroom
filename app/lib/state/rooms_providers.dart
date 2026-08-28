@@ -17,7 +17,9 @@ final roomListProvider =
 final roomDetailProvider =
     FutureProvider.autoDispose.family<RoomDetail, String>((ref, roomId) async {
   final api = ref.watch(roomsApiProvider);
-  final detail = await api.detail(roomId);
+  // 帶自己的 session key：Hub 回 you_are_admin（建立者可移出成員）
+  final deviceKey = ref.watch(appConfigProvider.select((c) => c.deviceKey));
+  final detail = await api.detail(roomId, sessionKey: deviceKey);
   // 累積最近見過的 agent session_key（指派快選用；detail 不含 session_key
   // 時此步為 no-op，快選仍有手動輸入的路）
   final keys = detail.participants

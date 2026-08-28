@@ -434,9 +434,12 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
       _error = null;
     });
     try {
-      final room = await ref
-          .read(roomsApiProvider)
-          .create(name: name, topic: _topic.text.trim());
+      final room = await ref.read(roomsApiProvider).create(
+            name: name,
+            topic: _topic.text.trim(),
+            // 建立者即管理員
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
       if (mounted) Navigator.of(context).pop(room);
     } on ApiException catch (e) {
       setState(() {
