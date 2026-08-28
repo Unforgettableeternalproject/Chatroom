@@ -16,6 +16,17 @@ def test_identity_persists_across_instances(tmp_path):
     assert second.display_name("room-a") == "Aster"
 
 
+def test_canonical_session_key_applies_to_future_rooms_and_persists(tmp_path):
+    """Codex thread id 一旦由指派綁定，同一 MCP bridge 跨房仍是同一 session。"""
+    path = tmp_path / "state.json"
+    first = BridgeState(path)
+    first.set_identity("room-a", "pid-1", "Sol", "codex-thread-id")
+    assert first.session_key("room-b") == "codex-thread-id"
+
+    second = BridgeState(path)
+    assert second.session_key("room-b") == "codex-thread-id"
+
+
 def test_cursor_only_moves_forward(tmp_path):
     st = BridgeState(tmp_path / "state.json")
     st.set_last_seq("room-a", 10)

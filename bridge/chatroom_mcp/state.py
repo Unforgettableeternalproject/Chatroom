@@ -8,11 +8,13 @@ bridge 是 stdio 程序，agent 每次重啟就換一個進程。若身分（par
 
     {
       "version": 1,
+      "session_key": "...",
       "rooms": {
         "<room_id>": {
           "participant_id": "...",
           "display_name": "...",
-          "last_seq": 42
+          "last_seq": 42,
+          "session_key": "..."
         }
       }
     }
@@ -46,6 +48,7 @@ class BridgeState:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else default_state_path()
+        self._session_key: str | None = None
         self._rooms: dict[str, dict[str, Any]] = {}
         self.load()
 
@@ -56,16 +59,19 @@ class BridgeState:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
+            self._session_key = None
             self._rooms = {}
             return
         except (OSError, ValueError):
             self._quarantine()
+            self._session_key = None
             self._rooms = {}
             return
 
         rooms = raw.get("rooms") if isinstance(raw, dict) else None
         if not isinstance(rooms, dict):
             self._quarantine()
+            self._session_key = None
             self._rooms = {}
             return
 
@@ -81,12 +87,29 @@ class BridgeState:
                 "participant_id": pid if isinstance(pid, str) else None,
                 "display_name": name if isinstance(name, str) else None,
                 "last_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else 0,
+                "session_key": (
+                    entry.get("session_key")
+                    if isinstance(entry.get("session_key"), str)
+                    else None
+                ),
             }
         self._rooms = clean
+        canonical = raw.get("session_key")
+        if isinstance(canonical, str) and canonical:
+            self._session_key = canonical
+        else:
+            # 相容已寫入 per-room canonical key 的舊檔。單一 bridge 應只對應
+            # 一個 agent session；若舊檔異常混有多把 key，就安全退回未綁定。
+            known = {e["session_key"] for e in clean.values() if e["session_key"]}
+            self._session_key = next(iter(known)) if len(known) == 1 else None
 
     def save(self) -> None:
         """原子寫回狀態檔；寫入失敗不視為致命錯誤（狀態可重建）。"""
-        payload = {"version": STATE_VERSION, "rooms": self._rooms}
+        payload = {
+            "version": STATE_VERSION,
+            "session_key": self._session_key,
+            "rooms": self._rooms,
+        }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -108,7 +131,13 @@ class BridgeState:
 
     def _entry(self, room_id: str) -> dict[str, Any]:
         return self._rooms.setdefault(
-            room_id, {"participant_id": None, "display_name": None, "last_seq": 0}
+            room_id,
+            {
+                "participant_id": None,
+                "display_name": None,
+                "last_seq": 0,
+                "session_key": None,
+            },
         )
 
     def participant_id(self, room_id: str) -> str | None:
@@ -117,11 +146,24 @@ class BridgeState:
     def display_name(self, room_id: str) -> str | None:
         return self._rooms.get(room_id, {}).get("display_name")
 
-    def set_identity(self, room_id: str, participant_id: str, display_name: str | None) -> None:
+    def session_key(self, room_id: str) -> str | None:
+        """Hub 綁定的 canonical key；學到後同一 bridge 的所有房間共用。"""
+        return self._session_key or self._rooms.get(room_id, {}).get("session_key")
+
+    def set_identity(
+        self,
+        room_id: str,
+        participant_id: str,
+        display_name: str | None,
+        session_key: str | None = None,
+    ) -> None:
         entry = self._entry(room_id)
         # 換身分等同換一段對話歷史的立足點，但訊息序號是房間層級的，游標保留即可
         entry["participant_id"] = participant_id
         entry["display_name"] = display_name
+        if session_key:
+            self._session_key = session_key
+            entry["session_key"] = session_key
         self.save()
 
     def clear_identity(self, room_id: str) -> None:

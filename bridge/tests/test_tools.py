@@ -34,6 +34,34 @@ def test_join_sends_session_key_and_kind(fake_hub):
     assert '"role": "agent"' in body or '"role":"agent"' in body
 
 
+def test_join_with_assignment_uses_hub_canonical_codex_thread(fake_hub):
+    """bridge 不必知道 thread id；assignment_id 由 Hub 兌換並回傳正式身分。"""
+    import json as _json
+
+    thread_id = "019d0000-0000-7000-8000-000000000001"
+    fake_hub.json(
+        "POST",
+        f"/api/rooms/{ROOM}/join",
+        {
+            "participant_id": "pid-thread",
+            "display_name": "Codex-Sol",
+            "rejoined": False,
+            "session_key": thread_id,
+        },
+    )
+    result = srv.chatroom_join(ROOM, assignment_id="assignment-1")
+    assert result["ok"] is True
+    body = _json.loads(fake_hub.calls[-1].content)
+    assert body["assignment_id"] == "assignment-1"
+    assert body["session_key"] == srv.SESSION_KEY
+    assert srv.state().session_key(ROOM) == thread_id
+
+    # 同一 bridge 後續重加不必再帶 assignment_id，也會沿用 canonical thread。
+    srv.chatroom_join(ROOM)
+    body = _json.loads(fake_hub.calls[-1].content)
+    assert body["session_key"] == thread_id
+
+
 def test_post_uses_stored_participant_header(fake_hub):
     _join(fake_hub)
     fake_hub.json("POST", f"/api/rooms/{ROOM}/messages", {"id": "m1", "seq": 3})

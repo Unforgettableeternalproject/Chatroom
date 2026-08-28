@@ -196,27 +196,40 @@ def chatroom_list_rooms() -> dict:
 
 @mcp.tool()
 @_guard
-def chatroom_join(room_id: str, preferred_name: str = "") -> dict:
+def chatroom_join(
+    room_id: str,
+    preferred_name: str = "",
+    assignment_id: str = "",
+) -> dict:
     """加入聊天室，取得該房間的身分。
 
     發言、釘選、heartbeat 之前都必須先加入。可提供 ``preferred_name`` 作為偏好名稱，
     房內重名時 Hub 會自動調整；回傳實際被指派的 ``display_name``。
-    若這個房間有針對你的指派且指派者已幫你取名，會以那個名字為準
+    收到 App 經 Codex queue 送來的指派時，請把通知內的 ``assignment_id`` 傳入；
+    Hub 會以該指派綁定的 Codex thread id 作為正式 session 身分，不會使用 MCP
+    臨時生成的 key。若指派者已幫你取名，會以那個名字為準
     （回傳含 ``name_from_assignment: true``），不必覺得奇怪。
     同一個 session 重複加入同一房間是冪等的（回傳 ``rejoined: true``）。
     身分會寫入本機狀態檔，bridge 重啟後不需要重新加入。
     """
+    canonical_key = state().session_key(room_id) or SESSION_KEY
     data = hub().request(
         "POST",
         f"/api/rooms/{room_id}/join",
         json={
             "kind": AGENT_KIND,
-            "session_key": SESSION_KEY,
+            "session_key": canonical_key,
+            "assignment_id": assignment_id or None,
             "preferred_name": preferred_name or DEFAULT_NAME or None,
             "role": "agent",
         },
     )
-    state().set_identity(room_id, data["participant_id"], data.get("display_name"))
+    state().set_identity(
+        room_id,
+        data["participant_id"],
+        data.get("display_name"),
+        data.get("session_key", canonical_key),
+    )
     return data
 
 

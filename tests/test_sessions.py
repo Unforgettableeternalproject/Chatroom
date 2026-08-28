@@ -214,3 +214,95 @@ async def test_assigned_name_in_listings(client):
     r = await client.get(f"/api/rooms/{room_id}/assignments")
     a = r.json()["assignments"][0]
     assert a["assigned_name"] == "鐵衛"
+
+
+async def test_assignment_id_binds_bridge_join_to_codex_thread(client):
+    """MCP 可帶臨時 key，但指派加入後 participant 必須使用 Codex thread id。"""
+    r = await client.post("/api/rooms", json={"name": "多代理房"})
+    room_id = r.json()["id"]
+    thread_id = "019d0000-0000-7000-8000-000000000001"
+    aid = await _assign(client, room_id, thread_id, name="鐵衛", note="請加入")
+
+    joined = await client.post(
+        f"/api/rooms/{room_id}/join",
+        json={
+            "kind": "codex",
+            "session_key": "codex-ephemeral-bridge",
+            "assignment_id": aid,
+            "preferred_name": "BridgeName",
+        },
+    )
+    assert joined.status_code == 200, joined.text
+    body = joined.json()
+    assert body["session_key"] == thread_id
+    assert body["display_name"] == "鐵衛"
+    assert body["name_from_assignment"] is True
+
+    sessions = (await client.get("/api/sessions")).json()["sessions"]
+    by_key = {s["session_key"]: s for s in sessions}
+    assert thread_id in by_key
+    assert "codex-ephemeral-bridge" not in by_key
+    assert by_key[thread_id]["rooms"][0]["display_name"] == "鐵衛"
+
+
+async def test_accepted_assignment_id_can_still_bind_join(client):
+    """先 accept 再 join 是既有工具文件允許的流程，不能因 status 改變而斷線。"""
+    r = await client.post("/api/rooms", json={"name": "房"})
+    room_id = r.json()["id"]
+    thread_id = "019d0000-0000-7000-8000-000000000002"
+    aid = await _assign(client, room_id, thread_id)
+    resolved = await client.post(
+        f"/api/assignments/{aid}/resolve", json={"status": "accepted"}
+    )
+    assert resolved.status_code == 200
+
+    joined = await client.post(
+        f"/api/rooms/{room_id}/join",
+        json={
+            "kind": "codex",
+            "session_key": "codex-temp",
+            "assignment_id": aid,
+        },
+    )
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["session_key"] == thread_id
+
+
+async def test_assignment_id_cannot_be_used_for_another_room(client):
+    first = (await client.post("/api/rooms", json={"name": "甲"})).json()["id"]
+    second = (await client.post("/api/rooms", json={"name": "乙"})).json()["id"]
+    aid = await _assign(client, first, "019d0000-0000-7000-8000-000000000003")
+
+    joined = await client.post(
+        f"/api/rooms/{second}/join",
+        json={
+            "kind": "codex",
+            "session_key": "codex-temp",
+            "assignment_id": aid,
+        },
+    )
+    assert joined.status_code == 404
+    assert joined.json()["detail"]["code"] == "assignment_not_joinable"
+
+
+async def test_assignment_join_resolves_pending_when_session_already_in_room(client):
+    """既有 participant 用指派 token 重加時，pending 不得留到 App 重啟後再通知。"""
+    room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+    thread_id = "019d0000-0000-7000-8000-000000000004"
+    await _join(client, room_id, thread_id, "Codex-Sol")
+    aid = await _assign(client, room_id, thread_id)
+
+    joined = await client.post(
+        f"/api/rooms/{room_id}/join",
+        json={
+            "kind": "codex",
+            "session_key": "codex-temp",
+            "assignment_id": aid,
+        },
+    )
+    assert joined.status_code == 200
+    assert joined.json()["rejoined"] is True
+    pending = (
+        await client.get("/api/assignments", params={"session_key": thread_id})
+    ).json()["assignments"]
+    assert pending == []

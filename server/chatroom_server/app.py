@@ -53,6 +53,9 @@ class RoomCreate(BaseModel):
 class JoinRequest(BaseModel):
     kind: str = Field(pattern="^(claude|codex|human|other)$")
     session_key: str = Field(min_length=1, max_length=128)
+    # App 可把 Codex thread id 當成指派目標；MCP bridge 本身拿不到 thread id，
+    # 因此以 assignment_id 兌換 Hub 已知的 canonical session_key。
+    assignment_id: str | None = Field(default=None, max_length=128)
     preferred_name: str | None = None
     role: str = Field(default="agent", pattern="^(agent|human)$")
 
@@ -426,13 +429,32 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def join_room(room_id: str, body: JoinRequest, request: Request):
         await _room_or_404(room_id)
         db = app.state.db
+        assignment = None
+        session_key = body.session_key
+        if body.assignment_id:
+            assignment = await (
+                await db.execute(
+                    "SELECT * FROM assignment WHERE id=? AND room_id=?"
+                    " AND status IN ('pending','accepted')",
+                    (body.assignment_id, room_id),
+                )
+            ).fetchone()
+            if assignment is None:
+                raise _err(
+                    404,
+                    "assignment_not_joinable",
+                    "找不到這筆可加入的指派，或它不屬於這個聊天室",
+                )
+            # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
+            # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
+            session_key = assignment["target_session_key"]
         # 被管理員移出的 session 不得重新加入——否則 client 的斷線自癒
         # （身分失效即自動 rejoin）會立刻把被踢的人加回來
         kicked = await (
             await db.execute(
                 "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
                 " AND status='kicked'",
-                (room_id, body.session_key),
+                (room_id, session_key),
             )
         ).fetchone()
         if kicked:
@@ -441,12 +463,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         existing = await (
             await db.execute(
                 "SELECT * FROM participant WHERE room_id=? AND session_key=? AND status='active'",
-                (room_id, body.session_key),
+                (room_id, session_key),
             )
         ).fetchone()
         if existing:
-            return {"participant_id": existing["id"], "display_name": existing["display_name"],
-                    "rejoined": True}
+            # 即使 session 已經在房內，使用 assignment token 重加也代表已接受
+            # 該指派；否則 App 重啟後會再次投遞同一筆 pending assignment。
+            if assignment is not None and assignment["status"] == "pending":
+                await db.execute(
+                    "UPDATE assignment SET status='accepted', resolved_at=? WHERE id=?",
+                    (_now(), assignment["id"]),
+                )
+                await db.commit()
+            await _touch_session(session_key, body.kind)
+            return {
+                "participant_id": existing["id"],
+                "display_name": existing["display_name"],
+                "rejoined": True,
+                "session_key": session_key,
+            }
 
         taken_rows = await (
             await db.execute(
@@ -455,14 +490,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchall()
         # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
-        assigned = await (
-            await db.execute(
-                "SELECT assigned_name FROM assignment WHERE room_id=?"
-                " AND target_session_key=? AND status='pending' AND assigned_name!=''"
-                " ORDER BY created_at DESC LIMIT 1",
-                (room_id, body.session_key),
-            )
-        ).fetchone()
+        if assignment is not None and assignment["assigned_name"]:
+            assigned = assignment
+        else:
+            assigned = await (
+                await db.execute(
+                    "SELECT assigned_name FROM assignment WHERE room_id=?"
+                    " AND target_session_key=? AND status='pending' AND assigned_name!=''"
+                    " ORDER BY created_at DESC LIMIT 1",
+                    (room_id, session_key),
+                )
+            ).fetchone()
         preferred = assigned["assigned_name"] if assigned else body.preferred_name
         name = generate_name({r["display_name"] for r in taken_rows}, preferred)
         pid = _uid()
@@ -471,7 +509,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
             " joined_at, last_seen_at, join_ip) VALUES (?,?,?,?,?,?,?,?,?)",
-            (pid, room_id, body.kind, body.session_key, name, body.role, now, now,
+            (pid, room_id, body.kind, session_key, name, body.role, now, now,
              join_ip),
         )
         await db.commit()
@@ -479,12 +517,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE assignment SET status='accepted', resolved_at=? WHERE room_id=?"
             " AND target_session_key=? AND status='pending'",
-            (now, room_id, body.session_key),
+            (now, room_id, session_key),
         )
         await db.commit()
-        await _touch_session(body.session_key, body.kind)
+        await _touch_session(session_key, body.kind)
         await _post_message(room_id, None, f"{name} 加入了聊天室", kind="system")
-        out = {"participant_id": pid, "display_name": name, "rejoined": False}
+        out = {
+            "participant_id": pid,
+            "display_name": name,
+            "rejoined": False,
+            "session_key": session_key,
+        }
         if assigned:
             # 讓 agent 知道名字來自指派者，而非自己的 preferred_name
             out["name_from_assignment"] = True
