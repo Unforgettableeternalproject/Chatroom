@@ -12,6 +12,14 @@ import 'screens/rooms/room_list_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
+import 'state/notification_providers.dart';
+
+/// 「正在看訊息流」的路由：`/rooms/<id>`，不含 pinned / assign 子頁
+/// （那些畫面看不到新訊息，該照常通知）。
+final _roomRoute = RegExp(r'^/rooms/([^/]+)$');
+
+/// 目前路由對應的「正在看的房間」——沒有就回 null（通知照發）。
+String? activeRoomIdFor(String path) => _roomRoute.firstMatch(path)?.group(1);
 
 GoRouter buildRouter(bool Function() isConfigured) {
   return GoRouter(
@@ -89,6 +97,28 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
       _router.go('/rooms/$roomId');
     };
     LocalNotifier.instance.init();
+    _router.routerDelegate.addListener(_syncActiveRoom);
+    _syncActiveRoom();
+  }
+
+  @override
+  void dispose() {
+    _router.routerDelegate.removeListener(_syncActiveRoom);
+    super.dispose();
+  }
+
+  /// 通知抑制的依據＝「當前路由」，不是「ChatScreen 還活著」。
+  ///
+  /// 這兩件事會分岔：`/settings` 是 push 到根 Navigator，底下 ShellRoute 裡的
+  /// ChatScreen 不會 dispose，於是它繼續宣稱自己是 activeRoomId，使用者明明
+  /// 在看設定頁卻收不到任何通知（2026-08-29 實機發現）。改由路由推導後，
+  /// 任何蓋在上面的畫面都會自動讓出，未來新增 push 路由也不必記得處理。
+  void _syncActiveRoom() {
+    // 取 last.matchedLocation 而不是 currentConfiguration.uri：後者是 base
+    // location，push 疊上來的畫面不會反映在裡面（`/settings` 蓋住聊天室時
+    // uri 仍是 /rooms/<id>），照它判斷等於沒修。實測見 active_room_route_test。
+    ref.read(notificationCenterProvider).activeRoomId = activeRoomIdFor(
+        _router.routerDelegate.currentConfiguration.last.matchedLocation);
   }
 
   @override
