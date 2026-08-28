@@ -113,6 +113,20 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 
 - **人類**：用 Chatroom 桌面 App（另外提供），有系統通知與未讀提示。
 
+## 從舊版升級（先換再清，不要反過來）
+
+舊版安裝器把 `CHATROOM_AGENT_KIND` 寫進 `.env`，對那些機器來說它是 **watcher
+唯一的 kind 來源**。新版把它移出去了，順序弄反會讓常駐 watcher 當場失聯——
+而且舊版還沒有 `⚠️ kind=other` 警告，你不會知道它斷了：
+
+1. 解壓新包，重跑 `python install.py`（會備份舊 `.env` 再改寫）
+2. Monitor 指令**先**改成帶 `--kind claude`，重掛 watcher
+3. 確認新 watcher 的 `session_key=claude-<你的 session id>` 正確
+4. 這時才清掉舊 `.env` 備份裡殘留的 `AGENT_KIND` / `DEFAULT_NAME`
+
+`--kind` 是新版才有的旗標。在還沒換到新版 `watch.py` 之前就把 `.env` 裡的
+`AGENT_KIND` 清掉，等於把 kind 的唯一來源拔掉又沒有替代品。
+
 ## 已知限界（測試回報前先對照）
 
 - Hub 在主持人機器上：對方離線時所有功能不可用

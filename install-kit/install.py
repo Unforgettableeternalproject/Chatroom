@@ -151,9 +151,15 @@ def write_env_file(url: str, token: str) -> Path:
         values["CHATROOM_TOKEN"] = token
     body = "".join(f"{k}={v}\n" for k, v in values.items())
     content = ENV_FILE_HEADER + body
-    if path.is_file() and path.read_text(encoding="utf-8-sig") == content:
+    old = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+    if old == content:
         print(f"• watcher 用 .env 已是最新：{path}")
         return path
+    # 舊版把 kind 寫在這裡，是那些使用者當下唯一的 kind 來源。這次改寫會拿掉
+    # 它——若他們沒同時把 --kind 補進 Monitor 指令，watcher 會立刻退化成隨機
+    # 身分。只對真正受影響的人喊，避免變成人人略過的例行雜訊。
+    stale = [k for k in ("CHATROOM_AGENT_KIND", "CHATROOM_DEFAULT_NAME")
+             if any(line.startswith(f"{k}=") for line in old.splitlines())]
     if path.is_file():
         backup = path.with_name(f".env.bak-{datetime.now():%Y%m%d%H%M%S}")
         shutil.copy2(path, backup)
@@ -162,6 +168,11 @@ def write_env_file(url: str, token: str) -> Path:
     if sys.platform != "win32":
         path.chmod(0o600)
     print(f"✅ watcher 用 .env 已寫入：{path}")
+    if stale:
+        print(f"⚠️ 舊 .env 帶著 {'、'.join(stale)}，已移除（身分改由指令列給）。")
+        print("   **在重掛 watcher 前，先把 --kind claude|codex 加進 Monitor**")
+        print("   **指令**——否則 watcher 會退回隨機身分，指派與 @mention 都")
+        print("   收不到。確認新 watcher 的 session_key 正確後再收工。")
     return path
 
 

@@ -157,6 +157,29 @@ def test_env_file_omits_empty_token(inst, kit_dir):
     assert "CHATROOM_TOKEN" not in _env_values(inst.write_env_file("http://hub:8787", ""))
 
 
+def test_env_file_warns_when_removing_legacy_identity_values(inst, kit_dir, capsys):
+    """舊版的 .env 是那些機器唯一的 kind 來源，拿掉它必須明講。
+
+    使用者若沒同時把 --kind 補進 Monitor 指令，watcher 會退回隨機身分——
+    而舊版沒有 kind=other 警告，斷了也不會有人知道。
+    """
+    (kit_dir / ".env").write_text(
+        "CHATROOM_URL=http://old\nCHATROOM_AGENT_KIND=claude\n"
+        "CHATROOM_DEFAULT_NAME=諾薇亞\n",
+        encoding="utf-8",
+    )
+    inst.write_env_file("http://hub:8787", "TOK")
+    out = capsys.readouterr().out
+    assert "CHATROOM_AGENT_KIND" in out and "--kind" in out
+    assert list(kit_dir.glob(".env.bak-*"))  # 舊值還原得回來
+
+
+def test_env_file_stays_quiet_for_fresh_install(inst, kit_dir, capsys):
+    """全新安裝沒有遷移問題，不該印那段警告變成人人略過的雜訊。"""
+    inst.write_env_file("http://hub:8787", "TOK")
+    assert "--kind" not in capsys.readouterr().out
+
+
 def test_env_file_backs_up_only_on_change(inst, kit_dir):
     inst.write_env_file("http://hub:8787", "TOK")
     inst.write_env_file("http://hub:8787", "TOK")
