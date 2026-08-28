@@ -8,6 +8,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/room.dart';
 import '../../state/app_providers.dart';
+import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
@@ -51,6 +52,9 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
         await api.archive(room.id);
       }
       ref.invalidate(roomListProvider);
+      // 聊天畫面若開著同一房，房間狀態與身分都要跟著換
+      ref.invalidate(roomDetailProvider(room.id));
+      ref.invalidate(identityProvider(room.id));
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)

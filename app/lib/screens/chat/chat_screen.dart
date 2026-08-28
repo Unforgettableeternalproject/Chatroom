@@ -37,6 +37,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Message? _replyTarget;
   int _newWhileAway = 0;
   int _lastSeenCount = 0;
+  int? _lastSystemCount;
   int? _highlightSeq;
   Timer? _highlightTimer;
   bool _loadingOlder = false;
@@ -62,6 +63,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _replyTarget = null;
       _newWhileAway = 0;
       _lastSeenCount = 0;
+      _lastSystemCount = null;
       _startHeartbeat();
     }
     if (widget.focusSeq != null && widget.focusSeq != old.focusSeq) {
@@ -288,6 +290,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
 
+    // 自己的 join 完成後刷新成員：新房間常在 join 完成前就抓了 detail，
+    // 成員清單會缺自己（kind 徽章全落 other、@ 選單空白）
+    ref.listen(identityProvider(roomId), (prev, next) {
+      if (next.hasValue && prev?.hasValue != true) {
+        ref.invalidate(roomDetailProvider(roomId));
+      }
+    });
+
+    // 解封後重建人類身分：封存期間進房的 join 會收到 409，
+    // 這個錯誤被 keepAlive 快取住，不清掉會讓之後所有發言都撞「已封存」
+    ref.listen(roomDetailProvider(roomId), (prev, next) {
+      final wasArchived = prev?.value?.room.isArchived ?? false;
+      final detail = next.value;
+      if (wasArchived && detail != null && !detail.room.isArchived) {
+        ref.invalidate(identityProvider(roomId));
+      }
+    });
+
     // 新訊息計數（使用者不在底部時不強制捲動，顯示提示 pill）
     ref.listen(messagesProvider(roomId), (prev, next) {
       final list = next.value;
@@ -297,6 +317,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         setState(() => _newWhileAway += chatCount - _lastSeenCount);
       }
       _lastSeenCount = chatCount;
+      // 系統訊息（加入/離開/封存/解封）到達 → 成員與房間狀態已變，刷新 detail
+      final systemCount = list.where((m) => m.isSystem).length;
+      if (_lastSystemCount != null && systemCount != _lastSystemCount) {
+        ref.invalidate(roomDetailProvider(roomId));
+      }
+      _lastSystemCount = systemCount;
       // 已讀 cursor：視窗開著就推進（未讀點的資料源）
       ref.read(settingsRepoProvider).setLastReadSeq(roomId, feed.cursor);
     });
@@ -582,6 +608,10 @@ class _RoomHeader extends ConsumerWidget {
               await ref.read(roomsApiProvider).unarchive(roomId);
               ref.invalidate(roomDetailProvider(roomId));
               ref.invalidate(roomListProvider);
+              // 封存期間 join 的 409 錯誤會被快取，解封後重新取得身分
+              ref.invalidate(identityProvider(roomId));
+              // feed 的房間狀態要等 WS 事件才會翻新；斷線時會卡在 archived
+              ref.read(roomFeedProvider(roomId)).setRoomStatus('active');
             },
           )
         else ...[

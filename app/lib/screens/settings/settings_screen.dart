@@ -211,6 +211,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ]),
                   ),
               ]),
+              // 首次啟動經 redirect 進來時沒有返回鍵可用，
+              // 設定完成後要有明確的出口，否則會被卡在這裡（驗收 A1）
+              if (!context.canPop() && config.isConfigured) ...[
+                const SizedBox(height: 18),
+                UepButton(
+                  label: '進入主畫面 →',
+                  expand: true,
+                  onPressed: () => context.go('/rooms'),
+                ),
+              ],
               const SizedBox(height: 26),
               Divider(color: s.line, height: 1),
               const SizedBox(height: 22),
