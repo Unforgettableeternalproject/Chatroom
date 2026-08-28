@@ -66,7 +66,6 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
           targetSessionKey: target,
           note: _note.text.trim(),
           assignedName: _name.text.trim());
-      await ref.read(settingsRepoProvider).rememberSessionKeys([target]);
       _target.clear();
       _name.clear();
       _note.clear();
@@ -87,7 +86,6 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
     final roomId = widget.roomId;
     final assignmentsAsync = ref.watch(roomAssignmentsProvider(roomId));
     final detail = ref.watch(roomDetailProvider(roomId)).value;
-    final recent = ref.watch(settingsRepoProvider).seenSessionKeys;
 
     return Scaffold(
       backgroundColor: s.bg,
@@ -151,28 +149,6 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                             '點上方清單自動填入，或手動輸入 session_key'),
                       ),
                     ),
-                    if (recent.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Wrap(spacing: 6, runSpacing: 6, children: [
-                        for (final key in recent.take(8))
-                          InkWell(
-                            onTap: () => setState(() => _target.text = key),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: s.line),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(key,
-                                  style: UepText.code(
-                                      size: 10,
-                                      color: s.inkSoft,
-                                      height: 1.4)),
-                            ),
-                          ),
-                      ]),
-                    ],
                     const SizedBox(height: 14),
                     MonoLabel('命名（選填）', color: s.inkSoft, letterSpacing: 1.4),
                     const SizedBox(height: 6),

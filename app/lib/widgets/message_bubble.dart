@@ -120,7 +120,7 @@ class MessageBubble extends StatelessWidget {
               _ReplyQuote(preview: message.replyPreview!),
               const SizedBox(height: 9),
             ],
-            UepMarkdownBody(data: message.content),
+            UepMarkdownBody(data: message.content, mentions: message.mentions),
           ],
         ),
       );

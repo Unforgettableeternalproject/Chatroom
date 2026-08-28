@@ -46,6 +46,8 @@ dependencies:
   google_fonts: ^8.2.1
   flutter_local_notifications: ^19.4.2
   flutter_markdown_plus: ^1.0.12
+  # mention chip 的自訂 inline syntax 需要直接引用（原為 transitive）
+  markdown: ^7.3.1
 
 dev_dependencies:
   flutter_test:
