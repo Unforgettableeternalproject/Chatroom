@@ -29,6 +29,10 @@ py -3.12 -m venv .venv
 cd server && ../.venv/Scripts/python.exe -m chatroom_server
 ```
 
+> **`.env` 支援**：Hub 與 MCP bridge 啟動時都會就近載入 `.env`
+> （搜尋順序：cwd 往上數層 → 套件目錄 → repo 根目錄；bridge 另會讀 `server/.env`）。
+> 真實環境變數永遠優先，`.env` 只補缺不覆寫。`.env` 已在 `.gitignore`，token 不入版控。
+
 > `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
 > 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
 

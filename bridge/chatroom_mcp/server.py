@@ -41,9 +41,13 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "chatroom_mcp"
 
+from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 
+# 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
+# CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
+load_env_file()
 
 AGENT_KIND = os.environ.get("CHATROOM_AGENT_KIND", "other")
 # join 未指定 preferred_name 時的預設代稱；房內重名由 Hub 自動加 -2 編號
