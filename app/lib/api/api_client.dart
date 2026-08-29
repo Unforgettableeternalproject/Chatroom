@@ -53,6 +53,11 @@ ApiException translateError(DioException e) {
       return NotFoundException(code ?? 'not_found');
     case 409:
       return RoomArchivedException(code ?? 'room_archived');
+    case 410:
+      return AttachmentGoneException(code ?? 'attachment_blob_missing');
+    case 413:
+      // Hub 的訊息含實際上限（「超過 25 MB」），比我們自己編的準
+      return AttachmentTooLargeException(_detailMessage(res.data));
     case 422:
       return ValidationException(
           code ?? 'validation', _detailMessage(res.data) ?? '請求內容不合法');

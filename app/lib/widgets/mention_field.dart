@@ -5,6 +5,7 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../models/message.dart';
 import '../models/participant.dart';
+import 'composer_attachments.dart';
 import 'kind_badge.dart';
 import 'uep_button.dart';
 
@@ -51,6 +52,11 @@ class MessageComposer extends StatefulWidget {
     this.enabled = true,
     this.replyTarget,
     this.onCancelReply,
+    this.attachments = const [],
+    this.onPickFiles,
+    this.onPasteImage,
+    this.onRemoveAttachment,
+    this.onRetryAttachment,
   });
 
   /// 房內 active 成員（@ 選單只列這些，P3-07 條件 2）。
@@ -59,6 +65,17 @@ class MessageComposer extends StatefulWidget {
   final bool enabled;
   final Message? replyTarget;
   final VoidCallback? onCancelReply;
+
+  /// 待送附件。上傳流程由外層（持有 provider 的畫面）負責，這裡只負責畫
+  /// 與觸發——輸入列是純呈現元件，不該知道 Hub 的存在。
+  final List<ComposerAttachment> attachments;
+  final VoidCallback? onPickFiles;
+
+  /// Ctrl+V：回傳 true 表示剪貼簿裡真的有圖並已接手，此時不讓貼上事件
+  /// 繼續傳給 TextField（否則會同時貼進一張圖和一段檔名文字）。
+  final Future<bool> Function()? onPasteImage;
+  final void Function(ComposerAttachment)? onRemoveAttachment;
+  final void Function(ComposerAttachment)? onRetryAttachment;
 
   @override
   State<MessageComposer> createState() => _MessageComposerState();
@@ -72,6 +89,10 @@ class _MessageComposerState extends State<MessageComposer> {
   List<Participant> _candidates = const [];
   int _mentionStart = -1;
   bool _sending = false;
+
+  /// 輸入框是否有內容。送出鈕的可用狀態靠它——直接在 build 讀 controller
+  /// 的話，打字不會觸發重建，按鈕會一直停在剛進畫面時的狀態。
+  bool _hasText = false;
 
   @override
   void initState() {
@@ -88,6 +109,8 @@ class _MessageComposerState extends State<MessageComposer> {
 
   void _onTextChanged() {
     final text = _controller.text;
+    final hasText = text.trim().isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
     final cursor = _controller.selection.baseOffset;
     if (cursor < 0) {
       _hideMentions();
@@ -148,9 +171,28 @@ class _MessageComposerState extends State<MessageComposer> {
   List<String> _extractMentions(String content) =>
       extractMentions(content, widget.members.map((p) => p.displayName));
 
+  /// 有附件還在傳（或傳失敗）時不讓送出。送出去的訊息只會帶已就緒的 id，
+  /// 讓它送出等於默默把那個檔案丟掉——使用者會以為傳成功了。
+  bool get _attachmentsSettled =>
+      widget.attachments.every((a) => a.isReady);
+
+  bool get _canSend =>
+      widget.enabled &&
+      !_sending &&
+      _attachmentsSettled &&
+      (_hasText || widget.attachments.isNotEmpty);
+
   Future<void> _send() async {
-    final content = _controller.text.trim();
-    if (content.isEmpty || _sending || !widget.enabled) return;
+    if (!_canSend) return;
+    var content = _controller.text.trim();
+    if (content.isEmpty) {
+      // Hub 的 content 是 min_length=1，純附件訊息必須有字。用檔名當說明，
+      // 與 bridge 的 chatroom_send_file 同一套慣例。
+      final first = widget.attachments.first.filename;
+      content = widget.attachments.length == 1
+          ? '（檔案）$first'
+          : '（檔案）$first 等 ${widget.attachments.length} 個';
+    }
     setState(() => _sending = true);
     try {
       await widget.onSend(content, _extractMentions(content));
@@ -164,6 +206,17 @@ class _MessageComposerState extends State<MessageComposer> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final paste = widget.onPasteImage;
+    if (paste != null &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed)) {
+      // 剪貼簿是非同步讀的，這裡無法等結果再決定要不要放行。剪貼簿同時有
+      // 圖與文字時（截圖工具常見）兩者都會進來——寧可多一段文字，也不要
+      // 因為攔截而讓一般的文字貼上失效。
+      paste();
+      return KeyEventResult.ignored;
+    }
     final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (!isEnter) return KeyEventResult.ignored;
@@ -204,6 +257,11 @@ class _MessageComposerState extends State<MessageComposer> {
         border: Border(top: BorderSide(color: s.line)),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ComposerAttachmentBar(
+          attachments: widget.attachments,
+          onRemove: widget.onRemoveAttachment ?? (_) {},
+          onRetry: widget.onRetryAttachment ?? (_) {},
+        ),
         if (reply != null) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
@@ -244,6 +302,14 @@ class _MessageComposerState extends State<MessageComposer> {
           const SizedBox(height: 10),
         ],
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          if (widget.onPickFiles != null) ...[
+            IconButton(
+              tooltip: '附加檔案（也可以直接把檔案拖進來、或貼上截圖）',
+              onPressed: widget.onPickFiles,
+              icon: Icon(Icons.attach_file, size: 18, color: s.inkMute),
+            ),
+            const SizedBox(width: 4),
+          ],
           Expanded(
             child: CompositedTransformTarget(
               link: _link,
@@ -292,7 +358,7 @@ class _MessageComposerState extends State<MessageComposer> {
           const SizedBox(width: 12),
           UepButton(
             label: '送出 →',
-            onPressed: _sending ? null : _send,
+            onPressed: _canSend ? _send : null,
           ),
         ]),
       ]),

@@ -37,6 +37,28 @@ void main() {
           isNot(translateError(_dioError(403)).runtimeType));
     });
 
+    test('413 → AttachmentTooLargeException，且沿用 Hub 講的實際上限', () {
+      final e = translateError(_dioError(413, detail: {
+        'code': 'attachment_too_large',
+        'message': '檔案超過上限 25 MB',
+      }));
+      expect(e, isA<AttachmentTooLargeException>());
+      // 上限是伺服器設定的，App 不知道；訊息必須來自 Hub 而不是自己編
+      expect(e.message, contains('25 MB'));
+    });
+
+    test('413 不可掉進 ServerException——那是「伺服器壞了」，這是使用者可修正的',
+        () {
+      expect(translateError(_dioError(413)), isNot(isA<ServerException>()));
+    });
+
+    test('410 → AttachmentGoneException（metadata 在、實體不在）', () {
+      final e = translateError(_dioError(410,
+          detail: {'code': 'attachment_blob_missing', 'message': 'x'}));
+      expect(e, isA<AttachmentGoneException>());
+      expect(e.code, 'attachment_blob_missing');
+    });
+
     test('404 → NotFoundException', () {
       expect(translateError(_dioError(404)), isA<NotFoundException>());
     });

@@ -44,6 +44,21 @@ class ValidationException extends ApiException {
   const ValidationException(super.code, super.message);
 }
 
+/// 413 — 附件超過 Hub 設定的上限。這是**使用者可修正**的錯誤（換個小一點的
+/// 檔案），與 5xx 的「伺服器壞了」語意完全不同，不可讓它掉進 ServerException。
+class AttachmentTooLargeException extends ApiException {
+  /// [message] 用 Hub 回的那句——它知道實際上限是幾 MB，我們不知道。
+  const AttachmentTooLargeException([String? message])
+      : super('attachment_too_large', message ?? '檔案超過伺服器允許的大小上限');
+}
+
+/// 410 — metadata 還在、實體檔案已不在伺服器上（db 與 attachments/ 不同步）。
+/// 對使用者而言不是「找不到」，是「這個東西回不來了」，訊息要講清楚。
+class AttachmentGoneException extends ApiException {
+  const AttachmentGoneException([String code = 'attachment_blob_missing'])
+      : super(code, '附件內容已不在伺服器上（資料庫與附件目錄可能不同步）');
+}
+
 /// 連不上 Hub（逾時 / socket 錯誤）。
 class NetworkException extends ApiException {
   const NetworkException()

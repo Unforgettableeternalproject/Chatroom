@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_client.dart';
 import '../api/assignments_api.dart';
+import '../api/attachments_api.dart';
 import '../api/messages_api.dart';
 import '../api/questions_api.dart';
 import '../api/rooms_api.dart';
@@ -108,6 +109,8 @@ final messagesApiProvider =
     Provider((ref) => MessagesApi(ref.watch(dioProvider)));
 final assignmentsApiProvider =
     Provider((ref) => AssignmentsApi(ref.watch(dioProvider)));
+final attachmentsApiProvider =
+    Provider((ref) => AttachmentsApi(ref.watch(dioProvider)));
 final questionsApiProvider =
     Provider((ref) => QuestionsApi(ref.watch(dioProvider)));
 

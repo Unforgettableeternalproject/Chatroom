@@ -48,6 +48,15 @@ dependencies:
   flutter_markdown_plus: ^1.0.12
   # mention chip 的自訂 inline syntax 需要直接引用（原為 transitive）
   markdown: ^7.3.1
+  # 附件：選檔（Windows + Android）與桌面拖放。兩者都是純 Dart/平台通道，
+  # 不會把額外的原生工具鏈拉進 build——這在 Windows 上是實質風險。
+  file_picker: ^12.1.2
+  desktop_drop: ^0.5.0
+  # 剪貼簿貼上圖片。原本要用 super_clipboard，但它經 device_info_plus 綁
+  # win32 <6，與 flutter_secure_storage 11（token 存放處）的 win32 ^6.0.1
+  # 直接衝突；降級 secure_storage 換一個貼上功能不划算。pasteboard 是純
+  # 平台通道、無額外原生工具鏈，Windows/Android 都支援。
+  pasteboard: ^0.5.0
 
 dev_dependencies:
   flutter_test:

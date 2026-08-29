@@ -105,6 +105,7 @@ class MessagesApi {
     required String content,
     List<String> mentions = const [],
     String? replyTo,
+    List<String> attachmentIds = const [],
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -113,6 +114,8 @@ class MessagesApi {
             'content': content,
             'mentions': mentions,
             'reply_to': ?replyTo,
+            // 空陣列不送：舊版 Hub 沒有這個欄位，多送會被 pydantic 擋掉
+            if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
           },
           options: Options(headers: {'X-Participant-Id': participantId}),
         );

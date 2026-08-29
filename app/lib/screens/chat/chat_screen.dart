@@ -1,6 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -14,6 +20,7 @@ import '../../models/participant.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
+import '../../widgets/composer_attachments.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
@@ -43,6 +50,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   int? _highlightSeq;
   Timer? _highlightTimer;
   bool _loadingOlder = false;
+
+  /// 待送附件。先上傳、送出時才把 id 帶進訊息——見 ComposerAttachment 的說明。
+  final List<ComposerAttachment> _pending = [];
+
+  /// 拖放游標是否停在視窗上（畫提示用）。
+  bool _dragging = false;
+  int _localSeq = 0;
 
   bool get _atBottom =>
       !_scroll.hasClients || _scroll.position.pixels < 60;
@@ -79,6 +93,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void dispose() {
     _heartbeat?.cancel();
     _highlightTimer?.cancel();
+    // 離開畫面時把還在傳的取消掉，否則它會傳完後往一個已 dispose 的 State
+    // 寫結果；已傳完的就留在 Hub 上（無主附件，不影響任何人）
+    for (final a in _pending) {
+      if (a.status == ComposerAttachmentStatus.uploading) {
+        a.cancelToken?.cancel('離開聊天室');
+      }
+    }
     _scroll.dispose();
     super.dispose();
   }
@@ -166,11 +187,204 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  // ---------- 附件 ----------
+
+  /// Hub 實際的單檔上限。伺服器沒回時退回預設值——寫死一個數字會讓人在
+  /// 上限被調大之後仍然被 App 自己擋下來。
+  int get _maxAttachmentBytes =>
+      ref.read(roomDetailProvider(widget.roomId)).value?.limits
+          .maxAttachmentBytes ??
+      const ServerLimits().maxAttachmentBytes;
+
+  void _replacePending(String localId, ComposerAttachment next) {
+    final i = _pending.indexWhere((a) => a.localId == localId);
+    if (i < 0) return; // 使用者已經把它移掉了
+    setState(() => _pending[i] = next);
+  }
+
+  Future<void> _pickFiles() async {
+    // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null
+    final files = await FilePicker.pickFiles();
+    for (final f in files) {
+      final path = f.path;
+      if (path == null) continue;
+      await _enqueue(filename: f.name, size: await f.length(), path: path);
+    }
+  }
+
+  Future<void> _dropFiles(List<DropItem> items) async {
+    for (final item in items) {
+      final stat = await FileStat.stat(item.path);
+      // 拖進來的可能是資料夾。整包上傳不是這個功能該做的事，靜默跳過又會
+      // 讓人以為是壞了，所以講一句
+      if (stat.type == FileSystemEntityType.directory) {
+        _toast('${item.name} 是資料夾，未加入');
+        continue;
+      }
+      await _enqueue(
+          filename: item.name, size: stat.size, path: item.path);
+    }
+  }
+
+  /// 從剪貼簿取圖。回傳是否真的取到——沒有圖的話（一般文字貼上）什麼都不做。
+  Future<bool> _pasteImage() async {
+    final Uint8List? bytes;
+    try {
+      bytes = await Pasteboard.image;
+    } catch (_) {
+      // 平台不支援或剪貼簿被別的程式鎖住；貼上失敗不該讓輸入框壞掉
+      return false;
+    }
+    if (bytes == null || bytes.isEmpty) return false;
+    await _enqueue(
+      // 剪貼簿的圖沒有檔名，用房內遞增的本機序號區分同一次對話裡的多張
+      filename: '貼上的圖片-${++_localSeq}.png',
+      size: bytes.length,
+      bytes: bytes,
+      mime: 'image/png',
+    );
+    return true;
+  }
+
+  Future<void> _enqueue({
+    required String filename,
+    required int size,
+    String? path,
+    Uint8List? bytes,
+    String? mime,
+  }) async {
+    if (size > _maxAttachmentBytes) {
+      // 先擋在本機：明知會被拒絕還是把整個檔案推上去，只是白白佔用頻寬與時間
+      final mb = (_maxAttachmentBytes / (1024 * 1024)).toStringAsFixed(0);
+      _toast('$filename 超過上限 $mb MB，未加入');
+      return;
+    }
+    // Hub 的 attachment_ids 上限是 10，超過會整則訊息被擋下來
+    if (_pending.length >= 10) {
+      _toast('一則訊息最多 10 個附件');
+      return;
+    }
+    final item = ComposerAttachment(
+      localId: '${DateTime.now().microsecondsSinceEpoch}-${_pending.length}',
+      filename: filename,
+      mime: mime ?? _guessMime(filename),
+      size: size,
+      path: path,
+      bytes: bytes,
+      cancelToken: CancelToken(),
+    );
+    setState(() => _pending.add(item));
+    await _upload(item);
+  }
+
+  Future<void> _upload(ComposerAttachment item) async {
+    final api = ref.read(attachmentsApiProvider);
+    try {
+      final identity = await ref.read(identityProvider(widget.roomId).future);
+      void onProgress(int sent, int total) {
+        if (!mounted || total <= 0) return;
+        _replacePending(item.localId, item.copyWith(progress: sent / total));
+      }
+
+      final uploaded = item.bytes != null
+          ? await api.uploadBytes(
+              widget.roomId,
+              participantId: identity.participantId,
+              bytes: item.bytes!,
+              filename: item.filename,
+              mime: item.mime,
+              onProgress: onProgress,
+              cancelToken: item.cancelToken,
+            )
+          : await api.uploadPath(
+              widget.roomId,
+              participantId: identity.participantId,
+              path: item.path!,
+              filename: item.filename,
+              mime: item.mime,
+              onProgress: onProgress,
+              cancelToken: item.cancelToken,
+            );
+      if (!mounted) return;
+      _replacePending(
+        item.localId,
+        item.copyWith(
+          status: ComposerAttachmentStatus.ready,
+          progress: 1,
+          remoteId: uploaded.id,
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      _replacePending(
+        item.localId,
+        item.copyWith(
+            status: ComposerAttachmentStatus.failed, error: e.message),
+      );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      // 取消是使用者自己按的，不是錯誤——那個項目已經被移掉了
+      if (CancelToken.isCancel(e)) return;
+      _replacePending(
+        item.localId,
+        item.copyWith(
+            status: ComposerAttachmentStatus.failed, error: '上傳失敗'),
+      );
+    }
+  }
+
+  void _removePending(ComposerAttachment a) {
+    if (a.status == ComposerAttachmentStatus.uploading) {
+      a.cancelToken?.cancel('使用者取消');
+    }
+    setState(() => _pending.removeWhere((x) => x.localId == a.localId));
+  }
+
+  Future<void> _retryPending(ComposerAttachment a) async {
+    final fresh = a.copyWith(
+      status: ComposerAttachmentStatus.uploading,
+      progress: 0,
+      cancelToken: CancelToken(),
+    );
+    _replacePending(a.localId, fresh);
+    await _upload(fresh);
+  }
+
+  static String _guessMime(String filename) {
+    final ext = filename.contains('.')
+        ? filename.split('.').last.toLowerCase()
+        : '';
+    return switch (ext) {
+      'png' => 'image/png',
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'gif' => 'image/gif',
+      'webp' => 'image/webp',
+      'bmp' => 'image/bmp',
+      'svg' => 'image/svg+xml',
+      'pdf' => 'application/pdf',
+      'txt' || 'log' || 'md' => 'text/plain',
+      'json' => 'application/json',
+      'zip' => 'application/zip',
+      _ => 'application/octet-stream',
+    };
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
   // ---------- 動作 ----------
 
   Future<void> _send(String content, List<String> mentions) async {
     final identity =
         await ref.read(identityProvider(widget.roomId).future);
+    // 只帶已上傳完成的；輸入列不讓有未完成項目時送出，這裡是第二道防線
+    final attachmentIds = [
+      for (final a in _pending)
+        if (a.isReady && a.remoteId != null) a.remoteId!,
+    ];
     try {
       await ref.read(messagesApiProvider).post(
             widget.roomId,
@@ -178,8 +392,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             content: content,
             mentions: mentions,
             replyTo: _replyTarget?.id,
+            attachmentIds: attachmentIds,
           );
-      if (mounted) setState(() => _replyTarget = null);
+      if (mounted) {
+        setState(() {
+          _replyTarget = null;
+          _pending.clear();
+        });
+      }
     } on ParticipantInvalidException {
       // 身分失效：重新 join 後重試一次（僅一次，避免無限迴圈）
       ref.invalidate(identityProvider(widget.roomId));
@@ -190,8 +410,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             content: content,
             mentions: mentions,
             replyTo: _replyTarget?.id,
+            attachmentIds: attachmentIds,
           );
-      if (mounted) setState(() => _replyTarget = null);
+      if (mounted) {
+        setState(() {
+          _replyTarget = null;
+          _pending.clear();
+        });
+      }
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -364,7 +590,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final wide = MediaQuery.sizeOf(context).width >= 1200;
 
-    final chatColumn = Column(children: [
+    final chatColumn = _withDropTarget(s, Column(children: [
       _RoomHeader(
         roomId: roomId,
         roomName: room?.name ?? '…',
@@ -486,8 +712,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         replyTarget: _replyTarget,
         onCancelReply: () => setState(() => _replyTarget = null),
         onSend: _send,
+        attachments: _pending,
+        // 封存房唯讀，附件入口一併收起
+        onPickFiles: archived ? null : _pickFiles,
+        onPasteImage: archived ? null : _pasteImage,
+        onRemoveAttachment: _removePending,
+        onRetryAttachment: _retryPending,
       ),
-    ]);
+    ]));
 
     if (!wide) {
       return Scaffold(
@@ -525,6 +757,51 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false),
         ),
+      ]),
+    );
+  }
+
+  /// 桌面才掛拖放。desktop_drop 只實作 windows/macos/linux/web，在 Android
+  /// 上掛了會在通道呼叫時炸 MissingPluginException——那是「有支援才掛」而不是
+  /// 「掛了再處理錯誤」的情境。
+  Widget _withDropTarget(UepSurface s, Widget child) {
+    final isDesktop = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.linux);
+    if (!isDesktop) return child;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      onDragDone: (detail) {
+        setState(() => _dragging = false);
+        _dropFiles(detail.files);
+      },
+      child: Stack(children: [
+        child,
+        if (_dragging)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Container(
+                color: UepColors.gold.withValues(alpha: .08),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: s.bgCard,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: UepColors.gold),
+                    ),
+                    child: MonoLabel('放開以附加檔案',
+                        size: 10,
+                        color: UepColors.gold,
+                        letterSpacing: 2.0),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ]),
     );
   }
