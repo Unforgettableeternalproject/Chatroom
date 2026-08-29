@@ -107,13 +107,31 @@ def configure(
         _state = bridge_state
 
 
+def _my_session_key() -> str:
+    """本 agent 對外的身分。
+
+    **不是 ``SESSION_KEY``。** 那是進程啟動當下算出來的，而身分可以在那之後
+    被 Hub 改寫——用 ``assignment_id`` 加入時，Hub 會以指派綁定的 key
+    （例如 Codex thread id）為準並回傳 canonical session_key，bridge 記在
+    state 裡。從那一刻起，「別人要指派給我時該用哪把 key」的答案就是它。
+
+    報錯 key 的後果是靜默的：對方照著指派，Hub 收下，而沒有任何 watcher
+    在輪詢那把 key——指派永遠不會被領走，兩邊都不會收到錯誤
+    （2026-08-29 實測）。
+    """
+    return state().session_key("") or SESSION_KEY
+
+
 def _presence_params() -> dict[str, str]:
     """帶 session_key 的查詢參數，順便向 Hub 自報 kind 與代稱。
 
     Hub 據此維護 session 名錄（指派 UI 的掃描來源）；label 用
     CHATROOM_DEFAULT_NAME，讓使用者在清單上認得出這個 session 是誰。
+
+    用 canonical key 自報：名錄是指派 UI 的來源，登記錯就等於在清單上
+    掛一把沒人在聽的 key，而它看起來跟能用的完全一樣。
     """
-    params = {"session_key": SESSION_KEY, "kind": AGENT_KIND}
+    params = {"session_key": _my_session_key(), "kind": AGENT_KIND}
     if DEFAULT_NAME:
         params["label"] = DEFAULT_NAME
     return params
@@ -216,7 +234,7 @@ def chatroom_list_rooms() -> dict:
             room["you_joined_as"] = name
     # key 是動態的（session id 或每進程生成），要讓使用者能指派就得先讓
     # agent 說得出自己是哪一把 key
-    data["your_session_key"] = SESSION_KEY
+    data["your_session_key"] = _my_session_key()
     return data
 
 
@@ -238,7 +256,7 @@ def chatroom_join(
     同一個 session 重複加入同一房間是冪等的（回傳 ``rejoined: true``）。
     身分會寫入本機狀態檔，bridge 重啟後不需要重新加入。
     """
-    canonical_key = state().session_key(room_id) or SESSION_KEY
+    canonical_key = state().session_key(room_id) or _my_session_key()
     data = hub().request(
         "POST",
         f"/api/rooms/{room_id}/join",
@@ -429,7 +447,7 @@ def chatroom_assignments() -> dict:
     data = hub().request(
         "GET", "/api/assignments", params=_presence_params()
     )
-    data["your_session_key"] = SESSION_KEY
+    data["your_session_key"] = _my_session_key()
     return data
 
 
