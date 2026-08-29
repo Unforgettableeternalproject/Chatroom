@@ -141,21 +141,31 @@ def find_cloudflared(auto_download: bool) -> str:
     return str(local)
 
 
-def isolated_config() -> Path:
-    """產生一份專用設定檔，擋掉 cloudflared 對使用者既有設定的自動載入。
+def isolation_args() -> list[str]:
+    """把 quick tunnel 與這台機器上既有的 cloudflared 設定完全隔開。
 
-    cloudflared 沒給 --config 時會自動讀 ``~/.cloudflared/config.yml``。那台機器
-    若為別的用途建過 named tunnel（本專案的 PM 架構就是），該檔的
-    ``credentials-file`` / ``tunnel`` 會被一併帶進來——**它照樣跟 Cloudflare 要到
-    一個 trycloudflare 網址並印出來，實際連線卻掛在別人的隧道憑證上**。
-    症狀是網址看似正常、公網請求穩定 404，origin 一個請求也收不到，
-    而全程沒有任何錯誤訊息。2026-08-29 實測踩到。
+    這台機器若為別的用途用過 cloudflared（本專案的 PM 架構就建過 named
+    tunnel），quick tunnel 會被那些殘留設定污染。**兩者都會讓 cloudflared
+    照樣跟 Cloudflare 要到 trycloudflare 網址並印出來，實際隧道卻沒建立**：
+
+    - ``~/.cloudflared/config.yml``：沒給 ``--config`` 時自動載入，別人的
+      ``credentials-file`` / ``tunnel`` 被一併帶進來
+    - ``~/.cloudflared/cert.pem``：**登入過帳號就會留下**，而 ``--config``
+      擋不掉它——它由 ``--origincert`` 決定，預設就指到家目錄那份
+
+    症狀是網址看起來完全正常，公網請求卻 404 或連 DNS 都解不出來，origin
+    一個請求也收不到，全程零錯誤訊息。2026-08-29 實測：只給 ``--config``
+    仍然不通，補上 ``--origincert`` 指向不存在的檔案後立刻 200。
+
+    quick tunnel 本來就不需要帳號憑證，指向不存在的路徑是安全的。
     """
     BIN_DIR.mkdir(parents=True, exist_ok=True)
-    path = BIN_DIR / "quick-tunnel.yml"
+    config = BIN_DIR / "quick-tunnel.yml"
     # 內容刻意只有無害的一行——重點是「有指定 --config」，讓自動載入不生效
-    path.write_text("no-autoupdate: true\n", encoding="utf-8")
-    return path
+    config.write_text("no-autoupdate: true\n", encoding="utf-8")
+    # 這個檔刻意不建立：存在與否不影響 quick tunnel，只要不是帳號那份就好
+    no_account = BIN_DIR / "no-account.pem"
+    return ["--config", str(config), "--origincert", str(no_account)]
 
 
 def probe(url: str, timeout: float = 15.0) -> tuple[int, bytes]:
@@ -199,10 +209,10 @@ def verify(url: str, port: str) -> None:
 ❌ 隧道沒有接到本機 Hub：直連本機回 HTTP {local_code}，經隧道回 HTTP {remote_code}
    （回應內容{'相同但狀態碼不同' if remote_body == local_body else '不一致'}）。
 
-  網址印得出來**不代表**隧道可用。最常見的成因是 cloudflared 讀到了這台機器
-  既有的 ~/.cloudflared/config.yml（為別的用途建過 named tunnel），
-  於是連線掛在別人的隧道憑證上。本腳本已用 --config 隔離，若仍出現，
-  請檢查是否有其他 cloudflared 進程佔用，或改用 named tunnel。
+  網址印得出來**不代表**隧道可用。最常見的成因是 cloudflared 沾到了這台機器
+  既有的設定（~/.cloudflared 的 config.yml 或 cert.pem），連線因此沒有真的
+  建立。本腳本已用 --config + --origincert 隔離，若仍出現，請確認沒有其他
+  cloudflared 進程佔用，或改用 named tunnel。
 """,
         file=sys.stderr, flush=True,
     )
@@ -277,7 +287,7 @@ def main() -> int:
     # cloudflared 把包含網址的橫幅寫在 stderr，stdout 幾乎沒東西
     proc = subprocess.Popen(
         [
-            exe, "--config", str(isolated_config()),
+            exe, *isolation_args(),
             "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate",
         ],
         stdout=subprocess.DEVNULL,
