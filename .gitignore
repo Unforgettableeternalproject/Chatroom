@@ -13,6 +13,10 @@ dist/
 *.db-wal
 *.db-shm
 
+# 隧道工具與臨時網址（本機產物）
+bin/
+server/.tunnel-url
+
 # Flutter / Dart
 app/build/
 app/.dart_tool/

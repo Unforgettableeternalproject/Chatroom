@@ -3,7 +3,7 @@
     python host-kit/build.py
 
 內容：install.py + README.md + server/（原始碼，不含 .env / db / 快取）
-　　　+ scripts/（run-hub.cmd、hub-service.ps1）。
+　　　+ scripts/（run-hub.cmd、hub-service.ps1、run-tunnel.cmd、tunnel.py）。
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def main() -> None:
         ),
     )
     (stage / "scripts").mkdir()
-    for name in ("run-hub.cmd", "hub-service.ps1"):
+    for name in ("run-hub.cmd", "hub-service.ps1", "run-tunnel.cmd", "tunnel.py"):
         shutil.copy2(REPO / "scripts" / name, stage / "scripts" / name)
 
     zip_path = DIST / "chatroom-hub-kit.zip"
