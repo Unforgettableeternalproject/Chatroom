@@ -216,6 +216,56 @@ void main() {
     expect(identical(feed, again), isTrue, reason: '保留期內不應重建 store');
   });
 
+  test('保留期內的暖回訪沿用原身分，保留期過後不得撿到舊身分', () async {
+    // 身分是 feed 訂閱狀態的一部分：保留期內沿用（否則未帶 id 的回訪會
+    // 退化成匿名訂閱，定向問題收不到），保留期一過就必須整組作廢——
+    // 否則下一輪全新生命週期會頂著上一輪的舊 pid，而 server 認得它，
+    // 不會報錯，只是把問題推給一個死掉的身分。
+    await service.dispose();
+    service = RealtimeService(
+      messagesApi: api,
+      wsUriBuilder: () => Uri.parse('ws://test/ws'),
+      connector: (uri) async {
+        final c = _FakeConnection();
+        connections.add(c);
+        return c;
+      },
+      policy: _ZeroPolicy(),
+      heartbeatInterval: const Duration(minutes: 5),
+      feedRetention: const Duration(milliseconds: 40),
+    );
+    connections.clear();
+
+    List<Map<String, dynamic>> subscribesFor(String roomId) => connections
+        .expand((c) => c.sent)
+        .map((s) => jsonDecode(s) as Map<String, dynamic>)
+        .where((m) => m['type'] == 'subscribe' && m['room_id'] == roomId)
+        .toList();
+
+    service.subscribe('r1', participantId: 'p1');
+    service.start();
+    await _waitFor(() => service.status is Connected);
+    await _waitFor(() => subscribesFor('r1').isNotEmpty);
+    expect(subscribesFor('r1').last['participant_id'], 'p1');
+
+    // 保留期內的暖回訪：沒帶 id 也該沿用 p1
+    service.unsubscribe('r1');
+    final before = subscribesFor('r1').length;
+    service.subscribe('r1');
+    await _waitFor(() => subscribesFor('r1').length > before);
+    expect(subscribesFor('r1').last['participant_id'], 'p1',
+        reason: '保留期內身分屬於同一份訂閱狀態');
+
+    // 保留期過後：全新生命週期，不得撿到舊身分
+    service.unsubscribe('r1');
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+    final beforeCold = subscribesFor('r1').length;
+    service.subscribe('r1');
+    await _waitFor(() => subscribesFor('r1').length > beforeCold);
+    expect(subscribesFor('r1').last['participant_id'], isNull,
+        reason: 'feed 已退役，身分必須跟著作廢');
+  });
+
   test('退避期間 retryNow 緊接 stop 不可 double-complete（Codex blocker）', () async {
     await service.dispose();
     // 連不上 + 長退避：讓服務停在 Reconnecting 等待 skip completer

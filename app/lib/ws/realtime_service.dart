@@ -186,6 +186,16 @@ class RealtimeService {
     _retireTimers[roomId] = Timer(feedRetention, () {
       _retireTimers.remove(roomId);
       _feeds.remove(roomId)?.dispose();
+      // feed 的生命週期到此結束，這個房的訂閱狀態整組作廢——身分也是。
+      // 留著的話，下一輪全新生命週期的訂閱若沒帶 id 就會撿到上一輪的舊
+      // pid。server 認得那個 pid（participant 記錄還在，只是 status 變了），
+      // 所以不會報錯，只會把定向問題推給一個死掉的身分。
+      //
+      // ⚠️ 清理刻意**不放在 refCount 歸零的當下**：保留期的用意就是讓
+      // 30 秒內的暖回訪沿用同一份訂閱狀態，提早砍會讓未帶 id 的回訪變成
+      // 匿名訂閱，平白開一個定向問題收不到的短暫缺口。
+      _participantIds.remove(roomId);
+      _sentParticipantIds.remove(roomId);
     });
   }
 
@@ -399,6 +409,8 @@ class RealtimeService {
       f.dispose();
     }
     _feeds.clear();
+    _participantIds.clear();
+    _sentParticipantIds.clear();
     await _statusCtrl.close();
   }
 }
