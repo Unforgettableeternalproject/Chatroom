@@ -161,6 +161,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         request.state.is_root_token = False
         request.state.token_label = ""
+        # 這次請求用的是哪張發出去的 token（主 token 與開放模式留空字串）。
+        # 踢出要連著撤銷它——只封 session_key 擋不住任何人，那把鑰匙是被踢者
+        # 自己在本機產的，換一把就是全新的人
+        request.state.access_token = ""
         if not cfg.api_token:
             # 未設 token＝完全開放（本機開發）。這時人人都是主持人，否則
             # 連發邀請都做不到
@@ -172,6 +176,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             return
         row = None
         if token:
+            request.state.access_token = token
             row = await (
                 await app.state.db.execute(
                     "SELECT * FROM access_token WHERE token=? AND revoked_at IS NULL",
@@ -662,9 +667,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         join_ip = request.client.host if request.client else None
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip) VALUES (?,?,?,?,?,?,?,?,?)",
+            " joined_at, last_seen_at, join_ip, join_token) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (pid, room_id, body.kind, session_key, name, body.role, now, now,
-             join_ip),
+             join_ip, getattr(request.state, "access_token", "")),
         )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
@@ -754,12 +759,38 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, target["session_key"]),
         )
         await db.commit()
+        # 只把 session_key 標成 kicked 擋不住任何人：那把鑰匙是被踢者自己在
+        # 本機產的（`human-<uuid4>`，設定畫面還有「重新產生」按鈕），換一把
+        # 就能大搖大擺走回來。**封鎖的對象必須是被封鎖者無法自行更換的識別**，
+        # 目前唯一符合的是主持人發出去的那張 access token。
+        #
+        # 一張 token 給多人共用時會一起斷——那是「一張發給一個人」的語意本來
+        # 就有的後果，不是這裡的例外，所以回應要說清楚撤掉的是哪一張。
+        revoked_token = ""
+        if target["join_token"]:
+            cur = await db.execute(
+                "UPDATE access_token SET revoked_at=? WHERE token=?"
+                " AND revoked_at IS NULL RETURNING label",
+                (now, target["join_token"]),
+            )
+            hit = await cur.fetchone()
+            if hit is not None:
+                revoked_token = hit["label"] or target["join_token"][:8]
+        await db.commit()
         await _post_message(
             room_id, None,
             f"{target['display_name']} 已被管理員移出聊天室", kind="system",
             system_event="kick",
         )
-        return {"ok": True}
+        return {
+            "ok": True,
+            # 撤掉了哪張邀請（空＝沒撤到）
+            "revoked_token_label": revoked_token,
+            # 對方是拿主 token（或在無 token 的開放模式下）進來的：主 token
+            # 不可撤銷——撤了所有人一起斷——所以他換個 session_key 就能再進來。
+            # 這件事必須講出來，不能讓管理員以為踢出等於切斷存取
+            "access_still_open": not target["join_token"],
+        }
 
     @app.post("/api/rooms/{room_id}/heartbeat", dependencies=[Depends(require_auth)])
     async def heartbeat(room_id: str, x_participant_id: str | None = Header(default=None)):

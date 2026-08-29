@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS participant (
     joined_at    TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     left_at      TEXT,
-    join_ip      TEXT                              -- 加入時的來源 IP（重名消歧用）
+    join_ip      TEXT,                             -- 加入時的來源 IP（重名消歧用）
+    -- 加入時用的那張 access_token（空＝主 token 或開放模式）。踢出要連著撤銷
+    -- 它：session_key 是被踢者自己產的，只封那個等於沒封
+    join_token   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -159,6 +162,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
     # 來源位址是唯一分得開的線索
     ("session", "last_ip", "last_ip TEXT"),
+    # 踢出要連著撤銷對方的 access token，得先知道他是拿哪一張進來的
+    ("participant", "join_token", "join_token TEXT NOT NULL DEFAULT ''"),
 ]
 
 
