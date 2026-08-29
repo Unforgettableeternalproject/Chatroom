@@ -22,7 +22,14 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
   final settings = ref.read(settingsRepoProvider);
   final dispatcher = CodexDispatcher(
     (roomId) async {
-      final detail = await roomsApi.detail(roomId);
+      // 房間是讀取邊界（08-29 收緊）：不帶身分的房間詳情一律被擋，而這裡
+      // 拿不到成員名冊的後果是**靜默的**——codexNames 變成空集合，
+      // mention 轉送於是一則都投不出去，加入通知卻照投（它不比對名字）。
+      final detail = await roomsApi.detail(
+        roomId,
+        sessionKey: ref.read(appConfigProvider).deviceKey,
+        participantId: settings.participantId(roomId),
+      );
       final kinds = <String, String>{};
       final codexNames = <String>{};
       final allNames = <String>{};
@@ -113,13 +120,18 @@ final notificationBootstrapProvider = Provider<void>((ref) {
       );
   unawaited(TaskbarBadge.instance.apply(currentUnhandled()));
 
-  final notifSub = center.notifications.listen((n) async {
-    LocalNotifier.instance.show(n);
-    // 被 @ 了就記一筆——toast 會過去，這一筆要留到人真的去看那個房間。
-    // 只計 mention 不計一般訊息：徽章要對應「等著我做決定的事」，
-    // 每一則訊息都算的話它永遠不會歸零，然後就跟沒有一樣
-    if (!n.mentioned) return;
-    await settings.addPendingMention(n.roomId);
+  final notifSub =
+      center.notifications.listen((n) => LocalNotifier.instance.show(n));
+
+  // 被 @ 了就記一筆——toast 會過去，這一筆要留到人真的去看那個房間。
+  // 只計 mention 不計一般訊息：徽章要對應「等著我做決定的事」，
+  // 每一則訊息都算的話它永遠不會歸零，然後就跟沒有一樣。
+  //
+  // 來源是 mentionsOfMe 而不是 notifications：後者被「正在看這個房 + 前景」
+  // 抑制，而那正是兩個人在同一個房裡對話互相 @ 的當下——徽章於是一次都不會
+  // 亮。抑制的對象是打擾，不是待辦。真的在看的話 ChatScreen 會清掉這一筆。
+  final mentionSub = center.mentionsOfMe.listen((roomId) async {
+    await settings.addPendingMention(roomId);
     await TaskbarBadge.instance.apply(currentUnhandled());
   });
 
@@ -147,6 +159,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
 
   ref.onDispose(() {
     notifSub.cancel();
+    mentionSub.cancel();
     codexSub.cancel();
     codexAssignmentPoll.cancel();
     activitySub.cancel();

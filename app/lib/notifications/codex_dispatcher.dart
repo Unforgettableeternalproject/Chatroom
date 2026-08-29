@@ -16,7 +16,15 @@ class RoomMembers {
     this.kinds = const {},
     this.codexNames = const {},
     this.allNames = const {},
+    this.resolved = true,
   });
+
+  /// 這份快照是不是真的查到了。
+  ///
+  /// 取不到成員時用空集合冒充「房裡沒有 Codex」，會讓 mention 轉送一則都
+  /// 投不出去而畫面上什麼都不會說——加入通知不比對名字所以照投，於是症狀
+  /// 長成「只有加入通知會到」。**查不到與查到零個必須分得開。**
+  final bool resolved;
 
   /// participant_id（含 alias id）→ kind。
   final Map<String, String> kinds;
@@ -86,13 +94,25 @@ class CodexDispatcher {
     for (final m in batch.messages) {
       (m.isMemberJoined ? joins : chats).add(m);
     }
+    final roomLabel =
+        batch.roomName.isEmpty ? batch.roomId : batch.roomName;
     final members = await _members(batch.roomId, batch.messages);
     if (threadOverride.isNotEmpty) {
+      // 成員名冊查不到時退回「有 @ 就投」：這個模式下轉送目標是人工指定的
+      // 單一 thread，多投一則的代價遠低於整條 mention 通道無聲斷掉。
+      if (!members.resolved) {
+        _log.warning(
+          '房間成員名冊查不到（$roomLabel），改以「訊息有 @ 任何人」放行 '
+          'mention 轉送。防迴圈（不轉送 Codex 自己的發言）此時失效。',
+        );
+      }
       final msgs = chats
           .where(
             (m) =>
                 members.kinds[m.senderId] != 'codex' &&
-                m.mentions.any(members.codexNames.contains),
+                (members.resolved
+                    ? m.mentions.any(members.codexNames.contains)
+                    : m.mentions.isNotEmpty),
           )
           .toList();
       if (msgs.isNotEmpty) {
@@ -117,6 +137,17 @@ class CodexDispatcher {
           if (!msgs.any((known) => known.id == m.id)) msgs.add(m);
         }
       }
+    }
+    // 有人被 @ 了卻一個 thread 都投不到，是這條通道最常見的失效形狀，而它
+    // 本身完全無聲——加入通知走廣播照樣會到，看起來像「轉送是好的」。
+    // 把兩邊的名字都印出來：對不上的多半是房內顯示名與 @ 的字串有出入。
+    final mentionedAnyone = chats.any((m) => m.mentions.isNotEmpty);
+    if (mentionedAnyone && byThread.isEmpty) {
+      final tagged = {for (final m in chats) ...m.mentions};
+      _log.warning(
+        'mention 轉送未投遞（$roomLabel）：訊息 @ 了 ${tagged.join('、')}，'
+        '但本機 Codex 在這個房的名字是 ${routes.keys.isEmpty ? '（查不到任何一個）' : routes.keys.join('、')}',
+      );
     }
     for (final entry in byThread.entries) {
       await _dispatchMessages(entry.key, batch, entry.value);
@@ -247,7 +278,7 @@ class CodexDispatcher {
         _memberCache[roomId] = cached;
       } catch (e) {
         _log.warning('取得房間成員失敗（$roomId）：$e');
-        cached ??= const RoomMembers();
+        cached ??= const RoomMembers(resolved: false);
       }
     }
     return cached;

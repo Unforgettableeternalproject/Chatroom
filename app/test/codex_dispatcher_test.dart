@@ -331,4 +331,24 @@ void main() {
     expect(target(runs.single), threadB);
     expect(payload(runs.single)['event'], 'member_joined');
   });
+
+  test('threadOverride 下成員名冊查不到時，mention 仍投得出去', () async {
+    // 這個組合正是實測到的症狀：加入通知會到、mention 一則都不到。
+    // 空成員名冊讓 codexNames 變成空集合，而 mention 過濾拿它當比對基準，
+    // 於是「查不到」被當成「房裡沒有 Codex」——安靜地整條通道斷掉。
+    final d = make(members: const RoomMembers(resolved: false))
+      ..threadOverride = threadB;
+    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
+    expect(runs, hasLength(1));
+    expect(target(runs.single), threadB);
+    expect(payload(runs.single)['event'], 'message');
+  });
+
+  test('成員名冊查得到但房裡沒有 Codex 時，override 不投遞', () async {
+    // 與上一條的分界：查到了、確實沒有 Codex，那就該安靜。
+    final d = make(members: const RoomMembers(kinds: {'p-claude': 'claude'}))
+      ..threadOverride = threadB;
+    await d.handle(batch([msg(1, content: '@Novia 在嗎', mentions: ['Novia'])]));
+    expect(runs, isEmpty);
+  });
 }
