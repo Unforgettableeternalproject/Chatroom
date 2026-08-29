@@ -19,6 +19,24 @@ sys.modules["tunnel_script"] = tunnel
 _spec.loader.exec_module(tunnel)
 
 
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """把 CHATROOM_* 從真實環境清掉，讓每個案例從已知狀態出發。
+
+    `setting()` 刻意讓真實環境變數贏過傳進來的 dict——那是正確的產品語意
+    （Hub 用環境變數啟動時，隧道必須跟著真實值走）。代價是這些測試會受
+    「這個 pytest 進程的環境長什麼樣」影響，而那不是它們想驗的東西。
+
+    實際踩到的情況：任何測試只要 import 過 chatroom_mcp.server，該模組在
+    **import 當下**就會呼叫 load_env_file() 把 server/.env 灌進 os.environ，
+    於是 CHATROOM_HOST 變成開發機的實際值，這裡的參數化案例全數失真——
+    而單獨跑這個檔案又完全正常，只有整輪跑才會炸（2026-08-29）。
+    """
+    for key in ("CHATROOM_HOST", "CHATROOM_PORT", "CHATROOM_TOKEN",
+                "CHATROOM_URL"):
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.mark.parametrize("host,expected", [
     # 綁所有介面：loopback 一定通，用它最安全
     ("0.0.0.0", "127.0.0.1"),
