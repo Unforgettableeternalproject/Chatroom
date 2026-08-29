@@ -340,6 +340,36 @@ void main() {
     expect(sent, hasLength(1));
   });
 
+  test('被 @ 的事實不受通知抑制——正在看那個房也要記待辦', () async {
+    // 兩個人在同一個房裡對話互相 @，正是「你正開著這個房」的當下。徽章若
+    // 綁在 notifications 上，這種最常見的情境一次都不會亮。
+    final mentions = <String>[];
+    center.mentionsOfMe.listen(mentions.add);
+    center.follow('r1',
+        roomName: 'A', myParticipantId: 'me', myDisplayName: 'Bernie');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+
+    center.activeRoomId = 'r1';
+    center.foreground = true;
+    feeds['r1']!.upsertAll([msg(2, mentions: ['Bernie'])]);
+    await pump();
+    expect(sent, isEmpty, reason: '正在看這個房，不必再彈一次 OS 通知');
+    expect(mentions, ['r1'], reason: '但這一筆待辦要記下來');
+
+    // 通知模式 off 關的是打擾，不是待辦
+    center.mode = NotifyModePref.off;
+    feeds['r1']!.upsertAll([msg(3, mentions: ['Bernie'])]);
+    await pump();
+    expect(sent, isEmpty);
+    expect(mentions, ['r1', 'r1']);
+
+    // 沒 @ 到我的訊息不算
+    feeds['r1']!.upsertAll([msg(4, mentions: ['piyan'])]);
+    await pump();
+    expect(mentions, hasLength(2));
+  });
+
   test('retainOnly 停止跟隨已移出的房間', () async {
     final unsubscribed = <String>[];
     final c2 = NotificationCenter(subscribe, unsubscribed.add, syncIdentity);

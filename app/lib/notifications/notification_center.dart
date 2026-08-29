@@ -78,6 +78,7 @@ class NotificationCenter {
   final _notifications = StreamController<RoomNotification>.broadcast();
   final _activity = StreamController<String>.broadcast();
   final _fresh = StreamController<RoomFreshBatch>.broadcast();
+  final _mentionsOfMe = StreamController<String>.broadcast();
 
   /// 該送去 OS 的通知（已套用模式與抑制規則）。
   Stream<RoomNotification> get notifications => _notifications.stream;
@@ -87,6 +88,19 @@ class NotificationCenter {
 
   /// 未過濾的新訊息批次（不受通知模式與正在看的房影響）。
   Stream<RoomFreshBatch> get fresh => _fresh.stream;
+
+  /// 有人在這個房 @ 了我——**待辦事實，不是打擾**。
+  ///
+  /// 刻意不套 [notifications] 那三道抑制（通知模式 off、正在看這個房、
+  /// app 在前景）：那些回答的是「現在該不該跳出來打斷你」，而工作列徽章
+  /// 回答的是「還有幾件事等你處理」。共用同一組條件的後果是——兩個人在
+  /// 同一個房裡對話時互相 @，徽章一次都不會亮，因為那正是「你正開著這個
+  /// 房」的時候；而桌面平台的失焦事件並不可靠（[foreground] 可能一直是
+  /// true），所以連「切到別的視窗」都救不回來。
+  ///
+  /// 真的在看的話，ChatScreen 會把這筆清掉——「看到了」由看的那一方認定，
+  /// 不由發送的這一端預先替它決定。
+  Stream<String> get mentionsOfMe => _mentionsOfMe.stream;
 
   Set<String> get followedRoomIds => _rooms.keys.toSet();
 
@@ -226,10 +240,13 @@ class NotificationCenter {
 
     if (!_activity.isClosed) _activity.add(roomId);
 
-    if (mode == NotifyModePref.off) return;
+    // 被 @ 的事實先發出去，任何抑制之前——見 mentionsOfMe 的說明
     final myName = room.myDisplayName;
     final mentioned = myName != null &&
         fresh.any((m) => m.mentions.contains(myName));
+    if (mentioned && !_mentionsOfMe.isClosed) _mentionsOfMe.add(roomId);
+
+    if (mode == NotifyModePref.off) return;
     if (mode == NotifyModePref.mentions && !mentioned) return;
     // 正在看這個房且 app 在前景：畫面本身就是通知
     if (foreground && roomId == activeRoomId) return;
@@ -264,6 +281,7 @@ class NotificationCenter {
     _notifications.close();
     _activity.close();
     _fresh.close();
+    _mentionsOfMe.close();
   }
 }
 
