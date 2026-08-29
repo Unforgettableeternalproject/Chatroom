@@ -178,6 +178,23 @@ def _room_request(
     try:
         return hub().request(method, path, participant_id=participant_id, **kwargs)
     except HubError as exc:
+        code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+        if code == "participant_header_required" and participant_id:
+            # 我們手上明明有這個房的身分，Hub 卻說「沒帶身分」——那不是身分
+            # 失效，是**這條路徑沒有把標頭帶上**，多半是 client 比 Hub 舊。
+            #
+            # 照原本的處置會構成一個閉環：清掉身分 → 說「請先 join」→ agent
+            # join 成功（它本來就是成員）→ 再試 → 同一個錯誤。實測跑完整圈，
+            # 而且過程中沒有任何線索指向真正的原因（2026-08-29 外部測試端）。
+            #
+            # 所以這裡**不清身分、不設 need_rejoin**，並且直接說出真正該做的事。
+            raise HubError(
+                "這個 client 版本沒有在這條路徑帶上房間身分，而 Hub 現在要求它"
+                "（房間已收成讀取邊界）。重新加入房間不會解決——你本來就是"
+                f"成員。請更新 chatroom-mcp-kit 到與 Hub 相同的版本。"
+                f"（Hub 的版本可用 GET {hub().base_url}/api/health 查。）",
+                status=exc.status, detail=exc.detail,
+            ) from exc
         if exc.identity_invalid and participant_id:
             state().clear_identity(room_id)
         raise
