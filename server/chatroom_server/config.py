@@ -54,5 +54,19 @@ class Config:
     log_level: str = field(
         default_factory=lambda: os.environ.get("CHATROOM_LOG_LEVEL", "INFO")
     )
+    # 結構化日誌的落檔目錄；空字串＝放在資料庫檔旁邊的 logs/
+    log_dir: str = field(
+        default_factory=lambda: os.environ.get("CHATROOM_LOG_DIR", "")
+    )
+    # 單一日誌檔上限（位元組）與保留份數。預設 10 MB × 5＝最多佔 50 MB：
+    # 長跑的 Hub 不該把磁碟寫滿，但也要留得住足夠回溯一次事故的量
+    log_max_bytes: int = field(
+        default_factory=lambda: int(
+            os.environ.get("CHATROOM_LOG_MAX_BYTES", str(10 * 1024 * 1024))
+        )
+    )
+    log_backup_count: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_LOG_BACKUPS", "5"))
+    )
     # long-poll 最長掛起秒數上限
     max_poll_timeout: float = 55.0

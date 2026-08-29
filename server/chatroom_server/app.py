@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 from .config import Config
 from .db import open_db
 from .events import RoomEvents
+from .logging_setup import setup_file_logging, token_hint
 from .naming import generate_name
+from .version import APP_VERSION, build_info, version_string
 
 
 logger = logging.getLogger("chatroom")
@@ -124,11 +126,33 @@ class QuestionAnswer(BaseModel):
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or Config()
     logger.setLevel(cfg.log_level.upper())
+    log_dir = cfg.log_dir or str(Path(cfg.db_path).resolve().parent / "logs")
+    log_path = setup_file_logging(
+        logger, log_dir,
+        max_bytes=cfg.log_max_bytes, backup_count=cfg.log_backup_count,
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 第一則就是版本：日誌從哪裡開始看，都要能立刻回答「這是哪一份程式碼」
+        info = build_info()
+        logger.info(
+            "Hub 啟動 %s", version_string(),
+            extra={"event": "startup", "version": info["version"],
+                   "commit": info["commit"], "built_at": info["built_at"],
+                   "version_source": info["source"], "db": cfg.db_path,
+                   "log_file": str(log_path) if log_path else ""},
+        )
+        if info["source"] == "unknown":
+            # 這正是這次事故的形狀：手上跑的是哪一份程式碼，沒有人答得出來
+            logger.warning(
+                "這份 Hub 沒有版本資訊（既非打包產物也不在 git 工作樹裡）"
+                "——出事時無法對照是哪一份程式碼",
+                extra={"event": "version_unknown"},
+            )
         if not cfg.api_token:
-            logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用")
+            logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用",
+                           extra={"event": "auth_disabled"})
         app.state.db = await open_db(cfg.db_path)
         sweeper = asyncio.create_task(_sweeper())
         app.state.sweeper_task = sweeper
@@ -140,7 +164,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await sweeper
             await app.state.db.close()
 
-    app = FastAPI(title="Chatroom Hub", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Chatroom Hub", version=APP_VERSION, lifespan=lifespan)
     events = RoomEvents()
 
     def _bearer(authorization: str | None) -> str:
@@ -184,6 +208,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
         if row is None:
+            logger.warning(
+                "token 驗證失敗", extra={
+                    "event": "auth_failed", "path": request.url.path,
+                    # 只記前 8 碼：日誌會被複製、貼上、附進 issue，
+                    # 每次都是一份新的外洩機會
+                    "token_hint": token_hint(token),
+                    "ip": _client_ip(request),
+                },
+            )
             raise _err(401, "invalid_token", "token 無效或未提供")
         request.state.token_label = row["label"]
         # 最後使用時間讓主持人看得出哪張還在用、哪張可以收掉
@@ -732,6 +765,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _touch_session(session_key, body.kind, ip=_client_ip(request))
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
+        logger.info(
+            "加入房間 %s（%s）", name, room_id, extra={
+                "event": "join", "room_id": room_id, "participant_id": pid,
+                "display_name": name, "session_key": session_key,
+                "kind": body.kind, "role": body.role, "ip": join_ip,
+                "token_hint": token_hint(getattr(request.state, "access_token", "")),
+                "via_assignment": assignment is not None,
+            },
+        )
         joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
                                      kind="system", system_event="join")
         out = {
@@ -760,6 +802,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         await db.execute(
             "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
+        )
+        logger.info(
+            "離開房間 %s（%s）", p["display_name"], room_id, extra={
+                "event": "leave", "room_id": room_id, "participant_id": p["id"],
+                "display_name": p["display_name"],
+                "session_key": p["session_key"],
+            },
         )
         await db.commit()
         await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
@@ -827,6 +876,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             if hit is not None:
                 revoked_token = hit["label"] or target["join_token"][:8]
         await db.commit()
+        logger.info(
+            "移出成員 %s（%s）", target["display_name"], room_id, extra={
+                "event": "kick", "room_id": room_id, "target_id": target_id,
+                "display_name": target["display_name"],
+                "target_session_key": target["session_key"],
+                "by": me["display_name"], "by_participant_id": me["id"],
+                "revoked_token_hint": token_hint(target["join_token"]),
+                # 對方拿主 token 進來時撤不掉——這件事要進紀錄，
+                # 事後才查得出「為什麼踢了還在」
+                "access_still_open": not target["join_token"],
+            },
+        )
         await _post_message(
             room_id, None,
             f"{target['display_name']} 已被管理員移出聊天室", kind="system",
@@ -1773,7 +1834,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         cutoff = (now - timedelta(seconds=cfg.idle_timeout)).isoformat()
         idle = await (
             await db.execute(
-                "SELECT id, room_id, display_name FROM participant"
+                # session_key 給日誌用：事後要回答「被移出的是哪一個 session」
+                "SELECT id, room_id, display_name, session_key FROM participant"
                 " WHERE status='active' AND role='agent' AND last_seen_at < ?",
                 (cutoff,),
             )
@@ -1784,7 +1846,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (_now(), p["id"]),
             )
             await db.commit()
-            logger.info("sweep: 移除閒置 agent %s（room=%s）", p["display_name"], p["room_id"])
+            logger.info(
+                "sweep: 移除閒置 agent %s（room=%s）",
+                p["display_name"], p["room_id"], extra={
+                    "event": "idle_removed", "room_id": p["room_id"],
+                    "participant_id": p["id"], "display_name": p["display_name"],
+                    "session_key": p["session_key"],
+                },
+            )
             await _post_message(
                 p["room_id"], None,
                 f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
@@ -1864,8 +1933,11 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
+        # App 啟動時拿這裡的 build 與自己的比對：版本對不上要當場講出來，
+        # 而不是等使用者發現「說好做完的功能不在畫面上」
         return {
             "ok": True, "version": app.version,
+            "build": build_info(),
             "idle_timeout_seconds": cfg.idle_timeout,
             "max_attachment_bytes": cfg.max_attachment_bytes,
         }
