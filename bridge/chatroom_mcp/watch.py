@@ -104,6 +104,9 @@ DEPARTURE_EVENTS = {
     "idle_removed": "idle_removed",
 }
 
+# 描述「誰在房裡」的事件。這些在掛上後的第一輪不發——見 Watcher.first_poll。
+_PRESENCE_EVENTS = frozenset({"join", *DEPARTURE_EVENTS})
+
 # 指派輪詢與 long-poll 分屬兩條執行緒，輸出要串行化才不會交錯成半行 JSON
 _emit_lock = threading.Lock()
 
@@ -269,7 +272,18 @@ class Watcher:
             pid, name, state_seq = _read_bridge_state(self.session_key, self.room_id)
             self.participant_id, self.display_name = pid, name
             self.after_seq = args.after_seq if args.after_seq is not None else state_seq
-        self.seen_assignments: set[str] = set()
+        # 掛上後的第一輪：進出事件在這一輪不發。
+        #
+        # 進出與 mention 的補發語意不同，這是刻意分開的：
+        #   mention — **待辦**。十分鐘前 @ 你的人現在還在等回覆，補發是對的
+        #   進出     — **狀態轉變**。補發等於宣告一件當下沒有發生的事，而且
+        #              那些人可能早就回來了；名單非但沒變準，還被推向錯誤方向
+        #
+        # 沒有本機游標時（全新掛載）`after_seq` 從 0 起算，整個房間的歷史都
+        # 會被當成新事件——房裡進出頻繁的話，agent 一掛上就收到一串「某某
+        # 離開了」（2026-08-29 外部測試端實測）。
+        self.first_poll = True
+        self.suppressed_presence = 0
         self.last_heartbeat = 0.0
         self.emitted = 0
         self.departed = False
@@ -318,7 +332,11 @@ class Watcher:
                 # 型別看 system_event 欄位，不比對中文內容——內容改一個字
                 # 就會無聲失效，而那種失效在這裡完全看不出來
                 event = m.get("system_event")
-                if event == "join" and self.args.join_events:
+                if event in _PRESENCE_EVENTS and self.first_poll:
+                    # 第一輪的進出一律是歷史。抑制但要記數——靜靜吞掉的話，
+                    # 「沒有人進出」與「有進出但被我丟了」看起來一模一樣
+                    self.suppressed_presence += 1
+                elif event == "join" and self.args.join_events:
                     self.emit({
                         "event": "member_joined",
                         "room_id": self.room_id,
@@ -367,6 +385,16 @@ class Watcher:
                     "deleted": m.get("deleted", False),
                 }
             )
+        if self.first_poll:
+            self.first_poll = False
+            if self.suppressed_presence:
+                # 講出來而不是靜靜吞掉：「沒有人進出」與「有進出但被我丟了」
+                # 在事件流上長得一模一樣
+                _log(
+                    f"掛上前已發生的 {self.suppressed_presence} 則進出未推播"
+                    "（那是歷史，不是現在發生的事）。目前誰在房裡請用 "
+                    "chatroom_read 或房間詳情查。"
+                )
 
     def poll_assignments(self) -> None:
         # kind/label 一併自報：這條輪詢是 Hub session 名錄（指派 UI 掃描

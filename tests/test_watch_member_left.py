@@ -34,12 +34,18 @@ def _system(seq, event, content):
     }
 
 
-def _run(monkeypatch, messages, **argkw):
-    """跑一輪 poll_room，收集發出的事件。"""
+def _run(monkeypatch, messages, first_poll=False, **argkw):
+    """跑一輪 poll_room，收集發出的事件。
+
+    ``first_poll=False`` 是預設，因為多數案例要驗的是「進出事件長什麼樣」，
+    而掛上後的第一輪刻意不發進出（那些是歷史）。要驗第一輪的抑制行為時
+    傳 True。
+    """
     monkeypatch.setenv("CHATROOM_AGENT_KIND", "claude")
     monkeypatch.setenv("CHATROOM_SESSION_KEY", "claude-test")
     w = Watcher(_args(**argkw))
     w.participant_id, w.display_name = "me", "我"
+    w.first_poll = first_poll
     emitted = []
     monkeypatch.setattr(w, "emit", emitted.append)
     monkeypatch.setattr(
@@ -125,3 +131,78 @@ class TestNameExtraction:
     def test_content_without_space_is_returned_as_is(self):
         """取不出名字時回原字串，不回空的——空字串在事件裡看起來像 bug。"""
         assert _who_left(None, "無法解析") == "無法解析"
+
+
+class TestFirstPollSuppression:
+    """掛上後的第一輪不發進出事件——那些是歷史，不是現在發生的事。
+
+    進出與 mention 的補發語意不同：
+    - mention 是**待辦**，十分鐘前 @ 你的人現在還在等回覆，補發是對的
+    - 進出是**狀態轉變**，補發等於宣告一件當下沒有發生的事，而且那些人
+      可能早就回來了；名單非但沒變準，還被推向錯誤方向
+
+    沒有本機游標時（全新掛載）after_seq 從 0 起算，整個房間的歷史都會被
+    當成新事件（2026-08-29 外部測試端實測：重掛 watcher 立刻收到自己
+    幾十秒前、已經結束的離場）。
+    """
+
+    def test_history_is_not_replayed_on_attach(self, monkeypatch):
+        events = _run(monkeypatch, [
+            {"seq": 1, "kind": "system", "system_event": "join",
+             "sender_id": "x", "sender_name": "米勒",
+             "content": "米勒 加入了聊天室", "mentions": []},
+            _system(2, "leave", "米勒 離開了聊天室"),
+        ], first_poll=True)
+
+        assert events == []
+
+    def test_mentions_still_arrive_on_the_first_poll(self, monkeypatch):
+        """抑制只針對進出。把 mention 一起吞掉會讓補發語意整個消失——
+        那是這次修正絕不能誤傷的東西。"""
+        events = _run(monkeypatch, [
+            {"seq": 1, "kind": "chat", "system_event": None,
+             "sender_id": "someone", "sender_name": "米勒",
+             "content": "@我 看一下", "mentions": ["我"]},
+        ], first_poll=True)
+
+        assert [e["event"] for e in events] == ["message"]
+        assert events[0]["mentioned"] is True
+
+    def test_suppression_count_is_reported(self, monkeypatch):
+        """靜靜吞掉的話，「沒有人進出」與「有進出但被我丟了」
+        在事件流上長得一模一樣。"""
+        logged: list[str] = []
+        monkeypatch.setattr("chatroom_mcp.watch._log", logged.append)
+
+        _run(monkeypatch, [
+            _system(1, "leave", "甲 離開了聊天室"),
+            _system(2, "kick", "乙 已被管理員移出聊天室"),
+        ], first_poll=True)
+
+        assert any("2" in line and "進出" in line for line in logged)
+
+    def test_second_poll_emits_normally(self, monkeypatch):
+        """抑制只有第一輪。之後的進出是真的正在發生。"""
+        monkeypatch.setenv("CHATROOM_AGENT_KIND", "claude")
+        monkeypatch.setenv("CHATROOM_SESSION_KEY", "claude-test")
+        w = Watcher(_args())
+        w.participant_id, w.display_name = "me", "我"
+        emitted: list[dict] = []
+        monkeypatch.setattr(w, "emit", emitted.append)
+
+        # 第二輪的 seq 必須大於第一輪推進後的游標，否則會被「既有訊息的
+        # 狀態變更不喚醒」那條規則濾掉，測到的就不是抑制邏輯
+        rounds = [
+            [_system(98, "leave", "歷史 離開了聊天室")],
+            [_system(100, "leave", "現在 離開了聊天室")],
+        ]
+        seqs = [99, 100]
+        monkeypatch.setattr(
+            w.hub, "request",
+            lambda *a, **k: {"messages": rounds.pop(0), "last_seq": seqs.pop(0),
+                             "room_status": "active"},
+        )
+        w.poll_room()   # 第一輪：抑制
+        w.poll_room()   # 第二輪：正常發出
+
+        assert [e["who"] for e in emitted] == ["現在"]
