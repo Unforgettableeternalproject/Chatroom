@@ -17,12 +17,15 @@ cloudflared 找不到時會自動下載官方單檔執行檔到 kit 內的 `bin/
 from __future__ import annotations
 
 import argparse
+import http.client
 import os
 import platform
 import re
 import shutil
 import signal
+import socket
 import subprocess
+import ssl
 import sys
 import threading
 import time
@@ -180,12 +183,51 @@ def probe(url: str, timeout: float = 15.0) -> tuple[int, bytes]:
         return 0, b""
 
 
-def verify(url: str, port: str) -> None:
-    """確認隧道真的接到本機 Hub——網址印得出來不代表它通。
+def probe_family(host: str, family: int, timeout: float = 15.0) -> tuple[int, bytes]:
+    """指定 IPv4 或 IPv6 打一次 /api/health。
 
-    判準是**比對回應內容**，不只比狀態碼：隧道沒接上時 Cloudflare 自己回 404，
-    而 origin 對未知路徑往往也回 404，只比狀態碼的話這兩者一模一樣。內容則不會
-    ——一邊是 Cloudflare 的錯誤頁，一邊是 Hub 的回應。
+    兩族都要試：實測過一台機器 IPv6 比 IPv4 快十倍，也遇過本機只解得到 AAAA
+    而沒有 IPv6 出口的情況——只測一邊會把好的隧道判成壞的。
+    """
+    try:
+        infos = socket.getaddrinfo(host, 443, family, socket.SOCK_STREAM)
+    except OSError:
+        return 0, b""
+    if not infos:
+        return 0, b""
+    ip = infos[0][4][0]
+    conn = http.client.HTTPSConnection(
+        host, 443, timeout=timeout, context=ssl.create_default_context()
+    )
+    # 連線走指定的那個 IP，但 SNI 與 Host 仍是主機名——等同 curl --resolve，
+    # 藉此繞過本機 DNS 的偏好順序，各族分別驗證
+    conn._create_connection = (  # type: ignore[method-assign]
+        lambda address, tmo, source: socket.create_connection((ip, 443), tmo)
+    )
+    try:
+        conn.request("GET", "/api/health", headers={"Host": host})
+        resp = conn.getresponse()
+        return resp.status, resp.read(512)
+    except OSError:
+        return 0, b""
+    finally:
+        conn.close()
+
+
+def verify(url: str, port: str) -> None:
+    """盡力自我檢查，但**不宣告自己證明不了的事**。
+
+    這個檢查是從跑 cloudflared 的那台機器上打自己的公網網址，那條路徑與真實
+    使用者的不一樣，會被三種與隧道無關的本機因素打斷：本機 DNS 的族別偏好、
+    路由器不支援 hairpin 回流、本機代理或 hosts。實測踩過——隧道從外部完全
+    正常，本機卻怎麼打都不通，於是白等了十幾分鐘「冷卻」去修一個不存在的問題。
+
+    所以失敗一律只說「本機自檢未通過」，並請人從外部確認；能斷言的只有成功
+    那一側。反過來說，本機通也不代表外面通——origin 本機是最不可能失敗的
+    視角，它是下限而非保證。
+
+    判準用回應內容而不只是狀態碼：隧道沒接上時 Cloudflare 自己回 404，而
+    origin 對未知路徑往往也回 404，只比狀態碼的話兩者一模一樣。
     """
     local_code, local_body = probe(f"http://127.0.0.1:{port}", timeout=5.0)
     if local_code == 0:
@@ -195,24 +237,48 @@ def verify(url: str, port: str) -> None:
             file=sys.stderr, flush=True,
         )
         return
+    host = url.split("://", 1)[-1]
     # quick tunnel 剛建立時 edge 需要幾秒收斂，失敗不立刻定罪
     remote_code, remote_body = 0, b""
-    for delay in (0, 5, 10):
+    # 邊緣收斂實測要數十秒，窗口太短會在隧道其實正常時就先喊失敗
+    for delay in (0, 5, 10, 20):
         if delay:
             time.sleep(delay)
-        remote_code, remote_body = probe(url)
-        if remote_code == local_code and remote_body == local_body:
-            print(f"✅ 隧道連通確認（/api/health → HTTP {remote_code}）", flush=True)
-            return
+        attempts = [
+            probe(url),
+            probe_family(host, socket.AF_INET),
+            probe_family(host, socket.AF_INET6),
+        ]
+        for remote_code, remote_body in attempts:
+            if remote_code == local_code and remote_body == local_body:
+                print(
+                    f"✅ 隧道連通確認（/api/health → HTTP {remote_code}）", flush=True
+                )
+                return
+        remote_code, remote_body = attempts[0]
+    # 兩種形狀的下一步完全不同，混在一起講會把人帶往錯的方向
+    if remote_code == 0:
+        diagnosis = """  本機連不到這個網址（IPv4 與 IPv6 都試過了）。**這多半是本機的事，不是隧道的事**
+  ——從自己的機器繞回自己的公網網址常常走不通（路由器不支援 hairpin 回流、
+  本機 DNS 只解到沒有出口的那一族、代理或 hosts 攔截）。實測遇過隧道從外部
+  完全正常、本機卻怎麼打都不通的情況。
+
+  → 請找一台**別的機器或手機的行動網路**打一次：
+       curl <上面那個網址>/api/health
+     回得出 Hub 的 JSON 就是通的，本訊息可以無視。"""
+    else:
+        diagnosis = """  網址連得上，但回應不是本機 Hub 的——隧道接到了別的東西。通常是 cloudflared
+  沾到這台機器既有的設定（~/.cloudflared 的 config.yml 或 cert.pem），於是
+  連線掛在別人的隧道上。本腳本已用 --config + --origincert 隔離，若仍出現，
+  請確認沒有其他 cloudflared 進程佔用同一份憑證。"""
     print(
         f"""
-❌ 隧道沒有接到本機 Hub：直連本機回 HTTP {local_code}，經隧道回 HTTP {remote_code}
-   （回應內容{'相同但狀態碼不同' if remote_body == local_body else '不一致'}）。
+⚠️ 本機自檢未通過：直連本機回 HTTP {local_code}，經隧道回 HTTP {remote_code}。
 
-  網址印得出來**不代表**隧道可用。最常見的成因是 cloudflared 沾到了這台機器
-  既有的設定（~/.cloudflared 的 config.yml 或 cert.pem），連線因此沒有真的
-  建立。本腳本已用 --config + --origincert 隔離，若仍出現，請確認沒有其他
-  cloudflared 進程佔用，或改用 named tunnel。
+{diagnosis}
+
+  隧道**照常運作中**，網址仍然有效。這個檢查只證明得了「我這台打不通」，
+  證明不了「隧道壞了」——發出去之前請由外部確認一次。
 """,
         file=sys.stderr, flush=True,
     )
