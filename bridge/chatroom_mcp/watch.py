@@ -25,6 +25,8 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
     {"event": "assignment", "assignment_id": ..., "room_id": ...,
      "room_name": ..., "note": ...}
     {"event": "member_joined", "room_id": ..., "seq": ..., "who": ...}
+    {"event": "member_left", "room_id": ..., "seq": ..., "who": ...,
+     "reason": "left|kicked|idle_removed"}
     {"event": "departure", "room_id": ..., "reason": "kicked|idle|left|archived",
      "message": ..., "rejoinable": true/false}   # 之後進程退出
     {"event": "watch_ended", "reason": "..."}    # 之後進程退出
@@ -39,9 +41,13 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
 
 - **只有被 @mention 的訊息**才發 message 事件（指派事件不受此限）；
   其餘訊息留給 agent 用 chatroom_read / chatroom_wait 自己撈（游標保證不漏）
-- **system 訊息**不發 message 事件；但**有人加入**會發獨立的
-  ``member_joined``（新夥伴進來是該知道的事，且一個房間不會一直有人加入，
-  不構成噪音）。不想要就加 ``--no-join-events``
+- **system 訊息**不發 message 事件；但**有人進出**會發獨立的
+  ``member_joined`` / ``member_left``（誰在房裡是該知道的事，且一個房間不會
+  一直有人進出，不構成噪音）。不想要就加 ``--no-join-events``
+
+  離場一定要跟進場成對。只推進場的話，每個 agent 心裡的成員名單只增不減，
+  越待越失真——然後就會 @ 到一個已經不在的人，而那個 mention 不會有人收到
+  （2026-08-29 實測：房內兩次離場，旁觀者一次都沒被告知）
 - **自己發的訊息**不發事件
 - **既有訊息的狀態變更**（釘選/軟刪除）不發事件——釘選牆是「額外可撈」
   的東西（chatroom_read pinned_only），不是喚醒的理由
@@ -88,6 +94,15 @@ TRANSIENT_RETRY_SECS = 5.0
 # 離場原因 → 能不能自己加回去。被踢是人為決定，agent 自己 rejoin 等於推翻它。
 REJOINABLE = {"idle": True, "left": True, "kicked": False, "archived": False}
 
+# Hub 的 system_event → 對外的離場理由。
+# 看 system_event 欄位而不是比對中文內容：內容改一個字就會無聲失效，而那種
+# 失效在這裡完全看不出來（事件單純不再發出，沒有錯誤）。
+DEPARTURE_EVENTS = {
+    "leave": "left",
+    "kick": "kicked",
+    "idle_removed": "idle_removed",
+}
+
 # 指派輪詢與 long-poll 分屬兩條執行緒，輸出要串行化才不會交錯成半行 JSON
 _emit_lock = threading.Lock()
 
@@ -106,6 +121,23 @@ def _who_joined(content: str) -> str:
     """從加入訊息取出名字。只在 sender_name 缺席（舊版 Hub）時的退路。"""
     name, _, tail = content.partition(" 加入了")
     return name if tail else content
+
+
+def _who_left(sender_name: Any, content: str) -> str:
+    """從離場訊息取出名字。
+
+    離場的三種 system 訊息（leave / kick / idle_removed）在 Hub 都以
+    ``sender_id=None`` 發出，所以 ``sender_name`` 是空的，只能從內容取。
+
+    但**不比對整句措辭**——那三句話各不相同（「離開了」「已被管理員移出」
+    「因閒置逾時被移出」），逐句比對等於把三份中文文案變成契約，改一個字
+    就無聲失效。這裡只依賴一個假設：**名字在最前面，後面接一個空白**。
+    三句話共用這個形狀，未來新增第四種離場也多半照樣成立。
+    """
+    if isinstance(sender_name, str) and sender_name:
+        return sender_name
+    head = content.split(" ", 1)[0]
+    return head or content
 
 
 def _preview(content: str) -> str:
@@ -284,7 +316,8 @@ class Watcher:
             if m.get("kind") == "system":
                 # 型別看 system_event 欄位，不比對中文內容——內容改一個字
                 # 就會無聲失效，而那種失效在這裡完全看不出來
-                if m.get("system_event") == "join" and self.args.join_events:
+                event = m.get("system_event")
+                if event == "join" and self.args.join_events:
                     self.emit({
                         "event": "member_joined",
                         "room_id": self.room_id,
@@ -292,6 +325,18 @@ class Watcher:
                         "who": m.get("sender_name") or _who_joined(
                             m.get("content", "")
                         ),
+                    })
+                elif event in DEPARTURE_EVENTS and self.args.join_events:
+                    # 與 member_joined 共用 --no-join-events：進出是同一件事的
+                    # 兩面，只關掉一邊會留下比完全不通知更糟的狀態——名單看起來
+                    # 在維護，實際上只增不減
+                    self.emit({
+                        "event": "member_left",
+                        "room_id": self.room_id,
+                        "seq": m.get("seq"),
+                        "who": _who_left(m.get("sender_name"),
+                                         m.get("content", "")),
+                        "reason": DEPARTURE_EVENTS[event],
                     })
                 if not self.args.include_system:
                     continue
