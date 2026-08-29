@@ -28,6 +28,7 @@ from __future__ import annotations
 import functools
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -159,6 +160,29 @@ def _room_request(
         if exc.identity_invalid and participant_id:
             state().clear_identity(room_id)
         raise
+
+
+def _participant_id_by_name(room_id: str, name: str) -> str:
+    """房內顯示名稱 → participant_id。
+
+    agent 手上有的是名字（訊息裡看到的那個），Hub 要的是 id。這層轉換放在
+    bridge，免得每個 agent 自己去翻房間詳情——翻錯的話會靜靜地問到別人身上。
+    """
+    data = hub().request("GET", f"/api/rooms/{room_id}")
+    actives = [
+        p for p in data.get("participants", [])
+        if p.get("status") == "active"
+    ]
+    for p in actives:
+        if p.get("display_name") == name:
+            return p["id"]
+    available = "、".join(
+        p["display_name"] for p in actives if p.get("role") == "human"
+    ) or "（房裡沒有人類）"
+    raise HubError(
+        f"房裡沒有名為「{name}」的成員。目前在房內的人類：{available}。"
+        "名字要與訊息中顯示的完全一致。"
+    )
 
 
 # ---------- 房間與成員 ----------
@@ -410,6 +434,113 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
         f"/api/assignments/{assignment_id}/resolve",
         json={"status": "accepted" if accept else "declined"},
     )
+
+
+# ---------- 向人類提問 ----------
+
+
+@mcp.tool()
+@_guard
+def chatroom_ask_human(
+    room_id: str,
+    question: str,
+    options: list[str] | None = None,
+    target_name: str = "",
+    timeout: float = 300.0,
+    allow_free_text: bool = True,
+) -> dict:
+    """在聊天室裡向指定的人類提問，並等待回答。
+
+    **房裡有人類時，這是問問題的首選方式**，優先於在自己的 session 裡問。
+    理由很實際：多個 agent 各自在自己的 session 裡問，同一個人會被同一個問題
+    問好幾遍，而且他的回答只有其中一個 agent 看得到。問在這裡，答案留在房裡，
+    其他 agent 查得到（見 ``chatroom_questions``）。
+
+    問題**不會**進入公開訊息流，只出現在指定那個人的介面上——所以要問誰必須
+    明確。房裡只有一位人類時可以省略 ``target_name``；有多位時省略會被要求指定，
+    因為「誰該回答」不是 Hub 該替人猜的事。
+
+    ``options`` 給選項時對方可以直接點選，比讓他打字快得多；``allow_free_text``
+    決定他能不能不選你給的選項而自己寫。至少要有其中一種，否則這題無法回答。
+
+    這個呼叫會**阻塞**到對方回答或 ``timeout`` 秒（預設 5 分鐘）。回傳：
+
+    - ``answered: true`` 帶 ``answer`` 與 ``answer_kind``（option / free_text）
+    - ``answered: false`` 且 ``reason`` 為：
+      - ``skipped``——對方明確選擇不在這裡回答。**改回你原本的方式問他**，
+        不要再用這個工具問同一件事
+      - ``timeout``——他沒看到。問題仍然留著，他晚點回答時你用
+        ``chatroom_read_answer`` 拿得到；不要因為逾時就重問一次
+
+    人沒空或不在時不要卡著等——把 timeout 設短一點，拿不到答案就先做你能做的。
+    """
+    payload: dict[str, Any] = {
+        "prompt": question,
+        "options": [{"label": o} for o in (options or [])],
+        "allow_free_text": allow_free_text,
+    }
+    if target_name:
+        payload["target_participant_id"] = _participant_id_by_name(room_id, target_name)
+    created = _room_request(
+        room_id, "POST", f"/api/rooms/{room_id}/questions", json=payload
+    )
+    qid = created["id"]
+    # Hub 單次 long-poll 上限 55 秒，較長的等待靠連續掛起累積
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {
+                "answered": False, "reason": "timeout", "question_id": qid,
+                "target_name": created.get("target_name"),
+                "hint": "問題仍然留著。對方晚點回答的話，用 chatroom_read_answer"
+                        f"（question_id={qid}）取得，不必重問。",
+            }
+        data = hub().request(
+            "GET", f"/api/questions/{qid}",
+            params={"wait": min(remaining, 50.0)},
+            timeout=min(remaining, 50.0) + 10.0,
+        )
+        q = data["question"]
+        if q["status"] == "answered":
+            return {"answered": True, "answer": q["answer"],
+                    "answer_kind": q["answer_kind"], "question_id": qid,
+                    "target_name": created.get("target_name")}
+        if q["status"] == "skipped":
+            return {
+                "answered": False, "reason": "skipped", "question_id": qid,
+                "target_name": created.get("target_name"),
+                "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
+                        "不要再用這個工具問同一件事。",
+            }
+
+
+@mcp.tool()
+@_guard
+def chatroom_read_answer(question_id: str) -> dict:
+    """讀取某個問題目前的狀態與答案（不等待）。
+
+    ``chatroom_ask_human`` 逾時後用這個回頭取——對方晚一點回答仍然算數，
+    逾時只代表「當下沒等到」，不代表問題作廢。
+    """
+    data = hub().request("GET", f"/api/questions/{question_id}")
+    return {"question": data["question"]}
+
+
+@mcp.tool()
+@_guard
+def chatroom_questions(room_id: str, pending_only: bool = True) -> dict:
+    """列出這個房間問過人類的問題（含答案）。
+
+    **發問前先看這裡**：別人可能已經問過同一件事，答案就在上面；也可能正有一題
+    掛在同一個人身上還沒回，這時再丟一題過去只是在洗版。這正是這套機制要消除的
+    重複發問。
+    """
+    params = {"status": "pending"} if pending_only else None
+    data = hub().request(
+        "GET", f"/api/rooms/{room_id}/questions", params=params
+    )
+    return {"questions": data["questions"]}
 
 
 def main() -> None:

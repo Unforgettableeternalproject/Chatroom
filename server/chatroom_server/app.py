@@ -77,6 +77,25 @@ class AssignmentResolve(BaseModel):
     status: str = Field(pattern="^(accepted|declined)$")
 
 
+class QuestionOption(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=280)
+
+
+class QuestionCreate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=4000)
+    options: list[QuestionOption] = Field(default_factory=list, max_length=8)
+    # 省略時由 Hub 解析：房內只有一個人類就是他，多於一個則要求指定
+    target_participant_id: str | None = None
+    allow_free_text: bool = True
+
+
+class QuestionAnswer(BaseModel):
+    # skip = 人類明確選擇不在這裡回答（改回 session 內問），與逾時是兩回事
+    kind: str = Field(pattern="^(option|free_text|skip)$")
+    answer: str = Field(default="", max_length=4000)
+
+
 # ---------- 應用工廠 ----------
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -829,6 +848,179 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
         await db.commit()
         return {"ok": True}
+
+    # ---------- 向人類提問 ----------
+
+    def _question_public(row) -> dict:
+        d = dict(row)
+        try:
+            d["options"] = json.loads(d.get("options") or "[]")
+        except ValueError:
+            d["options"] = []
+        d["allow_free_text"] = bool(d.get("allow_free_text"))
+        return d
+
+    async def _resolve_target(room_id: str, explicit: str | None):
+        """決定這題要問誰。
+
+        指定的對象**必須是人類**——這個機制存在的理由就是「有人在的時候問人」，
+        誤指到 agent 會讓問題永遠等不到答案，而且症狀是靜默的（就是一直逾時）。
+        省略時房內只有一個人類就問他；有多個則拒絕並列出候選，由發問方決定
+        ——替人類猜「誰該回答」是不該由 Hub 做的判斷。
+        """
+        db = app.state.db
+        if explicit:
+            row = await (
+                await db.execute(
+                    "SELECT * FROM participant WHERE id=? AND room_id=? AND status='active'",
+                    (explicit, room_id),
+                )
+            ).fetchone()
+            if row is None:
+                raise _err(404, "target_not_found", "指定的對象不在這個房間裡")
+            if row["role"] != "human":
+                raise _err(422, "target_not_human",
+                           "只能向人類提問；這個機制的用意就是在有人在的時候問人")
+            return row
+        humans = await (
+            await db.execute(
+                "SELECT * FROM participant WHERE room_id=? AND status='active'"
+                " AND role='human' ORDER BY last_seen_at DESC",
+                (room_id,),
+            )
+        ).fetchall()
+        if not humans:
+            raise _err(422, "no_human_in_room",
+                       "房裡沒有人類可以回答，請改用你原本的方式詢問")
+        if len(humans) > 1:
+            names = "、".join(h["display_name"] for h in humans)
+            raise _err(422, "target_required",
+                       f"房裡有多位人類（{names}），請指定要問誰")
+        return humans[0]
+
+    @app.post("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
+    async def create_question(
+        room_id: str, body: QuestionCreate,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        await _room_or_404(room_id)
+        asker = await _participant(x_participant_id, room_id)
+        target = await _resolve_target(room_id, body.target_participant_id)
+        if not body.options and not body.allow_free_text:
+            raise _err(422, "unanswerable_question",
+                       "沒有選項又不允許自由作答，這題無法回答")
+        db = app.state.db
+        qid = _uid()
+        await db.execute(
+            "INSERT INTO question (id, room_id, asker_id, target_id, prompt,"
+            " options, allow_free_text, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (qid, room_id, asker["id"], target["id"], body.prompt,
+             json.dumps([o.model_dump() for o in body.options], ensure_ascii=False),
+             int(body.allow_free_text), _now()),
+        )
+        await db.commit()
+        await events.notify(room_id)
+        return {"id": qid, "target_id": target["id"],
+                "target_name": target["display_name"]}
+
+    @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
+    async def list_questions(
+        room_id: str, status: str | None = None, target_id: str | None = None
+    ):
+        """房內問題列表。
+
+        agent 發問前可以先看這裡有沒有人問過同一件事——重複發問正是這個機制
+        要消除的東西，所以問題對房內成員一律可見，只有 UI 顯示是定向的。
+        """
+        await _room_or_404(room_id, allow_archived=True)
+        db = app.state.db
+        conds, params = ["q.room_id=?"], [room_id]
+        if status:
+            conds.append("q.status=?")
+            params.append(status)
+        if target_id:
+            conds.append("q.target_id=?")
+            params.append(target_id)
+        rows = await (
+            await db.execute(
+                "SELECT q.*, p.display_name AS asker_name FROM question q"
+                " LEFT JOIN participant p ON p.id=q.asker_id"
+                f" WHERE {' AND '.join(conds)}"
+                " ORDER BY q.created_at DESC",
+                params,
+            )
+        ).fetchall()
+        return {"questions": [_question_public(r) for r in rows]}
+
+    @app.get("/api/questions/{question_id}", dependencies=[Depends(require_auth)])
+    async def get_question(
+        question_id: str, wait: float = Query(default=0.0, le=55.0)
+    ):
+        """讀一題；``wait`` > 0 時掛起直到有結果或逾時（發問方的阻塞等待）。
+
+        逾時**不改狀態**——人類晚一點才看到仍然可以回答，那時 agent 用
+        chatroom_read_answer 就拿得到。把它標成過期只是為了讓畫面好看，
+        代價是把一個還有用的答案丟掉。
+        """
+        db = app.state.db
+
+        async def _load():
+            row = await (
+                await db.execute(
+                    "SELECT q.*, p.display_name AS asker_name FROM question q"
+                    " LEFT JOIN participant p ON p.id=q.asker_id"
+                    " WHERE q.id=?",
+                    (question_id,),
+                )
+            ).fetchone()
+            if row is None:
+                raise _err(404, "question_not_found", "找不到這個問題")
+            return row
+
+        row = await _load()
+        if row["status"] != "pending" or wait <= 0:
+            return {"question": _question_public(row)}
+        deadline = asyncio.get_event_loop().time() + min(wait, cfg.max_poll_timeout)
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return {"question": _question_public(await _load()),
+                        "timed_out": True}
+            await events.wait(row["room_id"], remaining)
+            row = await _load()
+            if row["status"] != "pending":
+                return {"question": _question_public(row)}
+
+    @app.post("/api/questions/{question_id}/answer", dependencies=[Depends(require_auth)])
+    async def answer_question(
+        question_id: str, body: QuestionAnswer,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        db = app.state.db
+        row = await (
+            await db.execute("SELECT * FROM question WHERE id=?", (question_id,))
+        ).fetchone()
+        if row is None:
+            raise _err(404, "question_not_found", "找不到這個問題")
+        # 只有被問的人能答——否則「定向提問」形同虛設，agent 也可能自問自答
+        me = await _participant(x_participant_id, row["room_id"])
+        if me["id"] != row["target_id"]:
+            raise _err(403, "not_your_question", "這個問題不是問你的")
+        if row["status"] != "pending":
+            raise _err(409, "question_already_resolved", "這個問題已經處理過了")
+        if body.kind != "skip" and not body.answer.strip():
+            raise _err(422, "empty_answer", "答案不能是空的")
+        if body.kind == "free_text" and not row["allow_free_text"]:
+            raise _err(422, "free_text_not_allowed", "這題只能從選項中選")
+        status = "skipped" if body.kind == "skip" else "answered"
+        await db.execute(
+            "UPDATE question SET status=?, answer=?, answer_kind=?, resolved_at=?"
+            " WHERE id=?",
+            (status, body.answer.strip(), body.kind, _now(), question_id),
+        )
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "status": status}
 
     # ---------- Session 名錄 ----------
 

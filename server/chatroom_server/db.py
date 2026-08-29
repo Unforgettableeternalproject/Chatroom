@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS session (
     last_seen_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_session_seen ON session(last_seen_at);
+
+-- Agent 向指定人類提出的問題。刻意**不進 message 流**：問題是定向的，
+-- 灌進公開時間軸會變成噪音，也會讓其他人以為該由自己回答。
+-- 房內成員仍查得到（agent 發問前可先看有沒有人問過同一件事，這正是這個
+-- 機制要解決的問題），但人類 UI 只顯示指派給自己的那些。
+CREATE TABLE IF NOT EXISTS question (
+    id            TEXT PRIMARY KEY,
+    room_id       TEXT NOT NULL REFERENCES room(id),
+    asker_id      TEXT REFERENCES participant(id),
+    target_id     TEXT NOT NULL REFERENCES participant(id),  -- 被問的人類
+    prompt        TEXT NOT NULL,
+    options       TEXT NOT NULL DEFAULT '[]',   -- JSON: [{"label","description"}]
+    allow_free_text INTEGER NOT NULL DEFAULT 1,
+    -- pending / answered / skipped / expired
+    -- skipped = 人類明確選擇不在這裡回答（改回 session 內問），與逾時不同：
+    -- 前者是決定，後者是沒看到，agent 的後續處置不一樣
+    status        TEXT NOT NULL DEFAULT 'pending',
+    answer        TEXT,
+    answer_kind   TEXT,                          -- option / free_text
+    created_at    TEXT NOT NULL,
+    resolved_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
+CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
