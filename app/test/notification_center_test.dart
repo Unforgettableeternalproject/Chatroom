@@ -207,6 +207,80 @@ void main() {
     expect(activity, isEmpty);
   });
 
+  test('訂閱早於 join：加入訊息已躺在暖 feed 裡，仍恰好補投一次', () async {
+    // 這是正常首次進房的時序：roomFeedProvider 先以 null 身分訂閱，
+    // identityProvider 才 POST join，而 Hub 在回應之前就 post 了加入訊息。
+    // 那則於是進了暖 feed，接著被「首批快照只立基準線」當成歷史吃掉。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    final feed = subscribe('r1');
+    feed.upsertAll([
+      msg(1),
+      msg(2,
+          kind: 'system',
+          systemEvent: 'join',
+          senderId: 'me',
+          sender: 'Bernie'),
+    ]);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    await pump();
+    expect(batches, isEmpty, reason: '還沒登記之前，它就只是歷史');
+
+    // join 回應回來了，帶著那則訊息的精確 id
+    center.expectJoin('r1', 'm2');
+    await pump();
+    expect(batches, hasLength(1));
+    expect(batches.single.messages.single.id, 'm2');
+
+    // 消費一次就沒了，後續變更不得再投它
+    batches.clear();
+    feeds['r1']!.upsertAll([msg(3)]);
+    await pump();
+    expect(batches.single.messages.map((m) => m.id), ['m3']);
+  });
+
+  test('沒有登記的歷史加入事件不重播（App 重啟不轟炸）', () async {
+    // 補投只認「這次 join 產生的那一筆」。若改用時間窗之類的模糊判準，
+    // 每次 App 啟動都會把各房的歷史加入事件重播給 agent。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    final feed = subscribe('r1');
+    feed.upsertAll([
+      msg(1,
+          kind: 'system',
+          systemEvent: 'join',
+          senderId: 'p-old',
+          sender: '很久以前的人'),
+      msg(2),
+    ]);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    await pump();
+    expect(batches, isEmpty);
+  });
+
+  test('加入訊息由 WS 增量送到時，補投機制不再送第二次', () async {
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+    batches.clear();
+
+    // 先登記，但 feed 還沒有它——競態的另一半
+    center.expectJoin('r1', 'm2');
+    feeds['r1']!.upsertAll([
+      msg(2, kind: 'system', systemEvent: 'join', senderId: 'me'),
+    ]);
+    await pump();
+    expect(batches, hasLength(1), reason: '走正常增量路徑送達');
+
+    batches.clear();
+    feeds['r1']!.upsertAll([msg(3)]);
+    await pump();
+    expect(batches.single.messages.map((m) => m.id), ['m3'],
+        reason: '登記已在增量路徑作廢，不得補投第二次');
+  });
+
   test('其他 system 事件不進轉送出口', () async {
     // 放行的只有 join。離開／踢出／封存都不該喚醒 agent——離場那條走的是
     // watcher 的 departure 事件，不是這裡。

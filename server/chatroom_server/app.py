@@ -594,13 +594,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _touch_session(session_key, body.kind)
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
-        await _post_message(room_id, pid, f"{name} 加入了聊天室", kind="system",
-                            system_event="join")
+        joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
+                                     kind="system", system_event="join")
         out = {
             "participant_id": pid,
             "display_name": name,
             "rejoined": False,
             "session_key": session_key,
+            # 這則加入訊息在**回應送出之前**就已經 post 了，所以 client 首次
+            # 跟房時 feed 可能已經含著它，然後把它當成歷史（首批快照只立
+            # 基準線）而整個吃掉——正常首次進房就會走到，不是邊角案例。
+            # 給出精確的 id/seq，client 才能只放行「就是這一筆」，不必靠
+            # 時間窗去猜哪則加入算「剛剛發生」（那會被時鐘偏差打敗）。
+            # 冪等 rejoin 不給：那次沒有產生新的加入訊息。
+            "join_message_id": joined["id"],
+            "join_seq": joined["seq"],
         }
         if assigned:
             # 讓 agent 知道名字來自指派者，而非自己的 preferred_name

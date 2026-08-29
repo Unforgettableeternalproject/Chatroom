@@ -63,6 +63,18 @@ class NotificationCenter {
 
   final Map<String, _FollowedRoom> _rooms = {};
 
+  /// roomId → 這台裝置這次加入所產生的那則 join 訊息 id，尚未投遞者。
+  ///
+  /// Hub 在 join 回應之前就 post 了加入訊息，而首次進房的訂閱早於 join
+  /// （`roomFeedProvider` 先以 null 身分訂閱，`identityProvider` 才 POST）。
+  /// 所以那則常常已經在暖 feed 裡，接著被「首批快照只立基準線」當成歷史
+  /// 吃掉——這是正常路徑，不是邊角案例。
+  ///
+  /// 用精確的 message id 而不是時間窗：時間窗要嘛依賴 Hub 與 client 的
+  /// 時鐘一致（差幾分鐘就又是一個看不出來的失效），要嘛得放寬到會把歷史
+  /// 加入事件重播一遍。id 精確、可去重、消費一次就沒了。
+  final Map<String, String> _expectedJoins = {};
+
   final _notifications = StreamController<RoomNotification>.broadcast();
   final _activity = StreamController<String>.broadcast();
   final _fresh = StreamController<RoomFreshBatch>.broadcast();
@@ -113,6 +125,30 @@ class NotificationCenter {
     }
     room.sub = feed.changes.listen((_) => _onFeedChange(roomId));
     _rooms[roomId] = room;
+    // 訂閱先於 join 時，這次的加入訊息可能已經在暖 feed 裡了
+    _flushExpectedJoin(roomId, room);
+  }
+
+  /// 登記「我這次加入產生了這則訊息」，它必須恰好被投遞一次。
+  void expectJoin(String roomId, String? messageId) {
+    if (messageId == null || messageId.isEmpty) return;
+    _expectedJoins[roomId] = messageId;
+    final room = _rooms[roomId];
+    if (room != null) _flushExpectedJoin(roomId, room);
+  }
+
+  /// 那則加入訊息若已經躺在 feed 裡（被當成歷史），補投一次。
+  /// 消費即移除，所以之後 WS 增量再送到也不會投第二次。
+  void _flushExpectedJoin(String roomId, _FollowedRoom room) {
+    final id = _expectedJoins[roomId];
+    if (id == null) return;
+    final found = room.feed.byId(id);
+    if (found == null || !found.isMemberJoined) return;
+    _expectedJoins.remove(roomId);
+    if (!_fresh.isClosed) {
+      _fresh.add(RoomFreshBatch(
+          roomId: roomId, roomName: room.roomName, messages: [found]));
+    }
   }
 
   /// 停止跟隨不在 [keep] 內的房間（房間封存/被移出時收掉）。
@@ -123,6 +159,7 @@ class NotificationCenter {
   }
 
   void _drop(String roomId) {
+    _expectedJoins.remove(roomId);
     final room = _rooms.remove(roomId);
     if (room == null) return;
     room.sub?.cancel();
@@ -138,6 +175,9 @@ class NotificationCenter {
     final baseline = room.notifiedUpTo;
     if (baseline == null) {
       if (!feed.isEmpty || feed.cursor > 0) room.notifiedUpTo = feed.cursor;
+      // 首批快照就是「被當成歷史」的那一刻——這次的加入訊息若在裡面，
+      // 現在不撈就永遠沒人撈了
+      _flushExpectedJoin(roomId, room);
       return;
     }
     if (feed.cursor <= baseline) return;
@@ -164,7 +204,11 @@ class NotificationCenter {
         // self-filter 去砍 agent 的出口，就是 B1 那個 bug 換一個位置重演。
         // Codex 自己加入不必叫醒自己，那個排除在 CodexDispatcher 做，
         // 那裡才分得出哪個 thread 對應哪個加入者。
-        if (m.isMemberJoined) everything.add(m);
+        if (m.isMemberJoined) {
+          // 走正常增量路徑送到了，登記作廢，免得補投機制再送一次
+          if (_expectedJoins[roomId] == m.id) _expectedJoins.remove(roomId);
+          everything.add(m);
+        }
         continue;
       }
       everything.add(m);

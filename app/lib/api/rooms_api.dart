@@ -71,10 +71,19 @@ class JoinResult {
     required this.participantId,
     required this.displayName,
     required this.rejoined,
+    this.joinMessageId,
   });
   final String participantId;
   final String displayName;
   final bool rejoined;
+
+  /// 這次加入所產生的那則 join system 訊息 id。
+  ///
+  /// Hub 在**回應送出之前**就 post 了它，所以它可能已經躺在暖 feed 裡，
+  /// 被「首批快照只立基準線」當成歷史吃掉——那樣同一台機器上的 agent 就
+  /// 不會知道這個人進來了。有了精確的 id，client 能只補投「就是這一筆」。
+  /// 冪等 rejoin 為 null（那次沒有產生新的加入訊息）。
+  final String? joinMessageId;
 }
 
 class HealthResult {
@@ -192,6 +201,7 @@ class RoomsApi {
           participantId: res.data!['participant_id'] as String,
           displayName: res.data!['display_name'] as String,
           rejoined: (res.data!['rejoined'] as bool?) ?? false,
+          joinMessageId: res.data!['join_message_id'] as String?,
         );
       });
 

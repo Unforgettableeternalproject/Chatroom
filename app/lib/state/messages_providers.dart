@@ -4,6 +4,7 @@ import '../models/message.dart';
 import '../models/question.dart';
 import '../ws/room_feed.dart';
 import 'app_providers.dart';
+import 'notification_providers.dart';
 
 /// 房間的訊息 feed。建立時向 realtime service 訂閱（refCount++），
 /// autoDispose 時退訂——service 端保留 store 30 秒供來回切換。
@@ -50,6 +51,12 @@ final identityProvider = FutureProvider.autoDispose
   await settings.setParticipantId(roomId, result.participantId);
   // 顯示名稱供通知中心做 mention 比對（房內重名時 Hub 會改名，以實際值為準）
   await settings.setDisplayName(roomId, result.displayName);
+  // 這次加入產生的那則 system 訊息，Hub 在回應之前就 post 了——它很可能
+  // 已經進了暖 feed 並被當成歷史。登記它，通知中心才補得回來，同一台
+  // 機器上的 agent 才知道這個人進來了。
+  ref
+      .read(notificationCenterProvider)
+      .expectJoin(roomId, result.joinMessageId);
   return (
     participantId: result.participantId,
     displayName: result.displayName,
