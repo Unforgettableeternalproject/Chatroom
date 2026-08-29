@@ -142,3 +142,45 @@ def test_kicked_guidance_tells_agent_not_to_rejoin():
     assert "不要再自己加回去" in err.reason
     idle = translate_status(403, {"code": "participant_removed_idle", "message": ""}, "u")
     assert "重新呼叫 chatroom_join" in idle.reason
+
+
+@pytest.mark.asyncio
+async def test_assignment_reports_target_liveness(tmp_path):
+    """派給一把沒人在領的 key，外觀跟派錯人一模一樣——建立當下就要講清楚。"""
+    app, client = await _make(tmp_path, "assign_live")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (
+                await client.post(
+                    "/api/rooms", json={"name": "房", "session_key": "admin-key"}
+                )
+            ).json()["id"]
+
+            # 從沒出現過的 key：Hub 連見都沒見過
+            r = await client.post(
+                f"/api/rooms/{room_id}/assignments",
+                json={"target_session_key": "claude-never-seen", "note": "在嗎"},
+            )
+            body = r.json()
+            assert body["target_known"] is False
+            assert body["target_active"] is False
+            assert body["target_last_seen_at"] is None
+
+            # 有 watcher 在輪詢的 key：輪詢本身就是心跳來源
+            await client.get(
+                "/api/assignments",
+                params={"session_key": "claude-alive", "kind": "claude"},
+            )
+            r = await client.post(
+                f"/api/rooms/{room_id}/assignments",
+                json={"target_session_key": "claude-alive", "note": "在嗎"},
+            )
+            body = r.json()
+            assert body["target_known"] is True
+            assert body["target_active"] is True
+
+            # 指派本身仍然成立——對方稍後上線還是收得到
+            r = await client.get(
+                "/api/assignments", params={"session_key": "claude-never-seen"}
+            )
+            assert len(r.json()["assignments"]) == 1

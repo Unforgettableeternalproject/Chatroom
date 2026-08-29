@@ -754,6 +754,13 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
     async def create_assignment(room_id: str, body: AssignmentCreate):
+        """建立指派，並回報目標 session 目前是不是活的。
+
+        指派本身永遠成立（對方稍後上線仍收得到），但派給一把沒有 watcher 在
+        輪詢的 key 時，外觀與「派錯人」完全一樣——都是丟出去毫無反應。這個
+        情境比想像中常見：`/clear` 換掉 session id 之後，UI 上抄的舊 key 就
+        再也沒人來領了。與其讓人乾等，不如在建立當下就講清楚。
+        """
         await _room_or_404(room_id)
         db = app.state.db
         aid = _uid()
@@ -764,7 +771,21 @@ def create_app(config: Config | None = None) -> FastAPI:
              body.assigned_name.strip(), _now()),
         )
         await db.commit()
-        return {"id": aid}
+        seen = await (
+            await db.execute(
+                "SELECT last_seen_at FROM session WHERE session_key=?",
+                (body.target_session_key,),
+            )
+        ).fetchone()
+        active_cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=cfg.session_active_window)
+        ).isoformat()
+        return {
+            "id": aid,
+            "target_known": seen is not None,
+            "target_active": bool(seen and seen["last_seen_at"] >= active_cutoff),
+            "target_last_seen_at": seen["last_seen_at"] if seen else None,
+        }
 
     @app.get("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
     async def list_room_assignments(room_id: str):

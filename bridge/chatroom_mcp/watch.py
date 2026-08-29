@@ -143,6 +143,34 @@ def _read_bridge_state(session_key: str, room_id: str) -> tuple[str | None, str 
         return None, None, 0
 
 
+def _sibling_states(session_key: str, room_id: str) -> list[tuple[str, str]]:
+    """同機**其他** session_key 的 state 檔中，在指定房間持有身分的那些。
+
+    這是身分分裂的精確證據：別把 key 在這個房有 participant_id、我這把沒有。
+    分裂的成因是 bridge 與 watcher 拿到不同的 session id——`/clear` 會換掉
+    ``CLAUDE_CODE_SESSION_ID``，而 MCP bridge 是既有進程、沿用舊值，Monitor
+    新拉的 watcher 則拿到新值，兩邊從此分家（2026-08-29 實測）。
+    """
+    mine = identity.state_path(session_key)
+    found: list[tuple[str, str]] = []
+    try:
+        candidates = sorted(mine.parent.glob("state-*.json"))
+    except OSError:
+        return found
+    for path in candidates:
+        if path == mine:
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entry = (raw.get("rooms") or {}).get(room_id) or {}
+        if entry.get("participant_id"):
+            key = raw.get("session_key") or path.name
+            found.append((str(key), str(entry.get("display_name") or "（無名稱）")))
+    return found
+
+
 class Watcher:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -208,10 +236,12 @@ class Watcher:
             )
             if not self.args.all_messages and not mentioned:
                 if self.display_name is None and not self._warned_no_name:
+                    # 為什麼沒有名字，preflight 已經查過並講清楚了；這裡只補上
+                    # 「所以現在會怎樣」，不要再猜一次原因誤導排查方向
                     _log(
-                        "state 無 display_name（尚未 join？）——預設只通知"
-                        " @mention，將收不到任何訊息事件；join 後自動生效，"
-                        "或改用 --all-messages 全收"
+                        "state 無 display_name——判不出訊息有沒有 @ 到自己，"
+                        "因此不會發出任何訊息事件（原因見啟動時的自檢結果）。"
+                        "想全收可加 --all-messages"
                     )
                     self._warned_no_name = True
                 continue
@@ -275,6 +305,36 @@ class Watcher:
             elif exc.identity_invalid:
                 # 身分失效但原因不明（舊版 Hub）：訊息還讀得到，不讓 watcher 死掉
                 self.participant_id = None
+
+    def preflight(self) -> None:
+        """啟動自檢：分不出「還沒 join」與「身分分裂」的話，排查會走進死路。
+
+        兩者症狀完全一樣（收不到任何訊息事件），處置卻相反：前者等 bridge join
+        就好，後者不論等多久都不會好。舊版只印「尚未 join？」，照它去查的人會
+        確認「有 join 啊」然後卡死——而分裂時 bridge 確實 join 成功了，只是寫
+        進了另一把 key 的 state 檔。
+        """
+        if not self.room_id or self.participant_id:
+            return
+        others = _sibling_states(self.session_key, self.room_id)
+        if not others:
+            _log(
+                "本 watcher 在該房尚無身分。bridge 還沒 join 的話這是正常的，"
+                "join 之後會自動生效。"
+            )
+            return
+        listed = "、".join(f"{key}（{name}）" for key, name in others)
+        _log(
+            "⚠️ session 身分分裂：這個房間的身分掛在另一把 key 底下——\n"
+            f"         本 watcher：{self.session_key}\n"
+            f"         房內身分在：{listed}\n"
+            "         指派與 @mention 都不會觸發，而且不會有任何錯誤訊息。\n"
+            "         成因通常是 /clear 或 /resume 換掉了 CLAUDE_CODE_SESSION_ID，"
+            "而 MCP bridge 是既有進程、仍持有舊值。\n"
+            "         處置：重啟 MCP 讓 bridge 換到新 key（重啟後房內身分會失效，"
+            "需重新 chatroom_join），或改用顯式的 CHATROOM_SESSION_KEY 固定兩邊。\n"
+            "         注意舊身分會以殭屍成員留在房裡，直到 presence sweeper 清掉。"
+        )
 
     def depart(self, reason: str, message: str) -> None:
         """發出離場事件並標記結束——這個房間對本 watcher 已經沒有事情要做了。"""
@@ -349,6 +409,7 @@ class Watcher:
                 "⚠️ kind=other——身分是隨機 key，與 bridge 對不上，"
                 "指派與 @mention 都不會觸發。請補 --kind claude|codex"
             )
+        self.preflight()
         # 有 room 時指派輪詢自己一條執行緒，不被 long-poll 擋住
         assignment_thread: threading.Thread | None = None
         if self.args.assignments and self.room_id:

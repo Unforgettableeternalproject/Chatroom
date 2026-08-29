@@ -137,3 +137,64 @@ def test_rejoinable_mapping(monkeypatch, capsys, reason, rejoinable):
     w = _watcher(monkeypatch, [])
     w.depart(reason, "說明")
     assert _events(capsys)[0]["rejoinable"] is rejoinable
+
+
+# ---------- session 身分分裂（/clear 換掉 CLAUDE_CODE_SESSION_ID） ----------
+
+
+def _write_state(directory, session_key, room_id, participant_id, name):
+    from chatroom_mcp import identity
+    path = directory / identity.state_filename(session_key)
+    path.write_text(json.dumps({
+        "version": 1,
+        "session_key": session_key,
+        "rooms": {room_id: {"participant_id": participant_id,
+                            "display_name": name, "last_seq": 3}},
+    }), encoding="utf-8")
+    return path
+
+
+def test_preflight_names_the_split_identity(monkeypatch, tmp_path, capsys):
+    """分裂與『還沒 join』症狀相同、處置相反，必須分辨得出來。"""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    (tmp_path / ".chatroom").mkdir()
+    _write_state(tmp_path / ".chatroom", "claude-OLD-bridge-key",
+                 "room-1", "pid-old", "測試端")
+
+    w = _watcher(monkeypatch, [])
+    w.participant_id = None       # 這把 key 在該房沒有身分
+    w.display_name = None
+    w.preflight()
+
+    err = capsys.readouterr().err
+    assert "身分分裂" in err
+    assert "claude-OLD-bridge-key" in err, "必須指名另一把 key，否則無從查起"
+    assert "claude-test" in err, "也要指名自己這把，兩者對照才看得懂"
+    assert "/clear" in err, "要講出最常見的成因"
+
+
+def test_preflight_stays_quiet_when_merely_not_joined_yet(monkeypatch, tmp_path, capsys):
+    """沒有別把 key 持有身分時就只是還沒 join——不得謊報分裂。"""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    (tmp_path / ".chatroom").mkdir()
+
+    w = _watcher(monkeypatch, [])
+    w.participant_id = None
+    w.display_name = None
+    w.preflight()
+
+    err = capsys.readouterr().err
+    assert "身分分裂" not in err
+    assert "尚無身分" in err
+
+
+def test_preflight_silent_when_identity_is_fine(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    (tmp_path / ".chatroom").mkdir()
+    _write_state(tmp_path / ".chatroom", "claude-OTHER", "room-1", "pid-x", "別人")
+
+    w = _watcher(monkeypatch, [])
+    w.participant_id = "pid-mine"   # 身分正常
+    w.preflight()
+
+    assert capsys.readouterr().err == "", "身分正常時不該有任何雜訊"
