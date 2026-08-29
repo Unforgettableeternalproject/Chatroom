@@ -337,8 +337,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         長輪詢的 agent 永遠掃不掉。即時通道（updates）另外要求 active 身分。
         """
         if not participant_id:
+            # 「你沒說你是誰」與「你不是成員」必須是兩句不同的話——它們把人
+            # 導向完全不同的處置（前者去找身分怎麼掉的，後者去找誰把我踢了）。
+            # 舊 client 沒帶標頭時最容易在這裡被誤導成「我被踢了嗎」
             raise _err(401, "participant_header_required",
-                       "此端點需要 X-Participant-Id 標頭：房內內容只給房內的人")
+                       "請求沒有帶 X-Participant-Id。這不是「你不是成員」，"
+                       "而是「還不知道你是誰」——先加入房間取得身分再讀。")
         row = await (
             await app.state.db.execute(
                 "SELECT status FROM participant WHERE id=? AND room_id=?",
@@ -348,7 +352,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row is None:
             # 不分「查無此身分」與「身分屬於別的房間」：對非成員來說，
             # 這個房間的存在與否本來就不該從錯誤碼推得出來
-            raise _err(403, "not_a_member", "你不是這個聊天室的成員")
+            raise _err(403, "not_a_member",
+                       "你不是這個聊天室的成員（這個身分不屬於這個房間）")
         if row["status"] == "kicked":
             raise _err(403, "participant_kicked",
                        "你已被管理員移出這個聊天室，看不到房內的內容")

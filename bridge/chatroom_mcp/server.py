@@ -46,6 +46,7 @@ from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
+from .version import version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
 # CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
@@ -678,6 +679,7 @@ def chatroom_get_file(room_id: str, attachment_id: str, save_dir: str = "") -> d
 
 
 def main() -> None:
+    print(f"[chatroom-mcp] {version_string()}", file=sys.stderr)
     # token 缺席時每次呼叫才報 401 會讓人誤以為 Hub 或指派壞了——啟動就把話說清楚
     if not os.environ.get("CHATROOM_TOKEN"):
         print(
