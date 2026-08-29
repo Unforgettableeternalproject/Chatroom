@@ -101,6 +101,14 @@ class RealtimeService {
   RealtimeStatus get status => _status;
   Stream<RealtimeStatus> get statusStream => _statusCtrl.stream;
 
+  final _kickedCtrl = StreamController<String>.broadcast();
+
+  /// 被管理員移出的房間 id。訂閱者負責清掉本機身分、收掉畫面。
+  ///
+  /// 踢出是**人為決定**，不是連線問題——所以它不走 [statusStream]
+  /// （那條講的是「連得上嗎」，重連會自己好；這條重連一百次也不會好）。
+  Stream<String> get kicked => _kickedCtrl.stream;
+
   // ---------- 生命週期 ----------
 
   void start() {
@@ -402,6 +410,14 @@ class RealtimeService {
         f.setRoomStatus(roomStatus);
       case WsQuestionsEvent(:final roomId, :final questions):
         _feeds[roomId]?.setQuestions(questions);
+      case WsErrorEvent(:final roomId, :final code, :final message):
+        // **只有 participant_kicked 該讓本機退場。** 其他錯誤碼各有各的
+        // 處置，尤其 participant_header_required 只是「還不知道你是誰」
+        // ——把它當成被踢會清掉本機身分，那是把時序問題偽裝成身分問題。
+        _log.warning('Hub 拒絕訂閱（$roomId）：$code $message');
+        if (code == 'participant_kicked' && !_kickedCtrl.isClosed) {
+          _kickedCtrl.add(roomId);
+        }
       case WsPongEvent():
         _pongDeadline?.cancel();
         _pongDeadline = null;
@@ -427,5 +443,6 @@ class RealtimeService {
     _participantIds.clear();
     _sentParticipantIds.clear();
     await _statusCtrl.close();
+    await _kickedCtrl.close();
   }
 }

@@ -44,6 +44,15 @@ class WsProtocol {
               .map((e) => Question.fromJson(e as Map<String, dynamic>))
               .toList(),
         );
+      case 'error':
+        // Hub 拒絕這個房的訂閱。原本沒有這個 case，於是它掉進 unknown 被
+        // 安靜忽略——被踢的人畫面上什麼事都沒發生，內容照樣看得到，
+        // 只是從此不再有新訊息（Hub 那半有做，App 這半沒接）。
+        return WsErrorEvent(
+          roomId: (data['room_id'] as String?) ?? '',
+          code: (data['code'] as String?) ?? '',
+          message: (data['message'] as String?) ?? '',
+        );
       case 'pong':
         return const WsPongEvent();
       default:

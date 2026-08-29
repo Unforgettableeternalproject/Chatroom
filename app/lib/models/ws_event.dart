@@ -46,3 +46,25 @@ class WsUnknownEvent extends WsEvent {
   const WsUnknownEvent(this.type);
   final String type;
 }
+
+/// {"type": "error", "room_id", "code", "message"}
+///
+/// Hub 拒絕這個房的訂閱。**必須看 `code` 而不是有沒有錯**——
+/// `participant_kicked` 是「不要再看到這裡」的人為決定，該退場；
+/// `participant_header_required` 只是「還不知道你是誰」，清掉本機身分
+/// 會把版本／時序問題偽裝成身分問題（2026-08-29 踩過）。
+@immutable
+class WsErrorEvent extends WsEvent {
+  const WsErrorEvent({
+    required this.roomId,
+    required this.code,
+    required this.message,
+  });
+
+  final String roomId;
+  final String code;
+  final String message;
+
+  /// 管理員把這個身分移出了房間——本機該跟著退場。
+  bool get isKicked => code == 'participant_kicked';
+}

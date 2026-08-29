@@ -52,6 +52,7 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell>
     with WidgetsBindingObserver {
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
+  StreamSubscription<String>? _kicked;
 
   /// 設定缺口警告在這個 shell 的生命週期內只彈一次——關掉之後不再打斷，
   /// 但下次啟動仍會再提醒（設定沒補齊，問題就還在）。
@@ -66,10 +67,35 @@ class _AppShellState extends ConsumerState<AppShell>
       final online = results.any((r) => r != ConnectivityResult.none);
       if (online) ref.read(realtimeServiceProvider).retryNow();
     });
+    _kicked = ref.read(realtimeServiceProvider).kicked.listen(_onKicked);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _syncForeground(WidgetsBinding.instance.lifecycleState);
       _warnIfSettingsIncomplete();
     });
+  }
+
+  /// 被管理員移出：本機也要跟著退場。
+  ///
+  /// Hub 那半早就擋了（訂閱被拒、REST 403），但 App 完全沒接那個錯誤，
+  /// 於是畫面停在被踢的前一刻——內容都還在、只是不再更新，看起來像
+  /// 「踢出沒有生效」。房間是邊界，不能只是名冊，而邊界要兩邊都認。
+  Future<void> _onKicked(String roomId) async {
+    final settings = ref.read(settingsRepoProvider);
+    // 清掉本機身分：留著的話房間列表仍把它當「已加入」，通知中心也會
+    // 繼續跟隨它，而每一次訂閱都只會再被拒一次
+    await settings.setParticipantId(roomId, null);
+    await settings.clearPendingMentions(roomId);
+    ref.read(notificationCenterProvider).retainOnly(
+          ref.read(notificationCenterProvider).followedRoomIds
+            ..remove(roomId),
+        );
+    ref.read(realtimeServiceProvider).unsubscribe(roomId);
+    ref.invalidate(roomListProvider('active'));
+    if (!mounted) return;
+    // 正在看那個房就請出來——留在一個讀不到內容的畫面上只會看到空白
+    if (widget.selectedRoomId == roomId) context.go('/rooms');
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('你已被管理員移出這個聊天室，看不到房內的內容了')));
   }
 
   /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
@@ -143,6 +169,7 @@ class _AppShellState extends ConsumerState<AppShell>
   @override
   void dispose() {
     _connectivity?.cancel();
+    _kicked?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
