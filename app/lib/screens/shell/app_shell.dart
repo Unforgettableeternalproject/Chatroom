@@ -10,9 +10,30 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
+import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../widgets/connection_pill.dart';
 import '../rooms/room_list_screen.dart';
+
+/// 設定不完整的診斷結果——`null` 表示設定齊全。
+///
+/// 判準刻意涵蓋「存過但沒存完」：router 的首次啟動導向只看「曾經存過
+/// server URL」，token 是空的照樣放行進主畫面，接著每一支 API 都 401，
+/// 而畫面上只有一片空房間列表——**看起來像沒有房間，不像沒有設定**。
+String? settingsGapMessage({
+  required bool hasServerConfig,
+  required String serverUrl,
+  required String token,
+}) {
+  if (!hasServerConfig || serverUrl.trim().isEmpty) {
+    return '尚未儲存伺服器位址。目前用的是預設值，連不到任何 Hub。';
+  }
+  if (token.trim().isEmpty) {
+    return 'API token 是空的。伺服器會拒絕每一次請求（401），'
+        '房間列表因此永遠是空的。';
+  }
+  return null;
+}
 
 /// 桌機雙欄 / 手機堆疊的分流（go_router ShellRoute 的 shell）。
 /// 也負責生命週期與網路恢復時叫醒重連（UI-DESIGN §4.2 的三個觸發點之二）。
@@ -30,6 +51,10 @@ class _AppShellState extends ConsumerState<AppShell>
     with WidgetsBindingObserver {
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
 
+  /// 設定缺口警告在這個 shell 的生命週期內只彈一次——關掉之後不再打斷，
+  /// 但下次啟動仍會再提醒（設定沒補齊，問題就還在）。
+  bool _warnedSettingsGap = false;
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +64,50 @@ class _AppShellState extends ConsumerState<AppShell>
       final online = results.any((r) => r != ConnectivityResult.none);
       if (online) ref.read(realtimeServiceProvider).retryNow();
     });
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _warnIfSettingsIncomplete());
+  }
+
+  /// 設定沒填完就進到主畫面時，把「為什麼什麼都看不到」講出來。
+  ///
+  /// 不靠 router 擋——擋不住的正是這一類：URL 存了、token 沒存，
+  /// `hasServerConfig` 為真，人就進來了，然後對著空畫面猜。
+  Future<void> _warnIfSettingsIncomplete() async {
+    if (_warnedSettingsGap || !mounted) return;
+    final config = ref.read(appConfigProvider);
+    final gap = settingsGapMessage(
+      hasServerConfig: ref.read(settingsRepoProvider).hasServerConfig,
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+    if (gap == null) return;
+    _warnedSettingsGap = true;
+    final goSettings = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('初始設定還沒完成',
+            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+        content: Text(
+          '$gap\n\n到設定頁填好伺服器位址與 API token，'
+          '按「測試連線」確認後再按「儲存設定」——只測試不儲存不會生效。',
+          style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
+        ),
+        actions: [
+          UepButton(
+            label: '稍後再說',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: '前往設定',
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (goSettings == true && mounted) context.push('/settings');
   }
 
   @override
