@@ -35,7 +35,8 @@ async def test_pagination_contract(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             p = await _join(client, room_id, "s1", "Nova")
             headers = {"X-Participant-Id": p["participant_id"]}
             for i in range(250):
@@ -52,6 +53,7 @@ async def test_pagination_contract(tmp_path):
                     await client.get(
                         f"/api/rooms/{room_id}/messages",
                         params={"after_seq": cursor, "limit": 100},
+                        headers=headers,
                     )
                 ).json()
                 seqs += [m["seq"] for m in data["messages"]]
@@ -72,7 +74,8 @@ async def test_pagination_contract(tmp_path):
                 else:
                     params["before_seq"] = seqs[-1] + 1
                 data = (
-                    await client.get(f"/api/rooms/{room_id}/messages", params=params)
+                    await client.get(f"/api/rooms/{room_id}/messages",
+                                     params=params, headers=headers)
                 ).json()
                 assert [m["seq"] for m in data["messages"]] == sorted(
                     m["seq"] for m in data["messages"]
@@ -86,27 +89,31 @@ async def test_pagination_contract(tmp_path):
             # 非法 limit → 422
             for bad in (0, -1, 501):
                 r = await client.get(
-                    f"/api/rooms/{room_id}/messages", params={"limit": bad}
+                    f"/api/rooms/{room_id}/messages", params={"limit": bad},
+                    headers=headers,
                 )
                 assert r.status_code == 422, bad
             # after_seq 與 before_seq 互斥
+            # 帶身分才測得到參數契約本身——成員門檻刻意排在參數驗證之前
             r = await client.get(
                 f"/api/rooms/{room_id}/messages",
                 params={"after_seq": 5, "before_seq": 10},
+                headers=headers,
             )
             assert r.status_code == 422
 
             # pinned_only 與分頁同時使用
             mid = (
                 await client.get(
-                    f"/api/rooms/{room_id}/messages", params={"after_seq": 0, "limit": 1}
+                    f"/api/rooms/{room_id}/messages",
+                    params={"after_seq": 0, "limit": 1}, headers=headers,
                 )
             ).json()["messages"][0]["id"]
             await client.post(f"/api/messages/{mid}/pin", headers=headers)
             data = (
                 await client.get(
                     f"/api/rooms/{room_id}/messages",
-                    params={"pinned_only": True, "limit": 100},
+                    params={"pinned_only": True, "limit": 100}, headers=headers,
                 )
             ).json()
             assert [m["id"] for m in data["messages"]] == [mid]
@@ -121,7 +128,8 @@ async def test_assignment_expiry(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             await client.post(
                 f"/api/rooms/{room_id}/assignments",
                 json={"target_session_key": "sess-x", "note": "n"},
@@ -158,12 +166,14 @@ async def test_sweep_keeps_human(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             await _join(client, room_id, "h1", "Xavier", kind="human", role="human")
             await _join(client, room_id, "a1", "Nova")
             await app.state.sweep_once()  # 移除閒置 agent + 起算封存倒數
             await app.state.sweep_once()  # 倒數（grace=0）到期 → 封存
-            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            detail = (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()
             by_name = {p["display_name"]: p["status"] for p in detail["participants"]}
             assert by_name == {"Xavier": "active", "Nova": "removed"}
             # 房內只剩「一個」human → 封存（沒有對話對象）
@@ -178,7 +188,8 @@ async def test_sweep_spares_room_with_multiple_humans(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             await _join(client, room_id, "h1", "Xavier", kind="human", role="human")
             await _join(client, room_id, "h2", "Bernie", kind="human", role="human")
             agent = await _join(client, room_id, "a1", "Nova")
@@ -189,7 +200,8 @@ async def test_sweep_spares_room_with_multiple_humans(tmp_path):
             )
             await app.state.sweep_once()
             await app.state.sweep_once()  # 兩輪都不得起算封存（兩個人類在場）
-            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            detail = (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()
             assert detail["room"]["status"] == "active"
 
             # 其中一個人類也走了 → 只剩一人，倒數起算 + 到期後封存
@@ -201,11 +213,13 @@ async def test_sweep_spares_room_with_multiple_humans(tmp_path):
                 headers={"X-Participant-Id": h2["id"]},
             )
             await app.state.sweep_once()
-            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                 "status"
             ] == "active"  # 倒數中，尚未封存
             await app.state.sweep_once()
-            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                 "status"
             ] == "archived"
 
@@ -263,9 +277,11 @@ async def test_sweeper_survives_exception(tmp_path, caplog):
             await db.execute("ALTER TABLE participant_broken RENAME TO participant")
             await db.commit()
             caplog.clear()
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             await _join(client, room_id, "s1")
-            assert (await client.get(f"/api/rooms/{room_id}")).status_code == 200
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -282,9 +298,11 @@ async def test_room_detail_exposes_server_limits(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room_id = (
-                await client.post("/api/rooms", json={"name": "房"})
+                await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})
             ).json()["id"]
-            limits = (await client.get(f"/api/rooms/{room_id}")).json()["server"]
+            limits = (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["server"]
             assert limits["idle_timeout_seconds"] == 1800.0
             assert limits["archive_grace_seconds"] == 90.0
             assert limits["max_attachment_bytes"] > 0

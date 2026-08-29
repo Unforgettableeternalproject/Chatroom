@@ -48,7 +48,8 @@ async def test_room_and_message_flow(client):
     seq = r.json()["seq"]
 
     # B 讀增量：應看到 join 系統訊息 x2 + 這則 chat
-    r = await client.get(f"/api/rooms/{room_id}/messages", params={"after_seq": 0})
+    r = await client.get(f"/api/rooms/{room_id}/messages", params={"after_seq": 0},
+                         headers={"X-Participant-Id": b["participant_id"]})
     msgs = r.json()["messages"]
     assert [m["kind"] for m in msgs] == ["system", "system", "chat"]
     assert msgs[-1]["sender_name"] == "Nova"
@@ -88,14 +89,16 @@ async def test_pin_and_delete(client):
     r = await client.post(f"/api/messages/{mid}/pin", headers={"X-Participant-Id": pid})
     assert r.status_code == 200
     r = await client.get(
-        f"/api/rooms/{room_id}/messages", params={"pinned_only": True}
+        f"/api/rooms/{room_id}/messages", params={"pinned_only": True},
+        headers={"X-Participant-Id": pid},
     )
     assert [m["id"] for m in r.json()["messages"]] == [mid]
 
     # 軟刪除後內容清空但保留占位
     r = await client.delete(f"/api/messages/{mid}")
     assert r.status_code == 200
-    r = await client.get(f"/api/rooms/{room_id}/messages")
+    r = await client.get(f"/api/rooms/{room_id}/messages",
+                         headers={"X-Participant-Id": pid})
     deleted = [m for m in r.json()["messages"] if m["id"] == mid][0]
     assert deleted["deleted"] is True and deleted["content"] == ""
 
@@ -128,5 +131,7 @@ async def test_leave_posts_system_message(client):
         headers={"X-Participant-Id": a["participant_id"]},
     )
     assert r.status_code == 200
-    r = await client.get(f"/api/rooms/{room_id}/messages")
+    # 離開之後仍讀得到歷史——離開不是銷毀自己的紀錄
+    r = await client.get(f"/api/rooms/{room_id}/messages",
+                         headers={"X-Participant-Id": a["participant_id"]})
     assert "Quill 離開了聊天室" in r.json()["messages"][-1]["content"]

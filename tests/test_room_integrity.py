@@ -37,23 +37,27 @@ async def test_unarchive_survives_sweeper(tmp_path):
     )
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             await _join(client, room_id, "s1")
             # 等 agent 閒置 → 自動封存
             for _ in range(40):
                 await asyncio.sleep(0.05)
-                if (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+                if (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                     "status"
                 ] == "archived":
                     break
-            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                 "status"
             ] == "archived"
 
             # 人類解封 → 多輪 sweeper 後仍應維持 active
             await client.post(f"/api/rooms/{room_id}/unarchive")
             await asyncio.sleep(0.3)
-            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                 "status"
             ] == "active"
 
@@ -61,11 +65,13 @@ async def test_unarchive_survives_sweeper(tmp_path):
             await _join(client, room_id, "s2")
             for _ in range(40):
                 await asyncio.sleep(0.05)
-                if (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+                if (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                     "status"
                 ] == "archived":
                     break
-            assert (await client.get(f"/api/rooms/{room_id}")).json()["room"][
+            assert (await client.get(f"/api/rooms/{room_id}",
+                              headers={"X-Session-Key": "owner-key"})).json()["room"][
                 "status"
             ] == "archived"
 
@@ -107,7 +113,8 @@ async def test_archived_room_semantics(tmp_path):
     app, client = await _make_client(tmp_path, "archived")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
             p = await _join(client, room_id, "s1", "Solo")
             headers = {"X-Participant-Id": p["participant_id"]}
             mid = (
@@ -141,15 +148,18 @@ async def test_archive_unarchive_system_messages_and_idempotency(tmp_path):
     app, client = await _make_client(tmp_path, "sysmsg")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
-            await _join(client, room_id, "s1")
+            room_id = (await client.post("/api/rooms",
+                              json={"name": "房", "session_key": "owner-key"})).json()["id"]
+            s1 = await _join(client, room_id, "s1")
 
             r = await client.post(f"/api/rooms/{room_id}/unarchive")
             assert r.json()["already_active"] is True
 
             await client.post(f"/api/rooms/{room_id}/archive")
             await client.post(f"/api/rooms/{room_id}/unarchive")
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            msgs = (await client.get(
+                f"/api/rooms/{room_id}/messages",
+                headers={"X-Participant-Id": s1["participant_id"]})).json()["messages"]
             contents = [m["content"] for m in msgs if m["kind"] == "system"]
             assert "聊天室已被手動封存" in contents
             assert "聊天室已解除封存" in contents

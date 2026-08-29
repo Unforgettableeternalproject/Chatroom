@@ -82,7 +82,9 @@ async def test_admin_can_reinvite_by_new_assignment(tmp_path):
             # 重新進來是全新的加入，該有加入訊息讓房內其他人知道
             assert data["join_message_id"]
 
-            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            detail = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": data["participant_id"]})).json()
             mine = [p for p in detail["participants"] if p["display_name"] == "Novia-2"]
             assert len(mine) == 1
             assert mine[0]["status"] == "active"
@@ -115,6 +117,9 @@ async def test_kick_revokes_the_old_assignment(tmp_path):
             assert r.status_code != 200, "踢出之前的指派不得成為繞過的後門"
 
             rows = (
-                await client.get(f"/api/rooms/{room_id}/assignments")
+                await client.get(
+                    f"/api/rooms/{room_id}/assignments",
+                    headers={"X-Participant-Id": admin["participant_id"]},
+                )
             ).json()["assignments"]
             assert [a["status"] for a in rows if a["id"] == old_aid] == ["revoked"]

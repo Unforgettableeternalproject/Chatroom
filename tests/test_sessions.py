@@ -201,7 +201,8 @@ async def test_assigned_name_conflict_gets_suffix(client):
 
 
 async def test_assigned_name_in_listings(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms",
+                          json={"name": "房", "session_key": "owner-key"})
     room_id = r.json()["id"]
     await _assign(client, room_id, "sess-a", name="鐵衛", note="幫忙看測試")
 
@@ -211,7 +212,8 @@ async def test_assigned_name_in_listings(client):
     assert a["assigned_name"] == "鐵衛"
 
     # 房間視角（UI 列表）
-    r = await client.get(f"/api/rooms/{room_id}/assignments")
+    r = await client.get(f"/api/rooms/{room_id}/assignments",
+                         headers={"X-Session-Key": "owner-key"})
     a = r.json()["assignments"][0]
     assert a["assigned_name"] == "鐵衛"
 

@@ -12,6 +12,14 @@ from chatroom_server.config import Config
 
 # ---------- WebSocket（同步 TestClient，因 httpx ASGITransport 不支援 WS） ----------
 
+def _next_messages(ws):
+    """取下一則 messages 事件，跳過同一條 socket 上的 questions 推送。"""
+    while True:
+        evt = ws.receive_json()
+        if evt["type"] == "messages":
+            return evt
+
+
 def test_ws_subscribe_receives_messages(tmp_path):
     app = create_app(Config(db_path=str(tmp_path / "ws.db"), api_token=""))
     with TestClient(app) as client:
@@ -25,9 +33,13 @@ def test_ws_subscribe_receives_messages(tmp_path):
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
 
-            ws.send_json({"type": "subscribe", "room_id": room_id, "after_seq": 0})
-            # 訂閱時應先收到既有訊息（join 系統訊息）
-            evt = ws.receive_json()
+            # 訂閱要帶身分——WS 是讀取通道，非成員不得掛上來
+            ws.send_json({"type": "subscribe", "room_id": room_id,
+                          "after_seq": 0,
+                          "participant_id": joined["participant_id"]})
+            # 訂閱時應先收到既有訊息（join 系統訊息）。帶身分訂閱會先推一則
+            # questions（定向問題與訊息共用同一條 socket），跳過它
+            evt = _next_messages(ws)
             assert evt["type"] == "messages" and evt["room_id"] == room_id
             assert evt["messages"][-1]["kind"] == "system"
             last_seq = evt["messages"][-1]["seq"]
@@ -38,7 +50,7 @@ def test_ws_subscribe_receives_messages(tmp_path):
                 json={"content": "即時測試"},
                 headers={"X-Participant-Id": joined["participant_id"]},
             )
-            evt = ws.receive_json()
+            evt = _next_messages(ws)
             assert evt["messages"][-1]["seq"] == last_seq + 1
             assert evt["messages"][-1]["content"] == "即時測試"
 
@@ -67,20 +79,25 @@ async def test_sweeper_removes_idle_agent_and_archives(tmp_path):
             room_id = (
                 await client.post("/api/rooms", json={"name": "閒置房"})
             ).json()["id"]
-            await client.post(
+            idle = (await client.post(
                 f"/api/rooms/{room_id}/join",
                 json={"kind": "claude", "session_key": "s1", "preferred_name": "Idle"},
-            )
+            )).json()
+            # 被 sweeper 移出之後身分不會消失，仍讀得到房——這正是要驗的
+            headers = {"X-Participant-Id": idle["participant_id"]}
             # 等 sweeper 跑過：閒置逾時 → 移出 → 房內無 agent → 封存
             for _ in range(40):
                 await asyncio.sleep(0.05)
-                detail = (await client.get(f"/api/rooms/{room_id}")).json()
+                detail = (await client.get(
+                    f"/api/rooms/{room_id}", headers=headers)).json()
                 if detail["room"]["status"] == "archived":
                     break
             assert detail["room"]["status"] == "archived"
             assert detail["participants"][0]["status"] == "removed"
 
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            # 被 sweeper 移出的身分仍讀得到歷史（只有被踢才看不到）
+            msgs = (await client.get(
+                f"/api/rooms/{room_id}/messages", headers=headers)).json()["messages"]
             assert any("因閒置逾時被移出" in m["content"] for m in msgs)
 
 
@@ -109,7 +126,9 @@ async def test_sweeper_keeps_active_agent(tmp_path):
                 f"/api/rooms/{room_id}/heartbeat",
                 headers={"X-Participant-Id": joined["participant_id"]},
             )
-            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            detail = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": joined["participant_id"]})).json()
             assert detail["room"]["status"] == "active"
             assert detail["participants"][0]["status"] == "active"
 
@@ -127,8 +146,13 @@ async def test_never_visited_room_not_archived(tmp_path):
     ) as client:
         async with app.router.lifespan_context(app):
             room_id = (
-                await client.post("/api/rooms", json={"name": "新房"})
+                await client.post(
+                    "/api/rooms",
+                    json={"name": "新房", "session_key": "creator-key"})
             ).json()["id"]
             await asyncio.sleep(0.2)
-            detail = (await client.get(f"/api/rooms/{room_id}")).json()
+            # 還沒有人 join 的房，建立者仍讀得到自己的房
+            detail = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Session-Key": "creator-key"})).json()
             assert detail["room"]["status"] == "active"

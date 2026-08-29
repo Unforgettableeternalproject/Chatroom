@@ -188,7 +188,8 @@ def _participant_id_by_name(room_id: str, name: str) -> str:
     agent 手上有的是名字（訊息裡看到的那個），Hub 要的是 id。這層轉換放在
     bridge，免得每個 agent 自己去翻房間詳情——翻錯的話會靜靜地問到別人身上。
     """
-    data = hub().request("GET", f"/api/rooms/{room_id}")
+    # 帶身分：房間詳情已經收成「房內的人才看得到」，裸請求會 401
+    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}")
     actives = [
         p for p in data.get("participants", [])
         if p.get("status") == "active"
@@ -639,18 +640,21 @@ def chatroom_send_file(
 
 @mcp.tool()
 @_guard
-def chatroom_get_file(attachment_id: str, save_dir: str = "") -> dict:
+def chatroom_get_file(room_id: str, attachment_id: str, save_dir: str = "") -> dict:
     """把聊天室裡的附件下載到本機，回傳存檔路徑。
 
     **圖片要「看」的話，取回後用你的檔案讀取工具打開這個路徑**——附件內容不會
     塞進工具回應裡，那會把整個對話脈絡吃掉，大一點的圖甚至一則就爆掉。
 
-    ``save_dir`` 省略時存到系統暫存目錄。附件 id 在訊息的 ``attachments`` 欄位裡。
+    ``save_dir`` 省略時存到系統暫存目錄。附件 id 在訊息的 ``attachments`` 欄位裡，
+    ``room_id`` 就是那則訊息所在的房間——附件跟著訊息走，房外的人取不到。
     """
-    meta = hub().request("GET", f"/api/attachments/{attachment_id}/meta")
-    info = meta["attachment"]
-    content = hub().request(
-        "GET", f"/api/attachments/{attachment_id}", raw=True, timeout=120.0
+    info = _room_request(
+        room_id, "GET", f"/api/attachments/{attachment_id}/meta"
+    )["attachment"]
+    content = _room_request(
+        room_id, "GET", f"/api/attachments/{attachment_id}",
+        raw=True, timeout=120.0,
     )
     target_dir = (
         Path(save_dir).expanduser()

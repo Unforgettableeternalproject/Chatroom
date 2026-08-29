@@ -274,6 +274,53 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         return row
 
+    async def _creator_or_member(
+        room, participant_id: str | None, session_key: str | None
+    ):
+        """房主視角的門檻：建立者本人，或房內成員。
+
+        建房到 join 之間有一段空窗（指派 UI 正開在那個空窗上——「邀請別人
+        進來」本來就發生在自己還沒進去的時候），要求先成為成員會讓房主連
+        自己的房都打不開。`you_are_admin` 本來就用同一個 header 判定。
+
+        被踢的人不會是建立者（kick 擋掉了踢自己），所以這不是繞道。
+        """
+        if room["creator_session_key"] and session_key == room["creator_session_key"]:
+            return None
+        return await _member_or_403(room["id"], participant_id)
+
+    async def _member_or_403(room_id: str, participant_id: str | None):
+        """讀取房內內容的門檻：必須**曾經**是這個房的成員，且不是被踢出的。
+
+        沒有這道門檻時，「踢出」在使用者眼中就是沒有生效——被踢的人照樣讀得到
+        全部歷史與即時訊息，只是不能發言。房間必須是真的邊界，不能只是名冊。
+
+        ⚠️ 刻意**不**要求 `status='active'`：自己離開、或閒置逾時被移出的人，
+        回頭讀當時的歷史是正當的（封存房唯讀瀏覽本來就這樣用）。要求 active
+        會讓「離開房間」變成「銷毀自己的紀錄」，那不是離開的意思。
+        **被踢是唯一的例外**——那是一個「不要再看到這裡」的人為決定。
+
+        也刻意不更新 `last_seen_at`：讀取不是活躍證明，拿它當心跳會讓掛著
+        長輪詢的 agent 永遠掃不掉。即時通道（updates）另外要求 active 身分。
+        """
+        if not participant_id:
+            raise _err(401, "participant_header_required",
+                       "此端點需要 X-Participant-Id 標頭：房內內容只給房內的人")
+        row = await (
+            await app.state.db.execute(
+                "SELECT status FROM participant WHERE id=? AND room_id=?",
+                (participant_id, room_id),
+            )
+        ).fetchone()
+        if row is None:
+            # 不分「查無此身分」與「身分屬於別的房間」：對非成員來說，
+            # 這個房間的存在與否本來就不該從錯誤碼推得出來
+            raise _err(403, "not_a_member", "你不是這個聊天室的成員")
+        if row["status"] == "kicked":
+            raise _err(403, "participant_kicked",
+                       "你已被管理員移出這個聊天室，看不到房內的內容")
+        return row
+
     async def _touch_session(
         session_key: str,
         kind: str | None = None,
@@ -461,8 +508,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def get_room(
         room_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
+        # 成員名冊與 session_key、來源 IP 都在這個回應裡，非成員不該看得到
+        await _creator_or_member(room, x_participant_id, x_session_key)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -861,10 +911,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         before_seq: int | None = None,
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
+        x_participant_id: str | None = Header(default=None),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         兩者互斥；回傳一律以 seq 遞增排列。"""
         await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id)
         if before_seq is not None and after_seq:
             raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
         db = app.state.db
@@ -908,9 +960,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
-        me = None
-        if x_participant_id:
-            me = await _participant(x_participant_id, room_id)
+        # 從選填改必填：這是取得即時訊息的通道，非成員掛在這裡等於被踢之後
+        # 照樣旁聽整個房間。這裡要的是 **active** 身分（不是 _member_or_403
+        # 那種「曾經是成員」）——已經離開的人不需要即時推送，讓他掛著只是
+        # 白佔一條長輪詢
+        me = await _participant(x_participant_id, room_id)
 
         async def _status() -> str:
             row = await (
@@ -1023,9 +1077,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     @app.get("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
-    async def list_room_assignments(room_id: str):
+    async def list_room_assignments(
+        room_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         """房間視角的指派列表（UI 檢視用，含所有狀態）。"""
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
+        await _creator_or_member(room, x_participant_id, x_session_key)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -1190,7 +1249,9 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/attachments/{attachment_id}/meta",
              dependencies=[Depends(require_auth)])
-    async def attachment_meta(attachment_id: str):
+    async def attachment_meta(
+        attachment_id: str, x_participant_id: str | None = Header(default=None)
+    ):
         """附件的 metadata。下載端點回的是檔案本體，拿不到檔名與型別。"""
         db = app.state.db
         row = await (
@@ -1204,12 +1265,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
+        # 附件跟著訊息走，門檻就跟著訊息一樣：非成員讀不到房內的檔案
+        await _member_or_403(row["room_id"], x_participant_id)
         meta = dict(row)
         meta["is_image"] = meta["mime"].startswith("image/")
         return {"attachment": meta}
 
     @app.get("/api/attachments/{attachment_id}", dependencies=[Depends(require_auth)])
-    async def download_attachment(attachment_id: str):
+    async def download_attachment(
+        attachment_id: str, x_participant_id: str | None = Header(default=None)
+    ):
         db = app.state.db
         row = await (
             await db.execute(
@@ -1218,6 +1283,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
+        await _member_or_403(row["room_id"], x_participant_id)
         path = _blob_path(row["sha256"])
         if not path.exists():
             # metadata 在、實體不在：備份只帶走 db 沒帶 attachments/ 就會這樣，
@@ -1309,7 +1375,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
     async def list_questions(
-        room_id: str, status: str | None = None, target_id: str | None = None
+        room_id: str,
+        status: str | None = None,
+        target_id: str | None = None,
+        x_participant_id: str | None = Header(default=None),
     ):
         """房內問題列表。
 
@@ -1317,6 +1386,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         要消除的東西，所以問題對房內成員一律可見，只有 UI 顯示是定向的。
         """
         await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id)
         db = app.state.db
         conds, params = ["q.room_id=?"], [room_id]
         if status:
@@ -1647,6 +1717,26 @@ def create_app(config: Config | None = None) -> FastAPI:
                 if kind == "subscribe":
                     rid = data["room_id"]
                     pid = str(data.get("participant_id") or "")
+                    # 這條是 App 的主要讀取通道：REST 收緊了而這裡沒收，
+                    # 被踢的人照樣即時收得到整個房間，等於白做
+                    try:
+                        await _member_or_403(rid, pid)
+                    except HTTPException as exc:
+                        detail = exc.detail
+                        async with send_lock:
+                            await ws.send_json({
+                                "type": "error", "room_id": rid,
+                                "code": detail.get("code") if isinstance(detail, dict)
+                                        else "not_a_member",
+                                "message": detail.get("message") if isinstance(detail, dict)
+                                           else "你不是這個聊天室的成員",
+                            })
+                        # 身分失效時要把既有 pump 一起收掉——訂閱是在還有效的
+                        # 時候建立的，被踢之後它會繼續推送
+                        if rid in pumps:
+                            pumps.pop(rid).cancel()
+                            pump_ids.pop(rid, None)
+                        continue
                     # 身分是 join 之後才拿得到的，client 因此會在同一個房間上
                     # 再 subscribe 一次來補帶 participant_id。只看「有沒有
                     # pump」的話那次會被整個忽略，而既有 pump 是用空身分建的
