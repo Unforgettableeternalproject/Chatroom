@@ -17,6 +17,7 @@ import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/question_card.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
 import '../../ws/realtime_service.dart';
@@ -473,6 +474,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
         ]),
       ),
+      if (myId != null) _PendingQuestions(roomId: roomId, participantId: myId),
       MessageComposer(
         members: activeMembers,
         enabled: !archived,
@@ -1036,6 +1038,49 @@ class _MemberTile extends StatelessWidget {
             ),
         ]),
       ),
+    );
+  }
+}
+
+
+/// 指名問「我」的待答問題。
+///
+/// 位置刻意在輸入框正上方而不是訊息流裡：問題是待辦不是對話，混進時間軸會被
+/// 後續訊息推走看不見——而「人沒看到」正是 agent 轉回自己 session 重複發問的
+/// 起點，也就是這整個機制要消除的東西。
+class _PendingQuestions extends ConsumerWidget {
+  const _PendingQuestions({required this.roomId, required this.participantId});
+
+  final String roomId;
+  final String participantId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final questions = ref.watch(roomQuestionsProvider(roomId)).value ?? const [];
+    if (questions.isEmpty) return const SizedBox.shrink();
+    final api = ref.watch(questionsApiProvider);
+
+    Future<void> respond(String id, String kind, String answer) async {
+      try {
+        await api.answer(id, kind: kind, answer: answer,
+            participantId: participantId);
+      } on ApiException catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('回答失敗：${e.message}')));
+      }
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final q in questions)
+          QuestionCard(
+            question: q,
+            onAnswer: (kind, answer) => respond(q.id, kind, answer),
+            onSkip: () => respond(q.id, 'skip', ''),
+          ),
+      ],
     );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import '../models/message.dart';
+import '../models/question.dart';
 
 /// 單一房間的訊息 store。REST 與 WS 都走同一條 upsert 路徑——
 /// 重連補訊、冷啟動載入、往上捲歷史共用同一份合併邏輯。
@@ -39,6 +40,27 @@ class RoomFeed {
 
   /// WS 推播順帶的房間狀態（archived 偵測）。
   String? get roomStatus => _roomStatus;
+
+  List<Question> _questions = const [];
+
+  /// 目前指名問「我」的待答問題（server 推完整快照，直接覆蓋）。
+  List<Question> get questions => _questions;
+
+  /// 覆蓋而非合併：已被回答或略過的問題會從 server 的快照中消失，
+  /// 用合併的話它們會永遠留在畫面上。
+  void setQuestions(List<Question> incoming) {
+    if (_sameQuestionIds(incoming)) return;
+    _questions = List.unmodifiable(incoming);
+    _notify();
+  }
+
+  bool _sameQuestionIds(List<Question> incoming) {
+    if (_questions.length != incoming.length) return false;
+    for (var i = 0; i < incoming.length; i++) {
+      if (_questions[i].id != incoming[i].id) return false;
+    }
+    return true;
+  }
 
   Stream<void> get changes => _changes.stream;
 
@@ -96,6 +118,7 @@ class RoomFeed {
     _cursor = 0;
     _oldestLoadedSeq = null;
     _hasMoreHistory = false;
+    _questions = const [];
     _notify();
   }
 

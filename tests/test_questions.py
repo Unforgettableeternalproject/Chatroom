@@ -323,3 +323,47 @@ async def test_room_questions_are_visible_to_agents(tmp_path):
             assert len(qs) == 1
             assert qs[0]["prompt"] == "要用哪個方案？"
             assert qs[0]["asker_name"] == "機器0", "要看得出是誰問的"
+
+
+@pytest.mark.asyncio
+async def test_ws_pushes_questions_only_to_the_target(tmp_path):
+    """定向提問若推給全房，UI 上就會出現不是問自己的題目——形同公開發問。"""
+    from httpx import ASGITransport
+    app, client = await _make(tmp_path, "q_ws")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client, humans=2, agents=1)
+            asked = people[0]
+            other = people[1]
+            await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "只問你一個人",
+                      "target_participant_id": asked["participant_id"]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+
+            from starlette.testclient import TestClient
+            with TestClient(app) as tc:
+                with tc.websocket_connect("/ws") as ws:
+                    ws.send_json({"type": "subscribe", "room_id": room_id,
+                                  "participant_id": asked["participant_id"]})
+                    # 訂閱當下就要收到——問題可能在連線之前就問了
+                    for _ in range(5):
+                        event = ws.receive_json()
+                        if event["type"] == "questions":
+                            break
+                    assert event["type"] == "questions"
+                    assert len(event["questions"]) == 1
+                    assert event["questions"][0]["prompt"] == "只問你一個人"
+
+                with tc.websocket_connect("/ws") as ws:
+                    ws.send_json({"type": "subscribe", "room_id": room_id,
+                                  "participant_id": other["participant_id"]})
+                    ws.send_json({"type": "ping"})
+                    events = []
+                    for _ in range(3):
+                        events.append(ws.receive_json())
+                        if events[-1]["type"] == "pong":
+                            break
+                    kinds = [e["type"] for e in events]
+                    assert "questions" not in kinds, "不是問他的題目不該推給他"

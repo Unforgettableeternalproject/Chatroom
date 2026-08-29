@@ -184,3 +184,15 @@ async def test_assignment_reports_target_liveness(tmp_path):
                 "/api/assignments", params={"session_key": "claude-never-seen"}
             )
             assert len(r.json()["assignments"]) == 1
+
+
+def test_unknown_403_code_still_counts_as_identity_invalid():
+    """滾動升級的保命契約：不是每台機器都會同步更新。
+
+    新 Hub 回的新 code，舊 bridge 不認得——只要它仍落在 identity_invalid 那條
+    路徑，舊 watcher 就會結束進程；若哪天有人把 403 的 fallback 改成「暫時性
+    錯誤」，舊 watcher 會變成永遠退不掉、還一直打 Hub 的殭屍。
+    """
+    err = translate_status(403, {"code": "some_future_code", "message": "x"}, "u")
+    assert err.identity_invalid is True
+    assert err.departure is None, "不認得的 code 不得亂猜離場原因"

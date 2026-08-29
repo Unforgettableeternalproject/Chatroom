@@ -1092,12 +1092,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         """UI 即時通道。
 
         客戶端指令（JSON）：
-            {"type": "subscribe", "room_id": "...", "after_seq": 0}
+            {"type": "subscribe", "room_id": "...", "after_seq": 0,
+             "participant_id": "..."}
             {"type": "unsubscribe", "room_id": "..."}
             {"type": "ping"}
         伺服器事件：
             {"type": "messages", "room_id", "room_status", "messages": [...]}
+            {"type": "questions", "room_id", "questions": [...]}
             {"type": "pong"}
+
+        ``participant_id`` 選填，帶了才會收到 ``questions``——提問是定向的，
+        只推給被問的那個人。沒帶就只是個看訊息的連線。
         """
         if cfg.api_token and ws.query_params.get("token") != cfg.api_token:
             logger.info("ws: 拒絕連線（token 驗證失敗）")
@@ -1109,9 +1114,41 @@ def create_app(config: Config | None = None) -> FastAPI:
         send_lock = asyncio.Lock()  # 多房間 pump 併發送出時避免交錯
         pumps: dict[str, asyncio.Task] = {}
 
-        async def pump(room_id: str, after_seq: int) -> None:
+        async def push_questions(room_id: str, participant_id: str, seen: set) -> set:
+            """把指派給這個人的待答問題推過去；集合沒變就不送，避免無謂重畫。"""
+            rows = await (
+                await db.execute(
+                    "SELECT q.*, p.display_name AS asker_name FROM question q"
+                    " LEFT JOIN participant p ON p.id=q.asker_id"
+                    " WHERE q.room_id=? AND q.target_id=? AND q.status='pending'"
+                    " ORDER BY q.created_at",
+                    (room_id, participant_id),
+                )
+            ).fetchall()
+            current = {r["id"] for r in rows}
+            if current == seen:
+                return seen
+            async with send_lock:
+                await ws.send_json({
+                    "type": "questions", "room_id": room_id,
+                    "questions": [_question_public(r) for r in rows],
+                })
+            return current
+
+        async def pump(room_id: str, after_seq: int, participant_id: str = "") -> None:
             last = after_seq
+            seen_questions: set = set()
+            if participant_id:
+                # 訂閱當下就先送一次：問題可能在連線之前就問了，等下一個事件
+                # 才推的話，重開 App 會看不到已經在等的問題
+                seen_questions = await push_questions(
+                    room_id, participant_id, {"__unset__"}
+                )
             while True:
+                if participant_id:
+                    seen_questions = await push_questions(
+                        room_id, participant_id, seen_questions
+                    )
                 rows = await (
                     await db.execute(
                         "SELECT * FROM message WHERE room_id=?"
@@ -1145,7 +1182,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     rid = data["room_id"]
                     if rid not in pumps:
                         pumps[rid] = asyncio.create_task(
-                            pump(rid, int(data.get("after_seq", 0)))
+                            pump(rid, int(data.get("after_seq", 0)),
+                                 str(data.get("participant_id") or ""))
                         )
                 elif kind == "unsubscribe":
                     task = pumps.pop(data.get("room_id", ""), None)

@@ -75,6 +75,9 @@ class RealtimeService {
   final Duration feedRetention;
 
   final Map<String, RoomFeed> _feeds = {};
+  /// room_id → 本人在該房的 participant_id。subscribe 時一併送出，
+  /// server 才知道該把哪些定向問題推過來。
+  final Map<String, String> _participantIds = {};
   final Map<String, int> _refCounts = {};
   final Map<String, Timer> _retireTimers = {};
 
@@ -124,8 +127,11 @@ class RealtimeService {
 
   // ---------- 訂閱 ----------
 
-  RoomFeed subscribe(String roomId) {
+  RoomFeed subscribe(String roomId, {String? participantId}) {
     _retireTimers.remove(roomId)?.cancel();
+    if (participantId != null && participantId.isNotEmpty) {
+      _participantIds[roomId] = participantId;
+    }
     _refCounts[roomId] = (_refCounts[roomId] ?? 0) + 1;
     final feed = _feeds.putIfAbsent(roomId, () => RoomFeed(roomId));
     if (_refCounts[roomId] == 1 && _status is Connected) {
@@ -135,6 +141,16 @@ class RealtimeService {
       }));
     }
     return feed;
+  }
+
+  /// 身分是 join 之後才拿得到的，而訂閱在那之前就發生了。身分就緒時補一次
+  /// subscribe，server 才知道要把哪些定向問題推過來——不補的話首次進房的人
+  /// 會看不到問題，而且畫面上完全沒有異狀。
+  void setParticipantId(String roomId, String participantId) {
+    if (participantId.isEmpty || _participantIds[roomId] == participantId) return;
+    _participantIds[roomId] = participantId;
+    _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
+        participantId: participantId));
   }
 
   void unsubscribe(String roomId) {
@@ -197,7 +213,8 @@ class RealtimeService {
         _setStatus(const Syncing());
         await _syncAll();
         for (final roomId in _refCounts.keys) {
-          conn.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0));
+          conn.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
+              participantId: _participantIds[roomId]));
         }
         syncOk = true;
       } catch (e) {
@@ -264,7 +281,8 @@ class RealtimeService {
 
   Future<void> _attachRoom(String roomId) async {
     await _syncRoom(roomId);
-    _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0));
+    _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
+        participantId: _participantIds[roomId]));
   }
 
   Future<void> _syncRoom(String roomId) async {
@@ -332,6 +350,8 @@ class RealtimeService {
         if (f == null) return;
         f.upsertAll(messages);
         f.setRoomStatus(roomStatus);
+      case WsQuestionsEvent(:final roomId, :final questions):
+        _feeds[roomId]?.setQuestions(questions);
       case WsPongEvent():
         _pongDeadline?.cancel();
         _pongDeadline = null;

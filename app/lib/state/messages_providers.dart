@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/message.dart';
+import '../models/question.dart';
 import '../ws/room_feed.dart';
 import 'app_providers.dart';
 
@@ -9,7 +10,10 @@ import 'app_providers.dart';
 final roomFeedProvider =
     Provider.autoDispose.family<RoomFeed, String>((ref, roomId) {
   final service = ref.watch(realtimeServiceProvider);
-  final feed = service.subscribe(roomId);
+  // 上次進房留下的身分（同步可讀）先用著；首次進房時是 null，
+  // 由 roomQuestionsProvider 在 join 完成後補送
+  final cached = ref.watch(settingsRepoProvider).participantId(roomId);
+  final feed = service.subscribe(roomId, participantId: cached);
   ref.onDispose(() => service.unsubscribe(roomId));
   return feed;
 });
@@ -50,4 +54,22 @@ final identityProvider = FutureProvider.autoDispose
     participantId: result.participantId,
     displayName: result.displayName,
   );
+});
+
+/// 指名問「我」的待答問題。
+///
+/// 這裡順便把 join 後才拿得到的 participant_id 交給 realtime service——
+/// 訂閱發生在 join 之前，不補送的話首次進房永遠收不到問題。
+final roomQuestionsProvider = StreamProvider.autoDispose
+    .family<List<Question>, String>((ref, roomId) async* {
+  final feed = ref.watch(roomFeedProvider(roomId));
+  final identity = ref.watch(identityProvider(roomId));
+  final participantId = identity.value?.participantId;
+  if (participantId != null) {
+    ref.watch(realtimeServiceProvider).setParticipantId(roomId, participantId);
+  }
+  yield feed.questions;
+  await for (final _ in feed.changes) {
+    yield feed.questions;
+  }
 });

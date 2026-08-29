@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'message.dart';
+import 'question.dart';
 
 /// WS 伺服器事件。協定唯一定義處在 ws/ws_protocol.dart，
 /// 這裡只放解碼後的資料形。
@@ -22,6 +23,17 @@ class WsMessagesEvent extends WsEvent {
   final String roomId;
   final String? roomStatus;
   final List<Message> messages;
+}
+
+/// {"type": "questions", "room_id", "questions": [...]}
+/// 只會推給被問的那個人（subscribe 時帶 participant_id 才會收到）。
+/// server 推的是該人目前所有待答問題的完整快照，client 直接覆蓋。
+@immutable
+class WsQuestionsEvent extends WsEvent {
+  const WsQuestionsEvent({required this.roomId, required this.questions});
+
+  final String roomId;
+  final List<Question> questions;
 }
 
 /// {"type": "pong"}

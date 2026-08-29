@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/message.dart';
+import '../models/question.dart';
 import '../models/ws_event.dart';
 
 /// WS 協定的唯一定義處。server 的 /ws 是純 JSON text frame：
@@ -8,8 +9,16 @@ import '../models/ws_event.dart';
 class WsProtocol {
   WsProtocol._();
 
-  static String subscribe(String roomId, int afterSeq) =>
-      jsonEncode({'type': 'subscribe', 'room_id': roomId, 'after_seq': afterSeq});
+  /// ``participantId`` 帶了才會收到 questions 事件——提問是定向的，
+  /// server 只推給被問的那個人。
+  static String subscribe(String roomId, int afterSeq, {String? participantId}) =>
+      jsonEncode({
+        'type': 'subscribe',
+        'room_id': roomId,
+        'after_seq': afterSeq,
+        if (participantId != null && participantId.isNotEmpty)
+          'participant_id': participantId,
+      });
 
   static String unsubscribe(String roomId) =>
       jsonEncode({'type': 'unsubscribe', 'room_id': roomId});
@@ -26,6 +35,13 @@ class WsProtocol {
           roomStatus: data['room_status'] as String?,
           messages: ((data['messages'] as List?) ?? const [])
               .map((e) => Message.fromJson(e as Map<String, dynamic>))
+              .toList(),
+        );
+      case 'questions':
+        return WsQuestionsEvent(
+          roomId: data['room_id'] as String,
+          questions: ((data['questions'] as List?) ?? const [])
+              .map((e) => Question.fromJson(e as Map<String, dynamic>))
               .toList(),
         );
       case 'pong':
