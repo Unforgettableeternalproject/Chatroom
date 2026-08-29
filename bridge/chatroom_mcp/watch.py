@@ -135,22 +135,67 @@ def _resolve_codex_argv() -> list[str]:
     return [str(path)]
 
 
-def _read_bridge_state(session_key: str, room_id: str) -> tuple[str | None, str | None, int]:
-    """從 bridge state 檔讀 (participant_id, display_name, last_seq)。唯讀。"""
-    path = identity.state_path(session_key)
+def _state_candidates(session_key: str) -> list[Path]:
+    """可能存放本 session 身分的 state 檔，依可信度排序。
+
+    第一順位是「照 key 算出來的檔名」，其餘是同目錄的其他 state 檔——因為
+    **檔名不是權威**，內容裡的 ``session_key`` 才是。
+    """
+    mine = identity.state_path(session_key)
+    paths = [mine]
+    for folder in {mine.parent, Path.home() / ".chatroom"}:
+        try:
+            paths.extend(sorted(folder.glob("state-*.json")))
+        except OSError:
+            continue
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            ordered.append(path)
+    return ordered
+
+
+def _entry_of(path: Path, room_id: str) -> tuple[str | None, dict]:
+    """讀一個 state 檔，回傳 (檔案自報的 session_key, 該房的 entry)。"""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        entry = raw.get("rooms", {}).get(room_id, {})
+    except (OSError, ValueError):
+        return None, {}
+    if not isinstance(raw, dict):
+        return None, {}
+    key = raw.get("session_key")
+    entry = (raw.get("rooms") or {}).get(room_id) or {}
+    return (key if isinstance(key, str) else None,
+            entry if isinstance(entry, dict) else {})
+
+
+def _read_bridge_state(session_key: str, room_id: str) -> tuple[str | None, str | None, int]:
+    """從 bridge state 檔讀 (participant_id, display_name, last_seq)。唯讀。
+
+    **依內容而不是依檔名認檔。** 檔名由 bridge 進程啟動當下的 key 決定，但
+    房內身分可以在那之後被改寫：用 ``assignment_id`` 加入時，Hub 會回一把
+    canonical session_key，bridge 把它寫進檔案內容，檔名卻還是舊的
+    （2026-08-29 實測）。照檔名去找的人於是撲空——讀不到 display_name 就
+    判不出訊息有沒有 @ 到自己，**一則 mention 事件都不會發，而且不報錯**。
+    """
+    for path in _state_candidates(session_key):
+        key, entry = _entry_of(path, room_id)
+        # 別的 key 的檔案：那是別人的身分，不能撿來用
+        if key is not None and key != session_key:
+            continue
         pid = entry.get("participant_id")
+        if not isinstance(pid, str):
+            continue
         name = entry.get("display_name")
         seq = entry.get("last_seq", 0)
         return (
-            pid if isinstance(pid, str) else None,
+            pid,
             name if isinstance(name, str) else None,
             seq if isinstance(seq, int) and not isinstance(seq, bool) else 0,
         )
-    except (OSError, ValueError):
-        return None, None, 0
+    return None, None, 0
 
 
 def _sibling_states(session_key: str, room_id: str) -> list[tuple[str, str]]:
@@ -163,21 +208,18 @@ def _sibling_states(session_key: str, room_id: str) -> list[tuple[str, str]]:
     """
     mine = identity.state_path(session_key)
     found: list[tuple[str, str]] = []
-    try:
-        candidates = sorted(mine.parent.glob("state-*.json"))
-    except OSError:
-        return found
-    for path in candidates:
+    for path in _state_candidates(session_key):
         if path == mine:
             continue
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        key, entry = _entry_of(path, room_id)
+        # 自報 key 與我相同的檔案不是「別把 key」——那是同一個身分寫在另一個
+        # 檔名底下（_read_bridge_state 已經會撿它），列進來會把「檔案位置對不上」
+        # 誤報成「身分分裂」，而兩者的處置完全不同
+        if key == session_key:
             continue
-        entry = (raw.get("rooms") or {}).get(room_id) or {}
         if entry.get("participant_id"):
-            key = raw.get("session_key") or path.name
-            found.append((str(key), str(entry.get("display_name") or "（無名稱）")))
+            found.append((str(key or path.name),
+                          str(entry.get("display_name") or "（無名稱）")))
     return found
 
 
