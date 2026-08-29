@@ -9,6 +9,7 @@ import '../../api/api_client.dart';
 import '../../api/rooms_api.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
+import '../../core/config/build_info.dart';
 import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -294,6 +295,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   onPressed: () => context.go('/rooms'),
                 ),
               ],
+              const SizedBox(height: 26),
+              Divider(color: s.line, height: 1),
+              const SizedBox(height: 22),
+              // 版本一定要在設定頁看得到：回報問題時要問的第一件事就是
+              // 「你手上是哪一份」，而使用者得找得到那個字串才答得出來
+              Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('App 版本',
+                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                      const SizedBox(height: 3),
+                      Text(
+                        BuildInfo.current.isKnown
+                            ? '回報問題時附上這串，才對得出是哪一份程式碼'
+                            // 明說取不到，不要用版本號填空
+                            : '這份 App 沒有版本標記——build 時沒帶 commit，'
+                                '無法確認它是哪一份程式碼',
+                        style: UepText.serif(
+                            size: 12, color: s.inkMute, height: 1.7),
+                      ),
+                    ],
+                  ),
+                ),
+                SelectableText(BuildInfo.current.label,
+                    style: UepText.code(size: 11, color: s.inkSoft)),
+              ]),
               const SizedBox(height: 26),
               Divider(color: s.line, height: 1),
               const SizedBox(height: 22),

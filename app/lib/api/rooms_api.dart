@@ -87,9 +87,13 @@ class JoinResult {
 }
 
 class HealthResult {
-  const HealthResult({required this.ok, required this.version});
+  const HealthResult({required this.ok, required this.version, this.build});
   final bool ok;
   final String version;
+
+  /// Hub 的 build 資訊（`{version, commit, built_at, source}`）。
+  /// 舊版 Hub 不回這一段——那時是 null，而 null **不等於相符**。
+  final Map<String, dynamic>? build;
 }
 
 class RoomsApi {
@@ -102,6 +106,7 @@ class RoomsApi {
         return HealthResult(
           ok: (res.data?['ok'] as bool?) ?? false,
           version: (res.data?['version'] as String?) ?? '?',
+          build: res.data?['build'] as Map<String, dynamic>?,
         );
       });
 

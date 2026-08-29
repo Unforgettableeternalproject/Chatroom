@@ -10,6 +10,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
+import '../../widgets/version_banner.dart';
 import '../../widgets/connection_pill.dart';
 import '../rooms/room_list_screen.dart';
 
@@ -69,6 +70,10 @@ class _AppShellState extends ConsumerState<AppShell>
     return Scaffold(
       backgroundColor: s.bg,
       body: Column(children: [
+        // 版本對不上時的警示。放在最上方、所有畫面之上——這條訊息要回答的
+        // 是「我看到的東西是不是最新的」，而那個疑問發生在你發現功能不見
+        // 的當下，不是在你想起要去翻設定的時候
+        const VersionBanner(),
         // top bar
         Container(
           height: 56,

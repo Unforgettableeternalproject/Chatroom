@@ -9,6 +9,8 @@ import '../api/questions_api.dart';
 import '../api/rooms_api.dart';
 import '../api/tokens_api.dart';
 import '../core/config/app_settings.dart';
+import '../core/config/build_info.dart';
+import '../core/errors/api_exception.dart';
 import '../core/identity/device_identity.dart';
 import '../ws/realtime_service.dart';
 import '../ws/ws_protocol.dart';
@@ -116,6 +118,22 @@ final questionsApiProvider =
     Provider((ref) => QuestionsApi(ref.watch(dioProvider)));
 final tokensApiProvider =
     Provider((ref) => TokensApi(ref.watch(dioProvider)));
+
+/// Hub 的版本資訊與本機 App 的比對結果。
+///
+/// 這整套機制的用途只有一個：讓「手上跑的是哪一份程式碼」變成一個可以回答
+/// 的問題。今天的事故成本就是沒有人答得出來——測試端拿著 16 小時前的產物
+/// 驗收，而三個人用三種方法去猜，全都在猜。
+final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+  final api = ref.watch(roomsApiProvider);
+  try {
+    final health = await api.health();
+    return BuildInfo.compare(BuildInfo.current, health.build);
+  } on ApiException {
+    // 連不上 Hub 是另一回事，不要偽裝成版本問題
+    return VersionMatch.unknown;
+  }
+});
 
 // ---------- Realtime ----------
 
