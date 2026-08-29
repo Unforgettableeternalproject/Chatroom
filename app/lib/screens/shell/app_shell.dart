@@ -8,8 +8,10 @@ import 'package:go_router/go_router.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../notifications/taskbar_badge.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
+import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../widgets/connection_pill.dart';
@@ -64,8 +66,36 @@ class _AppShellState extends ConsumerState<AppShell>
       final online = results.any((r) => r != ConnectivityResult.none);
       if (online) ref.read(realtimeServiceProvider).retryNow();
     });
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _warnIfSettingsIncomplete());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncForeground(WidgetsBinding.instance.lifecycleState);
+      _warnIfSettingsIncomplete();
+    });
+  }
+
+  /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
+  /// 失焦）與 `hidden`（最小化／被切走）都要讓通知照發。
+  ///
+  /// 初始值刻意從 `lifecycleState` 取而不是預設 true：`didChangeAppLifecycleState`
+  /// 只在**變化時**觸發，App 若不是在前景啟動的，那個猜來的 true 就一直錯著，
+  /// 而錯的方向是「把通知吃掉」。
+  ///
+  /// ⚠️ 殘餘缺口：視窗**有焦點但被別的視窗完全蓋住**時，Flutter 眼中仍是
+  /// `resumed`。那種情況要靠平台端的可見性查詢，目前沒有接。
+  void _syncForeground(AppLifecycleState? state) {
+    if (state == null) return;
+    ref.read(notificationCenterProvider).foreground =
+        state == AppLifecycleState.resumed;
+  }
+
+  Future<void> _clearPendingMentions(String roomId) async {
+    final settings = ref.read(settingsRepoProvider);
+    if (settings.pendingMentions(roomId) == 0) return;
+    await settings.clearPendingMentions(roomId);
+    await TaskbarBadge.instance.apply(unhandledCount(
+      realtime: ref.read(realtimeServiceProvider),
+      pendingInvites: ref.read(myPendingInvitesProvider).length,
+      settings: settings,
+    ));
   }
 
   /// 設定沒填完就進到主畫面時，把「為什麼什麼都看不到」講出來。
@@ -121,10 +151,13 @@ class _AppShellState extends ConsumerState<AppShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       ref.read(realtimeServiceProvider).retryNow();
+      // 回到前景＝人來看了，正在看的那個房的待處理 mention 算處理過。
+      // 清除原本只掛在「有新訊息進來」上，所以「開著房間但沒有新訊息」
+      // 時那個數字會一直掛著——那正是回頭來看的人最常遇到的情況。
+      final roomId = ref.read(notificationCenterProvider).activeRoomId;
+      if (roomId != null) unawaited(_clearPendingMentions(roomId));
     }
-    // 前景狀態餵給通知中心：失焦/背景時才彈系統通知
-    ref.read(notificationCenterProvider).foreground =
-        state == AppLifecycleState.resumed;
+    _syncForeground(state);
   }
 
   @override
