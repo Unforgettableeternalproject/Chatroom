@@ -2,6 +2,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/attachment.dart';
 import 'package:chatroom_app/widgets/attachment_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _image = Attachment(
@@ -21,7 +22,9 @@ const _file = Attachment(
 );
 
 Widget _host({String? participantId, List<Attachment> attachments = const []}) =>
-    MaterialApp(
+    // ProviderScope：下載鈕要讀 attachmentsApiProvider
+    ProviderScope(
+        child: MaterialApp(
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: AttachmentView(
@@ -31,7 +34,7 @@ Widget _host({String? participantId, List<Attachment> attachments = const []}) =
           participantId: participantId,
         ),
       ),
-    );
+    ));
 
 void main() {
   group('圖片附件在身分就緒前不得發出請求', () {
@@ -66,6 +69,29 @@ void main() {
       await tester.pumpWidget(_host(attachments: const [_file]));
 
       expect(find.text('run.log'), findsOneWidget);
+    });
+  });
+
+  group('存到本機', () {
+    testWidgets('圖片與非圖片都有存檔鈕——兩者都是使用者要拿走的東西',
+        (tester) async {
+      await tester.pumpWidget(
+          _host(participantId: 'p1', attachments: const [_image, _file]));
+
+      expect(find.byIcon(Icons.download_outlined), findsNWidgets(2));
+    });
+
+    testWidgets('身分還沒到時存檔鈕仍在，但按下去只提示、不發請求',
+        (tester) async {
+      // 鈕直接消失的話，畫面會在身分到齊的瞬間跳一下；而且使用者會以為
+      // 這個附件「不能下載」，那是錯的——它只是還沒準備好
+      await tester.pumpWidget(_host(attachments: const [_file]));
+
+      expect(find.byIcon(Icons.download_outlined), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.download_outlined));
+      await tester.pump();
+
+      expect(find.textContaining('房間身分'), findsOneWidget);
     });
   });
 

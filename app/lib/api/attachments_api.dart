@@ -79,6 +79,28 @@ class AttachmentsApi {
         cancelToken: cancelToken,
       );
 
+  /// 取回附件內容。
+  ///
+  /// 一次讀進記憶體：上限由 Hub 的 max_attachment_bytes 決定（預設 25 MB），
+  /// 而存檔對話框本來就要完整 bytes，串流到暫存檔再讀回來只是多一次落地。
+  Future<Uint8List> download(
+    String attachmentId, {
+    String? participantId,
+    ProgressCallback? onProgress,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.get<List<int>>(
+          '/api/attachments/$attachmentId',
+          options: Options(
+            responseType: ResponseType.bytes,
+            headers: {'X-Participant-Id': ?participantId},
+            receiveTimeout: const Duration(minutes: 5),
+          ),
+          onReceiveProgress: onProgress,
+        );
+        return Uint8List.fromList(res.data ?? const []);
+      });
+
   Future<UploadedAttachment> _upload(
     String roomId, {
     required String participantId,

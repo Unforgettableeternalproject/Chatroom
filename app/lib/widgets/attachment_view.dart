@@ -1,4 +1,9 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../core/errors/api_exception.dart';
+import '../state/app_providers.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
@@ -54,13 +59,25 @@ class AttachmentView extends StatelessWidget {
           for (final a in attachments)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: a.isImage
-                  ? (_canFetch
-                      ? _ImageAttachment(
-                          attachment: a, url: _url(a), headers: _headers)
-                      // 身分還沒到：畫佔位而不是發一個註定失敗的請求
-                      : _ImagePlaceholder(attachment: a))
-                  : _FileAttachment(attachment: a),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: a.isImage
+                        ? (_canFetch
+                            ? _ImageAttachment(
+                                attachment: a, url: _url(a), headers: _headers)
+                            // 身分還沒到：畫佔位而不是發註定失敗的請求
+                            : _ImagePlaceholder(attachment: a))
+                        : _FileAttachment(attachment: a),
+                  ),
+                  // 存檔鈕獨立於預覽之外：蓋在圖片上會擋住內容，而附件的
+                  // 用途多半就是「這個你看一下」
+                  DownloadAttachmentButton(
+                      attachment: a, participantId: participantId),
+                ],
+              ),
             ),
         ],
       ),
@@ -123,6 +140,88 @@ class _ImageAttachment extends StatelessWidget {
     );
   }
 }
+
+/// 把附件存到本機。
+///
+/// 走系統存檔對話框（`file_picker` 已是既有依賴），由使用者決定放哪裡——
+/// 自動丟到「下載」資料夾會讓人找不到，而這個 App 的附件常常是要拿去
+/// 別的地方用的（截圖、log、報告）。
+class DownloadAttachmentButton extends ConsumerStatefulWidget {
+  const DownloadAttachmentButton({
+    super.key,
+    required this.attachment,
+    required this.participantId,
+  });
+
+  final Attachment attachment;
+  final String? participantId;
+
+  @override
+  ConsumerState<DownloadAttachmentButton> createState() =>
+      _DownloadAttachmentButtonState();
+}
+
+class _DownloadAttachmentButtonState
+    extends ConsumerState<DownloadAttachmentButton> {
+  bool _busy = false;
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _save() async {
+    final pid = widget.participantId;
+    if (pid == null || pid.isEmpty) {
+      // 房間是讀取邊界，沒有身分連請求都不該發
+      _toast('還在取得房間身分，稍候再試');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final bytes = await ref
+          .read(attachmentsApiProvider)
+          .download(widget.attachment.id, participantId: pid);
+      // 先下載再開對話框：對話框開著時如果下載才失敗，使用者已經選好位置
+      // 卻拿到一個錯誤，那個順序讓人以為是存檔失敗（其實是取檔失敗）
+      final saved = await FilePicker.saveFile(
+        fileName: widget.attachment.filename,
+        bytes: bytes,
+        mimeType: widget.attachment.mime,
+        dialogTitle: '儲存附件',
+      );
+      if (saved == null) return;   // 使用者按了取消，不是錯誤
+      _toast('已存檔：${widget.attachment.filename}');
+    } on AttachmentGoneException catch (e) {
+      // metadata 在、實體不在：講清楚它回不來了，別讓人一直重試
+      _toast(e.message);
+    } on ApiException catch (e) {
+      _toast('下載失敗：${e.message}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return IconButton(
+      tooltip: '存到本機',
+      visualDensity: VisualDensity.compact,
+      onPressed: _busy ? null : _save,
+      icon: _busy
+          ? const SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: UepColors.gold),
+            )
+          : Icon(Icons.download_outlined, size: 15, color: s.inkMute),
+    );
+  }
+}
+
 
 /// 身分就緒前的圖片佔位。
 ///
