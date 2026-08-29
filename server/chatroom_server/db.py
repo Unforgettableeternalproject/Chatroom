@@ -109,7 +109,10 @@ CREATE TABLE IF NOT EXISTS question (
     answer        TEXT,
     answer_kind   TEXT,                          -- option / free_text
     created_at    TEXT NOT NULL,
-    resolved_at   TEXT
+    resolved_at   TEXT,
+    -- 過了這個時間就不再是待答。發問的 agent 是**卡在那裡等**的，不是留言，
+    -- 所以時限要短——等太久等於讓一條工作流癱瘓著
+    expires_at    TEXT
 );
 -- 附件：內容存磁碟，這裡只留 metadata。sqlite 塞 BLOB 會讓資料庫迅速膨脹，
 -- 而 long-poll 查詢與它共用同一個連線，大檔讀寫會拖累整個房間的即時性。
@@ -164,6 +167,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("session", "last_ip", "last_ip TEXT"),
     # 踢出要連著撤銷對方的 access token，得先知道他是拿哪一張進來的
     ("participant", "join_token", "join_token TEXT NOT NULL DEFAULT ''"),
+    # 問題逾時。舊資料的 expires_at 為 NULL＝永不過期，維持原本的語意
+    ("question", "expires_at", "expires_at TEXT"),
 ]
 
 

@@ -68,5 +68,11 @@ class Config:
     log_backup_count: int = field(
         default_factory=lambda: int(os.environ.get("CHATROOM_LOG_BACKUPS", "5"))
     )
+    # 向人類提問的有效時限（秒）。預設 3 分鐘——發問的 agent 是卡在那裡等的，
+    # 不是留言給人類；時限拉長不是「比較寬容」，是讓一條工作流癱瘓那麼久。
+    # 逾時只標記狀態不刪紀錄，人類仍看得到問過什麼
+    question_ttl: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_QUESTION_TTL", "180"))
+    )
     # long-poll 最長掛起秒數上限
     max_poll_timeout: float = 55.0

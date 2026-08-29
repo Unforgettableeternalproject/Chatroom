@@ -113,6 +113,9 @@ class QuestionCreate(BaseModel):
     # 少打一個參數的便利，不值得換掉行為的穩定性。
     target_participant_id: str = Field(min_length=1)
     allow_free_text: bool = True
+    # 這題的有效秒數；0＝用伺服器預設。上限刻意只有一小時——發問方是卡在
+    # 那裡等的，能等更久的事情本來就不該用「提問」這個機制
+    timeout_seconds: float = Field(default=0, ge=0, le=3600)
 
 
 class QuestionAnswer(BaseModel):
@@ -1362,6 +1365,16 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     # ---------- 向人類提問 ----------
 
+    def _seconds_left(expires_at: str | None) -> float | None:
+        """距離到期還有幾秒；已過期為 0，沒有時限則 None（舊資料）。"""
+        if not expires_at:
+            return None
+        try:
+            deadline = datetime.fromisoformat(expires_at)
+        except ValueError:
+            return None
+        return max(0.0, (deadline - datetime.now(timezone.utc)).total_seconds())
+
     def _question_public(row) -> dict:
         d = dict(row)
         try:
@@ -1369,7 +1382,42 @@ def create_app(config: Config | None = None) -> FastAPI:
         except ValueError:
             d["options"] = []
         d["allow_free_text"] = bool(d.get("allow_free_text"))
+        # 🔑 即時判定，不等 sweeper。sweeper 每輪之間最多 30 秒空窗，而那個
+        # 誤差是**使用者看得到的**——卡片該消失卻還在，點下去才發現過期了。
+        # 狀態以時間為準，sweeper 只負責把它寫死（見 _expire_questions）。
+        left = _seconds_left(d.get("expires_at"))
+        d["expires_in_seconds"] = left
+        if d["status"] == "pending" and left is not None and left <= 0:
+            d["status"] = "expired"
         return d
+
+    async def _expire_questions() -> set[str]:
+        """把過期的 pending 落庫成 expired，回傳受影響的房間 id。
+
+        落庫是為了讓歷史查詢與統計看到一致的狀態；即時正確性由
+        `_question_public` 保證，這裡晚幾秒不影響任何人看到的結果。
+        """
+        db = app.state.db
+        now = _now()
+        rows = await (
+            await db.execute(
+                "UPDATE question SET status='expired', resolved_at=?"
+                " WHERE status='pending' AND expires_at IS NOT NULL"
+                " AND expires_at <= ? RETURNING id, room_id, target_id",
+                (now, now),
+            )
+        ).fetchall()
+        if not rows:
+            return set()
+        await db.commit()
+        for r in rows:
+            logger.info(
+                "問題逾時未作答 %s", r["id"], extra={
+                    "event": "question_expired", "question_id": r["id"],
+                    "room_id": r["room_id"], "target_id": r["target_id"],
+                },
+            )
+        return {r["room_id"] for r in rows}
 
     async def _human_candidates(room_id: str) -> str:
         db = app.state.db
@@ -1420,12 +1468,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "沒有選項又不允許自由作答，這題無法回答")
         db = app.state.db
         qid = _uid()
+        ttl = body.timeout_seconds or cfg.question_ttl
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl)
+        ).isoformat()
         await db.execute(
             "INSERT INTO question (id, room_id, asker_id, target_id, prompt,"
-            " options, allow_free_text, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            " options, allow_free_text, created_at, expires_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (qid, room_id, asker["id"], target["id"], body.prompt,
              json.dumps([o.model_dump() for o in body.options], ensure_ascii=False),
-             int(body.allow_free_text), _now()),
+             int(body.allow_free_text), _now(), expires_at),
         )
         await db.commit()
         await events.notify(room_id)
@@ -1437,7 +1490,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"id": qid, "target_id": target["id"],
                 "target_name": target["display_name"],
                 "target_active": target["last_seen_at"] >= active_cutoff,
-                "target_last_seen_at": target["last_seen_at"]}
+                "target_last_seen_at": target["last_seen_at"],
+                "expires_at": expires_at, "expires_in_seconds": ttl}
 
     @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
     async def list_questions(
@@ -1455,7 +1509,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _member_or_403(room_id, x_participant_id)
         db = app.state.db
         conds, params = ["q.room_id=?"], [room_id]
-        if status:
+        if status == "pending":
+            # 已過期但還沒被 sweeper 寫死的，不能算在 pending 裡——否則
+            # 「還有幾題待答」這個數字會比實際多，而 UI 的徽章正是靠它
+            conds.append("q.status='pending'")
+            conds.append("(q.expires_at IS NULL OR q.expires_at > ?)")
+            params.append(_now())
+        elif status == "expired":
+            # 反過來：時間到了就算 expired，不必等落庫
+            conds.append("(q.status='expired' OR (q.status='pending'"
+                         " AND q.expires_at IS NOT NULL AND q.expires_at <= ?))")
+            params.append(_now())
+        elif status:
             conds.append("q.status=?")
             params.append(status)
         if target_id:
@@ -1498,18 +1563,29 @@ def create_app(config: Config | None = None) -> FastAPI:
             return row
 
         row = await _load()
-        if row["status"] != "pending" or wait <= 0:
-            return {"question": _question_public(row)}
-        deadline = asyncio.get_event_loop().time() + min(wait, cfg.max_poll_timeout)
+        pub = _question_public(row)
+        if pub["status"] != "pending" or wait <= 0:
+            return {"question": pub}
+        # 等待時間不超過這題的剩餘壽命：問題只剩 10 秒時掛滿 55 秒，等於讓
+        # 發問方多卡 45 秒去等一個**已經確定不會來**的答案
+        budget = min(wait, cfg.max_poll_timeout)
+        left = pub["expires_in_seconds"]
+        if left is not None:
+            budget = min(budget, left)
+        deadline = asyncio.get_event_loop().time() + budget
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                return {"question": _question_public(await _load()),
-                        "timed_out": True}
+                out = _question_public(await _load())
+                # 分開講：timed_out 是「你這次等夠久了」，expired 是「這題
+                # 沒了」。前者可以再等一次，後者再等也沒有用
+                return {"question": out, "timed_out": True,
+                        "expired": out["status"] == "expired"}
             await events.wait(row["room_id"], remaining)
             row = await _load()
-            if row["status"] != "pending":
-                return {"question": _question_public(row)}
+            pub = _question_public(row)
+            if pub["status"] != "pending":
+                return {"question": pub, "expired": pub["status"] == "expired"}
 
     @app.post("/api/questions/{question_id}/answer", dependencies=[Depends(require_auth)])
     async def answer_question(
@@ -1528,6 +1604,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_your_question", "這個問題不是問你的")
         if row["status"] != "pending":
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
+        # 以時間為準，不是以 status 欄位為準：sweeper 還沒跑到的那幾秒裡，
+        # DB 仍寫著 pending。放行的話發問方會在**已經放棄之後**收到答案，
+        # 那比沒收到更難處理
+        # ⚠️ 不可寫成 `(_seconds_left(...) or 1) <= 0`：剩餘 0.0 秒正是「已過期」
+        # 的那個值，而 0.0 在 Python 裡是 falsy，會被 `or` 換成 1 而放行
+        left = _seconds_left(row["expires_at"])
+        if left is not None and left <= 0:
+            raise _err(409, "question_expired",
+                       "這題已經逾時了，答案沒有送出。發問方多半已經改走別的路"
+                       "——需要的話請直接在聊天室裡告訴他。")
         if body.kind != "skip" and not body.answer.strip():
             raise _err(422, "empty_answer", "答案不能是空的")
         if body.kind == "free_text" and not row["allow_free_text"]:
@@ -1723,8 +1809,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "SELECT q.*, p.display_name AS asker_name FROM question q"
                     " LEFT JOIN participant p ON p.id=q.asker_id"
                     " WHERE q.room_id=? AND q.target_id=? AND q.status='pending'"
+                    # 過期的不推：卡片要從 UI 上消失，而集合一變就會重送，
+                    # 所以「不在這批裡」本身就是移除訊號
+                    " AND (q.expires_at IS NULL OR q.expires_at > ?)"
                     " ORDER BY q.created_at",
-                    (room_id, participant_id),
+                    (room_id, participant_id, _now()),
                 )
             ).fetchall()
             current = {r["id"] for r in rows}
@@ -1833,8 +1922,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- Presence sweeper ----------
 
     async def _sweep_once() -> None:
-        """單輪掃描：移除閒置 agent、過期 pending 指派、封存無 agent 房間。"""
+        """單輪掃描：移除閒置 agent、過期 pending 指派與提問、封存無 agent 房間。"""
         db = app.state.db
+        # 通知受影響的房間：client 靠這個把待答卡片收掉
+        for rid in await _expire_questions():
+            await events.notify(rid)
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(seconds=cfg.idle_timeout)).isoformat()
         idle = await (
