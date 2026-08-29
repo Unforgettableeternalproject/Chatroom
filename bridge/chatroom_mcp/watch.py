@@ -24,7 +24,15 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
      "preview": ..., "mentioned": true/false, "pinned": ..., "deleted": ...}
     {"event": "assignment", "assignment_id": ..., "room_id": ...,
      "room_name": ..., "note": ...}
+    {"event": "departure", "room_id": ..., "reason": "kicked|idle|left|archived",
+     "message": ..., "rejoinable": true/false}   # 之後進程退出
     {"event": "watch_ended", "reason": "..."}    # 之後進程退出
+
+``departure`` 是「這個房間對你已經結束了」的明確訊號：被管理員踢出、閒置逾時
+被移除、或房間封存。agent 收到後應該停掉這個房間的監看——沒有它的話 watcher
+只會以一句含糊的 watch_ended 收場，agent 分不出是自己該退場還是 Hub 出問題，
+於是監看常常就一直掛著空轉。``rejoinable`` 直接說明能不能自己加回去
+（被踢是人為決定，不該自己推翻）。
 
 預設行為刻意收斂雜訊——每個事件都會喚醒 agent 一次，喚醒必須值得：
 
@@ -50,6 +58,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -72,9 +81,17 @@ for _stream in (sys.stdout, sys.stderr):
 PREVIEW_LEN = 160
 TRANSIENT_RETRY_SECS = 5.0
 
+# 離場原因 → 能不能自己加回去。被踢是人為決定，agent 自己 rejoin 等於推翻它。
+REJOINABLE = {"idle": True, "left": True, "kicked": False, "archived": False}
+
+# 指派輪詢與 long-poll 分屬兩條執行緒，輸出要串行化才不會交錯成半行 JSON
+_emit_lock = threading.Lock()
+
 
 def _emit(event: dict[str, Any]) -> None:
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    line = json.dumps(event, ensure_ascii=False)
+    with _emit_lock:
+        print(line, flush=True)
 
 
 def _log(msg: str) -> None:
@@ -142,6 +159,8 @@ class Watcher:
         self.seen_assignments: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
+        self.departed = False
+        self._stop = threading.Event()
         self._warned_no_name = False
         # Codex 沒有 Monitor 那種自掛機制，只能反向推：事件經 codex queue
         # 注入其 session（前提：該 thread 已有至少一輪對話，否則 queue 讀不到）
@@ -168,6 +187,12 @@ class Watcher:
         last = data.get("last_seq")
         if isinstance(last, int):
             self.after_seq = max(self.after_seq, last)
+        # 封存不會讓成員身分失效（封存房仍可讀），所以不看這個欄位的話
+        # watcher 會對著一個已經結束的房間空轉到天荒地老
+        status = data.get("room_status")
+        if isinstance(status, str) and status != "active":
+            self.depart("archived", f"聊天室已{'封存' if status == 'archived' else status}")
+            return
         for m in data.get("messages", []):
             seq = m.get("seq")
             if isinstance(seq, int) and seq <= prev:
@@ -242,10 +267,27 @@ class Watcher:
             )
             self.last_heartbeat = now
         except HubError as exc:
-            # 身分失效（被踢/房間封存）不值得讓 watcher 死掉——訊息還讀得到
             _log(f"heartbeat 失敗：{exc.reason}")
-            if exc.identity_invalid:
+            if exc.departure:
+                # 這裡常是最早看到離場的地方——heartbeat 週期通常比 long-poll
+                # 的一輪還短。吞掉的話要等下一次 poll_room 才發得出事件。
+                self.depart(exc.departure, exc.reason)
+            elif exc.identity_invalid:
+                # 身分失效但原因不明（舊版 Hub）：訊息還讀得到，不讓 watcher 死掉
                 self.participant_id = None
+
+    def depart(self, reason: str, message: str) -> None:
+        """發出離場事件並標記結束——這個房間對本 watcher 已經沒有事情要做了。"""
+        self.emit(
+            {
+                "event": "departure",
+                "room_id": self.room_id,
+                "reason": reason,
+                "message": message,
+                "rejoinable": REJOINABLE.get(reason, True),
+            }
+        )
+        self.departed = True
 
     def emit(self, event: dict[str, Any]) -> None:
         _emit(event)
@@ -276,6 +318,22 @@ class Watcher:
 
     # ---------- 主迴圈 ----------
 
+    def assignment_loop(self) -> None:
+        """指派輪詢的獨立執行緒。
+
+        為什麼不留在主迴圈：帶 ``--room`` 時主迴圈是 long-poll，一次掛最多 50 秒，
+        指派輪詢排在它後面就得等它回來——房裡越安靜延遲越久，而「剛派完、房裡
+        還沒人講話」正是最常見的情境。實測有人因此以為自己派錯了人。
+        """
+        while not self._stop.is_set():
+            try:
+                self.poll_assignments()
+            except HubError as exc:
+                _log(f"指派輪詢暫時失敗，稍後重試：{exc.reason}")
+            except Exception:  # 這條執行緒死掉會靜默失去所有指派通知
+                _log("指派輪詢發生未預期錯誤，稍後重試")
+            self._stop.wait(self.args.idle_interval)
+
     def run(self) -> int:
         target = self.room_id or "（僅指派）"
         _log(
@@ -291,16 +349,38 @@ class Watcher:
                 "⚠️ kind=other——身分是隨機 key，與 bridge 對不上，"
                 "指派與 @mention 都不會觸發。請補 --kind claude|codex"
             )
+        # 有 room 時指派輪詢自己一條執行緒，不被 long-poll 擋住
+        assignment_thread: threading.Thread | None = None
+        if self.args.assignments and self.room_id:
+            assignment_thread = threading.Thread(
+                target=self.assignment_loop, daemon=True, name="assignments"
+            )
+            assignment_thread.start()
+        try:
+            return self._loop()
+        finally:
+            self._stop.set()
+            if assignment_thread:
+                assignment_thread.join(timeout=2.0)
+
+    def _loop(self) -> int:
         while True:
             try:
                 if self.room_id:
                     self.poll_room()  # long-poll 本身就是節奏來源
-                if self.args.assignments:
+                    if self.departed:
+                        return 0
+                elif self.args.assignments:
+                    # 沒有 room 可 long-poll，指派輪詢就是主迴圈本身
                     self.poll_assignments()
-                if not self.room_id:
+                    time.sleep(self.args.idle_interval)
+                else:
                     time.sleep(self.args.idle_interval)
                 self.maybe_heartbeat()
             except HubError as exc:
+                if exc.departure and self.room_id:
+                    self.depart(exc.departure, exc.reason)
+                    return 0
                 if exc.identity_invalid or "找不到" in exc.reason:
                     _emit({"event": "watch_ended", "reason": exc.reason})
                     return 0

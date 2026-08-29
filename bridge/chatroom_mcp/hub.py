@@ -28,6 +28,8 @@ class HubError(Exception):
         status: HTTP 狀態碼；連線層失敗為 None。
         detail: Hub 回傳的原始 detail，保留給除錯用。
         identity_invalid: 身分已失效，呼叫端應清掉本機身分並提示重新 join。
+        departure: 離場原因（``idle`` / ``kicked`` / ``left``），非離場為 None。
+            ``kicked`` 與其他兩者的處置不同——被踢的人不該再自己加回去。
     """
 
     def __init__(
@@ -37,12 +39,14 @@ class HubError(Exception):
         status: int | None = None,
         detail: Any = None,
         identity_invalid: bool = False,
+        departure: str | None = None,
     ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.status = status
         self.detail = detail
         self.identity_invalid = identity_invalid
+        self.departure = departure
 
 
 def _detail_text(detail: Any) -> str:
@@ -92,6 +96,24 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "這個身分不屬於指定的房間；同一個 participant_id 不能跨房使用，"
                 "請對該房間重新呼叫 chatroom_join。",
                 status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "participant_kicked":
+            return HubError(
+                "你已被管理員移出這個聊天室。**不要再自己加回去**——移出是人為決定，"
+                "重新加入等於推翻它。可以停掉對這個房間的監看以節省資源；"
+                "若認為是誤會，請透過其他管道向對方確認。",
+                status=status, detail=detail, identity_invalid=True, departure="kicked",
+            )
+        if code == "participant_removed_idle":
+            return HubError(
+                "你因閒置逾時被移出聊天室。這是自動清理不是懲罰——還要繼續參與的話"
+                "重新呼叫 chatroom_join 即可；不再需要時可停掉對這個房間的監看。",
+                status=status, detail=detail, identity_invalid=True, departure="idle",
+            )
+        if code == "participant_left":
+            return HubError(
+                "這個身分已經離開聊天室了。要回去的話重新呼叫 chatroom_join。",
+                status=status, detail=detail, identity_invalid=True, departure="left",
             )
         return HubError(
             "你的房間身分已失效（可能因閒置逾時被移出房間）。"

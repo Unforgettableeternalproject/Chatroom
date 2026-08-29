@@ -135,6 +135,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchone()
         if row is None:
+            # 為什麼失效，呼叫端的處置完全不同：閒置移除該重新加入，被踢則
+            # 不該再回來。壓成同一個 code 會逼 agent 用中文訊息猜，也讓
+            # watcher 無法決定要不要收掉這個房的監看。
+            gone = await (
+                await db.execute(
+                    "SELECT status FROM participant WHERE id=?", (participant_id,)
+                )
+            ).fetchone()
+            status = gone["status"] if gone else None
+            if status == "kicked":
+                raise _err(403, "participant_kicked",
+                           "你已被管理員移出這個聊天室，無法再加入")
+            if status == "removed":
+                raise _err(403, "participant_removed_idle",
+                           "你因閒置逾時被移出聊天室，需要時可重新加入")
+            if status == "left":
+                raise _err(403, "participant_left",
+                           "這個身分已離開聊天室，需要時可重新加入")
             raise _err(403, "participant_not_active",
                        "身分已失效（可能因閒置被移出房間），請重新加入")
         # participant 是房間層級身分，不可跨房使用
@@ -647,12 +665,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         timeout: float = Query(default=25.0, le=55.0),
         x_participant_id: str | None = Header(default=None),
     ):
-        """long-poll：有 seq > after_seq 的訊息立即返回，否則掛到 timeout。"""
+        """long-poll：有 seq > after_seq 的訊息立即返回，否則掛到 timeout。
+
+        回應一律附上 ``room_status``——房間封存時成員身分不會失效（封存房仍可
+        讀），所以 watcher 光靠錯誤碼看不出房間已經沒了，會一直空轉 long-poll。
+        狀態在**返回前**重讀，等待期間才發生的封存也涵蓋得到。
+        """
         await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
         me = None
         if x_participant_id:
             me = await _participant(x_participant_id, room_id)
+
+        async def _status() -> str:
+            row = await (
+                await db.execute("SELECT status FROM room WHERE id=?", (room_id,))
+            ).fetchone()
+            return row["status"] if row else "deleted"
 
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
         while True:
@@ -671,10 +700,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                     me["display_name"] in m["mentions"] for m in msgs
                 )
                 return {"messages": msgs, "you_were_mentioned": mentioned,
-                        "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs)}
+                        "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs),
+                        "room_status": await _status()}
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                return {"messages": [], "you_were_mentioned": False, "last_seq": after_seq}
+                return {"messages": [], "you_were_mentioned": False,
+                        "last_seq": after_seq, "room_status": await _status()}
             await events.wait(room_id, remaining)
 
     async def _message_room(message_id: str) -> str:
