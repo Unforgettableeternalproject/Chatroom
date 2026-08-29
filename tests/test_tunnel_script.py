@@ -70,3 +70,53 @@ def test_env_vars_win_over_dotenv(monkeypatch):
 def test_dotenv_used_when_env_var_absent(monkeypatch):
     monkeypatch.delenv("CHATROOM_HOST", raising=False)
     assert tunnel.origin_host({"CHATROOM_HOST": "26.0.0.1"}, None) == "26.0.0.1"
+
+
+# ---------- 授權範圍警示（人工驗收只證明「今天這次看得到」） ----------
+
+# 這些片語各自對應一條實測出來的暴露面。少任何一條，使用者對授權範圍的
+# 理解就會與實際不符——而他正要把網址發給別人。
+REQUIRED_PHRASES = [
+    "所有房間",        # 不限他加入的那個
+    "成員清單",        # room detail 會連 status 一起洩露
+    "沒有加入",        # 未加入的房間也讀得到
+    "已經封存",        # 封存的舊房間照樣可讀，這是暴露面質變的部分
+    "不需要是任何房間的成員",
+    "不是隔離邊界",
+    "不同 Hub 實例",   # 真正的隔離手段
+]
+
+
+@pytest.mark.parametrize("phrase", REQUIRED_PHRASES)
+def test_security_warning_states_the_full_scope(phrase):
+    assert phrase in tunnel.SECURITY_WARNING
+
+
+@pytest.mark.parametrize("phrase", REQUIRED_PHRASES)
+def test_banner_carries_the_same_warning(phrase):
+    """banner 與 --check 必須共用同一份文案，否則兩處會各自漂移。"""
+    banner = tunnel.banner("https://x.trycloudflare.com", "TOK", "8787", "127.0.0.1")
+    assert phrase in banner
+
+
+def test_warning_comes_before_the_url_and_token():
+    """網址與 token 一出現，人的下一個動作就是複製貼給對方。
+
+    警示排在它們後面，等於在他已經送出之後才講。
+    """
+    banner = tunnel.banner("https://x.trycloudflare.com", "TOK-VALUE", "8787", "127.0.0.1")
+    warning_at = banner.index("不是隔離邊界")
+    assert warning_at < banner.index("TOK-VALUE")
+    assert warning_at < banner.index("https://x.trycloudflare.com")
+    assert warning_at < banner.index("發給"), "也要在任何『發出去』的指示之前"
+
+
+def test_banner_asks_for_acknowledgement_before_sharing():
+    banner = tunnel.banner("https://x.trycloudflare.com", "TOK", "8787", "127.0.0.1")
+    assert "確認接受" in banner
+
+
+def test_banner_shows_the_actual_forward_target():
+    """綁 VPN IP 時 banner 若還印 127.0.0.1，排查的人會被帶往錯的方向。"""
+    banner = tunnel.banner("https://x.trycloudflare.com", "TOK", "8787", "26.176.231.43")
+    assert "26.176.231.43:8787" in banner
