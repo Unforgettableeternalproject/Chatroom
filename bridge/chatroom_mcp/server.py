@@ -458,8 +458,8 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
 def chatroom_ask_human(
     room_id: str,
     question: str,
+    target_name: str,
     options: list[str] | None = None,
-    target_name: str = "",
     timeout: float = 300.0,
     allow_free_text: bool = True,
 ) -> dict:
@@ -470,9 +470,11 @@ def chatroom_ask_human(
     問好幾遍，而且他的回答只有其中一個 agent 看得到。問在這裡，答案留在房裡，
     其他 agent 查得到（見 ``chatroom_questions``）。
 
-    問題**不會**進入公開訊息流，只出現在指定那個人的介面上——所以要問誰必須
-    明確。房裡只有一位人類時可以省略 ``target_name``；有多位時省略會被要求指定，
-    因為「誰該回答」不是 Hub 該替人猜的事。
+    問題**不會**進入公開訊息流，只出現在 ``target_name`` 那個人的介面上，所以
+    要問誰**必須明確指定**（房內成員的顯示名稱，與訊息上看到的完全一致）。
+    Hub 不代為挑選，即使房裡只有一個人也一樣——代選會讓同一個呼叫因為房內
+    人數變動而從成功變成失敗，事後也無從得知你到底問了誰。
+    不確定房裡有誰的話，先用 chatroom_read 看發言者，或 chatroom_list_rooms。
 
     ``options`` 給選項時對方可以直接點選，比讓他打字快得多；``allow_free_text``
     決定他能不能不選你給的選項而自己寫。至少要有其中一種，否則這題無法回答。
@@ -492,13 +494,21 @@ def chatroom_ask_human(
         "prompt": question,
         "options": [{"label": o} for o in (options or [])],
         "allow_free_text": allow_free_text,
+        "target_participant_id": _participant_id_by_name(room_id, target_name),
     }
-    if target_name:
-        payload["target_participant_id"] = _participant_id_by_name(room_id, target_name)
     created = _room_request(
         room_id, "POST", f"/api/rooms/{room_id}/questions", json=payload
     )
     qid = created["id"]
+    if created.get("target_active") is False:
+        # 早點講：對方可能根本沒開著 client，傻等五分鐘是最沒價值的等待
+        _log_target_idle = (
+            f"{created.get('target_name')} 最近沒有動靜"
+            f"（最後出現 {created.get('target_last_seen_at')}），"
+            "可能不在線上。逾時的話請改用你原本的方式問他。"
+        )
+    else:
+        _log_target_idle = ""
     # Hub 單次 long-poll 上限 55 秒，較長的等待靠連續掛起累積
     deadline = time.monotonic() + timeout
     while True:
@@ -507,7 +517,9 @@ def chatroom_ask_human(
             return {
                 "answered": False, "reason": "timeout", "question_id": qid,
                 "target_name": created.get("target_name"),
-                "hint": "問題仍然留著。對方晚點回答的話，用 chatroom_read_answer"
+                "target_was_active": created.get("target_active"),
+                "hint": (_log_target_idle + " " if _log_target_idle else "")
+                        + "問題仍然留著。對方晚點回答的話，用 chatroom_read_answer"
                         f"（question_id={qid}）取得，不必重問。",
             }
         data = hub().request(

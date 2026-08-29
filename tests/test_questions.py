@@ -56,6 +56,7 @@ async def test_ask_and_answer_roundtrip(tmp_path):
             r = await client.post(
                 f"/api/rooms/{room_id}/questions",
                 json={"prompt": "要用哪個方案？",
+                      "target_participant_id": people[0]["participant_id"],
                       "options": [{"label": "A"}, {"label": "B", "description": "較慢"}]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
@@ -89,7 +90,8 @@ async def test_questions_stay_out_of_the_message_stream(tmp_path):
             ).json()["messages"]
             await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "在嗎"},
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             after = (
@@ -107,7 +109,8 @@ async def test_only_the_asked_person_can_answer(tmp_path):
             room_id, people, bots = await _setup(client, humans=1, agents=2)
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "要繼續嗎"},
+                json={"prompt": "要繼續嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
 
@@ -128,40 +131,66 @@ async def test_only_the_asked_person_can_answer(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_target_resolution_rules(tmp_path):
+async def test_target_is_mandatory(tmp_path):
+    """對象必須明確指定，即使房裡只有一個人類。
+
+    代為挑選會讓同一個請求因為房內人數變動而從成功變成失敗，事後也無從
+    得知發問方到底問了誰。少打一個參數不值得換掉行為的穩定性。
+    """
     app, client = await _make(tmp_path, "q_target")
     async with client:
         async with app.router.lifespan_context(app):
-            # 房裡沒有人類：明確要求改用原本的方式問
-            room_id, _, bots = await _setup(client, humans=0, agents=1)
+            room_id, people, bots = await _setup(client, humans=1, agents=1)
             r = await client.post(
                 f"/api/rooms/{room_id}/questions",
                 json={"prompt": "在嗎"},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
-            assert r.status_code == 422
-            assert r.json()["detail"]["code"] == "no_human_in_room"
+            assert r.status_code == 422, "房裡只有一個人類也不得代選"
 
-            # 多位人類：Hub 不替人猜「誰該回答」
-            room2, people2, bots2 = await _setup(client, humans=2, agents=1)
             r = await client.post(
-                f"/api/rooms/{room2}/questions",
-                json={"prompt": "在嗎"},
-                headers={"X-Participant-Id": bots2[0]["participant_id"]},
-            )
-            assert r.status_code == 422
-            assert r.json()["detail"]["code"] == "target_required"
-            assert "人類0" in r.json()["detail"]["message"], "要列出候選才問得下去"
-
-            # 指定之後就成立
-            r = await client.post(
-                f"/api/rooms/{room2}/questions",
+                f"/api/rooms/{room_id}/questions",
                 json={"prompt": "在嗎",
-                      "target_participant_id": people2[1]["participant_id"]},
-                headers={"X-Participant-Id": bots2[0]["participant_id"]},
+                      "target_participant_id": people[0]["participant_id"]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             assert r.status_code == 200
-            assert r.json()["target_name"] == "人類1"
+            assert r.json()["target_name"] == "人類0"
+
+
+@pytest.mark.asyncio
+async def test_unknown_target_lists_the_humans_in_room(tmp_path):
+    """指錯人時要給得出可用的名字——否則呼叫端只能盲猜。"""
+    app, client = await _make(tmp_path, "q_target_hint")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client, humans=2, agents=1)
+            r = await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "在嗎", "target_participant_id": "不存在的-id"},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+            assert r.status_code == 404
+            assert r.json()["detail"]["code"] == "target_not_found"
+            assert "人類0" in r.json()["detail"]["message"]
+            assert "人類1" in r.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_no_human_in_room_says_so(tmp_path):
+    """房裡沒有人類時，訊息要明說，讓 agent 知道該改用原本的方式問。"""
+    app, client = await _make(tmp_path, "q_nohuman")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, _, bots = await _setup(client, humans=0, agents=2)
+            r = await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "在嗎",
+                      "target_participant_id": bots[1]["participant_id"]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "target_not_human"
 
 
 @pytest.mark.asyncio
@@ -190,7 +219,8 @@ async def test_skip_is_distinct_from_timeout(tmp_path):
             room_id, people, bots = await _setup(client)
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "在嗎"},
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
             r = await client.post(
@@ -213,7 +243,8 @@ async def test_timeout_leaves_question_answerable(tmp_path):
             room_id, people, bots = await _setup(client)
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "在嗎"},
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
 
@@ -239,7 +270,8 @@ async def test_waiting_call_wakes_on_answer(tmp_path):
             room_id, people, bots = await _setup(client)
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "在嗎"},
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
 
@@ -270,7 +302,8 @@ async def test_rejects_unanswerable_and_duplicate_answers(tmp_path):
             # 沒有選項又不准自由作答＝這題無法回答
             r = await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "?", "allow_free_text": False},
+                json={"prompt": "?", "allow_free_text": False,
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             assert r.status_code == 422
@@ -279,6 +312,7 @@ async def test_rejects_unanswerable_and_duplicate_answers(tmp_path):
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
                 json={"prompt": "?", "options": [{"label": "A"}],
+                      "target_participant_id": people[0]["participant_id"],
                       "allow_free_text": False},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
@@ -313,7 +347,8 @@ async def test_room_questions_are_visible_to_agents(tmp_path):
             room_id, people, bots = await _setup(client, humans=1, agents=2)
             await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "要用哪個方案？"},
+                json={"prompt": "要用哪個方案？",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             r = await client.get(
@@ -379,6 +414,7 @@ async def test_option_answer_must_be_one_of_the_options(tmp_path):
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
                 json={"prompt": "A 還是 B？",
+                      "target_participant_id": people[0]["participant_id"],
                       "options": [{"label": "A"}, {"label": "B"}]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
@@ -400,7 +436,8 @@ async def test_concurrent_answers_do_not_overwrite_each_other(tmp_path):
             room_id, people, bots = await _setup(client)
             qid = (await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "在嗎"},
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )).json()["id"]
 
@@ -432,7 +469,8 @@ async def test_resubscribe_with_identity_upgrades_the_pump(tmp_path):
             room_id, people, bots = await _setup(client)
             await client.post(
                 f"/api/rooms/{room_id}/questions",
-                json={"prompt": "身分補上之後才該看到我"},
+                json={"prompt": "身分補上之後才該看到我",
+                      "target_participant_id": people[0]["participant_id"]},
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
 
@@ -462,3 +500,52 @@ async def test_resubscribe_with_identity_upgrades_the_pump(tmp_path):
                             break
                     assert got is not None, "補送的 subscribe 被忽略了"
                     assert got["questions"][0]["prompt"] == "身分補上之後才該看到我"
+
+
+@pytest.mark.asyncio
+async def test_blank_reply_to_is_treated_as_none(tmp_path):
+    """直接打 REST 的 client 很自然會送 ""——它不該被當成一個不存在的訊息 id。
+
+    我們自己的 bridge 有處理，但隧道的用途正是讓別人的 client 連進來，
+    那些不會用我們的 bridge。
+    """
+    app, client = await _make(tmp_path, "q_blank_reply")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            r = await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "沒有回覆對象", "reply_to": ""},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_question_reports_whether_the_person_is_around(tmp_path):
+    """送出成功只證明「Hub 收下了」。人的 client 沒開時，發問方會傻等到逾時。"""
+    app, client = await _make(tmp_path, "q_alive", session_active_window=0.001)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            r = await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+            body = r.json()
+            assert body["target_active"] is False, "窗口極短時應判為不在線"
+            assert body["target_last_seen_at"]
+
+    app, client = await _make(tmp_path, "q_alive2")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            r = await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "在嗎",
+                      "target_participant_id": people[0]["participant_id"]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+            assert r.json()["target_active"] is True

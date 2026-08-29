@@ -19,7 +19,7 @@ from fastapi import (
     WebSocket, WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import Config
 from .db import open_db
@@ -67,6 +67,17 @@ class MessagePost(BaseModel):
     content: str = Field(min_length=1, max_length=32768)
     mentions: list[str] = []
     reply_to: str | None = None
+
+    @field_validator("reply_to", mode="before")
+    @classmethod
+    def _blank_reply_is_none(cls, v):
+        """空字串等同「沒有回覆對象」。
+
+        直接打 REST 的 client 很自然會送 ""，而它會被當成一個不存在的訊息 id
+        擋下來。我們自己的 bridge 有處理，但隧道的用途正是讓別人的 client
+        連進來，那些不會用我們的 bridge。
+        """
+        return v or None
     # 先上傳拿到 id，再隨訊息帶上——分兩步是為了讓上傳可以重試而不會重複發言
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
 
@@ -90,8 +101,10 @@ class QuestionOption(BaseModel):
 class QuestionCreate(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     options: list[QuestionOption] = Field(default_factory=list, max_length=8)
-    # 省略時由 Hub 解析：房內只有一個人類就是他，多於一個則要求指定
-    target_participant_id: str | None = None
+    # **必填**。曾經允許「房內只有一個人類時自動代選」，但那讓同一個請求會
+    # 因為房內人數變動而從成功變成失敗，而且事後無法證明發問方到底選了誰。
+    # 少打一個參數的便利，不值得換掉行為的穩定性。
+    target_participant_id: str = Field(min_length=1)
     allow_free_text: bool = True
 
 
@@ -1067,43 +1080,41 @@ def create_app(config: Config | None = None) -> FastAPI:
         d["allow_free_text"] = bool(d.get("allow_free_text"))
         return d
 
-    async def _resolve_target(room_id: str, explicit: str | None):
-        """決定這題要問誰。
-
-        指定的對象**必須是人類**——這個機制存在的理由就是「有人在的時候問人」，
-        誤指到 agent 會讓問題永遠等不到答案，而且症狀是靜默的（就是一直逾時）。
-        省略時房內只有一個人類就問他；有多個則拒絕並列出候選，由發問方決定
-        ——替人類猜「誰該回答」是不該由 Hub 做的判斷。
-        """
+    async def _human_candidates(room_id: str) -> str:
         db = app.state.db
-        if explicit:
-            row = await (
-                await db.execute(
-                    "SELECT * FROM participant WHERE id=? AND room_id=? AND status='active'",
-                    (explicit, room_id),
-                )
-            ).fetchone()
-            if row is None:
-                raise _err(404, "target_not_found", "指定的對象不在這個房間裡")
-            if row["role"] != "human":
-                raise _err(422, "target_not_human",
-                           "只能向人類提問；這個機制的用意就是在有人在的時候問人")
-            return row
-        humans = await (
+        rows = await (
             await db.execute(
-                "SELECT * FROM participant WHERE room_id=? AND status='active'"
-                " AND role='human' ORDER BY last_seen_at DESC",
+                "SELECT display_name FROM participant WHERE room_id=?"
+                " AND status='active' AND role='human' ORDER BY last_seen_at DESC",
                 (room_id,),
             )
         ).fetchall()
-        if not humans:
-            raise _err(422, "no_human_in_room",
-                       "房裡沒有人類可以回答，請改用你原本的方式詢問")
-        if len(humans) > 1:
-            names = "、".join(h["display_name"] for h in humans)
-            raise _err(422, "target_required",
-                       f"房裡有多位人類（{names}），請指定要問誰")
-        return humans[0]
+        return "、".join(r["display_name"] for r in rows)
+
+    async def _resolve_target(room_id: str, explicit: str):
+        """決定這題要問誰。對象**必須明確指定，且必須是人類**。
+
+        不代為挑選：房內人數一變，同一個請求就會從成功變成失敗，而且事後
+        無法證明發問方選的是誰。誤指到 agent 則會讓問題永遠等不到答案，
+        而症狀是靜默的——就是一直逾時，看不出是問錯了人。
+        """
+        db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT * FROM participant WHERE id=? AND room_id=? AND status='active'",
+                (explicit, room_id),
+            )
+        ).fetchone()
+        if row is None:
+            candidates = await _human_candidates(room_id)
+            raise _err(404, "target_not_found",
+                       "指定的對象不在這個房間裡。"
+                       + (f"目前在房內的人類：{candidates}"
+                          if candidates else "房裡目前沒有人類可以回答。"))
+        if row["role"] != "human":
+            raise _err(422, "target_not_human",
+                       "只能向人類提問；這個機制的用意就是在有人在的時候問人")
+        return row
 
     @app.post("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
     async def create_question(
@@ -1127,8 +1138,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         await events.notify(room_id)
+        # 對方最近有沒有動靜。送出成功只證明「Hub 收下了」——人的 client
+        # 沒開、或版本舊到不會顯示問題時，發問方會傻等到逾時才發現。
+        active_cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=cfg.session_active_window)
+        ).isoformat()
         return {"id": qid, "target_id": target["id"],
-                "target_name": target["display_name"]}
+                "target_name": target["display_name"],
+                "target_active": target["last_seen_at"] >= active_cutoff,
+                "target_last_seen_at": target["last_seen_at"]}
 
     @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
     async def list_questions(
