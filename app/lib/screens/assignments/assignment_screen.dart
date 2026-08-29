@@ -33,6 +33,13 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   Timer? _poll;
   bool _submitting = false;
 
+  /// 掃描清單是否連 idle 的 session 一起列出。
+  ///
+  /// 預設只列 active——idle 的 key 派出去會石沉大海，外觀與派錯人一模一樣。
+  /// 但**不能直接把 idle 砍掉**：`/clear` 換過 session id 之後，正在用的那台
+  /// 有時要一段時間才回到 active，一律不顯示會讓人以為自己的 session 消失了。
+  bool _showIdle = false;
+
   @override
   void initState() {
     super.initState();
@@ -77,6 +84,49 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _cancel(Assignment a) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final s = context.uep;
+        return AlertDialog(
+          title: Text('收回這筆指派？',
+              style: UepText.display(size: 22, color: s.inkTitle)),
+          content: Text(
+            '${a.targetSessionKey} 還沒回應。收回後對方就不會再收到這個邀請。',
+            style: UepText.serif(size: 13.5, color: s.inkSoft),
+          ),
+          actions: [
+            UepButton(
+              label: '不要',
+              variant: UepButtonVariant.outline,
+              small: true,
+              onPressed: () => Navigator.of(context).pop(false),
+            ),
+            UepButton(
+              label: '收回',
+              variant: UepButtonVariant.danger,
+              small: true,
+              onPressed: () => Navigator.of(context).pop(true),
+            ),
+          ],
+        );
+      },
+    );
+    if (!(confirmed ?? false)) return;
+    try {
+      await ref.read(assignmentsApiProvider).cancel(a.id);
+    } on ApiException catch (e) {
+      // 常見情境：對方剛好在這幾秒內接受了。訊息照 Hub 的講法，不要自己編
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      ref.invalidate(roomAssignmentsProvider(widget.roomId));
     }
   }
 
@@ -128,6 +178,14 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       MonoLabel('掃描到的 SESSION',
                           color: s.inkSoft, letterSpacing: 1.4),
                       const Spacer(),
+                      InkWell(
+                        onTap: () => setState(() => _showIdle = !_showIdle),
+                        child: MonoLabel(_showIdle ? '顯示全部' : '僅 ACTIVE',
+                            size: 8.5,
+                            color: _showIdle ? s.inkMute : UepColors.gold,
+                            letterSpacing: 1.4),
+                      ),
+                      const SizedBox(width: 10),
                       InkWell(
                         onTap: () => ref.invalidate(agentSessionsProvider),
                         child: Icon(Icons.refresh, size: 14, color: s.inkMute),
@@ -214,7 +272,10 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       )
                     : Column(children: [
                         for (final a in assignments)
-                          _AssignmentRow(assignment: a),
+                          _AssignmentRow(
+                            assignment: a,
+                            onCancel: a.isPending ? () => _cancel(a) : null,
+                          ),
                       ]),
               ),
             ],
@@ -246,21 +307,41 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         child: MonoLabel('掃描失敗，可手動輸入 session key',
             size: 9, color: UepColors.errorText),
       ),
-      data: (sessions) => sessions.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: MonoLabel('目前沒有掃描到任何 agent session',
-                  size: 9, color: s.inkMute),
-            )
-          : Column(children: [
-              for (final session in sessions)
-                _SessionRow(
-                  session: session,
-                  selected: _target.text.trim() == session.sessionKey,
-                  onTap: () =>
-                      setState(() => _target.text = session.sessionKey),
-                ),
-            ]),
+      data: (all) {
+        final sessions = _showIdle
+            ? all
+            : all.where((x) => x.status == 'active').toList();
+        final hiddenIdle = all.length - sessions.length;
+        if (sessions.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: MonoLabel(
+                hiddenIdle > 0
+                    // 有東西卻不顯示時一定要說原因，否則看起來就是掃描壞了
+                    ? '沒有 active 的 session（$hiddenIdle 個閒置中，可切換顯示全部）'
+                    : '目前沒有掃描到任何 agent session',
+                size: 9,
+                color: s.inkMute),
+          );
+        }
+        return Column(children: [
+          for (final session in sessions)
+            _SessionRow(
+              session: session,
+              selected: _target.text.trim() == session.sessionKey,
+              onTap: () => setState(() => _target.text = session.sessionKey),
+            ),
+          if (hiddenIdle > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: MonoLabel('另有 $hiddenIdle 個閒置的 session 未顯示',
+                    size: 8.5, color: s.inkMute),
+              ),
+            ),
+        ]);
+      },
     );
   }
 
@@ -369,9 +450,12 @@ class _SessionRow extends StatelessWidget {
 }
 
 class _AssignmentRow extends StatelessWidget {
-  const _AssignmentRow({required this.assignment});
+  const _AssignmentRow({required this.assignment, this.onCancel});
 
   final Assignment assignment;
+
+  /// 收回這筆指派；null 表示不可收回（已被處理過）。
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -388,7 +472,9 @@ class _AssignmentRow extends StatelessWidget {
         ),
       _ => (s.inkMute, s.lineStrong),
     };
-    final expired = assignment.status == 'expired';
+    // cancelled 與 expired 都是「這筆不算數了」，畫得淡一點
+    final expired =
+        assignment.status == 'expired' || assignment.status == 'cancelled';
     return Opacity(
       opacity: expired ? .55 : 1,
       child: Container(
@@ -439,6 +525,15 @@ class _AssignmentRow extends StatelessWidget {
               style: UepText.mono(size: 9, color: s.inkMute),
             ),
           ),
+          if (onCancel != null)
+            IconButton(
+              tooltip: '收回這筆指派',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(),
+              padding: const EdgeInsets.only(left: 6),
+              onPressed: onCancel,
+              icon: Icon(Icons.undo, size: 14, color: s.inkMute),
+            ),
         ]),
       ),
     );

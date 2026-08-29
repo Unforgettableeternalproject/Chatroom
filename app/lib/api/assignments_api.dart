@@ -65,6 +65,11 @@ class AssignmentsApi {
             .toList();
       });
 
+  /// 指派方收回一筆還沒被處理的指派。與 [resolve] 是相反方向的動作——
+  /// 那是被指派方回應，這是指派方反悔——所以狀態也分開（cancelled）。
+  Future<void> cancel(String assignmentId) =>
+      unwrap(() => _dio.delete('/api/assignments/$assignmentId'));
+
   /// 處理一筆指派：accept=true 標為 accepted，false 標為 declined。
   Future<void> resolve(String assignmentId, {required bool accept}) =>
       unwrap(() => _dio.post(

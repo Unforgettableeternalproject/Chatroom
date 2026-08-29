@@ -22,9 +22,15 @@ class Assignment {
 
   /// 指派者預先幫 agent 取的房內名稱；空字串表示交由 agent/名字池決定。
   final String assignedName;
-  final String status; // pending | accepted | declined | expired
+
+  /// pending | accepted | declined | cancelled | expired。
+  /// cancelled 是指派方收回，declined 是被指派方婉拒——事後看紀錄時，
+  /// 「他不想做」與「我不需要了」不是同一件事。
+  final String status;
   final String createdAt;
   final String? resolvedAt;
+
+  bool get isPending => status == 'pending';
 
   /// 只有 GET /api/assignments（session 視角）會帶房名/主題，房間視角為 null。
   final String? roomName;

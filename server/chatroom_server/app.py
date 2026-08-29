@@ -961,6 +961,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         return {"ok": True}
 
+    @app.delete("/api/assignments/{assignment_id}", dependencies=[Depends(require_auth)])
+    async def cancel_assignment(assignment_id: str):
+        """指派方收回一筆還沒被處理的指派。
+
+        與 resolve 是相反方向的動作：resolve 是被指派方回應（接受／婉拒），
+        這裡是指派方反悔。兩者都只對 pending 生效——已經被接受的指派對方
+        可能已經開工了，單方面撤掉只會讓兩邊對「這件事還算不算數」有不同
+        認知；那種情況該用講的，不是用一個按鈕。
+
+        狀態獨立成 ``cancelled`` 而不是複用 ``declined``：後者是被指派方
+        的判斷，事後看紀錄時分不出「他不想做」與「我不需要了」是兩件事。
+        """
+        db = app.state.db
+        cur = await db.execute(
+            "UPDATE assignment SET status='cancelled', resolved_at=?"
+            " WHERE id=? AND status='pending' RETURNING id",
+            (_now(), assignment_id),
+        )
+        if await cur.fetchone() is None:
+            raise _err(404, "assignment_not_found",
+                       "找不到這筆指派，或它已經被處理過了")
+        await db.commit()
+        return {"ok": True}
+
     # ---------- 附件 ----------
 
     def _attachment_root() -> Path:

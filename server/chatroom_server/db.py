@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS assignment (
     note               TEXT NOT NULL DEFAULT '',
     -- 指派者預先取的名字；agent 依此指派加入時優先於自取名與名字池
     assigned_name      TEXT NOT NULL DEFAULT '',
-    status             TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/expired
+    -- cancelled 是指派方收回，與被指派方婉拒的 declined 是兩件事，不可合併
+    status             TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/cancelled/expired
     created_at         TEXT NOT NULL,
     resolved_at        TEXT
 );
