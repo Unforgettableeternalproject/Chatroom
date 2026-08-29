@@ -125,6 +125,21 @@ CREATE TABLE IF NOT EXISTS attachment (
 CREATE INDEX IF NOT EXISTS idx_attachment_message ON attachment(message_id);
 CREATE INDEX IF NOT EXISTS idx_attachment_room ON attachment(room_id, created_at);
 
+-- 邀請進 Hub 用的存取 token。
+-- .env 的 CHATROOM_TOKEN 是**主 token**，不在這張表裡、不可撤銷——它是主持人
+-- 自己的鑰匙，弄丟了整台 Hub 就進不去。這裡放的是發給別人的那些：可以標註
+-- 發給誰、可以單獨撤銷，而不必換掉所有人的 token。
+--
+-- 權限範圍與主 token 相同（token 是信任邊界，房間不是）。這張表買到的是
+-- **可撤銷**與**可追溯**，不是隔離；要真隔離請開不同的 Hub 實例。
+CREATE TABLE IF NOT EXISTS access_token (
+    token        TEXT PRIMARY KEY,
+    label        TEXT NOT NULL DEFAULT '',   -- 這張發給誰（給人看的）
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked_at   TEXT                        -- 非 NULL 即失效；不刪列，保留紀錄
+);
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """
@@ -141,6 +156,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("room", "archive_pending_since", "archive_pending_since TEXT"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
+    # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
+    # 來源位址是唯一分得開的線索
+    ("session", "last_ip", "last_ip TEXT"),
 ]
 
 

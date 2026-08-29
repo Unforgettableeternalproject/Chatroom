@@ -89,6 +89,11 @@ class AssignmentCreate(BaseModel):
     assigned_name: str = Field(default="", max_length=32)
 
 
+class TokenCreate(BaseModel):
+    # 這張發給誰。純標註，用來認出「這張還要不要留著」
+    label: str = Field(default="", max_length=64)
+
+
 class AssignmentResolve(BaseModel):
     status: str = Field(pattern="^(accepted|declined)$")
 
@@ -138,11 +143,74 @@ def create_app(config: Config | None = None) -> FastAPI:
     app = FastAPI(title="Chatroom Hub", version="0.1.0", lifespan=lifespan)
     events = RoomEvents()
 
-    async def require_auth(authorization: str | None = Header(default=None)) -> None:
+    def _bearer(authorization: str | None) -> str:
+        if not authorization or not authorization.startswith("Bearer "):
+            return ""
+        return authorization[len("Bearer "):]
+
+    async def require_auth(
+        request: Request, authorization: str | None = Header(default=None)
+    ) -> None:
+        """驗 token，並把「是誰」記在 request.state 上。
+
+        兩種來源：`.env` 的主 token（主持人自己的鑰匙，不可撤銷），以及
+        access_token 表裡發給別人的那些（可標註、可單獨撤銷）。
+
+        兩者權限相同——token 是信任邊界，房間不是。多 token 買到的是可撤銷
+        與可追溯，不是隔離；要真隔離請開不同的 Hub 實例。
+        """
+        request.state.is_root_token = False
+        request.state.token_label = ""
         if not cfg.api_token:
+            # 未設 token＝完全開放（本機開發）。這時人人都是主持人，否則
+            # 連發邀請都做不到
+            request.state.is_root_token = True
             return
-        if authorization != f"Bearer {cfg.api_token}":
+        token = _bearer(authorization)
+        if token and token == cfg.api_token:
+            request.state.is_root_token = True
+            return
+        row = None
+        if token:
+            row = await (
+                await app.state.db.execute(
+                    "SELECT * FROM access_token WHERE token=? AND revoked_at IS NULL",
+                    (token,),
+                )
+            ).fetchone()
+        if row is None:
             raise _err(401, "invalid_token", "token 無效或未提供")
+        request.state.token_label = row["label"]
+        # 最後使用時間讓主持人看得出哪張還在用、哪張可以收掉
+        await app.state.db.execute(
+            "UPDATE access_token SET last_used_at=? WHERE token=?", (_now(), token)
+        )
+        await app.state.db.commit()
+
+    def require_root(request: Request) -> None:
+        """發放與撤銷 token 限主 token。
+
+        任何 token 都能再發 token 的話，撤銷就形同虛設——被撤掉的人早就自己
+        發了一張新的。發放權留在 `.env` 那把（也就是主持人這台）。
+        """
+        if not getattr(request.state, "is_root_token", False):
+            raise _err(403, "root_token_required",
+                       "只有 Hub 主持人（.env 的主 token）能發放或撤銷邀請")
+
+    def _client_ip(request: Request) -> str | None:
+        """來源位址。**僅供辨識顯示，不可用於任何授權判斷。**
+
+        `X-Forwarded-For` 是客戶端可自行填寫的標頭；隧道後面要靠它才拿得到
+        真實來源（直接看 peer 只會看到 cloudflared 的本機位址），但也因此
+        它可以被偽造。拿它當「這是誰」的提示可以，拿它當門禁不行。
+        """
+        cf = request.headers.get("cf-connecting-ip")
+        if cf:
+            return cf.strip()
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+        return request.client.host if request.client else None
 
     # ---------- 內部工具 ----------
 
@@ -202,7 +270,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row
 
     async def _touch_session(
-        session_key: str, kind: str | None = None, label: str | None = None
+        session_key: str,
+        kind: str | None = None,
+        label: str | None = None,
+        ip: str | None = None,
     ) -> None:
         """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
         舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。"""
@@ -216,13 +287,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 kind = prefix
         now = _now()
         await db.execute(
-            "INSERT INTO session (session_key, kind, label, first_seen_at, last_seen_at)"
-            " VALUES (?,?,?,?,?)"
+            "INSERT INTO session (session_key, kind, label, first_seen_at,"
+            " last_seen_at, last_ip) VALUES (?,?,?,?,?,?)"
             " ON CONFLICT(session_key) DO UPDATE SET"
             " last_seen_at=excluded.last_seen_at,"
             " kind=CASE WHEN excluded.kind!='' THEN excluded.kind ELSE session.kind END,"
-            " label=CASE WHEN excluded.label!='' THEN excluded.label ELSE session.label END",
-            (session_key, kind or "", label or "", now, now),
+            " label=CASE WHEN excluded.label!='' THEN excluded.label ELSE session.label END,"
+            " last_ip=COALESCE(excluded.last_ip, session.last_ip)",
+            (session_key, kind or "", label or "", now, now, ip),
         )
         # 首次插入時 kind 空字串會落庫，補回預設值
         await db.execute(
@@ -343,6 +415,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
     async def list_rooms(
+        request: Request,
         status: str = "active",
         session_key: str | None = None,
         kind: str | None = None,
@@ -350,7 +423,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         db = app.state.db
         if session_key:
-            await _touch_session(session_key, kind, label)
+            await _touch_session(session_key, kind, label, _client_ip(request))
         rows = await (
             await db.execute(
                 "SELECT r.*,"
@@ -556,7 +629,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (_now(), assignment["id"]),
                 )
                 await db.commit()
-            await _touch_session(session_key, body.kind)
+            await _touch_session(session_key, body.kind, ip=_client_ip(request))
             return {
                 "participant_id": existing["id"],
                 "display_name": existing["display_name"],
@@ -601,7 +674,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, session_key),
         )
         await db.commit()
-        await _touch_session(session_key, body.kind)
+        await _touch_session(session_key, body.kind, ip=_client_ip(request))
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
         joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
@@ -933,10 +1006,13 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/assignments", dependencies=[Depends(require_auth)])
     async def list_assignments(
-        session_key: str, kind: str | None = None, label: str | None = None
+        request: Request,
+        session_key: str,
+        kind: str | None = None,
+        label: str | None = None,
     ):
         # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
-        await _touch_session(session_key, kind, label)
+        await _touch_session(session_key, kind, label, _client_ip(request))
         db = app.state.db
         rows = await (
             await db.execute(
@@ -1364,6 +1440,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "session_key": r["session_key"],
                 "kind": r["kind"],
                 "label": r["label"],
+                # 邀請 UI 靠它認人：共用一把 token 時 Hub 眼中所有人長得一樣。
+                # **僅供辨識**——來源可能經 X-Forwarded-For 而來，不可拿來授權
+                "last_ip": r["last_ip"],
                 "status": "active" if r["last_seen_at"] >= active_cutoff else "idle",
                 "first_seen_at": r["first_seen_at"],
                 "last_seen_at": r["last_seen_at"],
@@ -1375,6 +1454,68 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "last_display_name": last_name,
             })
         return {"sessions": sessions}
+
+    # ---------- 存取 token（邀請人進 Hub） ----------
+
+    def _token_public(row) -> dict:
+        d = dict(row)
+        d["revoked"] = d.get("revoked_at") is not None
+        return d
+
+    @app.post("/api/tokens", dependencies=[Depends(require_auth)])
+    async def create_token(body: TokenCreate, request: Request):
+        """發一張新的存取 token，用來邀請一個人進這台 Hub。
+
+        回傳的 token 明碼只在這裡與 GET /api/tokens 看得到——這是刻意的：
+        邀請連結會過期（quick tunnel 每次重啟換網址），要能重新產生一份給
+        對方，不然每次都得重發一張、舊的還得記得撤掉。
+        """
+        require_root(request)
+        if not cfg.api_token:
+            # 沒設主 token 時整台 Hub 本來就沒有門，再發邀請只是製造安全感
+            raise _err(409, "auth_disabled",
+                       "這台 Hub 未設定 token（完全開放），不需要也不能發邀請")
+        token = uuid.uuid4().hex + uuid.uuid4().hex
+        db = app.state.db
+        await db.execute(
+            "INSERT INTO access_token (token, label, created_at) VALUES (?,?,?)",
+            (token, body.label.strip(), _now()),
+        )
+        await db.commit()
+        return {"token": token, "label": body.label.strip()}
+
+    @app.get("/api/tokens", dependencies=[Depends(require_auth)])
+    async def list_tokens(request: Request, include_revoked: bool = False):
+        """已發出的邀請 token。撤銷過的預設不列，但查得到——誰被收回權限
+        是要留紀錄的事。"""
+        require_root(request)
+        db = app.state.db
+        cond = "" if include_revoked else " WHERE revoked_at IS NULL"
+        rows = await (
+            await db.execute(
+                f"SELECT * FROM access_token{cond} ORDER BY created_at DESC"
+            )
+        ).fetchall()
+        return {"tokens": [_token_public(r) for r in rows]}
+
+    @app.delete("/api/tokens/{token}", dependencies=[Depends(require_auth)])
+    async def revoke_token(token: str, request: Request):
+        """撤銷一張 token。
+
+        不刪列而是標記 revoked_at：刪掉之後就查不到「這個人曾經有權限」，
+        而那正是事後要回答的問題。
+        """
+        require_root(request)
+        db = app.state.db
+        cur = await db.execute(
+            "UPDATE access_token SET revoked_at=? WHERE token=? AND revoked_at IS NULL"
+            " RETURNING token",
+            (_now(), token),
+        )
+        if await cur.fetchone() is None:
+            raise _err(404, "token_not_found", "找不到這張 token，或它已經被撤銷")
+        await db.commit()
+        return {"ok": True}
 
     # ---------- WebSocket（UI 即時通道） ----------
 

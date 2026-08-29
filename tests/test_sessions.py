@@ -306,3 +306,45 @@ async def test_assignment_join_resolves_pending_when_session_already_in_room(cli
         await client.get("/api/assignments", params={"session_key": thread_id})
     ).json()["assignments"]
     assert pending == []
+
+
+async def test_session_records_source_ip_for_identification(client):
+    """邀請 UI 靠來源位址認人——共用一把 token 時 Hub 眼中所有人長得一樣。"""
+    await client.get(
+        "/api/assignments",
+        params={"session_key": "claude-a"},
+        headers={"X-Forwarded-For": "192.168.1.42, 10.0.0.1"},
+    )
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == "claude-a")
+    # 取第一跳（最靠近使用者的那個），不是整串
+    assert row["last_ip"] == "192.168.1.42"
+
+
+async def test_cf_connecting_ip_wins_over_forwarded_for(client):
+    """隧道後面 XFF 會被中間層一路接長，Cloudflare 自己那個標頭才是原始來源。"""
+    await client.get(
+        "/api/assignments",
+        params={"session_key": "claude-b"},
+        headers={
+            "CF-Connecting-IP": "203.0.113.7",
+            "X-Forwarded-For": "10.0.0.1",
+        },
+    )
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == "claude-b")
+    assert row["last_ip"] == "203.0.113.7"
+
+
+async def test_latest_source_wins(client):
+    """同一個 session 換了網路（有線 → 無線、回家）時要跟著更新，
+    顯示一個過期的位址比不顯示更糟——它看起來像是另一個人。"""
+    for ip in ("192.168.1.9", "192.168.1.77"):
+        await client.get(
+            "/api/assignments",
+            params={"session_key": "claude-c"},
+            headers={"X-Forwarded-For": ip},
+        )
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == "claude-c")
+    assert row["last_ip"] == "192.168.1.77"
