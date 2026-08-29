@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'attachment.dart';
+
 @immutable
 class ReplyPreview {
   const ReplyPreview({
@@ -36,6 +38,7 @@ class Message {
     this.pinned = false,
     this.deleted = false,
     this.systemEvent,
+    this.attachments = const [],
   });
 
   final String id;
@@ -65,6 +68,9 @@ class Message {
 
   bool get isSystem => kind == 'system';
 
+  /// 夾帶的檔案（內容在 Hub 的磁碟上，這裡只有 metadata）。
+  final List<Attachment> attachments;
+
   /// 有人加入房間。dispatcher 據此喚醒房內的本機 agent。
   bool get isMemberJoined => systemEvent == 'join';
 
@@ -91,6 +97,9 @@ class Message {
         pinned: (json['pinned'] as bool?) ?? false,
         deleted: (json['deleted'] as bool?) ?? false,
         systemEvent: json['system_event'] as String?,
+        attachments: ((json['attachments'] as List?) ?? const [])
+            .map((e) => Attachment.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 
   @override
