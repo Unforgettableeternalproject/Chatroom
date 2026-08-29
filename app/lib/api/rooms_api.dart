@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/assignment.dart';
 import '../models/participant.dart';
@@ -22,6 +23,7 @@ class RoomDetail {
     required this.room,
     required this.participants,
     this.youAreAdmin = false,
+    this.limits = const ServerLimits(),
   });
 
   final Room room;
@@ -29,6 +31,39 @@ class RoomDetail {
 
   /// 帶 X-Session-Key 查詢且與建立者相符時為 true（可移出成員）。
   final bool youAreAdmin;
+
+  /// 伺服器實際生效的設定。UI 的倒數要以它為準——寫死一個數字的話，
+  /// 伺服器改了設定就會顯示一個假的倒數，看起來像壞掉但其實只是在猜。
+  final ServerLimits limits;
+}
+
+/// Hub 端實際生效的幾個門檻值。
+@immutable
+class ServerLimits {
+  const ServerLimits({
+    this.idleTimeout = const Duration(minutes: 10),
+    this.archiveGrace = const Duration(seconds: 60),
+    this.maxAttachmentBytes = 25 * 1024 * 1024,
+  });
+
+  final Duration idleTimeout;
+  final Duration archiveGrace;
+  final int maxAttachmentBytes;
+
+  /// 舊版 Hub 不回這一段，那時就用預設值——它們是 Hub 的預設值，
+  /// 猜錯的機會最小。
+  factory ServerLimits.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const ServerLimits();
+    double? secs(String key) => (json[key] as num?)?.toDouble();
+    return ServerLimits(
+      idleTimeout: Duration(
+          milliseconds: ((secs('idle_timeout_seconds') ?? 600) * 1000).round()),
+      archiveGrace: Duration(
+          milliseconds: ((secs('archive_grace_seconds') ?? 60) * 1000).round()),
+      maxAttachmentBytes:
+          (json['max_attachment_bytes'] as int?) ?? 25 * 1024 * 1024,
+    );
+  }
 }
 
 class JoinResult {
@@ -111,6 +146,8 @@ class RoomsApi {
               .map((e) => Participant.fromJson(e as Map<String, dynamic>))
               .toList(),
           youAreAdmin: (res.data!['you_are_admin'] as bool?) ?? false,
+          limits: ServerLimits.fromJson(
+              res.data!['server'] as Map<String, dynamic>?),
         );
       });
 

@@ -435,6 +435,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             "room": _room_public(room),
             "participants": [e for e, _ in participants],
             "you_are_admin": is_admin,
+            # UI 要據此算「還有多久被移出」。不給的話 client 只能寫死一個
+            # 數字，而它與伺服器實際設定不一致時會顯示一個假的倒數——
+            # 看起來像壞掉，實際上是猜的
+            "server": {
+                "idle_timeout_seconds": cfg.idle_timeout,
+                "archive_grace_seconds": cfg.archive_grace,
+                "max_attachment_bytes": cfg.max_attachment_bytes,
+            },
         }
 
     async def _archive(room_id: str, reason: str) -> None:
@@ -1524,6 +1532,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"ok": True, "version": app.version}
+        return {
+            "ok": True, "version": app.version,
+            "idle_timeout_seconds": cfg.idle_timeout,
+            "max_attachment_bytes": cfg.max_attachment_bytes,
+        }
 
     return app

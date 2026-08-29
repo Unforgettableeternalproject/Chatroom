@@ -5,6 +5,7 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
 import '../models/message.dart';
+import 'attachment_view.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
 
@@ -35,9 +36,15 @@ class MessageBubble extends StatelessWidget {
     required this.senderKind,
     this.actions,
     this.highlighted = false,
+    this.serverUrl = '',
+    this.token = '',
   });
 
   final Message message;
+
+  /// 附件要直接向 Hub 取圖，因此需要位址與 token。空字串時附件只顯示檔名。
+  final String serverUrl;
+  final String token;
   final bool isSelf;
   final String senderKind;
   final MessageActions? actions;
@@ -126,6 +133,12 @@ class MessageBubble extends StatelessWidget {
               const SizedBox(height: 7),
               _PingedRow(names: pinged),
             ],
+            if (message.attachments.isNotEmpty && serverUrl.isNotEmpty)
+              AttachmentView(
+                attachments: message.attachments,
+                serverUrl: serverUrl,
+                token: token,
+              ),
           ],
         ),
       );

@@ -266,3 +266,28 @@ async def test_sweeper_survives_exception(tmp_path, caplog):
             room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
             await _join(client, room_id, "s1")
             assert (await client.get(f"/api/rooms/{room_id}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_room_detail_exposes_server_limits(tmp_path):
+    """UI 的倒數要以伺服器實際設定為準。
+
+    不給的話 client 只能寫死一個數字——設 30 分鐘卻顯示「10 分後移出」，
+    那個倒數永遠不會發生，看起來像壞掉但其實只是在猜。
+    """
+    cfg = Config(db_path=str(tmp_path / "limits.db"), api_token="",
+                 idle_timeout=1800.0, archive_grace=90.0)
+    app = create_app(cfg)
+    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (
+                await client.post("/api/rooms", json={"name": "房"})
+            ).json()["id"]
+            limits = (await client.get(f"/api/rooms/{room_id}")).json()["server"]
+            assert limits["idle_timeout_seconds"] == 1800.0
+            assert limits["archive_grace_seconds"] == 90.0
+            assert limits["max_attachment_bytes"] > 0
+
+            health = (await client.get("/api/health")).json()
+            assert health["idle_timeout_seconds"] == 1800.0

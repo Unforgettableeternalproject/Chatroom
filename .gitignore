@@ -13,6 +13,10 @@ dist/
 *.db-wal
 *.db-shm
 
+# Hub 執行時產生的東西（附件實體與日誌）
+server/attachments/
+logs/
+
 # 隧道工具與臨時網址（本機產物）
 bin/
 server/.tunnel-url

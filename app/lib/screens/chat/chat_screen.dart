@@ -9,6 +9,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
+import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
@@ -281,6 +282,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final s = context.uep;
     final roomId = widget.roomId;
     final detailAsync = ref.watch(roomDetailProvider(roomId));
+    // 附件要直接向 Hub 取圖，因此氣泡需要位址與 token
+    final config = ref.watch(appConfigProvider);
     final messagesAsync = ref.watch(messagesProvider(roomId));
     final feed = ref.watch(roomFeedProvider(roomId));
     // 讓 join 在進房時就發生（不等第一次發言）
@@ -424,6 +427,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         senderKind: kind,
                         actions: actions,
                         highlighted: _highlightSeq == m.seq,
+                        serverUrl: config.serverUrl,
+                        token: config.token,
                       ),
                     );
                   },
@@ -495,6 +500,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 members: members,
                 myId: myId,
                 archived: archived,
+                limits: detailAsync.value?.limits ?? const ServerLimits(),
                 youAreAdmin: detailAsync.value?.youAreAdmin ?? false),
           ),
         ),
@@ -516,6 +522,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               members: members,
               myId: myId,
               archived: archived,
+              limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false),
         ),
       ]),
@@ -806,6 +813,7 @@ class _MembersPanel extends ConsumerWidget {
     required this.myId,
     required this.archived,
     required this.youAreAdmin,
+    this.limits = const ServerLimits(),
   });
 
   final String roomId;
@@ -813,6 +821,9 @@ class _MembersPanel extends ConsumerWidget {
   final String? myId;
   final bool archived;
   final bool youAreAdmin;
+
+  /// 伺服器實際生效的門檻（閒置移出倒數要用它，不能寫死）。
+  final ServerLimits limits;
 
   Future<void> _kick(
       BuildContext context, WidgetRef ref, Participant p) async {
@@ -883,6 +894,7 @@ class _MembersPanel extends ConsumerWidget {
               _MemberTile(
                 p: p,
                 isSelf: p.id == myId,
+                idleTimeout: limits.idleTimeout,
                 onKick: youAreAdmin && p.id != myId && !archived
                     ? () => _kick(context, ref, p)
                     : null,
@@ -922,11 +934,16 @@ class _MemberTile extends StatelessWidget {
       {required this.p,
       required this.isSelf,
       this.inactive = false,
-      this.onKick});
+      this.onKick,
+      this.idleTimeout = const Duration(minutes: 10)});
 
   final Participant p;
   final bool isSelf;
   final bool inactive;
+
+  /// 伺服器實際的閒置移出門檻。**不要寫死**——它是可設定的，猜錯就會顯示
+  /// 一個永遠不會發生的倒數（設 30 分鐘卻顯示 10 分鐘後移出）。
+  final Duration idleTimeout;
 
   /// 管理員視角的移出動作；null 表示不顯示。
   final VoidCallback? onKick;
@@ -951,7 +968,7 @@ class _MemberTile extends StatelessWidget {
     } else if (isSelf) {
       subtitle = '你 · 管控權';
     } else if (isIdle) {
-      final remain = 10 - idleMinutes!;
+      final remain = idleTimeout.inMinutes - idleMinutes!;
       subtitle = remain > 0 ? '閒置 $idleMinutes 分 · $remain 分後移出' : '閒置 $idleMinutes 分';
     } else {
       subtitle = '活躍 · ${relativeTime(p.lastSeenAt)}';
