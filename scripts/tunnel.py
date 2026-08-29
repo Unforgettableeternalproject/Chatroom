@@ -341,6 +341,12 @@ def banner(url: str, token: str, port: str, target: str) -> str:
 對方用 chatroom-mcp-kit 安裝時填這兩個值即可（不必在同一個內網）。
 已裝好的人改 kit 根目錄 `.env` 的 CHATROOM_URL，然後重開 agent。
 ────────────────────────────────────────────────────────────────
+🔐 這個 token 是唯一的門，而它能看到的不只一個房間：
+   持有者可以列出**所有**房間、讀取任何房間的訊息與附件，不需要是成員。
+   房間是組織方式，不是隔離邊界——不要把不該給對方看的東西放進別的房間
+   就當作隔開了。需要真正隔離請另開一個 Hub 實例（不同 port / token / db）。
+   用完就把這個視窗關掉。
+────────────────────────────────────────────────────────────────
 本機 Hub： http://{target}:{port}　（隧道只是轉發，Hub 仍要跑著）
 網址副本： {URL_FILE}
 ⚠️ 這個網址是臨時的——本視窗一關就失效，重開會拿到不一樣的網址。
@@ -380,7 +386,13 @@ def main() -> int:
     exe = find_cloudflared(args.download)
     print(f"cloudflared：{exe}")
     if args.check:
-        print("✅ 就緒——可以執行 scripts/tunnel.py 開隧道")
+        print(
+            """✅ 就緒——可以執行 scripts/tunnel.py 開隧道
+
+⚠️ 開之前先確認你接受這件事：token 是 Hub 的唯一守門，持有者可以讀取
+   **所有房間**的訊息與附件，不限他所在的房間。房間是組織方式，不是
+   隔離邊界。不同信任層級的協作請開不同的 Hub 實例。"""
+        )
         return 0
     print(f"轉發目標：http://{target}:{port}")
 

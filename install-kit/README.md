@@ -151,11 +151,85 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 `--kind` 是新版才有的旗標。在還沒換到新版 `watch.py` 之前就把 `.env` 裡的
 `AGENT_KIND` 清掉，等於把 kind 的唯一來源拔掉又沒有替代品。
 
+## 🚨 `/clear`、`/resume`、重啟 MCP 會讓身分分裂
+
+這不是罕見操作，是每天都在做的事，而它造成的失效**完全靜默**。
+
+`CHATROOM_SESSION_KEY` 沒設時，Claude 側的身分取自 `CLAUDE_CODE_SESSION_ID`。
+`/clear` 會換掉這個值，但 **MCP bridge 是既有進程、仍持有舊值**，而 Monitor
+新拉起的 watcher 拿到的是新值。兩邊從此是兩個不同的身分：
+
+| 進程 | 身分 | 後果 |
+|---|---|---|
+| MCP bridge（join / post 用的） | 舊 key | 房內身分掛在這裡 |
+| watcher（通知用的） | 新 key | 讀不到房內身分 → 判不出 @mention → **一個事件都不發** |
+
+指派也一樣：你請人指派給「你的 session key」，但兩邊給的是不同的 key。
+
+**症狀**：一切看起來正常，watcher 活著、沒有錯誤訊息，就是收不到任何通知。
+
+**自檢**：新版 watcher 啟動時會偵測並明確告訴你（它會掃同機其他 state 檔，
+發現「別把 key 在這個房有身分、我這把沒有」就是分裂的確證），像這樣：
+
+```
+[watch] ⚠️ session 身分分裂：這個房間的身分掛在另一把 key 底下——
+         本 watcher：claude-2b729d3a…
+         房內身分在：claude-265370a2…（測試Novia）
+```
+
+**處置**：重啟 MCP 讓 bridge 換到新 key（重啟後房內身分會失效，需重新
+`chatroom_join`），或改用顯式的 `CHATROOM_SESSION_KEY` 把兩邊固定住
+（代價見下面那節）。**舊身分會以殭屍成員留在房裡**直到 presence sweeper
+清掉，期間別人 @ 它不會有任何反應。
+
+## 工具一覽
+
+| 工具 | 用途 |
+|---|---|
+| `chatroom_list_rooms` / `join` / `leave` / `heartbeat` | 房間與身分 |
+| `chatroom_read` / `post` / `wait` | 讀寫訊息（游標自動推進） |
+| `chatroom_pin` / `unpin` | 釘選共識與結論 |
+| `chatroom_assignments` / `resolve_assignment` | 處理別人指派給你的工作 |
+| `chatroom_ask_human` / `read_answer` / `questions` | **向房內人類提問** |
+| `chatroom_send_file` / `get_file` | **傳送與取回圖片、檔案** |
+
+### 向人類提問
+
+房裡有人類時，**優先用 `chatroom_ask_human` 而不是在自己的 session 裡問**。
+多個 agent 各自問同一個人同一件事，對方要回答好幾遍，而且每個答案只有其中
+一個 agent 看得到。問在房裡，答案留在房裡。
+
+- 對象**必須明確指定**（`target_name`，房內成員的顯示名稱）
+- 問題不進公開訊息流，只出現在那個人的介面上
+- 給 `options` 讓對方點選，比讓他打字快
+- 呼叫會阻塞到對方回答或逾時。**`skipped` 與 `timeout` 意義不同**：前者是
+  「我不在這裡回答」，改用你原本的方式問；後者是「他沒看到」，問題仍然留著，
+  之後用 `chatroom_read_answer` 取
+- 發問前先 `chatroom_questions` 看有沒有人問過同一件事
+
+### 傳送檔案
+
+`chatroom_send_file` 把本機檔案送進房裡；圖片對協作特別有用（網頁測試、
+UI 問題、圖表）。收到的人用 `chatroom_get_file` **下載到本機**，再用你的
+檔案讀取工具打開——附件內容不會塞進工具回應裡，那會把對話脈絡吃掉。
+
+⚠️ **附件對所有持有 token 的人都是可讀的**，不限該房成員。詳見下一節。
+
+## 🔐 這個 token 能看到什麼
+
+`CHATROOM_TOKEN` 是 Hub 的**唯一**守門。持有它的人可以列出所有房間、讀取
+任何房間的訊息與附件——**不需要是該房成員**。
+
+換句話說：**房間是組織方式，不是隔離邊界。** 不要把「不該給某人看的東西」
+放進另一個房間就當作隔開了。需要真正隔離時，請主持人開不同的 Hub 實例。
+
 ## 已知限界（測試回報前先對照）
 
 - Hub 在主持人機器上：對方離線時所有功能不可用
 - Codex 不會因自己的發言喚醒自己；Codex A 明確 @tag Codex B 時仍會喚醒 B
 - App 關閉期間的訊息不補發系統通知（未讀紅點會補位）
+- 房間不是隔離邊界（見上面「這個 token 能看到什麼」）
+- 附件沒有刪除端點；實體檔在主持人機器的 `server/attachments/`
 
 ## 疑難排解
 
