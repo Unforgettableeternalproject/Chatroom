@@ -490,6 +490,33 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
 # ---------- 向人類提問 ----------
 
 
+def _question_seconds_left(question_id: str) -> float | None:
+    """這題還剩幾秒。拿不到就回 None——問不到壽命不該讓整個提問失敗。"""
+    try:
+        q = hub().request("GET", f"/api/questions/{question_id}")["question"]
+    except HubError:
+        return None
+    left = q.get("expires_in_seconds")
+    return float(left) if isinstance(left, (int, float)) else None
+
+
+def _expired_result(question_id: str, created: dict, idle_note: str) -> dict:
+    """這題過期了。
+
+    與 ``timeout`` 分開回報，因為 agent 的處置完全不同：逾時還能回頭拿答案，
+    過期回頭也拿不到。壓成同一個字等於逼它去猜，而它多半會猜「再等等看」。
+    """
+    return {
+        "answered": False, "reason": "expired", "question_id": question_id,
+        "target_name": created.get("target_name"),
+        "target_was_active": created.get("target_active"),
+        "hint": (idle_note + " " if idle_note else "")
+                + "這題已經過期，對方沒有看到，回頭也拿不到答案"
+                  "（chatroom_read_answer 只會告訴你同一件事）。"
+                  "換個方式問他，或照你自己的判斷往下做。",
+    }
+
+
 @mcp.tool()
 @_guard
 def chatroom_ask_human(
@@ -497,8 +524,9 @@ def chatroom_ask_human(
     question: str,
     target_name: str,
     options: list[str] | None = None,
-    timeout: float = 300.0,
+    timeout: float = 60.0,
     allow_free_text: bool = True,
+    question_ttl: float = 0.0,
 ) -> dict:
     """在聊天室裡向指定的人類提問，並等待回答。
 
@@ -516,16 +544,28 @@ def chatroom_ask_human(
     ``options`` 給選項時對方可以直接點選，比讓他打字快得多；``allow_free_text``
     決定他能不能不選你給的選項而自己寫。至少要有其中一種，否則這題無法回答。
 
-    這個呼叫會**阻塞**到對方回答或 ``timeout`` 秒（預設 5 分鐘）。回傳：
+    **``timeout`` 與 ``question_ttl`` 是兩件事，分開設**：
+
+    - ``timeout``——**你要等多久**（預設 60 秒，掛一輪就返回）
+    - ``question_ttl``——**這題活多久**（0＝用伺服器預設，目前 3 分鐘）
+
+    所以「只等 30 秒，但問題留 3 分鐘」是合法且常見的用法：問完先去做別的，
+    稍後用 ``chatroom_read_answer`` 回頭拿。**不要為了等答案而卡住自己**——
+    你卡著的時候，派你做事的人也在等你。
+
+    回傳：
 
     - ``answered: true`` 帶 ``answer`` 與 ``answer_kind``（option / free_text）
     - ``answered: false`` 且 ``reason`` 為：
       - ``skipped``——對方明確選擇不在這裡回答。**改回你原本的方式問他**，
         不要再用這個工具問同一件事
-      - ``timeout``——他沒看到。問題仍然留著，他晚點回答時你用
-        ``chatroom_read_answer`` 拿得到；不要因為逾時就重問一次
+      - ``timeout``——你等夠了，但**問題還活著**。回應會附上還剩幾秒；
+        先做你能做的，之後用 ``chatroom_read_answer`` 拿。不要重問
+      - ``expired``——**這題過期了，人沒看到**。回頭也拿不到答案，
+        `chatroom_read_answer` 只會告訴你同一件事。要嘛換個方式問，
+        要嘛照你自己的判斷往下做
 
-    人沒空或不在時不要卡著等——把 timeout 設短一點，拿不到答案就先做你能做的。
+    ``timeout`` 與 ``expired`` 的差別是「還能不能拿到答案」，處置完全不同。
     """
     payload: dict[str, Any] = {
         "prompt": question,
@@ -533,6 +573,8 @@ def chatroom_ask_human(
         "allow_free_text": allow_free_text,
         "target_participant_id": _participant_id_by_name(room_id, target_name),
     }
+    if question_ttl:
+        payload["timeout_seconds"] = question_ttl
     created = _room_request(
         room_id, "POST", f"/api/rooms/{room_id}/questions", json=payload
     )
@@ -551,12 +593,23 @@ def chatroom_ask_human(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            # 等夠了，但問題還活著——去確認它還剩多久，agent 才知道值不值得
+            # 回頭拿。少了這一步，「timeout」就只是一句沒有下一步的話
+            left = _question_seconds_left(qid)
+            if left is not None and left <= 0:
+                return _expired_result(qid, created, _log_target_idle)
             return {
                 "answered": False, "reason": "timeout", "question_id": qid,
                 "target_name": created.get("target_name"),
                 "target_was_active": created.get("target_active"),
+                "expires_in_seconds": left,
                 "hint": (_log_target_idle + " " if _log_target_idle else "")
-                        + "問題仍然留著。對方晚點回答的話，用 chatroom_read_answer"
+                        + f"問題還有效（剩約 {int(left)} 秒）。先做你能做的，"
+                          f"之後用 chatroom_read_answer（question_id={qid}）"
+                          "拿答案，不必重問。"
+                        if left is not None else
+                        (_log_target_idle + " " if _log_target_idle else "")
+                        + "問題仍然留著，用 chatroom_read_answer"
                         f"（question_id={qid}）取得，不必重問。",
             }
         data = hub().request(
@@ -565,6 +618,8 @@ def chatroom_ask_human(
             timeout=min(remaining, 50.0) + 10.0,
         )
         q = data["question"]
+        if q["status"] == "expired":
+            return _expired_result(qid, created, _log_target_idle)
         if q["status"] == "answered":
             return {"answered": True, "answer": q["answer"],
                     "answer_kind": q["answer_kind"], "question_id": qid,
@@ -583,8 +638,12 @@ def chatroom_ask_human(
 def chatroom_read_answer(question_id: str) -> dict:
     """讀取某個問題目前的狀態與答案（不等待）。
 
-    ``chatroom_ask_human`` 逾時後用這個回頭取——對方晚一點回答仍然算數，
-    逾時只代表「當下沒等到」，不代表問題作廢。
+    ``chatroom_ask_human`` 回報 ``timeout`` 後用這個回頭取——你只是等夠了，
+    問題還活著，對方晚一點回答仍然算數。
+
+    ⚠️ 但問題**有時限**（預設 3 分鐘）。回報 ``expired`` 的那些回頭也拿不到
+    答案，這裡只會告訴你 ``status: "expired"``——那代表對方從頭到尾沒看到，
+    不是他不想答（那是 ``skipped``）。
     """
     data = hub().request("GET", f"/api/questions/{question_id}")
     return {"question": data["question"]}
