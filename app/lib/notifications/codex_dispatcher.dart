@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 
 import '../models/agent_session.dart';
@@ -85,7 +86,36 @@ class CodexDispatcher {
   final Set<String> _seenAssignments = {};
   bool _pollingAssignments = false;
 
+  /// 投不出去、等著補投的 mention。key 是 messageId（同一則只留一份）。
+  ///
+  /// mention 與指派的可靠度差距全在這裡：指派每 10 秒輪詢一次，自帶重試，
+  /// 所以間歇性失敗看不出來；mention 只有事件抵達的那一瞬間一次機會，
+  /// 而 `fresh` 不會重放。偏偏 Codex 閒著等輸入時 writer lock 掃不到，
+  /// 人在打字講話的當下正是它最可能閒著的時候。
+  final Map<String, _PendingMention> _pending = {};
+
+  /// 補投佇列上限。塞爆時丟最舊的——留著十分鐘前的比留著兩小時前的有用。
+  static const _pendingLimit = 50;
+
+  /// 超過這個時間就不補投了。mention 是待辦不是狀態轉變，晚一點送到仍然
+  /// 算數（十分鐘前 @ 你的人還在等），但久到對方已經自己去看了就沒意義。
+  static const _pendingTtl = Duration(minutes: 30);
+
+  @visibleForTesting
+  int get pendingCount => _pending.length;
+
   Future<void> handle(RoomFreshBatch batch) async {
+    // 一批裡任何一則出事都不該連累其他則，更不該讓整條訂閱從此靜默。
+    // 這是無聲失效最好的溫床：轉送停了，畫面上一切正常。
+    try {
+      await _handle(batch);
+    } catch (e, st) {
+      _log.severe('轉送這一批時出錯（${batch.roomName}）：$e', e, st);
+      _remember(batch, batch.messages.where((m) => m.mentions.isNotEmpty));
+    }
+  }
+
+  Future<void> _handle(RoomFreshBatch batch) async {
     if (!enabled) return;
     // 「有人加入」走廣播，一般訊息走 mention 分流——兩條路徑的投遞對象
     // 算法完全不同：加入事件沒有 mentions，套 mention 分流會一個人都投不到。
@@ -138,16 +168,20 @@ class CodexDispatcher {
         }
       }
     }
-    // 有人被 @ 了卻一個 thread 都投不到，是這條通道最常見的失效形狀，而它
-    // 本身完全無聲——加入通知走廣播照樣會到，看起來像「轉送是好的」。
-    // 把兩邊的名字都印出來：對不上的多半是房內顯示名與 @ 的字串有出入。
-    final mentionedAnyone = chats.any((m) => m.mentions.isNotEmpty);
-    if (mentionedAnyone && byThread.isEmpty) {
+    // routes 空 = 這一刻查不到任何本機 Codex 在這個房。那是**暫時**的
+    // （writer lock 只在 session 持有寫入鎖時存在，Codex 閒著等輸入時
+    // 掃不到），不是「這個房沒有 Codex」——留著等下一輪補投。
+    if (routes.isEmpty) {
+      _remember(batch, chats.where((m) => m.mentions.isNotEmpty));
+    } else {
       final tagged = {for (final m in chats) ...m.mentions};
-      _log.warning(
-        'mention 轉送未投遞（$roomLabel）：訊息 @ 了 ${tagged.join('、')}，'
-        '但本機 Codex 在這個房的名字是 ${routes.keys.isEmpty ? '（查不到任何一個）' : routes.keys.join('、')}',
-      );
+      if (tagged.isNotEmpty && byThread.isEmpty) {
+        // 查到了、但沒 @ 到它——這是確定性的結果，不重試。
+        _log.info(
+          'mention 未投遞（$roomLabel）：訊息 @ 了 ${tagged.join('、')}，'
+          '本機 Codex 在這個房的名字是 ${routes.keys.join('、')}',
+        );
+      }
     }
     for (final entry in byThread.entries) {
       await _dispatchMessages(entry.key, batch, entry.value);
@@ -173,6 +207,14 @@ class CodexDispatcher {
     String thread,
     RoomFreshBatch batch,
     List<Message> msgs,
+  ) =>
+      _dispatchMessagesOk(thread, batch, msgs);
+
+  /// 回傳是否真的送達——補投要靠它決定該不該把訊息從佇列裡拿掉。
+  Future<bool> _dispatchMessagesOk(
+    String thread,
+    RoomFreshBatch batch,
+    List<Message> msgs,
   ) async {
     final last = msgs.last;
     final text =
@@ -186,6 +228,7 @@ class CodexDispatcher {
         })}';
     final ok = await _queue(thread, text);
     if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
+    return ok;
   }
 
   /// 有人加入房間——與訊息分開成獨立事件，agent 收到後可以決定要不要打招呼
@@ -209,6 +252,89 @@ class CodexDispatcher {
     if (!ok) _log.warning('codex queue 轉送失敗（member_joined, thread=$thread）');
   }
 
+  /// 記下投不出去的 mention，等下一輪補投。
+  void _remember(RoomFreshBatch batch, Iterable<Message> msgs) {
+    for (final m in msgs) {
+      _pending[m.id] = _PendingMention(
+        roomId: batch.roomId,
+        roomName: batch.roomName,
+        message: m,
+        firstSeenTick: _tick,
+      );
+    }
+    while (_pending.length > _pendingLimit) {
+      final dropped = _pending.keys.first;
+      _pending.remove(dropped);
+      _log.warning('補投佇列已滿，丟棄最舊的一則 mention（$dropped）');
+    }
+  }
+
+  /// 重試補投。跟著 [pollAssignments] 的 10 秒輪詢走——指派靠這個節奏顯得
+  /// 可靠，mention 沒理由不共用它。
+  Future<void> flushPendingMentions() async {
+    if (!enabled || _pending.isEmpty) return;
+    _tick++;
+    // 過期的先清掉，並且**講出來**——安靜地丟掉待辦，跟沒有這個機制一樣
+    final expiredTicks = _pendingTtl.inSeconds ~/ 10;
+    final expired = _pending.entries
+        .where((e) => _tick - e.value.firstSeenTick > expiredTicks)
+        .map((e) => e.key)
+        .toList();
+    for (final id in expired) {
+      final p = _pending.remove(id)!;
+      _log.warning(
+        'mention 補投逾時放棄（${p.roomName}）：'
+        '${p.message.senderName} @ ${p.message.mentions.join('、')}'
+        '——這則喚醒沒有送達任何本機 Codex',
+      );
+    }
+    if (_pending.isEmpty) return;
+
+    // 依房間分組重投：routes 是逐房查的
+    final byRoom = <String, List<_PendingMention>>{};
+    for (final p in _pending.values) {
+      byRoom.putIfAbsent(p.roomId, () => []).add(p);
+    }
+    for (final entry in byRoom.entries) {
+      final routes = await _roomRoutes(entry.key);
+      if (routes.isEmpty) continue; // 還是查不到，下一輪再說
+      final first = entry.value.first;
+      final batch = RoomFreshBatch(
+        roomId: entry.key,
+        roomName: first.roomName,
+        messages: [for (final p in entry.value) p.message],
+      );
+      final byThread = <String, List<Message>>{};
+      for (final p in entry.value) {
+        final m = p.message;
+        final senderThreads = routes[m.senderName] ?? const <String>{};
+        var routed = false;
+        for (final mention in m.mentions) {
+          for (final thread in routes[mention] ?? const <String>{}) {
+            if (senderThreads.contains(thread)) continue;
+            byThread.putIfAbsent(thread, () => <Message>[]).add(m);
+            routed = true;
+          }
+        }
+        // routes 查得到了，這則卻仍然投不到任何人——@ 的不是本機 Codex，
+        // 這是確定性的結果，繼續留著只會佔位子到過期
+        if (!routed) _pending.remove(m.id);
+      }
+      for (final t in byThread.entries) {
+        if (await _dispatchMessagesOk(t.key, batch, t.value)) {
+          for (final m in t.value) {
+            _pending.remove(m.id);
+          }
+          _log.info('mention 補投成功（${first.roomName}，${t.value.length} 則）');
+        }
+      }
+    }
+  }
+
+  /// 單調遞增的輪詢計數。不用時鐘——`Duration` 要靠 `DateTime.now()`，
+  /// 而測試裡沒辦法讓它前進。輪詢節奏固定 10 秒，用次數換算就夠了。
+  int _tick = 0;
+
   /// 掃描本機 Codex sessions、向 Hub 報到並投遞各自的 pending assignment。
   /// 即使轉送開關關閉仍會輪詢，讓指派 UI 能看見活躍 session；只有 queue 受
   /// [enabled] 控制。
@@ -216,6 +342,13 @@ class CodexDispatcher {
     if (_pollingAssignments) return;
     _pollingAssignments = true;
     try {
+      // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
+      // 要等的東西是同一件事
+      try {
+        await flushPendingMentions();
+      } catch (e) {
+        _log.warning('mention 補投失敗：$e');
+      }
       for (final thread in activeThreadIds()) {
         try {
           final assignments = await _fetchAssignments(thread);
@@ -370,4 +503,21 @@ class CodexDispatcher {
       return false;
     }
   }
+}
+
+/// 等著補投的一則 mention。
+class _PendingMention {
+  const _PendingMention({
+    required this.roomId,
+    required this.roomName,
+    required this.message,
+    required this.firstSeenTick,
+  });
+
+  final String roomId;
+  final String roomName;
+  final Message message;
+
+  /// 第一次投失敗時的輪詢計數，用來判斷是否過期。
+  final int firstSeenTick;
 }

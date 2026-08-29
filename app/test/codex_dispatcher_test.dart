@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:chatroom_app/models/agent_session.dart';
 import 'package:chatroom_app/models/assignment.dart';
+import 'package:chatroom_app/models/attachment.dart';
 import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/notifications/codex_dispatcher.dart';
 import 'package:chatroom_app/notifications/notification_center.dart';
@@ -322,6 +323,138 @@ void main() {
     expect(payload(runs.first)['event'], 'member_joined');
     expect(payload(runs.first)['latest']['display_name'], 'Bernie');
     center.dispose();
+  });
+
+  test('本機人類 @ 本機 Codex（全鏈）——與加入事件同一條 feed', () async {
+    // 實測回報的形狀：加入通知與指派都收得到、mention 一則都收不到。
+    // 前兩者不比對名字，只有 mention 走 routes[key]，所以這條測的是
+    // 「key 這一半在真實接線下對不對得上」。
+    final d = make();
+    final feeds = <String, RoomFeed>{};
+    final center = NotificationCenter(
+      (roomId, {participantId}) =>
+          feeds.putIfAbsent(roomId, () => RoomFeed(roomId)),
+      (_) {},
+      (_, _) {},
+    );
+    center.fresh.listen(d.handle);
+    center.follow('r1', roomName: '設計討論', myParticipantId: 'p-human');
+    feeds['r1']!.upsertAll([msg(1, mentions: const [])]);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    runs.clear();
+
+    // 人類自己發的、@ 到房內某個本機 Codex
+    feeds['r1']!.upsertAll([
+      msg(2,
+          senderId: 'p-human',
+          sender: 'piyan',
+          content: '@Codex-Sol 你看得到這張圖嗎',
+          mentions: const ['Codex-Sol']),
+    ]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(runs, hasLength(1), reason: '被 @ 的那個 thread 該收到');
+    expect(target(runs.single), threadA);
+    expect(payload(runs.single)['event'], 'message');
+    expect(payload(runs.single)['latest']['sender'], 'piyan');
+    center.dispose();
+  });
+
+  test('查不到本機 Codex 時 mention 留著補投，查得到之後補上', () async {
+    // 「時好時壞」的成因：writer lock 只在 Codex 持有寫入鎖時存在，它閒著
+    // 等輸入的時候掃不到。指派每 10 秒輪詢所以自帶重試，mention 只有事件
+    // 抵達的那一瞬間一次機會——同一個間歇性失敗，只有 mention 看得出來。
+    var threads = <String>{};
+    final d = CodexDispatcher(
+      (_) async => defaultMembers,
+      fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+      activeThreadResolver: () => threads,
+      runProcess: (argv) async {
+        runs.add(argv);
+        return true;
+      },
+      codexArgvResolver: () => ['codex-bin'],
+      codexHome: codexHome.path,
+    )..enabled = true;
+    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
+    expect(runs, isEmpty, reason: '這一刻投不出去');
+    expect(d.pendingCount, 1, reason: '但要留著');
+
+    // Codex 醒了，下一輪輪詢補上
+    threads = {threadA, threadB};
+    await d.pollAssignments();
+    expect(runs, hasLength(1));
+    expect(target(runs.single), threadA);
+    expect(payload(runs.single)['latest']['content'], '@Codex-Sol 在嗎');
+    expect(d.pendingCount, 0, reason: '送到了就不再留');
+  });
+
+  test('查得到本機 Codex 但沒 @ 到它——不重試，直接丟', () async {
+    // 與上一條的分界：這是確定性的結果，留著只會佔位子到過期。
+    final d = make();
+    await d.handle(batch([msg(1, mentions: const ['Bernie'])]));
+    expect(runs, isEmpty);
+    expect(d.pendingCount, 0);
+  });
+
+  test('一則出錯不連累同批其他則，也不讓訂閱靜默', () async {
+    // 打在真正沒有內層 catch 的地方：`_fetchMembers` / `_roomRoutes` 各自
+    // 都接得住自己的失敗，投遞那一段沒有。
+    var firstCall = true;
+    final d = CodexDispatcher(
+      (_) async => defaultMembers,
+      fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+      activeThreadResolver: () => {threadA},
+      runProcess: (argv) async {
+        if (firstCall) {
+          firstCall = false;
+          throw StateError('spawn codex 炸了');
+        }
+        runs.add(argv);
+        return true;
+      },
+      codexArgvResolver: () => ['codex-bin'],
+      codexHome: codexHome.path,
+    )..enabled = true;
+
+    // 第一批炸掉——不可以往外拋（Stream 的 onData 拋錯會變成未處理錯誤）
+    await d.handle(batch([msg(1, content: '@Codex-Sol 第一則')]));
+    expect(runs, isEmpty);
+    expect(d.pendingCount, 1, reason: '炸掉的那批也要留著補投');
+
+    // 下一批照常運作，先前那則跟著補上
+    await d.handle(batch([msg(2, content: '@Codex-Sol 第二則')]));
+    expect(runs, isNotEmpty, reason: '訂閱沒有因為前一批出錯而靜默');
+  });
+
+  test('帶附件的 mention 照樣投得出去（附件只是 metadata）', () async {
+    // 實測時懷疑過「那則帶 16MB 圖，是不是把管線毒死了」。附件在訊息上
+    // 只有 metadata，轉送 payload 也不含它——這條把結論釘住。
+    final d = make();
+    final withFile = Message(
+      id: 'm9',
+      seq: 9,
+      updateSeq: 0,
+      kind: 'chat',
+      content: '@Codex-Sol 你看得到這張圖嗎',
+      createdAt: '',
+      senderId: 'p-human',
+      senderName: 'piyan',
+      mentions: const ['Codex-Sol'],
+      attachments: const [
+        Attachment(
+          id: 'a1',
+          filename: '20241226_141155.png',
+          mime: 'image/png',
+          size: 16174321,
+          isImage: true,
+        ),
+      ],
+    );
+    await d.handle(batch([withFile]));
+    expect(runs, hasLength(1));
+    expect(target(runs.single), threadA);
+    expect(payload(runs.single)['latest']['content'], '@Codex-Sol 你看得到這張圖嗎');
   });
 
   test('threadOverride 下加入事件仍投得出去', () async {
