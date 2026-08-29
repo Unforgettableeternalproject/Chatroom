@@ -1,4 +1,8 @@
 import 'package:chatroom_app/app.dart';
+import 'package:chatroom_app/core/config/app_settings.dart';
+import 'package:chatroom_app/state/app_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +31,42 @@ void main() {
       expect(activeRoomIdFor('/rooms/abc123/pinned'), isNull);
       expect(activeRoomIdFor('/rooms/abc123/assign'), isNull);
     });
+  });
+
+  testWidgets('App 掛得起來——initState 早於 router 解析，'
+      '那裡拋例外沒有任何 error boundary 接得住，畫面會全白', (tester) async {
+    // ChatroomApp 在 initState 同步呼叫一次 _syncActiveRoom，那時 GoRouter
+    // 的 currentConfiguration 還是空的，`.last` 會拋 Bad state: No element。
+    //
+    // 這個回歸測試刻意掛整個 ChatroomApp 而不是只驗那支推導函式：
+    // activeRoomIdFor 的四個單元測試全綠，App 卻開起來一片空白——**崩在
+    // 誰身上，跟推導出什麼，是兩件不同的事**。
+    //
+    // 2026-08-29 實機發現，而它藏了 17 個 commit：期間每次 rebuild 都因
+    // exe 被執行中的 App 佔用而失敗（LNK1104），跑的一直是舊執行檔。
+    SharedPreferences.setMockInitialValues({});
+    final settings = SettingsRepository(await SharedPreferences.getInstance());
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        settingsRepoProvider.overrideWithValue(settings),
+        initialConfigProvider.overrideWithValue(const AppConfig(
+          serverUrl: '',
+          token: '',
+          themeMode: ThemeModePref.dark,
+          preferredName: '',
+          deviceKey: 'human-test',
+        )),
+      ],
+      child: const ChatroomApp(),
+    ));
+
+    expect(tester.takeException(), isNull);
+
+    // 拆掉整棵樹讓 ProviderScope dispose——realtime 的重連／heartbeat timer
+    // 掛在 provider 上，不收掉的話 test binding 會判定「還有 timer 沒結束」
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
   });
 
   /// 上面的推導只有在「取得的路徑真的是最上層」時才有意義，而這一點不能靠

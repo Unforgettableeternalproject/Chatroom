@@ -117,8 +117,17 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
     // 取 last.matchedLocation 而不是 currentConfiguration.uri：後者是 base
     // location，push 疊上來的畫面不會反映在裡面（`/settings` 蓋住聊天室時
     // uri 仍是 /rooms/<id>），照它判斷等於沒修。實測見 active_room_route_test。
-    ref.read(notificationCenterProvider).activeRoomId = activeRoomIdFor(
-        _router.routerDelegate.currentConfiguration.last.matchedLocation);
+    final matches = _router.routerDelegate.currentConfiguration;
+    if (matches.isEmpty) {
+      // initState 裡的首次呼叫早於 router 解析出第一條路由，此時 matchList
+      // 是空的，`.last` 會拋 Bad state: No element——而它拋在 initState 裡，
+      // 整棵樹掛掉，畫面全白（2026-08-29 實機發現）。
+      // 還沒有路由＝還沒有任何房間在前景，不抑制任何通知才是對的語意。
+      ref.read(notificationCenterProvider).activeRoomId = null;
+      return;
+    }
+    ref.read(notificationCenterProvider).activeRoomId =
+        activeRoomIdFor(matches.last.matchedLocation);
   }
 
   @override
