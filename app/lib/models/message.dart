@@ -35,6 +35,7 @@ class Message {
     this.replyPreview,
     this.pinned = false,
     this.deleted = false,
+    this.systemEvent,
   });
 
   final String id;
@@ -55,7 +56,17 @@ class Message {
   final bool pinned;
   final bool deleted;
 
+  /// system 訊息的機器可讀事件名（join / leave / kick / idle_removed /
+  /// archive…）。chat 訊息一律為 null。
+  ///
+  /// 存在的理由是**不要拿中文內容去比對**——「X 加入了聊天室」改一個字，
+  /// 依賴字串比對的 client 就會無聲失效，而且沒有任何地方會報錯。
+  final String? systemEvent;
+
   bool get isSystem => kind == 'system';
+
+  /// 有人加入房間。dispatcher 據此喚醒房內的本機 agent。
+  bool get isMemberJoined => systemEvent == 'join';
 
   /// 此則訊息對 cursor 的貢獻值。
   int get cursor => seq > updateSeq ? seq : updateSeq;
@@ -79,6 +90,7 @@ class Message {
                 json['reply_preview'] as Map<String, dynamic>),
         pinned: (json['pinned'] as bool?) ?? false,
         deleted: (json['deleted'] as bool?) ?? false,
+        systemEvent: json['system_event'] as String?,
       );
 
   @override

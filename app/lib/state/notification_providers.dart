@@ -61,7 +61,11 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
 
 final notificationCenterProvider = Provider<NotificationCenter>((ref) {
   final service = ref.watch(realtimeServiceProvider);
-  final center = NotificationCenter(service.subscribe, service.unsubscribe);
+  final center = NotificationCenter(
+    service.subscribe,
+    service.unsubscribe,
+    service.setParticipantId,
+  );
   ref.onDispose(center.dispose);
   return center;
 });

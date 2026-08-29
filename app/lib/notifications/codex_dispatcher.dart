@@ -79,9 +79,16 @@ class CodexDispatcher {
 
   Future<void> handle(RoomFreshBatch batch) async {
     if (!enabled) return;
+    // 「有人加入」走廣播，一般訊息走 mention 分流——兩條路徑的投遞對象
+    // 算法完全不同：加入事件沒有 mentions，套 mention 分流會一個人都投不到。
+    final joins = <Message>[];
+    final chats = <Message>[];
+    for (final m in batch.messages) {
+      (m.isMemberJoined ? joins : chats).add(m);
+    }
     final members = await _members(batch.roomId, batch.messages);
     if (threadOverride.isNotEmpty) {
-      final msgs = batch.messages
+      final msgs = chats
           .where(
             (m) =>
                 members.kinds[m.senderId] != 'codex' &&
@@ -91,12 +98,17 @@ class CodexDispatcher {
       if (msgs.isNotEmpty) {
         await _dispatchMessages(threadOverride, batch, msgs);
       }
+      // 診斷覆寫模式下沒有 routes 可比對，加入事件一律投給指定 thread；
+      // 排除自己加入由上游（NotificationCenter）以 sender_id 處理過了
+      if (joins.isNotEmpty) {
+        await _dispatchJoins(threadOverride, batch, joins);
+      }
       return;
     }
 
     final routes = await _roomRoutes(batch.roomId);
     final byThread = <String, List<Message>>{};
-    for (final m in batch.messages) {
+    for (final m in chats) {
       final senderThreads = routes[m.senderName] ?? const <String>{};
       for (final mention in m.mentions) {
         for (final thread in routes[mention] ?? const <String>{}) {
@@ -108,6 +120,21 @@ class CodexDispatcher {
     }
     for (final entry in byThread.entries) {
       await _dispatchMessages(entry.key, batch, entry.value);
+    }
+
+    // routes 只含「本機 Codex session ∩ 已加入這個房」，正好就是該喚醒的
+    // 全體。新成員自己不必被自己的加入事件叫醒。
+    final joinsByThread = <String, List<Message>>{};
+    final allThreads = routes.values.expand((t) => t).toSet();
+    for (final m in joins) {
+      final joinerThreads = routes[m.senderName] ?? const <String>{};
+      for (final thread in allThreads) {
+        if (joinerThreads.contains(thread)) continue;
+        joinsByThread.putIfAbsent(thread, () => <Message>[]).add(m);
+      }
+    }
+    for (final entry in joinsByThread.entries) {
+      await _dispatchJoins(entry.key, batch, entry.value);
     }
   }
 
@@ -128,6 +155,27 @@ class CodexDispatcher {
         })}';
     final ok = await _queue(thread, text);
     if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
+  }
+
+  /// 有人加入房間——與訊息分開成獨立事件，agent 收到後可以決定要不要打招呼
+  /// 或重查成員名錄（房內多了誰，mention 才挑得對名字）。
+  Future<void> _dispatchJoins(
+    String thread,
+    RoomFreshBatch batch,
+    List<Message> msgs,
+  ) async {
+    final last = msgs.last;
+    final text =
+        '[chatroom 通知] ${jsonEncode({
+          'event': 'member_joined',
+          'room_id': batch.roomId,
+          'room_name': batch.roomName,
+          'target_session_id': thread,
+          'count': msgs.length,
+          'latest': {'seq': last.seq, 'participant_id': last.senderId, 'display_name': last.senderName, 'content': last.content},
+        })}';
+    final ok = await _queue(thread, text);
+    if (!ok) _log.warning('codex queue 轉送失敗（member_joined, thread=$thread）');
   }
 
   /// 掃描本機 Codex sessions、向 Hub 報到並投遞各自的 pending assignment。

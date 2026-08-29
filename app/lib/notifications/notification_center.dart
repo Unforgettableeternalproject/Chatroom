@@ -44,10 +44,18 @@ class RoomNotification {
 /// - 正在看的房間（[activeRoomId]）且 app 在前景（[foreground]）時不通知，
 ///   但仍發 [activity] 讓房間列表刷新。
 class NotificationCenter {
-  NotificationCenter(this._subscribe, this._unsubscribe);
+  NotificationCenter(this._subscribe, this._unsubscribe, this._syncIdentity);
 
   final RoomFeed Function(String roomId, {String? participantId}) _subscribe;
   final void Function(String roomId) _unsubscribe;
+
+  /// 只把身分同步給 server，**不**取得一份新的訂閱所有權。
+  ///
+  /// `subscribe()` 每呼叫一次 refCount 就 +1，而 `follow()` 是冪等的、
+  /// 每次房間列表刷新都會被呼叫一遍。用 subscribe 補身分會讓 refCount
+  /// 單向累積，`_drop()` 只減一次就永遠歸不了零——房間被移出或封存後
+  /// 仍被背景訂閱著，而且完全沒有異狀可看。
+  final void Function(String roomId, String participantId) _syncIdentity;
 
   NotifyModePref mode = NotifyModePref.all;
   String? activeRoomId;
@@ -84,9 +92,11 @@ class NotificationCenter {
         ..myParticipantId = myParticipantId
         ..myDisplayName = myDisplayName;
       // 身分可能是這次才拿到的（先跟房、join 完才有 id）——要傳下去，
-      // 否則 server 那條訂閱永遠是匿名的，收不到指名給我的問題
+      // 否則 server 那條訂閱永遠是匿名的，收不到指名給我的問題。
+      // 走 _syncIdentity 而非 _subscribe：這裡已經持有訂閱了，再 subscribe
+      // 一次只會把 refCount 灌高，見上面的說明。
       if (myParticipantId != null && myParticipantId.isNotEmpty) {
-        _subscribe(roomId, participantId: myParticipantId);
+        _syncIdentity(roomId, myParticipantId);
       }
       return;
     }
@@ -141,7 +151,19 @@ class NotificationCenter {
     final fromOthers = <Message>[];
     for (final m in feed.messages) {
       if (m.seq <= baseline) continue;
-      if (m.isSystem || m.deleted) continue;
+      if (m.deleted) continue;
+      if (m.isSystem) {
+        // system 訊息不進 OS 通知也不算未讀，但「有人加入」要讓 dispatcher
+        // 喚醒房內的本機 agent——用 App 當通知樞紐的 Codex 沒有自己的
+        // watcher 進程，不放行就只有另外掛 watch.py 的 agent 收得到。
+        // 只加進 everything，不進 fromOthers：後者是 OS 通知與未讀的來源。
+        // 自己加入不必叫醒自己；Hub 已把加入者 pid 掛在 sender_id 上，
+        // 不需要去解析中文內容比對名字。
+        if (m.isMemberJoined && m.senderId != room.myParticipantId) {
+          everything.add(m);
+        }
+        continue;
+      }
       everything.add(m);
       if (room.myParticipantId != null && m.senderId == room.myParticipantId) {
         continue;

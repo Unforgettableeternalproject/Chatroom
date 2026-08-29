@@ -29,6 +29,25 @@ Message msg(
   mentions: mentions,
 );
 
+/// 「有人加入」的 system 訊息。sender 就是加入者本人（Hub 把 pid 掛在
+/// sender_id 上），而且**沒有 mentions**——所以它套不進 mention 分流。
+Message joinMsg(
+  int seq, {
+  String? senderId = 'p-new',
+  String sender = '測試Novia',
+}) => Message(
+  id: 'm$seq',
+  seq: seq,
+  updateSeq: 0,
+  kind: 'system',
+  content: '$sender 加入了聊天室',
+  createdAt: '',
+  senderId: senderId,
+  senderName: sender,
+  mentions: const [],
+  systemEvent: 'join',
+);
+
 const defaultMembers = RoomMembers(
   kinds: {'p-claude': 'claude', 'p-codex-a': 'codex', 'p-codex-b': 'codex'},
   codexNames: {'Codex-Sol', 'Codex-Luna'},
@@ -235,5 +254,49 @@ void main() {
     final d = make(activeThreads: const {});
     await d.handle(batch([msg(1)]));
     expect(runs, isEmpty);
+  });
+
+  test('有人加入時廣播給房內所有本機 Codex thread', () async {
+    // 加入事件沒有 mentions，套 mention 分流會一個人都投不到——所以它必須
+    // 走獨立的廣播路徑。這是「用 App 當通知樞紐的 Codex」唯一的到達方式，
+    // 只測 Python watcher 抓不到這條。
+    final d = make();
+    await d.handle(batch([joinMsg(1)]));
+    expect(runs, hasLength(2));
+    expect(runs.map(target).toSet(), {threadA, threadB});
+    for (final run in runs) {
+      final body = payload(run);
+      expect(body['event'], 'member_joined');
+      expect(body['latest']['display_name'], '測試Novia');
+      expect(body['latest']['participant_id'], 'p-new');
+    }
+  });
+
+  test('加入者是本機 Codex 時不喚醒它自己', () async {
+    final d = make();
+    await d.handle(batch([joinMsg(1, senderId: 'p-codex-a', sender: 'Codex-Sol')]));
+    expect(runs, hasLength(1));
+    expect(target(runs.single), threadB);
+  });
+
+  test('加入事件與一般訊息同批時各走各的路徑', () async {
+    final d = make();
+    await d.handle(batch([msg(1, content: '只給 Sol'), joinMsg(2)]));
+    final byEvent = <String, List<String>>{};
+    for (final run in runs) {
+      byEvent
+          .putIfAbsent(payload(run)['event'] as String, () => <String>[])
+          .add(target(run));
+    }
+    expect(byEvent['message'], [threadA], reason: 'mention 分流不受影響');
+    expect(byEvent['member_joined']!.toSet(), {threadA, threadB});
+  });
+
+  test('threadOverride 下加入事件仍投得出去', () async {
+    final d = make()..threadOverride = threadB;
+    await d.handle(batch([joinMsg(1)]));
+    expect(runs, hasLength(1));
+    expect(target(runs.single), threadB);
+    expect(payload(runs.single)['event'], 'member_joined');
   });
 }

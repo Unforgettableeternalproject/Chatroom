@@ -12,6 +12,7 @@ Message msg(
   String content = 'hello',
   List<String> mentions = const [],
   bool deleted = false,
+  String? systemEvent,
 }) =>
     Message(
       id: 'm$seq',
@@ -24,6 +25,7 @@ Message msg(
       senderName: sender,
       mentions: mentions,
       deleted: deleted,
+      systemEvent: systemEvent,
     );
 
 void main() {
@@ -33,17 +35,27 @@ void main() {
   late List<String> activity;
 
   final subscribedIds = <String, String?>{};
+  // 每次「取得一份訂閱所有權」記一筆——底層 refCount 就是這樣加的
+  final subscribeCalls = <String>[];
+  final syncedIds = <String, String>{};
   RoomFeed subscribe(String roomId, {String? participantId}) {
     if (participantId != null) subscribedIds[roomId] = participantId;
+    subscribeCalls.add(roomId);
     return feeds.putIfAbsent(roomId, () => RoomFeed(roomId));
+  }
+
+  void syncIdentity(String roomId, String participantId) {
+    syncedIds[roomId] = participantId;
   }
 
   setUp(() {
     feeds = {};
     subscribedIds.clear();
+    subscribeCalls.clear();
+    syncedIds.clear();
     sent = [];
     activity = [];
-    center = NotificationCenter(subscribe, (_) {});
+    center = NotificationCenter(subscribe, (_) {}, syncIdentity);
     center.notifications.listen(sent.add);
     center.activity.listen(activity.add);
   });
@@ -114,13 +126,91 @@ void main() {
     expect(subscribedIds['r1'], 'p1');
   });
 
-  test('先跟房、之後才拿到身分：要補送訂閱', () async {
+  test('先跟房、之後才拿到身分：補送身分但不再取得訂閱', () async {
     center.follow('r1', roomName: 'A');
-    expect(subscribedIds['r1'], isNull);
+    expect(syncedIds['r1'], isNull);
     // join 完成後帶著身分再 follow 一次（bootstrap 的正常時序）
     center.follow('r1', roomName: 'A', myParticipantId: 'p1');
-    expect(subscribedIds['r1'], 'p1',
+    expect(syncedIds['r1'], 'p1',
         reason: '不補送的話 server 那條訂閱永遠是匿名的');
+    expect(subscribeCalls, ['r1'],
+        reason: '補身分走同步出口，不得再取得一份訂閱所有權');
+  });
+
+  test('房間列表反覆刷新不把訂閱計數灌高', () async {
+    // bootstrap 對「所有已加入的房」呼叫 follow，而 roomList 每次刷新都會
+    // 重跑一遍。follow 是冪等的，只有第一次該取得訂閱所有權——否則底層
+    // refCount 單向累積，retainOnly 只減一次就永遠歸不了零，房間被移出或
+    // 封存之後仍被背景訂閱著，而且畫面上完全看不出異狀。
+    for (var i = 0; i < 5; i++) {
+      center.follow('r1', roomName: 'A', myParticipantId: 'p1');
+    }
+    expect(subscribeCalls, ['r1']);
+    expect(syncedIds['r1'], 'p1');
+  });
+
+  test('有人加入要送進轉送出口，但不是 OS 通知也不算未讀', () async {
+    // 用 App 當通知樞紐的本機 agent 沒有自己的 watcher 進程；加入事件不
+    // 放行的話，只有另外掛 watch.py 的 agent 收得到「房裡多了誰」。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+    batches.clear();
+    activity.clear();
+    sent.clear();
+
+    feeds['r1']!.upsertAll([
+      msg(2,
+          kind: 'system',
+          systemEvent: 'join',
+          senderId: 'p-new',
+          sender: '測試Novia',
+          content: '測試Novia 加入了聊天室'),
+    ]);
+    await pump();
+
+    expect(batches, hasLength(1), reason: '加入事件要能喚醒房內的本機 agent');
+    expect(batches.single.messages.single.isMemberJoined, isTrue);
+    expect(sent, isEmpty, reason: '加入不是給人看的通知');
+    expect(activity, isEmpty, reason: '也不該把加入算成未讀活動');
+  });
+
+  test('自己加入不喚醒自己', () async {
+    // Hub 把加入者的 participant_id 掛在 sender_id 上，所以判斷「這是不是
+    // 我自己」不必去解析中文內容比對名字（改一個字就會無聲失效）。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+    batches.clear();
+
+    feeds['r1']!.upsertAll([
+      msg(2, kind: 'system', systemEvent: 'join', senderId: 'me'),
+    ]);
+    await pump();
+    expect(batches, isEmpty);
+  });
+
+  test('其他 system 事件不進轉送出口', () async {
+    // 放行的只有 join。離開／踢出／封存都不該喚醒 agent——離場那條走的是
+    // watcher 的 departure 事件，不是這裡。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    center.follow('r1', roomName: 'A', myParticipantId: 'me');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+    batches.clear();
+
+    feeds['r1']!.upsertAll([
+      msg(2, kind: 'system', systemEvent: 'leave', senderId: null),
+      msg(3, kind: 'system', systemEvent: 'kick', senderId: null),
+      msg(4, kind: 'system', senderId: null),
+    ]);
+    await pump();
+    expect(batches, isEmpty);
   });
 
   test('mentions 模式只在被提及時通知，但活動照發', () async {
@@ -165,7 +255,7 @@ void main() {
 
   test('retainOnly 停止跟隨已移出的房間', () async {
     final unsubscribed = <String>[];
-    final c2 = NotificationCenter(subscribe, unsubscribed.add);
+    final c2 = NotificationCenter(subscribe, unsubscribed.add, syncIdentity);
     c2.follow('r1', roomName: 'A');
     c2.follow('r2', roomName: 'B');
     c2.retainOnly({'r1'});
