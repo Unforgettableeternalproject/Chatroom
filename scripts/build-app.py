@@ -16,14 +16,26 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Windows 主控台預設 CP950，訊息裡的 ✓ ⚠️ ✕ 會讓 print 直接拋
+# UnicodeEncodeError——build 明明成功卻以例外收場，看起來像失敗。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 VERSION = "1.0.0"
+# 這台機器的 SDK 位置；PATH 與 FLUTTER_ROOT 都沒有時的最後退路
+_FALLBACK_SDK = r"C:\Users\Bernie\dev\flutter"
 
 
 def git(*args: str) -> str:
@@ -34,6 +46,29 @@ def git(*args: str) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def flutter_cmd() -> str:
+    """找得到 flutter 才動手。
+
+    Flutter SDK 不在 PATH 上是這台機器的常態（要先 export 才用得了），而
+    subprocess 不會繼承那個 export。找不到就直接說清楚——否則會炸在
+    `FileNotFoundError: [WinError 2]`，訊息完全看不出少了什麼。
+    """
+    found = shutil.which("flutter")
+    if found:
+        return found
+    for candidate in (os.environ.get("FLUTTER_ROOT", ""), _FALLBACK_SDK):
+        if not candidate:
+            continue
+        name = "flutter.bat" if os.name == "nt" else "flutter"
+        exe = Path(candidate) / "bin" / name
+        if exe.exists():
+            return str(exe)
+    raise SystemExit(
+        "✕ 找不到 flutter。把 SDK 的 bin 加進 PATH，"
+        "或設 FLUTTER_ROOT 指向 SDK 根目錄。"
+    )
 
 
 def running_app_pids() -> list[str]:
@@ -69,7 +104,7 @@ def main() -> int:
 
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cmd = [
-        "flutter", "build", "windows", "--release",
+        flutter_cmd(), "build", "windows", "--release",
         f"--dart-define=CHATROOM_VERSION={VERSION}",
         f"--dart-define=CHATROOM_COMMIT={commit}",
         f"--dart-define=CHATROOM_BUILT_AT={built_at}",
