@@ -806,7 +806,7 @@ class _PinnedStrip extends StatelessWidget {
 
 // ---------- members panel ----------
 
-class _MembersPanel extends ConsumerWidget {
+class _MembersPanel extends ConsumerStatefulWidget {
   const _MembersPanel({
     required this.roomId,
     required this.members,
@@ -825,8 +825,49 @@ class _MembersPanel extends ConsumerWidget {
   /// 伺服器實際生效的門檻（閒置移出倒數要用它，不能寫死）。
   final ServerLimits limits;
 
-  Future<void> _kick(
-      BuildContext context, WidgetRef ref, Participant p) async {
+  @override
+  ConsumerState<_MembersPanel> createState() => _MembersPanelState();
+}
+
+class _MembersPanelState extends ConsumerState<_MembersPanel> {
+  /// 被我從列表隱藏的成員。**純本機視圖**——不送去 Hub，不影響聊天內容、
+  /// mention、歷史或任何人的成員資料。房間開久了離開過的身分會越積越多，
+  /// 但那些記錄在 Hub 端仍有用途（歷史訊息的身分對照），所以這裡做的是
+  /// 「不畫」而不是「刪掉」。
+  late Set<String> _hidden;
+
+  /// 暫時把隱藏的人叫回來看。刻意不持久化——它是「我現在想看一下」，
+  /// 不是一個偏好。
+  bool _showHidden = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hidden = ref.read(settingsRepoProvider).hiddenMembers(widget.roomId);
+  }
+
+  @override
+  void didUpdateWidget(_MembersPanel old) {
+    super.didUpdateWidget(old);
+    // 換房間時要換名單，否則會把上一個房的隱藏設定套在這個房上
+    if (old.roomId != widget.roomId) {
+      _hidden = ref.read(settingsRepoProvider).hiddenMembers(widget.roomId);
+      _showHidden = false;
+    }
+  }
+
+  Future<void> _setHidden(Participant p, bool hide) async {
+    final next = {..._hidden};
+    if (hide) {
+      next.add(p.id);
+    } else {
+      next.remove(p.id);
+    }
+    setState(() => _hidden = next);
+    await ref.read(settingsRepoProvider).setHiddenMembers(widget.roomId, next);
+  }
+
+  Future<void> _kick(BuildContext context, Participant p) async {
     final s = context.uep;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -853,12 +894,13 @@ class _MembersPanel extends ConsumerWidget {
         ],
       ),
     );
+    final myId = widget.myId;
     if (!(confirmed ?? false) || myId == null) return;
     try {
       await ref
           .read(roomsApiProvider)
-          .kick(roomId, targetId: p.id, participantId: myId!);
-      ref.invalidate(roomDetailProvider(roomId));
+          .kick(widget.roomId, targetId: p.id, participantId: myId);
+      ref.invalidate(roomDetailProvider(widget.roomId));
     } on ApiException catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
@@ -868,10 +910,14 @@ class _MembersPanel extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final s = context.uep;
-    final active = members.where((p) => p.isActive).toList();
-    final gone = members.where((p) => !p.isActive).toList();
+    final myId = widget.myId;
+    final shown = widget.members.where((p) => !_hidden.contains(p.id));
+    final active = shown.where((p) => p.isActive).toList();
+    final gone = shown.where((p) => !p.isActive).toList();
+    final hidden =
+        widget.members.where((p) => _hidden.contains(p.id)).toList();
 
     return Column(children: [
       Container(
@@ -879,10 +925,29 @@ class _MembersPanel extends ConsumerWidget {
         decoration:
             BoxDecoration(border: Border(bottom: BorderSide(color: s.line))),
         width: double.infinity,
-        child: Center(
-          child: MonoLabel('成員 ${active.length}',
+        child: Stack(alignment: Alignment.center, children: [
+          MonoLabel('成員 ${active.length}',
               size: 9, color: UepColors.gold, letterSpacing: 1.6),
-        ),
+          if (hidden.isNotEmpty)
+            Positioned(
+              right: 4,
+              child: IconButton(
+                tooltip: _showHidden
+                    ? '收起已隱藏的成員'
+                    : '顯示已隱藏的成員（${hidden.length}）',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(),
+                padding: EdgeInsets.zero,
+                onPressed: () => setState(() => _showHidden = !_showHidden),
+                icon: Icon(
+                    _showHidden
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    size: 14,
+                    color: s.inkMute),
+              ),
+            ),
+        ]),
       ),
       Expanded(
         child: ListView(
@@ -894,10 +959,12 @@ class _MembersPanel extends ConsumerWidget {
               _MemberTile(
                 p: p,
                 isSelf: p.id == myId,
-                idleTimeout: limits.idleTimeout,
-                onKick: youAreAdmin && p.id != myId && !archived
-                    ? () => _kick(context, ref, p)
+                idleTimeout: widget.limits.idleTimeout,
+                onKick: widget.youAreAdmin && p.id != myId && !widget.archived
+                    ? () => _kick(context, p)
                     : null,
+                // 自己隱藏自己只會讓人以為出了問題
+                onHide: p.id == myId ? null : () => _setHidden(p, true),
               ),
             if (gone.isNotEmpty) ...[
               const SizedBox(height: 16),
@@ -905,14 +972,36 @@ class _MembersPanel extends ConsumerWidget {
               const SizedBox(height: 8),
               for (final p in gone)
                 Opacity(
-                    opacity: .45,
-                    child: _MemberTile(p: p, isSelf: false, inactive: true)),
+                  opacity: .45,
+                  child: _MemberTile(
+                    p: p,
+                    isSelf: false,
+                    inactive: true,
+                    onHide: () => _setHidden(p, true),
+                  ),
+                ),
+            ],
+            if (_showHidden && hidden.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              MonoLabel('已隱藏', size: 8.5, letterSpacing: 2.2),
+              const SizedBox(height: 8),
+              for (final p in hidden)
+                Opacity(
+                  opacity: .35,
+                  child: _MemberTile(
+                    p: p,
+                    isSelf: p.id == myId,
+                    inactive: !p.isActive,
+                    idleTimeout: widget.limits.idleTimeout,
+                    onUnhide: () => _setHidden(p, false),
+                  ),
+                ),
             ],
           ],
         ),
       ),
       // 封存房唯讀，指派入口一併收起
-      if (!archived)
+      if (!widget.archived)
         Container(
           padding: const EdgeInsets.all(14),
           decoration:
@@ -922,7 +1011,7 @@ class _MembersPanel extends ConsumerWidget {
             variant: UepButtonVariant.outline,
             small: true,
             expand: true,
-            onPressed: () => context.go('/rooms/$roomId/assign'),
+            onPressed: () => context.go('/rooms/${widget.roomId}/assign'),
           ),
         ),
     ]);
@@ -935,6 +1024,8 @@ class _MemberTile extends StatelessWidget {
       required this.isSelf,
       this.inactive = false,
       this.onKick,
+      this.onHide,
+      this.onUnhide,
       this.idleTimeout = const Duration(minutes: 10)});
 
   final Participant p;
@@ -947,6 +1038,11 @@ class _MemberTile extends StatelessWidget {
 
   /// 管理員視角的移出動作；null 表示不顯示。
   final VoidCallback? onKick;
+
+  /// 從**我這台裝置**的列表隱藏／取消隱藏；null 表示不顯示該動作。
+  /// 與 [onKick] 完全不同：那個動到所有人，這個只動我的視圖。
+  final VoidCallback? onHide;
+  final VoidCallback? onUnhide;
 
   @override
   Widget build(BuildContext context) {
@@ -1044,6 +1140,22 @@ class _MemberTile extends StatelessWidget {
                         : UepColors.success,
                 border: isIdle ? Border.all(color: s.inkMute) : null,
               ),
+            ),
+          if (onHide != null)
+            IconButton(
+              tooltip: '從我的列表隱藏',
+              visualDensity: VisualDensity.compact,
+              onPressed: onHide,
+              icon: Icon(Icons.visibility_off_outlined,
+                  size: 14, color: s.inkMute),
+            ),
+          if (onUnhide != null)
+            IconButton(
+              tooltip: '取消隱藏',
+              visualDensity: VisualDensity.compact,
+              onPressed: onUnhide,
+              icon: Icon(Icons.visibility_outlined,
+                  size: 14, color: s.inkMute),
             ),
           if (onKick != null)
             IconButton(

@@ -21,6 +21,7 @@ class SettingsRepository {
   static const _kParticipantPrefix = 'chatroom.participant.';
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
+  static const _kHiddenMembersPrefix = 'chatroom.hidden_members.';
   static const _kNotifyMode = 'chatroom.notify_mode';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
@@ -103,6 +104,25 @@ class SettingsRepository {
       _prefs.getString('$_kDisplayNamePrefix$roomId');
   Future<void> setDisplayName(String roomId, String name) =>
       _prefs.setString('$_kDisplayNamePrefix$roomId', name);
+
+  /// 在成員列表中被我隱藏的 participant id。
+  ///
+  /// **純本機視圖**——不送去 Hub，不影響聊天內容、mention、歷史或任何人
+  /// 的成員資料，只決定這台裝置的側邊列表要不要畫他。房間開久了離開過的
+  /// 身分會越積越多，列表長到不能用，但那些記錄在 Hub 端仍有用途（歷史
+  /// 訊息的身分對照），所以是隱藏而不是刪除。
+  Set<String> hiddenMembers(String roomId) =>
+      (_prefs.getStringList('$_kHiddenMembersPrefix$roomId') ?? const [])
+          .toSet();
+
+  Future<void> setHiddenMembers(String roomId, Set<String> ids) async {
+    final key = '$_kHiddenMembersPrefix$roomId';
+    if (ids.isEmpty) {
+      await _prefs.remove(key);
+    } else {
+      await _prefs.setStringList(key, ids.toList());
+    }
+  }
 
   /// 最近見過的 agent session_key（指派畫面的快選來源）。
   List<String> get seenSessionKeys =>
