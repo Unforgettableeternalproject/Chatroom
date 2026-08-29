@@ -1,17 +1,29 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/rooms_api.dart';
-import '../models/room.dart';
+import '../models/assignment.dart';
 import 'app_providers.dart';
 
 /// 房間列表（status = active | archived）。
 /// 動作（建立/封存/解封）完成後由呼叫端 invalidate。
+///
+/// 帶自己的 session key 有兩個作用：Hub 會一併回傳指派給我的待處理邀請，
+/// 而且會把我登記進 session 名錄——別人要邀我進房時，得先在清單上看得到我。
 final roomListProvider =
-    FutureProvider.family<List<Room>, String>((ref, status) async {
+    FutureProvider.family<RoomListResult, String>((ref, status) async {
   final api = ref.watch(roomsApiProvider);
-  final result = await api.list(status: status);
-  return result.rooms;
+  final config = ref.watch(appConfigProvider);
+  return api.list(
+    status: status,
+    sessionKey: config.deviceKey,
+    label: config.preferredName,
+  );
 });
+
+/// 指派給我的待處理邀請。與房間列表同一次請求取得，不另外輪詢。
+final myPendingInvitesProvider = Provider<List<Assignment>>((ref) =>
+    ref.watch(roomListProvider('active')).value?.pendingAssignments ??
+    const []);
 
 /// 房間 + 成員。斷線補訊後與進房時各自 invalidate 一次。
 final roomDetailProvider =

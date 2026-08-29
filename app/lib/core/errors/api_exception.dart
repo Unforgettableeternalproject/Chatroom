@@ -27,6 +27,17 @@ class ParticipantInvalidException extends ApiException {
       : super(code, '你的房間身分已失效，正在重新加入…');
 }
 
+/// 403 + root_token_required — 這台 Hub 由別人主持，發放/撤銷邀請的權限
+/// 留在他那裡。
+///
+/// **不可與 [ParticipantInvalidException] 混用**：那個會觸發自動 re-join，
+/// 而這裡的 403 跟房間身分毫無關係，重新加入一百次也不會變成主持人。
+class RootTokenRequiredException extends ApiException {
+  const RootTokenRequiredException([String? message])
+      : super('root_token_required',
+            message ?? '只有 Hub 主持人能發放或撤銷邀請');
+}
+
 /// 404 — 房間 / 訊息 / 指派不存在。
 class NotFoundException extends ApiException {
   const NotFoundException([String code = 'not_found'])

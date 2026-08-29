@@ -10,6 +10,7 @@ import '../../models/room.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
+import '../../widgets/pending_invites_banner.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
@@ -131,6 +132,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
             ),
           ]),
         ),
+        const PendingInvitesBanner(),
         Expanded(
           child: RefreshIndicator(
             color: UepColors.gold,
@@ -143,7 +145,8 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: UepColors.gold))),
               error: (e, _) => ErrorState(error: e, onRetry: _refresh),
-              data: (allRooms) {
+              data: (result) {
+                final allRooms = result.rooms;
                 final query = _search.text.trim().toLowerCase();
                 final rooms = query.isEmpty
                     ? allRooms

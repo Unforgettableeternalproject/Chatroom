@@ -9,11 +9,13 @@ import '../../api/api_client.dart';
 import '../../api/rooms_api.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
+import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/invite_manager.dart';
 import '../../widgets/uep_button.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -55,6 +57,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return _urlController.text.trim() != config.serverUrl ||
         _tokenController.text.trim() != config.token ||
         _nameController.text.trim() != config.preferredName;
+  }
+
+  /// 套用一份邀請碼：一次填好網址與 token。
+  ///
+  /// 從剪貼簿讀而不是給一個輸入框——邀請碼是一長串沒有意義的字，手打會錯，
+  /// 而它到使用者手上的方式本來就是「複製一段訊息」。
+  Future<void> _pasteInvite() async {
+    final raw = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    final invite = InviteCode.tryParse(raw);
+    if (invite == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('剪貼簿裡沒有邀請碼。先複製對方給你的那一整串字。')));
+      }
+      return;
+    }
+    setState(() {
+      _urlController.text = invite.serverUrl;
+      _tokenController.text = invite.token;
+      _justSaved = false;
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('已填入 ${invite.serverUrl}，'
+              '確認後按「儲存」；建議先測試連線')));
+    }
   }
 
   Future<void> _save() async {
@@ -179,6 +207,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               Text('連線設定',
                   style: UepText.display(size: 28, color: s.inkTitle)),
               const SizedBox(height: 22),
+              UepButton(
+                label: '貼上邀請碼',
+                small: true,
+                variant: UepButtonVariant.outline,
+                expand: true,
+                onPressed: _pasteInvite,
+              ),
+              const SizedBox(height: 6),
+              Text('別人給你一份邀請碼時，用它一次填好網址與 token。',
+                  style: UepText.serif(size: 12, color: s.inkMute, height: 1.7)),
+              const SizedBox(height: 18),
               _FieldLabel('HUB URL'),
               _box(
                 context,
@@ -255,6 +294,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   onPressed: () => context.go('/rooms'),
                 ),
               ],
+              const SizedBox(height: 26),
+              Divider(color: s.line, height: 1),
+              const SizedBox(height: 22),
+              const InviteManager(),
               const SizedBox(height: 26),
               Divider(color: s.line, height: 1),
               const SizedBox(height: 22),

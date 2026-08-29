@@ -21,6 +21,7 @@ import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/composer_attachments.dart';
+import '../../widgets/invite_human_dialog.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
@@ -1144,6 +1145,19 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     await ref.read(settingsRepoProvider).setHiddenMembers(widget.roomId, next);
   }
 
+  Future<void> _inviteHuman(BuildContext context) async {
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (_) => InviteHumanDialog(
+          roomId: widget.roomId, members: widget.members),
+    );
+    if ((sent ?? false) && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('邀請已送出，對方接受後會加入這個聊天室')),
+      );
+    }
+  }
+
   Future<void> _kick(BuildContext context, Participant p) async {
     final s = context.uep;
     final confirmed = await showDialog<bool>(
@@ -1283,13 +1297,23 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           padding: const EdgeInsets.all(14),
           decoration:
               BoxDecoration(border: Border(top: BorderSide(color: s.line))),
-          child: UepButton(
-            label: '指派 AGENT 加入',
-            variant: UepButtonVariant.outline,
-            small: true,
-            expand: true,
-            onPressed: () => context.go('/rooms/${widget.roomId}/assign'),
-          ),
+          child: Column(children: [
+            UepButton(
+              label: '指派 AGENT 加入',
+              variant: UepButtonVariant.outline,
+              small: true,
+              expand: true,
+              onPressed: () => context.go('/rooms/${widget.roomId}/assign'),
+            ),
+            const SizedBox(height: 8),
+            UepButton(
+              label: '邀請成員加入',
+              variant: UepButtonVariant.outline,
+              small: true,
+              expand: true,
+              onPressed: () => _inviteHuman(context),
+            ),
+          ]),
         ),
     ]);
   }

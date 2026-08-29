@@ -32,6 +32,16 @@ void main() {
       expect(e, isA<ParticipantInvalidException>());
     });
 
+    test('403 + root_token_required 不可當成身分失效——'
+        '那會觸發自動 re-join，而重新加入不會讓人變成 Hub 主持人', () {
+      final e = translateError(_dioError(403, detail: {
+        'code': 'root_token_required',
+        'message': '只有 Hub 主持人（.env 的主 token）能發放或撤銷邀請',
+      }));
+      expect(e, isA<RootTokenRequiredException>());
+      expect(e, isNot(isA<ParticipantInvalidException>()));
+    });
+
     test('401 與 403 不可合併：型別必須不同', () {
       expect(translateError(_dioError(401)).runtimeType,
           isNot(translateError(_dioError(403)).runtimeType));

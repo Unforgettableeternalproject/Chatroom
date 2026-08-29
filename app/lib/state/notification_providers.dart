@@ -82,7 +82,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   center.mode = settings.notifyMode;
 
   void followJoined() {
-    final rooms = ref.read(roomListProvider('active')).value;
+    final rooms = ref.read(roomListProvider('active')).value?.rooms;
     if (rooms == null) return;
     final joined = rooms
         .where((r) => settings.participantId(r.id) != null)

@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/tokens_api.dart';
 import '../models/agent_session.dart';
 import '../models/assignment.dart';
 import 'app_providers.dart';
@@ -18,4 +19,23 @@ final agentSessionsProvider =
     FutureProvider.autoDispose<List<AgentSession>>((ref) async {
   final api = ref.watch(assignmentsApiProvider);
   return api.scanSessions();
+});
+
+/// 已連上 Hub 的人類 session。邀請人類進房的候選清單。
+///
+/// 只列已連線的人——沒連上 Hub 的人邀了也收不到，那種情況要先給他一份
+/// 邀請碼（設定頁的「邀請成員」），那是另一件事。
+final humanSessionsProvider =
+    FutureProvider.autoDispose<List<AgentSession>>((ref) async {
+  final api = ref.watch(assignmentsApiProvider);
+  final all = await api.scanSessions(includeHuman: true);
+  return all.where((s) => s.isHuman).toList();
+});
+
+/// 已發出的邀請 token。只有主 token 拿得到，其餘會是 403——
+/// 那不是錯誤，是「這台不是你主持的」。
+final accessTokensProvider =
+    FutureProvider.autoDispose<List<AccessToken>>((ref) async {
+  final api = ref.watch(tokensApiProvider);
+  return api.list();
 });

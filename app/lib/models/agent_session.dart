@@ -12,6 +12,7 @@ class AgentSession {
     required this.lastSeenAt,
     required this.rooms,
     this.lastDisplayName,
+    this.lastIp,
   });
 
   final String sessionKey;
@@ -25,6 +26,14 @@ class AgentSession {
 
   /// 不在任何房內時，最近一次用過的房內名稱（辨識用）。
   final String? lastDisplayName;
+
+  /// 最近一次連線的來源位址。**僅供辨識**——共用一把 token 時 Hub 眼中
+  /// 所有人長得一樣，這是邀請清單上唯一分得開「這是誰」的線索。
+  /// 它來自客戶端可填寫的標頭，不可用於任何授權判斷。
+  final String? lastIp;
+
+  bool get isHuman => kind == 'human';
+  bool get isActive => status == 'active';
 
   /// 給清單顯示的主名稱：代稱 > 房內名稱 > 歷史名稱 > key 尾碼。
   String get displayTitle {
@@ -49,6 +58,7 @@ class AgentSession {
             .map((e) => SessionRoom.fromJson(e as Map<String, dynamic>))
             .toList(),
         lastDisplayName: json['last_display_name'] as String?,
+        lastIp: json['last_ip'] as String?,
       );
 }
 

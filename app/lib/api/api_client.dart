@@ -48,6 +48,11 @@ ApiException translateError(DioException e) {
       // 後者是程式錯不是設定錯，但對使用者一樣導向設定檢查。
       return AuthException(code ?? 'invalid_token');
     case 403:
+      // 403 不是只有一種。權限不足與身分失效若共用型別，後者的自動 re-join
+      // 就會被前者觸發——重新加入一百次也不會變成 Hub 主持人
+      if (code == 'root_token_required') {
+        return RootTokenRequiredException(_detailMessage(res.data));
+      }
       return ParticipantInvalidException(code ?? 'participant_not_active');
     case 404:
       return NotFoundException(code ?? 'not_found');

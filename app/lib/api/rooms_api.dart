@@ -105,14 +105,22 @@ class RoomsApi {
         );
       });
 
-  Future<RoomListResult> list({String status = 'active', String? sessionKey}) =>
+  Future<RoomListResult> list({
+    String status = 'active',
+    String? sessionKey,
+    String label = '',
+  }) =>
       unwrap(() async {
+        final hasKey = sessionKey != null && sessionKey.isNotEmpty;
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/rooms',
           queryParameters: {
             'status': status,
-            if (sessionKey != null && sessionKey.isNotEmpty)
-              'session_key': sessionKey,
+            if (hasKey) 'session_key': sessionKey,
+            // kind=human 讓 Hub 把我登記成人類——邀請 UI 才分得出
+            // 「這是一個人」還是「這是一個 agent」
+            if (hasKey) 'kind': 'human',
+            if (hasKey && label.isNotEmpty) 'label': label,
           },
         );
         final rooms = ((res.data?['rooms'] as List?) ?? const [])

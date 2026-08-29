@@ -7,6 +7,7 @@ import '../api/attachments_api.dart';
 import '../api/messages_api.dart';
 import '../api/questions_api.dart';
 import '../api/rooms_api.dart';
+import '../api/tokens_api.dart';
 import '../core/config/app_settings.dart';
 import '../core/identity/device_identity.dart';
 import '../ws/realtime_service.dart';
@@ -113,6 +114,8 @@ final attachmentsApiProvider =
     Provider((ref) => AttachmentsApi(ref.watch(dioProvider)));
 final questionsApiProvider =
     Provider((ref) => QuestionsApi(ref.watch(dioProvider)));
+final tokensApiProvider =
+    Provider((ref) => TokensApi(ref.watch(dioProvider)));
 
 // ---------- Realtime ----------
 

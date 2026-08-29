@@ -27,9 +27,16 @@ class AssignmentsApi {
         return res.data!['id'] as String;
       });
 
-  /// 掃描 Hub 見過且仍存活的 agent session（指派對象清單）。
-  Future<List<AgentSession>> scanSessions() => unwrap(() async {
-        final res = await _dio.get<Map<String, dynamic>>('/api/sessions');
+  /// 掃描 Hub 見過且仍存活的 session（指派/邀請對象清單）。
+  ///
+  /// [includeHuman] 打開時連人類也列出來——邀請人類進房用的是同一份名錄，
+  /// 因為那本來就是同一件事：把一個 session 請進一個房間。
+  Future<List<AgentSession>> scanSessions({bool includeHuman = false}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/sessions',
+          queryParameters: {if (includeHuman) 'include_human': true},
+        );
         return ((res.data?['sessions'] as List?) ?? const [])
             .map((e) => AgentSession.fromJson(e as Map<String, dynamic>))
             .toList();
