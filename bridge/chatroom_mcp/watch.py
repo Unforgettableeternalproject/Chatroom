@@ -21,7 +21,9 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
 事件格式（一行一個 JSON 物件）：
 
     {"event": "message", "room_id": ..., "seq": ..., "sender": ...,
-     "preview": ..., "mentioned": true/false, "pinned": ..., "deleted": ...}
+     "preview": ..., "mentioned": true/false, "pinned": ..., "deleted": ...,
+     "attachments": [{"id", "filename", "mime", "size", "is_image"}]}
+      ——attachments 只在該則真的有夾帶時出現
     {"event": "assignment", "assignment_id": ..., "room_id": ...,
      "room_name": ..., "note": ...}
     {"event": "member_joined", "room_id": ..., "seq": ..., "who": ...}
@@ -384,6 +386,15 @@ class Watcher:
                     "mentioned": mentioned,
                     "pinned": m.get("pinned", False),
                     "deleted": m.get("deleted", False),
+                    # 只放 metadata（內容在 Hub 的磁碟上）。不放的話收到事件
+                    # 的 agent 不知道有東西要看——訊息正文常常只寫「你看得到
+                    # 這張圖嗎」，把附件略掉等於把問題本身略掉。
+                    **({"attachments": [
+                        {"id": a.get("id"), "filename": a.get("filename"),
+                         "mime": a.get("mime"), "size": a.get("size"),
+                         "is_image": a.get("is_image")}
+                        for a in atts
+                    ]} if (atts := m.get("attachments") or []) else {}),
                 }
             )
         if self.first_poll:

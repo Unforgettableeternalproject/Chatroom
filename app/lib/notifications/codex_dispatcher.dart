@@ -224,7 +224,26 @@ class CodexDispatcher {
           'room_name': batch.roomName,
           'target_session_id': thread,
           'count': msgs.length,
-          'latest': {'seq': last.seq, 'sender': last.senderName, 'content': last.content, 'mentions': last.mentions},
+          'latest': {
+            'seq': last.seq,
+            'sender': last.senderName,
+            'content': last.content,
+            'mentions': last.mentions,
+            // 附件只放 metadata（內容在 Hub 的磁碟上）。不放的話收到通知的
+            // agent 根本不知道有東西要看——訊息正文常常只寫「你看得到這張
+            // 圖嗎」，把附件略掉等於把問題本身略掉。
+            if (last.attachments.isNotEmpty)
+              'attachments': [
+                for (final a in last.attachments)
+                  {
+                    'id': a.id,
+                    'filename': a.filename,
+                    'mime': a.mime,
+                    'size': a.size,
+                    'is_image': a.isImage,
+                  },
+              ],
+          },
         })}';
     final ok = await _queue(thread, text);
     if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
