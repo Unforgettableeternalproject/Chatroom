@@ -330,51 +330,63 @@ def test_watch_rejects_unknown_kind():
         watch.build_parser().parse_args(["--kind", "gemini"])
 
 
-def test_hub_kit_never_ships_real_data(tmp_path, monkeypatch):
+def test_hub_kit_never_ships_real_data(tmp_path):
     """交付包絕不能夾帶主持人的實際資料。
 
     實測踩到：Hub 在 server/ 底下跑時，使用者上傳的附件全落在
     server/attachments/，跟著 copytree 進了 zip。db 有排除、附件沒有
     ——而附件（截圖、log、報告）往往比訊息本身更敏感。
+
+    這裡直接驗排除規則本身，不跑完整打包：跑 build.py 子進程會拖慢整輪，
+    把同一批裡時間敏感的 session 窗測試擠出窗外（實際造成過偶發紅燈）。
     """
     import shutil
+
+    spec = importlib.util.spec_from_file_location(
+        "hub_build", REPO / "host-kit" / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+
+    # 搭一個「正在服役中的 server/」：原始碼 + 各種不該外流的實際資料
+    src = tmp_path / "server"
+    (src / "chatroom_server").mkdir(parents=True)
+    (src / "chatroom_server" / "app.py").write_text("# code", encoding="utf-8")
+    (src / "chatroom_server" / "__pycache__").mkdir()
+    (src / "chatroom_server" / "__pycache__" / "app.pyc").write_bytes(b"pyc")
+    (src / "attachments" / "ab").mkdir(parents=True)
+    (src / "attachments" / "ab" / "blob").write_bytes(b"private screenshot")
+    (src / ".env").write_text("CHATROOM_TOKEN=real-secret", encoding="utf-8")
+    (src / ".env.bak-20260829").write_text("CHATROOM_TOKEN=old", encoding="utf-8")
+    (src / "chatroom.db").write_bytes(b"sqlite")
+    (src / "chatroom.db-wal").write_bytes(b"wal")
+    (src / ".tunnel-url").write_text(
+        "https://live.trycloudflare.com", encoding="utf-8")
+    (src / "logs").mkdir()
+    (src / "logs" / "hub-20260829.log").write_text("...", encoding="utf-8")
+
+    dst = tmp_path / "staged"
+    shutil.copytree(src, dst, ignore=build.SERVER_IGNORE)
+
+    shipped = {p.relative_to(dst).as_posix() for p in dst.rglob("*") if p.is_file()}
+    assert shipped == {"chatroom_server/app.py"}, (
+        f"交付包夾帶了不該外流的檔案：{shipped - {'chatroom_server/app.py'}}"
+    )
+
+
+def test_shipped_hub_kit_zip_is_clean():
+    """已產生的交付包若還在，順手驗一次——這是真正會發出去的那個檔案。"""
     import zipfile
 
-    repo = Path(__file__).resolve().parent.parent
-    server = repo / "server"
-    # 在真實的 server/ 底下放進「不該外流」的東西，跑完再清掉
-    planted = {
-        server / "attachments" / "ab" / "secret-blob": b"private screenshot",
-        server / ".env": None,             # 已存在就不動
-        server / ".tunnel-url": b"https://live-tunnel.trycloudflare.com\n",
-    }
-    created = []
-    for path, content in planted.items():
-        if content is None or path.exists():
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-        created.append(path)
-    try:
-        subprocess.run(
-            [sys.executable, str(repo / "host-kit" / "build.py")],
-            check=True, capture_output=True,
-        )
-        with zipfile.ZipFile(repo / "dist" / "chatroom-hub-kit.zip") as z:
-            names = z.namelist()
-        forbidden = [
-            n for n in names
-            if "attachments/" in n
-            or n.endswith(".env")
-            or ".db" in n
-            or n.endswith(".tunnel-url")
-            or "__pycache__" in n
-        ]
-        assert forbidden == [], f"交付包夾帶了不該外流的檔案：{forbidden}"
-        # 該有的仍要在
-        assert any(n.endswith("scripts/tunnel.py") for n in names)
-        assert any(n.endswith("server/chatroom_server/app.py") for n in names)
-    finally:
-        for path in created:
-            path.unlink(missing_ok=True)
-        shutil.rmtree(server / "attachments" / "ab", ignore_errors=True)
+    zip_path = REPO / "dist" / "chatroom-hub-kit.zip"
+    if not zip_path.exists():
+        pytest.skip("尚未打包")
+    with zipfile.ZipFile(zip_path) as z:
+        names = z.namelist()
+    leaked = [
+        n for n in names
+        if "attachments/" in n or n.endswith(".env") or ".env." in n
+        or ".db" in n or n.endswith(".tunnel-url") or "__pycache__" in n
+        or "/logs/" in n
+    ]
+    assert leaked == [], f"dist 裡的交付包夾帶了實際資料：{leaked}"
+    assert any(n.endswith("scripts/tunnel.py") for n in names)
