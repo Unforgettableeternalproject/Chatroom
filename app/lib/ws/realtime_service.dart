@@ -156,8 +156,17 @@ class RealtimeService {
   /// 會看不到問題，而且畫面上完全沒有異狀。
   void setParticipantId(String roomId, String participantId) {
     if (participantId.isEmpty) return;
+    final firstTime = (_participantIds[roomId] ?? '').isEmpty;
     _participantIds[roomId] = participantId;
     _syncSubscription(roomId);
+    // 首次拿到身分時把 REST 那半也補回來。房間是讀取邊界之後，沒有身分的
+    // 那次載入會整個被拒——WS 補送 subscribe 只救得回「之後的新訊息」，
+    // 歷史仍然是空的，而畫面上看起來就只是「這個房間沒有訊息」。
+    if (firstTime && _feeds.containsKey(roomId)) {
+      unawaited(_syncRoom(roomId).catchError((Object e) {
+        _log.warning('房間 $roomId 取得身分後回補失敗：$e');
+      }));
+    }
   }
 
   void _forgetSentSubscriptions() => _sentParticipantIds.clear();
@@ -333,7 +342,8 @@ class RealtimeService {
     var loops = 0;
     while (true) {
       final page = await messagesApi.read(
-        f.roomId, afterSeq: f.cursor, limit: catchUpBatch);
+        f.roomId, afterSeq: f.cursor, limit: catchUpBatch,
+        participantId: _participantIds[f.roomId]);
       f.upsertAll(page.messages);
       if (!page.hasMore || page.messages.isEmpty) break;
       loops++;
@@ -349,7 +359,8 @@ class RealtimeService {
 
   Future<void> _loadLatestWindow(RoomFeed f) async {
     final page = await messagesApi.read(
-      f.roomId, beforeSeq: kSeqInfinity, limit: initialWindow);
+      f.roomId, beforeSeq: kSeqInfinity, limit: initialWindow,
+      participantId: _participantIds[f.roomId]);
     f.upsertAll(page.messages);
     f.setHasMoreHistory(page.hasMore);
   }

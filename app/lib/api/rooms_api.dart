@@ -151,11 +151,18 @@ class RoomsApi {
         return Room.fromJson(res.data!);
       });
 
-  Future<RoomDetail> detail(String roomId, {String? sessionKey}) =>
+  /// [participantId] 是房內身分。房間是讀取邊界——房間詳情要成員才讀得到；
+  /// 建立者另可用 session key 進來（他要能看自己開的房）。舊版 Hub 忽略
+  /// 這個標頭，所以帶了也能對舊 Hub 跑。
+  Future<RoomDetail> detail(String roomId,
+          {String? sessionKey, String? participantId}) =>
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/rooms/$roomId',
-          options: Options(headers: {'X-Session-Key': ?sessionKey}),
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
         );
         return RoomDetail(
           room: Room.fromJson(res.data!['room'] as Map<String, dynamic>),

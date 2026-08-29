@@ -43,9 +43,16 @@ class AssignmentsApi {
       });
 
   /// 房間視角的指派列表（含所有狀態，UI 檢視用）。
-  Future<List<Assignment>> listForRoom(String roomId) => unwrap(() async {
-        final res = await _dio
-            .get<Map<String, dynamic>>('/api/rooms/$roomId/assignments');
+  ///
+  /// 帶房內身分：房間是讀取邊界，指派列表也算房內內容。舊版 Hub 忽略這個
+  /// 標頭，所以可以先於 Hub 升級上線。
+  Future<List<Assignment>> listForRoom(String roomId,
+          {String? participantId}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/rooms/$roomId/assignments',
+          options: Options(headers: {'X-Participant-Id': ?participantId}),
+        );
         return ((res.data?['assignments'] as List?) ?? const [])
             .map((e) => Assignment.fromJson(e as Map<String, dynamic>))
             .toList();

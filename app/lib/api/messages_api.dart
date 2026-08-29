@@ -41,12 +41,17 @@ class MessagesApi {
   final Dio _dio;
 
   /// after_seq 正向翻頁（補訊）、before_seq 反向翻頁（載入歷史），兩者互斥。
+  ///
+  /// [participantId] 是房內身分。房間是讀取邊界——非成員讀不到房內內容，
+  /// 所以每一次讀都要帶。舊版 Hub 忽略這個標頭，帶了不會有副作用，
+  /// 因此可以先於 Hub 升級上線。
   Future<MessagePage> read(
     String roomId, {
     int? afterSeq,
     int? beforeSeq,
     int limit = 100,
     bool pinnedOnly = false,
+    String? participantId,
   }) =>
       unwrap(() async {
         assert(afterSeq == null || beforeSeq == null,
@@ -59,6 +64,7 @@ class MessagesApi {
             'limit': limit,
             if (pinnedOnly) 'pinned_only': true,
           },
+          options: Options(headers: {'X-Participant-Id': ?participantId}),
         );
         return MessagePage(
           messages: ((res.data?['messages'] as List?) ?? const [])

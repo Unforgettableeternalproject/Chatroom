@@ -52,6 +52,10 @@ class _FakeMessagesApi extends MessagesApi {
   /// 房內的完整訊息序列（模擬 server DB）。
   final List<Message> serverMessages = [];
 
+  /// 每次 read 帶到的房內身分。房間是讀取邊界之後，沒帶身分的讀取會被
+  /// Hub 拒絕，所以「有沒有帶」本身就是要驗的行為。
+  final List<String?> readParticipantIds = [];
+
   @override
   Future<MessagePage> read(
     String roomId, {
@@ -59,7 +63,9 @@ class _FakeMessagesApi extends MessagesApi {
     int? beforeSeq,
     int limit = 100,
     bool pinnedOnly = false,
+    String? participantId,
   }) async {
+    readParticipantIds.add(participantId);
     List<Message> result;
     if (beforeSeq != null) {
       result = serverMessages.where((m) => m.seq < beforeSeq).toList()
@@ -138,6 +144,47 @@ void main() {
     expect(sub['room_id'], 'r1');
     // subscribe 的 after_seq 必須是「補完後」的 cursor（競態論證的關鍵行）
     expect(sub['after_seq'], 3);
+  });
+
+  group('房間是讀取邊界（Hub 側 3605638）', () {
+    test('每一次 REST 讀取都要帶房內身分，否則新版 Hub 直接拒絕', () async {
+      api.serverMessages.addAll([_msg(1), _msg(2)]);
+      service.subscribe('r1', participantId: 'p-known');
+      service.start();
+      await _waitFor(() => service.status is Connected);
+
+      expect(api.readParticipantIds, isNotEmpty);
+      expect(api.readParticipantIds, everyElement('p-known'));
+    });
+
+    test('首次進房（還沒有身分）拿到身分後要把歷史補回來', () async {
+      // 首次進房時本機沒有快取的 participant id，那一次載入在新版 Hub 上
+      // 會整個被拒。補送 subscribe 只救得回「之後的新訊息」——歷史仍然
+      // 是空的，而畫面上看起來只是「這個房間沒有訊息」，沒有任何異狀。
+      api.serverMessages.addAll([_msg(1), _msg(2), _msg(3)]);
+      service.subscribe('r1'); // 無身分
+      service.start();
+      await _waitFor(() => service.status is Connected);
+      final before = api.readParticipantIds.length;
+
+      service.setParticipantId('r1', 'p-late');
+
+      await _waitFor(() => api.readParticipantIds.length > before);
+      expect(api.readParticipantIds.last, 'p-late');
+    });
+
+    test('身分沒變時不重複回補——那是每次重訂閱都打一輪 REST', () async {
+      api.serverMessages.add(_msg(1));
+      service.subscribe('r1', participantId: 'p1');
+      service.start();
+      await _waitFor(() => service.status is Connected);
+      final before = api.readParticipantIds.length;
+
+      service.setParticipantId('r1', 'p1');
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(api.readParticipantIds.length, before);
+    });
   });
 
   test('WS 推播 upsert 進 feed；釘選快照覆寫既有訊息', () async {

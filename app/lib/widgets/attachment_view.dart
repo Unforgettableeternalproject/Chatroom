@@ -14,14 +14,22 @@ class AttachmentView extends StatelessWidget {
     required this.attachments,
     required this.serverUrl,
     required this.token,
+    this.participantId,
   });
 
   final List<Attachment> attachments;
   final String serverUrl;
   final String token;
 
-  Map<String, String> get _headers =>
-      token.isEmpty ? const {} : {'Authorization': 'Bearer $token'};
+  /// 房內身分。房間是讀取邊界，附件跟著訊息走——非成員取不到。
+  /// 舊版 Hub 忽略這個標頭，帶了不影響。
+  final String? participantId;
+
+  Map<String, String> get _headers => {
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+        if (participantId != null && participantId!.isNotEmpty)
+          'X-Participant-Id': participantId!,
+      };
 
   String _url(Attachment a) => '$serverUrl/api/attachments/${a.id}';
 

@@ -656,6 +656,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         highlighted: _highlightSeq == m.seq,
                         serverUrl: config.serverUrl,
                         token: config.token,
+                        // 附件下載也在讀取邊界內（Hub 側 3605638）
+                        participantId: myId,
                       ),
                     );
                   },

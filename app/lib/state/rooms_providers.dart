@@ -31,7 +31,13 @@ final roomDetailProvider =
   final api = ref.watch(roomsApiProvider);
   // 帶自己的 session key：Hub 回 you_are_admin（建立者可移出成員）
   final deviceKey = ref.watch(appConfigProvider.select((c) => c.deviceKey));
-  final detail = await api.detail(roomId, sessionKey: deviceKey);
+  // 房間是讀取邊界，房間詳情要成員身分才讀得到。用**快取的** participant id
+  // 而不是 await identityProvider：那會讓詳情等 join 完成，而 join 失敗時
+  // 連「這個房間長什麼樣」都看不到，錯誤畫面反而更難懂。首次進房時是 null，
+  // join 完成後由畫面層 invalidate 這個 provider 補上。
+  final cached = ref.watch(settingsRepoProvider).participantId(roomId);
+  final detail =
+      await api.detail(roomId, sessionKey: deviceKey, participantId: cached);
   // 累積最近見過的 agent session_key（指派快選用；detail 不含 session_key
   // 時此步為 no-op，快選仍有手動輸入的路）
   final keys = detail.participants

@@ -38,6 +38,7 @@ class MessageBubble extends StatelessWidget {
     this.highlighted = false,
     this.serverUrl = '',
     this.token = '',
+    this.participantId,
   });
 
   final Message message;
@@ -45,6 +46,9 @@ class MessageBubble extends StatelessWidget {
   /// 附件要直接向 Hub 取圖，因此需要位址與 token。空字串時附件只顯示檔名。
   final String serverUrl;
   final String token;
+
+  /// 房內身分；附件下載也在讀取邊界內。
+  final String? participantId;
   final bool isSelf;
   final String senderKind;
   final MessageActions? actions;
@@ -138,6 +142,7 @@ class MessageBubble extends StatelessWidget {
                 attachments: message.attachments,
                 serverUrl: serverUrl,
                 token: token,
+                participantId: participantId,
               ),
           ],
         ),

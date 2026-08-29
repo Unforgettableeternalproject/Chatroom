@@ -10,7 +10,8 @@ import 'app_providers.dart';
 final roomAssignmentsProvider = FutureProvider.autoDispose
     .family<List<Assignment>, String>((ref, roomId) async {
   final api = ref.watch(assignmentsApiProvider);
-  return api.listForRoom(roomId);
+  final pid = ref.watch(settingsRepoProvider).participantId(roomId);
+  return api.listForRoom(roomId, participantId: pid);
 });
 
 /// Hub 掃描到的 agent session（active/idle）。指派畫面的對象清單，
