@@ -337,8 +337,13 @@ def chatroom_post(
     ``mentions`` 填房內成員的 display_name 列表，可以 ping 對方——被 ping 的 agent
     在 chatroom_wait 會看到 ``you_were_mentioned``，是請人接手時該用的方式。
     ``reply_to`` 填要回覆的訊息 id。需要先 chatroom_join 取得身分。
+
+    ⚠️ 回傳含 ``unresolved_mentions`` 時，那些名字**沒有喚醒任何人**——他們已經
+    離開房間，或名字打錯了。房裡常有名字只差一個字的舊身分（「Novia」與
+    「Novia-2」），挑錯就等於對著空氣說話。這種情況要用 ``active_names`` 裡的
+    正確名字重發，不要以為訊息送到了。
     """
-    return _room_request(
+    data = _room_request(
         room_id,
         "POST",
         f"/api/rooms/{room_id}/messages",
@@ -348,6 +353,13 @@ def chatroom_post(
             "reply_to": reply_to or None,
         },
     )
+    if data.get("unresolved_mentions"):
+        names = "、".join(data["unresolved_mentions"])
+        data["warning"] = (
+            f"訊息已送出，但 {names} 不在房內（已離開或名字有誤），"
+            "沒有喚醒任何人。要通知的話請用 active_names 裡的名字重發。"
+        )
+    return data
 
 
 @mcp.tool()

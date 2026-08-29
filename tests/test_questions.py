@@ -367,3 +367,98 @@ async def test_ws_pushes_questions_only_to_the_target(tmp_path):
                             break
                     kinds = [e["type"] for e in events]
                     assert "questions" not in kinds, "不是問他的題目不該推給他"
+
+
+@pytest.mark.asyncio
+async def test_option_answer_must_be_one_of_the_options(tmp_path):
+    """不驗的話 kind=option 只是個標籤——agent 會把它當成「從我的清單選的」信任。"""
+    app, client = await _make(tmp_path, "q_option_guard")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            qid = (await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "A 還是 B？",
+                      "options": [{"label": "A"}, {"label": "B"}]},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )).json()["id"]
+            r = await client.post(
+                f"/api/questions/{qid}/answer",
+                json={"kind": "option", "answer": "C"},
+                headers={"X-Participant-Id": people[0]["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "unknown_option"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_answers_do_not_overwrite_each_other(tmp_path):
+    """先 SELECT 再 UPDATE 之間的空隙會讓後到的答案靜靜蓋掉先到的。"""
+    app, client = await _make(tmp_path, "q_race")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            qid = (await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "在嗎"},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )).json()["id"]
+
+            async def answer(text):
+                return await client.post(
+                    f"/api/questions/{qid}/answer",
+                    json={"kind": "free_text", "answer": text},
+                    headers={"X-Participant-Id": people[0]["participant_id"]},
+                )
+
+            results = await asyncio.gather(answer("先到"), answer("後到"))
+            codes = sorted(r.status_code for r in results)
+            assert codes == [200, 409], "只能有一個成功，另一個要明確衝突"
+            q = (await client.get(f"/api/questions/{qid}")).json()["question"]
+            assert q["answer"] in ("先到", "後到")
+            assert q["status"] == "answered"
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_with_identity_upgrades_the_pump(tmp_path):
+    """首次進房是「先訂閱、join 完才拿到身分」——補送的 subscribe 必須生效。
+
+    只看「有沒有 pump」的話，第二次 subscribe 會被整個忽略，而既有 pump 是用
+    空身分建的，結果是首次進房的人永遠收不到定向問題，且畫面上毫無異狀。
+    """
+    app, client = await _make(tmp_path, "q_resub")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id, people, bots = await _setup(client)
+            await client.post(
+                f"/api/rooms/{room_id}/questions",
+                json={"prompt": "身分補上之後才該看到我"},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
+            )
+
+            from starlette.testclient import TestClient
+            with TestClient(app) as tc:
+                with tc.websocket_connect("/ws") as ws:
+                    # 第一次：還沒 join，沒有身分
+                    ws.send_json({"type": "subscribe", "room_id": room_id})
+                    ws.send_json({"type": "ping"})
+                    first = []
+                    for _ in range(3):
+                        first.append(ws.receive_json())
+                        if first[-1]["type"] == "pong":
+                            break
+                    assert "questions" not in [e["type"] for e in first]
+
+                    # 第二次：身分就緒後補送
+                    ws.send_json({
+                        "type": "subscribe", "room_id": room_id,
+                        "participant_id": people[0]["participant_id"],
+                    })
+                    got = None
+                    for _ in range(5):
+                        event = ws.receive_json()
+                        if event["type"] == "questions":
+                            got = event
+                            break
+                    assert got is not None, "補送的 subscribe 被忽略了"
+                    assert got["questions"][0]["prompt"] == "身分補上之後才該看到我"

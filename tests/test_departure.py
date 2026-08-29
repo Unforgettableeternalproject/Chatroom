@@ -196,3 +196,73 @@ def test_unknown_403_code_still_counts_as_identity_invalid():
     err = translate_status(403, {"code": "some_future_code", "message": "x"}, "u")
     assert err.identity_invalid is True
     assert err.departure is None, "不認得的 code 不得亂猜離場原因"
+
+
+@pytest.mark.asyncio
+async def test_system_messages_carry_machine_readable_event(tmp_path):
+    """client 要精確過濾就不能比對中文內容——改一個字就會無聲失效。"""
+    app, client = await _make(tmp_path, "sysevent", idle_timeout=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (
+                await client.post(
+                    "/api/rooms", json={"name": "房", "session_key": "admin-key"}
+                )
+            ).json()["id"]
+            admin = await _join(client, room_id, "admin-key", "Xavier",
+                                kind="human", role="human")
+            guest = await _join(client, room_id, "guest-key", "訪客")
+            await client.post(
+                f"/api/rooms/{room_id}/participants/{guest['participant_id']}/kick",
+                headers={"X-Participant-Id": admin["participant_id"]},
+            )
+            await client.post(f"/api/rooms/{room_id}/archive")
+
+            msgs = (
+                await client.get(f"/api/rooms/{room_id}/messages")
+            ).json()["messages"]
+            events = [m["system_event"] for m in msgs if m["kind"] == "system"]
+            assert "join" in events
+            assert "kick" in events
+            assert "archive" in events
+            # 一般發言不該帶 system_event
+            chat = [m for m in msgs if m["kind"] == "chat"]
+            assert all(m["system_event"] is None for m in chat)
+
+
+@pytest.mark.asyncio
+async def test_mentioning_someone_who_left_is_reported(tmp_path):
+    """房裡常有名字只差一個字的舊身分，挑錯就等於對著空氣說話。"""
+    app, client = await _make(tmp_path, "mention_ghost")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (
+                await client.post(
+                    "/api/rooms", json={"name": "房", "session_key": "admin-key"}
+                )
+            ).json()["id"]
+            me = await _join(client, room_id, "me-key", "我")
+            ghost = await _join(client, room_id, "ghost-key", "Novia")
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": ghost["participant_id"]},
+            )
+            live = await _join(client, room_id, "live-key", "Novia-2")
+
+            r = await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "在嗎", "mentions": ["Novia"]},
+                headers={"X-Participant-Id": me["participant_id"]},
+            )
+            body = r.json()
+            assert body["unresolved_mentions"] == ["Novia"]
+            assert "Novia-2" in body["active_names"], "要給得出正確的名字"
+
+            # mention 活著的人不該有警告
+            r = await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "在嗎", "mentions": ["Novia-2"]},
+                headers={"X-Participant-Id": me["participant_id"]},
+            )
+            assert "unresolved_mentions" not in r.json()
+            assert live["display_name"] == "Novia-2"

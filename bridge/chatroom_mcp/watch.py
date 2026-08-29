@@ -24,6 +24,7 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
      "preview": ..., "mentioned": true/false, "pinned": ..., "deleted": ...}
     {"event": "assignment", "assignment_id": ..., "room_id": ...,
      "room_name": ..., "note": ...}
+    {"event": "member_joined", "room_id": ..., "seq": ..., "who": ...}
     {"event": "departure", "room_id": ..., "reason": "kicked|idle|left|archived",
      "message": ..., "rejoinable": true/false}   # 之後進程退出
     {"event": "watch_ended", "reason": "..."}    # 之後進程退出
@@ -38,7 +39,10 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
 
 - **只有被 @mention 的訊息**才發 message 事件（指派事件不受此限）；
   其餘訊息留給 agent 用 chatroom_read / chatroom_wait 自己撈（游標保證不漏）
-- **自己發的訊息**與**system 訊息**（加入/離開）不發事件
+- **system 訊息**不發 message 事件；但**有人加入**會發獨立的
+  ``member_joined``（新夥伴進來是該知道的事，且一個房間不會一直有人加入，
+  不構成噪音）。不想要就加 ``--no-join-events``
+- **自己發的訊息**不發事件
 - **既有訊息的狀態變更**（釘選/軟刪除）不發事件——釘選牆是「額外可撈」
   的東西（chatroom_read pinned_only），不是喚醒的理由
 
@@ -96,6 +100,12 @@ def _emit(event: dict[str, Any]) -> None:
 
 def _log(msg: str) -> None:
     print(f"[watch] {msg}", file=sys.stderr, flush=True)
+
+
+def _who_joined(content: str) -> str:
+    """從加入訊息取出名字。只在 sender_name 缺席（舊版 Hub）時的退路。"""
+    name, _, tail = content.partition(" 加入了")
+    return name if tail else content
 
 
 def _preview(content: str) -> str:
@@ -227,10 +237,22 @@ class Watcher:
                 # 既有訊息的狀態變更（釘選/軟刪除領 update_seq 重新入流）
                 # 不喚醒——釘選牆用 chatroom_read(pinned_only) 主動撈
                 continue
-            if m.get("kind") == "system" and not self.args.include_system:
-                continue
             if m.get("sender_id") and m["sender_id"] == self.participant_id:
-                continue  # 自己發的不用叫醒自己
+                continue  # 自己發的不用叫醒自己（加入通知也掛著發送者）
+            if m.get("kind") == "system":
+                # 型別看 system_event 欄位，不比對中文內容——內容改一個字
+                # 就會無聲失效，而那種失效在這裡完全看不出來
+                if m.get("system_event") == "join" and self.args.join_events:
+                    self.emit({
+                        "event": "member_joined",
+                        "room_id": self.room_id,
+                        "seq": m.get("seq"),
+                        "who": m.get("sender_name") or _who_joined(
+                            m.get("content", "")
+                        ),
+                    })
+                if not self.args.include_system:
+                    continue
             mentioned = bool(
                 self.display_name and self.display_name in (m.get("mentions") or [])
             )
@@ -466,6 +488,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-messages", action="store_true",
         help="每則訊息都發事件（舊行為）；預設只在被 @mention 時發，"
              "其餘訊息由 agent 用 chatroom_read 自行讀取",
+    )
+    p.add_argument(
+        "--no-join-events", dest="join_events", action="store_false",
+        help="有人加入房間時不發 member_joined 事件（預設會發）",
     )
     p.add_argument(
         "--include-system", action="store_true",

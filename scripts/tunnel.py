@@ -73,6 +73,22 @@ def read_env() -> dict[str, str]:
     return values
 
 
+def origin_host(env: dict[str, str], override: str | None) -> str:
+    """隧道要轉發到哪個位址。
+
+    不能寫死 127.0.0.1——hub-kit 明確支援（也建議）把 Hub 綁在 VPN 介面 IP，
+    例如 CHATROOM_HOST=26.176.231.43。那種設定下 Hub **不會**監聽 loopback，
+    轉到 127.0.0.1 就是連不上，而 cloudflared 只會回 502，看起來像隧道壞了。
+    只有 0.0.0.0 / :: （所有介面）才保證 loopback 也通。
+    """
+    if override:
+        return override
+    host = env.get("CHATROOM_HOST", "").strip()
+    if not host or host in ("0.0.0.0", "::", "*"):
+        return "127.0.0.1"
+    return host
+
+
 def check_token(token: str) -> None:
     """公網暴露前的最後一道檢查：token 夠不夠格當唯一的門。"""
     lowered = token.strip().lower()
@@ -214,7 +230,7 @@ def probe_family(host: str, family: int, timeout: float = 15.0) -> tuple[int, by
         conn.close()
 
 
-def verify(url: str, port: str) -> None:
+def verify(url: str, port: str, target: str = "127.0.0.1") -> None:
     """盡力自我檢查，但**不宣告自己證明不了的事**。
 
     這個檢查是從跑 cloudflared 的那台機器上打自己的公網網址，那條路徑與真實
@@ -229,10 +245,10 @@ def verify(url: str, port: str) -> None:
     判準用回應內容而不只是狀態碼：隧道沒接上時 Cloudflare 自己回 404，而
     origin 對未知路徑往往也回 404，只比狀態碼的話兩者一模一樣。
     """
-    local_code, local_body = probe(f"http://127.0.0.1:{port}", timeout=5.0)
+    local_code, local_body = probe(f"http://{target}:{port}", timeout=5.0)
     if local_code == 0:
         print(
-            f"⚠️ 本機 {port} 沒有回應——Hub 還沒啟動嗎？"
+            f"⚠️ {target}:{port} 沒有回應——Hub 還沒啟動，或它綁在別的位址上？"
             "隧道會照常掛著，但對方連進來只會拿到錯誤。",
             file=sys.stderr, flush=True,
         )
@@ -273,7 +289,7 @@ def verify(url: str, port: str) -> None:
   請確認沒有其他 cloudflared 進程佔用同一份憑證。"""
     print(
         f"""
-⚠️ 本機自檢未通過：直連本機回 HTTP {local_code}，經隧道回 HTTP {remote_code}。
+⚠️ 本機自檢未通過：直連 {target}:{port} 回 HTTP {local_code}，經隧道回 HTTP {remote_code}。
 
 {diagnosis}
 
@@ -284,7 +300,7 @@ def verify(url: str, port: str) -> None:
     )
 
 
-def pump(proc: subprocess.Popen, token: str, port: str) -> None:
+def pump(proc: subprocess.Popen, token: str, port: str, target: str) -> None:
     """轉印 cloudflared 的輸出，並在網址出現時把連線資訊攤開給使用者。"""
     announced = False
     assert proc.stderr is not None
@@ -295,15 +311,17 @@ def pump(proc: subprocess.Popen, token: str, port: str) -> None:
             announced = True
             url = match.group(0)
             URL_FILE.write_text(url + "\n", encoding="utf-8")
-            print(banner(url, token, port), flush=True)
+            print(banner(url, token, port, target), flush=True)
             # 驗證要另起執行緒——這裡還在讀 cloudflared 的 stderr，
             # 卡住它等於把隧道自己的日誌塞死
-            threading.Thread(target=verify, args=(url, port), daemon=True).start()
+            threading.Thread(
+                target=verify, args=(url, port, target), daemon=True
+            ).start()
         else:
             print(f"[cloudflared] {line}", file=sys.stderr, flush=True)
 
 
-def banner(url: str, token: str, port: str) -> str:
+def banner(url: str, token: str, port: str, target: str) -> str:
     return f"""
 ════════════════════════════════════════════════════════════════
 ✅ 隧道已開通——把下面兩行發給要協作的人
@@ -314,7 +332,7 @@ def banner(url: str, token: str, port: str) -> str:
 對方用 chatroom-mcp-kit 安裝時填這兩個值即可（不必在同一個內網）。
 已裝好的人改 kit 根目錄 `.env` 的 CHATROOM_URL，然後重開 agent。
 ────────────────────────────────────────────────────────────────
-本機 Hub： http://127.0.0.1:{port}　（隧道只是轉發，Hub 仍要跑著）
+本機 Hub： http://{target}:{port}　（隧道只是轉發，Hub 仍要跑著）
 網址副本： {URL_FILE}
 ⚠️ 這個網址是臨時的——本視窗一關就失效，重開會拿到不一樣的網址。
 ════════════════════════════════════════════════════════════════
@@ -324,6 +342,11 @@ def banner(url: str, token: str, port: str) -> str:
 def main() -> int:
     p = argparse.ArgumentParser(description="把本機 Hub 轉發到 Cloudflare Quick Tunnel")
     p.add_argument("--port", help="Hub 埠號；省略時讀 server/.env，再退回 8787")
+    p.add_argument(
+        "--target-host",
+        help="隧道要轉發到的位址；省略時讀 server/.env 的 CHATROOM_HOST"
+             "（綁 0.0.0.0 時用 127.0.0.1）",
+    )
     p.add_argument(
         "--no-download", dest="download", action="store_false",
         help="找不到 cloudflared 時直接失敗，不自動下載",
@@ -340,6 +363,7 @@ def main() -> int:
 
     env = read_env()
     port = args.port or env.get("CHATROOM_PORT") or "8787"
+    target = origin_host(env, args.target_host)
     token = os.environ.get("CHATROOM_TOKEN") or env.get("CHATROOM_TOKEN", "")
     if not args.i_know_its_public:
         check_token(token)
@@ -349,12 +373,13 @@ def main() -> int:
     if args.check:
         print("✅ 就緒——可以執行 scripts/tunnel.py 開隧道")
         return 0
+    print(f"轉發目標：http://{target}:{port}")
 
     # cloudflared 把包含網址的橫幅寫在 stderr，stdout 幾乎沒東西
     proc = subprocess.Popen(
         [
             exe, *isolation_args(),
-            "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate",
+            "tunnel", "--url", f"http://{target}:{port}", "--no-autoupdate",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -363,7 +388,9 @@ def main() -> int:
         errors="replace",
         bufsize=1,
     )
-    reader = threading.Thread(target=pump, args=(proc, token, port), daemon=True)
+    reader = threading.Thread(
+        target=pump, args=(proc, token, port, target), daemon=True
+    )
     reader.start()
     print("隧道啟動中…（網址出現前 Hub 就該已經在跑，否則對方連上會拿到 502）")
     try:

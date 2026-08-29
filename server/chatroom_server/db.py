@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS message (
     seq        INTEGER NOT NULL,
     sender_id  TEXT REFERENCES participant(id),   -- NULL = 系統訊息
     kind       TEXT NOT NULL DEFAULT 'chat',      -- chat / system
+    -- system 訊息的機器可讀型別（join / leave / kick / idle_removed /
+    -- archive / archive_pending / unarchive）。內容是給人看的中文，client
+    -- 要精確過濾就只能解析字串——那會在改一個字時無聲壞掉
+    system_event TEXT NOT NULL DEFAULT '',
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
     reply_to   TEXT,
@@ -118,6 +122,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
+    ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
 ]
 
 

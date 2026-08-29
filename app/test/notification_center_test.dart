@@ -32,11 +32,15 @@ void main() {
   late List<RoomNotification> sent;
   late List<String> activity;
 
-  RoomFeed subscribe(String roomId) =>
-      feeds.putIfAbsent(roomId, () => RoomFeed(roomId));
+  final subscribedIds = <String, String?>{};
+  RoomFeed subscribe(String roomId, {String? participantId}) {
+    if (participantId != null) subscribedIds[roomId] = participantId;
+    return feeds.putIfAbsent(roomId, () => RoomFeed(roomId));
+  }
 
   setUp(() {
     feeds = {};
+    subscribedIds.clear();
     sent = [];
     activity = [];
     center = NotificationCenter(subscribe, (_) {});
@@ -82,6 +86,41 @@ void main() {
     await pump();
     expect(sent, isEmpty);
     expect(activity, isEmpty);
+  });
+
+  test('自己發的訊息仍要進 fresh——Codex 轉送靠的就是這一條', () async {
+    // 人類在這個 App 裡 @ 本機 Codex，那則的 sender 就是自己。fresh 若共用
+    // 「不通知自己」的過濾結果，本機 Codex 永遠收不到同一台機器上的人對它
+    // 說的話，而且完全沒有錯誤跡象。
+    final batches = <RoomFreshBatch>[];
+    center.fresh.listen(batches.add);
+    center.follow('r1', roomName: '設計討論', myParticipantId: 'me');
+    feeds['r1']!.upsertAll([msg(1)]);
+    await pump();
+    batches.clear();
+    activity.clear();
+
+    feeds['r1']!.upsertAll([msg(2, senderId: 'me', content: '@Codex 看一下')]);
+    await pump();
+
+    expect(batches, hasLength(1), reason: '自己發的訊息要送到轉送出口');
+    expect(batches.single.messages.single.content, '@Codex 看一下');
+    expect(sent, isEmpty, reason: 'OS 通知不該通知自己');
+    expect(activity, isEmpty, reason: '未讀提示也不該把自己算成活動');
+  });
+
+  test('follow 把身分傳給底層訂閱——定向問題才推得過來', () async {
+    center.follow('r1', roomName: 'A', myParticipantId: 'p1');
+    expect(subscribedIds['r1'], 'p1');
+  });
+
+  test('先跟房、之後才拿到身分：要補送訂閱', () async {
+    center.follow('r1', roomName: 'A');
+    expect(subscribedIds['r1'], isNull);
+    // join 完成後帶著身分再 follow 一次（bootstrap 的正常時序）
+    center.follow('r1', roomName: 'A', myParticipantId: 'p1');
+    expect(subscribedIds['r1'], 'p1',
+        reason: '不補送的話 server 那條訂閱永遠是匿名的');
   });
 
   test('mentions 模式只在被提及時通知，但活動照發', () async {

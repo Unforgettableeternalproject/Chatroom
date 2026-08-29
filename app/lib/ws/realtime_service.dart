@@ -78,6 +78,11 @@ class RealtimeService {
   /// room_id → 本人在該房的 participant_id。subscribe 時一併送出，
   /// server 才知道該把哪些定向問題推過來。
   final Map<String, String> _participantIds = {};
+  /// room_id → **已經隨 subscribe 送出去**的身分。與上面那份分開記，因為
+  /// 「知道身分」與「server 知道我的身分」是兩件事——只記前者的話，身分在
+  /// refCount 已經大於 1 時才補上（通知層先跟房、之後才開聊天室的正常時序）
+  /// 就永遠不會送出去，而畫面上完全沒有異狀。
+  final Map<String, String> _sentParticipantIds = {};
   final Map<String, int> _refCounts = {};
   final Map<String, Timer> _retireTimers = {};
 
@@ -139,6 +144,9 @@ class RealtimeService {
       unawaited(_attachRoom(roomId).catchError((Object e) {
         _log.warning('房間 $roomId 掛載失敗：$e');
       }));
+    } else {
+      // 已經有人訂閱著：身分若是這次才帶進來的，補送一次
+      _syncSubscription(roomId);
     }
     return feed;
   }
@@ -147,10 +155,21 @@ class RealtimeService {
   /// subscribe，server 才知道要把哪些定向問題推過來——不補的話首次進房的人
   /// 會看不到問題，而且畫面上完全沒有異狀。
   void setParticipantId(String roomId, String participantId) {
-    if (participantId.isEmpty || _participantIds[roomId] == participantId) return;
+    if (participantId.isEmpty) return;
     _participantIds[roomId] = participantId;
+    _syncSubscription(roomId);
+  }
+
+  void _forgetSentSubscriptions() => _sentParticipantIds.clear();
+
+  /// server 手上的身分與我們現在知道的不一致時，補送一次 subscribe。
+  void _syncSubscription(String roomId) {
+    final want = _participantIds[roomId] ?? '';
+    if (want.isEmpty || _sentParticipantIds[roomId] == want) return;
+    if (!_feeds.containsKey(roomId) || _status is! Connected) return;
     _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
-        participantId: participantId));
+        participantId: want));
+    _sentParticipantIds[roomId] = want;
   }
 
   void unsubscribe(String roomId) {
@@ -160,6 +179,7 @@ class RealtimeService {
       return;
     }
     _refCounts.remove(roomId);
+    _sentParticipantIds.remove(roomId);
     _conn?.send(WsProtocol.unsubscribe(roomId));
     // 延遲移除 store：房間之間來回切換不必重新載入
     _retireTimers[roomId]?.cancel();
@@ -215,6 +235,7 @@ class RealtimeService {
         for (final roomId in _refCounts.keys) {
           conn.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
               participantId: _participantIds[roomId]));
+          _sentParticipantIds[roomId] = _participantIds[roomId] ?? '';
         }
         syncOk = true;
       } catch (e) {
@@ -262,6 +283,9 @@ class RealtimeService {
   }
 
   Future<void> _closeConn() async {
+    // 新連線的 server 端對我們一無所知，舊的「已送出」記錄會讓
+    // _syncSubscription 誤以為不必再送
+    _forgetSentSubscriptions();
     final conn = _conn;
     _conn = null;
     if (conn != null) {
@@ -283,6 +307,7 @@ class RealtimeService {
     await _syncRoom(roomId);
     _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
         participantId: _participantIds[roomId]));
+    _sentParticipantIds[roomId] = _participantIds[roomId] ?? '';
   }
 
   Future<void> _syncRoom(String roomId) async {

@@ -46,7 +46,7 @@ class RoomNotification {
 class NotificationCenter {
   NotificationCenter(this._subscribe, this._unsubscribe);
 
-  final RoomFeed Function(String roomId) _subscribe;
+  final RoomFeed Function(String roomId, {String? participantId}) _subscribe;
   final void Function(String roomId) _unsubscribe;
 
   NotifyModePref mode = NotifyModePref.all;
@@ -83,9 +83,14 @@ class NotificationCenter {
         ..roomName = roomName
         ..myParticipantId = myParticipantId
         ..myDisplayName = myDisplayName;
+      // 身分可能是這次才拿到的（先跟房、join 完才有 id）——要傳下去，
+      // 否則 server 那條訂閱永遠是匿名的，收不到指名給我的問題
+      if (myParticipantId != null && myParticipantId.isNotEmpty) {
+        _subscribe(roomId, participantId: myParticipantId);
+      }
       return;
     }
-    final feed = _subscribe(roomId);
+    final feed = _subscribe(roomId, participantId: myParticipantId);
     final room = _FollowedRoom(
       feed: feed,
       roomName: roomName,
@@ -128,22 +133,29 @@ class NotificationCenter {
     if (feed.cursor <= baseline) return;
     room.notifiedUpTo = feed.cursor;
 
-    final fresh = <Message>[];
+    // 兩份清單刻意分開。OS 通知與未讀提示要排除「自己發的」，但 Codex
+    // 轉送不行——人類在這個 App 裡 @ 本機 Codex，正是它該轉送的那一則，
+    // 而那則的 sender 就是自己。共用同一份過濾結果會讓本機 Codex 永遠
+    // 收不到同一台機器上的人對它說的話。
+    final everything = <Message>[];
+    final fromOthers = <Message>[];
     for (final m in feed.messages) {
       if (m.seq <= baseline) continue;
       if (m.isSystem || m.deleted) continue;
+      everything.add(m);
       if (room.myParticipantId != null && m.senderId == room.myParticipantId) {
         continue;
       }
-      fresh.add(m);
+      fromOthers.add(m);
     }
+    if (everything.isNotEmpty && !_fresh.isClosed) {
+      _fresh.add(RoomFreshBatch(
+          roomId: roomId, roomName: room.roomName, messages: everything));
+    }
+    final fresh = fromOthers;
     if (fresh.isEmpty) return;
 
     if (!_activity.isClosed) _activity.add(roomId);
-    if (!_fresh.isClosed) {
-      _fresh.add(RoomFreshBatch(
-          roomId: roomId, roomName: room.roomName, messages: fresh));
-    }
 
     if (mode == NotifyModePref.off) return;
     final myName = room.myDisplayName;

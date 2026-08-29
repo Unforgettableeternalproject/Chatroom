@@ -220,6 +220,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         kind: str = "chat",
         mentions: list[str] | None = None,
         reply_to: str | None = None,
+        system_event: str = "",
     ) -> dict:
         db = app.state.db
         # reply 目標必須存在且屬於同一房間，否則會把他房的內容洩進本房時間軸
@@ -241,9 +242,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         msg_id = _uid()
         await db.execute(
             "INSERT INTO message (id, room_id, seq, sender_id, kind, content, mentions,"
-            " reply_to, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            " reply_to, system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, kind, content,
-             json.dumps(mentions or []), reply_to, _now()),
+             json.dumps(mentions or []), reply_to, system_event, _now()),
         )
         await db.commit()
         await events.notify(room_id)
@@ -279,6 +280,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             out.append({
                 "id": r["id"], "seq": r["seq"], "update_seq": r["update_seq"],
                 "kind": r["kind"],
+                # system 訊息的機器可讀型別；client 要精確過濾（例如只在
+                # 有人加入時通知）就不必去比對中文內容
+                "system_event": r["system_event"] or None,
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 "content": "" if r["deleted"] else r["content"],
                 "mentions": json.loads(r["mentions"]),
@@ -429,7 +433,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _archive(room_id: str, reason: str) -> None:
         db = app.state.db
         # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
-        await _post_message(room_id, None, reason, kind="system")
+        await _post_message(room_id, None, reason, kind="system",
+                            system_event="archive")
         await db.execute(
             "UPDATE room SET status='archived', archived_at=?,"
             " archive_pending_since=NULL WHERE id=?",
@@ -457,7 +462,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             (_now(), room_id),
         )
         await db.commit()
-        await _post_message(room_id, None, "聊天室已解除封存", kind="system")
+        await _post_message(room_id, None, "聊天室已解除封存", kind="system",
+                            system_event="unarchive")
         return {"ok": True, "already_active": False}
 
     # ---------- 成員 ----------
@@ -558,7 +564,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         await _touch_session(session_key, body.kind)
-        await _post_message(room_id, None, f"{name} 加入了聊天室", kind="system")
+        # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
+        # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
+        await _post_message(room_id, pid, f"{name} 加入了聊天室", kind="system",
+                            system_event="join")
         out = {
             "participant_id": pid,
             "display_name": name,
@@ -579,7 +588,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
         )
         await db.commit()
-        await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室", kind="system")
+        await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
+                            kind="system", system_event="leave")
         return {"ok": True}
 
     @app.post(
@@ -618,6 +628,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _post_message(
             room_id, None,
             f"{target['display_name']} 已被管理員移出聊天室", kind="system",
+            system_event="kick",
         )
         return {"ok": True}
 
@@ -632,11 +643,33 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def post_message(
         room_id: str, body: MessagePost, x_participant_id: str | None = Header(default=None)
     ):
+        """發言。mention 到不存在或已離開的名字時，在回應中明說。
+
+        房裡可能同時有「Novia」（已離開的舊身分）與「Novia-2」（本人），名字
+        只差一個字。挑錯的話訊息會安靜地送進一個永遠不會醒的身分——發出去了、
+        沒有錯誤、也永遠等不到回應。mention 的用途就是喚醒對方，喚不到就是失敗，
+        必須講出來。不擋下訊息本身：提及一個已離開的人有時是合理的敘述。
+        """
         await _room_or_404(room_id)
         p = await _participant(x_participant_id, room_id)
-        return await _post_message(
+        result = await _post_message(
             room_id, p["id"], body.content, mentions=body.mentions, reply_to=body.reply_to
         )
+        if body.mentions:
+            db = app.state.db
+            rows = await (
+                await db.execute(
+                    "SELECT display_name FROM participant WHERE room_id=?"
+                    " AND status='active'",
+                    (room_id,),
+                )
+            ).fetchall()
+            active_names = {r["display_name"] for r in rows}
+            unresolved = [m for m in body.mentions if m not in active_names]
+            if unresolved:
+                result["unresolved_mentions"] = unresolved
+                result["active_names"] = sorted(active_names)
+        return result
 
     @app.get("/api/rooms/{room_id}/messages", dependencies=[Depends(require_auth)])
     async def read_messages(
@@ -1012,12 +1045,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "empty_answer", "答案不能是空的")
         if body.kind == "free_text" and not row["allow_free_text"]:
             raise _err(422, "free_text_not_allowed", "這題只能從選項中選")
+        if body.kind == "option":
+            # 不驗的話 kind=option 只是個標籤，任何字串都能冒充成「他選了這個」，
+            # 而 agent 會把 answer_kind=option 當成「從我給的清單裡選的」來信任
+            try:
+                labels = {o.get("label") for o in json.loads(row["options"] or "[]")}
+            except ValueError:
+                labels = set()
+            if body.answer.strip() not in labels:
+                raise _err(422, "unknown_option",
+                           "這個選項不在題目提供的清單裡")
         status = "skipped" if body.kind == "skip" else "answered"
-        await db.execute(
+        # 條件放進 UPDATE 本身：先 SELECT 再 UPDATE 之間有空隙，兩個並發的
+        # 回答會雙雙通過檢查，後到的直接覆寫先到的答案而且沒有任何人知道
+        cur = await db.execute(
             "UPDATE question SET status=?, answer=?, answer_kind=?, resolved_at=?"
-            " WHERE id=?",
+            " WHERE id=? AND status='pending' RETURNING id",
             (status, body.answer.strip(), body.kind, _now(), question_id),
         )
+        if await cur.fetchone() is None:
+            raise _err(409, "question_already_resolved", "這個問題已經處理過了")
         await db.commit()
         await events.notify(row["room_id"])
         return {"ok": True, "status": status}
@@ -1113,6 +1160,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         send_lock = asyncio.Lock()  # 多房間 pump 併發送出時避免交錯
         pumps: dict[str, asyncio.Task] = {}
+        # room_id → 建立該 pump 時用的 participant_id，用來判斷 re-subscribe
+        # 是不是換了身分（換了就要重建，見下方 subscribe 分支）
+        pump_ids: dict[str, str] = {}
 
         async def push_questions(room_id: str, participant_id: str, seen: set) -> set:
             """把指派給這個人的待答問題推過去；集合沒變就不送，避免無謂重畫。"""
@@ -1180,13 +1230,22 @@ def create_app(config: Config | None = None) -> FastAPI:
                 kind = data.get("type")
                 if kind == "subscribe":
                     rid = data["room_id"]
+                    pid = str(data.get("participant_id") or "")
+                    # 身分是 join 之後才拿得到的，client 因此會在同一個房間上
+                    # 再 subscribe 一次來補帶 participant_id。只看「有沒有
+                    # pump」的話那次會被整個忽略，而既有 pump 是用空身分建的
+                    # ——結果就是首次進房的人永遠收不到定向問題，直到重連。
+                    if rid in pumps and pump_ids.get(rid, "") != pid:
+                        pumps.pop(rid).cancel()
                     if rid not in pumps:
+                        pump_ids[rid] = pid
                         pumps[rid] = asyncio.create_task(
-                            pump(rid, int(data.get("after_seq", 0)),
-                                 str(data.get("participant_id") or ""))
+                            pump(rid, int(data.get("after_seq", 0)), pid)
                         )
                 elif kind == "unsubscribe":
-                    task = pumps.pop(data.get("room_id", ""), None)
+                    rid = data.get("room_id", "")
+                    pump_ids.pop(rid, None)
+                    task = pumps.pop(rid, None)
                     if task:
                         task.cancel()
                 elif kind == "ping":
@@ -1223,6 +1282,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _post_message(
                 p["room_id"], None,
                 f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
+                system_event="idle_removed",
             )
         # 過期 pending 指派
         a_cutoff = (now - timedelta(seconds=cfg.assignment_ttl)).isoformat()
@@ -1264,7 +1324,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await _post_message(
                     r["id"], None,
                     f"聊天室內已無 agent，將於 {int(cfg.archive_grace)} 秒後自動封存",
-                    kind="system",
+                    kind="system", system_event="archive_pending",
                 )
             elif (now - datetime.fromisoformat(pending)).total_seconds() >= (
                 cfg.archive_grace
