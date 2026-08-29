@@ -90,10 +90,11 @@ def state() -> BridgeState:
         if os.environ.get("CHATROOM_STATE_PATH"):
             _state = BridgeState()  # 顯式路徑（測試/特殊部署）
         else:
-            # state 檔跟著 session_key 走：並發 session 各寫各的，不互踩
-            _state = BridgeState(
-                Path.home() / ".chatroom" / _state_filename(SESSION_KEY)
-            )
+            # state 檔跟著 session_key 走：並發 session 各寫各的，不互踩。
+            # 用 resolve_ 而不是直接組檔名——身分可能存在一個以**舊 key**
+            # 命名的檔案裡（Hub 改寫過 canonical key 之後），照檔名找會讓
+            # 重啟後的 bridge 以為自己從來沒加入過任何房間
+            _state = BridgeState(identity.resolve_state_path(SESSION_KEY))
     return _state
 
 

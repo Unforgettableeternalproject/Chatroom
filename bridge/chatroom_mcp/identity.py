@@ -8,6 +8,7 @@ bridge 主體與 watcher 若各自實作，一旦歧異就會變成兩個身分�
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import uuid
@@ -60,8 +61,43 @@ def state_filename(session_key: str) -> str:
 
 
 def state_path(session_key: str) -> Path:
-    """state 檔位置：顯式 ``CHATROOM_STATE_PATH`` 優先，否則跟著 session_key 走。"""
+    """state 檔位置：顯式 ``CHATROOM_STATE_PATH`` 優先，否則跟著 session_key 走。
+
+    這是「依 key 算出來的名字」，**不保證身分真的存在那裡**——身分可以在
+    建檔之後被 Hub 改寫（見 resolve_state_path）。要讀既有身分請用那一支。
+    """
     override = os.environ.get("CHATROOM_STATE_PATH")
     if override:
         return Path(override)
     return Path.home() / ".chatroom" / state_filename(session_key)
+
+
+def resolve_state_path(session_key: str) -> Path:
+    """找出**真的存放這把 key 的身分**的 state 檔。
+
+    檔名由建檔當下的 key 決定，但那把 key 會變：用 ``assignment_id`` 加入
+    房間時 Hub 會回一把 canonical session_key，bridge 把它寫進檔案內容；
+    之後行程重啟拿到新的平台 session id，算出來的檔名就與實際存放位置對不
+    上，身分看起來憑空消失（2026-08-29 實測，MCP 重連後房內身分全失）。
+
+    **檔名不是權威，內容裡的 ``session_key`` 才是。** 依 key 算出的名字仍是
+    第一順位；找不到時掃同目錄，取內容自報 key 等於自己的那一份。
+
+    找到之後就地使用、不改名：改名要跟同時在讀這個檔的 watcher 搶，而搶輸
+    的代價（身分再次消失）比檔名不好看嚴重得多。
+    """
+    preferred = state_path(session_key)
+    if preferred.exists() or os.environ.get("CHATROOM_STATE_PATH"):
+        return preferred
+    try:
+        candidates = sorted(preferred.parent.glob("state-*.json"))
+    except OSError:
+        return preferred
+    for path in candidates:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(raw, dict) and raw.get("session_key") == session_key:
+            return path
+    return preferred
