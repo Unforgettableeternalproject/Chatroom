@@ -328,3 +328,53 @@ def test_watch_rejects_unknown_kind():
 
     with pytest.raises(SystemExit):
         watch.build_parser().parse_args(["--kind", "gemini"])
+
+
+def test_hub_kit_never_ships_real_data(tmp_path, monkeypatch):
+    """交付包絕不能夾帶主持人的實際資料。
+
+    實測踩到：Hub 在 server/ 底下跑時，使用者上傳的附件全落在
+    server/attachments/，跟著 copytree 進了 zip。db 有排除、附件沒有
+    ——而附件（截圖、log、報告）往往比訊息本身更敏感。
+    """
+    import shutil
+    import zipfile
+
+    repo = Path(__file__).resolve().parent.parent
+    server = repo / "server"
+    # 在真實的 server/ 底下放進「不該外流」的東西，跑完再清掉
+    planted = {
+        server / "attachments" / "ab" / "secret-blob": b"private screenshot",
+        server / ".env": None,             # 已存在就不動
+        server / ".tunnel-url": b"https://live-tunnel.trycloudflare.com\n",
+    }
+    created = []
+    for path, content in planted.items():
+        if content is None or path.exists():
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        created.append(path)
+    try:
+        subprocess.run(
+            [sys.executable, str(repo / "host-kit" / "build.py")],
+            check=True, capture_output=True,
+        )
+        with zipfile.ZipFile(repo / "dist" / "chatroom-hub-kit.zip") as z:
+            names = z.namelist()
+        forbidden = [
+            n for n in names
+            if "attachments/" in n
+            or n.endswith(".env")
+            or ".db" in n
+            or n.endswith(".tunnel-url")
+            or "__pycache__" in n
+        ]
+        assert forbidden == [], f"交付包夾帶了不該外流的檔案：{forbidden}"
+        # 該有的仍要在
+        assert any(n.endswith("scripts/tunnel.py") for n in names)
+        assert any(n.endswith("server/chatroom_server/app.py") for n in names)
+    finally:
+        for path in created:
+            path.unlink(missing_ok=True)
+        shutil.rmtree(server / "attachments" / "ab", ignore_errors=True)

@@ -40,8 +40,7 @@ python install.py
 ## 對外協作（讓內網以外的 agent 連進來）
 
 ```
-scripts
-un-tunnel.cmd
+scripts\run-tunnel.cmd
 ```
 
 Hub 要**先跑著**——隧道只是轉發，不會替你把 Hub 叫起來。起來後畫面會印出

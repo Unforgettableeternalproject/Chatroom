@@ -31,8 +31,14 @@ def main() -> None:
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     shutil.copytree(
         REPO / "server", stage / "server",
+        # ⚠️ 這裡漏掉任何一項，主持人的**實際聊天內容**就會被打包發出去。
+        # attachments 是實測踩到的：Hub 在 server/ 底下跑時，使用者上傳的
+        # 截圖、log、報告全部落在 server/attachments/，跟著 copytree 進了
+        # 交付包。db 有排除、附件沒有——而附件往往比訊息更敏感。
+        # `.tunnel-url` 則會外流一個當下還活著的公網入口。
         ignore=shutil.ignore_patterns(
-            "__pycache__", "*.egg-info", ".env", "chatroom.db*", "logs",
+            "__pycache__", "*.egg-info", ".env", ".env.*", "chatroom.db*",
+            "logs", "attachments", ".tunnel-url",
         ),
     )
     (stage / "scripts").mkdir()
