@@ -284,6 +284,7 @@ class Watcher:
         # 離開了」（2026-08-29 外部測試端實測）。
         self.first_poll = True
         self.suppressed_presence = 0
+        self.seen_assignments: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
         self.departed = False
