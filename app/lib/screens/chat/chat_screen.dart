@@ -18,7 +18,9 @@ import '../../models/message.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
 import '../../state/app_providers.dart';
+import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
+import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/invite_human_dialog.dart';
@@ -557,7 +559,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       _lastSystemCount = systemCount;
       // 已讀 cursor：視窗開著就推進（未讀點的資料源）
-      ref.read(settingsRepoProvider).setLastReadSeq(roomId, feed.cursor);
+      final settings = ref.read(settingsRepoProvider);
+      settings.setLastReadSeq(roomId, feed.cursor);
+      // 人真的在看這個房了，那些 @ 就算處理過。**只清 mention，不清問題**
+      // ——問題要答了才算完，看到不算（那正是「容易被忽略」的成因）
+      if (settings.pendingMentions(roomId) > 0) {
+        settings.clearPendingMentions(roomId).then((_) {
+          TaskbarBadge.instance.apply(unhandledCount(
+            realtime: ref.read(realtimeServiceProvider),
+            pendingInvites: ref.read(myPendingInvitesProvider).length,
+            settings: settings,
+          ));
+        });
+      }
     });
 
     final archived = feed.roomStatus == 'archived' ||

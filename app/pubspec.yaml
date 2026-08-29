@@ -57,6 +57,7 @@ dependencies:
   # 直接衝突；降級 secure_storage 換一個貼上功能不划算。pasteboard 是純
   # 平台通道、無額外原生工具鏈，Windows/Android 都支援。
   pasteboard: ^0.5.0
+  windows_taskbar: ^1.1.2
 
 dev_dependencies:
   flutter_test:
@@ -79,6 +80,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    # 工作列角標的數字圖示。setOverlayIcon 只吃 .ico 路徑，不能在執行期
+    # 把數字畫上去——由 scripts/make-badge-icons.py 產生
+    - assets/badge/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

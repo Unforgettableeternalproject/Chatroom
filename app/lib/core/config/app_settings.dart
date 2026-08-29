@@ -22,6 +22,7 @@ class SettingsRepository {
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
   static const _kHiddenMembersPrefix = 'chatroom.hidden_members.';
+  static const _kPendingMentionPrefix = 'chatroom.pending_mention.';
   static const _kNotifyMode = 'chatroom.notify_mode';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
@@ -86,6 +87,26 @@ class SettingsRepository {
   // ---------- 房間層級快取 ----------
 
   int lastReadSeq(String roomId) => _prefs.getInt('$_kLastReadPrefix$roomId') ?? 0;
+
+  /// 被 @ 了但還沒去看的則數（每房）。
+  ///
+  /// 與「未讀訊息」刻意分開：未讀是**看了沒**，這個是**處理了沒**。工作列
+  /// 徽章綁在後者——右下角的 toast 會自己消失，看漏就沒了，而徽章要留到
+  /// 人真的去看為止。這也是為什麼它要持久化：關掉 App 再開，那件事還在。
+  int pendingMentions(String roomId) =>
+      _prefs.getInt('$_kPendingMentionPrefix$roomId') ?? 0;
+
+  Future<void> addPendingMention(String roomId) => _prefs.setInt(
+      '$_kPendingMentionPrefix$roomId', pendingMentions(roomId) + 1);
+
+  Future<void> clearPendingMentions(String roomId) =>
+      _prefs.remove('$_kPendingMentionPrefix$roomId');
+
+  /// 所有房間的未讀 mention 總和。
+  int get totalPendingMentions => _prefs
+      .getKeys()
+      .where((k) => k.startsWith(_kPendingMentionPrefix))
+      .fold(0, (sum, k) => sum + (_prefs.getInt(k) ?? 0));
   Future<void> setLastReadSeq(String roomId, int seq) =>
       _prefs.setInt('$_kLastReadPrefix$roomId', seq);
 

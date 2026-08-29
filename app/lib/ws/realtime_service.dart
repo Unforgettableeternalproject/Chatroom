@@ -210,6 +210,10 @@ class RealtimeService {
 
   RoomFeed? feed(String roomId) => _feeds[roomId];
 
+  /// 目前持有的所有房間 feed。跨房彙總（工作列徽章）用——通知中心跟隨
+  /// 所有已加入的房間，所以這裡涵蓋的就是「我在的每個房」。
+  Iterable<RoomFeed> get feeds => _feeds.values;
+
   /// 往上捲載入歷史（before_seq 反向翻頁）。
   Future<void> loadOlder(String roomId) async {
     final f = _feeds[roomId];

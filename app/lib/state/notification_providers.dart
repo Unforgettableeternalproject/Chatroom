@@ -4,7 +4,10 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../notifications/codex_dispatcher.dart';
+import '../core/config/app_settings.dart';
+import '../ws/realtime_service.dart';
 import '../notifications/local_notifier.dart';
+import '../notifications/taskbar_badge.dart';
 import '../notifications/notification_center.dart';
 import 'app_providers.dart';
 import 'rooms_providers.dart';
@@ -101,7 +104,24 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   followJoined();
   ref.listen(roomListProvider('active'), (_, next) => followJoined());
 
-  final notifSub = center.notifications.listen(LocalNotifier.instance.show);
+  // 角標的數字。ref.watch 會在來源變動時重建這個 Provider，所以
+  // apply() 自然跟著 feed / 邀請 / mention 的變化走
+  int currentUnhandled() => unhandledCount(
+        realtime: ref.read(realtimeServiceProvider),
+        pendingInvites: ref.read(myPendingInvitesProvider).length,
+        settings: settings,
+      );
+  unawaited(TaskbarBadge.instance.apply(currentUnhandled()));
+
+  final notifSub = center.notifications.listen((n) async {
+    LocalNotifier.instance.show(n);
+    // 被 @ 了就記一筆——toast 會過去，這一筆要留到人真的去看那個房間。
+    // 只計 mention 不計一般訊息：徽章要對應「等著我做決定的事」，
+    // 每一則訊息都算的話它永遠不會歸零，然後就跟沒有一樣
+    if (!n.mentioned) return;
+    await settings.addPendingMention(n.roomId);
+    await TaskbarBadge.instance.apply(currentUnhandled());
+  });
 
   // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）
   final dispatcher = ref.watch(codexDispatcherProvider);
@@ -120,6 +140,8 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     refreshDebounce?.cancel();
     refreshDebounce = Timer(const Duration(seconds: 2), () {
       ref.invalidate(roomListProvider('active'));
+      // 順便重算角標：問題集合與邀請都可能在這段期間變過
+      unawaited(TaskbarBadge.instance.apply(currentUnhandled()));
     });
   });
 
@@ -131,3 +153,25 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     refreshDebounce?.cancel();
   });
 });
+
+
+/// 未處理項目總數——工作列角標的數字。
+///
+/// 「未處理」不是「未讀」：問題卡片被滑過去但沒答，它仍然算在裡面。那正是
+/// 使用者抱怨「容易被忽略」的那件事，把它排除等於把這個機制關掉。
+///
+/// 三個來源，都是**還等著人做決定**的東西：
+/// - 待答問題（已訂閱房間的 feed；Hub 已排除過期題，過期會自動減）
+/// - 待處理邀請（接受或婉拒都還沒做）
+/// - 被 @ 但還沒去看的訊息
+/// 參數收實際依賴而不是 Ref：Provider 端拿到的是 `Ref`、畫面端是
+/// `WidgetRef`，兩者不能互換，而這個數字兩邊都要算。
+int unhandledCount({
+  required RealtimeService realtime,
+  required int pendingInvites,
+  required SettingsRepository settings,
+}) {
+  final questions =
+      realtime.feeds.fold<int>(0, (sum, f) => sum + f.questions.length);
+  return questions + pendingInvites + settings.totalPendingMentions;
+}
