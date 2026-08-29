@@ -19,7 +19,8 @@ async def _make(tmp_path, name):
 
 
 async def _room_with_assignment(client, target="claude-target"):
-    r = await client.post("/api/rooms", json={"name": "房", "topic": ""})
+    r = await client.post("/api/rooms",
+                          json={"name": "房", "topic": "", "session_key": "owner-key"})
     room_id = r.json()["id"]
     r = await client.post(
         f"/api/rooms/{room_id}/assignments",
@@ -53,7 +54,8 @@ async def test_cancelled_status_is_distinct_from_declined(tmp_path):
         room_id, aid = await _room_with_assignment(client)
         await client.delete(f"/api/assignments/{aid}")
 
-        r = await client.get(f"/api/rooms/{room_id}/assignments")
+        r = await client.get(f"/api/rooms/{room_id}/assignments",
+                             headers={"X-Session-Key": "owner-key"})
         row = next(a for a in r.json()["assignments"] if a["id"] == aid)
         assert row["status"] == "cancelled"
         assert row["resolved_at"] is not None

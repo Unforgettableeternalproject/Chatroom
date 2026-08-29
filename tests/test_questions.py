@@ -86,7 +86,8 @@ async def test_questions_stay_out_of_the_message_stream(tmp_path):
         async with app.router.lifespan_context(app):
             room_id, people, bots = await _setup(client)
             before = (
-                await client.get(f"/api/rooms/{room_id}/messages")
+                await client.get(f"/api/rooms/{room_id}/messages",
+                                 headers={"X-Participant-Id": bots[0]["participant_id"]})
             ).json()["messages"]
             await client.post(
                 f"/api/rooms/{room_id}/questions",
@@ -95,7 +96,8 @@ async def test_questions_stay_out_of_the_message_stream(tmp_path):
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             after = (
-                await client.get(f"/api/rooms/{room_id}/messages")
+                await client.get(f"/api/rooms/{room_id}/messages",
+                                 headers={"X-Participant-Id": bots[0]["participant_id"]})
             ).json()["messages"]
             assert len(after) == len(before)
 
@@ -352,7 +354,8 @@ async def test_room_questions_are_visible_to_agents(tmp_path):
                 headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             r = await client.get(
-                f"/api/rooms/{room_id}/questions", params={"status": "pending"}
+                f"/api/rooms/{room_id}/questions", params={"status": "pending"},
+                headers={"X-Participant-Id": bots[0]["participant_id"]},
             )
             qs = r.json()["questions"]
             assert len(qs) == 1

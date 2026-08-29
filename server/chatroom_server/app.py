@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field, field_validator
 from .config import Config
 from .db import open_db
 from .events import RoomEvents
+from .logging_setup import setup_file_logging, token_hint
 from .naming import generate_name
+from .version import APP_VERSION, build_info, version_string
 
 
 logger = logging.getLogger("chatroom")
@@ -124,11 +126,33 @@ class QuestionAnswer(BaseModel):
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or Config()
     logger.setLevel(cfg.log_level.upper())
+    log_dir = cfg.log_dir or str(Path(cfg.db_path).resolve().parent / "logs")
+    log_path = setup_file_logging(
+        logger, log_dir,
+        max_bytes=cfg.log_max_bytes, backup_count=cfg.log_backup_count,
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 第一則就是版本：日誌從哪裡開始看，都要能立刻回答「這是哪一份程式碼」
+        info = build_info()
+        logger.info(
+            "Hub 啟動 %s", version_string(),
+            extra={"event": "startup", "version": info["version"],
+                   "commit": info["commit"], "built_at": info["built_at"],
+                   "version_source": info["source"], "db": cfg.db_path,
+                   "log_file": str(log_path) if log_path else ""},
+        )
+        if info["source"] == "unknown":
+            # 這正是這次事故的形狀：手上跑的是哪一份程式碼，沒有人答得出來
+            logger.warning(
+                "這份 Hub 沒有版本資訊（既非打包產物也不在 git 工作樹裡）"
+                "——出事時無法對照是哪一份程式碼",
+                extra={"event": "version_unknown"},
+            )
         if not cfg.api_token:
-            logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用")
+            logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用",
+                           extra={"event": "auth_disabled"})
         app.state.db = await open_db(cfg.db_path)
         sweeper = asyncio.create_task(_sweeper())
         app.state.sweeper_task = sweeper
@@ -140,7 +164,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await sweeper
             await app.state.db.close()
 
-    app = FastAPI(title="Chatroom Hub", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Chatroom Hub", version=APP_VERSION, lifespan=lifespan)
     events = RoomEvents()
 
     def _bearer(authorization: str | None) -> str:
@@ -161,6 +185,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         request.state.is_root_token = False
         request.state.token_label = ""
+        # 這次請求用的是哪張發出去的 token（主 token 與開放模式留空字串）。
+        # 踢出要連著撤銷它——只封 session_key 擋不住任何人，那把鑰匙是被踢者
+        # 自己在本機產的，換一把就是全新的人
+        request.state.access_token = ""
         if not cfg.api_token:
             # 未設 token＝完全開放（本機開發）。這時人人都是主持人，否則
             # 連發邀請都做不到
@@ -172,6 +200,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             return
         row = None
         if token:
+            request.state.access_token = token
             row = await (
                 await app.state.db.execute(
                     "SELECT * FROM access_token WHERE token=? AND revoked_at IS NULL",
@@ -179,6 +208,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
         if row is None:
+            logger.warning(
+                "token 驗證失敗", extra={
+                    "event": "auth_failed", "path": request.url.path,
+                    # 只記前 8 碼：日誌會被複製、貼上、附進 issue，
+                    # 每次都是一份新的外洩機會
+                    "token_hint": token_hint(token),
+                    "ip": _client_ip(request),
+                },
+            )
             raise _err(401, "invalid_token", "token 無效或未提供")
         request.state.token_label = row["label"]
         # 最後使用時間讓主持人看得出哪張還在用、哪張可以收掉
@@ -267,6 +305,58 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE participant SET last_seen_at=? WHERE id=?", (_now(), participant_id)
         )
         await db.commit()
+        return row
+
+    async def _creator_or_member(
+        room, participant_id: str | None, session_key: str | None
+    ):
+        """房主視角的門檻：建立者本人，或房內成員。
+
+        建房到 join 之間有一段空窗（指派 UI 正開在那個空窗上——「邀請別人
+        進來」本來就發生在自己還沒進去的時候），要求先成為成員會讓房主連
+        自己的房都打不開。`you_are_admin` 本來就用同一個 header 判定。
+
+        被踢的人不會是建立者（kick 擋掉了踢自己），所以這不是繞道。
+        """
+        if room["creator_session_key"] and session_key == room["creator_session_key"]:
+            return None
+        return await _member_or_403(room["id"], participant_id)
+
+    async def _member_or_403(room_id: str, participant_id: str | None):
+        """讀取房內內容的門檻：必須**曾經**是這個房的成員，且不是被踢出的。
+
+        沒有這道門檻時，「踢出」在使用者眼中就是沒有生效——被踢的人照樣讀得到
+        全部歷史與即時訊息，只是不能發言。房間必須是真的邊界，不能只是名冊。
+
+        ⚠️ 刻意**不**要求 `status='active'`：自己離開、或閒置逾時被移出的人，
+        回頭讀當時的歷史是正當的（封存房唯讀瀏覽本來就這樣用）。要求 active
+        會讓「離開房間」變成「銷毀自己的紀錄」，那不是離開的意思。
+        **被踢是唯一的例外**——那是一個「不要再看到這裡」的人為決定。
+
+        也刻意不更新 `last_seen_at`：讀取不是活躍證明，拿它當心跳會讓掛著
+        長輪詢的 agent 永遠掃不掉。即時通道（updates）另外要求 active 身分。
+        """
+        if not participant_id:
+            # 「你沒說你是誰」與「你不是成員」必須是兩句不同的話——它們把人
+            # 導向完全不同的處置（前者去找身分怎麼掉的，後者去找誰把我踢了）。
+            # 舊 client 沒帶標頭時最容易在這裡被誤導成「我被踢了嗎」
+            raise _err(401, "participant_header_required",
+                       "請求沒有帶 X-Participant-Id。這不是「你不是成員」，"
+                       "而是「還不知道你是誰」——先加入房間取得身分再讀。")
+        row = await (
+            await app.state.db.execute(
+                "SELECT status FROM participant WHERE id=? AND room_id=?",
+                (participant_id, room_id),
+            )
+        ).fetchone()
+        if row is None:
+            # 不分「查無此身分」與「身分屬於別的房間」：對非成員來說，
+            # 這個房間的存在與否本來就不該從錯誤碼推得出來
+            raise _err(403, "not_a_member",
+                       "你不是這個聊天室的成員（這個身分不屬於這個房間）")
+        if row["status"] == "kicked":
+            raise _err(403, "participant_kicked",
+                       "你已被管理員移出這個聊天室，看不到房內的內容")
         return row
 
     async def _touch_session(
@@ -456,8 +546,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def get_room(
         room_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
+        # 成員名冊與 session_key、來源 IP 都在這個回應裡，非成員不該看得到
+        await _creator_or_member(room, x_participant_id, x_session_key)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -662,9 +755,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         join_ip = request.client.host if request.client else None
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip) VALUES (?,?,?,?,?,?,?,?,?)",
+            " joined_at, last_seen_at, join_ip, join_token) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (pid, room_id, body.kind, session_key, name, body.role, now, now,
-             join_ip),
+             join_ip, getattr(request.state, "access_token", "")),
         )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
@@ -677,6 +770,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _touch_session(session_key, body.kind, ip=_client_ip(request))
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
+        logger.info(
+            "加入房間 %s（%s）", name, room_id, extra={
+                "event": "join", "room_id": room_id, "participant_id": pid,
+                "display_name": name, "session_key": session_key,
+                "kind": body.kind, "role": body.role, "ip": join_ip,
+                "token_hint": token_hint(getattr(request.state, "access_token", "")),
+                "via_assignment": assignment is not None,
+            },
+        )
         joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
                                      kind="system", system_event="join")
         out = {
@@ -705,6 +807,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         await db.execute(
             "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
+        )
+        logger.info(
+            "離開房間 %s（%s）", p["display_name"], room_id, extra={
+                "event": "leave", "room_id": room_id, "participant_id": p["id"],
+                "display_name": p["display_name"],
+                "session_key": p["session_key"],
+            },
         )
         await db.commit()
         await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
@@ -754,12 +863,50 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, target["session_key"]),
         )
         await db.commit()
+        # 只把 session_key 標成 kicked 擋不住任何人：那把鑰匙是被踢者自己在
+        # 本機產的（`human-<uuid4>`，設定畫面還有「重新產生」按鈕），換一把
+        # 就能大搖大擺走回來。**封鎖的對象必須是被封鎖者無法自行更換的識別**，
+        # 目前唯一符合的是主持人發出去的那張 access token。
+        #
+        # 一張 token 給多人共用時會一起斷——那是「一張發給一個人」的語意本來
+        # 就有的後果，不是這裡的例外，所以回應要說清楚撤掉的是哪一張。
+        revoked_token = ""
+        if target["join_token"]:
+            cur = await db.execute(
+                "UPDATE access_token SET revoked_at=? WHERE token=?"
+                " AND revoked_at IS NULL RETURNING label",
+                (now, target["join_token"]),
+            )
+            hit = await cur.fetchone()
+            if hit is not None:
+                revoked_token = hit["label"] or target["join_token"][:8]
+        await db.commit()
+        logger.info(
+            "移出成員 %s（%s）", target["display_name"], room_id, extra={
+                "event": "kick", "room_id": room_id, "target_id": target_id,
+                "display_name": target["display_name"],
+                "target_session_key": target["session_key"],
+                "by": me["display_name"], "by_participant_id": me["id"],
+                "revoked_token_hint": token_hint(target["join_token"]),
+                # 對方拿主 token 進來時撤不掉——這件事要進紀錄，
+                # 事後才查得出「為什麼踢了還在」
+                "access_still_open": not target["join_token"],
+            },
+        )
         await _post_message(
             room_id, None,
             f"{target['display_name']} 已被管理員移出聊天室", kind="system",
             system_event="kick",
         )
-        return {"ok": True}
+        return {
+            "ok": True,
+            # 撤掉了哪張邀請（空＝沒撤到）
+            "revoked_token_label": revoked_token,
+            # 對方是拿主 token（或在無 token 的開放模式下）進來的：主 token
+            # 不可撤銷——撤了所有人一起斷——所以他換個 session_key 就能再進來。
+            # 這件事必須講出來，不能讓管理員以為踢出等於切斷存取
+            "access_still_open": not target["join_token"],
+        }
 
     @app.post("/api/rooms/{room_id}/heartbeat", dependencies=[Depends(require_auth)])
     async def heartbeat(room_id: str, x_participant_id: str | None = Header(default=None)):
@@ -830,10 +977,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         before_seq: int | None = None,
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
+        x_participant_id: str | None = Header(default=None),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         兩者互斥；回傳一律以 seq 遞增排列。"""
         await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id)
         if before_seq is not None and after_seq:
             raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
         db = app.state.db
@@ -877,9 +1026,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id, allow_archived=True)
         db = app.state.db
-        me = None
-        if x_participant_id:
-            me = await _participant(x_participant_id, room_id)
+        # 從選填改必填：這是取得即時訊息的通道，非成員掛在這裡等於被踢之後
+        # 照樣旁聽整個房間。這裡要的是 **active** 身分（不是 _member_or_403
+        # 那種「曾經是成員」）——已經離開的人不需要即時推送，讓他掛著只是
+        # 白佔一條長輪詢
+        me = await _participant(x_participant_id, room_id)
 
         async def _status() -> str:
             row = await (
@@ -992,9 +1143,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     @app.get("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
-    async def list_room_assignments(room_id: str):
+    async def list_room_assignments(
+        room_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         """房間視角的指派列表（UI 檢視用，含所有狀態）。"""
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
+        await _creator_or_member(room, x_participant_id, x_session_key)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -1159,7 +1315,9 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/attachments/{attachment_id}/meta",
              dependencies=[Depends(require_auth)])
-    async def attachment_meta(attachment_id: str):
+    async def attachment_meta(
+        attachment_id: str, x_participant_id: str | None = Header(default=None)
+    ):
         """附件的 metadata。下載端點回的是檔案本體，拿不到檔名與型別。"""
         db = app.state.db
         row = await (
@@ -1173,12 +1331,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
+        # 附件跟著訊息走，門檻就跟著訊息一樣：非成員讀不到房內的檔案
+        await _member_or_403(row["room_id"], x_participant_id)
         meta = dict(row)
         meta["is_image"] = meta["mime"].startswith("image/")
         return {"attachment": meta}
 
     @app.get("/api/attachments/{attachment_id}", dependencies=[Depends(require_auth)])
-    async def download_attachment(attachment_id: str):
+    async def download_attachment(
+        attachment_id: str, x_participant_id: str | None = Header(default=None)
+    ):
         db = app.state.db
         row = await (
             await db.execute(
@@ -1187,6 +1349,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
+        await _member_or_403(row["room_id"], x_participant_id)
         path = _blob_path(row["sha256"])
         if not path.exists():
             # metadata 在、實體不在：備份只帶走 db 沒帶 attachments/ 就會這樣，
@@ -1278,7 +1441,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
     async def list_questions(
-        room_id: str, status: str | None = None, target_id: str | None = None
+        room_id: str,
+        status: str | None = None,
+        target_id: str | None = None,
+        x_participant_id: str | None = Header(default=None),
     ):
         """房內問題列表。
 
@@ -1286,6 +1452,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         要消除的東西，所以問題對房內成員一律可見，只有 UI 顯示是定向的。
         """
         await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id)
         db = app.state.db
         conds, params = ["q.room_id=?"], [room_id]
         if status:
@@ -1616,6 +1783,26 @@ def create_app(config: Config | None = None) -> FastAPI:
                 if kind == "subscribe":
                     rid = data["room_id"]
                     pid = str(data.get("participant_id") or "")
+                    # 這條是 App 的主要讀取通道：REST 收緊了而這裡沒收，
+                    # 被踢的人照樣即時收得到整個房間，等於白做
+                    try:
+                        await _member_or_403(rid, pid)
+                    except HTTPException as exc:
+                        detail = exc.detail
+                        async with send_lock:
+                            await ws.send_json({
+                                "type": "error", "room_id": rid,
+                                "code": detail.get("code") if isinstance(detail, dict)
+                                        else "not_a_member",
+                                "message": detail.get("message") if isinstance(detail, dict)
+                                           else "你不是這個聊天室的成員",
+                            })
+                        # 身分失效時要把既有 pump 一起收掉——訂閱是在還有效的
+                        # 時候建立的，被踢之後它會繼續推送
+                        if rid in pumps:
+                            pumps.pop(rid).cancel()
+                            pump_ids.pop(rid, None)
+                        continue
                     # 身分是 join 之後才拿得到的，client 因此會在同一個房間上
                     # 再 subscribe 一次來補帶 participant_id。只看「有沒有
                     # pump」的話那次會被整個忽略，而既有 pump 是用空身分建的
@@ -1652,7 +1839,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         cutoff = (now - timedelta(seconds=cfg.idle_timeout)).isoformat()
         idle = await (
             await db.execute(
-                "SELECT id, room_id, display_name FROM participant"
+                # session_key 給日誌用：事後要回答「被移出的是哪一個 session」
+                "SELECT id, room_id, display_name, session_key FROM participant"
                 " WHERE status='active' AND role='agent' AND last_seen_at < ?",
                 (cutoff,),
             )
@@ -1663,7 +1851,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (_now(), p["id"]),
             )
             await db.commit()
-            logger.info("sweep: 移除閒置 agent %s（room=%s）", p["display_name"], p["room_id"])
+            logger.info(
+                "sweep: 移除閒置 agent %s（room=%s）",
+                p["display_name"], p["room_id"], extra={
+                    "event": "idle_removed", "room_id": p["room_id"],
+                    "participant_id": p["id"], "display_name": p["display_name"],
+                    "session_key": p["session_key"],
+                },
+            )
             await _post_message(
                 p["room_id"], None,
                 f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
@@ -1743,8 +1938,11 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
+        # App 啟動時拿這裡的 build 與自己的比對：版本對不上要當場講出來，
+        # 而不是等使用者發現「說好做完的功能不在畫面上」
         return {
             "ok": True, "version": app.version,
+            "build": build_info(),
             "idle_timeout_seconds": cfg.idle_timeout,
             "max_attachment_bytes": cfg.max_attachment_bytes,
         }

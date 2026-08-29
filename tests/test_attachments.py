@@ -67,7 +67,8 @@ async def test_upload_attach_and_download_roundtrip(tmp_path):
             assert r.status_code == 200
 
             msgs = (
-                await client.get(f"/api/rooms/{room_id}/messages")
+                await client.get(f"/api/rooms/{room_id}/messages",
+                                 headers={"X-Participant-Id": me["participant_id"]})
             ).json()["messages"]
             attached = [m for m in msgs if m["attachments"]]
             assert len(attached) == 1
@@ -76,7 +77,8 @@ async def test_upload_attach_and_download_roundtrip(tmp_path):
             assert meta["is_image"] is True
             assert meta["size"] == len(blob)
 
-            r = await client.get(f"/api/attachments/{aid}")
+            r = await client.get(f"/api/attachments/{aid}",
+                                 headers={"X-Participant-Id": me["participant_id"]})
             assert r.status_code == 200
             assert r.content == blob
 
@@ -101,7 +103,8 @@ async def test_identical_content_is_stored_once(tmp_path):
             assert len(blobs) == 1, "實體只該有一份"
             # 兩筆 metadata 都下載得到，各自帶回自己的檔名
             for r, name in ((r1, "x.txt"), (r2, "y.txt")):
-                got = await client.get(f"/api/attachments/{r.json()['id']}")
+                got = await client.get(f"/api/attachments/{r.json()['id']}",
+                                 headers={"X-Participant-Id": a["participant_id"]})
                 assert got.content == blob
                 assert name in got.headers.get("content-disposition", "")
 
@@ -187,7 +190,8 @@ async def test_filename_never_becomes_a_path(tmp_path):
             r = await _upload(client, room_id, me["participant_id"], b"x", evil)
             assert r.status_code == 200
             meta = (
-                await client.get(f"/api/attachments/{r.json()['id']}/meta")
+                await client.get(f"/api/attachments/{r.json()['id']}/meta",
+                                 headers={"X-Participant-Id": me["participant_id"]})
             ).json()["attachment"]
             assert "/" not in meta["filename"] and "\\" not in meta["filename"]
             # 實體檔一律落在 attachments/ 底下，且檔名就是內容雜湊
@@ -216,7 +220,8 @@ async def test_deleted_message_hides_its_attachments(tmp_path):
             await client.delete(f"/api/messages/{mid}")
 
             msgs = (
-                await client.get(f"/api/rooms/{room_id}/messages")
+                await client.get(f"/api/rooms/{room_id}/messages",
+                                 headers={"X-Participant-Id": me["participant_id"]})
             ).json()["messages"]
             target = next(m for m in msgs if m["id"] == mid)
             assert target["deleted"] is True
@@ -235,7 +240,8 @@ async def test_missing_blob_reports_clearly(tmp_path):
             aid, sha = r.json()["id"], r.json()["sha256"]
             (tmp_path / "attachments" / sha[:2] / sha).unlink()
 
-            r = await client.get(f"/api/attachments/{aid}")
+            r = await client.get(f"/api/attachments/{aid}",
+                                 headers={"X-Participant-Id": me["participant_id"]})
             assert r.status_code == 410
             assert r.json()["detail"]["code"] == "attachment_blob_missing"
 
@@ -270,5 +276,6 @@ async def test_concurrent_uploads_of_same_content(tmp_path):
             shas = {r.json()["sha256"] for r in results}
             assert len(shas) == 1
             for r in results:
-                got = await client.get(f"/api/attachments/{r.json()['id']}")
+                got = await client.get(f"/api/attachments/{r.json()['id']}",
+                                 headers={"X-Participant-Id": me["participant_id"]})
                 assert got.content == blob

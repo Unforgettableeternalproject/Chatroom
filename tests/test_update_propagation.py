@@ -40,7 +40,8 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
             # 讀到底，拿到 cursor
             data = (
                 await client.get(
-                    f"/api/rooms/{room_id}/updates", params={"after_seq": 0, "timeout": 1}
+                    f"/api/rooms/{room_id}/updates",
+                    params={"after_seq": 0, "timeout": 1}, headers=headers,
                 )
             ).json()
             cursor = data["last_seq"]
@@ -50,7 +51,7 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
             data = (
                 await client.get(
                     f"/api/rooms/{room_id}/updates",
-                    params={"after_seq": cursor, "timeout": 1},
+                    params={"after_seq": cursor, "timeout": 1}, headers=headers,
                 )
             ).json()
             changed = {m["id"]: m for m in data["messages"]}
@@ -62,7 +63,7 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
             data = (
                 await client.get(
                     f"/api/rooms/{room_id}/updates",
-                    params={"after_seq": cursor, "timeout": 1},
+                    params={"after_seq": cursor, "timeout": 1}, headers=headers,
                 )
             ).json()
             changed = {m["id"]: m for m in data["messages"]}
@@ -71,10 +72,22 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
             data = (
                 await client.get(
                     f"/api/rooms/{room_id}/updates",
-                    params={"after_seq": data["last_seq"], "timeout": 0.2},
+                    params={"after_seq": data["last_seq"], "timeout": 0.2}, headers=headers,
                 )
             ).json()
             assert data["messages"] == []
+
+
+def _next_messages(ws):
+    """取下一則 messages 事件。
+
+    帶身分訂閱時 pump 會先推一則 ``questions``（多半是空清單）——那是定向
+    問題的通道，與訊息共用同一條 socket。測試要的是訊息，跳過其餘事件。
+    """
+    while True:
+        evt = ws.receive_json()
+        if evt["type"] == "messages":
+            return evt
 
 
 def test_ws_receives_pin_change_of_old_message(tmp_path):
@@ -93,10 +106,12 @@ def test_ws_receives_pin_change_of_old_message(tmp_path):
         ).json()["id"]
 
         with client.websocket_connect("/ws") as ws:
-            ws.send_json({"type": "subscribe", "room_id": room_id, "after_seq": 0})
-            ws.receive_json()  # 既有訊息批
+            # 訂閱要帶身分：WS 是 App 的主要讀取通道，不驗成員等於留一扇後門
+            ws.send_json({"type": "subscribe", "room_id": room_id, "after_seq": 0,
+                          "participant_id": p["participant_id"]})
+            _next_messages(ws)  # 既有訊息批
             client.post(f"/api/messages/{mid}/pin", headers=headers)
-            evt = ws.receive_json()
+            evt = _next_messages(ws)
             pinned = {m["id"]: m["pinned"] for m in evt["messages"]}
             assert pinned.get(mid) is True
 
@@ -108,7 +123,9 @@ async def test_room_assignments_and_list_metadata_and_reply_preview(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post(
+                "/api/rooms",
+                json={"name": "房", "session_key": "owner-key"})).json()["id"]
             aid = (
                 await client.post(
                     f"/api/rooms/{room_id}/assignments",
@@ -118,7 +135,9 @@ async def test_room_assignments_and_list_metadata_and_reply_preview(tmp_path):
             await client.post(f"/api/assignments/{aid}/resolve", json={"status": "declined"})
 
             # 房間視角的指派列表（含已解決的）
-            data = (await client.get(f"/api/rooms/{room_id}/assignments")).json()
+            data = (await client.get(
+                f"/api/rooms/{room_id}/assignments",
+                headers={"X-Session-Key": "owner-key"})).json()
             assert [a["status"] for a in data["assignments"]] == ["declined"]
 
             # 房間列表帶最後活動資訊
@@ -144,7 +163,8 @@ async def test_room_assignments_and_list_metadata_and_reply_preview(tmp_path):
                 f"/api/rooms/{room_id}/messages",
                 json={"content": "回覆", "reply_to": mid}, headers=headers,
             )
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                              headers=headers)).json()["messages"]
             reply = msgs[-1]
             assert reply["reply_preview"]["sender_name"] == "Nova"
             assert len(reply["reply_preview"]["excerpt"]) == 80

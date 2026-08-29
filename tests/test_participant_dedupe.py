@@ -37,7 +37,9 @@ async def test_rename_rejoin_dedupes_with_previous_name(tmp_path):
             second = await _join(client, room_id, "s1", name="Novia")
             await _join(client, room_id, "s2", name="Miller")
 
-            data = (await client.get(f"/api/rooms/{room_id}")).json()
+            data = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": second["participant_id"]})).json()
             participants = data["participants"]
 
             # s1 只出現一次（active 代表列），s2 照常
@@ -61,11 +63,11 @@ async def test_duplicate_name_between_left_and_active_gets_hint(tmp_path):
                 f"/api/rooms/{room_id}/leave",
                 headers={"X-Participant-Id": first["participant_id"]},
             )
-            await _join(client, room_id, "session-beta", name="Nova")
+            beta = await _join(client, room_id, "session-beta", name="Nova")
 
-            participants = (await client.get(f"/api/rooms/{room_id}")).json()[
-                "participants"
-            ]
+            participants = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": beta["participant_id"]})).json()["participants"]
             assert len(participants) == 2
             hints = {p["distinct_hint"] for p in participants}
             # 兩個 Nova 各自帶「不同」的 session 尾碼，且不含整把 key
@@ -81,10 +83,10 @@ async def test_unique_names_have_no_hint(tmp_path):
         async with app.router.lifespan_context(app):
             room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
             await _join(client, room_id, "s1", name="Nova")
-            await _join(client, room_id, "s2", name="Miller")
-            participants = (await client.get(f"/api/rooms/{room_id}")).json()[
-                "participants"
-            ]
+            miller = await _join(client, room_id, "s2", name="Miller")
+            participants = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": miller["participant_id"]})).json()["participants"]
             assert all("distinct_hint" not in p for p in participants)
 
 
@@ -98,11 +100,11 @@ async def test_same_name_rejoin_has_no_previous_name(tmp_path):
                 f"/api/rooms/{room_id}/leave",
                 headers={"X-Participant-Id": first["participant_id"]},
             )
-            await _join(client, room_id, "s1", name="Novia")
+            again = await _join(client, room_id, "s1", name="Novia")
 
-            participants = (await client.get(f"/api/rooms/{room_id}")).json()[
-                "participants"
-            ]
+            participants = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": again["participant_id"]})).json()["participants"]
             assert len(participants) == 1
             assert "previous_name" not in participants[0]
             assert first["participant_id"] in participants[0]["alias_ids"]

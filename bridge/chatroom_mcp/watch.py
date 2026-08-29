@@ -78,6 +78,7 @@ if __package__ in (None, ""):
     __package__ = "chatroom_mcp"
 
 from . import identity  # noqa: E402
+from .version import version_string  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 
@@ -629,6 +630,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     load_env_file()  # 只補缺，不覆寫——所以命令列的顯式值要在它之後才蓋得掉
     args = build_parser().parse_args(argv)
+    # 第一行就報版本：測試端回報問題時，「你手上的 kit 是哪一份」必須是
+    # 從 log 開頭就答得出來的問題，而不是事後去比對檔案時間
+    print(f"[watch] chatroom-mcp {version_string()}", file=sys.stderr, flush=True)
     if args.kind:
         os.environ["CHATROOM_AGENT_KIND"] = args.kind
     if args.label:

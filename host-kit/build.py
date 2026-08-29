@@ -20,6 +20,9 @@ KIT_DIR = Path(__file__).resolve().parent
 REPO = KIT_DIR.parent
 DIST = REPO / "dist"
 
+sys.path.insert(0, str(REPO / "scripts"))
+from buildstamp import read_app_version, report, stamp  # noqa: E402
+
 # ⚠️ 這裡漏掉任何一項，主持人的**實際聊天內容**就會被打包發出去。
 # attachments 是實測踩到的：Hub 在 server/ 底下跑時，使用者上傳的截圖、
 # log、報告全部落在 server/attachments/，跟著 copytree 進了交付包。
@@ -29,6 +32,8 @@ DIST = REPO / "dist"
 SERVER_IGNORE = shutil.ignore_patterns(
     "__pycache__", "*.egg-info", ".env", ".env.*", "chatroom.db*",
     "logs", "attachments", ".tunnel-url",
+    # 上一次打包留下的版本戳記：一定要重寫，不能沿用
+    "_build.json",
 )
 
 
@@ -45,6 +50,13 @@ def main() -> None:
     for name in ("run-hub.cmd", "hub-service.ps1", "run-tunnel.cmd", "tunnel.py"):
         shutil.copy2(REPO / "scripts" / name, stage / "scripts" / name)
 
+    # 交付包裡沒有 .git，版本只有在打包這一刻抓得到
+    info = stamp(
+        REPO,
+        stage / "server" / "chatroom_server" / "_build.json",
+        read_app_version(REPO / "server" / "chatroom_server" / "version.py"),
+    )
+
     zip_path = DIST / "chatroom-hub-kit.zip"
     if zip_path.exists():
         zip_path.unlink()
@@ -54,6 +66,7 @@ def main() -> None:
                 zf.write(f, f.relative_to(DIST))
     size_kb = zip_path.stat().st_size // 1024
     print(f"✅ {zip_path}（{size_kb} KB）")
+    report(info)
 
 
 if __name__ == "__main__":

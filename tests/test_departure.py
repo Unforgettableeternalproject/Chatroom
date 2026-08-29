@@ -219,7 +219,9 @@ async def test_system_messages_carry_machine_readable_event(tmp_path):
             await client.post(f"/api/rooms/{room_id}/archive")
 
             msgs = (
-                await client.get(f"/api/rooms/{room_id}/messages")
+                await client.get(
+                    f"/api/rooms/{room_id}/messages",
+                    headers={"X-Participant-Id": admin["participant_id"]})
             ).json()["messages"]
             events = [m["system_event"] for m in msgs if m["kind"] == "system"]
             assert "join" in events

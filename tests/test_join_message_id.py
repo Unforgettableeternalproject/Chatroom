@@ -40,7 +40,10 @@ async def test_join_returns_the_join_message_identity(tmp_path):
             assert isinstance(joined["join_seq"], int)
 
             # 指的必須真的是那一則：id、seq、sender、system_event 全部對得上
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            msgs = (await client.get(
+                f"/api/rooms/{room_id}/messages",
+                headers={"X-Participant-Id": joined["participant_id"]},
+            )).json()["messages"]
             match = [m for m in msgs if m["id"] == joined["join_message_id"]]
             assert len(match) == 1
             msg = match[0]
@@ -66,7 +69,10 @@ async def test_idempotent_rejoin_has_no_join_message(tmp_path):
             assert again.get("join_seq") is None
 
             # 而且確實沒有第二則加入訊息
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()["messages"]
+            msgs = (await client.get(
+                f"/api/rooms/{room_id}/messages",
+                headers={"X-Participant-Id": first["participant_id"]},
+            )).json()["messages"]
             joins = [m for m in msgs if m.get("system_event") == "join"]
             assert len(joins) == 1
             assert joins[0]["id"] == first["join_message_id"]

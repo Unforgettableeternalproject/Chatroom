@@ -46,6 +46,7 @@ from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
+from .version import version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
 # CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
@@ -188,7 +189,8 @@ def _participant_id_by_name(room_id: str, name: str) -> str:
     agent 手上有的是名字（訊息裡看到的那個），Hub 要的是 id。這層轉換放在
     bridge，免得每個 agent 自己去翻房間詳情——翻錯的話會靜靜地問到別人身上。
     """
-    data = hub().request("GET", f"/api/rooms/{room_id}")
+    # 帶身分：房間詳情已經收成「房內的人才看得到」，裸請求會 401
+    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}")
     actives = [
         p for p in data.get("participants", [])
         if p.get("status") == "active"
@@ -637,20 +639,62 @@ def chatroom_send_file(
     }
 
 
+def _resolve_attachment_room(attachment_id: str, room_id: str) -> tuple[str, dict]:
+    """找出這個附件屬於哪個房，順便把 metadata 帶回來。
+
+    附件讀取要房內身分，而 agent 手上通常只有訊息裡的 attachment id——**逼它
+    自己記住那則訊息在哪個房，是把 Hub 查得到的事推給呼叫端**。所以 room_id
+    省略時就拿本機已加入的房間逐一試；房數是個位數，一次 meta 請求很便宜。
+
+    ⚠️ 只試「本機有身分」的房：沒有身分的房本來就會被 Hub 擋，試了只是白打。
+    """
+    if room_id:
+        return room_id, _room_request(
+            room_id, "GET", f"/api/attachments/{attachment_id}/meta"
+        )["attachment"]
+    candidates = [rid for rid, entry in state().rooms().items()
+                  if entry.get("participant_id")]
+    if not candidates:
+        raise HubError(
+            "你還沒有任何房間的身分，取不到附件。先 chatroom_join 加入附件所在的"
+            "房間，或呼叫時明確指定 room_id。",
+            identity_invalid=True,
+        )
+    last: HubError | None = None
+    for rid in candidates:
+        try:
+            meta = _room_request(
+                rid, "GET", f"/api/attachments/{attachment_id}/meta"
+            )["attachment"]
+        except HubError as exc:
+            last = exc
+            continue
+        return rid, meta
+    # 講清楚試過哪些房：不然「找不到附件」與「我不在那個房」長得一模一樣
+    raise HubError(
+        f"在你已加入的房間裡找不到這個附件（試過 {len(candidates)} 個）。"
+        f"附件只有房內的人取得到——如果它在別的房，先加入那個房。"
+        f"（最後一個錯誤：{last}）"
+    )
+
+
 @mcp.tool()
 @_guard
-def chatroom_get_file(attachment_id: str, save_dir: str = "") -> dict:
+def chatroom_get_file(attachment_id: str, room_id: str = "",
+                      save_dir: str = "") -> dict:
     """把聊天室裡的附件下載到本機，回傳存檔路徑。
 
     **圖片要「看」的話，取回後用你的檔案讀取工具打開這個路徑**——附件內容不會
     塞進工具回應裡，那會把整個對話脈絡吃掉，大一點的圖甚至一則就爆掉。
 
     ``save_dir`` 省略時存到系統暫存目錄。附件 id 在訊息的 ``attachments`` 欄位裡。
+    ``room_id`` 是那則訊息所在的房間（附件跟著訊息走，房外的人取不到）；
+    省略時會拿本機已加入的房間身分逐一試，通常只有幾個房，成本很低。
     """
-    meta = hub().request("GET", f"/api/attachments/{attachment_id}/meta")
-    info = meta["attachment"]
-    content = hub().request(
-        "GET", f"/api/attachments/{attachment_id}", raw=True, timeout=120.0
+    room_id, info = _resolve_attachment_room(attachment_id, room_id)
+    content = _room_request(
+        room_id, "GET", f"/api/attachments/{attachment_id}",
+        raw=True, timeout=120.0,
     )
     target_dir = (
         Path(save_dir).expanduser()
@@ -674,6 +718,7 @@ def chatroom_get_file(attachment_id: str, save_dir: str = "") -> dict:
 
 
 def main() -> None:
+    print(f"[chatroom-mcp] {version_string()}", file=sys.stderr)
     # token 缺席時每次呼叫才報 401 會讓人誤以為 Hub 或指派壞了——啟動就把話說清楚
     if not os.environ.get("CHATROOM_TOKEN"):
         print(

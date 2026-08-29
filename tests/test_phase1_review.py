@@ -136,7 +136,8 @@ async def test_app_works_on_upgraded_db(tmp_path):
             assert (
                 await client.post(f"/api/messages/{mid}/pin", headers=headers)
             ).status_code == 200
-            msgs = (await client.get("/api/rooms/r0/messages")).json()["messages"]
+            msgs = (await client.get("/api/rooms/r0/messages",
+                              headers=headers)).json()["messages"]
             assert any(m["id"] == "m0" for m in msgs)
 
 
@@ -200,7 +201,8 @@ async def test_reply_target_validation(tmp_path):
                 json={"content": "回覆", "reply_to": a_mid}, headers=ha,
             )
             assert r.status_code == 200
-            msgs = (await client.get(f"/api/rooms/{room_a}/messages")).json()["messages"]
+            msgs = (await client.get(f"/api/rooms/{room_a}/messages",
+                              headers=ha)).json()["messages"]
             reply = next(m for m in msgs if m["reply_to"] == a_mid)
             assert reply["reply_preview"]["sender_name"] == "Alpha"
             assert reply["reply_preview"]["excerpt"] == "A 房原文"
@@ -236,6 +238,8 @@ async def test_reply_preview_cross_room_defense(tmp_path):
                 "UPDATE message SET reply_to=? WHERE id=?", (b_mid, a_mid)
             )
             await app.state.db.commit()
-            msgs = (await client.get(f"/api/rooms/{room_a}/messages")).json()["messages"]
+            msgs = (await client.get(
+                f"/api/rooms/{room_a}/messages",
+                headers={"X-Participant-Id": pa["participant_id"]})).json()["messages"]
             dirty = next(m for m in msgs if m["id"] == a_mid)
             assert dirty["reply_preview"] is None

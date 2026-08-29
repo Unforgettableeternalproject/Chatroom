@@ -44,7 +44,10 @@ async def test_creator_kicks_and_target_cannot_rejoin(tmp_path):
             assert r.status_code == 200
 
             detail = (
-                await client.get(f"/api/rooms/{room_id}")
+                await client.get(
+                    f"/api/rooms/{room_id}",
+                    headers={"X-Participant-Id": admin["participant_id"]},
+                )
             ).json()
             by_name = {p["display_name"]: p["status"] for p in detail["participants"]}
             assert by_name["Guest"] == "kicked"
@@ -60,9 +63,10 @@ async def test_creator_kicks_and_target_cannot_rejoin(tmp_path):
             assert r.status_code == 403
             assert r.json()["detail"]["code"] == "kicked"
 
-            msgs = (await client.get(f"/api/rooms/{room_id}/messages")).json()[
-                "messages"
-            ]
+            msgs = (await client.get(
+                f"/api/rooms/{room_id}/messages",
+                headers={"X-Participant-Id": admin["participant_id"]},
+            )).json()["messages"]
             assert any("已被管理員移出" in m["content"] for m in msgs)
 
 
@@ -102,7 +106,11 @@ async def test_admin_flag_and_creatorless_room(tmp_path):
                     headers={"X-Session-Key": "admin-key"},
                 )
             ).json()
-            other_view = (await client.get(f"/api/rooms/{room_id}")).json()
+            # 非建立者要看房間詳情得先是成員——房間是邊界，不是名冊
+            other = await _join(client, room_id, "other-key", "Other")
+            other_view = (await client.get(
+                f"/api/rooms/{room_id}",
+                headers={"X-Participant-Id": other["participant_id"]})).json()
             assert admin_view["you_are_admin"] is True
             assert other_view["you_are_admin"] is False
             # creator key 不可外流
