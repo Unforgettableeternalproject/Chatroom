@@ -7,15 +7,18 @@ WebSocket 通道留待 Phase 1（UI 開工前）。
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from fastapi import (
-    Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket,
-    WebSocketDisconnect,
+    Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile,
+    WebSocket, WebSocketDisconnect,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .config import Config
@@ -64,6 +67,8 @@ class MessagePost(BaseModel):
     content: str = Field(min_length=1, max_length=32768)
     mentions: list[str] = []
     reply_to: str | None = None
+    # 先上傳拿到 id，再隨訊息帶上——分兩步是為了讓上傳可以重試而不會重複發言
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
 class AssignmentCreate(BaseModel):
@@ -252,6 +257,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _message_rows_to_json(rows, db) -> list[dict]:
         out = []
+        attachments = await _attachments_for([r["id"] for r in rows], db)
         for r in rows:
             sender_name = None
             if r["sender_id"]:
@@ -288,6 +294,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "mentions": json.loads(r["mentions"]),
                 "reply_to": r["reply_to"], "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
+                "attachments": [] if r["deleted"] else attachments.get(r["id"], []),
                 "created_at": r["created_at"],
             })
         return out
@@ -652,11 +659,34 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id)
         p = await _participant(x_participant_id, room_id)
+        db = app.state.db
+        if body.attachment_ids:
+            # 只認「這個房間、還沒綁過訊息」的附件——否則可以把別房的附件
+            # 掛到自己的訊息上，等於繞過房間邊界讀別人的檔案
+            marks = ",".join("?" for _ in body.attachment_ids)
+            rows = await (
+                await db.execute(
+                    f"SELECT id FROM attachment WHERE id IN ({marks})"
+                    f" AND room_id=? AND message_id IS NULL",
+                    [*body.attachment_ids, room_id],
+                )
+            ).fetchall()
+            found = {r["id"] for r in rows}
+            missing = [a for a in body.attachment_ids if a not in found]
+            if missing:
+                raise _err(422, "attachment_not_available",
+                           "附件不存在、不屬於這個房間，或已經附在別的訊息上")
         result = await _post_message(
             room_id, p["id"], body.content, mentions=body.mentions, reply_to=body.reply_to
         )
+        if body.attachment_ids:
+            marks = ",".join("?" for _ in body.attachment_ids)
+            await db.execute(
+                f"UPDATE attachment SET message_id=? WHERE id IN ({marks})",
+                [result["id"], *body.attachment_ids],
+            )
+            await db.commit()
         if body.mentions:
-            db = app.state.db
             rows = await (
                 await db.execute(
                     "SELECT display_name FROM participant WHERE room_id=?"
@@ -881,6 +911,142 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
         await db.commit()
         return {"ok": True}
+
+    # ---------- 附件 ----------
+
+    def _attachment_root() -> Path:
+        """附件實體的存放根目錄；預設放在資料庫檔旁邊，備份時一起帶走。"""
+        if cfg.attachment_dir:
+            root = Path(cfg.attachment_dir)
+        else:
+            root = Path(cfg.db_path).resolve().parent / "attachments"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _blob_path(sha: str) -> Path:
+        """內容定址：同一份檔案重複上傳只存一份，且路徑完全由雜湊決定。
+
+        絕不用使用者給的檔名組路徑——那是目錄穿越的標準入口，而附件的來源
+        包含外部 agent。原始檔名只留在 DB 裡供顯示。
+        """
+        root = _attachment_root()
+        sub = root / sha[:2]
+        sub.mkdir(parents=True, exist_ok=True)
+        return sub / sha
+
+    async def _attachments_for(message_ids: list[str], db) -> dict[str, list[dict]]:
+        if not message_ids:
+            return {}
+        marks = ",".join("?" for _ in message_ids)
+        rows = await (
+            await db.execute(
+                f"SELECT id, message_id, filename, mime, size FROM attachment"
+                f" WHERE message_id IN ({marks}) ORDER BY created_at",
+                message_ids,
+            )
+        ).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["message_id"], []).append({
+                "id": r["id"], "filename": r["filename"],
+                "mime": r["mime"], "size": r["size"],
+                "is_image": r["mime"].startswith("image/"),
+            })
+        return out
+
+    @app.post("/api/rooms/{room_id}/attachments", dependencies=[Depends(require_auth)])
+    async def upload_attachment(
+        room_id: str,
+        file: UploadFile = File(...),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """上傳一個附件，回傳 id。要讓它出現在對話裡，再用 attachment_ids 發訊息。
+
+        分兩步而不是一次做完：上傳可能因為檔案大而失敗或逾時，綁在發言裡的話
+        重試就會重複發言。
+        """
+        await _room_or_404(room_id)
+        p = await _participant(x_participant_id, room_id)
+        digest = hashlib.sha256()
+        size = 0
+        # 邊讀邊寫暫存檔：整份讀進記憶體的話，幾個並發的大檔就能把 Hub 吃掉
+        root = _attachment_root()
+        tmp = root / f".upload-{_uid()}"
+        try:
+            with tmp.open("wb") as fh:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > cfg.max_attachment_bytes:
+                        raise _err(
+                            413, "attachment_too_large",
+                            f"檔案超過上限 "
+                            f"{cfg.max_attachment_bytes // (1024 * 1024)} MB",
+                        )
+                    digest.update(chunk)
+                    fh.write(chunk)
+            if size == 0:
+                raise _err(422, "empty_attachment", "檔案是空的")
+            sha = digest.hexdigest()
+            target = _blob_path(sha)
+            if target.exists():
+                tmp.unlink()          # 內容已存在，共用同一份實體
+            else:
+                tmp.replace(target)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+        aid = _uid()
+        db = app.state.db
+        await db.execute(
+            "INSERT INTO attachment (id, room_id, message_id, uploader_id,"
+            " filename, mime, size, sha256, created_at)"
+            " VALUES (?,?,NULL,?,?,?,?,?,?)",
+            (aid, room_id, p["id"], Path(file.filename or "檔案").name,
+             file.content_type or "application/octet-stream", size, sha, _now()),
+        )
+        await db.commit()
+        return {"id": aid, "size": size, "sha256": sha,
+                "mime": file.content_type or "application/octet-stream"}
+
+    @app.get("/api/attachments/{attachment_id}/meta",
+             dependencies=[Depends(require_auth)])
+    async def attachment_meta(attachment_id: str):
+        """附件的 metadata。下載端點回的是檔案本體，拿不到檔名與型別。"""
+        db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT a.id, a.room_id, a.message_id, a.filename, a.mime,"
+                " a.size, a.created_at, p.display_name AS uploader_name"
+                " FROM attachment a LEFT JOIN participant p ON p.id=a.uploader_id"
+                " WHERE a.id=?",
+                (attachment_id,),
+            )
+        ).fetchone()
+        if row is None:
+            raise _err(404, "attachment_not_found", "找不到這個附件")
+        meta = dict(row)
+        meta["is_image"] = meta["mime"].startswith("image/")
+        return {"attachment": meta}
+
+    @app.get("/api/attachments/{attachment_id}", dependencies=[Depends(require_auth)])
+    async def download_attachment(attachment_id: str):
+        db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT * FROM attachment WHERE id=?", (attachment_id,)
+            )
+        ).fetchone()
+        if row is None:
+            raise _err(404, "attachment_not_found", "找不到這個附件")
+        path = _blob_path(row["sha256"])
+        if not path.exists():
+            # metadata 在、實體不在：備份只帶走 db 沒帶 attachments/ 就會這樣，
+            # 講清楚比回一個空的 404 有用
+            raise _err(410, "attachment_blob_missing",
+                       "附件的內容已不在伺服器上（資料庫與附件目錄可能不同步）")
+        return FileResponse(
+            path, media_type=row["mime"], filename=row["filename"]
+        )
 
     # ---------- 向人類提問 ----------
 

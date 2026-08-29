@@ -40,6 +40,16 @@ class Config:
     updates_batch_limit: int = field(
         default_factory=lambda: int(os.environ.get("CHATROOM_UPDATES_LIMIT", "200"))
     )
+    # 附件儲存目錄；空字串＝放在資料庫檔旁邊的 attachments/
+    attachment_dir: str = field(
+        default_factory=lambda: os.environ.get("CHATROOM_ATTACHMENT_DIR", "")
+    )
+    # 單一附件大小上限（位元組），預設 25 MB
+    max_attachment_bytes: int = field(
+        default_factory=lambda: int(
+            os.environ.get("CHATROOM_MAX_ATTACHMENT_BYTES", str(25 * 1024 * 1024))
+        )
+    )
     # 日誌等級（chatroom logger）
     log_level: str = field(
         default_factory=lambda: os.environ.get("CHATROOM_LOG_LEVEL", "INFO")

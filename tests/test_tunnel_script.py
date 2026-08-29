@@ -53,3 +53,20 @@ def test_isolation_args_cover_both_leftovers():
     args = tunnel.isolation_args()
     assert "--config" in args
     assert "--origincert" in args
+
+
+def test_env_vars_win_over_dotenv(monkeypatch):
+    """Hub 啟動時真實環境變數優先、.env 只補缺——隧道必須用同一套語意。
+
+    否則「用環境變數啟動 Hub」這條合法路徑上，Hub 聽在 A、隧道轉到 B，
+    而兩邊各自看起來都正常。
+    """
+    monkeypatch.setenv("CHATROOM_HOST", "10.1.2.3")
+    assert tunnel.origin_host({"CHATROOM_HOST": "0.0.0.0"}, None) == "10.1.2.3"
+    monkeypatch.setenv("CHATROOM_PORT", "9999")
+    assert tunnel.setting({"CHATROOM_PORT": "8787"}, "CHATROOM_PORT") == "9999"
+
+
+def test_dotenv_used_when_env_var_absent(monkeypatch):
+    monkeypatch.delenv("CHATROOM_HOST", raising=False)
+    assert tunnel.origin_host({"CHATROOM_HOST": "26.0.0.1"}, None) == "26.0.0.1"

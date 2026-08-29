@@ -28,7 +28,7 @@ if hasattr(sys.stdout, "reconfigure"):
 KIT = Path(__file__).resolve().parent
 VENV = KIT / ".venv"
 ENV_FILE = KIT / "server" / ".env"
-DEPS = ["fastapi", "uvicorn[standard]", "aiosqlite"]
+DEPS = ["fastapi", "uvicorn[standard]", "aiosqlite", "python-multipart"]
 
 
 def ask(prompt: str, default: str = "") -> str:

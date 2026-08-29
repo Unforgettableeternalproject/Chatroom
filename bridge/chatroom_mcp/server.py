@@ -26,8 +26,10 @@ participant_id 是「每房間」的身分：join 後由 bridge 寫入本機狀�
 from __future__ import annotations
 
 import functools
+import mimetypes
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -553,6 +555,92 @@ def chatroom_questions(room_id: str, pending_only: bool = True) -> dict:
         "GET", f"/api/rooms/{room_id}/questions", params=params
     )
     return {"questions": data["questions"]}
+
+
+# ---------- 附件 ----------
+
+
+@mcp.tool()
+@_guard
+def chatroom_send_file(
+    room_id: str,
+    file_path: str,
+    message: str = "",
+    mentions: list[str] | None = None,
+) -> dict:
+    """把本機的一個檔案（截圖、log、報告…）送進聊天室。
+
+    圖片對協作特別有用——網頁測試、UI 問題、圖表，用講的往往講不清楚，
+    直接給人看快得多。收到的人用 ``chatroom_get_file`` 取回。
+
+    ``message`` 是隨檔案一起發的說明；省略時自動用檔名。單檔上限由 Hub 設定
+    （預設 25 MB）。需要先 chatroom_join。
+    """
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        raise HubError(f"找不到檔案：{path}")
+    mime, _ = mimetypes.guess_type(path.name)
+    with path.open("rb") as fh:
+        uploaded = _room_request(
+            room_id,
+            "POST",
+            f"/api/rooms/{room_id}/attachments",
+            files={"file": (path.name, fh, mime or "application/octet-stream")},
+            timeout=120.0,
+        )
+    posted = _room_request(
+        room_id,
+        "POST",
+        f"/api/rooms/{room_id}/messages",
+        json={
+            "content": message or f"（檔案）{path.name}",
+            "mentions": mentions or [],
+            "attachment_ids": [uploaded["id"]],
+        },
+    )
+    return {
+        "attachment_id": uploaded["id"],
+        "filename": path.name,
+        "size": uploaded["size"],
+        "message_id": posted["id"],
+        "seq": posted["seq"],
+    }
+
+
+@mcp.tool()
+@_guard
+def chatroom_get_file(attachment_id: str, save_dir: str = "") -> dict:
+    """把聊天室裡的附件下載到本機，回傳存檔路徑。
+
+    **圖片要「看」的話，取回後用你的檔案讀取工具打開這個路徑**——附件內容不會
+    塞進工具回應裡，那會把整個對話脈絡吃掉，大一點的圖甚至一則就爆掉。
+
+    ``save_dir`` 省略時存到系統暫存目錄。附件 id 在訊息的 ``attachments`` 欄位裡。
+    """
+    meta = hub().request("GET", f"/api/attachments/{attachment_id}/meta")
+    info = meta["attachment"]
+    content = hub().request(
+        "GET", f"/api/attachments/{attachment_id}", raw=True, timeout=120.0
+    )
+    target_dir = (
+        Path(save_dir).expanduser()
+        if save_dir
+        else Path(tempfile.gettempdir()) / "chatroom-files"
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # 檔名來自 Hub 的 metadata，也就是**其他 agent 上傳時給的字串**。只取
+    # basename：讓遠端字串參與組路徑就是目錄穿越，一個 ../ 就寫到別處去了
+    safe = Path(str(info.get("filename") or attachment_id)).name or attachment_id
+    path = target_dir / safe
+    path.write_bytes(content)
+    return {
+        "path": str(path),
+        "filename": info.get("filename"),
+        "mime": info.get("mime"),
+        "size": len(content),
+        "is_image": info.get("is_image", False),
+        "hint": "這是本機路徑。要看圖片內容請用檔案讀取工具開啟它。",
+    }
 
 
 def main() -> None:

@@ -73,6 +73,15 @@ def read_env() -> dict[str, str]:
     return values
 
 
+def setting(env: dict[str, str], key: str, default: str = "") -> str:
+    """讀一個 Hub 設定值，語意與 Hub 啟動時一致：**真實環境變數優先，.env 只補缺**。
+
+    只讀 .env 會在「用環境變數啟動 Hub」這條合法路徑上算出錯的位址與埠——
+    Hub 聽在 A，隧道轉到 B，而兩邊各自看起來都沒問題。
+    """
+    return os.environ.get(key) or env.get(key, "") or default
+
+
 def origin_host(env: dict[str, str], override: str | None) -> str:
     """隧道要轉發到哪個位址。
 
@@ -83,7 +92,7 @@ def origin_host(env: dict[str, str], override: str | None) -> str:
     """
     if override:
         return override
-    host = env.get("CHATROOM_HOST", "").strip()
+    host = setting(env, "CHATROOM_HOST").strip()
     if not host or host in ("0.0.0.0", "::", "*"):
         return "127.0.0.1"
     return host
@@ -362,9 +371,9 @@ def main() -> int:
     args = p.parse_args()
 
     env = read_env()
-    port = args.port or env.get("CHATROOM_PORT") or "8787"
+    port = args.port or setting(env, "CHATROOM_PORT", "8787")
     target = origin_host(env, args.target_host)
-    token = os.environ.get("CHATROOM_TOKEN") or env.get("CHATROOM_TOKEN", "")
+    token = setting(env, "CHATROOM_TOKEN")
     if not args.i_know_its_public:
         check_token(token)
 

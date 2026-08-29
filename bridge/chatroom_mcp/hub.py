@@ -200,8 +200,14 @@ class HubClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
+        files: Any = None,
+        raw: bool = False,
     ) -> Any:
-        """發出請求並回傳解析後的 JSON；任何失敗都轉成 :class:`HubError`。"""
+        """發出請求並回傳解析後的 JSON；任何失敗都轉成 :class:`HubError`。
+
+        ``files`` 走 multipart（附件上傳）；``raw=True`` 回傳原始 bytes
+        而非 JSON（附件下載）。
+        """
         try:
             with httpx.Client(
                 base_url=self.base_url,
@@ -209,7 +215,9 @@ class HubClient:
                 timeout=timeout or self.timeout,
                 transport=self.transport,
             ) as client:
-                response = client.request(method, path, params=params, json=json)
+                response = client.request(
+                    method, path, params=params, json=json, files=files
+                )
         except httpx.TimeoutException as exc:
             raise HubError(
                 f"連線 Hub（{self.base_url}）逾時。Hub 可能忙碌或網路不穩，稍後再試。"
@@ -229,6 +237,8 @@ class HubClient:
                 detail = response.text
             raise translate_status(response.status_code, detail, self.base_url)
 
+        if raw:
+            return response.content
         try:
             return response.json()
         except ValueError as exc:

@@ -107,6 +107,23 @@ CREATE TABLE IF NOT EXISTS question (
     created_at    TEXT NOT NULL,
     resolved_at   TEXT
 );
+-- 附件：內容存磁碟，這裡只留 metadata。sqlite 塞 BLOB 會讓資料庫迅速膨脹，
+-- 而 long-poll 查詢與它共用同一個連線，大檔讀寫會拖累整個房間的即時性。
+-- stored_name 用內容雜湊，同一份檔案重複上傳自動共用一份實體。
+CREATE TABLE IF NOT EXISTS attachment (
+    id          TEXT PRIMARY KEY,
+    room_id     TEXT NOT NULL REFERENCES room(id),
+    message_id  TEXT REFERENCES message(id),   -- NULL = 尚未附到任何訊息
+    uploader_id TEXT REFERENCES participant(id),
+    filename    TEXT NOT NULL,                 -- 原始檔名（僅顯示用，不當路徑）
+    mime        TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size        INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachment_message ON attachment(message_id);
+CREATE INDEX IF NOT EXISTS idx_attachment_room ON attachment(room_id, created_at);
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """

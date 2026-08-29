@@ -2,6 +2,9 @@
 fastapi
 uvicorn[standard]
 aiosqlite
+# 附件上傳（FastAPI 的 UploadFile 需要）——目前雖由其他套件間接帶進來，
+# 但那是巧合，明確列出免得哪天上游拿掉就整個上傳路徑壞掉
+python-multipart
 httpx
 mcp[cli]
 
