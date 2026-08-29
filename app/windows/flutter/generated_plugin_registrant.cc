@@ -10,6 +10,7 @@
 #include <desktop_drop/desktop_drop_plugin.h>
 #include <flutter_secure_storage_windows/flutter_secure_storage_windows_plugin.h>
 #include <pasteboard/pasteboard_plugin.h>
+#include <windows_taskbar/windows_taskbar_plugin.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
   ConnectivityPlusWindowsPluginRegisterWithRegistrar(
@@ -20,4 +21,6 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FlutterSecureStorageWindowsPlugin"));
   PasteboardPluginRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("PasteboardPlugin"));
+  WindowsTaskbarPluginRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("WindowsTaskbarPlugin"));
 }
