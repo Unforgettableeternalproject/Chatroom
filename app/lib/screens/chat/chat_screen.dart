@@ -1480,39 +1480,88 @@ class _MemberTile extends StatelessWidget {
 /// 位置刻意在輸入框正上方而不是訊息流裡：問題是待辦不是對話，混進時間軸會被
 /// 後續訊息推走看不見——而「人沒看到」正是 agent 轉回自己 session 重複發問的
 /// 起點，也就是這整個機制要消除的東西。
-class _PendingQuestions extends ConsumerWidget {
+class _PendingQuestions extends ConsumerStatefulWidget {
   const _PendingQuestions({required this.roomId, required this.participantId});
 
   final String roomId;
   final String participantId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final questions = ref.watch(roomQuestionsProvider(roomId)).value ?? const [];
-    if (questions.isEmpty) return const SizedBox.shrink();
-    final api = ref.watch(questionsApiProvider);
+  ConsumerState<_PendingQuestions> createState() => _PendingQuestionsState();
+}
 
-    Future<void> respond(String id, String kind, String answer) async {
-      try {
-        await api.answer(id, kind: kind, answer: answer,
-            participantId: participantId);
-      } on ApiException catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('回答失敗：${e.message}')));
-      }
+class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
+  /// 暫時收合。**不持久化**——它是「我現在想先看聊天」，不是一個偏好；
+  /// 而未答的問題一直存在，下次進房該重新看到。
+  bool _collapsed = false;
+
+  Future<void> _respond(String id, String kind, String answer) async {
+    try {
+      await ref.read(questionsApiProvider).answer(
+            id,
+            kind: kind,
+            answer: answer,
+            participantId: widget.participantId,
+          );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('回答失敗：${e.message}')));
     }
+  }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final q in questions)
-          QuestionCard(
-            question: q,
-            onAnswer: (kind, answer) => respond(q.id, kind, answer),
-            onSkip: () => respond(q.id, 'skip', ''),
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final questions =
+        ref.watch(roomQuestionsProvider(widget.roomId)).value ?? const [];
+    if (questions.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: s.line)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // 標題列在收合時仍然看得見——問題被藏起來而沒有任何痕跡的話，
+        // 就回到了這整個機制要消除的那件事：人沒看到，agent 重複發問
+        InkWell(
+          onTap: () => setState(() => _collapsed = !_collapsed),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+            child: Row(children: [
+              MonoLabel('待答問題 ${questions.length}',
+                  size: 9, color: UepColors.gold, letterSpacing: 1.6),
+              const Spacer(),
+              MonoLabel(_collapsed ? '展開' : '收合',
+                  size: 8.5, color: s.inkMute, letterSpacing: 1.4),
+              const SizedBox(width: 6),
+              Icon(_collapsed ? Icons.expand_less : Icons.expand_more,
+                  size: 15, color: s.inkMute),
+            ]),
           ),
-      ],
+        ),
+        if (!_collapsed)
+          ConstrainedBox(
+            // 不限高的話，多題或長題會把輸入框整個擠出畫面，而外層是
+            // Column 不能捲——使用者既看不完問題也打不了字（實機回報）
+            constraints: BoxConstraints(
+              maxHeight: (MediaQuery.sizeOf(context).height * .4)
+                  .clamp(160.0, 420.0),
+            ),
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.only(bottom: 4),
+              children: [
+                for (final q in questions)
+                  QuestionCard(
+                    question: q,
+                    onAnswer: (kind, answer) => _respond(q.id, kind, answer),
+                    onSkip: () => _respond(q.id, 'skip', ''),
+                  ),
+              ],
+            ),
+          ),
+      ]),
     );
   }
 }

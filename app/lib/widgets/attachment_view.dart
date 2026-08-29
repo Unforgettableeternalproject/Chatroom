@@ -23,7 +23,17 @@ class AttachmentView extends StatelessWidget {
 
   /// 房內身分。房間是讀取邊界，附件跟著訊息走——非成員取不到。
   /// 舊版 Hub 忽略這個標頭，帶了不影響。
+  ///
+  /// **還沒拿到身分時不要去抓圖。** 身分是 join 完成之後才有的，而訊息
+  /// 可能在那之前就畫出來了。那個空窗期裡發出的請求會被 Hub 以 401 擋下，
+  /// 而 Flutter 的 NetworkImage **相等性只看 url 與 scale、不含 headers**
+  /// ——同一個 url 的失敗結果會被沿用，身分到齊之後也不會自己重試。
+  /// 使用者看到的就是「永遠只有檔名」。（2026-08-29 實機發現）
   final String? participantId;
+
+  /// Hub 現在要求房內身分才給附件。沒有身分時連請求都不要發出去。
+  bool get _canFetch =>
+      participantId != null && participantId!.isNotEmpty;
 
   Map<String, String> get _headers => {
         if (token.isNotEmpty) 'Authorization': 'Bearer $token',
@@ -45,8 +55,11 @@ class AttachmentView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: a.isImage
-                  ? _ImageAttachment(
-                      attachment: a, url: _url(a), headers: _headers)
+                  ? (_canFetch
+                      ? _ImageAttachment(
+                          attachment: a, url: _url(a), headers: _headers)
+                      // 身分還沒到：畫佔位而不是發一個註定失敗的請求
+                      : _ImagePlaceholder(attachment: a))
                   : _FileAttachment(attachment: a),
             ),
         ],
@@ -110,6 +123,37 @@ class _ImageAttachment extends StatelessWidget {
     );
   }
 }
+
+/// 身分就緒前的圖片佔位。
+///
+/// 刻意不是錯誤狀態——這不是失敗，是還沒開始。畫成錯誤會讓人去查一個
+/// 不存在的問題，而它通常在幾百毫秒內就自己好了。
+class _ImagePlaceholder extends StatelessWidget {
+  const _ImagePlaceholder({required this.attachment});
+
+  final Attachment attachment;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Container(
+      width: 240,
+      height: 120,
+      decoration: BoxDecoration(
+        color: s.bgSunken,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: s.line),
+      ),
+      alignment: Alignment.center,
+      child: const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2, color: UepColors.gold),
+      ),
+    );
+  }
+}
+
 
 class _FileAttachment extends StatelessWidget {
   const _FileAttachment({required this.attachment, this.note});
