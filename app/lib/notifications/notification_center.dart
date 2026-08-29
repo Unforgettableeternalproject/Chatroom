@@ -157,11 +157,14 @@ class NotificationCenter {
         // 喚醒房內的本機 agent——用 App 當通知樞紐的 Codex 沒有自己的
         // watcher 進程，不放行就只有另外掛 watch.py 的 agent 收得到。
         // 只加進 everything，不進 fromOthers：後者是 OS 通知與未讀的來源。
-        // 自己加入不必叫醒自己；Hub 已把加入者 pid 掛在 sender_id 上，
-        // 不需要去解析中文內容比對名字。
-        if (m.isMemberJoined && m.senderId != room.myParticipantId) {
-          everything.add(m);
-        }
+        //
+        // ⚠️ 這裡**不可以**用 myParticipantId 排除「自己加入」。這個「自己」
+        // 指的是本機人類的 App 身分，而 fresh 的收件人是同一台機器上的
+        // agent——人類加入房間，正是該通知本機 agent 的那一則。用人類的
+        // self-filter 去砍 agent 的出口，就是 B1 那個 bug 換一個位置重演。
+        // Codex 自己加入不必叫醒自己，那個排除在 CodexDispatcher 做，
+        // 那裡才分得出哪個 thread 對應哪個加入者。
+        if (m.isMemberJoined) everything.add(m);
         continue;
       }
       everything.add(m);

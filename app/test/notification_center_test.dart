@@ -177,21 +177,34 @@ void main() {
     expect(activity, isEmpty, reason: '也不該把加入算成未讀活動');
   });
 
-  test('自己加入不喚醒自己', () async {
-    // Hub 把加入者的 participant_id 掛在 sender_id 上，所以判斷「這是不是
-    // 我自己」不必去解析中文內容比對名字（改一個字就會無聲失效）。
+  test('本機人類自己加入，也要送進 agent 出口', () async {
+    // 這裡的「自己」是本機人類的 App 身分，而 fresh 的收件人是同一台機器
+    // 上的 agent——人類加入房間，正是該通知本機 agent 的那一則。拿人類的
+    // self-filter 去砍 agent 的出口，就是 B1 那個 bug 換位置重演。
+    // Codex 自己加入不叫醒自己，是 CodexDispatcher 的職責（它才分得出
+    // 哪個 thread 對應哪個加入者），不在這一層做。
     final batches = <RoomFreshBatch>[];
     center.fresh.listen(batches.add);
     center.follow('r1', roomName: 'A', myParticipantId: 'me');
     feeds['r1']!.upsertAll([msg(1)]);
     await pump();
     batches.clear();
+    sent.clear();
+    activity.clear();
 
     feeds['r1']!.upsertAll([
-      msg(2, kind: 'system', systemEvent: 'join', senderId: 'me'),
+      msg(2,
+          kind: 'system',
+          systemEvent: 'join',
+          senderId: 'me',
+          sender: 'Bernie',
+          content: 'Bernie 加入了聊天室'),
     ]);
     await pump();
-    expect(batches, isEmpty);
+    expect(batches, hasLength(1),
+        reason: '同一台機器上的 agent 要知道這個人類進來了');
+    expect(sent, isEmpty, reason: '但不必用 OS 通知打擾這個人類自己');
+    expect(activity, isEmpty);
   });
 
   test('其他 system 事件不進轉送出口', () async {

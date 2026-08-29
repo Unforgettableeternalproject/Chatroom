@@ -6,6 +6,7 @@ import 'package:chatroom_app/models/assignment.dart';
 import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/notifications/codex_dispatcher.dart';
 import 'package:chatroom_app/notifications/notification_center.dart';
+import 'package:chatroom_app/ws/room_feed.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const threadA = '019d0000-0000-7000-8000-000000000001';
@@ -290,6 +291,37 @@ void main() {
     }
     expect(byEvent['message'], [threadA], reason: 'mention 分流不受影響');
     expect(byEvent['member_joined']!.toSet(), {threadA, threadB});
+  });
+
+  test('本機人類加入時，同一台機器上的 Codex 一定收得到（全鏈）', () async {
+    // 這是 B4 真正要保證的情境，而且是 NotificationCenter 與 dispatcher
+    // 串起來才成立的：人類在 App 裡按加入 → Hub 發 join system 訊息 →
+    // feed → NotificationCenter → dispatcher → 本機 Codex。
+    // 中間任何一層拿「這是本機自己」當理由把它濾掉，這條鏈就斷了。
+    final d = make();
+    final feeds = <String, RoomFeed>{};
+    final center = NotificationCenter(
+      (roomId, {participantId}) =>
+          feeds.putIfAbsent(roomId, () => RoomFeed(roomId)),
+      (_) {},
+      (_, _) {},
+    );
+    center.fresh.listen(d.handle);
+    center.follow('r1', roomName: '設計討論', myParticipantId: 'p-human');
+    // 先立基準線（首批快照是歷史，不通知）
+    feeds['r1']!.upsertAll([msg(1, mentions: const [])]);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    runs.clear();
+
+    // 人類自己加入：sender 就是這台 App 的 participant
+    feeds['r1']!.upsertAll([joinMsg(2, senderId: 'p-human', sender: 'Bernie')]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(runs, hasLength(2), reason: '房內兩個本機 Codex thread 都該被喚醒');
+    expect(runs.map(target).toSet(), {threadA, threadB});
+    expect(payload(runs.first)['event'], 'member_joined');
+    expect(payload(runs.first)['latest']['display_name'], 'Bernie');
+    center.dispose();
   });
 
   test('threadOverride 下加入事件仍投得出去', () async {
