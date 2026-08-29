@@ -519,8 +519,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
             # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
             session_key = assignment["target_session_key"]
-        # 被管理員移出的 session 不得重新加入——否則 client 的斷線自癒
-        # （身分失效即自動 rejoin）會立刻把被踢的人加回來
+        # 被管理員移出的 session 不得**自己**重新加入——否則 client 的斷線
+        # 自癒（身分失效即自動 rejoin）會立刻把被踢的人加回來，等於踢不掉。
+        #
+        # 但管理員重新指派是另一回事：那是一個新的人為決定，必須放行，否則
+        # 踢出就成了不可逆的死鎖，連指派 UI 都救不回來。分界線刻意不是
+        # 「人類 vs agent」——agent 的自癒同樣會繞過，對 agent 一律放行就
+        # 等於踢 agent 完全失效——而是「自己回來 vs 被重新邀請」。
+        #
+        # 舊指派在 kick 當下就被撤銷（見 kick endpoint），所以這裡放行的
+        # 一定是踢出**之後**新建立的那筆。
         kicked = await (
             await db.execute(
                 "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
@@ -528,8 +536,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, session_key),
             )
         ).fetchone()
-        if kicked:
-            raise _err(403, "kicked", "你已被管理員移出此聊天室，無法重新加入")
+        if kicked and assignment is None:
+            raise _err(403, "kicked",
+                       "你已被管理員移出此聊天室，無法自行重新加入。"
+                       "要回來需要管理員重新指派一次。")
         # 同一 session 已在房內 → 冪等返回既有身分
         existing = await (
             await db.execute(
@@ -656,9 +666,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if target is None:
             raise _err(404, "participant_not_found", "找不到這個成員，或已不在房內")
+        now = _now()
         await db.execute(
             "UPDATE participant SET status='kicked', left_at=? WHERE id=?",
-            (_now(), target_id),
+            (now, target_id),
+        )
+        # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
+        # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
+        # 要回來必須由管理員重新指派一次。
+        await db.execute(
+            "UPDATE assignment SET status='revoked', resolved_at=?"
+            " WHERE room_id=? AND target_session_key=?"
+            " AND status IN ('pending','accepted')",
+            (now, room_id, target["session_key"]),
         )
         await db.commit()
         await _post_message(
