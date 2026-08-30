@@ -26,7 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 
 # 語意版本：人看的「這是哪一版設計」。改動契約時才動它。
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 _BUILD_FILE = Path(__file__).with_name("_build.json")
 
