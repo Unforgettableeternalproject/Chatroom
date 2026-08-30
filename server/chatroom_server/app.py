@@ -217,6 +217,9 @@ class QuestionCreate(BaseModel):
     # 少打一個參數的便利，不值得換掉行為的穩定性。
     target_participant_id: str = Field(min_length=1)
     allow_free_text: bool = True
+    # 允許複選。預設單選——「只能挑一個」才逼得出決定；要並存的條件
+    #（勾哪幾個功能要開）才需要複選
+    multi_select: bool = False
     # 這題的有效秒數；0＝用伺服器預設。上限刻意只有一小時——發問方是卡在
     # 那裡等的，能等更久的事情本來就不該用「提問」這個機制
     timeout_seconds: float = Field(default=0, ge=0, le=3600)
@@ -226,6 +229,11 @@ class QuestionAnswer(BaseModel):
     # skip = 人類明確選擇不在這裡回答（改回 session 內問），與逾時是兩回事
     kind: str = Field(pattern="^(option|free_text|skip)$")
     answer: str = Field(default="", max_length=4000)
+    # 複選題選了哪些 label。單選題留空，用 answer 就好
+    selected: list[str] = Field(default_factory=list, max_length=8)
+    # 隨答案附上的檔案（先用 POST /rooms/{id}/attachments 上傳拿到 id）。
+    # 「這個 UI 怪怪的」講三段不如一張截圖，而回答正是最需要附圖的地方
+    attachment_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 # ---------- 應用工廠 ----------
@@ -1839,6 +1847,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         except ValueError:
             d["options"] = []
         d["allow_free_text"] = bool(d.get("allow_free_text"))
+        d["multi_select"] = bool(d.get("multi_select"))
+        # 複選的答案：結構化那份給判斷用，`answer` 的彙整字串給轉述用
+        try:
+            d["answer_options"] = json.loads(d.get("answer_options") or "[]")
+        except ValueError:
+            d["answer_options"] = []
+        try:
+            d["answer_attachments"] = json.loads(d.get("answer_attachments") or "[]")
+        except ValueError:
+            d["answer_attachments"] = []
         # 🔑 即時判定，不等 sweeper。sweeper 每輪之間最多 30 秒空窗，而那個
         # 誤差是**使用者看得到的**——卡片該消失卻還在，點下去才發現過期了。
         # 狀態以時間為準，sweeper 只負責把它寫死（見 _expire_questions）。
@@ -1846,6 +1864,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         d["expires_in_seconds"] = left
         if d["status"] == "pending" and left is not None and left <= 0:
             d["status"] = "expired"
+        return d
+
+    async def _question_full(row) -> dict:
+        """`_question_public` + 把附件 id 換成完整 metadata。
+
+        只回 id 的話，agent 得為了「這是不是圖、叫什麼名字」再打一次 API，
+        而它多半不會——結果是附上的截圖沒有人去看。
+        """
+        d = _question_public(row)
+        ids = d.get("answer_attachments") or []
+        if not ids:
+            return d
+        marks = ",".join("?" for _ in ids)
+        rows = await (
+            await app.state.db.execute(
+                f"SELECT id, filename, mime, size FROM attachment"
+                f" WHERE id IN ({marks})",
+                tuple(ids),
+            )
+        ).fetchall()
+        d["answer_attachments"] = [
+            {**dict(a), "is_image": str(a["mime"] or "").startswith("image/")}
+            for a in rows
+        ]
         return d
 
     async def _expire_questions() -> set[str]:
@@ -1931,11 +1973,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).isoformat()
         await db.execute(
             "INSERT INTO question (id, room_id, asker_id, target_id, prompt,"
-            " options, allow_free_text, created_at, expires_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            " options, allow_free_text, multi_select, created_at, expires_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (qid, room_id, asker["id"], target["id"], body.prompt,
              json.dumps([o.model_dump() for o in body.options], ensure_ascii=False),
-             int(body.allow_free_text), _now(), expires_at),
+             int(body.allow_free_text), int(body.multi_select), _now(), expires_at),
         )
         await db.commit()
         await events.notify(room_id)
@@ -1948,6 +1990,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "target_name": target["display_name"],
                 "target_active": target["last_seen_at"] >= active_cutoff,
                 "target_last_seen_at": target["last_seen_at"],
+                # 回報實際落庫的設定：發問方要能確認「我真的開了複選」，
+                # 而不是等收到單選的答案才發現參數沒傳到
+                "multi_select": body.multi_select,
+                "allow_free_text": body.allow_free_text,
                 "expires_at": expires_at, "expires_in_seconds": ttl}
 
     @app.get("/api/rooms/{room_id}/questions", dependencies=[Depends(require_auth)])
@@ -1992,7 +2038,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 params,
             )
         ).fetchall()
-        return {"questions": [_question_public(r) for r in rows]}
+        return {"questions": [await _question_full(r) for r in rows]}
 
     @app.get("/api/questions/{question_id}", dependencies=[Depends(require_auth)])
     async def get_question(
@@ -2020,7 +2066,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             return row
 
         row = await _load()
-        pub = _question_public(row)
+        pub = await _question_full(row)
         if pub["status"] != "pending" or wait <= 0:
             return {"question": pub}
         # 等待時間不超過這題的剩餘壽命：問題只剩 10 秒時掛滿 55 秒，等於讓
@@ -2033,14 +2079,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                out = _question_public(await _load())
+                out = await _question_full(await _load())
                 # 分開講：timed_out 是「你這次等夠久了」，expired 是「這題
                 # 沒了」。前者可以再等一次，後者再等也沒有用
                 return {"question": out, "timed_out": True,
                         "expired": out["status"] == "expired"}
             await events.wait(row["room_id"], remaining)
             row = await _load()
-            pub = _question_public(row)
+            pub = await _question_full(row)
             if pub["status"] != "pending":
                 return {"question": pub, "expired": pub["status"] == "expired"}
 
@@ -2071,10 +2117,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "question_expired",
                        "這題已經逾時了，答案沒有送出。發問方多半已經改走別的路"
                        "——需要的話請直接在聊天室裡告訴他。")
-        if body.kind != "skip" and not body.answer.strip():
+        # 複選時 answer 是空的（選項在 selected 裡），所以兩個都要看
+        if body.kind != "skip" and not body.answer.strip() and not body.selected:
             raise _err(422, "empty_answer", "答案不能是空的")
         if body.kind == "free_text" and not row["allow_free_text"]:
             raise _err(422, "free_text_not_allowed", "這題只能從選項中選")
+        selected: list[str] = []
         if body.kind == "option":
             # 不驗的話 kind=option 只是個標籤，任何字串都能冒充成「他選了這個」，
             # 而 agent 會把 answer_kind=option 當成「從我給的清單裡選的」來信任
@@ -2082,25 +2130,64 @@ def create_app(config: Config | None = None) -> FastAPI:
                 labels = {o.get("label") for o in json.loads(row["options"] or "[]")}
             except ValueError:
                 labels = set()
-            if body.answer.strip() not in labels:
+            # 單選走 answer、複選走 selected，但兩條路的驗證要一模一樣——
+            # 分開寫的話遲早有一邊漏掉，而漏掉的那邊就成了冒充選項的入口
+            picks = [x.strip() for x in body.selected if x.strip()]
+            if not picks and body.answer.strip():
+                picks = [body.answer.strip()]
+            if not picks:
+                raise _err(422, "empty_answer", "至少要選一個")
+            if len(picks) > 1 and not row["multi_select"]:
+                raise _err(422, "single_choice_only", "這題只能選一個")
+            unknown = [x for x in picks if x not in labels]
+            if unknown:
                 raise _err(422, "unknown_option",
-                           "這個選項不在題目提供的清單裡")
+                           f"這些選項不在題目提供的清單裡：{'、'.join(unknown)}")
+            selected = picks
+        # 附件必須屬於這個房間——否則回答可以把別房的檔案帶進來，而收據會
+        # 把它公開在這個房的時間軸上
+        attachments: list[str] = []
+        if body.attachment_ids:
+            marks = ",".join("?" for _ in body.attachment_ids)
+            rows_a = await (
+                await db.execute(
+                    f"SELECT id FROM attachment WHERE id IN ({marks}) AND room_id=?",
+                    (*body.attachment_ids, row["room_id"]),
+                )
+            ).fetchall()
+            attachments = [a["id"] for a in rows_a]
+            if len(attachments) != len(set(body.attachment_ids)):
+                raise _err(422, "attachment_not_in_room",
+                           "有附件不屬於這個聊天室，或已經不存在")
         status = "skipped" if body.kind == "skip" else "answered"
+        # 複選的答案同時留兩份：`answer` 是人類可讀的彙整（給 agent 轉述用），
+        # `answer_options` 是結構化的（給 agent 判斷用）。只留其中一份的話，
+        # 另一種用途都得自己去拆字串，而分隔符遲早會出現在選項文字裡
+        if selected:
+            body.answer = "、".join(selected)
         # 條件放進 UPDATE 本身：先 SELECT 再 UPDATE 之間有空隙，兩個並發的
         # 回答會雙雙通過檢查，後到的直接覆寫先到的答案而且沒有任何人知道
         cur = await db.execute(
-            "UPDATE question SET status=?, answer=?, answer_kind=?, resolved_at=?"
+            "UPDATE question SET status=?, answer=?, answer_kind=?,"
+            " answer_options=?, answer_attachments=?, resolved_at=?"
             " WHERE id=? AND status='pending' RETURNING id",
-            (status, body.answer.strip(), body.kind, _now(), question_id),
+            (status, body.answer.strip(), body.kind,
+             json.dumps(selected, ensure_ascii=False) if selected else None,
+             json.dumps(attachments), _now(), question_id),
         )
         if await cur.fetchone() is None:
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
         await db.commit()
         await events.notify(row["room_id"])
-        receipt = await _post_answer_receipt(row, me, status, body.answer.strip())
-        return {"ok": True, "status": status, "receipt_seq": receipt["seq"]}
+        receipt = await _post_answer_receipt(
+            row, me, status, body.answer.strip(), attachments
+        )
+        return {"ok": True, "status": status, "receipt_seq": receipt["seq"],
+                "answer_options": selected,
+                "answer_attachments": attachments}
 
-    async def _post_answer_receipt(question, answerer, status: str, answer: str) -> dict:
+    async def _post_answer_receipt(question, answerer, status: str, answer: str,
+                                   attachment_ids: list[str] | None = None) -> dict:
         """在時間軸留下一張「這題已經有答案了」的收據。
 
         問題本身刻意不進時間軸（見 schema 註解：定向的東西灌進公開時間軸會
@@ -2138,12 +2225,25 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"{asker_name} 的提問「{prompt}」"
                 f"—— {answerer['display_name']} 回答：{answer}"
             )
-        return await _post_message(
+        if attachment_ids:
+            content += f"（附 {len(attachment_ids)} 個檔案）"
+        receipt = await _post_message(
             question["room_id"], None, content, kind="system",
             system_event=("question_skipped" if status == "skipped"
                           else "question_answered"),
             mentions=[asker["display_name"]] if asker else None,
         )
+        if attachment_ids:
+            # 附件掛到收據上，房內的人才看得到——只留在 question 表裡的話，
+            # 只有發問的那個 agent 拿得到，而截圖多半是講給整個房間聽的
+            marks = ",".join("?" for _ in attachment_ids)
+            await db.execute(
+                f"UPDATE attachment SET message_id=? WHERE id IN ({marks})",
+                (receipt["id"], *attachment_ids),
+            )
+            await db.commit()
+            await events.notify(question["room_id"])
+        return receipt
 
     # ---------- Session 名錄 ----------
 

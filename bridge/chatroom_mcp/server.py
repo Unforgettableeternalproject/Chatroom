@@ -577,6 +577,7 @@ def chatroom_ask_human(
     options: list[str] | None = None,
     timeout: float = 60.0,
     allow_free_text: bool = True,
+    multi_select: bool = False,
     question_ttl: float = 0.0,
 ) -> dict:
     """在聊天室裡向指定的人類提問，並等待回答。
@@ -597,6 +598,14 @@ def chatroom_ask_human(
 
     ``options`` 給選項時對方可以直接點選，比讓他打字快得多；``allow_free_text``
     決定他能不能不選你給的選項而自己寫。至少要有其中一種，否則這題無法回答。
+    ``multi_select`` 讓對方可以複選——**只在選項真的可以並存時才開**
+    （「要開哪幾個功能」可以複選；「先做哪一個」不行，那種題目逼出一個決定
+    才有意義）。複選的答案 ``answer`` 是以「、」串好的字串，
+    ``answer_options`` 是原始清單，要判斷邏輯請用後者。
+
+    對方回答時可以**附上檔案**（UI 問題直接給你截圖，比講三段話清楚）。
+    回應的 ``attachments`` 是那些檔案的 metadata；**要看內容用
+    ``chatroom_get_file`` 取回**，附件本體不會塞進這個回應裡。
 
     **``timeout`` 與 ``question_ttl`` 是兩件事，分開設**：
 
@@ -609,7 +618,8 @@ def chatroom_ask_human(
 
     回傳：
 
-    - ``answered: true`` 帶 ``answer`` 與 ``answer_kind``（option / free_text）
+    - ``answered: true`` 帶 ``answer`` 與 ``answer_kind``（option / free_text）；
+      複選時另有 ``answer_options``，有附件時另有 ``attachments``
     - ``answered: false`` 且 ``reason`` 為：
       - ``skipped``——對方明確選擇不在這裡回答。**改回你原本的方式問他**，
         不要再用這個工具問同一件事
@@ -625,6 +635,7 @@ def chatroom_ask_human(
         "prompt": question,
         "options": [{"label": o} for o in (options or [])],
         "allow_free_text": allow_free_text,
+        "multi_select": multi_select,
         "target_participant_id": _participant_id_by_name(room_id, target_name),
     }
     if question_ttl:
@@ -675,9 +686,7 @@ def chatroom_ask_human(
         if q["status"] == "expired":
             return _expired_result(qid, created, _log_target_idle)
         if q["status"] == "answered":
-            return {"answered": True, "answer": q["answer"],
-                    "answer_kind": q["answer_kind"], "question_id": qid,
-                    "target_name": created.get("target_name")}
+            return _answered_result(qid, q, created)
         if q["status"] == "skipped":
             return {
                 "answered": False, "reason": "skipped", "question_id": qid,
@@ -685,6 +694,29 @@ def chatroom_ask_human(
                 "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
                         "不要再用這個工具問同一件事。",
             }
+
+
+def _answered_result(qid: str, q: dict, created: dict) -> dict:
+    """回答的統一形狀——`ask_human` 與 `read_answer` 兩條路要給一樣的東西。
+
+    兩邊各組一次的話，遲早有一邊漏掉新欄位（附件就差點只出現在其中一條），
+    而漏掉的症狀是「答案裡的截圖從來沒有人去看」。
+    """
+    out: dict[str, Any] = {
+        "answered": True,
+        "answer": q.get("answer"),
+        "answer_kind": q.get("answer_kind"),
+        "question_id": qid,
+        "target_name": created.get("target_name"),
+    }
+    if q.get("answer_options"):
+        out["answer_options"] = q["answer_options"]
+    files = q.get("answer_attachments") or []
+    if files:
+        out["attachments"] = files
+        out["hint"] = ("回答附了檔案。要看內容請用 chatroom_get_file 取回"
+                       "（附件本體不會放進這個回應裡）。")
+    return out
 
 
 @mcp.tool()

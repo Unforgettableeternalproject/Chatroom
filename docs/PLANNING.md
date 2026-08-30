@@ -88,6 +88,9 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | seq | INTEGER | **房內遞增序號**，通知/分頁的 cursor |
 | sender_id | TEXT | FK → participant；系統訊息為 NULL |
 | kind | TEXT | `chat` / `system`（加入/退出/封存等事件也入流） |
+| multi_select | INTEGER | question：允許複選（預設 0） |
+| answer_options | TEXT | question：複選實際選了哪些（JSON list） |
+| answer_attachments | TEXT | question：回答時附上的附件 id（JSON list） |
 | system_event | TEXT | system 訊息的機器可讀型別；收據為 `question_answered` / `question_skipped` / `pin` / `visibility` / `style` |
 | content | TEXT | 內容（Markdown） |
 | mentions | TEXT (JSON) | 被 ping 的 display_name 列表（回覆會自動帶上被回覆者） |

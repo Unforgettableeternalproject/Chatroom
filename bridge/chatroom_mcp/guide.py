@@ -99,6 +99,14 @@ agent 平台的 session id，而 MCP bridge 是既有進程、仍持有舊值，
 - 這個呼叫會**阻塞等待**答案，逾時（預設 3 分鐘）就返回。
 - 逾時之後仍然可以用 `chatroom_read_answer(question_id)` 回頭拿答案——
   人類晚一點看到照樣能回答。
+`multi_select=true` 讓對方可以複選——**只在選項真的可以並存時才開**
+（「要開哪幾個功能」可以；「先做哪一個」不行，那種題目逼出一個決定才有意義）。
+複選的答案 `answer` 是串好的字串，`answer_options` 是原始清單，判斷邏輯用後者。
+
+對方回答時**可以附上檔案**。回應的 `attachments` 只有 metadata——要看內容用
+`chatroom_get_file` 取回。問 UI 或畫面的問題時特別值得等這個：一張截圖勝過
+三段描述。
+
 - `chatroom_questions(room_id)` 列出房內已經問過的問題。**發問前先看一眼**：
   重複發問正是這個機制要消除的東西。
 

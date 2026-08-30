@@ -1,0 +1,185 @@
+"""提問的複選與附件。
+
+複選：有些問題的選項本來就可以並存（要開哪幾個功能），逼人挑一個只會逼出
+一個不完整的答案。附件：UI 問題用講的講不清楚，而回答正是最需要附圖的地方。
+"""
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from chatroom_server.app import create_app
+from chatroom_server.config import Config
+
+PNG = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + b"0000"
+
+
+async def _make(tmp_path, name):
+    cfg = Config(db_path=str(tmp_path / f"{name}.db"), api_token="")
+    app = create_app(cfg)
+    return app, AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+async def _setup(client):
+    room = (await client.post("/api/rooms", json={"name": "房"})).json()
+    agent = (await client.post(
+        f"/api/rooms/{room['id']}/join",
+        json={"kind": "claude", "session_key": "a1", "preferred_name": "Novia"},
+    )).json()
+    human = (await client.post(
+        f"/api/rooms/{room['id']}/join",
+        json={"kind": "human", "session_key": "h1", "preferred_name": "Bernie",
+              "role": "human"},
+    )).json()
+    return room, agent, human
+
+
+async def _ask(client, room, agent, human, **kw):
+    body = {
+        "prompt": "要開哪幾個？",
+        "options": [{"label": "甲"}, {"label": "乙"}, {"label": "丙"}],
+        "target_participant_id": human["participant_id"],
+        **kw,
+    }
+    r = await client.post(
+        f"/api/rooms/{room['id']}/questions", json=body,
+        headers={"X-Participant-Id": agent["participant_id"]},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.asyncio
+async def test_multi_select_keeps_both_a_string_and_a_list(tmp_path):
+    """兩份都留：字串給轉述用，清單給判斷用。
+
+    只留字串的話，要判斷「有沒有選丙」得自己拆分隔符，而分隔符遲早會出現
+    在選項文字裡。
+    """
+    app, client = await _make(tmp_path, "q_multi")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human, multi_select=True)
+            assert q["multi_select"] is True
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": ["甲", "丙"]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["answer_options"] == ["甲", "丙"]
+
+            r = await client.get(f"/api/questions/{q['id']}")
+            got = r.json()["question"]
+            assert got["answer_options"] == ["甲", "丙"]
+            assert got["answer"] == "甲、丙"
+
+
+@pytest.mark.asyncio
+async def test_single_choice_refuses_multiple(tmp_path):
+    """沒開複選就只能選一個——不然「逼出一個決定」這件事就沒了。"""
+    app, client = await _make(tmp_path, "q_single")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human)
+            assert q["multi_select"] is False
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": ["甲", "乙"]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "single_choice_only"
+
+
+@pytest.mark.asyncio
+async def test_multi_select_still_validates_the_labels(tmp_path):
+    """複選不是放行——冒充的選項照樣擋，否則 answer_kind=option 就沒有意義。"""
+    app, client = await _make(tmp_path, "q_multi_bad")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human, multi_select=True)
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": ["甲", "丁"]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "unknown_option"
+            assert "丁" in r.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_answer_can_carry_files_and_they_show_up_on_the_receipt(tmp_path):
+    """附件要掛到收據上，房內其他人才看得到。
+
+    只留在 question 表裡的話，只有發問的那個 agent 拿得到，而截圖多半是
+    講給整個房間聽的。
+    """
+    app, client = await _make(tmp_path, "q_files")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human, allow_free_text=True)
+            up = (await client.post(
+                f"/api/rooms/{room['id']}/attachments",
+                headers={"X-Participant-Id": human["participant_id"]},
+                files={"file": ("shot.png", PNG, "image/png")},
+            )).json()
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "free_text", "answer": "長這樣",
+                      "attachment_ids": [up["id"]]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["answer_attachments"] == [up["id"]]
+
+            # 讀回來時是完整 metadata，不是光禿禿的 id
+            got = (await client.get(f"/api/questions/{q['id']}")).json()["question"]
+            assert got["answer_attachments"][0]["filename"] == "shot.png"
+            assert got["answer_attachments"][0]["is_image"] is True
+
+            # 收據上掛著同一個附件，房內看得到
+            msgs = (await client.get(
+                f"/api/rooms/{room['id']}/messages",
+                headers={"X-Participant-Id": agent["participant_id"]},
+            )).json()["messages"]
+            receipt = [m for m in msgs
+                       if m["system_event"] == "question_answered"][0]
+            assert [a["id"] for a in receipt["attachments"]] == [up["id"]]
+            assert "附 1 個檔案" in receipt["content"]
+
+
+@pytest.mark.asyncio
+async def test_answer_cannot_smuggle_another_rooms_file(tmp_path):
+    """附件必須屬於這個房間，否則回答可以把別房的檔案公開到這裡的時間軸上。"""
+    app, client = await _make(tmp_path, "q_files_x")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human)
+            other = (await client.post("/api/rooms", json={"name": "別房"})).json()
+            op = (await client.post(
+                f"/api/rooms/{other['id']}/join",
+                json={"kind": "human", "session_key": "h2",
+                      "preferred_name": "Someone", "role": "human"},
+            )).json()
+            up = (await client.post(
+                f"/api/rooms/{other['id']}/attachments",
+                headers={"X-Participant-Id": op["participant_id"]},
+                files={"file": ("secret.txt", b"not yours", "text/plain")},
+            )).json()
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "free_text", "answer": "看這個",
+                      "attachment_ids": [up["id"]]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "attachment_not_in_room"

@@ -122,12 +122,21 @@ CREATE TABLE IF NOT EXISTS question (
     prompt        TEXT NOT NULL,
     options       TEXT NOT NULL DEFAULT '[]',   -- JSON: [{"label","description"}]
     allow_free_text INTEGER NOT NULL DEFAULT 1,
+    -- 允許複選。單選是預設，因為「只能挑一個」才逼得出決定；要並存的
+    -- 條件（勾選要開哪幾個功能）才需要複選
+    multi_select  INTEGER NOT NULL DEFAULT 0,
     -- pending / answered / skipped / expired
     -- skipped = 人類明確選擇不在這裡回答（改回 session 內問），與逾時不同：
     -- 前者是決定，後者是沒看到，agent 的後續處置不一樣
     status        TEXT NOT NULL DEFAULT 'pending',
     answer        TEXT,
     answer_kind   TEXT,                          -- option / free_text
+    -- 複選題實際選了哪些（JSON list of label）。answer 同時保留一份人類可讀
+    -- 的彙整字串，agent 兩種都拿得到：要判斷邏輯用這個，要轉述用 answer
+    answer_options TEXT,
+    -- 回答時附上的附件 id（JSON list）。UI 問題用講的講不清楚，一張截圖
+    -- 勝過三段文字——而回答本來就是最需要附圖的地方
+    answer_attachments TEXT NOT NULL DEFAULT '[]',
     created_at    TEXT NOT NULL,
     resolved_at   TEXT,
     -- 過了這個時間就不再是待答。發問的 agent 是**卡在那裡等**的，不是留言，
@@ -199,6 +208,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("message", "reply_to_seq", "reply_to_seq INTEGER"),
     # 說話方式。舊房一律 verbose——那是這個欄位存在之前的實際行為，
     # 升級一次資料庫就讓所有房間的對話語氣改變，沒有人會預期
+    # 提問的複選與附件。舊題目一律單選、無附件——那是這些欄位存在之前的行為
+    ("question", "multi_select", "multi_select INTEGER NOT NULL DEFAULT 0"),
+    ("question", "answer_options", "answer_options TEXT"),
+    ("question", "answer_attachments",
+     "answer_attachments TEXT NOT NULL DEFAULT '[]'"),
     ("room", "style", "style TEXT NOT NULL DEFAULT 'verbose'"),
     ("room", "style_instructions", "style_instructions TEXT NOT NULL DEFAULT ''"),
 ]
