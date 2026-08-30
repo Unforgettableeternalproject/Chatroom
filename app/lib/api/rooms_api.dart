@@ -188,6 +188,27 @@ class RoomsApi {
         return (res.data?['visibility'] as String?) ?? visibility;
       });
 
+  /// 永久刪除聊天室。只有建立者做得到，**不可復原**。
+  ///
+  /// 回傳各表刪掉幾筆，讓 UI 有東西可以講（「刪掉了 42 則訊息」比
+  /// 「已刪除」誠實得多）。
+  Future<Map<String, int>> deleteRoom(
+    String roomId, {
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.delete<Map<String, dynamic>>(
+          '/api/rooms/$roomId',
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        final raw = (res.data?['deleted'] as Map?) ?? const {};
+        return raw.map((k, v) => MapEntry('$k', (v as num?)?.toInt() ?? 0));
+      });
+
   /// 變更房內 agent 的說話方式。只有建立者做得到。
   ///
   /// 標頭與 [setVisibility] 同一套理由：建立者可能還沒加入自己的房。

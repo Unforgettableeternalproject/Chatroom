@@ -1053,6 +1053,36 @@ class _OverflowMenu extends ConsumerWidget {
                     .showSnackBar(SnackBar(content: Text(e.message)));
               }
             }
+          case 'delete':
+            final name = detail?.room.name ?? '';
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (_) => _DeleteRoomDialog(name: name),
+            );
+            if (ok != true) return;
+            try {
+              final counts = await ref.read(roomsApiProvider).deleteRoom(
+                    roomId,
+                    sessionKey: ref.read(appConfigProvider).deviceKey,
+                    participantId:
+                        ref.read(identityProvider(roomId)).value?.participantId,
+                  );
+              await ref.read(settingsRepoProvider).setParticipantId(roomId, null);
+              ref.invalidate(roomListProvider);
+              if (context.mounted) {
+                context.go('/rooms');
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text('已刪除「$name」'
+                      '（訊息 ${counts['message'] ?? 0} 則、'
+                      '附件 ${counts['attachment'] ?? 0} 個）'),
+                ));
+              }
+            } on ApiException catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            }
           case 'archive':
             try {
               await ref.read(roomsApiProvider).archive(roomId);
@@ -1111,6 +1141,14 @@ class _OverflowMenu extends ConsumerWidget {
           child: Text('離開房間',
               style: UepText.sans(size: 12.5, color: UepColors.errorText)),
         ),
+        // 刪除排在最後、與其他項目隔開：它是這個選單裡唯一不可復原的動作
+        if (youAreAdmin)
+          PopupMenuItem(
+            value: 'delete',
+            height: 36,
+            child: Text('永久刪除房間…',
+                style: UepText.sans(size: 12.5, color: UepColors.errorText)),
+          ),
       ],
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
@@ -1749,6 +1787,89 @@ class _StyleDialogState extends State<_StyleDialog> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         UepButton(label: '套用', small: true, onPressed: _submit),
+      ],
+    );
+  }
+}
+
+
+/// 刪除房間的確認。要打字才刪得掉——這是唯一不可復原的動作。
+///
+/// 用打房名而不是「你確定嗎？」：確認框點久了就變成反射動作，而這個動作
+/// 沒有反悔的機會。打字強迫人看一眼自己要刪的是哪一間。
+class _DeleteRoomDialog extends StatefulWidget {
+  const _DeleteRoomDialog({required this.name});
+
+  final String name;
+
+  @override
+  State<_DeleteRoomDialog> createState() => _DeleteRoomDialogState();
+}
+
+class _DeleteRoomDialogState extends State<_DeleteRoomDialog> {
+  final _typed = TextEditingController();
+
+  @override
+  void dispose() {
+    _typed.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final matches = _typed.text.trim() == widget.name;
+    return AlertDialog(
+      title: Text('永久刪除房間',
+          style: UepText.display(size: 22, color: s.inkTitle)),
+      content: SizedBox(
+        width: 420,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '「${widget.name}」連同房裡的訊息與附件會被永久刪除，'
+              '不可復原。房內的 agent 下次呼叫時會發現房間已經不存在。\n\n'
+              '確認的話，把房名打一次：',
+              style: UepText.serif(size: 12.5, color: s.ink, height: 1.6),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: s.bgSunken,
+              border: Border.all(color: s.lineStrong),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: TextField(
+              controller: _typed,
+              autofocus: true,
+              onChanged: (_) => setState(() {}),
+              style: UepText.code(size: 12.5, color: s.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: widget.name,
+                hintStyle: UepText.code(size: 12.5, color: s.inkMute),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+        ]),
+      ),
+      actions: [
+        UepButton(
+          label: '取消',
+          variant: UepButtonVariant.outline,
+          small: true,
+          onPressed: () => Navigator.of(context).pop(false),
+        ),
+        UepButton(
+          label: '永久刪除',
+          small: true,
+          onPressed: matches ? () => Navigator.of(context).pop(true) : null,
+        ),
       ],
     );
   }

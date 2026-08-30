@@ -13,7 +13,7 @@ void main() {
         'status': 'active',
         'last_seen_at': '2026-08-30T00:00:00Z',
         'rooms': const [],
-        if (host != null) 'host': host,
+        'host': ?host,
       });
 
   test('同一台機器算本機', () {
