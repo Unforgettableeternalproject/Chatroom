@@ -1619,7 +1619,20 @@ def create_app(config: Config | None = None) -> FastAPI:
                             "participant_id": r["id"], "status": r["status"]})
         return out, now
 
-    async def _my_subagent_names(room_id: str, parent_id: str) -> set[str]:
+    async def _my_subagent_bounds(room_id: str, parent_id: str) -> dict[str, int]:
+        """我旗下 active subagent 的「名字 → 喚醒界線」。
+
+        回傳的是 **mapping 而不是 set**，因為界線屬於**被 @ 的那個身分**，
+        不是投遞地址：父層只是收件路徑。拿父層的界線，等於讓新生的 subagent
+        繼承父層加入以來的整段歷史 @（決策端 2026-08-31 裁定）。
+
+        ⚠️ **與 `fix/pin-notify-and-mentions` 合併時要動的就是這裡**：
+        那條分支替 participant 加了 `joined_seq`（加入當下房內最後一則 seq）。
+        合併後把下面的 0 換成 `r["joined_seq"] or 0`，relay 就吃到每個
+        subagent 自己的界線。**這是新增邏輯，不是機械合併**——只把
+        `max(after_seq, joined_seq)` 放進 `_out()` 的迴圈，天然套上的是
+        父層的界線，正好是被裁掉的那種語意。
+        """
         db = app.state.db
         rows = await (
             await db.execute(
@@ -1628,7 +1641,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, parent_id),
             )
         ).fetchall()
-        return {r["display_name"] for r in rows}
+        return {r["display_name"]: 0 for r in rows}
 
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
@@ -1665,7 +1678,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             subs, cursor = await _subagent_delta(
                 room_id, me["id"], subagents_since
             )
-            mine = await _my_subagent_names(room_id, me["id"])
+            mine = await _my_subagent_bounds(room_id, me["id"])
             mentioned = False
             for m in msgs:
                 names = set(m.get("mentions") or [])
@@ -1685,7 +1698,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 進程（它活在我的進程裡），不轉投遞的話那個 mention 就是打
                 # 進空氣——而發話方會看到 unresolved_mentions 是空的，
                 # 以為送到了（§2 反向 mention）
-                relayed = sorted(names & mine)
+                # 每個 subagent 用自己的界線，不是父層的（見 _my_subagent_bounds）
+                relayed = sorted(
+                    n for n in names
+                    if n in mine and m.get("seq", 0) > mine[n]
+                )
                 if relayed:
                     m["relayed_mentions"] = relayed
                     mentioned = True
