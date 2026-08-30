@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -259,6 +260,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not cfg.api_token:
             logger.warning("未設定 CHATROOM_TOKEN，API 驗證停用——僅限本機開發使用",
                            extra={"event": "auth_disabled"})
+        # 這是整個 Hub 唯一會自己動手、且不可逆地刪掉使用者資料的機制。
+        # 預設是開的，所以它必須自己開口——把新版拉起來的人不該在房間開始
+        # 消失之後，才發現有這個設定存在
+        if cfg.purge_archived_days > 0:
+            logger.warning(
+                "自動清理已啟用：封存超過 %g 天的聊天室會被**永久刪除**"
+                "（含訊息與附件，不可復原）。設 CHATROOM_PURGE_ARCHIVED_DAYS=0 可關閉。",
+                cfg.purge_archived_days,
+                extra={"event": "purge_enabled", "days": cfg.purge_archived_days},
+            )
+        else:
+            logger.info("自動清理已關閉：封存的聊天室會一直留著",
+                        extra={"event": "purge_disabled"})
         app.state.db = await open_db(cfg.db_path)
         sweeper = asyncio.create_task(_sweeper())
         app.state.sweeper_task = sweeper
@@ -963,6 +977,53 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "style_instructions": instructions,
                 "style_prompt": prompt, "changed": True}
 
+    # room_id 是外鍵的那幾張表。順序照依賴關係由內往外，最後才是 room 本身
+    _ROOM_OWNED_TABLES = ("attachment", "message", "participant",
+                          "assignment", "question")
+
+    async def _purge_room(room_id: str) -> dict[str, int]:
+        """把一個聊天室連同它的內容從資料庫抹掉。**不可復原。**
+
+        ⚠️ 只刪 DB，**不刪附件實體**——附件是內容定址的（見 `_blob_path`），
+        同一份檔案重複上傳只存一份，別的房間可能正引用著同一個雜湊。這裡順手
+        刪檔的話，刪掉的是「所有引用它的房間」的附件。實體由 `_sweep_orphan_blobs`
+        負責：等到沒有任何 attachment row 引用該雜湊時才清掉。
+        """
+        db = app.state.db
+        counts: dict[str, int] = {}
+        for table in _ROOM_OWNED_TABLES:
+            # 表名是模組內的常數清單，不是外來輸入
+            cur = await db.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
+            counts[table] = cur.rowcount
+        cur = await db.execute("DELETE FROM room WHERE id=?", (room_id,))
+        counts["room"] = cur.rowcount
+        await db.commit()
+        return counts
+
+    @app.delete("/api/rooms/{room_id}", dependencies=[Depends(require_auth)])
+    async def delete_room(
+        room_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """永久刪除一個聊天室。只有建立者能做，**不可復原**。
+
+        封存的房間也能刪（其實那才是主要用途）。刪完之後，手上還握著舊身分的
+        agent 會在下一次呼叫拿到 404 `room_not_found`——那條路徑不是身分問題，
+        重新 join 也救不回來，bridge 對它有專屬的說明。
+        """
+        room = await _room_or_404(room_id, allow_archived=True)
+        await _admin_or_403(room, x_participant_id, x_session_key, "刪除")
+        counts = await _purge_room(room_id)
+        logger.warning(
+            "永久刪除聊天室「%s」（%s）：%s", room["name"], room_id, counts,
+            extra={"event": "room_deleted", "room_id": room_id,
+                   "room_name": room["name"], "counts": counts},
+        )
+        # 房間沒了，long-poll 掛在上面的 client 要醒過來自己去撞 404
+        await events.notify(room_id)
+        return {"ok": True, "deleted": counts}
+
     # ---------- 成員 ----------
 
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
@@ -1399,6 +1460,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                         "last_seq": after_seq, "room_status": await _status(),
                         "style_hint": style_hint}
             await events.wait(room_id, remaining)
+            # 房間可能在我們掛著的這段時間被刪掉了。刪除端點會 notify 一次
+            # 把我們叫醒，但被叫醒後沒有新訊息可回——不檢查的話就會繼續掛回去
+            # 等到逾時，而 watcher 也就晚一輪才知道房間沒了
+            if await _status() == "deleted":
+                return {"messages": [], "you_were_mentioned": False,
+                        "last_seq": after_seq, "room_status": "deleted",
+                        "style_hint": style_hint}
 
     async def _message_room(message_id: str) -> str:
         db = app.state.db
@@ -2377,6 +2445,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
                 system_event="idle_removed",
             )
+        # 封存夠久的房間永久刪除，然後回收沒人引用的附件實體。
+        # 順序不能反——先刪 row 才看得出哪些實體變成孤兒。
+        # 孤兒回收**每輪都跑**，不是只跟著自動清理：手動刪除房間走的是 API，
+        # 不經過 sweeper，但一樣會把實體留成孤兒
+        await _purge_expired_rooms()
+        await _sweep_orphan_blobs()
         # 過期 pending 指派
         a_cutoff = (now - timedelta(seconds=cfg.assignment_ttl)).isoformat()
         await db.execute(
@@ -2438,6 +2512,81 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (r["id"],),
                 )
         await db.commit()
+
+    async def _purge_expired_rooms() -> int:
+        """封存夠久的房間永久刪除。回傳刪掉幾間。
+
+        起點是 `archived_at`：**`archived_at` 是 NULL 的封存房一律不動**——
+        那是這個欄位存在之前留下的舊資料，沒有起點就沒有倒數，而這個動作
+        不可復原，寧可留著也不要用猜的時間去刪。
+        """
+        if cfg.purge_archived_days <= 0:
+            return 0
+        db = app.state.db
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(days=cfg.purge_archived_days)
+        ).isoformat()
+        rows = await (
+            await db.execute(
+                "SELECT id, name FROM room WHERE status='archived'"
+                " AND archived_at IS NOT NULL AND archived_at < ?",
+                (cutoff,),
+            )
+        ).fetchall()
+        for r in rows:
+            counts = await _purge_room(r["id"])
+            logger.warning(
+                "sweep: 清理封存超過 %g 天的聊天室「%s」（%s）：%s",
+                cfg.purge_archived_days, r["name"], r["id"], counts,
+                extra={"event": "room_purged", "room_id": r["id"],
+                       "room_name": r["name"], "counts": counts},
+            )
+        return len(rows)
+
+    async def _sweep_orphan_blobs() -> int:
+        """清掉沒有任何 attachment row 引用的附件實體。回傳刪掉幾個。
+
+        為什麼不在刪房時順手刪檔：附件是**內容定址**的，同一份檔案重複上傳
+        只存一份雜湊。刪房時刪檔，刪掉的是所有引用它的房間的附件。
+
+        為什麼要寬限（`orphan_blob_grace`）：上傳是「先寫檔、再寫 row」，
+        兩者之間有一段時間檔案看起來就是孤兒。沒有寬限的話，sweeper 會刪掉
+        一個正在上傳中的附件，而那個上傳會成功——留下一筆指向空氣的 row。
+        """
+        db = app.state.db
+        root = _attachment_root()
+        cutoff = time.time() - max(cfg.orphan_blob_grace, 0)
+        removed = 0
+        for sub in root.iterdir():
+            if not sub.is_dir():
+                continue
+            for blob in sub.iterdir():
+                if not blob.is_file():
+                    continue
+                try:
+                    if blob.stat().st_mtime > cutoff:
+                        continue
+                except OSError:
+                    continue
+                used = await (
+                    await db.execute(
+                        "SELECT 1 FROM attachment WHERE sha256=? LIMIT 1", (blob.name,)
+                    )
+                ).fetchone()
+                if used is not None:
+                    continue
+                try:
+                    blob.unlink()
+                    removed += 1
+                except OSError:
+                    # 檔案被佔用或權限不足：下一輪再試，不要讓 sweeper 死
+                    logger.warning("清不掉孤兒附件 %s", blob,
+                                   extra={"event": "orphan_blob_stuck"})
+        if removed:
+            logger.info("sweep: 清掉 %d 個沒有人引用的附件實體", removed,
+                        extra={"event": "orphan_blobs_removed", "count": removed})
+        return removed
 
     async def _sweeper() -> None:
         while True:

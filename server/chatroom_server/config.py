@@ -27,6 +27,18 @@ class Config:
     archive_grace: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_ARCHIVE_GRACE", "60"))
     )
+    # 封存房間保留幾天後**永久刪除**；0 = 關閉自動清理。
+    # 預設啟用（艾斯維爾 2026-08-30 裁決）——所以 Hub 啟動時會把這件事印出來，
+    # 拉了新版起來的人不該在房間開始消失之後才知道有這個設定
+    purge_archived_days: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_PURGE_ARCHIVED_DAYS", "3"))
+    )
+    # 孤兒附件實體的寬限（秒）。附件是內容定址的，刪房只能刪 DB row，實體要
+    # 等「沒有任何 row 引用這個雜湊」才能刪；而剛寫入檔案、row 還沒落庫的那
+    # 一瞬間看起來也像孤兒，所以要給一段寬限，預設 1 小時
+    orphan_blob_grace: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_ORPHAN_BLOB_GRACE", "3600"))
+    )
     # session 名錄：last_seen 在此窗內視為 active（秒）。watcher 的指派輪詢
     # 週期約 15~65 秒，窗口取其兩倍餘裕
     session_active_window: float = field(
