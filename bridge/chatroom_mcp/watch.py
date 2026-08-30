@@ -411,7 +411,8 @@ class Watcher:
     def poll_assignments(self) -> None:
         # kind/label 一併自報：這條輪詢是 Hub session 名錄（指派 UI 掃描
         # 來源）的主要心跳，watcher 掛著時 session 就會顯示為 active
-        params = {"session_key": self.session_key, "kind": identity.agent_kind()}
+        params = {"session_key": self.session_key, "kind": identity.agent_kind(),
+                  "host": identity.host_name()}
         label = os.environ.get("CHATROOM_DEFAULT_NAME", "")
         if label:
             params["label"] = label
@@ -464,7 +465,10 @@ class Watcher:
         確認「有 join 啊」然後卡死——而分裂時 bridge 確實 join 成功了，只是寫
         進了另一把 key 的 state 檔。
         """
-        if not self.room_id or self.participant_id:
+        if not self.room_id:
+            self._preflight_assignments_only()
+            return
+        if self.participant_id:
             return
         others = _sibling_states(self.session_key, self.room_id)
         if not others:
@@ -484,6 +488,35 @@ class Watcher:
             "         處置：重啟 MCP 讓 bridge 換到新 key（重啟後房內身分會失效，"
             "需重新 chatroom_join），或改用顯式的 CHATROOM_SESSION_KEY 固定兩邊。\n"
             "         注意舊身分會以殭屍成員留在房裡，直到 presence sweeper 清掉。"
+        )
+
+    def _preflight_assignments_only(self) -> None:
+        """指派模式的自檢。
+
+        分裂的第一個受害者就是指派：bridge 用一把 key、watcher 用另一把，
+        指派送到 bridge 那把上，watcher 永遠不會醒。而這裡沒有房間可比，
+        `_sibling_states` 那套精確訊號用不上。
+
+        所以這裡給的是**提示不是警告**：同機同時跑多個 session、各自有 state
+        檔是完全正常的（一台機器上兩個 Claude Code 視窗就會這樣），把它喊成
+        分裂只會讓真正的警告變成雜訊。能確定的只有一件事——收不到指派時，
+        第一個該比對的就是這兩把 key。
+        """
+        mine = identity.state_path(self.session_key)
+        fresh = 0
+        for path in _state_candidates(self.session_key):
+            if path == mine:
+                continue
+            key, _ = _entry_of(path, "")
+            if key and key != self.session_key:
+                fresh += 1
+        if not fresh:
+            return
+        _log(
+            f"同機另有 {fresh} 把 session key 的身分檔（多開 session 時這是正常的）。"
+            "若指派一直沒進來，先比對這把 key 與 bridge 的："
+            "chatroom_assignments 回傳的 your_session_key 應該與上面那行相同；"
+            "不同就是身分分裂，處置是重啟 MCP 或以 CHATROOM_SESSION_KEY 固定兩邊。"
         )
 
     def depart(self, reason: str, message: str) -> None:

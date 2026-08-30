@@ -24,6 +24,10 @@ def make_watcher(fake_hub, tmp_path, monkeypatch, *argv, state=None):
             json.dumps({"version": 1, "rooms": state}), encoding="utf-8"
         )
     monkeypatch.setenv("CHATROOM_STATE_PATH", str(state_path))
+    # 家目錄也要導開：_state_candidates 會掃 ~/.chatroom，不隔離的話測試會
+    # 讀到**這台機器上真實的** state 檔，結果隨開發者的機器狀態而變
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     args = watch.build_parser().parse_args(list(argv))
     w = watch.Watcher(args)
     w.hub = HubClient(base_url="http://hub.test", token="", transport=fake_hub.transport)
@@ -263,3 +267,41 @@ def test_watcher_never_writes_bridge_state(fake_hub, tmp_path, monkeypatch, caps
     w.poll_room()
     on_disk = json.loads((tmp_path / "watch-state.json").read_text(encoding="utf-8"))
     assert on_disk["rooms"][ROOM]["last_seq"] == 1  # 檔案原封不動
+
+
+# ---------- 指派模式的自檢 ----------
+#
+# 2026-08-30（測試端）：`_sibling_states` 的分裂警告只掛在 --room 迴圈上，
+# 而指派正是分裂的第一個受害者——bridge 用一把 key、watcher 用另一把，
+# 指派送到 bridge 那把上，watcher 永遠不會醒，全程沒有任何警示。
+
+
+def _foreign_state(tmp_path, key: str) -> None:
+    """在同一個資料夾放一份別把 key 的 state 檔。"""
+    (tmp_path / f"state-{key}.json").write_text(
+        json.dumps({"version": 1, "session_key": key,
+                    "rooms": {ROOM: {"participant_id": "p-other"}}}),
+        encoding="utf-8",
+    )
+
+
+def test_assignment_only_mode_hints_when_other_keys_exist(
+    fake_hub, tmp_path, monkeypatch, capsys
+):
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--kind", "claude")
+    _foreign_state(tmp_path, "claude-somebody-else")
+    w.preflight()
+    out = capsys.readouterr().err  # 日誌走 stderr，stdout 只能有事件 JSON
+    assert "your_session_key" in out, "要講出怎麼比對兩把 key"
+    # 措辭必須說明多開是正常的——喊成分裂會讓真正的警告變雜訊
+    assert "正常" in out
+    assert "⚠️" not in out, "這是提示不是警告"
+
+
+def test_assignment_only_mode_is_quiet_when_alone(
+    fake_hub, tmp_path, monkeypatch, capsys
+):
+    """只有自己一把 key 時不要出聲——沒有東西可疑。"""
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--kind", "claude")
+    w.preflight()
+    assert capsys.readouterr().err.strip() == ""
