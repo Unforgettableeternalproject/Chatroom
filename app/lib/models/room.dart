@@ -8,6 +8,7 @@ class Room {
     required this.topic,
     required this.status,
     required this.createdAt,
+    this.visibility = 'public',
     this.memberCount = 0,
     this.lastSeq = 0,
     this.lastActivityAt,
@@ -19,6 +20,13 @@ class Room {
   final String topic;
   final String status; // active | archived
   final String createdAt;
+
+  /// public | private。private＝對話鎖定：Hub 不會把它列給沒份的人，
+  /// 也不接受沒有邀請的加入。
+  ///
+  /// 舊版 Hub 不回這個欄位——那時一律當成公開，因為那正是舊 Hub 的行為。
+  /// 預設成 private 會讓所有房間在升級前的畫面上莫名其妙掛上鎖頭。
+  final String visibility;
   final int memberCount;
 
   /// 房間目前的最大 seq（= next_seq - 1；server list_rooms 附帶）。
@@ -28,24 +36,28 @@ class Room {
 
   bool get isArchived => status == 'archived';
 
+  bool get isPrivate => visibility == 'private';
+
   factory Room.fromJson(Map<String, dynamic> json) => Room(
         id: json['id'] as String,
         name: json['name'] as String,
         topic: (json['topic'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'active',
         createdAt: (json['created_at'] as String?) ?? '',
+        visibility: (json['visibility'] as String?) ?? 'public',
         memberCount: (json['member_count'] as int?) ?? 0,
         lastSeq: (json['last_seq'] as int?) ?? 0,
         lastActivityAt: json['last_activity_at'] as String?,
         archivedAt: json['archived_at'] as String?,
       );
 
-  Room copyWith({String? status, int? memberCount}) => Room(
+  Room copyWith({String? status, int? memberCount, String? visibility}) => Room(
         id: id,
         name: name,
         topic: topic,
         status: status ?? this.status,
         createdAt: createdAt,
+        visibility: visibility ?? this.visibility,
         memberCount: memberCount ?? this.memberCount,
         lastSeq: lastSeq,
         lastActivityAt: lastActivityAt,

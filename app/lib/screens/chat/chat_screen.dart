@@ -991,6 +991,11 @@ class _OverflowMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    // 鎖定是管理員限定的動作，非建立者連選項都不該看到——列出來再擋，
+    // 只是把一個必然失敗的按鈕擺在那裡
+    final detail = ref.watch(roomDetailProvider(roomId)).value;
+    final youAreAdmin = detail?.youAreAdmin ?? false;
+    final isPrivate = detail?.room.isPrivate ?? false;
     return PopupMenuButton<String>(
       color: s.bgCard,
       shape: RoundedRectangleBorder(
@@ -999,6 +1004,23 @@ class _OverflowMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
+          case 'visibility':
+            try {
+              await ref.read(roomsApiProvider).setVisibility(
+                    roomId,
+                    visibility: isPrivate ? 'public' : 'private',
+                    sessionKey: ref.read(appConfigProvider).deviceKey,
+                    participantId:
+                        ref.read(identityProvider(roomId)).value?.participantId,
+                  );
+              ref.invalidate(roomDetailProvider(roomId));
+              ref.invalidate(roomListProvider);
+            } on ApiException catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            }
           case 'archive':
             try {
               await ref.read(roomsApiProvider).archive(roomId);
@@ -1032,6 +1054,13 @@ class _OverflowMenu extends ConsumerWidget {
         }
       },
       itemBuilder: (context) => [
+        if (youAreAdmin)
+          PopupMenuItem(
+            value: 'visibility',
+            height: 36,
+            child: Text(isPrivate ? '解除鎖定（改為公開）' : '鎖定為私人對話',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
         PopupMenuItem(
           value: 'archive',
           height: 36,

@@ -342,6 +342,19 @@ class _RoomTile extends ConsumerWidget {
             Row(children: [
               MonoLabel('${room.memberCount} MEMBERS',
                   size: 9, letterSpacing: 1.0),
+              // 私人房：只有你有份才會出現在這份列表上，所以標記的用途是
+              // 「這個房別人看不到」——發言前該知道的事
+              if (room.isPrivate) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.lock_outline,
+                    size: 11,
+                    color: room.isArchived ? s.inkMute : UepColors.gold),
+                const SizedBox(width: 4),
+                MonoLabel('私人',
+                    size: 9,
+                    letterSpacing: 1.0,
+                    color: room.isArchived ? s.inkMute : UepColors.gold),
+              ],
               if (room.isArchived) ...[
                 const SizedBox(width: 8),
                 Icon(Icons.inventory_2_outlined, size: 11, color: s.inkMute),
@@ -417,6 +430,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   final _name = TextEditingController();
   final _topic = TextEditingController();
   bool _creating = false;
+  bool _private = false;
   String? _error;
 
   @override
@@ -442,6 +456,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             topic: _topic.text.trim(),
             // 建立者即管理員
             sessionKey: ref.read(appConfigProvider).deviceKey,
+            visibility: _private ? 'private' : 'public',
           );
       if (mounted) Navigator.of(context).pop(room);
     } on ApiException catch (e) {
@@ -465,6 +480,23 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           const SizedBox(height: 14),
           _field(context, 'TOPIC（給 agent 的上下文）', _topic,
               hint: '一句話說明這個房間在做什麼…', lines: 3),
+          const SizedBox(height: 6),
+          // 建立當下就能鎖：先開成公開再鎖起來，中間那段時間房間是所有人
+          // 都看得到、都能自己走進來的
+          CheckboxListTile(
+            value: _private,
+            onChanged: _creating
+                ? null
+                : (v) => setState(() => _private = v ?? false),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text('私人對話',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+            subtitle: Text('不會出現在其他人的對話列表，必須受邀才能加入',
+                style: UepText.serif(
+                    size: 11.5, color: s.inkMute, height: 1.4)),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Align(

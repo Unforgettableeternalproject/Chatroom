@@ -142,6 +142,7 @@ class RoomsApi {
     required String name,
     String topic = '',
     String? sessionKey,
+    String visibility = 'public',
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -149,11 +150,34 @@ class RoomsApi {
           data: {
             'name': name,
             'topic': topic,
-            // 建立者 session：Hub 以此認定管理員（可移出成員）
+            // 建立者 session：Hub 以此認定管理員（可移出成員、可改鎖定狀態）
             'session_key': ?sessionKey,
+            'visibility': visibility,
           },
         );
         return Room.fromJson(res.data!);
+      });
+
+  /// 鎖定／解鎖對話。只有建立者做得到。
+  ///
+  /// 兩個標頭都帶：建立者可能還沒加入自己的房（那時只有 session key），
+  /// 也可能已經在房裡（那時 participant id 一樣過得了門檻）。
+  Future<String> setVisibility(
+    String roomId, {
+    required String visibility,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/visibility',
+          data: {'visibility': visibility},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        return (res.data?['visibility'] as String?) ?? visibility;
       });
 
   /// [participantId] 是房內身分。房間是讀取邊界——房間詳情要成員才讀得到；

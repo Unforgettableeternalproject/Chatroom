@@ -8,16 +8,22 @@ class ReplyPreview {
     required this.senderName,
     required this.excerpt,
     required this.deleted,
+    this.seq,
   });
 
   final String? senderName;
   final String excerpt;
   final bool deleted;
 
+  /// 被回覆訊息的房內序號。內容可以被軟刪除，seq 不會——「回的是哪一則」
+  /// 只有它答得出來。舊版 Hub 不回這個欄位。
+  final int? seq;
+
   factory ReplyPreview.fromJson(Map<String, dynamic> json) => ReplyPreview(
         senderName: json['sender_name'] as String?,
         excerpt: (json['excerpt'] as String?) ?? '',
         deleted: (json['deleted'] as bool?) ?? false,
+        seq: json['seq'] as int?,
       );
 }
 
@@ -34,6 +40,7 @@ class Message {
     this.senderName,
     this.mentions = const [],
     this.replyTo,
+    this.replyToSeq,
     this.replyPreview,
     this.pinned = false,
     this.deleted = false,
@@ -55,6 +62,10 @@ class Message {
   final String? senderName;
   final List<String> mentions;
   final String? replyTo;
+
+  /// 被回覆訊息的房內序號。Hub 端「回覆＝mention 被回覆的人」，這個序號
+  /// 是那則訊息帶著走的指向。舊訊息與舊版 Hub 為 null。
+  final int? replyToSeq;
   final ReplyPreview? replyPreview;
   final bool pinned;
   final bool deleted;
@@ -74,6 +85,19 @@ class Message {
   /// 有人加入房間。dispatcher 據此喚醒房內的本機 agent。
   bool get isMemberJoined => systemEvent == 'join';
 
+  /// 「收據」類的系統訊息：提問有了答案、訊息被釘選。
+  ///
+  /// 與 join/leave 那種一行帶過的事件不同，收據帶著**內容**（答案全文、
+  /// 被釘的是誰的哪一則），塞進髮絲線中間的一行小字會被截斷成沒有用的東西，
+  /// 所以要另外渲染。
+  static const receiptEvents = {
+    'question_answered',
+    'question_skipped',
+    'pin',
+  };
+
+  bool get isReceipt => receiptEvents.contains(systemEvent);
+
   /// 此則訊息對 cursor 的貢獻值。
   int get cursor => seq > updateSeq ? seq : updateSeq;
 
@@ -90,6 +114,7 @@ class Message {
             .map((e) => e.toString())
             .toList(),
         replyTo: json['reply_to'] as String?,
+        replyToSeq: json['reply_to_seq'] as int?,
         replyPreview: json['reply_preview'] == null
             ? null
             : ReplyPreview.fromJson(

@@ -234,7 +234,10 @@ class _ReplyQuote extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('回覆 ${preview.senderName ?? '（未知）'}',
+          Text(
+              preview.seq == null
+                  ? '回覆 ${preview.senderName ?? '（未知）'}'
+                  : '回覆 ${preview.senderName ?? '（未知）'} · #${preview.seq}',
               style:
                   UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.0)),
           const SizedBox(height: 2),
