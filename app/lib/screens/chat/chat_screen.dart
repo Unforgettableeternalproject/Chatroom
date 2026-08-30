@@ -19,6 +19,7 @@ import '../../models/message.dart';
 import '../../api/attachments_api.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
+import '../../models/question.dart';
 import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../notifications/taskbar_badge.dart';
@@ -1789,9 +1790,14 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
   /// 而未答的問題一直存在，下次進房該重新看到。
   bool _collapsed = false;
 
+  /// 自己剛送出答案的題目 id。它們也會從待答清單消失，但那是預期的，
+  /// 不該跳「有一題不用回答了」的提示。
+  final _justAnswered = <String>{};
+
   Future<void> _respond(String id, String kind, String answer,
       [List<String> selected = const [],
       List<String> attachmentIds = const []]) async {
+    _justAnswered.add(id);
     try {
       await ref
           .read(questionsApiProvider)
@@ -1840,6 +1846,28 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    // 題目從清單上消失時說一聲。自己剛回答的那次不用講（他知道），
+    // 但**發問者撤回**與逾時要講——不然畫面上就是一題無聲消失，
+    // 使用者會以為是自己漏看了
+    ref.listen(roomQuestionsProvider(widget.roomId), (prev, next) {
+      final before = prev?.value ?? const <Question>[];
+      final after = next.value ?? const <Question>[];
+      if (before.isEmpty) return;
+      final ids = {for (final q in after) q.id};
+      final gone = [
+        for (final q in before)
+          if (!ids.contains(q.id) && !_justAnswered.contains(q.id)) q,
+      ];
+      if (gone.isEmpty || !mounted) return;
+      final head = gone.first.prompt.replaceAll('\n', ' ');
+      final short =
+          head.length > 40 ? '${head.substring(0, 40)}…' : head;
+      final text = gone.length == 1
+          ? '有一題不用回答了（發問者撤回或逾時）：$short'
+          : '有 ${gone.length} 題不用回答了（發問者撤回或逾時）';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(text)));
+    });
     final questions =
         ref.watch(roomQuestionsProvider(widget.roomId)).value ?? const [];
     if (questions.isEmpty) return const SizedBox.shrink();

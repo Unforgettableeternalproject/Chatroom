@@ -334,6 +334,8 @@ def chatroom_leave(room_id: str) -> dict:
     """離開聊天室。
 
     任務結束、或不再需要關注這個房間時呼叫；房內會留下一則系統訊息。
+    **你在這個房間還沒被回答的提問會一併撤回**——你都走了，留著只會讓人去
+    回答一個沒有讀者的問題。
     離開後本機身分即失效，之後要再發言必須重新 chatroom_join。
     注意：房內最後一個 agent 離開後，Hub 會自動封存該房間。
     """
@@ -733,6 +735,26 @@ def chatroom_read_answer(question_id: str) -> dict:
     """
     data = hub().request("GET", f"/api/questions/{question_id}")
     return {"question": data["question"]}
+
+
+@mcp.tool()
+@_guard
+def chatroom_cancel_question(room_id: str, question_id: str) -> dict:
+    """撤回一個你問出去、還沒被回答的問題。
+
+    **不再需要答案時就撤掉**——你自己找到答案了、被指派去做別的事了、或是
+    這輪工作要收了。題目留著的話，人會看到它、認真想、然後回答一個**沒有
+    任何人會讀**的答案。他的時間被花掉了，而他不會知道。
+
+    只有發問者能撤。已經被回答的撤不掉（人已經花了時間，抹掉等於當作沒發生）。
+    對方的介面上會顯示「發問者已取消」而不是默默消失——要讓他知道是被取消
+    的，不是自己漏看了。
+
+    ``chatroom_leave`` 會自動撤回你在該房未答的提問，所以正常收工不必自己撤。
+    """
+    return _room_request(
+        room_id, "POST", f"/api/questions/{question_id}/cancel"
+    )
 
 
 @mcp.tool()

@@ -259,6 +259,7 @@ GET    /api/rooms/{id}                     房間詳情 + 成員
 POST   /api/rooms/{id}/archive             手動封存 / POST unarchive 解封
 POST   /api/rooms/{id}/visibility          {visibility: public/private} 鎖定／解鎖（限建立者）
 POST   /api/rooms/{id}/style               {style, style_instructions?} 說話方式（限建立者）
+POST   /api/questions/{id}/cancel          撤回自己問出去、還沒被回答的問題
 DELETE /api/rooms/{id}                     永久刪除房間（限建立者，不可復原）
 POST   /api/rooms/{id}/join                {kind, session_key, assignment_id?, preferred_name?} → participant
 POST   /api/rooms/{id}/leave               自行退出

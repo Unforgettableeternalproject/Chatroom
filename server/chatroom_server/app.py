@@ -1213,9 +1213,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             },
         )
         await db.commit()
+        # 走了就沒有人在等答案了。留著只會讓人去回答一個沒有讀者的問題
+        cancelled = await _cancel_questions(
+            p["id"], room_id, "發問者已離開聊天室"
+        )
+        if cancelled:
+            logger.info(
+                "離開時撤回 %d 個未答的提問（%s）", len(cancelled), room_id,
+                extra={"event": "questions_cancelled_on_leave",
+                       "room_id": room_id, "count": len(cancelled)},
+            )
         await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
                             kind="system", system_event="leave")
-        return {"ok": True}
+        return {"ok": True, "cancelled_questions": len(cancelled)}
 
     @app.post(
         "/api/rooms/{room_id}/participants/{target_id}/kick",
@@ -2090,6 +2100,68 @@ def create_app(config: Config | None = None) -> FastAPI:
             if pub["status"] != "pending":
                 return {"question": pub, "expired": pub["status"] == "expired"}
 
+    async def _cancel_questions(asker_id: str, room_id: str, why: str) -> list[str]:
+        """把某個發問者還掛著的題目全部取消。回傳被取消的 question id。
+
+        取消不是「問錯了想收回」那種小事。真正的場景是**沒有人在等了**：
+        agent 問完之後可能自己找到答案、被指派去做別的事、或 session 直接
+        結束。題目還掛在 TTL 裡，人看到了、認真想了、回答了——而那個答案
+        不會有任何人讀。
+        這是「人回答了但 agent 收不到」的鏡像，代價一樣：**人的時間被花掉，
+        而他不知道花掉了。**
+        """
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "UPDATE question SET status='cancelled', resolved_at=?,"
+                " answer=? WHERE asker_id=? AND room_id=? AND status='pending'"
+                " RETURNING id",
+                (_now(), why, asker_id, room_id),
+            )
+        ).fetchall()
+        await db.commit()
+        if rows:
+            await events.notify(room_id)
+        return [r["id"] for r in rows]
+
+    @app.post("/api/questions/{question_id}/cancel",
+              dependencies=[Depends(require_auth)])
+    async def cancel_question(
+        question_id: str, x_participant_id: str | None = Header(default=None)
+    ):
+        """撤回一個還沒被回答的問題。只有發問者能撤。
+
+        被問的人會看到「發問者已取消」而不是題目默默消失——**要讓他知道
+        題目是被取消的、不是自己漏看了**，不然下次他不會信任這個介面。
+        """
+        db = app.state.db
+        row = await (
+            await db.execute("SELECT * FROM question WHERE id=?", (question_id,))
+        ).fetchone()
+        if row is None:
+            raise _err(404, "question_not_found", "找不到這個問題")
+        me = await _participant(x_participant_id, row["room_id"])
+        if me["id"] != row["asker_id"]:
+            raise _err(403, "not_your_question",
+                       "只有發問者可以撤回自己問出去的問題")
+        if row["status"] != "pending":
+            # 已經回答的不能撤——人已經花了時間，把它抹掉等於當作沒發生
+            raise _err(409, "question_already_resolved",
+                       f"這個問題已經是 {row['status']} 了，不能撤回")
+        await db.execute(
+            "UPDATE question SET status='cancelled', resolved_at=? WHERE id=?"
+            " AND status='pending'",
+            (_now(), question_id),
+        )
+        await db.commit()
+        await events.notify(row["room_id"])
+        logger.info(
+            "撤回提問 %s（%s）", question_id, row["room_id"],
+            extra={"event": "question_cancelled", "question_id": question_id,
+                   "room_id": row["room_id"]},
+        )
+        return {"ok": True, "status": "cancelled"}
+
     @app.post("/api/questions/{question_id}/answer", dependencies=[Depends(require_auth)])
     async def answer_question(
         question_id: str, body: QuestionAnswer,
@@ -2105,6 +2177,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await _participant(x_participant_id, row["room_id"])
         if me["id"] != row["target_id"]:
             raise _err(403, "not_your_question", "這個問題不是問你的")
+        if row["status"] == "cancelled":
+            raise _err(409, "question_cancelled",
+                       "發問者已經撤回這個問題了——不用回答，沒有人在等。")
         if row["status"] != "pending":
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
         # 以時間為準，不是以 status 欄位為準：sweeper 還沒跑到的那幾秒裡，
