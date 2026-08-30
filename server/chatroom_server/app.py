@@ -263,17 +263,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 這是整個 Hub 唯一會自己動手、且不可逆地刪掉使用者資料的機制。
         # 預設是開的，所以它必須自己開口——把新版拉起來的人不該在房間開始
         # 消失之後，才發現有這個設定存在
-        if cfg.purge_archived_days > 0:
-            logger.warning(
-                "自動清理已啟用：封存超過 %g 天的聊天室會被**永久刪除**"
-                "（含訊息與附件，不可復原）。設 CHATROOM_PURGE_ARCHIVED_DAYS=0 可關閉。",
-                cfg.purge_archived_days,
-                extra={"event": "purge_enabled", "days": cfg.purge_archived_days},
-            )
-        else:
-            logger.info("自動清理已關閉：封存的聊天室會一直留著",
-                        extra={"event": "purge_disabled"})
         app.state.db = await open_db(cfg.db_path)
+        # 名單要查資料庫，所以排在 open_db 之後
+        app.state.started_at = time.monotonic()
+        await _log_purge_preview()
         sweeper = asyncio.create_task(_sweeper())
         app.state.sweeper_task = sweeper
         try:
@@ -1744,6 +1737,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         finally:
             tmp.unlink(missing_ok=True)
 
+        # ⚠️ 順序是**先寫檔、再寫 row**，不要調換。
+        # 孤兒回收的判準是「檔案在、沒有任何 row 引用它」——先寫 row 的話，
+        # 中間那段時間會存在一筆指向不存在檔案的 row，而下載端點會 500。
+        # 現在這個順序的代價只是「檔案暫時看起來像孤兒」，那個由
+        # `orphan_blob_grace` 的寬限期擋掉，兩害相權輕得多
         aid = _uid()
         db = app.state.db
         await db.execute(
@@ -2513,6 +2511,52 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
         await db.commit()
 
+    async def _rooms_due_for_purge() -> list:
+        """目前符合自動清理條件的房間。給啟動預覽與實際清理共用同一個判準。"""
+        if cfg.purge_archived_days <= 0:
+            return []
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(days=cfg.purge_archived_days)
+        ).isoformat()
+        return await (
+            await app.state.db.execute(
+                "SELECT id, name, archived_at FROM room WHERE status='archived'"
+                " AND archived_at IS NOT NULL AND archived_at < ?"
+                " ORDER BY archived_at",
+                (cutoff,),
+            )
+        ).fetchall()
+
+    async def _log_purge_preview() -> None:
+        """啟動時把「這一輪會刪掉哪些房間」印出來。
+
+        只印設定值的話，人看到的是「有這個功能」；印出名單，看到的才是
+        「等一下要死的是這幾個」——後者才擋得住「我以為那些早就不重要了」。
+        搭配 `purge_first_delay` 的緩衝才成立：名單印出來卻 30 秒後就執行，
+        等於只是留下一份好看的遺書。
+        """
+        if cfg.purge_archived_days <= 0:
+            logger.info("自動清理已關閉：封存的聊天室會一直留著",
+                        extra={"event": "purge_disabled"})
+            return
+        rows = await _rooms_due_for_purge()
+        logger.warning(
+            "自動清理已啟用（CHATROOM_PURGE_ARCHIVED_DAYS=%g，設 0 可關閉）："
+            "封存超過 %g 天的聊天室會被**永久刪除**，含訊息與附件，不可復原。"
+            "第一輪在 %g 秒後執行——要反悔就趁現在。",
+            cfg.purge_archived_days, cfg.purge_archived_days,
+            cfg.purge_first_delay,
+            extra={"event": "purge_enabled", "days": cfg.purge_archived_days,
+                   "first_delay": cfg.purge_first_delay, "due": len(rows)},
+        )
+        if not rows:
+            logger.info("  本輪沒有符合條件的房間")
+            return
+        logger.warning("  本輪符合條件：%d 個房間", len(rows))
+        for r in rows:
+            logger.warning("    - %s（archived_at %s）", r["name"], r["archived_at"])
+
     async def _purge_expired_rooms() -> int:
         """封存夠久的房間永久刪除。回傳刪掉幾間。
 
@@ -2522,18 +2566,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         if cfg.purge_archived_days <= 0:
             return 0
-        db = app.state.db
-        cutoff = (
-            datetime.now(timezone.utc)
-            - timedelta(days=cfg.purge_archived_days)
-        ).isoformat()
-        rows = await (
-            await db.execute(
-                "SELECT id, name FROM room WHERE status='archived'"
-                " AND archived_at IS NOT NULL AND archived_at < ?",
-                (cutoff,),
-            )
-        ).fetchall()
+        # 首輪延遲：啟動時印出的名單要有人來得及讀完再 Ctrl-C
+        started = getattr(app.state, "started_at", None)
+        if started is not None and cfg.purge_first_delay > 0:
+            if time.monotonic() - started < cfg.purge_first_delay:
+                return 0
+        rows = await _rooms_due_for_purge()
         for r in rows:
             counts = await _purge_room(r["id"])
             logger.warning(
@@ -2597,6 +2635,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 logger.exception("sweeper 單輪執行失敗，下一輪續行")
 
     app.state.sweep_once = _sweep_once  # 測試可直接觸發單輪掃描
+    app.state.log_purge_preview = _log_purge_preview  # 測試驗預覽內容
 
     @app.get("/api/health")
     async def health():

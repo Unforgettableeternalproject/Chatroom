@@ -211,7 +211,8 @@ async def test_fresh_blob_is_kept_during_the_grace(tmp_path):
 
 @pytest.mark.asyncio
 async def test_sweeper_purges_rooms_archived_long_enough(tmp_path):
-    app, client = await _make(tmp_path, "purge_on", purge_archived_days=1.0)
+    app, client = await _make(tmp_path, "purge_on", purge_archived_days=1.0,
+                              purge_first_delay=0.0)
     async with client:
         async with app.router.lifespan_context(app):
             keep = await _room(client, "剛封存")
@@ -236,7 +237,8 @@ async def test_sweeper_purges_rooms_archived_long_enough(tmp_path):
 @pytest.mark.asyncio
 async def test_archived_without_a_timestamp_is_never_purged(tmp_path):
     """`archived_at` 是 NULL 的舊資料沒有倒數起點——不可復原的動作不用猜的時間。"""
-    app, client = await _make(tmp_path, "purge_null", purge_archived_days=1.0)
+    app, client = await _make(tmp_path, "purge_null", purge_archived_days=1.0,
+                              purge_first_delay=0.0)
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client)
@@ -295,3 +297,61 @@ async def test_long_poll_wakes_up_when_the_room_is_deleted(tmp_path):
             res = await asyncio.wait_for(task, timeout=5)
             # 醒過來就好——房間沒了，回什麼都算「別再掛著」
             assert res.status_code in (200, 404)
+
+
+@pytest.mark.asyncio
+async def test_first_sweep_is_delayed_so_there_is_time_to_change_your_mind(tmp_path):
+    """啟動後的第一輪要等——那是唯一一次「人在旁邊看著」的時刻。
+
+    Hub 啟動時會把「這一輪會刪掉哪些房間」印出來，30 秒後就執行的話沒有人
+    來得及讀完再 Ctrl-C，那份名單就只是一份好看的遺書（2026-08-30 測試端）。
+    之後每輪照常，不再延遲。
+    """
+    app, client = await _make(tmp_path, "purge_delay", purge_archived_days=1.0,
+                              purge_first_delay=600.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            await client.post(f"/api/rooms/{room['id']}/archive")
+            await app.state.db.execute(
+                "UPDATE room SET archived_at=? WHERE id=?",
+                ("2020-01-01T00:00:00+00:00", room["id"]),
+            )
+            await app.state.db.commit()
+
+            await app.state.sweep_once()
+            r = await client.get("/api/rooms", params={"status": "archived"})
+            assert room["id"] in [x["id"] for x in r.json()["rooms"]], (
+                "首輪延遲內就把房間刪掉了，反悔窗口等於不存在"
+            )
+
+            # 窗口過了就照常執行
+            app.state.started_at -= 601
+            await app.state.sweep_once()
+            r = await client.get("/api/rooms", params={"status": "archived"})
+            assert room["id"] not in [x["id"] for x in r.json()["rooms"]]
+
+
+@pytest.mark.asyncio
+async def test_startup_preview_names_the_rooms_that_will_die(tmp_path, caplog):
+    """只印設定值，人看到的是「有這個功能」；印出名單才是「等一下要死的是這幾個」。"""
+    import logging
+
+    app, client = await _make(tmp_path, "purge_preview", purge_archived_days=1.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client, name="要被清掉的房")
+            await client.post(f"/api/rooms/{room['id']}/archive")
+            await app.state.db.execute(
+                "UPDATE room SET archived_at=? WHERE id=?",
+                ("2020-01-01T00:00:00+00:00", room["id"]),
+            )
+            await app.state.db.commit()
+
+            with caplog.at_level(logging.INFO, logger="chatroom"):
+                await app.state.log_purge_preview()
+
+    text = caplog.text
+    assert "要被清掉的房" in text, "名單要指名道姓，不然人不會知道自己要失去什麼"
+    assert "永久刪除" in text
+    assert "可關閉" in text, "要講怎麼關掉，不然只是宣告壞消息"

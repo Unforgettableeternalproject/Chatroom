@@ -33,6 +33,13 @@ class Config:
     purge_archived_days: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_PURGE_ARCHIVED_DAYS", "3"))
     )
+    # Hub 啟動後多久才做第一次自動清理（秒），預設 5 分鐘。
+    # 這是**反悔窗口**：啟動時會把「這一輪會刪掉哪些房間」印出來，而 30 秒
+    # 根本來不及讀完再 Ctrl-C。只有第一輪需要——那是唯一一次「剛換版、人在
+    # 旁邊看著、而且可能不知道自己載入了什麼」的時刻
+    purge_first_delay: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_PURGE_FIRST_DELAY", "300"))
+    )
     # 孤兒附件實體的寬限（秒）。附件是內容定址的，刪房只能刪 DB row，實體要
     # 等「沒有任何 row 引用這個雜湊」才能刪；而剛寫入檔案、row 還沒落庫的那
     # 一瞬間看起來也像孤兒，所以要給一段寬限，預設 1 小時
