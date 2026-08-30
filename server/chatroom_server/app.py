@@ -51,8 +51,15 @@ def _err(status: int, code: str, message: str) -> HTTPException:
 class RoomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     topic: str = ""
-    # 建立者的 session（管理員身分：可移出成員）。省略時房間沒有管理員
+    # 建立者的 session（管理員身分：可移出成員、可改鎖定狀態）。
+    # 省略時房間沒有管理員
     session_key: str | None = Field(default=None, max_length=128)
+    # public / private。private 的房不出現在別人的房間列表，也不能自行加入
+    visibility: str = Field(default="public", pattern="^(public|private)$")
+
+
+class RoomVisibility(BaseModel):
+    visibility: str = Field(pattern="^(public|private)$")
 
 
 class JoinRequest(BaseModel):
@@ -362,6 +369,67 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "你已被管理員移出這個聊天室，看不到房內的內容")
         return row
 
+    async def _invited_to_private(room, session_key: str | None) -> bool:
+        """這個 session 能不能看到／進入這個私人房。
+
+        三種算數：建立者本人、房內既有紀錄（含已離開的——他當時在場過，
+        房間不該從他的列表上憑空消失）、以及一筆還算數的指派（邀請）。
+
+        ⚠️ 這是**可見性**，不是安全邊界。拿得到 token 的人本來就能對任何房
+        建立指派（見 `POST /api/rooms/{id}/assignments`，它只驗 token）——
+        token 才是這個系統的信任邊界，房間不是（與 access_token 的設計一致）。
+        私人房擋掉的是「在列表上被逛到」與「不請自來」，不是有心人。
+        真要隔離請開不同的 Hub 實例。
+        """
+        if not session_key:
+            return False
+        if room["creator_session_key"] and session_key == room["creator_session_key"]:
+            return True
+        db = app.state.db
+        # 被踢的人不算成員——那是一個「不要再看到這裡」的決定。要回來得靠
+        # 踢出**之後**新建的指派，那筆會在下面的 EXISTS 命中
+        member = await (
+            await db.execute(
+                "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
+                " AND status!='kicked'",
+                (room["id"], session_key),
+            )
+        ).fetchone()
+        if member is not None:
+            return True
+        invited = await (
+            await db.execute(
+                "SELECT 1 FROM assignment WHERE room_id=? AND target_session_key=?"
+                " AND status IN ('pending','accepted')",
+                (room["id"], session_key),
+            )
+        ).fetchone()
+        return invited is not None
+
+    async def _admin_or_403(room, participant_id: str | None, session_key: str | None):
+        """管理員（建立者）門檻。
+
+        接受兩種自報方式：X-Session-Key（建立者可能還沒加入自己的房，
+        指派 UI 正開在那個空窗上），或 X-Participant-Id 反查 session_key。
+        """
+        creator = room["creator_session_key"]
+        if not creator:
+            raise _err(409, "room_has_no_admin",
+                       "這個聊天室沒有建立者紀錄（建立時沒帶 session_key），"
+                       "沒有人可以變更它的鎖定狀態")
+        if session_key and session_key == creator:
+            return
+        if participant_id:
+            me = await (
+                await app.state.db.execute(
+                    "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                    (participant_id, room["id"]),
+                )
+            ).fetchone()
+            if me is not None and me["session_key"] == creator:
+                return
+        raise _err(403, "not_admin", "只有聊天室建立者可以變更鎖定狀態")
+
     async def _touch_session(
         session_key: str,
         kind: str | None = None,
@@ -406,16 +474,33 @@ def create_app(config: Config | None = None) -> FastAPI:
         system_event: str = "",
     ) -> dict:
         db = app.state.db
+        effective = list(mentions or [])
+        reply_to_seq = None
         # reply 目標必須存在且屬於同一房間，否則會把他房的內容洩進本房時間軸
         if reply_to is not None:
             target = await (
                 await db.execute(
-                    "SELECT 1 FROM message WHERE id=? AND room_id=?", (reply_to, room_id)
+                    "SELECT m.seq, m.sender_id, p.display_name FROM message m"
+                    " LEFT JOIN participant p ON p.id=m.sender_id"
+                    " WHERE m.id=? AND m.room_id=?",
+                    (reply_to, room_id),
                 )
             ).fetchone()
             if target is None:
                 raise _err(422, "reply_target_not_found",
                            "reply_to 指向的訊息不存在或不在這個房間")
+            reply_to_seq = target["seq"]
+            # 回覆＝mention 對方。「我回你了」與「我 @ 你」在使用者眼裡是同
+            # 一件事，但在此之前只有後者會喚醒對方——回覆送出去、看起來成功、
+            # 對方永遠不知道。要求發話方自己補一個 mentions 參數才會通知，
+            # 等於把一個沒人會記得的步驟塞進最常用的路徑。
+            #
+            # 自己回自己不算：那只會把 agent 自己叫醒一次。
+            # 回系統訊息也不算：沒有發送者可以通知。
+            if target["sender_id"] and target["sender_id"] != sender_id:
+                name = target["display_name"]
+                if name and name not in effective:
+                    effective.append(name)
         # 以 room.next_seq 發放房內序號（單一寫入者事務內遞增，避免併發重號）
         cur = await db.execute(
             "UPDATE room SET next_seq = next_seq + 1 WHERE id=? RETURNING next_seq - 1",
@@ -424,14 +509,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = (await cur.fetchone())[0]
         msg_id = _uid()
         await db.execute(
-            "INSERT INTO message (id, room_id, seq, sender_id, kind, content, mentions,"
-            " reply_to, system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO message (id, room_id, seq, sender_id, kind, content,"
+            " mentions, reply_to, reply_to_seq, system_event, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, kind, content,
-             json.dumps(mentions or []), reply_to, system_event, _now()),
+             json.dumps(effective), reply_to, reply_to_seq, system_event, _now()),
         )
         await db.commit()
         await events.notify(room_id)
-        return {"id": msg_id, "seq": seq}
+        # mentions 回傳「實際落庫的那份」（含回覆自動補上的），呼叫端的
+        # 未解析檢查才不會漏掉自動加的那個名字
+        return {"id": msg_id, "seq": seq, "mentions": effective,
+                "reply_to_seq": reply_to_seq}
 
     async def _message_rows_to_json(rows, db) -> list[dict]:
         out = []
@@ -446,10 +535,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 ).fetchone()
                 sender_name = p["display_name"] if p else None
             reply_preview = None
+            reply_to_seq = r["reply_to_seq"]
             if r["reply_to"]:
                 orig = await (
                     await db.execute(
-                        "SELECT m.content, m.deleted, p.display_name FROM message m"
+                        "SELECT m.seq, m.content, m.deleted, p.display_name FROM message m"
                         " LEFT JOIN participant p ON p.id=m.sender_id"
                         " WHERE m.id=? AND m.room_id=?",  # 寫入已驗同房，這裡是縱深防禦
                         (r["reply_to"], r["room_id"]),
@@ -457,10 +547,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 ).fetchone()
                 if orig:
                     reply_preview = {
+                        "seq": orig["seq"],
                         "sender_name": orig["display_name"],
                         "excerpt": "" if orig["deleted"] else orig["content"][:80],
                         "deleted": bool(orig["deleted"]),
                     }
+                    # 這個欄位是後來才加的，之前的回覆訊息落庫時沒有它。
+                    # 現查補上，舊訊息才不會在 UI 上獨獨少一個「#12」
+                    if reply_to_seq is None:
+                        reply_to_seq = orig["seq"]
             out.append({
                 "id": r["id"], "seq": r["seq"], "update_seq": r["update_seq"],
                 "kind": r["kind"],
@@ -470,7 +565,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 "content": "" if r["deleted"] else r["content"],
                 "mentions": json.loads(r["mentions"]),
-                "reply_to": r["reply_to"], "reply_preview": reply_preview,
+                "reply_to": r["reply_to"], "reply_to_seq": reply_to_seq,
+                "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
                 "attachments": [] if r["deleted"] else attachments.get(r["id"], []),
                 "created_at": r["created_at"],
@@ -500,11 +596,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         now = _now()
         await db.execute(
             "INSERT INTO room (id, name, topic, created_at, activated_at,"
-            " creator_session_key) VALUES (?,?,?,?,?,?)",
-            (room_id, body.name, body.topic, now, now, body.session_key),
+            " creator_session_key, visibility) VALUES (?,?,?,?,?,?,?)",
+            (room_id, body.name, body.topic, now, now, body.session_key,
+             body.visibility),
         )
         await db.commit()
-        return {"id": room_id, "name": body.name, "topic": body.topic, "status": "active"}
+        return {"id": room_id, "name": body.name, "topic": body.topic,
+                "status": "active", "visibility": body.visibility}
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
     async def list_rooms(
@@ -517,6 +615,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         if session_key:
             await _touch_session(session_key, kind, label, _client_ip(request))
+        # 私人房只對「有份的人」出現：建立者、房內（含曾在房內）的成員、
+        # 被邀請的 session。沒帶 session_key 就只看得到公開房——匿名的
+        # 列表請求無從證明自己有份
         rows = await (
             await db.execute(
                 "SELECT r.*,"
@@ -525,9 +626,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " r.next_seq - 1 AS last_seq,"
                 " (SELECT m.created_at FROM message m WHERE m.room_id=r.id"
                 "  ORDER BY m.seq DESC LIMIT 1) AS last_activity_at"
-                " FROM room r WHERE r.status=?"
-                " ORDER BY last_activity_at DESC",
-                (status,),
+                " FROM room r WHERE r.status=? AND ("
+                "  r.visibility='public'"
+                "  OR r.creator_session_key=?"
+                "  OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
+                "             AND p.session_key=? AND p.status!='kicked')"
+                "  OR EXISTS (SELECT 1 FROM assignment a WHERE a.room_id=r.id"
+                "             AND a.target_session_key=?"
+                "             AND a.status IN ('pending','accepted'))"
+                " ) ORDER BY last_activity_at DESC",
+                (status, session_key, session_key, session_key),
             )
         ).fetchall()
         rooms = [_room_public(r) for r in rows]
@@ -663,11 +771,47 @@ def create_app(config: Config | None = None) -> FastAPI:
                             system_event="unarchive")
         return {"ok": True, "already_active": False}
 
+    @app.post("/api/rooms/{room_id}/visibility", dependencies=[Depends(require_auth)])
+    async def set_visibility(
+        room_id: str,
+        body: RoomVisibility,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """鎖定／解鎖對話。只有建立者能改。
+
+        變更會在房內留下一則系統訊息：從公開變成私人，會影響其他人還找不找
+        得到這個房間，那不該是一件只有管理員知道的事。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key)
+        if room["visibility"] == body.visibility:
+            return {"ok": True, "visibility": body.visibility, "changed": False}
+        db = app.state.db
+        await db.execute(
+            "UPDATE room SET visibility=? WHERE id=?", (body.visibility, room_id)
+        )
+        await db.commit()
+        logger.info(
+            "變更鎖定狀態 %s → %s（%s）", room["visibility"], body.visibility, room_id,
+            extra={"event": "visibility", "room_id": room_id,
+                   "visibility": body.visibility},
+        )
+        await _post_message(
+            room_id, None,
+            ("這個對話已鎖定為私人：不會出現在其他人的對話列表，"
+             "也必須受邀才能加入"
+             if body.visibility == "private"
+             else "這個對話已改為公開：所有連上 Hub 的人都看得到並可自行加入"),
+            kind="system", system_event="visibility",
+        )
+        return {"ok": True, "visibility": body.visibility, "changed": True}
+
     # ---------- 成員 ----------
 
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
     async def join_room(room_id: str, body: JoinRequest, request: Request):
-        await _room_or_404(room_id)
+        room = await _room_or_404(room_id)
         db = app.state.db
         assignment = None
         session_key = body.session_key
@@ -709,6 +853,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "kicked",
                        "你已被管理員移出此聊天室，無法自行重新加入。"
                        "要回來需要管理員重新指派一次。")
+        # 私人房：沒有邀請就進不來。放在 kicked 檢查之後——被踢的人即使
+        # 手上有舊指派也已經在上面被擋掉了（kick 當下就撤銷了那些指派）
+        if room["visibility"] == "private" and not await _invited_to_private(
+            room, session_key
+        ):
+            raise _err(403, "room_is_private",
+                       "這是一個私人對話，必須先被邀請才能加入。"
+                       "請房內的成員從指派／邀請功能把你加進來。")
         # 同一 session 已在房內 → 冪等返回既有身分
         existing = await (
             await db.execute(
@@ -924,6 +1076,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         """發言。mention 到不存在或已離開的名字時，在回應中明說。
 
+        帶 ``reply_to`` 時，被回覆者會被**自動加進 mentions**——回覆與 @ 在
+        使用者眼裡是同一件事，而在此之前只有後者會喚醒對方。回應的
+        ``mentions`` 是實際落庫的那份（含自動補上的），``reply_to_seq``
+        是被回覆訊息的房內序號。
+
         房裡可能同時有「Novia」（已離開的舊身分）與「Novia-2」（本人），名字
         只差一個字。挑錯的話訊息會安靜地送進一個永遠不會醒的身分——發出去了、
         沒有錯誤、也永遠等不到回應。mention 的用途就是喚醒對方，喚不到就是失敗，
@@ -958,7 +1115,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 [result["id"], *body.attachment_ids],
             )
             await db.commit()
-        if body.mentions:
+        # 用實際落庫的 mentions 檢查，不是 body.mentions——回覆自動補上的那個
+        # 名字同樣可能已經離開房間，而那正是最需要講出來的情況：你以為回覆
+        # 就等於通知到人，對方其實早就不在了
+        if result["mentions"]:
             rows = await (
                 await db.execute(
                     "SELECT display_name FROM participant WHERE room_id=?"
@@ -967,7 +1127,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchall()
             active_names = {r["display_name"] for r in rows}
-            unresolved = [m for m in body.mentions if m not in active_names]
+            unresolved = [m for m in result["mentions"] if m not in active_names]
             if unresolved:
                 result["unresolved_mentions"] = unresolved
                 result["active_names"] = sorted(active_names)
@@ -1077,15 +1237,53 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
     async def pin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
+        """釘選一則訊息，並通知它的發送者。
+
+        通知的對象**一律是被釘訊息的發送者**，與誰按下釘選無關——包括自己
+        釘自己的訊息。釘選是「這段話很重要，之後還要回來看」的宣告，而最該
+        知道這件事的人就是說這段話的人；讓通知與釘選者的身分掛鉤，只會多出
+        一堆「為什麼這次沒通知」的特例。
+
+        被釘的若是系統訊息（沒有發送者）就沒有人可通知，但收據照樣留下——
+        釘選本身是房內事件，不因為沒人可 ping 就變成靜默操作。
+        """
         room_id = await _message_room(message_id)
         await _room_or_404(room_id)  # 封存房唯讀，禁止釘選
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
-        await db.execute(
-            "UPDATE message SET pinned=1, pinned_by=? WHERE id=?", (p["id"], message_id)
+        # 條件式 UPDATE：重複釘選一則已釘選的訊息不該再通知一次。
+        # 「先 SELECT 判斷再 UPDATE」不行——兩者之間有空隙，並發的兩次釘選
+        # 會雙雙通過檢查而發出兩張收據。把判斷寫進 UPDATE 的 WHERE 裡，
+        # 由資料庫保證只有一次會命中
+        cur = await db.execute(
+            "UPDATE message SET pinned=1, pinned_by=? WHERE id=? AND pinned=0"
+            " RETURNING seq, sender_id",
+            (p["id"], message_id),
         )
+        target = await cur.fetchone()
+        if target is None:
+            await db.commit()
+            return {"ok": True, "already_pinned": True}
+        seq, sender_id = target["seq"], target["sender_id"]
         await _touch_message(message_id, room_id)
-        return {"ok": True}
+        author_name = None
+        if sender_id:
+            author = await (
+                await db.execute(
+                    "SELECT display_name FROM participant WHERE id=?", (sender_id,)
+                )
+            ).fetchone()
+            author_name = author["display_name"] if author else None
+        if author_name:
+            content = f"{p['display_name']} 釘選了 {author_name} 的訊息 #{seq}"
+        else:
+            content = f"{p['display_name']} 釘選了 #{seq}"
+        await _post_message(
+            room_id, None, content, kind="system", system_event="pin",
+            mentions=[author_name] if author_name else None,
+            reply_to=message_id,
+        )
+        return {"ok": True, "notified": author_name}
 
     @app.delete("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
     async def unpin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
@@ -1640,7 +1838,53 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
         await db.commit()
         await events.notify(row["room_id"])
-        return {"ok": True, "status": status}
+        receipt = await _post_answer_receipt(row, me, status, body.answer.strip())
+        return {"ok": True, "status": status, "receipt_seq": receipt["seq"]}
+
+    async def _post_answer_receipt(question, answerer, status: str, answer: str) -> dict:
+        """在時間軸留下一張「這題已經有答案了」的收據。
+
+        問題本身刻意不進時間軸（見 schema 註解：定向的東西灌進公開時間軸會
+        變成噪音，也會讓其他人以為該由自己回答）。但**答案不一樣**：它是一個
+        已經拍板的決定，房內其他 agent 照著做就對了。決定只活在 question 表
+        裡的話，沒有人會知道它存在——除非每個 agent 都想到要去翻那張表，而
+        它們不會。收據是那個決定唯一會被看見的地方，所以它留下來。
+
+        收據也 mention 發問者。發問方多半正卡在 chatroom_read_answer 上等，
+        那條路會自己收到答案；但**放棄等待之後才被回答**的那次不會——那時
+        這個 mention 是它唯一會醒來的理由。
+        """
+        db = app.state.db
+        asker = None
+        if question["asker_id"]:
+            asker = await (
+                await db.execute(
+                    "SELECT display_name FROM participant WHERE id=?",
+                    (question["asker_id"],),
+                )
+            ).fetchone()
+        asker_name = asker["display_name"] if asker else "（已離開的成員）"
+        # 問題摘要 + 答案全文：摘要足以認出是哪一題，答案不截斷——被截斷的
+        # 決定等於沒有決定，讀的人還是得回頭去查，收據就白留了
+        prompt = question["prompt"].replace("\n", " ").strip()
+        if len(prompt) > 120:
+            prompt = prompt[:120] + "…"
+        if status == "skipped":
+            content = (
+                f"{asker_name} 的提問「{prompt}」"
+                f"—— {answerer['display_name']} 選擇不在聊天室裡回答"
+            )
+        else:
+            content = (
+                f"{asker_name} 的提問「{prompt}」"
+                f"—— {answerer['display_name']} 回答：{answer}"
+            )
+        return await _post_message(
+            question["room_id"], None, content, kind="system",
+            system_event=("question_skipped" if status == "skipped"
+                          else "question_answered"),
+            mentions=[asker["display_name"]] if asker else None,
+        )
 
     # ---------- Session 名錄 ----------
 

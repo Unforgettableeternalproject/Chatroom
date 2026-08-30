@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS room (
     name        TEXT NOT NULL,
     topic       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'active',   -- active / archived
+    -- public / private。private＝對話鎖定：不在別人的房間列表裡出現，
+    -- 也不能沒有邀請就加入。這是**可見性**，不是加密——拿得到 room_id
+    -- 又已經是成員的人照樣讀得到，它擋的是「逛到」與「自己走進來」
+    visibility  TEXT NOT NULL DEFAULT 'public',
     next_seq    INTEGER NOT NULL DEFAULT 1,       -- 訊息序號發放計數器
     created_at  TEXT NOT NULL,
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
@@ -54,6 +58,10 @@ CREATE TABLE IF NOT EXISTS message (
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
     reply_to   TEXT,
+    -- 被回覆訊息的房內序號。內容是可以事後被軟刪除的，seq 不會——回覆指向
+    -- 哪一則，這是唯一不會被刪掉的答案，client 也不必為了顯示「#12」而
+    -- 反查一次訊息
+    reply_to_seq INTEGER,
     pinned     INTEGER NOT NULL DEFAULT 0,
     pinned_by  TEXT,
     deleted    INTEGER NOT NULL DEFAULT 0,
@@ -169,6 +177,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("participant", "join_token", "join_token TEXT NOT NULL DEFAULT ''"),
     # 問題逾時。舊資料的 expires_at 為 NULL＝永不過期，維持原本的語意
     ("question", "expires_at", "expires_at TEXT"),
+    # 對話鎖定。舊房一律 public——把既有的房悄悄變成私人，等於在使用者
+    # 毫不知情的情況下讓它們從所有人的列表上消失
+    ("room", "visibility", "visibility TEXT NOT NULL DEFAULT 'public'"),
+    # 回覆目標的 seq。舊訊息補不回來（NULL），client 要能容忍缺值
+    ("message", "reply_to_seq", "reply_to_seq INTEGER"),
 ]
 
 
