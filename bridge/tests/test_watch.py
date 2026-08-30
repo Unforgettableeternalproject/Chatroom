@@ -305,3 +305,27 @@ def test_assignment_only_mode_is_quiet_when_alone(
     w = make_watcher(fake_hub, tmp_path, monkeypatch, "--kind", "claude")
     w.preflight()
     assert capsys.readouterr().err.strip() == ""
+
+
+def test_watcher_leaves_when_the_room_is_deleted(
+    fake_hub, tmp_path, monkeypatch, capsys
+):
+    """房間被永久刪除時 watcher 要自己結束，而不是無限重試。
+
+    這是 403 那條保命契約的鏡像（2026-08-30 測試端提出）：房不在了，重試
+    只會生出一隻永遠打 Hub 的殭屍。而它與封存的處置不同——封存房還讀得到
+    歷史、人可以解封；被刪的房不會回來。
+    """
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     "--kind", "claude", state={ROOM: {"participant_id": "p1"}})
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [], "you_were_mentioned": False, "last_seq": 0,
+         "room_status": "deleted"},
+    )
+    w.poll_room()
+    events = events_from(capsys)
+    departures = [e for e in events if e.get("event") == "departure"]
+    assert departures, "房間消失要發 departure 事件，不然沒有人知道它為什麼停了"
+    assert departures[-1]["reason"] == "deleted"
+    assert "刪除" in departures[-1]["message"]

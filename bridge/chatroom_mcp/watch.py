@@ -321,7 +321,16 @@ class Watcher:
         # watcher 會對著一個已經結束的房間空轉到天荒地老
         status = data.get("room_status")
         if isinstance(status, str) and status != "active":
-            self.depart("archived", f"聊天室已{'封存' if status == 'archived' else status}")
+            if status == "deleted":
+                # 封存與刪除的處置不同：封存房還讀得到歷史，人可以決定解封；
+                # 被刪的房不會回來，重新 join 也沒有東西可以加入
+                self.depart("deleted",
+                            "聊天室已被永久刪除（連同訊息與附件），不會再回來")
+            else:
+                self.depart(
+                    "archived",
+                    f"聊天室已{'封存' if status == 'archived' else status}",
+                )
             return
         for m in data.get("messages", []):
             seq = m.get("seq")
