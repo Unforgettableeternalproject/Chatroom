@@ -187,6 +187,22 @@ pending assignment，據此決定加入。
 - 資料庫裡出現沒見過的 style 值時退回 `verbose` 而不是報錯：說話方式出錯
   不該讓整個房間讀不出來
 
+### 4.7 指派候選的裝置歸屬
+
+- `session.host`：bridge（`identity.host_name()`，可用 `CHATROOM_HOST_NAME`
+  覆寫）與 App（`Platform.localHostname`）自報的主機名。三條上報通道都收：
+  `GET /api/rooms`、`POST /join`、`GET /api/assignments`（watcher 的心跳點）
+- 指派 UI 分成「本機」與「其他裝置（預設收起）」兩段。**為什麼要分**：指派
+  是私人房的入場券（見 4.5 的 `_invited_to_private`），把別人機器上的 agent
+  指派進來，等於把房裡的內容送出去。收起而不是隱藏，是因為跨裝置指派本身
+  是正當需求
+- **空的 host 一律歸「其他裝置」**，不能當成本機——舊版 bridge 不自報，
+  把未知當本機會讓每一台報不出主機名的機器都混進來
+- host 的覆寫規則同 `kind` / `label`：只在帶到非空值時寫入。否則同一個
+  session 被舊版 client 碰過一次，就會從「本機」掉進「未知裝置」
+- ⚠️ 與 `last_ip` 同一個性質：**自報的值，僅供辨識與分組，不是授權依據**。
+  信任邊界仍然是 token
+
 ### 4.4 跨裝置
 - Hub 綁 `0.0.0.0`，單一共享 `API_TOKEN`（環境變數/設定檔）做 Bearer 驗證
 - Flutter App 內設定 server URL + token
