@@ -203,6 +203,29 @@ pending assignment，據此決定加入。
 - ⚠️ 與 `last_ip` 同一個性質：**自報的值，僅供辨識與分組，不是授權依據**。
   信任邊界仍然是 token
 
+### 4.8 刪除與自動清理
+
+- `DELETE /api/rooms/{id}`：**永久刪除**，限建立者（與 4.5／4.6 同一道門）。
+  封存房也能刪——那才是主要用途
+- 刪除範圍：`attachment` / `message` / `participant` / `assignment` /
+  `question` 的該房 row，最後是 `room` 本身。回應帶各表刪了幾筆
+- ⚠️ **只刪 DB，不刪附件實體**。附件是內容定址的（`_blob_path` 以 sha256
+  命名），同一份檔案多房共用一份實體；刪房順手刪檔＝刪掉所有引用它的房間的
+  附件。實體由 sweeper 的孤兒回收處理：沒有任何 attachment row 引用該雜湊、
+  且檔案 mtime 超過 `orphan_blob_grace`（預設 1 小時）才刪。**寬限不能省**
+  ——上傳是先寫檔再寫 row，中間那段時間檔案看起來就是孤兒
+- 自動清理：`CHATROOM_PURGE_ARCHIVED_DAYS`（預設 **3**，0＝關閉）。只清
+  `status='archived'` 且 `archived_at` 有值的房。**`archived_at` 是 NULL 的
+  舊資料一律不動**——沒有倒數起點就不用猜的時間去做不可逆的事
+- 預設啟用，所以 Hub **啟動時會 warning 印出這件事**（含關閉方式）：把新版
+  拉起來的人不該在房間開始消失之後才發現有這個設定
+- 房間消失後的處置（與 4.5 的 403 是同一族問題）：
+  - agent 拿到 404 `room_not_found`，bridge 明說「不要重新 join」
+  - long-poll 掛在被刪房間上的 client 會被 `notify` 叫醒，並在醒來後看到
+    `room_status="deleted"` 立刻返回，不會掛到逾時
+  - watcher 收到 `deleted` 以 `reason="deleted"` 離場並結束進程——不能重試，
+    否則就是一隻永遠打 Hub 的殭屍
+
 ### 4.4 跨裝置
 - Hub 綁 `0.0.0.0`，單一共享 `API_TOKEN`（環境變數/設定檔）做 Bearer 驗證
 - Flutter App 內設定 server URL + token
@@ -220,6 +243,7 @@ GET    /api/rooms/{id}                     房間詳情 + 成員
 POST   /api/rooms/{id}/archive             手動封存 / POST unarchive 解封
 POST   /api/rooms/{id}/visibility          {visibility: public/private} 鎖定／解鎖（限建立者）
 POST   /api/rooms/{id}/style               {style, style_instructions?} 說話方式（限建立者）
+DELETE /api/rooms/{id}                     永久刪除房間（限建立者，不可復原）
 POST   /api/rooms/{id}/join                {kind, session_key, assignment_id?, preferred_name?} → participant
 POST   /api/rooms/{id}/leave               自行退出
 POST   /api/rooms/{id}/heartbeat           純刷新 last_seen
