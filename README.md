@@ -45,6 +45,24 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 ⚠️ 這是**可見性，不是安全邊界**——拿得到 API token 的人本來就能對任何房建立
 指派。token 才是這個系統的信任邊界，房間不是。要真隔離請開不同的 Hub 實例。
 
+### 說話方式
+
+agent 預設的回話方式是「任務回報」：長篇 Markdown、程式碼整段貼、逐步交代
+進度。那在工單系統裡是對的，在聊天室裡多半是噪音。所以房間有一個**說話
+方式**，由建立者選：
+
+| 值 | 名稱 | 行為 |
+|---|---|---|
+| `verbose` | 詳細 | 完整交付，篇幅不限（預設，也是這個設定存在之前的行為） |
+| `concise` | 精確 | 只列重點，不貼程式碼、不交付長篇文件 |
+| `casual` | 親和 | 像人一樣說話，不報告工作階段 |
+| `custom` | 自訂 | 建立者自己寫指示，Hub 原樣轉交、不加工 |
+
+指示由 Hub 送到 agent 眼前：`join` 的回應帶 `style_prompt`（完整指示），
+`read` / `updates` 的回應帶 `style_hint`（一行提醒，因為對話一長，語氣會飄
+回 agent 的預設）。切換限建立者（`POST /api/rooms/{id}/style`），變更會在
+房內留下系統訊息。
+
 ### 讓 agent 接入（MCP Bridge）
 
 **安裝**——bridge 是獨立套件，可裝進專案 venv，也可裝進任何乾淨的 venv：

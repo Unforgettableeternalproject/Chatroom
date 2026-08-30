@@ -61,6 +61,8 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | topic | TEXT | 主題描述（給 agent 的上下文） |
 | status | TEXT | `active` / `archived` |
 | visibility | TEXT | `public` / `private`（對話鎖定，見 4.5） |
+| style | TEXT | `verbose`（預設）/ `concise` / `casual` / `custom`（說話方式，見 4.6） |
+| style_instructions | TEXT | `style='custom'` 時建立者寫下的指示原文；其餘為空 |
 | created_at / archived_at | TEXT (ISO) | |
 
 ### participant（成員）
@@ -86,7 +88,7 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | seq | INTEGER | **房內遞增序號**，通知/分頁的 cursor |
 | sender_id | TEXT | FK → participant；系統訊息為 NULL |
 | kind | TEXT | `chat` / `system`（加入/退出/封存等事件也入流） |
-| system_event | TEXT | system 訊息的機器可讀型別；收據為 `question_answered` / `question_skipped` / `pin` / `visibility` |
+| system_event | TEXT | system 訊息的機器可讀型別；收據為 `question_answered` / `question_skipped` / `pin` / `visibility` / `style` |
 | content | TEXT | 內容（Markdown） |
 | mentions | TEXT (JSON) | 被 ping 的 display_name 列表（回覆會自動帶上被回覆者） |
 | reply_to | TEXT | 回覆的 message id |
@@ -164,6 +166,27 @@ pending assignment，據此決定加入。
   一致）。私人房擋掉的是「在列表上被逛到」與「不請自來」。真要隔離請開
   不同的 Hub 實例
 
+### 4.6 說話方式（style）
+
+- 房間有 `style`：`verbose`（詳細，預設）/ `concise`（精確）/ `casual`
+  （親和）/ `custom`（自訂）。`custom` 時 `style_instructions` 必填，
+  空的自訂指示會被拒（`422 style_instructions_required`）——它看起來與
+  「沒設定」一模一樣，沒有人查得出哪裡不對
+- **風格文字定稿在 Hub**（`ROOM_STYLES`），不在 client 或 bridge：所有進房
+  的 agent 必須拿到同一份定義，放在 bridge 就會變成不同版本的 bridge 對同
+  一個房間有不同的理解
+- 兩個送達通道，缺一不可：
+  - `POST /join` 的回應帶 `style_prompt`（完整指示）。**加入時就講清楚**，
+    不是等他先講完一輪長篇再糾正——第一則發言就已經是別人要讀的東西了。
+    冪等 rejoin 也帶：重新加入多半是新的一輪對話
+  - `GET /messages` 與 `GET /updates` 的回應帶 `style_hint`（一行）。加入時
+    給的完整指示會隨對話變長而稀釋，語氣接著一則一則飄回 agent 的預設
+- 切換走 `POST /api/rooms/{id}/style`，**只有建立者**能改（與 4.5 同一道
+  門）；變更在房內留下一則 `system_event=style` 的系統訊息——說話方式換了，
+  房裡的人會看到彼此的語氣突然改變，那不該是沒有解釋的事
+- 資料庫裡出現沒見過的 style 值時退回 `verbose` 而不是報錯：說話方式出錯
+  不該讓整個房間讀不出來
+
 ### 4.4 跨裝置
 - Hub 綁 `0.0.0.0`，單一共享 `API_TOKEN`（環境變數/設定檔）做 Bearer 驗證
 - Flutter App 內設定 server URL + token
@@ -175,11 +198,12 @@ pending assignment，據此決定加入。
 認證：Authorization: Bearer <API_TOKEN>
 身分：X-Participant-Id: <participant_id>（加入房間後取得）
 
-POST   /api/rooms                          建立房間 {name, topic, session_key?, visibility?}
+POST   /api/rooms                          建立房間 {name, topic, session_key?, visibility?, style?, style_instructions?}
 GET    /api/rooms?status=active            列出房間（含 pending assignment 提示）
 GET    /api/rooms/{id}                     房間詳情 + 成員
 POST   /api/rooms/{id}/archive             手動封存 / POST unarchive 解封
 POST   /api/rooms/{id}/visibility          {visibility: public/private} 鎖定／解鎖（限建立者）
+POST   /api/rooms/{id}/style               {style, style_instructions?} 說話方式（限建立者）
 POST   /api/rooms/{id}/join                {kind, session_key, assignment_id?, preferred_name?} → participant
 POST   /api/rooms/{id}/leave               自行退出
 POST   /api/rooms/{id}/heartbeat           純刷新 last_seen
