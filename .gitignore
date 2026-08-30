@@ -17,6 +17,9 @@ dist/
 server/attachments/
 logs/
 
+# bridge 取回的附件（agent 在哪個專案工作就落在那個專案底下）
+.chatroom/
+
 # 隧道工具與臨時網址（本機產物）
 bin/
 server/.tunnel-url

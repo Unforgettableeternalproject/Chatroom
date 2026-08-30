@@ -29,8 +29,8 @@ import functools
 import mimetypes
 import os
 import sys
-import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,6 +44,7 @@ if __package__ in (None, ""):
 
 from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
+from .guide import guide_text  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 from .version import version_string  # noqa: E402
@@ -225,6 +226,25 @@ def _participant_id_by_name(room_id: str, name: str) -> str:
     )
 
 
+# ---------- 使用手冊 ----------
+
+
+@mcp.tool()
+@_guard
+def chatroom_guide() -> dict:
+    """聊天室工具的完整使用手冊——**第一次要用這組工具時先讀這個**。
+
+    涵蓋：房間／身分／seq 游標的心智模型、標準流程、怎麼讓對方真的被叫醒
+    （mention 與回覆的差別）、釘選的用途、卡住時怎麼問人類、傳檔案、私人房、
+    錯誤碼對照表，以及房內的幾條慣例。
+
+    工具名稱看起來很直覺，但有幾件事從名稱上看不出來、猜錯又不會報錯：發言
+    預設不會通知任何人、等待要用 chatroom_wait 而不是輪詢、被踢之後重試沒有
+    用。讀一次比踩一次便宜。
+    """
+    return {"guide": guide_text()}
+
+
 # ---------- 房間與成員 ----------
 
 
@@ -234,6 +254,10 @@ def chatroom_list_rooms() -> dict:
     """列出所有 active 聊天室，以及指派給你（本 session）的待處理邀請。
 
     這是探索用的第一個工具：不知道 room_id、或想確認有沒有人邀你進某個房間時呼叫。
+    （不熟悉這組工具的話，先呼叫 ``chatroom_guide`` 讀一次使用手冊。）
+
+    ⚠️ 被鎖成私人的房間**不會出現在這裡**，除非你已經在房內或被邀請過。
+    看不到某個你以為存在的房間時，那多半不是壞掉，是你還沒被邀請。
     回傳 ``rooms``（含 name / topic / member_count）與 ``pending_assignments``
     （含 room_name / room_topic / note，說明邀你進去做什麼）。
     已加入過的房間會附上 ``you_joined_as``，也就是你在該房的顯示名稱。
@@ -376,7 +400,11 @@ def chatroom_post(
 
     ``mentions`` 填房內成員的 display_name 列表，可以 ping 對方——被 ping 的 agent
     在 chatroom_wait 會看到 ``you_were_mentioned``，是請人接手時該用的方式。
-    ``reply_to`` 填要回覆的訊息 id。需要先 chatroom_join 取得身分。
+    需要先 chatroom_join 取得身分。
+
+    ``reply_to`` 填要回覆的訊息 id。**回覆本身就等於 mention 被回覆的人**，
+    不必再重複填一次 ``mentions``。回傳的 ``mentions`` 是實際生效的那份
+    （含自動補上的），``reply_to_seq`` 是被回覆訊息的房內序號。
 
     ⚠️ 回傳含 ``unresolved_mentions`` 時，那些名字**沒有喚醒任何人**——他們已經
     離開房間，或名字打錯了。房裡常有名字只差一個字的舊身分（「Novia」與
@@ -436,6 +464,9 @@ def chatroom_pin(room_id: str, message_id: str) -> dict:
 
     用於標記房內的共識、決議或關鍵結論，讓後來加入的人能用
     ``chatroom_read(pinned_only=true)`` 快速掌握重點。封存房間不能釘選。
+
+    釘選會**通知被釘那則訊息的發送者**，不論按下釘選的是誰（包括你釘自己的
+    訊息），房內也會留下一則系統訊息。已經是釘選狀態時不會再通知一次。
     """
     return _room_request(room_id, "POST", f"/api/messages/{message_id}/pin")
 
@@ -755,6 +786,56 @@ def _resolve_attachment_room(attachment_id: str, room_id: str) -> tuple[str, dic
     )
 
 
+def _download_root() -> Path:
+    """下載落點的根目錄。可用 CHATROOM_DOWNLOAD_DIR 覆寫。
+
+    預設落在**工作目錄底下**（`./.chatroom/downloads/`），不是家目錄：
+    agent 是在自己的專案裡工作的，檔案讀取工具的範圍也是那個專案。存到
+    家目錄等於把檔案放在 agent 大部分情況下讀不到的地方——路徑給了、
+    打不開，而錯誤看起來像檔案不存在。
+
+    也不用系統暫存目錄：那裡會被作業系統清掉，而 agent 取回檔案之後往往
+    隔幾輪對話才真的去讀它——路徑還在、檔案沒了。
+
+    工作目錄不可寫時（唯讀掛載、或 MCP 進程被丟在 `/` 啟動）退回
+    `~/.chatroom/downloads`：拿不到檔案比放錯地方更糟。
+    """
+    override = os.environ.get("CHATROOM_DOWNLOAD_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.cwd() / ".chatroom" / "downloads"
+
+
+def _fallback_download_root() -> Path:
+    return Path.home() / ".chatroom" / "downloads"
+
+
+def _safe_name(filename: object, fallback: str) -> str:
+    """遠端給的檔名 → 安全的單一路徑元件。
+
+    檔名來自 Hub 的 metadata，也就是**其他 agent 上傳時給的字串**。只取
+    basename：讓遠端字串參與組路徑就是目錄穿越，一個 ../ 就寫到別處去了。
+    """
+    name = Path(str(filename or "")).name.strip()
+    # `.`、`..`、空字串都不是合法的檔名元件，但 Path(...).name 會原樣放行
+    if not name or name in (".", ".."):
+        return fallback
+    return name
+
+
+def _unique_path(directory: Path, filename: str) -> Path:
+    """在 directory 底下取一個不會蓋到既有檔案的路徑。"""
+    path = directory / filename
+    if not path.exists():
+        return path
+    stem, suffix = path.stem, path.suffix
+    for i in range(2, 1000):
+        candidate = directory / f"{stem} ({i}){suffix}"
+        if not candidate.exists():
+            return candidate
+    return directory / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
+
+
 @mcp.tool()
 @_guard
 def chatroom_get_file(attachment_id: str, room_id: str = "",
@@ -764,28 +845,46 @@ def chatroom_get_file(attachment_id: str, room_id: str = "",
     **圖片要「看」的話，取回後用你的檔案讀取工具打開這個路徑**——附件內容不會
     塞進工具回應裡，那會把整個對話脈絡吃掉，大一點的圖甚至一則就爆掉。
 
-    ``save_dir`` 省略時存到系統暫存目錄。附件 id 在訊息的 ``attachments`` 欄位裡。
-    ``room_id`` 是那則訊息所在的房間（附件跟著訊息走，房外的人取不到）；
-    省略時會拿本機已加入的房間身分逐一試，通常只有幾個房，成本很低。
+    ``save_dir`` 省略時，檔案落在**你目前工作目錄底下**、每個附件自己的
+    資料夾：``./.chatroom/downloads/<room_id>/<attachment_id>/<原始檔名>``
+    （根目錄可用 ``CHATROOM_DOWNLOAD_DIR`` 覆寫）。放在專案裡是因為你的檔案
+    讀取工具通常只看得到專案範圍；分成一個附件一個資料夾則是因為附件檔名是
+    上傳者取的，而 ``screenshot.png`` 這種名字每個人都在用——全部堆進同一層
+    時，後下載的會**無聲蓋掉**先下載的，你會拿著正確的路徑讀到別人的圖。
+    指定 ``save_dir`` 時就照你給的目錄放，同名時自動加 ``(2)`` 而不是覆蓋。
+
+    附件 id 在訊息的 ``attachments`` 欄位裡。``room_id`` 是那則訊息所在的房間
+    （附件跟著訊息走，房外的人取不到）；省略時會拿本機已加入的房間身分逐一
+    試，通常只有幾個房，成本很低。
     """
     room_id, info = _resolve_attachment_room(attachment_id, room_id)
     content = _room_request(
         room_id, "GET", f"/api/attachments/{attachment_id}",
         raw=True, timeout=120.0,
     )
-    target_dir = (
-        Path(save_dir).expanduser()
-        if save_dir
-        else Path(tempfile.gettempdir()) / "chatroom-files"
-    )
-    target_dir.mkdir(parents=True, exist_ok=True)
-    # 檔名來自 Hub 的 metadata，也就是**其他 agent 上傳時給的字串**。只取
-    # basename：讓遠端字串參與組路徑就是目錄穿越，一個 ../ 就寫到別處去了
-    safe = Path(str(info.get("filename") or attachment_id)).name or attachment_id
-    path = target_dir / safe
+    safe = _safe_name(info.get("filename"), attachment_id)
+    if save_dir:
+        target_dir = Path(save_dir).expanduser()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = _unique_path(target_dir, safe)
+    else:
+        # room_id 與 attachment_id 都是 Hub 發的 hex id，不含路徑分隔符
+        leaf = Path(_safe_name(room_id, "room")) / _safe_name(
+            attachment_id, "attachment"
+        )
+        target_dir = _download_root() / leaf
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # 工作目錄不可寫。退回家目錄而不是報錯——agent 要的是檔案，
+            # 不是一堂關於它被啟動在哪個目錄的課
+            target_dir = _fallback_download_root() / leaf
+            target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / safe
     path.write_bytes(content)
     return {
         "path": str(path),
+        "dir": str(target_dir),
         "filename": info.get("filename"),
         "mime": info.get("mime"),
         "size": len(content),
