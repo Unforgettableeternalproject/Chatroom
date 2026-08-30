@@ -1562,11 +1562,57 @@ def create_app(config: Config | None = None) -> FastAPI:
             out["next_before_seq"] = msgs[0]["seq"]
         return out
 
+    async def _subagent_delta(room_id: str, parent_id: str, since: str):
+        """我旗下 subagent 在 ``since`` 之後的進出，以及新的游標。
+
+        為什麼用時間戳當游標，而不是像訊息那樣用 seq：subagent 的進出**不進
+        訊息流**（§2），沒有序號可用。改讓 client 回傳上一輪由 server 給的
+        時間戳——那是 server 自己產的值，原封echo 回來，所以不受兩端時鐘
+        偏差影響，也不會像「每輪比對成員清單」那樣漏掉在兩次輪詢之間
+        進來又離開的那一個。
+        """
+        db = app.state.db
+        now = _now()
+        if not since:
+            # 第一輪不補發歷史：watcher 剛起來時房裡既有的 subagent 是現況，
+            # 不是「剛剛發生的事」。只把游標立在這裡
+            return [], now
+        rows = await (
+            await db.execute(
+                "SELECT id, display_name, status, joined_at, left_at"
+                " FROM participant WHERE room_id=? AND parent_id=?"
+                " AND (joined_at > ? OR (left_at IS NOT NULL AND left_at > ?))"
+                " ORDER BY joined_at",
+                (room_id, parent_id, since, since),
+            )
+        ).fetchall()
+        out = []
+        for r in rows:
+            if r["joined_at"] > since:
+                out.append({"event": "subagent_joined", "name": r["display_name"],
+                            "participant_id": r["id"]})
+            if r["left_at"] and r["left_at"] > since:
+                out.append({"event": "subagent_left", "name": r["display_name"],
+                            "participant_id": r["id"], "status": r["status"]})
+        return out, now
+
+    async def _my_subagent_names(room_id: str, parent_id: str) -> set[str]:
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT display_name FROM participant WHERE room_id=? AND parent_id=?"
+                " AND status='active'",
+                (room_id, parent_id),
+            )
+        ).fetchall()
+        return {r["display_name"] for r in rows}
+
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
         room_id: str,
         after_seq: int = 0,
         timeout: float = Query(default=25.0, le=55.0),
+        subagents_since: str = "",
         x_participant_id: str | None = Header(default=None),
     ):
         """long-poll：有 seq > after_seq 的訊息立即返回，否則掛到 timeout。
@@ -1590,6 +1636,36 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             return row["status"] if row else "deleted"
 
+        async def _out(msgs: list, last_seq: int, status: str) -> dict:
+            """統一三個返回點：每一條路徑都要帶上 subagent 事件與轉投遞的
+            mention，漏掉任何一條，那個通道就會在某些時序下靜靜地不作用。"""
+            subs, cursor = await _subagent_delta(
+                room_id, me["id"], subagents_since
+            )
+            mine = await _my_subagent_names(room_id, me["id"])
+            mentioned = False
+            for m in msgs:
+                names = set(m.get("mentions") or [])
+                if me["display_name"] in names:
+                    mentioned = True
+                # @ 到我旗下的 subagent＝叫醒我。subagent 沒有自己的 watcher
+                # 進程（它活在我的進程裡），不轉投遞的話那個 mention 就是打
+                # 進空氣——而發話方會看到 unresolved_mentions 是空的，
+                # 以為送到了（§2 反向 mention）
+                relayed = sorted(names & mine)
+                if relayed:
+                    m["relayed_mentions"] = relayed
+                    mentioned = True
+            return {
+                "messages": msgs,
+                "you_were_mentioned": mentioned,
+                "last_seq": last_seq,
+                "room_status": status,
+                "style_hint": style_hint,
+                "subagent_events": subs,
+                "subagents_cursor": cursor,
+            }
+
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
         while True:
             # max(seq, update_seq)：新訊息與既有訊息的狀態變更（釘選/刪除）
@@ -1603,25 +1679,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchall()
             if rows:
                 msgs = await _message_rows_to_json(rows, db)
-                mentioned = bool(me) and any(
-                    me["display_name"] in m["mentions"] for m in msgs
+                return await _out(
+                    msgs,
+                    max(max(m["seq"], m["update_seq"]) for m in msgs),
+                    await _status(),
                 )
-                return {"messages": msgs, "you_were_mentioned": mentioned,
-                        "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs),
-                        "room_status": await _status(), "style_hint": style_hint}
+            # 有 subagent 進出但沒有新訊息時也要返回——那正是 subagent 的
+            # 常態（它的進出根本不進訊息流），掛著等訊息等於永遠不通知
+            subs_peek, _ = await _subagent_delta(room_id, me["id"], subagents_since)
+            if subs_peek:
+                return await _out([], after_seq, await _status())
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                return {"messages": [], "you_were_mentioned": False,
-                        "last_seq": after_seq, "room_status": await _status(),
-                        "style_hint": style_hint}
+                return await _out([], after_seq, await _status())
             await events.wait(room_id, remaining)
             # 房間可能在我們掛著的這段時間被刪掉了。刪除端點會 notify 一次
             # 把我們叫醒，但被叫醒後沒有新訊息可回——不檢查的話就會繼續掛回去
             # 等到逾時，而 watcher 也就晚一輪才知道房間沒了
             if await _status() == "deleted":
-                return {"messages": [], "you_were_mentioned": False,
-                        "last_seq": after_seq, "room_status": "deleted",
-                        "style_hint": style_hint}
+                return await _out([], after_seq, "deleted")
 
     async def _message_room(message_id: str) -> str:
         db = app.state.db

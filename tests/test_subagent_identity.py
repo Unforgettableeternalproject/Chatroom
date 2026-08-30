@@ -224,3 +224,88 @@ async def test_subagent_alone_does_not_count_as_room_activity(tmp_path):
                 await db.execute("SELECT status FROM room WHERE id=?", (room_id,))
             ).fetchone()
             assert row["status"] == "archived", "只剩 subagent 時房間仍該被收掉"
+
+
+async def test_updates_relays_subagent_events_only_to_parent(tmp_path):
+    """C3 — subagent 的進出只出現在父層的 updates，第三方拿不到。"""
+    app, client = await _make(tmp_path, "c3")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            third = await _join_ok(client, room_id, "third-key", "米絲媞")
+
+            # 先各拿一次游標（第一輪不補發歷史）
+            p_first = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            t_first = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": third["participant_id"]},
+            )).json()
+
+            sub = (await _sub(client, room_id, parent, "t-d1", "米勒")).json()
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": sub["participant_id"]},
+            )
+            # 錨點：第三方在同一時段收得到房內的普通訊息，證明它的通道活著
+            await client.post(
+                f"/api/rooms/{room_id}/messages", json={"content": "錨點"},
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )
+
+            p_now = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0"
+                f"&subagents_since={p_first['subagents_cursor']}",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            t_now = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0"
+                f"&after_seq={t_first['last_seq']}"
+                f"&subagents_since={t_first['subagents_cursor']}",
+                headers={"X-Participant-Id": third["participant_id"]},
+            )).json()
+
+            kinds = [e["event"] for e in p_now["subagent_events"]]
+            assert kinds == ["subagent_joined", "subagent_left"]
+            assert all(e["name"] == "米勒" for e in p_now["subagent_events"])
+            # 第三方：沒有那兩個事件，但錨點訊息收得到
+            assert t_now["subagent_events"] == []
+            assert [m["content"] for m in t_now["messages"]] == ["錨點"]
+
+
+async def test_mentioning_a_subagent_wakes_its_parent(tmp_path):
+    """C7 — @ subagent＝叫醒父層，並標明是給誰的。"""
+    app, client = await _make(tmp_path, "c7")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            third = await _join_ok(client, room_id, "third-key", "米絲媞")
+            await _sub(client, room_id, parent, "t-e1", "米勒")
+
+            r = await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@米勒 這條給你", "mentions": ["米勒"]},
+                headers={"X-Participant-Id": third["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            # 錨點：名字有解析到，不是打進空氣
+            assert not r.json().get("unresolved_mentions")
+
+            upd = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            assert upd["you_were_mentioned"] is True
+            target = [m for m in upd["messages"] if m["content"].startswith("@米勒")]
+            assert target and target[0]["relayed_mentions"] == ["米勒"]
+
+            # 第三方自己不該因為這則而被叫醒
+            t_upd = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": third["participant_id"]},
+            )).json()
+            assert t_upd["you_were_mentioned"] is False
