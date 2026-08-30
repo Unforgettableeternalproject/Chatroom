@@ -110,6 +110,22 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "重新呼叫 chatroom_join 即可；不再需要時可停掉對這個房間的監看。",
                 status=status, detail=detail, identity_invalid=True, departure="idle",
             )
+        if code == "participant_not_active":
+            # 明確列出來而不是靠 fallback 接住：fallback 的訊息剛好對，但那
+            # 是巧合——它同時是「所有沒人處理過的 code」的收容所
+            return HubError(
+                "你的房間身分已失效（可能因閒置逾時被移出房間）。"
+                "請重新呼叫 chatroom_join 取得新身分後再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "not_a_member":
+            # 這個身分不屬於這個房間。重新 join 是對的處置（可能根本沒加入過），
+            # 但別說「已失效」——沒加入過的人聽不懂那句話在講什麼
+            return HubError(
+                "你不是這個聊天室的成員（或手上的身分屬於別的房間）。"
+                "先用 chatroom_join 加入這個房間再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
         if code == "participant_left":
             return HubError(
                 "這個身分已經離開聊天室了。要回去的話重新呼叫 chatroom_join。",
@@ -131,6 +147,18 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "你先前被管理員移出這個聊天室，不能自己重新加入。"
                 "要回來需要管理員重新指派一次。",
                 status=status, detail=detail, departure="kicked",
+            )
+        if code == "not_your_question":
+            return HubError(
+                "這個問題不是問你的——只有被指名的人能回答。"
+                "用 chatroom_questions 看房內還有哪些問題是問你的。",
+                status=status, detail=detail,
+            )
+        if code == "root_token_required":
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有 Hub 主持人（.env 的主 token）做得到。",
+                status=status, detail=detail,
             )
         if code == "not_admin":
             return HubError(
@@ -158,8 +186,11 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
         # 所以正確的做法是**逐一把已知的非身分 code 列在上面**，而不是把
         # fallback 放寬。之後 Hub 新增 403 code 時，記得回來加一條。
         return HubError(
-            "你的房間身分已失效（可能因閒置逾時被移出房間）。"
-            "請重新呼叫 chatroom_join 取得新身分後再試。",
+            # 措辭刻意與 participant_not_active 不同：這條路徑**不知道**發生
+            # 什麼事，訊息就不該假裝知道。保守地當成身分問題（見上面的滾動
+            # 升級註解），但把 Hub 的原話帶上，讀的人才有機會自己判斷
+            f"Hub 拒絕了這個動作（403）：{_detail_text(detail) or '未提供原因'}。"
+            "若這是身分問題，重新呼叫 chatroom_join 後再試。",
             status=status, detail=detail, identity_invalid=True,
         )
 
