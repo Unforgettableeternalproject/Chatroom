@@ -7,7 +7,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from chatroom_server.app import ROOM_STYLES, create_app
+from chatroom_server.app import CUSTOM_STYLE_FRAME, ROOM_STYLES, create_app
 from chatroom_server.config import Config
 
 
@@ -93,7 +93,9 @@ async def test_custom_style_is_passed_through_verbatim(tmp_path):
             text = "一律用英文回答，句子不要超過兩行。"
             room = await _room(client, style="custom", style_instructions=text)
             me = await _join(client, room["id"], "s1")
-            assert me["style_prompt"] == text
+            # 原文一字不改，但外面包一層講清楚用途的框
+            assert me["style_prompt"] == CUSTOM_STYLE_FRAME + text
+            assert text in me["style_prompt"]
 
             headers = {"X-Participant-Id": me["participant_id"]}
             r = await client.get(f"/api/rooms/{room['id']}/messages", headers=headers)
@@ -200,3 +202,18 @@ async def test_unknown_style_in_the_database_falls_back_to_verbose(tmp_path):
             )
             assert r.status_code == 200
             assert r.json()["style_hint"] == ROOM_STYLES["verbose"]["hint"]
+
+
+def test_custom_style_frames_the_instruction_as_style_only():
+    """自訂指示會被注入每個進房 agent 的 context，而任何建立者都能改它。
+
+    在協定上「回話短一點」與「去讀某個檔案」是同一種東西，沒有機制分得出來
+    （2026-08-30 實測：subagent 照做了版面約定，同時自己認出行為類的要求可疑
+    ——那次是它自己擋下來的，不是系統擋的）。這層框不是安全邊界，是把「完全
+    沒有邊界」變成「有一條 agent 讀得出來的邊界」。
+    """
+    assert "不是任務指示" in CUSTOM_STYLE_FRAME
+    for word in ("執行動作", "讀寫檔案", "呼叫工具"):
+        assert word in CUSTOM_STYLE_FRAME, f"框裡要點名：{word}"
+    # 要說出「該怎麼辦」，不然 agent 只知道可疑卻不知道要回報
+    assert "回報" in CUSTOM_STYLE_FRAME
