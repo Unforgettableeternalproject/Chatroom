@@ -33,9 +33,23 @@ for _stream in (sys.stdout, sys.stderr):
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
-VERSION = "1.0.0"
 # 這台機器的 SDK 位置；PATH 與 FLUTTER_ROOT 都沒有時的最後退路
 _FALLBACK_SDK = r"C:\Users\Bernie\dev\flutter"
+
+
+def app_version() -> str:
+    """App 的語意版本，唯一真相是 app/pubspec.yaml。
+
+    這裡曾經是一行 `VERSION = "1.0.0"`，於是 pubspec 推到 1.1.0 之後，
+    build 出來的 App 仍然自稱 1.0.0——而版本資訊在 build 當下編進產物，
+    錯過就永遠是錯的，事後從產物完全看不出來。版本只寫在一個地方。
+    """
+    text = (APP / "pubspec.yaml").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.startswith("version:"):
+            # `1.1.0+1` → `1.1.0`；build number 由 commit 短碼擔任
+            return line.split(":", 1)[1].strip().split("+", 1)[0]
+    raise SystemExit("✕ app/pubspec.yaml 裡找不到 version:——無法判定版本")
 
 
 def git(*args: str) -> str:
@@ -93,6 +107,7 @@ def main() -> int:
         print("  舊產物完好地待在原地。請先關閉 App 再重跑。", file=sys.stderr)
         return 1
 
+    version = app_version()
     commit = git("rev-parse", "--short=12", "HEAD")
     if not commit:
         print("⚠️ 抓不到 commit（不在 git 工作樹？）。", file=sys.stderr)
@@ -105,7 +120,7 @@ def main() -> int:
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cmd = [
         flutter_cmd(), "build", "windows", "--release",
-        f"--dart-define=CHATROOM_VERSION={VERSION}",
+        f"--dart-define=CHATROOM_VERSION={version}",
         f"--dart-define=CHATROOM_COMMIT={commit}",
         f"--dart-define=CHATROOM_BUILT_AT={built_at}",
     ]
@@ -119,7 +134,7 @@ def main() -> int:
     if app_so.exists():
         stamp = datetime.fromtimestamp(app_so.stat().st_mtime).isoformat(
             timespec="seconds")
-        print(f"✓ {VERSION}+{commit or 'unknown'} · Dart 產物 {stamp}")
+        print(f"✓ {version}+{commit or 'unknown'} · Dart 產物 {stamp}")
     return 0
 
 
