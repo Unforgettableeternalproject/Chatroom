@@ -15,11 +15,16 @@ import '../../widgets/kind_badge.dart';
 import '../../widgets/markdown_body.dart';
 
 /// 釘選訊息（pinned_only 直接問 server；client 端再濾掉 deleted）。
+///
+/// ⚠️ 讀訊息一定要帶 `participantId`：房間是讀取邊界，Hub 對沒帶
+/// `X-Participant-Id` 的請求回 401。少帶的後果不是空清單而是「API token
+/// 無效」——同一顆 token 其他畫面都正常，只有這一扇窗打不開。
 final _pinnedProvider = FutureProvider.autoDispose
     .family<List<Message>, String>((ref, roomId) async {
+  final pid = ref.watch(settingsRepoProvider).participantId(roomId);
   final page = await ref
       .read(messagesApiProvider)
-      .read(roomId, pinnedOnly: true, limit: 200);
+      .read(roomId, pinnedOnly: true, limit: 200, participantId: pid);
   return page.messages.where((m) => !m.deleted).toList();
 });
 
