@@ -11,6 +11,7 @@ class Room {
     this.visibility = 'public',
     this.style = 'verbose',
     this.styleInstructions = '',
+    this.youAreAdmin = false,
     this.memberCount = 0,
     this.lastSeq = 0,
     this.lastActivityAt,
@@ -38,6 +39,13 @@ class Room {
 
   /// style == 'custom' 時建立者寫下的指示原文；其餘風格為空。
   final String styleInstructions;
+
+  /// 我是不是這個房間的建立者（Hub 比對 session_key 後給的）。
+  ///
+  /// 列表上要顯示「刪除」這種管理員動作就得先知道這件事；建立者的
+  /// session key 不會外流，所以只能由 Hub 回答。舊版 Hub 不回這個欄位，
+  /// 那時一律當成不是——把必然失敗的按鈕擺出來跟不給一樣糟。
+  final bool youAreAdmin;
   final int memberCount;
 
   /// 房間目前的最大 seq（= next_seq - 1；server list_rooms 附帶）。
@@ -60,6 +68,7 @@ class Room {
         visibility: (json['visibility'] as String?) ?? 'public',
         style: (json['style'] as String?) ?? 'verbose',
         styleInstructions: (json['style_instructions'] as String?) ?? '',
+        youAreAdmin: (json['you_are_admin'] as bool?) ?? false,
         memberCount: (json['member_count'] as int?) ?? 0,
         lastSeq: (json['last_seq'] as int?) ?? 0,
         lastActivityAt: json['last_activity_at'] as String?,
@@ -72,6 +81,7 @@ class Room {
     String? visibility,
     String? style,
     String? styleInstructions,
+    bool? youAreAdmin,
   }) =>
       Room(
         id: id,
@@ -82,6 +92,7 @@ class Room {
         visibility: visibility ?? this.visibility,
         style: style ?? this.style,
         styleInstructions: styleInstructions ?? this.styleInstructions,
+        youAreAdmin: youAreAdmin ?? this.youAreAdmin,
         memberCount: memberCount ?? this.memberCount,
         lastSeq: lastSeq,
         lastActivityAt: lastActivityAt,

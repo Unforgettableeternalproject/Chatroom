@@ -11,6 +11,7 @@ import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
+import '../../widgets/delete_room_confirm.dart';
 import '../../widgets/pending_invites_banner.dart';
 import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
@@ -50,6 +51,35 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
     if (created != null && mounted) {
       ref.invalidate(roomListProvider);
       context.go('/rooms/${created.id}');
+    }
+  }
+
+  Future<void> _deleteRoom(Room room) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => DeleteRoomConfirm(name: room.name),
+    );
+    if (ok != true) return;
+    try {
+      final counts = await ref.read(roomsApiProvider).deleteRoom(
+            room.id,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            participantId: ref.read(settingsRepoProvider).participantId(room.id),
+          );
+      await ref.read(settingsRepoProvider).setParticipantId(room.id, null);
+      ref.invalidate(roomListProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('已刪除「${room.name}」'
+              '（訊息 ${counts['message'] ?? 0} 則、'
+              '附件 ${counts['attachment'] ?? 0} 個）'),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
     }
   }
 
@@ -179,6 +209,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                     selected: rooms[i].id == widget.selectedRoomId,
                     onTap: () => context.go('/rooms/${rooms[i].id}'),
                     onToggleArchive: () => _toggleArchive(rooms[i]),
+                    onDelete: () => _deleteRoom(rooms[i]),
                     onAssign: () =>
                         context.go('/rooms/${rooms[i].id}/assign'),
                   ),
@@ -261,6 +292,7 @@ class _RoomTile extends ConsumerWidget {
     required this.onTap,
     required this.onToggleArchive,
     required this.onAssign,
+    required this.onDelete,
   });
 
   final Room room;
@@ -268,6 +300,7 @@ class _RoomTile extends ConsumerWidget {
   final VoidCallback onTap;
   final VoidCallback onToggleArchive;
   final VoidCallback onAssign;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -328,7 +361,8 @@ class _RoomTile extends ConsumerWidget {
               _RoomMenu(
                   room: room,
                   onToggleArchive: onToggleArchive,
-                  onAssign: onAssign),
+                  onAssign: onAssign,
+                  onDelete: onDelete),
             ]),
             if (room.topic.isNotEmpty) ...[
               const SizedBox(height: 5),
@@ -376,11 +410,13 @@ class _RoomMenu extends StatelessWidget {
     required this.room,
     required this.onToggleArchive,
     required this.onAssign,
+    required this.onDelete,
   });
 
   final Room room;
   final VoidCallback onToggleArchive;
   final VoidCallback onAssign;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -400,6 +436,8 @@ class _RoomMenu extends StatelessWidget {
             onToggleArchive();
           case 'assign':
             onAssign();
+          case 'delete':
+            onDelete();
         }
       },
       itemBuilder: (context) => [
@@ -415,6 +453,15 @@ class _RoomMenu extends StatelessWidget {
             height: 36,
             child: Text('指派 agent',
                 style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
+        // 刪除也要在**列表上**給得到：封存房的操作場景就在這裡，沒有人會
+        // 為了刪掉一個封存房而先點進去
+        if (room.youAreAdmin)
+          PopupMenuItem(
+            value: 'delete',
+            height: 36,
+            child: Text('永久刪除…',
+                style: UepText.sans(size: 12.5, color: UepColors.errorText)),
           ),
       ],
     );
