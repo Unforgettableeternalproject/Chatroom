@@ -408,3 +408,37 @@ async def test_pinning_an_old_relayed_mention_does_not_rewake_the_parent(tmp_pat
             assert msg["seq"] in seqs, "重推本身是預期行為，這裡不是要擋掉它"
             relayed = [m for m in again["messages"] if m.get("relayed_mentions")]
             assert relayed == []
+
+
+async def test_a_parent_can_reuse_its_own_subagent_name(tmp_path):
+    """名字保留是對「別家父層」的——保留者自己可以重用。
+
+    同一個父層的 worker 結束後再派一個 worker，該拿回原名。被自己的保留
+    擋成 worker-2、worker-3 只是在懲罰正常的重複派遣，而那條路徑上根本不
+    存在誤投問題（收件人本來就是同一個父層）。（決策端 2026-08-31 裁定）
+    """
+    app, client = await _make(tmp_path, "reuse")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            other = await _join_ok(client, room_id, "other-key", "米絲媞")
+
+            first = (await _sub(client, room_id, parent, "t-u1", "worker")).json()
+            assert first["display_name"] == "worker"
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": first["participant_id"]},
+            )
+
+            # 同一個父層再派一個同名的 → 拿回原名
+            again = (await _sub(client, room_id, parent, "t-u2", "worker")).json()
+            assert again["display_name"] == "worker"
+
+            # 錨點：**別家**父層同名仍被擋——保留的本意沒有因此失效
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": again["participant_id"]},
+            )
+            poacher = (await _sub(client, room_id, other, "t-u3", "worker")).json()
+            assert poacher["display_name"] != "worker"

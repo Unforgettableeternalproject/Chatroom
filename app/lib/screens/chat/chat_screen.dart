@@ -631,6 +631,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         for (final alias in p.aliasIds) alias: p.kind,
       },
     };
+    // 子代理的發話者 → 父層名字。歷史訊息也要對得回去，所以掃的是
+    // `members`（含已離開的）而不是 activeMembers——子代理本來就是短命的，
+    // 只認 active 的話它一走，它說過的話就變成無主的發言
+    final nameById = {for (final p in members) p.id: p.displayName};
+    final subagentParentById = {
+      for (final p in members)
+        if (p.ephemeral && p.parentId != null)
+          p.id: nameById[p.parentId!] ?? '（未知）',
+    };
 
     final wide = MediaQuery.sizeOf(context).width >= 1200;
 
@@ -721,6 +730,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 token: config.token,
                                 // 附件下載也在讀取邊界內（Hub 側 3605638）
                                 participantId: myId,
+                                subagentOf: m.senderId == null
+                                    ? null
+                                    : subagentParentById[m.senderId],
                               ),
                             );
                           },
@@ -1513,12 +1525,19 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             children: [
               MonoLabel('ACTIVE', size: 8.5, letterSpacing: 2.2),
               const SizedBox(height: 8),
-              for (final p in active)
+              for (final p in _nestSubagents(active))
                 _MemberTile(
                   p: p,
                   isSelf: p.id == myId,
+                  nested: p.ephemeral,
                   idleTimeout: widget.limits.idleTimeout,
-                  onKick: widget.youAreAdmin && p.id != myId && !widget.archived
+                  // subagent 不給踢：它沒有獨立的存在，要它走就讓它的
+                  // 父層走（父層一離開，旗下的會一起消失）
+                  onKick:
+                      widget.youAreAdmin &&
+                          p.id != myId &&
+                          !widget.archived &&
+                          !p.ephemeral
                       ? () => _kick(context, p)
                       : null,
                   // 自己隱藏自己只會讓人以為出了問題
@@ -1590,11 +1609,48 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
   }
 }
 
+/// 把 subagent 排到它父層的正下方，其餘維持原本的順序。
+///
+/// 不做成 `sort`：subagent 之間、以及一般成員之間的既有順序（joined_at）
+/// 都要保留，只是把子代理「插」回父層後面。父層不在這份清單裡的（理論上
+/// 不會發生——級聯移除保證它們同進同出）就照原位留著，**不要丟掉**：
+/// 看不見的成員比排錯位置的成員危險得多。
+List<Participant> _nestSubagents(List<Participant> members) {
+  final byParent = <String, List<Participant>>{};
+  for (final p in members) {
+    if (p.ephemeral && p.parentId != null) {
+      byParent.putIfAbsent(p.parentId!, () => []).add(p);
+    }
+  }
+  if (byParent.isEmpty) return members;
+
+  final placed = <String>{};
+  final out = <Participant>[];
+  for (final p in members) {
+    if (p.ephemeral && p.parentId != null && byParent.containsKey(p.parentId)) {
+      continue; // 由父層那一輪帶出來
+    }
+    out.add(p);
+    for (final child in byParent[p.id] ?? const <Participant>[]) {
+      out.add(child);
+      placed.add(child.id);
+    }
+  }
+  // 父層不在清單裡的孤兒：補在最後，寧可位置不漂亮也不要消失
+  for (final children in byParent.values) {
+    for (final c in children) {
+      if (!placed.contains(c.id)) out.add(c);
+    }
+  }
+  return out;
+}
+
 class _MemberTile extends StatelessWidget {
   const _MemberTile({
     required this.p,
     required this.isSelf,
     this.inactive = false,
+    this.nested = false,
     this.onKick,
     this.onHide,
     this.onUnhide,
@@ -1604,6 +1660,10 @@ class _MemberTile extends StatelessWidget {
   final Participant p;
   final bool isSelf;
   final bool inactive;
+
+  /// 這是掛在別人底下的子代理：縮排、線條虛化，讓「它不是獨立成員」
+  /// 一眼看得出來。
+  final bool nested;
 
   /// 伺服器實際的閒置移出門檻。**不要寫死**——它是可設定的，猜錯就會顯示
   /// 一個永遠不會發生的倒數（設 30 分鐘卻顯示 10 分鐘後移出）。
@@ -1628,7 +1688,11 @@ class _MemberTile extends StatelessWidget {
     final isIdle = !inactive && !p.isHuman && (idleMinutes ?? 0) >= 2;
 
     String subtitle;
-    if (inactive) {
+    if (nested && !inactive) {
+      // 不沿用一般成員那套倒數：subagent 走的是完全不同的短時限，
+      // 顯示父層的門檻等於印一個永遠不會發生的倒數
+      subtitle = '臨時 · 工作結束即移除';
+    } else if (inactive) {
       subtitle = switch (p.status) {
         'removed' => '因閒置移出',
         'kicked' => '被管理員移出',
@@ -1648,12 +1712,20 @@ class _MemberTile extends StatelessWidget {
     return Opacity(
       opacity: isIdle ? .6 : 1,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.fromLTRB(10, 9, 8, 9),
+        margin: EdgeInsets.only(bottom: 4, left: nested ? 16 : 0),
+        padding: EdgeInsets.fromLTRB(nested ? 8 : 10, nested ? 7 : 9, 8,
+            nested ? 7 : 9),
         decoration: BoxDecoration(
           color: isSelf ? UepColors.gold.withValues(alpha: .06) : null,
           border: Border(
-            left: BorderSide(color: inactive ? s.hairline : color, width: 2),
+            left: BorderSide(
+              color: inactive
+                  ? s.hairline
+                  // 子代理的線條淡一階：它不是獨立成員，視覺重量也不該
+                  // 跟派它出來的那個一樣
+                  : (nested ? color.withValues(alpha: .45) : color),
+              width: nested ? 1 : 2,
+            ),
           ),
           borderRadius: const BorderRadius.horizontal(
             right: Radius.circular(4),
@@ -1679,7 +1751,25 @@ class _MemberTile extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 7),
-                      KindBadge(kind: p.kind, compact: true),
+                      if (nested)
+                        // 只縮排的話，「為什麼這個名字沒看過」得靠讀者自己
+                        // 推理。講出來便宜得多
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: s.hairline),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            '子代理',
+                            style: UepText.sans(size: 9, color: s.inkMute),
+                          ),
+                        )
+                      else
+                        KindBadge(kind: p.kind, compact: true),
                       if (p.previousName != null) ...[
                         const SizedBox(width: 7),
                         Flexible(

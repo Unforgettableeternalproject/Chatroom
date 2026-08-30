@@ -14,6 +14,8 @@ class Participant {
     this.previousName,
     this.aliasIds = const [],
     this.distinctHint,
+    this.ephemeral = false,
+    this.parentId,
   });
 
   final String id;
@@ -37,6 +39,13 @@ class Participant {
   /// 房內重名時的消歧提示（人類=來源 IP、agent=session 尾碼），無重名時為 null。
   final String? distinctHint;
 
+  /// 臨時成員（subagent）：某個 agent 派出的子代理，工作結束就會消失。
+  /// 它的**存在**對所有人可見（巢狀顯示在父層底下），只有進出通知限父層。
+  final bool ephemeral;
+
+  /// 依附的父成員 id；一般成員為 null。
+  final String? parentId;
+
   bool get isActive => status == 'active';
   bool get isHuman => role == 'human';
 
@@ -54,6 +63,10 @@ class Participant {
             .map((e) => e as String)
             .toList(),
         distinctHint: json['distinct_hint'] as String?,
+        // 舊 Hub 不回這兩個欄位——預設值就是「一般成員」，也就是這個功能
+        // 存在之前的實際語意
+        ephemeral: (json['ephemeral'] as bool?) ?? false,
+        parentId: json['parent_id'] as String?,
       );
 
   @override
@@ -61,8 +74,9 @@ class Participant {
       other is Participant &&
       other.id == id &&
       other.status == status &&
-      other.lastSeenAt == lastSeenAt;
+      other.lastSeenAt == lastSeenAt &&
+      other.parentId == parentId;
 
   @override
-  int get hashCode => Object.hash(id, status, lastSeenAt);
+  int get hashCode => Object.hash(id, status, lastSeenAt, parentId);
 }

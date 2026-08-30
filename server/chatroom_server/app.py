@@ -1184,14 +1184,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 保留名字讓晚到的 @ 變成 unresolved_mentions——一個發話者看得見的
         # 失敗，遠好過靜默投給別人家的 subagent。
         # 一般成員的回收語意不動：低頻，而且人類看得到成員列，代價不成比例。
+        #
+        # **保留是對「別家父層」的，保留者自己可以重用。** 同一個父層的
+        # worker 結束後再派一個 worker，該拿回原名——被自己的保留擋成
+        # worker-2、worker-3 只是在懲罰正常的重複派遣，而那條路徑上根本
+        # 不存在誤投問題（收件人本來就是同一個父層）。
+        my_parent = parent["id"] if parent is not None else None
         taken_rows = await (
             await db.execute(
                 "SELECT display_name FROM participant p WHERE p.room_id=?"
                 " AND (p.status='active'"
-                "      OR (p.ephemeral=1 AND EXISTS ("
+                "      OR (p.ephemeral=1 AND p.parent_id IS NOT ?"
+                "          AND EXISTS ("
                 "            SELECT 1 FROM participant q"
                 "            WHERE q.id=p.parent_id AND q.status='active')))",
-                (room_id,),
+                (room_id, my_parent),
             )
         ).fetchall()
         # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）

@@ -39,6 +39,7 @@ class MessageBubble extends StatelessWidget {
     this.serverUrl = '',
     this.token = '',
     this.participantId,
+    this.subagentOf,
   });
 
   final Message message;
@@ -53,6 +54,11 @@ class MessageBubble extends StatelessWidget {
   final String senderKind;
   final MessageActions? actions;
 
+  /// 發話者是誰旗下的子代理（父層名字）；一般成員為 null。
+  /// 子代理不是獨立的人，看到它說話卻不知道是誰派的，就無從判斷該不該信、
+  /// 該回給誰。
+  final String? subagentOf;
+
   /// focusSeq 跳轉的高亮。
   final bool highlighted;
 
@@ -62,6 +68,7 @@ class MessageBubble extends StatelessWidget {
     final color = kindColor(senderKind, context: context);
     final name = message.senderName ?? '（未知）';
     final time = clockTime(message.createdAt);
+    final isSub = subagentOf != null;
 
     final header = Row(
       mainAxisSize: MainAxisSize.min,
@@ -86,6 +93,11 @@ class MessageBubble extends StatelessWidget {
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
           Text(time, style: UepText.mono(size: 9, color: s.inkMute)),
+          if (isSub) ...[
+            const SizedBox(width: 8),
+            Text('↳ $subagentOf 的子代理',
+                style: UepText.serif(size: 10, color: s.inkMute)),
+          ],
           if (message.pinned) ...[
             const SizedBox(width: 8),
             Text('❖ 已釘選',
@@ -111,7 +123,11 @@ class MessageBubble extends StatelessWidget {
       body = Container(
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
         decoration: BoxDecoration(
-          color: isSelf ? UepColors.gold.withValues(alpha: .10) : s.bgCard,
+          color: isSelf
+              ? UepColors.gold.withValues(alpha: .10)
+              // 子代理的底色更淡：它的話是別人派出去的工作產出，
+              // 不該和房內成員自己的發言有同樣的視覺重量
+              : (isSub ? s.bgCard.withValues(alpha: .55) : s.bgCard),
           border: Border.all(
             color: highlighted
                 ? UepColors.gold
@@ -119,7 +135,8 @@ class MessageBubble extends StatelessWidget {
                     ? UepColors.gold.withValues(alpha: .28)
                     : message.pinned
                         ? UepColors.gold.withValues(alpha: .22)
-                        : s.line,
+                        : (isSub ? color.withValues(alpha: .35) : s.line),
+            width: isSub ? 1.2 : 1,
           ),
           borderRadius: BorderRadius.circular(10),
         ),
