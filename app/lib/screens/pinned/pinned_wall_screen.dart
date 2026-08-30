@@ -19,12 +19,21 @@ import '../../widgets/markdown_body.dart';
 /// ⚠️ 讀訊息一定要帶 `participantId`：房間是讀取邊界，Hub 對沒帶
 /// `X-Participant-Id` 的請求回 401。少帶的後果不是空清單而是「API token
 /// 無效」——同一顆 token 其他畫面都正常，只有這一扇窗打不開。
+///
+/// 身分**走 `identityProvider` 而不是 settings 的快取**：這個路由可以被直接
+/// 開啟（深連結、重啟還原），那時本機可能根本沒有身分，或留著一個已經失效
+/// 的 id；而 settings 不會在 id 變更時通知監聽者，於是錯誤畫面的「重試」會
+/// 拿同一個壞值一直重打同一個 401/403。`identityProvider` 負責 join（server
+/// 端冪等），拿到的一定是當下有效的身分——釘選牆因此不必先逛過聊天畫面。
 final _pinnedProvider = FutureProvider.autoDispose
     .family<List<Message>, String>((ref, roomId) async {
-  final pid = ref.watch(settingsRepoProvider).participantId(roomId);
-  final page = await ref
-      .read(messagesApiProvider)
-      .read(roomId, pinnedOnly: true, limit: 200, participantId: pid);
+  final identity = await ref.watch(identityProvider(roomId).future);
+  final page = await ref.read(messagesApiProvider).read(
+        roomId,
+        pinnedOnly: true,
+        limit: 200,
+        participantId: identity.participantId,
+      );
   return page.messages.where((m) => !m.deleted).toList();
 });
 
