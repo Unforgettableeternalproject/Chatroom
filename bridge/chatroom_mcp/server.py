@@ -260,6 +260,26 @@ def _room_request(
             # 把父層的身分一起弄掉——那會讓一個 subagent 逾時波及整個 session
             if participant_id == state().participant_id(room_id):
                 state().clear_identity(room_id)
+            else:
+                # 失效的是某個 subagent：把它的 handle 從登記簿移除，並且
+                # **不要回 need_rejoin**——那是叫父層重新 join，而父層好端端
+                # 的。子代理被短 TTL 回收之後該做的事是重新 spawn，不是讓
+                # 整個 session 以為自己掉出房間了（Codex review #4）。
+                # 不移除的話這個 handle 會被 bridge 永遠認得，每次呼叫都白打
+                # 一次 Hub，而錯誤訊息一路指向錯的動作
+                dead = next(
+                    (x for x in _subagents.in_room(room_id)
+                     if x.participant_id == participant_id),
+                    None,
+                )
+                if dead is not None:
+                    _subagents.drop(dead.handle)
+                    raise HubError(
+                        f"子代理「{dead.display_name}」的身分已失效"
+                        "（多半是超過短時限被回收了）。它的 handle 已作廢，"
+                        "要繼續用這個身分請重新 chatroom_spawn_subagent。"
+                        "長時間工作記得中途 chatroom_heartbeat(subagent=...) 續命。"
+                    ) from exc
         raise
 
 
@@ -478,15 +498,22 @@ def chatroom_leave(room_id: str) -> dict:
 
 @mcp.tool()
 @_guard
-def chatroom_heartbeat(room_id: str) -> dict:
+def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     """回報你仍在線，刷新該房間身分的 last_seen_at。
 
     Hub 的 presence sweeper 會把閒置逾時的 agent 移出房間，房內沒有 agent 時
     房間還會被自動封存。若你要離開工作區去做一件長時間的事（跑測試、長編譯），
     中途呼叫這個工具就能保住身分。
     正常讀寫訊息本來就會刷新 last_seen_at，因此**不必**在每次對話後都呼叫。
+
+    ``subagent`` 填 handle 就是替那個子代理續命。**子代理的時限比父層短一個
+    數量級**（預設 120 秒），一段安靜的長工作足以讓它被回收——回來要發最後
+    一則報告時才發現身分沒了。工作超過一分鐘就順手打一次。
     """
-    return _room_request(room_id, "POST", f"/api/rooms/{room_id}/heartbeat")
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(room_id, "POST", f"/api/rooms/{room_id}/heartbeat",
+                         participant_id=participant_id)
+    return {**(data if isinstance(data, dict) else {"result": data}), **scope}
 
 
 # ---------- 訊息 ----------
@@ -498,6 +525,7 @@ def chatroom_read(
     room_id: str,
     after_seq: int | None = None,
     limit: int = 100,
+    subagent: str = "",
     pinned_only: bool = False,
 ) -> dict:
     """讀取聊天室訊息（增量）。
@@ -508,6 +536,7 @@ def chatroom_read(
     （否則會跳過未釘選的訊息）。
     回傳 ``messages`` 與 ``next_after_seq``（下次可用的游標位置）。
     """
+    participant_id, scope = _identity_for(room_id, subagent)
     if after_seq is not None:
         effective = after_seq
     else:
@@ -518,14 +547,25 @@ def chatroom_read(
         "GET",
         f"/api/rooms/{room_id}/messages",
         require_identity=False,
+        participant_id=participant_id,
         params={"after_seq": effective, "limit": limit, "pinned_only": pinned_only},
     )
     messages = data.get("messages", [])
-    if messages and not pinned_only:
+    # **子代理讀訊息不推進父層的游標。** 那個游標是父層「我讀到哪裡」的紀錄，
+    # 被一個臨時分身推著跑，父層就會靜靜地跳過那段沒讀過的訊息
+    if messages and not pinned_only and not subagent:
         # P1-06 後 Hub 回傳權威 next_after_seq；缺欄位時（舊版 Hub）退回自算
         state().set_last_seq(room_id, data.get("next_after_seq", messages[-1]["seq"]))
     data["after_seq"] = effective
-    data["next_after_seq"] = state().last_seq(room_id) if not pinned_only else effective
+    if subagent:
+        data["next_after_seq"] = (
+            messages[-1]["seq"] if messages else effective
+        )
+    else:
+        data["next_after_seq"] = (
+            state().last_seq(room_id) if not pinned_only else effective
+        )
+    data.update(scope)
     return data
 
 
@@ -582,7 +622,8 @@ def chatroom_post(
 
 @mcp.tool()
 @_guard
-def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0) -> dict:
+def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0,
+                  subagent: str = "") -> dict:
     """等待新訊息（long-poll）。
 
     有新訊息立即返回，否則掛起到 ``timeout`` 秒（Hub 上限 55 秒）後回空清單。
@@ -591,19 +632,25 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     這是「等別人回話」的正確做法，不要用輪詢 chatroom_read 取代。
     """
     effective = state().last_seq(room_id) if after_seq is None else after_seq
+    participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/updates",
         require_identity=False,
+        participant_id=participant_id,
         params={"after_seq": effective, "timeout": timeout},
         timeout=timeout + 10.0,
     )
     last = data.get("last_seq")
-    if isinstance(last, int):
+    # 同 chatroom_read：子代理不推進父層的游標
+    if isinstance(last, int) and not subagent:
         state().set_last_seq(room_id, last)
     data["after_seq"] = effective
-    data["next_after_seq"] = state().last_seq(room_id)
+    data["next_after_seq"] = (
+        last if subagent and isinstance(last, int) else state().last_seq(room_id)
+    )
+    data.update(scope)
     return data
 
 
@@ -722,6 +769,7 @@ def chatroom_ask_human(
     allow_free_text: bool = True,
     multi_select: bool = False,
     question_ttl: float = 0.0,
+    subagent: str = "",
 ) -> dict:
     """在聊天室裡向指定的人類提問，並等待回答。
 
@@ -924,6 +972,7 @@ def chatroom_send_file(
     file_path: str,
     message: str = "",
     mentions: list[str] | None = None,
+    subagent: str = "",
 ) -> dict:
     """把本機的一個檔案（截圖、log、報告…）送進聊天室。
 
@@ -936,12 +985,14 @@ def chatroom_send_file(
     path = Path(file_path).expanduser()
     if not path.is_file():
         raise HubError(f"找不到檔案：{path}")
+    participant_id, scope = _identity_for(room_id, subagent)
     mime, _ = mimetypes.guess_type(path.name)
     with path.open("rb") as fh:
         uploaded = _room_request(
             room_id,
             "POST",
             f"/api/rooms/{room_id}/attachments",
+            participant_id=participant_id,
             files={"file": (path.name, fh, mime or "application/octet-stream")},
             timeout=120.0,
         )
@@ -949,6 +1000,7 @@ def chatroom_send_file(
         room_id,
         "POST",
         f"/api/rooms/{room_id}/messages",
+        participant_id=participant_id,
         json={
             "content": message or f"（檔案）{path.name}",
             "mentions": mentions or [],
@@ -961,6 +1013,7 @@ def chatroom_send_file(
         "size": uploaded["size"],
         "message_id": posted["id"],
         "seq": posted["seq"],
+        **scope,
     }
 
 

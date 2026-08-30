@@ -130,7 +130,7 @@ def test_ending_a_subagent_drops_the_handle(bridge):
     assert again["ok"] is False
 
 
-def test_subagent_failure_does_not_clear_the_parent_identity(bridge):
+def test_expired_subagent_does_not_clear_the_parent_identity(bridge):
     """一個 subagent 的身分失效，不該連累整個 session。"""
     handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
 
@@ -142,3 +142,69 @@ def test_subagent_failure_does_not_clear_the_parent_identity(bridge):
     assert out["ok"] is False
     # 父層在 state 檔裡的身分必須原封不動
     assert server.state().participant_id(ROOM) == "parent-p"
+
+
+def test_expired_handle_is_dropped_and_does_not_say_rejoin(bridge):
+    """被短 TTL 回收之後：handle 作廢、訊息指向重新 spawn，且**不標
+    need_rejoin**。
+
+    need_rejoin 是叫父層重新 join，而父層好端端的。不移除 handle 的話它會
+    被 bridge 永遠認得，每次呼叫都白打一次 Hub，而錯誤一路指向錯的動作。
+    """
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+
+    def boom(method, path, *, participant_id=None, **kwargs):
+        raise HubError("身分已失效", identity_invalid=True)
+
+    bridge.request = boom
+    out = server.chatroom_post(ROOM, "掛了", subagent=handle)
+    assert out["ok"] is False
+    assert "need_rejoin" not in out, out
+    assert "chatroom_spawn_subagent" in out["reason"]
+    assert "heartbeat" in out["reason"], "要順帶說出怎麼避免下一次"
+
+    # handle 已作廢：下一次連 Hub 都不該打
+    calls_before = len(bridge.calls)
+    bridge.request = FakeHub().request
+    again = server.chatroom_post(ROOM, "還在嗎", subagent=handle)
+    assert again["ok"] is False
+    assert "chatroom_spawn_subagent" in again["reason"]
+    assert len(bridge.calls) == calls_before
+
+
+def test_subagent_identity_applies_to_every_room_tool(bridge):
+    """契約 §3：**所有**會產生房內行為的工具都要吃 subagent。
+
+    只做 post 的話，子代理沒有續命手段——TTL 預設 120 秒，一段安靜的長工作
+    就會讓它在要交報告時發現身分沒了（Codex review #1）。
+    """
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+
+    for label, call in [
+        ("post", lambda: server.chatroom_post(ROOM, "x", subagent=handle)),
+        ("heartbeat", lambda: server.chatroom_heartbeat(ROOM, subagent=handle)),
+        ("read", lambda: server.chatroom_read(ROOM, subagent=handle)),
+    ]:
+        out = call()
+        assert out["ok"] is True, (label, out)
+        assert out["identity_scope"] == "subagent", (label, out)
+        assert bridge.calls[-1]["participant_id"] == "sub-participant-1", label
+
+
+def test_subagent_read_does_not_move_the_parent_cursor(bridge):
+    """子代理讀訊息不推進父層的游標——那是父層「我讀到哪裡」的紀錄。
+
+    被一個臨時分身推著跑，父層就會靜靜地跳過那段沒讀過的訊息。
+    """
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+    server.state().set_last_seq(ROOM, 5)
+
+    bridge.request = lambda method, path, *, participant_id=None, **kw: {
+        "messages": [{"seq": 42, "content": "新訊息"}], "next_after_seq": 42,
+    }
+    server.chatroom_read(ROOM, subagent=handle)
+    assert server.state().last_seq(ROOM) == 5
+
+    # 錨點：父層自己讀就會推進，否則上面那條可能只是讀取整個沒生效
+    server.chatroom_read(ROOM)
+    assert server.state().last_seq(ROOM) == 42

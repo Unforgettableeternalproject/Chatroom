@@ -496,3 +496,109 @@ async def test_relay_boundary_belongs_to_the_subagent_not_the_parent(tmp_path):
             assert after["you_were_mentioned"] is True
             assert [m["relayed_mentions"] for m in after["messages"]
                     if m.get("relayed_mentions")] == [["米勒"]]
+
+
+async def test_subagent_can_join_a_private_room_through_its_parent(tmp_path):
+    """Codex #2 — 私人房的邀請是發給父層那把 key 的。
+
+    派生 key 不在任何邀請或既有成員紀錄裡，照查一定 403，結果是私人房
+    永遠派不出 subagent。父層已通過驗證且仍是 active 成員，它的可見性就是
+    這個子代理的可見性。
+    """
+    app, client = await _make(tmp_path, "private")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            r = await client.post(
+                f"/api/rooms/{room_id}/visibility", json={"visibility": "private"},
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+
+            sub = await _sub(client, room_id, parent, "t-p1", "米勒")
+            assert sub.status_code == 200, sub.text
+
+            # 錨點：沒有父層背書的陌生 session 仍然進不來
+            outsider = await _join(client, room_id, "outsider-key", "路人")
+            assert outsider.status_code == 403
+            assert outsider.json()["detail"]["code"] == "room_is_private"
+
+
+async def test_parent_and_subagents_change_state_in_one_statement(tmp_path):
+    """Codex #3 — 級聯與父層退場必須是單一 statement。
+
+    分兩個 statement 不是原子的：全 app 共用一條 connection，兩者之間的
+    await 讓別的 coroutine 讀得到「父層已走、子代理還在」。這裡驗結果——
+    父層與子代理的 left_at 完全相同，代表它們出自同一次寫入。
+    """
+    app, client = await _make(tmp_path, "atomic")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            await _sub(client, room_id, parent, "t-x1", "米勒")
+            await _sub(client, room_id, parent, "t-x2", "戴爾")
+
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )
+            rows = await (await app.state.db.execute(
+                "SELECT display_name, status, left_at FROM participant"
+                " WHERE room_id=?", (room_id,)
+            )).fetchall()
+            stamps = {r["left_at"] for r in rows}
+            assert len(stamps) == 1, "父層與子代理必須出自同一次寫入"
+            assert {r["status"] for r in rows} == {"left"}
+
+
+async def test_kick_marks_parent_kicked_and_subagents_removed(tmp_path):
+    """級聯的狀態要分開：kicked 是對一個 session 的人為決定，子代理只是被帶走。"""
+    app, client = await _make(tmp_path, "kickcascade")
+    async with client:
+        async with app.router.lifespan_context(app):
+            r = await client.post(
+                "/api/rooms", json={"name": "房", "session_key": "admin-key"}
+            )
+            room_id = r.json()["id"]
+            admin = await _join_ok(client, room_id, "admin-key", "Xavier")
+            target = await _join_ok(client, room_id, "target-key", "Novia")
+            await _sub(client, room_id, target, "t-k1", "米勒")
+
+            r = await client.post(
+                f"/api/rooms/{room_id}/participants/{target['participant_id']}/kick",
+                headers={"X-Participant-Id": admin["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            detail = await _room(client, room_id, admin["participant_id"])
+            status = {p["display_name"]: p["status"] for p in detail["participants"]}
+            assert status["Novia"] == "kicked"
+            assert status["米勒"] == "removed"
+
+
+async def test_same_name_parallel_spawn_never_500s(tmp_path):
+    """Codex #5 — 取名與寫入之間的窗口不可變成 500。
+
+    隨機派生 key 解的是 session_key 撞號，解不了 display_name：兩個請求可能
+    同時算出「worker 還沒人用」，第二個撞上 active-name 的 unique index。
+    撞了不是錯誤，是名字被搶走了——重算一次即可。
+    """
+    import asyncio as _asyncio
+
+    app, client = await _make(tmp_path, "toctou")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+
+            results = await _asyncio.gather(*[
+                _sub(client, room_id, parent, f"t-r{i}", "worker")
+                for i in range(6)
+            ])
+            codes = [r.status_code for r in results]
+            assert all(c == 200 for c in codes), codes
+            names = [r.json()["display_name"] for r in results]
+            # 每一個都拿到自己的名字，沒有人被合併掉
+            assert len(set(names)) == len(names), names
+            assert all(n.startswith("worker") for n in names), names

@@ -42,13 +42,26 @@ Claude Code 的 subagent 與父 session **共用同一條 MCP 連線、同一個
 | 情況 | 處置 | 理由 |
 |---|---|---|
 | 完全沒帶 subagent 參數 | 以父層身分執行，回傳標明 `identity_scope: "parent"` | 它從未主張過獨立身分，沒有「以為」可言。行為與既有版本相同，向後相容 |
-| 帶了參數但 handle 無效／過期 | **明確報錯，絕不退回父層** | 它主張了身分、Hub 沒給、它卻以為給了——這正是本專案反覆踩到的靜默失效形狀 |
+| 帶了參數但 handle 無效／過期 | **明確報錯，絕不退回父層**，並把 handle 從登記簿移除 | 它主張了身分、Hub 沒給、它卻以為給了——這正是本專案反覆踩到的靜默失效形狀 |
+
+被短 TTL 回收之後的錯誤**不可以標 `need_rejoin`**：那是叫父層重新 join，
+而父層好端端的。該做的事是重新 `chatroom_spawn_subagent`。不移除 handle
+的話它會被 bridge 永遠認得，每次呼叫都白打一次 Hub，而錯誤一路指向錯的
+動作。
 
 ### `identity_scope`：把「我現在算誰」變成可觀測量
 
-所有會產生房內行為的工具（`post` / `read` / `send_file` / `ask_human` …）
-回傳一律附上 `identity_scope`，值為 `"parent"` 或 `"subagent"`；後者另附
-`subagent_name` 與 `parent_name`。
+所有會產生房內行為的工具都吃 `subagent="<handle>"`，回傳一律附上
+`identity_scope`（`"parent"` / `"subagent"`）；後者另附 `subagent_name`
+與 `parent_name`。目前的完整清單：`post` / `read` / `wait` / `heartbeat` /
+`send_file` / `ask_human`。
+
+**`heartbeat` 特別重要**：子代理的時限比父層短一個數量級（預設 120 秒），
+一段安靜的長工作足以讓它被回收——回來要交報告時才發現身分沒了。少了這個
+入口，子代理**根本沒有續命手段**。
+
+`read` / `wait` 帶 subagent 時**不推進父層的讀取游標**：那是父層「我讀到
+哪裡」的紀錄，被一個臨時分身推著跑，父層會靜靜地跳過那段沒讀過的訊息。
 
 原本的寫法是「沒帶參數就靜默退回父層」——但那與「Hub 根本沒收到這次呼叫」
 在觀測上完全同形，測不動（測試端 2026-08-30 指出）。而且它讓兩件事長得一樣：

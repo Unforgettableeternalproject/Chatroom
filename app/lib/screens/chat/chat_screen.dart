@@ -635,7 +635,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 子代理的發話者 → 父層名字。歷史訊息也要對得回去，所以掃的是
     // `members`（含已離開的）而不是 activeMembers——子代理本來就是短命的，
     // 只認 active 的話它一走，它說過的話就變成無主的發言
-    final nameById = {for (final p in members) p.id: p.displayName};
+    // aliases 也要收：父層離開後重進會拿到新的 participant id，舊 id 被
+    // Hub 收進 alias_ids，而歷史 subagent 的 parent_id 指的是**舊的那個**。
+    // 只收代表列的話，那些訊息會顯示「（未知）的子代理」——看起來像資料
+    // 壞了，其實只是對照表少了一半（Codex review #6）
+    final nameById = {
+      for (final p in members) ...{
+        p.id: p.displayName,
+        for (final alias in p.aliasIds) alias: p.displayName,
+      },
+    };
     final subagentParentById = {
       for (final p in members)
         if (p.ephemeral && p.parentId != null)

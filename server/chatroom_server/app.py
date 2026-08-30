@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -1132,9 +1133,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "要回來需要管理員重新指派一次。")
         # 私人房：沒有邀請就進不來。放在 kicked 檢查之後——被踢的人即使
         # 手上有舊指派也已經在上面被擋掉了（kick 當下就撤銷了那些指派）
-        if room["visibility"] == "private" and not await _invited_to_private(
-            room, session_key
-        ):
+        # subagent 例外：邀請是發給**父層**那把 key 的，派生 key 不在任何
+        # 邀請或既有成員紀錄裡，照查一定 403——結果是私人房永遠派不出
+        # subagent。父層已在上面通過驗證且仍是 active 成員，它的可見性就是
+        # 這個子代理的可見性（Codex review #2）
+        if (parent is None and room["visibility"] == "private"
+                and not await _invited_to_private(room, session_key)):
             raise _err(403, "room_is_private",
                        "這是一個私人對話，必須先被邀請才能加入。"
                        "請房內的成員從指派／邀請功能把你加進來。")
@@ -1231,16 +1235,47 @@ def create_app(config: Config | None = None) -> FastAPI:
         joined_seq = (await (
             await db.execute("SELECT next_seq FROM room WHERE id=?", (room_id,))
         ).fetchone())["next_seq"] - 1
-        await db.execute(
-            "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip, join_token, parent_id,"
-            " ephemeral, joined_seq)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (pid, room_id, body.kind, session_key, name, body.role, now, now,
-             join_ip, getattr(request.state, "access_token", ""),
-             parent["id"] if parent is not None else None,
-             1 if parent is not None else 0, joined_seq),
-        )
+        # 取名與寫入之間有窗口：兩個請求可能同時算出「worker 還沒人用」，
+        # 第二個 INSERT 撞上 active-name 的 partial unique index。撞了不是
+        # 錯誤，是**名字被搶走了**——重算一次即可。不重試的話那條路徑會回
+        # 500，而觸發它只需要同一個父層平行派兩個同名子代理，那是常態
+        # （Codex review #5）。
+        # 隨機派生 key 解的是 session_key 撞號，解不了 display_name。
+        # 最後一次改用「保證唯一」的名字：重試靠的是重算，而重算會讓同時
+        # 進來的幾個請求再次選到同一個候選——併發數一高就會耗盡次數，然後
+        # 回一個對呼叫端毫無意義的 409。名字取不到不該是一種結局
+        attempts = 6
+        for attempt in range(attempts):
+            if attempt == attempts - 1:
+                name = f"{name.rsplit('-', 1)[0]}-{pid[:4]}"
+            try:
+                await db.execute(
+                    "INSERT INTO participant (id, room_id, kind, session_key,"
+                    " display_name, role, joined_at, last_seen_at, join_ip,"
+                    " join_token, parent_id, ephemeral, joined_seq)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (pid, room_id, body.kind, session_key, name, body.role,
+                     now, now, join_ip,
+                     getattr(request.state, "access_token", ""),
+                     parent["id"] if parent is not None else None,
+                     1 if parent is not None else 0, joined_seq),
+                )
+                break
+            except sqlite3.IntegrityError:
+                if attempt == attempts - 1:
+                    # 走到這裡表示連帶著 participant id 前綴的名字都撞了，
+                    # 那不是併發，是資料異常——不要靜靜吞掉
+                    raise
+                taken_rows = await (
+                    await db.execute(
+                        "SELECT display_name FROM participant WHERE room_id=?"
+                        " AND status='active'",
+                        (room_id,),
+                    )
+                ).fetchall()
+                name = generate_name(
+                    {r["display_name"] for r in taken_rows}, preferred
+                )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
         await db.execute(
@@ -1322,6 +1357,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         條件只看 parent_id，不看 ephemeral：兩者是一起寫進去的，多一個條件
         只會在資料異常時默默少刪一筆。回傳被移除者的名字供日誌與事件使用。
+
+        ⚠️ **只查名字，不做狀態變更**——變更由呼叫端與父層那筆寫在**同一個
+        UPDATE statement** 裡（見 `_depart_with_subagents`）。分成兩個
+        statement 不是原子的：全 app 共用一條 aiosqlite connection，兩者之間
+        的 await 讓別的 coroutine 讀得到「父層已走、子代理還在」，甚至先一步
+        commit 掉那個中間態（Codex review #3）。
         """
         db = app.state.db
         rows = await (
@@ -1333,11 +1374,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchall()
         if not rows:
             return []
-        await db.execute(
-            "UPDATE participant SET status=?, left_at=?"
-            " WHERE room_id=? AND parent_id=? AND status='active'",
-            (status, _now(), room_id, parent_id),
-        )
         names = [r["display_name"] for r in rows]
         logger.info(
             "級聯移除 %d 個 subagent（room=%s，因 %s）", len(names), room_id, reason,
@@ -1346,17 +1382,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         return names
 
+    async def _depart_with_subagents(
+        room_id: str, participant_id: str, own_status: str,
+        sub_status: str, reason: str,
+    ) -> list[str]:
+        """父層退場：父層與它旗下的 subagent 在**同一個 UPDATE** 裡一起變更。
+
+        一個 statement 而不是兩個：SQLite 對單一 statement 是原子的，中間不會
+        有任何 coroutine 讀得到「父層已走、子代理還在」。父層與子代理的目標
+        狀態不同（kicked/left vs removed/left），所以用 CASE 分。
+        """
+        db = app.state.db
+        names = await _cascade_remove_subagents(
+            room_id, participant_id, sub_status, reason
+        )
+        now = _now()
+        await db.execute(
+            "UPDATE participant SET"
+            " status = CASE WHEN id=? THEN ? ELSE ? END,"
+            " left_at = ?"
+            " WHERE room_id=? AND status='active'"
+            "   AND (id=? OR parent_id=?)",
+            (participant_id, own_status, sub_status, now,
+             room_id, participant_id, participant_id),
+        )
+        return names
+
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
     async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
         # 封存房也允許離開（唯讀例外），故不檢查房間狀態
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
-        await db.execute(
-            "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
-        )
-        # 同一個交易：父層與它的 subagent 一起消失，中間不留窗口
-        orphans = await _cascade_remove_subagents(
-            room_id, p["id"], "left", "父層離開"
+        # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
+        orphans = await _depart_with_subagents(
+            room_id, p["id"], "left", "left", "父層離開"
         )
         logger.info(
             "離開房間 %s（%s）", p["display_name"], room_id, extra={
@@ -1415,14 +1474,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         if target is None:
             raise _err(404, "participant_not_found", "找不到這個成員，或已不在房內")
         now = _now()
-        await db.execute(
-            "UPDATE participant SET status='kicked', left_at=? WHERE id=?",
-            (now, target_id),
+        # 被踢者與旗下 subagent 同一個 statement。子代理標 removed 不標
+        # kicked——kicked 是對一個 session 的人為封鎖決定，而 subagent 只是
+        # 被父層帶走，沒有人針對它做過決定
+        await _depart_with_subagents(
+            room_id, target_id, "kicked", "removed", "父層被移出"
         )
-        # 同一個交易：被踢者旗下的 subagent 一起走。標 removed 不標 kicked——
-        # kicked 是對一個 session 的人為封鎖決定，而 subagent 只是被父層帶走，
-        # 沒有人針對它做過決定
-        await _cascade_remove_subagents(room_id, target_id, "removed", "父層被移出")
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
         # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
         # 要回來必須由管理員重新指派一次。
@@ -3009,13 +3066,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchall()
         for p in idle:
-            await db.execute(
-                "UPDATE participant SET status='removed', left_at=? WHERE id=?",
-                (_now(), p["id"]),
-            )
-            # 同一個交易：閒置移除也是父層退場，旗下 subagent 一起走
-            await _cascade_remove_subagents(
-                p["room_id"], p["id"], "removed", "父層閒置逾時"
+            # 閒置移除也是父層退場，同一個 statement 帶走旗下 subagent
+            await _depart_with_subagents(
+                p["room_id"], p["id"], "removed", "removed", "父層閒置逾時"
             )
             await db.commit()
             logger.info(
