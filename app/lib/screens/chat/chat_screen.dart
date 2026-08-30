@@ -16,6 +16,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../core/util/image_bytes.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
+import '../../api/attachments_api.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
 import '../../models/room_style.dart';
@@ -1788,7 +1789,9 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
   /// 而未答的問題一直存在，下次進房該重新看到。
   bool _collapsed = false;
 
-  Future<void> _respond(String id, String kind, String answer) async {
+  Future<void> _respond(String id, String kind, String answer,
+      [List<String> selected = const [],
+      List<String> attachmentIds = const []]) async {
     try {
       await ref
           .read(questionsApiProvider)
@@ -1796,6 +1799,8 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
             id,
             kind: kind,
             answer: answer,
+            selected: selected,
+            attachmentIds: attachmentIds,
             participantId: widget.participantId,
           );
     } on ApiException catch (e) {
@@ -1803,6 +1808,33 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('回答失敗：${e.message}')));
     }
+  }
+
+  /// 回答問題時選檔並上傳。走與訊息附件同一條 API——附件屬於房間而不是
+  /// 訊息，所以上傳完就可以掛到答案上（Hub 會驗它屬於這個房）。
+  Future<List<UploadedAttachment>> _pickAnswerFiles() async {
+    // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null
+    final files = await FilePicker.pickFiles();
+    final api = ref.read(attachmentsApiProvider);
+    final out = <UploadedAttachment>[];
+    for (final f in files) {
+      final path = f.path;
+      if (path == null) continue;
+      try {
+        out.add(await api.uploadPath(
+          widget.roomId,
+          participantId: widget.participantId,
+          path: path,
+          filename: f.name,
+        ));
+      } on ApiException catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${f.name} 上傳失敗：${e.message}')));
+        }
+      }
+    }
+    return out;
   }
 
   @override
@@ -1867,8 +1899,10 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
                   for (final q in questions)
                     QuestionCard(
                       question: q,
-                      onAnswer: (kind, answer) => _respond(q.id, kind, answer),
+                      onAnswer: (kind, answer, selected, files) =>
+                          _respond(q.id, kind, answer, selected, files),
                       onSkip: () => _respond(q.id, 'skip', ''),
+                      onPickFiles: _pickAnswerFiles,
                     ),
                 ],
               ),

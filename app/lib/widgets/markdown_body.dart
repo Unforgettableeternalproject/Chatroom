@@ -1,9 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+
+/// 開啟訊息裡的連結。
+///
+/// **只放行 http/https**：訊息內容來自房內任何一個 agent，而
+/// `launchUrl` 會把 `file:`／`ms-settings:` 這類 scheme 交給作業系統執行。
+/// 一則訊息就能讓收到的人點開本機檔案或系統設定，那不是聊天室該有的能力。
+Future<void> _openLink(BuildContext context, String? href) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final uri = href == null ? null : Uri.tryParse(href);
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    messenger?.showSnackBar(
+      SnackBar(content: Text('這個連結不是 http(s)，不開啟：${href ?? ''}')),
+    );
+    return;
+  }
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    messenger?.showSnackBar(SnackBar(content: Text('開不起來：$href')));
+  }
+}
 
 /// Markdown 套件的唯一接觸點——換套件只改這裡。
 /// 安全限制：訊息內容來自 agent，不啟用 raw HTML / 任意 widget 注入。
@@ -28,6 +49,10 @@ class UepMarkdownBody extends StatelessWidget {
     final ink = baseColor ?? s.ink;
     return MarkdownBody(
       data: data,
+      // GitHub 風格的 autolink：純文字的 https://… 也算連結，不必寫成
+      // [文字](網址)。agent 與人貼網址時多半是直接貼，不會去包 markdown
+      extensionSet: md.ExtensionSet.gitHubWeb,
+      onTapLink: (text, href, title) => _openLink(context, href),
       // ⚠️ 不要開 selectable。它會用 SelectableText 渲染，而 SelectableText
       // **即使沒有選取任何文字也會吃下右鍵**，彈出系統的「Select All」選單，
       // 把訊息自己的右鍵選單（釘選／回覆／刪除）搶走，位置也由它決定。
@@ -67,7 +92,13 @@ class UepMarkdownBody extends StatelessWidget {
         horizontalRuleDecoration: BoxDecoration(
           border: Border(top: BorderSide(color: s.hairline)),
         ),
-        a: TextStyle(color: UepColors.gold),
+        // 底線是「可以點」的唯一視覺線索——只有顏色的話，在這個配色裡
+        // 跟強調文字分不出來
+        a: TextStyle(
+          color: UepColors.gold,
+          decoration: TextDecoration.underline,
+          decorationColor: UepColors.gold.withValues(alpha: .5),
+        ),
         tableBorder: TableBorder.all(color: s.line),
         tableBody: UepText.serif(size: 13, color: ink, height: 1.6),
       ),

@@ -28,6 +28,7 @@ class Question {
     required this.createdAt,
     this.options = const [],
     this.allowFreeText = true,
+    this.multiSelect = false,
     this.askerName,
     this.answer,
     this.answerKind,
@@ -44,6 +45,10 @@ class Question {
 
   /// false 時只能從 options 選，不能自己打字。
   final bool allowFreeText;
+
+  /// true 時可以複選。舊版 Hub 不回這個欄位，那時一律當單選——那是這個
+  /// 設定存在之前的行為。
+  final bool multiSelect;
   final String? askerName;
   final String? answer;
 
@@ -58,6 +63,7 @@ class Question {
         prompt: (json['prompt'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'pending',
         createdAt: (json['created_at'] as String?) ?? '',
+        multiSelect: (json['multi_select'] as bool?) ?? false,
         options: ((json['options'] as List?) ?? const [])
             .map((e) => QuestionOption.fromJson(e as Map<String, dynamic>))
             .toList(),

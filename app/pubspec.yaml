@@ -58,6 +58,7 @@ dependencies:
   # 平台通道、無額外原生工具鏈，Windows/Android 都支援。
   pasteboard: ^0.5.0
   windows_taskbar: ^1.1.2
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

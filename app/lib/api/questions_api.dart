@@ -31,16 +31,25 @@ class QuestionsApi {
   ///
   /// skip 是「不在這裡回答」的明確表態，與放著不管（逾時）不同——
   /// agent 收到 skip 會改用它原本的方式問，收到逾時則會繼續等。
+  /// [selected] 是複選題選了哪些 label（單選題留空，用 [answer] 就好）。
+  /// [attachmentIds] 是隨答案附上的檔案——UI 問題直接給截圖，比打三段字快。
   Future<void> answer(
     String questionId, {
     required String kind,
     String answer = '',
+    List<String> selected = const [],
+    List<String> attachmentIds = const [],
     required String participantId,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/questions/$questionId/answer',
-          data: {'kind': kind, 'answer': answer},
+          data: {
+            'kind': kind,
+            'answer': answer,
+            'selected': selected,
+            'attachment_ids': attachmentIds,
+          },
           options: Options(headers: {'X-Participant-Id': participantId}),
         );
       });
