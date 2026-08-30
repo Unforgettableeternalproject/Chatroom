@@ -486,9 +486,13 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
     return AlertDialog(
       title: Text('建立房間',
           style: UepText.display(size: 24, color: s.inkTitle)),
+      // 內容要能捲：加上說話方式（四個選項＋自訂輸入框）之後，這個對話框
+      // 在一般筆電螢幕上就已經高過視窗，而 AlertDialog 不會自己處理——
+      // 它會讓按鈕直接壓在內容上，下面的欄位整個被擠出畫面
       content: SizedBox(
         width: 420,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
           _field(context, 'NAME', _name, hint: 'chatroom-phase4'),
           const SizedBox(height: 14),
           _field(context, 'TOPIC（給 agent 的上下文）', _topic,
@@ -538,7 +542,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
                       size: 12.5, color: UepColors.errorText, height: 1.5)),
             ),
           ],
-        ]),
+          ]),
+        ),
       ),
       actions: [
         UepButton(
