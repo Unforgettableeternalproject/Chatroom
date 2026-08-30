@@ -46,6 +46,74 @@ def _err(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status, {"code": code, "message": message})
 
 
+# ---------- 說話方式 ----------
+
+# agent 的預設回話方式是「任務回報」：長篇 Markdown、程式碼整段貼、每個步驟
+# 都交代一次。那在工單系統裡是對的，在聊天室裡多半是噪音——房裡還有別人在
+# 講話，一則回覆佔掉整個畫面，其他人就別想聊了。
+#
+# 風格文字**寫在 server**，不是寫在 client 或 bridge：房間的說話方式是房間的
+# 屬性，所有進來的 agent 必須拿到同一份定義。放在 bridge 就會變成「不同版本
+# 的 bridge 對同一個房間有不同的理解」。
+#
+# 每個風格兩份文字：`prompt` 在加入房間時給一次（完整指示），`hint` 每次讀
+# 訊息時附帶（一行，防止長對話裡風格慢慢飄回預設）。
+ROOM_STYLES: dict[str, dict[str, str]] = {
+    "verbose": {
+        "label": "詳細",
+        "prompt": (
+            "本房的說話方式是【詳細】：完整交付。任務結果、程式碼、結構化的"
+            " Markdown 報告都可以直接貼在房裡，篇幅不設限——這個房間同時是"
+            "工作紀錄，寫下來的東西之後有人會回頭翻。"
+        ),
+        "hint": "本房風格：詳細（完整交付，篇幅不限）",
+    },
+    "concise": {
+        "label": "精確",
+        "prompt": (
+            "本房的說話方式是【精確】：用最少的篇幅把話講完。結論先講，理由"
+            "一句話；要點用短列表。**不要貼程式碼，不要交付長篇 Markdown"
+            "文件**——細節先留在你手上，需要的人會開口要，那時再給。"
+            "把「我做了什麼」壓成一行，把「結果是什麼」講清楚。"
+        ),
+        "hint": "本房風格：精確（重點為主，不貼程式碼與長篇文件）",
+    },
+    "casual": {
+        "label": "親和",
+        "prompt": (
+            "本房的說話方式是【親和】：像人一樣說話。用自然的句子，不要標題、"
+            "不要條列、不要進度回報的格式。不主動交代工作階段與任務狀態——"
+            "有結果就講結果，有問題就問，該閒聊就閒聊。這裡是聊天室，"
+            "不是工單系統。"
+        ),
+        "hint": "本房風格：親和（自然語言，像人一樣說話）",
+    },
+}
+
+# 自訂風格的指示由建立者自己寫，Hub 不加工——加了就會變成兩個人的話疊在
+# 一起，而使用者無從得知自己的那句被改成什麼樣子
+CUSTOM_STYLE = "custom"
+STYLE_PATTERN = "^(verbose|concise|casual|custom)$"
+
+
+def _style_texts(style: str, instructions: str) -> tuple[str, str]:
+    """(完整指示, 一行提醒)。未知的 style 一律退回 verbose。
+
+    退回而不是報錯：舊 client 或手動改過的資料庫都可能塞進沒見過的值，
+    而說話方式出錯不該讓整個房間讀不出來。
+    """
+    if style == CUSTOM_STYLE:
+        text = instructions.strip()
+        if text:
+            # 壓成一行：自訂指示可能是多行的，提醒只有一行的位置
+            head = " ".join(text.split())[:60]
+            return text, f"本房風格：自訂——{head}"
+        # custom 但沒有內容：建立時已擋掉，這裡是資料層面的縱深防禦
+        style = "verbose"
+    spec = ROOM_STYLES.get(style) or ROOM_STYLES["verbose"]
+    return spec["prompt"], spec["hint"]
+
+
 # ---------- 請求模型 ----------
 
 class RoomCreate(BaseModel):
@@ -56,10 +124,18 @@ class RoomCreate(BaseModel):
     session_key: str | None = Field(default=None, max_length=128)
     # public / private。private 的房不出現在別人的房間列表，也不能自行加入
     visibility: str = Field(default="public", pattern="^(public|private)$")
+    # 房內 agent 的說話方式。custom 時 style_instructions 必填
+    style: str = Field(default="verbose", pattern=STYLE_PATTERN)
+    style_instructions: str = Field(default="", max_length=2000)
 
 
 class RoomVisibility(BaseModel):
     visibility: str = Field(pattern="^(public|private)$")
+
+
+class RoomStyle(BaseModel):
+    style: str = Field(pattern=STYLE_PATTERN)
+    style_instructions: str = Field(default="", max_length=2000)
 
 
 class JoinRequest(BaseModel):
@@ -406,17 +482,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         return invited is not None
 
-    async def _admin_or_403(room, participant_id: str | None, session_key: str | None):
+    async def _admin_or_403(room, participant_id: str | None,
+                            session_key: str | None, what: str = "鎖定狀態"):
         """管理員（建立者）門檻。
 
         接受兩種自報方式：X-Session-Key（建立者可能還沒加入自己的房，
         指派 UI 正開在那個空窗上），或 X-Participant-Id 反查 session_key。
+
+        ``what`` 只進錯誤訊息——同一道門現在管兩件事（鎖定狀態、說話方式），
+        訊息寫死其中一件會讓另一件的失敗看起來像叫錯了端點。
         """
         creator = room["creator_session_key"]
         if not creator:
             raise _err(409, "room_has_no_admin",
                        "這個聊天室沒有建立者紀錄（建立時沒帶 session_key），"
-                       "沒有人可以變更它的鎖定狀態")
+                       f"沒有人可以變更它的{what}")
         if session_key and session_key == creator:
             return
         if participant_id:
@@ -428,7 +508,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             if me is not None and me["session_key"] == creator:
                 return
-        raise _err(403, "not_admin", "只有聊天室建立者可以變更鎖定狀態")
+        raise _err(403, "not_admin", f"只有聊天室建立者可以變更{what}")
 
     async def _touch_session(
         session_key: str,
@@ -594,15 +674,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         room_id = _uid()
         now = _now()
+        # custom 沒有內容就沒有風格可言——落庫之後每個進來的 agent 都會拿到
+        # 一個空指示，而它看起來與「沒設定」一模一樣，沒有人查得出哪裡不對
+        if body.style == CUSTOM_STYLE and not body.style_instructions.strip():
+            raise _err(422, "style_instructions_required",
+                       "選擇自訂說話方式時必須寫下指示內容")
+        instructions = (body.style_instructions.strip()
+                        if body.style == CUSTOM_STYLE else "")
         await db.execute(
             "INSERT INTO room (id, name, topic, created_at, activated_at,"
-            " creator_session_key, visibility) VALUES (?,?,?,?,?,?,?)",
+            " creator_session_key, visibility, style, style_instructions)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (room_id, body.name, body.topic, now, now, body.session_key,
-             body.visibility),
+             body.visibility, body.style, instructions),
         )
         await db.commit()
         return {"id": room_id, "name": body.name, "topic": body.topic,
-                "status": "active", "visibility": body.visibility}
+                "status": "active", "visibility": body.visibility,
+                "style": body.style, "style_instructions": instructions}
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
     async def list_rooms(
@@ -807,6 +896,47 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         return {"ok": True, "visibility": body.visibility, "changed": True}
 
+    @app.post("/api/rooms/{room_id}/style", dependencies=[Depends(require_auth)])
+    async def set_style(
+        room_id: str,
+        body: RoomStyle,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """變更房內 agent 的說話方式。只有建立者能改。
+
+        變更會在房內留下一則系統訊息：說話方式換了，房裡的人會看到彼此的
+        語氣突然改變，那不該是一件沒有解釋的事。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key, "說話方式")
+        if body.style == CUSTOM_STYLE and not body.style_instructions.strip():
+            raise _err(422, "style_instructions_required",
+                       "選擇自訂說話方式時必須寫下指示內容")
+        instructions = (body.style_instructions.strip()
+                        if body.style == CUSTOM_STYLE else "")
+        if room["style"] == body.style and room["style_instructions"] == instructions:
+            return {"ok": True, "style": body.style,
+                    "style_instructions": instructions, "changed": False}
+        db = app.state.db
+        await db.execute(
+            "UPDATE room SET style=?, style_instructions=? WHERE id=?",
+            (body.style, instructions, room_id),
+        )
+        await db.commit()
+        prompt, hint = _style_texts(body.style, instructions)
+        logger.info(
+            "變更說話方式 %s -> %s（%s）", room["style"], body.style, room_id,
+            extra={"event": "style", "room_id": room_id, "style": body.style},
+        )
+        await _post_message(
+            room_id, None, f"這個對話的說話方式已改為：{hint.split('：', 1)[-1]}",
+            kind="system", system_event="style",
+        )
+        return {"ok": True, "style": body.style,
+                "style_instructions": instructions,
+                "style_prompt": prompt, "changed": True}
+
     # ---------- 成員 ----------
 
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
@@ -878,11 +1008,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
                 await db.commit()
             await _touch_session(session_key, body.kind, ip=_client_ip(request))
+            # rejoin 也給：閒置被移出後重新加入的多半是新的一輪對話，
+            # 而上一輪讀到的風格早就滾出 context 了
+            style_prompt, _ = _style_texts(room["style"], room["style_instructions"])
             return {
                 "participant_id": existing["id"],
                 "display_name": existing["display_name"],
                 "rejoined": True,
                 "session_key": session_key,
+                "style": room["style"],
+                "style_prompt": style_prompt,
             }
 
         taken_rows = await (
@@ -950,6 +1085,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             "join_message_id": joined["id"],
             "join_seq": joined["seq"],
         }
+        # 說話方式在**加入時就講清楚**，不是等他先講完一輪長篇再糾正——
+        # 第一則發言就已經是別人要讀的東西了
+        out["style"], out["style_prompt"] = (
+            room["style"], _style_texts(room["style"], room["style_instructions"])[0]
+        )
         if assigned:
             # 讓 agent 知道名字來自指派者，而非自己的 preferred_name
             out["name_from_assignment"] = True
@@ -1144,7 +1284,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         兩者互斥；回傳一律以 seq 遞增排列。"""
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id)
         if before_seq is not None and after_seq:
             raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
@@ -1168,7 +1308,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         if before_seq is not None:
             rows = list(reversed(rows))
         msgs = await _message_rows_to_json(rows, db)
-        out: dict = {"messages": msgs, "has_more": has_more}
+        # 每次讀都帶一行風格提醒：加入時給過的完整指示會隨著對話變長而被
+        # 稀釋，語氣接著一則一則飄回 agent 的預設。一行的成本幾乎為零
+        out: dict = {"messages": msgs, "has_more": has_more,
+                     "style_hint": _style_texts(room["style"],
+                                                room["style_instructions"])[1]}
         if msgs:
             out["next_after_seq"] = msgs[-1]["seq"]
             out["next_before_seq"] = msgs[0]["seq"]
@@ -1187,7 +1331,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         讀），所以 watcher 光靠錯誤碼看不出房間已經沒了，會一直空轉 long-poll。
         狀態在**返回前**重讀，等待期間才發生的封存也涵蓋得到。
         """
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
+        style_hint = _style_texts(room["style"], room["style_instructions"])[1]
         db = app.state.db
         # 從選填改必填：這是取得即時訊息的通道，非成員掛在這裡等於被踢之後
         # 照樣旁聽整個房間。這裡要的是 **active** 身分（不是 _member_or_403
@@ -1219,11 +1364,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
                 return {"messages": msgs, "you_were_mentioned": mentioned,
                         "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs),
-                        "room_status": await _status()}
+                        "room_status": await _status(), "style_hint": style_hint}
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 return {"messages": [], "you_were_mentioned": False,
-                        "last_seq": after_seq, "room_status": await _status()}
+                        "last_seq": after_seq, "room_status": await _status(),
+                        "style_hint": style_hint}
             await events.wait(room_id, remaining)
 
     async def _message_room(message_id: str) -> str:

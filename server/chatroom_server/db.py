@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS room (
     -- 也不能沒有邀請就加入。這是**可見性**，不是加密——拿得到 room_id
     -- 又已經是成員的人照樣讀得到，它擋的是「逛到」與「自己走進來」
     visibility  TEXT NOT NULL DEFAULT 'public',
+    -- 房內的說話方式：verbose（詳細）/ concise（精確）/ casual（親和）/ custom。
+    -- agent 預設的回話方式是「任務回報」——長篇 Markdown、程式碼全貼、
+    -- 每個步驟都交代。那在工單系統裡是對的，在聊天室裡多半是噪音，
+    -- 而房間的用途只有建立者知道，所以由他選
+    style       TEXT NOT NULL DEFAULT 'verbose',
+    -- style='custom' 時的指示原文；其餘風格用 server 端的定稿，這裡留空
+    style_instructions TEXT NOT NULL DEFAULT '',
     next_seq    INTEGER NOT NULL DEFAULT 1,       -- 訊息序號發放計數器
     created_at  TEXT NOT NULL,
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
@@ -182,6 +189,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("room", "visibility", "visibility TEXT NOT NULL DEFAULT 'public'"),
     # 回覆目標的 seq。舊訊息補不回來（NULL），client 要能容忍缺值
     ("message", "reply_to_seq", "reply_to_seq INTEGER"),
+    # 說話方式。舊房一律 verbose——那是這個欄位存在之前的實際行為，
+    # 升級一次資料庫就讓所有房間的對話語氣改變，沒有人會預期
+    ("room", "style", "style TEXT NOT NULL DEFAULT 'verbose'"),
+    ("room", "style_instructions", "style_instructions TEXT NOT NULL DEFAULT ''"),
 ]
 
 

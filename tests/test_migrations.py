@@ -66,6 +66,16 @@ async def test_legacy_db_gains_new_columns_without_losing_rows(tmp_path):
             await db.execute("SELECT visibility FROM room WHERE id='r1'")
         ).fetchone()
         assert row["visibility"] == "public"
+        # 舊房維持詳細：那是這個欄位存在之前的實際行為。升級一次資料庫就
+        # 讓所有房間的語氣改變，沒有人會預期
+        assert "style" in await _columns(db, "room")
+        row = await (
+            await db.execute(
+                "SELECT style, style_instructions FROM room WHERE id='r1'"
+            )
+        ).fetchone()
+        assert row["style"] == "verbose"
+        assert row["style_instructions"] == ""
         row = await (
             await db.execute("SELECT content, reply_to_seq FROM message WHERE id='m1'")
         ).fetchone()
