@@ -44,7 +44,14 @@ CREATE TABLE IF NOT EXISTS participant (
     join_ip      TEXT,                             -- 加入時的來源 IP（重名消歧用）
     -- 加入時用的那張 access_token（空＝主 token 或開放模式）。踢出要連著撤銷
     -- 它：session_key 是被踢者自己產的，只封那個等於沒封
-    join_token   TEXT NOT NULL DEFAULT ''
+    join_token   TEXT NOT NULL DEFAULT '',
+    -- subagent 依附的父成員（同房的 participant.id）；NULL＝一般成員。
+    -- agent 派出的子 agent 與父層共用同一個 MCP 進程與 session id，Hub 分辨
+    -- 不出來，只能由對方自報——這欄位存的就是那個自報的隸屬關係
+    parent_id    TEXT REFERENCES participant(id),
+    -- 臨時成員：工作結束即移除，進出不進訊息流、不計入自動封存判定、
+    -- 走專屬的短 TTL。與 parent_id 一起設定，不單獨存在
+    ephemeral    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -215,6 +222,20 @@ MIGRATIONS: list[tuple[str, str, str]] = [
      "answer_attachments TEXT NOT NULL DEFAULT '[]'"),
     ("room", "style", "style TEXT NOT NULL DEFAULT 'verbose'"),
     ("room", "style_instructions", "style_instructions TEXT NOT NULL DEFAULT ''"),
+    # subagent 身分。舊資料一律 parent_id=NULL / ephemeral=0——那是這兩個欄位
+    # 存在之前的實際語意（每個成員都是獨立的一般成員）。
+    # 註：帶 REFERENCES 的欄位只能以 NULL 為預設值，SQLite 的 ADD COLUMN 限制
+    ("participant", "parent_id", "parent_id TEXT REFERENCES participant(id)"),
+    ("participant", "ephemeral", "ephemeral INTEGER NOT NULL DEFAULT 0"),
+]
+
+# 依賴「欄位補齊之後」才能建立的索引。
+# 不能放進 SCHEMA：executescript 在 _migrate **之前**跑，對舊 DB 而言那時
+# participant 還沒有 parent_id 欄位，整份 SCHEMA 會在這一行炸掉——而它是
+# 開 DB 的必經路徑，等於舊資料庫一律開不起來
+POST_MIGRATION_INDEXES: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_participant_parent"
+    " ON participant(parent_id, status)",
 ]
 
 
@@ -225,6 +246,8 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         existing = {r["name"] for r in rows}
         if column not in existing:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+    for stmt in POST_MIGRATION_INDEXES:
+        await db.execute(stmt)
 
 
 async def open_db(path: str) -> aiosqlite.Connection:
