@@ -1172,9 +1172,25 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "style_prompt": style_prompt,
             }
 
+        # 已離開者的名字一般會釋出（房內唯一性只約束 active 成員），但
+        # **ephemeral 的名字在其父層還活著的期間不釋出**。
+        #
+        # 因為 subagent 的名字是自報的、慣用名就那幾個（tester / worker /
+        # reviewer），加上秒級 TTL 讓進出頻率比一般成員高一個數量級——撞名
+        # 是常態不是意外。名字一旦被**另一個父層**的 subagent 撿走，@ 那個
+        # 名字的訊息就會轉投遞到錯誤的父層去（C7 是靠名字轉投遞的）。那不是
+        # 吵，是跨 agent 的訊息投錯人，而且兩邊都不會看到錯誤。
+        #
+        # 保留名字讓晚到的 @ 變成 unresolved_mentions——一個發話者看得見的
+        # 失敗，遠好過靜默投給別人家的 subagent。
+        # 一般成員的回收語意不動：低頻，而且人類看得到成員列，代價不成比例。
         taken_rows = await (
             await db.execute(
-                "SELECT display_name FROM participant WHERE room_id=? AND status='active'",
+                "SELECT display_name FROM participant p WHERE p.room_id=?"
+                " AND (p.status='active'"
+                "      OR (p.ephemeral=1 AND EXISTS ("
+                "            SELECT 1 FROM participant q"
+                "            WHERE q.id=p.parent_id AND q.status='active')))",
                 (room_id,),
             )
         ).fetchall()

@@ -309,3 +309,55 @@ async def test_mentioning_a_subagent_wakes_its_parent(tmp_path):
                 headers={"X-Participant-Id": third["participant_id"]},
             )).json()
             assert t_upd["you_were_mentioned"] is False
+
+
+async def test_ephemeral_name_is_held_while_its_parent_lives(tmp_path):
+    """問題二 — subagent 的名字在父層存活期間不釋出。
+
+    名字被別家的 subagent 撿走，@ 那個名字就會轉投遞到錯誤的父層（C7 靠名字
+    轉投遞），而且兩邊都不會看到錯誤。保留名字讓晚到的 @ 變成一個發話者看得
+    見的失敗。
+    """
+    app, client = await _make(tmp_path, "namehold")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            other = await _join_ok(client, room_id, "other-key", "米絲媞")
+
+            sub = (await _sub(client, room_id, parent, "t-h1", "米勒")).json()
+            assert sub["display_name"] == "米勒"
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": sub["participant_id"]},
+            )
+
+            # 別家的 subagent 自報同名 → 拿到調整過的名字，不是原名
+            poacher = (await _sub(client, room_id, other, "t-h2", "米勒")).json()
+            assert poacher["display_name"] != "米勒"
+
+            # 錨點：一般成員的名字**照舊釋出**——這條修法不該外溢到既有語意
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": other["participant_id"]},
+            )
+            revived = await _join_ok(client, room_id, "newcomer-key", "米絲媞")
+            assert revived["display_name"] == "米絲媞"
+
+
+async def test_ephemeral_name_frees_up_once_the_parent_is_gone(tmp_path):
+    """名字隨父層的級聯一起釋放——保留期綁在父層的生命週期上，不是永久。"""
+    app, client = await _make(tmp_path, "namefree")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            other = await _join_ok(client, room_id, "other-key", "米絲媞")
+            await _sub(client, room_id, parent, "t-h3", "米勒")
+
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )
+            reused = (await _sub(client, room_id, other, "t-h4", "米勒")).json()
+            assert reused["display_name"] == "米勒"
