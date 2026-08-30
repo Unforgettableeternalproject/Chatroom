@@ -100,6 +100,11 @@ CREATE TABLE IF NOT EXISTS session (
     session_key   TEXT PRIMARY KEY,
     kind          TEXT NOT NULL DEFAULT 'other',  -- claude / codex / human / other
     label         TEXT NOT NULL DEFAULT '',       -- bridge 自報的代稱（CHATROOM_DEFAULT_NAME）
+    -- 自報的主機名。指派 UI 靠它把「我這台機器上的 agent」與「別人機器上
+    -- 的」分開——指派是私人房的入場券，把別人的 agent 指派進來等於把房裡
+    -- 的內容送出去。**僅供辨識與分組，不是授權依據**（自報的東西不可信，
+    -- 信任邊界仍然是 token）
+    host          TEXT NOT NULL DEFAULT '',
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL
 );
@@ -180,6 +185,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
     # 來源位址是唯一分得開的線索
     ("session", "last_ip", "last_ip TEXT"),
+    # 主機名。舊 bridge 不自報，留空——空值在 UI 上是「未知裝置」，
+    # 不能當成「本機」（那會讓所有舊 session 混進本機清單）
+    ("session", "host", "host TEXT NOT NULL DEFAULT ''"),
     # 踢出要連著撤銷對方的 access token，得先知道他是拿哪一張進來的
     ("participant", "join_token", "join_token TEXT NOT NULL DEFAULT ''"),
     # 問題逾時。舊資料的 expires_at 為 NULL＝永不過期，維持原本的語意

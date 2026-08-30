@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/assignment.dart';
 import '../models/participant.dart';
+import '../core/util/local_host.dart';
 import '../models/room.dart';
 import 'api_client.dart';
 
@@ -126,6 +127,8 @@ class RoomsApi {
             // 「這是一個人」還是「這是一個 agent」
             if (hasKey) 'kind': 'human',
             if (hasKey && label.isNotEmpty) 'label': label,
+            // 自報主機名：指派 UI 要靠它分出「這台機器上的 agent」
+            if (hasKey && localHostName.isNotEmpty) 'host': localHostName,
           },
         );
         final rooms = ((res.data?['rooms'] as List?) ?? const [])

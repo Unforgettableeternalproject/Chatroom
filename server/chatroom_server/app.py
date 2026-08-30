@@ -146,6 +146,8 @@ class JoinRequest(BaseModel):
     assignment_id: str | None = Field(default=None, max_length=128)
     preferred_name: str | None = None
     role: str = Field(default="agent", pattern="^(agent|human)$")
+    # 自報的主機名，指派 UI 用來分辨「這是我這台機器上的 agent 嗎」
+    host: str | None = Field(default=None, max_length=200)
 
 
 class MessagePost(BaseModel):
@@ -515,6 +517,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         kind: str | None = None,
         label: str | None = None,
         ip: str | None = None,
+        host: str | None = None,
     ) -> None:
         """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
         舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。"""
@@ -529,13 +532,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         now = _now()
         await db.execute(
             "INSERT INTO session (session_key, kind, label, first_seen_at,"
-            " last_seen_at, last_ip) VALUES (?,?,?,?,?,?)"
+            " last_seen_at, last_ip, host) VALUES (?,?,?,?,?,?,?)"
             " ON CONFLICT(session_key) DO UPDATE SET"
             " last_seen_at=excluded.last_seen_at,"
             " kind=CASE WHEN excluded.kind!='' THEN excluded.kind ELSE session.kind END,"
             " label=CASE WHEN excluded.label!='' THEN excluded.label ELSE session.label END,"
-            " last_ip=COALESCE(excluded.last_ip, session.last_ip)",
-            (session_key, kind or "", label or "", now, now, ip),
+            " last_ip=COALESCE(excluded.last_ip, session.last_ip),"
+            # host 同 kind/label：只在帶到非空值時覆寫。舊 bridge 不自報，
+            # 不能因為它呼叫了一次就把已知的主機名洗掉
+            " host=CASE WHEN excluded.host!='' THEN excluded.host ELSE session.host END",
+            (session_key, kind or "", label or "", now, now, ip, host or ""),
         )
         # 首次插入時 kind 空字串會落庫，補回預設值
         await db.execute(
@@ -700,10 +706,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str | None = None,
         kind: str | None = None,
         label: str | None = None,
+        host: str | None = None,
     ):
         db = app.state.db
         if session_key:
-            await _touch_session(session_key, kind, label, _client_ip(request))
+            await _touch_session(session_key, kind, label, _client_ip(request),
+                                 host)
         # 私人房只對「有份的人」出現：建立者、房內（含曾在房內）的成員、
         # 被邀請的 session。沒帶 session_key 就只看得到公開房——匿名的
         # 列表請求無從證明自己有份
@@ -1007,7 +1015,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (_now(), assignment["id"]),
                 )
                 await db.commit()
-            await _touch_session(session_key, body.kind, ip=_client_ip(request))
+            await _touch_session(session_key, body.kind, ip=_client_ip(request),
+                                 host=body.host)
             # rejoin 也給：閒置被移出後重新加入的多半是新的一輪對話，
             # 而上一輪讀到的風格早就滾出 context 了
             style_prompt, _ = _style_texts(room["style"], room["style_instructions"])
@@ -1057,7 +1066,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, session_key),
         )
         await db.commit()
-        await _touch_session(session_key, body.kind, ip=_client_ip(request))
+        await _touch_session(session_key, body.kind, ip=_client_ip(request),
+                             host=body.host)
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
         logger.info(
@@ -1513,9 +1523,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str,
         kind: str | None = None,
         label: str | None = None,
+        host: str | None = None,
     ):
         # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
-        await _touch_session(session_key, kind, label, _client_ip(request))
+        await _touch_session(session_key, kind, label, _client_ip(request), host)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -2086,6 +2097,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 邀請 UI 靠它認人：共用一把 token 時 Hub 眼中所有人長得一樣。
                 # **僅供辨識**——來源可能經 X-Forwarded-For 而來，不可拿來授權
                 "last_ip": r["last_ip"],
+                # 指派 UI 靠它分組（本機／其他裝置）。自報的值，僅供辨識
+                "host": r["host"],
                 "status": "active" if r["last_seen_at"] >= active_cutoff else "idle",
                 "first_seen_at": r["first_seen_at"],
                 "last_seen_at": r["last_seen_at"],

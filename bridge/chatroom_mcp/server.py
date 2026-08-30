@@ -12,6 +12,11 @@
     CHATROOM_AGENT_KIND   claude / codex / human / other，預設 other
     CHATROOM_DEFAULT_NAME join 未帶 preferred_name 時的預設代稱；
                           房內重名由 Hub 自動編號（Novia → Novia-2）
+    CHATROOM_HOST_NAME    自報給 Hub 的主機名，預設取作業系統的 hostname。
+                          指派 UI 靠它把「這台機器上的 agent」與別台分開；
+                          容器裡的 hostname 是無意義的隨機碼，該用它覆寫
+    CHATROOM_DOWNLOAD_DIR chatroom_get_file 的落點根目錄，預設是工作目錄底下
+                          的 ./.chatroom/downloads/
     CHATROOM_STATE_PATH   身分與游標狀態檔位置；預設跟著 session_key 走
                           （~/.chatroom/state-<key>.json），並發 session 不互踩
 
@@ -134,7 +139,8 @@ def _presence_params() -> dict[str, str]:
     用 canonical key 自報：名錄是指派 UI 的來源，登記錯就等於在清單上
     掛一把沒人在聽的 key，而它看起來跟能用的完全一樣。
     """
-    params = {"session_key": _my_session_key(), "kind": AGENT_KIND}
+    params = {"session_key": _my_session_key(), "kind": AGENT_KIND,
+              "host": identity.host_name()}
     if DEFAULT_NAME:
         params["label"] = DEFAULT_NAME
     return params
@@ -306,6 +312,7 @@ def chatroom_join(
         f"/api/rooms/{room_id}/join",
         json={
             "kind": AGENT_KIND,
+            "host": identity.host_name(),
             "session_key": canonical_key,
             "assignment_id": assignment_id or None,
             "preferred_name": preferred_name or DEFAULT_NAME or None,

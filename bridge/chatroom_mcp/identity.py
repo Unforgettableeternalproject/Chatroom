@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import re
 import uuid
 from pathlib import Path
@@ -101,3 +102,23 @@ def resolve_state_path(session_key: str) -> Path:
         if isinstance(raw, dict) and raw.get("session_key") == session_key:
             return path
     return preferred
+
+
+def host_name() -> str:
+    """這台機器的名字，自報給 Hub 用。
+
+    指派 UI 靠它把「我這台機器上的 agent」與「別人機器上的」分開——指派是
+    私人房的入場券，把別人的 agent 指派進來，等於把房裡的內容送出去。
+    可用 CHATROOM_HOST_NAME 覆寫（容器裡的 hostname 多半是無意義的隨機碼）。
+
+    ⚠️ 這是**自報**的值，僅供辨識與分組，不是授權依據。信任邊界仍是 token。
+    """
+    override = os.environ.get("CHATROOM_HOST_NAME", "").strip()
+    if override:
+        return override[:200]
+    try:
+        return (socket.gethostname() or "")[:200]
+    except OSError:
+        # 取不到就留空。空值在 UI 上是「未知裝置」——不能當成本機，那會讓
+        # 每一台取不到主機名的機器都混進本機清單
+        return ""

@@ -13,6 +13,7 @@ class AgentSession {
     required this.rooms,
     this.lastDisplayName,
     this.lastIp,
+    this.host = '',
   });
 
   final String sessionKey;
@@ -31,6 +32,19 @@ class AgentSession {
   /// 所有人長得一樣，這是邀請清單上唯一分得開「這是誰」的線索。
   /// 它來自客戶端可填寫的標頭，不可用於任何授權判斷。
   final String? lastIp;
+
+  /// bridge／App 自報的主機名。空字串＝舊版 bridge 沒報，那是「未知裝置」。
+  ///
+  /// ⚠️ 空值**不能**當成本機：每一台取不到主機名的機器都會混進本機清單，
+  /// 而指派是私人房的入場券。
+  final String host;
+
+  /// 這個 session 是不是跑在 [me] 這台機器上。
+  ///
+  /// 兩邊都要有值才算數，比對忽略大小寫——Windows 慣用大寫、Dart 拿到的
+  /// 可能是小寫，同一台機器不該因此被判成兩台。
+  bool isOnHost(String me) =>
+      host.isNotEmpty && me.isNotEmpty && host.toLowerCase() == me.toLowerCase();
 
   bool get isHuman => kind == 'human';
   bool get isActive => status == 'active';
@@ -59,6 +73,7 @@ class AgentSession {
             .toList(),
         lastDisplayName: json['last_display_name'] as String?,
         lastIp: json['last_ip'] as String?,
+        host: (json['host'] as String?) ?? '',
       );
 }
 

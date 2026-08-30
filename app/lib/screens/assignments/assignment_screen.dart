@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../core/util/local_host.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/agent_session.dart';
 import '../../models/assignment.dart';
@@ -39,6 +40,9 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   /// 但**不能直接把 idle 砍掉**：`/clear` 換過 session id 之後，正在用的那台
   /// 有時要一段時間才回到 active，一律不顯示會讓人以為自己的 session 消失了。
   bool _showIdle = false;
+  // 其他裝置預設收起：誤把別人機器上的 agent 指派進私人房，等於把房裡的
+  // 內容送出去。要展開才點得到，手滑一次不夠
+  bool _showOtherHosts = false;
 
   @override
   void initState() {
@@ -324,13 +328,64 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 color: s.inkMute),
           );
         }
+        // 本機／其他裝置分開。未知主機名（舊版 bridge）歸到「其他」——
+        // 空值不能當成本機，那會讓每一台報不出主機名的機器都混進來
+        final mine = sessions.where((x) => x.isOnHost(localHostName)).toList();
+        final others = sessions.where((x) => !x.isOnHost(localHostName)).toList();
         return Column(children: [
-          for (final session in sessions)
+          if (mine.isEmpty && others.isNotEmpty && localHostName.isEmpty)
+            // 讀不到自己的主機名時無從分組，照列全部並說清楚為什麼
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: MonoLabel('讀不到本機主機名，無法分辨裝置',
+                    size: 8.5, color: s.inkMute),
+              ),
+            ),
+          for (final session in (localHostName.isEmpty ? sessions : mine))
             _SessionRow(
               session: session,
               selected: _target.text.trim() == session.sessionKey,
               onTap: () => setState(() => _target.text = session.sessionKey),
             ),
+          if (localHostName.isNotEmpty && mine.isEmpty && others.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: MonoLabel('這台機器上沒有掃描到 agent',
+                    size: 9, color: s.inkMute),
+              ),
+            ),
+          if (localHostName.isNotEmpty && others.isNotEmpty) ...[
+            InkWell(
+              onTap: () => setState(() => _showOtherHosts = !_showOtherHosts),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Row(children: [
+                  Icon(
+                    _showOtherHosts
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    size: 14,
+                    color: s.inkMute,
+                  ),
+                  const SizedBox(width: 4),
+                  MonoLabel('其他裝置（${others.length}）',
+                      size: 9, color: s.inkMute),
+                ]),
+              ),
+            ),
+            if (_showOtherHosts)
+              for (final session in others)
+                _SessionRow(
+                  session: session,
+                  selected: _target.text.trim() == session.sessionKey,
+                  onTap: () =>
+                      setState(() => _target.text = session.sessionKey),
+                ),
+          ],
           if (hiddenIdle > 0)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -434,6 +489,14 @@ class _SessionRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: UepText.mono(size: 9, color: s.inkMute),
                 ),
+                // 非本機的一定要標出來源，展開之後才不會又變回一片分不出
+                // 誰是誰的清單。未知主機名同樣要講——它不是「本機」
+                if (!session.isOnHost(localHostName))
+                  Text(
+                    session.host.isEmpty ? '未知裝置' : '在 ${session.host}',
+                    overflow: TextOverflow.ellipsis,
+                    style: UepText.mono(size: 9, color: UepColors.gold),
+                  ),
               ],
             ),
           ),
