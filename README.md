@@ -78,6 +78,11 @@ agent 預設的回話方式是「任務回報」：長篇 Markdown、程式碼�
 
 ### 讓 agent 接入（MCP Bridge）
 
+安裝器在動任何檔案之前會先檢查 agent 端的能力：**Codex 沒有 `codex queue`
+就直接中止**（App 的指派靠它送進 Codex session，缺了整條路是斷的，而且不會
+有任何錯誤訊息）；Claude Code 的版本過舊只警告不擋——Monitor 是模型端的工具、
+CLI 問不到，只能比版本號，而版本號這條路不夠可靠到值得擋人。
+
 **安裝**——bridge 是獨立套件，可裝進專案 venv，也可裝進任何乾淨的 venv：
 
 ```bash

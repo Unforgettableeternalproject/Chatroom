@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,82 @@ def scripts_dir() -> Path:
 def check_python() -> None:
     if sys.version_info < (3, 12):
         die(f"需要 Python 3.12+（目前 {sys.version.split()[0]}）")
+
+
+# bridge 需要 agent 端具備的能力。少了它們，工具裝得起來但**通知永遠不會來**
+# ——而那種失效是靜默的：指派送出了、Hub 也收下了，只是沒有人被叫醒。
+#
+# ⚠️ 兩邊的判斷方式刻意不同：
+# * Codex 的 `queue` 是一個 CLI 子命令，可以直接問它在不在——**能力偵測**，
+#   不受版本號格式或發佈節奏影響
+# * Claude Code 的 Monitor 是模型端的工具，CLI 問不到，只能比版本號
+#
+# 而版本號這條路已經被實測打臉一次：公開資料說 Monitor 從 2.1.242 起才有，
+# 但 2.1.238 的機器上它運作正常（2026-08-30 實測）。所以這裡的門檻取
+# **實證可用的最低版本**，而且比不過時只警告不擋——擋掉一台其實能用的機器，
+# 比放行一台不能用的更糟：後者至少會在第一次指派時就看出問題。
+MIN_CLAUDE_VERSION = (2, 1, 238)
+
+
+def _cli_version(exe: str) -> tuple[int, ...] | None:
+    """問 CLI 自己的版本，回傳數字元組。問不到就 None。
+
+    ⚠️ ``exe`` 要傳 **shutil.which 解析出來的完整路徑**，不要傳 "claude"
+    這種名稱。同一台機器上可能裝了不只一份：這台用名稱叫到的是 2.1.92，
+    用 which 的完整路徑叫到的是 2.1.238（2026-08-30 實測）。檢查錯的那份
+    版本，結論當然也是錯的。
+    """
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                             timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out.stdout or out.stderr or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def check_agent_capabilities(targets: set[str]) -> None:
+    """確認要設定的 agent 真的支援 bridge 依賴的能力。
+
+    Codex 缺 `queue` 是**硬性阻擋**：App 的指派就是靠它送進 Codex session，
+    沒有它整條路是斷的，而使用者不會收到任何錯誤。
+    """
+    claude_exe = shutil.which("claude")
+    if "claude" in targets and claude_exe:
+        ver = _cli_version(claude_exe)
+        if ver is None:
+            print("⚠️  問不到 Claude Code 版本——無法確認它支援 Monitor"
+                  "（背景 watcher 靠它推送指派通知）。")
+        elif ver < MIN_CLAUDE_VERSION:
+            shown = ".".join(str(x) for x in ver)
+            want = ".".join(str(x) for x in MIN_CLAUDE_VERSION)
+            print(f"⚠️  Claude Code {shown} 比實證可用的 {want} 舊。"
+                  "若 Monitor 工具不存在，背景 watcher 掛不起來，"
+                  "指派與 @mention 都不會叫醒你（而且不會報錯）。"
+                  "裝完後請掛一次 watcher 確認。")
+    if "codex" in targets:
+        exe = shutil.which("codex")
+        if not exe:
+            print("⚠️  找不到 codex，略過它的能力檢查。")
+            return
+        try:
+            probe = subprocess.run([exe, "queue", "--help"],
+                                   capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as exc:
+            die(f"無法執行 codex：{exc}")
+        if probe.returncode != 0:
+            ver = _cli_version(exe)
+            shown = ".".join(str(x) for x in ver) if ver else "未知版本"
+            die(
+                f"這個 Codex（{shown}）沒有 `codex queue` 子命令。\n"
+                "  App 的指派就是靠 queue 把訊息送進既有的 Codex session，"
+                "缺了它整條路是斷的——而且不會有任何錯誤訊息，"
+                "指派會像是石沉大海。\n"
+                "  `codex queue` 自 0.149.0 起提供，請先升級 Codex CLI"
+                "（或用 --targets claude 只裝 Claude Code）。"
+            )
 
 
 def check_hub(url: str, token: str) -> bool:
@@ -345,6 +422,8 @@ def main() -> None:
     unknown = targets - {"claude", "codex"}
     if unknown:
         die(f"未知的 target：{', '.join(sorted(unknown))}")
+    # 在動任何檔案之前檢查：裝到一半才發現環境不支援，使用者要自己收拾殘骸
+    check_agent_capabilities(targets)
 
     print("\n• 測試 Hub 連線…")
     if check_hub(url, token):
