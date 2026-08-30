@@ -52,6 +52,7 @@ from .envfile import load_env_file  # noqa: E402
 from .guide import guide_text  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
+from .subagents import Subagent, SubagentRegistry, derive_key  # noqa: E402
 from .version import version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
@@ -168,16 +169,67 @@ def _guard(fn: Callable[..., Any]) -> Callable[..., dict]:
     return wrapper
 
 
+_subagents = SubagentRegistry()
+
+
+def _as_subagent(handle: str, room_id: str) -> Subagent:
+    """把自報的 handle 換成一個真的身分。**認不得就報錯，絕不退回父層。**
+
+    退回父層是這個介面最誘人也最危險的處置：呼叫端主張了一個身分、沒拿到，
+    卻會看到一則成功送出的訊息——它掛在父層名下，而 subagent 以為那是自己
+    說的話。這正是本專案反覆修的靜默失效（`docs/SUBAGENT-IDENTITY.md` §3）。
+    """
+    sub = _subagents.get(handle)
+    if sub is None:
+        known = "、".join(s.display_name for s in _subagents.in_room(room_id))
+        raise HubError(
+            f"認不得這個 subagent handle（{handle}）。它可能已經結束、"
+            "或本 bridge 進程重啟過（subagent 身分只活在記憶體裡，"
+            "重啟即作廢）。"
+            + (f"目前這個房間登記中的 subagent：{known}。" if known else
+               "目前這個房間沒有任何登記中的 subagent。")
+            + "要以 subagent 身分發言請先呼叫 chatroom_spawn_subagent。"
+        )
+    if sub.room_id != room_id:
+        raise HubError(
+            f"這個 subagent（{sub.display_name}）登記在另一個房間，"
+            f"不能用它在 {room_id} 發言。"
+        )
+    return sub
+
+
+def _identity_for(room_id: str, subagent: str) -> tuple[str | None, dict]:
+    """回傳 (participant_id, 要併進回應的身分標記)。
+
+    ``identity_scope`` 一律附上，即使是父層——「以父層身分執行」與「這次呼叫
+    根本沒到 Hub」在觀測上原本完全同形，那讓漏帶參數的 bug 與「舊版沒有這個
+    功能」長得一模一樣（§3）。
+    """
+    if not subagent:
+        return state().participant_id(room_id), {"identity_scope": "parent"}
+    sub = _as_subagent(subagent, room_id)
+    return sub.participant_id, {
+        "identity_scope": "subagent",
+        "subagent_name": sub.display_name,
+        "parent_name": sub.parent_name,
+    }
+
+
 def _room_request(
     room_id: str,
     method: str,
     path: str,
     *,
     require_identity: bool = True,
+    participant_id: str | None = None,
     **kwargs: Any,
 ) -> Any:
-    """帶上該房間身分發出請求；身分失效時清掉本機紀錄並要求重新 join。"""
-    participant_id = state().participant_id(room_id)
+    """帶上該房間身分發出請求；身分失效時清掉本機紀錄並要求重新 join。
+
+    ``participant_id`` 可覆寫成 subagent 的身分；不給就用父層在這個房間的身分。
+    """
+    if participant_id is None:
+        participant_id = state().participant_id(room_id)
     if require_identity and not participant_id:
         raise HubError(
             f"你還沒有「{room_id}」這個房間的身分，請先呼叫 chatroom_join 加入。",
@@ -204,7 +256,10 @@ def _room_request(
                 status=exc.status, detail=exc.detail,
             ) from exc
         if exc.identity_invalid and participant_id:
-            state().clear_identity(room_id)
+            # 只有父層的身分放在 state 檔裡。subagent 失效時清 state 等於
+            # 把父層的身分一起弄掉——那會讓一個 subagent 逾時波及整個 session
+            if participant_id == state().participant_id(room_id):
+                state().clear_identity(room_id)
         raise
 
 
@@ -330,6 +385,83 @@ def chatroom_join(
 
 @mcp.tool()
 @_guard
+def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
+    """替你即將派出的子 agent 在房內登記一個臨時身分，回傳 ``handle``。
+
+    **這是你（父層）要做的事，不是子 agent 自己能做的。** 你們共用同一個 MCP
+    進程與 session id，Hub 分辨不出誰在呼叫——所以隸屬關係只能由你在這裡宣告
+    一次，之後子 agent 拿著 ``handle`` 自報。
+
+    派遣時把 handle 寫進給子 agent 的 prompt，要它在本房發言時帶
+    ``subagent="<handle>"``。忘了帶不會報錯，只會以你的身分發言（回傳的
+    ``identity_scope`` 會是 ``"parent"``，那是你檢查得出來的）。
+
+    子 agent 工作結束時呼叫 ``chatroom_end_subagent``。忘了也沒關係——Hub 會在
+    短時限（預設 120 秒無動作）後自動回收；而你自己離開房間時，旗下所有
+    subagent 會一併消失。
+
+    **不會廣播**：它的加入只有你收得到通知，房內訊息流不會出現任何東西；
+    但成員列上所有人都看得到它掛在你底下。
+    """
+    parent_id = state().participant_id(room_id)
+    if not parent_id:
+        raise HubError(
+            f"你自己還沒加入「{room_id}」，不能在裡面派 subagent。"
+            "請先 chatroom_join。",
+            identity_invalid=True,
+        )
+    parent_key = state().session_key(room_id) or _my_session_key()
+    data = hub().request(
+        "POST",
+        f"/api/rooms/{room_id}/join",
+        json={
+            "kind": AGENT_KIND,
+            "host": identity.host_name(),
+            "session_key": derive_key(parent_key, name),
+            "preferred_name": name or None,
+            "role": "agent",
+            "parent_participant_id": parent_id,
+        },
+    )
+    handle = _subagents.new_handle()
+    _subagents.add(Subagent(
+        handle=handle,
+        room_id=room_id,
+        participant_id=data["participant_id"],
+        display_name=data.get("display_name", name),
+        session_key=data.get("session_key", ""),
+        parent_participant_id=parent_id,
+        parent_name=data.get("parent_name", ""),
+    ))
+    return {
+        "handle": handle,
+        "display_name": data.get("display_name"),
+        "parent_name": data.get("parent_name"),
+        "hint": (
+            f'把這句寫進派遣 prompt：在聊天室發言時帶 subagent="{handle}"'
+        ),
+    }
+
+
+@mcp.tool()
+@_guard
+def chatroom_end_subagent(room_id: str, subagent: str) -> dict:
+    """子 agent 工作結束，把它的臨時身分收掉。
+
+    忘了呼叫不會壞事——Hub 有短時限自動回收，父層離開時也會級聯帶走。
+    但主動收掉比較乾淨：成員列上不會留一個已經沒在做事的名字。
+    """
+    sub = _as_subagent(subagent, room_id)
+    data = _room_request(
+        room_id, "POST", f"/api/rooms/{room_id}/leave",
+        participant_id=sub.participant_id,
+    )
+    _subagents.drop(subagent)
+    return {**data, "ended": sub.display_name}
+
+
+@mcp.tool()
+@_guard
 def chatroom_leave(room_id: str) -> dict:
     """離開聊天室。
 
@@ -404,6 +536,7 @@ def chatroom_post(
     content: str,
     mentions: list[str] | None = None,
     reply_to: str = "",
+    subagent: str = "",
 ) -> dict:
     """在聊天室發言。
 
@@ -419,17 +552,25 @@ def chatroom_post(
     離開房間，或名字打錯了。房裡常有名字只差一個字的舊身分（「Novia」與
     「Novia-2」），挑錯就等於對著空氣說話。這種情況要用 ``active_names`` 裡的
     正確名字重發，不要以為訊息送到了。
+
+    ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，這則就以那個子
+    agent 的身分發出。回傳的 ``identity_scope`` 是 ``"parent"`` 或
+    ``"subagent"``——**發完檢查一下它**：漏帶 handle 不會報錯，訊息會掛在
+    父層名下，而那與「舊版沒有這個功能」在結果上完全一樣。
     """
+    participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(
         room_id,
         "POST",
         f"/api/rooms/{room_id}/messages",
+        participant_id=participant_id,
         json={
             "content": content,
             "mentions": mentions or [],
             "reply_to": reply_to or None,
         },
     )
+    data.update(scope)
     if data.get("unresolved_mentions"):
         names = "、".join(data["unresolved_mentions"])
         data["warning"] = (
