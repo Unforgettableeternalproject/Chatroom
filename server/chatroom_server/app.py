@@ -1215,7 +1215,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         # 走了就沒有人在等答案了。留著只會讓人去回答一個沒有讀者的問題
         cancelled = await _cancel_questions(
-            p["id"], room_id, "發問者已離開聊天室"
+            p["id"], room_id, "發問者已離開聊天室", p["display_name"]
         )
         if cancelled:
             logger.info(
@@ -1900,6 +1900,41 @@ def create_app(config: Config | None = None) -> FastAPI:
         ]
         return d
 
+    async def _post_question_notice(question, content: str, event: str,
+                                    mention_id: str | None) -> None:
+        """問題結束時在時間軸留一則收據。
+
+        **問題有三種結局，每一種都要留記錄**：answered 早就有收據，
+        cancelled 與 expired 原本什麼都沒有——被撤回的題目在人的畫面上無聲
+        消失，逾時的題目則是發問的 agent 永遠不知道對方沒看到。
+
+        第一版把「撤回」做成一次性提示，但它唯一需要出現的情境正是人不在
+        畫面前（會被撤回打到的前提就是他沒在看）。收據不同：訊息歷史是持久
+        的、可回溯的、房內共見的，他下次打開就看得到發生過什麼。
+        （艾斯維爾 2026-08-30：「可以消失沒錯，但要跟有回答一樣留下一個
+        區塊在訊息歷史中。」）
+
+        三種結局共用同一條路徑，也就不會再有「哪一種忘了處理」——結局本來
+        就是列舉的，這個形狀從結構上擋掉了今天出現三次的那類疏漏。
+        """
+        name = None
+        if mention_id:
+            row = await (
+                await app.state.db.execute(
+                    "SELECT display_name FROM participant WHERE id=?", (mention_id,)
+                )
+            ).fetchone()
+            name = row["display_name"] if row else None
+        await _post_message(
+            question["room_id"], None, content, kind="system",
+            system_event=event, mentions=[name] if name else None,
+        )
+
+    def _question_digest(question) -> str:
+        """收據裡用來認出「是哪一題」的摘要。"""
+        prompt = " ".join((question["prompt"] or "").split())
+        return prompt[:120] + "…" if len(prompt) > 120 else prompt
+
     async def _expire_questions() -> set[str]:
         """把過期的 pending 落庫成 expired，回傳受影響的房間 id。
 
@@ -1925,6 +1960,26 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "event": "question_expired", "question_id": r["id"],
                     "room_id": r["room_id"], "target_id": r["target_id"],
                 },
+            )
+            full = await (
+                await db.execute("SELECT * FROM question WHERE id=?", (r["id"],))
+            ).fetchone()
+            if full is None:
+                continue
+            target = await (
+                await db.execute(
+                    "SELECT display_name FROM participant WHERE id=?",
+                    (full["target_id"],),
+                )
+            ).fetchone()
+            who = target["display_name"] if target else "對方"
+            # mention 發問者：他是卡在那裡等的那一個，而「沒有人看到這題」
+            # 正是他最需要知道、卻最不可能自己發現的事
+            await _post_question_notice(
+                full,
+                f"提問「{_question_digest(full)}」逾時了——{who} 沒有在時限內"
+                "看到它。需要答案的話請換個方式問。",
+                "question_expired", full["asker_id"],
             )
         return {r["room_id"] for r in rows}
 
@@ -2100,7 +2155,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             if pub["status"] != "pending":
                 return {"question": pub, "expired": pub["status"] == "expired"}
 
-    async def _cancel_questions(asker_id: str, room_id: str, why: str) -> list[str]:
+    async def _cancel_questions(asker_id: str, room_id: str, why: str,
+                                asker_name: str = "") -> list[str]:
         """把某個發問者還掛著的題目全部取消。回傳被取消的 question id。
 
         取消不是「問錯了想收回」那種小事。真正的場景是**沒有人在等了**：
@@ -2120,6 +2176,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchall()
         await db.commit()
+        for r in rows:
+            full = await (
+                await db.execute("SELECT * FROM question WHERE id=?", (r["id"],))
+            ).fetchone()
+            if full is None:
+                continue
+            await _post_question_notice(
+                full,
+                f"{asker_name or '發問者'}離開了聊天室，提問"
+                f"「{_question_digest(full)}」自動撤回——不用回答了。",
+                "question_cancelled", full["target_id"],
+            )
         if rows:
             await events.notify(room_id)
         return [r["id"] for r in rows]
@@ -2159,6 +2227,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "撤回提問 %s（%s）", question_id, row["room_id"],
             extra={"event": "question_cancelled", "question_id": question_id,
                    "room_id": row["room_id"]},
+        )
+        await _post_question_notice(
+            row,
+            f"{me['display_name']} 撤回了提問「{_question_digest(row)}」"
+            "——不用回答了。",
+            "question_cancelled", row["target_id"],
         )
         return {"ok": True, "status": "cancelled"}
 

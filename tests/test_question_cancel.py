@@ -165,3 +165,58 @@ async def test_leaving_does_not_touch_other_peoples_questions(tmp_path):
             assert (await client.get(
                 f"/api/questions/{theirs['id']}")).json()["question"]["status"] \
                 == "pending"
+
+
+@pytest.mark.asyncio
+async def test_every_ending_leaves_a_receipt(tmp_path):
+    """問題有三種結局，每一種都要在時間軸上留下痕跡。
+
+    2026-08-30（艾斯維爾）：「可以消失沒錯，但要跟有回答一樣留下一個區塊在
+    訊息歷史中。」answered 早就有收據，cancelled 與 expired 原本什麼都沒有
+    ——被撤回的題目在人的畫面上無聲消失，逾時的題目則是發問的 agent 永遠
+    不知道對方沒看到。
+
+    三種走同一條路徑，就不會再有「哪一種忘了處理」——結局本來就是列舉的。
+    """
+    app, client = await _make(tmp_path, "receipts")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+
+            answered = await _ask(client, room, agent, human)
+            await client.post(
+                f"/api/questions/{answered['id']}/answer",
+                json={"kind": "free_text", "answer": "好"},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+
+            cancelled = await _ask(client, room, agent, human)
+            await client.post(
+                f"/api/questions/{cancelled['id']}/cancel",
+                headers={"X-Participant-Id": agent["participant_id"]},
+            )
+
+            expired = await _ask(client, room, agent, human)
+            await app.state.db.execute(
+                "UPDATE question SET expires_at=? WHERE id=?",
+                ("2020-01-01T00:00:00+00:00", expired["id"]),
+            )
+            await app.state.db.commit()
+            await app.state.sweep_once()
+
+            msgs = (await client.get(
+                f"/api/rooms/{room['id']}/messages",
+                headers={"X-Participant-Id": agent["participant_id"]},
+            )).json()["messages"]
+            events = {m["system_event"]: m for m in msgs if m["kind"] == "system"}
+
+            assert "question_answered" in events
+            assert "question_cancelled" in events
+            assert "question_expired" in events
+
+            # 撤回：告訴**被問的人**不用答了
+            assert events["question_cancelled"]["mentions"] == ["Bernie"]
+            assert "不用回答" in events["question_cancelled"]["content"]
+            # 逾時：告訴**發問者**沒有人看到——他是卡在那裡等的那一個
+            assert events["question_expired"]["mentions"] == ["Novia"]
+            assert "沒有在時限內" in events["question_expired"]["content"]

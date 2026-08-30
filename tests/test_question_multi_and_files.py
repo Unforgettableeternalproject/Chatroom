@@ -183,3 +183,50 @@ async def test_answer_cannot_smuggle_another_rooms_file(tmp_path):
             )
             assert r.status_code == 422
             assert r.json()["detail"]["code"] == "attachment_not_in_room"
+
+
+@pytest.mark.asyncio
+async def test_labels_containing_the_separator_survive(tmp_path):
+    """選項文字裡就有「、」時，answer 字串**還原不回原始選項**。
+
+    2026-08-30 測試端實測引爆：三個選項、其中兩個含頓號，複選之後
+    `answer` 變成一串無法可靠切開的文字。這正是 `answer_options` 存在的
+    理由——判斷邏輯一律用它，不要去拆 `answer`。
+    """
+    app, client = await _make(tmp_path, "q_sep")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = (await client.post("/api/rooms", json={"name": "房"})).json()
+            agent = (await client.post(
+                f"/api/rooms/{room['id']}/join",
+                json={"kind": "claude", "session_key": "a1",
+                      "preferred_name": "Novia"},
+            )).json()
+            human = (await client.post(
+                f"/api/rooms/{room['id']}/join",
+                json={"kind": "human", "session_key": "h1",
+                      "preferred_name": "Bernie", "role": "human"},
+            )).json()
+            labels = ["BMP、PNG、WebP", "host 分組、網址可點", "沒有頓號的選項"]
+            q = (await client.post(
+                f"/api/rooms/{room['id']}/questions",
+                json={"prompt": "挑幾個", "multi_select": True,
+                      "options": [{"label": x} for x in labels],
+                      "target_participant_id": human["participant_id"]},
+                headers={"X-Participant-Id": agent["participant_id"]},
+            )).json()
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": labels},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+
+            got = (await client.get(f"/api/questions/{q['id']}")).json()["question"]
+            # 結構化那份完好無損
+            assert got["answer_options"] == labels
+            # 而字串那份切開來就是錯的——這條斷言是刻意的：它證明
+            # 「拆 answer」這個做法不可靠，而不是暗示它可行
+            assert got["answer"].split("、") != labels
+            assert len(got["answer"].split("、")) > len(labels)

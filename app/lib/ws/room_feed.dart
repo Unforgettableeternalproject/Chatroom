@@ -46,23 +46,11 @@ class RoomFeed {
   /// 目前指名問「我」的待答問題（server 推完整快照，直接覆蓋）。
   List<Question> get questions => _questions;
 
-  final _vanished = StreamController<List<Question>>.broadcast();
-
-  /// 「本來在待答清單上、這次不見了」的題目。
-  ///
-  /// 題目會消失有三種原因：我回答了、逾時了、或**發問者撤回了**。前兩種
-  /// 使用者自己知道，第三種不講的話，畫面上就是一題無聲消失——他會以為是
-  /// 自己漏看了，而下一次他就不會信任這個清單。
-  Stream<List<Question>> get questionsVanished => _vanished.stream;
-
   /// 覆蓋而非合併：已被回答或略過的問題會從 server 的快照中消失，
   /// 用合併的話它們會永遠留在畫面上。
   void setQuestions(List<Question> incoming) {
     if (_sameQuestionIds(incoming)) return;
-    final ids = {for (final q in incoming) q.id};
-    final gone = [for (final q in _questions) if (!ids.contains(q.id)) q];
     _questions = List.unmodifiable(incoming);
-    if (gone.isNotEmpty && !_vanished.isClosed) _vanished.add(gone);
     _notify();
   }
 
@@ -150,7 +138,6 @@ class RoomFeed {
   }
 
   void dispose() {
-    _vanished.close();
     _changes.close();
   }
 }
