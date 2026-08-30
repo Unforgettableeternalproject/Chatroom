@@ -283,14 +283,16 @@ def _room_request(
         raise
 
 
-def _participant_id_by_name(room_id: str, name: str) -> str:
+def _participant_id_by_name(room_id: str, name: str,
+                            as_participant: str | None = None) -> str:
     """房內顯示名稱 → participant_id。
 
     agent 手上有的是名字（訊息裡看到的那個），Hub 要的是 id。這層轉換放在
     bridge，免得每個 agent 自己去翻房間詳情——翻錯的話會靜靜地問到別人身上。
     """
     # 帶身分：房間詳情已經收成「房內的人才看得到」，裸請求會 401
-    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}")
+    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}",
+                         participant_id=as_participant)
     actives = [
         p for p in data.get("participants", [])
         if p.get("status") == "active"
@@ -444,6 +446,9 @@ def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
         },
     )
     handle = _subagents.new_handle()
+    # 游標起點取 Hub 回的 joined_seq（加入當下房內的最後一則 seq）：子代理
+    # 不該補讀它出生之前的對話。舊版 Hub 不回這個欄位，退回父層目前的位置
+    # ——那至少不會讓它把整個房間的歷史重播一遍
     _subagents.add(Subagent(
         handle=handle,
         room_id=room_id,
@@ -452,7 +457,7 @@ def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
         session_key=data.get("session_key", ""),
         parent_participant_id=parent_id,
         parent_name=data.get("parent_name", ""),
-    ))
+    ), cursor=data.get("joined_seq") or state().last_seq(room_id))
     return {
         "handle": handle,
         "display_name": data.get("display_name"),
@@ -539,9 +544,13 @@ def chatroom_read(
     participant_id, scope = _identity_for(room_id, subagent)
     if after_seq is not None:
         effective = after_seq
-    else:
+    elif pinned_only:
         # 釘選牆要看整房的釘選；游標只服務一般增量讀取
-        effective = 0 if pinned_only else state().last_seq(room_id)
+        effective = 0
+    elif subagent:
+        effective = _subagents.cursor(subagent)
+    else:
+        effective = state().last_seq(room_id)
     data = _room_request(
         room_id,
         "GET",
@@ -551,20 +560,23 @@ def chatroom_read(
         params={"after_seq": effective, "limit": limit, "pinned_only": pinned_only},
     )
     messages = data.get("messages", [])
-    # **子代理讀訊息不推進父層的游標。** 那個游標是父層「我讀到哪裡」的紀錄，
-    # 被一個臨時分身推著跑，父層就會靜靜地跳過那段沒讀過的訊息
-    if messages and not pinned_only and not subagent:
+    # **子代理讀訊息不推進父層的游標，但要推進自己那一份。** 父層的游標是
+    # 「父層讀到哪裡」的紀錄，被臨時分身推著跑，父層會靜靜跳過沒讀過的訊息；
+    # 而子代理若完全不記位置，連續呼叫就會永遠拿到同一批
+    if messages and not pinned_only:
         # P1-06 後 Hub 回傳權威 next_after_seq；缺欄位時（舊版 Hub）退回自算
-        state().set_last_seq(room_id, data.get("next_after_seq", messages[-1]["seq"]))
+        head = data.get("next_after_seq", messages[-1]["seq"])
+        if subagent:
+            _subagents.advance(subagent, head)
+        else:
+            state().set_last_seq(room_id, head)
     data["after_seq"] = effective
-    if subagent:
-        data["next_after_seq"] = (
-            messages[-1]["seq"] if messages else effective
-        )
+    if pinned_only:
+        data["next_after_seq"] = effective
+    elif subagent:
+        data["next_after_seq"] = _subagents.cursor(subagent)
     else:
-        data["next_after_seq"] = (
-            state().last_seq(room_id) if not pinned_only else effective
-        )
+        data["next_after_seq"] = state().last_seq(room_id)
     data.update(scope)
     return data
 
@@ -631,8 +643,13 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     ``you_were_mentioned`` 為 true 表示有人在這批訊息裡 ping 你，應優先回應。
     這是「等別人回話」的正確做法，不要用輪詢 chatroom_read 取代。
     """
-    effective = state().last_seq(room_id) if after_seq is None else after_seq
     participant_id, scope = _identity_for(room_id, subagent)
+    if after_seq is not None:
+        effective = after_seq
+    elif subagent:
+        effective = _subagents.cursor(subagent)
+    else:
+        effective = state().last_seq(room_id)
     data = _room_request(
         room_id,
         "GET",
@@ -643,12 +660,15 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
         timeout=timeout + 10.0,
     )
     last = data.get("last_seq")
-    # 同 chatroom_read：子代理不推進父層的游標
-    if isinstance(last, int) and not subagent:
-        state().set_last_seq(room_id, last)
+    # 同 chatroom_read：子代理推自己那一份，不動父層的
+    if isinstance(last, int):
+        if subagent:
+            _subagents.advance(subagent, last)
+        else:
+            state().set_last_seq(room_id, last)
     data["after_seq"] = effective
     data["next_after_seq"] = (
-        last if subagent and isinstance(last, int) else state().last_seq(room_id)
+        _subagents.cursor(subagent) if subagent else state().last_seq(room_id)
     )
     data.update(scope)
     return data
@@ -741,7 +761,8 @@ def _question_seconds_left(question_id: str) -> float | None:
     return float(left) if isinstance(left, (int, float)) else None
 
 
-def _expired_result(question_id: str, created: dict, idle_note: str) -> dict:
+def _expired_result(question_id: str, created: dict, idle_note: str,
+                    scope: dict | None = None) -> dict:
     """這題過期了。
 
     與 ``timeout`` 分開回報，因為 agent 的處置完全不同：逾時還能回頭拿答案，
@@ -755,6 +776,7 @@ def _expired_result(question_id: str, created: dict, idle_note: str) -> dict:
                 + "這題已經過期，對方沒有看到，回頭也拿不到答案"
                   "（chatroom_read_answer 只會告訴你同一件事）。"
                   "換個方式問他，或照你自己的判斷往下做。",
+        **(scope or {}),
     }
 
 
@@ -822,17 +844,23 @@ def chatroom_ask_human(
 
     ``timeout`` 與 ``expired`` 的差別是「還能不能拿到答案」，處置完全不同。
     """
+    # 身分要在**建立問題之前**解析：Hub 把標頭身分寫成 asker_id，收據、
+    # 撤回權、離場自動取消全都掛在它身上。走父層的話，子代理問的問題會
+    # 變成父層問的——父層離開時會被連帶撤回，而真正在等答案的是子代理
+    _ask_pid, _ask_scope = _identity_for(room_id, subagent)
     payload: dict[str, Any] = {
         "prompt": question,
         "options": [{"label": o} for o in (options or [])],
         "allow_free_text": allow_free_text,
         "multi_select": multi_select,
-        "target_participant_id": _participant_id_by_name(room_id, target_name),
+        "target_participant_id": _participant_id_by_name(
+            room_id, target_name, as_participant=_ask_pid),
     }
     if question_ttl:
         payload["timeout_seconds"] = question_ttl
     created = _room_request(
-        room_id, "POST", f"/api/rooms/{room_id}/questions", json=payload
+        room_id, "POST", f"/api/rooms/{room_id}/questions",
+        participant_id=_ask_pid, json=payload,
     )
     qid = created["id"]
     if created.get("target_active") is False:
@@ -853,7 +881,7 @@ def chatroom_ask_human(
             # 回頭拿。少了這一步，「timeout」就只是一句沒有下一步的話
             left = _question_seconds_left(qid)
             if left is not None and left <= 0:
-                return _expired_result(qid, created, _log_target_idle)
+                return _expired_result(qid, created, _log_target_idle, _ask_scope)
             return {
                 "answered": False, "reason": "timeout", "question_id": qid,
                 "target_name": created.get("target_name"),
@@ -867,6 +895,7 @@ def chatroom_ask_human(
                         (_log_target_idle + " " if _log_target_idle else "")
                         + "問題仍然留著，用 chatroom_read_answer"
                         f"（question_id={qid}）取得，不必重問。",
+                **_ask_scope,
             }
         data = hub().request(
             "GET", f"/api/questions/{qid}",
@@ -875,19 +904,21 @@ def chatroom_ask_human(
         )
         q = data["question"]
         if q["status"] == "expired":
-            return _expired_result(qid, created, _log_target_idle)
+            return _expired_result(qid, created, _log_target_idle, _ask_scope)
         if q["status"] == "answered":
-            return _answered_result(qid, q, created)
+            return _answered_result(qid, q, created, _ask_scope)
         if q["status"] == "skipped":
             return {
                 "answered": False, "reason": "skipped", "question_id": qid,
                 "target_name": created.get("target_name"),
                 "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
                         "不要再用這個工具問同一件事。",
+                **_ask_scope,
             }
 
 
-def _answered_result(qid: str, q: dict, created: dict) -> dict:
+def _answered_result(qid: str, q: dict, created: dict,
+                     scope: dict | None = None) -> dict:
     """回答的統一形狀——`ask_human` 與 `read_answer` 兩條路要給一樣的東西。
 
     兩邊各組一次的話，遲早有一邊漏掉新欄位（附件就差點只出現在其中一條），
@@ -907,6 +938,7 @@ def _answered_result(qid: str, q: dict, created: dict) -> dict:
         out["attachments"] = files
         out["hint"] = ("回答附了檔案。要看內容請用 chatroom_get_file 取回"
                        "（附件本體不會放進這個回應裡）。")
+    out.update(scope or {})
     return out
 
 

@@ -48,13 +48,36 @@ def derive_key(parent_key: str, name: str) -> str:
 
 
 class SubagentRegistry:
+    """handle → 身分，外加**每個 handle 自己的讀取游標**。
+
+    游標不能共用父層那一份：省略 ``after_seq`` 時若讀父層的游標，父層沒在讀
+    的話子代理會一直拿到同一批（永遠重播），父層先讀掉的話子代理反而跳過
+    整段未讀。工具的說明白紙黑字寫「連續呼叫不重複也不遺漏」，共用游標兩邊
+    都違反。
+
+    起點取 join 當下的房內 seq（Hub 的 ``joined_seq``）——子代理不該補讀
+    它出生之前的對話，那些本來就不是給它的。
+    """
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_handle: dict[str, Subagent] = {}
+        self._cursors: dict[str, int] = {}
 
-    def add(self, sub: Subagent) -> None:
+    def add(self, sub: Subagent, cursor: int = 0) -> None:
         with self._lock:
             self._by_handle[sub.handle] = sub
+            self._cursors[sub.handle] = cursor
+
+    def cursor(self, handle: str) -> int:
+        with self._lock:
+            return self._cursors.get(handle, 0)
+
+    def advance(self, handle: str, seq: int) -> None:
+        """游標只前進不後退——亂序回寫會讓子代理重讀一段已經處理過的訊息。"""
+        with self._lock:
+            if seq > self._cursors.get(handle, 0):
+                self._cursors[handle] = seq
 
     def get(self, handle: str) -> Subagent | None:
         with self._lock:
@@ -62,6 +85,7 @@ class SubagentRegistry:
 
     def drop(self, handle: str) -> Subagent | None:
         with self._lock:
+            self._cursors.pop(handle, None)
             return self._by_handle.pop(handle, None)
 
     def in_room(self, room_id: str) -> list[Subagent]:
