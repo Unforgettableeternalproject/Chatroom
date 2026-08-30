@@ -20,6 +20,17 @@ class AuthException extends ApiException {
       : super(code, 'API token 無效，請至設定檢查');
 }
 
+/// 401 + participant_header_required — 請求沒帶 `X-Participant-Id`。
+///
+/// **這是程式錯，不是設定錯**，所以不能沿用 [AuthException] 那句「API token
+/// 無效」——token 明明是好的，其他畫面全部正常，只有漏帶身分的那個請求會
+/// 死。把兩者混成同一句話，找的人會去翻設定頁，而錯在呼叫端。
+class ParticipantHeaderMissingException extends ApiException {
+  const ParticipantHeaderMissingException()
+      : super('participant_header_required',
+            '這個畫面沒有帶上房間身分（程式問題，與 API token 無關）');
+}
+
 /// 403 — participant 非 active 或不屬於此房。觸發自動 re-join，
 /// 與 401 語意不同，不可合併處理。
 class ParticipantInvalidException extends ApiException {

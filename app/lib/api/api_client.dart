@@ -44,8 +44,12 @@ ApiException translateError(DioException e) {
   final code = _detailCode(res.data);
   switch (res.statusCode) {
     case 401:
-      // 401 有兩種：token 無效、缺 X-Participant-Id 標頭。
-      // 後者是程式錯不是設定錯，但對使用者一樣導向設定檢查。
+      // 401 有兩種：token 無效、缺 X-Participant-Id 標頭。後者是程式錯不是
+      // 設定錯——把它也講成「token 無效」，人就會去翻設定頁，而那裡什麼都
+      // 不必改（釘選牆漏帶身分那次就是這樣浪費掉的）。
+      if (code == 'participant_header_required') {
+        return const ParticipantHeaderMissingException();
+      }
       return AuthException(code ?? 'invalid_token');
     case 403:
       // 403 不是只有一種。權限不足與身分失效若共用型別，後者的自動 re-join
