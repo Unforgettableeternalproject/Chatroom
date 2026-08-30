@@ -28,7 +28,12 @@ class UepMarkdownBody extends StatelessWidget {
     final ink = baseColor ?? s.ink;
     return MarkdownBody(
       data: data,
-      selectable: true,
+      // ⚠️ 不要開 selectable。它會用 SelectableText 渲染，而 SelectableText
+      // **即使沒有選取任何文字也會吃下右鍵**，彈出系統的「Select All」選單，
+      // 把訊息自己的右鍵選單（釘選／回覆／刪除）搶走，位置也由它決定。
+      // 選取能力改由聊天畫面外層的 SelectionArea 提供——它只在真的有選取時
+      // 才顯示選單，右鍵就還給我們了，而且能跨訊息選取（2026-08-30 實測）。
+      selectable: false,
       inlineSyntaxes: [
         if (mentions.isNotEmpty) _MentionSyntax(mentions),
       ],
