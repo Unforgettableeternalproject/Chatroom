@@ -14,6 +14,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/image_bytes.dart';
+import '../../core/util/member_nesting.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
 import '../../api/attachments_api.dart';
@@ -1525,7 +1526,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             children: [
               MonoLabel('ACTIVE', size: 8.5, letterSpacing: 2.2),
               const SizedBox(height: 8),
-              for (final p in _nestSubagents(active))
+              for (final p in nestSubagents(active))
                 _MemberTile(
                   p: p,
                   isSelf: p.id == myId,
@@ -1607,42 +1608,6 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
       ],
     );
   }
-}
-
-/// 把 subagent 排到它父層的正下方，其餘維持原本的順序。
-///
-/// 不做成 `sort`：subagent 之間、以及一般成員之間的既有順序（joined_at）
-/// 都要保留，只是把子代理「插」回父層後面。父層不在這份清單裡的（理論上
-/// 不會發生——級聯移除保證它們同進同出）就照原位留著，**不要丟掉**：
-/// 看不見的成員比排錯位置的成員危險得多。
-List<Participant> _nestSubagents(List<Participant> members) {
-  final byParent = <String, List<Participant>>{};
-  for (final p in members) {
-    if (p.ephemeral && p.parentId != null) {
-      byParent.putIfAbsent(p.parentId!, () => []).add(p);
-    }
-  }
-  if (byParent.isEmpty) return members;
-
-  final placed = <String>{};
-  final out = <Participant>[];
-  for (final p in members) {
-    if (p.ephemeral && p.parentId != null && byParent.containsKey(p.parentId)) {
-      continue; // 由父層那一輪帶出來
-    }
-    out.add(p);
-    for (final child in byParent[p.id] ?? const <Participant>[]) {
-      out.add(child);
-      placed.add(child.id);
-    }
-  }
-  // 父層不在清單裡的孤兒：補在最後，寧可位置不漂亮也不要消失
-  for (final children in byParent.values) {
-    for (final c in children) {
-      if (!placed.contains(c.id)) out.add(c);
-    }
-  }
-  return out;
 }
 
 class _MemberTile extends StatelessWidget {
