@@ -442,3 +442,57 @@ async def test_a_parent_can_reuse_its_own_subagent_name(tmp_path):
             )
             poacher = (await _sub(client, room_id, other, "t-u3", "worker")).json()
             assert poacher["display_name"] != "worker"
+
+
+async def test_relay_boundary_belongs_to_the_subagent_not_the_parent(tmp_path):
+    """合併後的鑑別 case — 轉投遞的界線用 subagent 自己的 joined_seq。
+
+    父層早就在房裡（它的界線擋不住這則舊訊息），而 subagent 是後來才生的。
+    拿父層的界線，新生的 subagent 會繼承父層加入以來的整段歷史 @；拿它自己
+    的，那些訊息本來就不是給它的。
+
+    這條在合併前的任何單一分支上都證明不了：feature 沒有 joined_seq，
+    fix 沒有轉投遞。
+    """
+    app, client = await _make(tmp_path, "relaybound")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            third = await _join_ok(client, room_id, "third-key", "米絲媞")
+
+            # subagent 還不存在時，先有一則 @ 那個名字的訊息
+            stale = (await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@米勒 這是給上一任的", "mentions": ["米勒"]},
+                headers={"X-Participant-Id": third["participant_id"]},
+            )).json()
+
+            # 之後才派出叫同名的 subagent
+            await _sub(client, room_id, parent, "t-b1", "米勒")
+
+            upd = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+
+            # 錨點：那則舊訊息**確實在這一批裡**（父層讀得到歷史），
+            # 只是不該把它當成給自家 subagent 的
+            assert stale["seq"] in [m["seq"] for m in upd["messages"]]
+            assert [m for m in upd["messages"] if m.get("relayed_mentions")] == []
+
+            # 反向錨點：subagent 出生**之後**的 @ 照樣叫醒父層——
+            # 只驗前半會漏掉「界線設太寬，整條轉投遞失效」
+            await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@米勒 這是給你的", "mentions": ["米勒"]},
+                headers={"X-Participant-Id": third["participant_id"]},
+            )
+            after = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0"
+                f"&after_seq={upd['last_seq']}",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            assert after["you_were_mentioned"] is True
+            assert [m["relayed_mentions"] for m in after["messages"]
+                    if m.get("relayed_mentions")] == [["米勒"]]

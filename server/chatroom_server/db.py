@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS participant (
     parent_id    TEXT REFERENCES participant(id),
     -- 臨時成員：工作結束即移除，進出不進訊息流、不計入自動封存判定、
     -- 走專屬的短 TTL。與 parent_id 一起設定，不單獨存在
-    ephemeral    INTEGER NOT NULL DEFAULT 0
+    ephemeral    INTEGER NOT NULL DEFAULT 0,
+    -- 加入當下房內的最後一則 seq。@ 判定拿它當界線：加入之前的 mention 是
+    -- 給前一個同名者的（名字在離開後會被釋出重用），不該把新來的人叫醒。
+    -- NULL＝這個欄位存在之前就在房裡的舊成員，一律當 0（計入全部歷史，
+    -- 維持現行為）
+    joined_seq   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -220,6 +225,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("question", "answer_options", "answer_options TEXT"),
     ("question", "answer_attachments",
      "answer_attachments TEXT NOT NULL DEFAULT '[]'"),
+    # 加入當下的房內 seq，@ 判定的界線。**刻意不 backfill**：舊成員的
+    # NULL 一律當 0（計入全部歷史＝這個欄位存在之前的行為），語意只對新
+    # join 生效才叫零破壞；猜一個值回填反而會讓舊成員漏掉真正該收的 @
+    ("participant", "joined_seq", "joined_seq INTEGER"),
     ("room", "style", "style TEXT NOT NULL DEFAULT 'verbose'"),
     ("room", "style_instructions", "style_instructions TEXT NOT NULL DEFAULT ''"),
     # subagent 身分。舊資料一律 parent_id=NULL / ephemeral=0——那是這兩個欄位

@@ -597,6 +597,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         mentions: list[str] | None = None,
         reply_to: str | None = None,
         system_event: str = "",
+        reply_mentions_author: bool = True,
     ) -> dict:
         db = app.state.db
         effective = list(mentions or [])
@@ -622,7 +623,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             #
             # 自己回自己不算：那只會把 agent 自己叫醒一次。
             # 回系統訊息也不算：沒有發送者可以通知。
-            if target["sender_id"] and target["sender_id"] != sender_id:
+            # ``reply_mentions_author=False`` 給那些「收據指回原訊息，但通知
+            # 對象由端點自己決定」的系統訊息用（例如 self-pin 的收據要指回被
+            # 釘的訊息，卻不該 ping 任何人）。少了這個開關，端點傳空 mentions
+            # 也沒用——這裡會照回覆語意把作者補回去
+            if (reply_mentions_author and target["sender_id"]
+                    and target["sender_id"] != sender_id):
                 name = target["display_name"]
                 if name and name not in effective:
                     effective.append(name)
@@ -1218,14 +1224,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         pid = _uid()
         now = _now()
         join_ip = request.client.host if request.client else None
+        # joined_seq＝加入當下房內的最後一則 seq（next_seq 指向下一個要發的
+        # 號碼）。@ 判定拿它當界線：房內名稱在離開後會被釋出重用，沒有這條
+        # 界線的話，帶著同一個名字進來的下一個人首次拉歷史就會被前一任的
+        # @ 叫醒，讀到一則從來不是給他的訊息
+        joined_seq = (await (
+            await db.execute("SELECT next_seq FROM room WHERE id=?", (room_id,))
+        ).fetchone())["next_seq"] - 1
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip, join_token, parent_id, ephemeral)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " joined_at, last_seen_at, join_ip, join_token, parent_id,"
+            " ephemeral, joined_seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, room_id, body.kind, session_key, name, body.role, now, now,
              join_ip, getattr(request.state, "access_token", ""),
              parent["id"] if parent is not None else None,
-             1 if parent is not None else 0),
+             1 if parent is not None else 0, joined_seq),
         )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
@@ -1626,22 +1640,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         不是投遞地址：父層只是收件路徑。拿父層的界線，等於讓新生的 subagent
         繼承父層加入以來的整段歷史 @（決策端 2026-08-31 裁定）。
 
-        ⚠️ **與 `fix/pin-notify-and-mentions` 合併時要動的就是這裡**：
-        那條分支替 participant 加了 `joined_seq`（加入當下房內最後一則 seq）。
-        合併後把下面的 0 換成 `r["joined_seq"] or 0`，relay 就吃到每個
-        subagent 自己的界線。**這是新增邏輯，不是機械合併**——只把
-        `max(after_seq, joined_seq)` 放進 `_out()` 的迴圈，天然套上的是
-        父層的界線，正好是被裁掉的那種語意。
+        界線用**每個 subagent 自己的 `joined_seq`**。把父層的界線套上去是
+        錯的：那會讓一個剛派出來的 subagent 繼承父層加入以來的整段歷史 @。
+        NULL 當 0，與一般成員的處置一致。
         """
         db = app.state.db
         rows = await (
             await db.execute(
-                "SELECT display_name FROM participant WHERE room_id=? AND parent_id=?"
-                " AND status='active'",
+                "SELECT display_name, joined_seq FROM participant"
+                " WHERE room_id=? AND parent_id=? AND status='active'",
                 (room_id, parent_id),
             )
         ).fetchall()
-        return {r["display_name"]: 0 for r in rows}
+        return {r["display_name"]: (r["joined_seq"] or 0) for r in rows}
 
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
@@ -1679,6 +1690,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 room_id, me["id"], subagents_since
             )
             mine = await _my_subagent_bounds(room_id, me["id"])
+            # NULL（欄位存在之前就在房裡的舊成員）當 0，維持原本行為
+            my_since = me["joined_seq"] or 0
             mentioned = False
             for m in msgs:
                 names = set(m.get("mentions") or [])
@@ -1687,12 +1700,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 不設這條界線的話，任何人釘一則 @ 過你的舊訊息，你就會被
                 # 重新叫醒一次。
                 #
-                # ⚠️ 這條界線 `mentioned` 與 `relayed_mentions` **必須共用**。
-                # 只擋一邊的話，修掉的喚醒會從沒擋的那個入口原樣回歸——
-                # 轉投遞正是這樣一個入口（測試端 2026-08-31 實測紅燈）。
+                # ⚠️ 這行的隱含前提是**update 路徑不會新增 mention**：目前
+                # 只有 pin / unpin / delete 會推進 update_seq，三者都不動
+                # mentions。哪天加了「編輯訊息」而且改文能補 @ 人，這裡就會
+                # 把正當的喚醒吃掉，必須回來改成比對「mentions 裡新增了我」。
                 if m.get("seq", 0) <= after_seq:
                     continue
-                if me["display_name"] in names:
+                # 第二條界線：加入之前的 @ 不算。房內名稱在離開後會被釋出，
+                # 新來的人拿到同一個名字時那些舊訊息在字串比對下全都指向他，
+                # 而他第一次拉歷史用的是 after_seq=0，上面那條擋不住。
+                #
+                # **界線屬於被 @ 的那個身分，不是投遞地址**：我自己的用我的
+                # joined_seq，旗下 subagent 的用它自己的（見
+                # _my_subagent_bounds）。父層只是收件路徑，拿父層的界線會讓
+                # 新生的 subagent 繼承父層加入以來的整段歷史 @。
+                if me["display_name"] in names and m["seq"] > my_since:
                     mentioned = True
                 # @ 到我旗下的 subagent＝叫醒我。subagent 沒有自己的 watcher
                 # 進程（它活在我的進程裡），不轉投遞的話那個 mention 就是打
@@ -1762,10 +1784,16 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def pin_message(message_id: str, x_participant_id: str | None = Header(default=None)):
         """釘選一則訊息，並通知它的發送者。
 
-        通知的對象**一律是被釘訊息的發送者**，與誰按下釘選無關——包括自己
-        釘自己的訊息。釘選是「這段話很重要，之後還要回來看」的宣告，而最該
-        知道這件事的人就是說這段話的人；讓通知與釘選者的身分掛鉤，只會多出
-        一堆「為什麼這次沒通知」的特例。
+        通知的對象**一律是被釘訊息的發送者**，與誰按下釘選無關——唯一的例外
+        是自己釘自己的訊息。釘選是「這段話很重要，之後還要回來看」的宣告，
+        而最該知道這件事的人就是說這段話的人；讓通知與釘選者的身分掛鉤，
+        只會多出一堆「為什麼這次沒通知」的特例。
+
+        ⚠️ **self-pin 不通知**：這個特例原本不存在，實戰打臉才加上——agent
+        釘選自己的結論之後被自己的收據喚醒，讀到自己剛寫的長文，照「被 @
+        就回」的規範走就是自我循環。要通知的人與被通知的人是同一個時，那則
+        通知的收件人集合是空的，發出去只剩噪音。收據照留（房內事件不靜默），
+        只是不 ping 任何人。
 
         被釘的若是系統訊息（沒有發送者）就沒有人可通知，但收據照樣留下——
         釘選本身是房內事件，不因為沒人可 ping 就變成靜默操作。
@@ -1801,12 +1829,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             content = f"{p['display_name']} 釘選了 {author_name} 的訊息 #{seq}"
         else:
             content = f"{p['display_name']} 釘選了 #{seq}"
+        # self-pin 免通知（見 docstring）。判定用 participant id 不用名字：
+        # 房內名稱可以重複出現在不同世代的身分上，比對名字會把「同名的另一
+        # 個人」誤判成自己
+        notified = author_name if sender_id != p["id"] else None
         await _post_message(
             room_id, None, content, kind="system", system_event="pin",
-            mentions=[author_name] if author_name else None,
+            mentions=[notified] if notified else None,
             reply_to=message_id,
+            # 通知對象在上面算完了（self-pin 時是空的），別再讓回覆語意補人
+            reply_mentions_author=False,
         )
-        return {"ok": True, "notified": author_name}
+        return {"ok": True, "notified": notified}
 
     @app.delete("/api/messages/{message_id}/pin", dependencies=[Depends(require_auth)])
     async def unpin_message(message_id: str, x_participant_id: str | None = Header(default=None)):

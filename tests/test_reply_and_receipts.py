@@ -195,19 +195,40 @@ async def test_pin_notifies_the_author_whoever_pinned(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_self_pin_still_notifies(tmp_path):
-    """「無論釘選者是誰」包含自己——規則不因身分而有特例。"""
+async def test_self_pin_does_not_notify(tmp_path):
+    """釘自己的訊息不通知任何人——收件人就是操作者本人，通知只剩噪音。
+
+    原本的規則是「無論誰按下釘選，一律通知作者」，self-pin 也不例外；實戰
+    證明那會讓 agent 被自己的釘選喚醒、讀回自己剛寫的長文。收據照留，
+    但不 ping。
+    """
     app, client = await _make(tmp_path, "pin_self")
     async with client:
         async with app.router.lifespan_context(app):
             room_id = await _room(client)
             a = await _join(client, room_id, "sess-a", "Nova")
-            msg = await _post(client, room_id, a["participant_id"], "我自己的話")
+            pid = a["participant_id"]
+            msg = await _post(client, room_id, pid, "我自己的話")
             r = await client.post(
                 f"/api/messages/{msg['id']}/pin",
-                headers={"X-Participant-Id": a["participant_id"]},
+                headers={"X-Participant-Id": pid},
             )
-            assert r.json()["notified"] == "Nova"
+            assert r.json()["notified"] is None
+
+            # 收據仍在房內（釘選是房內事件，不因免通知而變成靜默操作），
+            # 只是不 mention 任何人
+            receipt = (await _messages(client, room_id, pid))[-1]
+            assert receipt["system_event"] == "pin"
+            assert receipt["mentions"] == []
+            assert receipt["reply_to_seq"] == msg["seq"]
+
+            # 操作者不會被自己的釘選喚醒
+            r = await client.get(
+                f"/api/rooms/{room_id}/updates",
+                params={"after_seq": msg["seq"], "timeout": 1},
+                headers={"X-Participant-Id": pid},
+            )
+            assert r.json()["you_were_mentioned"] is False
 
 
 @pytest.mark.asyncio
