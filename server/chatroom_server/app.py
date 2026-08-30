@@ -1180,6 +1180,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "session_key": session_key,
                 "style": room["style"],
                 "style_prompt": style_prompt,
+                # 冪等 rejoin 拿的是**既有**身分的界線，不是此刻的房內 seq：
+                # 身分沒變，它從哪一則開始也就沒變。回傳當下的值會讓呼叫端
+                # 以為自己剛出生，跳過這中間的訊息
+                "joined_seq": existing["joined_seq"] or 0,
             }
 
         # 已離開者的名字一般會釋出（房內唯一性只約束 active 成員），但
@@ -1249,17 +1253,36 @@ def create_app(config: Config | None = None) -> FastAPI:
             if attempt == attempts - 1:
                 name = f"{name.rsplit('-', 1)[0]}-{pid[:4]}"
             try:
-                await db.execute(
+                # 父層仍 active 這個條件寫進 INSERT 本身，不是靠上面那次
+                # SELECT。上面的檢查與這裡之間有一個真實的窗口：父層可以在
+                # 中間 leave（級聯把當時的 subagent 一起帶走），而我們手上
+                # 那份快照仍然說它是 active ⇒ 插進一個永遠不會被級聯到的
+                # 孤兒，正是 §3.5 宣稱不可達的狀態。
+                # 把它交給資料庫，「不可達」就從時序保證變成資料保證。
+                cur = await db.execute(
                     "INSERT INTO participant (id, room_id, kind, session_key,"
                     " display_name, role, joined_at, last_seen_at, join_ip,"
                     " join_token, parent_id, ephemeral, joined_seq)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (pid, room_id, body.kind, session_key, name, body.role,
-                     now, now, join_ip,
-                     getattr(request.state, "access_token", ""),
-                     parent["id"] if parent is not None else None,
-                     1 if parent is not None else 0, joined_seq),
+                    " SELECT :pid, :room_id, :kind, :session_key, :name,"
+                    " :role, :now, :now, :join_ip, :join_token, :parent_id,"
+                    " :ephemeral, :joined_seq"
+                    " WHERE :parent_id IS NULL OR EXISTS ("
+                    "   SELECT 1 FROM participant WHERE id=:parent_id"
+                    "   AND room_id=:room_id AND status='active')",
+                    {"pid": pid, "room_id": room_id, "kind": body.kind,
+                     "session_key": session_key, "name": name,
+                     "role": body.role, "now": now, "join_ip": join_ip,
+                     "join_token": getattr(request.state, "access_token", ""),
+                     "parent_id": parent["id"] if parent is not None else None,
+                     "ephemeral": 1 if parent is not None else 0,
+                     "joined_seq": joined_seq},
                 )
+                if cur.rowcount == 0:
+                    # 父層在這一瞬間走了。**不重試**——重算名字救不了一個
+                    # 已經不在房裡的父層，重試只會把同一個結論拖久一點
+                    raise _err(404, "parent_not_found",
+                               "父成員在這次派遣進行中離開了聊天室，"
+                               "subagent 沒有可以依附的對象。請重新 spawn。")
                 break
             except sqlite3.IntegrityError:
                 if attempt == attempts - 1:
@@ -1328,6 +1351,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             "join_seq": joined["seq"] if joined else None,
             # 「我現在算誰」是可觀測量，不是靠呼叫端自己記得（§3）
             "identity_scope": "subagent" if parent is not None else "parent",
+            # 這個身分是從房內哪一則之後開始的。Hub 早就算好它（@ 判定的
+            # 界線），不回傳的話 bridge 想拿它當 subagent 的讀取游標起點
+            # 就只能自己猜——猜出來的起點會重播或漏訊息，而兩者都不報錯
+            "joined_seq": joined_seq,
         }
         if parent is not None:
             out["parent_participant_id"] = parent["id"]
