@@ -1150,11 +1150,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         pid = _uid()
         now = _now()
         join_ip = request.client.host if request.client else None
+        # joined_seq＝加入當下房內的最後一則 seq（next_seq 指向下一個要發的
+        # 號碼）。@ 判定拿它當界線：房內名稱在離開後會被釋出重用，沒有這條
+        # 界線的話，帶著同一個名字進來的下一個人首次拉歷史就會被前一任的
+        # @ 叫醒，讀到一則從來不是給他的訊息
+        joined_seq = (await (
+            await db.execute("SELECT next_seq FROM room WHERE id=?", (room_id,))
+        ).fetchone())["next_seq"] - 1
         await db.execute(
             "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip, join_token) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " joined_at, last_seen_at, join_ip, join_token, joined_seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (pid, room_id, body.kind, session_key, name, body.role, now, now,
-             join_ip, getattr(request.state, "access_token", "")),
+             join_ip, getattr(request.state, "access_token", ""), joined_seq),
         )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
@@ -1492,9 +1500,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 只有 pin / unpin / delete 會推進 update_seq，三者都不動
                 # mentions。哪天加了「編輯訊息」而且改文能補 @ 人，這裡就會
                 # 把正當的喚醒吃掉，必須回來改成比對「mentions 裡新增了我」。
+                # 第二條界線：加入之前的 @ 不算。房內名稱在離開後會被釋出，
+                # 新來的人拿到同一個名字時，那些舊訊息在字串比對下全都指向
+                # 他——而他第一次拉歷史用的是 after_seq=0，上面那條擋不住。
+                # NULL（欄位存在之前就在房裡的舊成員）當 0，維持原本行為
+                since = max(after_seq, (me["joined_seq"] or 0) if me else 0)
                 mentioned = bool(me) and any(
                     me["display_name"] in m["mentions"]
-                    for m in msgs if m["seq"] > after_seq
+                    for m in msgs if m["seq"] > since
                 )
                 return {"messages": msgs, "you_were_mentioned": mentioned,
                         "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs),

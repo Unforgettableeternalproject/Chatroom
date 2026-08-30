@@ -146,6 +146,73 @@ async def test_pinning_an_old_message_does_not_rementions_its_targets(tmp_path):
             assert data["you_were_mentioned"] is True
 
 
+@pytest.mark.asyncio
+async def test_new_member_does_not_inherit_the_previous_namesakes_mentions(tmp_path):
+    """名字會被回收，舊的 @ 不該跟著轉手給下一個同名的人。
+
+    房內唯一名稱只約束 active 成員，所以離開者的名字會被釋出；而 mentions
+    存的是名字字串。沒有 joined_seq 這條界線的話，帶著同一個名字進來的下
+    一個人第一次拉歷史（after_seq=0）必定命中前一任的 @。
+    """
+    app = create_app(_cfg(tmp_path, "namesake"))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with app.router.lifespan_context(app):
+            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+
+            async def join(key):
+                return (await client.post(
+                    f"/api/rooms/{room_id}/join",
+                    json={"kind": "claude", "session_key": key,
+                          "preferred_name": "Novia"},
+                )).json()
+
+            a = (await client.post(
+                f"/api/rooms/{room_id}/join",
+                json={"kind": "claude", "session_key": "sa", "preferred_name": "A"},
+            )).json()
+            first = await join("s-old")
+            assert first["display_name"] == "Novia"
+
+            await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@Novia 這件事給你", "mentions": ["Novia"]},
+                headers={"X-Participant-Id": a["participant_id"]},
+            )
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": first["participant_id"]},
+            )
+
+            # 名字被釋出，下一個人拿到同一個 Novia
+            second = await join("s-new")
+            assert second["display_name"] == "Novia"
+            hs = {"X-Participant-Id": second["participant_id"]}
+
+            data = (await client.get(
+                f"/api/rooms/{room_id}/updates",
+                params={"after_seq": 0, "timeout": 1}, headers=hs,
+            )).json()
+            # 正向錨點：那則舊訊息確實在這一批裡（他讀得到歷史），
+            # 只是不該因此被叫醒
+            assert any("這件事給你" in m["content"] for m in data["messages"])
+            assert data["you_were_mentioned"] is False
+            cursor = data["last_seq"]
+
+            # 反向錨點：加入之後的 @ 照樣要醒
+            await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@Novia 這次是給你的", "mentions": ["Novia"]},
+                headers={"X-Participant-Id": a["participant_id"]},
+            )
+            data = (await client.get(
+                f"/api/rooms/{room_id}/updates",
+                params={"after_seq": cursor, "timeout": 1}, headers=hs,
+            )).json()
+            assert data["you_were_mentioned"] is True
+
+
 def _next_messages(ws):
     """取下一則 messages 事件。
 
