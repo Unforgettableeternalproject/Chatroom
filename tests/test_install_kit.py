@@ -390,3 +390,45 @@ def test_shipped_hub_kit_zip_is_clean():
     ]
     assert leaked == [], f"dist 裡的交付包夾帶了實際資料：{leaked}"
     assert any(n.endswith("scripts/tunnel.py") for n in names)
+
+
+# ---------- 舊 venv 殘骸清理 ----------
+
+
+def _fake_venv(root: Path, name: str, kb: int = 8) -> Path:
+    d = root / name
+    (d / "Lib").mkdir(parents=True)
+    (d / "Lib" / "blob.bin").write_bytes(b"x" * kb * 1024)
+    return d
+
+
+def test_sweep_old_venvs_keeps_the_latest_and_reports(inst, tmp_path, monkeypatch, capsys):
+    """升級不清舊環境，每輪多留 70–80 MB，而流程從頭到尾沒提過它們。
+
+    清掉更舊的、保留最近一份（升級失敗時的退路），並且**把清了什麼印出來**
+    ——不印的話這條修復本身也會變成一個沒有觀測面的行為。
+    """
+    monkeypatch.setattr(inst, "KIT_DIR", tmp_path)
+    for name in ("venv.old-000037", "venv.old-013824", "venv.old-171344"):
+        _fake_venv(tmp_path, name)
+    _fake_venv(tmp_path, "venv")  # 現用的，絕不能碰
+
+    removed = inst.sweep_old_venvs()
+
+    assert removed == ["venv.old-000037", "venv.old-013824"]
+    assert (tmp_path / "venv.old-171344").is_dir(), "最近一份要留著供回滾"
+    assert (tmp_path / "venv").is_dir(), "現用的 venv 被誤刪"
+    out = capsys.readouterr().out
+    assert "已清理 2 份舊環境" in out and "MB" in out
+    assert "venv.old-171344" in out  # 保留哪一份也要講
+
+
+def test_sweep_old_venvs_is_quiet_when_there_is_nothing_to_clean(inst, tmp_path,
+                                                                monkeypatch, capsys):
+    """沒有殘骸時不要出聲——每次安裝都印一句「已清理 0 份」是純噪音。"""
+    monkeypatch.setattr(inst, "KIT_DIR", tmp_path)
+    _fake_venv(tmp_path, "venv")
+    _fake_venv(tmp_path, "venv.old-171344")
+
+    assert inst.sweep_old_venvs() == []
+    assert capsys.readouterr().out == ""

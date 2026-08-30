@@ -215,7 +215,47 @@ def install_bridge() -> Path:
     if not exe.exists():
         die(f"安裝後找不到 {exe}")
     print(f"✅ bridge 安裝完成：{exe}")
+    # 新環境驗過了（exe 在），這時才輪得到清舊的
+    sweep_old_venvs()
     return exe
+
+
+def _dir_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def sweep_old_venvs(keep: int = 1) -> list[str]:
+    """清掉更早幾輪升級留下的 ``venv.old-*``，保留最近 ``keep`` 份。
+
+    **印出來比清掉重要。** 這些目錄各佔 70–80 MB，而升級流程從頭到尾沒有
+    任何一步提到它們存在——實機上跑了五次升級才有人發現三份躺在那裡
+    （2026-08-30 回報）。跟這個 kit 一路在修的東西同一個形狀：狀態產生了，
+    但沒有任何觀測面會講到它。
+
+    保留最近一份是刻意的：新版剛裝完就把唯一的退路刪光，升級失敗時連手動
+    回滾都沒得回。只在新 venv 驗證通過後才呼叫。
+    """
+    olds = sorted((d for d in KIT_DIR.glob("venv.old-*") if d.is_dir()),
+                  key=lambda d: d.name)
+    doomed = olds[:-keep] if keep else olds
+    if not doomed:
+        return []
+    removed: list[str] = []
+    freed = 0
+    for d in doomed:
+        size = _dir_size(d)
+        shutil.rmtree(d, ignore_errors=True)
+        if d.exists():  # Windows：檔案被佔用時 rmtree 會安靜地失敗
+            print(f"⚠️ 舊環境 {d.name} 清不掉（可能被程式佔用），請手動刪除")
+            continue
+        removed.append(d.name)
+        freed += size
+    if removed:
+        print(f"• 已清理 {len(removed)} 份舊環境（{freed / 1024 / 1024:.0f} MB）："
+              f"{'、'.join(removed)}")
+    if keep and olds[-keep:]:
+        print(f"  保留最近一份供回滾：{olds[-1].name}")
+    return removed
 
 
 def _report_install_failure(
