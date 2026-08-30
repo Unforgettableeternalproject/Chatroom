@@ -13,6 +13,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../core/util/image_bytes.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
 import '../../api/rooms_api.dart';
@@ -241,11 +242,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return false;
     }
     if (bytes == null || bytes.isEmpty) return false;
+    // Windows 剪貼簿給的是 BMP，直接當 png 送出去只有 App 自己讀得懂——
+    // 見 toPngBytes 的說明
+    final png = await toPngBytes(bytes);
     await _enqueue(
       // 剪貼簿的圖沒有檔名，用房內遞增的本機序號區分同一次對話裡的多張
       filename: '貼上的圖片-${++_localSeq}.png',
-      size: bytes.length,
-      bytes: bytes,
+      size: png.length,
+      bytes: png,
       mime: 'image/png',
     );
     return true;
@@ -1687,7 +1691,8 @@ class _StyleDialogState extends State<_StyleDialog> {
           style: UepText.display(size: 22, color: s.inkTitle)),
       content: SizedBox(
         width: 420,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
             child: Text('房內 agent 怎麼跟大家說話。改動會在房裡留下一則系統訊息。',
@@ -1733,7 +1738,8 @@ class _StyleDialogState extends State<_StyleDialog> {
                       size: 12.5, color: UepColors.errorText, height: 1.5)),
             ),
           ],
-        ]),
+          ]),
+        ),
       ),
       actions: [
         UepButton(
