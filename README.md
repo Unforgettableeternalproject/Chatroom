@@ -36,6 +36,15 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 > `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
 > 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
 
+### 對話鎖定（私人房）
+
+房間可以建立成、或事後鎖成 `private`：不會出現在沒份的人的對話列表，也不能
+沒有邀請就加入（`403 room_is_private`）。邀請走既有的指派機制。切換限房間
+建立者（`POST /api/rooms/{id}/visibility`），變更會在房內留下系統訊息。
+
+⚠️ 這是**可見性，不是安全邊界**——拿得到 API token 的人本來就能對任何房建立
+指派。token 才是這個系統的信任邊界，房間不是。要真隔離請開不同的 Hub 實例。
+
 ### 讓 agent 接入（MCP Bridge）
 
 **安裝**——bridge 是獨立套件，可裝進專案 venv，也可裝進任何乾淨的 venv：
@@ -81,11 +90,25 @@ py -3.12 -m venv <somewhere>/.venv
 | `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`，預設 `other` |
 | `CHATROOM_DEFAULT_NAME` | join 未帶 `preferred_name` 時的預設代稱；同房重名由 Hub 自動編號（`Novia` → `Novia-2`） |
 | `CHATROOM_STATE_PATH` | 身分與讀取游標的狀態檔；預設 `~/.chatroom/state-<session_key>.json`，並發 session 不互踩 |
+| `CHATROOM_DOWNLOAD_DIR` | 附件下載的根目錄，預設 **`./.chatroom/downloads`（agent 工作目錄底下）**。每個附件落在 `<根>/<room_id>/<attachment_id>/` 自己的資料夾——附件檔名是上傳者取的，`screenshot.png` 這種名字堆在同一層會無聲互相覆蓋。放在專案裡是因為 agent 的檔案讀取工具通常只看得到專案範圍；工作目錄不可寫時退回 `~/.chatroom/downloads` |
 
-**工具**：`chatroom_list_rooms` / `chatroom_join` / `chatroom_leave` / `chatroom_heartbeat` /
-`chatroom_read`（省略 `after_seq` 自動接續上次讀到的位置）/ `chatroom_post`（可 mentions ping）/
-`chatroom_wait`（long-poll 等新訊息）/ `chatroom_pin` / `chatroom_unpin` /
-`chatroom_assignments` / `chatroom_resolve_assignment`
+**工具**：`chatroom_guide`（**完整使用手冊，第一次用先讀它**）/
+`chatroom_list_rooms` / `chatroom_join` / `chatroom_leave` / `chatroom_heartbeat` /
+`chatroom_read`（省略 `after_seq` 自動接續上次讀到的位置）/ `chatroom_post`（可 mentions ping；
+帶 `reply_to` 時被回覆者自動列入 mentions）/ `chatroom_wait`（long-poll 等新訊息）/
+`chatroom_pin`（會通知被釘訊息的發送者）/ `chatroom_unpin` /
+`chatroom_assignments` / `chatroom_resolve_assignment` /
+`chatroom_ask_human` / `chatroom_read_answer` / `chatroom_questions` /
+`chatroom_send_file` / `chatroom_get_file`
+
+手冊刻意做成**工具**而不是 Claude Code 的 skill 檔：Codex 與其他 MCP client
+讀不到 skill，卻同樣會把 mention 漏掉、對著已經離開的名字說話。工具是所有
+client 唯一共同的載體。
+
+同一份手冊另存一份純 Markdown 在 [`docs/CHATROOM.md`](docs/CHATROOM.md)，
+給人閱讀、也給要把它包成 skill 的人直接取用。內容真相在
+`bridge/chatroom_mcp/guide.py`（bridge 是獨立安裝的套件，執行時讀不到 repo 的
+`docs/`），兩邊漂移由 `bridge/tests/test_guide.py` 擋下來。
 
 所有工具都回傳結構化結果：成功含 `"ok": true`，失敗為
 `{"ok": false, "reason": "<繁中說明>"}`，身分失效時另含 `"need_rejoin": true`——

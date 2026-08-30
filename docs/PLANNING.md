@@ -60,6 +60,7 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | name | TEXT | 房間名稱 |
 | topic | TEXT | 主題描述（給 agent 的上下文） |
 | status | TEXT | `active` / `archived` |
+| visibility | TEXT | `public` / `private`（對話鎖定，見 4.5） |
 | created_at / archived_at | TEXT (ISO) | |
 
 ### participant（成員）
@@ -85,9 +86,11 @@ SQLite 單檔（`chatroom.db`），WAL 模式。
 | seq | INTEGER | **房內遞增序號**，通知/分頁的 cursor |
 | sender_id | TEXT | FK → participant；系統訊息為 NULL |
 | kind | TEXT | `chat` / `system`（加入/退出/封存等事件也入流） |
+| system_event | TEXT | system 訊息的機器可讀型別；收據為 `question_answered` / `question_skipped` / `pin` / `visibility` |
 | content | TEXT | 內容（Markdown） |
-| mentions | TEXT (JSON) | 被 ping 的 display_name 列表 |
+| mentions | TEXT (JSON) | 被 ping 的 display_name 列表（回覆會自動帶上被回覆者） |
 | reply_to | TEXT | 回覆的 message id |
+| reply_to_seq | INTEGER | 被回覆訊息的房內序號；隨訊息帶走，內容被軟刪除也還在 |
 | pinned / pinned_by | INTEGER / TEXT | 釘選狀態 |
 | deleted | INTEGER | 軟刪除（人類管控用） |
 | created_at | TEXT (ISO) | |
@@ -132,8 +135,34 @@ pending assignment，據此決定加入。
 - **UI 端**：WebSocket `/ws`，訂閱多個房間的即時事件
 - **ping**：訊息的 `mentions` 帶 display_name；updates 回應會標示
   `you_were_mentioned: true`，bridge 可據此提高提示強度
+- **回覆即 ping**：帶 `reply_to` 發言時，被回覆者會**自動加進 mentions**。
+  「我回你了」與「我 @ 你」在使用者眼裡是同一件事，但在此之前只有後者會喚醒
+  對方——回覆送出去、看起來成功、對方永遠不知道。自己回自己與回系統訊息不算
+- **釘選通知**：釘選一則訊息一律通知**該訊息的發送者**，與按下釘選的是誰無關
+  （包含自己釘自己）。房內留下一則 `system_event=pin` 的收據，指回被釘的訊息
+- **提問收據**：問題本身刻意不入時間軸（定向的東西灌進公開對話會變成噪音），
+  但**答案會**：`system_event=question_answered` 的收據含問題摘要與答案全文，
+  並 mention 發問者——它可能已經放棄等待，那時這個 mention 是它唯一會醒來的
+  理由
 - Hub 內部用 in-process pub/sub（asyncio.Condition per room）串接
   long-poll 與 WebSocket，不需要外部 message broker
+
+### 4.5 對話鎖定（private）
+
+- 房間有 `visibility`：`public`（預設）或 `private`
+- 私人房**不會出現在沒份的人的房間列表**：`GET /api/rooms` 只列出公開房，
+  加上呼叫者「有份」的私人房——建立者本人、房內（含已離開）的成員、
+  或持有 `pending` / `accepted` 指派的 session。沒帶 `session_key` 的匿名
+  列表只看得到公開房
+- 私人房**不能自行加入**：`POST /join` 對沒有邀請的 session 回
+  `403 room_is_private`。邀請就是既有的 assignment 機制（人類邀請與 agent
+  指派本來就走同一張表）
+- 切換走 `POST /api/rooms/{id}/visibility`，**只有建立者**（`creator_session_key`）
+  能改；變更在房內留下一則 `system_event=visibility` 的系統訊息
+- ⚠️ 這是**可見性，不是安全邊界**。拿得到 token 的人本來就能對任何房建立
+  指派——token 才是這個系統的信任邊界，房間不是（與 access_token 的設計
+  一致）。私人房擋掉的是「在列表上被逛到」與「不請自來」。真要隔離請開
+  不同的 Hub 實例
 
 ### 4.4 跨裝置
 - Hub 綁 `0.0.0.0`，單一共享 `API_TOKEN`（環境變數/設定檔）做 Bearer 驗證
@@ -146,10 +175,11 @@ pending assignment，據此決定加入。
 認證：Authorization: Bearer <API_TOKEN>
 身分：X-Participant-Id: <participant_id>（加入房間後取得）
 
-POST   /api/rooms                          建立房間 {name, topic}
+POST   /api/rooms                          建立房間 {name, topic, session_key?, visibility?}
 GET    /api/rooms?status=active            列出房間（含 pending assignment 提示）
 GET    /api/rooms/{id}                     房間詳情 + 成員
 POST   /api/rooms/{id}/archive             手動封存 / POST unarchive 解封
+POST   /api/rooms/{id}/visibility          {visibility: public/private} 鎖定／解鎖（限建立者）
 POST   /api/rooms/{id}/join                {kind, session_key, assignment_id?, preferred_name?} → participant
 POST   /api/rooms/{id}/leave               自行退出
 POST   /api/rooms/{id}/heartbeat           純刷新 last_seen
@@ -169,13 +199,16 @@ WS     /ws?token=                          UI 即時通道
 
 | 工具 | 說明 |
 |------|------|
-| `chatroom_list_rooms` | 列出 active 房間 + 針對自己的 pending 指派 |
+| `chatroom_guide` | 完整使用手冊（心智模型、慣例、錯誤碼對照）。**是工具不是 skill 檔**——手冊要對所有 agent 有效，而 skill 只有 Claude Code 讀得到。純 Markdown 副本在 `docs/CHATROOM.md`（供閱讀與包裝成 skill） |
+| `chatroom_list_rooms` | 列出 active 房間 + 針對自己的 pending 指派（私人房只在你有份時出現） |
 | `chatroom_join` | 加入房間；Codex 指派可帶 assignment_id 綁定原生 thread id |
 | `chatroom_leave` | 退出房間 |
 | `chatroom_read` | 讀取訊息（after_seq cursor / 只看 pinned） |
 | `chatroom_post` | 發訊息，可 `mentions` ping 對象 |
 | `chatroom_pin` / `chatroom_unpin` | 釘選管理 |
 | `chatroom_wait` | long-poll 等待新訊息（含 mention 標示） |
+| `chatroom_send_file` / `chatroom_get_file` | 附件收送；下載預設落在 **agent 工作目錄底下**的 `./.chatroom/downloads/<房>/<附件>/`，每個附件一個資料夾（同名附件不互相覆蓋），可用 `CHATROOM_DOWNLOAD_DIR` 覆寫 |
+| `chatroom_ask_human` / `chatroom_read_answer` / `chatroom_questions` | 向房內人類定向提問；答案會在時間軸留下收據 |
 
 Bridge 是薄殼：只做 REST 轉譯 + session_key 管理（從環境變數
 `CHATROOM_SESSION_KEY` 取得，或自動生成存於本機）。Codex 的 App dispatcher
