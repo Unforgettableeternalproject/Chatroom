@@ -361,3 +361,50 @@ async def test_ephemeral_name_frees_up_once_the_parent_is_gone(tmp_path):
             )
             reused = (await _sub(client, room_id, other, "t-h4", "米勒")).json()
             assert reused["display_name"] == "米勒"
+
+
+async def test_pinning_an_old_relayed_mention_does_not_rewake_the_parent(tmp_path):
+    """合併門檻 — `relayed_mentions` 與 `mentioned` 必須共用同一條界線。
+
+    只擋一邊的話，修掉的重複喚醒會從沒擋的那個入口原樣回歸；而轉投遞正是
+    這樣一個入口（測試端 2026-08-31 實測紅燈）。
+    """
+    app, client = await _make(tmp_path, "relayline")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _new_room(client)
+            parent = await _join_ok(client, room_id, "parent-key", "Novia")
+            third = await _join_ok(client, room_id, "third-key", "米絲媞")
+            await _sub(client, room_id, parent, "t-r1", "米勒")
+
+            msg = (await client.post(
+                f"/api/rooms/{room_id}/messages",
+                json={"content": "@米勒 舊訊息", "mentions": ["米勒"]},
+                headers={"X-Participant-Id": third["participant_id"]},
+            )).json()
+
+            # 父層讀掉它——這一輪本來就該醒（正向錨點）
+            first = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            assert first["you_were_mentioned"] is True
+
+            # 第三方釘選那則舊訊息 → update_seq 推進，它重新入流
+            r = await client.post(
+                f"/api/messages/{msg['id']}/pin",
+                headers={"X-Participant-Id": third["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+
+            again = (await client.get(
+                f"/api/rooms/{room_id}/updates?timeout=0"
+                f"&after_seq={first['last_seq']}",
+                headers={"X-Participant-Id": parent["participant_id"]},
+            )).json()
+            # 錨點：那則舊訊息**確實在這一批裡**（重推是預期行為），
+            # 但它不該再叫醒任何人
+            seqs = [m["seq"] for m in again["messages"]]
+            assert msg["seq"] in seqs, "重推本身是預期行為，這裡不是要擋掉它"
+            relayed = [m for m in again["messages"] if m.get("relayed_mentions")]
+            assert relayed == []

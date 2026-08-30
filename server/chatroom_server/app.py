@@ -1662,6 +1662,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             mentioned = False
             for m in msgs:
                 names = set(m.get("mentions") or [])
+                # 只有**新訊息**能喚醒人。既有訊息因釘選／刪除領了 update_seq
+                # 重新入流時會再度出現在這一批裡，它裡面的 @ 早就被讀過了——
+                # 不設這條界線的話，任何人釘一則 @ 過你的舊訊息，你就會被
+                # 重新叫醒一次。
+                #
+                # ⚠️ 這條界線 `mentioned` 與 `relayed_mentions` **必須共用**。
+                # 只擋一邊的話，修掉的喚醒會從沒擋的那個入口原樣回歸——
+                # 轉投遞正是這樣一個入口（測試端 2026-08-31 實測紅燈）。
+                if m.get("seq", 0) <= after_seq:
+                    continue
                 if me["display_name"] in names:
                     mentioned = True
                 # @ 到我旗下的 subagent＝叫醒我。subagent 沒有自己的 watcher
