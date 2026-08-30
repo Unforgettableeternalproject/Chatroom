@@ -12,6 +12,8 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+# 備份：上線不可逆功能前備份資料庫是正當動作，不該讓產物被標成 -dirty
+*.bak
 
 # Hub 執行時產生的東西（附件實體與日誌）
 server/attachments/
