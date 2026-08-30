@@ -355,3 +355,85 @@ async def test_startup_preview_names_the_rooms_that_will_die(tmp_path, caplog):
     assert "要被清掉的房" in text, "名單要指名道姓，不然人不會知道自己要失去什麼"
     assert "永久刪除" in text
     assert "可關閉" in text, "要講怎麼關掉，不然只是宣告壞消息"
+
+
+# ---------- 房間不在了，每一條路徑都要講同一件事 ----------
+#
+# 2026-08-30 測試端實測：同一個事實（房已刪），read/post 回 404
+# room_not_found，heartbeat 卻回 403 participant_not_active——因為它先查
+# participant 才查房間。bridge 照實翻成「身分已失效，請重新 join」，而 join
+# 回「房間已被刪除」。**它叫人做的事，做了必定失敗，而且永遠不會成功。**
+#
+# 這是同一條死路的第三次（前兩次是私人房與非管理員的 403）。所以這裡不只
+# 修 heartbeat，而是把所有 room-scoped 端點一起釘住：漏掉任何一條，症狀都
+# 是「錯得很安靜」，而修法都一樣——先問房間還在不在。
+
+_AFTER_DELETE = [
+    ("GET", "/api/rooms/{r}/messages", None),
+    ("POST", "/api/rooms/{r}/messages", {"content": "還在嗎"}),
+    ("POST", "/api/rooms/{r}/heartbeat", None),
+    ("GET", "/api/rooms/{r}/updates", None),
+    ("GET", "/api/rooms/{r}", None),
+    ("POST", "/api/rooms/{r}/join",
+     {"kind": "claude", "session_key": "s1", "preferred_name": "Novia"}),
+    ("POST", "/api/rooms/{r}/archive", None),
+    ("POST", "/api/rooms/{r}/unarchive", None),
+    ("POST", "/api/rooms/{r}/visibility", {"visibility": "private"}),
+    ("POST", "/api/rooms/{r}/style", {"style": "casual"}),
+    ("DELETE", "/api/rooms/{r}", None),
+    ("GET", "/api/rooms/{r}/assignments", None),
+    ("POST", "/api/rooms/{r}/assignments", {"target_session_key": "s9"}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path,body", _AFTER_DELETE)
+async def test_every_path_says_room_not_found_after_deletion(
+    tmp_path, method, path, body
+):
+    name = "gone_" + path.replace("/", "_").replace("{r}", "") + method
+    app, client = await _make(tmp_path, name[:40])
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            pid = (await _join(client, room["id"]))["participant_id"]
+            await client.delete(
+                f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
+            )
+
+            r = await client.request(
+                method, path.format(r=room["id"]), json=body,
+                headers={"X-Participant-Id": pid, "X-Session-Key": "admin",
+                         "X-Session-Key-Alt": "admin"},
+            )
+            assert r.status_code == 404, (
+                f"{method} {path} 在房間被刪之後回了 {r.status_code}"
+                f"（{r.json()}）——不是 404 的話，agent 會被指去做一件"
+                "永遠不會成功的事"
+            )
+            assert r.json()["detail"]["code"] == "room_not_found"
+
+
+@pytest.mark.asyncio
+async def test_room_list_says_who_is_admin(tmp_path):
+    """列表要能分辨哪些房是我建的——不然「刪除」只能盲目地擺出來。
+
+    建立者的 session key 不外流（`_room_public` 會拿掉），所以只能由 Hub
+    比對完給一個布林。把必然失敗的按鈕擺出來，跟不給一樣糟。
+    """
+    app, client = await _make(tmp_path, "list_admin")
+    async with client:
+        async with app.router.lifespan_context(app):
+            mine = await _room(client, "我開的", session_key="admin")
+            other = await _room(client, "別人開的", session_key="someone-else")
+
+            r = await client.get("/api/rooms", params={"session_key": "admin"})
+            flags = {x["id"]: x["you_are_admin"] for x in r.json()["rooms"]}
+            assert flags[mine["id"]] is True
+            assert flags[other["id"]] is False
+            # creator_session_key 仍然不外流
+            assert all("creator_session_key" not in x for x in r.json()["rooms"])
+
+            # 匿名列表無從證明自己是誰，一律 false
+            r = await client.get("/api/rooms")
+            assert all(x["you_are_admin"] is False for x in r.json()["rooms"])

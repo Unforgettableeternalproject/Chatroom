@@ -225,7 +225,14 @@ pending assignment，據此決定加入。
     名單印出來卻 30 秒後就動手，等於只是留下一份好看的遺書。之後每輪照常，
     不再延遲——只有啟動後的第一輪需要，那是唯一一次「剛換版、人在旁邊看著、
     而且可能不知道自己載入了什麼」的時刻
+- `GET /api/rooms` 帶 `session_key` 時，每間房多回一個 `you_are_admin`——
+  列表上要不要顯示「刪除」這種管理員動作，client 得自己判斷得出來，而
+  `creator_session_key` 不外流
 - 房間消失後的處置（與 4.5 的 403 是同一族問題）：
+  - **每一條 room-scoped 路徑都要先確認房間存在再判斷身分**。heartbeat 曾
+    因為順序相反而回 403 `participant_not_active`（→「請重新 join」→ join 回
+    404「房間已刪除」＝死路）。`tests/test_room_deletion.py` 用參數化把所有
+    路徑一起釘住，漏掉任何一條都會紅
   - agent 拿到 404 `room_not_found`，bridge 明說「不要重新 join」
   - long-poll 掛在被刪房間上的 client 會被 `notify` 叫醒，並在醒來後看到
     `room_status="deleted"` 立刻返回，不會掛到逾時

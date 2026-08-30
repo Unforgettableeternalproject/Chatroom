@@ -510,20 +510,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         return invited is not None
 
     async def _admin_or_403(room, participant_id: str | None,
-                            session_key: str | None, what: str = "鎖定狀態"):
+                            session_key: str | None,
+                            what: str = "變更鎖定狀態"):
         """管理員（建立者）門檻。
 
         接受兩種自報方式：X-Session-Key（建立者可能還沒加入自己的房，
         指派 UI 正開在那個空窗上），或 X-Participant-Id 反查 session_key。
 
-        ``what`` 只進錯誤訊息——同一道門現在管兩件事（鎖定狀態、說話方式），
-        訊息寫死其中一件會讓另一件的失敗看起來像叫錯了端點。
+        ``what`` 只進錯誤訊息，要帶**完整的動作描述**（「變更鎖定狀態」而不是
+        「鎖定狀態」）——同一道門現在管三件事，其中「刪除」不是「變更」什麼，
+        模板裡寫死動詞會生出「只有建立者可以變更刪除」這種句子（實際發生過）。
         """
         creator = room["creator_session_key"]
         if not creator:
             raise _err(409, "room_has_no_admin",
                        "這個聊天室沒有建立者紀錄（建立時沒帶 session_key），"
-                       f"沒有人可以變更它的{what}")
+                       f"沒有人可以{what}")
         if session_key and session_key == creator:
             return
         if participant_id:
@@ -535,7 +537,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             if me is not None and me["session_key"] == creator:
                 return
-        raise _err(403, "not_admin", f"只有聊天室建立者可以變更{what}")
+        raise _err(403, "not_admin", f"只有聊天室建立者可以{what}")
 
     async def _touch_session(
         session_key: str,
@@ -760,7 +762,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (status, session_key, session_key, session_key),
             )
         ).fetchall()
-        rooms = [_room_public(r) for r in rows]
+        # you_are_admin：列表上要不要顯示「刪除」這種管理員動作，client 得
+        # 自己判斷得出來。creator_session_key 不外流（`_room_public` 會拿掉），
+        # 所以在這裡比對完再給一個布林——把必然失敗的按鈕擺出來，跟不給
+        # 一樣糟
+        rooms = []
+        for r in rows:
+            d = _room_public(r)
+            d["you_are_admin"] = bool(
+                session_key and r["creator_session_key"] == session_key
+            )
+            rooms.append(d)
         pending = []
         if session_key:
             # 與 GET /api/assignments 同形（含房名），client 不必打兩個端點
@@ -942,7 +954,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         語氣突然改變，那不該是一件沒有解釋的事。
         """
         room = await _room_or_404(room_id)
-        await _admin_or_403(room, x_participant_id, x_session_key, "說話方式")
+        await _admin_or_403(room, x_participant_id, x_session_key, "變更說話方式")
         if body.style == CUSTOM_STYLE and not body.style_instructions.strip():
             raise _err(422, "style_instructions_required",
                        "選擇自訂說話方式時必須寫下指示內容")
@@ -1006,7 +1018,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         重新 join 也救不回來，bridge 對它有專屬的說明。
         """
         room = await _room_or_404(room_id, allow_archived=True)
-        await _admin_or_403(room, x_participant_id, x_session_key, "刪除")
+        await _admin_or_403(room, x_participant_id, x_session_key, "刪除這個聊天室")
         counts = await _purge_room(room_id)
         logger.warning(
             "永久刪除聊天室「%s」（%s）：%s", room["name"], room_id, counts,
@@ -1287,6 +1299,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/heartbeat", dependencies=[Depends(require_auth)])
     async def heartbeat(room_id: str, x_participant_id: str | None = Header(default=None)):
+        # 先問「這個房還在嗎」再判斷身分。順序反過來的話，房間被刪之後這裡會
+        # 先查無 active participant 而回 participant_not_active（403）——那句話
+        # 叫人重新 join，而 join 會回 404「房間已被刪除」。做了必定失敗，而且
+        # 永遠不會成功（2026-08-30 測試端實測）。read/post 本來就先查房，所以
+        # 只有這條答錯
+        await _room_or_404(room_id, allow_archived=True)
         await _participant(x_participant_id, room_id)
         return {"ok": True}
 
