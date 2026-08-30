@@ -95,7 +95,11 @@ PREVIEW_LEN = 160
 TRANSIENT_RETRY_SECS = 5.0
 
 # 離場原因 → 能不能自己加回去。被踢是人為決定，agent 自己 rejoin 等於推翻它。
-REJOINABLE = {"idle": True, "left": True, "kicked": False, "archived": False}
+# 離場之後「還回得去嗎」。預設 True 只對「暫時性離場」成立，所以每加一個
+# 新的離場理由都要在這裡登記——漏登記的話會拿到 rejoinable: true，而那正是
+# 這個系統反覆出現的那條死路：叫人去做一件永遠不會成功的事
+REJOINABLE = {"idle": True, "left": True, "kicked": False,
+              "archived": False, "deleted": False}
 
 # Hub 的 system_event → 對外的離場理由。
 # 看 system_event 欄位而不是比對中文內容：內容改一個字就會無聲失效，而那種
@@ -111,6 +115,11 @@ _PRESENCE_EVENTS = frozenset({"join", *DEPARTURE_EVENTS})
 
 # 指派輪詢與 long-poll 分屬兩條執行緒，輸出要串行化才不會交錯成半行 JSON
 _emit_lock = threading.Lock()
+
+
+def _mentions_me(message: dict, display_name: str | None) -> bool:
+    """這則訊息有沒有點名我。沒有名字就一律當成沒有——猜不得。"""
+    return bool(display_name and display_name in (message.get("mentions") or []))
 
 
 def _emit(event: dict[str, Any]) -> None:
@@ -369,11 +378,19 @@ class Watcher:
                                          m.get("content", "")),
                         "reason": DEPARTURE_EVENTS[event],
                     })
-                if not self.args.include_system:
+                if not self.args.include_system and not _mentions_me(
+                    m, self.display_name
+                ):
+                    # 一般的系統訊息（誰進來、誰走了、房間封存）不喚醒任何人。
+                    # 但**點名到我的**系統訊息要放行——提問的答案收據與釘選
+                    # 通知都是 kind=system 且 mention 發問者／發送者，那正是
+                    # 它們存在的理由：放棄等待之後才被回答的那一次，這個
+                    # mention 是你唯一會醒來的機會。
+                    # 這個判斷原本寫在 system 過濾之後，於是永遠走不到
+                    # （2026-08-30：實際發生過——問題逾時、人回答了、
+                    # 發問的 agent 完全不知道）
                     continue
-            mentioned = bool(
-                self.display_name and self.display_name in (m.get("mentions") or [])
-            )
+            mentioned = _mentions_me(m, self.display_name)
             if not self.args.all_messages and not mentioned:
                 if self.display_name is None and not self._warned_no_name:
                     # 為什麼沒有名字，preflight 已經查過並講清楚了；這裡只補上

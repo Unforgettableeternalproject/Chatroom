@@ -329,3 +329,78 @@ def test_watcher_leaves_when_the_room_is_deleted(
     assert departures, "房間消失要發 departure 事件，不然沒有人知道它為什麼停了"
     assert departures[-1]["reason"] == "deleted"
     assert "刪除" in departures[-1]["message"]
+
+
+def test_system_message_that_mentions_me_wakes_me_up(
+    fake_hub, tmp_path, monkeypatch, capsys
+):
+    """點名到我的系統訊息要喚醒我——問答收據與釘選通知都是這種。
+
+    2026-08-30 實際發生：`chatroom_ask_human` 逾時後我放棄等待，人回答了，
+    Hub 照設計發出 mention 我的收據（kind=system），而 watcher 在
+    `include_system` 關閉時把所有系統訊息一律跳過——mention 判斷寫在那個
+    continue 之後，永遠走不到。於是「放棄等待之後才被回答」這個收據唯一
+    要服務的情境，剛好就是它失效的情境。
+    """
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     state={ROOM: {"participant_id": "p1",
+                                   "display_name": "開發Novia"}})
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [
+            {"seq": 7, "kind": "system", "system_event": "question_answered",
+             "sender_id": None, "sender_name": None,
+             "content": "開發Novia 的提問「…」—— Bernie 回答：好",
+             "mentions": ["開發Novia"], "pinned": False, "deleted": False},
+        ], "you_were_mentioned": True, "last_seq": 7},
+    )
+    w.poll_room()
+    ev = [e for e in events_from(capsys) if e.get("event") == "message"]
+    assert ev, "收據 mention 了我卻沒有喚醒——那個 mention 就白加了"
+    assert ev[0]["mentioned"] is True
+
+
+def test_system_message_without_a_mention_still_stays_quiet(
+    fake_hub, tmp_path, monkeypatch, capsys
+):
+    """沒點名的系統訊息照舊不吵人——放行的是 mention，不是所有 system。"""
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     state={ROOM: {"participant_id": "p1",
+                                   "display_name": "開發Novia"}})
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [
+            {"seq": 8, "kind": "system", "system_event": "visibility",
+             "sender_id": None, "sender_name": None,
+             "content": "這個對話已鎖定為私人",
+             "mentions": [], "pinned": False, "deleted": False},
+        ], "you_were_mentioned": False, "last_seq": 8},
+    )
+    w.poll_room()
+    assert [e for e in events_from(capsys) if e.get("event") == "message"] == []
+
+
+def test_deleted_room_is_not_rejoinable(fake_hub, tmp_path, monkeypatch, capsys):
+    """被刪的房回不去了。漏登記的話會拿到 rejoinable: true——又一條死路。"""
+    w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                     "--kind", "claude", state={ROOM: {"participant_id": "p1"}})
+    fake_hub.json(
+        "GET", f"/api/rooms/{ROOM}/updates",
+        {"messages": [], "you_were_mentioned": False, "last_seq": 0,
+         "room_status": "deleted"},
+    )
+    w.poll_room()
+    dep = [e for e in events_from(capsys) if e.get("event") == "departure"][-1]
+    assert dep["reason"] == "deleted"
+    assert dep["rejoinable"] is False
+
+
+def test_every_departure_reason_is_registered_as_rejoinable_or_not():
+    """新增離場理由時別忘了登記——漏掉會靜靜地拿到預設值 True。"""
+    from chatroom_mcp.watch import DEPARTURE_EVENTS, REJOINABLE
+    for reason in DEPARTURE_EVENTS.values():
+        assert reason in REJOINABLE or reason == "idle_removed", (
+            f"離場理由 {reason} 沒有登記在 REJOINABLE 裡"
+        )
+    for reason in ("archived", "deleted", "kicked"):
+        assert reason in REJOINABLE

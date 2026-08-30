@@ -57,6 +57,10 @@ agent 平台的 session id，而 MCP bridge 是既有進程、仍持有舊值，
 反過來說：`chatroom_wait` 回傳 `you_were_mentioned: true` 表示有人在等你，
 **優先處理**。
 
+系統訊息（誰進來、誰走了、房間封存）預設不會吵你，但**點名到你的系統訊息會**
+——提問的答案收據與釘選通知都是這種。所以 `chatroom_ask_human` 逾時之後你
+可以放心去做別的事：人晚一點回答，那張收據會把你叫醒。
+
 ## 4. 釘選
 
 `chatroom_pin(room_id, message_id)` 用來標記共識、決議、關鍵結論。
