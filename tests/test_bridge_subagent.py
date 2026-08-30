@@ -27,6 +27,7 @@ class FakeHub:
                            "participant_id": participant_id, **kwargs})
         if path.endswith("/join"):
             return {
+                "joined_seq": getattr(self, "joined_seq", 0),
                 "participant_id": self.next_participant,
                 "display_name": kwargs["json"].get("preferred_name") or "無名",
                 "session_key": kwargs["json"]["session_key"],
@@ -37,6 +38,18 @@ class FakeHub:
             return {"id": "m1", "seq": 7, "mentions": []}
         if path.endswith("/leave"):
             return {"ok": True}
+        if path.endswith("/questions"):
+            return {"id": "q1", "target_name": "Bernie", "target_active": True}
+        if path.startswith("/api/questions/"):
+            # ask_human 逾時後會回頭查一次狀態
+            return {"question": {"status": "pending", "expires_at": None}}
+        if path.endswith("/attachments"):
+            return {"id": "att-1", "size": 1}
+        if path.endswith(f"/api/rooms/{ROOM}"):
+            return {"participants": [
+                {"id": "human-1", "display_name": "Bernie",
+                 "role": "human", "status": "active"},
+            ]}
         return {}
 
 
@@ -180,15 +193,72 @@ def test_subagent_identity_applies_to_every_room_tool(bridge):
     """
     handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
 
+    # **六個工具全部要驗。** 上一輪只跑了三個，於是 ask_human 漏掉沒被抓到
+    # ——斷言寫得比宣稱窄，等於自己給自己開後門（Codex review 二審 #1）
     for label, call in [
         ("post", lambda: server.chatroom_post(ROOM, "x", subagent=handle)),
         ("heartbeat", lambda: server.chatroom_heartbeat(ROOM, subagent=handle)),
         ("read", lambda: server.chatroom_read(ROOM, subagent=handle)),
+        ("wait", lambda: server.chatroom_wait(ROOM, timeout=0, subagent=handle)),
+        ("send_file", lambda: server.chatroom_send_file(
+            ROOM, __file__, subagent=handle)),
+        ("ask_human", lambda: server.chatroom_ask_human(
+            ROOM, "在嗎", "Bernie", timeout=0, subagent=handle)),
     ]:
         out = call()
         assert out["ok"] is True, (label, out)
         assert out["identity_scope"] == "subagent", (label, out)
-        assert bridge.calls[-1]["participant_id"] == "sub-participant-1", label
+
+
+def test_ask_human_asks_as_the_subagent_not_the_parent(bridge):
+    """Hub 把標頭身分寫成 asker_id——收據、撤回權、離場自動取消都掛在它身上。
+
+    走父層的話，子代理問的問題會變成父層問的：父層離開時被連帶撤回，而真正
+    在等答案的是子代理。
+    """
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+    out = server.chatroom_ask_human(ROOM, "在嗎", "Bernie", timeout=0,
+                                    subagent=handle)
+    assert out["identity_scope"] == "subagent"
+
+    created = [c for c in bridge.calls if c["path"].endswith("/questions")]
+    assert created, bridge.calls
+    assert created[-1]["participant_id"] == "sub-participant-1"
+    # 找人也要用子代理的身分——房間詳情是讀取邊界
+    lookup = [c for c in bridge.calls if c["path"] == f"/api/rooms/{ROOM}"]
+    assert lookup and lookup[-1]["participant_id"] == "sub-participant-1"
+
+
+def test_each_subagent_has_its_own_cursor(bridge):
+    """省略 after_seq 時，子代理用**自己的**游標。
+
+    共用父層那一份，兩個方向都會壞：父層沒在讀 → 子代理永遠拿到同一批；
+    父層先讀掉 → 子代理跳過整段未讀（Codex review 二審 #2）。
+    """
+    server.state().set_last_seq(ROOM, 100)
+    bridge.joined_seq = 7          # 子代理是在 seq 7 之後才出生的
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+
+    seen = []
+
+    def fake(method, path, *, participant_id=None, **kw):
+        seen.append((kw.get("params") or {}).get("after_seq"))
+        return {"messages": [{"seq": 9}], "next_after_seq": 9}
+
+    bridge.request = fake
+    server.chatroom_read(ROOM, subagent=handle)
+    server.chatroom_read(ROOM, subagent=handle)
+    # 第二次要從第一次的結尾接下去，不是重播
+    assert seen == [7, 9], seen
+    # 錨點：父層的游標完全沒被動到
+    assert server.state().last_seq(ROOM) == 100
+
+
+def test_subagent_cursor_starts_at_its_join_point(bridge):
+    """起點是 join 當下的房內 seq——子代理不補讀出生之前的對話。"""
+    bridge.joined_seq = 42
+    handle = server.chatroom_spawn_subagent(ROOM, "米勒")["handle"]
+    assert server._subagents.cursor(handle) == 42
 
 
 def test_subagent_read_does_not_move_the_parent_cursor(bridge):
