@@ -129,3 +129,56 @@ def test_token_is_sent_as_bearer():
     client.request("GET", "/api/rooms", participant_id="pid-1")
     assert seen["auth"] == "Bearer s3cret"
     assert seen["pid"] == "pid-1"
+
+
+# ---------- 403 不等於身分失效 ----------
+#
+# 2026-08-30 實測（測試端）：Hub 對私人房回 403 room_is_private 並附正確的
+# 中文說明，bridge 卻翻成「你的房間身分已失效，請重新呼叫 chatroom_join」。
+# 那個 agent 從沒加入過該房，而被建議去做的正是它剛剛被拒絕的那個呼叫。
+
+
+def test_private_room_is_not_an_identity_problem():
+    err = translate_status(
+        403, {"code": "room_is_private", "message": "這是一個私人對話…"},
+        "http://hub.test",
+    )
+    assert err.identity_invalid is False, "重新 join 不會讓私人房變得可加入"
+    assert "邀請" in err.reason
+    assert "身分已失效" not in err.reason
+
+
+def test_kicked_from_join_says_do_not_come_back_by_yourself():
+    err = translate_status(
+        403, {"code": "kicked", "message": "你已被管理員移出此聊天室…"},
+        "http://hub.test",
+    )
+    # 手上的身分沒有失效——是 Hub 根本不讓你取得新的
+    assert err.identity_invalid is False
+    assert err.departure == "kicked"
+    assert "管理員" in err.reason
+
+
+def test_not_admin_passes_the_hub_message_through():
+    err = translate_status(
+        403, {"code": "not_admin", "message": "只有聊天室建立者可以變更說話方式"},
+        "http://hub.test",
+    )
+    assert err.identity_invalid is False
+    assert "說話方式" in err.reason
+
+
+def test_unknown_403_stays_conservative_for_rolling_upgrades():
+    """沒見過的 code 仍算身分失效——這條**不能**跟著上面幾個一起放寬。
+
+    修 room_is_private 那次差點把 fallback 一起改掉。滾動升級時舊 bridge
+    不認得新 Hub 的新 code，只要它仍落在 identity_invalid 這條路徑，舊
+    watcher 就會結束進程；放寬的話它會變成退不掉又一直打 Hub 的殭屍。
+    誤判一次 agent 的處置，遠比放生一隻殭屍便宜。
+    """
+    err = translate_status(
+        403, {"code": "some_future_rule", "message": "這個房間目前不接受新訊息"},
+        "http://hub.test",
+    )
+    assert err.identity_invalid is True
+    assert err.departure is None, "不認得的 code 不得亂猜離場原因"

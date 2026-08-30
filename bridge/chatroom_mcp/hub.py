@@ -115,6 +115,48 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "這個身分已經離開聊天室了。要回去的話重新呼叫 chatroom_join。",
                 status=status, detail=detail, identity_invalid=True, departure="left",
             )
+        # ↑ 以上都是「身分有問題」。↓ 以下的 403 不是——把它們翻成「請重新
+        #   join」會給出一個死路：房間是私人的、你不是管理員、你被踢了，
+        #   這三件事重新加入一次都不會改變，而 agent 會照著做然後再撞一次。
+        if code == "room_is_private":
+            return HubError(
+                "這是一個私人對話，必須先被邀請才能加入——重新呼叫 chatroom_join "
+                "不會改變這件事。請房內的成員用指派／邀請把你加進來。",
+                status=status, detail=detail,
+            )
+        if code == "kicked":
+            # join 端點的「被踢過所以不能自己回來」。與 participant_kicked
+            # 不同：那是手上的身分失效，這是根本不讓你取得新身分
+            return HubError(
+                "你先前被管理員移出這個聊天室，不能自己重新加入。"
+                "要回來需要管理員重新指派一次。",
+                status=status, detail=detail, departure="kicked",
+            )
+        if code == "not_admin":
+            return HubError(
+                _detail_text(detail) or "這個動作只有聊天室建立者做得到。",
+                status=status, detail=detail,
+            )
+        if code is None and ("participant" in low or "身分" in text):
+            # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
+            # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：
+            # 新版 Hub 一律帶 code，走上面那些精確分支
+            return HubError(
+                "你的房間身分已失效（可能因閒置逾時被移出房間）。"
+                "請重新呼叫 chatroom_join 取得新身分後再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        # 沒見過的 code：**維持 identity_invalid=True**。
+        #
+        # 直覺上這裡該跟上面幾個一樣「不要亂猜身分失效」，但滾動升級的保命
+        # 契約優先（見 tests/test_departure.py 的同名測試）：新 Hub 回的新
+        # code，舊 bridge 不認得，只要它仍落在這條路徑，舊 watcher 就會結束
+        # 進程；改成「暫時性錯誤」的話，舊 watcher 會變成永遠退不掉、還一直
+        # 打 Hub 的殭屍。誤判一次 agent 的處置（多 join 一次）遠比放生一隻
+        # 殭屍便宜。
+        #
+        # 所以正確的做法是**逐一把已知的非身分 code 列在上面**，而不是把
+        # fallback 放寬。之後 Hub 新增 403 code 時，記得回來加一條。
         return HubError(
             "你的房間身分已失效（可能因閒置逾時被移出房間）。"
             "請重新呼叫 chatroom_join 取得新身分後再試。",
