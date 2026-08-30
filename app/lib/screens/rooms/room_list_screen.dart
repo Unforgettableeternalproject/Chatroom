@@ -7,10 +7,12 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/room.dart';
+import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/pending_invites_banner.dart';
+import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
@@ -429,14 +431,17 @@ class _CreateRoomDialog extends ConsumerStatefulWidget {
 class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   final _name = TextEditingController();
   final _topic = TextEditingController();
+  final _styleInstructions = TextEditingController();
   bool _creating = false;
   bool _private = false;
+  String _style = kRoomStyles.first.value;
   String? _error;
 
   @override
   void dispose() {
     _name.dispose();
     _topic.dispose();
+    _styleInstructions.dispose();
     super.dispose();
   }
 
@@ -444,6 +449,12 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
     final name = _name.text.trim();
     if (name.isEmpty) {
       setState(() => _error = '房間名稱不可為空');
+      return;
+    }
+    final instructions = _styleInstructions.text.trim();
+    // Hub 也擋，但在這裡先講：送出去再被退回來，使用者得自己看懂 422
+    if (_style == kRoomStyleCustom && instructions.isEmpty) {
+      setState(() => _error = '選擇自訂說話方式時要寫下指示內容');
       return;
     }
     setState(() {
@@ -457,6 +468,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             // 建立者即管理員
             sessionKey: ref.read(appConfigProvider).deviceKey,
             visibility: _private ? 'private' : 'public',
+            style: _style,
+            styleInstructions: instructions,
           );
       if (mounted) Navigator.of(context).pop(room);
     } on ApiException catch (e) {
@@ -480,6 +493,25 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           const SizedBox(height: 14),
           _field(context, 'TOPIC（給 agent 的上下文）', _topic,
               hint: '一句話說明這個房間在做什麼…', lines: 3),
+          const SizedBox(height: 14),
+          // 說話方式在**建立時**就選：房間開起來的第一件事往往就是叫 agent
+          // 進來，等他講完第一輪長篇再改就已經晚了
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MonoLabel('說話方式', color: context.uep.inkSoft,
+                letterSpacing: 1.4),
+          ),
+          const SizedBox(height: 7),
+          RoomStylePicker(
+            value: _style,
+            enabled: !_creating,
+            onChanged: (v) => setState(() => _style = v),
+          ),
+          if (_style == kRoomStyleCustom) ...[
+            const SizedBox(height: 10),
+            _field(context, '自訂指示', _styleInstructions,
+                hint: '例：一律用英文回答，句子不要超過兩行。', lines: 3),
+          ],
           const SizedBox(height: 6),
           // 建立當下就能鎖：先開成公開再鎖起來，中間那段時間房間是所有人
           // 都看得到、都能自己走進來的

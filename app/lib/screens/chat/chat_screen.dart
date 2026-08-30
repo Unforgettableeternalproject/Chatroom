@@ -17,6 +17,7 @@ import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
+import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
@@ -24,6 +25,7 @@ import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/invite_human_dialog.dart';
+import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
@@ -996,6 +998,8 @@ class _OverflowMenu extends ConsumerWidget {
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final youAreAdmin = detail?.youAreAdmin ?? false;
     final isPrivate = detail?.room.isPrivate ?? false;
+    final style = detail?.room.style ?? kRoomStyles.first.value;
+    final styleInstructions = detail?.room.styleInstructions ?? '';
     return PopupMenuButton<String>(
       color: s.bgCard,
       shape: RoundedRectangleBorder(
@@ -1004,6 +1008,30 @@ class _OverflowMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
+          case 'style':
+            final picked = await showDialog<({String style, String text})>(
+              context: context,
+              builder: (_) => _StyleDialog(
+                  style: style, instructions: styleInstructions),
+            );
+            if (picked == null) return;
+            try {
+              await ref.read(roomsApiProvider).setStyle(
+                    roomId,
+                    style: picked.style,
+                    instructions: picked.text,
+                    sessionKey: ref.read(appConfigProvider).deviceKey,
+                    participantId:
+                        ref.read(identityProvider(roomId)).value?.participantId,
+                  );
+              ref.invalidate(roomDetailProvider(roomId));
+              ref.invalidate(roomListProvider);
+            } on ApiException catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            }
           case 'visibility':
             try {
               await ref.read(roomsApiProvider).setVisibility(
@@ -1054,6 +1082,13 @@ class _OverflowMenu extends ConsumerWidget {
         }
       },
       itemBuilder: (context) => [
+        if (youAreAdmin)
+          PopupMenuItem(
+            value: 'style',
+            height: 36,
+            child: Text('說話方式（${roomStyleLabel(style)}）',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'visibility',
@@ -1605,6 +1640,110 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
             ),
           ),
       ]),
+    );
+  }
+}
+
+
+/// 變更說話方式。回傳 (style, text)；取消時回 null。
+///
+/// 自訂的內容**留在對話框裡**而不是選了才問：切到自訂再跳出第二個視窗，
+/// 使用者會先失去剛剛看的那四個說明。
+class _StyleDialog extends StatefulWidget {
+  const _StyleDialog({required this.style, required this.instructions});
+
+  final String style;
+  final String instructions;
+
+  @override
+  State<_StyleDialog> createState() => _StyleDialogState();
+}
+
+class _StyleDialogState extends State<_StyleDialog> {
+  late String _style = widget.style;
+  late final _text = TextEditingController(text: widget.instructions);
+  String? _error;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _text.text.trim();
+    if (_style == kRoomStyleCustom && text.isEmpty) {
+      setState(() => _error = '選擇自訂說話方式時要寫下指示內容');
+      return;
+    }
+    Navigator.of(context).pop((style: _style, text: text));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return AlertDialog(
+      title: Text('說話方式',
+          style: UepText.display(size: 22, color: s.inkTitle)),
+      content: SizedBox(
+        width: 420,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text('房內 agent 怎麼跟大家說話。改動會在房裡留下一則系統訊息。',
+                style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
+          ),
+          const SizedBox(height: 12),
+          RoomStylePicker(
+            value: _style,
+            onChanged: (v) => setState(() {
+              _style = v;
+              _error = null;
+            }),
+          ),
+          if (_style == kRoomStyleCustom) ...[
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: s.bgSunken,
+                border: Border.all(color: s.lineStrong),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: TextField(
+                controller: _text,
+                maxLines: 4,
+                style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+                decoration: InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  hintText: '例：一律用英文回答，句子不要超過兩行。',
+                  hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_error!,
+                  style: UepText.serif(
+                      size: 12.5, color: UepColors.errorText, height: 1.5)),
+            ),
+          ],
+        ]),
+      ),
+      actions: [
+        UepButton(
+          label: '取消',
+          variant: UepButtonVariant.outline,
+          small: true,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        UepButton(label: '套用', small: true, onPressed: _submit),
+      ],
     );
   }
 }

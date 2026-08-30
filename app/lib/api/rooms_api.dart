@@ -143,6 +143,8 @@ class RoomsApi {
     String topic = '',
     String? sessionKey,
     String visibility = 'public',
+    String style = 'verbose',
+    String styleInstructions = '',
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -150,9 +152,12 @@ class RoomsApi {
           data: {
             'name': name,
             'topic': topic,
-            // 建立者 session：Hub 以此認定管理員（可移出成員、可改鎖定狀態）
+            // 建立者 session：Hub 以此認定管理員
+            //（可移出成員、可改鎖定狀態與說話方式）
             'session_key': ?sessionKey,
             'visibility': visibility,
+            'style': style,
+            'style_instructions': styleInstructions,
           },
         );
         return Room.fromJson(res.data!);
@@ -178,6 +183,33 @@ class RoomsApi {
           }),
         );
         return (res.data?['visibility'] as String?) ?? visibility;
+      });
+
+  /// 變更房內 agent 的說話方式。只有建立者做得到。
+  ///
+  /// 標頭與 [setVisibility] 同一套理由：建立者可能還沒加入自己的房。
+  /// 回傳 Hub 實際落庫的那組值——custom 以外的風格 instructions 一律被
+  /// 清成空字串，讓 UI 直接照回傳更新，不必自己複製那條規則。
+  Future<({String style, String instructions})> setStyle(
+    String roomId, {
+    required String style,
+    String instructions = '',
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/style',
+          data: {'style': style, 'style_instructions': instructions},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        return (
+          style: (res.data?['style'] as String?) ?? style,
+          instructions: (res.data?['style_instructions'] as String?) ?? '',
+        );
       });
 
   /// [participantId] 是房內身分。房間是讀取邊界——房間詳情要成員才讀得到；
