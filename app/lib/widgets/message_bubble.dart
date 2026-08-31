@@ -15,12 +15,17 @@ class MessageActions {
     required this.onReply,
     required this.onTogglePin,
     required this.onDelete,
+    required this.onEdit,
     this.enabled = true,
   });
 
   final void Function(Message) onReply;
   final void Function(Message) onTogglePin;
   final void Function(Message) onDelete;
+
+  /// 編輯**只有發送者本人做得到**（Hub 端也這樣驗）——刪除是破壞、看得
+  /// 出來，編輯是改了看不出來，所以建立者管得了刪除卻管不了這個。
+  final void Function(Message) onEdit;
 
   /// 封存房間：釘選 / 刪除 / 回覆停用（P3-08 條件 4）。
   final bool enabled;
@@ -112,6 +117,14 @@ class MessageBubble extends StatelessWidget {
             Text('❖ 已釘選',
                 style: UepText.mono(
                     size: 9, color: UepColors.gold, letterSpacing: 1.0)),
+          ],
+          // 編輯與刪除的差別就是「改了看不出來」——不畫這個標記，那條把
+          // 建立者擋在編輯之外的界線就在最後一哩失守
+          if (message.editedAt != null) ...[
+            const SizedBox(width: 8),
+            Text('已編輯',
+                style: UepText.mono(
+                    size: 9, color: s.inkMute, letterSpacing: 1.0)),
           ],
         ],
       ],
@@ -226,6 +239,7 @@ class MessageBubble extends StatelessWidget {
         child: _ContextMenuRegion(
           message: message,
           actions: actions,
+          isSelf: isSelf,
           child: column,
         ),
       ),
@@ -300,11 +314,16 @@ class _ContextMenuRegion extends StatelessWidget {
     required this.child,
     required this.message,
     required this.actions,
+    required this.isSelf,
   });
 
   final Widget child;
   final Message message;
   final MessageActions? actions;
+
+  /// 編輯只列給自己的訊息。**不是只靠 Hub 擋**——把一個必然失敗的選項擺
+  /// 出來，跟不給的差別是使用者會先按下去才知道不行。
+  final bool isSelf;
 
   Future<void> _showMenu(BuildContext context, Offset globalPos) async {
     final a = actions;
@@ -346,6 +365,13 @@ class _ContextMenuRegion extends StatelessWidget {
             height: 36,
             child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
           ),
+          if (isSelf)
+            PopupMenuItem(
+              value: 'edit',
+              height: 36,
+              child:
+                  Text('✎　編輯', style: UepText.sans(size: 12.5, color: s.ink)),
+            ),
         ],
         PopupMenuItem(
           value: 'copy',
@@ -371,6 +397,8 @@ class _ContextMenuRegion extends StatelessWidget {
         a.onReply(message);
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.content));
+      case 'edit':
+        a.onEdit(message);
       case 'delete':
         a.onDelete(message);
     }

@@ -5,8 +5,9 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 攔下請求、記下標頭，然後直接回 200——不需要真的 Hub。
-class _Recorder implements HttpClientAdapter {
+/// 攔下請求、記下標頭與 body，然後直接回 200——不需要真的 Hub。
+/// 其他測試檔也用得到，所以不加底線。
+class Recorder implements HttpClientAdapter {
   final List<RequestOptions> seen = [];
 
   @override
@@ -24,11 +25,11 @@ class _Recorder implements HttpClientAdapter {
 }
 
 void main() {
-  late _Recorder rec;
+  late Recorder rec;
   late Dio dio;
 
   setUp(() {
-    rec = _Recorder();
+    rec = Recorder();
     dio = Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = rec;
   });
 

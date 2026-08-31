@@ -56,6 +56,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scroll = ScrollController();
   Timer? _heartbeat;
   Message? _replyTarget;
+
+  /// 正在編輯的訊息。與 [_replyTarget] 互斥——設定其中一個就清掉另一個，
+  /// 否則送出時分不出該發新訊息還是改舊的。
+  Message? _editTarget;
   int _newWhileAway = 0;
   int _lastSeenCount = 0;
   int? _lastSystemCount;
@@ -485,7 +489,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   // ---------- 動作 ----------
 
+  /// 送出一次編輯。
+  ///
+  /// 內容沒變就當作取消——送一次 PATCH 只會給那則掛上「已編輯」標記，
+  /// 而使用者什麼都沒改。
+  Future<void> _submitEdit(Message target, String content) async {
+    if (content.trim() == target.content.trim()) {
+      setState(() => _editTarget = null);
+      return;
+    }
+    final identity = await ref.read(identityProvider(widget.roomId).future);
+    try {
+      await ref.read(messagesApiProvider).edit(
+            target.id,
+            participantId: identity.participantId,
+            content: content,
+          );
+      if (mounted) setState(() => _editTarget = null);
+    } on ApiException catch (e) {
+      // 訊息照 Hub 的講法：常見情境是這則剛被別人刪掉，或房間剛被封存
+      _toast(e.message);
+    }
+  }
+
   Future<void> _send(String content, List<String> mentions) async {
+    // 編輯中就走編輯，不發新訊息。分岔放在這裡而不是輸入列裡：輸入列是純
+    // 呈現元件，不該知道 Hub 的存在
+    final editing = _editTarget;
+    if (editing != null) {
+      await _submitEdit(editing, content);
+      return;
+    }
     final identity = await ref.read(identityProvider(widget.roomId).future);
     // 只帶已上傳完成的；輸入列不讓有未完成項目時送出，這裡是第二道防線
     final attachmentIds = [
@@ -755,7 +789,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .toList(growable: false);
 
     final actions = MessageActions(
-      onReply: (m) => setState(() => _replyTarget = m),
+      onReply: (m) => setState(() {
+        _replyTarget = m;
+        _editTarget = null;
+      }),
+      onEdit: (m) => setState(() {
+        _editTarget = m;
+        _replyTarget = null;
+      }),
       onTogglePin: _togglePin,
       onDelete: _delete,
       enabled: !archived,
@@ -963,6 +1004,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             enabled: !archived,
             replyTarget: _replyTarget,
             onCancelReply: () => setState(() => _replyTarget = null),
+            editTarget: _editTarget,
+            onCancelEdit: () => setState(() => _editTarget = null),
             onSend: _send,
             attachments: _pending,
             // 封存房唯讀，附件入口一併收起

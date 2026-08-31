@@ -53,6 +53,8 @@ class MessageComposer extends StatefulWidget {
     this.enabled = true,
     this.replyTarget,
     this.onCancelReply,
+    this.editTarget,
+    this.onCancelEdit,
     this.attachments = const [],
     this.onPickFiles,
     this.onPasteImage,
@@ -66,6 +68,12 @@ class MessageComposer extends StatefulWidget {
   final bool enabled;
   final Message? replyTarget;
   final VoidCallback? onCancelReply;
+
+  /// 正在編輯的訊息。與 [replyTarget] **同構但互斥**——回覆是「針對那則說
+  /// 一句新的」，編輯是「把那則換掉」，同時成立沒有意義，而且送出時分不出
+  /// 該走哪條路。外層設定其中一個時要清掉另一個。
+  final Message? editTarget;
+  final VoidCallback? onCancelEdit;
 
   /// 待送附件。上傳流程由外層（持有 provider 的畫面）負責，這裡只負責畫
   /// 與觸發——輸入列是純呈現元件，不該知道 Hub 的存在。
@@ -108,6 +116,23 @@ class _MessageComposerState extends State<MessageComposer> {
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(MessageComposer old) {
+    super.didUpdateWidget(old);
+    final target = widget.editTarget;
+    if (target != null && target.id != old.editTarget?.id) {
+      // 編輯是「把那則換掉」，所以輸入框要**帶著原文**進場——空白起手等於
+      // 逼使用者重打一遍，而他多半只是要改一個字
+      _controller.text = target.content;
+      _controller.selection =
+          TextSelection.collapsed(offset: target.content.length);
+      _focus.requestFocus();
+    } else if (target == null && old.editTarget != null) {
+      // 取消編輯要把草稿清掉：留著的話下一則新訊息會帶著上一則的內容送出
+      _controller.clear();
+    }
   }
 
   void _onTextChanged() {
@@ -262,6 +287,7 @@ class _MessageComposerState extends State<MessageComposer> {
     }
 
     final reply = widget.replyTarget;
+    final editing = widget.editTarget;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 14),
@@ -275,7 +301,45 @@ class _MessageComposerState extends State<MessageComposer> {
           onRemove: widget.onRemoveAttachment ?? (_) {},
           onRetry: widget.onRetryAttachment ?? (_) {},
         ),
-        if (reply != null) ...[
+        if (editing != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(
+              color: s.bgSunken,
+              border: const Border(
+                  left: BorderSide(color: UepColors.gold, width: 2)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('編輯 #${editing.seq}',
+                        style: UepText.mono(
+                            size: 9,
+                            color: UepColors.gold,
+                            letterSpacing: 1.0)),
+                    const SizedBox(height: 2),
+                    Text(
+                      // 講出後果：編輯過的訊息會留下「已編輯」標記，
+                      // 那不是可以偷偷改掉的東西
+                      '送出後會取代原本的內容，並標記為已編輯',
+                      style: UepText.serif(
+                          size: 12, color: s.inkMute, height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: widget.onCancelEdit,
+                icon: Icon(Icons.close, size: 14, color: s.inkMute),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const SizedBox(height: 10),
+        ] else if (reply != null) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
             decoration: BoxDecoration(

@@ -147,6 +147,22 @@ class MessagesApi {
         );
       });
 
+  /// 編輯訊息內容。**只有發送者本人做得到**（Hub 端驗）——刪除是破壞、
+  /// 看得出來，編輯是改了看不出來，所以連房間建立者都沒有這個權限。
+  ///
+  /// 只送 content：mentions 刻意不可改（改了會讓「誰被叫醒」與訊息內容
+  /// 對不上，而喚醒已經發生過了）。
+  Future<void> edit(
+    String messageId, {
+    required String participantId,
+    required String content,
+  }) =>
+      unwrap(() => _dio.patch(
+            '/api/messages/$messageId',
+            data: {'content': content},
+            options: Options(headers: {'X-Participant-Id': participantId}),
+          ));
+
   Future<void> pin(String messageId, {required String participantId}) =>
       unwrap(() => _dio.post(
             '/api/messages/$messageId/pin',

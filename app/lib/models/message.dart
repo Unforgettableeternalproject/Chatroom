@@ -40,6 +40,7 @@ class Message {
     this.senderName,
     this.mentions = const [],
     this.mentionGroups = const [],
+    this.editedAt,
     this.replyTo,
     this.replyToSeq,
     this.replyPreview,
@@ -70,6 +71,13 @@ class Message {
   /// 舊版 Hub 不回這個欄位，缺了就是空清單：那時 [mentions] 本來也不會有
   /// 展開的結果，兩邊自然一致。
   final List<String> mentionGroups;
+
+  /// 這則被編輯過的時間；沒編輯過就是 null。
+  ///
+  /// **UI 一定要畫出來**：編輯與刪除的差別正在於「改了看不出來」——那是
+  /// 權限界線把建立者擋在外面的理由（刪除他做得到，編輯不行）。標記沒畫，
+  /// 那條界線就在最後一哩失守。
+  final String? editedAt;
   final String? replyTo;
 
   /// 被回覆訊息的房內序號。Hub 端「回覆＝mention 被回覆的人」，這個序號
@@ -125,6 +133,7 @@ class Message {
         mentionGroups: ((json['mention_groups'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),
+        editedAt: json['edited_at'] as String?,
         replyTo: json['reply_to'] as String?,
         replyToSeq: json['reply_to_seq'] as int?,
         replyPreview: json['reply_preview'] == null
