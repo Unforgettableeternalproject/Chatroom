@@ -103,11 +103,17 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
 
   Future<void> _toggleArchive(Room room) async {
     final api = ref.read(roomsApiProvider);
+    // 封存／解封是房內管理動作，Hub 要求身分。房間列表上大多沒有 join 過
+    // 的房，participantId 會是 null——那是正常的，建立者靠 deviceKey 過關
+    final sessionKey = ref.read(appConfigProvider).deviceKey;
+    final participantId = ref.read(settingsRepoProvider).participantId(room.id);
     try {
       if (room.isArchived) {
-        await api.unarchive(room.id);
+        await api.unarchive(room.id,
+            sessionKey: sessionKey, participantId: participantId);
       } else {
-        await api.archive(room.id);
+        await api.archive(room.id,
+            sessionKey: sessionKey, participantId: participantId);
       }
       ref.invalidate(roomListProvider);
       // 聊天畫面若開著同一房，房間狀態與身分都要跟著換

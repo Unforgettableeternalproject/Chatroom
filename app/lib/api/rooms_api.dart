@@ -271,11 +271,40 @@ class RoomsApi {
             options: Options(headers: {'X-Participant-Id': participantId}),
           ));
 
-  Future<void> archive(String roomId) =>
-      unwrap(() => _dio.post('/api/rooms/$roomId/archive'));
+  /// 手動封存。Hub 端要求**建立者或此刻仍在房裡的成員**（08-31 收緊），
+  /// 所以身分標頭是必要的，不是可選的加強——不帶就是 401
+  /// `participant_header_required`，而那句話講的是程式錯，會讓沒權限的人
+  /// 看到一則跟自己毫無關係的訊息。
+  ///
+  /// 兩個標頭都帶：建立者可能還沒 join 自己的房（只有 session key），
+  /// 一般成員則只有 participant id。與 [deleteRoom]／[setVisibility] 同一套。
+  Future<void> archive(
+    String roomId, {
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() => _dio.post(
+            '/api/rooms/$roomId/archive',
+            options: Options(headers: {
+              'X-Session-Key': ?sessionKey,
+              'X-Participant-Id': ?participantId,
+            }),
+          ));
 
-  Future<void> unarchive(String roomId) =>
-      unwrap(() => _dio.post('/api/rooms/$roomId/unarchive'));
+  /// 解除封存。門檻比 [archive] 寬一格（不要求 active——房被封存時
+  /// sweeper 已經把 agent 掃成 removed），但一樣要證明身分。
+  Future<void> unarchive(
+    String roomId, {
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() => _dio.post(
+            '/api/rooms/$roomId/unarchive',
+            options: Options(headers: {
+              'X-Session-Key': ?sessionKey,
+              'X-Participant-Id': ?participantId,
+            }),
+          ));
 
   Future<JoinResult> join(
     String roomId, {

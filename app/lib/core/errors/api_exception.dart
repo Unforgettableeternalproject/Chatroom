@@ -33,9 +33,20 @@ class ParticipantHeaderMissingException extends ApiException {
 
 /// 403 — participant 非 active 或不屬於此房。觸發自動 re-join，
 /// 與 401 語意不同，不可合併處理。
+///
+/// ⚠️ **訊息一律優先用 Hub 的原話**。同一個型別接住的 403 其實有兩種語境：
+/// heartbeat／發言時的「身分真的過期了」（會 re-join），以及封存、收回邀請
+/// 這類房內管理動作的「你沒有這個資格」（不會 re-join，也不該 re-join）。
+/// 寫死「正在重新加入…」會在後者身上說出一件不會發生的事——使用者按了封存
+/// 卻被告知系統正在幫他重新加入，那句話跟他做的事毫無關係。
+///
+/// re-join 的判定看的是**型別**（`on ParticipantInvalidException`），不是這句
+/// 話，所以換掉 message 不影響自癒行為。
 class ParticipantInvalidException extends ApiException {
-  const ParticipantInvalidException([String code = 'participant_not_active'])
-      : super(code, '你的房間身分已失效，正在重新加入…');
+  const ParticipantInvalidException([
+    String code = 'participant_not_active',
+    String? message,
+  ]) : super(code, message ?? '你的房間身分已失效，正在重新加入…');
 }
 
 /// 403 + root_token_required — 這台 Hub 由別人主持，發放/撤銷邀請的權限

@@ -32,6 +32,23 @@ void main() {
       expect(e, isA<ParticipantInvalidException>());
     });
 
+    test('403 沿用 Hub 的原話——「沒有資格做這件事」不可講成「身分壞了」', () {
+      final e = translateError(_dioError(403, detail: {
+        'code': 'participant_not_active',
+        'message': '你已經不在這個聊天室裡了，無法執行房內的管理動作',
+      }));
+      expect(e, isA<ParticipantInvalidException>());
+      expect(e.message, contains('無法執行房內的管理動作'));
+      // 按下封存卻被告知「正在重新加入」，那件事不會發生
+      expect(e.message, isNot(contains('重新加入')));
+    });
+
+    test('403 沒帶 message 時才退回寫死的那句', () {
+      final e = translateError(
+          _dioError(403, detail: {'code': 'participant_not_active'}));
+      expect(e.message, contains('重新加入'));
+    });
+
     test('403 + root_token_required 不可當成身分失效——'
         '那會觸發自動 re-join，而重新加入不會讓人變成 Hub 主持人', () {
       final e = translateError(_dioError(403, detail: {

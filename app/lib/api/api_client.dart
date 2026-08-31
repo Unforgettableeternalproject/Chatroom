@@ -57,7 +57,11 @@ ApiException translateError(DioException e) {
       if (code == 'root_token_required') {
         return RootTokenRequiredException(_detailMessage(res.data));
       }
-      return ParticipantInvalidException(code ?? 'participant_not_active');
+      // Hub 對每個 403 code 都寫了一句對應的話（「只有聊天室建立者可以…」、
+      // 「你已經不在這個聊天室裡了…」）。丟掉它改用寫死的那句，等於把所有
+      // 「你沒有資格做這件事」都講成「你的身分壞了」
+      return ParticipantInvalidException(
+          code ?? 'participant_not_active', _detailMessage(res.data));
     case 404:
       return NotFoundException(code ?? 'not_found');
     case 409:

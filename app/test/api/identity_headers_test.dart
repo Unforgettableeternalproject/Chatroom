@@ -1,5 +1,6 @@
 import 'package:chatroom_app/api/assignments_api.dart';
 import 'package:chatroom_app/api/messages_api.dart';
+import 'package:chatroom_app/api/rooms_api.dart';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -61,6 +62,28 @@ void main() {
     test('收回指派沒有 participant 時不送空標頭——空字串會被 Hub 當成有帶',
         () async {
       await AssignmentsApi(dio).cancel('a1', sessionKey: 'dev-key');
+      expect(rec.seen.single.headers.containsKey('X-Participant-Id'), isFalse);
+    });
+
+    test('封存帶兩種身分——不帶的話 Hub 回 401，而那句錯誤講的是程式錯，'
+        '沒權限的人會看到一則跟自己無關的話', () async {
+      await RoomsApi(dio)
+          .archive('r1', sessionKey: 'dev-key', participantId: 'p9');
+      expect(rec.seen.single.headers['X-Session-Key'], 'dev-key');
+      expect(rec.seen.single.headers['X-Participant-Id'], 'p9');
+    });
+
+    test('解封是同一道門的另一面，一樣要帶身分', () async {
+      await RoomsApi(dio)
+          .unarchive('r1', sessionKey: 'dev-key', participantId: 'p9');
+      expect(rec.seen.single.headers['X-Session-Key'], 'dev-key');
+      expect(rec.seen.single.headers['X-Participant-Id'], 'p9');
+    });
+
+    test('封存沒 join 過的房時不送空的 participant 標頭——建立者靠 session '
+        'key 過關，空字串會讓 Hub 以為有帶', () async {
+      await RoomsApi(dio).archive('r1', sessionKey: 'dev-key');
+      expect(rec.seen.single.headers['X-Session-Key'], 'dev-key');
       expect(rec.seen.single.headers.containsKey('X-Participant-Id'), isFalse);
     });
   });

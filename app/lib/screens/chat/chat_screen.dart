@@ -1302,7 +1302,23 @@ class _RoomHeader extends ConsumerWidget {
             _HeaderAction(
               label: '解除封存',
               onTap: () async {
-                await ref.read(roomsApiProvider).unarchive(roomId);
+                try {
+                  await ref.read(roomsApiProvider).unarchive(
+                        roomId,
+                        sessionKey: ref.read(appConfigProvider).deviceKey,
+                        participantId: ref
+                            .read(settingsRepoProvider)
+                            .participantId(roomId),
+                      );
+                } on ApiException catch (e) {
+                  // 解封是有門檻的動作，會被 Hub 擋。沒有這個 catch 的話
+                  // 失敗只會拋進 framework，畫面上什麼都不會發生
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(e.message)));
+                  }
+                  return;
+                }
                 ref.invalidate(roomDetailProvider(roomId));
                 ref.invalidate(roomListProvider);
                 // 封存期間 join 的 409 錯誤會被快取，解封後重新取得身分
@@ -1476,7 +1492,12 @@ class _OverflowMenu extends ConsumerWidget {
             }
           case 'archive':
             try {
-              await ref.read(roomsApiProvider).archive(roomId);
+              await ref.read(roomsApiProvider).archive(
+                    roomId,
+                    sessionKey: ref.read(appConfigProvider).deviceKey,
+                    participantId:
+                        ref.read(settingsRepoProvider).participantId(roomId),
+                  );
               ref.invalidate(roomDetailProvider(roomId));
               ref.invalidate(roomListProvider);
             } on ApiException catch (e) {
