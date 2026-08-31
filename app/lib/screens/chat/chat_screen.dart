@@ -1871,21 +1871,23 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             ],
           ),
         ),
-        // 匯出**不**跟著封存收起——房間可以被永久刪除，備份正是封存之後
-        // 最需要的動作
+        // 底部動作區。匯出**不**跟著封存收起——房間可以被永久刪除，備份
+        // 正是封存之後最需要的動作；指派與邀請則唯讀時收起。
+        //
+        // ⚠️ 三顆鈕包在同一個 Container 裡，不是各自一個：匯出原本自己帶
+        // `bottom: 0` 的 padding，靠下面那塊的 14 撐出底部留白，於是封存房
+        // （下面那塊整個不渲染）就變成按鈕直接貼著視窗底邊，而且少了上緣的
+        // 分隔線。留白不可以外包給一個條件渲染的鄰居。
         Container(
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
-          child: ExportRoomButton(roomId: widget.roomId),
-        ),
-        // 封存房唯讀，指派入口一併收起
-        if (!widget.archived)
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              border: Border(top: BorderSide(color: s.line)),
-            ),
-            child: Column(
-              children: [
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            border: Border(top: BorderSide(color: s.line)),
+          ),
+          child: Column(
+            children: [
+              ExportRoomButton(roomId: widget.roomId),
+              if (!widget.archived) ...[
+                const SizedBox(height: 8),
                 UepButton(
                   label: '指派 AGENT 加入',
                   variant: UepButtonVariant.outline,
@@ -1902,8 +1904,9 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                   onPressed: () => _inviteHuman(context),
                 ),
               ],
-            ),
+            ],
           ),
+        ),
       ],
     );
   }
