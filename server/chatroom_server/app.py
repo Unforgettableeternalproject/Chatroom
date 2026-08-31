@@ -1067,7 +1067,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         else:
             sql = base + " AND ("
-            sql += ("  r.visibility='public'"
+            # ⚠️ `visibility='public'` 只放行**還活著的**房。
+            #
+            # 公開房出現在陌生人的列表上是刻意的——那是「發現並加入」的
+            # 入口，收掉的話新人連上 Hub 之後永遠進不了第一個房。但那個
+            # 理由只對 active 成立：封存房不能 join（409），而讀取要成員
+            # 資格（_member_or_403）。於是封存的公開房對非成員是一個死
+            # 胡同：看得到、點進去 401、也加入不了。
+            #
+            # 這個不一致（列表用 visibility 判、讀取用成員資格判）一直都
+            # 在，只是所有人都剛好是自己房間的成員所以沒浮現。deviceKey
+            # 換過一次，舊房的 participant.session_key 全部對不上，它就
+            # 整片露出來了。
+            sql += ("  (r.visibility='public' AND r.status='active')"
                     "  OR r.creator_session_key=?"
                     "  OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
                     "             AND p.session_key=? AND p.status!='kicked')"

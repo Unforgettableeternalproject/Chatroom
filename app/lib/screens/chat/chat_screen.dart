@@ -228,16 +228,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // hasError 而不是 !hasValue：loading 中兩者都還沒有值，那是正常過程
     if (!identity.hasError || !detail.hasError) return;
     _leaving = true;
-    final err = detail.error;
-    final reason = err is ApiException ? err.message : '你不是這個房間的成員';
     unawaited(() async {
       final settings = ref.read(settingsRepoProvider);
       await settings.setParticipantId(widget.roomId, null);
       ref.read(realtimeServiceProvider).unsubscribe(widget.roomId);
       if (!mounted) return;
       context.go('/rooms');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('讀不到這個聊天室：$reason'),
+      // 刻意**不轉述 Hub 的原話**。走到這裡的錯誤多半是 401
+      // `participant_header_required`，而那句話（「這個畫面沒有帶上房間
+      // 身分（程式問題，與 API token 無關）」）是寫給改程式的人看的——
+      // 它在別的地方是對的，因為那裡確實是呼叫端漏帶標頭。這裡不是：
+      // 使用者做的事是「點了一個他沒份的房」，那句話對他毫無意義。
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('你不是這個聊天室的成員，看不到房內的內容'),
       ));
     }());
   }

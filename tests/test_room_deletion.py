@@ -228,7 +228,12 @@ async def test_sweeper_purges_rooms_archived_long_enough(tmp_path):
 
             await app.state.sweep_once()
 
-            r = await client.get("/api/rooms", params={"status": "archived"})
+            # ⚠️ 拿列表當「房間還在嗎」的探針時**要帶 session_key**：
+            # 封存房只對有份的人顯示（09-01 起），匿名查詢一律看不到，
+            # 那會讓「已被清掉」與「我沒份」長得一模一樣
+            r = await client.get("/api/rooms",
+                                    params={"status": "archived",
+                                            "session_key": "admin"})
             ids = [x["id"] for x in r.json()["rooms"]]
             assert old["id"] not in ids, "封存夠久的房應該被清掉"
             assert keep["id"] in ids, "剛封存的房不該被碰"
@@ -250,7 +255,9 @@ async def test_archived_without_a_timestamp_is_never_purged(tmp_path):
 
             await app.state.sweep_once()
 
-            r = await client.get("/api/rooms", params={"status": "archived"})
+            r = await client.get("/api/rooms",
+                                    params={"status": "archived",
+                                            "session_key": "admin"})
             assert room["id"] in [x["id"] for x in r.json()["rooms"]]
 
 
@@ -269,7 +276,9 @@ async def test_purge_can_be_switched_off(tmp_path):
 
             await app.state.sweep_once()
 
-            r = await client.get("/api/rooms", params={"status": "archived"})
+            r = await client.get("/api/rooms",
+                                    params={"status": "archived",
+                                            "session_key": "admin"})
             assert room["id"] in [x["id"] for x in r.json()["rooms"]]
 
 
@@ -320,7 +329,9 @@ async def test_first_sweep_is_delayed_so_there_is_time_to_change_your_mind(tmp_p
             await app.state.db.commit()
 
             await app.state.sweep_once()
-            r = await client.get("/api/rooms", params={"status": "archived"})
+            r = await client.get("/api/rooms",
+                                    params={"status": "archived",
+                                            "session_key": "admin"})
             assert room["id"] in [x["id"] for x in r.json()["rooms"]], (
                 "首輪延遲內就把房間刪掉了，反悔窗口等於不存在"
             )
@@ -328,7 +339,9 @@ async def test_first_sweep_is_delayed_so_there_is_time_to_change_your_mind(tmp_p
             # 窗口過了就照常執行
             app.state.started_at -= 601
             await app.state.sweep_once()
-            r = await client.get("/api/rooms", params={"status": "archived"})
+            r = await client.get("/api/rooms",
+                                    params={"status": "archived",
+                                            "session_key": "admin"})
             assert room["id"] not in [x["id"] for x in r.json()["rooms"]]
 
 
