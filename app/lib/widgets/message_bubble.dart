@@ -158,7 +158,18 @@ class MessageBubble extends StatelessWidget {
               const SizedBox(height: 9),
             ],
             UepMarkdownBody(data: message.content, mentions: message.mentions),
-            if (unrenderedMentions(message.content, message.mentions)
+            // 群組 @ 的訊息，`mentions` 是 Hub 展開後的全房名單——照畫會在
+            // 每則 `@all` 底下掛一整排名字。用 `mention_groups`（發話者原本
+            // 打的字面）摺疊成一顆 chip。
+            //
+            // **不用「數量超過 N 就摺疊」那種啟發式**：那會在小房間裡不摺疊、
+            // 在大房間裡把正當的個別 @ 也一起吃掉，兩邊都錯。
+            if (message.mentionGroups.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              _PingedRow(
+                names: [for (final g in message.mentionGroups) '$g（全體）'],
+              ),
+            ] else if (unrenderedMentions(message.content, message.mentions)
                 case final pinged when pinged.isNotEmpty) ...[
               const SizedBox(height: 7),
               _PingedRow(names: pinged),

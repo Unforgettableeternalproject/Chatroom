@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/mention_groups.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../models/message.dart';
@@ -86,7 +87,9 @@ class _MessageComposerState extends State<MessageComposer> {
   final _focus = FocusNode();
   final _link = LayerLink();
   final _overlayController = OverlayPortalController();
-  List<Participant> _candidates = const [];
+  /// 補全候選：房內成員，或 `all` / `agents` / `humans` 這種群組保留字。
+  /// 群組項的 [_MentionOption.participant] 是 null。
+  List<_MentionOption> _candidates = const [];
   int _mentionStart = -1;
   bool _sending = false;
 
@@ -131,11 +134,16 @@ class _MessageComposerState extends State<MessageComposer> {
       return;
     }
     final fragment = text.substring(at + 1, cursor).toLowerCase();
-    final matches = widget.members
-        .where((p) =>
-            p.isActive &&
-            p.displayName.toLowerCase().startsWith(fragment))
-        .toList();
+    final matches = <_MentionOption>[
+      // 群組排在前面：它們是少數幾個固定的名字，而成員清單會很長。
+      // 打了 `@a` 卻要捲過十個人名才看到 `all`，那個選單等於沒用
+      for (final entry in kMentionGroups.entries)
+        if (entry.key.startsWith(fragment))
+          _MentionOption.group(entry.key, entry.value),
+      for (final p in widget.members)
+        if (p.isActive && p.displayName.toLowerCase().startsWith(fragment))
+          _MentionOption.member(p),
+    ];
     if (matches.isEmpty) {
       _hideMentions();
       return;
@@ -152,12 +160,12 @@ class _MessageComposerState extends State<MessageComposer> {
     _mentionStart = -1;
   }
 
-  void _pickMention(Participant p) {
+  void _pickMention(_MentionOption option) {
     final text = _controller.text;
     final cursor = _controller.selection.baseOffset;
     final before = text.substring(0, _mentionStart);
     final after = text.substring(cursor);
-    final inserted = '@${p.displayName} ';
+    final inserted = '@${option.name} ';
     _controller.value = TextEditingValue(
       text: '$before$inserted$after',
       selection:
@@ -168,8 +176,13 @@ class _MessageComposerState extends State<MessageComposer> {
   }
 
   /// 送出時從文字內容萃取仍存在的 @成員 名單。
-  List<String> _extractMentions(String content) =>
-      extractMentions(content, widget.members.map((p) => p.displayName));
+  ///
+  /// 群組保留字一併送出去，**不在這裡展開**——Hub 才知道此刻房裡有誰，
+  /// 而且 agent 透過 MCP 發的 `@all` 也得走同一條路。
+  List<String> _extractMentions(String content) => extractMentions(
+        content,
+        [...widget.members.map((p) => p.displayName), ...kMentionGroups.keys],
+      );
 
   /// 有附件還在傳（或傳失敗）時不讓送出。送出去的訊息只會帶已就緒的 id，
   /// 讓它送出等於默默把那個檔案丟掉——使用者會以為傳成功了。
@@ -387,28 +400,38 @@ class _MessageComposerState extends State<MessageComposer> {
               shrinkWrap: true,
               padding: const EdgeInsets.all(5),
               children: [
-                for (final p in _candidates)
+                for (final option in _candidates)
                   InkWell(
                     borderRadius: BorderRadius.circular(5),
-                    onTap: () => _pickMention(p),
+                    onTap: () => _pickMention(option),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 9, vertical: 7),
                       decoration: BoxDecoration(
                         border: Border(
                           left: BorderSide(
-                              color: kindColor(p.kind, context: context),
+                              color: option.participant == null
+                                  // 群組不屬於任何 kind，用金色與人名區隔——
+                                  // 它叫到的是一群人，該看得出來不一樣
+                                  ? UepColors.gold
+                                  : kindColor(option.participant!.kind,
+                                      context: context),
                               width: 2),
                         ),
                       ),
                       child: Row(children: [
-                        Text(p.displayName,
+                        Text(option.name,
                             style: UepText.sans(
                                 size: 12.5,
                                 weight: FontWeight.w600,
                                 color: s.inkTitle)),
                         const SizedBox(width: 9),
-                        KindBadge(kind: p.kind, compact: true),
+                        if (option.participant case final p?)
+                          KindBadge(kind: p.kind, compact: true)
+                        else
+                          Text(option.description,
+                              style:
+                                  UepText.serif(size: 11, color: s.inkMute)),
                       ]),
                     ),
                   ),
@@ -419,4 +442,22 @@ class _MessageComposerState extends State<MessageComposer> {
       ),
     );
   }
+}
+
+/// 補全選單的一個候選：房內成員，或群組保留字（`all` / `agents` / `humans`）。
+///
+/// 刻意不用「名字是不是保留字」去事後判斷——那會在房裡真的有人叫 `all` 時
+/// 選錯（Hub 端把它們列為保留字正是為了這個，但舊房間可能已經有那個名字）。
+class _MentionOption {
+  const _MentionOption.member(Participant this.participant)
+      : _groupName = null,
+        description = '';
+  const _MentionOption.group(this._groupName, this.description)
+      : participant = null;
+
+  final Participant? participant;
+  final String? _groupName;
+  final String description;
+
+  String get name => participant?.displayName ?? _groupName!;
 }

@@ -39,6 +39,7 @@ class Message {
     this.senderId,
     this.senderName,
     this.mentions = const [],
+    this.mentionGroups = const [],
     this.replyTo,
     this.replyToSeq,
     this.replyPreview,
@@ -61,6 +62,14 @@ class Message {
   final String? senderId;
   final String? senderName;
   final List<String> mentions;
+
+  /// 發話者原本打的群組字面（`["all"]`）。**展開在 Hub 那端做**，所以
+  /// [mentions] 已經是實名清單——這個欄位只是為了讓 UI 還原成一顆 `@all`
+  /// chip，而不是掛一整排全房名單。
+  ///
+  /// 舊版 Hub 不回這個欄位，缺了就是空清單：那時 [mentions] 本來也不會有
+  /// 展開的結果，兩邊自然一致。
+  final List<String> mentionGroups;
   final String? replyTo;
 
   /// 被回覆訊息的房內序號。Hub 端「回覆＝mention 被回覆的人」，這個序號
@@ -111,6 +120,9 @@ class Message {
         senderId: json['sender_id'] as String?,
         senderName: json['sender_name'] as String?,
         mentions: ((json['mentions'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        mentionGroups: ((json['mention_groups'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),
         replyTo: json['reply_to'] as String?,
