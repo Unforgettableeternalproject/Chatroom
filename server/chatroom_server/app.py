@@ -1695,17 +1695,62 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         after_seq: int = 0,
         before_seq: int | None = None,
+        around_seq: int | None = None,
+        radius: int = Query(default=25, ge=1, le=250),
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
         x_participant_id: str | None = Header(default=None),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
-        兩者互斥；回傳一律以 seq 遞增排列。"""
+        around_seq 錨定讀取（以某一則為中心取前後各 radius 則）；三者互斥。
+        回傳一律以 seq 遞增排列。"""
         room = await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id)
+        # 三方互斥要三方都擋。只擋兩兩組合的話，同時給三個參數會從某一條
+        # 分支溜過去，而回傳的內容看起來像是其中一種模式的正常結果
+        if around_seq is not None and (
+            after_seq or before_seq is not None or pinned_only
+        ):
+            raise _err(422, "conflicting_cursors",
+                       "around_seq 是錨定讀取（某一則的前後），不能與 after_seq／"
+                       "before_seq／pinned_only 併用——釘選牆看的是整房的釘選，"
+                       "與「這一則附近」是矛盾的語意")
         if before_seq is not None and after_seq:
             raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
         db = app.state.db
+        if around_seq is not None:
+            # **兩段各自 LIMIT，不能用算術範圍。** seq 與 update_seq 共用
+            # room.next_seq，所以 seq 天生有洞——`seq BETWEEN N-r AND N+r`
+            # 會依房間的釘選頻率給出不同數量的訊息，而它在乾淨的測試資料上
+            # 看起來完全正常。radius 數的是「則」，不是序號距離。
+            #
+            # 錨點本身不必存在：client 手上的 seq 可能是被 update_seq 領走的
+            # 號碼（例如從 cursor 推算）。那時 `seq>=around_seq` 的第一筆就是
+            # 它後面最近的一則，語意仍然成立——回 404 會把一個能用的請求
+            # 變成錯誤。
+            older = await (await db.execute(
+                "SELECT * FROM message WHERE room_id=? AND seq<? "
+                "ORDER BY seq DESC LIMIT ?",
+                (room_id, around_seq, radius),
+            )).fetchall()
+            newer = await (await db.execute(
+                "SELECT * FROM message WHERE room_id=? AND seq>=? "
+                "ORDER BY seq LIMIT ?",
+                (room_id, around_seq, radius + 1),
+            )).fetchall()
+            rows = list(reversed(older)) + list(newer)
+            msgs = await _message_rows_to_json(rows, db)
+            out: dict = {
+                "messages": msgs,
+                # 錨定讀取沒有「下一頁」的語意；要往兩邊續讀用 next_* 游標
+                "has_more": False,
+                "style_hint": _style_texts(room["style"],
+                                           room["style_instructions"])[1],
+            }
+            if msgs:
+                out["next_after_seq"] = msgs[-1]["seq"]
+                out["next_before_seq"] = msgs[0]["seq"]
+            return out
         cond = "room_id=?"
         params: list = [room_id]
         if pinned_only:
