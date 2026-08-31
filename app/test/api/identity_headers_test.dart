@@ -10,8 +10,8 @@ class _Recorder implements HttpClientAdapter {
   final List<RequestOptions> seen = [];
 
   @override
-  Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? _,
-      Future<void>? __) async {
+  Future<ResponseBody> fetch(
+      RequestOptions options, Stream<Uint8List>? _, Future<void>? _) async {
     seen.add(options);
     return ResponseBody.fromString('{"ok":true}', 200,
         headers: {
