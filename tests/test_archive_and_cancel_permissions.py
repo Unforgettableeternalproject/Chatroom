@@ -83,11 +83,12 @@ async def test_outsider_cannot_unarchive(tmp_path):
             assert r.status_code in (401, 403), r.text
 
 
-async def test_member_can_archive(tmp_path):
-    """房內成員算數——封存是房內的管理動作，不是建立者的私產。
+async def test_member_archive_becomes_a_request(tmp_path):
+    """房內成員提得出請求，但**房不會因此被封**。
 
-    與 cancel 同一條界線；若最終裁定收緊到只有建立者，這條要跟著改，但兩個
-    端點必須一致，不能一個寬一個嚴。
+    艾斯維爾 08/31 的裁決（原本這條驗的是「成員可以直接封存」）：封存讓
+    整個房唯讀，而房裡可能還有人在工作，那個決定留給建立者；房裡的人最
+    清楚事情做完了沒有，所以提議的路要留著。
     """
     app, client = await _make_client(tmp_path, "arch-member")
     async with client:
@@ -98,6 +99,174 @@ async def test_member_can_archive(tmp_path):
                 f"/api/rooms/{room_id}/archive",
                 headers={"X-Participant-Id": me["participant_id"]})
             assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["archived"] is False
+            assert body["request"]["status"] == "pending"
+            # 最重要的一條：房間還開著
+            det = (await client.get(f"/api/rooms/{room_id}",
+                   headers={"X-Session-Key": "owner"})).json()
+            assert det["room"]["status"] == "active"
+            assert det["archive_request"]["id"] == body["request"]["id"]
+
+
+async def test_second_member_request_is_idempotent(tmp_path):
+    """第二個人提同一件事，拿回既有那筆——建立者的待辦不該變成一疊卡片。"""
+    app, client = await _make_client(tmp_path, "arch-dup")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            a = await _join(client, room_id, "s-a", "Alpha")
+            b = await _join(client, room_id, "s-b", "Beta")
+            first = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": a["participant_id"]})).json()
+            second = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": b["participant_id"]})).json()
+            assert second["already_pending"] is True
+            assert second["request"]["id"] == first["request"]["id"]
+
+
+async def test_creator_approval_archives_the_room(tmp_path):
+    """建立者核准 → 房真的封了，那筆請求標 approved。"""
+    app, client = await _make_client(tmp_path, "arch-approve")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            req = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": me["participant_id"]},
+            )).json()["request"]
+            r = await client.post(
+                f"/api/archive-requests/{req['id']}/resolve",
+                json={"approve": True}, headers={"X-Session-Key": "owner"})
+            assert r.status_code == 200, r.text
+            det = (await client.get(f"/api/rooms/{room_id}",
+                   headers={"X-Session-Key": "owner"})).json()
+            assert det["room"]["status"] == "archived"
+            # 已處理的請求不再掛在待辦上
+            assert det["archive_request"] is None
+
+
+async def test_rejection_is_recorded_not_erased(tmp_path):
+    """婉拒要留紀錄。提議者得分得出「房主說不要」與「房主還沒看到」。"""
+    app, client = await _make_client(tmp_path, "arch-reject")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            req = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": me["participant_id"]},
+            )).json()["request"]
+            r = await client.post(
+                f"/api/archive-requests/{req['id']}/resolve",
+                json={"approve": False, "reason": "還在跑測試"},
+                headers={"X-Session-Key": "owner"})
+            assert r.status_code == 200, r.text
+            det = (await client.get(f"/api/rooms/{room_id}",
+                   headers={"X-Session-Key": "owner"})).json()
+            assert det["room"]["status"] == "active"
+            assert det["archive_request"] is None  # 不再 pending
+            # 但紀錄還在，而且說得出是被拒絕的
+            again = await client.post(
+                f"/api/archive-requests/{req['id']}/resolve",
+                json={"approve": True}, headers={"X-Session-Key": "owner"})
+            assert again.status_code == 409
+            assert "rejected" in again.json()["detail"]["message"]
+
+
+async def test_member_cannot_resolve_own_request(tmp_path):
+    """提議者不能自己核准——否則整套請求機制只是多按一次的直接封存。"""
+    app, client = await _make_client(tmp_path, "arch-self")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            pid = me["participant_id"]
+            req = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": pid})).json()["request"]
+            r = await client.post(
+                f"/api/archive-requests/{req['id']}/resolve",
+                json={"approve": True}, headers={"X-Participant-Id": pid})
+            assert r.status_code == 403, r.text
+            det = (await client.get(f"/api/rooms/{room_id}",
+                   headers={"X-Session-Key": "owner"})).json()
+            assert det["room"]["status"] == "active"
+
+
+async def test_requester_can_cancel_but_admin_cannot(tmp_path):
+    """收回限本人。建立者要表達的是「不要封」，那叫 reject——它留紀錄，
+    而 cancel 會讓他把自己的決定抹掉。"""
+    app, client = await _make_client(tmp_path, "arch-cancel")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            pid = me["participant_id"]
+            req = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": pid})).json()["request"]
+            owner = await _join(client, room_id, "owner", "Owner")
+            bad = await client.delete(
+                f"/api/archive-requests/{req['id']}",
+                headers={"X-Participant-Id": owner["participant_id"]})
+            assert bad.status_code == 403, bad.text
+            ok = await client.delete(f"/api/archive-requests/{req['id']}",
+                                     headers={"X-Participant-Id": pid})
+            assert ok.status_code == 200, ok.text
+            det = (await client.get(f"/api/rooms/{room_id}",
+                   headers={"X-Session-Key": "owner"})).json()
+            assert det["archive_request"] is None
+
+
+async def test_direct_archive_supersedes_pending_request(tmp_path):
+    """建立者自己按封存時，掛著的請求標 superseded 不標 approved。
+
+    被蓋過 ≠ 被核准：提議者看到 approved 會以為房主是回應他而按的。
+    而無論如何都不能讓它繼續 pending——那會指向一件已經發生的事。
+    """
+    app, client = await _make_client(tmp_path, "arch-supersede")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            req = (await client.post(
+                f"/api/rooms/{room_id}/archive",
+                headers={"X-Participant-Id": me["participant_id"]},
+            )).json()["request"]
+            await client.post(f"/api/rooms/{room_id}/archive",
+                              headers={"X-Session-Key": "owner"})
+            r = await client.post(
+                f"/api/archive-requests/{req['id']}/resolve",
+                json={"approve": True}, headers={"X-Session-Key": "owner"})
+            assert r.status_code == 409
+            assert "superseded" in r.json()["detail"]["message"]
+
+
+async def test_only_creator_can_unarchive(tmp_path):
+    """解封收成建立者專屬——封存與解封是同一道門的兩面，一寬一嚴等於沒擋。
+
+    收緊前：任何**曾經**是成員的人（含已離開的）都解得開別人封的房。
+    """
+    app, client = await _make_client(tmp_path, "unarch-member")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = await _room(client)
+            me = await _join(client, room_id, "s-a", "Alpha")
+            await client.post(f"/api/rooms/{room_id}/archive",
+                              headers={"X-Session-Key": "owner"})
+            r = await client.post(
+                f"/api/rooms/{room_id}/unarchive",
+                headers={"X-Participant-Id": me["participant_id"]})
+            assert r.status_code == 403, r.text
+            assert r.json()["detail"]["code"] == "not_admin"
+            # 對照組：建立者解得開。收緊不可以把正當路徑一起關掉
+            ok = await client.post(f"/api/rooms/{room_id}/unarchive",
+                                   headers={"X-Session-Key": "owner"})
+            assert ok.status_code == 200, ok.text
 
 
 # ---------- F6：收回邀請 ----------

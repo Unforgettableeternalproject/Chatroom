@@ -193,6 +193,30 @@ CREATE TABLE IF NOT EXISTS access_token (
     revoked_at   TEXT                        -- 非 NULL 即失效；不刪列，保留紀錄
 );
 
+-- 成員提出的封存請求。封存本身限建立者執行，但房裡的人最清楚事情做完了
+-- 沒有——請求機制讓他們提得出來，而不必去戳房主或乾等自動封存。
+--
+-- 刻意**不進 message 流**（與 question 同一個理由）：提議是定向給建立者的
+-- 待辦，灌進時間軸會變成噪音。但**會**連帶發一則系統訊息當通知——那則是
+-- 「這件事發生了」的公告，與這裡的「這件事還沒被處理」是兩種東西。
+CREATE TABLE IF NOT EXISTS archive_request (
+    id           TEXT PRIMARY KEY,
+    room_id      TEXT NOT NULL REFERENCES room(id),
+    requester_id TEXT NOT NULL REFERENCES participant(id),
+    reason       TEXT NOT NULL DEFAULT '',
+    -- pending / approved / rejected / cancelled / superseded
+    -- superseded = 房間在請求還沒被處理時就以別的方式封存了（自動封存、
+    -- 或建立者直接按封存）。與 rejected 分開：被拒絕是一個決定，被蓋過
+    -- 不是——提議者看到 rejected 會知道房主看過了並說不要
+    status       TEXT NOT NULL DEFAULT 'pending',
+    created_at   TEXT NOT NULL,
+    resolved_at  TEXT,
+    -- 誰拍的板。只會是建立者，但記下來才追得出是哪一次的建立者身分
+    resolved_by  TEXT REFERENCES participant(id)
+);
+CREATE INDEX IF NOT EXISTS idx_archive_request_room
+    ON archive_request(room_id, status);
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """

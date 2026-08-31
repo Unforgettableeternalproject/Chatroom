@@ -162,6 +162,18 @@ class RoomVisibility(BaseModel):
     visibility: str = Field(pattern="^(public|private)$")
 
 
+class ArchiveRequestCreate(BaseModel):
+    """成員提封存時可附一句理由。**可省**——POST 不帶 body 時整個模型是
+    None，因為建立者按封存走的是同一個端點，而他不必寫理由。"""
+
+    reason: str = Field(default="", max_length=500)
+
+
+class ArchiveRequestResolve(BaseModel):
+    approve: bool
+    reason: str = Field(default="", max_length=500)
+
+
 class RoomStyle(BaseModel):
     style: str = Field(pattern=STYLE_PATTERN)
     style_instructions: str = Field(default="", max_length=2000)
@@ -1085,10 +1097,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         is_admin = bool(room["creator_session_key"]) and (
             x_session_key == room["creator_session_key"]
         )
+        # 掛著的封存請求。**給所有成員看，不只建立者**——提議者要看得到
+        # 自己提的還在等，其他人才不會重複提；卡片上的核准鈕才是只有
+        # 建立者才有的東西，那由 you_are_admin 決定
+        pending_req = await _pending_archive_request(room_id)
         return {
             "room": _room_public(room),
             "participants": [e for e, _ in participants],
             "you_are_admin": is_admin,
+            "archive_request": _archive_request_public(pending_req)
+            if pending_req is not None else None,
             # UI 要據此算「還有多久被移出」。不給的話 client 只能寫死一個
             # 數字，而它與伺服器實際設定不一致時會顯示一個假的倒數——
             # 看起來像壞掉，實際上是猜的
@@ -1099,7 +1117,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             },
         }
 
-    async def _archive(room_id: str, reason: str) -> None:
+    async def _archive(room_id: str, reason: str,
+                       approved_request: str | None = None) -> None:
         db = app.state.db
         # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
         await _post_message(room_id, None, reason, kind="system",
@@ -1109,8 +1128,48 @@ def create_app(config: Config | None = None) -> FastAPI:
             " archive_pending_since=NULL WHERE id=?",
             (_now(), room_id),
         )
+        # 還沒被處理的封存請求要收尾——房間已經封了，那些提議不再是待辦。
+        # 標 superseded 不標 approved：只有真的被建立者按下核准的那一筆算
+        # approved（由 caller 以 approved_request 指名），其餘是被蓋過的。
+        # 不收的話它們會一直掛在建立者的待辦上，指向一件已經發生的事
+        params: list = [_now(), room_id]
+        sql = ("UPDATE archive_request SET status='superseded', resolved_at=?"
+               " WHERE room_id=? AND status='pending'")
+        if approved_request:
+            sql += " AND id!=?"
+            params.append(approved_request)
+        await db.execute(sql, tuple(params))
         await db.commit()
         await events.notify(room_id)
+
+    async def _pending_archive_request(room_id: str):
+        """這個房目前掛著的封存請求（最多一筆）。
+
+        「最多一筆」由建立時的冪等保證，不是由 schema 保證——同一個房的
+        第二個提議者拿回的是既有那筆，不會新建。理由：待辦是給建立者看的，
+        三個人各提一次不該變成三張要分別處理的卡片。
+        """
+        return await (await app.state.db.execute(
+            "SELECT r.*, p.display_name AS requester_name"
+            " FROM archive_request r"
+            " LEFT JOIN participant p ON p.id=r.requester_id"
+            " WHERE r.room_id=? AND r.status='pending'"
+            " ORDER BY r.created_at LIMIT 1",
+            (room_id,),
+        )).fetchone()
+
+    def _archive_request_public(row) -> dict:
+        return {
+            "id": row["id"],
+            "room_id": row["room_id"],
+            "requester_id": row["requester_id"],
+            "requester_name": row["requester_name"] if "requester_name"
+            in row.keys() else "",
+            "reason": row["reason"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "resolved_at": row["resolved_at"],
+        }
 
     async def _human_heirs(room_id: str, exclude_id: str) -> list[dict]:
         """可以接手管理權的人：房內 active 的人類，不含自己。
@@ -1204,21 +1263,171 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
     async def archive_room(
         room_id: str,
+        body: ArchiveRequestCreate | None = None,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        """手動封存。**建立者或房內成員**，不是任何持 token 者。
+        """手動封存。**只有建立者執行得了**；房內成員提得出請求。
 
-        封存把整個房變成唯讀，而房裡的人可能正在工作——這是房內最重的一個
-        管理動作，卻是今天發現的權限缺口裡唯一完全不驗身分的。同一條原則的
-        第五次套用：token 管的是「能不能連進來」，房內的事由房內判。
+        一個入口兩種結果，不是兩個端點：成員不必先知道自己有沒有權限才知道
+        要打哪支 API，而且真正的守門留在 server——client 判斷錯了行為仍然
+        正確（`you_are_admin` 是拿來決定畫面長怎樣的，不是拿來當授權的）。
 
-        門檻與收回邀請（`cancel_assignment`）一致：兩者都是房內管理動作，
-        一個寬一個嚴會讓人猜不出這道門到底管什麼。
+        回應用 ``archived`` 分辨發生了什麼：
+        - 建立者 → ``{"archived": true}``，房已封存
+        - active 成員 → ``{"archived": false, "request": {...}}``，請求已掛上
+        - 房外的人 → 401/403，兩者都不給
+
+        為什麼成員不能直接封存：封存讓整個房變成唯讀，而房裡可能還有人在
+        工作。為什麼成員仍提得出請求：房裡的人最清楚事情做完了沒有，要他們
+        去戳房主或乾等自動封存，等於把最有判斷力的人排除在外。
         """
         room = await _room_or_404(room_id)
-        await _active_creator_or_member(room, x_participant_id, x_session_key)
-        await _archive(room_id, "聊天室已被手動封存")
+        me = await _active_creator_or_member(room, x_participant_id,
+                                             x_session_key)
+        is_admin = bool(room["creator_session_key"]) and (
+            x_session_key == room["creator_session_key"]
+        )
+        if not is_admin and me is not None:
+            # 走 participant 自報的建立者也算數——他 join 之後手上仍只有
+            # 那把 session key，不該因為換了自報方式就被降級成一般成員
+            row = await (await app.state.db.execute(
+                "SELECT session_key FROM participant WHERE id=?",
+                (me["id"],),
+            )).fetchone()
+            is_admin = bool(room["creator_session_key"]) and row is not None \
+                and row["session_key"] == room["creator_session_key"]
+        if is_admin:
+            await _archive(room_id, "聊天室已被手動封存")
+            return {"ok": True, "archived": True}
+
+        # 以下是成員提案。走到這裡表示 _active_creator_or_member 放行了，
+        # 而它對非建立者一定回一筆 active participant——沒有 me 是不可能的
+        if me is None:
+            raise _err(403, "participant_not_active",
+                       "你已經不在這個聊天室裡了，無法執行房內的管理動作")
+        existing = await _pending_archive_request(room_id)
+        if existing is not None:
+            # 冪等：第二個人提同一件事，拿回的是既有那筆。**不新建**，
+            # 否則建立者的待辦會變成一疊指向同一個決定的卡片
+            return {"ok": True, "archived": False, "already_pending": True,
+                    "request": _archive_request_public(existing)}
+        req_id = _uid()
+        now = _now()
+        db = app.state.db
+        await db.execute(
+            "INSERT INTO archive_request (id, room_id, requester_id, reason,"
+            " status, created_at) VALUES (?,?,?,?,'pending',?)",
+            (req_id, room_id, me["id"], body.reason if body else "", now),
+        )
+        await db.commit()
+        name = await (await db.execute(
+            "SELECT display_name FROM participant WHERE id=?", (me["id"],),
+        )).fetchone()
+        who = name["display_name"] if name else "有人"
+        # 系統訊息是**公告**（這件事發生了），archive_request 才是**待辦**
+        # （這件事還沒被處理）。兩者都要：只發訊息的話沒有狀態可追，只寫表
+        # 的話沒進 long-poll，建立者不重整就不會知道
+        await _post_message(
+            room_id, None,
+            f"{who} 提議封存這個聊天室"
+            + (f"：{body.reason}" if body and body.reason else "")
+            + "。等待建立者確認。",
+            kind="system", system_event="archive_requested",
+        )
+        await events.notify(room_id)
+        created = await (await db.execute(
+            "SELECT r.*, p.display_name AS requester_name FROM archive_request r"
+            " LEFT JOIN participant p ON p.id=r.requester_id WHERE r.id=?",
+            (req_id,),
+        )).fetchone()
+        return {"ok": True, "archived": False,
+                "request": _archive_request_public(created)}
+
+    @app.post("/api/archive-requests/{request_id}/resolve",
+              dependencies=[Depends(require_auth)])
+    async def resolve_archive_request(
+        request_id: str,
+        body: ArchiveRequestResolve,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """建立者拍板。核准就封存，拒絕就留紀錄。
+
+        拒絕**要留下來**而不是刪掉：提議者需要分得出「房主看過了說不要」與
+        「房主還沒看到」，那是兩種完全不同的後續處置。
+        """
+        db = app.state.db
+        req = await (await db.execute(
+            "SELECT * FROM archive_request WHERE id=?", (request_id,),
+        )).fetchone()
+        if req is None:
+            raise _err(404, "archive_request_not_found", "找不到這筆封存請求")
+        room = await _room_or_404(req["room_id"], allow_archived=True)
+        await _admin_or_403(room, x_participant_id, x_session_key,
+                            what="處理封存請求")
+        if req["status"] != "pending":
+            # 已經處理過的不再動——重複核准會讓「已封存的房再封一次」，
+            # 而那會在時間軸上多留一則假的封存公告
+            raise _err(409, "archive_request_resolved",
+                       f"這筆封存請求已經是 {req['status']}，不能再處理一次")
+        resolver = x_participant_id
+        now = _now()
+        if body.approve:
+            await db.execute(
+                "UPDATE archive_request SET status='approved', resolved_at=?,"
+                " resolved_by=? WHERE id=?", (now, resolver, request_id),
+            )
+            await db.commit()
+            await _archive(req["room_id"], "聊天室已封存（建立者核准了封存請求）",
+                           approved_request=request_id)
+            return {"ok": True, "approved": True}
+        await db.execute(
+            "UPDATE archive_request SET status='rejected', resolved_at=?,"
+            " resolved_by=? WHERE id=?", (now, resolver, request_id),
+        )
+        await db.commit()
+        await _post_message(
+            req["room_id"], None,
+            "建立者婉拒了封存請求，聊天室繼續開著。"
+            + (f"理由：{body.reason}" if body.reason else ""),
+            kind="system", system_event="archive_request_rejected",
+        )
+        await events.notify(req["room_id"])
+        return {"ok": True, "approved": False}
+
+    @app.delete("/api/archive-requests/{request_id}",
+                dependencies=[Depends(require_auth)])
+    async def cancel_archive_request(
+        request_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """提議者收回自己的提議。
+
+        **限本人**，不放行建立者：建立者要表達的是「不要封」，那叫 reject，
+        它會留下紀錄。讓他改用 cancel 等於給他一條把自己的決定抹掉的路。
+        """
+        db = app.state.db
+        req = await (await db.execute(
+            "SELECT * FROM archive_request WHERE id=?", (request_id,),
+        )).fetchone()
+        if req is None:
+            raise _err(404, "archive_request_not_found", "找不到這筆封存請求")
+        if not x_participant_id:
+            raise _err(401, "participant_header_required",
+                       "請求沒有帶 X-Participant-Id。收回提議要證明是本人")
+        if x_participant_id != req["requester_id"]:
+            raise _err(403, "not_request_owner",
+                       "只有提出這筆封存請求的人可以收回它")
+        if req["status"] != "pending":
+            raise _err(409, "archive_request_resolved",
+                       f"這筆封存請求已經是 {req['status']}，不能再收回")
+        await db.execute(
+            "UPDATE archive_request SET status='cancelled', resolved_at=?"
+            " WHERE id=?", (_now(), request_id),
+        )
+        await db.commit()
+        await events.notify(req["room_id"])
         return {"ok": True}
 
     @app.post("/api/rooms/{room_id}/unarchive", dependencies=[Depends(require_auth)])
@@ -1228,10 +1437,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
-        # 封存與解封是同一道門的兩面，只擋一邊等於沒擋。
-        # **這裡不能要求 active**：房被封存時 sweeper 已經把所有 agent 掃成
-        # removed，要求 active 會讓封存的房永遠解不開
-        await _creator_or_member(room, x_participant_id, x_session_key)
+        # 封存與解封是同一道門的兩面，一寬一嚴會讓人猜不出這道門管什麼。
+        # 封存收成建立者專屬之後，這裡跟著收——不然「成員封不了，但封完
+        # 之後任何曾經來過的人都解得開」，那道門形同虛設。
+        #
+        # ⚠️ 已知代價（艾斯維爾 08/31 裁決時確認過）：建立者不在、或換掉了
+        # deviceKey，那個房就永遠是唯讀的。目前沒有管理權回收機制，只有
+        # 建立者主動移交（POST /admin）。封存房唯讀而非消失，代價可承受
+        await _admin_or_403(room, x_participant_id, x_session_key,
+                            what="解除封存")
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db

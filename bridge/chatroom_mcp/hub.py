@@ -198,6 +198,16 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有目前的管理員可以移交管理權。",
                 status=status, detail=detail,
             )
+        if code == "not_request_owner":
+            # 收回**自己的**提議與「拒絕別人的提議」是兩件事：後者是建立者
+            # 的動作而且會留紀錄。講成「你沒有權限」會讓建立者去找核准鈕的
+            # 反面，而他要的其實是 resolve(approve=false)
+            return HubError(
+                _detail_text(detail)
+                or "只有提出這筆封存請求的人可以收回它——"
+                   "建立者要表達「不要封」請用婉拒，那會留下紀錄。",
+                status=status, detail=detail,
+            )
         if code == "not_message_author":
             # 與 not_message_owner 分開講：刪除連建立者也可以，編輯只限本人。
             # 講成同一句話會讓建立者以為自己「身分有問題」而去重新 join
