@@ -364,8 +364,15 @@ class Watcher:
         for m in data.get("messages", []):
             seq = m.get("seq")
             if isinstance(seq, int) and seq <= prev:
-                # 既有訊息的狀態變更（釘選/軟刪除領 update_seq 重新入流）
-                # 不喚醒——釘選牆用 chatroom_read(pinned_only) 主動撈
+                # 既有訊息因 update_seq 重新入流。**釘選不喚醒**——它是「這段
+                # 話很重要」，晚一點看到不損失什麼，而且有 chatroom_read(
+                # pinned_only) 這個主動撈得回來的介面。
+                #
+                # **編輯與撤回不一樣**：沒有任何介面撈得回「我剛才讀到的那則
+                # 被改掉了」，agent 只會拿著一份過期的內容繼續工作，而且不會
+                # 有任何地方報錯。所以這兩種要發事件——但只發給跟這件事有關
+                # 的人（見 `_edit_event_for`），別人改別人的話跟我無關。
+                self._maybe_emit_edit(m)
                 continue
             if m.get("sender_id") and m["sender_id"] == self.participant_id:
                 continue  # 自己發的不用叫醒自己（加入通知也掛著發送者）
@@ -582,6 +589,45 @@ class Watcher:
             }
         )
         self.departed = True
+
+    def _maybe_emit_edit(self, m: dict) -> None:
+        """既有訊息被編輯或撤回時，叫醒**跟它有關的人**。
+
+        界線是「我發的、或我被 @ 在裡面」：
+
+        - 我發的——即使動手的是我自己也發。這裡刻意**不沿用**上面那條
+          「自己發的不叫醒自己」：那條防的是「我剛說完話就被自己吵醒」，
+          而這裡是「我說過的話現在長得不一樣了」，那是我最需要知道的事之一
+        - 我被 @ 在裡面——我因為那個 mention 醒過一次，內容被改掉就等於我
+          那次醒來的前提沒了
+
+        其餘一律安靜。每個事件都是一次打擾，而別人改別人的話跟我無關。
+
+        system 訊息不發：Hub 已經擋掉編輯它們（`join` 訊息的 sender_id 就是
+        加入者本人，只看作者會讓房間對事實的紀錄變成「他說的話」）。所以走
+        到這裡的 system 訊息只可能是釘選或刪除，兩者都不需要喚醒。
+        """
+        if m.get("kind") == "system":
+            return
+        deleted = bool(m.get("deleted"))
+        # `edited_at` 是舊版 Hub 沒有的欄位——沒有它就是沒編輯過，安靜。
+        # **降級不壞**：收不到新事件可以接受，崩掉不行
+        edited = bool(m.get("edited_at"))
+        if not deleted and not edited:
+            return
+        mine = bool(m.get("sender_id")) and m["sender_id"] == self.participant_id
+        if not mine and not _mentions_me(m, self.display_name):
+            return
+        self.emit({
+            "event": "message_deleted" if deleted else "message_edited",
+            "room_id": self.room_id,
+            "seq": m.get("seq"),
+            "sender": m.get("sender_name"),
+            # 撤回後 content 已被 Hub 清空，給預覽只會是空字串——那看起來像
+            # 事件壞了。編輯則給新內容：知道「改成什麼」才判斷得出要不要重做
+            **({} if deleted else {"preview": _preview(m.get("content", ""))}),
+            "was_mine": mine,
+        })
 
     def emit(self, event: dict[str, Any]) -> None:
         _emit(event)
