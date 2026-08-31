@@ -86,7 +86,13 @@ class RoomFeed {
       if (oldest != null && m.seq < oldest) {
         continue;
       }
-      if (!_bySeq.containsKey(m.seq)) added++;
+      // 覆寫要有方向，與 prependHistory 同一條規則。REST 補訊與 WS 推播是
+      // 兩條並行的路徑：REST 那份在路上時 WS 可能已經送來更新的快照，
+      // 無條件覆寫會把畫面倒退回編輯前，而 cursor 早就推進了——那個舊狀態
+      // 會一直留到下次整批重抓
+      final existing = _bySeq[m.seq];
+      if (existing != null && m.cursor < existing.cursor) continue;
+      if (existing == null) added++;
       _bySeq[m.seq] = m;
       _idToSeq[m.id] = m.seq;
     }

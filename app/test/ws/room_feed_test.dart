@@ -66,6 +66,34 @@ void main() {
       expect(feed.cursor, 12, reason: 'cursor 不推進會反覆重收同一批更新');
     });
 
+    test('晚到的舊快照不得把已編輯／撤回的狀態降級回去', () {
+      // REST 補訊與 WS 推播是兩條並行的路徑。REST 那份在路上時，WS 可能
+      // 已經送來更新的快照——無條件覆寫會把畫面倒退回編輯前，而 cursor
+      // 早就推進了，於是那個舊狀態會一直留到下次整批重抓。
+      //
+      // prependHistory 已經有這條方向規則（T0-2），upsertAll 漏了同一條：
+      // 同一個病的兩處，當時只修了一處。
+      final feed = RoomFeed('r1');
+      feed.upsertAll([msg(10, updateSeq: 30, deleted: true)]);
+      expect(feed.bySeq(10)!.deleted, isTrue);
+
+      feed.upsertAll([msg(10)]); // 舊快照（cursor 10 < 30）晚到
+
+      expect(feed.bySeq(10)!.deleted, isTrue, reason: '舊快照把撤回狀態蓋回去了');
+      expect(feed.cursor, 30);
+    });
+
+    test('同 cursor 的重送仍然覆寫，不當成舊快照擋掉', () {
+      // 邊界：cursor 相等代表「同一個版本又送了一次」。擋掉它沒有壞處，
+      // 但也沒有好處，而 prependHistory 用的是 >=——兩處要一致，否則
+      // 下一個人會以為其中一邊有特殊理由
+      final feed = RoomFeed('r1');
+      feed.upsertAll([msg(10, updateSeq: 30, pinned: true)]);
+      feed.upsertAll([msg(10, updateSeq: 30, pinned: true, id: 'm10')]);
+      expect(feed.bySeq(10)!.pinned, isTrue);
+      expect(feed.length, 1);
+    });
+
     test('往上捲回來的較新快照要蓋掉手上的舊版', () {
       // 症狀是「改了畫面不動、重進房才對」——最難查的那種間歇性。
       // upsertAll 早就是覆寫語意，prependHistory 卻用 containsKey 跳過，
