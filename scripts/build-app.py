@@ -23,6 +23,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from buildstamp import dart_default_version, verify_embedded
+
 # Windows 主控台預設 CP950，訊息裡的 ✓ ⚠️ ✕ 會讓 print 直接拋
 # UnicodeEncodeError——build 明明成功卻以例外收場，看起來像失敗。
 for _stream in (sys.stdout, sys.stderr):
@@ -131,10 +133,30 @@ def main() -> int:
 
     # 檢查的是 app.so 而不是 exe：純 Dart 變更不會重寫 exe
     app_so = APP / "build/windows/x64/runner/Release/data/app.so"
-    if app_so.exists():
-        stamp = datetime.fromtimestamp(app_so.stat().st_mtime).isoformat(
-            timespec="seconds")
-        print(f"✓ {version}+{commit or 'unknown'} · Dart 產物 {stamp}")
+    if not app_so.exists():
+        print("✕ 找不到 data/app.so——build 回報成功卻沒有產物。", file=sys.stderr)
+        return 1
+
+    # **驗產物，不要只印自己打算做的事。** 上面那行 print 印的是「要編進去
+    # 的值」，而 2026-08-31 有一份 App 印著 ✓ 1.1.5+<hash>、產物裡卻是
+    # 1.0.0——沒有任何地方報錯，直到有人去讀畫面右上角（F15）
+    problems = verify_embedded(
+        app_so.read_bytes(), version, commit,
+        dart_default_version(APP / "lib/core/config/build_info.dart"),
+    )
+    if problems:
+        print("✕ 產物與這次 build 對不上：", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        print("  這份產物講不出自己是哪一版，不要拿去交付。"
+              "常見原因：另一個不帶 --dart-define 的 flutter build 蓋掉了它。",
+              file=sys.stderr)
+        return 1
+
+    stamp = datetime.fromtimestamp(app_so.stat().st_mtime).isoformat(
+        timespec="seconds")
+    print(f"✓ {version}+{commit or 'unknown'} · Dart 產物 {stamp}"
+          f" · 版本字串已在產物中驗證")
     return 0
 
 

@@ -10,6 +10,7 @@ Hub 與 bridge 的版本就失去意義，而那正是這套東西唯一的用�
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,46 @@ def report(info: dict) -> None:
     elif not info["commit"]:
         print("   ⚠️ 抓不到 commit（不在 git 工作樹裡？）"
               "——收到的人無法判斷這是哪一份程式碼")
+
+
+def dart_default_version(build_info: Path) -> str | None:
+    """`build_info.dart` 裡 `CHATROOM_VERSION` 的 defaultValue。
+
+    不硬編在這裡：那個值一旦與 Dart 側漂移，下面的檢查就會安靜地失去意義
+    ——而它正是用來抓「安靜失去意義」的。
+    """
+    try:
+        text = build_info.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(
+        r"CHATROOM_VERSION'\s*,\s*defaultValue:\s*'([^']+)'", text, re.S
+    )
+    return m.group(1) if m else None
+
+
+def verify_embedded(blob: bytes, version: str, commit: str,
+                    fallback: str | None) -> list[str]:
+    """產物裡真的有那些值嗎？回傳問題清單，空清單＝通過。
+
+    **這支存在的理由**：build 腳本結尾印的是「它打算編進去的值」，不是產物
+    裡真的有的東西。2026-08-31 有一份 App 印著 `✓ 1.1.5+<hash>`，而 app.so
+    裡是 `1.0.0`——`--dart-define` 沒生效（實際上是被另一個不帶 define 的
+    直接 build 蓋掉），沒有任何地方報錯，直到有人去讀畫面右上角。
+
+    `fallback` 仍在，是最強的訊號：它代表 Dart 端走了 defaultValue 那條路。
+    """
+    problems: list[str] = []
+    if version and blob.count(version.encode()) == 0:
+        problems.append(f"版本字串 {version!r} 不在產物裡")
+    if commit and blob.count(commit.encode()) == 0:
+        problems.append(f"commit {commit!r} 不在產物裡")
+    if fallback and fallback != version and blob.count(fallback.encode()):
+        problems.append(
+            f"產物含 build_info 的 defaultValue {fallback!r}"
+            "——表示 --dart-define 沒有生效"
+        )
+    return problems
 
 
 def git(repo: Path, *args: str) -> str:
