@@ -197,11 +197,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _scrollToBottom() {
-    _scroll.animateTo(
-      0,
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOut,
-    );
+    // 送出成功時也會走這裡，而那條路徑不保證 list 已經 attach（剛進房就
+    // 發言、或畫面正在重建）。沒有 clients 時安靜跳過捲動即可——reverse
+    // list 的初始位置本來就是底部，不捲也在對的地方
+    if (_scroll.hasClients) {
+      _scroll.animateTo(
+        0,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOut,
+      );
+    }
     setState(() => _newWhileAway = 0);
   }
 
@@ -458,6 +463,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           _replyTarget = null;
           _pending.clear();
         });
+        // 自己按下送出是明確的意圖表達：「我剛說的話在哪」比「保持原本的
+        // 閱讀位置」重要。所以**無條件**回到底部，不看 _atBottom——
+        // 往上翻歷史時發言卻看不到自己的訊息，正是「沒有自動捲動」的症狀
+        _scrollToBottom();
       }
     } on ParticipantInvalidException {
       // 身分失效：重新 join 後重試一次（僅一次，避免無限迴圈）
@@ -478,6 +487,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           _replyTarget = null;
           _pending.clear();
         });
+        // 自己按下送出是明確的意圖表達：「我剛說的話在哪」比「保持原本的
+        // 閱讀位置」重要。所以**無條件**回到底部，不看 _atBottom——
+        // 往上翻歷史時發言卻看不到自己的訊息，正是「沒有自動捲動」的症狀
+        _scrollToBottom();
       }
     } on ApiException catch (e) {
       if (mounted) {
