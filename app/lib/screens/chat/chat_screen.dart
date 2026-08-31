@@ -27,6 +27,7 @@ import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/composer_attachments.dart';
+import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
 import '../../widgets/delete_room_confirm.dart';
 import '../../widgets/room_style_picker.dart';
@@ -1713,6 +1714,12 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
               ],
             ],
           ),
+        ),
+        // 匯出**不**跟著封存收起——房間可以被永久刪除，備份正是封存之後
+        // 最需要的動作
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+          child: ExportRoomButton(roomId: widget.roomId),
         ),
         // 封存房唯讀，指派入口一併收起
         if (!widget.archived)
