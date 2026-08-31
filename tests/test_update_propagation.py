@@ -59,7 +59,7 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
             cursor = data["last_seq"]
 
             # 軟刪除同理
-            await client.delete(f"/api/messages/{mid}")
+            await client.delete(f"/api/messages/{mid}", headers=headers)
             data = (
                 await client.get(
                     f"/api/rooms/{room_id}/updates",

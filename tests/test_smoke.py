@@ -95,7 +95,8 @@ async def test_pin_and_delete(client):
     assert [m["id"] for m in r.json()["messages"]] == [mid]
 
     # 軟刪除後內容清空但保留占位
-    r = await client.delete(f"/api/messages/{mid}")
+    r = await client.delete(f"/api/messages/{mid}",
+                            headers={"X-Participant-Id": pid})
     assert r.status_code == 200
     r = await client.get(f"/api/rooms/{room_id}/messages",
                          headers={"X-Participant-Id": pid})

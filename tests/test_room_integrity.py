@@ -137,7 +137,10 @@ async def test_archived_room_semantics(tmp_path):
             assert r.status_code == 409
 
             # 人類軟刪除（管控）與成員離開仍允許
-            assert (await client.delete(f"/api/messages/{mid}")).status_code == 200
+            # 建立者自報 session key 就刪得掉（他還沒 join 自己的房）
+            assert (await client.delete(
+                f"/api/messages/{mid}",
+                headers={"X-Session-Key": "owner-key"})).status_code == 200
             assert (
                 await client.post(f"/api/rooms/{room_id}/leave", headers=headers)
             ).status_code == 200

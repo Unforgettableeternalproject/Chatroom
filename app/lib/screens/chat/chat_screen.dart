@@ -558,7 +558,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
     if (confirmed ?? false) {
       try {
-        await ref.read(messagesApiProvider).delete(m.id);
+        final identity = await ref.read(identityProvider(widget.roomId).future);
+        await ref
+            .read(messagesApiProvider)
+            .delete(m.id, participantId: identity.participantId);
       } on ApiException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context)

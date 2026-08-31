@@ -143,7 +143,11 @@ class MessagesApi {
             options: Options(headers: {'X-Participant-Id': participantId}),
           ));
 
-  /// 人類管控用的軟刪除；server 端不驗 participant，靠 API token。
-  Future<void> delete(String messageId) =>
-      unwrap(() => _dio.delete('/api/messages/$messageId'));
+  /// 軟刪除（撤回）。**本人或聊天室建立者**才做得到——Hub 端會驗身分，
+  /// 沒帶 `X-Participant-Id` 一律 401，所以這個參數不是選填。
+  Future<void> delete(String messageId, {required String participantId}) =>
+      unwrap(() => _dio.delete(
+            '/api/messages/$messageId',
+            options: Options(headers: {'X-Participant-Id': participantId}),
+          ));
 }

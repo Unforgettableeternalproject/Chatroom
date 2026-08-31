@@ -1939,10 +1939,79 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.delete("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
-    async def delete_message(message_id: str):
-        # 人類管控用的軟刪除；不驗證 participant，靠 API token
+    async def delete_message(
+        message_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """軟刪除一則訊息。**本人或房間建立者**，其他人不行。
+
+        原本這裡只驗 API token——那等於「拿得到 token 的人可以抹掉任何人說過
+        的話」。token 確實是這個系統的信任邊界，但那條邊界管的是「能不能連進
+        來」；誰能抹掉誰的發言是房內的事，兩者不該共用同一個判定。
+
+        這個權限模型**只涵蓋刪除，不要拿去給編輯沿用**：刪除在畫面上留得下
+        痕跡（`deleted=1`，UI 顯示為已撤回），編輯不會——「改了看不出來」是
+        另一種風險，界線要單獨畫。
+
+        父層刪得掉自己子代理發的訊息：子代理是父層的一部分，不是另一個人。
+        反過來不成立（子代理的 handle 是暫態的，不該能抹掉父層的發言）。
+        """
         room_id = await _message_room(message_id)
         db = app.state.db
+        msg = await (
+            await db.execute(
+                "SELECT sender_id FROM message WHERE id=?", (message_id,)
+            )
+        ).fetchone()
+        room = await (
+            await db.execute("SELECT * FROM room WHERE id=?", (room_id,))
+        ).fetchone()
+
+        allowed = bool(
+            room is not None
+            and room["creator_session_key"]
+            and x_session_key == room["creator_session_key"]
+        )
+        if not allowed:
+            if not x_participant_id:
+                # 與 `_member_or_403` 同一條理由：「你沒說你是誰」與「你不是
+                # 這則訊息的主人」把人導向完全不同的處置，不能講成同一句話
+                raise _err(401, "participant_header_required",
+                           "請求沒有帶 X-Participant-Id。刪除訊息要證明你是"
+                           "發送者本人，或是這個聊天室的建立者")
+            me = await (
+                await db.execute(
+                    "SELECT id, session_key, parent_id FROM participant"
+                    " WHERE id=? AND room_id=?",
+                    (x_participant_id, room_id),
+                )
+            ).fetchone()
+            if me is None:
+                # 跨房身分在這裡也要擋住，且不要洩漏「那則訊息存在於別的房」
+                raise _err(403, "not_message_owner",
+                           "只有發送者本人或聊天室建立者可以刪除這則訊息")
+            sender = msg["sender_id"] if msg is not None else None
+            if me["id"] == sender:
+                allowed = True
+            elif room is not None and room["creator_session_key"] and (
+                me["session_key"] == room["creator_session_key"]
+            ):
+                allowed = True
+            elif sender:
+                sender_row = await (
+                    await db.execute(
+                        "SELECT parent_id FROM participant WHERE id=?", (sender,)
+                    )
+                ).fetchone()
+                allowed = bool(
+                    sender_row is not None
+                    and sender_row["parent_id"] == me["id"]
+                )
+        if not allowed:
+            raise _err(403, "not_message_owner",
+                       "只有發送者本人或聊天室建立者可以刪除這則訊息")
+
         await db.execute("UPDATE message SET deleted=1 WHERE id=?", (message_id,))
         await _touch_message(message_id, room_id)
         return {"ok": True}

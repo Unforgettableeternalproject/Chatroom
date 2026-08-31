@@ -217,7 +217,9 @@ async def test_deleted_message_hides_its_attachments(tmp_path):
                 json={"content": "圖", "attachment_ids": [aid]},
                 headers={"X-Participant-Id": me["participant_id"]},
             )).json()["id"]
-            await client.delete(f"/api/messages/{mid}")
+            await client.delete(
+                f"/api/messages/{mid}",
+                headers={"X-Participant-Id": me["participant_id"]})
 
             msgs = (
                 await client.get(f"/api/rooms/{room_id}/messages",
