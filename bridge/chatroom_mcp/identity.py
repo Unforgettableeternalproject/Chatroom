@@ -20,6 +20,18 @@ def agent_kind() -> str:
     return os.environ.get("CHATROOM_AGENT_KIND", "other")
 
 
+# kind → 該平台提供原生 session 身分的環境變數，依優先序。
+#
+# **只查自己這個 kind 的那幾個**——這張表的形狀本身就是那條隔離規則：
+# 想加一個變數就得先決定它屬於哪個 kind，沒有「順便也看一下別人的」這種寫法。
+_PLATFORM_SESSION_VARS: dict[str, tuple[tuple[str, str], ...]] = {
+    "claude": (("claude", "CLAUDE_CODE_SESSION_ID"),),
+    # thread id 優先：App 的 dispatcher 掃的 writer lock 用的是它，兩邊必須
+    # 對齊，否則指派路由不到（G1 的實際病灶）
+    "codex": (("codex", "CODEX_THREAD_ID"), ("codex", "CODEX_SESSION_ID")),
+}
+
+
 def session_key(kind: str | None = None) -> str:
     """解析本進程的 session 識別。
 
@@ -27,23 +39,36 @@ def session_key(kind: str | None = None) -> str:
     1. 顯式 ``CHATROOM_SESSION_KEY``——固定人格身分（特殊部署／測試用）。
        注意這是進程層級的設定：寫進專案 `.mcp.json` 會讓同專案所有 session
        共用同一把 key，因 join 冪等而合併成同一個 participant，訊息混流。
-    2. agent 平台的 session id——Claude Code 會把 ``CLAUDE_CODE_SESSION_ID``
-       傳進 MCP 進程環境（2026-08-28 實測）。以它當識別符，resume 同一個
-       session 時身分與游標延續，新 session 天然是新 participant。
-       僅在 kind=claude 時採用：從 Claude session 的 shell 拉起的 Codex
-       會「繼承」到母 session 的這個變數，直接採用會與母 session 撞 key。
-    3. 每進程各自生成——多開 session 必須是不同的 participant；若沿用
-       機器層級共用 keyfile，多個 session 會因 join 冪等合併成同一身分。
+    2. agent 平台的 session id——**每個 kind 只認自己的那個變數**：
+
+       - Claude Code 把 ``CLAUDE_CODE_SESSION_ID`` 傳進 MCP 進程環境
+         （2026-08-28 實測）
+       - Codex 提供 ``CODEX_THREAD_ID``（與 App 掃到的 writer lock 同值），
+         ``CODEX_SESSION_ID`` 作為次選（2026-08-31 在 Codex 實例上實證）
+
+       以它當識別符，同一個 session 重連時身分與游標延續，新 session 天然
+       是新 participant。
+
+       **跨 kind 一律不採用。** 從 Claude session 的 shell 拉起的 Codex 會
+       「繼承」到母 session 的 ``CLAUDE_CODE_SESSION_ID``，反方向同理；
+       不設防的話兩個進程撞同一把 key，而 join 冪等會把它們合併成同一個
+       participant——訊息混流，兩邊都不會報錯。
+    3. 每進程各自生成——最後防線。多開 session 必須是不同的 participant；
+       若沿用機器層級共用 keyfile，多個 session 會因 join 冪等合併成同一身分。
+
+       ⚠️ 但**落到這一層就是 G1 那個病**：進程重啟換一把新 key，於是指派送到
+       舊 key 上、監看掛在新 key 上，永遠不會醒且沒有任何錯誤訊息。它只該是
+       「這個平台沒有提供原生身分」時的退路，不該是常態。
     """
     if kind is None:
         kind = agent_kind()
     env = os.environ.get("CHATROOM_SESSION_KEY")
     if env:
         return env
-    if kind == "claude":
-        platform_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    for allowed_kind, var in _PLATFORM_SESSION_VARS.get(kind, ()):
+        platform_sid = os.environ.get(var)
         if platform_sid:
-            return f"claude-{platform_sid}"
+            return f"{allowed_kind}-{platform_sid}"
     return f"{kind}-{uuid.uuid4().hex[:12]}"
 
 
