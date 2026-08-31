@@ -2093,8 +2093,37 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"assignments": [dict(r) for r in rows]}
 
     @app.post("/api/assignments/{assignment_id}/resolve", dependencies=[Depends(require_auth)])
-    async def resolve_assignment(assignment_id: str, body: AssignmentResolve):
+    async def resolve_assignment(
+        assignment_id: str, body: AssignmentResolve,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """被指派方回應一筆指派（接受／婉拒）。**只有本人**。
+
+        原本只驗 API token——任何持 token 者都能替別人 accept 或 decline，
+        而被指派的那一方連「有人代我婉拒了」都不會知道。指派的收件人是一把
+        session key，回應它的資格自然也是同一把。
+
+        門檻用 `X-Session-Key` 而不是 participant：回應指派發生在**進房之前**
+        （婉拒的人根本不會進房），這時還沒有 participant 身分可用。
+        """
         db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT target_session_key FROM assignment WHERE id=?",
+                (assignment_id,),
+            )
+        ).fetchone()
+        if row is None:
+            raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
+        if not x_session_key:
+            # 與其他端點同一條理由：「你沒說你是誰」與「這不是給你的」把人
+            # 導向完全不同的處置，不能講成同一句話
+            raise _err(401, "session_key_header_required",
+                       "請求沒有帶 X-Session-Key。回應指派要證明你就是被指派的"
+                       "那個 session")
+        if x_session_key != row["target_session_key"]:
+            raise _err(403, "not_assignment_target",
+                       "這筆指派不是給你的，只有被指派的 session 能回應它")
         cur = await db.execute(
             "UPDATE assignment SET status=?, resolved_at=? WHERE id=? AND status='pending'"
             " RETURNING id",
@@ -2106,7 +2135,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.delete("/api/assignments/{assignment_id}", dependencies=[Depends(require_auth)])
-    async def cancel_assignment(assignment_id: str):
+    async def cancel_assignment(
+        assignment_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         """指派方收回一筆還沒被處理的指派。
 
         與 resolve 是相反方向的動作：resolve 是被指派方回應（接受／婉拒），
@@ -2118,6 +2151,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         的判斷，事後看紀錄時分不出「他不想做」與「我不需要了」是兩件事。
         """
         db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT room_id FROM assignment WHERE id=?", (assignment_id,)
+            )
+        ).fetchone()
+        if row is None:
+            raise _err(404, "assignment_not_found",
+                       "找不到這筆指派，或它已經被處理過了")
+        # 收回是**房內的管理動作**，門檻與「誰看得到這個房的指派列表」一致；
+        # 與 resolve 的「本人」是兩條不同的界線，不共用判定
+        room = await _room_or_404(row["room_id"], allow_archived=True)
+        await _creator_or_member(room, x_participant_id, x_session_key)
         cur = await db.execute(
             "UPDATE assignment SET status='cancelled', resolved_at=?"
             " WHERE id=? AND status='pending' RETURNING id",

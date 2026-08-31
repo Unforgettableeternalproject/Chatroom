@@ -267,7 +267,9 @@ async def test_room_assignments_and_list_metadata_and_reply_preview(tmp_path):
                     json={"target_session_key": "sx", "note": "來"},
                 )
             ).json()["id"]
-            await client.post(f"/api/assignments/{aid}/resolve", json={"status": "declined"})
+            await client.post(f"/api/assignments/{aid}/resolve",
+                              json={"status": "declined"},
+                              headers={"X-Session-Key": "sx"})
 
             # 房間視角的指派列表（含已解決的）
             data = (await client.get(

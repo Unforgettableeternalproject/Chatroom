@@ -142,7 +142,8 @@ async def test_assignment_expiry(tmp_path):
                 )
             ).json()["id"]
             await client.post(
-                f"/api/assignments/{aid2}/resolve", json={"status": "accepted"}
+                f"/api/assignments/{aid2}/resolve", json={"status": "accepted"},
+                headers={"X-Session-Key": "sess-y"},
             )
 
             await app.state.sweep_once()

@@ -744,6 +744,9 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
     return hub().request(
         "POST",
         f"/api/assignments/{assignment_id}/resolve",
+        # 指派是寄給一把 session key 的，回應它的資格也是同一把。用 canonical
+        # key（見 `_my_session_key`）——報錯的話 Hub 會判定「這不是給你的」
+        session_key=_my_session_key(),
         json={"status": "accepted" if accept else "declined"},
     )
 

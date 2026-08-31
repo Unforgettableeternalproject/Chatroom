@@ -12,6 +12,10 @@ from chatroom_server.app import create_app
 from chatroom_server.config import Config
 
 
+# 收回是房內的管理動作，門檻是建立者或成員；這些案例一律由房主收回
+_owner = {"X-Session-Key": "owner-key"}
+
+
 async def _make(tmp_path, name):
     cfg = Config(db_path=str(tmp_path / f"{name}.db"), api_token="")
     app = create_app(cfg)
@@ -39,7 +43,7 @@ async def test_cancel_pending_removes_it_from_target_queue(tmp_path):
         r = await client.get("/api/assignments", params={"session_key": "claude-target"})
         assert [a["id"] for a in r.json()["assignments"]] == [aid]
 
-        r = await client.delete(f"/api/assignments/{aid}")
+        r = await client.delete(f"/api/assignments/{aid}", headers=_owner)
         assert r.status_code == 200
 
         # 收回後對方就不該再看到它——不然 watcher 還是會把人叫起來
@@ -52,7 +56,7 @@ async def test_cancelled_status_is_distinct_from_declined(tmp_path):
     app, client = await _make(tmp_path, "distinct")
     async with app.router.lifespan_context(app), client:
         room_id, aid = await _room_with_assignment(client)
-        await client.delete(f"/api/assignments/{aid}")
+        await client.delete(f"/api/assignments/{aid}", headers=_owner)
 
         r = await client.get(f"/api/rooms/{room_id}/assignments",
                              headers={"X-Session-Key": "owner-key"})
@@ -67,9 +71,11 @@ async def test_cannot_cancel_an_already_accepted_assignment(tmp_path):
     app, client = await _make(tmp_path, "accepted")
     async with app.router.lifespan_context(app), client:
         _, aid = await _room_with_assignment(client)
-        await client.post(f"/api/assignments/{aid}/resolve", json={"status": "accepted"})
+        await client.post(f"/api/assignments/{aid}/resolve",
+                                  json={"status": "accepted"},
+                                  headers={"X-Session-Key": "claude-target"})
 
-        r = await client.delete(f"/api/assignments/{aid}")
+        r = await client.delete(f"/api/assignments/{aid}", headers=_owner)
         assert r.status_code == 404
         assert r.json()["detail"]["code"] == "assignment_not_found"
 
@@ -80,13 +86,13 @@ async def test_cancel_twice_is_not_silently_ok(tmp_path):
     app, client = await _make(tmp_path, "twice")
     async with app.router.lifespan_context(app), client:
         _, aid = await _room_with_assignment(client)
-        assert (await client.delete(f"/api/assignments/{aid}")).status_code == 200
-        assert (await client.delete(f"/api/assignments/{aid}")).status_code == 404
+        assert (await client.delete(f"/api/assignments/{aid}", headers=_owner)).status_code == 200
+        assert (await client.delete(f"/api/assignments/{aid}", headers=_owner)).status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_cancel_unknown_assignment_is_404(tmp_path):
     app, client = await _make(tmp_path, "unknown")
     async with app.router.lifespan_context(app), client:
-        r = await client.delete("/api/assignments/nope")
+        r = await client.delete("/api/assignments/nope", headers=_owner)
         assert r.status_code == 404

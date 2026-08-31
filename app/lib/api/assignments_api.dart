@@ -81,13 +81,35 @@ class AssignmentsApi {
 
   /// 指派方收回一筆還沒被處理的指派。與 [resolve] 是相反方向的動作——
   /// 那是被指派方回應，這是指派方反悔——所以狀態也分開（cancelled）。
-  Future<void> cancel(String assignmentId) =>
-      unwrap(() => _dio.delete('/api/assignments/$assignmentId'));
+  ///
+  /// 收回是**房內的管理動作**，Hub 端要求建立者或成員身分：房主還沒 join
+  /// 自己的房時只有 session key 可自報，所以兩種都送得出去。
+  Future<void> cancel(
+    String assignmentId, {
+    required String sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() => _dio.delete(
+            '/api/assignments/$assignmentId',
+            options: Options(headers: {
+              'X-Session-Key': sessionKey,
+              'X-Participant-Id': ?participantId,
+            }),
+          ));
 
   /// 處理一筆指派：accept=true 標為 accepted，false 標為 declined。
-  Future<void> resolve(String assignmentId, {required bool accept}) =>
+  ///
+  /// 只有**被指派的那把 session key** 做得到（Hub 端驗）——指派是寄給一把
+  /// key 的，回應它的資格也是同一把。這動作發生在進房之前，所以身分只能
+  /// 用 session key 自報，沒有 participant 可用。
+  Future<void> resolve(
+    String assignmentId, {
+    required bool accept,
+    required String sessionKey,
+  }) =>
       unwrap(() => _dio.post(
             '/api/assignments/$assignmentId/resolve',
             data: {'status': accept ? 'accepted' : 'declined'},
+            options: Options(headers: {'X-Session-Key': sessionKey}),
           ));
 }

@@ -165,6 +165,12 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 _detail_text(detail) or "這個動作只有聊天室建立者做得到。",
                 status=status, detail=detail,
             )
+        if code == "not_assignment_target":
+            return HubError(
+                _detail_text(detail)
+                or "這筆指派不是給你的，只有被指派的 session 能回應它。",
+                status=status, detail=detail,
+            )
         if code == "not_message_owner":
             return HubError(
                 _detail_text(detail)
@@ -262,12 +268,17 @@ class HubClient:
         self.timeout = timeout
         self.transport = transport
 
-    def _headers(self, participant_id: str | None) -> dict[str, str]:
+    def _headers(
+        self, participant_id: str | None, session_key: str | None = None
+    ) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         if participant_id:
             headers["X-Participant-Id"] = participant_id
+        if session_key:
+            # 房**外**的身分：回應指派發生在進房之前，那時還沒有 participant
+            headers["X-Session-Key"] = session_key
         return headers
 
     def request(
@@ -276,6 +287,7 @@ class HubClient:
         path: str,
         *,
         participant_id: str | None = None,
+        session_key: str | None = None,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
@@ -290,7 +302,7 @@ class HubClient:
         try:
             with httpx.Client(
                 base_url=self.base_url,
-                headers=self._headers(participant_id),
+                headers=self._headers(participant_id, session_key),
                 timeout=timeout or self.timeout,
                 transport=self.transport,
             ) as client:

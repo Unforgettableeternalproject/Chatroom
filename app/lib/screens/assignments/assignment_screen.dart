@@ -122,7 +122,11 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
     );
     if (!(confirmed ?? false)) return;
     try {
-      await ref.read(assignmentsApiProvider).cancel(a.id);
+      await ref.read(assignmentsApiProvider).cancel(
+            a.id,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            participantId: ref.read(settingsRepoProvider).participantId(widget.roomId),
+          );
     } on ApiException catch (e) {
       // 常見情境：對方剛好在這幾秒內接受了。訊息照 Hub 的講法，不要自己編
       if (mounted) {

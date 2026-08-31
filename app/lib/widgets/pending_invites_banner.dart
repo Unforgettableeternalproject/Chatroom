@@ -21,7 +21,11 @@ class PendingInvitesBanner extends ConsumerWidget {
   Future<void> _decline(
       BuildContext context, WidgetRef ref, Assignment a) async {
     try {
-      await ref.read(assignmentsApiProvider).resolve(a.id, accept: false);
+      await ref.read(assignmentsApiProvider).resolve(
+            a.id,
+            accept: false,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
     } on ApiException catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)

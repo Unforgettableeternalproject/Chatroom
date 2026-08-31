@@ -254,7 +254,8 @@ async def test_accepted_assignment_id_can_still_bind_join(client):
     thread_id = "019d0000-0000-7000-8000-000000000002"
     aid = await _assign(client, room_id, thread_id)
     resolved = await client.post(
-        f"/api/assignments/{aid}/resolve", json={"status": "accepted"}
+        f"/api/assignments/{aid}/resolve", json={"status": "accepted"},
+        headers={"X-Session-Key": thread_id},
     )
     assert resolved.status_code == 200
 
