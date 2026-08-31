@@ -988,8 +988,11 @@ def chatroom_questions(room_id: str, pending_only: bool = True) -> dict:
     重複發問。
     """
     params = {"status": "pending"} if pending_only else None
-    data = hub().request(
-        "GET", f"/api/rooms/{room_id}/questions", params=params
+    # 房間是讀取邊界，這條路徑在 Hub 端跑 `_member_or_403`——走 `_room_request`
+    # 才會帶上 X-Participant-Id。裸的 hub().request 在這裡是必然的 403，而錯誤
+    # 訊息會說「請先 join」，把呼叫端導向一個永遠無效的處置（2026-08-31 實測）
+    data = _room_request(
+        room_id, "GET", f"/api/rooms/{room_id}/questions", params=params
     )
     return {"questions": data["questions"]}
 
