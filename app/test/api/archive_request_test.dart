@@ -7,15 +7,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// 回一份指定的 JSON，並記下請求。
 class _Stub implements HttpClientAdapter {
-  _Stub(this.body, {this.status = 200});
+  _Stub(this.body);
 
   final Map<String, dynamic> body;
-  final int status;
+  static const status = 200;
   final List<RequestOptions> seen = [];
 
   @override
   Future<ResponseBody> fetch(
-      RequestOptions options, Stream<Uint8List>? _, Future<void>? __) async {
+      RequestOptions options, Stream<Uint8List>? _, Future<void>? _) async {
     seen.add(options);
     return ResponseBody.fromString(jsonEncode(body), status, headers: {
       Headers.contentTypeHeader: [Headers.jsonContentType],

@@ -162,6 +162,12 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
               status: _status,
               onChanged: (v) => setState(() => _status = v),
             ),
+            // 主持人模式。只有持主 token 的人看得到這一列——對其他人來說
+            // 一個永遠按不動的開關比沒有這個開關更難懂
+            if (roomsAsync.value?.youAreHost ?? false) ...[
+              const SizedBox(height: 8),
+              _HostModeToggle(on: ref.watch(hostViewProvider)),
+            ],
             const SizedBox(height: 8),
             Container(
               decoration: BoxDecoration(
@@ -677,5 +683,53 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
         ),
       ),
     ]);
+  }
+}
+
+/// 主持人模式開關。
+///
+/// 開著時列表含**所有人的**房間（包含自己沒份的私人房），所以它必須在畫面
+/// 上看得出來——一份清單兩種含意而外觀一樣，是最容易讓人把別人的私人房
+/// 當成自己的那種形狀。開著時整條變成金色並明說現在看到的是什麼。
+class _HostModeToggle extends ConsumerWidget {
+  const _HostModeToggle({required this.on});
+
+  final bool on;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    return InkWell(
+      onTap: () => ref.read(hostViewProvider.notifier).toggle(),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: on ? UepColors.gold.withValues(alpha: .09) : null,
+          border: Border.all(
+            color: on ? UepColors.gold.withValues(alpha: .5) : s.line,
+          ),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(children: [
+          Icon(
+            on ? Icons.visibility : Icons.visibility_off_outlined,
+            size: 14,
+            color: on ? UepColors.gold : s.inkMute,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              on ? '主持人模式：看得到全部聊天室' : '主持人模式',
+              style: UepText.sans(
+                size: 11.5,
+                color: on ? UepColors.gold : s.inkMute,
+                weight: on ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 }

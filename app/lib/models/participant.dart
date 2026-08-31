@@ -16,6 +16,8 @@ class Participant {
     this.distinctHint,
     this.ephemeral = false,
     this.parentId,
+    this.isAdmin = false,
+    this.isHost = false,
   });
 
   final String id;
@@ -46,6 +48,16 @@ class Participant {
   /// 依附的父成員 id；一般成員為 null。
   final String? parentId;
 
+  /// 這個房的建立者（管理員）。
+  final bool isAdmin;
+
+  /// Hub 的主持人：拿 `.env` 主 token 進來的那個人。
+  ///
+  /// 與 [isAdmin] **是兩件事**——admin 是「這個房是他開的」，host 是
+  /// 「這台 Hub 是他的」。一個人可以只是其中一種，所以兩個標籤各自顯示，
+  /// 不可以合併成一顆「管理員」badge。
+  final bool isHost;
+
   bool get isActive => status == 'active';
   bool get isHuman => role == 'human';
 
@@ -67,6 +79,10 @@ class Participant {
         // 存在之前的實際語意
         ephemeral: (json['ephemeral'] as bool?) ?? false,
         parentId: json['parent_id'] as String?,
+        isAdmin: (json['is_admin'] as bool?) ?? false,
+        // 舊 Hub 不回 is_host——false＝不知道。在別人的名字旁邊掛一個他
+        // 沒有的身分，比留白糟得多
+        isHost: (json['is_host'] as bool?) ?? false,
       );
 
   @override
@@ -75,8 +91,11 @@ class Participant {
       other.id == id &&
       other.status == status &&
       other.lastSeenAt == lastSeenAt &&
-      other.parentId == parentId;
+      other.parentId == parentId &&
+      other.isAdmin == isAdmin &&
+      other.isHost == isHost;
 
   @override
-  int get hashCode => Object.hash(id, status, lastSeenAt, parentId);
+  int get hashCode =>
+      Object.hash(id, status, lastSeenAt, parentId, isAdmin, isHost);
 }

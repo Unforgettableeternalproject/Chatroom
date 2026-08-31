@@ -2062,6 +2062,18 @@ class _MemberTile extends StatelessWidget {
                         )
                       else
                         KindBadge(kind: p.kind, compact: true),
+                      // 主持人與建立者是兩個**不同**的身分，兩顆都掛：
+                      // HOST＝這台 Hub 是他的，ADMIN＝這個房是他開的。
+                      // 合成一顆「管理員」會讓「誰能封這個房」與「誰能看
+                      // 所有房」變得分不出來
+                      if (p.isHost) ...[
+                        const SizedBox(width: 5),
+                        _RoleBadge(label: 'HOST', color: UepColors.gold),
+                      ],
+                      if (p.isAdmin) ...[
+                        const SizedBox(width: 5),
+                        _RoleBadge(label: 'ADMIN', color: s.inkMute),
+                      ],
                       if (p.previousName != null) ...[
                         const SizedBox(width: 7),
                         Flexible(
@@ -2416,6 +2428,32 @@ class _StyleDialogState extends State<_StyleDialog> {
         ),
         UepButton(label: '套用', small: true, onPressed: _submit),
       ],
+    );
+  }
+}
+
+/// 成員名字旁邊的身分標籤（HOST / ADMIN）。
+///
+/// 刻意做成外框而不是實心：實心的色塊在名字旁邊會搶掉名字本身，而這裡
+/// 要回答的是「這個人是誰」，身分是附註。
+class _RoleBadge extends StatelessWidget {
+  const _RoleBadge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withValues(alpha: .55)),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        label,
+        style: UepText.mono(size: 8, color: color, letterSpacing: 1.1),
+      ),
     );
   }
 }

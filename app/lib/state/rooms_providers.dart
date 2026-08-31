@@ -13,6 +13,9 @@ final roomListProvider =
     FutureProvider.family<RoomListResult, String>((ref, status) async {
   final api = ref.watch(roomsApiProvider);
   final config = ref.watch(appConfigProvider);
+  // 主持人模式切換時要重撈——列表的內容會從「有份的房」變成「全部的房」。
+  // dio 的 interceptor 是現讀的，但 provider 不 watch 就不會知道該重跑
+  ref.watch(hostViewProvider);
   return api.list(
     status: status,
     sessionKey: config.deviceKey,

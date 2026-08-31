@@ -13,6 +13,7 @@ Dio createApiDio({
   required String? token,
   Duration connectTimeout = const Duration(seconds: 6),
   Duration receiveTimeout = const Duration(seconds: 30),
+  bool Function()? hostView,
 }) {
   final dio = Dio(BaseOptions(
     baseUrl: baseUrl,
@@ -23,6 +24,12 @@ Dio createApiDio({
     onRequest: (options, handler) {
       if (token != null && token.isNotEmpty) {
         options.headers['Authorization'] = 'Bearer $token';
+      }
+      // 主持人視角。**每次請求現讀**而不是建 dio 時就決定——開關要能即時
+      // 生效，而重建 dio 會把連線一起關掉。Hub 端仍會驗這把 token 是不是
+      // 主 token，帶了不代表過得了
+      if (hostView != null && hostView()) {
+        options.headers['X-Host-View'] = '1';
       }
       handler.next(options);
     },

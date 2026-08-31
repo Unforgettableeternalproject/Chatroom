@@ -100,10 +100,35 @@ final appConfigProvider =
 
 // ---------- API ----------
 
+/// 主持人模式開關。**預設關**——持主 token 不等於隨時在用那個身分。
+///
+/// 這是「明確切換」的 client 這一半：Hub 只在請求帶著 `X-Host-View` 時才
+/// 用主持人身分放行，而那個標頭由這個 provider 決定要不要帶。開關關著時
+/// App 的行為與任何一般使用者完全一樣。
+///
+/// 刻意**不持久化**：主持人視角看得到所有人的私人房，讓它跨重啟活著等於
+/// 悄悄變成預設值。每次開 App 要重新打開，那個摩擦是刻意的。
+final hostViewProvider = NotifierProvider<HostViewNotifier, bool>(
+    HostViewNotifier.new);
+
+class HostViewNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void set(bool on) => state = on;
+  void toggle() => state = !state;
+}
+
 final dioProvider = Provider((ref) {
   final config = ref.watch(
       appConfigProvider.select((c) => (c.serverUrl, c.token)));
-  final dio = createApiDio(baseUrl: config.$1, token: config.$2);
+  // hostView 用 read 不用 watch：watch 會讓每次切換都重建 dio（連線一起
+  // 關掉），而 interceptor 是每次請求現讀的，不需要重建
+  final dio = createApiDio(
+    baseUrl: config.$1,
+    token: config.$2,
+    hostView: () => ref.read(hostViewProvider),
+  );
   ref.onDispose(dio.close);
   return dio;
 });
@@ -143,9 +168,14 @@ final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
 final realtimeServiceProvider = Provider((ref) {
   final config = ref.watch(
       appConfigProvider.select((c) => (c.serverUrl, c.token)));
+  // 主持人模式**要 watch**（不像 dio 那樣 read）：WS 的授權是在連線與
+  // subscribe 當下決定的，切換模式必須重連才會生效。不重連的話開關看起來
+  // 有反應（REST 立刻變了）但即時通道還停在舊身分上
+  final hostView = ref.watch(hostViewProvider);
   final service = RealtimeService(
     messagesApi: ref.watch(messagesApiProvider),
-    wsUriBuilder: () => WsProtocol.wsUri(config.$1, config.$2),
+    wsUriBuilder: () =>
+        WsProtocol.wsUri(config.$1, config.$2, hostView: hostView),
   );
   service.start();
   ref.onDispose(() => service.dispose());

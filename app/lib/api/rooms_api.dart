@@ -11,12 +11,24 @@ class RoomListResult {
   const RoomListResult({
     required this.rooms,
     this.pendingAssignments = const [],
+    this.youAreHost = false,
+    this.hostView = false,
   });
 
   final List<Room> rooms;
 
   /// 帶 session_key 查詢時，Hub 一併回傳指派給該 session 的 pending 邀請。
   final List<Assignment> pendingAssignments;
+
+  /// 手上這把 token 是不是 Hub 的主 token。決定「主持人模式」開關要不要
+  /// 出現——**與開關現在是開是關無關**（那是 [hostView]）。合成一個的話，
+  /// 開關會在被打開之後才出現，而使用者永遠找不到它。
+  final bool youAreHost;
+
+  /// 這份列表是不是用主持人視角撈的（＝含所有人的私人房）。
+  /// UI 要看得出自己正在看哪一種列表：同一份清單兩種含意而畫面長一樣，
+  /// 最容易讓人把別人的私人房當成自己的。
+  final bool hostView;
 }
 
 /// 按下封存之後實際發生的事。
@@ -194,7 +206,12 @@ class RoomsApi {
                 const [])
             .map((e) => Assignment.fromJson(e as Map<String, dynamic>))
             .toList();
-        return RoomListResult(rooms: rooms, pendingAssignments: pending);
+        return RoomListResult(
+          rooms: rooms,
+          pendingAssignments: pending,
+          youAreHost: (res.data?['you_are_host'] as bool?) ?? false,
+          hostView: (res.data?['host_view'] as bool?) ?? false,
+        );
       });
 
   Future<Room> create({
