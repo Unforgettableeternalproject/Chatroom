@@ -77,4 +77,38 @@ void main() {
       expect(out.map((p) => p.id).toSet().length, 5);
     });
   });
+
+  _groupingTests();
+}
+
+/// 成員列分組：結束的子代理不進「已離開」。
+///
+/// 一般成員離開是有意義的資訊，子代理是一次性的臨時分身——它結束就是它該
+/// 消失。留墓碑的話每派一次就多一塊，成員列會被撐長。
+List<Participant> goneSection(List<Participant> members) =>
+    members.where((p) => !p.isActive && !p.ephemeral).toList();
+
+void _groupingTests() {
+  group('已離開分組', () {
+    test('結束的子代理不列進已離開', () {
+      final gone = goneSection([
+        _p('a', 'Novia'),
+        Participant(
+          id: 's1', kind: 'claude', displayName: '米勒', role: 'agent',
+          status: 'left', joinedAt: '', ephemeral: true, parentId: 'a',
+        ),
+      ]);
+      expect(gone, isEmpty);
+    });
+
+    test('一般成員離開照樣列出來——這條修法不該外溢', () {
+      final gone = goneSection([
+        Participant(
+          id: 'b', kind: 'claude', displayName: '米絲媞', role: 'agent',
+          status: 'left', joinedAt: '',
+        ),
+      ]);
+      expect(gone.map((p) => p.displayName), ['米絲媞']);
+    });
+  });
 }

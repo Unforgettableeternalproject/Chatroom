@@ -59,6 +59,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   int? _highlightSeq;
   Timer? _highlightTimer;
   bool _loadingOlder = false;
+  Timer? _memberPoll;
+  DateTime? _lastMemberFetch;
 
   /// 待送附件。先上傳、送出時才把 id 帶進訊息——見 ComposerAttachment 的說明。
   final List<ComposerAttachment> _pending = [];
@@ -74,6 +76,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     _scroll.addListener(_onScroll);
     _startHeartbeat();
+    _startMemberPoll();
     // 通知抑制的 activeRoomId 由 router 推導（見 app.dart _syncActiveRoom）——
     // 綁在這裡的話，被 push 蓋住而沒 dispose 時會繼續抑制通知
     if (widget.focusSeq != null) {
@@ -92,6 +95,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _lastSeenCount = 0;
       _lastSystemCount = null;
       _startHeartbeat();
+      _startMemberPoll();
     }
     if (widget.focusSeq != null && widget.focusSeq != old.focusSeq) {
       _focusOn(widget.focusSeq!);
@@ -102,6 +106,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void dispose() {
     _heartbeat?.cancel();
     _highlightTimer?.cancel();
+    _memberPoll?.cancel();
     // 離開畫面時把還在傳的取消掉，否則它會傳完後往一個已 dispose 的 State
     // 寫結果；已傳完的就留在 Hub 上（無主附件，不影響任何人）
     for (final a in _pending) {
@@ -111,6 +116,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     _scroll.dispose();
     super.dispose();
+  }
+
+  // ---------- 成員列的定期重抓 ----------
+
+  /// 成員列原本只在「系統訊息數量變了」時重抓（見底下的 ref.listen）。
+  ///
+  /// **subagent 的進出不進訊息流**（設計如此，見 docs/SUBAGENT-IDENTITY.md
+  /// §2），所以那個觸發器對它們完全不作用：子代理加入時列表不會長出來、
+  /// 結束時也不會消失，要離房重進才對。實際看到的是後者——一個已經結束的
+  /// 子代理**繼續掛在成員列上**，那正是這份設計要消滅的殭屍成員形狀，
+  /// 只是從人類這一側現形（艾斯維爾 2026-08-31 實機發現）。
+  ///
+  /// 這是「不進訊息流」這個決定的直接代價，不是 App 少寫了什麼——訊息流
+  /// 本來就是成員列唯一的更新訊號，抽掉它就要另外給一個。
+  ///
+  /// 20 秒是刻意的：subagent 的 TTL 是 120 秒，比它短一個檔次才不會讓
+  /// 「已經被回收的成員」在畫面上留超過一個輪詢週期。
+  void _startMemberPoll() {
+    _memberPoll?.cancel();
+    _memberPoll = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!mounted) return;
+      ref.invalidate(roomDetailProvider(widget.roomId));
+    });
   }
 
   // ---------- heartbeat（讓其他 agent 看到人類在線；60s 一次即可） ----------
@@ -584,6 +612,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ref.invalidate(roomDetailProvider(roomId));
       }
       _lastSystemCount = systemCount;
+      // **房裡有任何動靜就重抓成員列**，不只看系統訊息。
+      //
+      // 系統訊息本來是成員變動的唯一訊號，但 subagent 的進出刻意不進訊息流
+      // （docs/SUBAGENT-IDENTITY.md §2），那個訊號對它們完全不作用——結果是
+      // 已經結束的子代理繼續掛在列表上，而剛加入的那個頂著「other」徽章
+      // （艾斯維爾 2026-08-31 實機發現）。抽掉唯一的更新訊號，就要另外給。
+      //
+      // 節流 3 秒：一則訊息一次重抓在熱絡的房裡是白費的請求，而成員變動
+      // 慢得多。陌生發送者不受節流限制——那是「有人在說話而我不認識他」，
+      // 等三秒等於讓他的第一則發言頂著錯的徽章。
+      final known = detailAsync.value?.participants;
+      final ids = {
+        for (final p in known ?? const <Participant>[]) ...{p.id, ...p.aliasIds},
+      };
+      final stranger = ids.isNotEmpty &&
+          list.any((m) => m.senderId != null && !ids.contains(m.senderId));
+      final now = DateTime.now();
+      final due = _lastMemberFetch == null ||
+          now.difference(_lastMemberFetch!) > const Duration(seconds: 3);
+      if (stranger || due) {
+        _lastMemberFetch = now;
+        ref.invalidate(roomDetailProvider(roomId));
+      }
       // 已讀 cursor：視窗開著就推進（未讀點的資料源）
       final settings = ref.read(settingsRepoProvider);
       settings.setLastReadSeq(roomId, feed.cursor);
@@ -1486,7 +1537,10 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     final myId = widget.myId;
     final shown = widget.members.where((p) => !_hidden.contains(p.id));
     final active = shown.where((p) => p.isActive).toList();
-    final gone = shown.where((p) => !p.isActive).toList();
+    // **結束的子代理不進「已離開」。** 一般成員離開是有意義的資訊（他還會
+    // 回來、他的話還在），而子代理是一次性的臨時分身——它結束就是它該消失，
+    // 留一塊墓碑只會把成員列撐長，而且每派一次就多一塊
+    final gone = shown.where((p) => !p.isActive && !p.ephemeral).toList();
     final hidden = widget.members.where((p) => _hidden.contains(p.id)).toList();
 
     return Column(
