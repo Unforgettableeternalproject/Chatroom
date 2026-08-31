@@ -57,10 +57,15 @@ class MessagesApi {
   /// [participantId] 是房內身分。房間是讀取邊界——非成員讀不到房內內容，
   /// 所以每一次讀都要帶。舊版 Hub 忽略這個標頭，帶了不會有副作用，
   /// 因此可以先於 Hub 升級上線。
+  /// [aroundSeq] 錨定讀取：取那一則前後各 [radius] 則，與另外兩個游標互斥。
+  /// 用來回答「那一則還在不在」——它不必存在（被 update_seq 領走的號碼也
+  /// 錨得住），Hub 會回它附近的訊息。
   Future<MessagePage> read(
     String roomId, {
     int? afterSeq,
     int? beforeSeq,
+    int? aroundSeq,
+    int radius = 25,
     int limit = 100,
     bool pinnedOnly = false,
     String? participantId,
@@ -68,11 +73,17 @@ class MessagesApi {
       unwrap(() async {
         assert(afterSeq == null || beforeSeq == null,
             'after_seq 與 before_seq 不可同時使用');
+        assert(
+            aroundSeq == null ||
+                (afterSeq == null && beforeSeq == null && !pinnedOnly),
+            'around_seq 是錨定讀取，不能與其他游標或 pinned_only 併用');
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/rooms/$roomId/messages',
           queryParameters: {
             'after_seq': ?afterSeq,
             'before_seq': ?beforeSeq,
+            'around_seq': ?aroundSeq,
+            if (aroundSeq != null) 'radius': radius,
             'limit': limit,
             if (pinnedOnly) 'pinned_only': true,
           },

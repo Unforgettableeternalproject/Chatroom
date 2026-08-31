@@ -61,11 +61,28 @@ class _FakeMessagesApi extends MessagesApi {
     String roomId, {
     int? afterSeq,
     int? beforeSeq,
+    int? aroundSeq,
+    int radius = 25,
     int limit = 100,
     bool pinnedOnly = false,
     String? participantId,
   }) async {
     readParticipantIds.add(participantId);
+    // 錨定讀取：回錨點前後各 radius 則。這個 fake 服務的是 RealtimeService
+    // 的分頁行為，錨定只有 _focusOn 在用，這裡給一份夠用的實作即可
+    if (aroundSeq != null) {
+      final older = serverMessages.where((m) => m.seq < aroundSeq).toList()
+        ..sort((a, b) => b.seq.compareTo(a.seq));
+      final newer = serverMessages.where((m) => m.seq >= aroundSeq).toList()
+        ..sort((a, b) => a.seq.compareTo(b.seq));
+      return MessagePage(
+        messages: [
+          ...older.take(radius).toList().reversed,
+          ...newer.take(radius + 1),
+        ],
+        hasMore: false,
+      );
+    }
     List<Message> result;
     if (beforeSeq != null) {
       result = serverMessages.where((m) => m.seq < beforeSeq).toList()

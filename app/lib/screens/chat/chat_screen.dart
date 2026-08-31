@@ -225,16 +225,66 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() => _newWhileAway = 0);
   }
 
+  /// 那一則還在不在？用錨定讀取問 Hub 一次，不動 feed。
+  ///
+  /// **只用來判斷，不把結果灌進 store**：`around_seq` 回的是「錨點前後」，
+  /// 而 feed 是單一連續視窗——灌進去會在中間留一段沒載入的洞，畫面上卻連續
+  /// 顯示（既有註解說的「時間軸假連續」）。真正要跳到很舊的訊息得改成錨定
+  /// 視窗模式，那是另一張票。
+  ///
+  /// 拿不到答案時回 `true`（照原本的逐頁流程走）——網路不穩不該讓一個
+  /// 存在的訊息被說成不存在。
+  Future<bool> _messageStillExists(int seq) async {
+    try {
+      final identity = await ref.read(identityProvider(widget.roomId).future);
+      final page = await ref.read(messagesApiProvider).read(
+            widget.roomId,
+            aroundSeq: seq,
+            radius: 1,
+            participantId: identity.participantId,
+          );
+      return page.messages.any((m) => m.seq == seq);
+    } catch (_) {
+      return true;
+    }
+  }
+
   Future<void> _focusOn(int seq) async {
-    // 目標不在視窗內就持續往回載，直到載到或沒有更多歷史
     var feed = ref.read(roomFeedProvider(widget.roomId));
+    // 先問一次「那則還在不在」，再決定要不要往回翻。一次請求換掉最多 30 輪
+    // 的白跑，而且**「已經不存在」與「太舊還沒載到」從此分得開**——原本
+    // 兩者都是安靜地什麼都不做
+    if (feed.bySeq(seq) == null && !await _messageStillExists(seq)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('那則訊息已經不在這個聊天室裡了')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    // 目標不在視窗內就持續往回載，直到載到或沒有更多歷史
     var guard = 0;
     while (feed.bySeq(seq) == null && feed.hasMoreHistory && guard < 30) {
       await ref.read(realtimeServiceProvider).loadOlder(widget.roomId);
       feed = ref.read(roomFeedProvider(widget.roomId));
       guard++;
     }
-    if (!mounted || feed.bySeq(seq) == null) return;
+    if (!mounted) return;
+    if (feed.bySeq(seq) == null) {
+      // **跳不到要說出來。** 原本這裡是安靜 return，使用者按了「跳回原文」
+      // 卻什麼都沒發生，分不出是當掉了還是訊息不見了
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            feed.hasMoreHistory
+                ? '那則訊息太舊了，已載入 ${feed.length} 則仍沒跳到——再往上捲一段後重試'
+                : '找不到那則訊息',
+          ),
+        ),
+      );
+      return;
+    }
     final list = feed.messages.toList();
     final index = list.indexWhere((m) => m.seq == seq);
     if (index < 0) return;
