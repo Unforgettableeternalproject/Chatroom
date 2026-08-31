@@ -437,6 +437,42 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         return row
 
+    def _room_context(room) -> dict:
+        """join 回傳裡的房間脈絡。
+
+        巢狀而不是攤平成 `room_name`：「房間的什麼」與「我的什麼」混在同一
+        層之後，日後補 zone / visibility 只會愈補愈亂。內容刻意最小——這是
+        「我進了哪裡」的答案，不是房間詳情的替代品。
+        """
+        return {
+            "id": room["id"],
+            "name": room["name"],
+            "topic": room["topic"],
+            "status": room["status"],
+        }
+
+    async def _assignment_note(
+        room_id: str, session_key: str, assignment=None
+    ) -> str:
+        """指派者交代的那句話；沒有就回空字串（呼叫端據此決定要不要放進回應）。
+
+        **rejoin 也要拿得到**，而那正是它最容易掉的時刻：watcher 的指派事件
+        是一次性的，進程重啟或 context 滾掉之後，這句話再也沒有第二個出口。
+        所以不只看這次帶進來的 assignment，也回頭找這個 session 在這個房裡
+        最近一筆帶 note 的指派（含已接受的——接受不代表交代作廢）。
+        """
+        if assignment is not None and assignment["note"]:
+            return assignment["note"]
+        row = await (
+            await app.state.db.execute(
+                "SELECT note FROM assignment WHERE room_id=? AND target_session_key=?"
+                " AND note!='' AND status IN ('pending','accepted')"
+                " ORDER BY created_at DESC LIMIT 1",
+                (room_id, session_key),
+            )
+        ).fetchone()
+        return row["note"] if row else ""
+
     async def _creator_or_member(
         room, participant_id: str | None, session_key: str | None
     ):
@@ -1177,7 +1213,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # rejoin 也給：閒置被移出後重新加入的多半是新的一輪對話，
             # 而上一輪讀到的風格早就滾出 context 了
             style_prompt, _ = _style_texts(room["style"], room["style_instructions"])
-            return {
+            out = {
                 "participant_id": existing["id"],
                 "display_name": existing["display_name"],
                 "rejoined": True,
@@ -1188,7 +1224,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 身分沒變，它從哪一則開始也就沒變。回傳當下的值會讓呼叫端
                 # 以為自己剛出生，跳過這中間的訊息
                 "joined_seq": existing["joined_seq"] or 0,
+                "room": _room_context(room),
             }
+            note = await _assignment_note(room_id, session_key, assignment)
+            if note:
+                out["assignment_note"] = note
+            return out
 
         # 已離開者的名字一般會釋出（房內唯一性只約束 active 成員），但
         # **ephemeral 的名字在其父層還活著的期間不釋出**。
@@ -1371,6 +1412,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         if assigned:
             # 讓 agent 知道名字來自指派者，而非自己的 preferred_name
             out["name_from_assignment"] = True
+        # 「這是哪個房、這房要我做什麼」跟著身分一起回去。前者省掉一趟
+        # list_rooms，後者本來只出現在 watcher 的一次性事件裡——resume 之後
+        # 那句話就沒有第二個出口了
+        out["room"] = _room_context(room)
+        note = await _assignment_note(room_id, session_key, assignment)
+        if note:
+            out["assignment_note"] = note
         return out
 
     async def _cascade_remove_subagents(

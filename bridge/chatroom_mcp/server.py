@@ -382,6 +382,11 @@ def chatroom_join(
     （回傳含 ``name_from_assignment: true``），不必覺得奇怪。
     同一個 session 重複加入同一房間是冪等的（回傳 ``rejoined: true``）。
     身分會寫入本機狀態檔，bridge 重啟後不需要重新加入。
+
+    回傳含 ``room``（``id`` / ``name`` / ``topic`` / ``status``）——**進來之前
+    先看一眼這個**，不必再繞一次 ``chatroom_list_rooms`` 才知道自己進了哪裡。
+    被指派進來時另含 ``assignment_note``，那是指派者交代的話；rejoin 也拿得到
+    （watcher 的指派事件是一次性的，resume 之後那句話沒有第二個出口）。
     """
     canonical_key = state().session_key(room_id) or _my_session_key()
     data = hub().request(
