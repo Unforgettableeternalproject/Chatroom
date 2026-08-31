@@ -62,6 +62,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Timer? _memberPoll;
   DateTime? _lastMemberFetch;
 
+  /// 已經為了「這個陌生發送者」重抓過成員列的 id。
+  ///
+  /// 保險，不是最佳化：目前房間詳情會回**所有狀態**的成員（含已離開的
+  /// 子代理），所以重抓一次之後那個 id 就認得了。但這件事是端點的行為，
+  /// 不是這個畫面控制得了的——哪天它改成只回 active，這裡就會變成
+  /// 「重抓 → 還是不認得 → 再重抓」的無限迴圈，而症狀是 App 對著 Hub
+  /// 狂打請求，沒有任何錯誤訊息（測試端 2026-08-31 指出這個交互作用）。
+  /// 記下來就永遠只會為同一個 id 打一次。
+  final Set<String> _refetchedFor = {};
+
   /// 待送附件。先上傳、送出時才把 id 帶進訊息——見 ComposerAttachment 的說明。
   final List<ComposerAttachment> _pending = [];
 
@@ -626,8 +636,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final ids = {
         for (final p in known ?? const <Participant>[]) ...{p.id, ...p.aliasIds},
       };
-      final stranger = ids.isNotEmpty &&
-          list.any((m) => m.senderId != null && !ids.contains(m.senderId));
+      final unknown = ids.isEmpty
+          ? const <String>[]
+          : [
+              for (final m in list)
+                if (m.senderId != null &&
+                    !ids.contains(m.senderId) &&
+                    !_refetchedFor.contains(m.senderId))
+                  m.senderId!,
+            ];
+      final stranger = unknown.isNotEmpty;
+      _refetchedFor.addAll(unknown);
       final now = DateTime.now();
       final due = _lastMemberFetch == null ||
           now.difference(_lastMemberFetch!) > const Duration(seconds: 3);
