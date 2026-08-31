@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -167,6 +168,10 @@ class JoinRequest(BaseModel):
     role: str = Field(default="agent", pattern="^(agent|human)$")
     # 自報的主機名，指派 UI 用來分辨「這是我這台機器上的 agent 嗎」
     host: str | None = Field(default=None, max_length=200)
+    # 以 subagent 身分加入：填父成員的 participant id。Hub 分辨不出誰在呼叫
+    # （父子共用同一個 MCP 進程），這是唯一的隸屬關係來源，由對方自報。
+    # 帶了就必須通過驗證——驗不過一律報錯，**絕不悄悄退回父層身分**
+    parent_participant_id: str | None = Field(default=None, max_length=64)
 
 
 class MessagePost(BaseModel):
@@ -814,7 +819,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         rows = await (
             await db.execute(
                 "SELECT id, kind, display_name, role, status, joined_at,"
-                " last_seen_at, session_key, join_ip"
+                " last_seen_at, session_key, join_ip, parent_id, ephemeral"
                 " FROM participant WHERE room_id=? ORDER BY joined_at",
                 (room_id,),
             )
@@ -836,6 +841,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "joined_at", "last_seen_at",
                 )
             }
+            # subagent 的「存在」對所有人可見（巢狀顯示在父層底下）；
+            # 限定只推父層的是**進出事件**，不是存在本身（§3.5）
+            entry["ephemeral"] = bool(rep["ephemeral"])
+            entry["parent_id"] = rep["parent_id"]
             prev = next(
                 (
                     g["display_name"]
@@ -1068,6 +1077,39 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
             # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
             session_key = assignment["target_session_key"]
+        # ---- subagent（ephemeral 成員）----
+        # 父子共用同一個 MCP 進程，Hub 分辨不出誰在呼叫，隸屬關係只能自報。
+        # 自報的東西一律驗到底：驗不過就報錯，**絕不悄悄退回父層身分**——
+        # 那正是「主張了身分、沒拿到、卻以為拿到了」的靜默失效
+        parent = None
+        if body.parent_participant_id:
+            if assignment is not None:
+                raise _err(400, "subagent_not_assignable",
+                           "subagent 不能被指派——指派是請一個固定身分進房做事，"
+                           "而 subagent 是父層進程裡的臨時分身，沒有獨立存在。"
+                           "請改為指派它的父層。")
+            parent = await (
+                await db.execute(
+                    "SELECT * FROM participant WHERE id=? AND room_id=?"
+                    " AND status='active'",
+                    (body.parent_participant_id, room_id),
+                )
+            ).fetchone()
+            if parent is None:
+                raise _err(404, "parent_not_found",
+                           "找不到這個父成員，或它已經不在這個聊天室裡。"
+                           "subagent 必須依附於一個仍在房內的成員。")
+            if parent["ephemeral"]:
+                raise _err(400, "subagent_cannot_nest",
+                           "subagent 不能再派 subagent。孫層會讓派生身分與"
+                           "級聯移除的複雜度平方成長，目前不支援。")
+            # 派生 key 必須真的長在父層底下。這不是安全邊界（自報的東西不可
+            # 信，信任邊界仍是 token），但它讓「誰是誰的小孩」在資料層可驗證，
+            # 而不是只靠一個可以指向任何人的欄位
+            if not session_key.startswith(f"{parent['session_key']}#"):
+                raise _err(400, "subagent_key_mismatch",
+                           "subagent 的 session_key 必須是父層的派生形式"
+                           "「<父key>#<名字>-<隨機碼>」。")
         # 被管理員移出的 session 不得**自己**重新加入——否則 client 的斷線
         # 自癒（身分失效即自動 rejoin）會立刻把被踢的人加回來，等於踢不掉。
         #
@@ -1091,9 +1133,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "要回來需要管理員重新指派一次。")
         # 私人房：沒有邀請就進不來。放在 kicked 檢查之後——被踢的人即使
         # 手上有舊指派也已經在上面被擋掉了（kick 當下就撤銷了那些指派）
-        if room["visibility"] == "private" and not await _invited_to_private(
-            room, session_key
-        ):
+        # subagent 例外：邀請是發給**父層**那把 key 的，派生 key 不在任何
+        # 邀請或既有成員紀錄裡，照查一定 403——結果是私人房永遠派不出
+        # subagent。父層已在上面通過驗證且仍是 active 成員，它的可見性就是
+        # 這個子代理的可見性（Codex review #2）
+        if (parent is None and room["visibility"] == "private"
+                and not await _invited_to_private(room, session_key)):
             raise _err(403, "room_is_private",
                        "這是一個私人對話，必須先被邀請才能加入。"
                        "請房內的成員從指派／邀請功能把你加進來。")
@@ -1104,6 +1149,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, session_key),
             )
         ).fetchone()
+        if existing and parent is not None:
+            # ephemeral 的 join **不冪等**。一般成員重加＝返回既有身分，那是
+            # 對的；但對 subagent 而言，冪等只會製造合併——同一個父層平行派
+            # 兩個同名 subagent，若派生 key 撞號，第二個會拿到既有那筆，兩者
+            # 共用一筆成員，其中一個結束就把另一個的身分收掉。
+            # 派生 key 帶隨機段本來就不該撞；撞了就表示隨機段出問題，要看得見
+            raise _err(409, "subagent_already_exists",
+                       f"這個 subagent 身分已經在房內（{existing['display_name']}）。"
+                       "派生 session_key 應該帶隨機段以避免撞號——"
+                       "撞到表示那段沒有生效。")
         if existing:
             # 即使 session 已經在房內，使用 assignment token 重加也代表已接受
             # 該指派；否則 App 重啟後會再次投遞同一筆 pending assignment。
@@ -1125,12 +1180,39 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "session_key": session_key,
                 "style": room["style"],
                 "style_prompt": style_prompt,
+                # 冪等 rejoin 拿的是**既有**身分的界線，不是此刻的房內 seq：
+                # 身分沒變，它從哪一則開始也就沒變。回傳當下的值會讓呼叫端
+                # 以為自己剛出生，跳過這中間的訊息
+                "joined_seq": existing["joined_seq"] or 0,
             }
 
+        # 已離開者的名字一般會釋出（房內唯一性只約束 active 成員），但
+        # **ephemeral 的名字在其父層還活著的期間不釋出**。
+        #
+        # 因為 subagent 的名字是自報的、慣用名就那幾個（tester / worker /
+        # reviewer），加上秒級 TTL 讓進出頻率比一般成員高一個數量級——撞名
+        # 是常態不是意外。名字一旦被**另一個父層**的 subagent 撿走，@ 那個
+        # 名字的訊息就會轉投遞到錯誤的父層去（C7 是靠名字轉投遞的）。那不是
+        # 吵，是跨 agent 的訊息投錯人，而且兩邊都不會看到錯誤。
+        #
+        # 保留名字讓晚到的 @ 變成 unresolved_mentions——一個發話者看得見的
+        # 失敗，遠好過靜默投給別人家的 subagent。
+        # 一般成員的回收語意不動：低頻，而且人類看得到成員列，代價不成比例。
+        #
+        # **保留是對「別家父層」的，保留者自己可以重用。** 同一個父層的
+        # worker 結束後再派一個 worker，該拿回原名——被自己的保留擋成
+        # worker-2、worker-3 只是在懲罰正常的重複派遣，而那條路徑上根本
+        # 不存在誤投問題（收件人本來就是同一個父層）。
+        my_parent = parent["id"] if parent is not None else None
         taken_rows = await (
             await db.execute(
-                "SELECT display_name FROM participant WHERE room_id=? AND status='active'",
-                (room_id,),
+                "SELECT display_name FROM participant p WHERE p.room_id=?"
+                " AND (p.status='active'"
+                "      OR (p.ephemeral=1 AND p.parent_id IS NOT ?"
+                "          AND EXISTS ("
+                "            SELECT 1 FROM participant q"
+                "            WHERE q.id=p.parent_id AND q.status='active')))",
+                (room_id, my_parent),
             )
         ).fetchall()
         # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
@@ -1157,13 +1239,66 @@ def create_app(config: Config | None = None) -> FastAPI:
         joined_seq = (await (
             await db.execute("SELECT next_seq FROM room WHERE id=?", (room_id,))
         ).fetchone())["next_seq"] - 1
-        await db.execute(
-            "INSERT INTO participant (id, room_id, kind, session_key, display_name, role,"
-            " joined_at, last_seen_at, join_ip, join_token, joined_seq)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (pid, room_id, body.kind, session_key, name, body.role, now, now,
-             join_ip, getattr(request.state, "access_token", ""), joined_seq),
-        )
+        # 取名與寫入之間有窗口：兩個請求可能同時算出「worker 還沒人用」，
+        # 第二個 INSERT 撞上 active-name 的 partial unique index。撞了不是
+        # 錯誤，是**名字被搶走了**——重算一次即可。不重試的話那條路徑會回
+        # 500，而觸發它只需要同一個父層平行派兩個同名子代理，那是常態
+        # （Codex review #5）。
+        # 隨機派生 key 解的是 session_key 撞號，解不了 display_name。
+        # 最後一次改用「保證唯一」的名字：重試靠的是重算，而重算會讓同時
+        # 進來的幾個請求再次選到同一個候選——併發數一高就會耗盡次數，然後
+        # 回一個對呼叫端毫無意義的 409。名字取不到不該是一種結局
+        attempts = 6
+        for attempt in range(attempts):
+            if attempt == attempts - 1:
+                name = f"{name.rsplit('-', 1)[0]}-{pid[:4]}"
+            try:
+                # 父層仍 active 這個條件寫進 INSERT 本身，不是靠上面那次
+                # SELECT。上面的檢查與這裡之間有一個真實的窗口：父層可以在
+                # 中間 leave（級聯把當時的 subagent 一起帶走），而我們手上
+                # 那份快照仍然說它是 active ⇒ 插進一個永遠不會被級聯到的
+                # 孤兒，正是 §3.5 宣稱不可達的狀態。
+                # 把它交給資料庫，「不可達」就從時序保證變成資料保證。
+                cur = await db.execute(
+                    "INSERT INTO participant (id, room_id, kind, session_key,"
+                    " display_name, role, joined_at, last_seen_at, join_ip,"
+                    " join_token, parent_id, ephemeral, joined_seq)"
+                    " SELECT :pid, :room_id, :kind, :session_key, :name,"
+                    " :role, :now, :now, :join_ip, :join_token, :parent_id,"
+                    " :ephemeral, :joined_seq"
+                    " WHERE :parent_id IS NULL OR EXISTS ("
+                    "   SELECT 1 FROM participant WHERE id=:parent_id"
+                    "   AND room_id=:room_id AND status='active')",
+                    {"pid": pid, "room_id": room_id, "kind": body.kind,
+                     "session_key": session_key, "name": name,
+                     "role": body.role, "now": now, "join_ip": join_ip,
+                     "join_token": getattr(request.state, "access_token", ""),
+                     "parent_id": parent["id"] if parent is not None else None,
+                     "ephemeral": 1 if parent is not None else 0,
+                     "joined_seq": joined_seq},
+                )
+                if cur.rowcount == 0:
+                    # 父層在這一瞬間走了。**不重試**——重算名字救不了一個
+                    # 已經不在房裡的父層，重試只會把同一個結論拖久一點
+                    raise _err(404, "parent_not_found",
+                               "父成員在這次派遣進行中離開了聊天室，"
+                               "subagent 沒有可以依附的對象。請重新 spawn。")
+                break
+            except sqlite3.IntegrityError:
+                if attempt == attempts - 1:
+                    # 走到這裡表示連帶著 participant id 前綴的名字都撞了，
+                    # 那不是併發，是資料異常——不要靜靜吞掉
+                    raise
+                taken_rows = await (
+                    await db.execute(
+                        "SELECT display_name FROM participant WHERE room_id=?"
+                        " AND status='active'",
+                        (room_id,),
+                    )
+                ).fetchall()
+                name = generate_name(
+                    {r["display_name"] for r in taken_rows}, preferred
+                )
         await db.commit()
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
         await db.execute(
@@ -1172,8 +1307,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, session_key),
         )
         await db.commit()
-        await _touch_session(session_key, body.kind, ip=_client_ip(request),
-                             host=body.host)
+        # ephemeral 不進 session 名錄：那份名錄是指派 UI 的掃描來源，而
+        # subagent 不可被指派（§3.7）。登記進去只會在清單上長出一堆
+        # 看起來可以指派、實際上指派不到的鬼影
+        if parent is None:
+            await _touch_session(session_key, body.kind, ip=_client_ip(request),
+                                 host=body.host)
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
         logger.info(
@@ -1183,10 +1322,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "kind": body.kind, "role": body.role, "ip": join_ip,
                 "token_hint": token_hint(getattr(request.state, "access_token", "")),
                 "via_assignment": assignment is not None,
+                "parent_id": parent["id"] if parent is not None else None,
+                "ephemeral": parent is not None,
             },
         )
-        joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
-                                     kind="system", system_event="join")
+        # subagent 的進出**不進訊息流**：它是成員列上的事件，不是對話事件。
+        # 通知只推父層，走成員快照那條路（見 §2 / §3.5）
+        joined = None
+        if parent is None:
+            joined = await _post_message(room_id, pid, f"{name} 加入了聊天室",
+                                         kind="system", system_event="join")
+        else:
+            # 成員列變了，訂閱端要重新拉一次快照
+            await events.notify(room_id)
         out = {
             "participant_id": pid,
             "display_name": name,
@@ -1198,9 +1346,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 給出精確的 id/seq，client 才能只放行「就是這一筆」，不必靠
             # 時間窗去猜哪則加入算「剛剛發生」（那會被時鐘偏差打敗）。
             # 冪等 rejoin 不給：那次沒有產生新的加入訊息。
-            "join_message_id": joined["id"],
-            "join_seq": joined["seq"],
+            # subagent 也不給——它的加入根本不進訊息流（§2）
+            "join_message_id": joined["id"] if joined else None,
+            "join_seq": joined["seq"] if joined else None,
+            # 「我現在算誰」是可觀測量，不是靠呼叫端自己記得（§3）
+            "identity_scope": "subagent" if parent is not None else "parent",
+            # 這個身分是從房內哪一則之後開始的。Hub 早就算好它（@ 判定的
+            # 界線），不回傳的話 bridge 想拿它當 subagent 的讀取游標起點
+            # 就只能自己猜——猜出來的起點會重播或漏訊息，而兩者都不報錯
+            "joined_seq": joined_seq,
         }
+        if parent is not None:
+            out["parent_participant_id"] = parent["id"]
+            out["parent_name"] = parent["display_name"]
         # 說話方式在**加入時就講清楚**，不是等他先講完一輪長篇再糾正——
         # 第一則發言就已經是別人要讀的東西了
         out["style"], out["style_prompt"] = (
@@ -1211,19 +1369,87 @@ def create_app(config: Config | None = None) -> FastAPI:
             out["name_from_assignment"] = True
         return out
 
+    async def _cascade_remove_subagents(
+        room_id: str, parent_id: str, status: str, reason: str
+    ) -> list[str]:
+        """父層退場時一併移除它旗下的 active subagent。**不 commit**。
+
+        呼叫端必須在同一個交易裡連父層那筆一起 commit：分兩次的話，兩者之間
+        會出現一個「父層已走、subagent 還在」的真實窗口，而那正是這個機制要
+        消滅的狀態（`docs/SUBAGENT-IDENTITY.md` §3.5）。
+
+        為什麼一定要級聯：subagent 的進出事件只推父層、@ 到它的訊息轉投遞
+        父層。父層不在，這兩條路都通向虛空——它會變成成員列上一個永遠不會
+        醒、還會吃掉 mention 的殭屍。
+
+        條件只看 parent_id，不看 ephemeral：兩者是一起寫進去的，多一個條件
+        只會在資料異常時默默少刪一筆。回傳被移除者的名字供日誌與事件使用。
+
+        ⚠️ **只查名字，不做狀態變更**——變更由呼叫端與父層那筆寫在**同一個
+        UPDATE statement** 裡（見 `_depart_with_subagents`）。分成兩個
+        statement 不是原子的：全 app 共用一條 aiosqlite connection，兩者之間
+        的 await 讓別的 coroutine 讀得到「父層已走、子代理還在」，甚至先一步
+        commit 掉那個中間態（Codex review #3）。
+        """
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT id, display_name FROM participant"
+                " WHERE room_id=? AND parent_id=? AND status='active'",
+                (room_id, parent_id),
+            )
+        ).fetchall()
+        if not rows:
+            return []
+        names = [r["display_name"] for r in rows]
+        logger.info(
+            "級聯移除 %d 個 subagent（room=%s，因 %s）", len(names), room_id, reason,
+            extra={"event": "subagent_cascade_removed", "room_id": room_id,
+                   "parent_id": parent_id, "names": names, "reason": reason},
+        )
+        return names
+
+    async def _depart_with_subagents(
+        room_id: str, participant_id: str, own_status: str,
+        sub_status: str, reason: str,
+    ) -> list[str]:
+        """父層退場：父層與它旗下的 subagent 在**同一個 UPDATE** 裡一起變更。
+
+        一個 statement 而不是兩個：SQLite 對單一 statement 是原子的，中間不會
+        有任何 coroutine 讀得到「父層已走、子代理還在」。父層與子代理的目標
+        狀態不同（kicked/left vs removed/left），所以用 CASE 分。
+        """
+        db = app.state.db
+        names = await _cascade_remove_subagents(
+            room_id, participant_id, sub_status, reason
+        )
+        now = _now()
+        await db.execute(
+            "UPDATE participant SET"
+            " status = CASE WHEN id=? THEN ? ELSE ? END,"
+            " left_at = ?"
+            " WHERE room_id=? AND status='active'"
+            "   AND (id=? OR parent_id=?)",
+            (participant_id, own_status, sub_status, now,
+             room_id, participant_id, participant_id),
+        )
+        return names
+
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
     async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
         # 封存房也允許離開（唯讀例外），故不檢查房間狀態
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
-        await db.execute(
-            "UPDATE participant SET status='left', left_at=? WHERE id=?", (_now(), p["id"])
+        # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
+        orphans = await _depart_with_subagents(
+            room_id, p["id"], "left", "left", "父層離開"
         )
         logger.info(
             "離開房間 %s（%s）", p["display_name"], room_id, extra={
                 "event": "leave", "room_id": room_id, "participant_id": p["id"],
                 "display_name": p["display_name"],
                 "session_key": p["session_key"],
+                "cascaded_subagents": orphans,
             },
         )
         await db.commit()
@@ -1237,9 +1463,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 extra={"event": "questions_cancelled_on_leave",
                        "room_id": room_id, "count": len(cancelled)},
             )
-        await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
-                            kind="system", system_event="leave")
-        return {"ok": True, "cancelled_questions": len(cancelled)}
+        # subagent 的離開不進訊息流（§2）。成員列變了仍要叫醒訂閱端
+        if p["ephemeral"]:
+            await events.notify(room_id)
+        else:
+            await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
+                                kind="system", system_event="leave")
+        return {"ok": True, "cancelled_questions": len(cancelled),
+                "cascaded_subagents": orphans}
 
     @app.post(
         "/api/rooms/{room_id}/participants/{target_id}/kick",
@@ -1270,9 +1501,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         if target is None:
             raise _err(404, "participant_not_found", "找不到這個成員，或已不在房內")
         now = _now()
-        await db.execute(
-            "UPDATE participant SET status='kicked', left_at=? WHERE id=?",
-            (now, target_id),
+        # 被踢者與旗下 subagent 同一個 statement。子代理標 removed 不標
+        # kicked——kicked 是對一個 session 的人為封鎖決定，而 subagent 只是
+        # 被父層帶走，沒有人針對它做過決定
+        await _depart_with_subagents(
+            room_id, target_id, "kicked", "removed", "父層被移出"
         )
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
         # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
@@ -1450,11 +1683,67 @@ def create_app(config: Config | None = None) -> FastAPI:
             out["next_before_seq"] = msgs[0]["seq"]
         return out
 
+    async def _subagent_delta(room_id: str, parent_id: str, since: str):
+        """我旗下 subagent 在 ``since`` 之後的進出，以及新的游標。
+
+        為什麼用時間戳當游標，而不是像訊息那樣用 seq：subagent 的進出**不進
+        訊息流**（§2），沒有序號可用。改讓 client 回傳上一輪由 server 給的
+        時間戳——那是 server 自己產的值，原封echo 回來，所以不受兩端時鐘
+        偏差影響，也不會像「每輪比對成員清單」那樣漏掉在兩次輪詢之間
+        進來又離開的那一個。
+        """
+        db = app.state.db
+        now = _now()
+        if not since:
+            # 第一輪不補發歷史：watcher 剛起來時房裡既有的 subagent 是現況，
+            # 不是「剛剛發生的事」。只把游標立在這裡
+            return [], now
+        rows = await (
+            await db.execute(
+                "SELECT id, display_name, status, joined_at, left_at"
+                " FROM participant WHERE room_id=? AND parent_id=?"
+                " AND (joined_at > ? OR (left_at IS NOT NULL AND left_at > ?))"
+                " ORDER BY joined_at",
+                (room_id, parent_id, since, since),
+            )
+        ).fetchall()
+        out = []
+        for r in rows:
+            if r["joined_at"] > since:
+                out.append({"event": "subagent_joined", "name": r["display_name"],
+                            "participant_id": r["id"]})
+            if r["left_at"] and r["left_at"] > since:
+                out.append({"event": "subagent_left", "name": r["display_name"],
+                            "participant_id": r["id"], "status": r["status"]})
+        return out, now
+
+    async def _my_subagent_bounds(room_id: str, parent_id: str) -> dict[str, int]:
+        """我旗下 active subagent 的「名字 → 喚醒界線」。
+
+        回傳的是 **mapping 而不是 set**，因為界線屬於**被 @ 的那個身分**，
+        不是投遞地址：父層只是收件路徑。拿父層的界線，等於讓新生的 subagent
+        繼承父層加入以來的整段歷史 @（決策端 2026-08-31 裁定）。
+
+        界線用**每個 subagent 自己的 `joined_seq`**。把父層的界線套上去是
+        錯的：那會讓一個剛派出來的 subagent 繼承父層加入以來的整段歷史 @。
+        NULL 當 0，與一般成員的處置一致。
+        """
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT display_name, joined_seq FROM participant"
+                " WHERE room_id=? AND parent_id=? AND status='active'",
+                (room_id, parent_id),
+            )
+        ).fetchall()
+        return {r["display_name"]: (r["joined_seq"] or 0) for r in rows}
+
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
         room_id: str,
         after_seq: int = 0,
         timeout: float = Query(default=25.0, le=55.0),
+        subagents_since: str = "",
         x_participant_id: str | None = Header(default=None),
     ):
         """long-poll：有 seq > after_seq 的訊息立即返回，否則掛到 timeout。
@@ -1478,6 +1767,61 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             return row["status"] if row else "deleted"
 
+        async def _out(msgs: list, last_seq: int, status: str) -> dict:
+            """統一三個返回點：每一條路徑都要帶上 subagent 事件與轉投遞的
+            mention，漏掉任何一條，那個通道就會在某些時序下靜靜地不作用。"""
+            subs, cursor = await _subagent_delta(
+                room_id, me["id"], subagents_since
+            )
+            mine = await _my_subagent_bounds(room_id, me["id"])
+            # NULL（欄位存在之前就在房裡的舊成員）當 0，維持原本行為
+            my_since = me["joined_seq"] or 0
+            mentioned = False
+            for m in msgs:
+                names = set(m.get("mentions") or [])
+                # 只有**新訊息**能喚醒人。既有訊息因釘選／刪除領了 update_seq
+                # 重新入流時會再度出現在這一批裡，它裡面的 @ 早就被讀過了——
+                # 不設這條界線的話，任何人釘一則 @ 過你的舊訊息，你就會被
+                # 重新叫醒一次。
+                #
+                # ⚠️ 這行的隱含前提是**update 路徑不會新增 mention**：目前
+                # 只有 pin / unpin / delete 會推進 update_seq，三者都不動
+                # mentions。哪天加了「編輯訊息」而且改文能補 @ 人，這裡就會
+                # 把正當的喚醒吃掉，必須回來改成比對「mentions 裡新增了我」。
+                if m.get("seq", 0) <= after_seq:
+                    continue
+                # 第二條界線：加入之前的 @ 不算。房內名稱在離開後會被釋出，
+                # 新來的人拿到同一個名字時那些舊訊息在字串比對下全都指向他，
+                # 而他第一次拉歷史用的是 after_seq=0，上面那條擋不住。
+                #
+                # **界線屬於被 @ 的那個身分，不是投遞地址**：我自己的用我的
+                # joined_seq，旗下 subagent 的用它自己的（見
+                # _my_subagent_bounds）。父層只是收件路徑，拿父層的界線會讓
+                # 新生的 subagent 繼承父層加入以來的整段歷史 @。
+                if me["display_name"] in names and m["seq"] > my_since:
+                    mentioned = True
+                # @ 到我旗下的 subagent＝叫醒我。subagent 沒有自己的 watcher
+                # 進程（它活在我的進程裡），不轉投遞的話那個 mention 就是打
+                # 進空氣——而發話方會看到 unresolved_mentions 是空的，
+                # 以為送到了（§2 反向 mention）
+                # 每個 subagent 用自己的界線，不是父層的（見 _my_subagent_bounds）
+                relayed = sorted(
+                    n for n in names
+                    if n in mine and m.get("seq", 0) > mine[n]
+                )
+                if relayed:
+                    m["relayed_mentions"] = relayed
+                    mentioned = True
+            return {
+                "messages": msgs,
+                "you_were_mentioned": mentioned,
+                "last_seq": last_seq,
+                "room_status": status,
+                "style_hint": style_hint,
+                "subagent_events": subs,
+                "subagents_cursor": cursor,
+            }
+
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
         while True:
             # max(seq, update_seq)：新訊息與既有訊息的狀態變更（釘選/刪除）
@@ -1491,40 +1835,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchall()
             if rows:
                 msgs = await _message_rows_to_json(rows, db)
-                # mention 判定只看**新訊息**（seq > after_seq），不看因狀態
-                # 變更而重投的舊訊息。否則任何人釘選（或刪除）一則 @ 過你的
-                # 舊訊息，都會把你再喚醒一次——被 @ 的那句話是幾天前說的，
-                # 醒來也無事可做。
-                #
-                # ⚠️ 這行的隱含前提是**update 路徑不會新增 mention**：目前
-                # 只有 pin / unpin / delete 會推進 update_seq，三者都不動
-                # mentions。哪天加了「編輯訊息」而且改文能補 @ 人，這裡就會
-                # 把正當的喚醒吃掉，必須回來改成比對「mentions 裡新增了我」。
-                # 第二條界線：加入之前的 @ 不算。房內名稱在離開後會被釋出，
-                # 新來的人拿到同一個名字時，那些舊訊息在字串比對下全都指向
-                # 他——而他第一次拉歷史用的是 after_seq=0，上面那條擋不住。
-                # NULL（欄位存在之前就在房裡的舊成員）當 0，維持原本行為
-                since = max(after_seq, (me["joined_seq"] or 0) if me else 0)
-                mentioned = bool(me) and any(
-                    me["display_name"] in m["mentions"]
-                    for m in msgs if m["seq"] > since
+                return await _out(
+                    msgs,
+                    max(max(m["seq"], m["update_seq"]) for m in msgs),
+                    await _status(),
                 )
-                return {"messages": msgs, "you_were_mentioned": mentioned,
-                        "last_seq": max(max(m["seq"], m["update_seq"]) for m in msgs),
-                        "room_status": await _status(), "style_hint": style_hint}
+            # 有 subagent 進出但沒有新訊息時也要返回——那正是 subagent 的
+            # 常態（它的進出根本不進訊息流），掛著等訊息等於永遠不通知
+            subs_peek, _ = await _subagent_delta(room_id, me["id"], subagents_since)
+            if subs_peek:
+                return await _out([], after_seq, await _status())
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                return {"messages": [], "you_were_mentioned": False,
-                        "last_seq": after_seq, "room_status": await _status(),
-                        "style_hint": style_hint}
+                return await _out([], after_seq, await _status())
             await events.wait(room_id, remaining)
             # 房間可能在我們掛著的這段時間被刪掉了。刪除端點會 notify 一次
             # 把我們叫醒，但被叫醒後沒有新訊息可回——不檢查的話就會繼續掛回去
             # 等到逾時，而 watcher 也就晚一輪才知道房間沒了
             if await _status() == "deleted":
-                return {"messages": [], "you_were_mentioned": False,
-                        "last_seq": after_seq, "room_status": "deleted",
-                        "style_hint": style_hint}
+                return await _out([], after_seq, "deleted")
 
     async def _message_room(message_id: str) -> str:
         db = app.state.db
@@ -2724,18 +3053,49 @@ def create_app(config: Config | None = None) -> FastAPI:
             await events.notify(rid)
         now = datetime.now(timezone.utc)
         cutoff = (now - timedelta(seconds=cfg.idle_timeout)).isoformat()
+        # subagent 走專屬的短時限，且**先掃**：父層與 subagent 都逾時的情況下
+        # 先收 subagent，父層那輪的級聯就沒事可做，日誌也不會出現兩筆互相
+        # 矛盾的移除理由
+        sub_cutoff = (
+            now - timedelta(seconds=cfg.subagent_timeout)
+        ).isoformat()
+        stale_subs = await (
+            await db.execute(
+                "SELECT id, room_id, display_name, parent_id FROM participant"
+                " WHERE status='active' AND ephemeral=1 AND last_seen_at < ?",
+                (sub_cutoff,),
+            )
+        ).fetchall()
+        for s in stale_subs:
+            await db.execute(
+                "UPDATE participant SET status='removed', left_at=? WHERE id=?",
+                (_now(), s["id"]),
+            )
+            await db.commit()
+            logger.info(
+                "sweep: 回收逾時的 subagent %s（room=%s）",
+                s["display_name"], s["room_id"], extra={
+                    "event": "subagent_reclaimed", "room_id": s["room_id"],
+                    "participant_id": s["id"], "display_name": s["display_name"],
+                    "parent_id": s["parent_id"],
+                },
+            )
+            # 不發系統訊息（§2）——只叫醒訂閱端重拉成員快照
+            await events.notify(s["room_id"])
         idle = await (
             await db.execute(
                 # session_key 給日誌用：事後要回答「被移出的是哪一個 session」
+                # ephemeral 已在上面用自己的時限處理過，這裡排除
                 "SELECT id, room_id, display_name, session_key FROM participant"
-                " WHERE status='active' AND role='agent' AND last_seen_at < ?",
+                " WHERE status='active' AND role='agent' AND ephemeral=0"
+                " AND last_seen_at < ?",
                 (cutoff,),
             )
         ).fetchall()
         for p in idle:
-            await db.execute(
-                "UPDATE participant SET status='removed', left_at=? WHERE id=?",
-                (_now(), p["id"]),
+            # 閒置移除也是父層退場，同一個 statement 帶走旗下 subagent
+            await _depart_with_subagents(
+                p["room_id"], p["id"], "removed", "removed", "父層閒置逾時"
             )
             await db.commit()
             logger.info(
@@ -2773,11 +3133,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.execute(
                 "SELECT r.id, r.archive_pending_since FROM room r"
                 " WHERE r.status='active'"
+                # ephemeral 兩邊都排除：subagent 是父層的臨時分身，不是
+                # 「房裡有人在做事」的證據。級聯移除（§3.5）讓「只剩 subagent」
+                # 在設計上不可達，這裡是縱深防禦——判定條件不該依賴另一個
+                # 機制永遠不出錯
                 " AND EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                "             AND p.role='agent'"
+                "             AND p.role='agent' AND p.ephemeral=0"
                 "             AND p.joined_at >= COALESCE(r.activated_at, r.created_at))"
                 " AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                "                 AND p.role='agent' AND p.status='active')"
+                "                 AND p.role='agent' AND p.ephemeral=0"
+                "                 AND p.status='active')"
                 " AND (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
                 "      AND p.role='human' AND p.status='active') <= 1",
             )

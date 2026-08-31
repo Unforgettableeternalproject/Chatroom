@@ -15,6 +15,14 @@ class Config:
     idle_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))
     )
+    # subagent（ephemeral 成員）閒置多久後被回收（秒）。
+    # 刻意與 idle_timeout 分開，而且短一個數量級：subagent 是背景工作的
+    # 臨時分身，工作結束就該消失。它正常退場靠自己 leave，這條時限處理的是
+    # 「被中斷／crash／忘了 leave」——那種殘骸掛在成員列上會誤導所有人，
+    # 而父層的 1800 秒對它來說等於整場對話都留著
+    subagent_timeout: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_SUBAGENT_TIMEOUT", "120"))
+    )
     # presence sweeper 掃描間隔（秒）
     sweep_interval: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_SWEEP_INTERVAL", "30"))

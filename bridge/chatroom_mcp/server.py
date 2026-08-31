@@ -52,6 +52,7 @@ from .envfile import load_env_file  # noqa: E402
 from .guide import guide_text  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
+from .subagents import Subagent, SubagentRegistry, derive_key  # noqa: E402
 from .version import version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
@@ -168,16 +169,67 @@ def _guard(fn: Callable[..., Any]) -> Callable[..., dict]:
     return wrapper
 
 
+_subagents = SubagentRegistry()
+
+
+def _as_subagent(handle: str, room_id: str) -> Subagent:
+    """把自報的 handle 換成一個真的身分。**認不得就報錯，絕不退回父層。**
+
+    退回父層是這個介面最誘人也最危險的處置：呼叫端主張了一個身分、沒拿到，
+    卻會看到一則成功送出的訊息——它掛在父層名下，而 subagent 以為那是自己
+    說的話。這正是本專案反覆修的靜默失效（`docs/SUBAGENT-IDENTITY.md` §3）。
+    """
+    sub = _subagents.get(handle)
+    if sub is None:
+        known = "、".join(s.display_name for s in _subagents.in_room(room_id))
+        raise HubError(
+            f"認不得這個 subagent handle（{handle}）。它可能已經結束、"
+            "或本 bridge 進程重啟過（subagent 身分只活在記憶體裡，"
+            "重啟即作廢）。"
+            + (f"目前這個房間登記中的 subagent：{known}。" if known else
+               "目前這個房間沒有任何登記中的 subagent。")
+            + "要以 subagent 身分發言請先呼叫 chatroom_spawn_subagent。"
+        )
+    if sub.room_id != room_id:
+        raise HubError(
+            f"這個 subagent（{sub.display_name}）登記在另一個房間，"
+            f"不能用它在 {room_id} 發言。"
+        )
+    return sub
+
+
+def _identity_for(room_id: str, subagent: str) -> tuple[str | None, dict]:
+    """回傳 (participant_id, 要併進回應的身分標記)。
+
+    ``identity_scope`` 一律附上，即使是父層——「以父層身分執行」與「這次呼叫
+    根本沒到 Hub」在觀測上原本完全同形，那讓漏帶參數的 bug 與「舊版沒有這個
+    功能」長得一模一樣（§3）。
+    """
+    if not subagent:
+        return state().participant_id(room_id), {"identity_scope": "parent"}
+    sub = _as_subagent(subagent, room_id)
+    return sub.participant_id, {
+        "identity_scope": "subagent",
+        "subagent_name": sub.display_name,
+        "parent_name": sub.parent_name,
+    }
+
+
 def _room_request(
     room_id: str,
     method: str,
     path: str,
     *,
     require_identity: bool = True,
+    participant_id: str | None = None,
     **kwargs: Any,
 ) -> Any:
-    """帶上該房間身分發出請求；身分失效時清掉本機紀錄並要求重新 join。"""
-    participant_id = state().participant_id(room_id)
+    """帶上該房間身分發出請求；身分失效時清掉本機紀錄並要求重新 join。
+
+    ``participant_id`` 可覆寫成 subagent 的身分；不給就用父層在這個房間的身分。
+    """
+    if participant_id is None:
+        participant_id = state().participant_id(room_id)
     if require_identity and not participant_id:
         raise HubError(
             f"你還沒有「{room_id}」這個房間的身分，請先呼叫 chatroom_join 加入。",
@@ -204,18 +256,43 @@ def _room_request(
                 status=exc.status, detail=exc.detail,
             ) from exc
         if exc.identity_invalid and participant_id:
-            state().clear_identity(room_id)
+            # 只有父層的身分放在 state 檔裡。subagent 失效時清 state 等於
+            # 把父層的身分一起弄掉——那會讓一個 subagent 逾時波及整個 session
+            if participant_id == state().participant_id(room_id):
+                state().clear_identity(room_id)
+            else:
+                # 失效的是某個 subagent：把它的 handle 從登記簿移除，並且
+                # **不要回 need_rejoin**——那是叫父層重新 join，而父層好端端
+                # 的。子代理被短 TTL 回收之後該做的事是重新 spawn，不是讓
+                # 整個 session 以為自己掉出房間了（Codex review #4）。
+                # 不移除的話這個 handle 會被 bridge 永遠認得，每次呼叫都白打
+                # 一次 Hub，而錯誤訊息一路指向錯的動作
+                dead = next(
+                    (x for x in _subagents.in_room(room_id)
+                     if x.participant_id == participant_id),
+                    None,
+                )
+                if dead is not None:
+                    _subagents.drop(dead.handle)
+                    raise HubError(
+                        f"子代理「{dead.display_name}」的身分已失效"
+                        "（多半是超過短時限被回收了）。它的 handle 已作廢，"
+                        "要繼續用這個身分請重新 chatroom_spawn_subagent。"
+                        "長時間工作記得中途 chatroom_heartbeat(subagent=...) 續命。"
+                    ) from exc
         raise
 
 
-def _participant_id_by_name(room_id: str, name: str) -> str:
+def _participant_id_by_name(room_id: str, name: str,
+                            as_participant: str | None = None) -> str:
     """房內顯示名稱 → participant_id。
 
     agent 手上有的是名字（訊息裡看到的那個），Hub 要的是 id。這層轉換放在
     bridge，免得每個 agent 自己去翻房間詳情——翻錯的話會靜靜地問到別人身上。
     """
     # 帶身分：房間詳情已經收成「房內的人才看得到」，裸請求會 401
-    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}")
+    data = _room_request(room_id, "GET", f"/api/rooms/{room_id}",
+                         participant_id=as_participant)
     actives = [
         p for p in data.get("participants", [])
         if p.get("status") == "active"
@@ -330,6 +407,86 @@ def chatroom_join(
 
 @mcp.tool()
 @_guard
+def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
+    """替你即將派出的子 agent 在房內登記一個臨時身分，回傳 ``handle``。
+
+    **這是你（父層）要做的事，不是子 agent 自己能做的。** 你們共用同一個 MCP
+    進程與 session id，Hub 分辨不出誰在呼叫——所以隸屬關係只能由你在這裡宣告
+    一次，之後子 agent 拿著 ``handle`` 自報。
+
+    派遣時把 handle 寫進給子 agent 的 prompt，要它在本房發言時帶
+    ``subagent="<handle>"``。忘了帶不會報錯，只會以你的身分發言（回傳的
+    ``identity_scope`` 會是 ``"parent"``，那是你檢查得出來的）。
+
+    子 agent 工作結束時呼叫 ``chatroom_end_subagent``。忘了也沒關係——Hub 會在
+    短時限（預設 120 秒無動作）後自動回收；而你自己離開房間時，旗下所有
+    subagent 會一併消失。
+
+    **不會廣播**：它的加入只有你收得到通知，房內訊息流不會出現任何東西；
+    但成員列上所有人都看得到它掛在你底下。
+    """
+    parent_id = state().participant_id(room_id)
+    if not parent_id:
+        raise HubError(
+            f"你自己還沒加入「{room_id}」，不能在裡面派 subagent。"
+            "請先 chatroom_join。",
+            identity_invalid=True,
+        )
+    parent_key = state().session_key(room_id) or _my_session_key()
+    data = hub().request(
+        "POST",
+        f"/api/rooms/{room_id}/join",
+        json={
+            "kind": AGENT_KIND,
+            "host": identity.host_name(),
+            "session_key": derive_key(parent_key, name),
+            "preferred_name": name or None,
+            "role": "agent",
+            "parent_participant_id": parent_id,
+        },
+    )
+    handle = _subagents.new_handle()
+    # 游標起點取 Hub 回的 joined_seq（加入當下房內的最後一則 seq）：子代理
+    # 不該補讀它出生之前的對話。舊版 Hub 不回這個欄位，退回父層目前的位置
+    # ——那至少不會讓它把整個房間的歷史重播一遍
+    _subagents.add(Subagent(
+        handle=handle,
+        room_id=room_id,
+        participant_id=data["participant_id"],
+        display_name=data.get("display_name", name),
+        session_key=data.get("session_key", ""),
+        parent_participant_id=parent_id,
+        parent_name=data.get("parent_name", ""),
+    ), cursor=data.get("joined_seq") or state().last_seq(room_id))
+    return {
+        "handle": handle,
+        "display_name": data.get("display_name"),
+        "parent_name": data.get("parent_name"),
+        "hint": (
+            f'把這句寫進派遣 prompt：在聊天室發言時帶 subagent="{handle}"'
+        ),
+    }
+
+
+@mcp.tool()
+@_guard
+def chatroom_end_subagent(room_id: str, subagent: str) -> dict:
+    """子 agent 工作結束，把它的臨時身分收掉。
+
+    忘了呼叫不會壞事——Hub 有短時限自動回收，父層離開時也會級聯帶走。
+    但主動收掉比較乾淨：成員列上不會留一個已經沒在做事的名字。
+    """
+    sub = _as_subagent(subagent, room_id)
+    data = _room_request(
+        room_id, "POST", f"/api/rooms/{room_id}/leave",
+        participant_id=sub.participant_id,
+    )
+    _subagents.drop(subagent)
+    return {**data, "ended": sub.display_name}
+
+
+@mcp.tool()
+@_guard
 def chatroom_leave(room_id: str) -> dict:
     """離開聊天室。
 
@@ -346,15 +503,22 @@ def chatroom_leave(room_id: str) -> dict:
 
 @mcp.tool()
 @_guard
-def chatroom_heartbeat(room_id: str) -> dict:
+def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     """回報你仍在線，刷新該房間身分的 last_seen_at。
 
     Hub 的 presence sweeper 會把閒置逾時的 agent 移出房間，房內沒有 agent 時
     房間還會被自動封存。若你要離開工作區去做一件長時間的事（跑測試、長編譯），
     中途呼叫這個工具就能保住身分。
     正常讀寫訊息本來就會刷新 last_seen_at，因此**不必**在每次對話後都呼叫。
+
+    ``subagent`` 填 handle 就是替那個子代理續命。**子代理的時限比父層短一個
+    數量級**（預設 120 秒），一段安靜的長工作足以讓它被回收——回來要發最後
+    一則報告時才發現身分沒了。工作超過一分鐘就順手打一次。
     """
-    return _room_request(room_id, "POST", f"/api/rooms/{room_id}/heartbeat")
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(room_id, "POST", f"/api/rooms/{room_id}/heartbeat",
+                         participant_id=participant_id)
+    return {**(data if isinstance(data, dict) else {"result": data}), **scope}
 
 
 # ---------- 訊息 ----------
@@ -366,6 +530,7 @@ def chatroom_read(
     room_id: str,
     after_seq: int | None = None,
     limit: int = 100,
+    subagent: str = "",
     pinned_only: bool = False,
 ) -> dict:
     """讀取聊天室訊息（增量）。
@@ -376,24 +541,43 @@ def chatroom_read(
     （否則會跳過未釘選的訊息）。
     回傳 ``messages`` 與 ``next_after_seq``（下次可用的游標位置）。
     """
+    participant_id, scope = _identity_for(room_id, subagent)
     if after_seq is not None:
         effective = after_seq
-    else:
+    elif pinned_only:
         # 釘選牆要看整房的釘選；游標只服務一般增量讀取
-        effective = 0 if pinned_only else state().last_seq(room_id)
+        effective = 0
+    elif subagent:
+        effective = _subagents.cursor(subagent)
+    else:
+        effective = state().last_seq(room_id)
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/messages",
         require_identity=False,
+        participant_id=participant_id,
         params={"after_seq": effective, "limit": limit, "pinned_only": pinned_only},
     )
     messages = data.get("messages", [])
+    # **子代理讀訊息不推進父層的游標，但要推進自己那一份。** 父層的游標是
+    # 「父層讀到哪裡」的紀錄，被臨時分身推著跑，父層會靜靜跳過沒讀過的訊息；
+    # 而子代理若完全不記位置，連續呼叫就會永遠拿到同一批
     if messages and not pinned_only:
         # P1-06 後 Hub 回傳權威 next_after_seq；缺欄位時（舊版 Hub）退回自算
-        state().set_last_seq(room_id, data.get("next_after_seq", messages[-1]["seq"]))
+        head = data.get("next_after_seq", messages[-1]["seq"])
+        if subagent:
+            _subagents.advance(subagent, head)
+        else:
+            state().set_last_seq(room_id, head)
     data["after_seq"] = effective
-    data["next_after_seq"] = state().last_seq(room_id) if not pinned_only else effective
+    if pinned_only:
+        data["next_after_seq"] = effective
+    elif subagent:
+        data["next_after_seq"] = _subagents.cursor(subagent)
+    else:
+        data["next_after_seq"] = state().last_seq(room_id)
+    data.update(scope)
     return data
 
 
@@ -404,6 +588,7 @@ def chatroom_post(
     content: str,
     mentions: list[str] | None = None,
     reply_to: str = "",
+    subagent: str = "",
 ) -> dict:
     """在聊天室發言。
 
@@ -419,17 +604,25 @@ def chatroom_post(
     離開房間，或名字打錯了。房裡常有名字只差一個字的舊身分（「Novia」與
     「Novia-2」），挑錯就等於對著空氣說話。這種情況要用 ``active_names`` 裡的
     正確名字重發，不要以為訊息送到了。
+
+    ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，這則就以那個子
+    agent 的身分發出。回傳的 ``identity_scope`` 是 ``"parent"`` 或
+    ``"subagent"``——**發完檢查一下它**：漏帶 handle 不會報錯，訊息會掛在
+    父層名下，而那與「舊版沒有這個功能」在結果上完全一樣。
     """
+    participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(
         room_id,
         "POST",
         f"/api/rooms/{room_id}/messages",
+        participant_id=participant_id,
         json={
             "content": content,
             "mentions": mentions or [],
             "reply_to": reply_to or None,
         },
     )
+    data.update(scope)
     if data.get("unresolved_mentions"):
         names = "、".join(data["unresolved_mentions"])
         data["warning"] = (
@@ -441,7 +634,8 @@ def chatroom_post(
 
 @mcp.tool()
 @_guard
-def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0) -> dict:
+def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0,
+                  subagent: str = "") -> dict:
     """等待新訊息（long-poll）。
 
     有新訊息立即返回，否則掛起到 ``timeout`` 秒（Hub 上限 55 秒）後回空清單。
@@ -449,20 +643,34 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     ``you_were_mentioned`` 為 true 表示有人在這批訊息裡 ping 你，應優先回應。
     這是「等別人回話」的正確做法，不要用輪詢 chatroom_read 取代。
     """
-    effective = state().last_seq(room_id) if after_seq is None else after_seq
+    participant_id, scope = _identity_for(room_id, subagent)
+    if after_seq is not None:
+        effective = after_seq
+    elif subagent:
+        effective = _subagents.cursor(subagent)
+    else:
+        effective = state().last_seq(room_id)
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/updates",
         require_identity=False,
+        participant_id=participant_id,
         params={"after_seq": effective, "timeout": timeout},
         timeout=timeout + 10.0,
     )
     last = data.get("last_seq")
+    # 同 chatroom_read：子代理推自己那一份，不動父層的
     if isinstance(last, int):
-        state().set_last_seq(room_id, last)
+        if subagent:
+            _subagents.advance(subagent, last)
+        else:
+            state().set_last_seq(room_id, last)
     data["after_seq"] = effective
-    data["next_after_seq"] = state().last_seq(room_id)
+    data["next_after_seq"] = (
+        _subagents.cursor(subagent) if subagent else state().last_seq(room_id)
+    )
+    data.update(scope)
     return data
 
 
@@ -553,7 +761,8 @@ def _question_seconds_left(question_id: str) -> float | None:
     return float(left) if isinstance(left, (int, float)) else None
 
 
-def _expired_result(question_id: str, created: dict, idle_note: str) -> dict:
+def _expired_result(question_id: str, created: dict, idle_note: str,
+                    scope: dict | None = None) -> dict:
     """這題過期了。
 
     與 ``timeout`` 分開回報，因為 agent 的處置完全不同：逾時還能回頭拿答案，
@@ -567,6 +776,7 @@ def _expired_result(question_id: str, created: dict, idle_note: str) -> dict:
                 + "這題已經過期，對方沒有看到，回頭也拿不到答案"
                   "（chatroom_read_answer 只會告訴你同一件事）。"
                   "換個方式問他，或照你自己的判斷往下做。",
+        **(scope or {}),
     }
 
 
@@ -581,6 +791,7 @@ def chatroom_ask_human(
     allow_free_text: bool = True,
     multi_select: bool = False,
     question_ttl: float = 0.0,
+    subagent: str = "",
 ) -> dict:
     """在聊天室裡向指定的人類提問，並等待回答。
 
@@ -633,17 +844,23 @@ def chatroom_ask_human(
 
     ``timeout`` 與 ``expired`` 的差別是「還能不能拿到答案」，處置完全不同。
     """
+    # 身分要在**建立問題之前**解析：Hub 把標頭身分寫成 asker_id，收據、
+    # 撤回權、離場自動取消全都掛在它身上。走父層的話，子代理問的問題會
+    # 變成父層問的——父層離開時會被連帶撤回，而真正在等答案的是子代理
+    _ask_pid, _ask_scope = _identity_for(room_id, subagent)
     payload: dict[str, Any] = {
         "prompt": question,
         "options": [{"label": o} for o in (options or [])],
         "allow_free_text": allow_free_text,
         "multi_select": multi_select,
-        "target_participant_id": _participant_id_by_name(room_id, target_name),
+        "target_participant_id": _participant_id_by_name(
+            room_id, target_name, as_participant=_ask_pid),
     }
     if question_ttl:
         payload["timeout_seconds"] = question_ttl
     created = _room_request(
-        room_id, "POST", f"/api/rooms/{room_id}/questions", json=payload
+        room_id, "POST", f"/api/rooms/{room_id}/questions",
+        participant_id=_ask_pid, json=payload,
     )
     qid = created["id"]
     if created.get("target_active") is False:
@@ -664,7 +881,7 @@ def chatroom_ask_human(
             # 回頭拿。少了這一步，「timeout」就只是一句沒有下一步的話
             left = _question_seconds_left(qid)
             if left is not None and left <= 0:
-                return _expired_result(qid, created, _log_target_idle)
+                return _expired_result(qid, created, _log_target_idle, _ask_scope)
             return {
                 "answered": False, "reason": "timeout", "question_id": qid,
                 "target_name": created.get("target_name"),
@@ -678,6 +895,7 @@ def chatroom_ask_human(
                         (_log_target_idle + " " if _log_target_idle else "")
                         + "問題仍然留著，用 chatroom_read_answer"
                         f"（question_id={qid}）取得，不必重問。",
+                **_ask_scope,
             }
         data = hub().request(
             "GET", f"/api/questions/{qid}",
@@ -686,19 +904,21 @@ def chatroom_ask_human(
         )
         q = data["question"]
         if q["status"] == "expired":
-            return _expired_result(qid, created, _log_target_idle)
+            return _expired_result(qid, created, _log_target_idle, _ask_scope)
         if q["status"] == "answered":
-            return _answered_result(qid, q, created)
+            return _answered_result(qid, q, created, _ask_scope)
         if q["status"] == "skipped":
             return {
                 "answered": False, "reason": "skipped", "question_id": qid,
                 "target_name": created.get("target_name"),
                 "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
                         "不要再用這個工具問同一件事。",
+                **_ask_scope,
             }
 
 
-def _answered_result(qid: str, q: dict, created: dict) -> dict:
+def _answered_result(qid: str, q: dict, created: dict,
+                     scope: dict | None = None) -> dict:
     """回答的統一形狀——`ask_human` 與 `read_answer` 兩條路要給一樣的東西。
 
     兩邊各組一次的話，遲早有一邊漏掉新欄位（附件就差點只出現在其中一條），
@@ -718,6 +938,7 @@ def _answered_result(qid: str, q: dict, created: dict) -> dict:
         out["attachments"] = files
         out["hint"] = ("回答附了檔案。要看內容請用 chatroom_get_file 取回"
                        "（附件本體不會放進這個回應裡）。")
+    out.update(scope or {})
     return out
 
 
@@ -783,6 +1004,7 @@ def chatroom_send_file(
     file_path: str,
     message: str = "",
     mentions: list[str] | None = None,
+    subagent: str = "",
 ) -> dict:
     """把本機的一個檔案（截圖、log、報告…）送進聊天室。
 
@@ -795,12 +1017,14 @@ def chatroom_send_file(
     path = Path(file_path).expanduser()
     if not path.is_file():
         raise HubError(f"找不到檔案：{path}")
+    participant_id, scope = _identity_for(room_id, subagent)
     mime, _ = mimetypes.guess_type(path.name)
     with path.open("rb") as fh:
         uploaded = _room_request(
             room_id,
             "POST",
             f"/api/rooms/{room_id}/attachments",
+            participant_id=participant_id,
             files={"file": (path.name, fh, mime or "application/octet-stream")},
             timeout=120.0,
         )
@@ -808,6 +1032,7 @@ def chatroom_send_file(
         room_id,
         "POST",
         f"/api/rooms/{room_id}/messages",
+        participant_id=participant_id,
         json={
             "content": message or f"（檔案）{path.name}",
             "mentions": mentions or [],
@@ -820,6 +1045,7 @@ def chatroom_send_file(
         "size": uploaded["size"],
         "message_id": posted["id"],
         "seq": posted["seq"],
+        **scope,
     }
 
 

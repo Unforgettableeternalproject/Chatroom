@@ -295,6 +295,11 @@ class Watcher:
         # 離開了」（2026-08-29 外部測試端實測）。
         self.first_poll = True
         self.suppressed_presence = 0
+        # subagent 的進出**不進訊息流**，所以 after_seq 掃不到它們。Hub 另給
+        # 一條游標（它自己發的時間戳），我們原封 echo 回去——不自己造值，
+        # 兩端時鐘偏差就與這件事無關。空字串＝還沒拿過，Hub 那輪只給游標、
+        # 不補發歷史（剛掛上時房裡既有的 subagent 是現況，不是剛發生的事）
+        self.subagents_since = ""
         self.seen_assignments: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
@@ -320,12 +325,27 @@ class Watcher:
             "GET",
             f"/api/rooms/{self.room_id}/updates",
             participant_id=self.participant_id,
-            params={"after_seq": self.after_seq, "timeout": self.args.poll_timeout},
+            params={"after_seq": self.after_seq, "timeout": self.args.poll_timeout,
+                    "subagents_since": self.subagents_since},
             timeout=self.args.poll_timeout + 10.0,
         )
         last = data.get("last_seq")
         if isinstance(last, int):
             self.after_seq = max(self.after_seq, last)
+        cursor = data.get("subagents_cursor")
+        if isinstance(cursor, str) and cursor:
+            self.subagents_since = cursor
+        for ev in data.get("subagent_events") or []:
+            # 只有父層拿得到這些（Hub 依 participant 過濾），所以這裡不必再
+            # 判斷「是不是我的」。也不受 --no-join-events 影響：那個開關管的
+            # 是房內成員的進出，而這是**你自己派出去的東西**的狀態——你就是
+            # 唯一的收件人，關掉等於沒有人會知道
+            self.emit({
+                "event": ev.get("event"),
+                "room_id": self.room_id,
+                "who": ev.get("name"),
+                "parent": self.display_name,
+            })
         # 封存不會讓成員身分失效（封存房仍可讀），所以不看這個欄位的話
         # watcher 會對著一個已經結束的房間空轉到天荒地老
         status = data.get("room_status")
@@ -390,7 +410,10 @@ class Watcher:
                     # （2026-08-30：實際發生過——問題逾時、人回答了、
                     # 發問的 agent 完全不知道）
                     continue
-            mentioned = _mentions_me(m, self.display_name)
+            relayed = m.get("relayed_mentions") or []
+            # @ 到我旗下的 subagent＝叫醒我。它沒有自己的 watcher 進程
+            # （它活在我的進程裡），我不醒的話那個 mention 就是打進空氣
+            mentioned = _mentions_me(m, self.display_name) or bool(relayed)
             if not self.args.all_messages and not mentioned:
                 if self.display_name is None and not self._warned_no_name:
                     # 為什麼沒有名字，preflight 已經查過並講清楚了；這裡只補上
@@ -410,6 +433,8 @@ class Watcher:
                     "sender": m.get("sender_name"),
                     "preview": _preview(m.get("content", "")),
                     "mentioned": mentioned,
+                    # 被叫醒卻不知道是給旗下哪一個的，就無從決定要不要轉手
+                    **({"for_subagent": relayed} if relayed else {}),
                     "pinned": m.get("pinned", False),
                     "deleted": m.get("deleted", False),
                     # 只放 metadata（內容在 Hub 的磁碟上）。不放的話收到事件
