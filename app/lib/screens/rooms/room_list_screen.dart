@@ -401,7 +401,8 @@ class _RoomTile extends ConsumerWidget {
                   room: room,
                   onToggleArchive: onToggleArchive,
                   onAssign: onAssign,
-                  onDelete: onDelete),
+                  onDelete: onDelete,
+                  hostMode: ref.watch(hostViewProvider)),
             ]),
             if (room.topic.isNotEmpty) ...[
               const SizedBox(height: 5),
@@ -450,12 +451,18 @@ class _RoomMenu extends StatelessWidget {
     required this.onToggleArchive,
     required this.onAssign,
     required this.onDelete,
+    this.hostMode = false,
   });
 
   final Room room;
   final VoidCallback onToggleArchive;
   final VoidCallback onAssign;
   final VoidCallback onDelete;
+
+  /// 主持人模式開著。Hub 對主持人放行封存／解封／刪除，UI 要跟著給——
+  /// 不給的話那個模式只是「看得到」，而看得到卻動不了正是使用者回報
+  /// 「刪除功能消失」的樣子。
+  final bool hostMode;
 
   @override
   Widget build(BuildContext context) {
@@ -494,8 +501,13 @@ class _RoomMenu extends StatelessWidget {
                 style: UepText.sans(size: 12.5, color: s.ink)),
           ),
         // 刪除也要在**列表上**給得到：封存房的操作場景就在這裡，沒有人會
-        // 為了刪掉一個封存房而先點進去
-        if (room.youAreAdmin)
+        // 為了刪掉一個封存房而先點進去。
+        //
+        // 主持人模式開著時一律給：Hub 端對主持人放行刪除，而
+        // `you_are_admin` 只答「這個房是不是你開的」——deviceKey 換過一次，
+        // 舊房就全部答 false，creator 為 NULL 的舊房更是誰都刪不掉。
+        // 那正是這個模式要解決的
+        if (room.youAreAdmin || hostMode)
           PopupMenuItem(
             value: 'delete',
             height: 36,

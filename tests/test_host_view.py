@@ -194,3 +194,67 @@ async def test_host_view_does_not_grant_write(tmp_path):
             r = await client.post(f"/api/rooms/{rid}/messages",
                                   json={"content": "插話"}, headers=HOST)
             assert r.status_code in (401, 403)
+
+
+async def test_host_can_delete_an_ownerless_room(tmp_path):
+    """**這是使用者實際撞到的**：deviceKey 換過一次，舊房的 you_are_admin
+    全部變 false；`creator_session_key` 為 NULL 的舊房更是誰都刪不掉
+    （`_admin_or_403` 對它們回 409 room_has_no_admin），一直堆在列表上。
+
+    主持人視角是唯一的出路——理由與封存同一條：他握有 .env 就握有
+    chatroom.db，`DELETE FROM room` 本來就做得到。
+    """
+    app, client = await _client(tmp_path, "del-ownerless")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post(
+                "/api/rooms", json={"name": "沒人管的房"})).json()["id"]
+            stuck = await client.delete(f"/api/rooms/{rid}")
+            assert stuck.status_code == 409
+            assert stuck.json()["detail"]["code"] == "room_has_no_admin"
+
+            r = await client.delete(f"/api/rooms/{rid}", headers=HOST)
+            assert r.status_code == 200, r.text
+            assert (await client.get(f"/api/rooms/{rid}",
+                                     headers=HOST)).status_code == 404
+
+
+async def test_host_can_delete_someone_elses_room(tmp_path):
+    """建立者是**別人**（或自己的舊 deviceKey）的房也刪得掉。"""
+    app, client = await _client(tmp_path, "del-others")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "old-device-key"})).json()["id"]
+            assert (await client.delete(f"/api/rooms/{rid}")).status_code == 403
+            assert (await client.delete(f"/api/rooms/{rid}",
+                                        headers=HOST)).status_code == 200
+
+
+async def test_host_view_still_refuses_room_owner_actions(tmp_path):
+    """刪除是主持人視角唯一涵蓋的破壞性動作。
+
+    「清掉這台 Hub 上的東西」是主持人的份內事；「以別人的房主身分行事」
+    （改說話方式、改鎖定狀態、踢別人房裡的人）不是。這條界線一鬆，
+    主持人就從「機器的擁有者」變成「所有房間的房主」。
+    """
+    app, client = await _client(tmp_path, "no-owner-acts")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "someone-else"})).json()["id"]
+            me = (await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human",
+                "session_key": "someone-else", "preferred_name": "Owner"},
+            )).json()
+
+            r = await client.post(f"/api/rooms/{rid}/visibility",
+                                  json={"visibility": "private"}, headers=HOST)
+            assert r.status_code == 403, r.text
+            r = await client.post(f"/api/rooms/{rid}/style",
+                                  json={"style": "concise"}, headers=HOST)
+            assert r.status_code == 403, r.text
+            r = await client.post(
+                f"/api/rooms/{rid}/participants/{me['participant_id']}/kick",
+                headers=HOST)
+            assert r.status_code in (401, 403), r.text

@@ -1672,15 +1672,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
-        """永久刪除一個聊天室。只有建立者能做，**不可復原**。
+        """永久刪除一個聊天室。建立者或 Hub 主持人，**不可復原**。
 
         封存的房間也能刪（其實那才是主要用途）。刪完之後，手上還握著舊身分的
         agent 會在下一次呼叫拿到 404 `room_not_found`——那條路徑不是身分問題，
         重新 join 也救不回來，bridge 對它有專屬的說明。
+
+        **主持人視角在這裡也放行**，理由與封存同一條：他握有 `.env` 就握有
+        `chatroom.db`，`DELETE FROM room` 本來就做得到。不給的話，
+        `creator_session_key` 為 NULL 的舊房會永遠刪不掉（`_admin_or_403`
+        對它們回 409 room_has_no_admin），一直堆在每個人的列表上。
+
+        ⚠️ 這是主持人視角唯一涵蓋的**破壞性**動作。發言、踢人、改鎖定狀態
+        與說話方式一律不放行——那些是「以別人的房主身分行事」，而刪除是
+        「清掉這台 Hub 上的東西」，後者才是主持人的份內事。
         """
         room = await _room_or_404(room_id, allow_archived=True)
-        await _admin_or_403(room, x_participant_id, x_session_key, "刪除這個聊天室")
+        await _admin_or_403(room, x_participant_id, x_session_key,
+                            "刪除這個聊天室", host=host)
         counts = await _purge_room(room_id)
         logger.warning(
             "永久刪除聊天室「%s」（%s）：%s", room["name"], room_id, counts,

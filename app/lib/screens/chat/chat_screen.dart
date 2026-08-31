@@ -1444,6 +1444,13 @@ class _OverflowMenu extends ConsumerWidget {
     // 只是把一個必然失敗的按鈕擺在那裡
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final youAreAdmin = detail?.youAreAdmin ?? false;
+    // 主持人模式**只加開刪除**，不加開說話方式與鎖定狀態。
+    //
+    // Hub 那邊也是這樣分的：主持人視角放行「清掉這台 Hub 上的東西」
+    // （封存／解封／刪除），不放行「以別人的房主身分行事」（改別人房間
+    // 的說話方式、鎖定狀態、踢別人房裡的人）。UI 多給一顆按鈕，按下去
+    // 只會拿到 403——把必然失敗的按鈕擺出來，跟不給一樣糟
+    final canDelete = youAreAdmin || ref.watch(hostViewProvider);
     final isPrivate = detail?.room.isPrivate ?? false;
     final style = detail?.room.style ?? kRoomStyles.first.value;
     final styleInstructions = detail?.room.styleInstructions ?? '';
@@ -1623,7 +1630,7 @@ class _OverflowMenu extends ConsumerWidget {
           ),
         ),
         // 刪除排在最後、與其他項目隔開：它是這個選單裡唯一不可復原的動作
-        if (youAreAdmin)
+        if (canDelete)
           PopupMenuItem(
             value: 'delete',
             height: 36,
