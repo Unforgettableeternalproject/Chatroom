@@ -1,3 +1,4 @@
+import 'package:chatroom_app/api/messages_api.dart';
 import 'package:chatroom_app/core/mention_groups.dart';
 import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
@@ -77,6 +78,26 @@ void main() {
         '那時 mentions 本來也不會有展開的結果，兩邊自然一致', () {
       final m = msg(mentions: ['Novia']);
       expect(m.mentionGroups, isEmpty);
+    });
+  });
+
+  group('展開成空的群組不能安靜地丟掉', () {
+    PostResult parse(Map<String, dynamic> json) => PostResult(
+          id: json['id'] as String,
+          seq: json['seq'] as int,
+          emptyGroups: ((json['empty_groups'] as List?) ?? const [])
+              .map((e) => e.toString())
+              .toList(),
+        );
+
+    test('empty_groups 帶得回來', () {
+      final r = parse({'id': 'm1', 'seq': 1, 'empty_groups': ['humans']});
+      expect(r.emptyGroups, ['humans']);
+    });
+
+    test('舊版 Hub 沒有這個欄位時是空清單——那時它也不做群組展開', () {
+      final r = parse({'id': 'm1', 'seq': 1});
+      expect(r.emptyGroups, isEmpty);
     });
   });
 }

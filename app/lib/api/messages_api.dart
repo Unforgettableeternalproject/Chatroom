@@ -30,9 +30,21 @@ class UpdatesResult {
 }
 
 class PostResult {
-  const PostResult({required this.id, required this.seq});
+  const PostResult({
+    required this.id,
+    required this.seq,
+    this.emptyGroups = const [],
+  });
+
   final String id;
   final int seq;
+
+  /// 展開成空的群組（例如房裡沒有人類卻發了 `@humans`）。
+  ///
+  /// **不能安靜地丟掉**：發話者看到的回應會與成功送達完全一樣，而他以為
+  /// 有人被叫醒了。與 `unresolved_mentions`（打錯的人名）同族，都是
+  /// 「你以為叫到人了，其實沒有」。
+  final List<String> emptyGroups;
 }
 
 class MessagesApi {
@@ -128,6 +140,10 @@ class MessagesApi {
         return PostResult(
           id: res.data!['id'] as String,
           seq: res.data!['seq'] as int,
+          // 舊版 Hub 不回這個欄位——那時它也不做群組展開，空清單是對的
+          emptyGroups: ((res.data!['empty_groups'] as List?) ?? const [])
+              .map((e) => e.toString())
+              .toList(),
         );
       });
 

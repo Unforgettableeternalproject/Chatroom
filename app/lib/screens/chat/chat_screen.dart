@@ -18,6 +18,7 @@ import '../../core/util/member_nesting.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/message.dart';
 import '../../api/attachments_api.dart';
+import '../../api/messages_api.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
 import '../../models/room_style.dart';
@@ -465,6 +466,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     };
   }
 
+  /// 群組 @ 展開成空的話講出來——例如房裡沒有人類卻發了 `@humans`。
+  ///
+  /// 不講的話，送出後的畫面與「成功叫到一群人」完全一樣，而發話者會就這樣
+  /// 等下去。與 `unresolved_mentions`（打錯的人名）同族：**你以為叫到人了，
+  /// 其實沒有**。
+  void _warnEmptyGroups(PostResult sent) {
+    if (sent.emptyGroups.isEmpty) return;
+    final names = sent.emptyGroups.map((g) => '@$g').join('、');
+    _toast('$names 現在房裡沒有對應的人，沒有人被叫醒');
+  }
+
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -481,7 +493,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (a.isReady && a.remoteId != null) a.remoteId!,
     ];
     try {
-      await ref
+      final sent = await ref
           .read(messagesApiProvider)
           .post(
             widget.roomId,
@@ -491,6 +503,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             replyTo: _replyTarget?.id,
             attachmentIds: attachmentIds,
           );
+      _warnEmptyGroups(sent);
       if (mounted) {
         setState(() {
           _replyTarget = null;
