@@ -66,6 +66,36 @@ void main() {
       expect(feed.cursor, 12, reason: 'cursor 不推進會反覆重收同一批更新');
     });
 
+    test('往上捲回來的較新快照要蓋掉手上的舊版', () {
+      // 症狀是「改了畫面不動、重進房才對」——最難查的那種間歇性。
+      // upsertAll 早就是覆寫語意，prependHistory 卻用 containsKey 跳過，
+      // 於是同一則訊息的新版本從歷史分頁回來時被靜靜丟掉。
+      final feed = RoomFeed('r1');
+      feed.upsertAll([msg(10), msg(11)]);
+      expect(feed.bySeq(10)!.pinned, isFalse);
+
+      feed.prependHistory(
+        [msg(7), msg(10, updateSeq: 14, pinned: true)],
+        hasMore: false,
+      );
+
+      expect(feed.bySeq(10)!.pinned, isTrue);
+      expect(feed.cursor, 14);
+      expect(feed.messages.map((m) => m.seq), [7, 10, 11]);
+    });
+
+    test('但歷史分頁不得把新版本降級回舊版', () {
+      // 覆寫要有方向：分頁請求送出後、回應到達前，WS 可能已經推來更新的
+      // 快照。無條件覆寫會讓畫面倒退一格，而那與「沒更新」一樣難查。
+      final feed = RoomFeed('r1');
+      feed.upsertAll([msg(10, updateSeq: 20, pinned: true)]);
+
+      feed.prependHistory([msg(10)], hasMore: false);
+
+      expect(feed.bySeq(10)!.pinned, isTrue, reason: '較舊的快照不該蓋掉新的');
+      expect(feed.cursor, 20);
+    });
+
     test('reset 清空後可重新載入', () {
       final feed = RoomFeed('r1');
       feed.upsertAll([msg(1)]);

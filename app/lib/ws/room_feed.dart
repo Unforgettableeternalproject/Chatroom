@@ -101,7 +101,11 @@ class RoomFeed {
   void prependHistory(Iterable<Message> older, {required bool hasMore}) {
     for (final m in older) {
       if (m.cursor > _cursor) _cursor = m.cursor;
-      if (!_bySeq.containsKey(m.seq)) {
+      // 與 upsertAll 同樣是覆寫語意——歷史分頁回的也是完整快照，手上那份
+      // 可能是編輯／釘選之前的版本。但**覆寫要有方向**：分頁送出後、回應
+      // 到達前，WS 可能已經推來更新的快照，無條件覆寫會讓畫面倒退一格。
+      final existing = _bySeq[m.seq];
+      if (existing == null || m.cursor >= existing.cursor) {
         _bySeq[m.seq] = m;
         _idToSeq[m.id] = m.seq;
       }
