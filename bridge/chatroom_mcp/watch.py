@@ -108,6 +108,10 @@ REJOINABLE = {"idle": True, "left": True, "kicked": False,
 # 小；設上限是為了長命 watcher 不會無界成長
 _SEEN_UPDATES_LIMIT = 512
 
+# 孤兒 state 檔的保留天數。夠長到「放了一個週末的 session」不會被誤清，
+# 又短到墓地不會無限成長。0 = 停用
+_STATE_TTL_DAYS_DEFAULT = 30.0
+
 DEPARTURE_EVENTS = {
     "leave": "left",
     "kick": "kicked",
@@ -543,6 +547,19 @@ class Watcher:
             )
             return
         listed = "、".join(f"{key}（{name}）" for key, name in others)
+        # **事件，不只是 log。** `_log` 走 stderr，而 Monitor 只把 stdout 當
+        # 事件流——診斷訊息送到沒有人在看的地方，等於沒有診斷。而這條訊息
+        # 的收件人正是最看不到東西的那個人：他在等指派，指派永遠不會到，
+        # 終端機與房內都一片安靜。
+        self.emit({
+            "event": "identity_split",
+            "room_id": self.room_id,
+            "session_key": self.session_key,
+            "found_in": [key for key, _ in others],
+            "message": "房內身分掛在另一把 session key 底下："
+                       "指派與 @mention 都不會觸發，而且不會有任何錯誤訊息。"
+                       "處置是重啟 MCP，或以 CHATROOM_SESSION_KEY 固定兩邊。",
+        })
         _log(
             "⚠️ session 身分分裂：這個房間的身分掛在另一把 key 底下——\n"
             f"         本 watcher：{self.session_key}\n"
@@ -583,6 +600,46 @@ class Watcher:
             "chatroom_assignments 回傳的 your_session_key 應該與上面那行相同；"
             "不同就是身分分裂，處置是重啟 MCP 或以 CHATROOM_SESSION_KEY 固定兩邊。"
         )
+
+    def gc_state_files(self) -> None:
+        """清掉久到不可能還活著的孤兒 state 檔。
+
+        每個死掉的 session 都留下一個檔案——這台開發機累積了九個。它們不
+        壞事，但 `_sibling_states` 那種「同機還有誰」的判斷要掃過全部，
+        而分裂診斷的可讀性正好與這個數字成反比。
+
+        **保守到近乎膽小是刻意的**：誤刪一個還活著的 session 的 state 檔，
+        等於把那個 agent 的房內身分與讀取游標一起抹掉，而它下一次醒來會以為
+        自己從沒進過房。所以：
+
+        - **自己的絕不碰**，即使看起來很舊——resume 一個放很久的 session 是
+          正常用法，而那正是最需要身分延續的時刻
+        - 只看 mtime，門檻預設 30 天，`CHATROOM_STATE_TTL_DAYS=0` 可停用
+        - 任何 IO 失敗都吞掉：GC 是啟動時的附帶動作，它失敗的後果不該大於
+          它的價值
+        """
+        try:
+            days = float(os.environ.get("CHATROOM_STATE_TTL_DAYS",
+                                        _STATE_TTL_DAYS_DEFAULT))
+        except ValueError:
+            days = _STATE_TTL_DAYS_DEFAULT
+        if days <= 0:
+            return
+        cutoff = time.time() - days * 86400
+        mine = identity.state_path(self.session_key)
+        removed = 0
+        for path in _state_candidates(self.session_key):
+            if path == mine:
+                continue
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    continue
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        if removed:
+            _log(f"清掉 {removed} 個超過 {days:g} 天沒動過的 session 身分檔。")
 
     def depart(self, reason: str, message: str) -> None:
         """發出離場事件並標記結束——這個房間對本 watcher 已經沒有事情要做了。"""
@@ -721,6 +778,7 @@ class Watcher:
                 "⚠️ kind=other——身分是隨機 key，與 bridge 對不上，"
                 "指派與 @mention 都不會觸發。請補 --kind claude|codex"
             )
+        self.gc_state_files()
         self.preflight()
         # 有 room 時指派輪詢自己一條執行緒，不被 long-poll 擋住
         assignment_thread: threading.Thread | None = None
