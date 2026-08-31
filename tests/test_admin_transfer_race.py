@@ -11,15 +11,20 @@
 （審核用 Codex F7，2026-08-31）
 """
 
+import ast
 import asyncio
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import chatroom_server.app as app_module
 from chatroom_server.app import create_app
 from chatroom_server.config import Config
 
-pytestmark = pytest.mark.asyncio
+# 這個檔案混了 async 與同步測試（靜態守衛是同步的），所以不下模組層的
+# `pytestmark = pytest.mark.asyncio`——它會套到同步測試上並發出警告。
+# pytest.ini 是 `asyncio_mode = auto`，async 測試不標也會跑
 
 
 def _cfg(tmp_path, name):
@@ -78,6 +83,36 @@ async def test_two_simultaneous_transfers_produce_one_winner(tmp_path):
         winner_name = next(p["display_name"] for p in detail["participants"]
                            if p["id"] == winner_id)
         assert admins == [winner_name], admins
+
+
+def test_no_request_path_rolls_back_the_shared_connection():
+    """請求路徑不得呼叫 `rollback()`。
+
+    整個 App 共用同一條 aiosqlite 連線，所以 `rollback()` 撤的是那條連線上
+    **所有**未提交的資料——包含另一個 coroutine 剛寫入還沒 commit 的。對方
+    之後照樣 commit、照樣回 200，而東西已經不在了：一次成功的寫入無聲消失
+    （審核用 Codex F11）。
+
+    **這條是靜態守衛，不是行為測試，而那是刻意的。** 我原本寫的是併發行為
+    測試（同時丟多筆寫入，斷言它們都還在）——把 rollback 加回去之後**它照樣
+    全綠**，跑四次都是。ASGITransport 底下的交錯不夠真實，構造不出那個窗口。
+    前後都綠的測試守不住任何東西，所以換成掃得到的形式。
+
+    真的需要交易隔離時，要的是 per-request 交易或連線池，不是在共用連線上
+    rollback——那時再回來鬆綁這條。
+    """
+    tree = ast.parse(Path(app_module.__file__).read_text(encoding="utf-8"))
+    offenders = [
+        f"app.py:{n.lineno}"
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "rollback"
+    ]
+    assert not offenders, (
+        "共用連線上的 rollback 會撤掉別的請求剛寫入、還沒 commit 的資料，"
+        "而對方會回報成功：\n  " + "\n  ".join(offenders)
+    )
 
 
 async def test_a_single_transfer_still_works(tmp_path):

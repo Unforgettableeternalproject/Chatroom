@@ -1178,7 +1178,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             (heir["session_key"], room_id, room["creator_session_key"]),
         )
         if cur.rowcount == 0:
-            await db.rollback()
+            # **這裡不要 rollback。** 整個 App 共用同一條 aiosqlite 連線，
+            # rollback 撤的是那條連線上所有未提交的東西——包含另一個 coroutine
+            # 剛寫入還沒 commit 的資料。它之後照樣 commit、照樣回成功，而東西
+            # 已經不在了。而且 rowcount=0 代表這個請求根本沒寫進任何東西，
+            # 沒有需要撤的（審核用 Codex F11）
             raise _err(409, "admin_already_changed",
                        "管理權在你送出這個請求的同時被移交給別人了。重新讀一次"
                        "房間狀態再決定——你現在可能已經不是管理員")
