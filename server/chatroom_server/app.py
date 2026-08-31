@@ -3922,15 +3922,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         ``participant_id`` 選填，帶了才會收到 ``questions``——提問是定向的，
         只推給被問的那個人。沒帶就只是個看訊息的連線。
         """
-        if cfg.api_token and ws.query_params.get("token") != cfg.api_token:
-            logger.info("ws: 拒絕連線（token 驗證失敗）")
-            await ws.close(code=4401)
-            return
+        # ⚠️ 這裡**必須與 require_auth 收一樣的 token**。原本寫成
+        # `token != cfg.api_token` 就拒——那在 08-27 是對的（當時只有主
+        # token），但 08-29 引入可撤銷的 access_token 之後就漏接了：用邀請碼
+        # 進來的人 REST 讀得到歷史，卻連不上即時通道。在他眼中那不是
+        # 「權限不足」，是「這個聊天室好像死了」。
+        ws_token = ws.query_params.get("token") or ""
+        ws_root = not cfg.api_token or ws_token == cfg.api_token
+        if not ws_root:
+            row = await app.state.db.execute(
+                "SELECT 1 FROM access_token WHERE token=? AND revoked_at IS NULL",
+                (ws_token,),
+            )
+            if await row.fetchone() is None:
+                logger.info("ws: 拒絕連線（token 驗證失敗）")
+                await ws.close(code=4401)
+                return
         # 主持人視角。REST 那半開了而這裡沒開等於白做——這是 App 的主要
         # 讀取通道（08-29 收緊讀取邊界時就踩過反方向的同一件事）。
-        # 走到這裡表示 token 已經驗過是主 token（或未設 token 的開放模式），
-        # 所以只要再確認 client 有沒有**明示**要用這個身分
-        ws_host = ws.query_params.get("host_view") == "1"
+        #
+        # 🚨 **必須自己判斷是不是主 token**，不能靠「走到這裡就是主 token」。
+        # 那個假設在上面放寬連線驗證的那一刻就沒了，而它一旦失效，任何一張
+        # 邀請碼都能打開主持人視角。這兩件事因此在同一個 commit 裡改。
+        ws_host = ws_root and ws.query_params.get("host_view") == "1"
         if ws_host:
             logger.info(
                 "ws: 主持人視角連線",
