@@ -66,7 +66,11 @@ def test_post_uses_stored_participant_header(fake_hub):
     _join(fake_hub)
     fake_hub.json("POST", f"/api/rooms/{ROOM}/messages", {"id": "m1", "seq": 3})
     result = srv.chatroom_post(ROOM, "你好")
-    assert result == {"ok": True, "id": "m1", "seq": 3}
+    # 不用精確相等：`identity_scope` 之類的觀測欄位是刻意一律附上的
+    # （見 `_identity_for`），而精確相等會讓每次新增這種欄位都變成假性失敗
+    assert result["ok"] is True
+    assert (result["id"], result["seq"]) == ("m1", 3)
+    assert result["identity_scope"] == "parent"
     assert fake_hub.calls[-1].headers["X-Participant-Id"] == "pid-1"
 
 
@@ -89,7 +93,7 @@ def test_heartbeat_requires_identity_first(fake_hub):
 def test_heartbeat_success(fake_hub):
     _join(fake_hub)
     fake_hub.json("POST", f"/api/rooms/{ROOM}/heartbeat", {"ok": True})
-    assert srv.chatroom_heartbeat(ROOM) == {"ok": True}
+    assert srv.chatroom_heartbeat(ROOM)["ok"] is True
 
 
 def test_pin_and_unpin(fake_hub):
