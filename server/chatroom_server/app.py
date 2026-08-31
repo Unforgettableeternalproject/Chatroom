@@ -2279,6 +2279,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _touch_message(message_id, room_id)
         return {"ok": True}
 
+    def _refuse_write_if_not_active(me) -> None:
+        """不在房裡就不能改動房內的訊息（編輯／撤回共用）。
+
+        `me` 為 None（跨房身分）時不在這裡處理——那要由呼叫端連同「不是作者」
+        一起講，才不會洩漏「那則訊息存在於別的房」。
+        """
+        if me is None or me["status"] == "active":
+            return
+        if me["status"] == "kicked":
+            raise _err(403, "participant_kicked",
+                       "你已被移出這個聊天室，不能再改動房內的訊息")
+        raise _err(403, "participant_not_active",
+                   "你已經不在這個聊天室裡。讀得到歷史，但改不動它——寫入要求"
+                   "的是此刻的成員資格，不是曾經有過")
+
     @app.patch("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
     async def edit_message(
         message_id: str,
@@ -2336,11 +2351,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "請求沒有帶 X-Participant-Id。編輯訊息要證明你是發送者本人")
         me = await (
             await db.execute(
-                "SELECT id FROM participant WHERE id=? AND room_id=?",
+                "SELECT id, status FROM participant WHERE id=? AND room_id=?",
                 (x_participant_id, room_id),
             )
         ).fetchone()
-        # 跨房身分一併擋住，且不洩漏「那則訊息存在於別的房」
+        # **寫入要求此刻還在房裡。** 讀取邊界刻意放行「曾經是成員」的人
+        # （離開不是銷毀自己的紀錄），寫入不沿用那條寬鬆——否則被踢的人手上
+        # 那個 id 仍然改得動他說過的話，而踢出的用意就是「不能再影響這個房間」。
+        #
+        # 三種情況要說三種話：被踢、已離開、不是作者。講成同一句的話，被踢的人
+        # 會看到「只有發送者本人可以編輯」——而他確實是本人，於是去查一個不存在
+        # 的問題
+        _refuse_write_if_not_active(me)
         if me is None or msg["sender_id"] is None or me["id"] != msg["sender_id"]:
             raise _err(403, "not_message_author",
                        "只有發送者本人可以編輯這則訊息。聊天室建立者刪得掉"
@@ -2402,11 +2424,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "發送者本人，或是這個聊天室的建立者")
             me = await (
                 await db.execute(
-                    "SELECT id, session_key, parent_id FROM participant"
+                    "SELECT id, session_key, parent_id, status FROM participant"
                     " WHERE id=? AND room_id=?",
                     (x_participant_id, room_id),
                 )
             ).fetchone()
+            # 與編輯同一條界線：踢出擋得住發言卻擋不住撤回的話，那條移除
+            # 就是半套的，而畫面上完全看不出來
+            _refuse_write_if_not_active(me)
             if me is None:
                 # 跨房身分在這裡也要擋住，且不要洩漏「那則訊息存在於別的房」
                 raise _err(403, "not_message_owner",
