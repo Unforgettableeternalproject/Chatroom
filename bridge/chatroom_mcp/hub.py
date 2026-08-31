@@ -84,6 +84,21 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "尚未取得房間身分：請先用 chatroom_join 加入該房間再試一次。",
                 status=status, detail=detail, identity_invalid=True,
             )
+        if code == "session_key_header_required":
+            # **不設 identity_invalid**：缺的是請求上的一個標頭，不是房內
+            # 身分。設了的話 watcher 會結束進程、agent 會跑去重新 join——
+            # 而那兩件事都解決不了「這個請求少一個 X-Session-Key」。
+            return HubError(
+                _detail_text(detail)
+                or "這個動作要證明你就是那把 session key 的本人，"
+                   "但請求沒有帶 X-Session-Key。",
+                status=status, detail=detail,
+            )
+        # 走到這裡的 401 一律被當成 token 問題——**那個假設只對
+        # `invalid_token` 成立**。Hub 之後新增的「你沒帶某個身分標頭」類
+        # code 若掉進來，agent 會被指去查一把好好的 token，然後在那裡繞很久。
+        # `tests/test_401_contract.py` 守著這件事：新增 401 code 忘了回來
+        # 加一條就會紅。
         return HubError(
             f"Hub 拒絕了這次請求（token 無效或未設定）。請確認環境變數 "
             f"CHATROOM_TOKEN 與 Hub（{hub_url}）設定一致。",
