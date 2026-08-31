@@ -20,7 +20,7 @@ from fastapi import (
     Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile,
     WebSocket, WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .config import Config
@@ -114,6 +114,10 @@ CUSTOM_STYLE_FRAME = (
 )
 CUSTOM_STYLE = "custom"
 STYLE_PATTERN = "^(verbose|concise|casual|custom)$"
+
+# 匯出時一次讀多少則。與 read_messages 的 limit 上限無關——那是分頁契約，
+# 這是串流的內部節奏，匯出本來就要跨過整個房間
+EXPORT_BATCH = 500
 
 
 def _style_texts(style: str, instructions: str) -> tuple[str, str]:
@@ -1682,6 +1686,60 @@ def create_app(config: Config | None = None) -> FastAPI:
             out["next_after_seq"] = msgs[-1]["seq"]
             out["next_before_seq"] = msgs[0]["seq"]
         return out
+
+    @app.get("/api/rooms/{room_id}/export", dependencies=[Depends(require_auth)])
+    async def export_room(
+        room_id: str,
+        format: str = "jsonl",
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """把整個房間匯成一行一則的 jsonl。
+
+        **門檻不沿用刪除那條。** 刪除是破壞，匯出是外流——它把整個房間打包
+        成一個檔案交出去。所以要求成員身分（曾經是成員即可，被踢的不行），
+        不是只驗 token。
+
+        封存房照樣匯得出來：房間可以被永久刪除，而那不可逆，備份正是封存
+        之後最需要的動作。
+
+        **逐批串流不是最佳化，是必要的**：匯出天生對最大的房下手，一次撈完
+        會在最不該倒的時候把 Hub 拖垮。
+
+        排版留給 client：影響行為的定稿收在 Hub，只影響呈現的不上來。這裡
+        出的是原始序列化——**與 read_messages 共用同一份**，另寫一份遲早會
+        漂移，而漂移的症狀是「匯出的內容跟畫面上看到的不一樣」。
+        """
+        if format != "jsonl":
+            raise _err(422, "unsupported_format",
+                       f"匯出目前只支援 jsonl，收到的是「{format}」")
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id)
+        db = app.state.db
+
+        async def _rows():
+            cursor = 0
+            while True:
+                rows = await (await db.execute(
+                    "SELECT * FROM message WHERE room_id=? AND seq>? "
+                    "ORDER BY seq LIMIT ?",
+                    (room_id, cursor, EXPORT_BATCH),
+                )).fetchall()
+                if not rows:
+                    return
+                for msg in await _message_rows_to_json(rows, db):
+                    yield json.dumps(msg, ensure_ascii=False) + "\n"
+                cursor = rows[-1]["seq"]
+
+        # 檔名用 room_id 不用房名：房名是使用者輸入，會有引號、換行、非
+        # ASCII，直接塞進 Content-Disposition 就是一個標頭注入的破口。
+        # 給人看的檔名由 client 命名，它手上本來就有房名
+        return StreamingResponse(
+            _rows(),
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": f'attachment; filename="{room_id}.jsonl"'
+            },
+        )
 
     async def _subagent_delta(room_id: str, parent_id: str, since: str):
         """我旗下 subagent 在 ``since`` 之後的進出，以及新的游標。
