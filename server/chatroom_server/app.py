@@ -1372,6 +1372,68 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "admin_participant_id": target["id"],
                 "admin_display_name": target["display_name"]}
 
+    @app.post("/api/rooms/{room_id}/admin/claim",
+              dependencies=[Depends(require_auth)])
+    async def claim_admin(
+        room_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """Hub 主持人把一個房間的管理權收到自己身上。
+
+        **與 `transfer_admin` 是兩件事，所以不共用端點**：那個是「現任管理員
+        交給房內的另一個人類成員」，要求交出者是現任 admin、接手者是房內
+        active 的人類。主持人兩個條件都不滿足——他多半根本不在那個房裡，
+        而需要 claim 的房正是「沒有現任管理員可以交出」的那些。
+
+        為什麼需要它：管理權綁在 `creator_session_key` 上，而人類的
+        session key 是 App 本機產的、設定頁還有「重新產生」按鈕。換一次
+        key，之前建的房就全部變成「別人的」；`creator_session_key` 為 NULL
+        的舊房更是從一開始就沒有管理員。主持人模式讓那些房看得到、封得起來、
+        刪得掉，但每一次都得先打開開關——claim 之後它就真的是他的房了。
+
+        封存房**也能 claim**，那其實是主要用途：需要被接管的房多半已經被
+        收起來了。
+        """
+        if not host:
+            raise _err(403, "host_view_required",
+                       "接管聊天室的管理權只有 Hub 主持人做得到，"
+                       "而且要明示主持人視角（X-Host-View）")
+        if not x_session_key:
+            raise _err(401, "session_key_header_required",
+                       "請求沒有帶 X-Session-Key。管理權要綁在一把具體的"
+                       "身分上，不能綁在「這次請求」上")
+        room = await _room_or_404(room_id, allow_archived=True)
+        previous = room["creator_session_key"]
+        if previous == x_session_key:
+            # 冪等：已經是你的了。回 200 而不是 409——重複點擊不該長得像錯誤
+            return {"ok": True, "changed": False}
+        db = app.state.db
+        await db.execute(
+            "UPDATE room SET creator_session_key=? WHERE id=?",
+            (x_session_key, room_id),
+        )
+        await db.commit()
+        logger.warning(
+            "主持人接管聊天室「%s」（%s）的管理權", room["name"], room_id,
+            extra={"event": "admin_claimed", "room_id": room_id,
+                   "room_name": room["name"],
+                   # 舊 key 只留提示碼：它是別人的身分識別，而這行日誌
+                   # 會被複製、貼進聊天室、附在 issue 上
+                   "previous_hint": token_hint(previous or ""),
+                   "had_admin": bool(previous)},
+        )
+        # 房內成員該知道管理權換人了——尤其原管理員還在的情況。
+        # 封存房照樣留這則：它是唯讀的，但那是對使用者而言，紀錄仍要留下
+        await _post_message(
+            room_id, None,
+            "Hub 主持人接管了這個聊天室的管理權"
+            + ("" if previous else "（這個房間原本沒有管理員）"),
+            kind="system", system_event="admin_claimed",
+        )
+        await events.notify(room_id)
+        return {"ok": True, "changed": True, "had_admin": bool(previous)}
+
     @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
     async def archive_room(
         room_id: str,

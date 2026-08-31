@@ -198,6 +198,15 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有目前的管理員可以移交管理權。",
                 status=status, detail=detail,
             )
+        if code == "host_view_required":
+            # 這條 agent 幾乎不會撞到（接管管理權是 App 的動作），但翻譯
+            # 一定要有：落進 fallback 會被當成身分失效，而 watcher 對身分
+            # 失效的處置是結束自己
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有 Hub 主持人做得到，而且要明示主持人視角。",
+                status=status, detail=detail,
+            )
         if code == "not_request_owner":
             # 收回**自己的**提議與「拒絕別人的提議」是兩件事：後者是建立者
             # 的動作而且會留紀錄。講成「你沒有權限」會讓建立者去找核准鈕的

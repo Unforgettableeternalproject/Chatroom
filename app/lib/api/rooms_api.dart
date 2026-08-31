@@ -388,6 +388,27 @@ class RoomsApi {
         );
       });
 
+  /// Hub 主持人把一個房間的管理權收到自己身上。
+  ///
+  /// 與「移交」不同：那個是現任管理員交給房內的另一個人類成員，這個是
+  /// 主持人**接管**——他多半不在那個房裡，而需要接管的房正是「沒有現任
+  /// 管理員可以交出」的那些。
+  ///
+  /// [sessionKey] 是管理權要綁上去的身分（自己的 deviceKey）。Hub 不接受
+  /// 省略它：管理權要綁在一把具體的身分上，不能綁在「這次請求」上。
+  Future<bool> claimAdmin(
+    String roomId, {
+    required String sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/admin/claim',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        // changed=false ＝ 本來就是你的。呼叫端據此決定要不要講話
+        return (res.data?['changed'] as bool?) ?? true;
+      });
+
   /// 建立者拍板：核准就封存，婉拒留紀錄。
   Future<void> resolveArchiveRequest(
     String requestId, {

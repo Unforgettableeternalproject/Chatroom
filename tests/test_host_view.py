@@ -258,3 +258,111 @@ async def test_host_view_still_refuses_room_owner_actions(tmp_path):
                 f"/api/rooms/{rid}/participants/{me['participant_id']}/kick",
                 headers=HOST)
             assert r.status_code in (401, 403), r.text
+
+
+# ---------- 接管管理權 ----------
+
+async def test_host_claims_admin_of_an_ownerless_room(tmp_path):
+    """creator 為 NULL 的舊房：claim 之後就真的是主持人的房了。
+
+    在此之前那些房**永遠**沒有管理員——`_admin_or_403` 對它們一律回 409
+    room_has_no_admin，而 transfer_admin 要求「現任管理員」交出，那個人
+    根本不存在。
+    """
+    app, client = await _client(tmp_path, "claim-none")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post(
+                "/api/rooms", json={"name": "沒人管的房"})).json()["id"]
+            r = await client.post(
+                f"/api/rooms/{rid}/admin/claim",
+                headers={**HOST, "X-Session-Key": "my-device"})
+            assert r.status_code == 200, r.text
+            assert r.json()["had_admin"] is False
+
+            # 之後不必再開主持人模式就管得動
+            det = (await client.get(
+                f"/api/rooms/{rid}",
+                headers={"X-Session-Key": "my-device"})).json()
+            assert det["you_are_admin"] is True
+            assert (await client.post(
+                f"/api/rooms/{rid}/archive",
+                headers={"X-Session-Key": "my-device"})).json()["archived"] is True
+
+
+async def test_claim_works_on_archived_rooms(tmp_path):
+    """封存房也能接管——那其實是主要用途，需要接管的房多半已經被收起來了。"""
+    app, client = await _client(tmp_path, "claim-archived")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "old-device"})).json()["id"]
+            await client.post(f"/api/rooms/{rid}/archive",
+                              headers={"X-Session-Key": "old-device"})
+            r = await client.post(
+                f"/api/rooms/{rid}/admin/claim",
+                headers={**HOST, "X-Session-Key": "new-device"})
+            assert r.status_code == 200, r.text
+            assert r.json()["had_admin"] is True
+            # 接管者解得開
+            assert (await client.post(
+                f"/api/rooms/{rid}/unarchive",
+                headers={"X-Session-Key": "new-device"})).status_code == 200
+
+
+async def test_claim_requires_host_view_and_a_session_key(tmp_path):
+    """兩個守門：主持人視角，以及「要綁在哪把身分上」。"""
+    app, client = await _client(tmp_path, "claim-guard")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "owner"})).json()["id"]
+
+            # 主 token 但沒明示主持人視角 → 擋
+            bad = await client.post(f"/api/rooms/{rid}/admin/claim",
+                                    headers={"X-Session-Key": "me"})
+            assert bad.status_code == 403
+            assert bad.json()["detail"]["code"] == "host_view_required"
+
+            # 主持人視角但沒說要綁給誰 → 擋。管理權不能綁在「這次請求」上
+            bad = await client.post(f"/api/rooms/{rid}/admin/claim",
+                                    headers=HOST)
+            assert bad.status_code == 401
+            assert bad.json()["detail"]["code"] == "session_key_header_required"
+
+            # 原管理員沒被動到
+            det = (await client.get(f"/api/rooms/{rid}",
+                                    headers={"X-Session-Key": "owner"})).json()
+            assert det["you_are_admin"] is True
+
+
+async def test_claim_is_idempotent(tmp_path):
+    """已經是你的了 → 200 changed=false。重複點擊不該長得像錯誤。"""
+    app, client = await _client(tmp_path, "claim-idem")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "me"})).json()["id"]
+            r = await client.post(f"/api/rooms/{rid}/admin/claim",
+                                  headers={**HOST, "X-Session-Key": "me"})
+            assert r.status_code == 200
+            assert r.json()["changed"] is False
+
+
+async def test_claim_leaves_a_system_message(tmp_path):
+    """房內成員該知道管理權換人了——尤其原管理員還在的時候。"""
+    app, client = await _client(tmp_path, "claim-msg")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "owner"})).json()["id"]
+            me = (await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human", "session_key": "owner",
+                "preferred_name": "Owner"})).json()
+            await client.post(f"/api/rooms/{rid}/admin/claim",
+                              headers={**HOST, "X-Session-Key": "new"})
+            msgs = (await client.get(
+                f"/api/rooms/{rid}/messages",
+                headers={"X-Participant-Id": me["participant_id"]})).json()
+            assert any(m.get("system_event") == "admin_claimed"
+                       for m in msgs["messages"]), msgs

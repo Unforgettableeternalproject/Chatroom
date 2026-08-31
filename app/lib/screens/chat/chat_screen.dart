@@ -1828,12 +1828,69 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     }
   }
 
+  /// 主持人接管管理權。
+  ///
+  /// 要確認：這會讓現任管理員降為一般成員，而他可能正在用這個房。
+  /// 但它**不是**破壞性的——管理權可以再移交回去，所以用 outline 不用 danger。
+  Future<void> _claimAdmin(BuildContext context, Participant? current) async {
+    final s = context.uep;
+    final who = current?.displayName;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('接管這個聊天室？',
+            style: UepText.display(size: 22, color: s.inkTitle)),
+        content: Text(
+          who == null
+              ? '這個聊天室目前沒有管理員。接管之後你就是它的管理員，'
+                  '不必再開主持人模式也管得動。'
+              : '$who 目前是這個聊天室的管理員，接管之後他會降為一般成員。'
+                  '房內會留下一則系統訊息，管理權之後可以再移交回去。',
+          style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.6),
+        ),
+        actions: [
+          UepButton(
+            label: '取消',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: '接管',
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (!(confirmed ?? false)) return;
+    try {
+      final changed = await ref.read(roomsApiProvider).claimAdmin(
+            widget.roomId,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
+      ref.invalidate(roomDetailProvider(widget.roomId));
+      ref.invalidate(roomListProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(changed ? '你現在是這個聊天室的管理員' : '這個聊天室本來就是你的'),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     final myId = widget.myId;
     final highlighted =
         ref.watch(highlightedMembersProvider)[widget.roomId] ?? const <String>{};
+    final hostMode = ref.watch(hostViewProvider);
     final shown = widget.members.where((p) => !_hidden.contains(p.id));
     final active = shown.where((p) => p.isActive).toList();
     // **結束的子代理不進「已離開」。** 一般成員離開是有意義的資訊（他還會
@@ -1903,6 +1960,11 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                           !p.ephemeral
                       ? () => _kick(context, p)
                       : null,
+                  // 接管掛在**現任管理員**身上，與移交同一個位置。
+                  // 封存房也給——需要接管的房多半已經被收起來了
+                  onClaimAdmin: hostMode && p.isAdmin && p.id != myId
+                      ? () => _claimAdmin(context, p)
+                      : null,
                   // 自己隱藏自己只會讓人以為出了問題
                   onHide: p.id == myId ? null : () => _setHidden(p, true),
                   // 標記只給別人：不會有人在等自己回話
@@ -1944,6 +2006,21 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             ],
           ),
         ),
+        // 沒有任何管理員的房（creator_session_key 為 NULL 的舊房）——
+        // 那正是**最需要**接管的那些，而成員列表上沒有人掛得住那顆按鈕。
+        // 只有這種情況才在底部另開入口，房內有管理員時一律走他身上那顆，
+        // 免得同一個動作有兩個位置
+        if (hostMode && !active.any((p) => p.isAdmin))
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
+            child: UepButton(
+              label: '接管這個聊天室',
+              variant: UepButtonVariant.outline,
+              small: true,
+              expand: true,
+              onPressed: () => _claimAdmin(context, null),
+            ),
+          ),
         // 底部動作區。匯出**不**跟著封存收起——房間可以被永久刪除，備份
         // 正是封存之後最需要的動作；指派與邀請則唯讀時收起。
         //
@@ -1992,6 +2069,7 @@ class _MemberTile extends StatelessWidget {
     this.inactive = false,
     this.nested = false,
     this.onKick,
+    this.onClaimAdmin,
     this.onHide,
     this.onUnhide,
     this.highlighted = false,
@@ -2013,6 +2091,10 @@ class _MemberTile extends StatelessWidget {
 
   /// 管理員視角的移出動作；null 表示不顯示。
   final VoidCallback? onKick;
+
+  /// Hub 主持人接管這個房間的管理權。只掛在**現任管理員**身上，
+  /// 與移交同一個位置——那是使用者找這個動作時會去看的地方。
+  final VoidCallback? onClaimAdmin;
 
   /// 從**我這台裝置**的列表隱藏／取消隱藏；null 表示不顯示該動作。
   /// 與 [onKick] 完全不同：那個動到所有人，這個只動我的視圖。
@@ -2209,6 +2291,17 @@ class _MemberTile extends StatelessWidget {
                   Icons.visibility_outlined,
                   size: 14,
                   color: s.inkMute,
+                ),
+              ),
+            if (onClaimAdmin != null)
+              IconButton(
+                tooltip: '接管管理權（主持人）',
+                visualDensity: VisualDensity.compact,
+                onPressed: onClaimAdmin,
+                icon: Icon(
+                  Icons.admin_panel_settings_outlined,
+                  size: 14,
+                  color: UepColors.gold,
                 ),
               ),
             if (onKick != null)

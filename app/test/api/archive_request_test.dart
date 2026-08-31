@@ -123,6 +123,29 @@ void main() {
       expect(stub.seen.single.data['reason'], '還在跑測試');
     });
 
+    test('接管管理權帶 session key——管理權要綁在一把具體的身分上', () async {
+      final stub = _Stub({'ok': true, 'changed': true, 'had_admin': false});
+      final changed = await RoomsApi(_dioWith(stub))
+          .claimAdmin('r1', sessionKey: 'my-device');
+      expect(stub.seen.single.headers['X-Session-Key'], 'my-device');
+      expect(changed, isTrue);
+    });
+
+    test('本來就是你的 → changed=false，呼叫端據此不講廢話', () async {
+      final stub = _Stub({'ok': true, 'changed': false});
+      final changed = await RoomsApi(_dioWith(stub))
+          .claimAdmin('r1', sessionKey: 'my-device');
+      expect(changed, isFalse);
+    });
+
+    test('舊版 Hub 沒有 changed 欄位時當成有變更——那是這個端點的正常結果，'
+        '當成 false 會讓成功的接管看起來像沒發生', () async {
+      final stub = _Stub({'ok': true});
+      final changed = await RoomsApi(_dioWith(stub))
+          .claimAdmin('r1', sessionKey: 'my-device');
+      expect(changed, isTrue);
+    });
+
     test('收回只帶 participant——限本人，session key 在這裡沒有意義', () async {
       final stub = _Stub({'ok': true});
       await RoomsApi(_dioWith(stub))
