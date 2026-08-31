@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS message (
     -- mentions 存的是展開後的實名，UI 要靠這個欄位還原成一顆 @all chip——
     -- 否則畫面上會攤出一整排全房名單
     mention_groups TEXT NOT NULL DEFAULT '[]',
+    -- 最後一次編輯的時間；NULL = 沒被改過。只存時間戳不留歷史（見 MIGRATIONS）
+    edited_at  TEXT,
     reply_to   TEXT,
     -- 被回覆訊息的房內序號。內容是可以事後被軟刪除的，seq 不會——回覆指向
     -- 哪一則，這是唯一不會被刪掉的答案，client 也不必為了顯示「#12」而
@@ -243,6 +245,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 群組標籤原字面。舊訊息一律空清單——那是這個欄位存在之前的事實
     # （當時沒有群組標籤），不需要也無法回推
     ("message", "mention_groups", "mention_groups TEXT NOT NULL DEFAULT '[]'"),
+    # 最後一次編輯的時間。NULL＝沒被改過，那正是這個欄位存在之前的事實。
+    # **刻意只存一個時間戳，不留編輯歷史**——留全歷史是稽核需求不是聊天
+    # 需求，會讓 message 表隨著每次改字膨脹
+    ("message", "edited_at", "edited_at TEXT"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

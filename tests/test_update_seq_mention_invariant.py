@@ -22,7 +22,13 @@ import chatroom_server.app as app_module
 
 # 只讀取 mentions（不寫入）的函式可以放行——但要在這裡具名列出並說明理由，
 # 讓下一個人看得到豁免的代價。清單保持極短
-_READ_ONLY_EXEMPT: set[str] = set()
+_READ_ONLY_EXEMPT: set[str] = {
+    # 編輯端點提到 mentions 是為了**拒絕**它（422 mentions_not_editable），
+    # 正是這條不變量要求的行為。它推進 update_seq、也提到 mentions，但方向
+    # 相反——守衛看不出方向，所以在這裡具名放行。
+    # 哪天它改成真的寫入 mentions，就要把它從這裡拿掉，並回頭改 _out() 的界線
+    "edit_message",
+}
 
 
 def _nodes_owned_by(fn: ast.AST):

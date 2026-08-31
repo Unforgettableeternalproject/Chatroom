@@ -192,6 +192,15 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有發送者本人或聊天室建立者可以刪除這則訊息。",
                 status=status, detail=detail,
             )
+        if code == "not_message_author":
+            # 與 not_message_owner 分開講：刪除連建立者也可以，編輯只限本人。
+            # 講成同一句話會讓建立者以為自己「身分有問題」而去重新 join
+            return HubError(
+                _detail_text(detail)
+                or "只有發送者本人可以編輯這則訊息——聊天室建立者刪得掉它，"
+                   "但改不動。",
+                status=status, detail=detail,
+            )
         if code is None and ("participant" in low or "身分" in text):
             # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
             # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：

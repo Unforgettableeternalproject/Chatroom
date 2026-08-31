@@ -197,6 +197,17 @@ class MessagePost(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+class MessageEdit(BaseModel):
+    """編輯只改內文。
+
+    `mentions` 明確接受但一律拒絕——不宣告的話 Pydantic 會安靜忽略它，而
+    呼叫端會以為 @ 改掉了。**收下再拒絕**，比假裝沒看到誠實。
+    """
+
+    content: str = Field(min_length=1, max_length=32768)
+    mentions: list[str] | None = None
+
+
 class AssignmentCreate(BaseModel):
     target_session_key: str
     note: str = ""
@@ -804,6 +815,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "reply_to": r["reply_to"], "reply_to_seq": reply_to_seq,
                 "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
+                # 改過的訊息要看得出來改過——沒有標記的編輯是無聲改寫歷史。
+                # 舊版 DB 沒這個欄位，缺席時當作沒被改過
+                "edited_at": (r["edited_at"] if "edited_at" in r.keys() else None),
                 "attachments": [] if r["deleted"] else attachments.get(r["id"], []),
                 "created_at": r["created_at"],
             })
@@ -2152,6 +2166,85 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await _touch_message(message_id, room_id)
         return {"ok": True}
+
+    @app.patch("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
+    async def edit_message(
+        message_id: str,
+        body: MessageEdit,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改一則自己說過的話。**只限發送者本人，建立者也不行。**
+
+        這條界線刻意比刪除嚴：刪除在畫面上留得下痕跡（顯示為已撤回），
+        **編輯不會**。建立者管得了房間秩序，不該改得動別人說過的話——
+        「改了看不出來」是與破壞不同的風險，界線要單獨畫。
+
+        不動 mentions（2026-08-31 裁定）。`_out()` 的喚醒判定只認新訊息，
+        它的隱含前提就是「update 路徑不會新增 mention」；開放改 mentions 就得
+        存上一版做 diff，而症狀會是「我 @ 了他，他沒醒」，全程零錯誤。
+        那個前提由 tests/test_update_seq_mention_invariant.py 守著。
+
+        推播走既有的 `_touch_message`：既有訊息因狀態變更重新入流的管線早就
+        通了，編輯只是又一個觸發它的動作，不需要新的通道。
+        """
+        if body.mentions is not None:
+            raise _err(422, "mentions_not_editable",
+                       "編輯只能改內文。要 @ 新的人請發一則新訊息——改舊訊息"
+                       "補 @ 不會叫醒任何人（喚醒只認新訊息），那是一種看不見"
+                       "的失敗")
+        if not body.content.strip():
+            raise _err(422, "empty_content",
+                       "內容不能是空白。清空一則訊息是撤回，那有自己的端點")
+        room_id = await _message_room(message_id)
+        # 封存房唯讀。發言擋了而編輯沒擋的話，那條唯讀是半套的
+        await _room_or_404(room_id)
+        db = app.state.db
+        msg = await (
+            await db.execute(
+                "SELECT sender_id, deleted, kind FROM message WHERE id=?",
+                (message_id,),
+            )
+        ).fetchone()
+        if msg is None:
+            raise _err(404, "message_not_found", "找不到這則訊息")
+        # system 訊息不可編輯——即使 sender_id 是你。「Novia 加入了聊天室」
+        # 掛在加入者名下，但那句話不是他說的，是房間對事實的紀錄。可編輯的話
+        # 每個人都能改寫自己的進出紀錄
+        if msg["kind"] != "chat":
+            raise _err(422, "not_a_chat_message",
+                       "系統訊息不能編輯——它是房間對事實的紀錄，不是誰說的話")
+        if msg["deleted"]:
+            raise _err(422, "message_deleted",
+                       "這則訊息已經被撤回了。改一則撤回的訊息等於讓它復活，"
+                       "而看的人只會看到內容憑空出現")
+        if not x_participant_id:
+            # 同 delete：「你沒說你是誰」與「你不是作者」把人導向完全不同的
+            # 處置，不能講成同一句話
+            raise _err(401, "participant_header_required",
+                       "請求沒有帶 X-Participant-Id。編輯訊息要證明你是發送者本人")
+        me = await (
+            await db.execute(
+                "SELECT id FROM participant WHERE id=? AND room_id=?",
+                (x_participant_id, room_id),
+            )
+        ).fetchone()
+        # 跨房身分一併擋住，且不洩漏「那則訊息存在於別的房」
+        if me is None or msg["sender_id"] is None or me["id"] != msg["sender_id"]:
+            raise _err(403, "not_message_author",
+                       "只有發送者本人可以編輯這則訊息。聊天室建立者刪得掉"
+                       "它，但改不動——刪掉看得出來，改掉看不出來")
+        await db.execute(
+            "UPDATE message SET content=?, edited_at=? WHERE id=?",
+            (body.content, _now(), message_id),
+        )
+        await db.commit()
+        # 領一個新的 update_seq，已經讀過那則的人才收得到——不推進的話他手上
+        # 永遠是舊內容，而畫面看起來完全正常
+        await _touch_message(message_id, room_id)
+        logger.info("編輯訊息 %s（%s）", message_id, room_id,
+                 extra={"event": "message_edited", "message_id": message_id,
+                        "room_id": room_id})
+        return {"ok": True, "id": message_id}
 
     @app.delete("/api/messages/{message_id}", dependencies=[Depends(require_auth)])
     async def delete_message(
