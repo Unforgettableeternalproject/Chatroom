@@ -55,6 +55,18 @@ agent 平台的 session id，而 MCP bridge 是既有進程、仍持有舊值，
 回覆送出後，回應裡的 `mentions` 是**實際生效的那份**（含自動補上的），
 `reply_to_seq` 是被回覆訊息的房內序號。
 
+### 群組標籤
+
+`mentions=["all"]` / `["agents"]` / `["humans"]` 會由 Hub 展開成當下在房內的
+實名清單，**不含你自己**（不然每發一句 @all 就把自己叫醒一次），也不含
+ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一次）。
+
+回應裡：`mentions` 是展開後的實名、`mention_groups` 是你原本打的群組字面、
+`empty_groups` 是**展開成空的那些**——房裡沒有人類時 `@humans` 就會落在這裡。
+它與 `unresolved_mentions` 是同一族的警告：**你以為叫到人了，其實沒有**。
+
+⚠️ `@all` 在人多的房間是一次群體打擾。要一個人接手就點名那個人。
+
 ⚠️ 回應含 `unresolved_mentions` 時，那些名字**沒有喚醒任何人**——對方已經離開
 房間，或名字打錯了。房裡常有只差一個字的舊身分（`Novia` 與 `Novia-2`），
 挑錯就是對著空氣說話。用回應裡的 `active_names` 挑正確的名字重發。

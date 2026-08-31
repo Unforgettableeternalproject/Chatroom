@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS message (
     system_event TEXT NOT NULL DEFAULT '',
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
+    -- 發話者原本打的群組標籤（all / agents / humans），JSON list。
+    -- mentions 存的是展開後的實名，UI 要靠這個欄位還原成一顆 @all chip——
+    -- 否則畫面上會攤出一整排全房名單
+    mention_groups TEXT NOT NULL DEFAULT '[]',
     reply_to   TEXT,
     -- 被回覆訊息的房內序號。內容是可以事後被軟刪除的，seq 不會——回覆指向
     -- 哪一則，這是唯一不會被刪掉的答案，client 也不必為了顯示「#12」而
@@ -236,6 +240,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 註：帶 REFERENCES 的欄位只能以 NULL 為預設值，SQLite 的 ADD COLUMN 限制
     ("participant", "parent_id", "parent_id TEXT REFERENCES participant(id)"),
     ("participant", "ephemeral", "ephemeral INTEGER NOT NULL DEFAULT 0"),
+    # 群組標籤原字面。舊訊息一律空清單——那是這個欄位存在之前的事實
+    # （當時沒有群組標籤），不需要也無法回推
+    ("message", "mention_groups", "mention_groups TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

@@ -27,7 +27,7 @@ from .config import Config
 from .db import open_db
 from .events import RoomEvents
 from .logging_setup import setup_file_logging, token_hint
-from .naming import generate_name
+from .naming import RESERVED_NAMES, generate_name
 from .version import APP_VERSION, build_info, version_string
 
 
@@ -630,6 +630,61 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
 
+    async def _expand_mention_groups(
+        room_id: str, sender_id: str | None, names: list[str],
+    ) -> tuple[list[str], list[str], list[str]]:
+        """把 @all / @agents / @humans 換成當下 active 成員的實名。
+
+        **展開在 Hub 做，不在 client。** 這是 multi-agent 聊天室，agent 透過
+        MCP 發 `@all` 也必須生效；在 App 展開等於只有人類用得到。而且展開之後
+        joined_seq 界線、subagent 轉投遞、unresolved 判定全部免費沿用——那三處
+        都比對實名，一個字都不必改。
+
+        回傳 ``(展開後的名字, 用到的群組原字面, 展開成空的群組)``。
+
+        兩件不展開的事：
+        - **發話者自己**。含自己的話 you_were_mentioned 會對自己成立，每發一句
+          @all 就把自己叫醒一次，而那個迴圈沒有任何錯誤訊息。
+        - **ephemeral subagent**。它們沒有自己的 watcher（活在父層進程裡），
+          被 @ 會透過 relayed_mentions 再把父層叫醒一次——房裡有 N 個子代理，
+          父層就被叫醒 N+1 次。子代理該由父層自己轉手。
+        """
+        wanted = [n for n in names if n.casefold() in RESERVED_NAMES]
+        if not wanted:
+            return list(names), [], []
+        rows = await (await app.state.db.execute(
+            "SELECT id, display_name, role FROM participant"
+            " WHERE room_id=? AND status='active' AND ephemeral=0",
+            (room_id,),
+        )).fetchall()
+        expanded: list[str] = []
+        groups: list[str] = []
+        empty: list[str] = []
+        seen = set()
+        for name in names:
+            group = name.casefold()
+            if group not in RESERVED_NAMES:
+                if name not in seen:
+                    seen.add(name)
+                    expanded.append(name)
+                continue
+            groups.append(name)
+            members = [
+                r["display_name"] for r in rows
+                if r["id"] != sender_id
+                and (group == "all"
+                     or (group == "agents" and r["role"] == "agent")
+                     or (group == "humans" and r["role"] == "human"))
+            ]
+            if not members:
+                # 安靜丟掉的話，發話者看到的回應與成功送達完全一樣
+                empty.append(name)
+            for m in members:
+                if m not in seen:
+                    seen.add(m)
+                    expanded.append(m)
+        return expanded, groups, empty
+
     async def _post_message(
         room_id: str,
         sender_id: str | None,
@@ -641,7 +696,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         reply_mentions_author: bool = True,
     ) -> dict:
         db = app.state.db
-        effective = list(mentions or [])
+        effective, groups, empty_groups = await _expand_mention_groups(
+            room_id, sender_id, list(mentions or []),
+        )
         reply_to_seq = None
         # reply 目標必須存在且屬於同一房間，否則會把他房的內容洩進本房時間軸
         if reply_to is not None:
@@ -682,16 +739,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         msg_id = _uid()
         await db.execute(
             "INSERT INTO message (id, room_id, seq, sender_id, kind, content,"
-            " mentions, reply_to, reply_to_seq, system_event, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " mentions, mention_groups, reply_to, reply_to_seq, system_event,"
+            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, kind, content,
-             json.dumps(effective), reply_to, reply_to_seq, system_event, _now()),
+             json.dumps(effective), json.dumps(groups), reply_to, reply_to_seq,
+             system_event, _now()),
         )
         await db.commit()
         await events.notify(room_id)
-        # mentions 回傳「實際落庫的那份」（含回覆自動補上的），呼叫端的
-        # 未解析檢查才不會漏掉自動加的那個名字
+        # mentions 回傳「實際落庫的那份」（含回覆自動補上的、群組展開後的），
+        # 呼叫端的未解析檢查才不會漏掉自動加的那個名字
         return {"id": msg_id, "seq": seq, "mentions": effective,
+                "mention_groups": groups, "empty_groups": empty_groups,
                 "reply_to_seq": reply_to_seq}
 
     async def _message_rows_to_json(rows, db) -> list[dict]:
@@ -737,6 +796,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 "content": "" if r["deleted"] else r["content"],
                 "mentions": json.loads(r["mentions"]),
+                # 展開後的實名給 client 渲染 chip，原字面讓它還原成一顆
+                # @all——不然畫面上會攤出一整排全房名單
+                "mention_groups": json.loads(
+                    r["mention_groups"] if "mention_groups" in r.keys() else "[]"
+                ),
                 "reply_to": r["reply_to"], "reply_to_seq": reply_to_seq,
                 "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
