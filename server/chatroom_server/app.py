@@ -387,6 +387,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await app.state.db.commit()
 
+    def host_view(
+        x_host_view: str | None = Header(default=None, alias="X-Host-View"),
+        authorization: str | None = Header(default=None),
+    ) -> bool:
+        """主持人視角：Hub 主持人明示要用「這台機器的擁有者」身分讀寫。
+
+        兩個條件缺一不可，而**「明示」那一半是重點**：
+        1. client 帶 `X-Host-View: 1`（明確切換，不是預設）
+        2. 用的是 `.env` 的主 token
+
+        為什麼不讓主 token 自動打穿門檻：那就是「預設開著」。主持人會在
+        沒有意識到的情況下一直看著別人的私人房，而 UI 上分不出他此刻看到
+        的是「有份的房」還是「全部的房」。誤讀別人的房比多按一次開關貴。
+
+        為什麼這是**正當**的能力而不是新開的後門：主 token 放在
+        `server/.env`，拿得到它的人本來就讀得到同一個目錄下的
+        `chatroom.db`。這裡給的不是新權限，是把既有能力變得可用——差別在
+        於翻 DB 是一個刻意的動作，所以 UI 這一側也要求刻意（見條件 1）。
+
+        ⚠️ **刻意不看 `request.state.is_root_token`**：那是
+        `require_auth` 設的，而 path 層 dependency 與參數層 dependency 的
+        執行順序是 FastAPI 的內部細節。自己驗一次 token 就不必依賴它。
+        """
+        if not x_host_view or x_host_view == "0":
+            return False
+        if not cfg.api_token:
+            # 未設 token＝完全開放（本機開發），這時人人都是主持人
+            return True
+        return _bearer(authorization) == cfg.api_token
+
+    def is_host_token(
+        authorization: str | None = Header(default=None),
+    ) -> bool:
+        """單純回答「這把 token 是主 token 嗎」，**不看 X-Host-View**。
+
+        與 `host_view` 刻意分開：App 要據此決定「要不要顯示主持人模式開關」，
+        那跟「此刻是不是開著」是兩個問題。合成一個的話，開關會在被打開之後
+        才出現——而使用者永遠找不到那個開關。
+        """
+        if not cfg.api_token:
+            return True
+        return _bearer(authorization) == cfg.api_token
+
     def require_root(request: Request) -> None:
         """發放與撤銷 token 限主 token。
 
@@ -506,22 +549,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row["note"] if row else ""
 
     async def _creator_or_member(
-        room, participant_id: str | None, session_key: str | None
+        room, participant_id: str | None, session_key: str | None,
+        host: bool = False,
     ):
-        """房主視角的門檻：建立者本人，或房內成員。
+        """房主視角的門檻：建立者本人、房內成員，或 Hub 主持人視角。
 
         建房到 join 之間有一段空窗（指派 UI 正開在那個空窗上——「邀請別人
         進來」本來就發生在自己還沒進去的時候），要求先成為成員會讓房主連
         自己的房都打不開。`you_are_admin` 本來就用同一個 header 判定。
 
         被踢的人不會是建立者（kick 擋掉了踢自己），所以這不是繞道。
+
+        ``host`` 由 `host_view` dependency 判定（主 token + 明示標頭）。
         """
+        if host:
+            return None
         if room["creator_session_key"] and session_key == room["creator_session_key"]:
             return None
         return await _member_or_403(room["id"], participant_id)
 
     async def _active_creator_or_member(
-        room, participant_id: str | None, session_key: str | None
+        room, participant_id: str | None, session_key: str | None,
+        host: bool = False,
     ):
         """房內**管理動作**的門檻：建立者本人，或此刻仍在房裡的成員。
 
@@ -532,6 +581,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         建立者不必是成員：建房到 join 之間有一段空窗，指派 UI 正開在上面。
         """
+        if host:
+            return None
         if room["creator_session_key"] and session_key == room["creator_session_key"]:
             return None
         if not participant_id:
@@ -550,7 +601,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "你已經不在這個聊天室裡了，無法執行房內的管理動作")
         return row
 
-    async def _member_or_403(room_id: str, participant_id: str | None):
+    async def _member_or_403(room_id: str, participant_id: str | None,
+                             host: bool = False):
         """讀取房內內容的門檻：必須**曾經**是這個房的成員，且不是被踢出的。
 
         沒有這道門檻時，「踢出」在使用者眼中就是沒有生效——被踢的人照樣讀得到
@@ -563,7 +615,16 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         也刻意不更新 `last_seen_at`：讀取不是活躍證明，拿它當心跳會讓掛著
         長輪詢的 agent 永遠掃不掉。即時通道（updates）另外要求 active 身分。
+
+        ``host``＝Hub 主持人視角（主 token + 明示 `X-Host-View`）。**這條路
+        繞過整道門檻**，包含被踢：主持人的能力來自他握有 `.env`，而握有
+        `.env` 就握有 `chatroom.db`——擋他等於擋一個從旁邊走就進得來的人。
+        代價是「踢出」對主 token 不成立，那是 08-29 讀取邊界的已知例外，
+        也是為什麼 **踢出要有效就不能共用主 token**（那條早就寫在
+        docs/FAILURE-PATTERNS.md 裡）。
         """
+        if host:
+            return None
         if not participant_id:
             # 「你沒說你是誰」與「你不是成員」必須是兩句不同的話——它們把人
             # 導向完全不同的處置（前者去找身分怎麼掉的，後者去找誰把我踢了）。
@@ -626,7 +687,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _admin_or_403(room, participant_id: str | None,
                             session_key: str | None,
-                            what: str = "變更鎖定狀態"):
+                            what: str = "變更鎖定狀態",
+                            host: bool = False):
         """管理員（建立者）門檻。
 
         接受兩種自報方式：X-Session-Key（建立者可能還沒加入自己的房，
@@ -635,7 +697,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         ``what`` 只進錯誤訊息，要帶**完整的動作描述**（「變更鎖定狀態」而不是
         「鎖定狀態」）——同一道門現在管三件事，其中「刪除」不是「變更」什麼，
         模板裡寫死動詞會生出「只有建立者可以變更刪除」這種句子（實際發生過）。
+
+        ``host``＝Hub 主持人視角。**這條路要放在 `room_has_no_admin` 之前**：
+        沒有建立者紀錄的房（建立時沒帶 session_key 的舊房）正是最需要主持人
+        接手的那些——先擋 409 再判 host，就等於把唯一的救援路徑關在門外。
         """
+        if host:
+            return
         creator = room["creator_session_key"]
         if not creator:
             raise _err(409, "room_has_no_admin",
@@ -965,6 +1033,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         kind: str | None = None,
         label: str | None = None,
         host: str | None = None,
+        host_mode: bool = Depends(host_view),
+        host_token: bool = Depends(is_host_token),
     ):
         db = app.state.db
         if session_key:
@@ -973,26 +1043,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 私人房只對「有份的人」出現：建立者、房內（含曾在房內）的成員、
         # 被邀請的 session。沒帶 session_key 就只看得到公開房——匿名的
         # 列表請求無從證明自己有份
-        rows = await (
-            await db.execute(
-                "SELECT r.*,"
-                " (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
-                "  AND p.status='active') AS member_count,"
-                " r.next_seq - 1 AS last_seq,"
-                " (SELECT m.created_at FROM message m WHERE m.room_id=r.id"
-                "  ORDER BY m.seq DESC LIMIT 1) AS last_activity_at"
-                " FROM room r WHERE r.status=? AND ("
-                "  r.visibility='public'"
-                "  OR r.creator_session_key=?"
-                "  OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
-                "             AND p.session_key=? AND p.status!='kicked')"
-                "  OR EXISTS (SELECT 1 FROM assignment a WHERE a.room_id=r.id"
-                "             AND a.target_session_key=?"
-                "             AND a.status IN ('pending','accepted'))"
-                " ) ORDER BY last_activity_at DESC",
-                (status, session_key, session_key, session_key),
+        base = (
+            "SELECT r.*,"
+            " (SELECT COUNT(*) FROM participant p WHERE p.room_id=r.id"
+            "  AND p.status='active') AS member_count,"
+            " r.next_seq - 1 AS last_seq,"
+            " (SELECT m.created_at FROM message m WHERE m.room_id=r.id"
+            "  ORDER BY m.seq DESC LIMIT 1) AS last_activity_at"
+            " FROM room r WHERE r.status=?"
+        )
+        if host_mode:
+            # 主持人視角：不套「有沒有份」那組條件。他要看的正是那些自己
+            # 沒份的房——沒有這個，「所有對話對他可見」就只是半句話
+            sql, params = base + " ORDER BY last_activity_at DESC", (status,)
+            logger.info(
+                "主持人視角列出全部聊天室",
+                extra={"event": "host_view", "channel": "list_rooms",
+                       # IP **不是**授權依據（見 _client_ip 與 host_view 的
+                       # 註解），這裡純粹是事後追得出「誰在什麼時候用這個
+                       # 身分看了東西」。擋不住的東西不要假裝擋得住，
+                       # 但要留得下紀錄
+                       "ip": _client_ip(request)},
             )
-        ).fetchall()
+        else:
+            sql = base + " AND ("
+            sql += ("  r.visibility='public'"
+                    "  OR r.creator_session_key=?"
+                    "  OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
+                    "             AND p.session_key=? AND p.status!='kicked')"
+                    "  OR EXISTS (SELECT 1 FROM assignment a WHERE a.room_id=r.id"
+                    "             AND a.target_session_key=?"
+                    "             AND a.status IN ('pending','accepted'))"
+                    " ) ORDER BY last_activity_at DESC")
+            params = (status, session_key, session_key, session_key)
+        rows = await (await db.execute(sql, params)).fetchall()
         # you_are_admin：列表上要不要顯示「刪除」這種管理員動作，client 得
         # 自己判斷得出來。creator_session_key 不外流（`_room_public` 會拿掉），
         # 所以在這裡比對完再給一個布林——把必然失敗的按鈕擺出來，跟不給
@@ -1016,22 +1100,34 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchall()
             pending = [dict(a) for a in arows]
-        return {"rooms": rooms, "pending_assignments": pending}
+        return {
+            "rooms": rooms,
+            "pending_assignments": pending,
+            # 這把 token 是不是主 token。App 據此決定要不要顯示「主持人模式」
+            # 開關——**與開關現在是開是關無關**（那是 host_mode）
+            "you_are_host": host_token,
+            # 這次的回應是不是用主持人視角撈的。UI 要看得出自己正在看的是
+            # 「全部的房」還是「有份的房」；同一份列表兩種含意而畫面長一樣，
+            # 是最容易讓人誤以為別人的私人房是自己的那種形狀
+            "host_view": host_mode,
+        }
 
     @app.get("/api/rooms/{room_id}", dependencies=[Depends(require_auth)])
     async def get_room(
         room_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
         # 成員名冊與 session_key、來源 IP 都在這個回應裡，非成員不該看得到
-        await _creator_or_member(room, x_participant_id, x_session_key)
+        await _creator_or_member(room, x_participant_id, x_session_key, host)
         db = app.state.db
         rows = await (
             await db.execute(
                 "SELECT id, kind, display_name, role, status, joined_at,"
-                " last_seen_at, session_key, join_ip, parent_id, ephemeral"
+                " last_seen_at, session_key, join_ip, parent_id, ephemeral,"
+                " joined_as_host"
                 " FROM participant WHERE room_id=? ORDER BY joined_at",
                 (room_id,),
             )
@@ -1060,6 +1156,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 room["creator_session_key"]
                 and rep["session_key"] == room["creator_session_key"]
             )
+            # Hub 主持人（拿 .env 主 token 進來的）。與 is_admin 是**兩件
+            # 不同的事**：admin 是「這個房是他開的」，host 是「這台 Hub 是
+            # 他的」。一個人可以只是其中一種，兩個標籤都要看得到
+            entry["is_host"] = bool(rep["joined_as_host"])
             # subagent 的「存在」對所有人可見（巢狀顯示在父層底下）；
             # 限定只推父層的是**進出事件**，不是存在本身（§3.5）
             entry["ephemeral"] = bool(rep["ephemeral"])
@@ -1266,6 +1366,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         body: ArchiveRequestCreate | None = None,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         """手動封存。**只有建立者執行得了**；房內成員提得出請求。
 
@@ -1284,10 +1385,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         room = await _room_or_404(room_id)
         me = await _active_creator_or_member(room, x_participant_id,
-                                             x_session_key)
-        is_admin = bool(room["creator_session_key"]) and (
+                                             x_session_key, host)
+        # 主持人視角在這裡等同建立者——他要封的正是那些**沒有人管得動**的房
+        # （建立者不在、或建立時根本沒帶 session_key）。走提案那條路的話，
+        # 提案會掛在一個永遠不會出現的人身上
+        is_admin = host or (bool(room["creator_session_key"]) and (
             x_session_key == room["creator_session_key"]
-        )
+        ))
         if not is_admin and me is not None:
             # 走 participant 自報的建立者也算數——他 join 之後手上仍只有
             # 那把 session key，不該因為換了自報方式就被降級成一般成員
@@ -1435,6 +1539,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
         # 封存與解封是同一道門的兩面，一寬一嚴會讓人猜不出這道門管什麼。
@@ -1444,8 +1549,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # ⚠️ 已知代價（艾斯維爾 08/31 裁決時確認過）：建立者不在、或換掉了
         # deviceKey，那個房就永遠是唯讀的。目前沒有管理權回收機制，只有
         # 建立者主動移交（POST /admin）。封存房唯讀而非消失，代價可承受
+        # 主持人視角是這條路的**唯一救援**：上面那個代價（建立者不在，房就
+        # 永遠唯讀）就是靠這裡補的
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            what="解除封存")
+                            what="解除封存", host=host)
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db
@@ -1799,10 +1906,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 cur = await db.execute(
                     "INSERT INTO participant (id, room_id, kind, session_key,"
                     " display_name, role, joined_at, last_seen_at, join_ip,"
-                    " join_token, parent_id, ephemeral, joined_seq)"
+                    " join_token, parent_id, ephemeral, joined_seq,"
+                    " joined_as_host)"
                     " SELECT :pid, :room_id, :kind, :session_key, :name,"
                     " :role, :now, :now, :join_ip, :join_token, :parent_id,"
-                    " :ephemeral, :joined_seq"
+                    " :ephemeral, :joined_seq, :joined_as_host"
                     " WHERE :parent_id IS NULL OR EXISTS ("
                     "   SELECT 1 FROM participant WHERE id=:parent_id"
                     "   AND room_id=:room_id AND status='active')",
@@ -1810,6 +1918,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                      "session_key": session_key, "name": name,
                      "role": body.role, "now": now, "join_ip": join_ip,
                      "join_token": getattr(request.state, "access_token", ""),
+                     # 拿主 token 進來的＝Hub 主持人本人，成員列表要標出來。
+                     # **記在 join 當下**：token 是那一刻用的那把，事後從
+                     # session_key 反推不出來（同一個人可以換 token 重進）
+                     "joined_as_host": 1 if getattr(
+                         request.state, "is_root_token", False) else 0,
                      "parent_id": parent["id"] if parent is not None else None,
                      "ephemeral": 1 if parent is not None else 0,
                      "joined_seq": joined_seq},
@@ -2214,12 +2327,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         around_seq 錨定讀取（以某一則為中心取前後各 radius 則）；三者互斥。
         回傳一律以 seq 遞增排列。"""
         room = await _room_or_404(room_id, allow_archived=True)
-        await _member_or_403(room_id, x_participant_id)
+        await _member_or_403(room_id, x_participant_id, host)
         # 三方互斥要三方都擋。只擋兩兩組合的話，同時給三個參數會從某一條
         # 分支溜過去，而回傳的內容看起來像是其中一種模式的正常結果
         if around_seq is not None and (
@@ -2299,6 +2413,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         format: str = "jsonl",
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """把整個房間匯成一行一則的 jsonl。
 
@@ -2320,7 +2435,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "unsupported_format",
                        f"匯出目前只支援 jsonl，收到的是「{format}」")
         await _room_or_404(room_id, allow_archived=True)
-        await _member_or_403(room_id, x_participant_id)
+        await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
 
         async def _rows():
@@ -3055,7 +3170,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/attachments/{attachment_id}/meta",
              dependencies=[Depends(require_auth)])
     async def attachment_meta(
-        attachment_id: str, x_participant_id: str | None = Header(default=None)
+        attachment_id: str, x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """附件的 metadata。下載端點回的是檔案本體，拿不到檔名與型別。"""
         db = app.state.db
@@ -3071,14 +3187,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
         # 附件跟著訊息走，門檻就跟著訊息一樣：非成員讀不到房內的檔案
-        await _member_or_403(row["room_id"], x_participant_id)
+        await _member_or_403(row["room_id"], x_participant_id, host)
         meta = dict(row)
         meta["is_image"] = meta["mime"].startswith("image/")
         return {"attachment": meta}
 
     @app.get("/api/attachments/{attachment_id}", dependencies=[Depends(require_auth)])
     async def download_attachment(
-        attachment_id: str, x_participant_id: str | None = Header(default=None)
+        attachment_id: str, x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         db = app.state.db
         row = await (
@@ -3088,7 +3205,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
-        await _member_or_403(row["room_id"], x_participant_id)
+        await _member_or_403(row["room_id"], x_participant_id, host)
         path = _blob_path(row["sha256"])
         if not path.exists():
             # metadata 在、實體不在：備份只帶走 db 沒帶 attachments/ 就會這樣，
@@ -3328,6 +3445,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         status: str | None = None,
         target_id: str | None = None,
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """房內問題列表。
 
@@ -3335,7 +3453,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         要消除的東西，所以問題對房內成員一律可見，只有 UI 顯示是定向的。
         """
         await _room_or_404(room_id, allow_archived=True)
-        await _member_or_403(room_id, x_participant_id)
+        await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
         conds, params = ["q.room_id=?"], [room_id]
         if status == "pending":
@@ -3808,6 +3926,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             logger.info("ws: 拒絕連線（token 驗證失敗）")
             await ws.close(code=4401)
             return
+        # 主持人視角。REST 那半開了而這裡沒開等於白做——這是 App 的主要
+        # 讀取通道（08-29 收緊讀取邊界時就踩過反方向的同一件事）。
+        # 走到這裡表示 token 已經驗過是主 token（或未設 token 的開放模式），
+        # 所以只要再確認 client 有沒有**明示**要用這個身分
+        ws_host = ws.query_params.get("host_view") == "1"
+        if ws_host:
+            logger.info(
+                "ws: 主持人視角連線",
+                extra={"event": "host_view", "channel": "ws",
+                       "ip": ws.client.host if ws.client else None},
+            )
         await ws.accept()
         logger.info("ws: 連線建立")
         db = app.state.db
@@ -3890,7 +4019,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     # 這條是 App 的主要讀取通道：REST 收緊了而這裡沒收，
                     # 被踢的人照樣即時收得到整個房間，等於白做
                     try:
-                        await _member_or_403(rid, pid)
+                        await _member_or_403(rid, pid, ws_host)
                     except HTTPException as exc:
                         detail = exc.detail
                         async with send_lock:

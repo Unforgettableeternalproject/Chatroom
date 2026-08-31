@@ -278,6 +278,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # **刻意只存一個時間戳，不留編輯歷史**——留全歷史是稽核需求不是聊天
     # 需求，會讓 message 表隨著每次改字膨脹
     ("message", "edited_at", "edited_at TEXT"),
+    # 這個成員是不是拿 .env 的主 token 進來的（＝Hub 主持人本人）。
+    # 舊資料一律 0＝不知道，那正是這個欄位存在之前的事實；猜著回填會在
+    # 別人的名字旁邊掛上一個他沒有的身分，比留白糟得多
+    ("participant", "joined_as_host", "joined_as_host INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
