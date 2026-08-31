@@ -702,6 +702,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         wanted = [n for n in names if n.casefold() in RESERVED_NAMES]
         if not wanted:
             return list(names), [], []
+        # **排除的單位是「發話的那個進程」，不是那個 participant id。**
+        # subagent 與父層共用同一個 MCP 進程：subagent 發 @all 時只排除它自己
+        # 的話，父層仍在展開結果裡，於是那個進程被自己剛說的話叫醒（F9）。
+        # 下面那條「不展開 ephemeral」防的是**被 @ 的是 subagent**，這裡防的是
+        # **發話的是 subagent**——同一個機制、反方向，當初只想到一邊
+        exclude = {sender_id}
+        if sender_id:
+            me = await (await app.state.db.execute(
+                "SELECT parent_id FROM participant WHERE id=?", (sender_id,)
+            )).fetchone()
+            if me is not None and me["parent_id"]:
+                exclude.add(me["parent_id"])
         rows = await (await app.state.db.execute(
             "SELECT id, display_name, role FROM participant"
             " WHERE room_id=? AND status='active' AND ephemeral=0",
@@ -721,7 +733,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             groups.append(name)
             members = [
                 r["display_name"] for r in rows
-                if r["id"] != sender_id
+                if r["id"] not in exclude
                 and (group == "all"
                      or (group == "agents" and r["role"] == "agent")
                      or (group == "humans" and r["role"] == "human"))
