@@ -19,11 +19,63 @@ class RoomListResult {
   final List<Assignment> pendingAssignments;
 }
 
+/// 按下封存之後實際發生的事。
+@immutable
+class ArchiveResult {
+  const ArchiveResult({
+    required this.archived,
+    this.alreadyPending = false,
+    this.request,
+  });
+
+  /// 房是不是真的封了。false 表示只是掛上一筆請求。
+  final bool archived;
+
+  /// 這個房已經有人提過了，拿回的是既有那筆。訊息要講得不一樣——
+  /// 「已送出」與「已經有人提過了，還在等」是兩件事
+  final bool alreadyPending;
+
+  final ArchiveRequest? request;
+}
+
+/// 成員提出、等建立者拍板的封存請求。
+///
+/// **對所有成員可見**——提議者要看得到自己提的還在等，其他人才不會重複提。
+/// 只有核准／婉拒的按鈕由 `youAreAdmin` 決定。
+@immutable
+class ArchiveRequest {
+  const ArchiveRequest({
+    required this.id,
+    required this.requesterId,
+    required this.requesterName,
+    required this.reason,
+    required this.status,
+  });
+
+  final String id;
+  final String requesterId;
+  final String requesterName;
+  final String reason;
+
+  /// pending / approved / rejected / cancelled / superseded。
+  /// detail 只會回 pending 那筆，但型別不假設——狀態是 Hub 的契約。
+  final String status;
+
+  factory ArchiveRequest.fromJson(Map<String, dynamic> json) => ArchiveRequest(
+        id: json['id'] as String,
+        requesterId: (json['requester_id'] as String?) ?? '',
+        requesterName: (json['requester_name'] as String?) ?? '',
+        reason: (json['reason'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'pending',
+      );
+}
+
 class RoomDetail {
   const RoomDetail({
     required this.room,
     required this.participants,
     this.youAreAdmin = false,
+    this.archiveRequest,
     this.limits = const ServerLimits(),
   });
 
@@ -32,6 +84,10 @@ class RoomDetail {
 
   /// 帶 X-Session-Key 查詢且與建立者相符時為 true（可移出成員）。
   final bool youAreAdmin;
+
+  /// 目前掛著的封存請求，沒有就是 null。舊版 Hub 不回這個欄位——
+  /// null 在兩種情況下都是「沒有待處理的提議」，UI 行為一致。
+  final ArchiveRequest? archiveRequest;
 
   /// 伺服器實際生效的設定。UI 的倒數要以它為準——寫死一個數字的話，
   /// 伺服器改了設定就會顯示一個假的倒數，看起來像壞掉但其實只是在猜。
@@ -255,6 +311,10 @@ class RoomsApi {
               .map((e) => Participant.fromJson(e as Map<String, dynamic>))
               .toList(),
           youAreAdmin: (res.data!['you_are_admin'] as bool?) ?? false,
+          archiveRequest: res.data!['archive_request'] == null
+              ? null
+              : ArchiveRequest.fromJson(
+                  res.data!['archive_request'] as Map<String, dynamic>),
           limits: ServerLimits.fromJson(
               res.data!['server'] as Map<String, dynamic>?),
         );
@@ -278,17 +338,65 @@ class RoomsApi {
   ///
   /// 兩個標頭都帶：建立者可能還沒 join 自己的房（只有 session key），
   /// 一般成員則只有 participant id。與 [deleteRoom]／[setVisibility] 同一套。
-  Future<void> archive(
+  ///
+  /// **一個入口兩種結果**：建立者按了房就封了；成員按了是提出請求。
+  /// 由 [ArchiveResult.archived] 分辨——client 不自己判斷權限，那是 Hub
+  /// 的事（`youAreAdmin` 決定畫面長怎樣，不決定會發生什麼）。
+  Future<ArchiveResult> archive(
     String roomId, {
+    String? sessionKey,
+    String? participantId,
+    String reason = '',
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/archive',
+          data: {'reason': reason},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        final data = res.data ?? const {};
+        return ArchiveResult(
+          // 舊版 Hub 不回 archived，而它的行為是「直接封存」——缺值時當
+          // true 才與那個行為一致。當成 false 會讓 App 顯示一則假的
+          // 「已送出請求」，而房其實已經封了
+          archived: (data['archived'] as bool?) ?? true,
+          alreadyPending: (data['already_pending'] as bool?) ?? false,
+          request: data['request'] == null
+              ? null
+              : ArchiveRequest.fromJson(
+                  data['request'] as Map<String, dynamic>),
+        );
+      });
+
+  /// 建立者拍板：核准就封存，婉拒留紀錄。
+  Future<void> resolveArchiveRequest(
+    String requestId, {
+    required bool approve,
+    String reason = '',
     String? sessionKey,
     String? participantId,
   }) =>
       unwrap(() => _dio.post(
-            '/api/rooms/$roomId/archive',
+            '/api/archive-requests/$requestId/resolve',
+            data: {'approve': approve, 'reason': reason},
             options: Options(headers: {
               'X-Session-Key': ?sessionKey,
               'X-Participant-Id': ?participantId,
             }),
+          ));
+
+  /// 提議者收回自己的提議。**限本人**——建立者要表達「不要封」是婉拒，
+  /// 那會留下紀錄。
+  Future<void> cancelArchiveRequest(
+    String requestId, {
+    required String participantId,
+  }) =>
+      unwrap(() => _dio.delete(
+            '/api/archive-requests/$requestId',
+            options: Options(headers: {'X-Participant-Id': participantId}),
           ));
 
   /// 解除封存。門檻比 [archive] 寬一格（不要求 active——房被封存時

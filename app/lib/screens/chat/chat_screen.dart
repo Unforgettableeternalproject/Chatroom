@@ -28,6 +28,7 @@ import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/highlighted_members_provider.dart';
 import '../../state/rooms_providers.dart';
+import '../../widgets/archive_request_banner.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
@@ -902,6 +903,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           if (pinnedMessages.isNotEmpty && !archived)
             _PinnedStrip(roomId: roomId, latest: pinnedMessages.last),
+          // 封存請求。封存房裡不會有 pending（封存時一律標 superseded），
+          // 所以不必自己判斷 archived
+          if (detailAsync.value?.archiveRequest case final req?)
+            ArchiveRequestBanner(
+              roomId: roomId,
+              request: req,
+              youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+            ),
           Expanded(
             child: Stack(
               children: [
@@ -1492,7 +1501,7 @@ class _OverflowMenu extends ConsumerWidget {
             }
           case 'archive':
             try {
-              await ref.read(roomsApiProvider).archive(
+              final result = await ref.read(roomsApiProvider).archive(
                     roomId,
                     sessionKey: ref.read(appConfigProvider).deviceKey,
                     participantId:
@@ -1500,6 +1509,15 @@ class _OverflowMenu extends ConsumerWidget {
                   );
               ref.invalidate(roomDetailProvider(roomId));
               ref.invalidate(roomListProvider);
+              // 成員按下去是提議不是封存。不講清楚的話畫面毫無動靜，
+              // 看起來像按鈕壞了
+              if (!result.archived && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(result.alreadyPending
+                      ? '已經有人提議封存了，還在等建立者確認'
+                      : '已送出封存請求，等建立者確認'),
+                ));
+              }
             } on ApiException catch (e) {
               if (context.mounted) {
                 ScaffoldMessenger.of(context)

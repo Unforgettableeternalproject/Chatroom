@@ -112,8 +112,17 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
         await api.unarchive(room.id,
             sessionKey: sessionKey, participantId: participantId);
       } else {
-        await api.archive(room.id,
+        final result = await api.archive(room.id,
             sessionKey: sessionKey, participantId: participantId);
+        // 非建立者按下去是提議。房間列表上沒有卡片可以顯示，這則
+        // snackbar 是他唯一會看到的回饋
+        if (!result.archived && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(result.alreadyPending
+                ? '已經有人提議封存了，還在等建立者確認'
+                : '已送出封存請求，等建立者確認'),
+          ));
+        }
       }
       ref.invalidate(roomListProvider);
       // 聊天畫面若開著同一房，房間狀態與身分都要跟著換
