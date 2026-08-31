@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 
+import '../core/errors/api_exception.dart';
 import '../api/messages_api.dart';
 import '../models/ws_event.dart';
 import 'reconnect_policy.dart';
@@ -330,12 +331,51 @@ class RealtimeService {
 
   Future<void> _syncAll() async {
     for (final roomId in List.of(_refCounts.keys)) {
-      await _syncRoom(roomId);
+      try {
+        await _syncRoom(roomId);
+      } on ApiException catch (e) {
+        // 🚨 **讀不到某個房，不是連線壞了。**
+        //
+        // 原本任何補訊例外都會冒到 _runLoop 的 catch，被當成「補訊失敗，
+        // 重新連線」——而 401/403 重連一百次也不會變成 200。實際長出來的
+        // 形狀是：WS 連上 → 補訊 401 → 關掉重連 → 再 401，每秒數次打向
+        // Hub，畫面上只顯示「重連中」。
+        //
+        // 這與底下 `code == 4401` 那條是同一條規則（「重連只會用同一個錯
+        // token 撞牆」），只是補訊這條路徑當初沒套用。
+        //
+        // 而且一個房讀不到不該讓**其他房**跟著斷：這個迴圈是跑所有訂閱中
+        // 的房間的。
+        if (_isAuthFailure(e)) {
+          _log.warning('房間 $roomId 讀不到（${e.code}），跳過補訊不重連');
+          continue;
+        }
+        rethrow;
+      }
     }
   }
 
+  /// 這個錯誤重試幾次都不會變好。
+  ///
+  /// 刻意**不**把網路層例外算進來——那些重連確實有用，是這個機制要保留的
+  /// 正常路徑。
+  static bool _isAuthFailure(ApiException e) =>
+      e is AuthException ||
+      e is ParticipantHeaderMissingException ||
+      e is ParticipantInvalidException ||
+      e is NotFoundException;
+
   Future<void> _attachRoom(String roomId) async {
-    await _syncRoom(roomId);
+    try {
+      await _syncRoom(roomId);
+    } on ApiException catch (e) {
+      // 進房的第一次載入。與 _syncAll 同一條規則——這裡漏掉的話，
+      // 「開一個讀不到的房」仍然會把例外丟進畫面層變成無限重試。
+      // **不在這裡退場**：那個判定要看 join 有沒有也失敗（見 chat_screen），
+      // 這裡只負責不要把授權問題當成連線問題
+      if (!_isAuthFailure(e)) rethrow;
+      _log.warning('房間 $roomId 讀不到（${e.code}）');
+    }
     _conn?.send(WsProtocol.subscribe(roomId, _feeds[roomId]?.cursor ?? 0,
         participantId: _participantIds[roomId]));
     _sentParticipantIds[roomId] = _participantIds[roomId] ?? '';

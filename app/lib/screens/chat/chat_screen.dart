@@ -212,6 +212,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// 已經在退場了。ref.listen 會從兩個 provider 各觸發一次，沒有這個旗標
+  /// 就會導航兩次、也會跳兩則 snackbar。
+  bool _leaving = false;
+
+  /// 拿不到身分**且**讀不到房間 → 這個房對我而言不存在，退場回列表。
+  ///
+  /// 走的是與「被管理員移出」完全一樣的收尾（清本機身分、退訂、回列表），
+  /// 因為對使用者來說結果是同一件事：這個房他進不去了。留在原地只會看到
+  /// 一個永遠在重連的空畫面。
+  void _leaveIfUnreadable(WidgetRef ref) {
+    if (_leaving) return;
+    final identity = ref.read(identityProvider(widget.roomId));
+    final detail = ref.read(roomDetailProvider(widget.roomId));
+    // hasError 而不是 !hasValue：loading 中兩者都還沒有值，那是正常過程
+    if (!identity.hasError || !detail.hasError) return;
+    _leaving = true;
+    final err = detail.error;
+    final reason = err is ApiException ? err.message : '你不是這個房間的成員';
+    unawaited(() async {
+      final settings = ref.read(settingsRepoProvider);
+      await settings.setParticipantId(widget.roomId, null);
+      ref.read(realtimeServiceProvider).unsubscribe(widget.roomId);
+      if (!mounted) return;
+      context.go('/rooms');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('讀不到這個聊天室：$reason'),
+      ));
+    }());
+  }
+
   void _scrollToBottom() {
     // 送出成功時也會走這裡，而那條路徑不保證 list 已經 attach（剛進房就
     // 發言、或畫面正在重建）。沒有 clients 時安靜跳過捲動即可——reverse
@@ -747,6 +777,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ref.invalidate(roomListProvider);
       }
     });
+
+    // 讀不到這個房 → 退場回列表，與「被管理員移出」同一條路。
+    //
+    // 🚨 **判定必須是「拿不到身分 *且* 讀不到房間」**，不能只看其中一個：
+    // - 只看讀取失敗：join 還在跑的時候讀取本來就會 401
+    //   （`participant_header_required` 是「還不知道你是誰」，不是
+    //   「你不是成員」），那是時序，不是權限
+    // - 只看 join 失敗：封存房本來就 join 不了（409），但成員仍讀得到
+    //   歷史——那是刻意保留的唯讀瀏覽，不可以把人踢出去
+    //
+    // 兩個同時失敗才是真的沒份。實際長出這個需求的情境：主持人用主持人
+    // 模式封了一個自己沒份的房，然後把模式關掉——房沒有建立者、他不是
+    // 成員，於是畫面停在一個永遠讀不到的房上，只顯示「重連中」。
+    ref.listen(identityProvider(roomId), (_, _) => _leaveIfUnreadable(ref));
+    ref.listen(roomDetailProvider(roomId), (_, _) => _leaveIfUnreadable(ref));
 
     // 解封後重建人類身分：封存期間進房的 join 會收到 409，
     // 這個錯誤被 keepAlive 快取住，不清掉會讓之後所有發言都撞「已封存」

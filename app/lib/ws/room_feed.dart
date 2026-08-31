@@ -41,6 +41,7 @@ class RoomFeed {
   /// WS 推播順帶的房間狀態（archived 偵測）。
   String? get roomStatus => _roomStatus;
 
+
   List<Question> _questions = const [];
 
   /// 目前指名問「我」的待答問題（server 推完整快照，直接覆蓋）。
