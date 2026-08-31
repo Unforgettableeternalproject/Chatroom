@@ -57,6 +57,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   int _lastSeenCount = 0;
   int? _lastSystemCount;
   int? _highlightSeq;
+
+  /// 掛在目前跳轉目標那一則上，讓 `_focusOn` 的第二段量得到它的實際位置。
+  /// 同一時間只有一則訊息會命中 `_highlightSeq`，所以這把 GlobalKey 不會
+  /// 同時出現在兩個 widget 上。
+  final GlobalKey _focusKey = GlobalKey();
   Timer? _highlightTimer;
   bool _loadingOlder = false;
   Timer? _memberPoll;
@@ -223,7 +228,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final list = feed.messages.toList();
     final index = list.indexWhere((m) => m.seq == seq);
     if (index < 0) return;
-    // reverse list 的索引從底部起算；以估計高度先跳到附近再高亮
+
+    // 先標記目標，_focusKey 才會掛到那一則上——精修那一步要靠它拿到 context
+    setState(() => _highlightSeq = seq);
+
+    // 第一段：以估計高度粗跳。這個估計一定不準（一行字約 60px，帶圖片的
+    // 氣泡好幾百），往回兩百則就差出好幾個螢幕；它的任務只是把目標帶進
+    // build 範圍，讓第二段有東西可以量
     final fromBottom = list.length - 1 - index;
     const estimatedExtent = 96.0;
     final target = (fromBottom * estimatedExtent).clamp(
@@ -237,7 +248,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         curve: Curves.easeOut,
       );
     }
-    setState(() => _highlightSeq = seq);
+
+    // 第二段：目標真的被 build 出來之後，用它自己的高度精修到畫面中央。
+    // 兩段是必要的——ensureVisible 對還沒 build 的 item 無效，而粗跳的
+    // 誤差正好大到會讓目標落在 viewport 外
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    // 跨了 endOfFrame 這個 async gap，所以要檢查的是**那個 context 自己**
+    // 還在不在（State.mounted 不能代答：目標訊息可能已經被捲出 build 範圍）
+    final ctx = _focusKey.currentContext;
+    if (ctx != null && ctx.mounted) {
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    }
+    if (!mounted) return;
     _highlightTimer?.cancel();
     _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) setState(() => _highlightSeq = null);
@@ -812,13 +840,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               );
                             }
                             final m = messages[messages.length - 1 - i];
+                            // 跳轉目標掛上 _focusKey。system 訊息也可能是
+                            // 目標（釘選收據就是 system），只掛 chat 分支
+                            // 會讓那些跳轉安靜地退回粗跳的誤差
+                            Widget keyed(Widget tile) => m.seq == _highlightSeq
+                                ? KeyedSubtree(key: _focusKey, child: tile)
+                                : tile;
                             if (m.isSystem) {
-                              return SystemMessageTile(message: m);
+                              return keyed(SystemMessageTile(message: m));
                             }
                             final kind = m.senderId != null
                                 ? (kindById[m.senderId] ?? 'other')
                                 : 'other';
-                            return Padding(
+                            return keyed(Padding(
                               padding: const EdgeInsets.symmetric(vertical: 9),
                               child: MessageBubble(
                                 message: m,
@@ -834,7 +868,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     ? null
                                     : subagentParentById[m.senderId],
                               ),
-                            );
+                            ));
                           },
                         ),
                       ),
