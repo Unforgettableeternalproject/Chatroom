@@ -42,10 +42,15 @@ def _uid() -> str:
     return uuid.uuid4().hex
 
 
-def _err(status: int, code: str, message: str) -> HTTPException:
+def _err(status: int, code: str, message: str, **extra) -> HTTPException:
     """機器可讀錯誤：detail 為 {"code", "message"}，code 是穩定契約，
-    message 僅供人讀——client 不得對 message 做字串比對。"""
-    return HTTPException(status, {"code": code, "message": message})
+    message 僅供人讀——client 不得對 message 做字串比對。
+
+    ``extra`` 併進 detail，給「拒絕但要讓對方知道怎麼繼續」的那些錯誤用
+    （例如管理員離開時附上可以接手的人）。**把選項放在拒絕裡**，client 才
+    不必為了畫一個選單再打一次別的端點。
+    """
+    return HTTPException(status, {"code": code, "message": message, **extra})
 
 
 # ---------- 說話方式 ----------
@@ -195,6 +200,10 @@ class MessagePost(BaseModel):
         return v or None
     # 先上傳拿到 id，再隨訊息帶上——分兩步是為了讓上傳可以重試而不會重複發言
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class AdminTransfer(BaseModel):
+    target_participant_id: str = Field(min_length=1, max_length=64)
 
 
 class MessageEdit(BaseModel):
@@ -959,6 +968,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "joined_at", "last_seen_at",
                 )
             }
+            # 誰是管理員。`you_are_admin` 只答得出「我是不是」，答不出
+            # 「誰是」——沒有這個欄位，App 連在名字後面掛一個標籤都做不到。
+            # 比對在 server 做完才給布林：creator_session_key 不外流
+            entry["is_admin"] = bool(
+                room["creator_session_key"]
+                and rep["session_key"] == room["creator_session_key"]
+            )
             # subagent 的「存在」對所有人可見（巢狀顯示在父層底下）；
             # 限定只推父層的是**進出事件**，不是存在本身（§3.5）
             entry["ephemeral"] = bool(rep["ephemeral"])
@@ -1022,6 +1038,80 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await db.commit()
         await events.notify(room_id)
+
+    async def _human_heirs(room_id: str, exclude_id: str) -> list[dict]:
+        """可以接手管理權的人：房內 active 的人類，不含自己。
+
+        agent 不列入——presence sweeper 會以閒置移除它，把管理權交給一個隨時
+        會消失的身分等於把它丟掉。
+        """
+        rows = await (await app.state.db.execute(
+            "SELECT id, display_name FROM participant WHERE room_id=?"
+            " AND status='active' AND role='human' AND id!=? ORDER BY joined_at",
+            (room_id, exclude_id),
+        )).fetchall()
+        return [{"participant_id": r["id"], "display_name": r["display_name"]}
+                for r in rows]
+
+    @app.post("/api/rooms/{room_id}/admin", dependencies=[Depends(require_auth)])
+    async def transfer_admin(
+        room_id: str,
+        body: AdminTransfer,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """把管理權交給另一個人類成員。
+
+        管理權綁在 `creator_session_key` 上，在此之前它沒有任何出口——一旦
+        建立者離開，房間就永遠沒有人能封存、踢人或收回邀請。
+
+        **交出去就是交出去了**：原管理員同時降為一般成員。兩個管理員與零個
+        管理員一樣糟，只是壞的方式不同。
+        """
+        room = await _room_or_404(room_id)
+        db = app.state.db
+        me = await _participant(x_participant_id, room_id)
+        if not room["creator_session_key"] or \
+                me["session_key"] != room["creator_session_key"]:
+            raise _err(403, "not_room_admin",
+                       "只有目前的管理員可以移交管理權")
+        target = await (
+            await db.execute(
+                "SELECT id, role, display_name FROM participant"
+                " WHERE id=? AND room_id=? AND status='active'",
+                (body.target_participant_id, room_id),
+            )
+        ).fetchone()
+        if target is None:
+            raise _err(404, "heir_not_found",
+                       "找不到這個成員，或他已經不在聊天室裡——交給一個已經"
+                       "離開的人等於把管理權丟掉")
+        if target["role"] != "human":
+            raise _err(422, "admin_must_be_human",
+                       "管理員只能是人類。agent 會被閒置移除，把管理權交給"
+                       "一個隨時會消失的身分，等於把它丟掉")
+        heir = await (
+            await db.execute(
+                "SELECT session_key FROM participant WHERE id=?", (target["id"],)
+            )
+        ).fetchone()
+        await db.execute(
+            "UPDATE room SET creator_session_key=? WHERE id=?",
+            (heir["session_key"], room_id),
+        )
+        await db.commit()
+        logger.info(
+            "移交管理權 %s → %s（%s）", me["display_name"],
+            target["display_name"], room_id,
+            extra={"event": "admin_transferred", "room_id": room_id,
+                   "from_participant_id": me["id"], "to_participant_id": target["id"]},
+        )
+        await _post_message(
+            room_id, None,
+            f"{me['display_name']} 把管理權移交給 {target['display_name']}",
+            kind="system", system_event="admin_transferred",
+        )
+        return {"ok": True, "admin_participant_id": target["id"],
+                "admin_display_name": target["display_name"]}
 
     @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
     async def archive_room(room_id: str):
@@ -1570,6 +1660,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 封存房也允許離開（唯讀例外），故不檢查房間狀態
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
+        # 管理員不能就這樣走掉：走了之後房間永遠沒有人能封存、踢人或收回
+        # 邀請，而那個狀態沒有任何地方會報錯——只會在下次有人需要管理員時
+        # 才發現。封存過的房間不再需要管理員（已經唯讀），所以只約束 active。
+        room = await (
+            await db.execute("SELECT * FROM room WHERE id=?", (room_id,))
+        ).fetchone()
+        # **只擋人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
+        # 可以回答「移轉還是封存」——擋下它只會讓它卡在一個答不出來的問題上。
+        # 那種房空了會由 presence sweeper 自動封存，既有機制已經涵蓋。
+        # 這條規則服務的是「人類在 App 上按下離開」那個情境。
+        if (room is not None and room["status"] == "active"
+                and room["creator_session_key"]
+                and p["role"] == "human"
+                and p["session_key"] == room["creator_session_key"]):
+            candidates = await _human_heirs(room_id, p["id"])
+            raise _err(
+                409, "admin_must_hand_over",
+                "你是這個聊天室的管理員。離開之前要先把管理權交給另一個人類"
+                "成員，或把聊天室封存——直接離開的話，之後沒有人能封存、踢人"
+                "或收回邀請。",
+                human_candidates=candidates,
+            )
         # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
         orphans = await _depart_with_subagents(
             room_id, p["id"], "left", "left", "父層離開"

@@ -192,6 +192,12 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有發送者本人或聊天室建立者可以刪除這則訊息。",
                 status=status, detail=detail,
             )
+        if code == "not_room_admin":
+            return HubError(
+                _detail_text(detail)
+                or "只有目前的管理員可以移交管理權。",
+                status=status, detail=detail,
+            )
         if code == "not_message_author":
             # 與 not_message_owner 分開講：刪除連建立者也可以，編輯只限本人。
             # 講成同一句話會讓建立者以為自己「身分有問題」而去重新 join
