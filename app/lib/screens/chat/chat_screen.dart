@@ -610,6 +610,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ref.listen(identityProvider(roomId), (prev, next) {
       if (next.hasValue && prev?.hasValue != true) {
         ref.invalidate(roomDetailProvider(roomId));
+        // 進房會讓 Hub 把對應的指派標成 accepted——邀請卡該在**這一刻**消失，
+        // 而不是等房間列表下一輪輪詢。走 `/rooms/...` 進來的人是從那張卡點
+        // 過來的，回列表時還看到它等於「按了沒反應」
+        ref.invalidate(roomListProvider);
       }
     });
 

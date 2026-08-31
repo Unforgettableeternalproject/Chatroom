@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -31,9 +33,25 @@ class RoomListPane extends ConsumerStatefulWidget {
 class _RoomListPaneState extends ConsumerState<RoomListPane> {
   String _status = 'active';
   final _search = TextEditingController();
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    // 邀請沒有推播通道可搭：WS 是 per-room 訂閱的，而被邀請的人還不是成員、
+    // 也還沒進房——他訂不到那個房。房間列表的其他變動（別人建房、封存）同理
+    // 落在通道之外。所以這裡輪詢，週期照指派畫面那個 10s 的先例。
+    //
+    // ⚠️ 輪詢是**兜底**，不是主要機制：使用者自己按下的動作（加入、婉拒）
+    // 一律在當下 invalidate，不等下一輪。剛按完鍵要等 10 秒，跟壞掉沒有分別。
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) {
+      ref.invalidate(roomListProvider);
+    });
+  }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _search.dispose();
     super.dispose();
   }
