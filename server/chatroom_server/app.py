@@ -818,26 +818,42 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _message_rows_to_json(rows, db) -> list[dict]:
         out = []
         attachments = await _attachments_for([r["id"] for r in rows], db)
+        # **一批查一次，不要逐則查。** 逐則查 sender 與 reply 原文會讓序列化
+        # 變成 message-level N+1：一般讀取每次上限 100 則所以不明顯，但匯出
+        # 會跨過整個房間，一萬則就是額外的一兩萬次查詢——而它們全走同一條
+        # aiosqlite 連線，long-poll 與即時推播也在那條線上（F8）
+        names: dict[str, str] = {}
+        sender_ids = {r["sender_id"] for r in rows if r["sender_id"]}
+        if sender_ids:
+            marks = ",".join("?" for _ in sender_ids)
+            prows = await (await db.execute(
+                f"SELECT id, display_name FROM participant WHERE id IN ({marks})",
+                tuple(sender_ids),
+            )).fetchall()
+            names = {p["id"]: p["display_name"] for p in prows}
+        originals: dict[str, object] = {}
+        reply_ids = {r["reply_to"] for r in rows if r["reply_to"]}
+        if reply_ids:
+            marks = ",".join("?" for _ in reply_ids)
+            rrows = await (await db.execute(
+                "SELECT m.id, m.room_id, m.seq, m.content, m.deleted,"
+                " p.display_name FROM message m"
+                " LEFT JOIN participant p ON p.id=m.sender_id"
+                f" WHERE m.id IN ({marks})",
+                tuple(reply_ids),
+            )).fetchall()
+            originals = {x["id"]: x for x in rrows}
         for r in rows:
-            sender_name = None
-            if r["sender_id"]:
-                p = await (
-                    await db.execute(
-                        "SELECT display_name FROM participant WHERE id=?", (r["sender_id"],)
-                    )
-                ).fetchone()
-                sender_name = p["display_name"] if p else None
+            sender_name = names.get(r["sender_id"]) if r["sender_id"] else None
             reply_preview = None
             reply_to_seq = r["reply_to_seq"]
             if r["reply_to"]:
-                orig = await (
-                    await db.execute(
-                        "SELECT m.seq, m.content, m.deleted, p.display_name FROM message m"
-                        " LEFT JOIN participant p ON p.id=m.sender_id"
-                        " WHERE m.id=? AND m.room_id=?",  # 寫入已驗同房，這裡是縱深防禦
-                        (r["reply_to"], r["room_id"]),
-                    )
-                ).fetchone()
+                orig = originals.get(r["reply_to"])
+                # 同房比對留著：寫入時已驗過，這裡是縱深防禦。批次查詢拿掉了
+                # SQL 上的 room_id 條件，就要在這裡補回來，否則跨房的回覆會
+                # 把別房的內容帶進這個時間軸
+                if orig is not None and orig["room_id"] != r["room_id"]:
+                    orig = None
                 if orig:
                     reply_preview = {
                         "seq": orig["seq"],
@@ -1151,10 +1167,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "SELECT session_key FROM participant WHERE id=?", (target["id"],)
             )
         ).fetchone()
-        await db.execute(
-            "UPDATE room SET creator_session_key=? WHERE id=?",
-            (heir["session_key"], room_id),
+        # **檢查與寫入必須是同一個動作。** 上面那道權限檢查與這行之間有一個
+        # 窗口：兩個同時抵達的請求會各自通過檢查、各自成功、各自發一則系統
+        # 訊息，最後一筆蓋掉前一筆——房裡於是有兩則「管理權已移交」，而實際
+        # admin 只有後寫入的那個，看紀錄的人無從知道哪一則是真的。
+        # 帶上舊的 creator_session_key 當條件，用 rowcount 判斷自己是不是贏家
+        cur = await db.execute(
+            "UPDATE room SET creator_session_key=? WHERE id=?"
+            " AND creator_session_key=?",
+            (heir["session_key"], room_id, room["creator_session_key"]),
         )
+        if cur.rowcount == 0:
+            await db.rollback()
+            raise _err(409, "admin_already_changed",
+                       "管理權在你送出這個請求的同時被移交給別人了。重新讀一次"
+                       "房間狀態再決定——你現在可能已經不是管理員")
         await db.commit()
         logger.info(
             "移交管理權 %s → %s（%s）", me["display_name"],
