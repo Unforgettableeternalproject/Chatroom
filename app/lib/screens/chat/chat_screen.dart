@@ -932,6 +932,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     final list = _desaturateIfArchived(
                       archived,
                       SelectionArea(
+                        // **壓掉原生的選取選單。** 上面那句「右鍵留給訊息選單」
+                        // 原本只是意圖——SelectionArea 在桌面端自帶一份
+                        // context menu（Select all／Copy），於是右鍵會同時彈出
+                        // 兩個浮層互相疊壓。
+                        //
+                        // 回空而不是拿掉 SelectionArea：**拖選的能力要留著**，
+                        // 要砍的只有那個選單。複製整則的入口在我們自己的選單裡
+                        // （「複製內容」），拖選部分文字則靠這個 SelectionArea。
+                        contextMenuBuilder: (_, _) => const SizedBox.shrink(),
                         child: ListView.builder(
                           controller: _scroll,
                           reverse: true,
