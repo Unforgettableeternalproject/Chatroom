@@ -329,15 +329,27 @@ class _ContextMenuRegion extends StatelessWidget {
     final a = actions;
     if (a == null || message.deleted || message.isSystem) return;
     final s = context.uep;
-    final overlay =
-        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    // **兩端都要指定 root，否則座標系對不上。**
+    //
+    // `globalPos` 是全視窗座標（`details.globalPosition`），而 `showMenu` 的
+    // `position` 是**相對於它落腳的那個 Overlay**。`Overlay.of(context)` 預設
+    // 取最近的一個，`showMenu` 預設用 `Navigator.of(context).overlay`——兩者
+    // 在有巢狀 Navigator／Overlay 的畫面上不保證是同一個，於是選單會固定偏
+    // 離游標一段距離（偏移量剛好是兩個 overlay 的原點差）。
+    //
+    // 明確都用 root：`rootOverlay: true` 與 `useRootNavigator: true` 成對出現，
+    // 少一個就回到「大部分時候對」的狀態，而那種錯位只在特定畫面結構下現形。
+    final overlay = Overlay.of(context, rootOverlay: true)
+        .context
+        .findRenderObject()! as RenderBox;
     final choice = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        globalPos.dx,
-        globalPos.dy,
-        overlay.size.width - globalPos.dx,
-        overlay.size.height - globalPos.dy,
+      useRootNavigator: true,
+      // 用 `fromRect` 而不是自己算四邊距離：把「點在哪」與「容器多大」分開
+      // 交給 Flutter，邊緣翻轉（右緣/下緣溢出時自動往內收）也才會生效
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(globalPos, globalPos),
+        Offset.zero & overlay.size,
       ),
       color: s.bgCard,
       shape: RoundedRectangleBorder(

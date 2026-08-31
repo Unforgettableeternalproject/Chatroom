@@ -54,4 +54,31 @@ void main() {
               '壓掉等於讓使用者無法複製，而且不會有任何測試紅');
     }
   });
+
+  group('訊息選單要貼著游標（F16）', () {
+    late String source;
+
+    setUp(() {
+      source = File('lib/widgets/message_bubble.dart').readAsStringSync();
+    });
+
+    test('rootOverlay 與 useRootNavigator 必須成對出現', () {
+      // `globalPos` 是全視窗座標，而 showMenu 的 position 相對於它落腳的
+      // Overlay。兩端不同時指定 root 就會固定偏離游標一段距離——**偏移量
+      // 剛好是兩個 overlay 的原點差**，所以它在某些畫面結構下完全正常，
+      // 在另一些畫面上差半個螢幕。那種「大部分時候對」最難查。
+      expect(source, contains('rootOverlay: true'),
+          reason: '選單的錨點容器要用 root overlay');
+      expect(source, contains('useRootNavigator: true'),
+          reason: 'showMenu 也要落在 root，否則與上面那個容器不是同一個座標系');
+    });
+
+    test('位置用 fromRect 交給 Flutter 算，不自己減四邊', () {
+      // 自己算 `overlay.width - dx` 那型在數學上等價，但它把「點在哪」與
+      // 「容器多大」揉在一起——容器取錯時錯誤是靜默的，而且邊緣翻轉
+      // （右緣溢出自動往內收）不一定生效。
+      expect(source, contains('RelativeRect.fromRect'),
+          reason: '用 fromRect(點, Offset.zero & overlay.size)');
+    });
+  });
 }
