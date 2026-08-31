@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../notifications/codex_dispatcher.dart';
 import '../core/config/app_settings.dart';
+import '../core/util/local_host.dart';
 import '../ws/realtime_service.dart';
 import '../notifications/local_notifier.dart';
 import '../notifications/taskbar_badge.dart';
@@ -60,6 +61,10 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
         threadId,
         kind: 'codex',
         label: 'Codex-$tail',
+        // 這個呼叫會把 thread 登記進 Hub 名錄；不帶 host 的話它會被歸進
+        // 指派 UI 的「其他裝置」（預設收起），使用者在自己的機器上找不到
+        // 自己的 agent
+        host: localHostName,
       );
     },
   );

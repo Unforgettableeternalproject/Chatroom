@@ -59,19 +59,36 @@ class AssignmentsApi {
       });
 
   /// session 視角的待處理指派（含 room_name / room_topic）。
+  /// session 視角的待處理指派。
+  ///
+  /// ⚠️ **這個呼叫有副作用**：Hub 會把這把 key 登記進 session 名錄
+  /// （`_touch_session`）。那是刻意的——Codex 不會自己 join，不登記就沒有
+  /// 指派目標，整條喚醒鏈是死的。
+  ///
+  /// 所以 [host] **要帶**：指派 UI 用它把「我這台機器上的 agent」與別人的
+  /// 分開，而空的 host 會被歸進「其他裝置」（那條規則本身是對的——把別人
+  /// 機器上的 agent 指派進私人房，等於把房裡的內容送出去）。不帶的話使用者
+  /// 看得到自己的 agent，但在他不會展開的那一區。
+  ///
+  /// host 是**識別用不是授權用**：自報的值不可信，信任邊界仍然是 token。
   Future<List<Assignment>> listForSession(
     String sessionKey, {
     String? kind,
     String? label,
+    String? host,
   }) =>
       unwrap(() async {
         final nonEmptyLabel = label?.isNotEmpty == true ? label : null;
+        // 讀不到主機名時**不送**，而不是送空字串：Hub 的 upsert 只在非空值
+        // 時覆寫，送空的等於主動把一個已知的主機名洗成未知
+        final nonEmptyHost = host?.isNotEmpty == true ? host : null;
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/assignments',
           queryParameters: {
             'session_key': sessionKey,
             'kind': ?kind,
             'label': ?nonEmptyLabel,
+            'host': ?nonEmptyHost,
           },
         );
         return ((res.data?['assignments'] as List?) ?? const [])
