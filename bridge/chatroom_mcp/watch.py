@@ -601,22 +601,22 @@ class Watcher:
             "不同就是身分分裂，處置是重啟 MCP 或以 CHATROOM_SESSION_KEY 固定兩邊。"
         )
 
-    def gc_state_files(self) -> None:
-        """清掉久到不可能還活著的孤兒 state 檔。
+    def report_stale_states(self) -> None:
+        """報告看起來很久沒動的 session 身分檔——**只報告，不刪除**。
 
-        每個死掉的 session 都留下一個檔案——這台開發機累積了九個。它們不
-        壞事，但 `_sibling_states` 那種「同機還有誰」的判斷要掃過全部，
-        而分裂診斷的可讀性正好與這個數字成反比。
+        原本這裡會自動 unlink，那個授權是錯的（審核用Codex-2 的 F10）：
 
-        **保守到近乎膽小是刻意的**：誤刪一個還活著的 session 的 state 檔，
-        等於把那個 agent 的房內身分與讀取游標一起抹掉，而它下一次醒來會以為
-        自己從沒進過房。所以：
+        - **mtime 不構成 orphan 的證據。** 「30 天沒啟動」與「已經死了」是兩
+          回事——resume 一個放了很久的 session 是完全正常的用法，而那正是最
+          需要身分延續的時刻。刪掉等於把那個 agent 的房內身分與讀取游標一起
+          抹掉，而它下一次醒來會以為自己從沒進過房。
+        - 更直接的實作錯誤：排除「自己的」時用的是 `state_path`（依 key 算
+          檔名），但 assignment 兌換之後**檔名仍是舊的 fallback、內容才是
+          canonical**。於是連「自己的絕不碰」都會在 30 天後失守。
 
-        - **自己的絕不碰**，即使看起來很舊——resume 一個放很久的 session 是
-          正常用法，而那正是最需要身分延續的時刻
-        - 只看 mtime，門檻預設 30 天，`CHATROOM_STATE_TTL_DAYS=0` 可停用
-        - 任何 IO 失敗都吞掉：GC 是啟動時的附帶動作，它失敗的後果不該大於
-          它的價值
+        收益是美觀（墓地會長）與 `_sibling_states` 的掃描量；代價是可能永久
+        刪掉一個活著的身分。**不對等，所以不做。** 保留量測的價值就好——
+        人看到數字自己決定要不要清，那是他的檔案。
         """
         try:
             days = float(os.environ.get("CHATROOM_STATE_TTL_DAYS",
@@ -626,20 +626,24 @@ class Watcher:
         if days <= 0:
             return
         cutoff = time.time() - days * 86400
-        mine = identity.state_path(self.session_key)
-        removed = 0
+        # 依**內容**認自己的那一份，不依檔名——canonical 化之後兩者會不一樣
+        mine = identity.resolve_state_path(self.session_key)
+        stale = 0
         for path in _state_candidates(self.session_key):
             if path == mine:
                 continue
             try:
-                if path.stat().st_mtime >= cutoff:
-                    continue
-                path.unlink()
-                removed += 1
+                if path.stat().st_mtime < cutoff:
+                    stale += 1
             except OSError:
                 continue
-        if removed:
-            _log(f"清掉 {removed} 個超過 {days:g} 天沒動過的 session 身分檔。")
+        if stale:
+            _log(
+                f"同機有 {stale} 個超過 {days:g} 天沒動過的 session 身分檔"
+                f"（{mine.parent}）。**不會自動清除**——「很久沒動」不等於"
+                "「已經死了」，resume 舊 session 是正常用法。確定不再需要的話"
+                "自己刪。"
+            )
 
     def depart(self, reason: str, message: str) -> None:
         """發出離場事件並標記結束——這個房間對本 watcher 已經沒有事情要做了。"""
@@ -778,7 +782,7 @@ class Watcher:
                 "⚠️ kind=other——身分是隨機 key，與 bridge 對不上，"
                 "指派與 @mention 都不會觸發。請補 --kind claude|codex"
             )
-        self.gc_state_files()
+        self.report_stale_states()
         self.preflight()
         # 有 room 時指派輪詢自己一條執行緒，不被 long-poll 擋住
         assignment_thread: threading.Thread | None = None
