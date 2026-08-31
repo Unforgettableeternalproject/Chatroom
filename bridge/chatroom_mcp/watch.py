@@ -104,6 +104,10 @@ REJOINABLE = {"idle": True, "left": True, "kicked": False,
 # Hub 的 system_event → 對外的離場理由。
 # 看 system_event 欄位而不是比對中文內容：內容改一個字就會無聲失效，而那種
 # 失效在這裡完全看不出來（事件單純不再發出，沒有錯誤）。
+# 記住多少則「被改過的訊息」的狀態。只有編輯/撤回過的會進來，量本來就
+# 小；設上限是為了長命 watcher 不會無界成長
+_SEEN_UPDATES_LIMIT = 512
+
 DEPARTURE_EVENTS = {
     "leave": "left",
     "kick": "kicked",
@@ -279,6 +283,9 @@ class Watcher:
         self.participant_id: str | None = None
         self.display_name: str | None = None
         self.after_seq = 0
+        # message_id → 上次發過事件時那則的狀態簽章。`edited_at`/`deleted`
+        # 是黏著狀態，靠它才分得出「又被改了」與「只是重新入流」
+        self._seen_updates: dict[str, str] = {}
         if self.room_id:
             pid, name, state_seq = _read_bridge_state(self.session_key, self.room_id)
             self.participant_id, self.display_name = pid, name
@@ -612,12 +619,30 @@ class Watcher:
         deleted = bool(m.get("deleted"))
         # `edited_at` 是舊版 Hub 沒有的欄位——沒有它就是沒編輯過，安靜。
         # **降級不壞**：收不到新事件可以接受，崩掉不行
-        edited = bool(m.get("edited_at"))
-        if not deleted and not edited:
+        edited_at = m.get("edited_at") or ""
+        if not deleted and not edited_at:
             return
         mine = bool(m.get("sender_id")) and m["sender_id"] == self.participant_id
         if not mine and not _mentions_me(m, self.display_name):
             return
+        # **`edited_at` 與 `deleted` 是狀態，不是事件**——它們一旦有值就永遠
+        # 有值。只看「這則現在長什麼樣」的話，訊息編輯過一次之後，後續每一次
+        # 釘選/取消釘選讓它重新入流都會再報一次「被編輯了」，而看的人會以為
+        # 它又被改了。
+        #
+        # 所以判斷的是**跟上次看到的比有沒有變**：記住這則上次的狀態，一樣
+        # 就閉嘴。第二次真的編輯（`edited_at` 換了新時間）照樣會發——消除
+        # 重複不能把後續的真變更一起吃掉。
+        mid = m.get("id")
+        signature = ("deleted" if deleted else f"edited:{edited_at}")
+        if mid:
+            if self._seen_updates.get(mid) == signature:
+                return
+            self._seen_updates[mid] = signature
+            # 只記「被改過的訊息」，量本來就小；仍設上限避免長命 watcher
+            # 無界成長。丟最舊的——那些早就不會再變了
+            while len(self._seen_updates) > _SEEN_UPDATES_LIMIT:
+                self._seen_updates.pop(next(iter(self._seen_updates)))
         self.emit({
             "event": "message_deleted" if deleted else "message_edited",
             "room_id": self.room_id,

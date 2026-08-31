@@ -33,7 +33,10 @@ def _updates(fake_hub, *messages):
 
 
 def _msg(**kw):
+    # `id` 一定要有——去重靠它。真實 Hub 每則都帶，fixture 缺了會讓
+    # 「同一則的重複事件」測試靜靜地失效
     base = {
+        "id": "msg-1",
         "seq": 5, "kind": "chat", "sender_id": "p9", "sender_name": "Bernie",
         "content": "改過的內容", "mentions": [], "pinned": False,
         "deleted": False,
@@ -132,3 +135,59 @@ def test_an_unedited_old_message_does_not_emit(
     _updates(fake_hub, _msg(sender_id="me"))
     w.poll_room()
     assert events_from(capsys) == []
+
+
+class TestStateIsNotAnEvent:
+    """`edited_at` 是**狀態**不是事件——它一旦有值就永遠有值。
+
+    審核用Codex 的 finding：訊息編輯過一次之後，之後**每一次** pin/unpin 讓
+    它重新入流，watcher 都會再發一次 `message_edited`。看的人會以為那則又被
+    改了一次，而它其實只是被釘了。
+
+    判斷「這次的 update 是不是編輯」不能只看訊息現在長什麼樣，要看**跟上次
+    看到的比有沒有變**。
+    """
+
+    def test_editing_once_emits_once(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        edited = _msg(sender_id="me", edited_at="2026-08-31T10:00:00Z")
+        _updates(fake_hub, edited)
+        w.poll_room()
+        assert [e["event"] for e in events_from(capsys)] == ["message_edited"]
+
+        # 同一則被釘選——`edited_at` 還在，但這次的變更不是編輯
+        _updates(fake_hub, {**edited, "pinned": True})
+        w.poll_room()
+        assert events_from(capsys) == [], "釘選不該再發一次 message_edited"
+
+    def test_a_second_real_edit_does_emit_again(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """真的又改了一次要再發——不能為了消除重複而把後續編輯一起吃掉。"""
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z"))
+        w.poll_room()
+        capsys.readouterr()
+
+        _updates(fake_hub, _msg(sender_id="me", content="又改了一次",
+                                edited_at="2026-08-31T10:05:00Z"))
+        w.poll_room()
+        assert [e["event"] for e in events_from(capsys)] == ["message_edited"]
+
+    def test_deleting_emits_once_too(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """`deleted` 同樣是黏著狀態。撤回的訊息不能被釘，但 update_seq 仍
+        可能因為別的路徑再推進一次，那時不該再報一次撤回。"""
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        gone = _msg(sender_id="me", content="", deleted=True)
+        _updates(fake_hub, gone)
+        w.poll_room()
+        assert [e["event"] for e in events_from(capsys)] == ["message_deleted"]
+
+        _updates(fake_hub, gone)
+        w.poll_room()
+        assert events_from(capsys) == []
