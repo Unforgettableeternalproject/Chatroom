@@ -25,6 +25,7 @@ import '../../state/app_providers.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
+import '../../state/highlighted_members_provider.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
@@ -91,6 +92,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    // 標記名單從本機設定讀進來一次。放在這裡而不是 build：Notifier 在
+    // build 期間改 state 會炸，而它本來就只需要讀一次
+    ref.read(highlightedMembersProvider.notifier).ensureLoaded(widget.roomId);
     _startHeartbeat();
     _startMemberPoll();
     // 通知抑制的 activeRoomId 由 router 推導（見 app.dart _syncActiveRoom）——
@@ -744,6 +748,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       enabled: !archived,
     );
 
+    // 被我標記的成員：時間軸與側欄共用同一份，所以放在 provider 裡
+    // （載入在 initState，build 期間不改 state）
+    final highlightedIds =
+        ref.watch(highlightedMembersProvider)[roomId] ?? const <String>{};
     final kindById = {
       for (final p in members) ...{
         p.id: p.kind,
@@ -861,6 +869,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 senderKind: kind,
                                 actions: actions,
                                 highlighted: _highlightSeq == m.seq,
+                                memberHighlighted: m.senderId != null &&
+                                    highlightedIds.contains(m.senderId),
                                 serverUrl: config.serverUrl,
                                 token: config.token,
                                 // 附件下載也在讀取邊界內（Hub 側 3605638）
@@ -1538,6 +1548,10 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     }
   }
 
+  Future<void> _toggleHighlight(Participant p) =>
+      ref.read(highlightedMembersProvider.notifier)
+          .toggle(widget.roomId, p.id);
+
   Future<void> _setHidden(Participant p, bool hide) async {
     final next = {..._hidden};
     if (hide) {
@@ -1609,6 +1623,8 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final myId = widget.myId;
+    final highlighted =
+        ref.watch(highlightedMembersProvider)[widget.roomId] ?? const <String>{};
     final shown = widget.members.where((p) => !_hidden.contains(p.id));
     final active = shown.where((p) => p.isActive).toList();
     // **結束的子代理不進「已離開」。** 一般成員離開是有意義的資訊（他還會
@@ -1680,6 +1696,10 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                       : null,
                   // 自己隱藏自己只會讓人以為出了問題
                   onHide: p.id == myId ? null : () => _setHidden(p, true),
+                  // 標記只給別人：不會有人在等自己回話
+                  highlighted: highlighted.contains(p.id),
+                  onToggleHighlight:
+                      p.id == myId ? null : () => _toggleHighlight(p),
                 ),
               if (gone.isNotEmpty) ...[
                 const SizedBox(height: 16),
@@ -1762,6 +1782,8 @@ class _MemberTile extends StatelessWidget {
     this.onKick,
     this.onHide,
     this.onUnhide,
+    this.highlighted = false,
+    this.onToggleHighlight,
     this.idleTimeout = const Duration(minutes: 10),
   });
 
@@ -1784,6 +1806,11 @@ class _MemberTile extends StatelessWidget {
   /// 與 [onKick] 完全不同：那個動到所有人，這個只動我的視圖。
   final VoidCallback? onHide;
   final VoidCallback? onUnhide;
+
+  /// 這個人被我標記為重點（時間軸上的左軸會加粗）。與隱藏同一類：
+  /// 純本機視圖，方向相反——隱藏是「別讓他佔位置」，標記是「別讓我漏看他」。
+  final bool highlighted;
+  final VoidCallback? onToggleHighlight;
 
   @override
   Widget build(BuildContext context) {
@@ -1925,6 +1952,17 @@ class _MemberTile extends StatelessWidget {
                       ? Colors.transparent
                       : UepColors.success,
                   border: isIdle ? Border.all(color: s.inkMute) : null,
+                ),
+              ),
+            if (onToggleHighlight != null)
+              IconButton(
+                tooltip: highlighted ? '取消標記' : '標記這個人（時間軸上加粗）',
+                visualDensity: VisualDensity.compact,
+                onPressed: onToggleHighlight,
+                icon: Icon(
+                  highlighted ? Icons.star : Icons.star_border,
+                  size: 14,
+                  color: highlighted ? color : s.inkMute,
                 ),
               ),
             if (onHide != null)

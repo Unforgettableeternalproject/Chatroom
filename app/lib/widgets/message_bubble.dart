@@ -36,6 +36,7 @@ class MessageBubble extends StatelessWidget {
     required this.senderKind,
     this.actions,
     this.highlighted = false,
+    this.memberHighlighted = false,
     this.serverUrl = '',
     this.token = '',
     this.participantId,
@@ -59,8 +60,16 @@ class MessageBubble extends StatelessWidget {
   /// 該回給誰。
   final String? subagentOf;
 
-  /// focusSeq 跳轉的高亮。
+  /// focusSeq 跳轉的高亮。**暫態**，跳完就消失。
   final bool highlighted;
+
+  /// 這個發話者被我標記為重點——**常駐**，直到我取消標記。
+  ///
+  /// 刻意與 [highlighted] 分成兩個參數而不是共用一個：一個是暫態、一個是
+  /// 常駐，共用會讓「我剛跳轉到這則」與「這個人我在等」互相覆蓋，而且金色
+  /// 已經被 self / pinned / focus 三種狀態占滿了。這裡改用發話者自己的
+  /// kind 色加粗左軸——在同一套色系裡加重，不新增一種顏色語彙。
+  final bool memberHighlighted;
 
   @override
   Widget build(BuildContext context) {
@@ -166,6 +175,10 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    // 標記的成員把左軸加粗到 5px。在同一套色系裡加重而不是換色：kind 色
+    // 是「這是誰說的」的既有語彙，標記只是把它喊大聲一點。自己的訊息沒有
+    // 左軸也不需要標記——不會有人在等自己回話
+    final axisWidth = memberHighlighted ? 5.0 : 2.0;
     final bubble = isSelf
         ? body
         : Container(
@@ -173,11 +186,11 @@ class MessageBubble extends StatelessWidget {
               border: Border(
                 left: BorderSide(
                   color: message.deleted ? s.hairline : color,
-                  width: 2,
+                  width: axisWidth,
                 ),
               ),
             ),
-            padding: const EdgeInsets.only(left: 11),
+            padding: EdgeInsets.only(left: 14 - axisWidth),
             child: body,
           );
 

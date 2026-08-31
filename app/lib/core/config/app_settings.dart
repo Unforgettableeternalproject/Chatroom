@@ -22,6 +22,7 @@ class SettingsRepository {
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
   static const _kHiddenMembersPrefix = 'chatroom.hidden_members.';
+  static const _kHighlightedMembersPrefix = 'chatroom.highlighted_members.';
   static const _kPendingMentionPrefix = 'chatroom.pending_mention.';
   static const _kNotifyMode = 'chatroom.notify_mode';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
@@ -138,6 +139,28 @@ class SettingsRepository {
 
   Future<void> setHiddenMembers(String roomId, Set<String> ids) async {
     final key = '$_kHiddenMembersPrefix$roomId';
+    if (ids.isEmpty) {
+      await _prefs.remove(key);
+    } else {
+      await _prefs.setStringList(key, ids.toList());
+    }
+  }
+
+  /// 在時間軸上被我標記的 participant id。
+  ///
+  /// 與 [hiddenMembers] 是同一類東西（**純本機視圖**，不送 Hub、不影響任何
+  /// 人看到的內容），方向相反：隱藏是「別讓他佔位置」，標記是「別讓我漏看
+  /// 他」。房裡人一多，等某個特定 agent 回話時整條時間軸都在滾。
+  ///
+  /// 刻意與訊息氣泡的 `highlighted` 分開——那是跳轉時的**暫態**金框，
+  /// 一秒後就該消失；這個是持續的偏好。共用一個視覺通道會讓「我剛跳過來」
+  /// 和「這個人我在等」看起來一模一樣。
+  Set<String> highlightedMembers(String roomId) =>
+      (_prefs.getStringList('$_kHighlightedMembersPrefix$roomId') ?? const [])
+          .toSet();
+
+  Future<void> setHighlightedMembers(String roomId, Set<String> ids) async {
+    final key = '$_kHighlightedMembersPrefix$roomId';
     if (ids.isEmpty) {
       await _prefs.remove(key);
     } else {
