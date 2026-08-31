@@ -508,6 +508,36 @@ def create_app(config: Config | None = None) -> FastAPI:
             return None
         return await _member_or_403(room["id"], participant_id)
 
+    async def _active_creator_or_member(
+        room, participant_id: str | None, session_key: str | None
+    ):
+        """房內**管理動作**的門檻：建立者本人，或此刻仍在房裡的成員。
+
+        與 `_creator_or_member` 的差別只有一個字：**active**。那個字是整件事
+        的重點——`_creator_or_member` 走的 `_member_or_403` 刻意放行歷史成員
+        （離開過的人回頭讀當時的歷史是正當的），而那個寬鬆**只該給讀取**。
+        沿用到管理動作上，離開過的人就能繼續封存房間、撤回別人的邀請。
+
+        建立者不必是成員：建房到 join 之間有一段空窗，指派 UI 正開在上面。
+        """
+        if room["creator_session_key"] and session_key == room["creator_session_key"]:
+            return None
+        if not participant_id:
+            raise _err(401, "participant_header_required",
+                       "請求沒有帶 X-Participant-Id。這個動作要證明你此刻"
+                       "還在這個聊天室裡")
+        row = await (
+            await app.state.db.execute(
+                "SELECT id FROM participant WHERE id=? AND room_id=?"
+                " AND status='active'",
+                (participant_id, room["id"]),
+            )
+        ).fetchone()
+        if row is None:
+            raise _err(403, "participant_not_active",
+                       "你已經不在這個聊天室裡了，無法執行房內的管理動作")
+        return row
+
     async def _member_or_403(room_id: str, participant_id: str | None):
         """讀取房內內容的門檻：必須**曾經**是這個房的成員，且不是被踢出的。
 
@@ -809,6 +839,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                         reply_to_seq = orig["seq"]
             out.append({
                 "id": r["id"], "seq": r["seq"], "update_seq": r["update_seq"],
+                # 這次 update 的原因。舊資料是空字串——client 那時退回
+                # 舊的推斷法，不能把「空」當成某一種原因
+                "update_kind": r["update_kind"],
                 "kind": r["kind"],
                 # system 訊息的機器可讀型別；client 要精確過濾（例如只在
                 # 有人加入時通知）就不必去比對中文內容
@@ -832,8 +865,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             })
         return out
 
-    async def _touch_message(message_id: str, room_id: str) -> None:
-        """訊息狀態變更（釘選/刪除）時領新序號，讓增量 cursor 能掃到並推播。"""
+    async def _touch_message(message_id: str, room_id: str, kind: str) -> None:
+        """訊息狀態變更時領新序號，讓增量 cursor 能掃到並推播。
+
+        ``kind`` 是**這次為什麼推進**（edit / delete / pin / unpin），必填。
+
+        訂閱端沒有它就只能從訊息現在的樣子回推原因，而 ``edited_at`` 與
+        ``deleted`` 是**黏著狀態**——一旦有值就永遠有值。於是「編輯過的訊息
+        後來被釘選」會被讀成「它剛被編輯」，觸發點明明是一次無關的釘選。
+        那不是延遲或重放，是**內容錯誤的通知**：讀的人會照著它去行動。
+
+        參數不給預設值是刻意的：新增一種會推進 update_seq 的變更時，這裡會
+        直接編譯不過，而不是安靜地繼承別人的原因。
+        """
         db = app.state.db
         cur = await db.execute(
             "UPDATE room SET next_seq = next_seq + 1 WHERE id=? RETURNING next_seq - 1",
@@ -841,7 +885,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         useq = (await cur.fetchone())[0]
         await db.execute(
-            "UPDATE message SET update_seq=? WHERE id=?", (useq, message_id)
+            "UPDATE message SET update_seq=?, update_kind=? WHERE id=?",
+            (useq, kind, message_id),
         )
         await db.commit()
         await events.notify(room_id)
@@ -1114,14 +1159,36 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "admin_display_name": target["display_name"]}
 
     @app.post("/api/rooms/{room_id}/archive", dependencies=[Depends(require_auth)])
-    async def archive_room(room_id: str):
-        await _room_or_404(room_id)
+    async def archive_room(
+        room_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """手動封存。**建立者或房內成員**，不是任何持 token 者。
+
+        封存把整個房變成唯讀，而房裡的人可能正在工作——這是房內最重的一個
+        管理動作，卻是今天發現的權限缺口裡唯一完全不驗身分的。同一條原則的
+        第五次套用：token 管的是「能不能連進來」，房內的事由房內判。
+
+        門檻與收回邀請（`cancel_assignment`）一致：兩者都是房內管理動作，
+        一個寬一個嚴會讓人猜不出這道門到底管什麼。
+        """
+        room = await _room_or_404(room_id)
+        await _active_creator_or_member(room, x_participant_id, x_session_key)
         await _archive(room_id, "聊天室已被手動封存")
         return {"ok": True}
 
     @app.post("/api/rooms/{room_id}/unarchive", dependencies=[Depends(require_auth)])
-    async def unarchive_room(room_id: str):
+    async def unarchive_room(
+        room_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         room = await _room_or_404(room_id, allow_archived=True)
+        # 封存與解封是同一道門的兩面，只擋一邊等於沒擋。
+        # **這裡不能要求 active**：房被封存時 sweeper 已經把所有 agent 掃成
+        # removed，要求 active 會讓封存的房永遠解不開
+        await _creator_or_member(room, x_participant_id, x_session_key)
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db
@@ -2241,7 +2308,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.commit()
             return {"ok": True, "already_pinned": True}
         seq, sender_id = target["seq"], target["sender_id"]
-        await _touch_message(message_id, room_id)
+        await _touch_message(message_id, room_id, "pin")
         author_name = None
         if sender_id:
             author = await (
@@ -2276,7 +2343,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE message SET pinned=0, pinned_by=NULL WHERE id=?", (message_id,)
         )
-        await _touch_message(message_id, room_id)
+        await _touch_message(message_id, room_id, "unpin")
         return {"ok": True}
 
     def _refuse_write_if_not_active(me) -> None:
@@ -2374,7 +2441,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         # 領一個新的 update_seq，已經讀過那則的人才收得到——不推進的話他手上
         # 永遠是舊內容，而畫面看起來完全正常
-        await _touch_message(message_id, room_id)
+        await _touch_message(message_id, room_id, "edit")
         logger.info("編輯訊息 %s（%s）", message_id, room_id,
                  extra={"event": "message_edited", "message_id": message_id,
                         "room_id": room_id})
@@ -2403,7 +2470,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         msg = await (
             await db.execute(
-                "SELECT sender_id FROM message WHERE id=?", (message_id,)
+                "SELECT sender_id, deleted FROM message WHERE id=?",
+                (message_id,),
             )
         ).fetchone()
         room = await (
@@ -2457,8 +2525,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_message_owner",
                        "只有發送者本人或聊天室建立者可以刪除這則訊息")
 
+        if msg is not None and msg["deleted"]:
+            # 不擋的話會再推進一次 update_seq，讓那則重新入流——訂閱端看到
+            # 一則「現在是 deleted」的訊息，於是再報一次撤回。同一件事通知
+            # 兩次，而第二次什麼都沒發生
+            raise _err(422, "message_deleted", "這則訊息已經被撤回了")
         await db.execute("UPDATE message SET deleted=1 WHERE id=?", (message_id,))
-        await _touch_message(message_id, room_id)
+        await _touch_message(message_id, room_id, "delete")
         return {"ok": True}
 
     # ---------- 指派 ----------
@@ -2607,7 +2680,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 收回是**房內的管理動作**，門檻與「誰看得到這個房的指派列表」一致；
         # 與 resolve 的「本人」是兩條不同的界線，不共用判定
         room = await _room_or_404(row["room_id"], allow_archived=True)
-        await _creator_or_member(room, x_participant_id, x_session_key)
+        # **要求 active**：讀 assignment 歷史對離開過的人維持開放（那是讀取），
+        # 但撤回邀請是管理動作——那個寬鬆不該跟著過來
+        await _active_creator_or_member(room, x_participant_id, x_session_key)
         cur = await db.execute(
             "UPDATE assignment SET status='cancelled', resolved_at=?"
             " WHERE id=? AND status='pending' RETURNING id",

@@ -265,7 +265,7 @@ async def test_archived_private_room_stays_hidden(tmp_path):
         async with app.router.lifespan_context(app):
             private = await _room(client, "私人房", visibility="private")
             rid = private["id"]
-            await client.post(f"/api/rooms/{rid}/archive")
+            await client.post(f"/api/rooms/{rid}/archive", headers={"X-Session-Key": "admin"})
             r = await client.get(
                 "/api/rooms", params={"status": "archived", "session_key": "outsider"}
             )

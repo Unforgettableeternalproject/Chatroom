@@ -108,7 +108,7 @@ async def test_updates_reports_room_status(tmp_path):
             )
             assert r.json()["room_status"] == "active"
 
-            await client.post(f"/api/rooms/{room_id}/archive")
+            await client.post(f"/api/rooms/{room_id}/archive", headers={"X-Session-Key": "admin-key"})
             r = await client.get(
                 f"/api/rooms/{room_id}/updates",
                 params={"after_seq": 0, "timeout": 0.1},
@@ -216,7 +216,7 @@ async def test_system_messages_carry_machine_readable_event(tmp_path):
                 f"/api/rooms/{room_id}/participants/{guest['participant_id']}/kick",
                 headers={"X-Participant-Id": admin["participant_id"]},
             )
-            await client.post(f"/api/rooms/{room_id}/archive")
+            await client.post(f"/api/rooms/{room_id}/archive", headers={"X-Session-Key": "admin-key"})
 
             msgs = (
                 await client.get(

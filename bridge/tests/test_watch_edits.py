@@ -191,3 +191,75 @@ class TestStateIsNotAnEvent:
         _updates(fake_hub, gone)
         w.poll_room()
         assert events_from(capsys) == []
+
+
+class TestUpdateKindIsTheSourceOfTruth:
+    """事件來源是 Hub 的 `update_kind`，不是訊息現在長什麼樣。
+
+    審核用Codex 指出簽章比對的兩個破口——它只回答「watcher 記不記得見過這個
+    狀態」，回答不了「這次 update 為何發生」。而 watcher 會忘記：
+
+    - **重啟**：`after_seq` 從 state 檔還原，記憶體裡的簽章表歸零
+    - **淘汰**：簽章表有上限，而釘選牆的用途正是讓人回頭釘很舊的訊息
+
+    兩種情況下，一次無關的釘選都會被報成「這則剛被編輯」。那不是延遲或重放，
+    是**內容錯誤的通知**：讀的人會照著它去行動。
+    """
+
+    def test_pin_does_not_report_an_edit_even_with_no_memory(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """全新的 watcher（等同重啟後）看到一則早就編輯過、現在被釘的訊息。
+
+        簽章比對在這裡必然誤報——它沒有「上一次」可比。`update_kind='pin'`
+        才答得出這次是釘選。
+        """
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z",
+                                pinned=True, update_kind="pin"))
+        w.poll_room()
+        assert events_from(capsys) == []
+
+    def test_an_edit_still_reports_with_no_memory(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """反向：真的是編輯就要發，即使 watcher 沒有記憶。"""
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z",
+                                update_kind="edit"))
+        w.poll_room()
+        assert [e["event"] for e in events_from(capsys)] == ["message_edited"]
+
+    def test_eviction_does_not_resurrect_a_stale_edit(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """簽章表被清空（模擬淘汰）之後，釘選仍然不該報成編輯。"""
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z",
+                                update_kind="edit"))
+        w.poll_room()
+        capsys.readouterr()
+        w._seen_updates.clear()   # FIFO 淘汰掉了這一則
+
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z",
+                                pinned=True, update_kind="pin"))
+        w.poll_room()
+        assert events_from(capsys) == []
+
+    def test_old_hub_without_update_kind_falls_back(
+            self, fake_hub, tmp_path, monkeypatch, capsys):
+        """舊 Hub 不帶 `update_kind` 時退回簽章比對——降級不壞。
+
+        那條路徑仍有兩個破口（重啟、淘汰），但它是舊 Hub 的既有行為，
+        不是新開的洞：升 Hub 就好。
+        """
+        w = make_watcher(fake_hub, tmp_path, monkeypatch, "--room", ROOM,
+                         state=ME)
+        _updates(fake_hub, _msg(sender_id="me",
+                                edited_at="2026-08-31T10:00:00Z"))
+        w.poll_room()
+        assert [e["event"] for e in events_from(capsys)] == ["message_edited"]

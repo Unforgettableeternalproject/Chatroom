@@ -54,7 +54,7 @@ async def test_unarchive_survives_sweeper(tmp_path):
             ] == "archived"
 
             # 人類解封 → 多輪 sweeper 後仍應維持 active
-            await client.post(f"/api/rooms/{room_id}/unarchive")
+            await client.post(f"/api/rooms/{room_id}/unarchive", headers={"X-Session-Key": "owner-key"})
             await asyncio.sleep(0.3)
             assert (await client.get(f"/api/rooms/{room_id}",
                               headers={"X-Session-Key": "owner-key"})).json()["room"][
@@ -125,7 +125,7 @@ async def test_archived_room_semantics(tmp_path):
                 )
             ).json()["id"]
             await client.post(f"/api/messages/{mid}/pin", headers=headers)
-            await client.post(f"/api/rooms/{room_id}/archive")
+            await client.post(f"/api/rooms/{room_id}/archive", headers={"X-Session-Key": "owner-key"})
 
             r = await client.post(
                 f"/api/rooms/{room_id}/messages", json={"content": "x"}, headers=headers
@@ -155,11 +155,11 @@ async def test_archive_unarchive_system_messages_and_idempotency(tmp_path):
                               json={"name": "房", "session_key": "owner-key"})).json()["id"]
             s1 = await _join(client, room_id, "s1")
 
-            r = await client.post(f"/api/rooms/{room_id}/unarchive")
+            r = await client.post(f"/api/rooms/{room_id}/unarchive", headers={"X-Session-Key": "owner-key"})
             assert r.json()["already_active"] is True
 
-            await client.post(f"/api/rooms/{room_id}/archive")
-            await client.post(f"/api/rooms/{room_id}/unarchive")
+            await client.post(f"/api/rooms/{room_id}/archive", headers={"X-Session-Key": "owner-key"})
+            await client.post(f"/api/rooms/{room_id}/unarchive", headers={"X-Session-Key": "owner-key"})
             msgs = (await client.get(
                 f"/api/rooms/{room_id}/messages",
                 headers={"X-Participant-Id": s1["participant_id"]})).json()["messages"]

@@ -117,7 +117,7 @@ async def test_archived_rooms_can_be_deleted(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client)
-            await client.post(f"/api/rooms/{room['id']}/archive")
+            await client.post(f"/api/rooms/{room['id']}/archive", headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -218,7 +218,7 @@ async def test_sweeper_purges_rooms_archived_long_enough(tmp_path):
             keep = await _room(client, "剛封存")
             old = await _room(client, "封存很久")
             for r in (keep, old):
-                await client.post(f"/api/rooms/{r['id']}/archive")
+                await client.post(f"/api/rooms/{r['id']}/archive", headers={"X-Session-Key": "admin"})
             # 把其中一間的封存時間往回撥
             await app.state.db.execute(
                 "UPDATE room SET archived_at=? WHERE id=?",
@@ -242,7 +242,7 @@ async def test_archived_without_a_timestamp_is_never_purged(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client)
-            await client.post(f"/api/rooms/{room['id']}/archive")
+            await client.post(f"/api/rooms/{room['id']}/archive", headers={"X-Session-Key": "admin"})
             await app.state.db.execute(
                 "UPDATE room SET archived_at=NULL WHERE id=?", (room["id"],)
             )
@@ -260,7 +260,7 @@ async def test_purge_can_be_switched_off(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client)
-            await client.post(f"/api/rooms/{room['id']}/archive")
+            await client.post(f"/api/rooms/{room['id']}/archive", headers={"X-Session-Key": "admin"})
             await app.state.db.execute(
                 "UPDATE room SET archived_at=? WHERE id=?",
                 ("2020-01-01T00:00:00+00:00", room["id"]),
@@ -312,7 +312,7 @@ async def test_first_sweep_is_delayed_so_there_is_time_to_change_your_mind(tmp_p
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client)
-            await client.post(f"/api/rooms/{room['id']}/archive")
+            await client.post(f"/api/rooms/{room['id']}/archive", headers={"X-Session-Key": "admin"})
             await app.state.db.execute(
                 "UPDATE room SET archived_at=? WHERE id=?",
                 ("2020-01-01T00:00:00+00:00", room["id"]),
@@ -341,7 +341,7 @@ async def test_startup_preview_names_the_rooms_that_will_die(tmp_path, caplog):
     async with client:
         async with app.router.lifespan_context(app):
             room = await _room(client, name="要被清掉的房")
-            await client.post(f"/api/rooms/{room['id']}/archive")
+            await client.post(f"/api/rooms/{room['id']}/archive", headers={"X-Session-Key": "admin"})
             await app.state.db.execute(
                 "UPDATE room SET archived_at=? WHERE id=?",
                 ("2020-01-01T00:00:00+00:00", room["id"]),

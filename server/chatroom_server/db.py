@@ -204,6 +204,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column, 完整欄位定義)
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
+    # 這次 update_seq 是**為什麼**被推進的（edit/delete/pin/unpin）。
+    # watcher 據此判斷該不該喚醒——只看訊息現在長什麼樣的話，
+    # `edited_at`/`deleted` 這種黏著狀態會讓一次無關的釘選被報成
+    # 「剛被編輯」。舊資料留空字串＝不知道，client 退回舊的推斷法
+    ("message", "update_kind", "update_kind TEXT NOT NULL DEFAULT ''"),
     ("participant", "join_ip", "join_ip TEXT"),
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),

@@ -616,33 +616,40 @@ class Watcher:
         """
         if m.get("kind") == "system":
             return
+
+        # **問「這次為什麼推進」，不要問「這則現在長什麼樣」。**
+        #
+        # `edited_at` 與 `deleted` 是**黏著狀態**：一旦有值就永遠有值。從它們
+        # 回推原因的話，「編輯過的訊息後來被釘選」會被讀成「它剛被編輯」——
+        # 觸發點明明是一次無關的釘選。那不是延遲也不是重放，是**內容錯誤的
+        # 通知**：讀的人會照著它去行動。
+        kind = m.get("update_kind") or ""
         deleted = bool(m.get("deleted"))
-        # `edited_at` 是舊版 Hub 沒有的欄位——沒有它就是沒編輯過，安靜。
-        # **降級不壞**：收不到新事件可以接受，崩掉不行
         edited_at = m.get("edited_at") or ""
-        if not deleted and not edited_at:
-            return
+
+        if kind:
+            if kind not in ("edit", "delete"):
+                return          # pin / unpin 等：不喚醒
+            deleted = kind == "delete"
+        else:
+            # 舊版 Hub 不帶 `update_kind`。退回「跟上次看到的比有沒有變」——
+            # **這條路徑有兩個已知破口**（watcher 重啟、簽章表淘汰，兩者都會
+            # 讓它失去「上一次」而誤報一次），但那是舊 Hub 的既有行為，不是
+            # 新開的洞。升 Hub 就沒有了。
+            if not deleted and not edited_at:
+                return
+            mid = m.get("id")
+            signature = "deleted" if deleted else f"edited:{edited_at}"
+            if mid:
+                if self._seen_updates.get(mid) == signature:
+                    return
+                self._seen_updates[mid] = signature
+                while len(self._seen_updates) > _SEEN_UPDATES_LIMIT:
+                    self._seen_updates.pop(next(iter(self._seen_updates)))
+
         mine = bool(m.get("sender_id")) and m["sender_id"] == self.participant_id
         if not mine and not _mentions_me(m, self.display_name):
             return
-        # **`edited_at` 與 `deleted` 是狀態，不是事件**——它們一旦有值就永遠
-        # 有值。只看「這則現在長什麼樣」的話，訊息編輯過一次之後，後續每一次
-        # 釘選/取消釘選讓它重新入流都會再報一次「被編輯了」，而看的人會以為
-        # 它又被改了。
-        #
-        # 所以判斷的是**跟上次看到的比有沒有變**：記住這則上次的狀態，一樣
-        # 就閉嘴。第二次真的編輯（`edited_at` 換了新時間）照樣會發——消除
-        # 重複不能把後續的真變更一起吃掉。
-        mid = m.get("id")
-        signature = ("deleted" if deleted else f"edited:{edited_at}")
-        if mid:
-            if self._seen_updates.get(mid) == signature:
-                return
-            self._seen_updates[mid] = signature
-            # 只記「被改過的訊息」，量本來就小；仍設上限避免長命 watcher
-            # 無界成長。丟最舊的——那些早就不會再變了
-            while len(self._seen_updates) > _SEEN_UPDATES_LIMIT:
-                self._seen_updates.pop(next(iter(self._seen_updates)))
         self.emit({
             "event": "message_deleted" if deleted else "message_edited",
             "room_id": self.room_id,
