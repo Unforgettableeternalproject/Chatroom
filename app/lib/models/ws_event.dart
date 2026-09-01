@@ -36,6 +36,23 @@ class WsQuestionsEvent extends WsEvent {
   final List<Question> questions;
 }
 
+/// {"type": "board", "room_id", "board_seq"}
+///
+/// 這個房掛著的任務板動了。**只帶水位，不帶內容**——內容照樣走
+/// `GET /board` 的增量拉取，與 agent 那側同一個形狀。
+///
+/// ⚠️ **必須是獨立事件，不能夾在 `messages` 那包裡**：board 最常見的變動
+/// （建卡、認領、改狀態）**一則訊息都不發**（設計文件 §4.3），夾帶的話
+/// 水位只有在「剛好同時有人講話」時才捎得出去——而那是最不需要它的時候。
+/// 同一個坑 `/updates` 踩過一次，退化量測是 1.3 秒 → 12 秒。
+@immutable
+class WsBoardEvent extends WsEvent {
+  const WsBoardEvent({required this.roomId, required this.boardSeq});
+
+  final String roomId;
+  final int boardSeq;
+}
+
 /// {"type": "pong"}
 class WsPongEvent extends WsEvent {
   const WsPongEvent();

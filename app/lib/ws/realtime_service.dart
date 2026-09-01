@@ -110,6 +110,17 @@ class RealtimeService {
   /// （那條講的是「連得上嗎」，重連會自己好；這條重連一百次也不會好）。
   Stream<String> get kicked => _kickedCtrl.stream;
 
+  final _boardCtrl = StreamController<({String roomId, int boardSeq})>
+      .broadcast();
+
+  /// 某個房的任務板動了（房間 id + 新水位）。
+  ///
+  /// **只給水位，內容要自己去拿**——訂閱者比對本機水位後決定要不要拉增量。
+  /// 這樣 WS 就不會變成 board 的第二個真相來源（它只負責喚醒），
+  /// 與 agent 那側 `chatroom_wait` 回 `board_changed` 是同一個形狀。
+  Stream<({String roomId, int boardSeq})> get boardChanged =>
+      _boardCtrl.stream;
+
   // ---------- 生命週期 ----------
 
   void start() {
@@ -450,6 +461,12 @@ class RealtimeService {
         f.setRoomStatus(roomStatus);
       case WsQuestionsEvent(:final roomId, :final questions):
         _feeds[roomId]?.setQuestions(questions);
+      case WsBoardEvent(:final roomId, :final boardSeq):
+        // 不查 _feeds：board 事件與訊息流無關，沒訂閱過訊息的畫面
+        // （例如直接進 board 全頁）照樣要收得到
+        if (!_boardCtrl.isClosed) {
+          _boardCtrl.add((roomId: roomId, boardSeq: boardSeq));
+        }
       case WsErrorEvent(:final roomId, :final code, :final message):
         // **只有 participant_kicked 該讓本機退場。** 其他錯誤碼各有各的
         // 處置，尤其 participant_header_required 只是「還不知道你是誰」
@@ -484,5 +501,6 @@ class RealtimeService {
     _sentParticipantIds.clear();
     await _statusCtrl.close();
     await _kickedCtrl.close();
+    await _boardCtrl.close();
   }
 }

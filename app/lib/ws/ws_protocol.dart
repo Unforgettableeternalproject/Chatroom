@@ -53,6 +53,11 @@ class WsProtocol {
           code: (data['code'] as String?) ?? '',
           message: (data['message'] as String?) ?? '',
         );
+      case 'board':
+        return WsBoardEvent(
+          roomId: (data['room_id'] as String?) ?? '',
+          boardSeq: (data['board_seq'] as int?) ?? 0,
+        );
       case 'pong':
         return const WsPongEvent();
       default:
