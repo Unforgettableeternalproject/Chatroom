@@ -390,3 +390,47 @@ async def test_existing_contradictions_are_healed_at_startup(tmp_path):
         seq = await (await app2.state.db.execute(
             "SELECT board_seq FROM room WHERE id=?", (rid,))).fetchone()
         assert row["board_seq"] == seq["board_seq"]
+
+
+async def test_healing_keeps_a_settled_card_on_its_holder(tmp_path):
+    """F7：清理不只是移除矛盾，**它同時挑了一個表示**——要跟正常路徑一致。
+
+    上面那條造的矛盾卡沒有 `claim_participant_id`，而真實的孤兒卡一定有
+    （它是從 `held` 來的），所以那條守住的空字串是個不會發生的情形。
+
+    正常完成的卡停在 `held`（見 `test_a_settled_task_is_never_orphaned`：
+    「做完的人仍然是做它的人」）。存量若清成空字串，同一種情形在資料庫裡
+    就有兩種表示，而 UI 兩種都畫成 completed ⇒ 它會一直安靜地存在，
+    直到有人去查「還掛在誰名下的卡」才發現對不起來。
+    """
+    path = str(tmp_path / "heal_held.db")
+    cfg = Config(db_path=path, api_token=ROOT)
+    app = create_app(cfg)
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://test",
+                         headers={"Authorization": f"Bearer {ROOT}"})
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        pid = hdr["X-Participant-Id"]
+        await app.state.db.execute(
+            "UPDATE board_task SET status='done', claim_state='orphaned',"
+            " claim_participant_id=?, claim_name='前世的我',"
+            " claimed_at='2026-09-01', orphaned_at='2026-09-01',"
+            " orphaned_reason='因閒置移出' WHERE id=?", (pid, tid))
+        await app.state.db.commit()
+    assert rid
+
+    app2 = create_app(Config(db_path=path, api_token=ROOT))
+    client2 = AsyncClient(transport=ASGITransport(app=app2),
+                          base_url="http://test",
+                          headers={"Authorization": f"Bearer {ROOT}"})
+    async with app2.router.lifespan_context(app2), client2:
+        row = await (await app2.state.db.execute(
+            "SELECT * FROM board_task WHERE id=?", (tid,))).fetchone()
+        assert row["claim_state"] == "held", (
+            "有持有者的收尾卡要清回 held，與正常完成的卡同一種表示"
+        )
+        # 矛盾本身仍然要消失
+        assert row["orphaned_at"] is None
+        assert row["orphaned_reason"] == ""
+        assert row["claim_name"] == "前世的我"

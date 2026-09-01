@@ -2320,6 +2320,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         `claim_name` 與 `claimed_at` 留著——那些是歷史（誰做的、什麼時候領的），
         不是矛盾。矛盾只在「它現在沒人做」這個宣稱上。
 
+        🔑 **F7（同日稍晚）：清成什麼，要跟正常路徑一致。**
+        第一版把矛盾卡清成空字串，但正常完成的卡（`set_task_status` 推到
+        done）本來就停在 `held`，而且那是有測試明文守著的決定——
+        「做完的人仍然是做它的人」。兩批資料於是收斂到不同的表示，UI 又
+        兩種都畫成 completed，所以它會一直安靜地存在，直到有人去查
+        「還掛在誰名下的卡」才發現對不起來。
+        ⇒ 有持有者的清回 `held`，本來就沒人領的才是空字串。
+        **清理不只是移除矛盾，它同時挑了一個表示——那個選擇必須明講。**
+
         受影響的房間要推進 `board_seq`，否則增量 client 永遠看不到這次修復，
         手上那張卡會一直維持矛盾狀態。
         """
@@ -2334,8 +2343,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         for r in rows:
             seq = await _next_board_seq(r["room_id"])
             cur = await db.execute(
-                "UPDATE board_task SET claim_state='', orphaned_at=NULL,"
-                " orphaned_reason='', board_seq=?"
+                "UPDATE board_task SET"
+                " claim_state=CASE WHEN claim_participant_id IS NOT NULL"
+                "                  THEN 'held' ELSE '' END,"
+                " orphaned_at=NULL, orphaned_reason='', board_seq=?"
                 " WHERE room_id=? AND claim_state='orphaned'"
                 "   AND status IN ('done','cancelled') RETURNING id",
                 (seq, r["room_id"]),
