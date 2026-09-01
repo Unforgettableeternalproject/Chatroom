@@ -3210,19 +3210,21 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _is_human(me) -> bool:
         return me["role"] == "human"
 
-    async def _board_audience(room_id: str, exclude_id: str = "") -> list[str]:
+    async def _board_audience(room_id: str, exclude_id: str = "",
+                              humans_only: bool = False) -> list[str]:
         """board 通知的收件名單：房內 active、**非 ephemeral** 的成員。
 
         排除 subagent 是既有原則的延伸——它們沒有自己的 watcher（活在父層
         進程裡），mention 它們只會經父層再叫醒一次，等於同一個人被叫兩次。
+
+        `humans_only` 用在「只有人類做得到的下一步」那兩則（送審／確認）：
+        agent 不需要被叫醒，它們本來就在看板；要被叫的是**沒在看板子的人**。
         """
-        rows = await (
-            await app.state.db.execute(
-                "SELECT id, display_name FROM participant"
-                " WHERE room_id=? AND status='active' AND ephemeral=0",
-                (room_id,),
-            )
-        ).fetchall()
+        sql = ("SELECT id, display_name FROM participant"
+               " WHERE room_id=? AND status='active' AND ephemeral=0")
+        if humans_only:
+            sql += " AND role='human'"
+        rows = await (await app.state.db.execute(sql, (room_id,))).fetchall()
         return [r["display_name"] for r in rows if r["id"] != exclude_id]
 
     async def _board_status_change(kind: str, item_id: str, target: str,
@@ -3403,6 +3405,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "review", "reviewed_by": me["id"], "reviewed_at": _now(),
         })
+        # 週期收尾的兩步只有人類做得到，而其餘 board 變動都靠「沒被通知的人
+        # 自己會來看板」撐著——唯獨這兩步的收件人是**沒在看板子的人類**，
+        # 而他正是唯一能讓週期往下走的人。忘了就停在這裡，板上一切正常、
+        # 沒有任何地方會報錯（艾斯維爾 2026-09-01 拍板補上）
+        audience = await _board_audience(row["room_id"], exclude_id=me["id"],
+                                         humans_only=True)
+        if audience:
+            await _post_message(
+                row["room_id"], None,
+                f"{me['display_name']} 送審了週期「{row['title']}」，等人確認。",
+                kind="system", system_event="board_objective_review",
+                mentions=audience, reply_mentions_author=False,
+            )
         return {"ok": True, "id": objective_id, "status": "review",
                 "board_seq": seq}
 
@@ -3453,6 +3468,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "verified", "verified_by": me["id"], "verified_at": _now(),
         })
+        # **確認者本人也要收**——他正是下一步（完成）要按的那個人。
+        # verified 比 review 更容易停住：App 的金色會退掉，畫面主動告訴你
+        # 「已確認」，看起來像收工了而實際還差一步
+        audience = await _board_audience(row["room_id"], humans_only=True)
+        if audience:
+            await _post_message(
+                row["room_id"], None,
+                f"週期「{row['title']}」已確認無誤，還差最後一步：按下完成。",
+                kind="system", system_event="board_objective_verified",
+                mentions=audience, reply_mentions_author=False,
+            )
         return {"ok": True, "id": objective_id, "status": "verified",
                 "board_seq": seq}
 

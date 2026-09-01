@@ -160,3 +160,61 @@ async def test_subagents_are_not_in_the_audience(tmp_path):
         (msg,) = await _events(client, rid, human, "board_task_done")
         assert "戴爾" not in msg["mentions"]
         assert set(msg["mentions"]) == {"Bernie", "Miller"}
+
+
+# ---------- 週期收尾的兩步（艾斯維爾 2026-09-01 拍板補上）----------
+
+async def _finish_to_review(client, rid, cid, tid, hdr):
+    await _status(client, tid, "in_progress", hdr)
+    await _status(client, tid, "done", hdr)
+    await client.post(f"/api/board/checklists/{cid}/status",
+                      json={"status": "done"}, headers=hdr)
+
+
+async def test_review_wakes_humans_only(tmp_path):
+    """送審與確認是整個設計裡僅有的兩個「非人類不可」的步驟。
+
+    其餘 board 變動靠「沒被通知的人自己會來看板」撐著——唯獨這兩步的收件人
+    是**沒在看板子的人類**，而他正是唯一能讓週期往下走的人。忘了就停在這裡，
+    板上一切正常、沒有任何地方會報錯。
+    """
+    app, client = await _client(tmp_path, "review-notify")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        oid, cid, (tid,) = await _tree(client, rid, a1)
+        await _finish_to_review(client, rid, cid, tid, a1)
+        await client.post(f"/api/board/objectives/{oid}/review", headers=a1)
+
+        (msg,) = await _events(client, rid, human, "board_objective_review")
+        assert msg["mentions"] == ["Bernie"], "agent 不必被叫醒，它們本來就在看板"
+        assert "週期一" in msg["content"]
+
+
+async def test_a_human_reviewer_does_not_wake_themselves(tmp_path):
+    app, client = await _client(tmp_path, "review-self")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        oid, cid, (tid,) = await _tree(client, rid, a1)
+        await _finish_to_review(client, rid, cid, tid, a1)
+        await client.post(f"/api/board/objectives/{oid}/review", headers=human)
+        assert await _events(client, rid, human,
+                             "board_objective_review") == []
+
+
+async def test_verified_wakes_humans_including_the_verifier(tmp_path):
+    """確認者本人也要收——他正是下一步（完成）要按的那個人。
+
+    verified 比 review 更容易停住：App 的金色會退掉，畫面主動告訴你
+    「已確認」，看起來像收工了而實際還差一步。
+    """
+    app, client = await _client(tmp_path, "verified-notify")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        oid, cid, (tid,) = await _tree(client, rid, a1)
+        await _finish_to_review(client, rid, cid, tid, a1)
+        await client.post(f"/api/board/objectives/{oid}/review", headers=a1)
+        await client.post(f"/api/board/objectives/{oid}/verify", headers=human)
+
+        (msg,) = await _events(client, rid, human, "board_objective_verified")
+        assert msg["mentions"] == ["Bernie"]
+        assert "完成" in msg["content"], "要說得出下一步是什麼"
