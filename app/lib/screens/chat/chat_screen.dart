@@ -2138,6 +2138,18 @@ class _MemberTile extends StatelessWidget {
       subtitle = '活躍 · ${relativeTime(p.lastSeenAt)}';
     }
 
+    final menuActions = <_MemberAction>[
+      if (onHide != null)
+        _MemberAction('從我的列表隱藏', Icons.visibility_off_outlined, onHide!),
+      if (onUnhide != null)
+        _MemberAction('取消隱藏', Icons.visibility_outlined, onUnhide!),
+      if (onClaimAdmin != null)
+        _MemberAction('接管管理權（主持人）', Icons.admin_panel_settings_outlined,
+            onClaimAdmin!, color: UepColors.gold),
+      if (onKick != null)
+        _MemberAction('移出聊天室', Icons.person_remove_outlined, onKick!),
+    ];
+
     return Opacity(
       opacity: isIdle ? .6 : 1,
       child: Container(
@@ -2203,7 +2215,7 @@ class _MemberTile extends StatelessWidget {
                       // HOST＝這台 Hub 是他的，ADMIN＝這個房是他開的。
                       // 合成一顆「管理員」會讓「誰能封這個房」與「誰能看
                       // 所有房」變得分不出來
-                      if (p.isHost) ...[
+                      if (p.showsHostBadge) ...[
                         const SizedBox(width: 5),
                         _RoleBadge(label: 'HOST', color: UepColors.gold),
                       ],
@@ -2271,49 +2283,39 @@ class _MemberTile extends StatelessWidget {
                   color: highlighted ? color : s.inkMute,
                 ),
               ),
-            if (onHide != null)
-              IconButton(
-                tooltip: '從我的列表隱藏',
-                visualDensity: VisualDensity.compact,
-                onPressed: onHide,
-                icon: Icon(
-                  Icons.visibility_off_outlined,
-                  size: 14,
-                  color: s.inkMute,
-                ),
-              ),
-            if (onUnhide != null)
-              IconButton(
-                tooltip: '取消隱藏',
-                visualDensity: VisualDensity.compact,
-                onPressed: onUnhide,
-                icon: Icon(
-                  Icons.visibility_outlined,
-                  size: 14,
-                  color: s.inkMute,
-                ),
-              ),
-            if (onClaimAdmin != null)
-              IconButton(
-                tooltip: '接管管理權（主持人）',
-                visualDensity: VisualDensity.compact,
-                onPressed: onClaimAdmin,
-                icon: Icon(
-                  Icons.admin_panel_settings_outlined,
-                  size: 14,
-                  color: UepColors.gold,
-                ),
-              ),
-            if (onKick != null)
-              IconButton(
-                tooltip: '移出聊天室',
-                visualDensity: VisualDensity.compact,
-                onPressed: onKick,
-                icon: Icon(
-                  Icons.person_remove_outlined,
-                  size: 14,
-                  color: s.inkMute,
-                ),
+            // 其餘動作收進選單。名字長一點的成員（agent 那些）在這個寬度下
+            // 本來就只剩一行的餘裕，四顆圖示並排會把名字擠成省略號。
+            // 標記留在外面沒有收進來：它同時是**狀態顯示**，收進選單就看不
+            // 出誰被標記了。
+            if (menuActions.isNotEmpty)
+              PopupMenuButton<VoidCallback>(
+                tooltip: '更多動作',
+                padding: EdgeInsets.zero,
+                iconSize: 14,
+                splashRadius: 14,
+                position: PopupMenuPosition.under,
+                icon: Icon(Icons.more_horiz, size: 14, color: s.inkMute),
+                onSelected: (cb) => cb(),
+                itemBuilder: (_) => [
+                  for (final a in menuActions)
+                    PopupMenuItem<VoidCallback>(
+                      value: a.onTap,
+                      height: 36,
+                      child: Row(
+                        children: [
+                          Icon(a.icon, size: 14, color: a.color ?? s.inkMute),
+                          const SizedBox(width: 8),
+                          Text(
+                            a.label,
+                            style: UepText.sans(
+                              size: 12,
+                              color: a.color ?? s.ink,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
           ],
         ),
@@ -2578,6 +2580,18 @@ class _StyleDialogState extends State<_StyleDialog> {
       ],
     );
   }
+}
+
+/// 成員列的「更多動作」選單項。
+class _MemberAction {
+  const _MemberAction(this.label, this.icon, this.onTap, {this.color});
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  /// 需要強調時的顏色（接管管理權）；null 走預設的淡色。
+  final Color? color;
 }
 
 /// 成員名字旁邊的身分標籤（HOST / ADMIN）。
