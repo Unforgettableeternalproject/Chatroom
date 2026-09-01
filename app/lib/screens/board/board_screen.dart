@@ -180,7 +180,21 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
-  /// 這塊板是不是唯讀的歷史。房間封存了就是。
+  /// 這塊板是不是唯讀的歷史。
+  ///
+  /// 🔴 **v2 遷移必改：訊號源會變，但這裡不會有任何地方報錯。**
+  ///
+  /// v1 是一房一板，房封存了板就沒有別的入口，所以「房封存 ⇒ 板唯讀」成立。
+  /// **v2 把這條反過來**（`BOARD_DESIGN.md` §3.2 + 驗收條件 2）：
+  ///
+  /// > room 封存：該 room 唯讀；**Board 仍可從其他 room 或 Board Library 編輯**。
+  ///
+  /// 一塊 Board 掛 A、B 兩房，A 封存後 B 照樣在寫它。屆時這個 getter 會讓
+  /// 從 A 進來的人看到一塊整片變灰、動作全收的板——**而那塊板是活的**。
+  /// 畫面說了一件不成立的事，而且不會有任何測試或例外抓得到。
+  ///
+  /// ⇒ Hub 一有 `board.status` 就改看它。§11 的遷移八步沒有一步會撞到這裡，
+  /// 所以這段註解是它唯一的守衛。
   bool get _archived =>
       ref.watch(roomDetailProvider(widget.roomId)).value?.room.status ==
       'archived';
