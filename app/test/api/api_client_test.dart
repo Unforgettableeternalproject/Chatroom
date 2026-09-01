@@ -96,6 +96,38 @@ void main() {
       expect(e.message, contains('封存'));
     });
 
+    // 409 不是只有一種——403 已經吸取過這個教訓（見 translateError 的註解），
+    // 409 還沒。Board 的認領衝突與非法轉移都是 409，把它們一律講成
+    // 「此聊天室已封存，無法發言」會讓人去找一個根本沒有封存的房間。
+    test('409 conflict → 帶 Hub 的 code 與訊息，不再一律說封存', () {
+      final e = translateError(_dioError(409, detail: {
+        'code': 'task_already_claimed',
+        'message': '這張卡已經被 Swift-Falcon 領走了',
+      }));
+      expect(e, isA<ConflictException>());
+      expect(e.code, 'task_already_claimed');
+      expect(e.message, contains('Swift-Falcon'));
+      expect(e.message, isNot(contains('封存')));
+    });
+
+    test('409 room_archived 仍是 RoomArchivedException', () {
+      final e = translateError(_dioError(409, detail: {
+        'code': 'room_archived',
+        'message': '此聊天室已封存',
+      }));
+      expect(e, isA<RoomArchivedException>());
+    });
+
+    test('409 invalid_transition 帶得出 allowed——App 可以直接拿它畫按鈕', () {
+      final e = translateError(_dioError(409, detail: {
+        'code': 'invalid_transition',
+        'message': '不能從「完成」回到「進行中」',
+        'allowed': ['cancelled'],
+      }));
+      expect(e, isA<ConflictException>());
+      expect((e as ConflictException).allowed, ['cancelled']);
+    });
+
     test('422 → ValidationException 且帶 server 的 message', () {
       final e = translateError(_dioError(422,
           detail: {'code': 'reply_target_not_found', 'message': '目標不存在'}));

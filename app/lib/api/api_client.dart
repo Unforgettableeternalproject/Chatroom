@@ -72,7 +72,17 @@ ApiException translateError(DioException e) {
     case 404:
       return NotFoundException(code ?? 'not_found');
     case 409:
-      return RoomArchivedException(code ?? 'room_archived');
+      // 409 不是只有一種——同 403 那組的理由（見上）。認領衝突、狀態轉移
+      // 不合法都是 409，把它們一律講成「此聊天室已封存」會讓人去找一個
+      // 根本沒有封存的房間。沒帶 code 的舊 Hub 維持原本的封存語意
+      if (code == null || code == 'room_archived') {
+        return RoomArchivedException(code ?? 'room_archived');
+      }
+      return ConflictException(
+        code,
+        _detailMessage(res.data) ?? '目前的狀態不允許這個動作',
+        allowed: _detailList(res.data, 'allowed'),
+      );
     case 410:
       return AttachmentGoneException(code ?? 'attachment_blob_missing');
     case 413:
@@ -91,6 +101,16 @@ String? _detailCode(dynamic data) {
     return (data['detail'] as Map)['code'] as String?;
   }
   return null;
+}
+
+/// 取 `detail` 裡的字串陣列（如 `invalid_transition` 的 `allowed`）。
+/// 缺欄位、型別不對一律當成空——這是附帶資訊，不該讓整個錯誤轉譯失敗。
+List<String> _detailList(dynamic data, String key) {
+  if (data is Map && data['detail'] is Map) {
+    final v = (data['detail'] as Map)[key];
+    if (v is List) return v.whereType<String>().toList();
+  }
+  return const [];
 }
 
 String? _detailMessage(dynamic data) {

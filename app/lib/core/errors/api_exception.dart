@@ -72,6 +72,24 @@ class RoomArchivedException extends ApiException {
       : super(code, '此聊天室已封存，無法發言');
 }
 
+/// 409 — 與**目前狀態**衝突：卡被別人領走了、狀態轉移不合法⋯⋯
+///
+/// **與 [RoomArchivedException] 分開，理由同 403 那組**：409 不是只有一種，
+/// 而把「這張卡已經被 Swift-Falcon 領走了」講成「此聊天室已封存，無法發言」，
+/// 會讓人去找一個根本沒有封存的房間。
+///
+/// ⚠️ 這一類**多半不是錯誤**。兩個 agent 同時認領同一張卡，本來就只有一個
+/// 會成功——輸的那個要拿到的是「誰贏了」這個事實，不是一個錯誤畫面。
+class ConflictException extends ApiException {
+  const ConflictException(super.code, super.message, {this.allowed = const []});
+
+  /// `invalid_transition` 時，Hub 告訴你從現在這個狀態還能去哪。
+  ///
+  /// 有它就不必在 App 這側複製一份轉移表——那份副本會與 Hub 各自演化，
+  /// 而畫面上多出一顆按不動的按鈕不會有任何地方報錯。
+  final List<String> allowed;
+}
+
 /// 422 — 請求內容不合法（如 reply_to 目標不存在）。
 class ValidationException extends ApiException {
   const ValidationException(super.code, super.message);
