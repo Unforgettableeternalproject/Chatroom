@@ -217,6 +217,103 @@ CREATE TABLE IF NOT EXISTS archive_request (
 CREATE INDEX IF NOT EXISTS idx_archive_request_room
     ON archive_request(room_id, status);
 
+-- ── Board（共同任務板）──────────────────────────────────────────────
+-- 三層：Objective（週期）→ Checklist（階段分組）→ Task（最小單位）。
+-- 掛在 room 底下，不另立 board 表——可見性／封存／權限／long-poll／讀取
+-- 邊界全是 room-scoped 的，獨立就要把那六套機制各重造一份。
+-- 增量讀取用房內獨立的 board_seq（見 room.board_seq），不共用 next_seq：
+-- 共用會讓人看到的訊息編號跳號，而 reply_to_seq 是畫在 UI 上給人看的。
+CREATE TABLE IF NOT EXISTS board_objective (
+    id          TEXT PRIMARY KEY,
+    room_id     TEXT NOT NULL REFERENCES room(id),
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    -- active / review / verified / done / cancelled
+    -- review 與 verified 分開：前者是「該做的都做完了」（機器判得出來），
+    -- 後者是「確認過沒問題」（只有人判得出來）。合成一個就沒有東西擋得住
+    -- 「所有 task 打勾＝週期完成」
+    status      TEXT NOT NULL DEFAULT 'active',
+    order_index INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT REFERENCES participant(id),
+    -- 送審／確認／完成分別是誰。三個時間點各留一份：追得出「誰確認的」
+    -- 才有守門的意義，只留 completed_by 等於沒有守門紀錄
+    reviewed_by  TEXT REFERENCES participant(id),
+    reviewed_at  TEXT,
+    verified_by  TEXT REFERENCES participant(id),
+    verified_at  TEXT,
+    completed_by TEXT REFERENCES participant(id),
+    completed_at TEXT,
+    deleted     INTEGER NOT NULL DEFAULT 0,   -- 軟刪除；增量讀取的 tombstone
+    board_seq   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bobjective_room
+    ON board_objective(room_id, board_seq);
+
+CREATE TABLE IF NOT EXISTS board_checklist (
+    id           TEXT PRIMARY KEY,
+    room_id      TEXT NOT NULL REFERENCES room(id),
+    objective_id TEXT NOT NULL REFERENCES board_objective(id),
+    title        TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'open',  -- open / done / cancelled
+    order_index  INTEGER NOT NULL DEFAULT 0,
+    created_by   TEXT REFERENCES participant(id),
+    completed_by TEXT REFERENCES participant(id),
+    completed_at TEXT,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    board_seq    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bchecklist_room
+    ON board_checklist(room_id, board_seq);
+
+CREATE TABLE IF NOT EXISTS board_task (
+    id           TEXT PRIMARY KEY,
+    room_id      TEXT NOT NULL REFERENCES room(id),
+    checklist_id TEXT NOT NULL REFERENCES board_checklist(id),
+    title        TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    -- todo / in_progress / blocked / done / cancelled
+    -- ⚠️ 沒有 claimed：認領是另一個維度（見下方 claim_*）。塞進 status 的話，
+    -- 孤兒卡打回 todo 會讓「做了一半」跟「沒人碰過」長得一模一樣
+    status       TEXT NOT NULL DEFAULT 'todo',
+    order_index  INTEGER NOT NULL DEFAULT 0,
+    priority     TEXT NOT NULL DEFAULT 'normal',  -- low / normal / high
+
+    -- 現任／前任持有者。participant_id 跨世代會變，session_key 才是 agent
+    -- 的持久身分——re-claim 要靠後者才認得出「這是同一個人回來了」
+    claim_participant_id TEXT REFERENCES participant(id),
+    claim_session_key    TEXT NOT NULL DEFAULT '',
+    claim_name           TEXT NOT NULL DEFAULT '',  -- 認領當下的 display_name
+    -- ''（未認領）/ held（持有中）/ orphaned（持有者已不在房內）
+    -- released 不存：主動放棄就清成 ''，那是「這張卡沒人做」的事實
+    claim_state          TEXT NOT NULL DEFAULT '',
+    claimed_at           TEXT,
+    orphaned_at          TEXT,
+
+    -- 來源訊息的房內 seq。**存 seq 不存 message_id**，與 reply_to_seq 同一個
+    -- 理由：訊息可以被軟刪除，seq 不會
+    source_seq   INTEGER,
+    -- 人類指定的執行者（建議，不是鎖）。認領仍要對方自己來——指派一個沒醒著
+    -- 的 agent 然後把卡鎖起來，board 會停在那裡
+    assignee_participant_id TEXT REFERENCES participant(id),
+
+    created_by   TEXT REFERENCES participant(id),
+    completed_by TEXT REFERENCES participant(id),
+    completed_at TEXT,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    board_seq    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_btask_room ON board_task(room_id, board_seq);
+CREATE INDEX IF NOT EXISTS idx_btask_checklist ON board_task(checklist_id, status);
+-- 孤兒釋放要靠這條：成員離場時以 participant_id 一次撈出他領走的全部。
+-- 這條 partial index 放在 SCHEMA 沒問題——board_task 是全新的表，同一份
+-- executescript 裡就建好了，不像 idx_participant_parent 要等 ALTER 補欄位
+CREATE INDEX IF NOT EXISTS idx_btask_claim
+    ON board_task(claim_participant_id) WHERE claim_state = 'held';
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """
@@ -282,6 +379,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 舊資料一律 0＝不知道，那正是這個欄位存在之前的事實；猜著回填會在
     # 別人的名字旁邊掛上一個他沒有的身分，比留白糟得多
     ("participant", "joined_as_host", "joined_as_host INTEGER NOT NULL DEFAULT 0"),
+    # Board 的房內水位。舊房一律 0＝「板子上什麼都還沒發生」，那正是這個
+    # 欄位存在之前的事實；增量 client 從 0 撈得到全量
+    ("room", "board_seq", "board_seq INTEGER NOT NULL DEFAULT 0"),
+    # 收所有 board 變動摘要的 session。空字串＝沒有指定，舊房一律如此
+    ("room", "board_supervisor_session_key",
+     "board_supervisor_session_key TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
