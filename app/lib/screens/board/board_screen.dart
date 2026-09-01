@@ -7,7 +7,10 @@ import '../../models/board.dart';
 import '../../state/board_providers.dart';
 import '../../widgets/board_task_card.dart';
 import '../../widgets/empty_error_states.dart';
+import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/uep_button.dart';
+import 'board_create_dialog.dart';
 
 /// Board 全頁畫面（設計稿 artboard 01）。
 ///
@@ -56,6 +59,35 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   String _holderFrom(Object e) {
     final m = RegExp(r'「(.+?)」').firstMatch('$e');
     return m?.group(1) ?? '別人';
+  }
+
+  /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
+  Future<void> _create(String kind,
+      {String? parentId, String? parentTitle}) async {
+    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final result = await showBoardCreateDialog(
+        context, kind: kind, parentTitle: parentTitle);
+    if (result == null) return;
+    try {
+      switch (kind) {
+        case 'objective':
+          final id = await actions.addObjective(result.title,
+              description: result.description);
+          // 新開的週期直接選起來——建立完的下一個動作幾乎一定是往裡面加東西
+          if (id != null && mounted) setState(() => _selectedObjectiveId = id);
+        case 'checklist':
+          await actions.addChecklist(parentId!, result.title,
+              description: result.description);
+        case 'task':
+          await actions.addTask(parentId!, result.title,
+              description: result.description, priority: result.priority);
+      }
+    } on ApiException catch (e) {
+      // 沒有這個 catch 的話，失敗只會拋進 framework，畫面上什麼都不會發生
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 
   @override
@@ -112,7 +144,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 20, 12, 24),
       children: [
-        MonoLabel('OBJECTIVES · ${active.length} ACTIVE'),
+        Row(children: [
+          Expanded(child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE')),
+          _BarButton(label: '＋ 新週期', onTap: () => _create('objective')),
+        ]),
         const SizedBox(height: 10),
         for (final o in active)
           _objectiveTile(context, snap, o, o.id == selected.id),
@@ -214,10 +249,18 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         for (final c in checklists) _checklistSection(context, snap, c),
         if (checklists.isEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 24),
+            padding: const EdgeInsets.only(top: 8, bottom: 12),
             child: Text('這個週期還沒有階段。',
                 style: UepText.mono(size: 11, color: s.inkMute)),
           ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _BarButton(
+            label: '＋ 階段',
+            onTap: () =>
+                _create('checklist', parentId: o.id, parentTitle: o.title),
+          ),
+        ),
       ],
     );
   }
@@ -368,6 +411,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               const SizedBox(width: 10),
               Text('$done / $total DONE',
                   style: UepText.mono(size: 9, color: s.inkMute)),
+              const Spacer(),
+              _BarButton(
+                label: '＋ 任務',
+                onTap: () =>
+                    _create('task', parentId: c.id, parentTitle: c.title),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -409,6 +458,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               textAlign: TextAlign.center,
               style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
             ),
+            const SizedBox(height: 20),
+            UepButton(label: '＋ 新週期', onPressed: () => _create('objective')),
           ],
         ),
       ),
