@@ -257,6 +257,18 @@ async def test_a_human_opening_a_container_wakes_the_agents(tmp_path):
         assert len(got) == 1
         assert sorted(got[0]) == ["Miller", "Novia"], f"只叫 agent：{got[0]}"
 
+        # 文案本身也要驗——只驗 mentions 的話，「艾斯維爾 在開了新的週期」
+        # 這種句子會一路綠燈上線（實機驗證才抓到）
+        rows = await (await app.state.db.execute(
+            "SELECT content, system_event FROM message WHERE room_id=?"
+            " AND system_event LIKE 'board_%_created' ORDER BY seq",
+            (rid,))).fetchall()
+        texts = {r["system_event"]: r["content"] for r in rows}
+        assert texts["board_objective_created"] == (
+            "Bernie 開了新的週期「新週期」，可以往裡面加任務了。")
+        assert texts["board_checklist_created"] == (
+            "Bernie 在「新週期」底下開了新的階段「新階段」，可以往裡面加任務了。")
+
 
 async def test_an_agent_opening_a_container_stays_quiet(tmp_path):
     """agent 自己開的容器不廣播——它開那個容器正是因為它已經知道要做什麼，

@@ -3549,10 +3549,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         audience = await _board_audience(room_id, agents_only=True)
         if not audience:
             return
-        where = f"「{within}」底下" if within else ""
+        # 「在」跟著 within 一起出現或一起消失——分開放的話，沒有 within 時
+        # 會變成「艾斯維爾 在開了新的週期」（實機驗證抓到的，單元測試只驗
+        # mentions 沒驗文案，所以它是綠的）
+        where = f"在「{within}」底下" if within else ""
         await _post_message(
             room_id, None,
-            f"{me['display_name']} 在{where}開了新的{label}「{title}」，"
+            f"{me['display_name']} {where}開了新的{label}「{title}」，"
             "可以往裡面加任務了。",
             kind="system", system_event=event,
             mentions=audience, reply_mentions_author=False,
