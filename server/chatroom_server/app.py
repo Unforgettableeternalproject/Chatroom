@@ -3235,7 +3235,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await _board_writer(parent["room_id"], x_participant_id)
         return await _insert_task(checklist_id, parent["room_id"], body, me)
 
+    async def _assert_assignee_in_room(assignee_id: str | None, room_id: str):
+        """指定的對象必須是**這個房間**的 active 成員。
+
+        `assignee_participant_id` 的外鍵只保證那個 id 存在，不保證它屬於本房
+        ——participant 是以 room_id 分租的單表，跨房的 id 一樣通得過 FK。
+        少了這道檢查，B 房的人可以被掛到 A 房的卡上：卡片顯示一個房內查不到
+        的名字，而且能拿 400／404 的差別去探測別房的 participant id。
+
+        只在**寫入**時要求 active：既有的指定不回頭校驗，否則指給一個後來
+        離場的人的卡，從此連 PATCH 都動不了。
+        """
+        if assignee_id is None:
+            return
+        row = await (await app.state.db.execute(
+            "SELECT 1 FROM participant WHERE id=? AND room_id=? AND status='active'",
+            (assignee_id, room_id),
+        )).fetchone()
+        if row is None:
+            raise _err(400, "assignee_not_in_room",
+                       "指定的對象不是這個聊天室的成員，或已經離開了")
+
     async def _insert_task(checklist_id: str, room_id: str, body, me) -> dict:
+        await _assert_assignee_in_room(body.assignee_participant_id, room_id)
         db = app.state.db
         seq = await _next_board_seq(room_id)
         tid = uuid.uuid4().hex
@@ -3277,6 +3299,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 「某某指定」要寫得出來，就得在指定的當下記——事後從 id 反推不出
             row = await _board_item_or_404("task", task_id)
             me = await _board_writer(row["room_id"], x_participant_id)
+            await _assert_assignee_in_room(body.assignee_participant_id,
+                                           row["room_id"])
             fields["assigned_by"] = me["id"]
             fields["assigned_by_name"] = me["display_name"]
         return await _board_patch("task", task_id, fields, x_participant_id)
@@ -3370,12 +3394,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         seq = await _next_board_seq(row["room_id"])
         done = body.status == "done"
-        await db.execute(
+        # **CAS：把守門帶進 WHERE。** 上面那張轉移表是拿 `row` 這份快照判的，
+        # 而讀到寫之間有 await——兩路同時把 in_progress 推向 done 與 cancelled
+        # 會各自通過檢查、各自回 200，最後只剩後寫的那個。更難看的是 done 那條
+        # 分支還會發一則系統訊息，於是板上寫著 cancelled、房裡卻有一則說它完成了
+        cur = await db.execute(
             "UPDATE board_task SET status=?, completed_by=?, completed_at=?,"
-            " board_seq=? WHERE id=?",
+            " board_seq=? WHERE id=? AND status=? RETURNING id",
             (body.status, me["id"] if done else None, _now() if done else None,
-             seq, task_id),
+             seq, task_id, old),
         )
+        if await cur.fetchone() is None:
+            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            current = await _board_item_or_404("task", task_id)
+            raise _err(409, "invalid_transition",
+                       f"這張卡的狀態在你送出的同時被改成「{current['status']}」了",
+                       from_status=current["status"], to_status=body.status,
+                       allowed=sorted(TASK_TRANSITIONS.get(current["status"],
+                                                           set())))
         await db.commit()
         if done:
             # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
@@ -3442,12 +3478,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有建立者或人類成員可以取消這份清單")
         seq = await _next_board_seq(row["room_id"])
         done = body.status == "done"
-        await db.execute(
+        # CAS，理由同 Task。這裡尤其要緊：上面那道「底下所有 task 都收尾了」
+        # 的閘是對快照判的，而 task 狀態隨時在動——不帶前值條件的話，
+        # 兩路同時收尾同一份清單會雙雙成功
+        cur = await db.execute(
             "UPDATE board_checklist SET status=?, completed_by=?, completed_at=?,"
-            " board_seq=? WHERE id=?",
+            " board_seq=? WHERE id=? AND status=? RETURNING id",
             (body.status, me["id"] if done else None, _now() if done else None,
-             seq, checklist_id),
+             seq, checklist_id, old),
         )
+        if await cur.fetchone() is None:
+            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            current = await _board_item_or_404("checklist", checklist_id)
+            raise _err(409, "invalid_transition",
+                       f"這份清單的狀態在你送出的同時被改成"
+                       f"「{current['status']}」了",
+                       from_status=current["status"], to_status=body.status,
+                       allowed=sorted({"open", "done", "cancelled"}
+                                      - {current["status"]}))
         await db.commit()
         await events.notify(row["room_id"])
         return {"ok": True, "id": checklist_id, "status": body.status,
@@ -3458,14 +3506,35 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await _board_writer(row["room_id"], participant_id)
         return row, me
 
-    async def _objective_set(row, fields: dict) -> int:
+    async def _objective_set(row, fields: dict,
+                             expect_status: str | None = None) -> int:
+        """把 Objective 推到新狀態。**CAS 是預設行為，不是選項。**
+
+        五個呼叫端（送審／確認／完成／打回／取消）全都先讀 `row`、依它的
+        status 判斷能不能走，而讀與寫之間有 await。所以預期前值就是
+        `row["status"]`——呼叫端什麼都不必做就得到保護，這正是把它放在共用
+        helper 裡的理由：漏掉一個呼叫端不會有任何地方報錯。
+
+        `expect_status` 留給「判斷依據不是自己的 status」的未來呼叫端；
+        目前沒有人用，也不該為了繞過守門而用它。
+        """
+        db = app.state.db
+        expect = row["status"] if expect_status is None else expect_status
         seq = await _next_board_seq(row["room_id"])
         sets = ", ".join(f"{k}=?" for k in fields)
-        await app.state.db.execute(
-            f"UPDATE board_objective SET {sets}, board_seq=? WHERE id=?",
-            (*fields.values(), seq, row["id"]),
+        cur = await db.execute(
+            f"UPDATE board_objective SET {sets}, board_seq=?"
+            " WHERE id=? AND status=? RETURNING id",
+            (*fields.values(), seq, row["id"], expect),
         )
-        await app.state.db.commit()
+        if await cur.fetchone() is None:
+            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            current = await _board_item_or_404("objective", row["id"])
+            raise _err(409, "invalid_transition",
+                       f"這個週期的狀態在你送出的同時被改成"
+                       f"「{current['status']}」了",
+                       from_status=current["status"])
+        await db.commit()
         await events.notify(row["room_id"])
         return seq
 
