@@ -140,10 +140,16 @@ class BoardActions {
     _reload();
   }
 
-  Future<void> completeChecklist(String checklistId) async {
+  Future<void> completeChecklist(String checklistId) =>
+      setChecklistStatus(checklistId, 'done');
+
+  /// Checklist：open / done / cancelled。三態之間 Hub 都收，限制在人：
+  /// 打回已完成的清單只有人類做得到，取消只有建立者或人類。
+  Future<void> setChecklistStatus(String checklistId, String status) async {
     final pid = await _pid();
     if (pid == null) return;
-    await _api.completeChecklist(checklistId, participantId: pid);
+    await _api.setChecklistStatus(checklistId,
+        participantId: pid, status: status);
     _reload();
   }
 

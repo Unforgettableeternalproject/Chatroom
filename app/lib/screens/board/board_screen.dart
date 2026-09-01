@@ -605,7 +605,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       BuildContext context, BoardObjective o, _Stats stats) {
     final s = context.uep;
     final actions = ref.read(boardActionsProvider(widget.roomId));
-    final canReview = stats.remaining == 0 && o.status == 'active';
+    // 條件本人在 BoardSnapshot.canReviewObjective——放 model 才咬得住測試，
+    // 在這裡複製一份判斷的話，測試測到的只會是那份副本
+    final canReview = stats.canReview;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -660,11 +662,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   String _closeoutHint(BoardObjective o, _Stats stats) {
     return switch (o.status) {
-      'active' when stats.remaining > 0 => [
-          '${stats.remaining} 張未完成',
+      // 說的是**擋住送審的那件事**。原本寫「N 張未完成」，而真正擋著的是
+      // 清單沒收尾——照著它做完所有卡，按鈕依然不會亮
+      'active' when stats.stages == 0 => '還沒有階段，先開一個',
+      'active' when stats.stagesOpen > 0 => [
+          '${stats.stagesOpen} 個階段還沒收尾',
+          if (stats.remaining > 0) '${stats.remaining} 張未完成',
           if (stats.orphans > 0) '${stats.orphans} 張沒有人在上面',
         ].join(' · '),
-      'active' => '全部完成，可以送審',
+      'active' when stats.stagesDone == 0 =>
+        '每個階段都被取消了，這個週期沒有東西可以驗收',
+      'active' => '所有階段都收尾了，可以送審',
       'review' => '已送審，等人確認過才能結束週期',
       'verified' => '已確認，可以結束這個週期',
       'done' => '這個週期已經結束',
@@ -768,10 +776,53 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               Text('$done / $total DONE',
                   style: UepText.mono(
                       size: 9, color: s.inkMute, letterSpacing: 1.4)),
+              // 收尾與否要看得見——送審擋在它上面，而卡片全綠時最容易
+              // 以為已經收好了
+              if (c.isDone) ...[
+                const SizedBox(width: 8),
+                Text('· 已收尾',
+                    style: UepText.mono(
+                        size: 9, color: UepColors.gold, letterSpacing: 1.4)),
+              ],
               const SizedBox(width: 12),
               // 標題與動作之間拉一條線：讓每一段的抬頭在視覺上自成一列
               Expanded(child: Container(height: 1, color: s.hairline)),
               const SizedBox(width: 12),
+              if (!_archived) ...[
+                // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
+                // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
+                // 有實作、一直沒有呼叫端，於是每一份清單都永遠停在 open
+                if (c.status == 'open') ...[
+                  _BarButton(
+                    label: '收尾階段',
+                    onTap: () => runBoardAction(
+                        context,
+                        () => ref
+                            .read(boardActionsProvider(widget.roomId))
+                            .completeChecklist(c.id)),
+                  ),
+                  const SizedBox(width: 8),
+                  _BarButton(
+                    label: '取消階段',
+                    onTap: () => runBoardAction(
+                        context,
+                        () => ref
+                            .read(boardActionsProvider(widget.roomId))
+                            .setChecklistStatus(c.id, 'cancelled')),
+                  ),
+                  const SizedBox(width: 8),
+                ] else if (c.status == 'done') ...[
+                  _BarButton(
+                    label: '重新開啟階段',
+                    onTap: () => runBoardAction(
+                        context,
+                        () => ref
+                            .read(boardActionsProvider(widget.roomId))
+                            .setChecklistStatus(c.id, 'open')),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ],
               _BarButton(
                 label: '＋ 任務',
                 onTap: () =>
@@ -858,6 +909,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final cancelled = tasks.where((t) => t.status == 'cancelled').length;
     return _Stats(
       stages: checklists.length,
+      // 可見的清單都不是 cancelled，所以「不是 done」就是還開著
+      stagesOpen: checklists.where((c) => !c.isDone).length,
+      stagesDone: checklists.where((c) => c.isDone).length,
+      canReview: snap.canReviewObjective(o.id),
       total: tasks.length,
       done: done,
       // 取消的不算「還沒做完」——它已經有結論了
@@ -870,6 +925,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 class _Stats {
   const _Stats({
     required this.stages,
+    required this.stagesOpen,
+    required this.stagesDone,
+    required this.canReview,
     required this.total,
     required this.done,
     required this.remaining,
@@ -877,6 +935,11 @@ class _Stats {
   });
 
   final int stages;
+
+  /// 還沒收尾的階段數。**送審擋在這個數字上**，不是擋在剩幾張卡上。
+  final int stagesOpen;
+  final int stagesDone;
+  final bool canReview;
   final int total;
   final int done;
   final int remaining;

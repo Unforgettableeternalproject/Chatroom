@@ -594,6 +594,22 @@ class BoardSnapshot {
     return o != null && o.status != 'cancelled';
   }
 
+  /// 這個週期現在能不能送審。
+  ///
+  /// ⚠️ **母體是 Checklist，不是 Task。** Hub 的送審閘驗的是「所有清單都收
+  /// 尾了，且至少一份真的完成」（全部取消不算完成——那是「這一段不做了」）。
+  /// 畫面原本數的是剩幾張 Task，兩邊數的不是同一種東西：Task 全做完而清單
+  /// 還開著時，按鈕會亮，而按下去必然拿 409。
+  ///
+  /// [checklistsOf] 已經濾掉 cancelled，所以「非空且全部 done」與 Hub 那句
+  /// 話等價。
+  bool canReviewObjective(String objectiveId) {
+    final o = objectives[objectiveId];
+    if (o == null || o.status != 'active') return false;
+    final lists = checklistsOf(objectiveId);
+    return lists.isNotEmpty && lists.every((c) => c.isDone);
+  }
+
   /// 一個週期底下所有看得到的 Task，依階段順序、再依卡片順序。
   List<BoardTask> tasksOfObjective(String objectiveId) => [
         for (final c in checklistsOf(objectiveId)) ...tasksOf(c.id),
