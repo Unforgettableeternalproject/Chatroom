@@ -137,6 +137,28 @@ class BoardChecklist {
       );
 }
 
+/// Task 卡片左側色軸的五種樣子（設計稿 artboard 02）。
+///
+/// ⚠️ 它**只描述認領那一維**。狀態（待辦／進行中／卡住／完成）走徽章，
+/// 兩者不可以互相污染——孤兒卡的狀態徽章必須維持原樣，因為「變的是人不是
+/// 進度」，那件事確實做到一半。
+enum ClaimAxis {
+  /// 中性線色：沒有人。
+  none,
+
+  /// 半透明：有人被指名（assignee），但還沒有人站上去。
+  suggested,
+
+  /// 實色（持有者的 kind 色）：現任持有者還在房裡。
+  held,
+
+  /// 斷開 + 名字劃掉：持有者已經不在房內。
+  orphaned,
+
+  /// 無軸、收合成單行：事情結束，誰做的退成註記。
+  completed,
+}
+
 /// Task：葉節點，一個人做得完的一件事。
 ///
 /// **認領與狀態是兩個獨立維度**：[status] 描述「這件事進行到哪」，
@@ -157,12 +179,17 @@ class BoardTask {
     this.claimParticipantId,
     this.claimSessionKey = '',
     this.claimName = '',
+    this.claimKind = '',
     this.claimState = '',
     this.claimedAt,
     this.orphanedAt,
+    this.orphanedReason = '',
     this.sourceSeq,
     this.assigneeParticipantId,
+    this.assignedBy,
+    this.assignedByName = '',
     this.createdBy,
+    this.createdByName = '',
     this.completedBy,
     this.completedAt,
     this.deleted = false,
@@ -192,10 +219,18 @@ class BoardTask {
   /// 而「上一個是誰在做」正是接手的人最需要知道的一件事。
   final String claimName;
 
+  /// 認領當下的 kind（claude / codex / human / other）。與 [claimName] 同一個
+  /// 理由存快照：持有者離場後 participant 查不回種類，而卡片要畫他的色軸。
+  final String claimKind;
+
   /// ''（未認領）/ held（持有中）/ orphaned（持有者已不在房內）
   final String claimState;
   final String? claimedAt;
   final String? orphanedAt;
+
+  /// 為什麼不在了：idle / left / kicked / subagent。
+  /// **只有離場的當下知道**，事後查不回來。
+  final String orphanedReason;
 
   /// 來源訊息的房內 seq。存 seq 不存 message id——訊息可以被軟刪除，seq 不會。
   final int? sourceSeq;
@@ -204,12 +239,44 @@ class BoardTask {
   /// 否則指派一個沒醒著的 agent 就會讓那張卡永遠不動。
   final String? assigneeParticipantId;
 
+  /// 誰指定的（設計稿：「Swift-Falcon　奈留指定 · 建議」）。
+  final String? assignedBy;
+  final String assignedByName;
+
   final String? createdBy;
+
+  /// 建立者的名字快照。**建立者常常是 subagent**——回收之後那一列可能整個
+  /// 不在了，這是所有 participant 參照裡最先斷的一種。
+  final String createdByName;
+
   final String? completedBy;
   final String? completedAt;
   final bool deleted;
   final int boardSeq;
   final String createdAt;
+
+  /// 卡片左側色軸該畫成哪一種。
+  ///
+  /// 設計的核心是**「色軸講誰，徽章講到哪」**——認領與狀態是兩個正交的維度，
+  /// 各走各的視覺通道。把它放進 model 而不是 widget，是因為這個對應本身就是
+  /// 規格（設計稿 artboard 02 的五種組合），而不是畫面的實作細節。
+  ClaimAxis get axis {
+    if (isDone || status == 'cancelled') return ClaimAxis.completed;
+    if (isOrphaned) return ClaimAxis.orphaned;
+    if (isHeld) return ClaimAxis.held;
+    if (assigneeParticipantId != null) return ClaimAxis.suggested;
+    return ClaimAxis.none;
+  }
+
+  /// 孤兒的成因，給人讀的一句話。空字串表示 Hub 沒給（舊資料）——
+  /// 那時只說「已不在房內」，不要猜。
+  String get orphanedReasonLabel => switch (orphanedReason) {
+        'idle' => '因閒置移出',
+        'left' => 'session 已結束',
+        'kicked' => '被移出聊天室',
+        'subagent' => '子代理已回收',
+        _ => '',
+      };
 
   bool get isHeld => claimState == 'held';
 
@@ -237,12 +304,17 @@ class BoardTask {
         claimParticipantId: json['claim_participant_id'] as String?,
         claimSessionKey: (json['claim_session_key'] as String?) ?? '',
         claimName: (json['claim_name'] as String?) ?? '',
+        claimKind: (json['claim_kind'] as String?) ?? '',
         claimState: (json['claim_state'] as String?) ?? '',
         claimedAt: json['claimed_at'] as String?,
         orphanedAt: json['orphaned_at'] as String?,
+        orphanedReason: (json['orphaned_reason'] as String?) ?? '',
         sourceSeq: json['source_seq'] as int?,
         assigneeParticipantId: json['assignee_participant_id'] as String?,
+        assignedBy: json['assigned_by'] as String?,
+        assignedByName: (json['assigned_by_name'] as String?) ?? '',
         createdBy: json['created_by'] as String?,
+        createdByName: (json['created_by_name'] as String?) ?? '',
         completedBy: json['completed_by'] as String?,
         completedAt: json['completed_at'] as String?,
         deleted: (json['deleted'] as bool?) ?? false,
