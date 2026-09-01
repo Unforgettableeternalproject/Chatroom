@@ -236,3 +236,78 @@ async def test_task_carries_source_seq_and_assignee(tmp_path):
         assert task["assignee_participant_id"] == other["X-Participant-Id"]
         # 指派不鎖卡：認領狀態仍是「沒人領」
         assert task["claim_state"] == ""
+
+
+# ---------- F2／F3（測試 Novia 第一輪回報）----------
+
+async def test_a_loose_task_gets_the_uncategorised_layers(tmp_path):
+    """Q2：三層強制，但「隨手記一件事」不該逼人先蓋兩層。
+
+    要 agent 為了記一件事先自己蓋 Objective 再蓋 Checklist，實務上的結果
+    是它乾脆不記。
+    """
+    app, client = await _client(tmp_path, "loose")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join(client, rid, "agent-1", "Novia")
+        r = await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": "順手記一件事"}, headers=hdr)
+        assert r.status_code == 200, r.text
+        board = await _board(client, rid, hdr)
+        assert [o["title"] for o in board["objectives"]] == ["未分類"]
+        assert [c["title"] for c in board["checklists"]] == ["未分類"]
+        assert board["tasks"][0]["checklist_id"] == board["checklists"][0]["id"]
+
+
+async def test_uncategorised_layers_are_reused_not_duplicated(tmp_path):
+    """固定名字才找得回同一個——每次新建的話板上會長出一排空殼。"""
+    app, client = await _client(tmp_path, "loose-reuse")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join(client, rid, "agent-1", "Novia")
+        for i in range(3):
+            await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": f"第 {i} 件"}, headers=hdr)
+        board = await _board(client, rid, hdr)
+        assert len(board["objectives"]) == 1
+        assert len(board["checklists"]) == 1
+        assert len(board["tasks"]) == 3
+
+
+async def test_wrong_layer_says_so_instead_of_not_found(tmp_path):
+    """「不存在」與「是別的層」壓成同一句的話，對方會去重讀 board 再撞一次。"""
+    app, client = await _client(tmp_path, "wrong-kind")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join(client, rid, "agent-1", "Novia")
+        oid, cid, tid = await _tree(client, rid, hdr)
+
+        # 把 Objective 的 id 當成 Checklist 用
+        r = await client.post(f"/api/board/checklists/{oid}/tasks",
+                              json={"title": "掛錯層"}, headers=hdr)
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert detail["code"] == "board_item_wrong_kind"
+        assert detail["actual"] == "objective"
+        assert detail["expected"] == "checklist"
+        assert detail["title"] == "週期一"
+
+        # 真的不存在的 id 仍然是 404
+        r = await client.post("/api/board/checklists/0000/tasks",
+                              json={"title": "沒這張"}, headers=hdr)
+        assert r.status_code == 404
+        assert r.json()["detail"]["code"] == "board_item_not_found"
+
+
+async def test_deleted_card_is_not_reported_as_wrong_kind(tmp_path):
+    """已刪除的卡在自己那層仍是 404，不能因為查不到就去別層亂猜。"""
+    app, client = await _client(tmp_path, "deleted-kind")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join(client, rid, "agent-1", "Novia")
+        oid, cid, tid = await _tree(client, rid, hdr)
+        await client.delete(f"/api/board/checklists/{cid}", headers=hdr)
+        r = await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": "掛到刪掉的"}, headers=hdr)
+        assert r.status_code == 404
+        assert r.json()["detail"]["code"] == "board_item_not_found"

@@ -194,3 +194,27 @@ async def test_response_shape_is_pinned(tmp_path):
         assert set(body["reclaimable_tasks"][0]) == {
             "id", "title", "orphaned_at", "claim_name",
         }
+
+
+async def test_full_read_omits_tombstones(tmp_path):
+    """墓碑只對增量讀取有意義（測試 Novia 第二輪 F4）。
+
+    全量 client 手上沒有「記得的那份」可以移除，那些列對它純粹是噪音，
+    而且會隨刪除次數無上限成長。增量仍然要拿得到，否則它永遠不知道那張卡
+    被刪了——兩種語意在同一個端點上，用游標分。
+    """
+    app, client = await _client(tmp_path, "full-tomb")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client)
+        hdr = {"X-Participant-Id": pid}
+        await _seed(app, rid, seq=1, suffix="1")
+        await _seed(app, rid, seq=5, deleted=1, suffix="2")
+
+        full = (await client.get(f"/api/rooms/{rid}/board", headers=hdr)).json()
+        assert [o["id"] for o in full["objectives"]] == ["o1"]
+        assert [t["id"] for t in full["tasks"]] == ["t1"]
+
+        delta = (await client.get(f"/api/rooms/{rid}/board?after_board_seq=1",
+                                  headers=hdr)).json()
+        assert [t["id"] for t in delta["tasks"]] == ["t2"]
+        assert delta["tasks"][0]["deleted"] is True

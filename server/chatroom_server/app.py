@@ -2869,21 +2869,46 @@ def create_app(config: Config | None = None) -> FastAPI:
         "task": "board_task",
     }
 
+    BOARD_KIND_NAMES = {"objective": "週期", "checklist": "階段清單", "task": "任務"}
+
     async def _board_item_or_404(kind: str, item_id: str):
         """取一列 board 資料。找不到與已軟刪除一律當成不存在。
 
         軟刪除的列在**讀取**端點是 tombstone（要回得去給增量 client），
         但對寫入而言它已經不在了——讓 PATCH 打得到一張刪掉的卡，只會讓它
         悄悄復活一半。
+
+        ⚠️ **「這個 id 不存在」與「這個 id 是別的層」必須是兩句話。**
+        壓成同一句的話，把 Objective 的 id 當成 Checklist 傳進來的人會收到
+        「找不到這張卡」——而那張卡明明就在板上，於是他去重讀 board、確認
+        它還在、再試一次，然後再撞一次。診斷錯誤比拒絕本身更花時間。
         """
         row = await (
             await app.state.db.execute(
                 f"SELECT * FROM {BOARD_TABLES[kind]} WHERE id=?", (item_id,)
             )
         ).fetchone()
-        if row is None or row["deleted"]:
-            raise _err(404, "board_item_not_found", "找不到這張卡（或它已被刪除）")
-        return row
+        if row is not None and not row["deleted"]:
+            return row
+        if row is None:
+            for other, table in BOARD_TABLES.items():
+                if other == kind:
+                    continue
+                hit = await (
+                    await app.state.db.execute(
+                        f"SELECT id, title FROM {table} WHERE id=? AND deleted=0",
+                        (item_id,),
+                    )
+                ).fetchone()
+                if hit is not None:
+                    raise _err(
+                        422, "board_item_wrong_kind",
+                        f"這個 id 是一個「{BOARD_KIND_NAMES[other]}」"
+                        f"（{hit['title']}），不是「{BOARD_KIND_NAMES[kind]}」。"
+                        "卡還在板上，重讀一次也不會改變——要換的是層別。",
+                        expected=kind, actual=other, title=hit["title"],
+                    )
+        raise _err(404, "board_item_not_found", "找不到這張卡（或它已被刪除）")
 
     async def _board_writer(room_id: str, participant_id: str | None):
         """board 寫入的共同門檻：房間 active + 身分 active。
@@ -3046,6 +3071,65 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         return await _board_soft_delete("checklist", checklist_id, x_participant_id)
 
+    # Q2 定案：三層強制，但「隨手記一件事」不該逼人先蓋兩層。缺的那兩層由
+    # Hub 自動備妥，名字固定是「未分類」——**固定名字才找得回同一個**，
+    # 每次新建一個的話板上會長出一排一模一樣的空殼
+    UNCATEGORISED = "未分類"
+
+    async def _uncategorised_checklist(room_id: str, me) -> str:
+        """取得（必要時建立）這個房的「未分類」Checklist，回傳它的 id。
+
+        兩層都可能要建：Checklist 掛在 Objective 底下，三層是嚴格的樹。
+        **與這次新增 Task 共用同一個 board_seq**——它們是同一個動作的三個
+        後果，拆成三個號會讓增量流看起來像有人連做了三件事。
+        """
+        db = app.state.db
+        row = await (
+            await db.execute(
+                "SELECT c.id FROM board_checklist c JOIN board_objective o"
+                "   ON o.id = c.objective_id"
+                " WHERE c.room_id=? AND c.deleted=0 AND o.deleted=0"
+                "   AND c.title=? AND o.title=? LIMIT 1",
+                (room_id, UNCATEGORISED, UNCATEGORISED),
+            )
+        ).fetchone()
+        if row is not None:
+            return row["id"]
+        seq = await _next_board_seq(room_id)
+        now = _now()
+        oid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_objective (id, room_id, title, description,"
+            " created_by, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (oid, room_id, UNCATEGORISED, "還沒歸進任何週期的東西",
+             me["id"], me["display_name"], seq, now),
+        )
+        cid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_checklist (id, room_id, objective_id, title,"
+            " description, created_by, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, room_id, oid, UNCATEGORISED, "", me["id"], me["display_name"],
+             seq, now),
+        )
+        return cid
+
+    @app.post("/api/rooms/{room_id}/board/tasks",
+              dependencies=[Depends(require_auth)])
+    async def create_loose_task(
+        room_id: str, body: BoardTaskCreate,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """記一件事，不指定掛在哪裡。
+
+        三層強制不變——Hub 會把「未分類」那兩層備妥再掛上去。要 agent 為了
+        記一件事先自己蓋 Objective 再蓋 Checklist，實務上的結果是它乾脆不記。
+        """
+        me = await _board_writer(room_id, x_participant_id)
+        cid = await _uncategorised_checklist(room_id, me)
+        return await _insert_task(cid, room_id, body, me)
+
     @app.post("/api/board/checklists/{checklist_id}/tasks",
               dependencies=[Depends(require_auth)])
     async def create_task(
@@ -3054,15 +3138,18 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         parent = await _board_item_or_404("checklist", checklist_id)
         me = await _board_writer(parent["room_id"], x_participant_id)
+        return await _insert_task(checklist_id, parent["room_id"], body, me)
+
+    async def _insert_task(checklist_id: str, room_id: str, body, me) -> dict:
         db = app.state.db
-        seq = await _next_board_seq(parent["room_id"])
+        seq = await _next_board_seq(room_id)
         tid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_task (id, room_id, checklist_id, title, description,"
             " priority, source_seq, assignee_participant_id, assigned_by,"
             " assigned_by_name, created_by, created_by_name, board_seq,"
             " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, parent["room_id"], checklist_id, body.title.strip(),
+            (tid, room_id, checklist_id, body.title.strip(),
              body.description, body.priority, body.source_seq,
              body.assignee_participant_id,
              me["id"] if body.assignee_participant_id else None,
@@ -3070,8 +3157,9 @@ def create_app(config: Config | None = None) -> FastAPI:
              me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
-        await events.notify(parent["room_id"])
-        return {"ok": True, "id": tid, "board_seq": seq}
+        await events.notify(room_id)
+        return {"ok": True, "id": tid, "checklist_id": checklist_id,
+                "board_seq": seq}
 
     @app.patch("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def patch_task(
@@ -3747,10 +3835,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
 
+        # 全量讀取不回墓碑。tombstone 的理由只對**增量**成立——增量 client
+        # 手上有「記得的那份」要移除；全量 client 沒有那份，那些列對它純粹是
+        # 噪音，而且會隨刪除次數無上限成長。同一個查詢兼差兩種語意時，正確
+        # 的那一半會把另一半拖下水（測試 Novia 第二輪 F4）
+        tombstones = after_board_seq > 0
+
         async def _rows(table: str) -> list:
             cur = await db.execute(
                 f"SELECT * FROM {table} WHERE room_id=? AND board_seq>?"
-                " ORDER BY board_seq",
+                + ("" if tombstones else " AND deleted=0")
+                + " ORDER BY board_seq",
                 (room_id, after_board_seq),
             )
             return [_board_row(r) for r in await cur.fetchall()]
