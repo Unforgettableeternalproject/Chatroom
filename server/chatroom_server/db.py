@@ -332,6 +332,21 @@ CREATE INDEX IF NOT EXISTS idx_btask_checklist ON board_task(checklist_id, statu
 CREATE INDEX IF NOT EXISTS idx_btask_claim
     ON board_task(claim_participant_id) WHERE claim_state = 'held';
 
+-- 「未分類」的去重靠的是「固定名字找得回同一個」，而那條不變式原本只寫在
+-- 註解與 Python 裡：`_uncategorised_checklist` 是 SELECT-then-INSERT，中間
+-- 有 await 讓出點，並行建立無 parent 的 Task 會各自讀到空、各自 INSERT，
+-- 於是一個房間長出好幾組「未分類」（審核用 Codex 實測 12 路建出 12 組）。
+-- 每一組都是永久留在板上的空殼。約束寫進資料庫，那條路才真的走不通。
+--
+-- 🚨 這兩條與 idx_btask_claim **不同**：那個能直接放 schema 是因為
+-- board_task 是同一份 executescript 裡建的全新表；這兩條加在**既有**表上，
+-- 現存資料只要已經違反就會建立失敗、連帶 DB 開不起來。
+-- 先跑 `scripts/dedupe-uncategorised.py`（預設 dry-run）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised
+    ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised
+    ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類';
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """

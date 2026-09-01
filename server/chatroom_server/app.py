@@ -3188,38 +3188,67 @@ def create_app(config: Config | None = None) -> FastAPI:
         兩層都可能要建：Checklist 掛在 Objective 底下，三層是嚴格的樹。
         **與這次新增 Task 共用同一個 board_seq**——它們是同一個動作的三個
         後果，拆成三個號會讓增量流看起來像有人連做了三件事。
+
+        ⚠️ **這裡是 SELECT-then-INSERT，而中間每一步都會讓出。** 並行呼叫會
+        各自讀到空、各自建一組，於是板上長出好幾組「未分類」——每一組都是
+        永久留在那裡的空殼（審核用 Codex 實測 12 路建出 12 組）。
+        去重真正的保證是 `idx_bobjective_uncategorised` / `idx_bchecklist_
+        uncategorised` 兩條 partial unique index，這裡的 INSERT 一律
+        `ON CONFLICT DO NOTHING`：撞到就表示別人剛建好，回頭讀他那一份。
         """
         db = app.state.db
-        row = await (
-            await db.execute(
-                "SELECT c.id FROM board_checklist c JOIN board_objective o"
-                "   ON o.id = c.objective_id"
-                " WHERE c.room_id=? AND c.deleted=0 AND o.deleted=0"
-                "   AND c.title=? AND o.title=? LIMIT 1",
-                (room_id, UNCATEGORISED, UNCATEGORISED),
+
+        async def _lookup():
+            return await (
+                await db.execute(
+                    "SELECT c.id FROM board_checklist c JOIN board_objective o"
+                    "   ON o.id = c.objective_id"
+                    " WHERE c.room_id=? AND c.deleted=0 AND o.deleted=0"
+                    "   AND c.title=? AND o.title=? LIMIT 1",
+                    (room_id, UNCATEGORISED, UNCATEGORISED),
+                )
+            ).fetchone()
+
+        # 三輪：讀不到就建，建不成表示別人贏了，回去讀他的。兩層各有一條
+        # index，所以「objective 我建的、checklist 對方建的」這種交錯也收得住
+        for _ in range(3):
+            row = await _lookup()
+            if row is not None:
+                return row["id"]
+            seq = await _next_board_seq(room_id)
+            now = _now()
+            oid = uuid.uuid4().hex
+            cur = await db.execute(
+                "INSERT INTO board_objective (id, room_id, title, description,"
+                " created_by, created_by_name, board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
+                (oid, room_id, UNCATEGORISED, "還沒歸進任何週期的東西",
+                 me["id"], me["display_name"], seq, now),
             )
-        ).fetchone()
+            if await cur.fetchone() is None:
+                # 對方剛建好那個週期。他的 checklist 可能還在路上，回去重讀。
+                # ⚠️ 這裡**不要 commit**：共用連線上別的語句可能正在進行中
+                # （"cannot commit transaction - SQL statements in progress"）。
+                # 領走的號就讓它空著——空號只讓某個增量 client 多空轉一次，
+                # 而在這條路徑上 commit 會直接把請求打掛
+                continue
+            cid = uuid.uuid4().hex
+            cur = await db.execute(
+                "INSERT INTO board_checklist (id, room_id, objective_id, title,"
+                " description, created_by, created_by_name, board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
+                (cid, room_id, oid, UNCATEGORISED, "", me["id"],
+                 me["display_name"], seq, now),
+            )
+            if await cur.fetchone() is None:
+                continue   # 同上，不 commit
+            return cid
+        # 三輪都沒收斂：讓呼叫者拿到明確的失敗，而不是默默再建一組空殼
+        row = await _lookup()
         if row is not None:
             return row["id"]
-        seq = await _next_board_seq(room_id)
-        now = _now()
-        oid = uuid.uuid4().hex
-        await db.execute(
-            "INSERT INTO board_objective (id, room_id, title, description,"
-            " created_by, created_by_name, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (oid, room_id, UNCATEGORISED, "還沒歸進任何週期的東西",
-             me["id"], me["display_name"], seq, now),
-        )
-        cid = uuid.uuid4().hex
-        await db.execute(
-            "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-            " description, created_by, created_by_name, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (cid, room_id, oid, UNCATEGORISED, "", me["id"], me["display_name"],
-             seq, now),
-        )
-        return cid
+        raise _err(503, "uncategorised_contended",
+                   "「未分類」正在被同時建立，稍後再試一次")
 
     @app.post("/api/rooms/{room_id}/board/tasks",
               dependencies=[Depends(require_auth)])

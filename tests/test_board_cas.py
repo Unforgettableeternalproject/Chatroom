@@ -165,3 +165,46 @@ async def test_an_assignee_from_another_room_is_refused(tmp_path):
                                json={"assignee_participant_id": a_pid},
                                headers=hdr)
         assert r.status_code == 200, r.text
+
+
+async def test_parallel_loose_tasks_share_one_uncategorised(tmp_path):
+    """並行「隨手記一件事」只能長出一組「未分類」。
+
+    原本是 SELECT-then-INSERT，中間每一步都讓出，12 路會各自讀到空、各自建
+    一組（審核用 Codex 實測）。每一組都是永久留在板上的空殼，而且沒有任何
+    地方會報錯——去重靠的是「固定名字找得回同一個」，那條不變式必須寫進
+    資料庫才算數。
+    """
+    app, client = await _client(tmp_path, "uncat_race")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        pid = await _join(client, rid, "human-1", "艾斯維爾")
+        hdr = {"X-Participant-Id": pid}
+
+        n = 12
+        results = await asyncio.gather(*[
+            client.post(f"/api/rooms/{rid}/board/tasks",
+                        json={"title": f"隨手記 {i}"}, headers=hdr)
+            for i in range(n)
+        ])
+        assert all(r.status_code == 200 for r in results), \
+            [r.status_code for r in results]
+
+        objs = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_objective"
+            " WHERE room_id=? AND title='未分類' AND deleted=0", (rid,),
+        )).fetchone()
+        assert objs["n"] == 1, f"長出了 {objs['n']} 組「未分類」週期"
+
+        cls = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_checklist"
+            " WHERE room_id=? AND title='未分類' AND deleted=0", (rid,),
+        )).fetchone()
+        assert cls["n"] == 1, f"長出了 {cls['n']} 份「未分類」清單"
+
+        # 12 張卡一張都不能掉——收斂不是把東西丟掉
+        tasks = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_task WHERE room_id=? AND deleted=0",
+            (rid,),
+        )).fetchone()
+        assert tasks["n"] == n, f"只剩 {tasks['n']} 張卡"
