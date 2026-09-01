@@ -417,6 +417,24 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # hold 標記的到期時間。舊資料一律 NULL＝沒有 hold，正是這個欄位存在
     # 之前的事實
     ("participant", "hold_until", "hold_until TEXT"),
+    # Supervisor 的身分快照與指定紀錄。存 session_key 而不是 participant_id
+    # ——supervisor 是一個**角色**，agent 重啟換了 participant 之後角色應該
+    # 還在。名字／種類同樣是快照（離場之後要顯示「本來是誰在看」）
+    ("room", "board_supervisor_name", "board_supervisor_name TEXT NOT NULL DEFAULT ''"),
+    ("room", "board_supervisor_kind", "board_supervisor_kind TEXT NOT NULL DEFAULT ''"),
+    ("room", "board_supervisor_set_by", "board_supervisor_set_by TEXT"),
+    ("room", "board_supervisor_set_by_name",
+     "board_supervisor_set_by_name TEXT NOT NULL DEFAULT ''"),
+    ("room", "board_supervisor_set_at", "board_supervisor_set_at TEXT"),
+    # 已經不在房內的時間。**標記而不是清空**（艾斯維爾 2026-09-01 拍板）：
+    # 清空連名字都不留，畫面上與「從來沒有指定過」一模一樣——連「本來有人
+    # 在看」這件事都消失了
+    ("room", "board_supervisor_left_at", "board_supervisor_left_at TEXT"),
+    # 摘要的水位與上次發送時間。摘要在 flush 時**從 board 反查**（board_seq
+    # 大於這個值的列），不在每個變動點各自累積——那樣要在十幾處插樁，漏一處
+    # 就是靜靜地少報一件事
+    ("room", "board_digest_seq", "board_digest_seq INTEGER NOT NULL DEFAULT 0"),
+    ("room", "board_digest_at", "board_digest_at TEXT"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
