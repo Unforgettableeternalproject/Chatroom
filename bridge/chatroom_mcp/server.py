@@ -675,8 +675,14 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
 
     這個房間有任務板（Board）而且你讀過它的話，board 有變動時也會把你叫醒
     ——回應的 ``board_changed`` 為 true 表示板上動了，用 ``chatroom_board``
-    去看。⚠️ **被 board 叫醒不等於被 @**：``you_were_mentioned`` 只看訊息裡
-    的 mention，board 的變動不會把它變成 true。
+    去看。
+
+    ``board_unread`` 是另一件事：**這個房間有板，而你還沒看過**。
+    它不代表剛剛有變動，看到就去 ``chatroom_board`` 讀一次，之後才會開始
+    收到 ``board_changed``。
+
+    ⚠️ **被 board 叫醒不等於被 @**：``you_were_mentioned`` 只看訊息裡的
+    mention，board 的變動不會把它變成 true。
     """
     participant_id, scope = _identity_for(room_id, subagent)
     if after_seq is not None:
@@ -704,8 +710,16 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     # 水位不在這裡推進——推進了下次就不會再被通知，而內容還沒去拿。
     # 交給 chatroom_board：它拿到內容的同時才移動水位
     board_now = data.get("board_seq")
+    # 「你還沒看過這塊板」與「board 剛剛動了」是兩件事，分開講。
+    # 合成一個的話，沒讀過 board 的 agent 會在**每一次** wait 都看到
+    # board_changed=true（板上只要有東西，board_now 就大於 0），而它以為
+    # 那代表剛剛有變動——那是一個永遠為真、因此毫無資訊的訊號
+    # （2026-09-01 測試端量測時被這個與「被自己的訊息喚醒」同時誤導）
     data["board_changed"] = (
-        isinstance(board_now, int) and board_now > known_board
+        isinstance(board_now, int) and known_board > 0 and board_now > known_board
+    )
+    data["board_unread"] = (
+        isinstance(board_now, int) and known_board == 0 and board_now > 0
     )
     last = data.get("last_seq")
     # 同 chatroom_read：子代理推自己那一份，不動父層的

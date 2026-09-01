@@ -129,6 +129,36 @@ def test_wait_reports_board_changed_but_does_not_move_the_watermark(fake_hub):
     assert srv.state().board_seq(ROOM) == 9
 
 
+def test_unread_board_is_not_reported_as_a_change(fake_hub):
+    """🔴 「你還沒看過這塊板」與「board 剛剛動了」是兩件事。
+
+    合成一個的話，沒讀過 board 的 agent 會在**每一次** wait 都看到
+    board_changed=true（板上只要有東西，水位就大於 0），而它以為那代表
+    剛剛有變動——一個永遠為真、因此毫無資訊的訊號。
+    """
+    _join(fake_hub)
+    fake_hub.json("GET", f"/api/rooms/{ROOM}/updates",
+                  {"messages": [], "last_seq": 0, "board_seq": 42})
+
+    result = srv.chatroom_wait(ROOM, timeout=0.1)
+
+    assert result["board_changed"] is False
+    assert result["board_unread"] is True
+
+
+def test_read_board_then_no_change_reports_neither(fake_hub):
+    _join(fake_hub)
+    _board(fake_hub, {"board_seq": 42, "tasks": []})
+    srv.chatroom_board(ROOM)
+    fake_hub.json("GET", f"/api/rooms/{ROOM}/updates",
+                  {"messages": [], "last_seq": 0, "board_seq": 42})
+
+    result = srv.chatroom_wait(ROOM, timeout=0.1)
+
+    assert result["board_changed"] is False
+    assert result["board_unread"] is False
+
+
 def test_board_change_does_not_count_as_being_mentioned(fake_hub):
     """被 board 叫醒 ≠ 被 @。"""
     _join(fake_hub)
