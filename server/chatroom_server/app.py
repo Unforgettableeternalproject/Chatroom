@@ -332,6 +332,12 @@ class BoardTaskPatch(BaseModel):
     assignee_participant_id: str | None = Field(default=None, max_length=64)
 
 
+class BoardStatusChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(min_length=1, max_length=20)
+
+
 class BoardReorderItem(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     order_index: int
@@ -3089,6 +3095,306 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
     ):
         return await _board_soft_delete("task", task_id, x_participant_id)
+
+    # ---------- 狀態機（T-05）----------
+    #
+    # 狀態只有這一條寫入路徑。PATCH 一律拒收 `status`（extra="forbid"），
+    # 因為一個欄位兩條寫入路徑遲早會有一條漏掉檢查——而漏掉的那條不會報錯，
+    # 它只是讓守門形同虛設。
+
+    TASK_TRANSITIONS = {
+        "todo": {"in_progress", "cancelled"},
+        "in_progress": {"blocked", "done", "cancelled"},
+        "blocked": {"in_progress", "cancelled"},
+        "done": {"in_progress"},          # 打回，限人類
+        "cancelled": {"todo"},            # 取消可以復原，同樣限人類
+    }
+
+    def _is_human(me) -> bool:
+        return me["role"] == "human"
+
+    async def _board_status_change(kind: str, item_id: str, target: str,
+                                   participant_id: str | None) -> dict:
+        row = await _board_item_or_404(kind, item_id)
+        me = await _board_writer(row["room_id"], participant_id)
+        return row, me
+
+    @app.post("/api/board/tasks/{task_id}/status",
+              dependencies=[Depends(require_auth)])
+    async def set_task_status(
+        task_id: str, body: BoardStatusChange,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """推 Task 的狀態。
+
+        ⚠️ 設計文件的端點表把這件事寫成 `PATCH /api/board/tasks/{tid}` 的一個
+        欄位。改成獨立端點是刻意的：狀態要守門，而 PATCH 的其他欄位不必——
+        混在一起就會有人在加欄位時忘了那條路徑也會改到狀態。
+
+        誰能推：**持有認領的人，或人類成員**。打回（done → in_progress）與
+        復原取消只有人類——agent 不能把自己宣告完成的東西再打開，那等於讓它
+        自己撤銷自己的宣告。
+        """
+        row, me = await _board_status_change("task", task_id, body.status,
+                                             x_participant_id)
+        old = row["status"]
+        if body.status == old:
+            return {"ok": True, "id": task_id, "status": old, "unchanged": True}
+        if body.status not in TASK_TRANSITIONS.get(old, set()):
+            raise _err(409, "invalid_transition",
+                       f"Task 不能從「{old}」直接變成「{body.status}」",
+                       from_status=old, to_status=body.status,
+                       allowed=sorted(TASK_TRANSITIONS.get(old, set())))
+        human = _is_human(me)
+        if old in ("done", "cancelled") and not human:
+            raise _err(403, "human_only",
+                       "只有人類成員可以把已完成／已取消的任務重新打開——"
+                       "agent 不能撤銷自己剛做出的宣告")
+        if body.status == "cancelled" and not human and row["created_by"] != me["id"]:
+            raise _err(403, "human_only",
+                       "只有建立者或人類成員可以取消這張卡")
+        if not human and row["claim_state"] == "held" \
+                and row["claim_participant_id"] != me["id"]:
+            raise _err(403, "not_claim_holder",
+                       f"這張卡由 {row['claim_name'] or '別人'} 持有，"
+                       "只有持有者本人或人類成員可以推動它")
+        db = app.state.db
+        seq = await _next_board_seq(row["room_id"])
+        done = body.status == "done"
+        await db.execute(
+            "UPDATE board_task SET status=?, completed_by=?, completed_at=?,"
+            " board_seq=? WHERE id=?",
+            (body.status, me["id"] if done else None, _now() if done else None,
+             seq, task_id),
+        )
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "id": task_id, "status": body.status,
+                "board_seq": seq}
+
+    @app.post("/api/board/checklists/{checklist_id}/status",
+              dependencies=[Depends(require_auth)])
+    async def set_checklist_status(
+        checklist_id: str, body: BoardStatusChange,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """Checklist：open / done / cancelled。
+
+        完成的條件是**底下所有 task ∈ {done, cancelled}，且至少一個 done**。
+        後半句不能省：全部被取消的清單不算完成，那是「這一段不做了」，
+        與「這一段做完了」在週期驗收上是兩件完全不同的事。
+        """
+        row, me = await _board_status_change("checklist", checklist_id,
+                                             body.status, x_participant_id)
+        if body.status not in ("open", "done", "cancelled"):
+            raise _err(422, "invalid_transition",
+                       "Checklist 只有 open / done / cancelled 三種狀態")
+        old = row["status"]
+        if body.status == old:
+            return {"ok": True, "id": checklist_id, "status": old,
+                    "unchanged": True}
+        db = app.state.db
+        if body.status == "done":
+            tasks = await (
+                await db.execute(
+                    "SELECT status FROM board_task WHERE checklist_id=? AND deleted=0",
+                    (checklist_id,),
+                )
+            ).fetchall()
+            states = [r["status"] for r in tasks]
+            if not states or any(s not in ("done", "cancelled") for s in states) \
+                    or "done" not in states:
+                raise _err(409, "tasks_incomplete",
+                           "底下還有沒做完的任務，或這份清單裡沒有任何一項真的"
+                           "完成（全部取消不算完成）",
+                           total=len(states),
+                           done=states.count("done"),
+                           open=[s for s in states
+                                 if s not in ("done", "cancelled")])
+        if old == "done" and not _is_human(me):
+            raise _err(403, "human_only",
+                       "只有人類成員可以把已完成的清單重新打開")
+        if body.status == "cancelled" and not _is_human(me) \
+                and row["created_by"] != me["id"]:
+            raise _err(403, "human_only",
+                       "只有建立者或人類成員可以取消這份清單")
+        seq = await _next_board_seq(row["room_id"])
+        done = body.status == "done"
+        await db.execute(
+            "UPDATE board_checklist SET status=?, completed_by=?, completed_at=?,"
+            " board_seq=? WHERE id=?",
+            (body.status, me["id"] if done else None, _now() if done else None,
+             seq, checklist_id),
+        )
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "id": checklist_id, "status": body.status,
+                "board_seq": seq}
+
+    async def _objective_write(objective_id: str, participant_id: str | None):
+        row = await _board_item_or_404("objective", objective_id)
+        me = await _board_writer(row["room_id"], participant_id)
+        return row, me
+
+    async def _objective_set(row, fields: dict) -> int:
+        seq = await _next_board_seq(row["room_id"])
+        sets = ", ".join(f"{k}=?" for k in fields)
+        await app.state.db.execute(
+            f"UPDATE board_objective SET {sets}, board_seq=? WHERE id=?",
+            (*fields.values(), seq, row["id"]),
+        )
+        await app.state.db.commit()
+        await events.notify(row["room_id"])
+        return seq
+
+    @app.post("/api/board/objectives/{objective_id}/review",
+              dependencies=[Depends(require_auth)])
+    async def review_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """送審（閘 3）。任何 active 成員都可以——送審是「我這邊做完了」的
+        宣告，不是判斷。判斷在 verify，那一顆只有人類能按。"""
+        row, me = await _objective_write(objective_id, x_participant_id)
+        if row["status"] != "active":
+            raise _err(409, "invalid_transition",
+                       f"只有進行中的週期可以送審（目前是「{row['status']}」）",
+                       from_status=row["status"])
+        lists = await (
+            await app.state.db.execute(
+                "SELECT status FROM board_checklist WHERE objective_id=? AND deleted=0",
+                (objective_id,),
+            )
+        ).fetchall()
+        states = [r["status"] for r in lists]
+        # 閘 3：全部收尾，且至少一項真的完成。全取消的週期不算做完
+        if not states or any(s not in ("done", "cancelled") for s in states) \
+                or "done" not in states:
+            raise _err(409, "checklists_incomplete",
+                       "底下還有沒收尾的清單，或這個週期裡沒有任何一份清單真的"
+                       "完成（全部取消不算完成）",
+                       total=len(states), done=states.count("done"),
+                       open=[s for s in states if s not in ("done", "cancelled")])
+        seq = await _objective_set(row, {
+            "status": "review", "reviewed_by": me["id"], "reviewed_at": _now(),
+        })
+        return {"ok": True, "id": objective_id, "status": "review",
+                "board_seq": seq}
+
+    @app.post("/api/board/objectives/{objective_id}/verify",
+              dependencies=[Depends(require_auth)])
+    async def verify_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """確認無誤（閘 2、閘 4）。**只有人類成員**（Q4 定案）。
+
+        閘 4 的前提「送審者是 agent 時」不可以省：Q4 已經規定只有人類能確認，
+        若再無條件要求「確認者 ≠ 送審者」，房裡只有一個人類時，**他自己送審的
+        週期就再也沒有人能確認**，那條週期會永遠卡在 review。
+        閘 4 存在的目的是擋 agent 自己確認自己，不是擋人。
+        """
+        row, me = await _objective_write(objective_id, x_participant_id)
+        if not _is_human(me):
+            raise _err(403, "human_only",
+                       "確認週期無誤只有人類成員做得到——agent 只能送審。"
+                       "請在聊天室裡請人類確認。")
+        if row["status"] != "review":
+            raise _err(409, "objective_not_in_review",
+                       f"這個週期還沒送審（目前是「{row['status']}」），"
+                       "不能直接確認",
+                       from_status=row["status"])
+        reviewer = None
+        if row["reviewed_by"]:
+            reviewer = await (
+                await app.state.db.execute(
+                    "SELECT role FROM participant WHERE id=?", (row["reviewed_by"],)
+                )
+            ).fetchone()
+        reviewer_role = reviewer["role"] if reviewer else "agent"
+        # ⚠️ **這道閘在目前的規則下永遠不會觸發**（2026-09-01 實測：整段換成
+        # `if False:` 十四條測試全綠）。推導：上面已經擋掉非人類，所以 me 是
+        # 人類；而 `reviewed_by == me["id"]` 成立時送審者就是 me，也就是人類，
+        # 於是 `reviewer_role != "human"` 必為 False。
+        #
+        # 真正在擋「agent 自己確認自己」的是 Q4（只有人類能 verify），不是這裡。
+        # 留著是因為它在 Q4 被放寬的那一天就會立刻生效，而且屆時的語意是對的
+        # ——但**不要把它當成現行的保護**，也不要為它寫一條「證明它有效」的
+        # 測試：那條測試只會證明它自己。
+        if reviewer_role != "human" and row["reviewed_by"] == me["id"]:
+            raise _err(409, "self_verification_not_allowed",
+                       "送審的人不能自己確認——「確認無誤」若由宣告完成的同一個"
+                       "身分按下，那道閘等於不存在")
+        seq = await _objective_set(row, {
+            "status": "verified", "verified_by": me["id"], "verified_at": _now(),
+        })
+        return {"ok": True, "id": objective_id, "status": "verified",
+                "board_seq": seq}
+
+    @app.post("/api/board/objectives/{objective_id}/complete",
+              dependencies=[Depends(require_auth)])
+    async def complete_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """完成（閘 1）。必須先 verified。"""
+        row, me = await _objective_write(objective_id, x_participant_id)
+        if not _is_human(me):
+            raise _err(403, "human_only", "完成週期只有人類成員做得到")
+        if row["status"] != "verified":
+            raise _err(409, "objective_not_verified",
+                       f"這個週期還沒被確認無誤（目前是「{row['status']}」）"
+                       "——這正是需求說的「確認無誤之後才可完成」",
+                       from_status=row["status"])
+        seq = await _objective_set(row, {
+            "status": "done", "completed_by": me["id"], "completed_at": _now(),
+        })
+        return {"ok": True, "id": objective_id, "status": "done",
+                "board_seq": seq}
+
+    @app.post("/api/board/objectives/{objective_id}/reopen",
+              dependencies=[Depends(require_auth)])
+    async def reopen_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """打回。只有人類成員，且會把送審／確認的紀錄一併清掉。
+
+        不清的話，下一輪送審會留著上一輪的 `reviewed_by`，閘 4 就會拿一個
+        過期的送審者去比對——那是一道看起來還在、實際上比錯對象的閘。
+        """
+        row, me = await _objective_write(objective_id, x_participant_id)
+        if not _is_human(me):
+            raise _err(403, "human_only", "只有人類成員可以把週期打回")
+        if row["status"] not in ("review", "verified", "done"):
+            raise _err(409, "invalid_transition",
+                       f"「{row['status']}」的週期沒有東西可以打回",
+                       from_status=row["status"])
+        seq = await _objective_set(row, {
+            "status": "active", "reviewed_by": None, "reviewed_at": None,
+            "verified_by": None, "verified_at": None,
+            "completed_by": None, "completed_at": None,
+        })
+        return {"ok": True, "id": objective_id, "status": "active",
+                "board_seq": seq}
+
+    @app.post("/api/board/objectives/{objective_id}/cancel",
+              dependencies=[Depends(require_auth)])
+    async def cancel_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        row, me = await _objective_write(objective_id, x_participant_id)
+        if not _is_human(me) and row["created_by"] != me["id"]:
+            raise _err(403, "human_only",
+                       "只有建立者或人類成員可以取消這個週期")
+        if row["status"] not in ("active", "review"):
+            raise _err(409, "invalid_transition",
+                       f"「{row['status']}」的週期不能取消",
+                       from_status=row["status"])
+        seq = await _objective_set(row, {"status": "cancelled"})
+        return {"ok": True, "id": objective_id, "status": "cancelled",
+                "board_seq": seq}
 
     @app.post("/api/rooms/{room_id}/board/reorder",
               dependencies=[Depends(require_auth)])
