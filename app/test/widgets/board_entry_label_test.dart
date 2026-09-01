@@ -80,10 +80,35 @@ void main() {
     expect(h.label, contains('等你確認'));
   });
 
-  test('verified 不算「等你確認」——那一步 agent 自己按得動', () {
+  test('🔴 verified 也在等人類——漏掉它，週期會停在倒數第二格', () {
+    // Objective 是四段：active → review → verified → done。
+    // verify 與 complete 是兩個獨立的動作，**都只有人類推得動**。
+    // 漏算 verified 的後果比漏算 review 更糟：入口不亮、沒有通知，
+    // 而畫面上寫著「已確認」——看起來像收工了。
     final h = _snap(
       tasks: [_t('a')],
       objectives: [_o('o1', status: 'verified')],
+    ).entryHint;
+    expect(h.needsYou, isTrue);
+    expect(h.label, '1 等你收尾');
+  });
+
+  test('review 與 verified 同時存在時合計，文案不假裝只有一種', () {
+    final h = _snap(
+      tasks: [_t('a')],
+      objectives: [
+        _o('o1', status: 'review'),
+        _o('o2', status: 'verified'),
+      ],
+    ).entryHint;
+    expect(h.needsYou, isTrue);
+    expect(h.label, '2 等你');
+  });
+
+  test('done 不再需要任何人', () {
+    final h = _snap(
+      tasks: [_t('a')],
+      objectives: [_o('o1', status: 'done')],
     ).entryHint;
     expect(h.needsYou, isFalse);
     expect(h.label, '0/1');

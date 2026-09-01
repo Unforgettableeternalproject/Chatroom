@@ -192,12 +192,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                           weight: FontWeight.w600,
                           color: o.status == 'done' ? s.inkMute : s.inkTitle)),
                 ),
-                if (o.status == 'verified')
+                // ⚠️ 這兩個標籤第一版寫反了。`review` 是「送審完、**等人類
+                // 確認**」，`verified` 是「已確認、**等人類按完成**」——
+                // 兩者都只有人類推得動，所以**兩者都是金色**。
+                // 讓 verified 退成灰色會變成畫面主動說「已經好了」，
+                // 而那個週期其實還停在倒數第二格（測試端 2026-09-01 指出）。
+                if (o.status == 'review')
                   Text('等你確認',
                       style: UepText.mono(size: 9, color: UepColors.gold))
-                else if (o.status == 'review')
-                  Text('審核中',
-                      style: UepText.mono(size: 9, color: s.inkMute)),
+                else if (o.status == 'verified')
+                  Text('等你收尾',
+                      style: UepText.mono(size: 9, color: UepColors.gold)),
               ],
             ),
             const SizedBox(height: 3),

@@ -489,12 +489,26 @@ class BoardSnapshot {
   /// 畫面怎麼排都不該改變它，而且**測試要能測到它本人**而不是它的副本。
   BoardEntryHint get entryHint {
     final live = tasks.values.where((t) => !t.deleted);
-    // 送審中＝在等人類確認。verified 是已經確認過、等著結束，那一步
-    // agent 自己按得動，不必叫人
-    final waiting =
+    // ⚠️ **`review` 與 `verified` 都在等人類**，第一版只算了 review。
+    // Objective 是四段（active → review → verified → done），而最後兩步
+    // 都只有人類推得動：`verify` 與 `complete` 是兩個獨立的動作。
+    //
+    // 漏掉 verified 的後果比漏掉 review 更糟：那個週期會停在**倒數第二格**，
+    // 入口不亮、沒有通知，而畫面上寫著「已確認」——看起來像收工了。
+    // 不是沒人被叫醒，是畫面主動告訴你已經好了（測試端 2026-09-01 指出）。
+    final review =
         objectives.values.where((o) => o.status == 'review').length;
-    if (waiting > 0) {
-      return BoardEntryHint(label: '$waiting 等你確認', needsYou: true);
+    final verified =
+        objectives.values.where((o) => o.status == 'verified').length;
+    if (review + verified > 0) {
+      return BoardEntryHint(
+        label: switch ((review, verified)) {
+          (0, final v) => '$v 等你收尾',
+          (final r, 0) => '$r 等你確認',
+          _ => '${review + verified} 等你',
+        },
+        needsYou: true,
+      );
     }
     final orphans = live.where((t) => t.isOrphaned).length;
     if (orphans > 0) return BoardEntryHint(label: '$orphans 孤兒');
