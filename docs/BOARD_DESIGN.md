@@ -4,10 +4,16 @@
 > 「Chatroom 開發 09/01」房 #11，補充約束來自「開發Novia (除錯)」#14。
 > 審查與定案回填：開發Novia (除錯)，同日（房 #20 / #27）。
 >
-> **狀態：規劃已定案，尚未實作。** 第 10 節七題全部由艾斯維爾拍板完成
-> （另加一題由 Q4 的答案衍生），答案已回填到各章節；第 9 節的票可以動工。
+> **狀態：規劃已定案，實作進行中。** 第 10 節七題全部由艾斯維爾拍板完成
+> （另加一題由 Q4 的答案衍生），答案已回填到各章節。
 > 審查抓到的五處缺陷已改寫進 §2.2 / §4.4 / §5.4 / §6，並在 §1.4 補上原本
 > 缺席的 Objective 權限表。
+>
+> **2026-09-01 下午：設計稿到齊**（`Board 外觀設計.dc.html`，claude.ai/design
+> 專案 `b61d1f79`）。§8 依設計稿改寫（初版的看板欄版面**作廢**），
+> §1.3 補上五個名字快照欄位與 `orphaned_reason`（§1.3.1 是它們的通則），
+> §2.3 的孤兒通知改為**獨立系統訊息**、§4.4 的 supervisor 退場改為
+> **標記而不清空**（兩者皆艾斯維爾同日拍板，依設計）。
 
 ---
 
@@ -129,8 +135,13 @@ CREATE TABLE IF NOT EXISTS board_task (
     -- ''（未認領）/ held（持有中）/ orphaned（持有者已不在房內）
     -- released 不存：主動放棄就清成 ''，那是「這張卡沒人做」的事實
     claim_state          TEXT NOT NULL DEFAULT '',
+    claim_kind           TEXT NOT NULL DEFAULT '',  -- 認領當下的 kind（見下）
     claimed_at           TEXT,
     orphaned_at          TEXT,
+    -- 為什麼不在了：idle（閒置移出）/ left（自行離開）/ kicked（被移出）/
+    -- subagent（子代理回收）。**只有離場的當下知道**，事後從任何一張表都
+    -- 查不回來——而設計稿的孤兒橫幅與系統訊息要靠它分辨措辭
+    orphaned_reason      TEXT NOT NULL DEFAULT '',
 
     -- ── 與既有機制的連結（§3）──────────────────────────────
     -- 來源訊息的房內 seq。**存 seq 不存 message_id**，與 reply_to_seq 同一個
@@ -140,7 +151,12 @@ CREATE TABLE IF NOT EXISTS board_task (
     -- 指派一個沒醒著的 agent 然後把卡鎖起來，等於卡片永遠不會動
     assignee_participant_id TEXT REFERENCES participant(id),
 
-    created_by   TEXT REFERENCES participant(id),
+    -- 誰指定的（設計稿：「Swift-Falcon　奈留指定 · 建議」）
+    assigned_by       TEXT REFERENCES participant(id),
+    assigned_by_name  TEXT NOT NULL DEFAULT '',
+
+    created_by      TEXT REFERENCES participant(id),
+    created_by_name TEXT NOT NULL DEFAULT '',  -- 見下
     completed_by TEXT REFERENCES participant(id),
     completed_at TEXT,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -154,13 +170,42 @@ CREATE INDEX IF NOT EXISTS idx_btask_claim
     ON board_task(claim_participant_id) WHERE claim_state = 'held';
 ```
 
-`room` 追加兩欄（走 `MIGRATIONS`）：
+`room` 追加欄位（走 `MIGRATIONS`）：
 
 ```
 ("room", "board_seq", "board_seq INTEGER NOT NULL DEFAULT 0"),
 ("room", "board_supervisor_session_key",
  "board_supervisor_session_key TEXT NOT NULL DEFAULT ''"),
+-- supervisor 也要顯示得出名字與種類，且它離場後不清空（§4.4）
+("room", "board_supervisor_name",
+ "board_supervisor_name TEXT NOT NULL DEFAULT ''"),
+("room", "board_supervisor_kind",
+ "board_supervisor_kind TEXT NOT NULL DEFAULT ''"),
+("room", "board_supervisor_set_by",
+ "board_supervisor_set_by TEXT NOT NULL DEFAULT ''"),
+("room", "board_supervisor_set_at",
+ "board_supervisor_set_at TEXT NOT NULL DEFAULT ''"),
 ```
+
+### 1.3.1 🔴 凡是參照 participant 的欄位，都要同時存名字快照
+
+`claim_name` 存快照的理由（持有者離場之後 participant 查不回名字，而「上一個
+是誰」正是接手的人最需要知道的一件事）**對 board 上每一處 participant 參照
+一字不差地成立**。初版只有 `claim_name` 做了，其餘三處沿用 id ⇒ 設計稿上
+處處要顯示的名字，到了離場之後全部變成空白。
+
+因此成對存放：
+
+| 參照 | 快照欄位 | 為什麼查不回 |
+|---|---|---|
+| `claim_participant_id` | `claim_name` / `claim_kind` | 持有者被 sweeper 掃出去、session 結束 |
+| `created_by` | `created_by_name` | **建立者常常是 subagent**——回收之後那一列可能整個不在了，這是所有參照裡最先斷的一種 |
+| `assigned_by` | `assigned_by_name` | 指定的人也會離開 |
+| `board_supervisor_session_key` | `board_supervisor_name` / `_kind` | 它本來就是**房外**身分，指定當下可能還沒進房 |
+
+⚠️ `assignee_participant_id`（被指定的人）**不存快照**：他是「現在該由誰做」，
+不是歷史紀錄——人不在了就該看得出「這個指定已經沒有意義」，而不是留一個
+看起來還有效的名字。這條與上面四個相反，是刻意的。
 
 ⚠️ `idx_btask_claim` 是 partial index，依賴 `board_task` 已存在
 → 與 `idx_participant_parent` 同樣的理由，若採 `MIGRATIONS` 路徑新增欄位，
@@ -333,13 +378,25 @@ RETURNING id, title, claim_name
 **為什麼不清空 `claim_participant_id`**：清掉就查不出「這張卡上一個是誰在做」，
 而那正是接手的人最需要知道的一件事。保留欄位、改狀態，成本是一個字串欄位。
 
-**要不要發系統訊息**：`_depart_with_subagents` 之後的
-`_post_message(system_event="idle_removed")` 已經在講「某某離開了」。
-建議**不另發一則**，改成在該則的內容尾巴附一句
-「（連帶釋放 N 張認領中的 Task）」，並用 `system_event` 不變。
-理由：一個人離開發兩則系統訊息是噪音，而這兩件事本來就是同一件事的兩面。
-⚠️ subagent 回收（第 2 步）**刻意沒有系統訊息**，那條路徑就只 `events.notify`，
-Board 的變動靠 §5 的 cursor 被看見，不喚醒任何人。
+**要不要發系統訊息**：✅ **要，發獨立的一則**（艾斯維爾 2026-09-01 拍板，
+依設計稿；本節初版寫的「附在離場訊息尾巴」已作廢）。
+
+```
+Kite 因閒置移出，「board_seq 增量 cursor」現在沒有人在上面。
+```
+
+理由是**主詞不同**。附在「某某離開了」底下的話，那句話的主詞是那個人，
+而讀的人在意的是**那張卡**——「誰不在了」與「哪張卡沒人做了」是兩件事，
+後者才是需要有人接手的那件。設計稿也把它畫成獨立訊息並帶「在板上開啟 →」。
+
+⚠️ **這則不 mention 任何人**（沿用 §4.3：孤兒不是誰的待辦，是板上的事實）。
+它靠 board 入口的「N 孤兒」被看見，不喚醒任何人。
+⚠️ subagent 回收（第 2 步）**維持不發**——那條路徑連離場訊息都沒有，
+Board 的變動靠 §5 的 cursor 被看見。
+
+⚠️ 這則訊息要寫得出「因閒置移出」還是「session 已結束」，
+所以 `_orphan_claims()` 必須收一個 `reason`，並寫進 `board_task.orphaned_reason`
+（見 §1.3）——**那個資訊只有離場的當下知道，事後從任何一張表都查不回來**。
 
 ### 2.4 re-claim：不自動回收
 
@@ -476,10 +533,15 @@ supervisor 是一個**角色**，agent 重啟換 participant 之後角色應該�
   Hub 累積變動，每 `CHATROOM_BOARD_DIGEST_INTERVAL`（預設 300 秒）
   或滿 N 筆才發一則彙整的系統訊息並 mention supervisor。
 - **退場**：supervisor 的 session 在房內已無 active participant 時，
-  清空欄位並發一則 `system_event="board_supervisor_left"` 的系統訊息。
+  **標記而不是清空**（艾斯維爾 2026-09-01 拍板，依設計稿；初版寫的
+  「清空欄位」已作廢）——比照孤兒 Task 的同一套處理：名字留著、標成
+  「已不在房內」、提示需要重新指定，並發一則
+  `system_event="board_supervisor_left"` 的系統訊息。
   ⚠️ **不可以安靜清空**——那會變成「沒有人在監督，而且沒有人知道」，
   這正是本專案 PM 記憶裡反覆出現的失效形狀（安靜地不做事）。
-  清空的判定接在 §2.3 那同一個離場路徑上。
+  而清空**連名字都不留**，畫面上與「從來沒有指定過」一模一樣，
+  是同一個病更嚴重的版本：連「本來有人在看」這件事都消失了。
+  判定接在 §2.3 那同一個離場路徑上。
 - 🔴 **退場判定只接在離場路徑上，不可以做成「定期檢查有沒有 active
   participant」**（審查發現）。`board_supervisor_session_key` 存的是
   **房外**身分——被指定的 agent 在設定的當下多半還沒進房（那正是要用
@@ -669,10 +731,37 @@ app/lib/screens/board/board_screen.dart
 app/lib/widgets/board_task_card.dart
 ```
 
-**Visual**：Objective 選擇器（頂端下拉／橫向 chip）→ 底下 Checklist 為欄，
-Task 為卡的看板。卡片上顯示認領者的 `KindBadge`（既有 widget）＋名字；
-`orphaned` 的卡加一條橘色邊與「認領者已離線」標籤——那正是最需要被人看到的
-一種卡。窄螢幕（<900）退成 Checklist 摺疊列表。
+**Visual**：✅ **以設計稿為準**（`Board 外觀設計.dc.html`，claude.ai/design 專案
+`b61d1f79`，與 Chatroom 本體同一個專案）。本節初版寫的「Checklist 為欄、Task
+為卡的看板」**是錯的，作廢**——設計走的是左右分欄：
+
+- **左**：Objective 清單（每條顯示「N 階段 · N 任務 · N 孤兒」與狀態）
+- **右**：單一 Objective 展開。Checklist 是**可摺疊的垂直區段**（`5 / 6 DONE`），
+  不是看板欄
+- **Task 詳情**：右側 420px 抽屜，不是新頁
+- 八個 artboard：主畫面／卡片全狀態／詳情／建立／收尾三段／聊天室入口／
+  supervisor／空板與封存板
+
+**卡片的兩個維度怎麼畫**（設計師對 §2.1「認領與狀態正交」的答案，這是整份
+設計的核心，實作不要自己改）：
+
+> **色軸講誰，徽章講到哪。**
+
+| 左側色軸 | 意思 |
+|---|---|
+| 實色（持有者的 kind 色） | 現任持有者還在房裡 |
+| **斷開 + 名字劃掉** | **孤兒。狀態徽章不動**——「變的是人不是進度」 |
+| 半透明 | 有人被指名（`assignee`），但還沒有人站上去 |
+| 中性線色 | 沒有人 |
+| 無軸（收合成單行） | 已完成——事情結束，誰做的退成註記 |
+
+⚠️ **認領失敗畫成事實，不是錯誤**：卡片直接換成「已經被 X 領走了（13:48）」，
+沒有紅字、沒有重試按鈕（§2.2 那條 409 在 UI 上的樣子）。
+
+⚠️ **人類與 agent 看到的不是同一個畫面**：Objective 收尾處，人類看到「確認 /
+打回」兩顆按鈕，agent 看到的是「你已於 14:26 送審。等奈留確認。」——
+**沒有那顆按鈕**，不是按了才失敗（Q4）。聊天室入口同理：agent 的入口只亮
+自己的事（可撿回、被指名），「等你確認」在 agent 那裡不存在。
 
 **唯一會動到既有檔的兩處**（都排在最後一張票）：
 - `app/lib/app.dart` — 加一條 GoRoute
@@ -693,14 +782,14 @@ Q1 選並存、Q3 選「Objective ＝ 週期／Checklist ＝ 階段分組」，�
 | **T-01** | `db.py` 三張 board 表 + room 兩個欄位 + partial index | — | 舊 DB 開得起來、`_migrate` 可重入跑兩次不炸；新表索引存在 | 🔴 `db.py` |
 | **T-02** | `GET /board` 讀取端點 + `board_seq` 增量契約 + tombstone | T-01 | `after_board_seq=0` 回全量；改一筆後只回那一筆；軟刪除的列帶 `deleted:true` 回得來 | 🔴 `app.py` |
 | **T-03** | Objective／Checklist／Task 的 CRUD 與批次排序 | T-02 | 建/改/軟刪各自推進 `board_seq`；批次排序只領一個號；**刪 Objective 後底下 checklist／task 的 tombstone 都撈得到**（§6） | 🔴 `app.py` |
-| **T-04** | claim／release 的 CAS + 孤兒釋放接進四條離場路徑 | T-03 | 兩個 participant 併發 claim 同一張，一成一敗回 409；**成功那次回應要與資料庫實際狀態一致**（§2.2 的 `fetchone` 判定，**這條測試要先紅**）；sweeper 掃掉持有者後該卡變 `orphaned` 且保留 `claim_name`；orphaned 可被別人 claim | 🔴 `app.py` |
+| **T-04** | claim／release 的 CAS + 孤兒釋放接進四條離場路徑 + **孤兒的獨立系統訊息** | T-03 | 兩個 participant 併發 claim 同一張，一成一敗回 409；**成功那次回應要與資料庫實際狀態一致**（§2.2 的 `fetchone` 判定，**這條測試要先紅**）；sweeper 掃掉持有者後該卡變 `orphaned` 且保留 `claim_name`／`claim_kind`；**四條離場路徑各自寫進不同的 `orphaned_reason`**；孤兒訊息**不 mention 任何人**且 subagent 回收那條**不發**；orphaned 可被別人 claim | 🔴 `app.py` |
 | **T-05** | 狀態機守門：Objective 四道閘、Checklist 完成條件、打回限人類 | T-03 | agent 送審後自己 verify → 409 `self_verification_not_allowed`（**先紅**）；**人類送審後自己 verify → 成功**（閘 4 的人類例外，**也要先紅**）；agent 呼叫 verify 一律 403 `human_only` | 🔴 `app.py` |
 | **T-06** | 兩條通知規則（system message + mentions） | T-05 | Task 完成後 `mentions` 不含完成者且含其餘 active 成員；Objective 完成含全員；其餘變動 `mentions` 為空 | 🔴 `app.py` |
-| **T-07** | Supervisor 設定／摘要／退場清空 | T-06、Q6 | 非建立者設定回 403；supervisor 離場後欄位清空且房內有系統訊息 | 🔴 `app.py` |
+| **T-07** | Supervisor 設定／摘要／**退場標記（不清空）** | T-06、Q6 | 非建立者設定回 403；**設定當下 supervisor 不在房裡不會被自己的退場規則清掉**（§4.4）；離場後名字與種類**留著**、標成已不在房內，且房內有系統訊息 | 🔴 `app.py` |
 | **T-08** | `/updates` 收 `after_board_seq` 參數 + 回應加 `board_seq` + **等待迴圈加返回條件**；`/ws` 同步 | T-02 | **board 變動（不發任何訊息的那種）要讓掛著的 long-poll 立刻返回**，不是等逾時（§5.4，**這條測試要先紅**）；沒帶 `after_board_seq` 的舊 client 行為不變、不會空轉；`you_were_mentioned` 不受影響 | 🔴 `app.py`（與既有 updates 端點同一段） |
 | **T-09** | 四個 MCP 工具 + `hub.py` 方法 + `guide.py` 一節 | T-08 | bridge 測試綠；`chatroom_board` 省略 cursor 時沿用本機水位 | 🔴 `server.py` / `guide.py` |
 | **T-10** | Flutter model + api + providers | T-02 | 單元測試：增量合併（新／改／刪三種）正確套用到本機快取 | 🟢 新檔 |
-| **T-11** | `board_screen.dart` + 卡片 widget（Visual） | T-10 | `flutter analyze` 0；widget test：orphaned 卡顯示離線標籤 | 🟢 新檔 |
+| **T-11** | `board_screen.dart` + 卡片 widget（**照設計稿**，§8） | T-10 | `flutter analyze` 0；widget test：**五種軸狀態各畫對**（實色／斷軸+劃掉／半透明／中性／收合）、**孤兒卡的狀態徽章不變**、認領失敗顯示為事實不是錯誤、**agent 視角沒有 verify 按鈕**；缺 `claim_kind`／`orphaned_reason` 時優雅退化 | 🟢 新檔 |
 | **T-12** | 路由 + `chat_screen` 入口按鈕 | T-11 | 從聊天進得去、回得來 | 🔴 `app.dart` + `chat_screen.dart`（**獨占**） |
 | **T-13** | 文件：`PLANNING.md` §4 新增一節、`CHATROOM.md` 同步 | T-09 | — | 🟡 `PLANNING.md` |
 
