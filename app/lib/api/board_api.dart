@@ -71,7 +71,6 @@ class BoardApi {
     String priority = 'normal',
     int? sourceSeq,
     String? assigneeParticipantId,
-    String? inviteSessionKey,
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -82,9 +81,6 @@ class BoardApi {
             'priority': priority,
             'source_seq': ?sourceSeq,
             'assignee_participant_id': ?assigneeParticipantId,
-            // 順手用既有的 assignment 把人叫進房。兩張表各自維持原本的語意，
-            // 這只是一條橋——人進來之後照樣要自己 claim
-            'invite_session_key': ?inviteSessionKey,
           },
           options: Options(headers: {'X-Participant-Id': participantId}),
         );
