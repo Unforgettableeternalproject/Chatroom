@@ -5231,12 +5231,18 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- Session 名錄 ----------
 
     @app.get("/api/sessions", dependencies=[Depends(require_auth)])
-    async def list_sessions(include_human: bool = False):
+    async def list_sessions(include_human: bool = False,
+                            exclude_room: str = ""):
         """列出 Hub 見過且仍在存活窗內的 session（指派 UI 的掃描來源）。
 
         status：last_seen 在 active window 內為 ``active``，否則 ``idle``；
         超過 session_ttl 的不列出。附上該 session 目前所在的房間與房內名稱，
         以及最近一次使用過的顯示名稱，讓使用者認得出「這是誰」。
+
+        ``exclude_room`` 給房間 id 時，**已經是該房 active 成員的 session
+        不列出**——指派是「請一個還沒在場的人進來」，把已經在場的人列進候選
+        只會讓人指派他一次，然後得到一個什麼都沒發生的結果（join 是冪等的）。
+        清單本身不表態的話，那個錯誤要等到指派送出去才發現。
         """
         db = app.state.db
         now = datetime.now(timezone.utc)
@@ -5246,6 +5252,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         params: list = [ttl_cutoff]
         if not include_human:
             cond += " AND kind != 'human'"
+        if exclude_room:
+            # 以 session_key 排除，不是 participant_id——同一個 session 重新
+            # 加入會換一個 participant_id，比對後者等於沒排除
+            cond += (" AND session_key NOT IN (SELECT session_key FROM participant"
+                     " WHERE room_id=? AND status='active')")
+            params.append(exclude_room)
         rows = await (
             await db.execute(
                 f"SELECT * FROM session WHERE {cond} ORDER BY last_seen_at DESC",
