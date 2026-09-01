@@ -3622,9 +3622,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         after_seq: int = 0,
         timeout: float = Query(default=25.0, le=55.0),
         subagents_since: str = "",
+        after_board_seq: int | None = None,
         x_participant_id: str | None = Header(default=None),
     ):
         """long-poll：有 seq > after_seq 的訊息立即返回，否則掛到 timeout。
+
+        ``after_board_seq`` 是 board 的水位。**省略＝這個 client 不關心 board**
+        ——⚠️ 不可以當成 0：當成 0 的話，任何已經有 board 資料的房間都會讓舊
+        client 的 long-poll 立刻返回，變成一個 25 秒 25 次的空轉迴圈。
 
         回應一律附上 ``room_status``——房間封存時成員身分不會失效（封存房仍可
         讀），所以 watcher 光靠錯誤碼看不出房間已經沒了，會一直空轉 long-poll。
@@ -3698,6 +3703,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "style_hint": style_hint,
                 "subagent_events": subs,
                 "subagents_cursor": cursor,
+                # board 的目前水位。client 比對自己記的那個數字就知道要不要
+                # 去拉 board——不必為 board 另開一條 long-poll，而
+                # events.RoomEvents 是 per-room 的單一 Condition，同一個房掛
+                # 兩條會互相搶醒
+                "board_seq": await _board_seq(room_id),
             }
 
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
@@ -3723,6 +3733,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             subs_peek, _ = await _subagent_delta(room_id, me["id"], subagents_since)
             if subs_peek:
                 return await _out([], after_seq, await _status())
+            # 🔴 board 變動**不進訊息流**（§4.3 大部分變動不發訊息），所以上面
+            # 兩個查詢都看不到它。少了這一段，events.notify 把我們叫醒之後
+            # 只會發現 rows 空、subs 空、還沒到 deadline，然後**再掛回去**
+            # ——結果不是「board 一動就拿到新水位」，而是「最多延遲一整個
+            # poll 週期」。而且它看起來完全正常：逾時返回本來就是正常路徑，
+            # 回應裡的 board_seq 也是對的，只是慢，沒有任何地方會報錯。
+            if after_board_seq is not None:
+                if await _board_seq(room_id) > after_board_seq:
+                    return await _out([], after_seq, await _status())
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 return await _out([], after_seq, await _status())
