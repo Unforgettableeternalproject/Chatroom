@@ -531,6 +531,26 @@ def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     return {**(data if isinstance(data, dict) else {"result": data}), **scope}
 
 
+@mcp.tool()
+@_guard
+def chatroom_hold(room_id: str, subagent: str = "") -> dict:
+    """替自己掛上 hold 標記；再呼叫一次即解除。
+
+    掛上後在時限內（預設 1 小時，Hub 端 CHATROOM_HOLD_MAX）不會因閒置被
+    presence sweeper 移出房間。要開始跑長測試、長編譯這種一段時間內完全
+    不會碰聊天室的工作時掛上，**做完記得再呼叫一次解除**。
+    與 chatroom_heartbeat 的差別：heartbeat 得中途反覆打，hold 掛一次就好。
+    hold 有時限上限——掛著就 crash 的 agent 沒有人會來解除，所以不做無限期；
+    回傳的 ``hold_until`` 是到期時間，工作比那更久就到期後再掛一次。
+    ``subagent`` 填 handle 就是替那個子代理掛（子代理的閒置時限更短，
+    長工作前更需要）。
+    """
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(room_id, "POST", f"/api/rooms/{room_id}/hold",
+                         participant_id=participant_id)
+    return {**(data if isinstance(data, dict) else {"result": data}), **scope}
+
+
 # ---------- 訊息 ----------
 
 

@@ -30,6 +30,13 @@ class Config:
     subagent_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_SUBAGENT_TIMEOUT", "900"))
     )
+    # hold 標記單次的最長有效時間（秒），預設 1 小時。agent 跑長測試／長編譯
+    # 時替自己掛上 hold，時限內不會被閒置移除。**刻意不做無限期**——上了
+    # hold 之後 crash 的 agent 沒有人會來解除，無上限等於在成員列上留一個
+    # 永遠掃不掉的殘影；真的要更久就到期後再掛一次
+    hold_max: float = field(
+        default_factory=lambda: float(os.environ.get("CHATROOM_HOLD_MAX", "3600"))
+    )
     # presence sweeper 掃描間隔（秒）
     sweep_interval: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_SWEEP_INTERVAL", "30"))

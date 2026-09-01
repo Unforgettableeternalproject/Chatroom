@@ -2513,6 +2513,35 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _participant(x_participant_id, room_id)
         return {"ok": True}
 
+    @app.post("/api/rooms/{room_id}/hold", dependencies=[Depends(require_auth)])
+    async def toggle_hold(room_id: str, x_participant_id: str | None = Header(default=None)):
+        """hold 標記切換：掛上後在時限內不會被閒置移除，再呼叫一次即解除。
+
+        與 heartbeat 的分工：heartbeat 是「我還在」，得反覆打；hold 是
+        「我要安靜地忙一陣子，別把我當閒置」，掛一次就好。時限上限
+        （``cfg.hold_max``）擋的是掛著 hold 就 crash 的 agent——沒有人會來
+        替它解除，無上限的 hold 等於永遠掃不掉的殘影。
+        已過期的 hold 視同沒有 hold：此時呼叫是「重新掛上」而不是「解除」。
+        """
+        await _room_or_404(room_id, allow_archived=True)
+        p = await _participant(x_participant_id, room_id)
+        db = app.state.db
+        now = datetime.now(timezone.utc)
+        held = bool(p["hold_until"] and p["hold_until"] > now.isoformat())
+        if held:
+            await db.execute(
+                "UPDATE participant SET hold_until=NULL WHERE id=?", (p["id"],)
+            )
+            await db.commit()
+            return {"ok": True, "held": False, "hold_until": None}
+        until = (now + timedelta(seconds=cfg.hold_max)).isoformat()
+        await db.execute(
+            "UPDATE participant SET hold_until=? WHERE id=?", (until, p["id"])
+        )
+        await db.commit()
+        return {"ok": True, "held": True, "hold_until": until,
+                "max_seconds": cfg.hold_max}
+
     # ---------- 訊息 ----------
 
     @app.post("/api/rooms/{room_id}/messages", dependencies=[Depends(require_auth)])
@@ -4819,11 +4848,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         sub_cutoff = (
             now - timedelta(seconds=cfg.subagent_timeout)
         ).isoformat()
+        # hold 中的成員不算閒置——兩條移除查詢共用這一段。已過期的 hold
+        # 不用清欄位，條件不成立自然失效
+        now_iso = now.isoformat()
+        not_held = " AND (hold_until IS NULL OR hold_until < ?)"
         stale_subs = await (
             await db.execute(
                 "SELECT id, room_id, display_name, parent_id FROM participant"
-                " WHERE status='active' AND ephemeral=1 AND last_seen_at < ?",
-                (sub_cutoff,),
+                " WHERE status='active' AND ephemeral=1 AND last_seen_at < ?"
+                + not_held,
+                (sub_cutoff, now_iso),
             )
         ).fetchall()
         for s in stale_subs:
@@ -4848,8 +4882,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # ephemeral 已在上面用自己的時限處理過，這裡排除
                 "SELECT id, room_id, display_name, session_key FROM participant"
                 " WHERE status='active' AND role='agent' AND ephemeral=0"
-                " AND last_seen_at < ?",
-                (cutoff,),
+                " AND last_seen_at < ?" + not_held,
+                (cutoff, now_iso),
             )
         ).fetchall()
         for p in idle:

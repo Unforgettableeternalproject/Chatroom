@@ -56,7 +56,10 @@ CREATE TABLE IF NOT EXISTS participant (
     -- 給前一個同名者的（名字在離開後會被釋出重用），不該把新來的人叫醒。
     -- NULL＝這個欄位存在之前就在房裡的舊成員，一律當 0（計入全部歷史，
     -- 維持現行為）
-    joined_seq   INTEGER
+    joined_seq   INTEGER,
+    -- hold 標記的到期時間；NULL＝沒有 hold。時限內 presence sweeper 不會
+    -- 因閒置移除這個成員（跑長測試、長編譯時自行掛上，做完再解除）
+    hold_until   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -411,6 +414,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("board_task", "orphaned_reason", "orphaned_reason TEXT NOT NULL DEFAULT ''"),
     ("board_task", "assigned_by", "assigned_by TEXT REFERENCES participant(id)"),
     ("board_task", "assigned_by_name", "assigned_by_name TEXT NOT NULL DEFAULT ''"),
+    # hold 標記的到期時間。舊資料一律 NULL＝沒有 hold，正是這個欄位存在
+    # 之前的事實
+    ("participant", "hold_until", "hold_until TEXT"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
