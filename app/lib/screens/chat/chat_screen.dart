@@ -16,6 +16,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../core/util/image_bytes.dart';
 import '../../core/util/member_nesting.dart';
 import '../../core/util/relative_time.dart';
+import '../../models/board.dart';
 import '../../models/message.dart';
 import '../../api/attachments_api.dart';
 import '../../api/messages_api.dart';
@@ -23,6 +24,7 @@ import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
 import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
+import '../../state/board_providers.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
@@ -1386,6 +1388,11 @@ class _RoomHeader extends ConsumerWidget {
               },
             )
           else ...[
+            _BoardAction(roomId: roomId),
+            const SizedBox(width: 8),
+            // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
+            // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
+            // 重要」無處可去——Board 上沒有一段話的位置
             _HeaderAction(
               label: '❖ 釘選 $pinnedCount',
               onTap: () => context.go('/rooms/$roomId/pinned'),
@@ -1414,10 +1421,18 @@ class _RoomHeader extends ConsumerWidget {
 }
 
 class _HeaderAction extends StatelessWidget {
-  const _HeaderAction({required this.label, required this.onTap});
+  const _HeaderAction({
+    required this.label,
+    required this.onTap,
+    this.accent = false,
+  });
 
   final String label;
   final VoidCallback onTap;
+
+  /// 點亮成金色。**留給「需要你動手、而且只有你能動」的那一種**——
+  /// 每個按鈕都在喊的話，就沒有一個在喊了。
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
@@ -1426,12 +1441,50 @@ class _HeaderAction extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(border: Border.all(color: s.line)),
+        decoration: BoxDecoration(
+          border: Border.all(color: accent ? UepColors.gold : s.line),
+        ),
         child: Text(
           label.toUpperCase(),
-          style: UepText.mono(size: 10, color: s.inkSoft, letterSpacing: 1.4),
+          style: UepText.mono(
+            size: 10,
+            color: accent ? UepColors.gold : s.inkSoft,
+            letterSpacing: 1.4,
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// 聊天室 app bar 上的 Board 入口（設計稿 artboard 06）。
+///
+/// 四種狀態同一個位置，**只有一種點亮金色**：
+///
+/// | 狀態 | 顯示 | 為什麼 |
+/// |---|---|---|
+/// | 平常 | `❖ BOARD` | 板上沒有需要你的東西 |
+/// | 有進度 | `❖ BOARD 8/14` | 數字是資訊不是警示，**不上色** |
+/// | 有孤兒 | `❖ BOARD 2 孤兒` | 有卡看起來有人在做、實際上沒有 |
+/// | 等你確認 | `❖ BOARD 1 等你確認`（金） | 需要你動手，而且**只有你能動** |
+///
+/// ⚠️ board 讀不到時退成最平常那一種，**不擋聊天**——聊天室不該因為附屬
+/// 功能的一次請求失敗而顯示錯誤。
+class _BoardAction extends ConsumerWidget {
+  const _BoardAction({required this.roomId});
+
+  final String roomId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // 顯示哪一種是 BoardSnapshot.entryHint 說了算——那個優先序是規格，
+    // 不該在畫面這側再抄一份
+    final hint = ref.watch(boardProvider(roomId)).value?.entryHint ??
+        const BoardEntryHint();
+    return _HeaderAction(
+      label: hint.label.isEmpty ? '❖ Board' : '❖ Board ${hint.label}',
+      accent: hint.needsYou,
+      onTap: () => context.go('/rooms/$roomId/board'),
     );
   }
 }

@@ -394,6 +394,18 @@ class BoardDelta {
       );
 }
 
+/// Board 入口要顯示的東西。
+@immutable
+class BoardEntryHint {
+  const BoardEntryHint({this.label = '', this.needsYou = false});
+
+  /// 接在「❖ Board」後面的那一小段。空字串＝平常，板上沒有需要你的東西。
+  final String label;
+
+  /// 點亮。**只給「需要你動手、而且只有你能動」的那一種。**
+  final bool needsYou;
+}
+
 /// 本機的 board 快取。不可變——每次合併產生一份新的。
 @immutable
 class BoardSnapshot {
@@ -465,6 +477,30 @@ class BoardSnapshot {
       reclaimable: delta.reclaimable,
       supervisor: delta.supervisor,
     );
+  }
+
+  /// 聊天室 app bar 上那顆 Board 入口該顯示什麼（設計稿 artboard 06）。
+  ///
+  /// 四種狀態同一個位置，**只有「等你確認」點亮**：那是唯一需要人動手、
+  /// 而且只有人能動的事。有進度、有孤兒都只是資訊——每個按鈕都在喊的話，
+  /// 就沒有一個在喊了。
+  ///
+  /// 放進 model 而不是 widget，理由同 [BoardTask.axis]：這個優先序是規格，
+  /// 畫面怎麼排都不該改變它，而且**測試要能測到它本人**而不是它的副本。
+  BoardEntryHint get entryHint {
+    final live = tasks.values.where((t) => !t.deleted);
+    // 送審中＝在等人類確認。verified 是已經確認過、等著結束，那一步
+    // agent 自己按得動，不必叫人
+    final waiting =
+        objectives.values.where((o) => o.status == 'review').length;
+    if (waiting > 0) {
+      return BoardEntryHint(label: '$waiting 等你確認', needsYou: true);
+    }
+    final orphans = live.where((t) => t.isOrphaned).length;
+    if (orphans > 0) return BoardEntryHint(label: '$orphans 孤兒');
+    if (live.isEmpty) return const BoardEntryHint();
+    final done = live.where((t) => t.isDone).length;
+    return BoardEntryHint(label: '$done/${live.length}');
   }
 
   /// 依 `order_index` 排序的 Objective（不含已取消的）。

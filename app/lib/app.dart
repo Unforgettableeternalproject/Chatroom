@@ -6,6 +6,7 @@ import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
+import 'screens/board/board_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
@@ -65,6 +66,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   GoRoute(
                     path: 'assign',
                     builder: (context, state) => AssignmentScreen(
+                        roomId: state.pathParameters['roomId']!),
+                  ),
+                  // Board 與釘選牆／指派同一層：它是這個房間底下的東西，
+                  // 跟著房間的成員、權限與封存狀態走
+                  GoRoute(
+                    path: 'board',
+                    builder: (context, state) => BoardScreen(
                         roomId: state.pathParameters['roomId']!),
                   ),
                 ],
