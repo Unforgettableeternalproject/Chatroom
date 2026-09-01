@@ -12,6 +12,7 @@ import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
+import 'board_action_feedback.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
 
@@ -624,22 +625,29 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
               label: '送審',
               // 條件未滿時按鈕是死的，而且底下寫著為什麼
-              onTap: canReview ? () => actions.reviewObjective(o.id) : null,
+              onTap: canReview
+                  ? () => runBoardAction(
+                      context, () => actions.reviewObjective(o.id))
+                  : null,
             )
           else if (o.status == 'review') ...[
             _BarButton(
-                label: '打回', onTap: () => actions.reopenObjective(o.id)),
+                label: '打回',
+                onTap: () => runBoardAction(
+                    context, () => actions.reopenObjective(o.id))),
             const SizedBox(width: 8),
             _BarButton(
               label: '確認',
               accent: true,
-              onTap: () => actions.verifyObjective(o.id),
+              onTap: () => runBoardAction(
+                  context, () => actions.verifyObjective(o.id)),
             ),
           ] else if (o.status == 'verified')
             _BarButton(
               label: '結束週期',
               accent: true,
-              onTap: () => actions.completeObjective(o.id),
+              onTap: () => runBoardAction(
+                  context, () => actions.completeObjective(o.id)),
             ),
         ]),
         const SizedBox(height: 10),
@@ -786,9 +794,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ? () => _claim(t.id)
                   : null,
               onRelease: (t.isHeld && !_archived)
-                  ? () => ref
-                      .read(boardActionsProvider(widget.roomId))
-                      .release(t.id)
+                  ? () => runBoardAction(
+                      context,
+                      () => ref
+                          .read(boardActionsProvider(widget.roomId))
+                          .release(t.id))
                   : null,
             ),
           if (tasks.isEmpty)

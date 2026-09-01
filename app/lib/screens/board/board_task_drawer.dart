@@ -9,6 +9,7 @@ import '../../models/board.dart';
 import '../../state/board_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../widgets/kind_badge.dart';
+import 'board_action_feedback.dart';
 
 /// Task 詳情抽屜（設計稿 artboard 03，420px）。
 ///
@@ -334,19 +335,23 @@ class BoardTaskDrawer extends ConsumerWidget {
         if (!settled) ...[
           _DrawerAction(
             label: '標記完成',
-            onTap: () => actions.completeTask(task.id),
+            onTap: () => runBoardAction(
+                context, () => actions.completeTask(task.id)),
           ),
           const SizedBox(width: 8),
           _DrawerAction(
             label: task.status == 'blocked' ? '解除卡住' : '標記卡住',
             accent: UepColors.error,
-            onTap: () => actions.setTaskStatus(
-                task.id, task.status == 'blocked' ? 'in_progress' : 'blocked'),
+            onTap: () => runBoardAction(
+                context,
+                () => actions.setTaskStatus(task.id,
+                    task.status == 'blocked' ? 'in_progress' : 'blocked')),
           ),
         ] else
           _DrawerAction(
             label: '重新開啟',
-            onTap: () => actions.setTaskStatus(task.id, 'todo'),
+            onTap: () => runBoardAction(
+                context, () => actions.setTaskStatus(task.id, 'todo')),
           ),
         const Spacer(),
         if (!settled)
@@ -354,7 +359,8 @@ class BoardTaskDrawer extends ConsumerWidget {
             label: '取消任務',
             bordered: false,
             accent: UepColors.error,
-            onTap: () => actions.setTaskStatus(task.id, 'cancelled'),
+            onTap: () => runBoardAction(
+                context, () => actions.setTaskStatus(task.id, 'cancelled')),
           ),
       ]),
     );
