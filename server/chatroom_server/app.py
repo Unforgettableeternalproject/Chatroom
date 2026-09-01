@@ -2607,6 +2607,88 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchall()
         return {r["display_name"]: (r["joined_seq"] or 0) for r in rows}
 
+    # ---------- Board（共同任務板）----------
+
+    async def _board_seq(room_id: str) -> int:
+        """房內 board 的目前水位。與訊息的 next_seq 刻意分開（見設計文件 §5.2）。"""
+        row = await (
+            await app.state.db.execute(
+                "SELECT board_seq FROM room WHERE id=?", (room_id,)
+            )
+        ).fetchone()
+        return (row["board_seq"] or 0) if row else 0
+
+    def _board_row(row) -> dict:
+        """board 列 → 對外回應。
+
+        `deleted` 一律轉成 bool：tombstone 是契約的一部分，client 要能直接
+        `if row.deleted` 判斷，而 SQLite 給的是 0/1。
+        """
+        d = dict(row)
+        d["deleted"] = bool(d.get("deleted"))
+        return d
+
+    @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
+    async def read_board(
+        room_id: str,
+        after_board_seq: int = 0,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """讀 board（增量）。
+
+        `after_board_seq=0` ＝ 全量（回應 `full: true`）。
+
+        **軟刪除的列照樣回傳**，帶 `deleted: true`——這是 tombstone。增量讀取
+        的 client 若收不到刪除事件，board 上會永遠留著一張已經不存在的卡，
+        而且愈久愈多。這是增量協定最常漏的一條。
+
+        封存房**照樣讀得到**（`allow_archived=True`）：唯讀瀏覽是既有語意，
+        board 不該自己長出另一套。寫入端點才擋。
+        """
+        room = await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        db = app.state.db
+
+        async def _rows(table: str) -> list:
+            cur = await db.execute(
+                f"SELECT * FROM {table} WHERE room_id=? AND board_seq>?"
+                " ORDER BY board_seq",
+                (room_id, after_board_seq),
+            )
+            return [_board_row(r) for r in await cur.fetchall()]
+
+        # 「上一世領走的卡」只認 session_key：同一個 agent 重新 join 會拿到
+        # 新的 participant_id，拿它比對永遠比不中（見設計文件 §2.4）。
+        # 主持人視角沒有房內身分，那時沒有「我的孤兒」可言。
+        reclaimable: list[dict] = []
+        if x_participant_id:
+            me = await (
+                await db.execute(
+                    "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                    (x_participant_id, room_id),
+                )
+            ).fetchone()
+            if me and me["session_key"]:
+                cur = await db.execute(
+                    "SELECT id, title, orphaned_at, claim_name FROM board_task"
+                    " WHERE room_id=? AND claim_state='orphaned'"
+                    " AND claim_session_key=? AND deleted=0"
+                    " ORDER BY board_seq",
+                    (room_id, me["session_key"]),
+                )
+                reclaimable = [dict(r) for r in await cur.fetchall()]
+
+        return {
+            "board_seq": await _board_seq(room_id),
+            "full": after_board_seq == 0,
+            "objectives": await _rows("board_objective"),
+            "checklists": await _rows("board_checklist"),
+            "tasks": await _rows("board_task"),
+            "reclaimable_tasks": reclaimable,
+            "supervisor": room["board_supervisor_session_key"] or None,
+        }
+
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
         room_id: str,

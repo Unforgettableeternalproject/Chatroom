@@ -1,0 +1,153 @@
+"""T-02：`GET /api/rooms/{id}/board` 的增量讀取契約。
+
+重點全在**增量**那一半：全量誰都寫得出來，會出事的是 tombstone
+（軟刪除的列必須照樣回得來，否則 board 上永遠留著一張已經不存在的卡）
+與水位語意。CRUD 還沒有（T-03），所以這裡直接寫 DB 造資料——驗的是讀取
+契約本身，不是誰寫進去的。
+"""
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from chatroom_server.app import create_app
+from chatroom_server.config import Config
+
+pytestmark = pytest.mark.asyncio
+
+ROOT = "root-token"
+
+
+async def _client(tmp_path, name):
+    cfg = Config(db_path=str(tmp_path / f"{name}.db"), api_token=ROOT)
+    app = create_app(cfg)
+    return app, AsyncClient(transport=ASGITransport(app=app),
+                            base_url="http://test",
+                            headers={"Authorization": f"Bearer {ROOT}"})
+
+
+async def _room_with_member(client, session_key="agent-1", name="Novia"):
+    rid = (await client.post("/api/rooms", json={
+        "name": "板子房", "session_key": "owner"})).json()["id"]
+    me = (await client.post(f"/api/rooms/{rid}/join", json={
+        "kind": "claude", "role": "agent", "session_key": session_key,
+        "preferred_name": name})).json()
+    return rid, me["participant_id"]
+
+
+async def _seed(app, room_id, *, seq, deleted=0, claim_state="",
+                claim_session_key="", suffix="1"):
+    """直接寫一組 objective / checklist / task（同一個 board_seq）。"""
+    db = app.state.db
+    oid, cid, tid = f"o{suffix}", f"c{suffix}", f"t{suffix}"
+    await db.execute(
+        "INSERT INTO board_objective (id, room_id, title, board_seq, deleted, created_at)"
+        " VALUES (?,?,?,?,?,'2026-09-01')", (oid, room_id, f"週期{suffix}", seq, deleted))
+    await db.execute(
+        "INSERT INTO board_checklist (id, room_id, objective_id, title, board_seq,"
+        " deleted, created_at) VALUES (?,?,?,?,?,?,'2026-09-01')",
+        (cid, room_id, oid, f"階段{suffix}", seq, deleted))
+    await db.execute(
+        "INSERT INTO board_task (id, room_id, checklist_id, title, board_seq, deleted,"
+        " claim_state, claim_session_key, claim_name, orphaned_at, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,'2026-09-01')",
+        (tid, room_id, cid, f"任務{suffix}", seq, deleted, claim_state,
+         claim_session_key, "前世的我" if claim_state else "", "2026-09-01"))
+    await db.execute("UPDATE room SET board_seq=? WHERE id=? AND board_seq<?",
+                     (seq, room_id, seq))
+    await db.commit()
+    return oid, cid, tid
+
+
+async def test_zero_cursor_returns_everything_and_says_full(tmp_path):
+    app, client = await _client(tmp_path, "full")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client)
+        await _seed(app, rid, seq=1, suffix="1")
+        await _seed(app, rid, seq=2, suffix="2")
+        r = await client.get(f"/api/rooms/{rid}/board",
+                             headers={"X-Participant-Id": pid})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["full"] is True
+        assert body["board_seq"] == 2
+        assert [o["id"] for o in body["objectives"]] == ["o1", "o2"]
+        assert len(body["tasks"]) == 2
+
+
+async def test_cursor_returns_only_what_changed(tmp_path):
+    app, client = await _client(tmp_path, "incr")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client)
+        await _seed(app, rid, seq=1, suffix="1")
+        await _seed(app, rid, seq=2, suffix="2")
+        r = await client.get(f"/api/rooms/{rid}/board?after_board_seq=1",
+                             headers={"X-Participant-Id": pid})
+        body = r.json()
+        assert body["full"] is False
+        assert [o["id"] for o in body["objectives"]] == ["o2"]
+        assert [t["id"] for t in body["tasks"]] == ["t2"]
+
+
+async def test_soft_deleted_rows_come_back_as_tombstones(tmp_path):
+    """增量協定最常漏的一條：看不到刪除事件的 client 會永遠留著那張卡。"""
+    app, client = await _client(tmp_path, "tomb")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client)
+        await _seed(app, rid, seq=1, suffix="1")
+        await _seed(app, rid, seq=5, deleted=1, suffix="2")
+        r = await client.get(f"/api/rooms/{rid}/board?after_board_seq=1",
+                             headers={"X-Participant-Id": pid})
+        body = r.json()
+        tombs = [t for t in body["tasks"] if t["deleted"]]
+        assert [t["id"] for t in tombs] == ["t2"]
+
+
+async def test_reclaimable_only_lists_my_own_orphans(tmp_path):
+    """孤兒卡是「你上一世領的」才該回收，別人的不該出現在你的清單裡。"""
+    app, client = await _client(tmp_path, "reclaim")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client, session_key="agent-mine")
+        await _seed(app, rid, seq=1, claim_state="orphaned",
+                    claim_session_key="agent-mine", suffix="1")
+        await _seed(app, rid, seq=2, claim_state="orphaned",
+                    claim_session_key="agent-someone-else", suffix="2")
+        await _seed(app, rid, seq=3, claim_state="held",
+                    claim_session_key="agent-mine", suffix="3")
+        r = await client.get(f"/api/rooms/{rid}/board",
+                             headers={"X-Participant-Id": pid})
+        body = r.json()
+        assert [t["id"] for t in body["reclaimable_tasks"]] == ["t1"]
+        assert body["reclaimable_tasks"][0]["claim_name"] == "前世的我"
+
+
+async def test_non_member_cannot_read_board(tmp_path):
+    app, client = await _client(tmp_path, "guard")
+    async with app.router.lifespan_context(app), client:
+        rid, _ = await _room_with_member(client)
+        r = await client.get(f"/api/rooms/{rid}/board")
+        assert r.status_code == 401
+        assert r.json()["detail"]["code"] == "participant_header_required"
+
+
+async def test_missing_room_is_404_before_identity_check(tmp_path):
+    """順序相反會產生「403 叫你重 join → join 回 404」的死路。"""
+    app, client = await _client(tmp_path, "order")
+    async with app.router.lifespan_context(app), client:
+        r = await client.get("/api/rooms/nope/board")
+        assert r.status_code == 404
+        assert r.json()["detail"]["code"] == "room_not_found"
+
+
+async def test_archived_room_board_is_still_readable(tmp_path):
+    """封存房唯讀瀏覽是既有語意，board 不該自己長出另一套。"""
+    app, client = await _client(tmp_path, "arch")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client)
+        await _seed(app, rid, seq=1, suffix="1")
+        await app.state.db.execute(
+            "UPDATE room SET status='archived' WHERE id=?", (rid,))
+        await app.state.db.commit()
+        r = await client.get(f"/api/rooms/{rid}/board",
+                             headers={"X-Participant-Id": pid})
+        assert r.status_code == 200
+        assert len(r.json()["objectives"]) == 1
