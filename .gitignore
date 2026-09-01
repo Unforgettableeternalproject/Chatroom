@@ -40,6 +40,7 @@ Thumbs.db
 # 本機設定（含 token）
 .env
 config.local.json
+design-ref/
 
 # Agent相關檔案
 CLAUDE.md

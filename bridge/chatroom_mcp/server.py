@@ -161,6 +161,18 @@ def _guard(fn: Callable[..., Any]) -> Callable[..., dict]:
             out: dict[str, Any] = {"ok": False, "reason": exc.reason}
             if exc.identity_invalid:
                 out["need_rejoin"] = True
+            # Hub 在 detail 裡放的**機器可讀欄位一律往外送**：`code`、
+            # 非法轉移的 `allowed`、錯層的 `actual`/`expected`⋯⋯
+            #
+            # 只送 reason 的話，agent 被擋下時手上除了一句中文什麼都沒有，
+            # 只能猜下一步——而 Hub 明明已經把答案算好放在回應裡了
+            # （2026-09-01 測試端 F1：`allowed` 到不了 agent 手上）。
+            # 逐一列舉會讓「Hub 加了新欄位」變成一次 bridge 改版，
+            # 所以這裡是**排除法**：只擋掉會與外層結構撞名的那幾個
+            if isinstance(exc.detail, dict):
+                for key, value in exc.detail.items():
+                    if key not in ("message", "ok", "reason", "need_rejoin"):
+                        out.setdefault(key, value)
             return out
         if isinstance(result, dict):
             return {"ok": True, **{k: v for k, v in result.items() if k != "ok"}}
@@ -1432,10 +1444,17 @@ def chatroom_board_update(
     if status:
         if kind == "objective":
             if status in ("verified", "verify"):
+                # ⚠️ 這句話**不可以假設週期還沒送審**。想確認的當下它多半
+                # 已經在 review 了（那正是有人想按確認的原因），叫它「先去
+                # 送審」會拿到 409「只有進行中的週期可以送審」——agent 照著
+                # 做就走進死路（2026-09-01 測試端 F5）。
+                # 工具層查不到當下狀態，所以兩種情形一起講。
                 raise HubError(
-                    "「確認無誤」只有人類成員做得到，agent 只能送審。"
-                    "請先 chatroom_board_update(status=\"review\")，"
-                    "再用 chatroom_ask_human 請房裡的人確認。"
+                    "「確認無誤」只有人類成員做得到，agent 不論如何都按不了"
+                    "這一步。你能做的是：**還沒送審**就先 "
+                    "chatroom_board_update(status=\"review\")；**已經送審**"
+                    "（狀態是 review）就直接用 chatroom_ask_human 請房裡的"
+                    "人確認——那是這個週期往下走的唯一方式，不要重試。"
                 )
             if status not in ("review", "reopen", "cancel", "complete"):
                 raise HubError(

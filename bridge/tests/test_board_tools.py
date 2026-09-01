@@ -280,6 +280,60 @@ def test_agents_are_told_why_verify_is_not_available(fake_hub):
     assert all("verify" not in c.url.path for c in fake_hub.calls)
 
 
+def test_verify_refusal_covers_the_already_in_review_case(fake_hub):
+    """🔴 擋回的訊息不可以假設「還沒送審」。
+
+    想按確認的當下，週期多半已經在 review 了——那正是有人想確認的原因。
+    只說「先去送審」的話，agent 照做會拿到 409「只有進行中的週期可以送審」，
+    然後手上沒有任何往下走的資訊（測試端 F5 + F1 疊起來就是死路）。
+    """
+    _join(fake_hub)
+
+    reason = srv.chatroom_board_update(
+        ROOM, "o1", kind="objective", status="verified")["reason"]
+
+    # 兩種情形都要講到，因為工具層查不到當下狀態
+    assert "還沒送審" in reason
+    assert "已經送審" in reason
+    assert "chatroom_ask_human" in reason
+
+
+def test_hub_detail_fields_reach_the_agent(fake_hub):
+    """🔴 Hub 放在 detail 裡的機器可讀欄位要送到 agent 手上。
+
+    只回 reason 的話，被擋下的 agent 除了一句中文什麼都沒有、只能猜下一步
+    ——而 Hub 已經把答案算好放在回應裡了（測試端 F1）。
+    """
+    _join(fake_hub)
+    fake_hub.error("POST", "/api/board/tasks/t1/status", 409, {
+        "code": "invalid_transition",
+        "message": "不能從「完成」回到「進行中」",
+        "allowed": ["cancelled"],
+    })
+
+    result = srv.chatroom_board_update(ROOM, "t1", status="in_progress")
+
+    assert result["ok"] is False
+    assert result["code"] == "invalid_transition"
+    assert result["allowed"] == ["cancelled"]
+
+
+def test_detail_fields_never_overwrite_the_envelope(fake_hub):
+    """detail 帶了同名欄位也不能蓋掉外層的結構。"""
+    _join(fake_hub)
+    fake_hub.error("POST", "/api/board/tasks/t1/claim", 409, {
+        "code": "task_already_claimed",
+        "message": "被領走了",
+        "ok": True,          # 惡意／舊版 Hub 塞的
+        "reason": "不是這句",
+    })
+
+    result = srv.chatroom_board_claim(ROOM, "t1")
+
+    assert result["ok"] is False
+    assert result["reason"] != "不是這句"
+
+
 # ---------- 認領 ----------
 
 
