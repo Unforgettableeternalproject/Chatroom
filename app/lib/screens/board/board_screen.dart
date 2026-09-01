@@ -139,27 +139,34 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   // 窄螢幕收掉左欄，只留展開的那一條
                   final wide = c.maxWidth >= 900;
                   final detail = _objectivePane(context, snap, selected);
-                  final drawer = _drawer(context, snap, c.maxWidth);
-                  if (!wide) {
-                    // 窄螢幕的抽屜蓋滿——420px 的抽屜配上更窄的板，
-                    // 剩下的那條縫誰都用不上
-                    return drawer == null
-                        ? detail
-                        : Stack(children: [detail, Positioned.fill(child: drawer)]);
-                  }
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(
-                        width: 300,
-                        child: _objectiveList(
-                            context, snap, objectives, selected),
-                      ),
-                      Container(width: 1, color: s.hairline),
-                      Expanded(child: detail),
-                      ?drawer,
-                    ],
-                  );
+                  final board = wide
+                      ? Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(
+                              width: 300,
+                              child: _objectiveList(
+                                  context, snap, objectives, selected),
+                            ),
+                            Container(width: 1, color: s.hairline),
+                            Expanded(child: detail),
+                          ],
+                        )
+                      : detail;
+
+                  // 🔑 **抽屜是浮起來的，不是版面裡的一欄。**
+                  //
+                  // 設計稿 artboard 03 畫得很清楚：抽屜底下那塊板是**被遮罩
+                  // 的**（`opacity: .35`），不是被擠窄的。第一版做成 Row 的
+                  // 第三欄，結果在 1267px 的視窗上中間只剩 274px——「未分類」
+                  // 四個字直排成一行，30px 的標題把整欄吃光。
+                  //
+                  // 板的寬度**不該由抽屜開不開決定**：同一塊板在抽屜開闔之間
+                  // 重排一次，讀的人會失去自己剛才在看哪一張卡。
+                  return Stack(children: [
+                    board,
+                    ?_drawer(context, snap, c.maxWidth),
+                  ]);
                 });
               },
             ),
@@ -218,13 +225,30 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     if (_openTaskId == null) return null;
     final task = snap.tasks[_openTaskId];
     if (task == null || task.deleted) return null;
-    return BoardTaskDrawer(
-      roomId: widget.roomId,
-      task: task,
-      checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
-      assigneeName: _assigneeName(task),
-      readOnly: _archived,
-      onClose: () => setState(() => _openTaskId = null),
+    void close() => setState(() => _openTaskId = null);
+    return Positioned.fill(
+      child: Row(children: [
+        // 遮罩：點板子的任何地方就關掉抽屜。**它同時是那句「底下這塊還在，
+        // 只是現在不是主角」**——設計稿用 opacity .35 講同一件事
+        Expanded(
+          child: GestureDetector(
+            onTap: close,
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: .45),
+            ),
+          ),
+        ),
+        BoardTaskDrawer(
+          roomId: widget.roomId,
+          task: task,
+          // 抽屜不吃滿整個視窗：留一段板子看得到，才知道自己還在板上
+          width: maxWidth < 480 ? maxWidth : 420,
+          checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
+          assigneeName: _assigneeName(task),
+          readOnly: _archived,
+          onClose: close,
+        ),
+      ]),
     );
   }
 
@@ -305,14 +329,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           _SupervisorPill(name: snap.supervisor!),
           const SizedBox(width: 12),
         ],
-        if (_archived)
-          const _ArchivedBadge()
-        else
-          _HeaderAction(
-            label: '＋ 新週期',
-            bordered: true,
-            onTap: () => _create('objective'),
-          ),
+        // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。
+        //
+        // 設計稿那個位置成立的前提是右上角還有 SUPERVISOR 膠囊陪著它；實機上
+        // supervisor 多半沒有指定，那顆按鈕就孤懸在一片空白的右上角，
+        // 而它作用的對象（Objective 清單）在畫面的最左邊。
+        //
+        // 移到左欄 `OBJECTIVES` 那一行——**動作要靠近它會產生結果的地方**。
+        if (_archived) const _ArchivedBadge(),
       ]),
     );
   }
@@ -332,9 +356,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         padding: EdgeInsets.zero,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 11),
-            child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
-                color: s.inkMute, letterSpacing: 2.2),
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 11),
+            child: Row(children: [
+              Expanded(
+                child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
+                    color: s.inkMute, letterSpacing: 2.2),
+              ),
+              if (!_archived)
+                _BarButton(
+                    label: '＋ 新週期', onTap: () => _create('objective')),
+            ]),
           ),
           for (final o in active)
             _objectiveTile(context, snap, o, o.id == selected.id),
@@ -932,28 +963,18 @@ class _Dot extends StatelessWidget {
 
 /// 頁首上的動作。[bordered] 的那種是主要動作（設計稿只有「＋ 新週期」是）。
 class _HeaderAction extends StatelessWidget {
-  const _HeaderAction({
-    required this.label,
-    required this.onTap,
-    this.bordered = false,
-  });
+  const _HeaderAction({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;
-  final bool bordered;
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     return InkWell(
       onTap: onTap,
-      child: Container(
-        padding: bordered
-            ? const EdgeInsets.symmetric(horizontal: 11, vertical: 5)
-            : EdgeInsets.zero,
-        decoration: bordered
-            ? BoxDecoration(border: Border.all(color: s.hairline))
-            : null,
+      child: Padding(
+        padding: EdgeInsets.zero,
         child: Text(label,
             style: UepText.mono(
                 size: 9.5, color: s.inkSoft, letterSpacing: 1.3)),

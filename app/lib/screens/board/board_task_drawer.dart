@@ -27,6 +27,7 @@ class BoardTaskDrawer extends ConsumerWidget {
     required this.onClose,
     this.assigneeName,
     this.readOnly = false,
+    this.width = 420,
   });
 
   final String roomId;
@@ -42,13 +43,17 @@ class BoardTaskDrawer extends ConsumerWidget {
   /// 不是被禁止的動作**，收掉的只有底下那排轉移。
   final bool readOnly;
 
+  /// 抽屜寬度。窄視窗時由呼叫端縮，但**不吃滿**——留一段板子看得到，
+  /// 才知道自己還在板上而不是換了一個畫面。
+  final double width;
+
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     return Container(
-      width: 420,
+      width: width,
       decoration: BoxDecoration(
         color: s.bg,
         border: Border(left: BorderSide(color: s.hairlineStrong)),
