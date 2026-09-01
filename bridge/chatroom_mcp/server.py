@@ -1256,9 +1256,27 @@ def chatroom_get_file(attachment_id: str, room_id: str = "",
 # 的工具。
 
 
+
+def _board_write(room_id: str, subagent: str, method: str, path: str,
+                 **kwargs: Any) -> dict:
+    """board 的寫入請求，帶上正確的身分。
+
+    ⚠️ **子代理要用自己的身分**：認領是綁 participant 的，走父層身分的話
+    那張卡會掛在父層名下，而房內看到的名字也是父層的。更糟的是同一個父層
+    派兩個子代理去領同一張卡時，第二次會拿到「已經被『你自己』領走了」
+    ——訊息荒謬，而且併發保證等於完全沒有被驗證到。
+    """
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(room_id, method, path, require_identity=False,
+                         participant_id=participant_id, **kwargs)
+    if isinstance(data, dict):
+        data.update(scope)
+    return data
+
 @mcp.tool()
 @_guard
-def chatroom_board(room_id: str, full: bool = False) -> dict:
+def chatroom_board(room_id: str, full: bool = False,
+                   subagent: str = "") -> dict:
     """看這個房間的任務板（Objective → Checklist → Task）。
 
     **鼓勵常看**：板上是「誰在做什麼、做到哪、哪些卡沒人接手」，那是聊天
@@ -1281,19 +1299,25 @@ def chatroom_board(room_id: str, full: bool = False) -> dict:
     ``claim_state`` 為 ``orphaned`` 表示原本領走它的人已經不在房裡了——
     那張卡看起來有人在做，實際上沒有，是最值得你接手的一種。
     """
-    known = 0 if full else state().board_seq(room_id)
+    participant_id, scope = _identity_for(room_id, subagent)
+    # **子代理一律讀全量、不碰父層的水位。** 它活不久、也沒有自己的水位，
+    # 用父層那個會把父層的位置往前推——父層之後就靜靜跳過它沒讀過的變動
+    known = 0 if (full or subagent) else state().board_seq(room_id)
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/board",
+        require_identity=False,
+        participant_id=participant_id,
         params={"after_board_seq": known},
     )
     seq = data.get("board_seq")
     # 拿到內容之後才推進水位。在 chatroom_wait 那側推的話，下次就不會再被
     # 通知，而內容其實還沒到手
-    if isinstance(seq, int):
+    if isinstance(seq, int) and not subagent:
         state().set_board_seq(room_id, seq)
     data["after_board_seq"] = known
+    data.update(scope)
     return data
 
 
@@ -1307,6 +1331,7 @@ def chatroom_board_add(
     description: str = "",
     source_seq: int | None = None,
     priority: str = "normal",
+    subagent: str = "",
 ) -> dict:
     """在板上新增一個 Objective／Checklist／Task。
 
@@ -1343,7 +1368,12 @@ def chatroom_board_add(
         body["priority"] = priority
         if source_seq is not None:
             body["source_seq"] = source_seq
-    return _room_request(room_id, "POST", path, json=body)
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(room_id, "POST", path, json=body,
+                         require_identity=False,
+                         participant_id=participant_id)
+    data.update(scope)
+    return data
 
 
 @mcp.tool()
@@ -1356,6 +1386,7 @@ def chatroom_board_update(
     title: str = "",
     description: str = "",
     priority: str = "",
+    subagent: str = "",
 ) -> dict:
     """改一張卡的狀態或內容。
 
@@ -1391,12 +1422,14 @@ def chatroom_board_update(
                     "Objective 的 status 只能是 review（送審）/ reopen（打回）"
                     f"/ cancel（取消），收到「{status}」。"
                 )
-            return _room_request(
-                room_id, "POST", f"/api/board/objectives/{item_id}/{status}"
+            return _board_write(
+                room_id, subagent, "POST",
+                f"/api/board/objectives/{item_id}/{status}"
             )
         plural = "tasks" if kind == "task" else "checklists"
-        return _room_request(
-            room_id, "POST", f"/api/board/{plural}/{item_id}/status",
+        return _board_write(
+            room_id, subagent, "POST",
+            f"/api/board/{plural}/{item_id}/status",
             json={"status": status},
         )
     fields = {
@@ -1409,15 +1442,17 @@ def chatroom_board_update(
         raise HubError("沒有要改的東西：給 status，或給 title/description/priority。")
     plural = {"objective": "objectives", "checklist": "checklists",
               "task": "tasks"}[kind]
-    return _room_request(
-        room_id, "PATCH", f"/api/board/{plural}/{item_id}", json=fields
+    return _board_write(
+        room_id, subagent, "PATCH", f"/api/board/{plural}/{item_id}",
+        json=fields,
     )
 
 
 @mcp.tool()
 @_guard
 def chatroom_board_claim(room_id: str, task_id: str,
-                         release: bool = False) -> dict:
+                         release: bool = False,
+                         subagent: str = "") -> dict:
     """認領一張 Task（或用 ``release=True`` 放掉）。
 
     **一張卡同時只能有一個人在上面**，而這是靠資料庫的條件式更新保證的，
@@ -1435,8 +1470,8 @@ def chatroom_board_claim(room_id: str, task_id: str,
     狀態：它看起來有人在處理，實際上沒有。
     """
     action = "release" if release else "claim"
-    return _room_request(
-        room_id, "POST", f"/api/board/tasks/{task_id}/{action}"
+    return _board_write(
+        room_id, subagent, "POST", f"/api/board/tasks/{task_id}/{action}"
     )
 
 

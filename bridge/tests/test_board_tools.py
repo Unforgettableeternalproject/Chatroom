@@ -270,3 +270,75 @@ def test_claim_conflict_keeps_the_holder_name(fake_hub):
     assert "Swift-Falcon" in result["reason"]
     # 認領衝突不是身分問題，不可以叫人重新 join
     assert result.get("need_rejoin") is not True
+
+
+# ---------- 子代理身分（測試端 #73 提出）----------
+
+
+def _spawn(fake_hub, handle_name="Probe", pid="pid-sub"):
+    fake_hub.json("POST", f"/api/rooms/{ROOM}/join",
+                  {"participant_id": pid, "display_name": handle_name,
+                   "rejoined": False, "ephemeral": True})
+    return srv.chatroom_spawn_subagent(ROOM, handle_name)
+
+
+def test_subagent_claims_with_its_own_identity(fake_hub):
+    """🔴 子代理認領要用**自己的** participant id。
+
+    走父層身分的話，那張卡會掛在父層名下、房內看到的也是父層的名字；
+    而同一個父層派兩個子代理去領同一張時，第二次會拿到「已經被『你自己』
+    領走了」——訊息荒謬，**併發保證等於完全沒有被驗證到**。
+    """
+    _join(fake_hub)
+    spawned = _spawn(fake_hub)
+    handle = spawned["handle"]
+    fake_hub.json("POST", "/api/board/tasks/t1/claim",
+                  {"ok": True, "reclaimed": False})
+
+    result = srv.chatroom_board_claim(ROOM, "t1", subagent=handle)
+
+    assert result["identity_scope"] == "subagent"
+    assert fake_hub.calls[-1].headers["X-Participant-Id"] == "pid-sub"
+
+
+def test_board_write_without_handle_stays_on_the_parent(fake_hub):
+    """漏帶 handle 不會報錯，會掛在父層名下——所以回應要說得出來。"""
+    _join(fake_hub)
+    fake_hub.json("POST", "/api/board/tasks/t1/claim", {"ok": True})
+
+    result = srv.chatroom_board_claim(ROOM, "t1")
+
+    assert result["identity_scope"] == "parent"
+    assert fake_hub.calls[-1].headers["X-Participant-Id"] == "pid-1"
+
+
+def test_subagent_reads_full_board_and_leaves_the_parent_cursor_alone(fake_hub):
+    """子代理讀 board 不碰父層水位。
+
+    它活不久、也沒有自己的水位；用父層那個會把父層的位置往前推，
+    父層之後就靜靜跳過它沒讀過的變動。
+    """
+    _join(fake_hub)
+    _board(fake_hub, {"board_seq": 5, "tasks": []})
+    srv.chatroom_board(ROOM)          # 父層水位 → 5
+
+    spawned = _spawn(fake_hub)
+    _board(fake_hub, {"board_seq": 30, "tasks": []})
+    srv.chatroom_board(ROOM, subagent=spawned["handle"])
+
+    assert fake_hub.calls[-1].url.params["after_board_seq"] == "0"
+    assert srv.state().board_seq(ROOM) == 5
+
+
+def test_subagent_add_and_update_carry_the_handle(fake_hub):
+    _join(fake_hub)
+    spawned = _spawn(fake_hub)
+    handle = spawned["handle"]
+    fake_hub.json("POST", "/api/board/checklists/c1/tasks", {"id": "t9"})
+    fake_hub.json("POST", "/api/board/tasks/t9/status", {"ok": True})
+
+    srv.chatroom_board_add(ROOM, "task", "x", parent_id="c1", subagent=handle)
+    assert fake_hub.calls[-1].headers["X-Participant-Id"] == "pid-sub"
+
+    srv.chatroom_board_update(ROOM, "t9", status="done", subagent=handle)
+    assert fake_hub.calls[-1].headers["X-Participant-Id"] == "pid-sub"
