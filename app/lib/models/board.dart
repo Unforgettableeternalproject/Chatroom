@@ -575,8 +575,32 @@ class BoardSnapshot {
   ///
   /// 放進 model 而不是 widget，理由同 [BoardTask.axis]：這個優先序是規格，
   /// 畫面怎麼排都不該改變它，而且**測試要能測到它本人**而不是它的副本。
+  /// 畫面上真的看得到的 Task——**計數的母體只能是這個**。
+  ///
+  /// 顯示側從 [sortedObjectives] 走到 [checklistsOf] 再走到 [tasksOf]，一路
+  /// 濾掉了被取消的父層；計數側原本直接拿整張 tasks map 只濾 `deleted`。
+  /// 兩個母體不一樣的後果不是短暫的不一致，是**穩定殘留**：app bar 永遠寫
+  /// 著 N 張孤兒，而點進去永遠找不到那些卡。
+  ///
+  /// 父層不在快取裡的也算不可見——那條路徑畫不出來，計數卻算得到的話，
+  /// 就是同一個 bug 的另一面。
+  Iterable<BoardTask> get visibleTasks =>
+      tasks.values.where((t) => !t.deleted && _parentAlive(t));
+
+  bool _parentAlive(BoardTask t) {
+    final c = checklists[t.checklistId];
+    if (c == null || c.status == 'cancelled') return false;
+    final o = objectives[c.objectiveId];
+    return o != null && o.status != 'cancelled';
+  }
+
+  /// 一個週期底下所有看得到的 Task，依階段順序、再依卡片順序。
+  List<BoardTask> tasksOfObjective(String objectiveId) => [
+        for (final c in checklistsOf(objectiveId)) ...tasksOf(c.id),
+      ];
+
   BoardEntryHint get entryHint {
-    final live = tasks.values.where((t) => !t.deleted);
+    final live = visibleTasks;
     // ⚠️ **`review` 與 `verified` 都在等人類**，第一版只算了 review。
     // Objective 是四段（active → review → verified → done），而最後兩步
     // 都只有人類推得動：`verify` 與 `complete` 是兩個獨立的動作。

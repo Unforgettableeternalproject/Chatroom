@@ -230,7 +230,9 @@ final orphanedTaskCountProvider =
     Provider.autoDispose.family<int, String>((ref, roomId) {
   final snap = ref.watch(boardProvider(roomId)).value;
   if (snap == null) return 0;
-  return snap.tasks.values.where((t) => t.isOrphaned).length;
+  // 母體是「畫面上看得到的」那些。拿整張 tasks map 的話，被取消的週期底下
+  // 那些卡會永遠計進來——app bar 寫著 N 孤兒，進板一張也找不到
+  return snap.visibleTasks.where((t) => t.isOrphaned).length;
 });
 
 /// 我這把 session 上一世領走、還掛在那裡的 Task。

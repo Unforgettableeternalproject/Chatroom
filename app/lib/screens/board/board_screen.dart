@@ -848,9 +848,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   // ---------- 聚合 ----------
 
-  List<BoardTask> _tasksOf(BoardSnapshot snap, BoardObjective o) => [
-        for (final c in snap.checklistsOf(o.id)) ...snap.tasksOf(c.id),
-      ];
+  List<BoardTask> _tasksOf(BoardSnapshot snap, BoardObjective o) =>
+      snap.tasksOfObjective(o.id);
 
   _Stats _statsOf(BoardSnapshot snap, BoardObjective o) {
     final checklists = snap.checklistsOf(o.id);
