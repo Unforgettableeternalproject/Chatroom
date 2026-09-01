@@ -91,12 +91,16 @@ class BoardApi {
         return res.data!['id'] as String;
       });
 
+  /// 改欄位。**改不到 `status`**——狀態轉移一律走 [setTaskStatus]。
+  ///
+  /// Hub 的 PATCH model 是 `extra="forbid"`，多塞 `status` 會回 422 而不是
+  /// 安靜忽略（那正是它該有的行為：一個欄位兩條寫入路徑，遲早有一條漏掉
+  /// 守門檢查）。
   Future<void> updateTask(
     String taskId, {
     required String participantId,
     String? title,
     String? description,
-    String? status,
     String? priority,
     String? assigneeParticipantId,
   }) =>
@@ -106,10 +110,42 @@ class BoardApi {
           data: {
             'title': ?title,
             'description': ?description,
-            'status': ?status,
             'priority': ?priority,
             'assignee_participant_id': ?assigneeParticipantId,
           },
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+      });
+
+  /// 推 Task 的狀態（todo / in_progress / blocked / done / cancelled）。
+  ///
+  /// 轉移不合法時 Hub 回 409 `invalid_transition`，並在
+  /// [ConflictException.allowed] 裡告訴你從現在這個狀態還能去哪——
+  /// **拿它畫按鈕，不要在 App 這側複製一份轉移表**：那份副本會與 Hub 各自
+  /// 演化，而畫面上多一顆按不動的按鈕不會有任何地方報錯。
+  Future<void> setTaskStatus(
+    String taskId, {
+    required String participantId,
+    required String status,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/tasks/$taskId/status',
+          data: {'status': status},
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+      });
+
+  /// 推 Checklist 的狀態（open / done / cancelled）。
+  Future<void> setChecklistStatus(
+    String checklistId, {
+    required String participantId,
+    required String status,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/checklists/$checklistId/status',
+          data: {'status': status},
           options: Options(headers: {'X-Participant-Id': participantId}),
         );
       });
@@ -143,23 +179,16 @@ class BoardApi {
         );
       });
 
+  /// 完成 ＝ 推到 `done`，不是另一條路徑。Hub 那側也是同一個端點——
+  /// 「完成」在使用者眼裡就是改狀態，多一條路只是多一個會漏掉守門的地方。
   Future<void> completeTask(String taskId,
           {required String participantId}) =>
-      unwrap(() async {
-        await _dio.post<Map<String, dynamic>>(
-          '/api/board/tasks/$taskId/complete',
-          options: Options(headers: {'X-Participant-Id': participantId}),
-        );
-      });
+      setTaskStatus(taskId, participantId: participantId, status: 'done');
 
   Future<void> completeChecklist(String checklistId,
           {required String participantId}) =>
-      unwrap(() async {
-        await _dio.post<Map<String, dynamic>>(
-          '/api/board/checklists/$checklistId/complete',
-          options: Options(headers: {'X-Participant-Id': participantId}),
-        );
-      });
+      setChecklistStatus(checklistId,
+          participantId: participantId, status: 'done');
 
   /// Objective 的三段：送審 → 確認 → 完成。
   ///
@@ -180,6 +209,10 @@ class BoardApi {
   Future<void> reopenObjective(String objectiveId,
           {required String participantId}) =>
       _objectiveAction(objectiveId, 'reopen', participantId);
+
+  Future<void> cancelObjective(String objectiveId,
+          {required String participantId}) =>
+      _objectiveAction(objectiveId, 'cancel', participantId);
 
   Future<void> _objectiveAction(String id, String action, String pid) =>
       unwrap(() async {

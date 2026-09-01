@@ -102,10 +102,12 @@ class BoardActions {
     _reload();
   }
 
+  /// 推 Task 的狀態。轉移不合法時丟 [ConflictException]，其 `allowed`
+  /// 會說出從現在這裡還能去哪——呼叫端拿它畫按鈕，不要自己複製轉移表。
   Future<void> setTaskStatus(String taskId, String status) async {
     final pid = await _pid();
     if (pid == null) return;
-    await _api.updateTask(taskId, participantId: pid, status: status);
+    await _api.setTaskStatus(taskId, participantId: pid, status: status);
     _reload();
   }
 
