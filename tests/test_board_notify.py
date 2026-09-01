@@ -9,6 +9,8 @@ Objective 完成通知所有人。**其餘 board 變動一律不喚醒任何人*
 在加功能時被打破的預設值，所以寫成明確的斷言。
 """
 
+import json
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -218,3 +220,91 @@ async def test_verified_wakes_humans_including_the_verifier(tmp_path):
         (msg,) = await _events(client, rid, human, "board_objective_verified")
         assert msg["mentions"] == ["Bernie"]
         assert "完成" in msg["content"], "要說得出下一步是什麼"
+
+
+# ---------------------------------------------------------------------------
+# 人類開新容器時叫醒 agent（艾斯維爾 2026-09-02）
+#
+# 這是 board 通知裡唯一「往下派工」方向的一則——其餘幾則都是回報已經發生的
+# 事（完成、送審、確認），而這一則是**還沒發生的事**：人類把一段工作的框架
+# 擺出來，等 agent 往裡面填 Task。那條工作流要成立，agent 就得知道那段開了。
+# ---------------------------------------------------------------------------
+
+
+async def _mentions_of(app, rid, event):
+    rows = await (await app.state.db.execute(
+        "SELECT mentions FROM message WHERE room_id=? AND system_event=?"
+        " ORDER BY seq", (rid, event),
+    )).fetchall()
+    return [json.loads(r["mentions"] or "[]") for r in rows]
+
+
+async def test_a_human_opening_a_container_wakes_the_agents(tmp_path):
+    app, client = await _client(tmp_path, "human_opens")
+    async with app.router.lifespan_context(app), client:
+        rid, human, _, _ = await _room(client)
+
+        oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                 json={"title": "新週期"},
+                                 headers=human)).json()["id"]
+        got = await _mentions_of(app, rid, "board_objective_created")
+        assert len(got) == 1, "人類開週期要發一則"
+        assert sorted(got[0]) == ["Miller", "Novia"], f"只叫 agent：{got[0]}"
+
+        await client.post(f"/api/board/objectives/{oid}/checklists",
+                          json={"title": "新階段"}, headers=human)
+        got = await _mentions_of(app, rid, "board_checklist_created")
+        assert len(got) == 1
+        assert sorted(got[0]) == ["Miller", "Novia"], f"只叫 agent：{got[0]}"
+
+
+async def test_an_agent_opening_a_container_stays_quiet(tmp_path):
+    """agent 自己開的容器不廣播——它開那個容器正是因為它已經知道要做什麼，
+    而房裡其他 agent 收到也不會去接（那是它的工作，不是待辦）。"""
+    app, client = await _client(tmp_path, "agent_opens")
+    async with app.router.lifespan_context(app), client:
+        rid, _, agent, _ = await _room(client)
+
+        oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                 json={"title": "agent 開的"},
+                                 headers=agent)).json()["id"]
+        await client.post(f"/api/board/objectives/{oid}/checklists",
+                          json={"title": "agent 開的階段"}, headers=agent)
+
+        assert await _mentions_of(app, rid, "board_objective_created") == []
+        assert await _mentions_of(app, rid, "board_checklist_created") == []
+
+
+async def test_creating_a_task_announces_nothing(tmp_path):
+    """Task 那層刻意不發：一個週期底下可能有幾十張，逐張叫醒會把訊息流洗掉。
+    **框架值得打斷，細項不值得。**"""
+    app, client = await _client(tmp_path, "task_quiet")
+    async with app.router.lifespan_context(app), client:
+        rid, human, _, _ = await _room(client)
+        oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                 json={"title": "週期"},
+                                 headers=human)).json()["id"]
+        cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                 json={"title": "階段"},
+                                 headers=human)).json()["id"]
+        before = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM message WHERE room_id=?",
+            (rid,))).fetchone()
+        await client.post(f"/api/board/checklists/{cid}/tasks",
+                          json={"title": "一件事"}, headers=human)
+        after = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM message WHERE room_id=?",
+            (rid,))).fetchone()
+        assert after["n"] == before["n"], "建 Task 不該產生任何訊息"
+
+
+async def test_no_agents_in_the_room_means_no_message(tmp_path):
+    """房裡沒有 agent 時不發——沒有收件人的通知只是噪音。"""
+    app, client = await _client(tmp_path, "no_agents")
+    async with app.router.lifespan_context(app), client:
+        rid = (await client.post("/api/rooms", json={
+            "name": "板子房", "session_key": "human-1"})).json()["id"]
+        human = await _join(client, rid, "human-1", "Bernie", role="human")
+        await client.post(f"/api/rooms/{rid}/board/objectives",
+                          json={"title": "沒人聽的週期"}, headers=human)
+        assert await _mentions_of(app, rid, "board_objective_created") == []

@@ -3148,6 +3148,8 @@ def create_app(config: Config | None = None) -> FastAPI:
              me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
+        await _announce_human_container(room_id, me, "週期", body.title.strip(),
+                                        "board_objective_created")
         await events.notify(room_id)
         return {"ok": True, "id": oid, "board_seq": seq}
 
@@ -3191,6 +3193,9 @@ def create_app(config: Config | None = None) -> FastAPI:
              body.description, me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
+        await _announce_human_container(
+            parent["room_id"], me, "階段", body.title.strip(),
+            "board_checklist_created", within=parent["title"])
         await events.notify(parent["room_id"])
         return {"ok": True, "id": cid, "board_seq": seq}
 
@@ -3493,7 +3498,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return me["role"] == "human"
 
     async def _board_audience(room_id: str, exclude_id: str = "",
-                              humans_only: bool = False) -> list[str]:
+                              humans_only: bool = False,
+                              agents_only: bool = False) -> list[str]:
         """board 通知的收件名單：房內 active、**非 ephemeral** 的成員。
 
         排除 subagent 是既有原則的延伸——它們沒有自己的 watcher（活在父層
@@ -3501,13 +3507,56 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         `humans_only` 用在「只有人類做得到的下一步」那兩則（送審／確認）：
         agent 不需要被叫醒，它們本來就在看板；要被叫的是**沒在看板子的人**。
+
+        `agents_only` 是反過來的那一種：**人類開了一段新的工作**。
+        artefact 在板上，但 agent 不會自己回頭看板——它們在等著被叫。
+        （艾斯維爾 2026-09-02：「我通常會用 checklist 放要做的東西，
+        然後 agent 自己再往裡面添加任務」——那條工作流要成立，
+        agent 就得知道那一段開了。）
         """
         sql = ("SELECT id, display_name FROM participant"
                " WHERE room_id=? AND status='active' AND ephemeral=0")
         if humans_only:
             sql += " AND role='human'"
+        if agents_only:
+            sql += " AND role!='human'"
         rows = await (await app.state.db.execute(sql, (room_id,))).fetchall()
         return [r["display_name"] for r in rows if r["id"] != exclude_id]
+
+    async def _announce_human_container(
+        room_id: str, me, label: str, title: str, event: str,
+        within: str = "",
+    ) -> None:
+        """**人類**開了一個新的週期／階段時，叫醒房裡的 agent。
+
+        這是 board 通知裡唯一「往下派工」方向的一則。其餘幾則都是回報已經
+        發生的事（完成、送審、確認），而這一則是**還沒發生的事**：人類把一段
+        工作的框架擺出來，等 agent 往裡面填 Task。
+
+        兩個刻意的限制：
+
+        - **只有人類建立才發。** agent 自己開的容器不必廣播——它開那個容器
+          正是因為它已經知道要做什麼了，而房裡其他 agent 收到也不會去接
+          （那是它的工作，不是待辦）。
+        - **只發給 agent，不發給其他人類。** 這是派工訊號不是公告；人類要看
+          板上有什麼，板本身就在那裡。
+
+        Task 那層刻意不發：一個週期底下的 Task 可能有幾十張，逐張叫醒等於
+        把訊息流洗掉。**框架值得打斷，細項不值得。**
+        """
+        if not _is_human(me):
+            return
+        audience = await _board_audience(room_id, agents_only=True)
+        if not audience:
+            return
+        where = f"「{within}」底下" if within else ""
+        await _post_message(
+            room_id, None,
+            f"{me['display_name']} 在{where}開了新的{label}「{title}」，"
+            "可以往裡面加任務了。",
+            kind="system", system_event=event,
+            mentions=audience, reply_mentions_author=False,
+        )
 
     async def _board_status_change(kind: str, item_id: str, target: str,
                                    participant_id: str | None) -> dict:
