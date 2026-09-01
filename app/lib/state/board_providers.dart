@@ -50,8 +50,21 @@ final boardCacheProvider =
 
 /// 一個房間的 board。invalidate 它＝拉一次增量並合併。
 ///
-/// 由 `/updates` 或 WebSocket 捎回的 `board_seq` 觸發：那邊只給水位，
-/// 內容要自己來拿；水位沒動就不必 invalidate。
+/// 🔴 **目前沒有任何自動更新——別人動了板，這裡不會知道。**
+/// 現存的 invalidate 只有三處：畫面首次載入、錯誤重試、以及 [BoardActions]
+/// 在**自己**動作之後。所以兩個人同時開著 board 時，一方的變更要等另一方
+/// 退出畫面再進來才看得到。
+///
+/// 這一段原本寫著「由 `/updates` 或 WebSocket 捎回的 `board_seq` 觸發」
+/// ——**那是意圖不是實作**，2026-09-01 查證後改掉。註解宣稱做了而其實沒做，
+/// 比完全沒寫更糟：讀的人會以為這條線是通的，然後去別處找 bug。
+///
+/// 要接通需要三層，這裡是第三層：
+///   1. Hub 的 WebSocket 推 board 事件（`{"type": "board", board_seq}`）
+///   2. `RealtimeService` 解析它並暴露出來
+///   3. **這裡**：水位比本機大就 `ref.invalidate(boardProvider(roomId))`
+///
+/// agent 那側不受影響——`chatroom_wait` 的 `board_changed` 已經通了。
 final boardProvider =
     FutureProvider.autoDispose.family<BoardSnapshot, String>((ref, roomId) async {
   // 房間是讀取邊界，board 也算房內內容 ⇒ 要房內身分。
