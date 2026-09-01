@@ -158,3 +158,59 @@ async def test_uncategorised_is_reopened_instead_of_refused(tmp_path):
             "SELECT COUNT(*) AS n FROM board_checklist WHERE room_id=?"
             " AND title='未分類' AND deleted=0", (rid,))).fetchone()
         assert n["n"] == 1
+
+
+async def test_a_reviewed_objective_refuses_new_checklists(tmp_path):
+    """🔑 判準是「不是 active 就拒收」，不只是收尾。
+
+    **閘只在送審那一刻驗過一次。** 之後加進來的 Checklist 是 `open` 的，
+    而週期會一路走到 `done`——底下卻掛著一段從沒做完的東西。同一個 bug，
+    只是換到上面一層。
+
+    （第一版我只擋收尾，理由是「送審會被打回，那時卡還要進得來」；但打回
+    之後狀態就是 `active`，本來就進得來，那個理由不支撐 review 可寫。）
+    """
+    app, client = await _client(tmp_path, "reviewed_obj")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, oid, cid = await _setup(client)
+        assert rid
+        await _settle_checklist(client, hdr, cid)
+        r = await client.post(f"/api/board/objectives/{oid}/review", headers=hdr)
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/objectives/{oid}/checklists",
+                              json={"title": "送審之後偷渡一段"}, headers=hdr)
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "container_settled"
+        assert detail["item_status"] == "review"
+        assert detail["reopen_to"] == "active"
+
+
+async def test_a_verified_objective_refuses_new_checklists(tmp_path):
+    """`verified` 更明顯：人類已經確認過，之後加進來的不會再被任何人看一眼，
+    而 `complete` 不重驗。"""
+    app, client = await _client(tmp_path, "verified_obj")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, oid, cid = await _setup(client)
+        assert rid
+        await _settle_checklist(client, hdr, cid)
+        await client.post(f"/api/board/objectives/{oid}/review", headers=hdr)
+        r = await client.post(f"/api/board/objectives/{oid}/verify", headers=hdr)
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/objectives/{oid}/checklists",
+                              json={"title": "確認之後偷渡一段"}, headers=hdr)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["item_status"] == "verified"
+
+
+async def test_an_active_objective_still_accepts_checklists(tmp_path):
+    """錨點：擋掉「把整個閘關死」也會過的寫法。"""
+    app, client = await _client(tmp_path, "active_obj_ok")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, oid, cid = await _setup(client)
+        assert rid and cid
+        r = await client.post(f"/api/board/objectives/{oid}/checklists",
+                              json={"title": "正常加一段"}, headers=hdr)
+        assert r.status_code == 200, r.text

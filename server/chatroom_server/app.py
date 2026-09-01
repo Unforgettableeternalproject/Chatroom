@@ -3264,7 +3264,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             打回會推 board_seq，畫面自己會反應，不另發系統訊息（隨手記一件
             事是很輕的動作，不值得在房裡響一聲）。
             """
-            if row["o_status"] in SETTLED:
+            if row["o_status"] != "active":
                 await db.execute(
                     "UPDATE board_objective SET status='active',"
                     " completed_by=NULL, completed_at=NULL,"
@@ -3365,14 +3365,31 @@ def create_app(config: Config | None = None) -> FastAPI:
         Checklist 還 open」這個組合會整個漏掉——而週期收尾本來就不要求
         先把每一份清單收掉，那個組合是走得到的。
 
-        `review` 不算收尾：送審會被打回，那時卡還要進得來。
+        🔑 **Objective 那層的判準是「不是 active 就拒收」，不只是收尾。**
+        `review` 與 `verified` 也要擋——**閘只在送審那一刻驗過一次**，之後
+        加進來的 Checklist 是 `open` 的，而週期會一路走到 `done`，底下卻掛著
+        一段從沒做完的東西。`verified` 更明顯：那是人類已經確認過的狀態，
+        之後加進來的東西不會再被任何人看過一眼，而 `complete` 不重驗。
+        （我第一版寫成只擋收尾，理由是「送審會被打回，那時卡還要進得來」
+        ——但打回之後狀態就是 `active`，本來就進得來，那個理由不支撐
+        review 可寫。開發Novia (協助) 在房內 #103 指出。）
+
+        Checklist 那層維持「收尾才擋」，因為它根本沒有 review 這個狀態。
         """
         row = await _board_item_or_404(kind, item_id)
-        if row["status"] in SETTLED:
+        if kind == "objective":
+            blocked = row["status"] != "active"
+            reason = {"review": "已經送審", "verified": "已經確認無誤",
+                      "done": "已經完成", "cancelled": "已經取消"}.get(
+                          row["status"], f"目前是「{row['status']}」")
+        else:
+            blocked = row["status"] in SETTLED
+            reason = "已經完成" if row["status"] == "done" else "已經取消"
+        if blocked:
             raise _err(409, "container_settled",
                        f"這個{'週期' if kind == 'objective' else '階段'}"
-                       f"已經{'完成' if row['status'] == 'done' else '取消'}了，"
-                       "不能再往裡面加東西——要加的話先把它打回進行中",
+                       f"{reason}了，不能再往裡面加東西"
+                       "——要加的話先把它打回進行中",
                        kind=kind, item_id=item_id,
                        # ⚠️ 不能叫 status——那是 _err() 自己的第一個參數名
                        item_status=row["status"],
