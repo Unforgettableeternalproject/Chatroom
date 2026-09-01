@@ -434,3 +434,84 @@ async def test_healing_keeps_a_settled_card_on_its_holder(tmp_path):
         assert row["orphaned_at"] is None
         assert row["orphaned_reason"] == ""
         assert row["claim_name"] == "前世的我"
+
+
+async def _room_with_cancellable_tree(client):
+    """回傳 (rid, 人類 hdr, agent hdr, oid, tid)。取消週期要人類或建立者。"""
+    rid = (await client.post("/api/rooms", json={
+        "name": "板子房", "session_key": "owner"})).json()["id"]
+    human, _ = await _join(client, rid, "human-1", "艾斯維爾", role="human")
+    agent, _ = await _join(client, rid, "agent-1", "Novia")
+    oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                             json={"title": "週期一"}, headers=human)).json()["id"]
+    cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                             json={"title": "階段一"}, headers=human)).json()["id"]
+    tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                             json={"title": "一件事"}, headers=human)).json()["id"]
+    return rid, human, agent, oid, tid
+
+
+async def test_a_task_under_a_cancelled_objective_is_never_orphaned(tmp_path):
+    """A5：父層被取消的卡，持有者離場也不該變孤兒。
+
+    objective 的 cancel **不 cascade 子層**（刻意的——cascade 會讓週期
+    reopen 時救不回子卡狀態），所以那些卡的 status 還是 todo，不符「已收尾」
+    的豁免 ⇒ 會被永久標成孤兒。而顯示那側早就把取消的週期濾掉了 ⇒
+    app bar 一直寫著 N 個孤兒，進板一張也找不到。
+
+    豁免而不 cascade：孤兒化的語意是「讓別人接手」，而父層取消的卡
+    **沒有人需要接手**。
+    """
+    app, client = await _client(tmp_path, "orphan_cancelled")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent, oid, tid = await _room_with_cancellable_tree(client)
+        r = await client.post(f"/api/board/tasks/{tid}/claim", headers=agent)
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/board/objectives/{oid}/cancel",
+                              headers=human)
+        assert r.status_code == 200, r.text
+
+        # 持有者離場
+        r = await client.post(f"/api/rooms/{rid}/leave", headers=agent)
+        assert r.status_code == 200, r.text
+
+        row = await (await app.state.db.execute(
+            "SELECT status, claim_state FROM board_task WHERE id=?", (tid,),
+        )).fetchone()
+        assert row["status"] == "todo", "取消週期不 cascade 子層，這是刻意的"
+        assert row["claim_state"] != "orphaned", (
+            "父層已取消的卡不該變孤兒——沒有人需要接手它"
+        )
+
+
+async def test_stale_orphans_under_a_cancelled_objective_are_healed(tmp_path):
+    """存量那半。不清的話，這些列會被 v2 遷移一起帶過去。"""
+    path = str(tmp_path / "heal_cancelled.db")
+    cfg = Config(db_path=path, api_token=ROOT)
+    app = create_app(cfg)
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://test",
+                         headers={"Authorization": f"Bearer {ROOT}"})
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent, oid, tid = await _room_with_cancellable_tree(client)
+        pid = agent["X-Participant-Id"]
+        await client.post(f"/api/board/objectives/{oid}/cancel", headers=human)
+        # 舊版本會產生的狀態：父層取消了，卡卻被標成孤兒
+        await app.state.db.execute(
+            "UPDATE board_task SET claim_state='orphaned',"
+            " claim_participant_id=?, claim_name='前世的我',"
+            " orphaned_at='2026-09-01', orphaned_reason='因閒置移出'"
+            " WHERE id=?", (pid, tid))
+        await app.state.db.commit()
+    assert rid
+
+    app2 = create_app(Config(db_path=path, api_token=ROOT))
+    client2 = AsyncClient(transport=ASGITransport(app=app2),
+                          base_url="http://test",
+                          headers={"Authorization": f"Bearer {ROOT}"})
+    async with app2.router.lifespan_context(app2), client2:
+        row = await (await app2.state.db.execute(
+            "SELECT claim_state, orphaned_reason FROM board_task WHERE id=?",
+            (tid,))).fetchone()
+        assert row["claim_state"] == "held", "有持有者的清回 held（F7）"
+        assert row["orphaned_reason"] == ""

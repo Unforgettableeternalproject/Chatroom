@@ -2329,14 +2329,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         ⇒ 有持有者的清回 `held`，本來就沒人領的才是空字串。
         **清理不只是移除矛盾，它同時挑了一個表示——那個選擇必須明講。**
 
+        🔑 **A5（同日稍晚）：另一種「不該是孤兒的孤兒」——父層被取消的卡。**
+        objective 的 cancel 只改自己那一列、不 cascade 子層（刻意的，
+        cascade 會讓週期 reopen 時救不回子卡狀態），所以那些卡的 status
+        還是 todo ⇒ 不符上面的收尾豁免，會被**永久**標成孤兒。而顯示那側
+        早就把取消的週期濾掉了 ⇒ app bar 一直寫著 N 個孤兒，進板一張也
+        找不到。
+
         受影響的房間要推進 `board_seq`，否則增量 client 永遠看不到這次修復，
         手上那張卡會一直維持矛盾狀態。
         """
         db = app.state.db
+        # 「不該是孤兒的孤兒」有兩種：自己收尾了（F6），以及父層被取消了
+        # （A5）。兩種的存量都要清，否則 v2 遷移會把它們一起帶過去。
+        stale = (
+            " claim_state='orphaned' AND (status IN ('done','cancelled')"
+            "   OR checklist_id IN (SELECT c.id FROM board_checklist c"
+            "        JOIN board_objective o ON o.id = c.objective_id"
+            "        WHERE c.status='cancelled' OR o.status='cancelled'))"
+        )
         rows = await (
             await db.execute(
-                "SELECT DISTINCT room_id FROM board_task"
-                " WHERE claim_state='orphaned' AND status IN ('done','cancelled')"
+                f"SELECT DISTINCT room_id FROM board_task WHERE {stale}"
             )
         ).fetchall()
         healed = 0
@@ -2347,8 +2361,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " claim_state=CASE WHEN claim_participant_id IS NOT NULL"
                 "                  THEN 'held' ELSE '' END,"
                 " orphaned_at=NULL, orphaned_reason='', board_seq=?"
-                " WHERE room_id=? AND claim_state='orphaned'"
-                "   AND status IN ('done','cancelled') RETURNING id",
+                f" WHERE room_id=? AND {stale} RETURNING id",
                 (seq, r["room_id"]),
             )
             healed += len(await cur.fetchall())
@@ -2386,12 +2399,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " p.role"
                 " FROM board_task t JOIN participant p"
                 "   ON p.id = t.claim_participant_id"
+                " JOIN board_checklist c ON c.id = t.checklist_id"
+                " JOIN board_objective o ON o.id = c.objective_id"
                 " WHERE t.room_id=? AND t.claim_state='held' AND p.status!='active'"
                 # 🔴 已收尾的卡不孤兒化。孤兒的意思是「這件事沒人做了」，
                 # 而 done／cancelled 的事**已經沒有人需要做**——把它標成
                 # orphaned 會產生一個自相矛盾的組合：完成了、而且沒人在做。
                 # UI 讀到那個組合只能二選一顯示，怎麼選都是錯的
-                "   AND t.status NOT IN ('done','cancelled')",
+                "   AND t.status NOT IN ('done','cancelled')"
+                # 🔴 父層被取消的卡同理，而且它連「自己被取消」都不會顯示：
+                # objective 的 cancel 只改自己那一列、**不 cascade 子層**
+                # （那是刻意的——cascade 會把子卡狀態改掉，週期 reopen 時
+                # 就救不回來了）。於是那些卡的 status 還是 todo，不符上面的
+                # 豁免，會被**永久**標成孤兒：app bar 一直寫著 N 個孤兒，
+                # 而畫面上找不到任何一張——因為顯示那側早就把取消的週期濾掉了。
+                #
+                # 豁免而不 cascade：孤兒化的語意是「讓別人接手」，
+                # 而父層取消的卡**沒有人需要接手**。
+                "   AND o.status != 'cancelled' AND c.status != 'cancelled'",
                 (room_id,),
             )
         ).fetchall()
