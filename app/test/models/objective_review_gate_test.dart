@@ -108,6 +108,37 @@ void main() {
     }
   });
 
+  /// 畫面把「未分類」那一層藏起來，但 **Hub 眼裡它仍是一份 Checklist**。
+  /// 送審條件排除它的話，按鈕會亮而 Hub 拒絕——正是這次要修掉的形狀。
+  group('藏起來的「未分類」照樣擋送審', () {
+    test('未分類還開著就送不出去', () {
+      final snap = _snap(
+        objectives: [_o('o1')],
+        checklists: [
+          _c('c1', status: 'done'),
+          _c(kUncategorisedTitle),
+        ],
+      );
+      expect(snap.canReviewObjective('o1'), isFalse);
+    });
+
+    test('未分類收尾了才放行', () {
+      final snap = _snap(
+        objectives: [_o('o1')],
+        checklists: [
+          _c('c1', status: 'done'),
+          _c(kUncategorisedTitle, status: 'done'),
+        ],
+      );
+      expect(snap.canReviewObjective('o1'), isTrue);
+    });
+
+    test('認得出哪一格是未分類', () {
+      expect(_c(kUncategorisedTitle).isUncategorised, isTrue);
+      expect(_c('Hub 側').isUncategorised, isFalse);
+    });
+  });
+
   test('週期不在快取裡：不亮，不是崩潰', () {
     expect(_snap().canReviewObjective('nope'), isFalse);
   });

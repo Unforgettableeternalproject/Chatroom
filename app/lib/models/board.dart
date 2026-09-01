@@ -80,6 +80,10 @@ class BoardObjective {
   );
 }
 
+/// Hub 給 loose task 用的收納層名稱。兩邊寫死同一個字串是刻意的：
+/// 它是 Hub 找回同一格的鍵，不是可翻譯的文案。
+const kUncategorisedTitle = '未分類';
+
 /// Checklist：Objective 底下的階段分組（「Hub 端」「App 端」「測試與除錯」）。
 ///
 /// **不是驗收條件清單**——這點在需求原文裡有歧義，已由艾斯維爾拍板
@@ -119,6 +123,13 @@ class BoardChecklist {
   final String createdAt;
 
   bool get isDone => status == 'done';
+
+  /// Hub 為「隨手記一件事」備妥的收納層（`POST .../board/tasks`）。
+  ///
+  /// 名字是固定的——**固定才找得回同一個**，每次新建的話板上會長出一排
+  /// 空殼。畫面把這一層藏起來（艾斯維爾裁決）：它不是使用者安排出來的
+  /// 階段，是系統為了滿足三層結構而墊的一格。
+  bool get isUncategorised => title == kUncategorisedTitle;
 
   factory BoardChecklist.fromJson(Map<String, dynamic> json) => BoardChecklist(
     id: json['id'] as String,
@@ -378,6 +389,10 @@ class BoardTask {
       status != 'cancelled';
 
   bool get isDone => status == 'done';
+
+  /// 已經有結論了（完成或取消）。收尾的閘看的是這個，不是只看 done——
+  /// 取消不是失敗，它同樣是一個結論。
+  bool get isSettled => status == 'done' || status == 'cancelled';
 
   factory BoardTask.fromJson(Map<String, dynamic> json) => BoardTask(
     id: json['id'] as String,

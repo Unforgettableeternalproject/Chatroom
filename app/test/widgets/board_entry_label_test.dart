@@ -190,6 +190,17 @@ void main() {
     });
   });
 
+  test('🔴 藏起來的「未分類」，它底下的卡照樣要算', () {
+    // 只藏中間那層，Task 平鋪在週期底下——卡片還在畫面上，計數就不能少。
+    // 為了藏 UI 而讓計數母體再漂移一次的話，就是把 B3 又做了一遍
+    final h = _snap(
+      tasks: [_t('a'), _t('b', checklistId: kUncategorisedTitle)],
+      checklists: [_c('c', 'o1'), _c(kUncategorisedTitle, 'o1')],
+      objectives: [_o('o1')],
+    ).entryHint;
+    expect(h.label, '0/2');
+  });
+
   group('可見母體是單一來源', () {
     test('tasksOfObjective 與 visibleTasks 對得起來', () {
       final snap = _snap(

@@ -508,7 +508,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(26, 20, 26, 48),
             children: [
-              for (final c in checklists) _checklistSection(context, snap, c),
+              for (final c in checklists)
+                if (c.isUncategorised)
+                  _looseTasks(context, snap, c)
+                else
+                  _checklistSection(context, snap, c),
               // 空的時候才在這裡再給一次入口——抬頭那顆已經在了，
               // 兩顆一樣的按鈕只會讓人懷疑它們是不是不同的東西
               if (checklists.isEmpty) ...[
@@ -732,6 +736,71 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   // ---------- Checklist 區段 ----------
 
+  Widget _taskCard(BoardSnapshot snap, BoardTask t) => BoardTaskCard(
+        task: t,
+        conflict: _conflicts[t.id],
+        assigneeName: _assigneeName(t),
+        onTap: () => setState(() => _openTaskId = t.id),
+        isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
+        onClaim: (t.isClaimable && !_archived) ? () => _claim(t.id) : null,
+        onRelease: (t.isHeld && !_archived)
+            ? () => runBoardAction(
+                context,
+                () => ref
+                    .read(boardActionsProvider(widget.roomId))
+                    .release(t.id))
+            : null,
+      );
+
+  /// 「未分類」那一層：**只藏中間那格，卡片平鋪在週期底下**（艾斯維爾裁
+  /// 決 #13）。整個週期藏掉會讓人找不到自己隨手記的東西。
+  ///
+  /// 它不是使用者安排出來的階段，是 Hub 為了滿足三層結構墊的一格，所以
+  /// 沒有標題列、沒有「＋ 任務」——隨手記那條路徑在聊天室裡，不在這裡。
+  ///
+  /// ⚠️ 唯一留下來的是收尾：它在 Hub 眼裡仍是一份 Checklist，**沒收尾就
+  /// 送不出審**。藏了那一層又不給收尾的入口，週期會永遠卡在送審前一步，
+  /// 而畫面上完全看不出是什麼擋著。
+  Widget _looseTasks(
+      BuildContext context, BoardSnapshot snap, BoardChecklist c) {
+    final s = context.uep;
+    var tasks = snap.tasksOf(c.id);
+    if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
+    if (tasks.isEmpty) return const SizedBox.shrink();
+
+    final loose = tasks.where((t) => !t.isSettled).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final t in tasks) _taskCard(snap, t),
+          if (!_archived && c.status == 'open' && loose == 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _BarButton(
+                  label: '收尾未分類',
+                  onTap: () => runBoardAction(
+                      context,
+                      () => ref
+                          .read(boardActionsProvider(widget.roomId))
+                          .completeChecklist(c.id)),
+                ),
+              ),
+            )
+          else if (!_archived && c.status == 'open')
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('未分類還有 $loose 張沒收尾，週期送不出審。',
+                  style: UepText.mono(size: 9, color: s.inkMute)),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _checklistSection(
       BuildContext context, BoardSnapshot snap, BoardChecklist c) {
     final s = context.uep;
@@ -833,25 +902,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           if (collapsed) const SizedBox(height: 4),
           if (!collapsed) ...[
           const SizedBox(height: 10),
-          for (final t in tasks)
-            BoardTaskCard(
-              task: t,
-              conflict: _conflicts[t.id],
-              assigneeName: _assigneeName(t),
-              onTap: () => setState(() => _openTaskId = t.id),
-              isMineToReclaim:
-                  snap.reclaimable.any((r) => r.id == t.id),
-              onClaim: (t.isClaimable && !_archived)
-                  ? () => _claim(t.id)
-                  : null,
-              onRelease: (t.isHeld && !_archived)
-                  ? () => runBoardAction(
-                      context,
-                      () => ref
-                          .read(boardActionsProvider(widget.roomId))
-                          .release(t.id))
-                  : null,
-            ),
+          for (final t in tasks) _taskCard(snap, t),
           if (tasks.isEmpty)
             Text('這個階段還沒有任務。',
                 style: UepText.mono(size: 10, color: s.inkMute)),
@@ -908,7 +959,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final done = tasks.where((t) => t.isDone).length;
     final cancelled = tasks.where((t) => t.status == 'cancelled').length;
     return _Stats(
-      stages: checklists.length,
+      // 「N 階段」數的是**看得見的**那些：未分類那一格畫面上不存在，
+      // 把它算進去，數字就會跟畫面對不起來（同 B3 的母體問題）
+      stages: checklists.where((c) => !c.isUncategorised).length,
+      // ⚠️ 收尾與送審相反，**必須含未分類**——Hub 的閘算它。排除它的話
+      // 按鈕會亮而拿 409，那正是這次要修掉的形狀
       // 可見的清單都不是 cancelled，所以「不是 done」就是還開著
       stagesOpen: checklists.where((c) => !c.isDone).length,
       stagesDone: checklists.where((c) => c.isDone).length,
