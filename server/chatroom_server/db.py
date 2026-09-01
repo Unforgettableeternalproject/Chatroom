@@ -235,6 +235,9 @@ CREATE TABLE IF NOT EXISTS board_objective (
     status      TEXT NOT NULL DEFAULT 'active',
     order_index INTEGER NOT NULL DEFAULT 0,
     created_by  TEXT REFERENCES participant(id),
+    -- 建立者的名字快照。id 在對方離場後查不回名字，而 board 上最先查不回的
+    -- 正是建立者——它常常是一個已經被回收的 subagent
+    created_by_name TEXT NOT NULL DEFAULT '',
     -- 送審／確認／完成分別是誰。三個時間點各留一份：追得出「誰確認的」
     -- 才有守門的意義，只留 completed_by 等於沒有守門紀錄
     reviewed_by  TEXT REFERENCES participant(id),
@@ -259,6 +262,7 @@ CREATE TABLE IF NOT EXISTS board_checklist (
     status       TEXT NOT NULL DEFAULT 'open',  -- open / done / cancelled
     order_index  INTEGER NOT NULL DEFAULT 0,
     created_by   TEXT REFERENCES participant(id),
+    created_by_name TEXT NOT NULL DEFAULT '',
     completed_by TEXT REFERENCES participant(id),
     completed_at TEXT,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -286,11 +290,18 @@ CREATE TABLE IF NOT EXISTS board_task (
     claim_participant_id TEXT REFERENCES participant(id),
     claim_session_key    TEXT NOT NULL DEFAULT '',
     claim_name           TEXT NOT NULL DEFAULT '',  -- 認領當下的 display_name
+    -- 認領當下的 agent 種類（claude / codex / human / other）。與 claim_name
+    -- 同一個理由：離場後 participant 查得到列但畫面要的是「當時是誰」，而
+    -- 種類徽章在卡片上與名字並列
+    claim_kind           TEXT NOT NULL DEFAULT '',
     -- ''（未認領）/ held（持有中）/ orphaned（持有者已不在房內）
     -- released 不存：主動放棄就清成 ''，那是「這張卡沒人做」的事實
     claim_state          TEXT NOT NULL DEFAULT '',
     claimed_at           TEXT,
     orphaned_at          TEXT,
+    -- 為什麼變成孤兒。**只有在離場那一刻知道**——事後從 participant 反推
+    -- 不出來（status 會被下一次 join 覆寫），所以當場記
+    orphaned_reason      TEXT NOT NULL DEFAULT '',
 
     -- 來源訊息的房內 seq。**存 seq 不存 message_id**，與 reply_to_seq 同一個
     -- 理由：訊息可以被軟刪除，seq 不會
@@ -298,8 +309,12 @@ CREATE TABLE IF NOT EXISTS board_task (
     -- 人類指定的執行者（建議，不是鎖）。認領仍要對方自己來——指派一個沒醒著
     -- 的 agent 然後把卡鎖起來，board 會停在那裡
     assignee_participant_id TEXT REFERENCES participant(id),
+    -- 誰指定的（卡片上會寫「某某指定」）。同樣存名字快照
+    assigned_by             TEXT REFERENCES participant(id),
+    assigned_by_name        TEXT NOT NULL DEFAULT '',
 
     created_by   TEXT REFERENCES participant(id),
+    created_by_name TEXT NOT NULL DEFAULT '',
     completed_by TEXT REFERENCES participant(id),
     completed_at TEXT,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -385,6 +400,17 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 收所有 board 變動摘要的 session。空字串＝沒有指定，舊房一律如此
     ("room", "board_supervisor_session_key",
      "board_supervisor_session_key TEXT NOT NULL DEFAULT ''"),
+    # 名字／種類／原因的快照。**參照 id 在對方離場後查不回名字**，而 board 上
+    # 到處都要顯示「上一個是誰、什麼種類、為什麼不在了」。claim_name 當初存
+    # 快照的理由，對這幾欄一字不差地成立。舊資料一律空字串＝不知道，那正是
+    # 這些欄位存在之前的事實——猜著回填會在卡片上寫出一個沒發生過的歷史
+    ("board_objective", "created_by_name", "created_by_name TEXT NOT NULL DEFAULT ''"),
+    ("board_checklist", "created_by_name", "created_by_name TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "created_by_name", "created_by_name TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "claim_kind", "claim_kind TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "orphaned_reason", "orphaned_reason TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "assigned_by", "assigned_by TEXT REFERENCES participant(id)"),
+    ("board_task", "assigned_by_name", "assigned_by_name TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

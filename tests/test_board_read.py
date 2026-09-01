@@ -151,3 +151,46 @@ async def test_archived_room_board_is_still_readable(tmp_path):
                              headers={"X-Participant-Id": pid})
         assert r.status_code == 200
         assert len(r.json()["objectives"]) == 1
+
+
+async def test_response_shape_is_pinned(tmp_path):
+    """回應的鍵集合本身是契約（除錯 Novia 於 T-02 審查提出）。
+
+    這條契約橫跨兩個語言：Dart 那側解析不到欄位**不會報錯，只會顯示空白**。
+    改個欄位名在 Python 這側看起來完全正常，而 App 上那一格就這樣安靜地空掉。
+    錨點只有放在產生端才有效——消費端的 fixture 是靜態的，抓不到。
+    """
+    app, client = await _client(tmp_path, "shape")
+    async with app.router.lifespan_context(app), client:
+        rid, pid = await _room_with_member(client, session_key="agent-mine")
+        await _seed(app, rid, seq=1, claim_state="orphaned",
+                    claim_session_key="agent-mine", suffix="1")
+        body = (await client.get(f"/api/rooms/{rid}/board",
+                                 headers={"X-Participant-Id": pid})).json()
+        assert set(body) == {
+            "board_seq", "full", "objectives", "checklists", "tasks",
+            "reclaimable_tasks", "supervisor",
+        }
+        assert set(body["objectives"][0]) == {
+            "id", "room_id", "title", "description", "status", "order_index",
+            "created_by", "created_by_name", "reviewed_by", "reviewed_at",
+            "verified_by", "verified_at", "completed_by", "completed_at",
+            "deleted", "board_seq", "created_at",
+        }
+        assert set(body["checklists"][0]) == {
+            "id", "room_id", "objective_id", "title", "description", "status",
+            "order_index", "created_by", "created_by_name", "completed_by",
+            "completed_at", "deleted", "board_seq", "created_at",
+        }
+        assert set(body["tasks"][0]) == {
+            "id", "room_id", "checklist_id", "title", "description", "status",
+            "order_index", "priority", "claim_participant_id",
+            "claim_session_key", "claim_name", "claim_kind", "claim_state",
+            "claimed_at", "orphaned_at", "orphaned_reason", "source_seq",
+            "assignee_participant_id", "assigned_by", "assigned_by_name",
+            "created_by", "created_by_name", "completed_by", "completed_at",
+            "deleted", "board_seq", "created_at",
+        }
+        assert set(body["reclaimable_tasks"][0]) == {
+            "id", "title", "orphaned_at", "claim_name",
+        }

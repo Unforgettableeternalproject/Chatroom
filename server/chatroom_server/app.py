@@ -2220,6 +2220,105 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         return names
 
+    # 離場原因：**只有在離場那一刻知道**。事後從 participant 反推不出來——
+    # 同一把 session_key 下次 join 會產生新的一列，而舊列的 status 說得出
+    # 「他走了」卻說不出這張卡是在哪一次走的時候掉的。
+    # 鍵是 (participant.status, 是不是人類)。分人類與 agent 是因為同一件事
+    # 在兩邊讀起來不一樣：agent 走掉是「它那個 session 結束了」，人走掉是
+    # 「他離開了這個房間」——卡片上要寫得像句話，不是像狀態碼
+    _ORPHAN_REASONS = {
+        ("removed", False): "因閒置移出",
+        ("removed", True): "因閒置移出",
+        ("kicked", False): "被移出聊天室",
+        ("kicked", True): "被移出聊天室",
+        ("left", False): "session 已結束",
+        ("left", True): "已離開聊天室",
+    }
+
+    async def _orphan_claims(room_id: str) -> list[dict]:
+        """把「持有者已經不在房內」的認領標成 orphaned。**不 commit。**
+
+        呼叫時機是四條離場路徑之後（閒置逾時、自行退出、被踢、subagent 回收）。
+        `leave_room` 已經會連帶 `_cancel_questions`、`kick_participant` 已經會
+        連帶撤銷 assignment 與 access_token——「離場要連帶處理其他表」在這個
+        Hub 是既有模式。
+
+        ⚠️ 這裡**不收 participant id 清單**（設計文件原本的簽章），改為以
+        「這個房裡所有非 active 的成員」為條件。理由：四個呼叫點各自能拿到的
+        id 不一樣（父層退場時子代理的 id 要另外查），而漏掉一個的症狀是靜默的
+        ——那張卡會永遠顯示「有人在做」。以狀態為條件則是自我修復的：任何一條
+        路徑忘了呼叫，下一次任何人離場時都會順手補上。
+        **而且離場原因就在 participant 那一列上**（status + ephemeral），不必
+        由四個呼叫點各自把 reason 傳進來——少一個會傳錯的地方。
+
+        **標記而非清空**：清掉 `claim_participant_id` 就查不出「上一個是誰在
+        做」，而那正是接手的人最需要知道的事。成本只是一個字串欄位。
+        """
+        db = app.state.db
+        held = await (
+            await db.execute(
+                "SELECT t.id, t.title, t.claim_name, p.status, p.ephemeral,"
+                " p.role"
+                " FROM board_task t JOIN participant p"
+                "   ON p.id = t.claim_participant_id"
+                " WHERE t.room_id=? AND t.claim_state='held' AND p.status!='active'",
+                (room_id,),
+            )
+        ).fetchall()
+        if not held:
+            return []
+        seq = await _next_board_seq(room_id)
+        now = _now()
+        out = []
+        for r in held:
+            # subagent 的回收不是「它自己決定離開」，措辭要分開——它掛在
+            # 父層底下，父層走了它就跟著走，那不是它的 session 結束
+            reason = ("subagent 已回收" if r["ephemeral"]
+                      else _ORPHAN_REASONS.get(
+                          (r["status"], r["role"] == "human"), "已不在房內"))
+            await db.execute(
+                "UPDATE board_task SET claim_state='orphaned', orphaned_at=?,"
+                " orphaned_reason=?, board_seq=? WHERE id=?",
+                (now, reason, seq, r["id"]),
+            )
+            out.append({"id": r["id"], "title": r["title"],
+                        "claim_name": r["claim_name"], "reason": reason,
+                        "ephemeral": bool(r["ephemeral"])})
+        return out
+
+    async def _announce_orphans(room_id: str, orphaned: list[dict]) -> None:
+        """孤兒發**獨立的 BOARD 系統訊息**（艾斯維爾 2026-09-01 裁定，照設計稿）。
+
+        主詞是**卡**不是人——讀的人在意的是哪張卡沒人做了，而不是誰走了；
+        附在「某某離開了」尾巴的話，那句話會被當成離場的註腳讀過去。
+
+        **不 mention 任何人**（§4.3）：孤兒不是誰的待辦，是板上的事實，
+        靠 board 入口的孤兒計數被看見。
+        ⚠️ subagent 回收那條路徑不發——它連離場訊息都沒有，為它破例會讓
+        「子代理的進出不進訊息流」這條設計出現一個例外。
+        """
+        visible = [o for o in orphaned if not o["ephemeral"]]
+        if not visible:
+            return
+        # 一次離場通常只掉一兩張卡。真的掉一整批時逐張發會把時間軸洗掉，
+        # 那時改成一行摘要——它仍然說得出是誰、為什麼
+        if len(visible) > 3:
+            who = visible[0]["claim_name"] or "某個成員"
+            await _post_message(
+                room_id, None,
+                f"{who} {visible[0]['reason']}，{len(visible)} 張認領中的"
+                "任務現在沒有人在上面。",
+                kind="system", system_event="board_orphaned",
+            )
+            return
+        for o in visible:
+            who = o["claim_name"] or "某個成員"
+            await _post_message(
+                room_id, None,
+                f"{who} {o['reason']}，「{o['title']}」現在沒有人在上面。",
+                kind="system", system_event="board_orphaned",
+            )
+
     async def _depart_with_subagents(
         room_id: str, participant_id: str, own_status: str,
         sub_status: str, reason: str,
@@ -2277,6 +2376,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         orphans = await _depart_with_subagents(
             room_id, p["id"], "left", "left", "父層離開"
         )
+        # 走了就不再持有 board 上的卡——留著會讓那張卡永遠顯示「有人在做」
+        released = await _orphan_claims(room_id)
         logger.info(
             "離開房間 %s（%s）", p["display_name"], room_id, extra={
                 "event": "leave", "room_id": room_id, "participant_id": p["id"],
@@ -2296,6 +2397,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 extra={"event": "questions_cancelled_on_leave",
                        "room_id": room_id, "count": len(cancelled)},
             )
+        await _announce_orphans(room_id, released)
         # subagent 的離開不進訊息流（§2）。成員列變了仍要叫醒訂閱端
         if p["ephemeral"]:
             await events.notify(room_id)
@@ -2303,7 +2405,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
                                 kind="system", system_event="leave")
         return {"ok": True, "cancelled_questions": len(cancelled),
-                "cascaded_subagents": orphans}
+                "cascaded_subagents": orphans,
+                "orphaned_tasks": [r["id"] for r in released]}
 
     @app.post(
         "/api/rooms/{room_id}/participants/{target_id}/kick",
@@ -2340,6 +2443,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _depart_with_subagents(
             room_id, target_id, "kicked", "removed", "父層被移出"
         )
+        # 被踢的人不再持有 board 上的卡（同 leave）
+        kicked_orphans = await _orphan_claims(room_id)
+        await db.commit()
+        await _announce_orphans(room_id, kicked_orphans)
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
         # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
         # 要回來必須由管理員重新指派一次。
@@ -2824,9 +2931,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         oid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_objective (id, room_id, title, description,"
-            " created_by, board_seq, created_at) VALUES (?,?,?,?,?,?,?)",
+            " created_by, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (oid, room_id, body.title.strip(), body.description,
-             me["id"], seq, _now()),
+             me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
         await events.notify(room_id)
@@ -2865,10 +2973,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         cid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-            " description, created_by, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " description, created_by, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (cid, parent["room_id"], objective_id, body.title.strip(),
-             body.description, me["id"], seq, _now()),
+             body.description, me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
         await events.notify(parent["room_id"])
@@ -2907,11 +3015,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         tid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_task (id, room_id, checklist_id, title, description,"
-            " priority, source_seq, assignee_participant_id, created_by, board_seq,"
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " priority, source_seq, assignee_participant_id, assigned_by,"
+            " assigned_by_name, created_by, created_by_name, board_seq,"
+            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, parent["room_id"], checklist_id, body.title.strip(),
              body.description, body.priority, body.source_seq,
-             body.assignee_participant_id, me["id"], seq, _now()),
+             body.assignee_participant_id,
+             me["id"] if body.assignee_participant_id else None,
+             me["display_name"] if body.assignee_participant_id else "",
+             me["id"], me["display_name"], seq, _now()),
         )
         await db.commit()
         await events.notify(parent["room_id"])
@@ -2927,13 +3039,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         ⚠️ **不含 `status`**：狀態轉移有自己的守門（誰能推、能推去哪），
         走專用端點。放在這裡等於開一條沒有閘的旁路。
         """
-        return await _board_patch("task", task_id, {
+        fields = {
             "title": body.title.strip() if body.title else None,
             "description": body.description,
             "priority": body.priority,
             "order_index": body.order_index,
             "assignee_participant_id": body.assignee_participant_id,
-        }, x_participant_id)
+        }
+        if body.assignee_participant_id is not None:
+            # 「某某指定」要寫得出來，就得在指定的當下記——事後從 id 反推不出
+            row = await _board_item_or_404("task", task_id)
+            me = await _board_writer(row["room_id"], x_participant_id)
+            fields["assigned_by"] = me["id"]
+            fields["assigned_by_name"] = me["display_name"]
+        return await _board_patch("task", task_id, fields, x_participant_id)
 
     @app.delete("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def delete_task(
@@ -2980,6 +3099,89 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.commit()
         await events.notify(room_id)
         return {"ok": True, "board_seq": seq, "count": len(body.items)}
+
+    @app.post("/api/board/tasks/{task_id}/claim",
+              dependencies=[Depends(require_auth)])
+    async def claim_task(
+        task_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """認領一張 Task。
+
+        並發保證用**條件式 UPDATE（CAS）**，不是 partial unique index：後者管
+        的是多列之間的唯一性（同房不能有兩個 active 的 Novia），而「同時只能
+        一個人持有」是單列的狀態轉移，索引管不到。
+
+        🔴 判定成敗一律 `await cur.fetchone() is not None`，**不可以用
+        `cursor.rowcount`**：`UPDATE … RETURNING` 在 fetch 之前 rowcount 是 0
+        （sqlite3 把它當成會產生結果列的語句）。照 rowcount==1 寫的話，每一次
+        認領都會確實改到資料庫、卻回報「已被別人領走」——狀態變了而呼叫端
+        以為沒變，是最難查的一種。既有的 `pin_message` 用的就是 fetchone。
+
+        `orphaned` 也算可認領：持有者已經不在房內，就不算「同時」。
+        """
+        row = await _board_item_or_404("task", task_id)
+        me = await _board_writer(row["room_id"], x_participant_id)
+        db = app.state.db
+        # 認回自己上一世領的卡要能被看見——RETURNING 給的是更新**後**的值，
+        # 所以先把舊的持有者記下來
+        was_mine = (row["claim_state"] == "orphaned"
+                    and row["claim_session_key"] == me["session_key"])
+        seq = await _next_board_seq(row["room_id"])
+        cur = await db.execute(
+            "UPDATE board_task SET claim_participant_id=?, claim_session_key=?,"
+            " claim_name=?, claim_kind=?, claim_state='held', claimed_at=?,"
+            " orphaned_at=NULL, orphaned_reason='', board_seq=?"
+            " WHERE id=? AND deleted=0 AND status NOT IN ('done','cancelled')"
+            "   AND (claim_state='' OR claim_state='orphaned')"
+            " RETURNING id",
+            (me["id"], me["session_key"], me["display_name"], me["kind"],
+             _now(), seq, task_id),
+        )
+        if await cur.fetchone() is None:
+            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            current = await _board_item_or_404("task", task_id)
+            raise _err(409, "task_already_claimed",
+                       "這張卡已經有人在做，或它已經完成／取消了",
+                       claim_name=current["claim_name"],
+                       claim_state=current["claim_state"],
+                       task_status=current["status"])
+        await db.commit()
+        await events.notify(row["room_id"])
+        # reclaimed=true ＝「這是你上一世領的」，agent 才有理由先去讀描述
+        return {"ok": True, "id": task_id, "board_seq": seq, "reclaimed": was_mine}
+
+    @app.post("/api/board/tasks/{task_id}/release",
+              dependencies=[Depends(require_auth)])
+    async def release_task(
+        task_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """放棄認領。持有者本人，或人類成員（強制解除，Q7 定案）。
+
+        清成 `''` 而不是 `orphaned`：主動放棄的意思就是「這張卡沒人做」，
+        與「持有者不在了」是兩件事——後者要保留線索給接手的人，前者不必。
+        """
+        row = await _board_item_or_404("task", task_id)
+        me = await _board_writer(row["room_id"], x_participant_id)
+        if row["claim_state"] != "held":
+            raise _err(409, "not_claimed", "這張卡目前沒有人持有")
+        if row["claim_participant_id"] != me["id"] and me["role"] != "human":
+            raise _err(403, "not_claim_holder",
+                       f"這張卡由 {row['claim_name'] or '別人'} 持有——"
+                       "只有持有者本人或人類成員可以解除認領")
+        db = app.state.db
+        seq = await _next_board_seq(row["room_id"])
+        await db.execute(
+            "UPDATE board_task SET claim_participant_id=NULL, claim_session_key='',"
+            " claim_name='', claim_kind='', claim_state='', claimed_at=NULL,"
+            " orphaned_at=NULL, orphaned_reason='', board_seq=? WHERE id=?",
+            (seq, task_id),
+        )
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "id": task_id, "board_seq": seq,
+                "forced": row["claim_participant_id"] != me["id"]}
 
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
     async def read_board(
@@ -4655,7 +4857,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _depart_with_subagents(
                 p["room_id"], p["id"], "removed", "removed", "父層閒置逾時"
             )
+            released = await _orphan_claims(p["room_id"])
             await db.commit()
+            await _announce_orphans(p["room_id"], released)
             logger.info(
                 "sweep: 移除閒置 agent %s（room=%s）",
                 p["display_name"], p["room_id"], extra={

@@ -198,6 +198,14 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有目前的管理員可以移交管理權。",
                 status=status, detail=detail,
             )
+        if code == "not_claim_holder":
+            # 認領是別人的。落進 fallback 會叫他重新 join——而重新 join 之後
+            # 卡還是在別人手上，他會照做然後再撞一次
+            return HubError(
+                _detail_text(detail)
+                or "這張卡由別人持有，只有持有者本人或人類成員可以解除認領。",
+                status=status, detail=detail,
+            )
         if code == "human_only":
             # board 上「只有人類做得到」的動作（刪卡、確認 Objective）。
             # 落進 fallback 會被翻成「身分失效請重新 join」——而重新 join
