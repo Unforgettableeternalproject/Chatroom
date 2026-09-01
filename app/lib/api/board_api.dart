@@ -63,6 +63,33 @@ class BoardApi {
         return res.data!['id'] as String;
       });
 
+  /// 記一件事，不指定掛在哪裡——Hub 會把「未分類」那兩層備妥再掛上去。
+  ///
+  /// **`sourceSeq` 是這條路徑存在的理由**：一張卡最後總會變成一句沒有上下文
+  /// 的話，而決定它的討論還在聊天室裡。從一則訊息長出一張卡時，那個 seq 是
+  /// 回去的路——board UI 上建的卡拿不到它，因為那裡沒有「來源訊息」這個東西。
+  Future<String> addLooseTask(
+    String roomId, {
+    required String participantId,
+    required String title,
+    String description = '',
+    String priority = 'normal',
+    int? sourceSeq,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/board/tasks',
+          data: {
+            'title': title,
+            'description': description,
+            'priority': priority,
+            'source_seq': ?sourceSeq,
+          },
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        return res.data!['id'] as String;
+      });
+
   Future<String> addTask(
     String checklistId, {
     required String participantId,

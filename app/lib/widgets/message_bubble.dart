@@ -16,6 +16,7 @@ class MessageActions {
     required this.onTogglePin,
     required this.onDelete,
     required this.onEdit,
+    required this.onCreateTask,
     this.enabled = true,
   });
 
@@ -26,6 +27,13 @@ class MessageActions {
   /// 編輯**只有發送者本人做得到**（Hub 端也這樣驗）——刪除是破壞、看得
   /// 出來，編輯是改了看不出來，所以建立者管得了刪除卻管不了這個。
   final void Function(Message) onEdit;
+
+  /// 從這則訊息長出一張 Task。
+  ///
+  /// **這是 App 上唯一產得出 `source_seq` 的路徑**：board 畫面上建的卡沒有
+  /// 來源訊息可指，而一張卡最後總會變成一句沒有上下文的話。決定它的討論
+  /// 還在聊天室裡，那個 seq 就是回去的路。
+  final void Function(Message) onCreateTask;
 
   /// 封存房間：釘選 / 刪除 / 回覆停用（P3-08 條件 4）。
   final bool enabled;
@@ -395,6 +403,15 @@ class _ContextMenuRegion extends StatelessWidget {
             height: 36,
             child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
           ),
+          // 釘選與建立任務是兩件事，並存（同 Q1 的理由）：釘選是「這則訊息
+          // 很重要」，任務是「這則訊息要有人去做」。而卡片會指回這裡——
+          // 三百則訊息之後，那條路是唯一還找得到當初為什麼的東西
+          PopupMenuItem(
+            value: 'task',
+            height: 36,
+            child:
+                Text('❖　建立任務', style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
           if (isSelf)
             PopupMenuItem(
               value: 'edit',
@@ -425,6 +442,8 @@ class _ContextMenuRegion extends StatelessWidget {
         a.onTogglePin(message);
       case 'reply':
         a.onReply(message);
+      case 'task':
+        a.onCreateTask(message);
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.content));
       case 'edit':

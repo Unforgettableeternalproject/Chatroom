@@ -216,6 +216,28 @@ class BoardActions {
     return id;
   }
 
+  /// 從一則訊息記一件事。卡片會指回那則討論（[sourceSeq]），並落在
+  /// 「未分類」——為了記一件事先蓋兩層，實務上的結果是根本不記。
+  Future<String?> addLooseTask(
+    String title, {
+    String description = '',
+    String priority = 'normal',
+    int? sourceSeq,
+  }) async {
+    final pid = await _pid();
+    if (pid == null) return null;
+    final id = await _api.addLooseTask(
+      roomId,
+      participantId: pid,
+      title: title,
+      description: description,
+      priority: priority,
+      sourceSeq: sourceSeq,
+    );
+    _reload();
+    return id;
+  }
+
   Future<String?> addTask(
     String checklistId,
     String title, {

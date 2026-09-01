@@ -25,14 +25,17 @@ Future<BoardCreateResult?> showBoardCreateDialog(
   BuildContext context, {
   required String kind,
   String? parentTitle,
+  String? initialTitle,
 }) =>
     showDialog<BoardCreateResult>(
       context: context,
-      builder: (_) => _BoardCreateDialog(kind: kind, parentTitle: parentTitle),
+      builder: (_) => _BoardCreateDialog(
+          kind: kind, parentTitle: parentTitle, initialTitle: initialTitle),
     );
 
 class _BoardCreateDialog extends StatefulWidget {
-  const _BoardCreateDialog({required this.kind, this.parentTitle});
+  const _BoardCreateDialog(
+      {required this.kind, this.parentTitle, this.initialTitle});
 
   /// objective / checklist / task
   final String kind;
@@ -41,12 +44,17 @@ class _BoardCreateDialog extends StatefulWidget {
   /// 哪」是最容易搞錯的一件事，所以寫在標題底下而不是讓人自己記。
   final String? parentTitle;
 
+  /// 預先填好的標題。從一則訊息建卡時就是那句話——**還是可以改**，
+  /// 訊息本身多半不是一個好的任務名，但要人從空白開始打會讓這條路徑
+  /// 變得比複製貼上還麻煩。
+  final String? initialTitle;
+
   @override
   State<_BoardCreateDialog> createState() => _BoardCreateDialogState();
 }
 
 class _BoardCreateDialogState extends State<_BoardCreateDialog> {
-  final _title = TextEditingController();
+  late final _title = TextEditingController(text: widget.initialTitle ?? '');
   final _description = TextEditingController();
   String _priority = 'normal';
 

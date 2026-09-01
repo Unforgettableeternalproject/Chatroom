@@ -44,6 +44,8 @@ import '../../widgets/question_card.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
 import '../../ws/realtime_service.dart';
+import '../board/board_action_feedback.dart';
+import '../board/board_create_dialog.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.roomId, this.focusSeq});
@@ -668,6 +670,47 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// 從一則訊息長出一張 Task。
+  ///
+  /// **這是 App 上唯一產得出 `source_seq` 的路徑。** Hub 一直收這個欄位、
+  /// 卡片抽屜也一直畫著「↩ 跳回聊天室」，但 App 這側沒有任何地方生得出那個
+  /// 值——agent 用 MCP 建卡時有，人只能從 board 畫面建，而那裡沒有「來源
+  /// 訊息」這種東西。
+  ///
+  /// 走 loose task（落在「未分類」）而不是要人先挑一個階段：那個端點本來就
+  /// 是為「隨手記一件事」設計的，而從一則訊息長出一張卡正是那件事。要人為
+  /// 了記一件事先選好位置，實際的結果是他乾脆不記。
+  Future<void> _createTaskFrom(Message m) async {
+    // 訊息本身多半不是一個好的任務名，但預填讓這條路徑比複製貼上快
+    final excerpt = m.content.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final result = await showBoardCreateDialog(
+      context,
+      kind: 'task',
+      parentTitle: '未分類（來自 #${m.seq}）',
+      initialTitle: excerpt.length > 60 ? excerpt.substring(0, 60) : excerpt,
+    );
+    if (result == null || !mounted) return;
+    final id = await runBoardAction(
+      context,
+      () => ref.read(boardActionsProvider(widget.roomId)).addLooseTask(
+            result.title,
+            description: result.description,
+            priority: result.priority,
+            sourceSeq: m.seq,
+          ),
+    );
+    // 卡建在另一個畫面上，這裡不說一聲就沒有任何跡象顯示它成功了
+    if (id != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('已加到 Board 的「未分類」，卡片指得回這則訊息。'),
+        action: SnackBarAction(
+          label: '去看看',
+          onPressed: () => context.go('/rooms/${widget.roomId}/board'),
+        ),
+      ));
+    }
+  }
+
   Future<void> _togglePin(Message m) async {
     try {
       final identity = await ref.read(identityProvider(widget.roomId).future);
@@ -901,6 +944,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }),
       onTogglePin: _togglePin,
       onDelete: _delete,
+      onCreateTask: _createTaskFrom,
       enabled: !archived,
     );
 
