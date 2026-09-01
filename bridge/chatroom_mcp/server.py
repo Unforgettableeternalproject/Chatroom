@@ -1354,7 +1354,10 @@ def chatroom_board_add(
     - ``objective``——一個**週期**（一次可交付的成果）。可以同時有好幾條在跑
     - ``checklist``——週期底下的**階段分組**（「Hub 端」「App 端」「測試」）。
       ``parent_id`` 給 objective 的 id
-    - ``task``——**一個人做得完的一件事**。``parent_id`` 給 checklist 的 id
+    - ``task``——**一個人做得完的一件事**。``parent_id`` 給 checklist 的 id；
+      **想隨手記一件事就別給**，Hub 會把它放進「未分類」（那兩層會重用，
+      不會每次長出新的）。事後再搬即可——為了記一件事先蓋兩層，
+      實際的結果是根本不記
 
     ``source_seq`` 填房內訊息的 seq，卡片就會指回長出它的那則討論——
     之後看板的人不必回頭翻三百則訊息去找當初為什麼要做這件事。
@@ -1365,18 +1368,21 @@ def chatroom_board_add(
         raise HubError(
             f"kind 只能是 objective / checklist / task，收到「{kind}」。"
         )
-    if kind != "objective" and not parent_id:
-        holder = "objective" if kind == "checklist" else "checklist"
+    if kind == "checklist" and not parent_id:
         raise HubError(
-            f"新增 {kind} 要給 parent_id（它所屬的 {holder} 的 id）。"
-            "三層是嚴格的樹，沒有孤立的卡——先用 chatroom_board 看一眼"
-            f"現有的 {holder}。"
+            "新增 checklist 要給 parent_id（它所屬的 objective 的 id）。"
+            "三層是嚴格的樹——先用 chatroom_board 看一眼現有的 objective。"
         )
     body: dict[str, Any] = {"title": title, "description": description}
     if kind == "objective":
         path = f"/api/rooms/{room_id}/board/objectives"
     elif kind == "checklist":
         path = f"/api/board/objectives/{parent_id}/checklists"
+    elif not parent_id:
+        # 隨手記一件事：Hub 會把「未分類」那兩層備妥再掛上去（那兩層會被
+        # 重用，不是每次新建）。要 agent 為了記一件事先自己蓋 Objective
+        # 再蓋 Checklist，實務上的結果是它乾脆不記
+        path = f"/api/rooms/{room_id}/board/tasks"
     else:
         path = f"/api/board/checklists/{parent_id}/tasks"
         body["priority"] = priority

@@ -197,15 +197,32 @@ def test_add_rejects_unknown_kind(fake_hub):
     assert "objective" in result["reason"]
 
 
-def test_add_child_without_parent_says_which_id_is_missing(fake_hub):
-    """錯誤訊息要說得出**要哪一個 id**，不然 agent 只會再猜一次。"""
+def test_task_without_parent_goes_to_the_loose_endpoint(fake_hub):
+    """隨手記一件事：不給 parent_id 就讓 Hub 放進「未分類」。
+
+    要 agent 為了記一件事先蓋 Objective 再蓋 Checklist，實際的結果是
+    它乾脆不記（Q2 定案的那條退路，F2 之後才通）。
+    """
+    _join(fake_hub)
+    fake_hub.json("POST", f"/api/rooms/{ROOM}/board/tasks", {"id": "t-loose"})
+
+    result = srv.chatroom_board_add(ROOM, "task", "隨手記一件事")
+
+    assert result["id"] == "t-loose"
+    assert fake_hub.calls[-1].url.path == f"/api/rooms/{ROOM}/board/tasks"
+
+
+def test_checklist_without_parent_says_which_id_is_missing(fake_hub):
+    """checklist **沒有**那條退路：它一定要掛在某個 objective 底下。
+
+    錯誤訊息要說得出要哪一個 id，不然 agent 只會再猜一次。
+    """
     _join(fake_hub)
 
-    task = srv.chatroom_board_add(ROOM, "task", "x")
-    checklist = srv.chatroom_board_add(ROOM, "checklist", "x")
+    result = srv.chatroom_board_add(ROOM, "checklist", "x")
 
-    assert "checklist" in task["reason"]
-    assert "objective" in checklist["reason"]
+    assert result["ok"] is False
+    assert "objective" in result["reason"]
 
 
 # ---------- 更新與狀態 ----------
