@@ -165,9 +165,23 @@ void main() {
     )));
 
     expect(find.text('✓'), findsOneWidget);
-    // 收合的卡不帶動作，也不帶狀態徽章
-    expect(find.text('完成'), findsNothing);
+    // 收合的卡不帶動作
     expect(find.text('釋放認領'), findsNothing);
+    // **狀態徽章照留**（設計稿 artboard 02）：徽章欄位不留空，一整欄看
+    // 下來狀態都在同一個 x 上，✓ 是輔助不是替代。
+    //
+    // 這條原本斷言「不帶狀態徽章」——那是我的視覺偏好混進了語意測試，
+    // 不在四條紅線裡，設計稿也畫了徽章。2026-09-01 由 UI 端指出後改口。
+    expect(find.text('完成'), findsOneWidget);
+  });
+
+  testWidgets('取消的卡同樣留著徽章', (tester) async {
+    await tester.pumpWidget(_wrap(BoardTaskCard(
+      task: _task(status: 'cancelled'),
+    )));
+
+    expect(find.text('✕'), findsOneWidget);
+    expect(find.text('已取消'), findsOneWidget);
   });
 
   testWidgets('被指名的卡：講出建議給誰，但誰都能領', (tester) async {
