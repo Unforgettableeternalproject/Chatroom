@@ -69,6 +69,15 @@ def _detail_text(detail: Any) -> str:
     return str(detail)
 
 
+def _ends_sentence(text: str) -> bool:
+    """這段話是不是已經自己收尾了。
+
+    Hub 的 message 多半自帶句號，而 bridge 又在後面補一個 ⇒ 「。。」。
+    純外觀，但那兩個點會出現在 agent 讀到的每一則 422／5xx 說明裡。
+    """
+    return text.rstrip().endswith(("。", "！", "？", ".", "!", "?", "）", ")"))
+
+
 def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
     """把 HTTP 狀態碼 + detail 轉成有行動指引的中文說明。
 
@@ -304,8 +313,10 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                         status=status, detail=detail)
 
     if status == 422:
-        return HubError(f"參數不符合 Hub 的要求：{text or '請檢查傳入的欄位'}。",
-                        status=status, detail=detail)
+        body = text or "請檢查傳入的欄位"
+        return HubError(
+            f"參數不符合 Hub 的要求：{body}" + ("" if _ends_sentence(body) else "。"),
+            status=status, detail=detail)
 
     if status >= 500:
         return HubError(
@@ -313,8 +324,11 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             status=status, detail=detail,
         )
 
-    return HubError(f"Hub 回傳未預期的狀態 HTTP {status}：{text or '無說明'}。",
-                    status=status, detail=detail)
+    body = text or "無說明"
+    return HubError(
+        f"Hub 回傳未預期的狀態 HTTP {status}：{body}"
+        + ("" if _ends_sentence(body) else "。"),
+        status=status, detail=detail)
 
 
 class HubClient:

@@ -182,3 +182,23 @@ def test_unknown_403_stays_conservative_for_rolling_upgrades():
     )
     assert err.identity_invalid is True
     assert err.departure is None, "不認得的 code 不得亂猜離場原因"
+
+
+def test_hub_message_that_already_ends_a_sentence_is_not_double_punctuated():
+    """Hub 的 message 自帶句號時，bridge 不要再補一個。
+
+    純外觀，但那兩個點會出現在 agent 讀到的每一則 422／5xx 說明裡
+    （2026-09-01 測試端在 board_item_wrong_kind 上看到「要換的是層別。。」）。
+    """
+    err = translate_status(422, {
+        "code": "board_item_wrong_kind",
+        "message": "這是 checklist 不是 task，要換的是層別。",
+    }, "http://hub.test")
+    assert "。。" not in err.reason
+    assert err.reason.endswith("層別。")
+
+
+def test_message_without_punctuation_still_gets_one():
+    err = translate_status(422, {"code": "x", "message": "欄位 title 不可為空"},
+                           "http://hub.test")
+    assert err.reason.endswith("不可為空。")
