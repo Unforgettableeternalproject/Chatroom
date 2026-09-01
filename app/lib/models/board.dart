@@ -660,6 +660,18 @@ class BoardSnapshot {
     return BoardEntryHint(label: '$done/${live.length}');
   }
 
+  /// 封存房的入口：**板是歷史，只報進度，不喊人**。
+  ///
+  /// [entryHint] 的「等你確認」在這裡是一句做不到的話——封存房的板整塊唯讀，
+  /// 那顆按鈕根本不存在。點亮一個永遠按不動的入口，比不點亮更糟：它會讓人
+  /// 一直進去找那件要做的事。
+  BoardEntryHint get archivedEntryHint {
+    final live = visibleTasks;
+    if (live.isEmpty) return const BoardEntryHint();
+    return BoardEntryHint(
+        label: '${live.where((t) => t.isDone).length}/${live.length}');
+  }
+
   /// 依 `order_index` 排序的 Objective（不含已取消的）。
   List<BoardObjective> get sortedObjectives {
     final out = objectives.values.where((o) => o.status != 'cancelled').toList()

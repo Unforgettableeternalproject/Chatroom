@@ -1358,7 +1358,13 @@ class _RoomHeader extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 16),
-          if (archived)
+          // 封存**只禁止寫入，不禁止查看**。Board 入口原本整個活在下面那個
+          // else 分支裡 ⇒ 房間一封存，那塊板就沒有任何入口——而板本身早就
+          // 做好唯讀了（整塊降飽和、動作全收），Hub 的讀取端點也明寫允許
+          // 封存房。缺的自始至終只有這扇門
+          if (archived) ...[
+            _BoardAction(roomId: roomId, archived: true),
+            const SizedBox(width: 8),
             _HeaderAction(
               label: '解除封存',
               onTap: () async {
@@ -1386,8 +1392,8 @@ class _RoomHeader extends ConsumerWidget {
                 // feed 的房間狀態要等 WS 事件才會翻新；斷線時會卡在 archived
                 ref.read(roomFeedProvider(roomId)).setRoomStatus('active');
               },
-            )
-          else ...[
+            ),
+          ] else ...[
             _BoardAction(roomId: roomId),
             const SizedBox(width: 8),
             // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
@@ -1471,15 +1477,20 @@ class _HeaderAction extends StatelessWidget {
 /// ⚠️ board 讀不到時退成最平常那一種，**不擋聊天**——聊天室不該因為附屬
 /// 功能的一次請求失敗而顯示錯誤。
 class _BoardAction extends ConsumerWidget {
-  const _BoardAction({required this.roomId});
+  const _BoardAction({required this.roomId, this.archived = false});
 
   final String roomId;
+
+  /// 封存房：板是歷史，入口只報進度、不點亮。喊「等你確認」而那顆按鈕在
+  /// 唯讀的板上根本不存在的話，人會一直進去找那件做不到的事。
+  final bool archived;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 顯示哪一種是 BoardSnapshot.entryHint 說了算——那個優先序是規格，
     // 不該在畫面這側再抄一份
-    final hint = ref.watch(boardProvider(roomId)).value?.entryHint ??
+    final snap = ref.watch(boardProvider(roomId)).value;
+    final hint = (archived ? snap?.archivedEntryHint : snap?.entryHint) ??
         const BoardEntryHint();
     return _HeaderAction(
       label: hint.label.isEmpty ? '❖ Board' : '❖ Board ${hint.label}',

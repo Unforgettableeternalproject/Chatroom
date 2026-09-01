@@ -1,9 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/board_api.dart';
+import '../core/errors/api_exception.dart';
 import '../models/board.dart';
 import 'app_providers.dart';
 import 'messages_providers.dart';
+import 'rooms_providers.dart';
 
 /// Board 的狀態層。
 ///
@@ -65,6 +67,47 @@ final boardSignalProvider =
       .map((e) => e.boardSeq);
 });
 
+/// 讀 board 該用哪一份身分。**規則本人在這裡，provider 只做接線。**
+///
+/// 回傳 `null` ＝「照常 join 拿一份新的」；非 null ＝「用本機這一份，不要
+/// join」。判斷留在 provider 裡的話就只能連著整張 provider 圖一起測，而那
+/// 份測試會脆到沒有人願意動它。
+///
+/// 封存房沒有本機身分時直接丟——那是真的讀不到，不是可以退而求其次的情況。
+String? savedIdentityForBoard({required bool archived, required String? saved}) {
+  if (!archived) return null;
+  if (saved == null || saved.isEmpty) {
+    throw const ArchivedWithoutIdentityException();
+  }
+  return saved;
+}
+
+/// 讀 board 用的房內身分。
+///
+/// 🔴 **封存房不能 join**：Hub 的 join 一開頭就 `_room_or_404`（不允許封存）
+/// ⇒ 409 `room_archived`。而 [identityProvider] 無條件 join ⇒ 封存房的 board
+/// 讀取必定失敗。
+///
+/// 但封存只禁止**寫入**，讀取端點自己寫明了「封存房照樣讀得到」。唯讀瀏覽
+/// 需要的只是「我曾經是誰」，那份 id 就在本機設定裡——拿它去讀，不必也不能
+/// 再 join 一次。
+///
+/// 沒有那份 id 表示從沒進過這個房間，封存之後也加不進去了。那是真的讀不到，
+/// 錯誤要照實說，**不可以退回 join 讓它拿一個會誤導人的 409**。
+final boardParticipantIdProvider =
+    FutureProvider.autoDispose.family<String, String>((ref, roomId) async {
+  // ⚠️ 一定要 await，**不能讀 `.value`**：房間詳情還在載入時 `.value` 是
+  // null，那會把封存房判成 active 而去 join，拿一個 409 回來並被快取——
+  // 也就是這個 provider 存在的理由本身。第一次進房正是它還在載入的時候
+  final detail = await ref.watch(roomDetailProvider(roomId).future);
+  final saved = savedIdentityForBoard(
+    archived: detail.room.status == 'archived',
+    saved: ref.read(settingsRepoProvider).participantId(roomId),
+  );
+  return saved ??
+      (await ref.watch(identityProvider(roomId).future)).participantId;
+});
+
 /// 一個房間的 board。invalidate 它＝拉一次增量並合併。
 final boardProvider =
     FutureProvider.autoDispose.family<BoardSnapshot, String>((ref, roomId) async {
@@ -77,7 +120,8 @@ final boardProvider =
   ref.watch(boardSignalProvider(roomId));
 
   // 房間是讀取邊界，board 也算房內內容 ⇒ 要房內身分。
-  final pid = (await ref.watch(identityProvider(roomId).future)).participantId;
+  // 封存房走既有那份，不能 join——理由見 boardParticipantIdProvider
+  final pid = await ref.watch(boardParticipantIdProvider(roomId).future);
   final cache = ref.read(boardCacheProvider.notifier);
   // 這裡用 read 不用 watch：watch 自己的輸出會讓每次合併都觸發一次重拉。
   final known = cache.snapshotOf(roomId).boardSeq;

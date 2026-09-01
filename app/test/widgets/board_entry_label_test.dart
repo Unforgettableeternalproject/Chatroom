@@ -201,6 +201,31 @@ void main() {
     expect(h.label, '0/2');
   });
 
+  /// 封存房也有 Board 入口（封存只禁止寫入，不禁止查看），但那塊板是歷史。
+  group('封存房的入口只報進度，不喊人', () {
+    test('🔴 不喊「等你確認」——那顆按鈕在唯讀的板上根本不存在', () {
+      final snap = _snap(
+        tasks: [_t('a', status: 'done'), _t('b')],
+        objectives: [_o('o1', status: 'review')],
+      );
+      // 活著的房間會點亮並喊人
+      expect(snap.entryHint.needsYou, isTrue);
+      // 封存之後那句話做不到。點亮一個按不動的入口，會讓人一直進去找
+      expect(snap.archivedEntryHint.needsYou, isFalse);
+      expect(snap.archivedEntryHint.label, '1/2');
+    });
+
+    test('空板就是空的，不留一個沒有內容的入口', () {
+      expect(_snap().archivedEntryHint.label, isEmpty);
+    });
+
+    test('孤兒在歷史上沒有意義——沒有人會再去接手', () {
+      final snap = _snap(tasks: [_t('a', claimState: 'orphaned')]);
+      expect(snap.entryHint.label, '1 孤兒');
+      expect(snap.archivedEntryHint.label, '0/1');
+    });
+  });
+
   group('可見母體是單一來源', () {
     test('tasksOfObjective 與 visibleTasks 對得起來', () {
       final snap = _snap(

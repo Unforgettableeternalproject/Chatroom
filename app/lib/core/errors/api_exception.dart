@@ -90,6 +90,20 @@ class ConflictException extends ApiException {
   final List<String> allowed;
 }
 
+/// 封存房唯讀瀏覽時，本機沒有這個房間的身分。
+///
+/// 封存房**不能 join**（Hub 的 join 一開頭就擋 409 `room_archived`），所以
+/// 唯讀瀏覽靠的是「我曾經是誰」——那份 id 存在本機。沒有它表示從沒進過這個
+/// 房間，而封存之後也加不進去了。
+///
+/// **不可以沿用 [ParticipantInvalidException]**：那個會觸發自動 re-join，
+/// 而這裡 re-join 一百次都會被同一個 409 擋下來。
+class ArchivedWithoutIdentityException extends ApiException {
+  const ArchivedWithoutIdentityException()
+      : super('archived_no_identity',
+            '這個聊天室已封存，而你沒有加入過它——封存後無法再加入');
+}
+
 /// 422 — 請求內容不合法（如 reply_to 目標不存在）。
 class ValidationException extends ApiException {
   const ValidationException(super.code, super.message);
