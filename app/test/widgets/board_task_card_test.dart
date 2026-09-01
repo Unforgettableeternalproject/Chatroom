@@ -16,25 +16,24 @@ BoardTask _task({
   String claimKind = '',
   String orphanedReason = '',
   String? assignee,
-}) =>
-    BoardTask(
-      id: 't1',
-      roomId: 'r1',
-      checklistId: 'c1',
-      title: '認領的條件式 UPDATE',
-      boardSeq: 1,
-      status: status,
-      claimState: claimState,
-      claimName: claimName,
-      claimKind: claimKind,
-      orphanedReason: orphanedReason,
-      assigneeParticipantId: assignee,
-    );
+}) => BoardTask(
+  id: 't1',
+  roomId: 'r1',
+  checklistId: 'c1',
+  title: '認領的條件式 UPDATE',
+  boardSeq: 1,
+  status: status,
+  claimState: claimState,
+  claimName: claimName,
+  claimKind: claimKind,
+  orphanedReason: orphanedReason,
+  assigneeParticipantId: assignee,
+);
 
 Widget _wrap(Widget child) => MaterialApp(
-      theme: buildUepTheme(Brightness.dark),
-      home: Scaffold(body: SingleChildScrollView(child: child)),
-    );
+  theme: buildUepTheme(Brightness.dark),
+  home: Scaffold(body: SingleChildScrollView(child: child)),
+);
 
 void main() {
   group('軸狀態', () {
@@ -47,13 +46,25 @@ void main() {
     });
 
     test('持有中＝held', () {
-      expect(_task(claimState: 'held', claimName: 'Nova').axis,
-          ClaimAxis.held);
+      expect(_task(claimState: 'held', claimName: 'Nova').axis, ClaimAxis.held);
     });
 
     test('持有者不在了＝orphaned', () {
-      expect(_task(claimState: 'orphaned', claimName: 'Kite').axis,
-          ClaimAxis.orphaned);
+      expect(
+        _task(claimState: 'orphaned', claimName: 'Kite').axis,
+        ClaimAxis.orphaned,
+      );
+    });
+
+    test('🔴 已收尾又是孤兒＝Hub 的資料矛盾，debug build 要炸出來', () {
+      // 這個組合是 Hub 的孤兒化沒排除 done/cancelled 造成的（F6）。
+      // axis 的判斷順序會讓它在畫面上看不出來——**下游處理得越漂亮，
+      // 上游的錯誤越安靜**。assert 只在 debug 執行，release 整段移除，
+      // 所以開發時抓得到、使用者不會看到任何東西。
+      expect(
+        () => _task(status: 'done', claimState: 'orphaned').axis,
+        throwsA(isA<AssertionError>()),
+      );
     });
 
     test('完成與取消＝completed（收合成單行）', () {
@@ -63,22 +74,28 @@ void main() {
 
     test('孤兒的軸狀態不受它做到哪影響——那是另一個維度', () {
       for (final s in ['todo', 'in_progress', 'blocked']) {
-        expect(_task(status: s, claimState: 'orphaned').axis,
-            ClaimAxis.orphaned);
+        expect(
+          _task(status: s, claimState: 'orphaned').axis,
+          ClaimAxis.orphaned,
+        );
       }
     });
   });
 
   testWidgets('🔴 孤兒卡的狀態徽章不變——變的是人不是進度', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(
-        status: 'in_progress',
-        claimState: 'orphaned',
-        claimName: 'Kite',
-        claimKind: 'claude',
-        orphanedReason: 'idle',
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(
+            status: 'in_progress',
+            claimState: 'orphaned',
+            claimName: 'Kite',
+            claimKind: 'claude',
+            orphanedReason: 'idle',
+          ),
+        ),
       ),
-    )));
+    );
 
     // 徽章照舊說「進行中」，不是被打回「待辦」
     expect(find.text('進行中'), findsOneWidget);
@@ -86,15 +103,19 @@ void main() {
   });
 
   testWidgets('孤兒卡：名字劃掉、講出為什麼不在了', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(
-        status: 'in_progress',
-        claimState: 'orphaned',
-        claimName: 'Kite',
-        claimKind: 'claude',
-        orphanedReason: 'idle',
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(
+            status: 'in_progress',
+            claimState: 'orphaned',
+            claimName: 'Kite',
+            claimKind: 'claude',
+            orphanedReason: 'idle',
+          ),
+        ),
       ),
-    )));
+    );
 
     final name = tester.widget<Text>(find.text('Kite'));
     expect(name.style?.decoration, TextDecoration.lineThrough);
@@ -102,33 +123,45 @@ void main() {
   });
 
   testWidgets('Hub 沒給 orphaned_reason 時只說「已不在房內」，不要猜', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(
-        status: 'in_progress',
-        claimState: 'orphaned',
-        claimName: 'Kite',
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(
+            status: 'in_progress',
+            claimState: 'orphaned',
+            claimName: 'Kite',
+          ),
+        ),
       ),
-    )));
+    );
 
     expect(find.textContaining('已不在房內'), findsOneWidget);
     expect(find.textContaining('閒置'), findsNothing);
   });
 
   testWidgets('Hub 沒給 claim_kind 時不畫種類徽章，不要猜', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(claimState: 'held', claimName: 'Nova'),
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(claimState: 'held', claimName: 'Nova'),
+        ),
+      ),
+    );
 
     expect(find.text('CLAUDE'), findsNothing);
     expect(find.text('Nova'), findsOneWidget);
   });
 
   testWidgets('🔴 認領失敗畫成事實，不是錯誤——沒有重試按鈕', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(claimState: 'held', claimName: 'Swift-Falcon'),
-      conflict: 'Swift-Falcon',
-      onClaim: () {},
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(claimState: 'held', claimName: 'Swift-Falcon'),
+          conflict: 'Swift-Falcon',
+          onClaim: () {},
+        ),
+      ),
+    );
 
     expect(find.textContaining('已經被 Swift-Falcon 領走了'), findsOneWidget);
     expect(find.text('重試'), findsNothing);
@@ -136,33 +169,47 @@ void main() {
   });
 
   testWidgets('可撿回的卡：金框與「撿回」只給本人', (tester) async {
-    await tester.pumpWidget(_wrap(Column(children: [
-      BoardTaskCard(
-        task: _task(claimState: 'orphaned', claimName: 'Nova'),
-        isMineToReclaim: true,
-        onClaim: () {},
+    await tester.pumpWidget(
+      _wrap(
+        Column(
+          children: [
+            BoardTaskCard(
+              task: _task(claimState: 'orphaned', claimName: 'Nova'),
+              isMineToReclaim: true,
+              onClaim: () {},
+            ),
+          ],
+        ),
       ),
-    ])));
+    );
 
     expect(find.textContaining('你上一世領走的卡'), findsOneWidget);
     expect(find.text('撿回'), findsOneWidget);
   });
 
   testWidgets('別人的孤兒卡是「接手」，不是「撿回」', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(claimState: 'orphaned', claimName: 'Kite'),
-      onClaim: () {},
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(claimState: 'orphaned', claimName: 'Kite'),
+          onClaim: () {},
+        ),
+      ),
+    );
 
     expect(find.text('接手'), findsOneWidget);
     expect(find.text('撿回'), findsNothing);
   });
 
   testWidgets('完成的卡收合成單行——誰做的退成註記', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(status: 'done', claimState: 'held', claimName: 'Nova'),
-      onClaim: () {},
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(status: 'done', claimState: 'held', claimName: 'Nova'),
+          onClaim: () {},
+        ),
+      ),
+    );
 
     expect(find.text('✓'), findsOneWidget);
     // 收合的卡不帶動作
@@ -176,20 +223,24 @@ void main() {
   });
 
   testWidgets('取消的卡同樣留著徽章', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(status: 'cancelled'),
-    )));
+    await tester.pumpWidget(
+      _wrap(BoardTaskCard(task: _task(status: 'cancelled'))),
+    );
 
     expect(find.text('✕'), findsOneWidget);
     expect(find.text('已取消'), findsOneWidget);
   });
 
   testWidgets('被指名的卡：講出建議給誰，但誰都能領', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(assignee: 'p9'),
-      assigneeName: 'Swift-Falcon',
-      onClaim: () {},
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(assignee: 'p9'),
+          assigneeName: 'Swift-Falcon',
+          onClaim: () {},
+        ),
+      ),
+    );
 
     expect(find.textContaining('建議給'), findsOneWidget);
     expect(find.text('Swift-Falcon'), findsOneWidget);
@@ -198,10 +249,14 @@ void main() {
   });
 
   testWidgets('被指名的人已經離開時，講出來而不是留白', (tester) async {
-    await tester.pumpWidget(_wrap(BoardTaskCard(
-      task: _task(assignee: 'p9'),
-      onClaim: () {},
-    )));
+    await tester.pumpWidget(
+      _wrap(
+        BoardTaskCard(
+          task: _task(assignee: 'p9'),
+          onClaim: () {},
+        ),
+      ),
+    );
 
     expect(find.textContaining('已不在房內'), findsOneWidget);
   });

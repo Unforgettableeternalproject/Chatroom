@@ -61,23 +61,23 @@ class BoardObjective {
   bool get isVerified => status == 'verified' || status == 'done';
 
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(
-        id: json['id'] as String,
-        roomId: (json['room_id'] as String?) ?? '',
-        title: (json['title'] as String?) ?? '',
-        description: (json['description'] as String?) ?? '',
-        status: (json['status'] as String?) ?? 'active',
-        orderIndex: (json['order_index'] as int?) ?? 0,
-        createdBy: json['created_by'] as String?,
-        reviewedBy: json['reviewed_by'] as String?,
-        reviewedAt: json['reviewed_at'] as String?,
-        verifiedBy: json['verified_by'] as String?,
-        verifiedAt: json['verified_at'] as String?,
-        completedBy: json['completed_by'] as String?,
-        completedAt: json['completed_at'] as String?,
-        deleted: (json['deleted'] as bool?) ?? false,
-        boardSeq: (json['board_seq'] as int?) ?? 0,
-        createdAt: (json['created_at'] as String?) ?? '',
-      );
+    id: json['id'] as String,
+    roomId: (json['room_id'] as String?) ?? '',
+    title: (json['title'] as String?) ?? '',
+    description: (json['description'] as String?) ?? '',
+    status: (json['status'] as String?) ?? 'active',
+    orderIndex: (json['order_index'] as int?) ?? 0,
+    createdBy: json['created_by'] as String?,
+    reviewedBy: json['reviewed_by'] as String?,
+    reviewedAt: json['reviewed_at'] as String?,
+    verifiedBy: json['verified_by'] as String?,
+    verifiedAt: json['verified_at'] as String?,
+    completedBy: json['completed_by'] as String?,
+    completedAt: json['completed_at'] as String?,
+    deleted: (json['deleted'] as bool?) ?? false,
+    boardSeq: (json['board_seq'] as int?) ?? 0,
+    createdAt: (json['created_at'] as String?) ?? '',
+  );
 }
 
 /// Checklist：Objective 底下的階段分組（「Hub 端」「App 端」「測試與除錯」）。
@@ -121,20 +121,20 @@ class BoardChecklist {
   bool get isDone => status == 'done';
 
   factory BoardChecklist.fromJson(Map<String, dynamic> json) => BoardChecklist(
-        id: json['id'] as String,
-        roomId: (json['room_id'] as String?) ?? '',
-        objectiveId: (json['objective_id'] as String?) ?? '',
-        title: (json['title'] as String?) ?? '',
-        description: (json['description'] as String?) ?? '',
-        status: (json['status'] as String?) ?? 'open',
-        orderIndex: (json['order_index'] as int?) ?? 0,
-        createdBy: json['created_by'] as String?,
-        completedBy: json['completed_by'] as String?,
-        completedAt: json['completed_at'] as String?,
-        deleted: (json['deleted'] as bool?) ?? false,
-        boardSeq: (json['board_seq'] as int?) ?? 0,
-        createdAt: (json['created_at'] as String?) ?? '',
-      );
+    id: json['id'] as String,
+    roomId: (json['room_id'] as String?) ?? '',
+    objectiveId: (json['objective_id'] as String?) ?? '',
+    title: (json['title'] as String?) ?? '',
+    description: (json['description'] as String?) ?? '',
+    status: (json['status'] as String?) ?? 'open',
+    orderIndex: (json['order_index'] as int?) ?? 0,
+    createdBy: json['created_by'] as String?,
+    completedBy: json['completed_by'] as String?,
+    completedAt: json['completed_at'] as String?,
+    deleted: (json['deleted'] as bool?) ?? false,
+    boardSeq: (json['board_seq'] as int?) ?? 0,
+    createdAt: (json['created_at'] as String?) ?? '',
+  );
 }
 
 /// Task 卡片左側色軸的五種樣子（設計稿 artboard 02）。
@@ -261,6 +261,21 @@ class BoardTask {
   /// 各走各的視覺通道。把它放進 model 而不是 widget，是因為這個對應本身就是
   /// 規格（設計稿 artboard 02 的五種組合），而不是畫面的實作細節。
   ClaimAxis get axis {
+    // 🔴 已收尾的卡**不該同時是孤兒**——一張完成的卡「沒有人在上面」不是
+    // 問題，它不需要有人。Hub 的孤兒化若沒排除 done/cancelled 就會產出這個
+    // 組合，而它的 claim CAS **有**排除 ⇒ Hub 自己造出一個它自己拒絕的狀態
+    // （2026-09-01 F6，`reclaimable_tasks` 因此會建議認回一張領不回來的卡）。
+    //
+    // ⚠️ 底下的判斷順序讓這個矛盾在畫面上**看不出來**（completed 先中），
+    // 那是防禦性優先序的副作用：**下游處理得越漂亮，上游的錯誤越安靜**。
+    // 用 assert 把它叫出來——debug build 會炸、release build 整段被移除，
+    // 所以開發時抓得到、使用者不會看到任何東西。代價是零。
+    assert(
+      !((isDone || status == 'cancelled') && isOrphaned),
+      '這張卡同時是「已收尾」與「孤兒」：id=$id status=$status '
+      'claim_state=$claimState。Hub 的孤兒化沒有排除已收尾的卡（F6）。'
+      'UI 這側會顯示成 completed，但那是遮蔽不是修正——根本解在 Hub。',
+    );
     if (isDone || status == 'cancelled') return ClaimAxis.completed;
     if (isOrphaned) return ClaimAxis.orphaned;
     if (isHeld) return ClaimAxis.held;
@@ -271,12 +286,12 @@ class BoardTask {
   /// 孤兒的成因，給人讀的一句話。空字串表示 Hub 沒給（舊資料）——
   /// 那時只說「已不在房內」，不要猜。
   String get orphanedReasonLabel => switch (orphanedReason) {
-        'idle' => '因閒置移出',
-        'left' => 'session 已結束',
-        'kicked' => '被移出聊天室',
-        'subagent' => '子代理已回收',
-        _ => '',
-      };
+    'idle' => '因閒置移出',
+    'left' => 'session 已結束',
+    'kicked' => '被移出聊天室',
+    'subagent' => '子代理已回收',
+    _ => '',
+  };
 
   bool get isHeld => claimState == 'held';
 
@@ -293,34 +308,34 @@ class BoardTask {
   bool get isDone => status == 'done';
 
   factory BoardTask.fromJson(Map<String, dynamic> json) => BoardTask(
-        id: json['id'] as String,
-        roomId: (json['room_id'] as String?) ?? '',
-        checklistId: (json['checklist_id'] as String?) ?? '',
-        title: (json['title'] as String?) ?? '',
-        description: (json['description'] as String?) ?? '',
-        status: (json['status'] as String?) ?? 'todo',
-        orderIndex: (json['order_index'] as int?) ?? 0,
-        priority: (json['priority'] as String?) ?? 'normal',
-        claimParticipantId: json['claim_participant_id'] as String?,
-        claimSessionKey: (json['claim_session_key'] as String?) ?? '',
-        claimName: (json['claim_name'] as String?) ?? '',
-        claimKind: (json['claim_kind'] as String?) ?? '',
-        claimState: (json['claim_state'] as String?) ?? '',
-        claimedAt: json['claimed_at'] as String?,
-        orphanedAt: json['orphaned_at'] as String?,
-        orphanedReason: (json['orphaned_reason'] as String?) ?? '',
-        sourceSeq: json['source_seq'] as int?,
-        assigneeParticipantId: json['assignee_participant_id'] as String?,
-        assignedBy: json['assigned_by'] as String?,
-        assignedByName: (json['assigned_by_name'] as String?) ?? '',
-        createdBy: json['created_by'] as String?,
-        createdByName: (json['created_by_name'] as String?) ?? '',
-        completedBy: json['completed_by'] as String?,
-        completedAt: json['completed_at'] as String?,
-        deleted: (json['deleted'] as bool?) ?? false,
-        boardSeq: (json['board_seq'] as int?) ?? 0,
-        createdAt: (json['created_at'] as String?) ?? '',
-      );
+    id: json['id'] as String,
+    roomId: (json['room_id'] as String?) ?? '',
+    checklistId: (json['checklist_id'] as String?) ?? '',
+    title: (json['title'] as String?) ?? '',
+    description: (json['description'] as String?) ?? '',
+    status: (json['status'] as String?) ?? 'todo',
+    orderIndex: (json['order_index'] as int?) ?? 0,
+    priority: (json['priority'] as String?) ?? 'normal',
+    claimParticipantId: json['claim_participant_id'] as String?,
+    claimSessionKey: (json['claim_session_key'] as String?) ?? '',
+    claimName: (json['claim_name'] as String?) ?? '',
+    claimKind: (json['claim_kind'] as String?) ?? '',
+    claimState: (json['claim_state'] as String?) ?? '',
+    claimedAt: json['claimed_at'] as String?,
+    orphanedAt: json['orphaned_at'] as String?,
+    orphanedReason: (json['orphaned_reason'] as String?) ?? '',
+    sourceSeq: json['source_seq'] as int?,
+    assigneeParticipantId: json['assignee_participant_id'] as String?,
+    assignedBy: json['assigned_by'] as String?,
+    assignedByName: (json['assigned_by_name'] as String?) ?? '',
+    createdBy: json['created_by'] as String?,
+    createdByName: (json['created_by_name'] as String?) ?? '',
+    completedBy: json['completed_by'] as String?,
+    completedAt: json['completed_at'] as String?,
+    deleted: (json['deleted'] as bool?) ?? false,
+    boardSeq: (json['board_seq'] as int?) ?? 0,
+    createdAt: (json['created_at'] as String?) ?? '',
+  );
 }
 
 /// 可以撿回來的孤兒 Task（同一把 session_key 上一世領走的）。
@@ -376,22 +391,22 @@ class BoardDelta {
   final String? supervisor;
 
   factory BoardDelta.fromJson(Map<String, dynamic> json) => BoardDelta(
-        boardSeq: (json['board_seq'] as int?) ?? 0,
-        full: (json['full'] as bool?) ?? false,
-        objectives: ((json['objectives'] as List?) ?? const [])
-            .map((e) => BoardObjective.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        checklists: ((json['checklists'] as List?) ?? const [])
-            .map((e) => BoardChecklist.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        tasks: ((json['tasks'] as List?) ?? const [])
-            .map((e) => BoardTask.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        reclaimable: ((json['reclaimable_tasks'] as List?) ?? const [])
-            .map((e) => ReclaimableTask.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        supervisor: json['supervisor'] as String?,
-      );
+    boardSeq: (json['board_seq'] as int?) ?? 0,
+    full: (json['full'] as bool?) ?? false,
+    objectives: ((json['objectives'] as List?) ?? const [])
+        .map((e) => BoardObjective.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    checklists: ((json['checklists'] as List?) ?? const [])
+        .map((e) => BoardChecklist.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    tasks: ((json['tasks'] as List?) ?? const [])
+        .map((e) => BoardTask.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    reclaimable: ((json['reclaimable_tasks'] as List?) ?? const [])
+        .map((e) => ReclaimableTask.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    supervisor: json['supervisor'] as String?,
+  );
 }
 
 /// Board 入口要顯示的東西。
@@ -442,8 +457,9 @@ class BoardSnapshot {
     final lists = delta.full
         ? <String, BoardChecklist>{}
         : Map<String, BoardChecklist>.from(checklists);
-    final tsks =
-        delta.full ? <String, BoardTask>{} : Map<String, BoardTask>.from(tasks);
+    final tsks = delta.full
+        ? <String, BoardTask>{}
+        : Map<String, BoardTask>.from(tasks);
 
     for (final o in delta.objectives) {
       if (o.deleted) {
@@ -496,10 +512,10 @@ class BoardSnapshot {
     // 漏掉 verified 的後果比漏掉 review 更糟：那個週期會停在**倒數第二格**，
     // 入口不亮、沒有通知，而畫面上寫著「已確認」——看起來像收工了。
     // 不是沒人被叫醒，是畫面主動告訴你已經好了（測試端 2026-09-01 指出）。
-    final review =
-        objectives.values.where((o) => o.status == 'review').length;
-    final verified =
-        objectives.values.where((o) => o.status == 'verified').length;
+    final review = objectives.values.where((o) => o.status == 'review').length;
+    final verified = objectives.values
+        .where((o) => o.status == 'verified')
+        .length;
     if (review + verified > 0) {
       return BoardEntryHint(
         label: switch ((review, verified)) {
@@ -520,27 +536,36 @@ class BoardSnapshot {
   /// 依 `order_index` 排序的 Objective（不含已取消的）。
   List<BoardObjective> get sortedObjectives {
     final out = objectives.values.where((o) => o.status != 'cancelled').toList()
-      ..sort((a, b) => a.orderIndex != b.orderIndex
-          ? a.orderIndex.compareTo(b.orderIndex)
-          : a.createdAt.compareTo(b.createdAt));
+      ..sort(
+        (a, b) => a.orderIndex != b.orderIndex
+            ? a.orderIndex.compareTo(b.orderIndex)
+            : a.createdAt.compareTo(b.createdAt),
+      );
     return out;
   }
 
   List<BoardChecklist> checklistsOf(String objectiveId) {
-    final out = checklists.values
-        .where((c) => c.objectiveId == objectiveId && c.status != 'cancelled')
-        .toList()
-      ..sort((a, b) => a.orderIndex != b.orderIndex
-          ? a.orderIndex.compareTo(b.orderIndex)
-          : a.createdAt.compareTo(b.createdAt));
+    final out =
+        checklists.values
+            .where(
+              (c) => c.objectiveId == objectiveId && c.status != 'cancelled',
+            )
+            .toList()
+          ..sort(
+            (a, b) => a.orderIndex != b.orderIndex
+                ? a.orderIndex.compareTo(b.orderIndex)
+                : a.createdAt.compareTo(b.createdAt),
+          );
     return out;
   }
 
   List<BoardTask> tasksOf(String checklistId) {
     final out = tasks.values.where((t) => t.checklistId == checklistId).toList()
-      ..sort((a, b) => a.orderIndex != b.orderIndex
-          ? a.orderIndex.compareTo(b.orderIndex)
-          : a.createdAt.compareTo(b.createdAt));
+      ..sort(
+        (a, b) => a.orderIndex != b.orderIndex
+            ? a.orderIndex.compareTo(b.orderIndex)
+            : a.createdAt.compareTo(b.createdAt),
+      );
     return out;
   }
 }
