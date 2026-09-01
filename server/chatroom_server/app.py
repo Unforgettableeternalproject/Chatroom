@@ -277,6 +277,61 @@ class QuestionAnswer(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
+# ---------- Board ----------
+# PATCH 的欄位一律 `default=None` ＝「這次不動它」。不能用「空字串代表清空」
+# 那套：description 與 title 本來就允許空字串，兩者混在一起之後，client 少
+# 傳一個欄位就會把既有內容抹掉，而且沒有任何地方會報錯。
+
+class BoardObjectiveCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+
+
+class BoardObjectivePatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    order_index: int | None = None
+
+
+class BoardChecklistCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+
+
+class BoardChecklistPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    order_index: int | None = None
+
+
+class BoardTaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    priority: str = Field(default="normal", pattern="^(low|normal|high)$")
+    # 來源訊息的房內 seq（不是 message_id：訊息可以被軟刪除，seq 不會）
+    source_seq: int | None = None
+    # 指定執行者是**建議不是鎖**：認領仍要對方自己來
+    assignee_participant_id: str | None = Field(default=None, max_length=64)
+
+
+class BoardTaskPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
+    order_index: int | None = None
+    assignee_participant_id: str | None = Field(default=None, max_length=64)
+
+
+class BoardReorderItem(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    order_index: int
+
+
+class BoardReorder(BaseModel):
+    kind: str = Field(pattern="^(objective|checklist|task)$")
+    items: list[BoardReorderItem] = Field(min_length=1, max_length=200)
+
+
 # ---------- 應用工廠 ----------
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -2627,6 +2682,288 @@ def create_app(config: Config | None = None) -> FastAPI:
         d = dict(row)
         d["deleted"] = bool(d.get("deleted"))
         return d
+
+    async def _next_board_seq(room_id: str) -> int:
+        """領一個新的 board 水位號。
+
+        **一次操作一個號**，不是一列一個號：批次排序動了二十列仍只領一次，
+        這樣「這次動了什麼」才是可讀的單位。同一次請求裡要重複用同一個
+        回傳值，不要每列各呼叫一次。
+        """
+        db = app.state.db
+        await db.execute(
+            "UPDATE room SET board_seq=board_seq+1 WHERE id=?", (room_id,)
+        )
+        return await _board_seq(room_id)
+
+    BOARD_TABLES = {
+        "objective": "board_objective",
+        "checklist": "board_checklist",
+        "task": "board_task",
+    }
+
+    async def _board_item_or_404(kind: str, item_id: str):
+        """取一列 board 資料。找不到與已軟刪除一律當成不存在。
+
+        軟刪除的列在**讀取**端點是 tombstone（要回得去給增量 client），
+        但對寫入而言它已經不在了——讓 PATCH 打得到一張刪掉的卡，只會讓它
+        悄悄復活一半。
+        """
+        row = await (
+            await app.state.db.execute(
+                f"SELECT * FROM {BOARD_TABLES[kind]} WHERE id=?", (item_id,)
+            )
+        ).fetchone()
+        if row is None or row["deleted"]:
+            raise _err(404, "board_item_not_found", "找不到這張卡（或它已被刪除）")
+        return row
+
+    async def _board_writer(room_id: str, participant_id: str | None):
+        """board 寫入的共同門檻：房間 active + 身分 active。
+
+        用 `_participant` 而不是 `_member_or_403`：寫入要求現役身分，離開過
+        的人不該還能改板子。順帶的副作用是它會刷新 last_seen_at——所以
+        「經常調查 board」的 agent 不會被閒置掃出房間（設計文件 §2.6）。
+        """
+        await _room_or_404(room_id)          # 封存房唯讀，寫入一律擋
+        return await _participant(participant_id, room_id)
+
+    def _board_can_remove(row, me) -> bool:
+        """誰能刪一張卡：建立者，或人類成員。
+
+        沿用 §1.4 對 `* → cancelled` 的規定（建立者或人類成員）——刪除與
+        取消是同一種「把這件事從板上拿掉」的決定，沒有理由給兩套權限。
+        """
+        return row["created_by"] == me["id"] or me["role"] == "human"
+
+    async def _board_patch(kind: str, item_id: str, fields: dict,
+                           participant_id: str | None) -> dict:
+        """PATCH 的共同實作：只寫有給的欄位，然後領一個號。"""
+        row = await _board_item_or_404(kind, item_id)
+        await _board_writer(row["room_id"], participant_id)
+        table = BOARD_TABLES[kind]
+        sets = {k: v for k, v in fields.items() if v is not None}
+        seq = await _next_board_seq(row["room_id"])
+        params: list = [seq]
+        sql = f"UPDATE {table} SET board_seq=?"
+        if sets:
+            sql += ", " + ", ".join(f"{k}=?" for k in sets)
+            params.extend(sets.values())
+        sql += " WHERE id=?"
+        params.append(item_id)
+        db = app.state.db
+        await db.execute(sql, params)
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "id": item_id, "board_seq": seq}
+
+    async def _board_soft_delete(kind: str, item_id: str,
+                                 participant_id: str | None) -> dict:
+        """軟刪除，**連同其下的子孫**。
+
+        🔴 子孫每一列都要領到新的 board_seq（與這次操作共用同一個）。
+        只更新被點的那一列的話，增量 client 永遠收不到底下 checklist / task
+        的 tombstone——它們的 board_seq 停在舊值，`board_seq > N` 撈不到，
+        board 上會留著一批已經不存在的卡，而且愈久愈多。
+        """
+        row = await _board_item_or_404(kind, item_id)
+        me = await _board_writer(row["room_id"], participant_id)
+        if not _board_can_remove(row, me):
+            raise _err(403, "human_only",
+                       "只有建立者或人類成員可以刪除這張卡")
+        db = app.state.db
+        seq = await _next_board_seq(row["room_id"])
+        table = BOARD_TABLES[kind]
+        await db.execute(
+            f"UPDATE {table} SET deleted=1, board_seq=? WHERE id=?", (seq, item_id)
+        )
+        if kind == "objective":
+            await db.execute(
+                "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id IN"
+                " (SELECT id FROM board_checklist WHERE objective_id=?)",
+                (seq, item_id),
+            )
+            await db.execute(
+                "UPDATE board_checklist SET deleted=1, board_seq=?"
+                " WHERE objective_id=?", (seq, item_id),
+            )
+        elif kind == "checklist":
+            await db.execute(
+                "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id=?",
+                (seq, item_id),
+            )
+        await db.commit()
+        await events.notify(row["room_id"])
+        return {"ok": True, "id": item_id, "board_seq": seq}
+
+    @app.post("/api/rooms/{room_id}/board/objectives",
+              dependencies=[Depends(require_auth)])
+    async def create_objective(
+        room_id: str, body: BoardObjectiveCreate,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        me = await _board_writer(room_id, x_participant_id)
+        db = app.state.db
+        seq = await _next_board_seq(room_id)
+        oid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_objective (id, room_id, title, description,"
+            " created_by, board_seq, created_at) VALUES (?,?,?,?,?,?,?)",
+            (oid, room_id, body.title.strip(), body.description,
+             me["id"], seq, _now()),
+        )
+        await db.commit()
+        await events.notify(room_id)
+        return {"ok": True, "id": oid, "board_seq": seq}
+
+    @app.patch("/api/board/objectives/{objective_id}",
+               dependencies=[Depends(require_auth)])
+    async def patch_objective(
+        objective_id: str, body: BoardObjectivePatch,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        return await _board_patch("objective", objective_id, {
+            "title": body.title.strip() if body.title else None,
+            "description": body.description,
+            "order_index": body.order_index,
+        }, x_participant_id)
+
+    @app.delete("/api/board/objectives/{objective_id}",
+                dependencies=[Depends(require_auth)])
+    async def delete_objective(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        return await _board_soft_delete("objective", objective_id, x_participant_id)
+
+    @app.post("/api/board/objectives/{objective_id}/checklists",
+              dependencies=[Depends(require_auth)])
+    async def create_checklist(
+        objective_id: str, body: BoardChecklistCreate,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        parent = await _board_item_or_404("objective", objective_id)
+        me = await _board_writer(parent["room_id"], x_participant_id)
+        db = app.state.db
+        seq = await _next_board_seq(parent["room_id"])
+        cid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_checklist (id, room_id, objective_id, title,"
+            " description, created_by, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (cid, parent["room_id"], objective_id, body.title.strip(),
+             body.description, me["id"], seq, _now()),
+        )
+        await db.commit()
+        await events.notify(parent["room_id"])
+        return {"ok": True, "id": cid, "board_seq": seq}
+
+    @app.patch("/api/board/checklists/{checklist_id}",
+               dependencies=[Depends(require_auth)])
+    async def patch_checklist(
+        checklist_id: str, body: BoardChecklistPatch,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        return await _board_patch("checklist", checklist_id, {
+            "title": body.title.strip() if body.title else None,
+            "description": body.description,
+            "order_index": body.order_index,
+        }, x_participant_id)
+
+    @app.delete("/api/board/checklists/{checklist_id}",
+                dependencies=[Depends(require_auth)])
+    async def delete_checklist(
+        checklist_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        return await _board_soft_delete("checklist", checklist_id, x_participant_id)
+
+    @app.post("/api/board/checklists/{checklist_id}/tasks",
+              dependencies=[Depends(require_auth)])
+    async def create_task(
+        checklist_id: str, body: BoardTaskCreate,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        parent = await _board_item_or_404("checklist", checklist_id)
+        me = await _board_writer(parent["room_id"], x_participant_id)
+        db = app.state.db
+        seq = await _next_board_seq(parent["room_id"])
+        tid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_task (id, room_id, checklist_id, title, description,"
+            " priority, source_seq, assignee_participant_id, created_by, board_seq,"
+            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, parent["room_id"], checklist_id, body.title.strip(),
+             body.description, body.priority, body.source_seq,
+             body.assignee_participant_id, me["id"], seq, _now()),
+        )
+        await db.commit()
+        await events.notify(parent["room_id"])
+        return {"ok": True, "id": tid, "board_seq": seq}
+
+    @app.patch("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
+    async def patch_task(
+        task_id: str, body: BoardTaskPatch,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改 Task 的欄位。
+
+        ⚠️ **不含 `status`**：狀態轉移有自己的守門（誰能推、能推去哪），
+        走專用端點。放在這裡等於開一條沒有閘的旁路。
+        """
+        return await _board_patch("task", task_id, {
+            "title": body.title.strip() if body.title else None,
+            "description": body.description,
+            "priority": body.priority,
+            "order_index": body.order_index,
+            "assignee_participant_id": body.assignee_participant_id,
+        }, x_participant_id)
+
+    @app.delete("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
+    async def delete_task(
+        task_id: str,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        return await _board_soft_delete("task", task_id, x_participant_id)
+
+    @app.post("/api/rooms/{room_id}/board/reorder",
+              dependencies=[Depends(require_auth)])
+    async def reorder_board(
+        room_id: str, body: BoardReorder,
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """批次排序：**整批只領一個 board_seq**。
+
+        每列各領一個號的話，拖動十張卡就會在增量流裡變成十次獨立變更，
+        而它們本來就是同一個動作。
+        """
+        await _board_writer(room_id, x_participant_id)
+        db = app.state.db
+        table = BOARD_TABLES[body.kind]
+        ids = [i.id for i in body.items]
+        placeholders = ",".join("?" for _ in ids)
+        rows = await (
+            await db.execute(
+                f"SELECT id FROM {table} WHERE room_id=? AND deleted=0"
+                f" AND id IN ({placeholders})",
+                (room_id, *ids),
+            )
+        ).fetchall()
+        known = {r["id"] for r in rows}
+        missing = [i for i in ids if i not in known]
+        if missing:
+            # 部分成功會讓 client 拿到一個它無法解讀的順序——排序是整批語意
+            raise _err(404, "board_item_not_found",
+                       f"有 {len(missing)} 張卡不屬於這個房間或已被刪除，整批未套用")
+        seq = await _next_board_seq(room_id)
+        for item in body.items:
+            await db.execute(
+                f"UPDATE {table} SET order_index=?, board_seq=? WHERE id=?",
+                (item.order_index, seq, item.id),
+            )
+        await db.commit()
+        await events.notify(room_id)
+        return {"ok": True, "board_seq": seq, "count": len(body.items)}
 
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
     async def read_board(

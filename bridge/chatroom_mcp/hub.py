@@ -198,6 +198,16 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有目前的管理員可以移交管理權。",
                 status=status, detail=detail,
             )
+        if code == "human_only":
+            # board 上「只有人類做得到」的動作（刪卡、確認 Objective）。
+            # 落進 fallback 會被翻成「身分失效請重新 join」——而重新 join
+            # 一百次也不會讓 agent 變成人類，那是最典型的死路指引
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有人類成員做得到，agent 不行。"
+                "請在聊天室裡請人類代為執行。",
+                status=status, detail=detail,
+            )
         if code == "host_view_required":
             # 這條 agent 幾乎不會撞到（接管管理權是 App 的動作），但翻譯
             # 一定要有：落進 fallback 會被當成身分失效，而 watcher 對身分
