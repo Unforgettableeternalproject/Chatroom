@@ -128,6 +128,33 @@ void main() {
       expect((e as ConflictException).allowed, ['cancelled']);
     });
 
+    /// 🔴 Hub 用 `_err(**extra)` 把「往下走的資訊」放進拒絕裡，而那是一個
+    /// **開放集合**（`allowed` / `reopen_to` / `open` / `item_id`⋯⋯）。
+    /// 為每個新欄位改一次型別的話，那些資訊多半就不會有人接——bridge 那側
+    /// 已經發生過一次（F1：`_detail_text` 只取 message，其餘全丟）。
+    test('🔴 409 的其餘 detail 欄位原樣帶到 App——不要只留 message', () {
+      final e = translateError(_dioError(409, detail: {
+        'code': 'container_settled',
+        'message': '這個階段已經完成了，不能再往裡面加東西',
+        'kind': 'checklist',
+        'item_id': 'c1',
+        'item_status': 'done',
+        'reopen_to': 'open',
+      })) as ConflictException;
+
+      // 擋的可能是**祖父層**，所以 item_id 不能由 App 自己猜
+      expect(e.detail['kind'], 'checklist');
+      expect(e.detail['item_id'], 'c1');
+      expect(e.detail['reopen_to'], 'open');
+    });
+
+    test('沒有 detail 時是空 map，不是 null——呼叫端不必處理兩種空', () {
+      final e = translateError(_dioError(409,
+          detail: {'code': 'task_already_claimed', 'message': 'x'}));
+      expect((e as ConflictException).detail['kind'], isNull);
+      expect(e.detail.containsKey('reopen_to'), isFalse);
+    });
+
     test('422 → ValidationException 且帶 server 的 message', () {
       final e = translateError(_dioError(422,
           detail: {'code': 'reply_target_not_found', 'message': '目標不存在'}));

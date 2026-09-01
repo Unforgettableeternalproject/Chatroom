@@ -2,13 +2,24 @@
 /// `{"detail": {"code": "...", "message": "..."}}`——code 是穩定契約，
 /// message 僅供人讀，client 絕不對 message 做字串比對。
 sealed class ApiException implements Exception {
-  const ApiException(this.code, this.message);
+  const ApiException(this.code, this.message, [this.detail = const {}]);
 
   /// server 的機器可讀錯誤碼（無法取得時為空字串）。
   final String code;
 
   /// 給使用者看的中文訊息。
   final String message;
+
+  /// Hub 塞在 `detail` 裡的其餘欄位（原樣）。
+  ///
+  /// **不要為每個新欄位長一個新的例外型別**——Hub 用 `_err(**extra)` 把
+  /// 「往下走的資訊」放進拒絕裡（`allowed`、`reopen_to`、`open`⋯⋯），那是
+  /// 一個開放集合。把它原樣留著，需要的呼叫端自己取，新增欄位時 client
+  /// 不必跟著改型別。
+  ///
+  /// ⚠️ 但 `code` 仍是唯一穩定的契約：**先看 code 再取欄位**，不要對
+  /// `message` 做字串比對。
+  final Map<String, dynamic> detail;
 
   @override
   String toString() => '$runtimeType($code): $message';
@@ -81,7 +92,9 @@ class RoomArchivedException extends ApiException {
 /// ⚠️ 這一類**多半不是錯誤**。兩個 agent 同時認領同一張卡，本來就只有一個
 /// 會成功——輸的那個要拿到的是「誰贏了」這個事實，不是一個錯誤畫面。
 class ConflictException extends ApiException {
-  const ConflictException(super.code, super.message, {this.allowed = const []});
+  const ConflictException(String code, String message,
+      {this.allowed = const [], Map<String, dynamic> detail = const {}})
+      : super(code, message, detail);
 
   /// `invalid_transition` 時，Hub 告訴你從現在這個狀態還能去哪。
   ///

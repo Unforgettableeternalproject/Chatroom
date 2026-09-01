@@ -85,10 +85,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
   Future<void> _create(String kind,
       {String? parentId, String? parentTitle}) async {
-    final actions = ref.read(boardActionsProvider(widget.roomId));
     final result = await showBoardCreateDialog(
         context, kind: kind, parentTitle: parentTitle);
     if (result == null) return;
+    await _submitCreate(kind, parentId, result);
+  }
+
+  /// 送出建立。**與對話框分開**是為了讓「重新開啟並繼續」能原樣重送一次，
+  /// 而不是要人把剛剛打的字再打一遍。
+  Future<void> _submitCreate(
+      String kind, String? parentId, BoardCreateResult result) async {
+    final actions = ref.read(boardActionsProvider(widget.roomId));
     try {
       switch (kind) {
         case 'objective':
@@ -103,12 +110,57 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           await actions.addTask(parentId!, result.title,
               description: result.description, priority: result.priority);
       }
+    } on ConflictException catch (e) {
+      if (!mounted) return;
+      // 收尾的容器拒收。被擋下來的人要拿得到往下走的路——Hub 在拒絕裡就
+      // 附上了「哪一層擋的、要打回哪個狀態」，這裡照著它做，不自己猜：
+      // 擋的可能是**祖父層**（週期已收尾、階段還開著），那時該重開的不是
+      // 眼前這個階段
+      final blocked = e.detail['item_id'] as String?;
+      final blockedKind = e.detail['kind'] as String?;
+      if (e.code == 'container_settled' && blocked != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.message),
+          action: SnackBarAction(
+            label: '重新開啟並繼續',
+            onPressed: () =>
+                _reopenAndRetry(blockedKind, blocked, kind, parentId, result),
+          ),
+        ));
+        return;
+      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
     } on ApiException catch (e) {
       // 沒有這個 catch 的話，失敗只會拋進 framework，畫面上什麼都不會發生
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  /// 把被擋下的那一層打回進行中，然後原樣重送。
+  ///
+  /// **重開是一個明確的動作，由人按下去**——這正是「拒收」勝過「自動打回
+  /// 父層」的地方：週期被拖回未完成這件事，要有人真的決定它。
+  Future<void> _reopenAndRetry(String? blockedKind, String blockedId,
+      String kind, String? parentId, BoardCreateResult result) async {
+    final actions = ref.read(boardActionsProvider(widget.roomId));
+    // 這兩個動作都回 void，所以用旗標判成敗——`runBoardAction` 回 null 只
+    // 代表「沒有值」，在 void 的情況下分不出失敗
+    var reopened = false;
+    await runBoardAction(context, () async {
+      if (blockedKind == 'objective') {
+        await actions.reopenObjective(blockedId);
+      } else {
+        await actions.setChecklistStatus(blockedId, 'open');
+      }
+      reopened = true;
+    });
+    // 重開自己也可能被拒（例如週期已取消）。那時 runBoardAction 已經說過
+    // 話了，不要再往下送一次必然失敗的建立
+    if (!reopened || !mounted) return;
+    await _submitCreate(kind, parentId, result);
   }
 
   @override

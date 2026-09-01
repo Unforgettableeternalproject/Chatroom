@@ -82,6 +82,10 @@ ApiException translateError(DioException e) {
         code,
         _detailMessage(res.data) ?? '目前的狀態不允許這個動作',
         allowed: _detailList(res.data, 'allowed'),
+        // 其餘欄位原樣帶過去。Hub 把「往下走的資訊」放在拒絕裡
+        // （`container_settled` 的 kind / item_id / reopen_to 就是這樣來的），
+        // 每加一個欄位就改一次型別的話，那些資訊多半就不會有人接
+        detail: _detailMap(res.data),
       );
     case 410:
       return AttachmentGoneException(code ?? 'attachment_blob_missing');
@@ -111,6 +115,14 @@ List<String> _detailList(dynamic data, String key) {
     if (v is List) return v.whereType<String>().toList();
   }
   return const [];
+}
+
+/// `detail` 本身（不是某一個欄位）。取不到就是空的，不要讓呼叫端處理 null。
+Map<String, dynamic> _detailMap(dynamic data) {
+  if (data is Map && data['detail'] is Map) {
+    return Map<String, dynamic>.from(data['detail'] as Map);
+  }
+  return const {};
 }
 
 String? _detailMessage(dynamic data) {
