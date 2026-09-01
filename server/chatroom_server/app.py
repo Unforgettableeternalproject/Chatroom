@@ -1798,9 +1798,42 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "style_instructions": instructions,
                 "style_prompt": prompt, "changed": True}
 
-    # room_id 是外鍵的那幾張表。順序照依賴關係由內往外，最後才是 room 本身
-    _ROOM_OWNED_TABLES = ("attachment", "message", "participant",
-                          "assignment", "question")
+    # room_id 是外鍵的那幾張表。順序照依賴關係由內往外，最後才是 room 本身。
+    #
+    # 🚨 **這份清單是手寫的，而漏掉一張表不會有任何地方報錯**——它只會在真的
+    # 有人去刪一間「剛好有那種資料」的房間時，以 FK 例外的形式爆出來。而
+    # `_purge_expired_rooms` 那條路徑**沒有人在聽**，它只會一輪一輪地失敗。
+    # 所以底下另有 `_room_owned_tables_gap()` 拿 schema 對帳，別只改這裡。
+    #
+    # 順序約束（改動前先確認）：
+    #   board_task → board_checklist → board_objective  彼此逐層相依
+    #   attachment → message                            attachment 指著 message
+    #   其餘全部 → participant                          board 四欄、question 兩欄、
+    #                                                   message.sender_id 都指著它
+    _ROOM_OWNED_TABLES = ("board_task", "board_checklist", "board_objective",
+                          "attachment", "archive_request", "question",
+                          "message", "assignment", "participant")
+
+    async def _room_owned_tables_gap() -> list[str]:
+        """schema 裡帶 room_id 的表，有哪幾張不在 `_ROOM_OWNED_TABLES` 裡。
+
+        新增一張 room-owned 表卻忘了更新清單，是這個缺陷的根因；靠人記得
+        不管用（board 三表與 archive_request 就是這樣漏掉的）。這裡拿
+        `PRAGMA table_info` 對帳，讓「忘了」變成一個查得到的事實。
+        """
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )).fetchall()
+        gap: list[str] = []
+        for r in rows:
+            name = r["name"]
+            if name in _ROOM_OWNED_TABLES or name == "room":
+                continue
+            cols = await (await db.execute(f"PRAGMA table_info({name})")).fetchall()
+            if any(c["name"] == "room_id" for c in cols):
+                gap.append(name)
+        return sorted(gap)
 
     async def _purge_room(room_id: str) -> dict[str, int]:
         """把一個聊天室連同它的內容從資料庫抹掉。**不可復原。**
@@ -1811,6 +1844,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         負責：等到沒有任何 attachment row 引用該雜湊時才清掉。
         """
         db = app.state.db
+        # **先對帳再動手。** 清單漏了表的話，底下的 DELETE 會刪掉一半才撞 FK，
+        # 而共用連線上那些已執行的 DELETE 不會被撤（rollback 會連累別的
+        # coroutine，見移交管理權那段的說明）——下一個請求的 commit 會把它們
+        # 一起送出：房間還在，訊息與附件卻沒了，且不留任何紀錄。
+        # 一列都還沒刪的此刻拒絕，是唯一不會留下殘局的時機。
+        gap = await _room_owned_tables_gap()
+        if gap:
+            logger.error(
+                "room-owned 表清單漏了 %s，拒絕刪除以免留下刪一半的殘局", gap,
+                extra={"event": "purge_refused", "room_id": room_id,
+                       "missing_tables": gap},
+            )
+            raise _err(500, "purge_incomplete_schema",
+                       "刪除聊天室的內部清單與資料庫結構對不上，這次不動它。"
+                       f"缺少：{'、'.join(gap)}")
         counts: dict[str, int] = {}
         for table in _ROOM_OWNED_TABLES:
             # 表名是模組內的常數清單，不是外來輸入
@@ -5853,6 +5901,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 logger.exception("sweeper 單輪執行失敗，下一輪續行")
 
     app.state.sweep_once = _sweep_once  # 測試可直接觸發單輪掃描
+    app.state.room_owned_tables_gap = _room_owned_tables_gap  # 對帳給測試守
     app.state.log_purge_preview = _log_purge_preview  # 測試驗預覽內容
 
     @app.get("/api/health")

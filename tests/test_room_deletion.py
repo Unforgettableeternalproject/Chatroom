@@ -450,3 +450,160 @@ async def test_room_list_says_who_is_admin(tmp_path):
             # 匿名列表無從證明自己是誰，一律 false
             r = await client.get("/api/rooms")
             assert all(x["you_are_admin"] is False for x in r.json()["rooms"])
+
+
+# ---------------------------------------------------------------------------
+# room-owned 表的完整性：清單是手寫的，漏一張表就是 FK 例外
+#
+# 🚨 這裡的每一條都不是「board 的測試」，是**刪除路徑的測試**。既有的刪除／
+# purge 測試建的都是空房，所以它們全綠只代表「空房刪得掉」。房裡只要有一筆
+# 指著 room 或 participant 的資料，走的就是完全不同的一條路。
+# ---------------------------------------------------------------------------
+
+
+async def _board_tree(client, room_id, pid):
+    """建一棵最小的 Objective → Checklist → Task。"""
+    hdr = {"X-Participant-Id": pid}
+    oid = (await client.post(f"/api/rooms/{room_id}/board/objectives",
+                             json={"title": "週期一"}, headers=hdr)).json()["id"]
+    cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                             json={"title": "階段一"}, headers=hdr)).json()["id"]
+    tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                             json={"title": "一件事"}, headers=hdr)).json()["id"]
+    return oid, cid, tid
+
+
+@pytest.mark.asyncio
+async def test_delete_a_room_that_has_board_data(tmp_path):
+    """房裡有 Board 就刪不掉——board 三表不在 room-owned 清單裡。
+
+    真正的爆點在 `DELETE FROM participant`（board 有四個欄位指著它），
+    比 `DELETE FROM room` 更早。
+    """
+    app, client = await _make(tmp_path, "del_board")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            me = await _join(client, room["id"])
+            await _board_tree(client, room["id"], me["participant_id"])
+
+            r = await client.delete(
+                f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
+            )
+            assert r.status_code == 200, r.text
+
+            db = app.state.db
+            for table in ("board_task", "board_checklist", "board_objective"):
+                row = await (await db.execute(
+                    f"SELECT COUNT(*) AS n FROM {table} WHERE room_id=?",
+                    (room["id"],),
+                )).fetchone()
+                assert row["n"] == 0, f"{table} 還有殘留"
+
+
+@pytest.mark.asyncio
+async def test_delete_a_room_that_has_an_archive_request(tmp_path):
+    """`archive_request` 也不在清單裡——而且它跟 Board 無關。
+
+    ⚠️ 這條比 board 那條更要緊：`_purge_expired_rooms` 針對的**正是**封存房，
+    而經由提案核准封存的房間必然有一筆 archive_request。
+    """
+    app, client = await _make(tmp_path, "del_archreq")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            member = await _join(client, room["id"], session_key="s-member")
+            # 非建立者提案 → 產生一筆 pending archive_request
+            r = await client.post(
+                f"/api/rooms/{room['id']}/archive",
+                headers={"X-Participant-Id": member["participant_id"]},
+                json={"reason": "收工了"},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["archived"] is False, "應該是提案不是直接封存"
+
+            r = await client.delete(
+                f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
+            )
+            assert r.status_code == 200, r.text
+
+            row = await (await app.state.db.execute(
+                "SELECT COUNT(*) AS n FROM archive_request WHERE room_id=?",
+                (room["id"],),
+            )).fetchone()
+            assert row["n"] == 0, "archive_request 還有殘留"
+
+
+@pytest.mark.asyncio
+async def test_delete_a_room_where_a_subagent_is_present(tmp_path):
+    """`participant.parent_id` 自我參照：子代理那一列指著父層那一列。
+
+    單一 `DELETE FROM participant WHERE room_id=?` 的刪除順序不保證先子後父。
+    """
+    app, client = await _make(tmp_path, "del_subagent")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            parent = await _join(client, room["id"], session_key="s-parent")
+            r = await client.post(
+                f"/api/rooms/{room['id']}/join",
+                json={"kind": "claude", "role": "agent",
+                      "session_key": "s-parent#helper",
+                      "preferred_name": "戴爾",
+                      "parent_participant_id": parent["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+
+            r = await client.delete(
+                f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
+            )
+            assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_sweeper_purges_a_room_that_has_board_data(tmp_path):
+    """自動清理走的是同一條 `_purge_room`。
+
+    手動刪除會把例外回給呼叫者，sweeper 這條**沒有人在聽**——它只會在
+    背景一輪一輪地失敗。
+    """
+    app, client = await _make(tmp_path, "purge_board", purge_archived_days=1.0,
+                              purge_first_delay=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room = await _room(client)
+            me = await _join(client, room["id"])
+            await _board_tree(client, room["id"], me["participant_id"])
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
+            # 把封存時間推到保留期之前
+            await app.state.db.execute(
+                "UPDATE room SET archived_at='2000-01-01T00:00:00+00:00'"
+                " WHERE id=?", (room["id"],),
+            )
+            await app.state.db.commit()
+
+            await app.state.sweep_once()
+
+            row = await (await app.state.db.execute(
+                "SELECT COUNT(*) AS n FROM room WHERE id=?", (room["id"],),
+            )).fetchone()
+            assert row["n"] == 0, "逾期封存房沒有被清掉"
+
+
+@pytest.mark.asyncio
+async def test_the_room_owned_table_list_covers_the_whole_schema(tmp_path):
+    """清單與 schema 對帳——**這條才是防漏的那道**。
+
+    上面四條守的是「今天漏掉的那幾張表補回來了」，這條守的是「明天新增一張
+    帶 room_id 的表時會被抓到」。少了它，下一次的漏刪會用一模一樣的方式
+    再發生一次，而且照樣是全綠上線。
+    """
+    app, client = await _make(tmp_path, "owned_gap")
+    async with client:
+        async with app.router.lifespan_context(app):
+            gap = await app.state.room_owned_tables_gap()
+            assert gap == [], (
+                f"這些表帶 room_id 卻不在 _ROOM_OWNED_TABLES 裡：{gap}。"
+                "把它們加進清單，並確認插入的位置符合外鍵依賴順序"
+            )
