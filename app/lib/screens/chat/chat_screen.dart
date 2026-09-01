@@ -157,8 +157,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 這是「不進訊息流」這個決定的直接代價，不是 App 少寫了什麼——訊息流
   /// 本來就是成員列唯一的更新訊號，抽掉它就要另外給一個。
   ///
-  /// 20 秒是刻意的：subagent 的 TTL 是 120 秒，比它短一個檔次才不會讓
-  /// 「已經被回收的成員」在畫面上留超過一個輪詢週期。
+  /// 20 秒是刻意的：它要明顯短於 subagent 的 TTL（`CHATROOM_SUBAGENT_TIMEOUT`，
+  /// 預設 900 秒），「已經被回收的成員」才不會在畫面上留超過一個輪詢週期。
+  /// 這裡不重述那個秒數——它改過一次（120 → 900），而散文裡的複本不會跟著改。
   void _startMemberPoll() {
     _memberPoll?.cancel();
     _memberPoll = Timer.periodic(const Duration(seconds: 20), (_) {

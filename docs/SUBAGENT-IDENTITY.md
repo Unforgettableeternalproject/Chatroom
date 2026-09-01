@@ -56,9 +56,13 @@ Claude Code 的 subagent 與父 session **共用同一條 MCP 連線、同一個
 與 `parent_name`。目前的完整清單：`post` / `read` / `wait` / `heartbeat` /
 `send_file` / `ask_human`。
 
-**`heartbeat` 特別重要**：子代理的時限比父層短一個數量級（預設 120 秒），
-一段安靜的長工作足以讓它被回收——回來要交報告時才發現身分沒了。少了這個
-入口，子代理**根本沒有續命手段**。
+**`heartbeat` 特別重要**：子代理的時限比父層短（預設 900 秒），一段安靜的
+長工作足以讓它被回收——回來要交報告時才發現身分沒了。少了這個入口，子代理
+**根本沒有續命手段**。
+
+> 預設值 2026-09-01 由 120 秒調為 900 秒。120 秒是照「crash 殘骸該多快消失」
+> 訂的，沒有照「一次真正的工作有多安靜」驗證過；而**登記與第一次發言之間
+> 本來就不會有任何呼叫**，續命的機會並不存在。理由詳見 `config.py`。
 
 `read` / `wait` 帶 subagent 時用**它自己的游標**，不碰父層那一份。共用會
 從兩個方向壞掉：父層沒在讀 → 子代理每次都拿到同一批（永遠重播）；父層先
@@ -276,7 +280,7 @@ CHATROOM_LOG_DIR=<repo>/logs/hub-test
 CHATROOM_IDLE_TIMEOUT=300             # 正式值 1800。與下面差一個數量級是
                                       # 刻意的：要驗兩條時限獨立，差 20 秒
                                       # 只證明得了排序
-CHATROOM_SUBAGENT_TIMEOUT=5           # 本功能新增
+CHATROOM_SUBAGENT_TIMEOUT=5           # 本功能新增（正式值 900）
 CHATROOM_SWEEP_INTERVAL=2             # 正式值 30
 CHATROOM_ARCHIVE_GRACE=10             # 正式值 60
 CHATROOM_PURGE_ARCHIVED_DAYS=0        # 測試機一律關閉自動刪除

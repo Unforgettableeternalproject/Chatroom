@@ -16,12 +16,19 @@ class Config:
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))
     )
     # subagent（ephemeral 成員）閒置多久後被回收（秒）。
-    # 刻意與 idle_timeout 分開，而且短一個數量級：subagent 是背景工作的
-    # 臨時分身，工作結束就該消失。它正常退場靠自己 leave，這條時限處理的是
-    # 「被中斷／crash／忘了 leave」——那種殘骸掛在成員列上會誤導所有人，
-    # 而父層的 1800 秒對它來說等於整場對話都留著
+    # 刻意與 idle_timeout 分開：subagent 是背景工作的臨時分身，工作結束就該
+    # 消失。它正常退場靠自己 end_subagent，這條時限處理的是「被中斷／crash／
+    # 忘了收」——那種殘骸掛在成員列上會誤導所有人。
+    #
+    # 原本是 120 秒，2026-09-01 改為 900。120 秒是照「crash 殘骸該多快消失」
+    # 訂的，卻沒有照「一次真正的工作有多安靜」驗證過：規劃／審查型的子代理
+    # 從登記到第一次發言中間隔十分鐘是常態（當天實測 632 秒），身分早就被
+    # 回收，要交報告時才發現自己沒有身分——而登記與發言之間**本來就不會有
+    # 任何呼叫**，續命的機會並不存在。
+    # 拉長不會讓殘骸失控：父層離場會級聯帶走旗下所有 subagent，殘骸的最長
+    # 存活本來就受父層限制，這條時限只決定「父層還在、子代理已死」那段窗口。
     subagent_timeout: float = field(
-        default_factory=lambda: float(os.environ.get("CHATROOM_SUBAGENT_TIMEOUT", "120"))
+        default_factory=lambda: float(os.environ.get("CHATROOM_SUBAGENT_TIMEOUT", "900"))
     )
     # presence sweeper 掃描間隔（秒）
     sweep_interval: float = field(

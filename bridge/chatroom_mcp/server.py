@@ -413,19 +413,24 @@ def chatroom_join(
 @mcp.tool()
 @_guard
 def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
-    """替你即將派出的子 agent 在房內登記一個臨時身分，回傳 ``handle``。
+    """在房內登記一個臨時的子代理身分，回傳 ``handle``。
 
-    **這是你（父層）要做的事，不是子 agent 自己能做的。** 你們共用同一個 MCP
-    進程與 session id，Hub 分辨不出誰在呼叫——所以隸屬關係只能由你在這裡宣告
-    一次，之後子 agent 拿著 ``handle`` 自報。
+    **子代理自己呼叫這支就行**，不必由父層代勞。你們共用同一個 MCP 進程與
+    session id，Hub 只認得那把 key、認不出是誰在呼叫——這件事過去被當成
+    「只有父層能宣告」的理由，其實推得反了：正因為分辨不出來，子代理自己
+    呼叫的效果與父層代呼叫完全相同，都會掛在同一個父成員底下。
 
-    派遣時把 handle 寫進給子 agent 的 prompt，要它在本房發言時帶
-    ``subagent="<handle>"``。忘了帶不會報錯，只會以你的身分發言（回傳的
-    ``identity_scope`` 會是 ``"parent"``，那是你檢查得出來的）。
+    由子代理自己登記、自己 ``chatroom_end_subagent`` 收掉，是**建議做法**：
+    父層代登記的話，handle 要透過訊息送過去，而子代理往往已經開始工作，
+    等它下一次讀訊息才收得到——那段空窗裡它要發言就會找不到身分
+    （2026-09-01 實測踩過）。
 
-    子 agent 工作結束時呼叫 ``chatroom_end_subagent``。忘了也沒關係——Hub 會在
-    短時限（預設 120 秒無動作）後自動回收；而你自己離開房間時，旗下所有
-    subagent 會一併消失。
+    在本房發言時帶 ``subagent="<handle>"``。忘了帶不會報錯，只會以父層身分
+    發言（回傳的 ``identity_scope`` 會是 ``"parent"``，那是可以自己檢查的）。
+
+    工作結束時呼叫 ``chatroom_end_subagent``。忘了也沒關係——Hub 會在無動作
+    逾時（預設 900 秒）後自動回收；而父層離開房間時，旗下所有 subagent 會
+    一併消失。
 
     **不會廣播**：它的加入只有你收得到通知，房內訊息流不會出現任何東西；
     但成員列上所有人都看得到它掛在你底下。
@@ -516,9 +521,9 @@ def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     中途呼叫這個工具就能保住身分。
     正常讀寫訊息本來就會刷新 last_seen_at，因此**不必**在每次對話後都呼叫。
 
-    ``subagent`` 填 handle 就是替那個子代理續命。**子代理的時限比父層短一個
-    數量級**（預設 120 秒），一段安靜的長工作足以讓它被回收——回來要發最後
-    一則報告時才發現身分沒了。工作超過一分鐘就順手打一次。
+    ``subagent`` 填 handle 就是替那個子代理續命。**子代理的時限比父層短**
+    （預設 900 秒），一段安靜的長工作足以讓它被回收——回來要發最後一則
+    報告時才發現身分沒了。工作會安靜超過十分鐘就順手打一次。
     """
     participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(room_id, "POST", f"/api/rooms/{room_id}/heartbeat",
