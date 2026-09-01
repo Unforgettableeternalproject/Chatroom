@@ -21,7 +21,7 @@ from fastapi import (
     WebSocket, WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Config
 from .db import open_db
@@ -281,6 +281,10 @@ class QuestionAnswer(BaseModel):
 # PATCH 的欄位一律 `default=None` ＝「這次不動它」。不能用「空字串代表清空」
 # 那套：description 與 title 本來就允許空字串，兩者混在一起之後，client 少
 # 傳一個欄位就會把既有內容抹掉，而且沒有任何地方會報錯。
+#
+# PATCH 一律 `extra="forbid"`：狀態轉移有自己的閘，走專用端點。預設的
+# 「安靜忽略未知欄位」在這裡是最糟的選擇——`{"status": "done"}` 會拿到
+# 200 卻什麼也沒發生，呼叫端完全看不出自己走錯路。
 
 class BoardObjectiveCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -288,6 +292,8 @@ class BoardObjectiveCreate(BaseModel):
 
 
 class BoardObjectivePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     order_index: int | None = None
@@ -299,6 +305,8 @@ class BoardChecklistCreate(BaseModel):
 
 
 class BoardChecklistPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     order_index: int | None = None
@@ -315,6 +323,8 @@ class BoardTaskCreate(BaseModel):
 
 
 class BoardTaskPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
@@ -2690,11 +2700,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         這樣「這次動了什麼」才是可讀的單位。同一次請求裡要重複用同一個
         回傳值，不要每列各呼叫一次。
         """
-        db = app.state.db
-        await db.execute(
-            "UPDATE room SET board_seq=board_seq+1 WHERE id=?", (room_id,)
+        # **一定要單一語句**。拆成 UPDATE 再 SELECT 的話，中間那個 await 會
+        # 讓出——後一個協程加完再回來讀，兩邊拿到同一個號。後果不是號碼難看，
+        # 是變更會消失：兩個操作共用 8 ⇒ client 讀到其中一批、水位停在 8 ⇒
+        # 下次 `board_seq > 8` 撈不到另一批，那些變更永遠到不了任何 client，
+        # 而 Hub 這邊完全正常、不會報錯。既有的 next_seq 本來就這樣領。
+        cur = await app.state.db.execute(
+            "UPDATE room SET board_seq=board_seq+1 WHERE id=? RETURNING board_seq",
+            (room_id,),
         )
-        return await _board_seq(room_id)
+        row = await cur.fetchone()   # ⚠️ 不是 rowcount：RETURNING 在 fetch 前是 0
+        return row["board_seq"]
 
     BOARD_TABLES = {
         "objective": "board_objective",
