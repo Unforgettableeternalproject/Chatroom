@@ -311,3 +311,82 @@ async def test_snapshots_survive_the_holder_leaving(tmp_path):
         assert task["created_by_name"] == "Novia"
         assert board["objectives"][0]["created_by_name"] == "Novia"
         assert board["checklists"][0]["created_by_name"] == "Novia"
+
+
+# ---------- F6：已收尾的卡不孤兒化（測試 Novia 實機發現）----------
+
+async def test_a_settled_task_is_never_orphaned(tmp_path):
+    """孤兒的意思是「這件事沒人做了」，而 done 的事**已經沒有人需要做**。
+
+    標成 orphaned 會產生一個自相矛盾的組合：完成了、而且沒人在做。
+    UI 讀到那個組合只能二選一顯示，怎麼選都是錯的。
+    """
+    app, client = await _client(tmp_path, "settled")
+    async with app.router.lifespan_context(app), client:
+        rid, mine, tid = await _room_with_task(client)
+        other, _ = await _join(client, rid, "agent-2", "Miller")
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
+        await client.post(f"/api/board/tasks/{tid}/status",
+                          json={"status": "in_progress"}, headers=mine)
+        await client.post(f"/api/board/tasks/{tid}/status",
+                          json={"status": "done"}, headers=mine)
+
+        r = await client.post(f"/api/rooms/{rid}/leave", headers=mine)
+        assert r.json()["orphaned_tasks"] == []
+
+        task = await _task(client, rid, other, tid)
+        assert task["status"] == "done"
+        assert task["claim_state"] == "held", "做完的人仍然是做它的人"
+        assert task["orphaned_reason"] == ""
+
+
+async def test_cancelled_tasks_are_not_orphaned_either(tmp_path):
+    app, client = await _client(tmp_path, "settled-cancel")
+    async with app.router.lifespan_context(app), client:
+        rid, mine, tid = await _room_with_task(client)
+        other, _ = await _join(client, rid, "agent-2", "Miller")
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
+        await client.post(f"/api/board/tasks/{tid}/status",
+                          json={"status": "cancelled"}, headers=mine)
+        await client.post(f"/api/rooms/{rid}/leave", headers=mine)
+        assert (await _task(client, rid, other, tid))["claim_state"] == "held"
+
+
+async def test_existing_contradictions_are_healed_at_startup(tmp_path):
+    """改了根因不會動到已經寫進去的資料——存量要另外清（同 HOST 徽章那次）。
+
+    只清「它現在沒人做」這個宣稱；`claim_name` / `claimed_at` 是歷史，留著。
+    """
+    path = str(tmp_path / "heal.db")
+    cfg = Config(db_path=path, api_token=ROOT)
+    app = create_app(cfg)
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://test",
+                         headers={"Authorization": f"Bearer {ROOT}"})
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        # 手工造出那個矛盾組合（舊版本會產生它）
+        await app.state.db.execute(
+            "UPDATE board_task SET status='done', claim_state='orphaned',"
+            " claim_name='前世的我', claimed_at='2026-09-01',"
+            " orphaned_at='2026-09-01', orphaned_reason='因閒置移出'"
+            " WHERE id=?", (tid,))
+        await app.state.db.commit()
+
+    # 重開一次 Hub：開機修復應該把它清乾淨
+    app2 = create_app(Config(db_path=path, api_token=ROOT))
+    client2 = AsyncClient(transport=ASGITransport(app=app2),
+                          base_url="http://test",
+                          headers={"Authorization": f"Bearer {ROOT}"})
+    async with app2.router.lifespan_context(app2), client2:
+        row = await (await app2.state.db.execute(
+            "SELECT * FROM board_task WHERE id=?", (tid,))).fetchone()
+        assert row["claim_state"] == ""
+        assert row["orphaned_at"] is None
+        assert row["orphaned_reason"] == ""
+        assert row["claim_name"] == "前世的我", "誰做的是歷史，不是矛盾"
+        assert row["claimed_at"] == "2026-09-01"
+        # 增量 client 要看得到這次修復，否則它手上那張卡永遠是矛盾的
+        seq = await (await app2.state.db.execute(
+            "SELECT board_seq FROM room WHERE id=?", (rid,))).fetchone()
+        assert row["board_seq"] == seq["board_seq"]

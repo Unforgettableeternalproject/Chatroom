@@ -391,6 +391,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 預設是開的，所以它必須自己開口——把新版拉起來的人不該在房間開始
         # 消失之後，才發現有這個設定存在
         app.state.db = await open_db(cfg.db_path)
+        # 存量修復：改了根因不會動到已經寫進去的資料（同 08-29 的 HOST 徽章）
+        await _heal_settled_orphans()
         # 名單要查資料庫，所以排在 open_db 之後
         app.state.started_at = time.monotonic()
         await _log_purge_preview()
@@ -2248,6 +2250,46 @@ def create_app(config: Config | None = None) -> FastAPI:
         ("left", True): "已離開聊天室",
     }
 
+    async def _heal_settled_orphans() -> int:
+        """開機修一次存量：把已收尾卻被標成 orphaned 的卡清掉。
+
+        F6 的修法有兩半。只做「防止新的產生」的話，既有那張矛盾的卡會永遠
+        留在資料庫裡——而 App 端為它加的 assert 會從第一天就開始說謊，
+        變成一個所有人都學會忽略的警告。**一個被忽略的警告比沒有警告更糟。**
+
+        **只清 `claim_state` / `orphaned_at` / `orphaned_reason`**，
+        `claim_name` 與 `claimed_at` 留著——那些是歷史（誰做的、什麼時候領的），
+        不是矛盾。矛盾只在「它現在沒人做」這個宣稱上。
+
+        受影響的房間要推進 `board_seq`，否則增量 client 永遠看不到這次修復，
+        手上那張卡會一直維持矛盾狀態。
+        """
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT DISTINCT room_id FROM board_task"
+                " WHERE claim_state='orphaned' AND status IN ('done','cancelled')"
+            )
+        ).fetchall()
+        healed = 0
+        for r in rows:
+            seq = await _next_board_seq(r["room_id"])
+            cur = await db.execute(
+                "UPDATE board_task SET claim_state='', orphaned_at=NULL,"
+                " orphaned_reason='', board_seq=?"
+                " WHERE room_id=? AND claim_state='orphaned'"
+                "   AND status IN ('done','cancelled') RETURNING id",
+                (seq, r["room_id"]),
+            )
+            healed += len(await cur.fetchall())
+        if healed:
+            await db.commit()
+            logger.info(
+                "修復 %d 張「已收尾卻標成孤兒」的卡（F6 存量）", healed,
+                extra={"event": "board_settled_orphans_healed", "count": healed},
+            )
+        return healed
+
     async def _orphan_claims(room_id: str) -> list[dict]:
         """把「持有者已經不在房內」的認領標成 orphaned。**不 commit。**
 
@@ -2274,7 +2316,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " p.role"
                 " FROM board_task t JOIN participant p"
                 "   ON p.id = t.claim_participant_id"
-                " WHERE t.room_id=? AND t.claim_state='held' AND p.status!='active'",
+                " WHERE t.room_id=? AND t.claim_state='held' AND p.status!='active'"
+                # 🔴 已收尾的卡不孤兒化。孤兒的意思是「這件事沒人做了」，
+                # 而 done／cancelled 的事**已經沒有人需要做**——把它標成
+                # orphaned 會產生一個自相矛盾的組合：完成了、而且沒人在做。
+                # UI 讀到那個組合只能二選一顯示，怎麼選都是錯的
+                "   AND t.status NOT IN ('done','cancelled')",
                 (room_id,),
             )
         ).fetchall()
@@ -5325,6 +5372,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         伺服器事件：
             {"type": "messages", "room_id", "room_status", "messages": [...]}
             {"type": "questions", "room_id", "questions": [...]}
+            {"type": "board", "room_id", "board_seq"}
             {"type": "pong"}
 
         ``participant_id`` 選填，帶了才會收到 ``questions``——提問是定向的，
@@ -5394,6 +5442,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         async def pump(room_id: str, after_seq: int, participant_id: str = "") -> None:
             last = after_seq
+            # -1 而不是 0：訂閱後第一輪一定推一次目前水位，client 才知道
+            # 「這條線是通的、而且我現在在哪裡」。用 0 的話，空板（board_seq
+            # 也是 0）永遠不會收到第一則，看起來與「沒接上」一模一樣
+            last_board = -1
             seen_questions: set = set()
             if participant_id:
                 # 訂閱當下就先送一次：問題可能在連線之前就問了，等下一個事件
@@ -5406,6 +5458,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                     seen_questions = await push_questions(
                         room_id, participant_id, seen_questions
                     )
+                # board 變動**不進訊息流**，所以下面那個查詢看不到它。
+                # 少了這一段，agent 改了板，App 的畫面到死都不會動——
+                # 這與 /updates 那條「三者缺一不可」是同一件事的 WS 版本。
+                # 只推水位不推內容：內容由 client 拿 board_seq 去做增量讀取
+                board_now = await _board_seq(room_id)
+                if board_now != last_board:
+                    last_board = board_now
+                    async with send_lock:
+                        await ws.send_json({
+                            "type": "board", "room_id": room_id,
+                            "board_seq": board_now,
+                        })
                 rows = await (
                     await db.execute(
                         "SELECT * FROM message WHERE room_id=?"

@@ -113,5 +113,14 @@ async def test_host_view_on_ws_requires_root_token(app):
     with TestClient(app) as tc:
         with tc.websocket_connect(f"/ws?token={ROOT}&host_view=1") as ws:
             ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
-            evt = ws.receive_json()
-            assert evt["type"] == "messages", evt
+            # ⚠️ **不能假設第一則就是 messages。** 訂閱成功後 Hub 會推哪些
+            # 事件、以什麼順序推，是會長出新種類的（board 就是 09-01 加的）。
+            # 這條測試要的是「訂得到 vs 被擋掉」，不是幀的順序——**以 type
+            # 分派、忽略不認得的種類**，那也是所有 WS consumer 該有的寫法。
+            for _ in range(8):
+                evt = ws.receive_json()
+                assert evt["type"] != "error", evt
+                if evt["type"] == "messages":
+                    break
+            else:
+                raise AssertionError("主 token + host_view 應該訂得到訊息")
