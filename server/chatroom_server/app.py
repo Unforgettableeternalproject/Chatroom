@@ -3179,6 +3179,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         parent = await _board_item_or_404("objective", objective_id)
         me = await _board_writer(parent["room_id"], x_participant_id)
+        await _assert_container_open("objective", objective_id)
         db = app.state.db
         seq = await _next_board_seq(parent["room_id"])
         cid = uuid.uuid4().hex
@@ -3237,7 +3238,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         async def _lookup():
             return await (
                 await db.execute(
-                    "SELECT c.id FROM board_checklist c JOIN board_objective o"
+                    "SELECT c.id, c.status AS c_status, o.id AS o_id,"
+                    "       o.status AS o_status"
+                    " FROM board_checklist c JOIN board_objective o"
                     "   ON o.id = c.objective_id"
                     " WHERE c.room_id=? AND c.deleted=0 AND o.deleted=0"
                     "   AND c.title=? AND o.title=? LIMIT 1",
@@ -3245,11 +3248,45 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
 
+        async def _reopen_if_settled(row) -> None:
+            """🔑 **「未分類」不受「收尾的容器拒收新卡」那道閘限制。**
+
+            那道閘擋的是「人決定收掉的容器」，而未分類不是任何人選的容器
+            ——它是 Hub 自己的收納格，靠**固定名字**找回同一格、不看狀態。
+
+            而它一定會被收尾：**週期要送審就得先把它收掉**（送審閘要求所有
+            Checklist ∈ done/cancelled）。所以純拒收的後果是「隨手記一件事」
+            從那一刻起整條壞掉，而且不能改用新建一組繞過——`idx_bchecklist_
+            uncategorised` 就在那裡擋著（軟刪才不算數，收尾的仍在）。
+
+            ⇒ 收到就打回 open。這不是繞過守門，是**回報事實**：確實有一件
+            還沒做的事進來了，週期本來就不該再停在「全部收尾」的狀態上。
+            打回會推 board_seq，畫面自己會反應，不另發系統訊息（隨手記一件
+            事是很輕的動作，不值得在房裡響一聲）。
+            """
+            if row["o_status"] in SETTLED:
+                await db.execute(
+                    "UPDATE board_objective SET status='active',"
+                    " completed_by=NULL, completed_at=NULL,"
+                    " reviewed_by=NULL, reviewed_at=NULL,"
+                    " verified_by=NULL, verified_at=NULL,"
+                    " board_seq=? WHERE id=?",
+                    (await _next_board_seq(room_id), row["o_id"]),
+                )
+            if row["c_status"] in SETTLED:
+                await db.execute(
+                    "UPDATE board_checklist SET status='open',"
+                    " completed_by=NULL, completed_at=NULL, board_seq=?"
+                    " WHERE id=?",
+                    (await _next_board_seq(room_id), row["id"]),
+                )
+
         # 三輪：讀不到就建，建不成表示別人贏了，回去讀他的。兩層各有一條
         # index，所以「objective 我建的、checklist 對方建的」這種交錯也收得住
         for _ in range(3):
             row = await _lookup()
             if row is not None:
+                await _reopen_if_settled(row)
                 return row["id"]
             seq = await _next_board_seq(room_id)
             now = _now()
@@ -3282,6 +3319,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 三輪都沒收斂：讓呼叫者拿到明確的失敗，而不是默默再建一組空殼
         row = await _lookup()
         if row is not None:
+            await _reopen_if_settled(row)
             return row["id"]
         raise _err(503, "uncategorised_contended",
                    "「未分類」正在被同時建立，稍後再試一次")
@@ -3309,7 +3347,39 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         parent = await _board_item_or_404("checklist", checklist_id)
         me = await _board_writer(parent["room_id"], x_participant_id)
+        await _assert_container_open("checklist", checklist_id)
         return await _insert_task(checklist_id, parent["room_id"], body, me)
+
+    SETTLED = ("done", "cancelled")
+
+    async def _assert_container_open(kind: str, item_id: str):
+        """收尾的容器不收新卡——連同它上面那層一起驗。
+
+        送審閘驗的是 **Checklist 的狀態**，不是底下 Task 的狀態。所以一份
+        `done` 的 Checklist 底下若還躺得下一張 `todo` 的卡，週期照樣送得出去、
+        確認得了、完成得掉：**板上寫著全部做完，實際上有一件沒做，而且沒有
+        任何地方會報錯。**（2026-09-02 驗收當下自己撞出來的：把 Checklist 推
+        done 之後，二十秒內就有一張新卡建進去了。）
+
+        ⚠️ **一定要驗兩層。** 只擋直接父層的話，「Objective 已收尾、底下
+        Checklist 還 open」這個組合會整個漏掉——而週期收尾本來就不要求
+        先把每一份清單收掉，那個組合是走得到的。
+
+        `review` 不算收尾：送審會被打回，那時卡還要進得來。
+        """
+        row = await _board_item_or_404(kind, item_id)
+        if row["status"] in SETTLED:
+            raise _err(409, "container_settled",
+                       f"這個{'週期' if kind == 'objective' else '階段'}"
+                       f"已經{'完成' if row['status'] == 'done' else '取消'}了，"
+                       "不能再往裡面加東西——要加的話先把它打回進行中",
+                       kind=kind, item_id=item_id,
+                       # ⚠️ 不能叫 status——那是 _err() 自己的第一個參數名
+                       item_status=row["status"],
+                       reopen_to="open" if kind == "checklist" else "active")
+        if kind == "checklist":
+            await _assert_container_open("objective", row["objective_id"])
+        return row
 
     async def _assert_assignee_in_room(assignee_id: str | None, room_id: str):
         """指定的對象必須是**這個房間**的 active 成員。
