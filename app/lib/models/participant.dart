@@ -61,6 +61,13 @@ class Participant {
   bool get isActive => status == 'active';
   bool get isHuman => role == 'human';
 
+  /// 成員列上該不該掛 HOST 標籤。
+  ///
+  /// **不等於 [isHost]**：agent 走 bridge，用的就是 `.env` 那把主 token，
+  /// 而修正之前的 Hub 只看 token 就記 host ⇒ 資料庫裡已經有一批被標成
+  /// 主持人的 agent，改 Hub 救不回那些既有的列。主持人是一個人。
+  bool get showsHostBadge => isHost && isHuman;
+
   factory Participant.fromJson(Map<String, dynamic> json) => Participant(
         id: json['id'] as String,
         kind: (json['kind'] as String?) ?? 'other',

@@ -179,6 +179,31 @@ async def test_joined_as_host_is_recorded_and_exposed(tmp_path):
             assert by_name["Host"]["is_admin"] is False
 
 
+async def test_agents_are_never_host(tmp_path):
+    """agent 拿主 token 進來也不是主持人。
+
+    bridge 用的就是 `.env` 那把主 token，所以「這次用的是不是主 token」
+    單獨拿來判定 host 會把**每一個** agent 都標成主持人。
+    主持人是一個人，判準必須帶上 role。
+    """
+    app, client = await _client(tmp_path, "agent-host")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "someone-else"})).json()["id"]
+            # 主 token（預設 header）+ agent
+            await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "claude", "role": "agent",
+                "session_key": "agent-key", "preferred_name": "Agent"})
+            await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human",
+                "session_key": "host-key", "preferred_name": "Host"})
+            det = (await client.get(f"/api/rooms/{rid}", headers=HOST)).json()
+            by_name = {p["display_name"]: p for p in det["participants"]}
+            assert by_name["Agent"]["is_host"] is False
+            assert by_name["Host"]["is_host"] is True
+
+
 # ---------- 不擴權 ----------
 
 async def test_host_view_does_not_grant_write(tmp_path):

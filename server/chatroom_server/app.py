@@ -2003,11 +2003,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                      "session_key": session_key, "name": name,
                      "role": body.role, "now": now, "join_ip": join_ip,
                      "join_token": getattr(request.state, "access_token", ""),
-                     # 拿主 token 進來的＝Hub 主持人本人，成員列表要標出來。
-                     # **記在 join 當下**：token 是那一刻用的那把，事後從
-                     # session_key 反推不出來（同一個人可以換 token 重進）
-                     "joined_as_host": 1 if getattr(
-                         request.state, "is_root_token", False) else 0,
+                     # 拿主 token 進來的**人**＝Hub 主持人本人，成員列表要
+                     # 標出來。**記在 join 當下**：token 是那一刻用的那把，
+                     # 事後從 session_key 反推不出來（同一個人可以換 token
+                     # 重進）。
+                     # role 這個條件不能省：bridge 用的就是 `.env` 那把主
+                     # token，只看 token 會把**每一個** agent 都標成主持人
+                     "joined_as_host": 1 if (
+                         getattr(request.state, "is_root_token", False)
+                         and body.role == "human") else 0,
                      "parent_id": parent["id"] if parent is not None else None,
                      "ephemeral": 1 if parent is not None else 0,
                      "joined_seq": joined_seq},
