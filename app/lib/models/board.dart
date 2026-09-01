@@ -58,6 +58,16 @@ class BoardObjective {
   final String createdAt;
 
   bool get isOpen => status == 'active' || status == 'review';
+
+  /// 這個週期還收不收新的階段。
+  ///
+  /// 🔴 **不是「非 done 就收」**——`review` 與 `verified` 也不收。送審之後才
+  /// 加進來的階段是 `open` 的，而閘只在送審那一刻驗過一次：週期會一路走到
+  /// `done`，底下卻掛著一段從沒做完的東西。那正是這一輪在修的形狀，只是換
+  /// 成上面一層。
+  ///
+  /// 要加就先把週期打回 `active`（「打回」那顆按鈕就在旁邊）。
+  bool get acceptsNewChecklists => status == 'active';
   bool get isVerified => status == 'verified' || status == 'done';
 
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(
@@ -130,6 +140,17 @@ class BoardChecklist {
   /// 空殼。畫面把這一層藏起來（艾斯維爾裁決）：它不是使用者安排出來的
   /// 階段，是系統為了滿足三層結構而墊的一格。
   bool get isUncategorised => title == kUncategorisedTitle;
+
+  /// 還收不收新的卡。
+  ///
+  /// 🔴 收尾之後就不收了。送審閘驗的是 Checklist 的狀態，不是底下 Task 的
+  /// 狀態 ⇒ 一份 `done` 的清單底下躺著一張 `todo` 的卡時，週期照樣送得出
+  /// 去、確認得了、完成得掉：**板上寫著全部做完，實際上有一件沒做，而且
+  /// 沒有任何地方會報錯。**
+  ///
+  /// 要往裡面加東西就先重新開啟它——讓人明確做一次那個動作，比幫他默默把
+  /// 週期拖回未完成好。
+  bool get acceptsNewTasks => status == 'open';
 
   factory BoardChecklist.fromJson(Map<String, dynamic> json) => BoardChecklist(
     id: json['id'] as String,

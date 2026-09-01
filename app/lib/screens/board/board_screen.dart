@@ -521,16 +521,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   child: Text('這個週期還沒有階段。',
                       style: UepText.mono(size: 11, color: s.inkMute)),
                 ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _BarButton(
-                    label: '＋ 階段',
-                    onTap: _archived
-                        ? null
-                        : () => _create('checklist',
-                            parentId: o.id, parentTitle: o.title),
+                if (o.acceptsNewChecklists)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _BarButton(
+                      label: '＋ 階段',
+                      onTap: _archived
+                          ? null
+                          : () => _create('checklist',
+                              parentId: o.id, parentTitle: o.title),
+                    ),
                   ),
-                ),
               ],
             ],
           ),
@@ -619,7 +620,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 封存的板不給任何轉移——它是歷史。按鈕留著只會讓人按下去拿 409
         if (!_archived)
         Row(mainAxisSize: MainAxisSize.min, children: [
-          if (o.status != 'done') ...[
+          // 送審之後也不收——`review` / `verified` 加進來的階段是 open 的，
+          // 而閘只在送審那一刻驗過一次：週期會一路走到 done，底下卻掛著一段
+          // 從沒做完的東西。要加就先按「打回」
+          if (o.acceptsNewChecklists) ...[
             _BarButton(
               label: '＋ 階段',
               onTap: () =>
@@ -892,11 +896,25 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   const SizedBox(width: 8),
                 ],
               ],
-              _BarButton(
-                label: '＋ 任務',
-                onTap: () =>
-                    _create('task', parentId: c.id, parentTitle: c.title),
-              ),
+              // 🔴 **收尾了就不再收新卡。**
+              //
+              // 送審閘驗的是 Checklist 的狀態，不是底下 Task 的狀態 ⇒ 一份
+              // done 的清單底下躺著一張 todo 的卡時，週期照樣送得出去、
+              // 確認得了、完成得掉：板上寫著全部做完，實際上有一件沒做，
+              // 而且沒有任何地方會報錯。
+              //
+              // 這是 B4 的鏡像——那次是「母體數錯」，這次是「**收尾之後母體
+              // 還會變**」。閘沒寫錯，是驗的那一刻與事實變動的那一刻之間有縫。
+              //
+              // 要往這裡加東西，先按旁邊那顆「重新開啟階段」。**讓人明確做一
+              // 次「我要重開這一段」，比幫他默默把週期拖回未完成好**——按下
+              // 「＋ 任務」的人不會預期自己撤銷了一次驗收。
+              if (c.acceptsNewTasks)
+                _BarButton(
+                  label: '＋ 任務',
+                  onTap: () =>
+                      _create('task', parentId: c.id, parentTitle: c.title),
+                ),
             ],
           ),
           if (collapsed) const SizedBox(height: 4),

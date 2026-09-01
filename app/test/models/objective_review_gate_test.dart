@@ -139,6 +139,40 @@ void main() {
     });
   });
 
+  /// 🔴 收尾的容器不能再收新東西。
+  ///
+  /// 驗收當下自己撞出來的：一張卡被建在已經 `done` 的 Checklist 底下，而
+  /// 送審閘驗的是 Checklist 的狀態、不是底下 Task 的狀態 ⇒ 週期照樣送得出
+  /// 去、確認得了、完成得掉。**板上寫著全部做完，實際上有一件沒做，而且
+  /// 沒有任何地方會報錯。**
+  ///
+  /// 這是 B4 的鏡像：那次是「母體數錯」，這次是「收尾之後母體還會變」。
+  /// 閘沒寫錯，是**驗的那一刻與事實變動的那一刻之間有縫**。
+  group('收尾的容器拒收新東西', () {
+    test('open 的階段收卡', () {
+      expect(_c('c1').acceptsNewTasks, isTrue);
+    });
+
+    test('done / cancelled 的階段不收——要加先重新開啟', () {
+      expect(_c('c1', status: 'done').acceptsNewTasks, isFalse);
+      expect(_c('c1', status: 'cancelled').acceptsNewTasks, isFalse);
+    });
+
+    test('active 的週期收階段', () {
+      expect(_o('o1').acceptsNewChecklists, isTrue);
+    });
+
+    test('🔴 review 與 verified 也不收——不是「非 done 就收」', () {
+      // 送審之後加進來的階段是 open 的，而閘只在送審那一刻驗過一次：
+      // 週期會一路走到 done，底下卻掛著一段從沒做完的東西。同一個 bug，
+      // 只是換到上面一層
+      expect(_o('o1', status: 'review').acceptsNewChecklists, isFalse);
+      expect(_o('o1', status: 'verified').acceptsNewChecklists, isFalse);
+      expect(_o('o1', status: 'done').acceptsNewChecklists, isFalse);
+      expect(_o('o1', status: 'cancelled').acceptsNewChecklists, isFalse);
+    });
+  });
+
   test('週期不在快取裡：不亮，不是崩潰', () {
     expect(_snap().canReviewObjective('nope'), isFalse);
   });
