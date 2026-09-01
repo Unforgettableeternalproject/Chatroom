@@ -137,6 +137,78 @@ class BoardChecklist {
   );
 }
 
+/// Task 狀態機，**Hub `TASK_TRANSITIONS`（`app.py`）的鏡像**。
+///
+/// 這份副本存在的理由只有一個：畫面必須在使用者按下去**之前**就知道要出
+/// 哪幾顆按鈕，而 `allowed` 要等 409 回來才拿得到。副本的代價是它會與 Hub
+/// 各自演化，所以它被一條契約測試釘著——那條測試直接讀 `app.py` 的表來比
+/// 對，兩邊不一致就紅。**沒有那條測試的話這份表不該存在。**
+///
+/// 曾經缺的那一格是 `todo → in_progress`：App 心裡是三態（待辦／完成／
+/// 卡住），Hub 是五態，而 `in_progress` 是通往 `done` 的唯一樞紐。中間那格
+/// 沒被畫出來的結果是使用者完全無法把一張卡做完。
+const kTaskTransitions = <String, Set<String>>{
+  'todo': {'in_progress', 'cancelled'},
+  'in_progress': {'blocked', 'done', 'cancelled'},
+  'blocked': {'in_progress', 'cancelled'},
+  'done': {'in_progress'},
+  'cancelled': {'todo'},
+};
+
+/// 抽屜底部的一顆動作按鈕。
+///
+/// 標籤依**來源狀態**而定，不是依目標狀態：同樣是推去 `in_progress`，
+/// 從 `todo` 是「開始」、從 `blocked` 是「解除卡住」、從 `done` 是
+/// 「重新開啟」。三句話講的是三件不同的事。
+class TaskAction {
+  const TaskAction(this.label, this.target,
+      {this.danger = false, this.trailing = false});
+
+  final String label;
+
+  /// 要把 Task 推去的狀態。必在 [kTaskTransitions] 允許的集合裡。
+  final String target;
+
+  /// 破壞性動作（紅色）。
+  final bool danger;
+
+  /// 靠右擺——「取消」與其他動作之間要有距離，不然會被誤按。
+  final bool trailing;
+}
+
+/// 某個狀態下該出哪幾顆按鈕。
+///
+/// ⚠️ **不可以憑「還沒收尾就全部出」來決定**——那正是舊版的寫法，它讓
+/// `todo` 長出「標記完成」、`blocked` 長出「標記完成」、`done` 長出打回
+/// `todo`，四顆按下去只會拿 409。
+///
+/// [allowed] 給的是 Hub 在 409 裡回的實際可去狀態；有它就以它為準，讓畫面
+/// 在副本漂移時自己修正回來。
+List<TaskAction> taskActionsFor(String status, {Set<String>? allowed}) {
+  final actions = _kTaskActions[status] ?? const <TaskAction>[];
+  if (allowed == null) return actions;
+  return actions.where((a) => allowed.contains(a.target)).toList();
+}
+
+const _kTaskActions = <String, List<TaskAction>>{
+  'todo': [
+    TaskAction('開始', 'in_progress'),
+    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+  ],
+  'in_progress': [
+    TaskAction('標記完成', 'done'),
+    TaskAction('標記卡住', 'blocked', danger: true),
+    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+  ],
+  'blocked': [
+    TaskAction('解除卡住', 'in_progress'),
+    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+  ],
+  // 打回與復原限人類。這個畫面本身跑在人類的 App 上，所以按鈕在
+  'done': [TaskAction('重新開啟', 'in_progress')],
+  'cancelled': [TaskAction('復原', 'todo')],
+};
+
 /// Task 卡片左側色軸的五種樣子（設計稿 artboard 02）。
 ///
 /// ⚠️ 它**只描述認領那一維**。狀態（待辦／進行中／卡住／完成）走徽章，

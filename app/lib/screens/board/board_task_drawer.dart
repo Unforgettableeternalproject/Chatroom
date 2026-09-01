@@ -90,7 +90,7 @@ class BoardTaskDrawer extends ConsumerWidget {
               ],
             ),
           ),
-          if (!readOnly) _actions(context, ref),
+          if (!readOnly) _TaskActionBar(roomId: roomId, task: task),
         ],
       ),
     );
@@ -319,12 +319,65 @@ class BoardTaskDrawer extends ConsumerWidget {
     );
   }
 
-  /// 底部動作列。**只給狀態轉移，不給認領**——認領在卡片上，那是掃視板子
-  /// 時就該按得到的東西；進到這裡的人已經在看細節了。
-  Widget _actions(BuildContext context, WidgetRef ref) {
+}
+
+/// 底部動作列。**只給狀態轉移，不給認領**——認領在卡片上，那是掃視板子
+/// 時就該按得到的東西；進到這裡的人已經在看細節了。
+///
+/// 出哪幾顆完全由 [taskActionsFor] 決定，這裡不做任何自己的判斷。舊版是
+/// 「還沒收尾就全部出」，於是 `todo` 長出「標記完成」、`blocked` 長出
+/// 「標記完成」、`done` 的重新開啟送 `todo`——四顆非法按鈕，按下去只會拿
+/// 409，而當時連 409 都看不見。
+class _TaskActionBar extends ConsumerStatefulWidget {
+  const _TaskActionBar({required this.roomId, required this.task});
+
+  final String roomId;
+  final BoardTask task;
+
+  @override
+  ConsumerState<_TaskActionBar> createState() => _TaskActionBarState();
+}
+
+class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
+  /// Hub 在上一個 409 裡說的「從這裡還能去哪」。
+  ///
+  /// 本機那份轉移表是副本，副本會漂移；有了這個，畫面在漂移發生時會自己
+  /// 收斂回 Hub 的說法，而不是留著一顆永遠按不動的按鈕。
+  Set<String>? _allowed;
+
+  @override
+  void didUpdateWidget(_TaskActionBar old) {
+    super.didUpdateWidget(old);
+    // 狀態變了，上一次的 allowed 是對上一個狀態說的，留著會蓋錯
+    if (old.task.status != widget.task.status) _allowed = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = context.uep;
-    final actions = ref.read(boardActionsProvider(roomId));
-    final settled = task.status == 'done' || task.status == 'cancelled';
+    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final items = taskActionsFor(widget.task.status, allowed: _allowed);
+
+    Widget button(TaskAction a) => _DrawerAction(
+          label: a.label,
+          bordered: !a.trailing,
+          accent: a.danger ? UepColors.error : null,
+          onTap: () => runBoardAction(
+            context,
+            () => actions.setTaskStatus(widget.task.id, a.target),
+            onConflict: (e) {
+              // 拒絕本身要說出來，順手把按鈕修正成 Hub 認的那幾顆
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text(e.message)));
+              if (e.allowed.isNotEmpty && mounted) {
+                setState(() => _allowed = e.allowed.toSet());
+              }
+            },
+          ),
+        );
+
+    final leading = items.where((a) => !a.trailing).toList();
+    final trailing = items.where((a) => a.trailing).toList();
 
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
@@ -332,36 +385,12 @@ class BoardTaskDrawer extends ConsumerWidget {
         border: Border(top: BorderSide(color: s.hairline)),
       ),
       child: Row(children: [
-        if (!settled) ...[
-          _DrawerAction(
-            label: '標記完成',
-            onTap: () => runBoardAction(
-                context, () => actions.completeTask(task.id)),
-          ),
-          const SizedBox(width: 8),
-          _DrawerAction(
-            label: task.status == 'blocked' ? '解除卡住' : '標記卡住',
-            accent: UepColors.error,
-            onTap: () => runBoardAction(
-                context,
-                () => actions.setTaskStatus(task.id,
-                    task.status == 'blocked' ? 'in_progress' : 'blocked')),
-          ),
-        ] else
-          _DrawerAction(
-            label: '重新開啟',
-            onTap: () => runBoardAction(
-                context, () => actions.setTaskStatus(task.id, 'todo')),
-          ),
+        for (final a in leading) ...[
+          button(a),
+          if (a != leading.last) const SizedBox(width: 8),
+        ],
         const Spacer(),
-        if (!settled)
-          _DrawerAction(
-            label: '取消任務',
-            bordered: false,
-            accent: UepColors.error,
-            onTap: () => runBoardAction(
-                context, () => actions.setTaskStatus(task.id, 'cancelled')),
-          ),
+        for (final a in trailing) button(a),
       ]),
     );
   }
