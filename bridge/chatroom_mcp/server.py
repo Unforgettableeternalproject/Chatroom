@@ -672,6 +672,11 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     ``after_seq`` 省略時沿用本機游標，返回後游標自動前進。
     ``you_were_mentioned`` 為 true 表示有人在這批訊息裡 ping 你，應優先回應。
     這是「等別人回話」的正確做法，不要用輪詢 chatroom_read 取代。
+
+    這個房間有任務板（Board）而且你讀過它的話，board 有變動時也會把你叫醒
+    ——回應的 ``board_changed`` 為 true 表示板上動了，用 ``chatroom_board``
+    去看。⚠️ **被 board 叫醒不等於被 @**：``you_were_mentioned`` 只看訊息裡
+    的 mention，board 的變動不會把它變成 true。
     """
     participant_id, scope = _identity_for(room_id, subagent)
     if after_seq is not None:
@@ -680,14 +685,27 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
         effective = _subagents.cursor(subagent)
     else:
         effective = state().last_seq(room_id)
+    params: dict[str, Any] = {"after_seq": effective, "timeout": timeout}
+    # **沒讀過 board 就不帶這個參數**（不是帶 0）。帶 0 的話，任何已經有
+    # 內容的板都會讓這條 long-poll 立刻返回，變成 25 秒 25 次的空轉——
+    # 而畫面上看起來只是「訊息一直是空的」，沒有任何地方報錯。
+    known_board = state().board_seq(room_id)
+    if known_board:
+        params["after_board_seq"] = known_board
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/updates",
         require_identity=False,
         participant_id=participant_id,
-        params={"after_seq": effective, "timeout": timeout},
+        params=params,
         timeout=timeout + 10.0,
+    )
+    # 水位不在這裡推進——推進了下次就不會再被通知，而內容還沒去拿。
+    # 交給 chatroom_board：它拿到內容的同時才移動水位
+    board_now = data.get("board_seq")
+    data["board_changed"] = (
+        isinstance(board_now, int) and board_now > known_board
     )
     last = data.get("last_seq")
     # 同 chatroom_read：子代理推自己那一份，不動父層的
@@ -1229,6 +1247,197 @@ def chatroom_get_file(attachment_id: str, room_id: str = "",
         "is_image": info.get("is_image", False),
         "hint": "這是本機路徑。要看圖片內容請用檔案讀取工具開啟它。",
     }
+
+
+# ---------- Board（共同任務板）----------
+#
+# 只開四個工具。bridge 已經有 20 幾個，而工具太多本身就會稀釋 agent 對每一個
+# 的理解——「完成」在 agent 眼裡就是改狀態，不值得為它多開一個它會忘記存在
+# 的工具。
+
+
+@mcp.tool()
+@_guard
+def chatroom_board(room_id: str, full: bool = False) -> dict:
+    """看這個房間的任務板（Objective → Checklist → Task）。
+
+    **鼓勵常看**：板上是「誰在做什麼、做到哪、哪些卡沒人接手」，那是聊天
+    記錄裡撈不出來的東西——三百則訊息之後，講定的事只有板上還留著。
+
+    讀取是**增量**的：預設只回上次之後的變動，所以連著呼叫很便宜，不會把
+    你的上下文塞滿。想重看整塊板傳 ``full=True``。
+
+    回應：
+
+    - ``objectives`` / ``checklists`` / ``tasks``——**只含這次變動的那些**
+      （``full=True`` 時是全部）。``deleted: true`` 的是**已經被刪掉**的卡，
+      要從你記得的那份移除，不是拿來顯示
+    - ``reclaimable_tasks``——**你上一世領走、還掛在那裡的卡**。agent 重啟
+      會換一個 participant 身分，但認領是跟著 session_key 走的。⚠️ 不會自動
+      認回：那些工作你這一輪並沒有記憶，先看過內容再決定要不要 claim
+    - ``board_seq``——目前的水位，下次自動沿用
+
+    ⚠️ 一張卡的**狀態**（做到哪）與**認領**（誰在上面）是兩件事。
+    ``claim_state`` 為 ``orphaned`` 表示原本領走它的人已經不在房裡了——
+    那張卡看起來有人在做，實際上沒有，是最值得你接手的一種。
+    """
+    known = 0 if full else state().board_seq(room_id)
+    data = _room_request(
+        room_id,
+        "GET",
+        f"/api/rooms/{room_id}/board",
+        params={"after_board_seq": known},
+    )
+    seq = data.get("board_seq")
+    # 拿到內容之後才推進水位。在 chatroom_wait 那側推的話，下次就不會再被
+    # 通知，而內容其實還沒到手
+    if isinstance(seq, int):
+        state().set_board_seq(room_id, seq)
+    data["after_board_seq"] = known
+    return data
+
+
+@mcp.tool()
+@_guard
+def chatroom_board_add(
+    room_id: str,
+    kind: str,
+    title: str,
+    parent_id: str = "",
+    description: str = "",
+    source_seq: int | None = None,
+    priority: str = "normal",
+) -> dict:
+    """在板上新增一個 Objective／Checklist／Task。
+
+    ``kind`` 三選一，三層是嚴格的樹：
+
+    - ``objective``——一個**週期**（一次可交付的成果）。可以同時有好幾條在跑
+    - ``checklist``——週期底下的**階段分組**（「Hub 端」「App 端」「測試」）。
+      ``parent_id`` 給 objective 的 id
+    - ``task``——**一個人做得完的一件事**。``parent_id`` 給 checklist 的 id
+
+    ``source_seq`` 填房內訊息的 seq，卡片就會指回長出它的那則討論——
+    之後看板的人不必回頭翻三百則訊息去找當初為什麼要做這件事。
+
+    ⚠️ 新增的 Task **不會自動掛在你身上**，要自己 ``chatroom_board_claim``。
+    """
+    if kind not in ("objective", "checklist", "task"):
+        raise HubError(
+            f"kind 只能是 objective / checklist / task，收到「{kind}」。"
+        )
+    if kind != "objective" and not parent_id:
+        holder = "objective" if kind == "checklist" else "checklist"
+        raise HubError(
+            f"新增 {kind} 要給 parent_id（它所屬的 {holder} 的 id）。"
+            "三層是嚴格的樹，沒有孤立的卡——先用 chatroom_board 看一眼"
+            f"現有的 {holder}。"
+        )
+    body: dict[str, Any] = {"title": title, "description": description}
+    if kind == "objective":
+        path = f"/api/rooms/{room_id}/board/objectives"
+    elif kind == "checklist":
+        path = f"/api/board/objectives/{parent_id}/checklists"
+    else:
+        path = f"/api/board/checklists/{parent_id}/tasks"
+        body["priority"] = priority
+        if source_seq is not None:
+            body["source_seq"] = source_seq
+    return _room_request(room_id, "POST", path, json=body)
+
+
+@mcp.tool()
+@_guard
+def chatroom_board_update(
+    room_id: str,
+    item_id: str,
+    kind: str = "task",
+    status: str = "",
+    title: str = "",
+    description: str = "",
+    priority: str = "",
+) -> dict:
+    """改一張卡的狀態或內容。
+
+    ``status`` 是最常用的：Task 走 ``todo`` / ``in_progress`` / ``blocked``
+    / ``done`` / ``cancelled``；Checklist 走 ``open`` / ``done`` /
+    ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``。
+
+    **完成一件事就是把它推到 ``done``**，沒有另一個「完成」工具——一個動作
+    一條路徑，多一條只是多一個會忘記的東西。
+
+    ⚠️ **Objective 的「確認無誤」（verify）不在這裡，agent 也做不到。**
+    週期要收尾時你能做的是 ``status="review"`` 送審，然後在聊天室裡請人類
+    確認——確認的實際意義是跑測試、看畫面、判斷有沒有踩到坑，那件事只有人
+    做得到。這不是權限刁難，是那道閘存在的理由。
+
+    轉移不合法時 Hub 會回 409 並附上 ``allowed``（從現在這個狀態還能去哪），
+    照它走就好，不必自己記一份轉移表。
+    """
+    if kind not in ("objective", "checklist", "task"):
+        raise HubError(
+            f"kind 只能是 objective / checklist / task，收到「{kind}」。"
+        )
+    if status:
+        if kind == "objective":
+            if status in ("verified", "verify"):
+                raise HubError(
+                    "「確認無誤」只有人類成員做得到，agent 只能送審。"
+                    "請先 chatroom_board_update(status=\"review\")，"
+                    "再用 chatroom_ask_human 請房裡的人確認。"
+                )
+            if status not in ("review", "reopen", "cancel", "complete"):
+                raise HubError(
+                    "Objective 的 status 只能是 review（送審）/ reopen（打回）"
+                    f"/ cancel（取消），收到「{status}」。"
+                )
+            return _room_request(
+                room_id, "POST", f"/api/board/objectives/{item_id}/{status}"
+            )
+        plural = "tasks" if kind == "task" else "checklists"
+        return _room_request(
+            room_id, "POST", f"/api/board/{plural}/{item_id}/status",
+            json={"status": status},
+        )
+    fields = {
+        k: v for k, v in (
+            ("title", title), ("description", description),
+            ("priority", priority),
+        ) if v
+    }
+    if not fields:
+        raise HubError("沒有要改的東西：給 status，或給 title/description/priority。")
+    plural = {"objective": "objectives", "checklist": "checklists",
+              "task": "tasks"}[kind]
+    return _room_request(
+        room_id, "PATCH", f"/api/board/{plural}/{item_id}", json=fields
+    )
+
+
+@mcp.tool()
+@_guard
+def chatroom_board_claim(room_id: str, task_id: str,
+                         release: bool = False) -> dict:
+    """認領一張 Task（或用 ``release=True`` 放掉）。
+
+    **一張卡同時只能有一個人在上面**，而這是靠資料庫的條件式更新保證的，
+    不是靠先問再做。所以：
+
+    ⚠️ **認領失敗是正常結果，不是錯誤。** 兩個 agent 同時想領同一張，只有
+    一個會成功；失敗時回應會告訴你現在是誰持有它（``held_by``）。那時該做
+    的是去領別的，不是重試。
+
+    ``reclaimed: true`` 表示這張是**你上一世領走的**——你這一輪對它沒有任何
+    記憶，先讀它的描述與那則來源訊息，再決定從哪裡接下去。
+
+    做完事情記得 ``chatroom_board_update(status="done")``；做不完就
+    ``release=True`` 放掉，讓別人接手。**領著不放又不做**是這塊板上最糟的
+    狀態：它看起來有人在處理，實際上沒有。
+    """
+    action = "release" if release else "claim"
+    return _room_request(
+        room_id, "POST", f"/api/board/tasks/{task_id}/{action}"
+    )
 
 
 def main() -> None:

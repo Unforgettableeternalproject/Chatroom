@@ -161,6 +161,7 @@ class BridgeState:
                 "display_name": None,
                 "last_seq": 0,
                 "session_key": None,
+                "board_seq": 0,
             },
         )
 
@@ -211,6 +212,24 @@ class BridgeState:
             entry = self._entry(room_id)
             if seq > entry["last_seq"]:
                 entry["last_seq"] = seq
+                self.save()
+
+    # ---------- Board 水位 ----------
+    #
+    # 與訊息游標**完全分開**：Hub 那側 board 用的是 room.board_seq，另一個
+    # 計數器（共用的話，人看到的訊息編號會被 board 的變動量推著跳號，而
+    # reply_to_seq 是畫在 UI 上給人看的）。混用會讓兩邊互相把對方的位置
+    # 沖掉，而且不會有任何地方報錯——只是安靜地漏訊息或漏 board 變動。
+
+    def board_seq(self, room_id: str) -> int:
+        return self._rooms.get(room_id, {}).get("board_seq", 0)
+
+    def set_board_seq(self, room_id: str, seq: int) -> None:
+        """水位只前進不後退，同 :meth:`set_last_seq`。"""
+        with self._lock:
+            entry = self._entry(room_id)
+            if seq > entry.get("board_seq", 0):
+                entry["board_seq"] = seq
                 self.save()
 
     def reset_cursor(self, room_id: str, seq: int = 0) -> None:
