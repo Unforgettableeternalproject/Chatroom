@@ -72,8 +72,10 @@ class MessageBubble extends StatelessWidget {
   ///
   /// 刻意與 [highlighted] 分成兩個參數而不是共用一個：一個是暫態、一個是
   /// 常駐，共用會讓「我剛跳轉到這則」與「這個人我在等」互相覆蓋，而且金色
-  /// 已經被 self / pinned / focus 三種狀態占滿了。這裡改用發話者自己的
-  /// kind 色加粗左軸——在同一套色系裡加重，不新增一種顏色語彙。
+  /// 已經被 self / pinned / focus 三種狀態占滿了。這裡用發話者自己的
+  /// kind 色做整圈邊框 + 淡底 + 加粗左軸——在同一套色系裡加重，不新增
+  /// 一種顏色語彙。（只加粗左軸的版本被推翻過：訊息一多根本看不出 2px
+  /// 與 5px 的差別，強調到看不出來等於沒有強調。）
   final bool memberHighlighted;
 
   @override
@@ -103,6 +105,12 @@ class MessageBubble extends StatelessWidget {
                   size: 13,
                   weight: FontWeight.w600,
                   color: message.deleted ? s.inkMute : s.inkTitle)),
+          // 成員面板上的標記開關是一顆星，這裡回應同一顆星——兩個畫面
+          // 用同一個符號講同一件事
+          if (memberHighlighted) ...[
+            const SizedBox(width: 6),
+            Text('★', style: UepText.sans(size: 10, color: color)),
+          ],
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
@@ -149,16 +157,27 @@ class MessageBubble extends StatelessWidget {
               ? UepColors.gold.withValues(alpha: .10)
               // 子代理的底色更淡：它的話是別人派出去的工作產出，
               // 不該和房內成員自己的發言有同樣的視覺重量
-              : (isSub ? s.bgCard.withValues(alpha: .55) : s.bgCard),
+              : isSub
+                  ? s.bgCard.withValues(alpha: .55)
+                  // 標記成員的淡底：與自己訊息的金色淡底同一套手法，
+                  // 換成發話者的 kind 色
+                  : memberHighlighted
+                      ? Color.alphaBlend(color.withValues(alpha: .07), s.bgCard)
+                      : s.bgCard,
           border: Border.all(
+            // 優先序：跳轉聚焦（暫態，蓋過一切）> 自己 > 標記成員 > 釘選。
+            // 標記壓過釘選是刻意的——釘選在 header 已有「❖ 已釘選」字樣，
+            // 邊框讓給「這個人我在等」不會丟資訊
             color: highlighted
                 ? UepColors.gold
                 : isSelf
                     ? UepColors.gold.withValues(alpha: .28)
-                    : message.pinned
-                        ? UepColors.gold.withValues(alpha: .22)
-                        : (isSub ? color.withValues(alpha: .35) : s.line),
-            width: isSub ? 1.2 : 1,
+                    : memberHighlighted
+                        ? color.withValues(alpha: .55)
+                        : message.pinned
+                            ? UepColors.gold.withValues(alpha: .22)
+                            : (isSub ? color.withValues(alpha: .35) : s.line),
+            width: memberHighlighted && !isSelf ? 1.4 : (isSub ? 1.2 : 1),
           ),
           borderRadius: BorderRadius.circular(10),
         ),
@@ -199,9 +218,8 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    // 標記的成員把左軸加粗到 5px。在同一套色系裡加重而不是換色：kind 色
-    // 是「這是誰說的」的既有語彙，標記只是把它喊大聲一點。自己的訊息沒有
-    // 左軸也不需要標記——不會有人在等自己回話
+    // 標記的成員左軸加粗到 5px，與整圈邊框、淡底一起構成強調。自己的
+    // 訊息沒有左軸也不需要標記——不會有人在等自己回話
     final axisWidth = memberHighlighted ? 5.0 : 2.0;
     final bubble = isSelf
         ? body

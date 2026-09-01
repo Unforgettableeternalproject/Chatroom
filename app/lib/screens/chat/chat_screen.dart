@@ -2155,7 +2155,7 @@ class _MemberTile extends StatelessWidget {
   final VoidCallback? onHide;
   final VoidCallback? onUnhide;
 
-  /// 這個人被我標記為重點（時間軸上的左軸會加粗）。與隱藏同一類：
+  /// 這個人被我標記為重點（時間軸上他的訊息會以他的 kind 色框起）。與隱藏同一類：
   /// 純本機視圖，方向相反——隱藏是「別讓他佔位置」，標記是「別讓我漏看他」。
   final bool highlighted;
   final VoidCallback? onToggleHighlight;
@@ -2328,7 +2328,7 @@ class _MemberTile extends StatelessWidget {
               ),
             if (onToggleHighlight != null)
               IconButton(
-                tooltip: highlighted ? '取消標記' : '標記這個人（時間軸上加粗）',
+                tooltip: highlighted ? '取消標記' : '標記這個人（他的訊息會以他的顏色框起）',
                 visualDensity: VisualDensity.compact,
                 onPressed: onToggleHighlight,
                 icon: Icon(
