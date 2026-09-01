@@ -10,6 +10,8 @@
 3. **摘要不逐筆**。supervisor 也是一個會被塞滿的 agent。
 """
 
+import json
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -204,3 +206,82 @@ async def test_a_departed_supervisor_stops_receiving_digests(tmp_path):
                           json={"title": "週期一"}, headers=owner)
         await app.state.sweep_once()
         assert await _events(client, rid, owner, "board_digest") == []
+
+
+# ---------------------------------------------------------------------------
+# 摘要的收件人（審核用 Codex 於 v1 驗收發現，重現兩次 mentions=[]）
+# ---------------------------------------------------------------------------
+
+
+async def _digest_recipients(app, rid):
+    rows = await (await app.state.db.execute(
+        "SELECT mentions FROM message WHERE room_id=?"
+        " AND system_event='board_digest' ORDER BY seq", (rid,),
+    )).fetchall()
+    return [json.loads(r["mentions"] or "[]") for r in rows]
+
+
+async def _digest_seq(app, rid):
+    row = await (await app.state.db.execute(
+        "SELECT board_seq, board_digest_seq FROM room WHERE id=?", (rid,),
+    )).fetchone()
+    return row["board_seq"], row["board_digest_seq"]
+
+
+async def test_a_digest_is_held_until_the_supervisor_is_actually_in_the_room(tmp_path):
+    """**收件人以 session_key 即時反查，不用設定當下的名字快照。**
+
+    supervisor 常在被指定的當下還沒進房（上面那條測試守著這是允許的），
+    此時快照是空字串 ⇒ mentions 為空 ⇒ 這則摘要不會叫醒任何人。而水位照樣
+    前進，於是那段變動再也追不回來——**靜默失效，且一輪一輪地重演**。
+    """
+    app, client = await _client(tmp_path, "digest_wait", board_digest_interval=0.0)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"session_key": "sup-1"}, headers=owner)
+        oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                 json={"title": "週期一"},
+                                 headers=owner)).json()["id"]
+        assert oid
+
+        await app.state.sweep_once()
+        assert await _digest_recipients(app, rid) == [], "人還沒進房就發了"
+        board_seq, digest_seq = await _digest_seq(app, rid)
+        assert board_seq > digest_seq, (
+            "水位不該前進——推了的話這段變動就再也追不回來了"
+        )
+
+        # 他進房了：同一段變動仍要送得到
+        await _join(client, rid, "sup-1", "監督者")
+        await app.state.sweep_once()
+        recipients = await _digest_recipients(app, rid)
+        assert len(recipients) == 1, f"進房後應該補送一則：{recipients}"
+        assert "監督者" in recipients[0], f"沒 mention 到人：{recipients[0]}"
+        board_seq, digest_seq = await _digest_seq(app, rid)
+        assert board_seq == digest_seq, "送出之後水位才該跟上"
+
+        # 另一半：進房時補上名字快照。摘要的收件人不靠它（即時反查），
+        # 但畫面要說得出「本來是誰在看」——他離場之後就只剩這一份
+        row = await (await app.state.db.execute(
+            "SELECT board_supervisor_name, board_supervisor_kind FROM room"
+            " WHERE id=?", (rid,),
+        )).fetchone()
+        assert row["board_supervisor_name"] == "監督者", "進房沒有回填名字快照"
+        assert row["board_supervisor_kind"] == "claude"
+
+
+async def test_a_digest_still_goes_out_when_the_supervisor_is_present(tmp_path):
+    """錨點：擋掉「把摘要整個關掉」也會過的寫法。"""
+    app, client = await _client(tmp_path, "digest_ok", board_digest_interval=0.0)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await _join(client, rid, "sup-1", "監督者")
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"session_key": "sup-1"}, headers=owner)
+        await client.post(f"/api/rooms/{rid}/board/objectives",
+                          json={"title": "週期一"}, headers=owner)
+
+        await app.state.sweep_once()
+        recipients = await _digest_recipients(app, rid)
+        assert len(recipients) == 1 and "監督者" in recipients[0]

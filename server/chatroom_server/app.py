@@ -2174,6 +2174,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             (now, room_id, session_key),
         )
         await db.commit()
+        # supervisor 是可以「先指定、人再進來」的（設定端點刻意允許），
+        # 而指定當下人不在房就取不到名字快照。這裡補上：畫面要說得出
+        # 「本來是誰在看」，靠的正是這份快照——摘要的收件人則另外即時反查，
+        # 不依賴它（見 `_flush_board_digest`）
+        await db.execute(
+            "UPDATE room SET board_supervisor_name=?, board_supervisor_kind=?"
+            " WHERE id=? AND board_supervisor_session_key=?"
+            "   AND board_supervisor_name=''",
+            (name, body.kind, room_id, session_key),
+        )
+        await db.commit()
         # ephemeral 不進 session 名錄：那份名錄是指派 UI 的掃描來源，而
         # subagent 不可被指派（§3.7）。登記進去只會在清單上長出一堆
         # 看起來可以指派、實際上指派不到的鬼影
@@ -3866,7 +3877,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         head = "、".join(f"{k} {v} 項" for k, v in counts.items())
         sample = "／".join(f"「{x}」" for x in titles[:3])
         more = f" 等 {len(titles)} 項" if len(titles) > 3 else ""
-        supervisor = room["board_supervisor_name"]
+        # 🔑 **收件人以 session_key 即時反查，不用設定當下的名字快照。**
+        #
+        # supervisor 常常在被指定的當下還沒進房（那正是要用指派把他叫進來的
+        # 情形，設定端點刻意允許），此時快照是空字串 ⇒ mentions 是空的 ⇒
+        # 這則摘要不會叫醒任何人。而水位照樣前進，於是那段變動再也追不回來：
+        # 通知管道用的是快照名字，身分卻是 session_key，兩者在這個被明文允許
+        # 的情境下必然不一致。
+        #
+        # 找不到人就**整個不做**，水位也不推——他之後進房仍拿得到這段摘要。
+        # 代價是長期沒人在場的房會累積很長一段（樣本已限 3 筆，counts 會變大），
+        # 那是可接受的取捨：現在的行為是靜靜地漏掉。
+        who = await (
+            await db.execute(
+                "SELECT display_name FROM participant"
+                " WHERE room_id=? AND session_key=? AND status='active'"
+                " ORDER BY joined_at DESC LIMIT 1",
+                (room_id, room["board_supervisor_session_key"]),
+            )
+        ).fetchone()
+        if who is None:
+            return
+        supervisor = who["display_name"]
         await db.execute(
             "UPDATE room SET board_digest_seq=(SELECT board_seq FROM room WHERE id=?),"
             " board_digest_at=? WHERE id=?",
