@@ -3113,6 +3113,21 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _is_human(me) -> bool:
         return me["role"] == "human"
 
+    async def _board_audience(room_id: str, exclude_id: str = "") -> list[str]:
+        """board 通知的收件名單：房內 active、**非 ephemeral** 的成員。
+
+        排除 subagent 是既有原則的延伸——它們沒有自己的 watcher（活在父層
+        進程裡），mention 它們只會經父層再叫醒一次，等於同一個人被叫兩次。
+        """
+        rows = await (
+            await app.state.db.execute(
+                "SELECT id, display_name FROM participant"
+                " WHERE room_id=? AND status='active' AND ephemeral=0",
+                (room_id,),
+            )
+        ).fetchall()
+        return [r["display_name"] for r in rows if r["id"] != exclude_id]
+
     async def _board_status_change(kind: str, item_id: str, target: str,
                                    participant_id: str | None) -> dict:
         row = await _board_item_or_404(kind, item_id)
@@ -3168,6 +3183,19 @@ def create_app(config: Config | None = None) -> FastAPI:
              seq, task_id),
         )
         await db.commit()
+        if done:
+            # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
+            # ——這則收據日後若帶上 reply_to（指回 source_seq 那則訊息），
+            # _post_message 會把被回覆者自動補進 mentions，把「排除執行者」
+            # 這條規則從下游繞掉。pin 收據踩過同一個坑
+            audience = await _board_audience(row["room_id"], exclude_id=me["id"])
+            if audience:
+                await _post_message(
+                    row["room_id"], None,
+                    f"{me['display_name']} 完成了任務「{row['title']}」",
+                    kind="system", system_event="board_task_done",
+                    mentions=audience, reply_mentions_author=False,
+                )
         await events.notify(row["room_id"])
         return {"ok": True, "id": task_id, "status": body.status,
                 "board_seq": seq}
@@ -3349,6 +3377,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
         })
+        # 規則二：**全部**，完成者也在內——他確認的是整個週期，不是自己那張卡
+        audience = await _board_audience(row["room_id"])
+        if audience:
+            await _post_message(
+                row["room_id"], None,
+                f"週期「{row['title']}」已完成（{me['display_name']} 確認）",
+                kind="system", system_event="board_objective_done",
+                mentions=audience, reply_mentions_author=False,
+            )
         return {"ok": True, "id": objective_id, "status": "done",
                 "board_seq": seq}
 
