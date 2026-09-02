@@ -307,11 +307,20 @@ class BoardsApi {
   ///
   /// [status] 為 `active` / `archived`。**Board 的封存與 room 的封存是兩件
   /// 事**：封存的房裡照樣可以寫它掛著的 Board，反過來也一樣。
-  Future<List<BoardSummary>> list({String status = 'active'}) =>
+  ///
+  /// ⚠️ [sessionKey] 走 **`X-Session-Key` header，不是 query**。
+  /// `/api/rooms` 收的是 query（`?session_key=`），照那邊複製過來會拿 400
+  /// `session_key_required`，而那句話讀起來像身分壞了，其實只是放錯位置。
+  /// Board Library 沒有 room participant，Hub 直接從這把 key 解析 actor_key。
+  Future<List<BoardSummary>> list({
+    required String sessionKey,
+    String status = 'active',
+  }) =>
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/boards',
           queryParameters: {'status': status},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         final items = (res.data?['boards'] as List?) ?? const [];
         return items
@@ -320,36 +329,58 @@ class BoardsApi {
       });
 
   /// 以 board_id 讀 delta。v2 的權威路徑。
-  Future<BoardDelta> fetch(String boardId, {int afterBoardSeq = 0}) =>
+  Future<BoardDelta> fetch(
+    String boardId, {
+    required String sessionKey,
+    int afterBoardSeq = 0,
+  }) =>
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/boards/$boardId',
           queryParameters: {'after_board_seq': afterBoardSeq},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return BoardDelta.fromJson(res.data ?? const {});
       });
 
   /// 建 Board。帶 [originRoomId] 時該房自動掛接，建立者成為 owner。
-  Future<String> create({required String name, String? originRoomId}) =>
+  Future<String> create({
+    required String name,
+    required String sessionKey,
+    String? originRoomId,
+  }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/boards',
           data: {'name': name, 'origin_room_id': ?originRoomId},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return (res.data?['id'] as String?) ?? '';
       });
 
   /// 把一間房掛上這塊 Board。
-  Future<void> attachRoom(String boardId, String roomId) => unwrap(() async {
+  Future<void> attachRoom(
+    String boardId,
+    String roomId, {
+    required String sessionKey,
+  }) =>
+      unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/boards/$boardId/rooms/$roomId',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });
 
   /// 解除掛接。**不刪 Board 的任何資料**——重新掛接看得到原狀態。
-  Future<void> detachRoom(String boardId, String roomId) => unwrap(() async {
+  Future<void> detachRoom(
+    String boardId,
+    String roomId, {
+    required String sessionKey,
+  }) =>
+      unwrap(() async {
         await _dio.delete<Map<String, dynamic>>(
           '/api/boards/$boardId/rooms/$roomId',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });
 }

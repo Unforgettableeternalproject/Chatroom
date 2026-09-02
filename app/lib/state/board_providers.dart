@@ -29,22 +29,53 @@ class BoardCache extends Notifier<Map<String, BoardSnapshot>> {
   @override
   Map<String, BoardSnapshot> build() => const {};
 
-  BoardSnapshot snapshotOf(String roomId) =>
-      state[roomId] ?? const BoardSnapshot();
+  /// roomId → boardId。**從回應學來的，不是問來的。**
+  ///
+  /// v2 起一塊 Board 可以掛在多間房，快取必須以 boardId 為 key——否則同一塊
+  /// 板在兩間房裡各存一份，各自推各自的水位，看起來永遠像兩塊不同的板。
+  ///
+  /// 但要用 boardId 當 key，得先知道它是誰，而那件事只有 Hub 說得準。
+  /// 解法是讓第一次拉取（沒有對應時走全量）自己把對應帶回來；之後就直接
+  /// 以 boardId 算游標。**這樣不必為了解析多打一次 API。**
+  final Map<String, String> _boardIdByRoom = {};
+
+  String? boardIdOf(String roomId) => _boardIdByRoom[roomId];
+
+  BoardSnapshot snapshotOf(String boardId) =>
+      state[boardId] ?? const BoardSnapshot();
+
+  /// 這個房間目前看到的板。還不知道對應時回空快照——**空快照的水位是 0，
+  /// 也就是「下一次拉全量」**，正是這種情況該做的事。
+  BoardSnapshot snapshotForRoom(String roomId) {
+    final id = _boardIdByRoom[roomId];
+    return id == null ? const BoardSnapshot() : snapshotOf(id);
+  }
 
   /// 套用一次增量，回傳合併後的快取。
-  BoardSnapshot apply(String roomId, BoardDelta delta) {
-    final merged = snapshotOf(roomId).merge(delta);
-    state = {...state, roomId: merged};
+  ///
+  /// [roomId] 有給時順便記下對應。舊 Hub 不回 `board_id`，那時退回以房為
+  /// key——遷移期間兩種 Hub 並存，這裡不能假設一定拿得到。
+  BoardSnapshot apply(String boardId, BoardDelta delta, {String? roomId}) {
+    final key = delta.boardId.isNotEmpty ? delta.boardId : boardId;
+    if (roomId != null && key.isNotEmpty) _boardIdByRoom[roomId] = key;
+    final merged = snapshotOf(key).merge(delta);
+    state = {...state, key: merged};
     return merged;
   }
 
-  /// 離開房間時丟掉。留著只會讓下次進來時用一個過期的水位去要增量，
+  /// 丟掉一塊板的快取。留著只會讓下次用一個過期的水位去要增量，
   /// 而 Hub 不會回傳那段期間已經被刪掉的列——那些卡會一直在。
-  void forget(String roomId) {
-    if (!state.containsKey(roomId)) return;
-    state = {...state}..remove(roomId);
+  void forget(String boardId) {
+    if (!state.containsKey(boardId)) return;
+    state = {...state}..remove(boardId);
   }
+
+  /// 離開房間。
+  ///
+  /// ⚠️ **只解除對應，不丟板的快取**——那塊板可能還掛在別的房、或正開在
+  /// Board Library 裡。跟著房一起丟掉的話，另一個畫面的水位會無聲地
+  /// 倒退成 0（BOARD_DESIGN §10：離開 room 不丟 Board cache）。
+  void forgetRoom(String roomId) => _boardIdByRoom.remove(roomId);
 }
 
 final boardCacheProvider =
@@ -124,11 +155,30 @@ final boardProvider =
   final pid = await ref.watch(boardParticipantIdProvider(roomId).future);
   final cache = ref.read(boardCacheProvider.notifier);
   // 這裡用 read 不用 watch：watch 自己的輸出會讓每次合併都觸發一次重拉。
-  final known = cache.snapshotOf(roomId).boardSeq;
+  //
+  // 水位從**這個房間目前掛的那塊板**算，不是從房間算。同一塊板掛兩間房時
+  // 以房為 key 會存成兩份、各推各的水位，畫面上看起來像兩塊不同的板。
+  final known = cache.snapshotForRoom(roomId).boardSeq;
   final delta = await ref
       .watch(boardApiProvider)
       .fetch(roomId, afterBoardSeq: known, participantId: pid);
-  return cache.apply(roomId, delta);
+  return cache.apply(cache.boardIdOf(roomId) ?? roomId, delta, roomId: roomId);
+});
+
+/// 以 board_id 讀的板（v2 權威路徑，Board Library 與 `/boards/:id` 用）。
+///
+/// 與 [boardProvider] 共用同一份快取——**兩條路徑進到同一塊板時看到的必須
+/// 是同一份**，否則從 Library 點進去與從房間點進去會顯示不同的水位。
+final boardByIdProvider =
+    FutureProvider.autoDispose.family<BoardSnapshot, String>((ref, boardId) async {
+  final cache = ref.read(boardCacheProvider.notifier);
+  final known = cache.snapshotOf(boardId).boardSeq;
+  final delta = await ref.watch(boardsApiProvider).fetch(
+        boardId,
+        afterBoardSeq: known,
+        sessionKey: ref.watch(appConfigProvider).deviceKey,
+      );
+  return cache.apply(boardId, delta);
 });
 
 /// board 上的動作。每一個都在成功之後 invalidate [boardProvider]，
@@ -328,7 +378,10 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// 而那正是最難查的一種畫面。見 `boardLibraryUnavailable`。
 final boardLibraryProvider =
     FutureProvider.autoDispose.family<List<BoardSummary>, String>(
-  (ref, status) => ref.watch(boardsApiProvider).list(status: status),
+  (ref, status) => ref.watch(boardsApiProvider).list(
+        status: status,
+        sessionKey: ref.watch(appConfigProvider).deviceKey,
+      ),
 );
 
 /// 這個錯誤是不是「Hub 還沒實作 Board Library」而不是真的壞了。
