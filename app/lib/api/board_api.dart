@@ -383,4 +383,53 @@ class BoardsApi {
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });
+
+  /// 指定或卸任 Supervisor（[actorKey] 為 null／空字串即卸任）。限 owner。
+  ///
+  /// **Supervisor 不必是板成員、也不必在任何掛接房裡**——那正是這個角色的
+  /// 意義：從外面看著，不必先被拉進某間對話。
+  Future<void> setSupervisor(
+    String boardId, {
+    required String sessionKey,
+    String? actorKey,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/supervisor',
+          data: {'target_actor_key': actorKey ?? ''},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+      });
+
+  /// 送一則判斷或建議。
+  ///
+  /// 回傳 `delivered`：目標**不在任何掛接房**時是 false。
+  /// ⚠️ **這個值一定要讓送出的人看到。** 假裝送到了，他會以為對方已經知道
+  /// 了——而那是他接下來所有判斷的前提。
+  /// ⚠️ 欄位名是 `target_actor_key` / `text`，**不是** `to_actor_key` /
+  /// `content`（後者是 delta 回來時的名字）。送出與讀回用的不是同一組名字，
+  /// 這點實測過——猜的話拿 422，而 422 的訊息會說「這些欄位不被允許」，
+  /// 讀起來像是自己送錯了東西。
+  Future<bool> sendDirective(
+    String boardId, {
+    required String sessionKey,
+    required String text,
+    String? targetActorKey,
+    String? itemId,
+    String? itemKind,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/directives',
+          data: {
+            'text': text,
+            'target_actor_key': targetActorKey ?? '',
+            'item_id': ?itemId,
+            'item_kind': ?itemKind,
+          },
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return (res.data?['delivered'] as bool?) ?? false;
+      });
 }
+

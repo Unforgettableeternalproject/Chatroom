@@ -15,6 +15,7 @@ import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
+import 'supervisor_panel.dart';
 
 /// Board 全頁畫面（設計稿 artboard 01）。
 ///
@@ -59,6 +60,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 偷偷 join 一間房來湊：開一塊板不該有「順便把你加進某個聊天室」這種
   /// 副作用，而那件事發生時他不會知道。
   bool get _boardOnly => widget.roomId == null;
+
+  /// 這個畫面正在看哪塊板。從房間進來時要等回應才知道——**還不知道時
+  /// 不畫需要它的入口**，畫了按下去只會拿一個空 id。
+  String? get _boardIdOrNull {
+    if (widget.boardId != null) return widget.boardId;
+    final id = _watchBoard().value?.boardId ?? '';
+    return id.isEmpty ? null : id;
+  }
 
   /// 房內動作。`_boardOnly` 時是 null，呼叫端必須自己處理——
   /// 讓型別擋住比讓執行期拿 404 好。
@@ -452,8 +461,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         const Spacer(),
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
         // 「沒有人在收摘要」與「有人但名字讀不到」不是同一件事
-        if (snap?.supervisor?.displayName.isNotEmpty ?? false) ...[
-          _SupervisorPill(name: snap!.supervisor!.displayName),
+        // ⚠️ **沒有指定時也要有入口**，只是換一句話。舊版只在有 supervisor
+        // 時畫這顆膠囊，於是「指派一個人來看著」這件事在畫面上完全不存在
+        // ——功能做了，但沒有人找得到它
+        if (_boardIdOrNull != null) ...[
+          _SupervisorPill(
+            name: snap?.supervisor?.displayName ?? '',
+            onTap: () =>
+                showSupervisorPanel(context, boardId: _boardIdOrNull!),
+          ),
           const SizedBox(width: 12),
         ],
         // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。
@@ -1307,26 +1323,41 @@ class _HeaderAction extends StatelessWidget {
 /// Hub 目前只給名字（沒有 kind），所以那顆點是中性的——**不要拿名字去猜種類**，
 /// 猜錯的話它會用別人的顏色說「他是 claude」。
 class _SupervisorPill extends StatelessWidget {
-  const _SupervisorPill({required this.name});
+  const _SupervisorPill({required this.name, required this.onTap});
 
+  /// 現任 Supervisor 的名字。空字串＝還沒指定。
   final String name;
+
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        border: Border.all(color: s.hairline),
-        borderRadius: BorderRadius.circular(999),
+    final empty = name.isEmpty;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: s.hairline),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('◎',
+              style: UepText.mono(
+                  size: 9, color: empty ? s.inkMute : s.inkSoft)),
+          const SizedBox(width: 8),
+          Text(
+            // 沒有指定時講「未指派」而不是留一個空的「SUPERVISOR · 」——
+            // 後者看起來像名字讀不出來，而那是完全不同的一件事
+            empty ? 'SUPERVISOR · 未指派' : 'SUPERVISOR · ${name.toUpperCase()}',
+            style: UepText.mono(
+                size: 9,
+                color: empty ? s.inkMute : s.inkSoft,
+                letterSpacing: 1.2),
+          ),
+        ]),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('◎', style: UepText.mono(size: 9, color: s.inkSoft)),
-        const SizedBox(width: 8),
-        Text('SUPERVISOR · ${name.toUpperCase()}',
-            style:
-                UepText.mono(size: 9, color: s.inkSoft, letterSpacing: 1.2)),
-      ]),
     );
   }
 }

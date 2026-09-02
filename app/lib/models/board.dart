@@ -634,7 +634,8 @@ class BoardSnapshot {
   final Map<String, BoardTask> tasks;
   final List<ReclaimableTask> reclaimable;
   final Map<String, AttachedRoom> attachedRooms;
-  final Map<String, BoardDirective> directives;
+  /// board_seq → directive。**沒有 id 可用**，見 [BoardDirective.boardSeq]。
+  final Map<int, BoardDirective> directives;
   final bool directivesHasMore;
   final BoardActorRef? supervisor;
 
@@ -675,8 +676,8 @@ class BoardSnapshot {
         ? <String, AttachedRoom>{}
         : Map<String, AttachedRoom>.from(attachedRooms);
     final dirs = delta.full
-        ? <String, BoardDirective>{}
-        : Map<String, BoardDirective>.from(directives);
+        ? <int, BoardDirective>{}
+        : Map<int, BoardDirective>.from(directives);
 
     for (final o in delta.objectives) {
       if (o.deleted) {
@@ -709,7 +710,7 @@ class BoardSnapshot {
       }
     }
     for (final d in delta.directives) {
-      dirs[d.id] = d;
+      dirs[d.boardSeq] = d;
     }
 
     return BoardSnapshot(
@@ -984,40 +985,50 @@ class AttachedRoom {
 @immutable
 class BoardDirective {
   const BoardDirective({
-    required this.id,
     required this.boardSeq,
-    this.from,
+    this.fromActorKey = '',
+    this.fromName = '',
     this.toActorKey = '',
-    this.taskId = '',
-    this.content = '',
+    this.originRoomId = '',
+    this.itemKind = '',
+    this.itemId = '',
+    this.text = '',
     this.createdAt,
   });
 
-  final String id;
-
-  /// 與 items 共用同一個 cursor。沒有它，增量拉不到新的 directive。
+  /// ⚠️ **directive 沒有自己的 id**（實測 Hub `c3773cd`）。`board_seq` 是它
+  /// 唯一的識別，而那個序號在板內遞增且唯一，所以拿來當 key 是安全的——
+  /// 但別在別處假設它有 uuid。
   final int boardSeq;
 
-  final BoardActorRef? from;
+  /// 送的人。**平鋪兩欄，不是巢狀物件**：`from_name` 是當下的名字快照，
+  /// Supervisor 可能不是板成員，查不到 `members[]` 裡去。
+  final String fromActorKey;
+  final String fromName;
 
-  /// 收件者。空字串＝廣播給 Board 上所有人。
+  /// 收件者。空字串＝對整塊板講的。
   final String toActorKey;
 
-  /// 針對哪張卡。空字串＝對整塊 Board 講的。
-  final String taskId;
+  /// 投影到哪間房（喚醒的落點）。空字串＝沒投影出去，也就是沒人被叫醒。
+  final String originRoomId;
 
-  final String content;
+  /// 針對哪張卡。`item_kind` 是 objective／checklist／task，兩欄都空＝
+  /// 對整塊板講的。
+  final String itemKind;
+  final String itemId;
+
+  final String text;
   final String? createdAt;
 
   factory BoardDirective.fromJson(Map<String, dynamic> json) => BoardDirective(
-    id: json['id'] as String,
     boardSeq: (json['board_seq'] as int?) ?? 0,
-    from: json['from'] == null
-        ? null
-        : BoardActorRef.fromJson(json['from'] as Map<String, dynamic>),
+    fromActorKey: (json['from_actor_key'] as String?) ?? '',
+    fromName: (json['from_name'] as String?) ?? '',
     toActorKey: (json['to_actor_key'] as String?) ?? '',
-    taskId: (json['task_id'] as String?) ?? '',
-    content: (json['content'] as String?) ?? '',
+    originRoomId: (json['origin_room_id'] as String?) ?? '',
+    itemKind: (json['item_kind'] as String?) ?? '',
+    itemId: (json['item_id'] as String?) ?? '',
+    text: (json['text'] as String?) ?? '',
     createdAt: json['created_at'] as String?,
   );
 }

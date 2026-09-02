@@ -89,7 +89,7 @@ void main() {
         _delta({
           'full': true,
           'directives': [
-            {'id': 'd1', 'board_seq': 3, 'content': '先做遷移'},
+            {'board_seq': 3, 'text': '先做遷移', 'from_name': '艾斯維爾'},
           ],
         }),
       );
@@ -97,11 +97,13 @@ void main() {
         _delta({
           'board_seq': 5,
           'directives': [
-            {'id': 'd2', 'board_seq': 5, 'content': '這張卡先停'},
+            {'board_seq': 5, 'text': '這張卡先停', 'from_name': '艾斯維爾'},
           ],
         }),
       );
-      expect(after.sortedDirectives.map((d) => d.id), ['d2', 'd1']);
+      // 沒有 id，board_seq 就是識別
+      expect(after.sortedDirectives.map((d) => d.boardSeq), [5, 3]);
+      expect(after.sortedDirectives.first.text, '這張卡先停');
     });
 
     test('has_more 只在全量回應時重設', () {
@@ -109,7 +111,7 @@ void main() {
         _delta({
           'full': true,
           'directives': [
-            {'id': 'd1', 'board_seq': 1},
+            {'board_seq': 1, 'text': 'x'},
           ],
           'directives_has_more': true,
         }),
