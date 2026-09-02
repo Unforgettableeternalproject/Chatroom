@@ -1,3 +1,4 @@
+import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/models/participant.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
@@ -17,6 +18,7 @@ Widget _host({
   required String initialText,
   required ValueChanged<String> onTextChanged,
   Key? key,
+  Message? editTarget,
 }) =>
     ProviderScope(
       child: MaterialApp(
@@ -27,6 +29,8 @@ Widget _host({
             members: const <Participant>[],
             initialText: initialText,
             onTextChanged: onTextChanged,
+            editTarget: editTarget,
+            onCancelEdit: () {},
             onSend: (_, _) async {},
           ),
         ),
@@ -71,5 +75,38 @@ void main() {
         key: const ValueKey('room-b'), initialText: '', onTextChanged: seen.add));
     expect(find.text('A 房的字'), findsNothing,
         reason: 'key 換了 State 卻沒重建，字就會跟著跑到另一個房間');
+  });
+
+  testWidgets('進入編輯模式時，那則訊息的原文不會被存成草稿', (tester) async {
+    // 🔴 編輯是「把已經說出去的那則換掉」，不是「我還沒說完的話」。
+    //
+    // 進場時 didUpdateWidget 會把原文灌進 controller，listener 照樣觸發。
+    // 存下去的話會這樣壞：**編輯到一半切走房間** → State 隨 ValueKey 重建、
+    // 編輯目標沒了（那是講好的），但草稿倉裡留著那則訊息的全文 → 切回來
+    // 那段文字以草稿的樣子出現在輸入框裡，而它已經不是編輯模式了
+    // ⇒ 按下送出就是**把同一則訊息再貼一次**。
+    //
+    // 全程沒有任何錯誤，畫面看起來完全正常。
+    final seen = <String>[];
+    await tester.pumpWidget(_host(
+        key: const ValueKey('room-a'), initialText: '', onTextChanged: seen.add));
+    await tester.pumpWidget(_host(
+      key: const ValueKey('room-a'),
+      initialText: '',
+      onTextChanged: seen.add,
+      editTarget: Message(
+        id: 'm1',
+        seq: 1,
+        updateSeq: 0,
+        kind: 'chat',
+        content: '這是已經送出去的訊息',
+        createdAt: '2026-09-02T00:00:00Z',
+      ),
+    ));
+    await tester.pump();
+    expect(find.text('這是已經送出去的訊息'), findsOneWidget,
+        reason: '編輯要帶著原文進場，這一半是對的');
+    expect(seen, isNot(contains('這是已經送出去的訊息')),
+        reason: '但它不可以被當成這個房間的草稿存起來');
   });
 }

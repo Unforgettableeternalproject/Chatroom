@@ -106,6 +106,9 @@ class MessageComposer extends StatefulWidget {
 
 class _MessageComposerState extends State<MessageComposer> {
   late final _controller = TextEditingController(text: widget.initialText);
+
+  /// 輸入框裡現在裝的是「要換掉的那則訊息」，不是草稿。
+  bool _editingBuffer = false;
   final _focus = FocusNode();
   final _link = LayerLink();
   final _overlayController = OverlayPortalController();
@@ -140,13 +143,18 @@ class _MessageComposerState extends State<MessageComposer> {
     if (target != null && target.id != old.editTarget?.id) {
       // 編輯是「把那則換掉」，所以輸入框要**帶著原文**進場——空白起手等於
       // 逼使用者重打一遍，而他多半只是要改一個字
+      _editingBuffer = true;
       _controller.text = target.content;
       _controller.selection =
           TextSelection.collapsed(offset: target.content.length);
       _focus.requestFocus();
     } else if (target == null && old.editTarget != null) {
-      // 取消編輯要把草稿清掉：留著的話下一則新訊息會帶著上一則的內容送出
+      // 取消編輯要把輸入框清掉：留著的話下一則新訊息會帶著上一則的內容送出。
+      //
+      // ⚠️ 清空**在旗標放下之前**做。順序反過來的話，這次清空會以「草稿變成
+      // 空字串」的身分回報出去，把使用者進編輯模式之前那份草稿一起抹掉
       _controller.clear();
+      _editingBuffer = false;
     }
   }
 
@@ -155,7 +163,13 @@ class _MessageComposerState extends State<MessageComposer> {
     // 回報給外層存起來。**放在最前面**——下面每一條 early return 都是
     // 「@ 選單不用理它」的意思，不是「這次輸入不算數」。漏在某一條之後的話，
     // 游標跑到開頭、或使用者按了 ESC 收掉選單，那一次的字就不會被存下來
-    widget.onTextChanged?.call(text);
+    //
+    // ⚠️ **編輯模式除外**：那時輸入框裡的是「已經說出去的那則」，不是
+    // 「還沒說完的話」。存下去會這樣壞——編輯到一半切走房間，State 隨
+    // ValueKey 重建、編輯目標沒了（講好的），但草稿倉裡留著那則的全文，
+    // 切回來它以草稿的樣子出現，而按下送出就是**把同一則再貼一次**。
+    // 全程沒有任何錯誤，畫面看起來完全正常
+    if (!_editingBuffer) widget.onTextChanged?.call(text);
     final hasText = text.trim().isNotEmpty;
     if (hasText != _hasText) setState(() => _hasText = hasText);
     final cursor = _controller.selection.baseOffset;
