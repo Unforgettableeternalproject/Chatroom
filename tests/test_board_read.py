@@ -176,11 +176,18 @@ async def test_response_shape_is_pinned(tmp_path):
             "created_by", "created_by_name", "reviewed_by", "reviewed_at",
             "verified_by", "verified_at", "completed_by", "completed_at",
             "deleted", "board_seq", "created_at",
+            # v2：身分改記持久的 actor_key（participant 隨離房消失）。
+            # 舊欄位並存不刪，等所有 client 升級後才 rebuild 清掉。
+            # `board_id` 刻意**不在**這份清單裡——它換軸前恆為空字串，
+            # 先給出去只會讓 client 拿空值去打 /api/boards/{board_id}
+            "created_by_actor_key", "reviewed_by_actor_key",
+            "verified_by_actor_key", "completed_by_actor_key",
         }
         assert set(body["checklists"][0]) == {
             "id", "room_id", "objective_id", "title", "description", "status",
             "order_index", "created_by", "created_by_name", "completed_by",
             "completed_at", "deleted", "board_seq", "created_at",
+            "created_by_actor_key", "completed_by_actor_key",
         }
         assert set(body["tasks"][0]) == {
             "id", "room_id", "checklist_id", "title", "description", "status",
@@ -190,6 +197,11 @@ async def test_response_shape_is_pinned(tmp_path):
             "assignee_participant_id", "assigned_by", "assigned_by_name",
             "created_by", "created_by_name", "completed_by", "completed_at",
             "deleted", "board_seq", "created_at",
+            "created_by_actor_key", "completed_by_actor_key",
+            "claim_actor_key", "assignee_actor_key", "assigned_by_actor_key",
+            # 來源訊息的完整座標：一塊板掛多間房之後，光有 seq 講不出
+            # 「是哪一間房的第幾則」
+            "source_room_id", "source_room_name", "source_message_id",
         }
         assert set(body["reclaimable_tasks"][0]) == {
             "id", "title", "orphaned_at", "claim_name",

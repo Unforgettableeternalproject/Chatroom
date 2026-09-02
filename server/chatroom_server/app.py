@@ -42,6 +42,24 @@ def _uid() -> str:
     return uuid.uuid4().hex
 
 
+def actor_key(session_key: str | None) -> str:
+    """把 session_key 規範化成 Board 上的持久協作者身分。
+
+    Board 的權限、認領與稽核**一律用這個值**，不用 participant_id——
+    participant 隨著離房消失，而板上「誰在做這張卡」必須在那之後還成立
+    （BOARD_DESIGN §2.2）。
+
+    現階段規範化只做去空白。**刻意不轉小寫**：session_key 是呼叫端自己
+    產的字串，統一小寫能吸收人為輸入差異，但代價是兩把只差大小寫的 key
+    會被併成同一個人——那是把別人的認領交到你手上，比多出一個身分嚴重。
+
+    subagent 與父層共用同一把 session_key，所以在板上**本來就是同一個
+    actor**；差異只在名字快照。這是刻意的：subagent 是臨時的，它領走的
+    卡不該在它被回收之後變成孤兒。
+    """
+    return (session_key or "").strip()
+
+
 def _err(status: int, code: str, message: str, **extra) -> HTTPException:
     """機器可讀錯誤：detail 為 {"code", "message"}，code 是穩定契約，
     message 僅供人讀——client 不得對 message 做字串比對。
@@ -3001,6 +3019,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         d = dict(row)
         d["deleted"] = bool(d.get("deleted"))
+        # 換軸期間 `board_id` 還沒有真值（v1 的卡一律空字串，等 H3 的遷移
+        # 才補）。**先給一個恆空的欄位比不給更糟**：client 會以為「有這個
+        # 欄位所以可以用」，拿空字串去打 /api/boards/{board_id}。等它真的
+        # 有值了再一起放出來
+        d.pop("board_id", None)
         return d
 
     async def _next_board_seq(room_id: str) -> int:
@@ -3159,10 +3182,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         oid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_objective (id, room_id, title, description,"
-            " created_by, created_by_name, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            " created_by, created_by_name, created_by_actor_key, board_seq,"
+            " created_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (oid, room_id, body.title.strip(), body.description,
-             me["id"], me["display_name"], seq, _now()),
+             me["id"], me["display_name"], actor_key(me["session_key"]),
+             seq, _now()),
         )
         await db.commit()
         await _announce_human_container(room_id, me, "週期", body.title.strip(),
@@ -3204,10 +3228,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         cid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-            " description, created_by, created_by_name, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            " description, created_by, created_by_name, created_by_actor_key,"
+            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (cid, parent["room_id"], objective_id, body.title.strip(),
-             body.description, me["id"], me["display_name"], seq, _now()),
+             body.description, me["id"], me["display_name"],
+             actor_key(me["session_key"]), seq, _now()),
         )
         await db.commit()
         await _announce_human_container(
@@ -3315,10 +3340,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             oid = uuid.uuid4().hex
             cur = await db.execute(
                 "INSERT INTO board_objective (id, room_id, title, description,"
-                " created_by, created_by_name, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
+                " created_by, created_by_name, created_by_actor_key, board_seq,"
+                " created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
                 (oid, room_id, UNCATEGORISED, "還沒歸進任何週期的東西",
-                 me["id"], me["display_name"], seq, now),
+                 me["id"], me["display_name"], actor_key(me["session_key"]),
+                 seq, now),
             )
             if await cur.fetchone() is None:
                 # 對方剛建好那個週期。他的 checklist 可能還在路上，回去重讀。
@@ -3330,10 +3357,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             cid = uuid.uuid4().hex
             cur = await db.execute(
                 "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-                " description, created_by, created_by_name, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
+                " description, created_by, created_by_name,"
+                " created_by_actor_key, board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
                 (cid, room_id, oid, UNCATEGORISED, "", me["id"],
-                 me["display_name"], seq, now),
+                 me["display_name"], actor_key(me["session_key"]), seq, now),
             )
             if await cur.fetchone() is None:
                 continue   # 同上，不 commit
@@ -3420,8 +3448,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _assert_container_open("objective", row["objective_id"])
         return row
 
-    async def _assert_assignee_in_room(assignee_id: str | None, room_id: str):
-        """指定的對象必須是**這個房間**的 active 成員。
+    async def _assert_assignee_in_room(assignee_id: str | None,
+                                       room_id: str) -> str:
+        """指定的對象必須是**這個房間**的 active 成員，回傳他的 actor_key。
 
         `assignee_participant_id` 的外鍵只保證那個 id 存在，不保證它屬於本房
         ——participant 是以 room_id 分租的單表，跨房的 id 一樣通得過 FK。
@@ -3432,31 +3461,41 @@ def create_app(config: Config | None = None) -> FastAPI:
         離場的人的卡，從此連 PATCH 都動不了。
         """
         if assignee_id is None:
-            return
+            return ""
         row = await (await app.state.db.execute(
-            "SELECT 1 FROM participant WHERE id=? AND room_id=? AND status='active'",
+            "SELECT session_key FROM participant"
+            " WHERE id=? AND room_id=? AND status='active'",
             (assignee_id, room_id),
         )).fetchone()
         if row is None:
             raise _err(400, "assignee_not_in_room",
                        "指定的對象不是這個聊天室的成員，或已經離開了")
+        return actor_key(row["session_key"])
 
     async def _insert_task(checklist_id: str, room_id: str, body, me) -> dict:
-        await _assert_assignee_in_room(body.assignee_participant_id, room_id)
+        assignee_actor = await _assert_assignee_in_room(
+            body.assignee_participant_id, room_id)
         db = app.state.db
         seq = await _next_board_seq(room_id)
         tid = uuid.uuid4().hex
+        mine = actor_key(me["session_key"])
         await db.execute(
             "INSERT INTO board_task (id, room_id, checklist_id, title, description,"
-            " priority, source_seq, assignee_participant_id, assigned_by,"
-            " assigned_by_name, created_by, created_by_name, board_seq,"
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " priority, source_seq, source_room_id, assignee_participant_id,"
+            " assignee_actor_key, assigned_by, assigned_by_name,"
+            " assigned_by_actor_key, created_by, created_by_name,"
+            " created_by_actor_key, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, room_id, checklist_id, body.title.strip(),
              body.description, body.priority, body.source_seq,
-             body.assignee_participant_id,
+             # 來源房從現在起就記上——一塊板掛多間房之後，光有 seq 講不出
+             # 是哪一間房的第幾則
+             room_id if body.source_seq is not None else "",
+             body.assignee_participant_id, assignee_actor,
              me["id"] if body.assignee_participant_id else None,
              me["display_name"] if body.assignee_participant_id else "",
-             me["id"], me["display_name"], seq, _now()),
+             mine if body.assignee_participant_id else "",
+             me["id"], me["display_name"], mine, seq, _now()),
         )
         await db.commit()
         await events.notify(room_id)
@@ -3631,10 +3670,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 會各自通過檢查、各自回 200，最後只剩後寫的那個。更難看的是 done 那條
         # 分支還會發一則系統訊息，於是板上寫著 cancelled、房裡卻有一則說它完成了
         cur = await db.execute(
-            "UPDATE board_task SET status=?, completed_by=?, completed_at=?,"
+            "UPDATE board_task SET status=?, completed_by=?,"
+            " completed_by_actor_key=?, completed_at=?,"
             " board_seq=? WHERE id=? AND status=? RETURNING id",
-            (body.status, me["id"] if done else None, _now() if done else None,
-             seq, task_id, old),
+            (body.status, me["id"] if done else None,
+             actor_key(me["session_key"]) if done else "",
+             _now() if done else None, seq, task_id, old),
         )
         if await cur.fetchone() is None:
             await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
@@ -3714,10 +3755,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 的閘是對快照判的，而 task 狀態隨時在動——不帶前值條件的話，
         # 兩路同時收尾同一份清單會雙雙成功
         cur = await db.execute(
-            "UPDATE board_checklist SET status=?, completed_by=?, completed_at=?,"
+            "UPDATE board_checklist SET status=?, completed_by=?,"
+            " completed_by_actor_key=?, completed_at=?,"
             " board_seq=? WHERE id=? AND status=? RETURNING id",
-            (body.status, me["id"] if done else None, _now() if done else None,
-             seq, checklist_id, old),
+            (body.status, me["id"] if done else None,
+             actor_key(me["session_key"]) if done else "",
+             _now() if done else None, seq, checklist_id, old),
         )
         if await cur.fetchone() is None:
             await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
@@ -3800,6 +3843,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        open=[s for s in states if s not in ("done", "cancelled")])
         seq = await _objective_set(row, {
             "status": "review", "reviewed_by": me["id"], "reviewed_at": _now(),
+            "reviewed_by_actor_key": actor_key(me["session_key"]),
         })
         # 週期收尾的兩步只有人類做得到，而其餘 board 變動都靠「沒被通知的人
         # 自己會來看板」撐著——唯獨這兩步的收件人是**沒在看板子的人類**，
@@ -3863,6 +3907,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "身分按下，那道閘等於不存在")
         seq = await _objective_set(row, {
             "status": "verified", "verified_by": me["id"], "verified_at": _now(),
+            "verified_by_actor_key": actor_key(me["session_key"]),
         })
         # **確認者本人也要收**——他正是下一步（完成）要按的那個人。
         # verified 比 review 更容易停住：App 的金色會退掉，畫面主動告訴你
@@ -3895,6 +3940,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=row["status"])
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
+            "completed_by_actor_key": actor_key(me["session_key"]),
         })
         # 規則二：**全部**，完成者也在內——他確認的是整個週期，不是自己那張卡
         audience = await _board_audience(row["room_id"])
@@ -3930,6 +3976,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "status": "active", "reviewed_by": None, "reviewed_at": None,
             "verified_by": None, "verified_at": None,
             "completed_by": None, "completed_at": None,
+            "reviewed_by_actor_key": "", "verified_by_actor_key": "",
+            "completed_by_actor_key": "",
         })
         return {"ok": True, "id": objective_id, "status": "active",
                 "board_seq": seq}
@@ -4198,17 +4246,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         # 認回自己上一世領的卡要能被看見——RETURNING 給的是更新**後**的值，
         # 所以先把舊的持有者記下來
+        mine = actor_key(me["session_key"])
+        # 比對用規範化後的值：兩邊都經過同一條路徑，才不會因為一個尾隨空白
+        # 就把「你上一世領的卡」判成別人的
         was_mine = (row["claim_state"] == "orphaned"
-                    and row["claim_session_key"] == me["session_key"])
+                    and actor_key(row["claim_session_key"]) == mine)
         seq = await _next_board_seq(row["room_id"])
         cur = await db.execute(
             "UPDATE board_task SET claim_participant_id=?, claim_session_key=?,"
+            " claim_actor_key=?,"
             " claim_name=?, claim_kind=?, claim_state='held', claimed_at=?,"
             " orphaned_at=NULL, orphaned_reason='', board_seq=?"
             " WHERE id=? AND deleted=0 AND status NOT IN ('done','cancelled')"
             "   AND (claim_state='' OR claim_state='orphaned')"
             " RETURNING id",
-            (me["id"], me["session_key"], me["display_name"], me["kind"],
+            (me["id"], me["session_key"], mine, me["display_name"], me["kind"],
              _now(), seq, task_id),
         )
         if await cur.fetchone() is None:
@@ -4247,6 +4299,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _next_board_seq(row["room_id"])
         await db.execute(
             "UPDATE board_task SET claim_participant_id=NULL, claim_session_key='',"
+            " claim_actor_key='',"
             " claim_name='', claim_kind='', claim_state='', claimed_at=NULL,"
             " orphaned_at=NULL, orphaned_reason='', board_seq=? WHERE id=?",
             (seq, task_id),

@@ -541,6 +541,47 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 就是靜靜地少報一件事
     ("room", "board_digest_seq", "board_digest_seq INTEGER NOT NULL DEFAULT 0"),
     ("room", "board_digest_at", "board_digest_at TEXT"),
+    # ── Board v2：items 換軸 ────────────────────────────────────────
+    # 卡片從「屬於某間房」變成「屬於某塊板」。**新舊欄位並存**（§11 步驟 1）：
+    # 舊 room_id 留著讓 v1 路由還讀得到，等所有 client 升級後才 rebuild 清掉。
+    # 空字串＝還沒換軸的舊卡，由遷移腳本補；猜著回填會把卡掛到不存在的板上
+    ("board_objective", "board_id", "board_id TEXT NOT NULL DEFAULT ''"),
+    ("board_checklist", "board_id", "board_id TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "board_id", "board_id TEXT NOT NULL DEFAULT ''"),
+    # participant 參照換成持久的 actor_key。**participant 會隨著離房消失**，
+    # 而板上「誰建的、誰確認的、誰在做」要在那之後還講得出來——v1 靠的是
+    # 名字快照，但快照認不出「這是同一個人回來了」，re-claim 與權限都需要
+    # 一個查得回去的身分。舊列一律空字串＝不知道，那正是這些欄位存在之前
+    # 的事實（當時只有 participant id 與名字快照）
+    ("board_objective", "created_by_actor_key",
+     "created_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_objective", "reviewed_by_actor_key",
+     "reviewed_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_objective", "verified_by_actor_key",
+     "verified_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_objective", "completed_by_actor_key",
+     "completed_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_checklist", "created_by_actor_key",
+     "created_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_checklist", "completed_by_actor_key",
+     "completed_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "created_by_actor_key",
+     "created_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "completed_by_actor_key",
+     "completed_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "claim_actor_key", "claim_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "assignee_actor_key",
+     "assignee_actor_key TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "assigned_by_actor_key",
+     "assigned_by_actor_key TEXT NOT NULL DEFAULT ''"),
+    # 來源訊息的完整座標。v1 只存 source_seq——那在一房一板時夠用，但一塊板
+    # 掛多間房之後，光有 seq 講不出「是哪一間房的第幾則」。room_id 不做強
+    # 外鍵、名字存快照，理由與 board_room 相同：房可以被永久刪除
+    ("board_task", "source_room_id", "source_room_id TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "source_room_name",
+     "source_room_name TEXT NOT NULL DEFAULT ''"),
+    ("board_task", "source_message_id",
+     "source_message_id TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -550,6 +591,17 @@ MIGRATIONS: list[tuple[str, str, str]] = [
 POST_MIGRATION_INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_participant_parent"
     " ON participant(parent_id, status)",
+    # Board v2 的增量讀取以 board_id 為軸。這三條與 v1 的 idx_b*_room 並存，
+    # 換軸期間兩邊都要走得動
+    "CREATE INDEX IF NOT EXISTS idx_bobjective_board"
+    " ON board_objective(board_id, board_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_bchecklist_board"
+    " ON board_checklist(board_id, board_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_btask_board"
+    " ON board_task(board_id, board_seq)",
+    # 孤兒判定 v2 改看 actor 在**所有掛接房**的 presence，撈的是 actor_key
+    "CREATE INDEX IF NOT EXISTS idx_btask_claim_actor"
+    " ON board_task(claim_actor_key) WHERE claim_state = 'held'",
 ]
 
 
