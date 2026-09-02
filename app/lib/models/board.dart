@@ -1197,6 +1197,31 @@ bool boardUnattached({
 List<String> reorderedIds(List<String> ids, int oldIndex, int newIndex) =>
     reorderedIdsAt(ids, oldIndex, newIndex > oldIndex ? newIndex - 1 : newIndex);
 
+/// 把「只排得動一部分」的結果攤回**完整**的順序。
+///
+/// [all] 是這個範疇裡的每一個 id（含拖不動的那些），[movable] 是畫面上
+/// 真的排得動的那幾個、且已經是拖曳後的順序。回傳的長度與 [all] 相同，
+/// 每個 id 恰好一次。
+///
+/// ⚠️ **為什麼不能只送排得動的那幾個**：Hub 依收到的順序寫 `order_index`，
+/// 只送子集合時，沒送的那些保留舊值 ⇒ 兩批號碼交錯，而**沒有任何一列是
+/// 錯的，錯的是它們之間的關係**（@開發 Novia (Hub) 2026-09-02）。結果是
+/// 一個未定義的順序，下次讀回來長什麼樣沒有人說得準。
+///
+/// 拖不動的那些**留在原本的位置上**，不會被擠到最後——「已完成的週期」
+/// 該待在哪，不是這次拖曳要回答的問題。
+List<String> spliceOrder(List<String> all, List<String> movable) {
+  final slots = <int>[
+    for (var i = 0; i < all.length; i++)
+      if (movable.contains(all[i])) i,
+  ];
+  final out = [...all];
+  for (var i = 0; i < slots.length && i < movable.length; i++) {
+    out[slots[i]] = movable[i];
+  }
+  return out;
+}
+
 /// 同上，但 [newIndex] 是**移除之後**的最終位置（`onReorderItem` 的語意）。
 List<String> reorderedIdsAt(List<String> ids, int oldIndex, int newIndex) {
   final out = [...ids];

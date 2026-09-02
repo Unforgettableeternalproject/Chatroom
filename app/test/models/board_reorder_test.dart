@@ -32,6 +32,7 @@ void main() {
   });
 
   _atSemantics();
+  _partialOrder();
 }
 
 /// `onReorderItem` 那條路。索引語意與上面那組不同——**這裡的 newIndex
@@ -49,5 +50,31 @@ void _atSemantics() {
 
   test('往前拖：兩種語意在這個方向上一致', () {
     expect(reorderedIdsAt(ids, 2, 0), reorderedIds(ids, 2, 0));
+  });
+}
+
+/// 只排得動一部分時，送出去的仍然是完整順序。
+void _partialOrder() {
+  test('拖不動的留在原位，不會被擠到最後', () {
+    // A(active) B(done) C(active) D(active)，把 D 拖到最前面。
+    // done 的 B 該留在第二格——它待在哪不是這次拖曳要回答的問題
+    expect(
+      spliceOrder(['a', 'b', 'c', 'd'], ['d', 'a', 'c']),
+      ['d', 'b', 'a', 'c'],
+    );
+  });
+
+  test('每個 id 恰好出現一次，長度不變', () {
+    final out = spliceOrder(['a', 'b', 'c', 'd'], ['c', 'a', 'd']);
+    expect(out, hasLength(4));
+    expect(out.toSet(), {'a', 'b', 'c', 'd'});
+  });
+
+  test('全部都排得動時就是 movable 本身', () {
+    expect(spliceOrder(['a', 'b'], ['b', 'a']), ['b', 'a']);
+  });
+
+  test('一個都排不動時原封不動', () {
+    expect(spliceOrder(['a', 'b'], const []), ['a', 'b']);
   });
 }

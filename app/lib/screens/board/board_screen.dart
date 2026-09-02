@@ -318,8 +318,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 之外的補償：成功就重拉，失敗就重拉——兩種情況畫面都會回到 Hub 說的
   /// 那個順序，不會停在一個只有本機看得到的排列上。
   /// [to] 是 `onReorderItem` 的語意：**移除之後**的最終位置。
-  Future<void> _reorder(String kind, List<String> ids, int from, int to) async {
-    final next = reorderedIdsAt(ids, from, to);
+  Future<void> _reorder(String kind, List<String> ids, int from, int to) =>
+      _reorderIds(kind, reorderedIdsAt(ids, from, to));
+
+  Future<void> _reorderIds(String kind, List<String> next) async {
     try {
       await ref.read(boardsApiProvider).reorder(
             _boardIdOrNull!,
@@ -334,6 +336,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     }
     _reloadBoard();
   }
+
+  /// 畫面上只排得動一部分時用這條：[all] 是這個範疇裡的每一個 id，
+  /// [movable] 是拖得動的那幾個。拖曳算在 [movable] 上，送出去的是完整順序。
+  Future<void> _reorderPartial(String kind, List<String> all,
+      List<String> movable, int from, int to) =>
+      _reorderIds(kind, spliceOrder(all, reorderedIdsAt(movable, from, to)));
 
   /// 可拖曳的卡片清單。不能拖時退回原本的 Column——**不要留一個拖不動的
   /// 拖曳把手**，那比沒有把手更讓人以為壞了。
@@ -589,12 +597,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               buildDefaultDragHandles: false,
-              // ⚠️ 只排 active 那幾條，而送出的順序也只有它們。
-              // 已完成的週期不在這個清單裡，它們的 order_index 會被擠到
-              // 後面——那是對的：這一層的順序講的是「接下來做哪個」，
-              // 而做完的週期已經不在那個問題裡了
-              onReorderItem: (from, to) => _reorder(
-                  'objective', [for (final o in active) o.id], from, to),
+              // ⚠️ 畫面上只有 active 那幾條拖得動，但**送出去的是完整順序**。
+              // 只送子集合的話，沒送的那些保留舊 order_index ⇒ 兩批號碼交錯，
+              // 而沒有任何一列是錯的，錯的是它們之間的關係
+              // （@開發 Novia (Hub) 2026-09-02，@審核用Codex-2 #411 第 3 條）。
+              // 已完成的週期留在原位，不會被這次拖曳擠到最後
+              onReorderItem: (from, to) => _reorderPartial(
+                  'objective',
+                  [for (final o in objectives) o.id],
+                  [for (final o in active) o.id],
+                  from,
+                  to),
               children: [
                 for (var i = 0; i < active.length; i++)
                   ReorderableDragStartListener(
