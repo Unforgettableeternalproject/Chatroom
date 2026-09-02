@@ -34,6 +34,7 @@ class UepMarkdownBody extends StatelessWidget {
     required this.data,
     this.baseColor,
     this.mentions = const [],
+    this.mentionGroups = const [],
   });
 
   final String data;
@@ -42,6 +43,21 @@ class UepMarkdownBody extends StatelessWidget {
   /// 訊息的 mentions 清單：內文中的「@名字」會渲染成帶外框的 chip，
   /// 與一般內容視覺區分。只認清單裡的名字，不做整段 @ 掃描。
   final List<String> mentions;
+
+  /// 群組 token（`agents` / `humans` / `all`）。
+  ///
+  /// ⚠️ **它們不在 [mentions] 裡**——Hub 把群組展開成全房名單放進 mentions，
+  /// 原本打的字面留在 `mention_groups`。所以只用 mentions 建比對式時，
+  /// 內文那個 `@agents` 永遠對不上任何一個名字，於是它是整則訊息裡
+  /// **唯一沒有被標起來的 mention**，而它偏偏是涵蓋最廣的那個。
+  final List<String> mentionGroups;
+
+  /// 內文中要標成 chip 的所有 token：個別名字 ＋ 群組。
+  ///
+  /// 兩者共用同一條比對式，因為它們在正文裡是同一種東西——都是「這則訊息
+  /// 點到了誰」。分開處理的話遲早有一邊漏掉，而漏掉的那邊在畫面上看起來
+  /// 就只是普通文字。
+  List<String> get _chipNames => [...mentions, ...mentionGroups];
 
   @override
   Widget build(BuildContext context) {
@@ -60,7 +76,7 @@ class UepMarkdownBody extends StatelessWidget {
       // 才顯示選單，右鍵就還給我們了，而且能跨訊息選取（2026-08-30 實測）。
       selectable: false,
       inlineSyntaxes: [
-        if (mentions.isNotEmpty) _MentionSyntax(mentions),
+        if (_chipNames.isNotEmpty) _MentionSyntax(_chipNames),
       ],
       builders: {'uepMention': _MentionChipBuilder()},
       styleSheet: MarkdownStyleSheet(

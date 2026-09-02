@@ -415,15 +415,26 @@ class BoardsApi {
   ///
   /// **Supervisor 不必是板成員、也不必在任何掛接房裡**——那正是這個角色的
   /// 意義：從外面看著，不必先被拉進某間對話。
+  /// ⚠️ [displayName] 與 [actorKind] **一定要送**。Hub 把它們當成快照直接存，
+  /// 不會反查——不送就存成空字串，而 Supervisor 可以不是板成員、也不在任何
+  /// 掛接房裡，那時**沒有任何地方查得回他的名字**。畫面上就只剩一個
+  /// actor_key，或一顆沒有名字的膠囊。
   Future<void> setSupervisor(
     String boardId, {
     required String sessionKey,
     String? actorKey,
+    String displayName = '',
+    String actorKind = '',
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/boards/$boardId/supervisor',
-          data: {'target_actor_key': actorKey ?? ''},
+          data: {
+            'target_actor_key': actorKey ?? '',
+            // 卸任時一併清空，免得留下上一任的名字
+            'display_name': (actorKey ?? '').isEmpty ? '' : displayName,
+            'actor_kind': (actorKey ?? '').isEmpty ? '' : actorKind,
+          },
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });
@@ -437,6 +448,10 @@ class BoardsApi {
   /// `content`（後者是 delta 回來時的名字）。送出與讀回用的不是同一組名字，
   /// 這點實測過——猜的話拿 422，而 422 的訊息會說「這些欄位不被允許」，
   /// 讀起來像是自己送錯了東西。
+  ///
+  /// ⚠️ [targetActorKey] **不可以是空的**：Hub 的 `min_length=1`，空字串與
+  /// 不帶都是 422。delta 那側雖然有「空 = 對整塊板講」的語意，但送出這側
+  /// 目前**沒有廣播**——呼叫端必須指定收件者。
   Future<bool> sendDirective(
     String boardId, {
     required String sessionKey,

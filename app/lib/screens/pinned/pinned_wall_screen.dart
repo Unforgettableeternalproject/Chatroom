@@ -166,7 +166,11 @@ class _PinnedCard extends ConsumerWidget {
               style: UepText.mono(size: 9, color: s.inkMute)),
         ]),
         const SizedBox(height: 9),
-        UepMarkdownBody(data: message.content, mentions: message.mentions),
+        UepMarkdownBody(
+          data: message.content,
+          mentions: message.mentions,
+          mentionGroups: message.mentionGroups,
+        ),
         const SizedBox(height: 10),
         Row(children: [
           InkWell(

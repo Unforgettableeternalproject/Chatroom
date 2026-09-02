@@ -51,7 +51,9 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
 
   Future<void> _send(BoardSnapshot snap) async {
     final text = _message.text.trim();
-    if (text.isEmpty) return;
+    // 收件者必填——Hub 不接受空 target，而那個 422 的訊息只會說
+    // 「至少要一個字元」，讀的人不會知道問題是「你沒挑人」
+    if (text.isEmpty || (_toActorKey ?? '').isEmpty) return;
     setState(() => _sending = true);
     try {
       final delivered = await ref.read(boardsApiProvider).sendDirective(
@@ -81,12 +83,18 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     }
   }
 
-  Future<void> _setSupervisor(String? actorKey) async {
+  Future<void> _setSupervisor(
+    String? actorKey, {
+    String displayName = '',
+    String actorKind = '',
+  }) async {
     try {
       await ref.read(boardsApiProvider).setSupervisor(
             widget.boardId,
             sessionKey: ref.read(appConfigProvider).deviceKey,
             actorKey: actorKey,
+            displayName: displayName,
+            actorKind: actorKind,
           );
       ref.invalidate(boardByIdProvider(widget.boardId));
     } on ApiException catch (e) {
@@ -215,7 +223,10 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         ],
       ),
     );
-    if (picked != null) await _setSupervisor(picked.actorKey);
+    if (picked != null) {
+      await _setSupervisor(picked.actorKey,
+          displayName: picked.displayName, actorKind: picked.actorKind);
+    }
   }
 
   Widget _trail(BuildContext context, BoardSnapshot? snap) {
@@ -281,6 +292,13 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     final s = context.uep;
     final members = snap?.members.values.toList() ?? const <BoardActorRef>[];
     return Column(children: [
+      if (members.isEmpty)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text('這塊板上還沒有成員，沒有人可以收。',
+              style: UepText.serif(size: 12, color: s.inkMute)),
+        )
+      else
       Row(children: [
         Expanded(
           child: DropdownButtonFormField<String?>(
@@ -292,12 +310,11 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             ),
             style: UepText.sans(size: 12, color: s.ink),
             onChanged: (v) => setState(() => _toActorKey = v),
+            // ⚠️ **沒有「對整塊板說」這個選項**。delta 那側有「空 =
+            // 對全體」的語意，但送出這側 Hub 要求 target 非空
+            // （min_length=1，空字串與不帶都是 422）。廣播還沒有實作，
+            // 放一個必然失敗的選項在這裡，等於把錯誤留到按下去才發生。
             items: [
-              DropdownMenuItem(
-                value: null,
-                child: Text('對整塊板說',
-                    style: UepText.sans(size: 12, color: s.inkMute)),
-              ),
               for (final m in members)
                 DropdownMenuItem(
                   value: m.actorKey,
@@ -326,7 +343,9 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         child: UepButton(
           label: _sending ? '送出中…' : '送出',
           small: true,
-          onPressed: _sending ? null : () => _send(snap!),
+          onPressed: (_sending || (_toActorKey ?? '').isEmpty)
+              ? null
+              : () => _send(snap!),
         ),
       ),
     ]);

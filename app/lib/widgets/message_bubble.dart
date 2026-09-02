@@ -197,7 +197,13 @@ class MessageBubble extends StatelessWidget {
               _ReplyQuote(preview: message.replyPreview!),
               const SizedBox(height: 9),
             ],
-            UepMarkdownBody(data: message.content, mentions: message.mentions),
+            UepMarkdownBody(
+              data: message.content,
+              mentions: message.mentions,
+              // 群組要一起傳，否則正文裡的 `@agents` 是整則訊息中唯一
+              // 沒被標起來的 mention——而它涵蓋的人最多
+              mentionGroups: message.mentionGroups,
+            ),
             // 群組 @ 的訊息，`mentions` 是 Hub 展開後的全房名單——照畫會在
             // 每則 `@all` 底下掛一整排名字。用 `mention_groups`（發話者原本
             // 打的字面）摺疊成一顆 chip。
