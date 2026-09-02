@@ -2543,7 +2543,28 @@ def create_app(config: Config | None = None) -> FastAPI:
                 #
                 # 豁免而不 cascade：孤兒化的語意是「讓別人接手」，
                 # 而父層取消的卡**沒有人需要接手**。
-                "   AND o.status != 'cancelled' AND c.status != 'cancelled'",
+                "   AND o.status != 'cancelled' AND c.status != 'cancelled'"
+                # 🔴 **跨房**：他在這塊板的**任何一間** active 掛接房還在，
+                # 就不算離開（BOARD_DESIGN §5.2、驗收 4）。
+                #
+                # v1 只看「這個房裡他還在不在」，那在一房一板時等價；v2 之後
+                # 一塊板掛多房，於是**離開其中一間房就把卡標成孤兒**——他明明
+                # 還在另一間房裡做那件事，而板上寫著沒人做
+                # （審核用Codex 指出、@開發Novia (除錯) 實測）。
+                #
+                # 比對用 actor_key，空的話退回 session_key（H2 之前領的舊卡）。
+                # `board_id` 為空的未換軸卡沒有 board_room，NOT EXISTS 恆真，
+                # 行為與 v1 相同
+                "   AND NOT EXISTS ("
+                "     SELECT 1 FROM participant p2"
+                "     JOIN board_room br ON br.room_id = p2.room_id"
+                "       AND br.detached_at IS NULL"
+                "     WHERE br.board_id = t.board_id"
+                "       AND p2.status = 'active'"
+                "       AND TRIM(p2.session_key) ="
+                "           COALESCE(NULLIF(TRIM(t.claim_actor_key), ''),"
+                "                    TRIM(t.claim_session_key))"
+                "   )",
                 (room_id,),
             )
         ).fetchall()
@@ -3152,14 +3173,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
         now = _now()
         if row is None:
-            # 不是 owner 也不是被邀請的——他從一間掛接房走進來。給 editor：
-            # 能看不能改的話，房裡的人會發現自己動不了眼前這塊板
-            await db.execute(
-                "INSERT INTO board_member (board_id, actor_key, role,"
-                " display_name, actor_kind, aliases, added_at)"
-                " VALUES (?,?,'editor',?,?,'[]',?)"
-                " ON CONFLICT DO NOTHING",
-                (board_id, actor, name, kind, now))
+            # 🔴 **不是成員就什麼都不做**（艾斯維爾 2026-09-02 裁 A+）。
+            #
+            # 這裡原本會把他自動加成 editor，理由寫的是「能看不能改的話，
+            # 房裡的人會發現自己動不了眼前這塊板」——那句話讀起來像設計，
+            # 實際上是把 §3.1「room participant 不會自動成為 Board member」
+            # 讀漏了。後果是 v1 room 路徑成了 ACL 的後門：房裡任何人寫一次
+            # 板就升成 editor（審核用Codex 2026-09-02）。
+            #
+            # 可用性的出口在**掛接時匯入**（`import_members`），那是 owner
+            # 的明示動作，不是走進來就自動發生的事
             return
         if not row["display_name"]:
             await db.execute(
@@ -3378,6 +3401,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id)          # 封存房唯讀，寫入一律擋
         me = dict(await _participant(participant_id, room_id))
+        # 已經掛了板的話，寫入要求 board_member（§3.1、驗收 6）。
+        # **還沒有板的房不擋**——那時第一個寫入的人正要建板，他會成為 owner
+        existing = await _board_for_room(room_id)
+        if existing is not None:
+            await _board_member_or_403(
+                existing["id"], actor_key(me["session_key"]), need_write=True,
+                board=existing)
         # 換軸的入口就在這裡：**第一次有人在這間房的板上寫東西**時建板。
         # 放在共同門檻而不是各個端點，是因為漏掉一個端點不會報錯——那條路徑
         # 寫出來的卡 board_id 是空的，在 Board Library 上根本不存在。
@@ -3435,6 +3465,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         if "board_id" not in keys:
             return ""
         return (row["board_id"] or "").strip()
+
+    def _is_claim_holder(row, me) -> bool:
+        """這張卡是不是**你**持有的。
+
+        比 `actor_key` 不比 `participant_id`：同一個人在兩間房有兩個
+        participant id，用後者比的話，**他在 A 房領的卡，從 B 房推不動**
+        ——而錯誤訊息會說「這張卡由『你自己的名字』持有」，荒謬到查不下去
+        （@開發Novia (除錯) 2026-09-02 實測）。
+
+        舊卡的 `claim_actor_key` 是空的（H2 之前領的），那時退回比
+        `claim_session_key`；再退回 participant_id，那是最舊的一層。
+        """
+        mine = actor_key(me.get("session_key"))
+        if row["claim_actor_key"] and mine:
+            return row["claim_actor_key"] == mine
+        if row["claim_session_key"] and mine:
+            return actor_key(row["claim_session_key"]) == mine
+        return row["claim_participant_id"] == me["id"]
 
     async def _item_seq(row) -> int:
         """改一張既有卡時領號——**跟著板走，不是跟著房走**。
@@ -4031,7 +4079,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這張卡")
         if not human and row["claim_state"] == "held" \
-                and row["claim_participant_id"] != me["id"]:
+                and not _is_claim_holder(row, me):
             raise _err(403, "not_claim_holder",
                        f"這張卡由 {row['claim_name'] or '別人'} 持有，"
                        "只有持有者本人或人類成員可以推動它")
@@ -4689,7 +4737,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await _board_item_writer(row, x_participant_id)
         if row["claim_state"] != "held":
             raise _err(409, "not_claimed", "這張卡目前沒有人持有")
-        if row["claim_participant_id"] != me["id"] and me["role"] != "human":
+        if not _is_claim_holder(row, me) and me["role"] != "human":
             raise _err(403, "not_claim_holder",
                        f"這張卡由 {row['claim_name'] or '別人'} 持有——"
                        "只有持有者本人或人類成員可以解除認領")
@@ -4702,7 +4750,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " orphaned_at=NULL, orphaned_reason='', board_seq=? WHERE id=?",
             (seq, task_id),
         )
-        forced = row["claim_participant_id"] != me["id"]
+        forced = not _is_claim_holder(row, me)
         await _record_board_event(
             row["board_id"], seq, "task_released",
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
@@ -4834,14 +4882,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row["role"] if row else ""
 
     async def _board_member_or_403(board_id: str, actor: str,
-                                   need_write: bool = False) -> str:
+                                   need_write: bool = False,
+                                   board=None) -> str:
+        """板的權限門檻。**403 一律附上板的身分。**
+
+        被擋下的那個回應，是 client 手上唯一還拿得到板資訊的地方——沒有
+        `board_id` 與 `board_name`，UI 只能畫一個「你沒有權限」的紅色畫面，
+        而正確的畫面是「這間房掛著《某某板》，但你還不是它的成員」。
+        **那不是錯誤，是狀態**（A+ 之後它會是進房者的常見狀態）。
+        """
         role = await _board_role(board_id, actor)
+        if role and not (need_write and role == "viewer"):
+            return role
+        if board is None:
+            board = await (await app.state.db.execute(
+                "SELECT name FROM board WHERE id=?", (board_id,))).fetchone()
+        name = board["name"] if board is not None else ""
         if not role:
             raise _err(403, "not_board_member",
-                       "你不是這塊板的成員——房裡的人不會自動變成板上的人")
-        if need_write and role == "viewer":
-            raise _err(403, "board_read_only", "你在這塊板上只能看")
-        return role
+                       "你不是這塊板的成員——房裡的人不會自動變成板上的人。"
+                       "請板的 owner 把你加進去。",
+                       board_id=board_id, board_name=name)
+        raise _err(403, "board_read_only", "你在這塊板上只能看",
+                   board_id=board_id, board_name=name)
 
     @app.post("/api/boards", dependencies=[Depends(require_auth)])
     async def create_board(
@@ -5549,6 +5612,7 @@ def create_app(config: Config | None = None) -> FastAPI:
               dependencies=[Depends(require_auth)])
     async def attach_board(
         board_id: str, room_id: str,
+        import_members: bool = False,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
@@ -5569,22 +5633,58 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "掛接要同時是這間房的管理者")
         db = app.state.db
         existing = await _board_for_room(room_id)
+        already = False
         if existing is not None:
-            if existing["id"] == board_id:
-                return {"ok": True, "board_id": board_id, "room_id": room_id,
-                        "already_attached": True}
-            raise _err(409, "room_already_has_board",
-                       "這間房已經掛著另一塊板了",
-                       board_id=existing["id"], board_name=existing["name"])
-        await db.execute(
-            "INSERT INTO board_room (id, board_id, room_id, room_name,"
-            " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
-            (uuid.uuid4().hex, board_id, room_id, room["name"], actor, _now()))
-        # 這間房自己的舊卡（如果它以前有過 v1 的板）不會被搬過來——那是
-        # 另一塊板的東西。掛接只是建立關聯，不合併任何資料
+            if existing["id"] != board_id:
+                raise _err(409, "room_already_has_board",
+                           "這間房已經掛著另一塊板了",
+                           board_id=existing["id"], board_name=existing["name"])
+            # 已經掛著同一塊板——**不早退**。App 建新板時先 POST /api/boards
+            # 帶 origin_room_id（那時就掛好了），再回頭呼叫這裡要求匯入；
+            # 早退的話那個勾選會靜靜沒有效果（審核用Codex 2026-09-02）
+            already = True
+        else:
+            await db.execute(
+                "INSERT INTO board_room (id, board_id, room_id, room_name,"
+                " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
+                (uuid.uuid4().hex, board_id, room_id, room["name"], actor,
+                 _now()))
+            # 這間房自己的舊卡（如果它以前有過 v1 的板）不會被搬過來——那是
+            # 另一塊板的東西。掛接只是建立關聯，不合併任何資料
+
+        imported: list[str] = []
+        if import_members:
+            # §3.1 的可用性出口：**owner 明示地**把這間房現在的人帶進板。
+            #
+            # 「現在的」是重點——之後才加入這間房的人不會自動獲得權限，
+            # 那正是 A+ 與「房成員自動算數」的分野（艾斯維爾 2026-09-02）。
+            #
+            # 匯入成 editor：給 viewer 的話勾了等於沒勾，那個核取方塊就沒有
+            # 存在的意義。**已經是成員的人不覆寫**——勾一下就把某個 owner
+            # 降成 editor 是災難，而使用者不會預期一個「匯入」會降級任何人
+            now = _now()
+            rows = await (await db.execute(
+                "SELECT session_key, display_name, kind FROM participant"
+                " WHERE room_id=? AND status='active' AND ephemeral=0",
+                (room_id,))).fetchall()
+            for r in rows:
+                key = actor_key(r["session_key"])
+                if not key:
+                    continue
+                cur = await db.execute(
+                    "INSERT INTO board_member (board_id, actor_key, role,"
+                    " display_name, actor_kind, aliases,"
+                    " added_by_actor_key, added_at)"
+                    " VALUES (?,?,'editor',?,?,'[]',?,?)"
+                    " ON CONFLICT DO NOTHING RETURNING actor_key",
+                    (board_id, key, r["display_name"], r["kind"], actor, now))
+                if await cur.fetchone() is not None:
+                    imported.append(key)
         await db.commit()
         await events.notify(room_id)
-        return {"ok": True, "board_id": board_id, "room_id": room_id}
+        return {"ok": True, "board_id": board_id, "room_id": room_id,
+                "already_attached": already,
+                "imported_members": imported}
 
     @app.delete("/api/boards/{board_id}/rooms/{room_id}",
                 dependencies=[Depends(require_auth)])

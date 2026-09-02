@@ -367,11 +367,15 @@ async def test_board_member_name_is_decided_by_the_first_room(tmp_path):
             assert alias["room_name"] == "B房", "房刪掉之後 hover 就靠它了"
 
 
-async def test_a_visitor_from_an_attached_room_becomes_an_editor(tmp_path):
-    """從掛接房走進來的人自動成為 editor。
+async def test_a_visitor_from_an_attached_room_gets_nothing(tmp_path):
+    """從掛接房走進來的人**不會**自動成為板的成員（§3.1、驗收 6）。
 
-    給 viewer 的話，房裡的人會發現自己動不了眼前這塊板——而他明明在
-    這間房裡，那個「為什麼」沒有地方講得清楚。
+    這條原本測的是相反的事：自動升成 editor。那個行為讓 v1 的 room 路徑成了
+    ACL 的後門——房裡任何人寫一次板就有了寫入權，而 board-scoped 那道 403
+    明明擋著同一個人（審核用Codex 2026-09-02 實測三步）。
+
+    可用性的出口在**掛接時匯入**，那是 owner 的明示動作，不是走進來就自動
+    發生的事。
     """
     app, client = await _client(tmp_path, "v2_visitor")
     async with client:
@@ -382,13 +386,17 @@ async def test_a_visitor_from_an_attached_room_becomes_an_editor(tmp_path):
             bid = await _board_id(client, rid, owner)
 
             other = await _join(client, rid, "claude-b", "B")
-            await client.post(f"/api/rooms/{rid}/board/tasks",
-                              json={"title": "B 也寫一張"}, headers=other)
+            r = await client.post(f"/api/rooms/{rid}/board/tasks",
+                                  json={"title": "B 想寫一張"}, headers=other)
+            assert r.status_code == 403, "房裡的人不該直接寫得動板"
+            assert r.json()["detail"]["code"] == "not_board_member"
+            # 被擋下的回應要講得出是哪塊板——UI 靠它畫「你還不是成員」
+            assert r.json()["detail"]["board_id"] == bid
+            assert r.json()["detail"]["board_name"]
 
             body = (await client.get(f"/api/boards/{bid}",
-                                     headers=other)).json()
-            roles = {m["actor_key"]: m["role"] for m in body["members"]}
-            assert roles == {"claude-a": "owner", "claude-b": "editor"}
+                                     headers=owner)).json()
+            assert [m["actor_key"] for m in body["members"]] == ["claude-a"]
 
 
 async def test_supervisor_directive_is_recorded_and_projected(tmp_path):
@@ -633,6 +641,12 @@ async def test_members_can_be_added_and_removed(tmp_path):
             worker = await _join(client, rid, "claude-w", "Worker")
             await _first_card(client, rid, owner)
             bid = await _board_id(client, rid, owner)
+            # A+ 之後房裡的人不會自動是板成員——owner 要先把他加進來，
+            # 他才做得了事。這一步本身就是新規則的一部分
+            r = await client.post(f"/api/boards/{bid}/members",
+                                  json={"actor_key": "claude-w",
+                                        "role": "editor"}, headers=owner)
+            assert r.status_code == 200, r.text
             tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
                                      json={"title": "Worker 的卡"},
                                      headers=worker)).json()["id"]
@@ -935,3 +949,103 @@ async def test_an_archived_board_is_read_only_from_the_room_path_too(tmp_path):
                 assert r.json()["detail"]["code"] == "board_archived"
                 # 被擋下的回應裡要講得出是哪塊板——那是唯一還拿得到的線索
                 assert r.json()["detail"]["board_id"] == bid
+
+
+async def test_attach_can_import_the_rooms_members(tmp_path):
+    """§3.1 的可用性出口：掛接時 owner 可以把這間房現在的人帶進板。
+
+    A+ 的另一半。只做收緊不做匯入的話，房裡除了建板者沒有人用得了板，
+    而 owner 手上唯一的工具需要 `actor_key`——那個值房內看不到。
+    """
+    app, client = await _client(tmp_path, "v2_import")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra = await _room(client, "A房", "claude-a")
+            rb = await _room(client, "B房", "claude-a")
+            owner = await _join(client, ra, "claude-a", "A")
+            await _first_card(client, ra, owner)
+            bid = await _board_id(client, ra, owner)
+
+            # B 房裡有兩個人，掛接時把他們一起帶進來
+            await _join(client, rb, "claude-a", "A")
+            await _join(client, rb, "claude-x", "X")
+            await _join(client, rb, "claude-y", "Y")
+            r = await client.post(
+                f"/api/boards/{bid}/rooms/{rb}?import_members=true",
+                headers=owner)
+            assert r.status_code == 200, r.text
+            assert set(r.json()["imported_members"]) == {"claude-x", "claude-y"}
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            roles = {m["actor_key"]: m["role"] for m in body["members"]}
+            assert roles["claude-x"] == "editor"
+            assert roles["claude-y"] == "editor"
+            assert roles["claude-a"] == "owner", "既有成員的角色被覆寫了"
+
+            # 帶進來的人現在寫得動板了
+            x = {"X-Participant-Id": (await client.post(
+                f"/api/rooms/{rb}/join",
+                json={"kind": "claude", "session_key": "claude-x",
+                      "preferred_name": "X"})).json()["participant_id"]}
+            r = await client.post(f"/api/rooms/{rb}/board/tasks",
+                                  json={"title": "X 寫得動了"}, headers=x)
+            assert r.status_code == 200, r.text
+
+
+async def test_import_on_an_already_attached_room(tmp_path):
+    """已經掛著同一塊板時，匯入**照樣要生效**。
+
+    App 建新板的流程是：先 `POST /api/boards` 帶 origin_room_id（那時就掛
+    好了），再回頭要求匯入。早退的話那個勾選會靜靜沒有效果
+    （審核用Codex 2026-09-02）。
+    """
+    app, client = await _client(tmp_path, "v2_import_again")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _join(client, rid, "claude-z", "Z")
+            r = await client.post("/api/boards",
+                                  json={"name": "新板", "origin_room_id": rid},
+                                  headers=owner)
+            bid = r.json()["id"]
+
+            r = await client.post(
+                f"/api/boards/{bid}/rooms/{rid}?import_members=true",
+                headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["already_attached"] is True
+            assert "claude-z" in r.json()["imported_members"], "勾了卻沒生效"
+
+
+async def test_import_never_downgrades_an_existing_member(tmp_path):
+    """匯入**不覆寫**既有成員的角色。
+
+    會覆寫的話，勾一下就可能把某個 owner 降成 editor——而使用者不會預期
+    一個叫「匯入」的動作會降級任何人。
+    """
+    app, client = await _client(tmp_path, "v2_import_no_downgrade")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra = await _room(client, "A房", "claude-a")
+            rb = await _room(client, "B房", "claude-a")
+            owner = await _join(client, ra, "claude-a", "A")
+            await _first_card(client, ra, owner)
+            bid = await _board_id(client, ra, owner)
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-b", "role": "owner"},
+                              headers=owner)
+
+            await _join(client, rb, "claude-a", "A")
+            await _join(client, rb, "claude-b", "B")
+            r = await client.post(
+                f"/api/boards/{bid}/rooms/{rb}?import_members=true",
+                headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["imported_members"] == [], "既有成員被當成新的匯入"
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            roles = {m["actor_key"]: m["role"] for m in body["members"]}
+            assert roles["claude-b"] == "owner", "owner 被降成 editor 了"
