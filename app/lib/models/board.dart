@@ -1007,3 +1007,26 @@ class BoardSummary {
     );
   }
 }
+
+/// 這塊板現在為什麼不能改（或可以改）。
+///
+/// 三種狀態必須分開，因為**處置不一樣**：
+/// - [editable]：正常
+/// - [archived]：這段歷史結束了，誰都改不了
+/// - [noRoom]：從 Board Library 進來，手上沒有房內身分。板是活的，
+///   要從掛著它的某間房進去才能動手
+///
+/// 把後兩者講成同一句「唯讀」，遇到 [noRoom] 的人會去找一個不存在的封存
+/// 狀態；反過來把 [noRoom] 講成「沒有權限」，他會去翻設定頁。
+enum BoardEditability { editable, archived, noRoom }
+
+/// [archived] 優先於 [hasRoom]：封存的板從哪裡進來都改不了，
+/// 而「從聊天室進來就能寫」這句話在封存的板上是假的。
+BoardEditability boardEditability({
+  required bool archived,
+  required bool hasRoom,
+}) {
+  if (archived) return BoardEditability.archived;
+  if (!hasRoom) return BoardEditability.noRoom;
+  return BoardEditability.editable;
+}

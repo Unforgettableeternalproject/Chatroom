@@ -40,9 +40,18 @@ GoRouter buildRouter(bool Function() isConfigured) {
       ShellRoute(
         builder: (context, state, child) => AppShell(
           selectedRoomId: state.pathParameters['roomId'],
+          selectedBoardId: state.pathParameters['boardId'],
           child: child,
         ),
         routes: [
+          // Board 的**權威路由**（BOARD_DESIGN §10）。v2 起 Board 不屬於任何
+          // 聊天室：它可以掛在多間房、也可以一間都沒掛，所以它的網址不能
+          // 長在某一間房底下。房底下那條保留為相容入口。
+          GoRoute(
+            path: '/boards/:boardId',
+            builder: (context, state) =>
+                BoardScreen(boardId: state.pathParameters['boardId']!),
+          ),
           GoRoute(
             path: '/rooms',
             builder: (context, state) =>
@@ -70,6 +79,10 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   ),
                   // Board 與釘選牆／指派同一層：它是這個房間底下的東西，
                   // 跟著房間的成員、權限與封存狀態走
+                  // 相容入口。**不 redirect 到 /boards/:id**：要 redirect 就得
+                  // 先解析出 board_id，而那是一次網路往返——導覽會先卡在
+                  // 一個空白畫面上，然後才跳走。這裡直接用 roomId 開，
+                  // BoardScreen 自己從回應學到 board_id。
                   GoRoute(
                     path: 'board',
                     builder: (context, state) => BoardScreen(

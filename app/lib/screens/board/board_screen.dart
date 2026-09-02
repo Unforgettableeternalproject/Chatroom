@@ -25,9 +25,16 @@ import 'board_task_drawer.dart';
 /// 版面：左 Objective 清單／右單一 Objective 展開。Checklist 是可摺疊的垂直
 /// 區段，**不是看板欄**——三層樹用欄位切會讓「這個週期還剩什麼」散在畫面各處。
 class BoardScreen extends ConsumerStatefulWidget {
-  const BoardScreen({super.key, required this.roomId});
+  const BoardScreen({super.key, this.roomId, this.boardId})
+      : assert(roomId != null || boardId != null,
+            '要嘛從房間進來，要嘛直接指定一塊板');
 
-  final String roomId;
+  /// 從哪間房進來的。`/boards/:id` 進來時是 null——**v2 起板可以一間房都
+  /// 沒掛**，所以這裡不能是必填。
+  final String? roomId;
+
+  /// 直接指定的板（權威路由）。從房間進來時是 null，由回應解析出來。
+  final String? boardId;
 
   @override
   ConsumerState<BoardScreen> createState() => _BoardScreenState();
@@ -45,6 +52,39 @@ const List<double> _desaturate35 = <double>[
 ];
 
 class _BoardScreenState extends ConsumerState<BoardScreen> {
+  /// 這個畫面是從 Board Library（`/boards/:id`）進來的，手上沒有房間。
+  ///
+  /// ⚠️ **那表示現在改不了東西**：item 的 claim／狀態／編輯端點維持 v1 形狀，
+  /// 要的是 `X-Participant-Id`——而房內身分只有進過房才有。這裡不會替使用者
+  /// 偷偷 join 一間房來湊：開一塊板不該有「順便把你加進某個聊天室」這種
+  /// 副作用，而那件事發生時他不會知道。
+  bool get _boardOnly => widget.roomId == null;
+
+  /// 房內動作。`_boardOnly` 時是 null，呼叫端必須自己處理——
+  /// 讓型別擋住比讓執行期拿 404 好。
+  BoardActions? get _actions =>
+      widget.roomId == null ? null : ref.read(boardActionsProvider(widget.roomId!));
+
+  /// 這個畫面的板從哪條路徑拉。兩條路徑共用同一份快取（見 [BoardCache]），
+  /// 所以從房間進與從 Library 進看到的是同一塊板、同一個水位。
+  AsyncValue<BoardSnapshot> _watchBoard() => widget.roomId != null
+      ? ref.watch(boardProvider(widget.roomId!))
+      : ref.watch(boardByIdProvider(widget.boardId!));
+
+  void _reloadBoard() => widget.roomId != null
+      ? ref.invalidate(boardProvider(widget.roomId!))
+      : ref.invalidate(boardByIdProvider(widget.boardId!));
+
+  /// 這塊板現在能不能改。
+  ///
+  /// 兩個來源：房間封存（唯讀歷史），以及**從 Library 進來時沒有房內身分**。
+  /// 後者不是權限問題也不是壞掉，是 item 端點還要 `X-Participant-Id`——
+  /// 兩件事在畫面上要講不同的話，否則使用者會去設定頁找一個不存在的問題。
+  BoardEditability get _editability =>
+      boardEditability(archived: _archived, hasRoom: !_boardOnly);
+
+  bool get _readOnly => _editability != BoardEditability.editable;
+
   String? _selectedObjectiveId;
 
   /// 只看孤兒。**不持久化**——它是「我現在要處理這批」，不是一個偏好。
@@ -60,7 +100,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   final Map<String, String> _conflicts = {};
 
   Future<void> _claim(String taskId) async {
-    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final actions = _actions!;
     try {
       final r = await actions.claim(taskId);
       if (!mounted) return;
@@ -95,7 +135,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 而不是要人把剛剛打的字再打一遍。
   Future<void> _submitCreate(
       String kind, String? parentId, BoardCreateResult result) async {
-    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final actions = _actions!;
     try {
       switch (kind) {
         case 'objective':
@@ -145,7 +185,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 父層」的地方：週期被拖回未完成這件事，要有人真的決定它。
   Future<void> _reopenAndRetry(String? blockedKind, String blockedId,
       String kind, String? parentId, BoardCreateResult result) async {
-    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final actions = _actions!;
     // 這兩個動作都回 void，所以用旗標判成敗——`runBoardAction` 回 null 只
     // 代表「沒有值」，在 void 的情況下分不出失敗
     var reopened = false;
@@ -166,7 +206,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final async = ref.watch(boardProvider(widget.roomId));
+    final async = _watchBoard();
 
     final body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -178,7 +218,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => ErrorState(
                 error: e,
-                onRetry: () => ref.invalidate(boardProvider(widget.roomId)),
+                onRetry: () => _reloadBoard(),
               ),
               data: (snap) {
                 final objectives = snap.sortedObjectives;
@@ -255,9 +295,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// ⇒ Hub 一有 `board.status` 就改看它。§11 的遷移八步沒有一步會撞到這裡，
   /// 所以這段註解是它唯一的守衛。
+  /// ⚠️ 看的仍是**房間**的封存狀態，因為 delta 還沒帶 `board.status`
+  /// （已向 Hub 提，房內 #110）。v2 的正確軸是板自己的狀態——
+  /// 封存的房裡照樣可以寫它掛著的板，反過來也一樣。
+  /// 欄位到了就改看它，這段註解是唯一的守衛。
   bool get _archived =>
-      ref.watch(roomDetailProvider(widget.roomId)).value?.room.status ==
-      'archived';
+      widget.roomId != null &&
+      ref.watch(roomDetailProvider(widget.roomId!)).value?.room.status ==
+          'archived';
 
   Widget _archivedNotice(BuildContext context) {
     final s = context.uep;
@@ -292,13 +337,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ),
         ),
         BoardTaskDrawer(
-          roomId: widget.roomId,
+          roomId: widget.roomId!,
           task: task,
           // 抽屜不吃滿整個視窗：留一段板子看得到，才知道自己還在板上
           width: maxWidth < 480 ? maxWidth : 420,
           checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
           assigneeName: _assigneeName(task),
-          readOnly: _archived,
+          readOnly: _readOnly,
           onClose: close,
         ),
       ]),
@@ -313,7 +358,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   String? _assigneeName(BoardTask task) {
     final id = task.assigneeParticipantId;
     if (id == null) return null;
-    final members = ref.read(roomDetailProvider(widget.roomId)).value
+    // 沒有房就沒有成員名冊可查。指定者的名字本來就只從「現在還在房裡的
+    // 人」查得到，這裡回 null 與「人已經不在了」是同一種答案
+    if (widget.roomId == null) return null;
+    final members = ref.read(roomDetailProvider(widget.roomId!)).value
             ?.participants ??
         const [];
     for (final p in members) {
@@ -329,9 +377,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// ——桌面版同時開著好幾個房間時，光看板子是分不出來的。
   Widget _header(BuildContext context, BoardSnapshot? snap) {
     final s = context.uep;
-    final detail = ref.watch(roomDetailProvider(widget.roomId));
-    final room = detail.value?.room;
-    final zone = zoneForRoomId(widget.roomId);
+    // 從 Library 進來時沒有房。標題退回板上掛著的房名——
+    // ⚠️ 這是**權宜**：delta 還沒帶 board.name（已向 Hub 提，房內 #110）。
+    // 欄位到了就直接顯示板名，這幾行連同 fallback 一起刪掉。
+    final room = widget.roomId == null
+        ? null
+        : ref.watch(roomDetailProvider(widget.roomId!)).value?.room;
+    final attached = snap?.liveRooms.toList() ?? const [];
+    final zone = zoneForRoomId(widget.roomId ?? widget.boardId!);
     final palette = uepZonePalettes[zone]!;
     final dark = Theme.of(context).brightness == Brightness.dark;
 
@@ -343,16 +396,20 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
       child: Row(children: [
-        _HeaderAction(
-          label: '← 回到聊天室',
-          onTap: () => context.go('/rooms/${widget.roomId}'),
-        ),
-        const SizedBox(width: 16),
-        Container(width: 1, height: 20, color: s.hairline),
-        const SizedBox(width: 16),
+        // 從房間進來：回得去。從 Library 進來：沒有「回去」這回事——
+        // 板不屬於任何一間房，硬給一個返回目標只會把人送到他沒去過的地方
+        if (widget.roomId != null) ...[
+          _HeaderAction(
+            label: '← 回到聊天室',
+            onTap: () => context.go('/rooms/${widget.roomId}'),
+          ),
+          const SizedBox(width: 16),
+          Container(width: 1, height: 20, color: s.hairline),
+          const SizedBox(width: 16),
+        ],
         Flexible(
           child: Text(
-            room?.name ?? '',
+            room?.name ?? (attached.isEmpty ? '任務板' : attached.first.name),
             overflow: TextOverflow.ellipsis,
             style: UepText.display(
                 size: 19, weight: FontWeight.w600, color: s.inkTitle),
@@ -375,6 +432,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         Text('BOARD',
             style:
                 UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.6)),
+        // 掛在這塊板上的其他房間，點了就切過去。**這是 v2 才有意義的一列**：
+        // 板不再屬於單一房間，「它還被哪些對話用著」只有這裡看得到
+        for (final r in attached.where((r) => r.id != widget.roomId).take(3)) ...[
+          const SizedBox(width: 8),
+          _HeaderAction(
+            label: '◫ ${r.name}',
+            onTap: () => context.go('/rooms/${r.id}'),
+          ),
+        ],
         const Spacer(),
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
         // 「沒有人在收摘要」與「有人但名字讀不到」不是同一件事
@@ -390,6 +456,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         //
         // 移到左欄 `OBJECTIVES` 那一行——**動作要靠近它會產生結果的地方**。
         if (_archived) const _ArchivedBadge(),
+        // 從 Library 進來時改不了東西。**要講出來而且要講對原因**——
+        // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
+        // 不存在的權限問題
+        if (_boardOnly && !_archived) const _NoRoomBadge(),
       ]),
     );
   }
@@ -415,7 +485,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
                     color: s.inkMute, letterSpacing: 2.2),
               ),
-              if (!_archived)
+              if (!_readOnly)
                 _BarButton(
                     label: '＋ 新週期', onTap: () => _create('objective')),
             ]),
@@ -578,7 +648,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     alignment: Alignment.centerLeft,
                     child: _BarButton(
                       label: '＋ 階段',
-                      onTap: _archived
+                      onTap: _readOnly
                           ? null
                           : () => _create('checklist',
                               parentId: o.id, parentTitle: o.title),
@@ -661,7 +731,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   Widget _closeoutActions(
       BuildContext context, BoardObjective o, _Stats stats) {
     final s = context.uep;
-    final actions = ref.read(boardActionsProvider(widget.roomId));
+    final actions = _actions!;
     // 條件本人在 BoardSnapshot.canReviewObjective——放 model 才咬得住測試，
     // 在這裡複製一份判斷的話，測試測到的只會是那份副本
     final canReview = stats.canReview;
@@ -670,7 +740,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         // 封存的板不給任何轉移——它是歷史。按鈕留著只會讓人按下去拿 409
-        if (!_archived)
+        if (!_readOnly)
         Row(mainAxisSize: MainAxisSize.min, children: [
           // 送審之後也不收——`review` / `verified` 加進來的階段是 open 的，
           // 而閘只在送審那一刻驗過一次：週期會一路走到 done，底下卻掛著一段
@@ -798,12 +868,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         assigneeName: _assigneeName(t),
         onTap: () => setState(() => _openTaskId = t.id),
         isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
-        onClaim: (t.isClaimable && !_archived) ? () => _claim(t.id) : null,
-        onRelease: (t.isHeld && !_archived)
+        onClaim: (t.isClaimable && !_readOnly) ? () => _claim(t.id) : null,
+        onRelease: (t.isHeld && !_readOnly)
             ? () => runBoardAction(
                 context,
-                () => ref
-                    .read(boardActionsProvider(widget.roomId))
+                () => _actions!
                     .release(t.id))
             : null,
       );
@@ -831,7 +900,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final t in tasks) _taskCard(snap, t),
-          if (!_archived && c.status == 'open' && loose == 0)
+          if (!_readOnly && c.status == 'open' && loose == 0)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Align(
@@ -840,13 +909,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   label: '收尾未分類',
                   onTap: () => runBoardAction(
                       context,
-                      () => ref
-                          .read(boardActionsProvider(widget.roomId))
+                      () => _actions!
                           .completeChecklist(c.id)),
                 ),
               ),
             )
-          else if (!_archived && c.status == 'open')
+          else if (!_readOnly && c.status == 'open')
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text('未分類還有 $loose 張沒收尾，週期送不出審。',
@@ -913,7 +981,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 標題與動作之間拉一條線：讓每一段的抬頭在視覺上自成一列
               Expanded(child: Container(height: 1, color: s.hairline)),
               const SizedBox(width: 12),
-              if (!_archived) ...[
+              if (!_readOnly) ...[
                 // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
                 // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
                 // 有實作、一直沒有呼叫端，於是每一份清單都永遠停在 open
@@ -922,8 +990,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     label: '收尾階段',
                     onTap: () => runBoardAction(
                         context,
-                        () => ref
-                            .read(boardActionsProvider(widget.roomId))
+                        () => _actions!
                             .completeChecklist(c.id)),
                   ),
                   const SizedBox(width: 8),
@@ -931,8 +998,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     label: '取消階段',
                     onTap: () => runBoardAction(
                         context,
-                        () => ref
-                            .read(boardActionsProvider(widget.roomId))
+                        () => _actions!
                             .setChecklistStatus(c.id, 'cancelled')),
                   ),
                   const SizedBox(width: 8),
@@ -941,8 +1007,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     label: '重新開啟階段',
                     onTap: () => runBoardAction(
                         context,
-                        () => ref
-                            .read(boardActionsProvider(widget.roomId))
+                        () => _actions!
                             .setChecklistStatus(c.id, 'open')),
                   ),
                   const SizedBox(width: 8),
@@ -985,7 +1050,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 空板（設計稿 artboard 08）。要邀請人開始，而不是看起來壞掉。
   Widget _emptyBoard(BuildContext context) {
     final s = context.uep;
-    final palette = uepZonePalettes[zoneForRoomId(widget.roomId)]!;
+    final palette =
+        uepZonePalettes[zoneForRoomId(widget.roomId ?? widget.boardId!)]!;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 380),
@@ -1001,13 +1067,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              _archived
+              _readOnly
                   ? '這塊板結束時是空的。'
                   : '這塊板還是空的。\n開一條週期，把今天講定的事放進去；\n之後的三百則訊息就不會把它沖走。',
               textAlign: TextAlign.center,
               style: UepText.serif(size: 13.5, color: s.inkSoft, height: 2),
             ),
-            if (!_archived) ...[
+            if (!_readOnly) ...[
               const SizedBox(height: 16),
               UepButton(
                   label: '＋ 新週期', onPressed: () => _create('objective')),
@@ -1087,6 +1153,30 @@ class _ArchivedBadge extends StatelessWidget {
       child: Text('封存 · 唯讀',
           style:
               UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+    );
+  }
+}
+
+/// 從 Board Library 進來、手上沒有房內身分。
+///
+/// 與封存徽章分開是刻意的：**同樣是不能改，原因不一樣，處置也不一樣。**
+/// 封存是「這段歷史結束了」，這個是「你要從掛著它的某間房進去才能動手」。
+/// 講成同一句話的人會去找一個不存在的封存狀態。
+class _NoRoomBadge extends StatelessWidget {
+  const _NoRoomBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Tooltip(
+      message: '從聊天室進入這塊板才能認領或改狀態',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(border: Border.all(color: s.hairline)),
+        child: Text('唯讀 · 未從聊天室進入',
+            style:
+                UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+      ),
     );
   }
 }
