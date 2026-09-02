@@ -35,12 +35,12 @@ class ActorName extends StatelessWidget {
   /// 一併顯示種類徽章（human／claude／codex）。
   final bool showKind;
 
-  /// room_id → 房名。
+  /// room_id → 房名。**只是備援**：alias 自己帶 `room_name` 快照，
+  /// 那份才是權威（房刪掉之後只剩它講得出出處）。
   ///
-  /// ⚠️ **alias 只帶 room_id，而 uuid 對使用者沒有意義**——「他在
-  /// `a3f9…` 裡叫 Novia」等於沒講。掛接中的房可以從 delta 的
-  /// `attached_rooms` 查到名字；查不到的（房已解除或刪除）就只能不講出處，
-  /// 那時別名本身仍有用，來源沒有。
+  /// 這條留著是為了遷移期間——舊 Hub 的 alias 沒有 `room_name`，
+  /// 而掛接中的房仍可從 delta 的 `attached_rooms` 查到名字。兩邊都沒有時
+  /// 就不講出處：**uuid 對使用者沒有意義**，吐出來只會像資料壞了。
   final String? Function(String roomId)? roomNameOf;
 
   /// 提示要講的話。沒有別名時回 null——**沒有別名就不要掛空 tooltip**，
@@ -48,7 +48,9 @@ class ActorName extends StatelessWidget {
   String? get _tip {
     if (actor.aliases.isEmpty) return null;
     final lines = actor.aliases.map((a) {
-      final room = a.roomId.isEmpty ? null : roomNameOf?.call(a.roomId);
+      final room = a.roomName.isNotEmpty
+          ? a.roomName
+          : (a.roomId.isEmpty ? null : roomNameOf?.call(a.roomId));
       return room == null ? '· ${a.name}' : '· ${a.name}（在「$room」）';
     });
     return '這個人在別的地方叫：\n${lines.join('\n')}';

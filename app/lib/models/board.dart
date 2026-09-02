@@ -819,15 +819,27 @@ class BoardSnapshot {
 /// 而後者才是使用者真正在問的問題（同一個 agent 在需求房叫 A、在實作房叫 B）。
 @immutable
 class BoardAlias {
-  const BoardAlias({required this.name, this.roomId = '', this.firstSeenAt});
+  const BoardAlias({
+    required this.name,
+    this.roomId = '',
+    this.roomName = '',
+    this.firstSeenAt,
+  });
 
   final String name;
   final String roomId;
+
+  /// 房名快照。**存的是當下的名字，不是即時查來的**——房可以被永久刪除，
+  /// 而 hover 那時還是要講得出「他在哪裡叫這個名字」。同 `source_room_name`
+  /// 的理由。
+  final String roomName;
+
   final String? firstSeenAt;
 
   factory BoardAlias.fromJson(Map<String, dynamic> json) => BoardAlias(
     name: (json['name'] as String?) ?? '',
     roomId: (json['room_id'] as String?) ?? '',
+    roomName: (json['room_name'] as String?) ?? '',
     firstSeenAt: json['first_seen_at'] as String?,
   );
 }

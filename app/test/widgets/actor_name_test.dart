@@ -41,6 +41,18 @@ void main() {
     expect(tip, isNot(contains('r-gone')));
   });
 
+  test('alias 自帶的 room_name 是權威，房刪了也講得出出處', () {
+    // 快照優先於即時解析：房被永久刪除之後，roomNameOf 什麼都查不到，
+    // 而那正是最需要講出處的時候
+    final tip = actorAliasTooltip(
+      _actor(aliases: const [
+        BoardAlias(name: 'Novia', roomId: 'r-gone', roomName: '需求討論'),
+      ]),
+      roomNameOf: (_) => null,
+    );
+    expect(tip, contains('需求討論'));
+  });
+
   test('多個別名各自成行', () {
     final tip = actorAliasTooltip(
       _actor(aliases: const [
