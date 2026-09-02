@@ -56,6 +56,32 @@ class _QuestionCardState extends State<QuestionCard> {
     super.dispose();
   }
 
+  /// 這顆按鈕現在會送出什麼。
+  ///
+  /// **一題只能有一種答案**（Hub 的 `answer_kind` 是 option 或 free_text），
+  /// 所以自由文字有內容時它優先——那是使用者剛剛動手打的東西，比幾下點選
+  /// 更晚、也更明確。按鈕的字跟著變，按下去之前就看得出結果。
+  bool get _hasText => _controller.text.trim().isNotEmpty;
+
+  bool get _canSend =>
+      !_busy && (_hasText || (widget.question.multiSelect && _picked.isNotEmpty));
+
+  String get _sendLabel {
+    if (_hasText) return '送出';
+    if (widget.question.multiSelect && _picked.isNotEmpty) {
+      return '送出所選 ${_picked.length}';
+    }
+    return '送出';
+  }
+
+  void _send() {
+    if (_hasText) {
+      _submitText();
+      return;
+    }
+    _run(() => widget.onAnswer('option', '', _picked.toList(), _fileIds()));
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -72,7 +98,6 @@ class _QuestionCardState extends State<QuestionCard> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final q = widget.question;
-    final canSubmitFreeText = q.allowFreeText && !_busy;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -130,14 +155,19 @@ class _QuestionCardState extends State<QuestionCard> {
                       letterSpacing: 1.2),
                 ),
                 const Spacer(),
-                UepButton(
-                  label: '送出所選',
-                  small: true,
-                  onPressed: (_busy || _picked.isEmpty)
-                      ? null
-                      : () => _run(() => widget.onAnswer(
-                          'option', '', _picked.toList(), _fileIds())),
-                ),
+                // 有自由文字欄時**這裡不出按鈕**——下面那顆會一併處理。
+                // 兩顆送出並排時，看的人得先讀懂它們差在哪才敢按，
+                // 而它們送出的是互斥的兩種答案（option / free_text），
+                // 不是「送這個」與「送那個」的並列選擇
+                if (!q.allowFreeText)
+                  UepButton(
+                    label: '送出所選',
+                    small: true,
+                    onPressed: (_busy || _picked.isEmpty)
+                        ? null
+                        : () => _run(() => widget.onAnswer(
+                            'option', '', _picked.toList(), _fileIds())),
+                  ),
               ]),
             ],
             if (q.allowFreeText) const SizedBox(height: 12),
@@ -164,16 +194,27 @@ class _QuestionCardState extends State<QuestionCard> {
                       borderSide: BorderSide(color: s.line),
                     ),
                   ),
-                  onSubmitted: canSubmitFreeText ? (_) => _submitText() : null,
+                  // 打字要重畫：按鈕的字與「會取代所選」那句提示都看它
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: _canSend ? (_) => _send() : null,
                 ),
               ),
               const SizedBox(width: 8),
               UepButton(
-                label: '送出',
+                label: _sendLabel,
                 small: true,
-                onPressed: canSubmitFreeText ? _submitText : null,
+                onPressed: _canSend ? _send : null,
               ),
             ]),
+          // 兩種答案互斥，所以要講清楚哪一種會被送出去。
+          // 不講的話，選了三張又打了字的人按下送出時，得到的結果是隨機的
+          if (q.multiSelect && q.allowFreeText && _picked.isNotEmpty &&
+              _controller.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('自己寫的內容會取代所選的 ${_picked.length} 項',
+                style: UepText.mono(
+                    size: 9.5, color: s.inkMute, letterSpacing: 1.2)),
+          ],
           if (widget.onPickFiles != null) ...[
             const SizedBox(height: 10),
             Row(children: [
