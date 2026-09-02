@@ -58,6 +58,7 @@ class BridgeState:
         # 可重入：set_identity 之類的寫入路徑會在持鎖時再呼叫 save()
         self._lock = threading.RLock()
         self._session_key: str | None = None
+        self._boards: dict[str, int] = {}
         self._rooms: dict[str, dict[str, Any]] = {}
         self.load()
 
@@ -74,11 +75,13 @@ class BridgeState:
         except FileNotFoundError:
             self._session_key = None
             self._rooms = {}
+            self._boards = {}
             return
         except (OSError, ValueError):
             self._quarantine()
             self._session_key = None
             self._rooms = {}
+            self._boards = {}
             return
 
         rooms = raw.get("rooms") if isinstance(raw, dict) else None
@@ -86,6 +89,7 @@ class BridgeState:
             self._quarantine()
             self._session_key = None
             self._rooms = {}
+            self._boards = {}
             return
 
         # 逐房驗證，壞掉的單一房間跳過即可，不必整份丟棄
@@ -102,7 +106,12 @@ class BridgeState:
             # 歸零之後「重啟過」與「從來沒讀過這塊板」變成同一件事，
             # 而那兩者本來是刻意分開的。加欄位時兩端都要改
             bseq = entry.get("board_seq", 0)
+            bid = entry.get("board_id")
             clean[room_id] = {
+                # 這間房目前掛的板。水位要跟著**板**記而不是跟著房記：
+                # 一塊板掛 N 間房時，per-room 的水位會讓同一次變更在 N 個房
+                # 各算出一次「board 動了」，同一個 agent 於是被叫醒 N 次
+                "board_id": bid if isinstance(bid, str) else None,
                 "participant_id": pid if isinstance(pid, str) else None,
                 "display_name": name if isinstance(name, str) else None,
                 "last_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else 0,
@@ -115,6 +124,16 @@ class BridgeState:
                 ),
             }
         self._rooms = clean
+        # 板水位獨立一區，key 是 board_id。放在 rooms 底下的話，掛同一塊板的
+        # 兩間房會各存一份，而那正是要消滅的東西
+        boards = raw.get("boards")
+        clean_boards: dict[str, int] = {}
+        if isinstance(boards, dict):
+            for bid, seq in boards.items():
+                if (isinstance(bid, str) and isinstance(seq, int)
+                        and not isinstance(seq, bool)):
+                    clean_boards[bid] = seq
+        self._boards = clean_boards
         canonical = raw.get("session_key")
         if isinstance(canonical, str) and canonical:
             self._session_key = canonical
@@ -136,6 +155,7 @@ class BridgeState:
                 "version": STATE_VERSION,
                 "session_key": self._session_key,
                 "rooms": json.loads(json.dumps(self._rooms)),
+                "boards": dict(self._boards),
             }
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -238,6 +258,33 @@ class BridgeState:
             entry = self._entry(room_id)
             if seq > entry.get("board_seq", 0):
                 entry["board_seq"] = seq
+                self.save()
+
+    def room_board(self, room_id: str) -> str | None:
+        """這間房掛的是哪塊板（bridge 上次看到的）。沒掛或還不知道回 None。"""
+        return self._rooms.get(room_id, {}).get("board_id")
+
+    def set_room_board(self, room_id: str, board_id: str | None) -> None:
+        """記住房↔板的對應。
+
+        **解除掛接要能記錄成 None**：留著舊的 board_id 會讓水位繼續掛在一塊
+        已經不相干的板上，而那條路徑不會報錯——只是安靜地不再通知。
+        """
+        with self._lock:
+            entry = self._entry(room_id)
+            if entry.get("board_id") != board_id:
+                entry["board_id"] = board_id
+                self.save()
+
+    def board_cursor(self, board_id: str) -> int:
+        """以**板**為單位的水位。掛同一塊板的房共用這一份。"""
+        return self._boards.get(board_id, 0)
+
+    def set_board_cursor(self, board_id: str, seq: int) -> None:
+        """水位只前進不後退，同 :meth:`set_last_seq`。"""
+        with self._lock:
+            if seq > self._boards.get(board_id, 0):
+                self._boards[board_id] = seq
                 self.save()
 
     def reset_cursor(self, room_id: str, seq: int = 0) -> None:

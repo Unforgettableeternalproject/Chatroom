@@ -674,6 +674,37 @@ def chatroom_post(
     return data
 
 
+def _known_board(room_id: str) -> int:
+    """這間房的 board 水位。掛了板就用**板**的那一份。
+
+    per-room 記的話，一塊板掛 N 間房時同一次變更會在 N 個房各算出一次
+    「board 動了」，同一個 agent 於是被叫醒 N 次——Hub 那邊就算只出一筆
+    canonical event 也擋不住（@開發Novia (除錯) 2026-09-02 實測）。
+
+    舊 Hub 不回 `board_id`，那時退回房內水位：不能因為對方沒有這個欄位
+    就當成「沒有板」，那會讓每次 wait 都報一次 board_unread。
+    """
+    board_id = state().room_board(room_id)
+    if board_id:
+        return state().board_cursor(board_id)
+    return state().board_seq(room_id)
+
+
+def _remember_board(room_id: str, board_id: Any) -> None:
+    """記住房↔板的對應，順手把房內水位搬到板上。
+
+    搬遷只做一次、且只在板還沒有水位時：舊 state 的房內水位是這個 agent
+    讀到哪裡的唯一紀錄，直接丟掉會讓它把整塊板重收一次。
+    """
+    if not isinstance(board_id, str) or not board_id:
+        state().set_room_board(room_id, None)
+        return
+    state().set_room_board(room_id, board_id)
+    legacy = state().board_seq(room_id)
+    if legacy and not state().board_cursor(board_id):
+        state().set_board_cursor(board_id, legacy)
+
+
 @mcp.tool()
 @_guard
 def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0,
@@ -707,7 +738,7 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     # **沒讀過 board 就不帶這個參數**（不是帶 0）。帶 0 的話，任何已經有
     # 內容的板都會讓這條 long-poll 立刻返回，變成 25 秒 25 次的空轉——
     # 而畫面上看起來只是「訊息一直是空的」，沒有任何地方報錯。
-    known_board = state().board_seq(room_id)
+    known_board = _known_board(room_id)
     if known_board:
         params["after_board_seq"] = known_board
     data = _room_request(
@@ -722,6 +753,16 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     # 水位不在這裡推進——推進了下次就不會再被通知，而內容還沒去拿。
     # 交給 chatroom_board：它拿到內容的同時才移動水位
     board_now = data.get("board_seq")
+    # Hub 從 Board v2 起會告訴我們這間房掛的是哪塊板。記下來，下一次
+    # `_known_board` 才查得到共用的那份水位。**解除掛接會回 None，那也要
+    # 記**——留著舊的 board_id 會讓水位掛在一塊已經不相干的板上，
+    # 而那條路徑不報錯，只是安靜地不再通知
+    if "board_id" in data:
+        _remember_board(room_id, data.get("board_id"))
+        # 對應可能是**這一次**才建立的（這間房第一次聽說自己掛了板）。
+        # 重算水位：不重算的話，掛同一塊板的第二間房會在第一次 wait 報一次
+        # board_unread——而那塊板早就讀過了，只是它剛剛才知道是同一塊
+        known_board = _known_board(room_id)
     # 「你還沒看過這塊板」與「board 剛剛動了」是兩件事，分開講。
     # 合成一個的話，沒讀過 board 的 agent 會在**每一次** wait 都看到
     # board_changed=true（板上只要有東西，board_now 就大於 0），而它以為
@@ -1328,7 +1369,7 @@ def chatroom_board(room_id: str, full: bool = False,
     participant_id, scope = _identity_for(room_id, subagent)
     # **子代理一律讀全量、不碰父層的水位。** 它活不久、也沒有自己的水位，
     # 用父層那個會把父層的位置往前推——父層之後就靜靜跳過它沒讀過的變動
-    known = 0 if (full or subagent) else state().board_seq(room_id)
+    known = 0 if (full or subagent) else _known_board(room_id)
     data = _room_request(
         room_id,
         "GET",
@@ -1338,10 +1379,18 @@ def chatroom_board(room_id: str, full: bool = False,
         params={"after_board_seq": known},
     )
     seq = data.get("board_seq")
+    board_id = data.get("board_id")
+    if not subagent:
+        _remember_board(room_id, board_id)
     # 拿到內容之後才推進水位。在 chatroom_wait 那側推的話，下次就不會再被
     # 通知，而內容其實還沒到手
     if isinstance(seq, int) and not subagent:
-        state().set_board_seq(room_id, seq)
+        if isinstance(board_id, str) and board_id:
+            # 水位記在**板**上：掛同一塊板的其他房共用這一份，讀一次板就把
+            # 每一間房的「board 動了」一起消掉
+            state().set_board_cursor(board_id, seq)
+        else:
+            state().set_board_seq(room_id, seq)
     data["after_board_seq"] = known
     data.update(scope)
     return data
