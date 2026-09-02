@@ -25,13 +25,15 @@ class QuestionCard extends StatefulWidget {
 
   final Question question;
 
-  /// (kind, answer, selected, attachmentIds)：kind 為 option 或 free_text。
-  /// [selected] 只有複選題會有值；[attachmentIds] 是隨答案附上的檔案。
+  /// (kind, answer, selected, attachmentIds, extra)：kind 為 option 或
+  /// free_text。[selected] 只有複選題會有值；[attachmentIds] 是隨答案附上的
+  /// 檔案；[extra] 是複選之外自己補的話，**只跟著 option 送**。
   final Future<void> Function(
     String kind,
     String answer,
     List<String> selected,
     List<String> attachmentIds,
+    String extra,
   ) onAnswer;
   final Future<void> Function() onSkip;
 
@@ -56,30 +58,39 @@ class _QuestionCardState extends State<QuestionCard> {
     super.dispose();
   }
 
-  /// 這顆按鈕現在會送出什麼。
-  ///
-  /// **一題只能有一種答案**（Hub 的 `answer_kind` 是 option 或 free_text），
-  /// 所以自由文字有內容時它優先——那是使用者剛剛動手打的東西，比幾下點選
-  /// 更晚、也更明確。按鈕的字跟著變，按下去之前就看得出結果。
   bool get _hasText => _controller.text.trim().isNotEmpty;
+  bool get _hasPicks => widget.question.multiSelect && _picked.isNotEmpty;
 
-  bool get _canSend =>
-      !_busy && (_hasText || (widget.question.multiSelect && _picked.isNotEmpty));
+  bool get _canSend => !_busy && (_hasText || _hasPicks);
 
+  /// 按鈕的字要說出**按下去會送什麼**。三種情形三句話——寫死一個「送出」
+  /// 的話，選了三張又打了字的人按下去之前不知道自己送的是哪一種。
   String get _sendLabel {
-    if (_hasText) return '送出';
-    if (widget.question.multiSelect && _picked.isNotEmpty) {
-      return '送出所選 ${_picked.length}';
-    }
+    if (_hasPicks && _hasText) return '送出所選 ${_picked.length} ＋補充';
+    if (_hasPicks) return '送出所選 ${_picked.length}';
     return '送出';
   }
 
+  /// 送出。
+  ///
+  /// **選項與補充是一起送的**（Hub `87cc53f` 的 `extra`）：`kind='option'`
+  /// 帶 `extra`，`answer_options` 那份仍只有真選項——讀它的 agent 對
+  /// 「他是從我給的清單裡選的」那份信任不會被自訂文字稀釋。
+  ///
+  /// ⚠️ `extra` **不能跟 free_text 一起送**（422 `extra_needs_option`）：
+  /// 沒有選任何項時，打的字本身就是答案，那時走 free_text。
   void _send() {
-    if (_hasText) {
+    if (!_hasPicks) {
       _submitText();
       return;
     }
-    _run(() => widget.onAnswer('option', '', _picked.toList(), _fileIds()));
+    _run(() => widget.onAnswer(
+          'option',
+          '',
+          _picked.toList(),
+          _fileIds(),
+          _controller.text.trim(),
+        ));
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -141,8 +152,8 @@ class _QuestionCardState extends State<QuestionCard> {
                             _picked.contains(option.label)
                                 ? _picked.remove(option.label)
                                 : _picked.add(option.label))
-                        : () => _run(() => widget.onAnswer(
-                            'option', option.label, const [], _fileIds())),
+                        : () => _run(() => widget.onAnswer('option',
+                            option.label, const [], _fileIds(), '')),
                   ),
               ],
             ),
@@ -150,7 +161,13 @@ class _QuestionCardState extends State<QuestionCard> {
               const SizedBox(height: 10),
               Row(children: [
                 Text(
-                  _picked.isEmpty ? '可以複選' : '已選 ${_picked.length} 項',
+                  _picked.isEmpty
+                      ? '可以複選'
+                      : (q.allowFreeText
+                          // 打了字時要講出來會一起送——上一版是「取代」，
+                          // 那是 Hub 沒有 extra 之前的限制，不是我們想要的行為
+                          ? '已選 ${_picked.length} 項，補充會一併帶上'
+                          : '已選 ${_picked.length} 項'),
                   style: UepText.mono(size: 9.5, color: s.inkMute,
                       letterSpacing: 1.2),
                 ),
@@ -165,8 +182,8 @@ class _QuestionCardState extends State<QuestionCard> {
                     small: true,
                     onPressed: (_busy || _picked.isEmpty)
                         ? null
-                        : () => _run(() => widget.onAnswer(
-                            'option', '', _picked.toList(), _fileIds())),
+                        : () => _run(() => widget.onAnswer('option', '',
+                            _picked.toList(), _fileIds(), '')),
                   ),
               ]),
             ],
@@ -206,15 +223,6 @@ class _QuestionCardState extends State<QuestionCard> {
                 onPressed: _canSend ? _send : null,
               ),
             ]),
-          // 兩種答案互斥，所以要講清楚哪一種會被送出去。
-          // 不講的話，選了三張又打了字的人按下送出時，得到的結果是隨機的
-          if (q.multiSelect && q.allowFreeText && _picked.isNotEmpty &&
-              _controller.text.trim().isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text('自己寫的內容會取代所選的 ${_picked.length} 項',
-                style: UepText.mono(
-                    size: 9.5, color: s.inkMute, letterSpacing: 1.2)),
-          ],
           if (widget.onPickFiles != null) ...[
             const SizedBox(height: 10),
             Row(children: [
@@ -278,8 +286,8 @@ class _QuestionCardState extends State<QuestionCard> {
     final text = _controller.text.trim();
     // 附了檔案就不必再逼人打字——「就是這張圖」本身就是答案
     if (text.isEmpty && _files.isEmpty) return;
-    _run(() => widget.onAnswer(
-        'free_text', text.isEmpty ? '（見附件）' : text, const [], _fileIds()));
+    _run(() => widget.onAnswer('free_text',
+        text.isEmpty ? '（見附件）' : text, const [], _fileIds(), ''));
   }
 }
 

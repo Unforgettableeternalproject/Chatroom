@@ -2509,7 +2509,8 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
 
   Future<void> _respond(String id, String kind, String answer,
       [List<String> selected = const [],
-      List<String> attachmentIds = const []]) async {
+      List<String> attachmentIds = const [],
+      String extra = '']) async {
     try {
       await ref
           .read(questionsApiProvider)
@@ -2517,6 +2518,7 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
             id,
             kind: kind,
             answer: answer,
+            extra: extra,
             selected: selected,
             attachmentIds: attachmentIds,
             participantId: widget.participantId,
@@ -2617,8 +2619,8 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
                   for (final q in questions)
                     QuestionCard(
                       question: q,
-                      onAnswer: (kind, answer, selected, files) =>
-                          _respond(q.id, kind, answer, selected, files),
+                      onAnswer: (kind, answer, selected, files, extra) =>
+                          _respond(q.id, kind, answer, selected, files, extra),
                       onSkip: () => _respond(q.id, 'skip', ''),
                       onPickFiles: _pickAnswerFiles,
                     ),
