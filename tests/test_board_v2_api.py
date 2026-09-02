@@ -225,3 +225,103 @@ async def test_archived_room_does_not_freeze_the_board(tmp_path):
             assert r.status_code == 200, r.text
             body = (await client.get(f"/api/boards/{bid}", headers=hdr_a)).json()
             assert len(body["tasks"]) == 2
+
+
+async def test_creating_cards_from_the_board_without_a_room(tmp_path):
+    """Board Library 裡沒有房——那個畫面上也要建得了東西。
+
+    權限看 `board_member` 而不是房內身分：拿房內身分當門檻的話，
+    Library 上什麼都做不了。
+    """
+    app, client = await _client(tmp_path, "v2_bcards")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+
+            # 只帶 session_key，沒有 participant、沒有房
+            only_key = {"X-Session-Key": "claude-a"}
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "從板上開的週期"},
+                                  headers=only_key)
+            assert r.status_code == 200, r.text
+            assert r.json()["board_id"] == bid
+
+            r = await client.post(f"/api/boards/{bid}/tasks",
+                                  json={"title": "從板上隨手記"},
+                                  headers=only_key)
+            assert r.status_code == 200, r.text
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=only_key)).json()
+            assert {o["title"] for o in body["objectives"]} == {
+                "未分類", "從板上開的週期"}
+            assert {t["title"] for t in body["tasks"]} == {
+                "第一張卡", "從板上隨手記"}
+            # 兩條路徑共用同一組「未分類」，不各長一組
+            assert len([o for o in body["objectives"]
+                        if o["title"] == "未分類"]) == 1
+
+
+async def test_board_cards_reject_non_members(tmp_path):
+    app, client = await _client(tmp_path, "v2_bcards_acl")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "闖進來"},
+                                  headers={"X-Session-Key": "claude-zzz"})
+            assert r.status_code == 403
+            assert r.json()["detail"]["code"] == "not_board_member"
+
+
+async def test_board_with_no_attached_room_says_so_clearly(tmp_path):
+    """過渡期限制要**明確擋下來**，不是撞 FK 回 500。
+
+    item 的 room_id 還是 NOT NULL（v1 遺留，等 table rebuild 才拿得掉），
+    所以板上沒房時建不了卡。回 500 的話，查半天才知道是這件事。
+    """
+    app, client = await _client(tmp_path, "v2_noroom")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=hdr)
+
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "沒房可掛"}, headers=hdr)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "board_has_no_room"
+
+
+async def test_session_key_can_come_from_header_or_query(tmp_path):
+    """房那邊的 /api/rooms 收 query session_key。兩邊不一致的話，照著既有
+    慣例寫的 client 會拿到 400 而不知道差在哪——同一份憑證，兩種放法都收。
+    """
+    app, client = await _client(tmp_path, "v2_key_place")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+
+            r = await client.get("/api/boards?session_key=claude-a")
+            assert r.status_code == 200, r.text
+            assert [b["id"] for b in r.json()["boards"]] == [bid]
+
+            r = await client.get(f"/api/boards/{bid}?session_key=claude-a")
+            assert r.status_code == 200, r.text
+
+            # 完全不給仍要擋，而且要講清楚缺什麼
+            r = await client.get("/api/boards")
+            assert r.status_code == 400
+            assert r.json()["detail"]["code"] == "session_key_required"

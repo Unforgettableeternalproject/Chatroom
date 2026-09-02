@@ -3120,21 +3120,40 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " RETURNING board_seq", (room_id,))
             row = await cur.fetchone()   # ⚠️ 不是 rowcount：RETURNING 在 fetch 前是 0
             return row["board_seq"]
-        # 換軸後水位屬於**板**，不屬於房——一塊板掛三間房時，三邊看到的
-        # 必須是同一條遞增序列，否則同一次變更在各房會有不同的號碼
+        return await _next_seq_for_board(board["id"])
+
+    async def _next_seq_for_board(board_id: str) -> int:
+        """以板為單位領號。board-scoped 端點手上沒有房，只能走這條。
+
+        換軸後水位屬於**板**不屬於房——一塊板掛三間房時三邊看到的必須是
+        同一條遞增序列，否則同一次變更在各房會有不同的號碼。
+        """
+        db = app.state.db
         cur = await db.execute(
             "UPDATE board SET board_seq=board_seq+1, updated_at=?"
-            " WHERE id=? RETURNING board_seq", (_now(), board["id"]))
-        row = await cur.fetchone()
-        seq = row["board_seq"]
+            " WHERE id=? RETURNING board_seq", (_now(), board_id))
+        seq = (await cur.fetchone())["board_seq"]
         # 同步回**所有** active 掛接房的 room.board_seq。v1 client 讀的是
         # 那個欄位；只同步當前房的話，別間房的舊 client 水位會停在原地，
         # 而它不會知道自己漏了——增量查詢照樣回 200、照樣回空清單
         await db.execute(
             "UPDATE room SET board_seq=? WHERE id IN"
             " (SELECT room_id FROM board_room WHERE board_id=?"
-            "  AND detached_at IS NULL)", (seq, board["id"]))
+            "  AND detached_at IS NULL)", (seq, board_id))
         return seq
+
+    async def _notify_board_rooms(board_id: str) -> None:
+        """把所有 active 掛接房叫醒。
+
+        板動了要通知的是**每一間掛著它的房**，不是操作發生的那一間——
+        board-scoped 的操作根本沒有「那一間」。漏掉的房不會報錯，它們的
+        long-poll 只是安靜地繼續等，直到有人在房裡說話才順便收到板的變動
+        """
+        rows = await (await app.state.db.execute(
+            "SELECT room_id FROM board_room WHERE board_id=?"
+            " AND detached_at IS NULL", (board_id,))).fetchall()
+        for r in rows:
+            await events.notify(r["room_id"])
 
     BOARD_TABLES = {
         "objective": "board_objective",
@@ -4492,7 +4511,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 自動變成板上的人（BOARD_DESIGN §3.1）。
 
     async def _actor_from_headers(session_key: str | None,
-                                  participant_id: str | None) -> str:
+                                  participant_id: str | None,
+                                  query_key: str = "") -> str:
         """這次請求是誰。Board Library 沒有房，所以 session_key 是主要來源。
 
         participant_id 只當退路：房內的 client 手上一定有它，卻不一定會把
@@ -4502,6 +4522,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         key = actor_key(session_key)
         if key:
             return key
+        if query_key:
+            # 房那邊的 /api/rooms 收的是 query session_key。兩邊不一致的話，
+            # 照著既有慣例寫的 client 會拿到 400 而不知道差在哪——**同一份
+            # 憑證，兩種放法都收**
+            return actor_key(query_key)
         if participant_id:
             row = await (await app.state.db.execute(
                 "SELECT session_key FROM participant WHERE id=?",
@@ -4538,6 +4563,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/boards", dependencies=[Depends(require_auth)])
     async def list_boards(
+        session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
     ):
@@ -4546,7 +4572,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         **不以 room list 代替**——板的生命週期與房已經分開了，一塊沒有任何
         active 掛接房的板仍然要找得到，否則它等於消失。
         """
-        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
         if not actor:
             raise _err(400, "session_key_required",
                        "要帶 X-Session-Key 才知道你是誰")
@@ -4581,6 +4608,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def read_board_v2(
         board_id: str,
         after_board_seq: int = 0,
+        session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
     ):
@@ -4590,7 +4618,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         量級的改動，而合併正是最容易寫錯又最難發現的地方。
         """
         board = await _board_or_404(board_id)
-        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
         await _board_member_or_403(board_id, actor)
         db = app.state.db
         tombstones = after_board_seq > 0
@@ -4641,6 +4670,88 @@ def create_app(config: Config | None = None) -> FastAPI:
             "attached_rooms": attached,
             "supervisor": sup,
         }
+
+    async def _board_writer_v2(board_id: str, session_key: str | None,
+                               participant_id: str | None):
+        """board-scoped 寫入的共同門檻，回 (board, provenance_room_id, me)。
+
+        與 room-scoped 版的差別在**權限來源**：那邊看房內身分，這邊看
+        `board_member`。Board Library 裡根本沒有房，拿房內身分當門檻的話，
+        那個畫面上什麼都做不了。
+
+        `me` 組成 room-scoped 版同形的 dict，好讓底下的插入邏輯只有一份——
+        兩份會各自漂移，而漂移的那一半沒有人在看。`id`（participant）是
+        None：這次操作不是從任何一間房發出來的。
+        """
+        board = await _board_or_404(board_id)
+        if board["status"] != "active":
+            raise _err(409, "board_archived", "這塊板已經封存，唯讀")
+        actor = await _actor_from_headers(session_key, participant_id)
+        await _board_member_or_403(board_id, actor, need_write=True)
+        member = await (await app.state.db.execute(
+            "SELECT display_name, actor_kind FROM board_member"
+            " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
+        # ⚠️ 過渡期限制：三張 item 表的 room_id 還是 NOT NULL（v1 遺留，
+        # 要等 §11 步驟 8 的 table rebuild 才拿得掉）。所以 board-scoped
+        # 建卡仍要有一間房掛著當 provenance。**明確擋下來並說清楚**，
+        # 比讓它撞 FK 然後回 500 好——後者查半天才知道是這件事
+        room = await (await app.state.db.execute(
+            "SELECT room_id FROM board_room WHERE board_id=?"
+            " AND detached_at IS NULL ORDER BY attached_at LIMIT 1",
+            (board_id,))).fetchone()
+        if room is None:
+            raise _err(409, "board_has_no_room",
+                       "這塊板目前沒有掛在任何聊天室上，還不能從板上直接建卡。"
+                       "先把它掛到一間房，或從那間房裡建")
+        me = {
+            "id": None,                       # 不是從房裡發出來的
+            "display_name": member["display_name"] if member else "",
+            "kind": member["actor_kind"] if member else "",
+            "session_key": actor,
+            "role": "agent",
+            "board_id": board_id,
+        }
+        return board, room["room_id"], me
+
+    @app.post("/api/boards/{board_id}/objectives",
+              dependencies=[Depends(require_auth)])
+    async def create_objective_v2(
+        board_id: str, body: BoardObjectiveCreate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """從板上直接建一個週期。權限看 board_member，不看房。"""
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        oid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_objective (id, room_id, board_id, title,"
+            " description, created_by, created_by_name, created_by_actor_key,"
+            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (oid, room_id, board_id, body.title.strip(), body.description,
+             None, me["display_name"], me["session_key"], seq, _now()))
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": oid, "board_seq": seq, "board_id": board_id}
+
+    @app.post("/api/boards/{board_id}/tasks",
+              dependencies=[Depends(require_auth)])
+    async def create_loose_task_v2(
+        board_id: str, body: BoardTaskCreate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """「隨手記」一張卡，自動放進「未分類」。
+
+        為了記一件事先蓋兩層，實際的結果是根本不記——所以這條與 room-scoped
+        版共用同一組「未分類」容器，不另外長一組出來。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        cid = await _uncategorised_checklist(room_id, me)
+        return await _insert_task(cid, room_id, body, me)
 
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
               dependencies=[Depends(require_auth)])
