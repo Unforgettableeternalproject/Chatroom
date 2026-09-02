@@ -325,3 +325,63 @@ async def test_session_key_can_come_from_header_or_query(tmp_path):
             r = await client.get("/api/boards")
             assert r.status_code == 400
             assert r.json()["detail"]["code"] == "session_key_required"
+
+
+async def test_board_member_name_is_decided_by_the_first_room(tmp_path):
+    """同一個 actor 在兩間房叫不同名字：板上以**最早進入的那個**為準，
+    另一個進 aliases（艾斯維爾第 2 點）。
+
+    板上只能有一個稱呼——否則同一個人在同一張卡的歷史裡會以兩個名字出現，
+    看起來像兩個人。alias 連 room_name 一起存快照：房可以被永久刪除，
+    那時 room_id 只是一個查不到的字串。
+    """
+    app, client = await _client(tmp_path, "v2_alias")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra = await _room(client, "A房", "claude-a")
+            rb = await _room(client, "B房", "claude-a")
+            hdr_a = await _join(client, ra, "claude-a", "先進來的名字")
+            await _first_card(client, ra, hdr_a)
+            bid = await _board_id(client, ra, hdr_a)
+            await client.post(f"/api/boards/{bid}/rooms/{rb}", headers=hdr_a)
+
+            # 同一把 session_key，B 房用另一個名字，然後在板上寫東西
+            hdr_b = await _join(client, rb, "claude-a", "後來的名字")
+            await client.post(f"/api/rooms/{rb}/board/tasks",
+                              json={"title": "從 B 房寫"}, headers=hdr_b)
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=hdr_a)).json()
+            me = [m for m in body["members"]
+                  if m["actor_key"] == "claude-a"][0]
+            assert me["display_name"] == "先進來的名字"
+            assert me["role"] == "owner"
+            assert len(me["aliases"]) == 1
+            alias = me["aliases"][0]
+            assert alias["name"] == "後來的名字"
+            assert alias["room_id"] == rb
+            assert alias["room_name"] == "B房", "房刪掉之後 hover 就靠它了"
+
+
+async def test_a_visitor_from_an_attached_room_becomes_an_editor(tmp_path):
+    """從掛接房走進來的人自動成為 editor。
+
+    給 viewer 的話，房裡的人會發現自己動不了眼前這塊板——而他明明在
+    這間房裡，那個「為什麼」沒有地方講得清楚。
+    """
+    app, client = await _client(tmp_path, "v2_visitor")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            other = await _join(client, rid, "claude-b", "B")
+            await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": "B 也寫一張"}, headers=other)
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=other)).json()
+            roles = {m["actor_key"]: m["role"] for m in body["members"]}
+            assert roles == {"claude-a": "owner", "claude-b": "editor"}

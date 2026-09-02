@@ -3044,6 +3044,56 @@ def create_app(config: Config | None = None) -> FastAPI:
             (room_id,),
         )).fetchone()
 
+    async def _touch_board_member(board_id: str, actor: str, name: str,
+                                  kind: str, room_id: str,
+                                  room_name: str) -> None:
+        """把這個 actor 記進板的成員列，並維護名字與別名。
+
+        **定案名以最早進入這塊板的那個為準**（艾斯維爾第 2 點）：同一個
+        actor 在不同房可能叫不同名字，而板上只能有一個稱呼——否則同一個人
+        在同一張卡的歷史裡會以兩個名字出現，看起來像兩個人。
+
+        其餘看過的名字進 `aliases`，供 UI hover 顯示「他在別的房叫什麼」。
+        每一筆連 `room_name` 一起存快照：房可以被永久刪除，那時 `room_id`
+        只是一個查不到的字串，快照是唯一還渲染得出來的東西。
+        """
+        if not actor:
+            return
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT display_name, aliases FROM board_member"
+            " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
+        now = _now()
+        if row is None:
+            # 不是 owner 也不是被邀請的——他從一間掛接房走進來。給 editor：
+            # 能看不能改的話，房裡的人會發現自己動不了眼前這塊板
+            await db.execute(
+                "INSERT INTO board_member (board_id, actor_key, role,"
+                " display_name, actor_kind, aliases, added_at)"
+                " VALUES (?,?,'editor',?,?,'[]',?)"
+                " ON CONFLICT DO NOTHING",
+                (board_id, actor, name, kind, now))
+            return
+        if not row["display_name"]:
+            await db.execute(
+                "UPDATE board_member SET display_name=? WHERE board_id=?"
+                " AND actor_key=?", (name, board_id, actor))
+            return
+        if not name or name == row["display_name"]:
+            return
+        try:
+            aliases = json.loads(row["aliases"]) or []
+        except (TypeError, ValueError):
+            aliases = []
+        if any(a.get("name") == name and a.get("room_id") == room_id
+               for a in aliases if isinstance(a, dict)):
+            return
+        aliases.append({"name": name, "room_id": room_id,
+                        "room_name": room_name, "first_seen_at": now})
+        await db.execute(
+            "UPDATE board_member SET aliases=? WHERE board_id=? AND actor_key=?",
+            (json.dumps(aliases, ensure_ascii=False), board_id, actor))
+
     async def _ensure_board_for_room(room_id: str, me) -> str:
         """取得這間房的板，沒有就**現在建一塊**並掛上去，回傳 board_id。
 
@@ -3221,6 +3271,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 寫出來的卡 board_id 是空的，在 Board Library 上根本不存在。
         # 板 id 隨身分一起回去，插入新卡時要用（Row 不能加鍵，所以轉 dict）
         me["board_id"] = await _ensure_board_for_room(room_id, me)
+        room = await (await app.state.db.execute(
+            "SELECT name FROM room WHERE id=?", (room_id,))).fetchone()
+        await _touch_board_member(
+            me["board_id"], actor_key(me["session_key"]), me["display_name"],
+            me["kind"], room_id, room["name"] if room else "")
         return me
 
     def _board_can_remove(row, me) -> bool:
@@ -4658,6 +4713,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             "detached": r["detached_at"] is not None,
         } for r in await cur.fetchall()]
 
+        cur = await db.execute(
+            "SELECT actor_key, role, display_name, actor_kind, aliases"
+            " FROM board_member WHERE board_id=? AND removed_at IS NULL"
+            " ORDER BY added_at", (board_id,))
+        members = []
+        for m in await cur.fetchall():
+            try:
+                aliases = json.loads(m["aliases"]) or []
+            except (TypeError, ValueError):
+                aliases = []
+            members.append({
+                "actor_key": m["actor_key"], "role": m["role"],
+                "display_name": m["display_name"],
+                "actor_kind": m["actor_kind"], "aliases": aliases,
+            })
+
         sup = None
         if board["supervisor_actor_key"]:
             sup = {"actor_key": board["supervisor_actor_key"],
@@ -4680,6 +4751,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "checklists": await _rows("board_checklist"),
             "tasks": await _rows("board_task"),
             "reclaimable_tasks": reclaimable,
+            "members": members,
             "attached_rooms": attached,
             "supervisor": sup,
         }
