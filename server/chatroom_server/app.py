@@ -3256,6 +3256,28 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(503, "board_attach_contended",
                            "這間房的板正在被同時建立，稍後再試一次")
             return winner["id"]
+        # 🔑 **從這間房長出來的板，房裡當下的人就是它的成員。**
+        #
+        # A+ 的匯入是給「把**別的**板掛進來」用的——那時 owner 要明示。但板
+        # 是換軸時自動建的，沒有任何掛接動作可以讓人勾選；不帶人的話，人類
+        # 建了房、agent 在裡面建了板，**人類看不到那塊板**，而他沒有任何
+        # 地方可以要求加入。
+        #
+        # 只帶**當下**的人，之後加入這間房的人仍要 owner 明示——那條分野
+        # （§3.1「不得暗中賦予未來 room 新成員永久權限」）沒有被放寬。
+        rows = await db.execute(
+            "SELECT session_key, display_name, kind FROM participant"
+            " WHERE room_id=? AND status='active' AND ephemeral=0", (room_id,))
+        for r in await rows.fetchall():
+            key = actor_key(r["session_key"])
+            if not key or key == mine:
+                continue
+            await db.execute(
+                "INSERT INTO board_member (board_id, actor_key, role,"
+                " display_name, actor_kind, aliases, added_by_actor_key,"
+                " added_at) VALUES (?,?,'editor',?,?,'[]',?,?)"
+                " ON CONFLICT DO NOTHING",
+                (bid, key, r["display_name"], r["kind"], mine, now))
         # 這間房既有的卡一起換軸。**同一個交易裡做完**：分兩步的話，中間
         # 崩掉會留下一塊沒有卡的板與一批沒有板的卡，而兩邊看起來都正常
         for table in ("board_objective", "board_checklist", "board_task"):
@@ -3449,8 +3471,30 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(409, "board_archived",
                            "這塊板已經封存，唯讀", board_id=board_id,
                            board_name=board["name"])
-        await _room_or_404(row["room_id"])
-        me = dict(await _participant(participant_id, row["room_id"]))
+        # 🔴 **身分不綁房**：一塊板掛 A、B 兩房，卡建在 A，持有者用他在 B 房
+        # 的 participant_id 推狀態時，`_participant(pid, row["room_id"])` 會回
+        # `participant_wrong_room` ——而他明明是這塊板的成員、也正是持卡人。
+        #
+        # 下游的 `_is_claim_holder` 已經比 actor_key 了，但它永遠跑不到：
+        # 上游先用房軸擋掉（@開發Novia (除錯) 2026-09-02 實測）。
+        #
+        # 所以這裡只要求「active 的身分」＋「是這塊板的成員」，房是哪一間
+        # 不重要——卡屬於板，不屬於房。
+        me = await (await app.state.db.execute(
+            "SELECT * FROM participant WHERE id=? AND status='active'",
+            (participant_id,))).fetchone()
+        if me is None:
+            raise _err(403, "participant_not_active",
+                       "你的身分已經失效，請重新加入聊天室",
+                       need_rejoin=True)
+        me = dict(me)
+        if board_id:
+            await _board_member_or_403(board_id, actor_key(me["session_key"]),
+                                       need_write=True, board=board)
+        else:
+            # 還沒換軸的舊卡沒有板可驗，退回原本的房內身分檢查
+            await _room_or_404(row["room_id"])
+            me = dict(await _participant(participant_id, row["room_id"]))
         me["board_id"] = board_id
         return me
 
@@ -4783,6 +4827,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
+        # 🔴 房內身分讓你進得了這間房，**不代表你進得了它掛的那塊板**
+        # （§3.1、驗收 6）。這條原本只驗房內身分，於是成了 board-scoped
+        # 那道 403 的後門：同一個人走這裡就讀得到（審核用Codex 抓到，
+        # @開發Novia (除錯) 在 8170219 上複現——寫入端接上了，讀取端沒有）。
+        #
+        # 主持人視角（host）不擋：他是 .env 持有者，看得到整個 Hub 是既有語意
+        attached_board = await _board_for_room(room_id)
+        if attached_board is not None and not host:
+            # ⚠️ `_member_or_403` 只回 `status`（它的門檻只需要那一欄），
+            # **不能拿它的 row 取 session_key**——那樣 actor 會是空字串，
+            # 而空 actor 在 `_board_role` 眼中就是「不是成員」，連 owner
+            # 自己都會被擋。這裡自己查。
+            prow = await (await db.execute(
+                "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                (x_participant_id, room_id))).fetchone()
+            actor = actor_key(prow["session_key"]) if prow else ""
+            await _board_member_or_403(attached_board["id"], actor,
+                                       board=attached_board)
 
         # 全量讀取不回墓碑。tombstone 的理由只對**增量**成立——增量 client
         # 手上有「記得的那份」要移除；全量 client 沒有那份，那些列對它純粹是

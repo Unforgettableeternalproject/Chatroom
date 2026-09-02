@@ -52,8 +52,39 @@ async def _room_with_task(client):
     return rid, hdr, tid
 
 
+async def _join_and_add_to_board(client, rid, session_key, name,
+                                 role="agent", owner_key="agent-1"):
+    """加入房間**並**被加進板——A+ 之後這是兩件事。
+
+    §3.1：房裡的人不會自動變成板上的人。所以「另一個 agent 來接手孤兒卡」
+    這種流程，現在多一步：owner 要先把他加進板。
+
+    ⚠️ 這一步在產品上是有代價的——孤兒機制的意義正是「讓別人接手」，而
+    接手的人通常是後來才進來的。這裡照新規則走，把代價顯性化。
+    """
+    hdr, body = await _join(client, rid, session_key, name, role=role)
+    b = (await client.get(f"/api/rooms/{rid}/board",
+                          headers={"X-Host-View": "1"})).json()
+    if b.get("board_id"):
+        await client.post(
+            f"/api/boards/{b['board_id']}/members",
+            json={"actor_key": session_key, "role": "editor"},
+            headers={"X-Session-Key": owner_key})
+    return hdr, body
+
+
 async def _task(client, rid, hdr, tid):
-    board = (await client.get(f"/api/rooms/{rid}/board", headers=hdr)).json()
+    """讀一張卡的當下狀態。**走主持人視角**，理由與被測的東西無關：
+
+    A+ 之後「後來才加入這間房的人」不會自動是板成員（§3.1），而這裡好幾條
+    測試正是拿一個後加入的旁觀者去看卡——那在產品上會（正確地）拿到 403。
+    這些測試要驗的是**孤兒與收尾的行為**，不是 ACL；用 .env 主 token 的
+    主持人視角讀，才不會讓一道正確的門檻把不相干的斷言染紅。
+
+    ACL 本身在 tests/test_board_v2_api.py 有專門的測試守著。
+    """
+    board = (await client.get(f"/api/rooms/{rid}/board",
+                              headers={**hdr, "X-Host-View": "1"})).json()
     return next(t for t in board["tasks"] if t["id"] == tid)
 
 
@@ -74,7 +105,7 @@ async def test_second_claimer_gets_409_not_a_silent_takeover(tmp_path):
     app, client = await _client(tmp_path, "claim2")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         assert (await client.post(f"/api/board/tasks/{tid}/claim",
                                   headers=mine)).status_code == 200
         r = await client.post(f"/api/board/tasks/{tid}/claim", headers=other)
@@ -90,7 +121,7 @@ async def test_concurrent_claims_exactly_one_wins(tmp_path):
     app, client = await _client(tmp_path, "claim-race")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         results = await asyncio.gather(
             client.post(f"/api/board/tasks/{tid}/claim", headers=mine),
             client.post(f"/api/board/tasks/{tid}/claim", headers=other),
@@ -129,8 +160,8 @@ async def test_only_holder_or_human_can_release(tmp_path):
     app, client = await _client(tmp_path, "release-perm")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
-        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
+        human, _ = await _join_and_add_to_board(client, rid, "human-1", "Bernie", role="human")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
 
         r = await client.post(f"/api/board/tasks/{tid}/release", headers=other)
@@ -148,7 +179,7 @@ async def test_leaving_orphans_the_card_but_keeps_the_trail(tmp_path):
     app, client = await _client(tmp_path, "orphan-leave")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
 
         r = await client.post(f"/api/rooms/{rid}/leave", headers=mine)
@@ -166,7 +197,7 @@ async def test_orphaned_card_can_be_claimed_by_someone_else(tmp_path):
     app, client = await _client(tmp_path, "orphan-reclaim")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
         await client.post(f"/api/rooms/{rid}/leave", headers=mine)
 
@@ -226,7 +257,7 @@ async def test_orphaning_advances_board_seq(tmp_path):
     app, client = await _client(tmp_path, "orphan-seq")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
         before = (await client.get(f"/api/rooms/{rid}/board",
                                    headers=other)).json()["board_seq"]
@@ -254,7 +285,7 @@ async def test_claiming_exempts_an_agent_from_the_idle_sweeper(tmp_path):
     async with app.router.lifespan_context(app), client:
         rid = (await client.post("/api/rooms", json={
             "name": "板子房", "session_key": "human-1"})).json()["id"]
-        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        human, _ = await _join_and_add_to_board(client, rid, "human-1", "Bernie", role="human")
         agent, _ = await _join(client, rid, "agent-1", "Novia")
         apid = agent["X-Participant-Id"]
         tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
@@ -289,7 +320,7 @@ async def test_leaving_orphans_the_card_and_announces_it(tmp_path):
     async with app.router.lifespan_context(app), client:
         rid = (await client.post("/api/rooms", json={
             "name": "板子房", "session_key": "human-1"})).json()["id"]
-        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        human, _ = await _join_and_add_to_board(client, rid, "human-1", "Bernie", role="human")
         agent, _ = await _join(client, rid, "agent-1", "Novia")
         oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
                                  json={"title": "週期一"},
@@ -325,7 +356,7 @@ async def test_orphan_reason_distinguishes_the_four_paths(tmp_path):
     app, client = await _client(tmp_path, "orphan-reason")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
         await client.post(f"/api/rooms/{rid}/leave", headers=mine)
         task = await _task(client, rid, other, tid)
@@ -361,7 +392,7 @@ async def test_a_settled_task_is_never_orphaned(tmp_path):
     app, client = await _client(tmp_path, "settled")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
         await client.post(f"/api/board/tasks/{tid}/status",
                           json={"status": "in_progress"}, headers=mine)
@@ -381,7 +412,7 @@ async def test_cancelled_tasks_are_not_orphaned_either(tmp_path):
     app, client = await _client(tmp_path, "settled-cancel")
     async with app.router.lifespan_context(app), client:
         rid, mine, tid = await _room_with_task(client)
-        other, _ = await _join(client, rid, "agent-2", "Miller")
+        other, _ = await _join_and_add_to_board(client, rid, "agent-2", "Miller")
         await client.post(f"/api/board/tasks/{tid}/claim", headers=mine)
         await client.post(f"/api/board/tasks/{tid}/status",
                           json={"status": "cancelled"}, headers=mine)
@@ -569,7 +600,7 @@ async def test_exemption_survives_a_session_key_with_whitespace(tmp_path):
     async with app.router.lifespan_context(app), client:
         rid = (await client.post("/api/rooms", json={
             "name": "板子房", "session_key": "human-1"})).json()["id"]
-        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        human, _ = await _join_and_add_to_board(client, rid, "human-1", "Bernie", role="human")
         agent, _ = await _join(client, rid, "  claude-spaced  ", "Novia")
         apid = agent["X-Participant-Id"]
         tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
