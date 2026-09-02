@@ -606,6 +606,18 @@ POST_MIGRATION_INDEXES: list[str] = [
     # 孤兒判定 v2 改看 actor 在**所有掛接房**的 presence，撈的是 actor_key
     "CREATE INDEX IF NOT EXISTS idx_btask_claim_actor"
     " ON board_task(claim_actor_key) WHERE claim_state = 'held'",
+    # 「未分類」的去重換軸：**一塊板一組**，不是一間房一組。
+    #
+    # 舊的 idx_bobjective_uncategorised 以 room_id 為軸，而 H9 之後板可以
+    # 沒有房 ⇒ 所有無房的板共用 `room_id=''` ⇒ 第二塊板會查到第一塊的未分類。
+    # 兩條並存：舊的還在保護未換軸的卡（它們的 room_id 一定有值），
+    # 新的用 `board_id != ''` 排除掉那些，兩者不會互相擋到。
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncat_board"
+    " ON board_objective(board_id)"
+    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncat_board"
+    " ON board_checklist(board_id)"
+    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
 ]
 
 

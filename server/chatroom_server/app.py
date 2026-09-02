@@ -3398,14 +3398,79 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         return row["created_by"] == me["id"] or me["role"] == "human"
 
+    async def _board_item_writer(row, participant_id: str | None):
+        """**改**一張既有卡的共同門檻。與 `_board_writer`（建卡用）分開。
+
+        🔴 **這裡不 ensure board。** 合在一起的時候，改一張已經解除掛接的卡
+        會走到 `_ensure_board_for_room(row["room_id"])`——那間房現在沒有板，
+        於是**靜默建一塊新的**：改的是原板的卡、推進的是新板的 seq，原板
+        水位不動，通知與 delta 契約當場分裂（審核用Codex 2026-09-02 實測）。
+
+        分界是：**建卡需要「房要有板」，改卡不需要——卡自己已經有
+        `board_id` 了。**
+
+        封存的板一律唯讀，room 路徑也不例外：漏了這道閘，v1 那條路就成了
+        繞過封存的後門。
+        """
+        board_id = (row["board_id"] or "").strip()
+        if board_id:
+            board = await _board_or_404(board_id)
+            if board["status"] != "active":
+                raise _err(409, "board_archived",
+                           "這塊板已經封存，唯讀", board_id=board_id,
+                           board_name=board["name"])
+        await _room_or_404(row["room_id"])
+        me = dict(await _participant(participant_id, row["room_id"]))
+        me["board_id"] = board_id
+        return me
+
+    def _row_board_id(row) -> str:
+        """這一列的 `board_id`，**沒有這個欄位就回空字串**。
+
+        底下兩個 helper 也被非 board 的路徑用到（問題收據那些 row 根本沒有
+        這一欄）。直接取值會 `IndexError`，而那條路徑與板無關——對它們來說
+        「沒有 board_id」就是正確答案，行為要與換軸前一模一樣。
+        """
+        keys = row.keys() if hasattr(row, "keys") else ()
+        if "board_id" not in keys:
+            return ""
+        return (row["board_id"] or "").strip()
+
+    async def _item_seq(row) -> int:
+        """改一張既有卡時領號——**跟著板走，不是跟著房走**。
+
+        走房軸的話，卡所在的房若已經解除掛接，`_next_board_seq` 找不到板、
+        改推 `room.board_seq`：**卡改了而板的水位沒動**，增量 client
+        （`board_seq > 我記得的值`）永遠撈不到這次變更，而 API 回 200。
+
+        還沒換軸的舊卡 `board_id` 是空的，那時仍走房軸。
+        """
+        bid = _row_board_id(row)
+        if bid:
+            return await _next_seq_for_board(bid)
+        return await _next_board_seq(row["room_id"])
+
+    async def _item_notify(row) -> None:
+        """卡動了要叫醒**每一間掛著這塊板的房**，不是只有卡所在的那一間。
+
+        一塊板掛 A、B 兩房，從 A 改一張卡而只通知 A 的話，B 的 long-poll
+        會一直等到有人在 B 說話才順帶收到——那不是即時，而中間沒有任何
+        地方報錯（審核用Codex 2026-09-02）。
+        """
+        bid = _row_board_id(row)
+        if bid:
+            await _notify_board_rooms(bid)
+        else:
+            await events.notify(row["room_id"])
+
     async def _board_patch(kind: str, item_id: str, fields: dict,
                            participant_id: str | None) -> dict:
         """PATCH 的共同實作：只寫有給的欄位，然後領一個號。"""
         row = await _board_item_or_404(kind, item_id)
-        await _board_writer(row["room_id"], participant_id)
+        await _board_item_writer(row, participant_id)
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         params: list = [seq]
         sql = f"UPDATE {table} SET board_seq=?"
         if sets:
@@ -3416,7 +3481,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         await db.execute(sql, params)
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
 
     async def _board_soft_delete(kind: str, item_id: str,
@@ -3429,12 +3494,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         board 上會留著一批已經不存在的卡，而且愈久愈多。
         """
         row = await _board_item_or_404(kind, item_id)
-        me = await _board_writer(row["room_id"], participant_id)
+        me = await _board_item_writer(row, participant_id)
         if not _board_can_remove(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以刪除這張卡")
         db = app.state.db
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         table = BOARD_TABLES[kind]
         await db.execute(
             f"UPDATE {table} SET deleted=1, board_seq=? WHERE id=?", (seq, item_id)
@@ -3455,7 +3520,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (seq, item_id),
             )
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
 
     @app.post("/api/rooms/{room_id}/board/objectives",
@@ -3572,16 +3637,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         db = app.state.db
 
+        # 「未分類」是**板的**，不是房的（2026-09-02 修）。
+        #
+        # 原本以 room_id 查，而 H9 之後板可以沒有房 ⇒ 所有無房的板共用
+        # `room_id=''` ⇒ **第二塊板會查到第一塊板的未分類，卡掛到別塊板
+        # 底下**。那不是 500，是跨板汙染：沒有任何一列是錯的，錯的是它們
+        # 之間的關係（@開發Novia (UI) 2026-09-02 抓到）。
+        #
+        # 還沒換軸的舊卡 `board_id` 是空的，那時仍以 room_id 查——它們的
+        # room_id 一定有值（v1 的卡都屬於某個房）。
+        board_key = (me.get("board_id") or "").strip()
+
         async def _lookup():
+            where, arg = (("c.board_id=?", board_key) if board_key
+                          else ("c.room_id=?", room_id))
             return await (
                 await db.execute(
                     "SELECT c.id, c.status AS c_status, o.id AS o_id,"
                     "       o.status AS o_status"
                     " FROM board_checklist c JOIN board_objective o"
                     "   ON o.id = c.objective_id"
-                    " WHERE c.room_id=? AND c.deleted=0 AND o.deleted=0"
+                    f" WHERE {where} AND c.deleted=0 AND o.deleted=0"
                     "   AND c.title=? AND o.title=? LIMIT 1",
-                    (room_id, UNCATEGORISED, UNCATEGORISED),
+                    (arg, UNCATEGORISED, UNCATEGORISED),
                 )
             ).fetchone()
 
@@ -3817,7 +3895,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if body.assignee_participant_id is not None:
             # 「某某指定」要寫得出來，就得在指定的當下記——事後從 id 反推不出
             row = await _board_item_or_404("task", task_id)
-            me = await _board_writer(row["room_id"], x_participant_id)
+            me = await _board_item_writer(row, x_participant_id)
             await _assert_assignee_in_room(body.assignee_participant_id,
                                            row["room_id"])
             fields["assigned_by"] = me["id"]
@@ -3915,7 +3993,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _board_status_change(kind: str, item_id: str, target: str,
                                    participant_id: str | None) -> dict:
         row = await _board_item_or_404(kind, item_id)
-        me = await _board_writer(row["room_id"], participant_id)
+        me = await _board_item_writer(row, participant_id)
         return row, me
 
     @app.post("/api/board/tasks/{task_id}/status",
@@ -3958,7 +4036,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"這張卡由 {row['claim_name'] or '別人'} 持有，"
                        "只有持有者本人或人類成員可以推動它")
         db = app.state.db
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         done = body.status == "done"
         # **CAS：把守門帶進 WHERE。** 上面那張轉移表是拿 `row` 這份快照判的，
         # 而讀到寫之間有 await——兩路同時把 in_progress 推向 done 與 cancelled
@@ -4002,7 +4080,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     kind="system", system_event="board_task_done",
                     mentions=audience, reply_mentions_author=False,
                 )
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "id": task_id, "status": body.status,
                 "board_seq": seq}
 
@@ -4052,7 +4130,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 and row["created_by"] != me["id"]:
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這份清單")
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         done = body.status == "done"
         # CAS，理由同 Task。這裡尤其要緊：上面那道「底下所有 task 都收尾了」
         # 的閘是對快照判的，而 task 狀態隨時在動——不帶前值條件的話，
@@ -4075,13 +4153,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                        allowed=sorted({"open", "done", "cancelled"}
                                       - {current["status"]}))
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "id": checklist_id, "status": body.status,
                 "board_seq": seq}
 
     async def _objective_write(objective_id: str, participant_id: str | None):
         row = await _board_item_or_404("objective", objective_id)
-        me = await _board_writer(row["room_id"], participant_id)
+        me = await _board_item_writer(row, participant_id)
         return row, me
 
     async def _objective_set(row, fields: dict,
@@ -4099,7 +4177,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         db = app.state.db
         expect = row["status"] if expect_status is None else expect_status
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         sets = ", ".join(f"{k}=?" for k in fields)
         cur = await db.execute(
             f"UPDATE board_objective SET {sets}, board_seq=?"
@@ -4124,7 +4202,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"「{current['status']}」了",
                        from_status=current["status"])
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return seq
 
     @app.post("/api/board/objectives/{objective_id}/review",
@@ -4557,7 +4635,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         `orphaned` 也算可認領：持有者已經不在房內，就不算「同時」。
         """
         row = await _board_item_or_404("task", task_id)
-        me = await _board_writer(row["room_id"], x_participant_id)
+        me = await _board_item_writer(row, x_participant_id)
         db = app.state.db
         # 認回自己上一世領的卡要能被看見——RETURNING 給的是更新**後**的值，
         # 所以先把舊的持有者記下來
@@ -4566,7 +4644,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 就把「你上一世領的卡」判成別人的
         was_mine = (row["claim_state"] == "orphaned"
                     and actor_key(row["claim_session_key"]) == mine)
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         cur = await db.execute(
             "UPDATE board_task SET claim_participant_id=?, claim_session_key=?,"
             " claim_actor_key=?,"
@@ -4592,7 +4670,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             item_kind="task", item_id=task_id,
             payload={"title": row["title"], "reclaimed": was_mine})
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         # reclaimed=true ＝「這是你上一世領的」，agent 才有理由先去讀描述
         return {"ok": True, "id": task_id, "board_seq": seq, "reclaimed": was_mine}
 
@@ -4608,7 +4686,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         與「持有者不在了」是兩件事——後者要保留線索給接手的人，前者不必。
         """
         row = await _board_item_or_404("task", task_id)
-        me = await _board_writer(row["room_id"], x_participant_id)
+        me = await _board_item_writer(row, x_participant_id)
         if row["claim_state"] != "held":
             raise _err(409, "not_claimed", "這張卡目前沒有人持有")
         if row["claim_participant_id"] != me["id"] and me["role"] != "human":
@@ -4616,7 +4694,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"這張卡由 {row['claim_name'] or '別人'} 持有——"
                        "只有持有者本人或人類成員可以解除認領")
         db = app.state.db
-        seq = await _next_board_seq(row["room_id"])
+        seq = await _item_seq(row)
         await db.execute(
             "UPDATE board_task SET claim_participant_id=NULL, claim_session_key='',"
             " claim_actor_key='',"
@@ -4632,7 +4710,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             payload={"title": row["title"], "forced": forced,
                      "previous_holder": row["claim_name"]})
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "id": task_id, "board_seq": seq,
                 "forced": forced}
 
@@ -6644,7 +6722,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (_now(), question_id),
         )
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         logger.info(
             "撤回提問 %s（%s）", question_id, row["room_id"],
             extra={"event": "question_cancelled", "question_id": question_id,
@@ -6761,7 +6839,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if await cur.fetchone() is None:
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
         await db.commit()
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         receipt = await _post_answer_receipt(
             row, me, status, body.answer.strip(), attachments
         )

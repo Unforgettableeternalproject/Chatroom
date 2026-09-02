@@ -860,3 +860,78 @@ async def test_one_change_makes_one_event_however_many_rooms(tmp_path):
             counts = {r["event_type"]: r["n"] for r in rows}
             assert counts.get("task_claimed") == 1
             assert counts.get("task_done") == 1
+
+
+async def test_editing_a_detached_card_does_not_conjure_a_new_board(tmp_path):
+    """改一張**已解除掛接**的卡，不能在舊房靜默長出一塊新板。
+
+    `_ensure_board_for_room` 原本掛在所有寫入的共同門檻上，於是改卡時會走到
+    「這個房沒有板 → 建一塊」——改的是原板的卡、推進的是新板的 seq，原板
+    水位不動，通知與 delta 契約當場分裂（審核用Codex 2026-09-02 實測）。
+
+    分界是：**建卡需要「房要有板」，改卡不需要——卡自己已經有 board_id。**
+    """
+    app, client = await _client(tmp_path, "v2_detached_edit")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            tid = await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=hdr)
+
+            db = app.state.db
+            before = (await (await db.execute(
+                "SELECT COUNT(*) AS n FROM board")).fetchone())["n"]
+            seq_before = (await (await db.execute(
+                "SELECT board_seq FROM board WHERE id=?", (bid,))).fetchone()
+            )["board_seq"]
+
+            r = await client.patch(f"/api/board/tasks/{tid}",
+                                   json={"title": "改個標題"}, headers=hdr)
+            assert r.status_code == 200, r.text
+
+            after = (await (await db.execute(
+                "SELECT COUNT(*) AS n FROM board")).fetchone())["n"]
+            assert after == before, "改卡的時候長出了一塊新板"
+            row = await (await db.execute(
+                "SELECT board_id, title, board_seq FROM board_task WHERE id=?",
+                (tid,))).fetchone()
+            assert row["board_id"] == bid, "卡被搬到別塊板上了"
+            assert row["title"] == "改個標題"
+            seq_after = (await (await db.execute(
+                "SELECT board_seq FROM board WHERE id=?", (bid,))).fetchone()
+            )["board_seq"]
+            assert seq_after > seq_before, "推進的是別塊板的水位"
+            assert row["board_seq"] == seq_after
+
+
+async def test_an_archived_board_is_read_only_from_the_room_path_too(tmp_path):
+    """封存的板一律唯讀，**v1 的 room 路徑也不例外**。
+
+    漏了這道閘，那條路就成了繞過封存的後門——而封存在畫面上看起來是生效的。
+    """
+    app, client = await _client(tmp_path, "v2_archived_room_path")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            tid = await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+            r = await client.post(f"/api/boards/{bid}/archive", headers=hdr)
+            assert r.status_code == 200, r.text
+
+            for method, path, payload in [
+                ("patch", f"/api/board/tasks/{tid}", {"title": "還想改"}),
+                ("post", f"/api/board/tasks/{tid}/status",
+                 {"status": "in_progress"}),
+                ("post", f"/api/board/tasks/{tid}/claim", None),
+                ("delete", f"/api/board/tasks/{tid}", None),
+            ]:
+                call = getattr(client, method)
+                r = (await call(path, json=payload, headers=hdr)
+                     if payload is not None else await call(path, headers=hdr))
+                assert r.status_code == 409, f"{method} {path} 繞過了封存"
+                assert r.json()["detail"]["code"] == "board_archived"
+                # 被擋下的回應裡要講得出是哪塊板——那是唯一還拿得到的線索
+                assert r.json()["detail"]["board_id"] == bid
