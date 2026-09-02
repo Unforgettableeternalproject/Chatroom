@@ -96,10 +96,18 @@ class BridgeState:
             pid = entry.get("participant_id")
             name = entry.get("display_name")
             seq = entry.get("last_seq", 0)
+            # ⚠️ 這是白名單重建：**沒列在這裡的欄位會被靜靜丟掉**。
+            # board_seq 就這樣掉了半天——它在寫入端加了，載入端沒跟上，
+            # 於是「寫得進檔案、讀不回來」，bridge 每次重啟板水位歸零。
+            # 歸零之後「重啟過」與「從來沒讀過這塊板」變成同一件事，
+            # 而那兩者本來是刻意分開的。加欄位時兩端都要改
+            bseq = entry.get("board_seq", 0)
             clean[room_id] = {
                 "participant_id": pid if isinstance(pid, str) else None,
                 "display_name": name if isinstance(name, str) else None,
                 "last_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else 0,
+                "board_seq": (bseq if isinstance(bseq, int)
+                              and not isinstance(bseq, bool) else 0),
                 "session_key": (
                     entry.get("session_key")
                     if isinstance(entry.get("session_key"), str)
