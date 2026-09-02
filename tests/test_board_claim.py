@@ -238,15 +238,54 @@ async def test_orphaning_advances_board_seq(tmp_path):
         assert delta["tasks"][0]["claim_state"] == "orphaned"
 
 
-async def test_idle_sweeper_orphans_and_announces_it_as_a_board_event(tmp_path):
-    """閒置逾時是孤兒的主要來源——agent session 結束沒有人會去釋放它的卡。
+async def test_claiming_exempts_an_agent_from_the_idle_sweeper(tmp_path):
+    """接案中的 agent **不會**被閒置掃走（艾斯維爾 2026-09-02 拍板）。
 
-    孤兒發**獨立的 BOARD 系統訊息**（艾斯維爾 09-01 裁定，照設計稿），
+    這條原本測的是相反的事：閒置逾時把卡標成孤兒。那個行為是對的，直到
+    使用者指出它的代價——做任務做到一半被踢出去，卡變孤兒、房內身分失效，
+    而 agent 自己完全不知道發生了什麼。
+
+    豁免是**完全的**，沒有時限：掛著卡就 crash 的殘影由人類強制 release
+    收拾（那條路徑本來就有）。用「延長門檻」會讓長任務在某個說不出理由的
+    時點被打斷，而那個時點永遠比任務短。
+    """
+    app, client = await _client(tmp_path, "claim-exempt",
+                                idle_timeout=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid = (await client.post("/api/rooms", json={
+            "name": "板子房", "session_key": "human-1"})).json()["id"]
+        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        agent, _ = await _join(client, rid, "agent-1", "Novia")
+        apid = agent["X-Participant-Id"]
+        tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
+                                 json={"title": "長工作"},
+                                 headers=human)).json()["id"]
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=agent)
+
+        await app.state.sweep_once()
+
+        row = await (await app.state.db.execute(
+            "SELECT status FROM participant WHERE id=?", (apid,))).fetchone()
+        assert row["status"] == "active", "接案中的人被掃出去了"
+        task = await _task(client, rid, human, tid)
+        assert task["claim_state"] == "held"
+
+        # 放掉之後就不再豁免——豁免跟著卡走，不是跟著人走
+        await client.post(f"/api/board/tasks/{tid}/release", headers=agent)
+        await app.state.sweep_once()
+        row = await (await app.state.db.execute(
+            "SELECT status FROM participant WHERE id=?", (apid,))).fetchone()
+        assert row["status"] == "removed", "卡都放掉了還在豁免"
+
+
+async def test_leaving_orphans_the_card_and_announces_it(tmp_path):
+    """孤兒發**獨立的 BOARD 系統訊息**（艾斯維爾 09-01 裁定，照設計稿），
     主詞是卡不是人：讀的人在意的是哪張卡沒人做了。而且**不 mention 任何人**
     ——孤兒不是誰的待辦，是板上的事實。
+
+    觸發改用主動離開：閒置那條路徑自 09-02 起對接案者不再成立。
     """
-    app, client = await _client(tmp_path, "orphan-sweep",
-                                idle_timeout=0.0, sweep_interval=3600)
+    app, client = await _client(tmp_path, "orphan-leave")
     async with app.router.lifespan_context(app), client:
         rid = (await client.post("/api/rooms", json={
             "name": "板子房", "session_key": "human-1"})).json()["id"]
@@ -263,19 +302,17 @@ async def test_idle_sweeper_orphans_and_announces_it_as_a_board_event(tmp_path):
                                  headers=human)).json()["id"]
         await client.post(f"/api/board/tasks/{tid}/claim", headers=agent)
 
-        await app.state.sweep_once()
+        await client.post(f"/api/rooms/{rid}/leave", headers=agent)
 
         task = await _task(client, rid, human, tid)
         assert task["claim_state"] == "orphaned"
         assert task["claim_name"] == "Novia", "接手的人要看得出上一個是誰"
-        assert task["orphaned_reason"] == "因閒置移出"
 
         msgs = (await client.get(f"/api/rooms/{rid}/messages",
                                  headers=human)).json()["messages"]
         board = [m for m in msgs if m["system_event"] == "board_orphaned"]
         assert len(board) == 1
         assert "「接端點」" in board[0]["content"]
-        assert "因閒置移出" in board[0]["content"]
         assert board[0]["mentions"] == [], "孤兒不是誰的待辦，不該喚醒任何人"
 
 

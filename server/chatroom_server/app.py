@@ -4620,7 +4620,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_member_or_403(board_id, actor)
+        my_role = await _board_member_or_403(board_id, actor)
         db = app.state.db
         tombstones = after_board_seq > 0
 
@@ -4661,6 +4661,14 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         return {
             "board_id": board_id,
+            # 板本身的中繼資料。從 Board Library 直接進來的 client 手上
+            # 什麼都沒有——沒有這幾欄，那個頁面連標題都畫不出來，而
+            # 「先打 /api/boards 撈全部再從裡面找這一塊」是拿一整份清單
+            # 換一個名字
+            "name": board["name"],
+            "description": board["description"],
+            "status": board["status"],
+            "my_role": my_role,
             "board_seq": board["board_seq"],
             "full": after_board_seq == 0,
             "objectives": await _rows("board_objective"),
@@ -4912,6 +4920,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # events.RoomEvents 是 per-room 的單一 Condition，同一個房掛
                 # 兩條會互相搶醒
                 "board_seq": await _board_seq(room_id),
+                # 這間房掛的是哪塊板（沒掛回 null）。client 的 board 水位要
+                # **跟著板記，不是跟著房記**：一塊板掛 N 間房時，per-room 的
+                # 水位會讓同一次變更在 N 個房各算出一次「board 動了」，於是
+                # 同一個 agent 被叫醒 N 次——Hub 這邊就算只出一筆 canonical
+                # event 也擋不住（@開發Novia (除錯) 2026-09-02 實測）。
+                # 少了這個欄位，client 連「這兩個房是同一塊板」都不知道
+                "board_id": (b["id"] if (b := await _board_for_room(room_id))
+                             else None),
             }
 
         deadline = asyncio.get_event_loop().time() + min(timeout, cfg.max_poll_timeout)
@@ -6447,6 +6463,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 不用清欄位，條件不成立自然失效
         now_iso = now.isoformat()
         not_held = " AND (hold_until IS NULL OR hold_until < ?)"
+        # 接案中的 agent 不掃（艾斯維爾 2026-09-02 拍板：完全豁免，
+        # 殘影由人類強制 release 收拾）。做任務做到一半被踢出去，卡會變孤兒、
+        # 房內身分失效，而它自己完全不知道發生了什麼。
+        #
+        # **跨房**：在任何一塊板上持有卡就算數，不限這一間房——一塊板可以掛
+        # 多間房，而「我在 A 房接了案」不該讓我在 B 房被掃掉。
+        #
+        # 舊卡的 claim_actor_key 是空的（H2 之前建的、沒有回填），所以要退回
+        # 去比對 claim_session_key。**少了這條 fallback，存量的接案者不會被
+        # 豁免**，而那正是最需要保護的一批——它們已經做了一段時間了
+        not_claiming = (
+            " AND NOT EXISTS (SELECT 1 FROM board_task t"
+            " WHERE t.claim_state='held' AND t.deleted=0"
+            "   AND t.status NOT IN ('done','cancelled')"
+            "   AND (t.claim_actor_key = participant.session_key"
+            "        OR (t.claim_actor_key = ''"
+            "            AND t.claim_session_key = participant.session_key)))"
+        )
+        not_held = not_held + not_claiming
         stale_subs = await (
             await db.execute(
                 "SELECT id, room_id, display_name, parent_id FROM participant"
