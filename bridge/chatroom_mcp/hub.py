@@ -248,6 +248,25 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "要寫入請板的 owner 把你調成 editor。",
                 status=status, detail=detail,
             )
+        if code == "human_block_readonly":
+            # 想法板：agent 不能改人類寫的段落（艾斯維爾 2026-09-02）。
+            # 落進 fallback 會叫他重新 join——而他再新的身分也還是 agent。
+            # **一定要說出替代做法**：不然它會改去把意見寫成新的一段，
+            # 混進本文裡，而那正是這道守門要避免的事
+            return HubError(
+                _detail_text(detail)
+                or "這一段是人類寫的，你不能改寫它。"
+                "要提意見的話用 notes 在它旁邊掛一則註解。",
+                status=status, detail=detail,
+            )
+        if code == "not_your_block":
+            # 同上，只是作者是另一個 agent
+            return HubError(
+                _detail_text(detail)
+                or "這一段是別人寫的，只有作者本人或人類成員可以改寫。"
+                "要提意見的話用 notes 在它旁邊掛一則註解。",
+                status=status, detail=detail,
+            )
         if code == "human_only":
             # board 上「只有人類做得到」的動作（刪卡、確認 Objective）。
             # 落進 fallback 會被翻成「身分失效請重新 join」——而重新 join

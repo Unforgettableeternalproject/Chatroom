@@ -435,6 +435,55 @@ class BoardReorder(BaseModel):
     items: list[BoardReorderItem] = Field(min_length=1, max_length=200)
 
 
+# ---------- 想法板與追蹤（BOARD_DESIGN §15）----------
+# ⚠️ 這幾個名字在整個檔案裡必須唯一。同名的 BaseModel 後定義的會**靜靜覆蓋**
+# 先定義的，端點宣告 A、FastAPI 拿 B 驗證，於是回一句「這些欄位不被允許」
+# 而兩邊的程式碼看起來都對（2026-09-02 的 BoardSupervisorSet 撞名事故）。
+
+class ScratchpadCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    # 建立時可以順手寫第一段。想法板存在的理由就是「先倒進去再說」，
+    # 逼人先建一份空的再加一段，那一刻他就去別的地方記了
+    content: str = Field(default="", max_length=50_000)
+
+
+class ScratchpadBlockCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=50_000)
+    # 插在哪一段之後；空字串＝放到最後
+    after_block_id: str = Field(default="", max_length=64)
+
+
+class ScratchpadBlockWrite(BaseModel):
+    content: str = Field(max_length=50_000)
+    # 必填、沒有預設。給預設值等於讓「忘了帶」變成一次靜默的覆寫，
+    # 而那正是整個 rev 機制要擋的那件事
+    rev: int = Field(ge=1)
+
+
+class ScratchpadNoteAdd(BaseModel):
+    """註解。**任何板成員都可以對任何段落加**——那是 agent 唯一能對人類的
+    段落做的事，擋掉它等於把「只能註解」變成「什麼都不能做」。"""
+    content: str = Field(min_length=1, max_length=10_000)
+
+
+class ScratchpadReorder(BaseModel):
+    block_ids: list[str] = Field(min_length=1, max_length=500)
+    # 結構的樂觀鎖。**遞增卻從來不比對的 rev 不是樂觀鎖，是計數器**
+    # （審核用Codex-2 2026-09-02）：兩路重排交錯都會 200，後寫靜默覆蓋
+    rev: int = Field(ge=1)
+
+
+class BoardWatchToggle(BaseModel):
+    # ⚠️ **只收 task。** 端點原本宣告可以追 objective／checklist，但
+    # `_fire_watch_notices` 只接在 task 的狀態轉移上——那是漏送，而**宣告得
+    # 比做得到的多比不做更糟**：追蹤者以為自己在等，通知永遠不會來，看起來
+    # 就像那張卡還沒完成（審核用Codex-2 2026-09-02）。
+    # 要支援那兩層的話，得先把 review／verify／complete／reopen／cancel
+    # 五條路徑都接上，那是另一張卡。
+    item_kind: str = Field(pattern="^task$")
+    item_id: str = Field(min_length=1, max_length=64)
+
+
 # ---------- 應用工廠 ----------
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -4177,8 +4226,21 @@ def create_app(config: Config | None = None) -> FastAPI:
              _now() if done else None, seq, task_id, old),
         )
         if await cur.fetchone() is None:
-            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            # 領號已經寫進去了，不 commit 會讓下一個號重複。⚠️ 同時要補一筆
+            # event：號前進了卻沒有對應的 event，稽核串就有洞。這條**不是
+            # 這次引入的**，是 board_event 完整性補上之後才浮現的既有缺口
+            # （審核用Codex-2 2026-09-02）
             current = await _board_item_or_404("task", task_id)
+            if _row_board_id(row):
+                await _record_board_event(
+                    _row_board_id(row), seq, "task_status_conflict",
+                    actor=actor_key(me["session_key"]),
+                    actor_name=me["display_name"],
+                    origin_room_id=row["room_id"], item_kind="task",
+                    item_id=task_id,
+                    payload={"from": old, "to": body.status,
+                             "actual": current["status"]})
+            await db.commit()
             raise _err(409, "invalid_transition",
                        f"這張卡的狀態在你送出的同時被改成「{current['status']}」了",
                        from_status=current["status"], to_status=body.status,
@@ -4203,6 +4265,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                 actor_name=me["display_name"], origin_room_id=row["room_id"],
                 item_kind="task", item_id=task_id,
                 payload={"title": row["title"]})
+        # 追蹤者的收件匣。**只有這三種轉移發**——每一次狀態變動都發的話，
+        # 追蹤就跟訂閱整塊板沒有差別，而艾斯維爾要的正是「不需要通知所有人」。
+        # reopen 與完成一樣重要：**「你等的那張卡又打開了」漏掉的話，等的人
+        # 會以為可以動工了。**
+        watch_kind = ("task_done" if done else
+                      "task_cancelled" if body.status == "cancelled" else
+                      "task_reopened" if old in ("done", "cancelled") else "")
+        watched: list[str] = []
+        if watch_kind and _row_board_id(row):
+            watched = await _fire_watch_notices(
+                _row_board_id(row), "task", task_id, row["title"], watch_kind,
+                seq, actor=me["session_key"], actor_name=me["display_name"])
         await db.commit()
         if done:
             # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
@@ -4219,7 +4293,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
         await _item_notify(row)
         return {"ok": True, "id": task_id, "status": body.status,
-                "board_seq": seq}
+                "board_seq": seq, "notified_watchers": watched}
 
     @app.post("/api/board/checklists/{checklist_id}/status",
               dependencies=[Depends(require_auth)])
@@ -4940,13 +5014,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 「你讀的其實是這塊板」，它才有辦法改走 /api/boards/{bid}。
         # 沒掛板時回 null 而**不自動建一塊**——建房不自動建空板
         attached = await _board_for_room(room_id)
+        objectives = await _rows("board_objective")
+        checklists = await _rows("board_checklist")
+        tasks = await _rows("board_task")
+        if attached is not None:
+            # v1 client 也看得到追蹤數：舊 client 不會因為沒升級就少一塊
+            # 資訊，而「這張卡有誰在等」與版本無關
+            me_row = await (await db.execute(
+                "SELECT session_key FROM participant WHERE id=?",
+                (x_participant_id,))).fetchone() if x_participant_id else None
+            await _annotate_watches(
+                attached["id"], me_row["session_key"] if me_row else "",
+                objectives, checklists, tasks)
         return {
             "board_id": attached["id"] if attached else None,
             "board_seq": await _board_seq(room_id),
             "full": after_board_seq == 0,
-            "objectives": await _rows("board_objective"),
-            "checklists": await _rows("board_checklist"),
-            "tasks": await _rows("board_task"),
+            "objectives": objectives,
+            "checklists": checklists,
+            "tasks": tasks,
             "reclaimable_tasks": reclaimable,
             "supervisor": room["board_supervisor_session_key"] or None,
         }
@@ -5058,15 +5144,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             " created_at, updated_at) VALUES (?,?,?,?,?,?)",
             (bid, body.name.strip(), body.description, actor, now, now))
         member_name = ""
+        member_kind = ""
         if x_participant_id:
             p = await (await db.execute(
                 "SELECT display_name, kind FROM participant WHERE id=?",
                 (x_participant_id,))).fetchone()
             member_name = p["display_name"] if p else ""
+            # ⚠️ kind 一定要跟著進去。它不只是拿來顯示——想法板的守門用它
+            # 分辨「人類的段落」與「agent 的段落」（§15.1），空著的話建板的
+            # 人會被當成 agent，**在他自己開的板上改不動別人寫的東西**。
+            # `_ensure_board_for_room` 一直有帶，只有這條路漏了：兩條路建出
+            # 來的板不一樣，而那個差別要等到權限出問題才看得見
+            member_kind = p["kind"] if p else ""
         await db.execute(
             "INSERT INTO board_member (board_id, actor_key, role,"
             " display_name, actor_kind, added_at) VALUES (?,?,'owner',?,?,?)",
-            (bid, actor, member_name, "", now))
+            (bid, actor, member_name, member_kind, now))
         if room is not None:
             await db.execute(
                 "INSERT INTO board_room (id, board_id, room_id, room_name,"
@@ -5227,6 +5320,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "created_at": d["created_at"],
             })
 
+        objectives = await _rows("board_objective")
+        checklists = await _rows("board_checklist")
+        tasks = await _rows("board_task")
+        await _annotate_watches(board_id, actor, objectives, checklists, tasks)
+
         sup = None
         if board["supervisor_actor_key"]:
             sup = {"actor_key": board["supervisor_actor_key"],
@@ -5245,9 +5343,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             "my_role": my_role,
             "board_seq": board["board_seq"],
             "full": after_board_seq == 0,
-            "objectives": await _rows("board_objective"),
-            "checklists": await _rows("board_checklist"),
-            "tasks": await _rows("board_task"),
+            "objectives": objectives,
+            "checklists": checklists,
+            "tasks": tasks,
             "reclaimable_tasks": reclaimable,
             "directives": directives,
             "directives_has_more": directives_more,
@@ -5812,6 +5910,978 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "board_seq": board["board_seq"],
                 "after_board_seq": after_board_seq}
 
+    # ── 想法板（ScratchPad）§15.1 ──────────────────────────────────
+    # 「有時候我並沒有辦法馬上都把任務給組織好」（艾斯維爾 2026-09-02）。
+    # 卡要求你先決定標題、層級與歸屬——想法還沒成形時，那三樣正好都給不出來。
+    #
+    # 🚨 本文是**一串有 id 的段落**，不是一個 Markdown 字串。理由見 db.py：
+    # 整份一個欄位的話，「人類的段落」在資料上不存在，守門就實作不出來。
+
+    async def _scratchpad_or_404(board_id: str, pad_id: str):
+        row = await (await app.state.db.execute(
+            "SELECT * FROM board_scratchpad WHERE id=? AND board_id=?"
+            " AND deleted=0", (pad_id, board_id))).fetchone()
+        if row is None:
+            raise _err(404, "scratchpad_not_found", "找不到這份想法板")
+        return row
+
+    async def _scratchpad_block_or_404(pad_id: str, block_id: str):
+        row = await (await app.state.db.execute(
+            "SELECT * FROM board_scratchpad_block WHERE id=?"
+            " AND scratchpad_id=? AND deleted=0",
+            (block_id, pad_id))).fetchone()
+        if row is None:
+            raise _err(404, "scratchpad_block_not_found", "找不到這個段落")
+        return row
+
+    def _actor_is_human(me: dict) -> bool:
+        """**只有明確的 `human` 才算人類。**
+
+        🚨 這個判定的兩種誤判**不對稱**，所以往吵的那一邊倒：
+
+        - 把 agent 誤認為人類 ⇒ 它改得動人類的段落，而**沒有人會發現**
+        - 把人類誤認為 agent ⇒ 他改不動別人的段落，會馬上抱怨
+
+        空的 `actor_kind`（沒帶 kind 加入的成員）一律當 agent。
+        """
+        return (me.get("kind") or "").strip().lower() == "human"
+
+    def _block_guard(block, me: dict) -> None:
+        """agent 只能改**自己寫的**段落，其餘只能註解（艾斯維爾 2026-09-02）。
+
+        ⚠️ 這是**事前擋下**，不是事後記錄。兩者都要，但它們是兩件事：
+        留歷史讓你查得回來，守門讓它一開始就不會發生。
+
+        agent 也不能改**另一個 agent** 寫的段落——先做嚴的。放寬比收緊安全：
+        收緊會讓已經寫進去的東西突然改不動。
+        """
+        if _actor_is_human(me):
+            return
+        if (block["author_kind"] or "").strip().lower() == "human":
+            raise _err(403, "human_block_readonly",
+                       "這段是人類寫的，agent 不能改寫——"
+                       "要提意見的話用 notes 掛一則註解在它旁邊",
+                       block_id=block["id"], author_name=block["author_name"])
+        if actor_key(block["author_actor_key"]) != actor_key(
+                me.get("session_key") or ""):
+            raise _err(403, "not_your_block",
+                       "這段是別人寫的，只有作者本人或人類成員可以改寫——"
+                       "要提意見的話用 notes 掛一則註解在它旁邊",
+                       block_id=block["id"], author_name=block["author_name"])
+
+    async def _claim_block_order(pad_id: str) -> int:
+        """領一個段落順序號。
+
+        🚨 **一定要單一語句。** `SELECT MAX(order_index)+1` 再 INSERT 的話，
+        中間那個 await 會讓出——兩路同時加段落各自算到同一個號，於是雙 200
+        而順序重複（審核用Codex-2 2026-09-02）。與 board_seq 同一個模式，
+        而那個模式今天已經因為同樣的理由被證明過一次。
+        """
+        cur = await app.state.db.execute(
+            "UPDATE board_scratchpad SET next_order=next_order+1"
+            " WHERE id=? RETURNING next_order", (pad_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise _err(404, "scratchpad_not_found", "找不到這份想法板")
+        return row["next_order"] - 1
+
+    async def _renumber_blocks(pad_id: str, ordered: list[str],
+                               seq: int) -> None:
+        """把段落重新編號成 0..n-1。
+
+        ⚠️ **兩階段**：先把所有 order_index 移到負區間，再寫回正值。直接逐列
+        寫的話，交換兩段的中途會撞上 `idx_scratchpad_block_order`——而那條
+        唯一索引正是用來擋住順序重複的，不能為了方便把它拿掉。
+        """
+        db = app.state.db
+        await db.execute(
+            "UPDATE board_scratchpad_block SET order_index=-order_index-1"
+            " WHERE scratchpad_id=? AND deleted=0", (pad_id,))
+        for index, bkid in enumerate(ordered):
+            await db.execute(
+                "UPDATE board_scratchpad_block SET order_index=?, board_seq=?"
+                " WHERE id=? AND scratchpad_id=?", (index, seq, bkid, pad_id))
+        await db.execute(
+            "UPDATE board_scratchpad SET next_order=? WHERE id=?",
+            (len(ordered), pad_id))
+
+    async def _block_order_ids(pad_id: str) -> list[str]:
+        rows = await (await app.state.db.execute(
+            "SELECT id FROM board_scratchpad_block WHERE scratchpad_id=?"
+            " AND deleted=0 ORDER BY order_index, created_at",
+            (pad_id,))).fetchall()
+        return [r["id"] for r in rows]
+
+    async def _insert_block(pad_id: str, board_id: str, content: str,
+                            me: dict, order_index: int, seq: int) -> str:
+        bkid = uuid.uuid4().hex
+        now = _now()
+        await app.state.db.execute(
+            "INSERT INTO board_scratchpad_block (id, scratchpad_id, board_id,"
+            " content, order_index, author_actor_key, author_name,"
+            " author_kind, rev, deleted, board_seq, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?)",
+            (bkid, pad_id, board_id, content, order_index,
+             me["session_key"], me["display_name"],
+             "human" if _actor_is_human(me) else (me.get("kind") or "agent"),
+             seq, now, now))
+        return bkid
+
+    @app.get("/api/boards/{board_id}/scratchpads",
+             dependencies=[Depends(require_auth)])
+    async def list_scratchpads(
+        board_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """這塊板上的想法板清單。**不回內容**——清單只需要知道有哪些。
+
+        `unresolved_notes` 是還沒處理的註解數：那個數字是唯一能讓人知道
+        「有人對你的段落提了意見」的線索。不放進清單的話它就只能靠一份一份
+        打開去發現，而沒有人會那樣做。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, board=board)
+        rows = await (await app.state.db.execute(
+            "SELECT p.id, p.title, p.rev, p.board_seq, p.created_by_name,"
+            " p.updated_by_name, p.created_at, p.updated_at,"
+            " (SELECT COUNT(*) FROM board_scratchpad_block b"
+            "  WHERE b.scratchpad_id = p.id AND b.deleted = 0) AS block_count,"
+            " (SELECT COUNT(*) FROM board_scratchpad_note n"
+            "  WHERE n.scratchpad_id = p.id AND n.deleted = 0"
+            "    AND n.resolved_at IS NULL) AS unresolved_notes"
+            " FROM board_scratchpad p WHERE p.board_id=? AND p.deleted=0"
+            " ORDER BY p.updated_at DESC", (board_id,))).fetchall()
+        return {"board_id": board_id, "board_seq": board["board_seq"],
+                "scratchpads": [dict(r) for r in rows]}
+
+    @app.post("/api/boards/{board_id}/scratchpads",
+              dependencies=[Depends(require_auth)])
+    async def create_scratchpad(
+        board_id: str, body: ScratchpadCreate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        pid = uuid.uuid4().hex
+        now = _now()
+        await db.execute(
+            "INSERT INTO board_scratchpad (id, board_id, title, rev,"
+            " board_seq, created_by_actor_key, created_by_name,"
+            " updated_by_actor_key, updated_by_name, created_at, updated_at)"
+            " VALUES (?,?,?,1,?,?,?,?,?,?,?)",
+            (pid, board_id, body.title.strip(), seq,
+             me["session_key"], me["display_name"],
+             me["session_key"], me["display_name"], now, now))
+        first = None
+        if body.content.strip():
+            first = await _insert_block(
+                pid, board_id, body.content, me,
+                await _claim_block_order(pid), seq)
+        await _record_board_event(
+            board_id, seq, "scratchpad_created", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pid,
+            payload={"title": body.title.strip()})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": pid, "rev": 1, "board_seq": seq,
+                "board_id": board_id, "first_block_id": first}
+
+    @app.get("/api/boards/{board_id}/scratchpads/{pad_id}",
+             dependencies=[Depends(require_auth)])
+    async def read_scratchpad(
+        board_id: str, pad_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """讀一份想法板：段落 + 每段的註解。
+
+        ⚠️ 每段的 `rev` 跟內容一起回——寫回去時要帶它。分成兩支 API 拿的話，
+        中間那段時間就是一個看不見的競態窗口。
+
+        `can_edit` 是**伺服器算好的**守門結果。讓 client 自己推斷的話，兩邊
+        的規則會漂移，而漂移的那一半沒有人在看：畫面給了編輯框、送出時 403。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, board=board)
+        pad = await _scratchpad_or_404(board_id, pad_id)
+        db = app.state.db
+        member = await (await db.execute(
+            "SELECT display_name, actor_kind FROM board_member"
+            " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
+        me = {"session_key": actor,
+              "kind": member["actor_kind"] if member else "",
+              "display_name": member["display_name"] if member else ""}
+        blocks = await (await db.execute(
+            "SELECT * FROM board_scratchpad_block WHERE scratchpad_id=?"
+            " AND deleted=0 ORDER BY order_index, created_at",
+            (pad_id,))).fetchall()
+        notes = await (await db.execute(
+            "SELECT id, block_id, content, author_name, author_actor_key,"
+            " author_kind, resolved_at, created_at FROM board_scratchpad_note"
+            " WHERE scratchpad_id=? AND deleted=0 ORDER BY created_at",
+            (pad_id,))).fetchall()
+        by_block: dict[str, list] = {}
+        for n in notes:
+            by_block.setdefault(n["block_id"], []).append(dict(n))
+        out = []
+        for b in blocks:
+            try:
+                _block_guard(b, me)
+                can_edit = True
+            except HTTPException:
+                can_edit = False
+            out.append({
+                "id": b["id"], "content": b["content"],
+                "order_index": b["order_index"], "rev": b["rev"],
+                "author_actor_key": b["author_actor_key"],
+                "author_name": b["author_name"],
+                "author_kind": b["author_kind"],
+                "created_at": b["created_at"], "updated_at": b["updated_at"],
+                "can_edit": can_edit,
+                "notes": by_block.get(b["id"], []),
+            })
+        return {"board_id": board_id, "id": pad["id"], "title": pad["title"],
+                "rev": pad["rev"], "board_seq": board["board_seq"],
+                "created_by_name": pad["created_by_name"],
+                "updated_by_name": pad["updated_by_name"],
+                "created_at": pad["created_at"],
+                "updated_at": pad["updated_at"],
+                "i_am_human": _actor_is_human(me),
+                "blocks": out}
+
+    @app.post("/api/boards/{board_id}/scratchpads/{pad_id}/blocks",
+              dependencies=[Depends(require_auth)])
+    async def add_scratchpad_block(
+        board_id: str, pad_id: str, body: ScratchpadBlockCreate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """加一段。**這就是 agent 丟想法的方式**——它寫的是自己的段落，
+        碰不到任何人已經寫下的東西，所以不需要任何守門。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        await _scratchpad_or_404(board_id, pad_id)
+        db = app.state.db
+        if body.after_block_id:
+            # 先確認那一段真的在這份想法板上，再決定插在哪
+            await _scratchpad_block_or_404(pad_id, body.after_block_id)
+        seq = await _next_seq_for_board(board_id)
+        # **一律先領一個號插到最後**（原子的，不會與別人撞），要插隊再重新
+        # 編號一次。分兩步是為了讓「加一段」這條熱路徑不需要動到別人的列
+        order = await _claim_block_order(pad_id)
+        bkid = await _insert_block(pad_id, board_id, body.content, me, order,
+                                   seq)
+        if body.after_block_id:
+            ids = [i for i in await _block_order_ids(pad_id) if i != bkid]
+            at = ids.index(body.after_block_id) + 1
+            await _renumber_blocks(pad_id, ids[:at] + [bkid] + ids[at:], seq)
+        await db.execute(
+            "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
+            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        await _record_board_event(
+            board_id, seq, "scratchpad_block_added", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id, payload={"block_id": bkid})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": bkid, "scratchpad_id": pad_id, "rev": 1,
+                "order_index": order, "board_seq": seq}
+
+    @app.put("/api/boards/{board_id}/scratchpads/{pad_id}/blocks/{block_id}",
+             dependencies=[Depends(require_auth)])
+    async def write_scratchpad_block(
+        board_id: str, pad_id: str, block_id: str, body: ScratchpadBlockWrite,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改寫一段。**兩道關卡，各擋一種失去。**
+
+        1. `_block_guard`——agent 改不了人類（或別的 agent）寫的段落
+        2. `rev` CAS——同時寫的話後寫的會被擋下，而不是安靜地蓋掉
+
+        ⚠️ 通過這兩關之後**還是會失去東西**：合法的循序改寫會把前一份原文
+        換掉，rev 對得上、回 200、沒有任何一端報錯。所以改之前先把原文寫進
+        `board_scratchpad_revision`——**那是所有靜默失效裡最安靜的一種：
+        它連衝突都沒有**（@測試Novia 2026-09-02）。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        await _scratchpad_or_404(board_id, pad_id)
+        block = await _scratchpad_block_or_404(pad_id, block_id)
+        _block_guard(block, me)
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        # CAS：**一定要單一語句**。先比對 rev 再 UPDATE 的話，中間那個 await
+        # 讓出去，兩個人可以各自比對成功、各自寫入
+        cur = await db.execute(
+            "UPDATE board_scratchpad_block SET content=?, rev=rev+1,"
+            " board_seq=?, updated_at=? WHERE id=? AND rev=? AND deleted=0"
+            " RETURNING rev", (body.content, seq, _now(), block_id, body.rev))
+        won = await cur.fetchone()
+        if won is None:
+            fresh = await _scratchpad_block_or_404(pad_id, block_id)
+            # ⚠️ **號已經領走了。** 不留 event 的話 `/events` 就有一個洞，
+            # 而那正是這塊板剛剛才補完的不變式——失敗的請求也是發生過的事
+            # （審核用Codex-2 2026-09-02）
+            await _record_board_event(
+                board_id, seq, "scratchpad_block_conflict",
+                actor=me["session_key"], actor_name=me["display_name"],
+                origin_room_id=room_id, item_kind="scratchpad",
+                item_id=pad_id,
+                payload={"block_id": block_id, "your_rev": body.rev,
+                         "current_rev": fresh["rev"]})
+            await db.commit()
+            raise _err(409, "scratchpad_block_stale",
+                       "這一段在你讀取之後被改過了",
+                       block_id=block_id, rev=fresh["rev"],
+                       content=fresh["content"], your_rev=body.rev,
+                       updated_at=fresh["updated_at"])
+        await db.execute(
+            "INSERT INTO board_scratchpad_revision (id, block_id,"
+            " scratchpad_id, board_id, content, rev, author_actor_key,"
+            " author_name, replaced_by_actor_key, replaced_by_name, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, block_id, pad_id, board_id, block["content"],
+             block["rev"], block["author_actor_key"], block["author_name"],
+             me["session_key"], me["display_name"], _now()))
+        await db.execute(
+            "UPDATE board_scratchpad SET board_seq=?, updated_at=?,"
+            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        await _record_board_event(
+            board_id, seq, "scratchpad_block_written", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id,
+            payload={"block_id": block_id, "rev": won["rev"]})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": block_id, "rev": won["rev"],
+                "board_seq": seq}
+
+    @app.delete("/api/boards/{board_id}/scratchpads/{pad_id}/blocks/{block_id}",
+                dependencies=[Depends(require_auth)])
+    async def delete_scratchpad_block(
+        board_id: str, pad_id: str, block_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """刪一段。守門與改寫**完全一樣**——刪掉別人的話比改掉更徹底。"""
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        await _scratchpad_or_404(board_id, pad_id)
+        block = await _scratchpad_block_or_404(pad_id, block_id)
+        _block_guard(block, me)
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "INSERT INTO board_scratchpad_revision (id, block_id,"
+            " scratchpad_id, board_id, content, rev, author_actor_key,"
+            " author_name, replaced_by_actor_key, replaced_by_name, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, block_id, pad_id, board_id, block["content"],
+             block["rev"], block["author_actor_key"], block["author_name"],
+             me["session_key"], me["display_name"], _now()))
+        await db.execute(
+            "UPDATE board_scratchpad_block SET deleted=1, board_seq=?,"
+            " updated_at=? WHERE id=?", (seq, _now(), block_id))
+        await db.execute(
+            "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
+            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        await _record_board_event(
+            board_id, seq, "scratchpad_block_deleted", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id,
+            payload={"block_id": block_id})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": block_id, "board_seq": seq}
+
+    @app.post(
+        "/api/boards/{board_id}/scratchpads/{pad_id}/blocks/{block_id}/notes",
+        dependencies=[Depends(require_auth)])
+    async def add_scratchpad_note(
+        board_id: str, pad_id: str, block_id: str, body: ScratchpadNoteAdd,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """在一段旁邊掛一則註解。
+
+        **這是 agent 對人類段落唯一能做的事**（艾斯維爾 2026-09-02），所以
+        它不看作者、不看 kind——擋掉它就等於把「只能註解」變成「什麼都不能
+        做」，而那時 agent 會改去把意見寫成新的一段，混在本文裡。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        await _scratchpad_or_404(board_id, pad_id)
+        await _scratchpad_block_or_404(pad_id, block_id)
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        nid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_scratchpad_note (id, block_id, scratchpad_id,"
+            " board_id, content, author_actor_key, author_name, author_kind,"
+            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (nid, block_id, pad_id, board_id, body.content,
+             me["session_key"], me["display_name"],
+             "human" if _actor_is_human(me) else (me.get("kind") or "agent"),
+             seq, _now()))
+        await _record_board_event(
+            board_id, seq, "scratchpad_note_added", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id,
+            payload={"block_id": block_id, "note_id": nid})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": nid, "block_id": block_id, "board_seq": seq}
+
+    @app.get(
+        "/api/boards/{board_id}/scratchpads/{pad_id}/blocks/{block_id}"
+        "/revisions", dependencies=[Depends(require_auth)])
+    async def read_block_revisions(
+        board_id: str, pad_id: str, block_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """這一段被改寫之前長什麼樣。
+
+        守門擋得住 agent 走 API，擋不住**人類自己把一段 agent 的話改掉**
+        ——那是合法的，而它同樣需要查得回來（@開發Novia (UI) 2026-09-02）。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, board=board)
+        # 🚨 驗了 board ACL 不等於驗完了：查詢只用 block_id 的話，**知道別
+        # 塊板 block id 的人讀得到那塊板的原文**。ACL 問的是「你能不能進這
+        # 塊板」，這裡問的是「這個 id 是不是這塊板的」——兩個都要問
+        # （審核用Codex-2 2026-09-02）
+        await _scratchpad_or_404(board_id, pad_id)
+        # ⚠️ **這裡不能用 `_scratchpad_block_or_404`**：它排除軟刪的列，而
+        # 被刪掉的段落正是最需要查歷史的時候——「那段話原本說什麼」在它還在
+        # 的時候誰都看得到，刪掉之後才是唯一的來源
+        gone = await (await app.state.db.execute(
+            "SELECT 1 FROM board_scratchpad_block WHERE id=?"
+            " AND scratchpad_id=?", (block_id, pad_id))).fetchone()
+        if gone is None:
+            raise _err(404, "scratchpad_block_not_found", "找不到這個段落")
+        rows = await (await app.state.db.execute(
+            "SELECT id, content, rev, author_name, author_actor_key,"
+            " replaced_by_name, replaced_by_actor_key, created_at"
+            " FROM board_scratchpad_revision WHERE block_id=?"
+            " AND scratchpad_id=? AND board_id=?"
+            " ORDER BY created_at",
+            (block_id, pad_id, board_id))).fetchall()
+        return {"board_id": board_id, "block_id": block_id,
+                "revisions": [dict(r) for r in rows]}
+
+    @app.post("/api/boards/{board_id}/scratchpads/{pad_id}/reorder",
+              dependencies=[Depends(require_auth)])
+    async def reorder_scratchpad_blocks(
+        board_id: str, pad_id: str, body: ScratchpadReorder,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """重排段落。**人類限定。**
+
+        排序不改任何一段的內容，但它改變別人段落的位置與上下文——一句話被
+        搬到另一段後面，意思可以完全不同。那與「改寫」是同一類的事。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        if not _actor_is_human(me):
+            raise _err(403, "human_only",
+                       "只有人類成員可以重排段落——排序會改變別人那段話的"
+                       "上下文，那與改寫是同一類的事")
+        pad = await _scratchpad_or_404(board_id, pad_id)
+        db = app.state.db
+        # **全部且唯一。** 子集合、重複、未知 id 都照收的話，會留下重複的
+        # order_index 與沒被重排到的殘舊段落——而請求回 200，沒有人會發現
+        want = [b for b in body.block_ids]
+        if len(set(want)) != len(want):
+            raise _err(400, "reorder_duplicate_block",
+                       "同一個段落在排序裡出現了兩次")
+        rows = await (await db.execute(
+            "SELECT id FROM board_scratchpad_block WHERE scratchpad_id=?"
+            " AND deleted=0", (pad_id,))).fetchall()
+        have = {r["id"] for r in rows}
+        if set(want) != have:
+            raise _err(409, "reorder_incomplete",
+                       "重排必須列出這份想法板現在的每一個段落，一個不多一個"
+                       "不少——少列的那些會留在原本的位置上，而排序就壞了",
+                       missing=sorted(have - set(want)),
+                       unknown=sorted(set(want) - have))
+        seq = await _next_seq_for_board(board_id)
+        # 結構的 CAS：**單一語句**，先比對再更新的話中間那個 await 會讓出
+        cur = await db.execute(
+            "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
+            " updated_by_actor_key=?, updated_by_name=?"
+            " WHERE id=? AND rev=? AND deleted=0 RETURNING rev",
+            (seq, _now(), me["session_key"], me["display_name"], pad_id,
+             body.rev))
+        won = await cur.fetchone()
+        if won is None:
+            fresh = await _scratchpad_or_404(board_id, pad_id)
+            await _record_board_event(
+                board_id, seq, "scratchpad_reorder_conflict",
+                actor=me["session_key"], actor_name=me["display_name"],
+                origin_room_id=room_id, item_kind="scratchpad",
+                item_id=pad_id,
+                payload={"your_rev": body.rev, "current_rev": fresh["rev"]})
+            await db.commit()
+            raise _err(409, "scratchpad_stale",
+                       "這份想法板的段落結構在你讀取之後被改過了",
+                       rev=fresh["rev"], your_rev=body.rev,
+                       updated_by_name=fresh["updated_by_name"])
+        await _renumber_blocks(pad_id, want, seq)
+        await _record_board_event(
+            board_id, seq, "scratchpad_reordered", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id,
+            payload={"block_ids": want, "rev": won["rev"]})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": pad_id, "rev": won["rev"],
+                "board_seq": seq}
+
+    @app.delete("/api/boards/{board_id}/scratchpads/{pad_id}",
+                dependencies=[Depends(require_auth)])
+    async def delete_scratchpad(
+        board_id: str, pad_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """軟刪除整份。刪掉的是別人丟進來的東西，硬刪不留回頭路。"""
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        pad = await _scratchpad_or_404(board_id, pad_id)
+        # 🚨 agent 刪不掉人類的段落，卻刪得掉**整份**——那是同一道守門的
+        # 後門：軟刪之後畫面上什麼都看不到，效果與刪掉每一段一樣
+        # （審核用Codex-2 2026-09-02）。所以整份刪除限人類或建立者本人
+        if not _actor_is_human(me) and actor_key(
+                pad["created_by_actor_key"]) != actor_key(me["session_key"]):
+            raise _err(403, "human_only",
+                       "整份想法板只有人類成員或建立者本人可以刪除——"
+                       "裡面有別人寫下的段落，刪掉整份等於把它們一起刪了",
+                       created_by_name=pad["created_by_name"])
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "UPDATE board_scratchpad SET deleted=1, board_seq=?, updated_at=?,"
+            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        await _record_board_event(
+            board_id, seq, "scratchpad_deleted", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="scratchpad", item_id=pad_id,
+            payload={"title": pad["title"]})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": pad_id, "board_seq": seq}
+
+    # ── 卡片追蹤 §15.2 ─────────────────────────────────────────────
+    # 「當追蹤的卡完成就會通知以追蹤的人，就不需要通知所有人」（艾斯維爾）。
+    # 驗收有兩半，缺一不可：**追蹤者收到**（漏送＝功能等於不存在）∧
+    # **非追蹤者收不到**（多送＝功能沒有意義）。去重做過頭就是漏送。
+
+    _WATCH_TABLES = {"objective": "board_objective",
+                     "checklist": "board_checklist",
+                     "task": "board_task"}
+
+    async def _board_scoped_item_or_404(board_id: str, kind: str,
+                                        item_id: str):
+        """確認這張卡真的屬於這塊板。
+
+        ⚠️ 名字**刻意不叫** `_board_item_or_404`——那個已經存在，簽名是
+        `(kind, item_id)`。同名的話後定義的會靜靜覆蓋先定義的，而既有呼叫
+        `_board_item_or_404("task", tid)` 會把 "task" 當成 board_id 傳進來：
+        兩邊的程式碼看起來都對，錯誤出現在第三個地方。
+
+        不驗的話可以追蹤**別塊板的卡**——而追蹤關係本身不會報錯，只是通知
+        永遠不來，看起來就像「這張卡還沒完成」。
+        """
+        table = _WATCH_TABLES.get(kind)
+        if table is None:
+            raise _err(400, "bad_item_kind", "只能追蹤 objective／checklist／task")
+        row = await (await app.state.db.execute(
+            f"SELECT * FROM {table} WHERE id=? AND deleted=0",
+            (item_id,))).fetchone()
+        if row is None:
+            raise _err(404, "item_not_found", "找不到這張卡")
+        own = _row_board_id(row)
+        if own and own != board_id:
+            raise _err(404, "item_not_on_board", "這張卡不在這塊板上",
+                       board_id=board_id, item_board_id=own)
+        if not own:
+            # 還沒換軸的舊卡：靠它所在的房是否掛著這塊板來判斷
+            hit = await (await app.state.db.execute(
+                "SELECT 1 FROM board_room WHERE board_id=? AND room_id=?"
+                " AND detached_at IS NULL", (board_id, row["room_id"]))
+            ).fetchone()
+            if hit is None:
+                raise _err(404, "item_not_on_board", "這張卡不在這塊板上")
+        return row
+
+    async def _fire_watch_notices(board_id: str, kind: str, item_id: str,
+                                  item_title: str, event_type: str,
+                                  board_seq: int, actor: str = "",
+                                  actor_name: str = "") -> list[str]:
+        """卡有動靜時，**只**寫給追蹤它的人。
+
+        🚨 這裡不寫 `board_event`——那張表的主鍵是 `(board_id, board_seq)`，
+        一個號只放得下一筆，而一張卡可能有五個追蹤者。硬塞會逼每個收件人各
+        領一個號 ⇒ 水位變成「通知數」而不是「變更數」，增量 client 讀到的
+        東西就整個變了。
+
+        ⚠️ **落地而不是只推播。** 追蹤者在卡完成的當下很可能不在任何掛接房
+        （而那正是他要追蹤而不是自己盯著的理由）。只靠當下叫醒的話，功能會
+        在最需要它的情境下失效：你追的卡完成了，但你當時不在，於是你永遠
+        不會知道。所以先寫進收件匣，再叫醒房間。
+
+        **做出這次變更的人自己不收**——他就是按下那個按鈕的人。
+        """
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT actor_key FROM board_watch WHERE board_id=? AND"
+            " item_kind=? AND item_id=?", (board_id, kind, item_id))).fetchall()
+        sent: list[str] = []
+        now = _now()
+        for r in rows:
+            who = (r["actor_key"] or "").strip()
+            if not who or who == actor_key(actor):
+                continue
+            await db.execute(
+                "INSERT INTO board_watch_notice (id, board_id, actor_key,"
+                " item_kind, item_id, item_title, event_type, board_seq,"
+                " actor_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, board_id, who, kind, item_id, item_title,
+                 event_type, board_seq, actor_name, now))
+            sent.append(who)
+        return sent
+
+    async def _annotate_watches(board_id: str, actor: str,
+                                *groups: list) -> None:
+        """把 `watcher_count` 與 `watching` 補到卡上（原地改）。
+
+        ⚠️ 這兩個數字**放在 delta 的卡上**，不另開一支 API。要另外打一支才
+        畫得出來的數字，就永遠不會出現在卡上（@開發Novia (UI) 2026-09-02）——
+        而認領者該知道自己卡住了誰。
+
+        一次查完整塊板，不是每張卡查一次：卡有幾百張時 N+1 會把讀板變慢，
+        而慢下來沒有人會想到是這裡。
+        """
+        rows = await (await app.state.db.execute(
+            "SELECT item_kind, item_id, actor_key FROM board_watch"
+            " WHERE board_id=?", (board_id,))).fetchall()
+        if not rows and not actor:
+            return
+        counts: dict[tuple[str, str], int] = {}
+        mine: set[tuple[str, str]] = set()
+        me = actor_key(actor)
+        for r in rows:
+            key = (r["item_kind"], r["item_id"])
+            counts[key] = counts.get(key, 0) + 1
+            if me and actor_key(r["actor_key"]) == me:
+                mine.add(key)
+        for kind, group in zip(("objective", "checklist", "task"), groups):
+            for card in group:
+                key = (kind, card.get("id"))
+                card["watcher_count"] = counts.get(key, 0)
+                card["watching"] = key in mine
+
+    async def _live_room_count(board_id: str) -> int:
+        """這塊板還有幾間**活著的**掛接房。
+
+        ⚠️ 判準是 `board_room` 未 detach **且** room 本身還是 active——
+        只看 board_room 的話，把最後一間房封存掉會留下一個「掛接數 1、但
+        沒有任何人能被叫醒」的狀態，而那個狀態從計數上看起來完全正常
+        （@測試Novia 2026-09-02 T13）。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_room br JOIN room r"
+            " ON r.id = br.room_id WHERE br.board_id=?"
+            " AND br.detached_at IS NULL AND r.status='active'",
+            (board_id,))).fetchone()
+        return row["n"]
+
+    async def _degrade_watches_to_inbox(board_id: str, seq: int,
+                                        reason: str) -> list[str]:
+        """板上沒有活著的房了：告訴**追蹤者**他們降級成只剩收件匣。
+
+        三件事各自有理由：
+
+        - **不清掉任何追蹤**——那是使用者的意圖，不是我們的
+        - **每個 actor 一筆，不是每張卡一筆**：同一個人追十張卡不該被洗
+          十次（審核用Codex-2 2026-09-02）
+        - **通知的是追蹤者，不是操作的人**：解除掛接的是 A，等在卡上的是
+          B 和 C，給 A 看一個警告等於沒說（@開發Novia (UI) 2026-09-02）
+        """
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT DISTINCT actor_key FROM board_watch WHERE board_id=?",
+            (board_id,))).fetchall()
+        board = await (await db.execute(
+            "SELECT name FROM board WHERE id=?", (board_id,))).fetchone()
+        now = _now()
+        told = []
+        for r in rows:
+            who = (r["actor_key"] or "").strip()
+            if not who:
+                continue
+            await db.execute(
+                "INSERT INTO board_watch_notice (id, board_id, actor_key,"
+                " item_kind, item_id, item_title, event_type, board_seq,"
+                " actor_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, board_id, who, "board", board_id,
+                 board["name"] if board else "", "delivery_degraded", seq,
+                 "", now))
+            told.append(who)
+        if told:
+            await _record_board_event(
+                board_id, seq, "delivery_degraded", item_kind="board",
+                item_id=board_id,
+                payload={"reason": reason, "watchers": len(told)})
+        return told
+
+    async def _touch_watched_item(board_id: str, kind: str, item_id: str,
+                                  seq: int) -> None:
+        """把卡自己的 `board_seq` 推上去。
+
+        只推板的水位是不夠的：delta 撈的是 `board_seq > cursor` 的**列**，
+        卡自己的號沒動的話，client 收到「板動了」卻撈不到任何東西——那比
+        不推還糟，它會讓人以為變更遺失了。
+        """
+        table = _WATCH_TABLES.get(kind)
+        if table is None:
+            return
+        await app.state.db.execute(
+            f"UPDATE {table} SET board_seq=? WHERE id=?", (seq, item_id))
+
+    @app.post("/api/boards/{board_id}/watches",
+              dependencies=[Depends(require_auth)])
+    async def watch_item(
+        board_id: str, body: BoardWatchToggle,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """追蹤一張卡：它完成／取消／重新打開／被刪除時通知我。
+
+        **任何板成員都可以追蹤任何一張卡**，不必是認領者——會被卡住的人
+        通常正是沒在做那張卡的那個。
+
+        ⚠️ 追蹤綁 `actor_key` 不綁 participant：離房、重啟、換 participant
+        都不影響。綁 participant 的話，agent 重啟一次追蹤就靜靜地斷了。
+        """
+        board = await _board_or_404(board_id)
+        if board["status"] != "active":
+            # 封存的板是唯讀的，而追蹤現在會推進水位、寫 event、改動卡的號
+            # ——那是寫入。漏掉這道檢查的話，封存就有一個側門
+            # （審核用Codex-2 2026-09-02）
+            raise _err(409, "board_archived",
+                       "這塊板已經封存，追蹤不會再有任何動靜",
+                       board_id=board_id, board_name=board["name"])
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        # viewer 也能追蹤：追蹤不改板上的內容，它只改「誰想知道」
+        await _board_member_or_403(board_id, actor, board=board)
+        row = await _board_scoped_item_or_404(
+            board_id, body.item_kind, body.item_id)
+        # 🚨 **新建追蹤時，零 active room 明確拒絕**（艾斯維爾裁決
+        # 2026-09-02）。這與「已經在追的人遇到降級」是兩件事，處置刻意不同：
+        #
+        #   新建   拒絕      ← 現在就知道沒有地方叫醒你，不要先答應再讓你等
+        #   降級   保留＋告知 ← 追蹤是使用者的意圖，不是我們可以代為清掉的
+        #
+        # 判準是**活著的**房，不是 board_room 的列數：把最後一間房封存掉會
+        # 留下「掛接數 1、卻沒有任何人叫得醒」的狀態
+        if await _live_room_count(board_id) == 0:
+            raise _err(409, "board_has_no_room",
+                       "這塊板沒有任何還開著的聊天室，追蹤不會有地方通知你。"
+                       "先把它掛到一間房上再追蹤。", board_id=board_id)
+        delivery = "room_and_inbox"
+        member = await (await app.state.db.execute(
+            "SELECT display_name FROM board_member WHERE board_id=?"
+            " AND actor_key=?", (board_id, actor))).fetchone()
+        await app.state.db.execute(
+            "INSERT INTO board_watch (board_id, item_kind, item_id, actor_key,"
+            " actor_name, created_at) VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT DO NOTHING",
+            (board_id, body.item_kind, body.item_id, actor,
+             member["display_name"] if member else "", _now()))
+        # ⚠️ **要推進 board_seq，而且要更新那張卡自己的號。**
+        # 我原本的理由是「板上的內容沒有變」——但 `watcher_count` 與
+        # `watching` 就放在卡的 payload 裡，那一刻它們就是卡的一部分。不推
+        # 的話那兩個欄位**永遠不會出現在任何一次 delta**，只能靠整份重讀補
+        # 值，而認領者就不會知道自己卡住了誰（審核用Codex-2 2026-09-02）
+        seq = await _next_seq_for_board(board_id)
+        await _touch_watched_item(board_id, body.item_kind, body.item_id, seq)
+        count = (await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_watch WHERE board_id=? AND"
+            " item_kind=? AND item_id=?",
+            (board_id, body.item_kind, body.item_id))).fetchone())["n"]
+        await _record_board_event(
+            board_id, seq, "watch_added", actor=actor,
+            actor_name=member["display_name"] if member else "",
+            item_kind=body.item_kind, item_id=body.item_id,
+            payload={"watcher_count": count, "title": row["title"]})
+        await app.state.db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "watching": True, "item_id": body.item_id,
+                "item_kind": body.item_kind, "watcher_count": count,
+                "board_seq": seq, "title": row["title"],
+                # room_and_inbox：卡有動靜時掛接房會被叫醒，收件匣也留一筆
+                # inbox_only：這塊板沒有掛任何房，不會被主動叫醒，要自己來看
+                "delivery": delivery}
+
+    @app.delete("/api/boards/{board_id}/watches",
+                dependencies=[Depends(require_auth)])
+    async def unwatch_item(
+        board_id: str, item_kind: str, item_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """取消追蹤。已經寫進收件匣的通知**不會**被撤回——那是已經發生的事。"""
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        await _board_member_or_403(board_id, actor, board=board)
+        cur = await app.state.db.execute(
+            "DELETE FROM board_watch WHERE board_id=? AND item_kind=?"
+            " AND item_id=? AND actor_key=?",
+            (board_id, item_kind, item_id, actor))
+        removed = cur.rowcount
+        count = (await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_watch WHERE board_id=? AND"
+            " item_kind=? AND item_id=?",
+            (board_id, item_kind, item_id))).fetchone())["n"]
+        seq = None
+        if removed:
+            # 沒有實際移除就不推號：重複呼叫取消追蹤不該讓整塊板動一次
+            seq = await _next_seq_for_board(board_id)
+            await _touch_watched_item(board_id, item_kind, item_id, seq)
+            await _record_board_event(
+                board_id, seq, "watch_removed", actor=actor,
+                item_kind=item_kind, item_id=item_id,
+                payload={"watcher_count": count})
+        await app.state.db.commit()
+        if removed:
+            await _notify_board_rooms(board_id)
+        return {"ok": True, "watching": False, "item_id": item_id,
+                "item_kind": item_kind, "watcher_count": count,
+                "board_seq": seq}
+
+    @app.get("/api/boards/{board_id}/watches",
+             dependencies=[Depends(require_auth)])
+    async def list_watches(
+        board_id: str,
+        all_actors: bool = False,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """我在這塊板上追蹤了哪些卡。
+
+        `all_actors=true` 回整塊板的追蹤關係——認領者該知道自己卡住了誰。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, board=board)
+        sql = ("SELECT item_kind, item_id, actor_key, actor_name, created_at"
+               " FROM board_watch WHERE board_id=?")
+        args: tuple = (board_id,)
+        if not all_actors:
+            sql += " AND actor_key=?"
+            args = (board_id, actor)
+        rows = await (await app.state.db.execute(
+            sql + " ORDER BY created_at", args)).fetchall()
+        return {"board_id": board_id, "board_seq": board["board_seq"],
+                "watches": [dict(r) for r in rows], "actor_key": actor}
+
+    @app.get("/api/board/notices", dependencies=[Depends(require_auth)])
+    async def read_watch_notices(
+        unread_only: bool = True,
+        board_id: str = "",
+        limit: int = Query(default=100, le=500),
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """我的追蹤收件匣。**跨板**——「我在等的東西完成了嗎」不分板。
+
+        這條就是除錯要的另一半：在線上時房會被叫醒，不在線上時**回來仍然
+        知道**。少了它，追蹤只在你已經在看的時候有用，而那時你不需要它。
+        """
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        if not actor:
+            raise _err(400, "missing_actor",
+                       "要帶 session_key 才知道這是誰的收件匣")
+        sql = ("SELECT n.id, n.board_id, n.item_kind, n.item_id, n.item_title,"
+               " n.event_type, n.board_seq, n.actor_name, n.created_at,"
+               " n.read_at, b.name AS board_name FROM board_watch_notice n"
+               " LEFT JOIN board b ON b.id = n.board_id WHERE n.actor_key=?")
+        args: list = [actor]
+        if unread_only:
+            sql += " AND n.read_at IS NULL"
+        if board_id:
+            sql += " AND n.board_id=?"
+            args.append(board_id)
+        sql += " ORDER BY n.created_at DESC LIMIT ?"
+        args.append(limit)
+        rows = await (await app.state.db.execute(sql, tuple(args))).fetchall()
+        unread = (await (await app.state.db.execute(
+            "SELECT COUNT(*) AS n FROM board_watch_notice WHERE actor_key=?"
+            " AND read_at IS NULL", (actor,))).fetchone())["n"]
+        return {"actor_key": actor, "unread_count": unread,
+                "notices": [dict(r) for r in rows]}
+
+    @app.post("/api/board/notices/read", dependencies=[Depends(require_auth)])
+    async def mark_watch_notices_read(
+        notice_ids: list[str] | None = None,
+        all_notices: bool = False,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """標記已讀。`all_notices=true` 清空整個收件匣。
+
+        **只動自己的**——`actor_key` 一律用呼叫者的，不從參數帶。從參數帶
+        的話，任何人都能把別人的未讀清掉，而對方看不出發生過什麼。
+        """
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        if not actor:
+            raise _err(400, "missing_actor", "要帶 session_key")
+        db = app.state.db
+        now = _now()
+        if all_notices:
+            cur = await db.execute(
+                "UPDATE board_watch_notice SET read_at=? WHERE actor_key=?"
+                " AND read_at IS NULL", (now, actor))
+        else:
+            ids = [i for i in (notice_ids or []) if i]
+            if not ids:
+                raise _err(400, "nothing_to_mark",
+                           "要給 notice_ids，或用 all_notices=true 清空")
+            marks = ",".join("?" * len(ids))
+            cur = await db.execute(
+                "UPDATE board_watch_notice SET read_at=? WHERE actor_key=?"
+                " AND read_at IS NULL AND id IN (" + marks + ")",
+                (now, actor, *ids))
+        await db.commit()
+        return {"ok": True, "marked": cur.rowcount}
+
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
               dependencies=[Depends(require_auth)])
     async def attach_board(
@@ -5912,9 +6982,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND detached_at IS NULL RETURNING id", (_now(), board_id, room_id))
         if await cur.fetchone() is None:
             raise _err(404, "board_not_attached", "這塊板沒有掛在這間房上")
+        # 解除最後一間活著的房 ⇒ 追蹤者從此不會被主動叫醒。**不清掉他們的
+        # 追蹤**（那是使用者的意圖），但要讓他們自己知道——通知的是追蹤者，
+        # 不是按下解除的那個人：那兩群多半不重疊（艾斯維爾裁決 2026-09-02）
+        degraded: list[str] = []
+        if await _live_room_count(board_id) == 0:
+            seq = await _next_seq_for_board(board_id)
+            degraded = await _degrade_watches_to_inbox(
+                board_id, seq, "board_detached")
         await db.commit()
         await events.notify(room_id)
-        return {"ok": True, "board_id": board_id, "room_id": room_id}
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "room_id": room_id,
+                "degraded_watchers": degraded}
 
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(

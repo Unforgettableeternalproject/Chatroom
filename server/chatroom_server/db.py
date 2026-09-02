@@ -438,6 +438,150 @@ CREATE TABLE IF NOT EXISTS board_event (
 CREATE INDEX IF NOT EXISTS idx_board_event_target
     ON board_event(target_actor_key, board_seq) WHERE target_actor_key != '';
 
+-- ── 想法板（ScratchPad）─────────────────────────────────────────────
+-- 「有時候我並沒有辦法馬上都把任務給組織好，我會先把想到的想法給放進去」
+-- （艾斯維爾 2026-09-02）。所以它刻意**不是**卡：卡要求你先決定標題、
+-- 層級與歸屬，而那正是想法還沒成形時給不出來的東西。
+--
+-- 🚨 **本文是一串有 id 的段落，不是一個 Markdown 字串。** 這不是實作偏好，
+-- 是艾斯維爾那條裁決逼出來的形狀：「agent 也不能改人類的段落，只能註解」。
+-- 整份一個 content 欄位的話，「人類的段落」在資料上根本不存在 ⇒ 守門實作
+-- 不出來，只能靠 agent 自律——**而自律不是守門，是期望**。
+-- 更糟的是自由文字的編輯（併段、拆段、上下調換）會讓段落與 id 的對應消失，
+-- 任何重新推斷都是猜的，猜錯的結果是某段的作者從人類變成 agent ⇒
+-- **保護自己被靜默地解除**（@開發Novia (UI) 2026-09-02）。
+CREATE TABLE IF NOT EXISTS board_scratchpad (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES board(id),
+    title       TEXT NOT NULL,
+    -- 整份**結構**的版本（段落的增刪與排序）。段落內容各自有自己的 rev，
+    -- 所以兩個人改不同段落不會互相衝突——那正是分段的另一個好處
+    rev         INTEGER NOT NULL DEFAULT 1,
+    -- 🚨 段落順序的號碼來源。**不能用 SELECT MAX(order_index)+1**：那中間
+    -- 有 await 讓出點，兩路同時加段落會各自算到同一個號，於是雙 200 而順序
+    -- 重複（審核用Codex-2 2026-09-02）。與 board_seq 完全同一個模式——
+    -- 單一 UPDATE…RETURNING 領號，永遠遞增、永遠不重複
+    next_order  INTEGER NOT NULL DEFAULT 0,
+    board_seq   INTEGER NOT NULL DEFAULT 0,
+    created_by_actor_key TEXT NOT NULL DEFAULT '',
+    created_by_name TEXT NOT NULL DEFAULT '',
+    updated_by_actor_key TEXT NOT NULL DEFAULT '',
+    updated_by_name TEXT NOT NULL DEFAULT '',
+    deleted     INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scratchpad_board
+    ON board_scratchpad(board_id, board_seq);
+
+CREATE TABLE IF NOT EXISTS board_scratchpad_block (
+    id           TEXT PRIMARY KEY,
+    scratchpad_id TEXT NOT NULL REFERENCES board_scratchpad(id),
+    board_id     TEXT NOT NULL,
+    content      TEXT NOT NULL DEFAULT '',
+    order_index  INTEGER NOT NULL DEFAULT 0,
+    author_actor_key TEXT NOT NULL DEFAULT '',
+    author_name  TEXT NOT NULL DEFAULT '',
+    -- 🚨 守門看的就是這一欄。**只有明確的 human 才算人類**，空值一律當
+    -- agent：兩種誤判裡只有一種是安靜的——把 agent 誤認為人類會解除保護而
+    -- 沒有人發現；把人類誤認為 agent 會讓他改不動別人的段落，他會馬上抱怨。
+    -- 所以往吵的那一邊倒。
+    author_kind  TEXT NOT NULL DEFAULT '',
+    -- 每段自己的樂觀鎖。分段之後衝突面小很多：兩個人編不同段互不影響
+    rev          INTEGER NOT NULL DEFAULT 1,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    board_seq    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scratchpad_block_pad
+    ON board_scratchpad_block(scratchpad_id, order_index);
+-- 順序不重複寫進資料庫，不靠呼叫端自律。⚠️ 重排時要先把所有 order_index
+-- 移到負區間再寫回正值，否則交換兩段的中途會撞上這條
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scratchpad_block_order
+    ON board_scratchpad_block(scratchpad_id, order_index) WHERE deleted = 0;
+
+-- 「只能註解」的落點。**掛 block_id 不掛偏移量**——偏移量在段落被編輯後
+-- 會漂到別的地方，而漂掉不會報錯，只會變成一句對不上的話。
+CREATE TABLE IF NOT EXISTS board_scratchpad_note (
+    id           TEXT PRIMARY KEY,
+    block_id     TEXT NOT NULL REFERENCES board_scratchpad_block(id),
+    scratchpad_id TEXT NOT NULL,
+    board_id     TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    author_actor_key TEXT NOT NULL DEFAULT '',
+    author_name  TEXT NOT NULL DEFAULT '',
+    author_kind  TEXT NOT NULL DEFAULT '',
+    resolved_at  TEXT,
+    deleted      INTEGER NOT NULL DEFAULT 0,
+    board_seq    INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scratchpad_note_block
+    ON board_scratchpad_note(block_id, created_at);
+
+-- ① 留歷史：每次段落被改寫，把**改之前**那份原文留下來。
+-- ⚠️ CAS 防的是「同時寫」，防不了「後來的人把你的話改掉了」——後者是合法
+-- 的循序寫入，rev 對得上、回 200、沒有任何一端報錯，而那段原話就沒了。
+-- **這是所有靜默失效裡最安靜的一種：它連衝突都沒有**（@測試Novia）。
+CREATE TABLE IF NOT EXISTS board_scratchpad_revision (
+    id           TEXT PRIMARY KEY,
+    block_id     TEXT NOT NULL,
+    scratchpad_id TEXT NOT NULL,
+    board_id     TEXT NOT NULL,
+    content      TEXT NOT NULL,          -- 改之前的內容
+    rev          INTEGER NOT NULL,       -- 改之前的 rev
+    author_actor_key TEXT NOT NULL DEFAULT '',   -- 原文的作者
+    author_name  TEXT NOT NULL DEFAULT '',
+    replaced_by_actor_key TEXT NOT NULL DEFAULT '',  -- 改掉它的人
+    replaced_by_name TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scratchpad_revision_block
+    ON board_scratchpad_revision(block_id, created_at);
+
+-- ── 卡片追蹤 ───────────────────────────────────────────────────────
+-- 「當追蹤的卡完成就會通知以追蹤的人，就不需要通知所有人」（艾斯維爾）。
+-- ⚠️ 追蹤綁 **actor_key 不綁 participant**：participant 隨離房消失，而
+-- 「我在等這張卡」不會因為我離開一間房就不成立。綁 participant 的話，
+-- agent 重啟一次追蹤就靜靜地斷了——而斷掉的當下沒有任何地方會報錯。
+CREATE TABLE IF NOT EXISTS board_watch (
+    board_id    TEXT NOT NULL REFERENCES board(id),
+    item_kind   TEXT NOT NULL,             -- task / checklist / objective
+    item_id     TEXT NOT NULL,
+    actor_key   TEXT NOT NULL,
+    actor_name  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (board_id, item_kind, item_id, actor_key)
+);
+-- 🚨 追蹤通知**不能**塞進 board_event：那張表的主鍵是 (board_id, board_seq)，
+-- 一個號只放得下一筆 canonical event，而「一張卡完成」可能要通知五個人。
+-- directive 走 board_event.target_actor_key 是因為它一次只有一個收件人；
+-- 追蹤是一對多，形狀不同，硬塞會逼著每個收件人各領一個 board_seq——那會
+-- 把水位灌成「通知數」而不是「變更數」，增量 client 讀到的東西就變了。
+CREATE TABLE IF NOT EXISTS board_watch_notice (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES board(id),
+    -- 收件人。與追蹤一樣綁 actor_key，所以重啟換 participant 也收得到
+    actor_key   TEXT NOT NULL,
+    item_kind   TEXT NOT NULL,
+    item_id     TEXT NOT NULL,
+    item_title  TEXT NOT NULL DEFAULT '',   -- 快照：卡之後被改名也講得出當時在等什麼
+    event_type  TEXT NOT NULL,              -- task_done / task_cancelled / task_reopened / item_deleted
+    -- 觸發它的那次變更的號。**不是自己領的**——它指回 board_event 的那一筆，
+    -- 所以「我收到的通知」與「板上發生的事」對得起來
+    board_seq   INTEGER NOT NULL DEFAULT 0,
+    actor_name  TEXT NOT NULL DEFAULT '',   -- 做出那個變更的人
+    created_at  TEXT NOT NULL,
+    read_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_watch_notice_inbox
+    ON board_watch_notice(actor_key, created_at) WHERE read_at IS NULL;
+
+-- 「這張卡有誰在等」與「我在等哪些卡」是兩個方向，都要快
+CREATE INDEX IF NOT EXISTS idx_board_watch_actor
+    ON board_watch(actor_key, board_id);
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """
@@ -447,6 +591,7 @@ CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 # 注意：ALTER TABLE ADD COLUMN 的 NOT NULL 欄位必須帶 DEFAULT。
 MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column, 完整欄位定義)
+    ("board_scratchpad", "next_order", "next_order INTEGER NOT NULL DEFAULT 0"),
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
     # 這次 update_seq 是**為什麼**被推進的（edit/delete/pin/unpin）。
