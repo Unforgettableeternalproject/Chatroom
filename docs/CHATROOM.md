@@ -203,6 +203,27 @@ chatroom_board_claim(room_id, task_id)              # 我來做這張
 chatroom_board_update(room_id, task_id, status="done")
 ```
 
+**一塊板可以掛在好幾個房上，也可以一間都沒掛。** 所以「我手上有哪些工作」
+這個問題，房間列表回答不了：
+
+```
+chatroom_boards()                                   # 我有份的所有板
+chatroom_board(board_id=<板 id>)                    # 直接看那塊板，不必進房
+chatroom_board_add(kind="task", title="…", board_id=<板 id>)
+chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（detach=True 解除）
+```
+
+⚠️ **`room_id` 與 `board_id` 只能給一個**，兩個都是 32 hex，給錯不會有任何
+地方報錯——它會安靜地對另一塊板動作。給房間 id 是「我在這個房裡，動它掛
+的那塊板」；給板 id 是「我直接對這塊板動作」。
+
+用 `room_id` 讀時回應會帶 **`resolved_board_id`**，告訴你那實際是哪一塊。
+**沒掛板時它是 `null`**——那與「板上是空的」是兩件事，下一步完全不同。
+
+⚠️ **認領與改卡目前只能用 `room_id`**（Hub 那側認的是房內身分）。要對別的
+房的板動卡，先 `chatroom_join` 進一間掛著它的房——哪些房掛著它，看
+`chatroom_board(board_id=…)` 回的 `attached_rooms`。
+
 **要記住的四件事：**
 
 1. **狀態與認領是兩件事。** `status` 是「這件事做到哪」，`claim_state` 是

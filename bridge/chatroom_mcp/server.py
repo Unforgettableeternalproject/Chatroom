@@ -1324,6 +1324,57 @@ def chatroom_get_file(attachment_id: str, room_id: str = "",
 
 
 
+def _board_target(room_id: str, board_id: str) -> tuple[str, str]:
+    """把「你要對哪塊板動作」解析成 (kind, id)。
+
+    **兩個都給或都不給一律報錯，不猜。** 兩個 id 都是 32 hex，猜錯不會有
+    任何地方報錯——它會安靜地對另一塊板動作，而那是最難查的一種。
+    """
+    room_id, board_id = (room_id or "").strip(), (board_id or "").strip()
+    if room_id and board_id:
+        raise HubError(
+            "room_id 與 board_id 只能給一個。給房間 id 是「我在這個房裡，"
+            "動它掛的那塊板」；給板 id 是「我直接對這塊板動作」。",
+        )
+    if board_id:
+        return "board", board_id
+    if room_id:
+        return "room", room_id
+    raise HubError(
+        "要給 room_id（動這個房掛的板）或 board_id（直接對這塊板動作）。",
+    )
+
+
+def _require_room_for_item(room_id: str, board_id: str, what: str) -> None:
+    """卡片層級的操作目前只走 room 身分。
+
+    Hub 那側的 item 端點（PATCH／status／claim／release）認的是房內
+    participant，而認領本來就綁著「誰在哪個房裡做這件事」。board-scoped
+    沒有房，所以這條路現在走不通。
+
+    **明確擋下來並說出替代做法**，不要讓它變成一個 404——那會讓人以為
+    是卡不見了，而真正的原因是身分。
+    """
+    if (board_id or "").strip() and not (room_id or "").strip():
+        raise HubError(
+            f"用 board_id {what}還沒開放：Hub 的卡片端點認的是房內身分，"
+            "而板上沒有房。先 chatroom_join 進一間掛著這塊板的房，"
+            "再用 room_id 呼叫。（哪些房掛著它：chatroom_board(board_id=…) "
+            "的 attached_rooms。）",
+        )
+
+
+def _board_scoped_request(method: str, path: str, **kwargs: Any) -> Any:
+    """對 board-scoped 端點發請求。
+
+    **不帶房間身分**——Board Library 裡沒有房，而板的權限看的是
+    `board_member`，不是房內身分。憑證走 canonical session_key。
+    """
+    params = dict(kwargs.pop("params", None) or {})
+    params.setdefault("session_key", _my_session_key())
+    return hub().request(method, path, params=params, **kwargs)
+
+
 def _board_write(room_id: str, subagent: str, method: str, path: str,
                  **kwargs: Any) -> dict:
     """board 的寫入請求，帶上正確的身分。
@@ -1342,9 +1393,33 @@ def _board_write(room_id: str, subagent: str, method: str, path: str,
 
 @mcp.tool()
 @_guard
-def chatroom_board(room_id: str, full: bool = False,
-                   subagent: str = "") -> dict:
-    """看這個房間的任務板（Objective → Checklist → Task）。
+def chatroom_boards() -> dict:
+    """列出你有份的所有任務板（Board Library）。
+
+    板已經不屬於任何一間聊天室了——**一塊板可以掛在好幾個房上，也可以一間
+    都沒掛**。所以「我手上有哪些工作」這個問題，房間列表回答不了它。
+
+    每一塊回：``id`` / ``name`` / ``status``（active／archived）/
+    ``attached_room_count`` / ``task_counts``（total、done、claimed）/
+    ``updated_at`` / ``my_role``（owner／editor／viewer）。
+
+    拿到 ``id`` 之後，底下的 board 工具都可以改用 ``board_id=`` 呼叫，
+    不必先進某一間房。
+    """
+    return _board_scoped_request("GET", "/api/boards")
+
+
+@mcp.tool()
+@_guard
+def chatroom_board(room_id: str = "", full: bool = False,
+                   subagent: str = "", board_id: str = "") -> dict:
+    """看一塊任務板（Objective → Checklist → Task）。
+
+    給 ``room_id`` ＝「我在這個房裡，看它掛的那塊板」；給 ``board_id`` ＝
+    直接看那塊板（Board Library 的用法，不必先進房）。**兩個只能給一個。**
+
+    用 ``room_id`` 呼叫時，回應會帶 ``resolved_board_id`` 告訴你那實際是
+    哪一塊——**房間沒掛板時它是 null**，那與「板上是空的」是兩件事。
 
     **鼓勵常看**：板上是「誰在做什麼、做到哪、哪些卡沒人接手」，那是聊天
     記錄裡撈不出來的東西——三百則訊息之後，講定的事只有板上還留著。
@@ -1366,6 +1441,21 @@ def chatroom_board(room_id: str, full: bool = False,
     ``claim_state`` 為 ``orphaned`` 表示原本領走它的人已經不在房裡了——
     那張卡看起來有人在做，實際上沒有，是最值得你接手的一種。
     """
+    kind, target = _board_target(room_id, board_id)
+    if kind == "board":
+        # **子代理一律讀全量**（理由同下）；board-scoped 沒有房，水位直接
+        # 記在板上
+        known = 0 if (full or subagent) else state().board_cursor(target)
+        data = _board_scoped_request(
+            "GET", f"/api/boards/{target}",
+            params={"after_board_seq": known})
+        seq = data.get("board_seq")
+        if isinstance(seq, int) and not subagent:
+            state().set_board_cursor(target, seq)
+        data["after_board_seq"] = known
+        data["resolved_board_id"] = target
+        return data
+
     participant_id, scope = _identity_for(room_id, subagent)
     # **子代理一律讀全量、不碰父層的水位。** 它活不久、也沒有自己的水位，
     # 用父層那個會把父層的位置往前推——父層之後就靜靜跳過它沒讀過的變動
@@ -1380,6 +1470,9 @@ def chatroom_board(room_id: str, full: bool = False,
     )
     seq = data.get("board_seq")
     board_id = data.get("board_id")
+    # 以 room_id 問的人要知道自己讀到的是哪一塊板——**沒有這個欄位的話，
+    # 「這個房沒掛板」與「板上什麼都沒有」在回應裡長得一模一樣**
+    data["resolved_board_id"] = board_id
     if not subagent:
         _remember_board(room_id, board_id)
     # 拿到內容之後才推進水位。在 chatroom_wait 那側推的話，下次就不會再被
@@ -1399,14 +1492,15 @@ def chatroom_board(room_id: str, full: bool = False,
 @mcp.tool()
 @_guard
 def chatroom_board_add(
-    room_id: str,
-    kind: str,
-    title: str,
+    room_id: str = "",
+    kind: str = "task",
+    title: str = "",
     parent_id: str = "",
     description: str = "",
     source_seq: int | None = None,
     priority: str = "normal",
     subagent: str = "",
+    board_id: str = "",
 ) -> dict:
     """在板上新增一個 Objective／Checklist／Task。
 
@@ -1434,6 +1528,9 @@ def chatroom_board_add(
             "新增 checklist 要給 parent_id（它所屬的 objective 的 id）。"
             "三層是嚴格的樹——先用 chatroom_board 看一眼現有的 objective。"
         )
+    if not title.strip():
+        raise HubError("title 不能是空的——卡片沒有標題，板上就只剩一個編號。")
+    kind_target, target = _board_target(room_id, board_id)
     body: dict[str, Any] = {"title": title, "description": description}
     if kind == "objective":
         path = f"/api/rooms/{room_id}/board/objectives"
@@ -1449,6 +1546,25 @@ def chatroom_board_add(
         body["priority"] = priority
         if source_seq is not None:
             body["source_seq"] = source_seq
+    if kind_target == "board":
+        # 板上直接建。**checklist 走不了這條**：Hub 那側的 checklist 端點掛在
+        # objective 底下、要房內身分，而 board-scoped 沒有房。明確擋下來，
+        # 比讓它 404 好——後者查半天才知道是這件事
+        if kind == "checklist":
+            raise HubError(
+                "從板上直接建 checklist 還沒開放（Hub 那條端點要房內身分）。"
+                "先用 room_id 從房裡建，或把 checklist 留給 objective 底下建。",
+            )
+        bpath = (f"/api/boards/{target}/objectives" if kind == "objective"
+                 else f"/api/boards/{target}/tasks")
+        if kind == "task":
+            body["priority"] = priority
+            if source_seq is not None:
+                body["source_seq"] = source_seq
+        data = _board_scoped_request("POST", bpath, json=body)
+        data["resolved_board_id"] = target
+        return data
+
     participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(room_id, "POST", path, json=body,
                          require_identity=False,
@@ -1460,14 +1576,15 @@ def chatroom_board_add(
 @mcp.tool()
 @_guard
 def chatroom_board_update(
-    room_id: str,
-    item_id: str,
+    room_id: str = "",
+    item_id: str = "",
     kind: str = "task",
     status: str = "",
     title: str = "",
     description: str = "",
     priority: str = "",
     subagent: str = "",
+    board_id: str = "",
 ) -> dict:
     """改一張卡的狀態或內容。
 
@@ -1490,6 +1607,9 @@ def chatroom_board_update(
         raise HubError(
             f"kind 只能是 objective / checklist / task，收到「{kind}」。"
         )
+    _require_room_for_item(room_id, board_id, "改卡")
+    if not item_id.strip():
+        raise HubError("要給 item_id——那是你要改的那張卡。")
     if status:
         if kind == "objective":
             if status in ("verified", "verify"):
@@ -1538,9 +1658,10 @@ def chatroom_board_update(
 
 @mcp.tool()
 @_guard
-def chatroom_board_claim(room_id: str, task_id: str,
+def chatroom_board_claim(room_id: str = "", task_id: str = "",
                          release: bool = False,
-                         subagent: str = "") -> dict:
+                         subagent: str = "",
+                         board_id: str = "") -> dict:
     """認領一張 Task（或用 ``release=True`` 放掉）。
 
     **一張卡同時只能有一個人在上面**，而這是靠資料庫的條件式更新保證的，
@@ -1557,10 +1678,31 @@ def chatroom_board_claim(room_id: str, task_id: str,
     ``release=True`` 放掉，讓別人接手。**領著不放又不做**是這塊板上最糟的
     狀態：它看起來有人在處理，實際上沒有。
     """
+    _require_room_for_item(room_id, board_id, "認領")
     action = "release" if release else "claim"
     return _board_write(
         room_id, subagent, "POST", f"/api/board/tasks/{task_id}/{action}"
     )
+
+
+@mcp.tool()
+@_guard
+def chatroom_board_attach(board_id: str, room_id: str,
+                          detach: bool = False) -> dict:
+    """把一塊板掛到一間聊天室上（或用 ``detach=True`` 解除）。
+
+    一塊板可以同時掛在好幾個房上——需求討論一間、實作協作一間、驗收除錯
+    一間，看到的是**同一份工作狀態**。
+
+    你要同時是**板的 owner／editor** 與**那間房的管理者**。只驗一邊的話，
+    任一方都能單方面把對方拉進來。
+
+    ⚠️ **解除掛接不刪任何卡**。板還在、卡還在，掛回來看到的是原來的狀態
+    ——`detach` 是「這間房不再談這件事」，不是「這件事結束了」。
+    """
+    method = "DELETE" if detach else "POST"
+    return _board_scoped_request(
+        method, f"/api/boards/{board_id}/rooms/{room_id}")
 
 
 def main() -> None:
