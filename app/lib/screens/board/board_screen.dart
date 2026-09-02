@@ -80,8 +80,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 兩個來源：房間封存（唯讀歷史），以及**從 Library 進來時沒有房內身分**。
   /// 後者不是權限問題也不是壞掉，是 item 端點還要 `X-Participant-Id`——
   /// 兩件事在畫面上要講不同的話，否則使用者會去設定頁找一個不存在的問題。
-  BoardEditability get _editability =>
-      boardEditability(archived: _archived, hasRoom: !_boardOnly);
+  BoardEditability get _editability => boardEditability(
+        archived: _archived,
+        hasRoom: !_boardOnly,
+        role: _watchBoard().value?.myRole ?? '',
+      );
 
   bool get _readOnly => _editability != BoardEditability.editable;
 
@@ -295,14 +298,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// ⇒ Hub 一有 `board.status` 就改看它。§11 的遷移八步沒有一步會撞到這裡，
   /// 所以這段註解是它唯一的守衛。
-  /// ⚠️ 看的仍是**房間**的封存狀態，因為 delta 還沒帶 `board.status`
-  /// （已向 Hub 提，房內 #110）。v2 的正確軸是板自己的狀態——
-  /// 封存的房裡照樣可以寫它掛著的板，反過來也一樣。
-  /// 欄位到了就改看它，這段註解是唯一的守衛。
-  bool get _archived =>
-      widget.roomId != null &&
-      ref.watch(roomDetailProvider(widget.roomId!)).value?.room.status ==
-          'archived';
+  /// 板自己的封存狀態。
+  ///
+  /// ⚠️ **不是房間的。** 曾經看的是 `roomDetailProvider` 的房狀態，那在 v2
+  /// 是錯的軸：一塊板掛在 A（已封存）與 B（活著）兩間房時，從 A 進來的人
+  /// 會看到一塊整片變灰、動作全收的板——**而那塊板是活的**。畫面說了一件
+  /// 不成立的事，沒有任何測試或例外抓得到。
+  ///
+  /// 現在看 delta 的 `board.status`（Hub 在 c72c92d 補上）。
+  bool get _archived => _watchBoard().value?.isArchived ?? false;
 
   Widget _archivedNotice(BuildContext context) {
     final s = context.uep;
@@ -409,7 +413,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ],
         Flexible(
           child: Text(
-            room?.name ?? (attached.isEmpty ? '任務板' : attached.first.name),
+            // 板有自己的名字了（Hub c72c92d）。房名只是它還沒送到時的退路
+            snap?.name.isNotEmpty == true
+                ? snap!.name
+                : (room?.name ??
+                    (attached.isEmpty ? '任務板' : attached.first.name)),
             overflow: TextOverflow.ellipsis,
             style: UepText.display(
                 size: 19, weight: FontWeight.w600, color: s.inkTitle),
@@ -460,6 +468,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
         // 不存在的權限問題
         if (_boardOnly && !_archived) const _NoRoomBadge(),
+        if (_editability == BoardEditability.viewer) const _ViewerBadge(),
       ]),
     );
   }
@@ -1174,6 +1183,29 @@ class _NoRoomBadge extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),
         child: Text('唯讀 · 未從聊天室進入',
+            style:
+                UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+      ),
+    );
+  }
+}
+
+/// 你在這塊板上是 viewer。
+///
+/// 與「沒從聊天室進來」分開：那個從房間進去就解決了，這個不會——
+/// 要板的 owner 把你升成 editor。講成同一句話的人會一直重試同一條路。
+class _ViewerBadge extends StatelessWidget {
+  const _ViewerBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Tooltip(
+      message: '你在這塊板上是 viewer，要板的 owner 給你 editor 才能改',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(border: Border.all(color: s.hairline)),
+        child: Text('唯讀 · VIEWER',
             style:
                 UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
       ),

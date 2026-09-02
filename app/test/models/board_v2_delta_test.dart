@@ -173,4 +173,97 @@ void main() {
       expect(s.canEdit, isFalse);
     });
   });
+
+  _realShapeTests();
+}
+
+/// Hub `c72c92d` 實測回來的真實形狀（8788，2026-09-02）。
+///
+/// 這一組是**照真貨寫的**，不是照契約猜的——欄位名打錯一個字就是靜默失效：
+/// 畫面少一塊東西，不報錯。
+void _realShapeTests() {
+  group('delta 中繼資料（實測形狀）', () {
+    BoardDelta real() => BoardDelta.fromJson({
+      'board_id': 'a1460d0c',
+      'name': 'UI 契約探針',
+      'description': '',
+      'status': 'active',
+      'my_role': 'owner',
+      'board_seq': 1,
+      'full': true,
+      'members': [
+        {
+          'actor_key': 'claude-ui-probe',
+          'role': 'owner',
+          'display_name': 'UI探針',
+          'actor_kind': 'claude',
+          'aliases': [],
+        },
+      ],
+      'attached_rooms': [
+        {
+          'id': '4a90a3c6',
+          'name': 'UI契約探針',
+          'status': 'active',
+          'detached': false,
+        },
+      ],
+      'supervisor': null,
+    });
+
+    test('板名、狀態、角色都讀得出來', () {
+      final snap = const BoardSnapshot().merge(real());
+      expect(snap.name, 'UI 契約探針');
+      expect(snap.status, 'active');
+      expect(snap.myRole, 'owner');
+      expect(snap.canEdit, isTrue);
+      expect(snap.isArchived, isFalse);
+    });
+
+    test('members 以 actor_key 建索引，卡片靠它查名字', () {
+      final snap = const BoardSnapshot().merge(real());
+      expect(snap.memberOf('claude-ui-probe')?.displayName, 'UI探針');
+      expect(snap.memberOf('claude-ui-probe')?.role, 'owner');
+      expect(snap.memberOf(null), isNull);
+      expect(snap.memberOf('nobody'), isNull);
+    });
+
+    test('增量不重送中繼資料時要保留，不可覆蓋成空', () {
+      // 覆蓋成空的話，頁首會在第二次拉取後突然變成一塊無名的板，
+      // 而且權限會從 owner 掉成「Hub 沒說」
+      final base = const BoardSnapshot().merge(real());
+      final after = base.merge(BoardDelta.fromJson({'board_seq': 2}));
+      expect(after.name, 'UI 契約探針');
+      expect(after.myRole, 'owner');
+      expect(after.members.length, 1);
+    });
+  });
+
+  group('可編輯性', () {
+    test('viewer 是自己一種，不與「沒從聊天室進來」混為一談', () {
+      // 前者要板的 owner 升你，後者從房間進去就解決了。
+      // 講成同一句話的人會一直重試同一條路
+      expect(
+        boardEditability(archived: false, hasRoom: true, role: 'viewer'),
+        BoardEditability.viewer,
+      );
+    });
+
+    test('Hub 沒說角色時當可寫，不是預設鎖住', () {
+      // 舊 Hub 不回 my_role。判成 viewer 會讓整塊板無故唯讀，
+      // 而使用者找不到任何可以改的地方。真的沒權限時 Hub 會回 403，
+      // 那是誠實的失敗；預設鎖住則是無聲的
+      expect(
+        boardEditability(archived: false, hasRoom: true, role: ''),
+        BoardEditability.editable,
+      );
+    });
+
+    test('封存壓過角色', () {
+      expect(
+        boardEditability(archived: true, hasRoom: true, role: 'owner'),
+        BoardEditability.archived,
+      );
+    });
+  });
 }

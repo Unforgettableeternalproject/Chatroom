@@ -480,6 +480,11 @@ class BoardDelta {
     required this.boardSeq,
     this.full = false,
     this.boardId = '',
+    this.name = '',
+    this.description = '',
+    this.status = 'active',
+    this.myRole = '',
+    this.members = const [],
     this.objectives = const [],
     this.checklists = const [],
     this.tasks = const [],
@@ -498,6 +503,23 @@ class BoardDelta {
 
   /// v2 起 Board 是獨立實體，這是它的身分。舊 Hub 不送，回空字串。
   final String boardId;
+
+  final String name;
+  final String description;
+
+  /// **板自己的封存狀態，與房間的封存無關。** 封存的房裡照樣可以寫它掛著
+  /// 的板，反過來也一樣（§10 要求兩者分開呈現）。
+  final String status;
+
+  /// owner / editor / viewer。空字串＝Hub 沒說，當唯讀處理。
+  final String myRole;
+
+  /// 板上的人。
+  ///
+  /// **別名掛在這裡而不是每張卡上**：同一個人出現在十張卡上時，卡上那份
+  /// 會重複十次，而它們還可能不一致。卡片只帶 `actor_key`，名字與別名
+  /// 一律回這裡查（[BoardSnapshot.memberOf]）。
+  final List<BoardActorRef> members;
 
   final List<BoardObjective> objectives;
   final List<BoardChecklist> checklists;
@@ -519,6 +541,13 @@ class BoardDelta {
     boardSeq: (json['board_seq'] as int?) ?? 0,
     full: (json['full'] as bool?) ?? false,
     boardId: (json['board_id'] as String?) ?? '',
+    name: (json['name'] as String?) ?? '',
+    description: (json['description'] as String?) ?? '',
+    status: (json['status'] as String?) ?? 'active',
+    myRole: (json['my_role'] as String?) ?? '',
+    members: ((json['members'] as List?) ?? const [])
+        .map((e) => BoardActorRef.fromJson(e as Map<String, dynamic>))
+        .toList(),
     attachedRooms: ((json['attached_rooms'] as List?) ?? const [])
         .map((e) => AttachedRoom.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -569,6 +598,10 @@ class BoardSnapshot {
   const BoardSnapshot({
     this.boardSeq = 0,
     this.boardId = '',
+    this.name = '',
+    this.status = 'active',
+    this.myRole = '',
+    this.members = const {},
     this.objectives = const {},
     this.checklists = const {},
     this.tasks = const {},
@@ -585,6 +618,17 @@ class BoardSnapshot {
   /// 這份快取是誰的。v2 起這才是身分，roomId 只是進來的其中一道門。
   final String boardId;
 
+  final String name;
+
+  /// 板自己的封存狀態。**不是房間的**。
+  final String status;
+
+  /// owner / editor / viewer。
+  final String myRole;
+
+  /// actor_key → 這個人在板上的身分（含別名）。
+  final Map<String, BoardActorRef> members;
+
   final Map<String, BoardObjective> objectives;
   final Map<String, BoardChecklist> checklists;
   final Map<String, BoardTask> tasks;
@@ -597,6 +641,13 @@ class BoardSnapshot {
   /// 還掛著的房間，解除的不算。給 Board 頁「切回來源對話」用。
   Iterable<AttachedRoom> get liveRooms =>
       attachedRooms.values.where((r) => !r.detached);
+
+  bool get isArchived => status == 'archived';
+  bool get canEdit => myRole == 'owner' || myRole == 'editor';
+
+  /// 查一個人。卡片只帶 actor_key，名字與別名都在這裡。
+  BoardActorRef? memberOf(String? actorKey) =>
+      actorKey == null ? null : members[actorKey];
 
   /// 稽核串由新到舊。
   List<BoardDirective> get sortedDirectives =>
@@ -667,6 +718,14 @@ class BoardSnapshot {
       boardSeq: delta.boardSeq > boardSeq ? delta.boardSeq : boardSeq,
       // 舊 Hub 不送 board_id，這時保留手上那份而不是覆蓋成空字串
       boardId: delta.boardId.isNotEmpty ? delta.boardId : boardId,
+      // 中繼資料只在有送時覆蓋。增量回應不重送這些欄位，跟著覆蓋成空字串
+      // 的話頁首會在第二次拉取後突然變成無名的板
+      name: delta.name.isNotEmpty ? delta.name : name,
+      status: delta.status.isNotEmpty ? delta.status : status,
+      myRole: delta.myRole.isNotEmpty ? delta.myRole : myRole,
+      members: delta.members.isEmpty
+          ? members
+          : {for (final m in delta.members) m.actorKey: m},
       objectives: objs,
       checklists: lists,
       tasks: tsks,
@@ -856,11 +915,17 @@ class BoardActorRef {
     required this.actorKey,
     this.displayName = '',
     this.actorKind = 'other',
+    this.role = '',
     this.aliases = const [],
   });
 
   final String actorKey;
   final String displayName;
+
+  /// owner / editor / viewer。從掛接房走進來的人自動是 editor——
+  /// 給 viewer 的話，房裡的人會發現自己動不了眼前這塊板，而他明明就在
+  /// 這間房裡。
+  final String role;
 
   /// human / claude / codex / other。徽章顯示種類用；
   /// 「是不是人類」從這裡推得出來，反過來推不出來。
@@ -874,6 +939,7 @@ class BoardActorRef {
     actorKey: (json['actor_key'] as String?) ?? '',
     displayName: (json['display_name'] as String?) ?? '',
     actorKind: (json['actor_kind'] as String?) ?? 'other',
+    role: (json['role'] as String?) ?? '',
     aliases: ((json['aliases'] as List?) ?? const [])
         .map((e) => BoardAlias.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -1018,16 +1084,23 @@ class BoardSummary {
 ///
 /// 把後兩者講成同一句「唯讀」，遇到 [noRoom] 的人會去找一個不存在的封存
 /// 狀態；反過來把 [noRoom] 講成「沒有權限」，他會去翻設定頁。
-enum BoardEditability { editable, archived, noRoom }
+enum BoardEditability { editable, archived, noRoom, viewer }
 
-/// [archived] 優先於 [hasRoom]：封存的板從哪裡進來都改不了，
+/// [archived] 優先於其餘：封存的板從哪裡進來、你是誰都改不了，
 /// 而「從聊天室進來就能寫」這句話在封存的板上是假的。
+///
+/// [role] 空字串代表 **Hub 沒說**（舊 Hub 不回 `my_role`）。那時當作可以寫
+/// ——舊 Hub 上本來就沒有 Board 權限這回事，判成 viewer 會讓整塊板無故
+/// 唯讀，而使用者找不到任何可以改的地方。真的沒權限時 Hub 會回 403，
+/// 那是誠實的失敗；預設鎖住則是無聲的。
 BoardEditability boardEditability({
   required bool archived,
   required bool hasRoom,
+  String role = '',
 }) {
   if (archived) return BoardEditability.archived;
   if (!hasRoom) return BoardEditability.noRoom;
+  if (role == 'viewer') return BoardEditability.viewer;
   return BoardEditability.editable;
 }
 
