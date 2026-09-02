@@ -786,3 +786,77 @@ async def test_reorder_from_the_board(tmp_path):
             body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
             assert {t["id"]: t["order_index"]
                     for t in body["tasks"]}[t1] == 1, "部分套用了"
+
+
+async def test_directive_reaches_every_room_the_target_is_in(tmp_path):
+    """一塊板掛兩房、目標兩房都在：**兩房都要收到**。
+
+    原本只投最近活躍的那一間，@測試Novia 的 T5-4 抓到它是漏送——agent 待在
+    房 A、directive 投到房 B，於是它永遠不會醒，而送出端看到的是 200、
+    稽核串也有紀錄。**漏送從送出端完全看不出來。**
+
+    判準：去重要去的是「同一個人被通知多次」，不是「同一個人只在其中一個房
+    被通知」。所以去重的單位是房，不是人。
+    """
+    app, client = await _client(tmp_path, "v2_directive_all")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra = await _room(client, "A房", "claude-a")
+            rb = await _room(client, "B房", "claude-a")
+            owner = await _join(client, ra, "claude-a", "A")
+            await _first_card(client, ra, owner)
+            bid = await _board_id(client, ra, owner)
+            await client.post(f"/api/boards/{bid}/rooms/{rb}", headers=owner)
+            owner_b = await _join(client, rb, "claude-a", "A")
+
+            # 目標在兩間房，而且兩房用不同名字
+            await _join(client, ra, "claude-w", "Worker-在A")
+            await _join(client, rb, "claude-w", "Worker-在B")
+
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"target_actor_key": "claude-w", "text": "兩邊都要看到"},
+                headers=owner)
+            assert r.status_code == 200, r.text
+            assert set(r.json()["delivered_rooms"]) == {ra, rb}
+
+            for rid, name, hdr in ((ra, "Worker-在A", owner),
+                                   (rb, "Worker-在B", owner_b)):
+                msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                         headers=hdr)).json()["messages"]
+                hit = [m for m in msgs
+                       if m["system_event"] == "board_directive"]
+                assert len(hit) == 1, f"{rid} 沒收到 directive"
+                # mention 用**該房的**名字，不是板上的定案名——比對的是
+                # 房內名稱，用板上那個會 mention 不到人
+                assert hit[0]["mentions"] == [name]
+
+            # 稽核串仍然只有一筆：投了兩個房不代表發生了兩件事
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert len(body["directives"]) == 1
+
+
+async def test_one_change_makes_one_event_however_many_rooms(tmp_path):
+    """驗收 8：一次 Board 變更只有一筆 canonical event，掛三房不變三筆。"""
+    app, client = await _client(tmp_path, "v2_one_event")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra = await _room(client, "A房", "claude-a")
+            rb = await _room(client, "B房", "claude-a")
+            owner = await _join(client, ra, "claude-a", "A")
+            tid = await _first_card(client, ra, owner)
+            bid = await _board_id(client, ra, owner)
+            await client.post(f"/api/boards/{bid}/rooms/{rb}", headers=owner)
+
+            await client.post(f"/api/board/tasks/{tid}/claim", headers=owner)
+            for step in ("in_progress", "done"):
+                await client.post(f"/api/board/tasks/{tid}/status",
+                                  json={"status": step}, headers=owner)
+
+            rows = await (await app.state.db.execute(
+                "SELECT event_type, COUNT(*) AS n FROM board_event"
+                " WHERE board_id=? GROUP BY event_type", (bid,))).fetchall()
+            counts = {r["event_type"]: r["n"] for r in rows}
+            assert counts.get("task_claimed") == 1
+            assert counts.get("task_done") == 1

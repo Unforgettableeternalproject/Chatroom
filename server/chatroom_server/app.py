@@ -3974,6 +3974,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=current["status"], to_status=body.status,
                        allowed=sorted(TASK_TRANSITIONS.get(current["status"],
                                                            set())))
+        if done:
+            # 完成是**要通知的事**（§7.3），一般狀態變動只推水位
+            await _record_board_event(
+                row["board_id"], seq, "task_done",
+                actor=actor_key(me["session_key"]),
+                actor_name=me["display_name"], origin_room_id=row["room_id"],
+                item_kind="task", item_id=task_id,
+                payload={"title": row["title"]})
         await db.commit()
         if done:
             # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
@@ -4071,7 +4079,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row, me
 
     async def _objective_set(row, fields: dict,
-                             expect_status: str | None = None) -> int:
+                             expect_status: str | None = None,
+                             event: str = "", actor=None) -> int:
         """把 Objective 推到新狀態。**CAS 是預設行為，不是選項。**
 
         五個呼叫端（送審／確認／完成／打回／取消）全都先讀 `row`、依它的
@@ -4091,6 +4100,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             " WHERE id=? AND status=? RETURNING id",
             (*fields.values(), seq, row["id"], expect),
         )
+        if event:
+            # 週期的四個轉折（送審／確認／完成／打回）是**要通知的事**，
+            # 與一般編輯不同（§7.3）。記在這裡而不是各端點：五個呼叫端全都
+            # 經過這條路，在外面分別記的話漏掉一個不會有任何地方報錯
+            await _record_board_event(
+                row["board_id"], seq, event,
+                actor=actor_key(actor["session_key"]) if actor else "",
+                actor_name=actor["display_name"] if actor else "",
+                origin_room_id=row["room_id"], item_kind="objective",
+                item_id=row["id"], payload={"title": row["title"]})
         if await cur.fetchone() is None:
             await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("objective", row["id"])
@@ -4133,7 +4152,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "review", "reviewed_by": me["id"], "reviewed_at": _now(),
             "reviewed_by_actor_key": actor_key(me["session_key"]),
-        })
+        }, event="objective_review", actor=me)
         # 週期收尾的兩步只有人類做得到，而其餘 board 變動都靠「沒被通知的人
         # 自己會來看板」撐著——唯獨這兩步的收件人是**沒在看板子的人類**，
         # 而他正是唯一能讓週期往下走的人。忘了就停在這裡，板上一切正常、
@@ -4197,7 +4216,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "verified", "verified_by": me["id"], "verified_at": _now(),
             "verified_by_actor_key": actor_key(me["session_key"]),
-        })
+        }, event="objective_verified", actor=me)
         # **確認者本人也要收**——他正是下一步（完成）要按的那個人。
         # verified 比 review 更容易停住：App 的金色會退掉，畫面主動告訴你
         # 「已確認」，看起來像收工了而實際還差一步
@@ -4230,7 +4249,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
             "completed_by_actor_key": actor_key(me["session_key"]),
-        })
+        }, event="objective_done", actor=me)
         # 規則二：**全部**，完成者也在內——他確認的是整個週期，不是自己那張卡
         audience = await _board_audience(row["room_id"])
         if audience:
@@ -4267,7 +4286,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "completed_by": None, "completed_at": None,
             "reviewed_by_actor_key": "", "verified_by_actor_key": "",
             "completed_by_actor_key": "",
-        })
+        }, event="objective_reopened", actor=me)
         return {"ok": True, "id": objective_id, "status": "active",
                 "board_seq": seq}
 
@@ -4285,7 +4304,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "invalid_transition",
                        f"「{row['status']}」的週期不能取消",
                        from_status=row["status"])
-        seq = await _objective_set(row, {"status": "cancelled"})
+        seq = await _objective_set(row, {"status": "cancelled"},
+                                   event="objective_cancelled", actor=me)
         return {"ok": True, "id": objective_id, "status": "cancelled",
                 "board_seq": seq}
 
@@ -4560,6 +4580,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                        claim_name=current["claim_name"],
                        claim_state=current["claim_state"],
                        task_status=current["status"])
+        await _record_board_event(
+            row["board_id"], seq, "task_claimed", actor=mine,
+            actor_name=me["display_name"], origin_room_id=row["room_id"],
+            item_kind="task", item_id=task_id,
+            payload={"title": row["title"], "reclaimed": was_mine})
         await db.commit()
         await events.notify(row["room_id"])
         # reclaimed=true ＝「這是你上一世領的」，agent 才有理由先去讀描述
@@ -4593,10 +4618,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             " orphaned_at=NULL, orphaned_reason='', board_seq=? WHERE id=?",
             (seq, task_id),
         )
+        forced = row["claim_participant_id"] != me["id"]
+        await _record_board_event(
+            row["board_id"], seq, "task_released",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=row["room_id"], item_kind="task", item_id=task_id,
+            payload={"title": row["title"], "forced": forced,
+                     "previous_holder": row["claim_name"]})
         await db.commit()
         await events.notify(row["room_id"])
         return {"ok": True, "id": task_id, "board_seq": seq,
-                "forced": row["claim_participant_id"] != me["id"]}
+                "forced": forced}
 
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
     async def read_board(
@@ -5383,15 +5415,29 @@ def create_app(config: Config | None = None) -> FastAPI:
         sender_name = (me["display_name"] if me else "") \
             or board["supervisor_name"] or "Supervisor"
 
-        # 目標現在在哪一間掛接房？找到就投影過去。**只投影一間**：投影到
-        # 每一間會讓同一則判斷在多個房各出現一次，而它是同一件事
-        row = await (await db.execute(
+        # 目標人在哪幾間掛接房？**每一間都要投**。
+        #
+        # 原本只投最近活躍的那一間，@測試Novia 2026-09-02 的 T5-4 抓到它是
+        # 漏送：agent 待在房 A、directive 投到房 B，於是它永遠不會醒——而
+        # 送出端看到的是 200、稽核串也有紀錄。**漏送從送出端完全看不出來。**
+        #
+        # 判準是她給的，收下：**去重要去的是「同一個人被通知多次」，不是
+        # 「同一個人只在其中一個房被通知」。** agent 待在哪個房，就必須在
+        # 那個房收到。所以去重的單位是「房」不是「人」——同一間房裡即使有
+        # 好幾個 participant 共用這把 key（父層與 subagent），也只投一則。
+        #
+        # 名字用**該房的** display_name，不是板上的定案名：mention 比對的是
+        # 房內名稱，用板上那個會 mention 不到人（H7 已經測過這半是對的）。
+        rows = await (await db.execute(
             "SELECT p.room_id, p.display_name FROM participant p"
             " JOIN board_room br ON br.room_id = p.room_id"
             "  AND br.detached_at IS NULL"
             " WHERE br.board_id=? AND p.status='active'"
-            "   AND TRIM(p.session_key)=? ORDER BY p.last_seen_at DESC LIMIT 1",
-            (board_id, target))).fetchone()
+            "   AND TRIM(p.session_key)=?"
+            " GROUP BY p.room_id"
+            " HAVING p.last_seen_at = MAX(p.last_seen_at)",
+            (board_id, target))).fetchall()
+        row = rows[0] if rows else None
         await _record_board_event(
             board_id, seq, "directive", actor=actor, actor_name=sender_name,
             origin_room_id=row["room_id"] if row else "",
@@ -5400,19 +5446,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             payload={"text": body.text.strip()})
         await db.commit()
 
-        delivered = False
-        if row is not None:
+        for r in rows:
             await _post_message(
-                row["room_id"], None,
-                f"【Supervisor】{sender_name} → {row['display_name']}："
+                r["room_id"], None,
+                f"【Supervisor】{sender_name} → {r['display_name']}："
                 f"{body.text.strip()}",
                 kind="system", system_event="board_directive",
-                mentions=[row["display_name"]], reply_mentions_author=False,
+                mentions=[r["display_name"]], reply_mentions_author=False,
             )
-            delivered = True
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
-                "delivered": delivered,
+                "delivered": bool(rows),
+                "delivered_rooms": [r["room_id"] for r in rows],
+                # 單數欄位留著給既有 client；多房時它只是其中一間
                 "delivered_room_id": row["room_id"] if row else None}
 
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
