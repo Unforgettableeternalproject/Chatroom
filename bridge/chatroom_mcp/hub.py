@@ -215,6 +215,23 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "這張卡由別人持有，只有持有者本人或人類成員可以解除認領。",
                 status=status, detail=detail,
             )
+        if code == "not_board_member":
+            # 房裡的人不會自動變成板上的人（Board v2）。落進 fallback 會叫他
+            # 重新 join 房間——而房內身分再新也不會讓他出現在板的成員列上
+            return HubError(
+                _detail_text(detail)
+                or "你不是這塊板的成員。請板的 owner 把你加進去，"
+                "重新加入聊天室沒有用。",
+                status=status, detail=detail,
+            )
+        if code == "board_read_only":
+            # viewer 只能看。同上，這不是身分失效，重新 join 不會升級角色
+            return HubError(
+                _detail_text(detail)
+                or "你在這塊板上是 viewer，只能看不能改。"
+                "要寫入請板的 owner 把你調成 editor。",
+                status=status, detail=detail,
+            )
         if code == "human_only":
             # board 上「只有人類做得到」的動作（刪卡、確認 Objective）。
             # 落進 fallback 會被翻成「身分失效請重新 join」——而重新 join

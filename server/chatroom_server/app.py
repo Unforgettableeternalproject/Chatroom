@@ -3026,6 +3026,79 @@ def create_app(config: Config | None = None) -> FastAPI:
         d.pop("board_id", None)
         return d
 
+    async def _board_for_room(room_id: str):
+        """這間房目前掛的是哪塊板。沒掛回 None。
+
+        「目前」＝ `detached_at IS NULL`。解除掛接的歷史列還在，但它們不是
+        現在這間房的板——一房一 active Board 由 partial unique index 保證，
+        所以這裡最多只會查到一列。
+        """
+        return await (await app.state.db.execute(
+            "SELECT b.* FROM board b JOIN board_room br ON br.board_id = b.id"
+            " WHERE br.room_id = ? AND br.detached_at IS NULL",
+            (room_id,),
+        )).fetchone()
+
+    async def _ensure_board_for_room(room_id: str, me) -> str:
+        """取得這間房的板，沒有就**現在建一塊**並掛上去，回傳 board_id。
+
+        只在**寫入**路徑呼叫。讀取端刻意不建（BOARD_DESIGN §1.2「建房不自動
+        建空板」）——一間從沒人開過板的房，讀起來應該是「沒有板」，而不是
+        長出一塊空的掛在那裡等著被封存。
+
+        建立者成為 owner。房名拿來當板名的起點：這塊板此刻只服務這一間房，
+        叫同一個名字最好認；之後掛到別間房時使用者自己改。
+        """
+        row = await _board_for_room(room_id)
+        if row is not None:
+            return row["id"]
+        db = app.state.db
+        rm = await (await db.execute(
+            "SELECT name FROM room WHERE id=?", (room_id,))).fetchone()
+        now = _now()
+        bid = uuid.uuid4().hex
+        mine = actor_key(me["session_key"])
+        # v1 的房內水位帶過來當起點。**不從 0 開始**：舊 client 記著的
+        # cursor 已經在那個高度，重新從 0 領號會讓它們再也收不到新變動
+        # （`board_seq > 我記得的值` 永遠不成立）
+        seq0 = (await (await db.execute(
+            "SELECT board_seq FROM room WHERE id=?", (room_id,))).fetchone()
+        )["board_seq"]
+        await db.execute(
+            "INSERT INTO board (id, name, owner_actor_key, board_seq,"
+            " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (bid, rm["name"] if rm else "任務板", mine, seq0, now, now))
+        await db.execute(
+            "INSERT INTO board_member (board_id, actor_key, role, display_name,"
+            " actor_kind, added_at) VALUES (?,?,'owner',?,?,?)",
+            (bid, mine, me["display_name"], me["kind"], now))
+        # 掛接這一步是**唯一的勝負點**：並行的第一批寫入會各自查到「沒有板」
+        # 然後各自建一塊，而 partial unique index 只讓一個掛得上。輸的那邊
+        # 不該炸掉，該回去用贏家的板——與「未分類」那兩層同一個模式。
+        # ⚠️ 這裡**不要 commit**：共用連線上別的語句可能正在進行中
+        cur = await db.execute(
+            "INSERT INTO board_room (id, board_id, room_id, room_name,"
+            " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT DO NOTHING RETURNING id",
+            (uuid.uuid4().hex, bid, room_id, rm["name"] if rm else "", mine, now))
+        if await cur.fetchone() is None:
+            # 對方贏了。把我剛建的那塊板收掉——沒有任何列引用它，留著只會
+            # 在 Board Library 上多出一塊沒有房、沒有卡的空板
+            await db.execute("DELETE FROM board_member WHERE board_id=?", (bid,))
+            await db.execute("DELETE FROM board WHERE id=?", (bid,))
+            winner = await _board_for_room(room_id)
+            if winner is None:
+                raise _err(503, "board_attach_contended",
+                           "這間房的板正在被同時建立，稍後再試一次")
+            return winner["id"]
+        # 這間房既有的卡一起換軸。**同一個交易裡做完**：分兩步的話，中間
+        # 崩掉會留下一塊沒有卡的板與一批沒有板的卡，而兩邊看起來都正常
+        for table in ("board_objective", "board_checklist", "board_task"):
+            await db.execute(
+                f"UPDATE {table} SET board_id=? WHERE room_id=? AND board_id=''",
+                (bid, room_id))
+        return bid
+
     async def _next_board_seq(room_id: str) -> int:
         """領一個新的 board 水位號。
 
@@ -3038,12 +3111,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 是變更會消失：兩個操作共用 8 ⇒ client 讀到其中一批、水位停在 8 ⇒
         # 下次 `board_seq > 8` 撈不到另一批，那些變更永遠到不了任何 client，
         # 而 Hub 這邊完全正常、不會報錯。既有的 next_seq 本來就這樣領。
-        cur = await app.state.db.execute(
-            "UPDATE room SET board_seq=board_seq+1 WHERE id=? RETURNING board_seq",
-            (room_id,),
-        )
-        row = await cur.fetchone()   # ⚠️ 不是 rowcount：RETURNING 在 fetch 前是 0
-        return row["board_seq"]
+        db = app.state.db
+        board = await _board_for_room(room_id)
+        if board is None:
+            # 還沒換軸的房（沒有人在它的板上動過任何東西）：維持 v1 的房內水位
+            cur = await db.execute(
+                "UPDATE room SET board_seq=board_seq+1 WHERE id=?"
+                " RETURNING board_seq", (room_id,))
+            row = await cur.fetchone()   # ⚠️ 不是 rowcount：RETURNING 在 fetch 前是 0
+            return row["board_seq"]
+        # 換軸後水位屬於**板**，不屬於房——一塊板掛三間房時，三邊看到的
+        # 必須是同一條遞增序列，否則同一次變更在各房會有不同的號碼
+        cur = await db.execute(
+            "UPDATE board SET board_seq=board_seq+1, updated_at=?"
+            " WHERE id=? RETURNING board_seq", (_now(), board["id"]))
+        row = await cur.fetchone()
+        seq = row["board_seq"]
+        # 同步回**所有** active 掛接房的 room.board_seq。v1 client 讀的是
+        # 那個欄位；只同步當前房的話，別間房的舊 client 水位會停在原地，
+        # 而它不會知道自己漏了——增量查詢照樣回 200、照樣回空清單
+        await db.execute(
+            "UPDATE room SET board_seq=? WHERE id IN"
+            " (SELECT room_id FROM board_room WHERE board_id=?"
+            "  AND detached_at IS NULL)", (seq, board["id"]))
+        return seq
 
     BOARD_TABLES = {
         "objective": "board_objective",
@@ -3100,7 +3191,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         「經常調查 board」的 agent 不會被閒置掃出房間（設計文件 §2.6）。
         """
         await _room_or_404(room_id)          # 封存房唯讀，寫入一律擋
-        return await _participant(participant_id, room_id)
+        me = dict(await _participant(participant_id, room_id))
+        # 換軸的入口就在這裡：**第一次有人在這間房的板上寫東西**時建板。
+        # 放在共同門檻而不是各個端點，是因為漏掉一個端點不會報錯——那條路徑
+        # 寫出來的卡 board_id 是空的，在 Board Library 上根本不存在。
+        # 板 id 隨身分一起回去，插入新卡時要用（Row 不能加鍵，所以轉 dict）
+        me["board_id"] = await _ensure_board_for_room(room_id, me)
+        return me
 
     def _board_can_remove(row, me) -> bool:
         """誰能刪一張卡：建立者，或人類成員。
@@ -3181,10 +3278,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _next_board_seq(room_id)
         oid = uuid.uuid4().hex
         await db.execute(
-            "INSERT INTO board_objective (id, room_id, title, description,"
-            " created_by, created_by_name, created_by_actor_key, board_seq,"
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (oid, room_id, body.title.strip(), body.description,
+            "INSERT INTO board_objective (id, room_id, board_id, title,"
+            " description, created_by, created_by_name, created_by_actor_key,"
+            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (oid, room_id, me["board_id"], body.title.strip(), body.description,
              me["id"], me["display_name"], actor_key(me["session_key"]),
              seq, _now()),
         )
@@ -3227,10 +3324,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         seq = await _next_board_seq(parent["room_id"])
         cid = uuid.uuid4().hex
         await db.execute(
-            "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-            " description, created_by, created_by_name, created_by_actor_key,"
-            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (cid, parent["room_id"], objective_id, body.title.strip(),
+            "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
+            " title, description, created_by, created_by_name,"
+            " created_by_actor_key, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (cid, parent["room_id"], me["board_id"], objective_id,
+             body.title.strip(),
              body.description, me["id"], me["display_name"],
              actor_key(me["session_key"]), seq, _now()),
         )
@@ -3339,11 +3438,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             now = _now()
             oid = uuid.uuid4().hex
             cur = await db.execute(
-                "INSERT INTO board_objective (id, room_id, title, description,"
-                " created_by, created_by_name, created_by_actor_key, board_seq,"
-                " created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
-                (oid, room_id, UNCATEGORISED, "還沒歸進任何週期的東西",
+                "INSERT INTO board_objective (id, room_id, board_id, title,"
+                " description, created_by, created_by_name,"
+                " created_by_actor_key, board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT DO NOTHING RETURNING id",
+                (oid, room_id, me["board_id"], UNCATEGORISED,
+                 "還沒歸進任何週期的東西",
                  me["id"], me["display_name"], actor_key(me["session_key"]),
                  seq, now),
             )
@@ -3356,12 +3457,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 continue
             cid = uuid.uuid4().hex
             cur = await db.execute(
-                "INSERT INTO board_checklist (id, room_id, objective_id, title,"
-                " description, created_by, created_by_name,"
-                " created_by_actor_key, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING id",
-                (cid, room_id, oid, UNCATEGORISED, "", me["id"],
-                 me["display_name"], actor_key(me["session_key"]), seq, now),
+                "INSERT INTO board_checklist (id, room_id, board_id,"
+                " objective_id, title, description, created_by,"
+                " created_by_name, created_by_actor_key, board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT DO NOTHING RETURNING id",
+                (cid, room_id, me["board_id"], oid, UNCATEGORISED, "",
+                 me["id"], me["display_name"], actor_key(me["session_key"]),
+                 seq, now),
             )
             if await cur.fetchone() is None:
                 continue   # 同上，不 commit
@@ -3480,13 +3583,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         tid = uuid.uuid4().hex
         mine = actor_key(me["session_key"])
         await db.execute(
-            "INSERT INTO board_task (id, room_id, checklist_id, title, description,"
+            "INSERT INTO board_task (id, room_id, board_id, checklist_id,"
+            " title, description,"
             " priority, source_seq, source_room_id, assignee_participant_id,"
             " assignee_actor_key, assigned_by, assigned_by_name,"
             " assigned_by_actor_key, created_by, created_by_name,"
             " created_by_actor_key, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, room_id, checklist_id, body.title.strip(),
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, room_id, me["board_id"], checklist_id, body.title.strip(),
              body.description, body.priority, body.source_seq,
              # 來源房從現在起就記上——一塊板掛多間房之後，光有 seq 講不出
              # 是哪一間房的第幾則
@@ -4367,7 +4471,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
                 reclaimable = [dict(r) for r in await cur.fetchall()]
 
+        # v1 路由從這裡起兼任 resolver（BOARD_DESIGN §8.1）：告訴舊 client
+        # 「你讀的其實是這塊板」，它才有辦法改走 /api/boards/{bid}。
+        # 沒掛板時回 null 而**不自動建一塊**——建房不自動建空板
+        attached = await _board_for_room(room_id)
         return {
+            "board_id": attached["id"] if attached else None,
             "board_seq": await _board_seq(room_id),
             "full": after_board_seq == 0,
             "objectives": await _rows("board_objective"),
@@ -4376,6 +4485,229 @@ def create_app(config: Config | None = None) -> FastAPI:
             "reclaimable_tasks": reclaimable,
             "supervisor": room["board_supervisor_session_key"] or None,
         }
+
+    # ── Board v2：以 board_id 為軸的端點 ──────────────────────────────
+    # v1 的 /api/rooms/{rid}/board 保留為 resolver（見上），新 client 一律走
+    # 這一組。權限不看 room participant 而看 board_member——房裡的人不會
+    # 自動變成板上的人（BOARD_DESIGN §3.1）。
+
+    async def _actor_from_headers(session_key: str | None,
+                                  participant_id: str | None) -> str:
+        """這次請求是誰。Board Library 沒有房，所以 session_key 是主要來源。
+
+        participant_id 只當退路：房內的 client 手上一定有它，卻不一定會把
+        session_key 放進 header——少了這條退路，同一個人從房裡點進 Board
+        頁會變成不認識的人。
+        """
+        key = actor_key(session_key)
+        if key:
+            return key
+        if participant_id:
+            row = await (await app.state.db.execute(
+                "SELECT session_key FROM participant WHERE id=?",
+                (participant_id,))).fetchone()
+            if row:
+                return actor_key(row["session_key"])
+        return ""
+
+    async def _board_or_404(board_id: str):
+        row = await (await app.state.db.execute(
+            "SELECT * FROM board WHERE id=?", (board_id,))).fetchone()
+        if row is None:
+            raise _err(404, "board_not_found", "找不到這塊板")
+        return row
+
+    async def _board_role(board_id: str, actor: str) -> str:
+        """這個 actor 在板上的角色。不是成員回空字串。"""
+        if not actor:
+            return ""
+        row = await (await app.state.db.execute(
+            "SELECT role FROM board_member WHERE board_id=? AND actor_key=?"
+            " AND removed_at IS NULL", (board_id, actor))).fetchone()
+        return row["role"] if row else ""
+
+    async def _board_member_or_403(board_id: str, actor: str,
+                                   need_write: bool = False) -> str:
+        role = await _board_role(board_id, actor)
+        if not role:
+            raise _err(403, "not_board_member",
+                       "你不是這塊板的成員——房裡的人不會自動變成板上的人")
+        if need_write and role == "viewer":
+            raise _err(403, "board_read_only", "你在這塊板上只能看")
+        return role
+
+    @app.get("/api/boards", dependencies=[Depends(require_auth)])
+    async def list_boards(
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """Board Library：這個 actor 有份的板。
+
+        **不以 room list 代替**——板的生命週期與房已經分開了，一塊沒有任何
+        active 掛接房的板仍然要找得到，否則它等於消失。
+        """
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        if not actor:
+            raise _err(400, "session_key_required",
+                       "要帶 X-Session-Key 才知道你是誰")
+        db = app.state.db
+        cur = await db.execute(
+            "SELECT b.*, m.role AS my_role FROM board b"
+            " JOIN board_member m ON m.board_id = b.id AND m.actor_key = ?"
+            "  AND m.removed_at IS NULL"
+            " ORDER BY b.updated_at DESC", (actor,))
+        out = []
+        for b in await cur.fetchall():
+            counts = await (await db.execute(
+                "SELECT COUNT(*) AS total,"
+                " SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
+                " SUM(CASE WHEN claim_state='held' THEN 1 ELSE 0 END) AS claimed"
+                " FROM board_task WHERE board_id=? AND deleted=0",
+                (b["id"],))).fetchone()
+            rooms = await (await db.execute(
+                "SELECT COUNT(*) AS n FROM board_room WHERE board_id=?"
+                " AND detached_at IS NULL", (b["id"],))).fetchone()
+            out.append({
+                "id": b["id"], "name": b["name"], "status": b["status"],
+                "attached_room_count": rooms["n"],
+                "task_counts": {"total": counts["total"] or 0,
+                                "done": counts["done"] or 0,
+                                "claimed": counts["claimed"] or 0},
+                "updated_at": b["updated_at"], "my_role": b["my_role"],
+            })
+        return {"boards": out}
+
+    @app.get("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
+    async def read_board_v2(
+        board_id: str,
+        after_board_seq: int = 0,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """讀一塊板（增量）。與 v1 回應**同構**，只多三個欄位。
+
+        同構是刻意的：client 的合併邏輯不必為了換軸重寫一次，那是另一個
+        量級的改動，而合併正是最容易寫錯又最難發現的地方。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        await _board_member_or_403(board_id, actor)
+        db = app.state.db
+        tombstones = after_board_seq > 0
+
+        async def _rows(table: str) -> list:
+            cur = await db.execute(
+                f"SELECT * FROM {table} WHERE board_id=? AND board_seq>?"
+                + ("" if tombstones else " AND deleted=0")
+                + " ORDER BY board_seq", (board_id, after_board_seq))
+            return [_board_row(r) for r in await cur.fetchall()]
+
+        # 孤兒卡以 actor_key 認，跨房都算——這正是 v2 的重點：離開其中一間
+        # 房不等於放棄這塊板上的工作
+        cur = await db.execute(
+            "SELECT id, title, orphaned_at, claim_name FROM board_task"
+            " WHERE board_id=? AND claim_state='orphaned' AND claim_actor_key=?"
+            " AND deleted=0 ORDER BY board_seq", (board_id, actor))
+        reclaimable = [dict(r) for r in await cur.fetchall()]
+
+        # **已解除的房也回**（帶 detached: true）。只回 active 的話，client
+        # 手上那份會殘留一間早就解除的房，而它無從得知——那是靜默失效
+        cur = await db.execute(
+            "SELECT br.room_id, br.room_name, br.detached_at, r.status"
+            " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
+            " WHERE br.board_id=? ORDER BY br.attached_at", (board_id,))
+        attached = [{
+            "id": r["room_id"],
+            # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
+            "name": r["room_name"],
+            "status": r["status"] or "deleted",
+            "detached": r["detached_at"] is not None,
+        } for r in await cur.fetchall()]
+
+        sup = None
+        if board["supervisor_actor_key"]:
+            sup = {"actor_key": board["supervisor_actor_key"],
+                   "display_name": board["supervisor_name"],
+                   "actor_kind": board["supervisor_kind"]}
+
+        return {
+            "board_id": board_id,
+            "board_seq": board["board_seq"],
+            "full": after_board_seq == 0,
+            "objectives": await _rows("board_objective"),
+            "checklists": await _rows("board_checklist"),
+            "tasks": await _rows("board_task"),
+            "reclaimable_tasks": reclaimable,
+            "attached_rooms": attached,
+            "supervisor": sup,
+        }
+
+    @app.post("/api/boards/{board_id}/rooms/{room_id}",
+              dependencies=[Depends(require_auth)])
+    async def attach_board(
+        board_id: str, room_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """把一塊板掛到一間房上。要同時是板的 owner/editor 與房的管理者。
+
+        兩邊都要，是因為掛接會讓房裡的人看見板、也讓板多一個入口——只驗
+        一邊的話，任一方都能單方面把對方拉進來。
+        """
+        board = await _board_or_404(board_id)
+        if board["status"] != "active":
+            raise _err(409, "board_archived", "封存的板不能掛接新的房間")
+        room = await _room_or_404(room_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        await _board_member_or_403(board_id, actor, need_write=True)
+        if not host and actor_key(room["creator_session_key"]) != actor:
+            raise _err(403, "not_room_admin",
+                       "掛接要同時是這間房的管理者")
+        db = app.state.db
+        existing = await _board_for_room(room_id)
+        if existing is not None:
+            if existing["id"] == board_id:
+                return {"ok": True, "board_id": board_id, "room_id": room_id,
+                        "already_attached": True}
+            raise _err(409, "room_already_has_board",
+                       "這間房已經掛著另一塊板了",
+                       board_id=existing["id"], board_name=existing["name"])
+        await db.execute(
+            "INSERT INTO board_room (id, board_id, room_id, room_name,"
+            " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
+            (uuid.uuid4().hex, board_id, room_id, room["name"], actor, _now()))
+        # 這間房自己的舊卡（如果它以前有過 v1 的板）不會被搬過來——那是
+        # 另一塊板的東西。掛接只是建立關聯，不合併任何資料
+        await db.commit()
+        await events.notify(room_id)
+        return {"ok": True, "board_id": board_id, "room_id": room_id}
+
+    @app.delete("/api/boards/{board_id}/rooms/{room_id}",
+                dependencies=[Depends(require_auth)])
+    async def detach_board(
+        board_id: str, room_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """解除掛接。**不刪任何卡片**（BOARD_DESIGN §3.2）。
+
+        重新掛接回來時看到的是原來的狀態——掛接歷史是一列一列疊上去的，
+        不是覆寫。
+        """
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        await _board_member_or_403(board_id, actor, need_write=True)
+        db = app.state.db
+        cur = await db.execute(
+            "UPDATE board_room SET detached_at=? WHERE board_id=? AND room_id=?"
+            " AND detached_at IS NULL RETURNING id", (_now(), board_id, room_id))
+        if await cur.fetchone() is None:
+            raise _err(404, "board_not_attached", "這塊板沒有掛在這間房上")
+        await db.commit()
+        await events.notify(room_id)
+        return {"ok": True, "board_id": board_id, "room_id": room_id}
 
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(

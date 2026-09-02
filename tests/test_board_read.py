@@ -168,6 +168,8 @@ async def test_response_shape_is_pinned(tmp_path):
         body = (await client.get(f"/api/rooms/{rid}/board",
                                  headers={"X-Participant-Id": pid})).json()
         assert set(body) == {
+            # v2：舊路由兼任 resolver，告訴舊 client 它讀的是哪塊板
+            "board_id",
             "board_seq", "full", "objectives", "checklists", "tasks",
             "reclaimable_tasks", "supervisor",
         }
