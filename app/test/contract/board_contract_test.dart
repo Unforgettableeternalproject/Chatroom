@@ -192,6 +192,97 @@ void main() {
     });
   });
 
+  group('掛接與成員匯入', () {
+    /// 開一間房，結束就刪。掛接兩邊都要驗身分，所以房必須由同一把
+    /// session_key 建立——不然會被 `not_room_admin` 擋下。
+    Future<String> freshRoom(String label) async {
+      final res = await dio.post<Map<String, dynamic>>(
+        '/api/rooms',
+        data: {'name': '契約測試 · $label', 'session_key': sessionKey},
+      );
+      final id = res.data!['id'] as String;
+      // ⚠️ **建房不等於進房**——Hub 那邊 `POST /api/rooms` 只寫 room，
+      // 不寫 participant。匯入讀的是 participant，所以不 join 的話這裡
+      // 會拿到一個空的 imported_members，而那看起來與「query 位置錯了」
+      // 一模一樣（我第一次跑就這樣騙到自己）
+      await dio.post<Map<String, dynamic>>(
+        '/api/rooms/$id/join',
+        data: {
+          'kind': 'claude',
+          'session_key': sessionKey,
+          'preferred_name': '契約測試員',
+        },
+      );
+      addTearDown(() async {
+        try {
+          // ⚠️ 刪房走 **X-Session-Key 標頭**，不是 query（刪板那條兩種都
+          // 收，很容易照抄過來）。傳錯會拿到 403，而這裡的 catch 會把它
+          // 吞掉——每跑一次就在共用的測試 Hub 上多留一間房
+          await dio.delete<Map<String, dynamic>>('/api/rooms/$id',
+              options: Options(headers: {'X-Session-Key': sessionKey}));
+        } catch (_) {}
+      });
+      return id;
+    }
+
+    test('import_members 走 query，勾了要真的匯入', () async {
+      final roomId = await freshRoom('import');
+      final boardId = await freshBoard('import');
+      // ⚠️ 用**第二個人**驗，不能用自己：建板的人已經是 owner，而 Hub 的
+      // 匯入不覆寫既有角色，所以他不會出現在 imported_members 裡。拿自己
+      // 當受詞的話，這條測試對「勾選有沒有效」永遠回答不出來
+      const other = 'claude-ui-contract-guest';
+      await dio.post<Map<String, dynamic>>(
+        '/api/rooms/$roomId/join',
+        data: {
+          'kind': 'claude',
+          'session_key': other,
+          'preferred_name': '契約測試客',
+        },
+      );
+
+      final out = await boards.attachRoom(boardId, roomId,
+          sessionKey: sessionKey, importMembers: true);
+      // 🔴 2026-09-02 的實際缺陷：client 把它塞在 body 裡，Hub 讀到預設的
+      // false。**不報錯**，只是那個核取方塊靜靜地沒有效果。這條測的就是
+      // 「送出去的位置」——欄位名對、型別對，位置錯一樣是靜默失效
+      expect(out.alreadyAttached, isFalse);
+      expect(out.importedMembers, contains(other));
+
+      final d = await boards.fetch(boardId, sessionKey: sessionKey);
+      final m = d.members.where((m) => m.actorKey == other);
+      expect(m, hasLength(1), reason: '回報匯入了，就要在成員列上看得到');
+      // editor，不是 viewer——匯入成 viewer 的話勾了等於沒勾
+      expect(m.single.role, 'editor');
+    });
+
+    test('已經掛著同一塊板時不早退，匯入照做', () async {
+      final roomId = await freshRoom('reattach');
+      final boardId = await freshBoard('reattach');
+      await boards.attachRoom(boardId, roomId, sessionKey: sessionKey);
+      final out = await boards.attachRoom(boardId, roomId,
+          sessionKey: sessionKey, importMembers: true);
+      // App 建新板走的正是這條：`POST /api/boards` 帶 origin_room_id 就掛好
+      // 了，匯入是第二次呼叫。早退的話勾選在「建一塊新的」那條路上永遠沒用
+      expect(out.alreadyAttached, isTrue);
+    });
+
+    test('解除掛接後 detached tombstone 回得來', () async {
+      final roomId = await freshRoom('detach');
+      final boardId = await freshBoard('detach');
+      await boards.attachRoom(boardId, roomId, sessionKey: sessionKey);
+      final before = await boards.fetch(boardId, sessionKey: sessionKey);
+      expect(before.attachedRooms.map((r) => r.id), contains(roomId));
+
+      await boards.detachRoom(boardId, roomId, sessionKey: sessionKey);
+      final after = await boards.fetch(boardId, sessionKey: sessionKey);
+      // 全量回應直接不含它即可；增量才需要 tombstone。兩種都可以，
+      // 不可以的是**還掛在上面**
+      final live = const BoardSnapshot().merge(after).liveRooms;
+      expect(live.map((r) => r.id), isNot(contains(roomId)));
+    });
+  });
+
   group('排序', () {
     test('reorder 整批送、整批套用', () async {
       final id = await freshBoard('reorder');

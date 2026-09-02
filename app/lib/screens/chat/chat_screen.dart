@@ -1553,13 +1553,26 @@ class _BoardAction extends ConsumerWidget {
       // 建立時 origin_room_id 已經掛好了，不要再掛一次。
       // ⚠️ 但**匯入成員仍要單獨呼叫**：create 那條沒有 import_members，
       // 少了這一步，勾選在「建一塊新的」那條路上會靜默失效
+      AttachOutcome? outcome;
       if (!result.isCreate || result.importMembers) {
-        await api.attachRoom(boardId, roomId,
+        outcome = await api.attachRoom(boardId, roomId,
             sessionKey: sessionKey, importMembers: result.importMembers);
       }
       ref.invalidate(boardProvider(roomId));
       ref.invalidate(boardLibraryProvider);
-      if (context.mounted) context.go('/rooms/$roomId/board');
+      if (!context.mounted) return;
+      // 勾了匯入就要說出加了幾個人。**零也要說**——「一個都沒加」與
+      // 「這個勾選根本沒送到 Hub」在畫面上會長得一模一樣，而前者是正常
+      // 結果（房裡的人本來就都在板上了），後者是缺陷
+      if (result.importMembers && outcome != null) {
+        final n = outcome.importedMembers.length;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(n == 0
+              ? '掛好了。沒有新的協作者——房裡的人本來就都在這塊板上'
+              : '掛好了，把 $n 位成員加為協作者'),
+        ));
+      }
+      context.go('/rooms/$roomId/board');
     } on ApiException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)

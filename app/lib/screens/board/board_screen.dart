@@ -317,8 +317,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// Hub 是整批套用（有一張不屬於這塊板就整批退回），所以這裡不做樂觀更新
   /// 之外的補償：成功就重拉，失敗就重拉——兩種情況畫面都會回到 Hub 說的
   /// 那個順序，不會停在一個只有本機看得到的排列上。
+  /// [to] 是 `onReorderItem` 的語意：**移除之後**的最終位置。
   Future<void> _reorder(String kind, List<String> ids, int from, int to) async {
-    final next = reorderedIds(ids, from, to);
+    final next = reorderedIdsAt(ids, from, to);
     try {
       await ref.read(boardsApiProvider).reorder(
             _boardIdOrNull!,
@@ -347,7 +348,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       buildDefaultDragHandles: false,
-      onReorder: (from, to) => _reorder(
+      onReorderItem: (from, to) => _reorder(
           'task', [for (final t in tasks) t.id], from, to),
       children: [
         for (var i = 0; i < tasks.length; i++)
@@ -592,7 +593,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 已完成的週期不在這個清單裡，它們的 order_index 會被擠到
               // 後面——那是對的：這一層的順序講的是「接下來做哪個」，
               // 而做完的週期已經不在那個問題裡了
-              onReorder: (from, to) => _reorder(
+              onReorderItem: (from, to) => _reorder(
                   'objective', [for (final o in active) o.id], from, to),
               children: [
                 for (var i = 0; i < active.length; i++)

@@ -989,6 +989,33 @@ class AttachedRoom {
   );
 }
 
+/// 掛接的結果。
+///
+/// `alreadyAttached` 為真時**不是失敗**——App 建新板走的是「先 `POST
+/// /api/boards` 帶 `origin_room_id`（那時就掛好了），再回頭要求匯入成員」，
+/// 所以第二次呼叫必然踩到這個狀態，而它仍然做了匯入的工作。
+@immutable
+class AttachOutcome {
+  const AttachOutcome({
+    this.alreadyAttached = false,
+    this.importedMembers = const [],
+  });
+
+  final bool alreadyAttached;
+
+  /// 這次真正被加進板的 actor_key。**已經是成員的人不在裡面**——
+  /// 所以它是「新增了幾個」，不是「房裡有幾個人」。
+  final List<String> importedMembers;
+
+  factory AttachOutcome.fromJson(Map<String, dynamic> json) => AttachOutcome(
+    alreadyAttached: (json['already_attached'] as bool?) ?? false,
+    importedMembers: (json['imported_members'] as List<dynamic>? ?? const [])
+        .map((e) => e.toString())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false),
+  );
+}
+
 /// Supervisor 對正在工作的 actor 送出的判斷或建議。
 ///
 /// 走 board_event（房內 #36 裁決的 B 案），不是聊天室訊息——所以 Supervisor
@@ -1148,8 +1175,15 @@ bool boardUnattached({
 /// ⚠️ **`newIndex` 是「移除之前」的插入位置**，所以往後拖時要先減一。
 /// 少了那一行，往後拖永遠會多跳一格——而且只在往後拖時錯，往前拖是對的，
 /// 所以隨手試一下很容易以為它好了。
-List<String> reorderedIds(List<String> ids, int oldIndex, int newIndex) {
-  if (newIndex > oldIndex) newIndex -= 1;
+///
+/// 新的 `onReorderItem` 已經替我們減過了，那條走 [reorderedIdsAt]。
+/// **兩個索引語意不同，是這裡分成兩個函式的唯一理由**——合成一個再靠參數
+/// 決定要不要減，遲早會有人在某個呼叫點傳錯，而錯的方向只在往後拖時看得見。
+List<String> reorderedIds(List<String> ids, int oldIndex, int newIndex) =>
+    reorderedIdsAt(ids, oldIndex, newIndex > oldIndex ? newIndex - 1 : newIndex);
+
+/// 同上，但 [newIndex] 是**移除之後**的最終位置（`onReorderItem` 的語意）。
+List<String> reorderedIdsAt(List<String> ids, int oldIndex, int newIndex) {
   final out = [...ids];
   out.insert(newIndex, out.removeAt(oldIndex));
   return out;

@@ -30,4 +30,24 @@ void main() {
     reorderedIds(original, 0, 3);
     expect(original, ids);
   });
+
+  _atSemantics();
+}
+
+/// `onReorderItem` 那條路。索引語意與上面那組不同——**這裡的 newIndex
+/// 已經是移除之後的最終位置**，不能再減一次。
+void _atSemantics() {
+  const ids = ['a', 'b', 'c', 'd'];
+
+  test('往後拖：最終位置就是最終位置，不再減一', () {
+    // onReorder 的 (0, 2) 與 onReorderItem 的 (0, 1) 是同一個動作。
+    // 兩邊都減一次的話，往後拖會少跳一格——而往前拖仍然正確，
+    // 所以隨手拖一下很容易以為它好了
+    expect(reorderedIdsAt(ids, 0, 1), ['b', 'a', 'c', 'd']);
+    expect(reorderedIdsAt(ids, 0, 3), ['b', 'c', 'd', 'a']);
+  });
+
+  test('往前拖：兩種語意在這個方向上一致', () {
+    expect(reorderedIdsAt(ids, 2, 0), reorderedIds(ids, 2, 0));
+  });
 }

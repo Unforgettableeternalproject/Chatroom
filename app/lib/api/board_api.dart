@@ -366,18 +366,25 @@ class BoardsApi {
   /// 發給那間房未來的所有人，而那不是掛接的人做過的決定。
   ///
   /// 不覆寫既有成員的角色（已經是 owner 的不會被降成 editor）。
-  Future<void> attachRoom(
+  /// 掛接。回傳「已經掛著了嗎」與「匯入了誰」。
+  ///
+  /// ⚠️ `import_members` 是 **query**，不是 body。Hub 那端的簽名是
+  /// `import_members: bool = False`（FastAPI 的原始型別預設收 query），
+  /// 塞進 body 的話它讀到的永遠是預設值 `false`——**不會報錯**，
+  /// 只是那個核取方塊靜靜地沒有任何效果（2026-09-02）。
+  Future<AttachOutcome> attachRoom(
     String boardId,
     String roomId, {
     required String sessionKey,
     bool importMembers = false,
   }) =>
       unwrap(() async {
-        await _dio.post<Map<String, dynamic>>(
+        final res = await _dio.post<Map<String, dynamic>>(
           '/api/boards/$boardId/rooms/$roomId',
-          data: {'import_members': importMembers},
+          queryParameters: {'import_members': importMembers},
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
+        return AttachOutcome.fromJson(res.data ?? const {});
       });
 
   /// 解除掛接。**不刪 Board 的任何資料**——重新掛接看得到原狀態。
