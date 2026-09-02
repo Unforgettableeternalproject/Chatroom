@@ -765,6 +765,12 @@ async def _rebuild_board_tables(db: aiosqlite.Connection) -> None:
             await db.execute(f"ALTER TABLE {table}__v2 RENAME TO {table}")
         for stmt in REBUILT_INDEXES:
             await db.execute(stmt)
+        # POST_MIGRATION_INDEXES 也建在這三張表上，而 DROP TABLE 把它們一起
+        # 帶走了。**少了這一圈，索引要等下一次啟動才補回來**——中間那段時間
+        # 查詢照樣正確，只是慢，而慢不會有任何地方報錯
+        # （@開發Novia (除錯) 2026-09-02 在三份 db 上一致重現）
+        for stmt in POST_MIGRATION_INDEXES:
+            await db.execute(stmt)
         await db.commit()
     finally:
         await db.execute("PRAGMA legacy_alter_table=OFF")

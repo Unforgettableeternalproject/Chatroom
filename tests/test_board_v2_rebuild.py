@@ -60,17 +60,33 @@ async def test_rebuild_keeps_every_column(tmp_path):
     await db.close()
 
 
-async def test_indexes_are_recreated(tmp_path):
-    """索引不重建就是**安靜地變慢**，而慢到被發現時沒有人會想到是換表。"""
-    db = await open_db(str(tmp_path / "idx.db"))
+async def test_indexes_are_recreated_on_the_first_start(tmp_path):
+    """索引不重建就是**安靜地變慢**，而慢到被發現時沒有人會想到是換表。
+
+    ⚠️ 關鍵是「**第一次**啟動就要齊」。`POST_MIGRATION_INDEXES` 那幾條建在
+    同樣三張表上，`DROP TABLE` 會一起帶走——漏掉重建的話它們要等下一次啟動
+    才補回來，而中間那段時間查詢照樣正確，只是慢。
+    （@開發Novia (除錯) 2026-09-02 在三份 db 上一致重現。）
+    """
+    path = str(tmp_path / "idx.db")
+    db = await open_db(path)
     rows = await (await db.execute(
         "SELECT name FROM sqlite_master WHERE type='index'")).fetchall()
-    names = {r["name"] for r in rows}
+    first = {r["name"] for r in rows}
     for want in ("idx_btask_room", "idx_btask_checklist", "idx_btask_claim",
                  "idx_bobjective_room", "idx_bchecklist_room",
-                 "idx_bobjective_uncategorised",
-                 "idx_bchecklist_uncategorised"):
-        assert want in names, f"{want} 沒有被重建"
+                 "idx_bobjective_uncategorised", "idx_bchecklist_uncategorised",
+                 # 換軸之後的增量查詢走這三條，孤兒判定走 claim_actor
+                 "idx_bobjective_board", "idx_bchecklist_board",
+                 "idx_btask_board", "idx_btask_claim_actor"):
+        assert want in first, f"{want} 第一次啟動就該在"
+    await db.close()
+
+    # 第二次啟動不該補出任何新的——要補就表示第一次漏了
+    db = await open_db(path)
+    rows = await (await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")).fetchall()
+    assert {r["name"] for r in rows} == first, "第二次啟動才補齊的索引"
     await db.close()
 
 
