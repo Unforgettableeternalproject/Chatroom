@@ -51,9 +51,13 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
 
   Future<void> _send(BoardSnapshot snap) async {
     final text = _message.text.trim();
-    // 收件者必填——Hub 不接受空 target，而那個 422 的訊息只會說
-    // 「至少要一個字元」，讀的人不會知道問題是「你沒挑人」
-    if (text.isEmpty || (_toActorKey ?? '').isEmpty) return;
+    // 收件者必**選**，但空字串是一個合法的選擇（＝對整塊板說）。
+    //
+    // ⚠️ 所以判準是 `== null`（還沒挑），不是 `.isEmpty`（挑了廣播）。
+    // 用後者的話廣播那個選項會永遠送不出去，而按鈕就那樣灰在那裡，
+    // 沒有任何東西說明為什麼
+    if (text.isEmpty || _toActorKey == null) return;
+    final broadcast = _toActorKey!.isEmpty;
     setState(() => _sending = true);
     try {
       final delivered = await ref.read(boardsApiProvider).sendDirective(
@@ -69,9 +73,17 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       // 不在任何掛接房裡、沒有被喚醒。不講的話送出的人會以為對方已經知道
       // 了——而那是他接下來所有判斷的前提
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(delivered
-            ? '已送出，對方已被叫醒。'
-            : '已寫進稽核串，但對方不在任何掛接的聊天室裡——他還不知道這件事。'),
+        // 廣播與單點的落空原因不同，講法也要不同：單點是「那個人不在」，
+        // 廣播是「板上沒有任何人在掛接的房裡」。混用同一句話，
+        // 送出的人會以為自己挑錯了人
+        content: Text(switch ((broadcast, delivered)) {
+          (true, true) => '已送出，板上在線的成員都被叫醒了。',
+          (true, false) =>
+            '已寫進稽核串，但板上沒有人在掛接的聊天室裡——現在沒有人知道這件事。',
+          (false, true) => '已送出，對方已被叫醒。',
+          (false, false) =>
+            '已寫進稽核串，但對方不在任何掛接的聊天室裡——他還不知道這件事。',
+        }),
         duration: Duration(seconds: delivered ? 2 : 6),
       ));
     } on ApiException catch (e) {
@@ -402,11 +414,20 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             ),
             style: UepText.sans(size: 12, color: s.ink),
             onChanged: (v) => setState(() => _toActorKey = v),
-            // ⚠️ **沒有「對整塊板說」這個選項**。delta 那側有「空 =
-            // 對全體」的語意，但送出這側 Hub 要求 target 非空
-            // （min_length=1，空字串與不帶都是 422）。廣播還沒有實作，
-            // 放一個必然失敗的選項在這裡，等於把錯誤留到按下去才發生。
+            // 空字串＝**對整塊板說**（Hub `5fbd7db` 起支援；在那之前
+            // `target_actor_key` 是 min_length=1，這個選項放上來等於把
+            // 必然失敗的錯誤留到按下去才發生）。
+            //
+            // ⚠️ 收件人是板上的**成員**，不是掛接房裡的所有人——
+            // 選單文字要照那個母體寫，寫成「房裡所有人」會讓 Supervisor
+            // 以為某個只在房裡、不在板上的人也收得到
             items: [
+              DropdownMenuItem(
+                value: '',
+                child: Text('所有板成員（${members.length}）',
+                    overflow: TextOverflow.ellipsis,
+                    style: UepText.sans(size: 12, color: s.inkSoft)),
+              ),
               for (final m in members)
                 DropdownMenuItem(
                   value: m.actorKey,
@@ -435,7 +456,8 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         child: UepButton(
           label: _sending ? '送出中…' : '送出',
           small: true,
-          onPressed: (_sending || (_toActorKey ?? '').isEmpty)
+          // 同上：`== null` 是「還沒挑」，空字串是「挑了廣播」
+          onPressed: (_sending || _toActorKey == null)
               ? null
               : () => _send(snap!),
         ),

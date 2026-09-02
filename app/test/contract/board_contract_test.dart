@@ -70,12 +70,16 @@ void main() {
     try {
       final res = await dio.get<Map<String, dynamic>>('/api/health');
       final b = res.data?['build'] as Map<String, dynamic>? ?? const {};
-      printOnFailure('Hub: $url');
+      // 這一行的用途就是無條件出現在測試輸出裡。`printOnFailure` 只在失敗
+      // 時吐，而「打的是哪一版」在成功時同樣要看得到：一組打著舊 Hub 的
+      // 全綠，比一條紅燈更會誤導人
+      // ignore: avoid_print
       print('契約測試打的 Hub：$url · '
           'v${res.data?['version'] ?? '?'} · ${b['commit'] ?? '?'}');
     } catch (e) {
       // 印不出來不該讓整組不跑——舊 Hub 可能沒有 /api/health，
       // 而契約本身仍然驗得動
+      // ignore: avoid_print — 同上
       print('契約測試打的 Hub：$url（版本問不到：$e）');
     }
   });
@@ -196,15 +200,32 @@ void main() {
       expect(list.single.fromName, isNotEmpty);
     });
 
-    test('空 target 送不出去——UI 不可以提供「對整塊板說」', () async {
-      final id = await freshBoard('directive-empty');
-      // 這條的用途是**盯著它什麼時候變**：Hub 若實作了廣播，這裡會由紅
-      // 提醒我們把那個選項加回去。現在它必須失敗
-      await expectLater(
-        boards.sendDirective(id,
-            sessionKey: sessionKey, text: 'x', targetActorKey: ''),
-        throwsA(isA<ApiException>()),
+    test('空 target ＝ 對整塊板說', () async {
+      final id = await freshBoard('directive-broadcast');
+      await boards.setSupervisor(id,
+          sessionKey: sessionKey,
+          actorKey: sessionKey,
+          displayName: '契約測試員',
+          actorKind: 'claude');
+      // 這條原本是反過來寫的（`min_length=1`，空 target 必然 422），
+      // 用途是**盯著它什麼時候變**。Hub `5fbd7db` 實作了廣播，它就紅了，
+      // 而那正是它存在的理由——翻面的同時 UI 也把那個選項加了回去
+      final delivered = await boards.sendDirective(
+        id,
+        sessionKey: sessionKey,
+        text: '契約測試：對整塊板說',
+        targetActorKey: '',
       );
+      // 沒有掛接房 ⇒ 沒有落點。廣播的 false 與單點的 false 成因不同
+      // （「板上沒有人在掛接房裡」vs「那個人不在」），但都必須送到 UI
+      expect(delivered, isFalse);
+
+      final d = await boards.fetch(id, sessionKey: sessionKey);
+      final list = const BoardSnapshot().merge(d).sortedDirectives;
+      expect(list, hasLength(1));
+      // 廣播在稽核串裡的 to 是空的——那是**識別廣播的唯一依據**，
+      // 補一個假的收件人會讓「對整塊板說」與「對某個人說」再也分不出來
+      expect(list.single.toActorKey, isEmpty);
     });
   });
 
