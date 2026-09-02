@@ -304,6 +304,41 @@ class QuestionAnswer(BaseModel):
 # 「安靜忽略未知欄位」在這裡是最糟的選擇——`{"status": "done"}` 會拿到
 # 200 卻什麼也沒發生，呼叫端完全看不出自己走錯路。
 
+class BoardCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2000)
+    # 建的當下順便掛到一間房（選填）。Board Library 上建的板可以先不掛，
+    # 但從房裡建的一定要掛——否則使用者按了「建立」之後，那塊板不會出現在
+    # 他眼前這間房裡，而他不知道自己該去哪裡找
+    origin_room_id: str = Field(default="", max_length=64)
+
+
+class BoardSupervisorAssign(BaseModel):
+    """board-scoped 的 Supervisor 指定。與房內那個 `BoardSupervisorSet`
+    是兩件事：那邊指的是 session_key、範圍是一間房；這邊是 actor_key、
+    範圍是一塊板，而且**對象不必在任何一間房裡**。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    # 空字串＝卸任。**用空字串而不是另開一條 DELETE**：指定與卸任是同一個
+    # 決定的兩面，兩條路徑會讓「現在到底有沒有人在看」多一個出錯的地方
+    target_actor_key: str = Field(default="", max_length=128)
+    display_name: str = Field(default="", max_length=100)
+    actor_kind: str = Field(default="", max_length=20)
+
+
+class BoardDirective(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_actor_key: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=4096)
+    # 針對哪張卡（選填）。有的話 UI 能把判斷掛在那張卡旁邊
+    item_kind: str = Field(default="", max_length=20)
+    item_id: str = Field(default="", max_length=64)
+
+
 class BoardObjectiveCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
@@ -3197,6 +3232,31 @@ def create_app(config: Config | None = None) -> FastAPI:
             "  AND detached_at IS NULL)", (seq, board_id))
         return seq
 
+    async def _record_board_event(board_id: str, board_seq: int,
+                                  event_type: str, actor: str = "",
+                                  actor_name: str = "",
+                                  origin_room_id: str = "",
+                                  item_kind: str = "", item_id: str = "",
+                                  target_actor_key: str = "",
+                                  payload: dict | None = None) -> None:
+        """記一筆 canonical event。
+
+        **一次變更只留一筆**，不論這塊板掛了幾間房（驗收條件 8）——把每件事
+        複製成每間房一則的話，掛三間房的板會讓同一件事在稽核串裡出現三次，
+        而讀的人分不出那是三件事還是一件。
+
+        與當次的 `board_seq` 共用同一個號：event 與它描述的那個變更是同一
+        件事，各領一個號會讓增量 client 收到一個沒有對應內容的水位。
+        """
+        await app.state.db.execute(
+            "INSERT INTO board_event (board_id, board_seq, event_type,"
+            " actor_key, actor_name, target_actor_key, origin_room_id,"
+            " item_kind, item_id, payload_json, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+            (board_id, board_seq, event_type, actor, actor_name,
+             target_actor_key, origin_room_id, item_kind, item_id,
+             json.dumps(payload or {}, ensure_ascii=False), _now()))
+
     async def _notify_board_rooms(board_id: str) -> None:
         """把所有 active 掛接房叫醒。
 
@@ -4621,6 +4681,63 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "board_read_only", "你在這塊板上只能看")
         return role
 
+    @app.post("/api/boards", dependencies=[Depends(require_auth)])
+    async def create_board(
+        body: BoardCreate,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """建一塊新的板。建立者成為 owner。
+
+        與「在房裡寫第一張卡自動長出一塊板」是兩條並存的路徑：那條服務的是
+        「我只是想記一件事」，這條服務的是「我要開一個新專案」——後者需要
+        自己取名字，而前者取不出名字（所以拿房名當起點）。
+        """
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        if not actor:
+            raise _err(400, "session_key_required",
+                       "要帶 X-Session-Key 才知道你是誰")
+        db = app.state.db
+        room = None
+        if body.origin_room_id:
+            room = await _room_or_404(body.origin_room_id)
+            if not host and actor_key(room["creator_session_key"]) != actor:
+                raise _err(403, "not_room_admin",
+                           "掛接要同時是這間房的管理者")
+            if await _board_for_room(body.origin_room_id) is not None:
+                raise _err(409, "room_already_has_board",
+                           "這間房已經掛著一塊板了")
+        now = _now()
+        bid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board (id, name, description, owner_actor_key,"
+            " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (bid, body.name.strip(), body.description, actor, now, now))
+        member_name = ""
+        if x_participant_id:
+            p = await (await db.execute(
+                "SELECT display_name, kind FROM participant WHERE id=?",
+                (x_participant_id,))).fetchone()
+            member_name = p["display_name"] if p else ""
+        await db.execute(
+            "INSERT INTO board_member (board_id, actor_key, role,"
+            " display_name, actor_kind, added_at) VALUES (?,?,'owner',?,?,?)",
+            (bid, actor, member_name, "", now))
+        if room is not None:
+            await db.execute(
+                "INSERT INTO board_room (id, board_id, room_id, room_name,"
+                " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
+                (uuid.uuid4().hex, bid, room["id"], room["name"], actor, now))
+        await db.commit()
+        if room is not None:
+            await events.notify(room["id"])
+        return {"ok": True, "id": bid, "board_id": bid,
+                "name": body.name.strip(),
+                "attached_room_id": room["id"] if room is not None else None}
+
     @app.get("/api/boards", dependencies=[Depends(require_auth)])
     async def list_boards(
         session_key: str = "",
@@ -4729,6 +4846,33 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "actor_kind": m["actor_kind"], "aliases": aliases,
             })
 
+        # directive 稽核串。**只回最近 50 筆**：長跑的板會把回應撐爆，
+        # 而畫面上一次也讀不完那麼多
+        cur = await db.execute(
+            "SELECT board_seq, actor_key, actor_name, target_actor_key,"
+            " origin_room_id, item_kind, item_id, payload_json, created_at"
+            " FROM board_event WHERE board_id=? AND event_type='directive'"
+            "   AND board_seq > ? ORDER BY board_seq DESC LIMIT 51",
+            (board_id, after_board_seq))
+        rows = list(await cur.fetchall())
+        directives_more = len(rows) > 50
+        directives = []
+        for d in reversed(rows[:50]):
+            try:
+                payload = json.loads(d["payload_json"]) or {}
+            except (TypeError, ValueError):
+                payload = {}
+            directives.append({
+                "board_seq": d["board_seq"],
+                "from_actor_key": d["actor_key"],
+                "from_name": d["actor_name"],
+                "to_actor_key": d["target_actor_key"],
+                "origin_room_id": d["origin_room_id"],
+                "item_kind": d["item_kind"], "item_id": d["item_id"],
+                "text": payload.get("text", ""),
+                "created_at": d["created_at"],
+            })
+
         sup = None
         if board["supervisor_actor_key"]:
             sup = {"actor_key": board["supervisor_actor_key"],
@@ -4751,6 +4895,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "checklists": await _rows("board_checklist"),
             "tasks": await _rows("board_task"),
             "reclaimable_tasks": reclaimable,
+            "directives": directives,
+            "directives_has_more": directives_more,
             "members": members,
             "attached_rooms": attached,
             "supervisor": sup,
@@ -4837,6 +4983,122 @@ def create_app(config: Config | None = None) -> FastAPI:
             board_id, x_session_key, x_participant_id)
         cid = await _uncategorised_checklist(room_id, me)
         return await _insert_task(cid, room_id, body, me)
+
+    @app.post("/api/boards/{board_id}/supervisor",
+              dependencies=[Depends(require_auth)])
+    async def set_board_supervisor(
+        board_id: str, body: BoardSupervisorAssign,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """指定或卸任這塊板的 Supervisor。只有 owner。
+
+        Supervisor **不必是板的成員，也不必在任何一間掛接房裡**——這正是
+        艾斯維爾第 4 點要的：他能對正在工作的 agent 送判斷，而不必先被拉
+        進某間對話。空的 `target_actor_key` ＝ 卸任。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        role = await _board_role(board_id, actor)
+        if role != "owner":
+            raise _err(403, "not_board_owner",
+                       "只有這塊板的 owner 能指定或卸任 Supervisor")
+        db = app.state.db
+        target = actor_key(body.target_actor_key)
+        seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "UPDATE board SET supervisor_actor_key=?, supervisor_name=?,"
+            " supervisor_kind=?, supervisor_set_by_actor_key=?,"
+            " supervisor_set_at=? WHERE id=?",
+            (target, body.display_name.strip() if target else "",
+             body.actor_kind.strip() if target else "",
+             actor if target else "", _now() if target else None, board_id))
+        await _record_board_event(
+            board_id, seq,
+            "supervisor_set" if target else "supervisor_cleared",
+            actor=actor, target_actor_key=target,
+            payload={"display_name": body.display_name.strip()})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "board_seq": seq,
+                "supervisor": ({"actor_key": target,
+                                "display_name": body.display_name.strip(),
+                                "actor_kind": body.actor_kind.strip()}
+                               if target else None)}
+
+    @app.post("/api/boards/{board_id}/directives",
+              dependencies=[Depends(require_auth)])
+    async def send_directive(
+        board_id: str, body: BoardDirective,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """Supervisor 對某個 actor 送一則判斷或建議。
+
+        兩件事一起做，缺一不可：
+
+        1. **寫 board_event**（真相與稽核串）——board_event 是唯一的事實
+           紀錄，room message 只是投影
+        2. **在目標所在的一間掛接房投影一則 mention 他的系統訊息**——
+           光寫 event 的話，agent 沒去讀板就收不到，而送出的人這邊看起來
+           一切正常。那是最典型的靜默失效
+
+        目標不在任何掛接房時回 `delivered: false`：**誠實講出「他現在收不到」**
+        比假裝送到了好——後者讓 Supervisor 以為對方已經知道了。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        is_supervisor = (board["supervisor_actor_key"]
+                         and board["supervisor_actor_key"] == actor)
+        if not is_supervisor and await _board_role(board_id, actor) != "owner":
+            raise _err(403, "not_board_supervisor",
+                       "只有這塊板的 Supervisor 或 owner 能送出判斷")
+        target = actor_key(body.target_actor_key)
+        if not target:
+            raise _err(422, "target_required", "要指定送給誰")
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        me = await (await db.execute(
+            "SELECT display_name FROM board_member WHERE board_id=?"
+            " AND actor_key=?", (board_id, actor))).fetchone()
+        sender_name = (me["display_name"] if me else "") \
+            or board["supervisor_name"] or "Supervisor"
+
+        # 目標現在在哪一間掛接房？找到就投影過去。**只投影一間**：投影到
+        # 每一間會讓同一則判斷在多個房各出現一次，而它是同一件事
+        row = await (await db.execute(
+            "SELECT p.room_id, p.display_name FROM participant p"
+            " JOIN board_room br ON br.room_id = p.room_id"
+            "  AND br.detached_at IS NULL"
+            " WHERE br.board_id=? AND p.status='active'"
+            "   AND TRIM(p.session_key)=? ORDER BY p.last_seen_at DESC LIMIT 1",
+            (board_id, target))).fetchone()
+        await _record_board_event(
+            board_id, seq, "directive", actor=actor, actor_name=sender_name,
+            origin_room_id=row["room_id"] if row else "",
+            item_kind=body.item_kind.strip(), item_id=body.item_id.strip(),
+            target_actor_key=target,
+            payload={"text": body.text.strip()})
+        await db.commit()
+
+        delivered = False
+        if row is not None:
+            await _post_message(
+                row["room_id"], None,
+                f"【Supervisor】{sender_name} → {row['display_name']}："
+                f"{body.text.strip()}",
+                kind="system", system_event="board_directive",
+                mentions=[row["display_name"]], reply_mentions_author=False,
+            )
+            delivered = True
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "board_seq": seq,
+                "delivered": delivered,
+                "delivered_room_id": row["room_id"] if row else None}
 
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
               dependencies=[Depends(require_auth)])

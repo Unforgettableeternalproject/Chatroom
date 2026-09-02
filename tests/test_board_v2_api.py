@@ -385,3 +385,193 @@ async def test_a_visitor_from_an_attached_room_becomes_an_editor(tmp_path):
                                      headers=other)).json()
             roles = {m["actor_key"]: m["role"] for m in body["members"]}
             assert roles == {"claude-a": "owner", "claude-b": "editor"}
+
+
+async def test_supervisor_directive_is_recorded_and_projected(tmp_path):
+    """H6：Supervisor 對正在工作的 agent 送判斷。
+
+    兩件事一起做，缺一不可——寫 board_event（真相與稽核串），以及在目標
+    所在的那間房投影一則 mention 他的訊息（喚醒）。光寫 event 的話，agent
+    沒去讀板就收不到，而送出的人這邊看起來一切正常：最典型的靜默失效。
+    """
+    app, client = await _client(tmp_path, "v2_directive")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            worker = await _join(client, rid, "claude-w", "Worker")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": "Worker 的卡"}, headers=worker)
+
+            # Supervisor 是一個**不在這間房裡**的身分
+            r = await client.post(
+                f"/api/boards/{bid}/supervisor",
+                json={"target_actor_key": "claude-sup",
+                      "display_name": "米絲媞", "actor_kind": "claude"},
+                headers=owner)
+            assert r.status_code == 200, r.text
+
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"target_actor_key": "claude-w",
+                      "text": "那條查詢會漏掉解除掛接的房"},
+                headers={"X-Session-Key": "claude-sup"})
+            assert r.status_code == 200, r.text
+            assert r.json()["delivered"] is True
+            assert r.json()["delivered_room_id"] == rid
+
+            # 投影：目標被 mention 到，watcher 才叫得醒他
+            msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                     headers=owner)).json()["messages"]
+            hit = [m for m in msgs if m["system_event"] == "board_directive"]
+            assert len(hit) == 1
+            assert hit[0]["mentions"] == ["Worker"]
+            assert "那條查詢會漏掉解除掛接的房" in hit[0]["content"]
+
+            # 稽核串：一次送出只留一筆 canonical event
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert len(body["directives"]) == 1
+            d = body["directives"][0]
+            assert d["from_actor_key"] == "claude-sup"
+            assert d["to_actor_key"] == "claude-w"
+            assert body["supervisor"] == {"actor_key": "claude-sup",
+                                          "display_name": "米絲媞",
+                                          "actor_kind": "claude"}
+
+
+async def test_directive_to_someone_who_is_not_around_says_so(tmp_path):
+    """目標不在任何掛接房時要**誠實回 delivered: false**。
+
+    假裝送到了會讓 Supervisor 以為對方已經知道了——而那正是他接下來所有
+    判斷的前提。
+    """
+    app, client = await _client(tmp_path, "v2_directive_away")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"target_actor_key": "claude-nobody", "text": "在嗎"},
+                headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["delivered"] is False
+            # 送不到不代表不記——他下次讀板還是看得到
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert len(body["directives"]) == 1
+
+
+async def test_only_supervisor_or_owner_can_send_directives(tmp_path):
+    app, client = await _client(tmp_path, "v2_directive_acl")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            other = await _join(client, rid, "claude-b", "B")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            # B 在板上寫過東西 ⇒ 是 editor，但 editor 不能送判斷
+            await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": "B 的卡"}, headers=other)
+
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"target_actor_key": "claude-a", "text": "我來指揮"},
+                headers=other)
+            assert r.status_code == 403
+            assert r.json()["detail"]["code"] == "not_board_supervisor"
+
+
+async def test_supervisor_can_be_dismissed(tmp_path):
+    """人類可以卸任 Supervisor 並重派（艾斯維爾第 4 點）。"""
+    app, client = await _client(tmp_path, "v2_sup_clear")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            await client.post(f"/api/boards/{bid}/supervisor",
+                              json={"target_actor_key": "claude-s1",
+                                    "display_name": "第一任"}, headers=owner)
+            r = await client.post(f"/api/boards/{bid}/supervisor",
+                                  json={"target_actor_key": ""},
+                                  headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["supervisor"] is None
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert body["supervisor"] is None
+
+            # 卸任之後前任就不能再送判斷了
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"target_actor_key": "claude-a", "text": "我還在"},
+                headers={"X-Session-Key": "claude-s1"})
+            assert r.status_code == 403
+
+
+async def test_no_duplicate_request_model_names(tmp_path):
+    """`app.py` 裡不能有兩個同名的請求模型。
+
+    Python 的後定義會**靜默覆蓋**前一個，於是端點宣告的是 A、實際驗證的是
+    B——請求回 422 說「這些欄位不被允許」，而你看著自己剛寫好的模型定義，
+    上面明明有那些欄位。（2026-09-02 實際踩過：board-scoped 的
+    Supervisor 模型與房內那個同名。）
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "server" / "chatroom_server" / "app.py"
+    names = re.findall(r"^class (\w+)\(BaseModel\):",
+                       src.read_text(encoding="utf-8"), re.M)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    assert not dupes, f"這些請求模型有同名的兩份，後定義的會靜默覆蓋：{dupes}"
+
+
+async def test_create_a_board_from_the_library_and_from_a_room(tmp_path):
+    """`POST /api/boards`：Library 上建新板，也可以順便掛到一間房。
+
+    @開發Novia (UI) 打真貨時發現這條路由不存在——Library 有「建立」按鈕
+    卻沒有對應端點。從房裡自動長出來的那條服務的是「我只是想記一件事」，
+    這條服務的是「我要開一個新專案」，兩者並存。
+    """
+    app, client = await _client(tmp_path, "v2_create")
+    async with client:
+        async with app.router.lifespan_context(app):
+            key = {"X-Session-Key": "claude-a"}
+            r = await client.post("/api/boards",
+                                  json={"name": "沒有房的板"}, headers=key)
+            assert r.status_code == 200, r.text
+            assert r.json()["attached_room_id"] is None
+
+            rid = await _room(client)
+            r = await client.post("/api/boards",
+                                  json={"name": "掛在房上的板",
+                                        "origin_room_id": rid}, headers=key)
+            assert r.status_code == 200, r.text
+            bid = r.json()["id"]
+            assert r.json()["attached_room_id"] == rid
+
+            hdr = await _join(client, rid, "claude-a", "A")
+            assert await _board_id(client, rid, hdr) == bid
+
+            # 已經掛了一塊，不能再掛第二塊
+            r = await client.post("/api/boards",
+                                  json={"name": "第二塊",
+                                        "origin_room_id": rid}, headers=key)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "room_already_has_board"
+
+            body = (await client.get("/api/boards", headers=key)).json()
+            assert {b["name"] for b in body["boards"]} == {
+                "沒有房的板", "掛在房上的板"}

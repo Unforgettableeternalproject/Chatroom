@@ -224,6 +224,22 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "重新加入聊天室沒有用。",
                 status=status, detail=detail,
             )
+        if code == "not_board_owner":
+            # 管理成員與指定 Supervisor 只有 owner 能做。落進 fallback 會叫他
+            # 重新 join——而角色不會因為重新加入房間而改變
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有板的 owner 做得到。請 owner 代為執行，"
+                "或請他把你調成 owner。",
+                status=status, detail=detail,
+            )
+        if code == "not_board_supervisor":
+            # 送出判斷限 Supervisor 或 owner。同上，不是身分失效
+            return HubError(
+                _detail_text(detail)
+                or "只有這塊板的 Supervisor 或 owner 能送出判斷。",
+                status=status, detail=detail,
+            )
         if code == "board_read_only":
             # viewer 只能看。同上，這不是身分失效，重新 join 不會升級角色
             return HubError(
