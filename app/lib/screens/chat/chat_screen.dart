@@ -44,6 +44,7 @@ import '../../widgets/message_bubble.dart';
 import '../../widgets/question_card.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
+import '../../state/composer_drafts.dart';
 import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
@@ -611,6 +612,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final identity = await ref.read(identityProvider(widget.roomId).future);
+    // 說出去了就不再是草稿。**只清這一房**——輸入列自己會清空顯示，但那是
+    // 兩份狀態，不清這裡的話下次進這個房又會把已經送出的那句話載回來
+    ref.read(composerDraftsProvider.notifier).clear(widget.roomId);
     // 只帶已上傳完成的；輸入列不讓有未完成項目時送出，這裡是第二道防線
     final attachmentIds = [
       for (final a in _pending)
@@ -1164,6 +1168,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           if (myId != null)
             _PendingQuestions(roomId: roomId, participantId: myId),
           MessageComposer(
+            // 這個房間上次沒說完的話。**只在 State 建立時讀一次**——
+            // `ValueKey(roomId)` 保證換房就是新的一顆 State，所以「讀一次」
+            // 與「每次換房重讀」在這裡是同一件事
+            initialText: ref.read(composerDraftsProvider.notifier)
+                .of(widget.roomId),
+            onTextChanged: (t) => ref
+                .read(composerDraftsProvider.notifier)
+                .set(widget.roomId, t),
             members: activeMembers,
             enabled: !archived,
             replyTarget: _replyTarget,

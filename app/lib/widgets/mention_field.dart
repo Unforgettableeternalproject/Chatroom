@@ -60,6 +60,8 @@ class MessageComposer extends StatefulWidget {
     this.onPasteImage,
     this.onRemoveAttachment,
     this.onRetryAttachment,
+    this.initialText = '',
+    this.onTextChanged,
   });
 
   /// 房內 active 成員（@ 選單只列這些，P3-07 條件 2）。
@@ -86,12 +88,24 @@ class MessageComposer extends StatefulWidget {
   final void Function(ComposerAttachment)? onRemoveAttachment;
   final void Function(ComposerAttachment)? onRetryAttachment;
 
+  /// 進場時輸入框裡就該有的字（這個房間上次沒說完的話）。
+  ///
+  /// **只在 initState 讀一次。** 之後的每一次輸入都是使用者在打字，拿外面
+  /// 的值再蓋回去會把游標推到別的位置、也會吃掉正在輸入的組字。
+  final String initialText;
+
+  /// 每次內容變動時回報給外層存起來。
+  ///
+  /// 存放的地方是外層的事——這個 widget 是純呈現元件，不知道有房間這回事，
+  /// 也就不該知道草稿該存到哪一格去。
+  final ValueChanged<String>? onTextChanged;
+
   @override
   State<MessageComposer> createState() => _MessageComposerState();
 }
 
 class _MessageComposerState extends State<MessageComposer> {
-  final _controller = TextEditingController();
+  late final _controller = TextEditingController(text: widget.initialText);
   final _focus = FocusNode();
   final _link = LayerLink();
   final _overlayController = OverlayPortalController();
@@ -108,6 +122,7 @@ class _MessageComposerState extends State<MessageComposer> {
   @override
   void initState() {
     super.initState();
+    _hasText = _controller.text.trim().isNotEmpty;
     _controller.addListener(_onTextChanged);
   }
 
@@ -137,6 +152,10 @@ class _MessageComposerState extends State<MessageComposer> {
 
   void _onTextChanged() {
     final text = _controller.text;
+    // 回報給外層存起來。**放在最前面**——下面每一條 early return 都是
+    // 「@ 選單不用理它」的意思，不是「這次輸入不算數」。漏在某一條之後的話，
+    // 游標跑到開頭、或使用者按了 ESC 收掉選單，那一次的字就不會被存下來
+    widget.onTextChanged?.call(text);
     final hasText = text.trim().isNotEmpty;
     if (hasText != _hasText) setState(() => _hasText = hasText);
     final cursor = _controller.selection.baseOffset;

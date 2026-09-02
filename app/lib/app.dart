@@ -61,7 +61,18 @@ GoRouter buildRouter(bool Function() isConfigured) {
             routes: [
               GoRoute(
                 path: ':roomId',
+                // ⚠️ **key 一定要有。** 少了它，切換房間時 Flutter 認為
+                // 這是同一個位置的同一種 widget，於是重用同一顆
+                // `_ChatScreenState`——回覆目標、編輯目標與**待送附件**
+                // 全部原封不動留著，然後出現在新的房間裡。附件那條最壞：
+                // 它會在別的房被送出去，而畫面上只是一排縮圖，沒有人會
+                // 逐一去認那是不是自己剛剛在別處挑的檔案
+                // （艾斯維爾 2026-09-02；UI 端定位到兩顆 State 都被重用）。
+                //
+                // 草稿的字**不靠 key 保存**，它存在 composerDraftsProvider
+                // 裡——key 讓 State 重建，那會清掉字，所以兩層缺一不可。
                 builder: (context, state) => ChatScreen(
+                  key: ValueKey(state.pathParameters['roomId']!),
                   roomId: state.pathParameters['roomId']!,
                   focusSeq: int.tryParse(
                       state.uri.queryParameters['focusSeq'] ?? ''),
