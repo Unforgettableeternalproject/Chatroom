@@ -310,6 +310,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// 這道守門只能在 UI：Hub 分不出「你只想動這兩張」與「你被篩選矇住了」，
   /// 而前者是合法的部分排序，擋掉它是錯的。
+  /// ⚠️ 排除 `_orphansOnly` 原本只是「篩選過的清單拖曳沒有意義」，但它
+  /// 同時守住了另一件事：**篩選過的清單送出去就是子集合**，而 Hub 依收到
+  /// 的順序寫 order_index，沒送的保留舊值 ⇒ 兩批號碼交錯，順序變成未定義
+  /// （@審核用Codex-2 #411 第 3 條）。拿掉這個條件的人要先解決那一半。
   bool get _canReorder => !_readOnly && !_orphansOnly && _boardIdOrNull != null;
 
   /// 把 [ids] 依 Flutter 的 old/new index 語意搬一格，然後整批送出。
