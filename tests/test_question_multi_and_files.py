@@ -230,3 +230,83 @@ async def test_labels_containing_the_separator_survive(tmp_path):
             # 「拆 answer」這個做法不可靠，而不是暗示它可行
             assert got["answer"].split("、") != labels
             assert len(got["answer"].split("、")) > len(labels)
+
+
+@pytest.mark.asyncio
+async def test_picking_options_and_adding_a_note(tmp_path):
+    """選了選項**又想補一句**——兩者要能一起送（艾斯維爾 2026-09-02）。
+
+    在此之前只能二選一：kind=option 會把自訂文字擋成 unknown_option，
+    kind=free_text 則讓那幾張選擇靜靜消失。
+
+    **刻意不放寬 unknown_option 的驗證**：`answer_options` 是給 agent 當
+    「他從我給的清單裡選的」來信任的，把自訂文字混進去，那個保證就沒了。
+    所以補充走獨立欄位，三種讀法各拿各的。
+    """
+    app, client = await _make(tmp_path, "extra")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human, multi_select=True)
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": ["甲", "丙"],
+                      "extra": "丙那個先別動"},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # 結構化那份**只有真選項**，agent 的信任保持
+            assert body["answer_options"] == ["甲", "丙"]
+            assert body["answer_extra"] == "丙那個先別動"
+
+            got = (await client.get(
+                f"/api/questions/{q['id']}")).json()["question"]
+            assert got["answer_options"] == ["甲", "丙"]
+            assert got["answer_extra"] == "丙那個先別動"
+            # 人讀那份是完整的：不必為了看到補充而去拼兩個欄位
+            assert "甲、丙" in got["answer"]
+            assert "丙那個先別動" in got["answer"]
+
+
+@pytest.mark.asyncio
+async def test_extra_without_options_is_refused(tmp_path):
+    """free_text 的補充**就是答案本身**。兩個欄位都填會讓「哪一份才算數」
+    沒有答案——明確擋下來，比挑一個來用好。
+    """
+    app, client = await _make(tmp_path, "extra_alone")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human)
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "free_text", "answer": "都不要",
+                      "extra": "另外還有一件事"},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "extra_needs_option"
+
+
+@pytest.mark.asyncio
+async def test_old_clients_that_never_send_extra_are_unchanged(tmp_path):
+    """不送 `extra` 的 client 行為完全不變——那是這個欄位存在之前的樣子。"""
+    app, client = await _make(tmp_path, "extra_absent")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, agent, human = await _setup(client)
+            q = await _ask(client, room, agent, human, multi_select=True)
+
+            r = await client.post(
+                f"/api/questions/{q['id']}/answer",
+                json={"kind": "option", "selected": ["甲", "乙"]},
+                headers={"X-Participant-Id": human["participant_id"]},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["answer_extra"] == ""
+            got = (await client.get(
+                f"/api/questions/{q['id']}")).json()["question"]
+            assert got["answer"] == "甲、乙", "沒有補充時不該多出分隔符"

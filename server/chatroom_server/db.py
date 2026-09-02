@@ -479,6 +479,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 提問的複選與附件。舊題目一律單選、無附件——那是這些欄位存在之前的行為
     ("question", "multi_select", "multi_select INTEGER NOT NULL DEFAULT 0"),
     ("question", "answer_options", "answer_options TEXT"),
+    # 選了選項**又補了一句**時的那一句。與 answer_options 分開存：後者是
+    # 「他從我給的清單裡選的」，agent 據此判斷；自訂文字混進去那個保證就沒了。
+    # 舊資料一律空字串＝沒有補充，那正是這個欄位存在之前的事實
+    ("question", "answer_extra", "answer_extra TEXT NOT NULL DEFAULT ''"),
     ("question", "answer_attachments",
      "answer_attachments TEXT NOT NULL DEFAULT '[]'"),
     # 加入當下的房內 seq，@ 判定的界線。**刻意不 backfill**：舊成員的

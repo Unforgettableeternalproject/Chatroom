@@ -290,6 +290,12 @@ class QuestionAnswer(BaseModel):
     answer: str = Field(default="", max_length=4000)
     # 複選題選了哪些 label。單選題留空，用 answer 就好
     selected: list[str] = Field(default_factory=list, max_length=8)
+    # 選了選項**又想補一句**時放這裡（@開發Novia (UI) 提案，艾斯維爾要的）。
+    # **刻意不放寬 unknown_option 的驗證**：`answer_options` 是給 agent 當
+    # 「他從我給的清單裡選的」來信任的，把自訂文字混進去那個保證就沒了。
+    # 分成獨立欄位，三種讀法各拿各的：answer_options 只有真選項、
+    # answer 是人讀的完整版、answer_extra 給要精確拆開的人
+    extra: str = Field(default="", max_length=4000)
     # 隨答案附上的檔案（先用 POST /rooms/{id}/attachments 上傳拿到 id）。
     # 「這個 UI 怪怪的」講三段不如一張截圖，而回答正是最需要附圖的地方
     attachment_ids: list[str] = Field(default_factory=list, max_length=8)
@@ -6709,6 +6715,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(422, "unknown_option",
                            f"這些選項不在題目提供的清單裡：{'、'.join(unknown)}")
             selected = picks
+        elif body.extra.strip():
+            # free_text 的補充就是答案本身，兩個欄位都填會讓「哪一份才算數」
+            # 沒有答案。**明確擋下來**比挑一個來用好
+            raise _err(422, "extra_needs_option",
+                       "extra 是「選了選項又想補一句」用的，"
+                       "kind=free_text 時請直接寫在 answer 裡")
         # 附件必須屬於這個房間——否則回答可以把別房的檔案帶進來，而收據會
         # 把它公開在這個房的時間軸上
         attachments: list[str] = []
@@ -6728,17 +6740,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 複選的答案同時留兩份：`answer` 是人類可讀的彙整（給 agent 轉述用），
         # `answer_options` 是結構化的（給 agent 判斷用）。只留其中一份的話，
         # 另一種用途都得自己去拆字串，而分隔符遲早會出現在選項文字裡
+        extra = body.extra.strip()
         if selected:
             body.answer = "、".join(selected)
+            # 補充接在後面，**用一個不會出現在選項裡的分隔**。這一份是給人讀
+            # 的完整答案；要精確拆的人用 answer_options 與 answer_extra，
+            # 不必去猜分隔符
+            if extra:
+                body.answer = f"{body.answer}｜另外：{extra}"
         # 條件放進 UPDATE 本身：先 SELECT 再 UPDATE 之間有空隙，兩個並發的
         # 回答會雙雙通過檢查，後到的直接覆寫先到的答案而且沒有任何人知道
         cur = await db.execute(
             "UPDATE question SET status=?, answer=?, answer_kind=?,"
-            " answer_options=?, answer_attachments=?, resolved_at=?"
-            " WHERE id=? AND status='pending' RETURNING id",
+            " answer_options=?, answer_extra=?, answer_attachments=?,"
+            " resolved_at=? WHERE id=? AND status='pending' RETURNING id",
             (status, body.answer.strip(), body.kind,
              json.dumps(selected, ensure_ascii=False) if selected else None,
-             json.dumps(attachments), _now(), question_id),
+             extra, json.dumps(attachments), _now(), question_id),
         )
         if await cur.fetchone() is None:
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
@@ -6749,6 +6767,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         return {"ok": True, "status": status, "receipt_seq": receipt["seq"],
                 "answer_options": selected,
+                "answer_extra": extra,
                 "answer_attachments": attachments}
 
     async def _post_answer_receipt(question, answerer, status: str, answer: str,
