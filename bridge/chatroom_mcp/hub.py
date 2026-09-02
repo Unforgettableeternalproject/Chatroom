@@ -332,6 +332,22 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "可用 chatroom_assignments 重新確認待處理清單。",
                 status=status, detail=detail,
             )
+        if code is None and text.strip().lower() == "not found":
+            # **端點不存在，不是資源不存在。** FastAPI 的路由層 404 回的是純
+            # 字串 "Not Found"（無 code）；Hub 自己發的資源 404 一律帶 code。
+            #
+            # 這個分野值得一條專門的訊息，因為**歸因決定 agent 的下一步**：
+            # 聽成「找不到資源」它會去查 id、重試、換 id——那條路永遠不會成功；
+            # 聽成「這台沒有這個端點」它才會改走舊路徑或回報要升級。
+            #
+            # 判準要**同時**滿足「無 code」與「detail 恰好是那句 Not Found」：
+            # 只看無 code 的話，舊版 Hub 的純字串資源錯誤會被誤判成端點缺失，
+            # 那只是把錯誤的歸因換到另一邊（見 test_route_vs_resource_404.py）
+            return HubError(
+                f"這台 Hub 沒有這個端點（{hub_url}）——多半是它的版本比目前的 "
+                "bridge 舊。請確認 Hub 已升級；在那之前改用舊的呼叫方式。",
+                status=status, detail=detail,
+            )
         return HubError(f"Hub 找不到對應資源（{text or '404'}）。",
                         status=status, detail=detail)
 
