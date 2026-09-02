@@ -5256,6 +5256,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "board_id": board_id, "actor_key": target,
                 "orphaned_tasks": released, "board_seq": seq}
 
+    @app.post("/api/boards/{board_id}/reorder",
+              dependencies=[Depends(require_auth)])
+    async def reorder_board_v2(
+        board_id: str, body: BoardReorder,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """批次排序（board-scoped）。**整批只領一個 board_seq**。
+
+        每列各領一個號的話，拖動十張卡就會在增量流裡變成十次獨立變更，
+        而它們本來就是同一個動作。
+
+        與 room-scoped 版的差別只在**卡的歸屬用 board_id 判定**：Board
+        Library 上拖卡時沒有房，而卡本來就屬於板。
+        """
+        await _board_writer_v2(board_id, x_session_key, x_participant_id)
+        db = app.state.db
+        table = BOARD_TABLES[body.kind]
+        ids = [i.id for i in body.items]
+        placeholders = ",".join("?" for _ in ids)
+        rows = await (await db.execute(
+            f"SELECT id FROM {table} WHERE board_id=? AND deleted=0"
+            f" AND id IN ({placeholders})", (board_id, *ids))).fetchall()
+        known = {r["id"] for r in rows}
+        missing = [i for i in ids if i not in known]
+        if missing:
+            # 部分成功會讓 client 拿到一個它無法解讀的順序——排序是整批語意
+            raise _err(404, "board_item_not_found",
+                       f"有 {len(missing)} 張卡不屬於這塊板或已被刪除，整批未套用")
+        seq = await _next_seq_for_board(board_id)
+        for item in body.items:
+            await db.execute(
+                f"UPDATE {table} SET order_index=?, board_seq=? WHERE id=?",
+                (item.order_index, seq, item.id))
+        await _record_board_event(
+            board_id, seq, "reordered", item_kind=body.kind,
+            payload={"count": len(body.items)})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "board_seq": seq,
+                "count": len(body.items)}
+
     @app.post("/api/boards/{board_id}/supervisor",
               dependencies=[Depends(require_auth)])
     async def set_board_supervisor(

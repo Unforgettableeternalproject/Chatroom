@@ -738,3 +738,51 @@ async def test_board_admin_actions_require_owner(tmp_path):
                      await call(path, headers=other))
                 assert r.status_code == 403, f"{method} {path} 讓 editor 過了"
                 assert r.json()["detail"]["code"] == "not_board_owner"
+
+
+async def test_reorder_from_the_board(tmp_path):
+    """批次排序（board-scoped）：**整批只領一個號**。
+
+    每列各領一個的話，拖十張卡在增量流裡會變成十次獨立變更，而它們本來
+    就是同一個動作。
+    """
+    app, client = await _client(tmp_path, "v2_reorder")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            hdr = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, hdr)
+            bid = await _board_id(client, rid, hdr)
+            t2 = (await client.post(f"/api/boards/{bid}/tasks",
+                                    json={"title": "第二張"},
+                                    headers=hdr)).json()["id"]
+            body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+            t1 = [t["id"] for t in body["tasks"] if t["id"] != t2][0]
+            before = body["board_seq"]
+
+            r = await client.post(
+                f"/api/boards/{bid}/reorder",
+                json={"kind": "task",
+                      "items": [{"id": t2, "order_index": 0},
+                                {"id": t1, "order_index": 1}]},
+                headers=hdr)
+            assert r.status_code == 200, r.text
+            assert r.json()["count"] == 2
+            assert r.json()["board_seq"] == before + 1, "整批不只領了一個號"
+
+            body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+            order = {t["id"]: t["order_index"] for t in body["tasks"]}
+            assert order[t2] == 0 and order[t1] == 1
+
+            # 不屬於這塊板的卡：整批不套用，不是部分成功
+            r = await client.post(
+                f"/api/boards/{bid}/reorder",
+                json={"kind": "task",
+                      "items": [{"id": t1, "order_index": 5},
+                                {"id": "不存在的卡", "order_index": 6}]},
+                headers=hdr)
+            assert r.status_code == 404
+            assert r.json()["detail"]["code"] == "board_item_not_found"
+            body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+            assert {t["id"]: t["order_index"]
+                    for t in body["tasks"]}[t1] == 1, "部分套用了"
