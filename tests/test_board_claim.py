@@ -552,3 +552,49 @@ async def test_stale_orphans_under_a_cancelled_objective_are_healed(tmp_path):
             (tid,))).fetchone()
         assert row["claim_state"] == "held", "有持有者的清回 held（F7）"
         assert row["orphaned_reason"] == ""
+
+
+async def test_exemption_survives_a_session_key_with_whitespace(tmp_path):
+    """session_key 帶空白時豁免仍要成立（@開發Novia (除錯) 2026-09-02 實測）。
+
+    `claim_actor_key` 走 `actor_key()` 做過 strip，而 `participant.session_key`
+    以前是原樣存入——兩邊一比就不相等，**接案豁免靜默失效**：agent 被掃掉、
+    卡變孤兒，而它不知道為什麼。正是 H5 要消滅的那個現象。
+
+    機率低但值得修：session_key 是呼叫端自己產的字串，而從 `.env` 或 shell
+    環境變數讀來的很容易帶尾隨空白——那正是 kit 使用者最常見的設定方式。
+    """
+    app, client = await _client(tmp_path, "claim-spaced",
+                                idle_timeout=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid = (await client.post("/api/rooms", json={
+            "name": "板子房", "session_key": "human-1"})).json()["id"]
+        human, _ = await _join(client, rid, "human-1", "Bernie", role="human")
+        agent, _ = await _join(client, rid, "  claude-spaced  ", "Novia")
+        apid = agent["X-Participant-Id"]
+        tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
+                                 json={"title": "長工作"},
+                                 headers=human)).json()["id"]
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=agent)
+
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT session_key FROM participant WHERE id=?",
+            (apid,))).fetchone()
+        assert row["session_key"] == "claude-spaced", "join 時就該規範化"
+
+        await app.state.sweep_once()
+        row = await (await db.execute(
+            "SELECT status FROM participant WHERE id=?", (apid,))).fetchone()
+        assert row["status"] == "active"
+
+        # 存量：改 join 只救得了新的。既有列已經帶著空白存進去了，
+        # 所以比對那一側也要 TRIM——不然升級之後那批人照樣被掃
+        await db.execute(
+            "UPDATE participant SET session_key='  claude-spaced  ',"
+            " status='active', left_at=NULL WHERE id=?", (apid,))
+        await db.commit()
+        await app.state.sweep_once()
+        row = await (await db.execute(
+            "SELECT status FROM participant WHERE id=?", (apid,))).fetchone()
+        assert row["status"] == "active", "存量那批帶空白的接案者被掃掉了"

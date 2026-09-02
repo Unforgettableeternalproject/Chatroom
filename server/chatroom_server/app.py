@@ -1946,7 +1946,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id)
         db = app.state.db
         assignment = None
-        session_key = body.session_key
+        # 走與 actor_key() 同一條規範化。session_key 是**呼叫端自己產的字串**
+        # ——從 .env 或 shell 環境變數讀來的很容易帶尾隨空白，而 kit 使用者
+        # 最常用的正是那種設定方式。存原樣的話，`participant.session_key`
+        # 與 board 上的 `claim_actor_key` 就不再相等：接案豁免會**靜默失效**，
+        # agent 被掃掉、卡變孤兒，而它不知道為什麼（@開發Novia (除錯) 實測）
+        session_key = actor_key(body.session_key)
         if body.assignment_id:
             assignment = await (
                 await db.execute(
@@ -6477,9 +6482,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND NOT EXISTS (SELECT 1 FROM board_task t"
             " WHERE t.claim_state='held' AND t.deleted=0"
             "   AND t.status NOT IN ('done','cancelled')"
-            "   AND (t.claim_actor_key = participant.session_key"
+            "   AND (t.claim_actor_key = TRIM(participant.session_key)"
             "        OR (t.claim_actor_key = ''"
-            "            AND t.claim_session_key = participant.session_key)))"
+            "            AND TRIM(t.claim_session_key)"
+            "            = TRIM(participant.session_key))))"
         )
         not_held = not_held + not_claiming
         stale_subs = await (
