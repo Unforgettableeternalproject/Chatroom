@@ -315,6 +315,24 @@ class BoardCreate(BaseModel):
     origin_room_id: str = Field(default="", max_length=64)
 
 
+class BoardPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # None ＝這次不改這個欄位。空字串是合法的值（把描述清空），
+    # 兩者混為一談的話，使用者永遠刪不掉一段寫錯的描述
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class BoardMemberAdd(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_key: str = Field(min_length=1, max_length=128)
+    role: str = Field(default="editor", pattern="^(owner|editor|viewer)$")
+    display_name: str = Field(default="", max_length=100)
+    actor_kind: str = Field(default="", max_length=20)
+
+
 class BoardSupervisorAssign(BaseModel):
     """board-scoped 的 Supervisor 指定。與房內那個 `BoardSupervisorSet`
     是兩件事：那邊指的是 session_key、範圍是一間房；這邊是 actor_key、
@@ -1924,12 +1942,56 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(500, "purge_incomplete_schema",
                        "刪除聊天室的內部清單與資料庫結構對不上，這次不動它。"
                        f"缺少：{'、'.join(gap)}")
-        # 先解除 Board 掛接再刪房。**標記而不是刪列**：這塊板還活著，
+        # 先把板上的卡搬到同一塊板的另一間 active 掛接房。
+        #
+        # ⚠️ 這一步存在的理由是 v1 的遺留：三張 item 表的 `room_id` 是
+        # `NOT NULL REFERENCES room(id)`，而 `PRAGMA foreign_keys=ON`——
+        # 卡沒有一間活著的房可指就留不下來。板已經是獨立實體了，卡卻還被
+        # 綁在某一間房上（BOARD_DESIGN §11 步驟 8 的 table rebuild 才拿得掉）。
+        #
+        # 搬過去之後，「這張卡當初從哪裡長出來」由 `source_room_id` 與
+        # `board_room` 的掛接歷史保存——那兩個都不是強外鍵，房刪掉仍在。
+        #
+        # 板只掛這一間房時沒有地方可搬，卡會跟著房一起消失。那是 v1 既有的
+        # 行為（一房一板時它是對的），不是這次的回歸；rebuild 之後才會變。
+        board = await _board_for_room(room_id)
+        moved = 0
+        if board is not None:
+            other = await (await db.execute(
+                "SELECT room_id FROM board_room WHERE board_id=? AND room_id<>?"
+                " AND detached_at IS NULL ORDER BY attached_at LIMIT 1",
+                (board["id"], room_id))).fetchone()
+            # 搬家時要一起放掉 participant 參照。那些 id 指著這間房裡的成員，
+            # 而成員會隨房一起被刪——留著就撞 FK，而 FK 是在 DELETE
+            # participant 那一步才炸，那時卡已經搬走一半了。
+            #
+            # 放掉不損失資訊：**名字快照與 actor_key 都還在**（H2 做的正是
+            # 這件事），卡片上「誰建的、誰在做」照樣顯示得出來，而且
+            # actor_key 還認得出「這是同一個人回來了」——participant id
+            # 從來就做不到那件事。
+            drop_refs = {
+                "board_objective": ("created_by", "reviewed_by",
+                                    "verified_by", "completed_by"),
+                "board_checklist": ("created_by", "completed_by"),
+                "board_task": ("created_by", "completed_by",
+                               "claim_participant_id",
+                               "assignee_participant_id", "assigned_by"),
+            }
+            if other is not None:
+                for table, refs in drop_refs.items():
+                    nulls = ", ".join(f"{c}=NULL" for c in refs)
+                    cur = await db.execute(
+                        f"UPDATE {table} SET room_id=?, {nulls}"
+                        " WHERE room_id=? AND board_id=?",
+                        (other["room_id"], room_id, board["id"]))
+                    moved += cur.rowcount
+        # 再解除 Board 掛接。**標記而不是刪列**：這塊板還活著，
         # 而「它曾經掛在這間房」是 Board 上那些卡的 provenance 唯一的來源。
         cur = await db.execute(
             "UPDATE board_room SET detached_at=? WHERE room_id=? AND"
             " detached_at IS NULL", (_now(), room_id))
-        counts: dict[str, int] = {"board_room_detached": cur.rowcount}
+        counts: dict[str, int] = {"board_room_detached": cur.rowcount,
+                                  "board_items_moved": moved}
         for table in _ROOM_OWNED_TABLES:
             # 表名是模組內的常數清單，不是外來輸入
             cur = await db.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
@@ -4983,6 +5045,237 @@ def create_app(config: Config | None = None) -> FastAPI:
             board_id, x_session_key, x_participant_id)
         cid = await _uncategorised_checklist(room_id, me)
         return await _insert_task(cid, room_id, body, me)
+
+    async def _board_owner_or_403(board_id: str, actor: str) -> None:
+        if await _board_role(board_id, actor) != "owner":
+            raise _err(403, "not_board_owner",
+                       "這個動作只有這塊板的 owner 做得到")
+
+    @app.patch("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
+    async def patch_board(
+        board_id: str, body: BoardPatch,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改板的名字或描述。只有 owner。
+
+        名字會被掛接房的 app bar 直接顯示，改它等於改所有人看到的東西——
+        editor 能改卡但不能改板本身叫什麼。
+        """
+        board = await _board_or_404(board_id)
+        if board["status"] != "active":
+            raise _err(409, "board_archived", "封存的板不能改")
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        sets = {k: v for k, v in
+                {"name": body.name.strip() if body.name else None,
+                 "description": body.description}.items() if v is not None}
+        if not sets:
+            return {"ok": True, "board_id": board_id, "changed": []}
+        seq = await _next_seq_for_board(board_id)
+        cols = ", ".join(f"{k}=?" for k in sets)
+        await app.state.db.execute(
+            f"UPDATE board SET {cols} WHERE id=?",
+            (*sets.values(), board_id))
+        await _record_board_event(board_id, seq, "board_updated", actor=actor,
+                                  payload=sets)
+        await app.state.db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "board_seq": seq,
+                "changed": sorted(sets)}
+
+    @app.post("/api/boards/{board_id}/archive",
+              dependencies=[Depends(require_auth)])
+    async def archive_board(
+        board_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """封存一塊板：板變唯讀，**掛接的房照樣聊天**（§3.2）。
+
+        兩件事分開是重點——房封存與板封存在畫面上必須長得不一樣，否則
+        使用者分不出「這個對話結束了」與「這份工作收尾了」。
+        """
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        seq = await _next_seq_for_board(board_id)
+        await app.state.db.execute(
+            "UPDATE board SET status='archived' WHERE id=?", (board_id,))
+        await _record_board_event(board_id, seq, "board_archived", actor=actor)
+        await app.state.db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "status": "archived",
+                "board_seq": seq}
+
+    @app.post("/api/boards/{board_id}/unarchive",
+              dependencies=[Depends(require_auth)])
+    async def unarchive_board(
+        board_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """解除封存。封存是可逆的決定，刪除才不是。"""
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        seq = await _next_seq_for_board(board_id)
+        await app.state.db.execute(
+            "UPDATE board SET status='active' WHERE id=?", (board_id,))
+        await _record_board_event(board_id, seq, "board_unarchived",
+                                  actor=actor)
+        await app.state.db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "status": "active",
+                "board_seq": seq}
+
+    # 板刪除要清的表。與 _ROOM_OWNED_TABLES 同一個理由手寫，也同一個理由
+    # 危險：漏一張表會撞 FK 而**刪到一半**，而共用連線上已執行的 DELETE
+    # 不會被撤回。順序由內往外
+    _BOARD_OWNED_TABLES = ("board_task", "board_checklist", "board_objective",
+                           "board_event", "board_member", "board_room")
+
+    @app.delete("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
+    async def delete_board(
+        board_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """永久刪除一塊板。只有 owner，**不可復原**。
+
+        ⚠️ 這條**不會**被 room purge 間接觸發（§3.2）：刪一間房只解除掛接。
+        板的刪除必須是一個獨立的、對著板本身下的決定——否則使用者刪掉一間
+        聊完的對話，會連同整份工作紀錄一起消失。
+        """
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        db = app.state.db
+        rooms = [r["room_id"] for r in await (await db.execute(
+            "SELECT room_id FROM board_room WHERE board_id=?"
+            " AND detached_at IS NULL", (board_id,))).fetchall()]
+        counts: dict[str, int] = {}
+        for table in _BOARD_OWNED_TABLES:
+            cur = await db.execute(
+                f"DELETE FROM {table} WHERE board_id=?", (board_id,))
+            counts[table] = cur.rowcount
+        cur = await db.execute("DELETE FROM board WHERE id=?", (board_id,))
+        counts["board"] = cur.rowcount
+        await db.commit()
+        # 掛接房要被叫醒：它們的 app bar 上還畫著這塊板
+        for rid in rooms:
+            await events.notify(rid)
+        return {"ok": True, "board_id": board_id, "deleted": counts}
+
+    @app.post("/api/boards/{board_id}/members",
+              dependencies=[Depends(require_auth)])
+    async def add_board_member(
+        board_id: str, body: BoardMemberAdd,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """加一個成員，或改既有成員的角色。只有 owner。
+
+        重複加同一個人是**改角色**而不是報錯：owner 想做的事只有一件
+        「讓這個人有這個角色」，先查再決定要 POST 還是 PATCH 是多的。
+        """
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        target = actor_key(body.actor_key)
+        if not target:
+            raise _err(422, "actor_key_required", "要指定加誰")
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        row = await (await db.execute(
+            "SELECT actor_key FROM board_member WHERE board_id=? AND actor_key=?",
+            (board_id, target))).fetchone()
+        if row is None:
+            await db.execute(
+                "INSERT INTO board_member (board_id, actor_key, role,"
+                " display_name, actor_kind, aliases, added_by_actor_key,"
+                " added_at) VALUES (?,?,?,?,?,'[]',?,?)",
+                (board_id, target, body.role, body.display_name.strip(),
+                 body.actor_kind.strip(), actor, _now()))
+        else:
+            # removed_at 一併清掉：被移除過的人再加回來就是回來了，
+            # 留著那個時間戳會讓他在成員列上看起來像已經走了
+            await db.execute(
+                "UPDATE board_member SET role=?, removed_at=NULL"
+                " WHERE board_id=? AND actor_key=?",
+                (body.role, board_id, target))
+        await _record_board_event(board_id, seq, "member_added", actor=actor,
+                                  target_actor_key=target,
+                                  payload={"role": body.role})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "actor_key": target,
+                "role": body.role, "board_seq": seq}
+
+    @app.delete("/api/boards/{board_id}/members/{member_actor_key}",
+                dependencies=[Depends(require_auth)])
+    async def remove_board_member(
+        board_id: str, member_actor_key: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """把一個人移出板。只有 owner，且**不能移掉最後一個 owner**。
+
+        移除**不刪他做過的事**：卡上的名字與 actor_key 是歷史，抹掉會讓
+        板上一段時間的紀錄變成沒有人做過。他持有的卡則立刻標成孤兒
+        （§5.2 的 member_removed），讓別人接得下去。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        target = actor_key(member_actor_key)
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT role FROM board_member WHERE board_id=? AND actor_key=?"
+            " AND removed_at IS NULL", (board_id, target))).fetchone()
+        if row is None:
+            raise _err(404, "not_a_board_member", "他不在這塊板的成員列上")
+        if row["role"] == "owner":
+            others = await (await db.execute(
+                "SELECT COUNT(*) AS n FROM board_member WHERE board_id=?"
+                " AND role='owner' AND removed_at IS NULL AND actor_key<>?",
+                (board_id, target))).fetchone()
+            if not others["n"]:
+                raise _err(409, "last_owner",
+                           "這是最後一個 owner——移掉之後沒有人能管這塊板了")
+        seq = await _next_seq_for_board(board_id)
+        now = _now()
+        await db.execute(
+            "UPDATE board_member SET removed_at=? WHERE board_id=?"
+            " AND actor_key=?", (now, board_id, target))
+        # 他手上的卡立刻讓出來。不等 presence grace period——被移除是一個
+        # 明確的決定，不是「暫時不在」
+        cur = await db.execute(
+            "UPDATE board_task SET claim_state='orphaned', orphaned_at=?,"
+            " orphaned_reason='已被移出這塊板', board_seq=?"
+            " WHERE board_id=? AND claim_state='held'"
+            "   AND TRIM(claim_actor_key)=? RETURNING id",
+            (now, seq, board_id, target))
+        released = len(await cur.fetchall())
+        await _record_board_event(board_id, seq, "member_removed", actor=actor,
+                                  target_actor_key=target,
+                                  payload={"orphaned_tasks": released})
+        await db.commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "actor_key": target,
+                "orphaned_tasks": released, "board_seq": seq}
 
     @app.post("/api/boards/{board_id}/supervisor",
               dependencies=[Depends(require_auth)])

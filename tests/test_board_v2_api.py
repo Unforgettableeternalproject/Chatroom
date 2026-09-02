@@ -575,3 +575,162 @@ async def test_create_a_board_from_the_library_and_from_a_room(tmp_path):
             body = (await client.get("/api/boards", headers=key)).json()
             assert {b["name"] for b in body["boards"]} == {
                 "沒有房的板", "掛在房上的板"}
+
+
+async def test_patch_archive_and_unarchive(tmp_path):
+    """改名／封存／解除封存。**板封存與房封存是兩件事**（§3.2）。"""
+    app, client = await _client(tmp_path, "v2_admin")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            r = await client.patch(f"/api/boards/{bid}",
+                                   json={"name": "改過的名字"}, headers=owner)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert body["name"] == "改過的名字"
+
+            r = await client.post(f"/api/boards/{bid}/archive", headers=owner)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert body["status"] == "archived"
+
+            # 板封存了，房照樣進得去、寫得動——兩件事不能綁在一起
+            r = await client.post(f"/api/rooms/{rid}/messages",
+                                  json={"content": "板封了但話還講得動"},
+                                  headers=owner)
+            assert r.status_code == 200, r.text
+
+            # 封存的板不能從板上建卡
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "還想寫"}, headers=owner)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "board_archived"
+
+            r = await client.post(f"/api/boards/{bid}/unarchive", headers=owner)
+            assert r.status_code == 200, r.text
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "解封之後"}, headers=owner)
+            assert r.status_code == 200, r.text
+
+
+async def test_members_can_be_added_and_removed(tmp_path):
+    """成員管理：加、改角色、移除。移除會讓他手上的卡立刻變孤兒。"""
+    app, client = await _client(tmp_path, "v2_members")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            worker = await _join(client, rid, "claude-w", "Worker")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            tid = (await client.post(f"/api/rooms/{rid}/board/tasks",
+                                     json={"title": "Worker 的卡"},
+                                     headers=worker)).json()["id"]
+            await client.post(f"/api/board/tasks/{tid}/claim", headers=worker)
+
+            # 重複加是**改角色**，不是報錯
+            r = await client.post(f"/api/boards/{bid}/members",
+                                  json={"actor_key": "claude-w",
+                                        "role": "viewer"}, headers=owner)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            roles = {m["actor_key"]: m["role"] for m in body["members"]}
+            assert roles["claude-w"] == "viewer"
+
+            r = await client.delete(f"/api/boards/{bid}/members/claude-w",
+                                    headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["orphaned_tasks"] == 1, "他手上的卡沒有讓出來"
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert [m["actor_key"] for m in body["members"]] == ["claude-a"]
+            card = [t for t in body["tasks"] if t["id"] == tid][0]
+            assert card["claim_state"] == "orphaned"
+            assert card["orphaned_reason"] == "已被移出這塊板"
+            # 但他做過的事還在：抹掉會讓板上一段紀錄變成沒有人做過
+            assert card["created_by_name"] == "Worker"
+
+
+async def test_the_last_owner_cannot_be_removed(tmp_path):
+    """移掉最後一個 owner 之後就沒有人能管這塊板了。"""
+    app, client = await _client(tmp_path, "v2_last_owner")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            r = await client.delete(f"/api/boards/{bid}/members/claude-a",
+                                    headers=owner)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "last_owner"
+
+
+async def test_deleting_a_board_is_never_triggered_by_deleting_a_room(tmp_path):
+    """刪房只解除掛接；板要被刪必須是**對著板本身下的決定**（§3.2）。
+
+    否則使用者刪掉一間聊完的對話，會連同整份工作紀錄一起消失。
+    """
+    app, client = await _client(tmp_path, "v2_delete")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            # 板掛在兩間房上：刪掉 A 之後卡要搬到 B，不能跟著消失
+            rb = await _room(client, "B房", "claude-a")
+            await _join(client, rb, "claude-a", "A")
+            await client.post(f"/api/boards/{bid}/rooms/{rb}", headers=owner)
+
+            r = await client.delete(f"/api/rooms/{rid}", headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["deleted"]["board_items_moved"] >= 1
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert len(body["tasks"]) == 1, "刪房把板上的卡帶走了"
+            # provenance 留著：那間房已經不在了，快照是唯一講得出來的東西
+            assert body["tasks"][0]["source_room_id"] in ("", rid)
+
+            r = await client.delete(f"/api/boards/{bid}", headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["deleted"]["board"] == 1
+            r = await client.get(f"/api/boards/{bid}", headers=owner)
+            assert r.status_code == 404
+
+
+async def test_board_admin_actions_require_owner(tmp_path):
+    app, client = await _client(tmp_path, "v2_admin_acl")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            other = await _join(client, rid, "claude-b", "B")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            await client.post(f"/api/rooms/{rid}/board/tasks",
+                              json={"title": "B 的卡"}, headers=other)   # 成 editor
+
+            for method, path, payload in [
+                ("patch", f"/api/boards/{bid}", {"name": "我要改名"}),
+                ("post", f"/api/boards/{bid}/archive", None),
+                ("post", f"/api/boards/{bid}/members",
+                 {"actor_key": "claude-c"}),
+                ("delete", f"/api/boards/{bid}", None),
+            ]:
+                call = getattr(client, method)
+                r = (await call(path, json=payload, headers=other)
+                     if payload is not None else
+                     await call(path, headers=other))
+                assert r.status_code == 403, f"{method} {path} 讓 editor 過了"
+                assert r.json()["detail"]["code"] == "not_board_owner"
