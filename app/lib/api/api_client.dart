@@ -64,6 +64,17 @@ ApiException translateError(DioException e) {
       if (code == 'root_token_required') {
         return RootTokenRequiredException(_detailMessage(res.data));
       }
+      // 板的成員資格與房內身分是兩件事。走 ParticipantInvalidException 的話
+      // 會觸發自動 re-join，而重新加入聊天室一百次也不會讓你出現在板的
+      // 成員列上——那是一個永遠不會成功、而且看起來像卡住的迴圈
+      if (code == 'not_board_member' ||
+          code == 'not_board_owner' ||
+          code == 'not_board_supervisor') {
+        return BoardAccessException(
+            code!,
+            _detailMessage(res.data) ?? '你還不是這塊板的成員',
+            _detailMap(res.data));
+      }
       // Hub 對每個 403 code 都寫了一句對應的話（「只有聊天室建立者可以…」、
       // 「你已經不在這個聊天室裡了…」）。丟掉它改用寫死的那句，等於把所有
       // 「你沒有資格做這件事」都講成「你的身分壞了」

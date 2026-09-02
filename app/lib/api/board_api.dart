@@ -359,14 +359,23 @@ class BoardsApi {
       });
 
   /// 把一間房掛上這塊 Board。
+  /// [importMembers] 把該房**當下的** active participants 加為 board editor。
+  ///
+  /// 「當下的」是這個設計的重點：之後才加入那間房的人**不會**自動拿到權限。
+  /// 房間成員資格若能持續推導出板的寫入權，掛接一塊板就等於把它的寫入權
+  /// 發給那間房未來的所有人，而那不是掛接的人做過的決定。
+  ///
+  /// 不覆寫既有成員的角色（已經是 owner 的不會被降成 editor）。
   Future<void> attachRoom(
     String boardId,
     String roomId, {
     required String sessionKey,
+    bool importMembers = false,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/boards/$boardId/rooms/$roomId',
+          data: {'import_members': importMembers},
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });

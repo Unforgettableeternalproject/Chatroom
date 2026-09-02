@@ -1550,9 +1550,12 @@ class _BoardAction extends ConsumerWidget {
               originRoomId: roomId,
             )
           : result.boardId!;
-      // 建立時 origin_room_id 已經掛好了，不要再掛一次
-      if (!result.isCreate) {
-        await api.attachRoom(boardId, roomId, sessionKey: sessionKey);
+      // 建立時 origin_room_id 已經掛好了，不要再掛一次。
+      // ⚠️ 但**匯入成員仍要單獨呼叫**：create 那條沒有 import_members，
+      // 少了這一步，勾選在「建一塊新的」那條路上會靜默失效
+      if (!result.isCreate || result.importMembers) {
+        await api.attachRoom(boardId, roomId,
+            sessionKey: sessionKey, importMembers: result.importMembers);
       }
       ref.invalidate(boardProvider(roomId));
       ref.invalidate(boardLibraryProvider);

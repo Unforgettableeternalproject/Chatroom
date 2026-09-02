@@ -229,10 +229,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           Expanded(
             child: async.when(
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => ErrorState(
-                error: e,
-                onRetry: () => _reloadBoard(),
-              ),
+              // 「你還不是這塊板的成員」**不是錯誤，是狀態**——房裡的人本來
+              // 就不自動是板成員（艾斯維爾裁決 A+）。畫成紅色的錯誤 + 重試
+              // 按鈕的話，看的人會一直按那顆按鈕，而它一百次都不會成功。
+              error: (e, _) => e is BoardAccessException
+                  ? _NotAMember(error: e)
+                  : ErrorState(error: e, onRetry: () => _reloadBoard()),
               data: (snap) {
                 final objectives = snap.sortedObjectives;
                 if (objectives.isEmpty) return _emptyBoard(context);
@@ -1298,6 +1300,50 @@ class _NoRoomBadge extends StatelessWidget {
   }
 }
 
+/// 房裡的人打開一塊他還不是成員的板。
+///
+/// 這一頁存在的理由：**403 在這裡是常態而不是故障**。沒有它的話，
+/// 房內成員按下 Board 按鈕會看到一個紅色的「權限不足」，而他既不知道
+/// 那是正常的，也不知道下一步該找誰。
+class _NotAMember extends StatelessWidget {
+  const _NotAMember({required this.error});
+
+  final BoardAccessException error;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final name = error.boardName;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('卷', style: UepText.display(size: 30, color: s.inkMute)),
+            const SizedBox(height: 14),
+            Text(
+              name.isEmpty
+                  ? '這間房掛著一塊任務板，但你還不是它的成員。'
+                  : '這間房掛著《$name》，但你還不是它的成員。',
+              textAlign: TextAlign.center,
+              style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.8),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              // 講得出「找誰」才有用。只說「沒有權限」的人會去翻設定頁
+              '請板的 owner 把你加進來——'
+              '在同一間房裡不會自動成為板的協作者。',
+              textAlign: TextAlign.center,
+              style: UepText.sans(size: 12, color: s.inkMute, height: 1.6),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// 你在這塊板上是 viewer。
 ///
 /// 與「沒從聊天室進來」分開：那個從房間進去就解決了，這個不會——
@@ -1309,7 +1355,9 @@ class _ViewerBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     return Tooltip(
-      message: '你在這塊板上是 viewer，要板的 owner 給你 editor 才能改',
+      // A+ 之後「不是板成員」是進房者的預設狀態，所以這顆徽章會從罕見
+      // 變常態——它要講的是「下一步怎麼辦」，不是「你的身分是什麼」
+      message: '你在這塊板上是唯讀。請板的 owner 把你設為協作者（editor）',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),

@@ -71,6 +71,25 @@ class RootTokenRequiredException extends ApiException {
             message ?? '只有 Hub 主持人能發放或撤銷邀請');
 }
 
+/// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
+/// `not_board_supervisor`）。
+///
+/// 🔴 **絕不可以與 [ParticipantInvalidException] 共用型別**：那個型別會觸發
+/// 自動 re-join，而**重新加入聊天室一百次也不會讓你出現在板的成員列上**。
+/// 板的成員資格與房內身分是兩件事（艾斯維爾裁決 A+，2026-09-02）——這正是
+/// 那個裁決要分開的東西。
+///
+/// 而且這多半**不是錯誤，是狀態**：房裡的人本來就不自動是板成員。
+/// 呈現時該講「請板的 owner 把你加進來」，不是任何紅色的東西。
+class BoardAccessException extends ApiException {
+  const BoardAccessException(super.code, super.message, [super.detail]);
+
+  /// Hub 在被擋下的回應裡附上這兩個值——**那是這時候唯一還拿得到的東西**，
+  /// 落地畫面靠它們講出「這間房掛著哪塊板」，不必再打一次必然再被擋的 API。
+  String get boardId => (detail['board_id'] as String?) ?? '';
+  String get boardName => (detail['board_name'] as String?) ?? '';
+}
+
 /// 404 — 房間 / 訊息 / 指派不存在。
 class NotFoundException extends ApiException {
   const NotFoundException([String code = 'not_found'])

@@ -172,6 +172,17 @@ final boardProvider =
 final boardByIdProvider =
     FutureProvider.autoDispose.family<BoardSnapshot, String>((ref, boardId) async {
   final cache = ref.read(boardCacheProvider.notifier);
+  // 外部變更要能叫醒這一頁。
+  //
+  // ⚠️ **這是半個解法，缺的那半在 Hub。** WS 的 board 事件是以 room 為軸
+  // （`WsBoardEvent.roomId`），所以這裡只能訂閱這塊板**目前掛著的那些房**
+  // ——已經知道對應之後才訂得到，而**一間房都沒掛的板完全沒有通道**。
+  // 那種板從 Library 開著時，別人的變更不會推過來，畫面會停在舊快照。
+  // 要真的補上需要 board_id 級的通知（審核用Codex 房內 #277 提出）。
+  final watched = cache.snapshotOf(boardId).liveRooms.map((r) => r.id).toSet();
+  for (final rid in watched) {
+    ref.watch(boardSignalProvider(rid));
+  }
   final known = cache.snapshotOf(boardId).boardSeq;
   final delta = await ref.watch(boardsApiProvider).fetch(
         boardId,

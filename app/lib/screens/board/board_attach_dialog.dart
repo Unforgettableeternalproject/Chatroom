@@ -28,11 +28,16 @@ Future<BoardAttachResult?> showBoardAttachDialog(
 
 /// 使用者選了什麼。二選一：建新的（帶名字），或掛既有的（帶 id）。
 class BoardAttachResult {
-  const BoardAttachResult.create(this.name) : boardId = null;
-  const BoardAttachResult.attach(this.boardId) : name = null;
+  const BoardAttachResult.create(this.name, {this.importMembers = false})
+      : boardId = null;
+  const BoardAttachResult.attach(this.boardId, {this.importMembers = false})
+      : name = null;
 
   final String? name;
   final String? boardId;
+
+  /// 把這間房**當下的**成員一併加為板的 editor。
+  final bool importMembers;
 
   bool get isCreate => name != null;
 }
@@ -55,6 +60,11 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
   bool _existing = false;
 
   String? _picked;
+
+  /// 預設不勾。**不是因為危險**（Hub 不覆寫既有角色），是因為授權應該是
+  /// 一個看得見的動作——預設把寫入權發給一整間房的人，沒有人會記得
+  /// 自己做過這個決定。
+  bool _importMembers = false;
 
   @override
   void dispose() {
@@ -112,6 +122,21 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
               picked: _picked,
               onPick: (id) => setState(() => _picked = id),
             )),
+          const SizedBox(height: 10),
+          CheckboxListTile(
+            value: _importMembers,
+            onChanged: (v) => setState(() => _importMembers = v ?? false),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text('把這間房現在的成員加為板的協作者',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+            subtitle: Text(
+                '只加現在在房裡的人。之後才進來的不會自動拿到權限——'
+                '那要由板的 owner 另外決定',
+                style: UepText.serif(
+                    size: 11.5, color: s.inkMute, height: 1.4)),
+          ),
         ]),
       ),
       actions: [
@@ -129,12 +154,14 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
           onPressed: _existing
               ? (_picked == null
                   ? null
-                  : () => Navigator.of(context)
-                      .pop(BoardAttachResult.attach(_picked!)))
+                  : () => Navigator.of(context).pop(
+                      BoardAttachResult.attach(_picked!,
+                          importMembers: _importMembers)))
               : (_name.text.trim().isEmpty
                   ? null
-                  : () => Navigator.of(context)
-                      .pop(BoardAttachResult.create(_name.text.trim()))),
+                  : () => Navigator.of(context).pop(
+                      BoardAttachResult.create(_name.text.trim(),
+                          importMembers: _importMembers))),
         ),
       ],
     );
