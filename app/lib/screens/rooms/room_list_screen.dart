@@ -12,6 +12,8 @@ import '../../models/room.dart';
 import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
+import '../../models/board.dart';
+import '../../state/board_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/delete_room_confirm.dart';
 import '../../widgets/pending_invites_banner.dart';
@@ -535,6 +537,13 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   String _style = kRoomStyles.first.value;
   String? _error;
 
+  /// 建完之後要掛哪塊板。null ＝不掛。
+  ///
+  /// **預設不掛是刻意的**（`BOARD_DESIGN` §1.2：建房不自動建空板）。多數
+  /// 房間是一次性的討論，替每一間都生一塊板，Board Library 很快就會變成
+  /// 一整排沒有人打開過的空板——那時「哪塊板還活著」就看不出來了。
+  String? _boardId;
+
   @override
   void dispose() {
     _name.dispose();
@@ -569,6 +578,22 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             style: _style,
             styleInstructions: instructions,
           );
+      // 掛板失敗**不能讓建房也跟著失敗**：房已經建好了，這時丟例外會讓
+      // 使用者以為整件事沒成功，然後再建一間
+      if (_boardId != null) {
+        try {
+          await ref.read(boardsApiProvider).attachRoom(
+                _boardId!,
+                room.id,
+                sessionKey: ref.read(appConfigProvider).deviceKey,
+              );
+        } on ApiException catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('房間建好了，但板沒掛上：${e.message}')));
+          }
+        }
+      }
       if (mounted) Navigator.of(context).pop(room);
     } on ApiException catch (e) {
       setState(() {
@@ -630,6 +655,18 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             subtitle: Text('不會出現在其他人的對話列表，必須受邀才能加入',
                 style: UepText.serif(
                     size: 11.5, color: s.inkMute, height: 1.4)),
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MonoLabel('任務板（可不掛）', color: context.uep.inkSoft,
+                letterSpacing: 1.4),
+          ),
+          const SizedBox(height: 7),
+          _BoardPicker(
+            value: _boardId,
+            enabled: !_creating,
+            onChanged: (v) => setState(() => _boardId = v),
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
@@ -742,6 +779,69 @@ class _HostModeToggle extends ConsumerWidget {
           ),
         ]),
       ),
+    );
+  }
+}
+
+
+/// 建房時選一塊既有的板來掛。
+///
+/// **只列既有的，不提供「順便建一塊」**——建板要取名字，而房間名字與板的
+/// 名字是兩件事（板活得比房久，它的名字要撐得住之後的每一間房）。要建新板
+/// 就進房之後用 app bar 那個入口，那裡有完整的建立流程。
+class _BoardPicker extends ConsumerWidget {
+  const _BoardPicker({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String? value;
+  final bool enabled;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final async = ref.watch(boardLibraryProvider('active'));
+    // 端點還沒上線、或一塊板都沒有時**整個不顯示**。一個永遠只有「不掛」
+    // 一個選項的下拉選單，只會讓人以為自己漏看了什麼
+    final boards =
+        async.value?.where((b) => b.canEdit).toList() ?? const <BoardSummary>[];
+    if (boards.isEmpty) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          async.isLoading ? '正在看有哪些板…' : '目前沒有可掛的板，進房之後再開一塊',
+          style: UepText.serif(size: 11.5, color: s.inkMute),
+        ),
+      );
+    }
+    return DropdownButtonFormField<String?>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
+      style: UepText.sans(size: 12.5, color: s.ink),
+      onChanged: enabled ? onChanged : null,
+      items: [
+        DropdownMenuItem(
+          value: null,
+          child: Text('不掛任務板',
+              style: UepText.sans(size: 12.5, color: s.inkMute)),
+        ),
+        for (final b in boards)
+          DropdownMenuItem(
+            value: b.id,
+            child: Text(
+              '${b.name}　·　${b.attachedRoomCount} 房',
+              overflow: TextOverflow.ellipsis,
+              style: UepText.sans(size: 12.5, color: s.ink),
+            ),
+          ),
+      ],
     );
   }
 }
