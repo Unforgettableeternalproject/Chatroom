@@ -59,9 +59,25 @@ void main() {
   late BoardsApi boards;
   const sessionKey = 'claude-ui-contract-test';
 
-  setUpAll(() {
+  setUpAll(() async {
     dio = createApiDio(baseUrl: url, token: token, hostView: () => false);
     boards = BoardsApi(dio);
+
+    // 把對方的版本印出來。**這一組紅掉時，第一個要問的問題是「打的是哪
+    // 一版」**——2026-09-02 有一條紅了半小時，三個人各自用症狀反推版本，
+    // 而 Hub 自己一直都答得出來。沒印出來的話，「client 送錯」與
+    // 「Hub 還沒升」在輸出上長得一模一樣
+    try {
+      final res = await dio.get<Map<String, dynamic>>('/api/health');
+      final b = res.data?['build'] as Map<String, dynamic>? ?? const {};
+      printOnFailure('Hub: $url');
+      print('契約測試打的 Hub：$url · '
+          'v${res.data?['version'] ?? '?'} · ${b['commit'] ?? '?'}');
+    } catch (e) {
+      // 印不出來不該讓整組不跑——舊 Hub 可能沒有 /api/health，
+      // 而契約本身仍然驗得動
+      print('契約測試打的 Hub：$url（版本問不到：$e）');
+    }
   });
 
   tearDownAll(() => dio.close());
