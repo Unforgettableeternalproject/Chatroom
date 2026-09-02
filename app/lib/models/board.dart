@@ -1030,3 +1030,20 @@ BoardEditability boardEditability({
   if (!hasRoom) return BoardEditability.noRoom;
   return BoardEditability.editable;
 }
+
+/// 這間房到底有沒有掛板。
+///
+/// ⚠️ 判準是**載入完成而且沒有 board_id**，不是「快照是空的」。
+/// 載入中的空快照與真的沒有板長得一模一樣，用後者判會讓聊天室的 Board
+/// 入口在每次進房時先閃一下「掛接任務板」再變回來——而那一閃看起來像
+/// 板被弄丟了。
+///
+/// [hasObjectives] 是給舊 Hub 的退路：它不回 `board_id`，但有卡就表示
+/// 板是存在的。遷移期間兩種 Hub 並存，只看 board_id 會把舊 Hub 上每一間
+/// 有板的房都判成未掛接。
+bool boardUnattached({
+  required bool loaded,
+  required String boardId,
+  required bool hasObjectives,
+}) =>
+    loaded && boardId.isEmpty && !hasObjectives;

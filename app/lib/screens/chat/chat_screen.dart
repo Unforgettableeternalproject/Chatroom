@@ -25,6 +25,7 @@ import '../../models/participant.dart';
 import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
+import '../board/board_attach_dialog.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
@@ -1529,11 +1530,64 @@ class _BoardAction extends ConsumerWidget {
   /// 唯讀的板上根本不存在的話，人會一直進去找那件做不到的事。
   final bool archived;
 
+  /// 掛一塊板上來。
+  ///
+  /// v2 起**建房不自動生一塊空板**（`BOARD_DESIGN` §1.2），所以未掛接的房
+  /// 需要一個明確的入口。走同一顆按鈕而不是塞進溢位選單：那顆按鈕本來就是
+  /// 「這間房的工作狀態在哪裡」，沒有板時的答案是「還沒有，要開一塊嗎」。
+  Future<void> _attach(BuildContext context, WidgetRef ref) async {
+    final roomName =
+        ref.read(roomDetailProvider(roomId)).value?.room.name ?? '';
+    final result = await showBoardAttachDialog(context, roomName: roomName);
+    if (result == null) return;
+    final api = ref.read(boardsApiProvider);
+    final sessionKey = ref.read(appConfigProvider).deviceKey;
+    try {
+      final boardId = result.isCreate
+          ? await api.create(
+              name: result.name!,
+              sessionKey: sessionKey,
+              originRoomId: roomId,
+            )
+          : result.boardId!;
+      // 建立時 origin_room_id 已經掛好了，不要再掛一次
+      if (!result.isCreate) {
+        await api.attachRoom(boardId, roomId, sessionKey: sessionKey);
+      }
+      ref.invalidate(boardProvider(roomId));
+      ref.invalidate(boardLibraryProvider);
+      if (context.mounted) context.go('/rooms/$roomId/board');
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // 顯示哪一種是 BoardSnapshot.entryHint 說了算——那個優先序是規格，
     // 不該在畫面這側再抄一份
-    final snap = ref.watch(boardProvider(roomId)).value;
+    final async = ref.watch(boardProvider(roomId));
+    final snap = async.value;
+
+    // 還沒掛板：入口要講的是「開一塊」，不是一個點進去空無一物的板。
+    //
+    // ⚠️ 判準是**載入完成而且沒有 board_id**，不是「快照是空的」——載入中
+    // 的空快照與真的沒有板長得一樣，用後者判會讓按鈕在每次進房時先閃一下
+    // 「掛接任務板」再變回來。封存房不給掛：那間房已經不收新東西了
+    final unattached = boardUnattached(
+      loaded: async.hasValue,
+      boardId: snap?.boardId ?? '',
+      hasObjectives: snap?.objectives.isNotEmpty ?? false,
+    );
+    if (unattached && !archived) {
+      return _HeaderAction(
+        label: '❖ 掛接任務板',
+        onTap: () => _attach(context, ref),
+      );
+    }
+
     final hint = (archived ? snap?.archivedEntryHint : snap?.entryHint) ??
         const BoardEntryHint();
     return _HeaderAction(
