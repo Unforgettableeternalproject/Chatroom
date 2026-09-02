@@ -109,4 +109,41 @@ void main() {
     expect(seen, isNot(contains('這是已經送出去的訊息')),
         reason: '但它不可以被當成這個房間的草稿存起來');
   });
+
+  testWidgets('取消編輯之後，進編輯前那份草稿要回到輸入框', (tester) async {
+    // 🔴 只把「不要抹掉草稿」做到一半的話，草稿會變成**看不見但還在**：
+    // 輸入框空白，倉裡卻留著。使用者看到空白就重新開始打，而第一個按鍵
+    // 就把那份不可見的草稿覆蓋掉——**遺失只是延後發生，不是沒發生**
+    // （@審核用Codex-2 #439）。
+    final seen = <String>[];
+    const msg = Message(
+      id: 'm1',
+      seq: 1,
+      updateSeq: 0,
+      kind: 'chat',
+      content: '這是已經送出去的訊息',
+      createdAt: '2026-09-02T00:00:00Z',
+    );
+    await tester.pumpWidget(_host(
+        key: const ValueKey('room-a'),
+        initialText: '半句還沒說完的話',
+        onTextChanged: seen.add));
+    await tester.pumpWidget(_host(
+        key: const ValueKey('room-a'),
+        initialText: '半句還沒說完的話',
+        onTextChanged: seen.add,
+        editTarget: msg));
+    await tester.pump();
+    expect(find.text('這是已經送出去的訊息'), findsOneWidget);
+
+    // 取消編輯
+    await tester.pumpWidget(_host(
+        key: const ValueKey('room-a'),
+        initialText: '半句還沒說完的話',
+        onTextChanged: seen.add));
+    await tester.pump();
+    expect(find.text('半句還沒說完的話'), findsOneWidget,
+        reason: '草稿要看得見，否則使用者會以為它不見了然後蓋掉它');
+    expect(seen, isNot(contains('這是已經送出去的訊息')));
+  });
 }

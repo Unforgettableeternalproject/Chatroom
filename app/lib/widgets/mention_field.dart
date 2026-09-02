@@ -109,6 +109,9 @@ class _MessageComposerState extends State<MessageComposer> {
 
   /// 輸入框裡現在裝的是「要換掉的那則訊息」，不是草稿。
   bool _editingBuffer = false;
+
+  /// 進編輯模式之前，輸入框裡那句還沒說完的話。取消時要放回去。
+  String _stashedDraft = '';
   final _focus = FocusNode();
   final _link = LayerLink();
   final _overlayController = OverlayPortalController();
@@ -143,17 +146,27 @@ class _MessageComposerState extends State<MessageComposer> {
     if (target != null && target.id != old.editTarget?.id) {
       // 編輯是「把那則換掉」，所以輸入框要**帶著原文**進場——空白起手等於
       // 逼使用者重打一遍，而他多半只是要改一個字
+      // 先把草稿收起來。**不收的話它會變成看不見但還在**——輸入框被原文
+      // 蓋掉、倉裡卻留著，使用者取消編輯後看到空白就重新開始打，而第一個
+      // 按鍵就覆蓋掉那份不可見的草稿。遺失只是延後發生
+      // （@審核用Codex-2 #439）
+      if (!_editingBuffer) _stashedDraft = _controller.text;
       _editingBuffer = true;
       _controller.text = target.content;
       _controller.selection =
           TextSelection.collapsed(offset: target.content.length);
       _focus.requestFocus();
     } else if (target == null && old.editTarget != null) {
-      // 取消編輯要把輸入框清掉：留著的話下一則新訊息會帶著上一則的內容送出。
+      // 取消編輯要把原文換掉：留著的話下一則新訊息會帶著上一則的內容送出。
+      // 換回來的是**進編輯前那句還沒說完的話**，不是空白。
       //
-      // ⚠️ 清空**在旗標放下之前**做。順序反過來的話，這次清空會以「草稿變成
-      // 空字串」的身分回報出去，把使用者進編輯模式之前那份草稿一起抹掉
-      _controller.clear();
+      // ⚠️ 這一步**在旗標放下之前**做。順序反過來的話，它會以「草稿被改成
+      // 這個值」的身分回報出去——而倉裡本來就是這個值，等於白跑一趟；
+      // 更早的版本是 clear()，那時反過來會直接把草稿抹掉
+      _controller.text = _stashedDraft;
+      _controller.selection =
+          TextSelection.collapsed(offset: _stashedDraft.length);
+      _stashedDraft = '';
       _editingBuffer = false;
     }
   }
