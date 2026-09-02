@@ -314,3 +314,25 @@ final orphanedTaskCountProvider =
 final reclaimableTasksProvider =
     Provider.autoDispose.family<List<ReclaimableTask>, String>((ref, roomId) =>
         ref.watch(boardProvider(roomId)).value?.reclaimable ?? const []);
+
+// ─────────────────────────────────────────────────────────────────
+// Board Library（v2）
+// ─────────────────────────────────────────────────────────────────
+
+final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
+
+/// Board Library 清單，依狀態分（active / archived）。
+///
+/// ⚠️ **Hub 還沒有 `/api/boards` 之前這支會回 404**，畫面必須把它呈現成
+/// 「這個功能還沒開」而不是一片空白——空清單與端點不存在看起來一模一樣，
+/// 而那正是最難查的一種畫面。見 `boardLibraryUnavailable`。
+final boardLibraryProvider =
+    FutureProvider.autoDispose.family<List<BoardSummary>, String>(
+  (ref, status) => ref.watch(boardsApiProvider).list(status: status),
+);
+
+/// 這個錯誤是不是「Hub 還沒實作 Board Library」而不是真的壞了。
+///
+/// 遷移期間兩種情況會同時存在於不同的 Hub，而使用者對它們該有的反應
+/// 完全不同：前者是等，後者是修。
+bool boardLibraryUnavailable(Object error) => error is NotFoundException;

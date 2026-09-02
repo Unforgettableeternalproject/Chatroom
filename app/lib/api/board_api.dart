@@ -291,3 +291,65 @@ class BoardClaimResult {
   /// 才知道該先去讀那張卡的描述，而不是從頭開始。
   final bool reclaimed;
 }
+
+/// Board Library（v2）。
+///
+/// 與 [BoardApi] 分開是因為它們的**軸不一樣**：BoardApi 目前以 room 為入口
+/// （v2 換軸後會改成 board_id），這支從一開始就只認 board_id，沒有 room 的
+/// 概念——Board Library 裡沒有 room participant 可言，Hub 直接從已認證的
+/// session 解析 actor_key（`BOARD_DESIGN.md` §8）。
+class BoardsApi {
+  BoardsApi(this._dio);
+
+  final Dio _dio;
+
+  /// Board Library 清單。
+  ///
+  /// [status] 為 `active` / `archived`。**Board 的封存與 room 的封存是兩件
+  /// 事**：封存的房裡照樣可以寫它掛著的 Board，反過來也一樣。
+  Future<List<BoardSummary>> list({String status = 'active'}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/boards',
+          queryParameters: {'status': status},
+        );
+        final items = (res.data?['boards'] as List?) ?? const [];
+        return items
+            .map((e) => BoardSummary.fromJson(e as Map<String, dynamic>))
+            .toList();
+      });
+
+  /// 以 board_id 讀 delta。v2 的權威路徑。
+  Future<BoardDelta> fetch(String boardId, {int afterBoardSeq = 0}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/boards/$boardId',
+          queryParameters: {'after_board_seq': afterBoardSeq},
+        );
+        return BoardDelta.fromJson(res.data ?? const {});
+      });
+
+  /// 建 Board。帶 [originRoomId] 時該房自動掛接，建立者成為 owner。
+  Future<String> create({required String name, String? originRoomId}) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards',
+          data: {'name': name, 'origin_room_id': ?originRoomId},
+        );
+        return (res.data?['id'] as String?) ?? '';
+      });
+
+  /// 把一間房掛上這塊 Board。
+  Future<void> attachRoom(String boardId, String roomId) => unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/rooms/$roomId',
+        );
+      });
+
+  /// 解除掛接。**不刪 Board 的任何資料**——重新掛接看得到原狀態。
+  Future<void> detachRoom(String boardId, String roomId) => unwrap(() async {
+        await _dio.delete<Map<String, dynamic>>(
+          '/api/boards/$boardId/rooms/$roomId',
+        );
+      });
+}

@@ -15,6 +15,7 @@ import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../widgets/connection_pill.dart';
+import '../boards/board_list_screen.dart';
 import '../rooms/room_list_screen.dart';
 
 /// 設定不完整的診斷結果——`null` 表示設定齊全。
@@ -40,10 +41,18 @@ String? settingsGapMessage({
 /// 桌機雙欄 / 手機堆疊的分流（go_router ShellRoute 的 shell）。
 /// 也負責生命週期與網路恢復時叫醒重連（UI-DESIGN §4.2 的三個觸發點之二）。
 class AppShell extends ConsumerStatefulWidget {
-  const AppShell({super.key, required this.child, this.selectedRoomId});
+  const AppShell({
+    super.key,
+    required this.child,
+    this.selectedRoomId,
+    this.selectedBoardId,
+  });
 
   final Widget child;
   final String? selectedRoomId;
+
+  /// 正在看哪塊 Board（`/boards/:boardId`）。左欄的 BOARDS 分頁靠它標選取。
+  final String? selectedBoardId;
 
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
@@ -254,8 +263,10 @@ class _AppShellState extends ConsumerState<AppShell>
                       decoration: BoxDecoration(
                         border: Border(right: BorderSide(color: s.line)),
                       ),
-                      child: RoomListPane(
-                          selectedRoomId: widget.selectedRoomId),
+                      child: _LeftPane(
+                        selectedRoomId: widget.selectedRoomId,
+                        selectedBoardId: widget.selectedBoardId,
+                      ),
                     ),
                   ),
                   Expanded(child: widget.child),
@@ -264,6 +275,89 @@ class _AppShellState extends ConsumerState<AppShell>
         ),
       ]),
     );
+  }
+}
+
+/// 左欄：ROOMS 與 BOARDS 兩個分頁。
+///
+/// 分頁狀態刻意**不放進路由**。理由是它會跟著你在看什麼自己走：從 Board 頁
+/// 切回某間房，左欄本來就該回到 ROOMS；把它寫進 URL 只會多出一個能與畫面
+/// 內容互相矛盾的狀態（`/rooms/x?tab=boards` 要顯示什麼？）。
+class _LeftPane extends StatefulWidget {
+  const _LeftPane({this.selectedRoomId, this.selectedBoardId});
+
+  final String? selectedRoomId;
+  final String? selectedBoardId;
+
+  @override
+  State<_LeftPane> createState() => _LeftPaneState();
+}
+
+class _LeftPaneState extends State<_LeftPane> {
+  bool _boards = false;
+
+  @override
+  void didUpdateWidget(_LeftPane old) {
+    super.didUpdateWidget(old);
+    // 導到一塊 Board 上時分頁自己跟過去——否則左欄還停在 ROOMS，
+    // 右邊已經是 Board 了，而選取的那一列在看不見的另一個分頁裡
+    if (widget.selectedBoardId != null &&
+        widget.selectedBoardId != old.selectedBoardId) {
+      _boards = true;
+    }
+    if (widget.selectedRoomId != null &&
+        widget.selectedRoomId != old.selectedRoomId) {
+      _boards = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    Widget tab(String label, bool active, VoidCallback onTap) => Expanded(
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: active ? UepColors.gold : Colors.transparent,
+                    width: 2,
+                  ),
+                ),
+              ),
+              child: Text(
+                label,
+                style: UepText.mono(
+                  size: 9.5,
+                  letterSpacing: 2.0,
+                  color: active ? s.ink : s.inkMute,
+                  weight: active ? FontWeight.w500 : FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+        );
+
+    return Column(children: [
+      Container(
+        decoration: BoxDecoration(
+          color: s.bgSoft,
+          border: Border(bottom: BorderSide(color: s.line)),
+        ),
+        child: Row(children: [
+          tab('ROOMS', !_boards, () => setState(() => _boards = false)),
+          tab('BOARDS', _boards, () => setState(() => _boards = true)),
+        ]),
+      ),
+      Expanded(
+        child: _boards
+            ? BoardListPane(selectedBoardId: widget.selectedBoardId)
+            : RoomListPane(selectedRoomId: widget.selectedRoomId),
+      ),
+    ]);
   }
 }
 
