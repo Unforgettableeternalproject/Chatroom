@@ -281,11 +281,12 @@ async def test_board_cards_reject_non_members(tmp_path):
             assert r.json()["detail"]["code"] == "not_board_member"
 
 
-async def test_board_with_no_attached_room_says_so_clearly(tmp_path):
-    """過渡期限制要**明確擋下來**，不是撞 FK 回 500。
+async def test_a_board_with_no_room_can_still_hold_cards(tmp_path):
+    """板上沒有任何掛接房時**照樣建得了卡**（§11 步驟 8 換表之後）。
 
-    item 的 room_id 還是 NOT NULL（v1 遺留，等 table rebuild 才拿得掉），
-    所以板上沒房時建不了卡。回 500 的話，查半天才知道是這件事。
+    換表前這裡會回 409：item 的 room_id 是 NOT NULL 且有外鍵，卡沒有一間
+    活著的房可指就存不下來。一塊還沒掛上任何房的板，本來就該能先把要做的
+    事寫下來。
     """
     app, client = await _client(tmp_path, "v2_noroom")
     async with client:
@@ -297,9 +298,12 @@ async def test_board_with_no_attached_room_says_so_clearly(tmp_path):
             await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=hdr)
 
             r = await client.post(f"/api/boards/{bid}/objectives",
-                                  json={"title": "沒房可掛"}, headers=hdr)
-            assert r.status_code == 409
-            assert r.json()["detail"]["code"] == "board_has_no_room"
+                                  json={"title": "沒房也寫得下"}, headers=hdr)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+            assert "沒房也寫得下" in {o["title"] for o in body["objectives"]}
+            assert body["attached_rooms"] == [
+                {"id": rid, "name": "房", "status": "active", "detached": True}]
 
 
 async def test_session_key_can_come_from_header_or_query(tmp_path):
@@ -695,7 +699,7 @@ async def test_deleting_a_board_is_never_triggered_by_deleting_a_room(tmp_path):
 
             r = await client.delete(f"/api/rooms/{rid}", headers=owner)
             assert r.status_code == 200, r.text
-            assert r.json()["deleted"]["board_items_moved"] >= 1
+            assert r.json()["deleted"]["board_items_kept"] >= 1
             body = (await client.get(f"/api/boards/{bid}",
                                      headers=owner)).json()
             assert len(body["tasks"]) == 1, "刪房把板上的卡帶走了"

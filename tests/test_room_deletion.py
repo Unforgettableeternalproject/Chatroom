@@ -493,12 +493,29 @@ async def test_delete_a_room_that_has_board_data(tmp_path):
             assert r.status_code == 200, r.text
 
             db = app.state.db
+            # Board v2：**卡不隨房刪除**（§11 步驟 8 換表後 room_id 沒有
+            # 外鍵了）。這條原本驗的是「三張表都清乾淨」，那在一房一板的
+            # 年代是對的；現在板是獨立實體，刪掉一間聊完的對話不該連同整份
+            # 工作紀錄一起消失。
             for table in ("board_task", "board_checklist", "board_objective"):
                 row = await (await db.execute(
                     f"SELECT COUNT(*) AS n FROM {table} WHERE room_id=?",
                     (room["id"],),
                 )).fetchone()
-                assert row["n"] == 0, f"{table} 還有殘留"
+                assert row["n"] >= 1, f"{table} 的卡被刪房帶走了"
+
+            # 但 participant 參照要放掉——它們指著剛被刪除的成員，而那正是
+            # 這條測試原本要守的爆點（DELETE participant 比 DELETE room 早）
+            row = await (await db.execute(
+                "SELECT COUNT(*) AS n FROM board_task WHERE room_id=?"
+                " AND (created_by IS NOT NULL OR claim_participant_id"
+                " IS NOT NULL)", (room["id"],))).fetchone()
+            assert row["n"] == 0, "卡上還指著已經被刪掉的成員"
+            # 名字快照留著：抹掉會讓板上一段紀錄變成沒有人做過
+            row = await (await db.execute(
+                "SELECT created_by_name FROM board_task WHERE room_id=?"
+                " LIMIT 1", (room["id"],))).fetchone()
+            assert row["created_by_name"]
 
 
 @pytest.mark.asyncio

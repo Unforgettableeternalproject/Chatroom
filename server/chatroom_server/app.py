@@ -1881,8 +1881,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     #   attachment → message                            attachment 指著 message
     #   其餘全部 → participant                          board 四欄、question 兩欄、
     #                                                   message.sender_id 都指著它
-    _ROOM_OWNED_TABLES = ("board_task", "board_checklist", "board_objective",
-                          "attachment", "archive_request", "question",
+    _ROOM_OWNED_TABLES = ("attachment", "archive_request", "question",
                           "message", "assignment", "participant")
 
     # 帶 room_id 卻**刻意不隨房刪除**的表。這份清單存在的唯一理由是：
@@ -1893,7 +1892,12 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 板消失（BOARD_DESIGN §3.2）。掛接歷史連 room_id 一起留著，Board 頁才
     # 講得出「這張卡當初是從哪間房長出來的」——那間房已經不在了，而那正是
     # 快照要救的情況。刪房時改標 `detached_at`，見 `_purge_room`。
-    _ROOM_ID_NOT_OWNED = ("board_room",)
+    #
+    # board 三表：**卡屬於板，不屬於房**（§11 步驟 8 換表後成立）。它們的
+    # `room_id` 只剩 provenance 的意義，沒有外鍵也不必為空——刪掉最後一間
+    # 掛接房之後，那塊板與板上的每一張卡都還在，這正是 v2 的重點。
+    _ROOM_ID_NOT_OWNED = ("board_room", "board_task", "board_checklist",
+                          "board_objective")
 
     async def _room_owned_tables_gap() -> list[str]:
         """schema 裡帶 room_id 的表，有哪幾張不在 `_ROOM_OWNED_TABLES` 裡。
@@ -1942,56 +1946,36 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(500, "purge_incomplete_schema",
                        "刪除聊天室的內部清單與資料庫結構對不上，這次不動它。"
                        f"缺少：{'、'.join(gap)}")
-        # 先把板上的卡搬到同一塊板的另一間 active 掛接房。
+        # 卡**不隨房刪除**（§11 步驟 8 換表後成立：room_id 沒有外鍵了）。
+        # 但卡上的 participant 參照要放掉——那些 id 指著即將被刪的成員，
+        # 留著會在 `DELETE participant` 那一步才炸，而那時房內資料已經
+        # 刪掉一半，共用連線上已執行的 DELETE 撤不回來。
         #
-        # ⚠️ 這一步存在的理由是 v1 的遺留：三張 item 表的 `room_id` 是
-        # `NOT NULL REFERENCES room(id)`，而 `PRAGMA foreign_keys=ON`——
-        # 卡沒有一間活著的房可指就留不下來。板已經是獨立實體了，卡卻還被
-        # 綁在某一間房上（BOARD_DESIGN §11 步驟 8 的 table rebuild 才拿得掉）。
-        #
-        # 搬過去之後，「這張卡當初從哪裡長出來」由 `source_room_id` 與
-        # `board_room` 的掛接歷史保存——那兩個都不是強外鍵，房刪掉仍在。
-        #
-        # 板只掛這一間房時沒有地方可搬，卡會跟著房一起消失。那是 v1 既有的
-        # 行為（一房一板時它是對的），不是這次的回歸；rebuild 之後才會變。
-        board = await _board_for_room(room_id)
-        moved = 0
-        if board is not None:
-            other = await (await db.execute(
-                "SELECT room_id FROM board_room WHERE board_id=? AND room_id<>?"
-                " AND detached_at IS NULL ORDER BY attached_at LIMIT 1",
-                (board["id"], room_id))).fetchone()
-            # 搬家時要一起放掉 participant 參照。那些 id 指著這間房裡的成員，
-            # 而成員會隨房一起被刪——留著就撞 FK，而 FK 是在 DELETE
-            # participant 那一步才炸，那時卡已經搬走一半了。
-            #
-            # 放掉不損失資訊：**名字快照與 actor_key 都還在**（H2 做的正是
-            # 這件事），卡片上「誰建的、誰在做」照樣顯示得出來，而且
-            # actor_key 還認得出「這是同一個人回來了」——participant id
-            # 從來就做不到那件事。
-            drop_refs = {
-                "board_objective": ("created_by", "reviewed_by",
-                                    "verified_by", "completed_by"),
-                "board_checklist": ("created_by", "completed_by"),
-                "board_task": ("created_by", "completed_by",
-                               "claim_participant_id",
-                               "assignee_participant_id", "assigned_by"),
-            }
-            if other is not None:
-                for table, refs in drop_refs.items():
-                    nulls = ", ".join(f"{c}=NULL" for c in refs)
-                    cur = await db.execute(
-                        f"UPDATE {table} SET room_id=?, {nulls}"
-                        " WHERE room_id=? AND board_id=?",
-                        (other["room_id"], room_id, board["id"]))
-                    moved += cur.rowcount
+        # 放掉不損失資訊：**名字快照與 actor_key 都還在**（H2 做的正是這件
+        # 事），卡片上「誰建的、誰在做」照樣顯示得出來，而且 actor_key 還
+        # 認得出「這是同一個人回來了」——participant id 從來就做不到。
+        drop_refs = {
+            "board_objective": ("created_by", "reviewed_by",
+                                "verified_by", "completed_by"),
+            "board_checklist": ("created_by", "completed_by"),
+            "board_task": ("created_by", "completed_by",
+                           "claim_participant_id",
+                           "assignee_participant_id", "assigned_by"),
+        }
+        kept = 0
+        for table, refs in drop_refs.items():
+            nulls = ", ".join(f"{c}=NULL" for c in refs)
+            cur = await db.execute(
+                f"UPDATE {table} SET {nulls} WHERE room_id=?", (room_id,))
+            kept += cur.rowcount
+        moved = kept
         # 再解除 Board 掛接。**標記而不是刪列**：這塊板還活著，
         # 而「它曾經掛在這間房」是 Board 上那些卡的 provenance 唯一的來源。
         cur = await db.execute(
             "UPDATE board_room SET detached_at=? WHERE room_id=? AND"
             " detached_at IS NULL", (_now(), room_id))
         counts: dict[str, int] = {"board_room_detached": cur.rowcount,
-                                  "board_items_moved": moved}
+                                  "board_items_kept": moved}
         for table in _ROOM_OWNED_TABLES:
             # 表名是模組內的常數清單，不是外來輸入
             cur = await db.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
@@ -4984,18 +4968,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         member = await (await app.state.db.execute(
             "SELECT display_name, actor_kind FROM board_member"
             " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
-        # ⚠️ 過渡期限制：三張 item 表的 room_id 還是 NOT NULL（v1 遺留，
-        # 要等 §11 步驟 8 的 table rebuild 才拿得掉）。所以 board-scoped
-        # 建卡仍要有一間房掛著當 provenance。**明確擋下來並說清楚**，
-        # 比讓它撞 FK 然後回 500 好——後者查半天才知道是這件事
+        # 有掛接房就拿第一間當 provenance；**沒有也照樣能建**（§11 步驟 8
+        # 換表之後 room_id 沒有外鍵、可以是空字串）。一塊還沒掛上任何房的
+        # 板，本來就該能先把要做的事寫下來
         room = await (await app.state.db.execute(
             "SELECT room_id FROM board_room WHERE board_id=?"
             " AND detached_at IS NULL ORDER BY attached_at LIMIT 1",
             (board_id,))).fetchone()
-        if room is None:
-            raise _err(409, "board_has_no_room",
-                       "這塊板目前沒有掛在任何聊天室上，還不能從板上直接建卡。"
-                       "先把它掛到一間房，或從那間房裡建")
         me = {
             "id": None,                       # 不是從房裡發出來的
             "display_name": member["display_name"] if member else "",
@@ -5004,7 +4983,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "role": "agent",
             "board_id": board_id,
         }
-        return board, room["room_id"], me
+        return board, room["room_id"] if room else "", me
 
     @app.post("/api/boards/{board_id}/objectives",
               dependencies=[Depends(require_auth)])

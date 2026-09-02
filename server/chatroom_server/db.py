@@ -605,6 +605,172 @@ POST_MIGRATION_INDEXES: list[str] = [
 ]
 
 
+# ── Board v2 步驟 8：把 item 三表重建成「不綁房間生命週期」的形狀 ──────
+#
+# v1 一房一板時，`room_id TEXT NOT NULL REFERENCES room(id)` 是對的：卡本來
+# 就屬於那間房。v2 之後板是獨立實體，那條外鍵變成一個**會刪掉資料的約束**
+# ——`PRAGMA foreign_keys=ON` 之下，刪掉最後一間掛接房就等於刪掉板上的卡。
+#
+# participant 的那幾條外鍵同理：成員隨房消失，而卡上要留下「誰建的、誰在
+# 做」。名字快照與 `actor_key` 已經接手這件事，而且 actor_key 還認得出
+# 「這是同一個人回來了」——participant id 從來就做不到。
+#
+# 留下的只有板內部的樹狀外鍵（objective_id / checklist_id）：那是同一塊板
+# 裡的結構，沒有跨生命週期的問題。
+#
+# ⚠️ 欄位清單是手寫的。漏一欄不會報錯——它會在複製時被靜靜丟掉，而表看起來
+# 一切正常。底下 `_REBUILT_COLUMNS` 與 tests/test_board_v2_rebuild.py 的
+# 對帳就是為了讓「漏了」變成一個會紅的事實。
+REBUILT_TABLES: dict[str, str] = {
+    "board_objective": """
+        CREATE TABLE board_objective__v2 (
+            id          TEXT PRIMARY KEY,
+            -- 房間只是 provenance，不再是所有者：**沒有外鍵、可以是空字串**
+            room_id     TEXT NOT NULL DEFAULT '',
+            board_id    TEXT NOT NULL DEFAULT '',
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            status      TEXT NOT NULL DEFAULT 'active',
+            order_index INTEGER NOT NULL DEFAULT 0,
+            created_by  TEXT,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_by_actor_key TEXT NOT NULL DEFAULT '',
+            reviewed_by  TEXT,
+            reviewed_by_actor_key TEXT NOT NULL DEFAULT '',
+            reviewed_at  TEXT,
+            verified_by  TEXT,
+            verified_by_actor_key TEXT NOT NULL DEFAULT '',
+            verified_at  TEXT,
+            completed_by TEXT,
+            completed_by_actor_key TEXT NOT NULL DEFAULT '',
+            completed_at TEXT,
+            deleted     INTEGER NOT NULL DEFAULT 0,
+            board_seq   INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL
+        )
+    """,
+    "board_checklist": """
+        CREATE TABLE board_checklist__v2 (
+            id           TEXT PRIMARY KEY,
+            room_id      TEXT NOT NULL DEFAULT '',
+            board_id     TEXT NOT NULL DEFAULT '',
+            -- 板內部的樹狀關係保留外鍵：同一塊板裡的結構，沒有跨生命週期問題
+            objective_id TEXT NOT NULL REFERENCES board_objective(id),
+            title        TEXT NOT NULL,
+            description  TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL DEFAULT 'open',
+            order_index  INTEGER NOT NULL DEFAULT 0,
+            created_by   TEXT,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_by_actor_key TEXT NOT NULL DEFAULT '',
+            completed_by TEXT,
+            completed_by_actor_key TEXT NOT NULL DEFAULT '',
+            completed_at TEXT,
+            deleted      INTEGER NOT NULL DEFAULT 0,
+            board_seq    INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT NOT NULL
+        )
+    """,
+    "board_task": """
+        CREATE TABLE board_task__v2 (
+            id           TEXT PRIMARY KEY,
+            room_id      TEXT NOT NULL DEFAULT '',
+            board_id     TEXT NOT NULL DEFAULT '',
+            checklist_id TEXT NOT NULL REFERENCES board_checklist(id),
+            title        TEXT NOT NULL,
+            description  TEXT NOT NULL DEFAULT '',
+            status       TEXT NOT NULL DEFAULT 'todo',
+            order_index  INTEGER NOT NULL DEFAULT 0,
+            priority     TEXT NOT NULL DEFAULT 'normal',
+            claim_participant_id TEXT,
+            claim_session_key    TEXT NOT NULL DEFAULT '',
+            claim_actor_key      TEXT NOT NULL DEFAULT '',
+            claim_name           TEXT NOT NULL DEFAULT '',
+            claim_kind           TEXT NOT NULL DEFAULT '',
+            claim_state          TEXT NOT NULL DEFAULT '',
+            claimed_at           TEXT,
+            orphaned_at          TEXT,
+            orphaned_reason      TEXT NOT NULL DEFAULT '',
+            source_seq        INTEGER,
+            source_room_id    TEXT NOT NULL DEFAULT '',
+            source_room_name  TEXT NOT NULL DEFAULT '',
+            source_message_id TEXT NOT NULL DEFAULT '',
+            assignee_participant_id TEXT,
+            assignee_actor_key      TEXT NOT NULL DEFAULT '',
+            assigned_by             TEXT,
+            assigned_by_name        TEXT NOT NULL DEFAULT '',
+            assigned_by_actor_key   TEXT NOT NULL DEFAULT '',
+            created_by   TEXT,
+            created_by_name TEXT NOT NULL DEFAULT '',
+            created_by_actor_key TEXT NOT NULL DEFAULT '',
+            completed_by TEXT,
+            completed_by_actor_key TEXT NOT NULL DEFAULT '',
+            completed_at TEXT,
+            deleted      INTEGER NOT NULL DEFAULT 0,
+            board_seq    INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT NOT NULL
+        )
+    """,
+}
+
+# 重建之後要補回來的索引。**不重建就是安靜地變慢**，而慢到被發現時
+# 沒有人會想到是半年前那次 rebuild
+REBUILT_INDEXES: list[str] = [
+    "CREATE INDEX IF NOT EXISTS idx_bobjective_room"
+    " ON board_objective(room_id, board_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_bchecklist_room"
+    " ON board_checklist(room_id, board_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_btask_room ON board_task(room_id, board_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_btask_checklist"
+    " ON board_task(checklist_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_btask_claim"
+    " ON board_task(claim_participant_id) WHERE claim_state = 'held'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised"
+    " ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised"
+    " ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類'",
+]
+
+
+async def _needs_room_fk_rebuild(db: aiosqlite.Connection) -> bool:
+    """還綁著 room 外鍵的話就要重建。做完之後這個查詢自然回 False。"""
+    rows = await (
+        await db.execute("PRAGMA foreign_key_list(board_task)")
+    ).fetchall()
+    return any(r["table"] == "room" for r in rows)
+
+
+async def _rebuild_board_tables(db: aiosqlite.Connection) -> None:
+    """SQLite 的 12 步驟換表法（建新→複製→刪舊→改名→補索引）。
+
+    `legacy_alter_table=ON` 是必要的：關掉的話 RENAME 會順手改寫**其他表**
+    對它的外鍵定義，於是剛重建好的乾淨表又被指回舊名字。
+    """
+    await db.execute("PRAGMA foreign_keys=OFF")
+    await db.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        for table, ddl in REBUILT_TABLES.items():
+            cols = [
+                r["name"]
+                for r in await (
+                    await db.execute(f"PRAGMA table_info({table})")
+                ).fetchall()
+            ]
+            await db.execute(ddl)
+            names = ", ".join(cols)
+            await db.execute(
+                f"INSERT INTO {table}__v2 ({names}) SELECT {names} FROM {table}"
+            )
+            await db.execute(f"DROP TABLE {table}")
+            await db.execute(f"ALTER TABLE {table}__v2 RENAME TO {table}")
+        for stmt in REBUILT_INDEXES:
+            await db.execute(stmt)
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA legacy_alter_table=OFF")
+        await db.execute("PRAGMA foreign_keys=ON")
+
+
 async def _migrate(db: aiosqlite.Connection) -> None:
     """為舊版 DB 補上後續版本新增的欄位（冪等）。"""
     for table, column, ddl in MIGRATIONS:
@@ -623,4 +789,8 @@ async def open_db(path: str) -> aiosqlite.Connection:
     await db.executescript(SCHEMA)
     await _migrate(db)
     await db.commit()
+    # 換表放在補欄位**之後**：新表的欄位清單含了所有 migration 加過的欄位，
+    # 先換的話那些欄位還不存在，複製時會整批漏掉
+    if await _needs_room_fk_rebuild(db):
+        await _rebuild_board_tables(db)
     return db
