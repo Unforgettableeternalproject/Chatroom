@@ -1372,7 +1372,10 @@ def _board_scoped_request(method: str, path: str, **kwargs: Any) -> Any:
     """
     params = dict(kwargs.pop("params", None) or {})
     params.setdefault("session_key", _my_session_key())
-    return hub().request(method, path, params=params, **kwargs)
+    # ⚠️ **兩邊都要帶。** GET 端點吃查詢字串上的 session_key，POST／PUT／
+    # DELETE 只認 `X-Session-Key` 標頭——只給前者的話，寫入會被當成沒有身分
+    return hub().request(method, path, params=params,
+                         session_key=_my_session_key(), **kwargs)
 
 
 def _board_write(room_id: str, subagent: str, method: str, path: str,
@@ -1703,6 +1706,203 @@ def chatroom_board_attach(board_id: str, room_id: str,
     method = "DELETE" if detach else "POST"
     return _board_scoped_request(
         method, f"/api/boards/{board_id}/rooms/{room_id}")
+
+
+def _resolve_board_id(room_id: str, board_id: str) -> str:
+    """把 room_id／board_id 解析成一個 board_id。
+
+    想法板與追蹤全都是 board-scoped 的端點——房裡的人要用它們，得先知道
+    這間房掛的是哪一塊板。**沒掛板時明確報錯**，不要回一塊空的：那兩件事
+    的下一步完全不同（一個要先掛板，一個是正常的空板）。
+    """
+    kind, value = _board_target(room_id, board_id)
+    if kind == "board":
+        return value
+    data = _room_request(value, "GET", f"/api/rooms/{value}/board")
+    resolved = (data or {}).get("board_id")
+    if not resolved:
+        raise HubError(
+            "這間聊天室還沒有掛任何任務板，所以也沒有想法板可以看。"
+            "先在板上建一張卡，或用 chatroom_board_attach 掛一塊現成的板。",
+        )
+    _remember_board(value, resolved)
+    return resolved
+
+
+@mcp.tool()
+@_guard
+def chatroom_scratchpads(room_id: str = "", board_id: str = "") -> dict:
+    """列出這塊板上的想法板（ScratchPad）。
+
+    想法板是**還沒成形的東西**放的地方——卡要求你先決定標題、層級與歸屬，
+    而想法還沒成形時那三樣正好都給不出來。艾斯維爾用它先把腦裡的東西倒
+    進去，之後才整理成卡。
+
+    每一份回 ``title`` / ``block_count``（有幾段）/ ``unresolved_notes``
+    （還沒處理的註解數）/ ``rev``。
+
+    ⚠️ ``unresolved_notes`` 是唯一能讓你知道「有人對某一段提了意見」的
+    線索——包括**別人對你寫的那段**提的。看到它不是 0 就進去看。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request("GET", f"/api/boards/{bid}/scratchpads")
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@mcp.tool()
+@_guard
+def chatroom_scratchpad(pad_id: str, room_id: str = "",
+                        board_id: str = "") -> dict:
+    """讀一份想法板：**一串有 id 的段落**，每段帶作者與自己的 ``rev``。
+
+    它刻意不是一整塊文字。**「誰寫的」存在段落層級**，因為那是守門的依據：
+    你不能改寫人類寫下的段落，也不能改別的 agent 寫的——要提意見的話，用
+    ``chatroom_scratchpad_add(kind="note")`` 在那一段旁邊掛一則註解。
+
+    每段回：
+
+    - ``content`` / ``author_name`` / ``author_kind``
+    - ``rev``——改寫時**必須帶著它**送回去。對不上表示那段在你讀取之後被
+      改過了，Hub 會擋下並附上現值，**不會**自動合併
+    - ``can_edit``——**伺服器算好的**守門結果。不要自己推斷：規則漂移的話，
+      你會以為改得動、送出時才被拒
+    - ``notes``——掛在這一段上的註解
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request("GET",
+                                f"/api/boards/{bid}/scratchpads/{pad_id}")
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@mcp.tool()
+@_guard
+def chatroom_scratchpad_add(kind: str, content: str, room_id: str = "",
+                            board_id: str = "", pad_id: str = "",
+                            block_id: str = "", title: str = "",
+                            after_block_id: str = "") -> dict:
+    """往想法板裡加東西。``kind`` 三選一：
+
+    - ``pad``——開一份新的想法板（要 ``title``；``content`` 會成為第一段）
+    - ``block``——**加一段。這就是你丟想法的方式。** 要 ``pad_id``。
+      它寫的是你自己的段落，碰不到任何人已經寫下的東西
+    - ``note``——在某一段旁邊掛一則註解。要 ``pad_id`` 與 ``block_id``。
+      **這是你對人類（或別人）段落唯一能做的事**
+
+    ⚠️ 想改人類寫的那段時，正確的動作是 ``note`` 而不是把意見寫成新的一段
+    ——後者會讓本文裡混進沒有人同意過的內容，而那正是這道守門要避免的。
+
+    ``after_block_id`` 讓新段落插在指定那段之後（``block`` 用），省略就
+    放最後。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    kind = (kind or "").strip().lower()
+    if kind == "pad":
+        if not title.strip():
+            raise HubError("開一份想法板要給 title。")
+        return _board_scoped_request(
+            "POST", f"/api/boards/{bid}/scratchpads",
+            json={"title": title, "content": content})
+    if not pad_id:
+        raise HubError("要給 pad_id（用 chatroom_scratchpads 找）。")
+    if kind == "block":
+        return _board_scoped_request(
+            "POST", f"/api/boards/{bid}/scratchpads/{pad_id}/blocks",
+            json={"content": content, "after_block_id": after_block_id})
+    if kind == "note":
+        if not block_id:
+            raise HubError(
+                "註解要掛在某一段上，請給 block_id"
+                "（chatroom_scratchpad 回的每一段都有 id）。")
+        return _board_scoped_request(
+            "POST",
+            f"/api/boards/{bid}/scratchpads/{pad_id}/blocks/{block_id}/notes",
+            json={"content": content})
+    raise HubError("kind 只能是 pad／block／note。")
+
+
+@mcp.tool()
+@_guard
+def chatroom_scratchpad_edit(pad_id: str, block_id: str, content: str,
+                             rev: int, room_id: str = "",
+                             board_id: str = "") -> dict:
+    """改寫**你自己寫的**那一段。
+
+    ``rev`` 從 ``chatroom_scratchpad`` 拿，必須帶。對不上會被擋下並附上
+    現值——那表示那段在你讀取之後被改過了，**不要拿現值直接覆蓋**，先看
+    看別人寫了什麼。
+
+    改不動別人的段落是正常的，不是權限設定錯誤：人類寫的段落 agent 一律
+    只能註解，另一個 agent 寫的也一樣。回應會告訴你作者是誰。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    return _board_scoped_request(
+        "PUT", f"/api/boards/{bid}/scratchpads/{pad_id}/blocks/{block_id}",
+        json={"content": content, "rev": rev})
+
+
+@mcp.tool()
+@_guard
+def chatroom_watch(task_id: str, room_id: str = "", board_id: str = "",
+                   release: bool = False) -> dict:
+    """追蹤一張卡：它完成／取消／被重新打開時通知你（``release=True`` 取消）。
+
+    **用途是「我的工作卡在這張卡上」**——你不必是它的認領者，會被卡住的人
+    通常正是沒在做那張卡的那個。而通知只會送給追蹤的人，不會打擾整個房間。
+
+    ⚠️ 追蹤跟著你的 session_key 走，**重啟不會斷**。回應的 ``delivery``：
+
+    - ``room_and_inbox``——卡有動靜時房會被叫醒，收件匣也留一筆
+    - 板上沒有任何還開著的聊天室時**會被拒絕**：那時沒有地方能通知你
+
+    卡有動靜而你當時不在線上也不會漏——用 ``chatroom_notices`` 撈。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    if release:
+        return _board_scoped_request(
+            "DELETE", f"/api/boards/{bid}/watches",
+            params={"item_kind": "task", "item_id": task_id})
+    return _board_scoped_request(
+        "POST", f"/api/boards/{bid}/watches",
+        json={"item_kind": "task", "item_id": task_id})
+
+
+@mcp.tool()
+@_guard
+def chatroom_notices(unread_only: bool = True,
+                     mark_read: bool = False) -> dict:
+    """你追蹤的卡有動靜了嗎——**跨板的收件匣**。
+
+    這是追蹤的另一半：在線上時房會把你叫醒，**不在線上時通知留在這裡等你
+    回來**。少了它，追蹤只在你已經在看的時候有用，而那時你並不需要它。
+
+    每筆回 ``item_title``（那張卡當時叫什麼）/ ``event_type``：
+
+    - ``task_done`` / ``task_cancelled``——你等的那張卡結束了
+    - ``task_reopened``——**它又被打開了**。跟完成一樣重要：漏掉的話你會
+      以為可以動工了
+    - ``delivery_degraded``——那塊板已經沒有開著的聊天室，之後不會再主動
+      叫醒你，要自己回來看。**你的追蹤沒有被清掉**
+
+    ``mark_read=True`` 順手把撈到的這批標成已讀。
+    """
+    out = hub().request("GET", "/api/board/notices",
+                        session_key=_my_session_key(),
+                        params={"unread_only": unread_only,
+                                "session_key": _my_session_key()})
+    if mark_read and isinstance(out, dict) and out.get("notices"):
+        # ⚠️ **只標記這次撈到的那幾筆。** `all_notices=true` 會把沒回給你
+        # 的也一起清掉——GET 一次最多 100 筆，有 150 筆時另外 50 筆會靜默
+        # 變成已讀，而你從來沒看過它們（審核用Codex-2 2026-09-02）
+        ids = [n["id"] for n in out["notices"] if n.get("id")]
+        if ids:
+            hub().request("POST", "/api/board/notices/read",
+                          session_key=_my_session_key(),
+                          json={"notice_ids": ids})
+    return out
 
 
 def main() -> None:

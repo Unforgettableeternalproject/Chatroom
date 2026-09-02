@@ -3732,10 +3732,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
     ):
         parent = await _board_item_or_404("objective", objective_id)
-        me = await _board_writer(parent["room_id"], x_participant_id)
+        # 🚨 授權看**板**，不看卡所在的那間房。`_board_writer(parent["room_id"])`
+        # 問的是「你是不是那間房的成員」——而一塊板可以掛好幾間房，呼叫者
+        # 完全可能從**另一間掛接房**建子卡。那條路徑會 403，而錯誤訊息講的是
+        # 房間身分，完全對不上真正的原因（@測試Novia T11／審核用Codex-2 2026-09-02）
+        me = await _board_item_writer(parent, x_participant_id)
         await _assert_container_open("objective", objective_id)
         db = app.state.db
-        seq = await _next_board_seq(parent["room_id"])
+        seq = await _item_seq(parent)
         cid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
@@ -3938,7 +3942,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
     ):
         parent = await _board_item_or_404("checklist", checklist_id)
-        me = await _board_writer(parent["room_id"], x_participant_id)
+        # 🚨 授權看**板**，不看卡所在的那間房。`_board_writer(parent["room_id"])`
+        # 問的是「你是不是那間房的成員」——而一塊板可以掛好幾間房，呼叫者
+        # 完全可能從**另一間掛接房**建子卡。那條路徑會 403，而錯誤訊息講的是
+        # 房間身分，完全對不上真正的原因（@測試Novia T11／審核用Codex-2 2026-09-02）
+        me = await _board_item_writer(parent, x_participant_id)
         await _assert_container_open("checklist", checklist_id)
         return await _insert_task(checklist_id, parent["room_id"], body, me)
 
@@ -6187,10 +6195,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             ids = [i for i in await _block_order_ids(pad_id) if i != bkid]
             at = ids.index(body.after_block_id) + 1
             await _renumber_blocks(pad_id, ids[:at] + [bkid] + ids[at:], seq)
-        await db.execute(
+        # ⚠️ **`AND deleted=0` 是 CAS，不是修飾。** A 通過了
+        # `_scratchpad_or_404`，B 在那之後把整份軟刪掉——A 照樣寫得進去，
+        # 於是段落落在一份已經不存在的想法板裡：沒有人看得到它，也沒有任何
+        # 地方報錯（審核用Codex-2 2026-09-02）。不帶 rev 是刻意的：加一段
+        # 不與任何人的編輯衝突，逼它帶 rev 只會讓 agent 動不了
+        alive = await (await db.execute(
             "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
-            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            " updated_by_actor_key=?, updated_by_name=?"
+            " WHERE id=? AND deleted=0 RETURNING rev",
             (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        ).fetchone()
+        if alive is None:
+            await _record_board_event(
+                board_id, seq, "scratchpad_write_lost", actor=me["session_key"],
+                actor_name=me["display_name"], origin_room_id=room_id,
+                item_kind="scratchpad", item_id=pad_id,
+                payload={"block_id": bkid, "reason": "pad_deleted"})
+            await db.commit()
+            raise _err(409, "scratchpad_deleted",
+                       "這份想法板在你送出的同時被刪掉了，那一段沒有寫進去")
         await _record_board_event(
             board_id, seq, "scratchpad_block_added", actor=me["session_key"],
             actor_name=me["display_name"], origin_room_id=room_id,
@@ -6294,12 +6318,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             (uuid.uuid4().hex, block_id, pad_id, board_id, block["content"],
              block["rev"], block["author_actor_key"], block["author_name"],
              me["session_key"], me["display_name"], _now()))
-        await db.execute(
+        # 兩路刪同一段：**一次實際的刪除只能有一格水位、一筆 event**。
+        # 不做 CAS 的話兩邊都成功、各領一個號，稽核串上就有兩次刪除——而
+        # 那一段只被刪了一次（@開發Novia (除錯) B 組實測）
+        killed = await (await db.execute(
             "UPDATE board_scratchpad_block SET deleted=1, board_seq=?,"
-            " updated_at=? WHERE id=?", (seq, _now(), block_id))
+            " updated_at=? WHERE id=? AND deleted=0 RETURNING id",
+            (seq, _now(), block_id))).fetchone()
+        if killed is None:
+            await _record_board_event(
+                board_id, seq, "scratchpad_block_delete_noop",
+                actor=me["session_key"], actor_name=me["display_name"],
+                origin_room_id=room_id, item_kind="scratchpad",
+                item_id=pad_id, payload={"block_id": block_id})
+            await db.commit()
+            return {"ok": True, "id": block_id, "board_seq": seq,
+                    "already_deleted": True}
         await db.execute(
             "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
-            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            " updated_by_actor_key=?, updated_by_name=?"
+            " WHERE id=? AND deleted=0",
             (seq, _now(), me["session_key"], me["display_name"], pad_id))
         await _record_board_event(
             board_id, seq, "scratchpad_block_deleted", actor=me["session_key"],
@@ -6480,10 +6518,33 @@ def create_app(config: Config | None = None) -> FastAPI:
                        created_by_name=pad["created_by_name"])
         db = app.state.db
         seq = await _next_seq_for_board(board_id)
-        await db.execute(
+        gone = await (await db.execute(
             "UPDATE board_scratchpad SET deleted=1, board_seq=?, updated_at=?,"
-            " updated_by_actor_key=?, updated_by_name=? WHERE id=?",
+            " updated_by_actor_key=?, updated_by_name=?"
+            " WHERE id=? AND deleted=0 RETURNING id",
             (seq, _now(), me["session_key"], me["display_name"], pad_id))
+        ).fetchone()
+        if gone is not None:
+            # cascade：不標記的話，底下的段落與註解會變成**活著的孤兒**
+            # ——查詢得到、畫面上看不到，而兩邊都不會報錯
+            await db.execute(
+                "UPDATE board_scratchpad_block SET deleted=1, board_seq=?,"
+                " updated_at=? WHERE scratchpad_id=? AND deleted=0",
+                (seq, _now(), pad_id))
+            await db.execute(
+                "UPDATE board_scratchpad_note SET deleted=1, board_seq=?"
+                " WHERE scratchpad_id=? AND deleted=0", (seq, pad_id))
+        if gone is None:
+            # 兩路同時刪：輸的那個不留 event 會在稽核串上開一個洞，因為號
+            # 已經領走了
+            await _record_board_event(
+                board_id, seq, "scratchpad_delete_noop",
+                actor=me["session_key"], actor_name=me["display_name"],
+                origin_room_id=room_id, item_kind="scratchpad",
+                item_id=pad_id, payload={"title": pad["title"]})
+            await db.commit()
+            return {"ok": True, "id": pad_id, "board_seq": seq,
+                    "already_deleted": True}
         await _record_board_event(
             board_id, seq, "scratchpad_deleted", actor=me["session_key"],
             actor_name=me["display_name"], origin_room_id=room_id,
@@ -6618,7 +6679,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (board_id,))).fetchone()
         return row["n"]
 
-    async def _degrade_watches_to_inbox(board_id: str, seq: int,
+    async def _degrade_watches_to_inbox(board_id: str,
                                         reason: str) -> list[str]:
         """板上沒有活著的房了：告訴**追蹤者**他們降級成只剩收件匣。
 
@@ -6634,14 +6695,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         rows = await (await db.execute(
             "SELECT DISTINCT actor_key FROM board_watch WHERE board_id=?",
             (board_id,))).fetchall()
+        who_all = [(r["actor_key"] or "").strip() for r in rows]
+        who_all = [w for w in who_all if w]
+        if not who_all:
+            # 🚨 **沒有人要通知就不領號。** 先領再看有沒有事要記的話，零
+            # watcher 的 detach 會讓水位前進而 `/events` 沒有對應的 event
+            # ——那正是我上一輪才修掉的形狀，而我在新程式碼裡又做了一次
+            # （審核用Codex-2 2026-09-02）
+            return []
+        seq = await _next_seq_for_board(board_id)
         board = await (await db.execute(
             "SELECT name FROM board WHERE id=?", (board_id,))).fetchone()
         now = _now()
         told = []
-        for r in rows:
-            who = (r["actor_key"] or "").strip()
-            if not who:
-                continue
+        for who in who_all:
             await db.execute(
                 "INSERT INTO board_watch_notice (id, board_id, actor_key,"
                 " item_kind, item_id, item_title, event_type, board_seq,"
@@ -6650,11 +6717,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                  board["name"] if board else "", "delivery_degraded", seq,
                  "", now))
             told.append(who)
-        if told:
-            await _record_board_event(
-                board_id, seq, "delivery_degraded", item_kind="board",
-                item_id=board_id,
-                payload={"reason": reason, "watchers": len(told)})
+        await _record_board_event(
+            board_id, seq, "delivery_degraded", item_kind="board",
+            item_id=board_id,
+            payload={"reason": reason, "watchers": len(told)})
         return told
 
     async def _touch_watched_item(board_id: str, kind: str, item_id: str,
@@ -6715,30 +6781,39 @@ def create_app(config: Config | None = None) -> FastAPI:
         member = await (await app.state.db.execute(
             "SELECT display_name FROM board_member WHERE board_id=?"
             " AND actor_key=?", (board_id, actor))).fetchone()
-        await app.state.db.execute(
+        # ⚠️ **冪等**：已經在追的人再按一次不該讓整塊板動一次。取消追蹤那
+        # 邊本來就是這樣（`rowcount` 為 0 就不推號），兩邊要一致——不然
+        # 「重複呼叫安不安全」這件事會取決於你呼叫的是哪一個
+        # （審核用Codex-2 2026-09-02）
+        cur = await app.state.db.execute(
             "INSERT INTO board_watch (board_id, item_kind, item_id, actor_key,"
             " actor_name, created_at) VALUES (?,?,?,?,?,?)"
-            " ON CONFLICT DO NOTHING",
+            " ON CONFLICT DO NOTHING RETURNING actor_key",
             (board_id, body.item_kind, body.item_id, actor,
              member["display_name"] if member else "", _now()))
+        added = await cur.fetchone() is not None
         # ⚠️ **要推進 board_seq，而且要更新那張卡自己的號。**
         # 我原本的理由是「板上的內容沒有變」——但 `watcher_count` 與
         # `watching` 就放在卡的 payload 裡，那一刻它們就是卡的一部分。不推
         # 的話那兩個欄位**永遠不會出現在任何一次 delta**，只能靠整份重讀補
         # 值，而認領者就不會知道自己卡住了誰（審核用Codex-2 2026-09-02）
-        seq = await _next_seq_for_board(board_id)
-        await _touch_watched_item(board_id, body.item_kind, body.item_id, seq)
         count = (await (await app.state.db.execute(
             "SELECT COUNT(*) AS n FROM board_watch WHERE board_id=? AND"
             " item_kind=? AND item_id=?",
             (board_id, body.item_kind, body.item_id))).fetchone())["n"]
-        await _record_board_event(
-            board_id, seq, "watch_added", actor=actor,
-            actor_name=member["display_name"] if member else "",
-            item_kind=body.item_kind, item_id=body.item_id,
-            payload={"watcher_count": count, "title": row["title"]})
+        seq = None
+        if added:
+            seq = await _next_seq_for_board(board_id)
+            await _touch_watched_item(board_id, body.item_kind, body.item_id,
+                                      seq)
+            await _record_board_event(
+                board_id, seq, "watch_added", actor=actor,
+                actor_name=member["display_name"] if member else "",
+                item_kind=body.item_kind, item_id=body.item_id,
+                payload={"watcher_count": count, "title": row["title"]})
         await app.state.db.commit()
-        await _notify_board_rooms(board_id)
+        if added:
+            await _notify_board_rooms(board_id)
         return {"ok": True, "watching": True, "item_id": body.item_id,
                 "item_kind": body.item_kind, "watcher_count": count,
                 "board_seq": seq, "title": row["title"],
@@ -6987,9 +7062,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 不是按下解除的那個人：那兩群多半不重疊（艾斯維爾裁決 2026-09-02）
         degraded: list[str] = []
         if await _live_room_count(board_id) == 0:
-            seq = await _next_seq_for_board(board_id)
             degraded = await _degrade_watches_to_inbox(
-                board_id, seq, "board_detached")
+                board_id, "board_detached")
         await db.commit()
         await events.notify(room_id)
         await _notify_board_rooms(board_id)
