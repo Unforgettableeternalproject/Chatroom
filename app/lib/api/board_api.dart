@@ -384,6 +384,33 @@ class BoardsApi {
         );
       });
 
+  /// 批次排序。
+  ///
+  /// **整批送、整批套用**：Hub 那端有一張卡不屬於這塊板就整批退回 404，
+  /// 不會套用一半。部分成功會讓 client 拿到一個它無法解讀的順序——排序
+  /// 本來就是整批語意，不是 N 次獨立更新。
+  ///
+  /// [ids] 是**排好之後的完整順序**，index 就是 order_index。
+  Future<void> reorder(
+    String boardId, {
+    required String sessionKey,
+    required String kind,
+    required List<String> ids,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/reorder',
+          data: {
+            'kind': kind,
+            'items': [
+              for (var i = 0; i < ids.length; i++)
+                {'id': ids[i], 'order_index': i},
+            ],
+          },
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+      });
+
   /// 指定或卸任 Supervisor（[actorKey] 為 null／空字串即卸任）。限 owner。
   ///
   /// **Supervisor 不必是板成員、也不必在任何掛接房裡**——那正是這個角色的

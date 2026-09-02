@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/board.dart';
+import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/board_task_card.dart';
@@ -292,6 +293,62 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
+
+  /// 拖曳排序。
+  ///
+  /// ⚠️ **只有看到完整清單時才准拖。** 篩選（例如「只看孤兒」）之下拖動，
+  /// 送出去的順序只涵蓋看得見的那幾張，Hub 會把 0..n-1 指給它們——沒被
+  /// 顯示的卡就被擠到後面去了，而動手的人不會知道自己動到了看不見的東西。
+  bool get _canReorder => !_readOnly && !_orphansOnly && _boardIdOrNull != null;
+
+  /// 把 [ids] 依 Flutter 的 old/new index 語意搬一格，然後整批送出。
+  ///
+  /// Hub 是整批套用（有一張不屬於這塊板就整批退回），所以這裡不做樂觀更新
+  /// 之外的補償：成功就重拉，失敗就重拉——兩種情況畫面都會回到 Hub 說的
+  /// 那個順序，不會停在一個只有本機看得到的排列上。
+  Future<void> _reorder(String kind, List<String> ids, int from, int to) async {
+    final next = reorderedIds(ids, from, to);
+    try {
+      await ref.read(boardsApiProvider).reorder(
+            _boardIdOrNull!,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            kind: kind,
+            ids: next,
+          );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+    _reloadBoard();
+  }
+
+  /// 可拖曳的卡片清單。不能拖時退回原本的 Column——**不要留一個拖不動的
+  /// 拖曳把手**，那比沒有把手更讓人以為壞了。
+  Widget _taskList(BoardSnapshot snap, List<BoardTask> tasks) {
+    if (!_canReorder || tasks.length < 2) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [for (final t in tasks) _taskCard(snap, t)],
+      );
+    }
+    return ReorderableListView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      onReorder: (from, to) => _reorder(
+          'task', [for (final t in tasks) t.id], from, to),
+      children: [
+        for (var i = 0; i < tasks.length; i++)
+          ReorderableDragStartListener(
+            key: ValueKey(tasks[i].id),
+            index: i,
+            child: _taskCard(snap, tasks[i]),
+          ),
+      ],
+    );
+  }
+
   /// 這塊板是不是唯讀的歷史。
   ///
   /// 🔴 **v2 遷移必改：訊號源會變，但這裡不會有任何地方報錯。**
@@ -515,8 +572,30 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     label: '＋ 新週期', onTap: () => _create('objective')),
             ]),
           ),
-          for (final o in active)
-            _objectiveTile(context, snap, o, o.id == selected.id),
+          if (_canReorder && active.length > 1)
+            ReorderableListView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              // ⚠️ 只排 active 那幾條，而送出的順序也只有它們。
+              // 已完成的週期不在這個清單裡，它們的 order_index 會被擠到
+              // 後面——那是對的：這一層的順序講的是「接下來做哪個」，
+              // 而做完的週期已經不在那個問題裡了
+              onReorder: (from, to) => _reorder(
+                  'objective', [for (final o in active) o.id], from, to),
+              children: [
+                for (var i = 0; i < active.length; i++)
+                  ReorderableDragStartListener(
+                    key: ValueKey(active[i].id),
+                    index: i,
+                    child: _objectiveTile(
+                        context, snap, active[i], active[i].id == selected.id),
+                  ),
+              ],
+            )
+          else
+            for (final o in active)
+              _objectiveTile(context, snap, o, o.id == selected.id),
           // 完成的週期退成一份名單：它們不再需要被點開，但要看得到做過什麼
           if (done.isNotEmpty) ...[
             Padding(
@@ -928,7 +1007,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final t in tasks) _taskCard(snap, t),
+          _taskList(snap, tasks),
           if (!_readOnly && c.status == 'open' && loose == 0)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -1066,7 +1145,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           if (collapsed) const SizedBox(height: 4),
           if (!collapsed) ...[
           const SizedBox(height: 10),
-          for (final t in tasks) _taskCard(snap, t),
+          _taskList(snap, tasks),
           if (tasks.isEmpty)
             Text('這個階段還沒有任務。',
                 style: UepText.mono(size: 10, color: s.inkMute)),

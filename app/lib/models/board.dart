@@ -1142,3 +1142,15 @@ bool boardUnattached({
   required bool hasObjectives,
 }) =>
     loaded && boardId.isEmpty && !hasObjectives;
+
+/// 把 [ids] 依 Flutter `ReorderableListView.onReorder` 的語意搬一格。
+///
+/// ⚠️ **`newIndex` 是「移除之前」的插入位置**，所以往後拖時要先減一。
+/// 少了那一行，往後拖永遠會多跳一格——而且只在往後拖時錯，往前拖是對的，
+/// 所以隨手試一下很容易以為它好了。
+List<String> reorderedIds(List<String> ids, int oldIndex, int newIndex) {
+  if (newIndex > oldIndex) newIndex -= 1;
+  final out = [...ids];
+  out.insert(newIndex, out.removeAt(oldIndex));
+  return out;
+}
