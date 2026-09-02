@@ -378,8 +378,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         const Spacer(),
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
         // 「沒有人在收摘要」與「有人但名字讀不到」不是同一件事
-        if (snap?.supervisor != null && snap!.supervisor!.isNotEmpty) ...[
-          _SupervisorPill(name: snap.supervisor!),
+        if (snap?.supervisor?.displayName.isNotEmpty ?? false) ...[
+          _SupervisorPill(name: snap!.supervisor!.displayName),
           const SizedBox(width: 12),
         ],
         // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。

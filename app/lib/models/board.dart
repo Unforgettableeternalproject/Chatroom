@@ -479,10 +479,14 @@ class BoardDelta {
   const BoardDelta({
     required this.boardSeq,
     this.full = false,
+    this.boardId = '',
     this.objectives = const [],
     this.checklists = const [],
     this.tasks = const [],
     this.reclaimable = const [],
+    this.attachedRooms = const [],
+    this.directives = const [],
+    this.directivesHasMore = false,
     this.supervisor,
   });
 
@@ -492,15 +496,36 @@ class BoardDelta {
   /// 這是全量（`after_board_seq=0` 的回應），不是增量。
   final bool full;
 
+  /// v2 起 Board 是獨立實體，這是它的身分。舊 Hub 不送，回空字串。
+  final String boardId;
+
   final List<BoardObjective> objectives;
   final List<BoardChecklist> checklists;
   final List<BoardTask> tasks;
   final List<ReclaimableTask> reclaimable;
-  final String? supervisor;
+
+  /// 掛在這塊 Board 上的房間。`detached: true` 的是 tombstone。
+  final List<AttachedRoom> attachedRooms;
+
+  final List<BoardDirective> directives;
+
+  /// 全量回應只帶最近 50 筆——長跑的 Board 會把回應撐爆。
+  /// 為 true 時畫面上要留得出「還有更早的」，不能假裝這就是全部。
+  final bool directivesHasMore;
+
+  final BoardActorRef? supervisor;
 
   factory BoardDelta.fromJson(Map<String, dynamic> json) => BoardDelta(
     boardSeq: (json['board_seq'] as int?) ?? 0,
     full: (json['full'] as bool?) ?? false,
+    boardId: (json['board_id'] as String?) ?? '',
+    attachedRooms: ((json['attached_rooms'] as List?) ?? const [])
+        .map((e) => AttachedRoom.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    directives: ((json['directives'] as List?) ?? const [])
+        .map((e) => BoardDirective.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    directivesHasMore: (json['directives_has_more'] as bool?) ?? false,
     objectives: ((json['objectives'] as List?) ?? const [])
         .map((e) => BoardObjective.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -513,7 +538,16 @@ class BoardDelta {
     reclaimable: ((json['reclaimable_tasks'] as List?) ?? const [])
         .map((e) => ReclaimableTask.fromJson(e as Map<String, dynamic>))
         .toList(),
-    supervisor: json['supervisor'] as String?,
+    // v1 的 supervisor 是一個名字字串，v2 升成物件。兩種都吃——遷移期間
+    // 新舊 Hub 會同時存在，只認一種等於在其中一邊靜默掉一個角色。
+    supervisor: switch (json['supervisor']) {
+      final Map<String, dynamic> m => BoardActorRef.fromJson(m),
+      final String s when s.isNotEmpty => BoardActorRef(
+        actorKey: '',
+        displayName: s,
+      ),
+      _ => null,
+    },
   );
 }
 
@@ -534,21 +568,39 @@ class BoardEntryHint {
 class BoardSnapshot {
   const BoardSnapshot({
     this.boardSeq = 0,
+    this.boardId = '',
     this.objectives = const {},
     this.checklists = const {},
     this.tasks = const {},
     this.reclaimable = const [],
+    this.attachedRooms = const {},
+    this.directives = const {},
+    this.directivesHasMore = false,
     this.supervisor,
   });
 
   /// 已經套用到哪個水位。**下次請求帶這個值**。
   final int boardSeq;
 
+  /// 這份快取是誰的。v2 起這才是身分，roomId 只是進來的其中一道門。
+  final String boardId;
+
   final Map<String, BoardObjective> objectives;
   final Map<String, BoardChecklist> checklists;
   final Map<String, BoardTask> tasks;
   final List<ReclaimableTask> reclaimable;
-  final String? supervisor;
+  final Map<String, AttachedRoom> attachedRooms;
+  final Map<String, BoardDirective> directives;
+  final bool directivesHasMore;
+  final BoardActorRef? supervisor;
+
+  /// 還掛著的房間，解除的不算。給 Board 頁「切回來源對話」用。
+  Iterable<AttachedRoom> get liveRooms =>
+      attachedRooms.values.where((r) => !r.detached);
+
+  /// 稽核串由新到舊。
+  List<BoardDirective> get sortedDirectives =>
+      directives.values.toList()..sort((a, b) => b.boardSeq.compareTo(a.boardSeq));
 
   /// 套用一次增量。三種變更各有各的處理：
   ///
@@ -568,6 +620,12 @@ class BoardSnapshot {
     final tsks = delta.full
         ? <String, BoardTask>{}
         : Map<String, BoardTask>.from(tasks);
+    final rooms = delta.full
+        ? <String, AttachedRoom>{}
+        : Map<String, AttachedRoom>.from(attachedRooms);
+    final dirs = delta.full
+        ? <String, BoardDirective>{}
+        : Map<String, BoardDirective>.from(directives);
 
     for (final o in delta.objectives) {
       if (o.deleted) {
@@ -590,15 +648,34 @@ class BoardSnapshot {
         tsks[t.id] = t;
       }
     }
+    // detached 與 deleted 同語意：收到就移除。留著會殘留一間早已解除的房，
+    // 而使用者點下去才會發現——那時已經沒有任何線索指出是快取的問題。
+    for (final r in delta.attachedRooms) {
+      if (r.detached) {
+        rooms.remove(r.id);
+      } else {
+        rooms[r.id] = r;
+      }
+    }
+    for (final d in delta.directives) {
+      dirs[d.id] = d;
+    }
 
     return BoardSnapshot(
       // 水位只進不退：增量回應可能因為這一輪沒有任何變更而回一個較小的值，
       // 倒退會讓下一次請求重拉已經套用過的東西
       boardSeq: delta.boardSeq > boardSeq ? delta.boardSeq : boardSeq,
+      // 舊 Hub 不送 board_id，這時保留手上那份而不是覆蓋成空字串
+      boardId: delta.boardId.isNotEmpty ? delta.boardId : boardId,
       objectives: objs,
       checklists: lists,
       tasks: tsks,
       reclaimable: delta.reclaimable,
+      attachedRooms: rooms,
+      directives: dirs,
+      // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
+      // 讓它跟著增量歸零會把已知的截斷事實抹掉
+      directivesHasMore: delta.full ? delta.directivesHasMore : directivesHasMore,
       supervisor: delta.supervisor,
     );
   }
@@ -727,5 +804,194 @@ class BoardSnapshot {
             : a.createdAt.compareTo(b.createdAt),
       );
     return out;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// v2：Board 獨立於 Chatroom 之後才有的東西
+// 契約定於房內 #41／#43（Hub 確認同構 + 四點微調）。
+// 這些欄位舊 Hub 不會送，所有 fromJson 都必須能吃到 null。
+// ─────────────────────────────────────────────────────────────────
+
+/// 同一個 actor 在別的房間用過的名字。
+///
+/// 只存名字的話，hover 講得出「它還叫過這個」，卻講不出「那是哪來的」——
+/// 而後者才是使用者真正在問的問題（同一個 agent 在需求房叫 A、在實作房叫 B）。
+@immutable
+class BoardAlias {
+  const BoardAlias({required this.name, this.roomId = '', this.firstSeenAt});
+
+  final String name;
+  final String roomId;
+  final String? firstSeenAt;
+
+  factory BoardAlias.fromJson(Map<String, dynamic> json) => BoardAlias(
+    name: (json['name'] as String?) ?? '',
+    roomId: (json['room_id'] as String?) ?? '',
+    firstSeenAt: json['first_seen_at'] as String?,
+  );
+}
+
+/// Board 上的一個持久身分。
+///
+/// ⚠️ **身分是 `actorKey`，不是 `displayName`。** 同一個 actor 掛在多間房時
+/// 名字可能不同，[displayName] 依約定取**最早進入 Board** 的那個；其餘進
+/// [aliases]。要比對「是不是同一個人」只能用 actorKey，用名字比會在改名或
+/// 跨房時靜默判錯。
+@immutable
+class BoardActorRef {
+  const BoardActorRef({
+    required this.actorKey,
+    this.displayName = '',
+    this.actorKind = 'other',
+    this.aliases = const [],
+  });
+
+  final String actorKey;
+  final String displayName;
+
+  /// human / claude / codex / other。徽章顯示種類用；
+  /// 「是不是人類」從這裡推得出來，反過來推不出來。
+  final String actorKind;
+
+  final List<BoardAlias> aliases;
+
+  bool get isHuman => actorKind == 'human';
+
+  factory BoardActorRef.fromJson(Map<String, dynamic> json) => BoardActorRef(
+    actorKey: (json['actor_key'] as String?) ?? '',
+    displayName: (json['display_name'] as String?) ?? '',
+    actorKind: (json['actor_kind'] as String?) ?? 'other',
+    aliases: ((json['aliases'] as List?) ?? const [])
+        .map((e) => BoardAlias.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
+}
+
+/// 掛在這塊 Board 上的一間聊天室。
+///
+/// ⚠️ **已解除的房照樣會回傳**（[detached] 為 true），語意同 tombstone：
+/// 收到就從快取移除。Hub 若只回還掛著的那些，client 手上會殘留一間早已
+/// 解除的房，而且無從發現——那是靜默失效，不是顯示瑕疵。
+@immutable
+class AttachedRoom {
+  const AttachedRoom({
+    required this.id,
+    this.name = '',
+    this.status = 'active',
+    this.detached = false,
+  });
+
+  final String id;
+  final String name;
+
+  /// 房間自己的狀態（active / archived）。**與 Board 的封存無關**，
+  /// 兩者要分開呈現：封存房裡的 Board 照樣可寫。
+  final String status;
+
+  final bool detached;
+
+  factory AttachedRoom.fromJson(Map<String, dynamic> json) => AttachedRoom(
+    id: json['id'] as String,
+    name: (json['name'] as String?) ?? '',
+    status: (json['status'] as String?) ?? 'active',
+    detached: (json['detached'] as bool?) ?? false,
+  );
+}
+
+/// Supervisor 對正在工作的 actor 送出的判斷或建議。
+///
+/// 走 board_event（房內 #36 裁決的 B 案），不是聊天室訊息——所以 Supervisor
+/// 不必在該 agent 的房裡，在房裡也照樣能用。
+@immutable
+class BoardDirective {
+  const BoardDirective({
+    required this.id,
+    required this.boardSeq,
+    this.from,
+    this.toActorKey = '',
+    this.taskId = '',
+    this.content = '',
+    this.createdAt,
+  });
+
+  final String id;
+
+  /// 與 items 共用同一個 cursor。沒有它，增量拉不到新的 directive。
+  final int boardSeq;
+
+  final BoardActorRef? from;
+
+  /// 收件者。空字串＝廣播給 Board 上所有人。
+  final String toActorKey;
+
+  /// 針對哪張卡。空字串＝對整塊 Board 講的。
+  final String taskId;
+
+  final String content;
+  final String? createdAt;
+
+  factory BoardDirective.fromJson(Map<String, dynamic> json) => BoardDirective(
+    id: json['id'] as String,
+    boardSeq: (json['board_seq'] as int?) ?? 0,
+    from: json['from'] == null
+        ? null
+        : BoardActorRef.fromJson(json['from'] as Map<String, dynamic>),
+    toActorKey: (json['to_actor_key'] as String?) ?? '',
+    taskId: (json['task_id'] as String?) ?? '',
+    content: (json['content'] as String?) ?? '',
+    createdAt: json['created_at'] as String?,
+  );
+}
+
+/// Board Library（Boards 分頁）一張卡要的東西。
+///
+/// 這是 `GET /api/boards` 的列表項，**不是** [BoardSnapshot] 的精簡版——
+/// Library 不載入 items，只看得到彙總數字。
+@immutable
+class BoardSummary {
+  const BoardSummary({
+    required this.id,
+    this.name = '',
+    this.status = 'active',
+    this.attachedRoomCount = 0,
+    this.taskTotal = 0,
+    this.taskDone = 0,
+    this.taskClaimed = 0,
+    this.updatedAt,
+    this.myRole = '',
+  });
+
+  final String id;
+  final String name;
+
+  /// active / archived。**Board 的封存與 room 的封存是兩件事。**
+  final String status;
+
+  final int attachedRoomCount;
+  final int taskTotal;
+  final int taskDone;
+  final int taskClaimed;
+  final String? updatedAt;
+
+  /// owner / editor / viewer。空字串＝Hub 沒說，當唯讀處理。
+  final String myRole;
+
+  bool get isArchived => status == 'archived';
+  bool get canEdit => myRole == 'owner' || myRole == 'editor';
+
+  factory BoardSummary.fromJson(Map<String, dynamic> json) {
+    final counts = (json['task_counts'] as Map<String, dynamic>?) ?? const {};
+    return BoardSummary(
+      id: json['id'] as String,
+      name: (json['name'] as String?) ?? '',
+      status: (json['status'] as String?) ?? 'active',
+      attachedRoomCount: (json['attached_room_count'] as int?) ?? 0,
+      taskTotal: (counts['total'] as int?) ?? 0,
+      taskDone: (counts['done'] as int?) ?? 0,
+      taskClaimed: (counts['claimed'] as int?) ?? 0,
+      updatedAt: json['updated_at'] as String?,
+      myRole: (json['my_role'] as String?) ?? '',
+    );
   }
 }
