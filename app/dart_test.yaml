@@ -1,0 +1,9 @@
+# 契約測試需要一台活的 Hub，所以它有自己的標籤。
+#
+# 預設的 `flutter test` **會跑到它**，但沒有設 CHATROOM_TEST_URL /
+# CHATROOM_TEST_TOKEN 時它整組跳過（skip，不是失敗）——這是刻意的：
+# 用 `--exclude-tags` 把它排除在外的話，沒有人會記得它存在，
+# 而一組沒有人跑的契約測試等於沒有契約測試。
+tags:
+  contract:
+    # 打真 Hub，會建立並刪除資料。指向測試 Hub，不要指生產。
