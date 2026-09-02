@@ -3575,6 +3575,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         params.append(item_id)
         db = app.state.db
         await db.execute(sql, params)
+        await _record_board_event(
+            _row_board_id(row), seq, f"{kind}_updated",
+            origin_room_id=row["room_id"], item_kind=kind, item_id=item_id,
+            payload={"fields": sorted(sets)})
         await db.commit()
         await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
@@ -3614,6 +3618,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id=?",
                 (seq, item_id),
             )
+        await _record_board_event(
+            _row_board_id(row), seq, f"{kind}_deleted",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=row["room_id"], item_kind=kind, item_id=item_id,
+            payload={"title": row["title"]})
         await db.commit()
         await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
@@ -3636,6 +3645,11 @@ def create_app(config: Config | None = None) -> FastAPI:
              me["id"], me["display_name"], actor_key(me["session_key"]),
              seq, _now()),
         )
+        await _record_board_event(
+            me["board_id"], seq, "objective_created",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=room_id, item_kind="objective", item_id=oid,
+            payload={"title": body.title.strip()})
         await db.commit()
         await _announce_human_container(room_id, me, "週期", body.title.strip(),
                                         "board_objective_created")
@@ -3684,6 +3698,11 @@ def create_app(config: Config | None = None) -> FastAPI:
              body.description, me["id"], me["display_name"],
              actor_key(me["session_key"]), seq, _now()),
         )
+        await _record_board_event(
+            me["board_id"], seq, "checklist_created",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=parent["room_id"], item_kind="checklist",
+            item_id=cid, payload={"title": body.title.strip()})
         await db.commit()
         await _announce_human_container(
             parent["room_id"], me, "階段", body.title.strip(),
@@ -3832,6 +3851,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
             if await cur.fetchone() is None:
                 continue   # 同上，不 commit
+            # 那兩層共用這一個號（它們是同一個動作的兩個後果），所以
+            # **一筆 event**——記兩筆會讓稽核串看起來像做了兩件事
+            await _record_board_event(
+                me.get("board_id", ""), seq, "uncategorised_created",
+                actor=actor_key(me["session_key"]),
+                actor_name=me["display_name"], origin_room_id=room_id,
+                item_kind="checklist", item_id=cid)
             return cid
         # 三輪都沒收斂：讓呼叫者拿到明確的失敗，而不是默默再建一組空殼
         row = await _lookup()
@@ -3965,6 +3991,11 @@ def create_app(config: Config | None = None) -> FastAPI:
              mine if body.assignee_participant_id else "",
              me["id"], me["display_name"], mine, seq, _now()),
         )
+        await _record_board_event(
+            me["board_id"], seq, "task_created", actor=mine,
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="task", item_id=tid,
+            payload={"title": body.title.strip()})
         await db.commit()
         await events.notify(room_id)
         return {"ok": True, "id": tid, "checklist_id": checklist_id,
@@ -4153,6 +4184,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=current["status"], to_status=body.status,
                        allowed=sorted(TASK_TRANSITIONS.get(current["status"],
                                                            set())))
+        if not done:
+            # 非完成的轉移也要留一筆——**稽核串不能只記好消息**。
+            # 通知與否是另一回事（§7.3 只有完成會發訊息），但「這張卡什麼
+            # 時候被誰推到 blocked」正是事後最想查的東西
+            await _record_board_event(
+                _row_board_id(row), seq, "task_status",
+                actor=actor_key(me["session_key"]),
+                actor_name=me["display_name"], origin_room_id=row["room_id"],
+                item_kind="task", item_id=task_id,
+                payload={"from": old, "to": body.status,
+                         "title": row["title"]})
         if done:
             # 完成是**要通知的事**（§7.3），一般狀態變動只推水位
             await _record_board_event(
@@ -4238,7 +4280,16 @@ def create_app(config: Config | None = None) -> FastAPI:
              actor_key(me["session_key"]) if done else "",
              _now() if done else None, seq, checklist_id, old),
         )
-        if await cur.fetchone() is None:
+        changed = await cur.fetchone()
+        if changed is not None:
+            await _record_board_event(
+                _row_board_id(row), seq, "checklist_status",
+                actor=actor_key(me["session_key"]),
+                actor_name=me["display_name"], origin_room_id=row["room_id"],
+                item_kind="checklist", item_id=checklist_id,
+                payload={"from": old, "to": body.status,
+                         "title": row["title"]})
+        if changed is None:
             await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("checklist", checklist_id)
             raise _err(409, "invalid_transition",
@@ -5261,6 +5312,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (oid, room_id, board_id, body.title.strip(), body.description,
              None, me["display_name"], me["session_key"], seq, _now()))
+        await _record_board_event(
+            board_id, seq, "objective_created", actor=me["session_key"],
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="objective", item_id=oid,
+            payload={"title": body.title.strip()})
         await db.commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": oid, "board_seq": seq, "board_id": board_id}
@@ -5700,6 +5756,61 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "delivered_rooms": [r["room_id"] for r in rows],
                 # 單數欄位留著給既有 client；多房時它只是其中一間
                 "delivered_room_id": row["room_id"] if row else None}
+
+    @app.get("/api/boards/{board_id}/events",
+             dependencies=[Depends(require_auth)])
+    async def read_board_events(
+        board_id: str,
+        after_board_seq: int = 0,
+        limit: int = Query(default=100, le=500),
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """這塊板的 canonical event 串（稽核）。
+
+        **一次變更恰好一筆**——這不是願望，是 `tests/
+        test_board_event_completeness.py` 在守的：它列舉所有會推進
+        `board_seq` 的操作，斷言每個被領走的號都有對應的 event。
+
+        沒有那條測試就開這個端點的話，回的會是一條**看起來完整、實際上有洞**
+        的稽核串，而那比沒有稽核串更糟（審核用Codex 2026-09-02 指出，
+        當時 22 個號只有 9 筆 event）。
+
+        `after_board_seq` 與 board delta 共用同一個 cursor，所以「板動了」
+        與「動了什麼」對得起來。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, board=board)
+        cur = await app.state.db.execute(
+            "SELECT board_seq, event_type, actor_key, actor_name,"
+            " target_actor_key, origin_room_id, item_kind, item_id,"
+            " payload_json, created_at FROM board_event"
+            " WHERE board_id=? AND board_seq > ?"
+            " ORDER BY board_seq LIMIT ?",
+            (board_id, after_board_seq, limit + 1))
+        rows = list(await cur.fetchall())
+        has_more = len(rows) > limit
+        events = []
+        for e in rows[:limit]:
+            try:
+                payload = json.loads(e["payload_json"]) or {}
+            except (TypeError, ValueError):
+                payload = {}
+            events.append({
+                "board_seq": e["board_seq"], "event_type": e["event_type"],
+                "actor_key": e["actor_key"], "actor_name": e["actor_name"],
+                "target_actor_key": e["target_actor_key"],
+                "origin_room_id": e["origin_room_id"],
+                "item_kind": e["item_kind"], "item_id": e["item_id"],
+                "payload": payload, "created_at": e["created_at"],
+            })
+        return {"board_id": board_id, "events": events,
+                "has_more": has_more,
+                "board_seq": board["board_seq"],
+                "after_board_seq": after_board_seq}
 
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
               dependencies=[Depends(require_auth)])
