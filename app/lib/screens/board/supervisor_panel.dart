@@ -192,11 +192,11 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     ]);
   }
 
-  /// 從板成員裡挑一個。
+  /// 挑一個人當 Supervisor。
   ///
-  /// ⚠️ **Supervisor 不必是板成員**（Hub 明講），所以這份清單是方便，不是
-  /// 限制——真要指派一個外面的 agent，走的是 actor_key，那需要一個能貼
-  /// key 的入口。這裡先做常見的那半，缺的那半不假裝它不存在。
+  /// 板成員是**方便**，不是限制——Hub 明講 Supervisor 不必是板成員、也不必
+  /// 在任何掛接房裡（那正是這個角色的意義：從外面看著）。所以清單底下有
+  /// 一條「用 session key 指定」的路，給不在名單上的人。
   Future<void> _pick(BuildContext context, BoardSnapshot? snap) async {
     final members = snap?.members.values.toList() ?? const <BoardActorRef>[];
     final picked = await showDialog<BoardActorRef>(
@@ -216,10 +216,21 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             ),
           if (members.isEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
               child: Text('這塊板上還沒有成員。',
                   style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
             ),
+          const Divider(height: 18),
+          SimpleDialogOption(
+            onPressed: () async {
+              final outside = await _askActorKey(ctx);
+              if (outside != null && ctx.mounted) {
+                Navigator.of(ctx).pop(outside);
+              }
+            },
+            child: Text('指定板外的人（用 session key）…',
+                style: UepText.sans(size: 12.5, color: UepColors.gold)),
+          ),
         ],
       ),
     );
@@ -227,6 +238,87 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       await _setSupervisor(picked.actorKey,
           displayName: picked.displayName, actorKind: picked.actorKind);
     }
+  }
+
+  /// 手動輸入一個板外的 actor。
+  ///
+  /// ⚠️ **顯示名要一起問。** Hub 把 display_name／actor_kind 當快照存，不會
+  /// 反查——板外的人沒有任何地方查得回他的名字，不填就只剩一串 session key
+  /// 掛在頁首上。
+  Future<BoardActorRef?> _askActorKey(BuildContext context) {
+    final key = TextEditingController();
+    final name = TextEditingController();
+    var kind = 'claude';
+    return showDialog<BoardActorRef>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          backgroundColor: ctx.uep.bgCard,
+          title: Text('指定板外的 Supervisor',
+              style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+          content: SizedBox(
+            width: 380,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: key,
+                autofocus: true,
+                // 「指派」的可按與否看這個欄位，不重畫的話它永遠是灰的
+                onChanged: (_) => setLocal(() {}),
+                style: UepText.mono(size: 12, color: ctx.uep.ink),
+                decoration: const InputDecoration(
+                  labelText: 'session key（actor_key）',
+                  helperText: '對方用 chatroom_list_rooms 查得到自己的 key',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: name,
+                style: UepText.sans(size: 12.5, color: ctx.uep.ink),
+                decoration: const InputDecoration(
+                  labelText: '顯示名稱',
+                  helperText: '不填的話頁首上就只剩一串 key',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                for (final k in const ['claude', 'codex', 'human', 'other'])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: InkWell(
+                      onTap: () => setLocal(() => kind = k),
+                      child: Opacity(
+                        opacity: kind == k ? 1 : .35,
+                        child: KindBadge(kind: k),
+                      ),
+                    ),
+                  ),
+              ]),
+            ]),
+          ),
+          actions: [
+            UepButton(
+              label: '取消',
+              variant: UepButtonVariant.outline,
+              small: true,
+              onPressed: () => Navigator.of(ctx).pop(),
+            ),
+            UepButton(
+              label: '指派',
+              small: true,
+              onPressed: key.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.of(ctx).pop(BoardActorRef(
+                        actorKey: key.text.trim(),
+                        displayName: name.text.trim(),
+                        actorKind: kind,
+                      )),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _trail(BuildContext context, BoardSnapshot? snap) {

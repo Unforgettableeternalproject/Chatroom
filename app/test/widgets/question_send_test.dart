@@ -77,6 +77,20 @@ void main() {
     expect(sent[3], '另外那個先別動');
   });
 
+  testWidgets('單選：先打字再點選項，那段字要一起送出', (tester) async {
+    // 單選維持「點了就送」（多一個確認步驟會讓最常見的情況變慢），
+    // 但先打字再點選項是很自然的順序——把那段字默默丟掉，
+    // 使用者不會發現自己補的話沒送出去
+    await tester.pumpWidget(host(_q(multi: false)));
+    await tester.enterText(find.byType(TextField), '但乙那個要先確認');
+    await tester.pump();
+    await tester.tap(find.text('甲'));
+    await tester.pump();
+    expect(sent[0], 'option');
+    expect(sent[1], '甲');
+    expect(sent[3], '但乙那個要先確認');
+  });
+
   testWidgets('只打字沒選：走 free_text，extra 必須是空的', (tester) async {
     // extra 跟 free_text 一起送會拿 422 extra_needs_option——
     // 那時打的字本身就是答案，不是補充

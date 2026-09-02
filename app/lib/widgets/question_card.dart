@@ -152,8 +152,16 @@ class _QuestionCardState extends State<QuestionCard> {
                             _picked.contains(option.label)
                                 ? _picked.remove(option.label)
                                 : _picked.add(option.label))
-                        : () => _run(() => widget.onAnswer('option',
-                            option.label, const [], _fileIds(), '')),
+                        // 單選維持「點了就送」，但**打過的字要一起帶走**。
+                        // Hub 的單選也吃 option + extra，而使用者先打字再點
+                        // 選項是很自然的順序——把那段字默默丟掉，他不會發現
+                        // 自己補的話沒送出去
+                        : () => _run(() => widget.onAnswer(
+                            'option',
+                            option.label,
+                            const [],
+                            _fileIds(),
+                            _controller.text.trim())),
                   ),
               ],
             ),
