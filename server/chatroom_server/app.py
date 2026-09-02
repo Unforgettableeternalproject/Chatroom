@@ -354,9 +354,12 @@ class BoardSupervisorAssign(BaseModel):
 
 
 class BoardDirective(BaseModel):
+    # 空的 target ＝**對整塊板說**（艾斯維爾 2026-09-02）。不是每一則
+    # Supervisor 的判斷都針對某個人——「這個方向要改」是說給板上所有人聽的。
+    # UI 早就做好那個介面，而 Hub 這側原本必填，送出去一律 422
     model_config = ConfigDict(extra="forbid")
 
-    target_actor_key: str = Field(min_length=1, max_length=128)
+    target_actor_key: str = Field(default="", max_length=128)
     text: str = Field(min_length=1, max_length=4096)
     # 針對哪張卡（選填）。有的話 UI 能把判斷掛在那張卡旁邊
     item_kind: str = Field(default="", max_length=20)
@@ -5027,6 +5030,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/boards", dependencies=[Depends(require_auth)])
     async def list_boards(
+        status: str = "",
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
@@ -5042,11 +5046,23 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(400, "session_key_required",
                        "要帶 X-Session-Key 才知道你是誰")
         db = app.state.db
-        cur = await db.execute(
-            "SELECT b.*, m.role AS my_role FROM board b"
-            " JOIN board_member m ON m.board_id = b.id AND m.actor_key = ?"
-            "  AND m.removed_at IS NULL"
-            " ORDER BY b.updated_at DESC", (actor,))
+        # `status` 篩選：App 的「進行中／已封存」切換一直有送這個參數，而
+        # Hub 從來沒有宣告它 ⇒ FastAPI 靜默忽略、SQL 也沒有 WHERE ⇒
+        # **兩邊都不報錯，篩選就是沒有作用**（審核用Codex 2026-09-02）。
+        # 值不合法時明確擋下：默默回全部會讓打錯字的人以為「這個板不存在」
+        want = status.strip()
+        if want and want not in ("active", "archived"):
+            raise _err(422, "invalid_status",
+                       "status 只能是 active 或 archived",
+                       allowed=["active", "archived"])
+        sql = ("SELECT b.*, m.role AS my_role FROM board b"
+               " JOIN board_member m ON m.board_id = b.id AND m.actor_key = ?"
+               "  AND m.removed_at IS NULL")
+        params: list = [actor]
+        if want:
+            sql += " AND b.status = ?"
+            params.append(want)
+        cur = await db.execute(sql + " ORDER BY b.updated_at DESC", params)
         out = []
         for b in await cur.fetchall():
             counts = await (await db.execute(
@@ -5614,8 +5630,6 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_board_supervisor",
                        "只有這塊板的 Supervisor 或 owner 能送出判斷")
         target = actor_key(body.target_actor_key)
-        if not target:
-            raise _err(422, "target_required", "要指定送給誰")
         db = app.state.db
         seq = await _next_seq_for_board(board_id)
         me = await (await db.execute(
@@ -5637,15 +5651,32 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # 名字用**該房的** display_name，不是板上的定案名：mention 比對的是
         # 房內名稱，用板上那個會 mention 不到人（H7 已經測過這半是對的）。
-        rows = await (await db.execute(
-            "SELECT p.room_id, p.display_name FROM participant p"
-            " JOIN board_room br ON br.room_id = p.room_id"
-            "  AND br.detached_at IS NULL"
-            " WHERE br.board_id=? AND p.status='active'"
-            "   AND TRIM(p.session_key)=?"
-            " GROUP BY p.room_id"
-            " HAVING p.last_seen_at = MAX(p.last_seen_at)",
-            (board_id, target))).fetchall()
+        if target:
+            rows = await (await db.execute(
+                "SELECT p.room_id, p.display_name FROM participant p"
+                " JOIN board_room br ON br.room_id = p.room_id"
+                "  AND br.detached_at IS NULL"
+                " WHERE br.board_id=? AND p.status='active'"
+                "   AND TRIM(p.session_key)=?"
+                " GROUP BY p.room_id"
+                " HAVING p.last_seen_at = MAX(p.last_seen_at)",
+                (board_id, target))).fetchall()
+        else:
+            # **對整塊板說**：收件人是板上的**成員**，不是房裡的所有人。
+            # 用房內名單的話，一個剛好在場、卻不屬於這塊板的人也會被叫醒
+            # ——那則判斷對他只是噪音，而他對這塊板一無所知。
+            # 送出者自己不收（他知道自己說了什麼）
+            rows = await (await db.execute(
+                "SELECT p.room_id, p.display_name FROM participant p"
+                " JOIN board_room br ON br.room_id = p.room_id"
+                "  AND br.detached_at IS NULL"
+                " JOIN board_member bm ON bm.board_id = br.board_id"
+                "  AND bm.actor_key = TRIM(p.session_key)"
+                "  AND bm.removed_at IS NULL"
+                " WHERE br.board_id=? AND p.status='active' AND p.ephemeral=0"
+                "   AND TRIM(p.session_key) <> ?"
+                " GROUP BY p.room_id, p.display_name",
+                (board_id, actor))).fetchall()
         row = rows[0] if rows else None
         await _record_board_event(
             board_id, seq, "directive", actor=actor, actor_name=sender_name,

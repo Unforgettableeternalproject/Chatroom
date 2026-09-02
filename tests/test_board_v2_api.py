@@ -1049,3 +1049,74 @@ async def test_import_never_downgrades_an_existing_member(tmp_path):
                                      headers=owner)).json()
             roles = {m["actor_key"]: m["role"] for m in body["members"]}
             assert roles["claude-b"] == "owner", "owner 被降成 editor 了"
+
+
+async def test_library_can_filter_by_status(tmp_path):
+    """`?status=`：App 的「進行中／已封存」切換一直有送它。
+
+    Hub 從來沒宣告這個參數 ⇒ FastAPI 靜默忽略、SQL 也沒有 WHERE ⇒
+    **兩邊都不報錯，篩選就是沒有作用**（審核用Codex 2026-09-02）。
+    """
+    app, client = await _client(tmp_path, "v2_status_filter")
+    async with client:
+        async with app.router.lifespan_context(app):
+            key = {"X-Session-Key": "claude-a"}
+            live = (await client.post("/api/boards", json={"name": "還在跑"},
+                                      headers=key)).json()["id"]
+            gone = (await client.post("/api/boards", json={"name": "收工了"},
+                                      headers=key)).json()["id"]
+            await client.post(f"/api/boards/{gone}/archive", headers=key)
+
+            both = (await client.get("/api/boards", headers=key)).json()
+            assert {b["id"] for b in both["boards"]} == {live, gone}
+
+            r = await client.get("/api/boards?status=active", headers=key)
+            assert [b["id"] for b in r.json()["boards"]] == [live]
+            r = await client.get("/api/boards?status=archived", headers=key)
+            assert [b["id"] for b in r.json()["boards"]] == [gone]
+
+            # 打錯字要擋下來——默默回全部會讓人以為「那塊板不見了」
+            r = await client.get("/api/boards?status=活著的", headers=key)
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "invalid_status"
+
+
+async def test_a_directive_with_no_target_speaks_to_the_whole_board(tmp_path):
+    """空的 target ＝對整塊板說（艾斯維爾 2026-09-02）。
+
+    不是每一則 Supervisor 的判斷都針對某個人——「這個方向要改」是說給板上
+    所有人聽的。UI 早就做好那個介面，而 Hub 這側原本必填、送出去一律 422。
+
+    **收件人是板的成員，不是房裡的所有人**：一個剛好在場、卻不屬於這塊板
+    的人被叫醒也沒有意義，他對這塊板一無所知。
+    """
+    app, client = await _client(tmp_path, "v2_broadcast")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            # worker 在建板之後才進房 ⇒ 不是板成員，要 owner 明示加入
+            await _join(client, rid, "claude-w", "Worker")
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-w", "role": "editor"},
+                              headers=owner)
+            # 這一位也在房裡，但**不是**板成員——他不該被叫醒
+            await _join(client, rid, "claude-out", "路過的")
+
+            r = await client.post(
+                f"/api/boards/{bid}/directives",
+                json={"text": "這個方向要改"}, headers=owner)
+            assert r.status_code == 200, r.text
+            assert r.json()["delivered"] is True
+
+            msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                     headers=owner)).json()["messages"]
+            hit = [m for m in msgs if m["system_event"] == "board_directive"]
+            assert len(hit) == 1
+            assert hit[0]["mentions"] == ["Worker"], "叫醒了不屬於這塊板的人"
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=owner)).json()
+            assert body["directives"][0]["to_actor_key"] == "", "廣播不該有收件人"
