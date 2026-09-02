@@ -252,4 +252,67 @@ void main() {
       expect(snap.visibleTasks, isEmpty);
     });
   });
+
+  /// 取消的卡不進分母（艾斯維爾 2026-09-02）。
+  ///
+  /// 「取消」是**這件事不做了**，不是「還沒做」。留在分母裡的後果不只是
+  /// 數字難看：所有活著的卡都做完之後，進度永遠差一截，而畫面不會解釋
+  /// 為什麼——看起來像卡住了，實際上已經收工。
+  ///
+  /// ⚠️ 模型層本來就有這個語意（[BoardTask.isSettled]「取消不是失敗，它同樣
+  /// 是一個結論」），`_statsOf` 的 `remaining` 也已經扣掉了取消。
+  /// **缺的只是分母沒跟上**——同一個概念在同一個函式裡有兩種算法。
+  group('取消的卡不佔分母', () {
+    test('badge 的分母排除 cancelled', () {
+      final snap = _snap(tasks: [
+        _t('a', status: 'done'),
+        _t('b', status: 'todo'),
+        _t('x', status: 'cancelled'),
+      ]);
+      expect(snap.entryHint.label, '1/2',
+          reason: '取消的卡留在分母裡，等於它還在等人做');
+    });
+
+    test('活著的卡都做完就是滿的，即使有取消過的', () {
+      final snap = _snap(tasks: [
+        _t('a', status: 'done'),
+        _t('b', status: 'done'),
+        _t('x', status: 'cancelled'),
+      ]);
+      expect(snap.entryHint.label, '2/2',
+          reason: '收工了卻顯示 2/3，人會回去找那張根本不用做的卡');
+    });
+
+    test('封存房的入口用同一套算法', () {
+      // 兩個 getter 各算各的，就會有一天只修好其中一個
+      final snap = _snap(tasks: [
+        _t('a', status: 'done'),
+        _t('x', status: 'cancelled'),
+      ]);
+      expect(snap.archivedEntryHint.label, '1/1');
+    });
+
+    test('全部取消時不顯示進度，而不是 0/0', () {
+      // 0/0 是「有一塊板但什麼都沒有」，跟「這些都不做了」是兩件事；
+      // 而且 0/0 在進度條上是除以零
+      final snap = _snap(tasks: [
+        _t('x', status: 'cancelled'),
+        _t('y', status: 'cancelled'),
+      ]);
+      expect(snap.entryHint.label, '');
+    });
+
+    test('刪除與父層取消仍然照舊排除（不能只換一種排除法）', () {
+      final snap = _snap(
+        tasks: [
+          _t('a', status: 'done'),
+          _t('gone', deleted: true),
+          _t('orphanParent', checklistId: 'dead'),
+        ],
+        checklists: [_c('c', 'o1'), _c('dead', 'o1', status: 'cancelled')],
+        objectives: [_o('o1')],
+      );
+      expect(snap.entryHint.label, '1/1');
+    });
+  });
 }

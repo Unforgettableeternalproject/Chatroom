@@ -771,6 +771,21 @@ class BoardSnapshot {
   Iterable<BoardTask> get visibleTasks =>
       tasks.values.where((t) => !t.deleted && _parentAlive(t));
 
+  /// 進度的母體：**看得見、而且還算數的卡**。
+  ///
+  /// 與 [visibleTasks] 差在取消的那些——它們畫面上還在（取消是一個結論，
+  /// 不是刪除，看得到才知道那件事被放棄了），但**不進任何分母**。
+  ///
+  /// 留在分母裡的後果不只是數字難看：活著的卡全部做完之後進度永遠差一截，
+  /// 而畫面不會解釋為什麼，看起來像卡住了，實際上已經收工
+  /// （艾斯維爾 2026-09-02）。
+  ///
+  /// ⚠️ 四個地方共用這一個母體（兩個入口 badge、階段標題、週期進度條）。
+  /// 各算各的話，總有一天只有其中一個被修好——`_statsOf` 的 `remaining`
+  /// 早就扣掉了取消，而同一個函式裡的 `total` 沒有，就是這麼來的。
+  Iterable<BoardTask> get countableTasks =>
+      visibleTasks.where((t) => t.status != 'cancelled');
+
   bool _parentAlive(BoardTask t) {
     final c = checklists[t.checklistId];
     if (c == null || c.status == 'cancelled') return false;
@@ -800,7 +815,7 @@ class BoardSnapshot {
       ];
 
   BoardEntryHint get entryHint {
-    final live = visibleTasks;
+    final live = countableTasks;
     // ⚠️ **`review` 與 `verified` 都在等人類**，第一版只算了 review。
     // Objective 是四段（active → review → verified → done），而最後兩步
     // 都只有人類推得動：`verify` 與 `complete` 是兩個獨立的動作。
@@ -835,7 +850,7 @@ class BoardSnapshot {
   /// 那顆按鈕根本不存在。點亮一個永遠按不動的入口，比不點亮更糟：它會讓人
   /// 一直進去找那件要做的事。
   BoardEntryHint get archivedEntryHint {
-    final live = visibleTasks;
+    final live = countableTasks;
     if (live.isEmpty) return const BoardEntryHint();
     return BoardEntryHint(
         label: '${live.where((t) => t.isDone).length}/${live.length}');

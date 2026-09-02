@@ -1052,8 +1052,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
     if (_orphansOnly && tasks.isEmpty) return const SizedBox.shrink();
 
-    final done = snap.tasksOf(c.id).where((t) => t.isDone).length;
-    final total = snap.tasksOf(c.id).length;
+    // 取消的卡不進分母——它已經有結論了（同 BoardSnapshot.countableTasks）
+    final counted =
+        snap.tasksOf(c.id).where((t) => t.status != 'cancelled').toList();
+    final done = counted.where((t) => t.isDone).length;
+    final total = counted.length;
 
     final collapsed = _collapsed.contains(c.id);
 
@@ -1224,7 +1227,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       stagesOpen: checklists.where((c) => !c.isDone).length,
       stagesDone: checklists.where((c) => c.isDone).length,
       canReview: snap.canReviewObjective(o.id),
-      total: tasks.length,
+      // ⚠️ 分母同樣扣掉取消。這裡原本只有 `remaining` 扣、`total` 沒扣——
+      // 同一個概念在同一個函式裡有兩種算法，而 `total` 是進度條的分母，
+      // 於是取消過卡的週期永遠填不滿（艾斯維爾 2026-09-02）
+      total: tasks.length - cancelled,
       done: done,
       // 取消的不算「還沒做完」——它已經有結論了
       remaining: tasks.length - done - cancelled,
