@@ -283,6 +283,7 @@ class BoardTask {
     this.claimParticipantId,
     this.claimSessionKey = '',
     this.claimName = '',
+    this.claimActorKey = '',
     this.claimKind = '',
     this.claimState = '',
     this.claimedAt,
@@ -321,7 +322,16 @@ class BoardTask {
 
   /// 認領當下的 display_name。持有者離場之後 participant 查不回名字，
   /// 而「上一個是誰在做」正是接手的人最需要知道的一件事。
+  ///
+  /// ⚠️ 這是**快照**。v2 之後名字的權威在 [BoardSnapshot.members]（依
+  /// [claimActorKey] 查），因為同一個人在不同房可能叫不同名字，板上要
+  /// 統一成最早進入的那個。查不到時才退回這份快照——它永遠都在。
   final String claimName;
+
+  /// 持有者的持久身分（v2）。名字與別名一律拿它去 [BoardSnapshot.members]
+  /// 查；**比對「是不是同一個人」只能用它**，用名字比會在改名或跨房時
+  /// 靜默判錯。
+  final String claimActorKey;
 
   /// 認領當下的 kind（claude / codex / human / other）。與 [claimName] 同一個
   /// 理由存快照：持有者離場後 participant 查不回種類，而卡片要畫他的色軸。
@@ -427,6 +437,7 @@ class BoardTask {
     claimParticipantId: json['claim_participant_id'] as String?,
     claimSessionKey: (json['claim_session_key'] as String?) ?? '',
     claimName: (json['claim_name'] as String?) ?? '',
+    claimActorKey: (json['claim_actor_key'] as String?) ?? '',
     claimKind: (json['claim_kind'] as String?) ?? '',
     claimState: (json['claim_state'] as String?) ?? '',
     claimedAt: json['claimed_at'] as String?,

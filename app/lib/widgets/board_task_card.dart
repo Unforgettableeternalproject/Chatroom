@@ -4,6 +4,7 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
 import '../models/board.dart';
+import 'actor_name.dart';
 import 'kind_badge.dart';
 
 /// Board 的 Task 卡片。
@@ -20,6 +21,7 @@ class BoardTaskCard extends StatelessWidget {
     super.key,
     required this.task,
     this.assigneeName,
+    this.holder,
     this.isMineToReclaim = false,
     this.conflict,
     this.onTap,
@@ -33,6 +35,13 @@ class BoardTaskCard extends StatelessWidget {
   /// 查不到就不畫——指定是「現在該由誰做」，人不在了就該看得出這個指定
   /// 已經沒有意義（所以 Hub 刻意不為它存名字快照）。
   final String? assigneeName;
+
+  /// 持有者在**板上**的身分（由 `claim_actor_key` 查 [BoardSnapshot.members]）。
+  ///
+  /// 給了就用它——同一個人在不同房可能叫不同名字，板上要統一成最早進入的
+  /// 那個，而別名掛在它身上。**查不到就傳 null**，卡片會退回 `claim_name`
+  /// 快照：那份永遠都在，而且是「他當時叫什麼」的正確答案。
+  final BoardActorRef? holder;
 
   /// 這張是我這把 session 上一世領走的。金框只有本人看得到。
   final bool isMineToReclaim;
@@ -246,17 +255,24 @@ class BoardTaskCard extends StatelessWidget {
         crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 9,
         children: [
-          Text(
-            task.claimName.isEmpty ? '（不明）' : task.claimName,
-            // 名字劃掉：他曾經在這張卡上，那是事實；他現在不在，也是事實
-            style: UepText.sans(
-                    size: 11.5,
-                    weight: FontWeight.w600,
-                    color: struck ? s.inkMute : s.ink)
-                .copyWith(
-              decoration: struck ? TextDecoration.lineThrough : null,
+          if (holder != null)
+            ActorName(
+              actor: holder!,
+              size: 11.5,
+              color: struck ? s.inkMute : s.ink,
+            )
+          else
+            Text(
+              task.claimName.isEmpty ? '（不明）' : task.claimName,
+              // 名字劃掉：他曾經在這張卡上，那是事實；他現在不在，也是事實
+              style: UepText.sans(
+                      size: 11.5,
+                      weight: FontWeight.w600,
+                      color: struck ? s.inkMute : s.ink)
+                  .copyWith(
+                decoration: struck ? TextDecoration.lineThrough : null,
+              ),
             ),
-          ),
           // kind 沒給（舊資料）就不畫徽章，不要猜。
           // 孤兒時 kind 一起退成灰：他的種類色屬於「他在這張卡上」的那段時間
           if (task.claimKind.isNotEmpty)
@@ -335,9 +351,13 @@ class BoardTaskCard extends StatelessWidget {
                         // 誰做的退成註記——還在，但不再是主角
                         if (!cancelled && task.claimName.isNotEmpty) ...[
                           const SizedBox(width: 12),
-                          Text(task.claimName,
-                              style: UepText.sans(
-                                  size: 11.5, color: s.inkMute)),
+                          if (holder != null)
+                            ActorName(
+                                actor: holder!, size: 11.5, color: s.inkMute)
+                          else
+                            Text(task.claimName,
+                                style: UepText.sans(
+                                    size: 11.5, color: s.inkMute)),
                           if (task.claimKind.isNotEmpty) ...[
                             const SizedBox(width: 12),
                             _KindText(kind: task.claimKind, muted: true),

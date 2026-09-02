@@ -891,6 +891,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         task: t,
         conflict: _conflicts[t.id],
         assigneeName: _assigneeName(t),
+        // 名字的權威在板成員表，卡上那份是快照。查不到就傳 null，
+        // 卡片自己退回快照——舊 Hub 與 v1 路徑都沒有 members[]
+        holder: snap.memberOf(
+            t.claimActorKey.isEmpty ? null : t.claimActorKey),
         onTap: () => setState(() => _openTaskId = t.id),
         isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
         onClaim: (t.isClaimable && !_readOnly) ? () => _claim(t.id) : null,
