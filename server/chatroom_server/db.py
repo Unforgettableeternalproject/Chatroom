@@ -347,6 +347,97 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised
     ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類';
 
+-- ── Board v2：Board 成為獨立實體 ────────────────────────────────────
+-- v1 把 Board 掛在 room 底下（一房一板），代價是 Epic 級的工作面被綁在一次
+-- 可被封存／刪除的臨時對話上。v2 反轉所有權：**房間掛接 Board**，一塊板可
+-- 同時掛在多間房，房封存或刪除只解除關聯。
+-- 以下四張表先加、舊欄位先不刪（docs/BOARD_DESIGN.md §11 步驟 1），
+-- 讓 v1 路由還能當 wrapper 跑，等所有 client 升級後才 rebuild 清乾淨。
+CREATE TABLE IF NOT EXISTS board (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'active',      -- active / archived
+    visibility      TEXT NOT NULL DEFAULT 'private',
+    -- 擁有者是 actor_key 不是 participant：participant 會隨著離房消失，
+    -- 而 Board 的存在本來就不依賴任何一間房還開著
+    owner_actor_key TEXT NOT NULL,
+    -- 每塊板獨立的單調水位。**不與 room.next_seq 共用**，理由與 v1 相同：
+    -- 共用會讓人看到的訊息編號跳號
+    board_seq       INTEGER NOT NULL DEFAULT 0,
+    -- Supervisor 從 room 搬到 board：他看的是這塊板，不是某一間房，
+    -- 所以離開任何一間房都不該讓他退場
+    supervisor_actor_key TEXT NOT NULL DEFAULT '',
+    supervisor_name TEXT NOT NULL DEFAULT '',
+    supervisor_kind TEXT NOT NULL DEFAULT '',
+    supervisor_set_by_actor_key TEXT NOT NULL DEFAULT '',
+    supervisor_set_at TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_board_status ON board(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS board_room (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES board(id),
+    -- ⚠️ 刻意不對 room 做強外鍵：room 可以被永久刪除，但「這塊板曾經掛在
+    -- 那間房」這件事要留著，否則 provenance 會跟著房一起消失
+    room_id     TEXT NOT NULL,
+    room_name   TEXT NOT NULL DEFAULT '',   -- 房名快照，房刪掉後畫面還講得出來
+    attached_by_actor_key TEXT NOT NULL,
+    attached_at TEXT NOT NULL,
+    -- 解除掛接不刪列，改標時間：每次掛接／解除都是一筆歷史
+    detached_at TEXT
+);
+-- Phase 1 的「一房最多一塊 active Board」寫進資料庫，不靠呼叫端自律
+CREATE UNIQUE INDEX IF NOT EXISTS idx_board_room_one_active_per_room
+    ON board_room(room_id) WHERE detached_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_board_room_board_active
+    ON board_room(board_id) WHERE detached_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS board_member (
+    board_id     TEXT NOT NULL REFERENCES board(id),
+    -- Hub 內持久的協作者身分（由 canonical session_key 規範化而得）。
+    -- 權限、認領與稽核一律用它；participant_id 只證明「現在從哪間房操作」
+    actor_key    TEXT NOT NULL,
+    role         TEXT NOT NULL,                    -- owner / editor / viewer
+    -- 定案顯示名：**以最早進入這塊板的那個名字為準**（艾斯維爾 2026-09-02）。
+    -- 同一個 actor 在不同房可能叫不同名字，板上只能有一個稱呼，否則同一個人
+    -- 在同一張卡的歷史裡會以兩個名字出現
+    display_name TEXT NOT NULL DEFAULT '',
+    -- 其餘看過的名字，供 UI hover 顯示「他在別的房叫什麼」。
+    -- JSON 陣列 [{"name","room_id","first_seen_at"}]；只有名字的話講不出
+    -- 這個別名是哪一間房來的
+    aliases      TEXT NOT NULL DEFAULT '[]',
+    actor_kind   TEXT NOT NULL DEFAULT '',   -- human / claude / codex / other
+    added_by_actor_key TEXT NOT NULL DEFAULT '',
+    added_at     TEXT NOT NULL,
+    removed_at   TEXT,
+    PRIMARY KEY (board_id, actor_key)
+);
+CREATE INDEX IF NOT EXISTS idx_board_member_actor ON board_member(actor_key);
+
+CREATE TABLE IF NOT EXISTS board_event (
+    board_id       TEXT NOT NULL REFERENCES board(id),
+    board_seq      INTEGER NOT NULL,
+    event_type     TEXT NOT NULL,
+    actor_key      TEXT NOT NULL DEFAULT '',     -- 做這件事的人
+    actor_name     TEXT NOT NULL DEFAULT '',
+    -- directive 專用：這則是「送給誰」的。event 本身已有 actor_key（送出者），
+    -- 目標得另存一欄，否則 Supervisor 的判斷投遞不出去
+    target_actor_key TEXT NOT NULL DEFAULT '',
+    origin_room_id TEXT NOT NULL DEFAULT '',
+    item_kind      TEXT NOT NULL DEFAULT '',
+    item_id        TEXT NOT NULL DEFAULT '',
+    payload_json   TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (board_id, board_seq)
+);
+-- 一次 Board 變更只留一筆 canonical event，掛三房不會變三筆（驗收條件 8）。
+-- directive 的收件匣查詢走這條
+CREATE INDEX IF NOT EXISTS idx_board_event_target
+    ON board_event(target_actor_key, board_seq) WHERE target_actor_key != '';
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 """

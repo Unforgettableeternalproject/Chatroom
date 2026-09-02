@@ -1814,6 +1814,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                           "attachment", "archive_request", "question",
                           "message", "assignment", "participant")
 
+    # 帶 room_id 卻**刻意不隨房刪除**的表。這份清單存在的唯一理由是：
+    # 上面那份「漏了會出事」的對帳，必須分得出「忘了加」與「故意不加」——
+    # 兩者在 `PRAGMA table_info` 眼中長得一模一樣。
+    #
+    # `board_room`：Board v2 起房間只是**掛接**在 Board 上，房刪掉不代表這塊
+    # 板消失（BOARD_DESIGN §3.2）。掛接歷史連 room_id 一起留著，Board 頁才
+    # 講得出「這張卡當初是從哪間房長出來的」——那間房已經不在了，而那正是
+    # 快照要救的情況。刪房時改標 `detached_at`，見 `_purge_room`。
+    _ROOM_ID_NOT_OWNED = ("board_room",)
+
     async def _room_owned_tables_gap() -> list[str]:
         """schema 裡帶 room_id 的表，有哪幾張不在 `_ROOM_OWNED_TABLES` 裡。
 
@@ -1828,7 +1838,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         gap: list[str] = []
         for r in rows:
             name = r["name"]
-            if name in _ROOM_OWNED_TABLES or name == "room":
+            if (name in _ROOM_OWNED_TABLES
+                    or name in _ROOM_ID_NOT_OWNED
+                    or name == "room"):
                 continue
             cols = await (await db.execute(f"PRAGMA table_info({name})")).fetchall()
             if any(c["name"] == "room_id" for c in cols):
@@ -1859,7 +1871,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(500, "purge_incomplete_schema",
                        "刪除聊天室的內部清單與資料庫結構對不上，這次不動它。"
                        f"缺少：{'、'.join(gap)}")
-        counts: dict[str, int] = {}
+        # 先解除 Board 掛接再刪房。**標記而不是刪列**：這塊板還活著，
+        # 而「它曾經掛在這間房」是 Board 上那些卡的 provenance 唯一的來源。
+        cur = await db.execute(
+            "UPDATE board_room SET detached_at=? WHERE room_id=? AND"
+            " detached_at IS NULL", (_now(), room_id))
+        counts: dict[str, int] = {"board_room_detached": cur.rowcount}
         for table in _ROOM_OWNED_TABLES:
             # 表名是模組內的常數清單，不是外來輸入
             cur = await db.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
