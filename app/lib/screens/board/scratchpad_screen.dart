@@ -452,6 +452,12 @@ class _BlockCardState extends State<_BlockCard> {
                               // 他可以再送一次
                               _note.clear();
                               setState(() => _noting = false);
+                            } catch (_) {
+                              // ⚠️ **要接住。** 呼叫端已經 toast 過並 rethrow，
+                              // 這裡只有 try/finally 的話那個例外會從 async
+                              // onTap 逸出去變成未處理錯誤——輸入框裡的字保住
+                              // 了，卻多了一個沒有人接的例外
+                              // （@審核用Codex-2 2026-09-03）
                             } finally {
                               if (mounted) setState(() => _sendingNote = false);
                             }
