@@ -439,3 +439,111 @@ async def test_detaching_the_last_room_tells_the_watchers_not_the_operator(
             watches = (await client.get(f"/api/boards/{bid}/watches",
                                         headers=watcher)).json()["watches"]
             assert len(watches) == 2, "降級把使用者的追蹤清掉了"
+
+
+async def _system_msgs(client, rid, hdr):
+    msgs = (await client.get(f"/api/rooms/{rid}/messages?after_seq=0",
+                             headers=hdr)).json()["messages"]
+    return [m for m in msgs if m.get("system_event") == "board_task_done"]
+
+
+async def _finish(client, rid, tid, hdr):
+    await client.post(f"/api/board/tasks/{tid}/claim", headers=hdr)
+    await client.post(f"/api/board/tasks/{tid}/status",
+                      json={"status": "in_progress"}, headers=hdr)
+    return await client.post(f"/api/board/tasks/{tid}/status",
+                             json={"status": "done"}, headers=hdr)
+
+
+async def test_with_no_watchers_the_whole_room_still_hears_it(tmp_path):
+    """三態之一：**沒有人在追 ⇒ 保留舊的全房廣播。**
+
+    那是 §7.3 的既有行為。追蹤是後來加的第二個機制，它不該讓還沒用到它的
+    房間安靜下來。
+    """
+    app, client = await _client(tmp_path, "state1")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            other = await _join(client, rid, bid, hdr, "claude-o", "旁觀者")
+            tid = await _task(client, rid, hdr)
+            await _finish(client, rid, tid, hdr)
+            msgs = await _system_msgs(client, rid, hdr)
+            assert len(msgs) == 1
+            assert "旁觀者" in msgs[0]["mentions"]
+
+
+async def test_with_watchers_the_room_is_not_told_only_they_are(tmp_path):
+    """🚨 三態之二：**有人在追 ⇒ 永不廣播。**
+
+    艾斯維爾的原句同時有正向與負向：「通知追蹤的人」∧「**不需要通知所有
+    人**」。少了這一條，負向那半永遠不成立——非追蹤者照樣被通知，而「只通知
+    在等的人」就只是多了一份收件匣而已（審核用Codex-2 2026-09-02）。
+    """
+    app, client = await _client(tmp_path, "state2")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            watcher = await _join(client, rid, bid, hdr, "claude-w", "等的人")
+            await _join(client, rid, bid, hdr, "claude-n", "沒在等的人")
+            tid = await _task(client, rid, hdr)
+            await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=watcher)
+            await _finish(client, rid, tid, hdr)
+
+            msgs = await _system_msgs(client, rid, hdr)
+            assert len(msgs) == 1
+            assert msgs[0]["mentions"] == ["等的人"], (
+                f"廣播沒有收斂：{msgs[0]['mentions']}")
+            assert "沒在等的人" not in msgs[0]["mentions"]
+
+
+async def test_the_only_watcher_being_the_finisher_still_counts(tmp_path):
+    """⚠️ 分支看「**有沒有人在追**」，mention 才看「要叫醒誰」。
+
+    先把完成者從名單裡拿掉再判斷的話，唯一的追蹤者正好是完成者時，watch
+    關係明明存在卻會落進零-watcher 分支 ⇒ **整房又被廣播了一次**。
+    """
+    app, client = await _client(tmp_path, "state3")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            await _join(client, rid, bid, hdr, "claude-n", "沒在等的人")
+            tid = await _task(client, rid, hdr)
+            # 完成者自己就是唯一的追蹤者
+            await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=hdr)
+            await _finish(client, rid, tid, hdr)
+            assert await _system_msgs(client, rid, hdr) == [], (
+                "唯一的追蹤者是完成者，卻還是廣播給整個房間了")
+
+
+async def test_a_watcher_in_another_attached_room_is_woken_too(tmp_path):
+    """定向要走**每一間 active 掛接房**。
+
+    只查卡所在那間的話，追蹤者若正好在另一間掛接房裡就只剩收件匣——他人在
+    線上，卻不會被叫醒。與 directive 的投遞同一個判準。
+    """
+    app, client = await _client(tmp_path, "state4")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            second = (await client.post("/api/rooms", json={
+                "name": "另一間", "session_key": "claude-h"})).json()["id"]
+            await client.post(f"/api/rooms/{second}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-h",
+                "preferred_name": "艾斯維爾"})
+            await client.post(f"/api/boards/{bid}/rooms/{second}", headers=hdr)
+            far = await _join(client, second, bid, hdr, "claude-f", "在別間的人")
+
+            tid = await _task(client, rid, hdr)
+            await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=far)
+            await _finish(client, rid, tid, hdr)
+
+            there = await _system_msgs(client, second, far)
+            assert there and there[0]["mentions"] == ["在別間的人"], (
+                "追蹤者在另一間掛接房，人在線上卻沒有被叫醒")

@@ -4287,18 +4287,66 @@ def create_app(config: Config | None = None) -> FastAPI:
                 seq, actor=me["session_key"], actor_name=me["display_name"])
         await db.commit()
         if done:
-            # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
-            # ——這則收據日後若帶上 reply_to（指回 source_seq 那則訊息），
-            # _post_message 會把被回覆者自動補進 mentions，把「排除執行者」
-            # 這條規則從下游繞掉。pin 收據踩過同一個坑
-            audience = await _board_audience(row["room_id"], exclude_id=me["id"])
-            if audience:
-                await _post_message(
-                    row["room_id"], None,
-                    f"{me['display_name']} 完成了任務「{row['title']}」",
-                    kind="system", system_event="board_task_done",
-                    mentions=audience, reply_mentions_author=False,
-                )
+            # 🚨 **三態**（艾斯維爾原句同時有正向與負向：「通知追蹤的人」
+            # ∧「不需要通知所有人」；房內 2026-09-02 定案）：
+            #
+            #   沒有人在追  → 保留舊的全房廣播（那是 §7.3 的既有行為）
+            #   有人在追    → **永不廣播**。線上的追蹤者定向 mention，
+            #                 全都不在線上就只留收件匣
+            #
+            # 少了中間那條，負向那半永遠不成立——非追蹤者照樣被通知，而
+            # 「只通知在等的人」這個功能就只是多了一份收件匣而已
+            watchers = await (await db.execute(
+                "SELECT actor_key FROM board_watch WHERE board_id=?"
+                " AND item_kind='task' AND item_id=?",
+                (_row_board_id(row), task_id))).fetchall()                 if _row_board_id(row) else []
+            keys = {actor_key(w["actor_key"]) for w in watchers}
+            # 🚨 **分支看「有沒有人在追」，mention 才看「要叫醒誰」。**
+            # 先 discard 再判斷的話，唯一的追蹤者正好是完成者時，watch 關係
+            # 明明存在卻會落進零-watcher 分支 ⇒ 整房又被廣播了一次
+            # （審核用Codex-2 2026-09-02）
+            has_watchers = bool(keys)
+            keys.discard(actor_key(me["session_key"]))
+            if not has_watchers:
+                # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
+                # ——這則收據日後若帶上 reply_to（指回 source_seq 那則訊息），
+                # _post_message 會把被回覆者自動補進 mentions，把「排除執行者」
+                # 這條規則從下游繞掉。pin 收據踩過同一個坑
+                audience = await _board_audience(row["room_id"],
+                                                 exclude_id=me["id"])
+                if audience:
+                    await _post_message(
+                        row["room_id"], None,
+                        f"{me['display_name']} 完成了任務「{row['title']}」",
+                        kind="system", system_event="board_task_done",
+                        mentions=audience, reply_mentions_author=False,
+                    )
+            else:
+                # 定向：只叫醒**在這間房裡的追蹤者**。不在的那些不會漏——
+                # 收件匣已經寫好了，他回來就看得到
+                # ⚠️ **每一間 active 掛接房都要找。** 只查卡所在那間的話，
+                # 追蹤者若正好在另一間掛接房裡就只剩收件匣——他人在線上、
+                # 卻不會被叫醒（審核用Codex-2 2026-09-02）。與 directive
+                # 的投遞同一個判準
+                rooms = await (await db.execute(
+                    "SELECT room_id FROM board_room WHERE board_id=?"
+                    " AND detached_at IS NULL",
+                    (_row_board_id(row),))).fetchall() if keys else []
+                for r in rooms:
+                    here = await (await db.execute(
+                        "SELECT display_name, TRIM(session_key) AS sk FROM"
+                        " participant WHERE room_id=? AND status='active'",
+                        (r["room_id"],))).fetchall()
+                    names = [p["display_name"] for p in here
+                             if actor_key(p["sk"]) in keys]
+                    if names:
+                        await _post_message(
+                            r["room_id"], None,
+                            f"{me['display_name']} 完成了你追蹤的任務"
+                            f"「{row['title']}」",
+                            kind="system", system_event="board_task_done",
+                            mentions=names, reply_mentions_author=False,
+                        )
         await _item_notify(row)
         return {"ok": True, "id": task_id, "status": body.status,
                 "board_seq": seq, "notified_watchers": watched}
@@ -5918,6 +5966,29 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "board_seq": board["board_seq"],
                 "after_board_seq": after_board_seq}
 
+    async def _commit() -> None:
+        """commit，撞到別人的交易就等一下再試。
+
+        🚨 **共用一條 aiosqlite 連線**：兩個請求的語句會交錯執行，而交易是
+        共用的。A 這路要 commit 的時候，B 那路的語句可能還在進行中 ⇒
+        `cannot commit transaction - SQL statements in progress`，而那是**未
+        處理例外**：走 HTTP 只看得到「500」三個字，log 裡什麼都沒有
+        （@開發Novia (除錯) 2026-09-03 F 組，note 與 delete 同時打）。
+
+        ⚠️ 這與今天早上 `_next_board_seq` 領號那條是同一族——共用連線 +
+        讀寫之間有 await。這裡先讓新端點不再爆，**既有端點同樣暴露在這個
+        形狀下**，全面換掉是另一張卡。
+        """
+        for _ in range(40):
+            try:
+                await app.state.db.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if "statements in progress" not in str(exc):
+                    raise
+                await asyncio.sleep(0.005)
+        await app.state.db.commit()
+
     # ── 想法板（ScratchPad）§15.1 ──────────────────────────────────
     # 「有時候我並沒有辦法馬上都把任務給組織好」（艾斯維爾 2026-09-02）。
     # 卡要求你先決定標題、層級與歸屬——想法還沒成形時，那三樣正好都給不出來。
@@ -6097,7 +6168,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pid,
             payload={"title": body.title.strip()})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": pid, "rev": 1, "board_seq": seq,
                 "board_id": board_id, "first_block_id": first}
@@ -6207,19 +6278,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             (seq, _now(), me["session_key"], me["display_name"], pad_id))
         ).fetchone()
         if alive is None:
+            # ⚠️ **要把剛插的那一段收掉。** 只記一筆 event 就 commit 的話，
+            # block 留在一份已刪的 pad 底下——那正是這道 CAS 要防的
+            # live orphan，防了一半等於沒防（審核用Codex-2 2026-09-02）
+            await db.execute(
+                "DELETE FROM board_scratchpad_block WHERE id=?", (bkid,))
             await _record_board_event(
                 board_id, seq, "scratchpad_write_lost", actor=me["session_key"],
                 actor_name=me["display_name"], origin_room_id=room_id,
                 item_kind="scratchpad", item_id=pad_id,
                 payload={"block_id": bkid, "reason": "pad_deleted"})
-            await db.commit()
+            await _commit()
             raise _err(409, "scratchpad_deleted",
                        "這份想法板在你送出的同時被刪掉了，那一段沒有寫進去")
         await _record_board_event(
             board_id, seq, "scratchpad_block_added", actor=me["session_key"],
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id, payload={"block_id": bkid})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": bkid, "scratchpad_id": pad_id, "rev": 1,
                 "order_index": order, "board_seq": seq}
@@ -6267,7 +6343,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 item_id=pad_id,
                 payload={"block_id": block_id, "your_rev": body.rev,
                          "current_rev": fresh["rev"]})
-            await db.commit()
+            await _commit()
             raise _err(409, "scratchpad_block_stale",
                        "這一段在你讀取之後被改過了",
                        block_id=block_id, rev=fresh["rev"],
@@ -6290,7 +6366,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id,
             payload={"block_id": block_id, "rev": won["rev"]})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": block_id, "rev": won["rev"],
                 "board_seq": seq}
@@ -6331,7 +6407,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 actor=me["session_key"], actor_name=me["display_name"],
                 origin_room_id=room_id, item_kind="scratchpad",
                 item_id=pad_id, payload={"block_id": block_id})
-            await db.commit()
+            await _commit()
             return {"ok": True, "id": block_id, "board_seq": seq,
                     "already_deleted": True}
         await db.execute(
@@ -6344,7 +6420,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id,
             payload={"block_id": block_id})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": block_id, "board_seq": seq}
 
@@ -6382,7 +6458,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id,
             payload={"block_id": block_id, "note_id": nid})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": nid, "block_id": block_id, "board_seq": seq}
 
@@ -6480,7 +6556,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 origin_room_id=room_id, item_kind="scratchpad",
                 item_id=pad_id,
                 payload={"your_rev": body.rev, "current_rev": fresh["rev"]})
-            await db.commit()
+            await _commit()
             raise _err(409, "scratchpad_stale",
                        "這份想法板的段落結構在你讀取之後被改過了",
                        rev=fresh["rev"], your_rev=body.rev,
@@ -6491,7 +6567,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id,
             payload={"block_ids": want, "rev": won["rev"]})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": pad_id, "rev": won["rev"],
                 "board_seq": seq}
@@ -6542,7 +6618,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 actor=me["session_key"], actor_name=me["display_name"],
                 origin_room_id=room_id, item_kind="scratchpad",
                 item_id=pad_id, payload={"title": pad["title"]})
-            await db.commit()
+            await _commit()
             return {"ok": True, "id": pad_id, "board_seq": seq,
                     "already_deleted": True}
         await _record_board_event(
@@ -6550,7 +6626,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="scratchpad", item_id=pad_id,
             payload={"title": pad["title"]})
-        await db.commit()
+        await _commit()
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": pad_id, "board_seq": seq}
 
@@ -6811,7 +6887,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 actor_name=member["display_name"] if member else "",
                 item_kind=body.item_kind, item_id=body.item_id,
                 payload={"watcher_count": count, "title": row["title"]})
-        await app.state.db.commit()
+        await _commit()
         if added:
             await _notify_board_rooms(board_id)
         return {"ok": True, "watching": True, "item_id": body.item_id,
@@ -6850,7 +6926,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 board_id, seq, "watch_removed", actor=actor,
                 item_kind=item_kind, item_id=item_id,
                 payload={"watcher_count": count})
-        await app.state.db.commit()
+        await _commit()
         if removed:
             await _notify_board_rooms(board_id)
         return {"ok": True, "watching": False, "item_id": item_id,
@@ -6954,7 +7030,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE board_watch_notice SET read_at=? WHERE actor_key=?"
                 " AND read_at IS NULL AND id IN (" + marks + ")",
                 (now, actor, *ids))
-        await db.commit()
+        await _commit()
         return {"ok": True, "marked": cur.rowcount}
 
     @app.post("/api/boards/{board_id}/rooms/{room_id}",
