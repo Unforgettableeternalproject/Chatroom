@@ -3375,7 +3375,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 崩掉會留下一塊沒有卡的板與一批沒有板的卡，而兩邊看起來都正常
         for table in ("board_objective", "board_checklist", "board_task"):
             await db.execute(
-                f"UPDATE {table} SET board_id=? WHERE room_id=? AND board_id=''",
+                # ⚠️ **`'' OR IS NULL` 兩種都要接。** 欄位定義是
+                # `NOT NULL DEFAULT ''`，但 §11 步驟 8 的換表是
+                # `INSERT ... SELECT`——複製過來的值取決於當時舊表有什麼，
+                # 被 rebuild 過的庫裡是有 NULL 的。只認 '' 的話，那些卡
+                # **永遠接不上板**：v1 讀寫完全正常（它走 room_id），只有
+                # v2-only 的功能會說「這個房沒有板」，而那時沒有人會想到
+                # 是一個 WHERE 條件（@測試Novia 2026-09-03 在生產房撞到）
+                f"UPDATE {table} SET board_id=? WHERE room_id=?"
+                f" AND (board_id='' OR board_id IS NULL)",
                 (bid, room_id))
         return bid
 
@@ -3438,6 +3446,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         與當次的 `board_seq` 共用同一個號：event 與它描述的那個變更是同一
         件事，各領一個號會讓增量 client 收到一個沒有對應內容的水位。
         """
+        # 🚨 **沒有板就沒有板的稽核串。** 還沒換軸的房，卡的 `board_id` 是
+        # 空字串——拿它寫進去會撞 `board_event.board_id` 的外鍵而拋
+        # IntegrityError（500）。而那條路徑今天之前根本走不到：event 是今天
+        # 才補齊的，在那之前只有少數幾種變更會記，剛好都不在這條路上。
+        #
+        # ⚠️ 症狀極難從外面看懂：v1 的讀取完全正常（走 room_id），只有**寫入**
+        # 會 500，而且水位已經先被領走一格（@測試Novia 2026-09-03 在生產房
+        # 撞到，那是升級後第一次有人在未換軸的房裡動卡）。
+        if not (board_id or "").strip():
+            return
         await app.state.db.execute(
             "INSERT INTO board_event (board_id, board_seq, event_type,"
             " actor_key, actor_name, target_actor_key, origin_room_id,"

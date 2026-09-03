@@ -296,3 +296,62 @@ async def test_the_cas_loser_leaves_no_gap_either(tmp_path):
                 "輸掉的那一路已經把號領走了，要嘛把領號移到 CAS 之後，"
                 "要嘛留一筆 conflict event。"
             )
+
+
+async def test_a_room_that_never_switched_axis_can_still_be_written_to(
+        tmp_path):
+    """🚨 **還沒換軸的房：寫入不能 500。**
+
+    v1 時代留下來的卡，`board_id` 是空字串。`_record_board_event` 拿它去寫
+    `board_event` 會撞外鍵（那一欄 `REFERENCES board(id)`）⇒ IntegrityError
+    ⇒ 500，**而水位已經先被領走一格**。
+
+    ⚠️ 這條路徑在 event 補齊之前根本走不到：在那之前只有少數幾種變更會記
+    event，剛好都不在這條路上。所以它是**新的不變式打到舊資料**——而症狀
+    極難從外面看懂：v1 的讀取完全正常（走 room_id），只有寫入會炸
+    （@測試Novia 2026-09-03 升級後第一次在生產房動卡時撞到）。
+
+    沒有板就沒有板的稽核串，這是對的；不能接受的是它把整個請求打掛。
+    """
+    app, client = await _client(tmp_path, "noaxis")
+    async with client:
+        async with app.router.lifespan_context(app):
+            db = app.state.db
+            now = "2026-09-03T00:00:00+00:00"
+            rid = (await client.post("/api/rooms", json={
+                "name": "舊房", "session_key": "claude-a"})).json()["id"]
+            j = await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-a",
+                "preferred_name": "A"})
+            hdr = {"X-Participant-Id": j.json()["participant_id"]}
+            # v1 時代的卡：board_id 是空字串，沒有 board、沒有 board_room
+            await db.execute(
+                "INSERT INTO board_objective (id, room_id, board_id, title,"
+                " created_at) VALUES ('o1', ?, '', '週期', ?)", (rid, now))
+            await db.execute(
+                "INSERT INTO board_checklist (id, room_id, board_id,"
+                " objective_id, title, created_at)"
+                " VALUES ('c1', ?, '', 'o1', '階段', ?)", (rid, now))
+            await db.execute(
+                "INSERT INTO board_task (id, room_id, board_id, checklist_id,"
+                " title, created_at) VALUES ('t1', ?, '', 'c1', '一件事', ?)",
+                (rid, now))
+            await db.commit()
+
+            for label, r in (
+                ("改描述", await client.patch("/api/board/tasks/t1",
+                                              json={"description": "改過"},
+                                              headers=hdr)),
+                ("認領", await client.post("/api/board/tasks/t1/claim",
+                                           headers=hdr)),
+                ("推狀態", await client.post("/api/board/tasks/t1/status",
+                                             json={"status": "in_progress"},
+                                             headers=hdr)),
+            ):
+                assert r.status_code == 200, f"{label} 回了 {r.status_code}"
+
+            # 讀取一直都是好的——那正是這個 bug 難查的原因
+            body = (await client.get(f"/api/rooms/{rid}/board",
+                                     headers=hdr)).json()
+            assert body["board_id"] is None
+            assert len(body["tasks"]) == 1
