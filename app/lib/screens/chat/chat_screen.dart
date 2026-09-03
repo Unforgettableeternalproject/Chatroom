@@ -644,16 +644,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // 身分失效：重新 join 後重試一次（僅一次，避免無限迴圈）
       ref.invalidate(identityProvider(widget.roomId));
       final fresh = await ref.read(identityProvider(widget.roomId).future);
-      await ref
-          .read(messagesApiProvider)
-          .post(
-            widget.roomId,
-            participantId: fresh.participantId,
-            content: content,
-            mentions: mentions,
-            replyTo: _replyTarget?.id,
-            attachmentIds: attachmentIds,
-          );
+      try {
+        await ref
+            .read(messagesApiProvider)
+            .post(
+              widget.roomId,
+              participantId: fresh.participantId,
+              content: content,
+              mentions: mentions,
+              replyTo: _replyTarget?.id,
+              attachmentIds: attachmentIds,
+            );
+      } on ApiException catch (e) {
+        // ⚠️ **這裡要自己接。** catch 區塊裡丟出來的例外**不會**落到同一層
+        // 的 sibling `on ApiException`——沒有這一段的話，重試失敗是完全
+        // 沒有聲音的：草稿留著（那是對的），但畫面什麼都不說，
+        // 而使用者以為訊息送出去了（@審核用Codex-2 2026-09-03）
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(e.message)));
+        }
+        rethrow;
+      }
       _clearDraft();
       if (mounted) {
         setState(() {
