@@ -5696,10 +5696,27 @@ def create_app(config: Config | None = None) -> FastAPI:
              body.visibility, now, now))
         member_name = ""
         member_kind = ""
+        p = None
         if x_participant_id:
             p = await (await db.execute(
                 "SELECT display_name, kind FROM participant WHERE id=?",
                 (x_participant_id,))).fetchone()
+        if p is None:
+            # 🚨 **只帶 `X-Session-Key` 的呼叫端也要查得到名字。** Board
+            # Library 那條路沒有 participant_id（板軸沒有房），於是這裡拿不到
+            # 名字與 kind ⇒ 建板的人在自己的板上是一個**沒有名字的 actor_key**
+            # （@測試Novia 2026-09-03 實測：owner 有 join 房、有帶
+            # preferred_name，`members[]` 仍然是空字串）。
+            #
+            # kind 空著更糟：想法板的守門靠它分辨人類與 agent，空的會把人類
+            # 當成 agent，**在他自己開的板上改不動別人寫的東西**——底下那段
+            # 註解講的正是這件事，只是當時只補了另一條路徑
+            p = await (await db.execute(
+                "SELECT p.display_name, p.kind FROM participant p"
+                " JOIN room r ON r.id = p.room_id AND r.status='active'"
+                " WHERE p.session_key=? AND p.status='active' AND p.ephemeral=0"
+                " ORDER BY p.last_seen_at DESC LIMIT 1", (actor,))).fetchone()
+        if p is not None:
             member_name = p["display_name"] if p else ""
             # ⚠️ kind 一定要跟著進去。它不只是拿來顯示——想法板的守門用它
             # 分辨「人類的段落」與「agent 的段落」（§15.1），空著的話建板的
@@ -5871,6 +5888,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 設定成功而畫面看不出來，又是一次沒有人會報錯的失敗
         cur = await db.execute(
             "SELECT br.room_id, br.room_name, br.detached_at, r.status,"
+            " r.visibility AS room_visibility,"
             " r.board_supervisor_session_key, r.board_supervisor_name,"
             " r.board_supervisor_kind, r.board_supervisor_left_at"
             " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
@@ -5883,6 +5901,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
                 "name": r["room_name"],
                 "status": r["status"] or "deleted",
+                # 房是公開還是私人。少了它，板的 owner **看不出自己的板掛在
+                # 哪種可見度的房上**——側門擋住的是「之後才改」，已經掛著的
+                # 存量仍然要看得見（@測試Novia 2026-09-03）
+                "visibility": r["room_visibility"] or "",
                 "detached": r["detached_at"] is not None,
                 # `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼，
                 # 兩個名字指同一個東西時，總有一邊的比對會寫錯

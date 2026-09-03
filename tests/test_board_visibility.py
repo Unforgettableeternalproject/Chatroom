@@ -607,3 +607,51 @@ async def test_making_the_room_public_cannot_expose_a_private_board(tmp_path):
             ok = await client.post(f"/api/rooms/{rid}/visibility",
                                    json={"visibility": "public"}, headers=a)
             assert ok.status_code == 200, ok.text
+
+
+async def test_a_board_created_with_only_a_session_key_still_has_a_name(
+        tmp_path):
+    """只帶 `X-Session-Key` 建板，owner 在名冊上也要有名字與 kind。
+
+    🚨 Board Library 那條路沒有 `participant_id`（板軸沒有房）⇒ 建板時查不到
+    名字 ⇒ **建立者在自己的板上是一個沒有名字的 actor_key**。kind 空著更糟：
+    想法板的守門靠它分辨人類與 agent，空的會把人類當成 agent，**在他自己開
+    的板上改不動別人寫的東西**（@測試Novia 2026-09-03 實測，owner 有 join 房、
+    有帶 preferred_name，`members[]` 仍是空字串）。
+    """
+    app, client = await _client(tmp_path, "board-member-name")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            await _join(client, rid, "claude-a", "諾薇亞")
+            only_key = {"X-Session-Key": "claude-a"}   # 刻意不帶 participant
+            bid = await _board(client, only_key)
+
+            me = next(m for m in (await client.get(
+                f"/api/boards/{bid}", headers=only_key)).json()["members"]
+                if m["actor_key"] == "claude-a")
+            assert me["display_name"] == "諾薇亞"
+            assert me["actor_kind"] == "claude"
+
+
+async def test_attached_rooms_say_whether_each_room_is_private(tmp_path):
+    """`attached_rooms[]` 要說得出每間房是公開還是私人。
+
+    側門擋住的是「之後才改」；**已經掛著的存量仍然要看得見**，否則板的 owner
+    看不出自己的私人板正掛在一間公開房上（@測試Novia 2026-09-03）。
+    """
+    app, client = await _client(tmp_path, "attached-room-visibility")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, room=rid)
+            entry = (await client.get(f"/api/boards/{bid}",
+                                      headers=a)).json()["attached_rooms"][0]
+            assert entry["visibility"] == "public"
+
+            await client.post(f"/api/rooms/{rid}/visibility",
+                              json={"visibility": "private"}, headers=a)
+            entry = (await client.get(f"/api/boards/{bid}",
+                                      headers=a)).json()["attached_rooms"][0]
+            assert entry["visibility"] == "private"

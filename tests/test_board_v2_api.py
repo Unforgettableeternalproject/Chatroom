@@ -141,7 +141,9 @@ async def test_detach_keeps_the_cards_and_reattach_restores_the_view(tmp_path):
             assert body["attached_rooms"] == [
                 {"id": rid, "name": "房", "status": "active", "detached": True,
                  # supervisor 是 per-room 的，沒指定就是 None
-                 "supervisor": None}]
+                 "supervisor": None,
+                 # 房的可見度：板 owner 要看得出自己掛在哪種房上
+                 "visibility": "public"}]
 
             r = await client.post(f"/api/boards/{bid}/rooms/{rid}", headers=hdr)
             assert r.status_code == 200, r.text
@@ -319,7 +321,9 @@ async def test_a_board_with_no_room_can_still_hold_cards(tmp_path):
             assert body["attached_rooms"] == [
                 {"id": rid, "name": "房", "status": "active", "detached": True,
                  # supervisor 是 per-room 的，沒指定就是 None
-                 "supervisor": None}]
+                 "supervisor": None,
+                 # 房的可見度：板 owner 要看得出自己掛在哪種房上
+                 "visibility": "public"}]
 
 
 async def test_session_key_can_come_from_header_or_query(tmp_path):
