@@ -13,6 +13,22 @@ class BoardApi {
 
   final Dio _dio;
 
+  /// 板軸的卡片操作要嘛帶房內身分、要嘛帶 session key。
+  ///
+  /// **兩條路都要在**：從聊天室進來的人手上有 participant_id，從 Board
+  /// Library 進來的人沒有房，只有 session key。Hub 的 `_actor_from_headers`
+  /// 優先讀 session_key、participant_id 當退路——所以這裡有什麼就帶什麼，
+  /// 房軸照舊送 participant_id，語意不變。
+  ///
+  /// 少了 session key 那條的後果不是「某個動作失敗」，是**整塊板從 Library
+  /// 進去只能看**——而那正是艾斯維爾指出的「Board 沒有綁房間就必定唯讀」。
+  static Options _auth(String? participantId, String? sessionKey) => Options(
+        headers: {
+          'X-Participant-Id': ?participantId,
+          'X-Session-Key': ?sessionKey,
+        },
+      );
+
   /// 讀 board。[afterBoardSeq] 為 0 時 Hub 回全量（`full: true`）。
   ///
   /// 回應含軟刪除的列（`deleted: true`）作為 tombstone，
@@ -35,7 +51,8 @@ class BoardApi {
 
   Future<String> addObjective(
     String roomId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String title,
     String description = '',
   }) =>
@@ -43,14 +60,15 @@ class BoardApi {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/rooms/$roomId/board/objectives',
           data: {'title': title, 'description': description},
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
         return res.data!['id'] as String;
       });
 
   Future<String> addChecklist(
     String objectiveId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String title,
     String description = '',
   }) =>
@@ -58,7 +76,7 @@ class BoardApi {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/board/objectives/$objectiveId/checklists',
           data: {'title': title, 'description': description},
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
         return res.data!['id'] as String;
       });
@@ -70,7 +88,8 @@ class BoardApi {
   /// 回去的路——board UI 上建的卡拿不到它，因為那裡沒有「來源訊息」這個東西。
   Future<String> addLooseTask(
     String roomId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String title,
     String description = '',
     String priority = 'normal',
@@ -85,14 +104,15 @@ class BoardApi {
             'priority': priority,
             'source_seq': ?sourceSeq,
           },
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
         return res.data!['id'] as String;
       });
 
   Future<String> addTask(
     String checklistId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String title,
     String description = '',
     String priority = 'normal',
@@ -109,7 +129,7 @@ class BoardApi {
             'source_seq': ?sourceSeq,
             'assignee_participant_id': ?assigneeParticipantId,
           },
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
         return res.data!['id'] as String;
       });
@@ -121,7 +141,8 @@ class BoardApi {
   /// 守門檢查）。
   Future<void> updateTask(
     String taskId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     String? title,
     String? description,
     String? priority,
@@ -136,7 +157,7 @@ class BoardApi {
             'priority': ?priority,
             'assignee_participant_id': ?assigneeParticipantId,
           },
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
@@ -148,28 +169,30 @@ class BoardApi {
   /// 演化，而畫面上多一顆按不動的按鈕不會有任何地方報錯。
   Future<void> setTaskStatus(
     String taskId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String status,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/tasks/$taskId/status',
           data: {'status': status},
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
   /// 推 Checklist 的狀態（open / done / cancelled）。
   Future<void> setChecklistStatus(
     String checklistId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     required String status,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/checklists/$checklistId/status',
           data: {'status': status},
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
@@ -182,34 +205,35 @@ class BoardApi {
   /// 回應的 `reclaimed` 為 true 表示這張是**自己上一世**領走的。
   Future<BoardClaimResult> claim(
     String taskId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/board/tasks/$taskId/claim',
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
         return BoardClaimResult(
           reclaimed: (res.data?['reclaimed'] as bool?) ?? false,
         );
       });
 
-  Future<void> release(String taskId, {required String participantId}) =>
+  Future<void> release(String taskId, {String? participantId, String? sessionKey}) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/tasks/$taskId/release',
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
   /// 完成 ＝ 推到 `done`，不是另一條路徑。Hub 那側也是同一個端點——
   /// 「完成」在使用者眼裡就是改狀態，多一條路只是多一個會漏掉守門的地方。
   Future<void> completeTask(String taskId,
-          {required String participantId}) =>
+          {String? participantId, String? sessionKey}) =>
       setTaskStatus(taskId, participantId: participantId, status: 'done');
 
   Future<void> completeChecklist(String checklistId,
-          {required String participantId}) =>
+          {String? participantId, String? sessionKey}) =>
       setChecklistStatus(checklistId,
           participantId: participantId, status: 'done');
 
@@ -218,54 +242,59 @@ class BoardApi {
   /// [verify] 只有人類成員能呼叫（Hub 回 403 `human_only`）——「確認無誤」
   /// 在這個專案的實際意義是跑測試、看畫面、判斷有沒有踩到坑。
   Future<void> reviewObjective(String objectiveId,
-          {required String participantId}) =>
-      _objectiveAction(objectiveId, 'review', participantId);
+          {String? participantId, String? sessionKey}) =>
+      _objectiveAction(objectiveId, 'review', participantId, sessionKey);
 
   Future<void> verifyObjective(String objectiveId,
-          {required String participantId}) =>
-      _objectiveAction(objectiveId, 'verify', participantId);
+          {String? participantId, String? sessionKey}) =>
+      _objectiveAction(objectiveId, 'verify', participantId, sessionKey);
 
   Future<void> completeObjective(String objectiveId,
-          {required String participantId}) =>
-      _objectiveAction(objectiveId, 'complete', participantId);
+          {String? participantId, String? sessionKey}) =>
+      _objectiveAction(objectiveId, 'complete', participantId, sessionKey);
 
   Future<void> reopenObjective(String objectiveId,
-          {required String participantId}) =>
-      _objectiveAction(objectiveId, 'reopen', participantId);
+          {String? participantId, String? sessionKey}) =>
+      _objectiveAction(objectiveId, 'reopen', participantId, sessionKey);
 
   Future<void> cancelObjective(String objectiveId,
-          {required String participantId}) =>
-      _objectiveAction(objectiveId, 'cancel', participantId);
+          {String? participantId, String? sessionKey}) =>
+      _objectiveAction(objectiveId, 'cancel', participantId, sessionKey);
 
-  Future<void> _objectiveAction(String id, String action, String pid) =>
+  Future<void> _objectiveAction(
+    String id,
+    String action,
+    String? pid,
+    String? sessionKey,
+  ) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/objectives/$id/$action',
-          options: Options(headers: {'X-Participant-Id': pid}),
+          options: _auth(pid, sessionKey),
         );
       });
 
-  Future<void> deleteTask(String taskId, {required String participantId}) =>
+  Future<void> deleteTask(String taskId, {String? participantId, String? sessionKey}) =>
       unwrap(() async {
         await _dio.delete<Map<String, dynamic>>(
           '/api/board/tasks/$taskId',
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
-  Future<void> deleteChecklist(String id, {required String participantId}) =>
+  Future<void> deleteChecklist(String id, {String? participantId, String? sessionKey}) =>
       unwrap(() async {
         await _dio.delete<Map<String, dynamic>>(
           '/api/board/checklists/$id',
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
-  Future<void> deleteObjective(String id, {required String participantId}) =>
+  Future<void> deleteObjective(String id, {String? participantId, String? sessionKey}) =>
       unwrap(() async {
         await _dio.delete<Map<String, dynamic>>(
           '/api/board/objectives/$id',
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 
@@ -279,7 +308,8 @@ class BoardApi {
   /// 傳 null／空字串＝取消指派。
   Future<void> setSupervisor(
     String roomId, {
-    required String participantId,
+    String? participantId,
+    String? sessionKey,
     String? targetParticipantId,
   }) =>
       unwrap(() async {
@@ -289,7 +319,7 @@ class BoardApi {
             'session_key': '',
             'participant_id': targetParticipantId ?? '',
           },
-          options: Options(headers: {'X-Participant-Id': participantId}),
+          options: _auth(participantId, sessionKey),
         );
       });
 }

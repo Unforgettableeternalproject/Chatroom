@@ -246,7 +246,7 @@ void _realShapeTests() {
       // 前者要板的 owner 升你，後者從房間進去就解決了。
       // 講成同一句話的人會一直重試同一條路
       expect(
-        boardEditability(archived: false, hasRoom: true, role: 'viewer'),
+        boardEditability(archived: false, role: 'viewer'),
         BoardEditability.viewer,
       );
     });
@@ -256,14 +256,14 @@ void _realShapeTests() {
       // 而使用者找不到任何可以改的地方。真的沒權限時 Hub 會回 403，
       // 那是誠實的失敗；預設鎖住則是無聲的
       expect(
-        boardEditability(archived: false, hasRoom: true, role: ''),
+        boardEditability(archived: false, role: ''),
         BoardEditability.editable,
       );
     });
 
     test('封存壓過角色', () {
       expect(
-        boardEditability(archived: true, hasRoom: true, role: 'owner'),
+        boardEditability(archived: true, role: 'owner'),
         BoardEditability.archived,
       );
     });

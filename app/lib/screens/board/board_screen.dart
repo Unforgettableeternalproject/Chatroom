@@ -72,10 +72,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return id.isEmpty ? null : id;
   }
 
-  /// 房內動作。`_boardOnly` 時是 null，呼叫端必須自己處理——
-  /// 讓型別擋住比讓執行期拿 404 好。
-  BoardActions? get _actions =>
-      widget.roomId == null ? null : ref.read(boardActionsProvider(widget.roomId!));
+  /// 這塊板上的動作。**兩條軸都有**：房軸帶房內身分，板軸帶 session key。
+  ///
+  /// 從前板軸是 null（「呼叫端自己處理」），而呼叫端處理的方式就是整片唯讀。
+  BoardActions? get _actions => widget.roomId != null
+      ? ref.read(boardActionsProvider(widget.roomId!))
+      : (_boardIdOrNull == null
+          ? null
+          : ref.read(boardActionsByIdProvider(_boardIdOrNull!)));
 
   /// 這個畫面的板從哪條路徑拉。兩條路徑共用同一份快取（見 [BoardCache]），
   /// 所以從房間進與從 Library 進看到的是同一塊板、同一個水位。
@@ -89,12 +93,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   /// 這塊板現在能不能改。
   ///
-  /// 兩個來源：房間封存（唯讀歷史），以及**從 Library 進來時沒有房內身分**。
-  /// 後者不是權限問題也不是壞掉，是 item 端點還要 `X-Participant-Id`——
-  /// 兩件事在畫面上要講不同的話，否則使用者會去設定頁找一個不存在的問題。
+  /// **從 Library 進來不再是唯讀的理由**（卡片端點認 `X-Session-Key` 之後）。
+  /// 剩下的兩個來源是封存與 viewer 角色，兩者要講不同的話：前者是這段歷史
+  /// 結束了，後者是這塊板上你只能看。
   BoardEditability get _editability => boardEditability(
         archived: _archived,
-        hasRoom: !_boardOnly,
         role: _watchBoard().value?.myRole ?? '',
       );
 
@@ -606,7 +609,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
                     color: s.inkMute, letterSpacing: 2.2),
               ),
-              if (!_readOnly)
+              // 板軸開不了新週期（Hub 的建立端點在房軸上）。**收起來而不是
+              // 留著**——按下去什麼都不發生比按鈕不在更糟
+              if (!_readOnly && (_actions?.canAddObjective ?? false))
                 _BarButton(
                     label: '＋ 新週期', onTap: () => _create('objective')),
             ]),
@@ -1306,10 +1311,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               textAlign: TextAlign.center,
               style: UepText.serif(size: 13.5, color: s.inkSoft, height: 2),
             ),
-            if (!_readOnly) ...[
+            if (!_readOnly && (_actions?.canAddObjective ?? false)) ...[
               const SizedBox(height: 16),
               UepButton(
                   label: '＋ 新週期', onPressed: () => _create('objective')),
+            ] else if (!_readOnly && _boardOnly) ...[
+              const SizedBox(height: 14),
+              Text('週期要從掛著這塊板的聊天室裡開。',
+                  textAlign: TextAlign.center,
+                  style: UepText.sans(size: 12, color: s.inkMute)),
             ],
           ],
         ),
@@ -1405,11 +1415,13 @@ class _NoRoomBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     return Tooltip(
-      message: '從聊天室進入這塊板才能認領或改狀態',
+      // **事實陳述，不是限制。** 這塊板現在沒有掛任何聊天室 ⇒ 板上的變更
+      // 不會叫醒任何人（通知走房），追蹤者只能自己回來看。改是改得動的
+      message: '這塊板沒有掛任何聊天室——改得動，但變更不會叫醒任何人',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),
-        child: Text('唯讀 · 未從聊天室進入',
+        child: Text('未掛接聊天室',
             style:
                 UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
       ),

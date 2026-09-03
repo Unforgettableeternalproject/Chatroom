@@ -1239,15 +1239,19 @@ class BoardSummary {
 
 /// 這塊板現在為什麼不能改（或可以改）。
 ///
-/// 三種狀態必須分開，因為**處置不一樣**：
 /// - [editable]：正常
 /// - [archived]：這段歷史結束了，誰都改不了
-/// - [noRoom]：從 Board Library 進來，手上沒有房內身分。板是活的，
-///   要從掛著它的某間房進去才能動手
+/// - [viewer]：這塊板上你只能看
 ///
-/// 把後兩者講成同一句「唯讀」，遇到 [noRoom] 的人會去找一個不存在的封存
-/// 狀態；反過來把 [noRoom] 講成「沒有權限」，他會去翻設定頁。
-enum BoardEditability { editable, archived, noRoom, viewer }
+/// ⚠️ 曾經有第四種 `noRoom`——「從 Board Library 進來」，而它會讓整塊板
+/// 唯讀。判準是**你從哪條網址進來**（`widget.roomId == null`），跟板有沒有
+/// 掛房、跟你是不是 owner 都無關；於是從 BOARDS 分頁開的板進去一張卡都建
+/// 不了，包括自己剛開的那塊。
+///
+/// 那正是艾斯維爾說的「我不認為 Board 沒有綁房間就必定是唯讀」
+/// （2026-09-03）——**server 從來沒有這條規則，它長在這裡。**
+/// 卡片端點認 `X-Session-Key` 之後這個狀態就沒有存在的理由了。
+enum BoardEditability { editable, archived, viewer }
 
 /// [archived] 優先於其餘：封存的板從哪裡進來、你是誰都改不了，
 /// 而「從聊天室進來就能寫」這句話在封存的板上是假的。
@@ -1258,12 +1262,12 @@ enum BoardEditability { editable, archived, noRoom, viewer }
 /// 那是誠實的失敗；預設鎖住則是無聲的。
 BoardEditability boardEditability({
   required bool archived,
-  required bool hasRoom,
   String role = '',
 }) {
   if (archived) return BoardEditability.archived;
-  if (!hasRoom) return BoardEditability.noRoom;
   if (role == 'viewer') return BoardEditability.viewer;
+  // 從哪條網址進來**不再是判準**——擋不擋得住由 Hub 的權限說了算，
+  // 而那會以 role 的形式回到這裡
   return BoardEditability.editable;
 }
 

@@ -197,17 +197,42 @@ final boardByIdProvider =
 /// board 上的動作。每一個都在成功之後 invalidate [boardProvider]，
 /// 讓變更以「Hub 說了算」的形式回到畫面上，而不是本機先猜一份。
 class BoardActions {
-  BoardActions(this._ref, this.roomId);
+  /// 房軸：從某間聊天室進來，身分是那間房的 participant。
+  BoardActions(this._ref, this.roomId) : boardId = null;
+
+  /// 板軸：從 Board Library 進來，**沒有房**，身分是 session key。
+  ///
+  /// 這條路存在之前，`/boards/:id` 進去的板一律唯讀——判準是「你從哪條網址
+  /// 進來」，跟板有沒有掛房、跟你是不是 owner 都無關。那正是艾斯維爾指出的
+  /// 「Board 沒有綁房間就必定是唯讀」（2026-09-03）。
+  BoardActions.forBoard(this._ref, String this.boardId) : roomId = null;
 
   final Ref _ref;
-  final String roomId;
+  final String? roomId;
+  final String? boardId;
 
   BoardApi get _api => _ref.read(boardApiProvider);
 
-  Future<String?> _pid() async =>
-      (await _ref.read(identityProvider(roomId).future)).participantId;
+  /// 房軸的身分。**板軸是 null，而那不是失敗**——那時身分走 [_sk]。
+  Future<String?> _pid() async => roomId == null
+      ? null
+      : (await _ref.read(identityProvider(roomId!).future)).participantId;
 
-  void _reload() => _ref.invalidate(boardProvider(roomId));
+  /// 板軸的身分。房軸不送，語意維持原樣（Hub 優先讀 session_key，
+  /// 兩個都送會讓房軸的行為悄悄改變）。
+  String? get _sk =>
+      roomId == null ? _ref.read(appConfigProvider).deviceKey : null;
+
+  /// 開得了新週期嗎。
+  ///
+  /// **板軸開不了**：Hub 的建立端點是 `/api/rooms/{rid}/board/objectives`，
+  /// 板軸沒有對應的入口。畫面要據此把按鈕收起來——留著按下去會靜默什麼
+  /// 都不發生，那比按鈕不在更糟。
+  bool get canAddObjective => roomId != null;
+
+  void _reload() => roomId != null
+      ? _ref.invalidate(boardProvider(roomId!))
+      : _ref.invalidate(boardByIdProvider(boardId!));
 
   /// 認領一張 Task。
   ///
@@ -218,16 +243,16 @@ class BoardActions {
   /// 領的人才知道該先去讀那張卡的描述而不是從頭開始。
   Future<BoardClaimResult?> claim(String taskId) async {
     final pid = await _pid();
-    if (pid == null) return null;
-    final result = await _api.claim(taskId, participantId: pid);
+    if (pid == null && _sk == null) return null;
+    final result = await _api.claim(taskId, participantId: pid, sessionKey: _sk);
     _reload();
     return result;
   }
 
   Future<void> release(String taskId) async {
     final pid = await _pid();
-    if (pid == null) return;
-    await _api.release(taskId, participantId: pid);
+    if (pid == null && _sk == null) return;
+    await _api.release(taskId, participantId: pid, sessionKey: _sk);
     _reload();
   }
 
@@ -235,15 +260,16 @@ class BoardActions {
   /// 會說出從現在這裡還能去哪——呼叫端拿它畫按鈕，不要自己複製轉移表。
   Future<void> setTaskStatus(String taskId, String status) async {
     final pid = await _pid();
-    if (pid == null) return;
-    await _api.setTaskStatus(taskId, participantId: pid, status: status);
+    if (pid == null && _sk == null) return;
+    await _api.setTaskStatus(taskId, participantId: pid,
+          sessionKey: _sk, status: status);
     _reload();
   }
 
   Future<void> completeTask(String taskId) async {
     final pid = await _pid();
-    if (pid == null) return;
-    await _api.completeTask(taskId, participantId: pid);
+    if (pid == null && _sk == null) return;
+    await _api.completeTask(taskId, participantId: pid, sessionKey: _sk);
     _reload();
   }
 
@@ -254,16 +280,20 @@ class BoardActions {
   /// 打回已完成的清單只有人類做得到，取消只有建立者或人類。
   Future<void> setChecklistStatus(String checklistId, String status) async {
     final pid = await _pid();
-    if (pid == null) return;
+    if (pid == null && _sk == null) return;
     await _api.setChecklistStatus(checklistId,
-        participantId: pid, status: status);
+        participantId: pid,
+          sessionKey: _sk, status: status);
     _reload();
   }
 
   Future<String?> addObjective(String title, {String description = ''}) async {
     final pid = await _pid();
-    if (pid == null) return null;
-    final id = await _api.addObjective(roomId,
+    if (pid == null && _sk == null) return null;
+    // 房軸端點：Hub 那支路徑是 `/api/rooms/{rid}/board/objectives`，
+    // 板軸沒有對應的入口 ⇒ 這條在 Library 上做不到（見 canAddObjective）
+    if (roomId == null || pid == null) return null;
+    final id = await _api.addObjective(roomId!,
         participantId: pid, title: title, description: description);
     _reload();
     return id;
@@ -272,9 +302,10 @@ class BoardActions {
   Future<String?> addChecklist(String objectiveId, String title,
       {String description = ''}) async {
     final pid = await _pid();
-    if (pid == null) return null;
+    if (pid == null && _sk == null) return null;
     final id = await _api.addChecklist(objectiveId,
-        participantId: pid, title: title, description: description);
+        participantId: pid,
+          sessionKey: _sk, title: title, description: description);
     _reload();
     return id;
   }
@@ -288,9 +319,10 @@ class BoardActions {
     int? sourceSeq,
   }) async {
     final pid = await _pid();
-    if (pid == null) return null;
+    if (pid == null && _sk == null) return null;
+    if (roomId == null || pid == null) return null;
     final id = await _api.addLooseTask(
-      roomId,
+      roomId!,
       participantId: pid,
       title: title,
       description: description,
@@ -310,10 +342,11 @@ class BoardActions {
     String? assigneeParticipantId,
   }) async {
     final pid = await _pid();
-    if (pid == null) return null;
+    if (pid == null && _sk == null) return null;
     final id = await _api.addTask(
       checklistId,
       participantId: pid,
+          sessionKey: _sk,
       title: title,
       description: description,
       priority: priority,
@@ -327,35 +360,40 @@ class BoardActions {
   /// Objective 的三段。[verify] 只有人類成員能按（Hub 回 403 `human_only`），
   /// 所以呼叫它的按鈕在 agent 的畫面上不該出現——不是按了才失敗。
   Future<void> reviewObjective(String id) async =>
-      _objective(id, (api, pid) => api.reviewObjective(id, participantId: pid));
+      _objective(id, (api, pid) => api.reviewObjective(id, participantId: pid, sessionKey: _sk));
 
   Future<void> verifyObjective(String id) async =>
-      _objective(id, (api, pid) => api.verifyObjective(id, participantId: pid));
+      _objective(id, (api, pid) => api.verifyObjective(id, participantId: pid, sessionKey: _sk));
 
   Future<void> completeObjective(String id) async => _objective(
-      id, (api, pid) => api.completeObjective(id, participantId: pid));
+      id, (api, pid) => api.completeObjective(id, participantId: pid, sessionKey: _sk));
 
   Future<void> reopenObjective(String id) async =>
-      _objective(id, (api, pid) => api.reopenObjective(id, participantId: pid));
+      _objective(id, (api, pid) => api.reopenObjective(id, participantId: pid, sessionKey: _sk));
 
   Future<void> _objective(
-      String id, Future<void> Function(BoardApi, String) run) async {
+      String id, Future<void> Function(BoardApi, String?) run) async {
     final pid = await _pid();
-    if (pid == null) return;
+    if (pid == null && _sk == null) return;
     await run(_api, pid);
     _reload();
   }
 
   Future<void> deleteTask(String taskId) async {
     final pid = await _pid();
-    if (pid == null) return;
-    await _api.deleteTask(taskId, participantId: pid);
+    if (pid == null && _sk == null) return;
+    await _api.deleteTask(taskId, participantId: pid, sessionKey: _sk);
     _reload();
   }
 }
 
 final boardActionsProvider = Provider.family<BoardActions, String>(
     (ref, roomId) => BoardActions(ref, roomId));
+
+/// 板軸的動作（Board Library / `/boards/:id`）。與 [boardActionsProvider]
+/// 是同一個類別的兩種身分來源，不是兩套邏輯。
+final boardActionsByIdProvider = Provider.family<BoardActions, String>(
+    (ref, boardId) => BoardActions.forBoard(ref, boardId));
 
 /// 這個房間有幾張孤兒 Task（持有者已經不在房裡）。
 ///
