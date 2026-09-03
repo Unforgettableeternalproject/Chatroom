@@ -3387,8 +3387,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (bid, room_id))
         return bid
 
-    async def _next_board_seq(room_id: str) -> int:
+    async def _next_board_seq(room_id: str, board_id: str = "") -> int:
         """領一個新的 board 水位號。
+
+        ⚠️ `room_id` 可以是空的——`_board_writer_v2` 在**零掛接房的板**上會
+        給空的 provenance room。那時要走板軸領號，不然
+        `UPDATE room WHERE id=''` 什麼都沒更新，`RETURNING` 回 None，
+        下一行 `row["board_seq"]` 就是 `TypeError: 'NoneType' object is not
+        subscriptable` ⇒ 500（@開發Novia (除錯) 2026-09-03 D9 的現場）。
 
         **一次操作一個號**，不是一列一個號：批次排序動了二十列仍只領一次，
         這樣「這次動了什麼」才是可讀的單位。同一次請求裡要重複用同一個
@@ -3400,6 +3406,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 下次 `board_seq > 8` 撈不到另一批，那些變更永遠到不了任何 client，
         # 而 Hub 這邊完全正常、不會報錯。既有的 next_seq 本來就這樣領。
         db = app.state.db
+        if not (room_id or "").strip():
+            # 沒有房可依附：只能走板軸。連 board_id 都沒有的話，呼叫端傳錯了
+            if not (board_id or "").strip():
+                raise _err(500, "seq_without_scope",
+                           "領號時既沒有房也沒有板，這是呼叫端的錯")
+            return await _next_seq_for_board(board_id)
         board = await _board_for_room(room_id)
         if board is None:
             # 還沒換軸的房（沒有人在它的板上動過任何東西）：維持 v1 的房內水位
@@ -3665,7 +3677,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         bid = _row_board_id(row)
         if bid:
             return await _next_seq_for_board(bid)
-        return await _next_board_seq(row["room_id"])
+        # 零掛接房的板：row 的 room_id 是空的，要把板帶下去，不然領號那邊
+        # 沒有任何可以依附的軸（@開發Novia (除錯) D9）
+        return await _next_board_seq(row["room_id"], _row_board_id(row))
 
     async def _item_notify(row) -> None:
         """卡動了要叫醒**每一間掛著這塊板的房**，不是只有卡所在的那一間。
@@ -3926,14 +3940,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                     " reviewed_by=NULL, reviewed_at=NULL,"
                     " verified_by=NULL, verified_at=NULL,"
                     " board_seq=? WHERE id=?",
-                    (await _next_board_seq(room_id), row["o_id"]),
+                    (await _next_board_seq(room_id, me.get("board_id", "")), row["o_id"]),
                 )
             if row["c_status"] in SETTLED:
                 await db.execute(
                     "UPDATE board_checklist SET status='open',"
                     " completed_by=NULL, completed_at=NULL, board_seq=?"
                     " WHERE id=?",
-                    (await _next_board_seq(room_id), row["id"]),
+                    (await _next_board_seq(room_id, me.get("board_id", "")), row["id"]),
                 )
 
         # 三輪：讀不到就建，建不成表示別人贏了，回去讀他的。兩層各有一條
@@ -3943,7 +3957,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             if row is not None:
                 await _reopen_if_settled(row)
                 return row["id"]
-            seq = await _next_board_seq(room_id)
+            seq = await _next_board_seq(room_id, me.get("board_id", ""))
             now = _now()
             oid = uuid.uuid4().hex
             cur = await db.execute(
@@ -4099,7 +4113,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         assignee_actor = await _assert_assignee_in_room(
             body.assignee_participant_id, room_id)
         db = app.state.db
-        seq = await _next_board_seq(room_id)
+        seq = await _next_board_seq(room_id, me.get("board_id", ""))
         tid = uuid.uuid4().hex
         mine = actor_key(me["session_key"])
         await db.execute(

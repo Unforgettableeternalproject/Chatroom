@@ -1120,3 +1120,28 @@ async def test_a_directive_with_no_target_speaks_to_the_whole_board(tmp_path):
             body = (await client.get(f"/api/boards/{bid}",
                                      headers=owner)).json()
             assert body["directives"][0]["to_actor_key"] == "", "廣播不該有收件人"
+
+
+async def test_a_loose_task_on_a_board_with_no_room_does_not_crash(tmp_path):
+    """🚨 零掛接房的板上「隨手記一件事」不能 500。
+
+    `_board_writer_v2` 在沒有掛接房時給的是**空的 provenance room**，而
+    `_uncategorised_checklist` 拿它去 `_next_board_seq("")`：
+    `UPDATE room WHERE id=''` 什麼都沒更新 → `RETURNING` 回 None →
+    `row["board_seq"]` ⇒ `TypeError: 'NoneType' object is not subscriptable`
+    ⇒ 500（@開發Novia (除錯) 2026-09-03 D9 的現場）。
+
+    ⚠️ 一塊還沒掛上任何房的板**本來就該能先把要做的事寫下來**——那是
+    `_board_writer_v2` 註解裡寫著的設計意圖，只是領號那一步沒跟上。
+    """
+    app, client = await _client(tmp_path, "noroomloose")
+    async with client:
+        async with app.router.lifespan_context(app):
+            key = {"X-Session-Key": "claude-a"}
+            bid = (await client.post("/api/boards", json={"name": "還沒掛房的板"},
+                                     headers=key)).json()["id"]
+            r = await client.post(f"/api/boards/{bid}/tasks",
+                                  json={"title": "隨手記一件事"}, headers=key)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}", headers=key)).json()
+            assert [t["title"] for t in body["tasks"]] == ["隨手記一件事"]
