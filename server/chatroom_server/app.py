@@ -444,6 +444,15 @@ class BoardSupervisorSet(BaseModel):
 
     # 空字串＝取消指定。**不是「刪掉這個欄位」**，取消也要留下紀錄
     session_key: str = Field(default="", max_length=128)
+    # 🚨 **UI 只有這個值。** `GET /api/rooms/{id}` 刻意不外流成員的
+    # `session_key`（隱私），所以只收 session_key 的話，指派選單根本做不
+    # 出來——那個對話框只能是唯讀的（艾斯維爾 2026-09-03：「我無法指派
+    # Supervisor」）。換成 session_key 的動作在 server 做，key 不出門。
+    #
+    # 兩個欄位並存而不是取代：`session_key` 那條路要留給「對方還沒進房」
+    # 的情形，那正是 supervisor 最常被指定的時機，而還沒進房的人沒有
+    # participant_id
+    participant_id: str = Field(default="", max_length=64)
 
 
 class BoardStatusChange(BaseModel):
@@ -4313,13 +4322,34 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 而讀到寫之間有 await——兩路同時把 in_progress 推向 done 與 cancelled
         # 會各自通過檢查、各自回 200，最後只剩後寫的那個。更難看的是 done 那條
         # 分支還會發一則系統訊息，於是板上寫著 cancelled、房裡卻有一則說它完成了
+        # 🚨 **收尾時把孤兒狀態一起收掉。** `done`／`cancelled` ∧ `orphaned`
+        # 是一個沒有出口的組合：`claim` 的 CAS 帶著
+        # `status NOT IN ('done','cancelled')` ⇒ UPDATE 恆回 0 列 ⇒ 永遠 409，
+        # 誰都接不了，而畫面上它還掛著「沒有人在做」。
+        #
+        # 「已收尾的卡不孤兒化」原本只擋了 `_orphan_claims` 的入口，沒擋
+        # **先孤兒、後完成**這個順序；而修復只跑在開機路徑
+        # （`_heal_settled_orphans`）⇒ 重啟之前它是永久的。收斂寫進同一條
+        # UPDATE，才不會有「狀態改了、孤兒沒清」的中間態
+        # （@開發Novia (除錯) 2026-09-03 DB 實證）。
+        #
+        # `claim_name` / `claimed_at` **留著**——那是歷史（誰做的、什麼時候
+        # 領的），與「現在誰在做」是兩件事
+        settling = body.status in ("done", "cancelled")
         cur = await db.execute(
             "UPDATE board_task SET status=?, completed_by=?,"
             " completed_by_actor_key=?, completed_at=?,"
+            " claim_state=CASE WHEN ? AND claim_state='orphaned'"
+            "   THEN (CASE WHEN claim_participant_id IS NOT NULL"
+            "              THEN 'held' ELSE '' END)"
+            "   ELSE claim_state END,"
+            " orphaned_at=CASE WHEN ? THEN NULL ELSE orphaned_at END,"
+            " orphaned_reason=CASE WHEN ? THEN '' ELSE orphaned_reason END,"
             " board_seq=? WHERE id=? AND status=? RETURNING id",
             (body.status, me["id"] if done else None,
              actor_key(me["session_key"]) if done else "",
-             _now() if done else None, seq, task_id, old),
+             _now() if done else None,
+             settling, settling, settling, seq, task_id, old),
         )
         if await cur.fetchone() is None:
             # 領號已經寫進去了，不 commit 會讓下一個號重複。⚠️ 同時要補一筆
@@ -4817,6 +4847,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
         key = body.session_key.strip()
+        # participant_id 先換成 session_key。**房要對得上**：participant_id
+        # 是房內身分，拿別間房的 id 來指定就不是他了
+        if not key and body.participant_id.strip():
+            target = await (await db.execute(
+                "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                (body.participant_id.strip(), room_id))).fetchone()
+            if target is None:
+                raise _err(404, "participant_not_found",
+                           "找不到這個成員——他不在這間房裡")
+            key = actor_key(target["session_key"])
         now = _now()
         if not key:
             await db.execute(
@@ -5320,13 +5360,72 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row
 
     async def _board_role(board_id: str, actor: str) -> str:
-        """這個 actor 在板上的角色。不是成員回空字串。"""
+        """這個 actor 在板上的角色。不是成員回空字串。
+
+        🔑 **明示的角色優先，房內身分是退路**（艾斯維爾 2026-09-03）。
+
+        09/02 裁決過「房裡的人不會自動變成板上的人，要 owner 明示匯入」。
+        那條裁決的直接後果是**在 B 房接不了 A 房帶過來的卡**：門檻查的是
+        `board_member`，沒被手動加進去就一律 403，跟他在哪間房無關。而
+        `board_member` 綁的是 `session_key`，agent 每開一個新 session 就換
+        一把 ⇒ 連它自己昨天建的板都變成陌生人。艾斯維爾的模型是
+        「在 A 房接的人跟在 B 房接的人本來就是不同實體，接手應該沒問題」，
+        於是這裡改成：查不到明示成員時，看他是不是任一**未解除掛接**房的
+        active 成員，是就給 editor。
+
+        ⚠️ 代價講清楚：板掛上一間房之後那間房的人都拿得到寫入權，包含之後
+        才進房的。這正是明示匯入原本要擋的，今天用可用性換掉它。
+
+        退路只補「查不到」的情形，**不蓋過明示角色**——蓋過去的話，把某人
+        降成 viewer 就變成一件做不到的事，而做這個降權的人不會收到任何提示。
+        """
         if not actor:
             return ""
-        row = await (await app.state.db.execute(
+        db = app.state.db
+        row = await (await db.execute(
             "SELECT role FROM board_member WHERE board_id=? AND actor_key=?"
             " AND removed_at IS NULL", (board_id, actor))).fetchone()
-        return row["role"] if row else ""
+        if row:
+            return row["role"]
+        # ephemeral（subagent）不算：它的身分本來就是暫時的，而板上的寫入
+        # 會留下署名——掛在一個過幾分鐘就消失的名字底下沒有意義
+        row = await (await db.execute(
+            "SELECT 1 FROM board_room br JOIN participant p"
+            "   ON p.room_id = br.room_id"
+            " WHERE br.board_id=? AND br.detached_at IS NULL"
+            "   AND p.session_key=? AND p.status='active' AND p.ephemeral=0"
+            " LIMIT 1", (board_id, actor))).fetchone()
+        return "editor" if row else ""
+
+    async def _board_identity(board_id: str, actor: str):
+        """這個 actor 在板上的**名字與 kind**，`board_member` 查不到就退回
+        掛接房裡的身分。回 dict 或 None。
+
+        🚨 `kind` 不是裝飾，是守門的依據：想法板的「agent 不得改人類的段落」
+        全靠它。`_board_role` 加了房內身分退路之後，房裡的人可以寫板卻沒有
+        `board_member` 列 ⇒ kind 是空字串 ⇒ **人類會被當成 agent**，他寫下
+        的段落連自己都改不動，而沒有任何地方會報錯。
+
+        `removed_at IS NULL` 一併補上：被移除的成員本來就不該還算成員，
+        `_board_role`（`:5322`）早就有這個條件，這兩處漏了
+        （@開發Novia (除錯) 2026-09-03）。
+        """
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT display_name, actor_kind FROM board_member"
+            " WHERE board_id=? AND actor_key=? AND removed_at IS NULL",
+            (board_id, actor))).fetchone()
+        if row is not None:
+            return row
+        # active 優先、否則取最後一筆：他可能剛好在某一間房裡離線了，
+        # 而名字與 kind 不會因為離線就變成別的東西
+        return await (await db.execute(
+            "SELECT p.display_name, p.kind AS actor_kind FROM participant p"
+            " JOIN board_room br ON br.room_id = p.room_id"
+            " WHERE br.board_id=? AND br.detached_at IS NULL"
+            "   AND p.session_key=?"
+            " ORDER BY p.status='active' DESC, p.joined_at DESC LIMIT 1",
+            (board_id, actor))).fetchone()
 
     async def _board_member_or_403(board_id: str, actor: str,
                                    need_write: bool = False,
@@ -5515,17 +5614,37 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         # **已解除的房也回**（帶 detached: true）。只回 active 的話，client
         # 手上那份會殘留一間早就解除的房，而它無從得知——那是靜默失效
+        # supervisor 一起撈出來：**它是 per-room 的**（艾斯維爾 2026-09-03：
+        # 「每個聊天室綁的 supervisor 可以不同，這是每個 room 範疇的」）。
+        # 只回頂層那個 board-scoped 的話，指派寫進去了、膠囊卻不會亮——
+        # 設定成功而畫面看不出來，又是一次沒有人會報錯的失敗
         cur = await db.execute(
-            "SELECT br.room_id, br.room_name, br.detached_at, r.status"
+            "SELECT br.room_id, br.room_name, br.detached_at, r.status,"
+            " r.board_supervisor_session_key, r.board_supervisor_name,"
+            " r.board_supervisor_kind, r.board_supervisor_left_at"
             " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
             " WHERE br.board_id=? ORDER BY br.attached_at", (board_id,))
-        attached = [{
-            "id": r["room_id"],
-            # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
-            "name": r["room_name"],
-            "status": r["status"] or "deleted",
-            "detached": r["detached_at"] is not None,
-        } for r in await cur.fetchall()]
+        attached = []
+        for r in await cur.fetchall():
+            sup_key = r["board_supervisor_session_key"] or ""
+            attached.append({
+                "id": r["room_id"],
+                # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
+                "name": r["room_name"],
+                "status": r["status"] or "deleted",
+                "detached": r["detached_at"] is not None,
+                # `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼，
+                # 兩個名字指同一個東西時，總有一邊的比對會寫錯
+                "supervisor": {
+                    "actor_key": sup_key,
+                    "display_name": r["board_supervisor_name"] or sup_key,
+                    "actor_kind": r["board_supervisor_kind"] or "",
+                    # 退場是**標記不是清空**，所以這裡也要說得出「本來是誰
+                    # 在看，但他已經走了」——少了它，畫面只能二選一地畫成
+                    # 「有人在看」或「沒有人」，而真相是第三種
+                    "departed": bool(r["board_supervisor_left_at"]),
+                } if sup_key else None,
+            })
 
         cur = await db.execute(
             "SELECT actor_key, role, display_name, actor_kind, aliases"
@@ -5621,9 +5740,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "board_archived", "這塊板已經封存，唯讀")
         actor = await _actor_from_headers(session_key, participant_id)
         await _board_member_or_403(board_id, actor, need_write=True)
-        member = await (await app.state.db.execute(
-            "SELECT display_name, actor_kind FROM board_member"
-            " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
+        member = await _board_identity(board_id, actor)
         # 有掛接房就拿第一間當 provenance；**沒有也照樣能建**（§11 步驟 8
         # 換表之後 room_id 沒有外鍵、可以是空字串）。一塊還沒掛上任何房的
         # 板，本來就該能先把要做的事寫下來
@@ -5925,6 +6042,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE board_task SET claim_state='orphaned', orphaned_at=?,"
             " orphaned_reason='已被移出這塊板', board_seq=?"
             " WHERE board_id=? AND claim_state='held'"
+            # 已收尾的卡不孤兒化——`done` ∧ `orphaned` 接不回來（見
+            # `set_task_status` 的收斂）。`_orphan_claims`（`:2575`）早就有
+            # 這個條件，這條入口漏了（@開發Novia (除錯) 2026-09-03）
+            "   AND status NOT IN ('done','cancelled')"
             "   AND TRIM(claim_actor_key)=? RETURNING id",
             (now, seq, board_id, target))
         released = len(await cur.fetchall())
@@ -6041,6 +6162,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                                           session_key)
         is_supervisor = (board["supervisor_actor_key"]
                          and board["supervisor_actor_key"] == actor)
+        # supervisor 是 **per-room** 的（艾斯維爾 2026-09-03），所以掛接房
+        # 那邊指派的人也算。只認 board-scoped 那一個的話，被指派的人**還是
+        # 送不出判斷**——而 403 會說他不是 supervisor，那句話在他眼裡是錯的。
+        #
+        # 掛三間房、三個不同 supervisor 時三個人都送得出：directive 是對整塊
+        # 板說的，沒有房的維度
+        if not is_supervisor and actor:
+            row = await (await app.state.db.execute(
+                "SELECT 1 FROM board_room br JOIN room r ON r.id = br.room_id"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                "   AND r.board_supervisor_session_key=? LIMIT 1",
+                (board_id, actor))).fetchone()
+            is_supervisor = row is not None
         if not is_supervisor and await _board_role(board_id, actor) != "owner":
             raise _err(403, "not_board_supervisor",
                        "只有這塊板的 Supervisor 或 owner 能送出判斷")
@@ -6381,12 +6515,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_member_or_403(board_id, actor, board=board)
+        role = await _board_member_or_403(board_id, actor, board=board)
         pad = await _scratchpad_or_404(board_id, pad_id)
         db = app.state.db
-        member = await (await db.execute(
-            "SELECT display_name, actor_kind FROM board_member"
-            " WHERE board_id=? AND actor_key=?", (board_id, actor))).fetchone()
+        member = await _board_identity(board_id, actor)
         me = {"session_key": actor,
               "kind": member["actor_kind"] if member else "",
               "display_name": member["display_name"] if member else ""}
@@ -6426,6 +6558,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "created_at": pad["created_at"],
                 "updated_at": pad["updated_at"],
                 "i_am_human": _actor_is_human(me),
+                # 🚨 **整份的 can_edit 與每一段的是兩件事。** 段落層級答的是
+                # 「這一段是不是我寫的」，答不了「我能不能往這份裡加東西」。
+                # 少了這一個欄位，client 沒有任何依據可以開放「加一段／掛
+                # 註解」，只能預設拒絕 ⇒ 畫面對**所有人**唯讀、包括 owner，
+                # 而兩邊的程式碼看起來都對，沒有一端報錯
+                # （艾斯維爾 2026-09-03：「ScratchPad 基本沒有作用」）。
+                # 判準必須跟寫入端點的門檻同源（`_board_writer_v2`）：
+                # 板要 active，角色不能是 viewer。只看角色的話，封存板會給
+                # owner 一個編輯框，按下去才 409
+                "can_edit": board["status"] == "active" and role != "viewer",
                 "blocks": out}
 
     @app.post("/api/boards/{board_id}/scratchpads/{pad_id}/blocks",

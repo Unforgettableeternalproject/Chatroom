@@ -497,3 +497,134 @@ async def test_a_note_can_actually_become_resolved(tmp_path):
 
             back = await client.post(f"{base}?unresolve=true", headers=hdr)
             assert back.status_code == 200 and back.json()["resolved"] is False
+
+
+# ── 整份的 can_edit：漏一個欄位，全部人都變成唯讀 ────────────────────
+
+async def test_the_pad_says_whether_i_may_write_into_it(tmp_path):
+    """讀一份想法板要回**整份**的 `can_edit`，不是只有每一段的。
+
+    🚨 這條測的是一個漏欄位：段落層級的 `can_edit` 答的是「這一段是不是我
+    寫的」，答不了「我能不能往這份裡加東西」。owner 讀自己的想法板時，
+    每一段都 `can_edit=True`，但「加一段」「掛註解」這些動作沒有任何欄位
+    授權——client 只好預設拒絕，於是**畫面對所有人唯讀，包括 owner**，
+    而兩邊的程式碼看起來都對，沒有任何一端報錯
+    （艾斯維爾 2026-09-03：「ScratchPad 基本沒有作用」）。
+    """
+    app, client = await _client(tmp_path, "pad-can-edit")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, _ = await _pad(client, bid, hdr)
+
+            mine = (await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
+                                     headers=hdr)).json()
+            assert mine["can_edit"] is True, "owner 讀自己的板卻不能寫"
+
+            # editor 也能寫——他丟想法用的正是這個畫面
+            bot = await _add_agent(client, bid, hdr, "claude-bot")
+            as_bot = (await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
+                                       headers=bot)).json()
+            assert as_bot["can_edit"] is True
+
+            # viewer 不能。守門結果由伺服器算，client 不自己推斷
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-eye", "role": "viewer",
+                                    "display_name": "旁觀", "actor_kind": "claude"},
+                              headers=hdr)
+            as_viewer = (await client.get(
+                f"/api/boards/{bid}/scratchpads/{pid}",
+                headers=_key("claude-eye"))).json()
+            assert as_viewer["can_edit"] is False
+
+
+async def test_an_archived_board_is_read_only_for_its_owner_too(tmp_path):
+    """板封存之後連 owner 都只能看——`can_edit` 要跟著寫入門檻走。
+
+    寫入端點擋的是 `status != 'active'`（409 board_archived）。`can_edit`
+    只看角色的話，封存板會給 owner 一個編輯框，按下去才 409。
+    """
+    app, client = await _client(tmp_path, "pad-archived")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, _ = await _pad(client, bid, hdr)
+            archived = await client.post(f"/api/boards/{bid}/archive",
+                                         headers=hdr)
+            assert archived.status_code == 200, archived.text
+            body = (await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
+                                     headers=hdr)).json()
+            assert body["can_edit"] is False
+
+
+async def test_a_human_from_the_room_is_still_a_human_on_the_pad(tmp_path):
+    """房內身分退路不能把人類降級成 agent。
+
+    🚨 `_board_role` 2026-09-03 加了「掛接房成員自動 editor」的退路之後，
+    這種人**寫得動板卻沒有 `board_member` 列**。名字與 kind 只查 board_member
+    的話 kind 是空字串 ⇒ `_actor_is_human` 為 false ⇒ 他寫下的段落被記成
+    agent 寫的，於是**他自己改不動自己寫的東西**，而沒有任何地方報錯。
+
+    kind 是守門的依據（「agent 不得改人類的段落」全靠它），不是裝飾。
+    """
+    app, client = await _client(tmp_path, "human-from-room")
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "claude-h"})).json()["id"]
+            j0 = await client.post(f"/api/rooms/{room_id}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-h",
+                "preferred_name": "艾斯維爾"})
+            hdr = {"X-Participant-Id": j0.json()["participant_id"],
+                   "X-Session-Key": "claude-h"}
+            bid = (await client.post(
+                "/api/boards",
+                json={"name": "板", "origin_room_id": room_id},
+                headers=hdr)).json()["id"]
+            pid, _ = await _pad(client, bid, hdr)
+
+            # 另一個人類，只進房、沒被加進板
+            j = await client.post(f"/api/rooms/{room_id}/join", json={
+                "kind": "human", "role": "human", "session_key": "human-2",
+                "preferred_name": "另一個人"})
+            assert j.status_code == 200, j.text
+            them = {"X-Participant-Id": j.json()["participant_id"],
+                    "X-Session-Key": "human-2"}
+
+            body = (await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
+                                     headers=them)).json()
+            assert body["can_edit"] is True
+            assert body["i_am_human"] is True, "房內的人類被當成 agent 了"
+
+            # 他寫的段落改得動——kind 記對了才有這個結果
+            add = await client.post(
+                f"/api/boards/{bid}/scratchpads/{pid}/blocks",
+                json={"content": "我寫的"}, headers=them)
+            assert add.status_code == 200, add.text
+            mine = next(b for b in (await client.get(
+                f"/api/boards/{bid}/scratchpads/{pid}",
+                headers=them)).json()["blocks"] if b["content"] == "我寫的")
+            assert mine["can_edit"] is True
+            assert mine["author_kind"] == "human"
+
+
+async def test_a_removed_member_is_not_still_a_member(tmp_path):
+    """被移除的成員不該還被當成成員拿名字與 kind。
+
+    `_board_role` 早就有 `removed_at IS NULL`，但取名字那兩處漏了——於是
+    授權說他不是成員、身分卻還查得到他，兩個答案不一致
+    （@開發Novia (除錯) 2026-09-03）。
+    """
+    app, client = await _client(tmp_path, "removed-member")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, _ = await _pad(client, bid, hdr)
+            bot = await _add_agent(client, bid, hdr, "claude-gone", "離職的")
+            await client.request("DELETE",
+                                 f"/api/boards/{bid}/members/claude-gone",
+                                 headers=hdr)
+            r = await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
+                                 headers=bot)
+            assert r.status_code == 403
+            assert r.json()["detail"]["code"] == "not_board_member"

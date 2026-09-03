@@ -139,7 +139,9 @@ async def test_detach_keeps_the_cards_and_reattach_restores_the_view(tmp_path):
             assert len(body["tasks"]) == 1, "解除掛接把卡刪掉了"
             # 已解除的房仍要出現在清單裡，帶 detached: true
             assert body["attached_rooms"] == [
-                {"id": rid, "name": "房", "status": "active", "detached": True}]
+                {"id": rid, "name": "房", "status": "active", "detached": True,
+                 # supervisor 是 per-room 的，沒指定就是 None
+                 "supervisor": None}]
 
             r = await client.post(f"/api/boards/{bid}/rooms/{rid}", headers=hdr)
             assert r.status_code == 200, r.text
@@ -166,8 +168,14 @@ async def test_a_room_cannot_hold_two_boards(tmp_path):
             assert r.json()["detail"]["code"] == "room_already_has_board"
 
 
-async def test_room_member_is_not_automatically_a_board_member(tmp_path):
-    """驗收 6：房裡的人不會自動變成板上的人。"""
+async def test_someone_from_no_room_at_all_is_still_not_a_board_member(tmp_path):
+    """房外的人仍然什麼都拿不到。
+
+    ⚠️ 這條**原本測的是相反的事**（驗收 6：房裡的人不會自動變成板上的人）。
+    艾斯維爾 2026-09-03 推翻了那條裁決——掛接房的成員自動算 editor，理由見
+    `_board_role`。所以剩下要守的界線只有一條：**沒有進任何掛接房的人**。
+    退路要是連這個都放過，`board_member` 就完全沒有意義了。
+    """
     app, client = await _client(tmp_path, "v2_acl")
     async with client:
         async with app.router.lifespan_context(app):
@@ -176,10 +184,16 @@ async def test_room_member_is_not_automatically_a_board_member(tmp_path):
             await _first_card(client, rid, owner)
             bid = await _board_id(client, rid, owner)
 
-            other = await _join(client, rid, "claude-b", "B")
-            r = await client.get(f"/api/boards/{bid}", headers=other)
+            r = await client.get(f"/api/boards/{bid}",
+                                 headers={"X-Session-Key": "claude-outsider"})
             assert r.status_code == 403
             assert r.json()["detail"]["code"] == "not_board_member"
+
+            # 進了房就算數——同一把 key，差別只在他現在在房裡
+            inside = await _join(client, rid, "claude-outsider", "路人")
+            ok = await client.get(f"/api/boards/{bid}", headers=inside)
+            assert ok.status_code == 200
+            assert ok.json()["my_role"] == "editor"
 
 
 async def test_library_lists_only_my_boards_with_counts(tmp_path):
@@ -303,7 +317,9 @@ async def test_a_board_with_no_room_can_still_hold_cards(tmp_path):
             body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
             assert "沒房也寫得下" in {o["title"] for o in body["objectives"]}
             assert body["attached_rooms"] == [
-                {"id": rid, "name": "房", "status": "active", "detached": True}]
+                {"id": rid, "name": "房", "status": "active", "detached": True,
+                 # supervisor 是 per-room 的，沒指定就是 None
+                 "supervisor": None}]
 
 
 async def test_session_key_can_come_from_header_or_query(tmp_path):
@@ -367,15 +383,18 @@ async def test_board_member_name_is_decided_by_the_first_room(tmp_path):
             assert alias["room_name"] == "B房", "房刪掉之後 hover 就靠它了"
 
 
-async def test_a_visitor_from_an_attached_room_gets_nothing(tmp_path):
-    """從掛接房走進來的人**不會**自動成為板的成員（§3.1、驗收 6）。
+async def test_a_visitor_from_an_attached_room_may_write_but_stays_off_the_roster(
+        tmp_path):
+    """從掛接房走進來的人寫得動板，但**不會被寫進成員名冊**。
 
-    這條原本測的是相反的事：自動升成 editor。那個行為讓 v1 的 room 路徑成了
-    ACL 的後門——房裡任何人寫一次板就有了寫入權，而 board-scoped 那道 403
-    明明擋著同一個人（審核用Codex 2026-09-02 實測三步）。
+    這條的歷史值得留著：它原本測「自動升成 editor」，2026-09-02 被改成測
+    相反的事（那個自動升級讓 v1 的 room 路徑成了 ACL 後門），2026-09-03 又
+    被艾斯維爾推回來——因為那道門擋掉的是「在 B 房接 A 房帶過來的卡」，
+    而那正是他要的功能。後門與正門是同一扇，差別只在誰說了算。
 
-    可用性的出口在**掛接時匯入**，那是 owner 的明示動作，不是走進來就自動
-    發生的事。
+    但**名冊不動**：`members[]` 只列明示加入的人。房內身分是動態的（離房
+    就沒了），寫進名冊會讓「誰被正式加進這塊板」與「誰現在剛好在房裡」
+    混成同一件事，而清掉前者要靠移除後者。
     """
     app, client = await _client(tmp_path, "v2_visitor")
     async with client:
@@ -388,15 +407,19 @@ async def test_a_visitor_from_an_attached_room_gets_nothing(tmp_path):
             other = await _join(client, rid, "claude-b", "B")
             r = await client.post(f"/api/rooms/{rid}/board/tasks",
                                   json={"title": "B 想寫一張"}, headers=other)
-            assert r.status_code == 403, "房裡的人不該直接寫得動板"
-            assert r.json()["detail"]["code"] == "not_board_member"
-            # 被擋下的回應要講得出是哪塊板——UI 靠它畫「你還不是成員」
-            assert r.json()["detail"]["board_id"] == bid
-            assert r.json()["detail"]["board_name"]
+            assert r.status_code == 200, r.text
 
             body = (await client.get(f"/api/boards/{bid}",
                                      headers=owner)).json()
-            assert [m["actor_key"] for m in body["members"]] == ["claude-a"]
+            assert [m["actor_key"] for m in body["members"]] == ["claude-a"],                 "房內身分不該被寫進成員名冊"
+
+            # 房外的人照樣被擋，而且 403 要講得出是哪塊板——UI 靠它畫
+            # 「這間房掛著某某板，但你還不是它的成員」
+            out = await client.get(f"/api/boards/{bid}",
+                                   headers={"X-Session-Key": "claude-out"})
+            assert out.status_code == 403
+            assert out.json()["detail"]["board_id"] == bid
+            assert out.json()["detail"]["board_name"]
 
 
 async def test_supervisor_directive_is_recorded_and_projected(tmp_path):
@@ -1145,3 +1168,152 @@ async def test_a_loose_task_on_a_board_with_no_room_does_not_crash(tmp_path):
             assert r.status_code == 200, r.text
             body = (await client.get(f"/api/boards/{bid}", headers=key)).json()
             assert [t["title"] for t in body["tasks"]] == ["隨手記一件事"]
+
+
+# ── 掛接房的成員自動算板成員（艾斯維爾 2026-09-03 推翻明示匯入）──────
+
+async def test_being_in_an_attached_room_is_enough_to_work_on_the_board(
+        tmp_path):
+    """掛接房的 active 成員自動是板的 editor。
+
+    🚨 09/02 裁決過「房裡的人不會自動變成板上的人，要 owner 明示匯入」，
+    而今天那條裁決的直接後果是：**在 B 房沒辦法接 A 房帶過來的卡**——
+    沒被手動加進板的人一律 403，跟他在哪間房無關。艾斯維爾 2026-09-03：
+    「在 A 聊天室接那塊板的人，跟在 B 聊天室要接那塊板的人理論上被視為
+    不同的實體，所以這樣的接手應該要沒有問題才對」。
+
+    連帶解掉的還有「agent 換一個 session 就對自己昨天的板變成陌生人」：
+    `board_member` 綁 session_key，而 session_key 每個 session 都會換。
+    重新進房就又算數了，不必另外做跨 session 的穩定身分。
+    """
+    app, client = await _client(tmp_path, "room-member-is-board-member")
+    async with client:
+        async with app.router.lifespan_context(app):
+            a_room = await _room(client)
+            a = await _join(client, a_room, "claude-a", "A")
+            await _first_card(client, a_room, a)
+            bid = await _board_id(client, a_room, a)
+
+            # B 房掛同一塊板。裡面的人從來沒被加進 board_member
+            b_room = await _room(client)
+            b = await _join(client, b_room, "claude-b", "B")
+            r = await client.post(f"/api/boards/{bid}/rooms/{b_room}",
+                                  headers={**a, "X-Session-Key": "claude-a"})
+            assert r.status_code == 200, r.text
+
+            body = await client.get(f"/api/boards/{bid}",
+                                    headers={**b, "X-Session-Key": "claude-b"})
+            assert body.status_code == 200, "B 房的人連看都看不到"
+            assert body.json()["my_role"] == "editor"
+
+            task = next(t for t in body.json()["tasks"])
+            claimed = await client.post(f"/api/board/tasks/{task['id']}/claim",
+                                        headers=b)
+            assert claimed.status_code == 200, claimed.text
+
+
+async def test_an_explicit_viewer_is_not_promoted_by_being_in_the_room(
+        tmp_path):
+    """明示指定的角色優先——被指成 viewer 的人不會因為在房裡就升級。
+
+    退路只補「查不到」的情形。蓋過明示角色的話，降權就變成一件做不到的
+    事，而做這個降權的人不會收到任何提示。
+    """
+    app, client = await _client(tmp_path, "explicit-viewer-wins")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, a)
+            bid = await _board_id(client, rid, a)
+
+            eye = await _join(client, rid, "claude-eye", "旁觀")
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-eye",
+                                    "role": "viewer", "display_name": "旁觀",
+                                    "actor_kind": "claude"},
+                              headers={**a, "X-Session-Key": "claude-a"})
+
+            body = (await client.get(
+                f"/api/boards/{bid}",
+                headers={**eye, "X-Session-Key": "claude-eye"})).json()
+            assert body["my_role"] == "viewer"
+            task = body["tasks"][0]
+            r = await client.post(f"/api/board/tasks/{task['id']}/claim",
+                                  headers=eye)
+            assert r.status_code == 403
+
+
+async def test_finishing_an_orphaned_card_does_not_leave_it_orphaned(tmp_path):
+    """收尾一張孤兒卡要把孤兒狀態一起收掉。
+
+    🚨 `done` ∧ `orphaned` 是一個**沒有出口的矛盾狀態**：`claim` 的 CAS 條件
+    有 `status NOT IN ('done','cancelled')` ⇒ UPDATE 恆回 0 列 ⇒ 永遠 409，
+    誰都接不了；而畫面上它還掛著「沒人在做」。
+
+    「已收尾的卡不孤兒化」這條規則原本只擋了 `_orphan_claims` 的入口，沒擋
+    **先孤兒、後完成**這個順序；修復又只跑在開機路徑（`_heal_settled_orphans`）
+    ⇒ 重啟前它是永久的（@開發Novia (除錯) 2026-09-03 DB 實證）。
+    """
+    app, client = await _client(tmp_path, "done-not-orphan")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            human = await _join(client, rid, "human-1", "艾斯維爾",
+                                role="human")
+            bot = await _join(client, rid, "claude-bot", "諾薇亞")
+            tid = await _first_card(client, rid, human)
+            await client.post(f"/api/board/tasks/{tid}/claim", headers=bot)
+            await client.post(f"/api/board/tasks/{tid}/status",
+                              json={"status": "in_progress"}, headers=bot)
+            # 持有者離房 ⇒ 卡被孤兒化
+            await client.post(f"/api/rooms/{rid}/leave", headers=bot)
+            bid = await _board_id(client, rid, human)
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=human)).json()
+            card = next(t for t in body["tasks"] if t["id"] == tid)
+            assert card["claim_state"] == "orphaned"
+
+            r = await client.post(f"/api/board/tasks/{tid}/status",
+                                  json={"status": "done"}, headers=human)
+            assert r.status_code == 200, r.text
+
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=human)).json()
+            card = next(t for t in body["tasks"] if t["id"] == tid)
+            assert card["status"] == "done"
+            assert card["claim_state"] != "orphaned", (
+                "完成了、而且沒人在做——這個組合自相矛盾，而且接不回來")
+
+
+async def test_a_board_with_no_attached_room_still_answers_to_its_members(
+        tmp_path):
+    """零掛接的板不會因為沒有房就把 owner 鎖在外面。
+
+    ⚠️ `_board_role` 的房內身分退路來源是「任一未解除掛接房的 active
+    成員」——板沒掛任何房時那個來源是空的。退路一旦被誤寫成**取代**明示
+    成員（而不是補在後面），這種板就對所有人 403，包括建立它的人。
+    剛好撞上 #2 確認的「未綁房不該唯讀」，所以這條界線要有測試釘住
+    （@開發Novia (除錯) 2026-09-03）。
+    """
+    app, client = await _client(tmp_path, "zero-attach-role")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=owner)
+
+            body = await client.get(f"/api/boards/{bid}", headers=owner)
+            assert body.status_code == 200
+            assert body.json()["my_role"] == "owner"
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "沒房也寫得下"}, headers=owner)
+            assert r.status_code == 200, r.text
+
+            # 但退路的來源沒了 ⇒ 只在房裡的人現在什麼都不是
+            await _join(client, rid, "claude-b", "B")
+            out = await client.get(f"/api/boards/{bid}",
+                                   headers={"X-Session-Key": "claude-b"})
+            assert out.status_code == 403

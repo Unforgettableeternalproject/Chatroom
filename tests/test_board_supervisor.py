@@ -285,3 +285,110 @@ async def test_a_digest_still_goes_out_when_the_supervisor_is_present(tmp_path):
         await app.state.sweep_once()
         recipients = await _digest_recipients(app, rid)
         assert len(recipients) == 1 and "監督者" in recipients[0]
+
+
+# ── 指派得做得出來：UI 手上只有 participant_id ──────────────────────
+
+async def test_appointing_by_participant_id_because_session_keys_never_leave(
+        tmp_path):
+    """指派要收得下 `participant_id`。
+
+    🚨 這條測的是一個**做不出介面**的契約缺口，不是壞掉的行為：這支端點
+    只收 `session_key`，而 `GET /api/rooms/{id}` 刻意不外流成員的
+    `session_key`（隱私）。⇒ UI 手上沒有任何可以送出去的值，指派選單
+    **根本做不出來**，於是那個對話框只能是唯讀的
+    （艾斯維爾 2026-09-03：「我無法指派 Supervisor」）。
+
+    換掉的動作在 server 做：session_key 維持不外流。
+    """
+    app, client = await _client(tmp_path, "appoint-by-pid")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        bot = await _join(client, rid, "claude-bot", "諾薇亞")
+        pid = bot["X-Participant-Id"]
+
+        # 前提：房間詳情確實不給 session_key，所以 UI 只有 participant_id
+        room = (await client.get(f"/api/rooms/{rid}", headers=owner)).json()
+        assert all("session_key" not in p for p in room["participants"])
+
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"participant_id": pid}, headers=owner)
+        assert r.status_code == 200, r.text
+        assert r.json()["display_name"] == "諾薇亞"
+        assert r.json()["in_room"] is True
+
+        # 別間房指不了他：participant_id 是**房內**身分，跨房就不是同一個人。
+        # 少了房的比對，任何管理者都能拿一個外面撿到的 id 指自己的房
+        other = (await client.post("/api/rooms", json={
+            "name": "別間", "session_key": "human-1"})).json()["id"]
+        bad = await client.post(f"/api/rooms/{other}/board/supervisor",
+                                json={"participant_id": pid},
+                                headers={"X-Session-Key": "human-1"})
+        assert bad.status_code == 404
+        assert bad.json()["detail"]["code"] == "participant_not_found"
+
+
+async def test_each_attached_room_carries_its_own_supervisor(tmp_path):
+    """v2 的板要回**每一間掛接房各自的** supervisor。
+
+    艾斯維爾 2026-09-03：「每個聊天室綁的 supervisor 可以不同，這是每個
+    room 範疇的」。板的回應只給 board-scoped 那一個的話，指派成功了膠囊
+    也不會亮——設定寫進去了、畫面看不出來，又是一次沒有人會報錯的失敗。
+    """
+    app, client = await _client(tmp_path, "per-room-sup")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        bot = await _join(client, rid, "claude-bot", "諾薇亞")
+        bid = (await client.post("/api/boards",
+                                 json={"name": "板", "origin_room_id": rid},
+                                 headers=owner)).json()["id"]
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"participant_id": bot["X-Participant-Id"]},
+                          headers=owner)
+
+        body = (await client.get(f"/api/boards/{bid}", headers=owner)).json()
+        room_entry = next(a for a in body["attached_rooms"] if a["id"] == rid)
+        assert room_entry["supervisor"] is not None
+        assert room_entry["supervisor"]["display_name"] == "諾薇亞"
+
+
+async def test_a_room_supervisor_may_send_directives(tmp_path):
+    """掛接房的 supervisor 送得出 directive。
+
+    授權只看 `board.supervisor_actor_key` 的話，per-room 指派完的人**還是
+    送不出判斷**——被指派了、卻做不了那件事，而 403 的訊息會說他不是
+    supervisor，那句話在他眼裡是錯的。
+
+    板掛多間房、每間房各有 supervisor 時，三個人都送得出：directive 是對
+    整塊板說的，沒有房的維度（諾薇亞 2026-09-03，艾斯維爾未反對）。
+    """
+    app, client = await _client(tmp_path, "room-sup-directive")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        bot = await _join(client, rid, "claude-bot", "諾薇亞")
+        worker = await _join(client, rid, "claude-worker", "米勒")
+        bid = (await client.post("/api/boards",
+                                 json={"name": "板", "origin_room_id": rid},
+                                 headers=owner)).json()["id"]
+        # 兩個 agent 都進板，否則 directive 投影不到人身上
+        for key, name in (("claude-bot", "諾薇亞"), ("claude-worker", "米勒")):
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": key, "role": "editor",
+                                    "display_name": name,
+                                    "actor_kind": "claude"}, headers=owner)
+
+        # 指派前送不出去：他還不是任何人的 supervisor
+        early = await client.post(f"/api/boards/{bid}/directives",
+                                  json={"target_actor_key": "claude-worker",
+                                        "text": "這個方向要改"}, headers=bot)
+        assert early.status_code == 403
+
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"participant_id": bot["X-Participant-Id"]},
+                          headers=owner)
+
+        ok = await client.post(f"/api/boards/{bid}/directives",
+                               json={"target_actor_key": "claude-worker",
+                                     "text": "這個方向要改"}, headers=bot)
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["delivered"] is True
