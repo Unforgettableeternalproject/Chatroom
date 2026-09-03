@@ -3606,6 +3606,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 還沒換軸的舊卡沒有板可驗，退回原本的房內身分檢查
             await _room_or_404(row["room_id"])
             me = dict(await _participant(participant_id, row["room_id"]))
+            # ⚠️ **這裡順手換軸**（艾斯維爾裁決 B，2026-09-03）。
+            #
+            # 原本只有「建卡」會 ensure，理由是改一張既有的卡不該憑空長出
+            # 一塊板。但升級之後的房**除非有人建新卡，否則永遠停在 v1 的
+            # 世界**——而那個失敗方式是安靜的：沒有人會來抱怨「我的房沒有
+            # 換軸」，他們只會覺得想法板與追蹤怪怪的
+            # （@開發Novia (除錯) 在生產 db 副本上量出來的）。
+            #
+            # 🔴 **只在「這個房真的還沒有板」時才建。** 上面那條註解講的
+            # 危險情境（改一張已經解除掛接的卡 ⇒ 靜默建一塊新板 ⇒ 契約分裂）
+            # 是**卡有 board_id 但房沒有**；這裡是**卡也沒有 board_id**，
+            # 那就是 v1 遺留，不是解除掛接。兩者不能混為一談。
+            if await _board_for_room(row["room_id"]) is None:
+                board_id = await _ensure_board_for_room(row["room_id"], me)
         me["board_id"] = board_id
         return me
 

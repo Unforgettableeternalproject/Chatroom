@@ -350,8 +350,16 @@ async def test_a_room_that_never_switched_axis_can_still_be_written_to(
             ):
                 assert r.status_code == 200, f"{label} 回了 {r.status_code}"
 
-            # 讀取一直都是好的——那正是這個 bug 難查的原因
+            # 改一張既有的卡也會把房接上板（艾斯維爾裁決 B 2026-09-03）。
+            # 原本只有「建卡」會換軸，而升級後的房除非有人建新卡就永遠停在
+            # v1——那個失敗方式是安靜的，沒有人會來抱怨自己的房沒換軸
             body = (await client.get(f"/api/rooms/{rid}/board",
                                      headers=hdr)).json()
-            assert body["board_id"] is None
+            assert body["board_id"], "改卡沒有觸發換軸"
+            bid = body["board_id"]
+            rows = await (await db.execute(
+                "SELECT id FROM board_task WHERE board_id=?", (bid,))).fetchall()
+            assert [r["id"] for r in rows] == ["t1"], (
+                "板建起來了，但既有的卡沒有跟著接上——那比不換軸更糟："
+                "板上是空的，而卡還在 v1 的世界")
             assert len(body["tasks"]) == 1
