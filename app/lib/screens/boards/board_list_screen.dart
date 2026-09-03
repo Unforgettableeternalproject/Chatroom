@@ -40,15 +40,16 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   /// 「先建板、之後再決定掛去哪」是 v2 的正常路徑（`origin_room_id` 選填），
   /// 而剛建好的零掛接板不是邊界案例，是這條路徑的起點。
   Future<void> _createBoard() async {
-    final name = await showDialog<String>(
+    final made = await showDialog<({String name, String visibility})>(
       context: context,
       builder: (_) => const _NewBoardDialog(),
     );
-    if (name == null || name.isEmpty) return;
+    if (made == null || made.name.isEmpty) return;
     try {
       final id = await ref.read(boardsApiProvider).create(
-            name: name,
+            name: made.name,
             sessionKey: ref.read(appConfigProvider).deviceKey,
+            visibility: made.visibility,
           );
       ref.invalidate(boardLibraryProvider);
       if (!mounted || id.isEmpty) return;
@@ -288,6 +289,13 @@ class _BoardTile extends StatelessWidget {
                   ),
                 ),
               ),
+              // 私人板要看得出來。**這是「別人看不看得到」的唯一線索**——
+              // 它決定的是掛得進哪種聊天室、以及房裡的人會不會在自己的
+              // 分頁上看到它，而那兩件事都不會在畫面別處出現
+              if (board.isPrivate) ...[
+                const SizedBox(width: 6),
+                const MonoLabel('私人', size: 8.5, letterSpacing: 1.0),
+              ],
               if (board.isArchived) ...[
                 const SizedBox(width: 6),
                 const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
@@ -405,6 +413,11 @@ class _NewBoardDialog extends StatefulWidget {
 class _NewBoardDialogState extends State<_NewBoardDialog> {
   final _name = TextEditingController();
 
+  /// **預設公開。** 私人板只掛得進自己開的私人聊天室，是一條窄路——
+  /// 預設走窄路的話，多數人會在掛接的時候才撞到那道閘，而那時他已經
+  /// 忘記自己選過什麼。
+  String _visibility = 'public';
+
   @override
   void dispose() {
     _name.dispose();
@@ -414,7 +427,7 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
   void _submit() {
     final v = _name.text.trim();
     if (v.isEmpty) return;
-    Navigator.of(context).pop(v);
+    Navigator.of(context).pop((name: v, visibility: _visibility));
   }
 
   @override
@@ -430,21 +443,43 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
           style: UepText.display(size: 19, color: s.inkTitle)),
       content: SizedBox(
         width: 360,
-        child: TextField(
-          controller: _name,
-          autofocus: true,
-          // 打完直接 Enter 送出——開一塊板只有一個欄位，還要移到按鈕上
-          // 按一次是多的
-          onSubmitted: (_) => _submit(),
-          // 空字串時「建立」要是灰的，不重畫的話它永遠亮著
-          onChanged: (_) => setState(() {}),
-          style: UepText.sans(size: 13, color: s.ink),
-          decoration: const InputDecoration(
-            labelText: '名稱',
-            helperText: '之後可以把聊天室掛上來，一塊板可以掛好幾間',
-            border: OutlineInputBorder(),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: _name,
+            autofocus: true,
+            // 打完直接 Enter 送出——名稱是唯一的必填欄位
+            onSubmitted: (_) => _submit(),
+            // 空字串時「建立」要是灰的，不重畫的話它永遠亮著
+            onChanged: (_) => setState(() {}),
+            style: UepText.sans(size: 13, color: s.ink),
+            decoration: const InputDecoration(
+              labelText: '名稱',
+              helperText: '之後可以把聊天室掛上來，一塊板可以掛好幾間',
+              border: OutlineInputBorder(),
+            ),
           ),
-        ),
+          const SizedBox(height: 18),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MonoLabel('誰看得到', color: s.inkSoft, letterSpacing: 1.4),
+          ),
+          const SizedBox(height: 6),
+          // 兩個選項各自把**結果**講完，而不是只給「公開／私人」兩個詞——
+          // 這裡選錯要到掛接聊天室的時候才會撞到閘，那時人已經忘了自己選過
+          _VisibilityOption(
+            label: '公開',
+            detail: '掛著它的聊天室裡的人，都會在 BOARDS 分頁看到這塊板',
+            selected: _visibility == 'public',
+            onTap: () => setState(() => _visibility = 'public'),
+          ),
+          _VisibilityOption(
+            label: '私人',
+            detail: '只有你看得到；**只能掛進你自己開的私人聊天室**，'
+                '房裡的人從聊天室進得來，但它不會出現在他們的分頁上',
+            selected: _visibility == 'private',
+            onTap: () => setState(() => _visibility = 'private'),
+          ),
+        ]),
       ),
       actions: [
         UepButton(
@@ -459,6 +494,57 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
           onPressed: _name.text.trim().isEmpty ? null : _submit,
         ),
       ],
+    );
+  }
+}
+
+/// 建板時的公開／私人選項。**兩行**：一行是名字，一行是它的實際後果。
+class _VisibilityOption extends StatelessWidget {
+  const _VisibilityOption({
+    required this.label,
+    required this.detail,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String detail;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+        decoration: BoxDecoration(
+          border: Border.all(color: selected ? UepColors.gold : s.line),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(selected ? '◉' : '○',
+              style: UepText.mono(
+                  size: 11, color: selected ? UepColors.gold : s.inkMute)),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: UepText.sans(
+                        size: 12.5,
+                        color: selected ? s.inkTitle : s.inkSoft)),
+                const SizedBox(height: 2),
+                Text(detail.replaceAll('**', ''),
+                    style: UepText.serif(
+                        size: 11, color: s.inkMute, height: 1.4)),
+              ],
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }

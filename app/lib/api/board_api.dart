@@ -358,11 +358,16 @@ class BoardsApi {
     required String name,
     required String sessionKey,
     String? originRoomId,
+    String visibility = 'public',
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/boards',
-          data: {'name': name, 'origin_room_id': ?originRoomId},
+          data: {
+            'name': name,
+            'origin_room_id': ?originRoomId,
+            'visibility': visibility,
+          },
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return (res.data?['id'] as String?) ?? '';

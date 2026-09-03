@@ -1169,6 +1169,7 @@ class BoardSummary {
     this.taskClaimed = 0,
     this.updatedAt,
     this.myRole = '',
+    this.visibility = 'public',
   });
 
   final String id;
@@ -1199,6 +1200,12 @@ class BoardSummary {
   /// owner / editor / viewer。空字串＝Hub 沒說，當唯讀處理。
   final String myRole;
 
+  /// `public` / `private`。**預設 public**：舊 Hub 不回這欄時，把板當成
+  /// 私人會在畫面上憑空長出一個使用者從未設定過的限制。
+  final String visibility;
+
+  bool get isPrivate => visibility == 'private';
+
   bool get isArchived => status == 'archived';
 
   /// 追蹤通知只能自己回來看，不會有人被叫醒。
@@ -1225,6 +1232,7 @@ class BoardSummary {
       taskClaimed: (counts['claimed'] as int?) ?? 0,
       updatedAt: json['updated_at'] as String?,
       myRole: (json['my_role'] as String?) ?? '',
+      visibility: (json['visibility'] as String?) ?? 'public',
     );
   }
 }
