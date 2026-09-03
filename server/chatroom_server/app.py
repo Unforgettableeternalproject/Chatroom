@@ -4461,8 +4461,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                 payload={"from": old, "to": body.status,
                          "title": row["title"]})
         if changed is None:
-            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("checklist", checklist_id)
+            if _row_board_id(row):
+                await _record_board_event(
+                    _row_board_id(row), seq, "checklist_status_conflict",
+                    actor=actor_key(me["session_key"]),
+                    actor_name=me["display_name"],
+                    origin_room_id=row["room_id"], item_kind="checklist",
+                    item_id=checklist_id,
+                    payload={"from": old, "to": body.status,
+                             "actual": current["status"]})
+            await _commit_with_retry(db)
             raise _err(409, "invalid_transition",
                        f"這份清單的狀態在你送出的同時被改成"
                        f"「{current['status']}」了",
@@ -4496,6 +4505,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         expect = row["status"] if expect_status is None else expect_status
         seq = await _item_seq(row)
         sets = ", ".join(f"{k}=?" for k in fields)
+        pending_event = ""
         cur = await db.execute(
             f"UPDATE board_objective SET {sets}, board_seq=?"
             " WHERE id=? AND status=? RETURNING id",
@@ -4505,15 +4515,31 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 週期的四個轉折（送審／確認／完成／打回）是**要通知的事**，
             # 與一般編輯不同（§7.3）。記在這裡而不是各端點：五個呼叫端全都
             # 經過這條路，在外面分別記的話漏掉一個不會有任何地方報錯
+            pending_event = event
+        # 🚨 **event 要記在 CAS 之後。** 記在前面的話，輸掉的那一路也留下
+        # 一筆「週期已送審」——號對得上、稽核串看起來完整，而**那件事根本
+        # 沒有發生**。這比空號更難查：空號至少看得出來少了什麼
+        # （審核用Codex-2 2026-09-03）
+        won = await cur.fetchone()
+        if won is not None and pending_event:
             await _record_board_event(
-                row["board_id"], seq, event,
+                row["board_id"], seq, pending_event,
                 actor=actor_key(actor["session_key"]) if actor else "",
                 actor_name=actor["display_name"] if actor else "",
                 origin_room_id=row["room_id"], item_kind="objective",
                 item_id=row["id"], payload={"title": row["title"]})
-        if await cur.fetchone() is None:
-            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
+        if won is None:
             current = await _board_item_or_404("objective", row["id"])
+            if row["board_id"]:
+                await _record_board_event(
+                    row["board_id"], seq, "objective_status_conflict",
+                    actor=actor_key(actor["session_key"]) if actor else "",
+                    actor_name=actor["display_name"] if actor else "",
+                    origin_room_id=row["room_id"], item_kind="objective",
+                    item_id=row["id"],
+                    payload={"attempted": event,
+                             "actual": current["status"]})
+            await _commit_with_retry(db)
             raise _err(409, "invalid_transition",
                        f"這個週期的狀態在你送出的同時被改成"
                        f"「{current['status']}」了",
@@ -4986,8 +5012,18 @@ def create_app(config: Config | None = None) -> FastAPI:
              _now(), seq, task_id),
         )
         if await cur.fetchone() is None:
-            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            # 領號已經寫進去了，不 commit 會讓下一個號重複——**而號前進了就
+            # 要有 event**，不然稽核串上是一個空號（審核用Codex-2 2026-09-03）
             current = await _board_item_or_404("task", task_id)
+            if _row_board_id(row):
+                await _record_board_event(
+                    _row_board_id(row), seq, "task_claim_conflict", actor=mine,
+                    actor_name=me["display_name"],
+                    origin_room_id=row["room_id"], item_kind="task",
+                    item_id=task_id,
+                    payload={"held_by": current["claim_name"],
+                             "claim_state": current["claim_state"]})
+            await _commit_with_retry(db)
             raise _err(409, "task_already_claimed",
                        "這張卡已經有人在做，或它已經完成／取消了",
                        claim_name=current["claim_name"],

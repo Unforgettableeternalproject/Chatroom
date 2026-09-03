@@ -225,3 +225,74 @@ async def test_failed_requests_leave_no_gap_either(tmp_path):
                 "被拒絕的請求也是發生過的事——要嘛不領號，要嘛留一筆 "
                 "conflict event，不能號被領走而沒有任何交代。"
             )
+
+
+async def test_the_cas_loser_leaves_no_gap_either(tmp_path):
+    """**真的撞在一起的那一路，也不能留下空號。**
+
+    ⚠️ 上一條走的是「狀態機把它擋下來」——那是單線程的拒絕，在領號**之前**
+    就發生了。這條走的是另一種：兩路都通過了檢查，CAS 讓其中一個輸掉，而
+    輸家**已經把號領走了**（審核用Codex-2 2026-09-03）。
+
+    兩者長得很像而性質不同：前者是「不該做的事被擋下」，後者是「該做的事
+    被別人搶先」。只驗前者的話，稽核串的洞會留在後者那一半。
+    """
+    import asyncio
+
+    app, client = await _client(tmp_path, "casrace")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "板子房", "session_key": "claude-a"})).json()["id"]
+            j = await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-a",
+                "preferred_name": "A"})
+            hdr = {"X-Participant-Id": j.json()["participant_id"]}
+            oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                     json={"title": "週期"},
+                                     headers=hdr)).json()["id"]
+            bid = (await client.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()["board_id"]
+            cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                     json={"title": "階段"},
+                                     headers=hdr)).json()["id"]
+            tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                     json={"title": "一件事"},
+                                     headers=hdr)).json()["id"]
+
+            # ① 兩路同時認領同一張卡
+            await asyncio.gather(
+                client.post(f"/api/board/tasks/{tid}/claim", headers=hdr),
+                client.post(f"/api/board/tasks/{tid}/claim", headers=hdr))
+            await client.post(f"/api/board/tasks/{tid}/status",
+                              json={"status": "in_progress"}, headers=hdr)
+
+            # ② 兩路同時把它推向不同的終點
+            await asyncio.gather(
+                client.post(f"/api/board/tasks/{tid}/status",
+                            json={"status": "done"}, headers=hdr),
+                client.post(f"/api/board/tasks/{tid}/status",
+                            json={"status": "blocked"}, headers=hdr))
+
+            # ③ 兩路同時收尾同一份清單
+            await asyncio.gather(
+                client.post(f"/api/board/checklists/{cid}/status",
+                            json={"status": "done"}, headers=hdr),
+                client.post(f"/api/board/checklists/{cid}/status",
+                            json={"status": "done"}, headers=hdr))
+
+            # ④ 兩路同時送審同一個週期
+            await asyncio.gather(
+                client.post(f"/api/board/objectives/{oid}/review",
+                            headers=hdr),
+                client.post(f"/api/board/objectives/{oid}/review",
+                            headers=hdr))
+
+            seq, events = await _seq_and_events(app, bid)
+            missing = [n for n in range(1, seq + 1) if n not in events]
+            assert not missing, (
+                f"CAS 輸家留下了空號：{missing}"
+                f"（總共領了 {seq} 個號，只有 {len(events)} 筆 event）。"
+                "輸掉的那一路已經把號領走了，要嘛把領號移到 CAS 之後，"
+                "要嘛留一筆 conflict event。"
+            )
