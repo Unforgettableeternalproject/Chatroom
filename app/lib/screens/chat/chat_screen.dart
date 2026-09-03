@@ -612,9 +612,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final identity = await ref.read(identityProvider(widget.roomId).future);
-    // 說出去了就不再是草稿。**只清這一房**——輸入列自己會清空顯示，但那是
-    // 兩份狀態，不清這裡的話下次進這個房又會把已經送出的那句話載回來
-    ref.read(composerDraftsProvider.notifier).clear(widget.roomId);
     // 只帶已上傳完成的；輸入列不讓有未完成項目時送出，這裡是第二道防線
     final attachmentIds = [
       for (final a in _pending)
@@ -632,6 +629,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             attachmentIds: attachmentIds,
           );
       _warnEmptyGroups(sent);
+      _clearDraft();
       if (mounted) {
         setState(() {
           _replyTarget = null;
@@ -656,6 +654,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             replyTo: _replyTarget?.id,
             attachmentIds: attachmentIds,
           );
+      _clearDraft();
       if (mounted) {
         setState(() {
           _replyTarget = null;
@@ -674,6 +673,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       rethrow;
     }
   }
+
+  /// 說出去了就不再是草稿。
+  ///
+  /// ⚠️ **只在送出成功之後叫它。** 送出前先清的話，POST 失敗時輸入框裡
+  /// 還看得到那句話、倉裡卻已經空了——切個房再回來就沒了，而使用者以為
+  /// 它一直在那裡（@審核用Codex-2 2026-09-02）。
+  ///
+  /// 這與「輸入列自己會清空顯示」是兩份狀態，兩份都要清：不清這裡的話，
+  /// 下次進這個房又會把已經送出的那句話載回來。
+  void _clearDraft() =>
+      ref.read(composerDraftsProvider.notifier).clear(widget.roomId);
 
   /// 從一則訊息長出一張 Task。
   ///
