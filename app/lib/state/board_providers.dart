@@ -158,7 +158,9 @@ final boardProvider =
   //
   // 水位從**這個房間目前掛的那塊板**算，不是從房間算。同一塊板掛兩間房時
   // 以房為 key 會存成兩份、各推各的水位，畫面上看起來像兩塊不同的板。
-  final known = cache.snapshotForRoom(roomId).boardSeq;
+  // ⚠️ `resumeFrom` 不是 `boardSeq`——手上一張卡都沒有時要從 0 要全量。
+  // 差別在這裡的話症狀是**永遠空白且不報錯**（2026-09-03）
+  final known = cache.snapshotForRoom(roomId).resumeFrom;
   final delta = await ref
       .watch(boardApiProvider)
       .fetch(roomId, afterBoardSeq: known, participantId: pid);
@@ -183,7 +185,7 @@ final boardByIdProvider =
   for (final rid in watched) {
     ref.watch(boardSignalProvider(rid));
   }
-  final known = cache.snapshotOf(boardId).boardSeq;
+  final known = cache.snapshotOf(boardId).resumeFrom;
   final delta = await ref.watch(boardsApiProvider).fetch(
         boardId,
         afterBoardSeq: known,
