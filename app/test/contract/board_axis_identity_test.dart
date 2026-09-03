@@ -43,6 +43,24 @@ void main() {
     expect(rec.seen.single.headers['X-Session-Key'], 'k1');
   });
 
+  test('🔴 板軸建週期走自己的端點——不是「板軸開不了週期」，'
+      '那支端點一直都在（app.py:6042）', () async {
+    final boards = BoardsApi(
+        Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = rec);
+    try {
+      await boards.addObjective('b1', sessionKey: 'k1', title: '週期');
+    } catch (_) {}
+    final req = rec.seen.single;
+    expect(req.path, '/api/boards/b1/objectives');
+    expect(req.headers['X-Session-Key'], 'k1');
+  });
+
+  test('完成卡片的捷徑不可以把 session key 弄丟——'
+      '轉發時漏掉一個具名參數不會有任何地方報錯', () async {
+    await api.completeTask('t1', sessionKey: 'k1');
+    expect(rec.seen.single.headers['X-Session-Key'], 'k1');
+  });
+
   test('建階段（checklist）認 session key——板軸要能往裡面放東西', () async {
     // Recorder 回空 body，而 addChecklist 會去解析 id ⇒ 解析會炸。
     // 這裡要釘的是**送出去的身分**，不是回應的形狀

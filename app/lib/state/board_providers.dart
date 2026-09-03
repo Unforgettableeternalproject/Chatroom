@@ -223,12 +223,13 @@ class BoardActions {
   String? get _sk =>
       roomId == null ? _ref.read(appConfigProvider).deviceKey : null;
 
-  /// 開得了新週期嗎。
+  /// 開得了新週期嗎。**兩條軸都可以。**
   ///
-  /// **板軸開不了**：Hub 的建立端點是 `/api/rooms/{rid}/board/objectives`，
-  /// 板軸沒有對應的入口。畫面要據此把按鈕收起來——留著按下去會靜默什麼
-  /// 都不發生，那比按鈕不在更糟。
-  bool get canAddObjective => roomId != null;
+  /// ⚠️ 這個 getter 曾經回 `roomId != null`——因為以為板軸沒有建立入口。
+  /// 實際上 `POST /api/boards/{bid}/objectives` 一直都在（`app.py:6042`），
+  /// 那是今天第五次「以為 server 缺、其實早就有」。留著這個 getter 是為了
+  /// 讓畫面仍有一個地方問這件事，不是為了擋。
+  bool get canAddObjective => true;
 
   void _reload() => roomId != null
       ? _ref.invalidate(boardProvider(roomId!))
@@ -290,11 +291,21 @@ class BoardActions {
   Future<String?> addObjective(String title, {String description = ''}) async {
     final pid = await _pid();
     if (pid == null && _sk == null) return null;
-    // 房軸端點：Hub 那支路徑是 `/api/rooms/{rid}/board/objectives`，
-    // 板軸沒有對應的入口 ⇒ 這條在 Library 上做不到（見 canAddObjective）
-    if (roomId == null || pid == null) return null;
-    final id = await _api.addObjective(roomId!,
-        participantId: pid, title: title, description: description);
+    // 兩條軸各有自己的建立端點：房軸 `/api/rooms/{rid}/board/objectives`
+    // （要房內身分），板軸 `/api/boards/{bid}/objectives`（要 session key）
+    final String id;
+    if (roomId != null) {
+      if (pid == null) return null;
+      id = await _api.addObjective(roomId!,
+          participantId: pid, title: title, description: description);
+    } else {
+      id = await _ref.read(boardsApiProvider).addObjective(
+            boardId!,
+            sessionKey: _sk!,
+            title: title,
+            description: description,
+          );
+    }
     _reload();
     return id;
   }

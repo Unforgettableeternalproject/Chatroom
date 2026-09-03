@@ -230,12 +230,17 @@ class BoardApi {
   /// 「完成」在使用者眼裡就是改狀態，多一條路只是多一個會漏掉守門的地方。
   Future<void> completeTask(String taskId,
           {String? participantId, String? sessionKey}) =>
-      setTaskStatus(taskId, participantId: participantId, status: 'done');
+      setTaskStatus(taskId,
+          participantId: participantId,
+          sessionKey: sessionKey,
+          status: 'done');
 
   Future<void> completeChecklist(String checklistId,
           {String? participantId, String? sessionKey}) =>
       setChecklistStatus(checklistId,
-          participantId: participantId, status: 'done');
+          participantId: participantId,
+          sessionKey: sessionKey,
+          status: 'done');
 
   /// Objective 的三段：送審 → 確認 → 完成。
   ///
@@ -342,6 +347,27 @@ class BoardsApi {
   BoardsApi(this._dio);
 
   final Dio _dio;
+
+  /// 在板上直接開一個週期。**板軸的建立入口**，權限看 `board_member`。
+  ///
+  /// 房軸那支（`/api/rooms/{rid}/board/objectives`）需要房內身分，所以從
+  /// Board Library 進來的人用不了它。少了這條，Library 上開的新板要先掛
+  /// 一間房才長得出第一條週期——而「先建板、之後再決定掛去哪」正是 v2
+  /// 的正常路徑。
+  Future<String> addObjective(
+    String boardId, {
+    required String sessionKey,
+    required String title,
+    String description = '',
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/objectives',
+          data: {'title': title, 'description': description},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return (res.data?['id'] as String?) ?? '';
+      });
 
   /// Board Library 清單。
   ///

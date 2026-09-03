@@ -609,8 +609,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
                     color: s.inkMute, letterSpacing: 2.2),
               ),
-              // 板軸開不了新週期（Hub 的建立端點在房軸上）。**收起來而不是
-              // 留著**——按下去什麼都不發生比按鈕不在更糟
               if (!_readOnly && (_actions?.canAddObjective ?? false))
                 _BarButton(
                     label: '＋ 新週期', onTap: () => _create('objective')),
@@ -1315,11 +1313,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               const SizedBox(height: 16),
               UepButton(
                   label: '＋ 新週期', onPressed: () => _create('objective')),
-            ] else if (!_readOnly && _boardOnly) ...[
-              const SizedBox(height: 14),
-              Text('週期要從掛著這塊板的聊天室裡開。',
-                  textAlign: TextAlign.center,
-                  style: UepText.sans(size: 12, color: s.inkMute)),
             ],
           ],
         ),
