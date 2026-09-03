@@ -280,8 +280,17 @@ class _MessageComposerState extends State<MessageComposer> {
     setState(() => _sending = true);
     try {
       await widget.onSend(content, _extractMentions(content));
+      // ⚠️ 清空**在 await 之後**。放前面的話送出失敗那句話就沒了
       _controller.clear();
       _hideMentions();
+    } catch (_) {
+      // 送出端已經把訊息 toast 出來了，這裡只要**不清空**。
+      //
+      // ⚠️ 沒有這個 catch 的話，那個例外會從 `_send()` 逸到 framework——
+      // `_send()` 是 fire-and-forget 叫的（Enter 鍵與按鈕都不 await），
+      // 所以它變成一個未處理的 async error：**功能上看起來正常**
+      // （字保住了、toast 也出來了），只有 log 裡多一筆沒人看的紅字
+      // （@審核用Codex-2 2026-09-03）
     } finally {
       if (mounted) setState(() => _sending = false);
     }
