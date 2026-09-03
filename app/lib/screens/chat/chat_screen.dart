@@ -1410,10 +1410,17 @@ class _HeaderAction extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.accent = false,
+    this.hint,
   });
 
   final String label;
-  final VoidCallback onTap;
+
+  /// null＝這個動作這個人做不到。**按鈕還在，只是按不動**——整個藏起來的話
+  /// 「這裡沒有這件事」與「這件事不歸你做」會長得一樣。
+  final VoidCallback? onTap;
+
+  /// 滑過去時說明為什麼按不動。做得到的動作不需要它。
+  final String? hint;
 
   /// 點亮成金色。**留給「需要你動手、而且只有你能動」的那一種**——
   /// 每個按鈕都在喊的話，就沒有一個在喊了。
@@ -1422,23 +1429,35 @@ class _HeaderAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    return InkWell(
+    final dead = onTap == null;
+    final button = InkWell(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: accent ? UepColors.gold : s.line),
+          border: Border.all(
+              color: accent
+                  ? UepColors.gold
+                  : dead
+                      ? s.hairline
+                      : s.line),
         ),
         child: Text(
           label.toUpperCase(),
           style: UepText.mono(
             size: 10,
-            color: accent ? UepColors.gold : s.inkSoft,
+            color: accent
+                ? UepColors.gold
+                : dead
+                    ? s.inkMute
+                    : s.inkSoft,
             letterSpacing: 1.4,
           ),
         ),
       ),
     );
+    // 沒有說明就不要包 Tooltip——空訊息的 Tooltip 只是多一層攔滑鼠的東西
+    return hint == null ? button : Tooltip(message: hint!, child: button);
   }
 }
 
@@ -1532,9 +1551,20 @@ class _BoardAction extends ConsumerWidget {
       hasObjectives: snap?.objectives.isNotEmpty ?? false,
     );
     if (unattached && !archived) {
+      // 掛板是**房間管理者限定**的動作（Hub `attach_board` 回
+      // 403 `not_room_admin`）。對所有人畫一顆「掛接任務板」的話，
+      // 非管理者按下去必然失敗——而這個檔案自己在溢位選單那裡就寫著
+      // 「列出來再擋，只是把一個必然失敗的按鈕擺在那裡」。
+      //
+      // 完全藏起來也不行：那會讓「這間房還沒有板」變成看不見的事實。
+      // 所以按鈕留著、按不動、講原因。
+      final admin =
+          ref.watch(roomDetailProvider(roomId)).value?.room.youAreAdmin ??
+              false;
       return _HeaderAction(
-        label: '❖ 掛接任務板',
-        onTap: () => _attach(context, ref),
+        label: admin ? '❖ 掛接任務板' : '❖ 尚無任務板',
+        hint: admin ? null : '只有房間管理者能掛接任務板',
+        onTap: admin ? () => _attach(context, ref) : null,
       );
     }
 
