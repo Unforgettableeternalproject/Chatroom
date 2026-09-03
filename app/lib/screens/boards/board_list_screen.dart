@@ -4,11 +4,14 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../core/errors/api_exception.dart';
 import '../../models/board.dart';
+import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/uep_button.dart';
 
 /// Board Library：左欄 BOARDS 分頁的內容。
 ///
@@ -32,6 +35,32 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     await ref.read(boardLibraryProvider(_status).future);
   }
 
+  /// 在 Library 直接開一塊板：**不掛任何房間**。
+  ///
+  /// 「先建板、之後再決定掛去哪」是 v2 的正常路徑（`origin_room_id` 選填），
+  /// 而剛建好的零掛接板不是邊界案例，是這條路徑的起點。
+  Future<void> _createBoard() async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const _NewBoardDialog(),
+    );
+    if (name == null || name.isEmpty) return;
+    try {
+      final id = await ref.read(boardsApiProvider).create(
+            name: name,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
+      ref.invalidate(boardLibraryProvider);
+      if (!mounted || id.isEmpty) return;
+      // 建完直接進去——下一個動作幾乎一定是往裡面放東西
+      context.go('/boards/$id');
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -51,6 +80,17 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               // 管道只有這一個——沒有它，通知留著了，但沒有任何地方會
               // 告訴他有東西留著，②A 在使用上就等於「不通知」
               const _NoticesButton(),
+              // 開一塊新的板。**這個入口從前不存在**——板只能靠「在房裡寫
+              // 第一張卡」長出來（lazy 建立），於是 BOARDS 分頁只看得到板、
+              // 開不了板，而「先開一塊板再決定掛去哪」根本走不通
+              // （艾斯維爾 2026-09-03：「等同於沒有創立板子的途徑」）。
+              // server 這邊一直是支援的，缺的只有這顆按鈕
+              IconButton(
+                tooltip: '開一塊板',
+                visualDensity: VisualDensity.compact,
+                onPressed: _createBoard,
+                icon: Icon(Icons.add, size: 17, color: s.inkMute),
+              ),
               IconButton(
                 tooltip: '重新整理',
                 visualDensity: VisualDensity.compact,
@@ -92,9 +132,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                       title: _status == 'active'
                           ? '目前沒有進行中的任務板'
                           : '沒有已封存的任務板',
+                      // 舊文案寫「在聊天室裡建立一塊板」——那在有了上面
+                      // 那顆＋之後就是**錯的指引**：它把人送回一條更長的路
                       subtitle: _status == 'active'
-                          ? '在聊天室裡建立一塊板，\n它就會留在這裡——'
-                              '房間封存了也不會跟著消失'
+                          ? '用上面的＋開一塊，或在聊天室裡寫第一張卡。\n'
+                              '板不屬於任何一間房——房間封存了也不會跟著消失'
                           : null,
                     ),
                   ]);
@@ -344,6 +386,79 @@ class _NoticesButton extends ConsumerWidget {
             ),
           ),
       ]),
+    );
+  }
+}
+
+/// 開一塊板時只問名字。
+///
+/// **刻意不在這裡問「要掛哪間房」**：板不屬於任何一間房，而剛開的板通常
+/// 還不知道要給誰用——掛接是之後在板上做的決定，塞進建立流程只會讓「我
+/// 現在還不確定」變成一個必填欄位。
+class _NewBoardDialog extends StatefulWidget {
+  const _NewBoardDialog();
+
+  @override
+  State<_NewBoardDialog> createState() => _NewBoardDialogState();
+}
+
+class _NewBoardDialogState extends State<_NewBoardDialog> {
+  final _name = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final v = _name.text.trim();
+    if (v.isEmpty) return;
+    Navigator.of(context).pop(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return AlertDialog(
+      backgroundColor: s.bgCard,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+        side: BorderSide(color: s.lineStrong),
+      ),
+      title: Text('開一塊板',
+          style: UepText.display(size: 19, color: s.inkTitle)),
+      content: SizedBox(
+        width: 360,
+        child: TextField(
+          controller: _name,
+          autofocus: true,
+          // 打完直接 Enter 送出——開一塊板只有一個欄位，還要移到按鈕上
+          // 按一次是多的
+          onSubmitted: (_) => _submit(),
+          // 空字串時「建立」要是灰的，不重畫的話它永遠亮著
+          onChanged: (_) => setState(() {}),
+          style: UepText.sans(size: 13, color: s.ink),
+          decoration: const InputDecoration(
+            labelText: '名稱',
+            helperText: '之後可以把聊天室掛上來，一塊板可以掛好幾間',
+            border: OutlineInputBorder(),
+          ),
+        ),
+      ),
+      actions: [
+        UepButton(
+          label: '取消',
+          variant: UepButtonVariant.outline,
+          small: true,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        UepButton(
+          label: '建立',
+          small: true,
+          onPressed: _name.text.trim().isEmpty ? null : _submit,
+        ),
+      ],
     );
   }
 }
