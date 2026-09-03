@@ -372,6 +372,13 @@ class BoardMemberAdd(BaseModel):
     actor_kind: str = Field(default="", max_length=20)
 
 
+class BoardVisibility(BaseModel):
+    """改板的公開／私人。命名照抄房間的 `RoomVisibility`。"""
+    model_config = ConfigDict(extra="forbid")
+
+    visibility: str = Field(pattern="^(public|private)$")
+
+
 class BoardOwnerTransfer(BaseModel):
     """把板交給別人。命名照抄房間的 `transfer_admin`，不發明新詞
     （裁定Novia 2026-09-03）。"""
@@ -3602,7 +3609,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         return row["created_by"] == me["id"] or me["role"] == "human"
 
-    async def _board_item_writer(row, participant_id: str | None):
+    async def _board_item_writer(row, participant_id: str | None,
+                                 session_key: str | None = None):
         """**改**一張既有卡的共同門檻。與 `_board_writer`（建卡用）分開。
 
         🔴 **這裡不 ensure board。** 合在一起的時候，改一張已經解除掛接的卡
@@ -3635,6 +3643,34 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await (await app.state.db.execute(
             "SELECT * FROM participant WHERE id=? AND status='active'",
             (participant_id,))).fetchone()
+        if me is None and board_id and actor_key(session_key or ""):
+            # 🔑 **板軸沒有房，也就沒有 participant_id。** Board Library 進來
+            # 的 client 手上只有 session_key——少了這條路，那些畫面上一張卡
+            # 都改不動，而 `_actor_from_headers` 的 docstring 早就寫著
+            # 「Board Library 沒有房，所以 session_key 是主要來源」
+            # （@開發Novia (UI) 2026-09-03）。
+            #
+            # ⚠️ **還是先找 participant**：他多半正在某個掛接房裡，只是從板
+            # 那條路點進來。認領會寫 `claim_participant_id`，而孤兒判定
+            # （`_orphan_claims`）是 JOIN 那一欄的——寫成 NULL 的話，他離房
+            # 之後那張卡**永遠不會被孤兒化**，看起來一直有人在做。
+            # 真的不在任何房裡才退回純 actor 身分，那時 NULL 是對的：
+            # 沒有房內存在可以失去
+            me = await (await app.state.db.execute(
+                "SELECT p.* FROM participant p"
+                " JOIN board_room br ON br.room_id = p.room_id"
+                " JOIN room r ON r.id = br.room_id AND r.status='active'"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                "   AND p.session_key=? AND p.status='active'"
+                "   AND p.ephemeral=0 ORDER BY p.last_seen_at DESC LIMIT 1",
+                (board_id, actor_key(session_key)))).fetchone()
+            if me is None:
+                who = await _board_identity(board_id, actor_key(session_key))
+                me = {"id": None, "room_id": row["room_id"],
+                      "session_key": actor_key(session_key),
+                      "display_name": who["display_name"] if who else "",
+                      "kind": who["actor_kind"] if who else "",
+                      "role": "agent"}
         if me is None:
             raise _err(403, "participant_not_active",
                        "你的身分已經失效，請重新加入聊天室",
@@ -3724,10 +3760,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             await events.notify(row["room_id"])
 
     async def _board_patch(kind: str, item_id: str, fields: dict,
-                           participant_id: str | None) -> dict:
+                           participant_id: str | None,
+                           session_key: str | None = None) -> dict:
         """PATCH 的共同實作：只寫有給的欄位，然後領一個號。"""
         row = await _board_item_or_404(kind, item_id)
-        await _board_item_writer(row, participant_id)
+        await _board_item_writer(row, participant_id, session_key)
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
         seq = await _item_seq(row)
@@ -3749,7 +3786,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "id": item_id, "board_seq": seq}
 
     async def _board_soft_delete(kind: str, item_id: str,
-                                 participant_id: str | None) -> dict:
+                                 participant_id: str | None,
+                                 session_key: str | None = None) -> dict:
         """軟刪除，**連同其下的子孫**。
 
         🔴 子孫每一列都要領到新的 board_seq（與這次操作共用同一個）。
@@ -3758,7 +3796,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board 上會留著一批已經不存在的卡，而且愈久愈多。
         """
         row = await _board_item_or_404(kind, item_id)
-        me = await _board_item_writer(row, participant_id)
+        me = await _board_item_writer(row, participant_id, session_key)
         if not _board_can_remove(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以刪除這張卡")
@@ -3826,33 +3864,37 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def patch_objective(
         objective_id: str, body: BoardObjectivePatch,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         return await _board_patch("objective", objective_id, {
             "title": body.title.strip() if body.title else None,
             "description": body.description,
             "order_index": body.order_index,
-        }, x_participant_id)
+        }, x_participant_id, x_session_key)
 
     @app.delete("/api/board/objectives/{objective_id}",
                 dependencies=[Depends(require_auth)])
     async def delete_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        return await _board_soft_delete("objective", objective_id, x_participant_id)
+        return await _board_soft_delete("objective", objective_id,
+                                        x_participant_id, x_session_key)
 
     @app.post("/api/board/objectives/{objective_id}/checklists",
               dependencies=[Depends(require_auth)])
     async def create_checklist(
         objective_id: str, body: BoardChecklistCreate,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         parent = await _board_item_or_404("objective", objective_id)
         # 🚨 授權看**板**，不看卡所在的那間房。`_board_writer(parent["room_id"])`
         # 問的是「你是不是那間房的成員」——而一塊板可以掛好幾間房，呼叫者
         # 完全可能從**另一間掛接房**建子卡。那條路徑會 403，而錯誤訊息講的是
         # 房間身分，完全對不上真正的原因（@測試Novia T11／審核用Codex-2 2026-09-02）
-        me = await _board_item_writer(parent, x_participant_id)
+        me = await _board_item_writer(parent, x_participant_id, x_session_key)
         await _assert_container_open("objective", objective_id)
         db = app.state.db
         seq = await _item_seq(parent)
@@ -3884,20 +3926,23 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def patch_checklist(
         checklist_id: str, body: BoardChecklistPatch,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         return await _board_patch("checklist", checklist_id, {
             "title": body.title.strip() if body.title else None,
             "description": body.description,
             "order_index": body.order_index,
-        }, x_participant_id)
+        }, x_participant_id, x_session_key)
 
     @app.delete("/api/board/checklists/{checklist_id}",
                 dependencies=[Depends(require_auth)])
     async def delete_checklist(
         checklist_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        return await _board_soft_delete("checklist", checklist_id, x_participant_id)
+        return await _board_soft_delete("checklist", checklist_id,
+                                        x_participant_id, x_session_key)
 
     # Q2 定案：三層強制，但「隨手記一件事」不該逼人先蓋兩層。缺的那兩層由
     # Hub 自動備妥，名字固定是「未分類」——**固定名字才找得回同一個**，
@@ -4056,13 +4101,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def create_task(
         checklist_id: str, body: BoardTaskCreate,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         parent = await _board_item_or_404("checklist", checklist_id)
         # 🚨 授權看**板**，不看卡所在的那間房。`_board_writer(parent["room_id"])`
         # 問的是「你是不是那間房的成員」——而一塊板可以掛好幾間房，呼叫者
         # 完全可能從**另一間掛接房**建子卡。那條路徑會 403，而錯誤訊息講的是
         # 房間身分，完全對不上真正的原因（@測試Novia T11／審核用Codex-2 2026-09-02）
-        me = await _board_item_writer(parent, x_participant_id)
+        me = await _board_item_writer(parent, x_participant_id, x_session_key)
         await _assert_container_open("checklist", checklist_id)
         return await _insert_task(checklist_id, parent["room_id"], body, me)
 
@@ -4178,6 +4224,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def patch_task(
         task_id: str, body: BoardTaskPatch,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """改 Task 的欄位。
 
@@ -4194,19 +4241,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         if body.assignee_participant_id is not None:
             # 「某某指定」要寫得出來，就得在指定的當下記——事後從 id 反推不出
             row = await _board_item_or_404("task", task_id)
-            me = await _board_item_writer(row, x_participant_id)
+            me = await _board_item_writer(row, x_participant_id, x_session_key)
             await _assert_assignee_in_room(body.assignee_participant_id,
                                            row["room_id"])
             fields["assigned_by"] = me["id"]
             fields["assigned_by_name"] = me["display_name"]
-        return await _board_patch("task", task_id, fields, x_participant_id)
+        return await _board_patch("task", task_id, fields, x_participant_id,
+                                  x_session_key)
 
     @app.delete("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def delete_task(
         task_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        return await _board_soft_delete("task", task_id, x_participant_id)
+        return await _board_soft_delete("task", task_id, x_participant_id,
+                                        x_session_key)
 
     # ---------- 狀態機（T-05）----------
     #
@@ -4290,9 +4340,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     async def _board_status_change(kind: str, item_id: str, target: str,
-                                   participant_id: str | None) -> dict:
+                                   participant_id: str | None,
+                                   session_key: str | None = None) -> dict:
         row = await _board_item_or_404(kind, item_id)
-        me = await _board_item_writer(row, participant_id)
+        me = await _board_item_writer(row, participant_id, session_key)
         return row, me
 
     @app.post("/api/board/tasks/{task_id}/status",
@@ -4300,6 +4351,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def set_task_status(
         task_id: str, body: BoardStatusChange,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """推 Task 的狀態。
 
@@ -4312,7 +4364,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         自己撤銷自己的宣告。
         """
         row, me = await _board_status_change("task", task_id, body.status,
-                                             x_participant_id)
+                                             x_participant_id, x_session_key)
         old = row["status"]
         if body.status == old:
             return {"ok": True, "id": task_id, "status": old, "unchanged": True}
@@ -4493,6 +4545,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def set_checklist_status(
         checklist_id: str, body: BoardStatusChange,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """Checklist：open / done / cancelled。
 
@@ -4501,7 +4554,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         與「這一段做完了」在週期驗收上是兩件完全不同的事。
         """
         row, me = await _board_status_change("checklist", checklist_id,
-                                             body.status, x_participant_id)
+                                             body.status, x_participant_id,
+                                             x_session_key)
         if body.status not in ("open", "done", "cancelled"):
             raise _err(422, "invalid_transition",
                        "Checklist 只有 open / done / cancelled 三種狀態")
@@ -4579,9 +4633,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "id": checklist_id, "status": body.status,
                 "board_seq": seq}
 
-    async def _objective_write(objective_id: str, participant_id: str | None):
+    async def _objective_write(objective_id: str, participant_id: str | None,
+                               session_key: str | None = None):
         row = await _board_item_or_404("objective", objective_id)
-        me = await _board_item_writer(row, participant_id)
+        me = await _board_item_writer(row, participant_id, session_key)
         return row, me
 
     async def _objective_set(row, fields: dict,
@@ -4649,10 +4704,12 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def review_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """送審（閘 3）。任何 active 成員都可以——送審是「我這邊做完了」的
         宣告，不是判斷。判斷在 verify，那一顆只有人類能按。"""
-        row, me = await _objective_write(objective_id, x_participant_id)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
         if row["status"] != "active":
             raise _err(409, "invalid_transition",
                        f"只有進行中的週期可以送審（目前是「{row['status']}」）",
@@ -4697,6 +4754,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def verify_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """確認無誤（閘 2、閘 4）。**只有人類成員**（Q4 定案）。
 
@@ -4705,7 +4763,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         週期就再也沒有人能確認**，那條週期會永遠卡在 review。
         閘 4 存在的目的是擋 agent 自己確認自己，不是擋人。
         """
-        row, me = await _objective_write(objective_id, x_participant_id)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
         if not _is_human(me):
             raise _err(403, "human_only",
                        "確認週期無誤只有人類成員做得到——agent 只能送審。"
@@ -4759,9 +4818,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def complete_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """完成（閘 1）。必須先 verified。"""
-        row, me = await _objective_write(objective_id, x_participant_id)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
         if not _is_human(me):
             raise _err(403, "human_only", "完成週期只有人類成員做得到")
         if row["status"] != "verified":
@@ -4790,13 +4851,15 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def reopen_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """打回。只有人類成員，且會把送審／確認的紀錄一併清掉。
 
         不清的話，下一輪送審會留著上一輪的 `reviewed_by`，閘 4 就會拿一個
         過期的送審者去比對——那是一道看起來還在、實際上比錯對象的閘。
         """
-        row, me = await _objective_write(objective_id, x_participant_id)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
         if not _is_human(me):
             raise _err(403, "human_only", "只有人類成員可以把週期打回")
         if row["status"] not in ("review", "verified", "done"):
@@ -4818,8 +4881,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def cancel_objective(
         objective_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        row, me = await _objective_write(objective_id, x_participant_id)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
         if not _is_human(me) and row["created_by"] != me["id"]:
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這個週期")
@@ -5133,6 +5198,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def claim_task(
         task_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """認領一張 Task。
 
@@ -5149,7 +5215,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         `orphaned` 也算可認領：持有者已經不在房內，就不算「同時」。
         """
         row = await _board_item_or_404("task", task_id)
-        me = await _board_item_writer(row, x_participant_id)
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
         db = app.state.db
         # 認回自己上一世領的卡要能被看見——RETURNING 給的是更新**後**的值，
         # 所以先把舊的持有者記下來
@@ -5203,6 +5269,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def release_task(
         task_id: str,
         x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         """放棄認領。持有者本人，或人類成員（強制解除，Q7 定案）。
 
@@ -5210,7 +5277,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         與「持有者不在了」是兩件事——後者要保留線索給接手的人，前者不必。
         """
         row = await _board_item_or_404("task", task_id)
-        me = await _board_item_writer(row, x_participant_id)
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
         if row["claim_state"] != "held":
             raise _err(409, "not_claimed", "這張卡目前沒有人持有")
         if not _is_claim_holder(row, me) and me["role"] != "human":
@@ -6236,6 +6303,55 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "count": len(body.items)}
+
+    @app.post("/api/boards/{board_id}/visibility",
+              dependencies=[Depends(require_auth)])
+    async def set_board_visibility(
+        board_id: str, body: BoardVisibility,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改這塊板的公開／私人。**掛在任何現存非封存房上時一律擋下。**
+
+        艾斯維爾 2026-09-03：不做自動解除掛接。順手把房解除掉的話，房裡的人
+        會在**沒有任何提示**的情況下失去一塊他們正在用的板——那是一個看不見
+        的副作用，而使用者按的只是「改成私人」。擋下來至少他知道要先做什麼。
+
+        全部解除、或掛接房全封存之後才可改（封存的房只是曾經存在）。
+        409 要**說得出是哪幾間房擋著**，否則使用者只知道「不行」。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        if await _board_role(board_id, actor) != "owner":
+            raise _err(403, "not_board_owner",
+                       "只有這塊板的 owner 能改它的公開／私人")
+        if board["visibility"] == body.visibility:
+            # 同值＝什麼都沒發生。回 200 而不是 409——重複點擊不該像錯誤
+            return {"ok": True, "visibility": body.visibility, "changed": False}
+        db = app.state.db
+        blocking = [
+            {"id": r["room_id"], "name": r["room_name"]}
+            for r in await (await db.execute(
+                "SELECT br.room_id, COALESCE(r.name, br.room_name) AS room_name"
+                " FROM board_room br"
+                " JOIN room r ON r.id = br.room_id AND r.status='active'"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                " ORDER BY br.attached_at", (board_id,))).fetchall()]
+        if blocking:
+            raise _err(409, "board_still_attached",
+                       "這塊板還掛在聊天室上——先解除掛接再改公開／私人",
+                       rooms=blocking)
+        seq = await _next_seq_for_board(board_id)
+        await db.execute("UPDATE board SET visibility=?, updated_at=?,"
+                         " board_seq=? WHERE id=?",
+                         (body.visibility, _now(), seq, board_id))
+        await _record_board_event(board_id, seq, "visibility_changed",
+                                  actor=actor,
+                                  payload={"from": board["visibility"],
+                                           "to": body.visibility})
+        await _commit_with_retry(db)
+        return {"ok": True, "visibility": body.visibility, "changed": True,
+                "board_seq": seq}
 
     @app.post("/api/boards/{board_id}/owner",
               dependencies=[Depends(require_auth)])

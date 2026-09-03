@@ -336,3 +336,158 @@ async def test_an_owner_who_only_lives_in_an_archived_room_counts_as_gone(
                                    headers=host)
             assert ok.status_code == 200, ok.text
             assert ok.json()["had_owner"] is True
+
+
+async def test_visibility_can_only_change_while_the_board_hangs_nowhere(
+        tmp_path):
+    """掛在任何現存非封存房上時，一律擋下改可見性（艾斯維爾 2026-09-03）。
+
+    **不做自動解除掛接。** 公開改私人時順手把房解除掉的話，房裡的人會在
+    沒有任何提示的情況下失去一塊他們正在用的板——那是一個看不見的副作用，
+    而使用者按的只是「改成私人」。擋下來至少他知道自己要先做什麼。
+
+    全部解除、或掛接房全封存之後才可改（封存的房只是曾經存在）。
+    """
+    app, client = await _client(tmp_path, "visibility-change")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            b = await _join(client, rid, "claude-b", "B")
+            bid = await _board(client, a, room=rid)
+
+            no = await client.post(f"/api/boards/{bid}/visibility",
+                                   json={"visibility": "private"}, headers=a)
+            assert no.status_code == 409
+            detail = no.json()["detail"]
+            assert detail["code"] == "board_still_attached"
+            # 要說得出**是哪幾間房**擋著，否則使用者只知道「不行」
+            assert detail["rooms"] == [{"id": rid, "name": "房"}]
+
+            # 非 owner 更不行——即使板已經沒掛房
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=a)
+            nope = await client.post(f"/api/boards/{bid}/visibility",
+                                     json={"visibility": "private"}, headers=b)
+            assert nope.status_code == 403
+
+            ok = await client.post(f"/api/boards/{bid}/visibility",
+                                   json={"visibility": "private"}, headers=a)
+            assert ok.status_code == 200, ok.text
+            assert ok.json()["visibility"] == "private"
+
+            # 同值再送一次＝什麼都沒發生，不該長得像錯誤
+            same = await client.post(f"/api/boards/{bid}/visibility",
+                                     json={"visibility": "private"}, headers=a)
+            assert same.status_code == 200
+            assert same.json()["changed"] is False
+
+
+async def test_an_archived_room_does_not_block_the_visibility_change(tmp_path):
+    """掛接房全封存之後就改得動——封存的房「只是曾經存在」。"""
+    app, client = await _client(tmp_path, "visibility-archived-room")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, room=rid)
+            assert (await client.post(f"/api/boards/{bid}/visibility",
+                                      json={"visibility": "private"},
+                                      headers=a)).status_code == 409
+
+            await client.post(f"/api/rooms/{rid}/archive", headers=a)
+
+            ok = await client.post(f"/api/boards/{bid}/visibility",
+                                   json={"visibility": "private"}, headers=a)
+            assert ok.status_code == 200, ok.text
+
+
+# ── 板軸：手上只有 session_key 也動得了卡 ────────────────────────────
+
+async def test_cards_can_be_worked_on_with_only_a_session_key(tmp_path):
+    """卡片端點要認 `X-Session-Key`，不能只認 `X-Participant-Id`。
+
+    🚨 板軸**沒有房，也就沒有 participant_id**。Board Library 進來的 client
+    手上只有 session_key ⇒ 那些畫面上一張卡都改不動，而
+    `_actor_from_headers` 的 docstring 早就寫著「Board Library 沒有房，
+    所以 session_key 是主要來源」——底層一直支援，是這批端點沒去拿
+    （@開發Novia (UI) 2026-09-03）。
+
+    「＋ 開一塊板」上線之後，零掛接板是**正常狀態**，這條路徑天天走。
+    """
+    app, client = await _client(tmp_path, "cards-by-session-key")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, room=rid)
+            only_key = {"X-Session-Key": "claude-a"}   # 刻意不帶 participant
+
+            oid = (await client.post(f"/api/boards/{bid}/objectives",
+                                     json={"title": "週期"},
+                                     headers=only_key)).json()["id"]
+            cid = (await client.post(
+                f"/api/board/objectives/{oid}/checklists",
+                json={"title": "清單"}, headers=only_key)).json()["id"]
+            tid = (await client.post(
+                f"/api/board/checklists/{cid}/tasks",
+                json={"title": "卡"}, headers=only_key)).json()["id"]
+
+            for path, body in (
+                    (f"/api/board/tasks/{tid}/claim", None),
+                    (f"/api/board/tasks/{tid}/status", {"status": "in_progress"}),
+                    (f"/api/board/tasks/{tid}/status", {"status": "done"})):
+                r = await client.post(path, json=body, headers=only_key)
+                assert r.status_code == 200, (path, r.text)
+
+            r = await client.patch(f"/api/board/tasks/{tid}",
+                                   json={"title": "改過的卡"}, headers=only_key)
+            assert r.status_code == 200, r.text
+
+            # 房外的人照樣被擋——放寬的是身分來源，不是權限
+            no = await client.patch(f"/api/board/tasks/{tid}",
+                                    json={"title": "路人改的"},
+                                    headers={"X-Session-Key": "claude-out"})
+            assert no.status_code == 403
+
+
+async def test_a_claim_from_the_board_axis_still_orphans_when_he_leaves(
+        tmp_path):
+    """從板軸認領的卡，持有者離房之後**照樣會被孤兒化**。
+
+    ⚠️ 孤兒判定（`_orphan_claims`）是 JOIN `claim_participant_id` 的。板軸
+    的呼叫者沒有 participant_id，若就這樣寫成 NULL，他離房之後那張卡**永遠
+    不會被孤兒化**——畫面上一直有人在做，而那個人早就走了。
+
+    所以身分解析要**先找 participant**（他多半正在某個掛接房裡，只是從板那
+    條路點進來），真的不在任何房裡才退回純 actor 身分——那時 NULL 才是對的，
+    因為沒有房內存在可以失去。
+    """
+    app, client = await _client(tmp_path, "board-axis-claim-orphans")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            b = await _join(client, rid, "claude-b", "B")
+            bid = await _board(client, a, room=rid)
+            oid = (await client.post(f"/api/boards/{bid}/objectives",
+                                     json={"title": "週期"},
+                                     headers=a)).json()["id"]
+            cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                     json={"title": "清單"},
+                                     headers=a)).json()["id"]
+            tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                     json={"title": "卡"},
+                                     headers=a)).json()["id"]
+
+            # B 從板軸認領——只帶 session_key
+            r = await client.post(f"/api/board/tasks/{tid}/claim",
+                                  headers={"X-Session-Key": "claude-b"})
+            assert r.status_code == 200, r.text
+
+            await client.post(f"/api/rooms/{rid}/leave", headers=b)
+
+            body = (await client.get(f"/api/boards/{bid}", headers=a)).json()
+            card = next(t for t in body["tasks"] if t["id"] == tid)
+            assert card["claim_state"] == "orphaned", (
+                "板軸認領的卡在持有者離房後沒有被孤兒化——畫面上會一直"
+                "顯示有人在做")
