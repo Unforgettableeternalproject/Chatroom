@@ -27,6 +27,8 @@ class BoardTaskCard extends StatelessWidget {
     this.onTap,
     this.onClaim,
     this.onRelease,
+    this.onToggleWatch,
+    this.watchBlockedReason = '',
   });
 
   final BoardTask task;
@@ -55,6 +57,14 @@ class BoardTaskCard extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onClaim;
   final VoidCallback? onRelease;
+
+  /// 切換追蹤。`null` ＝這張卡現在不能追（唯讀、或這塊板沒有掛接房）。
+  final VoidCallback? onToggleWatch;
+
+  /// 不能追的原因。**有原因就要說出來**——一顆灰掉沒有解釋的按鈕，
+  /// 使用者會一直點它，然後以為壞了。裁決 #392 ③ 要的是「明確擋下」，
+  /// 而不是「可以追但收不到」：後者要等到卡完成才發現，而那時他已經在等了。
+  final String watchBlockedReason;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +141,14 @@ class BoardTaskCard extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 8),
+        _WatchToggle(
+          watching: task.watching,
+          count: task.watcherCount,
+          onTap: onToggleWatch,
+          blockedReason: watchBlockedReason,
+        ),
+        const SizedBox(width: 8),
         // 狀態徽章。⚠️ 孤兒不改它——變的是人不是進度
         _StatusBadge(status: task.status),
       ],
@@ -585,6 +602,65 @@ class _TinyAction extends StatelessWidget {
         child: Text(
           label,
           style: UepText.mono(size: 8.5, color: c, letterSpacing: 1.0),
+        ),
+      ),
+    );
+  }
+}
+
+/// 追蹤的開關與「有幾個人在等」。
+///
+/// 兩件事擠在同一顆小元件上是刻意的：**追蹤者關心「我有沒有在等」，
+/// 認領者關心「有幾個人在等我」**，而那是同一張卡上的同一個數字。
+/// 拆成兩處的話，認領者要多看一個地方才知道自己卡住了誰。
+class _WatchToggle extends StatelessWidget {
+  const _WatchToggle({
+    required this.watching,
+    required this.count,
+    required this.onTap,
+    required this.blockedReason,
+  });
+
+  final bool watching;
+  final int count;
+  final VoidCallback? onTap;
+  final String blockedReason;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    // 不能追、也沒有人在等 ⇒ 整顆不畫。灰掉一顆永遠不能按的按鈕，
+    // 在一塊本來就不支援追蹤的板上只是噪音
+    if (onTap == null && count == 0 && blockedReason.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final color = watching ? UepColors.gold : s.inkMute;
+    final chip = Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(watching ? Icons.notifications_active : Icons.notifications_none,
+          size: 13, color: onTap == null ? s.inkMute : color),
+      if (count > 0) ...[
+        const SizedBox(width: 3),
+        Text('$count',
+            style: UepText.mono(size: 9, letterSpacing: .8, color: color)),
+      ],
+    ]);
+    if (onTap == null) {
+      // ⚠️ 原因走 Tooltip：桌面 hover、行動端長按都拿得到，而它不佔版面。
+      // 完全不解釋的話，使用者只看到一顆按不動的鈴鐺
+      return Tooltip(
+        message: blockedReason.isEmpty ? '現在不能追蹤這張卡' : blockedReason,
+        child: Opacity(opacity: .4, child: chip),
+      );
+    }
+    return Tooltip(
+      message: watching
+          ? '取消追蹤。已經送到收件匣的通知不會收回'
+          : '追蹤：它完成、取消或重新打開時通知我',
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+          child: chip,
         ),
       ),
     );

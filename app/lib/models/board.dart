@@ -284,6 +284,8 @@ class BoardTask {
     this.claimSessionKey = '',
     this.claimName = '',
     this.claimActorKey = '',
+    this.watcherCount = 0,
+    this.watching = false,
     this.claimKind = '',
     this.claimState = '',
     this.claimedAt,
@@ -332,6 +334,14 @@ class BoardTask {
   /// 查；**比對「是不是同一個人」只能用它**，用名字比會在改名或跨房時
   /// 靜默判錯。
   final String claimActorKey;
+
+  /// 有幾個人在等這張卡。**認領者該知道自己卡住了誰**——這個數字不放在
+  /// 卡上的話，那件事就只有追蹤者自己知道。
+  final int watcherCount;
+
+  /// 我自己在不在追蹤。按鈕的狀態靠它，不靠本機記憶——本機記的那份在
+  /// 換裝置、重開 App 之後就不對了，而按鈕會顯示成錯的那一邊。
+  final bool watching;
 
   /// 認領當下的 kind（claude / codex / human / other）。與 [claimName] 同一個
   /// 理由存快照：持有者離場後 participant 查不回種類，而卡片要畫他的色軸。
@@ -438,6 +448,8 @@ class BoardTask {
     claimSessionKey: (json['claim_session_key'] as String?) ?? '',
     claimName: (json['claim_name'] as String?) ?? '',
     claimActorKey: (json['claim_actor_key'] as String?) ?? '',
+    watcherCount: (json['watcher_count'] as int?) ?? 0,
+    watching: (json['watching'] as bool?) ?? false,
     claimKind: (json['claim_kind'] as String?) ?? '',
     claimState: (json['claim_state'] as String?) ?? '',
     claimedAt: json['claimed_at'] as String?,

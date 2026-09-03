@@ -7,6 +7,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
+import '../../state/scratchpad_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/board_task_card.dart';
 import '../../widgets/empty_error_states.dart';
@@ -1012,7 +1013,52 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 () => _actions!
                     .release(t.id))
             : null,
+        // 零掛接房的板**不支援追蹤**（裁決 #392 ③）。停用並說明原因，
+        // 不是讓他追得成然後永遠等不到——「可以追但收不到」比「不能追」
+        // 糟得多，前者要等到卡完成才發現，而那時他已經在等了
+        onToggleWatch: _canWatch(snap) ? () => _toggleWatch(t) : null,
+        watchBlockedReason: _watchBlockedReason(snap),
       );
+
+  /// 追蹤要有落點。板上沒有任何活著的掛接房時，通知沒有地方可以送。
+  bool _canWatch(BoardSnapshot snap) =>
+      _boardIdOrNull != null && !snap.isArchived && snap.liveRooms.isNotEmpty;
+
+  String _watchBlockedReason(BoardSnapshot snap) {
+    if (_boardIdOrNull == null) return '';
+    if (snap.isArchived) return '這塊板已經封存，追蹤不會再有任何動靜';
+    if (snap.liveRooms.isEmpty) {
+      // ⚠️ 講的是「這塊板沒有聊天室」，**不是「你不在房裡」**。
+      // 後者是另一件事（人不在房裡時通知會留著，回來就知道），
+      // 兩件事用同一句話講，人會以為自己離開房間就追蹤失效了
+      return '這塊板還沒有掛接任何聊天室，通知沒有地方可以送。'
+          '掛一間房上來就可以追蹤了';
+    }
+    return '';
+  }
+
+  Future<void> _toggleWatch(BoardTask t) async {
+    final api = ref.read(watchApiProvider);
+    final key = ref.read(appConfigProvider).deviceKey;
+    try {
+      if (t.watching) {
+        await api.unwatch(_boardIdOrNull!,
+            sessionKey: key, itemKind: 'task', itemId: t.id);
+      } else {
+        await api.watch(_boardIdOrNull!,
+            sessionKey: key, itemKind: 'task', itemId: t.id);
+      }
+      // **不做樂觀更新。** watch/unwatch 會推進 board_seq，重拉就會拿到
+      // 正確的 watching 與 watcher_count——自己先改的話，失敗時畫面會
+      // 停在一個「看起來成功了」的狀態
+      _reloadBoard();
+      ref.invalidate(watchNoticesProvider);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
 
   /// 「未分類」那一層：**只藏中間那格，卡片平鋪在週期底下**（艾斯維爾裁
   /// 決 #13）。整個週期藏掉會讓人找不到自己隨手記的東西。
