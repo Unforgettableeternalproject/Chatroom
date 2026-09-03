@@ -5606,9 +5606,23 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         # 孤兒卡以 actor_key 認，跨房都算——這正是 v2 的重點：離開其中一間
         # 房不等於放棄這塊板上的工作
+        #
+        # 🔑 **actor_key 空的退回 session_key**，判準與 `_orphan_claims`
+        # 完全一致。H2 換身分軸時**沒有回填存量資料**：DB 裡舊卡的
+        # `claim_actor_key` 一律是空字串，身分只留在 `claim_session_key`。
+        # 直接比 `claim_actor_key` 的話，同一份資料在兩條路上會給出相反的
+        # 答案——`_orphan_claims` 判得出它是誰的、照樣標成孤兒，這裡卻一張
+        # 也撈不到。畫面上就是「1 張卡的持有者已不在房內」配一份空的可接手
+        # 清單，而兩邊都不會報錯（@開發Novia (除錯) 2026-09-03 DB 實證）。
+        #
+        # 回退的**方向**要守住：兩欄都有值時以 actor_key 為準。反過來寫或
+        # 把兩欄 OR 起來也能讓「撈得到」的測試過，但那樣一張卡會同時屬於
+        # 兩個身分，等於把別人的認領交到你手上
         cur = await db.execute(
             "SELECT id, title, orphaned_at, claim_name FROM board_task"
-            " WHERE board_id=? AND claim_state='orphaned' AND claim_actor_key=?"
+            " WHERE board_id=? AND claim_state='orphaned'"
+            " AND COALESCE(NULLIF(TRIM(claim_actor_key), ''),"
+            "              TRIM(claim_session_key)) = ?"
             " AND deleted=0 ORDER BY board_seq", (board_id, actor))
         reclaimable = [dict(r) for r in await cur.fetchall()]
 
