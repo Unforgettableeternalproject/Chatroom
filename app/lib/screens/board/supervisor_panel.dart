@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -590,6 +591,10 @@ class _RoomSupervisorSection extends ConsumerWidget {
         ref.watch(roomDetailProvider(roomId)).value?.room.youAreAdmin ?? false;
     final sup = attached?.supervisor;
     final departed = attached?.supervisorDeparted ?? false;
+    // 我是不是這間房的 supervisor。人類的 actor_key 就是 deviceKey
+    final iAmSupervisor = sup != null &&
+        !departed &&
+        sup.actorKey == ref.read(appConfigProvider).deviceKey;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Align(
@@ -620,6 +625,20 @@ class _RoomSupervisorSection extends ConsumerWidget {
                       style: UepText.serif(size: 11.5, color: UepColors.gold)),
               ],
             ),
+          ),
+        ],
+        // 追蹤介面的入口。**supervisor 本人與房間管理者才看得到**——
+        // 它是「監察」用的視角，對其他成員來說只是同一批卡換個排法
+        if (canAssign || iAmSupervisor) ...[
+          const SizedBox(width: 8),
+          UepButton(
+            label: '誰在做什麼',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () {
+              Navigator.of(context).pop();
+              context.go('/rooms/$roomId/board/track');
+            },
           ),
         ],
         if (canAssign) ...[

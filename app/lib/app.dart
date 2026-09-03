@@ -8,6 +8,7 @@ import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
+import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
@@ -126,6 +127,14 @@ GoRouter buildRouter(bool Function() isConfigured) {
                           roomId: state.pathParameters['roomId']!,
                           padId: state.pathParameters['padId']!,
                         ),
+                      ),
+                      // Supervisor 的追蹤介面。掛在房底下是因為它問的是
+                      // 「**這間房裡**誰在做什麼」——Supervisor 是 per-room
+                      // 的，板軸上沒有「這一間」可言
+                      GoRoute(
+                        path: 'track',
+                        builder: (context, state) => SupervisorTrackScreen(
+                            roomId: state.pathParameters['roomId']!),
                       ),
                     ],
                   ),
