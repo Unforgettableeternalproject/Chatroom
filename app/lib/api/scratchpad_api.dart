@@ -161,6 +161,29 @@ class ScratchpadApi {
           options: _h(sessionKey),
         );
       });
+
+  /// 把一則註解標成已處理（[unresolve] 收回）。
+  ///
+  /// ⚠️ `unresolve` 走 **query**（Hub 那端是 `unresolve: bool = False`，
+  /// 沒有 BaseModel 包著的原始型別一律收 query）。
+  ///
+  /// 有這條之前，「N 則未處理」只會往上長——**有狀態就要有轉移，
+  /// 不然那個狀態是假的**。
+  Future<bool> resolveNote(
+    String boardId,
+    String padId,
+    String noteId, {
+    required String sessionKey,
+    bool unresolve = false,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/scratchpads/$padId/notes/$noteId/resolve',
+          queryParameters: {if (unresolve) 'unresolve': true},
+          options: _h(sessionKey),
+        );
+        return (res.data?['resolved'] as bool?) ?? !unresolve;
+      });
 }
 
 /// 卡片追蹤與跨板收件匣。

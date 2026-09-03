@@ -132,4 +132,55 @@ void main() {
       expect(t.watcherCount, 3);
     });
   });
+
+  _deliveryMode();
+}
+/// `delivery_mode`（Hub `c94daeb` 起）。
+///
+/// ⚠️ 這一組守的是**「掛 1 房」與「掛 1 房但沒有一間活著」不能長得一樣**。
+/// 後者表示追蹤者不會再被叫醒，而那是持續狀態，不是閃過去的提示。
+void _deliveryMode() {
+  group('delivery_mode', () {
+    test('Hub 說 inbox_only 就是 inbox_only', () {
+      final b = BoardSummary.fromJson({
+        'id': 'b1',
+        'attached_room_count': 1,
+        'live_room_count': 0,
+        'delivery_mode': 'inbox_only',
+      });
+      expect(b.inboxOnly, isTrue);
+    });
+
+    test('Hub 說 room_and_inbox 就不標降級，即使房數看起來像', () {
+      // 聽 Hub 的，不自己推。自己推的話兩邊的規則會漂移，
+      // 而漂移的那一半沒有人在看
+      final b = BoardSummary.fromJson({
+        'id': 'b1',
+        'attached_room_count': 1,
+        'live_room_count': 0,
+        'delivery_mode': 'room_and_inbox',
+      });
+      expect(b.inboxOnly, isFalse);
+    });
+
+    test('舊 Hub 不回這欄時才退回用房數推', () {
+      expect(
+        BoardSummary.fromJson({
+          'id': 'b1',
+          'attached_room_count': 2,
+          'live_room_count': 0,
+        }).inboxOnly,
+        isTrue,
+      );
+    });
+
+    test('全新的空板不算降級——那不是降級，是還沒開始', () {
+      // attached_room_count 也是 0 的話，用 live==0 推會把每一塊新板
+      // 都標成「通知要自己來看」，而那句話對它毫無意義
+      expect(
+        BoardSummary.fromJson({'id': 'b1'}).inboxOnly,
+        isFalse,
+      );
+    });
+  });
 }

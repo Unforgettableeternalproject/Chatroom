@@ -105,6 +105,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             onCancel: () => setState(() => _editing = null),
             onSave: (text) => _save(b, text),
             onNote: pad.canEdit ? (text) => _note(b, text) : null,
+            onResolveNote:
+                pad.canEdit ? (id, undo) => _resolveNote(id, undo) : null,
             onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
           ),
         if (pad.canEdit) ...[
@@ -231,6 +233,28 @@ class _PadBodyState extends ConsumerState<_PadBody> {
     }
   }
 
+  /// 把一則註解標成已處理（或收回）。
+  ///
+  /// ⚠️ **有這條之前，「N 則未處理」只會往上長**——一個只會增加的計數器，
+  /// 第三天就沒有人看了，跟永遠亮著的紅點是同一件事。
+  /// 有狀態就要有轉移，不然那個狀態是假的（@審核用Codex-2 #500）。
+  Future<void> _resolveNote(String noteId, bool undo) async {
+    try {
+      await ref.read(scratchpadApiProvider).resolveNote(
+            widget.boardId,
+            widget.pad.id,
+            noteId,
+            sessionKey: _sessionKey,
+            unresolve: undo,
+          );
+      _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   Future<void> _delete(ScratchpadBlock b) async {
     try {
       await ref.read(scratchpadApiProvider).deleteBlock(
@@ -258,6 +282,7 @@ class _BlockCard extends StatefulWidget {
     required this.onCancel,
     required this.onSave,
     required this.onNote,
+    required this.onResolveNote,
     required this.onDelete,
   });
 
@@ -271,6 +296,10 @@ class _BlockCard extends StatefulWidget {
   /// 的話，POST 失敗時 toast 跳出來，而使用者剛打的那句意見已經沒了
   /// （@審核用Codex-2 2026-09-03）。
   final Future<void> Function(String)? onNote;
+
+  /// `(noteId, undo)`。收回也走同一條——**標錯了要有路可以退**，
+  /// 不然人會為了怕標錯而乾脆不標，那個數字就又回到只增不減。
+  final void Function(String, bool)? onResolveNote;
   final VoidCallback? onDelete;
 
   @override
@@ -402,20 +431,39 @@ class _BlockCardState extends State<_BlockCard> {
             for (final n in b.notes)
               Padding(
                 padding: const EdgeInsets.only(top: 6, left: 18),
-                child: Text.rich(TextSpan(children: [
-                  TextSpan(
-                    text: '${n.authorName}：',
-                    style: UepText.mono(size: 9, color: s.inkMute),
-                  ),
-                  TextSpan(
-                    text: n.content,
-                    style: UepText.serif(
-                      size: 12,
-                      height: 1.45,
-                      color: n.resolved ? s.inkMute : s.inkSoft,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text.rich(TextSpan(children: [
+                        TextSpan(
+                          text: '${n.authorName}：',
+                          style: UepText.mono(size: 9, color: s.inkMute),
+                        ),
+                        TextSpan(
+                          text: n.content,
+                          // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
+                          // 起來的話，人會找不到自己剛剛處理的是哪一則
+                          style: UepText.serif(
+                            size: 12,
+                            height: 1.45,
+                            color: n.resolved ? s.inkMute : s.inkSoft,
+                          ).copyWith(
+                            decoration: n.resolved
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                      ])),
                     ),
-                  ),
-                ])),
+                    if (widget.onResolveNote != null)
+                      _Tiny(
+                        label: n.resolved ? '收回' : '處理掉',
+                        onTap: () =>
+                            widget.onResolveNote!(n.id, n.resolved),
+                      ),
+                  ],
+                ),
               ),
             if (widget.onNote != null) ...[
               const SizedBox(height: 6),

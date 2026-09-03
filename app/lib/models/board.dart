@@ -1109,6 +1109,8 @@ class BoardSummary {
     this.name = '',
     this.status = 'active',
     this.attachedRoomCount = 0,
+    this.liveRoomCount = 0,
+    this.deliveryMode = '',
     this.taskTotal = 0,
     this.taskDone = 0,
     this.taskClaimed = 0,
@@ -1123,6 +1125,19 @@ class BoardSummary {
   final String status;
 
   final int attachedRoomCount;
+
+  /// **還活著**的掛接房。與 [attachedRoomCount] 不同：封存的房仍然掛著，
+  /// 但通知送不進去。兩個數字一樣時畫面沒差，不一樣的時候差的正是
+  /// 「有沒有人會被叫醒」。
+  final int liveRoomCount;
+
+  /// `room_and_inbox` / `inbox_only`。Hub 算好的**現值**，不是事件。
+  ///
+  /// ⚠️ 不要自己用 `liveRoomCount == 0` 推——那是在猜 Hub 的規則，而
+  /// 規則漂移的那一半沒有人在看。舊 Hub 不回這欄時是空字串，那時才退回
+  /// 用房數判斷（見 [inboxOnly]）。
+  final String deliveryMode;
+
   final int taskTotal;
   final int taskDone;
   final int taskClaimed;
@@ -1132,6 +1147,15 @@ class BoardSummary {
   final String myRole;
 
   bool get isArchived => status == 'archived';
+
+  /// 追蹤通知只能自己回來看，不會有人被叫醒。
+  ///
+  /// Hub 說了就聽 Hub 的；舊 Hub 沒說時才退回用「有沒有活著的房」推——
+  /// **而且要求 `attachedRoomCount > 0`**，否則一塊全新的空板也會被標成
+  /// 降級，那不是降級，是還沒開始。
+  bool get inboxOnly => deliveryMode.isEmpty
+      ? (attachedRoomCount > 0 && liveRoomCount == 0)
+      : deliveryMode == 'inbox_only';
   bool get canEdit => myRole == 'owner' || myRole == 'editor';
 
   factory BoardSummary.fromJson(Map<String, dynamic> json) {
@@ -1141,6 +1165,8 @@ class BoardSummary {
       name: (json['name'] as String?) ?? '',
       status: (json['status'] as String?) ?? 'active',
       attachedRoomCount: (json['attached_room_count'] as int?) ?? 0,
+      liveRoomCount: (json['live_room_count'] as int?) ?? 0,
+      deliveryMode: (json['delivery_mode'] as String?) ?? '',
       taskTotal: (counts['total'] as int?) ?? 0,
       taskDone: (counts['done'] as int?) ?? 0,
       taskClaimed: (counts['claimed'] as int?) ?? 0,

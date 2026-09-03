@@ -260,6 +260,18 @@ class _BoardTile extends StatelessWidget {
                 text: '${board.attachedRoomCount} 房',
                 color: s.inkMute,
               ),
+              // ⚠️ **「掛 1 房」與「掛 1 房但沒有一間活著」在畫面上不能長得
+              // 一樣。** 後者表示追蹤者不會再被叫醒，只能自己回來看，而那是
+              // 一個會持續下去的狀態（裁決 #431），不是一個閃過去的提示。
+              // 封存最後一間活房正是製造這個狀態的路徑
+              if (board.inboxOnly) ...[
+                const SizedBox(width: 10),
+                _Meta(
+                  glyph: '⚑',
+                  text: '通知要自己來看',
+                  color: UepColors.gold,
+                ),
+              ],
               const SizedBox(width: 10),
               _Meta(
                 glyph: '✓',

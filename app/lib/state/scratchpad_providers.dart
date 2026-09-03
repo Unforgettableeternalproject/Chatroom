@@ -42,7 +42,15 @@ String scratchpadKey(String boardId, String padId) => '$boardId/$padId';
 final watchNoticesProvider =
     FutureProvider<({List<WatchNotice> notices, int unread})>((ref) {
   final key = ref.watch(appConfigProvider).deviceKey;
-  return ref.watch(watchApiProvider).notices(sessionKey: key);
+  // ⚠️ **要已讀的也拿回來**（`unreadOnly: false`）。只拿未讀的話，點開一筆
+  // 標記已讀之後它會從清單上**消失**——而人剛剛才在那裡看到它，會懷疑
+  // 自己是不是看錯了。讀過的該留著、只是不再喊
+  // （@審核用Codex-2 2026-09-03；我自己在 _NoticeRow 的註解裡寫了這條規則，
+  //  卻在這一行做了相反的事）。
+  //
+  // 紅點的數字不受影響：Hub 的 `unread_count` 是獨立算的，不跟著這個
+  // 篩選走，所以拿全部回來不會讓那個數字變大。
+  return ref.watch(watchApiProvider).notices(sessionKey: key, unreadOnly: false);
 });
 
 /// 每一塊板各有幾筆未讀。
