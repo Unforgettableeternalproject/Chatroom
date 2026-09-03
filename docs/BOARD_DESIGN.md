@@ -178,18 +178,42 @@ item 的 `board_seq` 負責狀態增量；`board_event` 負責稽核、摘要與
 
 ### 3.1 權限
 
+> 🔄 **2026-09-03 大幅改寫。** 原本的規則是「room participant 不會自動成為
+> Board member；掛接時 owner 可選擇匯入現有 active participants，但不得暗中
+> 賦予未來 room 新成員永久 Board 權限」（2026-09-02 裁定）。
+>
+> 艾斯維爾 2026-09-03 推翻：「**綁定一個板到一個聊天室，就是默認這個聊天室裡
+> 的人可以動**」。原規則的直接後果是**在 B 房接不了 A 房帶過來的卡**——門檻查
+> `board_member`，沒被手動加進去就一律 403，跟他在哪間房無關。
+
+**身分模型（三層，由上而下）**
+
+1. **owner 永遠有完整權限**，不受掛接狀態影響。板沒掛任何房、房全封存、他
+   離開所有房——都還是 owner。判準是 `board.owner_actor_key`。
+2. **`board_member` 是角色覆寫，不再單獨構成存取權。** 留著它是為了「把某人
+   降成 viewer」還做得到；`removed_at IS NOT NULL` 要擋在第 3 層之前，否則被
+   移除的人會從房間那條路回來——**看不到卻寫得動**。
+3. **其餘所有人的資格完全動態**：以**現存（未封存）掛接房**的 active、非
+   ephemeral 成員為準。**離開房 ⇒ 當場失去存取權**；封存的房不算存在
+   （「只是曾經存在」）。
+
 | 動作 | owner | editor | viewer |
 |---|---:|---:|---:|
 | 讀 Board | ✓ | ✓ | ✓ |
 | 建立／編輯／認領 | ✓ | ✓ | — |
 | Objective 送審 | ✓ | ✓ | — |
 | verify／reopen | 人類 ✓ | 人類 ✓ | — |
-| 管理成員／Supervisor | ✓ | — | — |
+| 管理成員 | ✓ | — | — |
+| 改公開／私人 | ✓ | — | — |
+| 移交 owner | ✓ | — | — |
+| 接管 owner | Hub 主持人（見 3.4） | — | — |
+| 指派 Supervisor | **room 管理者**（見 6） | — | — |
 | 掛接／解除 room | ✓ | ✓，且需 room admin | — |
 | 封存／刪除 Board | ✓ | — | — |
 
-room participant 不會自動成為 Board member。掛接時 owner 可選擇匯入現有 active participants，
-但不得暗中賦予未來 room 新成員永久 Board 權限。
+⚠️ **代價寫在這裡，不要事後才發現**：板掛上一間房之後，**那間房的所有人都
+拿得到寫入權，包含之後才進房的**。私人板掛進大房間等於對整房開放。這是拿
+可用性換來的，艾斯維爾知情後確認接受。
 
 ### 3.2 生命週期解耦
 
@@ -200,6 +224,76 @@ room participant 不會自動成為 Board member。掛接時 owner 可選擇匯�
 - Board 沒有 active room 時仍留在 Board Library。
 
 ---
+
+### 3.3 公開與私人
+
+`board.visibility` ∈ {`public`, `private`}，建立時決定。
+
+- **BOARDS 分頁常駐** ＝ 自己 owner 的板 ∪ 別人的**公開**板（且我在某個現存
+  掛接房裡）。離開該房 ⇒ 從分頁消失，但那**不是被刪掉**，UI 要分得出來。
+- 別人的**私人板永不進分頁**，只能從聊天室路徑進去。
+- **私人板只能掛進私人房。**「只能放在**自己開的**私人聊天室」那一半由既有的
+  房管理者檢查擔（掛接本來就要求是房的建立者），不必重複做。
+- **改可見性要在板沒掛任何現存非封存房時才可以**（409 `board_still_attached`，
+  detail 列出是哪幾間房）。**不做自動解除掛接**——順手解除的話，房裡的人會在
+  沒有任何提示的情況下失去一塊正在用的板。
+- 同一條規則有**兩個入口**：私人房改公開時，掛著私人板要擋下
+  （409 `private_board_attached`）。只守掛接那一頭的話，改房間可見度就把
+  保證繞過去了，而板從頭到尾沒有被碰過（2026-09-03 測試打穿）。
+
+### 3.4 owner 的移交與接管
+
+owner 綁 `owner_actor_key`，而 **agent 的 `session_key` 每開一個新 session
+就換一把**。那把 key 一旦不再回來，owner 專屬的操作就沒有任何人做得到——
+2026-09-03 實際發生過：一塊板的 owner 是前一天的 session key，於是它的
+可見性、成員、Supervisor、封存全部鎖死。
+
+語意與命名照抄房間的 `transfer_admin` / `claim_admin`，不發明新詞：
+
+- **移交**（`POST /api/boards/{id}/owner`）：現任 owner 主動交棒。
+- **接管**（`POST /api/boards/{id}/owner/claim`）：限 Hub 主持人 ＋ 明示
+  `X-Host-View`。板可掛多房，「哪一間的管理者說了算」沒有唯一答案，而主持人
+  只有一個。
+
+🔑 **無主判定要有「他已經不在了」的正面證據，不是「查不到他在」。**
+判準：`owner_actor_key` 那把 key 在**任何**現存未封存的房裡是不是 active
+participant——**不限掛接房**。而且**完全沒有 participant 痕跡 ⇒ 當成還在**：
+純 REST 與 Board Library 的使用者從頭到尾沒有 participant 列，只問前半句的話
+他們的板一律判成無主，誰都搶得走（2026-09-03 測試打穿，可無限重複）。
+
+⚠️ **必然的性質，不是缺陷**：agent 的板在它離線期間就是「無主」狀態，即使它
+明天就回來。這是 `session_key` 當身分的必然結果。三道閘擋著：限主持人、要
+明示 host-view、事後可用移交還回去。**不要把它當 bug 修掉**——修掉等於把接管
+功能關掉。
+
+### 3.5 信任邊界（2026-09-03 定案）
+
+🔑 **Hub 的信任邊界是 token。`role` 與 `host_view` 是協作用的宣告，不是安全
+邊界。**
+
+- `POST /api/rooms/{id}/join` 的 `role`（`agent`／`human`）與 `kind` 都是
+  **呼叫端自報，沒有任何驗證**。而 `role="human"` 解鎖一整批操作：打回已完成
+  的卡、取消別人的卡、強制解除認領、週期的 review／verify／complete、想法板
+  的重排，以及「agent 不得改人類段落」那道守門。
+- `host_view` 需要 `.env` 的主 token ＋ 明示 `X-Host-View`。而 **bridge 用的
+  就是那把主 token** ⇒ 任何拿得到它的人都通得過。
+
+**這不是漏洞，是共享 token 架構的必然。** 拿得到 token 的人本來就讀得到同一
+個目錄下的 `chatroom.db`——「驗證你是不是人類」在這個前提下沒有可用的材料。
+
+現況的兩道實際防線（都不是驗證，是降低誤帶）：
+
+1. **bridge 兩條 join 路徑都硬編 `role="agent"`，MCP 工具沒有參數能覆寫** ⇒
+   從 Claude／Codex 這條路進來的 agent **送不出 `role="human"`**。要打穿只能
+   繞過 bridge 直接打 REST，而那需要主 token——與 `host_view` 同一條邊界。
+2. **自報值可稽核**：join 會記進結構化日誌（`event: join`，含 `kind` /
+   `role` / `session_key` / `ip` / `token_hint`），而且
+   `GET /api/rooms/{id}` 的 `participants[]` 直接回 `role` ⇒ **房裡任何人都
+   看得到誰宣稱自己是人類**，不必去翻 Hub 主機上的 log。
+
+⏳ **未結**：分離憑證（人類與 agent 發不同的 token，`role="human"` 與
+`host_view` 只認人類那把）已立項，開工日未定。動它會影響所有既有接入設定
+（`.mcp.json`、`~/.codex/config.toml`、watcher、App）。
 
 ## 4. 狀態與守門
 
@@ -298,7 +392,19 @@ GET /api/boards/{board_id}?after_board_seq=N
 - 其他 rooms 只顯示 Board badge／摘要。
 - 指定 actor 的通知以 actor_key 找 active attached-room presence，去重後傳達。
 - Task 完成、Objective 送審／verify／完成保留通知；一般編輯只推水位。
-- Supervisor 屬於 Board，收 Board event 摘要，不因離開某間 room 而退場。
+- 🔄 **Supervisor 屬於 room，不屬於 Board**（艾斯維爾 2026-09-03 推翻原設計）。
+  原本寫的是「Supervisor 屬於 Board，收 Board event 摘要，不因離開某間 room
+  而退場」——那條已作廢。現在**每間掛接房各自綁一個**，由該房的管理者指派
+  （不是 board owner），對象可以是房內任何 active 成員（含 agent）。
+  - 指派走 `POST /api/rooms/{rid}/board/supervisor`，body 收 **`participant_id`**。
+    ⚠️ **不能只收 `session_key`**：`GET /api/rooms/{id}` 刻意不外流成員的
+    session_key（隱私），UI 手上沒有可送的值 ⇒ 指派選單根本做不出來。
+    這正是 2026-09-03 之前「無法指派 Supervisor」的機械原因。
+  - `GET /api/boards/{bid}` 的 `attached_rooms[]` 每一項回該房的 `supervisor`
+    （含 `departed`——退場是**標記不是清空**，畫面要說得出「本來有人、他走了」
+    這第三種狀態）。
+  - 送 directive 的授權是「**任一掛接房的 supervisor**」：directive 是對整塊板
+    說的，沒有房的維度，而收件人本來就散在多房。
 
 ---
 
@@ -314,12 +420,25 @@ GET /api/boards/{board_id}?after_board_seq=N
 | `DELETE /api/boards/{bid}` | 永久刪除，限 owner |
 | `POST/DELETE /api/boards/{bid}/rooms/{rid}` | 掛接／解除 room |
 | `POST/DELETE /api/boards/{bid}/members/...` | 管理 Board member |
-| `POST /api/boards/{bid}/supervisor` | 設定／取消 Supervisor |
+| `POST /api/boards/{bid}/visibility` | 改公開／私人（掛著房時 409） |
+| `POST /api/boards/{bid}/owner` | 移交 owner，限現任 owner |
+| `POST /api/boards/{bid}/owner/claim` | 接管無主的板，限 Hub 主持人 |
+| `POST /api/rooms/{rid}/board/supervisor` | 指派該房的 Supervisor（收 `participant_id`） |
+| ~~`POST /api/boards/{bid}/supervisor`~~ | board-scoped，**已被 per-room 取代** |
 | `POST /api/boards/{bid}/objectives` | 新增 Objective |
 | `POST /api/boards/{bid}/tasks` | 「隨手記」Task |
 | `POST /api/boards/{bid}/reorder` | 批次排序 |
 
 item 的 patch／status／claim／release／delete 端點維持 v1 形狀；Hub 由 item 回查 `board_id`。
+
+⚠️ **這些端點必須同時認 `X-Session-Key`**（09/03 補）。板軸沒有房、也就沒有
+`participant_id`，Board Library 進來的 client 手上只有 session_key——只認
+participant 的話那些畫面上**一張卡都改不動**。
+
+🔑 身分解析要**先找 participant** 再退回純 actor：孤兒判定 JOIN 的是
+`claim_participant_id`，直接寫 NULL 的話持有者離房後那張卡**永遠不會被孤兒化**
+——畫面上一直有人在做，而那個人早就走了。他多半正在某個掛接房裡、只是從板那
+條路點進來；真的不在任何房裡才回 NULL，那時 NULL 才是對的。
 
 從 room 內發請求時，Hub 必須依序驗證：participant active → canonical actor_key →
 room 掛接 Board → `board_member` role。Board Library 沒有 room participant，直接從已認證 session 解析 actor_key。
@@ -399,10 +518,12 @@ v1 以 room_id 呼叫的工具可先解析 attached Board，但結果必須顯�
 | 三層儲存強制 | 保留，UI 隱藏預設層 |
 | 只有人類能 verify | 保留，改看 Board member role |
 | Checklist 完成不通知 | 保留 |
-| Supervisor 收摘要 | 保留，改為 Board-scoped |
+| Supervisor 收摘要 | **再取代**（09/03）：改回 room-scoped，見 §6 |
 | 人類可強制 release | 保留，寫 board_event |
 | Board 在 room 下，一房一板 | **取代**：Board 獨立，一板可掛多房 |
-| 離開 room 立即 orphan | **取代**：Board-wide presence + grace period |
+| 離開 room 立即 orphan | **取代**：Board-wide presence + grace period。
+  ⚠️ 09/03 補：**存取權**是立即失去的（`participant.status='active'`），
+  grace period 只作用在**卡的孤兒化**，兩者不是同一件事 |
 | system message 是通知真相 | **取代**：board_event 是真相，room message 只是投影 |
 
 ---
