@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -44,6 +43,7 @@ import '../../widgets/message_bubble.dart';
 import '../../widgets/question_card.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
+import '../../state/composer_attachments.dart';
 import '../../state/composer_drafts.dart';
 import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
@@ -92,7 +92,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final Set<String> _refetchedFor = {};
 
   /// 待送附件。先上傳、送出時才把 id 帶進訊息——見 ComposerAttachment 的說明。
-  final List<ComposerAttachment> _pending = [];
+  ///
+  /// **不存在這顆 State 裡**：`ValueKey(roomId)` 讓 State 隨房重建，附件留在
+  /// 這裡就會在切走的瞬間連同上傳一起消失。改存房間層級，見
+  /// `composer_attachments.dart`。這裡只是取用的捷徑。
+  ComposerAttachmentDrafts get _attachments =>
+      ref.read(composerAttachmentsProvider.notifier);
+
+  List<ComposerAttachment> get _pending => _attachments.of(widget.roomId);
 
   /// 拖放游標是否停在視窗上（畫提示用）。
   bool _dragging = false;
@@ -139,13 +146,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _heartbeat?.cancel();
     _highlightTimer?.cancel();
     _memberPoll?.cancel();
-    // 離開畫面時把還在傳的取消掉，否則它會傳完後往一個已 dispose 的 State
-    // 寫結果；已傳完的就留在 Hub 上（無主附件，不影響任何人）
-    for (final a in _pending) {
-      if (a.status == ComposerAttachmentStatus.uploading) {
-        a.cancelToken?.cancel('離開聊天室');
-      }
-    }
+    // 這裡**不再取消上傳中的附件**。從前要取消是因為結果會寫回這顆 State；
+    // 現在上傳跑在 App 級的 provider 裡，切走再回來進度條接著跑。
+    // 切個房間就把傳到一半的大檔砍掉重來，那才是使用者感受得到的損失。
     _scroll.dispose();
     super.dispose();
   }
@@ -385,12 +388,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .maxAttachmentBytes ??
       const ServerLimits().maxAttachmentBytes;
 
-  void _replacePending(String localId, ComposerAttachment next) {
-    final i = _pending.indexWhere((a) => a.localId == localId);
-    if (i < 0) return; // 使用者已經把它移掉了
-    setState(() => _pending[i] = next);
-  }
-
   Future<void> _pickFiles() async {
     // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null
     final files = await FilePicker.pickFiles();
@@ -444,122 +441,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     Uint8List? bytes,
     String? mime,
   }) async {
-    if (size > _maxAttachmentBytes) {
-      // 先擋在本機：明知會被拒絕還是把整個檔案推上去，只是白白佔用頻寬與時間
-      final mb = (_maxAttachmentBytes / (1024 * 1024)).toStringAsFixed(0);
-      _toast('$filename 超過上限 $mb MB，未加入');
-      return;
-    }
-    // Hub 的 attachment_ids 上限是 10，超過會整則訊息被擋下來
-    if (_pending.length >= 10) {
-      _toast('一則訊息最多 10 個附件');
-      return;
-    }
-    final item = ComposerAttachment(
-      localId: '${DateTime.now().microsecondsSinceEpoch}-${_pending.length}',
+    // 排隊與上傳都在 provider 裡跑（見 composer_attachments.dart）。
+    // 擋下來的原因由它回傳，顯示仍然是畫面的事
+    final rejected = await _attachments.enqueue(
+      widget.roomId,
       filename: filename,
-      mime: mime ?? _guessMime(filename),
       size: size,
+      maxBytes: _maxAttachmentBytes,
       path: path,
       bytes: bytes,
-      cancelToken: CancelToken(),
+      mime: mime,
     );
-    setState(() => _pending.add(item));
-    await _upload(item);
+    if (rejected != null && mounted) _toast(rejected);
   }
 
-  Future<void> _upload(ComposerAttachment item) async {
-    final api = ref.read(attachmentsApiProvider);
-    try {
-      final identity = await ref.read(identityProvider(widget.roomId).future);
-      void onProgress(int sent, int total) {
-        if (!mounted || total <= 0) return;
-        _replacePending(item.localId, item.copyWith(progress: sent / total));
-      }
+  void _removePending(ComposerAttachment a) =>
+      _attachments.remove(widget.roomId, a);
 
-      final uploaded = item.bytes != null
-          ? await api.uploadBytes(
-              widget.roomId,
-              participantId: identity.participantId,
-              bytes: item.bytes!,
-              filename: item.filename,
-              mime: item.mime,
-              onProgress: onProgress,
-              cancelToken: item.cancelToken,
-            )
-          : await api.uploadPath(
-              widget.roomId,
-              participantId: identity.participantId,
-              path: item.path!,
-              filename: item.filename,
-              mime: item.mime,
-              onProgress: onProgress,
-              cancelToken: item.cancelToken,
-            );
-      if (!mounted) return;
-      _replacePending(
-        item.localId,
-        item.copyWith(
-          status: ComposerAttachmentStatus.ready,
-          progress: 1,
-          remoteId: uploaded.id,
-        ),
-      );
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      _replacePending(
-        item.localId,
-        item.copyWith(
-          status: ComposerAttachmentStatus.failed,
-          error: e.message,
-        ),
-      );
-    } on DioException catch (e) {
-      if (!mounted) return;
-      // 取消是使用者自己按的，不是錯誤——那個項目已經被移掉了
-      if (CancelToken.isCancel(e)) return;
-      _replacePending(
-        item.localId,
-        item.copyWith(status: ComposerAttachmentStatus.failed, error: '上傳失敗'),
-      );
-    }
-  }
-
-  void _removePending(ComposerAttachment a) {
-    if (a.status == ComposerAttachmentStatus.uploading) {
-      a.cancelToken?.cancel('使用者取消');
-    }
-    setState(() => _pending.removeWhere((x) => x.localId == a.localId));
-  }
-
-  Future<void> _retryPending(ComposerAttachment a) async {
-    final fresh = a.copyWith(
-      status: ComposerAttachmentStatus.uploading,
-      progress: 0,
-      cancelToken: CancelToken(),
-    );
-    _replacePending(a.localId, fresh);
-    await _upload(fresh);
-  }
-
-  static String _guessMime(String filename) {
-    final ext = filename.contains('.')
-        ? filename.split('.').last.toLowerCase()
-        : '';
-    return switch (ext) {
-      'png' => 'image/png',
-      'jpg' || 'jpeg' => 'image/jpeg',
-      'gif' => 'image/gif',
-      'webp' => 'image/webp',
-      'bmp' => 'image/bmp',
-      'svg' => 'image/svg+xml',
-      'pdf' => 'application/pdf',
-      'txt' || 'log' || 'md' => 'text/plain',
-      'json' => 'application/json',
-      'zip' => 'application/zip',
-      _ => 'application/octet-stream',
-    };
-  }
+  Future<void> _retryPending(ComposerAttachment a) =>
+      _attachments.retry(widget.roomId, a);
 
   /// 群組 @ 展開成空的話講出來——例如房裡沒有人類卻發了 `@humans`。
   ///
@@ -631,10 +531,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _warnEmptyGroups(sent);
       _clearDraft();
       if (mounted) {
-        setState(() {
-          _replyTarget = null;
-          _pending.clear();
-        });
+        _attachments.clear(widget.roomId);
+        setState(() => _replyTarget = null);
         // 自己按下送出是明確的意圖表達：「我剛說的話在哪」比「保持原本的
         // 閱讀位置」重要。所以**無條件**回到底部，不看 _atBottom——
         // 往上翻歷史時發言卻看不到自己的訊息，正是「沒有自動捲動」的症狀
@@ -668,10 +566,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       _clearDraft();
       if (mounted) {
-        setState(() {
-          _replyTarget = null;
-          _pending.clear();
-        });
+        _attachments.clear(widget.roomId);
+        setState(() => _replyTarget = null);
         // 自己按下送出是明確的意圖表達：「我剛說的話在哪」比「保持原本的
         // 閱讀位置」重要。所以**無條件**回到底部，不看 _atBottom——
         // 往上翻歷史時發言卻看不到自己的訊息，正是「沒有自動捲動」的症狀
@@ -1205,7 +1101,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             editTarget: _editTarget,
             onCancelEdit: () => setState(() => _editTarget = null),
             onSend: _send,
-            attachments: _pending,
+            // 待送附件活在房間層級的 provider 裡（見 composer_attachments.dart）
+            // ——這裡 watch 它，上傳進度與完成才畫得出來
+            attachments:
+                ref.watch(composerAttachmentsProvider)[widget.roomId] ??
+                    const [],
             // 封存房唯讀，附件入口一併收起
             onPickFiles: archived ? null : _pickFiles,
             onPasteImage: archived ? null : _pasteImage,
