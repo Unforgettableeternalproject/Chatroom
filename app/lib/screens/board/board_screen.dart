@@ -857,7 +857,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 ),
               ),
               const SizedBox(width: 18),
-              _closeoutActions(context, o, stats),
+              // ⚠️ **從 Library 進來時沒有房，就沒有 `_actions`。**
+              // 收尾那組動作全部要走房內身分（送審／確認／完成都是），
+              // 所以那時整組不畫。
+              //
+              // 🔴 少了這個判斷的後果不是「按鈕壞掉」，是**整頁白不出來**：
+              // `_closeoutActions` 是 build 期間跑的，它第一行就 `_actions!`
+              // ——null 檢查在 build 裡炸開，畫面是一整片灰，而不是任何
+              // 一種空狀態（@開發Novia (除錯) 2026-09-03 的截圖）。
+              if (!_boardOnly) _closeoutActions(context, o, stats),
             ],
           ),
           const SizedBox(height: 14),
@@ -885,7 +893,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   Widget _closeoutActions(
       BuildContext context, BoardObjective o, _Stats stats) {
     final s = context.uep;
-    final actions = _actions!;
+    // 第二道防線。呼叫點已經擋了，但這裡再擋一次是刻意的——**在 build 裡
+    // 用 `!` 的代價不是一個錯誤訊息，是整頁畫不出來**，而那種畫面不會告訴
+    // 任何人是哪一行造成的
+    final actions = _actions;
+    if (actions == null) return const SizedBox.shrink();
     // 條件本人在 BoardSnapshot.canReviewObjective——放 model 才咬得住測試，
     // 在這裡複製一份判斷的話，測試測到的只會是那份副本
     final canReview = stats.canReview;
