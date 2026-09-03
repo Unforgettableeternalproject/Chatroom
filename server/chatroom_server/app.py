@@ -346,6 +346,12 @@ class BoardCreate(BaseModel):
     # 但從房裡建的一定要掛——否則使用者按了「建立」之後，那塊板不會出現在
     # 他眼前這間房裡，而他不知道自己該去哪裡找
     origin_room_id: str = Field(default="", max_length=64)
+    # 公開／私人（艾斯維爾 2026-09-03）。**預設 public**——存量板一律遷成
+    # public，新板跟著一致；預設私人的話，使用者建完一塊板、掛進房，房裡
+    # 的人卻在 BOARDS 分頁上看不到它，而他不會知道是自己沒改這個選項。
+    # ⚠️ schema 的欄位預設寫的是 `private`（那時它還是死欄位），兩者不一致
+    # 是刻意的：這裡一律顯式帶值進 INSERT，欄位預設不會被用到
+    visibility: str = Field(default="public", pattern="^(public|private)$")
 
 
 class BoardPatch(BaseModel):
@@ -3332,9 +3338,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT board_seq FROM room WHERE id=?", (room_id,))).fetchone()
         )["board_seq"]
         await db.execute(
-            "INSERT INTO board (id, name, owner_actor_key, board_seq,"
-            " migrated_from_seq, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?)",
+            # 🚨 **`visibility` 要顯式帶 public。** 欄位的 schema 預設是
+            # `private`（那時它還是死欄位），而房裡長出來的板天生就是給房裡
+            # 的人用的——吃預設值的話，換軸建出來的板一律私人，掛進公開房
+            # 立刻被 `_private_board_needs_private_room` 擋下，而使用者從頭
+            # 到尾沒有選過任何東西。兩條建板路徑要給出同一種板
+            "INSERT INTO board (id, name, owner_actor_key, visibility,"
+            " board_seq, migrated_from_seq, created_at, updated_at)"
+            " VALUES (?,?,?,'public',?,?,?,?)",
             (bid, rm["name"] if rm else "任務板", mine, seq0, seq0, now, now))
         await db.execute(
             "INSERT INTO board_member (board_id, actor_key, role, display_name,"
@@ -5382,6 +5393,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not actor:
             return ""
         db = app.state.db
+        # 🔑 **owner 永遠是 owner**（艾斯維爾 2026-09-03），早於一切。
+        # `board.owner_actor_key` 在此之前是**死欄位**（只寫不讀），owner 的
+        # 權限完全靠 `board_member` 那一列 ⇒ 他換一個 session、actor_key 變了
+        # 就對不上 ⇒ 落到房內身分退路、降級成 editor；板要是沒掛任何房，
+        # 退路也沒有來源 ⇒ **對自己的板完全沒權限**。而「在 BOARDS 分頁開
+        # 一塊板」建出來的板本來就沒掛房（@開發Novia (除錯) 2026-09-03）
+        owned = await (await db.execute(
+            "SELECT 1 FROM board WHERE id=? AND owner_actor_key=? LIMIT 1",
+            (board_id, actor))).fetchone()
+        if owned:
+            return "owner"
         row = await (await db.execute(
             "SELECT role FROM board_member WHERE board_id=? AND actor_key=?"
             " AND removed_at IS NULL", (board_id, actor))).fetchone()
@@ -5416,6 +5438,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             "   AND p.session_key=? AND p.status='active' AND p.ephemeral=0"
             " LIMIT 1", (board_id, actor))).fetchone()
         return "editor" if row else ""
+
+    def _private_board_needs_private_room(visibility: str, room) -> None:
+        """私人板只能掛進私人房（艾斯維爾 2026-09-03）。
+
+        他的原話是「自己的私人板只能放在**自己開的私人**聊天室」。
+        「自己開的」那一半**不必在這裡做**——`attach_board` 與 `create_board`
+        都已經要求呼叫者是房的建立者，所以「掛進別人的房」本來就不可能。
+        這裡守的是剩下那一半：**自己開的公開房也不行**。
+
+        兩條路徑（建板時順手掛、事後掛接）共用同一份判準：分兩份寫的話，
+        其中一份漏掉時，結果是一塊私人板躺在公開房裡，而事後看不出它是從
+        哪條路進來的。
+        """
+        if visibility == "private" and room is not None \
+                and room["visibility"] != "private":
+            raise _err(409, "private_board_public_room",
+                       "私人板只能掛進私人聊天室——把房間改成私人，"
+                       "或把這塊板改成公開",
+                       room_id=room["id"], room_visibility=room["visibility"])
 
     async def _board_identity(board_id: str, actor: str):
         """這個 actor 在板上的**名字與 kind**，`board_member` 查不到就退回
@@ -5501,12 +5542,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             if await _board_for_room(body.origin_room_id) is not None:
                 raise _err(409, "room_already_has_board",
                            "這間房已經掛著一塊板了")
+            # 建的當下就掛房的話，同一道限制也要在這裡擋——否則
+            # `attach_board` 那條路守著、這條路繞過去，而繞過去的結果
+            # （私人板躺在公開房裡）事後看不出是從哪條路進來的
+            _private_board_needs_private_room(body.visibility, room)
         now = _now()
         bid = uuid.uuid4().hex
         await db.execute(
             "INSERT INTO board (id, name, description, owner_actor_key,"
-            " created_at, updated_at) VALUES (?,?,?,?,?,?)",
-            (bid, body.name.strip(), body.description, actor, now, now))
+            " visibility, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+            (bid, body.name.strip(), body.description, actor,
+             body.visibility, now, now))
         member_name = ""
         member_kind = ""
         if x_participant_id:
@@ -5563,10 +5609,35 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "invalid_status",
                        "status 只能是 active 或 archived",
                        allowed=["active", "archived"])
-        sql = ("SELECT b.*, m.role AS my_role FROM board b"
-               " JOIN board_member m ON m.board_id = b.id AND m.actor_key = ?"
-               "  AND m.removed_at IS NULL")
-        params: list = [actor]
+        # 分頁常駐 ＝ **自己 owner 的板** ∪ **別人的公開板（且我在某個現存
+        # 掛接房裡）**（艾斯維爾 2026-09-03）。
+        #
+        # 三個否定條件都是規則的一部分，少一個就錯：
+        # - 別人的**私人板永不進分頁**（只能從聊天室路徑進去）
+        # - 房**封存了不算**（「只是曾經存在」）
+        # - 我**離開房**之後那塊板就該消失
+        #
+        # `board_member` 不再單獨構成理由：它降級成角色覆寫（讓「把某人
+        # 降成 viewer」還做得到），不是存取權的來源。⚠️ 但被移除的人
+        # （`removed_at IS NOT NULL`）要擋掉，否則他會從房間那條路回來
+        sql = ("SELECT b.*, ? AS my_role FROM board b WHERE ("
+               "  b.owner_actor_key = ?"
+               "  OR (b.visibility = 'public' AND EXISTS ("
+               "        SELECT 1 FROM board_room br"
+               "        JOIN room r ON r.id = br.room_id"
+               "             AND r.status = 'active'"
+               "        JOIN participant p ON p.room_id = br.room_id"
+               "        WHERE br.board_id = b.id AND br.detached_at IS NULL"
+               "          AND p.session_key = ? AND p.status = 'active'"
+               "          AND p.ephemeral = 0)"
+               "      AND NOT EXISTS ("
+               "        SELECT 1 FROM board_member bm"
+               "        WHERE bm.board_id = b.id AND bm.actor_key = ?"
+               "          AND bm.removed_at IS NOT NULL))"
+               ")")
+        # my_role 逐列再算：SQL 裡拼出同一份判準會變成第二個真相來源，
+        # 而漂移的那一半沒有人在看
+        params: list = ["", actor, actor, actor]
         if want:
             sql += " AND b.status = ?"
             params.append(want)
@@ -5593,7 +5664,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "task_counts": {"total": counts["total"] or 0,
                                 "done": counts["done"] or 0,
                                 "claimed": counts["claimed"] or 0},
-                "updated_at": b["updated_at"], "my_role": b["my_role"],
+                "updated_at": b["updated_at"],
+                # 走 `_board_role` 而不是 SQL 裡算好的：判準只能有一份，
+                # 兩份會漂移，而漂移的結果是清單上寫著 editor、點進去卻是
+                # viewer（或反過來）
+                "my_role": await _board_role(b["id"], actor),
+                "visibility": b["visibility"],
             })
         return {"boards": out}
 
@@ -7532,6 +7608,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not host and actor_key(room["creator_session_key"]) != actor:
             raise _err(403, "not_room_admin",
                        "掛接要同時是這間房的管理者")
+        _private_board_needs_private_room(board["visibility"], room)
         db = app.state.db
         existing = await _board_for_room(room_id)
         already = False

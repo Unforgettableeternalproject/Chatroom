@@ -358,7 +358,12 @@ CREATE TABLE IF NOT EXISTS board (
     name            TEXT NOT NULL,
     description     TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'active',      -- active / archived
-    visibility      TEXT NOT NULL DEFAULT 'private',
+    -- ⚠️ 預設 **public**，與 room 那邊同一個判斷：把東西悄悄變成私人，等於
+    -- 在使用者毫不知情的情況下讓它從別人的列表上消失。這個欄位在 2026-09-03
+    -- 之前是死欄位（只有 schema、沒人讀），預設值原本寫的是 private——喚醒
+    -- 它的那一刻若照著那個值走，所有既有的板會一次消失（見 `_migrate_data`）。
+    -- 建板的兩條路徑都顯式帶值，這個預設只是最後一道保險
+    visibility      TEXT NOT NULL DEFAULT 'public',
     -- 擁有者是 actor_key 不是 participant：participant 會隨著離房消失，
     -- 而 Board 的存在本來就不依賴任何一間房還開著
     owner_actor_key TEXT NOT NULL,
@@ -955,6 +960,33 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
+    await _migrate_data(db)
+
+
+# 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
+# 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
+# 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
+DATA_VERSION = 1
+
+
+async def _migrate_data(db: aiosqlite.Connection) -> None:
+    """一次性的資料修正。**只前進，不重跑。**"""
+    cur = await db.execute("PRAGMA user_version")
+    version = (await cur.fetchone())[0]
+    if version >= DATA_VERSION:
+        return
+    if version < 1:
+        # 🚨 **存量板一律遷成 public**（艾斯維爾 2026-09-03：「現有的板都是
+        # 以公開為主」）。`board.visibility` 的欄位預設是 `private`，而它到
+        # 今天為止**從來沒有被讀過**——所以既有的板在資料庫裡真的存著
+        # `private`（活庫實查確認）。可見性一旦開始生效，那個值立刻讓所有
+        # 既有的板從所有人的 BOARDS 分頁消失，只剩建立者看得到，而且沒有
+        # 任何一端會報錯。
+        #
+        # 這與 `room.visibility` 當初的遷移是同一個判斷：「把既有的東西悄悄
+        # 變成私人，等於在使用者毫不知情的情況下讓它們從別人的列表上消失」。
+        await db.execute("UPDATE board SET visibility='public'")
+    await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 
 async def open_db(path: str) -> aiosqlite.Connection:
