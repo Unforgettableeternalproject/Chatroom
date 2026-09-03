@@ -166,3 +166,62 @@ async def test_the_events_endpoint_serves_the_whole_trail(tmp_path):
                                  headers={"X-Session-Key": "claude-zzz"})
             assert r.status_code == 403
             assert r.json()["detail"]["code"] == "not_board_member"
+
+
+async def test_failed_requests_leave_no_gap_either(tmp_path):
+    """**被拒絕的請求也是發生過的事。**
+
+    ⚠️ 上面那條只走成功路徑，所以它守不到這一半：CAS 輸掉、狀態轉移被擋、
+    重排被拒——這些路徑裡有些**先領了號才發現不行**，於是水位前進而
+    `/events` 沒有對應的 event（審核用Codex-2 2026-09-03）。
+
+    兩種修法都可以，這條不挑：**要嘛不領號，要嘛留一筆 conflict event。**
+    不能接受的是號被領走而沒有任何交代——那正是「看起來完整、實際上有洞」
+    的稽核串。
+    """
+    app, client = await _client(tmp_path, "failures")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "板子房", "session_key": "claude-a"})).json()["id"]
+            j = await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-a",
+                "preferred_name": "A"})
+            hdr = {"X-Participant-Id": j.json()["participant_id"]}
+            key = {"X-Session-Key": "claude-a"}
+            oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                     json={"title": "週期"},
+                                     headers=hdr)).json()["id"]
+            bid = (await client.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()["board_id"]
+            cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                     json={"title": "階段"},
+                                     headers=hdr)).json()["id"]
+            tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                     json={"title": "一件事"},
+                                     headers=hdr)).json()["id"]
+
+            # ── 被拒絕的路徑（每一條都預期非 2xx）
+            await client.post(f"/api/board/tasks/{tid}/status",
+                              json={"status": "done"}, headers=hdr)   # 沒認領
+            await client.post(f"/api/board/checklists/{cid}/status",
+                              json={"status": "done"}, headers=hdr)   # 底下沒完成
+            await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=hdr)                            # 還沒送審
+            await client.post(f"/api/boards/{bid}/reorder",
+                              json={"kind": "task",
+                                    "items": [{"id": "不存在", "order_index": 0}]},
+                              headers=key)
+            await client.post(f"/api/rooms/{rid}/board/reorder",
+                              json={"kind": "task",
+                                    "items": [{"id": tid, "order_index": 3}]},
+                              headers=hdr)
+
+            seq, events = await _seq_and_events(app, bid)
+            missing = [n for n in range(1, seq + 1) if n not in events]
+            assert not missing, (
+                f"這些 board_seq 沒有對應的 canonical event：{missing}"
+                f"（總共領了 {seq} 個號，只有 {len(events)} 筆 event）。"
+                "被拒絕的請求也是發生過的事——要嘛不領號，要嘛留一筆 "
+                "conflict event，不能號被領走而沒有任何交代。"
+            )

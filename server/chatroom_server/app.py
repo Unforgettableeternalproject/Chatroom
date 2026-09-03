@@ -4903,7 +4903,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         每列各領一個號的話，拖動十張卡就會在增量流裡變成十次獨立變更，
         而它們本來就是同一個動作。
         """
-        await _board_writer(room_id, x_participant_id)
+        me = await _board_writer(room_id, x_participant_id)
         db = app.state.db
         table = BOARD_TABLES[body.kind]
         ids = [i.id for i in body.items]
@@ -4927,6 +4927,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"UPDATE {table} SET order_index=?, board_seq=? WHERE id=?",
                 (item.order_index, seq, item.id),
             )
+        # ⚠️ 這條 v1 路由推了號卻沒有留 event——`/events` 上就是一個洞。
+        # board-scoped 那條有記，兩條路做的是同一件事而只有一條留下痕跡
+        # （審核用Codex-2 2026-09-03；擴充到失敗路徑的 mutation matrix 抓到）
+        board = await _board_for_room(room_id)
+        if board is not None:
+            await _record_board_event(
+                board["id"], seq, "reordered",
+                actor=actor_key(me["session_key"]),
+                actor_name=me["display_name"], origin_room_id=room_id,
+                item_kind=body.kind,
+                payload={"count": len(body.items),
+                         "ids": [i.id for i in body.items]})
         await _commit_with_retry(db)
         await events.notify(room_id)
         return {"ok": True, "board_seq": seq, "count": len(body.items)}
