@@ -262,3 +262,18 @@ String watchNoticeLabel(String eventType, String itemTitle) {
     _ => '$t 有變動（$eventType）',
   };
 }
+
+/// 這一則註解，現在這個人能不能把它標成已處理。
+///
+/// Hub 的守門是「**這一段的作者，或人類成員**」（`app.py:6593`），而那與
+/// 段落的 `can_edit` 是同一條。所以這裡直接用伺服器算好的兩個布林值，
+/// **不自己重算那個條件**——自己算的話兩邊的規則會漂移，而漂移的那一半
+/// 沒有人在看：畫面給了按鈕，按下去 403。
+///
+/// ⚠️ 判準是 [blockCanEdit] 不是想法板層級的可寫。只看後者的話，agent 會在
+/// 人類寫的段落上看到一顆「處理掉」（@審核用Codex-2 2026-09-03）。
+bool canResolveNote({
+  required bool padCanEdit,
+  required bool blockCanEdit,
+}) =>
+    padCanEdit && blockCanEdit;

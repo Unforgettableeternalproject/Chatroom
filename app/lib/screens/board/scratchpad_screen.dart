@@ -105,8 +105,18 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             onCancel: () => setState(() => _editing = null),
             onSave: (text) => _save(b, text),
             onNote: pad.canEdit ? (text) => _note(b, text) : null,
+            // ⚠️ 守門用 **`b.canEdit`**，不是 `pad.canEdit`。Hub 那邊
+            // resolve 的條件是「這一段的作者，或人類成員」——與 can_edit
+            // 同一條（`app.py:6593`）。只看 pad 的話，agent 會在人類寫的
+            // 段落上看到一顆「處理掉」，按下去必然 403。
+            //
+            // **不要自己重算那個條件**，直接用伺服器算好的：自己算的話
+            // 兩邊的規則會漂移，而漂移的那一半沒有人在看
+            // （@審核用Codex-2 2026-09-03）
             onResolveNote:
-                pad.canEdit ? (id, undo) => _resolveNote(id, undo) : null,
+                canResolveNote(padCanEdit: pad.canEdit, blockCanEdit: b.canEdit)
+                    ? (id, undo) => _resolveNote(id, undo)
+                    : null,
             onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
           ),
         if (pad.canEdit) ...[

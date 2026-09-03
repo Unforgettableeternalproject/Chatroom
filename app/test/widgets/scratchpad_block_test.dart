@@ -64,4 +64,26 @@ void main() {
       expect(watchNoticeLabel('something_new', 'A'), contains('something_new'));
     });
   });
+
+  _resolveGate();
+}
+/// 註解的「處理掉」該不該出現，用的是**段落**的 can_edit，不是想法板的。
+///
+/// Hub 的 resolve 守門是「這一段的作者，或人類成員」——與 can_edit 同一條
+/// （`app.py:6593`）。用 pad 層級判的話，agent 會在人類寫的段落上看到一顆
+/// 「處理掉」，按下去必然 403（@審核用Codex-2 2026-09-03）。
+void _resolveGate() {
+  group('註解處理權', () {
+    test('別人的段落上不給處理鈕，即使我在這塊板上可寫', () {
+      expect(canResolveNote(padCanEdit: true, blockCanEdit: false), isFalse);
+    });
+
+    test('自己的段落才給', () {
+      expect(canResolveNote(padCanEdit: true, blockCanEdit: true), isTrue);
+    });
+
+    test('整塊板唯讀時一律不給', () {
+      expect(canResolveNote(padCanEdit: false, blockCanEdit: true), isFalse);
+    });
+  });
 }
