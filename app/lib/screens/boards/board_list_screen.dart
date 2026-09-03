@@ -6,6 +6,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/board.dart';
 import '../../state/board_providers.dart';
+import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 
@@ -45,6 +46,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
             Row(children: [
               const MonoLabel('BOARDS', letterSpacing: 2.0),
               const Spacer(),
+              // 追蹤收件匣的入口。**紅點在這裡是必要的**，不是裝飾：
+              // 裁決 #392 ②A 是「離線通知留著，回來就知道」，而知道的
+              // 管道只有這一個——沒有它，通知留著了，但沒有任何地方會
+              // 告訴他有東西留著，②A 在使用上就等於「不通知」
+              const _NoticesButton(),
               IconButton(
                 tooltip: '重新整理',
                 visualDensity: VisualDensity.compact,
@@ -294,4 +300,38 @@ class _Meta extends StatelessWidget {
           Text(text, style: UepText.mono(size: 9.5, color: color)),
         ],
       );
+}
+
+/// 「我在等的東西」入口，帶未讀數。
+class _NoticesButton extends ConsumerWidget {
+  const _NoticesButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final unread = ref.watch(watchNoticesProvider).maybeWhen(
+          data: (d) => d.unread,
+          orElse: () => 0,
+        );
+    return IconButton(
+      tooltip: unread == 0 ? '我在等的東西' : '我在等的東西（$unread 筆新的）',
+      visualDensity: VisualDensity.compact,
+      onPressed: () => context.go('/notices'),
+      icon: Stack(clipBehavior: Clip.none, children: [
+        Icon(Icons.notifications_none,
+            size: 15, color: unread == 0 ? s.inkMute : UepColors.gold),
+        if (unread > 0)
+          Positioned(
+            right: -3,
+            top: -3,
+            child: Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                  color: UepColors.gold, shape: BoxShape.circle),
+            ),
+          ),
+      ]),
+    );
+  }
 }

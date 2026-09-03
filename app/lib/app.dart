@@ -7,6 +7,8 @@ import 'core/theme/uep_theme.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
+import 'screens/board/scratchpad_screen.dart';
+import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
@@ -51,6 +53,22 @@ GoRouter buildRouter(bool Function() isConfigured) {
             path: '/boards/:boardId',
             builder: (context, state) =>
                 BoardScreen(boardId: state.pathParameters['boardId']!),
+            routes: [
+              // 想法板走板軸，不走房軸——它屬於板，而板活得比房久。
+              GoRoute(
+                path: 'pads/:padId',
+                builder: (context, state) => ScratchpadPage(
+                  boardId: state.pathParameters['boardId']!,
+                  padId: state.pathParameters['padId']!,
+                ),
+              ),
+            ],
+          ),
+          // 追蹤收件匣**跨板**——「我在等的東西完成了嗎」不分板，
+          // 所以它不掛在任何一塊板底下
+          GoRoute(
+            path: '/notices',
+            builder: (context, state) => const WatchNoticesScreen(),
           ),
           GoRoute(
             path: '/rooms',

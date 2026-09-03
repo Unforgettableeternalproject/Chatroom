@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -642,6 +643,219 @@ class _Tiny extends StatelessWidget {
                 letterSpacing: 1.1,
                 color: onTap == null ? s.inkMute : s.inkSoft)),
       ),
+    );
+  }
+}
+
+/// 一份想法板的整頁版（路由用）。
+///
+/// [ScratchpadScreen] 只有內容，沒有 Scaffold——那是為了讓它之後也能嵌在
+/// 板頁的側欄裡。這一層負責標題列與返回。
+class ScratchpadPage extends StatelessWidget {
+  const ScratchpadPage({
+    super.key,
+    required this.boardId,
+    required this.padId,
+  });
+
+  final String boardId;
+  final String padId;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Scaffold(
+      backgroundColor: s.bg,
+      appBar: AppBar(
+        backgroundColor: s.bg,
+        title: Text('想法板', style: UepText.display(size: 20, color: s.inkTitle)),
+      ),
+      body: ScratchpadScreen(boardId: boardId, padId: padId),
+    );
+  }
+}
+
+/// 板上的想法板清單。**入口就是它**——沒有這一段的話，想法板那個畫面
+/// 存在，但沒有任何地方走得到（@審核用Codex-2 2026-09-03）。
+class ScratchpadSection extends ConsumerWidget {
+  const ScratchpadSection({
+    super.key,
+    required this.boardId,
+    required this.canEdit,
+  });
+
+  final String boardId;
+  final bool canEdit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final async = ref.watch(scratchpadListProvider(boardId));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Expanded(
+          child: MonoLabel('想法板', size: 9, letterSpacing: 2.2),
+        ),
+        if (canEdit)
+          _Tiny(label: '＋ 開一份', onTap: () => _create(context, ref)),
+      ]),
+      const SizedBox(height: 8),
+      async.when(
+        loading: () => const SizedBox(
+          height: 20,
+          child: Center(
+            child: SizedBox(
+                width: 14, height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2)),
+          ),
+        ),
+        // 這個 Hub 還沒有想法板時不要畫一塊紅色的錯誤——它不是壞了，
+        // 是還沒有。整段收起來，畫面上就當這個功能不存在
+        error: (e, _) => e is NotFoundException
+            ? const SizedBox.shrink()
+            : ErrorState(
+                error: e,
+                onRetry: () => ref.invalidate(scratchpadListProvider(boardId)),
+              ),
+        data: (pads) => pads.isEmpty
+            ? Text(
+                canEdit
+                    ? '還沒有想法板。想到什麼但還沒想好怎麼拆成卡的，先丟一份進來。'
+                    : '還沒有想法板。',
+                style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final p in pads)
+                    _PadRow(
+                      pad: p,
+                      onTap: () =>
+                          context.go('/boards/$boardId/pads/${p.id}'),
+                    ),
+                ],
+              ),
+      ),
+    ]);
+  }
+
+  Future<void> _create(BuildContext context, WidgetRef ref) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => const _NewPadDialog(),
+    );
+    if (name == null || name.isEmpty) return;
+    try {
+      final id = await ref.read(scratchpadApiProvider).create(
+            boardId,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            title: name,
+          );
+      ref.invalidate(scratchpadListProvider(boardId));
+      if (!context.mounted || id.isEmpty) return;
+      context.go('/boards/$boardId/pads/$id');
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+}
+
+class _PadRow extends StatelessWidget {
+  const _PadRow({required this.pad, required this.onTap});
+
+  final ScratchpadSummary pad;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: s.hairline)),
+        ),
+        child: Row(children: [
+          Expanded(
+            child: Text(
+              pad.title.isEmpty ? '（未命名）' : pad.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: UepText.sans(size: 12.5, color: s.ink),
+            ),
+          ),
+          // 未處理的註解數。**這是唯一能讓人知道「有人對你的段落提了意見」
+          // 的線索**——不放在這裡，就只能一份一份打開去發現
+          if (pad.unresolvedNotes > 0) ...[
+            MonoLabel('${pad.unresolvedNotes} 則意見',
+                size: 9, letterSpacing: 1.0, color: UepColors.gold),
+            const SizedBox(width: 8),
+          ],
+          MonoLabel('${pad.blockCount} 段', size: 9, letterSpacing: 1.0),
+        ]),
+      ),
+    );
+  }
+}
+
+class _NewPadDialog extends StatefulWidget {
+  const _NewPadDialog();
+
+  @override
+  State<_NewPadDialog> createState() => _NewPadDialogState();
+}
+
+class _NewPadDialogState extends State<_NewPadDialog> {
+  final _c = TextEditingController();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return AlertDialog(
+      backgroundColor: s.bgCard,
+      title: Text('開一份想法板',
+          style: UepText.display(size: 18, color: s.inkTitle)),
+      content: SizedBox(
+        width: 360,
+        child: TextField(
+          controller: _c,
+          autofocus: true,
+          style: UepText.sans(size: 13, color: s.ink),
+          decoration: InputDecoration(
+            labelText: '叫什麼',
+            helperText: '想到什麼先丟進去，之後再整理成卡',
+            helperStyle: UepText.serif(size: 11, color: s.inkMute),
+            border: const OutlineInputBorder(),
+          ),
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (v) =>
+              v.trim().isEmpty ? null : Navigator.of(context).pop(v.trim()),
+        ),
+      ),
+      actions: [
+        UepButton(
+          label: '取消',
+          variant: UepButtonVariant.outline,
+          small: true,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        UepButton(
+          label: '開',
+          small: true,
+          onPressed: _c.text.trim().isEmpty
+              ? null
+              : () => Navigator.of(context).pop(_c.text.trim()),
+        ),
+      ],
     );
   }
 }

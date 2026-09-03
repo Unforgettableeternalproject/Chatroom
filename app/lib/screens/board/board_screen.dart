@@ -8,6 +8,7 @@ import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
+import 'scratchpad_screen.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/board_task_card.dart';
 import '../../widgets/empty_error_states.dart';
@@ -651,6 +652,19 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       ),
                     ),
                 ],
+              ),
+            ),
+          ],
+          // 想法板放在左欄最下面：它是這塊板的**旁邊**，不是某個週期底下的
+          // 東西。放進週期裡的話，「還沒想好要放哪個週期」的想法就無處可去
+          // ——而那正是它存在的理由
+          if (_boardIdOrNull != null) ...[
+            const SizedBox(height: 26),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              child: ScratchpadSection(
+                boardId: _boardIdOrNull!,
+                canEdit: !_readOnly,
               ),
             ),
           ],
