@@ -197,3 +197,142 @@ async def test_boards_from_before_this_feature_are_public(tmp_path):
             "SELECT visibility FROM board WHERE id='old'")).fetchone()
         assert row["visibility"] == "public"
         await db.close()
+
+
+# ── owner 的轉移與接管（裁定Novia 2026-09-03，照房間那兩條抄）──────────
+
+async def test_the_owner_can_hand_the_board_to_someone_else(tmp_path):
+    """現任 owner 把板交給別人（對應房間的 `transfer_admin`）。
+
+    只做接管不做交棒的話，**活著的 owner 想主動交棒得先把自己弄死**。
+    """
+    app, client = await _client(tmp_path, "board-transfer")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            b = await _join(client, rid, "claude-b", "B")
+            bid = await _board(client, a, room=rid)
+
+            no = await client.post(f"/api/boards/{bid}/owner",
+                                   json={"target_actor_key": "claude-b"},
+                                   headers=b)
+            assert no.status_code == 403, "非 owner 也交得出去"
+
+            r = await client.post(f"/api/boards/{bid}/owner",
+                                  json={"target_actor_key": "claude-b"},
+                                  headers=a)
+            assert r.status_code == 200, r.text
+
+            assert (await client.get(f"/api/boards/{bid}",
+                                     headers=b)).json()["my_role"] == "owner"
+            # 交出去的人不會變成陌生人——他還在房裡，所以還是 editor
+            assert (await client.get(f"/api/boards/{bid}",
+                                     headers=a)).json()["my_role"] == "editor"
+
+
+async def test_the_host_can_take_over_a_board_whose_owner_is_gone(tmp_path):
+    """owner 的身分死掉時，Hub 主持人接管（對應房間的 `claim_admin`）。
+
+    🚨 這是艾斯維爾早上報的「永久孤兒」升了一層：當時是卡，這裡是**整塊板**。
+    根因同一個——`session_key` 被當成永久身分用，而 agent 每開一個新 session
+    就換一把。owner 專屬的六個操作（改公開/私人、指派 supervisor、加減成員、
+    封存板）於是**沒有任何人做得到**（@開發Novia (除錯) 2026-09-03，活庫實證
+    「Chatroom 開發 09/02」那塊板就是這個狀態）。
+
+    「owner 永遠有完整權限」那條規則讓它更硬：權限牢牢綁在一把死掉的 key 上。
+    規則對，但它預設 owner 是個活得下去的身分——**agent 的 session key 不是**。
+    """
+    app, client = await _client(tmp_path, "board-claim")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client, who="claude-dead")
+            dead = await _join(client, rid, "claude-dead", "昨天的我")
+            bid = await _board(client, dead, room=rid)
+            await client.post(f"/api/rooms/{rid}/leave", headers=dead)
+
+            host = {"X-Session-Key": "human-host", "X-Host-View": "1"}
+            plain = await client.post(f"/api/boards/{bid}/owner/claim",
+                                      headers={"X-Session-Key": "human-host"})
+            assert plain.status_code == 403, "沒有主持人視角也接管得了"
+
+            r = await client.post(f"/api/boards/{bid}/owner/claim",
+                                  headers=host)
+            assert r.status_code == 200, r.text
+            assert r.json()["changed"] is True
+
+            got = await client.get(f"/api/boards/{bid}",
+                                   headers={"X-Session-Key": "human-host"})
+            assert got.json()["my_role"] == "owner"
+
+            # 冪等：再按一次不該長得像錯誤
+            again = await client.post(f"/api/boards/{bid}/owner/claim",
+                                      headers=host)
+            assert again.status_code == 200
+            assert again.json()["changed"] is False
+
+
+async def test_a_board_whose_owner_is_still_around_cannot_be_taken_over(
+        tmp_path):
+    """owner 還活著就接管不了——**板有沒有掛房與這件事無關**。
+
+    🚨 迴歸測試。判準一度被寫成「owner 是不是某個**掛接房**的 active 成員」，
+    那會把剛用「＋ 開一塊板」建出來的板判成無主：沒掛任何房是它**正常的
+    初始狀態**，而 owner 三秒前才建它、人就在線上 ⇒ 主持人接管得走別人剛
+    建好的私人板，而艾斯維爾的規則是「owner 無論如何都能編輯自己的板」
+    （@開發Novia (除錯) 2026-09-03 攔下）。
+
+    正確判準：`owner_actor_key` 這把 key 在**任何**現存未封存的房裡是不是
+    active participant。
+    """
+    app, client = await _client(tmp_path, "owner-alive-no-claim")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, "剛建好的", visibility="private")
+
+            host = {"X-Session-Key": "human-host", "X-Host-View": "1"}
+            no = await client.post(f"/api/boards/{bid}/owner/claim",
+                                   headers=host)
+            assert no.status_code == 409, "主持人接管得走別人剛建好的板"
+            detail = no.json()["detail"]
+            assert detail["code"] == "board_has_owner"
+            # 主持人要判斷得出「這個 owner 是 20 分鐘前還在，還是昨天之後
+            # 就沒出現過」——兩者現在長得一模一樣
+            assert detail["owner_display_name"] == "A"
+            assert detail["owner_last_seen_at"]
+
+            # owner 離開最後一間房 ⇒ 這把 key 到處都不是 active ⇒ 可接管
+            await client.post(f"/api/rooms/{rid}/leave", headers=a)
+            ok = await client.post(f"/api/boards/{bid}/owner/claim",
+                                   headers=host)
+            assert ok.status_code == 200, ok.text
+
+
+async def test_an_owner_who_only_lives_in_an_archived_room_counts_as_gone(
+        tmp_path):
+    """owner 只在**封存房**裡 active ⇒ 算無主。
+
+    由「封存的房只是曾經存在」（艾斯維爾 2026-09-03）直接推出來，不需要
+    靠「限主持人所以可以放寬」來撐。
+    """
+    app, client = await _client(tmp_path, "owner-archived-only")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, room=rid)
+
+            host = {"X-Session-Key": "human-host", "X-Host-View": "1"}
+            assert (await client.post(f"/api/boards/{bid}/owner/claim",
+                                      headers=host)).status_code == 409
+
+            # 房封存，但他**沒有離開**——participant 仍是 active
+            r = await client.post(f"/api/rooms/{rid}/archive", headers=a)
+            assert r.status_code == 200, r.text
+
+            ok = await client.post(f"/api/boards/{bid}/owner/claim",
+                                   headers=host)
+            assert ok.status_code == 200, ok.text
+            assert ok.json()["had_owner"] is True

@@ -372,6 +372,14 @@ class BoardMemberAdd(BaseModel):
     actor_kind: str = Field(default="", max_length=20)
 
 
+class BoardOwnerTransfer(BaseModel):
+    """把板交給別人。命名照抄房間的 `transfer_admin`，不發明新詞
+    （裁定Novia 2026-09-03）。"""
+    model_config = ConfigDict(extra="forbid")
+
+    target_actor_key: str = Field(min_length=1, max_length=128)
+
+
 class BoardSupervisorAssign(BaseModel):
     """board-scoped 的 Supervisor 指定。與房內那個 `BoardSupervisorSet`
     是兩件事：那邊指的是 session_key、範圍是一間房；這邊是 actor_key、
@@ -5439,6 +5447,33 @@ def create_app(config: Config | None = None) -> FastAPI:
             " LIMIT 1", (board_id, actor))).fetchone()
         return "editor" if row else ""
 
+    async def _board_owner_alive(owner: str):
+        """owner 那把 key 現在還活著嗎？活著回他的身分列，否則回 None。
+
+        🔑 **判準是「這把 key 在任何現存未封存的房裡是不是 active」——
+        不限掛接房**（裁定Novia 2026-09-03 修正版）。
+
+        ⚠️ 一度差點寫成「owner 是不是某個**掛接房**的 active 成員」，那會把
+        剛用「＋ 開一塊板」建出來的板判成無主：它沒掛任何房是**正常的初始
+        狀態**，而 owner 三秒前才建它、人就在線上 ⇒ 主持人接管得走別人剛
+        建好的私人板。那是拿「經房取得資格」的退路判準去判 owner，正是
+        `_board_role` 的 owner 例外要解掉的同一個錯（@開發Novia (除錯) 攔下）。
+
+        必然的性質，先說在這裡免得日後被當成 bug：**agent 的板在它離線期間
+        就是「無主」**——session 一結束，key 從所有房裡消失，那塊板立刻可被
+        接管，即使它明天就回來。這是 `session_key` 當身分的必然結果（今天
+        第三次遇到同一個形狀：卡變孤兒 → 板變無主 → owner 資格蒸發）。
+        三道閘擋著：限主持人、要明示 host-view、事後可用交棒還回去。
+        """
+        key = actor_key(owner or "")
+        if not key:
+            return None
+        return await (await app.state.db.execute(
+            "SELECT p.display_name, p.last_seen_at FROM participant p"
+            " JOIN room r ON r.id = p.room_id AND r.status='active'"
+            " WHERE p.session_key=? AND p.status='active' AND p.ephemeral=0"
+            " ORDER BY p.last_seen_at DESC LIMIT 1", (key,))).fetchone()
+
     def _private_board_needs_private_room(visibility: str, room) -> None:
         """私人板只能掛進私人房（艾斯維爾 2026-09-03）。
 
@@ -6201,6 +6236,133 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "count": len(body.items)}
+
+    @app.post("/api/boards/{board_id}/owner",
+              dependencies=[Depends(require_auth)])
+    async def transfer_board_owner(
+        board_id: str, body: BoardOwnerTransfer,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """把這塊板交給別人。**現任 owner 限定。**
+
+        與 `claim_board_owner` 是兩件事，所以不共用端點——語意與命名照抄房間
+        的 `transfer_admin` / `claim_admin`（裁定Novia 2026-09-03）：這條是
+        「還活著的 owner 主動交棒」，那條是「已經沒有人可以交了」。只做後者
+        的話，活著的 owner 想交棒得先把自己弄死。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id)
+        if actor_key(board["owner_actor_key"]) != actor:
+            raise _err(403, "not_board_owner",
+                       "只有這塊板現在的 owner 可以把它交給別人")
+        target = actor_key(body.target_actor_key)
+        if not target:
+            raise _err(422, "heir_required", "要指定交給誰")
+        if target == actor:
+            return {"ok": True, "changed": False, "owner_actor_key": actor}
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        # **檢查與寫入是同一個動作**：兩個同時抵達的請求會各自通過上面那道
+        # 檢查、各自成功，最後一筆蓋掉前一筆，而稽核串上會有兩則交棒紀錄。
+        # 帶著舊的 owner 當條件，與房間那條同一個寫法
+        cur = await db.execute(
+            "UPDATE board SET owner_actor_key=? WHERE id=? AND owner_actor_key=?"
+            " RETURNING id", (target, board_id, board["owner_actor_key"]))
+        if await cur.fetchone() is None:
+            await _commit_with_retry(db)
+            raise _err(409, "owner_already_changed",
+                       "這塊板的 owner 在你送出請求的同時換人了")
+        # `board_member` 的角色一併跟上——它現在只是角色覆寫，但留著一個
+        # 寫著 owner 的舊列，會讓「誰是 owner」有兩個答案
+        await db.execute(
+            "UPDATE board_member SET role='editor' WHERE board_id=?"
+            " AND actor_key=? AND role='owner'", (board_id, actor))
+        await db.execute(
+            "INSERT INTO board_member (board_id, actor_key, role, display_name,"
+            " actor_kind, aliases, added_by_actor_key, added_at)"
+            " VALUES (?,?,'owner','','','[]',?,?)"
+            " ON CONFLICT (board_id, actor_key) DO UPDATE SET role='owner',"
+            " removed_at=NULL", (board_id, target, actor, _now()))
+        await _record_board_event(board_id, seq, "owner_transferred",
+                                  actor=actor, target_actor_key=target,
+                                  payload={"from": board["owner_actor_key"]})
+        await _commit_with_retry(db)
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "changed": True, "board_seq": seq,
+                "owner_actor_key": target}
+
+    @app.post("/api/boards/{board_id}/owner/claim",
+              dependencies=[Depends(require_auth)])
+    async def claim_board_owner(
+        board_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """Hub 主持人把一塊沒有人管得動的板收到自己身上。
+
+        🚨 **為什麼需要它**：owner 綁 `owner_actor_key`，而 agent 的
+        `session_key` 每開一個新 session 就換一把。那把 key 一旦不再回來，
+        owner 專屬的六個操作（改公開/私人、指派 supervisor、加減成員、封存板）
+        就**沒有任何人做得到**——「Chatroom 開發 09/02」那塊板現在正是這個
+        狀態（@開發Novia (除錯) 2026-09-03 活庫實證）。
+
+        這是艾斯維爾早上報的「永久孤兒」升了一層：當時是卡，這裡是整塊板。
+        而「owner 永遠有完整權限」那條規則讓它更硬——權限牢牢綁在一把死掉的
+        key 上，其他人永遠拿不到。
+
+        **限主持人，不是房管理者**：板可以掛多間房，「哪一間的管理者說了算」
+        沒有唯一答案，而主持人只有一個（裁定Novia 2026-09-03）。
+        封存的板**也能接管**，那其實是主要用途——需要被接管的多半已經收起來了。
+        """
+        if not host:
+            raise _err(403, "host_view_required",
+                       "接管板只有 Hub 主持人做得到，"
+                       "而且要明示主持人視角（X-Host-View）")
+        if not x_session_key:
+            raise _err(401, "session_key_header_required",
+                       "請求沒有帶 X-Session-Key。owner 要綁在一把具體的"
+                       "身分上，不能綁在「這次請求」上")
+        board = await _board_or_404(board_id)
+        me = actor_key(x_session_key)
+        previous = board["owner_actor_key"]
+        if actor_key(previous) == me:
+            # 冪等：已經是你的了。重複點擊不該長得像錯誤
+            return {"ok": True, "changed": False}
+        alive = await _board_owner_alive(previous)
+        if alive is not None:
+            raise _err(409, "board_has_owner",
+                       f"這塊板還有 owner（{alive['display_name'] or previous}），"
+                       "接管只用在沒有人管得動的板上",
+                       owner_display_name=alive["display_name"],
+                       owner_last_seen_at=alive["last_seen_at"])
+        db = app.state.db
+        seq = await _next_seq_for_board(board_id)
+        await db.execute("UPDATE board SET owner_actor_key=? WHERE id=?",
+                         (me, board_id))
+        await db.execute(
+            "UPDATE board_member SET role='editor' WHERE board_id=?"
+            " AND actor_key=? AND role='owner'", (board_id, previous))
+        await db.execute(
+            "INSERT INTO board_member (board_id, actor_key, role, display_name,"
+            " actor_kind, aliases, added_by_actor_key, added_at)"
+            " VALUES (?,?,'owner','','','[]',?,?)"
+            " ON CONFLICT (board_id, actor_key) DO UPDATE SET role='owner',"
+            " removed_at=NULL", (board_id, me, me, _now()))
+        await _record_board_event(board_id, seq, "owner_claimed", actor=me,
+                                  payload={"had_owner": bool(previous)})
+        await _commit_with_retry(db)
+        logger.warning(
+            "主持人接管板「%s」（%s）", board["name"], board_id,
+            extra={"event": "board_owner_claimed", "board_id": board_id,
+                   "board_name": board["name"],
+                   # 舊 key 只留提示碼：它是別人的身分識別，而這行日誌會被
+                   # 複製、貼進聊天室、附在 issue 上
+                   "previous_hint": token_hint(previous or ""),
+                   "had_owner": bool(previous)})
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "changed": True, "board_seq": seq,
+                "had_owner": bool(previous)}
 
     @app.post("/api/boards/{board_id}/supervisor",
               dependencies=[Depends(require_auth)])
