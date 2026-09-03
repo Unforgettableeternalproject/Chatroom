@@ -491,3 +491,119 @@ async def test_a_claim_from_the_board_axis_still_orphans_when_he_leaves(
             assert card["claim_state"] == "orphaned", (
                 "板軸認領的卡在持有者離房後沒有被孤兒化——畫面上會一直"
                 "顯示有人在做")
+
+
+async def test_the_board_detail_says_whether_it_is_public(tmp_path):
+    """詳情端點也要回 `visibility` 與 `owner_actor_key`。
+
+    清單有、詳情沒有 ⇒ 從 Board Library 點進去那個畫面**不知道自己是公開
+    還是私人**，而改可見性的入口正是在那裡（@開發Novia (除錯) 2026-09-03）。
+    同一個東西的兩個讀取端點給不同欄位，差別要等有人做那件事才看得見——
+    今天已經因為同一種形狀（`read_scratchpad` 少一個 `can_edit`）繞了一圈。
+    """
+    app, client = await _client(tmp_path, "detail-has-visibility")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, "私人板", visibility="private")
+
+            body = (await client.get(f"/api/boards/{bid}", headers=a)).json()
+            assert body["visibility"] == "private"
+            assert body["owner_actor_key"] == "claude-a"
+
+            # 清單與詳情必須說同一件事
+            card = next(b for b in (await client.get(
+                "/api/boards", headers=a)).json()["boards"] if b["id"] == bid)
+            assert card["visibility"] == body["visibility"]
+
+
+async def test_an_owner_who_never_joined_a_room_still_cannot_be_robbed(
+        tmp_path):
+    """從沒進過任何房的 owner **不算「不見了」**。
+
+    🚨 `_board_owner_alive` 原本問的是「owner 現在是不是某間活房的 active
+    participant」——**純 REST／Board Library 的使用者從頭到尾沒有 participant
+    列**，於是恆判為無主 ⇒ 任何拿得到主 token 的人一次請求就搶得走整塊板，
+    包括私人板，而回應自己還寫著 `had_owner: true`
+    （@測試Novia 2026-09-03 在 8788 實測，可無限重複）。
+
+    修正：接管要有 **owner 已經不在了的正面證據**，不是「查不到他在」。
+    他若從來沒有出現過任何 participant 列，那是「不知道」，而不知道時
+    不該提權。
+    """
+    app, client = await _client(tmp_path, "owner-never-in-a-room")
+    async with client:
+        async with app.router.lifespan_context(app):
+            # A 完全走 REST，沒有加入任何房間
+            only_key = {"X-Session-Key": "claude-a"}
+            bid = await _board(client, only_key, "我的私人板",
+                               visibility="private")
+
+            host = {"X-Session-Key": "claude-thief", "X-Host-View": "1"}
+            r = await client.post(f"/api/boards/{bid}/owner/claim",
+                                  headers=host)
+            assert r.status_code == 409, "沒進過房的 owner 被搶走了"
+            assert r.json()["detail"]["code"] == "board_has_owner"
+
+            # owner 仍然是他
+            body = (await client.get(f"/api/boards/{bid}",
+                                     headers=only_key)).json()
+            assert body["my_role"] == "owner"
+
+
+async def test_an_owner_who_was_here_and_left_can_be_replaced(tmp_path):
+    """曾經在、現在不在了 ⇒ 有正面證據，接管成立。
+
+    這是接管功能存在的理由，與上一條的差別只有一件事：**有沒有留下過痕跡**。
+    """
+    app, client = await _client(tmp_path, "owner-was-here-and-left")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client, who="claude-a")
+            a = await _join(client, rid, "claude-a", "A")
+            bid = await _board(client, a, room=rid)
+            host = {"X-Session-Key": "human-host", "X-Host-View": "1"}
+            assert (await client.post(f"/api/boards/{bid}/owner/claim",
+                                      headers=host)).status_code == 409
+
+            await client.post(f"/api/rooms/{rid}/leave", headers=a)
+
+            ok = await client.post(f"/api/boards/{bid}/owner/claim",
+                                   headers=host)
+            assert ok.status_code == 200, ok.text
+
+
+async def test_making_the_room_public_cannot_expose_a_private_board(tmp_path):
+    """私人房改公開時，掛著的私人板要擋下。
+
+    🚨 這是「私人板只能放在私人聊天室」的側門：掛接那一頭守住了，**房這一頭
+    改可見度就把同一個保證繞過去**，而板從頭到尾沒有被碰過
+    （@測試Novia 2026-09-03 打穿）。
+
+    擋下而不是自動解除掛接，與可見性那條同一個形狀——靜默的副作用會讓房裡
+    的人在沒有提示的情況下失去一塊正在用的板。
+    """
+    app, client = await _client(tmp_path, "room-public-exposes-board")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client, who="claude-a")
+            a = await _join(client, rid, "claude-a", "A")
+            await client.post(f"/api/rooms/{rid}/visibility",
+                              json={"visibility": "private"}, headers=a)
+            bid = await _board(client, a, "私人板", visibility="private")
+            assert (await client.post(f"/api/boards/{bid}/rooms/{rid}",
+                                      headers=a)).status_code == 200
+
+            no = await client.post(f"/api/rooms/{rid}/visibility",
+                                   json={"visibility": "public"}, headers=a)
+            assert no.status_code == 409, "改房間可見度就把私人板曝光了"
+            detail = no.json()["detail"]
+            assert detail["code"] == "private_board_attached"
+            assert detail["boards"] == [{"id": bid, "name": "私人板"}]
+
+            # 解除掛接之後就改得動
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=a)
+            ok = await client.post(f"/api/rooms/{rid}/visibility",
+                                   json={"visibility": "public"}, headers=a)
+            assert ok.status_code == 200, ok.text

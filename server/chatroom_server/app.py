@@ -1938,6 +1938,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         if room["visibility"] == body.visibility:
             return {"ok": True, "visibility": body.visibility, "changed": False}
         db = app.state.db
+        # 🚨 **私人房改公開時，掛在上面的私人板要擋下。** 這是「私人板只能
+        # 放在私人聊天室」那條規則的側門：掛接那一頭守住了，房這一頭改可見度
+        # 就把同一個保證繞過去，而板從頭到尾沒有被碰過
+        # （@測試Novia 2026-09-03 打穿）。
+        #
+        # 擋下而不是自動解除掛接，與裁決①同一個形狀：靜默的副作用會讓房裡的
+        # 人在沒有提示的情況下失去一塊正在用的板。409 要列出是哪幾塊板擋著
+        if body.visibility == "public":
+            blocking = [
+                {"id": b["id"], "name": b["name"]}
+                for b in await (await db.execute(
+                    "SELECT b.id, b.name FROM board b"
+                    " JOIN board_room br ON br.board_id = b.id"
+                    " WHERE br.room_id=? AND br.detached_at IS NULL"
+                    "   AND b.visibility='private'", (room_id,))).fetchall()]
+            if blocking:
+                raise _err(409, "private_board_attached",
+                           "這間房掛著私人板——先解除掛接再把房間改成公開",
+                           boards=blocking)
         await db.execute(
             "UPDATE room SET visibility=? WHERE id=?", (body.visibility, room_id)
         )
@@ -5535,11 +5554,31 @@ def create_app(config: Config | None = None) -> FastAPI:
         key = actor_key(owner or "")
         if not key:
             return None
-        return await (await app.state.db.execute(
+        db = app.state.db
+        here = await (await db.execute(
             "SELECT p.display_name, p.last_seen_at FROM participant p"
             " JOIN room r ON r.id = p.room_id AND r.status='active'"
             " WHERE p.session_key=? AND p.status='active' AND p.ephemeral=0"
             " ORDER BY p.last_seen_at DESC LIMIT 1", (key,))).fetchone()
+        if here is not None:
+            return here
+        # 🚨 **接管要有「他已經不在了」的正面證據，不是「查不到他在」。**
+        #
+        # 只問前一段的話，**從沒進過任何房的 owner 恆判為無主**——純 REST
+        # 與 Board Library 的使用者從頭到尾沒有 participant 列，於是任何拿得
+        # 到主 token 的人一次請求就搶得走整塊板（含私人板），而回應自己還寫
+        # 著 `had_owner: true`（@測試Novia 2026-09-03 在測試 Hub 實測，可無限
+        # 重複）。而「在 BOARDS 分頁開一塊板」建出來的板正是這種。
+        #
+        # 沒有留下過任何痕跡＝**不知道**，而不知道時不該提權。有痕跡而現在
+        # 不在，才是接管功能要處理的那個狀態
+        ever = await (await db.execute(
+            "SELECT display_name, last_seen_at FROM participant"
+            " WHERE session_key=? ORDER BY last_seen_at DESC LIMIT 1",
+            (key,))).fetchone()
+        if ever is None:
+            return {"display_name": "", "last_seen_at": None}
+        return None
 
     def _private_board_needs_private_room(visibility: str, room) -> None:
         """私人板只能掛進私人房（艾斯維爾 2026-09-03）。
@@ -5922,6 +5961,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             "description": board["description"],
             "status": board["status"],
             "my_role": my_role,
+            # 清單有、詳情沒有 ⇒ 從 Board Library 點進去那個畫面**不知道**
+            # 自己是公開還是私人，而改可見性的入口正是在那裡
+            # （@開發Novia (除錯) 2026-09-03）。同一個東西的兩個讀取端點
+            # 給不同欄位，差別要等有人做那件事才看得見
+            "visibility": board["visibility"],
+            # owner 是誰、他還在不在——接管的確認對話框靠這兩個判斷「20 分鐘
+            # 前還在」與「昨天之後沒再出現過」，不能只在 409 裡才給
+            "owner_actor_key": board["owner_actor_key"],
             "board_seq": board["board_seq"],
             "full": after_board_seq == 0,
             "objectives": objectives,
@@ -6394,12 +6441,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE board_member SET role='editor' WHERE board_id=?"
             " AND actor_key=? AND role='owner'", (board_id, actor))
+        # ⚠️ **名字與 kind 要填。** 寫死空字串的話，新 owner 在 `members[]`
+        # 上只剩一把 key，UI 顯示不出「這塊板現在是誰的」；而 kind 空著更糟
+        # ——想法板的守門靠它分辨人類與 agent，空的會把人類當成 agent
+        # （@測試Novia 2026-09-03 在測試 Hub 上看到整排空值）
+        who = await _board_identity(board_id, target)
         await db.execute(
             "INSERT INTO board_member (board_id, actor_key, role, display_name,"
             " actor_kind, aliases, added_by_actor_key, added_at)"
-            " VALUES (?,?,'owner','','','[]',?,?)"
+            " VALUES (?,?,'owner',?,?,'[]',?,?)"
             " ON CONFLICT (board_id, actor_key) DO UPDATE SET role='owner',"
-            " removed_at=NULL", (board_id, target, actor, _now()))
+            " removed_at=NULL,"
+            " display_name=CASE WHEN board_member.display_name='' THEN excluded.display_name"
+            "                   ELSE board_member.display_name END,"
+            " actor_kind=CASE WHEN board_member.actor_kind='' THEN excluded.actor_kind"
+            "                 ELSE board_member.actor_kind END",
+            (board_id, target, who["display_name"] if who else "",
+             who["actor_kind"] if who else "", actor, _now()))
         await _record_board_event(board_id, seq, "owner_transferred",
                                   actor=actor, target_actor_key=target,
                                   payload={"from": board["owner_actor_key"]})
@@ -6459,12 +6517,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE board_member SET role='editor' WHERE board_id=?"
             " AND actor_key=? AND role='owner'", (board_id, previous))
+        who = await _board_identity(board_id, me)
         await db.execute(
             "INSERT INTO board_member (board_id, actor_key, role, display_name,"
             " actor_kind, aliases, added_by_actor_key, added_at)"
-            " VALUES (?,?,'owner','','','[]',?,?)"
+            " VALUES (?,?,'owner',?,?,'[]',?,?)"
             " ON CONFLICT (board_id, actor_key) DO UPDATE SET role='owner',"
-            " removed_at=NULL", (board_id, me, me, _now()))
+            " removed_at=NULL,"
+            " display_name=CASE WHEN board_member.display_name='' THEN excluded.display_name"
+            "                   ELSE board_member.display_name END,"
+            " actor_kind=CASE WHEN board_member.actor_kind='' THEN excluded.actor_kind"
+            "                 ELSE board_member.actor_kind END",
+            (board_id, me, who["display_name"] if who else "",
+             who["actor_kind"] if who else "", me, _now()))
         await _record_board_event(board_id, seq, "owner_claimed", actor=me,
                                   payload={"had_owner": bool(previous)})
         await _commit_with_retry(db)
