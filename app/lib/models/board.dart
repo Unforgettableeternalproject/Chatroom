@@ -879,6 +879,23 @@ class BoardSnapshot {
     return out;
   }
 
+  /// 排序要送的那一份：**這塊板上每一個沒被刪掉的週期**，照目前順序。
+  ///
+  /// ⚠️ 與 [sortedObjectives] 差在**含被取消的**。顯示側不該看到它們，但
+  /// 排序的母體是「同層 siblings」，而 Hub 眼中被取消的週期仍然是一個
+  /// sibling（它只排除 deleted）。少送的話：Hub `510d6ed` 起回 409
+  /// `reorder_incomplete`；在那之前更糟——那些卡保留舊的 order_index，
+  /// 與新的 0、1、2 直接重疊，**沒有任何一列是錯的，錯的是它們之間的關係**。
+  List<String> get allObjectiveIdsInOrder {
+    final out = objectives.values.toList()
+      ..sort(
+        (a, b) => a.orderIndex != b.orderIndex
+            ? a.orderIndex.compareTo(b.orderIndex)
+            : a.createdAt.compareTo(b.createdAt),
+      );
+    return [for (final o in out) o.id];
+  }
+
   List<BoardChecklist> checklistsOf(String objectiveId) {
     final out =
         checklists.values

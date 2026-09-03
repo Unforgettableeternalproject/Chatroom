@@ -610,7 +610,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 已完成的週期留在原位，不會被這次拖曳擠到最後
               onReorderItem: (from, to) => _reorderPartial(
                   'objective',
-                  [for (final o in objectives) o.id],
+                  // ⚠️ 母體是**這塊板上每一個沒被刪掉的週期**，含被取消的
+                  // 那些。`objectives` 走的是 sortedObjectives，那條會濾掉
+                  // cancelled——送那一份的話 Hub 的全集檢查會回 409
+                  // `reorder_incomplete`（Hub `510d6ed` 起），而在那之前
+                  // 它是靜默的：被取消的週期保留舊 order_index，與新的
+                  // 0、1、2 直接重疊
+                  snap.allObjectiveIdsInOrder,
                   [for (final o in active) o.id],
                   from,
                   to),
