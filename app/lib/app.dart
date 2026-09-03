@@ -116,6 +116,18 @@ GoRouter buildRouter(bool Function() isConfigured) {
                     path: 'board',
                     builder: (context, state) => BoardScreen(
                         roomId: state.pathParameters['roomId']!),
+                    routes: [
+                      // 想法板的房軸入口。板軸那條（`/boards/:bid/pads/:pid`）
+                      // 仍是權威路徑；這條的存在只為了讓「從聊天室點進來」
+                      // 的人留在 ROOMS 分頁上——見 RoomScratchpadPage
+                      GoRoute(
+                        path: 'pads/:padId',
+                        builder: (context, state) => RoomScratchpadPage(
+                          roomId: state.pathParameters['roomId']!,
+                          padId: state.pathParameters['padId']!,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

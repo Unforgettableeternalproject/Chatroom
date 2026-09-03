@@ -671,6 +671,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               child: ScratchpadSection(
                 boardId: _boardIdOrNull!,
                 canEdit: !_readOnly,
+                // 房軸進來的就留在房軸——否則左欄會跳去 BOARDS 分頁
+                roomId: widget.roomId,
               ),
             ),
           ],

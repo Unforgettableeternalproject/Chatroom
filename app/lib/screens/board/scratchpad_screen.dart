@@ -8,6 +8,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../models/board.dart' show reorderedIdsAt;
 import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
+import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
@@ -778,6 +779,76 @@ class ScratchpadPage extends StatelessWidget {
   }
 }
 
+/// 一份想法板的網址。**從哪裡點進來，就留在哪一軸**。
+///
+/// 板軸（`/boards/:bid/pads/:pid`）是權威路徑，但它會讓 `AppShell` 的
+/// `selectedBoardId` 有值 ⇒ 左欄從 ROOMS 跳到 BOARDS。從聊天室點進來的人
+/// 因此被換到另一個世界，而他只是想看一份想法板（艾斯維爾 2026-09-03）。
+String padRoute({
+  required String boardId,
+  required String padId,
+  String? roomId,
+}) =>
+    roomId != null
+        ? '/rooms/$roomId/board/pads/$padId'
+        : '/boards/$boardId/pads/$padId';
+
+/// 從聊天室走進來的想法板：`/rooms/:roomId/board/pads/:padId`。
+///
+/// 想法板**屬於板**，所以權威網址是板軸那條（`/boards/:bid/pads/:pid`）。
+/// 但從聊天室點進來的人不該被丟到板軸上：`AppShell` 靠 `selectedBoardId`
+/// 決定左欄站在哪個分頁，板軸網址一出現，左欄就從 ROOMS 跳到 BOARDS——
+/// 內容是對的，人卻被換到另一個世界，而且回去要自己找路。
+///
+/// 所以這裡多一條**房軸的相容入口**，與 `/rooms/:roomId/board` 同一族：
+/// 網址記得你從哪來，boardId 則照 BoardScreen 的老辦法從房間解析。
+class RoomScratchpadPage extends ConsumerWidget {
+  const RoomScratchpadPage({
+    super.key,
+    required this.roomId,
+    required this.padId,
+  });
+
+  final String roomId;
+  final String padId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final async = ref.watch(boardProvider(roomId));
+    return async.when(
+      loading: () => Scaffold(
+        backgroundColor: s.bg,
+        appBar: AppBar(backgroundColor: s.bg),
+        body: const Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => Scaffold(
+        backgroundColor: s.bg,
+        appBar: AppBar(backgroundColor: s.bg),
+        body: ErrorState(
+          error: e,
+          onRetry: () => ref.invalidate(boardProvider(roomId)),
+        ),
+      ),
+      data: (snap) => snap.boardId.isEmpty
+          // 房間沒掛板就沒有想法板可看。這不是錯誤，講清楚就好
+          ? Scaffold(
+              backgroundColor: s.bg,
+              appBar: AppBar(
+                backgroundColor: s.bg,
+                title: Text('想法板',
+                    style: UepText.display(size: 20, color: s.inkTitle)),
+              ),
+              body: Center(
+                child: Text('這個聊天室還沒有掛上任何板。',
+                    style: UepText.serif(size: 13, color: s.inkMute)),
+              ),
+            )
+          : ScratchpadPage(boardId: snap.boardId, padId: padId),
+    );
+  }
+}
+
 /// 板上的想法板清單。**入口就是它**——沒有這一段的話，想法板那個畫面
 /// 存在，但沒有任何地方走得到（@審核用Codex-2 2026-09-03）。
 class ScratchpadSection extends ConsumerWidget {
@@ -785,10 +856,22 @@ class ScratchpadSection extends ConsumerWidget {
     super.key,
     required this.boardId,
     required this.canEdit,
+    this.roomId,
   });
 
   final String boardId;
   final bool canEdit;
+
+  /// 從哪一間房走進這塊板的（板軸進來時是 null）。
+  ///
+  /// **只影響網址，不影響顯示的內容。** 一律往 `/boards/:bid/pads/:pid` 走的
+  /// 話，`AppShell` 看到 `selectedBoardId` 有值就把左欄從 ROOMS 切到 BOARDS
+  /// ——人是從聊天室點進來的，畫面卻換了一個世界，回去要自己找路
+  /// （艾斯維爾 2026-09-03）。
+  final String? roomId;
+
+  String _padRoute(String padId) =>
+      padRoute(boardId: boardId, padId: padId, roomId: roomId);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -833,8 +916,7 @@ class ScratchpadSection extends ConsumerWidget {
                   for (final p in pads)
                     _PadRow(
                       pad: p,
-                      onTap: () =>
-                          context.go('/boards/$boardId/pads/${p.id}'),
+                      onTap: () => context.go(_padRoute(p.id)),
                     ),
                 ],
               ),
@@ -856,7 +938,7 @@ class ScratchpadSection extends ConsumerWidget {
           );
       ref.invalidate(scratchpadListProvider(boardId));
       if (!context.mounted || id.isEmpty) return;
-      context.go('/boards/$boardId/pads/$id');
+      context.go(_padRoute(id));
     } on ApiException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
