@@ -146,8 +146,13 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       ),
       title: Text('Supervisor',
           style: UepText.display(size: 20, color: s.inkTitle)),
+      // ⚠️ **一定要能捲。** AlertDialog 的 content 不會自己給捲軸：內容一長
+      // 就直接被裁掉，而畫面上沒有任何東西表示下面還有東西
+      // （艾斯維爾 2026-09-03：「也無法捲動，因此後面我還沒測」）。
+      // 這個面板本來只有一段，今天加到四段之後就溢出了
       content: SizedBox(
         width: 460,
+        child: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           // 房軸進來的話，**先講這間房**——他要指派的是「這裡的人」，
           // 板上那個 supervisor 是另一回事
@@ -180,6 +185,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             _composer(context, snap),
           ],
         ]),
+        ),
       ),
       actions: [
         UepButton(
@@ -587,8 +593,12 @@ class _RoomSupervisorSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     // 權限看**房間管理者**，不是板上的角色
+    // ⚠️ `you_are_admin` 在**回應頂層**，不在 `room` 物件裡（房間列表那支
+    // 才塞進 room）。寫成 `.room.youAreAdmin` 會**永遠是 false**——指派
+    // 按鈕就這樣消失了，而畫面上看起來只是「這間房沒有指派入口」
+    // （艾斯維爾 2026-09-03 實機：「不知為何無法指定裁定Novia」）
     final canAssign =
-        ref.watch(roomDetailProvider(roomId)).value?.room.youAreAdmin ?? false;
+        ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
     final sup = attached?.supervisor;
     final departed = attached?.supervisorDeparted ?? false;
     // 我是不是這間房的 supervisor。人類的 actor_key 就是 deviceKey

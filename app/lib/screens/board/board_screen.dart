@@ -535,13 +535,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         Text('BOARD',
             style:
                 UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.6)),
-        // 掛在這塊板上的其他房間，點了就切過去。**這是 v2 才有意義的一列**：
-        // 板不再屬於單一房間，「它還被哪些對話用著」只有這裡看得到
-        for (final r in attached.where((r) => r.id != widget.roomId).take(3)) ...[
+        // 掛在這塊板上的聊天室。**一顆按鈕、點開列全部**，不是把房名一個個
+        // 攤在頁首上——板可以掛任意多間，攤開來只能塞得下前幾個，而「還有
+        // 沒有別的」看不出來（艾斯維爾 2026-09-03）
+        if (attached.isNotEmpty) ...[
           const SizedBox(width: 8),
           _HeaderAction(
-            label: '◫ ${r.name}',
-            onTap: () => context.go('/rooms/${r.id}'),
+            label: '◫ ${attached.length} 間聊天室',
+            onTap: () => _showAttachedRooms(context, attached),
           ),
         ],
         const Spacer(),
@@ -576,9 +577,69 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 從 Library 進來時改不了東西。**要講出來而且要講對原因**——
         // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
         // 不存在的權限問題
-        if (_boardOnly && !_archived) const _NoRoomBadge(),
+        // ⚠️ 條件是「**這塊板真的沒掛任何活著的房**」，不是「你從板軸進來」。
+        // 那個徽章從前寫「唯讀 · 未從聊天室進入」，條件用 `_boardOnly` 剛好
+        // 成立；今天把文案改成「未掛接聊天室」卻沒改條件 ⇒ 它變成一句
+        // **事實上錯誤**的陳述：板掛著兩間房，從 BOARDS 分頁進去照樣說沒掛
+        // （艾斯維爾 2026-09-03 實機發現）
+        if (!_archived && (_watchBoard().value?.liveRooms.isEmpty ?? false))
+          const _NoRoomBadge(),
         if (_editability == BoardEditability.viewer) const _ViewerBadge(),
       ]),
+    );
+  }
+
+  /// 掛接的聊天室列表。**點一間就切過去**——那是這個清單存在的理由：
+  /// 板不再屬於單一房間，「它還被哪些對話用著」只有這裡看得到。
+  ///
+  /// 已解除掛接的房**照樣列出來但標明**：那段歷史真的發生過，而「從來沒掛過」
+  /// 與「掛過又拿掉了」是兩件事。
+  Future<void> _showAttachedRooms(
+      BuildContext context, List<AttachedRoom> rooms) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final s = ctx.uep;
+        return SimpleDialog(
+          backgroundColor: s.bgCard,
+          title: Text('掛在這塊板上的聊天室',
+              style: UepText.display(size: 17, color: s.inkTitle)),
+          children: [
+            for (final r in rooms)
+              SimpleDialogOption(
+                onPressed: r.detached
+                    ? null
+                    : () {
+                        Navigator.of(ctx).pop();
+                        context.go('/rooms/${r.id}');
+                      },
+                child: Row(children: [
+                  Text('◫',
+                      style: UepText.mono(
+                          size: 10,
+                          color: r.detached ? s.inkMute : s.inkSoft)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      r.name.isEmpty ? '（未命名）' : r.name,
+                      style: UepText.serif(
+                        size: 12.5,
+                        color: r.detached ? s.inkMute : s.ink,
+                      ),
+                    ),
+                  ),
+                  // 現在站在哪一間，講出來——不然點進去會發現「怎麼沒動」
+                  if (r.id == widget.roomId)
+                    const MonoLabel('目前', size: 8.5, letterSpacing: 1.0),
+                  if (r.detached)
+                    const MonoLabel('已解除', size: 8.5, letterSpacing: 1.0),
+                  if (!r.detached && r.status == 'archived')
+                    const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
+                ]),
+              ),
+          ],
+        );
+      },
     );
   }
 

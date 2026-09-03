@@ -1559,8 +1559,9 @@ class _BoardAction extends ConsumerWidget {
       // 完全藏起來也不行：那會讓「這間房還沒有板」變成看不見的事實。
       // 所以按鈕留著、按不動、講原因。
       final admin =
-          ref.watch(roomDetailProvider(roomId)).value?.room.youAreAdmin ??
-              false;
+          // ⚠️ 頂層的 `you_are_admin`，不是 `room` 裡那個——後者只有房間
+          // 列表那支端點會塞，在詳情裡永遠是 false
+          ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
       return _HeaderAction(
         label: admin ? '❖ 掛接任務板' : '❖ 尚無任務板',
         hint: admin ? null : '只有房間管理者能掛接任務板',
