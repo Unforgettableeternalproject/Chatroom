@@ -212,7 +212,9 @@ class WatchNotice {
   final String itemId;
   final String itemTitle;
 
-  /// `task_done` / `task_cancelled` / `task_reopened` / `task_deleted`…
+  /// Hub 實際會寫進來的（`app.py` 4321 與 6839／6872）：
+  /// `task_done` / `task_cancelled` / `task_reopened` /
+  /// `delivery_degraded` / `delivery_restored`。
   ///
   /// **「你等的那張卡又打開了」跟完成一樣重要**——漏掉它等於讓人以為
   /// 可以動工了。
@@ -249,8 +251,14 @@ String watchNoticeLabel(String eventType, String itemTitle) {
     'task_done' => '$t 完成了',
     'task_cancelled' => '$t 被取消了',
     'task_reopened' => '$t 又重新打開了',
-    'task_deleted' => '$t 被刪掉了',
-    'watch_delivery_degraded' => '你追蹤的板不再有聊天室，改為只能自己查看',
+    // ⚠️ 這兩個的 item_title 是**板名**，不是卡名（Hub 寫 item_kind='board'）。
+    // 套上面那個 `t` 的話會變成「「某某板」完成了」那種句子
+    'delivery_degraded' =>
+      '${itemTitle.isEmpty ? '你追蹤的板' : '「$itemTitle」'} '
+          '不再有聊天室，通知改為只能自己回來看',
+    'delivery_restored' =>
+      '${itemTitle.isEmpty ? '你追蹤的板' : '「$itemTitle」'} '
+          '又有聊天室了，會重新叫醒你',
     _ => '$t 有變動（$eventType）',
   };
 }

@@ -90,6 +90,12 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         const SizedBox(height: 16),
         for (final b in pad.blocks)
           _BlockCard(
+            // ⚠️ **key by id。** 沒有 key 的話，reload 或重排之後 Flutter
+            // 會按索引沿用同一顆 State，而那顆 State 裡的 controller 只在
+            // initState 建一次——編輯框會裝著**前一段**的舊文字，存下去就
+            // 覆蓋錯段落。這正是今天 composer 那個 bug 的同一種
+            // （@審核用Codex-2 2026-09-03）
+            key: ValueKey(b.id),
             block: b,
             editing: _editing == b.id,
             onEdit: pad.canEdit && b.canEdit
@@ -194,9 +200,12 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           );
       _reload();
     } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+      // 同 _note：失敗要傳回去，否則剛打的那一段會被清掉
+      rethrow;
     }
   }
 
@@ -211,9 +220,13 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           );
       _reload();
     } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+      // ⚠️ **要往上丟。** 吞掉的話呼叫端拿到的是一個成功的 Future，
+      // 於是輸入框照樣被清空——toast 說失敗了，而那句話已經沒了
+      rethrow;
     }
   }
 
@@ -237,6 +250,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
 /// 一個段落。作者、內容、註解。
 class _BlockCard extends StatefulWidget {
   const _BlockCard({
+    super.key,
     required this.block,
     required this.editing,
     required this.onEdit,
@@ -251,7 +265,11 @@ class _BlockCard extends StatefulWidget {
   final VoidCallback? onEdit;
   final VoidCallback onCancel;
   final ValueChanged<String> onSave;
-  final ValueChanged<String>? onNote;
+
+  /// ⚠️ 回 `Future`，而且**成功才清輸入框**。同步 callback 加上按下就 clear
+  /// 的話，POST 失敗時 toast 跳出來，而使用者剛打的那句意見已經沒了
+  /// （@審核用Codex-2 2026-09-03）。
+  final Future<void> Function(String)? onNote;
   final VoidCallback? onDelete;
 
   @override
@@ -263,12 +281,23 @@ class _BlockCardState extends State<_BlockCard> {
       TextEditingController(text: widget.block.content);
   final _note = TextEditingController();
 
+  @override
+  void didUpdateWidget(_BlockCard old) {
+    super.didUpdateWidget(old);
+    // 不在編輯中才跟著外面的值走。編輯中同步的話會推走游標、吃掉組字，
+    // 而使用者正在打的東西會被伺服器那份蓋掉——那是 key 解決不了的另一半
+    if (!widget.editing && widget.block.content != _text.text) {
+      _text.text = widget.block.content;
+    }
+  }
+
   /// 註解**預設展開**（艾斯維爾 #402：「段落旁邊，但應該還是要可以摺疊」）。
   ///
   /// ⚠️ 預設收起來的話這個功能等於沒做——agent 的註解就是它的產出，
   /// 而沒有人會去展開一個不知道裡面有沒有東西的區塊。
   bool _notesOpen = true;
   bool _noting = false;
+  bool _sendingNote = false;
 
   @override
   void dispose() {
@@ -409,14 +438,24 @@ class _BlockCardState extends State<_BlockCard> {
                   ),
                   const SizedBox(width: 6),
                   _Tiny(
-                    label: '送出',
-                    onTap: () {
-                      final t = _note.text.trim();
-                      if (t.isEmpty) return;
-                      widget.onNote!(t);
-                      _note.clear();
-                      setState(() => _noting = false);
-                    },
+                    label: _sendingNote ? '送出中…' : '送出',
+                    onTap: _sendingNote
+                        ? null
+                        : () async {
+                            final t = _note.text.trim();
+                            if (t.isEmpty) return;
+                            setState(() => _sendingNote = true);
+                            try {
+                              await widget.onNote!(t);
+                              if (!mounted) return;
+                              // 成功了才清。失敗時那句話還在框裡，
+                              // 他可以再送一次
+                              _note.clear();
+                              setState(() => _noting = false);
+                            } finally {
+                              if (mounted) setState(() => _sendingNote = false);
+                            }
+                          },
                   ),
                 ]),
             ],
@@ -516,7 +555,9 @@ class _Side extends StatelessWidget {
 class _AddBlock extends StatefulWidget {
   const _AddBlock({required this.onAdd});
 
-  final ValueChanged<String> onAdd;
+  /// 回 `Future`，**成功才清輸入框**。按下就清的話，POST 失敗時那一段
+  /// 想法已經沒了，而 toast 只告訴他「失敗」，沒告訴他「你剛打的不見了」。
+  final Future<void> Function(String) onAdd;
 
   @override
   State<_AddBlock> createState() => _AddBlockState();
@@ -524,6 +565,7 @@ class _AddBlock extends StatefulWidget {
 
 class _AddBlockState extends State<_AddBlock> {
   final _c = TextEditingController();
+  bool _sending = false;
 
   @override
   void dispose() {
@@ -551,14 +593,20 @@ class _AddBlockState extends State<_AddBlock> {
       Align(
         alignment: Alignment.centerRight,
         child: UepButton(
-          label: '加一段',
+          label: _sending ? '送出中…' : '加一段',
           small: true,
-          onPressed: _c.text.trim().isEmpty
+          onPressed: (_sending || _c.text.trim().isEmpty)
               ? null
-              : () {
-                  widget.onAdd(_c.text.trim());
-                  _c.clear();
-                  setState(() {});
+              : () async {
+                  setState(() => _sending = true);
+                  try {
+                    await widget.onAdd(_c.text.trim());
+                    if (mounted) _c.clear();
+                  } catch (_) {
+                    // 訊息已經由呼叫端 toast 過了。這裡只要**不清空**
+                  } finally {
+                    if (mounted) setState(() => _sending = false);
+                  }
                 },
         ),
       ),
@@ -570,7 +618,10 @@ class _Tiny extends StatelessWidget {
   const _Tiny({required this.label, required this.onTap});
 
   final String label;
-  final VoidCallback onTap;
+
+  /// `null` ＝現在按不得（多半是送出中）。InkWell 收 null 就自己變成
+  /// 不可點，不必另外做一個停用樣式。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -580,7 +631,10 @@ class _Tiny extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         child: Text(label,
-            style: UepText.mono(size: 9, letterSpacing: 1.1, color: s.inkSoft)),
+            style: UepText.mono(
+                size: 9,
+                letterSpacing: 1.1,
+                color: onTap == null ? s.inkMute : s.inkSoft)),
       ),
     );
   }
