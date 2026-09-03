@@ -1317,3 +1317,40 @@ async def test_a_board_with_no_attached_room_still_answers_to_its_members(
             out = await client.get(f"/api/boards/{bid}",
                                    headers={"X-Session-Key": "claude-b"})
             assert out.status_code == 403
+
+
+async def test_leaving_the_room_takes_the_board_access_with_it(tmp_path):
+    """離開房間的當下就失去這塊板的存取權（艾斯維爾 2026-09-03）。
+
+    「被邀請進聊天室就自動拿到板的編輯權，**對方離開之後就不再有存取權**」
+    ——後半這件事是 `_board_role` 退路裡 `p.status='active'` 那個條件在擔的。
+    它沒有自己的測試：拿掉條件的話前面那些「房裡的人接得動卡」照樣全綠，
+    而**退路會變成永久授權**，離了房、被踢了都還寫得動。
+
+    明示成員不受影響——他們的權限來源是 `board_member`，不是在不在房裡。
+    """
+    app, client = await _client(tmp_path, "leave-revokes")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            guest = await _join(client, rid, "claude-guest", "客人")
+            gkey = {"X-Session-Key": "claude-guest"}
+            assert (await client.get(f"/api/boards/{bid}",
+                                     headers=gkey)).status_code == 200
+
+            await client.post(f"/api/rooms/{rid}/leave", headers=guest)
+
+            gone = await client.get(f"/api/boards/{bid}", headers=gkey)
+            assert gone.status_code == 403, "離房之後還看得到這塊板"
+            assert gone.json()["detail"]["code"] == "not_board_member"
+
+            # owner 是明示成員，權限不隨在不在房裡變動
+            await client.post(f"/api/rooms/{rid}/leave", headers=owner)
+            still = await client.get(f"/api/boards/{bid}",
+                                     headers={"X-Session-Key": "claude-a"})
+            assert still.status_code == 200
+            assert still.json()["my_role"] == "owner"

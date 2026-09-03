@@ -21,7 +21,12 @@ from chatroom_server.config import Config
 from chatroom_server.logging_setup import token_hint
 
 ROOT = "root-secret"
-pytestmark = pytest.mark.asyncio
+# ⚠️ **這裡刻意沒有 module 級的 `pytestmark = pytest.mark.asyncio`。**
+# `pytest.ini` 已經是 `asyncio_mode = auto`，async 測試會自動被收成 asyncio，
+# 那行是多餘的；而它是 module 級的，會連**同步**測試一起標上去，於是每跑一次
+# 全套就噴三個 PytestWarning。警告本身無害（那兩條同步測試照樣執行、照樣
+# PASSED），但長期掛著的雜訊會讓人看不見真的警告
+# （@開發Novia (除錯) 2026-09-03 提出，實測確認不是「被略過」）。
 
 
 def _cfg(tmp_path, name, token=ROOT):
