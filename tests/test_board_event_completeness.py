@@ -363,3 +363,52 @@ async def test_a_room_that_never_switched_axis_can_still_be_written_to(
                 "板建起來了，但既有的卡沒有跟著接上——那比不換軸更糟："
                 "板上是空的，而卡還在 v1 的世界")
             assert len(body["tasks"]) == 1
+
+
+async def test_the_trail_says_where_it_started(tmp_path):
+    """換軸的起點是**事實，不是推論**。
+
+    `board_seq` 會跟著每一次變更長，所以事後看不出當初從哪一格接上。而
+    稽核串的完整性判準需要那個下界：換軸之前的號屬於 v1 的房內序列，那段
+    本來就不會有 board_event——把它算成「洞」是誤判（@測試Novia T19）。
+
+    ⚠️ 拿 `min(existing events)` 當下界是**吃得掉一格的**：洞剛好落在換軸後
+    的第一格時，它會被一起吃掉而沒有人發現。
+    """
+    app, client = await _client(tmp_path, "lowerbound")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "舊房", "session_key": "claude-a"})).json()["id"]
+            j = await client.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-a",
+                "preferred_name": "A"})
+            hdr = {"X-Participant-Id": j.json()["participant_id"]}
+            # v1 時代已經走掉的水位
+            await app.state.db.execute(
+                "UPDATE room SET board_seq=42 WHERE id=?", (rid,))
+            await app.state.db.commit()
+
+            await client.post(f"/api/rooms/{rid}/board/objectives",
+                              json={"title": "換軸"}, headers=hdr)
+            bid = (await client.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()["board_id"]
+            body = (await client.get(f"/api/boards/{bid}/events",
+                                     headers={"X-Session-Key": "claude-a"})
+                    ).json()
+            assert body["migrated_from_seq"] == 42, (
+                "換軸的起點沒有被保留下來——沒有它，1..42 那段會被算成 42 個洞")
+            # 下界之後的每一個號都要有 event
+            got = {e["board_seq"] for e in body["events"]}
+            missing = [n for n in range(43, body["board_seq"] + 1)
+                       if n not in got]
+            assert not missing, missing
+
+            # 顯式建的板從頭就是 v2，下界是 0
+            fresh = (await client.post("/api/boards", json={"name": "新板"},
+                                       headers={"X-Session-Key": "claude-a"})
+                     ).json()["id"]
+            body = (await client.get(f"/api/boards/{fresh}/events",
+                                     headers={"X-Session-Key": "claude-a"})
+                    ).json()
+            assert body["migrated_from_seq"] == 0

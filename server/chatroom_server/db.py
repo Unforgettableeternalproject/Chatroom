@@ -365,6 +365,12 @@ CREATE TABLE IF NOT EXISTS board (
     -- 每塊板獨立的單調水位。**不與 room.next_seq 共用**，理由與 v1 相同：
     -- 共用會讓人看到的訊息編號跳號
     board_seq       INTEGER NOT NULL DEFAULT 0,
+    -- 換軸當下的水位：建板時寫一次，**之後永遠不動**。
+    -- `board_seq` 會跟著每一次變更長，所以事後看不出當初是從哪一格接上的
+    -- ——而稽核串的完整性判準需要那個下界：換軸之前的號屬於 v1 的房內序列，
+    -- 那段本來就不會有 board_event，把它算成「洞」是誤判
+    -- （@測試Novia 2026-09-03 T19）。顯式建的板是 0（它從頭就是 v2）
+    migrated_from_seq INTEGER NOT NULL DEFAULT 0,
     -- Supervisor 從 room 搬到 board：他看的是這塊板，不是某一間房，
     -- 所以離開任何一間房都不該讓他退場
     supervisor_actor_key TEXT NOT NULL DEFAULT '',
@@ -592,6 +598,8 @@ CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column, 完整欄位定義)
     ("board_scratchpad", "next_order", "next_order INTEGER NOT NULL DEFAULT 0"),
+    ("board", "migrated_from_seq",
+     "migrated_from_seq INTEGER NOT NULL DEFAULT 0"),
     ("room", "activated_at", "activated_at TEXT"),
     ("message", "update_seq", "update_seq INTEGER NOT NULL DEFAULT 0"),
     # 這次 update_seq 是**為什麼**被推進的（edit/delete/pin/unpin）。

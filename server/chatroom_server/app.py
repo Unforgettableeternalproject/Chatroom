@@ -3324,8 +3324,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         )["board_seq"]
         await db.execute(
             "INSERT INTO board (id, name, owner_actor_key, board_seq,"
-            " created_at, updated_at) VALUES (?,?,?,?,?,?)",
-            (bid, rm["name"] if rm else "任務板", mine, seq0, now, now))
+            " migrated_from_seq, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (bid, rm["name"] if rm else "任務板", mine, seq0, seq0, now, now))
         await db.execute(
             "INSERT INTO board_member (board_id, actor_key, role, display_name,"
             " actor_kind, added_at) VALUES (?,?,'owner',?,?,?)",
@@ -6168,6 +6169,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"board_id": board_id, "events": events,
                 "has_more": has_more,
                 "board_seq": board["board_seq"],
+                # 稽核串的**下界**：這個號以前屬於 v1 的房內序列，那段本來
+                # 就不會有 board_event。沒有它的話，「每個號恰一筆」這個
+                # 判準會把換軸之前的整段算成洞（@測試Novia T19）
+                "migrated_from_seq": board["migrated_from_seq"],
                 "after_board_seq": after_board_seq}
 
     async def _commit() -> None:
