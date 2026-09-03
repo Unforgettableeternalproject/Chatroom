@@ -164,3 +164,47 @@ async def test_deleting_a_room_detaches_the_board_but_keeps_it(tmp_path):
             board = await (await db.execute(
                 "SELECT status FROM board WHERE id = 'b1'")).fetchone()
             assert board["status"] == "active", "Board 不該隨房消失"
+
+
+async def test_every_board_owned_table_is_in_the_delete_list(tmp_path):
+    """**帶 `board_id` 的表都要在刪板清單裡。**
+
+    漏掉的話刪板會撞外鍵而拋 IntegrityError（500），或者更糟——沒有外鍵的
+    那些會留下永遠沒有人讀得到的孤兒列，而 API 回 200
+    （審核用Codex-2 2026-09-03 用非空 pad + watch 重現）。
+
+    這條拿 schema 對帳，讓「忘了加」變成一個查得到的事實，而不是等到有人
+    真的去刪一塊有東西的板。
+    """
+    from chatroom_server.app import create_app
+    from chatroom_server.config import Config
+
+    app = create_app(Config(db_path=str(tmp_path / "owned.db"),
+                            api_token="root-token"))
+    async with app.router.lifespan_context(app):
+        rows = await (await app.state.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name LIKE 'board%'")).fetchall()
+        have = set()
+        for r in rows:
+            cols = await (await app.state.db.execute(
+                f"PRAGMA table_info({r['name']})")).fetchall()
+            if any(c["name"] == "board_id" for c in cols):
+                have.add(r["name"])
+        have.discard("board")
+        listed = set(_owned_tables(app))
+        missing = have - listed
+        assert not missing, (
+            f"這些表帶著 board_id 卻不在刪板清單裡：{sorted(missing)}。"
+            "刪一塊有東西的板時，它們會撞外鍵或留下孤兒列")
+
+
+def _owned_tables(app):
+    """從原始碼把清單撈出來——它是模組內的區域常數，沒有別的入口。"""
+    import inspect
+    import re
+
+    from chatroom_server import app as mod
+    src = inspect.getsource(mod.create_app)
+    body = re.search(r"_BOARD_OWNED_TABLES = \(([^)]*)\)", src).group(1)
+    return re.findall(r'"([^"]+)"', body)

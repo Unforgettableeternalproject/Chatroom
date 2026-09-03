@@ -60,6 +60,33 @@ def actor_key(session_key: str | None) -> str:
     return (session_key or "").strip()
 
 
+async def _commit_with_retry(db) -> None:
+    """commit，撞到別人的交易就等一下再試。
+
+    🚨 **共用一條 aiosqlite 連線**：兩個請求的語句會交錯執行，而交易是共用
+    的。A 這路要 commit 的時候，B 那路的語句可能還在進行中 ⇒
+    `cannot commit transaction - SQL statements in progress`，而那是**未處理
+    例外**：走 HTTP 只看得到「500」三個字，log 裡什麼都沒有
+    （@開發Novia (除錯) 2026-09-03 F 組，note 與 delete 同時打）。
+
+    ⚠️ 這與 `_next_board_seq` 領號那條是同一族——共用連線 + 讀寫之間有
+    await。**重試只解掉「會爆」，不解掉「兩路都成功」**：那要靠各自的 CAS，
+    而那是另一件事。
+
+    ⚠️ 重試上限用完仍失敗時**讓例外往上走**，不要吞掉：commit 沒成功而
+    回 200，是比 500 更難查的一種。
+    """
+    for _ in range(40):
+        try:
+            await db.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            if "statements in progress" not in str(exc):
+                raise
+            await asyncio.sleep(0.005)
+    await db.commit()
+
+
 def _err(status: int, code: str, message: str, **extra) -> HTTPException:
     """機器可讀錯誤：detail 為 {"code", "message"}，code 是穩定契約，
     message 僅供人讀——client 不得對 message 做字串比對。
@@ -594,7 +621,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await app.state.db.execute(
             "UPDATE access_token SET last_used_at=? WHERE token=?", (_now(), token)
         )
-        await app.state.db.commit()
+        await _commit_with_retry(app.state.db)
 
     def host_view(
         x_host_view: str | None = Header(default=None, alias="X-Host-View"),
@@ -718,7 +745,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE participant SET last_seen_at=? WHERE id=?", (_now(), participant_id)
         )
-        await db.commit()
+        await _commit_with_retry(db)
         return row
 
     def _room_context(room) -> dict:
@@ -967,7 +994,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE session SET kind='other' WHERE session_key=? AND kind=''",
             (session_key,),
         )
-        await db.commit()
+        await _commit_with_retry(db)
 
     async def _expand_mention_groups(
         room_id: str, sender_id: str | None, names: list[str],
@@ -1096,7 +1123,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              json.dumps(effective), json.dumps(groups), reply_to, reply_to_seq,
              system_event, _now()),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
         # mentions 回傳「實際落庫的那份」（含回覆自動補上的、群組展開後的），
         # 呼叫端的未解析檢查才不會漏掉自動加的那個名字
@@ -1205,7 +1232,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE message SET update_seq=?, update_kind=? WHERE id=?",
             (useq, kind, message_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
 
     # ---------- 房間 ----------
@@ -1229,7 +1256,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (room_id, body.name, body.topic, now, now, body.session_key,
              body.visibility, body.style, instructions),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         return {"id": room_id, "name": body.name, "topic": body.topic,
                 "status": "active", "visibility": body.visibility,
                 "style": body.style, "style_instructions": instructions}
@@ -1460,7 +1487,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             sql += " AND id!=?"
             params.append(approved_request)
         await db.execute(sql, tuple(params))
-        await db.commit()
+        await _commit_with_retry(db)
+        # 封存這間房，可能讓它掛著的板失去**最後一個叫得醒人的地方**。
+        # detach 那條路已經在處理，這條沒有的話追蹤者會安靜地降級——而
+        # `board_room` 的列還在，從計數上看起來完全正常
+        boards = await (await db.execute(
+            "SELECT board_id FROM board_room WHERE room_id=?"
+            " AND detached_at IS NULL", (room_id,))).fetchall()
+        touched = False
+        for b in boards:
+            if await _live_room_count(b["board_id"]) == 0:
+                if await _degrade_watches_to_inbox(b["board_id"],
+                                                   "room_archived"):
+                    touched = True
+        if touched:
+            await _commit_with_retry(db)
         await events.notify(room_id)
 
     async def _pending_archive_request(room_id: str):
@@ -1566,7 +1607,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "admin_already_changed",
                        "管理權在你送出這個請求的同時被移交給別人了。重新讀一次"
                        "房間狀態再決定——你現在可能已經不是管理員")
-        await db.commit()
+        await _commit_with_retry(db)
         logger.info(
             "移交管理權 %s → %s（%s）", me["display_name"],
             target["display_name"], room_id,
@@ -1622,7 +1663,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE room SET creator_session_key=? WHERE id=?",
             (x_session_key, room_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         logger.warning(
             "主持人接管聊天室「%s」（%s）的管理權", room["name"], room_id,
             extra={"event": "admin_claimed", "room_id": room_id,
@@ -1707,7 +1748,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " status, created_at) VALUES (?,?,?,?,'pending',?)",
             (req_id, room_id, me["id"], body.reason if body else "", now),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         name = await (await db.execute(
             "SELECT display_name FROM participant WHERE id=?", (me["id"],),
         )).fetchone()
@@ -1765,7 +1806,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE archive_request SET status='approved', resolved_at=?,"
                 " resolved_by=? WHERE id=?", (now, resolver, request_id),
             )
-            await db.commit()
+            await _commit_with_retry(db)
             await _archive(req["room_id"], "聊天室已封存（建立者核准了封存請求）",
                            approved_request=request_id)
             return {"ok": True, "approved": True}
@@ -1773,7 +1814,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE archive_request SET status='rejected', resolved_at=?,"
             " resolved_by=? WHERE id=?", (now, resolver, request_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await _post_message(
             req["room_id"], None,
             "建立者婉拒了封存請求，聊天室繼續開著。"
@@ -1813,7 +1854,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE archive_request SET status='cancelled', resolved_at=?"
             " WHERE id=?", (_now(), request_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(req["room_id"])
         return {"ok": True}
 
@@ -1845,7 +1886,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " archive_pending_since=NULL WHERE id=?",
             (_now(), room_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await _post_message(room_id, None, "聊天室已解除封存", kind="system",
                             system_event="unarchive")
         return {"ok": True, "already_active": False}
@@ -1870,7 +1911,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "UPDATE room SET visibility=? WHERE id=?", (body.visibility, room_id)
         )
-        await db.commit()
+        await _commit_with_retry(db)
         logger.info(
             "變更鎖定狀態 %s → %s（%s）", room["visibility"], body.visibility, room_id,
             extra={"event": "visibility", "room_id": room_id,
@@ -1913,7 +1954,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE room SET style=?, style_instructions=? WHERE id=?",
             (body.style, instructions, room_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         prompt, hint = _style_texts(body.style, instructions)
         logger.info(
             "變更說話方式 %s -> %s（%s）", room["style"], body.style, room_id,
@@ -2040,7 +2081,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             counts[table] = cur.rowcount
         cur = await db.execute("DELETE FROM room WHERE id=?", (room_id,))
         counts["room"] = cur.rowcount
-        await db.commit()
+        await _commit_with_retry(db)
         return counts
 
     @app.delete("/api/rooms/{room_id}", dependencies=[Depends(require_auth)])
@@ -2198,7 +2239,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "UPDATE assignment SET status='accepted', resolved_at=? WHERE id=?",
                     (_now(), assignment["id"]),
                 )
-                await db.commit()
+                await _commit_with_retry(db)
             await _touch_session(session_key, body.kind, ip=_client_ip(request),
                                  host=body.host)
             # rejoin 也給：閒置被移出後重新加入的多半是新的一輪對話，
@@ -2345,14 +2386,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 name = generate_name(
                     {r["display_name"] for r in taken_rows}, preferred
                 )
-        await db.commit()
+        await _commit_with_retry(db)
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
         await db.execute(
             "UPDATE assignment SET status='accepted', resolved_at=? WHERE room_id=?"
             " AND target_session_key=? AND status='pending'",
             (now, room_id, session_key),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # supervisor 是可以「先指定、人再進來」的（設定端點刻意允許），
         # 而指定當下人不在房就取不到名字快照。這裡補上：畫面要說得出
         # 「本來是誰在看」，靠的正是這份快照——摘要的收件人則另外即時反查，
@@ -2363,7 +2404,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "   AND board_supervisor_name=''",
             (name, body.kind, room_id, session_key),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # ephemeral 不進 session 名錄：那份名錄是指派 UI 的掃描來源，而
         # subagent 不可被指派（§3.7）。登記進去只會在清單上長出一堆
         # 看起來可以指派、實際上指派不到的鬼影
@@ -2545,7 +2586,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
             healed += len(await cur.fetchall())
         if healed:
-            await db.commit()
+            await _commit_with_retry(db)
             logger.info(
                 "修復 %d 張「已收尾卻標成孤兒」的卡（F6 存量）", healed,
                 extra={"event": "board_settled_orphans_healed", "count": healed},
@@ -2741,7 +2782,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "cascaded_subagents": orphans,
             },
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # 走了就沒有人在等答案了。留著只會讓人去回答一個沒有讀者的問題
         cancelled = await _cancel_questions(
             p["id"], room_id, "發問者已離開聊天室", p["display_name"]
@@ -2801,7 +2842,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         # 被踢的人不再持有 board 上的卡（同 leave）
         kicked_orphans = await _orphan_claims(room_id)
-        await db.commit()
+        await _commit_with_retry(db)
         await _announce_orphans(room_id, kicked_orphans)
         await _check_supervisor_departed(room_id)
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
@@ -2813,7 +2854,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND status IN ('pending','accepted')",
             (now, room_id, target["session_key"]),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # 只把 session_key 標成 kicked 擋不住任何人：那把鑰匙是被踢者自己在
         # 本機產的（`human-<uuid4>`，設定畫面還有「重新產生」按鈕），換一把
         # 就能大搖大擺走回來。**封鎖的對象必須是被封鎖者無法自行更換的識別**，
@@ -2831,7 +2872,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             hit = await cur.fetchone()
             if hit is not None:
                 revoked_token = hit["label"] or target["join_token"][:8]
-        await db.commit()
+        await _commit_with_retry(db)
         logger.info(
             "移出成員 %s（%s）", target["display_name"], room_id, extra={
                 "event": "kick", "room_id": room_id, "target_id": target_id,
@@ -2889,13 +2930,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.execute(
                 "UPDATE participant SET hold_until=NULL WHERE id=?", (p["id"],)
             )
-            await db.commit()
+            await _commit_with_retry(db)
             return {"ok": True, "held": False, "hold_until": None}
         until = (now + timedelta(seconds=cfg.hold_max)).isoformat()
         await db.execute(
             "UPDATE participant SET hold_until=? WHERE id=?", (until, p["id"])
         )
-        await db.commit()
+        await _commit_with_retry(db)
         return {"ok": True, "held": True, "hold_until": until,
                 "max_seconds": cfg.hold_max}
 
@@ -2945,7 +2986,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"UPDATE attachment SET message_id=? WHERE id IN ({marks})",
                 [result["id"], *body.attachment_ids],
             )
-            await db.commit()
+            await _commit_with_retry(db)
         # 用實際落庫的 mentions 檢查，不是 body.mentions——回覆自動補上的那個
         # 名字同樣可能已經離開房間，而那正是最需要講出來的情況：你以為回覆
         # 就等於通知到人，對方其實早就不在了
@@ -3628,7 +3669,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             _row_board_id(row), seq, f"{kind}_updated",
             origin_room_id=row["room_id"], item_kind=kind, item_id=item_id,
             payload={"fields": sorted(sets)})
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
 
@@ -3672,7 +3713,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
             origin_room_id=row["room_id"], item_kind=kind, item_id=item_id,
             payload={"title": row["title"]})
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         return {"ok": True, "id": item_id, "board_seq": seq}
 
@@ -3699,7 +3740,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
             origin_room_id=room_id, item_kind="objective", item_id=oid,
             payload={"title": body.title.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
         await _announce_human_container(room_id, me, "週期", body.title.strip(),
                                         "board_objective_created")
         await events.notify(room_id)
@@ -3756,7 +3797,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
             origin_room_id=parent["room_id"], item_kind="checklist",
             item_id=cid, payload={"title": body.title.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
         await _announce_human_container(
             parent["room_id"], me, "階段", body.title.strip(),
             "board_checklist_created", within=parent["title"])
@@ -4053,7 +4094,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="task", item_id=tid,
             payload={"title": body.title.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
         return {"ok": True, "id": tid, "checklist_id": checklist_id,
                 "board_seq": seq}
@@ -4248,7 +4289,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     item_id=task_id,
                     payload={"from": old, "to": body.status,
                              "actual": current["status"]})
-            await db.commit()
+            await _commit_with_retry(db)
             raise _err(409, "invalid_transition",
                        f"這張卡的狀態在你送出的同時被改成「{current['status']}」了",
                        from_status=current["status"], to_status=body.status,
@@ -4285,7 +4326,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             watched = await _fire_watch_notices(
                 _row_board_id(row), "task", task_id, row["title"], watch_kind,
                 seq, actor=me["session_key"], actor_name=me["display_name"])
-        await db.commit()
+        await _commit_with_retry(db)
         if done:
             # 🚨 **三態**（艾斯維爾原句同時有正向與負向：「通知追蹤的人」
             # ∧「不需要通知所有人」；房內 2026-09-02 定案）：
@@ -4420,7 +4461,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 payload={"from": old, "to": body.status,
                          "title": row["title"]})
         if changed is None:
-            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("checklist", checklist_id)
             raise _err(409, "invalid_transition",
                        f"這份清單的狀態在你送出的同時被改成"
@@ -4428,7 +4469,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=current["status"], to_status=body.status,
                        allowed=sorted({"open", "done", "cancelled"}
                                       - {current["status"]}))
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         return {"ok": True, "id": checklist_id, "status": body.status,
                 "board_seq": seq}
@@ -4471,13 +4512,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 origin_room_id=row["room_id"], item_kind="objective",
                 item_id=row["id"], payload={"title": row["title"]})
         if await cur.fetchone() is None:
-            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("objective", row["id"])
             raise _err(409, "invalid_transition",
                        f"這個週期的狀態在你送出的同時被改成"
                        f"「{current['status']}」了",
                        from_status=current["status"])
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         return seq
 
@@ -4712,7 +4753,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " board_supervisor_set_at=NULL, board_supervisor_left_at=NULL"
                 " WHERE id=?", (room_id,),
             )
-            await db.commit()
+            await _commit_with_retry(db)
             await _post_message(room_id, None, "板子的監督者已取消指定",
                                 kind="system", system_event="board_supervisor_set")
             return {"ok": True, "supervisor": None}
@@ -4736,7 +4777,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              me["id"] if me else None, me["display_name"] if me else "主持人",
              now, room_id, now, room_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         name = (who["display_name"] if who else key)
         await _post_message(
             room_id, None,
@@ -4842,7 +4883,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " board_digest_at=? WHERE id=?",
             (room_id, _now(), room_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await _post_message(
             room_id, None,
             f"板子摘要：{head}有變動（{sample}{more}）",
@@ -4886,7 +4927,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"UPDATE {table} SET order_index=?, board_seq=? WHERE id=?",
                 (item.order_index, seq, item.id),
             )
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
         return {"ok": True, "board_seq": seq, "count": len(body.items)}
 
@@ -4933,7 +4974,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              _now(), seq, task_id),
         )
         if await cur.fetchone() is None:
-            await db.commit()   # 領號已經寫進去了，不 commit 會讓下一個號重複
+            await _commit_with_retry(db)   # 領號已經寫進去了，不 commit 會讓下一個號重複
             current = await _board_item_or_404("task", task_id)
             raise _err(409, "task_already_claimed",
                        "這張卡已經有人在做，或它已經完成／取消了",
@@ -4945,7 +4986,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=row["room_id"],
             item_kind="task", item_id=task_id,
             payload={"title": row["title"], "reclaimed": was_mine})
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         # reclaimed=true ＝「這是你上一世領的」，agent 才有理由先去讀描述
         return {"ok": True, "id": task_id, "board_seq": seq, "reclaimed": was_mine}
@@ -4985,7 +5026,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             origin_room_id=row["room_id"], item_kind="task", item_id=task_id,
             payload={"title": row["title"], "forced": forced,
                      "previous_holder": row["claim_name"]})
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         return {"ok": True, "id": task_id, "board_seq": seq,
                 "forced": forced}
@@ -5221,7 +5262,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "INSERT INTO board_room (id, board_id, room_id, room_name,"
                 " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
                 (uuid.uuid4().hex, bid, room["id"], room["name"], actor, now))
-        await db.commit()
+        await _commit_with_retry(db)
         if room is not None:
             await events.notify(room["id"])
         return {"ok": True, "id": bid, "board_id": bid,
@@ -5274,9 +5315,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             rooms = await (await db.execute(
                 "SELECT COUNT(*) AS n FROM board_room WHERE board_id=?"
                 " AND detached_at IS NULL", (b["id"],))).fetchone()
+            # 「這塊板還叫得醒人嗎」要看**活著的**房。掛接數看起來正常而
+            # 沒有人叫得醒，正是最容易被讀成沒問題的那個狀態
+            live = await _live_room_count(b["id"])
             out.append({
                 "id": b["id"], "name": b["name"], "status": b["status"],
                 "attached_room_count": rooms["n"],
+                "live_room_count": live,
+                "delivery_mode": "room_and_inbox" if live else "inbox_only",
                 "task_counts": {"total": counts["total"] or 0,
                                 "done": counts["done"] or 0,
                                 "claimed": counts["claimed"] or 0},
@@ -5471,7 +5517,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             actor_name=me["display_name"], origin_room_id=room_id,
             item_kind="objective", item_id=oid,
             payload={"title": body.title.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": oid, "board_seq": seq, "board_id": board_id}
 
@@ -5527,7 +5573,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (*sets.values(), board_id))
         await _record_board_event(board_id, seq, "board_updated", actor=actor,
                                   payload=sets)
-        await app.state.db.commit()
+        await _commit_with_retry(app.state.db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "changed": sorted(sets)}
@@ -5553,7 +5599,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await app.state.db.execute(
             "UPDATE board SET status='archived' WHERE id=?", (board_id,))
         await _record_board_event(board_id, seq, "board_archived", actor=actor)
-        await app.state.db.commit()
+        await _commit_with_retry(app.state.db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "status": "archived",
                 "board_seq": seq}
@@ -5576,7 +5622,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE board SET status='active' WHERE id=?", (board_id,))
         await _record_board_event(board_id, seq, "board_unarchived",
                                   actor=actor)
-        await app.state.db.commit()
+        await _commit_with_retry(app.state.db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "status": "active",
                 "board_seq": seq}
@@ -5584,7 +5630,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 板刪除要清的表。與 _ROOM_OWNED_TABLES 同一個理由手寫，也同一個理由
     # 危險：漏一張表會撞 FK 而**刪到一半**，而共用連線上已執行的 DELETE
     # 不會被撤回。順序由內往外
+    # ⚠️ **加一張帶 board_id 的表，就要加進這裡。** 漏掉的話刪板會撞外鍵而
+    # 拋 IntegrityError（500），或者更糟——沒有外鍵的那些會留下永遠沒有人
+    # 讀得到的孤兒列。順序是子表先於父表：note→block→scratchpad
+    # （審核用Codex-2 2026-09-03 用非空 pad + watch 真 API 重現）
     _BOARD_OWNED_TABLES = ("board_task", "board_checklist", "board_objective",
+                           "board_watch_notice", "board_watch",
+                           "board_scratchpad_revision", "board_scratchpad_note",
+                           "board_scratchpad_block", "board_scratchpad",
                            "board_event", "board_member", "board_room")
 
     @app.delete("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
@@ -5615,7 +5668,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             counts[table] = cur.rowcount
         cur = await db.execute("DELETE FROM board WHERE id=?", (board_id,))
         counts["board"] = cur.rowcount
-        await db.commit()
+        await _commit_with_retry(db)
         # 掛接房要被叫醒：它們的 app bar 上還畫著這塊板
         for rid in rooms:
             await events.notify(rid)
@@ -5663,7 +5716,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _record_board_event(board_id, seq, "member_added", actor=actor,
                                   target_actor_key=target,
                                   payload={"role": body.role})
-        await db.commit()
+        await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "actor_key": target,
                 "role": body.role, "board_seq": seq}
@@ -5718,7 +5771,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _record_board_event(board_id, seq, "member_removed", actor=actor,
                                   target_actor_key=target,
                                   payload={"orphaned_tasks": released})
-        await db.commit()
+        await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "actor_key": target,
                 "orphaned_tasks": released, "board_seq": seq}
@@ -5761,7 +5814,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _record_board_event(
             board_id, seq, "reordered", item_kind=body.kind,
             payload={"count": len(body.items)})
-        await db.commit()
+        await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "count": len(body.items)}
@@ -5802,7 +5855,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "supervisor_set" if target else "supervisor_cleared",
             actor=actor, target_actor_key=target,
             payload={"display_name": body.display_name.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "supervisor": ({"actor_key": target,
@@ -5894,7 +5947,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             item_kind=body.item_kind.strip(), item_id=body.item_id.strip(),
             target_actor_key=target,
             payload={"text": body.text.strip()})
-        await db.commit()
+        await _commit_with_retry(db)
 
         for r in rows:
             await _post_message(
@@ -5967,27 +6020,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "after_board_seq": after_board_seq}
 
     async def _commit() -> None:
-        """commit，撞到別人的交易就等一下再試。
-
-        🚨 **共用一條 aiosqlite 連線**：兩個請求的語句會交錯執行，而交易是
-        共用的。A 這路要 commit 的時候，B 那路的語句可能還在進行中 ⇒
-        `cannot commit transaction - SQL statements in progress`，而那是**未
-        處理例外**：走 HTTP 只看得到「500」三個字，log 裡什麼都沒有
-        （@開發Novia (除錯) 2026-09-03 F 組，note 與 delete 同時打）。
-
-        ⚠️ 這與今天早上 `_next_board_seq` 領號那條是同一族——共用連線 +
-        讀寫之間有 await。這裡先讓新端點不再爆，**既有端點同樣暴露在這個
-        形狀下**，全面換掉是另一張卡。
-        """
-        for _ in range(40):
-            try:
-                await app.state.db.commit()
-                return
-            except sqlite3.OperationalError as exc:
-                if "statements in progress" not in str(exc):
-                    raise
-                await asyncio.sleep(0.005)
-        await app.state.db.commit()
+        await _commit_with_retry(app.state.db)
 
     # ── 想法板（ScratchPad）§15.1 ──────────────────────────────────
     # 「有時候我並沒有辦法馬上都把任務給組織好」（艾斯維爾 2026-09-02）。
@@ -6482,6 +6515,66 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _notify_board_rooms(board_id)
         return {"ok": True, "id": nid, "block_id": block_id, "board_seq": seq}
 
+    @app.post(
+        "/api/boards/{board_id}/scratchpads/{pad_id}/notes/{note_id}/resolve",
+        dependencies=[Depends(require_auth)])
+    async def resolve_scratchpad_note(
+        board_id: str, pad_id: str, note_id: str,
+        unresolve: bool = False,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """把一則註解標成已處理（``unresolve=true`` 收回）。
+
+        ⚠️ schema、清單與畫面上都有「N 則未處理」，**卻沒有任何一條路可以讓
+        它變成已處理**——那個數字只會往上長，長到沒有人再看它
+        （審核用Codex-2 2026-09-03）。有狀態就要有轉移，不然那個狀態是假的。
+
+        誰能標：**段落的作者**（意見是對他的）或人類成員。註解者自己不行——
+        「我提的意見我自己說處理完了」不是處理完了。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        await _scratchpad_or_404(board_id, pad_id)
+        note = await (await app.state.db.execute(
+            "SELECT * FROM board_scratchpad_note WHERE id=? AND scratchpad_id=?"
+            " AND deleted=0", (note_id, pad_id))).fetchone()
+        if note is None:
+            raise _err(404, "scratchpad_note_not_found", "找不到這則註解")
+        block = await _scratchpad_block_or_404(pad_id, note["block_id"])
+        if not _actor_is_human(me) and actor_key(
+                block["author_actor_key"]) != actor_key(me["session_key"]):
+            raise _err(403, "not_your_block",
+                       "只有這一段的作者或人類成員可以把註解標成已處理——"
+                       "提意見的人自己說處理完了，不是處理完了",
+                       block_id=block["id"], author_name=block["author_name"])
+        db = app.state.db
+        cur = await db.execute(
+            "UPDATE board_scratchpad_note SET resolved_at=?"
+            " WHERE id=? AND deleted=0 AND resolved_at IS"
+            + (" NOT NULL" if unresolve else " NULL") + " RETURNING id",
+            (None if unresolve else _now(), note_id))
+        if await cur.fetchone() is None:
+            # 已經是那個狀態了：**不領號、不留 event**，因為什麼都沒發生
+            await _commit()
+            return {"ok": True, "id": note_id, "unchanged": True,
+                    "resolved": not unresolve, "board_seq": None}
+        seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "UPDATE board_scratchpad_note SET board_seq=? WHERE id=?",
+            (seq, note_id))
+        await _record_board_event(
+            board_id, seq,
+            "scratchpad_note_unresolved" if unresolve
+            else "scratchpad_note_resolved",
+            actor=me["session_key"], actor_name=me["display_name"],
+            origin_room_id=room_id, item_kind="scratchpad", item_id=pad_id,
+            payload={"note_id": note_id, "block_id": note["block_id"]})
+        await _commit()
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "id": note_id, "resolved": not unresolve,
+                "board_seq": seq}
+
     @app.get(
         "/api/boards/{board_id}/scratchpads/{pad_id}/blocks/{block_id}"
         "/revisions", dependencies=[Depends(require_auth)])
@@ -6819,6 +6912,37 @@ def create_app(config: Config | None = None) -> FastAPI:
             payload={"reason": reason, "watchers": len(told)})
         return told
 
+    async def _restore_watch_delivery(board_id: str) -> list[str]:
+        """板又有活著的房了：告訴追蹤者他們恢復被叫醒。
+
+        與降級同一組規則——**每個 actor 一筆**，通知的是追蹤者不是操作的人。
+        **降級講了就要講恢復**：只講壞消息的話，他會一直以為自己還得回來看。
+        """
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT DISTINCT actor_key FROM board_watch WHERE board_id=?",
+            (board_id,))).fetchall()
+        who_all = [(r["actor_key"] or "").strip() for r in rows]
+        who_all = [w for w in who_all if w]
+        if not who_all:
+            return []
+        seq = await _next_seq_for_board(board_id)
+        board = await (await db.execute(
+            "SELECT name FROM board WHERE id=?", (board_id,))).fetchone()
+        now = _now()
+        for who in who_all:
+            await db.execute(
+                "INSERT INTO board_watch_notice (id, board_id, actor_key,"
+                " item_kind, item_id, item_title, event_type, board_seq,"
+                " actor_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, board_id, who, "board", board_id,
+                 board["name"] if board else "", "delivery_restored", seq,
+                 "", now))
+        await _record_board_event(
+            board_id, seq, "delivery_restored", item_kind="board",
+            item_id=board_id, payload={"watchers": len(who_all)})
+        return who_all
+
     async def _touch_watched_item(board_id: str, kind: str, item_id: str,
                                   seq: int) -> None:
         """把卡自己的 `board_seq` 推上去。
@@ -7125,11 +7249,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (board_id, key, r["display_name"], r["kind"], actor, now))
                 if await cur.fetchone() is not None:
                     imported.append(key)
-        await db.commit()
+        # 掛回一間活著的房 ⇒ 追蹤者又叫得醒了。**降級講了就要講恢復**——
+        # 只講壞消息的話，他會一直以為自己還要自己回來看
+        restored: list[str] = []
+        # ⚠️ `already` 那半不能少：重送 attach（例如只是為了補勾
+        # import_members）時房本來就掛著，`_live_room_count()==1` 照樣成立
+        # ⇒ 每次都再生一筆 delivery_restored，追蹤者被同一件事洗好幾次
+        # （審核用Codex-2 2026-09-03）
+        if not already and await _live_room_count(board_id) == 1:
+            restored = await _restore_watch_delivery(board_id)
+        await _commit_with_retry(db)
         await events.notify(room_id)
         return {"ok": True, "board_id": board_id, "room_id": room_id,
                 "already_attached": already,
-                "imported_members": imported}
+                "imported_members": imported,
+                "restored_watchers": restored}
 
     @app.delete("/api/boards/{board_id}/rooms/{room_id}",
                 dependencies=[Depends(require_auth)])
@@ -7160,7 +7294,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if await _live_room_count(board_id) == 0:
             degraded = await _degrade_watches_to_inbox(
                 board_id, "board_detached")
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "room_id": room_id,
@@ -7352,7 +7486,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         target = await cur.fetchone()
         if target is None:
-            await db.commit()
+            await _commit_with_retry(db)
             return {"ok": True, "already_pinned": True}
         seq, sender_id = target["seq"], target["sender_id"]
         await _touch_message(message_id, room_id, "pin")
@@ -7485,7 +7619,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE message SET content=?, edited_at=? WHERE id=?",
             (body.content, _now(), message_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # 領一個新的 update_seq，已經讀過那則的人才收得到——不推進的話他手上
         # 永遠是舊內容，而畫面看起來完全正常
         await _touch_message(message_id, room_id, "edit")
@@ -7601,7 +7735,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (aid, room_id, body.target_session_key, body.note,
              body.assigned_name.strip(), _now()),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         seen = await (
             await db.execute(
                 "SELECT last_seen_at FROM session WHERE session_key=?",
@@ -7696,7 +7830,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         if await cur.fetchone() is None:
             raise _err(404, "assignment_not_found", "找不到這筆指派，或它已被處理")
-        await db.commit()
+        await _commit_with_retry(db)
         return {"ok": True}
 
     @app.delete("/api/assignments/{assignment_id}", dependencies=[Depends(require_auth)])
@@ -7738,7 +7872,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if await cur.fetchone() is None:
             raise _err(404, "assignment_not_found",
                        "找不到這筆指派，或它已經被處理過了")
-        await db.commit()
+        await _commit_with_retry(db)
         return {"ok": True}
 
     # ---------- 附件 ----------
@@ -7838,7 +7972,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             (aid, room_id, p["id"], Path(file.filename or "檔案").name,
              file.content_type or "application/octet-stream", size, sha, _now()),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         return {"id": aid, "size": size, "sha256": sha,
                 "mime": file.content_type or "application/octet-stream"}
 
@@ -8006,7 +8140,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchall()
         if not rows:
             return set()
-        await db.commit()
+        await _commit_with_retry(db)
         for r in rows:
             logger.info(
                 "問題逾時未作答 %s", r["id"], extra={
@@ -8097,7 +8231,7 @@ def create_app(config: Config | None = None) -> FastAPI:
              json.dumps([o.model_dump() for o in body.options], ensure_ascii=False),
              int(body.allow_free_text), int(body.multi_select), _now(), expires_at),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await events.notify(room_id)
         # 對方最近有沒有動靜。送出成功只證明「Hub 收下了」——人的 client
         # 沒開、或版本舊到不會顯示問題時，發問方會傻等到逾時才發現。
@@ -8229,7 +8363,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (_now(), why, asker_id, room_id),
             )
         ).fetchall()
-        await db.commit()
+        await _commit_with_retry(db)
         for r in rows:
             full = await (
                 await db.execute("SELECT * FROM question WHERE id=?", (r["id"],))
@@ -8275,7 +8409,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND status='pending'",
             (_now(), question_id),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         logger.info(
             "撤回提問 %s（%s）", question_id, row["room_id"],
@@ -8392,7 +8526,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         if await cur.fetchone() is None:
             raise _err(409, "question_already_resolved", "這個問題已經處理過了")
-        await db.commit()
+        await _commit_with_retry(db)
         await _item_notify(row)
         receipt = await _post_answer_receipt(
             row, me, status, body.answer.strip(), attachments
@@ -8457,7 +8591,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"UPDATE attachment SET message_id=? WHERE id IN ({marks})",
                 (receipt["id"], *attachment_ids),
             )
-            await db.commit()
+            await _commit_with_retry(db)
             await events.notify(question["room_id"])
         return receipt
 
@@ -8567,7 +8701,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "INSERT INTO access_token (token, label, created_at) VALUES (?,?,?)",
             (token, body.label.strip(), _now()),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         return {"token": token, "label": body.label.strip()}
 
     @app.get("/api/tokens", dependencies=[Depends(require_auth)])
@@ -8600,7 +8734,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         if await cur.fetchone() is None:
             raise _err(404, "token_not_found", "找不到這張 token，或它已經被撤銷")
-        await db.commit()
+        await _commit_with_retry(db)
         return {"ok": True}
 
     # ---------- WebSocket（UI 即時通道） ----------
@@ -8847,7 +8981,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE participant SET status='removed', left_at=? WHERE id=?",
                 (_now(), s["id"]),
             )
-            await db.commit()
+            await _commit_with_retry(db)
             logger.info(
                 "sweep: 回收逾時的 subagent %s（room=%s）",
                 s["display_name"], s["room_id"], extra={
@@ -8874,7 +9008,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 p["room_id"], p["id"], "removed", "removed", "父層閒置逾時"
             )
             released = await _orphan_claims(p["room_id"])
-            await db.commit()
+            await _commit_with_retry(db)
             await _announce_orphans(p["room_id"], released)
             await _check_supervisor_departed(p["room_id"])
             logger.info(
@@ -8922,7 +9056,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " WHERE status='pending' AND created_at < ?",
             (_now(), a_cutoff),
         )
-        await db.commit()
+        await _commit_with_retry(db)
         # 封存：active 房間中已無任何 active agent，且 active 人類不超過一人
         # ——兩個以上的人類仍在對話時，agent 離場不該把房間收走。
         # 只計入「本次 active 期間（activated_at 之後）」加入過的 agent，
@@ -8956,7 +9090,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "UPDATE room SET archive_pending_since=? WHERE id=?",
                     (now.isoformat(), r["id"]),
                 )
-                await db.commit()
+                await _commit_with_retry(db)
                 await _post_message(
                     r["id"], None,
                     f"聊天室內已無 agent，將於 {int(cfg.archive_grace)} 秒後自動封存",
@@ -8980,7 +9114,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "UPDATE room SET archive_pending_since=NULL WHERE id=?",
                     (r["id"],),
                 )
-        await db.commit()
+        await _commit_with_retry(db)
 
     async def _rooms_due_for_purge() -> list:
         """目前符合自動清理條件的房間。給啟動預覽與實際清理共用同一個判準。"""

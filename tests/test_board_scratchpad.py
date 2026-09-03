@@ -457,3 +457,43 @@ async def test_a_note_never_ends_up_on_a_deleted_block(tmp_path):
             assert not orphans, (
                 f"{len(orphans)} 則註解掛在已刪的段落上——查得到、看不到、"
                 "而且沒有任何一端報錯")
+
+
+async def test_a_note_can_actually_become_resolved(tmp_path):
+    """「N 則未處理」要有辦法變成已處理。
+
+    schema、清單與畫面上都有那個數字，卻沒有任何一條路讓它下降的話，**它
+    只會往上長，長到沒有人再看它**（審核用Codex-2 2026-09-03）。有狀態就要
+    有轉移，不然那個狀態是假的。
+
+    誰能標：段落的作者（意見是對他的）或人類成員。**註解者自己不行**——
+    「我提的意見我自己說處理完了」不是處理完了。
+    """
+    app, client = await _client(tmp_path, "resolve")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, human_block = await _pad(client, bid, hdr)
+            bot = await _add_agent(client, bid, hdr, "claude-bot")
+            nid = (await client.post(
+                f"/api/boards/{bid}/scratchpads/{pid}"
+                f"/blocks/{human_block}/notes",
+                json={"content": "一則意見"}, headers=bot)).json()["id"]
+
+            base = f"/api/boards/{bid}/scratchpads/{pid}/notes/{nid}/resolve"
+            mine = await client.post(base, headers=bot)
+            assert mine.status_code == 403, "註解者自己把它標成處理完了"
+
+            ok = await client.post(base, headers=hdr)
+            assert ok.status_code == 200 and ok.json()["resolved"] is True
+            pads = (await client.get(f"/api/boards/{bid}/scratchpads",
+                                     headers=hdr)).json()["scratchpads"]
+            assert pads[0]["unresolved_notes"] == 0
+
+            # 重複標記不該再動一次板：什麼都沒發生
+            again = await client.post(base, headers=hdr)
+            assert again.json()["unchanged"] is True
+            assert again.json()["board_seq"] is None
+
+            back = await client.post(f"{base}?unresolve=true", headers=hdr)
+            assert back.status_code == 200 and back.json()["resolved"] is False
