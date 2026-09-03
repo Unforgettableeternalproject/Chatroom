@@ -6,7 +6,10 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
+import '../../models/participant.dart';
 import '../../state/board_providers.dart';
+import '../../state/messages_providers.dart';
+import '../../state/rooms_providers.dart';
 import '../../widgets/actor_name.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
@@ -23,16 +26,24 @@ import '../../widgets/uep_button.dart';
 Future<void> showSupervisorPanel(
   BuildContext context, {
   required String boardId,
+  String? roomId,
 }) =>
     showDialog<void>(
       context: context,
-      builder: (_) => _SupervisorPanel(boardId: boardId),
+      builder: (_) => _SupervisorPanel(boardId: boardId, roomId: roomId),
     );
 
 class _SupervisorPanel extends ConsumerStatefulWidget {
-  const _SupervisorPanel({required this.boardId});
+  const _SupervisorPanel({required this.boardId, this.roomId});
 
   final String boardId;
+
+  /// 從哪一間房打開的。板軸（Board Library）進來時是 null。
+  ///
+  /// **Supervisor 是 per-room 的**（艾斯維爾 2026-09-03），所以「指派誰來看
+  /// 著」這件事只有站在某一間房裡才問得出來——板掛三間房就有三個位置，
+  /// 板軸上沒有「這一間」可言。
+  final String? roomId;
 
   @override
   ConsumerState<_SupervisorPanel> createState() => _SupervisorPanelState();
@@ -136,6 +147,18 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       content: SizedBox(
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // 房軸進來的話，**先講這間房**——他要指派的是「這裡的人」，
+          // 板上那個 supervisor 是另一回事
+          if (widget.roomId != null) ...[
+            _RoomSupervisorSection(
+              roomId: widget.roomId!,
+              boardId: widget.boardId,
+              attached: snap?.attachedRooms[widget.roomId!],
+            ),
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+          ],
           _current(context, snap, isOwner),
           const SizedBox(height: 14),
           const Divider(height: 1),
@@ -462,6 +485,159 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
               : () => _send(snap!),
         ),
       ),
+    ]);
+  }
+}
+
+/// 「這間房的 Supervisor」——per-room 那一半。
+///
+/// ## 為什麼它跟板上那個分開
+///
+/// 艾斯維爾 2026-09-03：「每個聊天室綁的 supervisor 可以不同，這是每個 room
+/// 範疇的。」板掛三間房就有三個位置，板軸上問不出「這一間」是哪一間。
+///
+/// ## 為什麼從前指派不了
+///
+/// 兩層擋著，兩層都要拆：
+///
+/// 1. 板上那個指派入口看 `myRole == 'owner'`，而艾斯維爾在板上是 editor
+///    ——按鈕根本不畫出來，看起來像功能沒做
+/// 2. room-scoped 的端點從前只收 `session_key`，而那個值 Hub 刻意不外流
+///    ⇒ UI 手上沒有任何送得出去的值，選單做不出來
+///
+/// 現在權限看**房間管理者**（`you_are_admin`），送出去的是 `participant_id`。
+class _RoomSupervisorSection extends ConsumerWidget {
+  const _RoomSupervisorSection({
+    required this.roomId,
+    required this.boardId,
+    required this.attached,
+  });
+
+  final String roomId;
+  final String boardId;
+
+  /// 這間房在板上的那一筆。板還沒載完時是 null。
+  final AttachedRoom? attached;
+
+  Future<void> _set(BuildContext context, WidgetRef ref, String? pid) async {
+    try {
+      final me = await ref.read(identityProvider(roomId).future);
+      await ref.read(boardApiProvider).setSupervisor(
+            roomId,
+            participantId: me.participantId,
+            targetParticipantId: pid,
+          );
+      ref.invalidate(boardByIdProvider(boardId));
+      ref.invalidate(boardProvider(roomId));
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  /// 挑一個**房內的人**。板外指定那條路留在板軸那一半——這裡問的是
+  /// 「這間房裡誰來看著」，房外的人不在這個問題的範圍內。
+  Future<void> _pick(BuildContext context, WidgetRef ref) async {
+    final detail = ref.read(roomDetailProvider(roomId)).value;
+    final members = [
+      for (final p in detail?.participants ?? const <Participant>[])
+        // 已離開的人不能當 supervisor：指派完當場就是 departed 狀態
+        if (p.status == 'active') p,
+    ];
+    final picked = await showDialog<Participant>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('這間房的 Supervisor',
+            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+        children: [
+          for (final m in members)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(m),
+              child: Row(children: [
+                KindBadge(kind: m.kind, compact: true),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(m.displayName,
+                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                ),
+              ]),
+            ),
+          if (members.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+              child: Text('這間房裡沒有其他人。',
+                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+            ),
+        ],
+      ),
+    );
+    if (picked != null && context.mounted) {
+      await _set(context, ref, picked.id);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    // 權限看**房間管理者**，不是板上的角色
+    final canAssign =
+        ref.watch(roomDetailProvider(roomId)).value?.room.youAreAdmin ?? false;
+    final sup = attached?.supervisor;
+    final departed = attached?.supervisorDeparted ?? false;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: MonoLabel('這間房的 SUPERVISOR', color: s.inkSoft,
+            letterSpacing: 1.4),
+      ),
+      const SizedBox(height: 8),
+      Row(children: [
+        if (sup == null)
+          Expanded(
+            child: Text('這間房還沒有指派 Supervisor。',
+                style: UepText.serif(size: 12.5, color: s.inkMute)),
+          )
+        else ...[
+          KindBadge(kind: sup.actorKind),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ActorName(actor: sup, size: 13, showKind: false),
+                // 三種狀態的第三種：**本來是誰在看，但他已經走了**。
+                // 退場是標記不是清空，少了這一句，畫面就只能在「有人在看」
+                // 與「沒有人」之間二選一，而兩個都不是真的
+                if (departed)
+                  Text('已經離開這間房了。指派的紀錄留著，但沒有人在看。',
+                      style: UepText.serif(size: 11.5, color: UepColors.gold)),
+              ],
+            ),
+          ),
+        ],
+        if (canAssign) ...[
+          const SizedBox(width: 8),
+          UepButton(
+            label: sup == null ? '指派' : '換人',
+            variant: sup == null
+                ? UepButtonVariant.gold
+                : UepButtonVariant.outline,
+            small: true,
+            onPressed: () => _pick(context, ref),
+          ),
+          if (sup != null) ...[
+            const SizedBox(width: 6),
+            UepButton(
+              label: '卸任',
+              variant: UepButtonVariant.outline,
+              small: true,
+              onPressed: () => _set(context, ref, null),
+            ),
+          ],
+        ],
+      ]),
     ]);
   }
 }

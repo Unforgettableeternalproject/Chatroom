@@ -1033,6 +1033,8 @@ class AttachedRoom {
     this.name = '',
     this.status = 'active',
     this.detached = false,
+    this.supervisor,
+    this.supervisorDeparted = false,
   });
 
   final String id;
@@ -1044,12 +1046,27 @@ class AttachedRoom {
 
   final bool detached;
 
-  factory AttachedRoom.fromJson(Map<String, dynamic> json) => AttachedRoom(
-    id: json['id'] as String,
-    name: (json['name'] as String?) ?? '',
-    status: (json['status'] as String?) ?? 'active',
-    detached: (json['detached'] as bool?) ?? false,
-  );
+  /// **這間房**的 supervisor。每間掛接房各綁各的（艾斯維爾 2026-09-03：
+  /// 「他不再是 per board 而是 per room」），所以它長在這裡而不是板上。
+  final BoardActorRef? supervisor;
+
+  /// 那個人已經離開這間房了。
+  ///
+  /// **退場是標記不是清空**——少了這個旗標，畫面只能二選一地畫成「有人在看」
+  /// 或「沒有人」，而真相是第三種：本來是誰在看，但他已經走了。
+  final bool supervisorDeparted;
+
+  factory AttachedRoom.fromJson(Map<String, dynamic> json) {
+    final sup = json['supervisor'] as Map<String, dynamic>?;
+    return AttachedRoom(
+      id: json['id'] as String,
+      name: (json['name'] as String?) ?? '',
+      status: (json['status'] as String?) ?? 'active',
+      detached: (json['detached'] as bool?) ?? false,
+      supervisor: sup == null ? null : BoardActorRef.fromJson(sup),
+      supervisorDeparted: (sup?['departed'] as bool?) ?? false,
+    );
+  }
 }
 
 /// 掛接的結果。

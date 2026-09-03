@@ -269,16 +269,26 @@ class BoardApi {
         );
       });
 
-  /// 設定或取消（傳空字串）Board 的 supervisor。限房間建立者。
+  /// 設定或取消**這間房**的 supervisor。限房間管理者。
+  ///
+  /// 指的是誰用 `targetParticipantId` 講——**不是 session_key**。那個值
+  /// Hub 刻意不外流（隱私），所以 UI 手上從來就沒有它：端點只收 session_key
+  /// 的那段期間，這支方法沒有任何呼叫端，指派選單也就做不出來，而症狀是
+  /// 「介面上沒有指派入口」，看起來像忘了做（艾斯維爾 2026-09-03）。
+  ///
+  /// 傳 null／空字串＝取消指派。
   Future<void> setSupervisor(
     String roomId, {
     required String participantId,
-    required String sessionKey,
+    String? targetParticipantId,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/rooms/$roomId/board/supervisor',
-          data: {'session_key': sessionKey},
+          data: {
+            'session_key': '',
+            'participant_id': targetParticipantId ?? '',
+          },
           options: Options(headers: {'X-Participant-Id': participantId}),
         );
       });

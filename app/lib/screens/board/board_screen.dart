@@ -549,9 +549,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // ——功能做了，但沒有人找得到它
         if (_boardIdOrNull != null) ...[
           _SupervisorPill(
-            name: snap?.supervisor?.displayName ?? '',
-            onTap: () =>
-                showSupervisorPanel(context, boardId: _boardIdOrNull!),
+            // 房軸站在某一間房裡，那就講**這間房**的 supervisor——
+            // Supervisor 是 per-room 的，板上那個是另一回事
+            name: _roomSupervisor(snap)?.displayName ??
+                (widget.roomId != null ? '' : snap?.supervisor?.displayName) ??
+                '',
+            departed: widget.roomId != null &&
+                (snap?.attachedRooms[widget.roomId!]?.supervisorDeparted ??
+                    false),
+            onTap: () => showSupervisorPanel(context,
+                boardId: _boardIdOrNull!, roomId: widget.roomId),
           ),
           const SizedBox(width: 12),
         ],
@@ -571,6 +578,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       ]),
     );
   }
+
+  /// 這間房綁的 supervisor（板軸進來時沒有「這間房」可言 ⇒ null）。
+  BoardActorRef? _roomSupervisor(BoardSnapshot? snap) =>
+      widget.roomId == null
+          ? null
+          : snap?.attachedRooms[widget.roomId!]?.supervisor;
 
   // ---------- 左：Objective 清單 ----------
 
@@ -1567,10 +1580,19 @@ class _HeaderAction extends StatelessWidget {
 /// Hub 目前只給名字（沒有 kind），所以那顆點是中性的——**不要拿名字去猜種類**，
 /// 猜錯的話它會用別人的顏色說「他是 claude」。
 class _SupervisorPill extends StatelessWidget {
-  const _SupervisorPill({required this.name, required this.onTap});
+  const _SupervisorPill({
+    required this.name,
+    required this.onTap,
+    this.departed = false,
+  });
 
   /// 現任 Supervisor 的名字。空字串＝還沒指定。
   final String name;
+
+  /// 那個人已經離開這間房了。**退場是標記不是清空**，所以膠囊上要說得出
+  /// 第三種狀態——只有「有人」與「沒人」兩種畫法時，這個情況會被畫成
+  /// 「有人在看」，而實際上沒有。
+  final bool departed;
 
   final VoidCallback onTap;
 
@@ -1594,10 +1616,18 @@ class _SupervisorPill extends StatelessWidget {
           Text(
             // 沒有指定時講「未指派」而不是留一個空的「SUPERVISOR · 」——
             // 後者看起來像名字讀不出來，而那是完全不同的一件事
-            empty ? 'SUPERVISOR · 未指派' : 'SUPERVISOR · ${name.toUpperCase()}',
+            empty
+                ? 'SUPERVISOR · 未指派'
+                : departed
+                    ? 'SUPERVISOR · ${name.toUpperCase()}（已離開）'
+                    : 'SUPERVISOR · ${name.toUpperCase()}',
             style: UepText.mono(
                 size: 9,
-                color: empty ? s.inkMute : s.inkSoft,
+                color: empty
+                    ? s.inkMute
+                    : departed
+                        ? UepColors.gold
+                        : s.inkSoft,
                 letterSpacing: 1.2),
           ),
         ]),
