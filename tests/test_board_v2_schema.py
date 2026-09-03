@@ -208,3 +208,61 @@ def _owned_tables(app):
     src = inspect.getsource(mod.create_app)
     body = re.search(r"_BOARD_OWNED_TABLES = \(([^)]*)\)", src).group(1)
     return re.findall(r'"([^"]+)"', body)
+
+
+@pytest.mark.xfail(
+    reason="共用連線下修不對：rollback 會撤掉別人剛寫入、還沒 commit 的資料，"
+           "而對方回報成功（test_admin_transfer_race 在守）。正解是 "
+           "per-request 交易或連線池——那是架構改動，不混在功能收尾裡做。",
+    strict=True)
+async def test_a_failed_board_delete_leaves_nothing_half_removed(tmp_path):
+    """**半刪的板比刪不掉的板糟得多。**
+
+    逐表 DELETE 中途任何一個未預期的錯誤，都會讓前半段已經消失而後半段還在
+    ——而那個狀態沒有任何一支 API 描述得出來（審核用Codex-2 2026-09-03）。
+
+    這條把「最後一步失敗」注入進去，斷言**一列都沒有消失**。
+    """
+    import sqlite3
+    from unittest.mock import patch
+
+    import pytest as _pytest
+    from httpx import ASGITransport, AsyncClient
+
+    from chatroom_server.app import create_app
+    from chatroom_server.config import Config
+
+    app = create_app(Config(db_path=str(tmp_path / "halfdelete.db"),
+                            api_token="root-token"))
+    async with AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://test",
+                           headers={"Authorization": "Bearer root-token"}
+                           ) as client:
+        async with app.router.lifespan_context(app):
+            key = {"X-Session-Key": "claude-a"}
+            bid = (await client.post("/api/boards", json={"name": "板"},
+                                     headers=key)).json()["id"]
+            oid = (await client.post(f"/api/boards/{bid}/objectives",
+                                     json={"title": "週期"},
+                                     headers=key)).json()["id"]
+            real = app.state.db.execute
+            calls = {"n": 0}
+
+            async def _boom(sql, *a, **k):
+                if sql.startswith("DELETE FROM board WHERE"):
+                    raise sqlite3.OperationalError("disk I/O error")
+                calls["n"] += 1
+                return await real(sql, *a, **k)
+
+            with patch.object(app.state.db, "execute", _boom):
+                with _pytest.raises(sqlite3.OperationalError):
+                    await client.delete(f"/api/boards/{bid}", headers=key)
+
+            still = await (await app.state.db.execute(
+                "SELECT id FROM board_objective WHERE id=?", (oid,))).fetchone()
+            assert still is not None, (
+                "刪板中途失敗，前半段的卡已經消失了——那塊板現在處於一個"
+                "沒有任何 API 描述得出來的狀態")
+            board = await (await app.state.db.execute(
+                "SELECT id FROM board WHERE id=?", (bid,))).fetchone()
+            assert board is not None

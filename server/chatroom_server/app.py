@@ -4918,6 +4918,64 @@ def create_app(config: Config | None = None) -> FastAPI:
             reply_mentions_author=False,
         )
 
+    _REORDER_PARENT = {"objective": None,
+                       "checklist": "objective_id",
+                       "task": "checklist_id"}
+
+    async def _assert_reorder_fullset(table: str, kind: str, ids: list[str],
+                                      scope_sql: str, scope_args: tuple):
+        """排序必須是**同一個 parent 底下、完整且唯一**的一份順序。
+
+        只驗「這些 id 存在」的話，這三種都會 200 而留下壞掉的順序
+        （審核用Codex-2 2026-09-03 實測）：
+
+        - **重複 id**——同一張卡被寫兩次，最後一次贏，中間那個位置空著
+        - **子集合**——沒送到的那些保留舊的 `order_index`，與新的 0、1、2
+          直接重疊。畫面上是兩張卡搶同一個位置，而 API 回的是 200
+        - **混不同 parent**——排序的母體是「同層 siblings」，跨 parent 的
+          一份順序在任何一邊看都不完整
+
+        母體的定義（審核用Codex-2 #421）：objective 的 parent 是板本身，
+        checklist 是同一個 objective，task 是同一份 checklist。
+        """
+        if len(set(ids)) != len(ids):
+            raise _err(400, "reorder_duplicate_item",
+                       "同一張卡在這份順序裡出現了兩次")
+        db = app.state.db
+        marks = ",".join("?" for _ in ids)
+        parent_col = _REORDER_PARENT[kind]
+        cols = f"id, {parent_col}" if parent_col else "id"
+        rows = await (await db.execute(
+            f"SELECT {cols} FROM {table} WHERE {scope_sql} AND deleted=0"
+            f" AND id IN ({marks})", (*scope_args, *ids))).fetchall()
+        known = {r["id"] for r in rows}
+        missing = [i for i in ids if i not in known]
+        if missing:
+            # 部分成功會讓 client 拿到一個它無法解讀的順序——排序是整批語意
+            raise _err(404, "board_item_not_found",
+                       f"有 {len(missing)} 張卡不屬於這塊板或已被刪除，"
+                       "整批未套用", missing=missing)
+        if parent_col:
+            parents = {r[parent_col] for r in rows}
+            if len(parents) > 1:
+                raise _err(409, "reorder_mixed_parents",
+                           "一次只能排同一層底下的卡——跨 parent 的一份順序"
+                           "在任何一邊看都不完整", parents=sorted(parents))
+            parent = parents.pop()
+            siblings = await (await db.execute(
+                f"SELECT id FROM {table} WHERE {scope_sql} AND deleted=0"
+                f" AND {parent_col}=?", (*scope_args, parent))).fetchall()
+        else:
+            siblings = await (await db.execute(
+                f"SELECT id FROM {table} WHERE {scope_sql} AND deleted=0",
+                scope_args)).fetchall()
+        have = {r["id"] for r in siblings}
+        if have != set(ids):
+            raise _err(409, "reorder_incomplete",
+                       "排序必須列出這一層現在的每一張卡，一張不多一張不少"
+                       "——少列的那些會留在原本的位置上，與新的順序重疊",
+                       missing=sorted(have - set(ids)))
+
     @app.post("/api/rooms/{room_id}/board/reorder",
               dependencies=[Depends(require_auth)])
     async def reorder_board(
@@ -4933,20 +4991,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         table = BOARD_TABLES[body.kind]
         ids = [i.id for i in body.items]
-        placeholders = ",".join("?" for _ in ids)
-        rows = await (
-            await db.execute(
-                f"SELECT id FROM {table} WHERE room_id=? AND deleted=0"
-                f" AND id IN ({placeholders})",
-                (room_id, *ids),
-            )
-        ).fetchall()
-        known = {r["id"] for r in rows}
-        missing = [i for i in ids if i not in known]
-        if missing:
-            # 部分成功會讓 client 拿到一個它無法解讀的順序——排序是整批語意
-            raise _err(404, "board_item_not_found",
-                       f"有 {len(missing)} 張卡不屬於這個房間或已被刪除，整批未套用")
+        # 兩條 reorder 走**同一個守門**。分別寫的話會漂移，而漂移的那一半
+        # 沒有人在看——v1 與 v2 排的是同一批卡
+        await _assert_reorder_fullset(table, body.kind, ids,
+                                      "room_id=?", (room_id,))
         seq = await _next_board_seq(room_id)
         for item in body.items:
             await db.execute(
@@ -5709,6 +5757,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         rooms = [r["room_id"] for r in await (await db.execute(
             "SELECT room_id FROM board_room WHERE board_id=?"
             " AND detached_at IS NULL", (board_id,))).fetchall()]
+        # ⚠️ **這裡沒有 rollback，而那是刻意的——但問題也還在。**
+        #
+        # 逐表 DELETE 中途的未預期錯誤會留下半刪的板：前半段消失、後半段還在，
+        # 而那個狀態沒有任何一支 API 描述得出來（審核用Codex-2 #505）。
+        # 我一度加了 try/rollback，然後被 `test_admin_transfer_race.py` 擋下
+        # ——**共用連線上的 rollback 會撤掉別的請求剛寫入、還沒 commit 的
+        # 資料，而對方會回報成功**。那條測試存在得比這個問題早，理由也更強：
+        # 用一種靜默失效去換另一種，不是修好。
+        #
+        # ⇒ 正解是 per-request 交易或連線池，那是架構改動，不混在這裡做。
+        #    在那之前，能做的是讓「漏了一張帶 board_id 的表」這個**最可能的
+        #    觸發原因**被測試擋在門外——那條對帳測試在 test_board_v2_schema。
         counts: dict[str, int] = {}
         for table in _BOARD_OWNED_TABLES:
             cur = await db.execute(
@@ -5844,16 +5904,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         table = BOARD_TABLES[body.kind]
         ids = [i.id for i in body.items]
-        placeholders = ",".join("?" for _ in ids)
-        rows = await (await db.execute(
-            f"SELECT id FROM {table} WHERE board_id=? AND deleted=0"
-            f" AND id IN ({placeholders})", (board_id, *ids))).fetchall()
-        known = {r["id"] for r in rows}
-        missing = [i for i in ids if i not in known]
-        if missing:
-            # 部分成功會讓 client 拿到一個它無法解讀的順序——排序是整批語意
-            raise _err(404, "board_item_not_found",
-                       f"有 {len(missing)} 張卡不屬於這塊板或已被刪除，整批未套用")
+        await _assert_reorder_fullset(table, body.kind, ids,
+                                      "board_id=?", (board_id,))
         seq = await _next_seq_for_board(board_id)
         for item in body.items:
             await db.execute(
