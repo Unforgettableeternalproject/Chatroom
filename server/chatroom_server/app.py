@@ -6385,7 +6385,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         block = await _scratchpad_block_or_404(pad_id, block_id)
         _block_guard(block, me)
         db = app.state.db
+        # 🚨 **先 CAS，後領號。** 領號在前的話，兩路刪同一段會各領一個號，
+        # 水位推兩格而實際的刪除只發生一次——稽核串上就有兩次刪除
+        # （@開發Novia (除錯) B 組量到 6 → 8）。輸的那路現在完全不動板：
+        # 沒有號、沒有 event，因為**什麼都沒有發生**
+        killed = await (await db.execute(
+            "UPDATE board_scratchpad_block SET deleted=1, updated_at=?"
+            " WHERE id=? AND deleted=0 RETURNING id",
+            (_now(), block_id))).fetchone()
+        if killed is None:
+            await _commit()
+            return {"ok": True, "id": block_id, "already_deleted": True,
+                    "board_seq": None}
         seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "UPDATE board_scratchpad_block SET board_seq=? WHERE id=?",
+            (seq, block_id))
+        # ⚠️ 註解要跟著走。留著的話會掛在一個已經不存在的段落上——查得到、
+        # 畫面上看不到，而兩邊都不報錯（@開發Novia (除錯) F 組）
+        await db.execute(
+            "UPDATE board_scratchpad_note SET deleted=1, board_seq=?"
+            " WHERE block_id=? AND deleted=0", (seq, block_id))
         await db.execute(
             "INSERT INTO board_scratchpad_revision (id, block_id,"
             " scratchpad_id, board_id, content, rev, author_actor_key,"
@@ -6394,22 +6414,6 @@ def create_app(config: Config | None = None) -> FastAPI:
             (uuid.uuid4().hex, block_id, pad_id, board_id, block["content"],
              block["rev"], block["author_actor_key"], block["author_name"],
              me["session_key"], me["display_name"], _now()))
-        # 兩路刪同一段：**一次實際的刪除只能有一格水位、一筆 event**。
-        # 不做 CAS 的話兩邊都成功、各領一個號，稽核串上就有兩次刪除——而
-        # 那一段只被刪了一次（@開發Novia (除錯) B 組實測）
-        killed = await (await db.execute(
-            "UPDATE board_scratchpad_block SET deleted=1, board_seq=?,"
-            " updated_at=? WHERE id=? AND deleted=0 RETURNING id",
-            (seq, _now(), block_id))).fetchone()
-        if killed is None:
-            await _record_board_event(
-                board_id, seq, "scratchpad_block_delete_noop",
-                actor=me["session_key"], actor_name=me["display_name"],
-                origin_room_id=room_id, item_kind="scratchpad",
-                item_id=pad_id, payload={"block_id": block_id})
-            await _commit()
-            return {"ok": True, "id": block_id, "board_seq": seq,
-                    "already_deleted": True}
         await db.execute(
             "UPDATE board_scratchpad SET rev=rev+1, board_seq=?, updated_at=?,"
             " updated_by_actor_key=?, updated_by_name=?"
@@ -6443,16 +6447,32 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _scratchpad_or_404(board_id, pad_id)
         await _scratchpad_block_or_404(pad_id, block_id)
         db = app.state.db
-        seq = await _next_seq_for_board(board_id)
         nid = uuid.uuid4().hex
-        await db.execute(
+        # 🚨 **單一語句的存在性檢查。** 上面那個 `_scratchpad_block_or_404`
+        # 與這裡的 INSERT 之間有 await——別人可以在那個縫裡把段落刪掉，
+        # 於是兩路都 200，而註解掛在一個已經不存在的段落上
+        # （@開發Novia (除錯) F 組）。先領號再檢查的話，失敗那路還會白推
+        # 一格水位，所以號也留到確認之後才領
+        cur = await db.execute(
             "INSERT INTO board_scratchpad_note (id, block_id, scratchpad_id,"
             " board_id, content, author_actor_key, author_name, author_kind,"
-            " board_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " board_seq, created_at)"
+            " SELECT ?,?,?,?,?,?,?,?,0,? WHERE EXISTS"
+            " (SELECT 1 FROM board_scratchpad_block WHERE id=? AND deleted=0)"
+            " RETURNING id",
             (nid, block_id, pad_id, board_id, body.content,
              me["session_key"], me["display_name"],
              "human" if _actor_is_human(me) else (me.get("kind") or "agent"),
-             seq, _now()))
+             _now(), block_id))
+        if await cur.fetchone() is None:
+            await _commit()
+            raise _err(409, "scratchpad_block_deleted",
+                       "這一段在你送出的同時被刪掉了，註解沒有掛上去",
+                       block_id=block_id)
+        seq = await _next_seq_for_board(board_id)
+        await db.execute(
+            "UPDATE board_scratchpad_note SET board_seq=? WHERE id=?",
+            (seq, nid))
         await _record_board_event(
             board_id, seq, "scratchpad_note_added", actor=me["session_key"],
             actor_name=me["display_name"], origin_room_id=room_id,

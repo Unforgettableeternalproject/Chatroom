@@ -396,3 +396,64 @@ async def test_every_pad_change_leaves_an_event(tmp_path):
             got = {e["board_seq"] for e in body["events"]}
             missing = set(range(1, body["board_seq"] + 1)) - got
             assert not missing, f"這些 board_seq 沒有對應的 event：{sorted(missing)}"
+
+
+# ── 真併發（@開發Novia (除錯) verify_scratchpad_race.py 的形狀）───────
+
+async def test_deleting_the_same_block_twice_moves_the_water_once(tmp_path):
+    """**一次實際的刪除只能有一格水位。**
+
+    兩路都領號的話，水位推兩格而刪除只發生一次——`/events` 上就出現兩次
+    刪除，而稽核串的意義正在於它對得上實際發生的事
+    （@開發Novia (除錯) 2026-09-03 量到 6 → 8）。
+
+    ⚠️ 關鍵是**先 CAS 後領號**。反過來的話，輸的那路已經把號領走了。
+    """
+    import asyncio
+
+    app, client = await _client(tmp_path, "doubledelete")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, bkid = await _pad(client, bid, hdr, content="要被刪的")
+            before = (await client.get(f"/api/boards/{bid}",
+                                       headers=hdr)).json()["board_seq"]
+            path = f"/api/boards/{bid}/scratchpads/{pid}/blocks/{bkid}"
+            a, b = await asyncio.gather(client.delete(path, headers=hdr),
+                                        client.delete(path, headers=hdr))
+            assert {a.status_code, b.status_code} == {200}
+            done = [r for r in (a, b) if not r.json().get("already_deleted")]
+            assert len(done) == 1, "兩路都認為自己刪掉了它"
+
+            after = (await client.get(f"/api/boards/{bid}",
+                                      headers=hdr)).json()["board_seq"]
+            assert after == before + 1, f"水位推了 {after - before} 格"
+
+
+async def test_a_note_never_ends_up_on_a_deleted_block(tmp_path):
+    """加註解與刪段落同時發生時，**不能兩個都成功而留下孤兒**。
+
+    註解掛在一個已經不存在的段落上：查得到、畫面上看不到，而兩邊都不報錯
+    ——今天講了一整天的那個形狀，換到 block→note 這一層
+    （@開發Novia (除錯) 2026-09-03 F 組）。
+    """
+    import asyncio
+
+    app, client = await _client(tmp_path, "notevsdelete")
+    async with client:
+        async with app.router.lifespan_context(app):
+            bid, hdr = await _human_board(client)
+            pid, bkid = await _pad(client, bid, hdr)
+            base = f"/api/boards/{bid}/scratchpads/{pid}/blocks/{bkid}"
+            await asyncio.gather(
+                client.post(f"{base}/notes", json={"content": "一則註解"},
+                            headers=hdr),
+                client.delete(base, headers=hdr))
+
+            orphans = await (await app.state.db.execute(
+                "SELECT n.id FROM board_scratchpad_note n"
+                " JOIN board_scratchpad_block b ON b.id = n.block_id"
+                " WHERE n.deleted=0 AND b.deleted=1")).fetchall()
+            assert not orphans, (
+                f"{len(orphans)} 則註解掛在已刪的段落上——查得到、看不到、"
+                "而且沒有任何一端報錯")
