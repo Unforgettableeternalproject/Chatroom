@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../core/util/relative_time.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../models/participant.dart';
@@ -160,6 +161,10 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             const SizedBox(height: 12),
           ],
           _current(context, snap, isOwner),
+          const SizedBox(height: 14),
+          const Divider(height: 1),
+          const SizedBox(height: 12),
+          _BoardOwnerSection(boardId: widget.boardId, snap: snap),
           const SizedBox(height: 14),
           const Divider(height: 1),
           const SizedBox(height: 12),
@@ -636,6 +641,153 @@ class _RoomSupervisorSection extends ConsumerWidget {
               onPressed: () => _set(context, ref, null),
             ),
           ],
+        ],
+      ]),
+    ]);
+  }
+}
+
+/// 「這塊板是誰的」——owner 的移交與接管。
+///
+/// ## 為什麼它在這個面板裡
+///
+/// 這個面板管的是**這塊板的人事**：誰在看著（Supervisor）、誰管得動
+/// （owner）。分成兩個入口的話，「板鎖死了要找誰」會變成得先知道去哪找。
+///
+/// ## owner 為什麼要能交接
+///
+/// owner 是唯一不靠掛接關係的權限來源（`_board_role` 開頭就認它），也就是
+/// 「這塊板還有沒有人管得動」的最後一道保險。不能交接的話，換一份工作、
+/// 換一個 session，那塊板就永遠鎖在一個不再回來的人手上。
+class _BoardOwnerSection extends ConsumerWidget {
+  const _BoardOwnerSection({required this.boardId, required this.snap});
+
+  final String boardId;
+  final BoardSnapshot? snap;
+
+  BoardActorRef? get _owner {
+    for (final m in snap?.members.values ?? const <BoardActorRef>[]) {
+      if (m.role == 'owner') return m;
+    }
+    return null;
+  }
+
+  Future<void> _transfer(BuildContext context, WidgetRef ref) async {
+    final me = _owner?.actorKey;
+    final members = [
+      for (final m in snap?.members.values ?? const <BoardActorRef>[])
+        if (m.actorKey != me) m,
+    ];
+    final picked = await showDialog<BoardActorRef>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('把這塊板交給誰',
+            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+        children: [
+          for (final m in members)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(m),
+              child: Row(children: [
+                KindBadge(kind: m.actorKind, compact: true),
+                const SizedBox(width: 6),
+                Expanded(child: ActorName(actor: m, size: 12.5)),
+              ]),
+            ),
+          if (members.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+              child: Text('板上沒有別人可以接。先把人加進來。',
+                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !context.mounted) return;
+    try {
+      await ref.read(boardsApiProvider).transferOwner(
+            boardId,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            targetActorKey: picked.actorKey,
+          );
+      ref.invalidate(boardByIdProvider(boardId));
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  Future<void> _claim(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(boardsApiProvider).claimOwner(
+            boardId,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
+      ref.invalidate(boardByIdProvider(boardId));
+      ref.invalidate(boardLibraryProvider);
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      // ⚠️ **owner 還活著時要講出他是誰、什麼時候還在。**
+      // 「這塊板有 owner」這句話對「20 分鐘前還在」與「昨天之後沒再出現」
+      // 是同一句，而那兩種情況該做的決定完全不同
+      final who = e.detail['owner_display_name'] as String?;
+      final seen = e.detail['owner_last_seen_at'] as String?;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.code == 'board_has_owner' && who != null
+            ? '$who 還是這塊板的 owner'
+                '${seen == null ? '' : '（最後出現：${relativeTime(seen)}）'}'
+                '——接管只在無主的板上做得到'
+            : e.message),
+        duration: const Duration(seconds: 6),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final owner = _owner;
+    final iAmOwner = snap?.myRole == 'owner';
+    // 主持人模式開著才給接管——這與「持有主 token」是兩件事，
+    // 開關現在是關的時候，Hub 那支端點本來就會拒絕
+    final host = ref.watch(hostViewProvider);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: MonoLabel('這塊板是誰的', color: s.inkSoft, letterSpacing: 1.4),
+      ),
+      const SizedBox(height: 8),
+      Row(children: [
+        if (owner == null)
+          Expanded(
+            child: Text('這塊板現在沒有人管得動。',
+                style: UepText.serif(size: 12.5, color: s.inkMute)),
+          )
+        else ...[
+          KindBadge(kind: owner.actorKind),
+          const SizedBox(width: 8),
+          Expanded(child: ActorName(actor: owner, size: 13, showKind: false)),
+        ],
+        if (iAmOwner) ...[
+          const SizedBox(width: 8),
+          UepButton(
+            label: '移交',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => _transfer(context, ref),
+          ),
+        ],
+        // 接管：主持人限定。**不是 owner 的時候才有意義**，
+        // 自己已經是 owner 還畫一顆「接管」只會讓人以為它有別的作用
+        if (host && !iAmOwner) ...[
+          const SizedBox(width: 6),
+          UepButton(
+            label: '接管',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => _claim(context, ref),
+          ),
         ],
       ]),
     ]);

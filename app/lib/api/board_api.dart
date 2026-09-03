@@ -504,5 +504,40 @@ class BoardsApi {
         );
         return (res.data?['delivered'] as bool?) ?? false;
       });
-}
 
+  /// 把 owner 交給別人。**限現任 owner。**
+  ///
+  /// owner 是這塊板唯一不靠掛接關係的權限來源（`_board_role` 開頭就認它），
+  /// 所以它是「這塊板還有沒有人管得動」的最後一道保險——交接要能做，
+  /// 否則換一份工作、換一個 session 就把板鎖死了。
+  Future<void> transferOwner(
+    String boardId, {
+    required String sessionKey,
+    required String targetActorKey,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/owner',
+          data: {'target_actor_key': targetActorKey},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+      });
+
+  /// Hub 主持人把一塊**無主**的板接管到自己身上。限主持人模式
+  /// （`X-Host-View` 由 api_client 依開關自動帶）。
+  ///
+  /// ⚠️ owner 還活著時 Hub 回 **409 `board_has_owner`**，detail 帶
+  /// `owner_display_name` 與 `owner_last_seen_at`——**那兩個欄位要顯示出來**：
+  /// 「A，20 分鐘前還在」與「審核Novia，昨天之後沒再出現」會讓人做出完全
+  /// 不同的決定，而只說「這塊板有 owner」兩者長得一樣。
+  ///
+  /// 另外，判準是「owner 那把 key 現在活不活著」⇒ **agent 的板在它離線期間
+  /// 就是無主狀態**。那是這個設計的必然性質，不是缺陷。
+  Future<void> claimOwner(String boardId, {required String sessionKey}) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/owner/claim',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+      });
+}
