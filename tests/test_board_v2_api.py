@@ -1354,3 +1354,121 @@ async def test_leaving_the_room_takes_the_board_access_with_it(tmp_path):
                                      headers={"X-Session-Key": "claude-a"})
             assert still.status_code == 200
             assert still.json()["my_role"] == "owner"
+
+
+async def test_an_archived_room_no_longer_counts_as_being_in_it(tmp_path):
+    """封存的房不算「你還在裡面」（艾斯維爾 2026-09-03：只是曾經存在）。
+
+    退路的 SQL 原本只看 `board_room.detached_at IS NULL` 與 participant 的
+    status，**沒有看房本身是不是還活著**；而封存一間房完全不碰 `participant`
+    ⇒ 房封存了，裡面的人照樣是 active ⇒ 存取權永久保留。
+    agent 會被 sweeper 掃掉而自然失效，**人類永遠不會**
+    （@開發Novia (除錯) 2026-09-03，活庫查到 8 列這種狀態）。
+
+    對照組 `_live_room_count` 早就寫對了——同一份判準兩處寫得不一樣。
+    """
+    app, client = await _client(tmp_path, "archived-room-no-access")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            guest = await _join(client, rid, "human-g", "客人", role="human")
+            gkey = {"X-Session-Key": "human-g"}
+            assert (await client.get(f"/api/boards/{bid}",
+                                     headers=gkey)).status_code == 200
+
+            r = await client.post(f"/api/rooms/{rid}/archive", headers=owner)
+            assert r.status_code == 200, r.text
+
+            gone = await client.get(f"/api/boards/{bid}", headers=gkey)
+            assert gone.status_code == 403, "房封存了他還在裡面"
+
+            # owner 不受影響——他的權限來源是 board_member
+            assert (await client.get(
+                f"/api/boards/{bid}",
+                headers={"X-Session-Key": "claude-a"})).status_code == 200
+
+
+async def test_a_removed_member_cannot_walk_back_in_through_the_room(tmp_path):
+    """被移出板的人，即使還在掛接房裡也回不來。
+
+    🚨 退路的邏輯是「明示查不到 ⇒ 走退路」，而 `removed_at IS NOT NULL`
+    在第一段查詢眼裡**就等於查不到** ⇒ 被移除的成員只要還在房裡是 active，
+    立刻以 editor 身分回來。降成 viewer 擋得住、整個移除反而擋不住
+    （@開發Novia (除錯) 2026-09-03；這是 `removed_at IS NULL` 補上去之後
+    才成立的組合，兩件事單獨看都對）。
+
+    更難看的是它**沒有任何畫面會揭露**：`remove_board_member` 回 200、
+    卡也孤兒化了、`list_boards` 也把板從他清單拿掉 ⇒ **看不到，但寫得動**。
+    """
+    app, client = await _client(tmp_path, "removed-cannot-return")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            bad = await _join(client, rid, "claude-bad", "被移除的")
+            bkey = {"X-Session-Key": "claude-bad"}
+            # 先成為明示成員，才有得移除
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-bad", "role": "editor",
+                                    "display_name": "被移除的",
+                                    "actor_kind": "claude"},
+                              headers={**owner, "X-Session-Key": "claude-a"})
+            assert (await client.get(f"/api/boards/{bid}",
+                                     headers=bkey)).status_code == 200
+
+            r = await client.request(
+                "DELETE", f"/api/boards/{bid}/members/claude-bad",
+                headers={**owner, "X-Session-Key": "claude-a"})
+            assert r.status_code == 200, r.text
+
+            # 他**還在房裡**（沒有離開），但不該因此回來
+            back = await client.get(f"/api/boards/{bid}", headers=bkey)
+            assert back.status_code == 403, "被移除的人從房間那條路走回來了"
+            assert back.json()["detail"]["code"] == "not_board_member"
+
+            wrote = await client.post(f"/api/rooms/{rid}/board/tasks",
+                                      json={"title": "我又回來了"}, headers=bad)
+            assert wrote.status_code == 403, "看不到卻寫得動，是最糟的組合"
+
+
+async def test_objectives_can_be_created_on_the_board_axis(tmp_path):
+    """週期也要能從板軸建。
+
+    其他寫入端點（checklist / task / status / claim / release）**全部是
+    `/api/board/...` 板軸**，只有新增週期是房軸
+    （`/api/rooms/{rid}/board/objectives`）⇒ 從 Board Library 進來、或一塊
+    還沒掛任何房的板，就是少了這一個入口
+    （@開發Novia (UI) 2026-09-03）。而「顯式建一塊板」剛上線之後，
+    零掛接板是**正常狀態**不是邊界案例。
+    """
+    app, client = await _client(tmp_path, "objective-board-axis")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+            akey = {**owner, "X-Session-Key": "claude-a"}
+            await client.delete(f"/api/boards/{bid}/rooms/{rid}", headers=akey)
+
+            r = await client.post(f"/api/boards/{bid}/objectives",
+                                  json={"title": "沒房也開得了週期"},
+                                  headers=akey)
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/boards/{bid}", headers=akey)).json()
+            assert "沒房也開得了週期" in {o["title"] for o in body["objectives"]}
+
+            # 同一道門：viewer 寫不進去
+            await client.post(f"/api/boards/{bid}/members",
+                              json={"actor_key": "claude-eye", "role": "viewer",
+                                    "display_name": "旁觀",
+                                    "actor_kind": "claude"}, headers=akey)
+            no = await client.post(f"/api/boards/{bid}/objectives",
+                                   json={"title": "旁觀者想寫"},
+                                   headers={"X-Session-Key": "claude-eye"})
+            assert no.status_code == 403

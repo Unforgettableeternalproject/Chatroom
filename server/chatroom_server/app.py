@@ -5387,11 +5387,31 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND removed_at IS NULL", (board_id, actor))).fetchone()
         if row:
             return row["role"]
+        # 🚨 **被移除的人不能從房間那條路走回來。**
+        # 退路的邏輯是「明示查不到 ⇒ 走退路」，而 `removed_at IS NOT NULL`
+        # 在上面那段眼裡**就等於查不到** ⇒ 被移出板的人只要還在房裡是
+        # active，立刻以 editor 身分回來。降成 viewer 擋得住、整個移除反而
+        # 擋不住，是同一段推理漏掉的一半（@開發Novia (除錯) 2026-09-03）。
+        #
+        # 而它沒有任何畫面會揭露：移除回 200、卡也孤兒化了、`list_boards`
+        # 也把板從他清單上拿掉 ⇒ **看不到，但寫得動**。
+        removed = await (await db.execute(
+            "SELECT 1 FROM board_member WHERE board_id=? AND actor_key=?"
+            " AND removed_at IS NOT NULL LIMIT 1", (board_id, actor))).fetchone()
+        if removed:
+            return ""
         # ephemeral（subagent）不算：它的身分本來就是暫時的，而板上的寫入
-        # 會留下署名——掛在一個過幾分鐘就消失的名字底下沒有意義
+        # 會留下署名——掛在一個過幾分鐘就消失的名字底下沒有意義。
+        #
+        # 🚨 **房本身也要還活著。** 封存的房「只是曾經存在」（艾斯維爾
+        # 2026-09-03），不算你還在裡面。封存一間房完全不碰 `participant`
+        # ⇒ 少了這個條件，房封存之後裡面的人照樣是 active、存取權永久保留；
+        # agent 會被 sweeper 掃掉而自然失效，**人類永遠不會**。
+        # 對照組 `_live_room_count` 早就有這個條件——同一份判準兩處不一樣
         row = await (await db.execute(
-            "SELECT 1 FROM board_room br JOIN participant p"
-            "   ON p.room_id = br.room_id"
+            "SELECT 1 FROM board_room br"
+            " JOIN room r ON r.id = br.room_id AND r.status='active'"
+            " JOIN participant p ON p.room_id = br.room_id"
             " WHERE br.board_id=? AND br.detached_at IS NULL"
             "   AND p.session_key=? AND p.status='active' AND p.ephemeral=0"
             " LIMIT 1", (board_id, actor))).fetchone()
