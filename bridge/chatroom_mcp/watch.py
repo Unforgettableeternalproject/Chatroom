@@ -526,6 +526,74 @@ class Watcher:
                 # 身分失效但原因不明（舊版 Hub）：訊息還讀得到，不讓 watcher 死掉
                 self.participant_id = None
 
+    def _preflight_stale_identity(self) -> None:
+        """state 裡有身分，但那個身分**在房裡已經死了**——啟動時就講出來。
+
+        🚨 這是 crash 復原專屬的失敗，而且原本**長得像正常收工**：舊 key 的
+        state 檔裡有 participant_id（只是那個 participant 已被 sweeper 移除）
+        ⇒ 上面那道 `if self.participant_id: return` 直接放行 ⇒ 什麼都沒驗
+        ⇒ 第一次 heartbeat 拿到 `participant_not_active` ⇒ 發一個
+        `departure(reason=idle)` 然後 **exit 0**。看起來就是「這個房結束了」，
+        而實際上是「你帶著一把死掉的 key 進來」。
+
+        ⚠️ **為什麼「別把 key 寫死」解不了這件事**：Monitor 的 shell 拿到的
+        `CLAUDE_CODE_SESSION_ID` 在 crash 重開之後**仍是舊 session 的**，而
+        MCP bridge 進程拿到的是新的（2026-09-03 三台實測，三個樣本一致）。
+        所以照著 `${CLAUDE_CODE_SESSION_ID}` 寫也一樣會拿到舊 key——變數展開
+        成功了，只是值是舊的。**驗證是唯一可靠的解。**
+
+        正確的取得方式是先呼叫 `chatroom_list_rooms` 讀 `your_session_key`
+        （那是 bridge 進程自己報的），把那個值帶進指令。
+        """
+        try:
+            data = self.hub.request(
+                "GET", f"/api/rooms/{self.room_id}",
+                participant_id=self.participant_id)
+        except HubError as exc:
+            # 這裡不下判斷：讀不到房間可能只是 Hub 剛好在重啟，而把暫時性
+            # 失敗說成「你的身分死了」會把人送去查錯的方向
+            _log(f"啟動自檢讀不到房間（{exc.reason}），略過身分驗證")
+            return
+        me = next((p for p in data.get("participants", [])
+                   if p.get("id") == self.participant_id), None)
+        if me is not None and me.get("status") == "active":
+            return
+        # 房裡現在還活著的名字——**這是最有用的一行**：他多半在裡面看得到
+        # 自己同名的新身分，於是立刻知道「我掛的是舊的那個」
+        alive = [str(p.get("display_name") or "")
+                 for p in data.get("participants", [])
+                 if p.get("status") == "active"]
+        others = _sibling_states(self.session_key, self.room_id)
+        self.emit({
+            "event": "stale_identity",
+            "room_id": self.room_id,
+            "session_key": self.session_key,
+            "participant_id": self.participant_id,
+            "participant_status": (me or {}).get("status") or "not_found",
+            "active_names": alive,
+            "message": "這把 session key 在該房的身分已經失效（多半是 crash "
+                       "／重開之後帶著舊 key 掛上來）。watcher 會立刻結束——"
+                       "用 chatroom_list_rooms 回報的 your_session_key 重掛。",
+        })
+        _log(
+            "⚠️ 這把 session key 在該房已經沒有 active 身分——\n"
+            f"         指令給的 key：{self.session_key}\n"
+            f"         state 裡的身分：{self.participant_id}"
+            f"（現在是 {(me or {}).get('status') or '查不到'}）\n"
+            f"         房內還活著的：{'、'.join(alive) or '（無）'}\n"
+            "         成因通常是 crash／重開之後帶著舊 session key 重掛："
+            "Monitor 那個 shell 的 CLAUDE_CODE_SESSION_ID 仍是舊值，\n"
+            "         而 MCP bridge 進程已經換成新的。**照 "
+            "${CLAUDE_CODE_SESSION_ID} 寫也一樣會拿到舊 key。**\n"
+            "         處置：呼叫 chatroom_list_rooms 讀 your_session_key，"
+            "用那個值重掛。"
+            + (f"\n         同機另一把 key 在這個房有身分："
+               + "、".join(f"{k}（{n}）" for k, n in others) if others else "")
+        )
+        # 大聲失敗：原本這條路會安靜地 exit 0，而那與「這個房結束了」
+        # 在 Monitor 眼裡一模一樣
+        raise SystemExit(2)
+
     def preflight(self) -> None:
         """啟動自檢：分不出「還沒 join」與「身分分裂」的話，排查會走進死路。
 
@@ -538,6 +606,7 @@ class Watcher:
             self._preflight_assignments_only()
             return
         if self.participant_id:
+            self._preflight_stale_identity()
             return
         others = _sibling_states(self.session_key, self.room_id)
         if not others:

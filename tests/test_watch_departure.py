@@ -193,7 +193,14 @@ def test_preflight_silent_when_identity_is_fine(monkeypatch, tmp_path, capsys):
     (tmp_path / ".chatroom").mkdir()
     _write_state(tmp_path / ".chatroom", "claude-OTHER", "room-1", "pid-x", "別人")
 
-    w = _watcher(monkeypatch, [])
+    # preflight 現在會**回打一次房間名冊確認身分還活著**（2026-09-03）：
+    # 舊 key 的 state 檔裡也有 participant_id，光看「有沒有身分」分不出
+    # 「還活著」與「已經被移除」，而後者原本會安靜地 exit 0
+    w = _watcher(monkeypatch, [
+        {"id": "room-1", "participants": [
+            {"id": "pid-mine", "display_name": "測試者", "status": "active"},
+        ]},
+    ])
     w.participant_id = "pid-mine"   # 身分正常
     w.preflight()
 
