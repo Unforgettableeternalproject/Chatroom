@@ -156,14 +156,25 @@ final boardProvider =
   final cache = ref.read(boardCacheProvider.notifier);
   // 這裡用 read 不用 watch：watch 自己的輸出會讓每次合併都觸發一次重拉。
   //
-  // 水位從**這個房間目前掛的那塊板**算，不是從房間算。同一塊板掛兩間房時
-  // 以房為 key 會存成兩份、各推各的水位，畫面上看起來像兩塊不同的板。
-  // ⚠️ `resumeFrom` 不是 `boardSeq`——手上一張卡都沒有時要從 0 要全量。
-  // 差別在這裡的話症狀是**永遠空白且不報錯**（2026-09-03）
-  final known = cache.snapshotForRoom(roomId).resumeFrom;
+  // 🔴 **房軸一律要全量（`afterBoardSeq: 0`）**，不吃快取水位。
+  //
+  // 快取以 board_id 為 key（v2 刻意：兩條路徑進到同一塊板要看到同一份），
+  // 而**房軸的 delta 只含這間房的卡**。兩件事各自都成立，湊在一起會壞：
+  //
+  //   1. 從 A 房進板 → 共用快照裝著 A 房的卡，水位被推到最新
+  //   2. 切到 B 房 → 拿到**同一份**快照 → 水位是 A 房推上去的那個
+  //   3. 用那個水位要 B 房的增量 → Hub 只回該水位之後的變動
+  //      → **B 房自己的卡一張都不會來**
+  //   4. 畫面上留著的是 A 房的內容
+  //
+  // 壞得很安靜：沒有錯誤、沒有空白，畫面上是**另一間房的卡**，看起來
+  // 像「這個房的卡不見了」（艾斯維爾 2026-09-03 實機）。
+  //
+  // 全量的代價已經量過（實機最大那塊板 48 張），遠低於「顯示錯房間的卡」。
+  // 真正的解法是房軸與板軸的語意對齊，那是另一張票。
   final delta = await ref
       .watch(boardApiProvider)
-      .fetch(roomId, afterBoardSeq: known, participantId: pid);
+      .fetch(roomId, afterBoardSeq: 0, participantId: pid);
   return cache.apply(cache.boardIdOf(roomId) ?? roomId, delta, roomId: roomId);
 });
 

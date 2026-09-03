@@ -536,17 +536,40 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         Text('BOARD',
             style:
                 UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.6)),
-        // 掛在這塊板上的聊天室。**一顆按鈕、點開列全部**，不是把房名一個個
-        // 攤在頁首上——板可以掛任意多間，攤開來只能塞得下前幾個，而「還有
-        // 沒有別的」看不出來（艾斯維爾 2026-09-03）
-        if (attached.isNotEmpty) ...[
-          const SizedBox(width: 8),
-          _HeaderAction(
-            label: '◫ ${attached.length} 間聊天室',
-            onTap: () => _showAttachedRooms(context, attached),
-          ),
-        ],
         const Spacer(),
+        // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。
+        //
+        // 設計稿那個位置成立的前提是右上角還有 SUPERVISOR 膠囊陪著它；實機上
+        // supervisor 多半沒有指定，那顆按鈕就孤懸在一片空白的右上角，
+        // 而它作用的對象（Objective 清單）在畫面的最左邊。
+        //
+        // 移到左欄 `OBJECTIVES` 那一行——**動作要靠近它會產生結果的地方**。
+        if (_archived) ...[
+          const _ArchivedBadge(),
+          const SizedBox(width: 8),
+        ],
+        // 從 Library 進來時改不了東西。**要講出來而且要講對原因**——
+        // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
+        // 不存在的權限問題
+        // 掛接的聊天室。**有掛沒掛是同一個徽章的兩種文字**——它們回答的是
+        // 同一個問題（這塊板現在被哪些對話用著），分成兩個元件只會讓其中
+        // 一個被忘記更新（艾斯維爾 2026-09-03）。
+        //
+        // ⚠️ 判準是「**真的有沒有掛活著的房**」，不是「你從板軸進來」。
+        // 從前那個徽章寫「唯讀 · 未從聊天室進入」，用 `_boardOnly` 判剛好
+        // 成立；文案改成「未掛接聊天室」之後條件沒跟著改，它就變成一句
+        // 事實上錯誤的話：板掛著兩間房，從 BOARDS 分頁進去照樣說沒掛。
+        if (!_archived)
+          _AttachedRoomsBadge(
+            count: attached.length,
+            onTap: attached.isEmpty
+                ? null
+                : () => _showAttachedRooms(context, attached),
+          ),
+        if (_editability == BoardEditability.viewer) ...[
+          const SizedBox(width: 8),
+          const _ViewerBadge(),
+        ],
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
         // 「沒有人在收摘要」與「有人但名字讀不到」不是同一件事
         // ⚠️ **沒有指定時也要有入口**，只是換一句話。舊版只在有 supervisor
@@ -558,6 +581,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 跟正門一樣。板掛三間房就有三個 supervisor，板軸要顯示的是彙整
         // （另一張票），不是一個可以指派的位置
         if (!_boardOnly && _boardIdOrNull != null) ...[
+          const SizedBox(width: 8),
           _SupervisorPill(
             // 房軸站在某一間房裡，那就講**這間房**的 supervisor——
             // Supervisor 是 per-room 的，板上那個是另一回事
@@ -570,27 +594,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             onTap: () => showSupervisorPanel(context,
                 boardId: _boardIdOrNull!, roomId: widget.roomId),
           ),
-          const SizedBox(width: 12),
         ],
-        // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。
-        //
-        // 設計稿那個位置成立的前提是右上角還有 SUPERVISOR 膠囊陪著它；實機上
-        // supervisor 多半沒有指定，那顆按鈕就孤懸在一片空白的右上角，
-        // 而它作用的對象（Objective 清單）在畫面的最左邊。
-        //
-        // 移到左欄 `OBJECTIVES` 那一行——**動作要靠近它會產生結果的地方**。
-        if (_archived) const _ArchivedBadge(),
-        // 從 Library 進來時改不了東西。**要講出來而且要講對原因**——
-        // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
-        // 不存在的權限問題
-        // ⚠️ 條件是「**這塊板真的沒掛任何活著的房**」，不是「你從板軸進來」。
-        // 那個徽章從前寫「唯讀 · 未從聊天室進入」，條件用 `_boardOnly` 剛好
-        // 成立；今天把文案改成「未掛接聊天室」卻沒改條件 ⇒ 它變成一句
-        // **事實上錯誤**的陳述：板掛著兩間房，從 BOARDS 分頁進去照樣說沒掛
-        // （艾斯維爾 2026-09-03 實機發現）
-        if (!_archived && (_watchBoard().value?.liveRooms.isEmpty ?? false))
-          const _NoRoomBadge(),
-        if (_editability == BoardEditability.viewer) const _ViewerBadge(),
       ]),
     );
   }
@@ -1468,22 +1472,36 @@ class _ArchivedBadge extends StatelessWidget {
 /// 與封存徽章分開是刻意的：**同樣是不能改，原因不一樣，處置也不一樣。**
 /// 封存是「這段歷史結束了」，這個是「你要從掛著它的某間房進去才能動手」。
 /// 講成同一句話的人會去找一個不存在的封存狀態。
-class _NoRoomBadge extends StatelessWidget {
-  const _NoRoomBadge();
+class _AttachedRoomsBadge extends StatelessWidget {
+  const _AttachedRoomsBadge({required this.count, this.onTap});
+
+  final int count;
+
+  /// null＝一間都沒掛，沒有東西可以列。**徽章還在**，只是換一句話：
+  /// 「這塊板沒掛任何聊天室」本身就是要說出來的事實。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final empty = count == 0;
     return Tooltip(
-      // **事實陳述，不是限制。** 這塊板現在沒有掛任何聊天室 ⇒ 板上的變更
-      // 不會叫醒任何人（通知走房），追蹤者只能自己回來看。改是改得動的
-      message: '這塊板沒有掛任何聊天室——改得動，但變更不會叫醒任何人',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(border: Border.all(color: s.hairline)),
-        child: Text('未掛接聊天室',
-            style:
-                UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+      message: empty
+          // **事實陳述，不是限制。** 板上的變更不會叫醒任何人（通知走房），
+          // 追蹤者只能自己回來看。改是改得動的
+          ? '這塊板沒有掛任何聊天室——改得動，但變更不會叫醒任何人'
+          : '看看它掛在哪些聊天室上',
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(border: Border.all(color: s.hairline)),
+          child: Text(
+            empty ? '未掛接聊天室' : '◫ $count 間聊天室',
+            style: UepText.mono(
+                size: 8.5, color: s.inkMute, letterSpacing: 1.4),
+          ),
+        ),
       ),
     );
   }
