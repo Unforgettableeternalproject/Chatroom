@@ -4937,6 +4937,11 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         母體的定義（審核用Codex-2 #421）：objective 的 parent 是板本身，
         checklist 是同一個 objective，task 是同一份 checklist。
+
+        ⚠️ **判準是 `deleted=0`，不是 `status`——軟刪的不算，取消的算。**
+        被取消的卡還帶著 order_index、還在資料裡；把它排除在外的話，它會留在
+        原本的位置上與新的 0、1、2 重疊。**畫面上看不到它，不代表它不佔位置**
+        （@開發Novia (UI) 2026-09-03 從顯示那側推回來的）。
         """
         if len(set(ids)) != len(ids):
             raise _err(400, "reorder_duplicate_item",
