@@ -108,27 +108,6 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     }
   }
 
-  Future<void> _setSupervisor(
-    String? actorKey, {
-    String displayName = '',
-    String actorKind = '',
-  }) async {
-    try {
-      await ref.read(boardsApiProvider).setSupervisor(
-            widget.boardId,
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-            actorKey: actorKey,
-            displayName: displayName,
-            actorKind: actorKind,
-          );
-      ref.invalidate(boardByIdProvider(widget.boardId));
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -154,8 +133,15 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         width: 460,
         child: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // 房軸進來的話，**先講這間房**——他要指派的是「這裡的人」，
-          // 板上那個 supervisor 是另一回事
+          // **Supervisor 只有 per-room 這一種**（艾斯維爾 2026-09-03）。
+          //
+          // 板層級的那一份（`snap.supervisor` ＋「指派／換人／卸任」）已經
+          // 從畫面上退場：在板軸上指派一個「這塊板的 supervisor」，等於
+          // 在 per-room 的契約上開一個後門——而那個後門看起來就跟正門
+          // 一樣，沒有任何地方會說它是不同的東西。
+          //
+          // ⚠️ server 端的欄位還在（遷移是另一張票），所以這裡是**畫面
+          // 先退場**。不顯示不會壞任何東西；顯示才會讓人以為那條路還通。
           if (widget.roomId != null) ...[
             _RoomSupervisorSection(
               roomId: widget.roomId!,
@@ -166,10 +152,6 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             const Divider(height: 1),
             const SizedBox(height: 12),
           ],
-          _current(context, snap, isOwner),
-          const SizedBox(height: 14),
-          const Divider(height: 1),
-          const SizedBox(height: 12),
           _BoardOwnerSection(boardId: widget.boardId, snap: snap),
           const SizedBox(height: 14),
           const Divider(height: 1),
@@ -195,176 +177,6 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
           onPressed: () => Navigator.of(context).pop(),
         ),
       ],
-    );
-  }
-
-  /// 現任 Supervisor。空著時只有 owner 看得到「指派」——其他人看到的是
-  /// 一句事實陳述，而不是一顆按不動的按鈕。
-  Widget _current(BuildContext context, BoardSnapshot? snap, bool isOwner) {
-    final s = context.uep;
-    final sup = snap?.supervisor;
-    if (sup == null) {
-      return Row(children: [
-        Expanded(
-          child: Text('目前沒有人在看著這塊板。',
-              style: UepText.serif(size: 12.5, color: s.inkMute)),
-        ),
-        if (isOwner)
-          UepButton(
-            label: '指派',
-            small: true,
-            onPressed: () => _pick(context, snap),
-          ),
-      ]);
-    }
-    return Row(children: [
-      KindBadge(kind: sup.actorKind),
-      const SizedBox(width: 8),
-      Expanded(child: ActorName(actor: sup, size: 13, showKind: false)),
-      if (isOwner) ...[
-        UepButton(
-          label: '換人',
-          variant: UepButtonVariant.outline,
-          small: true,
-          onPressed: () => _pick(context, snap),
-        ),
-        const SizedBox(width: 6),
-        UepButton(
-          label: '卸任',
-          variant: UepButtonVariant.outline,
-          small: true,
-          onPressed: () => _setSupervisor(null),
-        ),
-      ],
-    ]);
-  }
-
-  /// 挑一個人當 Supervisor。
-  ///
-  /// 板成員是**方便**，不是限制——Hub 明講 Supervisor 不必是板成員、也不必
-  /// 在任何掛接房裡（那正是這個角色的意義：從外面看著）。所以清單底下有
-  /// 一條「用 session key 指定」的路，給不在名單上的人。
-  Future<void> _pick(BuildContext context, BoardSnapshot? snap) async {
-    final members = snap?.members.values.toList() ?? const <BoardActorRef>[];
-    final picked = await showDialog<BoardActorRef>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text('指派 Supervisor',
-            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
-        children: [
-          for (final m in members)
-            SimpleDialogOption(
-              onPressed: () => Navigator.of(ctx).pop(m),
-              child: Row(children: [
-                KindBadge(kind: m.actorKind, compact: true),
-                const SizedBox(width: 6),
-                Expanded(child: ActorName(actor: m, size: 12.5)),
-              ]),
-            ),
-          if (members.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-              child: Text('這塊板上還沒有成員。',
-                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
-            ),
-          const Divider(height: 18),
-          SimpleDialogOption(
-            onPressed: () async {
-              final outside = await _askActorKey(ctx);
-              if (outside != null && ctx.mounted) {
-                Navigator.of(ctx).pop(outside);
-              }
-            },
-            child: Text('指定板外的人（用 session key）…',
-                style: UepText.sans(size: 12.5, color: UepColors.gold)),
-          ),
-        ],
-      ),
-    );
-    if (picked != null) {
-      await _setSupervisor(picked.actorKey,
-          displayName: picked.displayName, actorKind: picked.actorKind);
-    }
-  }
-
-  /// 手動輸入一個板外的 actor。
-  ///
-  /// ⚠️ **顯示名要一起問。** Hub 把 display_name／actor_kind 當快照存，不會
-  /// 反查——板外的人沒有任何地方查得回他的名字，不填就只剩一串 session key
-  /// 掛在頁首上。
-  Future<BoardActorRef?> _askActorKey(BuildContext context) {
-    final key = TextEditingController();
-    final name = TextEditingController();
-    var kind = 'claude';
-    return showDialog<BoardActorRef>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: ctx.uep.bgCard,
-          title: Text('指定板外的 Supervisor',
-              style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
-          content: SizedBox(
-            width: 380,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              TextField(
-                controller: key,
-                autofocus: true,
-                // 「指派」的可按與否看這個欄位，不重畫的話它永遠是灰的
-                onChanged: (_) => setLocal(() {}),
-                style: UepText.mono(size: 12, color: ctx.uep.ink),
-                decoration: const InputDecoration(
-                  labelText: 'session key（actor_key）',
-                  helperText: '對方用 chatroom_list_rooms 查得到自己的 key',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: name,
-                style: UepText.sans(size: 12.5, color: ctx.uep.ink),
-                decoration: const InputDecoration(
-                  labelText: '顯示名稱',
-                  helperText: '不填的話頁首上就只剩一串 key',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(children: [
-                for (final k in const ['claude', 'codex', 'human', 'other'])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: InkWell(
-                      onTap: () => setLocal(() => kind = k),
-                      child: Opacity(
-                        opacity: kind == k ? 1 : .35,
-                        child: KindBadge(kind: k),
-                      ),
-                    ),
-                  ),
-              ]),
-            ]),
-          ),
-          actions: [
-            UepButton(
-              label: '取消',
-              variant: UepButtonVariant.outline,
-              small: true,
-              onPressed: () => Navigator.of(ctx).pop(),
-            ),
-            UepButton(
-              label: '指派',
-              small: true,
-              onPressed: key.text.trim().isEmpty
-                  ? null
-                  : () => Navigator.of(ctx).pop(BoardActorRef(
-                        actorKey: key.text.trim(),
-                        displayName: name.text.trim(),
-                        actorKind: kind,
-                      )),
-            ),
-          ],
-        ),
-      ),
     );
   }
 

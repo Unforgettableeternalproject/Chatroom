@@ -19,7 +19,7 @@ class _Canned implements HttpClientAdapter {
 
   @override
   Future<ResponseBody> fetch(
-      RequestOptions options, Stream<Uint8List>? _, Future<void>? __) async {
+      RequestOptions options, Stream<Uint8List>? stream, Future<void>? cancel) async {
     return ResponseBody.fromString(jsonEncode(body), 200, headers: {
       Headers.contentTypeHeader: [Headers.jsonContentType],
     });

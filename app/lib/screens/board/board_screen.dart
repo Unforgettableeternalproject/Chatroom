@@ -436,7 +436,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ),
         ),
         BoardTaskDrawer(
-          roomId: widget.roomId!,
+          roomId: widget.roomId,
+          boardId: _boardIdOrNull ?? '',
           task: task,
           // 抽屜不吃滿整個視窗：留一段板子看得到，才知道自己還在板上
           width: maxWidth < 480 ? maxWidth : 420,
@@ -551,7 +552,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // ⚠️ **沒有指定時也要有入口**，只是換一句話。舊版只在有 supervisor
         // 時畫這顆膠囊，於是「指派一個人來看著」這件事在畫面上完全不存在
         // ——功能做了，但沒有人找得到它
-        if (_boardIdOrNull != null) ...[
+        // ⚠️ **板軸不畫 SUPERVISOR。** Supervisor 是 per-room 的
+        // （艾斯維爾 2026-09-03），而板軸上沒有「這一間房」可言——在這裡
+        // 給一個指派入口，等於在那條契約上開一個後門，而那個後門看起來
+        // 跟正門一樣。板掛三間房就有三個 supervisor，板軸要顯示的是彙整
+        // （另一張票），不是一個可以指派的位置
+        if (!_boardOnly && _boardIdOrNull != null) ...[
           _SupervisorPill(
             // 房軸站在某一間房裡，那就講**這間房**的 supervisor——
             // Supervisor 是 per-room 的，板上那個是另一回事

@@ -23,6 +23,7 @@ class BoardTaskDrawer extends ConsumerWidget {
   const BoardTaskDrawer({
     super.key,
     required this.roomId,
+    required this.boardId,
     required this.task,
     required this.checklistTitle,
     required this.onClose,
@@ -31,7 +32,17 @@ class BoardTaskDrawer extends ConsumerWidget {
     this.width = 420,
   });
 
-  final String roomId;
+  /// 從哪一間房打開的。**板軸（Board Library）進來時是 null**——那時沒有
+  /// 房內身分，也沒有訊息流可以跳回去。
+  ///
+  /// ⚠️ 這裡從前是 `String`，而板軸的呼叫端寫 `widget.roomId!` ⇒ 板軸點開
+  /// 任何一張卡都是 build 期 null check 例外，畫面整片灰、沒有任何錯誤訊息
+  /// （艾斯維爾 2026-09-03 實機）。
+  final String? roomId;
+
+  /// 這張卡屬於哪塊板。**兩條軸都有**，動作要靠它挑身分來源。
+  final String boardId;
+
   final BoardTask task;
 
   /// 這張卡長在哪個階段底下。標頭列寫出來——抽屜蓋住了板，
@@ -83,14 +94,17 @@ class BoardTaskDrawer extends ConsumerWidget {
                 ],
                 const SizedBox(height: 18),
                 _meta(context),
-                if (task.sourceSeq != null) ...[
+                // 來源訊息只有房軸看得到——板軸沒有房，就沒有那條路。
+                // **拿不到不是錯誤**，收起來就好
+                if (task.sourceSeq != null && roomId != null) ...[
                   const SizedBox(height: 18),
                   _source(context, ref),
                 ],
               ],
             ),
           ),
-          if (!readOnly) _TaskActionBar(roomId: roomId, task: task),
+          if (!readOnly)
+            _TaskActionBar(roomId: roomId, boardId: boardId, task: task),
         ],
       ),
     );
@@ -235,7 +249,8 @@ class BoardTaskDrawer extends ConsumerWidget {
   Widget _source(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     final seq = task.sourceSeq!;
-    final message = ref.watch(roomFeedProvider(roomId)).bySeq(seq);
+    final rid = roomId!;
+    final message = ref.watch(roomFeedProvider(rid)).bySeq(seq);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -245,7 +260,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                 UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.6)),
         const SizedBox(height: 8),
         InkWell(
-          onTap: () => context.go('/rooms/$roomId?focusSeq=$seq'),
+          onTap: () => context.go('/rooms/$rid?focusSeq=$seq'),
           child: IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -329,9 +344,14 @@ class BoardTaskDrawer extends ConsumerWidget {
 /// 「標記完成」、`done` 的重新開啟送 `todo`——四顆非法按鈕，按下去只會拿
 /// 409，而當時連 409 都看不見。
 class _TaskActionBar extends ConsumerStatefulWidget {
-  const _TaskActionBar({required this.roomId, required this.task});
+  const _TaskActionBar({
+    required this.roomId,
+    required this.boardId,
+    required this.task,
+  });
 
-  final String roomId;
+  final String? roomId;
+  final String boardId;
   final BoardTask task;
 
   @override
@@ -355,7 +375,10 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final actions = ref.read(boardActionsProvider(widget.roomId));
+    // 兩條軸各自的身分來源：房軸帶 participant，板軸帶 session key
+    final actions = widget.roomId != null
+        ? ref.read(boardActionsProvider(widget.roomId!))
+        : ref.read(boardActionsByIdProvider(widget.boardId));
     final items = taskActionsFor(widget.task.status, allowed: _allowed);
 
     Widget button(TaskAction a) => _DrawerAction(
