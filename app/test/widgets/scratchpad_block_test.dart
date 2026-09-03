@@ -86,4 +86,58 @@ void _resolveGate() {
       expect(canResolveNote(padCanEdit: false, blockCanEdit: true), isFalse);
     });
   });
+
+  _reorderGate();
+}
+/// 段落排得動嗎——**兩個條件都要**。
+///
+/// 🔴 Hub 只讓人類重排（`human_only`，實測 2026-09-03）：排序會改變別人那段
+/// 話的上下文，它把那歸成與改寫同一類。agent 看到拖曳把手、拖完才拿 403 的
+/// 話，順序在畫面上已經變了，它會以為成功。
+void _reorderGate() {
+  Scratchpad pad({
+    required bool canEdit,
+    required bool human,
+    int blocks = 2,
+  }) =>
+      Scratchpad.fromJson({
+        'id': 'p1',
+        'can_edit': canEdit,
+        'i_am_human': human,
+        'blocks': [
+          for (var i = 0; i < blocks; i++) {'id': 'b$i'},
+        ],
+      });
+
+  group('段落重排的守門', () {
+    test('人類且可寫才排得動', () {
+      expect(pad(canEdit: true, human: true).canReorder, isTrue);
+    });
+
+    test('agent 排不動，即使它在這塊板上可寫', () {
+      expect(pad(canEdit: true, human: false).canReorder, isFalse);
+    });
+
+    test('唯讀的人排不動', () {
+      expect(pad(canEdit: false, human: true).canReorder, isFalse);
+    });
+
+    test('只有一段時不給拖——拖不動的把手比沒有把手更像壞了', () {
+      expect(pad(canEdit: true, human: true, blocks: 1).canReorder, isFalse);
+    });
+
+    test('Hub 沒說我是不是人類時當作不是', () {
+      // 反過來的話 agent 會拖完才拿 403，而那時順序在畫面上已經變了
+      final p = Scratchpad.fromJson({
+        'id': 'p1',
+        'can_edit': true,
+        'blocks': [
+          {'id': 'b0'},
+          {'id': 'b1'},
+        ],
+      });
+      expect(p.iAmHuman, isFalse);
+      expect(p.canReorder, isFalse);
+    });
+  });
 }

@@ -87,6 +87,11 @@ void main() {
       // 讀不到就當唯讀，那時整份板會無故不能編，而使用者找不到原因
       expect(b.canEdit, isTrue);
       expect(b.authorActorKey, sessionKey);
+      // i_am_human 是重排守門的**唯一來源**。這個 session 是 claude，
+      // 所以要是 false——讀不到而預設成 true 的話，agent 會看到拖曳把手，
+      // 拖完才拿 403，而那時順序在畫面上已經變了
+      expect(pad.iAmHuman, isFalse);
+      expect(pad.canReorder, isFalse);
     });
 
     test('清單帶得回 block_count 與 unresolved_notes', () async {

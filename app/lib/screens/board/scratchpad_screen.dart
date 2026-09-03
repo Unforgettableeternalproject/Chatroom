@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../models/board.dart' show reorderedIdsAt;
 import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
 import '../../state/scratchpad_providers.dart';
@@ -89,36 +90,25 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
         ),
         const SizedBox(height: 16),
-        for (final b in pad.blocks)
-          _BlockCard(
-            // ⚠️ **key by id。** 沒有 key 的話，reload 或重排之後 Flutter
-            // 會按索引沿用同一顆 State，而那顆 State 裡的 controller 只在
-            // initState 建一次——編輯框會裝著**前一段**的舊文字，存下去就
-            // 覆蓋錯段落。這正是今天 composer 那個 bug 的同一種
-            // （@審核用Codex-2 2026-09-03）
-            key: ValueKey(b.id),
-            block: b,
-            editing: _editing == b.id,
-            onEdit: pad.canEdit && b.canEdit
-                ? () => setState(() => _editing = b.id)
-                : null,
-            onCancel: () => setState(() => _editing = null),
-            onSave: (text) => _save(b, text),
-            onNote: pad.canEdit ? (text) => _note(b, text) : null,
-            // ⚠️ 守門用 **`b.canEdit`**，不是 `pad.canEdit`。Hub 那邊
-            // resolve 的條件是「這一段的作者，或人類成員」——與 can_edit
-            // 同一條（`app.py:6593`）。只看 pad 的話，agent 會在人類寫的
-            // 段落上看到一顆「處理掉」，按下去必然 403。
-            //
-            // **不要自己重算那個條件**，直接用伺服器算好的：自己算的話
-            // 兩邊的規則會漂移，而漂移的那一半沒有人在看
-            // （@審核用Codex-2 2026-09-03）
-            onResolveNote:
-                canResolveNote(padCanEdit: pad.canEdit, blockCanEdit: b.canEdit)
-                    ? (id, undo) => _resolveNote(id, undo)
-                    : null,
-            onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
-          ),
+        // 排得動時整段換成可拖曳的清單。**拖不動就不要留拖曳把手**——
+        // 那比沒有把手更讓人以為壞了（同 board_screen 的 _canReorder）
+        if (pad.canReorder)
+          ReorderableListView(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            onReorderItem: (from, to) => _reorderBlocks(from, to),
+            children: [
+              for (var i = 0; i < pad.blocks.length; i++)
+                ReorderableDragStartListener(
+                  key: ValueKey('drag-${pad.blocks[i].id}'),
+                  index: i,
+                  child: _blockCard(pad, pad.blocks[i]),
+                ),
+            ],
+          )
+        else
+          for (final b in pad.blocks) _blockCard(pad, b),
         if (pad.canEdit) ...[
           const SizedBox(height: 12),
           _AddBlock(onAdd: _add),
@@ -130,6 +120,61 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           ),
       ],
     );
+  }
+
+  Widget _blockCard(Scratchpad pad, ScratchpadBlock b) => _BlockCard(
+        // ⚠️ **key by id。** 沒有 key 的話，reload 或重排之後 Flutter
+        // 會按索引沿用同一顆 State，而那顆 State 裡的 controller 只在
+        // initState 建一次——編輯框會裝著**前一段**的舊文字，存下去就
+        // 覆蓋錯段落。這正是今天 composer 那個 bug 的同一種
+        // （@審核用Codex-2 2026-09-03）
+        key: ValueKey(b.id),
+        block: b,
+        editing: _editing == b.id,
+        onEdit: pad.canEdit && b.canEdit
+            ? () => setState(() => _editing = b.id)
+            : null,
+        onCancel: () => setState(() => _editing = null),
+        onSave: (text) => _save(b, text),
+        onNote: pad.canEdit ? (text) => _note(b, text) : null,
+        // ⚠️ 守門用 **`b.canEdit`**，不是 `pad.canEdit`。Hub 那邊
+        // resolve 的條件是「這一段的作者，或人類成員」——與 can_edit
+        // 同一條（`app.py:6593`）。只看 pad 的話，agent 會在人類寫的
+        // 段落上看到一顆「處理掉」，按下去必然 403。
+        //
+        // **不要自己重算那個條件**，直接用伺服器算好的：自己算的話
+        // 兩邊的規則會漂移，而漂移的那一半沒有人在看
+        // （@審核用Codex-2 2026-09-03）
+        onResolveNote:
+            canResolveNote(padCanEdit: pad.canEdit, blockCanEdit: b.canEdit)
+                ? (id, undo) => _resolveNote(id, undo)
+                : null,
+        onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
+      );
+
+  /// 拖曳重排。**整批送**：Hub 依收到的順序寫 order_index，只送一部分的話
+  /// 沒送的那些保留舊值 ⇒ 兩批號碼交錯，順序變成未定義。
+  ///
+  /// ⚠️ 帶的是**這份想法板的結構 rev**，不是某一段的。rev 對不上時 Hub
+  /// 回 409：那表示有人在你拖的時候插了一段或搬了順序，重拉就好——
+  /// 這裡不做樂觀更新，失敗時畫面不會停在一個只有本機看得到的排列上。
+  Future<void> _reorderBlocks(int from, int to) async {
+    final ids = [for (final b in widget.pad.blocks) b.id];
+    try {
+      await ref.read(scratchpadApiProvider).reorder(
+            widget.boardId,
+            widget.pad.id,
+            sessionKey: _sessionKey,
+            blockIds: reorderedIdsAt(ids, from, to),
+            rev: widget.pad.rev,
+          );
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+    _reload();
   }
 
   Future<void> _save(ScratchpadBlock b, String text) async {

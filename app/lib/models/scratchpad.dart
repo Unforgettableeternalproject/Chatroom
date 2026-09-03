@@ -156,6 +156,7 @@ class Scratchpad {
     this.rev = 1,
     this.blocks = const [],
     this.canEdit = false,
+    this.iAmHuman = false,
   });
 
   final String id;
@@ -168,6 +169,18 @@ class Scratchpad {
 
   final List<ScratchpadBlock> blocks;
   final bool canEdit;
+
+  /// 我是不是人類成員。**伺服器算的**，不從 kind 字串自己推。
+  ///
+  /// 只有人類排得動段落——排序會改變別人那段話的上下文，Hub 把它歸成
+  /// 與改寫同一類（`human_only`，實測 2026-09-03）。
+  ///
+  /// ⚠️ 預設 **false**：讀不到就當不能排。反過來的話 agent 會看到拖曳
+  /// 把手，拖完才拿 403——**而那時順序在畫面上已經變了**，它會以為成功。
+  final bool iAmHuman;
+
+  /// 段落排得動嗎。兩個條件都要：板上可寫，而且我是人類。
+  bool get canReorder => canEdit && iAmHuman && blocks.length > 1;
 
   ScratchpadBlock? blockOf(String id) {
     for (final b in blocks) {
@@ -182,6 +195,7 @@ class Scratchpad {
     title: (json['title'] as String?) ?? '',
     rev: (json['rev'] as int?) ?? 1,
     canEdit: (json['can_edit'] as bool?) ?? false,
+    iAmHuman: (json['i_am_human'] as bool?) ?? false,
     blocks: [
       for (final b in (json['blocks'] as List<dynamic>? ?? const []))
         ScratchpadBlock.fromJson(b as Map<String, dynamic>),
