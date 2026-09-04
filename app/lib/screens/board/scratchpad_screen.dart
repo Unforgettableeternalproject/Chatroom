@@ -68,14 +68,42 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   String get _sessionKey => ref.read(appConfigProvider).deviceKey;
   String get _key => scratchpadKey(widget.boardId, widget.pad.id);
 
-  void _reload() => ref.invalidate(scratchpadProvider(_key));
+  /// 重拉這一份——**連外面那份清單一起**。
+  ///
+  /// 🔴 只 invalidate 這一份的話，板頁上的「N 段 · N 則未處理」會停在進來
+  /// 之前的數字：加了三段、回去看還是舊的（艾斯維爾 2026-09-04）。
+  /// 同一份資料在兩個 provider 裡各有一份快照，**改了一邊就得動另一邊**——
+  /// 而不同步的那個看起來只是「數字有點怪」，不像壞掉，所以會一直留著。
+  void _reload() {
+    ref.invalidate(scratchpadProvider(_key));
+    ref.invalidate(scratchpadListProvider(widget.boardId));
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     final pad = widget.pad;
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 40),
+    // 🔴 **輸入框在捲動區外面。**
+    //
+    // 它原本是清單的最後一項，而 `ListView` 會把捲出可視範圍的 children
+    // **dispose**——段落一多，輸入框就落到畫面外，controller 跟著沒了，
+    // 回到那裡是空的。艾斯維爾看到的是「輸入框一直清空」，猜「重複渲染」；
+    // 實際上是**被當成用完了**（2026-09-04）。
+    //
+    // ⚠️ `AutomaticKeepAliveClientMixin` 在這條路徑上救不了：實測把
+    // `wantKeepAlive` 寫死成 `true` 也一樣被回收。與其留一個看起來有守、
+    // 其實沒有的保護，不如讓它根本不在可回收的地方。
+    //
+    // 副作用剛好是對的：想法板的用法是「隨時往裡丟」，那個框本來就不該
+    // 要人先捲到最底下才找得到。
+    return Column(children: [
+      Expanded(child: _scroller(s, pad)),
+      _footer(s, pad),
+    ]);
+  }
+
+  Widget _scroller(UepSurface s, Scratchpad pad) => ListView(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
       children: [
         Row(children: [
           Expanded(
@@ -110,18 +138,21 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           )
         else
           for (final b in pad.blocks) _blockCard(pad, b),
-        if (pad.canEdit) ...[
-          const SizedBox(height: 12),
-          _AddBlock(onAdd: _add),
-        ] else
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text('你在這塊板上是唯讀的，只能看。',
+      ]);
+
+  /// 常駐在底部的輸入區。唯讀時換成一句說明——**位置一樣**，人不會
+  /// 覺得是不是哪裡沒載出來。
+  Widget _footer(UepSurface s, Scratchpad pad) => Container(
+        decoration: BoxDecoration(
+          color: s.bg,
+          border: Border(top: BorderSide(color: s.line)),
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
+        child: pad.canEdit
+            ? _AddBlock(onAdd: _add)
+            : Text('你在這塊板上是唯讀的，只能看。',
                 style: UepText.serif(size: 12, color: s.inkMute)),
-          ),
-      ],
-    );
-  }
+      );
 
   Widget _blockCard(Scratchpad pad, ScratchpadBlock b) => _BlockCard(
         // ⚠️ **key by id。** 沒有 key 的話，reload 或重排之後 Flutter
