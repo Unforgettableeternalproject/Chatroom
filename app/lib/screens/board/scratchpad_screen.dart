@@ -40,6 +40,18 @@ class ScratchpadScreen extends ConsumerWidget {
     final key = scratchpadKey(boardId, padId);
     final async = ref.watch(scratchpadProvider(key));
     return async.when(
+      // 🔴 **重算時不要把整棵樹換成轉圈圈。**
+      //
+      // `skipLoadingOnRefresh` 預設就是 true（invalidate 會保留舊值），但
+      // **`skipLoadingOnReload` 預設 false**——這份 provider 的**依賴**一動
+      // （身分、deviceKey…）就是 reload，畫面會真的閃過 loading，底下所有
+      // State 連同 controller 一起 dispose。
+      //
+      // 艾斯維爾看到的是「**寫到一半他會跳一下，然後字就被清空了**」
+      // （2026-09-04）——那個「跳一下」就是這個 spinner，字是在那一瞬間
+      // 沒的。上午把輸入框移出 `ListView` 修掉了另一半（被回收），
+      // 這是同一個症狀的第二個成因。
+      skipLoadingOnReload: true,
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => ErrorState(
         error: e,
@@ -848,6 +860,9 @@ class RoomScratchpadPage extends ConsumerWidget {
     final s = context.uep;
     final async = ref.watch(boardProvider(roomId));
     return async.when(
+      // 同上：板一有變動（WS 訊號、水位）這裡就 reload，而它底下正是
+      // 那份想法板。少了這一行，別人在板上動一張卡就會清掉你打的字
+      skipLoadingOnReload: true,
       loading: () => Scaffold(
         backgroundColor: s.bg,
         appBar: AppBar(backgroundColor: s.bg),

@@ -313,6 +313,16 @@ class _MessageComposerState extends State<MessageComposer> {
     final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (!isEnter) return KeyEventResult.ignored;
+    // 🔴 **輸入法正在組字時，Enter 是「選這個字」不是「送出」。**
+    //
+    // 中文（以及日文、韓文）打字時每一個詞都會先進組字狀態，那時按 Enter
+    // 要確認候選字。攔下來當成送出的話，訊息會在打到一半時飛出去，而且
+    // IME 的 session 被打斷——艾斯維爾的說法是「**打中文的時候卡住，
+    // 要去其他地方聚焦才可以重新打字**」（2026-09-04）。
+    //
+    // `composing.isValid` 就是「現在有一段未確認的組字」。英數字打字時
+    // 它一直是無效的，所以這道判斷不會影響原本的送出行為。
+    if (_controller.value.composing.isValid) return KeyEventResult.ignored;
     if (HardwareKeyboard.instance.isShiftPressed) {
       return KeyEventResult.ignored; // SHIFT+ENTER → 換行
     }
