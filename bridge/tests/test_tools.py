@@ -1,5 +1,7 @@
 """P2-01 ~ P2-03：MCP 工具層的行為（全部以 MockTransport 模擬 Hub）。"""
 
+import json
+
 import httpx
 
 from chatroom_mcp import server as srv
@@ -390,3 +392,20 @@ def test_all_tools_registered_with_chinese_docstrings():
         assert any("一" <= ch <= "鿿" for ch in fn.__doc__), (
             f"{name} 的 docstring 不是繁體中文"
         )
+
+
+def test_resolving_a_task_request_uses_the_canonical_session_key(fake_hub):
+    """回答指派請求要帶 canonical session key（N-4）。
+
+    🔑 與 `chatroom_resolve_assignment` 同一個理由：請求是**寄給一把 key**
+    的，回應它的資格也是同一把。帶錯的話 Hub 會判定「這不是給你的」而回
+    403——而那句話對 agent 來說完全看不出是自己帶錯了 key。
+    """
+    fake_hub.json("POST", "/api/board/task-requests/q1/resolve",
+                  {"ok": True, "accepted": True, "task_id": "t1"})
+    out = srv.chatroom_resolve_task_request("q1", True)
+    assert out["accepted"] is True
+    sent = fake_hub.calls[-1]
+    assert sent.url.path == "/api/board/task-requests/q1/resolve"
+    assert json.loads(sent.content) == {"accept": True}
+    assert sent.headers.get("X-Session-Key")

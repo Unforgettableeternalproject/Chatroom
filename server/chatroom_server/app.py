@@ -9017,7 +9017,27 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (session_key,),
             )
         ).fetchall()
-        return {"assignments": [dict(r) for r in rows]}
+        # N-4：指派請求掛在**同一支輪詢**上。watcher 每隔幾秒就打這裡（那也是
+        # session 名錄的心跳來源），請求跟著回來，agent 就不必多跑一條迴圈
+        # ——**多一條輪詢就多一個會漏、會失步、會忘了關的地方**。
+        #
+        # ⚠️ 這與「不復用 assignment 表」不衝突：表仍然獨立，共用的只是輪詢
+        # 的入口。合併發生在傳輸層，不在資料層。
+        #
+        # 只回**指名我的 pending**。已回答的不回：留著會讓 agent 每一輪都被
+        # 同一件已經處理完的事叫醒一次，而那正是 watcher 最怕的東西
+        reqs = await (await db.execute(
+            "SELECT q.*, t.title AS task_title FROM board_task_request q"
+            " JOIN board_task t ON t.id = q.task_id"
+            " WHERE q.target_session_key=? AND q.status='pending'"
+            "   AND t.deleted=0"
+            " ORDER BY q.created_at", (session_key,))).fetchall()
+        return {
+            "assignments": [dict(r) for r in rows],
+            "task_requests": [
+                {**_task_request_public(r), "task_title": r["task_title"]}
+                for r in reqs],
+        }
 
     @app.post("/api/assignments/{assignment_id}/resolve", dependencies=[Depends(require_auth)])
     async def resolve_assignment(

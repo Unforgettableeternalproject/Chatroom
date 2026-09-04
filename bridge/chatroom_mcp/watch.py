@@ -26,6 +26,9 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
       ——attachments 只在該則真的有夾帶時出現
     {"event": "assignment", "assignment_id": ..., "room_id": ...,
      "room_name": ..., "note": ...}
+    {"event": "task_request", "request_id": ..., "task_id": ...,
+     "task_title": ..., "room_id": ..., "requester_name": ..., "note": ...}
+      ——有人請你接手某張卡（N-4）。用 chatroom_resolve_task_request 回答
     {"event": "member_joined", "room_id": ..., "seq": ..., "who": ...}
     {"event": "member_left", "room_id": ..., "seq": ..., "who": ...,
      "reason": "left|kicked|idle_removed"}
@@ -312,6 +315,9 @@ class Watcher:
         # 不補發歷史（剛掛上時房裡既有的 subagent 是現況，不是剛發生的事）
         self.subagents_since = ""
         self.seen_assignments: set[str] = set()
+        # 與 seen_assignments 分開：兩種東西的 id 來自不同的表，湊在一個
+        # 集合裡的話，理論上撞號就會讓其中一則永遠不通知
+        self.seen_task_requests: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
         self.departed = False
@@ -501,6 +507,24 @@ class Watcher:
             if a.get("assigned_name"):
                 event["assigned_name"] = a["assigned_name"]
             self.emit(event)
+        # N-4：孤兒卡的指派請求走**同一條輪詢**。⚠️ `.get(..., [])` 不是
+        # 防禦性寫法上的潔癖——bridge 與 Hub **不是一起升級的**（kit 裝在
+        # 別人的機器上），少一個鍵就 KeyError 的話，整條通知鏈會在升級的
+        # 空窗期靜靜停掉，而 agent 只會覺得「今天很安靜」
+        for q in data.get("task_requests", []) or []:
+            qid = q.get("id")
+            if not qid or qid in self.seen_task_requests:
+                continue
+            self.seen_task_requests.add(qid)
+            self.emit({
+                "event": "task_request",
+                "request_id": qid,
+                "task_id": q.get("task_id"),
+                "task_title": q.get("task_title") or "",
+                "room_id": q.get("room_id"),
+                "requester_name": q.get("requester_name") or "",
+                "note": _preview(q.get("note") or ""),
+            })
 
     def maybe_heartbeat(self) -> None:
         """掛著聽卻被 presence sweeper 當閒置踢出去就本末倒置了——定期報平安。"""

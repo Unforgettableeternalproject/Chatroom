@@ -267,3 +267,51 @@ async def test_declining_leaves_the_card_alone_and_records_the_answer(tmp_path):
                 f"/api/board/task-requests/{req['id']}/resolve",
                 json={"accept": True}, headers=worker)
             assert r.status_code == 409, r.text
+
+
+async def test_the_target_agent_can_find_the_request_from_its_watcher_poll(
+        tmp_path):
+    """agent 側的通知鏈：指派請求掛在 watcher 既有的輪詢點上。
+
+    🔑 **不另開一條輪詢。** watcher 每隔幾秒就打一次 `/api/assignments`
+    （那也是 session 名錄的心跳來源），把請求掛在同一支回應裡，agent 就不必
+    多跑一條迴圈——**多一條輪詢就多一個會漏、會失步、會忘了關的地方**。
+
+    ⚠️ 這與艾斯維爾 #265「不復用 assignment 表」不衝突：表仍然是獨立的，
+    共用的只是**輪詢的入口**。合併發生在傳輸層，不在資料層。
+    """
+    app, client = await _client(tmp_path, "assign_watch")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            asker = await _join(client, rid, "agent-asker", "提議的人")
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+
+            await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"],
+                      "note": "幫個忙"},
+                headers=asker)
+
+            got = (await client.get(
+                "/api/assignments?session_key=agent-worker")).json()
+            reqs = got["task_requests"]
+            assert len(reqs) == 1, "被指名的 agent 在輪詢裡看不到請求"
+            assert reqs[0]["task_title"] == "孤兒卡"
+            assert reqs[0]["requester_name"] == "提議的人"
+            assert reqs[0]["note"] == "幫個忙"
+
+            # 🔴 別人的請求不會出現在我的輪詢裡
+            got = (await client.get(
+                "/api/assignments?session_key=agent-asker")).json()
+            assert got["task_requests"] == [], \
+                "提議者自己的輪詢收到了要對方回答的請求"
+
+            # 答完就不再出現——留著會讓 agent 每一輪都被同一件事叫醒一次
+            r = await client.post(
+                f"/api/board/task-requests/{reqs[0]['id']}/resolve",
+                json={"accept": True}, headers=worker)
+            assert r.status_code == 200, r.text
+            got = (await client.get(
+                "/api/assignments?session_key=agent-worker")).json()
+            assert got["task_requests"] == []

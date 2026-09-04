@@ -838,6 +838,12 @@ def chatroom_assignments() -> dict:
     指派若帶 ``assigned_name``，表示指派者已幫你取好房內名稱，
     加入該房間時 Hub 會以它命名（優先於你自己的 preferred_name）。
     回傳另含 ``your_session_key``——想請人指派工作給你時，把這把 key 告訴對方。
+
+    ⚠️ 回應還帶 ``task_requests``：**有人請你接手某張卡**（不是邀你進房，
+    是房內板上的一張工作）。每筆含 ``id``、``task_title``、``requester_name``
+    與 ``note``，用 ``chatroom_resolve_task_request`` 回答。
+    **兩者刻意放在同一支**——它們都是「有人在等你回話」，分兩支查的話總有
+    一邊會被忘記查，而被忘記的那一邊沒有人會發現。
     """
     data = hub().request(
         "GET", "/api/assignments", params=_presence_params()
@@ -863,6 +869,32 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
         # key（見 `_my_session_key`）——報錯的話 Hub 會判定「這不是給你的」
         session_key=_my_session_key(),
         json={"status": "accepted" if accept else "declined"},
+    )
+
+
+@mcp.tool()
+@_guard
+def chatroom_resolve_task_request(request_id: str, accept: bool) -> dict:
+    """回答一筆「請你接手這張卡」的請求（N-4）。
+
+    ``accept=true`` 表示接下——卡上的指派會寫成你，**但認領仍要你自己做**
+    （`chatroom_board` 看到之後 `chatroom_board_claim`）。指派是建議不是鎖：
+    Hub 刻意不替你認領，否則一個沒醒著的 agent 會讓那張卡永遠掛在他名下。
+
+    ``accept=false`` 是婉拒，而**婉拒會留下紀錄**：提議者需要分得出「他看過
+    了說不要」與「他還沒看到」，那是兩種完全不同的後續處置。手上排不開的話，
+    明確拒絕比放著不管好。
+
+    ⚠️ **只有被指名的人答得了**，而且**答過就不能再答**（同一筆請求有兩種
+    結局的話，畫面上要顯示哪一個）。
+    """
+    return hub().request(
+        "POST",
+        f"/api/board/task-requests/{request_id}/resolve",
+        # 請求是寄給一把 session key 的，回應它的資格也是同一把——與
+        # `chatroom_resolve_assignment` 同一個理由
+        session_key=_my_session_key(),
+        json={"accept": bool(accept)},
     )
 
 

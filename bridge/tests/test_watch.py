@@ -404,3 +404,42 @@ def test_every_departure_reason_is_registered_as_rejoinable_or_not():
         )
     for reason in ("archived", "deleted", "kicked"):
         assert reason in REJOINABLE
+
+
+def test_task_request_events_from_the_same_poll(fake_hub, tmp_path, monkeypatch,
+                                                capsys):
+    """N-4：指派請求走**既有那條輪詢**，不另開一條迴圈。
+
+    多一條輪詢就多一個會漏、會失步、會忘了關的地方——而 watcher 每隔幾秒
+    本來就在打 `/api/assignments`（那也是 session 名錄的心跳）。
+    """
+    w = make_watcher(fake_hub, tmp_path, monkeypatch)
+    fake_hub.json(
+        "GET", "/api/assignments",
+        {"assignments": [],
+         "task_requests": [{"id": "q1", "task_id": "t1", "room_id": ROOM,
+                            "task_title": "接手這張", "requester_name": "諾薇亞",
+                            "note": "你比較熟", "status": "pending"}]},
+    )
+    w.poll_assignments()
+    w.poll_assignments()   # 同一筆只叫醒一次
+    ev = events_from(capsys)
+    assert len(ev) == 1, "同一筆請求通知了兩次"
+    assert ev[0]["event"] == "task_request"
+    assert ev[0]["request_id"] == "q1"
+    assert ev[0]["task_title"] == "接手這張"
+    assert ev[0]["requester_name"] == "諾薇亞"
+
+
+def test_a_hub_without_task_requests_still_works(fake_hub, tmp_path, monkeypatch,
+                                                 capsys):
+    """舊 Hub 不回這個鍵——watcher 不能因此炸掉。
+
+    ⚠️ bridge 與 Hub **不是一起升級的**：kit 裝在別人的機器上，那台的
+    watcher 可能比 Hub 新，也可能比它舊。少一個鍵就 KeyError 的話，整條
+    通知鏈會在升級的空窗期靜靜停掉，而 agent 只會覺得「今天很安靜」。
+    """
+    w = make_watcher(fake_hub, tmp_path, monkeypatch)
+    fake_hub.json("GET", "/api/assignments", {"assignments": []})
+    w.poll_assignments()
+    assert events_from(capsys) == []
