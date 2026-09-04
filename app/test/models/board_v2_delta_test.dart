@@ -21,7 +21,7 @@ Map<String, dynamic> _room(String id, {bool detached = false}) => {
 
 void main() {
   group('掛接房間', () {
-    test('detached 是 tombstone：收到就從快取移除', () {
+    test('detached 是狀態不是 tombstone：留在快取裡但不算「現在掛著」', () {
       final attached = const BoardSnapshot().merge(
         _delta({
           'full': true,
@@ -30,8 +30,16 @@ void main() {
       );
       expect(attached.liveRooms.map((r) => r.id), unorderedEquals(['a', 'b']));
 
-      // 解除 b。只把 detached 的當一般資料塞回去的話，b 會永遠留在清單上，
-      // 而使用者要點下去才會發現它已經不在。
+      // 解除 b。**擋住「永遠留在清單上」的是 `liveRooms`**（它過濾
+      // detached），不是把資料丟掉。
+      //
+      // 🔴 這裡本來還斷言 `attachedRooms` 不含 b——那多做了一層一樣的防護，
+      // 代價是連歷史一起殺掉：`_showAttachedRooms` 整段「已解除」的標示
+      // 因此永遠不會亮，四個 `r.detached` 全是死碼。Hub 也是刻意回這些房的
+      // （`_attached_rooms()`：「已解除的房也回」）——兩邊都想留住它，
+      // 中間這一行把它丟了（2026-09-04 寫房軸契約測試時發現）。
+      //
+      // 「解除了」與「從來沒掛過」對讀的人是兩件事。
       final after = attached.merge(
         _delta({
           'board_seq': 2,
@@ -39,7 +47,7 @@ void main() {
         }),
       );
       expect(after.liveRooms.map((r) => r.id), ['a']);
-      expect(after.attachedRooms.containsKey('b'), isFalse);
+      expect(after.attachedRooms['b']!.detached, isTrue);
     });
 
     test('增量不重送的房間要留著', () {

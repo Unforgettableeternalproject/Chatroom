@@ -723,14 +723,20 @@ class BoardSnapshot {
         tsks[t.id] = t;
       }
     }
-    // detached 與 deleted 同語意：收到就移除。留著會殘留一間早已解除的房，
-    // 而使用者點下去才會發現——那時已經沒有任何線索指出是快取的問題。
+    // ⚠️ **detached 不是 tombstone，是一個狀態。** 解除掛接的房要**留在
+    // 快照裡並標明**——那段歷史真的發生過，而「解除了」與「從來沒掛過」
+    // 對讀的人是兩件事。
+    //
+    // 🔴 這裡本來跟著 deleted 一起 `remove`，理由是「留著會殘留一間早已
+    // 解除的房」。但殘留正是 `liveRooms` 在擋的東西（它過濾 detached），
+    // 移除等於**做了第二層一樣的防護，代價是把歷史一起殺掉**：
+    // `_showAttachedRooms` 那整段「已解除」的標示因此永遠不會亮，
+    // 四個 `r.detached` 全是死碼（2026-09-04 寫房軸契約測試時發現）。
+    //
+    // Hub 也是刻意回這些房的（`_attached_rooms()`：「已解除的房也回」）。
+    // 兩邊都想留住它，中間這一行把它丟了。
     for (final r in delta.attachedRooms) {
-      if (r.detached) {
-        rooms.remove(r.id);
-      } else {
-        rooms[r.id] = r;
-      }
+      rooms[r.id] = r;
     }
     for (final d in delta.directives) {
       dirs[d.boardSeq] = d;
