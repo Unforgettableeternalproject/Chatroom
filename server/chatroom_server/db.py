@@ -454,7 +454,12 @@ CREATE TABLE IF NOT EXISTS board_task_request (
     -- pending / accepted / declined / cancelled / expired
     status        TEXT NOT NULL DEFAULT 'pending',
     created_at    TEXT NOT NULL,
-    resolved_at   TEXT
+    resolved_at   TEXT,
+    -- 發起者被告知結果的時刻。**存時間不存布林**：布林只說得出「通知過了」，
+    -- 而排查「他到底有沒有收到」時要問的是「什麼時候」。
+    -- 回過就標記，否則 watcher 重啟後會把三天前的答覆再通知一次——那種
+    -- 「舊事重播」比沒有通知更難信任
+    requester_notified_at TEXT
 );
 -- 同一張卡對同一個人**只能有一筆待回應的請求**。三個人各自請求同一個對象
 -- 是合理的（他們不知道彼此），但同一個人連按三次不該生出三筆——那會讓對方
@@ -773,6 +778,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("board_task", "claim_actor_key", "claim_actor_key TEXT NOT NULL DEFAULT ''"),
     ("board_task", "assignee_actor_key",
      "assignee_actor_key TEXT NOT NULL DEFAULT ''"),
+    # 表是今天才建的，但已經有 Hub 跑在含表、不含這欄的版本上（8787 與 8788
+    # 都重啟過）——不補這條，那些庫升上來會缺欄位而查詢直接炸
+    ("board_task_request", "requester_notified_at",
+     "requester_notified_at TEXT"),
     ("board_task", "assigned_by_actor_key",
      "assigned_by_actor_key TEXT NOT NULL DEFAULT ''"),
     # 來源訊息的完整座標。v1 只存 source_seq——那在一房一板時夠用，但一塊板

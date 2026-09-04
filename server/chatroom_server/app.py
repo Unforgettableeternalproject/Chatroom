@@ -5364,8 +5364,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         pid = (body.target_participant_id or "").strip()
         key = (body.target_session_key or "").strip()
         if not pid and not key:
-            raise _err(422, "assign_target_required",
-                       "要指定對象：target_participant_id 或 target_session_key")
+            # 空 target ＝ **取消指派**，照 `BoardSupervisorSet` 的既有慣例
+            # （空字串是卸任，不是「這個欄位沒填」）。另開一條 DELETE 也做得
+            # 到，但指定與取消是同一個決定的兩面，兩條路徑會讓「現在到底指派
+            # 給誰」多一個出錯的地方
+            return None, "", ""
         if pid:
             p = await (await db.execute(
                 "SELECT id, session_key, display_name FROM participant"
@@ -5463,13 +5466,26 @@ def create_app(config: Config | None = None) -> FastAPI:
                        task_status=row["status"])
         target_pid, target_key, target_name = await _assign_target(row, body)
         db = app.state.db
+        clearing = not target_pid and not target_key
+        if clearing:
+            # 取消是**管理動作**：讓任何人都清得掉的話，指派等於沒有效力
+            # ——誰都可以把別人分派的工作抹掉，而卡上不會留下是誰做的
+            if not await _can_assign_directly(row, me, host):
+                raise _err(403, "not_assign_admin",
+                           "取消指派要是這塊板的管理者（板 owner 或這間房的"
+                           "建立者）——否則任何人都能抹掉別人分派的工作")
+            seq = await _apply_assignment(row, None, "", "", me)
+            await _commit_with_retry(db)
+            await events.notify(row["room_id"])
+            return {"ok": True, "assigned": False, "cleared": True,
+                    "task_id": task_id, "board_seq": seq, "request": None}
         if await _can_assign_directly(row, me, host):
             seq = await _apply_assignment(row, target_pid, target_key,
                                           target_name, me)
             await _commit_with_retry(db)
             await events.notify(row["room_id"])
-            return {"ok": True, "assigned": True, "task_id": task_id,
-                    "board_seq": seq, "request": None}
+            return {"ok": True, "assigned": True, "cleared": False,
+                    "task_id": task_id, "board_seq": seq, "request": None}
 
         # 非管理員：留一筆請求，等對方回答
         mine = actor_key(me["session_key"] or "")
@@ -9032,11 +9048,34 @@ def create_app(config: Config | None = None) -> FastAPI:
             " WHERE q.target_session_key=? AND q.status='pending'"
             "   AND t.deleted=0"
             " ORDER BY q.created_at", (session_key,))).fetchall()
+        # **我發出的、已經被回答、還沒告訴過我的**。發起者是最需要知道結果的
+        # 那個人——對方拒絕了他要另找人，對方接下了他就可以放手——而在此之前
+        # 這支只回「指名我的」，等於送出請求就斷了線（測試Novia #390 缺口 ②）。
+        #
+        # ⚠️ **回過就標記**（`requester_notified_at`），否則 watcher 重啟後
+        # 會把三天前的答覆再通知一次。「舊事重播」比沒有通知更難信任：收到的
+        # 人分不出哪些是新的，最後整條通知都會被忽略
+        answers = await (await db.execute(
+            "SELECT q.*, t.title AS task_title FROM board_task_request q"
+            " JOIN board_task t ON t.id = q.task_id"
+            " WHERE q.requester_actor_key=? AND q.status IN"
+            "   ('accepted','declined')"
+            "   AND q.requester_notified_at IS NULL"
+            " ORDER BY q.resolved_at", (session_key,))).fetchall()
+        if answers:
+            await db.execute(
+                "UPDATE board_task_request SET requester_notified_at=?"
+                " WHERE id IN (%s)" % ",".join("?" * len(answers)),
+                (_now(), *[a["id"] for a in answers]))
+            await _commit_with_retry(db)
         return {
             "assignments": [dict(r) for r in rows],
             "task_requests": [
                 {**_task_request_public(r), "task_title": r["task_title"]}
                 for r in reqs],
+            "task_request_answers": [
+                {**_task_request_public(a), "task_title": a["task_title"]}
+                for a in answers],
         }
 
     @app.post("/api/assignments/{assignment_id}/resolve", dependencies=[Depends(require_auth)])

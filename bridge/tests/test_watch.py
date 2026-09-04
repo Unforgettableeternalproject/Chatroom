@@ -443,3 +443,27 @@ def test_a_hub_without_task_requests_still_works(fake_hub, tmp_path, monkeypatch
     fake_hub.json("GET", "/api/assignments", {"assignments": []})
     w.poll_assignments()
     assert events_from(capsys) == []
+
+
+def test_the_requester_gets_told_the_answer(fake_hub, tmp_path, monkeypatch,
+                                            capsys):
+    """發起者收得到「對方答了」——那是他最需要知道的事。
+
+    server 那側回過就標記，所以 watcher 這裡**不必自己去重**；但仍然照做，
+    因為同一輪迴圈裡重試（網路抖動重打一次）不該通知兩次。
+    """
+    w = make_watcher(fake_hub, tmp_path, monkeypatch)
+    fake_hub.json(
+        "GET", "/api/assignments",
+        {"assignments": [], "task_requests": [],
+         "task_request_answers": [{"id": "q9", "task_id": "t9",
+                                   "task_title": "那張卡", "room_id": ROOM,
+                                   "target_name": "米勒", "status": "declined"}]},
+    )
+    w.poll_assignments()
+    ev = events_from(capsys)
+    assert len(ev) == 1
+    assert ev[0]["event"] == "task_request_answered"
+    assert ev[0]["status"] == "declined"
+    assert ev[0]["target_name"] == "米勒"
+    assert ev[0]["task_title"] == "那張卡"

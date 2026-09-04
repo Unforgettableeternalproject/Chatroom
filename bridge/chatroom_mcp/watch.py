@@ -29,6 +29,9 @@ CLAUDE_CODE_SESSION_ID，直接與母 Claude session 撞成同一個 participant
     {"event": "task_request", "request_id": ..., "task_id": ...,
      "task_title": ..., "room_id": ..., "requester_name": ..., "note": ...}
       ——有人請你接手某張卡（N-4）。用 chatroom_resolve_task_request 回答
+    {"event": "task_request_answered", "request_id": ..., "task_id": ...,
+     "task_title": ..., "room_id": ..., "target_name": ..., "status": ...}
+      ——**你請的那個人答了**（accepted/declined）。拒絕的話要另外找人
     {"event": "member_joined", "room_id": ..., "seq": ..., "who": ...}
     {"event": "member_left", "room_id": ..., "seq": ..., "who": ...,
      "reason": "left|kicked|idle_removed"}
@@ -318,6 +321,7 @@ class Watcher:
         # 與 seen_assignments 分開：兩種東西的 id 來自不同的表，湊在一個
         # 集合裡的話，理論上撞號就會讓其中一則永遠不通知
         self.seen_task_requests: set[str] = set()
+        self.seen_task_answers: set[str] = set()
         self.last_heartbeat = 0.0
         self.emitted = 0
         self.departed = False
@@ -524,6 +528,22 @@ class Watcher:
                 "room_id": q.get("room_id"),
                 "requester_name": q.get("requester_name") or "",
                 "note": _preview(q.get("note") or ""),
+            })
+        # 「你請的那個人答了」。server 回過就標記，所以這裡不必自己去重——
+        # 但仍然做，因為同一輪裡的重試（網路抖動重打一次）不該通知兩次
+        for a in data.get("task_request_answers", []) or []:
+            aid2 = a.get("id")
+            if not aid2 or aid2 in self.seen_task_answers:
+                continue
+            self.seen_task_answers.add(aid2)
+            self.emit({
+                "event": "task_request_answered",
+                "request_id": aid2,
+                "task_id": a.get("task_id"),
+                "task_title": a.get("task_title") or "",
+                "room_id": a.get("room_id"),
+                "target_name": a.get("target_name") or "",
+                "status": a.get("status") or "",
             })
 
     def maybe_heartbeat(self) -> None:

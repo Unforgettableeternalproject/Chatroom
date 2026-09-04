@@ -277,6 +277,16 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "請在聊天室裡請人類代為執行。",
                 status=status, detail=detail,
             )
+        if code == "not_assign_admin":
+            # 取消指派要管理權限。落進 fallback 會被翻成「身分失效請重新
+            # join」——而重新 join 不會讓你變成板 owner，agent 會照著那句話
+            # 白跑一趟再撞同一道門
+            return HubError(
+                _detail_text(detail)
+                or "取消指派要是這塊板的管理者（板 owner 或這間房的建立者）。"
+                "不是你分派的工作，請本人或管理者處理。",
+                status=status, detail=detail,
+            )
         if code == "not_the_request_target":
             # N-4 的指派請求只有被指名的人能回答。落進 fallback 會被翻成
             # 「身分失效請重新 join」——而重新 join 不會讓你變成別人，agent

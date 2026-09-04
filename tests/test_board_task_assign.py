@@ -315,3 +315,97 @@ async def test_the_target_agent_can_find_the_request_from_its_watcher_poll(
             got = (await client.get(
                 "/api/assignments?session_key=agent-worker")).json()
             assert got["task_requests"] == []
+
+
+async def test_assigning_to_nobody_clears_the_assignment(tmp_path):
+    """空 target ＝ 取消指派（測試Novia #390 缺口 ①）。
+
+    照 `BoardSupervisorSet` 的既有慣例：**空字串是卸任，不是「這個欄位沒填」**。
+    另開一條 DELETE 也做得到，但指定與取消是同一個決定的兩面，兩條路徑會讓
+    「現在到底指派給誰」多一個出錯的地方。
+
+    在此之前空 target 回 422 ⇒ **指派出去收不回**，而人事會變、卡會轉手。
+    """
+    app, client = await _client(tmp_path, "assign_clear")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+
+            await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=boss)
+            assert (await _card(client, rid, boss, tid)
+                    )["assignee_participant_id"] is not None
+
+            r = await client.post(f"/api/board/tasks/{tid}/assign",
+                                  json={}, headers=boss)
+            assert r.status_code == 200, r.text
+            assert r.json()["assigned"] is False
+            assert r.json()["cleared"] is True
+
+            card = await _card(client, rid, boss, tid)
+            assert card["assignee_participant_id"] is None
+            assert card["assignee_actor_key"] == ""
+
+            # 🔴 取消是管理動作：非管理員不能清掉別人做的指派
+            other = await _join(client, rid, "agent-other", "路人")
+            await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=boss)
+            r = await client.post(f"/api/board/tasks/{tid}/assign",
+                                  json={}, headers=other)
+            assert r.status_code == 403, r.text
+
+
+async def test_the_requester_hears_back_when_the_answer_comes(tmp_path):
+    """發起者要知道對方答了沒（測試Novia #390 缺口 ②）。
+
+    在此之前 `/api/assignments` **只回「指名我的」** ⇒ 送出請求的人靠通知
+    完全不知道結果，而他正是最需要知道的那個：對方拒絕了他要另找人，對方
+    接下了他就可以放手。
+
+    ⚠️ **回過就標記**（`requester_notified_at`），否則 watcher 重啟後會把
+    三天前的答覆再通知一次——那種「舊事重播」比沒有通知更難信任。
+    """
+    app, client = await _client(tmp_path, "assign_echo")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            asker = await _join(client, rid, "agent-asker", "提議的人")
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+
+            req = (await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=asker)).json()["request"]
+
+            # 還沒答之前，發起者的輪詢裡沒有東西要通知他
+            got = (await client.get(
+                "/api/assignments?session_key=agent-asker")).json()
+            assert got["task_request_answers"] == []
+
+            await client.post(
+                f"/api/board/task-requests/{req['id']}/resolve",
+                json={"accept": False}, headers=worker)
+
+            got = (await client.get(
+                "/api/assignments?session_key=agent-asker")).json()
+            answers = got["task_request_answers"]
+            assert len(answers) == 1, "發起者收不到對方的答覆"
+            assert answers[0]["status"] == "declined"
+            assert answers[0]["target_name"] == "接手的人"
+            assert answers[0]["task_title"] == "孤兒卡"
+
+            # 🔴 只通知一次——標記過就不再回，否則 watcher 每一輪都被同一件
+            # 已經結束的事叫醒
+            got = (await client.get(
+                "/api/assignments?session_key=agent-asker")).json()
+            assert got["task_request_answers"] == [], "同一個答覆通知了兩次"
+
+            # 被指名者那側不會收到自己答過的東西
+            got = (await client.get(
+                "/api/assignments?session_key=agent-worker")).json()
+            assert got["task_request_answers"] == []
