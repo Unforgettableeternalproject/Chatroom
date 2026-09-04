@@ -2,6 +2,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/question.dart';
 import 'package:chatroom_app/widgets/question_card.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 複選題的送出：一顆按鈕，選項與補充**一起送**。
@@ -27,7 +28,10 @@ Question _q({bool multi = true, bool freeText = true}) => Question(
 void main() {
   late List<Object?> sent;
 
-  Widget host(Question q) => MaterialApp(
+  // QuestionCard 的答題草稿存在 App 級 provider 裡（2026-09-04：卡片捲出
+  // 視窗會被回收，草稿放 State 裡就沒了），所以它需要一個 ProviderScope
+  Widget host(Question q) => ProviderScope(
+          child: MaterialApp(
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: QuestionCard(
@@ -38,7 +42,7 @@ void main() {
             onSkip: () async {},
           ),
         ),
-      );
+      ));
 
   setUp(() => sent = []);
 

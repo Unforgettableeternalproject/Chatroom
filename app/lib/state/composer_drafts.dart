@@ -46,3 +46,39 @@ class ComposerDrafts extends Notifier<Map<String, String>> {
 
 final composerDraftsProvider =
     NotifierProvider<ComposerDrafts, Map<String, String>>(ComposerDrafts.new);
+
+/// 還沒送出的**答題**內容，依問題分開。
+///
+/// 🔴 與 [ComposerDrafts] 同一個病因的第三次現身（2026-09-04）：
+///
+/// 1. 訊息草稿活在 State 裡 ⇒ 切房時跟著跑到別的房（09-02）
+/// 2. 想法板的輸入框活在 State 裡 ⇒ 捲出視窗被 `ListView` 回收就沒了（今天上午）
+/// 3. **答題草稿活在 `_QuestionCardState` 裡** ⇒ 待答問題多到要捲動時，
+///    捲出去的那張卡被回收，打到一半的答案消失
+///    （@開發Novia (除錯) #414 系統性排查抓到的）
+///
+/// 三次的共同點都不是「忘了存」，是**存在一個生命週期比它短的地方**。
+/// 觸發條件看起來罕見（要同時有多題），但艾斯維爾答題常打長文，中一次
+/// 就是整段沒了——而且它不會報錯，只是回到那張卡時是空的。
+class QuestionDrafts extends Notifier<Map<String, String>> {
+  @override
+  Map<String, String> build() => const {};
+
+  String of(String questionId) => state[questionId] ?? '';
+
+  void set(String questionId, String text) {
+    if (text.isEmpty) {
+      if (!state.containsKey(questionId)) return;
+      state = {...state}..remove(questionId);
+      return;
+    }
+    if (state[questionId] == text) return;
+    state = {...state, questionId: text};
+  }
+
+  /// 送出成功之後叫它。答完的問題不會再出現，那一格留著只是佔位。
+  void clear(String questionId) => set(questionId, '');
+}
+
+final questionDraftsProvider =
+    NotifierProvider<QuestionDrafts, Map<String, String>>(QuestionDrafts.new);

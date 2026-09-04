@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../api/attachments_api.dart';
 import '../models/question.dart';
+import '../state/composer_drafts.dart';
 import 'uep_button.dart';
 
 /// agent 指名問「我」的問題卡。
@@ -14,7 +16,7 @@ import 'uep_button.dart';
 ///
 /// 「略過」與放著不管是兩件事：略過會明確告訴 agent 改用它原本的方式問，
 /// 放著不管則讓它繼續等。所以略過必須是一個看得見、按得到的動作。
-class QuestionCard extends StatefulWidget {
+class QuestionCard extends ConsumerStatefulWidget {
   const QuestionCard({
     super.key,
     required this.question,
@@ -42,11 +44,21 @@ class QuestionCard extends StatefulWidget {
   final Future<List<UploadedAttachment>> Function()? onPickFiles;
 
   @override
-  State<QuestionCard> createState() => _QuestionCardState();
+  ConsumerState<QuestionCard> createState() => _QuestionCardState();
 }
 
-class _QuestionCardState extends State<QuestionCard> {
-  final _controller = TextEditingController();
+class _QuestionCardState extends ConsumerState<QuestionCard> {
+  /// 🔴 **草稿存在 App 級，不是這顆 State 裡。**
+  ///
+  /// 這張卡躺在聊天畫面一個有高度上限的 `ListView` 裡（`chat_screen.dart`
+  /// :2596，maxHeight 420）——待答問題多到要捲動時，**捲出視窗的卡會被
+  /// 回收，打到一半的答案跟著消失**（@開發Novia (除錯) #414）。
+  ///
+  /// 與訊息草稿、想法板輸入框是同一個病因的第三次：**不是忘了存，
+  /// 是存在一個生命週期比它短的地方。**
+  late final _controller = TextEditingController(
+      text: ref.read(questionDraftsProvider.notifier).of(widget.question.id))
+    ..addListener(_saveDraft);
   final _picked = <String>{};
   final _files = <UploadedAttachment>[];
   bool _uploading = false;
@@ -54,8 +66,37 @@ class _QuestionCardState extends State<QuestionCard> {
 
   @override
   void dispose() {
+    // ⚠️ **不在這裡清草稿**——dispose 的原因多半是「捲出去了」而不是
+    // 「答完了」，清掉的話這個修法就等於沒做
+    _controller.removeListener(_saveDraft);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _saveDraft() => ref
+      .read(questionDraftsProvider.notifier)
+      .set(widget.question.id, _controller.text);
+
+  /// 🔴 **同一顆 State 換去服務另一題時，輸入框要跟著換那一題的草稿。**
+  ///
+  /// 卡片沒有 key（或有 key 但被重用）時，Flutter 會把這顆 State 交給下一題
+  /// ——而 `late final` 的 controller 只建一次 ⇒ **第一題打的字會出現在
+  /// 第二題的輸入框裡，按下送出就送到錯的問題上。**
+  ///
+  /// 這比「草稿消失」嚴重：消失看得見，串位不會——送出去的是一段讀起來
+  /// 完全合理、只是答錯題的話。
+  @override
+  void didUpdateWidget(QuestionCard old) {
+    super.didUpdateWidget(old);
+    if (old.question.id == widget.question.id) return;
+    // 先把手上這份存回**舊那題**，再換成新那題的
+    ref.read(questionDraftsProvider.notifier).set(old.question.id, _controller.text);
+    _controller.removeListener(_saveDraft);
+    _controller.text =
+        ref.read(questionDraftsProvider.notifier).of(widget.question.id);
+    _controller.addListener(_saveDraft);
+    _picked.clear();
+    _files.clear();
   }
 
   bool get _hasText => _controller.text.trim().isNotEmpty;
@@ -98,6 +139,9 @@ class _QuestionCardState extends State<QuestionCard> {
     setState(() => _busy = true);
     try {
       await action();
+      // 答出去了才清草稿。**失敗時不清**——那正是最需要它還在的時候
+      // （送失敗的長文如果連著草稿一起沒了，人要從頭打一遍）
+      ref.read(questionDraftsProvider.notifier).clear(widget.question.id);
     } finally {
       // 送出後卡片通常就消失了（server 推的快照不再包含它），
       // 但失敗時要能重試，所以仍要解除忙碌狀態
