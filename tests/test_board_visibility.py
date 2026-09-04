@@ -746,3 +746,40 @@ async def test_library_says_who_owns_each_board(tmp_path):
             row = [b for b in seen["boards"] if b["id"] == bid][0]
             assert row["owner_display_name"] == "板主", \
                 "主持人看得到這塊板，卻不知道是誰的"
+
+
+async def test_library_says_whether_host_view_is_actually_on(tmp_path):
+    """清單頂層要回 `you_are_host` 與 `host_view`（@開發Novia (UI) 2026-09-04）。
+
+    照 `GET /api/rooms` 那份的形狀，兩個欄位各管一件事：
+
+    - `you_are_host` 決定**開關要不要出現**。畫一個永遠按不動的開關比不畫更
+      難懂
+    - `host_view` 是**唯一能確認開關真的生效**的訊號。`host_view` 那兩個條件
+      （明示標頭＋主 token）任何一個沒滿足就靜靜降級成一般視角，而少的板本來
+      就看不到 ⇒ **畫面完全一樣**，UI 無從分辨
+
+    第二個是今天講了一整天的那種靜默失效，所以這條測試把「開了但沒生效」
+    那格也釘住。
+    """
+    app, client = await _client(tmp_path, "host_flags")
+    async with client:
+        async with app.router.lifespan_context(app):
+            me = {"X-Session-Key": "claude-a"}
+            got = (await client.get("/api/boards", headers=me)).json()
+            assert got["you_are_host"] is True, "主 token 就該看得到開關"
+            assert got["host_view"] is False, "沒帶標頭不該是主持人視角"
+
+            on = {"X-Session-Key": "claude-a", "X-Host-View": "1"}
+            got = (await client.get("/api/boards", headers=on)).json()
+            assert got["host_view"] is True
+
+            # 🔴 帶了標頭但 token 不是主 token ⇒ 靜靜降級，而這正是要看得出來的那格
+            weak = AsyncClient(transport=ASGITransport(app=app),
+                               base_url="http://test",
+                               headers={"Authorization": "Bearer not-root"})
+            async with weak:
+                r = await weak.get("/api/boards", headers=on)
+                if r.status_code == 200:
+                    assert r.json()["you_are_host"] is False
+                    assert r.json()["host_view"] is False

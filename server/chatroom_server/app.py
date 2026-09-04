@@ -2044,8 +2044,11 @@ def create_app(config: Config | None = None) -> FastAPI:
     # board 三表：**卡屬於板，不屬於房**（§11 步驟 8 換表後成立）。它們的
     # `room_id` 只剩 provenance 的意義，沒有外鍵也不必為空——刪掉最後一間
     # 掛接房之後，那塊板與板上的每一張卡都還在，這正是 v2 的重點。
+    # `board_task_request`：請求綁在**卡**上，而卡屬於板不屬於房。它的
+    # `room_id` 只記「這筆請求是從哪間房發出的」，與 board 三表同一個理由。
+    # 它跟著**板**走（見 `_BOARD_OWNED_TABLES`），不跟著房走。
     _ROOM_ID_NOT_OWNED = ("board_room", "board_task", "board_checklist",
-                          "board_objective")
+                          "board_objective", "board_task_request")
 
     async def _room_owned_tables_gap() -> list[str]:
         """schema 裡帶 room_id 的表，有哪幾張不在 `_ROOM_OWNED_TABLES` 裡。
@@ -5867,6 +5870,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
+        host_token: bool = Depends(is_host_token),
     ):
         """Board Library：這個 actor 有份的板。
 
@@ -5917,8 +5921,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             sql += " AND b.status = ?"
             params.append(want)
         cur = await db.execute(sql + " ORDER BY b.updated_at DESC", params)
-        return {"boards": [await _library_row(db, b, actor)
-                           for b in await cur.fetchall()]}
+        return {
+            "boards": [await _library_row(db, b, actor)
+                       for b in await cur.fetchall()],
+            # 照 `GET /api/rooms` 那份的形狀，兩個欄位各管一件事：
+            # - `you_are_host` 決定**開關要不要出現**（畫一個永遠按不動的
+            #   開關比不畫更難懂）
+            # - `host_view` 是**唯一能確認開關真的生效**的訊號。那兩個條件
+            #   （明示標頭＋主 token）任何一個沒滿足就靜靜降級成一般視角，
+            #   而少掉的板本來就看不到 ⇒ 畫面完全一樣，UI 無從分辨
+            #   （@開發Novia (UI) 2026-09-04）
+            "you_are_host": host_token,
+            "host_view": host,
+        }
 
     def _library_scope_sql(actor: str) -> tuple[str, list]:
         sql = ("SELECT b.*, ? AS my_role FROM board b WHERE ("
@@ -6315,7 +6330,12 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 拋 IntegrityError（500），或者更糟——沒有外鍵的那些會留下永遠沒有人
     # 讀得到的孤兒列。順序是子表先於父表：note→block→scratchpad
     # （審核用Codex-2 2026-09-03 用非空 pad + watch 真 API 重現）
-    _BOARD_OWNED_TABLES = ("board_task", "board_checklist", "board_objective",
+    # ⚠️ `board_task_request` 要排在 `board_task` **之前**：它的 `task_id`
+    # 指著那張卡，反過來刪會撞外鍵而刪到一半（上面那段註解講的正是這件事，
+    # 而我加表的時候還是漏了——31 條紅裡有 26 條是它，`test_room_deletion`
+    # 那組守住了）
+    _BOARD_OWNED_TABLES = ("board_task_request",
+                           "board_task", "board_checklist", "board_objective",
                            "board_watch_notice", "board_watch",
                            "board_scratchpad_revision", "board_scratchpad_note",
                            "board_scratchpad_block", "board_scratchpad",

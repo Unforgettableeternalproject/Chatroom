@@ -428,6 +428,45 @@ CREATE TABLE IF NOT EXISTS board_member (
 );
 CREATE INDEX IF NOT EXISTS idx_board_member_actor ON board_member(actor_key);
 
+-- 孤兒卡的「請求指派」（N-4，載體定案 C：獨立表，艾斯維爾 2026-09-03）。
+-- **刻意不復用 assignment 表**：那張是「邀請某個 session 進房」，這張是
+-- 「請某個人接手這張卡」，兩者的目標、生命週期與結束條件都不同。合併發生在
+-- **清單層**（UI 拿兩份自己併，@開發Novia (UI) 2026-09-04 定的契約），不在
+-- 資料層——併在資料層的話，兩種東西的欄位會互相污染成一堆可空欄。
+CREATE TABLE IF NOT EXISTS board_task_request (
+    id            TEXT PRIMARY KEY,
+    task_id       TEXT NOT NULL REFERENCES board_task(id),
+    -- 板與房都存：板是這張卡真正的歸屬，房是「請求從哪裡發出的」。
+    -- 只存房的話，板解除掛接之後這筆請求就失去脈絡
+    board_id      TEXT NOT NULL DEFAULT '',
+    room_id       TEXT NOT NULL DEFAULT '',
+    requester_actor_key TEXT NOT NULL,
+    requester_name      TEXT NOT NULL DEFAULT '',
+    -- 🔑 **session_key 與 participant_id 雙存**（Hub #267 提案，艾斯維爾未
+    -- 表異議即定案）。participant_id 會隨著離房消失，而請求要活得比一次在場
+    -- 更久；session_key 則是通知找得到人的依據。少了任何一邊都有一種情境
+    -- 對不上人：只有 participant 的話對方重開就找不到，只有 session_key 的話
+    -- 畫面上指不出是房裡的哪一位
+    target_participant_id TEXT,
+    target_session_key    TEXT NOT NULL DEFAULT '',
+    target_name           TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',
+    -- pending / accepted / declined / cancelled / expired
+    status        TEXT NOT NULL DEFAULT 'pending',
+    created_at    TEXT NOT NULL,
+    resolved_at   TEXT
+);
+-- 同一張卡對同一個人**只能有一筆待回應的請求**。三個人各自請求同一個對象
+-- 是合理的（他們不知道彼此），但同一個人連按三次不該生出三筆——那會讓對方
+-- 的收件匣出現三則一模一樣的東西，而拒絕一則之後另外兩則還在
+CREATE UNIQUE INDEX IF NOT EXISTS idx_btask_req_one_pending
+    ON board_task_request(task_id, target_session_key)
+    WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_btask_req_target
+    ON board_task_request(target_session_key, status);
+CREATE INDEX IF NOT EXISTS idx_btask_req_room
+    ON board_task_request(room_id, status);
+
 CREATE TABLE IF NOT EXISTS board_event (
     board_id       TEXT NOT NULL REFERENCES board(id),
     board_seq      INTEGER NOT NULL,
