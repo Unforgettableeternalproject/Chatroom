@@ -1180,6 +1180,8 @@ class BoardSummary {
     this.updatedAt,
     this.myRole = '',
     this.visibility = 'public',
+    this.ownerActorKey = '',
+    this.ownerDisplayName = '',
   });
 
   final String id;
@@ -1214,9 +1216,27 @@ class BoardSummary {
   /// 私人會在畫面上憑空長出一個使用者從未設定過的限制。
   final String visibility;
 
+  /// 這塊板是誰的。
+  ///
+  /// ⚠️ **只在主持人模式下才有用**：一般視角看到的都是自己有份的板，
+  /// 標「這是你的」沒有資訊量。主持人模式會一次多出一堆別人的板，那時
+  /// 「誰的」才是唯一分得出來的線索——少了它，畫面上是一排標著「私人」
+  /// 但不知道屬於誰的板（@開發Novia (Hub) `8bdb2d2` 補的欄位）。
+  final String ownerActorKey;
+
+  /// owner 的顯示名。查不到時是空字串——**被移除的成員也唸得出名字**
+  /// （Hub `_actor_display_name`）：`removed_at` 標記的是「不再有權限」，
+  /// 不是「這個人不存在」。
+  final String ownerDisplayName;
+
   bool get isPrivate => visibility == 'private';
 
   bool get isArchived => status == 'archived';
+
+  /// 這塊板是不是別人的。**用 `my_role` 判，不用 owner 比對**——
+  /// 我手上沒有「我是誰」的 actor_key（那是 Hub 不外流的 session_key），
+  /// 自己拼一個出來比對必然會漂移。Hub 已經算好 `my_role` 了。
+  bool get notMine => myRole.isEmpty;
 
   /// 追蹤通知只能自己回來看，不會有人被叫醒。
   ///
@@ -1243,6 +1263,8 @@ class BoardSummary {
       updatedAt: json['updated_at'] as String?,
       myRole: (json['my_role'] as String?) ?? '',
       visibility: (json['visibility'] as String?) ?? 'public',
+      ownerActorKey: (json['owner_actor_key'] as String?) ?? '',
+      ownerDisplayName: (json['owner_display_name'] as String?) ?? '',
     );
   }
 }

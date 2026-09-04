@@ -301,6 +301,24 @@ class _BoardTile extends StatelessWidget {
                 const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
               ],
             ]),
+            // 別人的板：**說出是誰的**。
+            //
+            // 一般視角看到的都是自己有份的板，所以這一列平常不會出現。
+            // 主持人模式會一次多出一堆別人的板，那時「私人」標籤只講了
+            // 一半——它說「這塊板不公開」，卻沒說**不公開給誰以外的人**。
+            // 少了這一列，畫面上是一排看不出屬於誰的板，而主持人模式存在
+            // 的理由正是要看得到別人的東西（2026-09-04）。
+            if (board.notMine) ...[
+              const SizedBox(height: 4),
+              Text(
+                board.ownerDisplayName.isEmpty
+                    // 名字查不到也要講出「這不是你的」——留白的話它會被
+                    // 讀成自己的板
+                    ? '別人的板'
+                    : '${board.ownerDisplayName} 的板',
+                style: UepText.sans(size: 10.5, color: UepColors.gold),
+              ),
+            ],
             const SizedBox(height: 5),
             Row(children: [
               // 掛了幾間房——這是 v2 才有的資訊，也是 Board 與 room 分家
