@@ -4813,6 +4813,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "id": objective_id, "status": "review",
                 "board_seq": seq}
 
+    async def _is_board_supervisor(row, me) -> bool:
+        """這個人是不是這塊板**任一掛接房**的 supervisor。
+
+        supervisor 存在 `room.board_supervisor_session_key`（per-room，
+        艾斯維爾 2026-09-03），所以要問的是「這塊板掛的那些房裡，有沒有哪一
+        間指定了他」。
+
+        ⚠️ **退場了就不算**：`board_supervisor_left_at` 有值代表他已經離開，
+        那個欄位留著是為了讓畫面說得出「本來是誰在看」，不是資格。拿它當
+        資格用的話，指派過一次就終身有效。
+
+        沒有 board_id 的存量週期（換軸前寫的）退回只看它自己那間房——那種
+        週期本來就只屬於一間房。
+        """
+        key = (me["session_key"] or "").strip()
+        if not key:
+            return False
+        db = app.state.db
+        bid = (row["board_id"] or "").strip() if "board_id" in row.keys() else ""
+        if bid:
+            hit = await (await db.execute(
+                "SELECT 1 FROM room r JOIN board_room br ON br.room_id = r.id"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                "   AND r.board_supervisor_session_key=?"
+                "   AND r.board_supervisor_left_at IS NULL LIMIT 1",
+                (bid, key))).fetchone()
+        else:
+            hit = await (await db.execute(
+                "SELECT 1 FROM room WHERE id=?"
+                "   AND board_supervisor_session_key=?"
+                "   AND board_supervisor_left_at IS NULL LIMIT 1",
+                (row["room_id"], key))).fetchone()
+        return hit is not None
+
     @app.post("/api/board/objectives/{objective_id}/verify",
               dependencies=[Depends(require_auth)])
     async def verify_objective(
@@ -4820,19 +4854,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
-        """確認無誤（閘 2、閘 4）。**只有人類成員**（Q4 定案）。
+        """確認無誤（閘 2、閘 4）。**人類 ∪ 該板任一掛接房的 supervisor**。
 
-        閘 4 的前提「送審者是 agent 時」不可以省：Q4 已經規定只有人類能確認，
-        若再無條件要求「確認者 ≠ 送審者」，房裡只有一個人類時，**他自己送審的
-        週期就再也沒有人能確認**，那條週期會永遠卡在 review。
+        原本是 human-only（Q4）。放寬給 supervisor 是艾斯維爾 2026-09-04 的
+        裁定：supervisor 可以是 agent，而他正是這塊板上「負責看」的那個人
+        ——把他擋在確認之外，等於指定了一個監察者卻不讓他做監察的最後一步。
+
+        **跨房算數**（同日裁定）：板掛 A、B 兩房時，A 房的 supervisor 驗得了
+        來源在 B 房的週期。限制成「只能驗本房來源」會讓掛多房的板長出沒有人
+        驗得了的死角，而板的重點正是跨房共用。
+
+        閘 4 的前提「送審者是 agent 時」不可以省：人類房裡只有一個人時，
+        **他自己送審的週期就再也沒有人能確認**，那條週期會永遠卡在 review。
         閘 4 存在的目的是擋 agent 自己確認自己，不是擋人。
         """
         row, me = await _objective_write(objective_id, x_participant_id,
                                          x_session_key)
-        if not _is_human(me):
+        if not _is_human(me) and not await _is_board_supervisor(row, me):
             raise _err(403, "human_only",
-                       "確認週期無誤只有人類成員做得到——agent 只能送審。"
-                       "請在聊天室裡請人類確認。")
+                       "確認週期無誤只有人類成員或這塊板的 supervisor 做得到"
+                       "——其他 agent 只能送審。請在聊天室裡請人類確認。")
         if row["status"] != "review":
             raise _err(409, "objective_not_in_review",
                        f"這個週期還沒送審（目前是「{row['status']}」），"
@@ -4846,15 +4887,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
         reviewer_role = reviewer["role"] if reviewer else "agent"
-        # ⚠️ **這道閘在目前的規則下永遠不會觸發**（2026-09-01 實測：整段換成
-        # `if False:` 十四條測試全綠）。推導：上面已經擋掉非人類，所以 me 是
-        # 人類；而 `reviewed_by == me["id"]` 成立時送審者就是 me，也就是人類，
-        # 於是 `reviewer_role != "human"` 必為 False。
+        # ✅ **那一天到了**：Q4 於 2026-09-04 放寬給 supervisor（可為 agent），
+        # 這道閘從此真的會觸發——agent supervisor 送審後自己按確認會被擋下。
+        # 上面那段舊註解說它「永遠不會觸發、不要為它寫測試」，在 human-only
+        # 的前提下是對的；前提沒了，結論跟著失效。**現在它有兩條測試**
+        # （`test_a_supervisor_still_cannot_verify_what_he_sent_for_review`）。
         #
-        # 真正在擋「agent 自己確認自己」的是 Q4（只有人類能 verify），不是這裡。
-        # 留著是因為它在 Q4 被放寬的那一天就會立刻生效，而且屆時的語意是對的
-        # ——但**不要把它當成現行的保護**，也不要為它寫一條「證明它有效」的
-        # 測試：那條測試只會證明它自己。
+        # 人類送審者仍然可以自己確認，那是刻意的：房裡只有一個人類時不許的話，
+        # 他送審的週期就永遠卡在 review。閘 4 擋的是 agent 自我確認，不是人。
         if reviewer_role != "human" and row["reviewed_by"] == me["id"]:
             raise _err(409, "self_verification_not_allowed",
                        "送審的人不能自己確認——「確認無誤」若由宣告完成的同一個"

@@ -392,3 +392,91 @@ async def test_a_room_supervisor_may_send_directives(tmp_path):
                                      "text": "這個方向要改"}, headers=bot)
         assert ok.status_code == 200, ok.text
         assert ok.json()["delivered"] is True
+
+
+async def _objective_ready_for_verify(client, rid, hdr):
+    """造一個「所有階段都收尾、已送審」的週期——閘 3 過得去的最小形狀。"""
+    oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                             json={"title": "要驗的週期"},
+                             headers=hdr)).json()["id"]
+    cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                             json={"title": "清單"}, headers=hdr)).json()["id"]
+    tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                             json={"title": "卡"}, headers=hdr)).json()["id"]
+    # todo 不能直接跳 done，中間要經過 in_progress
+    for st in ("in_progress", "done"):
+        r = await client.post(f"/api/board/tasks/{tid}/status",
+                              json={"status": st}, headers=hdr)
+        assert r.status_code == 200, r.text
+    r = await client.post(f"/api/board/checklists/{cid}/status",
+                          json={"status": "done"}, headers=hdr)
+    assert r.status_code == 200, r.text
+    return oid
+
+
+async def test_the_rooms_supervisor_can_verify_even_as_an_agent(tmp_path):
+    """審核放寬給該房的 supervisor（艾斯維爾想法板觀察 ③、2026-09-04 定案）。
+
+    在此之前 verify 是 human-only。supervisor 可以是 agent（N-6 語意），
+    而他正是這塊板上「負責看」的那個人——把他擋在確認之外，等於指定了一個
+    監察者卻不讓他做監察的最後一步。
+
+    ⚠️ 放寬的是**誰能按**，閘 3（底下全部收尾）一步都沒有鬆。
+    """
+    app, client = await _client(tmp_path, "sup-verify")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        agent = await _join(client, rid, "agent-sup", "監察者")
+        worker = await _join(client, rid, "agent-worker", "工人")
+
+        oid = await _objective_ready_for_verify(client, rid, worker)
+        r = await client.post(f"/api/board/objectives/{oid}/review",
+                              headers=worker)
+        assert r.status_code == 200, r.text
+
+        # 還不是 supervisor 的 agent：擋下（放寬不是對所有 agent 開門）
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=agent)
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "human_only"
+
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"session_key": "agent-sup"}, headers=owner)
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=agent)
+        assert r.status_code == 200, r.text
+
+
+async def test_a_supervisor_still_cannot_verify_what_he_sent_for_review(tmp_path):
+    """supervisor 送審後不能自己確認。
+
+    🔑 這道閘在 verify 還是 human-only 的時候**永遠不會觸發**（程式碼裡有
+    一段註解實測過：整段換成 `if False:` 十四條測試全綠），因為人類送審者
+    本來就允許自己確認（房裡只有一個人類時，不許的話那條週期永遠卡住）。
+
+    放寬給 agent supervisor 的那一刻它才真的開始擋——而擋的正是它當初寫下
+    來要擋的東西：**宣告完成的身分自己按下確認，那道閘等於不存在**。
+    """
+    app, client = await _client(tmp_path, "sup-self")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        agent = await _join(client, rid, "agent-sup", "監察者")
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"session_key": "agent-sup"}, headers=owner)
+
+        oid = await _objective_ready_for_verify(client, rid, agent)
+        r = await client.post(f"/api/board/objectives/{oid}/review",
+                              headers=agent)
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=agent)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "self_verification_not_allowed"
+
+        # 人類照樣驗得了——擋的是自我確認，不是這條週期
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=owner)
+        assert r.status_code == 200, r.text
