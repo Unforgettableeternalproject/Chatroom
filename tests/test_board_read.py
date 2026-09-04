@@ -177,6 +177,8 @@ async def test_response_shape_is_pinned(tmp_path):
             "attached_rooms",
             # N-4：與我有關的指派請求隨板一起回，不另開清單端點
             "task_requests",
+            # 想法板標籤選單（預設 ∪ 板自訂），與板軸同一份
+            "allowed_tags",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",

@@ -42,6 +42,18 @@ def _uid() -> str:
     return uuid.uuid4().hex
 
 
+# 想法板段落的預設標籤集合（艾斯維爾想法板觀察 ④ / #403）。
+#
+# **跨板一致，板刪不掉它們**：讓它刪得掉的話，同一個 `bug` 在不同板上會有
+# 不同意思，而預設集合存在的理由正是「跨板一致」。板自訂的標籤是**附加**，
+# 存在 `board.custom_tags`。
+#
+# 第一版依據艾斯維爾那六則觀察的實際分佈（兩則 bug、三則新功能、一則權限
+# 設計），`question` 是補的——想法板本來就是「還沒成形」的地方，
+# 「我不確定這樣對不對」是它最自然的用途之一（@開發Novia (UI) 的提案）。
+DEFAULT_SCRATCHPAD_TAGS = ("bug", "feature", "design", "question")
+
+
 def actor_key(session_key: str | None) -> str:
     """把 session_key 規範化成 Board 上的持久協作者身分。
 
@@ -525,14 +537,25 @@ class ScratchpadCreate(BaseModel):
     content: str = Field(default="", max_length=50_000)
 
 
+class BoardTagsAdd(BaseModel):
+    """替一塊板註冊額外的想法板標籤。"""
+    model_config = ConfigDict(extra="forbid")
+
+    tags: list[str] = Field(min_length=1, max_length=16)
+
+
 class ScratchpadBlockCreate(BaseModel):
     content: str = Field(min_length=1, max_length=50_000)
     # 插在哪一段之後；空字串＝放到最後
     after_block_id: str = Field(default="", max_length=64)
+    # 分類標籤。**陣列而不是單一值**：定案是單選（UI 只給選一個），但欄位
+    # 選寬——之後改多選時不必動資料。空陣列＝還沒分類，那是想法板的常態
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ScratchpadBlockWrite(BaseModel):
     content: str = Field(max_length=50_000)
+    tags: list[str] = Field(default_factory=list, max_length=8)
     # 必填、沒有預設。給預設值等於讓「忘了帶」變成一次靜默的覆寫，
     # 而那正是整個 rev 機制要擋的那件事
     rev: int = Field(ge=1)
@@ -5850,6 +5873,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             #
             # ⚠️ 只回**與我有關**的（我發出的、或指名我的）。全部都回的話，
             # 房裡每個人都看得到別人之間的商量，而那不是板要傳達的資訊
+            # 與板軸同一份——從聊天室進板的人看到的選單不能比較少
+            "allowed_tags": (_allowed_tags(attached)
+                             if attached is not None
+                             else list(DEFAULT_SCRATCHPAD_TAGS)),
             "task_requests": await _my_task_requests(
                 scope_sql.replace("board_id", "t.board_id")
                          .replace("room_id", "t.room_id"),
@@ -6462,6 +6489,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 與房軸同一份（見那邊的註解）。**兩軸都要有**：同一份資訊只在
             # 一條路上出現的話，從 Board Library 進來的人看不到自己被請求接手
             # 什麼，而他從哪一條路進板純粹是導覽的偶然
+            # 想法板的標籤選單靠它（預設 ∪ 這塊板自訂的）。不回的話 UI 只能
+            # 把預設集合寫死一份在自己那邊——第二份判準，而板自訂的那些它
+            # 永遠不會知道
+            "allowed_tags": _allowed_tags(board),
             "task_requests": await _my_task_requests(
                 "t.board_id=?", [board_id], actor,
                 # `actor_key()` 現階段只做去空白 ⇒ 兩者同值。這裡不另外取
@@ -7360,15 +7391,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         return [r["id"] for r in rows]
 
     async def _insert_block(pad_id: str, board_id: str, content: str,
-                            me: dict, order_index: int, seq: int) -> str:
+                            me: dict, order_index: int, seq: int,
+                            tags_json: str = "[]") -> str:
         bkid = uuid.uuid4().hex
         now = _now()
         await app.state.db.execute(
             "INSERT INTO board_scratchpad_block (id, scratchpad_id, board_id,"
-            " content, order_index, author_actor_key, author_name,"
+            " content, tags, order_index, author_actor_key, author_name,"
             " author_kind, rev, deleted, board_seq, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?)",
-            (bkid, pad_id, board_id, content, order_index,
+            " VALUES (?,?,?,?,?,?,?,?,?,1,0,?,?,?)",
+            (bkid, pad_id, board_id, content, tags_json, order_index,
              me["session_key"], me["display_name"],
              "human" if _actor_is_human(me) else (me.get("kind") or "agent"),
              seq, now, now))
@@ -7492,6 +7524,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "author_actor_key": b["author_actor_key"],
                 "author_name": b["author_name"],
                 "author_kind": b["author_kind"],
+                "tags": _tags_public(b),
                 "created_at": b["created_at"], "updated_at": b["updated_at"],
                 "can_edit": can_edit,
                 "notes": by_block.get(b["id"], []),
@@ -7515,6 +7548,148 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "can_edit": board["status"] == "active" and role != "viewer",
                 "blocks": out}
 
+    # ── 想法板標籤（觀察 ④）─────────────────────────────────────────
+    # 預設集合是程式常數（跨板一致），板自訂的存 `board.custom_tags`。
+    # **驗證在這裡不在 UI**：只靠選單的話，任何直打 REST 的人都能塞任意
+    # 字串進去，而「固定集合」要防的正是那種不會報錯、只會讓分堆慢慢失效
+    # 的髒資料——它會從畫面防不到的那條路進來。
+
+    def _board_custom_tags(board) -> list[str]:
+        """這塊板自訂的額外標籤。欄位壞掉時回空陣列而不是炸掉。
+
+        ⚠️ 標籤是**附屬資訊**：它解不出來時該讓板照常打得開（少一個選項），
+        不是讓整塊板讀不到。同一份取捨在 `aliases` 那裡也做過。
+        """
+        raw = (board["custom_tags"] if "custom_tags" in board.keys() else "") or "[]"
+        try:
+            got = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [t for t in got if isinstance(t, str) and t]
+
+    def _allowed_tags(board) -> list[str]:
+        """這塊板能用的全部標籤＝預設 ∪ 自訂。順序固定：預設在前。
+
+        隨板回給 client（房軸與板軸都有）——不回的話 UI 只能把預設集合寫死
+        一份在自己那邊，那是**第二份判準**，而板自訂的那些它永遠不會知道。
+        """
+        return list(DEFAULT_SCRATCHPAD_TAGS) + [
+            t for t in _board_custom_tags(board)
+            if t not in DEFAULT_SCRATCHPAD_TAGS]
+
+    def _check_tags(board, tags: list[str]) -> str:
+        """驗證並正規化成要存的 JSON。不合法就 422。"""
+        allowed = _allowed_tags(board)
+        clean: list[str] = []
+        for t in tags or []:
+            t = (t or "").strip()
+            if not t:
+                continue
+            if t not in allowed:
+                # 錯誤要說得出「可以用哪些」，否則呼叫端只能猜——而猜的結果
+                # 就是再送一次錯的
+                raise _err(422, "unknown_tag",
+                           f"「{t}」不是這塊板可以用的標籤",
+                           tag=t, allowed=allowed)
+            if t not in clean:      # 同一個標籤標兩次沒有意義
+                clean.append(t)
+        return json.dumps(clean, ensure_ascii=False)
+
+    def _tags_public(row) -> list[str]:
+        raw = (row["tags"] if "tags" in row.keys() else "") or "[]"
+        try:
+            got = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [t for t in got if isinstance(t, str)]
+
+    @app.post("/api/boards/{board_id}/tags",
+              dependencies=[Depends(require_auth)])
+    async def add_board_tags(
+        board_id: str, body: BoardTagsAdd,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """替這塊板註冊額外的標籤（艾斯維爾 #403）。
+
+        ⚠️ 與「自由輸入」是兩件事：註冊是**一次明確的動作**，之後仍然從選單
+        挑。所以固定集合要防的東西一個都沒放掉——選單的內容變成
+        「預設 ∪ 這塊板自訂的」，而不是一個空白輸入框。
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        current = _board_custom_tags(board)
+        added = []
+        for t in body.tags:
+            t = (t or "").strip()
+            if not t or t in DEFAULT_SCRATCHPAD_TAGS or t in current:
+                continue
+            current.append(t)
+            added.append(t)
+        if added:
+            await app.state.db.execute(
+                "UPDATE board SET custom_tags=?, updated_at=? WHERE id=?",
+                (json.dumps(current, ensure_ascii=False), _now(), board_id))
+            await _commit_with_retry(app.state.db)
+        fresh = await _board_or_404(board_id)
+        return {"ok": True, "tags": _board_custom_tags(fresh),
+                "allowed": _allowed_tags(fresh), "added": added}
+
+    @app.delete("/api/boards/{board_id}/tags/{tag}",
+                dependencies=[Depends(require_auth)])
+    async def remove_board_tag(
+        board_id: str, tag: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """拿掉一個自訂標籤。**還有段落在用就擋下，並指出是哪幾則。**
+
+        三種做法裡選了「擋下」（@開發Novia (UI) 2026-09-04 的分析）：
+        - 保留段落的 tag ⇒ 那些段落**從篩選器裡消失**，而想法板的用途就是
+          之後回來翻，翻不到等於沒寫
+        - 刪標籤時清掉段落的 tag ⇒ **靜靜改掉一批段落**，按下刪除的人不知道
+          自己動了幾則
+
+        兩者都在刪除的當下看起來成功，問題要等到有人去篩選時才浮出來，而那時
+        已經沒有線索指向「有人刪了一個標籤」。
+
+        🔴 但「不給刪」若沒有出口，標籤會被用過一次就**永久鎖死**——那不是
+        保護，是沒有人收拾得了的狀態。所以 409 帶著 `block_ids`：畫面才說得出
+        「還有 3 則在用，去看看」。**擋下來但指得出路才是這個做法；擋下來而已
+        是把問題換個地方放。**
+        """
+        board, room_id, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id)
+        if tag in DEFAULT_SCRATCHPAD_TAGS:
+            raise _err(422, "tag_is_default",
+                       f"「{tag}」是預設標籤，不屬於這塊板，不能移除",
+                       tag=tag)
+        current = _board_custom_tags(board)
+        if tag not in current:
+            raise _err(404, "tag_not_found",
+                       f"這塊板沒有自訂標籤「{tag}」", tag=tag)
+        db = app.state.db
+        # 比對用 JSON 值而不是 LIKE：`perf` 會誤中 `perfect`，而那種誤判
+        # 的方向是「擋下不該擋的」——刪不掉而且看不出為什麼
+        rows = await (await db.execute(
+            "SELECT id, scratchpad_id, tags FROM board_scratchpad_block"
+            " WHERE board_id=? AND deleted=0", (board_id,))).fetchall()
+        using = [r for r in rows if tag in _tags_public(r)]
+        if using:
+            raise _err(409, "tag_in_use",
+                       f"還有 {len(using)} 則段落在用「{tag}」，"
+                       "先改掉它們才能移除這個標籤",
+                       tag=tag, in_use_count=len(using),
+                       block_ids=[r["id"] for r in using],
+                       pad_ids=sorted({r["scratchpad_id"] for r in using}))
+        current.remove(tag)
+        await db.execute(
+            "UPDATE board SET custom_tags=?, updated_at=? WHERE id=?",
+            (json.dumps(current, ensure_ascii=False), _now(), board_id))
+        await _commit_with_retry(db)
+        return {"ok": True, "tags": current,
+                "allowed": _allowed_tags(await _board_or_404(board_id))}
+
     @app.post("/api/boards/{board_id}/scratchpads/{pad_id}/blocks",
               dependencies=[Depends(require_auth)])
     async def add_scratchpad_block(
@@ -7537,7 +7712,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 編號一次。分兩步是為了讓「加一段」這條熱路徑不需要動到別人的列
         order = await _claim_block_order(pad_id)
         bkid = await _insert_block(pad_id, board_id, body.content, me, order,
-                                   seq)
+                                   seq,
+                                   tags_json=_check_tags(board, body.tags))
         if body.after_block_id:
             ids = [i for i in await _block_order_ids(pad_id) if i != bkid]
             at = ids.index(body.after_block_id) + 1
@@ -7603,9 +7779,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         # CAS：**一定要單一語句**。先比對 rev 再 UPDATE 的話，中間那個 await
         # 讓出去，兩個人可以各自比對成功、各自寫入
         cur = await db.execute(
-            "UPDATE board_scratchpad_block SET content=?, rev=rev+1,"
+            # 標籤跟著 content 一起寫：它是段落的一部分，不是掛在旁邊的
+            # 東西。分成兩支端點的話「改內容」與「改標籤」會各自領一個
+            # `board_seq`，而它們常常是同一個動作
+            "UPDATE board_scratchpad_block SET content=?, tags=?, rev=rev+1,"
             " board_seq=?, updated_at=? WHERE id=? AND rev=? AND deleted=0"
-            " RETURNING rev", (body.content, seq, _now(), block_id, body.rev))
+            " RETURNING rev", (body.content, _check_tags(board, body.tags),
+                               seq, _now(), block_id, body.rev))
         won = await cur.fetchone()
         if won is None:
             fresh = await _scratchpad_block_or_404(pad_id, block_id)

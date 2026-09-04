@@ -376,6 +376,14 @@ CREATE TABLE IF NOT EXISTS board (
     -- 那段本來就不會有 board_event，把它算成「洞」是誤判
     -- （@測試Novia 2026-09-03 T19）。顯式建的板是 0（它從頭就是 v2）
     migrated_from_seq INTEGER NOT NULL DEFAULT 0,
+    -- 這塊板自訂的額外標籤（艾斯維爾 #403：「每個板子可以有自訂的其他
+    -- 標籤」）。**預設集合不存在這裡**——那是程式常數，跨板一致；這一欄
+    -- 只放附加的部分。
+    --
+    -- ⚠️ 與「自由輸入」是兩件事：加標籤是**一次明確的動作**，之後仍然從
+    -- 選單挑。所以固定集合要防的（`bug`／`Bug`／`BUG`／`錯誤` 四種寫法，
+    -- 而且不會報錯、只會讓分堆慢慢失效）一個都沒放掉
+    custom_tags  TEXT NOT NULL DEFAULT '[]',
     -- Supervisor 從 room 搬到 board：他看的是這塊板，不是某一間房，
     -- 所以離開任何一間房都不該讓他退場
     supervisor_actor_key TEXT NOT NULL DEFAULT '',
@@ -542,6 +550,14 @@ CREATE TABLE IF NOT EXISTS board_scratchpad_block (
     -- 沒有人發現；把人類誤認為 agent 會讓他改不動別人的段落，他會馬上抱怨。
     -- 所以往吵的那一邊倒。
     author_kind  TEXT NOT NULL DEFAULT '',
+    -- 分類標籤（艾斯維爾想法板觀察 ④）。**JSON 陣列而不是單一欄位**：
+    -- 定案是單選，但 schema 選寬、行為選窄——之後改成多選時不必動資料，
+    -- 反過來（存單一 TEXT）有一半機率要遷移。UI 只給選一個。
+    --
+    -- 標在**段落**不標在板：同一份想法板裡的段落性質常常各不相同（艾斯維爾
+    -- 那六則就是兩則 bug、三則新功能、一則權限設計），標在板上等於標不出
+    -- 任何東西
+    tags         TEXT NOT NULL DEFAULT '[]',
     -- 每段自己的樂觀鎖。分段之後衝突面小很多：兩個人編不同段互不影響
     rev          INTEGER NOT NULL DEFAULT 1,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -782,6 +798,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 都重啟過）——不補這條，那些庫升上來會缺欄位而查詢直接炸
     ("board_task_request", "requester_notified_at",
      "requester_notified_at TEXT"),
+    ("board_scratchpad_block", "tags", "tags TEXT NOT NULL DEFAULT '[]'"),
+    ("board", "custom_tags", "custom_tags TEXT NOT NULL DEFAULT '[]'"),
     ("board_task", "assigned_by_actor_key",
      "assigned_by_actor_key TEXT NOT NULL DEFAULT ''"),
     # 來源訊息的完整座標。v1 只存 source_seq——那在一房一板時夠用，但一塊板
