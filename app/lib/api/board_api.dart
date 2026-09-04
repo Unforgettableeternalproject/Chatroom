@@ -341,6 +341,12 @@ class BoardApi {
     String taskId, {
     String? participantId,
     String? sessionKey,
+    /// 空字串 ＝ **取消指派**（照 `BoardSupervisorSet` 的既有慣例：
+    /// 空是「卸任」，不是「這個欄位沒填」）。
+    ///
+    /// ⚠️ 取消是**管理動作**——一般人按下去會 403 `not_assign_admin`。
+    /// 讓任何人都清得掉的話，指派等於沒有效力
+    /// （@開發Novia (Hub) 2026-09-04）。
     required String targetParticipantId,
     String note = '',
   }) =>
@@ -358,6 +364,7 @@ class BoardApi {
         final req = d['request'] as Map<String, dynamic>?;
         return TaskAssignOutcome(
           assigned: (d['assigned'] as bool?) ?? false,
+          cleared: (d['cleared'] as bool?) ?? false,
           alreadyPending: (d['already_pending'] as bool?) ?? false,
           request: req == null ? null : TaskRequest.fromJson(req),
         );
@@ -387,12 +394,17 @@ class BoardApi {
 class TaskAssignOutcome {
   const TaskAssignOutcome({
     this.assigned = false,
+    this.cleared = false,
     this.alreadyPending = false,
     this.request,
   });
 
   /// 直接寫到卡上了（提出者是管理員）。
   final bool assigned;
+
+  /// 取消掉了。**`assigned` 也是 false，但那是兩件相反的事**——
+  /// 只看 `assigned` 的話，取消成功會被畫成「送出了一筆請求」。
+  final bool cleared;
 
   /// 這筆請求**早就存在**。不是失敗——同一張卡對同一個人重按，
   /// Hub 回原本那筆而不是再生一筆。

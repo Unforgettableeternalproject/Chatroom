@@ -147,4 +147,44 @@ void main() {
     final after = base.merge(BoardDelta.fromJson({'board_seq': 2}));
     expect(after.taskRequests, hasLength(1));
   });
+
+  group('取消指派', () {
+    test('🔴 空 target ＝ 取消，不是「欄位沒填」', () async {
+      // 照 BoardSupervisorSet 的既有慣例。原本回 422 ⇒ 指派出去收不回，
+      // 而人事會變、卡會轉手（@測試Novia #390 抓到的缺口）
+      final (api, rec) = _api({'ok': true, 'assigned': false, 'cleared': true});
+      final out = await api.assignTask('t1',
+          participantId: 'p1', targetParticipantId: '');
+      expect(out.cleared, isTrue);
+      expect((rec.seen!.data as Map)['target_participant_id'], '');
+    });
+
+    test('🔴 cleared 與 assigned 都是 false 時**不是同一件事**', () async {
+      // 取消成功：assigned=false, cleared=true
+      // 送出請求：assigned=false, cleared=false
+      // 只看 assigned 的話，取消成功會被畫成「送出了一筆請求」——
+      // 而那句話會讓人以為還要等對方回覆一個已經不存在的東西
+      final (a1, _) = _api({'ok': true, 'assigned': false, 'cleared': true});
+      final cleared = await a1.assignTask('t1',
+          participantId: 'p1', targetParticipantId: '');
+
+      final (a2, _) = _api({
+        'ok': true,
+        'assigned': false,
+        'request': {'id': 'r1', 'task_id': 't1', 'status': 'pending'},
+      });
+      final requested = await a2.assignTask('t1',
+          participantId: 'p1', targetParticipantId: 'p2');
+
+      expect(cleared.assigned, requested.assigned); // 兩者相同
+      expect(cleared.cleared, isNot(requested.cleared)); // 但這裡不同
+    });
+
+    test('舊 Hub 不回 cleared 時當成 false——不可以把送出請求講成取消', () async {
+      final (api, _) = _api({'ok': true, 'assigned': false});
+      final out = await api.assignTask('t1',
+          participantId: 'p1', targetParticipantId: 'p2');
+      expect(out.cleared, isFalse);
+    });
+  });
 }

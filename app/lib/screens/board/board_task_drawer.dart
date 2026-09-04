@@ -418,6 +418,23 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     });
   }
 
+  /// 取消這張卡的指派。
+  ///
+  /// 送空的 `target_participant_id`——照 supervisor 那條既有慣例，
+  /// 空是「卸任」不是「沒填」。
+  Future<void> _clearAssignee(BoardActions actions) async {
+    await runBoardAction(context, () async {
+      final out =
+          await actions.assignTask(widget.task.id, targetParticipantId: '');
+      if (out == null || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        // ⚠️ `cleared` 與 `assigned` 都是 false 時**不是同一件事**：
+        // 只看 assigned 的話，取消成功會被講成「送出了一筆請求」
+        content: Text(out.cleared ? '已取消指派' : '沒有東西可以取消'),
+      ));
+    });
+  }
+
   /// 挑一個房內的人，把這張卡請給他。
   ///
   /// 送出後**要說出實際發生了什麼**：管理員按下去是「已指派」，其他人是
@@ -557,10 +574,26 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
         ] else if (canAssign) ...[
           if (leading.isNotEmpty) const SizedBox(width: 8),
           _DrawerAction(
-            label: '請人接手',
+            label: (widget.task.assigneeParticipantId ?? '').isEmpty
+                ? '請人接手'
+                : '改請別人',
             bordered: true,
             onTap: () => _assign(actions),
           ),
+          // 取消指派。**只在真的有指派時出現**——沒有指派時給一顆取消鈕，
+          // 是在問一個不存在的問題。
+          //
+          // ⚠️ 取消是管理動作，一般人按下去會 403 `not_assign_admin`。
+          // 那顆按鈕仍然畫出來：**權限判準在 server**，UI 自己算一份會漂移，
+          // 而漂移的方向如果是「藏起來」，管理員會找不到功能且沒有任何線索
+          if ((widget.task.assigneeParticipantId ?? '').isNotEmpty) ...[
+            const SizedBox(width: 8),
+            _DrawerAction(
+              label: '取消指派',
+              bordered: true,
+              onTap: () => _clearAssignee(actions),
+            ),
+          ],
         ],
         const Spacer(),
         for (final a in trailing) button(a),
