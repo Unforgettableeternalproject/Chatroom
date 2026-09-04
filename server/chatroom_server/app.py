@@ -5370,12 +5370,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 的那一半會把另一半拖下水（測試 Novia 第二輪 F4）
         tombstones = after_board_seq > 0
 
+        # 🔴 **範圍是「板」不是「房」**（艾斯維爾 2026-09-04 拍板）。原本三張表
+        # 各自用 `room_id` 過濾 ⇒ 一塊板掛兩間房時，每間房只看得到「在這間房
+        # 寫的那些卡」，板就退化成每房獨立，而共用正是板存在的理由。
+        #
+        # 水位不必跟著改：`_next_seq_for_board` 每次領號就把板水位同步回
+        # **所有** active 掛接房的 `room.board_seq` ⇒ 房軸回的 `board_seq`
+        # 早就是板軸的號。只改撈列範圍，兩邊自然對得上。
+        #
+        # 沒掛板的房（`attached_board is None`）維持房軸過濾：那種房的卡還沒
+        # 換軸，`board_id` 是空字串，改用它會一張也撈不到。
+        scope_col, scope_val = (
+            ("board_id", attached_board["id"]) if attached_board is not None
+            else ("room_id", room_id))
+
         async def _rows(table: str) -> list:
             cur = await db.execute(
-                f"SELECT * FROM {table} WHERE room_id=? AND board_seq>?"
+                f"SELECT * FROM {table} WHERE {scope_col}=? AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
                 + " ORDER BY board_seq",
-                (room_id, after_board_seq),
+                (scope_val, after_board_seq),
             )
             return [_board_row(r) for r in await cur.fetchall()]
 
@@ -5391,19 +5405,23 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
             if me and me["session_key"]:
+                # 範圍同樣是板（裁定 #301 核准）：不對齊的話會出現「板上
+                # 看得到那張孤兒卡、可接手清單裡卻沒有」——同一份判準在兩處
+                # 寫法不同的老形狀。⚠️ 放寬的只有**房**，身分判準不動：仍然
+                # 限同一個 `claim_session_key`，別人的孤兒卡不會跑進來。
                 cur = await db.execute(
                     "SELECT id, title, orphaned_at, claim_name FROM board_task"
-                    " WHERE room_id=? AND claim_state='orphaned'"
+                    f" WHERE {scope_col}=? AND claim_state='orphaned'"
                     " AND claim_session_key=? AND deleted=0"
                     " ORDER BY board_seq",
-                    (room_id, me["session_key"]),
+                    (scope_val, me["session_key"]),
                 )
                 reclaimable = [dict(r) for r in await cur.fetchall()]
 
         # v1 路由從這裡起兼任 resolver（BOARD_DESIGN §8.1）：告訴舊 client
         # 「你讀的其實是這塊板」，它才有辦法改走 /api/boards/{bid}。
         # 沒掛板時回 null 而**不自動建一塊**——建房不自動建空板
-        attached = await _board_for_room(room_id)
+        attached = attached_board   # 上面已經查過，不重查
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")

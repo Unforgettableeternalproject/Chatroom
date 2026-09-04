@@ -448,6 +448,17 @@ room 掛接 Board → `board_member` role。Board Library 沒有 room participan
 `GET /api/rooms/{rid}/board` 過渡期保留為 resolver：未掛 Board 回 `404 board_not_attached`，
 不自動建空板；已掛則回 `board_id` 與標準 delta。新 client 一律用 `/api/boards/...`。
 
+**範圍是整塊板，不是本房那一段**（艾斯維爾 2026-09-04 拍板）。從任一間掛接房
+讀到的 `objectives` / `checklists` / `tasks` / `reclaimable_tasks` 與板軸完全
+一致——板存在的理由就是跨聊天室共用，各房只看自己寫的那些等於每房獨立。
+
+水位不隨之改動：`_next_seq_for_board` 每次領號就把板水位同步回**所有** active
+掛接房的 `room.board_seq`，房軸回的 `board_seq` 本來就是板軸的號。⚠️ 這兩件事
+要一起看——資料整塊、水位本房（或反過來）會讓增量安靜地漏掉東西，而 client
+那側的症狀是「另一間房的卡」，不是錯誤（2026-09-03 App `BoardCache` 事件）。
+
+未掛板的房維持房軸過濾：那種房的卡還沒換軸，`board_id` 是空字串。
+
 ---
 
 ## 9. MCP 工具
