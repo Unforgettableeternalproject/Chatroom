@@ -655,3 +655,94 @@ async def test_attached_rooms_say_whether_each_room_is_private(tmp_path):
             entry = (await client.get(f"/api/boards/{bid}",
                                       headers=a)).json()["attached_rooms"][0]
             assert entry["visibility"] == "private"
+
+
+async def test_host_view_lists_other_peoples_private_boards(tmp_path):
+    """主持人模式看得到別人的私人板（艾斯維爾想法板觀察 ②）。
+
+    比照主持人可見私人房的既有語意：`.env` 主 token 的持有者本來就讀得到
+    同一個目錄下的 `chatroom.db`，這裡給的不是新權限，是把既有能力變得可用。
+
+    ⚠️ **兩個條件缺一不可**，這條測試也把「只帶其中一個不算」一起釘住：
+    沒帶 `X-Host-View` 就是普通清單（不是預設開著），而 header 帶了但
+    token 不對也一樣——否則任何人加一個標頭就看得到全部。
+    """
+    app, client = await _client(tmp_path, "host_private")
+    async with client:
+        async with app.router.lifespan_context(app):
+            mine = {"X-Session-Key": "claude-owner"}
+            secret = await _board(client, mine, "別人的私人板", "private")
+            open_one = await _board(client, mine, "別人的公開板", "public")
+
+            # 路人：兩塊都不是他的，公開那塊他也不在任何掛接房裡
+            stranger = {"X-Session-Key": "claude-stranger"}
+            assert await _library(client, stranger) == set()
+
+            host = {"X-Session-Key": "claude-stranger", "X-Host-View": "1"}
+            got = (await client.get("/api/boards", headers=host)).json()
+            names = {b["id"]: b for b in got["boards"]}
+            assert set(names) == {secret, open_one}, "主持人模式沒看到全部的板"
+            # 標得出哪一塊是私人的——UI 要據此加註記
+            assert names[secret]["visibility"] == "private"
+
+            # 🔴 沒帶 header ⇒ 不是主持人模式（主 token 不自動打穿）
+            assert await _library(client, stranger) == set()
+
+            # 🔴 帶了 header 但 token 不對 ⇒ 一樣看不到
+            bad = AsyncClient(transport=ASGITransport(app=app),
+                              base_url="http://test",
+                              headers={"Authorization": "Bearer not-the-root-token"})
+            async with bad:
+                r = await bad.get("/api/boards", headers=host)
+                # 認證那關先擋下就已經達到目的；放行的話清單必須是空的
+                assert r.status_code != 200 or r.json()["boards"] == []
+
+
+async def test_host_view_still_honours_the_status_filter(tmp_path):
+    """主持人模式放寬的是**看得到誰的板**，不是把其他篩選一起關掉。
+
+    放寬一個維度時順手把別的維度也放掉，是最容易混進來的那種錯——它不會
+    報錯，只會讓「進行中／已封存」切換在主持人模式下靜靜失效。
+    """
+    app, client = await _client(tmp_path, "host_status")
+    async with client:
+        async with app.router.lifespan_context(app):
+            mine = {"X-Session-Key": "claude-owner"}
+            live = await _board(client, mine, "還在跑的板", "private")
+            done = await _board(client, mine, "已封存的板", "private")
+            r = await client.post(f"/api/boards/{done}/archive", headers=mine)
+            assert r.status_code == 200, r.text
+
+            host = {"X-Session-Key": "claude-stranger", "X-Host-View": "1"}
+            got = (await client.get("/api/boards?status=active",
+                                    headers=host)).json()
+            assert [b["id"] for b in got["boards"]] == [live]
+
+
+async def test_library_says_who_owns_each_board(tmp_path):
+    """清單要說得出每塊板是誰的（@開發Novia (UI) 2026-09-04）。
+
+    主持人開了開關會多出一堆別人的板，每塊標著「私人」——**看得到卻不知道
+    是誰的，等於只做了一半**。而主持人模式存在的理由正是「看得到別人的
+    東西」。
+
+    ⚠️ `owner_actor_key` 單獨不夠：畫面上要能唸得出來的是名字。key 是給
+    比對用的，兩個都要。
+    """
+    app, client = await _client(tmp_path, "library_owner")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client, "有人的房", "claude-owner")
+            owner = await _join(client, rid, "claude-owner", "板主")
+            bid = await _board(client, owner, "他的私人板", "private")
+
+            mine = (await client.get("/api/boards",
+                                     headers=owner)).json()["boards"]
+            assert [b["owner_display_name"] for b in mine] == ["板主"]
+            assert mine[0]["owner_actor_key"]
+
+            host = {"X-Session-Key": "claude-stranger", "X-Host-View": "1"}
+            seen = (await client.get("/api/boards", headers=host)).json()
+            row = [b for b in seen["boards"] if b["id"] == bid][0]
+            assert row["owner_display_name"] == "板主", \
+                "主持人看得到這塊板，卻不知道是誰的"

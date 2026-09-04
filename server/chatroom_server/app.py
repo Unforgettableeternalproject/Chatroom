@@ -5826,6 +5826,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """Board Library：這個 actor 有份的板。
 
@@ -5858,6 +5859,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         # `board_member` 不再單獨構成理由：它降級成角色覆寫（讓「把某人
         # 降成 viewer」還做得到），不是存取權的來源。⚠️ 但被移除的人
         # （`removed_at IS NOT NULL`）要擋掉，否則他會從房間那條路回來
+        # 主持人視角看得到**全部**的板，含別人的私人板（艾斯維爾想法板觀察
+        # ②）。比照主持人可見私人房的既有語意：`.env` 主 token 的持有者本來
+        # 就讀得到同一個目錄下的 `chatroom.db`，這裡給的不是新權限，是把既有
+        # 能力變得可用——而 `host_view` 那兩個條件（明示標頭＋主 token）保證
+        # 它不是預設開著的。
+        #
+        # ⚠️ 放寬的只有「**看得到誰的板**」這一個維度。下面的 `status` 篩選
+        # 照樣套用：放寬一個維度時順手把別的也放掉不會報錯，只會讓「進行中／
+        # 已封存」切換在主持人模式下靜靜失效。
+        if host:
+            sql = "SELECT b.*, ? AS my_role FROM board b WHERE 1=1"
+            params: list = ["", ]
+        else:
+            sql, params = _library_scope_sql(actor)
+        if want:
+            sql += " AND b.status = ?"
+            params.append(want)
+        cur = await db.execute(sql + " ORDER BY b.updated_at DESC", params)
+        return {"boards": [await _library_row(db, b, actor)
+                           for b in await cur.fetchall()]}
+
+    def _library_scope_sql(actor: str) -> tuple[str, list]:
         sql = ("SELECT b.*, ? AS my_role FROM board b WHERE ("
                "  b.owner_actor_key = ?"
                "  OR (b.visibility = 'public' AND EXISTS ("
@@ -5875,41 +5898,70 @@ def create_app(config: Config | None = None) -> FastAPI:
                ")")
         # my_role 逐列再算：SQL 裡拼出同一份判準會變成第二個真相來源，
         # 而漂移的那一半沒有人在看
-        params: list = ["", actor, actor, actor]
-        if want:
-            sql += " AND b.status = ?"
-            params.append(want)
-        cur = await db.execute(sql + " ORDER BY b.updated_at DESC", params)
-        out = []
-        for b in await cur.fetchall():
-            counts = await (await db.execute(
-                "SELECT COUNT(*) AS total,"
-                " SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
-                " SUM(CASE WHEN claim_state='held' THEN 1 ELSE 0 END) AS claimed"
-                " FROM board_task WHERE board_id=? AND deleted=0",
-                (b["id"],))).fetchone()
-            rooms = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM board_room WHERE board_id=?"
-                " AND detached_at IS NULL", (b["id"],))).fetchone()
-            # 「這塊板還叫得醒人嗎」要看**活著的**房。掛接數看起來正常而
-            # 沒有人叫得醒，正是最容易被讀成沒問題的那個狀態
-            live = await _live_room_count(b["id"])
-            out.append({
-                "id": b["id"], "name": b["name"], "status": b["status"],
-                "attached_room_count": rooms["n"],
-                "live_room_count": live,
-                "delivery_mode": "room_and_inbox" if live else "inbox_only",
-                "task_counts": {"total": counts["total"] or 0,
-                                "done": counts["done"] or 0,
-                                "claimed": counts["claimed"] or 0},
-                "updated_at": b["updated_at"],
-                # 走 `_board_role` 而不是 SQL 裡算好的：判準只能有一份，
-                # 兩份會漂移，而漂移的結果是清單上寫著 editor、點進去卻是
-                # viewer（或反過來）
-                "my_role": await _board_role(b["id"], actor),
-                "visibility": b["visibility"],
-            })
-        return {"boards": out}
+        return sql, ["", actor, actor, actor]
+
+    async def _library_row(db, b, actor: str) -> dict:
+        """Board Library 的一列。主持人視角與一般視角**共用這一份**——
+        兩邊各算一次的話，主持人看到的欄位會慢慢與別人不同。"""
+        counts = await (await db.execute(
+            "SELECT COUNT(*) AS total,"
+            " SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
+            " SUM(CASE WHEN claim_state='held' THEN 1 ELSE 0 END) AS claimed"
+            " FROM board_task WHERE board_id=? AND deleted=0",
+            (b["id"],))).fetchone()
+        rooms = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM board_room WHERE board_id=?"
+            " AND detached_at IS NULL", (b["id"],))).fetchone()
+        # 「這塊板還叫得醒人嗎」要看**活著的**房。掛接數看起來正常而
+        # 沒有人叫得醒，正是最容易被讀成沒問題的那個狀態
+        live = await _live_room_count(b["id"])
+        return {
+            "id": b["id"], "name": b["name"], "status": b["status"],
+            "attached_room_count": rooms["n"],
+            "live_room_count": live,
+            "delivery_mode": "room_and_inbox" if live else "inbox_only",
+            "task_counts": {"total": counts["total"] or 0,
+                            "done": counts["done"] or 0,
+                            "claimed": counts["claimed"] or 0},
+            "updated_at": b["updated_at"],
+            # 走 `_board_role` 而不是 SQL 裡算好的：判準只能有一份，
+            # 兩份會漂移，而漂移的結果是清單上寫著 editor、點進去卻是
+            # viewer（或反過來）
+            "my_role": await _board_role(b["id"], actor),
+            "visibility": b["visibility"],
+            # **owner 是誰**。主持人模式會一次多出一堆別人的板，每塊標著
+            # 「私人」——看得到卻不知道是誰的，等於只做了一半，而主持人模式
+            # 存在的理由正是「看得到別人的東西」（@開發Novia (UI) 2026-09-04）。
+            #
+            # ⚠️ key 與名字兩個都要：key 是給比對用的，畫面上要唸得出來的是
+            # 名字。只給 key 的話 UI 只能顯示一串 hex，那與沒給差不多
+            "owner_actor_key": b["owner_actor_key"],
+            "owner_display_name": await _actor_display_name(
+                b["id"], b["owner_actor_key"]),
+        }
+
+    async def _actor_display_name(board_id: str, actor: str) -> str:
+        """這個 actor 在這塊板上叫什麼。查不到回空字串。
+
+        先問 `board_member`（兩條建板路徑都會替 owner 寫一列，含名字），
+        查不到才退回 participant 的最近一筆——**被移除的成員也要唸得出
+        名字**：`removed_at` 標記的是「不再有權限」，不是「這個人不存在」，
+        而清單上仍要說得出那塊板本來是誰的。
+        """
+        if not actor:
+            return ""
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT display_name FROM board_member"
+            " WHERE board_id=? AND actor_key=? LIMIT 1",
+            (board_id, actor))).fetchone()
+        if row is not None and row["display_name"]:
+            return row["display_name"]
+        row = await (await db.execute(
+            "SELECT display_name FROM participant WHERE session_key=?"
+            " AND display_name != '' ORDER BY last_seen_at DESC LIMIT 1",
+            (actor,))).fetchone()
+        return row["display_name"] if row is not None else ""
 
     @app.get("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
     async def read_board_v2(
