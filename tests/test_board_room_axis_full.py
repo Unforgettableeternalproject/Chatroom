@@ -238,3 +238,28 @@ async def test_a_room_with_no_board_reports_no_attached_rooms(tmp_path):
                                      headers=hdr)).json()
             assert body["board_id"] is None
             assert body["attached_rooms"] == []
+
+
+async def test_attached_rooms_shape_is_pinned(tmp_path):
+    """釘住 `attached_rooms` 每一列的鍵集合。
+
+    🔑 **這條是跨層接縫的 server 半邊。** App 那側有一份契約測試
+    （`app/test/contract/room_axis_attached_rooms_test.dart`，@開發Novia (UI)
+    2026-09-04），形狀取自這支端點的輸出——但它吃的是**寫死的假 JSON**，所以
+    這邊改了形狀，那邊不會紅：它守的是「UI 解得動這個形狀」，不是「Hub 還在
+    送這個形狀」。兩者都要有人守，缺哪一半都會讓另一半變成假的安全感。
+
+    改這裡的形狀時，**要同時去改 App 那份**——它不會自己提醒你。
+    """
+    app, client = await _client(tmp_path, "axis_attached_shape")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra, rb, hdr_a, hdr_b, bid = await _two_rooms_one_board(client)
+            body = (await client.get(f"/api/rooms/{ra}/board",
+                                     headers=hdr_a)).json()
+            assert set(body["attached_rooms"][0]) == {
+                "id", "name", "status", "visibility", "detached",
+                # 沒指定時是 None，但**鍵一定在**——鍵時有時無的話，client
+                # 得先判斷有沒有這個鍵再判斷值，那是兩層而不是一層
+                "supervisor",
+            }
