@@ -277,6 +277,16 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "請在聊天室裡請人類代為執行。",
                 status=status, detail=detail,
             )
+        if code == "not_the_request_target":
+            # N-4 的指派請求只有被指名的人能回答。落進 fallback 會被翻成
+            # 「身分失效請重新 join」——而重新 join 不會讓你變成別人，agent
+            # 照著那句話做只會白跑一趟，然後再撞一次同一道門
+            return HubError(
+                _detail_text(detail)
+                or "這筆指派請求不是給你的，只有被指名的人能回答。"
+                "你可以自己去認領那張卡，但不能替別人答應。",
+                status=status, detail=detail,
+            )
         if code == "host_view_required":
             # 這條 agent 幾乎不會撞到（接管管理權是 App 的動作），但翻譯
             # 一定要有：落進 fallback 會被當成身分失效，而 watcher 對身分

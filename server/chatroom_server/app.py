@@ -460,6 +460,27 @@ class BoardTaskPatch(BaseModel):
     assignee_participant_id: str | None = Field(default=None, max_length=64)
 
 
+class BoardTaskAssign(BaseModel):
+    """指派一張卡給某人。**建議不是鎖**——卡仍要對方自己認領。
+
+    `participant_id` 與 `session_key` 兩條路並存，理由與 `BoardSupervisorSet`
+    完全相同：UI 手上只有 participant_id（成員的 session_key 刻意不外流），
+    而「對方還沒進房」時只有 session_key 指得到人。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    target_participant_id: str = Field(default="", max_length=64)
+    target_session_key: str = Field(default="", max_length=128)
+    # 非管理員的請求會把它送到對方眼前。管理員直接指派時不用——那不是商量
+    note: str = Field(default="", max_length=500)
+
+
+class BoardTaskRequestResolve(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accept: bool
+
+
 class BoardSupervisorSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -5300,6 +5321,263 @@ def create_app(config: Config | None = None) -> FastAPI:
         await events.notify(room_id)
         return {"ok": True, "board_seq": seq, "count": len(body.items)}
 
+    # ── N-4：孤兒卡指派協定 ──────────────────────────────────────────
+    # 管理員直接指派；其他人只能**請求**，要對方點頭（艾斯維爾 2026-09-03）。
+    # 載體是獨立表 `board_task_request`（定案 C，不復用 assignment）。
+
+    async def _can_assign_directly(row, me, host: bool) -> bool:
+        """這個人能不能跳過對方的同意直接指派。
+
+        三種人可以：**Hub 主持人**、**這塊板的 owner**、**卡所在房的建立者**。
+        其餘（包括房裡的一般成員與 editor）只能請求。
+
+        ⚠️ 板 owner 也算是刻意的：板可以掛在別人開的房裡，只認房建立者的話，
+        **板的主人在自己的板上反而只能請求**——而他正是那個分派工作的人。
+        """
+        if host:
+            return True
+        actor = actor_key(me["session_key"] or "")
+        if not actor:
+            return False
+        db = app.state.db
+        bid = _row_board_id(row)
+        if bid:
+            owned = await (await db.execute(
+                "SELECT 1 FROM board WHERE id=? AND owner_actor_key=? LIMIT 1",
+                (bid, actor))).fetchone()
+            if owned:
+                return True
+        room = await (await db.execute(
+            "SELECT creator_session_key FROM room WHERE id=?",
+            (row["room_id"],))).fetchone()
+        return room is not None and \
+            actor_key(room["creator_session_key"] or "") == actor
+
+    async def _assign_target(row, body: "BoardTaskAssign"):
+        """把 body 指的對象解析成 (participant_id, session_key, name)。
+
+        ⚠️ **對象必須是這塊板構得到的人**——板的掛接房裡的 active 成員。少了
+        這道檢查，任何人都能把卡指派給一個與這塊板毫無關係的 session，而那張
+        卡從此掛著一個沒有人認得的名字。
+        """
+        db = app.state.db
+        pid = (body.target_participant_id or "").strip()
+        key = (body.target_session_key or "").strip()
+        if not pid and not key:
+            raise _err(422, "assign_target_required",
+                       "要指定對象：target_participant_id 或 target_session_key")
+        if pid:
+            p = await (await db.execute(
+                "SELECT id, session_key, display_name FROM participant"
+                " WHERE id=?", (pid,))).fetchone()
+            if p is None:
+                raise _err(404, "assign_target_not_found",
+                           "找不到這個成員")
+            return p["id"], p["session_key"], p["display_name"]
+        # 只給 session_key：在這塊板的掛接房裡找他現在的身分。找不到也放行
+        # ——「還沒進房的人」正是指派最常見的對象（與 supervisor 同一個理由），
+        # 那時 participant_id 是 None，等他進來再由 UI 對上名字
+        bid = _row_board_id(row)
+        if bid:
+            p = await (await db.execute(
+                "SELECT p.id, p.session_key, p.display_name FROM participant p"
+                " JOIN board_room br ON br.room_id = p.room_id"
+                "      AND br.detached_at IS NULL"
+                " WHERE br.board_id=? AND p.session_key=? AND p.status='active'"
+                " ORDER BY p.last_seen_at DESC LIMIT 1",
+                (bid, key))).fetchone()
+        else:
+            p = await (await db.execute(
+                "SELECT id, session_key, display_name FROM participant"
+                " WHERE room_id=? AND session_key=? AND status='active'"
+                " ORDER BY last_seen_at DESC LIMIT 1",
+                (row["room_id"], key))).fetchone()
+        if p is None:
+            return None, key, ""
+        return p["id"], p["session_key"], p["display_name"]
+
+    def _task_request_public(r) -> dict:
+        return {
+            "id": r["id"], "task_id": r["task_id"],
+            "board_id": r["board_id"], "room_id": r["room_id"],
+            "requester_actor_key": r["requester_actor_key"],
+            "requester_name": r["requester_name"],
+            "target_participant_id": r["target_participant_id"],
+            "target_name": r["target_name"],
+            "note": r["note"], "status": r["status"],
+            "created_at": r["created_at"], "resolved_at": r["resolved_at"],
+        }
+
+    async def _apply_assignment(row, target_pid, target_key, target_name,
+                                me) -> int:
+        """把指派寫到卡上。回傳這次領到的 board_seq。
+
+        🔴 **只動 assignee_*，不碰 claim_***。指派是建議不是鎖：把認領一起
+        寫下去的話，一個沒醒著的 agent 會讓那張卡永遠掛在他名下，board 停在
+        那裡（`assignee_participant_id` 的欄位註解第一天就這樣寫）。
+        """
+        db = app.state.db
+        seq = await _item_seq(row)
+        await db.execute(
+            "UPDATE board_task SET assignee_participant_id=?,"
+            " assignee_actor_key=?, assigned_by=?, assigned_by_name=?,"
+            " assigned_by_actor_key=?, board_seq=? WHERE id=?",
+            (target_pid, actor_key(target_key or ""), me["id"],
+             me["display_name"], actor_key(me["session_key"] or ""),
+             seq, row["id"]))
+        bid = _row_board_id(row)
+        if bid:
+            await _record_board_event(
+                bid, seq, "task_assigned",
+                actor=actor_key(me["session_key"] or ""),
+                actor_name=me["display_name"], origin_room_id=row["room_id"],
+                item_kind="task", item_id=row["id"],
+                target_actor_key=actor_key(target_key or ""),
+                payload={"target_name": target_name})
+        return seq
+
+    @app.post("/api/board/tasks/{task_id}/assign",
+              dependencies=[Depends(require_auth)])
+    async def assign_task(
+        task_id: str, body: BoardTaskAssign,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """指派一張卡，或請求指派（N-4）。
+
+        **同一支端點兩種結果**，看你是誰：管理員直接寫上去（`assigned: true`），
+        其他人生出一筆待對方回應的請求（`assigned: false` + `request`）。
+
+        分成兩支端點也做得到，但那樣呼叫端得先自己判斷「我算不算管理員」才
+        知道要打哪一支——而那個判準在 server，複製到 client 就是第二份會漂移
+        的真相。**讓 server 回答「這次發生了什麼」比讓 client 預測它可靠。**
+        """
+        row = await _board_item_or_404("task", task_id)
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
+        if row["status"] in ("done", "cancelled"):
+            # 驗收條件 ②：收尾的卡再指派給誰都沒有意義，而畫面上會出現一張
+            # 「已完成、指派給某某」的卡——看的人得先讀完狀態才知道那是空的
+            raise _err(409, "task_already_settled",
+                       f"這張卡已經是「{row['status']}」，不能再指派",
+                       task_status=row["status"])
+        target_pid, target_key, target_name = await _assign_target(row, body)
+        db = app.state.db
+        if await _can_assign_directly(row, me, host):
+            seq = await _apply_assignment(row, target_pid, target_key,
+                                          target_name, me)
+            await _commit_with_retry(db)
+            await events.notify(row["room_id"])
+            return {"ok": True, "assigned": True, "task_id": task_id,
+                    "board_seq": seq, "request": None}
+
+        # 非管理員：留一筆請求，等對方回答
+        mine = actor_key(me["session_key"] or "")
+        # 同一張卡對同一個人只留一筆待回應的。三個人各自請求同一個對象是合理
+        # 的（他們不知道彼此），但同一個人連按三次不該生出三筆——對方的收件匣
+        # 會出現三則一模一樣的東西，而拒絕一則之後另外兩則還在
+        existing = await (await db.execute(
+            "SELECT * FROM board_task_request WHERE task_id=?"
+            " AND target_session_key=? AND status='pending' LIMIT 1",
+            (task_id, target_key or ""))).fetchone()
+        if existing is not None:
+            return {"ok": True, "assigned": False, "task_id": task_id,
+                    "request": _task_request_public(existing),
+                    "already_pending": True}
+        rid = uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_task_request (id, task_id, board_id, room_id,"
+            " requester_actor_key, requester_name, target_participant_id,"
+            " target_session_key, target_name, note, status, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)",
+            (rid, task_id, _row_board_id(row) or "", row["room_id"], mine,
+             me["display_name"], target_pid, target_key or "", target_name,
+             body.note.strip(), _now()))
+        await _commit_with_retry(db)
+        created = await (await db.execute(
+            "SELECT * FROM board_task_request WHERE id=?", (rid,))).fetchone()
+        # 對方要被叫醒——請求躺在那裡沒有人看，與沒有請求是同一回事
+        if target_pid:
+            await _post_message(
+                row["room_id"], None,
+                f"{me['display_name']} 想請你接手「{row['title']}」"
+                + (f"：{body.note.strip()}" if body.note.strip() else ""),
+                kind="system", system_event="board_task_requested",
+                mentions=[target_name] if target_name else None,
+                reply_mentions_author=False)
+            await events.notify(row["room_id"])
+        return {"ok": True, "assigned": False, "task_id": task_id,
+                "request": _task_request_public(created)}
+
+    @app.post("/api/board/task-requests/{request_id}/resolve",
+              dependencies=[Depends(require_auth)])
+    async def resolve_task_request(
+        request_id: str, body: BoardTaskRequestResolve,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """被指名的人回答（N-4）。
+
+        🔴 **只有被指名的那個人能答。** 少了這道門，「需要對方同意」等於沒有
+        ——提議者自己按一下就成立了。
+
+        拒絕**留紀錄不刪除**：提議者需要分得出「他看過了說不要」與「他還沒
+        看到」，那是兩種完全不同的後續處置（既有的 `archive_request` 同樣
+        這樣做）。
+        """
+        db = app.state.db
+        req = await (await db.execute(
+            "SELECT * FROM board_task_request WHERE id=?",
+            (request_id,))).fetchone()
+        if req is None:
+            raise _err(404, "task_request_not_found", "找不到這筆指派請求")
+        row = await _board_item_or_404("task", req["task_id"])
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
+        mine = actor_key(me["session_key"] or "")
+        if actor_key(req["target_session_key"] or "") != mine:
+            raise _err(403, "not_the_request_target",
+                       "只有被指名的人可以回答這筆請求——別人替你答應的話，"
+                       "「需要對方同意」這件事等於不存在")
+        if req["status"] != "pending":
+            # 答過就不能再答：同一筆請求有兩種結局的話，畫面上要顯示哪一個
+            raise _err(409, "task_request_resolved",
+                       f"這筆請求已經是「{req['status']}」，不能再回答一次",
+                       request_status=req["status"])
+        now = _now()
+        await db.execute(
+            "UPDATE board_task_request SET status=?, resolved_at=?"
+            " WHERE id=?",
+            ("accepted" if body.accept else "declined", now, request_id))
+        seq = None
+        if body.accept:
+            seq = await _apply_assignment(
+                row, me["id"], me["session_key"], me["display_name"], me)
+        await _commit_with_retry(db)
+        await events.notify(row["room_id"])
+        return {"ok": True, "accepted": bool(body.accept),
+                "task_id": req["task_id"], "board_seq": seq}
+
+    async def _my_task_requests(scope_sql: str, scope_params: list,
+                                actor: str, session_key: str) -> list[dict]:
+        """與我有關的待回應請求：**我發出的，或指名我的**。
+
+        ⚠️ 不回全部。房裡每個人都看得到別人之間的商量的話，那不是板的資訊，
+        是別人的私訊——而板上的東西是給所有人看的。
+
+        已回答的也回（`accepted`／`declined`）：提議者要分得出「他拒絕了」與
+        「他還沒看到」，只回 pending 的話那兩種在畫面上一模一樣。
+        """
+        if not (actor or session_key):
+            return []
+        cur = await app.state.db.execute(
+            "SELECT r.* FROM board_task_request r"
+            " JOIN board_task t ON t.id = r.task_id"
+            f" WHERE {scope_sql} AND (r.requester_actor_key=?"
+            "   OR r.target_session_key=?)"
+            " ORDER BY r.created_at",
+            (*scope_params, actor, session_key))
+        return [_task_request_public(r) for r in await cur.fetchall()]
+
     @app.post("/api/board/tasks/{task_id}/claim",
               dependencies=[Depends(require_auth)])
     async def claim_task(
@@ -5495,6 +5773,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 新的 participant_id，拿它比對永遠比不中（見設計文件 §2.4）。
         # 主持人視角沒有房內身分，那時沒有「我的孤兒」可言。
         reclaimable: list[dict] = []
+        me_key = ""
         if x_participant_id:
             me = await (
                 await db.execute(
@@ -5502,6 +5781,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (x_participant_id, room_id),
                 )
             ).fetchone()
+            me_key = (me["session_key"] if me else "") or ""
             if me and me["session_key"]:
                 # 範圍同樣是板（裁定 #301 核准）：不對齊的話會出現「板上
                 # 看得到那張孤兒卡、可接手清單裡卻沒有」——同一份判準在兩處
@@ -5548,6 +5828,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 更隱蔽，@開發Novia (UI) 2026-09-04 刻意不那樣止血）
             "attached_rooms": (await _attached_rooms(attached["id"])
                                if attached is not None else []),
+            # N-4 的指派請求隨板一起回，**不另開清單端點**——@開發Novia (UI)
+            # 2026-09-04 定的契約是「server 出 0 支合併端點，UI 拿兩份自己
+            # 併」，而請求本來就是板上的東西，它跟著板走最自然。
+            #
+            # ⚠️ 只回**與我有關**的（我發出的、或指名我的）。全部都回的話，
+            # 房裡每個人都看得到別人之間的商量，而那不是板要傳達的資訊
+            "task_requests": await _my_task_requests(
+                scope_sql.replace("board_id", "t.board_id")
+                         .replace("room_id", "t.room_id"),
+                scope_params,
+                actor_key(me_key) if me_key else "", me_key),
         }
 
     # ── Board v2：以 board_id 為軸的端點 ──────────────────────────────
@@ -6152,6 +6443,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             "members": members,
             "attached_rooms": attached,
             "supervisor": sup,
+            # 與房軸同一份（見那邊的註解）。**兩軸都要有**：同一份資訊只在
+            # 一條路上出現的話，從 Board Library 進來的人看不到自己被請求接手
+            # 什麼，而他從哪一條路進板純粹是導覽的偶然
+            "task_requests": await _my_task_requests(
+                "t.board_id=?", [board_id], actor,
+                # `actor_key()` 現階段只做去空白 ⇒ 兩者同值。這裡不另外取
+                # 一次 session_key：多一個來源就多一個會漂移的地方
+                actor),
         }
 
     async def _board_writer_v2(board_id: str, session_key: str | None,

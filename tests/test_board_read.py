@@ -175,6 +175,8 @@ async def test_response_shape_is_pinned(tmp_path):
             # 從聊天室進板的徽章靠它畫「掛了哪幾間房」，與板軸同一份
             # （艾斯維爾想法板觀察 ①）
             "attached_rooms",
+            # N-4：與我有關的指派請求隨板一起回，不另開清單端點
+            "task_requests",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",
