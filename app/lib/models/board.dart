@@ -695,9 +695,6 @@ class BoardSnapshot {
     final tsks = delta.full
         ? <String, BoardTask>{}
         : Map<String, BoardTask>.from(tasks);
-    final rooms = delta.full
-        ? <String, AttachedRoom>{}
-        : Map<String, AttachedRoom>.from(attachedRooms);
     final dirs = delta.full
         ? <int, BoardDirective>{}
         : Map<int, BoardDirective>.from(directives);
@@ -735,9 +732,7 @@ class BoardSnapshot {
     //
     // Hub 也是刻意回這些房的（`_attached_rooms()`：「已解除的房也回」）。
     // 兩邊都想留住它，中間這一行把它丟了。
-    for (final r in delta.attachedRooms) {
-      rooms[r.id] = r;
-    }
+
     for (final d in delta.directives) {
       dirs[d.boardSeq] = d;
     }
@@ -760,7 +755,16 @@ class BoardSnapshot {
       checklists: lists,
       tasks: tsks,
       reclaimable: delta.reclaimable,
-      attachedRooms: rooms,
+      // ⚠️ **整份替換，不是累加**（`delta.attachedRooms` 是全量重算的：
+      // Hub 每次都重新查 `board_room`，`detached: true` 是那一列**當前的
+      // 狀態**，不是「這列被刪了」的訊號 — @開發Novia (Hub) 2026-09-04）。
+      //
+      // 累加的話，一列若真的從表上消失就會永遠留在 client 手上，而它無從
+      // 得知。同 `members` 的處理：**空的時候保留舊那份**，因為舊 Hub 不送
+      // 這個欄位，跟著清空會讓徽章在第二次拉取後突然說「未掛接聊天室」。
+      attachedRooms: delta.attachedRooms.isEmpty
+          ? attachedRooms
+          : {for (final r in delta.attachedRooms) r.id: r},
       directives: dirs,
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉

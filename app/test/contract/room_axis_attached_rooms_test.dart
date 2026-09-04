@@ -95,4 +95,34 @@ void main() {
       isEmpty,
     );
   });
+
+  test('🔴 attached_rooms 是全量重算，不是累加——不在新那份裡的要消失', () {
+    // Hub 每次都重查 `board_room`（@開發Novia (Hub) 2026-09-04）：
+    // `detached: true` 是那一列**當前的狀態**，不是 tombstone。
+    // tombstone 是另一套機制（`deleted: true`，只在增量、只在三層卡上）。
+    //
+    // ⚠️ 累加的話，一列真的從表上消失就會**永遠留在 client 手上**，
+    // 而它無從得知——那是靜默失效，畫面上是一間根本不存在的房。
+    final base = _snap();
+    expect(base.attachedRooms.keys, hasLength(3));
+
+    final after = base.merge(BoardDelta.fromJson({
+      'board_seq': 400,
+      'full': false,
+      'board_id': 'bd1',
+      'attached_rooms': [
+        {'id': 'r1', 'name': '09/03 需求落地', 'status': 'active'},
+      ],
+    }));
+    expect(after.attachedRooms.keys, ['r1']);
+  });
+
+  test('增量沒送這個欄位時保留手上那份——舊 Hub 的回應不可以清空徽章', () {
+    final after = _snap().merge(BoardDelta.fromJson({
+      'board_seq': 400,
+      'full': false,
+      'board_id': 'bd1',
+    }));
+    expect(after.liveRooms.map((r) => r.id), ['r1', 'r3']);
+  });
 }

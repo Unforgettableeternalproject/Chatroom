@@ -30,8 +30,12 @@ void main() {
       );
       expect(attached.liveRooms.map((r) => r.id), unorderedEquals(['a', 'b']));
 
-      // 解除 b。**擋住「永遠留在清單上」的是 `liveRooms`**（它過濾
-      // detached），不是把資料丟掉。
+      // 解除 b。**Hub 每次都全量重算這份**（`_attached_rooms()` 無條件
+      // 查整張 `board_room`），所以這裡送的是**兩間都在**的新版本，
+      // 不是「只送變動的那間」——後者是不會發生的輸入。
+      //
+      // **擋住「永遠留在清單上」的是 `liveRooms`**（它過濾 detached），
+      // 不是把資料丟掉。
       //
       // 🔴 這裡本來還斷言 `attachedRooms` 不含 b——那多做了一層一樣的防護，
       // 代價是連歷史一起殺掉：`_showAttachedRooms` 整段「已解除」的標示
@@ -43,7 +47,7 @@ void main() {
       final after = attached.merge(
         _delta({
           'board_seq': 2,
-          'attached_rooms': [_room('b', detached: true)],
+          'attached_rooms': [_room('a'), _room('b', detached: true)],
         }),
       );
       expect(after.liveRooms.map((r) => r.id), ['a']);
