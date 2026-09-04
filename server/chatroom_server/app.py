@@ -3266,6 +3266,51 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         return (row["board_seq"] or 0) if row else 0
 
+    async def _attached_rooms(board_id: str) -> list[dict]:
+        """這塊板掛過哪些房。**房軸與板軸共用這一份**——複製第二份出來的話，
+        漂移的那一半沒有人在看（房軸的徽章與板軸的清單會各說各話）。
+
+        **已解除的房也回**（帶 `detached: true`）。只回 active 的話，client
+        手上那份會殘留一間早就解除的房，而它無從得知——那是靜默失效。
+        supervisor 一起撈出來：**它是 per-room 的**（艾斯維爾 2026-09-03：
+        「每個聊天室綁的 supervisor 可以不同，這是每個 room 範疇的」）。
+        只回頂層那個 board-scoped 的話，指派寫進去了、膠囊卻不會亮——
+        設定成功而畫面看不出來，又是一次沒有人會報錯的失敗。
+        """
+        cur = await app.state.db.execute(
+            "SELECT br.room_id, br.room_name, br.detached_at, r.status,"
+            " r.visibility AS room_visibility,"
+            " r.board_supervisor_session_key, r.board_supervisor_name,"
+            " r.board_supervisor_kind, r.board_supervisor_left_at"
+            " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
+            " WHERE br.board_id=? ORDER BY br.attached_at", (board_id,))
+        out = []
+        for r in await cur.fetchall():
+            sup_key = r["board_supervisor_session_key"] or ""
+            out.append({
+                "id": r["room_id"],
+                # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
+                "name": r["room_name"],
+                "status": r["status"] or "deleted",
+                # 房是公開還是私人。少了它，板的 owner **看不出自己的板掛在
+                # 哪種可見度的房上**——側門擋住的是「之後才改」，已經掛著的
+                # 存量仍然要看得見（@測試Novia 2026-09-03）
+                "visibility": r["room_visibility"] or "",
+                "detached": r["detached_at"] is not None,
+                # `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼，
+                # 兩個名字指同一個東西時，總有一邊的比對會寫錯
+                "supervisor": {
+                    "actor_key": sup_key,
+                    "display_name": r["board_supervisor_name"] or sup_key,
+                    "actor_kind": r["board_supervisor_kind"] or "",
+                    # 退場是**標記不是清空**，所以這裡也要說得出「本來是誰
+                    # 在看，但他已經走了」——少了它，畫面只能二選一地畫成
+                    # 「有人在看」或「沒有人」，而真相是第三種
+                    "departed": bool(r["board_supervisor_left_at"]),
+                } if sup_key else None,
+            })
+        return out
+
     def _board_row(row) -> dict:
         """board 列 → 對外回應。
 
@@ -5453,6 +5498,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             "tasks": tasks,
             "reclaimable_tasks": reclaimable,
             "supervisor": room["board_supervisor_session_key"] or None,
+            # 從聊天室進板的畫面靠這個畫「掛了哪幾間房」的徽章。少了它，
+            # 那個徽章只能顯示預設值「未掛接聊天室」——而板明明就掛在你正
+            # 看著的這間房上（艾斯維爾想法板觀察 ①）。與板軸**同一份**：
+            # UI 不做半套推斷（掛 3 間時「至少顯示 1 間」比「說沒掛」錯得
+            # 更隱蔽，@開發Novia (UI) 2026-09-04 刻意不那樣止血）
+            "attached_rooms": (await _attached_rooms(attached["id"])
+                               if attached is not None else []),
         }
 
     # ── Board v2：以 board_id 為軸的端點 ──────────────────────────────
@@ -5908,44 +5960,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND deleted=0 ORDER BY board_seq", (board_id, actor))
         reclaimable = [dict(r) for r in await cur.fetchall()]
 
-        # **已解除的房也回**（帶 detached: true）。只回 active 的話，client
-        # 手上那份會殘留一間早就解除的房，而它無從得知——那是靜默失效
-        # supervisor 一起撈出來：**它是 per-room 的**（艾斯維爾 2026-09-03：
-        # 「每個聊天室綁的 supervisor 可以不同，這是每個 room 範疇的」）。
-        # 只回頂層那個 board-scoped 的話，指派寫進去了、膠囊卻不會亮——
-        # 設定成功而畫面看不出來，又是一次沒有人會報錯的失敗
-        cur = await db.execute(
-            "SELECT br.room_id, br.room_name, br.detached_at, r.status,"
-            " r.visibility AS room_visibility,"
-            " r.board_supervisor_session_key, r.board_supervisor_name,"
-            " r.board_supervisor_kind, r.board_supervisor_left_at"
-            " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
-            " WHERE br.board_id=? ORDER BY br.attached_at", (board_id,))
-        attached = []
-        for r in await cur.fetchall():
-            sup_key = r["board_supervisor_session_key"] or ""
-            attached.append({
-                "id": r["room_id"],
-                # 房還在就用現名，刪掉了才退回快照——快照存在的理由就是這一刻
-                "name": r["room_name"],
-                "status": r["status"] or "deleted",
-                # 房是公開還是私人。少了它，板的 owner **看不出自己的板掛在
-                # 哪種可見度的房上**——側門擋住的是「之後才改」，已經掛著的
-                # 存量仍然要看得見（@測試Novia 2026-09-03）
-                "visibility": r["room_visibility"] or "",
-                "detached": r["detached_at"] is not None,
-                # `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼，
-                # 兩個名字指同一個東西時，總有一邊的比對會寫錯
-                "supervisor": {
-                    "actor_key": sup_key,
-                    "display_name": r["board_supervisor_name"] or sup_key,
-                    "actor_kind": r["board_supervisor_kind"] or "",
-                    # 退場是**標記不是清空**，所以這裡也要說得出「本來是誰
-                    # 在看，但他已經走了」——少了它，畫面只能二選一地畫成
-                    # 「有人在看」或「沒有人」，而真相是第三種
-                    "departed": bool(r["board_supervisor_left_at"]),
-                } if sup_key else None,
-            })
+        attached = await _attached_rooms(board_id)
 
         cur = await db.execute(
             "SELECT actor_key, role, display_name, actor_kind, aliases"

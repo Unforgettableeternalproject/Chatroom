@@ -172,6 +172,9 @@ async def test_response_shape_is_pinned(tmp_path):
             "board_id",
             "board_seq", "full", "objectives", "checklists", "tasks",
             "reclaimable_tasks", "supervisor",
+            # 從聊天室進板的徽章靠它畫「掛了哪幾間房」，與板軸同一份
+            # （艾斯維爾想法板觀察 ①）
+            "attached_rooms",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",

@@ -201,3 +201,40 @@ async def test_v1_cards_survive_when_a_foreign_board_is_attached(tmp_path):
             titles = sorted(t["title"] for t in (await client.get(
                 f"/api/rooms/{rv}/board", headers=hdr_v)).json()["tasks"])
             assert "v1 存量卡" in titles, "掛進外部板之後，房裡的存量卡不見了"
+
+
+async def test_room_axis_reports_the_attached_rooms(tmp_path):
+    """房軸也要回 `attached_rooms`，與板軸**同一份**。
+
+    少了它，從聊天室進板的畫面畫不出「這塊板掛了哪幾間房」的徽章，只能顯示
+    預設值「未掛接聊天室」——而那塊板明明就掛在你正看著的這間房上
+    （艾斯維爾想法板觀察 ①）。
+
+    ⚠️ 兩邊必須逐欄相同：判準複製一份出來的話，漂移的那一半沒有人在看。
+    """
+    app, client = await _client(tmp_path, "axis_attached")
+    async with client:
+        async with app.router.lifespan_context(app):
+            ra, rb, hdr_a, hdr_b, bid = await _two_rooms_one_board(client)
+
+            room_axis = (await client.get(f"/api/rooms/{ra}/board",
+                                          headers=hdr_a)).json()
+            board_axis = (await client.get(f"/api/boards/{bid}",
+                                           headers=hdr_a)).json()
+            assert room_axis["attached_rooms"] == board_axis["attached_rooms"]
+            assert sorted(x["id"] for x in room_axis["attached_rooms"]) \
+                == sorted([ra, rb])
+
+
+async def test_a_room_with_no_board_reports_no_attached_rooms(tmp_path):
+    """沒掛板的房回空清單——那與「掛了但一間也沒有」是同一種畫面，但
+    `board_id` 是 null 已經把兩者分開了，這裡不必再發明第三種值。"""
+    app, client = await _client(tmp_path, "axis_attached_none")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client, "空房", "claude-a")
+            hdr = await _join(client, rid, "claude-a", "A")
+            body = (await client.get(f"/api/rooms/{rid}/board",
+                                     headers=hdr)).json()
+            assert body["board_id"] is None
+            assert body["attached_rooms"] == []
