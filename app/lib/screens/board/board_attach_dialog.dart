@@ -201,7 +201,7 @@ class _ExistingList extends ConsumerWidget {
       data: (boards) {
         // 只有 owner／editor 掛得上去。列出 viewer 的板再讓他撞 403，
         // 等於把一個必然失敗的選項擺在那裡
-        final usable = boards.where((b) => b.canEdit).toList();
+        final usable = boards.boards.where((b) => b.canEdit).toList();
         if (usable.isEmpty) {
           return Center(
             child: Text(

@@ -343,7 +343,7 @@ void main() {
       await boards.attachRoom(bid, roomId, sessionKey: sessionKey);
 
       final list = await boards.list(sessionKey: sessionKey);
-      final card = list.where((b) => b.id == bid);
+      final card = list.boards.where((b) => b.id == bid);
       expect(card, hasLength(1));
       // 這一欄是 Hub 算好的**現值**。讀不到就會退回用房數推，
       // 而那是在猜 Hub 的規則

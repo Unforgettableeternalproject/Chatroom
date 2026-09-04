@@ -1269,6 +1269,34 @@ class BoardSummary {
   }
 }
 
+/// Board Library 那份清單，連同兩個**只有 Hub 說得準**的旗標。
+///
+/// 形狀刻意與 `RoomListResult` 對齊——同一個開關管兩個分頁，兩邊的判斷
+/// 依據長得不一樣的話，總有一邊會先漂移。
+@immutable
+class BoardListResult {
+  const BoardListResult({
+    this.boards = const [],
+    this.youAreHost = false,
+    this.hostView = false,
+  });
+
+  final List<BoardSummary> boards;
+
+  /// 手上這把 token 是不是 Hub 的主 token。決定**開關要不要出現**——
+  /// 與開關現在是開是關無關（那是 [hostView]）。合成一個的話，開關會在
+  /// 被打開之後才出現，而使用者永遠找不到它。
+  final bool youAreHost;
+
+  /// 這份清單**是不是真的用主持人視角撈的**。
+  ///
+  /// 🔴 這是**唯一能確認開關生效**的訊號。Hub 的 `host_view` 要兩個條件
+  /// （明示 `X-Host-View` 標頭＋主 token），任一沒滿足就靜靜降級成一般
+  /// 視角——而少掉的板本來就看不到，**畫面完全一樣**。沒有這個欄位的話，
+  /// 「開關壞了」與「別人沒有私人板」在畫面上是同一件事。
+  final bool hostView;
+}
+
 /// 這塊板現在為什麼不能改（或可以改）。
 ///
 /// - [editable]：正常

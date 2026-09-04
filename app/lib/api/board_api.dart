@@ -378,7 +378,7 @@ class BoardsApi {
   /// `/api/rooms` 收的是 query（`?session_key=`），照那邊複製過來會拿 400
   /// `session_key_required`，而那句話讀起來像身分壞了，其實只是放錯位置。
   /// Board Library 沒有 room participant，Hub 直接從這把 key 解析 actor_key。
-  Future<List<BoardSummary>> list({
+  Future<BoardListResult> list({
     required String sessionKey,
     String status = 'active',
   }) =>
@@ -389,9 +389,13 @@ class BoardsApi {
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         final items = (res.data?['boards'] as List?) ?? const [];
-        return items
-            .map((e) => BoardSummary.fromJson(e as Map<String, dynamic>))
-            .toList();
+        return BoardListResult(
+          boards: items
+              .map((e) => BoardSummary.fromJson(e as Map<String, dynamic>))
+              .toList(),
+          youAreHost: (res.data?['you_are_host'] as bool?) ?? false,
+          hostView: (res.data?['host_view'] as bool?) ?? false,
+        );
       });
 
   /// 以 board_id 讀 delta。v2 的權威路徑。

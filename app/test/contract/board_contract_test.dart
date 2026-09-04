@@ -108,7 +108,7 @@ void main() {
     test('GET /api/boards 的每一格都對得上 BoardSummary', () async {
       await freshBoard('library');
       final list = await boards.list(sessionKey: sessionKey);
-      final mine = list.where((b) => b.name.startsWith('契約測試')).toList();
+      final mine = list.boards.where((b) => b.name.startsWith('契約測試')).toList();
       expect(mine, isNotEmpty, reason: '剛建的板要出現在自己的 Library 裡');
       final b = mine.first;
       // 這幾個欄位空掉時畫面不會壞，只會少一塊——所以要在這裡擋

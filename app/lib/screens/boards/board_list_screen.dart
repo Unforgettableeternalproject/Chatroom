@@ -10,6 +10,7 @@ import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
+import '../../widgets/host_mode_toggle.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 
@@ -66,6 +67,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final boardsAsync = ref.watch(boardLibraryProvider(_status));
+    final hostOn = ref.watch(hostViewProvider);
 
     return Container(
       color: s.bgSoft,
@@ -104,6 +106,26 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               status: _status,
               onChanged: (v) => setState(() => _status = v),
             ),
+            // 主持人模式。**這個開關本來只在 ROOMS 分頁**，但
+            // `hostViewProvider` 是全域的、`X-Host-View` 由 api_client
+            // 依它自動帶——所以在那邊打開，這邊也生效。
+            //
+            // 🔴 少了它的後果不是「沒有功能」，是**多出來的板沒有解釋**：
+            // 主持人在 ROOMS 打開開關、切過來，清單突然多出一堆別人的板，
+            // 而這個畫面上沒有任何東西說得出為什麼（2026-09-04）。
+            //
+            // 只有持主 token 的人看得到這一列——對其他人來說，一個永遠
+            // 按不動的開關比沒有這個開關更難懂。
+            if (boardsAsync.value?.youAreHost ?? false) ...[
+              const SizedBox(height: 8),
+              HostModeToggle(
+                on: hostOn,
+                onLabel: '主持人模式：看得到所有人的板',
+                // 開著、但這份清單不是主持人視角撈的 ⇒ server 沒照做。
+                // 不講的話它與「別人沒有私人板」在畫面上完全一樣
+                warn: hostOn && !(boardsAsync.value?.hostView ?? false),
+              ),
+            ],
           ]),
         ),
         Expanded(
@@ -125,7 +147,8 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               error: (e, _) => boardLibraryUnavailable(e)
                   ? const _LibraryNotReady()
                   : ErrorState(error: e, onRetry: _refresh),
-              data: (boards) {
+              data: (lib) {
+                final boards = lib.boards;
                 if (boards.isEmpty) {
                   return ListView(children: [
                     const SizedBox(height: 120),

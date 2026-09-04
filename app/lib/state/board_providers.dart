@@ -450,7 +450,7 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// 「這個功能還沒開」而不是一片空白——空清單與端點不存在看起來一模一樣，
 /// 而那正是最難查的一種畫面。見 `boardLibraryUnavailable`。
 final boardLibraryProvider =
-    FutureProvider.autoDispose.family<List<BoardSummary>, String>(
+    FutureProvider.autoDispose.family<BoardListResult, String>(
   (ref, status) => ref.watch(boardsApiProvider).list(
         status: status,
         sessionKey: ref.watch(appConfigProvider).deviceKey,
