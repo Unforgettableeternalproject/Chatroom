@@ -147,3 +147,57 @@ async def test_reclaimable_spans_the_whole_board(tmp_path):
             body = (await client.get(f"/api/rooms/{rb}/board",
                                      headers=hdr_b)).json()
             assert body["reclaimable_tasks"] == []
+
+
+async def test_v1_cards_survive_when_a_foreign_board_is_attached(tmp_path):
+    """房裡有 v1 存量卡（`board_id` 空）、之後掛進**別的**板——舊卡不能消失。
+
+    `_ensure_board_for_room`（換軸）會把該房的卡回填 `board_id`，但
+    `attach_board` 不會：它掛的是另一塊板，那些卡本來就不屬於它。於是房軸
+    改用 `board_id` 過濾之後，這批卡**兩邊都看不到**——板軸沒有它們（不是
+    那塊板的），房軸也撈不到（board_id 空）。舊行為至少房軸還看得到。
+
+    這裡只保證**不比改之前差**：卡留在房軸看得見。它們該不該併進那塊板是
+    語意問題，不由讀取路徑順手決定。
+    """
+    app, client = await _client(tmp_path, "axis_v1_orphan")
+    async with client:
+        async with app.router.lifespan_context(app):
+            # 甲房：v1 存量卡（直接塞 DB，模擬換軸前寫下的卡）
+            rv = await _room(client, "存量房", "claude-v")
+            hdr_v = await _join(client, rv, "claude-v", "V")
+            db = app.state.db
+            t0 = "2026-01-01T00:00:00+00:00"
+            # 整棵樹都是 v1 的：board_id 一律空（真實存量卡就長這樣）
+            await db.execute(
+                "INSERT INTO board_objective (id, room_id, board_id, title,"
+                " status, created_at, board_seq)"
+                " VALUES ('legacy-o', ?, '', '舊週期', 'active', ?, 1)", (rv, t0))
+            await db.execute(
+                "INSERT INTO board_checklist (id, room_id, board_id,"
+                " objective_id, title, status, created_at, board_seq)"
+                " VALUES ('legacy-c', ?, '', 'legacy-o', '舊清單', 'open', ?, 2)",
+                (rv, t0))
+            await db.execute(
+                "INSERT INTO board_task (id, room_id, board_id, checklist_id,"
+                " title, status, created_at, board_seq)"
+                " VALUES ('legacy-1', ?, '', 'legacy-c', 'v1 存量卡', 'todo',"
+                " ?, 3)", (rv, t0))
+            await db.commit()
+            assert [t["title"] for t in (await client.get(
+                f"/api/rooms/{rv}/board", headers=hdr_v)).json()["tasks"]] \
+                == ["v1 存量卡"]
+
+            # 乙房長出一塊板，把它掛到甲房上
+            ro = await _room(client, "別房", "claude-v")
+            hdr_o = await _join(client, ro, "claude-v", "V")
+            await _card(client, ro, hdr_o, "別房的卡")
+            bid = (await client.get(f"/api/rooms/{ro}/board",
+                                    headers=hdr_o)).json()["board_id"]
+            r = await client.post(f"/api/boards/{bid}/rooms/{rv}",
+                                  headers=hdr_v)
+            assert r.status_code == 200, r.text
+
+            titles = sorted(t["title"] for t in (await client.get(
+                f"/api/rooms/{rv}/board", headers=hdr_v)).json()["tasks"])
+            assert "v1 存量卡" in titles, "掛進外部板之後，房裡的存量卡不見了"

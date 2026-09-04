@@ -5380,16 +5380,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # 沒掛板的房（`attached_board is None`）維持房軸過濾：那種房的卡還沒
         # 換軸，`board_id` 是空字串，改用它會一張也撈不到。
-        scope_col, scope_val = (
-            ("board_id", attached_board["id"]) if attached_board is not None
-            else ("room_id", room_id))
+        # ⚠️ **還要撈本房那些 `board_id` 空的 v1 存量卡。** 換軸
+        # （`_ensure_board_for_room`）會回填該房的卡，但 `attach_board`
+        # 不會——它掛的是**別的**板，那些卡本來就不屬於它。少了這半的話，
+        # 「房裡有 v1 存量卡、之後掛進外部板」的組合會讓那批卡**兩邊都
+        # 看不到**：板軸沒有它們，房軸也撈不到。改成板範圍之前房軸至少
+        # 還看得見，那是實打實的退步。
+        #
+        # 這裡只保證**不比改之前差**。它們該不該併進那塊板是語意問題，
+        # 不由讀取路徑順手決定（同一個判斷讓 attach 也沒有去回填）。
+        scope_sql, scope_params = (
+            ("(board_id=? OR ((board_id='' OR board_id IS NULL) AND room_id=?))",
+             [attached_board["id"], room_id]) if attached_board is not None
+            else ("room_id=?", [room_id]))
 
         async def _rows(table: str) -> list:
             cur = await db.execute(
-                f"SELECT * FROM {table} WHERE {scope_col}=? AND board_seq>?"
+                f"SELECT * FROM {table} WHERE {scope_sql} AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
                 + " ORDER BY board_seq",
-                (scope_val, after_board_seq),
+                (*scope_params, after_board_seq),
             )
             return [_board_row(r) for r in await cur.fetchall()]
 
@@ -5411,10 +5421,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 限同一個 `claim_session_key`，別人的孤兒卡不會跑進來。
                 cur = await db.execute(
                     "SELECT id, title, orphaned_at, claim_name FROM board_task"
-                    f" WHERE {scope_col}=? AND claim_state='orphaned'"
+                    f" WHERE {scope_sql} AND claim_state='orphaned'"
                     " AND claim_session_key=? AND deleted=0"
                     " ORDER BY board_seq",
-                    (scope_val, me["session_key"]),
+                    (*scope_params, me["session_key"]),
                 )
                 reclaimable = [dict(r) for r in await cur.fetchall()]
 
