@@ -278,6 +278,37 @@ class BoardActions {
     _reload();
   }
 
+  /// 請這個人接手這張卡（N-4）。
+  ///
+  /// ⚠️ **回傳值要看**：同一支端點兩種結果——管理員直接指派，其他人生出
+  /// 一筆待回應的請求。畫面得說得出是哪一種，說錯的話提議者會以為事情
+  /// 已經定了。
+  Future<TaskAssignOutcome?> assignTask(
+    String taskId, {
+    required String targetParticipantId,
+    String note = '',
+  }) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    final out = await _api.assignTask(taskId,
+        participantId: pid,
+        sessionKey: _sk,
+        targetParticipantId: targetParticipantId,
+        note: note);
+    _reload();
+    return out;
+  }
+
+  /// 回答一筆請求。**只有被指名的人答得動**（Hub 擋，UI 不重算那個判準）。
+  Future<void> resolveTaskRequest(String requestId,
+      {required bool accept}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.resolveTaskRequest(requestId,
+        participantId: pid, sessionKey: _sk, accept: accept);
+    _reload();
+  }
+
   Future<void> completeTask(String taskId) async {
     final pid = await _pid();
     if (pid == null && _sk == null) return;

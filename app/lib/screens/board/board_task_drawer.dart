@@ -6,8 +6,10 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/board.dart';
+import '../../models/participant.dart';
 import '../../state/board_providers.dart';
 import '../../state/messages_providers.dart';
+import '../../state/rooms_providers.dart';
 import '../../widgets/kind_badge.dart';
 import 'board_action_feedback.dart';
 
@@ -64,6 +66,15 @@ class BoardTaskDrawer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    // 與這張卡有關的商量。Hub **只回與我有關的**（我提的、或指名我的）——
+    // 全部都回的話，房裡每個人都看得到別人之間的商量，那不是通知是廣播。
+    final snap = roomId != null
+        ? ref.watch(boardProvider(roomId!)).value
+        : ref.watch(boardByIdProvider(boardId)).value;
+    final requests = [
+      for (final r in snap?.taskRequests ?? const <TaskRequest>[])
+        if (r.taskId == task.id) r,
+    ];
     return Container(
       width: width,
       decoration: BoxDecoration(
@@ -93,7 +104,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                           size: 13, color: s.inkSoft, height: 1.95)),
                 ],
                 const SizedBox(height: 18),
-                _meta(context),
+                _meta(context, requests),
                 // 來源訊息只有房軸看得到——板軸沒有房，就沒有那條路。
                 // **拿不到不是錯誤**，收起來就好
                 if (task.sourceSeq != null && roomId != null) ...[
@@ -104,7 +115,12 @@ class BoardTaskDrawer extends ConsumerWidget {
             ),
           ),
           if (!readOnly)
-            _TaskActionBar(roomId: roomId, boardId: boardId, task: task),
+            _TaskActionBar(
+              requests: requests,
+              roomId: roomId,
+              boardId: boardId,
+              task: task,
+            ),
         ],
       ),
     );
@@ -183,7 +199,7 @@ class BoardTaskDrawer extends ConsumerWidget {
 
   /// 中繼資料。**空的列不畫**——「指定對象：（無）」比不寫更佔位置，
   /// 而這個抽屜的每一列都該是一件確實成立的事。
-  Widget _meta(BuildContext context) {
+  Widget _meta(BuildContext context, List<TaskRequest> requests) {
     final s = context.uep;
     final rows = <Widget>[];
 
@@ -211,6 +227,19 @@ class BoardTaskDrawer extends ConsumerWidget {
         trailing: task.assignedByName.isEmpty
             ? '建議'
             : '${task.assignedByName}指定 · 建議',
+      ));
+    }
+    for (final r in requests) {
+      rows.add(_MetaRow(
+        label: r.isPending ? '待回覆' : (r.isAccepted ? '已接受' : '已婉拒'),
+        value: r.targetName.isEmpty ? '某人' : r.targetName,
+        // 🔴 **拒絕留紀錄不刪除**（Hub 刻意）：提議者要分得出「他看過了
+        // 說不要」與「他還沒看到」——前者要換人，後者要再等。把拒絕的
+        // 那筆從畫面上拿掉，兩種處境會長得一模一樣
+        trailing: r.requesterName.isEmpty
+            ? ''
+            : '${r.requesterName}提出 · ${relativeTime(r.createdAt)}',
+        struck: r.isDeclined,
       ));
     }
     if (task.createdByName.isNotEmpty) {
@@ -345,10 +374,14 @@ class BoardTaskDrawer extends ConsumerWidget {
 /// 409，而當時連 409 都看不見。
 class _TaskActionBar extends ConsumerStatefulWidget {
   const _TaskActionBar({
+    this.requests = const [],
     required this.roomId,
     required this.boardId,
     required this.task,
   });
+
+  /// 與這張卡有關、**與我有關**的商量。
+  final List<TaskRequest> requests;
 
   final String? roomId;
   final String boardId;
@@ -370,6 +403,76 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     super.didUpdateWidget(old);
     // 狀態變了，上一次的 allowed 是對上一個狀態說的，留著會蓋錯
     if (old.task.status != widget.task.status) _allowed = null;
+  }
+
+  /// 回答一筆請求。**拒絕也要送出去**——不回答與說不要是兩件事，
+  /// 而提議者只能從這裡分辨。
+  Future<void> _respond(
+      BoardActions actions, TaskRequest r, bool accept) async {
+    await runBoardAction(context, () async {
+      await actions.resolveTaskRequest(r.id, accept: accept);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(accept ? '接下了，這張卡現在指向你' : '已回覆婉拒'),
+      ));
+    });
+  }
+
+  /// 挑一個房內的人，把這張卡請給他。
+  ///
+  /// 送出後**要說出實際發生了什麼**：管理員按下去是「已指派」，其他人是
+  /// 「已送出請求，等他回覆」。兩種都正常，但說錯的話提議者會以為事情
+  /// 已經定了。
+  Future<void> _assign(BoardActions actions) async {
+    final detail = ref.read(roomDetailProvider(widget.roomId!)).value;
+    final members = [
+      for (final p in detail?.participants ?? const <Participant>[])
+        // 已離開的人指了也沒用——他收不到，那張卡只會掛著
+        if (p.status == 'active') p,
+    ];
+    final picked = await showDialog<Participant>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('請誰接手這張卡',
+            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+        children: [
+          for (final m in members)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(m),
+              child: Row(children: [
+                KindBadge(kind: m.kind, compact: true),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(m.displayName,
+                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                ),
+              ]),
+            ),
+          if (members.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
+              child: Text('這間房裡沒有其他人。',
+                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await runBoardAction(context, () async {
+      final out = await actions.assignTask(widget.task.id,
+          targetParticipantId: picked.id);
+      if (out == null || !mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          out.assigned
+              ? '已指派給 ${picked.displayName}'
+              : out.alreadyPending
+                  // 重按不是失敗，但要講清楚沒有生出第二筆
+                  ? '已經在等 ${picked.displayName} 回覆了'
+                  : '已送出請求，等 ${picked.displayName} 回覆',
+        ),
+      ));
+    });
   }
 
   @override
@@ -402,6 +505,29 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     final leading = items.where((a) => !a.trailing).toList();
     final trailing = items.where((a) => a.trailing).toList();
 
+    // 「請人接手」。**只在房軸出現**——板軸沒有房，也就沒有「這裡有誰」
+    // 可問；板成員清單是另一個範圍的問題（同 supervisor 的處理）。
+    //
+    // ⚠️ 標籤一律是「請人接手」，**不看自己算不算管理員**。那個判準在
+    // server（Hub 主持人／板 owner／房建立者），複製到 client 就是第二份
+    // 會漂移的真相——按下去讓 server 回答發生了什麼，比先預測它可靠
+    // （@開發Novia (Hub) 2026-09-04）。
+    final canAssign = widget.roomId != null &&
+        !const ['done', 'cancelled'].contains(widget.task.status);
+
+    // 有沒有一筆**在等我回答**的。
+    //
+    // ⚠️ 判準是「指名我」，而 Hub 已經只回與我有關的了——所以這裡不必
+    // （也不該）自己比對身分：那需要一個 UI 手上沒有的 actor_key，
+    // 拼一個出來比對必然漂移。剩下要分的只是「我是被指名的那個」還是
+    // 「我是提出的那個」，靠 `target_participant_id` 對本房身分即可。
+    final myPid = widget.roomId == null
+        ? null
+        : ref.watch(identityProvider(widget.roomId!)).value?.participantId;
+    final pending = widget.requests
+        .where((r) => r.isPending && r.targetParticipantId == myPid)
+        .firstOrNull;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
       decoration: BoxDecoration(
@@ -411,6 +537,30 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
         for (final a in leading) ...[
           button(a),
           if (a != leading.last) const SizedBox(width: 8),
+        ],
+        // 🔴 **有人在等我回答的話，那件事排在所有動作前面。**
+        // 藏在資訊區裡只是「顯示」——被指名的人要有地方按，否則
+        // 「需要對方同意」在畫面上就不成立
+        if (pending != null) ...[
+          if (leading.isNotEmpty) const SizedBox(width: 8),
+          _DrawerAction(
+            label: '接下',
+            bordered: false,
+            onTap: () => _respond(actions, pending, true),
+          ),
+          const SizedBox(width: 8),
+          _DrawerAction(
+            label: '婉拒',
+            bordered: true,
+            onTap: () => _respond(actions, pending, false),
+          ),
+        ] else if (canAssign) ...[
+          if (leading.isNotEmpty) const SizedBox(width: 8),
+          _DrawerAction(
+            label: '請人接手',
+            bordered: true,
+            onTap: () => _assign(actions),
+          ),
         ],
         const Spacer(),
         for (final a in trailing) button(a),

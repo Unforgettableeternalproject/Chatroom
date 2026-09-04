@@ -327,6 +327,79 @@ class BoardApi {
           options: _auth(participantId, sessionKey),
         );
       });
+
+  /// 請這個人接手這張卡（N-4）。
+  ///
+  /// 🔴 **同一支端點兩種結果**：管理員（Hub 主持人／板 owner／卡所在房的
+  /// 建立者）直接寫上去，其他人生出一筆待對方回應的請求。
+  ///
+  /// ⚠️ **不要在呼叫前自己判斷「我算不算管理員」再挑端點。** 那個判準在
+  /// server，複製到 client 就是第二份會漂移的真相——而漂移的那一半沒有人
+  /// 在看。按下去，看 [TaskAssignOutcome.assigned] 說發生了什麼
+  /// （@開發Novia (Hub) 2026-09-04）。
+  Future<TaskAssignOutcome> assignTask(
+    String taskId, {
+    String? participantId,
+    String? sessionKey,
+    required String targetParticipantId,
+    String note = '',
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/board/tasks/$taskId/assign',
+          data: {
+            'target_participant_id': targetParticipantId,
+            'target_session_key': '',
+            'note': note,
+          },
+          options: _auth(participantId, sessionKey),
+        );
+        final d = res.data ?? const {};
+        final req = d['request'] as Map<String, dynamic>?;
+        return TaskAssignOutcome(
+          assigned: (d['assigned'] as bool?) ?? false,
+          alreadyPending: (d['already_pending'] as bool?) ?? false,
+          request: req == null ? null : TaskRequest.fromJson(req),
+        );
+      });
+
+  /// 回答一筆請求。**只有被指名的人答得動**——少了那道門，「需要對方
+  /// 同意」等於沒有。
+  Future<void> resolveTaskRequest(
+    String requestId, {
+    String? participantId,
+    String? sessionKey,
+    required bool accept,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/task-requests/$requestId/resolve',
+          data: {'accept': accept},
+          options: _auth(participantId, sessionKey),
+        );
+      });
+}
+
+/// 按下「請他接手」之後**實際發生了什麼**。
+///
+/// 兩種結果不是錯誤與成功，是兩條都正常的路：直接指派了，或送出了一筆
+/// 商量。畫面要說得出是哪一種——說錯的話，提議者會以為事情已經定了。
+class TaskAssignOutcome {
+  const TaskAssignOutcome({
+    this.assigned = false,
+    this.alreadyPending = false,
+    this.request,
+  });
+
+  /// 直接寫到卡上了（提出者是管理員）。
+  final bool assigned;
+
+  /// 這筆請求**早就存在**。不是失敗——同一張卡對同一個人重按，
+  /// Hub 回原本那筆而不是再生一筆。
+  final bool alreadyPending;
+
+  /// 生出來（或早就存在）的那筆請求。[assigned] 為真時是 null。
+  final TaskRequest? request;
 }
 
 class BoardClaimResult {

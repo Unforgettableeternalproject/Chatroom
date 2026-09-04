@@ -512,6 +512,7 @@ class BoardDelta {
     this.checklists = const [],
     this.tasks = const [],
     this.reclaimable = const [],
+    this.taskRequests = const [],
     this.attachedRooms = const [],
     this.directives = const [],
     this.directivesHasMore = false,
@@ -548,6 +549,10 @@ class BoardDelta {
   final List<BoardChecklist> checklists;
   final List<BoardTask> tasks;
   final List<ReclaimableTask> reclaimable;
+
+  /// **與我有關的**那些請求（我發出的、或指名我的）。Hub 刻意不回全部——
+  /// 房裡每個人都看得到別人之間的商量的話，那不是通知是廣播。
+  final List<TaskRequest> taskRequests;
 
   /// 掛在這塊 Board 上的房間。`detached: true` 的是 tombstone。
   final List<AttachedRoom> attachedRooms;
@@ -586,6 +591,9 @@ class BoardDelta {
         .toList(),
     tasks: ((json['tasks'] as List?) ?? const [])
         .map((e) => BoardTask.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    taskRequests: ((json['task_requests'] as List?) ?? const [])
+        .map((e) => TaskRequest.fromJson(e as Map<String, dynamic>))
         .toList(),
     reclaimable: ((json['reclaimable_tasks'] as List?) ?? const [])
         .map((e) => ReclaimableTask.fromJson(e as Map<String, dynamic>))
@@ -629,6 +637,7 @@ class BoardSnapshot {
     this.checklists = const {},
     this.tasks = const {},
     this.reclaimable = const [],
+    this.taskRequests = const [],
     this.attachedRooms = const {},
     this.directives = const {},
     this.directivesHasMore = false,
@@ -656,6 +665,10 @@ class BoardSnapshot {
   final Map<String, BoardChecklist> checklists;
   final Map<String, BoardTask> tasks;
   final List<ReclaimableTask> reclaimable;
+
+  /// 與我有關的請求。**每次全量重算**（同 `attachedRooms`：Hub 每次都重查
+  /// 「我發出的 ∪ 指名我的」），所以照樣整份替換而不是累加。
+  final List<TaskRequest> taskRequests;
   final Map<String, AttachedRoom> attachedRooms;
   /// board_seq → directive。**沒有 id 可用**，見 [BoardDirective.boardSeq]。
   final Map<int, BoardDirective> directives;
@@ -755,6 +768,10 @@ class BoardSnapshot {
       checklists: lists,
       tasks: tsks,
       reclaimable: delta.reclaimable,
+      // 同 attachedRooms：Hub 每次都重算這份，空的時候保留手上那份
+      // （舊 Hub 不送這個欄位，跟著清空會讓已經送出的請求從畫面上消失）
+      taskRequests:
+          delta.taskRequests.isEmpty ? taskRequests : delta.taskRequests,
       // ⚠️ **整份替換，不是累加**（`delta.attachedRooms` 是全量重算的：
       // Hub 每次都重新查 `board_room`，`detached: true` 是那一列**當前的
       // 狀態**，不是「這列被刪了」的訊號 — @開發Novia (Hub) 2026-09-04）。
@@ -1267,6 +1284,74 @@ class BoardSummary {
       ownerDisplayName: (json['owner_display_name'] as String?) ?? '',
     );
   }
+}
+
+/// 一筆「請你做這張卡」的商量（N-4，Hub `483b257`）。
+///
+/// **指派與請求是同一件事的兩種結果**：管理員（Hub 主持人／板 owner／卡所在
+/// 房的建立者）按下去就直接寫上去，其他人按下去生出這樣一筆，等對方回答。
+///
+/// ⚠️ **已回答的也留著。** 提議者要分得出「**他看過了說不要**」與「**他還沒
+/// 看到**」——那是兩種完全不同的處境（要不要換人 vs 要不要再等），而把
+/// 拒絕的那筆刪掉會讓它們在畫面上長得一模一樣。
+@immutable
+class TaskRequest {
+  const TaskRequest({
+    required this.id,
+    required this.taskId,
+    this.boardId = '',
+    this.roomId = '',
+    this.requesterActorKey = '',
+    this.requesterName = '',
+    this.targetParticipantId = '',
+    this.targetName = '',
+    this.note = '',
+    this.status = 'pending',
+    this.createdAt,
+    this.resolvedAt,
+  });
+
+  final String id;
+  final String taskId;
+  final String boardId;
+
+  /// 從哪個房提出來的。板可以掛好幾間房，而「誰在跟誰商量」是有出處的。
+  final String roomId;
+
+  final String requesterActorKey;
+  final String requesterName;
+
+  /// 被指名的人。**`participant_id` 不是 `actor_key`**——Hub 不外流成員的
+  /// session_key，UI 手上只有 participant。
+  final String targetParticipantId;
+  final String targetName;
+
+  final String note;
+
+  /// `pending` / `accepted` / `declined`。
+  final String status;
+
+  final String? createdAt;
+  final String? resolvedAt;
+
+  bool get isPending => status == 'pending';
+  bool get isDeclined => status == 'declined';
+  bool get isAccepted => status == 'accepted';
+
+  factory TaskRequest.fromJson(Map<String, dynamic> json) => TaskRequest(
+        id: (json['id'] as String?) ?? '',
+        taskId: (json['task_id'] as String?) ?? '',
+        boardId: (json['board_id'] as String?) ?? '',
+        roomId: (json['room_id'] as String?) ?? '',
+        requesterActorKey: (json['requester_actor_key'] as String?) ?? '',
+        requesterName: (json['requester_name'] as String?) ?? '',
+        targetParticipantId: (json['target_participant_id'] as String?) ?? '',
+        targetName: (json['target_name'] as String?) ?? '',
+        note: (json['note'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'pending',
+        createdAt: json['created_at'] as String?,
+        resolvedAt: json['resolved_at'] as String?,
+      );
 }
 
 /// Board Library 那份清單，連同兩個**只有 Hub 說得準**的旗標。
