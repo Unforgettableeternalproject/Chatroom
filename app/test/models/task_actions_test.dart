@@ -23,12 +23,19 @@ void main() {
   });
 
   group('那四顆非法按鈕', () {
-    test('todo 不給「標記完成」——中間還隔著 in_progress', () {
-      expect(_targets('todo').contains('done'), isFalse);
+    // ⚠️ `todo → done` 與 `todo → blocked` **在 2026-09-05 被 Hub 明確放行**
+    // （`3369c8c`）。原本這兩條釘的是「中間還隔著 in_progress」，而那個假設
+    // 本身是錯的：「認領時已經查完了」與「前提一開始就不成立」都是真實的
+    // 走法，強迫繞路會在板上留下一段從沒發生過的「曾經在動工」。
+    //
+    // 這兩條沒有刪掉而是**反過來釘**——這一格曾經是空的，日後若有人再把它
+    // 收窄，紅的應該是這裡。
+    test('todo 給得出「直接完成」', () {
+      expect(_targets('todo'), contains('done'));
     });
 
-    test('todo 不給「標記卡住」', () {
-      expect(_targets('todo').contains('blocked'), isFalse);
+    test('todo 給得出「標記卡住」', () {
+      expect(_targets('todo'), contains('blocked'));
     });
 
     test('blocked 不給「標記完成」——要先解除卡住', () {

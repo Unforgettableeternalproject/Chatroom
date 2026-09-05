@@ -180,7 +180,7 @@ class BoardChecklist {
 /// 卡住），Hub 是五態，而 `in_progress` 是通往 `done` 的唯一樞紐。中間那格
 /// 沒被畫出來的結果是使用者完全無法把一張卡做完。
 const kTaskTransitions = <String, Set<String>>{
-  'todo': {'in_progress', 'cancelled'},
+  'todo': {'in_progress', 'blocked', 'done', 'cancelled'},
   'in_progress': {'blocked', 'done', 'cancelled'},
   'blocked': {'in_progress', 'cancelled'},
   'done': {'in_progress'},
@@ -223,8 +223,14 @@ List<TaskAction> taskActionsFor(String status, {Set<String>? allowed}) {
 }
 
 const _kTaskActions = <String, List<TaskAction>>{
+  // 🔴 `todo` 直接到 `done`／`blocked` 是刻意放行的（Hub `3369c8c`）：
+  // 「認領時已經查完了」與「前提一開始就不成立」都是真實的走法，而先前
+  // 只能繞路推去 `in_progress` 再推，**板上因此留下一段它從沒發生過的
+  // 「曾經在動工」**。假的歷史比少一顆按鈕貴。
   'todo': [
     TaskAction('開始', 'in_progress'),
+    TaskAction('直接完成', 'done'),
+    TaskAction('標記卡住', 'blocked', danger: true),
     TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
   ],
   'in_progress': [
