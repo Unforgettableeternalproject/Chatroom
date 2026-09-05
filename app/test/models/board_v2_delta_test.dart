@@ -63,37 +63,15 @@ void main() {
     });
   });
 
-  group('Supervisor 雙格式', () {
-    test('v2 物件形式：actor_kind 讀得到', () {
-      final snap = const BoardSnapshot().merge(
-        _delta({
-          'supervisor': {
-            'actor_key': 'claude-abc',
-            'display_name': '諾薇亞',
-            'actor_kind': 'claude',
-          },
-        }),
-      );
-      expect(snap.supervisor!.actorKey, 'claude-abc');
-      expect(snap.supervisor!.displayName, '諾薇亞');
-      expect(snap.supervisor!.isHuman, isFalse);
-    });
-
-    // 遷移期間新舊 Hub 並存。只認物件形式的話，舊 Hub 那邊的 supervisor
-    // 會靜默消失——畫面顯示「沒有人在收摘要」，而實際上有。
-    test('v1 字串形式仍讀得到名字', () {
-      final snap = const BoardSnapshot().merge(
-        _delta({'supervisor': '艾斯維爾'}),
-      );
-      expect(snap.supervisor!.displayName, '艾斯維爾');
-      expect(snap.supervisor!.actorKind, 'other');
-    });
-
-    test('空字串等於沒有指定，不是一個沒名字的人', () {
-      final snap = const BoardSnapshot().merge(_delta({'supervisor': ''}));
-      expect(snap.supervisor, isNull);
-    });
-  });
+  // 【2026-09-05 移除】「Supervisor 雙格式」那一組（v2 物件／v1 字串／空字串）
+  // 連同它守的欄位一起退場：板回應頂層的 `supervisor` 兩側都已移除
+  // （server `3a5979b`、App 這次），Supervisor 一律 per-room，走
+  // `attached_rooms[].supervisor`。
+  //
+  // ⚠️ 那組測試不是被刪掉了事——它守的行為搬去了
+  // `test/models/board_supervisor_test.dart`（`supervisesAnyRoom` /
+  // `roomSupervisors`），而且守得比原本嚴：原本只驗解析得出來，新的那組驗
+  // 的是「解除掛接的房不算」「departed 仍然算」「沒掛房＝正確空白」。
 
   group('Directive 稽核串', () {
     test('增量疊加，由新到舊', () {

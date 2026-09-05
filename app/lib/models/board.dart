@@ -524,7 +524,6 @@ class BoardDelta {
     this.directivesHasMore = false,
     this.allowedTags = const [],
     this.customTags,
-    this.supervisor,
   });
 
   /// 這次的水位。下次帶著它當 `after_board_seq`。
@@ -591,8 +590,6 @@ class BoardDelta {
   /// 為 true 時畫面上要留得出「還有更早的」，不能假裝這就是全部。
   final bool directivesHasMore;
 
-  final BoardActorRef? supervisor;
-
   factory BoardDelta.fromJson(Map<String, dynamic> json) => BoardDelta(
     boardSeq: (json['board_seq'] as int?) ?? 0,
     full: (json['full'] as bool?) ?? false,
@@ -638,16 +635,6 @@ class BoardDelta {
     reclaimable: ((json['reclaimable_tasks'] as List?) ?? const [])
         .map((e) => ReclaimableTask.fromJson(e as Map<String, dynamic>))
         .toList(),
-    // v1 的 supervisor 是一個名字字串，v2 升成物件。兩種都吃——遷移期間
-    // 新舊 Hub 會同時存在，只認一種等於在其中一邊靜默掉一個角色。
-    supervisor: switch (json['supervisor']) {
-      final Map<String, dynamic> m => BoardActorRef.fromJson(m),
-      final String s when s.isNotEmpty => BoardActorRef(
-        actorKey: '',
-        displayName: s,
-      ),
-      _ => null,
-    },
   );
 }
 
@@ -683,7 +670,6 @@ class BoardSnapshot {
     this.directivesHasMore = false,
     this.allowedTags = const [],
     this.customTags,
-    this.supervisor,
   });
 
   /// 已經套用到哪個水位。**下次請求帶這個值**。
@@ -721,7 +707,6 @@ class BoardSnapshot {
   /// board_seq → directive。**沒有 id 可用**，見 [BoardDirective.boardSeq]。
   final Map<int, BoardDirective> directives;
   final bool directivesHasMore;
-  final BoardActorRef? supervisor;
 
   /// 還掛著的房間，解除的不算。給 Board 頁「切回來源對話」用。
   Iterable<AttachedRoom> get liveRooms =>
@@ -732,11 +717,19 @@ class BoardSnapshot {
 
   /// 我是不是**任何一間**掛接房的 supervisor。
   ///
-  /// 🔴 這是「發指令」那顆按鈕的依據。在此之前它問的是頂層 [supervisor]，
-  /// 而那個欄位讀的是 server 的 `board.supervisor_*`——**恆空**（2026-09-05
-  /// 查 8787 生產庫：board 層級 0 筆）。於是只有 owner 按得到，而 supervisor
-  /// 其實送得出去（server 的權限第二問走掛接房）。畫面上只是少一顆按鈕，
-  /// 沒有錯誤也沒有紅字。
+  /// 🔴 這是「發指令」那顆按鈕的依據。在此之前它問的是板回應頂層那個
+  /// `supervisor` 欄位（已於 2026-09-05 兩側一起退場）。
+  ///
+  /// 那個欄位在**板軸**（`GET /api/boards/{bid}`，也就是產生這個面板的那支）
+  /// 讀的是 `board.supervisor_*`——**恆空**（查 8787 生產庫：board 層級
+  /// 0 筆）。於是判斷恆為假，只有 owner 按得到，而 supervisor 其實送得出去
+  /// （server 的權限第二問走掛接房）。畫面上只是少一顆按鈕，沒有錯誤也沒有
+  /// 紅字。
+  ///
+  /// ⚠️ 房軸那支回的頂層 `supervisor` 則**有值**（v1 格式，房的 supervisor
+  /// 的 actor_key 字串）。兩軸共用同一份快照，所以「恆空」只在板軸脈絡下
+  /// 成立——而那正是把 per-room 的東西放進板層級欄位造成的混淆。現在一律
+  /// 問 `attached_rooms[].supervisor`，沒有這個歧義。
   ///
   /// ⚠️ **`departed` 仍然算**：那是 presence（他離開過那間房），不是卸任。
   /// 人回來了而旗標還沒清的那一刻若不給按，等於把權限判給了一個時間差。
@@ -875,7 +868,6 @@ class BoardSnapshot {
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉
       directivesHasMore: delta.full ? delta.directivesHasMore : directivesHasMore,
-      supervisor: delta.supervisor,
     );
   }
 

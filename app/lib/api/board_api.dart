@@ -626,33 +626,13 @@ class BoardsApi {
         );
       });
 
-  /// 指定或卸任 Supervisor（[actorKey] 為 null／空字串即卸任）。限 owner。
-  ///
-  /// **Supervisor 不必是板成員、也不必在任何掛接房裡**——那正是這個角色的
-  /// 意義：從外面看著，不必先被拉進某間對話。
-  /// ⚠️ [displayName] 與 [actorKind] **一定要送**。Hub 把它們當成快照直接存，
-  /// 不會反查——不送就存成空字串，而 Supervisor 可以不是板成員、也不在任何
-  /// 掛接房裡，那時**沒有任何地方查得回他的名字**。畫面上就只剩一個
-  /// actor_key，或一顆沒有名字的膠囊。
-  Future<void> setSupervisor(
-    String boardId, {
-    required String sessionKey,
-    String? actorKey,
-    String displayName = '',
-    String actorKind = '',
-  }) =>
-      unwrap(() async {
-        await _dio.post<Map<String, dynamic>>(
-          '/api/boards/$boardId/supervisor',
-          data: {
-            'target_actor_key': actorKey ?? '',
-            // 卸任時一併清空，免得留下上一任的名字
-            'display_name': (actorKey ?? '').isEmpty ? '' : displayName,
-            'actor_kind': (actorKey ?? '').isEmpty ? '' : actorKind,
-          },
-          options: Options(headers: {'X-Session-Key': sessionKey}),
-        );
-      });
+  // 【2026-09-05 移除】`setSupervisor`（board-scoped）連同
+  // `POST /api/boards/{bid}/supervisor` 一起退場（server `3a5979b`）：
+  // Supervisor 一律 per-room，指派走 `BoardApi.setSupervisor`（房軸那支）。
+  //
+  // ⚠️ 它 docstring 裡那條「display_name／actor_kind 一定要送，Hub 當快照
+  // 存不會反查」**在房軸那支仍然成立**——Supervisor 可以不是板成員、也不在
+  // 任何掛接房裡，不送就沒有任何地方查得回他的名字。
 
   /// 送一則判斷或建議。
   ///

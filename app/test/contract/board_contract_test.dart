@@ -138,45 +138,20 @@ void main() {
   });
 
   group('Supervisor 與 directive', () {
-    test('指派時 display_name / actor_kind 會被存下來', () async {
-      final id = await freshBoard('supervisor');
-      await boards.setSupervisor(
-        id,
-        sessionKey: sessionKey,
-        actorKey: sessionKey,
-        displayName: '契約測試員',
-        actorKind: 'claude',
-      );
-      final d = await boards.fetch(id, sessionKey: sessionKey);
-      expect(d.supervisor, isNotNull);
-      expect(d.supervisor!.actorKey, sessionKey);
-      // 🔴 這條是 2026-09-02 的實際缺陷：client 沒送這兩欄 → Hub 存空字串
-      // → Supervisor 顯示成一顆沒有名字的膠囊，而他可能不是板成員，
-      // 沒有任何地方查得回名字
-      expect(d.supervisor!.displayName, '契約測試員');
-      expect(d.supervisor!.actorKind, 'claude');
-    });
-
-    test('卸任把名字一起清掉，不留上一任', () async {
-      final id = await freshBoard('supervisor-clear');
-      await boards.setSupervisor(id,
-          sessionKey: sessionKey,
-          actorKey: sessionKey,
-          displayName: '前一任',
-          actorKind: 'claude');
-      await boards.setSupervisor(id, sessionKey: sessionKey, actorKey: null);
-      final d = await boards.fetch(id, sessionKey: sessionKey);
-      expect(d.supervisor, isNull);
-    });
+    // 【2026-09-05 移除】原本兩條驗的是 board-scoped supervisor 的指派與
+    // 卸任（`POST /api/boards/{bid}/supervisor`）。那支端點連同板層級
+    // supervisor 一起退場了（server `3a5979b`）——Supervisor 一律 per-room。
+    //
+    // ⚠️ 它們守的那個缺陷（不送 display_name/actor_kind ⇒ Hub 存空字串 ⇒
+    // 顯示成一顆沒有名字的膠囊）**沒有跟著消失**：房軸的指派端點仍然存在，
+    // 而那條路的等價守衛在 `test/contract/room_supervisor_test.dart`。
 
     test('送 directive 用 target_actor_key / text，且回得出 delivered',
         () async {
       final id = await freshBoard('directive');
-      await boards.setSupervisor(id,
-          sessionKey: sessionKey,
-          actorKey: sessionKey,
-          displayName: '契約測試員',
-          actorKind: 'claude');
+      // 建板的人就是 owner，**owner 本來就送得出 directive**（另一條是
+      // 掛接房的 supervisor）。原本這裡先把自己指派成板的 supervisor，
+      // 而那支端點已經退場了
       final delivered = await boards.sendDirective(
         id,
         sessionKey: sessionKey,
@@ -202,11 +177,9 @@ void main() {
 
     test('空 target ＝ 對整塊板說', () async {
       final id = await freshBoard('directive-broadcast');
-      await boards.setSupervisor(id,
-          sessionKey: sessionKey,
-          actorKey: sessionKey,
-          displayName: '契約測試員',
-          actorKind: 'claude');
+      // 建板的人就是 owner，**owner 本來就送得出 directive**（另一條是
+      // 掛接房的 supervisor）。原本這裡先把自己指派成板的 supervisor，
+      // 而那支端點已經退場了
       // 這條原本是反過來寫的（`min_length=1`，空 target 必然 422），
       // 用途是**盯著它什麼時候變**。Hub `5fbd7db` 實作了廣播，它就紅了，
       // 而那正是它存在的理由——翻面的同時 UI 也把那個選項加了回去

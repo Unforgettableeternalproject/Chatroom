@@ -140,13 +140,13 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           // **Supervisor 只有 per-room 這一種**（艾斯維爾 2026-09-03）。
           //
-          // 板層級的那一份（`snap.supervisor` ＋「指派／換人／卸任」）已經
-          // 從畫面上退場：在板軸上指派一個「這塊板的 supervisor」，等於
-          // 在 per-room 的契約上開一個後門——而那個後門看起來就跟正門
-          // 一樣，沒有任何地方會說它是不同的東西。
+          // 板層級的那一份（頂層 `supervisor` ＋「指派／換人／卸任」）已經
+          // 退場：在板軸上指派一個「這塊板的 supervisor」，等於在 per-room
+          // 的契約上開一個後門——而那個後門看起來就跟正門一樣，沒有任何
+          // 地方會說它是不同的東西。
           //
-          // ⚠️ server 端的欄位還在（遷移是另一張票），所以這裡是**畫面
-          // 先退場**。不顯示不會壞任何東西；顯示才會讓人以為那條路還通。
+          // 2026-09-05 收尾：畫面、server 端點（`3a5979b`）、App 的模型欄位
+          // 三層都拿掉了。板軸現在顯示的是**掛接房的唯讀彙整**。
           if (widget.roomId != null) ...[
             _RoomSupervisorSection(
               roomId: widget.roomId!,
