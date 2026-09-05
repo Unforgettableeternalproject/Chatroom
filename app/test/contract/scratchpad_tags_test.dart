@@ -75,6 +75,38 @@ void main() {
               '而兩份漂移時沒有一邊會報錯');
     });
 
+    test('🔴 `[]` 與「沒有這個欄位」必須分得出來（Hub 13af69c）', () {
+      // Hub 刻意在沒有自訂標籤時回 `[]` 而不是省略欄位：兩者要畫的東西不同
+      // ——「這塊板沒有自訂標籤」時預設那四個要鎖起來，「舊 Hub 不會回」時
+      // 什麼都鎖不了。用 `as List? ?? const []` 解析會把兩者壓成同一個值
+      final saidNone = BoardDelta.fromJson(const {
+        'board_seq': 1,
+        'allowed_tags': ['bug', 'feature', 'design', 'question'],
+        'custom_tags': <String>[],
+      });
+      expect(saidNone.customTags, isEmpty);
+      expect(saidNone.customTags, isNotNull, reason: 'Hub 說了：一個都沒有');
+
+      final didNotSay = BoardDelta.fromJson(const {'board_seq': 1});
+      expect(didNotSay.customTags, isNull, reason: '舊 Hub 沒說，不是說了沒有');
+    });
+
+    test('🔴 哪些刪得掉＝allowed − custom，不是 UI 自己那份翻譯表', () {
+      final d = BoardDelta.fromJson(const {
+        'board_seq': 1,
+        'allowed_tags': ['bug', 'feature', 'design', 'question', '權限'],
+        'custom_tags': ['權限'],
+      });
+      expect(removableTags(allowed: d.allowedTags, custom: d.customTags),
+          ['權限']);
+      // 舊 Hub（沒說）時**全部都當可刪**，由 Hub 用 422 擋——鎖錯比多一次
+      // 拒絕貴：把某塊板真的自訂的標籤鎖起來，那個標籤就永遠刪不掉了
+      expect(
+        removableTags(allowed: const ['bug', '權限'], custom: null),
+        ['bug', '權限'],
+      );
+    });
+
     test('🔴 增量沒帶這一欄時保留手上那份，不是清空', () {
       // 跟著清空的話，選單會在第二次拉取之後整個消失——而畫面上那看起來
       // 像「這塊板沒有標籤功能」，不像掉了一份資料

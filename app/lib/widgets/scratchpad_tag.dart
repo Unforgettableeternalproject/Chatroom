@@ -34,6 +34,24 @@ Color tagColor(String tag) => switch (tag) {
       _ => const Color(0xFF7A8290),
     };
 
+/// 哪些標籤刪得掉：**`allowed` 減掉預設集合**，而預設集合是
+/// `allowed - custom` 推出來的，不是 UI 這邊列的。
+///
+/// [custom] 為 `null` 表示 Hub 沒說（舊版不回 `custom_tags`）。那時**全部
+/// 都當可刪**，由 Hub 用 422 `tag_is_default` 擋——鎖錯比多一次拒絕貴：
+/// 猜錯而把某塊板真的自訂的標籤鎖起來，那個標籤就永遠刪不掉了。
+List<String> removableTags({
+  required List<String> allowed,
+  required List<String>? custom,
+}) {
+  if (custom == null) return allowed;
+  final c = custom.toSet();
+  return [
+    for (final t in allowed)
+      if (c.contains(t)) t,
+  ];
+}
+
 /// 刪不掉一個標籤時要對人說的那句話。
 ///
 /// **抽成頂層函式是為了測得到**（同 `padRoute()`）：這幾句是這個對話框裡

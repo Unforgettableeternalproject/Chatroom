@@ -6,7 +6,7 @@ import '../../api/board_api.dart' show BoardsApi;
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
-import '../../models/board.dart' show reorderedIdsAt;
+import '../../models/board.dart' show BoardTagsResult, reorderedIdsAt;
 import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
@@ -70,6 +70,7 @@ class ScratchpadScreen extends ConsumerWidget {
         boardId: boardId,
         allowedTags:
             ref.watch(boardCacheProvider)[boardId]?.allowedTags ?? const [],
+        customTags: ref.watch(boardCacheProvider)[boardId]?.customTags,
       ),
     );
   }
@@ -80,6 +81,7 @@ class _PadBody extends ConsumerStatefulWidget {
     required this.pad,
     required this.boardId,
     this.allowedTags = const [],
+    this.customTags,
   });
 
   final Scratchpad pad;
@@ -87,6 +89,9 @@ class _PadBody extends ConsumerStatefulWidget {
 
   /// 標籤選單的內容，來自板（`allowed_tags`）。空的時候整套標籤 UI 不出現。
   final List<String> allowedTags;
+
+  /// 這塊板自訂的那些（`custom_tags`）。`null` = 舊 Hub 沒說。
+  final List<String>? customTags;
 
   @override
   ConsumerState<_PadBody> createState() => _PadBodyState();
@@ -96,6 +101,12 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   /// 正在編輯哪一段。一次一段——同時開兩段的話，兩份 rev 都會過期，
   /// 而使用者不會知道是哪一段先壞的。
   String? _editing;
+
+  /// 對話框裡刚改過的標籤。板重拉回來之前先用這份。
+  BoardTagsResult? _tags;
+
+  List<String> get _allowedTags => _tags?.allowed ?? widget.allowedTags;
+  List<String>? get _customTags => _tags?.custom ?? widget.customTags;
 
   /// 只看某一個標籤的段落。`null` = 全部。
   ///
@@ -160,7 +171,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           MonoLabel('${pad.blocks.length} 段', size: 9, letterSpacing: 1.2),
           // 管理這塊板的自訂標籤。**只在標籤功能真的在時出現**——
           // 舊 Hub 沒有 `allowed_tags`，那時這顆按鈕按下去是一個空對話框
-          if (pad.canEdit && widget.allowedTags.isNotEmpty) ...[
+          if (pad.canEdit && _allowedTags.isNotEmpty) ...[
             const SizedBox(width: 8),
             _Tiny(label: '標籤', onTap: _manageTags),
           ],
@@ -171,13 +182,13 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           'agent 讀得到，也能對每一段留意見——但改不動你寫的東西。',
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
         ),
-        if (widget.allowedTags.isNotEmpty) ...[
+        if (_allowedTags.isNotEmpty) ...[
           const SizedBox(height: 12),
           _TagFilterBar(
-            allowed: widget.allowedTags,
+            allowed: _allowedTags,
             selected: _filter,
             counts: {
-              for (final t in widget.allowedTags)
+              for (final t in _allowedTags)
                 t: [
                   for (final b in pad.blocks)
                     if (b.tag == t) b,
@@ -235,7 +246,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         child: pad.canEdit
             ? _AddBlock(
                 onAdd: _add,
-                allowedTags: widget.allowedTags,
+                allowedTags: _allowedTags,
                 initialTag: _filter,
               )
             : Text('你在這塊板上是唯讀的，只能看。',
@@ -270,7 +281,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 ? (id, undo) => _resolveNote(id, undo)
                 : null,
         onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
-        allowedTags: widget.allowedTags,
+        allowedTags: _allowedTags,
         onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
       );
 
@@ -279,16 +290,21 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   /// 開完之後**一定要 invalidate 板的快取**：選單內容是從那份快照讀的，
   /// 不重拉的話新增的標籤要等下一次板變動才會出現在段落的選單裡。
   Future<void> _manageTags() async {
-    await showDialog<void>(
+    final result = await showDialog<BoardTagsResult>(
       context: context,
       builder: (_) => _TagManagerDialog(
         boardId: widget.boardId,
-        allowed: widget.allowedTags,
+        allowed: _allowedTags,
+        custom: _customTags,
         sessionKey: _sessionKey,
         api: ref.read(boardsApiProvider),
       ),
     );
     if (!mounted) return;
+    // 對話框裡動過的話，**段落那邊的選單要馬上跟上**。只靠重拉板
+    // 的話，新增的標籤要等下一次板變動才會出現——而使用者剛剛才建立它，
+    // 看不到它會以為沒建成功
+    if (result != null) setState(() => _tags = result);
     ref.invalidate(boardByIdProvider(widget.boardId));
     _reload();
   }
@@ -507,24 +523,27 @@ class _PadBodyState extends ConsumerState<_PadBody> {
 /// 一個段落。作者、內容、註解。
 /// 管理板自訂標籤。
 ///
-/// ⚠️ **這裡分不出哪些是預設標籤、哪些是這塊板自己加的**——Hub 的
-/// `allowed_tags` 是兩者的聯集，而 `custom_tags` 沒有隨板回來。所以刪除
-/// 對每一顆都開放，預設集合由 Hub 用 422 `tag_is_default` 擋下。
+/// 刪得掉的只有這塊板自己加的那些（`allowed - 預設`），而預設是誰由
+/// **Hub 的 `custom_tags`** 決定，不是 UI 自己列一份（`13af69c` 補上）。
+/// 判斷走 [removableTags]，它也處理「舊 Hub 沒說」那種情況。
 ///
-/// 這不是理想的形狀（專案的規矩是「畫一個永遠按不動的按鈕比不畫更難懂」，
-/// 這裡等於反過來：畫一顆註定失敗的按鈕）。正解是 Hub 隨板回 `custom_tags`，
-/// 已在房內提出；補上之後這裡把預設那些鎖起來就好，是一行的事。
-/// **在那之前，錯誤訊息要說得夠清楚**，不能只丟一句「操作失敗」。
+/// ⚠️ 錯誤訊息仍要說得清楚：鎖住預設那些之後，`tag_in_use` 就是刪除唯一
+/// 會失敗的原因，而它一定要講出還有幾則在用。
 class _TagManagerDialog extends StatefulWidget {
   const _TagManagerDialog({
     required this.boardId,
     required this.allowed,
+    required this.custom,
     required this.sessionKey,
     required this.api,
   });
 
   final String boardId;
   final List<String> allowed;
+
+  /// 這塊板自訂的那些。`null` = 舊 Hub 沒說，那時全部都當可刪。
+  final List<String>? custom;
+
   final String sessionKey;
   final BoardsApi api;
 
@@ -534,9 +553,14 @@ class _TagManagerDialog extends StatefulWidget {
 
 class _TagManagerDialogState extends State<_TagManagerDialog> {
   late List<String> _allowed = [...widget.allowed];
+  late List<String>? _custom = widget.custom;
   final _input = TextEditingController();
   bool _busy = false;
   String? _error;
+
+  /// 這一顆刪不刪得掉。舊 Hub 沒說時一律當可刪（見 [removableTags]）。
+  bool _removable(String tag) =>
+      removableTags(allowed: _allowed, custom: _custom).contains(tag);
 
   @override
   void dispose() {
@@ -557,6 +581,7 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
       if (!mounted) return;
       setState(() {
         _allowed = r.allowed;
+        _custom = r.custom;
         _input.clear();
       });
     } on ApiException catch (e) {
@@ -576,7 +601,10 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
       final r = await widget.api
           .removeTag(widget.boardId, tag, sessionKey: widget.sessionKey);
       if (!mounted) return;
-      setState(() => _allowed = r.allowed);
+      setState(() {
+        _allowed = r.allowed;
+        _custom = r.custom;
+      });
     } on ApiException catch (e) {
       if (!mounted) return;
       // 🔴 **`tag_in_use` 要指得出是哪幾則。** 擋下來而已是把問題換個地方
@@ -621,15 +649,20 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
                   Text(tagLabel(t),
                       style: UepText.mono(
                           size: 9, letterSpacing: 1.0, color: tagColor(t))),
-                  IconButton(
-                    tooltip: '刪掉',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 26, minHeight: 26),
-                    onPressed: _busy ? null : () => _remove(t),
-                    icon: Icon(Icons.close, size: 12, color: s.inkMute),
-                  ),
+                  // 預設標籤不畫刪除鈕——畫一顆按下去必定拿 422 的按鈕，
+                  // 比沒有那顆按鈕更難懂（同主持人開關那條）
+                  if (_removable(t))
+                    IconButton(
+                      tooltip: '刪掉',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 26, minHeight: 26),
+                      onPressed: _busy ? null : () => _remove(t),
+                      icon: Icon(Icons.close, size: 12, color: s.inkMute),
+                    )
+                  else
+                    const SizedBox(width: 8),
                 ]),
               ),
           ]),
@@ -664,7 +697,9 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
           label: '關起來',
           variant: UepButtonVariant.outline,
           small: true,
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => Navigator.of(context)
+              .pop(BoardTagsResult(custom: _custom ?? const [],
+                  allowed: _allowed)),
         ),
       ],
     );

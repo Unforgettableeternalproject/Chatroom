@@ -523,6 +523,7 @@ class BoardDelta {
     this.directives = const [],
     this.directivesHasMore = false,
     this.allowedTags = const [],
+    this.customTags,
     this.supervisor,
   });
 
@@ -552,6 +553,18 @@ class BoardDelta {
   /// 不回這一欄時它是空的，那時正確的畫面是「沒有標籤這個功能」，不是
   /// 「有四個寫死的選項」。
   final List<String> allowedTags;
+
+  /// 這塊板**自己加的**那些標籤（不含預設集合）。刪得掉的就是這些。
+  ///
+  /// 🔴 **`null` 與 `[]` 是兩件事，不可以壓成同一個值**（Hub `13af69c` 特地
+  /// 在沒有自訂標籤時回 `[]` 而不是省略欄位）：
+  ///
+  ///   - `[]` — Hub 說了：這塊板一個自訂標籤都沒有 ⇒ 預設那四個要鎖起來
+  ///   - `null` — 舊 Hub 根本不回這一欄 ⇒ 什麼都鎖不了，交給 422 擋
+  ///
+  /// 用 `as List? ?? const []` 解析會把兩者變成同一個空清單，而它們要畫的
+  /// 東西不同。判斷哪些刪得掉一律走 [removableTags]。
+  final List<String>? customTags;
 
   /// 板上的人。
   ///
@@ -602,6 +615,14 @@ class BoardDelta {
       for (final t in (json['allowed_tags'] as List?) ?? const [])
         if (t is String && t.isNotEmpty) t,
     ],
+    // ⚠️ 用 containsKey 而不是 `as List? ?? []`——見 [BoardDelta.customTags]，
+    // 「說了沒有」與「沒說」要分得出來
+    customTags: json.containsKey('custom_tags')
+        ? [
+            for (final t in (json['custom_tags'] as List?) ?? const [])
+              if (t is String && t.isNotEmpty) t,
+          ]
+        : null,
     objectives: ((json['objectives'] as List?) ?? const [])
         .map((e) => BoardObjective.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -661,6 +682,7 @@ class BoardSnapshot {
     this.directives = const {},
     this.directivesHasMore = false,
     this.allowedTags = const [],
+    this.customTags,
     this.supervisor,
   });
 
@@ -672,6 +694,9 @@ class BoardSnapshot {
 
   /// 想法板標籤的選單內容（預設 ∪ 這塊板自訂的）。見 [BoardDelta.allowedTags]。
   final List<String> allowedTags;
+
+  /// 這塊板自己加的那些。`null` = 舊 Hub 沒說。見 [BoardDelta.customTags]。
+  final List<String>? customTags;
 
   final String name;
 
@@ -809,6 +834,10 @@ class BoardSnapshot {
       // 選單會在第二次拉取後整個消失，而畫面上那看起來像「這塊板沒有標籤」
       allowedTags:
           delta.allowedTags.isEmpty ? allowedTags : delta.allowedTags,
+      // ⚠️ 這一個看 **null**，不是看空——`[]` 是「這塊板沒有自訂標籤」這個
+      // 事實，照 allowedTags 那條「空的就保留舊值」處理的話，刪掉最後一個
+      // 自訂標籤之後畫面會一直以為它還在
+      customTags: delta.customTags ?? customTags,
       directives: dirs,
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉
