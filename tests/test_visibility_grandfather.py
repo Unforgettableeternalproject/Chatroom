@@ -37,6 +37,17 @@ async def _room_ids(client, session_key):
     return [x["id"] for x in r.json()["rooms"]]
 
 
+async def _join_hdr(client, rid, who, name, role="agent"):
+    """加入房間並回傳可直接當標頭用的身分。"""
+    kind = "human" if role == "human" else "claude"
+    r = await client.post(f"/api/rooms/{rid}/join", json={
+        "kind": kind, "role": role, "session_key": who,
+        "preferred_name": name})
+    assert r.status_code == 200, r.text
+    return {"X-Participant-Id": r.json()["participant_id"],
+            "X-Session-Key": who}
+
+
 async def _lock(client, rid, visibility="private"):
     r = await client.post(f"/api/rooms/{rid}/visibility",
                           json={"visibility": visibility},
@@ -112,4 +123,35 @@ async def test_kick_is_the_one_thing_that_removes_access(tmp_path):
 
         assert rid not in await _room_ids(client, "sess-kicked"), (
             "被踢之後仍看得到私人房——白名單沒有出口"
+        )
+
+
+async def test_room_member_keeps_board_access_after_the_room_is_locked(tmp_path):
+    """經房取得的板存取權，不因為房改可見度而改變。
+
+    `_board_role` 的房內退路查的是「未解除掛接的 active 房 × active 成員」
+    ——**完全沒有看 `room.visibility`**，所以鎖房不影響它。這條把那個事實
+    釘住：哪天有人在退路裡加上可見度條件（看起來很像在收緊安全性），
+    受害的是房裡本來就在用那塊板的人，而他們只會看到 403。
+    """
+    app, client = await _make(tmp_path, "gf_board")
+    async with client, app.router.lifespan_context(app):
+        rid = (await client.post("/api/rooms", json={
+            "name": "房", "session_key": "admin", "visibility": "public"
+        })).json()["id"]
+        owner = await _join_hdr(client, rid, "admin", "Xavier", role="human")
+        member = await _join_hdr(client, rid, "sess-member", "同房的人")
+
+        bid = (await client.post("/api/boards", json={
+            "name": "板", "visibility": "public", "origin_room_id": rid,
+        }, headers=owner)).json()["id"]
+
+        before = await client.get(f"/api/boards/{bid}", headers=member)
+        assert before.status_code == 200, "同房的人本來就讀得到這塊板"
+
+        await _lock(client, rid)
+
+        after = await client.get(f"/api/boards/{bid}", headers=member)
+        assert after.status_code == 200, (
+            "鎖房之後同房的人讀不到板了——經房取得的存取權被可見度影響了"
         )
