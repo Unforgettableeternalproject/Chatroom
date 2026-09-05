@@ -6471,7 +6471,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         counts = await (await db.execute(
             "SELECT COUNT(*) AS total,"
             " SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
-            " SUM(CASE WHEN claim_state='held' THEN 1 ELSE 0 END) AS claimed"
+            # 🟠 **`claimed` 是「還在做幾張」，不是「歷史上被領過幾張」。**
+            # 認領與狀態是兩個正交的軸（§3.3），而卡做完之後認領**不會**
+            # 自動解除——`claim_state` 停在 `held` 是正常的，它記的是「這張
+            # 是誰做的」。少了 status 條件，這個數字跟著歷史累積、只增不減：
+            # 實測一塊活躍的板回 65，真正未收尾的只有 3
+            # （審核用Codex 2026-09-05）。而 App 把它直接標成「N 進行中」
+            " SUM(CASE WHEN claim_state='held'"
+            "          AND status NOT IN ('done','cancelled')"
+            "     THEN 1 ELSE 0 END) AS claimed"
             " FROM board_task WHERE board_id=? AND deleted=0",
             (b["id"],))).fetchone()
         rooms = await (await db.execute(
@@ -8005,10 +8013,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                 payload={"block_id": block_id, "your_rev": body.rev,
                          "current_rev": fresh["rev"]})
             await _commit()
+            # 🔴 **`tags` 一定要跟著回。** 標籤與內容是同一次寫入的兩半
+            # （上面那句 `SET content=?, tags=?`），衝突回應少給哪一半，
+            # retry 就只能用手上那份舊的——而 App 的「保留我的」正是拿
+            # 新版 rev ＋ **舊 tags** 重送 ⇒ 對方剛設好的標籤被清掉，
+            # 200 回來，**兩邊都沒有錯誤訊息**
+            # （審核用Codex 2026-09-05 以現行 API 重現，資料損失級）。
             raise _err(409, "scratchpad_block_stale",
                        "這一段在你讀取之後被改過了",
                        block_id=block_id, rev=fresh["rev"],
-                       content=fresh["content"], your_rev=body.rev,
+                       content=fresh["content"], tags=_tags_public(fresh),
+                       your_rev=body.rev,
                        updated_at=fresh["updated_at"])
         await db.execute(
             "INSERT INTO board_scratchpad_revision (id, block_id,"

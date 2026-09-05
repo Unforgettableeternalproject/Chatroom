@@ -187,3 +187,56 @@ async def test_the_library_row_says_what_the_outcome_was(tmp_path):
         assert rows[done]["outcome"] == "completed"
         assert rows[dropped]["outcome"] == "abandoned"
         assert rows[live]["outcome"] == ""
+
+
+async def test_claimed_count_means_still_being_worked_on(tmp_path):
+    """清單的 `claimed` 是「**還在做**幾張」，不是「歷史上有幾張被領過」。
+
+    🟠 審核用Codex 2026-09-05 以現行板實測：API 回 `claimed=65`，而真正未收尾
+    且 held 的只有 **3** 張——其餘 61 張 done-held ＋ 1 張 cancelled-held 全被
+    算進去了。App 又把這個數字直接標成「N 進行中」。
+
+    根因：**認領與狀態是兩個正交的軸**（`BOARD_DESIGN` §3.3 明寫），而卡
+    做完之後認領不會自動解除——`claim_state` 停在 `held` 是正常的，它記的是
+    「這張是誰做的」。所以數「還在做幾張」時，只看 `claim_state` 必然虛高，
+    而且**板越活躍虛得越多**：它跟著歷史累積，永遠只增不減。
+    """
+    app, client = await _client(tmp_path, "oc_claimed")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-1", "艾斯維爾", role="human")
+        oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                 json={"title": "週期"},
+                                 headers=hdr)).json()["id"]
+        cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                 json={"title": "一段"},
+                                 headers=hdr)).json()["id"]
+
+        async def _task(title):
+            tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                     json={"title": title},
+                                     headers=hdr)).json()["id"]
+            r = await client.post(f"/api/board/tasks/{tid}/claim", headers=hdr)
+            assert r.status_code == 200, r.text
+            return tid
+
+        working = await _task("還在做")
+        finished = await _task("做完了")
+        dropped = await _task("不做了")
+        for tid, status in ((finished, "done"), (dropped, "cancelled")):
+            r = await client.post(f"/api/board/tasks/{tid}/status",
+                                  json={"status": status}, headers=hdr)
+            assert r.status_code == 200, r.text
+
+        bid = (await client.get(f"/api/rooms/{rid}/board",
+                                headers=hdr)).json()["board_id"]
+        (row,) = [b for b in (await client.get("/api/boards", headers=hdr)
+                              ).json()["boards"] if b["id"] == bid]
+
+        assert row["task_counts"]["claimed"] == 1, (
+            "已收尾的卡還被算成「進行中」——"
+            f"實際 {row['task_counts']['claimed']}，應該只有 {working[:8]} 那張"
+        )
+        # 另外兩個數字不動：total 仍是全部、done 仍是完成數
+        assert row["task_counts"]["total"] == 3
+        assert row["task_counts"]["done"] == 1

@@ -311,3 +311,45 @@ async def test_a_board_without_custom_tags_returns_an_empty_list(tmp_path):
             rid, hdr, bid, pad = await _room_with_pad(client)
             body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
             assert body["custom_tags"] == []
+
+
+async def test_a_stale_write_gets_told_the_current_tags_too(tmp_path):
+    """409 要把**現在的標籤**一起回，不只內容與 rev。
+
+    🔴 資料損失（審核用Codex 2026-09-05 以現行 API 重現）：
+    另一端把標籤改成 `bug`（rev 2）→ 我拿舊 rev 寫內容 → 409 →
+    App 的衝突框「保留我的」用**新版 rev ＋ 我手上那份舊 tags** 重送 → 200，
+    而對方剛設好的標籤就這樣被清掉了，**兩邊都沒有錯誤訊息**。
+
+    根因不在 App 的 retry 邏輯，在這裡：**409 沒有把 tags 交出去**，
+    retry 手上就只有舊的那份。標籤與內容是同一次寫入的兩半
+    （`UPDATE ... SET content=?, tags=?`），衝突回應也必須是兩半都給。
+    """
+    app, client = await _client(tmp_path, "tag_stale")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, hdr, bid, pad = await _room_with_pad(client)
+            r = await _add_block(client, bid, pad, hdr, "第一版", tags=["feature"])
+            blk = r.json()
+            block_id, rev0 = blk["id"], blk["rev"]
+
+            # 另一端只改標籤（內容不動），rev 前進
+            r = await client.put(
+                f"/api/boards/{bid}/scratchpads/{pad}/blocks/{block_id}",
+                json={"content": "第一版", "rev": rev0, "tags": ["bug"]},
+                headers=hdr)
+            assert r.status_code == 200, r.text
+
+            # 我拿舊 rev 寫內容 ⇒ 409
+            r = await client.put(
+                f"/api/boards/{bid}/scratchpads/{pad}/blocks/{block_id}",
+                json={"content": "我的新內容", "rev": rev0, "tags": ["feature"]},
+                headers=hdr)
+            assert r.status_code == 409, r.text
+            detail = r.json()["detail"]
+            assert detail["code"] == "scratchpad_block_stale"
+            assert detail["content"] == "第一版"
+            assert detail["tags"] == ["bug"], (
+                "409 沒有回現在的標籤——retry 只能用舊的那份，"
+                f"於是對方剛設好的標籤會被清掉。實際回的是 {detail.get('tags')}"
+            )
