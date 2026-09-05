@@ -424,8 +424,13 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             sessionKey: _sessionKey,
             content: mine,
             rev: theirRev,
-            // 同 _save：整份送，不帶等於清掉
-            tags: b.tags,
+            // 🔴 **用 409 帶回來的那份，不是 `b.tags`。**
+            //
+            // `_save` 那邊帶 `b.tags` 是對的（剛編輯完，手上就是最新的），
+            // 但這裡不是——**衝突的定義就是「對方改過了」**，`b` 必然舊。
+            // 拿它去蓋會把對方剛改的標籤洗掉，而且不報錯
+            // （審核用Codex 2026-09-05 用現行 API 重現）。
+            tags: conflictTags(e.detail, fallback: b.tags),
           );
       if (!mounted) return;
       setState(() => _editing = null);

@@ -151,6 +151,45 @@ void main() {
     });
   });
 
+  group('🔴 衝突重試不可以拿本地的舊標籤去蓋', () {
+    // 審核用Codex 2026-09-05 用現行 API 重現：另一端先把標籤改成 `bug`
+    // （rev 2）→ 舊內容寫入拿 409 → 依 UI 的「保留我的」retry 後 200，
+    // 但最終 tags 變回 `[]`。**資料損失級。**
+    //
+    // 怎麼進來的：`_save` 帶 `tags: b.tags` 是對的（剛編輯完，手上就是最新
+    // 的），那一行被複製到 `_resolveConflict`，而**衝突的定義就是「對方改過
+    // 了」**——那條路徑上的 `b` 必然是舊的。同一行程式碼，前提相反。
+    //
+    // 兩邊各自的測試都不會紅：兩條路徑都「有把 tags 送出去」。要有人真的
+    // 讓兩端交錯才看得見。
+    test('409 帶了 fresh tags 就用它，不用本地那份', () {
+      final tags = conflictTags(
+        const {'content': '對方寫的', 'rev': 2, 'tags': ['bug']},
+        fallback: const ['feature'],
+      );
+      expect(tags, ['bug'], reason: '對方剛改成 bug，重試不可以把它蓋回 feature');
+    });
+
+    test('409 明確說「現在沒有標籤」也要照做', () {
+      // `[]` 是一個值（對方把標籤拿掉了），不是「沒講」
+      expect(
+        conflictTags(const {'tags': <String>[]}, fallback: const ['bug']),
+        isEmpty,
+      );
+    });
+
+    test('⚠️ 舊 Hub 不帶 tags 時只能退回本地那份——**那條路徑仍會覆蓋**', () {
+      // 沒有更好的選擇：API 要的是整份新值，不送等於清空（更糟）。
+      // 這是已知的降級，不是修好了——server 補上 409 帶 tags 之後這條
+      // fallback 就不會再被走到
+      expect(
+        conflictTags(const {'content': '對方寫的', 'rev': 2},
+            fallback: const ['feature']),
+        ['feature'],
+      );
+    });
+  });
+
   group('板自訂標籤', () {
     test('註冊新標籤，回傳新的選單內容', () async {
       final canned = _Canned({

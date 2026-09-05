@@ -52,6 +52,34 @@ List<String> removableTags({
   ];
 }
 
+/// 衝突重試時該送哪一份標籤。
+///
+/// 🔴 **不可以送本地那份。** `_save` 帶 `b.tags` 是對的（剛編輯完，手上就是
+/// 最新的），但**衝突的定義就是「對方改過了」**——那條路徑上的 `b` 必然是
+/// 舊的。同一行程式碼，前提相反。
+///
+/// 審核用Codex 2026-09-05 用現行 API 重現：另一端把標籤改成 `bug`（rev 2）
+/// → 舊內容寫入拿 409 → 依 UI 的「保留我的」retry 後 200，**最終 tags 變回
+/// `[]`**。兩端各自的測試都不會紅（兩條路徑都「有把 tags 送出去」），要有人
+/// 真的讓兩端交錯才看得見。
+///
+/// [detail] 是 409 `scratchpad_block_stale` 的 detail。它帶 `tags` 就用它
+/// ——**含 `[]`**（那是「對方把標籤拿掉了」，一個值，不是「沒講」）。
+///
+/// ⚠️ [fallback] 只在**舊 Hub 不帶這一欄**時走到，而**那條路徑仍然會覆蓋**。
+/// 沒有更好的選擇：API 要的是整份新值，不送等於清空（更糟）。這是已知的
+/// 降級，不是修好了。
+List<String> conflictTags(
+  Map<String, dynamic> detail, {
+  required List<String> fallback,
+}) {
+  if (!detail.containsKey('tags')) return fallback;
+  return [
+    for (final t in (detail['tags'] as List?) ?? const [])
+      if (t is String && t.isNotEmpty) t,
+  ];
+}
+
 /// 刪不掉一個標籤時要對人說的那句話。
 ///
 /// **抽成頂層函式是為了測得到**（同 `padRoute()`）：這幾句是這個對話框裡
