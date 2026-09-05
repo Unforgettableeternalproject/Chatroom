@@ -18,7 +18,11 @@ from starlette.testclient import TestClient
 from chatroom_server.app import create_app
 from chatroom_server.config import Config
 
-pytestmark = pytest.mark.asyncio
+# ⚠️ 這個檔**刻意不寫** `pytestmark = pytest.mark.asyncio`（別的測試檔有，
+# 那是慣例）：底下 `test_websocket_subscribe_refuses_non_members` 是同步的
+# （`TestClient` 的 WS 只有同步介面），而檔案層的 mark 會連它一起標，
+# pytest 每跑一次就叫一次。`pytest.ini` 是 `asyncio_mode = auto`，async
+# 測試不必標也會被收，所以那一行本來就是冗餘的。
 
 
 def _cfg(tmp_path, name):
