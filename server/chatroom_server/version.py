@@ -28,6 +28,9 @@ from pathlib import Path
 # 語意版本：人看的「這是哪一版設計」。改動契約時才動它。
 APP_VERSION = "1.1.5"
 
+# 交付包實際收錄的路徑。dirty 判定只看這裡（見 _from_git）。
+_SHIPPED = "server/"
+
 _BUILD_FILE = Path(__file__).with_name("_build.json")
 
 
@@ -81,8 +84,12 @@ def _from_git() -> dict[str, str] | None:
     commit = _git(root, "rev-parse", "--short=12", "HEAD")
     if not commit:
         return None
-    # 工作樹髒 = 這份執行中的程式碼對不回任何 commit
-    if _git(root, "status", "--porcelain") != "":
+    # 工作樹髒 = 這份執行中的程式碼對不回任何 commit。
+    # 只問 `server/`：交付包只含這個目錄，別人在改別處（Flutter、
+    # 另一半的 kit）不改變「這份程式碼是哪一版」。scope 開成整個 repo
+    # 會讓 `-dirty` 幾乎恆真，而恆真的警告沒有人看。
+    # ⚠️ scope **內**的 untracked 仍然算髒：新檔案沒 commit，一樣對不回去。
+    if _git(root, "status", "--porcelain", "--", _SHIPPED) != "":
         commit += "-dirty"
     return {
         "version": APP_VERSION,

@@ -41,6 +41,7 @@ def main() -> None:
         REPO,
         stage / "bridge" / "chatroom_mcp" / "_build.json",
         read_app_version(REPO / "bridge" / "chatroom_mcp" / "version.py"),
+        scope=("bridge/", "install-kit/"),
     )
 
     zip_path = DIST / "chatroom-mcp-kit.zip"

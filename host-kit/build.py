@@ -55,6 +55,7 @@ def main() -> None:
         REPO,
         stage / "server" / "chatroom_server" / "_build.json",
         read_app_version(REPO / "server" / "chatroom_server" / "version.py"),
+        scope=("server/", "host-kit/", "scripts/"),
     )
 
     zip_path = DIST / "chatroom-hub-kit.zip"

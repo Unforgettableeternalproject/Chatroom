@@ -16,14 +16,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def stamp(repo: Path, target: Path, version: str) -> dict:
+def stamp(repo: Path, target: Path, version: str,
+          scope: tuple[str, ...] = ()) -> dict:
     """在 ``target`` 寫下 `_build.json`，回傳寫進去的內容。
 
     ``commit`` 帶 `-dirty` 後綴表示打包時工作樹有未提交的變更——那份產物
     對不回任何一個 commit，收到的人有權知道。
+
+    ``scope`` 是**這份產物實際收錄的路徑**（相對 repo 根）。給了就只問這些
+    路徑髒不髒：兩個 kit 從同一棵樹打包，但 host-kit 收 `server/`、
+    install-kit 收 `bridge/`——一邊在改的時候，另一邊沒有理由被標成
+    「對不回任何 commit」。scope 開成整棵樹會讓警告幾乎恆真，而恆真的
+    警告沒有人看（那正是 `report()` 上面那段事故的下一步）。
+
+    ⚠️ scope **內**的 untracked 仍然算髒：新檔案沒 commit，一樣對不回去。
+    留空 = 問整棵樹，維持舊行為。
     """
     commit = git(repo, "rev-parse", "--short=12", "HEAD") or ""
-    if commit and git(repo, "status", "--porcelain"):
+    status_args = ("status", "--porcelain")
+    if scope:
+        status_args += ("--", *scope)
+    if commit and git(repo, *status_args):
         commit += "-dirty"
     info = {
         "version": version,
