@@ -20,7 +20,7 @@ from fastapi import (
     Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile,
     WebSocket, WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Config
@@ -599,6 +599,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         # 第一則就是版本：日誌從哪裡開始看，都要能立刻回答「這是哪一份程式碼」
+        #
+        # 🔑 **這一行是 load-bearing，不只是寫日誌**：`build_info()` 有
+        # `lru_cache`，而這裡是啟動後第一個呼叫它的地方 ⇒ 版本被凍在**啟動
+        # 當下**，之後 `/api/health` 回的就不會跟著工作樹跑。拿掉它，health
+        # 會變成「現查 git HEAD」，於是一台跑著舊碼的 Hub 會回報新 commit
+        # ——而且不會有任何地方報錯（@開發Novia (除錯) 2026-09-05 追 8787
+        # 版本時撞到，@開發Novia (Hub) 實測確認機制）。
         info = build_info()
         logger.info(
             "Hub 啟動 %s", version_string(),
@@ -638,6 +645,39 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="Chatroom Hub", version=APP_VERSION, lifespan=lifespan)
     events = RoomEvents()
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request: Request, exc: Exception):
+        """沒人接住的例外：落檔帶 traceback，回應帶得走一個 `error_id`。
+
+        存在的理由是一次真實的追查成本（2026-09-03，D9 那天連撞三次）：
+        走 HTTP 只看得到「500」三個字，`hub.jsonl` 空的，traceback 只有在
+        in-process、`raise_app_exceptions=True` 的測試環境才拿得到——**而
+        回報問題的人手上永遠沒有那個環境**。
+
+        `error_id` 是回應與日誌之間唯一的橋。回報者抄一個短字串，追查的人
+        `grep` 一次就到現場，不必反問「你幾點打的」「打的是哪個端點」。
+
+        🚨 **例外訊息不進回應。** 它裡面可能有檔案路徑、SQL、參數值。要看
+        內容的人有日誌可看，而日誌看得到的前提是他進得了這台機器——那道
+        邊界正是這裡要守的。
+        """
+        error_id = uuid.uuid4().hex[:12]
+        logger.exception(
+            "未攔截例外 %s", error_id,
+            extra={
+                "event": "unhandled_exception", "error_id": error_id,
+                "path": request.url.path, "method": request.method,
+                "error_type": type(exc).__name__,
+                "ip": _client_ip(request),
+            },
+        )
+        # detail 的形狀與 `_err` 一致：client 對 500 與對 4xx 不必寫兩套解析
+        return JSONResponse(status_code=500, content={"detail": {
+            "code": "internal_error",
+            "message": f"伺服器內部錯誤，回報時請附上 error_id：{error_id}",
+            "error_id": error_id,
+        }})
 
     def _bearer(authorization: str | None) -> str:
         if not authorization or not authorization.startswith("Bearer "):
