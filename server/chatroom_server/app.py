@@ -20,6 +20,7 @@ from fastapi import (
     Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile,
     WebSocket, WebSocketDisconnect,
 )
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -643,6 +644,50 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="Chatroom Hub", version=APP_VERSION, lifespan=lifespan)
     events = RoomEvents()
+
+    @app.exception_handler(HTTPException)
+    async def denial_logged(request: Request, exc: HTTPException):
+        """403 與 404 也要落檔——**拒絕本來是黑的**。
+
+        2026-09-05 幫跨裝置測試端對一筆 403 的帳時發現：`hub.jsonl` 裡什麼
+        都沒有，唯一的痕跡是 uvicorn access log 的一行「403」，而那一行說
+        不出**誰**被拒、**為什麼**。追查的人手上通常只有「我打了這個端點，
+        它說我不行」。
+
+        **403 恰恰最需要留痕：它代表有人以為自己有權限。**
+
+        只記這兩種是刻意的：401 已經有 `auth_failed`；422 是參數驗證、訊息
+        本身就說得出哪個欄位錯，記了只會把日誌灌滿；5xx 由
+        `unhandled_exception` 收。
+
+        🔑 **記的是 `code` 不是 message**——`code` 是穩定契約（`_err` 的第二
+        個參數），它就是「哪一條判準拒絕了你」。只記狀態碼等於沒補，追查的
+        人本來就從 access log 知道那是 403。
+
+        ⚠️ 回應**原封不動**交給 FastAPI 預設的 handler：`detail` 的形狀是
+        client 依賴的契約，觀測不該改變被觀測的東西。
+        """
+        if exc.status_code in (403, 404):
+            detail = exc.detail
+            code = detail.get("code", "") if isinstance(detail, dict) else ""
+            logger.warning(
+                "拒絕 %s %s（%s）", exc.status_code, request.url.path,
+                code or "無 code",
+                extra={
+                    "event": "request_denied",
+                    "status": exc.status_code, "code": code,
+                    "path": request.url.path, "method": request.method,
+                    # 「誰問的」：session_key 是 agent 的身分，participant 是
+                    # 房內身分——兩個都留，因為拒絕可能發生在只有其中一個的
+                    # 路徑上
+                    "session_key": request.headers.get("X-Session-Key", ""),
+                    "participant_id": request.headers.get("X-Participant-Id", ""),
+                    "token_hint": token_hint(
+                        getattr(request.state, "access_token", "")),
+                    "ip": _client_ip(request),
+                },
+            )
+        return await http_exception_handler(request, exc)
 
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception):
@@ -3361,6 +3406,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         return (row["board_seq"] or 0) if row else 0
 
+    def _supervisor_obj(session_key, name, kind, left_at):
+        """supervisor 的對外形狀。**房軸與 attached_rooms 共用這一份。**
+
+        分兩份寫的話，漂移的那一半沒有人在看——而這個鍵剛好就是因為兩處
+        形狀不同才開了一張卡（09/05 `3a518cbe`：一邊字串一邊物件）。
+
+        `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼。
+        `departed` 是**標記不是清空**，所以要說得出「本來是誰在看，但他
+        走了」——少了它，畫面只能二選一地畫成「有人在看」或「沒有人」，
+        而真相是第三種。
+        """
+        key = session_key or ""
+        if not key:
+            return None
+        return {
+            "actor_key": key,
+            "display_name": name or key,
+            "actor_kind": kind or "",
+            "departed": bool(left_at),
+        }
+
     async def _attached_rooms(board_id: str) -> list[dict]:
         """這塊板掛過哪些房。**房軸與板軸共用這一份**——複製第二份出來的話，
         漂移的那一半沒有人在看（房軸的徽章與板軸的清單會各說各話）。
@@ -3394,15 +3460,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "detached": r["detached_at"] is not None,
                 # `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼，
                 # 兩個名字指同一個東西時，總有一邊的比對會寫錯
-                "supervisor": {
-                    "actor_key": sup_key,
-                    "display_name": r["board_supervisor_name"] or sup_key,
-                    "actor_kind": r["board_supervisor_kind"] or "",
-                    # 退場是**標記不是清空**，所以這裡也要說得出「本來是誰
-                    # 在看，但他已經走了」——少了它，畫面只能二選一地畫成
-                    # 「有人在看」或「沒有人」，而真相是第三種
-                    "departed": bool(r["board_supervisor_left_at"]),
-                } if sup_key else None,
+                "supervisor": _supervisor_obj(
+                    sup_key, r["board_supervisor_name"],
+                    r["board_supervisor_kind"],
+                    r["board_supervisor_left_at"]),
             })
         return out
 
@@ -5915,7 +5976,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             "checklists": checklists,
             "tasks": tasks,
             "reclaimable_tasks": reclaimable,
-            "supervisor": room["board_supervisor_session_key"] or None,
+            # **本房的 supervisor**，形狀與 `attached_rooms[].supervisor`
+            # 完全一致（09/05 卡 3a518cbe）。這裡以前回 v1 的
+            # **session_key 字串**，而那邊回物件——同一個鍵名兩種型別，
+            # 而且對外不該外流 session_key。
+            #
+            # ⚠️ **不能改成「從 attached_rooms 取本房那筆」而刪掉這個鍵**：
+            # supervisor 是 **room** 層級的設定（`room.board_supervisor_*`），
+            # 房間**還沒有板也能指定**——「指派它進來」正是最常見的情形。
+            # 而 `attached_rooms` 是**板**的掛接清單，沒板時它是空的 ⇒
+            # 刪掉這個鍵，那種房的 supervisor 就完全拿不到
+            # （09/05 實測，三條測試當場紅）
+            "supervisor": _supervisor_obj(
+                room["board_supervisor_session_key"],
+                room["board_supervisor_name"],
+                room["board_supervisor_kind"],
+                room["board_supervisor_left_at"]),
             # 從聊天室進板的畫面靠這個畫「掛了哪幾間房」的徽章。少了它，
             # 那個徽章只能顯示預設值「未掛接聊天室」——而板明明就掛在你正
             # 看著的這間房上（艾斯維爾想法板觀察 ①）。與板軸**同一份**：
