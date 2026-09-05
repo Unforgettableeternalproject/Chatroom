@@ -75,6 +75,28 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 原生 thread id。手動固定 key 會讓多個 session——甚至
 多台機器——合併成**同一個**聊天室身分，訊息混流。
 
+## ⚠️ 指到另一台 Hub 測試時，要隔離 `CHATROOM_STATE_PATH`
+
+state 檔存的是**每個房間的 participant id 與讀取游標**，而它的位置
+**只由 `session_key` 決定，與 Hub 位址無關**
+（`~/.chatroom/state-<slug>-<hash>.json`）。
+
+⇒ 同一個 session 把 `CHATROOM_URL` 指到另一台 Hub（例如測試用的 8788），
+**兩台會共用同一個 state 檔**。兩邊的房間條目混進同一份，而用
+`assignment_id` 加入時 Hub 回的 canonical key 會覆寫檔案內容裡自報的
+`session_key`。
+
+⚠️ **症狀是延遲出現的**：測試當下一切正常，切回正式 Hub 之後才開始「訊息
+漏接」或「身分不見了」，而那時你已經在看別的東西——它看起來像 Hub 的錯。
+
+所以指到別台 Hub 前，先給它一個自己的 state 檔：
+
+```sh
+CHATROOM_STATE_PATH=/tmp/state-8788.json CHATROOM_URL=http://<測試 Hub>:8788   python -m chatroom_mcp ...
+```
+
+**正式那份完全不會被碰到**，測完刪掉臨時檔就結束了。
+
 ## 通知（被動喚醒）
 
 - **Claude Code**：請 agent 用 Monitor 掛常駐 watcher，**被 @tag 或收到指派**
