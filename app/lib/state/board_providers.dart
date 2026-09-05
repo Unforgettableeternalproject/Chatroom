@@ -480,12 +480,21 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// ⚠️ **Hub 還沒有 `/api/boards` 之前這支會回 404**，畫面必須把它呈現成
 /// 「這個功能還沒開」而不是一片空白——空清單與端點不存在看起來一模一樣，
 /// 而那正是最難查的一種畫面。見 `boardLibraryUnavailable`。
+/// ⚠️ 主持人模式切換時要重撈——清單的內容會從「我有份的板」變成「所有人
+/// 的板」。dio 的 interceptor 是每次請求現讀開關的，但 **provider 不 watch
+/// 就不會知道該重跑**（`roomListProvider` 那邊同一條，ROOMS 補了、BOARDS
+/// 漏了）。漏掉的後果有兩層：清單不會多出東西（功能等於沒作用），而且沿用
+/// 的舊回應 `host_view` 是 false ⇒ banner 亮起「伺服器沒有照做」，
+/// **指著一個完全無辜的方向**（2026-09-05）。
 final boardLibraryProvider =
     FutureProvider.autoDispose.family<BoardListResult, String>(
-  (ref, status) => ref.watch(boardsApiProvider).list(
-        status: status,
-        sessionKey: ref.watch(appConfigProvider).deviceKey,
-      ),
+  (ref, status) {
+    ref.watch(hostViewProvider);
+    return ref.watch(boardsApiProvider).list(
+          status: status,
+          sessionKey: ref.watch(appConfigProvider).deviceKey,
+        );
+  },
 );
 
 /// 這個錯誤是不是「Hub 還沒實作 Board Library」而不是真的壞了。
