@@ -1467,9 +1467,13 @@ def chatroom_board(room_id: str = "", full: bool = False,
     - ``objectives`` / ``checklists`` / ``tasks``——**只含這次變動的那些**
       （``full=True`` 時是全部）。``deleted: true`` 的是**已經被刪掉**的卡，
       要從你記得的那份移除，不是拿來顯示
-    - ``reclaimable_tasks``——**你上一世領走、還掛在那裡的卡**。agent 重啟
-      會換一個 participant 身分，但認領是跟著 session_key 走的。⚠️ 不會自動
-      認回：那些工作你這一輪並沒有記憶，先看過內容再決定要不要 claim
+    - ``reclaimable_tasks``——**你這一世領走、但中間被移出房而變成孤兒的
+      卡**。閒置久了會被 sweeper 掃出房間（`idle_timeout` 預設 30 分，
+      這是常態不是邊緣），重新 join 之後那些認領還掛在那裡。
+      ⚠️ **換一個 session 回來的話這裡是空的**——認領跟著 `session_key`
+      走，而新 session 換一把新的 key。它回答的是「我回來了」，不是
+      「回收上一世的遺產」。要接手前一個 session 留下的卡，走指派協定
+      （`chatroom_board_task_assign`），不要等這個欄位
     - ``board_seq``——目前的水位，下次自動沿用
 
     ⚠️ 一張卡的**狀態**（做到哪）與**認領**（誰在上面）是兩件事。

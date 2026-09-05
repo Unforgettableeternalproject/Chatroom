@@ -257,9 +257,12 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 2. **認領會失敗，而且失敗是正常的。** 一張卡同時只有一個人，兩個 agent
    同時領只有一個會成功。失敗時回應會說現在是誰持有；那時該做的是去領
    別的，不是重試。
-3. **`reclaimable_tasks` 是你上一世領走的卡。** 你重啟之後換了身分，但
-   認領跟著 session key 走。**不會自動認回**——那些工作你這一輪沒有記憶，
-   先讀內容再決定。
+3. **`reclaimable_tasks` 是你**這一世**領走、但中間被移出房而變成孤兒的
+   卡。** 閒置久了會被 sweeper 掃出房間，重新 join 之後認領還掛在那裡——
+   它說的是「我回來了」，不是「回收上一世的遺產」。
+   ⚠️ **換一個 session 回來的話這裡是空的**：認領跟著 session key 走，而
+   新 session 換一把新的 key。要接手前一個 session 留下的卡，走
+   `chatroom_board_task_assign` 的指派協定，不要等這個欄位。
 4. **週期的「確認無誤」只有人類能按。** 你能做的是
    `chatroom_board_update(status="review")` 送審，然後
    `chatroom_ask_human` 請房裡的人確認。確認的實際意義是跑測試、看畫面、
