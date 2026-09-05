@@ -4425,8 +4425,16 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 因為一個欄位兩條寫入路徑遲早會有一條漏掉檢查——而漏掉的那條不會報錯，
     # 它只是讓守門形同虛設。
 
+    # 🔑 **守的是「這個宣稱與現況矛盾」，不是「你沒有照順序按按鈕」。**
+    # `todo` 曾經只能去 `in_progress`／`cancelled`，於是「一張卡從來沒開工、
+    # 但前提一開始就不成立」與「認領的當下調查就做完了」這兩種真實走法都得先
+    # 繞一次 `in_progress` ⇒ 板上永久留下一段「它曾經在動工」，而那沒有發生過
+    # （@測試Novia 撞到前者、@開發Novia (除錯) 撞到後者，2026-09-05 同一天）。
+    # **板是給人讀的紀錄，讓它說謊比讓它少擋一次嚴重。**
+    # 仍然擋著的是有矛盾的那些：`blocked` 不能直接宣告完成（先解除阻塞）、
+    # 收尾了的不能橫向改成另一種收尾。
     TASK_TRANSITIONS = {
-        "todo": {"in_progress", "cancelled"},
+        "todo": {"in_progress", "blocked", "done", "cancelled"},
         "in_progress": {"blocked", "done", "cancelled"},
         "blocked": {"in_progress", "cancelled"},
         "done": {"in_progress"},          # 打回，限人類

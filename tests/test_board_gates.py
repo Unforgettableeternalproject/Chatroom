@@ -70,14 +70,52 @@ async def _finish_everything(client, cid, tids, hdr):
 # ---------- Task ----------
 
 async def test_task_cannot_skip_states(tmp_path):
+    """卡在 blocked 的東西不能直接宣告完成——先解除阻塞。
+
+    ⚠️ 這條原本守的是「`todo` 不能直接去 `blocked`」，2026-09-05 改掉了：
+    那個守門建立在「每張卡都是在板上被人逐步推進的」這個假設上，而它不成立
+    （見下面那條測試）。**狀態機守的應該是「這個宣稱與現況矛盾」，不是
+    「你沒有照順序按按鈕」**——後者擋不住任何錯誤，只會逼人先造一段假紀錄。
+    """
     app, client = await _client(tmp_path, "task-skip")
     async with app.router.lifespan_context(app), client:
         rid, human, agent = await _room(client)
         _, _, (tid,) = await _tree(client, rid, agent)
-        r = await _task_status(client, tid, "blocked", agent)
+        await _task_status(client, tid, "blocked", agent)
+        r = await _task_status(client, tid, "done", agent)
         assert r.status_code == 409
         assert r.json()["detail"]["code"] == "invalid_transition"
         assert "in_progress" in r.json()["detail"]["allowed"]
+        assert "done" not in r.json()["detail"]["allowed"]
+
+
+async def test_a_task_can_go_straight_from_todo_to_blocked_or_done(tmp_path):
+    """`todo` 可以直接去 `blocked` 或 `done`，不必先經過 `in_progress`。
+
+    兩種都是真實的走法，而且逼人繞路的代價是**在板上留下假紀錄**：
+
+    - 直接 `blocked`：一張卡從來沒開工，但前提一開始就不成立（等別人交東西、
+      等人類決斷）。最誠實的表達就是 todo → blocked
+      （@測試Novia 2026-09-05 撞到：kit 版本不對，卡根本還沒動工）
+    - 直接 `done`：認領的當下調查就做完了——例如「這個 bug 早就修好了，
+      只是卡的狀態沒收回來」
+      （@開發Novia (除錯) 2026-09-05 撞到，D9 與 app.py:2674 兩張都是）
+
+    繞路推出來的 `in_progress` 會被永久記成「它曾經在動工」，而那件事沒有
+    發生過。**板是給人讀的紀錄，讓它說謊比讓它少擋一次嚴重。**
+    """
+    app, client = await _client(tmp_path, "task-todo-direct")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        _, _, (blocked_tid, done_tid) = await _tree(client, rid, agent, tasks=2)
+
+        r = await _task_status(client, blocked_tid, "blocked", agent)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "blocked"
+
+        r = await _task_status(client, done_tid, "done", agent)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "done"
 
 
 async def test_only_holder_or_human_pushes_a_claimed_task(tmp_path):
