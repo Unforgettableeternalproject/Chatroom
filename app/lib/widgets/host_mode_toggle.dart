@@ -5,6 +5,24 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../state/app_providers.dart';
 
+/// 這一刻該不該亮「伺服器沒有照做」。
+///
+/// 🔴 **重抓期間一定要沉默。** 這個警告的判準是「手上這份清單是不是主持人
+/// 視角撈的」，而切換開關的那一瞬間，手上那份**必然還是切換前的**（Riverpod
+/// 保留舊值直到新回應到達）⇒ `hostView` 是 false ⇒ 警告會閃一下紅。
+///
+/// 艾斯維爾 2026-09-06 實機看到的就是這個：「非常快但是存在」。它不是誤報
+/// 一個不存在的問題，是**拿過期的資料回答一個關於現在的問題**——而診斷訊號
+/// 在資料過期時必須閉嘴，不然它自己就變成雜訊的來源。
+///
+/// [loading] 傳 `AsyncValue.isLoading`（重算期間為 true，且舊值還在）。
+bool hostModeWarn({
+  required bool on,
+  required bool loading,
+  required bool hostView,
+}) =>
+    on && !loading && !hostView;
+
 /// 主持人模式開關。**ROOMS 與 BOARDS 兩個分頁共用同一顆。**
 ///
 /// 開著時清單含**所有人的**東西（含自己沒份的私人房／私人板），所以它必須

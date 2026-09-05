@@ -3,6 +3,7 @@ import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/board_providers.dart';
+import 'package:chatroom_app/widgets/host_mode_toggle.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -103,5 +104,28 @@ void main() {
     expect(off.boards, hasLength(1),
         reason: '關掉之後還留著別人的私人板，比沒有這個功能更糟');
     expect(off.hostView, isFalse);
+  });
+
+  group('🔴 重抓期間不能亮「伺服器沒有照做」', () {
+    // 艾斯維爾 2026-09-06 實機：「切換按鈕會有一瞬間仍然是紅色並且顯示
+    // 伺服器無回應的，非常快但是存在」。
+    //
+    // 切換的那一瞬間，手上那份清單**必然還是切換前的**（Riverpod 保留舊值
+    // 直到新回應到達）⇒ `hostView` 是 false ⇒ 警告閃一下紅。
+    //
+    // 它不是誤報一個不存在的問題，是**拿過期的資料回答一個關於現在的
+    // 問題**——而診斷訊號在資料過期時必須閉嘴，否則它自己就變成雜訊。
+    test('重抓中（舊值還在）一律不亮', () {
+      expect(hostModeWarn(on: true, loading: true, hostView: false), isFalse);
+    });
+
+    test('重抓完了還是 false → 那才真的是 server 沒照做', () {
+      expect(hostModeWarn(on: true, loading: false, hostView: false), isTrue);
+    });
+
+    test('生效了就不亮，開關關著也不亮', () {
+      expect(hostModeWarn(on: true, loading: false, hostView: true), isFalse);
+      expect(hostModeWarn(on: false, loading: false, hostView: false), isFalse);
+    });
   });
 }

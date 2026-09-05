@@ -122,8 +122,16 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                 on: hostOn,
                 onLabel: '主持人模式：看得到所有人的板',
                 // 開著、但這份清單不是主持人視角撈的 ⇒ server 沒照做。
-                // 不講的話它與「別人沒有私人板」在畫面上完全一樣
-                warn: hostOn && !(boardsAsync.value?.hostView ?? false),
+                // 不講的話它與「別人沒有私人板」在畫面上完全一樣。
+                //
+                // ⚠️ **重抓期間要沉默**（`isLoading`）：切換的那一瞬間手上
+                // 那份必然還是切換前的，不擋的話警告會閃一下紅
+                // （艾斯維爾 2026-09-06 實機：「非常快但是存在」）
+                warn: hostModeWarn(
+                  on: hostOn,
+                  loading: boardsAsync.isLoading,
+                  hostView: boardsAsync.value?.hostView ?? false,
+                ),
               ),
             ],
           ]),
