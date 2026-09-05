@@ -271,3 +271,43 @@ async def test_a_default_tag_cannot_be_removed(tmp_path):
             r = await client.delete(f"/api/boards/{bid}/tags/bug", headers=hdr)
             assert r.status_code == 422, r.text
             assert r.json()["detail"]["code"] == "tag_is_default"
+
+
+async def test_the_board_says_which_tags_are_deletable(tmp_path):
+    """`allowed_tags` 是聯集，分不出哪些刪得掉——所以 `custom_tags` 也要回。
+
+    UI 的刪除按鈕要嘛對預設標籤也開放（按了必吃 422 `tag_is_default`，
+    一顆註定失敗的按鈕），要嘛自己在本地寫一份預設集合去反推——**第二份
+    判準**，跟 `allowed_tags` 當初要消除的是同一個東西。
+
+    房軸與板軸都要回：從聊天室進板的人，看到的東西不能比較少。
+    """
+    app, client = await _client(tmp_path, "tag_deletable")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, hdr, bid, pad = await _room_with_pad(client)
+            await client.post(f"/api/boards/{bid}/tags",
+                              json={"tags": ["perf"]}, headers=hdr)
+
+            for label, url in (("板軸", f"/api/boards/{bid}"),
+                               ("房軸", f"/api/rooms/{rid}/board")):
+                body = (await client.get(url, headers=hdr)).json()
+                assert "custom_tags" in body, f"{label}沒有回 custom_tags"
+                assert body["custom_tags"] == ["perf"], (
+                    f"{label}的 custom_tags 應該只有自訂的那些，"
+                    f"實際是 {body['custom_tags']}"
+                )
+                # 預設標籤不在裡面 = UI 據此鎖住它們的刪除按鈕
+                assert "bug" not in body["custom_tags"]
+                assert "bug" in body["allowed_tags"]
+
+
+async def test_a_board_without_custom_tags_returns_an_empty_list(tmp_path):
+    """沒有自訂標籤時回空陣列，不是缺欄位——缺欄位 UI 分不出「沒有」與
+    「舊版 Hub 不會回」，而那兩者要畫的東西不同。"""
+    app, client = await _client(tmp_path, "tag_none")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, hdr, bid, pad = await _room_with_pad(client)
+            body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+            assert body["custom_tags"] == []

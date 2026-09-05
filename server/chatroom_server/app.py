@@ -5935,6 +5935,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             "allowed_tags": (_allowed_tags(attached)
                              if attached is not None
                              else list(DEFAULT_SCRATCHPAD_TAGS)),
+            # `allowed_tags` 是聯集，**分不出哪些刪得掉**——少了這個欄位，
+            # UI 的刪除按鈕要嘛對預設標籤也開放（按了必吃 422
+            # `tag_is_default`，一顆註定失敗的按鈕），要嘛自己在本地寫
+            # 一份預設集合去反推，而那正是 `allowed_tags` 當初要消除的
+            # 第二份判準
+            "custom_tags": (_board_custom_tags(attached)
+                            if attached is not None else []),
             "task_requests": await _my_task_requests(
                 scope_sql.replace("board_id", "t.board_id")
                          .replace("room_id", "t.room_id"),
@@ -6551,6 +6558,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 把預設集合寫死一份在自己那邊——第二份判準，而板自訂的那些它
             # 永遠不會知道
             "allowed_tags": _allowed_tags(board),
+            # `allowed_tags` 是聯集，**分不出哪些刪得掉**——少了這個欄位，
+            # UI 的刪除按鈕要嘛對預設標籤也開放（按了必吃 422
+            # `tag_is_default`，一顆註定失敗的按鈕），要嘛自己在本地寫
+            # 一份預設集合去反推，而那正是 `allowed_tags` 當初要消除的
+            # 第二份判準
+            "custom_tags": _board_custom_tags(board),
             "task_requests": await _my_task_requests(
                 "t.board_id=?", [board_id], actor,
                 # `actor_key()` 現階段只做去空白 ⇒ 兩者同值。這裡不另外取
