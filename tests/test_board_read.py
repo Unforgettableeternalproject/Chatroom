@@ -179,6 +179,12 @@ async def test_response_shape_is_pinned(tmp_path):
             "task_requests",
             # 想法板標籤選單（預設 ∪ 板自訂），與板軸同一份
             "allowed_tags",
+            # `allowed_tags` 是聯集，分不出哪些刪得掉——UI 靠這個鎖住預設
+            # 標籤的刪除鈕（09/05 卡 d10ae5f2）
+            "custom_tags",
+            # 板的結局，與 status 正交（09/05 裁定 A，卡 N-2）：從聊天室
+            # 進板的人看不出這塊板已經收尾的話，他會在一塊結束了的板上繼續加卡
+            "outcome",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",

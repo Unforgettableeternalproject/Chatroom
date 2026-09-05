@@ -391,6 +391,18 @@ class BoardVisibility(BaseModel):
     visibility: str = Field(pattern="^(public|private)$")
 
 
+class BoardOutcome(BaseModel):
+    """板的結局。空字串＝還在做（reopen 走的也是它）。
+
+    **與 `status` 是兩軸**（艾斯維爾 2026-09-05 裁定 A）：status 說的是
+    「現在能不能編輯」，這裡說的是「這份工作的結局」。合成一欄的四個值就
+    表達不出「完成**且**收起來」，而那是最常見的收尾。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: str = Field(pattern="^(completed|abandoned|)$")
+
+
 class BoardOwnerTransfer(BaseModel):
     """把板交給別人。命名照抄房間的 `transfer_admin`，不發明新詞
     （裁定Novia 2026-09-03）。"""
@@ -5928,6 +5940,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 第二份判準
             "custom_tags": (_board_custom_tags(attached)
                             if attached is not None else []),
+            # 房軸也要有——從聊天室進板的人看不出這塊板已經收尾的話，
+            # 他會在一塊「結束了」的板上繼續加卡
+            "outcome": (attached["outcome"]
+                        if attached is not None
+                        and "outcome" in attached.keys() else ""),
             "task_requests": await _my_task_requests(
                 scope_sql.replace("board_id", "t.board_id")
                          .replace("room_id", "t.room_id"),
@@ -6251,6 +6268,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/boards", dependencies=[Depends(require_auth)])
     async def list_boards(
         status: str = "",
+        outcome: str = "",
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
@@ -6305,6 +6323,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         if want:
             sql += " AND b.status = ?"
             params.append(want)
+        # 收尾的板**預設不佔分頁**（卡 N-2：「顯示至完成或廢止」），但要
+        # 找得回來——所以是過濾不是刪除。`any` 要顯式講出來：預設回全部的話，
+        # 分頁會隨著時間被做完的板塞滿，而那正是這張卡要解決的問題。
+        #
+        # ⚠️ 與 `status` 同一個判斷：值不合法就明確擋下。默默回全部會讓打錯
+        # 字的人以為「這些板都還在做」，而那個誤會不會有任何地方報錯。
+        if outcome and outcome not in ("completed", "abandoned", "any"):
+            raise _err(422, "invalid_outcome",
+                       "outcome 只能是 completed、abandoned 或 any",
+                       allowed=["completed", "abandoned", "any"])
+        if outcome == "any":
+            pass
+        elif outcome:
+            sql += " AND b.outcome = ?"
+            params.append(outcome)
+        else:
+            sql += " AND b.outcome = ''"
         cur = await db.execute(sql + " ORDER BY b.updated_at DESC", params)
         return {
             "boards": [await _library_row(db, b, actor)
@@ -6523,6 +6558,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             # （@開發Novia (除錯) 2026-09-03）。同一個東西的兩個讀取端點
             # 給不同欄位，差別要等有人做那件事才看得見
             "visibility": board["visibility"],
+            # 結局與 status 分開回：少了它，UI 只能拿 status 猜，而
+            # 「封存」與「做完了」是兩件事——收起來的板可能只是暫時擱置
+            "outcome": board["outcome"] if "outcome" in board.keys() else "",
             # owner 是誰、他還在不在——接管的確認對話框靠這兩個判斷「20 分鐘
             # 前還在」與「昨天之後沒再出現過」，不能只在 409 裡才給
             "owner_actor_key": board["owner_actor_key"],
@@ -6675,6 +6713,51 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _notify_board_rooms(board_id)
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "changed": sorted(sets)}
+
+    @app.post("/api/boards/{board_id}/outcome",
+              dependencies=[Depends(require_auth)])
+    async def set_board_outcome(
+        board_id: str,
+        body: BoardOutcome,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """宣告這塊板的結局：完成／廢止，或空字串把它重新打開。
+
+        **一支端點三個轉換**，不拆成 complete／abandon／reopen 三支：一個
+        欄位多條寫入路徑，遲早有一條漏掉檢查，而漏掉的那條不會報錯
+        （同一個理由寫在 `_private_board_needs_private_room` 上面）。
+
+        🚨 **限人類**，照 Objective `verified` 那道閘的同一個理由：判斷
+        「這件事真的做完了嗎」的實際意義是跑測試、看畫面、確認沒踩到坑，
+        那件事只有人做得到。agent 側不暴露工具。
+
+        **可逆**——不可逆的只有刪除，與封存同一個判斷。reopen 一樣留事件，
+        否則板上會出現「它什麼時候又活過來的」這種查不到的問題。
+        """
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_owner_or_403(board_id, actor)
+        me = await _board_identity(board_id, actor)
+        if not me or me["actor_kind"] != "human":
+            raise _err(403, "human_only",
+                       "只有人類 owner 可以宣告這塊板完成或廢止——"
+                       "確認「真的做完了」要跑測試、看畫面，"
+                       "那件事只有人做得到")
+        seq = await _next_seq_for_board(board_id)
+        await app.state.db.execute(
+            "UPDATE board SET outcome=?, updated_at=? WHERE id=?",
+            (body.outcome, _now(), board_id))
+        await _record_board_event(
+            board_id, seq,
+            "board_reopened" if not body.outcome else "board_settled",
+            actor=actor, payload={"outcome": body.outcome})
+        await _commit_with_retry(app.state.db)
+        await _notify_board_rooms(board_id)
+        return {"ok": True, "board_id": board_id, "outcome": body.outcome,
+                "board_seq": seq}
 
     @app.post("/api/boards/{board_id}/archive",
               dependencies=[Depends(require_auth)])

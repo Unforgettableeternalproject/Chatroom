@@ -358,6 +358,12 @@ CREATE TABLE IF NOT EXISTS board (
     name            TEXT NOT NULL,
     description     TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'active',      -- active / archived
+    -- **結局**，與 status 正交（艾斯維爾 2026-09-05 裁定 A）。
+    -- status 回答「現在還能不能編輯」（可逆），這一欄回答「這份工作的結局
+    -- 是什麼」。塞成同一欄的四個值就表達不出「完成**且**收起來」，而那是
+    -- 最常見的收尾。同一個判斷在 Task 那裡做過：status 與 claim 正交。
+    -- '' / completed / abandoned；可 reopen，不可逆的只有刪除
+    outcome         TEXT NOT NULL DEFAULT '',
     -- ⚠️ 預設 **public**，與 room 那邊同一個判斷：把東西悄悄變成私人，等於
     -- 在使用者毫不知情的情況下讓它從別人的列表上消失。這個欄位在 2026-09-03
     -- 之前是死欄位（只有 schema、沒人讀），預設值原本寫的是 private——喚醒
@@ -810,6 +816,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
      "source_room_name TEXT NOT NULL DEFAULT ''"),
     ("board_task", "source_message_id",
      "source_message_id TEXT NOT NULL DEFAULT ''"),
+    # 板的結局。既有的板一律是 ''（還在做）——把存量悄悄標成「已完成」會讓
+    # 它們一次從 BOARDS 分頁消失，與 visibility 當初的遷移是同一個判斷
+    ("board", "outcome", "outcome TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

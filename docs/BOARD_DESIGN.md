@@ -226,6 +226,29 @@ item 的 `board_seq` 負責狀態增量；`board_event` 負責稽核、摘要與
 - Board 刪除：獨立的 owner 操作，不得由 room purge 間接觸發。
 - Board 沒有 active room 時仍留在 Board Library。
 
+#### 結局（`outcome`）與 `status` 是兩軸
+
+艾斯維爾 2026-09-05 裁定 A。
+
+| 軸 | 值 | 回答的問題 | 可逆 |
+|---|---|---|---|
+| `status` | `active` / `archived` | 現在還能不能編輯 | 是 |
+| `outcome` | `""` / `completed` / `abandoned` | 這份工作的結局是什麼 | 可 reopen |
+
+**不合成一欄的四個值**：那樣就表達不出「完成**且**收起來」，而那是最常見的
+收尾。同一個判斷在 Task 那裡做過（status 與 claim 正交，不把 `claimed` 放進
+status）。封存一塊已完成的板，`outcome` 不受影響。
+
+- `POST /api/boards/{bid}/outcome`，body `{"outcome": ...}`。**一支端點三個
+  轉換**，空字串＝reopen。不拆成 complete／abandon／reopen 三支：一個欄位
+  多條寫入路徑，遲早有一條漏掉檢查，而漏掉的那條不會報錯。
+- **限人類 owner**（403 `human_only`），agent 側不暴露工具。理由與 Objective
+  的 `verified` 相同：確認「真的做完了」要跑測試、看畫面，那件事只有人做得到。
+- `GET /api/boards` **預設濾掉 `outcome` 非空的板**（分頁不該隨時間被做完的板
+  塞滿），`outcome=completed|abandoned|any` 可撈回；值不合法 422。
+- 存量遷移一律 `''`。把既有的板悄悄標成已完成，它們會一次從分頁消失——與
+  `visibility` 當初的遷移是同一個判斷。
+
 ---
 
 ### 3.3 公開與私人
