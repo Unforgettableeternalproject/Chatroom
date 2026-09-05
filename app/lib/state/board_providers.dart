@@ -156,25 +156,26 @@ final boardProvider =
   final cache = ref.read(boardCacheProvider.notifier);
   // 這裡用 read 不用 watch：watch 自己的輸出會讓每次合併都觸發一次重拉。
   //
-  // 🔴 **房軸一律要全量（`afterBoardSeq: 0`）**，不吃快取水位。
+  // 帶快取水位要增量。**這裡曾經一律帶 0**（止血 B，2026-09-03）：
   //
-  // 快取以 board_id 為 key（v2 刻意：兩條路徑進到同一塊板要看到同一份），
-  // 而**房軸的 delta 只含這間房的卡**。兩件事各自都成立，湊在一起會壞：
+  //   快取以 board_id 為 key（v2 刻意：兩條路徑進到同一塊板要看到同一份），
+  //   而當時**房軸的 delta 只含這間房的卡**。兩件事各自都成立，湊在一起
+  //   會壞——從 A 房進板把共用水位推到最新，切到 B 房時拿那個水位去要增量，
+  //   Hub 只回該水位之後的變動 ⇒ **B 房自己的卡一張都不會來**，畫面上留著
+  //   A 房的內容。沒有錯誤、沒有空白，看起來像「這個房的卡不見了」
+  //   （艾斯維爾 2026-09-03 實機）。
   //
-  //   1. 從 A 房進板 → 共用快照裝著 A 房的卡，水位被推到最新
-  //   2. 切到 B 房 → 拿到**同一份**快照 → 水位是 A 房推上去的那個
-  //   3. 用那個水位要 B 房的增量 → Hub 只回該水位之後的變動
-  //      → **B 房自己的卡一張都不會來**
-  //   4. 畫面上留著的是 A 房的內容
+  // 🔴 **前提在 Hub `0876746` 消失了：房軸回的是整塊板。** 兩軸語意對齊
+  // 之後，共用快照與共用水位不再矛盾——止血也就沒有必要再付「每次進房重拉
+  // 整塊板」那個代價。撤除依據不是測試綠，是除錯端 2026-09-05 在 8788 打
+  // 真 HTTP 的實測（A 房全量回兩間房的卡、B 房帶水位的增量正確地回空）。
   //
-  // 壞得很安靜：沒有錯誤、沒有空白，畫面上是**另一間房的卡**，看起來
-  // 像「這個房的卡不見了」（艾斯維爾 2026-09-03 實機）。
-  //
-  // 全量的代價已經量過（實機最大那塊板 48 張），遠低於「顯示錯房間的卡」。
-  // 真正的解法是房軸與板軸的語意對齊，那是另一張票。
+  // 空板時 `resumeFrom` 自己回 0（見它的說明）——拿著高水位空等的話畫面會
+  // 永遠是空的，而且不報錯。
+  final known = cache.snapshotForRoom(roomId).resumeFrom;
   final delta = await ref
       .watch(boardApiProvider)
-      .fetch(roomId, afterBoardSeq: 0, participantId: pid);
+      .fetch(roomId, afterBoardSeq: known, participantId: pid);
   return cache.apply(cache.boardIdOf(roomId) ?? roomId, delta, roomId: roomId);
 });
 
