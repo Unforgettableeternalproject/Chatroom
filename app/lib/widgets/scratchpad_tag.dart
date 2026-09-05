@@ -34,6 +34,23 @@ Color tagColor(String tag) => switch (tag) {
       _ => const Color(0xFF7A8290),
     };
 
+/// 刪不掉一個標籤時要對人說的那句話。
+///
+/// **抽成頂層函式是為了測得到**（同 `padRoute()`）：這幾句是這個對話框裡
+/// 唯一有判斷的東西，埋在 State 裡等於沒有守著。
+///
+/// 🔴 `tag_in_use` 一定要講出**幾則**。Hub 特地在 409 裡附上 `block_ids`
+/// 就是為了這個——擋下來而已是把問題換個地方放，使用者會反覆按同一顆刪除
+/// 鈕，因為畫面沒告訴他該先去改什麼。
+String tagRemovalError(String code, String tag,
+    {int blockCount = 0, String fallback = ''}) =>
+    switch (code) {
+      'tag_in_use' => '還有 $blockCount 則段落標著「${tagLabel(tag)}」，'
+          '先把它們改成別的標籤才刪得掉。',
+      'tag_is_default' => '「${tagLabel(tag)}」是預設標籤，每塊板都有，刪不掉。',
+      _ => fallback,
+    };
+
 /// 一顆標籤徽章。
 ///
 /// [onPick] 給了才可以改；`null` 時它只是一個顯示——**唯讀的人不該看到一個

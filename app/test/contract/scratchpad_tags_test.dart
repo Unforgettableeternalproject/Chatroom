@@ -6,6 +6,7 @@ import 'package:chatroom_app/api/scratchpad_api.dart';
 import 'package:chatroom_app/core/errors/api_exception.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/models/scratchpad.dart';
+import 'package:chatroom_app/widgets/scratchpad_tag.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -131,6 +132,20 @@ void main() {
       final r = await api.addTags('b1', sessionKey: 'k', tags: const ['權限']);
       expect(r.allowed, contains('權限'));
       expect(canned.seen.single.data['tags'], ['權限']);
+    });
+
+    test('🔴 刪不掉的時候要講出「幾則」，不是丟一句操作失敗', () {
+      expect(
+        tagRemovalError('tag_in_use', 'bug', blockCount: 2),
+        allOf(contains('2 則'), contains('Bug')),
+        reason: 'Hub 特地在 409 裡附上 block_ids 就是為了這句話——'
+            '沒有它，人會反覆按同一顆刪除鈕',
+      );
+      expect(tagRemovalError('tag_is_default', 'feature'),
+          allOf(contains('新功能'), contains('刪不掉')));
+      // 沒認出來的 code 用 Hub 的原話，不要自己編一句更模糊的
+      expect(tagRemovalError('whatever', 'x', fallback: 'Hub 說的話'),
+          'Hub 說的話');
     });
 
     test('🔴 刪除還有段落在用的標籤 → 409，而且指得出是哪幾則', () async {

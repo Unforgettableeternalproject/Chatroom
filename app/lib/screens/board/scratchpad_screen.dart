@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../api/board_api.dart' show BoardsApi;
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -157,6 +158,12 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 style: UepText.display(size: 22, color: s.inkTitle)),
           ),
           MonoLabel('${pad.blocks.length} 段', size: 9, letterSpacing: 1.2),
+          // 管理這塊板的自訂標籤。**只在標籤功能真的在時出現**——
+          // 舊 Hub 沒有 `allowed_tags`，那時這顆按鈕按下去是一個空對話框
+          if (pad.canEdit && widget.allowedTags.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            _Tiny(label: '標籤', onTap: _manageTags),
+          ],
         ]),
         const SizedBox(height: 4),
         Text(
@@ -266,6 +273,25 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         allowedTags: widget.allowedTags,
         onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
       );
+
+  /// 管理這塊板的自訂標籤。
+  ///
+  /// 開完之後**一定要 invalidate 板的快取**：選單內容是從那份快照讀的，
+  /// 不重拉的話新增的標籤要等下一次板變動才會出現在段落的選單裡。
+  Future<void> _manageTags() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _TagManagerDialog(
+        boardId: widget.boardId,
+        allowed: widget.allowedTags,
+        sessionKey: _sessionKey,
+        api: ref.read(boardsApiProvider),
+      ),
+    );
+    if (!mounted) return;
+    ref.invalidate(boardByIdProvider(widget.boardId));
+    _reload();
+  }
 
   /// 只改標籤，內容原封不動送回去。
   ///
@@ -479,6 +505,172 @@ class _PadBodyState extends ConsumerState<_PadBody> {
 }
 
 /// 一個段落。作者、內容、註解。
+/// 管理板自訂標籤。
+///
+/// ⚠️ **這裡分不出哪些是預設標籤、哪些是這塊板自己加的**——Hub 的
+/// `allowed_tags` 是兩者的聯集，而 `custom_tags` 沒有隨板回來。所以刪除
+/// 對每一顆都開放，預設集合由 Hub 用 422 `tag_is_default` 擋下。
+///
+/// 這不是理想的形狀（專案的規矩是「畫一個永遠按不動的按鈕比不畫更難懂」，
+/// 這裡等於反過來：畫一顆註定失敗的按鈕）。正解是 Hub 隨板回 `custom_tags`，
+/// 已在房內提出；補上之後這裡把預設那些鎖起來就好，是一行的事。
+/// **在那之前，錯誤訊息要說得夠清楚**，不能只丟一句「操作失敗」。
+class _TagManagerDialog extends StatefulWidget {
+  const _TagManagerDialog({
+    required this.boardId,
+    required this.allowed,
+    required this.sessionKey,
+    required this.api,
+  });
+
+  final String boardId;
+  final List<String> allowed;
+  final String sessionKey;
+  final BoardsApi api;
+
+  @override
+  State<_TagManagerDialog> createState() => _TagManagerDialogState();
+}
+
+class _TagManagerDialogState extends State<_TagManagerDialog> {
+  late List<String> _allowed = [...widget.allowed];
+  final _input = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _input.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add() async {
+    final t = _input.text.trim();
+    if (t.isEmpty || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final r = await widget.api
+          .addTags(widget.boardId, sessionKey: widget.sessionKey, tags: [t]);
+      if (!mounted) return;
+      setState(() {
+        _allowed = r.allowed;
+        _input.clear();
+      });
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _remove(String tag) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final r = await widget.api
+          .removeTag(widget.boardId, tag, sessionKey: widget.sessionKey);
+      if (!mounted) return;
+      setState(() => _allowed = r.allowed);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      // 🔴 **`tag_in_use` 要指得出是哪幾則。** 擋下來而已是把問題換個地方
+      // 放——使用者會反覆按同一顆刪除鈕，因為畫面沒告訴他該先去改什麼
+      setState(() => _error = tagRemovalError(
+            e.code,
+            tag,
+            blockCount: (e.detail['block_ids'] as List?)?.length ?? 0,
+            fallback: e.message,
+          ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return AlertDialog(
+      backgroundColor: s.bgCard,
+      title: Text('這塊板的標籤',
+          style: UepText.display(size: 18, color: s.inkTitle)),
+      content: SizedBox(
+        width: 360,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(
+            '段落一次只標一個。新增的標籤這塊板上的人都用得到；'
+            '預設的四個每塊板都有，刪不掉。',
+            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+          ),
+          const SizedBox(height: 12),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            for (final t in _allowed)
+              Container(
+                padding: const EdgeInsets.only(left: 8, right: 2),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                      color: tagColor(t).withValues(alpha: .5)),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(tagLabel(t),
+                      style: UepText.mono(
+                          size: 9, letterSpacing: 1.0, color: tagColor(t))),
+                  IconButton(
+                    tooltip: '刪掉',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 26, minHeight: 26),
+                    onPressed: _busy ? null : () => _remove(t),
+                    icon: Icon(Icons.close, size: 12, color: s.inkMute),
+                  ),
+                ]),
+              ),
+          ]),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _input,
+                style: UepText.sans(size: 13, color: s.ink),
+                decoration: InputDecoration(
+                  hintText: '新增一個標籤…',
+                  hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onSubmitted: (_) => _add(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            UepButton(label: '新增', small: true, onPressed: _busy ? null : _add),
+          ]),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(_error!,
+                style: UepText.sans(size: 12, color: UepColors.error,
+                    height: 1.45)),
+          ],
+        ]),
+      ),
+      actions: [
+        UepButton(
+          label: '關起來',
+          variant: UepButtonVariant.outline,
+          small: true,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ],
+    );
+  }
+}
+
 /// 依標籤篩選。**數字跟著每一顆走**——「Bug 0」與「沒有 Bug 這個標籤」
 /// 是兩件事，而使用者要的是前者：他想知道自己有沒有漏標。
 class _TagFilterBar extends StatelessWidget {
