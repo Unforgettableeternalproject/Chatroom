@@ -82,11 +82,16 @@ class ScratchpadApi {
     required String sessionKey,
     required String content,
     String afterBlockId = '',
+    List<String> tags = const [],
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/boards/$boardId/scratchpads/$padId/blocks',
-          data: {'content': content, 'after_block_id': afterBlockId},
+          data: {
+            'content': content,
+            'after_block_id': afterBlockId,
+            'tags': tags,
+          },
           options: _h(sessionKey),
         );
         return (res.data?['id'] as String?) ?? '';
@@ -104,11 +109,14 @@ class ScratchpadApi {
     required String sessionKey,
     required String content,
     required int rev,
+    List<String> tags = const [],
   }) =>
       unwrap(() async {
         final res = await _dio.put<Map<String, dynamic>>(
           '/api/boards/$boardId/scratchpads/$padId/blocks/$blockId',
-          data: {'content': content, 'rev': rev},
+          // ⚠️ `tags` 送的是**整份新值**，不是差異。改內容時沒把現有標籤
+          // 一起帶上就等於把它清掉——呼叫端要從 block 讀出來再送回去
+          data: {'content': content, 'rev': rev, 'tags': tags},
           options: _h(sessionKey),
         );
         return (res.data?['rev'] as int?) ?? rev;

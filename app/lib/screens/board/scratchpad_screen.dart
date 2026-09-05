@@ -12,6 +12,7 @@ import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/scratchpad_tag.dart';
 import '../../widgets/uep_button.dart';
 
 /// 想法板：**先把腦裡的東西倒進去**，之後再整理成卡。
@@ -57,16 +58,34 @@ class ScratchpadScreen extends ConsumerWidget {
         error: e,
         onRetry: () => ref.invalidate(scratchpadProvider(key)),
       ),
-      data: (pad) => _PadBody(pad: pad, boardId: boardId),
+      // 標籤選單只有板知道（預設 ∪ 板自訂）。**拿不到就是空的**——這時
+      // 整套標籤 UI 不出現，而不是退回一份寫死的預設集合（見 BoardDelta）。
+      //
+      // ⚠️ 讀的是**快取裡已經有的那份**，不另外去要一次板：想法板一定是
+      // 從板頁進來的，那份快照已經在手上。為了一排標籤而讓這個畫面多一個
+      // 網路依賴，代價是它會跟著板的載入一起失敗——而標籤只是點綴
+      data: (pad) => _PadBody(
+        pad: pad,
+        boardId: boardId,
+        allowedTags:
+            ref.watch(boardCacheProvider)[boardId]?.allowedTags ?? const [],
+      ),
     );
   }
 }
 
 class _PadBody extends ConsumerStatefulWidget {
-  const _PadBody({required this.pad, required this.boardId});
+  const _PadBody({
+    required this.pad,
+    required this.boardId,
+    this.allowedTags = const [],
+  });
 
   final Scratchpad pad;
   final String boardId;
+
+  /// 標籤選單的內容，來自板（`allowed_tags`）。空的時候整套標籤 UI 不出現。
+  final List<String> allowedTags;
 
   @override
   ConsumerState<_PadBody> createState() => _PadBodyState();
@@ -76,6 +95,21 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   /// 正在編輯哪一段。一次一段——同時開兩段的話，兩份 rev 都會過期，
   /// 而使用者不會知道是哪一段先壞的。
   String? _editing;
+
+  /// 只看某一個標籤的段落。`null` = 全部。
+  ///
+  /// ⚠️ **這是純畫面上的過濾，不動資料。** 篩選中時排序功能要關掉——
+  /// 拖曳送的是「整份新順序」，而手上只有一部分，送出去等於把沒顯示的
+  /// 那些的位置一起重寫。
+  String? _filter;
+
+  /// 篩選之後看得到的段落。
+  List<ScratchpadBlock> get _visible => _filter == null
+      ? widget.pad.blocks
+      : [
+          for (final b in widget.pad.blocks)
+            if (b.tag == _filter) b,
+        ];
 
   String get _sessionKey => ref.read(appConfigProvider).deviceKey;
   String get _key => scratchpadKey(widget.boardId, widget.pad.id);
@@ -130,10 +164,29 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           'agent 讀得到，也能對每一段留意見——但改不動你寫的東西。',
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
         ),
+        if (widget.allowedTags.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _TagFilterBar(
+            allowed: widget.allowedTags,
+            selected: _filter,
+            counts: {
+              for (final t in widget.allowedTags)
+                t: [
+                  for (final b in pad.blocks)
+                    if (b.tag == t) b,
+                ].length,
+            },
+            onPick: (t) => setState(() => _filter = t),
+          ),
+        ],
         const SizedBox(height: 16),
         // 排得動時整段換成可拖曳的清單。**拖不動就不要留拖曳把手**——
         // 那比沒有把手更讓人以為壞了（同 board_screen 的 _canReorder）
-        if (pad.canReorder)
+        //
+        // 🔴 篩選中時**一律不給拖**：拖曳送的是整份新順序，而手上只有符合
+        // 篩選的那一部分，送出去會把沒顯示的那些位置一起重寫——畫面上完全
+        // 看不出發生了什麼
+        if (pad.canReorder && _filter == null)
           ReorderableListView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -148,8 +201,20 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 ),
             ],
           )
-        else
-          for (final b in pad.blocks) _blockCard(pad, b),
+        else ...[
+          for (final b in _visible) _blockCard(pad, b),
+          // 篩掉了全部時要說出來。空白畫面與「這塊板還沒有東西」看起來
+          // 一模一樣，而使用者多半已經忘記自己按了篩選
+          if (_visible.isEmpty && pad.blocks.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                '這個標籤底下還沒有段落。',
+                textAlign: TextAlign.center,
+                style: UepText.serif(size: 12, color: s.inkMute),
+              ),
+            ),
+        ],
       ]);
 
   /// 常駐在底部的輸入區。唯讀時換成一句說明——**位置一樣**，人不會
@@ -161,7 +226,11 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         ),
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
         child: pad.canEdit
-            ? _AddBlock(onAdd: _add)
+            ? _AddBlock(
+                onAdd: _add,
+                allowedTags: widget.allowedTags,
+                initialTag: _filter,
+              )
             : Text('你在這塊板上是唯讀的，只能看。',
                 style: UepText.serif(size: 12, color: s.inkMute)),
       );
@@ -194,7 +263,38 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 ? (id, undo) => _resolveNote(id, undo)
                 : null,
         onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
+        allowedTags: widget.allowedTags,
+        onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
       );
+
+  /// 只改標籤，內容原封不動送回去。
+  ///
+  /// ⚠️ 走的是同一支 `writeBlock`（Hub 沒有單獨改標籤的端點），所以 **rev
+  /// 照樣會被檢查**——別人在你按下選單的那一刻改了內容的話這裡會 409，
+  /// 而正確的處置是重拉，不是把手上的舊內容連著新標籤寫回去（那會把他
+  /// 剛寫的字蓋掉，而使用者以為自己只是點了一個標籤）。
+  Future<void> _setTag(ScratchpadBlock b, String? tag) async {
+    try {
+      await ref.read(scratchpadApiProvider).writeBlock(
+            widget.boardId,
+            widget.pad.id,
+            b.id,
+            sessionKey: _sessionKey,
+            content: b.content,
+            rev: b.rev,
+            tags: tag == null ? const [] : [tag],
+          );
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.code == 'scratchpad_block_stale'
+              ? '這一段剛被別人改過，重新載入後再標一次'
+              : e.message),
+        ));
+      }
+    }
+    _reload();
+  }
 
   /// 拖曳重排。**整批送**：Hub 依收到的順序寫 order_index，只送一部分的話
   /// 沒送的那些保留舊值 ⇒ 兩批號碼交錯，順序變成未定義。
@@ -230,6 +330,10 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             sessionKey: _sessionKey,
             content: text,
             rev: b.rev,
+            // ⚠️ **`tags` 送的是整份新值，不是差異。** 不帶的話「改一個錯字」
+            // 會順手把這一段的標籤清掉——不會報錯，只有下次去篩選時才發現
+            // 它從分堆裡消失了
+            tags: b.tags,
           );
       if (!mounted) return;
       setState(() => _editing = null);
@@ -278,6 +382,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             sessionKey: _sessionKey,
             content: mine,
             rev: theirRev,
+            // 同 _save：整份送，不帶等於清掉
+            tags: b.tags,
           );
       if (!mounted) return;
       setState(() => _editing = null);
@@ -292,13 +398,14 @@ class _PadBodyState extends ConsumerState<_PadBody> {
     }
   }
 
-  Future<void> _add(String text) async {
+  Future<void> _add(String text, String? tag) async {
     try {
       await ref.read(scratchpadApiProvider).addBlock(
             widget.boardId,
             widget.pad.id,
             sessionKey: _sessionKey,
             content: text,
+            tags: tag == null ? const [] : [tag],
           );
       _reload();
     } on ApiException catch (e) {
@@ -372,6 +479,67 @@ class _PadBodyState extends ConsumerState<_PadBody> {
 }
 
 /// 一個段落。作者、內容、註解。
+/// 依標籤篩選。**數字跟著每一顆走**——「Bug 0」與「沒有 Bug 這個標籤」
+/// 是兩件事，而使用者要的是前者：他想知道自己有沒有漏標。
+class _TagFilterBar extends StatelessWidget {
+  const _TagFilterBar({
+    required this.allowed,
+    required this.selected,
+    required this.counts,
+    required this.onPick,
+  });
+
+  final List<String> allowed;
+  final String? selected;
+  final Map<String, int> counts;
+  final ValueChanged<String?> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Wrap(spacing: 6, runSpacing: 6, children: [
+      _pill(s, label: '全部', on: selected == null, onTap: () => onPick(null),
+          color: s.inkMute),
+      for (final t in allowed)
+        _pill(
+          s,
+          label: '${tagLabel(t)} ${counts[t] ?? 0}',
+          on: selected == t,
+          color: tagColor(t),
+          // 再按一次收起來——按了才發現不是想看的那一堆時，路要在原地
+          onTap: () => onPick(selected == t ? null : t),
+        ),
+    ]);
+  }
+
+  Widget _pill(UepSurface s,
+          {required String label,
+          required bool on,
+          required Color color,
+          required VoidCallback onTap}) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(3),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: on ? color.withValues(alpha: .13) : null,
+            border: Border.all(
+                color: on ? color.withValues(alpha: .55) : s.line),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Text(
+            label,
+            style: UepText.mono(
+              size: 9,
+              letterSpacing: 1.0,
+              color: on ? color : s.inkMute,
+            ),
+          ),
+        ),
+      );
+}
+
 class _BlockCard extends StatefulWidget {
   const _BlockCard({
     super.key,
@@ -383,10 +551,18 @@ class _BlockCard extends StatefulWidget {
     required this.onNote,
     required this.onResolveNote,
     required this.onDelete,
+    this.allowedTags = const [],
+    this.onSetTag,
   });
 
   final ScratchpadBlock block;
   final bool editing;
+
+  /// 選單內容，一律來自 Hub（見 [ScratchpadTagChip]）。
+  final List<String> allowedTags;
+
+  /// 改這一段的標籤（`null` = 取消標籤）。唯讀時給 `null`。
+  final ValueChanged<String?>? onSetTag;
   final VoidCallback? onEdit;
   final VoidCallback onCancel;
   final ValueChanged<String> onSave;
@@ -467,6 +643,14 @@ class _BlockCardState extends State<_BlockCard> {
                   color: s.inkMute),
             ),
           ),
+          // 標籤放在動作按鈕之前：它是這一段「是什麼」，不是能對它做什麼
+          ScratchpadTagChip(
+            tag: b.tag,
+            allowed: widget.allowedTags,
+            onPick: widget.onSetTag,
+          ),
+          if (b.tag != null || widget.allowedTags.isNotEmpty)
+            const SizedBox(width: 6),
           if (!widget.editing && widget.onEdit != null)
             _Tiny(label: '編輯', onTap: widget.onEdit!),
           if (!widget.editing && widget.onDelete != null) ...[
@@ -707,11 +891,21 @@ class _Side extends StatelessWidget {
 }
 
 class _AddBlock extends StatefulWidget {
-  const _AddBlock({required this.onAdd});
+  const _AddBlock({
+    required this.onAdd,
+    this.allowedTags = const [],
+    this.initialTag,
+  });
 
   /// 回 `Future`，**成功才清輸入框**。按下就清的話，POST 失敗時那一段
   /// 想法已經沒了，而 toast 只告訴他「失敗」，沒告訴他「你剛打的不見了」。
-  final Future<void> Function(String) onAdd;
+  final Future<void> Function(String, String?) onAdd;
+
+  final List<String> allowedTags;
+
+  /// 正在篩某個標籤時預設帶上它。**不帶的話新增的那一段會當場從畫面上
+  /// 消失**（它不符合篩選），而人會以為沒有存成功。
+  final String? initialTag;
 
   @override
   State<_AddBlock> createState() => _AddBlockState();
@@ -720,6 +914,16 @@ class _AddBlock extends StatefulWidget {
 class _AddBlockState extends State<_AddBlock> {
   final _c = TextEditingController();
   bool _sending = false;
+  late String? _tag = widget.initialTag;
+
+  @override
+  void didUpdateWidget(_AddBlock old) {
+    super.didUpdateWidget(old);
+    // 篩選換了就跟著換——除非人已經自己挑過別的
+    if (widget.initialTag != old.initialTag && _tag == old.initialTag) {
+      _tag = widget.initialTag;
+    }
+  }
 
   @override
   void dispose() {
@@ -744,9 +948,14 @@ class _AddBlockState extends State<_AddBlock> {
         onChanged: (_) => setState(() {}),
       ),
       const SizedBox(height: 8),
-      Align(
-        alignment: Alignment.centerRight,
-        child: UepButton(
+      Row(children: [
+        ScratchpadTagChip(
+          tag: _tag,
+          allowed: widget.allowedTags,
+          onPick: (t) => setState(() => _tag = t),
+        ),
+        const Spacer(),
+        UepButton(
           label: _sending ? '送出中…' : '加一段',
           small: true,
           onPressed: (_sending || _c.text.trim().isEmpty)
@@ -754,7 +963,7 @@ class _AddBlockState extends State<_AddBlock> {
               : () async {
                   setState(() => _sending = true);
                   try {
-                    await widget.onAdd(_c.text.trim());
+                    await widget.onAdd(_c.text.trim(), _tag);
                     if (mounted) _c.clear();
                   } catch (_) {
                     // 訊息已經由呼叫端 toast 過了。這裡只要**不清空**
@@ -763,7 +972,7 @@ class _AddBlockState extends State<_AddBlock> {
                   }
                 },
         ),
-      ),
+      ]),
     ]);
   }
 }

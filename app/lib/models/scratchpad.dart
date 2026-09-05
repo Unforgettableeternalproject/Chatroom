@@ -60,6 +60,7 @@ class ScratchpadBlock {
     this.authorName = '',
     this.authorKind = '',
     this.canEdit = false,
+    this.tags = const [],
     this.notes = const [],
     this.updatedAt,
   });
@@ -80,8 +81,21 @@ class ScratchpadBlock {
   /// 規則會漂移，而漂移的那一半沒有人在看：畫面給了編輯框、送出時 403。
   final bool canEdit;
 
+  /// 這個段落被標成什麼（Bug／新功能／…）。
+  ///
+  /// **schema 寬、行為窄**：欄位是陣列，但行為是單選——之後要改多選時不必
+  /// 動資料，反過來（存單一值）有一半機率要遷移。畫面要的那一個用 [tag]。
+  ///
+  /// 標在段落不標在板：一份想法板裡的觀察性質各不相同（兩則 bug、三則新
+  /// 功能、一則權限設計），標在板上等於一份板只有一個標籤，標不出任何東西。
+  final List<String> tags;
+
   final List<ScratchpadNote> notes;
   final String? updatedAt;
+
+  /// 單選語意下的那一個標籤。**沒標時是 `null`**——`null` 與空字串要分得出
+  /// 來，不然「沒有標籤」與「標了一個空的」在畫面上會長得一樣。
+  String? get tag => tags.isEmpty ? null : tags.first;
 
   bool get isHuman => authorKind == 'human';
 
@@ -100,6 +114,10 @@ class ScratchpadBlock {
         authorName: (json['author_name'] as String?) ?? '',
         authorKind: (json['author_kind'] as String?) ?? '',
         canEdit: (json['can_edit'] as bool?) ?? false,
+        tags: [
+          for (final t in (json['tags'] as List<dynamic>? ?? const []))
+            if (t is String && t.isNotEmpty) t,
+        ],
         updatedAt: json['updated_at'] as String?,
         notes: [
           for (final n in (json['notes'] as List<dynamic>? ?? const []))

@@ -454,6 +454,45 @@ class BoardsApi {
         return (res.data?['id'] as String?) ?? '';
       });
 
+  /// 幫這塊板註冊自訂的想法板標籤。
+  ///
+  /// **註冊與「自由輸入」是兩件事**：註冊是一次明確的動作，之後段落仍然
+  /// 從選單挑。選單內容變成「預設 ∪ 這塊板自訂的」，不是一個空白輸入框
+  /// ——不然 bug／Bug／BUG／錯誤 會一起長出來，而那不會報錯，只會讓分堆
+  /// 慢慢失效。
+  Future<BoardTagsResult> addTags(
+    String boardId, {
+    required String sessionKey,
+    required List<String> tags,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/tags',
+          data: {'tags': tags},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return BoardTagsResult.fromJson(res.data ?? const {});
+      });
+
+  /// 撤掉一個板自訂標籤。**預設集合刪不掉**（422 `tag_is_default`）。
+  ///
+  /// 🔴 還有段落在用時 Hub 回 409 `tag_in_use`，並附上 `block_ids` 與
+  /// `pad_ids`。那兩份清單是這個做法的重點：擋下來而已是把問題換個地方
+  /// 放，**擋下來並指得出是哪幾則**才給得出出口——否則標籤用過一次就
+  /// 永久鎖死。呼叫端要把它們畫出來。
+  Future<BoardTagsResult> removeTag(
+    String boardId,
+    String tag, {
+    required String sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.delete<Map<String, dynamic>>(
+          '/api/boards/$boardId/tags/${Uri.encodeComponent(tag)}',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return BoardTagsResult.fromJson(res.data ?? const {});
+      });
+
   /// Board Library 清單。
   ///
   /// [status] 為 `active` / `archived`。**Board 的封存與 room 的封存是兩件

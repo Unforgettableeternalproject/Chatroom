@@ -516,6 +516,7 @@ class BoardDelta {
     this.attachedRooms = const [],
     this.directives = const [],
     this.directivesHasMore = false,
+    this.allowedTags = const [],
     this.supervisor,
   });
 
@@ -537,6 +538,14 @@ class BoardDelta {
 
   /// owner / editor / viewer。空字串＝Hub 沒說，當唯讀處理。
   final String myRole;
+
+  /// 想法板段落標籤的選單內容：**預設集合 ∪ 這塊板自訂的**。
+  ///
+  /// 🔴 **不要在 UI 這邊補一份預設集合當退路。** 補了就是第二個判準，而板
+  /// 自訂的那些它永遠不會知道——兩份漂移的時候沒有任何一邊會報錯。舊 Hub
+  /// 不回這一欄時它是空的，那時正確的畫面是「沒有標籤這個功能」，不是
+  /// 「有四個寫死的選項」。
+  final List<String> allowedTags;
 
   /// 板上的人。
   ///
@@ -583,6 +592,10 @@ class BoardDelta {
         .map((e) => BoardDirective.fromJson(e as Map<String, dynamic>))
         .toList(),
     directivesHasMore: (json['directives_has_more'] as bool?) ?? false,
+    allowedTags: [
+      for (final t in (json['allowed_tags'] as List?) ?? const [])
+        if (t is String && t.isNotEmpty) t,
+    ],
     objectives: ((json['objectives'] as List?) ?? const [])
         .map((e) => BoardObjective.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -641,6 +654,7 @@ class BoardSnapshot {
     this.attachedRooms = const {},
     this.directives = const {},
     this.directivesHasMore = false,
+    this.allowedTags = const [],
     this.supervisor,
   });
 
@@ -649,6 +663,9 @@ class BoardSnapshot {
 
   /// 這份快取是誰的。v2 起這才是身分，roomId 只是進來的其中一道門。
   final String boardId;
+
+  /// 想法板標籤的選單內容（預設 ∪ 這塊板自訂的）。見 [BoardDelta.allowedTags]。
+  final List<String> allowedTags;
 
   final String name;
 
@@ -782,6 +799,10 @@ class BoardSnapshot {
       attachedRooms: delta.attachedRooms.isEmpty
           ? attachedRooms
           : {for (final r in delta.attachedRooms) r.id: r},
+      // 同上：空的時候保留手上那份。增量回應不重送它，跟著清空的話標籤
+      // 選單會在第二次拉取後整個消失，而畫面上那看起來像「這塊板沒有標籤」
+      allowedTags:
+          delta.allowedTags.isEmpty ? allowedTags : delta.allowedTags,
       directives: dirs,
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉
@@ -1359,6 +1380,30 @@ class TaskRequest {
 /// 形狀刻意與 `RoomListResult` 對齊——同一個開關管兩個分頁，兩邊的判斷
 /// 依據長得不一樣的話，總有一邊會先漂移。
 @immutable
+/// 動過板自訂標籤之後的新狀態。
+///
+/// [allowed] 是**選單接下來該長什麼樣**（預設 ∪ 自訂），[custom] 只有這塊
+/// 板自己加的那些——設定頁要分得出哪些刪得掉（預設集合刪不掉）。
+@immutable
+class BoardTagsResult {
+  const BoardTagsResult({this.custom = const [], this.allowed = const []});
+
+  final List<String> custom;
+  final List<String> allowed;
+
+  factory BoardTagsResult.fromJson(Map<String, dynamic> json) =>
+      BoardTagsResult(
+        custom: [
+          for (final t in (json['tags'] as List?) ?? const [])
+            if (t is String && t.isNotEmpty) t,
+        ],
+        allowed: [
+          for (final t in (json['allowed'] as List?) ?? const [])
+            if (t is String && t.isNotEmpty) t,
+        ],
+      );
+}
+
 class BoardListResult {
   const BoardListResult({
     this.boards = const [],

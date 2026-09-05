@@ -54,7 +54,8 @@ class _CountingApi extends ScratchpadApi {
   Future<String> addBlock(String boardId, String padId,
       {required String sessionKey,
       required String content,
-      String afterBlockId = ''}) async {
+      String afterBlockId = '',
+      List<String> tags = const []}) async {
     blocks++;
     return 'b$blocks';
   }
