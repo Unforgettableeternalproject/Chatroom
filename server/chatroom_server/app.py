@@ -2704,21 +2704,31 @@ def create_app(config: Config | None = None) -> FastAPI:
             "        JOIN board_objective o ON o.id = c.objective_id"
             "        WHERE c.status='cancelled' OR o.status='cancelled'))"
         )
+        # 🚨 **要連 board_id 一起分組，不能只按 room_id。**
+        # 零掛接房的板上，卡的 `room_id` 是空字串——只查 room_id 的話這裡會
+        # 拿著空的 room 去領號，而 `_next_board_seq` 在沒有房也沒有板時是
+        # **明確拒絕**（D9 的修法，那是對的）。拒絕發生在 `lifespan` 裡 ⇒
+        # 不是一個端點 500，是**整台 Hub 起不來**，而且那一列留在資料庫裡，
+        # 每次啟動都再炸一次，重啟救不回來
+        # （@開發Novia (除錯) 2026-09-05，D9 的同型問題往上一級）。
         rows = await (
             await db.execute(
-                f"SELECT DISTINCT room_id FROM board_task WHERE {stale}"
+                f"SELECT DISTINCT room_id, board_id FROM board_task"
+                f" WHERE {stale}"
             )
         ).fetchall()
         healed = 0
         for r in rows:
-            seq = await _next_board_seq(r["room_id"])
+            board_key = _row_board_id(r)
+            seq = await _next_board_seq(r["room_id"], board_key)
             cur = await db.execute(
                 "UPDATE board_task SET"
                 " claim_state=CASE WHEN claim_participant_id IS NOT NULL"
                 "                  THEN 'held' ELSE '' END,"
                 " orphaned_at=NULL, orphaned_reason='', board_seq=?"
-                f" WHERE room_id=? AND {stale} RETURNING id",
-                (seq, r["room_id"]),
+                " WHERE room_id=? AND IFNULL(board_id,'')=?"
+                f" AND {stale} RETURNING id",
+                (seq, r["room_id"], board_key),
             )
             healed += len(await cur.fetchall())
         if healed:
