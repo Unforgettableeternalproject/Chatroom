@@ -171,7 +171,12 @@ async def test_response_shape_is_pinned(tmp_path):
             # v2：舊路由兼任 resolver，告訴舊 client 它讀的是哪塊板
             "board_id",
             "board_seq", "full", "objectives", "checklists", "tasks",
-            "reclaimable_tasks", "supervisor",
+            "reclaimable_tasks",
+            # 本房的 supervisor。09/05（卡 3a518cbe）型別從 v1 的
+            # session_key 字串改成物件，與 attached_rooms[] 同形。
+            # ⚠️ 這個鍵**不能刪**：supervisor 是 room 層級的設定，
+            # 房間還沒有板也能指定，而那時 attached_rooms 是空的
+            "supervisor",
             # 從聊天室進板的徽章靠它畫「掛了哪幾間房」，與板軸同一份
             # （艾斯維爾想法板觀察 ①）
             "attached_rooms",

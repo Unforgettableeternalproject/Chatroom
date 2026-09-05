@@ -52,6 +52,19 @@ async def _events(client, rid, hdr, event):
     return [m for m in msgs if m["system_event"] == event]
 
 
+def _room_supervisor(board_body, room_id):
+    """本房的 supervisor——房軸頂層那個鍵。
+
+    09/05（卡 3a518cbe）型別從 v1 的 session_key 字串改成**物件**，與
+    `attached_rooms[].supervisor` 同形。
+
+    ⚠️ 這個鍵不能改成「從 attached_rooms 取本房那筆」：supervisor 是 room
+    層級的設定，**房間還沒有板也能指定**（指派它進來正是最常見的情形），
+    而 attached_rooms 是板的掛接清單，沒板時是空的。
+    """
+    return board_body["supervisor"]
+
+
 async def test_can_appoint_someone_not_in_the_room_yet(tmp_path):
     """被指定的對象在設定當下多半還沒進房——那正是要指派它進來的情形。"""
     app, client = await _client(tmp_path, "not-yet")
@@ -64,7 +77,8 @@ async def test_can_appoint_someone_not_in_the_room_yet(tmp_path):
         assert r.json()["in_room"] is False
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=owner)).json()
-        assert board["supervisor"] == "claude-not-here-yet"
+        sup = _room_supervisor(board, rid)
+        assert sup is not None and sup["actor_key"] == "claude-not-here-yet"
 
 
 async def test_only_the_creator_can_appoint(tmp_path):
@@ -91,7 +105,8 @@ async def test_departure_marks_and_announces_but_does_not_erase(tmp_path):
 
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=owner)).json()
-        assert board["supervisor"] == "agent-sup", "名字不能被抹掉"
+        sup = _room_supervisor(board, rid)
+        assert sup is not None and sup["actor_key"] == "agent-sup", "名字不能被抹掉"
         (msg,) = await _events(client, rid, owner, "board_supervisor_left")
         assert "Nova" in msg["content"]
         assert "重新指定" in msg["content"]
@@ -124,7 +139,8 @@ async def test_appointment_survives_a_restart_of_the_agent(tmp_path):
         again = await _join(client, rid, "agent-sup", "Nova")
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=again)).json()
-        assert board["supervisor"] == "agent-sup"
+        sup = _room_supervisor(board, rid)
+        assert sup is not None and sup["actor_key"] == "agent-sup"
 
 
 async def test_cancelling_leaves_a_record(tmp_path):
@@ -139,7 +155,7 @@ async def test_cancelling_leaves_a_record(tmp_path):
         assert r.json()["supervisor"] is None
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=owner)).json()
-        assert board["supervisor"] is None
+        assert _room_supervisor(board, rid) is None
         assert len(await _events(client, rid, owner,
                                  "board_supervisor_set")) == 2
 
@@ -480,3 +496,40 @@ async def test_a_supervisor_still_cannot_verify_what_he_sent_for_review(tmp_path
         r = await client.post(f"/api/board/objectives/{oid}/verify",
                               headers=owner)
         assert r.status_code == 200, r.text
+
+
+async def test_both_places_describe_the_supervisor_the_same_way(tmp_path):
+    """房軸頂層與 `attached_rooms[]` 講同一件事，形狀必須一模一樣。
+
+    這張卡（09/05 `3a518cbe`）的起因就是它們不一樣：一邊回 v1 的
+    session_key 字串、一邊回物件。**同一個鍵名兩種型別**，而讀的人得先知道
+    自己在哪一條路上——那是一份判準拆成兩份。
+
+    server 端兩處已改用同一個 `_supervisor_obj()`；這條釘住那個決定，
+    否則下一次有人「順手」在其中一邊多補一個欄位，漂移不會有任何地方報錯。
+    """
+    app, client = await _client(tmp_path, "same-shape")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await _join(client, rid, "agent-sup", "Nova")
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"session_key": "agent-sup"}, headers=owner)
+        # 建一張卡讓板長出來，attached_rooms 才有東西
+        await client.post(f"/api/rooms/{rid}/board/tasks",
+                          json={"title": "第一張"}, headers=owner)
+
+        body = (await client.get(f"/api/rooms/{rid}/board",
+                                 headers=owner)).json()
+        top = body["supervisor"]
+        (entry,) = [r for r in body["attached_rooms"] if r["id"] == rid]
+
+        assert top is not None and entry["supervisor"] is not None
+        assert top == entry["supervisor"], (
+            "同一個 supervisor 在兩處長得不一樣——"
+            f"頂層 {top}／attached_rooms {entry['supervisor']}"
+        )
+        assert top["actor_key"] == "agent-sup"
+        assert set(top) == {"actor_key", "display_name", "actor_kind",
+                            "departed"}
+        # session_key 不外流：對外一律用板上那套稱呼
+        assert "session_key" not in top
