@@ -399,20 +399,6 @@ class BoardOwnerTransfer(BaseModel):
     target_actor_key: str = Field(min_length=1, max_length=128)
 
 
-class BoardSupervisorAssign(BaseModel):
-    """board-scoped 的 Supervisor 指定。與房內那個 `BoardSupervisorSet`
-    是兩件事：那邊指的是 session_key、範圍是一間房；這邊是 actor_key、
-    範圍是一塊板，而且**對象不必在任何一間房裡**。
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    # 空字串＝卸任。**用空字串而不是另開一條 DELETE**：指定與卸任是同一個
-    # 決定的兩面，兩條路徑會讓「現在到底有沒有人在看」多一個出錯的地方
-    target_actor_key: str = Field(default="", max_length=128)
-    display_name: str = Field(default="", max_length=100)
-    actor_kind: str = Field(default="", max_length=20)
-
-
 class BoardDirective(BaseModel):
     # 空的 target ＝**對整塊板說**（艾斯維爾 2026-09-02）。不是每一則
     # Supervisor 的判斷都針對某個人——「這個方向要改」是說給板上所有人聽的。
@@ -6516,12 +6502,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         tasks = await _rows("board_task")
         await _annotate_watches(board_id, actor, objectives, checklists, tasks)
 
-        sup = None
-        if board["supervisor_actor_key"]:
-            sup = {"actor_key": board["supervisor_actor_key"],
-                   "display_name": board["supervisor_name"],
-                   "actor_kind": board["supervisor_kind"]}
-
+        # 🔑 **這裡刻意沒有頂層 `supervisor`。** Supervisor 屬於 room 不屬於
+        # board（艾斯維爾 2026-09-03 推翻原設計），要問的是
+        # `attached_rooms[].supervisor`——那才有「是哪一間的」這個維度。
+        # 頂層放一個彙整過的人只會換一種誤導：板掛三間房時它指誰？
+        # 而 client 真正要的多半是一個布林（我是不是任一掛接房的 supervisor），
+        # 那從 attached_rooms 算得出來（N-6，2026-09-05）。
         return {
             "board_id": board_id,
             # 板本身的中繼資料。從 Board Library 直接進來的 client 手上
@@ -6550,7 +6536,6 @@ def create_app(config: Config | None = None) -> FastAPI:
             "directives_has_more": directives_more,
             "members": members,
             "attached_rooms": attached,
-            "supervisor": sup,
             # 與房軸同一份（見那邊的註解）。**兩軸都要有**：同一份資訊只在
             # 一條路上出現的話，從 Board Library 進來的人看不到自己被請求接手
             # 什麼，而他從哪一條路進板純粹是導覽的偶然
@@ -7139,49 +7124,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "changed": True, "board_seq": seq,
                 "had_owner": bool(previous)}
 
-    @app.post("/api/boards/{board_id}/supervisor",
-              dependencies=[Depends(require_auth)])
-    async def set_board_supervisor(
-        board_id: str, body: BoardSupervisorAssign,
-        session_key: str = "",
-        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        x_participant_id: str | None = Header(default=None),
-    ):
-        """指定或卸任這塊板的 Supervisor。只有 owner。
-
-        Supervisor **不必是板的成員，也不必在任何一間掛接房裡**——這正是
-        艾斯維爾第 4 點要的：他能對正在工作的 agent 送判斷，而不必先被拉
-        進某間對話。空的 `target_actor_key` ＝ 卸任。
-        """
-        board = await _board_or_404(board_id)
-        actor = await _actor_from_headers(x_session_key, x_participant_id,
-                                          session_key)
-        role = await _board_role(board_id, actor)
-        if role != "owner":
-            raise _err(403, "not_board_owner",
-                       "只有這塊板的 owner 能指定或卸任 Supervisor")
-        db = app.state.db
-        target = actor_key(body.target_actor_key)
-        seq = await _next_seq_for_board(board_id)
-        await db.execute(
-            "UPDATE board SET supervisor_actor_key=?, supervisor_name=?,"
-            " supervisor_kind=?, supervisor_set_by_actor_key=?,"
-            " supervisor_set_at=? WHERE id=?",
-            (target, body.display_name.strip() if target else "",
-             body.actor_kind.strip() if target else "",
-             actor if target else "", _now() if target else None, board_id))
-        await _record_board_event(
-            board_id, seq,
-            "supervisor_set" if target else "supervisor_cleared",
-            actor=actor, target_actor_key=target,
-            payload={"display_name": body.display_name.strip()})
-        await _commit_with_retry(db)
-        await _notify_board_rooms(board_id)
-        return {"ok": True, "board_id": board_id, "board_seq": seq,
-                "supervisor": ({"actor_key": target,
-                                "display_name": body.display_name.strip(),
-                                "actor_kind": body.actor_kind.strip()}
-                               if target else None)}
+    # ⛔ `POST /api/boards/{board_id}/supervisor` 於 2026-09-05 退場（N-6）。
+    #
+    # Supervisor 屬於 room 不屬於 board（艾斯維爾 2026-09-03 推翻原設計），
+    # 指派一律走 `POST /api/rooms/{room_id}/board/supervisor`。兩個層級並存
+    # 的代價不是多一條路，是**同一個問題有兩個答案**：授權要兩邊都問、畫面
+    # 要決定顯示哪一個，而兩者不一致時沒有人是錯的。
+    #
+    # `BOARD_DESIGN.md` 的端點表 09/03 就把它劃掉了，程式碼晚了兩天才跟上。
+    # 退場前查過存量：board 層級的 supervisor **一筆都沒有**，這條路從來
+    # 沒被用過。`board.supervisor_*` 五個欄位留著不刪（沒有讀寫路徑了，
+    # 刪欄位的 migration 風險換不到東西）。
 
     @app.post("/api/boards/{board_id}/directives",
               dependencies=[Depends(require_auth)])
@@ -7207,15 +7160,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        is_supervisor = (board["supervisor_actor_key"]
-                         and board["supervisor_actor_key"] == actor)
-        # supervisor 是 **per-room** 的（艾斯維爾 2026-09-03），所以掛接房
-        # 那邊指派的人也算。只認 board-scoped 那一個的話，被指派的人**還是
-        # 送不出判斷**——而 403 會說他不是 supervisor，那句話在他眼裡是錯的。
+        # supervisor 是 **per-room** 的（艾斯維爾 2026-09-03），所以問的是
+        # 「這塊板掛的那些房裡，有沒有哪一間指定了他」。
         #
         # 掛三間房、三個不同 supervisor 時三個人都送得出：directive 是對整塊
-        # 板說的，沒有房的維度
-        if not is_supervisor and actor:
+        # 板說的，沒有房的維度。
+        #
+        # ⚠️ 2026-09-05（N-6）：這裡原本先問 `board.supervisor_actor_key`
+        # 再問掛接房。那個第一問**恆假**——board 層級的指派端點已經退場，
+        # 而且退場前一筆存量都沒有。留著只是讓讀的人以為還有第二個層級。
+        is_supervisor = False
+        if actor:
             row = await (await app.state.db.execute(
                 "SELECT 1 FROM board_room br JOIN room r ON r.id = br.room_id"
                 " WHERE br.board_id=? AND br.detached_at IS NULL"
@@ -7231,8 +7186,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await (await db.execute(
             "SELECT display_name FROM board_member WHERE board_id=?"
             " AND actor_key=?", (board_id, actor))).fetchone()
-        sender_name = (me["display_name"] if me else "") \
-            or board["supervisor_name"] or "Supervisor"
+        # 退路曾經是 `board["supervisor_name"]`，隨 board 層級指派一起退場
+        # （N-6）：那欄現在恆空，留著等於寫了一條永遠走不到的路
+        sender_name = (me["display_name"] if me else "") or "Supervisor"
 
         # 目標人在哪幾間掛接房？**每一間都要投**。
         #

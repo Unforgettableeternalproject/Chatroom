@@ -88,6 +88,9 @@ CREATE TABLE board (
     visibility      TEXT NOT NULL DEFAULT 'private',
     owner_actor_key TEXT NOT NULL,
     board_seq       INTEGER NOT NULL DEFAULT 0,
+    -- ⛔ 以下五欄自 2026-09-05（N-6）起**沒有任何讀寫路徑**：
+    --    Supervisor 屬於 room 不屬於 board，見 §6。
+    --    欄位留著不刪（退場前存量為 0，刪欄位的 migration 風險換不到東西）
     supervisor_actor_key TEXT NOT NULL DEFAULT '',
     supervisor_name TEXT NOT NULL DEFAULT '',
     supervisor_kind TEXT NOT NULL DEFAULT '',
@@ -465,7 +468,7 @@ GET /api/boards/{board_id}?after_board_seq=N
 | `POST /api/boards/{bid}/owner` | 移交 owner，限現任 owner |
 | `POST /api/boards/{bid}/owner/claim` | 接管無主的板，限 Hub 主持人 |
 | `POST /api/rooms/{rid}/board/supervisor` | 指派該房的 Supervisor（收 `participant_id`） |
-| ~~`POST /api/boards/{bid}/supervisor`~~ | board-scoped，**已被 per-room 取代** |
+| ~~`POST /api/boards/{bid}/supervisor`~~ | board-scoped，**已被 per-room 取代，2026-09-05 從程式碼移除**（404） |
 | `POST /api/boards/{bid}/objectives` | 新增 Objective |
 | `POST /api/boards/{bid}/tasks` | 「隨手記」Task |
 | `POST /api/boards/{bid}/reorder` | 批次排序 |

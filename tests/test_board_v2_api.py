@@ -444,12 +444,12 @@ async def test_supervisor_directive_is_recorded_and_projected(tmp_path):
             await client.post(f"/api/rooms/{rid}/board/tasks",
                               json={"title": "Worker 的卡"}, headers=worker)
 
-            # Supervisor 是一個**不在這間房裡**的身分
+            # Supervisor 是一個**不在這間房裡**的身分——指派走房軸，
+            # 而房軸刻意不驗「他是不是成員」，正是為了這種還沒進房的情形
             r = await client.post(
-                f"/api/boards/{bid}/supervisor",
-                json={"target_actor_key": "claude-sup",
-                      "display_name": "米絲媞", "actor_kind": "claude"},
-                headers=owner)
+                f"/api/rooms/{rid}/board/supervisor",
+                json={"session_key": "claude-sup"},
+                headers={"X-Session-Key": "claude-a"})
             assert r.status_code == 200, r.text
 
             r = await client.post(
@@ -476,9 +476,11 @@ async def test_supervisor_directive_is_recorded_and_projected(tmp_path):
             d = body["directives"][0]
             assert d["from_actor_key"] == "claude-sup"
             assert d["to_actor_key"] == "claude-w"
-            assert body["supervisor"] == {"actor_key": "claude-sup",
-                                          "display_name": "米絲媞",
-                                          "actor_kind": "claude"}
+            # Supervisor 只在掛接房那一層有答案（N-6，2026-09-05）——
+            # 頂層那份已經退場，它在多房時本來就答不出「是哪一間的」
+            assert "supervisor" not in body
+            assert [r["supervisor"]["actor_key"]
+                    for r in body["attached_rooms"]] == ["claude-sup"]
 
 
 async def test_directive_to_someone_who_is_not_around_says_so(tmp_path):
@@ -529,8 +531,13 @@ async def test_only_supervisor_or_owner_can_send_directives(tmp_path):
 
 
 async def test_supervisor_can_be_dismissed(tmp_path):
-    """人類可以卸任 Supervisor 並重派（艾斯維爾第 4 點）。"""
+    """人類可以卸任 Supervisor 並重派（艾斯維爾第 4 點）。
+
+    ⚠️ 2026-09-05 改走房軸：board-scoped 的指派端點退場了（N-6），
+    Supervisor 一律 per-room。卸任的**效果**沒有變——前任送不出判斷。
+    """
     app, client = await _client(tmp_path, "v2_sup_clear")
+    admin = {"X-Session-Key": "claude-a"}
     async with client:
         async with app.router.lifespan_context(app):
             rid = await _room(client)
@@ -538,18 +545,16 @@ async def test_supervisor_can_be_dismissed(tmp_path):
             await _first_card(client, rid, owner)
             bid = await _board_id(client, rid, owner)
 
-            await client.post(f"/api/boards/{bid}/supervisor",
-                              json={"target_actor_key": "claude-s1",
-                                    "display_name": "第一任"}, headers=owner)
-            r = await client.post(f"/api/boards/{bid}/supervisor",
-                                  json={"target_actor_key": ""},
-                                  headers=owner)
+            await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"session_key": "claude-s1"}, headers=admin)
+            r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                                  json={"session_key": ""}, headers=admin)
             assert r.status_code == 200, r.text
-            assert r.json()["supervisor"] is None
 
+            # 板軸看得到的是**掛接房的彙整**，不是板自己的一份答案
             body = (await client.get(f"/api/boards/{bid}",
                                      headers=owner)).json()
-            assert body["supervisor"] is None
+            assert [r["supervisor"] for r in body["attached_rooms"]] == [None]
 
             # 卸任之後前任就不能再送判斷了
             r = await client.post(
@@ -557,6 +562,29 @@ async def test_supervisor_can_be_dismissed(tmp_path):
                 json={"target_actor_key": "claude-a", "text": "我還在"},
                 headers={"X-Session-Key": "claude-s1"})
             assert r.status_code == 403
+
+
+async def test_the_board_scoped_supervisor_endpoint_is_gone(tmp_path):
+    """board-scoped 的 Supervisor 指派端點已退場（N-6）。
+
+    Supervisor 屬於 room 不屬於 board（艾斯維爾 2026-09-03 推翻原設計），
+    而兩個層級並存的代價不是多一條路，是**同一個問題有兩個答案**：
+    授權判定得兩邊都問、畫面得決定要顯示哪一個，而兩者不一致時沒有人是錯的。
+
+    `BOARD_DESIGN.md` §端點表 09/03 就把它劃掉了，程式碼晚了兩天才跟上。
+    """
+    app, client = await _client(tmp_path, "v2_sup_gone")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _room(client)
+            owner = await _join(client, rid, "claude-a", "A")
+            await _first_card(client, rid, owner)
+            bid = await _board_id(client, rid, owner)
+
+            r = await client.post(f"/api/boards/{bid}/supervisor",
+                                  json={"target_actor_key": "claude-s1"},
+                                  headers=owner)
+            assert r.status_code == 404, r.text
 
 
 async def test_no_duplicate_request_model_names(tmp_path):
