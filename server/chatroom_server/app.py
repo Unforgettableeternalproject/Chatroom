@@ -4606,9 +4606,23 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "human_only",
                        "只有人類成員可以把已完成／已取消的任務重新打開——"
                        "agent 不能撤銷自己剛做出的宣告")
-        if body.status == "cancelled" and not human and row["created_by"] != me["id"]:
+        # **目前的認領者**也可以取消（艾斯維爾 2026-09-05 核准，卡 56a07ff3）。
+        #
+        # 起因是一張「問題已經自己消失了」的收尾票：查證的人三件都驗完、
+        # 結論也寫上卡了，卻按不下最後那一下——他不是建立者也不是人類。
+        # 那條限制的效果變成「查證做完了，卡還停在原地等一個按鈕」。
+        #
+        # ⚠️ 與 Objective 的 `verified` 那道閘**不同，後者維持不動**：確認
+        # 「真的做完了」要跑測試、看畫面，只有人做得到；而 cancel 一張前提
+        # 已經不成立的票不需要人類判斷，**它就是把查證結果登記進去**，
+        # 而做那個查證的正是認領者。
+        #
+        # ⚠️ 只認 `held` 的**當前**持有者。孤兒卡此刻沒有人在做，放行的理由
+        # （認領者最清楚）已經不成立——要取消得先重新認領，那條路本來就在。
+        if body.status == "cancelled" and not human                 and row["created_by"] != me["id"]                 and not (row["claim_state"] == "held"
+                         and _is_claim_holder(row, me)):
             raise _err(403, "human_only",
-                       "只有建立者或人類成員可以取消這張卡")
+                       "只有建立者、目前的認領者或人類成員可以取消這張卡")
         if not human and row["claim_state"] == "held" \
                 and not _is_claim_holder(row, me):
             raise _err(403, "not_claim_holder",
@@ -6468,6 +6482,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         live = await _live_room_count(b["id"])
         return {
             "id": b["id"], "name": b["name"], "status": b["status"],
+            # 清單**過濾**得掉收尾的板（`?outcome=`），但每一列也要說得出
+            # 自己的結局——切到「已收尾」時，`completed` 與 `abandoned`
+            # 在畫面上必須分得出來：「做完了」與「不做了」是兩件事。
+            # ⚠️ 與 `custom_tags` 同型的漏法：**過濾做了、值沒回**
+            "outcome": b["outcome"] if "outcome" in b.keys() else "",
             "attached_room_count": rooms["n"],
             "live_room_count": live,
             "delivery_mode": "room_and_inbox" if live else "inbox_only",

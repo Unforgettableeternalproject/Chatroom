@@ -161,3 +161,29 @@ async def test_an_unknown_outcome_is_refused(tmp_path):
 
         r = await _settle(client, bid, hdr, "finished")
         assert r.status_code == 422, r.text
+
+
+async def test_the_library_row_says_what_the_outcome_was(tmp_path):
+    """清單**過濾**得掉收尾的板，但每一列也要說得出自己的結局是什麼。
+
+    ⚠️ 與 `custom_tags` 那次同型（09/05 卡 d10ae5f2）：**過濾做了、值沒回**。
+    切到「已收尾」時每一列都不知道自己是 completed 還是 abandoned——而那兩者
+    在畫面上必須分得出來，「做完了」與「不做了」是兩件事。
+    """
+    app, client = await _client(tmp_path, "oc_row")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-1", "艾斯維爾", role="human")
+        done = await _board(client, hdr, "做完了")
+        dropped = await _board(client, hdr, "不做了")
+        live = await _board(client, hdr, "還在做")
+
+        await _settle(client, done, hdr, "completed")
+        await _settle(client, dropped, hdr, "abandoned")
+
+        r = await client.get("/api/boards", params={"outcome": "any"},
+                             headers=hdr)
+        rows = {b["id"]: b for b in r.json()["boards"]}
+        assert rows[done]["outcome"] == "completed"
+        assert rows[dropped]["outcome"] == "abandoned"
+        assert rows[live]["outcome"] == ""

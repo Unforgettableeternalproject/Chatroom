@@ -326,6 +326,14 @@ participant——**不限掛接房**。而且**完全沒有 participant 痕跡 �
 - Objective：`active → review → verified → done`，另可 `cancelled`／reopen。
 - Checklist：`open → done`，或 `cancelled`。
 - Task：`todo / in_progress / blocked / done / cancelled`。
+
+  **取消**：建立者、人類成員，或**目前的認領者**（`claim_state='held'`，
+  艾斯維爾 2026-09-05 核准）。上面那條「取消**別人的**卡要 `role=human`」
+  仍然成立——放行的只是「取消自己正在做的那張」。
+  理由：cancel 一張前提已經不成立的票**不需要人類判斷**，它就是把查證結果
+  登記進去，而做那個查證的正是認領者。⚠️ 與 Objective 的 `verified` 不同，
+  後者維持人類限定（確認「真的做完了」要跑測試、看畫面）。
+  ⚠️ 孤兒卡不算：那張卡此刻沒有人在做，要取消得先重新認領。
 - Task status 與 claim 狀態正交，不把 `claimed` 放進 status。
 
 Objective 完成前：
