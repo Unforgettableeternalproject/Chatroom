@@ -585,9 +585,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           _SupervisorPill(
             // 房軸站在某一間房裡，那就講**這間房**的 supervisor——
             // Supervisor 是 per-room 的，板上那個是另一回事
-            name: _roomSupervisor(snap)?.displayName ??
-                (widget.roomId != null ? '' : snap?.supervisor?.displayName) ??
-                '',
+            // ⚠️ 這裡曾經有一條退路：房軸拿不到時改讀頂層 `snap.supervisor`。
+            // 那個欄位讀的是 server 的 `board.supervisor_*`，而它**恆空**
+            // （2026-09-05 查生產庫 0 筆），所以那條退路從來沒有退到任何
+            // 東西——留著只會讓人以為板層級還有一份 supervisor 可以退。
+            // 板軸的彙整在 supervisor 面板裡，唯讀（`roomSupervisors`）
+            name: _roomSupervisor(snap)?.displayName ?? '',
             departed: widget.roomId != null &&
                 (snap?.attachedRooms[widget.roomId!]?.supervisorDeparted ??
                     false),

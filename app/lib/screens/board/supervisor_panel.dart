@@ -114,7 +114,12 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     final snap = ref.watch(boardByIdProvider(widget.boardId)).value;
     final me = ref.watch(appConfigProvider).deviceKey;
     final isOwner = snap?.myRole == 'owner';
-    final isSupervisor = snap?.supervisor?.actorKey == me;
+    // 🔴 問的是**掛接房**，不是頂層那個欄位。頂層 `snap.supervisor` 讀的是
+    // server 的 `board.supervisor_*`，而那幾欄恆空（2026-09-05 查生產庫：
+    // board 層級 0 筆）⇒ 這一行以前恆 false ⇒ **只有 owner 按得到「發指令」，
+    // 而 supervisor 其實送得出去**（server 的權限第二問走掛接房）。
+    // 少一顆按鈕不會報錯，所以沒有人發現。
+    final isSupervisor = snap?.supervisesAnyRoom(me) ?? false;
     final canSend = isOwner || isSupervisor;
 
     return AlertDialog(
@@ -148,6 +153,14 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
               boardId: widget.boardId,
               attached: snap?.attachedRooms[widget.roomId!],
             ),
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+          ] else ...[
+            // 板軸沒有「這一間房」，所以這裡是**唯讀的彙整**：掛了幾間房，
+            // 每一間各是誰在看。指派入口只在房軸上（在板軸上指派等於在
+            // per-room 的契約上開一個看起來跟正門一樣的後門）。
+            _AttachedSupervisorsSection(sups: snap?.roomSupervisors ?? const []),
             const SizedBox(height: 14),
             const Divider(height: 1),
             const SizedBox(height: 12),
@@ -330,6 +343,73 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
 ///    ⇒ UI 手上沒有任何送得出去的值，選單做不出來
 ///
 /// 現在權限看**房間管理者**（`you_are_admin`），送出去的是 `participant_id`。
+/// 板軸上的 supervisor 彙整：**唯讀，而且每一筆都說得出是哪一間房的**。
+///
+/// 只畫名字的話，板掛三間房時這份清單讀起來像「這塊板有三個 supervisor」，
+/// 而真相是三間房各有一個——那正是 per-room 這件事要講清楚的地方。
+///
+/// 空的時候要明說「沒有人在看」而不是留白：**沒掛房、都沒指派、資料沒載到
+/// 在畫面上長得一模一樣**，而前兩者是正常狀態，第三種是壞掉。
+class _AttachedSupervisorsSection extends StatelessWidget {
+  const _AttachedSupervisorsSection({required this.sups});
+
+  final List<RoomSupervisor> sups;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      MonoLabel('掛接聊天室的 SUPERVISOR', color: s.inkSoft, letterSpacing: 1.4),
+      const SizedBox(height: 8),
+      if (sups.isEmpty)
+        Text(
+          '這塊板掛著的聊天室裡還沒有人在看。指派要從聊天室那一邊做——'
+          'Supervisor 是綁在房間上的，不是綁在板上。',
+          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+        )
+      else
+        for (final sup in sups)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(children: [
+              KindBadge(kind: sup.actor.actorKind),
+              const SizedBox(width: 8),
+              Text(
+                sup.actor.displayName,
+                // 走了的人名字劃掉——三種狀態要分得出來，只有「有人／
+                // 沒人」兩種畫法時，人走了會被畫成「還有人在看」
+                style: UepText.sans(
+                  size: 13,
+                  color: sup.departed ? s.inkMute : s.ink,
+                ).copyWith(
+                  decoration:
+                      sup.departed ? TextDecoration.lineThrough : null,
+                ),
+              ),
+              if (sup.departed) ...[
+                const SizedBox(width: 6),
+                Text('已離開',
+                    style: UepText.mono(
+                        size: 8.5, letterSpacing: 1.0, color: UepColors.error)),
+              ],
+              const Spacer(),
+              // 來源房。**這是這份清單唯一有意義的欄位**——少了它，多房時
+              // 讀者分不出這幾個人是三間房各一個，還是同一間房有三個
+              Flexible(
+                child: Text(
+                  sup.roomName.isEmpty ? sup.roomId : sup.roomName,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: UepText.mono(
+                      size: 9, letterSpacing: 1.0, color: s.inkMute),
+                ),
+              ),
+            ]),
+          ),
+    ]);
+  }
+}
+
 class _RoomSupervisorSection extends ConsumerWidget {
   const _RoomSupervisorSection({
     required this.roomId,

@@ -730,6 +730,39 @@ class BoardSnapshot {
   bool get isArchived => status == 'archived';
   bool get canEdit => myRole == 'owner' || myRole == 'editor';
 
+  /// 我是不是**任何一間**掛接房的 supervisor。
+  ///
+  /// 🔴 這是「發指令」那顆按鈕的依據。在此之前它問的是頂層 [supervisor]，
+  /// 而那個欄位讀的是 server 的 `board.supervisor_*`——**恆空**（2026-09-05
+  /// 查 8787 生產庫：board 層級 0 筆）。於是只有 owner 按得到，而 supervisor
+  /// 其實送得出去（server 的權限第二問走掛接房）。畫面上只是少一顆按鈕，
+  /// 沒有錯誤也沒有紅字。
+  ///
+  /// ⚠️ **`departed` 仍然算**：那是 presence（他離開過那間房），不是卸任。
+  /// 人回來了而旗標還沒清的那一刻若不給按，等於把權限判給了一個時間差。
+  /// 真正的守門在 server，這裡只決定畫不畫——該給不給比畫了被拒更貴。
+  bool supervisesAnyRoom(String actorKey) =>
+      actorKey.isNotEmpty &&
+      liveRooms.any((r) => r.supervisor?.actorKey == actorKey);
+
+  /// 板軸要顯示的 supervisor 彙整：**每間掛接房各一筆，標明來源房**。
+  ///
+  /// Supervisor 是 per-room 的，所以板軸上沒有「這塊板的 supervisor」可以
+  /// 顯示。硬要挑一個出來當代表，等於在 per-room 的契約上開一個看起來跟
+  /// 正門一樣的後門。
+  ///
+  /// **沒掛房、或都沒指派 ⇒ 空清單，那是正確的空白**，不是資料沒載到。
+  List<RoomSupervisor> get roomSupervisors => [
+        for (final r in liveRooms)
+          if (r.supervisor != null)
+            RoomSupervisor(
+              roomId: r.id,
+              roomName: r.name,
+              actor: r.supervisor!,
+              departed: r.supervisorDeparted,
+            ),
+      ];
+
   /// 查一個人。卡片只帶 actor_key，名字與別名都在這裡。
   BoardActorRef? memberOf(String? actorKey) =>
       actorKey == null ? null : members[actorKey];
@@ -1150,6 +1183,29 @@ class AttachedRoom {
       supervisorDeparted: (sup?['departed'] as bool?) ?? false,
     );
   }
+}
+
+/// 一間掛接房的 supervisor，**帶著來源房**。
+///
+/// 板軸上一次可能看到好幾筆（板掛在好幾間房），所以每一筆都要說得出是哪
+/// 一間的——只畫名字的話，多房時那份清單讀起來像「這塊板有三個 supervisor」，
+/// 而真相是三間房各有一個。
+@immutable
+class RoomSupervisor {
+  const RoomSupervisor({
+    required this.roomId,
+    required this.roomName,
+    required this.actor,
+    this.departed = false,
+  });
+
+  final String roomId;
+  final String roomName;
+  final BoardActorRef actor;
+
+  /// 那個人已經離開那間房了。**三種狀態要分開畫**：未指派／在任／已離開——
+  /// 只有兩種畫法時，人走了會被畫成「還有人在看」。
+  final bool departed;
 }
 
 /// 掛接的結果。
