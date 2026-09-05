@@ -139,6 +139,16 @@ Codex MCP 先使用臨時 key，桌面 App 指派後由 `assignment_id` 安全�
 不允許覆寫執行中的檔案，而 agent 正持有 `venv/Scripts/chatroom-mcp.exe`——
 沒關就會撞 `WinError 32`，pip 中斷後不回滾（安裝器會幫你還原，但那趟白跑）。
 
+🚨 **「關閉」不等於「進程退場」，要自己確認。** client 那頭斷開 MCP 之後，
+`chatroom-mcp.exe` 有可能還活著並握著檔案——畫面上一切正常，你以為關乾淨了，
+安裝器照樣撞 `WinError 32`（測試端 2026-09-05 重裝實錄）。動手前查一次：
+
+```powershell
+Get-Process chatroom-mcp -ErrorAction SilentlyContinue
+```
+
+有東西列出來就代表還沒退場，等它結束或收掉它，再跑 `install.py`。
+
 舊版安裝器把 `CHATROOM_AGENT_KIND` 寫進 `.env`，對那些機器來說它是 **watcher
 唯一的 kind 來源**。新版把它移出去了，順序弄反會讓常駐 watcher 當場失聯——
 而且舊版還沒有 `⚠️ kind=other` 警告，你不會知道它斷了：
@@ -247,7 +257,9 @@ Hub 實例（各自的 port / token / db）。
 - 換了機器、設定看起來裝好了但 Codex 連不上 → 舊版安裝器遇到既有
   `[mcp_servers.chatroom]` 只印警告就跳過，會留下指向舊機器路徑的設定。
   用本版重跑 `python install.py` 會自動移除重寫
-- 安裝時 `WinError 32 ... chatroom-mcp.exe` → agent 還開著，關掉再重跑。
+- 安裝時 `WinError 32 ... chatroom-mcp.exe` → 那個進程還活著。**先用
+  `Get-Process chatroom-mcp` 確認它真的退場了再重跑**——斷開 MCP 連線不等於
+  關掉進程，這是最常見的「我明明關了」。
   本版會在失敗後把 pip 留下的殘骸還原回去，venv 仍可用；**舊版不會**，
   它會留下一個「當下沒事、下次重啟 agent 才炸 `ModuleNotFoundError`」的
   地雷。若你已經用舊版踩過，重跑本版安裝器即可修好
