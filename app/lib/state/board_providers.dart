@@ -487,14 +487,37 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// 漏了）。漏掉的後果有兩層：清單不會多出東西（功能等於沒作用），而且沿用
 /// 的舊回應 `host_view` 是 false ⇒ banner 亮起「伺服器沒有照做」，
 /// **指著一個完全無辜的方向**（2026-09-05）。
+/// [view] 是**分頁**不是 status：`active` / `archived` / `settled`。
+///
+/// 前兩個直接對應 Hub 的 `status`；`settled`（已收尾）是第三個軸——
+/// **收尾與封存正交**，一塊做完的板可能還開著、也可能已經封存，所以那一頁
+/// 不能綁在某一個 status 上。
 final boardLibraryProvider =
     FutureProvider.autoDispose.family<BoardListResult, String>(
-  (ref, status) {
+  (ref, view) async {
     ref.watch(hostViewProvider);
-    return ref.watch(boardsApiProvider).list(
-          status: status,
-          sessionKey: ref.watch(appConfigProvider).deviceKey,
-        );
+    final api = ref.watch(boardsApiProvider);
+    final key = ref.watch(appConfigProvider).deviceKey;
+    if (view != 'settled') {
+      return api.list(status: view, sessionKey: key);
+    }
+    // ⚠️ 這裡的 client 端過濾**與「不要在 client 過濾已收尾的板」不衝突**，
+    // 差別在於資料有沒有被送過來：
+    //
+    //   - 拿**預設清單**（Hub 已經濾掉收尾的）去篩 ⇒ 那一頁永遠是空的
+    //   - 帶 `outcome=any` 拿到全部再挑 ⇒ 它們真的在手上
+    //
+    // 之所以要挑，是因為 Hub 只有 `any`（全部）沒有「只要有結局的」。
+    // server 若之後出 `outcome=settled`，這三行就可以拿掉。
+    final all = await api.list(status: '', outcome: 'any', sessionKey: key);
+    return BoardListResult(
+      boards: [
+        for (final b in all.boards)
+          if (b.isSettled) b,
+      ],
+      youAreHost: all.youAreHost,
+      hostView: all.hostView,
+    );
   },
 );
 

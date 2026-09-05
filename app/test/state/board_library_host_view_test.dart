@@ -35,6 +35,7 @@ class _FakeBoardsApi extends BoardsApi {
   Future<BoardListResult> list({
     required String sessionKey,
     String status = 'active',
+    String outcome = '',
   }) async {
     calls++;
     final host = _hostViewNow();

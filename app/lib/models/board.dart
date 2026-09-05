@@ -524,6 +524,7 @@ class BoardDelta {
     this.directivesHasMore = false,
     this.allowedTags = const [],
     this.customTags,
+    this.outcome,
   });
 
   /// 這次的水位。下次帶著它當 `after_board_seq`。
@@ -552,6 +553,14 @@ class BoardDelta {
   /// 不回這一欄時它是空的，那時正確的畫面是「沒有標籤這個功能」，不是
   /// 「有四個寫死的選項」。
   final List<String> allowedTags;
+
+  /// 這件事的**結局**：`''` / `completed` / `abandoned`（N-2）。
+  ///
+  /// 🔴 **`null` 與 `''` 是兩件事。** `''` 是一個**合法的值**（重新打開），
+  /// 所以不能照 [name]／[status] 那條「非空才覆寫」的規則——那樣的話，
+  /// **把一塊板重新打開之後畫面會一直以為它還是完成的**。
+  /// `null` = 這次的回應沒提到它（舊 Hub），那時才保留手上那份。
+  final String? outcome;
 
   /// 這塊板**自己加的**那些標籤（不含預設集合）。刪得掉的就是這些。
   ///
@@ -614,6 +623,7 @@ class BoardDelta {
     ],
     // ⚠️ 用 containsKey 而不是 `as List? ?? []`——見 [BoardDelta.customTags]，
     // 「說了沒有」與「沒說」要分得出來
+    outcome: json['outcome'] as String?,
     customTags: json.containsKey('custom_tags')
         ? [
             for (final t in (json['custom_tags'] as List?) ?? const [])
@@ -670,6 +680,7 @@ class BoardSnapshot {
     this.directivesHasMore = false,
     this.allowedTags = const [],
     this.customTags,
+    this.outcome = '',
   });
 
   /// 已經套用到哪個水位。**下次請求帶這個值**。
@@ -683,6 +694,13 @@ class BoardSnapshot {
 
   /// 這塊板自己加的那些。`null` = 舊 Hub 沒說。見 [BoardDelta.customTags]。
   final List<String>? customTags;
+
+  /// 這件事的結局：`''` / `completed` / `abandoned`。見 [BoardDelta.outcome]。
+  final String outcome;
+
+  bool get isCompleted => outcome == 'completed';
+  bool get isAbandoned => outcome == 'abandoned';
+  bool get isSettled => outcome.isNotEmpty;
 
   final String name;
 
@@ -864,6 +882,10 @@ class BoardSnapshot {
       // 事實，照 allowedTags 那條「空的就保留舊值」處理的話，刪掉最後一個
       // 自訂標籤之後畫面會一直以為它還在
       customTags: delta.customTags ?? customTags,
+      // 同 customTags：看 **null** 不看空。`''` 是「重新打開了」這個事實，
+      // 照「空的就保留舊值」處理的話，重新打開之後畫面會一直以為它還是
+      // 完成的——而那正是這個欄位最需要說對的一刻
+      outcome: delta.outcome ?? outcome,
       directives: dirs,
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉
@@ -1303,6 +1325,7 @@ class BoardSummary {
     this.visibility = 'public',
     this.ownerActorKey = '',
     this.ownerDisplayName = '',
+    this.outcome = '',
   });
 
   final String id;
@@ -1350,9 +1373,31 @@ class BoardSummary {
   /// 不是「這個人不存在」。
   final String ownerDisplayName;
 
+  /// 這件事的**結局**：`''` / `completed` / `abandoned`（N-2）。
+  ///
+  /// 🔴 **與 [status] 是兩個正交的軸，不可以合成一個徽章。**
+  /// `archived` 說的是「還能不能編輯」（可逆的收納），這裡說的是「這件事
+  /// 後來怎麼了」。把封存畫成「完成」，等於把**收起來但沒做完**講成做完
+  /// 了——那是最不該弄錯的一格。
+  ///
+  /// ⚠️ Hub 的 `_library_row` 一度沒有回這欄（2026-09-05 UI 側發現，當天
+  /// 第三次「加到單板回應與房軸、漏了清單列」）。拿不到時是空字串，畫面
+  /// 降級成「未收尾」——**猜一個結局出來比少畫一個徽章糟得多**。
+  final String outcome;
+
   bool get isPrivate => visibility == 'private';
 
   bool get isArchived => status == 'archived';
+
+  bool get isCompleted => outcome == 'completed';
+  bool get isAbandoned => outcome == 'abandoned';
+
+  /// 有結局了（完成或廢止）。
+  ///
+  /// ⚠️ 只拿它決定「進不進預設清單」。**畫面上不要只畫「已收尾」**——
+  /// 做完了與放棄了在清單上長一樣的話，那份清單就回答不了「這件事後來
+  /// 怎麼了」，而那正是人回頭翻它的唯一理由。
+  bool get isSettled => outcome.isNotEmpty;
 
   /// 這塊板是不是別人的。**用 `my_role` 判，不用 owner 比對**——
   /// 我手上沒有「我是誰」的 actor_key（那是 Hub 不外流的 session_key），
@@ -1386,6 +1431,7 @@ class BoardSummary {
       visibility: (json['visibility'] as String?) ?? 'public',
       ownerActorKey: (json['owner_actor_key'] as String?) ?? '',
       ownerDisplayName: (json['owner_display_name'] as String?) ?? '',
+      outcome: (json['outcome'] as String?) ?? '',
     );
   }
 }

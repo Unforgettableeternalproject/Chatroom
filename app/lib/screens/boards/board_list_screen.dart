@@ -153,9 +153,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                   return ListView(children: [
                     const SizedBox(height: 120),
                     EmptyState(
-                      title: _status == 'active'
-                          ? '目前沒有進行中的任務板'
-                          : '沒有已封存的任務板',
+                      title: switch (_status) {
+                        'active' => '目前沒有進行中的任務板',
+                        'archived' => '沒有已封存的任務板',
+                        _ => '還沒有板被宣告完成或廢止',
+                      },
                       // 舊文案寫「在聊天室裡建立一塊板」——那在有了上面
                       // 那顆＋之後就是**錯的指引**：它把人送回一條更長的路
                       subtitle: _status == 'active'
@@ -262,6 +264,9 @@ class _BoardStatusToggle extends StatelessWidget {
         child: Row(children: [
           segment('active', '進行中'),
           segment('archived', '已封存'),
+          // 第三個軸。**不是 status**－—收尾與封存正交，做完的板可能
+          // 還開著也可能已封存，所以這一頁不能綁在某一個 status 上
+          segment('settled', '已收尾'),
         ]),
       ),
     );
@@ -322,6 +327,23 @@ class _BoardTile extends StatelessWidget {
               if (board.isArchived) ...[
                 const SizedBox(width: 6),
                 const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
+              ],
+              // 🔴 **結局是另一個軸，與「封存」並排而不是取代它。**
+              //
+              // 封存說的是「還能不能改」（可逆的收納），這裡說的是「這件事
+              // 後來怎麼了」。合成一個徽章的話，**收起來但沒做完**會被畫成
+              // 做完了——那是這兩個軸交叉出來最不該弄錯的一格。
+              //
+              // 完成與廢止也分開講：都畫成「已收尾」的話，清單就回答不了
+              // 「後來怎麼了」，而那正是人回頭翻它的唯一理由
+              if (board.isSettled) ...[
+                const SizedBox(width: 6),
+                MonoLabel(
+                  board.isCompleted ? '完成' : '廢止',
+                  size: 8.5,
+                  letterSpacing: 1.0,
+                  color: board.isCompleted ? UepColors.gold : s.inkMute,
+                ),
               ],
             ]),
             // 別人的板：**說出是誰的**。

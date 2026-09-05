@@ -454,6 +454,32 @@ class BoardsApi {
         return (res.data?['id'] as String?) ?? '';
       });
 
+  /// 宣告這塊板的結局：`completed` / `abandoned`，或空字串把它重新打開。
+  ///
+  /// **一支端點三個轉換**（Hub 刻意不拆成三支：一個欄位多條寫入路徑，遲早
+  /// 有一條漏掉檢查，而漏掉的那條不會報錯）。
+  ///
+  /// 🚨 **限人類 owner**（403 `human_only`），照 Objective `verified` 那道閘
+  /// 的同一個理由：判斷「這件事真的做完了嗎」的實際意義是跑測試、看畫面、
+  /// 確認沒踩到坑。App 的操作者本來就是人，所以 UI 只要對 owner 畫；那個
+  /// 403 是兜底，不是 UI 的判準。
+  ///
+  /// **可逆**——不可逆的只有刪除。重新打開一樣留事件，否則板上會出現
+  /// 「它什麼時候又活過來的」這種查不到的問題。
+  Future<String> setOutcome(
+    String boardId, {
+    required String sessionKey,
+    required String outcome,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/outcome',
+          data: {'outcome': outcome},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return (res.data?['outcome'] as String?) ?? outcome;
+      });
+
   /// 幫這塊板註冊自訂的想法板標籤。
   ///
   /// **註冊與「自由輸入」是兩件事**：註冊是一次明確的動作，之後段落仍然
@@ -502,14 +528,23 @@ class BoardsApi {
   /// `/api/rooms` 收的是 query（`?session_key=`），照那邊複製過來會拿 400
   /// `session_key_required`，而那句話讀起來像身分壞了，其實只是放錯位置。
   /// Board Library 沒有 room participant，Hub 直接從這把 key 解析 actor_key。
+  /// [outcome] 空字串＝照 Hub 的預設**只看未收尾的板**；`any` 撈全部；
+  /// `completed` / `abandoned` 只看那一種。
+  ///
+  /// ⚠️ **不要在 client 端過濾已收尾的板**：Hub 預設就沒把它們送過來，
+  /// 篩一份沒有它們的清單篩不出它們——「已收尾」那一頁會永遠是空的。
   Future<BoardListResult> list({
     required String sessionKey,
     String status = 'active',
+    String outcome = '',
   }) =>
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/boards',
-          queryParameters: {'status': status},
+          queryParameters: {
+            'status': status,
+            if (outcome.isNotEmpty) 'outcome': outcome,
+          },
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         final items = (res.data?['boards'] as List?) ?? const [];

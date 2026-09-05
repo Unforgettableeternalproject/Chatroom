@@ -16,6 +16,7 @@ import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
+import 'board_outcome_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
 import 'supervisor_panel.dart';
@@ -569,6 +570,24 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         if (_editability == BoardEditability.viewer) ...[
           const SizedBox(width: 8),
           const _ViewerBadge(),
+        ],
+        // 結局（N-2／N-3）。**只有 owner 看得到這個入口**——宣告「這件事
+        // 做完了」是所有權層級的動作，而 Hub 那邊限人類 owner（App 的操作者
+        // 本來就是人，所以這裡只判 owner；403 `human_only` 是兜底不是判準）。
+        //
+        // 已經有結局時它變成一個狀態顯示＋重新打開的入口：**收尾是可逆的**，
+        // 不可逆的只有刪除。沒有回頭路的話，人會為了怕按錯而乾脆不收尾，
+        // 而那正好讓這個功能等於不存在
+        if (_boardIdOrNull != null && snap?.myRole == 'owner') ...[
+          const SizedBox(width: 8),
+          _OutcomePill(
+            outcome: snap?.outcome ?? '',
+            onTap: () => showBoardOutcomeDialog(
+              context,
+              boardId: _boardIdOrNull!,
+              current: snap?.outcome ?? '',
+            ),
+          ),
         ],
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
         // 「沒有人在收摘要」與「有人但名字讀不到」不是同一件事
@@ -1672,6 +1691,43 @@ class _HeaderAction extends StatelessWidget {
 ///
 /// Hub 目前只給名字（沒有 kind），所以那顆點是中性的——**不要拿名字去猜種類**，
 /// 猜錯的話它會用別人的顏色說「他是 claude」。
+/// 板的結局：沒有時是一個入口，有了之後是狀態＋重新打開的入口。
+///
+/// ⚠️ **與「封存」並存而不是取代它**（見 [BoardSummary.outcome]）：封存說的
+/// 是還能不能改，這裡說的是這件事後來怎麼了。
+class _OutcomePill extends StatelessWidget {
+  const _OutcomePill({required this.outcome, required this.onTap});
+
+  final String outcome;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final done = outcome == 'completed';
+    final settled = outcome.isNotEmpty;
+    final c = settled ? (done ? UepColors.gold : s.inkMute) : s.inkMute;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: settled ? c.withValues(alpha: .10) : null,
+          border: Border.all(color: settled ? c.withValues(alpha: .5) : s.hairline),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          // 沒有結局時講「宣告結局」而不是「完成」——那顆按鈕不是「按了就
+          // 完成」，是「去決定它的結局」，而其中一個選項是廢止
+          settled ? (done ? '完成' : '廢止') : '宣告結局',
+          style: UepText.mono(size: 8.5, letterSpacing: 1.1, color: c),
+        ),
+      ),
+    );
+  }
+}
+
 class _SupervisorPill extends StatelessWidget {
   const _SupervisorPill({
     required this.name,
