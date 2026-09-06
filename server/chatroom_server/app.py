@@ -3739,10 +3739,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         板動了要通知的是**每一間掛著它的房**，不是操作發生的那一間——
         board-scoped 的操作根本沒有「那一間」。漏掉的房不會報錯，它們的
         long-poll 只是安靜地繼續等，直到有人在房裡說話才順便收到板的變動
+
+        **封存的房不叫**（09/06 卡 48b9263）：那間房已經收起來了，喚醒它
+        裡面的 long-poll 只是把一個沒有人在讀的畫面刷新一次。解封之後
+        `events.notify` 自然又會找到它——擋的是狀態，不是曾經。
         """
         rows = await (await app.state.db.execute(
-            "SELECT room_id FROM board_room WHERE board_id=?"
-            " AND detached_at IS NULL", (board_id,))).fetchall()
+            "SELECT br.room_id FROM board_room br"
+            " JOIN room r ON r.id = br.room_id"
+            " WHERE br.board_id=? AND br.detached_at IS NULL"
+            " AND r.status='active'", (board_id,))).fetchall()
         for r in rows:
             await events.notify(r["room_id"])
 
@@ -4519,13 +4525,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         （艾斯維爾 2026-09-02：「我通常會用 checklist 放要做的東西，
         然後 agent 自己再往裡面添加任務」——那條工作流要成立，
         agent 就得知道那一段開了。）
+
+        🚨 **房封存了就沒有收件人**（09/06 卡 48b9263，艾斯維爾實測）。
+        封存**完全不碰 participant**——裡面的人維持 `status='active'`，
+        少了房那一層條件，一間已經收起來的房會繼續收到板的通知。同一份判準
+        在 `_live_room_count`（8576）與 `_board_role`（6149）早就有，
+        這裡是第三處、也是還沒補上的那一處。
+
+        ⚠️ 擋的只有**往房裡發訊息**這條路。收件匣（`board_watch_notice`）
+        綁的是 actor 不是房，設計上就是要送給不在場的人——那條刻意不擋，
+        否則「板還在動、你追蹤的卡有進展」會跟著一起消失。
         """
-        sql = ("SELECT id, display_name FROM participant"
-               " WHERE room_id=? AND status='active' AND ephemeral=0")
+        sql = ("SELECT p.id, p.display_name FROM participant p"
+               " JOIN room r ON r.id = p.room_id"
+               " WHERE p.room_id=? AND p.status='active' AND p.ephemeral=0"
+               " AND r.status='active'")
         if humans_only:
-            sql += " AND role='human'"
+            sql += " AND p.role='human'"
         if agents_only:
-            sql += " AND role!='human'"
+            sql += " AND p.role!='human'"
         rows = await (await app.state.db.execute(sql, (room_id,))).fetchall()
         return [r["display_name"] for r in rows if r["id"] != exclude_id]
 
@@ -4759,9 +4777,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 追蹤者若正好在另一間掛接房裡就只剩收件匣——他人在線上、
                 # 卻不會被叫醒（審核用Codex-2 2026-09-02）。與 directive
                 # 的投遞同一個判準
+                #
+                # ⚠️ 但**封存的房不算**（09/06 卡 48b9263）：這段是自己的
+                # 一句 SQL，不經過 `_board_audience`，所以那邊補上的房
+                # active 條件擋不到這裡。漏掉這半的症狀更難看出來——一般
+                # 廣播安靜了，只有剛好有人追蹤那張卡時才會冒出來
                 rooms = await (await db.execute(
-                    "SELECT room_id FROM board_room WHERE board_id=?"
-                    " AND detached_at IS NULL",
+                    "SELECT br.room_id FROM board_room br"
+                    " JOIN room r ON r.id = br.room_id"
+                    " WHERE br.board_id=? AND br.detached_at IS NULL"
+                    " AND r.status='active'",
                     (_row_board_id(row),))).fetchall() if keys else []
                 for r in rooms:
                     here = await (await db.execute(
@@ -6426,12 +6451,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # ⚠️ 與 `status` 同一個判斷：值不合法就明確擋下。默默回全部會讓打錯
         # 字的人以為「這些板都還在做」，而那個誤會不會有任何地方報錯。
-        if outcome and outcome not in ("completed", "abandoned", "any"):
+        if outcome and outcome not in ("completed", "abandoned",
+                                       "settled", "any"):
             raise _err(422, "invalid_outcome",
-                       "outcome 只能是 completed、abandoned 或 any",
-                       allowed=["completed", "abandoned", "any"])
+                       "outcome 只能是 completed、abandoned、settled 或 any",
+                       allowed=["completed", "abandoned", "settled", "any"])
         if outcome == "any":
             pass
+        elif outcome == "settled":
+            # 「已收尾」那一頁要的是 completed ∪ abandoned。少了它，UI 只能
+            # 送 `any` 再自己挑 `outcome != ""`——判準又多了一份，而多出來的
+            # 那份沒有任何地方會提醒它跟這裡不一樣（09/06 卡 cc6228fb）
+            sql += " AND b.outcome != ''"
         elif outcome:
             sql += " AND b.outcome = ?"
             params.append(outcome)
@@ -6472,6 +6503,35 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 而漂移的那一半沒有人在看
         return sql, ["", actor, actor, actor]
 
+    async def _outcome_gate(board_id: str) -> tuple[bool, str]:
+        """這塊板現在能不能宣告結局，以及不能的話是為什麼。
+
+        規則（艾斯維爾 09/06，想法板 #8 段）：**曾掛過房、而且目前一間都
+        沒掛著**才可以收尾。還掛著的話房裡的人還在用它；從沒掛過的話，
+        收尾是對一段共同工作的結論，而它從來沒有共同過。
+
+        🚨 **判準只有一份，寫在這裡。** client 拿 `attached_room_count`
+        自己算會算錯——那是當下值，**0 分不出「從未掛過」與「掛過已全解」**，
+        而算錯的方向是把入口開給不該開的板（@開發Novia (UI) 09/06 #16）。
+        讀取回應出 `outcome_eligible` / `outcome_block_reason`，409 用同一組
+        字串，兩邊都由這支產生。
+
+        ⚠️ 「還掛著」看的是 `detached_at IS NULL`，**不管房是不是封存的**——
+        與 `attached_room_count` 同一個判準。這裡刻意不用 `_live_room_count`
+        （它另外要求房 active）：封存一間房不是「這塊板跟這間房沒關係了」的
+        宣告，解除掛接才是。兩者用同一個數字的話，畫面上會出現「掛接數 1、
+        但可以宣告結局」這種自相矛盾的列。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT COUNT(*) AS ever,"
+            " SUM(CASE WHEN detached_at IS NULL THEN 1 ELSE 0 END) AS live"
+            " FROM board_room WHERE board_id=?", (board_id,))).fetchone()
+        if not row["ever"]:
+            return False, "never_attached"
+        if row["live"]:
+            return False, "still_attached"
+        return True, ""
+
     async def _library_row(db, b, actor: str) -> dict:
         """Board Library 的一列。主持人視角與一般視角**共用這一份**——
         兩邊各算一次的話，主持人看到的欄位會慢慢與別人不同。"""
@@ -6495,6 +6555,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 「這塊板還叫得醒人嗎」要看**活著的**房。掛接數看起來正常而
         # 沒有人叫得醒，正是最容易被讀成沒問題的那個狀態
         live = await _live_room_count(b["id"])
+        eligible, block_reason = await _outcome_gate(b["id"])
         return {
             "id": b["id"], "name": b["name"], "status": b["status"],
             # 清單**過濾**得掉收尾的板（`?outcome=`），但每一列也要說得出
@@ -6504,6 +6565,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             "outcome": b["outcome"] if "outcome" in b.keys() else "",
             "attached_room_count": rooms["n"],
             "live_room_count": live,
+            # **能不能宣告結局，由 server 說。** 見 `_outcome_gate`：
+            # `attached_room_count == 0` 有兩種完全不同的成因，UI 分不出來
+            "outcome_eligible": eligible,
+            "outcome_block_reason": block_reason,
             "delivery_mode": "room_and_inbox" if live else "inbox_only",
             "task_counts": {"total": counts["total"] or 0,
                             "done": counts["done"] or 0,
@@ -6653,6 +6718,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 頂層放一個彙整過的人只會換一種誤導：板掛三間房時它指誰？
         # 而 client 真正要的多半是一個布林（我是不是任一掛接房的 supervisor），
         # 那從 attached_rooms 算得出來（N-6，2026-09-05）。
+        outcome_eligible, outcome_block_reason = await _outcome_gate(board_id)
         return {
             "board_id": board_id,
             # 板本身的中繼資料。從 Board Library 直接進來的 client 手上
@@ -6671,6 +6737,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 結局與 status 分開回：少了它，UI 只能拿 status 猜，而
             # 「封存」與「做完了」是兩件事——收起來的板可能只是暫時擱置
             "outcome": board["outcome"] if "outcome" in board.keys() else "",
+            # **宣告入口畫在詳情頁上，所以判準也要在這裡回。** 清單有、詳情
+            # 沒有的話，UI 只能回頭撈一整份 Library 才知道這一塊能不能收尾
+            "outcome_eligible": outcome_eligible,
+            "outcome_block_reason": outcome_block_reason,
             # owner 是誰、他還在不在——接管的確認對話框靠這兩個判斷「20 分鐘
             # 前還在」與「昨天之後沒再出現過」，不能只在 409 裡才給
             "owner_actor_key": board["owner_actor_key"],
@@ -6845,6 +6915,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         **可逆**——不可逆的只有刪除，與封存同一個判斷。reopen 一樣留事件，
         否則板上會出現「它什麼時候又活過來的」這種查不到的問題。
+
+        🚨 **宣告有前置條件**（`_outcome_gate`）：曾掛過房、且目前一間都沒
+        掛著。**reopen 不受它管**——反過來擋的話，一塊收尾後又被掛回房的板
+        會卡在 completed 拿不下來，而那是個沒有出口的狀態。
         """
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
@@ -6856,6 +6930,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有人類 owner 可以宣告這塊板完成或廢止——"
                        "確認「真的做完了」要跑測試、看畫面，"
                        "那件事只有人做得到")
+        if body.outcome:
+            eligible, reason = await _outcome_gate(board_id)
+            if not eligible:
+                raise _err(409, reason,
+                           "還掛在聊天室上的板不能宣告結局，"
+                           "先解除掛接" if reason == "still_attached" else
+                           "從來沒掛過聊天室的板不能宣告結局——"
+                           "收尾是對一段共同工作的結論",
+                           outcome_block_reason=reason)
         seq = await _next_seq_for_board(board_id)
         await app.state.db.execute(
             "UPDATE board SET outcome=?, updated_at=? WHERE id=?",

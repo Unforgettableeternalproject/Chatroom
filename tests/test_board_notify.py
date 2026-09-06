@@ -320,3 +320,107 @@ async def test_no_agents_in_the_room_means_no_message(tmp_path):
         await client.post(f"/api/rooms/{rid}/board/objectives",
                           json={"title": "沒人聽的週期"}, headers=human)
         assert await _mentions_of(app, rid, "board_objective_created") == []
+
+
+# ---------------------------------------------------------------------------
+# 封存房不再收原掛板的通知（09/06 卡 48b9263，艾斯維爾想法板 #9 段 bug）
+#
+# 封存**完全不碰 participant**——房裡的人維持 `status='active'`，於是
+# `_board_audience` 照樣把他們撈出來，板一動就往一間已經收起來的房發訊息。
+# 同一份判準在別處早就有房 active 的條件（`_live_room_count`、`_board_role`），
+# 這裡是還沒補上的那一處。
+#
+# ⚠️ 邊界：**收件匣（board notices）不在此列**。那條綁的是 actor 而不是房，
+# 設計上就是要送給不在場的人——擋掉它等於把「板還在動、你追蹤的卡有進展」
+# 這件事一起弄丟。這裡擋的只有「往房裡發訊息＋mention」那條。
+# ---------------------------------------------------------------------------
+
+
+async def _archive(client, rid, hdr):
+    r = await client.post(f"/api/rooms/{rid}/archive", headers=hdr)
+    assert r.status_code == 200, r.text
+    return r
+
+
+async def _all_events(client, rid, hdr, event):
+    """封存房也讀得到訊息（唯讀），所以斷言拿得到證據。"""
+    r = await client.get(f"/api/rooms/{rid}/messages", headers=hdr)
+    assert r.status_code == 200, r.text
+    return [m for m in r.json()["messages"] if m["system_event"] == event]
+
+
+async def test_an_archived_room_is_not_woken_by_its_old_board(tmp_path):
+    """房收起來之後，板再動也不該往那間房發東西。"""
+    app, client = await _client(tmp_path, "archived-quiet")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        _, _, (tid,) = await _tree(client, rid, a1)
+        await _archive(client, rid, human)
+
+        await _status(client, tid, "in_progress", a1)
+        r = await _status(client, tid, "done", a1)
+        assert r.status_code == 200, r.text
+
+        assert await _all_events(client, rid, human, "board_task_done") == [],             "封存的房還在收板子通知"
+
+
+async def test_review_does_not_wake_an_archived_room(tmp_path):
+    """送審是「非人類不可」的那一步——但收起來的房裡沒有人在等它。"""
+    app, client = await _client(tmp_path, "archived-review")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        oid, cid, (tid,) = await _tree(client, rid, a1)
+        await _finish_to_review(client, rid, cid, tid, a1)
+        await _archive(client, rid, human)
+
+        await client.post(f"/api/board/objectives/{oid}/review", headers=a1)
+        assert await _all_events(client, rid, human,
+                                 "board_objective_review") == []
+
+
+async def test_unarchiving_brings_the_notifications_back(tmp_path):
+    """擋的是「現在是封存狀態」，不是「這間房曾經被封存過」。
+
+    寫成明確的斷言是因為這種擋法最容易寫成單向的——解封之後靜悄悄，而那
+    與「板本來就沒動」在畫面上完全一樣。
+    """
+    app, client = await _client(tmp_path, "archived-restored")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        _, _, (t1, t2) = await _tree(client, rid, a1, tasks=2)
+        await _archive(client, rid, human)
+        await _status(client, t1, "done", a1)
+        assert await _all_events(client, rid, human, "board_task_done") == []
+
+        r = await client.post(f"/api/rooms/{rid}/unarchive", headers=human)
+        assert r.status_code == 200, r.text
+        await _status(client, t2, "done", a1)
+
+        msgs = await _all_events(client, rid, human, "board_task_done")
+        assert len(msgs) == 1, "解封之後通知沒有回來"
+        assert "任務1" in msgs[0]["content"]
+
+
+async def test_a_watcher_in_an_archived_room_gets_no_room_message(tmp_path):
+    """追蹤者的定向通知也走同一條路——**它是分開的一段 SQL，不吃
+    `_board_audience` 的過濾。**
+
+    這半漏掉的話症狀更難看出來：一般廣播安靜了，看起來像修好了，只有
+    「剛好有人追蹤那張卡」的時候才會冒出來。收件匣那邊照收（那條綁 actor
+    不綁房，刻意保留），所以追蹤者不會漏掉這件事，只是不從一間收起來的房
+    裡聽見。
+    """
+    app, client = await _client(tmp_path, "archived-watcher")
+    async with app.router.lifespan_context(app), client:
+        rid, human, a1, a2 = await _room(client)
+        _, _, (tid,) = await _tree(client, rid, a1)
+        bid = (await client.get(f"/api/rooms/{rid}/board",
+                                headers=a2)).json()["board_id"]
+        r = await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=a2)
+        assert r.status_code == 200, r.text
+        await _archive(client, rid, human)
+
+        await _status(client, tid, "done", a1)
+        assert await _all_events(client, rid, human, "board_task_done") == [],             "封存房裡的追蹤者還是被叫醒了"
