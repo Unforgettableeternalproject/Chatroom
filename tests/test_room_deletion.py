@@ -624,3 +624,35 @@ async def test_the_room_owned_table_list_covers_the_whole_schema(tmp_path):
                 f"這些表帶 room_id 卻不在 _ROOM_OWNED_TABLES 裡：{gap}。"
                 "把它們加進清單，並確認插入的位置符合外鍵依賴順序"
             )
+
+
+# ---------------------------------------------------------------------------
+# purge 預設值（09/06 卡 93bb5039，艾斯維爾裁定跟進 15）
+# ---------------------------------------------------------------------------
+
+
+def test_the_purge_default_is_fifteen_days():
+    """預設 15 天，不是 3。
+
+    ⚠️ 這條釘的不是數字好不好，是**這個數字有沒有跟上已經做過的決定**。
+    3 天是在「還沒有人看過三天後會發生什麼」時選的；09/06 看到了（一間 633
+    則訊息的房到期被永久刪除），艾斯維爾重裁 15。
+
+    決定原本只活在正式 Hub 的環境變數裡 ⇒ 下一台新起的 Hub、或一次漏帶變數
+    的重啟，都會安靜地退回 3 天。**「決定寫了、但沒寫在會被讀到的地方」**
+    ——這條測試與 config.py 那段註解是同一件事的兩半：註解說服人，測試擋住
+    無意的改回。
+    """
+    from chatroom_server.config import Config
+    assert Config().purge_archived_days == 15.0
+
+
+def test_the_env_var_still_wins(monkeypatch):
+    """環境變數仍然覆寫得掉——改的是預設，不是把它寫死。
+
+    每台部署仍可以有自己的保留天數（測試 Hub 想設 0 關掉也行），這條釘住
+    那條路沒有被順手堵起來。
+    """
+    from chatroom_server.config import Config
+    monkeypatch.setenv("CHATROOM_PURGE_ARCHIVED_DAYS", "3")
+    assert Config().purge_archived_days == 3.0
