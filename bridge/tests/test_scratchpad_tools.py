@@ -144,3 +144,60 @@ def test_board_scoped_writes_carry_the_session_key_header(fake_hub):
                                 content="第一段", board_id=BOARD)
     sent = fake_hub.calls[-1]
     assert sent.headers.get("X-Session-Key"), "寫入沒有帶身分標頭"
+
+
+# ---------------------------------------------------------------------------
+# 改寫段落不該順手清掉標籤（09/06 卡 c22ca1b4）
+#
+# 這支工具原本只送 `{content, rev}`，而 Hub 那側的 tags 是整份覆寫 ⇒ **agent
+# 每一次改寫都在把標籤清成空，200 回來、兩邊都沒有錯誤訊息**。
+#
+# server 那半已改成 containsKey 語意，所以 bridge 這半要守的是：**沒有要改
+# 標籤時，就不要把那個欄位送出去。** 送 `[]` 與不送在新語意下是兩件事。
+# ---------------------------------------------------------------------------
+
+
+def _payload(fake_hub):
+    import json
+    return json.loads(fake_hub.calls[-1].content)
+
+
+def _edit_ok(fake_hub):
+    fake_hub.json("PUT",
+                  f"/api/boards/{BOARD}/scratchpads/{PAD}/blocks/{BLOCK}",
+                  {"ok": True, "id": BLOCK, "rev": 4, "board_seq": 12})
+
+
+def test_editing_without_tags_does_not_send_the_field(fake_hub):
+    """沒有要改標籤，就不要把它送出去——這是那個 bug 的本體。"""
+    _edit_ok(fake_hub)
+    srv.chatroom_scratchpad_edit(pad_id=PAD, block_id=BLOCK, content="改過",
+                                 rev=3, board_id=BOARD)
+    body = _payload(fake_hub)
+    assert "tags" not in body, "不送才是不動——送空陣列會把標籤清掉"
+    assert "state" not in body
+
+
+def test_editing_can_carry_tags_and_state(fake_hub):
+    """要改的時候帶得上——不然 agent 根本標不了。"""
+    _edit_ok(fake_hub)
+    srv.chatroom_scratchpad_edit(pad_id=PAD, block_id=BLOCK, content="改過",
+                                 rev=3, board_id=BOARD, tags=["design"],
+                                 state="implemented")
+    body = _payload(fake_hub)
+    assert body["tags"] == ["design"]
+    assert body["state"] == "implemented"
+
+
+def test_clearing_is_expressible(fake_hub):
+    """清除要講得出來：空陣列清標籤、空字串清狀態。
+
+    這兩個值必須**送得出去**，否則標錯了就拿不回來——而「不動」與「清除」
+    在新語意下正好是靠「有沒有送」分辨的。
+    """
+    _edit_ok(fake_hub)
+    srv.chatroom_scratchpad_edit(pad_id=PAD, block_id=BLOCK, content="改過",
+                                 rev=3, board_id=BOARD, tags=[], state="")
+    body = _payload(fake_hub)
+    assert body["tags"] == []
+    assert body["state"] == ""

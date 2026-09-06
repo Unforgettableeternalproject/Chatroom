@@ -780,3 +780,87 @@ async def test_state_and_tags_are_orthogonal(tmp_path):
         assert r.status_code == 200, r.text
         row = await _block(client, bid, pad, blk, hdr)
         assert row["tags"] == ["bug"] and row["state"] == "implemented"
+
+
+# ---------------------------------------------------------------------------
+# tags 也走 containsKey（09/06 卡 c22ca1b4，決策重裁）
+#
+# 原本是整份覆寫，而 `chatroom_scratchpad_edit` 根本不送 tags ⇒ **agent 每次
+# 改寫段落都在清標籤，200 回來、兩邊都沒有錯誤訊息**。實測見卡片。
+#
+# 決策 #68 原裁「既有債、今天不動」建立在「呼叫端有帶就不會丟」的前提上，
+# 那個前提是錯的。改採與 `state` 同一套語意：沒送＝不動、送 []＝清除、
+# 送值＝設定。
+# ---------------------------------------------------------------------------
+
+
+async def _write_raw(client, bid, pad, blk, hdr, body):
+    """完全照給的 body 送——要測「沒送某個欄位」就不能用會補預設的 helper。"""
+    return await client.put(
+        f"/api/boards/{bid}/scratchpads/{pad}/blocks/{blk}",
+        json=body, headers=hdr)
+
+
+async def test_not_sending_tags_leaves_them_alone(tmp_path):
+    """🚨 **這條就是 bridge 那個 bug 的本體。**
+
+    `chatroom_scratchpad_edit` 只送 content 與 rev。整份覆寫語意下，那等於
+    每一次改寫都在把標籤清成空——而清空是靜悄悄發生的。
+    """
+    app, client = await _client(tmp_path, "pad_tags_untouched")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, tags=["design"])
+
+        # bridge 的形狀：只有 content 與 rev
+        r = await _write_raw(client, bid, pad, blk, hdr,
+                             {"content": "改一個錯字", "rev": 2})
+        assert r.status_code == 200, r.text
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["content"] == "改一個錯字"
+        assert row["tags"] == ["design"], "改內容順手把標籤清掉了"
+
+
+async def test_sending_an_empty_list_clears_the_tags(tmp_path):
+    """清除仍然做得到，只是要明確講——與 state 同一個判斷。"""
+    app, client = await _client(tmp_path, "pad_tags_clear")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, tags=["design"])
+
+        r = await _write_raw(client, bid, pad, blk, hdr,
+                             {"content": "改寫", "tags": [], "rev": 2})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk, hdr))["tags"] == []
+
+
+async def test_sending_tags_still_replaces_them(tmp_path):
+    """有送就照送——App 現在的行為完全不變。"""
+    app, client = await _client(tmp_path, "pad_tags_set")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, tags=["design"])
+
+        r = await _write_raw(client, bid, pad, blk, hdr,
+                             {"content": "改寫", "tags": ["bug"], "rev": 2})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk, hdr))["tags"] == ["bug"]
+
+
+async def test_touching_neither_keeps_both(tmp_path):
+    """兩軸都沒送就兩軸都不動——這是最常見的那次寫入（改錯字）。"""
+    app, client = await _client(tmp_path, "pad_both_untouched")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, tags=["design"],
+                     state="implemented")
+
+        r = await _write_raw(client, bid, pad, blk, hdr,
+                             {"content": "改一個錯字", "rev": 2})
+        assert r.status_code == 200, r.text
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["tags"] == ["design"] and row["state"] == "implemented"

@@ -1881,7 +1881,9 @@ def chatroom_scratchpad_add(kind: str, content: str, room_id: str = "",
 @_guard
 def chatroom_scratchpad_edit(pad_id: str, block_id: str, content: str,
                              rev: int, room_id: str = "",
-                             board_id: str = "") -> dict:
+                             board_id: str = "",
+                             tags: list[str] | None = None,
+                             state: str | None = None) -> dict:
     """改寫**你自己寫的**那一段。
 
     ``rev`` 從 ``chatroom_scratchpad`` 拿，必須帶。對不上會被擋下並附上
@@ -1890,11 +1892,28 @@ def chatroom_scratchpad_edit(pad_id: str, block_id: str, content: str,
 
     改不動別人的段落是正常的，不是權限設定錯誤：人類寫的段落 agent 一律
     只能註解，另一個 agent 寫的也一樣。回應會告訴你作者是誰。
+
+    ``tags``（分類）與 ``state``（這段後來怎麼了：``implemented`` /
+    ``abandoned``）都是**不給就不動**：
+
+    - 不給 → 保持原樣。只改錯字時就該這樣
+    - 給 ``[]`` / ``""`` → 清掉
+    - 給值 → 換成它
+
+    ⚠️ 這支工具原本連 ``tags`` 都不送，而 Hub 那側當時是整份覆寫 ⇒
+    **每一次改寫都在把標籤清成空**，200 回來、兩邊都沒有錯誤訊息
+    （09/06 卡 c22ca1b4）。所以「不給就不送那個欄位」是這裡的關鍵——
+    送空陣列與不送在現在的語意下是兩件事。
     """
     bid = _resolve_board_id(room_id, board_id)
+    payload: dict[str, Any] = {"content": content, "rev": rev}
+    if tags is not None:
+        payload["tags"] = tags
+    if state is not None:
+        payload["state"] = state
     return _board_scoped_request(
         "PUT", f"/api/boards/{bid}/scratchpads/{pad_id}/blocks/{block_id}",
-        json={"content": content, "rev": rev})
+        json=payload)
 
 
 @mcp.tool()

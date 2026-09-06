@@ -554,7 +554,13 @@ class ScratchpadBlockCreate(BaseModel):
 
 class ScratchpadBlockWrite(BaseModel):
     content: str = Field(max_length=50_000)
-    tags: list[str] = Field(default_factory=list, max_length=8)
+    # 與 `state` 同一套語意：沒送＝不動、送 []＝清除、送值＝設定。
+    #
+    # 🚨 **原本是整份覆寫，而那在丟資料**：`chatroom_scratchpad_edit` 只送
+    # content 與 rev，於是 agent 每一次改寫段落都把標籤清成空——200 回來、
+    # 兩邊都沒有錯誤訊息（09/06 實測，卡 c22ca1b4）。原本判定為「既有債」
+    # 的前提是「呼叫端有帶就不會丟」，那個前提是錯的
+    tags: list[str] | None = Field(default=None, max_length=8)
     # 這一段後來怎麼了。**三種情況要分得出來**（決策 09/06）：
     # 沒送＝不動、送 ""＝清除、送值＝設定。
     #
@@ -8121,6 +8127,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         set_state = "state" in body.model_fields_set
         if set_state:
             _check_block_state(body.state)
+        set_tags = "tags" in body.model_fields_set
+        if set_tags:
+            _check_tags(board, body.tags or [])
         seq = await _next_seq_for_board(board_id)
         # CAS：**一定要單一語句**。先比對 rev 再 UPDATE 的話，中間那個 await
         # 讓出去，兩個人可以各自比對成功、各自寫入
@@ -8131,12 +8140,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 狀態只在**有送**的時候才進 SET 子句——沒送就不該出現在這句
             # 話裡。用 COALESCE 之類的技巧把它塞進來也行，但那會讓「送 ''
             # 要清除」變成寫不出來
-            "UPDATE board_scratchpad_block SET content=?, tags=?,"
+            # 標籤與狀態都只在**有送**的時候才進 SET 子句。用預設值把它們
+            # 塞進來也寫得出來，但那會讓「送空要清除」與「沒送要保留」
+            # 變成同一件事——而它們的差別正是這兩張卡的全部內容
+            "UPDATE board_scratchpad_block SET content=?,"
+            + (" tags=?," if set_tags else "")
             + (" state=?," if set_state else "")
             + " rev=rev+1,"
             " board_seq=?, updated_at=? WHERE id=? AND rev=? AND deleted=0"
             " RETURNING rev",
-            (body.content, _check_tags(board, body.tags))
+            (body.content,)
+            + ((_check_tags(board, body.tags or []),) if set_tags else ())
             + ((_check_block_state(body.state),) if set_state else ())
             + (seq, _now(), block_id, body.rev))
         won = await cur.fetchone()
