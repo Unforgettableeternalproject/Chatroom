@@ -1379,23 +1379,29 @@ def _board_target(room_id: str, board_id: str) -> tuple[str, str]:
     )
 
 
-def _require_room_for_item(room_id: str, board_id: str, what: str) -> None:
-    """卡片層級的操作目前只走 room 身分。
+def _item_axis(room_id: str, board_id: str, subagent: str,
+               what: str) -> tuple[str, str]:
+    """卡片層級的操作要走哪個軸，順便擋掉走不通的組合。
 
-    Hub 那側的 item 端點（PATCH／status／claim／release）認的是房內
-    participant，而認領本來就綁著「誰在哪個房裡做這件事」。board-scoped
-    沒有房，所以這條路現在走不通。
+    以前這裡是一條封鎖（`_require_room_for_item`）：board_id 一律拒絕，
+    理由寫著「Hub 的卡片端點認的是房內 participant」。**那句話 09/06 起
+    不成立**——server 的 `_board_item_writer` 早就吃得下 `X-Session-Key`，
+    防線改成 `board_member` 資格。bridge 沒跟上而已，不是誤用
+    （09/06 卡 46f096b5，@測試Novia 發現）。
 
-    **明確擋下來並說出替代做法**，不要讓它變成一個 404——那會讓人以為
-    是卡不見了，而真正的原因是身分。
+    ⚠️ **board 軸帶不了 subagent**。子代理的身分是 participant，而板上
+    沒有房、也就沒有 participant。默默改用父層身分送出去的話，那張卡會
+    掛在父層名下——與「這個功能沒開」在結果上完全一樣，而且不會有任何
+    地方報錯。所以這裡明確擋下，不靜默降級。
     """
-    if (board_id or "").strip() and not (room_id or "").strip():
+    kind, target = _board_target(room_id, board_id)
+    if kind == "board" and (subagent or "").strip():
         raise HubError(
-            f"用 board_id {what}還沒開放：Hub 的卡片端點認的是房內身分，"
-            "而板上沒有房。先 chatroom_join 進一間掛著這塊板的房，"
-            "再用 room_id 呼叫。（哪些房掛著它：chatroom_board(board_id=…) "
-            "的 attached_rooms。）",
+            f"board 軸的{what}帶不了 subagent：子代理的身分是房內 "
+            "participant，而板上沒有房。要以子代理身分動卡，先進一間掛著"
+            "這塊板的房，改用 room_id 呼叫。",
         )
+    return kind, target
 
 
 def _board_scoped_request(method: str, path: str, **kwargs: Any) -> Any:
@@ -1413,14 +1419,21 @@ def _board_scoped_request(method: str, path: str, **kwargs: Any) -> Any:
 
 
 def _board_write(room_id: str, subagent: str, method: str, path: str,
-                 **kwargs: Any) -> dict:
+                 board_id: str = "", **kwargs: Any) -> dict:
     """board 的寫入請求，帶上正確的身分。
+
+    兩個軸各有自己的憑證：**房軸帶 participant_id**（房內身分），
+    **板軸帶 session_key**（板成員資格）。給錯的那一個不會被 Hub 讀成
+    「沒有身分」而是讀成「另一個人」，所以兩者不混用。
 
     ⚠️ **子代理要用自己的身分**：認領是綁 participant 的，走父層身分的話
     那張卡會掛在父層名下，而房內看到的名字也是父層的。更糟的是同一個父層
     派兩個子代理去領同一張卡時，第二次會拿到「已經被『你自己』領走了」
     ——訊息荒謬，而且併發保證等於完全沒有被驗證到。
+    （板軸不接受 subagent，在 `_item_axis` 就擋掉了。）
     """
+    if (board_id or "").strip():
+        return _board_scoped_request(method, path, **kwargs)
     participant_id, scope = _identity_for(room_id, subagent)
     data = _room_request(room_id, method, path, require_identity=False,
                          participant_id=participant_id, **kwargs)
@@ -1648,7 +1661,7 @@ def chatroom_board_update(
         raise HubError(
             f"kind 只能是 objective / checklist / task，收到「{kind}」。"
         )
-    _require_room_for_item(room_id, board_id, "改卡")
+    _item_axis(room_id, board_id, subagent, "改卡")
     if not item_id.strip():
         raise HubError("要給 item_id——那是你要改的那張卡。")
     if status:
@@ -1673,13 +1686,14 @@ def chatroom_board_update(
                 )
             return _board_write(
                 room_id, subagent, "POST",
-                f"/api/board/objectives/{item_id}/{status}"
+                f"/api/board/objectives/{item_id}/{status}",
+                board_id=board_id,
             )
         plural = "tasks" if kind == "task" else "checklists"
         return _board_write(
             room_id, subagent, "POST",
             f"/api/board/{plural}/{item_id}/status",
-            json={"status": status},
+            board_id=board_id, json={"status": status},
         )
     fields = {
         k: v for k, v in (
@@ -1693,7 +1707,7 @@ def chatroom_board_update(
               "task": "tasks"}[kind]
     return _board_write(
         room_id, subagent, "PATCH", f"/api/board/{plural}/{item_id}",
-        json=fields,
+        board_id=board_id, json=fields,
     )
 
 
@@ -1719,10 +1733,11 @@ def chatroom_board_claim(room_id: str = "", task_id: str = "",
     ``release=True`` 放掉，讓別人接手。**領著不放又不做**是這塊板上最糟的
     狀態：它看起來有人在處理，實際上沒有。
     """
-    _require_room_for_item(room_id, board_id, "認領")
+    _item_axis(room_id, board_id, subagent, "認領")
     action = "release" if release else "claim"
     return _board_write(
-        room_id, subagent, "POST", f"/api/board/tasks/{task_id}/{action}"
+        room_id, subagent, "POST", f"/api/board/tasks/{task_id}/{action}",
+        board_id=board_id,
     )
 
 

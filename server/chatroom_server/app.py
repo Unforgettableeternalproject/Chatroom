@@ -5514,11 +5514,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _can_assign_directly(row, me, host: bool) -> bool:
         """這個人能不能跳過對方的同意直接指派。
 
-        三種人可以：**Hub 主持人**、**這塊板的 owner**、**卡所在房的建立者**。
-        其餘（包括房裡的一般成員與 editor）只能請求。
+        四種人可以：**Hub 主持人**、**這塊板的 owner**、**監督者**、
+        **卡所在房的建立者**。其餘（包括房裡的一般成員與 editor）只能請求。
 
         ⚠️ 板 owner 也算是刻意的：板可以掛在別人開的房裡，只認房建立者的話，
         **板的主人在自己的板上反而只能請求**——而他正是那個分派工作的人。
+
+        **監督者**是 09/06 補上的（艾斯維爾裁定：「板子的持有者跟監督者可以
+        直接指派，其他人只能請求指派」）。他是被指定來看著這塊板的那個人，
+        卻只能請求別人接手、而請求要對方點頭——板 owner 不在線上時整條分派
+        路徑就停在那裡。資格判定共用 `_is_board_supervisor`，所以「退場了就
+        不算」那條規則自動跟著（判準只有一份）。
         """
         if host:
             return True
@@ -5533,6 +5539,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (bid, actor))).fetchone()
             if owned:
                 return True
+        if await _is_board_supervisor(row, me):
+            return True
         room = await (await db.execute(
             "SELECT creator_session_key FROM room WHERE id=?",
             (row["room_id"],))).fetchone()

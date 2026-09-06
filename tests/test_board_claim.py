@@ -629,3 +629,55 @@ async def test_exemption_survives_a_session_key_with_whitespace(tmp_path):
         row = await (await db.execute(
             "SELECT status FROM participant WHERE id=?", (apid,))).fetchone()
         assert row["status"] == "active", "存量那批帶空白的接案者被掃掉了"
+
+
+# ---------------------------------------------------------------------------
+# board 軸身分不是繞過 ACL 的側門（09/06 卡 46f096b5 的前置驗證）
+#
+# @測試Novia 09/06 #32 先講明他會打這一發：修「卡片端點不認 board_id」這個
+# 缺口，不能順手變成「不在任何掛接房裡的人也能動卡」。
+#
+# 這兩條一開始就是綠的——**那正是重點**。要開通 bridge 的 board 軸之前，
+# 得先證明那道門真的擋得住，而不是我以為它擋得住。
+# ---------------------------------------------------------------------------
+
+
+async def test_a_stranger_cannot_claim_with_a_bare_session_key(tmp_path):
+    """沒進房、也不是板成員的人，拿 session_key 直接打 claim 要被擋。
+
+    `_board_item_writer` 在拿不到 participant 時會退回純 actor 身分，
+    但最後一律過 `_board_member_or_403`——那道門才是防線。
+    """
+    app, client = await _client(tmp_path, "axis_stranger")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+
+        r = await client.post(f"/api/board/tasks/{tid}/claim",
+                              headers={"X-Session-Key": "agent-outsider"})
+        assert r.status_code == 403, r.text
+
+        # 而且真的沒領到——403 之後卡還是空的
+        assert (await _task(client, rid, hdr, tid))["claim_state"] == ""
+
+
+async def test_a_board_member_may_claim_without_being_in_a_room(tmp_path):
+    """反過來那半：**是板成員就構得到卡**，不必先進房。
+
+    這是 46f096b5 要開通的那條路。防線是「板成員資格」而不是「房內身分」——
+    兩者不同，混為一談會讓板房分離之後的板變成沒有人動得了的東西。
+    """
+    app, client = await _client(tmp_path, "axis_member")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        b = (await client.get(f"/api/rooms/{rid}/board",
+                              headers={"X-Host-View": "1"})).json()
+        r = await client.post(
+            f"/api/boards/{b['board_id']}/members",
+            json={"actor_key": "agent-remote", "role": "editor"},
+            headers={"X-Session-Key": "agent-1"})
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/tasks/{tid}/claim",
+                              headers={"X-Session-Key": "agent-remote"})
+        assert r.status_code == 200, r.text
+        assert (await _task(client, rid, hdr, tid))["claim_state"] == "held"

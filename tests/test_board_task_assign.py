@@ -409,3 +409,90 @@ async def test_the_requester_hears_back_when_the_answer_comes(tmp_path):
             got = (await client.get(
                 "/api/assignments?session_key=agent-worker")).json()
             assert got["task_request_answers"] == []
+
+
+# ---------------------------------------------------------------------------
+# 擴權：監督者也能直接指派（09/06 卡 bc83b3c9）
+#
+# 艾斯維爾 09/06 裁定（#15 收據）：**板子的持有者跟監督者可以直接指派，
+# 其他人只能請求指派。**
+#
+# supervisor 原本不在 `_can_assign_directly` 裡——他是被指定來看著這塊板的
+# 那個人，卻只能請求別人接手，而請求要對方點頭。板 owner 不在線上時整條
+# 分派路徑就停在那裡。
+# ---------------------------------------------------------------------------
+
+
+async def _make_supervisor(client, rid, boss, key):
+    r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"session_key": key}, headers=boss)
+    assert r.status_code == 200, r.text
+    return r
+
+
+async def test_the_supervisor_assigns_directly(tmp_path):
+    """監督者直接指派，不降級成請求。"""
+    app, client = await _client(tmp_path, "assign_supervisor")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            sup = await _join(client, rid, "agent-sup", "監督者")
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+            await _make_supervisor(client, rid, boss, "agent-sup")
+
+            r = await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=sup)
+            assert r.status_code == 200, r.text
+            assert r.json()["assigned"] is True,                 "監督者被降級成請求了——他正是那個分派工作的人"
+            card = await _card(client, rid, boss, tid)
+            assert card["assignee_participant_id"] ==                 worker["X-Participant-Id"]
+
+
+async def test_a_departed_supervisor_loses_the_privilege(tmp_path):
+    """**退場了就不算。**
+
+    `board_supervisor_left_at` 留著是為了讓畫面說得出「本來是誰在看」，
+    不是資格——拿它當資格用的話，當過一次監督者就終身有效。
+    """
+    app, client = await _client(tmp_path, "assign_sup_left")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            sup = await _join(client, rid, "agent-sup", "監督者")
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+            await _make_supervisor(client, rid, boss, "agent-sup")
+            assert (await client.post(f"/api/rooms/{rid}/leave",
+                                      headers=sup)).status_code == 200
+
+            back = await _join(client, rid, "agent-sup", "監督者")
+            r = await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=back)
+            assert r.status_code == 200, r.text
+            assert r.json()["assigned"] is False,                 "退場過的監督者還留著直接指派的權限"
+
+
+async def test_an_ordinary_member_still_only_asks(tmp_path):
+    """擴的是監督者那一格，不是把閘門拆掉——其餘人一律仍走請求。
+
+    寫成明確的斷言是因為擴權最容易擴過頭：判準多一個 or 分支，而
+    「誰不能」沒有任何地方會提醒它變寬了。
+    """
+    app, client = await _client(tmp_path, "assign_plain_member")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, boss, tid = await _setup(client)
+            other = await _join(client, rid, "agent-other", "路人")
+            worker = await _join(client, rid, "agent-worker", "接手的人")
+            await _make_supervisor(client, rid, boss, "agent-sup")
+
+            r = await client.post(
+                f"/api/board/tasks/{tid}/assign",
+                json={"target_participant_id": worker["X-Participant-Id"]},
+                headers=other)
+            assert r.status_code == 200, r.text
+            assert r.json()["assigned"] is False
+            assert r.json()["request"]["status"] == "pending",                 "該降級成請求卻沒建立請求"

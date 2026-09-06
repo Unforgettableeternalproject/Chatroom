@@ -104,20 +104,27 @@ def test_checklist_from_the_board_is_refused_with_a_way_out(fake_hub):
 
 
 def test_item_operations_by_board_id_explain_themselves(fake_hub):
-    """認領與改卡目前只走房內身分。
+    """走不通的組合要說出原因，不要變成一個 404。
 
-    回 404 的話會讓人以為卡不見了，而真正的原因是身分——訊息要說出
-    「先進一間掛著這塊板的房」。
+    ⚠️ **這條的前提在 09/06 反了**（卡 46f096b5）。它原本釘的是「認領與
+    改卡只走房內身分」，斷言 board_id 一律被擋、訊息要說「先 chatroom_join
+    進一間掛著這塊板的房」。那條封鎖已經過時——server 的卡片端點早就吃得下
+    `X-Session-Key`。**不是我為了讓測試過而改斷言，是斷言本身跟著契約反了。**
+
+    留下來的是它真正在守的東西：走不通的時候要說得出為什麼。現在走不通的
+    只剩「board 軸帶 subagent」。
     """
     for call in (
-        lambda: srv.chatroom_board_claim(task_id="t1", board_id=BOARD),
+        lambda: srv.chatroom_board_claim(task_id="t1", board_id=BOARD,
+                                         subagent="handle-1"),
         lambda: srv.chatroom_board_update(item_id="t1", status="done",
-                                          board_id=BOARD),
+                                          board_id=BOARD,
+                                          subagent="handle-1"),
     ):
         out = call()
         assert out["ok"] is False
-        assert "chatroom_join" in out["reason"]
-        assert "attached_rooms" in out["reason"], "要告訴他去哪裡找那些房"
+        assert "subagent" in out["reason"]
+        assert "room_id" in out["reason"], "要告訴他替代做法是哪一條"
 
 
 def test_attach_and_detach(fake_hub):
@@ -148,3 +155,69 @@ def test_old_positional_calls_still_work(fake_hub):
                   {"ok": True, "id": "t1"})
     srv.chatroom_board_claim(ROOM, "t1")
     assert fake_hub.calls[-1].url.path == "/api/board/tasks/t1/claim"
+
+
+# ---------------------------------------------------------------------------
+# 卡片操作也走得通 board 軸（09/06 卡 46f096b5）
+#
+# 板房分離之後，`chatroom_board_claim(board_id=…)` 仍被 bridge 本地擋下
+# （`_require_room_for_item`），連請求都發不出去。那條封鎖寫的理由是「Hub
+# 的卡片端點認的是房內 participant」——**那句話現在不成立了**：server 的
+# `_board_item_writer` 早就吃得下 `X-Session-Key`，防線改成 `board_member`
+# 資格（tests/test_board_claim.py 兩條實測釘住）。
+#
+# 所以這是 bridge 沒跟上 server，不是誤用。
+# ---------------------------------------------------------------------------
+
+
+def test_claiming_by_board_id_needs_no_room(fake_hub):
+    """Board Library 裡沒有房，卡照樣要領得動。"""
+    fake_hub.json("POST", "/api/board/tasks/t-1/claim",
+                  {"ok": True, "id": "t-1", "board_seq": 9})
+    out = srv.chatroom_board_claim(board_id=BOARD, task_id="t-1")
+    assert out["ok"] is True
+    req = fake_hub.calls[-1]
+    # 憑證走 session_key，兩邊都要帶——GET 吃查詢字串，寫入只認標頭
+    assert req.url.params["session_key"]
+    assert req.headers.get("X-Session-Key")
+    assert "X-Participant-Id" not in req.headers,         "board 軸不該帶房內身分——那把 id 屬於另一個軸"
+
+
+def test_releasing_by_board_id_works_too(fake_hub):
+    """放掉與認領是同一條路，只差一個動作名。"""
+    fake_hub.json("POST", "/api/board/tasks/t-1/release",
+                  {"ok": True, "id": "t-1", "board_seq": 10})
+    out = srv.chatroom_board_claim(board_id=BOARD, task_id="t-1", release=True)
+    assert out["ok"] is True
+    assert fake_hub.calls[-1].url.path.endswith("/release")
+
+
+def test_updating_a_card_by_board_id_needs_no_room(fake_hub):
+    """改卡同理——收尾一張卡不必先進一間房。"""
+    fake_hub.json("POST", "/api/board/tasks/t-1/status",
+                  {"ok": True, "id": "t-1", "status": "done", "board_seq": 11})
+    out = srv.chatroom_board_update(board_id=BOARD, item_id="t-1",
+                                    kind="task", status="done")
+    assert out["ok"] is True
+    assert fake_hub.calls[-1].headers.get("X-Session-Key")
+
+
+def test_a_subagent_cannot_act_on_the_board_axis(fake_hub):
+    """**子代理只在房裡有身分。**
+
+    認領綁的是 participant，而 board 軸下沒有房、也就沒有 participant。
+    默默用父層身分送出去的話，那張卡會掛在父層名下——與「這個功能沒開」
+    在結果上完全一樣，而且不會有任何地方報錯。所以明確擋下來。
+    """
+    out = srv.chatroom_board_claim(board_id=BOARD, task_id="t-1",
+                                   subagent="handle-1")
+    assert out["ok"] is False
+    assert "subagent" in out["reason"]
+
+
+def test_giving_both_ids_is_still_refused(fake_hub):
+    """兩個都是 32 hex，猜錯不會報錯——這條擋線不因為開通而放寬。"""
+    out = srv.chatroom_board_claim(room_id=ROOM, board_id=BOARD,
+                                   task_id="t-1")
+    assert out["ok"] is False
+    assert "只能給一個" in out["reason"]
