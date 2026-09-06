@@ -196,6 +196,25 @@ def _resolve_codex_argv() -> list[str]:
     return [str(path)]
 
 
+def _codex_thread_busy(thread: str) -> bool:
+    """那個 Codex session 現在是不是正在處理一個 turn。
+
+    判準是 writer lock 檔存在與否——Codex 持有寫入鎖時才有這個檔，閒著等
+    輸入時沒有。注意它只回答「忙不忙」：**檔不存在同時涵蓋「閒著」與
+    「根本沒在跑」**，兩者分不開。這裡取這樣就夠了——沒在跑的話 queue 會
+    失敗，事件放回隊伍下一輪再試，不會丟。
+    """
+    if not thread:
+        return False
+    home = os.environ.get("CODEX_HOME") or os.path.join(
+        os.environ.get("USERPROFILE") or os.environ.get("HOME") or "", ".codex"
+    )
+    try:
+        return (Path(home) / "thread-writer-locks" / f"{thread}.lock").exists()
+    except OSError:
+        return False  # 掃不到就當它空著：延遲送達好過永遠不送
+
+
 def _state_candidates(session_key: str) -> list[Path]:
     """可能存放本 session 身分的 state 檔，依可信度排序。
 
@@ -330,6 +349,12 @@ class Watcher:
         # Codex 沒有 Monitor 那種自掛機制，只能反向推：事件經 codex queue
         # 注入其 session（前提：該 thread 已有至少一輪對話，否則 queue 讀不到）
         self.codex_argv = _resolve_codex_argv() if args.codex_thread else None
+        # Codex 正在處理一個 turn 時累積下來的事件。`codex queue` 的成功只
+        # 代表「接受入列」，CLI 沒有 replace/dedupe/cancel——在它忙的期間
+        # 逐則入列，結果是 turn 結束後逐筆倒灌，其中大半早已被它自己的 MCP
+        # 游標讀過。忙就累積，空下來一次送。
+        self._codex_pending: list[dict[str, Any]] = []
+        self._codex_pending_lock = threading.Lock()
 
     # ---------- 各事件來源 ----------
 
@@ -843,8 +868,31 @@ class Watcher:
 
     def dispatch_codex(self, event: dict[str, Any]) -> None:
         """把事件排入 Codex session 的佇列（外部喚醒，2026-08-28 實測閒置 session
-        會立即處理）。失敗只記 stderr 不中斷——通知丟一則不該讓 watcher 死掉。"""
-        text = "[chatroom 通知] " + json.dumps(event, ensure_ascii=False)
+        會立即處理）。
+
+        它正在處理 turn 時只累積不送；lock 消失後由 [flush_codex_pending]
+        一次送出。App 端的 CodexDispatcher 是同一套時機。
+        """
+        with self._codex_pending_lock:
+            self._codex_pending.append(event)
+        if not _codex_thread_busy(self.args.codex_thread):
+            self.flush_codex_pending()
+
+    def flush_codex_pending(self) -> None:
+        """Codex 空下來就把累積的事件一次送出。還在忙就下一輪再說。"""
+        if not self.codex_argv:
+            return
+        if _codex_thread_busy(self.args.codex_thread):
+            return
+        with self._codex_pending_lock:
+            events, self._codex_pending = self._codex_pending, []
+        if not events:
+            return
+        # 一則 queue item 裡放 N 個通知，每個仍是完整的一行
+        # `[chatroom 通知] {...}`——單筆的解析契約不變，變的只是一次拿到幾筆。
+        text = "\n".join(
+            "[chatroom 通知] " + json.dumps(e, ensure_ascii=False) for e in events
+        )
         argv = [
             *self.codex_argv, "queue",
             "--thread", self.args.codex_thread, "--message", text,
@@ -855,12 +903,19 @@ class Watcher:
                 encoding="utf-8", errors="replace",
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
+            self._requeue_codex(events)
             _log(f"codex queue 失敗：{exc}")
             return
         if done.returncode != 0:
+            self._requeue_codex(events)
             _log(f"codex queue 失敗（exit {done.returncode}）：{done.stderr.strip()}")
         else:
-            _log(f"codex queue OK：{done.stdout.strip()}")
+            _log(f"codex queue OK（{len(events)} 則）：{done.stdout.strip()}")
+
+    def _requeue_codex(self, events: list[dict[str, Any]]) -> None:
+        """送不出去就放回隊伍前面，下一輪再試——丟掉的話這幾則喚醒就沒了。"""
+        with self._codex_pending_lock:
+            self._codex_pending[:0] = events
 
     # ---------- 主迴圈 ----------
 
@@ -878,6 +933,12 @@ class Watcher:
                 _log(f"指派輪詢暫時失敗，稍後重試：{exc.reason}")
             except Exception:  # 這條執行緒死掉會靜默失去所有指派通知
                 _log("指派輪詢發生未預期錯誤，稍後重試")
+            # 借同一個節奏把累積的 Codex 通知送出去：等的是同一件事
+            #（那個 thread 空下來），沒理由再開一條執行緒
+            try:
+                self.flush_codex_pending()
+            except Exception:
+                _log("Codex 通知補送發生未預期錯誤，稍後重試")
             self._stop.wait(self.args.idle_interval)
 
     def run(self) -> int:

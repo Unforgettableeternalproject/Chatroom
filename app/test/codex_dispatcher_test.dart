@@ -81,19 +81,24 @@ void main() {
   late List<List<String>> runs;
   late Directory codexHome;
 
+  /// 本機當下持有 writer lock 的 thread ＝ **正在處理一個 turn**。
+  /// `make` 預設讓兩個都忙著；投遞發生在它們空下來的時候，見 [settle]。
+  late Set<String> busyThreads;
+
   CodexDispatcher make({
     RoomMembers members = defaultMembers,
     List<AgentSession>? sessions,
     Map<String, List<Assignment>> assignments = const {},
-    Set<String> activeThreads = const {threadA, threadB},
+    Set<String>? activeThreads,
   }) {
+    busyThreads = activeThreads ?? {threadA, threadB};
     final d = CodexDispatcher(
       (_) async => members,
       fetchSessions: () async =>
           sessions ??
           [session(threadA, 'Codex-Sol'), session(threadB, 'Codex-Luna')],
       fetchAssignments: (thread) async => assignments[thread] ?? const [],
-      activeThreadResolver: () => activeThreads,
+      activeThreadResolver: () => busyThreads,
       runProcess: (argv) async {
         runs.add(argv);
         return true;
@@ -115,6 +120,14 @@ void main() {
   RoomFreshBatch batch(List<Message> msgs) =>
       RoomFreshBatch(roomId: 'r1', roomName: '設計討論', messages: msgs);
 
+  /// Codex 的 turn 結束、writer lock 消失，下一輪輪詢把累積的批次投出去。
+  /// 忙碌期間累積、空下來才投，所以「投給誰、內容對不對」的斷言都要先
+  /// 經過這一步——那不是這些測試的主題，只是它們的前置。
+  Future<void> settle(CodexDispatcher d) async {
+    busyThreads.clear();
+    await d.pollAssignments();
+  }
+
   String target(List<String> argv) => argv[argv.indexOf('--thread') + 1];
   Map payload(List<String> argv) {
     final text = argv[argv.indexOf('--message') + 1];
@@ -124,6 +137,7 @@ void main() {
   test('依房內 Codex 名稱把訊息送到精確 thread', () async {
     final d = make();
     await d.handle(batch([msg(1, content: '只給 Sol')]));
+    await settle(d);
     expect(runs, hasLength(1));
     expect(target(runs.single), threadA);
     expect(payload(runs.single)['target_session_id'], threadA);
@@ -138,6 +152,7 @@ void main() {
         msg(2, mentions: const ['Codex-Sol', 'Codex-Luna']),
       ]),
     );
+    await settle(d);
     expect(runs, hasLength(2));
     expect(runs.map(target).toSet(), {threadA, threadB});
     final byTarget = {for (final run in runs) target(run): payload(run)};
@@ -157,6 +172,7 @@ void main() {
         ),
       ]),
     );
+    await settle(d);
     expect(runs, hasLength(1));
     expect(target(runs.single), threadB);
   });
@@ -284,6 +300,9 @@ void main() {
   test('加入事件與一般訊息同批時各走各的路徑', () async {
     final d = make();
     await d.handle(batch([msg(1, content: '只給 Sol'), joinMsg(2)]));
+    // 加入事件不受投遞時機反轉影響（它不走 mention 分流，也不累積）；
+    // mention 那一半要等它空下來。
+    await settle(d);
     final byEvent = <String, List<String>>{};
     for (final run in runs) {
       byEvent
@@ -352,6 +371,7 @@ void main() {
           mentions: const ['Codex-Sol']),
     ]);
     await Future<void>.delayed(const Duration(milliseconds: 20));
+    await settle(d);
 
     expect(runs, hasLength(1), reason: '被 @ 的那個 thread 該收到');
     expect(target(runs.single), threadA);
@@ -360,10 +380,10 @@ void main() {
     center.dispose();
   });
 
-  test('查不到本機 Codex 時 mention 留著補投，查得到之後補上', () async {
-    // 「時好時壞」的成因：writer lock 只在 Codex 持有寫入鎖時存在，它閒著
-    // 等輸入的時候掃不到。指派每 10 秒輪詢所以自帶重試，mention 只有事件
-    // 抵達的那一瞬間一次機會——同一個間歇性失敗，只有 mention 看得出來。
+  test('沒見過 lock 時留著，見過之後等它空下來才投（完整生命週期）', () async {
+    // writer lock 回答的是兩個不同的問題：「這個 thread 在這台機器上嗎」
+    // 與「它現在忙不忙」。舊的判讀只取後者、而且取反了——把「查得到 lock」
+    // 當成「投得出去」，於是恰好在它最忙的時候逐則入列，turn 結束後倒灌。
     var threads = <String>{};
     final d = CodexDispatcher(
       (_) async => defaultMembers,
@@ -377,11 +397,17 @@ void main() {
       codexHome: codexHome.path,
     )..enabled = true;
     await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
-    expect(runs, isEmpty, reason: '這一刻投不出去');
+    expect(runs, isEmpty, reason: '沒有正面證據說它在這台機器上');
     expect(d.pendingCount, 1, reason: '但要留著');
 
-    // Codex 醒了，下一輪輪詢補上
+    // Codex 開始處理一個 turn：這下知道它是本機的了，可是它正忙
     threads = {threadA, threadB};
+    await d.pollAssignments();
+    expect(runs, isEmpty, reason: '忙碌期間入列的下場就是 turn 結束後倒灌');
+    expect(d.pendingCount, 1);
+
+    // turn 結束，lock 消失——這才是該投的時刻
+    threads = <String>{};
     await d.pollAssignments();
     expect(runs, hasLength(1));
     expect(target(runs.single), threadA);
@@ -401,10 +427,11 @@ void main() {
     // 打在真正沒有內層 catch 的地方：`_fetchMembers` / `_roomRoutes` 各自
     // 都接得住自己的失敗，投遞那一段沒有。
     var firstCall = true;
+    final busy = <String>{threadA};
     final d = CodexDispatcher(
       (_) async => defaultMembers,
       fetchSessions: () async => [session(threadA, 'Codex-Sol')],
-      activeThreadResolver: () => {threadA},
+      activeThreadResolver: () => busy,
       runProcess: (argv) async {
         if (firstCall) {
           firstCall = false;
@@ -417,14 +444,21 @@ void main() {
       codexHome: codexHome.path,
     )..enabled = true;
 
-    // 第一批炸掉——不可以往外拋（Stream 的 onData 拋錯會變成未處理錯誤）
+    // 忙碌期間先累積（順便讓它認得 threadA 是本機的）
     await d.handle(batch([msg(1, content: '@Codex-Sol 第一則')]));
+    expect(runs, isEmpty);
+    expect(d.pendingCount, 1);
+
+    // 空下來要投了，spawn 在這一刻炸掉——不可以往外拋
+    //（Stream 的 onData 拋錯會變成未處理錯誤）
+    busy.clear();
+    await d.pollAssignments();
     expect(runs, isEmpty);
     expect(d.pendingCount, 1, reason: '炸掉的那批也要留著補投');
 
-    // 下一批照常運作，先前那則跟著補上
+    // 下一批照常運作，訂閱沒有因為前一批出錯而靜默
     await d.handle(batch([msg(2, content: '@Codex-Sol 第二則')]));
-    expect(runs, isNotEmpty, reason: '訂閱沒有因為前一批出錯而靜默');
+    expect(runs, isNotEmpty);
   });
 
   test('帶附件的 mention 照樣投得出去（附件只是 metadata）', () async {
@@ -452,6 +486,7 @@ void main() {
       ],
     );
     await d.handle(batch([withFile]));
+    await settle(d);
     expect(runs, hasLength(1));
     expect(target(runs.single), threadA);
     expect(payload(runs.single)['latest']['content'], '@Codex-Sol 你看得到這張圖嗎');
@@ -483,5 +518,64 @@ void main() {
       ..threadOverride = threadB;
     await d.handle(batch([msg(1, content: '@Novia 在嗎', mentions: ['Novia'])]));
     expect(runs, isEmpty);
+  });
+
+  // ── 投遞時機反轉（卡 261519cd 第一階段）───────────────────────────
+  //
+  // writer lock 存在＝Codex 正在處理一個 turn。原本的判讀反了：把「查得到
+  // lock」當成「投得出去」，結果恰好在它最忙的時候把每一則各排一次 queue，
+  // 等當前 turn 結束後逐筆倒灌。CLI 沒有 replace/dedupe/cancel，入列就撤不回。
+  //
+  // 反轉之後：忙碌期間只累積不投，lock 消失（轉 idle）才投一次合併的批次。
+
+  test('Codex 忙碌期間的連續 mention 不逐筆投遞', () async {
+    final active = <String>{threadA};
+    final d = make(activeThreads: active);
+    await d.handle(batch([msg(1, content: '@Codex-Sol 一')]));
+    await d.handle(batch([msg(2, content: '@Codex-Sol 二')]));
+    await d.handle(batch([msg(3, content: '@Codex-Sol 三')]));
+    expect(runs, isEmpty, reason: '它正在忙，這三則都不該現在入列');
+    expect(d.pendingCount, 3, reason: '但一則都不能丟');
+  });
+
+  test('轉 idle 後只送一批，內容是期間累積的全部', () async {
+    final active = <String>{threadA};
+    final d = make(activeThreads: active);
+    await d.handle(batch([msg(1, content: '@Codex-Sol 一')]));
+    await d.handle(batch([msg(2, content: '@Codex-Sol 二')]));
+    await d.handle(batch([msg(3, content: '@Codex-Sol 三')]));
+
+    active.clear(); // lock 消失＝當前 turn 結束，Codex 閒著等輸入
+    await d.pollAssignments();
+
+    expect(runs, hasLength(1), reason: '三則合成一次喚醒，不是三次');
+    expect(target(runs.single), threadA);
+    final p = payload(runs.single);
+    expect(p['count'], 3);
+    expect(p['latest']['seq'], 3, reason: '帶最新的那則');
+    expect(d.pendingCount, 0);
+  });
+
+  test('busy 期間認得的本機 thread，idle 之後仍認得出來', () async {
+    // 沒有 lock 時 activeThreadIds() 是空的，而它正是「這個 thread 是不是
+    // 本機的」唯一來源。不記住的話，反轉之後永遠投不出去——查不到要投給誰。
+    final active = <String>{threadA};
+    final d = make(activeThreads: active);
+    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
+    expect(runs, isEmpty);
+
+    active.clear();
+    await d.pollAssignments();
+    expect(runs, hasLength(1), reason: 'threadA 已知是本機的，不因 lock 消失而失憶');
+    expect(target(runs.single), threadA);
+  });
+
+  test('從未見過 lock 的 thread 不投——那不是本機的', () async {
+    // 與上一條的分界：沒有正面證據說它在這台機器上，就不能投。
+    final d = make(activeThreads: const {});
+    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
+    await d.pollAssignments();
+    expect(runs, isEmpty);
+    expect(d.pendingCount, 1, reason: '留著等它出現過一次 lock');
   });
 }

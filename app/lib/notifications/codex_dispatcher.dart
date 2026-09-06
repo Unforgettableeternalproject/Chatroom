@@ -86,6 +86,24 @@ class CodexDispatcher {
   final Set<String> _seenAssignments = {};
   bool _pollingAssignments = false;
 
+  /// 曾經在本機出現過 writer lock 的 thread。
+  ///
+  /// lock 只在 Codex 持有寫入鎖時存在，所以它同時回答了兩個不同的問題：
+  /// 「這個 thread 在這台機器上嗎」與「它現在忙不忙」。投遞時機反轉之後
+  /// 要在**沒有 lock 的那一刻**投遞，前一個問題就沒有現成答案了——不記住
+  /// 的話，反轉的結果是永遠投不出去。
+  ///
+  /// 只增不減：thread 不會從本機搬去別台。
+  final Set<String> _knownLocalThreads = {};
+
+  /// 掃一次 lock，順手把看到的 thread 記進本機名冊。回傳的是**當下忙碌**
+  /// 的那些（有 lock ＝ 正在處理一個 turn）。
+  Set<String> _scanBusyThreads() {
+    final busy = activeThreadIds();
+    _knownLocalThreads.addAll(busy);
+    return busy;
+  }
+
   /// 投不出去、等著補投的 mention。key 是 messageId（同一則只留一份）。
   ///
   /// mention 與指派的可靠度差距全在這裡：指派每 10 秒輪詢一次，自帶重試，
@@ -156,6 +174,7 @@ class CodexDispatcher {
       return;
     }
 
+    final busy = _scanBusyThreads();
     final routes = await _roomRoutes(batch.roomId);
     final byThread = <String, List<Message>>{};
     for (final m in chats) {
@@ -183,7 +202,14 @@ class CodexDispatcher {
         );
       }
     }
+    // 忙碌的 thread 只累積不投。`codex queue` 的 exit 0 只代表接受入列，
+    // 而 CLI 沒有 replace/dedupe/cancel——在它處理 turn 的期間逐則入列，
+    // 結果就是 turn 結束後逐筆倒灌，其中大半早已被 MCP 游標讀過。
     for (final entry in byThread.entries) {
+      if (busy.contains(entry.key)) {
+        _remember(batch, entry.value);
+        continue;
+      }
       await _dispatchMessages(entry.key, batch, entry.value);
     }
 
@@ -310,13 +336,14 @@ class CodexDispatcher {
     if (_pending.isEmpty) return;
 
     // 依房間分組重投：routes 是逐房查的
+    final busy = _scanBusyThreads();
     final byRoom = <String, List<_PendingMention>>{};
     for (final p in _pending.values) {
       byRoom.putIfAbsent(p.roomId, () => []).add(p);
     }
     for (final entry in byRoom.entries) {
       final routes = await _roomRoutes(entry.key);
-      if (routes.isEmpty) continue; // 還是查不到，下一輪再說
+      if (routes.isEmpty) continue; // 從沒在本機見過這個房的 Codex，下一輪再說
       final first = entry.value.first;
       final batch = RoomFreshBatch(
         roomId: entry.key,
@@ -340,6 +367,8 @@ class CodexDispatcher {
         if (!routed) _pending.remove(m.id);
       }
       for (final t in byThread.entries) {
+        // 還在忙就繼續等。這一批合併成一次喚醒，等它空下來再送。
+        if (busy.contains(t.key)) continue;
         if (await _dispatchMessagesOk(t.key, batch, t.value)) {
           for (final m in t.value) {
             _pending.remove(m.id);
@@ -391,7 +420,9 @@ class CodexDispatcher {
 
   Future<Map<String, Set<String>>> _roomRoutes(String roomId) async {
     try {
-      final local = activeThreadIds();
+      // 「是不是本機的」用曾見過的名冊回答，不用當下的 lock——Codex 閒著
+      // 等輸入時掃不到 lock，而那正是該投遞的時刻。
+      final local = {...activeThreadIds(), ..._knownLocalThreads};
       if (local.isEmpty) return const {};
       final sessions = await _fetchSessions();
       final routes = <String, Set<String>>{};
