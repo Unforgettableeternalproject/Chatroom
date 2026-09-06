@@ -14,7 +14,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 # 交付包實際收錄的路徑。dirty 判定只看這裡（見 _from_git）。
 _SHIPPED = "bridge/"
