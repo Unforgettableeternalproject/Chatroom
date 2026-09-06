@@ -628,3 +628,155 @@ async def test_a_removed_member_is_not_still_a_member(tmp_path):
                                  headers=bot)
             assert r.status_code == 403
             assert r.json()["detail"]["code"] == "not_board_member"
+
+
+# ---------------------------------------------------------------------------
+# 段落狀態：已實作／已放棄（09/06 卡 6b1e6ecc，艾斯維爾想法板 #6 段）
+#
+# 段落除了刪除之外要能標記「後來怎麼了」。與段落標籤**正交**——標籤是分類
+# （bug / feature / design），狀態是結局。
+#
+# 三態，且 `""` ≠ `abandoned`：「還沒標」與「決定不做」是兩件事，畫成同一種
+# 就等於替所有沒人管的段落做了決定。
+#
+# 寫入語意（決策Novia 09/06 #68 裁定，UI 提的問題）：**沒送＝不動、
+# 送空＝清除、送值＝設定**。PUT 對 `content`/`tags` 是整份覆寫，狀態若跟著
+# 那個語意，改個錯字就會順手把狀態清掉——那正是這包一直在抓的靜默資料遺失。
+# ---------------------------------------------------------------------------
+
+
+async def _write(client, bid, pad, blk, hdr, **fields):
+    body = {"content": "改寫", "tags": [], "rev": 1, **fields}
+    return await client.put(
+        f"/api/boards/{bid}/scratchpads/{pad}/blocks/{blk}",
+        json=body, headers=hdr)
+
+
+async def _block(client, bid, pad, blk, hdr):
+    r = await client.get(f"/api/boards/{bid}/scratchpads/{pad}", headers=hdr)
+    assert r.status_code == 200, r.text
+    return next(b for b in r.json()["blocks"] if b["id"] == blk)
+
+
+async def test_a_fresh_paragraph_has_no_state_yet(tmp_path):
+    """沒有狀態是空字串，不是缺欄位——client 分不出「還沒標」與「舊版沒有
+    這個欄位」的話，它只能兩種都當成沒標，而那兩件事的處置不同。"""
+    app, client = await _client(tmp_path, "pad_state_fresh")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        assert (await _block(client, bid, pad, blk, hdr))["state"] == ""
+
+
+async def test_marking_implemented_and_abandoned(tmp_path):
+    """兩個結局都標得起來，而且分得出來。"""
+    app, client = await _client(tmp_path, "pad_state_set")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write(client, bid, pad, blk, hdr, state="implemented")
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk,
+                             hdr))["state"] == "implemented"
+
+        r = await _write(client, bid, pad, blk, hdr, rev=2, state="abandoned")
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk,
+                             hdr))["state"] == "abandoned"
+
+
+async def test_not_sending_state_leaves_it_alone(tmp_path):
+    """🚨 **沒送就是不動。**
+
+    PUT 對 `content` 與 `tags` 是整份覆寫，狀態若跟著同一個語意，改個錯字
+    就會順手把「已實作」清掉——200 回來、兩邊都沒有錯誤訊息。這與 09/05 那
+    次 tags 被 retry 清掉是同一個形狀。
+    """
+    app, client = await _client(tmp_path, "pad_state_untouched")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, state="implemented")
+
+        r = await _write(client, bid, pad, blk, hdr, rev=2,
+                         content="只是改個錯字")
+        assert r.status_code == 200, r.text
+        blkrow = await _block(client, bid, pad, blk, hdr)
+        assert blkrow["content"] == "只是改個錯字"
+        assert blkrow["state"] == "implemented", "改內容順手把狀態清掉了"
+
+
+async def test_sending_an_empty_state_clears_it(tmp_path):
+    """清除是**明確動作**：送空字串才清。標錯了要拿得回來。"""
+    app, client = await _client(tmp_path, "pad_state_clear")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, state="abandoned")
+
+        r = await _write(client, bid, pad, blk, hdr, rev=2, state="")
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk, hdr))["state"] == ""
+
+
+async def test_an_unknown_state_is_refused(tmp_path):
+    """值域擋下，`allowed` 一起給——回應自己就是文件。
+
+    默默存進去的話，UI 拿到一個它畫不出來的值，多半會退回「沒標」顯示：
+    使用者按了、看起來沒反應，而沒有任何地方報錯。
+    """
+    app, client = await _client(tmp_path, "pad_state_bad")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write(client, bid, pad, blk, hdr, state="done")
+        assert r.status_code == 422, r.text
+        assert "implemented" in r.json()["detail"]["allowed"]
+
+
+async def test_a_stale_write_hands_back_the_state_too(tmp_path):
+    """🔴 **衝突回應一定要帶 `state`。**
+
+    與 09/05 那條 `tags` 教訓完全同型（資料損失級）：狀態與內容是同一次寫入
+    的兩半，衝突回應少給哪一半，retry 就只能用手上那份舊的——而「保留我的」
+    正是拿新版 rev ＋ 舊值重送 ⇒ 對方剛標好的狀態被清掉，200 回來，
+    兩邊都沒有錯誤訊息。
+    """
+    app, client = await _client(tmp_path, "pad_state_stale")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        await _write(client, bid, pad, blk, hdr, state="implemented")
+
+        # 手上還握著 rev=1
+        r = await _write(client, bid, pad, blk, hdr, rev=1, content="慢了一步")
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "scratchpad_block_stale"
+        assert detail["state"] == "implemented",             "衝突回應沒帶 state——retry 會拿舊值把它清掉"
+
+
+async def test_state_and_tags_are_orthogonal(tmp_path):
+    """標籤是分類、狀態是結局，兩軸各走各的。
+
+    寫成明確的斷言是因為它們同在一句 UPDATE 裡，寫錯一個逗號就會互相牽動，
+    而那種牽動要等有人同時用到兩者才看得見。
+    """
+    app, client = await _client(tmp_path, "pad_state_orthogonal")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write(client, bid, pad, blk, hdr, tags=["design"],
+                         state="implemented")
+        assert r.status_code == 200, r.text
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["tags"] == ["design"] and row["state"] == "implemented"
+
+        # 只改標籤，狀態不動
+        r = await _write(client, bid, pad, blk, hdr, rev=2, tags=["bug"])
+        assert r.status_code == 200, r.text
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["tags"] == ["bug"] and row["state"] == "implemented"

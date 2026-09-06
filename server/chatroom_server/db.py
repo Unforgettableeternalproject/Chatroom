@@ -564,6 +564,14 @@ CREATE TABLE IF NOT EXISTS board_scratchpad_block (
     -- 那六則就是兩則 bug、三則新功能、一則權限設計），標在板上等於標不出
     -- 任何東西
     tags         TEXT NOT NULL DEFAULT '[]',
+    -- 這一段後來怎麼了：'' / implemented / abandoned（09/06，艾斯維爾）。
+    --
+    -- 與 tags **正交**：標籤是分類（bug/feature/design），狀態是結局。
+    -- 一段可以同時是 design 又是 abandoned，那是兩件事。
+    --
+    -- ⚠️ '' 不等於 abandoned。「還沒標」與「決定不做」畫成同一種，等於
+    -- 替所有沒人管的段落做了決定
+    state        TEXT NOT NULL DEFAULT '',
     -- 每段自己的樂觀鎖。分段之後衝突面小很多：兩個人編不同段互不影響
     rev          INTEGER NOT NULL DEFAULT 1,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -819,6 +827,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 板的結局。既有的板一律是 ''（還在做）——把存量悄悄標成「已完成」會讓
     # 它們一次從 BOARDS 分頁消失，與 visibility 當初的遷移是同一個判斷
     ("board", "outcome", "outcome TEXT NOT NULL DEFAULT ''"),
+    # 段落的結局。存量一律 ''（還沒標）——與 board.outcome 同一個判斷：
+    # 把既有的東西悄悄標成某個結局，等於替沒人管的段落做了決定
+    ("board_scratchpad_block", "state", "state TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

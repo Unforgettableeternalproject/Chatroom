@@ -555,6 +555,14 @@ class ScratchpadBlockCreate(BaseModel):
 class ScratchpadBlockWrite(BaseModel):
     content: str = Field(max_length=50_000)
     tags: list[str] = Field(default_factory=list, max_length=8)
+    # 這一段後來怎麼了。**三種情況要分得出來**（決策 09/06）：
+    # 沒送＝不動、送 ""＝清除、送值＝設定。
+    #
+    # 所以型別是 `str | None` 而判斷靠 `model_fields_set`——用預設值
+    # `""` 的話，「沒送」與「要清除」會長得一模一樣，於是改個錯字就順手
+    # 把「已實作」清掉：200 回來、兩邊都沒有錯誤訊息。`content`／`tags`
+    # 是整份覆寫語意，狀態刻意不跟
+    state: str | None = Field(default=None, max_length=32)
     # 必填、沒有預設。給預設值等於讓「忘了帶」變成一次靜默的覆寫，
     # 而那正是整個 rev 機制要擋的那件事
     rev: int = Field(ge=1)
@@ -7836,6 +7844,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "author_name": b["author_name"],
                 "author_kind": b["author_kind"],
                 "tags": _tags_public(b),
+                # 這一段後來怎麼了。**輸出是白名單**，不加這一行的話欄位
+                # 寫進去了卻回不出來——那與沒做完全一樣
+                "state": _block_state(b),
                 "created_at": b["created_at"], "updated_at": b["updated_at"],
                 "can_edit": can_edit,
                 "notes": by_block.get(b["id"], []),
@@ -7913,6 +7924,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         except (TypeError, ValueError):
             return []
         return [t for t in got if isinstance(t, str)]
+
+    def _block_state(row) -> str:
+        """段落的結局，舊列（migration 之前）沒有這欄時回空字串。"""
+        return (row["state"] or "") if "state" in row.keys() else ""
+
+    BLOCK_STATES = ("", "implemented", "abandoned")
+
+    def _check_block_state(value: str) -> str:
+        """段落狀態的值域。默默存進去的話，UI 拿到一個它畫不出來的值多半
+        會退回「沒標」顯示——使用者按了、看起來沒反應，而沒有任何地方報錯。
+        """
+        state = (value or "").strip()
+        if state not in BLOCK_STATES:
+            raise _err(422, "unknown_block_state",
+                       "段落狀態只能是 implemented（已實作）、"
+                       "abandoned（已放棄），或空字串（還沒標）",
+                       allowed=list(BLOCK_STATES))
+        return state
 
     @app.post("/api/boards/{board_id}/tags",
               dependencies=[Depends(require_auth)])
@@ -8086,6 +8115,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         block = await _scratchpad_block_or_404(pad_id, block_id)
         _block_guard(block, me)
         db = app.state.db
+        # 「有沒有送 state」是欄位在不在 body 裡，不是它的值——這兩件事在
+        # 這裡必須分開（見 `ScratchpadBlockWrite.state`）。先驗值域再領號，
+        # 422 不該白白推走一個 board_seq
+        set_state = "state" in body.model_fields_set
+        if set_state:
+            _check_block_state(body.state)
         seq = await _next_seq_for_board(board_id)
         # CAS：**一定要單一語句**。先比對 rev 再 UPDATE 的話，中間那個 await
         # 讓出去，兩個人可以各自比對成功、各自寫入
@@ -8093,10 +8128,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 標籤跟著 content 一起寫：它是段落的一部分，不是掛在旁邊的
             # 東西。分成兩支端點的話「改內容」與「改標籤」會各自領一個
             # `board_seq`，而它們常常是同一個動作
-            "UPDATE board_scratchpad_block SET content=?, tags=?, rev=rev+1,"
+            # 狀態只在**有送**的時候才進 SET 子句——沒送就不該出現在這句
+            # 話裡。用 COALESCE 之類的技巧把它塞進來也行，但那會讓「送 ''
+            # 要清除」變成寫不出來
+            "UPDATE board_scratchpad_block SET content=?, tags=?,"
+            + (" state=?," if set_state else "")
+            + " rev=rev+1,"
             " board_seq=?, updated_at=? WHERE id=? AND rev=? AND deleted=0"
-            " RETURNING rev", (body.content, _check_tags(board, body.tags),
-                               seq, _now(), block_id, body.rev))
+            " RETURNING rev",
+            (body.content, _check_tags(board, body.tags))
+            + ((_check_block_state(body.state),) if set_state else ())
+            + (seq, _now(), block_id, body.rev))
         won = await cur.fetchone()
         if won is None:
             fresh = await _scratchpad_block_or_404(pad_id, block_id)
@@ -8121,6 +8163,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "這一段在你讀取之後被改過了",
                        block_id=block_id, rev=fresh["rev"],
                        content=fresh["content"], tags=_tags_public(fresh),
+                       # `state` 與 `tags` 同一個理由，而且是同一次寫入的
+                       # 另外兩半：少給哪一半，retry 就只能用手上那份舊的
+                       state=_block_state(fresh),
                        your_rev=body.rev,
                        updated_at=fresh["updated_at"])
         await db.execute(
