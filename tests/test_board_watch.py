@@ -547,3 +547,78 @@ async def test_a_watcher_in_another_attached_room_is_woken_too(tmp_path):
             there = await _system_msgs(client, second, far)
             assert there and there[0]["mentions"] == ["在別間的人"], (
                 "追蹤者在另一間掛接房，人在線上卻沒有被叫醒")
+
+
+# ---------------------------------------------------------------------------
+# 封存降級了，解封就要恢復（09/06 卡 9b2fcddf）
+#
+# `_archive` 在最後一間活著的房被收起來時會 `_degrade_watches_to_inbox`，
+# 但 `unarchive_room` **沒有**對應的恢復——那支只有 attach 端點會叫。
+#
+# 降級有通知、恢復沒有，是單向的：追蹤者收到「之後不會再主動叫醒你」之後，
+# 就一直以為自己得回來看，而房其實早就開回來了。**「不會再被叫醒」與
+# 「板上真的沒動靜」在他那邊長得一模一樣。**
+# ---------------------------------------------------------------------------
+
+
+async def test_unarchiving_the_room_restores_delivery(tmp_path):
+    """降級講了就要講恢復。"""
+    app, client = await _client(tmp_path, "unarchive_restore")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            watcher = await _join(client, rid, bid, hdr, "claude-w", "等的人")
+            tid = await _task(client, rid, hdr)
+            await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=watcher)
+
+            assert (await client.post(f"/api/rooms/{rid}/archive",
+                                      headers=hdr)).status_code == 200
+            got = await _inbox(client, "claude-w")
+            assert [n for n in got["notices"]
+                    if n["event_type"] == "delivery_degraded"],                 "封存沒有降級——這條測的前提不成立"
+
+            out = await client.post(f"/api/rooms/{rid}/unarchive", headers=hdr)
+            assert out.status_code == 200, out.text
+            assert out.json()["restored_watchers"] == ["claude-w"]
+
+            got = await _inbox(client, "claude-w")
+            assert [n for n in got["notices"]
+                    if n["event_type"] == "delivery_restored"],                 "解封之後追蹤者不知道自己又叫得醒了"
+
+
+async def test_unarchiving_says_nothing_when_delivery_never_stopped(tmp_path):
+    """板還有別的活房 ⇒ 從來沒降級過 ⇒ 不該冒出一則「恢復」。
+
+    ⚠️ 這條與上面那條一起才完整。只驗「會恢復」的話，寫成無條件呼叫也會
+    綠——而那會在每次解封時對所有追蹤者發一則他們看不懂的通知：**他們
+    根本不知道自己什麼時候被降級過。**
+    """
+    app, client = await _client(tmp_path, "unarchive_quiet")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, bid, hdr = await _room_board(client)
+            watcher = await _join(client, rid, bid, hdr, "claude-w", "等的人")
+            tid = await _task(client, rid, hdr)
+            await client.post(f"/api/boards/{bid}/watches",
+                              json={"item_kind": "task", "item_id": tid},
+                              headers=watcher)
+
+            # 同一塊板再掛一間房，這樣封存第一間也還有活的
+            other = (await client.post("/api/rooms", json={
+                "name": "另一間", "session_key": "claude-h"})).json()["id"]
+            await client.post(f"/api/rooms/{other}/join", json={
+                "kind": "human", "role": "human", "session_key": "claude-h",
+                "preferred_name": "艾斯維爾"})
+            assert (await client.post(f"/api/boards/{bid}/rooms/{other}",
+                                      headers=hdr)).status_code == 200
+
+            await client.post(f"/api/rooms/{rid}/archive", headers=hdr)
+            out = await client.post(f"/api/rooms/{rid}/unarchive", headers=hdr)
+            assert out.status_code == 200, out.text
+            assert out.json()["restored_watchers"] == []
+
+            got = await _inbox(client, "claude-w")
+            assert not [n for n in got["notices"]
+                        if n["event_type"] == "delivery_restored"]

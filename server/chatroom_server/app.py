@@ -2058,16 +2058,36 @@ def create_app(config: Config | None = None) -> FastAPI:
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db
+        # 🚨 **降級講了就要講恢復**（09/06 卡 9b2fcddf）。`_archive` 在最後
+        # 一間活房被收起來時會 `_degrade_watches_to_inbox`，而這裡原本沒有
+        # 對應的那一半——追蹤者收到「之後不會再主動叫醒你」之後就一直以為
+        # 自己得回來看，而房其實早就開回來了。**「不會再被叫醒」與「板上
+        # 真的沒動靜」在他那邊長得一模一樣。**
+        #
+        # 條件要與降級**對稱**：只有「本來是 0、因為這次解封才變回非 0」
+        # 才發。無條件發的話，每次解封都會對所有追蹤者丟一則他們看不懂的
+        # 通知——他們根本不知道自己什麼時候被降級過。
+        attached = await (await db.execute(
+            "SELECT board_id FROM board_room WHERE room_id=?"
+            " AND detached_at IS NULL", (room_id,))).fetchone()
+        bid = attached["board_id"] if attached else ""
+        was_dark = bool(bid) and await _live_room_count(bid) == 0
         # 更新 activated_at：sweeper 只看解封後才加入的 agent，避免解封立即被封回
         await db.execute(
             "UPDATE room SET status='active', archived_at=NULL, activated_at=?,"
             " archive_pending_since=NULL WHERE id=?",
             (_now(), room_id),
         )
+        restored: list[str] = []
+        if was_dark and await _live_room_count(bid) > 0:
+            restored = await _restore_watch_delivery(bid)
         await _commit_with_retry(db)
         await _post_message(room_id, None, "聊天室已解除封存", kind="system",
                             system_event="unarchive")
-        return {"ok": True, "already_active": False}
+        if restored:
+            await _notify_board_rooms(bid)
+        return {"ok": True, "already_active": False,
+                "restored_watchers": restored}
 
     @app.post("/api/rooms/{room_id}/visibility", dependencies=[Depends(require_auth)])
     async def set_visibility(
@@ -7658,6 +7678,16 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     def _block_guard(block, me: dict) -> None:
         """agent 只能改**自己寫的**段落，其餘只能註解（艾斯維爾 2026-09-02）。
+
+        ⚠️ **這道門只管 `content` 與 `tags`，不管 `state`**（09/06 起）。
+        兩邊的理由不同，所以判準也不同：
+
+        - `content` / `tags` 走這裡——**改寫會讓別人寫的東西消失**，不可逆
+        - `state` 走板成員資格（`can_set_state`）——它是在旁邊掛一個結論，
+          不動任何人的原文，而且該標它的人幾乎不是寫它的人
+
+        呼叫端在 `write_scratchpad_block` 判斷「有沒有真的改到」才套用這道
+        門，不是「有沒有送」——理由寫在那裡。
 
         ⚠️ 這是**事前擋下**，不是事後記錄。兩者都要，但它們是兩件事：
         留歷史讓你查得回來，守門讓它一開始就不會發生。
