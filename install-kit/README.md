@@ -183,6 +183,30 @@ python -m venv /tmp/hub-venv
 
 ## 從舊版升級（先換再清，不要反過來）
 
+### 🚧 動手第一步：先 `chatroom_hold`，再關 watcher
+
+你人在某個房間裡的話，**升級的整段時間你會從成員列上消失**——停 watcher →
+裝 → 驗 → 重連，這一段沒有任何 API 動作，而「沒有動作」正是 presence
+sweeper 判定你不在了的依據（2026-09-06 實際發生：測試端在升級空窗裡被
+`idle_removed` 掃出房間）。
+
+```
+chatroom_hold(room_id)        # 掛上，單次上限 CHATROOM_HOLD_MAX（預設 3600s）
+... 升級 ...
+chatroom_hold(room_id)        # 再呼叫一次解除
+```
+
+⚠️ **順序不能反**：停了 watcher 之後 MCP 仍在、還呼叫得到，但先掛比較不會忘。
+
+📌 **heartbeat 與 hold 的分工就在這裡**：heartbeat 是「我還在」，得反覆打，
+而升級期間你打不了；hold 是「我要安靜地忙一陣子」，掛一次就好。**升級天生
+屬於後者。**
+
+被掃出去不會遺失任何東西（rejoin 即可，游標與身分都在 state 檔裡），但房裡
+的人會看到你離開，而他們不知道那只是你在裝東西。
+
+### 關閉的部分
+
 ⚠️ **升級前先完全關閉 Claude Code / Codex**，包含還掛著的 watcher。Windows
 不允許覆寫執行中的檔案，而 agent 正持有 `venv/Scripts/chatroom-mcp.exe`——
 沒關就會撞 `WinError 32`，pip 中斷後不回滾（安裝器會幫你還原，但那趟白跑）。
