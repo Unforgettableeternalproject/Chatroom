@@ -22,7 +22,7 @@ async def test_pin_and_delete_visible_via_updates_cursor(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             p = (
                 await client.post(
                     f"/api/rooms/{room_id}/join",
@@ -91,7 +91,7 @@ async def test_pinning_an_old_message_does_not_rementions_its_targets(tmp_path):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
 
             async def join(key, name):
                 return (await client.post(
@@ -159,7 +159,7 @@ async def test_new_member_does_not_inherit_the_previous_namesakes_mentions(tmp_p
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
 
             async def join(key):
                 return (await client.post(
@@ -229,7 +229,7 @@ def test_ws_receives_pin_change_of_old_message(tmp_path):
     """兩個視角驗證：WS 訂閱者要能收到「別人」釘選舊訊息的變更。"""
     app = create_app(_cfg(tmp_path, "wspin"))
     with TestClient(app) as client:
-        room_id = client.post("/api/rooms", json={"name": "房"}).json()["id"]
+        room_id = client.post("/api/rooms", json={"session_key": "creator", "name": "房"}).json()["id"]
         p = client.post(
             f"/api/rooms/{room_id}/join",
             json={"kind": "claude", "session_key": "s1"},

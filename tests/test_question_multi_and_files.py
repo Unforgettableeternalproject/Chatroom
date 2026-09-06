@@ -20,7 +20,7 @@ async def _make(tmp_path, name):
 
 
 async def _setup(client):
-    room = (await client.post("/api/rooms", json={"name": "房"})).json()
+    room = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()
     agent = (await client.post(
         f"/api/rooms/{room['id']}/join",
         json={"kind": "claude", "session_key": "a1", "preferred_name": "Novia"},
@@ -163,7 +163,7 @@ async def test_answer_cannot_smuggle_another_rooms_file(tmp_path):
         async with app.router.lifespan_context(app):
             room, agent, human = await _setup(client)
             q = await _ask(client, room, agent, human)
-            other = (await client.post("/api/rooms", json={"name": "別房"})).json()
+            other = (await client.post("/api/rooms", json={"session_key": "creator", "name": "別房"})).json()
             op = (await client.post(
                 f"/api/rooms/{other['id']}/join",
                 json={"kind": "human", "session_key": "h2",
@@ -196,7 +196,7 @@ async def test_labels_containing_the_separator_survive(tmp_path):
     app, client = await _make(tmp_path, "q_sep")
     async with client:
         async with app.router.lifespan_context(app):
-            room = (await client.post("/api/rooms", json={"name": "房"})).json()
+            room = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()
             agent = (await client.post(
                 f"/api/rooms/{room['id']}/join",
                 json={"kind": "claude", "session_key": "a1",

@@ -111,9 +111,15 @@ async def test_host_can_rescue_an_ownerless_archived_room(tmp_path):
     app, client = await _client(tmp_path, "rescue")
     async with client:
         async with app.router.lifespan_context(app):
-            # 沒帶 session_key 建房＝沒有建立者紀錄（舊房就長這樣）
+            # 沒有建立者紀錄的房（舊房就長這樣）。09/06 起建房必須帶
+            # session_key（卡 48da086a），這種房**再也建不出來**——但存量
+            # 還在，主持人視角要救的正是它們，所以改用清欄位重現
             rid = (await client.post(
-                "/api/rooms", json={"name": "沒人管的房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator",
+                                    "name": "沒人管的房"})).json()["id"]
+            await app.state.db.execute(
+                "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
+            await app.state.db.commit()
             # 對照組：一般身分連封存都做不到
             nobody = await client.post(f"/api/rooms/{rid}/archive")
             assert nobody.status_code in (401, 403, 409)
@@ -233,7 +239,12 @@ async def test_host_can_delete_an_ownerless_room(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             rid = (await client.post(
-                "/api/rooms", json={"name": "沒人管的房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator",
+                                    "name": "沒人管的房"})).json()["id"]
+            # 存量無主房（見上方說明）
+            await app.state.db.execute(
+                "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
+            await app.state.db.commit()
             stuck = await client.delete(f"/api/rooms/{rid}")
             assert stuck.status_code == 409
             assert stuck.json()["detail"]["code"] == "room_has_no_admin"
@@ -298,7 +309,12 @@ async def test_host_claims_admin_of_an_ownerless_room(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             rid = (await client.post(
-                "/api/rooms", json={"name": "沒人管的房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator",
+                                    "name": "沒人管的房"})).json()["id"]
+            # 存量無主房（見上方說明）
+            await app.state.db.execute(
+                "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
+            await app.state.db.commit()
             r = await client.post(
                 f"/api/rooms/{rid}/admin/claim",
                 headers={**HOST, "X-Session-Key": "my-device"})

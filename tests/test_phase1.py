@@ -23,7 +23,7 @@ def _next_messages(ws):
 def test_ws_subscribe_receives_messages(tmp_path):
     app = create_app(Config(db_path=str(tmp_path / "ws.db"), api_token=""))
     with TestClient(app) as client:
-        room_id = client.post("/api/rooms", json={"name": "WS房"}).json()["id"]
+        room_id = client.post("/api/rooms", json={"session_key": "creator", "name": "WS房"}).json()["id"]
         joined = client.post(
             f"/api/rooms/{room_id}/join",
             json={"kind": "claude", "session_key": "s1", "preferred_name": "Nova"},
@@ -77,7 +77,7 @@ async def test_sweeper_removes_idle_agent_and_archives(tmp_path):
     ) as client:
         async with app.router.lifespan_context(app):
             room_id = (
-                await client.post("/api/rooms", json={"name": "閒置房"})
+                await client.post("/api/rooms", json={"session_key": "creator", "name": "閒置房"})
             ).json()["id"]
             idle = (await client.post(
                 f"/api/rooms/{room_id}/join",
@@ -113,7 +113,7 @@ async def test_sweeper_keeps_active_agent(tmp_path):
     ) as client:
         async with app.router.lifespan_context(app):
             room_id = (
-                await client.post("/api/rooms", json={"name": "活躍房"})
+                await client.post("/api/rooms", json={"session_key": "creator", "name": "活躍房"})
             ).json()["id"]
             joined = (
                 await client.post(

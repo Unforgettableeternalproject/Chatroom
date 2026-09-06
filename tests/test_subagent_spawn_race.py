@@ -37,7 +37,7 @@ async def test_spawn_racing_parent_leave_leaves_no_orphan(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room_id = (await client.post(
-                "/api/rooms", json={"name": "房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             parent = (await client.post(
                 f"/api/rooms/{room_id}/join",
                 json={"kind": "claude", "session_key": "p-1",
@@ -101,7 +101,7 @@ async def test_spawn_still_works_when_parent_stays(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room_id = (await client.post(
-                "/api/rooms", json={"name": "房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             parent = (await client.post(
                 f"/api/rooms/{room_id}/join",
                 json={"kind": "claude", "session_key": "p-1",
@@ -131,7 +131,7 @@ async def test_join_returns_joined_seq(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room_id = (await client.post(
-                "/api/rooms", json={"name": "房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             first = (await client.post(
                 f"/api/rooms/{room_id}/join",
                 json={"kind": "claude", "session_key": "p-1",
@@ -174,7 +174,7 @@ async def test_rejoin_returns_the_existing_boundary_not_a_fresh_one(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room_id = (await client.post(
-                "/api/rooms", json={"name": "房"})).json()["id"]
+                "/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             body = {"kind": "claude", "session_key": "p-1",
                     "preferred_name": "Parent", "role": "agent"}
             first = (await client.post(

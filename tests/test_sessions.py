@@ -89,7 +89,7 @@ async def test_kind_inferred_from_key_prefix(client):
 
 
 async def test_join_registers_session_and_lists_room(client):
-    r = await client.post("/api/rooms", json={"name": "作戰室"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "作戰室"})
     room_id = r.json()["id"]
     await _join(client, room_id, "sess-a", "Nova")
 
@@ -103,7 +103,7 @@ async def test_join_registers_session_and_lists_room(client):
 
 
 async def test_left_session_shows_last_display_name(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     a = await _join(client, room_id, "sess-a", "Echo")
     await client.post(
@@ -118,7 +118,7 @@ async def test_left_session_shows_last_display_name(client):
 
 
 async def test_human_sessions_hidden_by_default(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     await client.post(
         f"/api/rooms/{room_id}/join",
@@ -166,7 +166,7 @@ async def _assign(client, room_id, target, name="", note=""):
 
 
 async def test_assigned_name_overrides_preferred(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     await _assign(client, room_id, "sess-a", name="鐵衛")
 
@@ -181,7 +181,7 @@ async def test_assigned_name_overrides_preferred(client):
 
 
 async def test_assigned_name_absent_falls_back(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     await _assign(client, room_id, "sess-a")  # 沒取名
 
@@ -191,7 +191,7 @@ async def test_assigned_name_absent_falls_back(client):
 
 
 async def test_assigned_name_conflict_gets_suffix(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     await _join(client, room_id, "sess-x", "鐵衛")
     await _assign(client, room_id, "sess-a", name="鐵衛")
@@ -220,7 +220,7 @@ async def test_assigned_name_in_listings(client):
 
 async def test_assignment_id_binds_bridge_join_to_codex_thread(client):
     """MCP 可帶臨時 key，但指派加入後 participant 必須使用 Codex thread id。"""
-    r = await client.post("/api/rooms", json={"name": "多代理房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "多代理房"})
     room_id = r.json()["id"]
     thread_id = "019d0000-0000-7000-8000-000000000001"
     aid = await _assign(client, room_id, thread_id, name="鐵衛", note="請加入")
@@ -249,7 +249,7 @@ async def test_assignment_id_binds_bridge_join_to_codex_thread(client):
 
 async def test_accepted_assignment_id_can_still_bind_join(client):
     """先 accept 再 join 是既有工具文件允許的流程，不能因 status 改變而斷線。"""
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     thread_id = "019d0000-0000-7000-8000-000000000002"
     aid = await _assign(client, room_id, thread_id)
@@ -272,8 +272,8 @@ async def test_accepted_assignment_id_can_still_bind_join(client):
 
 
 async def test_assignment_id_cannot_be_used_for_another_room(client):
-    first = (await client.post("/api/rooms", json={"name": "甲"})).json()["id"]
-    second = (await client.post("/api/rooms", json={"name": "乙"})).json()["id"]
+    first = (await client.post("/api/rooms", json={"session_key": "creator", "name": "甲"})).json()["id"]
+    second = (await client.post("/api/rooms", json={"session_key": "creator", "name": "乙"})).json()["id"]
     aid = await _assign(client, first, "019d0000-0000-7000-8000-000000000003")
 
     joined = await client.post(
@@ -290,7 +290,7 @@ async def test_assignment_id_cannot_be_used_for_another_room(client):
 
 async def test_assignment_join_resolves_pending_when_session_already_in_room(client):
     """既有 participant 用指派 token 重加時，pending 不得留到 App 重啟後再通知。"""
-    room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+    room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
     thread_id = "019d0000-0000-7000-8000-000000000004"
     await _join(client, room_id, thread_id, "Codex-Sol")
     aid = await _assign(client, room_id, thread_id)

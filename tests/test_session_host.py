@@ -44,7 +44,7 @@ async def test_host_is_recorded_from_join_and_assignment_poll(tmp_path):
     async with client:
         async with app.router.lifespan_context(app):
             room = (
-                await client.post("/api/rooms", json={"name": "房"})
+                await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
             ).json()
             await client.post(
                 f"/api/rooms/{room['id']}/join",

@@ -28,7 +28,7 @@ async def test_join_returns_the_join_message_identity(tmp_path):
     app, client = await _make_client(tmp_path, "join_msg")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             joined = (
                 await client.post(
                     f"/api/rooms/{room_id}/join",
@@ -59,7 +59,7 @@ async def test_idempotent_rejoin_has_no_join_message(tmp_path):
     app, client = await _make_client(tmp_path, "rejoin_msg")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             body = {"kind": "claude", "session_key": "s1", "preferred_name": "Novia"}
             first = (await client.post(f"/api/rooms/{room_id}/join", json=body)).json()
             again = (await client.post(f"/api/rooms/{room_id}/join", json=body)).json()

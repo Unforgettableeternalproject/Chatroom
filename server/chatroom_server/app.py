@@ -207,8 +207,15 @@ class RoomCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     topic: str = ""
     # 建立者的 session（管理員身分：可移出成員、可改鎖定狀態）。
-    # 省略時房間沒有管理員
-    session_key: str | None = Field(default=None, max_length=128)
+    #
+    # 🚨 **必填**（09/06 卡 48da086a）。原本選填，於是漏帶不會有任何錯誤：
+    # 回 200、房建起來、`creator_session_key` 是空字串 ⇒ **你不是自己那間房
+    # 的管理者**。而症狀不在因果現場——實際看到的是三步之後的
+    # 「建板 403 not_room_admin」，那句話完全指不回「建房時漏了 body 欄位」。
+    #
+    # 空字串與沒帶是同一件事（存進去的就是空字串），所以 `min_length=1`
+    # 兩種一起擋。失敗要發生在建房那一刻。
+    session_key: str = Field(min_length=1, max_length=128)
     # public / private。private 的房不出現在別人的房間列表，也不能自行加入
     visibility: str = Field(default="public", pattern="^(public|private)$")
     # 房內 agent 的說話方式。custom 時 style_instructions 必填

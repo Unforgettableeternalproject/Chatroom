@@ -22,7 +22,7 @@ async def _make(tmp_path, name):
 
 
 async def _setup(client):
-    room = (await client.post("/api/rooms", json={"name": "房"})).json()
+    room = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()
     agent = (await client.post(
         f"/api/rooms/{room['id']}/join",
         json={"kind": "claude", "session_key": "a1", "preferred_name": "Novia"},

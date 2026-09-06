@@ -28,7 +28,7 @@ async def test_rename_rejoin_dedupes_with_previous_name(tmp_path):
     app, client = await _make_client(tmp_path, "dedupe")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             first = await _join(client, room_id, "s1", name="Bright-Drift")
             await client.post(
                 f"/api/rooms/{room_id}/leave",
@@ -57,7 +57,7 @@ async def test_duplicate_name_between_left_and_active_gets_hint(tmp_path):
     app, client = await _make_client(tmp_path, "duphint")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             first = await _join(client, room_id, "session-alpha", name="Nova")
             await client.post(
                 f"/api/rooms/{room_id}/leave",
@@ -81,7 +81,7 @@ async def test_unique_names_have_no_hint(tmp_path):
     app, client = await _make_client(tmp_path, "nohint")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             await _join(client, room_id, "s1", name="Nova")
             miller = await _join(client, room_id, "s2", name="Miller")
             participants = (await client.get(
@@ -94,7 +94,7 @@ async def test_same_name_rejoin_has_no_previous_name(tmp_path):
     app, client = await _make_client(tmp_path, "samename")
     async with client:
         async with app.router.lifespan_context(app):
-            room_id = (await client.post("/api/rooms", json={"name": "房"})).json()["id"]
+            room_id = (await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})).json()["id"]
             first = await _join(client, room_id, "s1", name="Novia")
             await client.post(
                 f"/api/rooms/{room_id}/leave",

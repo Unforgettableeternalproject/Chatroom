@@ -247,8 +247,15 @@ async def test_room_without_creator_has_no_admin(tmp_path):
     app, client = await _make(tmp_path, "vis_no_admin")
     async with client:
         async with app.router.lifespan_context(app):
-            r = await client.post("/api/rooms", json={"name": "無主房"})
+            r = await client.post("/api/rooms", json={
+                "session_key": "creator", "name": "無主房"})
             rid = r.json()["id"]
+            # 09/06 起建房必須帶 session_key（卡 48da086a），所以無主房
+            # **建不出來了**——但存量還在，這條測的正是它們。改用直接清欄位
+            # 重現那個狀態，比放著一條建不出前提的測試誠實
+            await app.state.db.execute(
+                "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
+            await app.state.db.commit()
             r = await client.post(
                 f"/api/rooms/{rid}/visibility",
                 json={"visibility": "private"},

@@ -161,8 +161,8 @@ async def test_reply_target_validation(tmp_path):
     app, client = await _make_client(tmp_path, "reply")
     async with client:
         async with app.router.lifespan_context(app):
-            room_a = (await client.post("/api/rooms", json={"name": "A"})).json()["id"]
-            room_b = (await client.post("/api/rooms", json={"name": "B"})).json()["id"]
+            room_a = (await client.post("/api/rooms", json={"session_key": "creator", "name": "A"})).json()["id"]
+            room_b = (await client.post("/api/rooms", json={"session_key": "creator", "name": "B"})).json()["id"]
             pa = await _join(client, room_a, "sa", "Alpha")
             pb = await _join(client, room_b, "sb", "Beta")
             ha = {"X-Participant-Id": pa["participant_id"]}
@@ -217,8 +217,8 @@ async def test_reply_preview_cross_room_defense(tmp_path):
     app, client = await _make_client(tmp_path, "defense")
     async with client:
         async with app.router.lifespan_context(app):
-            room_a = (await client.post("/api/rooms", json={"name": "A"})).json()["id"]
-            room_b = (await client.post("/api/rooms", json={"name": "B"})).json()["id"]
+            room_a = (await client.post("/api/rooms", json={"session_key": "creator", "name": "A"})).json()["id"]
+            room_b = (await client.post("/api/rooms", json={"session_key": "creator", "name": "B"})).json()["id"]
             pa = await _join(client, room_a, "sa")
             pb = await _join(client, room_b, "sb")
             b_mid = (

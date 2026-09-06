@@ -81,8 +81,8 @@ async def test_cross_room_identity_rejected(tmp_path):
     app, client = await _make_client(tmp_path, "xroom")
     async with client:
         async with app.router.lifespan_context(app):
-            room_a = (await client.post("/api/rooms", json={"name": "A"})).json()["id"]
-            room_b = (await client.post("/api/rooms", json={"name": "B"})).json()["id"]
+            room_a = (await client.post("/api/rooms", json={"session_key": "creator", "name": "A"})).json()["id"]
+            room_b = (await client.post("/api/rooms", json={"session_key": "creator", "name": "B"})).json()["id"]
             pa = await _join(client, room_a, "sa", "Alpha")
             pb = await _join(client, room_b, "sb", "Beta")
             headers_a = {"X-Participant-Id": pa["participant_id"]}
@@ -168,3 +168,59 @@ async def test_archive_unarchive_system_messages_and_idempotency(tmp_path):
             assert "聊天室已解除封存" in contents
             # 冪等解封不會多留一則訊息
             assert contents.count("聊天室已解除封存") == 1
+
+
+# ---------------------------------------------------------------------------
+# 建房一定要說出你是誰（09/06 卡 48da086a，@測試Novia 佈景時撞到）
+#
+# `POST /api/rooms` 的 session_key 讀的是 **request body**，而它原本是選填 ⇒
+# 不帶不會有任何錯誤：回 200、房建起來、`creator_session_key` 是空字串，
+# 於是**你不是自己那間房的管理者**。
+#
+# 難查的地方在於症狀不在因果現場：實際看到的是三步之後的
+# 「建板 403 not_room_admin」，而那句話完全指不回「建房時漏了 body 欄位」。
+# 撞到的人第一反應是憑證放錯位置（試 header、試 query），兩個都不是它讀的
+# 地方——這個 Hub 上「你是誰」有四種傳法，建房是其中最不像的那一種。
+#
+# 止血：失敗要發生在建房那一刻。
+# ---------------------------------------------------------------------------
+
+
+async def test_creating_a_room_without_a_session_key_is_refused(tmp_path):
+    """沒說你是誰就不給建——否則建出來的是一間沒有管理者的房。"""
+    app, client = await _make_client(tmp_path, "room_needs_key")
+    async with client, app.router.lifespan_context(app):
+        r = await client.post("/api/rooms", json={"name": "沒有主人的房"})
+        assert r.status_code == 422, r.text
+
+
+async def test_an_empty_session_key_is_refused_too(tmp_path):
+    """空字串與沒帶是同一件事——擋掉前者才擋得住這個 bug 的實際形狀。
+
+    `creator_session_key` 存的就是空字串，所以只擋 `null` 的話，送 `""`
+    照樣建得出無主房，而那條路徑看起來完全合法。
+    """
+    app, client = await _make_client(tmp_path, "room_empty_key")
+    async with client, app.router.lifespan_context(app):
+        r = await client.post("/api/rooms",
+                              json={"name": "空鑰匙", "session_key": ""})
+        assert r.status_code == 422, r.text
+
+
+async def test_the_creator_really_becomes_the_admin(tmp_path):
+    """正向那半：帶了就真的是管理者。
+
+    ⚠️ 這條與上面兩條一起才完整。只驗「擋得住」的話，把欄位改成必填卻同時
+    寫錯欄位名，兩條照樣綠——而那時每一間房都沒有管理者。
+    """
+    app, client = await _make_client(tmp_path, "room_admin_ok")
+    async with client, app.router.lifespan_context(app):
+        rid = (await client.post("/api/rooms", json={
+            "name": "有主人的房", "session_key": "boss"})).json()["id"]
+        await _join(client, rid, "boss", "老闆", kind="human")
+
+        # 管理者才做得到的事：改可見性
+        r = await client.post(f"/api/rooms/{rid}/visibility",
+                              json={"visibility": "private"},
+                              headers={"X-Session-Key": "boss"})
+        assert r.status_code == 200, r.text

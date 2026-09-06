@@ -117,7 +117,7 @@ async def test_admin_flag_and_creatorless_room(tmp_path):
             assert "creator_session_key" not in admin_view["room"]
 
             # 沒有建立者的房間（bridge/舊資料）：任何人都不是管理員
-            legacy = (await client.post("/api/rooms", json={"name": "舊房"})).json()[
+            legacy = (await client.post("/api/rooms", json={"session_key": "creator", "name": "舊房"})).json()[
                 "id"
             ]
             me = await _join(client, legacy, "x-key", "X")

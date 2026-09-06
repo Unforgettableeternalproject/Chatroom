@@ -30,7 +30,7 @@ async def _join(client, room_id, session_key, name=None, kind="claude"):
 
 
 async def test_room_and_message_flow(client):
-    r = await client.post("/api/rooms", json={"name": "測試房", "topic": "煙霧測試"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "測試房", "topic": "煙霧測試"})
     room_id = r.json()["id"]
 
     a = await _join(client, room_id, "sess-a", "Nova")
@@ -66,7 +66,7 @@ async def test_room_and_message_flow(client):
 
 
 async def test_rejoin_is_idempotent(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     a1 = await _join(client, room_id, "sess-x", "Echo")
     a2 = await _join(client, room_id, "sess-x", "Echo")
@@ -75,7 +75,7 @@ async def test_rejoin_is_idempotent(client):
 
 
 async def test_pin_and_delete(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     a = await _join(client, room_id, "sess-a")
     pid = a["participant_id"]
@@ -105,7 +105,7 @@ async def test_pin_and_delete(client):
 
 
 async def test_assignment_flow(client):
-    r = await client.post("/api/rooms", json={"name": "任務房", "topic": "T"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "任務房", "topic": "T"})
     room_id = r.json()["id"]
     r = await client.post(
         f"/api/rooms/{room_id}/assignments",
@@ -124,7 +124,7 @@ async def test_assignment_flow(client):
 
 
 async def test_leave_posts_system_message(client):
-    r = await client.post("/api/rooms", json={"name": "房"})
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "房"})
     room_id = r.json()["id"]
     a = await _join(client, room_id, "sess-a", "Quill")
     r = await client.post(
