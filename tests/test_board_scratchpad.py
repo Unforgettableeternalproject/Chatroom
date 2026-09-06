@@ -1164,3 +1164,41 @@ async def test_a_viewer_still_cannot_retag(tmp_path):
                              {"content": "人類寫的第一段", "tags": ["bug"],
                               "rev": 1})
         assert r.status_code == 403, r.text
+
+
+async def test_the_server_says_who_may_retag(tmp_path):
+    """`can_set_tags` 與 `can_set_state` 分開回，即使今天兩者同值。
+
+    ⚠️ **不共用一個欄位**，理由今天剛被證明過：state 與 tags 是**兩次獨立
+    的裁定**（09/06 先放寬 state、稍後才放寬 tags）。共用的話，下一次只改
+    其中一邊時 UI 會靜默地跟錯——而「入口多了一個」或「少了一個」不會有
+    任何地方報錯。
+
+    判準的**實作**仍只有一份（同一個運算式），對外投影成兩個欄位，各自回答
+    一個問題。那與「client 自己算第二份」是兩件事。
+    """
+    app, client = await _client(tmp_path, "pad_can_set_tags")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        pad, human_blk = await _pad(client, bid, hdr)
+
+        row = await _block(client, bid, pad, human_blk, a)
+        assert row["can_edit"] is False, "人類寫的段落 agent 改不動原文（不變）"
+        assert row["can_set_tags"] is True
+        assert row["can_set_state"] is True
+
+
+async def test_a_viewer_may_not_retag_either(tmp_path):
+    """viewer 兩個都是 False——放寬到板成員，不是放寬到旁觀者。"""
+    app, client = await _client(tmp_path, "pad_viewer_no_tags")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        await client.post(f"/api/boards/{bid}/members",
+                          json={"actor_key": "watcher", "role": "viewer",
+                                "display_name": "旁觀", "actor_kind": "claude"},
+                          headers=hdr)
+        pad, blk = await _pad(client, bid, hdr)
+
+        row = await _block(client, bid, pad, blk, _key("watcher"))
+        assert row["can_set_tags"] is False and row["can_set_state"] is False

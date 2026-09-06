@@ -7922,7 +7922,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # 判準與寫入端點同源（`_board_writer_v2`）：板要 active、角色不能是
         # viewer。**不看作者**——那正是放寬的內容。
-        can_set_state = board["status"] == "active" and role != "viewer"
+        #
+        # tags 09/06 稍後也放寬到同一道門，但**欄位分開回**：state 與 tags 是
+        # 兩次獨立的裁定（先 state、稍後才 tags），共用一個欄位的話，下一次
+        # 只改其中一邊時 UI 會靜默地跟錯——而入口多一個或少一個不會有任何
+        # 地方報錯。判準的**實作**仍只有一份，對外投影成兩個欄位而已。
+        can_annotate = board["status"] == "active" and role != "viewer"
+        can_set_state = can_annotate
+        can_set_tags = can_annotate
         for b in blocks:
             try:
                 _block_guard(b, me)
@@ -7943,6 +7950,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "can_edit": can_edit,
                 # 這一段的**狀態**改不改得動。與 can_edit 分開回，理由見上面
                 "can_set_state": can_set_state,
+                # **標籤**改不改得動。今天與 can_set_state 同值，但它們回答
+                # 的是兩個問題——見上面為什麼不共用一個欄位
+                "can_set_tags": can_set_tags,
                 "notes": by_block.get(b["id"], []),
             })
         return {"board_id": board_id, "id": pad["id"], "title": pad["title"],
