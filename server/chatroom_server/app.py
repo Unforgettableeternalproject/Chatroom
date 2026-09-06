@@ -7837,6 +7837,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         for n in notes:
             by_block.setdefault(n["block_id"], []).append(dict(n))
         out = []
+        # 🚨 **標狀態與改寫是兩道不同的門，所以兩個欄位。**
+        #
+        # `can_edit` 是 content 守門（`_block_guard`）的結果——它答的是
+        # 「這一段是不是我寫的」。UI 拿它決定要不要畫「＋狀態」入口的話，
+        # 09/06 那道放寬會完全失效：server 允許、畫面不給，功能做了但沒有人
+        # 找得到，而且不會有任何錯誤（@開發Novia (UI) 09/06）。
+        #
+        # 判準與寫入端點同源（`_board_writer_v2`）：板要 active、角色不能是
+        # viewer。**不看作者**——那正是放寬的內容。
+        can_set_state = board["status"] == "active" and role != "viewer"
         for b in blocks:
             try:
                 _block_guard(b, me)
@@ -7855,6 +7865,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "state": _block_state(b),
                 "created_at": b["created_at"], "updated_at": b["updated_at"],
                 "can_edit": can_edit,
+                # 這一段的**狀態**改不改得動。與 can_edit 分開回，理由見上面
+                "can_set_state": can_set_state,
                 "notes": by_block.get(b["id"], []),
             })
         return {"board_id": board_id, "id": pad["id"], "title": pad["title"],
@@ -7930,6 +7942,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         except (TypeError, ValueError):
             return []
         return [t for t in got if isinstance(t, str)]
+
+    def _tags_changed(body, block) -> bool:
+        """這次寫入有沒有真的動到標籤。
+
+        沒送 ⇒ 沒動。送了也要**比值**——送現值回來與不送在結果上一樣，
+        那不該被算成一次改動（見 `write_scratchpad_block` 的守門說明）。
+        """
+        if "tags" not in body.model_fields_set:
+            return False
+        try:
+            now = set(json.loads(block["tags"] or "[]"))
+        except (ValueError, TypeError):
+            now = set()
+        return set(body.tags or []) != now
 
     def _block_state(row) -> str:
         """段落的結局，舊列（migration 之前）沒有這欄時回空字串。"""
@@ -8114,12 +8140,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         換掉，rev 對得上、回 200、沒有任何一端報錯。所以改之前先把原文寫進
         `board_scratchpad_revision`——**那是所有靜默失效裡最安靜的一種：
         它連衝突都沒有**（@測試Novia 2026-09-02）。
+
+        🚨 **守門只擋動得到原文的那些改動**（決策 09/06 裁 A，源自
+        @測試Novia 的發現）。`_block_guard` 保護的是不可逆的東西：改寫別人
+        寫的段落會讓它消失。**標狀態不動任何人的原文**，它是在旁邊掛一個
+        結論——可逆、可清除、留事件。同一道門擋兩種動作，其中一種擋錯了。
+
+        語意上更直接：「已實作」該由實作的人標，而那幾乎不會是提出想法的
+        人；「已放棄」多半是監督者標的，而監督者常常是 agent。**寫原文的人
+        反而最不需要標它。**
         """
         board, room_id, me = await _board_writer_v2(
             board_id, x_session_key, x_participant_id)
         await _scratchpad_or_404(board_id, pad_id)
         block = await _scratchpad_block_or_404(pad_id, block_id)
-        _block_guard(block, me)
+        # ⚠️ 判準是「**有沒有真的改到**」而不是「有沒有送」：App 送 PUT 時
+        # 會把現值一起帶上，照「有送就擋」寫的話，UI 只要在標狀態時順手帶了
+        # tags，這道放寬就靜靜地失效了。
+        #
+        # ⚠️ 放寬的只有狀態那一軸。tags 仍在守門後面——決策沒裁它，而把整道
+        # 門跳過去會連原文一起放行。
+        if body.content != block["content"] or _tags_changed(body, block):
+            _block_guard(block, me)
         db = app.state.db
         # 「有沒有送 state」是欄位在不在 body 裡，不是它的值——這兩件事在
         # 這裡必須分開（見 `ScratchpadBlockWrite.state`）。先驗值域再領號，

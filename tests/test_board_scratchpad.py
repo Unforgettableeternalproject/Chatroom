@@ -864,3 +864,167 @@ async def test_touching_neither_keeps_both(tmp_path):
         assert r.status_code == 200, r.text
         row = await _block(client, bid, pad, blk, hdr)
         assert row["tags"] == ["design"] and row["state"] == "implemented"
+
+
+# ---------------------------------------------------------------------------
+# 標狀態不受作者守門（09/06，決策裁 A，源自 @測試Novia #93）
+#
+# `_block_guard` 保護的是**不可逆的原文**：改寫別人寫的東西會讓它消失。
+# 標狀態不動任何人的原文，它是在旁邊掛一個結論——可逆、可清除、留事件。
+# 同一道門擋兩種動作，其中一種擋錯了。
+#
+# 語意上更直接：「已實作」該由實作的人標，而實作的人幾乎不會是提出想法的
+# 那個人。**寫原文的人反而最不需要標它。**
+#
+# 實測基線（改之前，記憶體 DB）：
+#     B 標 A 的段落   403 not_your_block
+#     A 標人類的段落  403 human_block_readonly
+#     人類標 A 的段落 200 OK      ← 人類本來就不受 _block_guard 限制
+# ---------------------------------------------------------------------------
+
+
+async def test_an_agent_can_mark_someone_elses_paragraph(tmp_path):
+    """別人的段落標得動——那正是這個功能的主要用法。"""
+    app, client = await _client(tmp_path, "state_cross_agent")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, _ = await _pad(client, bid, hdr)
+        blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法"}, headers=a)).json()["id"]
+
+        r = await _write_raw(client, bid, pad, blk, b,
+                             {"content": "A 的想法", "state": "implemented",
+                              "rev": 1})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk,
+                             hdr))["state"] == "implemented"
+
+
+async def test_an_agent_can_mark_a_human_paragraph(tmp_path):
+    """人類寫的段落也標得動。
+
+    決定放棄的常常是監督者，而監督者多半是 agent——擋住它等於讓那個角色
+    標不了自己剛裁定要放棄的東西。
+    """
+    app, client = await _client(tmp_path, "state_on_human_block")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write_raw(client, bid, pad, blk, a,
+                             {"content": "人類寫的第一段",
+                              "state": "abandoned", "rev": 1})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk,
+                             hdr))["state"] == "abandoned"
+
+
+async def test_the_content_guard_is_untouched(tmp_path):
+    """**放寬的只有狀態那一格。**
+
+    寫成明確的斷言是因為最容易的寫法是把整道守門跳過去——那會連原文一起
+    放行，而原文的改寫是不可逆的。
+    """
+    app, client = await _client(tmp_path, "state_guard_intact")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, human_blk = await _pad(client, bid, hdr)
+        a_blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法"}, headers=a)).json()["id"]
+
+        # 改內容仍被擋——連同時帶 state 也一樣
+        r = await _write_raw(client, bid, pad, a_blk, b,
+                             {"content": "B 亂改", "state": "implemented",
+                              "rev": 1})
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "not_your_block"
+
+        r = await _write_raw(client, bid, pad, human_blk, a,
+                             {"content": "改人類的原文", "rev": 1})
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "human_block_readonly"
+
+        # 標籤也還在守門後面——決策只放寬了狀態那一軸
+        r = await _write_raw(client, bid, pad, a_blk, b,
+                             {"content": "A 的想法", "tags": ["bug"],
+                              "rev": 1})
+        assert r.status_code == 403, r.text
+
+
+async def test_marking_still_needs_to_be_on_the_board(tmp_path):
+    """放寬到「板成員」，不是放寬到「任何人」。
+
+    ⚠️ 這條與上面那條守的是不同的門：`_block_guard` 是作者守門，這裡是
+    板成員資格。兩道門常被當成同一道，而只剩一道的時候沒有任何地方會說。
+    """
+    app, client = await _client(tmp_path, "state_needs_membership")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write_raw(client, bid, pad, blk, _key("nobody"),
+                             {"content": "人類寫的第一段",
+                              "state": "implemented", "rev": 1})
+        assert r.status_code == 403, r.text
+
+
+async def test_the_server_says_who_may_mark_the_state(tmp_path):
+    """🚨 **`can_edit` 答不了「我能不能標狀態」——那是兩道不同的門。**
+
+    UI 拿 `can_edit`（content 的守門）決定要不要畫「＋狀態」入口的話，
+    放寬完全失效：server 允許、畫面不給，功能做了但沒有人找得到，而且
+    不會有任何錯誤（@開發Novia (UI) 09/06 #99）。
+
+    判準只有 server 一份——client 自己算就是製造第二份，兩邊會漂移。
+    """
+    app, client = await _client(tmp_path, "pad_can_set_state")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        pad, human_blk = await _pad(client, bid, hdr)
+
+        row = await _block(client, bid, pad, human_blk, a)
+        assert row["can_edit"] is False, "人類寫的段落 agent 改不動（不變）"
+        assert row["can_set_state"] is True,             "標狀態的入口被 content 守門連坐關掉了"
+
+        # 自己寫的那一段兩者都是 True
+        mine = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法"}, headers=a)).json()["id"]
+        row = await _block(client, bid, pad, mine, a)
+        assert row["can_edit"] is True and row["can_set_state"] is True
+
+
+async def test_a_viewer_may_not_mark_anything(tmp_path):
+    """放寬到板成員，不是放寬到旁觀者。判準與寫入端點同源。"""
+    app, client = await _client(tmp_path, "pad_viewer_no_state")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        await client.post(f"/api/boards/{bid}/members",
+                          json={"actor_key": "watcher", "role": "viewer",
+                                "display_name": "旁觀", "actor_kind": "claude"},
+                          headers=hdr)
+        pad, blk = await _pad(client, bid, hdr)
+
+        row = await _block(client, bid, pad, blk, _key("watcher"))
+        assert row["can_edit"] is False and row["can_set_state"] is False
+
+
+async def test_an_archived_board_lets_nobody_mark(tmp_path):
+    """封存的板整份唯讀——只看角色的話會給 owner 一個按下去才 409 的入口。"""
+    app, client = await _client(tmp_path, "pad_archived_no_state")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        pad, blk = await _pad(client, bid, hdr)
+        assert (await client.post(f"/api/boards/{bid}/archive",
+                                  headers=hdr)).status_code == 200
+
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["can_set_state"] is False
