@@ -53,7 +53,7 @@ from .guide import guide_text  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 from .subagents import Subagent, SubagentRegistry, derive_key  # noqa: E402
-from .version import version_string  # noqa: E402
+from .version import handshake_version, version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
 # CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
@@ -76,7 +76,9 @@ def _state_filename(session_key: str) -> str:
     """session_key → 安全的 state 檔名。見 identity.state_filename。"""
     return identity.state_filename(session_key)
 
-mcp = MCPServer("chatroom")
+# version 要帶進交握：`initialize` 是 client 在呼叫任何工具之前唯一問得到
+# 版本的地方，空著等於逼所有人去猜自己在跑哪一版（09/05 就繞過這一圈）
+mcp = MCPServer("chatroom", version=handshake_version())
 
 # ---------- 相依物件（延後建立，方便測試注入） ----------
 

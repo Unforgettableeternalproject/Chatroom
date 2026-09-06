@@ -41,6 +41,20 @@ def version_string() -> str:
     return f"{info['version']}+{info['commit'] or 'unknown'} ({info['source']})"
 
 
+def handshake_version() -> str:
+    """MCP `initialize` 回的 `serverInfo.version`。
+
+    與 `version_string()` 刻意分開：那支是給人看的 banner（帶空格與來源
+    標註），這支是給 client 比對用的**版本字串**——空格與括號在版本欄位裡
+    是雜訊。
+
+    帶 commit 的理由：server／bridge／app 三包同版號，版號本身沒有鑑別力。
+    交握是 client 呼叫任何工具之前唯一問得到版本的地方，能多說一點就多說。
+    """
+    info = build_info()
+    return f"{info['version']}+{info['commit']}" if info["commit"] else info["version"]
+
+
 def _from_build_file() -> dict[str, str] | None:
     try:
         raw = json.loads(_BUILD_FILE.read_text(encoding="utf-8"))
