@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,6 +69,39 @@ def token_hint(token: str | None) -> str:
     return token[:8]
 
 
+def ensure_console_warnings(logger: logging.Logger) -> logging.Handler:
+    """讓這個 logger 的 WARNING 以上也走 stderr。
+
+    2026-09-06 之前它們哪裡都不去（除了 `hub.jsonl`）：這個 logger 只掛過
+    檔案 handler，`propagate=True` 但 root 沒有 handler——uvicorn 的
+    dictConfig 只設 `uvicorn.*`，不碰 root。所以**每一則 WARNING 在真進程
+    的主控台都是看不見的**。
+
+    要緊的地方 `config.py` 自己寫過：`purge_archived_days` 的註解說「Hub
+    啟動時會把這件事印出來，拉了新版起來的人不該在房間開始消失之後才知道
+    有這個設定」。那個意圖失效了——永久刪除房間的預告只寫進了 jsonl，而
+    沒有任何跡象會告訴你它沒被看到。
+
+    ⚠️ **只收 WARNING 以上。** INFO 全上主控台會把警告洗成噪音，而噪音等於
+    沒有警告——那是同一個問題換一個形狀。
+
+    ⚠️ **走 stderr 不走 stdout。** stdout 是 Hub 的正常輸出，警告混進去會
+    被管線與重導一起吃掉。
+
+    可重入：反覆 `create_app`（測試就是這樣做的）只會有一個，不然每則警告
+    會印 N 次。
+    """
+    for existing in logger.handlers:
+        if getattr(existing, "_chatroom_console_handler", False):
+            return existing
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    handler._chatroom_console_handler = True  # type: ignore[attr-defined]
+    logger.addHandler(handler)
+    return handler
+
+
 def setup_file_logging(
     logger: logging.Logger,
     log_dir: str | Path,
@@ -83,6 +117,10 @@ def setup_file_logging(
     可重入：同一個 logger 重複呼叫只會有一個檔案 handler（測試會反覆
     `create_app`，不擋的話 handler 會一路疊上去，每則訊息寫 N 次）。
     """
+    # 掛在這裡而不是另開一個入口：呼叫點只有一個，多一個入口就多一個會被
+    # 忘記呼叫的地方——而漏掉它的症狀正是「警告安靜地消失」
+    ensure_console_warnings(logger)
+
     path = Path(log_dir) / "hub.jsonl"
     for existing in list(logger.handlers):
         if getattr(existing, "_chatroom_file_handler", False):
