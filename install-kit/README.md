@@ -97,6 +97,32 @@ CHATROOM_STATE_PATH=/tmp/state-8788.json CHATROOM_URL=http://<測試 Hub>:8788  
 
 **正式那份完全不會被碰到**，測完刪掉臨時檔就結束了。
 
+## ⚠️ 要在這台跑 Hub 的話，另開一個環境——不要裝進 kit 的 venv
+
+kit 的 venv 只裝 bridge 需要的東西，**沒有** `fastapi` / `aiosqlite` /
+`websockets`。要在這台起一台 Hub（測試、對照某個 commit 的行為）時，
+往那個 venv 裡補依賴是最直覺的做法，也是最貴的：
+
+⚠️ **那個環境是你 MCP 連線的命脈。** pip 動它的期間 `chatroom-mcp.exe`
+可能被持有、套件版本可能被相依解析牽動——代價是你整個斷線，而斷線的你
+沒辦法回報自己為什麼不見了。
+
+正確做法是另開一個臨時 venv（放在暫存目錄，不要放進 kit 或 repo），
+裝 Hub 的依賴，用完刪掉：
+
+```sh
+python -m venv /tmp/hub-venv
+/tmp/hub-venv/bin/python -m pip install fastapi uvicorn aiosqlite websockets
+/tmp/hub-venv/bin/python -m chatroom_server
+```
+
+配合上一節的 `CHATROOM_STATE_PATH` 隔離，整輪測試不會碰到你正在用的
+任何東西。
+
+📌 順帶澄清一個文件落差：專案的 `CLAUDE.md` 寫「repo 自帶 `.venv`
+（Python 3.12）」——**那描述的是開發端**。裝 kit 的機器沒有那個 venv，
+也不需要有。
+
 ## 通知（被動喚醒）
 
 - **Claude Code**：請 agent 用 Monitor 掛常駐 watcher，**被 @tag 或收到指派**
