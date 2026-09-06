@@ -5084,6 +5084,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # **確認者本人也要收**——他正是下一步（完成）要按的那個人。
         # verified 比 review 更容易停住：App 的金色會退掉，畫面主動告訴你
         # 「已確認」，看起來像收工了而實際還差一步
+        # 房內那則只給在場的人類（agent 在看板不用叫）；**不在場的那一層**
+        # 走收件匣，見 `_settlement_notices`
+        await _settlement_notices(row, "objective_verified", seq,
+                                  me["session_key"], me["display_name"])
         audience = await _board_audience(row["room_id"], humans_only=True)
         if audience:
             await _post_message(
@@ -5116,6 +5120,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
             "completed_by_actor_key": actor_key(me["session_key"]),
         }, event="objective_done", actor=me)
+        # 做過事的人——含已經離開的、含 agent、跨掛接房——走收件匣
+        await _settlement_notices(row, "objective_done", seq,
+                                  me["session_key"], me["display_name"])
         # 規則二：**全部**，完成者也在內——他確認的是整個週期，不是自己那張卡
         audience = await _board_audience(row["room_id"])
         if audience:
@@ -8465,6 +8472,67 @@ def create_app(config: Config | None = None) -> FastAPI:
                  event_type, board_seq, actor_name, now))
             sent.append(who)
         return sent
+
+    async def _settlement_notices(row, event_type: str, seq: int,
+                                  actor: str, actor_name: str) -> list[str]:
+        """週期收尾時，通知**在這個週期底下做過事的人**。
+
+        🔑 收件人不從「現在誰在房裡」算，從「誰做過事」算
+        （艾斯維爾 2026-09-06 實測：verify ＋完成之後，接過任務的人一個通知
+        都沒收到，而系統沒有報錯——它「正確地」只通知了在場的人類）。
+
+        原本兩則都走 `_board_audience(row["room_id"])`，那是
+        `WHERE room_id=? AND status='active'`：
+
+        - 只掃 **objective 所在那一間房**的成員，而接過任務的人散在多個掛接房
+        - 只掃**當前**成員，而做完事的 agent 多半已經離開（sweeper 也會掃）
+        - `verified` 那則還加了 `humans_only=True` ⇒ agent 一律排除。原意是
+          「agent 本來就在看板」，但 board 與 chatroom 分離之後那個前提失效了
+
+        ⚠️ **落地而不是只推播**，理由與 `_fire_watch_notices` 完全相同：
+        最需要這則通知的人，正好就是不在場的那個。收件匣綁 `actor_key`，
+        所以換一個 session 回來仍然收得到。
+
+        **「做過事」＝認領過或完成過**（`claim_actor_key` ∪
+        `completed_by_actor_key`）。刻意不含「被指派但沒接」的人：指派是
+        邀請，收尾通知該給實際參與的人。按下按鈕的人自己不收。
+
+        房內那則 mention 維持原樣——在場的人本來就看得到，這裡補的是
+        **不在場的那一層**。
+        """
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT t.board_id, t.claim_actor_key, t.completed_by_actor_key"
+            " FROM board_task t"
+            " JOIN board_checklist c ON c.id = t.checklist_id"
+            " WHERE c.objective_id=? AND t.deleted=0", (row["id"],))).fetchall()
+        me_key = actor_key(actor)
+        board_id = ""
+        who: set[str] = set()
+        for r in rows:
+            board_id = board_id or (r["board_id"] or "")
+            for k in (r["claim_actor_key"], r["completed_by_actor_key"]):
+                k = (k or "").strip()
+                if k and k != me_key:
+                    who.add(k)
+        if not who:
+            return []
+        if not board_id:
+            # v1 舊卡的 `board_id` 是空的（換軸前建的）——退回用房找板。
+            # 找不到就不發：`board_watch_notice.board_id` 有外鍵，硬塞會炸
+            attached = await _board_for_room(row["room_id"])
+            board_id = attached["id"] if attached else ""
+        if not board_id:
+            return []
+        now = _now()
+        for k in sorted(who):
+            await db.execute(
+                "INSERT INTO board_watch_notice (id, board_id, actor_key,"
+                " item_kind, item_id, item_title, event_type, board_seq,"
+                " actor_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (uuid.uuid4().hex, board_id, k, "objective", row["id"],
+                 row["title"], event_type, seq, actor_name, now))
+        return sorted(who)
 
     async def _annotate_watches(board_id: str, actor: str,
                                 *groups: list) -> None:
