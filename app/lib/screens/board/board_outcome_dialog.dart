@@ -67,15 +67,26 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.code == 'human_only'
-          // 這句話幾乎不會出現在 App 上（操作者是人），但出現的時候要說得出
-          // 為什麼，而不是一句「沒有權限」
-          ? '宣告結局限人類 owner——「真的做完了嗎」要跑測試、看畫面才判斷得出來。'
-          : e.message);
+      setState(() => _error = _messageFor(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  /// 失敗的理由怎麼講給人聽。
+  ///
+  /// 前置條件的 409 **是兜底不是判準**——按鈕本來就會依 `outcome_eligible`
+  /// 先擋掉。走到這裡表示畫面上那份判斷已經過期（別人剛把板掛回某間房），
+  /// 所以要講的是「現在的狀況變了」，不是重述一次規則。
+  String _messageFor(ApiException e) => switch (e.code) {
+        // 這句話幾乎不會出現在 App 上（操作者是人），但出現的時候要說得出
+        // 為什麼，而不是一句「沒有權限」
+        'human_only' =>
+          '宣告結局限人類 owner——「真的做完了嗎」要跑測試、看畫面才判斷得出來。',
+        'still_attached' => '這塊板又被掛到聊天室上了，先解除掛接才能收尾。',
+        'never_attached' => '這塊板從沒掛過聊天室，沒有東西可以收尾。',
+        _ => e.message,
+      };
 
   @override
   Widget build(BuildContext context) {

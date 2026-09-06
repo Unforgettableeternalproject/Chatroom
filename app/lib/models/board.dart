@@ -525,6 +525,8 @@ class BoardDelta {
     this.allowedTags = const [],
     this.customTags,
     this.outcome,
+    this.outcomeEligible,
+    this.outcomeBlockReason,
   });
 
   /// 這次的水位。下次帶著它當 `after_board_seq`。
@@ -561,6 +563,20 @@ class BoardDelta {
   /// **把一塊板重新打開之後畫面會一直以為它還是完成的**。
   /// `null` = 這次的回應沒提到它（舊 Hub），那時才保留手上那份。
   final String? outcome;
+
+  /// 現在宣告得了結局嗎。**判準只存在 server 一份**，這裡只轉述結論。
+  ///
+  /// 🔴 **`null` ≠ `false`。** `null` = 這個 Hub 不回答這個問題（舊版），
+  /// 那時正確的行為是**照舊顯示入口、讓 409 兜底**——當成 `false` 會讓
+  /// owner 連按都按不到，而且畫面上看不出是被擋還是功能不見了。
+  ///
+  /// 規則本身（曾掛過房 && 目前掛接數為 0）刻意不在 UI 重寫一份：兩份
+  /// 判準遲早漂移，而漂移的時候沒有任何一邊會報錯。
+  final bool? outcomeEligible;
+
+  /// 擋下來的理由：`never_attached` / `still_attached` / `''`。
+  /// 與 409 的 code 同一組字串。`null` = 沒說。
+  final String? outcomeBlockReason;
 
   /// 這塊板**自己加的**那些標籤（不含預設集合）。刪得掉的就是這些。
   ///
@@ -624,6 +640,8 @@ class BoardDelta {
     // ⚠️ 用 containsKey 而不是 `as List? ?? []`——見 [BoardDelta.customTags]，
     // 「說了沒有」與「沒說」要分得出來
     outcome: json['outcome'] as String?,
+    outcomeEligible: json['outcome_eligible'] as bool?,
+    outcomeBlockReason: json['outcome_block_reason'] as String?,
     customTags: json.containsKey('custom_tags')
         ? [
             for (final t in (json['custom_tags'] as List?) ?? const [])
@@ -681,6 +699,8 @@ class BoardSnapshot {
     this.allowedTags = const [],
     this.customTags,
     this.outcome = '',
+    this.outcomeEligible,
+    this.outcomeBlockReason = '',
   });
 
   /// 已經套用到哪個水位。**下次請求帶這個值**。
@@ -697,6 +717,19 @@ class BoardSnapshot {
 
   /// 這件事的結局：`''` / `completed` / `abandoned`。見 [BoardDelta.outcome]。
   final String outcome;
+
+  /// 現在宣告得了結局嗎。`null` = 這個 Hub 不回答（舊版）。
+  /// 見 [BoardDelta.outcomeEligible]——**`null` ≠ `false`**。
+  final bool? outcomeEligible;
+
+  /// 擋下來的理由：`never_attached` / `still_attached` / `''`。
+  final String outcomeBlockReason;
+
+  /// 要不要畫「宣告結局」那顆按鈕。
+  ///
+  /// 已經收尾的板走的是**重新打開**，而 reopen 不受前置條件管（收尾後又
+  /// 掛回房的板否則會卡在 completed 拿不下來），所以那個狀態一律給按。
+  bool get canDeclareOutcome => isSettled || outcomeEligible != false;
 
   bool get isCompleted => outcome == 'completed';
   bool get isAbandoned => outcome == 'abandoned';
@@ -886,6 +919,10 @@ class BoardSnapshot {
       // 照「空的就保留舊值」處理的話，重新打開之後畫面會一直以為它還是
       // 完成的——而那正是這個欄位最需要說對的一刻
       outcome: delta.outcome ?? outcome,
+      // 同 outcome：看 **null** 不看值。掛接關係一變它就跟著變，而 `false`
+      // 是一個要說出口的結論，不是「沒提到」
+      outcomeEligible: delta.outcomeEligible ?? outcomeEligible,
+      outcomeBlockReason: delta.outcomeBlockReason ?? outcomeBlockReason,
       directives: dirs,
       // 只在全量回應時重設：增量沒有「還有更早的」這個概念，
       // 讓它跟著增量歸零會把已知的截斷事實抹掉
@@ -1326,6 +1363,8 @@ class BoardSummary {
     this.ownerActorKey = '',
     this.ownerDisplayName = '',
     this.outcome = '',
+    this.outcomeEligible,
+    this.outcomeBlockReason = '',
   });
 
   final String id;
@@ -1397,6 +1436,16 @@ class BoardSummary {
   /// 降級成「未收尾」——**猜一個結局出來比少畫一個徽章糟得多**。
   final String outcome;
 
+  /// 現在宣告得了結局嗎。`null` = 這個 Hub 不回答（舊版）。
+  /// 見 [BoardDelta.outcomeEligible]——**`null` ≠ `false`**。
+  final bool? outcomeEligible;
+
+  /// 擋下來的理由：`never_attached` / `still_attached` / `''`。
+  final String outcomeBlockReason;
+
+  /// 要不要畫「宣告結局」那顆按鈕。已收尾的走 reopen，不受前置條件管。
+  bool get canDeclareOutcome => isSettled || outcomeEligible != false;
+
   bool get isPrivate => visibility == 'private';
 
   bool get isArchived => status == 'archived';
@@ -1444,6 +1493,10 @@ class BoardSummary {
       ownerActorKey: (json['owner_actor_key'] as String?) ?? '',
       ownerDisplayName: (json['owner_display_name'] as String?) ?? '',
       outcome: (json['outcome'] as String?) ?? '',
+      // ⚠️ 這裡**不補預設**：`null` 是「舊 Hub 不回答」，補成 false 會讓
+      // owner 連按都按不到，而畫面上看不出是被擋還是功能不見了
+      outcomeEligible: json['outcome_eligible'] as bool?,
+      outcomeBlockReason: (json['outcome_block_reason'] as String?) ?? '',
     );
   }
 }

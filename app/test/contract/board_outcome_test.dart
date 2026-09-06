@@ -148,4 +148,95 @@ void main() {
       }
     });
   });
+
+  // ── 宣告的前置條件（卡 27bee744 / 47f0ee5a）─────────────────────────
+  //
+  // 規則：**曾掛過房 && 目前掛接數為 0** 才宣告得了。判準只存在 server
+  // 一份，UI 轉述它的結論（`outcome_eligible` + `outcome_block_reason`）。
+  //
+  // 🔴 UI 不重寫這條規則。兩份判準遲早漂移，而漂移的時候沒有任何一邊會
+  // 報錯——畫面說可以、server 說不行，使用者只看得到一個沒有理由的失敗。
+  group('宣告結局的前置條件', () {
+    test('server 說不行就不畫入口，理由照它給的那組字串', () {
+      final s = _summary({
+        'outcome_eligible': false,
+        'outcome_block_reason': 'still_attached',
+      });
+      expect(s.canDeclareOutcome, isFalse);
+      expect(s.outcomeBlockReason, 'still_attached');
+    });
+
+    test('never_attached 與 still_attached 是兩個不同的擋法', () {
+      expect(
+        _summary({'outcome_eligible': false, 'outcome_block_reason': 'never_attached'})
+            .outcomeBlockReason,
+        'never_attached',
+      );
+      expect(
+        _summary({'outcome_eligible': false, 'outcome_block_reason': 'still_attached'})
+            .outcomeBlockReason,
+        'still_attached',
+      );
+    });
+
+    test('🔴 舊 Hub 不回這一欄時照舊給按，由 409 兜底', () {
+      // `null` ≠ `false`。當成 false 的話 owner 連按都按不到，而畫面上
+      // 看不出是「被擋」還是「這個功能不見了」——那是最糟的一種降級。
+      final s = _summary({});
+      expect(s.outcomeEligible, isNull, reason: '沒說就是沒說');
+      expect(s.canDeclareOutcome, isTrue);
+    });
+
+    test('🔴 已經收尾的板一律給按——reopen 不受前置條件管', () {
+      // 否則：收尾之後又掛回房的板會卡在 completed 拿不下來。
+      final s = _summary({
+        'outcome': 'completed',
+        'outcome_eligible': false,
+        'outcome_block_reason': 'still_attached',
+      });
+      expect(s.canDeclareOutcome, isTrue);
+    });
+
+    test('詳情快照同一套判準', () {
+      final blocked = const BoardSnapshot().merge(BoardDelta.fromJson(const {
+        'board_seq': 1,
+        'outcome_eligible': false,
+        'outcome_block_reason': 'never_attached',
+      }));
+      expect(blocked.canDeclareOutcome, isFalse);
+      expect(blocked.outcomeBlockReason, 'never_attached');
+
+      final ok = const BoardSnapshot().merge(BoardDelta.fromJson(
+          const {'board_seq': 1, 'outcome_eligible': true}));
+      expect(ok.canDeclareOutcome, isTrue);
+    });
+
+    test('🔴 掛接關係一變就要跟著變——`false` 是結論，不是「沒提到」', () {
+      // 照 outcome 那條「null 才保留舊值」處理。若寫成「有值才覆寫」，
+      // 解除掛接之後畫面會一直以為還被擋著。
+      final blocked = const BoardSnapshot().merge(BoardDelta.fromJson(const {
+        'board_seq': 1,
+        'outcome_eligible': false,
+        'outcome_block_reason': 'still_attached',
+      }));
+      final freed = blocked.merge(BoardDelta.fromJson(const {
+        'board_seq': 2,
+        'outcome_eligible': true,
+        'outcome_block_reason': '',
+      }));
+      expect(freed.canDeclareOutcome, isTrue);
+      expect(freed.outcomeBlockReason, isEmpty);
+    });
+
+    test('回應沒提到時保留手上那份（增量不重送）', () {
+      final blocked = const BoardSnapshot().merge(BoardDelta.fromJson(const {
+        'board_seq': 1,
+        'outcome_eligible': false,
+        'outcome_block_reason': 'still_attached',
+      }));
+      final next = blocked.merge(BoardDelta.fromJson(const {'board_seq': 2}));
+      expect(next.canDeclareOutcome, isFalse);
+      expect(next.outcomeBlockReason, 'still_attached');
+    });
+  });
 }

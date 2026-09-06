@@ -13,6 +13,7 @@ Map<String, dynamic> _task(String id, {
   String claimState = '',
   String status = 'todo',
   int order = 0,
+  String assignee = '',
 }) =>
     {
       'id': id,
@@ -23,6 +24,7 @@ Map<String, dynamic> _task(String id, {
       'order_index': order,
       'claim_state': claimState,
       'claim_name': claimState.isEmpty ? '' : 'Novia',
+      if (assignee.isNotEmpty) 'assignee_participant_id': assignee,
       'deleted': deleted,
       'board_seq': seq,
       'created_at': '2026-09-01T00:00:0${order}Z',
@@ -104,6 +106,28 @@ void main() {
     expect(s.tasks['orphan']!.isClaimable, isTrue,
         reason: '持有者已經不在房內，就不算「同時」被兩個人領走');
     expect(s.tasks['done']!.isClaimable, isFalse);
+  });
+
+  test('🔴 認領入口涵蓋所有無認領者的卡，不是只有孤兒（卡 bc83b3c9）', () {
+    // 「被指名但還沒人站上去」最容易在這裡被漏掉：它看起來已經有歸屬，
+    // 但**指名不是認領**——那張卡上實際沒有人。建議不是鎖，誰都能領。
+    final s = const BoardSnapshot().merge(_delta(
+      1,
+      [
+        _task('free'),
+        _task('suggested', assignee: 'p-someone'),
+        _task('orphan', claimState: 'orphaned'),
+        _task('suggested_orphan',
+            assignee: 'p-someone', claimState: 'orphaned'),
+      ],
+      full: true,
+    ));
+
+    expect(s.tasks['suggested']!.axis, ClaimAxis.suggested);
+    for (final id in s.tasks.keys) {
+      expect(s.tasks[id]!.isClaimable, isTrue,
+          reason: '$id 上沒有人站著，就該給得出認領入口');
+    }
   });
 
   test('排序依 order_index，同序時用 created_at 決勝', () {

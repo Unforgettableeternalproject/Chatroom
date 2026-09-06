@@ -582,6 +582,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           const SizedBox(width: 8),
           _OutcomePill(
             outcome: snap?.outcome ?? '',
+            // 前置條件由 server 判、UI 只轉述（`outcome_eligible`）。已經
+            // 收尾的走 reopen，那條不受前置管，所以 blockReason 是空的
+            blockReason: (snap != null && !snap.canDeclareOutcome)
+                ? snap.outcomeBlockReason
+                : '',
             onTap: () => showBoardOutcomeDialog(
               context,
               boardId: _boardIdOrNull!,
@@ -1696,34 +1701,62 @@ class _HeaderAction extends StatelessWidget {
 /// ⚠️ **與「封存」並存而不是取代它**（見 [BoardSummary.outcome]）：封存說的
 /// 是還能不能改，這裡說的是這件事後來怎麼了。
 class _OutcomePill extends StatelessWidget {
-  const _OutcomePill({required this.outcome, required this.onTap});
+  const _OutcomePill({
+    required this.outcome,
+    required this.onTap,
+    this.blockReason = '',
+  });
 
   final String outcome;
+
+  /// 現在宣告不了的理由：`never_attached` / `still_attached` / `''`。
+  ///
+  /// 有值時膠囊變成不可按，但**仍然畫出來**。整顆藏掉的話 owner 看到的是
+  /// 一個功能不見了，而不是一個有理由的暫時擋下——這包一直在抓的就是這種
+  /// 「畫面上什麼都沒說」的失效。理由要講得出下一步做什麼。
+  final String blockReason;
   final VoidCallback onTap;
+
+  /// 擋下來的理由怎麼講給人聽。
+  static String _reasonText(String reason) => switch (reason) {
+        'still_attached' => '還掛在聊天室上，先解除掛接才能收尾',
+        'never_attached' => '從沒掛過聊天室，沒有東西可以收尾',
+        _ => '現在還不能宣告結局',
+      };
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     final done = outcome == 'completed';
     final settled = outcome.isNotEmpty;
-    final c = settled ? (done ? UepColors.gold : s.inkMute) : s.inkMute;
+    final blocked = blockReason.isNotEmpty;
+    final c = blocked
+        ? s.inkMute.withValues(alpha: .5)
+        : settled
+            ? (done ? UepColors.gold : s.inkMute)
+            : s.inkMute;
+    final pill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: settled && !blocked ? c.withValues(alpha: .10) : null,
+        border: Border.all(
+            color: settled && !blocked ? c.withValues(alpha: .5) : s.hairline),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        // 沒有結局時講「宣告結局」而不是「完成」——那顆按鈕不是「按了就
+        // 完成」，是「去決定它的結局」，而其中一個選項是廢止
+        settled ? (done ? '完成' : '廢止') : '宣告結局',
+        style: UepText.mono(size: 8.5, letterSpacing: 1.1, color: c),
+      ),
+    );
+    if (blocked) {
+      return Tooltip(message: _reasonText(blockReason), child: pill);
+    }
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: settled ? c.withValues(alpha: .10) : null,
-          border: Border.all(color: settled ? c.withValues(alpha: .5) : s.hairline),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Text(
-          // 沒有結局時講「宣告結局」而不是「完成」——那顆按鈕不是「按了就
-          // 完成」，是「去決定它的結局」，而其中一個選項是廢止
-          settled ? (done ? '完成' : '廢止') : '宣告結局',
-          style: UepText.mono(size: 8.5, letterSpacing: 1.1, color: c),
-        ),
-      ),
+      child: pill,
     );
   }
 }
