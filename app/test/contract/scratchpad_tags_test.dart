@@ -311,25 +311,29 @@ void main() {
         expect(b.canSetState, isFalse);
       });
 
-      test('🔴 狀態標得動、標籤標不動的時候，畫面要說得出為什麼', () {
-        // 決策 09/06：tags 的權限今天不跟著 state 放寬。結果是兩顆同形、
-        // 並排、一樣大的 chip，一顆點得動一顆點不動——**不說的話那看起來
-        // 就是壞了**，而使用者會反覆去點那顆沒反應的。
-        expect(
-          tagLockedReason(canEdit: false, canSetState: true),
-          isNotEmpty,
-        );
+      test('🔴 標籤與狀態現在同權限，但仍是兩個欄位', () {
+        // 09/06 晚間裁定：tags 也放寬到板成員。所以「兩顆同形 chip 一顆
+        // 點得動一顆點不動」那個不對稱消失了——`tagLockedReason()` 連同
+        // 它的三條測試一起刪掉，那支函式已經恆回空字串。
+        //
+        // ⚠️ **server 刻意投影成兩個欄位而不共用一個**：state 與 tags 是
+        // 兩次獨立的裁定，共用的話下次只改一邊時 UI 會靜默跟錯，而入口多
+        // 一個或少一個不會有任何地方報錯。UI 這邊照樣分開讀。
+        final b = block(const {
+          'can_edit': false,
+          'can_set_state': true,
+          'can_set_tags': true,
+        });
+        expect(b.canEdit, isFalse, reason: '內容仍然只有作者改得動');
+        expect(b.canSetState, isTrue);
+        expect(b.canSetTags, isTrue);
       });
 
-      test('能改的時候不必說', () {
-        expect(tagLockedReason(canEdit: true, canSetState: true), isEmpty);
-      });
-
-      test('🔴 整塊板唯讀時也不說——那不是「被擋」', () {
-        // viewer／封存板：旁邊的「＋狀態」也不在，沒有並排的對照。
-        // 「被擋」與「這裡本來就沒有這個功能」是兩種訊息，對後者解釋
-        // 等於在對一個沒有人期待的東西道歉。
-        expect(tagLockedReason(canEdit: false, canSetState: false), isEmpty);
+      test('🔴 舊 Hub 不回 can_set_tags 時退回 can_edit', () {
+        // 同 can_set_state 的降級：那正是放寬之前的規則（標籤只有作者能改），
+        // 是舊行為的等價物。預設 true 會在舊 Hub 上畫出必然 403 的入口。
+        expect(block(const {'can_edit': true}).canSetTags, isTrue);
+        expect(block(const {'can_edit': false}).canSetTags, isFalse);
       });
 
       test('🔴 舊 Hub 不回這一欄時退回 can_edit，不是預設放行', () {

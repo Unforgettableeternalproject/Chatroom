@@ -61,11 +61,13 @@ class ScratchpadBlock {
     this.authorKind = '',
     this.canEdit = false,
     bool? canSetState,
+    bool? canSetTags,
     this.tags = const [],
     this.state,
     this.notes = const [],
     this.updatedAt,
-  }) : canSetState = canSetState ?? canEdit;
+  })  : canSetState = canSetState ?? canEdit,
+        canSetTags = canSetTags ?? canEdit;
 
   final String id;
   final String content;
@@ -100,6 +102,17 @@ class ScratchpadBlock {
   /// 等價物。預設 `true` 會在舊 Hub 上畫出必然 403 的入口，預設 `false` 則
   /// 連作者自己都標不動。
   final bool canSetState;
+
+  /// 改得動這一段的**標籤**嗎（決策 09/06 晚間放寬到板成員，與 [canSetState]
+  /// 同一條判準）。
+  ///
+  /// 🔴 **server 刻意投影成兩個欄位而不共用一個，UI 這邊也照樣分開讀。**
+  /// state 與 tags 是**兩次獨立的裁定**（先放寬 state、稍後才放寬 tags），
+  /// 共用的話下次只改其中一邊時這裡會靜默跟錯——而入口多一個或少一個
+  /// 不會有任何地方報錯。今天同值不代表明天同值。
+  ///
+  /// 缺席時退回 [canEdit]，理由同 [canSetState]。
+  final bool canSetTags;
 
   /// 這個段落被標成什麼（Bug／新功能／…）。
   ///
@@ -150,8 +163,9 @@ class ScratchpadBlock {
         authorName: (json['author_name'] as String?) ?? '',
         authorKind: (json['author_kind'] as String?) ?? '',
         canEdit: (json['can_edit'] as bool?) ?? false,
-        // 舊 Hub 沒這一欄 ⇒ null ⇒ 建構子退回 can_edit（放寬之前的規則）
+        // 舊 Hub 沒這兩欄 ⇒ null ⇒ 建構子退回 can_edit（放寬之前的規則）
         canSetState: json['can_set_state'] as bool?,
+        canSetTags: json['can_set_tags'] as bool?,
         tags: [
           for (final t in (json['tags'] as List<dynamic>? ?? const []))
             if (t is String && t.isNotEmpty) t,

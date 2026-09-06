@@ -282,7 +282,10 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 : null,
         onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
         allowedTags: _allowedTags,
-        onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
+        // 🔴 **不是 `b.canEdit`。** 標籤與狀態各走自己那道門（09/06 晚間
+        // 放寬到板成員），content 的守門沒變。分開讀而不是共用一個欄位：
+        // 兩者今天同值，但那是兩次獨立的裁定，下次只改一邊時共用會靜默跟錯
+        onSetTag: b.canSetTags ? (t) => _setTag(b, t) : null,
         // 🔴 **不是 `b.canEdit`。** 標狀態走另一道門（見 [canSetState]）：
         // 別人寫的段落改不動內容，但標得動它後來怎麼了。用 canEdit 擋的話，
         // server 放寬了、畫面不給，功能做了卻沒有人找得到。
@@ -917,10 +920,6 @@ class _BlockCardState extends State<_BlockCard> {
             tag: b.tag,
             allowed: widget.allowedTags,
             onPick: widget.onSetTag,
-            // 標籤與狀態的權限不同（決策 09/06：state 放寬、tags 沒有），
-            // 而兩顆 chip 同形同大並排——不說的話那看起來就是壞了
-            lockedReason: tagLockedReason(
-                canEdit: b.canEdit, canSetState: b.canSetState),
           ),
           if (b.tag != null || widget.allowedTags.isNotEmpty)
             const SizedBox(width: 6),

@@ -80,31 +80,21 @@ String tagRemovalError(String code, String tag,
       _ => fallback,
     };
 
-/// 標籤改不動時要說的那句話。空字串＝不必說。
-///
-/// 🔴 **只在「狀態標得動、標籤標不動」時才說。** 那是唯一會讓人以為壞掉的
-/// 組合：兩顆同形、並排、一樣大的 chip，一顆點得動一顆點不動（決策 09/06
-/// 裁定 tags 的權限今天不跟著 state 放寬）。
-///
-/// 整塊板唯讀時不說——那時「＋狀態」也不在，沒有並排的對照，多一句話只是
-/// 對一個沒有人期待的東西解釋。**「被擋」與「這裡本來就沒有這個功能」是
-/// 兩種訊息**，只有前者需要理由。
-///
-/// **抽成頂層函式是為了測得到**（同 `tagRemovalError`）：這是這顆 chip 上
-/// 唯一有判斷的東西，埋在 build 裡等於沒有守著。
-String tagLockedReason({required bool canEdit, required bool canSetState}) {
-  if (canEdit) return '';
-  if (!canSetState) return '';
-  return '標籤只有寫這一段的人能改。狀態（後來怎麼了）任何板成員都標得動。';
-}
+// 這裡曾經有一支 `tagLockedReason()`：當 `state` 已放寬而 `tags` 還限作者
+// 時，那顆點不動的標籤 chip 要說得出為什麼——兩顆同形、並排、一樣大的
+// chip，一顆點得動一顆點不動，不說的話那看起來就是壞了。
+//
+// 🔴 **同一天晚上 tags 也放寬了（`c2cd3c22`），那個不對稱消失，函式恆回
+// 空字串。** 它存在了大約一小時。
+//
+// 📌 留這段紀錄不是為了懷念，是因為**它被刪掉的理由與它被寫出來的理由是
+// 同一件事**：畫面上兩個並排的東西行為不同時，差別必須說得出口；行為一樣
+// 了，那句解釋就成了描述一個不存在的差異，比不說更糟。
 
 /// 一顆標籤徽章。
 ///
 /// [onPick] 給了才可以改；`null` 時它只是一個顯示——**唯讀的人不該看到一個
 /// 按下去沒反應的東西**。
-///
-/// [lockedReason] 非空時，這顆 chip 會帶著那句話（見 [tagLockedReason]）。
-/// 那是「被擋」而不是「沒有這個功能」的情況，畫面要說得出差別。
 ///
 /// [allowed] 空的時候整顆不畫（舊 Hub 沒有這個功能），呼叫端不必自己判斷。
 class ScratchpadTagChip extends StatelessWidget {
@@ -113,11 +103,7 @@ class ScratchpadTagChip extends StatelessWidget {
     required this.tag,
     this.allowed = const [],
     this.onPick,
-    this.lockedReason = '',
   });
-
-  /// 改不動的理由。空＝不必說（見 [tagLockedReason]）。
-  final String lockedReason;
 
   /// 現在標的那一個。`null` = 沒標。
   final String? tag;
@@ -134,12 +120,7 @@ class ScratchpadTagChip extends StatelessWidget {
     if (allowed.isEmpty && tag == null) return const SizedBox.shrink();
 
     final chip = _chip(s);
-    if (onPick == null || allowed.isEmpty) {
-      // 被擋下來的要說得出為什麼；純粹唯讀的不說（見 [tagLockedReason]）
-      return lockedReason.isEmpty
-          ? chip
-          : Tooltip(message: lockedReason, child: chip);
-    }
+    if (onPick == null || allowed.isEmpty) return chip;
 
     return PopupMenuButton<String>(
       tooltip: '標籤',
