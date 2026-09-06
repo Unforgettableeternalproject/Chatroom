@@ -1350,6 +1350,18 @@ class BoardSummary {
 
   final int taskTotal;
   final int taskDone;
+
+  /// **有人在上面、而且那件事還沒收尾**的卡數。
+  ///
+  /// 🔴 **不是「所有 `claim_state=held`」**，儘管欄位名叫 claimed。做完的卡
+  /// 上仍然掛著當初做它的人（那是紀錄，不是佔用），把它們算進來會得到一個
+  /// 只增不減的數字——這塊板實測回過 `claimed=65`，而真正未收尾且有人在上面
+  /// 的只有 3 張，其餘是 61 張 done-held ＋ 1 張 cancelled-held
+  /// （審核用Codex 2026-09-05 以現行板重現，Hub 卡 `47be7d4c` 修）。
+  ///
+  /// ⚠️ **這個欄位的名字沒變、意思變了**——那種改動最容易被下一個人改回去。
+  /// 畫面上寫「N 進行中」之所以成立，靠的是 server 這一側的定義，不是
+  /// client 自己過濾。
   final int taskClaimed;
   final String? updatedAt;
 
