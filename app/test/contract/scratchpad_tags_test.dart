@@ -315,7 +315,7 @@ void main() {
         // 這個前提。真正照契約用的話，這條路徑根本不碰 state 那一欄。
         final c = _Canned({'ok': true, 'rev': 3});
         await api(c).writeBlock('b1', 'p1', 'blk1',
-            sessionKey: 'k', content: '改個錯字', rev: 2);
+            sessionKey: 'k', content: '改個錯字', rev: 2, tags: const []);
         expect(c.seen.single.data.containsKey('state'), isFalse,
             reason: '沒有要改狀態，就不該出現在那句 UPDATE 裡');
       });
@@ -323,7 +323,7 @@ void main() {
       test('設定狀態送值', () async {
         final c = _Canned({'ok': true, 'rev': 3});
         await api(c).writeBlock('b1', 'p1', 'blk1',
-            sessionKey: 'k', content: 'x', rev: 2, state: 'implemented');
+            sessionKey: 'k', content: 'x', rev: 2, tags: const [], state: 'implemented');
         expect(c.seen.single.data['state'], 'implemented');
       });
 
@@ -332,7 +332,7 @@ void main() {
         // 兩者用同一個表示法的話，清除這個動作就寫不出來了。
         final c = _Canned({'ok': true, 'rev': 3});
         await api(c).writeBlock('b1', 'p1', 'blk1',
-            sessionKey: 'k', content: 'x', rev: 2, state: null);
+            sessionKey: 'k', content: 'x', rev: 2, tags: const [], state: null);
         expect(c.seen.single.data.containsKey('state'), isTrue);
         expect(c.seen.single.data['state'], '');
       });

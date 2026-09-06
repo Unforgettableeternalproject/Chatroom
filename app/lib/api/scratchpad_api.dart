@@ -109,6 +109,14 @@ class ScratchpadApi {
   /// ⚠️ [rev] **必填、沒有預設值**。給了預設值等於「不知道就當作沒人改過」，
   /// 而那正是 CAS 要擋的那件事。改不動時 Hub 回 409 `scratchpad_block_stale`
   /// 並附上**現值的 content 與 rev**——那兩個是衝突畫面唯一的材料。
+  ///
+  /// ⚠️ [tags] **必填，理由與 [rev] 一模一樣**。它是整份覆寫語意（見下方
+  /// 註解），所以預設 `const []` 會讓「忘了帶」變成一次靜默的清除——200
+  /// 回來、兩邊都沒有錯誤訊息，下次去篩選才發現標籤從分堆裡消失了。
+  ///
+  /// 這正是 `c22ca1b4` 那個 bug 的形狀，只是發生在 bridge 那一側：
+  /// `chatroom_scratchpad_edit` 只送 content 與 rev，於是 agent 每一次改寫
+  /// 段落都把標籤清成空。**必填讓同一件事在這裡是編譯錯誤，不是資料遺失。**
   Future<int> writeBlock(
     String boardId,
     String padId,
@@ -116,7 +124,7 @@ class ScratchpadApi {
     required String sessionKey,
     required String content,
     required int rev,
-    List<String> tags = const [],
+    required List<String> tags,
     Object? state = noStateChange,
   }) =>
       unwrap(() async {

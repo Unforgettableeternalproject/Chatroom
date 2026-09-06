@@ -114,12 +114,12 @@ void main() {
       final b = pad.blocks.single;
 
       await pads.writeBlock(bid, pid, b.id,
-          sessionKey: sessionKey, content: '改過一次', rev: b.rev);
+          sessionKey: sessionKey, content: '改過一次', rev: b.rev, tags: const []);
 
       // 拿舊的 rev 再寫一次＝另一個人拿著過期的版本按下存檔
       try {
         await pads.writeBlock(bid, pid, b.id,
-            sessionKey: sessionKey, content: '拿舊版蓋', rev: b.rev);
+            sessionKey: sessionKey, content: '拿舊版蓋', rev: b.rev, tags: const []);
         fail('舊的 rev 應該要被擋下來');
       } on ApiException catch (e) {
         expect(e.code, 'scratchpad_block_stale');
