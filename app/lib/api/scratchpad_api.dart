@@ -110,13 +110,24 @@ class ScratchpadApi {
     required String content,
     required int rev,
     List<String> tags = const [],
+    String? state,
   }) =>
       unwrap(() async {
         final res = await _dio.put<Map<String, dynamic>>(
           '/api/boards/$boardId/scratchpads/$padId/blocks/$blockId',
           // ⚠️ `tags` 送的是**整份新值**，不是差異。改內容時沒把現有標籤
           // 一起帶上就等於把它清掉——呼叫端要從 block 讀出來再送回去
-          data: {'content': content, 'rev': rev, 'tags': tags},
+          //
+          // ⚠️ `state` 一律送，即使這次不是要改它。Hub 端的語意還沒定案
+          // （「沒送＝不動」還是「沒送＝清掉」），而**帶上現值在兩種語意
+          // 下都是對的**——賭其中一種的話，賭錯就是使用者改個錯字，段落
+          // 的狀態標記悄悄消失，而且不會有任何錯誤
+          data: {
+            'content': content,
+            'rev': rev,
+            'tags': tags,
+            'state': state ?? '',
+          },
           options: _h(sessionKey),
         );
         return (res.data?['rev'] as int?) ?? rev;

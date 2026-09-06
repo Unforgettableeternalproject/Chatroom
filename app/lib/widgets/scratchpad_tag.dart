@@ -80,6 +80,20 @@ List<String> conflictTags(
   ];
 }
 
+/// 衝突重試時該送哪一個狀態。與 [conflictTags] 同一條規則、同一個理由：
+/// **衝突的定義就是「對方改過了」**，那條路徑上的本地值必然是舊的。
+///
+/// [detail] 帶 `state` 就用它——**含空字串**（那是「對方把標記清掉了」，
+/// 一個值，不是「沒講」）。沒帶才退回 [fallback]，同樣是已知的降級。
+String? conflictState(
+  Map<String, dynamic> detail, {
+  required String? fallback,
+}) {
+  if (!detail.containsKey('state')) return fallback;
+  final v = detail['state'];
+  return v is String && v.isNotEmpty ? v : null;
+}
+
 /// 刪不掉一個標籤時要對人說的那句話。
 ///
 /// **抽成頂層函式是為了測得到**（同 `padRoute()`）：這幾句是這個對話框裡
@@ -186,6 +200,115 @@ class ScratchpadTagChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(tagLabel(t),
+          style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
+    );
+  }
+}
+
+/// 段落狀態的繁中顯示名。
+String blockStateLabel(String state) => switch (state) {
+      'implemented' => '已實作',
+      'abandoned' => '已放棄',
+      _ => state,
+    };
+
+/// 段落狀態的顏色。
+///
+/// 「已放棄」刻意走中性灰而不是紅：放棄是一個**正常的結局**，不是錯誤。
+/// 畫成紅的話，一份健康的想法板看起來會像出了一堆事。
+Color blockStateColor(String state) => switch (state) {
+      'implemented' => UepColors.gold,
+      'abandoned' => const Color(0xFF7A8290),
+      _ => const Color(0xFF7A8290),
+    };
+
+/// 一顆段落狀態徽章：這則觀察後來怎麼了。
+///
+/// 與 [ScratchpadTagChip] 是**正交的兩個軸**（標籤講性質、這裡講結局），
+/// 所以並排而不是二選一。
+///
+/// 🔴 **沒標時不畫實心徽章。** 三態裡「還沒標」是常態，把它畫成一個有顏色
+/// 的東西，等於宣告一件沒有人決定過的事——沒標與已放棄在畫面上必須分得開。
+/// 可以改的時候給一個安靜的「＋狀態」入口，唯讀時整顆不畫。
+class ScratchpadStateChip extends StatelessWidget {
+  const ScratchpadStateChip({super.key, required this.state, this.onPick});
+
+  /// 現在的狀態。`null` = 還沒標。
+  final String? state;
+
+  /// 選了新狀態（或選「清除標記」時給 `null`）。`null` = 不能改。
+  final ValueChanged<String?>? onPick;
+
+  static const _choices = ['implemented', 'abandoned'];
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final st = state;
+    // 唯讀又沒標 ⇒ 這裡沒有任何事可講，不要留一個空殼
+    if (onPick == null && st == null) return const SizedBox.shrink();
+
+    final chip = _chip(s);
+    if (onPick == null) return chip;
+
+    return PopupMenuButton<String>(
+      tooltip: '這則後來怎麼了',
+      position: PopupMenuPosition.under,
+      // 「清除標記」與「改成別的」在同一個選單裡——分成兩個入口的話，
+      // 標錯了要改回「還沒決定」會變成一個找不到的動作
+      onSelected: (v) => onPick!(v.isEmpty ? null : v),
+      itemBuilder: (_) => [
+        for (final v in _choices)
+          PopupMenuItem(
+            value: v,
+            child: Row(children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                    color: blockStateColor(v), shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(blockStateLabel(v),
+                  style: UepText.sans(size: 12, color: s.ink)),
+            ]),
+          ),
+        if (st != null) ...[
+          const PopupMenuDivider(),
+          PopupMenuItem(
+            value: '',
+            child: Text('清除標記',
+                style: UepText.sans(size: 12, color: s.inkMute)),
+          ),
+        ],
+      ],
+      child: chip,
+    );
+  }
+
+  Widget _chip(UepSurface s) {
+    final st = state;
+    if (st == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: s.line),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text('＋狀態',
+            style: UepText.mono(
+                size: 8.5, letterSpacing: 1.0, color: s.inkMute)),
+      );
+    }
+    final c = blockStateColor(st);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: .13),
+        border: Border.all(color: c.withValues(alpha: .5)),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(blockStateLabel(st),
           style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
     );
   }

@@ -283,6 +283,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
         allowedTags: _allowedTags,
         onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
+        onSetState:
+            pad.canEdit && b.canEdit ? (v) => _setState(b, v) : null,
       );
 
   /// 管理這塊板的自訂標籤。
@@ -325,6 +327,34 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             content: b.content,
             rev: b.rev,
             tags: tag == null ? const [] : [tag],
+            // 改標籤不該動狀態——兩個正交的軸，帶上現值
+            state: b.state,
+          );
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.code == 'scratchpad_block_stale'
+              ? '這一段剛被別人改過，重新載入後再標一次'
+              : e.message),
+        ));
+      }
+    }
+    _reload();
+  }
+
+  /// 標這一段後來怎麼了（`null` = 清除標記）。
+  Future<void> _setState(ScratchpadBlock b, String? state) async {
+    try {
+      await ref.read(scratchpadApiProvider).writeBlock(
+            widget.boardId,
+            widget.pad.id,
+            b.id,
+            sessionKey: _sessionKey,
+            content: b.content,
+            rev: b.rev,
+            // 同上，反過來：改狀態不該動標籤
+            tags: b.tags,
+            state: state,
           );
     } on ApiException catch (e) {
       if (mounted) {
@@ -376,6 +406,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             // 會順手把這一段的標籤清掉——不會報錯，只有下次去篩選時才發現
             // 它從分堆裡消失了
             tags: b.tags,
+            // 同上，狀態那個軸也一樣：改錯字不該把「已實作」弄不見
+            state: b.state,
           );
       if (!mounted) return;
       setState(() => _editing = null);
@@ -431,6 +463,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             // 拿它去蓋會把對方剛改的標籤洗掉，而且不報錯
             // （審核用Codex 2026-09-05 用現行 API 重現）。
             tags: conflictTags(e.detail, fallback: b.tags),
+            // 同一個理由（見 [conflictState]）：這條路徑上的 b.state 必然舊
+            state: conflictState(e.detail, fallback: b.state),
           );
       if (!mounted) return;
       setState(() => _editing = null);
@@ -785,6 +819,7 @@ class _BlockCard extends StatefulWidget {
     required this.onDelete,
     this.allowedTags = const [],
     this.onSetTag,
+    this.onSetState,
   });
 
   final ScratchpadBlock block;
@@ -795,6 +830,9 @@ class _BlockCard extends StatefulWidget {
 
   /// 改這一段的標籤（`null` = 取消標籤）。唯讀時給 `null`。
   final ValueChanged<String?>? onSetTag;
+
+  /// 改這一段的狀態（`null` = 清除標記）。唯讀時給 `null`。
+  final ValueChanged<String?>? onSetState;
   final VoidCallback? onEdit;
   final VoidCallback onCancel;
   final ValueChanged<String> onSave;
@@ -882,6 +920,11 @@ class _BlockCardState extends State<_BlockCard> {
             onPick: widget.onSetTag,
           ),
           if (b.tag != null || widget.allowedTags.isNotEmpty)
+            const SizedBox(width: 6),
+          // 狀態排在標籤之後：先講這是什麼，再講它後來怎麼了。
+          // 兩顆並排而不是二選一——標籤與狀態是正交的兩個軸
+          ScratchpadStateChip(state: b.state, onPick: widget.onSetState),
+          if (b.state != null || widget.onSetState != null)
             const SizedBox(width: 6),
           if (!widget.editing && widget.onEdit != null)
             _Tiny(label: '編輯', onTap: widget.onEdit!),

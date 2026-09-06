@@ -243,4 +243,94 @@ void main() {
       );
     });
   });
+
+  // ── 段落狀態（卡 287c903b / 6b1e6ecc）──────────────────────────────
+  //
+  // 「這則觀察後來怎麼了」：`null` / `implemented` / `abandoned`。
+  // 與標籤是**正交的兩個軸**——標籤講性質，狀態講結局。
+  group('段落狀態', () {
+    ScratchpadBlock block(Map<String, dynamic> json) =>
+        ScratchpadBlock.fromJson({'id': 'blk1', ...json});
+
+    test('三態各自讀得出來', () {
+      expect(block(const {'state': 'implemented'}).isImplemented, isTrue);
+      expect(block(const {'state': 'abandoned'}).isAbandoned, isTrue);
+      expect(block(const {}).state, isNull);
+    });
+
+    test('🔴 「還沒標」不是「已放棄」', () {
+      // 三態最容易壓成兩態的地方。壓掉的話，畫面會對一則沒有人決定過的
+      // 觀察宣告「放棄了」——而那正是想法板最不該說錯的一句話。
+      final unset = block(const {});
+      expect(unset.isAbandoned, isFalse);
+      expect(unset.isSettled, isFalse, reason: '沒標不是一種結局，是還沒到那一步');
+      expect(block(const {'state': 'abandoned'}).isSettled, isTrue);
+    });
+
+    test('空字串當成沒標——Hub 清除時送 null 或 \'\' 都收得住', () {
+      expect(block(const {'state': ''}).state, isNull);
+      expect(block(const {'state': null}).state, isNull);
+    });
+
+    test('狀態與標籤是正交的，同一則兩個軸都說得出來', () {
+      final b = block(const {'tags': ['bug'], 'state': 'implemented'});
+      expect(b.tag, 'bug');
+      expect(b.isImplemented, isTrue);
+    });
+
+    test('🔴 改內容時要把 state 一起送回去，否則它會悄悄消失', () async {
+      // 與 tags 同一個形狀：整份覆寫的端點上，「沒帶」等於「清掉」。
+      // Hub 端的語意還沒定案（沒送＝不動 vs 沒送＝清掉），而帶上現值在
+      // 兩種語意下都是對的——賭錯的代價是使用者改個錯字，狀態標記不見了，
+      // 而且不會有任何錯誤。
+      final canned = _Canned({'ok': true, 'rev': 3});
+      final api = ScratchpadApi(Dio(BaseOptions(baseUrl: 'http://test'))
+        ..httpClientAdapter = canned);
+      await api.writeBlock('b1', 'p1', 'blk1',
+          sessionKey: 'k', content: '改個錯字', rev: 2, state: 'implemented');
+      expect(canned.seen.single.data['state'], 'implemented');
+    });
+
+    test('清除標記送空字串，不是把欄位省掉', () async {
+      final canned = _Canned({'ok': true, 'rev': 3});
+      final api = ScratchpadApi(Dio(BaseOptions(baseUrl: 'http://test'))
+        ..httpClientAdapter = canned);
+      await api.writeBlock('b1', 'p1', 'blk1',
+          sessionKey: 'k', content: 'x', rev: 2, state: null);
+      expect(canned.seen.single.data.containsKey('state'), isTrue,
+          reason: '省掉欄位在「沒送＝不動」的語意下清不掉');
+      expect(canned.seen.single.data['state'], '');
+    });
+
+    group('衝突重試（與 conflictTags 同一條規則）', () {
+      test('409 帶了 fresh state 就用它，不用本地那份', () {
+        // 同一行程式碼、前提相反：`_save` 帶 b.state 是對的（剛編輯完），
+        // 複製到衝突路徑就錯了——衝突的定義就是「對方改過了」。
+        expect(
+          conflictState(
+            const {'content': '對方寫的', 'rev': 2, 'state': 'abandoned'},
+            fallback: 'implemented',
+          ),
+          'abandoned',
+          reason: '對方剛標成已放棄，重試不可以把它蓋回已實作',
+        );
+      });
+
+      test('409 明確說「現在沒標」也要照做', () {
+        // `''` 是一個值（對方把標記清掉了），不是「沒講」
+        expect(
+          conflictState(const {'state': ''}, fallback: 'implemented'),
+          isNull,
+        );
+      });
+
+      test('⚠️ 舊 Hub 不帶 state 時只能退回本地那份——那條路徑仍會覆蓋', () {
+        expect(
+          conflictState(const {'content': '對方寫的', 'rev': 2},
+              fallback: 'implemented'),
+          'implemented',
+        );
+      });
+    });
+  });
 }

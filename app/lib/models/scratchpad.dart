@@ -61,6 +61,7 @@ class ScratchpadBlock {
     this.authorKind = '',
     this.canEdit = false,
     this.tags = const [],
+    this.state,
     this.notes = const [],
     this.updatedAt,
   });
@@ -90,6 +91,22 @@ class ScratchpadBlock {
   /// 功能、一則權限設計），標在板上等於一份板只有一個標籤，標不出任何東西。
   final List<String> tags;
 
+  /// 這則觀察後來怎麼了：`null` / `implemented` / `abandoned`。
+  ///
+  /// 🔴 **三態，`null` 不等於 `abandoned`。** 「還沒標」是絕大多數段落的
+  /// 常態，把它畫得像「已放棄」，等於宣告一件沒有人決定過的事。
+  ///
+  /// 與 [tags] 是**正交的兩個軸**：標籤講這是什麼性質的觀察（bug／新功能），
+  /// 這裡講它後來有沒有被做掉。同一則「這裡有個 bug」可以是 bug＋已實作，
+  /// 也可以是 bug＋已放棄，兩個維度都要說得出口。
+  final String? state;
+
+  bool get isImplemented => state == 'implemented';
+  bool get isAbandoned => state == 'abandoned';
+
+  /// 有沒有被決定過。**沒標不是一種結局**，是還沒到那一步。
+  bool get isSettled => isImplemented || isAbandoned;
+
   final List<ScratchpadNote> notes;
   final String? updatedAt;
 
@@ -118,6 +135,12 @@ class ScratchpadBlock {
           for (final t in (json['tags'] as List<dynamic>? ?? const []))
             if (t is String && t.isNotEmpty) t,
         ],
+        // ⚠️ 空字串當成沒標。Hub 清除時送 `null` 還是 `''` 由它決定，
+        // 兩種都要收得住——這一欄唯一該分開的是「有結局」與「沒有」
+        state: switch (json['state']) {
+          final String s when s.isNotEmpty => s,
+          _ => null,
+        },
         updatedAt: json['updated_at'] as String?,
         notes: [
           for (final n in (json['notes'] as List<dynamic>? ?? const []))
