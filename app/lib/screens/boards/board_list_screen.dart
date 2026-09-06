@@ -36,6 +36,39 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     await ref.read(boardLibraryProvider(_status).future);
   }
 
+  /// 封存／解除封存一塊板。
+  ///
+  /// ⚠️ **封存不是結局**（`947deba7` 與 N-2 的分界）：這裡只改「還能不能
+  /// 改」，`outcome` 那一軸完全不動。一塊板可以是「封存了但沒做完」，也可以
+  /// 是「做完了還開著」——把兩者綁在一起會把前者講成後者。
+  ///
+  /// 送出後三頁都要重拉：封存的板會從「進行中」移到「已封存」，而
+  /// **「已收尾」那頁與這兩頁是正交的**（收尾的板可能在任一邊）。
+  Future<void> _toggleArchive(BoardSummary board) async {
+    final api = ref.read(boardsApiProvider);
+    final key = ref.read(appConfigProvider).deviceKey;
+    try {
+      if (board.isArchived) {
+        await api.unarchive(board.id, sessionKey: key);
+      } else {
+        await api.archive(board.id, sessionKey: key);
+      }
+      for (final v in ['active', 'archived', 'settled']) {
+        ref.invalidate(boardLibraryProvider(v));
+      }
+      ref.invalidate(boardByIdProvider(board.id));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+        // 403 在這裡幾乎不會發生（只對 owner 畫那顆選單），但真的發生時
+        // 要說得出為什麼，而不是一句「操作失敗」
+        e.code == 'board_owner_required' || e.code == 'forbidden'
+            ? '只有這塊板的 owner 能封存它。'
+            : e.message,
+      )));
+    }
+  }
+
   /// 在 Library 直接開一塊板：**不掛任何房間**。
   ///
   /// 「先建板、之後再決定掛去哪」是 v2 的正常路徑（`origin_room_id` 選填），
@@ -182,6 +215,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                     board: boards[i],
                     selected: boards[i].id == widget.selectedBoardId,
                     onTap: () => context.go('/boards/${boards[i].id}'),
+                    // 只有 owner 給得到這顆——Hub 那邊 `_board_owner_or_403`
+                    // 擋著，畫一顆必然拿 403 的按鈕比不畫更難懂
+                    onToggleArchive: boards[i].myRole == 'owner'
+                        ? () => _toggleArchive(boards[i])
+                        : null,
                   ),
                 );
               },
@@ -281,16 +319,63 @@ class _BoardStatusToggle extends StatelessWidget {
   }
 }
 
+/// 板卡上的操作選單。**刻意與 ROOMS 那顆長得一樣**（`_RoomMenu`）——
+/// 兩個清單做同一件事，外觀不一致只會讓人以為它們是不同的東西。
+///
+/// 目前只有封存／解除封存。刪除沒有放進來：板的刪除語意（連同卡、想法板、
+/// 掛接關係）比房重得多，**在清單上一按就沒**不是這件事該有的份量。
+class _BoardMenu extends StatelessWidget {
+  const _BoardMenu({required this.archived, required this.onToggleArchive});
+
+  final bool archived;
+  final VoidCallback onToggleArchive;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_horiz, size: 14, color: s.inkMute),
+      iconSize: 14,
+      padding: EdgeInsets.zero,
+      color: s.bgCard,
+      tooltip: '這塊板的操作',
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: s.lineStrong),
+      ),
+      onSelected: (_) => onToggleArchive(),
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'archive',
+          height: 36,
+          // 同一個項目切換文字，不是兩個項目——與 ROOMS 一致，也避免
+          // 「封存」與「解除封存」同時出現時要人自己判斷現在是哪個狀態
+          child: Text(archived ? '解除封存' : '封存',
+              style: UepText.sans(size: 12.5, color: s.ink)),
+        ),
+      ],
+    );
+  }
+}
+
 class _BoardTile extends StatelessWidget {
   const _BoardTile({
     required this.board,
     required this.selected,
     required this.onTap,
+    this.onToggleArchive,
   });
 
   final BoardSummary board;
   final bool selected;
   final VoidCallback onTap;
+
+  /// 封存／解除封存。`null` = 不是 owner，不畫那顆選單。
+  ///
+  /// **入口在清單上而不是板頁裡**（艾斯維爾 2026-09-06，推翻 #260 的膠囊
+  /// 提案）：與 ROOMS 的封存入口對齊。封存的操作場景本來就在清單——沒有人
+  /// 會為了封存一塊板而先點進去，而封存過的板更是如此。
+  final VoidCallback? onToggleArchive;
 
   @override
   Widget build(BuildContext context) {
@@ -351,6 +436,16 @@ class _BoardTile extends StatelessWidget {
                   size: 8.5,
                   letterSpacing: 1.0,
                   color: board.isCompleted ? UepColors.gold : s.inkMute,
+                ),
+              ],
+              // 封存入口。**與 ROOMS 那顆對齊**（同樣的 more_horiz、同樣的
+              // 尺寸與選單樣式）——兩個清單做同一件事，長得不一樣只會讓人
+              // 以為它們是不同的東西
+              if (onToggleArchive != null) ...[
+                const SizedBox(width: 4),
+                _BoardMenu(
+                  archived: board.isArchived,
+                  onToggleArchive: onToggleArchive!,
                 ),
               ],
             ]),

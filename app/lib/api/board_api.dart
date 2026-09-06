@@ -454,6 +454,45 @@ class BoardsApi {
         return (res.data?['id'] as String?) ?? '';
       });
 
+  /// 舊 Hub 不回 `status` 時該推定成什麼。
+  ///
+  /// 退回空字串的話，`isArchived` 這類判斷會變成「兩邊都不是」——**而那個
+  /// 狀態在畫面上沒有畫法**。動作本身已經說了意圖，照它推定即可。
+  String archivedStatusFallback({required bool archive}) =>
+      archive ? 'archived' : 'active';
+
+  /// 封存這塊板：**板變唯讀，掛接的房照樣聊天**（Hub §3.2）。
+  ///
+  /// 🔴 **與 [setOutcome] 是兩件事**：這裡說的是「還能不能改」（可逆的
+  /// 收納），結局說的是「這件事後來怎麼了」。房封存與板封存也必須在畫面上
+  /// 長得不一樣，否則使用者分不出「這個對話結束了」與「這份工作收尾了」。
+  ///
+  /// 限板 owner（403）。
+  Future<String> archive(String boardId, {required String sessionKey}) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/archive',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return (res.data?['status'] as String?) ??
+            archivedStatusFallback(archive: true);
+      });
+
+  /// 解除封存。**封存是可逆的決定，刪除才不是。**
+  ///
+  /// ⚠️ 與 [archive] **是兩支端點，不要在 client 合成一支 toggle**：那樣
+  /// 畫面上的狀態與送出的意圖會在競態時分歧——兩個人同時按，第二個人送出的
+  /// 其實是「切回去」。
+  Future<String> unarchive(String boardId, {required String sessionKey}) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/unarchive',
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return (res.data?['status'] as String?) ??
+            archivedStatusFallback(archive: false);
+      });
+
   /// 宣告這塊板的結局：`completed` / `abandoned`，或空字串把它重新打開。
   ///
   /// **一支端點三個轉換**（Hub 刻意不拆成三支：一個欄位多條寫入路徑，遲早
