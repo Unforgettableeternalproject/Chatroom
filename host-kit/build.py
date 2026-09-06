@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import sys
 import zipfile
@@ -15,13 +16,19 @@ from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    # 中止訊息走 stderr，而 Windows 主控台預設 cp950——不設這行，打包被擋下
+    # 的那句話會變成一串亂碼，等於白擋
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 KIT_DIR = Path(__file__).resolve().parent
 REPO = KIT_DIR.parent
 DIST = REPO / "dist"
 
 sys.path.insert(0, str(REPO / "scripts"))
-from buildstamp import read_app_version, report, stamp  # noqa: E402
+from buildstamp import (  # noqa: E402
+    read_app_version, report, require_commit, stamp,
+)
 
 # ⚠️ 這裡漏掉任何一項，主持人的**實際聊天內容**就會被打包發出去。
 # attachments 是實測踩到的：Hub 在 server/ 底下跑時，使用者上傳的截圖、
@@ -37,7 +44,23 @@ SERVER_IGNORE = shutil.ignore_patterns(
 )
 
 
+def _expected_commit(argv: list[str] | None = None) -> str:
+    """`--expect <commit>`：打包指令說出「我要打的是哪個 commit」。
+
+    在隔離 worktree 上打包時 checkout 沒做／做錯不會有任何症狀（見
+    `buildstamp.require_commit`），期望值必須從外面帶進來。
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--expect", default="",
+        help="預期的 HEAD commit（短 hash 即可）；不符就中止，不產出 zip")
+    return parser.parse_args(argv).expect
+
+
 def main() -> None:
+    # 打包前先確認打的是要打的那個 commit——這道閘要在刪 stage 之前，
+    # 中止時不該留下半個產物目錄
+    head = require_commit(REPO, _expected_commit())
     stage = DIST / "chatroom-hub-kit"
     if stage.exists():
         shutil.rmtree(stage)
@@ -68,6 +91,7 @@ def main() -> None:
     size_kb = zip_path.stat().st_size // 1024
     print(f"✅ {zip_path}（{size_kb} KB）")
     report(info)
+    print(f"   worktree HEAD {head or '未知'}")
 
 
 if __name__ == "__main__":

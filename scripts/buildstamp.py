@@ -49,6 +49,35 @@ def stamp(repo: Path, target: Path, version: str,
     return info
 
 
+def require_commit(repo: Path, expected: str) -> str:
+    """打包前確認 HEAD 真的是要打的那個 commit；不符就中止。
+
+    在隔離 worktree 上打包解掉了「工作樹髒」那個失效，但換來一個更安靜的：
+    **checkout 沒做、做錯、或半途失敗**，而版號已經抬上去了——產物就是
+    「版號是新的、commit 是舊的」。`-dirty` 會自己喊出來，這個不會：它對得
+    回一個真實存在的 commit，只是錯的那個，`_build.json` 內部完全一致，
+    收件端驗不出來（測試端 2026-09-06 指出）。
+
+    所以期望值必須來自**打包指令**，不能來自被檢查的那棵樹——後者只能驗出
+    自我一致，而自我一致在上面那個情境裡照樣成立。
+
+    ⚠️ 問不出 HEAD 也是失敗。「查不到」與「相符」是兩件事，把前者當後者
+    等於在最需要這道閘的情況（不是 git 工作樹、git 壞了）下自動打開它。
+    """
+    head = git(repo, "rev-parse", "--short=12", "HEAD") or ""
+    if not expected:
+        return head  # 沒給期望值就照舊：這道閘是可選的
+    if not head:
+        raise SystemExit(
+            f"❌ 問不出 {repo} 的 HEAD，無法確認要打的是不是 {expected}。"
+            "打包中止——查不到不等於相符。")
+    if not (head.startswith(expected) or expected.startswith(head)):
+        raise SystemExit(
+            f"❌ 打包中止：worktree 的 HEAD 是 {head}，但指定要打的是 "
+            f"{expected}。checkout 是不是沒做或做錯了？")
+    return head
+
+
 def read_app_version(version_py: Path) -> str:
     """從 version.py 讀語意版本，不在兩個地方各寫一份。"""
     try:
