@@ -122,8 +122,18 @@ class ScratchpadApi {
       unwrap(() async {
         final res = await _dio.put<Map<String, dynamic>>(
           '/api/boards/$boardId/scratchpads/$padId/blocks/$blockId',
-          // ⚠️ `tags` 送的是**整份新值**，不是差異。改內容時沒把現有標籤
-          // 一起帶上就等於把它清掉——呼叫端要從 block 讀出來再送回去
+          // ⚠️ `tags` **一律送整份新值**，即使這次不是要改它。改內容時沒
+          // 把現有標籤一起帶上就等於把它清掉——呼叫端要從 block 讀出來再
+          // 送回去
+          //
+          // 🔴 **不要跟進 `state` 的做法。** Hub `0e1cae1` 之後 tags 也吃
+          // containsKey（沒送＝不動），照理可以省掉這一欄——但那只在**新
+          // Hub** 上成立。舊 Hub 的 `tags` 是 `default_factory=list`：沒送
+          // ＝空陣列＝清除。App 與 Hub 是分開更新的，新 App 打舊 Hub 的
+          // 那一刻，「改個錯字」就會把標籤清光，而且 200、沒有錯誤。
+          //
+          // `state` 沒有這個問題是因為它是**新欄位**：舊 Hub 根本沒有它，
+          // 送不送都不影響。差別在這裡，不在兩邊誰比較講究
           //
           // `state` 走的是另一套（Hub 判 `model_fields_set`）：**欄位不在
           // body 裡就是「不動」**。所以這裡是真的不放那個 key，不是放一個
