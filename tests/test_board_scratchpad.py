@@ -951,11 +951,10 @@ async def test_the_content_guard_is_untouched(tmp_path):
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "human_block_readonly"
 
-        # 標籤也還在守門後面——決策只放寬了狀態那一軸
-        r = await _write_raw(client, bid, pad, a_blk, b,
-                             {"content": "A 的想法", "tags": ["bug"],
-                              "rev": 1})
-        assert r.status_code == 403, r.text
+        # ⚠️ 這裡原本還有一條「標籤也還在守門後面」——**同一天稍後被推翻**
+        # （艾斯維爾裁定 tags 跟進放寬，卡 c2cd3c22）。斷言移到本檔末段的
+        # tags 那批，這裡只留 content 那一軸。
+        # **不是為了讓測試過而刪，是那條斷言跟著契約反了。**
 
 
 async def test_marking_still_needs_to_be_on_the_board(tmp_path):
@@ -1028,3 +1027,140 @@ async def test_an_archived_board_lets_nobody_mark(tmp_path):
 
         row = await _block(client, bid, pad, blk, hdr)
         assert row["can_set_state"] is False
+
+
+# ---------------------------------------------------------------------------
+# tags 的權限跟著 state 放寬（09/06 卡 c2cd3c22，艾斯維爾裁定）
+#
+# `f3ef764` 把 `state` 的守門拆出去時 `tags` 沒動，於是同一支 PUT 上有兩套
+# 權限：**agent 標得動別人段落的「結局」，標不動別人段落的「分類」。**
+#
+# 兩邊的論證當時等重（tags 是作者對自己想法的定性 vs 標籤同樣不動原文），
+# 艾斯維爾裁定跟進放寬。
+#
+# 🚨 **@測試Novia 撤回的那條結論是這批測試的由來**：他原本用「B 標 state
+# 不帶 tags → A 的 tags 保住了」證明 containsKey 生效，但**當時 B 根本改不動
+# A 的 tags**——保住有兩個可能的原因，那個實驗分不出來。放寬之後才驗得到。
+# 所以下面第二條是白箱的那一半：**在 B 真的有權限的前提下**再驗一次。
+# ---------------------------------------------------------------------------
+
+
+async def test_an_agent_can_now_retag_someone_elses_paragraph(tmp_path):
+    """別人的段落改得動標籤了。"""
+    app, client = await _client(tmp_path, "tags_cross_agent")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, _ = await _pad(client, bid, hdr)
+        blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法", "tags": ["bug"]}, headers=a)).json()["id"]
+
+        r = await _write_raw(client, bid, pad, blk, b,
+                             {"content": "A 的想法", "tags": ["design"],
+                              "rev": 1})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk, hdr))["tags"] == ["design"]
+
+
+async def test_containskey_still_holds_once_permission_is_open(tmp_path):
+    """🚨 **放寬與保護不可以在同一顆 commit 裡互相打開洞。**
+
+    放寬之前「B 不帶 tags → A 的 tags 不動」有兩個可能的成因：containsKey
+    語意，或**權限在守門處就把那個欄位丟掉了**。兩者結果一樣，分不出來。
+
+    現在 B 有權限了，所以這條驗的是真的語意：**有權改而選擇不送，仍然不動。**
+    """
+    app, client = await _client(tmp_path, "tags_containskey_with_perm")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, _ = await _pad(client, bid, hdr)
+        blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法", "tags": ["bug"]}, headers=a)).json()["id"]
+
+        # ⚠️ **先證明 B 真的有權改 tags**——少了這一步，下面那半在放寬前也
+        # 會綠（守門根本沒被觸發），而那正是被撤回的那個推論的形狀
+        r = await _write_raw(client, bid, pad, blk, b,
+                             {"content": "A 的想法", "tags": ["bug"],
+                              "rev": 1})
+        assert r.status_code == 200,             f"B 沒有改 tags 的權限，下面那半驗不到語意：{r.text}"
+
+        # 有權，而選擇不送
+        r = await _write_raw(client, bid, pad, blk, b,
+                             {"content": "A 的想法", "state": "implemented",
+                              "rev": 2})
+        assert r.status_code == 200, r.text
+        row = await _block(client, bid, pad, blk, hdr)
+        assert row["tags"] == ["bug"], "有權改而沒送，標籤還是被清掉了"
+        assert row["state"] == "implemented"
+
+
+async def test_sending_an_empty_list_still_clears(tmp_path):
+    """另一半：**送空就是清除**。
+
+    「不送」與「送空」必須分得出來——那是 containsKey 語意的全部內容，
+    而它只有在有權限之後才驗得到。
+    """
+    app, client = await _client(tmp_path, "tags_clear_with_perm")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, _ = await _pad(client, bid, hdr)
+        blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法", "tags": ["bug"]}, headers=a)).json()["id"]
+
+        r = await _write_raw(client, bid, pad, blk, b,
+                             {"content": "A 的想法", "tags": [], "rev": 1})
+        assert r.status_code == 200, r.text
+        assert (await _block(client, bid, pad, blk, hdr))["tags"] == []
+
+
+async def test_the_content_guard_is_still_the_only_thing_left(tmp_path):
+    """**原文仍然改不動。** 放寬到此為止。
+
+    三條軸現在的歸屬：content 走 `_block_guard`（不可逆），tags 與 state 走
+    板成員資格。少了這條，「把整道門拿掉」也會讓上面三條全綠。
+    """
+    app, client = await _client(tmp_path, "tags_content_still_guarded")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        a = await _add_agent(client, bid, hdr, "agent-a", "AgentA")
+        b = await _add_agent(client, bid, hdr, "agent-b", "AgentB")
+        pad, human_blk = await _pad(client, bid, hdr)
+        a_blk = (await client.post(
+            f"/api/boards/{bid}/scratchpads/{pad}/blocks",
+            json={"content": "A 的想法"}, headers=a)).json()["id"]
+
+        r = await _write_raw(client, bid, pad, a_blk, b,
+                             {"content": "B 亂改", "tags": ["design"],
+                              "rev": 1})
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "not_your_block"
+
+        r = await _write_raw(client, bid, pad, human_blk, a,
+                             {"content": "改人類的原文", "rev": 1})
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "human_block_readonly"
+
+
+async def test_a_viewer_still_cannot_retag(tmp_path):
+    """放寬到板成員，不是放寬到旁觀者——與 state 同一道門。"""
+    app, client = await _client(tmp_path, "tags_viewer_denied")
+    async with client, app.router.lifespan_context(app):
+        bid, hdr = await _human_board(client)
+        await client.post(f"/api/boards/{bid}/members",
+                          json={"actor_key": "watcher", "role": "viewer",
+                                "display_name": "旁觀", "actor_kind": "claude"},
+                          headers=hdr)
+        pad, blk = await _pad(client, bid, hdr)
+
+        r = await _write_raw(client, bid, pad, blk, _key("watcher"),
+                             {"content": "人類寫的第一段", "tags": ["bug"],
+                              "rev": 1})
+        assert r.status_code == 403, r.text

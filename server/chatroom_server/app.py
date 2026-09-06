@@ -7716,12 +7716,14 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _block_guard(block, me: dict) -> None:
         """agent 只能改**自己寫的**段落，其餘只能註解（艾斯維爾 2026-09-02）。
 
-        ⚠️ **這道門只管 `content` 與 `tags`，不管 `state`**（09/06 起）。
-        兩邊的理由不同，所以判準也不同：
+        ⚠️ **這道門只管 `content`**（09/06 兩次放寬之後）。三條軸的歸屬：
 
-        - `content` / `tags` 走這裡——**改寫會讓別人寫的東西消失**，不可逆
+        - `content` 走這裡——**改寫會讓別人寫的東西消失**，不可逆
         - `state` 走板成員資格（`can_set_state`）——它是在旁邊掛一個結論，
           不動任何人的原文，而且該標它的人幾乎不是寫它的人
+        - `tags` 同日稍後跟進（艾斯維爾裁定，卡 c2cd3c22）——標籤同樣不動
+          原文。原本一度只放寬 state，於是同一支 PUT 上有兩套權限：
+          **標得動別人段落的「結局」、標不動它的「分類」**
 
         呼叫端在 `write_scratchpad_block` 判斷「有沒有真的改到」才套用這道
         門，不是「有沒有送」——理由寫在那裡。
@@ -8017,20 +8019,6 @@ def create_app(config: Config | None = None) -> FastAPI:
             return []
         return [t for t in got if isinstance(t, str)]
 
-    def _tags_changed(body, block) -> bool:
-        """這次寫入有沒有真的動到標籤。
-
-        沒送 ⇒ 沒動。送了也要**比值**——送現值回來與不送在結果上一樣，
-        那不該被算成一次改動（見 `write_scratchpad_block` 的守門說明）。
-        """
-        if "tags" not in body.model_fields_set:
-            return False
-        try:
-            now = set(json.loads(block["tags"] or "[]"))
-        except (ValueError, TypeError):
-            now = set()
-        return set(body.tags or []) != now
-
     def _block_state(row) -> str:
         """段落的結局，舊列（migration 之前）沒有這欄時回空字串。"""
         return (row["state"] or "") if "state" in row.keys() else ""
@@ -8230,11 +8218,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         block = await _scratchpad_block_or_404(pad_id, block_id)
         # ⚠️ 判準是「**有沒有真的改到**」而不是「有沒有送」：App 送 PUT 時
         # 會把現值一起帶上，照「有送就擋」寫的話，UI 只要在標狀態時順手帶了
-        # tags，這道放寬就靜靜地失效了。
+        # 現值，這道放寬就靜靜地失效了。
         #
-        # ⚠️ 放寬的只有狀態那一軸。tags 仍在守門後面——決策沒裁它，而把整道
-        # 門跳過去會連原文一起放行。
-        if body.content != block["content"] or _tags_changed(body, block):
+        # `tags` 09/06 稍後也跟著放寬（艾斯維爾裁定，卡 c2cd3c22）：標籤同樣
+        # 不動任何人的原文。**剩下的只有 content**——那才是不可逆的那一個。
+        if body.content != block["content"]:
             _block_guard(block, me)
         db = app.state.db
         # 「有沒有送 state」是欄位在不在 body 裡，不是它的值——這兩件事在
