@@ -327,8 +327,9 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             content: b.content,
             rev: b.rev,
             tags: tag == null ? const [] : [tag],
-            // 改標籤不該動狀態——兩個正交的軸，帶上現值
-            state: b.state,
+            // 改標籤不該動狀態：**不送**就是不動（Hub 判 model_fields_set）。
+            // 送現值也會得到同樣的結果，但那要仰賴「改 state 一定升 rev」
+            // 這個前提；照契約用的話這條路徑根本不碰那一欄
           );
     } on ApiException catch (e) {
       if (mounted) {
@@ -406,8 +407,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             // 會順手把這一段的標籤清掉——不會報錯，只有下次去篩選時才發現
             // 它從分堆裡消失了
             tags: b.tags,
-            // 同上，狀態那個軸也一樣：改錯字不該把「已實作」弄不見
-            state: b.state,
+            // 狀態那一欄**不送**＝不動。它跟 tags 走的不是同一套語意：
+            // tags 是整份覆寫（所以上面那行非帶不可），state 走 containsKey
           );
       if (!mounted) return;
       setState(() => _editing = null);
@@ -463,8 +464,11 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             // 拿它去蓋會把對方剛改的標籤洗掉，而且不報錯
             // （審核用Codex 2026-09-05 用現行 API 重現）。
             tags: conflictTags(e.detail, fallback: b.tags),
-            // 同一個理由（見 [conflictState]）：這條路徑上的 b.state 必然舊
-            state: conflictState(e.detail, fallback: b.state),
+            // 🔴 **狀態不送。** 「保留我的」保留的是使用者剛打的那段內容，
+            // 不包括他根本沒碰的狀態欄；而衝突的定義就是「對方改過了」。
+            // 不送＝不動，對方剛標的自然留著——這正是 containsKey 語意比
+            // 整份覆寫好的地方：tags 得靠 conflictTags 特地把現值撈回來，
+            // state 什麼都不必做就是對的
           );
       if (!mounted) return;
       setState(() => _editing = null);

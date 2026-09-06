@@ -278,59 +278,61 @@ void main() {
       expect(b.isImplemented, isTrue);
     });
 
-    test('🔴 改內容時要把 state 一起送回去，否則它會悄悄消失', () async {
-      // 與 tags 同一個形狀：整份覆寫的端點上，「沒帶」等於「清掉」。
-      // Hub 端的語意還沒定案（沒送＝不動 vs 沒送＝清掉），而帶上現值在
-      // 兩種語意下都是對的——賭錯的代價是使用者改個錯字，狀態標記不見了，
-      // 而且不會有任何錯誤。
-      final canned = _Canned({'ok': true, 'rev': 3});
-      final api = ScratchpadApi(Dio(BaseOptions(baseUrl: 'http://test'))
-        ..httpClientAdapter = canned);
-      await api.writeBlock('b1', 'p1', 'blk1',
-          sessionKey: 'k', content: '改個錯字', rev: 2, state: 'implemented');
-      expect(canned.seen.single.data['state'], 'implemented');
+    // Hub 的語意（決策 09/06 裁定、`5674198` 實作）：
+    //   沒送＝不動、送 ""＝清除、送值＝設定
+    // 判準是 `model_fields_set`——**欄位在不在 body 裡**，不是它的值。
+    // 所以 client 這邊「不動」與「清除」必須真的送出不同的東西。
+    group('三態的寫入（containsKey 語意）', () {
+      ScratchpadApi api(_Canned c) => ScratchpadApi(
+          Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = c);
+
+      test('🔴 改內容時**不送** state——那是「不動」', () async {
+        // 送現值也能得到一樣的結果，但那要仰賴「改 state 一定會升 rev」
+        // 這個前提。真正照契約用的話，這條路徑根本不碰 state 那一欄。
+        final c = _Canned({'ok': true, 'rev': 3});
+        await api(c).writeBlock('b1', 'p1', 'blk1',
+            sessionKey: 'k', content: '改個錯字', rev: 2);
+        expect(c.seen.single.data.containsKey('state'), isFalse,
+            reason: '沒有要改狀態，就不該出現在那句 UPDATE 裡');
+      });
+
+      test('設定狀態送值', () async {
+        final c = _Canned({'ok': true, 'rev': 3});
+        await api(c).writeBlock('b1', 'p1', 'blk1',
+            sessionKey: 'k', content: 'x', rev: 2, state: 'implemented');
+        expect(c.seen.single.data['state'], 'implemented');
+      });
+
+      test('🔴 清除標記送空字串——不是把欄位省掉', () async {
+        // `null` 在這支 API 上是一個**合法值**（清除），不是「沒給」。
+        // 兩者用同一個表示法的話，清除這個動作就寫不出來了。
+        final c = _Canned({'ok': true, 'rev': 3});
+        await api(c).writeBlock('b1', 'p1', 'blk1',
+            sessionKey: 'k', content: 'x', rev: 2, state: null);
+        expect(c.seen.single.data.containsKey('state'), isTrue);
+        expect(c.seen.single.data['state'], '');
+      });
     });
 
-    test('清除標記送空字串，不是把欄位省掉', () async {
-      final canned = _Canned({'ok': true, 'rev': 3});
-      final api = ScratchpadApi(Dio(BaseOptions(baseUrl: 'http://test'))
-        ..httpClientAdapter = canned);
+    test('🔴 衝突重試不送 state——對方剛標的要留著', () async {
+      // 「保留我的」保留的是使用者剛打的那段內容，不包括他根本沒碰的
+      // 狀態欄；而衝突的定義就是「對方改過了」，本地那份必然舊。
+      //
+      // tags 得靠 conflictTags 特地把 409 帶回來的現值撈出來重送，state
+      // 什麼都不必做——**需要一個 conflict helper 這件事本身，就是整份
+      // 覆寫語意的成本**。這條測試釘的是那個差別。
+      final c = _Canned({'ok': true, 'rev': 4});
+      final api = ScratchpadApi(
+          Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = c);
+      // 「我看過了，還是要蓋掉」：用對方的 rev 重送自己的內容
       await api.writeBlock('b1', 'p1', 'blk1',
-          sessionKey: 'k', content: 'x', rev: 2, state: null);
-      expect(canned.seen.single.data.containsKey('state'), isTrue,
-          reason: '省掉欄位在「沒送＝不動」的語意下清不掉');
-      expect(canned.seen.single.data['state'], '');
-    });
-
-    group('衝突重試（與 conflictTags 同一條規則）', () {
-      test('409 帶了 fresh state 就用它，不用本地那份', () {
-        // 同一行程式碼、前提相反：`_save` 帶 b.state 是對的（剛編輯完），
-        // 複製到衝突路徑就錯了——衝突的定義就是「對方改過了」。
-        expect(
-          conflictState(
-            const {'content': '對方寫的', 'rev': 2, 'state': 'abandoned'},
-            fallback: 'implemented',
-          ),
-          'abandoned',
-          reason: '對方剛標成已放棄，重試不可以把它蓋回已實作',
-        );
-      });
-
-      test('409 明確說「現在沒標」也要照做', () {
-        // `''` 是一個值（對方把標記清掉了），不是「沒講」
-        expect(
-          conflictState(const {'state': ''}, fallback: 'implemented'),
-          isNull,
-        );
-      });
-
-      test('⚠️ 舊 Hub 不帶 state 時只能退回本地那份——那條路徑仍會覆蓋', () {
-        expect(
-          conflictState(const {'content': '對方寫的', 'rev': 2},
-              fallback: 'implemented'),
-          'implemented',
-        );
-      });
+          sessionKey: 'k',
+          content: '我的內容',
+          rev: 3,
+          tags: const ['bug']);
+      expect(c.seen.single.data.containsKey('state'), isFalse);
+      expect(c.seen.single.data['tags'], ['bug'],
+          reason: 'tags 是整份覆寫，那一欄非送不可');
     });
   });
 }

@@ -80,19 +80,12 @@ List<String> conflictTags(
   ];
 }
 
-/// 衝突重試時該送哪一個狀態。與 [conflictTags] 同一條規則、同一個理由：
-/// **衝突的定義就是「對方改過了」**，那條路徑上的本地值必然是舊的。
-///
-/// [detail] 帶 `state` 就用它——**含空字串**（那是「對方把標記清掉了」，
-/// 一個值，不是「沒講」）。沒帶才退回 [fallback]，同樣是已知的降級。
-String? conflictState(
-  Map<String, dynamic> detail, {
-  required String? fallback,
-}) {
-  if (!detail.containsKey('state')) return fallback;
-  final v = detail['state'];
-  return v is String && v.isNotEmpty ? v : null;
-}
+// 段落狀態**沒有**對應的 `conflictState()`，那是刻意的。
+//
+// 它走的是 containsKey 語意（不送＝不動），所以衝突重試什麼都不必做：
+// 不碰那一欄，對方剛標的自然留著。tags 得靠上面那支特地把現值撈回來，
+// 只是因為它是整份覆寫——**需要一個 conflict helper 這件事本身，就是那個
+// 語意的成本**。真要為 state 寫一支，寫出來的會是一個永遠不該被呼叫的函式。
 
 /// 刪不掉一個標籤時要對人說的那句話。
 ///

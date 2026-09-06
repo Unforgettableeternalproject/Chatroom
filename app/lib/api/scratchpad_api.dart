@@ -3,6 +3,13 @@ import 'package:dio/dio.dart';
 import '../models/scratchpad.dart';
 import 'api_client.dart';
 
+/// 「這次不要動段落狀態」的哨兵值。
+///
+/// 🔴 **不能用 `null` 表示這件事**——`null` 在那支 API 上是一個合法值
+/// （清除標記）。Hub 判的是欄位在不在 body 裡（`model_fields_set`），
+/// 兩者共用同一個表示法的話，「清除」這個動作就寫不出來了。
+const Object noStateChange = Object();
+
 /// 想法板與卡片追蹤。
 ///
 /// ⚠️ 一律走 `X-Session-Key` **標頭**。`/api/rooms` 那組是 query，照抄過來
@@ -110,7 +117,7 @@ class ScratchpadApi {
     required String content,
     required int rev,
     List<String> tags = const [],
-    String? state,
+    Object? state = noStateChange,
   }) =>
       unwrap(() async {
         final res = await _dio.put<Map<String, dynamic>>(
@@ -118,15 +125,14 @@ class ScratchpadApi {
           // ⚠️ `tags` 送的是**整份新值**，不是差異。改內容時沒把現有標籤
           // 一起帶上就等於把它清掉——呼叫端要從 block 讀出來再送回去
           //
-          // ⚠️ `state` 一律送，即使這次不是要改它。Hub 端的語意還沒定案
-          // （「沒送＝不動」還是「沒送＝清掉」），而**帶上現值在兩種語意
-          // 下都是對的**——賭其中一種的話，賭錯就是使用者改個錯字，段落
-          // 的狀態標記悄悄消失，而且不會有任何錯誤
+          // `state` 走的是另一套（Hub 判 `model_fields_set`）：**欄位不在
+          // body 裡就是「不動」**。所以這裡是真的不放那個 key，不是放一個
+          // 代表「不動」的值——後者在那個判準下等於「設定成這個值」
           data: {
             'content': content,
             'rev': rev,
             'tags': tags,
-            'state': state ?? '',
+            if (!identical(state, noStateChange)) 'state': state ?? '',
           },
           options: _h(sessionKey),
         );
