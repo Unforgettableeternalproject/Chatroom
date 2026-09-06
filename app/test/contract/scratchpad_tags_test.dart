@@ -151,43 +151,61 @@ void main() {
     });
   });
 
-  group('🔴 衝突重試不可以拿本地的舊標籤去蓋', () {
-    // 審核用Codex 2026-09-05 用現行 API 重現：另一端先把標籤改成 `bug`
-    // （rev 2）→ 舊內容寫入拿 409 → 依 UI 的「保留我的」retry 後 200，
-    // 但最終 tags 變回 `[]`。**資料損失級。**
-    //
-    // 怎麼進來的：`_save` 帶 `tags: b.tags` 是對的（剛編輯完，手上就是最新
-    // 的），那一行被複製到 `_resolveConflict`，而**衝突的定義就是「對方改過
-    // 了」**——那條路徑上的 `b` 必然是舊的。同一行程式碼，前提相反。
-    //
-    // 兩邊各自的測試都不會紅：兩條路徑都「有把 tags 送出去」。要有人真的
-    // 讓兩端交錯才看得見。
-    test('409 帶了 fresh tags 就用它，不用本地那份', () {
-      final tags = conflictTags(
-        const {'content': '對方寫的', 'rev': 2, 'tags': ['bug']},
-        fallback: const ['feature'],
-      );
-      expect(tags, ['bug'], reason: '對方剛改成 bug，重試不可以把它蓋回 feature');
+  // ── tags 也走 containsKey（卡 dfb98c7b，前提：不會再有舊 Hub 在跑）──
+  //
+  // 🔴 **不送 ≠ 送空陣列。** 新 Hub 的 containsKey 只在**真的不送**時才是
+  // 「不動」；送 `[]` 仍然是一個明確的清除。所以這裡不能回到「optional 帶
+  // 預設 `const []`」——那等於把 `be63474` 修掉的洞原樣裝回去。
+  group('tags 的三態寫入', () {
+    ScratchpadApi api(_Canned c) => ScratchpadApi(
+        Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = c);
+
+    test('🔴 改內容時**不送** tags——那是「不動」', () async {
+      final c = _Canned({'ok': true, 'rev': 3});
+      await api(c).writeBlock('b1', 'p1', 'blk1',
+          sessionKey: 'k', content: '改個錯字', rev: 2);
+      expect(c.seen.single.data.containsKey('tags'), isFalse,
+          reason: '沒有要改標籤，就不該出現在那句 UPDATE 裡');
     });
 
-    test('409 明確說「現在沒有標籤」也要照做', () {
-      // `[]` 是一個值（對方把標籤拿掉了），不是「沒講」
-      expect(
-        conflictTags(const {'tags': <String>[]}, fallback: const ['bug']),
-        isEmpty,
-      );
+    test('🔴 改標籤時真的送得出去（反向釘）', () async {
+      // 哨兵化之後「忘了帶」變成**動作靜默無效**——使用者按了標籤、什麼都
+      // 沒發生。那也是靜默失效，只是比清除輕。清除型與無效型都要有測試。
+      final c = _Canned({'ok': true, 'rev': 3});
+      await api(c).writeBlock('b1', 'p1', 'blk1',
+          sessionKey: 'k', content: 'x', rev: 2, tags: const ['bug']);
+      expect(c.seen.single.data['tags'], ['bug']);
     });
 
-    test('⚠️ 舊 Hub 不帶 tags 時只能退回本地那份——**那條路徑仍會覆蓋**', () {
-      // 沒有更好的選擇：API 要的是整份新值，不送等於清空（更糟）。
-      // 這是已知的降級，不是修好了——server 補上 409 帶 tags 之後這條
-      // fallback 就不會再被走到
-      expect(
-        conflictTags(const {'content': '對方寫的', 'rev': 2},
-            fallback: const ['feature']),
-        ['feature'],
-      );
+    test('🔴 清除標籤送空陣列——不是把欄位省掉', () async {
+      final c = _Canned({'ok': true, 'rev': 3});
+      await api(c).writeBlock('b1', 'p1', 'blk1',
+          sessionKey: 'k', content: 'x', rev: 2, tags: const <String>[]);
+      expect(c.seen.single.data.containsKey('tags'), isTrue,
+          reason: '省掉欄位在 containsKey 語意下清不掉');
+      expect(c.seen.single.data['tags'], isEmpty);
     });
+  });
+
+  test('🔴 衝突重試不送 tags——對方剛改的要留著', () async {
+    // 2026-09-05 這條路徑真的丟過資料：`_save` 帶 `tags: b.tags` 是對的
+    // （剛編輯完，手上就是最新的），那一行被複製到 `_resolveConflict`，
+    // 而**衝突的定義就是「對方改過了」**——那條路徑上的 `b` 必然是舊的。
+    // 同一行程式碼，前提相反。兩邊各自的測試都不會紅（兩條路徑都「有把
+    // tags 送出去」），要有人真的讓兩端交錯才看得見。
+    //
+    // 當時的修法是一支 `conflictTags()`（把 409 帶回來的現值撈出來重送）。
+    // **tags 改走 containsKey 之後，正確答案變成「什麼都不送」**——不動就
+    // 是不動，那支函式連存在的理由都沒有了。
+    final c = _Canned({'ok': true, 'rev': 4});
+    final api = ScratchpadApi(
+        Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = c);
+    // 「我看過了，還是要蓋掉」：用對方的 rev 重送自己的內容
+    await api.writeBlock('b1', 'p1', 'blk1',
+        sessionKey: 'k', content: '我的內容', rev: 3);
+    expect(c.seen.single.data.containsKey('tags'), isFalse);
+    expect(c.seen.single.data.containsKey('state'), isFalse,
+        reason: '兩欄同一個理由，沒有一個需要 conflict helper');
   });
 
   group('板自訂標籤', () {

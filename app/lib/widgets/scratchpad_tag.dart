@@ -52,48 +52,16 @@ List<String> removableTags({
   ];
 }
 
-/// 衝突重試時該送哪一份標籤。
-///
-/// 🔴 **不可以送本地那份。** `_save` 帶 `b.tags` 是對的（剛編輯完，手上就是
-/// 最新的），但**衝突的定義就是「對方改過了」**——那條路徑上的 `b` 必然是
-/// 舊的。同一行程式碼，前提相反。
-///
-/// 審核用Codex 2026-09-05 用現行 API 重現：另一端把標籤改成 `bug`（rev 2）
-/// → 舊內容寫入拿 409 → 依 UI 的「保留我的」retry 後 200，**最終 tags 變回
-/// `[]`**。兩端各自的測試都不會紅（兩條路徑都「有把 tags 送出去」），要有人
-/// 真的讓兩端交錯才看得見。
-///
-/// [detail] 是 409 `scratchpad_block_stale` 的 detail。它帶 `tags` 就用它
-/// ——**含 `[]`**（那是「對方把標籤拿掉了」，一個值，不是「沒講」）。
-///
-/// ⚠️ [fallback] 只在**舊 Hub 不帶這一欄**時走到，而**那條路徑仍然會覆蓋**。
-/// 沒有更好的選擇：API 要的是整份新值，不送等於清空（更糟）。這是已知的
-/// 降級，不是修好了。
-List<String> conflictTags(
-  Map<String, dynamic> detail, {
-  required List<String> fallback,
-}) {
-  if (!detail.containsKey('tags')) return fallback;
-  return [
-    for (final t in (detail['tags'] as List?) ?? const [])
-      if (t is String && t.isNotEmpty) t,
-  ];
-}
-
-// 段落狀態**沒有**對應的 `conflictState()`，那是刻意的。
+// 這裡曾經有一支 `conflictTags()`：衝突重試時把 409 帶回來的現值撈出來
+// 重送，因為當時 tags 是整份覆寫語意，不送等於清空（2026-09-05 真的丟過
+// 一次資料——兩端各自的測試都不會紅，要有人讓兩端交錯才看得見）。
 //
-// 它走的是 containsKey 語意（不送＝不動），所以衝突重試什麼都不必做：
-// 不碰那一欄，對方剛標的自然留著。**需要一個 conflict helper 這件事本身，
-// 就是整份覆寫語意的成本**——真要為 state 寫一支，寫出來的會是一個永遠不
-// 該被呼叫的函式。
+// 🔴 **tags 改走 containsKey 之後（09/06 `dfb98c7b`），那支函式連存在的
+// 理由都沒有了**：不送就是不動，對方剛改的自然留著。
 //
-// 🔴 **Hub `0e1cae1` 之後 tags 也吃 containsKey 了，這支仍然留著。**
-// 那不是漏刪：App 與 Hub 分開更新，新 App 打舊 Hub 時「不送 tags」＝清除
-// （舊 model 是 `default_factory=list`）。所以 UI 這邊仍然一律送整份值，
-// 而只要還在送，衝突重試就仍然需要它把對方剛改的那份撈回來。
-//
-// 要拿掉這支的前提是**確定沒有舊 Hub 在跑**，那是部署面的判斷，不是這裡
-// 能決定的。
+// 📌 留著它作為紀錄，是因為這個對比值得下一個人看到——**需要一個 conflict
+// helper 這件事本身，就是整份覆寫語意的成本**。同一段路，state 從第一天就
+// 走 containsKey，所以從來不需要那支函式。
 
 /// 刪不掉一個標籤時要對人說的那句話。
 ///

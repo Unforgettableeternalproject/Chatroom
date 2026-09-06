@@ -10,6 +10,14 @@ import 'api_client.dart';
 /// 兩者共用同一個表示法的話，「清除」這個動作就寫不出來了。
 const Object noStateChange = Object();
 
+/// 「這次不要動段落標籤」的哨兵值。同 [noStateChange] 的理由。
+///
+/// 🔴 **不送 ≠ 送空陣列。** containsKey 只在**真的不送**時才是「不動」；
+/// 送 `[]` 仍然是一個明確的清除。所以這一欄不能回到「optional 帶預設
+/// `const []`」——那個寫法會讓「忘了帶」等於清空標籤，而它 09/06 才在
+/// bridge 那一側真的丟過資料（卡 `c22ca1b4`）。
+const Object noTagsChange = Object();
+
 /// 想法板與卡片追蹤。
 ///
 /// ⚠️ 一律走 `X-Session-Key` **標頭**。`/api/rooms` 那組是 query，照抄過來
@@ -110,19 +118,14 @@ class ScratchpadApi {
   /// 而那正是 CAS 要擋的那件事。改不動時 Hub 回 409 `scratchpad_block_stale`
   /// 並附上**現值的 content 與 rev**——那兩個是衝突畫面唯一的材料。
   ///
-  /// ⚠️ [tags] **必填，理由與 [rev] 一模一樣**：預設 `const []` 會讓「忘了
-  /// 帶」變成一次靜默的清除——200 回來、兩邊都沒有錯誤訊息，下次去篩選才
-  /// 發現標籤從分堆裡消失了。那正是 `c22ca1b4` 的形狀（bridge 的
+  /// [tags] 與 [state] 都走**哨兵**：不傳＝不動、傳值＝設定、傳空＝清除。
+  /// 見 [noTagsChange] / [noStateChange]——`null` 與 `[]` 在這支 API 上都是
+  /// **合法值**（清除），所以「沒給」需要另一個表示法。
+  ///
+  /// 🔴 **不要為了「方便」給它們預設值。** 預設 `const []` 會讓「忘了帶」
+  /// 變成一次靜默的清除，而那正是 `c22ca1b4` 的形狀：bridge 的
   /// `chatroom_scratchpad_edit` 只送 content 與 rev，於是 agent 每一次改寫
-  /// 段落都把標籤清成空）。**必填讓同一件事在這裡是編譯錯誤，不是資料遺失。**
-  ///
-  /// 📌 **這道防線防的是舊 Hub，新 Hub 上它是冗餘的。** `0e1cae1` 之後
-  /// server 的 tags 也吃 containsKey（不送＝不動，測試端 09/06 實測），所以
-  /// 在新 Hub 上「忘了帶」什麼事都不會發生。舊 Hub 的 `default_factory=list`
-  /// 才是那個會清空的版本，而 App 與 Hub 是分開更新的。
-  ///
-  /// 冗餘不等於沒用——但**別讓下一個人以為新 Hub 需要它**，那會讓他在讀
-  /// `dfb98c7b`（等沒有舊 Hub 再簡化）時對不上帳。
+  /// 段落都把標籤清成空——200 回來、兩邊都沒有錯誤訊息。
   Future<int> writeBlock(
     String boardId,
     String padId,
@@ -130,32 +133,24 @@ class ScratchpadApi {
     required String sessionKey,
     required String content,
     required int rev,
-    required List<String> tags,
+    Object? tags = noTagsChange,
     Object? state = noStateChange,
   }) =>
       unwrap(() async {
         final res = await _dio.put<Map<String, dynamic>>(
           '/api/boards/$boardId/scratchpads/$padId/blocks/$blockId',
-          // ⚠️ `tags` **一律送整份新值**，即使這次不是要改它。改內容時沒
-          // 把現有標籤一起帶上就等於把它清掉——呼叫端要從 block 讀出來再
-          // 送回去
+          // Hub 判的是 `model_fields_set`——**欄位不在 body 裡就是「不動」**。
+          // 所以這裡是真的不放那個 key，不是放一個代表「不動」的值：後者在
+          // 那個判準下等於「設定成這個值」，而對 tags 來說那個值是清空。
           //
-          // 🔴 **不要跟進 `state` 的做法。** Hub `0e1cae1` 之後 tags 也吃
-          // containsKey（沒送＝不動），照理可以省掉這一欄——但那只在**新
-          // Hub** 上成立。舊 Hub 的 `tags` 是 `default_factory=list`：沒送
-          // ＝空陣列＝清除。App 與 Hub 是分開更新的，新 App 打舊 Hub 的
-          // 那一刻，「改個錯字」就會把標籤清光，而且 200、沒有錯誤。
-          //
-          // `state` 沒有這個問題是因為它是**新欄位**：舊 Hub 根本沒有它，
-          // 送不送都不影響。差別在這裡，不在兩邊誰比較講究
-          //
-          // `state` 走的是另一套（Hub 判 `model_fields_set`）：**欄位不在
-          // body 裡就是「不動」**。所以這裡是真的不放那個 key，不是放一個
-          // 代表「不動」的值——後者在那個判準下等於「設定成這個值」
+          // 📌 兩欄的降級方向不同，但寫法一樣：`state` 是新欄位（舊 Hub 沒
+          // 有它，送不送都不影響），`tags` 在舊 Hub 上是整份覆寫（不送＝
+          // 清除）。**這個寫法只在確認沒有舊 Hub 之後才安全**——艾斯維爾
+          // 09/06 確認不會再起舊版，卡 `dfb98c7b` 才動的
           data: {
             'content': content,
             'rev': rev,
-            'tags': tags,
+            if (!identical(tags, noTagsChange)) 'tags': tags ?? const <String>[],
             if (!identical(state, noStateChange)) 'state': state ?? '',
           },
           options: _h(sessionKey),
