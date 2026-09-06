@@ -60,11 +60,12 @@ class ScratchpadBlock {
     this.authorName = '',
     this.authorKind = '',
     this.canEdit = false,
+    bool? canSetState,
     this.tags = const [],
     this.state,
     this.notes = const [],
     this.updatedAt,
-  });
+  }) : canSetState = canSetState ?? canEdit;
 
   final String id;
   final String content;
@@ -80,7 +81,25 @@ class ScratchpadBlock {
 
   /// ⚠️ **伺服器算好的守門結果，不要自己推斷。** client 自己算的話兩邊的
   /// 規則會漂移，而漂移的那一半沒有人在看：畫面給了編輯框、送出時 403。
+  ///
+  /// 這一個答的是**改內容**（`_block_guard`：只有作者本人，人類不設限）。
+  /// 標狀態走另一道門，見 [canSetState]。
   final bool canEdit;
+
+  /// 標得動這一段的**狀態**嗎（決策 09/06 放寬到板成員）。
+  ///
+  /// 🔴 **與 [canEdit] 是兩道門，不可以共用一個判斷。** `_block_guard` 保護
+  /// 的是不可逆的原文；標狀態不動任何人的原文，它是在旁邊掛一個結論。共用
+  /// 的話「決定放棄」只有原作者做得到——而寫原文的人正好是最不需要標它的人
+  /// （監督者連自己裁定要放棄的段落都標不動）。
+  ///
+  /// ⚠️ 畫面上要看得出這是兩道門：別人寫的段落上「＋狀態」在、編輯與刪除
+  /// 不在。**整排入口一起出現或一起消失，就表示 UI 只問了一個 [canEdit]。**
+  ///
+  /// 舊 Hub 不回這一欄時退回 [canEdit]——那正是放寬之前的規則，是舊行為的
+  /// 等價物。預設 `true` 會在舊 Hub 上畫出必然 403 的入口，預設 `false` 則
+  /// 連作者自己都標不動。
+  final bool canSetState;
 
   /// 這個段落被標成什麼（Bug／新功能／…）。
   ///
@@ -131,6 +150,8 @@ class ScratchpadBlock {
         authorName: (json['author_name'] as String?) ?? '',
         authorKind: (json['author_kind'] as String?) ?? '',
         canEdit: (json['can_edit'] as bool?) ?? false,
+        // 舊 Hub 沒這一欄 ⇒ null ⇒ 建構子退回 can_edit（放寬之前的規則）
+        canSetState: json['can_set_state'] as bool?,
         tags: [
           for (final t in (json['tags'] as List<dynamic>? ?? const []))
             if (t is String && t.isNotEmpty) t,

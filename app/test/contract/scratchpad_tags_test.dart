@@ -278,6 +278,30 @@ void main() {
       expect(b.isImplemented, isTrue);
     });
 
+    group('誰標得動（`can_set_state`，決策 #95 放寬）', () {
+      test('🔴 別人寫的段落：內容改不動，但狀態標得動', () {
+        // 兩道門判的是兩件事——`_block_guard` 保護的是不可逆的原文，
+        // 標狀態不動任何人的原文。共用一道門的話「決定放棄」只有原作者
+        // 做得到，而那正好是最不需要標它的人。
+        final b = block(const {'can_edit': false, 'can_set_state': true});
+        expect(b.canEdit, isFalse);
+        expect(b.canSetState, isTrue);
+      });
+
+      test('viewer／封存的板：兩個都不行', () {
+        final b = block(const {'can_edit': false, 'can_set_state': false});
+        expect(b.canSetState, isFalse);
+      });
+
+      test('🔴 舊 Hub 不回這一欄時退回 can_edit，不是預設放行', () {
+        // 這一欄是新的。缺了它而預設 true 的話，UI 會在舊 Hub 上畫出一個
+        // 按下去必然 403 的入口——而預設 false 又會讓連作者自己都標不動。
+        // 退回 `can_edit` 是舊行為的等價物：那正是放寬之前的規則。
+        expect(block(const {'can_edit': true}).canSetState, isTrue);
+        expect(block(const {'can_edit': false}).canSetState, isFalse);
+      });
+    });
+
     // Hub 的語意（決策 09/06 裁定、`5674198` 實作）：
     //   沒送＝不動、送 ""＝清除、送值＝設定
     // 判準是 `model_fields_set`——**欄位在不在 body 裡**，不是它的值。

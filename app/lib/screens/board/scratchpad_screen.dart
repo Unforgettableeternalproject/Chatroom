@@ -283,8 +283,11 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         onDelete: pad.canEdit && b.canEdit ? () => _delete(b) : null,
         allowedTags: _allowedTags,
         onSetTag: pad.canEdit && b.canEdit ? (t) => _setTag(b, t) : null,
-        onSetState:
-            pad.canEdit && b.canEdit ? (v) => _setState(b, v) : null,
+        // 🔴 **不是 `b.canEdit`。** 標狀態走另一道門（見 [canSetState]）：
+        // 別人寫的段落改不動內容，但標得動它後來怎麼了。用 canEdit 擋的話，
+        // server 放寬了、畫面不給，功能做了卻沒有人找得到。
+        // pad 層的可寫已經包在 server 那個判準裡，不必再 &&
+        onSetState: b.canSetState ? (v) => _setState(b, v) : null,
       );
 
   /// 管理這塊板的自訂標籤。
