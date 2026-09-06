@@ -681,3 +681,83 @@ async def test_a_board_member_may_claim_without_being_in_a_room(tmp_path):
                               headers={"X-Session-Key": "agent-remote"})
         assert r.status_code == 200, r.text
         assert (await _task(client, rid, hdr, tid))["claim_state"] == "held"
+
+
+# ---------------------------------------------------------------------------
+# 同名不同世：錯誤訊息要說得出差別（09/06 卡 13661deb，@開發Novia (UI) 實測）
+#
+# 復現：session A 認領後結束；同一個 display_name 的 session B 進房（新
+# session_key），對那張卡 release ⇒ 403「這張卡由 開發Novia (UI) 持有」——
+# **而呼叫者的名字就是它**。訊息讀起來等於「你不是你」。
+#
+# 認領綁 session_key 是對的（`_is_claim_holder` 已修過跨房問題），錯的是
+# 訊息只投影出 display_name。名字在房內唯一，但**只在 active 成員之間**——
+# 前一世離開後名字就釋出了，下一世拿得回同一個名字。
+# ---------------------------------------------------------------------------
+
+
+async def test_a_namesake_is_told_it_is_another_session(tmp_path):
+    """同名不同 session 時，訊息要明講那是另一個 session。"""
+    app, client = await _client(tmp_path, "namesake_release")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        assert (await client.post(f"/api/board/tasks/{tid}/claim",
+                                  headers=hdr)).status_code == 200
+        # ⚠️ 卡要先收尾：**已 done 的卡不會被孤兒化**（09/03 那條修法），
+        # 認領停在 held。未收尾的卡在持有者離開時會變 orphaned，那時 release
+        # 走的是另一條（409 not_claimed）——UI 撞到的正是前者
+        await client.post(f"/api/board/tasks/{tid}/status",
+                          json={"status": "done"}, headers=hdr)
+        # 前一世走了，名字釋出
+        await client.post(f"/api/rooms/{rid}/leave", headers=hdr)
+        # 下一世用同一個名字回來（新 session_key）
+        again, _ = await _join_and_add_to_board(client, rid, "agent-2", "Novia")
+
+        r = await client.post(f"/api/board/tasks/{tid}/release", headers=again)
+        assert r.status_code == 403, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "not_claim_holder"
+        assert "另一個" in detail["message"],             f"訊息讀起來像「你不是你」：{detail['message']}"
+        # 結構化欄位讓 client 不必解析中文
+        assert detail["held_by_same_name"] is True
+
+
+async def test_a_different_name_reads_as_before(tmp_path):
+    """不同名時維持原本的說法——**放寬的只有同名那一格**。
+
+    寫成明確的斷言是因為最容易的寫法是「一律改成新句子」，那會讓正常情況
+    的訊息多出一個沒有意義的「另一個 session」。
+    """
+    app, client = await _client(tmp_path, "namesake_normal")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=hdr)
+        other, _ = await _join_and_add_to_board(client, rid, "agent-9", "Miller")
+
+        r = await client.post(f"/api/board/tasks/{tid}/release", headers=other)
+        assert r.status_code == 403, r.text
+        detail = r.json()["detail"]
+        assert "另一個" not in detail["message"]
+        assert detail["held_by_same_name"] is False
+
+
+async def test_the_same_signal_reaches_the_claim_conflict(tmp_path):
+    """認領衝突那條也帶同一個旗標。
+
+    「已經被『你自己』領走了」是同一個誤導的另一個入口——而它多半是上一世。
+
+    ⚠️ 三處各寫一份判斷的話，改了一處另外兩處會靜靜地留在舊說法上，而
+    「訊息不一致」不會有任何測試或使用者報上來。所以判準抽成一支共用。
+    """
+    app, client = await _client(tmp_path, "namesake_claim")
+    async with app.router.lifespan_context(app), client:
+        rid, hdr, tid = await _room_with_task(client)
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=hdr)
+        await client.post(f"/api/board/tasks/{tid}/status",
+                          json={"status": "done"}, headers=hdr)
+        await client.post(f"/api/rooms/{rid}/leave", headers=hdr)
+        again, _ = await _join_and_add_to_board(client, rid, "agent-2", "Novia")
+
+        r = await client.post(f"/api/board/tasks/{tid}/claim", headers=again)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["held_by_same_name"] is True

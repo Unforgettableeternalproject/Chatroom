@@ -3979,6 +3979,33 @@ def create_app(config: Config | None = None) -> FastAPI:
             return ""
         return (row["board_id"] or "").strip()
 
+    def _holder_hint(row, me) -> tuple[str, bool]:
+        """「這張卡由誰持有」要怎麼說，以及那是不是**同名的另一個 session**。
+
+        名字在房內唯一，但**只在 active 成員之間**——前一世離開後名字就釋出
+        了，下一世拿得回同一個名字。於是「這張卡由 開發Novia (UI) 持有」會
+        出現在一個**自己就叫這個名字**的人面前，讀起來等於「你不是你」
+        （09/06 卡 13661deb，實測復現）。
+
+        認領綁 session_key 是對的，錯的是訊息只投影出 display_name。所以這裡
+        只補**可辨識性**，不動綁定語意。
+
+        回 `(說法, 同名旗標)`。旗標一起往外送，client 才不必解析中文——
+        三處守門共用這一份，各寫一份句子的話改了一處另外兩處會靜靜留在舊
+        說法上，而「訊息不一致」不會有任何人報上來。
+        """
+        name = (row["claim_name"] or "").strip()
+        same_name = bool(name) and name == (me.get("display_name") or "").strip()
+        if not name:
+            return "由別人持有", False
+        if not same_name:
+            return f"由 {name} 持有", False
+        # 時間用 UTC 原樣的 HH:MM，並標明時區——猜對方在哪個時區只會更糟
+        when = (row["claimed_at"] or "")[11:16]
+        at = f"於 {when} UTC " if when else ""
+        return (f"由**同名的另一個 session**（{name}）{at}持有——"
+                "認領綁的是 session 不是名字，你這一世不是領走它的那一個"), True
+
     def _is_claim_holder(row, me) -> bool:
         """這張卡是不是**你**持有的。
 
@@ -4684,9 +4711,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有建立者、目前的認領者或人類成員可以取消這張卡")
         if not human and row["claim_state"] == "held" \
                 and not _is_claim_holder(row, me):
+            hint, same_name = _holder_hint(row, me)
             raise _err(403, "not_claim_holder",
-                       f"這張卡由 {row['claim_name'] or '別人'} 持有，"
-                       "只有持有者本人或人類成員可以推動它")
+                       f"這張卡{hint}，"
+                       "只有持有者本人或人類成員可以推動它",
+                       held_by_same_name=same_name,
+                       claim_name=row["claim_name"] or "")
         db = app.state.db
         seq = await _item_seq(row)
         done = body.status == "done"
@@ -5885,9 +5915,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                     payload={"held_by": current["claim_name"],
                              "claim_state": current["claim_state"]})
             await _commit_with_retry(db)
+            _, same_name = _holder_hint(current, me)
             raise _err(409, "task_already_claimed",
                        "這張卡已經有人在做，或它已經完成／取消了",
                        claim_name=current["claim_name"],
+                       # 同名那一格在這裡一樣會發生：「已經被『你自己』領走
+                       # 了」——而那多半是上一世
+                       held_by_same_name=same_name,
                        claim_state=current["claim_state"],
                        task_status=current["status"])
         await _record_board_event(
@@ -5917,9 +5951,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row["claim_state"] != "held":
             raise _err(409, "not_claimed", "這張卡目前沒有人持有")
         if not _is_claim_holder(row, me) and me["role"] != "human":
+            hint, same_name = _holder_hint(row, me)
             raise _err(403, "not_claim_holder",
-                       f"這張卡由 {row['claim_name'] or '別人'} 持有——"
-                       "只有持有者本人或人類成員可以解除認領")
+                       f"這張卡{hint}——"
+                       "只有持有者本人或人類成員可以解除認領",
+                       held_by_same_name=same_name,
+                       claim_name=row["claim_name"] or "")
         db = app.state.db
         seq = await _item_seq(row)
         await db.execute(
