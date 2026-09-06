@@ -126,5 +126,19 @@ class Config:
     question_ttl: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_QUESTION_TTL", "180"))
     )
+    # 除錯端點閘門（`/api/_debug/*`）。**預設關，正式組態不可達。**
+    # 存在的唯一理由：`error_id` 那條正向路徑（未攔截例外 → 500 帶 id →
+    # traceback 落 hub.jsonl）在真進程上從來沒被外部觸發過，只有單元測試
+    # 背書——而單元測試跑的是 in-process ASGI，量不到「回報問題的人手上
+    # 看到什麼」。要驗它就需要一條**已知會炸**的路徑。
+    #
+    # 🚨 開著等於對持有 token 的人開放一個必定 500 的端點。它不洩漏內容
+    # （例外訊息本來就不進回應），但會在日誌裡製造雜訊，而且是刻意留下的
+    # 洞——所以要環境變數明確打開，且 Hub 啟動時會把這件事印出來
+    debug_endpoints: bool = field(
+        default_factory=lambda: os.environ.get(
+            "CHATROOM_DEBUG_ENDPOINTS", "0").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
     # long-poll 最長掛起秒數上限
     max_poll_timeout: float = 55.0

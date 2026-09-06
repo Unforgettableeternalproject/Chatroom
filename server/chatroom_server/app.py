@@ -11009,4 +11009,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             "max_attachment_bytes": cfg.max_attachment_bytes,
         }
 
+    if cfg.debug_endpoints:
+        # 🚨 刻意留下的洞，只在 `CHATROOM_DEBUG_ENDPOINTS` 明確打開時才存在。
+        #
+        # 為什麼需要它：H16 那條「未攔截例外 → 500 帶 `error_id` → traceback
+        # 落 hub.jsonl」在真進程上從來沒被外部觸發過。單元測試是在測試裡臨時
+        # 掛一條路由上去驗的——那條路徑正式進程裡不存在，所以那份綠燈證明的
+        # 是 handler 的邏輯，不是「回報問題的人打得到、而且兩端串得起來」。
+        #
+        # 關著的時候是 **404 而不是 403**：預設關的意思是連「這裡有東西」都
+        # 不說。開著的時候仍要 token——它不該比其他端點好進。
+        @app.get("/api/_debug/boom", dependencies=[Depends(require_auth)])
+        async def _debug_boom():
+            raise RuntimeError("除錯端點：故意在這裡炸，用來驗 error_id 的正向路徑")
+
+        logger.warning(
+            "除錯端點已啟用（CHATROOM_DEBUG_ENDPOINTS）：GET /api/_debug/boom "
+            "會**必定回 500**，用於驗證 error_id 正向路徑。正式部署請關掉。",
+            extra={"event": "debug_endpoints_enabled"},
+        )
+
     return app
