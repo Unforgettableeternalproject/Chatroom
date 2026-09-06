@@ -293,6 +293,27 @@ void main() {
         expect(b.canSetState, isFalse);
       });
 
+      test('🔴 狀態標得動、標籤標不動的時候，畫面要說得出為什麼', () {
+        // 決策 09/06：tags 的權限今天不跟著 state 放寬。結果是兩顆同形、
+        // 並排、一樣大的 chip，一顆點得動一顆點不動——**不說的話那看起來
+        // 就是壞了**，而使用者會反覆去點那顆沒反應的。
+        expect(
+          tagLockedReason(canEdit: false, canSetState: true),
+          isNotEmpty,
+        );
+      });
+
+      test('能改的時候不必說', () {
+        expect(tagLockedReason(canEdit: true, canSetState: true), isEmpty);
+      });
+
+      test('🔴 整塊板唯讀時也不說——那不是「被擋」', () {
+        // viewer／封存板：旁邊的「＋狀態」也不在，沒有並排的對照。
+        // 「被擋」與「這裡本來就沒有這個功能」是兩種訊息，對後者解釋
+        // 等於在對一個沒有人期待的東西道歉。
+        expect(tagLockedReason(canEdit: false, canSetState: false), isEmpty);
+      });
+
       test('🔴 舊 Hub 不回這一欄時退回 can_edit，不是預設放行', () {
         // 這一欄是新的。缺了它而預設 true 的話，UI 會在舊 Hub 上畫出一個
         // 按下去必然 403 的入口——而預設 false 又會讓連作者自己都標不動。

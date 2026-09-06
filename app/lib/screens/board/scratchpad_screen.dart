@@ -925,6 +925,10 @@ class _BlockCardState extends State<_BlockCard> {
             tag: b.tag,
             allowed: widget.allowedTags,
             onPick: widget.onSetTag,
+            // 標籤與狀態的權限不同（決策 09/06：state 放寬、tags 沒有），
+            // 而兩顆 chip 同形同大並排——不說的話那看起來就是壞了
+            lockedReason: tagLockedReason(
+                canEdit: b.canEdit, canSetState: b.canSetState),
           ),
           if (b.tag != null || widget.allowedTags.isNotEmpty)
             const SizedBox(width: 6),
