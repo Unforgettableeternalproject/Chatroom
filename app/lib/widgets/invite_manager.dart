@@ -11,10 +11,31 @@ import '../state/app_providers.dart';
 import '../state/assignments_providers.dart';
 import 'uep_button.dart';
 
+/// 發不出邀請時要說的話（d49687c5）。
+///
+/// 🔴 `root_token_required` 現在有**兩種來源**，而 Hub 兩種都回同一個 code：
+///
+/// 1. 這台 Hub 由別人主持——發放權留在他那裡（舊的那種）
+/// 2. **手上這張憑證的 audience 是 human，而 human ≠ root**（2026-09-07 的
+///    憑證分離之後才有的；除錯與 Hub 各實打確認過）
+///
+/// App 分不出是哪一種——它看不到自己那把 token 的 audience（要看得到得動
+/// server，另開卡）。所以這句話寫成**兩種都成立**的講法：講「這張憑證」
+/// 而不是「你不是主持人」。後者在第 2 種情況下是錯的，而那正是艾斯維爾
+/// 換完憑證後會遇到的那一種。
+///
+/// ⚠️ 決策 09/07 裁：按鈕留著，用「錯誤講人話」除罪，不做入口隱藏。
+String inviteErrorText(Object error) => switch (error) {
+      RootTokenRequiredException() =>
+        '這張憑證發不了邀請——邀請要用主憑證從伺服器端發（已知限制，不是故障）。',
+      ApiException(:final message) => message,
+      _ => '無法讀取已發出的邀請',
+    };
+
 /// 設定頁的「邀請成員」區塊：發一份邀請給還沒連上 Hub 的人，以及收回已發出的。
 ///
-/// 只有 Hub 主持人（`.env` 那把主 token）能用；其他人拿到 403，這裡把它畫成
-/// 說明而不是錯誤——「這台不是你主持的」不是故障。
+/// 只有持主憑證的人能用；其他人拿到 403，這裡把它畫成說明而不是錯誤
+/// ——「這張憑證發不了邀請」不是故障。
 class InviteManager extends ConsumerStatefulWidget {
   const InviteManager({super.key});
 
@@ -43,7 +64,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(inviteErrorText(e))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -217,12 +238,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: UepColors.gold)))),
         error: (e, _) => Text(
-          // 不是故障：這台 Hub 由別人主持，發放權留在他那裡
-          e is RootTokenRequiredException
-              ? '只有 Hub 主持人能發放與撤銷邀請。'
-              : e is ApiException
-                  ? e.message
-                  : '無法讀取已發出的邀請',
+          // 不是故障。兩處共用同一份文案——分開寫的話，同一個 403 會在
+          // 「按下去」與「讀清單」上講出兩句不同的話
+          inviteErrorText(e),
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
         ),
         data: (tokens) => tokens.isEmpty
