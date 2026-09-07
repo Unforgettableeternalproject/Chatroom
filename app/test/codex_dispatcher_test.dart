@@ -578,4 +578,65 @@ void main() {
     expect(runs, isEmpty);
     expect(d.pendingCount, 1, reason: '留著等它出現過一次 lock');
   });
+
+  /// 🔴 忙碌期間的加入事件逐筆入列（原卡 1e3ce054）。
+  ///
+  /// `codex queue` 的 exit 0 只代表接受入列，CLI 沒有 replace/dedupe/cancel——
+  /// mention 那半因此改成「忙就累積、空下來合併投一次」，**加入事件沒有跟上**：
+  /// 五個人陸續進房，Codex 的 turn 一結束就吃到五則。
+  ///
+  /// ⚠️ 但 join **不能照 mention 那樣累積後補投**：它是狀態轉變不是待辦。
+  /// 累積十分鐘再倒出來的那份名單，中間有人進了又走，送到時已經是錯的。
+  ///
+  /// 所以做的是**節流**而不是佇列：忙碌期間第一則照送（agent 立刻知道
+  /// 名錄變了，那正是這個通知的用途），同一個 turn 內後續的抑制掉。
+  /// turn 結束就重置。這樣立刻性、不倒灌、不失真三件事同時成立。
+  group('加入事件在忙碌期間節流', () {
+    test('🔴 同一個 turn 內只喚醒一次，不逐筆倒灌', () async {
+      final d = make(); // 兩個 thread 都忙
+      await d.handle(batch([joinMsg(1, senderId: 'p-1', sender: '甲')]));
+      await d.handle(batch([joinMsg(2, senderId: 'p-2', sender: '乙')]));
+      await d.handle(batch([joinMsg(3, senderId: 'p-3', sender: '丙')]));
+
+      // 每個 thread 各一則，不是各三則
+      expect(runs.map(target).toList()..sort(), [threadA, threadB]..sort());
+      for (final run in runs) {
+        expect(payload(run)['event'], 'member_joined');
+        expect(payload(run)['latest']['display_name'], '甲',
+            reason: '送的是第一則，不是最後一則——後面那些是它引發的重查要處理的');
+      }
+    });
+
+    test('turn 結束後重置：下一個 turn 的加入照樣喚醒得到', () async {
+      final d = make();
+      await d.handle(batch([joinMsg(1, senderId: 'p-1', sender: '甲')]));
+      expect(runs, hasLength(2));
+      runs.clear();
+
+      // turn 結束（lock 消失）→ 再忙起來 → 又有人加入
+      busyThreads.clear();
+      await d.pollAssignments();
+      busyThreads.addAll({threadA, threadB});
+      await d.handle(batch([joinMsg(2, senderId: 'p-2', sender: '乙')]));
+
+      expect(runs, hasLength(2), reason: '節流是 per-turn 的，不是永久靜音');
+      expect(payload(runs.first)['latest']['display_name'], '乙');
+    });
+
+    test('沒在忙就不節流——連續加入各自送得出去', () async {
+      // 對照組：節流的理由是「turn 進行中入列會倒灌」。沒有 turn 就沒有
+      // 那個理由，這時壓掉通知只是讓 agent 少知道一件事
+      final d = make();
+      // 先讓兩個 thread 被看見過一次——`_knownLocalThreads` 是「這個 thread
+      // 在本機嗎」的唯一來源，沒見過 lock 的 thread 本來就不投
+      await d.handle(batch([joinMsg(0, senderId: 'p-0', sender: '零')]));
+      busyThreads.clear();
+      await d.pollAssignments();
+      runs.clear();
+
+      await d.handle(batch([joinMsg(1, senderId: 'p-1', sender: '甲')]));
+      await d.handle(batch([joinMsg(2, senderId: 'p-2', sender: '乙')]));
+      expect(runs, hasLength(4), reason: '兩則 × 兩個 thread');
+    });
+  });
 }

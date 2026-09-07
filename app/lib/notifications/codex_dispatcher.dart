@@ -96,11 +96,16 @@ class CodexDispatcher {
   /// 只增不減：thread 不會從本機搬去別台。
   final Set<String> _knownLocalThreads = {};
 
+  /// 這個 turn 裡已經送過加入通知的 thread（節流用，見 [_dispatchJoins]）。
+  final Set<String> _joinNoticedThisTurn = {};
+
   /// 掃一次 lock，順手把看到的 thread 記進本機名冊。回傳的是**當下忙碌**
   /// 的那些（有 lock ＝ 正在處理一個 turn）。
   Set<String> _scanBusyThreads() {
     final busy = activeThreadIds();
     _knownLocalThreads.addAll(busy);
+    // 空下來就重置加入通知的節流：它是 per-turn 的，不是永久靜音
+    _joinNoticedThisTurn.removeWhere((t) => !busy.contains(t));
     return busy;
   }
 
@@ -225,6 +230,25 @@ class CodexDispatcher {
       }
     }
     for (final entry in joinsByThread.entries) {
+      // 🔴 忙碌期間**只喚醒一次**（原卡 1e3ce054）。`codex queue` 沒有
+      // dedupe，turn 進行中每則加入都入列，結束後逐筆倒灌。
+      //
+      // ⚠️ 這裡刻意**不走 mention 那套「累積後補投」**：join 是狀態轉變，
+      // 不是待辦。累積十分鐘再倒出來的那份名單，中間有人進了又走，
+      // 送到時已經是錯的——而收到的人無從發現。
+      //
+      // 節流的形狀是：第一則照送（agent 立刻知道名錄變了，那正是這個通知
+      // 的用途——它該去重查，不是把通知本身當名單讀），同一個 turn 內
+      // 後續的抑制掉，turn 結束重置。
+      if (busy.contains(entry.key) &&
+          !_joinNoticedThisTurn.add(entry.key)) {
+        _log.info(
+          '加入事件抑制（$roomLabel，thread=${entry.key}）：'
+          '這個 turn 已經通知過一次，${entry.value.length} 則不重複入列'
+          '——它空下來會自己重查名錄',
+        );
+        continue;
+      }
       await _dispatchJoins(entry.key, batch, entry.value);
     }
   }
@@ -390,6 +414,12 @@ class CodexDispatcher {
     if (_pollingAssignments) return;
     _pollingAssignments = true;
     try {
+      // 每一輪都掃一次 lock，**不管有沒有東西要補投**。
+      //
+      // 🔴 加入通知的節流靠它重置，而 `flushPendingMentions` 佇列空就提早
+      // 返回——把重置掛在那裡的話，「turn 結束了但剛好沒有待補的 mention」
+      // 這個常態情況下節流永遠不解除，加入通知就從節流變成**永久靜音**。
+      _scanBusyThreads();
       // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
       // 要等的東西是同一件事
       try {
