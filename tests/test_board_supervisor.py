@@ -533,3 +533,40 @@ async def test_both_places_describe_the_supervisor_the_same_way(tmp_path):
                             "departed"}
         # session_key 不外流：對外一律用板上那套稱呼
         assert "session_key" not in top
+
+
+async def test_an_archived_room_cannot_be_given_a_supervisor(tmp_path):
+    """封存房是唯讀的，指派監督者也不例外（09/07 卡 3e5e9255）。
+
+    艾斯維爾實測從封存房的入口進去仍指派得了。權威擋點必須在 Hub——UI 把
+    入口藏起來只是少一條路，直接打 API 的那條還在。
+    """
+    app, client = await _client(tmp_path, "archived-supervisor")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await client.post(f"/api/rooms/{rid}/archive",
+                          headers={**owner, "X-Session-Key": "human-1"})
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              headers={**owner, "X-Session-Key": "human-1"},
+                              json={"session_key": "agent-1"})
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "room_archived"
+
+
+async def test_host_view_does_not_reopen_an_archived_room_for_appointment(
+        tmp_path):
+    """主持人模式繞得過「限建立者」，繞不過「房已封存」。
+
+    兩道閘的理由不同：前者是「誰有資格」，後者是「這間房還在不在」。
+    主持人模式解的是前者。
+    """
+    app, client = await _client(tmp_path, "archived-supervisor-host")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await client.post(f"/api/rooms/{rid}/archive",
+                          headers={**owner, "X-Session-Key": "human-1"})
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              headers={"X-Host-View": "1"},
+                              json={"session_key": "agent-1"})
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "room_archived"
