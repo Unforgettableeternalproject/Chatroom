@@ -11,6 +11,18 @@ class Config:
     port: int = field(default_factory=lambda: int(os.environ.get("CHATROOM_PORT", "8787")))
     # 共享 API token；空字串代表不驗證（僅限本機開發）
     api_token: str = field(default_factory=lambda: os.environ.get("CHATROOM_TOKEN", ""))
+    # 人類專用的 token。**空字串＝還沒進入分離期**，一切照舊。
+    #
+    # 分開的理由：`X-Host-View` 與 `role=human` 是兩個「我是人」的宣稱，而
+    # bridge 手上就是上面那把 `api_token`——只看 token 的話，每一個 agent 都
+    # 宣稱得了。主持人模式之後還要再擴權（視同所有板的 owner），擴權掛在一把
+    # 人人都有的鑰匙上就等於沒有門。
+    #
+    # 為什麼要有「沒設就照舊」這個狀態：舊 kit 還在外面跑，而一個「升級 Hub
+    # 就把所有人擋在門外」的改動沒有人會預期。設了才開始嚴格。
+    human_api_token: str = field(
+        default_factory=lambda: os.environ.get("CHATROOM_HUMAN_TOKEN", "")
+    )
     # agent 閒置多久後被自動移出房間（秒）
     idle_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))

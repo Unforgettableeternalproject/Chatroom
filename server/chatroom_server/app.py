@@ -304,6 +304,10 @@ class AssignmentCreate(BaseModel):
 class TokenCreate(BaseModel):
     # 這張發給誰。純標註，用來認出「這張還要不要留著」
     label: str = Field(default="", max_length=64)
+    # 給人還是給 agent。**預設 agent**——沒講清楚的一律不給人類的份量，
+    # 而人類憑證要是打錯字就靜靜降級成 agent，發的人會以為自己給了對方一把
+    # 用不了的鑰匙（所以這裡用 pattern 擋，不做寬鬆解析）
+    audience: str = Field(default="agent", pattern="^(human|agent)$")
 
 
 class AssignmentResolve(BaseModel):
@@ -758,9 +762,18 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         兩者權限相同——token 是信任邊界，房間不是。多 token 買到的是可撤銷
         與可追溯，不是隔離；要真隔離請開不同的 Hub 實例。
+
+        ⚠️ **一個例外**：`request.state.token_audience`（'human' / 'agent'）。
+        `role=human` 與 `X-Host-View` 只認 human，其餘一切照舊。這不是把
+        token 變成隔離手段——擋的是**冒充**，不是存取範圍。
+        `CHATROOM_HUMAN_TOKEN` 沒設時一律回 'human'（＝還沒進入分離期，
+        照舊）。
         """
         request.state.is_root_token = False
         request.state.token_label = ""
+        # 相容期（未設 human token）一律 human：這個欄位的每一個讀取點都要
+        # 在那段期間表現得像它不存在
+        request.state.token_audience = "human"
         # 這次請求用的是哪張發出去的 token（主 token 與開放模式留空字串）。
         # 踢出要連著撤銷它——只封 session_key 擋不住任何人，那把鑰匙是被踢者
         # 自己在本機產的，換一把就是全新的人
@@ -771,8 +784,18 @@ def create_app(config: Config | None = None) -> FastAPI:
             request.state.is_root_token = True
             return
         token = _bearer(authorization)
+        if cfg.human_api_token and token and token == cfg.human_api_token:
+            # 人類主持人自己的鑰匙。與主 token 一樣不可撤銷、一樣是 root
+            request.state.is_root_token = True
+            request.state.token_audience = "human"
+            request.state.token_label = "人類主持人"
+            return
         if token and token == cfg.api_token:
             request.state.is_root_token = True
+            # 分離期開始後，舊的單一 token **降級為 agent 憑證**——bridge 手上
+            # 就是這一把，它不能再宣稱自己是人
+            if cfg.human_api_token:
+                request.state.token_audience = "agent"
             return
         row = None
         if token:
@@ -795,13 +818,33 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
             raise _err(401, "invalid_token", "token 無效或未提供")
         request.state.token_label = row["label"]
+        if cfg.human_api_token:
+            # 舊 token 沒有這一欄（migration 補的預設是 agent），所以取不到
+            # 值時也只能是 agent——見 db.py 那條 migration 的理由
+            request.state.token_audience = (
+                row["audience"] if "audience" in row.keys() else "agent")
         # 最後使用時間讓主持人看得出哪張還在用、哪張可以收掉
         await app.state.db.execute(
             "UPDATE access_token SET last_used_at=? WHERE token=?", (_now(), token)
         )
         await _commit_with_retry(app.state.db)
 
-    def host_view(
+    async def _token_audience(token: str) -> str:
+        """一張發出去的 token 是給人還是給 agent 的。
+
+        查不到（撤銷、不存在）一律 agent——這個函式只被拿來**放行**，
+        而查不到的東西不該放行任何東西。
+        """
+        row = await (
+            await app.state.db.execute(
+                "SELECT audience FROM access_token"
+                " WHERE token=? AND revoked_at IS NULL", (token,))
+        ).fetchone()
+        if row is None:
+            return "agent"
+        return row["audience"] or "agent"
+
+    async def host_view(
         x_host_view: str | None = Header(default=None, alias="X-Host-View"),
         authorization: str | None = Header(default=None),
     ) -> bool:
@@ -829,7 +872,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not cfg.api_token:
             # 未設 token＝完全開放（本機開發），這時人人都是主持人
             return True
-        return _bearer(authorization) == cfg.api_token
+        token = _bearer(authorization)
+        if not cfg.human_api_token:
+            # 相容期：還沒分離憑證，維持既有行為（不符資格就靜靜地不是主持
+            # 人——那是這條路徑一直以來的樣子，現在改成報錯會讓舊 client 在
+            # 升級的當下壞掉）
+            return token == cfg.api_token
+        # 分離期：**只認人類憑證**。不符資格時明講而不是靜靜降級——
+        # `X-Host-View` 是明示要求，靜默地不給等於「按了開關卻什麼都沒發生」，
+        # 而那與「這個 Hub 的主持人模式壞了」在畫面上一模一樣
+        if token == cfg.human_api_token:
+            return True
+        if token and await _token_audience(token) == "human":
+            return True
+        raise _err(403, "human_token_required",
+                   "主持人視角只認人類憑證（CHATROOM_HUMAN_TOKEN 或"
+                   " audience=human 的邀請）。agent 的 token 借不到這個身分。")
 
     def is_host_token(
         authorization: str | None = Header(default=None),
@@ -853,6 +911,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not getattr(request.state, "is_root_token", False):
             raise _err(403, "root_token_required",
                        "只有 Hub 主持人（.env 的主 token）能發放或撤銷邀請")
+        # 分離期：發邀請是主持人的權力，而主持人是**人**。bridge 手上那把
+        # 主 token 留著它原有的一切，就是不能再發新的鑰匙出去
+        if cfg.human_api_token and getattr(
+                request.state, "token_audience", "agent") != "human":
+            raise _err(403, "human_token_required",
+                       "發放與撤銷邀請只認人類憑證（CHATROOM_HUMAN_TOKEN）")
 
     def _client_ip(request: Request) -> str | None:
         """來源位址。**僅供辨識顯示，不可用於任何授權判斷。**
@@ -2344,6 +2408,15 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
     async def join_room(room_id: str, body: JoinRequest, request: Request):
         room = await _room_or_404(room_id)
+        # `role=human` 不只是換個圖示：人類在封存規則、完成別人的卡、確認
+        # 週期無誤上都有額外的份量。bridge 手上就是主 token，分離期開始後
+        # 它不能再自報成人——**擋在進門那一刻**，因為 role 一旦寫進
+        # participant 就會被後面每一條規則當成事實
+        if body.role == "human" and cfg.human_api_token and getattr(
+                request.state, "token_audience", "agent") != "human":
+            raise _err(403, "human_token_required",
+                       "以人類身分加入只認人類憑證（CHATROOM_HUMAN_TOKEN 或"
+                       " audience=human 的邀請）。agent 請用 role=agent。")
         db = app.state.db
         assignment = None
         # 走與 actor_key() 同一條規範化。session_key 是**呼叫端自己產的字串**
@@ -10717,11 +10790,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         token = uuid.uuid4().hex + uuid.uuid4().hex
         db = app.state.db
         await db.execute(
-            "INSERT INTO access_token (token, label, created_at) VALUES (?,?,?)",
-            (token, body.label.strip(), _now()),
+            "INSERT INTO access_token (token, label, audience, created_at)"
+            " VALUES (?,?,?,?)",
+            (token, body.label.strip(), body.audience, _now()),
         )
         await _commit_with_retry(db)
-        return {"token": token, "label": body.label.strip()}
+        return {"token": token, "label": body.label.strip(),
+                "audience": body.audience}
 
     @app.get("/api/tokens", dependencies=[Depends(require_auth)])
     async def list_tokens(request: Request, include_revoked: bool = False):

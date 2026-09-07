@@ -306,6 +306,18 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "這個動作只有 Hub 主持人做得到，而且要明示主持人視角。",
                 status=status, detail=detail,
             )
+        if code == "human_token_required":
+            # 分離憑證（Hub 09/07）：`role=human`、主持人視角、發放邀請只認
+            # 人類憑證。agent 撞到這條**不是設定壞了**，是它正在做一件本來就
+            # 不屬於它的事——落進 fallback 會被讀成身分失效，而 watcher 對身分
+            # 失效的處置是結束自己
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有人類做得到（需要 Hub 的人類憑證）。"
+                "agent 的 token 借不到人類身分，請改用 role=agent，"
+                "或請艾斯維爾從 App 來做。",
+                status=status, detail=detail,
+            )
         if code == "not_request_owner":
             # 收回**自己的**提議與「拒絕別人的提議」是兩件事：後者是建立者
             # 的動作而且會留紀錄。講成「你沒有權限」會讓建立者去找核准鈕的

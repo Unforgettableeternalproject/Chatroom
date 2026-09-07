@@ -191,6 +191,9 @@ CREATE INDEX IF NOT EXISTS idx_attachment_room ON attachment(room_id, created_at
 CREATE TABLE IF NOT EXISTS access_token (
     token        TEXT PRIMARY KEY,
     label        TEXT NOT NULL DEFAULT '',   -- 這張發給誰（給人看的）
+    -- 'human' / 'agent'。這是唯一有權限差的一欄：`role=human` 與
+    -- `X-Host-View` 只認 human。預設 agent——沒講清楚的一律不給人類的份量
+    audience     TEXT NOT NULL DEFAULT 'agent',
     created_at   TEXT NOT NULL,
     last_used_at TEXT,
     revoked_at   TEXT                        -- 非 NULL 即失效；不刪列，保留紀錄
@@ -830,6 +833,12 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 段落的結局。存量一律 ''（還沒標）——與 board.outcome 同一個判斷：
     # 把既有的東西悄悄標成某個結局，等於替沒人管的段落做了決定
     ("board_scratchpad_block", "state", "state TEXT NOT NULL DEFAULT ''"),
+    # 這張 token 是發給人還是發給 agent（'human' / 'agent'）。
+    # **存量一律 agent**——那正是這一欄存在之前的事實：舊 token 都是在「所有
+    # 憑證權限相同」的年代發出去的，沒有任何一張被審視過「該不該當人類用」。
+    # 反過來預設成 human 會把整個機制的方向弄反：一次升級就讓外面每一張 token
+    # 都當得了主持人，而且不會有任何地方報錯。
+    ("access_token", "audience", "audience TEXT NOT NULL DEFAULT 'agent'"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
