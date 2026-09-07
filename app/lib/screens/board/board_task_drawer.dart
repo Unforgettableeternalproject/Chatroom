@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../api/rooms_api.dart';
+import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
@@ -435,15 +437,68 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     });
   }
 
+  /// 板軸專用：這張卡要指到哪一間掛接房。
+  ///
+  /// 掛一間就回那間，不問——問一個只有一個答案的問題，得到的只有一次多餘
+  /// 的點擊。多間才開選單，每一筆都寫出房名，因為「指到哪一間」正是板軸
+  /// 上唯一問不出來的那件事。
+  Future<String?> _pickRoom(List<AttachedRoom> rooms) async {
+    if (rooms.length == 1) return rooms.first.id;
+    final picked = await showDialog<AttachedRoom>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('指到哪一間聊天室',
+            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+        children: [
+          for (final r in rooms)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(r),
+              child: Row(children: [
+                Expanded(
+                  child: Text(r.name.isEmpty ? r.id : r.name,
+                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                ),
+                // 封存房也列出來，但要看得出來：那間房裡的人多半已經散了，
+                // 指過去的卡不會有人接。藏掉的話，多房時使用者會覺得
+                // 「少了一間」而去找它
+                if (r.status == 'archived')
+                  Text('已封存',
+                      style: UepText.mono(size: 8.5, color: ctx.uep.inkMute)),
+              ]),
+            ),
+        ],
+      ),
+    );
+    return picked?.id;
+  }
+
   /// 挑一個房內的人，把這張卡請給他。
   ///
   /// 送出後**要說出實際發生了什麼**：管理員按下去是「已指派」，其他人是
   /// 「已送出請求，等他回覆」。兩種都正常，但說錯的話提議者會以為事情
   /// 已經定了。
-  Future<void> _assign(BoardActions actions) async {
-    final detail = ref.read(roomDetailProvider(widget.roomId!)).value;
+  Future<void> _assign(BoardActions actions, List<AttachedRoom> rooms) async {
+    // 板軸沒有「這一間房」，所以指派的第一個問題是**指到哪一間**。
+    // 掛一間就不問——多問一次沒有增加任何資訊，只是多一步
+    final rid = widget.roomId ?? await _pickRoom(rooms);
+    if (rid == null || !mounted) return;
+    // 板軸這條要現拉：房軸進來時這份早就在快取裡，板軸是第一次碰這間房。
+    //
+    // ⚠️ 拉不到不是空清單。**「這間房裡沒有人」與「我讀不到這間房」不是
+    // 同一件事**——前者按下去也沒用，後者要講出來，不然看的人會以為那間
+    // 房是空的（板軸的人未必是那間房的成員）
+    final RoomDetail detail;
+    try {
+      detail = await ref.read(roomDetailProvider(rid).future);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('讀不到那間房的成員：${e.message}')));
+      return;
+    }
+    if (!mounted) return;
     final members = [
-      for (final p in detail?.participants ?? const <Participant>[])
+      for (final p in detail.participants)
         // 已離開的人指了也沒用——他收不到，那張卡只會掛著
         if (p.status == 'active') p,
     ];
@@ -522,15 +577,32 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     final leading = items.where((a) => !a.trailing).toList();
     final trailing = items.where((a) => a.trailing).toList();
 
-    // 「請人接手」。**只在房軸出現**——板軸沒有房，也就沒有「這裡有誰」
-    // 可問；板成員清單是另一個範圍的問題（同 supervisor 的處理）。
+    // 「請人接手」。**兩條軸都出現**（決策 2026-09-07 裁「房選擇器」路）。
+    //
+    // 指派的目標是**房內身分**，而板可以掛好幾間房、也可以一間都沒掛——
+    // 所以板軸上「指派給誰」沒有唯一答案。解法是**指派前先選房**：
+    // 掛一間就直接用那間，掛多間先問，零房則按鈕停用並說出為什麼。
+    //
+    // ⚠️ 不動 server 契約（原卡另一條路是改用 actor_key）：那條與今天的
+    // 憑證分離撞在同一個區域，兩邊同時動風險太高。
     //
     // ⚠️ 標籤一律是「請人接手」，**不看自己算不算管理員**。那個判準在
     // server（Hub 主持人／板 owner／房建立者），複製到 client 就是第二份
     // 會漂移的真相——按下去讓 server 回答發生了什麼，比先預測它可靠
     // （@開發Novia (Hub) 2026-09-04）。
-    final canAssign = widget.roomId != null &&
-        !const ['done', 'cancelled'].contains(widget.task.status);
+    final settled = const ['done', 'cancelled'].contains(widget.task.status);
+    // 板軸可以指到哪些房：**還掛著的才算**。`detached` 的房算進去的話，
+    // 送出的指派會指向一個與這塊板已無關係的人，server 那端會拒——
+    // UI 不該先製造那次失敗
+    final rooms = widget.roomId != null
+        ? const <AttachedRoom>[]
+        : (ref.watch(boardByIdProvider(widget.boardId)).value?.liveRooms ??
+                const <AttachedRoom>[])
+            .toList();
+    final canAssign = !settled;
+    // 板軸零房：入口留著但按不動。**消失會被讀成「板軸沒有這個功能」**，
+    // 而真相是「這塊板現在沒有人可以指」——後者有下一步（去掛一間房）
+    final noRoomToAssign = widget.roomId == null && rooms.isEmpty;
 
     // 有沒有一筆**在等我回答**的。
     //
@@ -551,51 +623,60 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
         border: Border(top: BorderSide(color: s.hairline)),
       ),
       child: Row(children: [
-        for (final a in leading) ...[
-          button(a),
-          if (a != leading.last) const SizedBox(width: 8),
-        ],
-        // 🔴 **有人在等我回答的話，那件事排在所有動作前面。**
-        // 藏在資訊區裡只是「顯示」——被指名的人要有地方按，否則
-        // 「需要對方同意」在畫面上就不成立
-        if (pending != null) ...[
-          if (leading.isNotEmpty) const SizedBox(width: 8),
-          _DrawerAction(
-            label: '接下',
-            bordered: false,
-            onTap: () => _respond(actions, pending, true),
+        // ⚠️ **這排會換行，不會溢出。** 板軸長出「請人接手」之後，
+        // 420px 的抽屜在 `todo` 那組動作下就超出 45px——而 Row 的溢位
+        // 是一條黃黑斜紋，不是任何一種可用的畫面。多一顆按鈕就爆版的東西
+        // 不能靠「目前剛好放得下」撐著
+        Expanded(
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final a in leading) button(a),
+              // 🔴 **有人在等我回答的話，那件事排在所有動作前面。**
+              // 藏在資訊區裡只是「顯示」——被指名的人要有地方按，否則
+              // 「需要對方同意」在畫面上就不成立
+              if (pending != null) ...[
+                _DrawerAction(
+                  label: '接下',
+                  bordered: false,
+                  onTap: () => _respond(actions, pending, true),
+                ),
+                _DrawerAction(
+                  label: '婉拒',
+                  bordered: true,
+                  onTap: () => _respond(actions, pending, false),
+                ),
+              ] else if (canAssign) ...[
+                _DrawerAction(
+                  label: (widget.task.assigneeParticipantId ?? '').isEmpty
+                      ? '請人接手'
+                      : '改請別人',
+                  bordered: true,
+                  onTap: noRoomToAssign ? null : () => _assign(actions, rooms),
+                ),
+                // 停用要說出理由，而且理由要能導向下一步
+                if (noRoomToAssign)
+                  Text('掛到房間後才能指派',
+                      style: UepText.mono(size: 8.5, color: s.inkMute)),
+                // 取消指派。**只在真的有指派時出現**——沒有指派時給一顆
+                // 取消鈕，是在問一個不存在的問題。
+                //
+                // ⚠️ 取消是管理動作，一般人按下去會 403 `not_assign_admin`。
+                // 那顆按鈕仍然畫出來：**權限判準在 server**，UI 自己算一份
+                // 會漂移，而漂移的方向如果是「藏起來」，管理員會找不到功能
+                // 且沒有任何線索
+                if ((widget.task.assigneeParticipantId ?? '').isNotEmpty)
+                  _DrawerAction(
+                    label: '取消指派',
+                    bordered: true,
+                    onTap: () => _clearAssignee(actions),
+                  ),
+              ],
+            ],
           ),
-          const SizedBox(width: 8),
-          _DrawerAction(
-            label: '婉拒',
-            bordered: true,
-            onTap: () => _respond(actions, pending, false),
-          ),
-        ] else if (canAssign) ...[
-          if (leading.isNotEmpty) const SizedBox(width: 8),
-          _DrawerAction(
-            label: (widget.task.assigneeParticipantId ?? '').isEmpty
-                ? '請人接手'
-                : '改請別人',
-            bordered: true,
-            onTap: () => _assign(actions),
-          ),
-          // 取消指派。**只在真的有指派時出現**——沒有指派時給一顆取消鈕，
-          // 是在問一個不存在的問題。
-          //
-          // ⚠️ 取消是管理動作，一般人按下去會 403 `not_assign_admin`。
-          // 那顆按鈕仍然畫出來：**權限判準在 server**，UI 自己算一份會漂移，
-          // 而漂移的方向如果是「藏起來」，管理員會找不到功能且沒有任何線索
-          if ((widget.task.assigneeParticipantId ?? '').isNotEmpty) ...[
-            const SizedBox(width: 8),
-            _DrawerAction(
-              label: '取消指派',
-              bordered: true,
-              onTap: () => _clearAssignee(actions),
-            ),
-          ],
-        ],
-        const Spacer(),
+        ),
         for (final a in trailing) button(a),
       ]),
     );
@@ -719,13 +800,18 @@ class _DrawerAction extends StatelessWidget {
   });
 
   final String label;
-  final VoidCallback onTap;
+
+  /// null ＝ 現在按不動。**按鈕仍然畫出來**：整顆藏掉的話，看的人得到的是
+  /// 「這裡沒有這個功能」，而真相是「現在還不行」——後者有下一步可做，
+  /// 前者沒有。停用時務必在旁邊講出理由。
+  final VoidCallback? onTap;
   final bool bordered;
   final Color? accent;
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final disabled = onTap == null;
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -733,12 +819,16 @@ class _DrawerAction extends StatelessWidget {
             ? const EdgeInsets.symmetric(horizontal: 13, vertical: 7)
             : const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
         decoration: bordered
-            ? BoxDecoration(border: Border.all(color: s.hairlineStrong))
+            ? BoxDecoration(
+                border: Border.all(
+                    color: disabled ? s.hairline : s.hairlineStrong))
             : null,
         child: Text(label,
             style: UepText.mono(
                 size: 9,
-                color: accent ?? s.inkSoft,
+                color: disabled
+                    ? s.inkMute.withValues(alpha: .5)
+                    : (accent ?? s.inkSoft),
                 letterSpacing: 1.4)),
       ),
     );

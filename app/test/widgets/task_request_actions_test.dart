@@ -27,8 +27,13 @@ Widget _wrap(Widget child) => ProviderScope(
     );
 
 void main() {
-  testWidgets('🔴 板軸沒有「請人接手」——那裡沒有房，也就沒有「這裡有誰」可問',
-      (tester) async {
+  // ⚠️ 這條原本釘的是「板軸沒有『請人接手』」，理由是那裡沒有房可問。
+  // **2026-09-07 決策裁走「房選擇器」路之後那個前提不成立了**：板軸照樣
+  // 有入口，只是指派前先選一間掛接房。零房時按鈕仍畫出來但按不動——
+  // 消失會被讀成「板軸沒有這個功能」，而真相是「這塊板現在沒有人可以指」。
+  //
+  // 板軸各種掛接情形的完整覆蓋在 board_axis_assign_test。
+  testWidgets('板軸一間房都沒掛：入口在，但按不動且說得出為什麼', (tester) async {
     await tester.pumpWidget(_wrap(BoardTaskDrawer(
       roomId: null,
       boardId: 'b1',
@@ -37,7 +42,8 @@ void main() {
       onClose: () {},
     )));
     expect(tester.takeException(), isNull);
-    expect(find.text('請人接手'), findsNothing);
+    expect(find.text('請人接手'), findsOneWidget);
+    expect(find.text('掛到房間後才能指派'), findsOneWidget);
   });
 
   testWidgets('已完成的卡不再請人接手——請了也只是掛著', (tester) async {
