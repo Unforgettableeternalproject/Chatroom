@@ -1542,17 +1542,19 @@ class _BoardAction extends ConsumerWidget {
     final async = ref.watch(boardProvider(roomId));
     final snap = async.value;
 
-    // 還沒掛板：入口要講的是「開一塊」，不是一個點進去空無一物的板。
+    // 這顆入口該長成哪一種，判準在 model（`boardEntryKind`）。
     //
     // ⚠️ 判準是**載入完成而且沒有 board_id**，不是「快照是空的」——載入中
     // 的空快照與真的沒有板長得一樣，用後者判會讓按鈕在每次進房時先閃一下
-    // 「掛接任務板」再變回來。封存房不給掛：那間房已經不收新東西了
-    final unattached = boardUnattached(
+    // 「掛接任務板」再變回來。
+    final kind = boardEntryKind(
       loaded: async.hasValue,
       boardId: snap?.boardId ?? '',
       hasObjectives: snap?.objectives.isNotEmpty ?? false,
+      archived: archived,
+      hadDeletedBoard: snap?.previousBoard != null,
     );
-    if (unattached && !archived) {
+    if (kind == BoardEntryKind.attachable) {
       // 掛板是**房間管理者限定**的動作（Hub `attach_board` 回
       // 403 `not_room_admin`）。對所有人畫一顆「掛接任務板」的話，
       // 非管理者按下去必然失敗——而這個檔案自己在溢位選單那裡就寫著
@@ -1566,8 +1568,36 @@ class _BoardAction extends ConsumerWidget {
           ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
       return _HeaderAction(
         label: admin ? '❖ 掛接任務板' : '❖ 尚無任務板',
-        hint: admin ? null : '只有房間管理者能掛接任務板',
+        // 原先那塊被刪掉的話，這裡順帶說一句——**空白要有原因**。
+        // 進行中的房不畫墓碑（它有下一步），但那個下一步旁邊值得註明
+        // 「你看到的空白是這麼來的」
+        hint: admin
+            ? (snap?.previousBoard == null
+                ? null
+                : '原先的任務板已被刪除，可以掛一塊新的')
+            : '只有房間管理者能掛接任務板',
         onTap: admin ? () => _attach(context, ref) : null,
+      );
+    }
+    // 封存房沒有板：兩種，而它們對讀的人意義不同。
+    // **「從沒有過」與「原先那塊被刪了」在畫面上長得一模一樣**，而後者是
+    // 「你看到的空白有原因」——那間房裡的人做過的事去了哪裡，正是他回頭
+    // 翻它的唯一理由（艾斯維爾 09/07 裁定第 3 點）
+    if (kind == BoardEntryKind.deleted) {
+      final gone = snap!.previousBoard!;
+      return _HeaderAction(
+        label: '❖ 任務板已刪除',
+        hint: gone.name.isEmpty
+            ? '這間房原先的任務板已被刪除'
+            : '這間房原先的任務板「${gone.name}」已被刪除',
+        onTap: null,
+      );
+    }
+    if (kind == BoardEntryKind.none) {
+      return const _HeaderAction(
+        label: '❖ 尚無任務板',
+        hint: '這間房已封存，沒有任務板',
+        onTap: null,
       );
     }
 

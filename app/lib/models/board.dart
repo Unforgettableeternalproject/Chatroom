@@ -551,6 +551,7 @@ class BoardDelta {
     this.taskRequests = const [],
     this.attachedRooms = const [],
     this.liveAttachedRoomCount,
+    this.previousBoard,
     this.directives = const [],
     this.directivesHasMore = false,
     this.allowedTags = const [],
@@ -567,6 +568,9 @@ class BoardDelta {
   /// 0 是「一間活著的房都沒有」，null 是「這次沒說」——混為一談的話，
   /// 一次無關的增量就會把追蹤入口洗成灰的。
   final int? liveAttachedRoomCount;
+
+  /// 原先那塊板被刪掉了（房軸專有）。見 [PreviousBoard]。
+  final PreviousBoard? previousBoard;
 
   /// 這次的水位。下次帶著它當 `after_board_seq`。
   final int boardSeq;
@@ -670,6 +674,10 @@ class BoardDelta {
         .toList(),
     // 不補預設：缺席要留成 null，見欄位註解
     liveAttachedRoomCount: json['live_attached_room_count'] as int?,
+    previousBoard: json['previous_board'] == null
+        ? null
+        : PreviousBoard.fromJson(
+            json['previous_board'] as Map<String, dynamic>),
     directives: ((json['directives'] as List?) ?? const [])
         .map((e) => BoardDirective.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -762,6 +770,7 @@ class BoardSnapshot {
     this.taskRequests = const [],
     this.attachedRooms = const {},
     this.liveAttachedRoomCount,
+    this.previousBoard,
     this.directives = const {},
     this.directivesHasMore = false,
     this.allowedTags = const [],
@@ -827,6 +836,9 @@ class BoardSnapshot {
   /// Hub 算的「還有人在用嗎」（`live_attached_room_count`）。
   /// `null` ＝ 還沒收到過這個欄位，這時走本地推算（見 [liveAttachedRooms]）。
   final int? liveAttachedRoomCount;
+
+  /// 原先那塊板被刪掉了。見 [PreviousBoard]。
+  final PreviousBoard? previousBoard;
 
   /// board_seq → directive。**沒有 id 可用**，見 [BoardDirective.boardSeq]。
   final Map<int, BoardDirective> directives;
@@ -1003,6 +1015,10 @@ class BoardSnapshot {
       // 追蹤入口洗成灰的，而畫面上只會說「這塊板沒有掛接聊天室」
       liveAttachedRoomCount:
           delta.liveAttachedRoomCount ?? liveAttachedRoomCount,
+      // ⚠️ 這一個**直接覆寫**，不走「沒送就保留」——與上面那行相反，
+      // 而理由正是它們的差別：墓碑要能**被清掉**（綁上新板時 Hub 就不再
+      // 回它）。保留舊值的話，房間掛上新板之後畫面仍會說原先那塊被刪了
+      previousBoard: delta.previousBoard,
       // 同上：空的時候保留手上那份。增量回應不重送它，跟著清空的話標籤
       // 選單會在第二次拉取後整個消失，而畫面上那看起來像「這塊板沒有標籤」
       allowedTags:
@@ -1756,6 +1772,62 @@ BoardEditability boardEditability({
   // 從哪條網址進來**不再是判準**——擋不擋得住由 Hub 的權限說了算，
   // 而那會以 role 的形式回到這裡
   return BoardEditability.editable;
+}
+
+/// 這間房**原先那塊板被刪掉了**的墓碑（Hub `previous_board`，029e24f6）。
+///
+/// `null` ＝ 沒發生過這件事：從沒綁過板，或現在正綁著一塊。
+///
+/// ⚠️ Hub 回的是**事實**，不是呈現：進行中的房也拿得到它。要畫成
+/// 「沒綁板＋可重綁」還是「原先的任務板已刪除」，由房的 status 決定
+/// （見 [boardEntryKind]）——判斷放兩邊的話，同一份事實會有兩個真相來源。
+@immutable
+class PreviousBoard {
+  const PreviousBoard({this.name = '', this.deletedAt});
+
+  final String name;
+  final String? deletedAt;
+
+  factory PreviousBoard.fromJson(Map<String, dynamic> json) => PreviousBoard(
+        name: (json['name'] as String?) ?? '',
+        deletedAt: json['deleted_at'] as String?,
+      );
+}
+
+/// 聊天室的 Board 入口該長成哪一種。
+enum BoardEntryKind {
+  /// 載入中，或這間房有板——照 entryHint 畫。
+  board,
+
+  /// 沒有板，而且掛得上去（進行中的房）。
+  attachable,
+
+  /// 沒有板，也掛不上去（封存房，而且從沒有過板）。
+  none,
+
+  /// 原先那塊板被刪掉了。**這是一句歷史**，不是一個可以修的狀態。
+  deleted,
+}
+
+/// 🔴 「從沒有過板」與「原先那塊被刪了」在畫面上長得一模一樣，而它們
+/// 對讀的人意義完全不同：後者是「你看到的空白有原因」。封存房尤其——
+/// 那間房裡的人做過的事去了哪裡，是他回頭翻它的唯一理由。
+///
+/// 進行中的房**不畫墓碑**：它可以重新綁一塊，畫面該講的是下一步而不是
+/// 追悼。墓碑那句話留給沒有下一步的那一種（艾斯維爾 09/07 裁定第 3 點）。
+BoardEntryKind boardEntryKind({
+  required bool loaded,
+  required String boardId,
+  required bool hasObjectives,
+  required bool archived,
+  required bool hadDeletedBoard,
+}) {
+  if (!boardUnattached(
+      loaded: loaded, boardId: boardId, hasObjectives: hasObjectives)) {
+    return BoardEntryKind.board;
+  }
+  if (!archived) return BoardEntryKind.attachable;
+  return hadDeletedBoard ? BoardEntryKind.deleted : BoardEntryKind.none;
 }
 
 /// 這間房到底有沒有掛板。
