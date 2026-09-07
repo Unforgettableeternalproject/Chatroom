@@ -78,6 +78,17 @@ class RoomFeed {
   /// 回傳「本次新增（先前不存在）的訊息數」，供未讀提示用。
   int upsertAll(Iterable<Message> incoming) {
     var added = 0;
+    // store 有沒有真的動過。**只有動過才通知**——Hub 的 pump 條件是
+    // `MAX(seq, update_seq) > last`，而釘選／刪除／編輯都會推進 `update_seq`
+    // ⇒ 一則早就捲出視窗的舊訊息會被重推一次，走到下面那個 `continue`，
+    // `_bySeq` 一個字都沒改。無條件通知的話，**有人釘一則舊訊息，全房的
+    // 畫面各重建一次，而畫面上什麼都沒變**。WS 重連用 after_seq 補推一批
+    // 已知訊息也是同一件事。
+    //
+    // ⚠️ 條件是「store 變了」不是 `added > 0`：釘選／刪除／編輯**不產生新
+    // 訊息**，它們推進的是既有那則的 update_seq ⇒ 走覆寫那條、`added` 為 0，
+    // 而那時畫面確實要更新（測試釘住這一條）。
+    var changed = false;
     for (final m in incoming) {
       // cursor 永遠推進（否則 resubscribe 會反覆重推同一批更新）
       if (m.cursor > _cursor) _cursor = m.cursor;
@@ -94,13 +105,14 @@ class RoomFeed {
       final existing = _bySeq[m.seq];
       if (existing != null && m.cursor < existing.cursor) continue;
       if (existing == null) added++;
+      changed = true;
       _bySeq[m.seq] = m;
       _idToSeq[m.id] = m.seq;
     }
     if (_bySeq.isNotEmpty) {
       _oldestLoadedSeq ??= _bySeq.firstKey();
     }
-    _notify();
+    if (changed) _notify();
     return added;
   }
 
