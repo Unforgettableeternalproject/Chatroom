@@ -237,3 +237,26 @@ async def test_the_notice_reads_for_someone_with_no_context(tmp_path):
         # 第二句：怎麼看到全部——兩條路都要在
         assert "include_settled" in f["how_to_see_them"]
         assert "objective_id" in f["how_to_see_them"]
+
+
+async def test_the_hidden_cycles_are_listed_by_id(tmp_path):
+    """`objective_id=` 那條路要**走得到**（@決策Novia 09/07 以陌生讀者角度
+    讀出來的缺口）。
+
+    沒有這份清單的話那條路對陌生人是死的：他手上的回應裡沒有那些 id，而
+    **id 正是被篩掉的東西**。要拿到 id 得先 include_settled 全量讀一次——
+    那第二條路就不是替代路徑，是繞遠路。
+
+    只帶 id／標題／卡數，不含子項：幾百字元，不是幾十萬。
+    """
+    app, client = await _client(tmp_path, "scope-cycle-list")
+    async with app.router.lifespan_context(app), client:
+        bid, _, _, ids = await _setup(client)
+        f = (await _read(client, bid, OWNER))["filtered"]
+        assert [c["id"] for c in f["cycles"]] == [ids["old"]["objective"]]
+        assert f["cycles"][0]["title"] == "08/31 週期"
+        assert f["cycles"][0]["tasks"] == 1
+        # 那條路真的走得通——拿清單裡的 id 去取，就看得到那一期
+        body = await _read(client, bid, OWNER,
+                           objective_id=f["cycles"][0]["id"])
+        assert [o["id"] for o in body["objectives"]] == [ids["old"]["objective"]]

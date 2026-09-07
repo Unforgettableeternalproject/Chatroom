@@ -6358,15 +6358,36 @@ def create_app(config: Config | None = None) -> FastAPI:
         # **「我知道怎麼看到全部」**。
         # （提這件事的人自己就是原型：他第一次讀這塊板直接撞上限，當時手上
         # 沒有任何線索，是靠讀轉存檔＋自己寫 python 解析才拼出發生了什麼。）
+        # 🔑 **被篩掉的那幾期要列出 id**（@決策Novia 09/07 以陌生讀者角度
+        # 讀出來的缺口）：沒有這份清單的話，`objective_id=` 那條路對陌生人
+        # 是**死的**——他手上這份回應裡沒有那些 id，而 id 正是被篩掉的東西。
+        # 要拿到 id 得先 include_settled 全量讀一次，那第二條路就不是替代
+        # 路徑而是繞遠路。
+        #
+        # 只帶 id／標題／卡數，不含子項：那是幾百字元，不是幾十萬。
+        cycles = await (await db.execute(
+            "SELECT o.id, o.title,"
+            "  (SELECT COUNT(*) FROM board_task t"
+            "     JOIN board_checklist c ON c.id = t.checklist_id"
+            "    WHERE c.objective_id = o.id AND t.deleted=0) AS tasks"
+            f" FROM board_objective o WHERE {scope_sql.replace('board_id', 'o.board_id').replace('room_id', 'o.room_id')}"
+            f"   AND o.deleted=0 AND o.status IN {SETTLED_OBJECTIVE_SQL}"
+            " ORDER BY o.board_seq DESC LIMIT 20",
+            tuple(scope_params))).fetchall()
         return {
             "objectives": row["n"], "tasks": tasks["n"],
+            # 一行一個，最近的在前。超過 20 期時只列前 20——再多就不是
+            # 「一眼看到被藏的是哪幾期」，而是另一份要捲的東西
+            "cycles": [{"id": c["id"], "title": c["title"],
+                        "tasks": c["tasks"]} for c in cycles],
             "reason": f"⚠️ 你手上這份**不是整塊板**：另外還有 {row['n']} 個"
                       f"已經收尾的週期（共 {tasks['n']} 張卡）沒有回傳給你。"
                       "整塊板一次讀完會超過單次可讀上限，所以預設只給還在"
                       "進行中的週期。",
             "how_to_see_them": "要看那些：讀取時帶 include_settled=true"
-                               "（全部歷史），或 objective_id=<週期 id>"
-                               "（只看其中一個）。用 MCP 工具的話是"
+                               "（全部歷史），或 objective_id=<id>"
+                               "（只看其中一個——底下 cycles 列出了它們的"
+                               " id 與標題）。用 MCP 工具的話是"
                                " chatroom_board(include_settled=True)。",
         }
 
