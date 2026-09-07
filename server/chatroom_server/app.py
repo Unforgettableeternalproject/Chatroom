@@ -4631,6 +4631,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         task_id: str,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         return await _board_soft_delete("task", task_id, x_participant_id,
                                         x_session_key)
@@ -5635,6 +5636,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def reorder_board(
         room_id: str, body: BoardReorder,
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """批次排序：**整批只領一個 board_seq**。
 
@@ -6813,6 +6815,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """讀一塊板（增量）。與 v1 回應**同構**，只多三個欄位。
 
@@ -6822,7 +6825,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        my_role = await _board_member_or_403(board_id, actor)
+        my_role = await _board_member_or_403(board_id, actor, host=host)
         db = app.state.db
         tombstones = after_board_seq > 0
 
@@ -6968,7 +6971,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     async def _board_writer_v2(board_id: str, session_key: str | None,
-                               participant_id: str | None):
+                               participant_id: str | None,
+                               host: bool = False):
         """board-scoped 寫入的共同門檻，回 (board, provenance_room_id, me)。
 
         與 room-scoped 版的差別在**權限來源**：那邊看房內身分，這邊看
@@ -6983,7 +6987,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if board["status"] != "active":
             raise _err(409, "board_archived", "這塊板已經封存，唯讀")
         actor = await _actor_from_headers(session_key, participant_id)
-        await _board_member_or_403(board_id, actor, need_write=True)
+        await _board_member_or_403(board_id, actor, need_write=True, host=host)
         member = await _board_identity(board_id, actor)
         # 有掛接房就拿第一間當 provenance；**沒有也照樣能建**（§11 步驟 8
         # 換表之後 room_id 沒有外鍵、可以是空字串）。一塊還沒掛上任何房的
@@ -6997,7 +7001,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "display_name": member["display_name"] if member else "",
             "kind": member["actor_kind"] if member else "",
             "session_key": actor,
-            "role": "agent",
+            # 與 `_board_item_writer` 的板軸退路同一個理由（09/07 卡
+            # 0a19355051）：寫死 agent 會讓人類在板軸上失去份量。主持人
+            # 視角也算人——它只認人類憑證
+            "role": "human" if (
+                (member["actor_kind"] if member else "").strip().lower()
+                == "human" or host) else "agent",
             "board_id": board_id,
         }
         return board, room["room_id"] if room else "", me
@@ -7008,10 +7017,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, body: BoardObjectiveCreate,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """從板上直接建一個週期。權限看 board_member，不看房。"""
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         db = app.state.db
         seq = await _next_seq_for_board(board_id)
         oid = uuid.uuid4().hex
@@ -7036,6 +7046,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, body: BoardTaskCreate,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """「隨手記」一張卡，自動放進「未分類」。
 
@@ -7043,12 +7054,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         版共用同一組「未分類」容器，不另外長一組出來。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         cid = await _uncategorised_checklist(room_id, me)
         return await _insert_task(cid, room_id, body, me)
 
-    async def _board_owner_or_403(board_id: str, actor: str) -> None:
-        if await _board_role(board_id, actor) != "owner":
+    async def _board_owner_or_403(board_id: str, actor: str,
+                                  host: bool = False) -> None:
+        if await _board_role(board_id, actor, host) != "owner":
             raise _err(403, "not_board_owner",
                        "這個動作只有這塊板的 owner 做得到")
 
@@ -7058,6 +7070,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """改板的名字或描述。只有 owner。
 
@@ -7069,7 +7082,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "board_archived", "封存的板不能改")
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         sets = {k: v for k, v in
                 {"name": body.name.strip() if body.name else None,
                  "description": body.description}.items() if v is not None}
@@ -7095,6 +7108,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """宣告這塊板的結局：完成／廢止，或空字串把它重新打開。
 
@@ -7116,7 +7130,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         me = await _board_identity(board_id, actor)
         if not me or me["actor_kind"] != "human":
             raise _err(403, "human_only",
@@ -7152,6 +7166,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """封存一塊板：板變唯讀，**掛接的房照樣聊天**（§3.2）。
 
@@ -7161,7 +7176,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         seq = await _next_seq_for_board(board_id)
         await app.state.db.execute(
             "UPDATE board SET status='archived' WHERE id=?", (board_id,))
@@ -7178,12 +7193,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """解除封存。封存是可逆的決定，刪除才不是。"""
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         seq = await _next_seq_for_board(board_id)
         await app.state.db.execute(
             "UPDATE board SET status='active' WHERE id=?", (board_id,))
@@ -7218,6 +7234,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """永久刪除一塊板。只有 owner，**不可復原**。
 
@@ -7228,7 +7245,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         db = app.state.db
         rooms = [r["room_id"] for r in await (await db.execute(
             "SELECT room_id FROM board_room WHERE board_id=?"
@@ -7265,6 +7282,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """加一個成員，或改既有成員的角色。只有 owner。
 
@@ -7274,7 +7292,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         target = actor_key(body.actor_key)
         if not target:
             raise _err(422, "actor_key_required", "要指定加誰")
@@ -7312,6 +7330,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """把一個人移出板。只有 owner，且**不能移掉最後一個 owner**。
 
@@ -7322,7 +7341,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
-        await _board_owner_or_403(board_id, actor)
+        await _board_owner_or_403(board_id, actor, host)
         target = actor_key(member_actor_key)
         db = app.state.db
         row = await (await db.execute(
@@ -7371,6 +7390,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """批次排序（board-scoped）。**整批只領一個 board_seq**。
 
@@ -7380,7 +7400,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         與 room-scoped 版的差別只在**卡的歸屬用 board_id 判定**：Board
         Library 上拖卡時沒有房，而卡本來就屬於板。
         """
-        await _board_writer_v2(board_id, x_session_key, x_participant_id)
+        await _board_writer_v2(board_id, x_session_key, x_participant_id, host)
         db = app.state.db
         table = BOARD_TABLES[body.kind]
         ids = [i.id for i in body.items]
@@ -7405,6 +7425,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, body: BoardVisibility,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """改這塊板的公開／私人。**掛在任何現存非封存房上時一律擋下。**
 
@@ -7417,7 +7438,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id)
-        if await _board_role(board_id, actor) != "owner":
+        if await _board_role(board_id, actor, host) != "owner":
             raise _err(403, "not_board_owner",
                        "只有這塊板的 owner 能改它的公開／私人")
         if board["visibility"] == body.visibility:
@@ -7951,9 +7972,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, body: ScratchpadCreate,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         db = app.state.db
         seq = await _next_seq_for_board(board_id)
         pid = uuid.uuid4().hex
@@ -8160,6 +8182,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, body: BoardTagsAdd,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """替這塊板註冊額外的標籤（艾斯維爾 #403）。
 
@@ -8168,7 +8191,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         「預設 ∪ 這塊板自訂的」，而不是一個空白輸入框。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         current = _board_custom_tags(board)
         added = []
         for t in body.tags:
@@ -8192,6 +8215,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, tag: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """拿掉一個自訂標籤。**還有段落在用就擋下，並指出是哪幾則。**
 
@@ -8210,7 +8234,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         是把問題換個地方放。**
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         if tag in DEFAULT_SCRATCHPAD_TAGS:
             raise _err(422, "tag_is_default",
                        f"「{tag}」是預設標籤，不屬於這塊板，不能移除",
@@ -8247,12 +8271,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str, body: ScratchpadBlockCreate,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """加一段。**這就是 agent 丟想法的方式**——它寫的是自己的段落，
         碰不到任何人已經寫下的東西，所以不需要任何守門。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         await _scratchpad_or_404(board_id, pad_id)
         db = app.state.db
         if body.after_block_id:
@@ -8309,6 +8334,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str, block_id: str, body: ScratchpadBlockWrite,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """改寫一段。**兩道關卡，各擋一種失去。**
 
@@ -8330,7 +8356,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         反而最不需要標它。**
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         await _scratchpad_or_404(board_id, pad_id)
         block = await _scratchpad_block_or_404(pad_id, block_id)
         # ⚠️ 判準是「**有沒有真的改到**」而不是「有沒有送」：App 送 PUT 時
@@ -8431,10 +8457,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str, block_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """刪一段。守門與改寫**完全一樣**——刪掉別人的話比改掉更徹底。"""
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         await _scratchpad_or_404(board_id, pad_id)
         block = await _scratchpad_block_or_404(pad_id, block_id)
         _block_guard(block, me)
@@ -8489,6 +8516,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str, block_id: str, body: ScratchpadNoteAdd,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """在一段旁邊掛一則註解。
 
@@ -8497,7 +8525,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         做」，而那時 agent 會改去把意見寫成新的一段，混在本文裡。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         await _scratchpad_or_404(board_id, pad_id)
         await _scratchpad_block_or_404(pad_id, block_id)
         db = app.state.db
@@ -8544,6 +8572,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         unresolve: bool = False,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """把一則註解標成已處理（``unresolve=true`` 收回）。
 
@@ -8555,7 +8584,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         「我提的意見我自己說處理完了」不是處理完了。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         await _scratchpad_or_404(board_id, pad_id)
         note = await (await app.state.db.execute(
             "SELECT * FROM board_scratchpad_note WHERE id=? AND scratchpad_id=?"
@@ -8643,6 +8672,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str, body: ScratchpadReorder,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """重排段落。**人類限定。**
 
@@ -8650,7 +8680,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         搬到另一段後面，意思可以完全不同。那與「改寫」是同一類的事。
         """
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         if not _actor_is_human(me):
             raise _err(403, "human_only",
                        "只有人類成員可以重排段落——排序會改變別人那段話的"
@@ -8712,10 +8742,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id: str, pad_id: str,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
     ):
         """軟刪除整份。刪掉的是別人丟進來的東西，硬刪不留回頭路。"""
         board, room_id, me = await _board_writer_v2(
-            board_id, x_session_key, x_participant_id)
+            board_id, x_session_key, x_participant_id, host)
         pad = await _scratchpad_or_404(board_id, pad_id)
         # 🚨 agent 刪不掉人類的段落，卻刪得掉**整份**——那是同一道守門的
         # 後門：軟刪之後畫面上什麼都看不到，效果與刪掉每一段一樣
@@ -9840,6 +9871,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         """房間視角的指派列表（UI 檢視用，含所有狀態）。"""
         room = await _room_or_404(room_id, allow_archived=True)
