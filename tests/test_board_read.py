@@ -222,6 +222,9 @@ async def test_response_shape_is_pinned(tmp_path):
             # 來源訊息的完整座標：一塊板掛多間房之後，光有 seq 講不出
             # 「是哪一間房的第幾則」
             "source_room_id", "source_room_name", "source_message_id",
+            # 這件事搬去哪張卡了（`status='moved'`，09/07 卡 73fe4d94）。
+            # 空字串＝沒搬走，或搬走了但去向還沒說
+            "moved_to",
         }
         assert set(body["reclaimable_tasks"][0]) == {
             "id", "title", "orphaned_at", "claim_name",

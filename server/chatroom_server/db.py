@@ -308,6 +308,12 @@ CREATE TABLE IF NOT EXISTS board_task (
     -- 為什麼變成孤兒。**只有在離場那一刻知道**——事後從 participant 反推
     -- 不出來（status 會被下一次 join 覆寫），所以當場記
     orphaned_reason      TEXT NOT NULL DEFAULT '',
+    -- `status='moved'` 時這件事搬去哪張卡了。空字串＝搬走了但去向還沒說，
+    -- 那是真實的中間狀態（新週期常常是先收舊卡、再建新卡）。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**：舊 db 靠 migration
+    -- 補欄，而 `board_task__v2` 的重建路徑是照這份 CREATE TABLE 建的——
+    -- 只加 migration 的話，重建之後 INSERT 會找不到這個欄位
+    moved_to             TEXT NOT NULL DEFAULT '',
 
     -- 來源訊息的房內 seq。**存 seq 不存 message_id**，與 reply_to_seq 同一個
     -- 理由：訊息可以被軟刪除，seq 不會
@@ -839,6 +845,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 反過來預設成 human 會把整個機制的方向弄反：一次升級就讓外面每一張 token
     # 都當得了主持人，而且不會有任何地方報錯。
     ("access_token", "audience", "audience TEXT NOT NULL DEFAULT 'agent'"),
+    # 這張卡的工作搬去哪了（`status='moved'` 時指向新卡）。空字串＝搬走了但
+    # 還沒說去向，那是真實的中間狀態：跨週期搬遷常常是先把舊卡收掉、新週期
+    # 開起來才建新卡。存量一律空——這一欄存在之前沒有 moved 這個狀態
+    ("board_task", "moved_to", "moved_to TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -960,6 +970,7 @@ REBUILT_TABLES: dict[str, str] = {
             claimed_at           TEXT,
             orphaned_at          TEXT,
             orphaned_reason      TEXT NOT NULL DEFAULT '',
+            moved_to             TEXT NOT NULL DEFAULT '',
             source_seq        INTEGER,
             source_room_id    TEXT NOT NULL DEFAULT '',
             source_room_name  TEXT NOT NULL DEFAULT '',

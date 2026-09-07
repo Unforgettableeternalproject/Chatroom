@@ -523,6 +523,10 @@ class BoardStatusChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = Field(min_length=1, max_length=20)
+    # `status="moved"` 時：這件事搬到哪張卡去了。**選填**——跨週期搬遷常常
+    # 是先把舊卡收掉、新週期開起來才建新卡，要求先有目標等於逼人先建一張
+    # 佔位卡。空的意思是「搬走了，去向還沒說」，那是真實的中間狀態
+    moved_to: str = Field(default="", max_length=64)
 
 
 class BoardReorderItem(BaseModel):
@@ -2868,7 +2872,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 「不該是孤兒的孤兒」有兩種：自己收尾了（F6），以及父層被取消了
         # （A5）。兩種的存量都要清，否則 v2 遷移會把它們一起帶過去。
         stale = (
-            " claim_state='orphaned' AND (status IN ('done','cancelled')"
+            " claim_state='orphaned' AND (status IN ('done','cancelled','moved')"
             "   OR checklist_id IN (SELECT c.id FROM board_checklist c"
             "        JOIN board_objective o ON o.id = c.objective_id"
             "        WHERE c.status='cancelled' OR o.status='cancelled'))"
@@ -2941,7 +2945,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 而 done／cancelled 的事**已經沒有人需要做**——把它標成
                 # orphaned 會產生一個自相矛盾的組合：完成了、而且沒人在做。
                 # UI 讀到那個組合只能二選一顯示，怎麼選都是錯的
-                "   AND t.status NOT IN ('done','cancelled')"
+                "   AND t.status NOT IN ('done','cancelled','moved')"
                 # 🔴 父層被取消的卡同理，而且它連「自己被取消」都不會顯示：
                 # objective 的 cancel 只改自己那一列、**不 cascade 子層**
                 # （那是刻意的——cascade 會把子卡狀態改掉，週期 reopen 時
@@ -4662,12 +4666,16 @@ def create_app(config: Config | None = None) -> FastAPI:
     # **板是給人讀的紀錄，讓它說謊比讓它少擋一次嚴重。**
     # 仍然擋著的是有矛盾的那些：`blocked` 不能直接宣告完成（先解除阻塞）、
     # 收尾了的不能橫向改成另一種收尾。
+    # `moved`＝這件事搬到別的地方做了（09/07 卡 73fe4d94）。它不是 done
+    # （在這裡沒有做完）也不是 cancelled（不是「不做了」）——沒有這個狀態
+    # 的話，一張早就搬走的卡會永遠擋著它那份清單送審。
     TASK_TRANSITIONS = {
-        "todo": {"in_progress", "blocked", "done", "cancelled"},
-        "in_progress": {"blocked", "done", "cancelled"},
-        "blocked": {"in_progress", "cancelled"},
+        "todo": {"in_progress", "blocked", "done", "cancelled", "moved"},
+        "in_progress": {"blocked", "done", "cancelled", "moved"},
+        "blocked": {"in_progress", "cancelled", "moved"},
         "done": {"in_progress"},          # 打回，限人類
         "cancelled": {"todo"},            # 取消可以復原，同樣限人類
+        "moved": {"todo"},                # 搬錯了要收得回來，與 cancelled 對稱
     }
 
     def _is_human(me) -> bool:
@@ -4787,10 +4795,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=old, to_status=body.status,
                        allowed=sorted(TASK_TRANSITIONS.get(old, set())))
         human = _is_human(me)
-        if old in ("done", "cancelled") and not human:
+        if old in ("done", "cancelled", "moved") and not human:
             raise _err(403, "human_only",
-                       "只有人類成員可以把已完成／已取消的任務重新打開——"
-                       "agent 不能撤銷自己剛做出的宣告")
+                       "只有人類成員可以把已完成／已取消／已搬走的任務"
+                       "重新打開——agent 不能撤銷自己剛做出的宣告")
         # **目前的認領者**也可以取消（艾斯維爾 2026-09-05 核准，卡 56a07ff3）。
         #
         # 起因是一張「問題已經自己消失了」的收尾票：查證的人三件都驗完、
@@ -4808,6 +4816,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                          and _is_claim_holder(row, me)):
             raise _err(403, "human_only",
                        "只有建立者、目前的認領者或人類成員可以取消這張卡")
+        # `moved` 的目標要真的存在（09/07 卡 73fe4d94）。指向不存在的卡等於
+        # 沒有指向，而畫面會照樣畫一個點得下去的連結——那比留白更糟
+        if body.status == "moved" and body.moved_to.strip():
+            dest = body.moved_to.strip()
+            if dest == task_id:
+                raise _err(409, "moved_to_self", "一張卡不能搬到它自己身上")
+            found = await (await app.state.db.execute(
+                "SELECT 1 FROM board_task WHERE id=? AND deleted=0 LIMIT 1",
+                (dest,))).fetchone()
+            if found is None:
+                raise _err(404, "moved_to_not_found",
+                           "指向的那張卡不存在（或已被刪除）——搬遷要指得到"
+                           "東西，不然這張卡只是消失了")
         # **板 owner 也推得動別人的卡**（09/07 卡 0a19355051）：他是這塊板
         # 的負責人，而卡的持有者可能早就不在了。人類那條之外還要這一條，是
         # 因為 owner 不一定是人——agent 開的板，agent 自己收不掉，等於沒有人
@@ -4815,7 +4836,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_owner = await _board_role(
             (me.get("board_id") or "").strip(),
             actor_key(me["session_key"]), host) == "owner"
-        if not human and not board_owner and row["claim_state"] == "held" \
+        # **房的 Supervisor 也推得動**（09/07 卡 73fe4d94，決策明列）：他是
+        # 那個負責看的人，而跨週期搬遷正是他在收的尾。判準共用
+        # `_is_board_supervisor`，所以「退場了就不算」那條一併成立
+        supervising = (not human and not board_owner
+                       and await _is_board_supervisor(row, me))
+        if not human and not board_owner and not supervising \
+                and row["claim_state"] == "held" \
                 and not _is_claim_holder(row, me):
             hint, same_name = _holder_hint(row, me)
             raise _err(403, "not_claim_holder",
@@ -4843,7 +4870,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # `claim_name` / `claimed_at` **留著**——那是歷史（誰做的、什麼時候
         # 領的），與「現在誰在做」是兩件事
-        settling = body.status in ("done", "cancelled")
+        settling = body.status in ("done", "cancelled", "moved")
         cur = await db.execute(
             "UPDATE board_task SET status=?, completed_by=?,"
             " completed_by_actor_key=?, completed_at=?,"
@@ -4853,11 +4880,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             "   ELSE claim_state END,"
             " orphaned_at=CASE WHEN ? THEN NULL ELSE orphaned_at END,"
             " orphaned_reason=CASE WHEN ? THEN '' ELSE orphaned_reason END,"
+            # 搬走時記下去向；**離開 moved 時清掉**——留著的話那張卡會同時
+            # 「在這裡」與「搬到別處了」，而畫面只能二選一顯示
+            " moved_to=?,"
             " board_seq=? WHERE id=? AND status=? RETURNING id",
             (body.status, me["id"] if done else None,
              actor_key(me["session_key"]) if done else "",
              _now() if done else None,
-             settling, settling, settling, seq, task_id, old),
+             settling, settling, settling,
+             body.moved_to.strip() if body.status == "moved" else "",
+             seq, task_id, old),
         )
         if await cur.fetchone() is None:
             # 領號已經寫進去了，不 commit 會讓下一個號重複。⚠️ 同時要補一筆
@@ -5016,7 +5048,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchall()
             states = [r["status"] for r in tasks]
-            if not states or any(s not in ("done", "cancelled") for s in states) \
+            # `moved` 算收尾——它在這裡沒有做完，但**這裡已經不必再做它了**。
+            # 不算的話，一張早就搬去新週期的卡會永遠擋著這份清單，而那正是
+            # 09/07 卡 73fe4d94 要解的「收不掉」
+            if not states or any(
+                    s not in ("done", "cancelled", "moved")
+                    for s in states) \
                     or "done" not in states:
                 raise _err(409, "tasks_incomplete",
                            "底下還有沒做完的任務，或這份清單裡沒有任何一項真的"
@@ -6003,7 +6040,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             " claim_actor_key=?,"
             " claim_name=?, claim_kind=?, claim_state='held', claimed_at=?,"
             " orphaned_at=NULL, orphaned_reason='', board_seq=?"
-            " WHERE id=? AND deleted=0 AND status NOT IN ('done','cancelled')"
+            " WHERE id=? AND deleted=0"
+            "   AND status NOT IN ('done','cancelled','moved')"
             "   AND (claim_state='' OR claim_state='orphaned')"
             " RETURNING id",
             (me["id"], me["session_key"], mine, me["display_name"], me["kind"],
@@ -6760,7 +6798,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 實測一塊活躍的板回 65，真正未收尾的只有 3
             # （審核用Codex 2026-09-05）。而 App 把它直接標成「N 進行中」
             " SUM(CASE WHEN claim_state='held'"
-            "          AND status NOT IN ('done','cancelled')"
+            "          AND status NOT IN ('done','cancelled','moved')"
             "     THEN 1 ELSE 0 END) AS claimed"
             " FROM board_task WHERE board_id=? AND deleted=0",
             (b["id"],))).fetchone()
@@ -7401,7 +7439,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 已收尾的卡不孤兒化——`done` ∧ `orphaned` 接不回來（見
             # `set_task_status` 的收斂）。`_orphan_claims`（`:2575`）早就有
             # 這個條件，這條入口漏了（@開發Novia (除錯) 2026-09-03）
-            "   AND status NOT IN ('done','cancelled')"
+            "   AND status NOT IN ('done','cancelled','moved')"
             "   AND TRIM(claim_actor_key)=? RETURNING id",
             (now, seq, board_id, target))
         released = len(await cur.fetchall())
@@ -11191,7 +11229,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         not_claiming = (
             " AND NOT EXISTS (SELECT 1 FROM board_task t"
             " WHERE t.claim_state='held' AND t.deleted=0"
-            "   AND t.status NOT IN ('done','cancelled')"
+            "   AND t.status NOT IN ('done','cancelled','moved')"
             "   AND (t.claim_actor_key = TRIM(participant.session_key)"
             "        OR (t.claim_actor_key = ''"
             "            AND TRIM(t.claim_session_key)"
