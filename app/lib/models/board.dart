@@ -1548,7 +1548,14 @@ class BoardSummary {
       name: (json['name'] as String?) ?? '',
       status: (json['status'] as String?) ?? 'active',
       attachedRoomCount: (json['attached_room_count'] as int?) ?? 0,
-      liveRoomCount: (json['live_room_count'] as int?) ?? 0,
+      // 同一個值兩個名字（Hub `d03c2a5` 起並存）：`live_attached_room_count`
+      // 是 09/07 決策定的正典，`live_room_count` 是先前就在的舊名，
+      // 預計下一個 kit 週期收掉。**先讀正典再退回舊名**——反過來寫的話，
+      // 舊名被收掉的那一天這個數字會靜靜變成 0，而 0 是一個合法的值
+      // （「一間活著的房都沒有」），沒有任何地方會報錯
+      liveRoomCount: (json['live_attached_room_count'] as int?) ??
+          (json['live_room_count'] as int?) ??
+          0,
       deliveryMode: (json['delivery_mode'] as String?) ?? '',
       taskTotal: (counts['total'] as int?) ?? 0,
       taskDone: (counts['done'] as int?) ?? 0,

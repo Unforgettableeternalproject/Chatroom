@@ -25,6 +25,8 @@ BoardSnapshot _snap(List<Map<String, dynamic>> rooms, {int? liveCount}) =>
     }));
 
 void main() {
+  _libraryNaming();
+
   group('activeRooms 與 liveRooms 是兩個問題', () {
     test('🔴 封存的房仍然掛著，但它不是「還在用」', () {
       final snap = _snap([
@@ -77,6 +79,41 @@ void main() {
       ], liveCount: 3);
       final after = full.merge(BoardDelta.fromJson({'board_seq': 11}));
       expect(after.liveAttachedRooms, 3);
+    });
+  });
+}
+
+/// 清單（Library）那半：**同一個值兩個名字**。
+///
+/// Hub `d03c2a5` 起 `live_attached_room_count`（09/07 決策定的正典）與
+/// `live_room_count`（先前就在的舊名）並存、值相同，舊名預計下一個 kit
+/// 週期收掉。
+///
+/// ⚠️ 先讀正典再退回舊名。反過來寫的話，舊名被收掉的那一天這個數字會
+/// **靜靜變成 0**——而 0 是一個合法的值（「一間活著的房都沒有」），
+/// 沒有任何地方會報錯，畫面只會說這塊板沒有人在用。
+void _libraryNaming() {
+  group('清單的 live 計數：兩個名字並存期', () {
+    BoardSummary parse(Map<String, dynamic> json) =>
+        BoardSummary.fromJson({'id': 'b1', ...json});
+
+    test('兩個都在時取正典', () {
+      expect(
+          parse({'live_attached_room_count': 2, 'live_room_count': 2})
+              .liveRoomCount,
+          2);
+    });
+
+    test('🔴 只有正典時也要讀得到——舊名收掉那天不能變成 0', () {
+      expect(parse({'live_attached_room_count': 3}).liveRoomCount, 3);
+    });
+
+    test('只有舊名時（還沒換版的 Hub）照樣讀得到', () {
+      expect(parse({'live_room_count': 1}).liveRoomCount, 1);
+    });
+
+    test('兩個都沒有才是 0', () {
+      expect(parse(const {}).liveRoomCount, 0);
     });
   });
 }
