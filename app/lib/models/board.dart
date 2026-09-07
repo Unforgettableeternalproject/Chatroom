@@ -1830,6 +1830,27 @@ BoardEntryKind boardEntryKind({
   return hadDeletedBoard ? BoardEntryKind.deleted : BoardEntryKind.none;
 }
 
+/// 進板時預設要展開哪一個週期。
+///
+/// 🔴 **「排序上的第一個」在 `90cc566` 之後就不對了**：那顆讓 App 帶
+/// `include_settled=true` 把歷史週期撈回畫面（先前人類只看得到本週期），
+/// 於是清單裡多了已完成的那些，而預設選取沒跟著調整——進板第一眼看到的
+/// 變成一個早就收工的週期（艾斯維爾 09/07 實機）。
+///
+/// **不是新 bug，是那個修復的直接副作用**：改了資料範圍，沒改「預設看哪
+/// 一筆」。同一族的第三次。
+///
+/// 判準是**還沒結束的第一個**，不是「active 的第一個」——`review` 與
+/// `verified` 都還在等人類動手，它們比任何 `done` 都更需要被看到。
+/// 全部都結束了才退回第一個：那時沒有「該關注的」，但畫面仍要有東西。
+BoardObjective? defaultObjective(List<BoardObjective> sorted) {
+  if (sorted.isEmpty) return null;
+  for (final o in sorted) {
+    if (o.status != 'done') return o;
+  }
+  return sorted.first;
+}
+
 /// 這間房到底有沒有掛板。
 ///
 /// ⚠️ 判準是**載入完成而且沒有 board_id**，不是「快照是空的」。

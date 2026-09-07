@@ -245,9 +245,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 final objectives = snap.sortedObjectives;
                 if (objectives.isEmpty) return _emptyBoard(context);
 
+                // 判準在 model（`defaultObjective`）——「進板先看哪一個」
+                // 是規格不是版面細節，放這裡的話它會與測試分開演化
                 final selected = objectives.firstWhere(
                   (o) => o.id == _selectedObjectiveId,
-                  orElse: () => objectives.first,
+                  orElse: () => defaultObjective(objectives)!,
                 );
                 return LayoutBuilder(builder: (context, c) {
                   // 窄螢幕收掉左欄，只留展開的那一條
