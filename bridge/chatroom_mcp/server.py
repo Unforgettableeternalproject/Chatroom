@@ -164,13 +164,19 @@ def _my_session_key() -> str:
 
 
 def _presence_params() -> dict[str, str]:
-    """帶 session_key 的查詢參數，順便向 Hub 自報 kind 與代稱。
+    """向 Hub 自報 kind 與代稱的查詢參數。
 
     Hub 據此維護 session 名錄（指派 UI 的掃描來源）；label 用
     CHATROOM_DEFAULT_NAME，讓使用者在清單上認得出這個 session 是誰。
 
-    用 canonical key 自報：名錄是指派 UI 的來源，登記錯就等於在清單上
-    掛一把沒人在聽的 key，而它看起來跟能用的完全一樣。
+    ⚠️ **`session_key` 這一輪兩個位置都送**（87ec8297，決策 seq 169）：
+    標頭是正典，查詢字串留著是為了**讓 kit 與 Hub 版本解耦**——新 Hub
+    （≥ `f2f9c1e`）header 優先、舊位置被忽略；舊 Hub（正式站現在跑的
+    版本）只讀得到舊位置。只送標頭的話，裝了新 kit 又還沒換 Hub 的人會
+    當場 422，而症狀看起來像身分壞掉不像版本錯配。
+
+    真正的拔收斂到下一個 kit 週期（那時所有 Hub 都齊了，與其他舊名一次
+    拔乾淨）。`kind` / `host` / `label` 不是憑證，本來就留在這裡。
     """
     params = {"session_key": _my_session_key(), "kind": AGENT_KIND,
               "host": identity.host_name()}
@@ -389,12 +395,14 @@ def chatroom_list_rooms() -> dict:
     （含 room_name / room_topic / note，說明邀你進去做什麼）。
     已加入過的房間會附上 ``you_joined_as``，也就是你在該房的顯示名稱。
     """
-    data = hub().request("GET", "/api/rooms", params=_presence_params())
+    data = hub().request("GET", "/api/rooms", params=_presence_params(),
+                         session_key=_my_session_key())
     # /api/rooms 的 pending_assignments 只有原始欄位；/api/assignments 有 join 房名，
     # 對 agent 更可讀，取得成功就用它替換
     try:
         richer = hub().request(
-            "GET", "/api/assignments", params=_presence_params()
+            "GET", "/api/assignments", params=_presence_params(),
+            session_key=_my_session_key(),
         )
         data["pending_assignments"] = richer.get("assignments", [])
     except HubError:
@@ -444,6 +452,9 @@ def chatroom_join(
             "preferred_name": preferred_name or DEFAULT_NAME or None,
             "role": "agent",
         },
+        # 標頭是正典（87ec8297），body 那份留給還沒換版的 Hub。新 Hub
+        # header 優先，兩者同時給時舊的不會被讀
+        session_key=canonical_key,
     )
     state().set_identity(
         room_id,
@@ -487,17 +498,25 @@ def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
             identity_invalid=True,
         )
     parent_key = state().session_key(room_id) or _my_session_key()
+    sub_key = derive_key(parent_key, name)
     data = hub().request(
         "POST",
         f"/api/rooms/{room_id}/join",
         json={
             "kind": AGENT_KIND,
             "host": identity.host_name(),
-            "session_key": derive_key(parent_key, name),
+            "session_key": sub_key,
             "preferred_name": name or None,
             "role": "agent",
             "parent_participant_id": parent_id,
         },
+        # ⚠️ 兩處送的都是**子代理自己**那把 derived key，不是父層的。這裡
+        # 最容易順手填成 `_my_session_key()`——那會讓子代理以父層身分登記，
+        # 而回應看起來完全正常。
+        # 也**必須是同一個變數**：`derive_key` 每次呼叫產生不同的值，兩處
+        # 各算一次的話 body 與標頭會是兩把不同的 key，而 Hub 只會讀其中
+        # 一把——另一把去了哪裡沒有人看得出來
+        session_key=sub_key,
     )
     handle = _subagents.new_handle()
     # 游標起點取 Hub 回的 joined_seq（加入當下房內的最後一則 seq）：子代理
@@ -891,7 +910,8 @@ def chatroom_assignments() -> dict:
     一邊會被忘記查，而被忘記的那一邊沒有人會發現。
     """
     data = hub().request(
-        "GET", "/api/assignments", params=_presence_params()
+        "GET", "/api/assignments", params=_presence_params(),
+        session_key=_my_session_key(),
     )
     data["your_session_key"] = _my_session_key()
     return data
@@ -1455,8 +1475,9 @@ def _board_scoped_request(method: str, path: str, **kwargs: Any) -> Any:
     """
     params = dict(kwargs.pop("params", None) or {})
     params.setdefault("session_key", _my_session_key())
-    # ⚠️ **兩邊都要帶。** GET 端點吃查詢字串上的 session_key，POST／PUT／
-    # DELETE 只認 `X-Session-Key` 標頭——只給前者的話，寫入會被當成沒有身分
+    # ⚠️ **這一輪兩邊都帶**（87ec8297）：標頭是正典，查詢字串是給還沒換版
+    # 的 Hub 的相容退路。`_actor_from_headers` 是 header 優先，新 Hub 會忽略
+    # 舊位置——拔掉的時機在下一個 kit 週期，不是現在
     return hub().request(method, path, params=params,
                          session_key=_my_session_key(), **kwargs)
 
@@ -2022,6 +2043,7 @@ def chatroom_notices(unread_only: bool = True,
     out = hub().request("GET", "/api/board/notices",
                         session_key=_my_session_key(),
                         params={"unread_only": unread_only,
+                                # 相容退路，同上
                                 "session_key": _my_session_key()})
     if mark_read and isinstance(out, dict) and out.get("notices"):
         # ⚠️ **只標記這次撈到的那幾筆。** `all_notices=true` 會把沒回給你
