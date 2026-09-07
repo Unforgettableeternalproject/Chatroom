@@ -502,8 +502,20 @@ class _RoomSupervisorSection extends ConsumerWidget {
     // 才塞進 room）。寫成 `.room.youAreAdmin` 會**永遠是 false**——指派
     // 按鈕就這樣消失了，而畫面上看起來只是「這間房沒有指派入口」
     // （艾斯維爾 2026-09-03 實機：「不知為何無法指定裁定Novia」）
-    final canAssign =
+    // 封存房不改人事。Hub 那端本來就擋（`_room_or_404` → 409
+    // `room_archived`，主持人模式也繞不過），所以這裡藏的是一顆**必定失敗
+    // 的按鈕**——留著它等於在邀請一個做不到的動作
+    // （Bernie 2026-09-07 想法板 4cc16199）。
+    //
+    // ⚠️ 判準用**房間**的狀態，不是板的：封存的房裡那塊板照樣可寫
+    // （§10 兩者分開），所以借 `_readOnly` 那條線會把還能動的板一起鎖死。
+    final roomArchived = attached?.status == 'archived';
+    // 「管得動這間房」與「現在還能不能改人事」是兩件事。合成一個旗標的話，
+    // 封存會把唯讀的追蹤入口一起收掉——而封存房照樣讀得到板，
+    // 「當初是誰在看」正是回頭查歷史時最需要的那條路
+    final isRoomAdmin =
         ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
+    final canAssign = !roomArchived && isRoomAdmin;
     final sup = attached?.supervisor;
     final departed = attached?.supervisorDeparted ?? false;
     // 我是不是這間房的 supervisor。人類的 actor_key 就是 deviceKey
@@ -544,7 +556,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
         ],
         // 追蹤介面的入口。**supervisor 本人與房間管理者才看得到**——
         // 它是「監察」用的視角，對其他成員來說只是同一批卡換個排法
-        if (canAssign || iAmSupervisor) ...[
+        if (isRoomAdmin || iAmSupervisor) ...[
           const SizedBox(width: 8),
           UepButton(
             label: '誰在做什麼',
@@ -577,6 +589,16 @@ class _RoomSupervisorSection extends ConsumerWidget {
           ],
         ],
       ]),
+      // 消失要留下說明。**只是不見的話，看的人會以為自己權限不夠**，
+      // 然後去找怎麼拿到權限——而封存不是權限問題，是這段歷史結束了
+      if (roomArchived && isRoomAdmin) ...[
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text('這間房已封存，人事不再變動。',
+              style: UepText.serif(size: 11.5, color: s.inkMute)),
+        ),
+      ],
     ]);
   }
 }
