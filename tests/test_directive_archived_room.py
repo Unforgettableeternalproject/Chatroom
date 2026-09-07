@@ -173,3 +173,33 @@ async def test_the_audit_trail_does_not_record_what_was_never_sent(tmp_path):
                                    headers={"X-Session-Key": "human-1"})
                   ).json()["events"]
         assert not [e for e in events if e["event_type"] == "directive"]
+
+
+async def test_a_refused_directive_does_not_burn_a_sequence_number(tmp_path):
+    """被拒的那則連**號碼**都不該領走。
+
+    board_seq 是稽核串的骨架，`tests/test_board_event_completeness.py` 守的是
+    「每個被領走的號都有一筆 event」。領了號卻不寫 event 會在串上留一個空洞，
+    而空洞比多一筆假紀錄更難查——它不指向任何東西。
+
+    （@開發Novia (UI) 09/07 追問「拒收發生在寫入之前嗎」時一起查出來的：
+    event 確實沒寫，但號已經領走了。）
+    """
+    app, client = await _client(tmp_path, "directive-no-seq")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client, "工作房")
+        await _join(client, rid, "sup-1", "監督者")
+        await _join(client, rid, "worker-1", "工人")
+        bid = await _board_on(client, rid)
+        await _make_supervisor(client, rid, "sup-1")
+        await _archive(client, rid)
+
+        before = (await client.get(f"/api/boards/{bid}",
+                                   headers={"X-Session-Key": "human-1"})
+                  ).json()["board_seq"]
+        r = await _send(client, bid, "sup-1", target="worker-1")
+        assert r.status_code == 409, r.text
+        after = (await client.get(f"/api/boards/{bid}",
+                                  headers={"X-Session-Key": "human-1"})
+                 ).json()["board_seq"]
+        assert after == before

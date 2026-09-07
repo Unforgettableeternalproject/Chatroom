@@ -7684,7 +7684,6 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有這塊板的 Supervisor 或 owner 能送出判斷")
         target = actor_key(body.target_actor_key)
         db = app.state.db
-        seq = await _next_seq_for_board(board_id)
         me = await (await db.execute(
             "SELECT display_name FROM board_member WHERE board_id=?"
             " AND actor_key=?", (board_id, actor))).fetchone()
@@ -7767,6 +7766,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "收件人只在已封存的聊天室裡——封存房唯讀，"
                            "這則判斷送不進去，也不會留在稽核串上。"
                            "請在還活著的房裡說，或先解除封存。")
+        # 🔴 **領號要在守門之後。** `_next_seq_for_board` 會推進板的計數器，
+        # 而被拒的那則不寫 event ⇒ 稽核串上會多一個沒有對應事件的空號。
+        # `tests/test_board_event_completeness.py` 守的正是「每個被領走的號
+        # 都有一筆 event」，而斷號比多一筆假紀錄更難查：它不指向任何東西
+        seq = await _next_seq_for_board(board_id)
         row = rows[0] if rows else None
         await _record_board_event(
             board_id, seq, "directive", actor=actor, actor_name=sender_name,
