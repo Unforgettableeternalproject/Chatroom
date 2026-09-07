@@ -6245,8 +6245,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _annotate_watches(
                 attached["id"], me_row["session_key"] if me_row else "",
                 objectives, checklists, tasks)
+        # 這間房原先那塊板被刪掉了（09/07 卡 029e24f6）。**回的是事實，
+        # 不是呈現**：進行中的房畫「沒綁板＋可重綁」、封存房畫「原先的板
+        # 已刪除」，那個判斷 client 手上就有（房的 status）。server 這側
+        # 再判一次的話，同一份事實會有兩個真相來源
+        tomb = await (await db.execute(
+            "SELECT deleted_board_name, deleted_board_at FROM room WHERE id=?",
+            (room_id,))).fetchone()
+        previous_board = None
+        if tomb is not None and (tomb["deleted_board_at"] or ""):
+            previous_board = {"name": tomb["deleted_board_name"],
+                              "deleted_at": tomb["deleted_board_at"]}
         return {
             "board_id": attached["id"] if attached else None,
+            "previous_board": previous_board,
             "board_seq": await _board_seq(room_id),
             "full": after_board_seq == 0,
             "objectives": objectives,
@@ -6336,9 +6348,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         return ""
 
     async def _board_or_404(board_id: str):
+        """這塊板，**已刪除的一律當成不存在**（09/07 卡 029e24f6）。
+
+        軟刪除留的是資料不是入口：`board_event` 是稽核串，硬刪會在上面留一個
+        指不到東西的洞；但那塊板對每一條 API 來說就是不在了。擋在這裡而不是
+        各個端點，是因為漏掉一條不會報錯——那塊板會從清單上消失卻還收得下
+        新卡。
+        """
         row = await (await app.state.db.execute(
             "SELECT * FROM board WHERE id=?", (board_id,))).fetchone()
-        if row is None:
+        if row is None or row["status"] == "deleted":
             raise _err(404, "board_not_found", "找不到這塊板")
         return row
 
@@ -6687,6 +6706,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             params: list = ["", ]
         else:
             sql, params = _library_scope_sql(actor)
+        # 刪掉的板誰都不列，主持人也一樣——他要的是「看得到別人的板」，
+        # 不是「看得到已經不存在的板」
+        sql += " AND b.status != 'deleted'"
         if want:
             sql += " AND b.status = ?"
             params.append(want)
@@ -7309,11 +7331,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         ⚠️ 這條**不會**被 room purge 間接觸發（§3.2）：刪一間房只解除掛接。
         板的刪除必須是一個獨立的、對著板本身下的決定——否則使用者刪掉一間
         聊完的對話，會連同整份工作紀錄一起消失。
+
+        🔴 **前置：板必須已經封存**（艾斯維爾 2026-09-07 裁定）。刪除不可
+        復原，封存是它的緩衝——要先按過一次「這份工作收尾了」，才輪得到
+        「這塊板不該存在」。兩個決定合成一步的話，中間沒有任何地方可以反悔。
+
+        刪掉之後**掛接的房要說得出實話**：進行中的房變回「沒綁板」（硬刪
+        連 `board_room` 的列一起帶走，那正是要的，房主可以再綁一塊），
+        封存房則留一句「原先的板已刪除」——它不會再綁新的，「沒綁板」對它
+        是錯的說法。墓碑寫在 `room` 側，因為板真的不在了。
         """
-        await _board_or_404(board_id)
+        board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
         await _board_owner_or_403(board_id, actor, host)
+        if board["status"] != "archived":
+            raise _err(409, "board_not_archived",
+                       "要先封存這塊板才能刪除——刪除不可復原，"
+                       "封存是它的緩衝。",
+                       board_status=board["status"])
         db = app.state.db
         rooms = [r["room_id"] for r in await (await db.execute(
             "SELECT room_id FROM board_room WHERE board_id=?"
@@ -7337,6 +7373,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             counts[table] = cur.rowcount
         cur = await db.execute("DELETE FROM board WHERE id=?", (board_id,))
         counts["board"] = cur.rowcount
+        # 墓碑。**在同一次 commit 裡**——分開寫的話，中間失敗會留下一間
+        # 「板不在了、也不知道曾經有過」的房，而那正是這段要消滅的狀態
+        for rid in rooms:
+            await db.execute(
+                "UPDATE room SET deleted_board_name=?, deleted_board_at=?"
+                " WHERE id=?", (board["name"], _now(), rid))
         await _commit_with_retry(db)
         # 掛接房要被叫醒：它們的 app bar 上還畫著這塊板
         for rid in rooms:
@@ -9440,6 +9482,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " attached_by_actor_key, attached_at) VALUES (?,?,?,?,?,?)",
                 (uuid.uuid4().hex, board_id, room_id, room["name"], actor,
                  _now()))
+            # 綁上新板 ⇒ 墓碑收掉。它講的是「這間房現在沒有板」，而現在有了
+            await db.execute(
+                "UPDATE room SET deleted_board_name='', deleted_board_at=NULL"
+                " WHERE id=?", (room_id,))
             # 這間房自己的舊卡（如果它以前有過 v1 的板）不會被搬過來——那是
             # 另一塊板的東西。掛接只是建立關聯，不合併任何資料
 

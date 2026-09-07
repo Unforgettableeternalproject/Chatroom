@@ -775,6 +775,10 @@ async def test_deleting_a_board_is_never_triggered_by_deleting_a_room(tmp_path):
             # provenance 留著：那間房已經不在了，快照是唯一講得出來的東西
             assert body["tasks"][0]["source_room_id"] in ("", rid)
 
+            # 刪除前置：板要先封存（09/07 艾斯維爾裁定，卡 029e24f6）——
+            # 刪除不可復原，封存是它的緩衝
+            assert (await client.post(f"/api/boards/{bid}/archive",
+                                      headers=owner)).status_code == 200
             r = await client.delete(f"/api/boards/{bid}", headers=owner)
             assert r.status_code == 200, r.text
             assert r.json()["deleted"]["board"] == 1

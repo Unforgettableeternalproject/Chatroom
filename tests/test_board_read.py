@@ -190,6 +190,10 @@ async def test_response_shape_is_pinned(tmp_path):
             # 板的結局，與 status 正交（09/05 裁定 A，卡 N-2）：從聊天室
             # 進板的人看不出這塊板已經收尾的話，他會在一塊結束了的板上繼續加卡
             "outcome",
+            # 這間房原先那塊板被刪掉了（09/07 卡 029e24f6）。回的是事實，
+            # 呈現由 App 決定：進行中的房畫「沒綁板＋可重綁」，封存房畫
+            # 「原先的板已刪除」
+            "previous_board",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",

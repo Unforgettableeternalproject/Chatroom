@@ -849,6 +849,13 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 還沒說去向，那是真實的中間狀態：跨週期搬遷常常是先把舊卡收掉、新週期
     # 開起來才建新卡。存量一律空——這一欄存在之前沒有 moved 這個狀態
     ("board_task", "moved_to", "moved_to TEXT NOT NULL DEFAULT ''"),
+    # 這間房原先掛的板被**刪掉**了（09/07 卡 029e24f6）。刪板是硬刪，
+    # `board_room` 的列跟著消失 ⇒ 進行中的房自然變回「沒綁板」（那正是要的），
+    # 但**封存房從此說不出自己曾經有過板**——那間房不會再綁新的，「沒綁板」
+    # 對它是錯的說法。名字存快照：沒有名字的訃聞等於沒有訃聞，而板已經不在
+    # 了，事後查不回來。空字串／NULL＝沒發生過這件事
+    ("room", "deleted_board_name", "deleted_board_name TEXT NOT NULL DEFAULT ''"),
+    ("room", "deleted_board_at", "deleted_board_at TEXT"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
