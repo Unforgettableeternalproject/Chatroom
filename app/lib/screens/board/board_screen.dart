@@ -578,20 +578,35 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 已經有結局時它變成一個狀態顯示＋重新打開的入口：**收尾是可逆的**，
         // 不可逆的只有刪除。沒有回頭路的話，人會為了怕按錯而乾脆不收尾，
         // 而那正好讓這個功能等於不存在
-        if (_boardIdOrNull != null && snap?.myRole == 'owner') ...[
+        //
+        // 🔴 條件從前是「只有 owner 看得到」，於是**非 owner 在任何地方都
+        // 看不出這塊板有沒有結局**（Bernie 2026-09-07：封存房回去看時右上角
+        // 沒有標記；封存只是最明顯的切面）。結局是**事實**，不是權限——
+        // 誰都該看得到，能不能改它才是權限。
+        //
+        // ⚠️ 這是今天在 App 端的第四次同一個形狀：把「狀態顯示」與「動作
+        // 入口」綁在同一個旗標上。前三次是板軸的收尾動作、封存房的指派入口、
+        // supervisor 的追蹤入口——症狀都一樣：**東西不見了，畫面上沒有
+        // 任何一句話說為什麼**。
+        if (_boardIdOrNull != null &&
+            (snap?.myRole == 'owner' || (snap?.outcome ?? '').isNotEmpty)) ...[
           const SizedBox(width: 8),
           _OutcomePill(
             outcome: snap?.outcome ?? '',
+            // 非 owner 是唯讀展示。**畫一顆按下去 403 的膠囊比不畫更糟**：
+            // 他會以為自己該有辦法改，然後去找那個辦法
+            onTap: snap?.myRole == 'owner'
+                ? () => showBoardOutcomeDialog(
+                      context,
+                      boardId: _boardIdOrNull!,
+                      current: snap?.outcome ?? '',
+                    )
+                : null,
             // 前置條件由 server 判、UI 只轉述（`outcome_eligible`）。已經
             // 收尾的走 reopen，那條不受前置管，所以 blockReason 是空的
             blockReason: (snap != null && !snap.canDeclareOutcome)
                 ? snap.outcomeBlockReason
                 : '',
-            onTap: () => showBoardOutcomeDialog(
-              context,
-              boardId: _boardIdOrNull!,
-              current: snap?.outcome ?? '',
-            ),
           ),
         ],
         // supervisor 只在真的有指定時出現。沒有指定就不畫一個空殼——
@@ -1721,7 +1736,13 @@ class _OutcomePill extends StatelessWidget {
   /// 一個功能不見了，而不是一個有理由的暫時擋下——這包一直在抓的就是這種
   /// 「畫面上什麼都沒說」的失效。理由要講得出下一步做什麼。
   final String blockReason;
-  final VoidCallback onTap;
+
+  /// null ＝ **唯讀展示**（非 owner）。結局是事實，誰都看得到；改它才是
+  /// 所有權層級的動作。
+  ///
+  /// ⚠️ 與 [blockReason] 不是同一件事：那個是「你有權，但現在還不能宣告」，
+  /// 講得出下一步；這個是「這顆膠囊對你只是資訊」，沒有下一步可做。
+  final VoidCallback? onTap;
 
   /// 擋下來的理由怎麼講給人聽。
   static String _reasonText(String reason) => switch (reason) {
@@ -1759,6 +1780,9 @@ class _OutcomePill extends StatelessWidget {
     if (blocked) {
       return Tooltip(message: _reasonText(blockReason), child: pill);
     }
+    // 唯讀：不包 InkWell。包了的話它會有點擊水波，而那在畫面上就是
+    // 「這裡可以按」——按下去卻什麼都不會發生
+    if (onTap == null) return pill;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
