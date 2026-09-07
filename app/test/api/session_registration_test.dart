@@ -43,7 +43,17 @@ void main() {
       final q = rec.seen.single.queryParameters;
       expect(q['kind'], 'codex');
       expect(q['label'], 'Codex-2650');
-      expect(q['session_key'], '01a05774-2650');
+    });
+
+    test('憑證改走 header，kind/label/host 留在 query（87ec8297）', () async {
+      // ⚠️ 這三個**不是憑證**：它們是向 session 名錄自報的資訊
+      // （我是什麼、叫什麼、在哪台機器）。統一憑證位置那張卡搬的只有
+      // `session_key`——照字串一起搬的話，名錄會少掉分辨機器的依據
+      await api.listForSession('01a05774-2650', kind: 'codex',
+          label: 'Codex-2650', host: 'TheFantasias');
+      expect(rec.seen.single.queryParameters.containsKey('session_key'),
+          isFalse);
+      expect(rec.seen.single.headers['X-Session-Key'], '01a05774-2650');
     });
   });
 }

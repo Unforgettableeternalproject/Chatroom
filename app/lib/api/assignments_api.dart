@@ -85,11 +85,14 @@ class AssignmentsApi {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/assignments',
           queryParameters: {
-            'session_key': sessionKey,
+            // kind／label／host 是向 session 名錄自報的資訊，不是憑證，
+            // 留在 query（87ec8297 搬的只有 session_key）
             'kind': ?kind,
             'label': ?nonEmptyLabel,
             'host': ?nonEmptyHost,
           },
+          // 憑證走 header（Hub `f2f9c1e` 起 query 改選填、header 優先）
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return ((res.data?['assignments'] as List?) ?? const [])
             .map((e) => Assignment.fromJson(e as Map<String, dynamic>))

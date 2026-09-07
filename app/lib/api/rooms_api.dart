@@ -190,7 +190,10 @@ class RoomsApi {
           '/api/rooms',
           queryParameters: {
             'status': status,
-            if (hasKey) 'session_key': sessionKey,
+            // ⚠️ 這三個**不是憑證**，留在 query：它們是向 session 名錄
+            // 自報的資訊（我是人／叫什麼／在哪台機器）。憑證統一到 header
+            // 那張卡搬的只有 session_key（87ec8297）
+            //
             // kind=human 讓 Hub 把我登記成人類——邀請 UI 才分得出
             // 「這是一個人」還是「這是一個 agent」
             if (hasKey) 'kind': 'human',
@@ -198,6 +201,10 @@ class RoomsApi {
             // 自報主機名：指派 UI 要靠它分出「這台機器上的 agent」
             if (hasKey && localHostName.isNotEmpty) 'host': localHostName,
           },
+          // 憑證走 header（正典，Hub `f2f9c1e` 起四支都收）。
+          // Hub 是 **header 優先**，所以不必雙送——雙送反而會讓
+          // 「我改成 header 了」在悄悄用舊位置時看起來也像生效
+          options: Options(headers: {'X-Session-Key': ?sessionKey}),
         );
         final rooms = ((res.data?['rooms'] as List?) ?? const [])
             .map((e) => Room.fromJson(e as Map<String, dynamic>))
@@ -228,13 +235,14 @@ class RoomsApi {
           data: {
             'name': name,
             'topic': topic,
-            // 建立者 session：Hub 以此認定管理員
-            //（可移出成員、可改鎖定狀態與說話方式）
-            'session_key': ?sessionKey,
             'visibility': visibility,
             'style': style,
             'style_instructions': styleInstructions,
           },
+          // 建立者 session：Hub 以此認定管理員（可移出成員、可改鎖定狀態
+          // 與說話方式）。**憑證走 header**（87ec8297）——漏帶的症狀不是
+          // 建房失敗，是三步之後建板拿 403，那條保護在 Hub 的端點層
+          options: Options(headers: {'X-Session-Key': ?sessionKey}),
         );
         return Room.fromJson(res.data!);
       });
@@ -499,13 +507,15 @@ class RoomsApi {
           '/api/rooms/$roomId/join',
           data: {
             'kind': kind,
-            'session_key': sessionKey,
             // ⚠️ role 不可遺漏：JoinRequest 預設 'agent'，
             // 人類漏送會在閒置 10 分鐘後被 sweeper 掃掉（P3-07 條件 5）。
             'role': role,
             if (preferredName != null && preferredName.isNotEmpty)
               'preferred_name': preferredName,
           },
+          // 憑證走 header（87ec8297）。join 是「建立身分」而不是「出示
+          // 身分」，但那不構成位置例外——決策 09/07 裁
+          options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return JoinResult(
           participantId: res.data!['participant_id'] as String,
