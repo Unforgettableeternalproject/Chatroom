@@ -6335,12 +6335,23 @@ def create_app(config: Config | None = None) -> FastAPI:
             f"   WHERE objective_id IN (SELECT id FROM board_objective"
             f"     WHERE {scope_sql} AND status IN {SETTLED_OBJECTIVE_SQL}))",
             tuple(scope_params))).fetchone()
+        # ⚠️ **這段文字是寫給沒有上下文的陌生人看的**（@測試Novia 09/07）。
+        # 具體情境：今天的週期收尾之後，明天第一次進房的 agent 讀板會看到
+        # 一片乾淨，而他沒參與過任何討論——`filtered` 是他唯一的線索。
+        # 它至少要讓那個人得出兩句話：**「我看到的不是全部」**、
+        # **「我知道怎麼看到全部」**。
+        # （提這件事的人自己就是原型：他第一次讀這塊板直接撞上限，當時手上
+        # 沒有任何線索，是靠讀轉存檔＋自己寫 python 解析才拼出發生了什麼。）
         return {
             "objectives": row["n"], "tasks": tasks["n"],
-            "reason": "已收尾的週期預設不回傳——整塊板一次讀完會超過"
-                      "單次可讀上限",
-            "how_to_see_them": "帶 include_settled=true 取全部，"
-                               "或 objective_id=<週期 id> 只取其中一個",
+            "reason": f"⚠️ 你手上這份**不是整塊板**：另外還有 {row['n']} 個"
+                      f"已經收尾的週期（共 {tasks['n']} 張卡）沒有回傳給你。"
+                      "整塊板一次讀完會超過單次可讀上限，所以預設只給還在"
+                      "進行中的週期。",
+            "how_to_see_them": "要看那些：讀取時帶 include_settled=true"
+                               "（全部歷史），或 objective_id=<週期 id>"
+                               "（只看其中一個）。用 MCP 工具的話是"
+                               " chatroom_board(include_settled=True)。",
         }
 
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])

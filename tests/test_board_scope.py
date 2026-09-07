@@ -215,3 +215,25 @@ async def test_the_default_response_is_small_enough_to_read(tmp_path):
                                                include_settled="true")))
         assert default_size * 3 < full_size, (
             f"預設 {default_size} 對全量 {full_size}——沒有真的變小")
+
+
+async def test_the_notice_reads_for_someone_with_no_context(tmp_path):
+    """⚠️ 這段文字的讀者是**明天第一次進房的 agent**（@測試Novia 09/07）。
+
+    今天的週期收尾之後，他讀板會看到一片乾淨，而他沒參與過任何討論。
+    `filtered` 是他唯一的線索，所以它至少要讓他得出兩句話：
+    「我看到的不是全部」、「我知道怎麼看到全部」。
+
+    這條釘的是**那兩句話**，不是特定字串——所以驗的是「數字出現在句子裡」
+    與「兩條路都講了」，改寫文案不會誤紅。
+    """
+    app, client = await _client(tmp_path, "scope-notice")
+    async with app.router.lifespan_context(app), client:
+        bid, _, _, _ = await _setup(client)
+        f = (await _read(client, bid, OWNER))["filtered"]
+        # 第一句：手上這份不是全部，而且講得出少了多少
+        assert "1" in f["reason"], "沒講出少了幾個週期"
+        assert "不是整塊板" in f["reason"] or "不是全部" in f["reason"]
+        # 第二句：怎麼看到全部——兩條路都要在
+        assert "include_settled" in f["how_to_see_them"]
+        assert "objective_id" in f["how_to_see_them"]
