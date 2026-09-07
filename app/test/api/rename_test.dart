@@ -10,11 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// - `PATCH /api/rooms/{room_id}`，body `{"name": "..."}`，權限房管理者
 /// - `PATCH /api/boards/{board_id}`，body `{"name": "..."}`，權限板 owner
-/// - 成功回更新後的物件；空字串 422；錯誤照既有 code 契約
+/// - 空字串 422；錯誤照既有 code 契約
 ///
-/// ⚠️ 這組測試釘的是**送出去的東西**（method／path／body／身分標頭），
-/// 不是 Hub 的行為。兩邊照同一份契約各自實作，端點落地後對得起來就通——
-/// 送錯 method 或漏帶身分是那時最貴的一種失敗：它會被讀成「權限不足」。
+/// 🔴 **回應形狀原本是我猜的，猜錯了。** 我先寫 App 半邊時假設它回
+/// `{"room": {...}}` / `{"board": {...}}`，而 Hub 落地後（`51b420c`）實際
+/// 回的是扁平的 `{ok, id, name, changed}` / `{ok, board_id, board_seq,
+/// name, changed}`。房那支原本會在 `res.data!['room']` 上當場炸。
+///
+/// **兩邊照同一份文字各自實作，對得起來才算數**——這組測試現在釘的是
+/// 比對過的形狀，不是我以為的那個。
 class _Stub implements HttpClientAdapter {
   _Stub(this.body);
 
@@ -38,18 +42,9 @@ Dio _dioWith(_Stub stub) =>
     Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = stub;
 
 void main() {
-  test('房間改名：PATCH /api/rooms/{id}，帶身分，回更新後的房', () async {
-    final stub = _Stub({
-      'ok': true,
-      'room': {
-        'id': 'r1',
-        'name': '新名字',
-        'topic': '',
-        'status': 'active',
-        'created_at': '2026-09-01T00:00:00+00:00',
-      },
-    });
-    final room = await RoomsApi(_dioWith(stub))
+  test('房間改名：PATCH /api/rooms/{id}，帶身分，回生效後的名字', () async {
+    final stub = _Stub({'ok': true, 'id': 'r1', 'name': '新名字', 'changed': true});
+    final name = await RoomsApi(_dioWith(stub))
         .rename('r1', name: '新名字', sessionKey: 'k', participantId: 'p1');
 
     expect(stub.seen.single.method, 'PATCH');
@@ -59,13 +54,16 @@ void main() {
     // 一般管理者則走 participant id——與封存／可見性同一套
     expect(stub.seen.single.headers['X-Session-Key'], 'k');
     expect(stub.seen.single.headers['X-Participant-Id'], 'p1');
-    expect(room.name, '新名字');
+    expect(name, '新名字');
   });
 
   test('板改名：PATCH /api/boards/{id}，帶 session key', () async {
     final stub = _Stub({
       'ok': true,
-      'board': {'id': 'b1', 'name': '新板名', 'status': 'active'},
+      'board_id': 'b1',
+      'board_seq': 12,
+      'name': '新板名',
+      'changed': ['name'],
     });
     final name =
         await BoardsApi(_dioWith(stub)).rename('b1', sessionKey: 'k', name: '新板名');
@@ -77,18 +75,26 @@ void main() {
     expect(name, '新板名');
   });
 
-  test('前後空白先修掉再送——送出去的名字就是之後畫面上的那一個', () async {
-    final stub = _Stub({
-      'ok': true,
-      'room': {
-        'id': 'r1',
-        'name': '新名字',
-        'topic': '',
-        'status': 'active',
-        'created_at': '2026-09-01T00:00:00+00:00',
-      },
-    });
+  test('前後空白先修掉再送', () async {
+    final stub = _Stub({'ok': true, 'id': 'r1', 'name': '新名字'});
     await RoomsApi(_dioWith(stub)).rename('r1', name: '  新名字  ');
     expect(stub.seen.single.data, {'name': '新名字'});
+  });
+
+  test('拿 Hub 說的那個名字，不是自己送出去的那份', () async {
+    // 正規化（trim、長度截斷）發生在 Hub 那邊，兩者不保證相同。
+    // 回自己送出去的值，畫面就會顯示一個伺服器上並不存在的名字
+    final stub = _Stub({'ok': true, 'id': 'r1', 'name': '被截斷的名'});
+    final name = await RoomsApi(_dioWith(stub)).rename('r1', name: '很長的名字');
+    expect(name, '被截斷的名');
+  });
+
+  test('板沒有實際變更時 Hub 不回 name——那時退回送出的值', () async {
+    // `changed: []` 的回應裡沒有 `name` 鍵。硬讀會拿到 null，
+    // 而呼叫端要的是「現在叫什麼」，這時送出的那份就是答案
+    final stub = _Stub({'ok': true, 'board_id': 'b1', 'changed': []});
+    final name =
+        await BoardsApi(_dioWith(stub)).rename('b1', sessionKey: 'k', name: '同名');
+    expect(name, '同名');
   });
 }

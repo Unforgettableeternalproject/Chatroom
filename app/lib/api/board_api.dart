@@ -758,8 +758,11 @@ class BoardsApi {
           data: {'name': name.trim()},
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
-        final board = res.data?['board'] as Map<String, dynamic>?;
-        return (board?['name'] as String?) ?? name.trim();
+        // 🔴 回應是扁平的 `{ok, board_id, board_seq, name, changed}`，
+        // 不是包一層 `board`——同 rooms 那支，這是我先寫 App 半邊時猜錯的
+        // 形狀。⚠️ 沒有實際變更時（`changed: []`）Hub **不回 name**，
+        // 那時退回送出的值才是對的
+        return (res.data?['name'] as String?) ?? name.trim();
       });
 
   /// 把 owner 交給別人。**限現任 owner。**

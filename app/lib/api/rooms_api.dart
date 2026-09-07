@@ -345,7 +345,14 @@ class RoomsApi {
   ///
   /// ⚠️ 前後空白在這裡就修掉。送一個帶空白的名字上去，之後每一個地方
   /// 看到的都是那個版本，而「為什麼多一格」沒有人查得出來。
-  Future<Room> rename(
+  /// 回傳**生效後的名字**，不是整個 Room。
+  ///
+  /// 🔴 這裡原本寫 `Room.fromJson(res.data!['room'])`——那是我照契約先寫
+  /// App 半邊時猜的回應形狀，而 Hub 實際回的是扁平的
+  /// `{ok, id, name, changed}`。`res.data!['room']` 是 null，`fromJson`
+  /// 會當場炸。**兩邊各自照同一份文字實作，對得起來才算數**，這次對出來
+  /// 是不一致的（2026-09-07，Hub `51b420c` 落地後實際比對）。
+  Future<String> rename(
     String roomId, {
     required String name,
     String? sessionKey,
@@ -360,7 +367,9 @@ class RoomsApi {
             'X-Participant-Id': ?participantId,
           }),
         );
-        return Room.fromJson(res.data!['room'] as Map<String, dynamic>);
+        // 拿 Hub 說的那個名字，不是自己送出去的那份——正規化（trim、
+        // 長度截斷）發生在它那邊，兩者不保證相同
+        return (res.data?['name'] as String?) ?? name.trim();
       });
 
   /// 管理員移出成員（被移出的 session 無法重新加入該房）。
