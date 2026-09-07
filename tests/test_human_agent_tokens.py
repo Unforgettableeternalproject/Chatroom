@@ -196,3 +196,58 @@ async def test_health_does_not_leak_the_token_itself(tmp_path):
     async with app.router.lifespan_context(app), client:
         body = (await client.get("/api/health")).text
         assert HUMAN not in body and ROOT not in body
+
+
+# ---------- you_are_host：開關要畫給真正按得動的人 ----------
+
+async def _you_are_host(client, token: str):
+    r = await client.get("/api/rooms", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    return r.json()["you_are_host"]
+
+
+async def test_the_host_switch_is_shown_to_whoever_can_actually_use_it(tmp_path):
+    """`you_are_host` 決定 App 畫不畫主持人開關，`host_view` 決定按下去有沒有
+    用——**兩者必須對同一件事說話**。
+
+    分離憑證之後它們一度相反：主 token 拿到開關卻按不動（403），人類憑證按得動
+    卻沒有開關。畫一個永遠按不動的開關比不畫更難懂，而「該有的人看不到」根本
+    無從發現。
+    """
+    app, client = await _client(tmp_path, "switch-split", human_api_token=HUMAN)
+    async with app.router.lifespan_context(app), client:
+        assert await _you_are_host(client, HUMAN) is True
+        assert await _you_are_host(client, ROOT) is False
+        invite = (await client.post("/api/tokens", headers=_auth(HUMAN),
+                                    json={"label": "App",
+                                          "audience": "human"})).json()["token"]
+        assert await _you_are_host(client, invite) is True
+
+
+async def test_before_the_split_the_main_token_still_owns_the_switch(tmp_path):
+    """相容期照舊：那時能開主持人模式的就是主 token。"""
+    app, client = await _client(tmp_path, "switch-legacy")
+    async with app.router.lifespan_context(app), client:
+        assert await _you_are_host(client, ROOT) is True
+
+
+async def test_a_human_invite_works_before_the_split_too(tmp_path):
+    """**同一張 `audience=human` 的邀請在兩種模式下都要能用。**
+
+    這是換版時唯一沒有斷線視窗的路（@開發Novia (除錯) 09/07）：先發這張、
+    App 換上，之後 Hub 何時進入分離期都不影響。legacy 下 `audience` 根本
+    沒被讀到——但「沒被讀到所以不影響」是推理，這條把它變成事實。
+    """
+    app, client = await _client(tmp_path, "invite-legacy")
+    async with app.router.lifespan_context(app), client:
+        invite = (await client.post("/api/tokens",
+                                    json={"label": "Bernie 的 App",
+                                          "audience": "human"})).json()["token"]
+        rid = (await client.post("/api/rooms", headers=_auth(invite),
+                                 json={"name": "房",
+                                       "session_key": "human-1"})).json()["id"]
+        r = await client.post(f"/api/rooms/{rid}/join", headers=_auth(invite),
+                              json={"kind": "human", "role": "human",
+                                    "session_key": "human-1",
+                                    "preferred_name": "Bernie"})
+        assert r.status_code == 200, r.text

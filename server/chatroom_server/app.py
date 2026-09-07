@@ -889,18 +889,30 @@ def create_app(config: Config | None = None) -> FastAPI:
                    "主持人視角只認人類憑證（CHATROOM_HUMAN_TOKEN 或"
                    " audience=human 的邀請）。agent 的 token 借不到這個身分。")
 
-    def is_host_token(
+    async def is_host_token(
         authorization: str | None = Header(default=None),
     ) -> bool:
-        """單純回答「這把 token 是主 token 嗎」，**不看 X-Host-View**。
+        """回答「這把 token 開得了主持人模式嗎」，**不看 X-Host-View**。
 
         與 `host_view` 刻意分開：App 要據此決定「要不要顯示主持人模式開關」，
         那跟「此刻是不是開著」是兩個問題。合成一個的話，開關會在被打開之後
         才出現——而使用者永遠找不到那個開關。
+
+        🔴 **判準必須與 `host_view` 同步**（09/07 修）。分離憑證落地之後這兩
+        者一度相反：主 token 拿得到開關卻按不動（403），人類憑證按得動卻沒有
+        開關。畫一個永遠按不動的開關比不畫更難懂，而「該有的人看不到」根本
+        無從發現——沒有畫面會說「你其實有這個權限」。
+        （@開發Novia (除錯) 與 @測試Novia 各自在真 Hub 上獨立重現。）
         """
         if not cfg.api_token:
             return True
-        return _bearer(authorization) == cfg.api_token
+        token = _bearer(authorization)
+        if not cfg.human_api_token:
+            # 相容期：能開主持人模式的就是主 token，照舊
+            return token == cfg.api_token
+        if token == cfg.human_api_token:
+            return True
+        return bool(token) and await _token_audience(token) == "human"
 
     def require_root(request: Request) -> None:
         """發放與撤銷 token 限主 token。
