@@ -100,6 +100,29 @@ def running_app_pids() -> list[str]:
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
+# 這份產物實際收錄的路徑。**只問這裡髒不髒**——同一棵樹上另外兩個 kit 各自
+# 只問 `bridge/` 與 `server/`（見 `buildstamp.stamp` 的 `scope`），App 沒有
+# 理由因為別人在改 server 就被標成「對不回任何 commit」。
+#
+# 開成整棵樹的代價不是誤報一次而已：三個人同時開發時它幾乎恆為 `-dirty`，
+# 而恆真的警告沒有人看——那時真的髒到 `app/` 也看不出來。
+DIRTY_SCOPE = ("app",)
+
+
+def commit_stamp() -> str:
+    """要編進產物的 commit 短碼，髒了就帶 `-dirty`。
+
+    抓不到 commit 時回空字串——那時**不**補 `-dirty`，因為沒有基準可以說它
+    偏離了什麼。
+    """
+    commit = git("rev-parse", "--short=12", "HEAD")
+    if not commit:
+        return ""
+    if git("status", "--porcelain", "--", *DIRTY_SCOPE):
+        commit += "-dirty"
+    return commit
+
+
 def main() -> int:
     pids = running_app_pids()
     if pids:
@@ -110,14 +133,13 @@ def main() -> int:
         return 1
 
     version = app_version()
-    commit = git("rev-parse", "--short=12", "HEAD")
+    commit = commit_stamp()
     if not commit:
         print("⚠️ 抓不到 commit（不在 git 工作樹？）。", file=sys.stderr)
         print("  這份產物將無法對帳版本，Hub 比對會顯示「無法確認」。", file=sys.stderr)
-    elif git("status", "--porcelain"):
-        commit += "-dirty"
-        print(f"⚠️ 工作樹有未提交的變更——這份產物對不回任何一個 commit（{commit}）。",
-              file=sys.stderr)
+    elif commit.endswith("-dirty"):
+        print(f"⚠️ {'/'.join(DIRTY_SCOPE)} 有未提交的變更——"
+              f"這份產物對不回任何一個 commit（{commit}）。", file=sys.stderr)
 
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cmd = [
