@@ -743,6 +743,25 @@ class BoardsApi {
         return (res.data?['delivered'] as bool?) ?? false;
       });
 
+  /// 改板的名字（c271c7ff，決策 2026-09-07 定契約）。權限是**板 owner**。
+  ///
+  /// 回傳更新後的名字——呼叫端拿它當事實，不要拿自己送出去的那份，
+  /// 兩者在 Hub 做了正規化（trim、長度截斷）之後就不是同一個字串了。
+  Future<String> rename(
+    String boardId, {
+    required String sessionKey,
+    required String name,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/api/boards/$boardId',
+          data: {'name': name.trim()},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        final board = res.data?['board'] as Map<String, dynamic>?;
+        return (board?['name'] as String?) ?? name.trim();
+      });
+
   /// 把 owner 交給別人。**限現任 owner。**
   ///
   /// owner 是這塊板唯一不靠掛接關係的權限來源（`_board_role` 開頭就認它），

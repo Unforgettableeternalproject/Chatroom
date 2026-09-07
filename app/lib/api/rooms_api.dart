@@ -337,6 +337,32 @@ class RoomsApi {
         );
       });
 
+  /// 改房間的名字（c271c7ff，決策 2026-09-07 定契約）。
+  ///
+  /// 權限是**房管理者**，Hub 端 `_admin_or_403`。兩個身分標頭都帶：建立者
+  /// 可能還沒 join 自己的房（只有 session key），一般管理者則只有
+  /// participant id——與封存／可見性同一套。
+  ///
+  /// ⚠️ 前後空白在這裡就修掉。送一個帶空白的名字上去，之後每一個地方
+  /// 看到的都是那個版本，而「為什麼多一格」沒有人查得出來。
+  Future<Room> rename(
+    String roomId, {
+    required String name,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/api/rooms/$roomId',
+          data: {'name': name.trim()},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        return Room.fromJson(res.data!['room'] as Map<String, dynamic>);
+      });
+
   /// 管理員移出成員（被移出的 session 無法重新加入該房）。
   Future<void> kick(
     String roomId, {

@@ -35,6 +35,7 @@ import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
 import '../../widgets/delete_room_confirm.dart';
+import '../../widgets/rename_dialog.dart';
 import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
@@ -1609,6 +1610,33 @@ class _OverflowMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
+          case 'rename':
+            // 對話框只負責問出名字：取消與「沒改」都回 null，
+            // 那時**不要打 API**——送一個相同的名字會在房裡留下一則
+            // 「X 將房間改名為 Y」的系統訊息，而什麼都沒變
+            final name = await showRenameDialog(
+              context,
+              title: '房間改名',
+              current: detail?.room.name ?? '',
+              hint: '例：Chatroom 開發 09/07',
+            );
+            if (name == null || !context.mounted) return;
+            try {
+              await ref.read(roomsApiProvider).rename(
+                    roomId,
+                    name: name,
+                    sessionKey: ref.read(appConfigProvider).deviceKey,
+                    participantId:
+                        ref.read(identityProvider(roomId)).value?.participantId,
+                  );
+              ref.invalidate(roomDetailProvider(roomId));
+              ref.invalidate(roomListProvider);
+            } on ApiException catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(e.message)));
+              }
+            }
           case 'style':
             final picked = await showDialog<({String style, String text})>(
               context: context,
@@ -1745,6 +1773,12 @@ class _OverflowMenu extends ConsumerWidget {
         }
       },
       itemBuilder: (context) => [
+        if (youAreAdmin)
+          PopupMenuItem(
+            value: 'rename',
+            height: 36,
+            child: Text('重新命名…', style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'style',

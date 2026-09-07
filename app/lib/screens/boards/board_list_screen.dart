@@ -12,6 +12,7 @@ import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/host_mode_toggle.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/rename_dialog.dart';
 import '../../widgets/uep_button.dart';
 
 /// Board Library：左欄 BOARDS 分頁的內容。
@@ -66,6 +67,39 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
             ? '只有這塊板的 owner 能封存它。'
             : e.message,
       )));
+    }
+  }
+
+  /// 改板的名字（c271c7ff）。限 owner——Hub 那邊也是。
+  ///
+  /// 對話框回 null＝取消或沒改，那時**不打 API**：送一個相同的名字上去
+  /// 會在房裡留下一則「X 將板改名為 Y」的系統訊息，而什麼都沒變。
+  Future<void> _rename(BoardSummary board) async {
+    final name = await showRenameDialog(
+      context,
+      title: '板改名',
+      current: board.name,
+      hint: '例：09/07 週期',
+    );
+    if (name == null || !mounted) return;
+    try {
+      await ref.read(boardsApiProvider).rename(
+            board.id,
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            name: name,
+          );
+      // 三頁都重拉：改過名的板可能出現在任何一頁，而清單上的名字是快照
+      for (final v in ['active', 'archived', 'settled']) {
+        ref.invalidate(boardLibraryProvider(v));
+      }
+      ref.invalidate(boardByIdProvider(board.id));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.code == 'board_owner_required' || e.code == 'forbidden'
+            ? '只有這塊板的 owner 能改它的名字。'
+            : e.message),
+      ));
     }
   }
 
@@ -220,6 +254,9 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                     onToggleArchive: boards[i].myRole == 'owner'
                         ? () => _toggleArchive(boards[i])
                         : null,
+                    onRename: boards[i].myRole == 'owner'
+                        ? () => _rename(boards[i])
+                        : null,
                   ),
                 );
               },
@@ -322,13 +359,18 @@ class _BoardStatusToggle extends StatelessWidget {
 /// 板卡上的操作選單。**刻意與 ROOMS 那顆長得一樣**（`_RoomMenu`）——
 /// 兩個清單做同一件事，外觀不一致只會讓人以為它們是不同的東西。
 ///
-/// 目前只有封存／解除封存。刪除沒有放進來：板的刪除語意（連同卡、想法板、
-/// 掛接關係）比房重得多，**在清單上一按就沒**不是這件事該有的份量。
+/// 目前是封存／解除封存與改名。刪除沒有放進來：板的刪除語意（連同卡、
+/// 想法板、掛接關係）比房重得多，**在清單上一按就沒**不是這件事該有的份量。
 class _BoardMenu extends StatelessWidget {
-  const _BoardMenu({required this.archived, required this.onToggleArchive});
+  const _BoardMenu({
+    required this.archived,
+    required this.onToggleArchive,
+    required this.onRename,
+  });
 
   final bool archived;
   final VoidCallback onToggleArchive;
+  final VoidCallback onRename;
 
   @override
   Widget build(BuildContext context) {
@@ -343,8 +385,19 @@ class _BoardMenu extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: s.lineStrong),
       ),
-      onSelected: (_) => onToggleArchive(),
+      // ⚠️ 以前這裡是 `onSelected: (_) => onToggleArchive()`——**忽略 value**。
+      // 只有一個項目時那樣寫沒事，多一個項目就會變成「按改名結果封存了」，
+      // 而且不會有任何地方報錯
+      onSelected: (v) => switch (v) {
+        'rename' => onRename(),
+        _ => onToggleArchive(),
+      },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'rename',
+          height: 36,
+          child: Text('重新命名…', style: UepText.sans(size: 12.5, color: s.ink)),
+        ),
         PopupMenuItem(
           value: 'archive',
           height: 36,
@@ -364,6 +417,7 @@ class _BoardTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.onToggleArchive,
+    this.onRename,
   });
 
   final BoardSummary board;
@@ -376,6 +430,9 @@ class _BoardTile extends StatelessWidget {
   /// 提案）：與 ROOMS 的封存入口對齊。封存的操作場景本來就在清單——沒有人
   /// 會為了封存一塊板而先點進去，而封存過的板更是如此。
   final VoidCallback? onToggleArchive;
+
+  /// 改名。與封存同一個判準（owner），所以兩者一起有、一起沒有。
+  final VoidCallback? onRename;
 
   @override
   Widget build(BuildContext context) {
@@ -446,6 +503,7 @@ class _BoardTile extends StatelessWidget {
                 _BoardMenu(
                   archived: board.isArchived,
                   onToggleArchive: onToggleArchive!,
+                  onRename: onRename ?? () {},
                 ),
               ],
             ]),
