@@ -1189,22 +1189,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         watchBlockedReason: _watchBlockedReason(snap),
       );
 
-  /// 追蹤要有落點。板上沒有任何活著的掛接房時，通知沒有地方可以送。
+  /// 追蹤要有落點。**判準與文案都在 model**（`boardWatchBlockedReason`）——
+  /// 在這裡複製一份的話，能不能按與旁邊寫什麼會各自演化，而它們是同一個
+  /// 判斷的兩面。
   bool _canWatch(BoardSnapshot snap) =>
-      _boardIdOrNull != null && !snap.isArchived && snap.liveRooms.isNotEmpty;
+      _boardIdOrNull != null && boardWatchBlockedReason(snap).isEmpty;
 
-  String _watchBlockedReason(BoardSnapshot snap) {
-    if (_boardIdOrNull == null) return '';
-    if (snap.isArchived) return '這塊板已經封存，追蹤不會再有任何動靜';
-    if (snap.liveRooms.isEmpty) {
-      // ⚠️ 講的是「這塊板沒有聊天室」，**不是「你不在房裡」**。
-      // 後者是另一件事（人不在房裡時通知會留著，回來就知道），
-      // 兩件事用同一句話講，人會以為自己離開房間就追蹤失效了
-      return '這塊板還沒有掛接任何聊天室，通知沒有地方可以送。'
-          '掛一間房上來就可以追蹤了';
-    }
-    return '';
-  }
+  String _watchBlockedReason(BoardSnapshot snap) =>
+      _boardIdOrNull == null ? '' : boardWatchBlockedReason(snap);
 
   Future<void> _toggleWatch(BoardTask t) async {
     final api = ref.read(watchApiProvider);

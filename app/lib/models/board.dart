@@ -520,6 +520,7 @@ class BoardDelta {
     this.reclaimable = const [],
     this.taskRequests = const [],
     this.attachedRooms = const [],
+    this.liveAttachedRoomCount,
     this.directives = const [],
     this.directivesHasMore = false,
     this.allowedTags = const [],
@@ -528,6 +529,14 @@ class BoardDelta {
     this.outcomeEligible,
     this.outcomeBlockReason,
   });
+
+  /// Hub 算的「還有人在用嗎」——**只算 active 的掛接房**
+  /// （1c920235，決策 2026-09-07 裁 B）。
+  ///
+  /// `null` ＝ 這次沒帶（舊 Hub，或增量沒重送）。**與 0 不是同一件事**：
+  /// 0 是「一間活著的房都沒有」，null 是「這次沒說」——混為一談的話，
+  /// 一次無關的增量就會把追蹤入口洗成灰的。
+  final int? liveAttachedRoomCount;
 
   /// 這次的水位。下次帶著它當 `after_board_seq`。
   final int boardSeq;
@@ -629,6 +638,8 @@ class BoardDelta {
     attachedRooms: ((json['attached_rooms'] as List?) ?? const [])
         .map((e) => AttachedRoom.fromJson(e as Map<String, dynamic>))
         .toList(),
+    // 不補預設：缺席要留成 null，見欄位註解
+    liveAttachedRoomCount: json['live_attached_room_count'] as int?,
     directives: ((json['directives'] as List?) ?? const [])
         .map((e) => BoardDirective.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -678,6 +689,32 @@ class BoardEntryHint {
   final bool needsYou;
 }
 
+/// 追蹤（watch）現在為什麼不能用；空字串＝可以用。
+///
+/// **判準放在這裡而不是畫面裡**：畫面上那份會與這句話各自演化，而它們
+/// 必須一致——按鈕能不能按、旁邊寫什麼理由，是同一個判斷的兩面。
+///
+/// 🔴 判準是 **active 的掛接房**，不是「還掛著的房」：封存的房仍然掛著，
+/// 但通知送不進去（c81f757a 的 Server 半邊在投遞前就濾掉它們）。
+/// 用錯的症狀是**「可以追但收不到」**——按鈕亮著、追蹤也成立，然後那則
+/// 通知永遠不來，人要等到事情發生了才發現。
+String boardWatchBlockedReason(BoardSnapshot snap) {
+  if (snap.isArchived) return '這塊板已經封存，追蹤不會再有任何動靜';
+  if (snap.liveAttachedRooms > 0) return '';
+  // 「一間都沒掛」與「掛的房全封存了」是兩件事，下一步也不同：前者去掛
+  // 一間，後者要開一間新的（封存房不會再有動靜）。講成同一句的話，
+  // 掛著兩間封存房的人會被告知他沒有掛任何房
+  if (snap.liveRooms.isNotEmpty) {
+    return '這塊板掛著的聊天室都已經封存，通知送不進去。'
+        '掛一間還開著的房上來才追蹤得到';
+  }
+  // ⚠️ 講的是「這塊板沒有聊天室」，**不是「你不在房裡」**。後者是另一件事
+  // （人不在房裡時通知會留著，回來就知道），兩件事用同一句話講，
+  // 人會以為自己離開房間就追蹤失效了
+  return '這塊板還沒有掛接任何聊天室，通知沒有地方可以送。'
+      '掛一間房上來就可以追蹤了';
+}
+
 /// 本機的 board 快取。不可變——每次合併產生一份新的。
 @immutable
 class BoardSnapshot {
@@ -694,6 +731,7 @@ class BoardSnapshot {
     this.reclaimable = const [],
     this.taskRequests = const [],
     this.attachedRooms = const {},
+    this.liveAttachedRoomCount,
     this.directives = const {},
     this.directivesHasMore = false,
     this.allowedTags = const [],
@@ -755,13 +793,36 @@ class BoardSnapshot {
   /// 「我發出的 ∪ 指名我的」），所以照樣整份替換而不是累加。
   final List<TaskRequest> taskRequests;
   final Map<String, AttachedRoom> attachedRooms;
+
+  /// Hub 算的「還有人在用嗎」（`live_attached_room_count`）。
+  /// `null` ＝ 還沒收到過這個欄位，這時走本地推算（見 [liveAttachedRooms]）。
+  final int? liveAttachedRoomCount;
+
   /// board_seq → directive。**沒有 id 可用**，見 [BoardDirective.boardSeq]。
   final Map<int, BoardDirective> directives;
   final bool directivesHasMore;
 
   /// 還掛著的房間，解除的不算。給 Board 頁「切回來源對話」用。
+  ///
+  /// ⚠️ **它回答的是「掛著哪些房」，不是「還有人在用嗎」**——封存的房仍然
+  /// 掛著。要問後者用 [activeRooms] / [liveAttachedRooms]。
   Iterable<AttachedRoom> get liveRooms =>
       attachedRooms.values.where((r) => !r.detached);
+
+  /// 掛著、而且**房本身還開著**的那些（1c920235）。
+  ///
+  /// 🔴 通知送不進封存房（c81f757a 的 Server 半邊就是在投遞前濾掉它們），
+  /// 所以凡是「這件事會不會有人收到」的判斷都要問這個，不是 [liveRooms]。
+  /// 用錯的症狀是**「可以追但收不到」**——比「不能追」糟得多，前者要等到
+  /// 事情發生了才發現沒收到，而那時人已經在等了。
+  Iterable<AttachedRoom> get activeRooms =>
+      liveRooms.where((r) => r.status != 'archived');
+
+  /// Hub 算的 live 掛接房數；**沒回時才退回本地推算**。
+  ///
+  /// 與 `deliveryMode` 同一套處置：自己推算等於在猜 Hub 的規則，而規則
+  /// 漂移的那一半沒有人在看。
+  int get liveAttachedRooms => liveAttachedRoomCount ?? activeRooms.length;
 
   bool get isArchived => status == 'archived';
   bool get canEdit => myRole == 'owner' || myRole == 'editor';
@@ -907,6 +968,11 @@ class BoardSnapshot {
       attachedRooms: delta.attachedRooms.isEmpty
           ? attachedRooms
           : {for (final r in delta.attachedRooms) r.id: r},
+      // 看 **null** 不是看 0：0 是「一間活著的房都沒有」這個事實，
+      // null 是「這次沒說」。把後者當成前者的話，一次無關的增量就會把
+      // 追蹤入口洗成灰的，而畫面上只會說「這塊板沒有掛接聊天室」
+      liveAttachedRoomCount:
+          delta.liveAttachedRoomCount ?? liveAttachedRoomCount,
       // 同上：空的時候保留手上那份。增量回應不重送它，跟著清空的話標籤
       // 選單會在第二次拉取後整個消失，而畫面上那看起來像「這塊板沒有標籤」
       allowedTags:
