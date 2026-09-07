@@ -268,6 +268,19 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
           child: DropdownButtonFormField<String?>(
             initialValue: _toActorKey,
             isExpanded: true,
+            // 🔴 沒有這一句時選單是**一片空白**（艾斯維爾 2026-09-06 #237）。
+            // `_toActorKey` 初值是 null，而選單裡沒有任何一項的 value 是
+            // null——Flutter 於是什麼都不畫。
+            //
+            // ⚠️ null 是刻意的，不能靠給預設值解決：空字串在這裡是一個真正
+            // 的選擇（＝廣播），「還沒挑」必須有自己的值，送出鈕才擋得住。
+            // 缺的只是把那個狀態講出來。
+            //
+            // 而空白與「板上沒有成員」（上面那條分支）在畫面上長得一樣，
+            // 一個是你還沒挑、一個是沒有人可以收——處置完全相反
+            hint: Text('選一個收件者…',
+                overflow: TextOverflow.ellipsis,
+                style: UepText.sans(size: 12, color: s.inkMute)),
             decoration: const InputDecoration(
               isDense: true,
               border: OutlineInputBorder(),
