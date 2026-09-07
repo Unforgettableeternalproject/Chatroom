@@ -634,6 +634,38 @@ class BoardWatchToggle(BaseModel):
 
 # ---------- 應用工廠 ----------
 
+def assert_no_duplicate_routes(app: FastAPI) -> None:
+    """同一個 `(method, path)` 註冊兩次就拒絕啟動（09/07 卡 7e022378）。
+
+    🚨 **FastAPI 對重複路由不報錯，先註冊的贏。** 於是新加的那支會靜默蓋掉
+    既有實作——連同它的權限判斷、事件紀錄與通知路徑一起消失，而全套測試可能
+    照樣綠：既有測試打的是同一條路徑，只是接的人換了。
+
+    09/07 一天內發生兩次（`DELETE /api/boards/{board_id}`、
+    `PATCH /api/boards/{board_id}`），兩次都是「照裁決加了一支早就存在的
+    端點」。發現它的方式是一條不相干的稽核串測試紅了，那時已經走很遠。
+
+    ⚠️ 擋的是**同動詞同路徑**。同一條路徑上的不同動詞是正常設計。
+    """
+    seen: dict[tuple[str, str], str] = {}
+    clashes: list[str] = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        name = getattr(route, "name", "") or "?"
+        for method in sorted(getattr(route, "methods", None) or ()):
+            key = (method, path)
+            if key in seen:
+                clashes.append(f"{method} {path}（{seen[key]} 與 {name}）")
+            else:
+                seen[key] = name
+    if clashes:
+        joined = "\n  ".join(clashes)
+        raise RuntimeError(
+            f"偵測到重複註冊的路由，Hub 拒絕啟動：\n  {joined}\n"
+            "重複的路由**不會報錯**，先註冊的那支會贏 ⇒ 另一支連同它的"
+            "權限判斷與事件紀錄會被靜默取代。請先確認哪一支才是對的。")
+
+
 def create_app(config: Config | None = None) -> FastAPI:
     cfg = config or Config()
     logger.setLevel(cfg.log_level.upper())
@@ -11667,4 +11699,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             extra={"event": "debug_endpoints_enabled"},
         )
 
+    # 🚨 **最後一道**：重複路由靜默替換既有端點（見
+    # `assert_no_duplicate_routes`）。放在這裡而不是測試裡，是因為它要擋的是
+    # 「跑起來的那個 Hub」——測試綠不代表跑著的進程接的是你以為的那支
+    assert_no_duplicate_routes(app)
     return app
