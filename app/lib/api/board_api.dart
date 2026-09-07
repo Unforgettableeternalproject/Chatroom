@@ -41,7 +41,20 @@ class BoardApi {
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/rooms/$roomId/board',
-          queryParameters: {'after_board_seq': afterBoardSeq},
+          queryParameters: {
+            'after_board_seq': afterBoardSeq,
+            // 🔴 **人類的畫面要看全量**（卡 442f3813）。
+            //
+            // Hub 的預設從 `659e9ff0` 起收窄成「只回進行中的週期」，那是為
+            // **agent 讀板會爆量**修的（274,701 字元讀不動）。但 App 走同一
+            // 支端點——於是人類打開板也只剩本週期，先前的全不見了，而畫面上
+            // 沒有任何一句話說它們去哪了（艾斯維爾 09/07 實機發現）。
+            //
+            // ⚠️ 這是「為 A 修的預設值改到了 B」：兩個讀者共用一支端點，
+            // 而其中一個沒有讀取上限問題。**UI 明確表態要全量**，agent 那側
+            // 的收窄不動——不是把 Hub 的預設改回去
+            'include_settled': true,
+          },
           options: Options(headers: {
             'X-Participant-Id': ?participantId,
           }),
@@ -605,7 +618,13 @@ class BoardsApi {
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/boards/$boardId',
-          queryParameters: {'after_board_seq': afterBoardSeq},
+          // 同房軸那支：人類的畫面要全量（442f3813）。**兩條軸都要帶**——
+          // 只補一條的話，從聊天室進去看得到歷史、從 BOARDS 分頁進去看不到，
+          // 而那種不一致比兩邊都缺更難查
+          queryParameters: {
+            'after_board_seq': afterBoardSeq,
+            'include_settled': true,
+          },
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
         return BoardDelta.fromJson(res.data ?? const {});
