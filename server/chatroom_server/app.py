@@ -3950,7 +3950,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return row["created_by"] == me["id"] or me["role"] == "human"
 
     async def _board_item_writer(row, participant_id: str | None,
-                                 session_key: str | None = None):
+                                 session_key: str | None = None,
+                                 host: bool = False):
         """**改**一張既有卡的共同門檻。與 `_board_writer`（建卡用）分開。
 
         🔴 **這裡不 ensure board。** 合在一起的時候，改一張已經解除掛接的卡
@@ -3983,7 +3984,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await (await app.state.db.execute(
             "SELECT * FROM participant WHERE id=? AND status='active'",
             (participant_id,))).fetchone()
-        if me is None and board_id and actor_key(session_key or ""):
+        if me is None and board_id and (actor_key(session_key or "") or host):
             # 🔑 **板軸沒有房，也就沒有 participant_id。** Board Library 進來
             # 的 client 手上只有 session_key——少了這條路，那些畫面上一張卡
             # 都改不動，而 `_actor_from_headers` 的 docstring 早就寫著
@@ -4006,11 +4007,20 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (board_id, actor_key(session_key)))).fetchone()
             if me is None:
                 who = await _board_identity(board_id, actor_key(session_key))
+                kind = (who["actor_kind"] if who else "").strip().lower()
                 me = {"id": None, "room_id": row["room_id"],
                       "session_key": actor_key(session_key),
                       "display_name": who["display_name"] if who else "",
                       "kind": who["actor_kind"] if who else "",
-                      "role": "agent"}
+                      # 🚨 **role 不能寫死 agent**（09/07 卡 0a19355051）。
+                      # 下游的守門讀的是 `me["role"]`，而人類在板上的份量
+                      # （推得動別人的卡、打得回 done）全靠它。板軸沒有房 ⇒
+                      # 走到這裡 ⇒ 人類被當成 agent ⇒ **在自己建的板上改不動
+                      # 別人的卡**，而從聊天室進去同一件事卻做得到。
+                      # 那個不一致沒有任何畫面說得出原因（艾斯維爾 09/06 實測）
+                      # 主持人視角也是人（09/07 起它只認人類憑證），而他多半
+                      # 不在任何掛接房裡——查不到 kind 不代表他是 agent
+                      "role": "human" if (kind == "human" or host) else "agent"}
         if me is None:
             raise _err(403, "participant_not_active",
                        "你的身分已經失效，請重新加入聊天室",
@@ -4018,7 +4028,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = dict(me)
         if board_id:
             await _board_member_or_403(board_id, actor_key(me["session_key"]),
-                                       need_write=True, board=board)
+                                       need_write=True, board=board, host=host)
         else:
             # 還沒換軸的舊卡沒有板可驗，退回原本的房內身分檢查
             await _room_or_404(row["room_id"])
@@ -4728,9 +4738,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _board_status_change(kind: str, item_id: str, target: str,
                                    participant_id: str | None,
-                                   session_key: str | None = None) -> dict:
+                                   session_key: str | None = None,
+                                   host: bool = False) -> dict:
         row = await _board_item_or_404(kind, item_id)
-        me = await _board_item_writer(row, participant_id, session_key)
+        me = await _board_item_writer(row, participant_id, session_key, host)
         return row, me
 
     @app.post("/api/board/tasks/{task_id}/status",
@@ -4739,6 +4750,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         task_id: str, body: BoardStatusChange,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         """推 Task 的狀態。
 
@@ -4751,7 +4763,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         自己撤銷自己的宣告。
         """
         row, me = await _board_status_change("task", task_id, body.status,
-                                             x_participant_id, x_session_key)
+                                             x_participant_id, x_session_key,
+                                             host)
         old = row["status"]
         if body.status == old:
             return {"ok": True, "id": task_id, "status": old, "unchanged": True}
@@ -4782,12 +4795,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                          and _is_claim_holder(row, me)):
             raise _err(403, "human_only",
                        "只有建立者、目前的認領者或人類成員可以取消這張卡")
-        if not human and row["claim_state"] == "held" \
+        # **板 owner 也推得動別人的卡**（09/07 卡 0a19355051）：他是這塊板
+        # 的負責人，而卡的持有者可能早就不在了。人類那條之外還要這一條，是
+        # 因為 owner 不一定是人——agent 開的板，agent 自己收不掉，等於沒有人
+        # 收得掉
+        board_owner = await _board_role(
+            (me.get("board_id") or "").strip(),
+            actor_key(me["session_key"]), host) == "owner"
+        if not human and not board_owner and row["claim_state"] == "held" \
                 and not _is_claim_holder(row, me):
             hint, same_name = _holder_hint(row, me)
             raise _err(403, "not_claim_holder",
                        f"這張卡{hint}，"
-                       "只有持有者本人或人類成員可以推動它",
+                       "只有持有者本人、這塊板的 owner 或人類成員可以推動它",
                        held_by_same_name=same_name,
                        claim_name=row["claim_name"] or "")
         db = app.state.db
@@ -6270,8 +6290,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "board_not_found", "找不到這塊板")
         return row
 
-    async def _board_role(board_id: str, actor: str) -> str:
+    async def _board_role(board_id: str, actor: str,
+                          host: bool = False) -> str:
         """這個 actor 在板上的角色。不是成員回空字串。
+
+        🔑 **主持人視角視同所有板的 owner**（艾斯維爾 2026-09-06 產品裁定，
+        卡 a03fa6e8）。理由與 `host_view` 當初一字不差：主 token 放在
+        `server/.env`，拿得到它的人本來就讀得寫得同一個目錄下的
+        `chatroom.db`——這裡給的不是新權限，是把既有能力變得可用。
+        ⚠️ 09/07 起 `host_view` 只認**人類憑證**（見 `require_auth` 的
+        `token_audience`），所以這條擴權掛的是人不是 agent；沒有那道閘的話，
+        每一個拿 bridge token 的 agent 都是每一塊板的 owner。
 
         🔑 **明示的角色優先，房內身分是退路**（艾斯維爾 2026-09-03）。
 
@@ -6290,6 +6319,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         退路只補「查不到」的情形，**不蓋過明示角色**——蓋過去的話，把某人
         降成 viewer 就變成一件做不到的事，而做這個降權的人不會收到任何提示。
         """
+        if host:
+            # actor 是誰都不影響——主持人視角本身就是身分。**放在 `not actor`
+            # 之前**：Board Library 那條路可能連 session_key 都沒有，而
+            # 「主持人開著主持人模式卻什麼都做不了」正是這張卡的症狀
+            return "owner"
         if not actor:
             return ""
         db = app.state.db
@@ -6437,7 +6471,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _board_member_or_403(board_id: str, actor: str,
                                    need_write: bool = False,
-                                   board=None) -> str:
+                                   board=None, host: bool = False) -> str:
         """板的權限門檻。**403 一律附上板的身分。**
 
         被擋下的那個回應，是 client 手上唯一還拿得到板資訊的地方——沒有
@@ -6445,7 +6479,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         而正確的畫面是「這間房掛著《某某板》，但你還不是它的成員」。
         **那不是錯誤，是狀態**（A+ 之後它會是進房者的常見狀態）。
         """
-        role = await _board_role(board_id, actor)
+        role = await _board_role(board_id, actor, host)
         if role and not (need_write and role == "viewer"):
             return role
         if board is None:
