@@ -106,8 +106,14 @@ async def test_what_was_filtered_out_is_said_out_loud(tmp_path):
         assert f is not None, "篩掉了東西卻沒說"
         assert f["objectives"] == 1
         assert f["tasks"] == 1
-        # 判準 3：路要在回應裡，不必回去翻文件
-        assert "include_settled" in f["how_to_see_them"]
+        # 判準 3：路要在回應裡，不必回去翻文件。
+        # ⚠️ **順序也是內容**：`objective_id` 要排在 `include_settled` 前面
+        # ——後者在真實的板上會超過可讀上限（@測試Novia 09/07 實打 291,875
+        # 字元），把它放第一位等於指一條通往牆的逃生路
+        how = f["how_to_see_them"]
+        assert "objective_id" in how and "include_settled" in how
+        assert how.index("objective_id") < how.index("include_settled"), (
+            "include_settled 排在前面——照做的人會再撞一次上限")
 
 
 async def test_nothing_filtered_means_no_notice(tmp_path):

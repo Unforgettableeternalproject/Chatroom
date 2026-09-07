@@ -6384,11 +6384,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                       f"已經收尾的週期（共 {tasks['n']} 張卡）沒有回傳給你。"
                       "整塊板一次讀完會超過單次可讀上限，所以預設只給還在"
                       "進行中的週期。",
-            "how_to_see_them": "要看那些：讀取時帶 include_settled=true"
-                               "（全部歷史），或 objective_id=<id>"
-                               "（只看其中一個——底下 cycles 列出了它們的"
-                               " id 與標題）。用 MCP 工具的話是"
-                               " chatroom_board(include_settled=True)。",
+            # ⚠️ **順序是重點：先講 objective_id。**（@測試Novia 09/07 實打）
+            # `include_settled=true` 在這塊板上回 291,875 字元——**比他早上
+            # 撞死的 274,701 還大**。原本的文案把它放在第一位 ⇒ 讀的人照著
+            # 做就會再撞一次同一道牆，而且是**在被明確指路之後撞的**。
+            # 一條逃生路指向牆，比沒有逃生路更糟。
+            "how_to_see_them": "要看那些：用 objective_id=<id> 逐一取"
+                               "（底下 cycles 列出了每一期的 id 與標題）"
+                               "——**這是唯一保證讀得下的路**。"
+                               " include_settled=true 會一次拿回整塊板，"
+                               "但那多半超過單次可讀上限（週期一多就會撞），"
+                               "只在你確定板很小時用。"
+                               " MCP 工具寫法："
+                               "chatroom_board(objective_id=\"<id>\")。",
         }
 
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
