@@ -179,12 +179,17 @@ class BoardChecklist {
 /// 曾經缺的那一格是 `todo → in_progress`：App 心裡是三態（待辦／完成／
 /// 卡住），Hub 是五態，而 `in_progress` 是通往 `done` 的唯一樞紐。中間那格
 /// 沒被畫出來的結果是使用者完全無法把一張卡做完。
+/// `moved` ＝這件事搬到別的地方做了（09/07 卡 73fe4d94）。它**不是 done**
+/// （在這裡沒有做完）也**不是 cancelled**（不是「不做了」）——沒有這個狀態
+/// 的話，一張早就搬走的卡會永遠擋著它那份清單送審。
 const kTaskTransitions = <String, Set<String>>{
-  'todo': {'in_progress', 'blocked', 'done', 'cancelled'},
-  'in_progress': {'blocked', 'done', 'cancelled'},
-  'blocked': {'in_progress', 'cancelled'},
+  'todo': {'in_progress', 'blocked', 'done', 'cancelled', 'moved'},
+  'in_progress': {'blocked', 'done', 'cancelled', 'moved'},
+  'blocked': {'in_progress', 'cancelled', 'moved'},
   'done': {'in_progress'},
   'cancelled': {'todo'},
+  // 搬錯了要收得回來，與 cancelled 對稱
+  'moved': {'todo'},
 };
 
 /// 抽屜底部的一顆動作按鈕。
@@ -231,20 +236,28 @@ const _kTaskActions = <String, List<TaskAction>>{
     TaskAction('開始', 'in_progress'),
     TaskAction('直接完成', 'done'),
     TaskAction('標記卡住', 'blocked', danger: true),
+    // 「搬走了」不是破壞性動作，但它與取消一樣是離開這份清單，所以擺在
+    // 同一區。標籤講的是**這件事去了別的地方**，不是「刪掉」
+    TaskAction('搬到別處', 'moved', trailing: true),
     TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
   ],
   'in_progress': [
     TaskAction('標記完成', 'done'),
     TaskAction('標記卡住', 'blocked', danger: true),
+    TaskAction('搬到別處', 'moved', trailing: true),
     TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
   ],
   'blocked': [
     TaskAction('解除卡住', 'in_progress'),
+    TaskAction('搬到別處', 'moved', trailing: true),
     TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
   ],
   // 打回與復原限人類。這個畫面本身跑在人類的 App 上，所以按鈕在
   'done': [TaskAction('重新開啟', 'in_progress')],
   'cancelled': [TaskAction('復原', 'todo')],
+  // 搬錯了收得回來。講「收回」不講「復原」——後者聽起來像撤銷一次取消，
+  // 而這張卡沒有被取消過，它只是去了別的地方
+  'moved': [TaskAction('收回這裡', 'todo')],
 };
 
 /// Task 卡片左側色軸的五種樣子（設計稿 artboard 02）。
@@ -284,6 +297,7 @@ class BoardTask {
     required this.boardSeq,
     this.description = '',
     this.status = 'todo',
+    this.movedTo = '',
     this.orderIndex = 0,
     this.priority = 'normal',
     this.claimParticipantId,
@@ -401,12 +415,12 @@ class BoardTask {
     // 用 assert 把它叫出來——debug build 會炸、release build 整段被移除，
     // 所以開發時抓得到、使用者不會看到任何東西。代價是零。
     assert(
-      !((isDone || status == 'cancelled') && isOrphaned),
+      !(isSettled && isOrphaned),
       '這張卡同時是「已收尾」與「孤兒」：id=$id status=$status '
       'claim_state=$claimState。Hub 的孤兒化沒有排除已收尾的卡（F6）。'
       'UI 這側會顯示成 completed，但那是遮蔽不是修正——根本解在 Hub。',
     );
-    if (isDone || status == 'cancelled') return ClaimAxis.completed;
+    if (isSettled) return ClaimAxis.completed;
     if (isOrphaned) return ClaimAxis.orphaned;
     if (isHeld) return ClaimAxis.held;
     if (assigneeParticipantId != null) return ClaimAxis.suggested;
@@ -431,15 +445,30 @@ class BoardTask {
 
   /// 還能不能被認領。`orphaned` 也算——持有者已經不在房內，就不算「同時」。
   bool get isClaimable =>
-      (claimState.isEmpty || isOrphaned) &&
-      status != 'done' &&
-      status != 'cancelled';
+      (claimState.isEmpty || isOrphaned) && !isSettled;
 
   bool get isDone => status == 'done';
 
-  /// 已經有結論了（完成或取消）。收尾的閘看的是這個，不是只看 done——
-  /// 取消不是失敗，它同樣是一個結論。
-  bool get isSettled => status == 'done' || status == 'cancelled';
+  /// 已經有結論了（完成、取消，或**搬到別處**）。收尾的閘看的是這個，
+  /// 不是只看 done——取消不是失敗，它同樣是一個結論；而 `moved` 是
+  /// 「這件事不在這份清單上了」，同樣不該擋著清單收尾（73fe4d94）。
+  ///
+  /// ⚠️ **每一個「已收尾」的判斷都要走這裡**。漏掉任一處的症狀都不同、
+  /// 而且都不報錯：清單送審會被一張搬走的卡永遠擋著、認領會領到一張
+  /// 已經不在這裡的卡、進行中計數會多算一筆。
+  bool get isSettled =>
+      status == 'done' || status == 'cancelled' || status == 'moved';
+
+  /// 搬去哪張卡了（`moved_to`）。空字串＝沒搬走，或搬走了但去向沒說
+  /// （Hub 那邊 `moved_to` 是選填）。
+  final String movedTo;
+
+  /// **已經不算在這份清單的帳上**：取消了，或搬到別處做了。
+  ///
+  /// 與 [isSettled] 差一格：`done` 是收尾**而且**算進進度（它是分子），
+  /// 這兩種則是連分母都不該進——一個週期取消掉一半的卡之後進度條永遠
+  /// 填不滿，就是分母沒扣的結果（艾斯維爾 2026-09-02）。
+  bool get leftThisList => status == 'cancelled' || status == 'moved';
 
   factory BoardTask.fromJson(Map<String, dynamic> json) => BoardTask(
     id: json['id'] as String,
@@ -448,6 +477,7 @@ class BoardTask {
     title: (json['title'] as String?) ?? '',
     description: (json['description'] as String?) ?? '',
     status: (json['status'] as String?) ?? 'todo',
+    movedTo: (json['moved_to'] as String?) ?? '',
     orderIndex: (json['order_index'] as int?) ?? 0,
     priority: (json['priority'] as String?) ?? 'normal',
     claimParticipantId: json['claim_participant_id'] as String?,
@@ -1029,7 +1059,7 @@ class BoardSnapshot {
   /// 各算各的話，總有一天只有其中一個被修好——`_statsOf` 的 `remaining`
   /// 早就扣掉了取消，而同一個函式裡的 `total` 沒有，就是這麼來的。
   Iterable<BoardTask> get countableTasks =>
-      visibleTasks.where((t) => t.status != 'cancelled');
+      visibleTasks.where((t) => !t.leftThisList);
 
   bool _parentAlive(BoardTask t) {
     final c = checklists[t.checklistId];

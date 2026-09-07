@@ -759,6 +759,9 @@ class _StatusChip extends StatelessWidget {
     'blocked': '卡住',
     'done': '完成',
     'cancelled': '已取消',
+    // 「已搬走」不是完成也不是取消——講錯的話，讀板的人會以為這件事
+    // 在這裡做完了（done）或不做了（cancelled），而它其實在別的地方進行
+    'moved': '已搬走',
   };
 
   @override
@@ -777,6 +780,9 @@ class _StatusChip extends StatelessWidget {
           null,
         ),
       'cancelled' => (s.inkMute, s.hairline, null),
+      // 與取消同一種淡，但**不共用**：兩者的意思不同，哪天要分開畫時
+      // 這一行已經在了
+      'moved' => (s.inkMute, s.hairline, null),
       _ => (s.inkMute, s.hairlineStrong, null),
     };
     return Container(
