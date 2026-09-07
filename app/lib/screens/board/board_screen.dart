@@ -973,15 +973,21 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 ),
               ),
               const SizedBox(width: 18),
-              // ⚠️ **從 Library 進來時沒有房，就沒有 `_actions`。**
-              // 收尾那組動作全部要走房內身分（送審／確認／完成都是），
-              // 所以那時整組不畫。
+              // **兩條軸都畫。** 收尾動作（＋階段／送審／確認／結束週期）
+              // 的端點都收 `X-Session-Key`，板軸拿得到身分
+              // （`BoardActions.forBoard`），沒有理由只給房軸。
               //
-              // 🔴 少了這個判斷的後果不是「按鈕壞掉」，是**整頁白不出來**：
-              // `_closeoutActions` 是 build 期間跑的，它第一行就 `_actions!`
-              // ——null 檢查在 build 裡炸開，畫面是一整片灰，而不是任何
-              // 一種空狀態（@開發Novia (除錯) 2026-09-03 的截圖）。
-              if (!_boardOnly) _closeoutActions(context, o, stats),
+              // 🔴 這裡曾經掛著 `if (!_boardOnly)`：那是板軸還沒有 `_actions`
+              // 的年代留下的——當時 `_closeoutActions` 第一行就 `_actions!`，
+              // 在 build 期炸開會讓**整頁灰掉**（2026-09-03）。後來身分那半
+              // 補上了、函式自己也改成先取值再判 null，這道守衛卻沒跟著拆，
+              // 於是變成「從 Board 分頁進去就沒有那組按鈕」
+              // （Bernie 2026-09-07 想法板 e86dd552）。
+              //
+              // ⚠️ 這種殘留沒有任何症狀可看：不灰屏、不報錯、按鈕也不是
+              // 灰的——它就是**不存在**，而那與「這塊板現在不能送審」
+              // 在畫面上長得一模一樣。
+              _closeoutActions(context, o, stats),
             ],
           ),
           const SizedBox(height: 14),
