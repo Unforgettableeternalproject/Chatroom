@@ -11346,6 +11346,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "build": build_info(),
             "idle_timeout_seconds": cfg.idle_timeout,
             "max_attachment_bytes": cfg.max_attachment_bytes,
+            # 憑證模式（09/07，測試Novia 提）：`legacy` 是還沒分家——
+            # `role=human` 與 `X-Host-View` 誰都宣稱得了。**這件事一定要從
+            # 外部看得出來**：漏設 human token 的失敗模式是「所有防護一條
+            # 都不生效，而且完全不報錯」，靠翻 .env 才知道的東西等於沒有人
+            # 知道。不洩漏 token 本身，只說在哪個模式
+            "credential_mode": "split" if cfg.human_api_token else "legacy",
         }
 
     if cfg.debug_endpoints:

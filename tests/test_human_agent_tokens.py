@@ -169,3 +169,30 @@ async def test_an_open_hub_is_still_open(tmp_path):
         r = await client.get("/api/rooms", headers={"X-Host-View": "1"})
         assert r.status_code == 200, r.text
         assert r.json()["host_view"] is True
+
+
+# ---------- 從外部看得出自己在哪個模式 ----------
+
+async def test_health_says_which_credential_mode_it_is_in(tmp_path):
+    """漏設 human token 的失敗模式是「所有防護都不生效、而且不報錯」。
+
+    測試Novia 09/07 提：相容期本身就是靜默失效的形狀，所以模式必須從外部
+    查得到——否則沒有人知道正式站到底進沒進分離期，只能靠翻 `.env`。
+    """
+    app, client = await _client(tmp_path, "mode-legacy")
+    async with app.router.lifespan_context(app), client:
+        assert (await client.get("/api/health")).json()["credential_mode"] \
+            == "legacy"
+
+    app, client = await _client(tmp_path, "mode-split", human_api_token=HUMAN)
+    async with app.router.lifespan_context(app), client:
+        assert (await client.get("/api/health")).json()["credential_mode"] \
+            == "split"
+
+
+async def test_health_does_not_leak_the_token_itself(tmp_path):
+    """`/api/health` 不需要 token 就打得到——它只能說模式，不能說鑰匙。"""
+    app, client = await _client(tmp_path, "mode-no-leak", human_api_token=HUMAN)
+    async with app.router.lifespan_context(app), client:
+        body = (await client.get("/api/health")).text
+        assert HUMAN not in body and ROOT not in body
