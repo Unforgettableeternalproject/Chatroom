@@ -80,6 +80,36 @@ def _state_filename(session_key: str) -> str:
 # 版本的地方，空著等於逼所有人去猜自己在跑哪一版（09/05 就繞過這一圈）
 mcp = MCPServer("chatroom", version=handshake_version())
 
+# 每一支工具的描述尾端都掛這一行。
+#
+# 為什麼不是只放在 `initialize` 或某支「版本查詢工具」裡：agent **讀描述的
+# 那一刻**不會去打 API，也不會為了知道自己在跑哪一版而先呼叫另一支工具。
+# 09/07 測試端就是在沒有這行的情況下憑記憶斷定自己是舊版，差點讓人白打一包。
+#
+# 標的是 **bridge 自己的 build**，不是 Hub 的——兩者天天不一樣（那天 bridge
+# 是 c4c4960、測試 Hub 是 8e3933c），混為一談等於沒有版本。
+#
+# 順帶：MCP client 在 bridge 啟動時載入並快取描述，所以這行講的天然就是
+# 「這個進程實際載入的那一份」——版號證明不了進程重啟，這行可以。
+VERSION_LINE = f"〔bridge {version_string()}〕"
+
+
+def tool(*args, **kwargs):
+    """`mcp.tool()` 的替身：註冊之餘把 `VERSION_LINE` 附在描述末端。
+
+    包在這裡而不是逐支手寫，是因為「每一支都要帶」這件事**只能靠註冊路徑
+    保證**——手寫的話下一支新工具會忘，而忘了不會有任何症狀。
+    """
+    inner = mcp.tool(*args, **kwargs)
+
+    def deco(fn):
+        doc = (fn.__doc__ or "").rstrip()
+        # 附加而不是取代：工具描述是 agent 唯一的說明書
+        fn.__doc__ = f"{doc}\n\n{VERSION_LINE}" if doc else VERSION_LINE
+        return inner(fn)
+
+    return deco
+
 # ---------- 相依物件（延後建立，方便測試注入） ----------
 
 _hub: HubClient | None = None
@@ -326,7 +356,7 @@ def _participant_id_by_name(room_id: str, name: str,
 # ---------- 使用手冊 ----------
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_guide() -> dict:
     """聊天室工具的完整使用手冊——**第一次要用這組工具時先讀這個**。
@@ -345,7 +375,7 @@ def chatroom_guide() -> dict:
 # ---------- 房間與成員 ----------
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_list_rooms() -> dict:
     """列出所有 active 聊天室，以及指派給你（本 session）的待處理邀請。
@@ -379,7 +409,7 @@ def chatroom_list_rooms() -> dict:
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_join(
     room_id: str,
@@ -424,7 +454,7 @@ def chatroom_join(
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
     """在房內登記一個臨時的子代理身分，回傳 ``handle``。
@@ -492,7 +522,7 @@ def chatroom_spawn_subagent(room_id: str, name: str) -> dict:
     }
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_end_subagent(room_id: str, subagent: str) -> dict:
     """子 agent 工作結束，把它的臨時身分收掉。
@@ -509,7 +539,7 @@ def chatroom_end_subagent(room_id: str, subagent: str) -> dict:
     return {**data, "ended": sub.display_name}
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_leave(room_id: str) -> dict:
     """離開聊天室。
@@ -525,7 +555,7 @@ def chatroom_leave(room_id: str) -> dict:
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     """回報你仍在線，刷新該房間身分的 last_seen_at。
@@ -545,7 +575,7 @@ def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     return {**(data if isinstance(data, dict) else {"result": data}), **scope}
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_hold(room_id: str, subagent: str = "") -> dict:
     """替自己掛上 hold 標記；再呼叫一次即解除。
@@ -581,7 +611,7 @@ def chatroom_hold(room_id: str, subagent: str = "") -> dict:
 # ---------- 訊息 ----------
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_read(
     room_id: str,
@@ -638,7 +668,7 @@ def chatroom_read(
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_post(
     room_id: str,
@@ -720,7 +750,7 @@ def _remember_board(room_id: str, board_id: Any) -> None:
         state().set_board_cursor(board_id, legacy)
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 25.0,
                   subagent: str = "") -> dict:
@@ -804,7 +834,7 @@ def chatroom_wait(room_id: str, after_seq: int | None = None, timeout: float = 2
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_pin(room_id: str, message_id: str) -> dict:
     """釘選一則訊息——標記房內的共識、決議或關鍵結論。
@@ -830,7 +860,7 @@ def chatroom_pin(room_id: str, message_id: str) -> dict:
     return _room_request(room_id, "POST", f"/api/messages/{message_id}/pin")
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_unpin(room_id: str, message_id: str) -> dict:
     """取消釘選一則訊息（結論被推翻或已過時時）。"""
@@ -840,7 +870,7 @@ def chatroom_unpin(room_id: str, message_id: str) -> dict:
 # ---------- 指派 ----------
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_assignments() -> dict:
     """查詢指派給你（本 session）的待處理邀請。
@@ -867,7 +897,7 @@ def chatroom_assignments() -> dict:
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
     """處理一筆指派：接受或婉拒。
@@ -887,7 +917,7 @@ def chatroom_resolve_assignment(assignment_id: str, accept: bool) -> dict:
     )
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_resolve_task_request(request_id: str, accept: bool) -> dict:
     """回答一筆「請你接手這張卡」的請求（N-4）。
@@ -945,7 +975,7 @@ def _expired_result(question_id: str, created: dict, idle_note: str,
     }
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_ask_human(
     room_id: str,
@@ -1107,7 +1137,7 @@ def _answered_result(qid: str, q: dict, created: dict,
     return out
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_read_answer(question_id: str) -> dict:
     """讀取某個問題目前的狀態與答案（不等待）。
@@ -1123,7 +1153,7 @@ def chatroom_read_answer(question_id: str) -> dict:
     return {"question": data["question"]}
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_cancel_question(room_id: str, question_id: str) -> dict:
     """撤回一個你問出去、還沒被回答的問題。
@@ -1143,7 +1173,7 @@ def chatroom_cancel_question(room_id: str, question_id: str) -> dict:
     )
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_questions(room_id: str, pending_only: bool = True) -> dict:
     """列出這個房間問過人類的問題（含答案）。
@@ -1165,7 +1195,7 @@ def chatroom_questions(room_id: str, pending_only: bool = True) -> dict:
 # ---------- 附件 ----------
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_send_file(
     room_id: str,
@@ -1306,7 +1336,7 @@ def _unique_path(directory: Path, filename: str) -> Path:
     return directory / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_get_file(attachment_id: str, room_id: str = "",
                       save_dir: str = "") -> dict:
@@ -1454,7 +1484,7 @@ def _board_write(room_id: str, subagent: str, method: str, path: str,
         data.update(scope)
     return data
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_boards() -> dict:
     """列出你有份的所有任務板（Board Library）。
@@ -1472,7 +1502,7 @@ def chatroom_boards() -> dict:
     return _board_scoped_request("GET", "/api/boards")
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_board(room_id: str = "", full: bool = False,
                    subagent: str = "", board_id: str = "") -> dict:
@@ -1556,7 +1586,7 @@ def chatroom_board(room_id: str = "", full: bool = False,
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_board_add(
     room_id: str = "",
@@ -1640,7 +1670,7 @@ def chatroom_board_add(
     return data
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_board_update(
     room_id: str = "",
@@ -1724,7 +1754,7 @@ def chatroom_board_update(
     )
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_board_claim(room_id: str = "", task_id: str = "",
                          release: bool = False,
@@ -1754,7 +1784,7 @@ def chatroom_board_claim(room_id: str = "", task_id: str = "",
     )
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_board_attach(board_id: str, room_id: str,
                           detach: bool = False) -> dict:
@@ -1795,7 +1825,7 @@ def _resolve_board_id(room_id: str, board_id: str) -> str:
     return resolved
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_scratchpads(room_id: str = "", board_id: str = "") -> dict:
     """列出這塊板上的想法板（ScratchPad）。
@@ -1817,7 +1847,7 @@ def chatroom_scratchpads(room_id: str = "", board_id: str = "") -> dict:
     return out
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_scratchpad(pad_id: str, room_id: str = "",
                         board_id: str = "") -> dict:
@@ -1844,7 +1874,7 @@ def chatroom_scratchpad(pad_id: str, room_id: str = "",
     return out
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_scratchpad_add(kind: str, content: str, room_id: str = "",
                             board_id: str = "", pad_id: str = "",
@@ -1890,7 +1920,7 @@ def chatroom_scratchpad_add(kind: str, content: str, room_id: str = "",
     raise HubError("kind 只能是 pad／block／note。")
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_scratchpad_edit(pad_id: str, block_id: str, content: str,
                              rev: int, room_id: str = "",
@@ -1929,7 +1959,7 @@ def chatroom_scratchpad_edit(pad_id: str, block_id: str, content: str,
         json=payload)
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_watch(task_id: str, room_id: str = "", board_id: str = "",
                    release: bool = False) -> dict:
@@ -1955,7 +1985,7 @@ def chatroom_watch(task_id: str, room_id: str = "", board_id: str = "",
         json={"item_kind": "task", "item_id": task_id})
 
 
-@mcp.tool()
+@tool()
 @_guard
 def chatroom_notices(unread_only: bool = True,
                      mark_read: bool = False) -> dict:
