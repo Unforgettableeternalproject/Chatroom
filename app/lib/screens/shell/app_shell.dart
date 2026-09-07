@@ -9,6 +9,7 @@ import '../../core/config/app_settings.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../notifications/taskbar_badge.dart';
+import '../../core/diagnostics/input_diagnostics.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
@@ -185,6 +186,9 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 卡 `7d3db264`：**「別的視窗跳出來搶焦點」那條候選唯一的抓手**。
+    // 症狀是「打字打到一半不能動」，而使用者不會記得當下有什麼跳出來過
+    InputDiagnostics.instance.lifecycle(state.name);
     if (state == AppLifecycleState.resumed) {
       ref.read(realtimeServiceProvider).retryNow();
       // 回到前景＝人來看了，正在看的那個房的待處理 mention 算處理過。

@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 import 'package:windows_taskbar/windows_taskbar.dart';
 
+import '../core/diagnostics/input_diagnostics.dart';
+
 final _log = Logger('badge');
 
 /// 工作列圖示上的未處理數字（Discord 那個紅點）。
@@ -32,6 +34,9 @@ class TaskbarBadge {
     final n = count < 0 ? 0 : count;
     if (_applied == n) return;
     _applied = n;
+    // 卡 `7d3db264` 的時間軸參照點。09/07 的實驗顯示它單獨不會造成輸入
+    // 卡死，但**下次發作時它在不在附近，一眼就看得出來**——那是免費的
+    InputDiagnostics.instance.badge(n, before: true);
     try {
       if (n == 0) {
         await WindowsTaskbar.resetOverlayIcon();
@@ -49,6 +54,10 @@ class TaskbarBadge {
       // 與「沒有未處理的事」在畫面上長得一模一樣
       _log.warning('工作列角標套用失敗（count=$n）：$e');
       _applied = null; // 下次重試，不要因為記住了而永遠不再嘗試
+    } finally {
+      // **後也要記**：Win32 呼叫的「開始」與「結束」之間就是它佔住主執行緒
+      // 的那段時間，而組字被打斷若落在那個區間裡，時間軸會直接說出來
+      InputDiagnostics.instance.badge(n, before: false);
     }
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/mention_groups.dart';
+import '../core/diagnostics/input_diagnostics.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../models/message.dart';
@@ -62,7 +63,15 @@ class MessageComposer extends StatefulWidget {
     this.onRetryAttachment,
     this.initialText = '',
     this.onTextChanged,
+    this.onDiagnostic,
   });
+
+  /// 診斷事件的出口（卡 `7d3db264`）。**省略時走正式的
+  /// [InputDiagnostics]**，測試才注入自己的接收端。
+  ///
+  /// 存在的理由是**測試不該碰檔案系統**：儀器的正式落點是使用者硬碟上的
+  /// 一個檔，而測試要驗的是「記了什麼」與「沒記什麼」，不是檔案怎麼開。
+  final void Function(String kind, Map<String, Object?> data)? onDiagnostic;
 
   /// 房內 active 成員（@ 選單只列這些，P3-07 條件 2）。
   final List<Participant> members;
@@ -125,18 +134,61 @@ class _MessageComposerState extends State<MessageComposer> {
   /// 的話，打字不會觸發重建，按鈕會一直停在剛進畫面時的狀態。
   bool _hasText = false;
 
+  /// 上一次看到的組字狀態。**只記「變了」的那一刻**——每個按鍵記一筆的話
+  /// log 會被打字本身淹掉，而我們要找的是那個轉折點（卡 `7d3db264`）。
+  bool _wasComposing = false;
+
   @override
   void initState() {
     super.initState();
     _hasText = _controller.text.trim().isNotEmpty;
     _controller.addListener(_onTextChanged);
+    _controller.addListener(_traceComposing);
+    _focus.addListener(_traceFocus);
   }
 
   @override
   void dispose() {
+    _focus.removeListener(_traceFocus);
+    _controller.removeListener(_traceComposing);
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  /// 焦點的兩個旗標都記。**「焦點在但打不出字」正是這個症狀的形狀**——
+  /// 只記 `hasFocus` 的話，那個狀態在 log 上看起來完全正常。
+  void _traceFocus() => _trace('focus', {
+        'has': _focus.hasFocus,
+        'primary': _focus.hasPrimaryFocus,
+      });
+
+  /// 診斷事件統一從這裡出去——正式走 [InputDiagnostics]，測試走注入的那個。
+  void _trace(String kind, Map<String, Object?> data) {
+    final out = widget.onDiagnostic;
+    if (out != null) {
+      out(kind, data);
+      return;
+    }
+    InputDiagnostics.instance.log(kind, data);
+  }
+
+  /// IME 組字的起訖。**不記文字內容**，只記範圍與形狀。
+  ///
+  /// `composing` 從有效變無效的那一刻就是「組字被打斷」——如果它與別的
+  /// 事件落在同一毫秒，那個事件就是嫌犯。這是這份儀器要抓的主訊號。
+  void _traceComposing() {
+    final v = _controller.value;
+    final now = v.composing.isValid;
+    if (now == _wasComposing) return;
+    _wasComposing = now;
+    _trace('composing', {
+      'active': now,
+      'start': v.composing.start,
+      'end': v.composing.end,
+      'len': v.text.length,
+      'lines': '\n'.allMatches(v.text).length + 1,
+    });
   }
 
   @override
