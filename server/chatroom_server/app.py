@@ -925,9 +925,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         憑證）、`_session_params` 的 kind／label／host（向名錄自報的資訊）。
         """
         head = (header_value or "").strip()
+        old = (legacy or "").strip()
+        # 🔴 **雙送的隱藏成本**（@開發Novia (除錯) 09/07 在 bridge 那側撞到）：
+        # 同一份憑證放兩個位置時，「兩處必須是同一個值」變成一條**沒有人會
+        # 主動去檢查的不變式**。他那次是 `derive_key` 每次回不同值，於是
+        # subagent 的 body 與標頭送出兩把不同的 key——Hub 只讀其中一把，
+        # 另一把去哪了沒有人看得出來。他當場炸是因為那個函式不純；**如果它
+        # 是純函式，這個 bug 會安靜到下一輪拔舊位置那天**。
+        #
+        # Hub 這側看得到兩個位置，所以由這裡守。**不 raise**：切換期把服務
+        # 停掉太重，而 header 優先本來就是定義好的行為——要的是留下痕跡，
+        # 不是拒絕服務。
+        if head and old and head != old:
+            logger.warning(
+                "%s 的兩個位置送了**不同的值**（標頭與舊位置不一致）。"
+                "已採用標頭；另一個值被丟棄——這通常表示送出端有 bug。",
+                where, extra={"event": "credential_position_mismatch",
+                              "where": where})
         if head:
             return head
-        old = (legacy or "").strip()
         if old and where not in _DEPRECATED_SEEN:
             # 一個位置只警告一次：每次請求都印的話，日誌會被輪詢端點洗掉，
             # 而這句話是給升級的人看的，不是給監控看的

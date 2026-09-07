@@ -182,3 +182,28 @@ async def test_the_websocket_keeps_its_query_token(tmp_path):
     from chatroom_server import app as mod
     src = inspect.getsource(mod.create_app)
     assert 'query_params.get("token")' in src, "WS 的 ?token= 被拔掉了"
+
+
+async def test_two_positions_with_different_values_are_reported(tmp_path, caplog):
+    """🔴 雙送的隱藏成本：**「兩處是同一個值」沒有人會主動檢查。**
+
+    @開發Novia (除錯) 09/07 在 bridge 那側撞到——`derive_key` 每次回不同值，
+    於是 subagent 的 body 與標頭送出兩把不同的 key。Hub 只讀其中一把，另一把
+    去哪了沒有人看得出來。他當場炸是因為那個函式不純；**如果它是純函式，
+    這個 bug 會安靜到下一輪拔舊位置那天。**
+
+    Hub 這側看得到兩個位置，所以由這裡守。不 raise——切換期把服務停掉太重，
+    而 header 優先本來就是定義好的行為；要的是**留下痕跡**。
+    """
+    import logging
+
+    app, client = await _client(tmp_path, "pos-mismatch")
+    async with app.router.lifespan_context(app), client:
+        with caplog.at_level(logging.WARNING, logger="chatroom"):
+            r = await client.post("/api/rooms",
+                                  headers={"X-Session-Key": "from-header"},
+                                  json={"name": "房",
+                                        "session_key": "from-body"})
+        assert r.status_code == 200, r.text
+        assert any(getattr(rec, "event", "") == "credential_position_mismatch"
+                   for rec in caplog.records), "兩個位置不一致卻沒有留下痕跡"
