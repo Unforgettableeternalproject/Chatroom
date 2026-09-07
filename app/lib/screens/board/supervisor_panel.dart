@@ -99,6 +99,21 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         }),
         duration: Duration(seconds: delivered ? 2 : 6),
       ));
+    } on RoomArchivedException {
+      // 封存房拒收（Hub 在送出端擋，409 `room_archived`——決策 2026-09-07
+      // 裁：沿用既有契約，不另造 code）。
+      //
+      // ⚠️ 這句話要說的是**這次留下了什麼**。上面的成功路徑會講「已寫進
+      // 稽核串，但沒有人被叫醒」——那是留下了、只是沒送到。被拒是另一回事：
+      // 什麼都沒留下。混用同一種講法，送的人會以為那則判斷已經在板上了。
+      //
+      // 也不能用 `RoomArchivedException` 的預設訊息（「此聊天室已封存，
+      // 無法發言」）：他送的是判斷，不是發言，那句話對不上他做的事。
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('這間房已封存，這則判斷沒有送出，也沒有留在稽核串上。'),
+        duration: Duration(seconds: 6),
+      ));
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
