@@ -7707,9 +7707,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 房內名稱，用板上那個會 mention 不到人（H7 已經測過這半是對的）。
         if target:
             rows = await (await db.execute(
+                # 🚨 **封存房不是投得進去的地方**（09/07 卡 c81f757a）。
+                # 少了 `r.status='active'`，投影會寫進一間唯讀的房：送出端
+                # 看到 200、稽核串也有紀錄，而收件人永遠不會醒
                 "SELECT p.room_id, p.display_name FROM participant p"
                 " JOIN board_room br ON br.room_id = p.room_id"
                 "  AND br.detached_at IS NULL"
+                " JOIN room r ON r.id = br.room_id AND r.status='active'"
                 " WHERE br.board_id=? AND p.status='active'"
                 "   AND TRIM(p.session_key)=?"
                 " GROUP BY p.room_id"
@@ -7724,6 +7728,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "SELECT p.room_id, p.display_name FROM participant p"
                 " JOIN board_room br ON br.room_id = p.room_id"
                 "  AND br.detached_at IS NULL"
+                " JOIN room r ON r.id = br.room_id AND r.status='active'"
                 " JOIN board_member bm ON bm.board_id = br.board_id"
                 "  AND bm.actor_key = TRIM(p.session_key)"
                 "  AND bm.removed_at IS NULL"
@@ -7731,6 +7736,37 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "   AND TRIM(p.session_key) <> ?"
                 " GROUP BY p.room_id, p.display_name",
                 (board_id, actor))).fetchall()
+        if not rows:
+            # 「他現在收不到」與「這件事根本送不出去」對送出的人意味著不同的
+            # 下一步：前者等他回來，後者要換一個地方說。所以只有**確實有
+            # 收件人、只是他所在的房全封存了**才報錯，其餘維持既有的
+            # `delivered: false`（誠實講出他收不到，見底下的 docstring）。
+            #
+            # ⚠️ **擋在寫 event 之前**：先寫再擋的話，板上會留下一筆「送出過」
+            # 而收件人那邊什麼都沒有——正是這張卡要消滅的落差換個地方出現。
+            sql = ("SELECT 1 FROM participant p"
+                   " JOIN board_room br ON br.room_id = p.room_id"
+                   "  AND br.detached_at IS NULL"
+                   " JOIN room r ON r.id = br.room_id AND r.status!='active'"
+                   " WHERE br.board_id=? AND p.status='active'")
+            params: list = [board_id]
+            if target:
+                sql += " AND TRIM(p.session_key)=?"
+                params.append(target)
+            else:
+                sql += (" AND p.ephemeral=0 AND TRIM(p.session_key) <> ?"
+                        " AND EXISTS (SELECT 1 FROM board_member bm"
+                        "   WHERE bm.board_id=br.board_id"
+                        "     AND bm.actor_key=TRIM(p.session_key)"
+                        "     AND bm.removed_at IS NULL)")
+                params.append(actor)
+            only_archived = await (
+                await db.execute(sql + " LIMIT 1", tuple(params))).fetchone()
+            if only_archived is not None:
+                raise _err(409, "room_archived",
+                           "收件人只在已封存的聊天室裡——封存房唯讀，"
+                           "這則判斷送不進去，也不會留在稽核串上。"
+                           "請在還活著的房裡說，或先解除封存。")
         row = rows[0] if rows else None
         await _record_board_event(
             board_id, seq, "directive", actor=actor, actor_name=sender_name,
