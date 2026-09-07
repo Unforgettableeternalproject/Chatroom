@@ -223,6 +223,25 @@ class RoomCreate(BaseModel):
     style_instructions: str = Field(default="", max_length=2000)
 
 
+class Rename(BaseModel):
+    """改名。房與板共用一份——兩邊要改的是同一件事，分兩個模型只會漂移。
+
+    ⚠️ `min_length` 擋不掉全空白：`"   "` 長度是 3。空名字在畫面上與
+    「載入中」長得一樣，而使用者不會知道自己按到了什麼。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("名字不能是空白")
+        return v.strip()
+
+
 class RoomVisibility(BaseModel):
     visibility: str = Field(pattern="^(public|private)$")
 
@@ -2168,6 +2187,41 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _notify_board_rooms(bid)
         return {"ok": True, "already_active": False,
                 "restored_watchers": restored}
+
+    @app.patch("/api/rooms/{room_id}", dependencies=[Depends(require_auth)])
+    async def rename_room(
+        room_id: str, body: Rename,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """改房名。限房間管理者（09/07 卡 c271c7ff，契約見決策裁定）。
+
+        **改名要留痕**：名字是所有人共用的指涉，換掉它而不說一聲，別人會以為
+        自己記錯了。同名不發訊息——「改名為原本那個名字」只是噪音。
+
+        ⚠️ `board_room.room_name` 是**房名的快照**（房被刪之後板上還要說得出
+        那間房叫什麼），所以要跟著更新。不同步的話板上會一直顯示舊名字，而
+        兩邊都不會報錯——只有記得舊名的人才看得出哪裡怪。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key,
+                            "改房間的名字", host)
+        if room["name"] == body.name:
+            return {"ok": True, "id": room_id, "name": body.name,
+                    "changed": False}
+        db = app.state.db
+        await db.execute("UPDATE room SET name=? WHERE id=?",
+                         (body.name, room_id))
+        await db.execute(
+            "UPDATE board_room SET room_name=? WHERE room_id=?",
+            (body.name, room_id))
+        await _commit_with_retry(db)
+        await _post_message(
+            room_id, None,
+            f"聊天室已改名為「{body.name}」（原本是「{room['name']}」）",
+            kind="system", system_event="rename")
+        return {"ok": True, "id": room_id, "name": body.name, "changed": True}
 
     @app.post("/api/rooms/{room_id}/visibility", dependencies=[Depends(require_auth)])
     async def set_visibility(
@@ -7186,8 +7240,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _record_board_event(board_id, seq, "board_updated", actor=actor,
                                   payload=sets)
         await _commit_with_retry(app.state.db)
+        # **改名要在房裡說一聲**（09/07 卡 c271c7ff）。板名出現在每一間掛接
+        # 房的 app bar 上，只推水位的話，房裡的人會看到標題突然變了而沒有
+        # 任何說明——名字是所有人共用的指涉，換掉它而不留痕，別人會以為自己
+        # 記錯了。描述改動不發：那一段不在任何人的視線正中央
+        if "name" in sets and sets["name"] != board["name"]:
+            rooms = await (await app.state.db.execute(
+                "SELECT br.room_id FROM board_room br"
+                " JOIN room r ON r.id = br.room_id AND r.status='active'"
+                " WHERE br.board_id=? AND br.detached_at IS NULL",
+                (board_id,))).fetchall()
+            for r in rooms:
+                await _post_message(
+                    r["room_id"], None,
+                    f"任務板已改名為「{sets['name']}」"
+                    f"（原本是「{board['name']}」）",
+                    kind="system", system_event="rename")
         await _notify_board_rooms(board_id)
+        # `name` 一起回：改名的 client 要拿它更新畫面，而它已經知道自己送了
+        # 什麼——回傳生效後的值才分得出「送出去的」與「真的存下來的」
         return {"ok": True, "board_id": board_id, "board_seq": seq,
+                "name": sets.get("name", board["name"]),
                 "changed": sorted(sets)}
 
     @app.post("/api/boards/{board_id}/outcome",
