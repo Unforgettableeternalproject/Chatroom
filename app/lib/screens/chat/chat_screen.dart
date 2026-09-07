@@ -36,6 +36,7 @@ import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
 import '../../widgets/delete_room_confirm.dart';
 import '../../widgets/rename_dialog.dart';
+import '../board/board_switch.dart';
 import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
@@ -1585,6 +1586,77 @@ class _OverflowMenu extends ConsumerWidget {
 
   final String roomId;
 
+  /// 更換任務板：**先解除、再挑一塊**（618da61b）。
+  ///
+  /// 中途停下來是這條路的一部分，不是失敗——`attach` 那端有
+  /// `room_already_has_board` 擋著，順序不能反，所以「舊的解除了、新的還
+  /// 沒掛上」必然會經過。四種結果各講各的話（`boardSwitchStatusMessage`）。
+  Future<void> _switchBoard(BuildContext context, WidgetRef ref) async {
+    final board = ref.read(boardProvider(roomId)).value;
+    final boardId = board?.boardId ?? '';
+    if (boardId.isEmpty) return;
+    if (!await confirmBoardSwitch(context, boardName: board?.name ?? '')) {
+      return;
+    }
+    final api = ref.read(boardsApiProvider);
+    final key = ref.read(appConfigProvider).deviceKey;
+
+    // 第一步：解除。失敗時什麼都沒變——**要說原本那塊還在**，
+    // 否則人會以為房間空了而去做一件不必做的事
+    try {
+      await api.detachRoom(boardId, roomId, sessionKey: key);
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(boardSwitchStatusMessage(
+            detached: false, attached: false, error: e.message)),
+      ));
+      return;
+    }
+    ref.invalidate(boardProvider(roomId));
+    ref.invalidate(boardLibraryProvider);
+    if (!context.mounted) return;
+
+    // 第二步：挑一塊新的。取消也是一種結果，而且是**要講出來**的那種：
+    // 這間房現在沒有板
+    final result = await showBoardAttachDialog(context,
+        roomName:
+            ref.read(roomDetailProvider(roomId)).value?.room.name ?? '');
+    if (result == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            boardSwitchStatusMessage(detached: true, attached: false)),
+        duration: const Duration(seconds: 6),
+      ));
+      return;
+    }
+    try {
+      final newId = result.isCreate
+          ? await api.create(
+              name: result.name!, sessionKey: key, originRoomId: roomId)
+          : result.boardId!;
+      if (!result.isCreate || result.importMembers) {
+        await api.attachRoom(newId, roomId,
+            sessionKey: key, importMembers: result.importMembers);
+      }
+      ref.invalidate(boardProvider(roomId));
+      ref.invalidate(boardLibraryProvider);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content:
+            Text(boardSwitchStatusMessage(detached: true, attached: true)),
+      ));
+    } on ApiException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(boardSwitchStatusMessage(
+            detached: true, attached: false, error: e.message)),
+        duration: const Duration(seconds: 8),
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
@@ -1592,6 +1664,10 @@ class _OverflowMenu extends ConsumerWidget {
     // 只是把一個必然失敗的按鈕擺在那裡
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final youAreAdmin = detail?.youAreAdmin ?? false;
+    // 這間房現在掛著板嗎。**判準是 board_id 有值**，不是快照非空——
+    // 一塊剛掛上、還沒有任何卡的板照樣是「有板」
+    final board = ref.watch(boardProvider(roomId)).value;
+    final hasBoard = (board?.boardId ?? '').isNotEmpty;
     // 主持人模式**只加開刪除**，不加開說話方式與鎖定狀態。
     //
     // Hub 那邊也是這樣分的：主持人視角放行「清掉這台 Hub 上的東西」
@@ -1610,6 +1686,8 @@ class _OverflowMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
+          case 'switch_board':
+            await _switchBoard(context, ref);
           case 'rename':
             // 對話框只負責問出名字：取消與「沒改」都回 null，
             // 那時**不要打 API**——送一個相同的名字會在房裡留下一則
@@ -1773,6 +1851,15 @@ class _OverflowMenu extends ConsumerWidget {
         }
       },
       itemBuilder: (context) => [
+        // 換板只在**已經有板**時出現：沒有板的時候該走的是「掛接任務板」
+        // 那條路（在 Board 入口按鈕上），兩個入口同時存在只會讓人猶豫
+        if (youAreAdmin && hasBoard)
+          PopupMenuItem(
+            value: 'switch_board',
+            height: 36,
+            child: Text('更換任務板…',
+                style: UepText.sans(size: 12.5, color: s.ink)),
+          ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'rename',
