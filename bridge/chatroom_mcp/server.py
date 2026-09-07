@@ -1505,7 +1505,9 @@ def chatroom_boards() -> dict:
 @tool()
 @_guard
 def chatroom_board(room_id: str = "", full: bool = False,
-                   subagent: str = "", board_id: str = "") -> dict:
+                   subagent: str = "", board_id: str = "",
+                   include_settled: bool = False,
+                   objective_id: str = "") -> dict:
     """看一塊任務板（Objective → Checklist → Task）。
 
     給 ``room_id`` ＝「我在這個房裡，看它掛的那塊板」；給 ``board_id`` ＝
@@ -1519,6 +1521,15 @@ def chatroom_board(room_id: str = "", full: bool = False,
 
     讀取是**增量**的：預設只回上次之後的變動，所以連著呼叫很便宜，不會把
     你的上下文塞滿。想重看整塊板傳 ``full=True``。
+
+    ⚠️ **全量讀取預設只回「還在進行中的週期」。** 一塊做了幾個月的板全量
+    回傳會超過你單次讀得下的量（本專案實測 274,701 字元），那時你拿到的是
+    一個讀取失敗，不是一塊板。已收尾的週期要看就傳 ``include_settled=True``
+    （全部）或 ``objective_id=<週期 id>``（只要那一個）。
+
+    **被篩掉的話回應會有 ``filtered``** 講明篩了幾個週期／幾張卡、以及怎麼
+    看得到它們；沒篩到東西時它是 ``None``。**看到它就不要把手上這份當成
+    整塊板**——那正是它存在的理由。
 
     回應：
 
@@ -1545,7 +1556,9 @@ def chatroom_board(room_id: str = "", full: bool = False,
         known = 0 if (full or subagent) else state().board_cursor(target)
         data = _board_scoped_request(
             "GET", f"/api/boards/{target}",
-            params={"after_board_seq": known})
+            params={"after_board_seq": known,
+                    "include_settled": include_settled,
+                    "objective_id": objective_id})
         seq = data.get("board_seq")
         if isinstance(seq, int) and not subagent:
             state().set_board_cursor(target, seq)
@@ -1563,7 +1576,9 @@ def chatroom_board(room_id: str = "", full: bool = False,
         f"/api/rooms/{room_id}/board",
         require_identity=False,
         participant_id=participant_id,
-        params={"after_board_seq": known},
+        params={"after_board_seq": known,
+                "include_settled": include_settled,
+                "objective_id": objective_id},
     )
     seq = data.get("board_seq")
     board_id = data.get("board_id")

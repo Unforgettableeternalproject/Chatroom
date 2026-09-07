@@ -266,8 +266,11 @@ async def test_full_cycle_agent_reviews_human_verifies(tmp_path):
                                   headers=human)).status_code == 200
         assert (await client.post(f"/api/board/objectives/{oid}/complete",
                                   headers=human)).status_code == 200
-        board = (await client.get(f"/api/rooms/{rid}/board",
-                                  headers=human)).json()
+        # ⚠️ 收尾的週期**預設不在全量回應裡**（09/07 卡 659e9ff0）——
+        # 要看它就得明講。這正是那張卡的行為，不是這條測試壞了
+        board = (await client.get(
+            f"/api/rooms/{rid}/board?include_settled=true",
+            headers=human)).json()
         obj = board["objectives"][0]
         assert obj["status"] == "done"
         assert obj["reviewed_by"] and obj["verified_by"] and obj["completed_by"]

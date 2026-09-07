@@ -6209,10 +6209,81 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "id": task_id, "board_seq": seq,
                 "forced": forced}
 
+    # 已經收尾的週期。板讀取的預設範圍靠它收窄（09/07 卡 659e9ff0）
+    SETTLED_OBJECTIVE_SQL = "('done','cancelled')"
+
+    def _cycle_scope(table: str, scope_sql: str, scope_params: list,
+                     include_settled: bool, objective_id: str
+                     ) -> tuple[str, list]:
+        """把全量讀取限縮在**進行中的週期**（或指定的那一個）。
+
+        起因：本專案的板全量回 274,701 字元 / 5,943 行，**超過 agent 單次
+        可讀上限** ⇒ 板一大就讀不動（三台實測一致，09/07）。
+
+        🔑 **收窄的是預設值，不是 `full`。** `full=true` 的意思是「重看整塊
+        板」，偷換它的語意會讓下一個人照舊語意用它而拿到不完整的東西
+        （@測試Novia 09/07 判準 4）。這裡限縮的是**全量路徑的內容範圍**，
+        由 `include_settled` / `objective_id` 兩個參數放寬。
+
+        ⚠️ **子項要跟著週期走**：只篩掉 objective 而留下它的卡，畫面上會是
+        一堆沒有歸屬的卡。
+        """
+        if objective_id:
+            if table == "board_objective":
+                return " AND id=?", [objective_id]
+            if table == "board_checklist":
+                return " AND objective_id=?", [objective_id]
+            return (" AND checklist_id IN (SELECT id FROM board_checklist"
+                    " WHERE objective_id=?)", [objective_id])
+        if include_settled:
+            return "", []
+        settled = (f"SELECT id FROM board_objective WHERE {scope_sql}"
+                   f" AND status IN {SETTLED_OBJECTIVE_SQL}")
+        if table == "board_objective":
+            return f" AND id NOT IN ({settled})", list(scope_params)
+        if table == "board_checklist":
+            return f" AND objective_id NOT IN ({settled})", list(scope_params)
+        return (" AND checklist_id NOT IN (SELECT id FROM board_checklist"
+                f" WHERE objective_id IN ({settled}))", list(scope_params))
+
+    async def _filtered_notice(scope_sql: str, scope_params: list
+                               ) -> dict | None:
+        """🚨 **被篩掉了就要說出來**（@測試Novia 09/07 判準 2，最重要的一條）。
+
+        最糟的結果不是回太多，是**回了一部分而讀的人以為那就是全部**——板上
+        還有一百多張卡，而他沒有任何線索知道。少了這個欄位，這張卡把一個
+        「拿不到」換成一個「拿到假的」，那更糟。
+
+        沒篩到東西回 `None`：一個恆存在的欄位會被讀成「總是有東西被藏起來」。
+        取得方式一起回（判準 3）——讀的人不該回去翻文件才知道怎麼看歷史。
+        """
+        db = app.state.db
+        row = await (await db.execute(
+            f"SELECT COUNT(*) AS n FROM board_objective WHERE {scope_sql}"
+            f" AND deleted=0 AND status IN {SETTLED_OBJECTIVE_SQL}",
+            tuple(scope_params))).fetchone()
+        if not row["n"]:
+            return None
+        tasks = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM board_task WHERE deleted=0"
+            " AND checklist_id IN (SELECT id FROM board_checklist"
+            f"   WHERE objective_id IN (SELECT id FROM board_objective"
+            f"     WHERE {scope_sql} AND status IN {SETTLED_OBJECTIVE_SQL}))",
+            tuple(scope_params))).fetchone()
+        return {
+            "objectives": row["n"], "tasks": tasks["n"],
+            "reason": "已收尾的週期預設不回傳——整塊板一次讀完會超過"
+                      "單次可讀上限",
+            "how_to_see_them": "帶 include_settled=true 取全部，"
+                               "或 objective_id=<週期 id> 只取其中一個",
+        }
+
     @app.get("/api/rooms/{room_id}/board", dependencies=[Depends(require_auth)])
     async def read_board(
         room_id: str,
         after_board_seq: int = 0,
+        include_settled: bool = False,
+        objective_id: str = "",
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
@@ -6279,12 +6350,21 @@ def create_app(config: Config | None = None) -> FastAPI:
              [attached_board["id"], room_id]) if attached_board is not None
             else ("room_id=?", [room_id]))
 
+        # ⚠️ **只有全量路徑收窄**（09/07 卡 659e9ff0）。增量不篩：斷線期間
+        # 收尾的週期照樣要送達，篩掉的話 client 手上那份會永遠停在「還在做」
+        narrowing = after_board_seq == 0
+
         async def _rows(table: str) -> list:
+            extra, extra_params = (
+                _cycle_scope(table, scope_sql, scope_params,
+                             include_settled, objective_id)
+                if narrowing else ("", []))
             cur = await db.execute(
                 f"SELECT * FROM {table} WHERE {scope_sql} AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
+                + extra
                 + " ORDER BY board_seq",
-                (*scope_params, after_board_seq),
+                (*scope_params, after_board_seq, *extra_params),
             )
             return [_board_row(r) for r in await cur.fetchall()]
 
@@ -6345,6 +6425,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {
             "board_id": attached["id"] if attached else None,
             "previous_board": previous_board,
+            # 篩掉了什麼、以及怎麼看得到（見 `_filtered_notice`）
+            "filtered": (await _filtered_notice(scope_sql, scope_params)
+                         if narrowing and not include_settled
+                         and not objective_id else None),
             "board_seq": await _board_seq(room_id),
             "full": after_board_seq == 0,
             "objectives": objectives,
@@ -6982,6 +7066,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def read_board_v2(
         board_id: str,
         after_board_seq: int = 0,
+        include_settled: bool = False,
+        objective_id: str = "",
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
@@ -6999,11 +7085,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         tombstones = after_board_seq > 0
 
+        # 與房軸同一個判斷（09/07 卡 659e9ff0）：只有全量路徑收窄，增量不篩
+        narrowing = after_board_seq == 0
+
         async def _rows(table: str) -> list:
+            extra, extra_params = (
+                _cycle_scope(table, "board_id=?", [board_id],
+                             include_settled, objective_id)
+                if narrowing else ("", []))
             cur = await db.execute(
                 f"SELECT * FROM {table} WHERE board_id=? AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
-                + " ORDER BY board_seq", (board_id, after_board_seq))
+                + extra
+                + " ORDER BY board_seq",
+                (board_id, after_board_seq, *extra_params))
             return [_board_row(r) for r in await cur.fetchall()]
 
         # 孤兒卡以 actor_key 認，跨房都算——這正是 v2 的重點：離開其中一間
@@ -7107,6 +7202,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 沒有的話，UI 只能回頭撈一整份 Library 才知道這一塊能不能收尾
             "outcome_eligible": outcome_eligible,
             "outcome_block_reason": outcome_block_reason,
+            # 篩掉了什麼、以及怎麼看得到（見 `_filtered_notice`）
+            "filtered": (await _filtered_notice("board_id=?", [board_id])
+                         if narrowing and not include_settled
+                         and not objective_id else None),
             # **兩個計數各答一個問題**（09/07 卡 1c920235）：前者是歷史
             # （掛過幾間、還沒解除），後者是現況（還有幾間活著）。詳情頁
             # 少了它們，畫面只能拿 `attached_rooms` 自己數——而那正是

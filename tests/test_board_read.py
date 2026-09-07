@@ -194,6 +194,9 @@ async def test_response_shape_is_pinned(tmp_path):
             # 呈現由 App 決定：進行中的房畫「沒綁板＋可重綁」，封存房畫
             # 「原先的板已刪除」
             "previous_board",
+            # 全量讀取預設只回進行中的週期（09/07 卡 659e9ff0）——**篩掉了
+            # 什麼一定要說出來**，否則讀的人會把手上這份當成整塊板
+            "filtered",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",
