@@ -6723,16 +6723,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         讀取回應出 `outcome_eligible` / `outcome_block_reason`，409 用同一組
         字串，兩邊都由這支產生。
 
-        ⚠️ 「還掛著」看的是 `detached_at IS NULL`，**不管房是不是封存的**——
-        與 `attached_room_count` 同一個判準。這裡刻意不用 `_live_room_count`
-        （它另外要求房 active）：封存一間房不是「這塊板跟這間房沒關係了」的
-        宣告，解除掛接才是。兩者用同一個數字的話，畫面上會出現「掛接數 1、
-        但可以宣告結局」這種自相矛盾的列。
+        ⚠️ **「還掛著」＝還有活著的房**（09/07 卡 1c920235，艾斯維爾實測後的
+        產品裁定）。這推翻了 09/06 的刻意決定（`37a1feb`：封存不等於解除掛接）
+        ——那條在語意上站得住，實務上卻讓「所有房都封存了」的板永遠收不了尾，
+        而收尾正是那種板唯一還需要的動作。
+
+        當時反對的理由是「畫面會出現掛接數 1、但可以宣告結局」。那個矛盾是
+        真的，但根源是**一個數字被拿去回答兩個問題**。09/07 決策裁走拆欄位：
+        `attached_room_count` 答「掛過幾間、還沒解除」（歷史），
+        `live_attached_room_count` 答「還有幾間活著」（現況）。gate 用後者。
+
+        ⚠️ 封存房**仍看得到板**（唯讀入口不動）：那是歷史，不是失效。
         """
         row = await (await app.state.db.execute(
             "SELECT COUNT(*) AS ever,"
-            " SUM(CASE WHEN detached_at IS NULL THEN 1 ELSE 0 END) AS live"
-            " FROM board_room WHERE board_id=?", (board_id,))).fetchone()
+            " SUM(CASE WHEN br.detached_at IS NULL"
+            "          AND r.status='active' THEN 1 ELSE 0 END) AS live"
+            " FROM board_room br JOIN room r ON r.id = br.room_id"
+            " WHERE br.board_id=?", (board_id,))).fetchone()
         if not row["ever"]:
             return False, "never_attached"
         if row["live"]:
@@ -6771,6 +6779,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             # ⚠️ 與 `custom_tags` 同型的漏法：**過濾做了、值沒回**
             "outcome": b["outcome"] if "outcome" in b.keys() else "",
             "attached_room_count": rooms["n"],
+            # 09/07 起的正典名稱（決策裁 B）。`live_room_count` 是同一個值的
+            # 舊名，留著給還沒換的 client——**兩個名字表示同一件事是暫時的**，
+            # 下一個 kit 週期收掉舊名
+            "live_attached_room_count": live,
             "live_room_count": live,
             # **能不能宣告結局，由 server 說。** 見 `_outcome_gate`：
             # `attached_room_count == 0` 有兩種完全不同的成因，UI 分不出來
@@ -6949,6 +6961,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 沒有的話，UI 只能回頭撈一整份 Library 才知道這一塊能不能收尾
             "outcome_eligible": outcome_eligible,
             "outcome_block_reason": outcome_block_reason,
+            # **兩個計數各答一個問題**（09/07 卡 1c920235）：前者是歷史
+            # （掛過幾間、還沒解除），後者是現況（還有幾間活著）。詳情頁
+            # 少了它們，畫面只能拿 `attached_rooms` 自己數——而那正是
+            # `_outcome_gate` 的 docstring 說 client 會算錯的那件事
+            "attached_room_count": len(attached),
+            "live_attached_room_count": await _live_room_count(board_id),
             # owner 是誰、他還在不在——接管的確認對話框靠這兩個判斷「20 分鐘
             # 前還在」與「昨天之後沒再出現過」，不能只在 409 裡才給
             "owner_actor_key": board["owner_actor_key"],
