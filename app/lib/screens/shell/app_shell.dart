@@ -72,6 +72,18 @@ class _AppShellState extends ConsumerState<AppShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 卡 `7d3db264`：**視窗前後景的第二次嘗試**。
+    //
+    // `didChangeAppLifecycleState` 在 Windows 桌面對「別的視窗跳到前面」
+    // 完全不觸發（除錯 09/07 實測 0 筆），所以那條抓手是空的。這裡改監聽
+    // `FocusManager`——Flutter 收到 view focus 變化時會經它取消 primary
+    // focus，**如果**引擎有把視窗失焦傳下來的話。
+    //
+    // ⚠️ **它也可能是空的，我沒有實機驗過。** 但它有第二個作用而且那個
+    // 一定成立：**primaryFocus 變成 null 的那一刻**會被記下來，而
+    // 「游標還在閃、卻打不出字」正是「primaryFocus 沒變、但打不進去」——
+    // 兩者在 log 上分得出來，這比只有一條 focus 線索多一個維度
+    FocusManager.instance.addListener(_traceAppFocus);
     _connectivity =
         Connectivity().onConnectivityChanged.listen((results) {
       final online = results.any((r) => r != ConnectivityResult.none);
@@ -180,14 +192,31 @@ class _AppShellState extends ConsumerState<AppShell>
   void dispose() {
     _connectivity?.cancel();
     _kicked?.cancel();
+    FocusManager.instance.removeListener(_traceAppFocus);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  /// 全域焦點的變化。與 composer 自己那條 `focus` 是**兩個層級**：
+  /// 那條說「輸入框認為自己有沒有焦點」，這條說「整個 App 現在把焦點放在
+  /// 哪裡、或根本沒有」。症狀是前者說有、而字打不進去，所以兩條都要。
+  ///
+  /// **不記 widget 的細節**，只記「有沒有」與型別名——debugLabel 可能含
+  /// 使用者資料。
+  void _traceAppFocus() {
+    final f = FocusManager.instance.primaryFocus;
+    InputDiagnostics.instance.log('appfocus', {
+      'has': f != null,
+      'node': f == null ? '-' : f.runtimeType.toString(),
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 卡 `7d3db264`：**「別的視窗跳出來搶焦點」那條候選唯一的抓手**。
-    // 症狀是「打字打到一半不能動」，而使用者不會記得當下有什麼跳出來過
+    // ⚠️ **這一格在 Windows 桌面是空的**——實測（除錯 09/07）：讓 App 失去
+    // 前景三秒再回來，`didChangeAppLifecycleState` 一次都沒觸發。留著是因為
+    // 它在其他平台仍然有效，而且成本是零；**但別把它當成「視窗前後景」的
+    // 抓手**，那條走 `_traceAppFocus`
     InputDiagnostics.instance.lifecycle(state.name);
     if (state == AppLifecycleState.resumed) {
       ref.read(realtimeServiceProvider).retryNow();
