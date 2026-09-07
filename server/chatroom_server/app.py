@@ -215,7 +215,10 @@ class RoomCreate(BaseModel):
     #
     # 空字串與沒帶是同一件事（存進去的就是空字串），所以 `min_length=1`
     # 兩種一起擋。失敗要發生在建房那一刻。
-    session_key: str = Field(min_length=1, max_length=128)
+    # ⚠️ **改成選填是因為多了 `X-Session-Key` 這條路（09/07 卡 87ec8297），
+    # 不是因為它可以不給。** 兩個位置都沒有時端點層一律 422——48da086a 的
+    # 保護原封不動，只是換個地方擋
+    session_key: str = Field(default="", max_length=128)
     # public / private。private 的房不出現在別人的房間列表，也不能自行加入
     visibility: str = Field(default="public", pattern="^(public|private)$")
     # 房內 agent 的說話方式。custom 時 style_instructions 必填
@@ -265,7 +268,9 @@ class RoomStyle(BaseModel):
 
 class JoinRequest(BaseModel):
     kind: str = Field(pattern="^(claude|codex|human|other)$")
-    session_key: str = Field(min_length=1, max_length=128)
+    # ⚠️ 選填是因為多了 `X-Session-Key`（09/07 卡 87ec8297），不是因為
+    # 可以不給——兩個位置都沒有時端點層 422
+    session_key: str = Field(default="", max_length=128)
     # App 可把 Codex thread id 當成指派目標；MCP bridge 本身拿不到 thread id，
     # 因此以 assignment_id 兌換 Hub 已知的 canonical session_key。
     assignment_id: str | None = Field(default=None, max_length=128)
@@ -634,6 +639,10 @@ class BoardWatchToggle(BaseModel):
 
 # ---------- 應用工廠 ----------
 
+# 舊憑證位置的 deprecation 警告：一個位置只印一次（見 `_credential_key`）
+_DEPRECATED_SEEN: set[str] = set()
+
+
 def assert_no_duplicate_routes(app: FastAPI) -> None:
     """同一個 `(method, path)` 註冊兩次就拒絕啟動（09/07 卡 7e022378）。
 
@@ -898,6 +907,37 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row is None:
             return "agent"
         return row["audience"] or "agent"
+
+    def _credential_key(header_value: str | None, legacy: str | None,
+                        where: str) -> str:
+        """`session_key` 的正典位置是 `X-Session-Key`（09/07 卡 87ec8297）。
+
+        **header 優先，舊位置照收。** 相容期還沒結束——bridge 送在三個位置、
+        App 送在四處，兩邊都要先切過去才拔得掉（順序：server 收齊 →
+        bridge 拔 + App 切 → 出包）。
+
+        悄悄用舊的那個是不行的：切換期兩邊都會出現，而「我改成 header 了」
+        會看起來生效、實際沒有。
+
+        ⚠️ **不在這條規範內的三個**（照字串搜尋改的手會踩）：
+        `/ws` 的 `?token=`（WS 握手沒有地方放 header，協定層限制，**永久
+        例外**）、`board/supervisor` body 的 `session_key`（那是指派目標不是
+        憑證）、`_session_params` 的 kind／label／host（向名錄自報的資訊）。
+        """
+        head = (header_value or "").strip()
+        if head:
+            return head
+        old = (legacy or "").strip()
+        if old and where not in _DEPRECATED_SEEN:
+            # 一個位置只警告一次：每次請求都印的話，日誌會被輪詢端點洗掉，
+            # 而這句話是給升級的人看的，不是給監控看的
+            _DEPRECATED_SEEN.add(where)
+            logger.warning(
+                "%s 送在舊位置。正典是 X-Session-Key 標頭，"
+                "舊位置會在下一個 kit 週期後移除。", where,
+                extra={"event": "deprecated_credential_position",
+                       "where": where})
+        return old
 
     async def host_view(
         x_host_view: str | None = Header(default=None, alias="X-Host-View"),
@@ -1547,7 +1587,19 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- 房間 ----------
 
     @app.post("/api/rooms", dependencies=[Depends(require_auth)])
-    async def create_room(body: RoomCreate):
+    async def create_room(
+        body: RoomCreate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        creator_key = _credential_key(
+            x_session_key, body.session_key,
+            "POST /api/rooms 的 session_key（body）")
+        if not creator_key:
+            # 漏帶不報錯的話，症狀不在因果現場——是三步之後的
+            # 「建板 403 not_room_admin」（09/06 卡 48da086a）
+            raise _err(422, "session_key_required",
+                       "建立聊天室要帶 X-Session-Key——沒有它你不會是"
+                       "自己這間房的管理者，而那件事要到三步之後才看得出來")
         db = app.state.db
         room_id = _uid()
         now = _now()
@@ -1562,7 +1614,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "INSERT INTO room (id, name, topic, created_at, activated_at,"
             " creator_session_key, visibility, style, style_instructions)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
-            (room_id, body.name, body.topic, now, now, body.session_key,
+            (room_id, body.name, body.topic, now, now, creator_key,
              body.visibility, body.style, instructions),
         )
         await _commit_with_retry(db)
@@ -1578,9 +1630,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         kind: str | None = None,
         label: str | None = None,
         host: str | None = None,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         host_mode: bool = Depends(host_view),
         host_token: bool = Depends(is_host_token),
     ):
+        session_key = _credential_key(x_session_key, session_key,
+                                      "GET /api/rooms 的 session_key（query）")
         db = app.state.db
         if session_key:
             await _touch_session(session_key, kind, label, _client_ip(request),
@@ -2508,8 +2563,18 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- 成員 ----------
 
     @app.post("/api/rooms/{room_id}/join", dependencies=[Depends(require_auth)])
-    async def join_room(room_id: str, body: JoinRequest, request: Request):
+    async def join_room(
+        room_id: str, body: JoinRequest, request: Request,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
         room = await _room_or_404(room_id)
+        joining_key = _credential_key(
+            x_session_key, body.session_key,
+            "POST /api/rooms/{id}/join 的 session_key（body）")
+        if not joining_key:
+            raise _err(422, "session_key_required",
+                       "加入聊天室要帶 X-Session-Key——它是你在房裡的身分，"
+                       "沒有它連你是誰都說不出來")
         # `role=human` 不只是換個圖示：人類在封存規則、完成別人的卡、確認
         # 週期無誤上都有額外的份量。bridge 手上就是主 token，分離期開始後
         # 它不能再自報成人——**擋在進門那一刻**，因為 role 一旦寫進
@@ -2526,7 +2591,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 最常用的正是那種設定方式。存原樣的話，`participant.session_key`
         # 與 board 上的 `claim_actor_key` 就不再相等：接案豁免會**靜默失效**，
         # agent 被掃掉、卡變孤兒，而它不知道為什麼（@開發Novia (除錯) 實測）
-        session_key = actor_key(body.session_key)
+        session_key = actor_key(joining_key)
         if body.assignment_id:
             assignment = await (
                 await db.execute(
@@ -10246,11 +10311,22 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/assignments", dependencies=[Depends(require_auth)])
     async def list_assignments(
         request: Request,
-        session_key: str,
+        session_key: str = "",
         kind: str | None = None,
         label: str | None = None,
         host: str | None = None,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
+        # ⚠️ 這個參數原本是**必填 query**，於是舊 client 與新 client 只能活
+        # 一種（@開發Novia (UI) 09/07 指出）。改成兩邊擇一
+        session_key = _credential_key(
+            x_session_key, session_key,
+            "GET /api/assignments 的 session_key（query）")
+        if not session_key:
+            # **明確講**：靜默回空清單的話，那與「你沒有指派」長得一模一樣，
+            # 而後者是每天都會發生的正常狀態
+            raise _err(422, "session_key_required",
+                       "要帶 X-Session-Key 才知道要看誰的指派")
         # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
         await _touch_session(session_key, kind, label, _client_ip(request), host)
         db = app.state.db
