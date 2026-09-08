@@ -173,19 +173,29 @@ class MessageBubble extends StatelessWidget {
                       ? Color.alphaBlend(color.withValues(alpha: .07), s.bgCard)
                       : s.bgCard,
           border: Border.all(
-            // 優先序：跳轉聚焦（暫態，蓋過一切）> 自己 > 標記成員 > 釘選。
-            // 標記壓過釘選是刻意的——釘選在 header 已有「❖ 已釘選」字樣，
+            // 優先序：標記成員 > 釘選 > 自己 > 子代理。
+            //
+            // 🔴 **釘選改成常駐的強調**（09/08 卡 4f797666，艾斯維爾附圖）：
+            // 原本是 alpha .22 的金框，在一整頁訊息裡幾乎看不出來——而釘選
+            // 是決議索引，看不出來的索引等於沒有索引。現在用的是原本「跳轉
+            // 聚焦」那個強度。
+            //
+            // ⚠️ 跳轉聚焦**不再參與這條鏈**：它改成疊在外圈的呼吸效果
+            // （見 [_FocusPulse]）。兩者都用金色卻是兩件事——一個是「這則
+            // 很重要」，一個是「你剛剛跳到這裡」，共用同一個強度就分不出來。
+            //
+            // 標記成員仍壓過釘選：釘選在 header 已有「❖ 已釘選」字樣，
             // 邊框讓給「這個人我在等」不會丟資訊
-            color: highlighted
-                ? UepColors.gold
-                : isSelf
-                    ? UepColors.gold.withValues(alpha: .28)
-                    : memberHighlighted
-                        ? color.withValues(alpha: .55)
-                        : message.pinned
-                            ? UepColors.gold.withValues(alpha: .22)
-                            : (isSub ? color.withValues(alpha: .35) : s.line),
-            width: memberHighlighted && !isSelf ? 1.4 : (isSub ? 1.2 : 1),
+            color: memberHighlighted && !isSelf
+                ? color.withValues(alpha: .55)
+                : message.pinned
+                    ? UepColors.gold
+                    : isSelf
+                        ? UepColors.gold.withValues(alpha: .28)
+                        : (isSub ? color.withValues(alpha: .35) : s.line),
+            width: (memberHighlighted && !isSelf) || message.pinned
+                ? 1.4
+                : (isSub ? 1.2 : 1),
           ),
           borderRadius: BorderRadius.circular(10),
         ),
@@ -250,6 +260,10 @@ class MessageBubble extends StatelessWidget {
             child: body,
           );
 
+    // 跳轉聚焦：呼吸，不是靜止的框。**它要能與釘選的常駐金框區分開**，
+    // 而兩者都是金色——會動的那個才是「你剛剛跳到這裡」
+    final focused = highlighted ? _FocusPulse(child: bubble) : bubble;
+
     final column = Column(
       crossAxisAlignment:
           isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -260,7 +274,7 @@ class MessageBubble extends StatelessWidget {
           child: header,
         ),
         const SizedBox(height: 6),
-        bubble,
+        focused,
       ],
     );
 
@@ -468,4 +482,62 @@ class _ContextMenuRegion extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// 跳轉聚焦的**呼吸**（09/08 卡 4f797666）。
+///
+/// 疊在氣泡外圈，不動氣泡自己的邊框——釘選現在常駐一圈金框，聚焦若也去改
+/// 那個顏色，兩件事就會互相覆蓋：跳到一則沒釘選的訊息看起來像它被釘了，
+/// 跳到一則釘選訊息則什麼都看不出來。
+///
+/// ⚠️ **只在 `highlighted` 為真時才建這個 widget**（呼叫端已經這樣做）。
+/// 無條件建立的話，畫面上每一則訊息都掛著一個永遠在跑的 ticker。
+class _FocusPulse extends StatefulWidget {
+  const _FocusPulse({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_FocusPulse> createState() => _FocusPulseState();
+}
+
+class _FocusPulseState extends State<_FocusPulse>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _c,
+        // child 不進 builder 的重建範圍——每格重畫整則訊息（含 Markdown）
+        // 太貴，而變的只有外面那一圈
+        child: widget.child,
+        builder: (_, child) => Stack(children: [
+          child!,
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    // 低點仍看得見：脈動到最暗時整圈消失的話，那不是呼吸，
+                    // 是閃爍
+                    color: UepColors.gold
+                        .withValues(alpha: .35 + .65 * _c.value),
+                    width: 1.6,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ]),
+      );
 }
