@@ -17,23 +17,38 @@ Future<String?> showRenameDialog(
   required String title,
   required String current,
   String hint = '',
+  String note = kRenameLeavesTrace,
 }) =>
     showDialog<String>(
       context: context,
-      builder: (_) =>
-          _RenameDialog(title: title, current: current, hint: hint),
+      builder: (_) => _RenameDialog(
+          title: title, current: current, hint: hint, note: note),
     );
+
+/// 房間與板改名的說明——**這兩者真的會留痕**。
+const kRenameLeavesTrace = '改名會在房裡留下一則系統訊息——誰改的、改成什麼，都看得到。';
+
+/// 週期與階段改名的說明。
+///
+/// ⚠️ **不能沿用 [kRenameLeavesTrace]**：`_board_patch` 沒有發任何 system
+/// 訊息，那句話用在這裡是假的。畫面上講一件不會發生的事，比什麼都不講更糟
+/// ——讀的人會去房裡找那則訊息，然後以為是漏發了。
+const kRenameNoTrace = '改名不會在房裡留訊息——看板的人下次看到的就是新名字。';
 
 class _RenameDialog extends StatefulWidget {
   const _RenameDialog({
     required this.title,
     required this.current,
     required this.hint,
+    required this.note,
   });
 
   final String title;
   final String current;
   final String hint;
+
+  /// 改完之後會發生什麼。**留不留痕不是同一件事**，所以由呼叫端講。
+  final String note;
 
   @override
   State<_RenameDialog> createState() => _RenameDialogState();
@@ -78,7 +93,7 @@ class _RenameDialogState extends State<_RenameDialog> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: Text('改名會在房裡留下一則系統訊息——誰改的、改成什麼，都看得到。',
+            child: Text(widget.note,
                 style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),

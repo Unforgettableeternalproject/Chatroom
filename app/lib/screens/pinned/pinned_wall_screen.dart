@@ -112,6 +112,8 @@ class PinnedWallScreen extends ConsumerWidget {
                       return _PinnedCard(
                         roomId: roomId,
                         message: m,
+                        // system 訊息沒有發話者,`kindById` 查不到是**正常**
+                        // 的——它不該退成 `other`(見 [pinnedSenderLabel])
                         kind: m.senderId != null
                             ? (kindById[m.senderId] ?? 'other')
                             : 'other',
@@ -142,7 +144,10 @@ class _PinnedCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
-    final color = kindColor(kind, context: context);
+    final isSystem = message.kind == 'system';
+    // 沒有發話者就沒有 kind 色。用中性線色而不是 `other` 的橘——
+    // 那個顏色的意思是「一個我不認得的 agent」，而這裡根本沒有 agent
+    final color = isSystem ? s.hairlineStrong : kindColor(kind, context: context);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
       decoration: BoxDecoration(
@@ -156,11 +161,15 @@ class _PinnedCard extends ConsumerWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(message.senderName ?? '（未知）',
+          Text(pinnedSenderLabel(message),
               style: UepText.sans(
-                  size: 12.5, weight: FontWeight.w600, color: s.inkTitle)),
-          const SizedBox(width: 8),
-          KindBadge(kind: kind, compact: true),
+                  size: 12.5,
+                  weight: FontWeight.w600,
+                  color: isSystem ? s.inkMute : s.inkTitle)),
+          if (!isSystem) ...[
+            const SizedBox(width: 8),
+            KindBadge(kind: kind, compact: true),
+          ],
           const Spacer(),
           Text('#${message.seq} · ${clockTime(message.createdAt)}',
               style: UepText.mono(size: 9, color: s.inkMute)),
@@ -203,3 +212,15 @@ class _PinnedCard extends ConsumerWidget {
     );
   }
 }
+
+/// 釘選牆上這一列掛在誰名下。
+///
+/// 🔴 **system 訊息沒有發話者,那不是資料壞掉**(09/08 卡 bf3547db,艾斯維爾
+/// 截圖):釘選一則收據之後,牆上出現一個叫「(未知)」、徽章寫 OTHER 的人。
+/// 房裡沒有任何人離開過,而畫面說有——那句話本身是假的,而且它指向一個不
+/// 存在的偵錯方向(去查誰離開了)。
+///
+/// 「(未知)」的 fallback **保留給真正的那種情況**:發話者是人/agent,但名字
+/// 查不到(離開了、或快取還沒補上)。兩者要分得開,因為處置完全不同。
+String pinnedSenderLabel(Message m) =>
+    m.kind == 'system' ? '系統' : (m.senderName ?? '（未知）');

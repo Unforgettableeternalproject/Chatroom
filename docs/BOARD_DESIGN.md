@@ -463,10 +463,41 @@ GET /api/boards/{board_id}?after_board_seq=N
 
 `board_event` 是唯一事實紀錄，不把每件事複製成每間 attached room 的 system message。
 
-- 重要變更可在 `origin_room_id` 投影一則 system message。
+- ~~重要變更可在 `origin_room_id` 投影一則 system message。~~
+  **取代（2026-09-08）：週期轉折投影到板的每一間 active 掛接房**，不是週期
+  出生的那一間。留痕的讀者是「後來進這個房的人」，而 `origin_room_id`
+  那間**可能早就封存**——發在一間沒有人會再打開的房裡等於沒發。
+  判準與 `_notify_board_rooms` 同一份：解除掛接的不發、封存的不發。
 - 其他 rooms 只顯示 Board badge／摘要。
 - 指定 actor 的通知以 actor_key 找 active attached-room presence，去重後傳達。
 - Task 完成、Objective 送審／verify／完成保留通知；一般編輯只推水位。
+- **週期收尾另走收件匣**（`board_watch_notice`，綁 actor_key）：收件人是
+  「在這個週期底下做過事的人」∪「還在任的 supervisor」。前者從
+  `claim_actor_key ∪ completed_by_actor_key` 算，不從「現在誰在房裡」算——
+  做完事的 agent 多半已經離開；後者多半一張卡都沒認領，卻是這塊板上唯一
+  被指定「負責看」的那個。按下按鈕的人自己不收。
+
+#### 明文但書：`review` / `verify` 在純 agent 房沒有痕跡
+
+（艾斯維爾 2026-09-08 裁定，測試Novia 在 8788 實測後提出）
+
+五個轉折的房內留痕，收件人分兩類：
+
+| 轉折 | 房內 mention | 純 agent 房 |
+|---|---|---|
+| `reopen` / `cancel` / `complete` | 全員（含 agent） | **有痕** |
+| `review` / `verify` | **只有人類成員** | **無痕** |
+
+`review` / `verify` 的訊息內容是「等人確認」「還差最後一步：按下完成」——
+它們催的是**只有人類做得到的下一步**。房裡沒有人類時，那一步根本無法發生，
+痕跡會指向一個不會來的動作。**這是設計，不是缺陷**，看到「純 agent 房沒有
+送審留痕」不要當回歸報。
+
+發起人是否在 mention 裡也分兩邊，同樣是刻意的：
+
+- `verified` / `done` **含發起人**——下一顆按鈕就在他手上
+- `review` / `reopened` / `cancelled` **排除發起人**——之後沒有他要按的東西，
+  叫他等於叫假的
 - 🔄 **Supervisor 屬於 room，不屬於 Board**（艾斯維爾 2026-09-03 推翻原設計）。
   原本寫的是「Supervisor 屬於 Board，收 Board event 摘要，不因離開某間 room
   而退場」——那條已作廢。現在**每間掛接房各自綁一個**，由該房的管理者指派
