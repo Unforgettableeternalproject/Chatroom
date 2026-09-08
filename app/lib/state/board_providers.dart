@@ -269,6 +269,56 @@ class BoardActions {
     _reload();
   }
 
+  /// 改一張卡的標題與敘述（艾斯維爾 09/08）。
+  ///
+  /// ⚠️ **不走這裡改狀態**——Hub 的 PATCH model 是 `extra="forbid"`，
+  /// 多送一個 `status` 會回 422。一個欄位兩條寫入路徑，遲早有一條漏掉守門。
+  ///
+  /// 兩個欄位都是選填：只改標題時不要把敘述一起送成空字串，那會**清掉**它
+  /// （`_board_patch` 只跳過 null，空字串是一個真的值）。
+  Future<void> updateTask(String taskId,
+      {String? title, String? description}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.updateTask(taskId,
+        participantId: pid,
+        sessionKey: _sk,
+        title: title,
+        description: description);
+    _reload();
+  }
+
+  /// 改一個週期的標題與敘述（09/08 卡 32f26b75）。規則與 [updateTask]
+  /// 完全一樣：兩個欄位都選填，**null＝沒動它、空字串＝清空**。
+  ///
+  /// 沒資格改時 Hub 回 403 `not_board_editor`（owner／supervisor／建立者
+  /// 三軸，`_board_can_edit`）。**判準不複製到這裡**——UI 自己算一份就是
+  /// 第二份會漂移的真相。
+  Future<void> updateObjective(String objectiveId,
+      {String? title, String? description}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.updateObjective(objectiveId,
+        participantId: pid,
+        sessionKey: _sk,
+        title: title,
+        description: description);
+    _reload();
+  }
+
+  /// 改一個階段的標題與敘述。與 [updateObjective] 同一組規則。
+  Future<void> updateChecklist(String checklistId,
+      {String? title, String? description}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.updateChecklist(checklistId,
+        participantId: pid,
+        sessionKey: _sk,
+        title: title,
+        description: description);
+    _reload();
+  }
+
   /// 推 Task 的狀態。轉移不合法時丟 [ConflictException]，其 `allowed`
   /// 會說出從現在這裡還能去哪——呼叫端拿它畫按鈕，不要自己複製轉移表。
   Future<void> setTaskStatus(String taskId, String status,

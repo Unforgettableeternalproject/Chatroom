@@ -15,6 +15,7 @@ import '../../state/rooms_providers.dart';
 import '../../widgets/kind_badge.dart';
 import 'board_action_feedback.dart';
 import 'board_move_dialog.dart';
+import 'board_task_edit_dialog.dart';
 
 /// Task 詳情抽屜（設計稿 artboard 03，420px）。
 ///
@@ -94,7 +95,7 @@ class BoardTaskDrawer extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _header(context),
+          _header(context, ref),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
@@ -129,7 +130,29 @@ class BoardTaskDrawer extends ConsumerWidget {
     );
   }
 
-  Widget _header(BuildContext context) {
+  /// 改這張卡的標題與敘述。
+  ///
+  /// 入口放在 header 而不是底下那排動作：**編輯不是狀態轉移**，混進那一排
+  /// 會讓「改個錯字」看起來跟「標記完成」一樣重（而那排正好剛被重新設計過
+  /// ——主要動作外露、其餘收選單，編輯兩者都不是）。
+  ///
+  /// 沒資格改的人會拿到 403 `not_board_editor`（09/08 收緊到 owner／
+  /// supervisor／建立者）。**入口照樣畫出來**：資格判斷在 Hub，複製一份到
+  /// client 就是第二份會漂移的真相，而按下去讓 server 回答比先猜可靠。
+  Future<void> _edit(BuildContext context, WidgetRef ref) async {
+    final edit = await showTaskEditDialog(context,
+        title: task.title, description: task.description);
+    if (edit == null || edit.isEmpty || !context.mounted) return;
+    final actions = roomId != null
+        ? ref.read(boardActionsProvider(roomId!))
+        : ref.read(boardActionsByIdProvider(boardId));
+    await runBoardAction(
+        context,
+        () => actions.updateTask(task.id,
+            title: edit.title, description: edit.description));
+  }
+
+  Widget _header(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
@@ -146,6 +169,18 @@ class BoardTaskDrawer extends ConsumerWidget {
                 UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.8),
           ),
         ),
+        if (!readOnly) ...[
+          InkWell(
+            onTap: () => _edit(context, ref),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Text('編輯',
+                  style: UepText.mono(
+                      size: 9, color: s.inkSoft, letterSpacing: 1.4)),
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
         InkWell(
           onTap: onClose,
           child: Padding(
