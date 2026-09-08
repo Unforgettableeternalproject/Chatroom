@@ -185,11 +185,19 @@ class BoardApi {
     String? participantId,
     String? sessionKey,
     required String status,
+    String movedTo = '',
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/tasks/$taskId/status',
-          data: {'status': status},
+          // 去向只在 `moved` 時有意義，而且 Hub 那側是**選填**：空字串等於
+          // 「搬走了但還沒說去哪」，那是它認得的中間狀態。所以空的時候
+          // 整個欄位不送——送一個空字串與不送同義，但少送就少一個
+          // 「這裡到底有沒有設定過」的問題
+          data: {
+            'status': status,
+            if (status == 'moved' && movedTo.isNotEmpty) 'moved_to': movedTo,
+          },
           options: _auth(participantId, sessionKey),
         );
       });

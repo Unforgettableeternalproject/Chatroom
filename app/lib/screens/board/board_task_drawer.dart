@@ -14,6 +14,7 @@ import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/kind_badge.dart';
 import 'board_action_feedback.dart';
+import 'board_move_dialog.dart';
 
 /// Task 詳情抽屜（設計稿 artboard 03，420px）。
 ///
@@ -106,7 +107,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                           size: 13, color: s.inkSoft, height: 1.95)),
                 ],
                 const SizedBox(height: 18),
-                _meta(context, requests),
+                _meta(context, ref, requests),
                 // 來源訊息只有房軸看得到——板軸沒有房，就沒有那條路。
                 // **拿不到不是錯誤**，收起來就好
                 if (task.sourceSeq != null && roomId != null) ...[
@@ -201,9 +202,33 @@ class BoardTaskDrawer extends ConsumerWidget {
 
   /// 中繼資料。**空的列不畫**——「指定對象：（無）」比不寫更佔位置，
   /// 而這個抽屜的每一列都該是一件確實成立的事。
-  Widget _meta(BuildContext context, List<TaskRequest> requests) {
+  Widget _meta(
+      BuildContext context, WidgetRef ref, List<TaskRequest> requests) {
     final s = context.uep;
     final rows = <Widget>[];
+
+    // 搬走的卡**留在原地顯示**（09/08 可見度規則，@開發Novia (除錯) 定），
+    // 所以它需要一列說出去了哪裡——否則畫面上只剩一個「已搬走」徽章，
+    // 那與「不見了」在讀者眼裡是同一件事。
+    //
+    // ⚠️ 去向空白是**存量會有的真實狀態**（這個功能之前搬卡不寫去向），
+    // 不是壞掉。要講出來，但不能講成錯誤：那張卡還在，只是沒人說去哪。
+    if (task.status == 'moved') {
+      final snap = roomId != null
+          ? ref.watch(boardProvider(roomId!)).value
+          : ref.watch(boardByIdProvider(boardId)).value;
+      final target = task.movedTo.isEmpty ? null : snap?.tasks[task.movedTo];
+      rows.add(_MetaRow(
+        label: '搬去了',
+        // 查不到不等於不存在——目標可能在還沒載入的週期裡，或已經被刪掉。
+        // 兩種都不該講成「沒有去向」，那是另一件事
+        value: task.movedTo.isEmpty
+            ? '沒說去哪'
+            : (target?.title ?? '這份快取裡找不到的一張卡'),
+        trailing: task.movedTo.isEmpty ? '去向留白' : '',
+        trailingIsAlert: task.movedTo.isEmpty,
+      ));
+    }
 
     if (task.claimName.isNotEmpty) {
       rows.add(_MetaRow(
@@ -424,6 +449,21 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
   ///
   /// 送空的 `target_participant_id`——照 supervisor 那條既有慣例，
   /// 空是「卸任」不是「沒填」。
+  /// 搬到別處。**先問去哪，再搬**——[showBoardMoveDialog] 會在目標清單建一張
+  /// 新卡並把這張指過去，所以這裡不必（也不可以）自己推一次 `moved`。
+  Future<void> _move() async {
+    final newId = await showBoardMoveDialog(
+      context,
+      task: widget.task,
+      boardId: widget.boardId,
+      roomId: widget.roomId,
+    );
+    if (newId == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已搬走。新的那張卡在你選的清單上，這張指向它。')),
+    );
+  }
+
   Future<void> _clearAssignee(BoardActions actions) async {
     await runBoardAction(context, () async {
       final out =
@@ -560,7 +600,12 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
           label: a.label,
           bordered: !a.trailing,
           accent: a.danger ? UepColors.error : null,
-          onTap: () => runBoardAction(
+          // 「搬到別處」不是單純推一次狀態：去向要在同一個動作裡定下來，
+          // 否則留下的是一張「搬走了、不知道去哪」的卡。所以它走對話框，
+          // 不走這條共用的 runBoardAction
+          onTap: a.target == 'moved'
+              ? _move
+              : () => runBoardAction(
             context,
             () => actions.setTaskStatus(widget.task.id, a.target),
             onConflict: (e) {
@@ -571,7 +616,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
                 setState(() => _allowed = e.allowed.toSet());
               }
             },
-          ),
+                ),
         );
 
     final leading = items.where((a) => !a.trailing).toList();

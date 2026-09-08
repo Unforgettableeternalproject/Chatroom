@@ -271,12 +271,34 @@ class BoardActions {
 
   /// 推 Task 的狀態。轉移不合法時丟 [ConflictException]，其 `allowed`
   /// 會說出從現在這裡還能去哪——呼叫端拿它畫按鈕，不要自己複製轉移表。
-  Future<void> setTaskStatus(String taskId, String status) async {
+  Future<void> setTaskStatus(String taskId, String status,
+      {String movedTo = ''}) async {
     final pid = await _pid();
     if (pid == null && _sk == null) return;
     await _api.setTaskStatus(taskId, participantId: pid,
-          sessionKey: _sk, status: status);
+          sessionKey: _sk, status: status, movedTo: movedTo);
     _reload();
+  }
+
+  /// 把一張卡搬去別的地方做：**先在目標清單建一張新卡，再把舊卡推成
+  /// `moved` 並指向它**。回傳新卡 id。
+  ///
+  /// ⚠️ **這個順序不可以反過來。** 先推 `moved` 的話，後面任何一步失敗都會
+  /// 留下一張「搬走了、去向空白」的卡——而那正是它會從清單上消失又追不回來
+  /// 的原因（09/08 的 bug 卡）。先建新卡的話，最壞情況是多一張沒人指向的
+  /// 卡：它看得見、改得動、刪得掉。
+  Future<String?> moveTask(
+    String taskId, {
+    required String targetChecklistId,
+    required String title,
+    String description = '',
+    String priority = 'normal',
+  }) async {
+    final newId = await addTask(targetChecklistId, title,
+        description: description, priority: priority);
+    if (newId == null) return null;
+    await setTaskStatus(taskId, 'moved', movedTo: newId);
+    return newId;
   }
 
   /// 請這個人接手這張卡（N-4）。
