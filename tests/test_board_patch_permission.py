@@ -153,3 +153,27 @@ async def test_legacy_cards_with_no_creator_stay_editable(tmp_path):
         await db.commit()
         r = await _patch(client, "objectives", "o-legacy", hdr, title="改得動")
         assert r.status_code == 200, r.text
+
+
+async def test_the_exemption_is_strictly_both_empty(tmp_path):
+    """🔴 豁免條件是 AND（兩者皆空），不是 OR——寫成 OR 會炸開一個更大的洞。
+
+    board-scoped 建的卡 `created_by` **就是空的**（`_board_writer_v2` 明文
+    「不是從房裡發出來的」），身分只在 `created_by_actor_key`。條件一旦沾到
+    OR，所有走 Board Library 建的東西就變成人人可改——**而且不會有任何測試
+    報錯，因為它「通過」了**（測試Novia 09/08 事前指出）。
+
+    所以這條打的不是豁免本身，是它的邊界：有 actor_key 就代表有建立者。
+    """
+    app, client = await _client(tmp_path, "patch-exemption-boundary")
+    async with app.router.lifespan_context(app), client:
+        rid, creator, stranger, _ = await _setup(client)
+        board_id = (await client.get(f"/api/rooms/{rid}/board",
+                                     headers=creator)).json()["board_id"]
+        oid = (await client.post(f"/api/boards/{board_id}/objectives",
+                                 json={"title": "板軸建的週期"},
+                                 headers={"X-Session-Key": "creator"})
+               ).json()["id"]
+        r = await _patch(client, "objectives", oid, stranger, title="路人改")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "not_board_editor"
