@@ -455,11 +455,16 @@ async def _finish(client, rid, tid, hdr):
                              json={"status": "done"}, headers=hdr)
 
 
-async def test_with_no_watchers_the_whole_room_still_hears_it(tmp_path):
-    """三態之一：**沒有人在追 ⇒ 保留舊的全房廣播。**
+async def test_with_no_watchers_the_room_is_told_but_nobody_is_woken(tmp_path):
+    """**沒有人在追 ⇒ 留痕照發，但不再全房廣播**（艾斯維爾 2026-09-08）。
 
-    那是 §7.3 的既有行為。追蹤是後來加的第二個機制，它不該讓還沒用到它的
-    房間安靜下來。
+    舊行為是「沒有人在追就退回全房廣播」（§7.3 的既有行為，那時的理由是
+    「追蹤是後來加的第二個機制，不該讓還沒用到它的房間安靜下來」）。那條
+    當天被推翻：一天 9 則 `board_task_done` × 全房 4~5 人 ≈ 45 次喚醒，
+    而多數收件人不會因此做任何事。
+
+    取而代之的是**留痕與喚醒分開**：訊息照發（後來進房的人看得到這件事
+    發生過），mentions 只給利害關係人——這裡一個都沒有，所以是空的。
     """
     app, client = await _client(tmp_path, "state1")
     async with client:
@@ -469,8 +474,13 @@ async def test_with_no_watchers_the_whole_room_still_hears_it(tmp_path):
             tid = await _task(client, rid, hdr)
             await _finish(client, rid, tid, hdr)
             msgs = await _system_msgs(client, rid, hdr)
-            assert len(msgs) == 1
-            assert "旁觀者" in msgs[0]["mentions"]
+            assert len(msgs) == 1, "留痕不見了——縮的是 mention，不是訊息"
+            assert "旁觀者" not in msgs[0]["mentions"], (
+                f"旁觀者被叫醒了，他不會因此做任何事：{msgs[0]['mentions']}"
+            )
+            assert msgs[0]["mentions"] == [], (
+                f"沒有任何利害關係人，卻叫醒了誰：{msgs[0]['mentions']}"
+            )
 
 
 async def test_with_watchers_the_room_is_not_told_only_they_are(tmp_path):
@@ -516,8 +526,18 @@ async def test_the_only_watcher_being_the_finisher_still_counts(tmp_path):
                               json={"item_kind": "task", "item_id": tid},
                               headers=hdr)
             await _finish(client, rid, tid, hdr)
-            assert await _system_msgs(client, rid, hdr) == [], (
-                "唯一的追蹤者是完成者，卻還是廣播給整個房間了")
+            # 09/08 起「沒有人要叫醒」不再等於「不發訊息」：留痕照發、
+            # mentions 空。這條原本斷言「完全沒有訊息」，那是舊三態下
+            # 「零-watcher ⇒ 全房廣播」的反證；現在零-watcher 也不廣播，
+            # 要驗的變成**沒有人被叫醒**，而不是沒有訊息
+            msgs = await _system_msgs(client, rid, hdr)
+            assert len(msgs) == 1, "留痕不見了"
+            assert msgs[0]["mentions"] == [], (
+                f"唯一的追蹤者就是完成者，不該叫醒任何人：{msgs[0]['mentions']}"
+            )
+            assert "沒在等的人" not in msgs[0]["mentions"], (
+                "落進了零-watcher 分支，整房又被廣播了一次"
+            )
 
 
 async def test_a_watcher_in_another_attached_room_is_woken_too(tmp_path):

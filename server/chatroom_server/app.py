@@ -5269,73 +5269,108 @@ def create_app(config: Config | None = None) -> FastAPI:
                 seq, actor=me["session_key"], actor_name=me["display_name"])
         await _commit_with_retry(db)
         if done:
-            # 🚨 **三態**（艾斯維爾原句同時有正向與負向：「通知追蹤的人」
-            # ∧「不需要通知所有人」；房內 2026-09-02 定案）：
+            # 🚨 **task 完成是局部事件**：mention 只給利害關係人，訊息只發
+            # 來源房（艾斯維爾 2026-09-08；決策同日把「只發來源房」定為規格
+            # ——跨房的讀者該看板，不該靠訊息流）。
             #
-            #   沒有人在追  → 保留舊的全房廣播（那是 §7.3 的既有行為）
-            #   有人在追    → **永不廣播**。線上的追蹤者定向 mention，
-            #                 全都不在線上就只留收件匣
+            # 起因是實測的喚醒成本：一天至少 9 則 `board_task_done`，每則
+            # mention 全房 4~5 人 ⇒ 約 45 次喚醒，而多數收件人不會因此做任何
+            # 事。這與「不要一次 tag 太多人」直接衝突。
             #
-            # 少了中間那條，負向那半永遠不成立——非追蹤者照樣被通知，而
-            # 「只通知在等的人」這個功能就只是多了一份收件匣而已
-            watchers = await (await db.execute(
-                "SELECT actor_key FROM board_watch WHERE board_id=?"
-                " AND item_kind='task' AND item_id=?",
-                (_row_board_id(row), task_id))).fetchall()                 if _row_board_id(row) else []
-            keys = {actor_key(w["actor_key"]) for w in watchers}
-            # 🚨 **分支看「有沒有人在追」，mention 才看「要叫醒誰」。**
-            # 先 discard 再判斷的話，唯一的追蹤者正好是完成者時，watch 關係
-            # 明明存在卻會落進零-watcher 分支 ⇒ 整房又被廣播了一次
-            # （審核用Codex-2 2026-09-02）
-            has_watchers = bool(keys)
+            # 🚨 **一個事件叫醒一個人一次。** 舊的定向分支掃每一間 active
+            # 掛接房、每房各 mention 一次 ⇒ 同一個追蹤者在兩間房裡被叫兩次。
+            # 只發來源房之後那個洞跟著關掉。
+            #
+            # 🚨 **留痕與喚醒是兩件事**（09/08 objective 層那個迴歸的教訓）：
+            # 沒有人要叫醒時**訊息照發、mentions 是空的**。發不發只看房還
+            # 活著沒有——封存的房不發，那是既有判準。
+            #
+            # 不在來源房的利害關係人**不 mention**：mention 一個不在的人只會
+            # 進 `unresolved_mentions`，看起來 tag 了、實際沒有人收到。他們
+            # 走收件匣——追蹤者由上面的 `_fire_watch_notices` 落好，其餘
+            # （認領者／被指派者／supervisor）在這裡補。
+            bid = _row_board_id(row)
+            keys: set[str] = {actor_key(k) for k in watched if k}
+            for raw in (row["claim_actor_key"], row["assignee_actor_key"]):
+                k = actor_key((raw or "").strip())
+                if k:
+                    keys.add(k)
+            if bid:
+                keys |= await _board_supervisor_keys(bid, row["room_id"])
             keys.discard(actor_key(me["session_key"]))
-            if not has_watchers:
-                # 規則一：完成者以外的人。**必須傳 reply_mentions_author=False**
-                # ——這則收據日後若帶上 reply_to（指回 source_seq 那則訊息），
-                # _post_message 會把被回覆者自動補進 mentions，把「排除執行者」
-                # 這條規則從下游繞掉。pin 收據踩過同一個坑
-                audience = await _board_audience(row["room_id"],
-                                                 exclude_id=me["id"])
-                if audience:
-                    await _post_message(
-                        row["room_id"], None,
-                        f"{me['display_name']} 完成了任務「{row['title']}」",
-                        kind="system", system_event="board_task_done",
-                        mentions=audience, reply_mentions_author=False,
-                    )
-            else:
-                # 定向：只叫醒**在這間房裡的追蹤者**。不在的那些不會漏——
-                # 收件匣已經寫好了，他回來就看得到
-                # ⚠️ **每一間 active 掛接房都要找。** 只查卡所在那間的話，
-                # 追蹤者若正好在另一間掛接房裡就只剩收件匣——他人在線上、
-                # 卻不會被叫醒（審核用Codex-2 2026-09-02）。與 directive
-                # 的投遞同一個判準
-                #
-                # ⚠️ 但**封存的房不算**（09/06 卡 48b9263）：這段是自己的
-                # 一句 SQL，不經過 `_board_audience`，所以那邊補上的房
-                # active 條件擋不到這裡。漏掉這半的症狀更難看出來——一般
-                # 廣播安靜了，只有剛好有人追蹤那張卡時才會冒出來
-                rooms = await (await db.execute(
+
+            alive = await (await db.execute(
+                "SELECT 1 FROM room WHERE id=? AND status='active'",
+                (row["room_id"],))).fetchone()
+            present: set[str] = set()
+            if alive:
+                here = await (await db.execute(
+                    "SELECT display_name, TRIM(session_key) AS sk FROM"
+                    " participant WHERE room_id=? AND status='active'"
+                    "   AND ephemeral=0",
+                    (row["room_id"],))).fetchall()
+                present = {actor_key(p["sk"]) for p in here}
+                names = [p["display_name"] for p in here
+                         if actor_key(p["sk"]) in keys]
+                # **必須傳 reply_mentions_author=False**——這則收據日後若帶上
+                # reply_to，`_post_message` 會把被回覆者自動補進 mentions，
+                # 把「排除執行者」這條規則從下游繞掉。pin 收據踩過同一個坑
+                await _post_message(
+                    row["room_id"], None,
+                    f"{me['display_name']} 完成了任務「{row['title']}」",
+                    kind="system", system_event="board_task_done",
+                    mentions=names, reply_mentions_author=False,
+                )
+            # 不在來源房的利害關係人：**照 directive 模式定向投遞**——投到
+            # 他所在的那一間 active 掛接房，只投那間、只 mention 他
+            # （決策 2026-09-08 採 C 案）。
+            #
+            # 這一段讓三條規則同時成立，而它們原本看起來是二選一：
+            # 「task 留痕只發來源房」（那則全房可見的紀錄仍只有一則）、
+            # 「一個事件叫醒一個人一次」（投過就從名單移除）、
+            # 「線上的人要被叫醒，不能只剩收件匣」（他人在別間房也找得到）。
+            remaining = {k for k in keys if k not in present}
+            if remaining and bid:
+                others = await (await db.execute(
                     "SELECT br.room_id FROM board_room br"
                     " JOIN room r ON r.id = br.room_id"
                     " WHERE br.board_id=? AND br.detached_at IS NULL"
-                    " AND r.status='active'",
-                    (_row_board_id(row),))).fetchall() if keys else []
-                for r in rooms:
-                    here = await (await db.execute(
+                    "   AND r.status='active' AND br.room_id<>?"
+                    " ORDER BY br.attached_at",
+                    (bid, row["room_id"]))).fetchall()
+                for other in others:
+                    if not remaining:
+                        break
+                    there = await (await db.execute(
                         "SELECT display_name, TRIM(session_key) AS sk FROM"
-                        " participant WHERE room_id=? AND status='active'",
-                        (r["room_id"],))).fetchall()
-                    names = [p["display_name"] for p in here
-                             if actor_key(p["sk"]) in keys]
-                    if names:
+                        " participant WHERE room_id=? AND status='active'"
+                        "   AND ephemeral=0",
+                        (other["room_id"],))).fetchall()
+                    hit = [(p["display_name"], actor_key(p["sk"]))
+                           for p in there if actor_key(p["sk"]) in remaining]
+                    if hit:
                         await _post_message(
-                            r["room_id"], None,
-                            f"{me['display_name']} 完成了你追蹤的任務"
+                            other["room_id"], None,
+                            f"{me['display_name']} 完成了你關注的任務"
                             f"「{row['title']}」",
                             kind="system", system_event="board_task_done",
-                            mentions=names, reply_mentions_author=False,
+                            mentions=[n for n, _ in hit],
+                            reply_mentions_author=False,
                         )
+                        remaining -= {k for _, k in hit}
+            missing = remaining - {actor_key(k) for k in watched if k}
+            if missing and bid:
+                now = _now()
+                for k in sorted(missing):
+                    await db.execute(
+                        "INSERT INTO board_watch_notice (id, board_id,"
+                        " actor_key, item_kind, item_id, item_title,"
+                        " event_type, board_seq, actor_name, created_at)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (uuid.uuid4().hex, bid, k, "task", task_id,
+                         row["title"], "task_done", seq,
+                         me["display_name"], now))
+                await _commit_with_retry(db)
         await _item_notify(row)
         return {"ok": True, "id": task_id, "status": body.status,
                 "board_seq": seq, "notified_watchers": watched}

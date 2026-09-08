@@ -69,18 +69,31 @@ async def _status(client, tid, status, hdr):
                              json={"status": status}, headers=hdr)
 
 
-async def test_task_done_notifies_everyone_except_the_one_who_did_it(tmp_path):
+async def test_task_done_only_wakes_the_stakeholders(tmp_path):
+    """09/08 起 task 完成**只叫醒利害關係人**，不再全房廣播。
+
+    舊名是 `test_task_done_notifies_everyone_except_the_one_who_did_it`，
+    釘的是「全房除了完成者」——那條被艾斯維爾當天推翻：一天 9 則
+    `board_task_done` × 全房 4~5 人 ≈ 45 次喚醒，而多數收件人不會因此做
+    任何事。留痕照發，只縮 mention。
+
+    利害關係人 = 認領者 ∪ 被指派者 ∪ supervisor ∪ 追蹤者，完成者自己不算。
+    """
     app, client = await _client(tmp_path, "task-done")
     async with app.router.lifespan_context(app), client:
         rid, human, a1, a2 = await _room(client)
         _, _, (tid,) = await _tree(client, rid, a1)
+        # Miller 認領 ⇒ 他是利害關係人；Novia 把它標完成
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=a2)
         await _status(client, tid, "in_progress", a1)
         await _status(client, tid, "done", a1)
 
         (msg,) = await _events(client, rid, human, "board_task_done")
-        assert set(msg["mentions"]) == {"Bernie", "Miller"}
+        assert set(msg["mentions"]) == {"Miller"}, (
+            f"應該只叫醒認領者，其餘都是旁觀者：{msg['mentions']}"
+        )
         assert "Novia" not in msg["mentions"], "完成者不該被自己的完成叫醒"
-        assert "任務0" in msg["content"]
+        assert "任務0" in msg["content"], "留痕本身要留著，縮的只是 mention"
 
 
 async def test_objective_done_notifies_everyone_including_the_verifier(tmp_path):
@@ -145,23 +158,44 @@ async def test_checklist_completion_is_silent(tmp_path):
 
 
 async def test_subagents_are_not_in_the_audience(tmp_path):
-    """subagent 沒有自己的 watcher——mention 它只會經父層再叫醒一次。"""
+    """subagent 沒有自己的 watcher——mention 它只會經父層再叫醒一次。
+
+    🚨 **這條測試在 09/08 之前是假通過的兩次**：
+
+    1. 它建 subagent 用的 `session_key` 是 `agent-2/sub-1`，而 Hub 要求派生
+       形式 `<父key>#<名字>`——那個 join **一直是 400**，房裡從來沒有出現過
+       這個 subagent。它驗的是「一個不存在的名字不在名單裡」。
+    2. 舊斷言 `mentions == {"Bernie", "Miller"}` 靠的是全房廣播；09/08 起
+       task 完成只 mention 利害關係人，全房廣播沒了，那個斷言連帶失效。
+
+    現在的驗法：**父層 Miller 認領那張卡**（他是不折不扣的利害關係人），
+    subagent 依附在他底下。Miller 要被叫到、戴爾不能——它的父層已經收到
+    一次了，再叫它一次就是同一個進程被打擾兩遍。
+    """
     app, client = await _client(tmp_path, "sub-audience")
     async with app.router.lifespan_context(app), client:
         rid, human, a1, a2 = await _room(client)
-        # a2 底下派一個 subagent
+        # a2 底下派一個 subagent（派生 key 必須是 `<父key>#<名字>`）
         parent_id = a2["X-Participant-Id"]
-        await client.post(f"/api/rooms/{rid}/join", json={
-            "kind": "claude", "role": "agent", "session_key": "agent-2/sub-1",
+        r = await client.post(f"/api/rooms/{rid}/join", json={
+            "kind": "claude", "role": "agent", "session_key": "agent-2#sub-1",
             "preferred_name": "戴爾", "parent_participant_id": parent_id})
+        assert r.status_code == 200, f"subagent 沒建起來，這條測試不成立：{r.text}"
+        assert r.json()["identity_scope"] == "subagent"
 
         _, _, (tid,) = await _tree(client, rid, a1)
+        await client.post(f"/api/board/tasks/{tid}/claim", headers=a2)
         await _status(client, tid, "in_progress", a1)
         await _status(client, tid, "done", a1)
 
         (msg,) = await _events(client, rid, human, "board_task_done")
-        assert "戴爾" not in msg["mentions"]
-        assert set(msg["mentions"]) == {"Bernie", "Miller"}
+        assert "Miller" in msg["mentions"], (
+            f"認領者沒被叫到，這條測試的前提垮了：{msg['mentions']}"
+        )
+        assert "戴爾" not in msg["mentions"], (
+            f"subagent 被 mention 了——它的父層已經收到一次："
+            f"{msg['mentions']}"
+        )
 
 
 # ---------- 週期收尾的兩步（艾斯維爾 2026-09-01 拍板補上）----------
