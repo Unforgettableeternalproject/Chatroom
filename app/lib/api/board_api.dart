@@ -174,6 +174,45 @@ class BoardApi {
         );
       });
 
+  /// 改一個**週期**的標題／敘述（09/08 卡 32f26b75）。
+  ///
+  /// 端點與守門在 Hub 早就有（`_board_patch` + `_board_can_edit`，`2f0a06a`
+  /// 收緊到 owner／supervisor／建立者）——缺的一直只有 App 這一側。沒資格時
+  /// 回 403 `not_board_editor`。
+  ///
+  /// ⚠️ **null 與空字串是兩件事**：null＝沒動它（Hub 跳過），空字串＝清空。
+  /// 把「沒改」送成空字串的話，只改標題的人會發現敘述不見了。
+  Future<void> updateObjective(
+    String objectiveId, {
+    String? participantId,
+    String? sessionKey,
+    String? title,
+    String? description,
+  }) =>
+      unwrap(() async {
+        await _dio.patch<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId',
+          data: {'title': ?title, 'description': ?description},
+          options: _auth(participantId, sessionKey),
+        );
+      });
+
+  /// 改一個**階段**的標題／敘述。與 [updateObjective] 同一組規則。
+  Future<void> updateChecklist(
+    String checklistId, {
+    String? participantId,
+    String? sessionKey,
+    String? title,
+    String? description,
+  }) =>
+      unwrap(() async {
+        await _dio.patch<Map<String, dynamic>>(
+          '/api/board/checklists/$checklistId',
+          data: {'title': ?title, 'description': ?description},
+          options: _auth(participantId, sessionKey),
+        );
+      });
+
   /// 推 Task 的狀態（todo / in_progress / blocked / done / cancelled）。
   ///
   /// 轉移不合法時 Hub 回 409 `invalid_transition`，並在

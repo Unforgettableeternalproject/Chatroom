@@ -19,6 +19,7 @@ import 'board_action_feedback.dart';
 import 'board_outcome_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
+import 'board_task_edit_dialog.dart';
 import 'supervisor_panel.dart';
 
 /// Board 全頁畫面（設計稿 artboard 01）。
@@ -1024,6 +1025,44 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
+  /// 改週期的標題與敘述（09/08 卡 32f26b75）。
+  ///
+  /// **共用卡片那個對話框**（`showTaskEditDialog`）：週期、階段、卡片要問的
+  /// 是同一件事，各做一個的話文案與「空字串＝清空」那條規則會各自漂移。
+  ///
+  /// ⚠️ 沒資格改的人這裡**照樣看得到按鈕**，按下去由 Hub 回 403
+  /// `not_board_editor`。權限判準（owner／supervisor／建立者三軸）在 server，
+  /// 複製到 client 就是第二份會漂移的真相——而漂移的方向如果是「藏起來」，
+  /// 有資格的人會找不到功能且沒有任何線索。
+  Future<void> _editObjective(BoardObjective o) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final edit = await showTaskEditDialog(context,
+        title: o.title, description: o.description);
+    // 什麼都沒改就不要送——`_board_patch` 會照樣寫一次，board_seq 前進，
+    // 所有看板的人收到一次「有東西變了」而畫面上什麼都沒變
+    if (edit == null || edit.isEmpty || !mounted) return;
+    await runBoardAction(
+      context,
+      () => actions.updateObjective(o.id,
+          title: edit.title, description: edit.description),
+    );
+  }
+
+  /// 改階段的標題與敘述。與 [_editObjective] 同一組規則。
+  Future<void> _editChecklist(BoardChecklist c) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final edit = await showTaskEditDialog(context,
+        title: c.title, description: c.description);
+    if (edit == null || edit.isEmpty || !mounted) return;
+    await runBoardAction(
+      context,
+      () => actions.updateChecklist(c.id,
+          title: edit.title, description: edit.description),
+    );
+  }
+
   /// 送審 → 確認 → 完成（設計稿 artboard 05）。
   ///
   /// ⚠️ **人類與 agent 看到的不是同一件事**：確認那顆按鈕只有人類有。
@@ -1050,6 +1089,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           // 送審之後也不收——`review` / `verified` 加進來的階段是 open 的，
           // 而閘只在送審那一刻驗過一次：週期會一路走到 done，底下卻掛著一段
           // 從沒做完的東西。要加就先按「打回」
+          // 改名／改敘述。**收尾了也還能改**——那與「還能不能往裡面加東西」
+          // 是兩件事：一個週期做完之後才發現標題打錯字，沒有理由改不了
+          _BarButton(
+            label: '編輯',
+            onTap: () => _editObjective(o),
+          ),
+          const SizedBox(width: 8),
           if (o.acceptsNewChecklists) ...[
             _BarButton(
               label: '＋ 階段',
@@ -1332,6 +1378,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               Expanded(child: Container(height: 1, color: s.hairline)),
               const SizedBox(width: 12),
               if (!_readOnly) ...[
+                _BarButton(label: '編輯', onTap: () => _editChecklist(c)),
+                const SizedBox(width: 8),
                 // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
                 // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
                 // 有實作、一直沒有呼叫端，於是每一份清單都永遠停在 open
