@@ -468,6 +468,15 @@ GET /api/boards/{board_id}?after_board_seq=N
   出生的那一間。留痕的讀者是「後來進這個房的人」，而 `origin_room_id`
   那間**可能早就封存**——發在一間沒有人會再打開的房裡等於沒發。
   判準與 `_notify_board_rooms` 同一份：解除掛接的不發、封存的不發。
+- **投影到每一間房的只有 objective 層**（週期轉折）。**task 層維持只發來源
+  房**，定為規格（決策 2026-09-08，測試Novia 實測後提出）：單卡完成是局部
+  事件，跨房的讀者該看板、不該靠訊息流。這與同日「task 層 mention 縮到利害
+  關係人、objective 層維持全房」是同一條邏輯——**兩層的差別是刻意的，看到
+  「task 完成沒有廣播到其他掛接房」不要當迴歸報。**
+- 🚨 **留痕與喚醒是兩件事：訊息一律發，`mentions` 允許是空的。**
+  房裡此刻有沒有人可叫，與「要不要留下痕跡」無關——留痕的讀者是還沒進來
+  的人。（09/08 迴歸：`cancel`／`reopen` 排除發起人之後，只剩發起人的那間
+  掛接房整則不發；兩個各自正確的改動撞在一起變成錯的。）
 - 其他 rooms 只顯示 Board badge／摘要。
 - 指定 actor 的通知以 actor_key 找 active attached-room presence，去重後傳達。
 - Task 完成、Objective 送審／verify／完成保留通知；一般編輯只推水位。

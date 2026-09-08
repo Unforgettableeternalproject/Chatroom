@@ -4997,12 +4997,26 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         收件名單**各房各算**——同一個人在不同房是不同的 participant，
         名單只能在那間房裡取。
+
+        🚨 **留痕與喚醒是兩件事：訊息一律發，`mentions` 允許是空的。**
+        原本寫的是 `if audience:`，那把「沒有人要叫醒」誤當成「不用留痕」——
+        而留痕的讀者本來就是**還沒進來的人**，房裡此刻有沒有人可叫與它無關。
+
+        09/08 實錄：`cancel`／`reopen` 加上「排除發起人」之後，一間**只剩
+        發起人**的掛接房 audience 變成空的 ⇒ 那間房對整個週期的收尾一點痕跡
+        都沒有。兩個各自正確的改動（多房廣播、排除發起人）撞在一起變成錯的，
+        而單元測試沒紅——那條多房測試走的是 `complete`，那則不排除發起人，
+        audience 永遠非空。
+
+        唯一的例外是 `humans_only` 那兩則（`review`／`verify`）：它們寫的是
+        「等人確認」「還差最後一步」，房裡沒有人類時那句話指向一個不會發生的
+        動作。那個沉默是 §7.3 的明文但書，要留著。
         """
         for rid in await _board_rooms_for_trace(row):
             audience = await _board_audience(
                 rid, humans_only=humans_only,
                 exclude_session_key=exclude_session_key)
-            if audience:
+            if audience or not humans_only:
                 await _post_message(rid, None, text, kind="system",
                                     system_event=event, mentions=audience,
                                     reply_mentions_author=False)

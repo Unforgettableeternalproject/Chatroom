@@ -209,3 +209,74 @@ async def test_the_supervisor_hears_about_it_without_touching_a_card(tmp_path):
             f"supervisor 一個收尾通知都沒有——他一張卡都沒認領，"
             f"所以落在「做過事的人」之外（收到：{got}）"
         )
+
+
+async def test_the_trace_survives_a_room_where_only_the_actor_is_left(tmp_path):
+    """留痕與喚醒是兩件事——**沒有人要叫醒不等於不用留痕**。
+
+    09/08 迴歸實錄（測試Novia 在 8788 抓到）：`cancel` / `reopen` 加上
+    「排除發起人」之後，一間**只剩發起人**的掛接房 audience 會是空的，而
+    `_objective_trace` 當時寫的是 `if audience:` ⇒ 整則訊息不發 ⇒ 那間房
+    對這個週期的收尾一點痕跡都沒有。
+
+    兩個各自正確的改動撞在一起變成錯的：多房廣播（要發）與排除發起人
+    （不叫他）。錯在把留痕綁在 mention 上。
+
+    ⚠️ 原本那條多房測試抓不到，因為它走 `complete`——那則**不排除發起人**，
+    audience 永遠非空。所以這裡刻意用 `cancel`，且讓 B 房只有發起人一個人。
+    """
+    app, client = await _client(tmp_path, "trace_no_audience")
+    async with app.router.lifespan_context(app), client:
+        ra = await _room(client, "A房", "human-1")
+        human_a = await _join(client, ra, "human-1", "艾斯維爾", role="human")
+        worker = await _join(client, ra, "agent-worker", "做事的人")
+        oid = await _cycle(client, ra, human_a, worker)
+        bid = (await client.get(f"/api/rooms/{ra}/board",
+                                headers=human_a)).json()["board_id"]
+
+        # B 房**只有發起人**——排除他之後這間房一個收件人都不剩
+        rb = await _room(client, "B房", "human-1")
+        human_b = await _join(client, rb, "human-1", "艾斯維爾", role="human")
+        assert (await client.post(f"/api/boards/{bid}/rooms/{rb}",
+                                  headers=human_b)).status_code == 200
+
+        assert (await client.post(f"/api/board/objectives/{oid}/cancel",
+                                  headers=human_a)).status_code == 200
+
+        for rid, hdr, who in ((ra, human_a, "A房"), (rb, human_b, "B房")):
+            events = await _events(client, rid, hdr)
+            assert "board_objective_cancelled" in events, (
+                f"{who}沒有留痕——那間房只剩發起人，"
+                f"「沒有人要叫醒」被當成了「不用留痕」：{events}"
+            )
+
+        msgs = (await client.get(f"/api/rooms/{rb}/messages",
+                                 params={"after_seq": 0, "limit": 100},
+                                 headers=human_b)).json()["messages"]
+        trace = [m for m in msgs
+                 if m["system_event"] == "board_objective_cancelled"][0]
+        assert trace["mentions"] == [], (
+            f"發起人被自己的動作叫醒了：{trace['mentions']}"
+        )
+
+
+async def test_review_still_stays_silent_in_an_agent_only_room(tmp_path):
+    """但 `review` / `verify` 的沉默要留著——那是 §7.3 的明文但書。
+
+    修「沒有人就不發」時很容易一路改成「一律發」，那會把純 agent 房的
+    送審留痕一起放出來，而那則訊息寫的是「等人確認」——房裡沒有人類時，
+    它指向一個不會發生的動作。
+    """
+    app, client = await _client(tmp_path, "review_silent")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client, "純 agent 房", "agent-1")
+        a1 = await _join(client, rid, "agent-1", "甲")
+        a2 = await _join(client, rid, "agent-2", "乙")
+        oid = await _cycle(client, rid, a1, a2, "純 agent 週期")
+
+        assert (await client.post(f"/api/board/objectives/{oid}/review",
+                                  headers=a2)).status_code == 200
+        events = await _events(client, rid, a1)
+        assert "board_objective_review" not in events, (
+            f"純 agent 房收到了送審留痕——但書被改掉了：{events}"
+        )
