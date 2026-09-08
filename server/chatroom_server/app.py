@@ -4124,13 +4124,73 @@ def create_app(config: Config | None = None) -> FastAPI:
             me["kind"], room_id, room["name"] if room else "")
         return me
 
+    def _is_creator(row, me) -> bool:
+        """這個人是不是這張卡的建立者。**兩軸都要比對。**
+
+        board-scoped 建的卡 `created_by` 是 None——`_board_writer_v2` 明文
+        寫著「不是從房裡發出來的」，Board Library 裡根本沒有房，那條路上
+        沒有 participant 可記，身分改記在 `created_by_actor_key`。那是設計。
+
+        遺漏在另一端：權限檢查只認 participant id，於是**建立者被擋在自己
+        從板上建的東西外面**（09/08 測試Novia 在 8788 實測：同身分同板，
+        房軸建的 cancel 200、板軸建的 403，交換順序兩輪確認與順序無關）。
+        而 board-scoped 正是 Board V2「板與房分離」的主要入口。
+
+        ⚠️ 這不是放寬權限：`actor_key` 就是身分本身，比對它與比對
+        participant id 指的是同一個人。空值兩邊都不算——v1 存量卡的
+        `created_by_actor_key` 是空字串，讓它與空 session_key 相等的話，
+        沒有身分的兩個人會互相認得。
+        """
+        pid = row["created_by"]
+        if pid and pid == me["id"]:
+            return True
+        key = (row["created_by_actor_key"] or "").strip() \
+            if "created_by_actor_key" in row.keys() else ""
+        mine = actor_key(me["session_key"] or "")
+        return bool(key and mine and key == mine)
+
     def _board_can_remove(row, me) -> bool:
         """誰能刪一張卡：建立者，或人類成員。
 
         沿用 §1.4 對 `* → cancelled` 的規定（建立者或人類成員）——刪除與
         取消是同一種「把這件事從板上拿掉」的決定，沒有理由給兩套權限。
         """
-        return row["created_by"] == me["id"] or me["role"] == "human"
+        return _is_creator(row, me) or me["role"] == "human"
+
+    async def _board_can_edit(row, me, host: bool = False) -> bool:
+        """誰能改一張卡／階段／週期的**標題與敘述**：板 owner、房
+        supervisor、建立者（艾斯維爾 09/08 seq 87，決策裁定 B）。
+
+        在這之前 `_board_patch` 上**一個權限檢查都沒有**——只要是 board
+        writer（房軸＝房內任何 participant）就改得動別人建的東西。測試Novia
+        在 8788 上用一個三軸皆非的路人，把週期／階段／卡的標題全改掉了。
+
+        ⚠️ **這是收緊，不是新功能**：改名的能力本來就在，只是誰都有。
+
+        ⚠️ 建立者那一軸走 `_is_creator` 的雙軸比對，**不另寫一份**。自己寫
+        一個只比對 participant id 的版本的話，board-scoped 建的東西認不出
+        建立者——他連自己從 Board Library 建的週期都改不了名，那與 09/08
+        「建立者取消不了自己的卡」是同一個 bug 換一個動作（測試Novia 的
+        事前警告）。
+
+        人類成員**不在**這三軸裡，所以 403 的 code 是 `not_board_editor`
+        而不是 `human_only`——後者會說謊。
+        """
+        # v1 存量卡：`created_by` 與 `created_by_actor_key` 兩邊都空——那些
+        # 卡是換軸前直接寫進 DB 的，身分資訊根本不存在。收緊的理由是「別人
+        # 建的東西不該被路人改」，而**沒有建立者就沒有要保護的對象**；不豁免
+        # 的話升級後的房裡那些卡誰都改不動，而且不會有人來抱怨——他只會以為
+        # 板壞了（`test_board_event_completeness` 守著這條）。
+        if not (row["created_by"]
+                or ((row["created_by_actor_key"] or "").strip()
+                    if "created_by_actor_key" in row.keys() else "")):
+            return True
+        if _is_creator(row, me):
+            return True
+        key = actor_key(me["session_key"] or "")
+        if await _board_role(_row_board_id(row), key, host) == "owner":
+            return True
+        return await _is_board_supervisor(row, me)
 
     async def _board_item_writer(row, participant_id: str | None,
                                  session_key: str | None = None,
@@ -4321,10 +4381,19 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _board_patch(kind: str, item_id: str, fields: dict,
                            participant_id: str | None,
-                           session_key: str | None = None) -> dict:
-        """PATCH 的共同實作：只寫有給的欄位，然後領一個號。"""
+                           session_key: str | None = None,
+                           host: bool = False) -> dict:
+        """PATCH 的共同實作：只寫有給的欄位，然後領一個號。
+
+        ⚠️ **三種物件共用這一條路**，所以守門也只有這一道——漏掉的話
+        週期、階段、卡三種一起漏（09/08 實測就是三種全被路人改掉）。
+        """
         row = await _board_item_or_404(kind, item_id)
-        await _board_item_writer(row, participant_id, session_key)
+        me = await _board_item_writer(row, participant_id, session_key)
+        if not await _board_can_edit(row, me, host):
+            raise _err(403, "not_board_editor",
+                       "只有這塊板的 owner、房間的 supervisor 或"
+                       "建立者可以改它")
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
         seq = await _item_seq(row)
@@ -4425,12 +4494,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         objective_id: str, body: BoardObjectivePatch,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         return await _board_patch("objective", objective_id, {
             "title": body.title.strip() if body.title else None,
             "description": body.description,
             "order_index": body.order_index,
-        }, x_participant_id, x_session_key)
+        }, x_participant_id, x_session_key, host)
 
     @app.delete("/api/board/objectives/{objective_id}",
                 dependencies=[Depends(require_auth)])
@@ -4487,12 +4557,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         checklist_id: str, body: BoardChecklistPatch,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         return await _board_patch("checklist", checklist_id, {
             "title": body.title.strip() if body.title else None,
             "description": body.description,
             "order_index": body.order_index,
-        }, x_participant_id, x_session_key)
+        }, x_participant_id, x_session_key, host)
 
     @app.delete("/api/board/checklists/{checklist_id}",
                 dependencies=[Depends(require_auth)])
@@ -4785,6 +4856,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         task_id: str, body: BoardTaskPatch,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         """改 Task 的欄位。
 
@@ -4807,7 +4879,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             fields["assigned_by"] = me["id"]
             fields["assigned_by_name"] = me["display_name"]
         return await _board_patch("task", task_id, fields, x_participant_id,
-                                  x_session_key)
+                                  x_session_key, host)
 
     @app.delete("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def delete_task(
@@ -5050,7 +5122,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         #
         # ⚠️ 只認 `held` 的**當前**持有者。孤兒卡此刻沒有人在做，放行的理由
         # （認領者最清楚）已經不成立——要取消得先重新認領，那條路本來就在。
-        if body.status == "cancelled" and not human                 and row["created_by"] != me["id"]                 and not (row["claim_state"] == "held"
+        if body.status == "cancelled" and not human                 and not _is_creator(row, me)                 and not (row["claim_state"] == "held"
                          and _is_claim_holder(row, me)):
             raise _err(403, "human_only",
                        "只有建立者、目前的認領者或人類成員可以取消這張卡")
@@ -5304,7 +5376,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "human_only",
                        "只有人類成員可以把已完成的清單重新打開")
         if body.status == "cancelled" and not _is_human(me) \
-                and row["created_by"] != me["id"]:
+                and not _is_creator(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這份清單")
         seq = await _item_seq(row)
@@ -5635,7 +5707,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _objective_trace(
             row,
             f"週期「{row['title']}」被打回重開（{me['display_name']}）",
-            "board_objective_reopened")
+            # 排除發起人，與 `review` 同一條理由：打回之後**他沒有下一步要按**
+            # ——`verified`／`done` 刻意含發起人是因為那兩步的下一顆按鈕就在
+            # 他手上，這裡沒有那個前提（09/08 測試Novia 在 8788 看到自己被
+            # 自己的動作 mention）
+            "board_objective_reopened", exclude_session_key=me["session_key"])
         return {"ok": True, "id": objective_id, "status": "active",
                 "board_seq": seq}
 
@@ -5648,7 +5724,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         row, me = await _objective_write(objective_id, x_participant_id,
                                          x_session_key)
-        if not _is_human(me) and row["created_by"] != me["id"]:
+        if not _is_human(me) and not _is_creator(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這個週期")
         if row["status"] not in ("active", "review"):
@@ -5663,7 +5739,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _objective_trace(
             row,
             f"週期「{row['title']}」已取消（{me['display_name']}）",
-            "board_objective_cancelled")
+            "board_objective_cancelled", exclude_session_key=me["session_key"])
         return {"ok": True, "id": objective_id, "status": "cancelled",
                 "board_seq": seq}
 

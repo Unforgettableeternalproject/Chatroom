@@ -215,6 +215,15 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "這張卡由別人持有，只有持有者本人或人類成員可以解除認領。",
                 status=status, detail=detail,
             )
+        if code == "not_board_editor":
+            # 改標題／敘述收緊到 owner／supervisor／建立者（09/08 裁定 B）。
+            # 落進 fallback 會叫他重新 join——而重新加入不會讓他變成建立者
+            return HubError(
+                _detail_text(detail)
+                or "改標題與敘述只有這塊板的 owner、房間的 supervisor "
+                "或建立者做得到。請他們代為修改。",
+                status=status, detail=detail,
+            )
         if code == "not_board_member":
             # 房裡的人不會自動變成板上的人（Board v2）。落進 fallback 會叫他
             # 重新 join 房間——而房內身分再新也不會讓他出現在板的成員列上
