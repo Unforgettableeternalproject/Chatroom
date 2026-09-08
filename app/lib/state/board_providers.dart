@@ -297,7 +297,14 @@ class BoardActions {
     final newId = await addTask(targetChecklistId, title,
         description: description, priority: priority);
     if (newId == null) return null;
-    await setTaskStatus(taskId, 'moved', movedTo: newId);
+    try {
+      await setTaskStatus(taskId, 'moved', movedTo: newId);
+    } on ApiException catch (e) {
+      // 第二步倒了。新卡留著（見 [MoveHalfDoneException] 為什麼不補償），
+      // 但**這件事必須說出來**——沉默的話使用者只會看到「失敗了」然後重按，
+      // 於是目標清單多出第二張一模一樣的卡
+      throw MoveHalfDoneException(newId, e);
+    }
     return newId;
   }
 

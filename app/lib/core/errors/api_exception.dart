@@ -167,3 +167,28 @@ class ServerException extends ApiException {
   ServerException(int statusCode)
       : super('server_$statusCode', '伺服器發生錯誤（HTTP $statusCode）');
 }
+
+/// 搬卡搬到一半：**新卡建好了，舊卡沒能標成「已搬走」**。
+///
+/// 搬卡是兩個寫入，而 Hub 沒有原子端點——中間斷掉必然留下一個中間狀態。
+/// 兩個方向只有一個成立：先建卡再指過去，所以壞掉的形狀只有這一種
+/// （反過來需要一個還不存在的 id，送不出去）。
+///
+/// ⚠️ **刻意不補償**（不刪掉剛建的那張新卡）。理由有兩個：那張卡是使用者
+/// 真的要的東西，而刪除本身也會失敗——補償失敗留下的狀態更難對人講。
+/// 所以這裡選擇把話講完整，讓人知道那邊已經多了一張卡：**不講的話，重按
+/// 一次就會再建一張，而那才是真正的損害**。
+class MoveHalfDoneException extends ApiException {
+  MoveHalfDoneException(this.newTaskId, this.cause)
+      : super(
+            'move_half_done',
+            '新卡已經建好了（在你選的清單上），但這張卡沒能標成「已搬走」：'
+            '${cause.message}　先過去看一眼再決定要不要重試——'
+            '直接重按會再建一張。');
+
+  /// 已經建好的那張卡。畫面要有辦法把人帶過去。
+  final String newTaskId;
+
+  /// 第二步實際上是怎麼失敗的。
+  final ApiException cause;
+}

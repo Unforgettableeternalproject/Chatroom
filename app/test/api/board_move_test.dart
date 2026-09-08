@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:chatroom_app/api/board_api.dart';
+import 'package:chatroom_app/core/errors/api_exception.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/board_providers.dart';
@@ -15,12 +16,27 @@ import 'package:flutter_test/flutter_test.dart';
 /// 兩步順序。後者是這張卡真正的重點——順序反了會留下一張「搬走了、去向
 /// 空白」的卡，而那正是它要消滅的狀態。
 class _Stub implements HttpClientAdapter {
+  _Stub({this.failStatus = false});
+
+  /// 讓第二步（推狀態）倒下去，模擬搬到一半。
+  final bool failStatus;
   final List<RequestOptions> seen = [];
 
   @override
   Future<ResponseBody> fetch(
-      RequestOptions options, Stream<Uint8List>? _, Future<void>? __) async {
+      RequestOptions options, Stream<Uint8List>? _, Future<void>? _) async {
     seen.add(options);
+    if (failStatus && options.path.endsWith('/status')) {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'detail': {'code': 'invalid_transition', 'message': '這張卡不能搬'}
+        }),
+        409,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType]
+        },
+      );
+    }
     final body = options.path.endsWith('/tasks')
         ? {'ok': true, 'id': 'new1'}
         : {'ok': true};
@@ -94,6 +110,34 @@ void main() {
       expect(_dataOf(stub.seen[0])['title'], '搬過去的事');
       expect(stub.seen[1].path, '/api/board/tasks/t1/status');
       expect(_dataOf(stub.seen[1])['moved_to'], 'new1');
+    });
+
+    test('第二步倒了要說出「新卡已經建好」——不講的話重按一次就多一張', () async {
+      final stub = _Stub(failStatus: true);
+      final container = ProviderContainer(overrides: [
+        dioProvider.overrideWithValue(_dioWith(stub)),
+        initialConfigProvider.overrideWithValue(const AppConfig(
+          serverUrl: 'http://test',
+          token: 't',
+          themeMode: ThemeModePref.dark,
+          preferredName: '',
+          deviceKey: 'dev-1',
+        )),
+      ]);
+      addTearDown(container.dispose);
+
+      await expectLater(
+        container.read(boardActionsByIdProvider('b1')).moveTask('t1',
+            targetChecklistId: 'c9', title: '搬過去的事'),
+        throwsA(isA<MoveHalfDoneException>()
+            // 那張卡確實建出來了，畫面要有辦法把人帶過去
+            .having((e) => e.newTaskId, 'newTaskId', 'new1')
+            // 失敗的原話要留著，否則使用者不知道是為什麼倒的
+            .having((e) => e.cause.code, 'cause.code', 'invalid_transition')
+            .having((e) => e.message, 'message', contains('新卡已經建好'))),
+      );
+      // **不補償**：新卡留著，沒有第三個請求去刪它
+      expect(stub.seen.length, 2);
     });
   });
 }
