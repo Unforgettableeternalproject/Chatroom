@@ -22,6 +22,25 @@ WT="$ROOT/.claude/worktrees/hub-8788"
 # 路徑還通，總不能先把大家在用的 8788 停掉。DB 與附件目錄不跟著換，所以換 port
 # 起的那台看到的是同一份資料，只適合當場驗完就關。
 PORT="${TEST_HUB_PORT:-8788}"
+# 呼叫端可以覆寫閒置時限。**要在載入 .env 之前先接住**——底下那段
+# `set -a; . .env` 會把正式值灌進同名變數，接晚了就分不出「呼叫端指定的」
+# 與「.env 帶進來的」。
+#
+# 為什麼需要它（09/08 測試Novia）：走 REST 不掛 watcher 的測試端沒有背景
+# heartbeat，活躍度只來自「剛好打了一個請求」，而 agent 停下來寫一份回報
+# 破 300 秒是常態 ⇒ 被掃成 removed、房間跟著自動封存，然後它打出來的
+# 轉折**照今天的規則本來就不該留痕**。那會長成一個一模一樣的假缺陷，
+# 而且要花一整輪才查得出來是自己被掃掉害的。
+_IDLE_OVERRIDE="${CHATROOM_IDLE_TIMEOUT:-}"
+# 同理，人類那把 token 也可以覆寫。**這支腳本預設載入 `server/.env`，
+# 而那把 `CHATROOM_HUMAN_TOKEN` 與正式 8787 是同一把**——要把人類權限交給
+# 別台機器測試時，發的不能是它。用這個覆寫發一把臨時的，收台時作廢：
+#
+#   CHATROOM_HUMAN_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(24))')" \
+#     ./scripts/run-test-hub.sh
+#
+# 「測試機的 token，驗完就收」只有在它真的**不是**正式那把時才成立。
+_HUMAN_TOKEN_OVERRIDE="${CHATROOM_HUMAN_TOKEN:-}"
 
 if [ ! -d "$WT/server" ]; then
   echo "✖ 找不到 worktree：$WT" >&2
@@ -82,9 +101,15 @@ export CHATROOM_HOST=0.0.0.0                      # 讓另一台裝置連得到
 export CHATROOM_DB="$ROOT/test_resources/hub-test.db"
 export CHATROOM_ATTACHMENT_DIR="$ROOT/test_resources/hub-test-attachments"
 export CHATROOM_LOG_DIR="$ROOT/logs/hub-test"
-export CHATROOM_IDLE_TIMEOUT=300                  # 正式 1800。與下面差一個數量級是
-                                                  # 刻意的：要驗兩條時限獨立，差 20 秒
-                                                  # 只證明得了排序（契約 C5）
+# 預設 300（正式 1800）。與下面差一個數量級是刻意的：要驗兩條時限獨立，
+# 差 20 秒只證明得了排序（契約 C5）。
+# 測留痕／通知那類「跑得慢也該對」的東西時用 CHATROOM_IDLE_TIMEOUT=1800 覆寫
+# ——那兩種需求方向相反，一台通吃會兩邊都測不準
+export CHATROOM_IDLE_TIMEOUT="${_IDLE_OVERRIDE:-300}"
+if [ -n "$_HUMAN_TOKEN_OVERRIDE" ]; then
+  export CHATROOM_HUMAN_TOKEN="$_HUMAN_TOKEN_OVERRIDE"
+  echo "human token: 用呼叫端指定的臨時值（**不是** server/.env 那把）"
+fi
 export CHATROOM_SUBAGENT_TIMEOUT=5
 export CHATROOM_SWEEP_INTERVAL=2                  # 正式 30
 export CHATROOM_ARCHIVE_GRACE=10                  # 正式 60
