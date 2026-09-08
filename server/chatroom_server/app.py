@@ -4850,7 +4850,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _board_audience(room_id: str, exclude_id: str = "",
                               humans_only: bool = False,
-                              agents_only: bool = False) -> list[str]:
+                              agents_only: bool = False,
+                              exclude_session_key: str = "") -> list[str]:
         """board 通知的收件名單：房內 active、**非 ephemeral** 的成員。
 
         排除 subagent 是既有原則的延伸——它們沒有自己的 watcher（活在父層
@@ -4875,7 +4876,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         綁的是 actor 不是房，設計上就是要送給不在場的人——那條刻意不擋，
         否則「板還在動、你追蹤的卡有進展」會跟著一起消失。
         """
-        sql = ("SELECT p.id, p.display_name FROM participant p"
+        sql = ("SELECT p.id, p.display_name, p.session_key FROM participant p"
                " JOIN room r ON r.id = p.room_id"
                " WHERE p.room_id=? AND p.status='active' AND p.ephemeral=0"
                " AND r.status='active'")
@@ -4884,7 +4885,77 @@ def create_app(config: Config | None = None) -> FastAPI:
         if agents_only:
             sql += " AND p.role!='human'"
         rows = await (await app.state.db.execute(sql, (room_id,))).fetchall()
-        return [r["display_name"] for r in rows if r["id"] != exclude_id]
+        # `exclude_session_key` 是跨房版本的「排除自己」：participant id 只在
+        # 一間房裡認得出他，而同一個人在別間掛接房是另一個 id——拿 id 去別房
+        # 比對永遠比不中，於是他在其他房照樣被 mention 一次（09/08）
+        skip = (exclude_session_key or "").strip()
+        return [r["display_name"] for r in rows
+                if r["id"] != exclude_id
+                and not (skip and (r["session_key"] or "").strip() == skip)]
+
+    async def _board_rooms_for_trace(row) -> list[str]:
+        """這個週期的留痕該發到哪些房：板的**所有 active 掛接房**。
+
+        不是「操作發生的那一間」。週期出生的房可能早就封存了，而留痕存在
+        的理由就是給後來的人看——發在一間沒有人會再打開的房裡等於沒發
+        （09/08 卡 7c868590）。判準與 `_notify_board_rooms` 是同一份：
+        解除掛接的不發、封存的不發。
+
+        v1 存量週期的 `board_id` 是空的，退回它自己那一間房；那間房也要
+        還活著，否則同樣是發給沒有人。
+        """
+        db = app.state.db
+        bid = (row["board_id"] or "").strip() if "board_id" in row.keys() else ""
+        if bid:
+            rows = await (await db.execute(
+                "SELECT br.room_id FROM board_room br"
+                " JOIN room r ON r.id = br.room_id"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                " AND r.status='active'", (bid,))).fetchall()
+            return [r["room_id"] for r in rows]
+        alive = await (await db.execute(
+            "SELECT 1 FROM room WHERE id=? AND status='active'",
+            (row["room_id"],))).fetchone()
+        return [row["room_id"]] if alive else []
+
+    async def _objective_trace(row, text: str, event: str, *,
+                               humans_only: bool = False,
+                               exclude_session_key: str = "") -> None:
+        """週期轉折的留痕：同一則 system 訊息發到每一間 active 掛接房。
+
+        收件名單**各房各算**——同一個人在不同房是不同的 participant，
+        名單只能在那間房裡取。
+        """
+        for rid in await _board_rooms_for_trace(row):
+            audience = await _board_audience(
+                rid, humans_only=humans_only,
+                exclude_session_key=exclude_session_key)
+            if audience:
+                await _post_message(rid, None, text, kind="system",
+                                    system_event=event, mentions=audience,
+                                    reply_mentions_author=False)
+
+    async def _board_supervisor_keys(board_id: str, room_id: str) -> set[str]:
+        """這塊板上所有還在任的 supervisor（**per-room，所以可能有好幾個**）。
+
+        退場的不算，理由與 `_is_board_supervisor` 同一條：
+        `board_supervisor_left_at` 留著是為了說得出「本來是誰在看」，
+        不是資格。
+        """
+        db = app.state.db
+        bid = (board_id or "").strip()
+        if bid:
+            rows = await (await db.execute(
+                "SELECT r.board_supervisor_session_key AS k FROM room r"
+                " JOIN board_room br ON br.room_id = r.id"
+                " WHERE br.board_id=? AND br.detached_at IS NULL"
+                "   AND r.board_supervisor_left_at IS NULL", (bid,))).fetchall()
+        else:
+            rows = await (await db.execute(
+                "SELECT board_supervisor_session_key AS k FROM room"
+                " WHERE id=? AND board_supervisor_left_at IS NULL",
+                (room_id,))).fetchall()
+        return {actor_key(r["k"]) for r in rows if (r["k"] or "").strip()}
 
     async def _announce_human_container(
         room_id: str, me, label: str, title: str, event: str,
@@ -5385,15 +5456,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 自己會來看板」撐著——唯獨這兩步的收件人是**沒在看板子的人類**，
         # 而他正是唯一能讓週期往下走的人。忘了就停在這裡，板上一切正常、
         # 沒有任何地方會報錯（艾斯維爾 2026-09-01 拍板補上）
-        audience = await _board_audience(row["room_id"], exclude_id=me["id"],
-                                         humans_only=True)
-        if audience:
-            await _post_message(
-                row["room_id"], None,
-                f"{me['display_name']} 送審了週期「{row['title']}」，等人確認。",
-                kind="system", system_event="board_objective_review",
-                mentions=audience, reply_mentions_author=False,
-            )
+        await _objective_trace(
+            row,
+            f"{me['display_name']} 送審了週期「{row['title']}」，等人確認。",
+            "board_objective_review", humans_only=True,
+            exclude_session_key=me["session_key"])
         return {"ok": True, "id": objective_id, "status": "review",
                 "board_seq": seq}
 
@@ -5494,14 +5561,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 走收件匣，見 `_settlement_notices`
         await _settlement_notices(row, "objective_verified", seq,
                                   me["session_key"], me["display_name"])
-        audience = await _board_audience(row["room_id"], humans_only=True)
-        if audience:
-            await _post_message(
-                row["room_id"], None,
-                f"週期「{row['title']}」已確認無誤，還差最後一步：按下完成。",
-                kind="system", system_event="board_objective_verified",
-                mentions=audience, reply_mentions_author=False,
-            )
+        await _objective_trace(
+            row,
+            f"週期「{row['title']}」已確認無誤，還差最後一步：按下完成。",
+            "board_objective_verified", humans_only=True)
         return {"ok": True, "id": objective_id, "status": "verified",
                 "board_seq": seq}
 
@@ -5530,14 +5593,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _settlement_notices(row, "objective_done", seq,
                                   me["session_key"], me["display_name"])
         # 規則二：**全部**，完成者也在內——他確認的是整個週期，不是自己那張卡
-        audience = await _board_audience(row["room_id"])
-        if audience:
-            await _post_message(
-                row["room_id"], None,
-                f"週期「{row['title']}」已完成（{me['display_name']} 確認）",
-                kind="system", system_event="board_objective_done",
-                mentions=audience, reply_mentions_author=False,
-            )
+        await _objective_trace(
+            row,
+            f"週期「{row['title']}」已完成（{me['display_name']} 確認）",
+            "board_objective_done")
         return {"ok": True, "id": objective_id, "status": "done",
                 "board_seq": seq}
 
@@ -5568,6 +5627,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             "reviewed_by_actor_key": "", "verified_by_actor_key": "",
             "completed_by_actor_key": "",
         }, event="objective_reopened", actor=me)
+        # 打回是三個轉折裡**最該說出口**的那一個——「你做完的東西被退回來了」，
+        # 而在 09/08 之前它是唯一連一則訊息都不發的（送審／確認／完成都有）。
+        # 收件匣那一層同理：做過事的人多半已經離開，房內 mention 叫不到他
+        await _settlement_notices(row, "objective_reopened", seq,
+                                  me["session_key"], me["display_name"])
+        await _objective_trace(
+            row,
+            f"週期「{row['title']}」被打回重開（{me['display_name']}）",
+            "board_objective_reopened")
         return {"ok": True, "id": objective_id, "status": "active",
                 "board_seq": seq}
 
@@ -5589,6 +5657,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=row["status"])
         seq = await _objective_set(row, {"status": "cancelled"},
                                    event="objective_cancelled", actor=me)
+        # 取消與打回同一個缺口：週期沒了，做過事的人得知道（09/08 卡 d8c3d8df）
+        await _settlement_notices(row, "objective_cancelled", seq,
+                                  me["session_key"], me["display_name"])
+        await _objective_trace(
+            row,
+            f"週期「{row['title']}」已取消（{me['display_name']}）",
+            "board_objective_cancelled")
         return {"ok": True, "id": objective_id, "status": "cancelled",
                 "board_seq": seq}
 
@@ -9392,14 +9467,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                 k = (k or "").strip()
                 if k and k != me_key:
                     who.add(k)
-        if not who:
-            return []
         if not board_id:
             # v1 舊卡的 `board_id` 是空的（換軸前建的）——退回用房找板。
             # 找不到就不發：`board_watch_notice.board_id` 有外鍵，硬塞會炸
+            board_id = (row["board_id"] or "").strip() \
+                if "board_id" in row.keys() else ""
+        if not board_id:
             attached = await _board_for_room(row["room_id"])
             board_id = attached["id"] if attached else ""
         if not board_id:
+            return []
+        # supervisor 也是利害關係人——**而且他多半一張卡都沒認領**，所以
+        # 「做過事的人」這個集合永遠撈不到他。他是這塊板上唯一被指定「負責
+        # 看」的那個，收尾卻要他自己回頭發現，那個指派等於只做了一半
+        # （09/08 卡 bcfb9257）。per-room 指派 ⇒ 可能不只一個
+        for k in await _board_supervisor_keys(board_id, row["room_id"]):
+            if k and k != me_key:
+                who.add(k)
+        if not who:
             return []
         now = _now()
         for k in sorted(who):
