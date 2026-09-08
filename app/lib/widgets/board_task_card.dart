@@ -317,16 +317,27 @@ class BoardTaskCard extends StatelessWidget {
   Widget _completedRow(BuildContext context) {
     final s = context.uep;
     final cancelled = task.status == 'cancelled';
+    // 🔴 **三個結局要有三個樣子。**
+    //
+    // 這裡曾經只分兩態（`cancelled ? ✕ : ✓`），於是 `moved` 落進 else，
+    // 拿到了完成的綠勾與填底——板上一張搬去別處的卡，與真的做完的卡長得
+    // 一模一樣。艾斯維爾實測後的原話是「會讓人誤以為是已完成」：那張卡
+    // 沒有消失，是**混進完成堆裡認不出來**（09/08 實測截圖）。
+    //
+    // 加狀態時要回到這裡看一眼：else 分支的意思是「完成」，不是「其他」。
+    final moved = task.status == 'moved';
+    // 搬走與取消同樣退到 .5：兩者都不是這裡的成果
+    final faded = cancelled || moved;
     return InkWell(
       onTap: onTap,
       child: Opacity(
         // 取消退得比完成更遠：完成是一個成果，取消只是一筆不再發生的事
-        opacity: cancelled ? .5 : .62,
+        opacity: faded ? .5 : .62,
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
-            // 取消不填色、不佔視覺重量，但留在原位
-            color: cancelled ? Colors.transparent : s.bgCard,
+            // 取消與搬走都不填色、不佔視覺重量，但留在原位
+            color: faded ? Colors.transparent : s.bgCard,
             border: Border.all(color: s.hairline),
           ),
           child: IntrinsicHeight(
@@ -334,7 +345,7 @@ class BoardTaskCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _Axis(
-                    color: cancelled ? Colors.transparent : s.hairlineStrong,
+                    color: faded ? Colors.transparent : s.hairlineStrong,
                     broken: false),
                 Expanded(
                   child: Padding(
@@ -342,10 +353,11 @@ class BoardTaskCard extends StatelessWidget {
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     child: Row(
                       children: [
-                        Text(cancelled ? '✕' : '✓',
+                        // ✓ 做完了／✕ 不做了／→ 去別的地方做了
+                        Text(cancelled ? '✕' : (moved ? '→' : '✓'),
                             style: UepText.mono(
                                 size: 10,
-                                color: cancelled
+                                color: faded
                                     ? s.inkMute
                                     : UepColors.success)),
                         const SizedBox(width: 12),
@@ -356,7 +368,7 @@ class BoardTaskCard extends StatelessWidget {
                             style: UepText.sans(
                                     size: 13,
                                     color:
-                                        cancelled ? s.inkMute : s.inkSoft,
+                                        faded ? s.inkMute : s.inkSoft,
                                     height: 1.5)
                                 .copyWith(
                               decoration: cancelled
@@ -540,6 +552,12 @@ class _StatusBadge extends StatelessWidget {
     'blocked': '卡住',
     'done': '完成',
     'cancelled': '已取消',
+    // 「已搬走」不是完成也不是取消——講錯的話，讀板的人會以為這件事在這裡
+    // 做完了（done）或不做了（cancelled），而它其實在別的地方進行。
+    // ⚠️ 這顆與抽屜的 `_StatusChip` 是**兩份表**，加狀態要兩邊一起加：
+    // 漏掉一邊不報錯（兩處都有 `?? status` 的退路），症狀只是徽章上冒出
+    // 一個英文碼，而那讀起來像「這張卡壞了」
+    'moved': '已搬走',
   };
 
   @override
@@ -562,6 +580,9 @@ class _StatusBadge extends StatelessWidget {
           null,
         ),
       'cancelled' => (s.inkMute, s.hairline, null),
+      // 與取消同一種淡，但**不共用**：兩者的意思不同，哪天要分開畫時
+      // 這一行已經在了（與抽屜的 `_StatusChip` 同構）
+      'moved' => (s.inkMute, s.hairline, null),
       _ => (s.inkMute, s.hairlineStrong, null),
     };
     return Container(

@@ -260,4 +260,32 @@ void main() {
 
     expect(find.textContaining('已不在房內'), findsOneWidget);
   });
+
+  testWidgets('🔴 搬走的卡：徽章要說「已搬走」，不是吐英文狀態碼', (tester) async {
+    // 抽屜那顆徽章早就有 `moved`（`board_task_drawer.dart`），卡片這顆漏了。
+    // 漏掉的症狀不報錯：卡片照樣畫得出來，只是徽章上寫著 `moved`——
+    // 讀板的人在一排中文徽章裡看到一個英文字，第一個念頭是「這張壞了」，
+    // 而不是「這件事搬到別處做了」。**找不到那張卡的體感就是這麼來的。**
+    await tester.pumpWidget(
+      _wrap(BoardTaskCard(task: _task(status: 'moved'))),
+    );
+
+    expect(find.text('已搬走'), findsOneWidget);
+    expect(find.text('moved'), findsNothing);
+  });
+
+  testWidgets('🔴 搬走的卡不可以長成「已完成」', (tester) async {
+    // 艾斯維爾的實測截圖（09/08）：一張 moved 卡在板上帶著綠色 ✓ 與完成的
+    // 填底，與旁邊真的做完的卡一模一樣。他的原話是「會讓人誤以為是已完成」
+    // ——「找不到」的真正意思是**它混進完成堆裡認不出來**，不是它不見了。
+    //
+    // 收尾樣式當初只分了兩態（`cancelled ? ✕ : ✓`），moved 落進 else，
+    // 於是拿到 done 的符號與顏色。三個結局要有三個樣子。
+    await tester.pumpWidget(
+      _wrap(BoardTaskCard(task: _task(status: 'moved'))),
+    );
+
+    expect(find.text('✓'), findsNothing, reason: '打勾是「這裡做完了」，而它沒有');
+    expect(find.text('→'), findsOneWidget, reason: '搬走要有自己的符號');
+  });
 }
