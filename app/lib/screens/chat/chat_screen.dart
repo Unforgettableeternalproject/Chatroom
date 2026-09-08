@@ -909,7 +909,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       s,
       Column(
         children: [
-          _RoomHeader(
+          RoomHeader(
             roomId: roomId,
             roomName: room?.name ?? '…',
             topic: room?.topic ?? '',
@@ -1249,8 +1249,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
 // ---------- header ----------
 
-class _RoomHeader extends ConsumerWidget {
-  const _RoomHeader({
+/// 聊天室頂端那一排。
+///
+/// **公開的**：這排按鈕的「檢視／寫入」分界踩過兩次同一個坑（Board 入口、
+/// 釘選牆），而它從來沒有被 widget 測試蓋到——私有類別測不了，於是每次都
+/// 要等有人在實機上撞見才知道。現在 `room_header_archived_test` 釘著它。
+class RoomHeader extends ConsumerWidget {
+  const RoomHeader({
+    super.key,
     required this.roomId,
     required this.roomName,
     required this.topic,
@@ -1339,13 +1345,29 @@ class _RoomHeader extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 16),
-          // 封存**只禁止寫入，不禁止查看**。Board 入口原本整個活在下面那個
-          // else 分支裡 ⇒ 房間一封存，那塊板就沒有任何入口——而板本身早就
-          // 做好唯讀了（整塊降飽和、動作全收），Hub 的讀取端點也明寫允許
-          // 封存房。缺的自始至終只有這扇門
+          // 🔴 **封存只禁止寫入，不禁止查看**——所以這排按鈕分的是
+          // 「檢視／寫入」，不是「活著／封存」。
+          //
+          // 這個坑踩過兩次，形狀一模一樣：入口整個活在 else 分支裡，房間
+          // 一封存那扇門就沒了，而門後的東西早就做好唯讀了。第一次是 Board
+          // 入口，第二次是釘選牆（艾斯維爾 09/08：「封存房看不到當初的釘選
+          // 列表」——`PinnedWallScreen` 自己早就會在封存時收掉「取消釘選」，
+          // Hub 的 `read_messages` 也明寫 `allow_archived=True`，缺的自始至
+          // 終只有這扇門）。
+          //
+          // ⇒ 檢視類（Board、釘選）兩態共用；寫入類（指派、溢位選單）才分歧。
+          // 往這裡加入口時先問：**它是去看東西，還是去改東西。**
+          _BoardAction(roomId: roomId, archived: archived),
+          const SizedBox(width: 8),
+          // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
+          // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
+          // 重要」無處可去——Board 上沒有一段話的位置
+          _HeaderAction(
+            label: '❖ 釘選 $pinnedCount',
+            onTap: () => context.go('/rooms/$roomId/pinned'),
+          ),
+          const SizedBox(width: 8),
           if (archived) ...[
-            _BoardAction(roomId: roomId, archived: true),
-            const SizedBox(width: 8),
             _HeaderAction(
               label: '解除封存',
               onTap: () async {
@@ -1375,16 +1397,6 @@ class _RoomHeader extends ConsumerWidget {
               },
             ),
           ] else ...[
-            _BoardAction(roomId: roomId),
-            const SizedBox(width: 8),
-            // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
-            // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
-            // 重要」無處可去——Board 上沒有一段話的位置
-            _HeaderAction(
-              label: '❖ 釘選 $pinnedCount',
-              onTap: () => context.go('/rooms/$roomId/pinned'),
-            ),
-            const SizedBox(width: 8),
             _HeaderAction(
               label: '指派',
               onTap: () => context.go('/rooms/$roomId/assign'),
