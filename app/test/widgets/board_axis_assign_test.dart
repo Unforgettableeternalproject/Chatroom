@@ -44,6 +44,17 @@ BoardSnapshot _snap({required List<Map<String, dynamic>> rooms}) =>
       'attached_rooms': rooms,
     }));
 
+
+/// 「請人接手」09/08 起**收進 `⋯` 選單**（卡 9e8e53d1：外露的按鈕太多）。
+///
+/// 入口沒有消失，只是換了位置——這些測試守的仍是「它還在、停用時還說得出
+/// 理由」，所以斷言之前先把選單打開。⚠️ 位置變了要改測試，但**斷言不可以
+/// 跟著鬆掉**：改成 findsNothing 就等於把這條測試原本要擋的東西放走了。
+Future<void> _openMore(WidgetTester tester) async {
+  await tester.tap(find.text('⋯'));
+  await tester.pumpAndSettle();
+}
+
 Future<void> _pump(WidgetTester tester, BoardSnapshot snap) async {
   await tester.pumpWidget(ProviderScope(
     overrides: [
@@ -75,13 +86,15 @@ void main() {
         ]));
 
     expect(tester.takeException(), isNull);
+    await _openMore(tester);
     expect(find.text('請人接手'), findsOneWidget);
   });
 
   testWidgets('🔴 一間房都沒掛：入口留著但停用，並說得出為什麼', (tester) async {
     await _pump(tester, _snap(rooms: const []));
 
-    // 按鈕還在——**消失會被讀成「板軸沒有這個功能」**，而真相是
+    await _openMore(tester);
+    // 項目還在——**消失會被讀成「板軸沒有這個功能」**，而真相是
     // 「這塊板現在沒有人可以指」
     expect(find.text('請人接手'), findsOneWidget);
     expect(find.text('掛到房間後才能指派'), findsOneWidget);
@@ -99,6 +112,7 @@ void main() {
           },
         ]));
 
+    await _openMore(tester);
     // 對照組：`detached` 的房若被算進去，指派會送到一個與這塊板
     // 已經無關的房裡，而 server 那端會拒——UI 不該先製造那次失敗
     expect(find.text('掛到房間後才能指派'), findsOneWidget);

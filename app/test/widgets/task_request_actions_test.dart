@@ -26,6 +26,17 @@ Widget _wrap(Widget child) => ProviderScope(
       ),
     );
 
+
+/// 「請人接手」09/08 起**收進 `⋯` 選單**（卡 9e8e53d1：外露的按鈕太多）。
+///
+/// 入口沒有消失，只是換了位置——這些測試守的仍是「它還在、停用時還說得出
+/// 理由」，所以斷言之前先把選單打開。⚠️ 位置變了要改測試，但**斷言不可以
+/// 跟著鬆掉**：改成 findsNothing 就等於把這條測試原本要擋的東西放走了。
+Future<void> _openMore(WidgetTester tester) async {
+  await tester.tap(find.text('⋯'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   // ⚠️ 這條原本釘的是「板軸沒有『請人接手』」，理由是那裡沒有房可問。
   // **2026-09-07 決策裁走「房選擇器」路之後那個前提不成立了**：板軸照樣
@@ -42,6 +53,7 @@ void main() {
       onClose: () {},
     )));
     expect(tester.takeException(), isNull);
+    await _openMore(tester);
     expect(find.text('請人接手'), findsOneWidget);
     expect(find.text('掛到房間後才能指派'), findsOneWidget);
   });

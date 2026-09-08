@@ -596,31 +596,40 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
         : ref.read(boardActionsByIdProvider(widget.boardId));
     final items = taskActionsFor(widget.task.status, allowed: _allowed);
 
-    Widget button(TaskAction a) => _DrawerAction(
-          label: a.label,
-          bordered: !a.trailing,
-          accent: a.danger ? UepColors.error : null,
-          // 「搬到別處」不是單純推一次狀態：去向要在同一個動作裡定下來，
-          // 否則留下的是一張「搬走了、不知道去哪」的卡。所以它走對話框，
-          // 不走這條共用的 runBoardAction
-          onTap: a.target == 'moved'
-              ? _move
-              : () => runBoardAction(
-            context,
-            () => actions.setTaskStatus(widget.task.id, a.target),
-            onConflict: (e) {
-              // 拒絕本身要說出來，順手把按鈕修正成 Hub 認的那幾顆
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text(e.message)));
-              if (e.allowed.isNotEmpty && mounted) {
-                setState(() => _allowed = e.allowed.toSet());
-              }
-            },
-                ),
-        );
+    // 一個動作實際上怎麼跑。**按鈕與選單共用同一條路**——分兩份寫的話，
+    // 收進選單的那幾顆會慢慢長出與外露那顆不同的行為，而沒有地方會報錯。
+    void run(TaskAction a) {
+      if (a.target == 'moved') {
+        // 「搬到別處」不是單純推一次狀態：去向要在同一個動作裡定下來，
+        // 否則留下的是一張「搬走了、不知道去哪」的卡
+        _move();
+        return;
+      }
+      runBoardAction(
+        context,
+        () => actions.setTaskStatus(widget.task.id, a.target),
+        onConflict: (e) {
+          // 拒絕本身要說出來，順手把按鈕修正成 Hub 認的那幾顆
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(e.message)));
+          if (e.allowed.isNotEmpty && mounted) {
+            setState(() => _allowed = e.allowed.toSet());
+          }
+        },
+      );
+    }
 
-    final leading = items.where((a) => !a.trailing).toList();
-    final trailing = items.where((a) => a.trailing).toList();
+    // 🔴 **一次只外露一顆狀態動作**（09/08 卡 9e8e53d1：按鈕太多令人反感）。
+    //
+    // 判準不是「危不危險」也不是「常不常用」，而是**這個狀態下你多半要做
+    // 的那一件事**：`todo` 是開始、`in_progress` 是標記完成、`blocked` 是
+    // 解除卡住。那正好是 [_kTaskActions] 每一組的第一顆——那份表本來就
+    // 照這個順序寫，所以這裡取 `first` 不是巧合，也不必再維護第二份名單。
+    //
+    // ⚠️ 過濾過的 `items` 取 `first` 仍然成立：`allowed` 只會拿掉 Hub 不認
+    // 的那幾顆，剩下的相對順序不變。
+    final primary = items.isEmpty ? null : items.first;
+    final rest = items.skip(1).toList();
 
     // 「請人接手」。**兩條軸都出現**（決策 2026-09-07 裁「房選擇器」路）。
     //
@@ -668,20 +677,21 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
         border: Border(top: BorderSide(color: s.hairline)),
       ),
       child: Row(children: [
-        // ⚠️ **這排會換行，不會溢出。** 板軸長出「請人接手」之後，
-        // 420px 的抽屜在 `todo` 那組動作下就超出 45px——而 Row 的溢位
-        // 是一條黃黑斜紋，不是任何一種可用的畫面。多一顆按鈕就爆版的東西
-        // 不能靠「目前剛好放得下」撐著
+        // 外露的只有兩種東西：**這個狀態下的主要動作**，以及**有人在等我
+        // 回答**的那件事。其餘一律收進右邊的選單。
+        //
+        // ⚠️ 這排仍然用 Wrap 而不是 Row：外露的東西雖然少了，但標籤是中文
+        // 且長度會變（「解除卡住」／「重新開啟」），420px 的抽屜沒有多到
+        // 可以賭。Row 的溢位是一條黃黑斜紋，不是任何一種可用的畫面
         Expanded(
           child: Wrap(
             spacing: 8,
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              for (final a in leading) button(a),
               // 🔴 **有人在等我回答的話，那件事排在所有動作前面。**
-              // 藏在資訊區裡只是「顯示」——被指名的人要有地方按，否則
-              // 「需要對方同意」在畫面上就不成立
+              // 藏在選單裡只是「有這個功能」——被指名的人要有地方按，
+              // 否則「需要對方同意」在畫面上就不成立
               if (pending != null) ...[
                 _DrawerAction(
                   label: '接下',
@@ -693,37 +703,126 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
                   bordered: true,
                   onTap: () => _respond(actions, pending, false),
                 ),
-              ] else if (canAssign) ...[
-                _DrawerAction(
-                  label: (widget.task.assigneeParticipantId ?? '').isEmpty
-                      ? '請人接手'
-                      : '改請別人',
-                  bordered: true,
-                  onTap: noRoomToAssign ? null : () => _assign(actions, rooms),
-                ),
-                // 停用要說出理由，而且理由要能導向下一步
-                if (noRoomToAssign)
-                  Text('掛到房間後才能指派',
-                      style: UepText.mono(size: 8.5, color: s.inkMute)),
-                // 取消指派。**只在真的有指派時出現**——沒有指派時給一顆
-                // 取消鈕，是在問一個不存在的問題。
-                //
-                // ⚠️ 取消是管理動作，一般人按下去會 403 `not_assign_admin`。
-                // 那顆按鈕仍然畫出來：**權限判準在 server**，UI 自己算一份
-                // 會漂移，而漂移的方向如果是「藏起來」，管理員會找不到功能
-                // 且沒有任何線索
-                if ((widget.task.assigneeParticipantId ?? '').isNotEmpty)
-                  _DrawerAction(
-                    label: '取消指派',
-                    bordered: true,
-                    onTap: () => _clearAssignee(actions),
-                  ),
               ],
+              if (primary != null)
+                _DrawerAction(
+                  label: primary.label,
+                  // 有人在等回答時，主要動作退成外框——同一排兩顆實心會讓
+                  // 「先回答那件事」這個順序在畫面上消失
+                  bordered: pending != null,
+                  accent: primary.danger ? UepColors.error : null,
+                  onTap: () => run(primary),
+                ),
             ],
           ),
         ),
-        for (final a in trailing) button(a),
+        _moreMenu(
+          context,
+          rest: rest,
+          run: run,
+          actions: actions,
+          rooms: rooms,
+          showAssign: pending == null && canAssign,
+          noRoomToAssign: noRoomToAssign,
+        ),
       ]),
+    );
+  }
+}
+
+/// 收起來的那些動作。
+///
+/// **停用的項目留著、不隱藏**：消失會被讀成「沒有這個功能」，而真相多半是
+/// 「現在還不行」——後者有下一步（去掛一間房），前者沒有。同理，`⋯` 本身
+/// 在沒有任何可收動作時才整顆不畫。
+extension on _TaskActionBarState {
+  Widget _moreMenu(
+    BuildContext context, {
+    required List<TaskAction> rest,
+    required void Function(TaskAction) run,
+    required BoardActions actions,
+    required List<AttachedRoom> rooms,
+    required bool showAssign,
+    required bool noRoomToAssign,
+  }) {
+    final s = context.uep;
+    final assigned = (widget.task.assigneeParticipantId ?? '').isNotEmpty;
+    final entries = <PopupMenuEntry<VoidCallback>>[];
+
+    for (final a in rest) {
+      entries.add(PopupMenuItem<VoidCallback>(
+        value: () => run(a),
+        height: 38,
+        child: Text(a.label,
+            style: UepText.sans(
+                size: 12.5, color: a.danger ? UepColors.error : s.ink)),
+      ));
+    }
+
+    // 「請人接手」。**兩條軸都出現**（決策 2026-09-07 裁「房選擇器」路）。
+    //
+    // 指派的目標是**房內身分**，而板可以掛好幾間房、也可以一間都沒掛——
+    // 所以板軸上「指派給誰」沒有唯一答案。解法是**指派前先選房**：
+    // 掛一間就直接用那間，掛多間先問，零房則停用並說出為什麼。
+    //
+    // ⚠️ 標籤一律是「請人接手」，**不看自己算不算管理員**。那個判準在
+    // server（Hub 主持人／板 owner／房建立者），複製到 client 就是第二份
+    // 會漂移的真相——按下去讓 server 回答發生了什麼，比先預測它可靠
+    // （@開發Novia (Hub) 2026-09-04）。
+    if (showAssign) {
+      if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
+      entries.add(PopupMenuItem<VoidCallback>(
+        value: noRoomToAssign ? null : () => _assign(actions, rooms),
+        enabled: !noRoomToAssign,
+        height: noRoomToAssign ? 46 : 38,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(assigned ? '改請別人' : '請人接手',
+                style: UepText.sans(
+                    size: 12.5, color: noRoomToAssign ? s.inkMute : s.ink)),
+            // 停用要說出理由，而且理由要能導向下一步
+            if (noRoomToAssign)
+              Text('掛到房間後才能指派',
+                  style: UepText.mono(size: 8.5, color: s.inkMute)),
+          ],
+        ),
+      ));
+      // 取消指派。**只在真的有指派時出現**——沒有指派時給一個取消項，
+      // 是在問一個不存在的問題。
+      //
+      // ⚠️ 取消是管理動作，一般人按下去會 403 `not_assign_admin`。它仍然
+      // 畫出來：**權限判準在 server**，UI 自己算一份會漂移，而漂移的方向
+      // 如果是「藏起來」，管理員會找不到功能且沒有任何線索
+      if (assigned) {
+        entries.add(PopupMenuItem<VoidCallback>(
+          value: () => _clearAssignee(actions),
+          height: 38,
+          child: Text('取消指派', style: UepText.sans(size: 12.5, color: s.ink)),
+        ));
+      }
+    }
+
+    if (entries.isEmpty) return const SizedBox.shrink();
+
+    return PopupMenuButton<VoidCallback>(
+      tooltip: '更多動作',
+      color: s.bgCard,
+      padding: EdgeInsets.zero,
+      position: PopupMenuPosition.under,
+      onSelected: (fn) => fn(),
+      itemBuilder: (_) => entries,
+      child: Container(
+        width: 32,
+        height: 30,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border.all(color: s.hairline),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text('⋯', style: UepText.sans(size: 14, color: s.inkSoft)),
+      ),
     );
   }
 }
