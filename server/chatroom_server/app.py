@@ -10,7 +10,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import re
 import sqlite3
 import time
 import unicodedata
@@ -1450,10 +1449,6 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _nfc(text: str) -> str:
         return unicodedata.normalize("NFC", text)
 
-    # 內文裡「看起來是指涉」的字面。標題自己含 `]` 的話這條抓不到——
-    # 那是**已知的洞，而且只會漏放行不會誤擋**：反向檢查抓不到就等於沒查，
-    # 訊息照發，不會有人被擋在門外
-    _CARD_LITERAL_RE = re.compile(r"#\[([^\]]*)\]")
 
     async def _resolve_card_refs(
         room_id: str, content: str, task_ids: list[str] | None,
@@ -1490,10 +1485,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "card_refs_field_limit",
                        f"card_refs 有 {len(seen)} 筆，超過欄位上限 100")
         body = _nfc(content)
-        # 內文裡「看起來是指涉」的字面。標題自己含 `]` 的話這條抓不到——
-        # 那是**已知的洞，而且只會漏放行不會誤擋**
-        literals = {_nfc(t) for t in _CARD_LITERAL_RE.findall(content)}             if check_orphans and "#[" in content else set()
-        if not seen and not literals:
+        # 反向檢查要不要做。真正比對哪些字面在下面用**板上的卡標題**去比，
+        # 不從內文抓——用正則從內文抓 `#[...]` 的話，標題自己含 `]` 的卡
+        # （`修復[A]問題` 這種寫法很自然）只會被抓成 `修復[A`，對不上任何
+        # 卡，反向閘就靜靜地不觸發，而那正是它要消滅的形狀
+        scan_orphans = check_orphans and "#[" in content
+        if not seen and not scan_orphans:
             return []
         board = await _board_for_room(room_id)
         if board is None:
@@ -1509,10 +1506,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0",
             (board["id"],),
         )).fetchall()
-        by_title = {}
+        # 同一塊板上**可以有兩張同名的卡**，所以一個標題對到的是一份清單，
+        # 不是一張卡。只留第一張的話，指涉第二張時反向檢查會拿第一張來要
+        # ——欄位帶了 B、它說你少帶 A，而兩張在畫面上同名，發話者看不出
+        # 差別也補不出來
+        by_title: dict[str, list] = {}
         for r in board_rows:
-            by_title.setdefault(_nfc(r["title"]), r)
-        matched = {t: by_title[t] for t in literals if t in by_title}
+            by_title.setdefault(_nfc(r["title"]), []).append(r)
+        matched = ({t: rows_ for t, rows_ in by_title.items()
+                    if _card_ref_literal(t) in body} if scan_orphans else {})
         if len(matched) > 20:
             raise _err(422, "card_refs_too_many",
                        f"內文的卡片指涉有 {len(matched)} 個，超過上限 20——"
@@ -1544,12 +1546,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             out.append({"board_id": r["board_id"], "task_id": r["id"],
                         "title": r["title"]})
         taken = {t["task_id"] for t in out}
-        for title, r in matched.items():
-            if r["id"] not in taken:
-                raise _err(422, "card_ref_field_missing",
-                           f"內文寫了 {_card_ref_literal(r['title'])}，但"
-                           f" card_refs 沒有帶這張卡（{r['id']}）——"
-                           "看起來指了卡卻點不下去，是另一半的靜默失效")
+        for title, same_name in matched.items():
+            if any(r["id"] in taken for r in same_name):
+                continue
+            r = same_name[0]
+            raise _err(422, "card_ref_field_missing",
+                       f"內文寫了 {_card_ref_literal(r['title'])}，但"
+                       f" card_refs 沒有帶這張卡（{r['id']}）——"
+                       "看起來指了卡卻點不下去，是另一半的靜默失效。"
+                       "字面看起來明明有寫的話，可能是輸入法或貼上造成的"
+                       "字形差異（同樣的字、不同的編碼形式）——從 # 候選"
+                       "重選一次那張卡就會對上")
         return out
 
     async def _post_message(

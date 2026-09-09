@@ -317,3 +317,70 @@ async def test_field_side_has_a_hard_gate_before_any_query(tmp_path):
                             [f"nonexistent-{i:04d}" for i in range(1000)])
             assert r.status_code == 422
             assert r.json()["detail"]["code"] == "card_refs_field_limit"
+
+
+async def test_same_title_twice_on_one_board(tmp_path):
+    """同一塊板上兩張同名的卡，指涉第二張要過。
+
+    一個標題對到的是一份清單而不是一張卡——只留第一張的話，反向檢查會
+    拿第一張來要：欄位帶了 B、它說你少帶 A，而兩張在畫面上同名，
+    發話者看不出差別也補不出來。
+    """
+    app, client = await _client(tmp_path, "dupname")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            await _task(client, rid, hdr, "同名卡")
+            second = await _task(client, rid, hdr, "同名卡")
+            r = await _post(client, rid, hdr, "講的是 #[同名卡]", [second])
+            assert r.status_code == 200, r.text
+            assert r.json()["card_refs"][0]["task_id"] == second
+
+
+async def test_reverse_check_covers_titles_containing_brackets(tmp_path):
+    """標題含 `]` 的卡，反向檢查也要抓得到。
+
+    用正則從內文抓 `#[...]` 的話，`修復[A]問題` 只會被抓成 `修復[A`，
+    對不上任何卡 ⇒ 反向閘靜靜地不觸發 ⇒ 那則訊息看起來指了卡卻點不下去，
+    而且 200 照發。這正是反向閘要消滅的形狀，在這類標題上原樣復活。
+
+    改成拿板上的卡標題去比內文就沒有這個洞——比對的是完整標題，
+    裡面有什麼字元都不影響。
+    """
+    app, client = await _client(tmp_path, "brackets")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            tid = await _task(client, rid, hdr, "修復[A]問題")
+
+            bad = await _post(client, rid, hdr, "修這個 #[修復[A]問題] 好嗎", [])
+            assert bad.status_code == 422
+            assert bad.json()["detail"]["code"] == "card_ref_field_missing"
+
+            ok = await _post(client, rid, hdr, "修這個 #[修復[A]問題] 好嗎", [tid])
+            assert ok.status_code == 200, ok.text
+            assert ok.json()["card_refs"][0]["title"] == "修復[A]問題"
+
+
+async def test_mixed_bracket_and_plain_titles(tmp_path):
+    """一則訊息裡同時有含 `]` 與不含的標題——這種會**部分**成功。
+
+    正則抓法在這裡只抓到半截的 `修復[A` 加上完整的 `登入頁重構`：帶了
+    後者就過關，而前者那張卡從頭到尾沒有人問過。訊息上有兩個字面、
+    只有一個點得下去，兩邊都不報錯。（@測試Novia 09/09 房 seq 104）
+    """
+    app, client = await _client(tmp_path, "mixed")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            a = await _task(client, rid, hdr, "修復[A]問題")
+            b = await _task(client, rid, hdr, "登入頁重構")
+            body = "先修 #[修復[A]問題] 再看 #[登入頁重構] 這張"
+
+            half = await _post(client, rid, hdr, body, [b])
+            assert half.status_code == 422
+            assert half.json()["detail"]["code"] == "card_ref_field_missing"
+
+            both = await _post(client, rid, hdr, body, [a, b])
+            assert both.status_code == 200, both.text
+            assert {x["task_id"] for x in both.json()["card_refs"]} == {a, b}
