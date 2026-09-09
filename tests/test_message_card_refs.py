@@ -413,3 +413,32 @@ async def test_cancelled_and_moved_cards_are_not_forbidden_words(tmp_path):
                              [gone])
             assert ok.status_code == 200, ok.text
             assert ok.json()["card_refs"][0]["task_id"] == gone
+
+
+async def test_moved_preview_shows_the_current_title(tmp_path):
+    """`moved` 給的是**現況**標題，不是快照（契約 §3 修訂後的文字）。
+
+    卡搬走時標題沒變的話，快照與現況長得一模一樣，顯示哪一個都看不出
+    差別——那種案例證不了這條。要證明得讓兩者不同。
+    （@測試Novia 09/09 房 seq 115 指出我造的案例區分不出來）
+    """
+    app, client = await _client(tmp_path, "movedtitle")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            old = await _task(client, rid, hdr, "改名前的標題")
+            new = await _task(client, rid, hdr, "新家")
+            await _post(client, rid, hdr, "指涉 #[改名前的標題] 這張", [old])
+            await client.patch(f"/api/board/tasks/{old}",
+                               json={"title": "改名後的標題"}, headers=hdr)
+            await client.post(f"/api/board/tasks/{old}/status",
+                              json={"status": "moved", "moved_to": new},
+                              headers=hdr)
+
+            msg = (await _messages(client, rid, hdr))[-1]
+            ref = msg["card_refs"][0]
+            assert "#[改名前的標題]" in msg["content"], "內文不該被改寫"
+            assert ref["title"] == "改名前的標題", "快照答的是當時指的是誰"
+            assert ref["card_preview"]["status"] == "moved"
+            assert ref["card_preview"]["title"] == "改名後的標題"
+            assert ref["card_preview"]["moved_to"] == new
