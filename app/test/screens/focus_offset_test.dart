@@ -55,4 +55,17 @@ void main() {
   test('只有一則訊息時不除以零', () {
     expect(estimateFocusOffset(fromBottom: 0, total: 1, maxExtent: 500), 0);
   });
+
+  test('🔴 total 少算一格就會偏——載入提示 tile 也佔一個 item', () {
+    // `itemCount` 是 `messages.length + (hasMoreHistory ? 1 : 0)`，而
+    // `maxScrollExtent` 含那一格。呼叫端若只傳 messages.length，比值會偏大
+    // ——單獨看不出來，但每重跳一輪就再偏一次（開發Novia (除錯) seq 78）
+    const maxExtent = 30000.0;
+    final correct =
+        estimateFocusOffset(fromBottom: 99, total: 101, maxExtent: maxExtent);
+    final missingTile =
+        estimateFocusOffset(fromBottom: 99, total: 100, maxExtent: maxExtent);
+    expect(missingTile, greaterThan(correct),
+        reason: '少算一格會讓落點往更舊的方向多跑一段');
+  });
 }

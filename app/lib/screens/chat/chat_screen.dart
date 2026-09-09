@@ -372,14 +372,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 是 null，精修那一步被安靜跳過，畫面就停在粗跳落到的地方——沒有錯誤、
     // 沒有提示，看起來只是「跳歪了」。所以這裡改成**重跳到量得到為止**，
     // 有上限，用完了要說出來
-    final fromBottom = list.length - 1 - index;
     BuildContext? ctx;
     for (var attempt = 0; attempt < _focusMaxAttempts; attempt++) {
+      // 🔴 **每一輪都重新量目標在哪，不能沿用迴圈外算好的那份。**
+      //
+      // 粗跳往舊訊息捲時會越過 `_onScroll` 的載入門檻，`loadOlder` 補進
+      // 一批 → `maxScrollExtent` 變大，而 `total` 若還是舊的，比值就偏大：
+      // 偏大的比值 × 變大的總高度 = 落點越跳越往舊的方向跑，於是更容易
+      // 再次觸發載入。**那不是收斂，是正回饋**，而它的觸發條件正好就是
+      // 這個功能存在的理由——訊息多的房、跳很舊的釘選
+      // （開發Novia (除錯) 09/09 房 seq 78 複核抓到）
+      feed = ref.read(roomFeedProvider(widget.roomId));
+      final round = feed.messages.toList();
+      final at = round.indexWhere((m) => m.seq == seq);
+      if (at < 0) break;
+      final fromBottom = round.length - 1 - at;
+      // 「載入更早的訊息…」那格也佔一個 item，`itemCount` 與
+      // `maxScrollExtent` 都含它——少算一格，比值就偏大一格
+      final total = round.length + (feed.hasMoreHistory ? 1 : 0);
+
       if (_scroll.hasClients) {
         await _scroll.animateTo(
           estimateFocusOffset(
             fromBottom: fromBottom,
-            total: list.length,
+            total: total,
             maxExtent: _scroll.position.maxScrollExtent,
           ),
           // 第一次給得從容一點（使用者看得出來畫面在移動），之後的重跳是
@@ -395,8 +411,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ctx = _focusKey.currentContext;
       if (ctx != null && ctx.mounted) break;
       ctx = null;
-      // 沒量到就再來一次。下一輪的 maxScrollExtent 已經吸收了這一輪捲過的
-      // 那段實際高度，估計會比上一輪準——這是收斂的來源，不是重試碰運氣
+      // 沒量到就再來一次。下一輪 feed、total 與 maxScrollExtent 一起重讀，
+      // 三者同步時估計才會越來越準——**只重讀其中一個就是上面那個正回饋**
     }
 
     // `ctx.mounted` 在使用點再確認一次：迴圈裡那次檢查之後又跨了幾個
