@@ -16,6 +16,7 @@ import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
+import '../../state/mcp_kit_providers.dart';
 import '../../widgets/connection_pill.dart';
 import '../boards/board_list_screen.dart';
 import '../rooms/room_list_screen.dart';
@@ -284,9 +285,13 @@ class _AppShellState extends ConsumerState<AppShell>
             // 主機控制台的入口。**沒有 host-kit 時整個不存在**，不是變灰
             // ——絕大多數使用者是成員不是主持人，他們機器上本來就沒有那包，
             // 而一個永遠按不動的按鈕比沒有這個功能更糟
-            if (ref.watch(hostKitProvider).value != null) ...[
+            // 主持包或 MCP 接入，有任一個就顯示——一個人可以同時是主持人
+            // 與成員，而兩者都沒有的人（例如只裝了 App 去連別人的 Hub）
+            // 這個入口對他沒有任何意義
+            if (ref.watch(hostKitProvider).value != null ||
+                ref.watch(mcpKitProvider).value != null) ...[
               _TopIconButton(
-                tooltip: '主機（這台機器上的 Hub）',
+                tooltip: '這台機器（Hub 與 agent 接入的狀態）',
                 glyph: '⌂',
                 onTap: () => context.push('/host'),
               ),

@@ -30,7 +30,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # 繁中 Windows 主控台預設 cp950，emoji/特殊字元會直接 UnicodeEncodeError
@@ -39,6 +39,13 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
 KIT_DIR = Path(__file__).resolve().parent
+
+# 桌面 App 靠這份檔案知道「這台機器上接了 chatroom，接在哪、什麼時候接的」。
+#
+# ⚠️ **它是指路牌，不是設定。** URL 與 token 的真相在 kit 根目錄的 `.env`，
+# bridge 版本的真相在 `_build.json`——那兩份都會被改，而改完不會有人回來
+# 更新這裡。App 讀這份拿路徑與安裝時間，其餘一律現查。
+REGISTRY = Path.home() / ".chatroom" / "mcp-kit.json"
 VENV_DIR = KIT_DIR / "venv"
 
 
@@ -437,6 +444,42 @@ def setup_codex(exe: Path, url: str, token: str, name: str,
 # ---------- 主流程 ----------
 
 
+def write_registry(targets: list[str]) -> None:
+    """寫下指路牌，讓桌面 App 認得這台機器上的 MCP 接入。
+
+    **失敗不中止安裝**：沒有它只是 App 少一塊狀態顯示，agent 照樣連得上
+    ——走到這裡時 MCP 設定與 .env 都已經寫好了，為了一個便利設施把整個
+    安裝判成失敗，會讓人以為 bridge 沒裝好而重跑一遍。
+
+    ⚠️ **`installed_at` 是有用途的欄位，不是裝飾。** Claude Code 若在安裝
+    之前就開著，它連的是舊的 bridge 進程——設定檔更新了，跑著的沒有。
+    那個落差安裝器看得見、使用者看不見（2026-09-09 實際踩過：舊 bridge
+    沒有 `card_refs` 參數，發文被 Hub 擋下，而錯誤訊息指向他沒有的東西）。
+    App 拿這個時間與 agent 的行為對照，才講得出「請重啟」。
+    """
+    payload = {
+        "version": 1,
+        "kit_root": str(KIT_DIR),
+        "env_file": str(KIT_DIR / ".env"),
+        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "targets": sorted(targets),
+    }
+    try:
+        REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+        # 先寫暫存再換名：中途失敗留下的是舊的那份，不是半個 JSON。
+        # 一個解析不了的指路牌會讓 App 每次都當成「壞了」而不是「沒有」
+        tmp = REGISTRY.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(REGISTRY)
+        print(f"✅ 註冊檔已寫入：{REGISTRY}")
+    except OSError as exc:
+        print(f"⚠️ 註冊檔寫不進去（{exc}）——桌面 App 會看不到這包，"
+              f"但 agent 的連線不受影響。")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Chatroom MCP Bridge 安裝器")
     p.add_argument("--url", help="Hub 位址，例 http://26.176.231.43:8787")
@@ -482,6 +525,8 @@ def main() -> None:
     # watcher（Monitor 拉起的獨立進程）拿不到 MCP 設定裡的 env，只能靠這份。
     # 兩種 target 都需要：Codex 的 --codex-thread 備援模式同樣是獨立進程。
     write_env_file(url, token)
+
+    write_registry(targets)
 
     print("\n=== 完成 ===")
     print("重啟 Claude Code / Codex 後即可使用 chatroom_* 工具。")

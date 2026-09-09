@@ -10,6 +10,7 @@ import '../../models/host_kit.dart';
 import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
+import '../../state/mcp_kit_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 
@@ -30,12 +31,13 @@ class HostConsoleScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     final kit = ref.watch(hostKitProvider).value;
+    final mcp = ref.watch(mcpKitProvider).value;
 
     return Scaffold(
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bgSoft,
-        title: Text('主機',
+        title: Text('這台機器',
             style: UepText.mono(
                 size: 12, color: s.inkTitle, letterSpacing: 2.0)),
         actions: [
@@ -45,16 +47,20 @@ class HostConsoleScreen extends ConsumerWidget {
             onPressed: () {
               ref.invalidate(hostEnvProvider);
               ref.invalidate(hostHealthProvider);
+              ref.invalidate(tunnelStatusProvider);
+              ref.invalidate(serviceStatusProvider);
+              ref.invalidate(mcpEnvProvider);
+              ref.invalidate(mcpStatusProvider);
             },
           ),
         ],
       ),
-      body: kit == null
+      body: (kit == null && mcp == null)
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
                 child: Text(
-                  '這台機器上找不到 Hub 主持包。',
+                  '這台機器上找不到 Hub 主持包，也沒有接上 chatroom。',
                   style: UepText.serif(size: 14, color: s.inkMute),
                 ),
               ),
@@ -62,15 +68,23 @@ class HostConsoleScreen extends ConsumerWidget {
           : ListView(
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
               children: [
-                _HealthSection(),
-                const SizedBox(height: 28),
-                _ShareSection(kit: kit),
-                const SizedBox(height: 28),
-                const _TunnelSection(),
-                const SizedBox(height: 28),
-                const _ControlSection(),
-                const SizedBox(height: 28),
-                _KitSection(kit: kit),
+                // 一個人可以同時是主持人與成員（多半就是），所以兩塊並存；
+                // 沒有的那一塊**整個不出現**，不是空著佔一個標題
+                if (mcp != null) ...[
+                  _McpSection(kit: mcp),
+                  const SizedBox(height: 28),
+                ],
+                if (kit != null) ...[
+                  _HealthSection(),
+                  const SizedBox(height: 28),
+                  _ShareSection(kit: kit),
+                  const SizedBox(height: 28),
+                  const _TunnelSection(),
+                  const SizedBox(height: 28),
+                  const _ControlSection(),
+                  const SizedBox(height: 28),
+                  _KitSection(kit: kit),
+                ],
               ],
             ),
     );
@@ -232,6 +246,129 @@ class _ShareSection extends ConsumerWidget {
               style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Agent 接入（MCP）——**這台機器的 agent 連得上 Hub 嗎**。
+///
+/// 成員端要回答的三題：連得上嗎、我是誰、agent 認得那些工具了嗎。
+/// 前兩題這裡答得了；**第三題答不了**，見底下的安裝時間那段。
+class _McpSection extends ConsumerWidget {
+  const _McpSection({required this.kit});
+
+  final McpKit kit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(mcpStatusProvider);
+    final env = ref.watch(mcpEnvProvider).value;
+
+    return _Panel(
+      title: 'AGENT 接入（MCP）',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          status.when(
+            loading: () =>
+                const _LightRow(label: '連線', probe: Probe.checking()),
+            error: (e, _) => _LightRow(
+                label: '連線', probe: Probe(ProbeState.unknown, '$e')),
+            data: (m) {
+              if (m == null) {
+                return const _LightRow(
+                  label: '設定',
+                  probe: Probe(ProbeState.unknown, '讀不到 kit 根目錄的 .env',
+                      caveat: '重跑 install.py 可以重建它'),
+                );
+              }
+              return Column(children: [
+                _LightRow(label: '① 連線', probe: m.reach),
+                const SizedBox(height: 14),
+                _LightRow(label: '② 認證', probe: m.auth),
+              ]);
+            },
+          ),
+          if (env != null && env.url.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _CopyRow(label: '連的 Hub', value: env.url),
+          ],
+          const SizedBox(height: 16),
+          _InstalledAt(kit: kit),
+        ],
+      ),
+    );
+  }
+}
+
+/// 安裝時間，以及它為什麼在這裡。
+///
+/// 🔴 **App 看不到 agent 的進程，所以「agent 認得那些工具了嗎」這一題
+/// 答不了。** 但那個落差真實存在而且咬過人：Claude Code 若在安裝之前就
+/// 開著，它連的是舊的 bridge——設定檔更新了，跑著的那個沒有
+/// （2026-09-09：舊 bridge 沒有 `card_refs` 參數，發文被 Hub 擋下，
+/// 而錯誤訊息指向他手上沒有的東西）。
+///
+/// **答不了的事不要假裝答得了**：這裡不畫一盞燈，只把安裝時間講出來，
+/// 讓使用者自己對照——那是他答得出來而 App 答不出來的事。
+class _InstalledAt extends ConsumerWidget {
+  const _InstalledAt({required this.kit});
+
+  final McpKit kit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final version = ref.watch(mcpBridgeVersionProvider).value ?? '';
+    final when = kit.installedAt.isEmpty
+        ? '（不知道）'
+        : kit.installedAt.replaceFirst('T', ' ').replaceFirst('+00:00', ' UTC');
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: s.bgSunken,
+        border: Border.all(color: s.line),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            MonoLabel('安裝於', size: 9, letterSpacing: 1.4),
+            const SizedBox(width: 10),
+            Text(when, style: UepText.code(size: 11.5, color: s.inkSoft)),
+          ]),
+          if (version.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              MonoLabel('BRIDGE', size: 9, letterSpacing: 1.4),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(version,
+                    style: UepText.code(size: 11.5, color: s.inkSoft)),
+              ),
+            ]),
+          ],
+          if (kit.targets.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(children: [
+              MonoLabel('裝給', size: 9, letterSpacing: 1.4),
+              const SizedBox(width: 10),
+              Text(kit.targets.join('、'),
+                  style: UepText.code(size: 11.5, color: s.inkSoft)),
+            ]),
+          ],
+          const SizedBox(height: 10),
+          Text(
+            '⚠️ 你的 Claude Code / Codex 如果在上面那個時間之前就開著，'
+            '它連的還是舊的 bridge——設定檔更新了，跑著的那個沒有。'
+            '症狀是工具少了新參數，而錯誤訊息會指向你手上沒有的東西。'
+            '重啟 agent 就會換過去。',
+            style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.6),
+          ),
         ],
       ),
     );

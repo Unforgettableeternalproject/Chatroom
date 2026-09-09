@@ -7,6 +7,7 @@ import 'package:chatroom_app/screens/host/host_console_screen.dart';
 import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
+import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,7 +23,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// 還是只是環境變了（後者用 `--update-goldens` 重產）。
 void main() {
   testWidgets('主機控制台：好／壞／不確定三種狀態並存', (tester) async {
-    tester.view.physicalSize = const Size(760, 1500);
+    tester.view.physicalSize = const Size(760, 1900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -61,6 +62,22 @@ void main() {
             )),
         hostActionsProvider.overrideWith(
             (ref) => const HostActions(r'C:\kits\chatroom-host-kit')),
+        // 同一台機器同時是主持人與成員——多半就是這樣，所以圖要涵蓋兩塊
+        mcpKitProvider.overrideWith((ref) async => const McpKit(
+              kitRoot: r'C:\kits\chatroom-mcp-kit',
+              envFile: r'C:\kits\chatroom-mcp-kit\.env',
+              installedAt: '2026-09-09T06:30:00+00:00',
+              targets: ['claude', 'codex'],
+            )),
+        mcpEnvProvider.overrideWith((ref) async =>
+            const McpEnv(url: 'http://26.176.231.43:8787', token: 'demo')),
+        mcpBridgeVersionProvider
+            .overrideWith((ref) async => '1.2.1+c123507f9c6f'),
+        mcpStatusProvider.overrideWith((ref) async => const McpStatus(
+              reach: Probe(ProbeState.ok, 'Hub 連得到'),
+              auth: Probe(ProbeState.ok, 'token 可以通過認證'),
+              bridgeVersion: '1.2.1+c123507f9c6f',
+            )),
       ],
       child: MaterialApp(
         theme: buildUepTheme(Brightness.dark),

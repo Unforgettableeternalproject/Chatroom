@@ -80,6 +80,29 @@ void main() {
     });
   });
 
+  group('McpKit', () {
+    test('讀得出註冊檔', () {
+      final kit = McpKit.fromJson({
+        'kit_root': r'C:\kits\mcp-kit',
+        'env_file': r'C:\kits\mcp-kit\.env',
+        'installed_at': '2026-09-09T06:30:00+00:00',
+        'targets': ['claude', 'codex'],
+      });
+      expect(kit.targets, ['claude', 'codex']);
+      expect(kit.installedAt, '2026-09-09T06:30:00+00:00');
+    });
+
+    test('🔴 targets 缺了也不炸', () {
+      expect(McpKit.fromJson({'kit_root': '/x'}).targets, isEmpty);
+    });
+
+    test('沒有 URL 就是設定不完整', () {
+      expect(const McpEnv().isComplete, isFalse);
+      expect(const McpEnv(url: 'http://h:8787').isComplete, isTrue,
+          reason: 'token 可以是空的——有些 Hub 沒設 token');
+    });
+  });
+
   group('.env 解析', () {
     /// 與 `hostEnvProvider` 同一套規則，抽出來單獨驗——provider 需要
     /// 檔案系統與 riverpod，這裡只驗那段字串處理。
