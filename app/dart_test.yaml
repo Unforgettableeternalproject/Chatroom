@@ -7,3 +7,8 @@
 tags:
   contract:
     # 打真 Hub，會建立並刪除資料。指向測試 Hub，不要指生產。
+  golden:
+    # 驗收用的對比圖。**同樣不排除**，理由同上——它是呼吸框偏位的回歸防線。
+    # 但它對字型與平台敏感，紅的時候先分辨是哪一種：
+    # focus_pulse_alignment_test（量位置）也紅 → 真的偏了，去修實作；
+    # 只有 golden 紅 → 環境變了，用 --update-goldens 重產。
