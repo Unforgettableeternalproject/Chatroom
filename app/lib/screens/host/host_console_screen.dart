@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,9 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/host_kit.dart';
+import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/uep_button.dart';
 
 /// 主機控制台——**這台機器上的 Hub**。
 ///
@@ -61,6 +65,10 @@ class HostConsoleScreen extends ConsumerWidget {
                 _HealthSection(),
                 const SizedBox(height: 28),
                 _ShareSection(kit: kit),
+                const SizedBox(height: 28),
+                const _TunnelSection(),
+                const SizedBox(height: 28),
+                const _ControlSection(),
                 const SizedBox(height: 28),
                 _KitSection(kit: kit),
               ],
@@ -227,6 +235,205 @@ class _ShareSection extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// 對外協作（隧道）。
+class _TunnelSection extends ConsumerWidget {
+  const _TunnelSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final status = ref.watch(tunnelStatusProvider);
+    final actions = ref.watch(hostActionsProvider);
+
+    return _Panel(
+      title: '對外協作（隧道）',
+      child: status.when(
+        loading: () => const _LightRow(
+            label: '隧道', probe: Probe.checking()),
+        error: (e, _) => _LightRow(
+            label: '隧道', probe: Probe(ProbeState.unknown, '$e')),
+        data: (t) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _LightRow(
+              label: '隧道',
+              probe: Probe(t.state, t.detail, caveat: t.caveat),
+            ),
+            if (t.hasUrl) ...[
+              const SizedBox(height: 12),
+              _CopyRow(label: '隧道網址', value: t.url),
+            ],
+            if (actions != null && Platform.isWindows) ...[
+              const SizedBox(height: 14),
+              Row(children: [
+                UepButton(
+                  label: t.hasUrl ? '再開一條' : '開隧道',
+                  onPressed: () => _confirmTunnel(context, ref, actions),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    // 「關」不放在這裡是刻意的：隧道活在自己的視窗裡，
+                    // 關掉那個視窗就是關隧道。做一顆按鈕去殺別人的進程，
+                    // 會在殺錯的時候完全看不出來
+                    '關隧道＝把那個隧道視窗關掉。',
+                    style: UepText.serif(
+                        size: 11.5, color: s.inkMute, height: 1.5),
+                  ),
+                ),
+              ]),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🔴 **警告要出現在它有意義的那一刻。**
+  ///
+  /// `host-kit/README.md` 有一整段把 token 的信任邊界寫得很清楚，但它在
+  /// 第 60 行——而**不讀 README 正是這個介面要服務的族群**
+  /// （設計稿 §5 第一條）。這段話真正需要被讀到的時刻就是現在。
+  ///
+  /// 為了不變成一個被反射性關掉的對話框：**講後果，不講規則**，而且確認鈕
+  /// 上寫的是它實際會做的事（「開隧道」），不是「確定」。
+  Future<void> _confirmTunnel(
+    BuildContext context, WidgetRef ref, HostActions actions) async {
+    final s = context.uep;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text('開隧道之前',
+            style: UepText.serif(
+                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+        content: Text(
+          '隧道一開，任何知道網址的人都能連到這個 Hub，擋在前面的只有 token。\n\n'
+          '而 token 的權限比多數人以為的大：拿到它的人讀得到「所有房間」的訊息、'
+          '成員與附件——包含他沒有加入的房間，以及已經封存的舊房間。\n\n'
+          '所以不要用「開另一個房間」當隔離。不同信任層級的協作請開不同的 Hub。',
+          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消',
+                style: UepText.serif(size: 13, color: s.inkMute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('開隧道',
+                style: UepText.serif(size: 13, color: UepColors.gold)),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    await actions.startTunnel();
+    // 隧道要幾秒才拿得到網址（cloudflared 要先跟 Cloudflare 要一個），
+    // 立刻重讀只會看到「沒開」——那會讓人以為按了沒反應而再按一次
+    await Future<void>.delayed(const Duration(seconds: 4));
+    ref.invalidate(tunnelStatusProvider);
+  }
+}
+
+/// 起停與自啟。
+class _ControlSection extends ConsumerWidget {
+  const _ControlSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final actions = ref.watch(hostActionsProvider);
+    if (actions == null) return const SizedBox.shrink();
+
+    // 服務註冊是排程任務，只有 Windows 有。**藏起來而不是顯示為失敗**——
+    // 那不是壞掉，是這台機器沒有那個東西（設計稿 §6.3）
+    final windows = Platform.isWindows;
+    final service = ref.watch(serviceStatusProvider).value;
+
+    return _Panel(
+      title: '啟動與自啟',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (windows) ...[
+            Row(children: [
+              UepButton(
+                label: '啟動 Hub',
+                onPressed: () async {
+                  await actions.startHub();
+                  await Future<void>.delayed(const Duration(seconds: 3));
+                  ref.invalidate(hostHealthProvider);
+                },
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  // 講明它跑在哪裡——不講的話，關掉那個黑視窗會讓所有人斷線，
+                  // 而按下按鈕的人不會預期那件事
+                  '會開一個獨立的視窗跑 Hub。關掉那個視窗＝停止 Hub；'
+                  '關掉這個 App 不會——它只是遙控器。',
+                  style: UepText.serif(
+                      size: 11.5, color: s.inkMute, height: 1.5),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 18),
+          ],
+          if (windows) ...[
+            Text('開機／登入時自動啟動',
+                style: UepText.serif(
+                    size: 13, weight: FontWeight.w600, color: s.inkTitle)),
+            const SizedBox(height: 6),
+            Text(
+              service?.raw.isNotEmpty == true ? service!.raw : '（問不到狀態）',
+              style: UepText.code(size: 11.5, color: s.inkSoft),
+            ),
+            const SizedBox(height: 10),
+            Wrap(spacing: 10, runSpacing: 10, children: [
+              UepButton(
+                label: service?.registered == true ? '重新註冊' : '註冊',
+                onPressed: () => _runService(ref, 'install'),
+              ),
+              UepButton(
+                label: '啟動',
+                onPressed: () => _runService(ref, 'start'),
+              ),
+              UepButton(
+                label: '停止',
+                onPressed: () => _runService(ref, 'stop'),
+              ),
+              if (service?.registered == true)
+                UepButton(
+                  label: '取消註冊',
+                  onPressed: () => _runService(ref, 'uninstall'),
+                ),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              // 這個差別現在只寫在 README 裡，而它決定「重開機之後還在不在」
+              '一般權限註冊＝登入時自啟；以系統管理員執行這個 App 再註冊'
+              '＝開機自啟（沒登入也跑）。',
+              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
+            ),
+            const SizedBox(height: 18),
+          ],
+          UepButton(label: '開啟日誌資料夾', onPressed: actions.openLogs),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _runService(WidgetRef ref, String action) async {
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+    await actions.service(action);
+    ref.invalidate(serviceStatusProvider);
+    ref.invalidate(hostHealthProvider);
   }
 }
 
