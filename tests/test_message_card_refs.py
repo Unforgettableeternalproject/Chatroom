@@ -274,3 +274,29 @@ async def test_no_refs_is_the_default(tmp_path):
             await client.post(f"/api/rooms/{rid}/messages",
                               json={"content": "沒有指涉任何卡"}, headers=hdr)
             assert (await _messages(client, rid, hdr))[-1]["card_refs"] == []
+
+
+async def test_cap_counts_literals_not_fields(tmp_path):
+    """上限算在內文上——兩條分開算會開出一個發不出去的死局。
+
+    內文寫了 21 個對得上的字面時，反向驗證要 21 筆、上限只准 20 筆，
+    使用者會在兩個錯誤碼之間來回跳，而他不可能從那兩句話推出「要改內文」。
+    """
+    app, client = await _client(tmp_path, "cap")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            ids, parts = [], []
+            for i in range(21):
+                ids.append(await _task(client, rid, hdr, f"卡{i:02d}"))
+                parts.append(f"#[卡{i:02d}]")
+            r = await _post(client, rid, hdr, " ".join(parts), ids)
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "card_refs_too_many"
+            # 錯誤要講的是內文，不是欄位——講錯的話他會去砍 refs，
+            # 然後撞上反向驗證
+            assert "內文" in r.json()["detail"]["message"]
+
+            # 砍到 20 個（內文與欄位一起砍）就過
+            ok = await _post(client, rid, hdr, " ".join(parts[:20]), ids[:20])
+            assert ok.status_code == 200, ok.text

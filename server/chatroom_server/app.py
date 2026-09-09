@@ -1457,36 +1457,65 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _resolve_card_refs(
         room_id: str, content: str, task_ids: list[str] | None,
+        check_orphans: bool = True,
     ) -> list[dict]:
         """把 client 送來的 task_id 清單解析成落庫用的 card_refs。
 
         **client 只送 task_id，board_id 與標題快照都由 Hub 自己查**——讓
         呼叫端送標題等於讓它自己宣告指到哪張卡，那個宣告沒有東西擋得住。
 
-        三道驗證，全部在 Hub：卡存在、卡所屬的板正掛在這間房、內文確實
-        寫了 `#[標題]`。第三道是給純文字端的——bridge 與 watcher 沒有
-        chip 這條後路，欄位有而內文沒有的話，那則訊息對它們是沒有意義的。
+        欄位與內文的一致性**兩個方向都擋**，因為兩邊各自都是靜默的：
+
+        - 欄位有、內文沒有 ⇒ bridge 與 watcher 沒有 chip 這條後路，
+          看到的是一則講不出在指哪張卡的訊息
+        - 內文有、欄位沒有 ⇒ 看起來指了卡，卻沒有 preview、點不下去
+
+        ⚠️ **上限算在內文上，不算在欄位上。** 兩條分開算的話會開出一個
+        死局：內文寫了 21 個對得上的字面時，反向驗證要 21 筆、上限只准 20
+        筆，兩個錯誤碼來回跳而使用者永遠發不出去——而他不可能從那兩句話
+        推出「要改的是內文」。
         """
+        db = app.state.db
         seen: list[str] = []
         for tid in (task_ids or []):
             if tid and tid not in seen:
                 seen.append(tid)
-        if not seen:
+        body = _nfc(content)
+        # 內文裡「看起來是指涉」的字面。標題自己含 `]` 的話這條抓不到——
+        # 那是**已知的洞，而且只會漏放行不會誤擋**
+        literals = {_nfc(t) for t in _CARD_LITERAL_RE.findall(content)}             if check_orphans and "#[" in content else set()
+        if not seen and not literals:
             return []
-        if len(seen) > 20:
-            raise _err(422, "card_refs_too_many", "一則訊息最多指涉 20 張卡")
-        db = app.state.db
         board = await _board_for_room(room_id)
         if board is None:
-            raise _err(422, "card_ref_board_not_attached",
-                       "這個房間目前沒有掛接任何板，不能指涉卡片")
-        marks = ",".join("?" for _ in seen)
-        rows = await (await db.execute(
-            f"SELECT id, board_id, title FROM board_task WHERE id IN ({marks})"
-            " AND deleted=0", tuple(seen),
+            if seen:
+                raise _err(422, "card_ref_board_not_attached",
+                           "這個房間目前沒有掛接任何板，不能指涉卡片")
+            # 內文湊巧寫成這個形狀、而房裡根本沒有板：那就只是一句話
+            return []
+        # 板上的卡標題。反向檢查只認**確實對得上某張卡**的字面——純粹湊巧
+        # 寫成 `#[買牛奶]` 的一般句子不該被擋，那會讓一個沒人預期的形狀
+        # 變成禁字
+        board_rows = await (await db.execute(
+            "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0",
+            (board["id"],),
         )).fetchall()
+        by_title = {}
+        for r in board_rows:
+            by_title.setdefault(_nfc(r["title"]), r)
+        matched = {t: by_title[t] for t in literals if t in by_title}
+        if len(matched) > 20:
+            raise _err(422, "card_refs_too_many",
+                       f"內文的卡片指涉有 {len(matched)} 個，超過上限 20——"
+                       "這是內文的問題，減少指涉的卡片數量")
+        rows = []
+        if seen:
+            marks = ",".join("?" for _ in seen)
+            rows = await (await db.execute(
+                f"SELECT id, board_id, title FROM board_task"
+                f" WHERE id IN ({marks}) AND deleted=0", tuple(seen),
+            )).fetchall()
         found = {r["id"]: r for r in rows}
-        body = _nfc(content)
         out = []
         for tid in seen:
             r = found.get(tid)
@@ -1505,40 +1534,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "欄位有而內文沒有的話，純文字端看不出你在講哪張卡")
             out.append({"board_id": r["board_id"], "task_id": r["id"],
                         "title": r["title"]})
-        return out
-
-    async def _refuse_orphan_literals(room_id: str, content: str,
-                                      refs: list[dict]) -> None:
-        """內文寫了 `#[某卡]`、欄位卻沒帶它 ⇒ 擋下。
-
-        **這是 `mentions` 那個坑的鏡像面**：正向的漏是「欄位有、內文沒有」
-        （純文字端看不懂），反向的漏是「內文有、欄位沒有」——訊息看起來指
-        了一張卡，卻沒有 chip、沒有 preview、點不下去，而且不會有任何地方
-        報錯。兩個方向都要擋，只擋一邊等於留著另一半。
-
-        只認**確實對得上本房掛接板上某張卡標題**的字面。純粹湊巧寫成
-        `#[待辦]` 的一般句子不該被擋——那會讓一個沒人預期的形狀變成禁字。
-        """
-        if "#[" not in content:
-            return
-        titles = {_nfc(t) for t in _CARD_LITERAL_RE.findall(content)}
-        if not titles:
-            return
-        board = await _board_for_room(room_id)
-        if board is None:
-            return
-        taken = {_nfc(x["title"]) for x in refs}
-        rows = await (await app.state.db.execute(
-            "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0",
-            (board["id"],),
-        )).fetchall()
-        for r in rows:
-            t = _nfc(r["title"])
-            if t in titles and t not in taken:
+        taken = {t["task_id"] for t in out}
+        for title, r in matched.items():
+            if r["id"] not in taken:
                 raise _err(422, "card_ref_field_missing",
                            f"內文寫了 {_card_ref_literal(r['title'])}，但"
                            f" card_refs 沒有帶這張卡（{r['id']}）——"
                            "看起來指了卡卻點不下去，是另一半的靜默失效")
+        return out
 
     async def _post_message(
         room_id: str,
@@ -1552,11 +1555,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         card_refs: list[str] | None = None,
     ) -> dict:
         db = app.state.db
-        refs = await _resolve_card_refs(room_id, content, card_refs)
-        if kind == "chat":
-            # 系統訊息不走這條：它的內文是 Hub 自己組的，而使用者的話
-            # （例如被引用的訊息摘要）可能剛好含著某張卡的字面
-            await _refuse_orphan_literals(room_id, content, refs)
+        # 系統訊息不做反向檢查：它的內文是 Hub 自己組的，而使用者的話
+        # （例如被引用的訊息摘要）可能剛好含著某張卡的字面
+        refs = await _resolve_card_refs(room_id, content, card_refs,
+                                        check_orphans=(kind == "chat"))
         effective, groups, empty_groups = await _expand_mention_groups(
             room_id, sender_id, list(mentions or []),
         )
@@ -10605,7 +10607,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "而指涉是不可編輯的")
         # 反向也要守：改文時**加**一個字面同樣會做出「看起來指了卡卻點不下去」
         # 的訊息，而指涉不可編輯代表它永遠補不上那個欄位
-        await _refuse_orphan_literals(room_id, body.content, existing_refs)
+        await _resolve_card_refs(
+            room_id, body.content,
+            [x.get("task_id", "") for x in existing_refs])
         # system 訊息不可編輯——即使 sender_id 是你。「Novia 加入了聊天室」
         # 掛在加入者名下，但那句話不是他說的，是房間對事實的紀錄。可編輯的話
         # 每個人都能改寫自己的進出紀錄
