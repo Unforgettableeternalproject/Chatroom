@@ -329,10 +329,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   List<CardCandidate> _cardsFrom(BoardSnapshot? snap) {
     if (snap == null) return const [];
     return [
-      // 已刪除與已取消的不列：指涉一張不存在的卡沒有意義，而候選是
-      // 「現在可以指誰」，不是板的完整歷史
+      // 已刪除、已取消、已搬走的不列：候選是「現在可以指誰」，不是板的
+      // 完整歷史。
+      //
+      // ⚠️ **這份條件與 Hub 反向檢查的語料是同一組，改一邊要改兩邊**
+      // （`app.py` 的 `_resolve_card_refs`）。兩邊不一致的後果不是誤判而是
+      // 死局：寬的那端要求帶 ref、窄的那端不給選，而錯誤訊息會叫使用者
+      // 「從候選重選一次」——候選裡根本沒有那張卡（09/09 房 seq 111）
       for (final t in snap.tasks.values)
-        if (!t.deleted && t.status != 'cancelled')
+        if (!t.deleted && t.status != 'cancelled' && t.status != 'moved')
           CardCandidate(
             boardId: snap.boardId,
             taskId: t.id,
