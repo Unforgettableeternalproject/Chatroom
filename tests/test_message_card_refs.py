@@ -384,3 +384,32 @@ async def test_mixed_bracket_and_plain_titles(tmp_path):
             both = await _post(client, rid, hdr, body, [a, b])
             assert both.status_code == 200, both.text
             assert {x["task_id"] for x in both.json()["card_refs"]} == {a, b}
+
+
+async def test_cancelled_and_moved_cards_are_not_forbidden_words(tmp_path):
+    """取消／搬走的卡不再是禁字——反向檢查的集合要與 App 候選一致。
+
+    兩邊篩選條件不一樣會湊出一個解不掉的死局：板上有張取消掉的卡叫 X，
+    有人把含 `#[X]` 的舊文字複製貼上進輸入框（不必手打），App 候選沒有 X
+    所以不帶 ref，Hub 卻認得 X 於是擋下來，還叫他「從 # 候選重選一次」
+    ——候選裡根本沒有那張卡。（@開發Novia (UI) 09/09 房 seq 111）
+
+    正向那側維持寬鬆：明確帶了 id 的人知道自己在指誰。
+    """
+    app, client = await _client(tmp_path, "settled")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            gone = await _task(client, rid, hdr, "取消掉的卡")
+            await client.post(f"/api/board/tasks/{gone}/status",
+                              json={"status": "cancelled"}, headers=hdr)
+
+            # 反向：貼上含字面的舊文字、欄位空 ⇒ 照發，不是禁字
+            r = await _post(client, rid, hdr, "之前講的 #[取消掉的卡] 那張", [])
+            assert r.status_code == 200, r.text
+
+            # 正向：明確帶 id 仍然可以指它
+            ok = await _post(client, rid, hdr, "之前講的 #[取消掉的卡] 那張",
+                             [gone])
+            assert ok.status_code == 200, ok.text
+            assert ok.json()["card_refs"][0]["task_id"] == gone

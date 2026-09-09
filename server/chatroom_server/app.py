@@ -1502,8 +1502,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 板上的卡標題。反向檢查只認**確實對得上某張卡**的字面——純粹湊巧
         # 寫成 `#[買牛奶]` 的一般句子不該被擋，那會讓一個沒人預期的形狀
         # 變成禁字
+        # 反向檢查的來源必須與 App 的 `#` 候選是**同一個集合**：「現在可以
+        # 指誰」。兩邊篩選條件不一樣的話會湊出一個解不掉的死局——板上有張
+        # 取消掉的卡叫 X，有人把含 `#[X]` 的舊文字**複製貼上**進輸入框，
+        # App 的候選沒有 X 所以不帶 ref，這裡卻認得 X 於是擋下來，然後叫他
+        # 「從 # 候選重選一次」——而候選裡根本沒有那張卡。他照做也解不掉。
+        #
+        # cancelled 與 moved 都是「已經不算數了」。把它們留在這個集合裡，
+        # 等於讓一張取消掉的卡繼續阻止別人講話。
+        #
+        # ⚠️ **正向那側刻意保持寬鬆**（只排除 deleted）：明確帶了 id 的人
+        # 知道自己在指誰，擋他沒有道理。寬正向 + 窄反向不會撞出死局——
+        # 反向只會要求 App 給得出來的那些卡
         board_rows = await (await db.execute(
-            "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0",
+            "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0"
+            " AND status NOT IN ('cancelled','moved')",
             (board["id"],),
         )).fetchall()
         # 同一塊板上**可以有兩張同名的卡**，所以一個標題對到的是一份清單，
