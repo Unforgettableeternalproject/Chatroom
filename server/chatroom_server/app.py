@@ -1480,6 +1480,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         for tid in (task_ids or []):
             if tid and tid not in seen:
                 seen.append(tid)
+        # 欄位那側的硬閘，**擺在任何查詢之前**：`seen` 直接來自請求，
+        # 不擋的話 1000 個不存在的 id 會原樣展開成 `WHERE id IN (?...)`，
+        # 要等那一大包查完才在迴圈第一圈報錯。內文那條上限（20）擋不住它
+        # ——那些 id 對不上任何字面，`matched` 是 0，上限檢查直接放行。
+        # 這裡刻意設得比 20 寬鬆：它防的是「未經檢查的欄位展開成 SQL 參數」
+        # 這個形狀，不是業務規則；真正的業務上限由內文那條負責
+        if len(seen) > 100:
+            raise _err(422, "card_refs_field_limit",
+                       f"card_refs 有 {len(seen)} 筆，超過欄位上限 100")
         body = _nfc(content)
         # 內文裡「看起來是指涉」的字面。標題自己含 `]` 的話這條抓不到——
         # 那是**已知的洞，而且只會漏放行不會誤擋**

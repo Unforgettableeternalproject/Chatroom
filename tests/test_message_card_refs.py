@@ -300,3 +300,20 @@ async def test_cap_counts_literals_not_fields(tmp_path):
             # 砍到 20 個（內文與欄位一起砍）就過
             ok = await _post(client, rid, hdr, " ".join(parts[:20]), ids[:20])
             assert ok.status_code == 200, ok.text
+
+
+async def test_field_side_has_a_hard_gate_before_any_query(tmp_path):
+    """大量無效 id 要在查詢之前被擋下。
+
+    內文那條上限擋不住它——那些 id 對不上任何字面，`matched` 是 0，
+    上限檢查直接放行，然後整包展開成 `WHERE id IN (?...)`。
+    「未經檢查的請求欄位直接變成 SQL 參數」這個形狀本身就該有個閘。
+    """
+    app, client = await _client(tmp_path, "gate")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid, _, hdr = await _room_board(client)
+            r = await _post(client, rid, hdr, "沒有任何字面",
+                            [f"nonexistent-{i:04d}" for i in range(1000)])
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "card_refs_field_limit"
