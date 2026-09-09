@@ -313,10 +313,17 @@ class _McpSection extends ConsumerWidget {
 /// （Claude Code 與 Codex 都沒有顯示啟動時間）。那是要求他做一件他做不到的
 /// 比較，與「叫 agent 從 # 候選重選一次」是同一個形狀。
 ///
-/// 改成測試Novia 提的判準（09/09 房 seq 170）：**讓 agent 自己說**。
-/// 每個 chatroom 工具的說明結尾都帶著 `〔bridge x.y.z+commit〕`，那是**跑著
-/// 的那份**自己報的，不是設定檔。把它與這裡顯示的已安裝版本擺在一起，
-/// 比對就成立——**而且比對的兩邊都是他看得到的東西**。
+/// 一度改成「讓 agent 自己說」（測試Novia 09/09 房 seq 170）——每個 chatroom
+/// 工具的說明結尾都帶著 `〔bridge x.y.z+commit〕`。**但那條也不成立**，她隨即
+/// 自己推翻（seq 190 實測）：**宿主端會快取工具描述**，同一個 bridge 進程、
+/// 同一刻，三個工具報出三個不同的版本——舊的那些是升級前載過的殘留。
+///
+/// 照著它做的人，碰巧問到快取的工具就會去重啟一個不必重啟的 agent；
+/// 反過來也可能讓真的該重啟的人以為自己是新的。
+///
+/// ⚠️ **所以這裡不給任何「怎麼查」的方法，只給一個必然正確的動作：重啟。**
+/// 重啟很便宜，而確認它有沒有必要反而不便宜——在還沒有一條驗證過的查法
+/// 之前，給一個沒驗過的方法就是今天已經犯過三次的那個錯。
 class _VersionCheck extends ConsumerWidget {
   const _VersionCheck({required this.kit});
 
@@ -354,9 +361,11 @@ class _VersionCheck extends ConsumerWidget {
                 // 讀不到就不要給一個做不到的指示——講清楚少了什麼
                 ? '沒有這份檔案就對照不了版本。kit 解開之後沒有 .git，'
                     '_build.json 是現場唯一可靠的版本來源；缺了它多半是解壓不完整。'
-                : '要確認 agent 跑的是不是這一份：讓它呼叫任何一個 chatroom 工具，'
-                    '工具說明的結尾會帶著它「實際跑著」的 bridge 版本。'
-                    '和上面這個不一樣，就是它還連著舊的——重啟 Claude Code / Codex。',
+                : '不確定 agent 跑的是不是這一份的話，重啟一次 Claude Code / '
+                    'Codex 最快——重啟很便宜，而確認它有沒有必要反而不便宜。\n\n'
+                    '⚠️ 不要用工具說明結尾的版本判斷：宿主端會快取工具描述，'
+                    '同一個 session 裡不同工具可能報出不同的版本，而其中一個'
+                    '已經不存在了。',
             style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.6),
           ),
           const SizedBox(height: 10),

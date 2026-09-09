@@ -451,18 +451,52 @@ def write_registry(targets: list[str]) -> None:
     ——走到這裡時 MCP 設定與 .env 都已經寫好了，為了一個便利設施把整個
     安裝判成失敗，會讓人以為 bridge 沒裝好而重跑一遍。
 
-    ⚠️ **`installed_at` 是有用途的欄位，不是裝飾。** Claude Code 若在安裝
-    之前就開著，它連的是舊的 bridge 進程——設定檔更新了，跑著的沒有。
-    那個落差安裝器看得見、使用者看不見（2026-09-09 實際踩過：舊 bridge
-    沒有 `card_refs` 參數，發文被 Hub 擋下，而錯誤訊息指向他沒有的東西）。
-    App 拿這個時間與 agent 的行為對照，才講得出「請重啟」。
+    🔴 **`targets` 要與既有的合併，不能覆寫。**
+
+    這台 kit 的既定流程就是**分兩次跑安裝器**——`--name` 一次只吃一個值，
+    而 Claude 與 Codex 的房內代稱往往不同。覆寫的話第二次會把第一次的洗掉，
+    於是 App 顯示「只裝了 codex」而實際上兩端都在
+    （測試Novia 09/09 房 seq 186 實測撞到，那不是邊緣案例是既定流程）。
+
+    使用者看到那個之後合理的反應是再跑一次安裝器，然後把另一端的代稱洗掉
+    ——**一個顯示錯誤誘導出一個真實的破壞**。
+
+    ⚠️ 合併的前提是**同一包**：`kit_root` 不同表示他把 kit 解到別的位置重裝，
+    那時舊的 targets 可能指向已經不存在的設定，整份取代才對。
+
+    每個 target 另外記自己的安裝時間——「哪一端比較舊」比「整包什麼時候裝的」
+    有用得多，尤其在分兩次裝的機器上。
     """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    merged = sorted(targets)
+    per_target = {t: now for t in targets}
+
+    old = {}
+    try:
+        if REGISTRY.is_file():
+            loaded = json.loads(REGISTRY.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                old = loaded
+    except (OSError, ValueError):
+        # 讀不懂就當沒有——一份壞掉的舊檔不該擋住寫入新的
+        old = {}
+
+    if old.get("kit_root") == str(KIT_DIR):
+        previous = [str(t) for t in (old.get("targets") or [])]
+        merged = sorted(set(previous) | set(targets))
+        stamps = old.get("target_installed_at")
+        if isinstance(stamps, dict):
+            # 這次沒裝的那些保留原本的時間，別假裝它們剛剛被更新過
+            for key, value in stamps.items():
+                per_target.setdefault(str(key), str(value))
+
     payload = {
         "version": 1,
         "kit_root": str(KIT_DIR),
         "env_file": str(KIT_DIR / ".env"),
-        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "targets": sorted(targets),
+        "installed_at": now,
+        "targets": merged,
+        "target_installed_at": per_target,
     }
     try:
         REGISTRY.parent.mkdir(parents=True, exist_ok=True)
@@ -474,7 +508,7 @@ def write_registry(targets: list[str]) -> None:
             encoding="utf-8",
         )
         tmp.replace(REGISTRY)
-        print(f"✅ 註冊檔已寫入：{REGISTRY}")
+        print(f"✅ 註冊檔已寫入：{REGISTRY}（targets: {'、'.join(merged)}）")
     except OSError as exc:
         print(f"⚠️ 註冊檔寫不進去（{exc}）——桌面 App 會看不到這包，"
               f"但 agent 的連線不受影響。")
