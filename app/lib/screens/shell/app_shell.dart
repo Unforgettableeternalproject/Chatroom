@@ -15,6 +15,7 @@ import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
+import '../../state/host_kit_providers.dart';
 import '../../widgets/connection_pill.dart';
 import '../boards/board_list_screen.dart';
 import '../rooms/room_list_screen.dart';
@@ -280,6 +281,17 @@ class _AppShellState extends ConsumerState<AppShell>
                   ref.read(appConfigProvider.notifier).toggleTheme(),
             ),
             const SizedBox(width: 8),
+            // 主機控制台的入口。**沒有 host-kit 時整個不存在**，不是變灰
+            // ——絕大多數使用者是成員不是主持人，他們機器上本來就沒有那包，
+            // 而一個永遠按不動的按鈕比沒有這個功能更糟
+            if (ref.watch(hostKitProvider).value != null) ...[
+              _TopIconButton(
+                tooltip: '主機（這台機器上的 Hub）',
+                glyph: '⌂',
+                onTap: () => context.push('/host'),
+              ),
+              const SizedBox(width: 8),
+            ],
             _TopIconButton(
               tooltip: '設定',
               glyph: '◎',

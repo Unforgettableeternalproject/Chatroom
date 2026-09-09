@@ -7,6 +7,7 @@ import 'core/theme/uep_theme.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
+import 'screens/host/host_console_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
@@ -39,6 +40,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
       GoRoute(
         path: '/settings',
         builder: (context, state) => const SettingsScreen(),
+      ),
+      // 主機控制台。**只在裝了 host-kit 的那台機器上有意義**——入口本身
+      // 會依偵測結果出現或消失，這條路由留著是為了讓它能被直接開啟
+      // （見 docs/KIT-UI-DESIGN-BRIEF.md §6.0）
+      GoRoute(
+        path: '/host',
+        builder: (context, state) => const HostConsoleScreen(),
       ),
       ShellRoute(
         builder: (context, state, child) => AppShell(

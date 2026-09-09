@@ -3,11 +3,12 @@
     python install.py                 # 互動式：host / port / token
     python install.py --yes           # 全用預設值（token 自動生成）
 
-做四件事：
+做五件事：
 1. 在包內建立獨立 venv 並安裝 Hub 相依（不污染系統 Python）
 2. 產生 server/.env（host / port / token；token 預設自動生成高熵值）
 3. 要對外協作的話，順手把 cloudflared 抓下來備妥（之後開隧道就是一鍵）
-4. 印出啟動方式與要發給成員的連線資訊
+4. 寫下註冊檔 ~/.chatroom/host-kit.json，讓桌面 App 找得到這包
+5. 印出啟動方式與要發給成員的連線資訊
 
 之後：前景試跑用 scripts\\run-hub.cmd；要開機/登入自啟用
 `pwsh -File scripts/hub-service.ps1 install`；要讓內網外的 agent 連進來用
@@ -17,9 +18,11 @@ scripts\\run-tunnel.cmd（詳見 README）。
 from __future__ import annotations
 
 import argparse
+import json
 import secrets
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -29,6 +32,14 @@ KIT = Path(__file__).resolve().parent
 VENV = KIT / ".venv"
 ENV_FILE = KIT / "server" / ".env"
 DEPS = ["fastapi", "uvicorn[standard]", "aiosqlite", "python-multipart"]
+
+# 桌面 App 靠這份檔案知道「這台機器上有一包 Hub，它在哪裡」。
+#
+# ⚠️ **它只是一個指路牌，不是設定檔。** 真相仍在 server/.env 與實際跑著的
+# 進程裡——App 讀這裡拿到路徑，其餘一律現查。寫成第二份設定的話，兩邊
+# 遲早不一樣，而使用者會看到一個講得很篤定卻是錯的畫面。
+REGISTRY = Path.home() / ".chatroom" / "host-kit.json"
+
 
 
 def ask(prompt: str, default: str = "") -> str:
@@ -79,6 +90,39 @@ def prepare_tunnel() -> bool:
     return True
 
 
+def write_registry(host: str, port: str) -> None:
+    """寫下指路牌，讓桌面 App 認得這台機器上的 Hub。
+
+    **失敗不中止安裝**：沒有它只是 App 少一個分頁，Hub 本身照跑——
+    而 `install.py` 走到這裡時伺服器已經可以用了，為了一個便利設施把整個
+    安裝判成失敗，會讓人以為 Hub 沒裝好。
+    """
+    payload = {
+        "version": 1,
+        # App 需要的是**這一包在哪**，其餘（token、實際 host/port）它自己去
+        # 讀 server/.env——那份會被人手改，而改完不會有人回來更新這裡
+        "kit_root": str(KIT),
+        "env_file": str(ENV_FILE),
+        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # 只是給人看的線索，App 不可以拿它當現況——Hub 可能根本沒在跑
+        "installed_host": host,
+        "installed_port": port,
+    }
+    try:
+        REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+        # 先寫暫存再換名：中途失敗時留下的是舊的那份，不是半個 JSON。
+        # 一個解析不了的指路牌會讓 App 每次啟動都當成「壞了」而不是「沒有」
+        tmp = REGISTRY.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(REGISTRY)
+    except OSError as exc:
+        print(f"⚠️ 註冊檔寫不進去（{exc}）——桌面 App 會找不到這包 Hub，"
+              f"但 Hub 本身不受影響。手動建立：{REGISTRY}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Chatroom Hub 安裝器")
     p.add_argument("--host", help="綁定位址（0.0.0.0 = 所有介面；建議填 VPN 介面 IP）")
@@ -123,6 +167,7 @@ def main() -> None:
 
     ensure_venv()
     write_env(host, port, token)
+    write_registry(host, port)
     tunnel_ready = prepare_tunnel() if want_tunnel else False
 
     shown = host if host != "0.0.0.0" else "<這台機器的 IP>"
