@@ -96,6 +96,33 @@ def test_同一端重裝會更新它自己的時間(installer):
         "2020-01-01T00:00:00+00:00")
 
 
+def test_舊格式留下的_target_沒有時間就讓它沒有(installer):
+    """🔴 不要替它編一個時間（測試Novia 09/09 房 seq 204 實測的起點狀態）。
+
+    舊版安裝器沒有 `target_installed_at`，所以那筆 target 的時間**從來沒被
+    記過**。填今天的等於宣稱它剛剛被更新，填 `installed_at` 等於宣稱那是它的
+    安裝時刻——兩個都是編出來的，而且會讓人拿它去判斷「哪一端比較舊」時
+    得到相反的結論。顯示「不明」才是誠實的。
+    """
+    module, registry = installer
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(json.dumps({
+        "version": 1,
+        "kit_root": str(module.KIT_DIR),
+        "installed_at": "2026-09-01T00:00:00+00:00",
+        "targets": ["codex"],
+        # 舊格式：沒有 target_installed_at
+    }), encoding="utf-8")
+
+    module.write_registry(["claude"])
+    data = _read(registry)
+    assert data["targets"] == ["claude", "codex"]
+    assert "codex" not in data["target_installed_at"], (
+        "codex 的安裝時間從來沒被記過——補一個假的比留白更糟"
+    )
+    assert data["target_installed_at"]["claude"]
+
+
 def test_解到別的位置重裝就整份取代(installer, tmp_path):
     module, registry = installer
     module.write_registry(["claude", "codex"])

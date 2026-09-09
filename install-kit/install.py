@@ -498,6 +498,14 @@ def write_registry(targets: list[str]) -> None:
             # 這次沒裝的那些保留原本的時間，別假裝它們剛剛被更新過
             for key, value in stamps.items():
                 per_target.setdefault(str(key), str(value))
+        # ⚠️ **舊格式（沒有 target_installed_at）留下的 target 就是沒有時間，
+        # 不要替它補一個。** 那筆是上一版安裝器裝的，它的時間從來沒被記過
+        # ——填今天的等於宣稱它剛剛被更新，填舊的 installed_at 等於宣稱那是
+        # 它的安裝時刻，兩個都是編出來的。
+        #
+        # 顯示「不明」是誠實的，顯示一個錯的時間會讓人拿它去判斷「哪一端
+        # 比較舊」而得到相反的結論（測試Novia 09/09 房 seq 204 指出這一點
+        # 時，它還只是 setdefault 的副作用；現在它是刻意的）。
 
     payload = {
         "version": 1,
