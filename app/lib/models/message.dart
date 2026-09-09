@@ -27,6 +27,82 @@ class ReplyPreview {
       );
 }
 
+/// 一則訊息指涉到的一張卡（`#[標題]`）。
+///
+/// **兩層結構，兩件事**（契約 v1，09/09 房 seq 32）：
+/// [title] 是**發文當下的標題快照**——卡之後改名、被刪、被搬，訊息當時說的
+/// 是哪一張不該被之後的變動改寫；[preview] 是 Hub 讀取時現查的**現況**。
+@immutable
+class CardRef {
+  const CardRef({
+    required this.boardId,
+    required this.taskId,
+    required this.title,
+    required this.preview,
+  });
+
+  final String boardId;
+  final String taskId;
+
+  /// 發文當下的標題快照。
+  final String title;
+  final CardRefPreview preview;
+
+  factory CardRef.fromJson(Map<String, dynamic> json) => CardRef(
+        boardId: (json['board_id'] as String?) ?? '',
+        taskId: (json['task_id'] as String?) ?? '',
+        title: (json['title'] as String?) ?? '',
+        preview: CardRefPreview.fromJson(
+            (json['card_preview'] as Map?)?.cast<String, dynamic>() ?? const {}),
+      );
+}
+
+/// 被指涉那張卡的**現況**。
+@immutable
+class CardRefPreview {
+  const CardRefPreview({
+    this.status = 'ok',
+    this.title = '',
+    this.taskStatus = '',
+    this.movedTo = '',
+    this.checklistId = '',
+  });
+
+  /// `ok` / `deleted` / `moved` / `no_access`。
+  ///
+  /// ⚠️ **卡被刪或被搬時指涉不會被拿掉**——把 ref 從訊息裡移除是無聲地改寫
+  /// 歷史，比顯示「這張卡已刪除」糟得多。
+  final String status;
+
+  /// 該顯示的標題。**Hub 已經幫忙挑好了**：`ok` / `moved` 給現況標題，
+  /// `deleted` / `no_access` 給快照。所以 App 直接用它，不要自己再判一次
+  /// ——判兩次遲早有一邊不一樣，而那時畫面上看不出是誰對。
+  final String title;
+
+  /// 卡自己的狀態（todo / in_progress / done…），只有 `ok` 時有值。
+  final String taskStatus;
+  final String movedTo;
+  final String checklistId;
+
+  bool get isOk => status == 'ok';
+
+  /// chip 上要不要加狀態標記。
+  String get badge => switch (status) {
+        'deleted' => '已刪除',
+        'moved' => '已搬走',
+        'no_access' => '看不到',
+        _ => '',
+      };
+
+  factory CardRefPreview.fromJson(Map<String, dynamic> json) => CardRefPreview(
+        status: (json['status'] as String?) ?? 'ok',
+        title: (json['title'] as String?) ?? '',
+        taskStatus: (json['task_status'] as String?) ?? '',
+        movedTo: (json['moved_to'] as String?) ?? '',
+        checklistId: (json['checklist_id'] as String?) ?? '',
+      );
+}
+
 @immutable
 class Message {
   const Message({
@@ -40,6 +116,7 @@ class Message {
     this.senderName,
     this.mentions = const [],
     this.mentionGroups = const [],
+    this.cardRefs = const [],
     this.editedAt,
     this.replyTo,
     this.replyToSeq,
@@ -71,6 +148,12 @@ class Message {
   /// 舊版 Hub 不回這個欄位，缺了就是空清單：那時 [mentions] 本來也不會有
   /// 展開的結果，兩邊自然一致。
   final List<String> mentionGroups;
+
+  /// 這則訊息指涉到的板上卡片（`#[標題]`）。
+  ///
+  /// 舊版 Hub 不回這個欄位，所以預設空清單——那時內文裡的 `#[標題]` 只是
+  /// 普通文字，不會被標成 chip，而那正是正確的降級。
+  final List<CardRef> cardRefs;
 
   /// 這則被編輯過的時間；沒編輯過就是 null。
   ///
@@ -132,6 +215,9 @@ class Message {
             .toList(),
         mentionGroups: ((json['mention_groups'] as List?) ?? const [])
             .map((e) => e.toString())
+            .toList(),
+        cardRefs: ((json['card_refs'] as List?) ?? const [])
+            .map((e) => CardRef.fromJson((e as Map).cast<String, dynamic>()))
             .toList(),
         editedAt: json['edited_at'] as String?,
         replyTo: json['reply_to'] as String?,

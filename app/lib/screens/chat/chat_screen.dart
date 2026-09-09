@@ -321,6 +321,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 超高的圖片訊息）無限重跳會把畫面拖著上下跑，那比跳歪更糟。
   static const _focusMaxAttempts = 4;
 
+  /// `#` 的候選：本房掛接板上的卡。
+  ///
+  /// **build 與送出共用這一份**——兩邊各寫一次的話，畫面上選得到的卡與
+  /// 送出時認得的卡會慢慢分岔，而分岔的那些會變成 Hub 的 422（內文寫了
+  /// `#[標題]` 但 card_refs 沒帶），使用者完全看不出哪裡不對。
+  List<CardCandidate> _cardsFrom(BoardSnapshot? snap) {
+    if (snap == null) return const [];
+    return [
+      // 已刪除與已取消的不列：指涉一張不存在的卡沒有意義，而候選是
+      // 「現在可以指誰」，不是板的完整歷史
+      for (final t in snap.tasks.values)
+        if (!t.deleted && t.status != 'cancelled')
+          CardCandidate(
+            boardId: snap.boardId,
+            taskId: t.id,
+            title: t.title,
+            status: t.status,
+          ),
+    ];
+  }
+
+  /// 點了訊息裡的卡片指涉：導到那塊板並把那張卡打開。
+  ///
+  /// 走**板的權威路由**（`/boards/:boardId`）而不是房底下那條相容入口——
+  /// 板可以掛在多間房，被指涉的那張卡不一定屬於「從這間房進去」的視角。
+  void _openCardRef(CardRef ref) {
+    if (ref.boardId.isEmpty || ref.taskId.isEmpty) return;
+    context.go('/boards/${ref.boardId}?task=${ref.taskId}');
+  }
+
   Future<void> _focusOn(int seq) async {
     var feed = ref.read(roomFeedProvider(widget.roomId));
     // 先問一次「那則還在不在」，再決定要不要往回翻。一次請求換掉最多 30 輪
@@ -373,6 +403,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 沒有提示，看起來只是「跳歪了」。所以這裡改成**重跳到量得到為止**，
     // 有上限，用完了要說出來
     BuildContext? ctx;
+    // 迴圈中途目標整個消失（被刪、被捲出 feed）與「量不到位置」是兩件事，
+    // 給使用者的話也不一樣——共用一句的話，他會以為只是沒對準而一直重試
+    var vanished = false;
     for (var attempt = 0; attempt < _focusMaxAttempts; attempt++) {
       // 🔴 **每一輪都重新量目標在哪，不能沿用迴圈外算好的那份。**
       //
@@ -385,7 +418,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       feed = ref.read(roomFeedProvider(widget.roomId));
       final round = feed.messages.toList();
       final at = round.indexWhere((m) => m.seq == seq);
-      if (at < 0) break;
+      if (at < 0) {
+        vanished = true;
+        break;
+      }
       final fromBottom = round.length - 1 - at;
       // 「載入更早的訊息…」那格也佔一個 item，`itemCount` 與
       // `maxScrollExtent` 都含它——少算一格，比值就偏大一格
@@ -429,7 +465,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // 用完重試仍然量不到。**這裡一定要出聲**——安靜結束的話，使用者
       // 看到的是「跳到一個看起來不對的位置」，而那與功能壞掉分不出來
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('跳轉沒對準那則訊息，再往上捲一段後重試')),
+        SnackBar(
+          content: Text(vanished
+              ? '那則訊息已經不在這個聊天室裡了'
+              : '跳轉沒對準那則訊息，再往上捲一段後重試'),
+        ),
       );
     }
     if (!mounted) return;
@@ -590,6 +630,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             mentions: mentions,
             replyTo: _replyTarget?.id,
             attachmentIds: attachmentIds,
+            // 指涉**從內文回推**，不另外記使用者選過什麼。他可以手改內文、
+            // 把插好的 `#[標題]` 刪掉一半——那時「內文寫了什麼」是唯一還
+            // 算數的真相，而 Hub 的雙向驗證比對的也正是內文
+            cardRefs: extractCardRefs(
+              content,
+              _cardsFrom(ref.read(boardProvider(widget.roomId)).value),
+            ).map((c) => c.taskId).toList(),
           );
       _warnEmptyGroups(sent);
       _clearDraft();
@@ -1081,6 +1128,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 subagentOf: m.senderId == null
                                     ? null
                                     : subagentParentById[m.senderId],
+                                onTapCard: _openCardRef,
                               ),
                             ));
                           },
@@ -1169,22 +1217,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             // **已刪除與已取消的不列**——指涉一張不存在的卡沒有意義，而
             // 候選清單是「現在可以指誰」，不是板的完整歷史。板還沒讀進來
             // （或這個房沒掛板）時是空清單，那時 `#` 不會有任何反應
-            cards: [
-              for (final t in (ref.watch(boardProvider(widget.roomId)).value
-                          ?.tasks.values ??
-                      const <BoardTask>[]))
-                if (!t.deleted && t.status != 'cancelled')
-                  CardCandidate(
-                    boardId: ref
-                            .watch(boardProvider(widget.roomId))
-                            .value
-                            ?.boardId ??
-                        '',
-                    taskId: t.id,
-                    title: t.title,
-                    status: t.status,
-                  ),
-            ],
+            cards: _cardsFrom(ref.watch(boardProvider(widget.roomId)).value),
             members: activeMembers,
             enabled: !archived,
             replyTarget: _replyTarget,

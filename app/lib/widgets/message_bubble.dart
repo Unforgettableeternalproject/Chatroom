@@ -54,7 +54,11 @@ class MessageBubble extends StatelessWidget {
     this.token = '',
     this.participantId,
     this.subagentOf,
+    this.onTapCard,
   });
+
+  /// 點了內文裡的卡片指涉 chip。往上傳到畫面層去導覽——氣泡不知道路由
+  /// 這回事，就像它不知道 Hub 在哪一樣。
 
   final Message message;
 
@@ -67,6 +71,8 @@ class MessageBubble extends StatelessWidget {
   final bool isSelf;
   final String senderKind;
   final MessageActions? actions;
+
+  final void Function(CardRef)? onTapCard;
 
   /// 發話者是誰旗下的子代理（父層名字）；一般成員為 null。
   /// 子代理不是獨立的人，看到它說話卻不知道是誰派的，就無從判斷該不該信、
@@ -220,6 +226,8 @@ class MessageBubble extends StatelessWidget {
               // 群組要一起傳，否則正文裡的 `@agents` 是整則訊息中唯一
               // 沒被標起來的 mention——而它涵蓋的人最多
               mentionGroups: message.mentionGroups,
+              cardRefs: message.cardRefs,
+              onTapCard: onTapCard,
             ),
             // 群組 @ 的訊息，`mentions` 是 Hub 展開後的全房名單——照畫會在
             // 每則 `@all` 底下掛一整排名字。用 `mention_groups`（發話者原本

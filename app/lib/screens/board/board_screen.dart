@@ -31,9 +31,19 @@ import 'supervisor_panel.dart';
 /// 版面：左 Objective 清單／右單一 Objective 展開。Checklist 是可摺疊的垂直
 /// 區段，**不是看板欄**——三層樹用欄位切會讓「這個週期還剩什麼」散在畫面各處。
 class BoardScreen extends ConsumerStatefulWidget {
-  const BoardScreen({super.key, this.roomId, this.boardId})
-      : assert(roomId != null || boardId != null,
+  const BoardScreen({
+    super.key,
+    this.roomId,
+    this.boardId,
+    this.focusTaskId,
+  }) : assert(roomId != null || boardId != null,
             '要嘛從房間進來，要嘛直接指定一塊板');
+
+  /// 進來就要打開的那張卡（`?task=` — 訊息裡的 `#[標題]` 點進來時帶著）。
+  ///
+  /// 板還沒載進來時它指不到任何東西，那時抽屜先不出現；等資料到了、重建
+  /// 一次，抽屜自然就開了——**不需要等待邏輯**，因為 `_openTaskId` 留著。
+  final String? focusTaskId;
 
   /// 從哪間房進來的。`/boards/:id` 進來時是 null——**v2 起板可以一間房都
   /// 沒掛**，所以這裡不能是必填。
@@ -114,7 +124,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   final Set<String> _collapsed = {};
 
   /// 開著詳情抽屜的那張卡。
-  String? _openTaskId;
+  late String? _openTaskId = widget.focusTaskId;
 
   /// 剛剛認領失敗的卡 → 現任持有者。顯示在卡片上當成事實。
   final Map<String, String> _conflicts = {};

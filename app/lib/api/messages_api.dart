@@ -135,6 +135,7 @@ class MessagesApi {
     List<String> mentions = const [],
     String? replyTo,
     List<String> attachmentIds = const [],
+    List<String> cardRefs = const [],
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -145,6 +146,9 @@ class MessagesApi {
             'reply_to': ?replyTo,
             // 空陣列不送：舊版 Hub 沒有這個欄位，多送會被 pydantic 擋掉
             if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
+            // 同上。送的是 task_id 清單，Hub 自己去查標題並驗證內文有沒有
+            // 寫對應的 `#[標題]`——**不由 client 決定快照內容**
+            if (cardRefs.isNotEmpty) 'card_refs': cardRefs,
           },
           options: Options(headers: {'X-Participant-Id': participantId}),
         );

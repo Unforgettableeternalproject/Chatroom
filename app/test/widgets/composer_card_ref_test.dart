@@ -39,7 +39,7 @@ void main() {
               ),
             ],
             cards: cards,
-            onSend: (_, __) async {},
+            onSend: (_, _) async {},
           ),
         ),
       );

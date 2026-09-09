@@ -3,6 +3,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/message.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 
@@ -35,6 +36,8 @@ class UepMarkdownBody extends StatelessWidget {
     this.baseColor,
     this.mentions = const [],
     this.mentionGroups = const [],
+    this.cardRefs = const [],
+    this.onTapCard,
   });
 
   final String data;
@@ -51,6 +54,16 @@ class UepMarkdownBody extends StatelessWidget {
   /// 內文那個 `@agents` 永遠對不上任何一個名字，於是它是整則訊息裡
   /// **唯一沒有被標起來的 mention**，而它偏偏是涵蓋最廣的那個。
   final List<String> mentionGroups;
+
+  /// 這則訊息指涉到的卡：內文裡的 `#[標題]` 會渲染成可點的 chip。
+  ///
+  /// **只認這份清單裡的標題**，不做整段 `#[...]` 掃描——使用者自己打的
+  /// `#[買牛奶]` 沒有對應的卡，把它畫成 chip 等於承諾一個點不開的連結。
+  final List<CardRef> cardRefs;
+
+  /// 點了卡片 chip。`no_access` 與 `deleted` 的 chip 不會呼叫它——那兩種
+  /// 點過去只會看到一個空畫面，而使用者會以為是 App 壞了。
+  final void Function(CardRef)? onTapCard;
 
   /// 內文中要標成 chip 的所有 token：個別名字 ＋ 群組。
   ///
@@ -77,8 +90,12 @@ class UepMarkdownBody extends StatelessWidget {
       selectable: false,
       inlineSyntaxes: [
         if (_chipNames.isNotEmpty) _MentionSyntax(_chipNames),
+        if (cardRefs.isNotEmpty) _CardRefSyntax(cardRefs),
       ],
-      builders: {'uepMention': _MentionChipBuilder()},
+      builders: {
+        'uepMention': _MentionChipBuilder(),
+        'uepCardRef': _CardRefChipBuilder(cardRefs, onTapCard),
+      },
       styleSheet: MarkdownStyleSheet(
         p: UepText.serif(size: 14.5, color: ink),
         strong: UepText.serif(
@@ -179,6 +196,106 @@ class _MentionChipBuilder extends MarkdownElementBuilder {
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     return MentionChip(element.textContent);
+  }
+}
+
+/// 「`#[` + 這則訊息指涉到的任一卡片標題 + `]`」的比對式。
+///
+/// **字面是有界的**（契約 seq 44）：中文沒有空白可以當右邊界，裸標題比對會
+/// 讓 `#登入頁重構的問題` 同時中到 `#登入頁重構`。長的排前面，理由與
+/// [mentionPattern] 相同——短標題若是長標題的前綴，先比到短的就錯了。
+String cardRefPattern(List<CardRef> refs) {
+  final sorted = [...refs]
+    ..sort((a, b) => b.title.length.compareTo(a.title.length));
+  return r'#\[(?:' +
+      sorted.map((r) => RegExp.escape(r.title)).join('|') +
+      r')\]';
+}
+
+class _CardRefSyntax extends md.InlineSyntax {
+  _CardRefSyntax(List<CardRef> refs)
+      : super(cardRefPattern(refs), caseSensitive: true);
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    parser.addNode(md.Element.text('uepCardRef', match[0]!));
+    return true;
+  }
+}
+
+/// 卡片指涉 chip。
+///
+/// 標題直接用 `preview.title`——**Hub 已經依 status 挑好該顯示哪一個**
+/// （`ok`/`moved` 現況、`deleted`/`no_access` 快照）。App 再判一次的話，
+/// 兩邊的規則遲早會不一樣，而畫面上看不出是誰對。
+class CardRefChip extends StatelessWidget {
+  const CardRefChip(this.ref, {super.key, this.onTap});
+
+  final CardRef ref;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final preview = ref.preview;
+    // 現況不明的（刪掉、搬走、看不到）用灰的：它們仍然指著一段歷史，
+    // 但點過去沒有東西，顏色要先講出這件事
+    final tint = preview.isOk ? UepColors.gold : s.inkMute;
+    final label = preview.title.isEmpty ? ref.title : preview.title;
+    final chip = Container(
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: .10),
+        border: Border.all(color: tint.withValues(alpha: .45)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(
+            text: label,
+            style: UepText.sans(
+                    size: 12.5, weight: FontWeight.w600, color: tint)
+                .copyWith(height: 1.3),
+          ),
+          if (preview.badge.isNotEmpty)
+            TextSpan(
+              text: '（${preview.badge}）',
+              style: UepText.mono(size: 9.5, color: s.inkMute),
+            ),
+        ]),
+      ),
+    );
+    if (onTap == null) return chip;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: onTap, child: chip),
+    );
+  }
+}
+
+class _CardRefChipBuilder extends MarkdownElementBuilder {
+  _CardRefChipBuilder(this.refs, this.onTapCard);
+
+  final List<CardRef> refs;
+  final void Function(CardRef)? onTapCard;
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    // 從字面回推是哪一張。比對式是用這份清單建的，所以一定找得到；
+    // 找不到時退成純文字而不是丟例外——渲染路徑上不該有會炸的地方
+    final literal = element.textContent;
+    final title = literal.length >= 3
+        ? literal.substring(2, literal.length - 1)
+        : '';
+    final ref = refs.where((r) => r.title == title).firstOrNull;
+    if (ref == null) return Text(literal, style: preferredStyle);
+    final handler = onTapCard;
+    // 點不開的不給點：deleted 與 no_access 過去只會是一個空畫面
+    final tappable = handler != null &&
+        ref.preview.status != 'deleted' &&
+        ref.preview.status != 'no_access';
+    return CardRefChip(ref, onTap: tappable ? () => handler(ref) : null);
   }
 }
 

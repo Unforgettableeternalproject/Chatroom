@@ -52,8 +52,11 @@ GoRouter buildRouter(bool Function() isConfigured) {
           // 長在某一間房底下。房底下那條保留為相容入口。
           GoRoute(
             path: '/boards/:boardId',
-            builder: (context, state) =>
-                BoardScreen(boardId: state.pathParameters['boardId']!),
+            builder: (context, state) => BoardScreen(
+              boardId: state.pathParameters['boardId']!,
+              // 訊息裡的 `#[標題]` 點進來時帶著要打開的那張卡
+              focusTaskId: state.uri.queryParameters['task'],
+            ),
             routes: [
               // 想法板走板軸，不走房軸——它屬於板，而板活得比房久。
               GoRoute(
