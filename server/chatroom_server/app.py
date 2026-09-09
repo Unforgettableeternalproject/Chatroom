@@ -12,7 +12,6 @@ import json
 import logging
 import sqlite3
 import time
-import unicodedata
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -1441,13 +1440,6 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _card_ref_literal(title: str) -> str:
         return f"#[{title}]"
 
-    # 比對前一律 NFC。卡標題常帶 emoji 與中文，而內文與 DB 裡的字串可能是
-    # 不同的正規化形式（NFD 來自某些輸入法與 macOS 貼上）——**兩邊在畫面上
-    # 長得一模一樣，字串包含卻直接失敗**，而錯誤訊息會說「缺 #[標題]」。
-    # 使用者不可能自己排除那種錯。
-    # ZWJ 組成的 emoji 序列不受正規化改動，兩邊都原樣，比得上
-    def _nfc(text: str) -> str:
-        return unicodedata.normalize("NFC", text)
 
 
     async def _resolve_card_refs(
@@ -1484,7 +1476,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         if len(seen) > 100:
             raise _err(422, "card_refs_field_limit",
                        f"card_refs 有 {len(seen)} 筆，超過欄位上限 100")
-        body = _nfc(content)
         # 反向檢查要不要做。真正比對哪些字面在下面用**板上的卡標題**去比，
         # 不從內文抓——用正則從內文抓 `#[...]` 的話，標題自己含 `]` 的卡
         # （`修復[A]問題` 這種寫法很自然）只會被抓成 `修復[A`，對不上任何
@@ -1525,9 +1516,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 差別也補不出來
         by_title: dict[str, list] = {}
         for r in board_rows:
-            by_title.setdefault(_nfc(r["title"]), []).append(r)
+            by_title.setdefault(r["title"], []).append(r)
+        # **一律原樣比對，不做 Unicode 正規化**（2026-09-09 裁定，方案②）。
+        #
+        # 曾經在這裡做 NFC，理由是「兩邊畫面上長得一樣、字串包含卻失敗」。
+        # 但那讓 Hub 認得 App 認不得的字面（Dart 核心沒有內建正規化），
+        # 於是板上標題是 NFC、使用者手打 NFD 字面時，Hub 要求帶 ref 而 App
+        # 給不出來，他從候選也選不回那個字面——又是一個死局。
+        #
+        # 同一條比對規則被 Hub／App／bridge 三端各自實作，**只要有一端不
+        # 一樣就會湊出死局**（今天咬過三次）。最小一致面優先於個別聰明。
+        #
+        # ⚠️ 已知代價：內文是 NFD、又明確帶了 ref 的訊息，從過變成擋
+        # （`card_ref_not_in_content`）。受害者是複製含 NFD 標題文字的
+        # agent，錯誤訊息裡有那句字形差異的提示
         matched = ({t: rows_ for t, rows_ in by_title.items()
-                    if _card_ref_literal(t) in body} if scan_orphans else {})
+                    if _card_ref_literal(t) in content} if scan_orphans else {})
         if len(matched) > 20:
             raise _err(422, "card_refs_too_many",
                        f"內文的卡片指涉有 {len(matched)} 個，超過上限 20——"
@@ -1552,10 +1556,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(422, "card_ref_not_available",
                            "指涉的卡片不存在，或不在這個房間掛接的板上")
             literal = _card_ref_literal(r["title"])
-            if _nfc(literal) not in body:
+            if literal not in content:
                 raise _err(422, "card_ref_not_in_content",
                            f"內文缺少這張卡的字面 {literal}——"
-                           "欄位有而內文沒有的話，純文字端看不出你在講哪張卡")
+                           "欄位有而內文沒有的話，純文字端看不出你在講哪張卡。"
+                           "字面看起來明明有寫的話，可能是輸入法或貼上造成的"
+                           "字形差異（同樣的字、不同的編碼形式）——從 # 候選"
+                           "重選一次那張卡，或直接複製卡片標題")
             out.append({"board_id": r["board_id"], "task_id": r["id"],
                         "title": r["title"]})
         taken = {t["task_id"] for t in out}
@@ -1567,9 +1574,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"內文寫了 {_card_ref_literal(r['title'])}，但"
                        f" card_refs 沒有帶這張卡（{r['id']}）——"
                        "看起來指了卡卻點不下去，是另一半的靜默失效。"
-                       "字面看起來明明有寫的話，可能是輸入法或貼上造成的"
-                       "字形差異（同樣的字、不同的編碼形式）——從 # 候選"
-                       "重選一次那張卡就會對上")
+                       "你是 agent 而手上的工具沒有 card_refs 參數的話，"
+                       "代表 bridge 進程比這個功能舊——它載的是啟動當時的"
+                       "程式碼，要重啟 MCP 進程才拿得到那個參數")
         return out
 
     async def _post_message(
@@ -10630,7 +10637,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         existing_refs = _row_card_refs(msg)
         for ref in existing_refs:
             literal = _card_ref_literal(ref.get("title", ""))
-            if _nfc(literal) not in _nfc(body.content):
+            if literal not in body.content:
                 raise _err(422, "card_ref_not_in_content",
                            f"內文不能拿掉 {literal}——這則訊息指涉著那張卡，"
                            "而指涉是不可編輯的")

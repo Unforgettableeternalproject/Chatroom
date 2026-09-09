@@ -225,24 +225,40 @@ async def test_literal_without_field_is_refused(tmp_path):
             assert ok.status_code == 200, ok.text
 
 
-async def test_nfc_normalisation_before_compare(tmp_path):
-    """內文與標題正規化形式不同時仍要對得上。
+async def test_no_unicode_normalisation_anywhere(tmp_path):
+    """一律原樣比對，Hub 不做 NFC（2026-09-09 裁定，方案②）。
 
-    兩邊在畫面上長得一模一樣，字串包含卻失敗，而錯誤訊息說「缺 #[標題]」
-    ——使用者不可能自己排除那種錯。
+    做 NFC 的話 Hub 會認得 App 認不得的字面（Dart 核心沒有內建正規化），
+    於是板上標題 NFC、使用者手打 NFD 字面時，Hub 要求帶 ref 而 App 給不
+    出來，他從候選也選不回那個字面——死局。同一條比對規則三端各自實作，
+    只要有一端不一樣就會湊出死局，最小一致面優先。
+
+    已知代價（刻意接受）：內文是 NFD、又明確帶了 ref 的訊息從過變成擋。
     """
-    import unicodedata
+    import unicodedata as ud
 
-    app, client = await _client(tmp_path, "nfc")
+    app, client = await _client(tmp_path, "normalise")
     async with client:
         async with app.router.lifespan_context(app):
             rid, _, hdr = await _room_board(client)
-            title = "設計稿 café 版"          # NFC
+            title = ud.normalize("NFC", "ログイン画面のバグ")
+            assert ud.normalize("NFD", title) != title
             tid = await _task(client, rid, hdr, title)
-            decomposed = unicodedata.normalize("NFD", f"#[{title}]")
-            assert decomposed != f"#[{title}]", "這個標題要有可分解的字元"
-            r = await _post(client, rid, hdr, f"見 {decomposed}", [tid])
-            assert r.status_code == 200, r.text
+            nfd_body = "看 " + ud.normalize("NFD", f"#[{title}]")
+
+            # 反向：手打 NFD 字面、欄位空 ⇒ 兩端一致地不認得，照發
+            assert (await _post(client, rid, hdr, nfd_body, [])).status_code == 200
+
+            # 正向：NFD 內文 + 明確帶 ref ⇒ 擋（已知代價，不是漏擋）
+            r = await _post(client, rid, hdr, nfd_body, [tid])
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "card_ref_not_in_content"
+            # 錯誤要指向使用者改得動的東西
+            assert "字形差異" in r.json()["detail"]["message"]
+
+            # 原樣那條照樣通過
+            ok = await _post(client, rid, hdr, f"看 #[{title}]", [tid])
+            assert ok.status_code == 200, ok.text
 
 
 async def test_edit_cannot_add_an_orphan_literal(tmp_path):
