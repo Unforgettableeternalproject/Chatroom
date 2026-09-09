@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# golden 比對失敗時 flutter_test 產生的診斷圖。是除錯用的暫存物，
+# 不是產物——留在版控裡只會讓每次 golden 紅一次就多四個檔案。
+test/**/failures/
