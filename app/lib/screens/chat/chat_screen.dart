@@ -47,6 +47,7 @@ import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
 import '../../state/composer_attachments.dart';
 import '../../state/composer_drafts.dart';
+import '../../state/composer_history.dart';
 import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
@@ -1096,6 +1097,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             onTextChanged: (t) => ref
                 .read(composerDraftsProvider.notifier)
                 .set(widget.roomId, t),
+            // 上下鍵的歷史。**watch 不是 read**——每送出一則就多一筆，
+            // 用 read 的話輸入框手上會一直是進畫面當下的那一份
+            history: ref.watch(composerHistoryProvider)[widget.roomId] ??
+                const [],
+            onHistoryAdd: (t) =>
+                ref.read(composerHistoryProvider.notifier)
+                    .add(widget.roomId, t),
             members: activeMembers,
             enabled: !archived,
             replyTarget: _replyTarget,

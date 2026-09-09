@@ -63,6 +63,8 @@ class MessageComposer extends StatefulWidget {
     this.onRetryAttachment,
     this.initialText = '',
     this.onTextChanged,
+    this.history = const [],
+    this.onHistoryAdd,
     this.onDiagnostic,
   });
 
@@ -109,6 +111,17 @@ class MessageComposer extends StatefulWidget {
   /// 也就不該知道草稿該存到哪一格去。
   final ValueChanged<String>? onTextChanged;
 
+  /// 這個房間送出過的訊息，由舊到新。上下鍵遍歷的就是它。
+  ///
+  /// **與 [initialText] 不同，這個要持續 watch**——每送出一則就多一筆，
+  /// 而歷史的持有者在外層（見 `state/composer_history.dart`：存在 State
+  /// 裡的東西會隨換房整顆重建而消失）。
+  final List<String> history;
+
+  /// 送出成功後把內容交給外層記進歷史。時機是**送出成功之後**——失敗的
+  /// 那句話還在輸入框裡，先記進歷史等於同一句話同時在兩個地方。
+  final ValueChanged<String>? onHistoryAdd;
+
   @override
   State<MessageComposer> createState() => _MessageComposerState();
 }
@@ -129,6 +142,24 @@ class _MessageComposerState extends State<MessageComposer> {
   List<_MentionOption> _candidates = const [];
   int _mentionStart = -1;
   bool _sending = false;
+
+  /// 候選選單裡被選取的那一項。選單每次重新計算都回到 0——候選變了之後
+  /// 還停在第 3 項，選中的會是一個使用者沒看過的名字。
+  int _highlighted = 0;
+
+  /// 高亮項的捲動錨點。候選比選單高度多時，方向鍵一路往下會讓選取跑到
+  /// 看不見的地方，那時它等於沒有作用。
+  final _optionKeys = <int, GlobalKey>{};
+
+  /// 現在瀏覽到歷史的第幾則；`null` = 不在歷史裡，輸入框裝的是草稿。
+  int? _historyIndex;
+
+  /// 進歷史之前那句還沒說完的話。一路按 ↓ 回到底時要放回去——
+  /// 這與編輯模式的 [_stashedDraft] 是同一個道理，也是同一個教訓。
+  String _historyStash = '';
+
+  /// 正在把歷史內容塞進輸入框。這段期間 [_onTextChanged] 不做 @ 偵測。
+  bool _applyingHistory = false;
 
   /// 輸入框是否有內容。送出鈕的可用狀態靠它——直接在 build 讀 controller
   /// 的話，打字不會觸發重建，按鈕會一直停在剛進畫面時的狀態。
@@ -237,6 +268,13 @@ class _MessageComposerState extends State<MessageComposer> {
     if (!_editingBuffer) widget.onTextChanged?.call(text);
     final hasText = text.trim().isNotEmpty;
     if (hasText != _hasText) setState(() => _hasText = hasText);
+    // 歷史召回不是打字。這裡若照常往下走，一則含 `@某人` 的舊訊息會在被
+    // 叫回來的當下彈出候選選單，而選單一開就把方向鍵接管走了——使用者
+    // 按第二下 ↑ 會發現自己在選人名，不是在翻歷史
+    if (_applyingHistory) {
+      _hideMentions();
+      return;
+    }
     final cursor = _controller.selection.baseOffset;
     if (cursor < 0) {
       _hideMentions();
@@ -274,6 +312,8 @@ class _MessageComposerState extends State<MessageComposer> {
     setState(() {
       _mentionStart = at;
       _candidates = matches;
+      _highlighted = 0;
+      _optionKeys.clear();
     });
     _overlayController.show();
   }
@@ -296,6 +336,86 @@ class _MessageComposerState extends State<MessageComposer> {
     );
     _hideMentions();
     _focus.requestFocus();
+  }
+
+  /// 候選選單裡上下移動。**到頭就停住，不繞回去**——繞回去的選單在只有
+  /// 兩三個候選時會讓人以為自己按錯了方向。
+  void _moveHighlight(int delta) {
+    final next = (_highlighted + delta).clamp(0, _candidates.length - 1);
+    if (next == _highlighted) return;
+    setState(() => _highlighted = next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _optionKeys[next]?.currentContext;
+      if (ctx != null) Scrollable.ensureVisible(ctx, alignment: 0.5);
+    });
+  }
+
+  /// 上下鍵遍歷輸入歷史（終端機式）。回傳是否吃掉這個按鍵。
+  ///
+  /// **不吃的時候一定要回 false**，讓 TextField 拿去移動游標——六行的訊息
+  /// 如果連上下移動游標都做不到，這個功能就是在幫倒忙。
+  bool _travelHistory(bool down) {
+    // 編輯模式裡裝的是「要換掉的那則」，不是草稿。在那上面翻歷史會把
+    // 使用者正在改的訊息換掉，而他按下送出就是把別的內容蓋上去
+    //
+    // ⚠️ 兩個條件都要看。[_editingBuffer] 只在 didUpdateWidget 裡被設起來，
+    // 一開始就帶著 editTarget 進場的那顆 State 走不到那裡——旗標是假的，
+    // 而 widget.editTarget 是真相
+    if (_editingBuffer || widget.editTarget != null) return false;
+    final sel = _controller.selection;
+    // 有選取範圍時方向鍵是「取消選取並移動」，那是輸入框自己的事
+    if (!sel.isCollapsed || sel.baseOffset < 0) return false;
+    final text = _controller.text;
+    final offset = sel.baseOffset;
+    final history = widget.history;
+
+    if (!down) {
+      // 游標上面還有內容時，↑ 是「移到上一行」
+      if (text.substring(0, offset).contains('\n')) return false;
+      if (history.isEmpty) return false;
+      if (_historyIndex == null) {
+        _historyStash = text;
+        _historyIndex = history.length - 1;
+      } else if (_historyIndex! > 0) {
+        _historyIndex = _historyIndex! - 1;
+      } else {
+        // 已經在最舊那一則。吃掉按鍵但不動——放行的話游標會跳到開頭，
+        // 看起來像翻過頭了，其實只是沒有更舊的了
+        return true;
+      }
+      _applyHistory(history[_historyIndex!]);
+      return true;
+    }
+
+    // 游標下面還有內容時，↓ 是「移到下一行」
+    if (text.substring(offset).contains('\n')) return false;
+    // 不在歷史裡就沒有「下一則」可去
+    if (_historyIndex == null) return false;
+    if (_historyIndex! < history.length - 1) {
+      _historyIndex = _historyIndex! + 1;
+      _applyHistory(history[_historyIndex!]);
+    } else {
+      // 回到底：放回進歷史之前那句還沒說完的話
+      _historyIndex = null;
+      _applyHistory(_historyStash);
+      _historyStash = '';
+    }
+    return true;
+  }
+
+  void _applyHistory(String value) {
+    _applyingHistory = true;
+    _controller.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+    _applyingHistory = false;
+  }
+
+  /// 離開歷史瀏覽，回到「輸入框裡是草稿」的狀態。
+  void _resetHistory() {
+    _historyIndex = null;
+    _historyStash = '';
   }
 
   /// 送出時從文字內容萃取仍存在的 @成員 名單。
@@ -333,8 +453,13 @@ class _MessageComposerState extends State<MessageComposer> {
     try {
       await widget.onSend(content, _extractMentions(content));
       // ⚠️ 清空**在 await 之後**。放前面的話送出失敗那句話就沒了
+      //
+      // 記歷史也一樣要在這裡。送出失敗時那句話還在輸入框，先記的話它會
+      // 同時是「輸入框裡的字」與「歷史最後一則」，使用者按 ↑ 看到重複
+      widget.onHistoryAdd?.call(content);
       _controller.clear();
       _hideMentions();
+      _resetHistory();
     } catch (_) {
       // 送出端已經把訊息 toast 出來了，這裡只要**不清空**。
       //
@@ -350,7 +475,40 @@ class _MessageComposerState extends State<MessageComposer> {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // 方向鍵要吃長按重複（翻十則歷史不該按十次），其餘按鍵只認按下——
+    // Enter 若吃了 repeat，按著不放會把同一則送出好幾次
+    final key = event.logicalKey;
+    final isArrow = key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (event is! KeyDownEvent && !(isArrow && event is KeyRepeatEvent)) {
+      return KeyEventResult.ignored;
+    }
+
+    final menuOpen = _overlayController.isShowing && _candidates.isNotEmpty;
+
+    // 🔴 組字中的方向鍵是 IME 在選候選字，攔下來會讓中文打不完整
+    // （與底下 Enter 那條同一個理由）
+    final composing = _controller.value.composing.isValid;
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (!menuOpen) return KeyEventResult.ignored;
+      _hideMentions();
+      return KeyEventResult.handled;
+    }
+
+    if (isArrow && !composing) {
+      final down = key == LogicalKeyboardKey.arrowDown;
+      // 選單開著時方向鍵歸選單，關著才歸歷史。兩張卡共用同一組按鍵，
+      // 仲裁只有這一處——分散在兩邊各自判斷的話，總有一天會同時成立
+      if (menuOpen) {
+        _moveHighlight(down ? 1 : -1);
+        return KeyEventResult.handled;
+      }
+      return _travelHistory(down)
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
+
     final paste = widget.onPasteImage;
     if (paste != null &&
         event.logicalKey == LogicalKeyboardKey.keyV &&
@@ -362,8 +520,8 @@ class _MessageComposerState extends State<MessageComposer> {
       paste();
       return KeyEventResult.ignored;
     }
-    final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
-        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    final isEnter = key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter;
     if (!isEnter) return KeyEventResult.ignored;
     // 🔴 **輸入法正在組字時，Enter 是「選這個字」不是「送出」。**
     //
@@ -374,12 +532,14 @@ class _MessageComposerState extends State<MessageComposer> {
     //
     // `composing.isValid` 就是「現在有一段未確認的組字」。英數字打字時
     // 它一直是無效的，所以這道判斷不會影響原本的送出行為。
-    if (_controller.value.composing.isValid) return KeyEventResult.ignored;
+    if (composing) return KeyEventResult.ignored;
     if (HardwareKeyboard.instance.isShiftPressed) {
       return KeyEventResult.ignored; // SHIFT+ENTER → 換行
     }
-    if (_overlayController.isShowing && _candidates.isNotEmpty) {
-      _pickMention(_candidates.first);
+    if (menuOpen) {
+      // 選中的是高亮那一項，不是第一項——方向鍵移動過之後還選第一項，
+      // 等於方向鍵沒有作用
+      _pickMention(_candidates[_highlighted.clamp(0, _candidates.length - 1)]);
       return KeyEventResult.handled;
     }
     _send();
@@ -541,7 +701,7 @@ class _MessageComposerState extends State<MessageComposer> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      MonoLabel('ENTER 送出 · SHIFT+ENTER 換行',
+                      MonoLabel('ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史',
                           size: 8.5, letterSpacing: 1.2),
                     ],
                   ),
@@ -581,14 +741,19 @@ class _MessageComposerState extends State<MessageComposer> {
               shrinkWrap: true,
               padding: const EdgeInsets.all(5),
               children: [
-                for (final option in _candidates)
+                for (final (i, option) in _candidates.indexed)
                   InkWell(
+                    key: _optionKeys[i] ??= GlobalKey(),
                     borderRadius: BorderRadius.circular(5),
                     onTap: () => _pickMention(option),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 9, vertical: 7),
                       decoration: BoxDecoration(
+                        // 高亮那一項要看得出來——鍵盤選取如果沒有視覺回饋，
+                        // 使用者按 Enter 之前不知道自己選到誰
+                        color: i == _highlighted ? s.bgSunken : null,
+                        borderRadius: BorderRadius.circular(5),
                         border: Border(
                           left: BorderSide(
                               color: option.participant == null
