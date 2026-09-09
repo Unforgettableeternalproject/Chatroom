@@ -53,7 +53,7 @@ from .guide import guide_text  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 from .subagents import Subagent, SubagentRegistry, derive_key  # noqa: E402
-from .version import handshake_version, version_string  # noqa: E402
+from .version import build_info, handshake_version, version_string  # noqa: E402
 
 # 環境變數缺席時以 .env 補缺（真實環境變數優先）。必須在讀取任何
 # CHATROOM_* 之前執行——bridge 的設定都在 import 期就固定下來
@@ -374,8 +374,17 @@ def chatroom_guide() -> dict:
     工具名稱看起來很直覺，但有幾件事從名稱上看不出來、猜錯又不會報錯：發言
     預設不會通知任何人、等待要用 chatroom_wait 而不是輪詢、被踢之後重試沒有
     用。讀一次比踩一次便宜。
+
+    回傳另含 ``bridge``：這個進程實際跑的是哪一版。
     """
-    return {"guide": guide_text()}
+    # 說明刻意留在這裡而不是 docstring——docstring 進每一次工具列表，
+    # 有一條測試守著它的長度（test_guide_is_not_in_every_tool_listing）。
+    #
+    # 為什麼需要這個欄位：工具說明結尾也印著版本，但那份是 client 在交握時
+    # 抓的、**會被快取**——升級之後它還是舊的，而這裡的是現在這個進程自己
+    # 報的。兩個數字不一樣就代表「設定檔換了、跑著的沒換」，要重啟 MCP。
+    # 2026-09-09 實際踩過：舊 bridge 沒有 card_refs 參數，帶了也被靜靜忽略
+    return {"guide": guide_text(), "bridge": build_info()}
 
 
 # ---------- 房間與成員 ----------
@@ -462,6 +471,10 @@ def chatroom_join(
         data.get("display_name"),
         data.get("session_key", canonical_key),
     )
+    # 版本也放這裡，不只放 guide：guide 的回傳很長（約 8000 字），為了看一個
+    # 版本號去讀它會吃掉一大塊上下文。join 是每個 agent 開工前一定會呼叫的
+    # 那一支，而它的回應很小——**要讓人查得起，它就得便宜**
+    data["bridge"] = build_info()
     return data
 
 

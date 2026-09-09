@@ -59,3 +59,31 @@ def test_doc_matches_the_packaged_guide():
 def test_doc_is_a_bare_manual():
     """那份檔案要能直接被包成 skill，所以不放任何前言或產生器註解。"""
     assert _DOC.read_text(encoding="utf-8").startswith("# Chatroom 使用手冊")
+
+
+def test_guide_reports_the_running_build():
+    """實跑版本要從回應拿得到，不能只寫在工具說明裡。
+
+    工具說明結尾那份是 client 在交握時抓的、會被快取——升級之後它還是舊的。
+    「設定檔換了、跑著的沒換」這個落差**沒有任何一條從回應拿得到的路**時，
+    症狀是新參數被靜靜忽略（2026-09-09 實際踩過：舊 bridge 沒有 card_refs）。
+    """
+    info = srv.chatroom_guide()["bridge"]
+    assert set(info) >= {"version", "commit", "built_at", "source"}
+    assert info["version"]
+
+
+def test_join_also_reports_the_running_build(fake_hub):
+    """join 也帶版本——查得起，才有人會查。
+
+    guide 的回傳約 8000 字，為了看一個版本號去讀它會吃掉一大塊上下文。
+    join 是每個 agent 開工前一定會呼叫的那一支，而它的回應很小。
+    （@測試Novia 09/09 房 seq 193 提的取捨）
+    """
+    room = "room-guide"
+    fake_hub.json(
+        "POST", f"/api/rooms/{room}/join",
+        {"participant_id": "pid-1", "display_name": "Aster", "rejoined": False},
+    )
+    info = srv.chatroom_join(room)["bridge"]
+    assert set(info) >= {"version", "commit", "built_at", "source"}
