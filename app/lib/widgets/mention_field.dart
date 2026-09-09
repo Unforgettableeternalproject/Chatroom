@@ -45,7 +45,49 @@ List<String> extractMentions(String content, Iterable<String> memberNames) {
   return found.toList();
 }
 
-/// 訊息輸入區：回覆預覽 + @ 自動完成 + ENTER 送出 / SHIFT+ENTER 換行。
+/// `#` 候選的一張卡。
+///
+/// 輸入列是純呈現元件，不知道板的存在——所以候選由外層挑好傳進來，
+/// 這個型別只帶著送訊息時需要的三樣東西。
+@immutable
+class CardCandidate {
+  const CardCandidate({
+    required this.boardId,
+    required this.taskId,
+    required this.title,
+    this.status = '',
+  });
+
+  final String boardId;
+  final String taskId;
+
+  /// 卡的**現況**標題。送出時它會被抄成訊息裡的快照——之後卡改了名字，
+  /// 訊息裡那句話說的仍然是當時的那張（契約 v1，09/09 房 seq 32）。
+  final String title;
+  final String status;
+}
+
+/// 從送出內容萃取 `#[標題]` 指涉到的卡。
+///
+/// **字面是有界的 `#[標題]`，不是裸的 `#標題`**（契約 seq 44）：中文沒有
+/// 空白可以當右邊界，裸標題比對會把 `#登入頁重構的問題` 判成含有
+/// `#登入頁重構`，而往任何方向調都只是在「前綴誤放行」與「正常字句誤擋」
+/// 之間換一種錯。兩個括號換掉整類問題。
+///
+/// 依 task_id 去重：同一張卡在一則訊息裡提兩次，是一個指涉不是兩個。
+List<CardCandidate> extractCardRefs(
+  String content,
+  Iterable<CardCandidate> cards,
+) {
+  final found = <String, CardCandidate>{};
+  for (final card in cards) {
+    if (card.title.isEmpty) continue;
+    if (content.contains('#[${card.title}]')) found[card.taskId] = card;
+  }
+  return found.values.toList();
+}
+
+/// 訊息輸入區：回覆預覽 + @ / # 自動完成 + ENTER 送出 / SHIFT+ENTER 換行。
 class MessageComposer extends StatefulWidget {
   const MessageComposer({
     super.key,
@@ -65,6 +107,7 @@ class MessageComposer extends StatefulWidget {
     this.onTextChanged,
     this.history = const [],
     this.onHistoryAdd,
+    this.cards = const [],
     this.onDiagnostic,
   });
 
@@ -121,6 +164,13 @@ class MessageComposer extends StatefulWidget {
   /// 送出成功後把內容交給外層記進歷史。時機是**送出成功之後**——失敗的
   /// 那句話還在輸入框裡，先記進歷史等於同一句話同時在兩個地方。
   final ValueChanged<String>? onHistoryAdd;
+
+  /// `#` 的候選：**本房掛接板上的卡**。
+  ///
+  /// 空清單時 `#` 不會有任何反應——這個房沒有掛板，而契約限制指涉只能指
+  /// 本房掛接的板（標題快照會落在訊息裡，指到房外的板等於把那塊板的卡名
+  /// 洩進這個房，ACL 事後擋不掉已經寫死的快照）。
+  final List<CardCandidate> cards;
 
   @override
   State<MessageComposer> createState() => _MessageComposerState();
@@ -280,31 +330,57 @@ class _MessageComposerState extends State<MessageComposer> {
       _hideMentions();
       return;
     }
-    // 從游標往回找最近的 @，中間不能有空白/換行
+    // 從游標往回找觸發字元。
+    //
+    // ⚠️ **`@` 與 `#` 的邊界規則不一樣，不能共用一套。** 名字裡沒有空白，
+    // 所以 `@` 一遇到空白就該放棄；卡片標題本來就有空白（「釘選列表跳訊息：
+    // 訊息多的房間定位會偏」），`#` 遇空白就斷的話永遠比不到第二個字以後。
+    // 兩者都遇換行就斷。
     var at = -1;
+    var trigger = '';
+    var sawSpace = false;
     for (var i = cursor - 1; i >= 0; i--) {
       final c = text[i];
-      if (c == '@') {
+      if (c == '@' || c == '#') {
         at = i;
+        trigger = c;
         break;
       }
-      if (c == ' ' || c == '\n') break;
+      // `]` 是已經完成的 `#[標題]` 的右界。跨過它往回找，會讓游標停在
+      // 一個插好的指涉後面時又重新彈出選單
+      if (c == '\n' || c == ']') break;
+      if (c == ' ') sawSpace = true;
+      // 往回掃的距離要有上限，否則長訊息每打一個字都在掃整段
+      if (cursor - i > 60) break;
     }
-    if (at < 0) {
+    if (at < 0 || (trigger == '@' && sawSpace)) {
       _hideMentions();
       return;
     }
-    final fragment = text.substring(at + 1, cursor).toLowerCase();
-    final matches = <_MentionOption>[
-      // 群組排在前面：它們是少數幾個固定的名字，而成員清單會很長。
-      // 打了 `@a` 卻要捲過十個人名才看到 `all`，那個選單等於沒用
-      for (final entry in kMentionGroups.entries)
-        if (entry.key.startsWith(fragment))
-          _MentionOption.group(entry.key, entry.value),
-      for (final p in widget.members)
-        if (p.isActive && p.displayName.toLowerCase().startsWith(fragment))
-          _MentionOption.member(p),
-    ];
+    var fragment = text.substring(at + 1, cursor).toLowerCase();
+    // 使用者自己打了 `#[` 的話，`[` 不是要搜尋的字
+    if (trigger == '#' && fragment.startsWith('[')) {
+      fragment = fragment.substring(1);
+    }
+    final matches = trigger == '#'
+        ? <_MentionOption>[
+            // 卡片標題**用 contains 比對，不是 startsWith**：沒有人記得住
+            // 一張卡的開頭是什麼，記得住的是中間那幾個字
+            for (final card in widget.cards)
+              if (card.title.toLowerCase().contains(fragment))
+                _MentionOption.card(card),
+          ]
+        : <_MentionOption>[
+            // 群組排在前面：它們是少數幾個固定的名字，而成員清單會很長。
+            // 打了 `@a` 卻要捲過十個人名才看到 `all`，那個選單等於沒用
+            for (final entry in kMentionGroups.entries)
+              if (entry.key.startsWith(fragment))
+                _MentionOption.group(entry.key, entry.value),
+            for (final p in widget.members)
+              if (p.isActive &&
+                  p.displayName.toLowerCase().startsWith(fragment))
+                _MentionOption.member(p),
+          ];
     if (matches.isEmpty) {
       _hideMentions();
       return;
@@ -328,7 +404,10 @@ class _MessageComposerState extends State<MessageComposer> {
     final cursor = _controller.selection.baseOffset;
     final before = text.substring(0, _mentionStart);
     final after = text.substring(cursor);
-    final inserted = '@${option.name} ';
+    // 卡片指涉的字面是**有界**的 `#[標題]`（契約 seq 44）——中文沒有空白
+    // 可以當右邊界，沒有那兩個括號就沒有任何可靠的比對方式
+    final inserted =
+        option.card != null ? '#[${option.name}] ' : '@${option.name} ';
     _controller.value = TextEditingValue(
       text: '$before$inserted$after',
       selection:
@@ -757,8 +836,8 @@ class _MessageComposerState extends State<MessageComposer> {
                         border: Border(
                           left: BorderSide(
                               color: option.participant == null
-                                  // 群組不屬於任何 kind，用金色與人名區隔——
-                                  // 它叫到的是一群人，該看得出來不一樣
+                                  // 群組與卡片都不屬於任何 kind，用金色與
+                                  // 人名區隔——它們指到的不是一個人
                                   ? UepColors.gold
                                   : kindColor(option.participant!.kind,
                                       context: context),
@@ -766,14 +845,24 @@ class _MessageComposerState extends State<MessageComposer> {
                         ),
                       ),
                       child: Row(children: [
-                        Text(option.name,
-                            style: UepText.sans(
-                                size: 12.5,
-                                weight: FontWeight.w600,
-                                color: s.inkTitle)),
+                        Expanded(
+                          child: Text(option.name,
+                              // 卡片標題會長，一行放不下就截斷——換行會讓
+                              // 每一項高度不一，方向鍵捲動就跟著跳
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: UepText.sans(
+                                  size: 12.5,
+                                  weight: FontWeight.w600,
+                                  color: s.inkTitle)),
+                        ),
                         const SizedBox(width: 9),
                         if (option.participant case final p?)
                           KindBadge(kind: p.kind, compact: true)
+                        else if (option.card case final c?)
+                          Text(c.status,
+                              style:
+                                  UepText.mono(size: 9.5, color: s.inkMute))
                         else
                           Text(option.description,
                               style:
@@ -797,13 +886,22 @@ class _MessageComposerState extends State<MessageComposer> {
 class _MentionOption {
   const _MentionOption.member(Participant this.participant)
       : _groupName = null,
+        card = null,
         description = '';
   const _MentionOption.group(this._groupName, this.description)
-      : participant = null;
+      : participant = null,
+        card = null;
+  const _MentionOption.card(CardCandidate this.card)
+      : participant = null,
+        _groupName = null,
+        description = '';
 
   final Participant? participant;
   final String? _groupName;
+
+  /// 這一項是板上的一張卡（`#` 候選）；`@` 的候選為 null。
+  final CardCandidate? card;
   final String description;
 
-  String get name => participant?.displayName ?? _groupName!;
+  String get name => participant?.displayName ?? card?.title ?? _groupName!;
 }

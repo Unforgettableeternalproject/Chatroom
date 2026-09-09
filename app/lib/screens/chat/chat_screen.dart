@@ -1164,6 +1164,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             onHistoryAdd: (t) =>
                 ref.read(composerHistoryProvider.notifier)
                     .add(widget.roomId, t),
+            // `#` 的候選：本房掛接板上的卡。
+            //
+            // **已刪除與已取消的不列**——指涉一張不存在的卡沒有意義，而
+            // 候選清單是「現在可以指誰」，不是板的完整歷史。板還沒讀進來
+            // （或這個房沒掛板）時是空清單，那時 `#` 不會有任何反應
+            cards: [
+              for (final t in (ref.watch(boardProvider(widget.roomId)).value
+                          ?.tasks.values ??
+                      const <BoardTask>[]))
+                if (!t.deleted && t.status != 'cancelled')
+                  CardCandidate(
+                    boardId: ref
+                            .watch(boardProvider(widget.roomId))
+                            .value
+                            ?.boardId ??
+                        '',
+                    taskId: t.id,
+                    title: t.title,
+                    status: t.status,
+                  ),
+            ],
             members: activeMembers,
             enabled: !archived,
             replyTarget: _replyTarget,
