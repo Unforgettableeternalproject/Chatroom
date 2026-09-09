@@ -296,25 +296,29 @@ class _McpSection extends ConsumerWidget {
             _CopyRow(label: '連的 Hub', value: env.url),
           ],
           const SizedBox(height: 16),
-          _InstalledAt(kit: kit),
+          _VersionCheck(kit: kit),
         ],
       ),
     );
   }
 }
 
-/// 安裝時間，以及它為什麼在這裡。
+/// 版本對照：**已安裝的** bridge，與 agent **實際跑著的**那份。
 ///
-/// 🔴 **App 看不到 agent 的進程，所以「agent 認得那些工具了嗎」這一題
-/// 答不了。** 但那個落差真實存在而且咬過人：Claude Code 若在安裝之前就
-/// 開著，它連的是舊的 bridge——設定檔更新了，跑著的那個沒有
-/// （2026-09-09：舊 bridge 沒有 `card_refs` 參數，發文被 Hub 擋下，
-/// 而錯誤訊息指向他手上沒有的東西）。
+/// 🔴 App 看不到 agent 的進程，所以「agent 認得那些工具了嗎」這一題它答不了
+/// ——不畫燈是對的（畫綠燈會騙人：設定檔是新的、跑著的不是）。
 ///
-/// **答不了的事不要假裝答得了**：這裡不畫一盞燈，只把安裝時間講出來，
-/// 讓使用者自己對照——那是他答得出來而 App 答不出來的事。
-class _InstalledAt extends ConsumerWidget {
-  const _InstalledAt({required this.kit});
+/// ⚠️ 但第一版的提醒犯了今天反覆出現的那個錯：它寫「你的 agent 如果在安裝
+/// 之前就開著」——**而使用者不知道自己的 agent 是什麼時候開的**
+/// （Claude Code 與 Codex 都沒有顯示啟動時間）。那是要求他做一件他做不到的
+/// 比較，與「叫 agent 從 # 候選重選一次」是同一個形狀。
+///
+/// 改成測試Novia 提的判準（09/09 房 seq 170）：**讓 agent 自己說**。
+/// 每個 chatroom 工具的說明結尾都帶著 `〔bridge x.y.z+commit〕`，那是**跑著
+/// 的那份**自己報的，不是設定檔。把它與這裡顯示的已安裝版本擺在一起，
+/// 比對就成立——**而且比對的兩邊都是他看得到的東西**。
+class _VersionCheck extends ConsumerWidget {
+  const _VersionCheck({required this.kit});
 
   final McpKit kit;
 
@@ -323,7 +327,7 @@ class _InstalledAt extends ConsumerWidget {
     final s = context.uep;
     final version = ref.watch(mcpBridgeVersionProvider).value ?? '';
     final when = kit.installedAt.isEmpty
-        ? '（不知道）'
+        ? ''
         : kit.installedAt.replaceFirst('T', ' ').replaceFirst('+00:00', ' UTC');
 
     return Container(
@@ -336,39 +340,35 @@ class _InstalledAt extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            MonoLabel('安裝於', size: 9, letterSpacing: 1.4),
-            const SizedBox(width: 10),
-            Text(when, style: UepText.code(size: 11.5, color: s.inkSoft)),
-          ]),
-          if (version.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(children: [
-              MonoLabel('BRIDGE', size: 9, letterSpacing: 1.4),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(version,
-                    style: UepText.code(size: 11.5, color: s.inkSoft)),
-              ),
-            ]),
-          ],
-          if (kit.targets.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Row(children: [
-              MonoLabel('裝給', size: 9, letterSpacing: 1.4),
-              const SizedBox(width: 10),
-              Text(kit.targets.join('、'),
-                  style: UepText.code(size: 11.5, color: s.inkSoft)),
-            ]),
-          ],
+          MonoLabel('已安裝的 BRIDGE', size: 9, letterSpacing: 1.6),
+          const SizedBox(height: 5),
+          SelectableText(
+            version.isEmpty ? '讀不到（找不到 bridge/chatroom_mcp/_build.json）' : version,
+            style: UepText.code(
+                size: 13,
+                color: version.isEmpty ? s.inkMute : UepColors.gold),
+          ),
           const SizedBox(height: 10),
           Text(
-            '⚠️ 你的 Claude Code / Codex 如果在上面那個時間之前就開著，'
-            '它連的還是舊的 bridge——設定檔更新了，跑著的那個沒有。'
-            '症狀是工具少了新參數，而錯誤訊息會指向你手上沒有的東西。'
-            '重啟 agent 就會換過去。',
+            version.isEmpty
+                // 讀不到就不要給一個做不到的指示——講清楚少了什麼
+                ? '沒有這份檔案就對照不了版本。kit 解開之後沒有 .git，'
+                    '_build.json 是現場唯一可靠的版本來源；缺了它多半是解壓不完整。'
+                : '要確認 agent 跑的是不是這一份：讓它呼叫任何一個 chatroom 工具，'
+                    '工具說明的結尾會帶著它「實際跑著」的 bridge 版本。'
+                    '和上面這個不一樣，就是它還連著舊的——重啟 Claude Code / Codex。',
             style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.6),
           ),
+          const SizedBox(height: 10),
+          // 次要資訊：對照不上時拿來判斷「這包是什麼時候、裝給誰的」
+          Wrap(spacing: 18, runSpacing: 4, children: [
+            if (when.isNotEmpty)
+              Text('安裝於 $when',
+                  style: UepText.code(size: 10.5, color: s.inkMute)),
+            if (kit.targets.isNotEmpty)
+              Text('裝給 ${kit.targets.join('、')}',
+                  style: UepText.code(size: 10.5, color: s.inkMute)),
+          ]),
         ],
       ),
     );
