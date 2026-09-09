@@ -10,8 +10,10 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -287,6 +289,10 @@ class JoinRequest(BaseModel):
 class MessagePost(BaseModel):
     content: str = Field(min_length=1, max_length=32768)
     mentions: list[str] = []
+    # 訊息裡指涉的板上卡片。**只送 task_id**——board_id 與標題快照由 Hub
+    # 自己查，讓呼叫端送標題等於讓它自己宣告指到哪張卡，那個宣告沒有東西
+    # 擋得住。內文必須寫出對應的 `#[標題]`，否則 422
+    card_refs: list[str] = []
     reply_to: str | None = None
 
     @field_validator("reply_to", mode="before")
@@ -310,12 +316,13 @@ class AdminTransfer(BaseModel):
 class MessageEdit(BaseModel):
     """編輯只改內文。
 
-    `mentions` 明確接受但一律拒絕——不宣告的話 Pydantic 會安靜忽略它，而
-    呼叫端會以為 @ 改掉了。**收下再拒絕**，比假裝沒看到誠實。
+    `mentions` 與 `card_refs` 明確接受但一律拒絕——不宣告的話 Pydantic 會
+    安靜忽略它，而呼叫端會以為改掉了。**收下再拒絕**，比假裝沒看到誠實。
     """
 
     content: str = Field(min_length=1, max_length=32768)
     mentions: list[str] | None = None
+    card_refs: list[str] | None = None
 
 
 class AssignmentCreate(BaseModel):
@@ -1428,6 +1435,111 @@ def create_app(config: Config | None = None) -> FastAPI:
                     expanded.append(m)
         return expanded, groups, empty
 
+    # 訊息裡指涉一張卡的字面形式。**有界是刻意的**：中文沒有詞邊界，
+    # 子字串比對會讓 `#登入頁重構` 在 `#登入頁重構v2` 裡假通過，而往另一
+    # 邊調（要求後面接空白）又會讓 `#登入頁重構的問題` 這種正常句子被誤擋。
+    # 括號把範圍講死，比對式就只有一條，不必推測邊界。
+    def _card_ref_literal(title: str) -> str:
+        return f"#[{title}]"
+
+    # 比對前一律 NFC。卡標題常帶 emoji 與中文，而內文與 DB 裡的字串可能是
+    # 不同的正規化形式（NFD 來自某些輸入法與 macOS 貼上）——**兩邊在畫面上
+    # 長得一模一樣，字串包含卻直接失敗**，而錯誤訊息會說「缺 #[標題]」。
+    # 使用者不可能自己排除那種錯。
+    # ZWJ 組成的 emoji 序列不受正規化改動，兩邊都原樣，比得上
+    def _nfc(text: str) -> str:
+        return unicodedata.normalize("NFC", text)
+
+    # 內文裡「看起來是指涉」的字面。標題自己含 `]` 的話這條抓不到——
+    # 那是**已知的洞，而且只會漏放行不會誤擋**：反向檢查抓不到就等於沒查，
+    # 訊息照發，不會有人被擋在門外
+    _CARD_LITERAL_RE = re.compile(r"#\[([^\]]*)\]")
+
+    async def _resolve_card_refs(
+        room_id: str, content: str, task_ids: list[str] | None,
+    ) -> list[dict]:
+        """把 client 送來的 task_id 清單解析成落庫用的 card_refs。
+
+        **client 只送 task_id，board_id 與標題快照都由 Hub 自己查**——讓
+        呼叫端送標題等於讓它自己宣告指到哪張卡，那個宣告沒有東西擋得住。
+
+        三道驗證，全部在 Hub：卡存在、卡所屬的板正掛在這間房、內文確實
+        寫了 `#[標題]`。第三道是給純文字端的——bridge 與 watcher 沒有
+        chip 這條後路，欄位有而內文沒有的話，那則訊息對它們是沒有意義的。
+        """
+        seen: list[str] = []
+        for tid in (task_ids or []):
+            if tid and tid not in seen:
+                seen.append(tid)
+        if not seen:
+            return []
+        if len(seen) > 20:
+            raise _err(422, "card_refs_too_many", "一則訊息最多指涉 20 張卡")
+        db = app.state.db
+        board = await _board_for_room(room_id)
+        if board is None:
+            raise _err(422, "card_ref_board_not_attached",
+                       "這個房間目前沒有掛接任何板，不能指涉卡片")
+        marks = ",".join("?" for _ in seen)
+        rows = await (await db.execute(
+            f"SELECT id, board_id, title FROM board_task WHERE id IN ({marks})"
+            " AND deleted=0", tuple(seen),
+        )).fetchall()
+        found = {r["id"]: r for r in rows}
+        body = _nfc(content)
+        out = []
+        for tid in seen:
+            r = found.get(tid)
+            # 「不存在」與「存在但在別的板」講成同一句話是刻意的。分開報等於
+            # 給了一個探測器：拿別人的 task_id 打過來，兩種錯誤碼就能問出
+            # 「這張卡存在嗎」。**擋在這裡而不是 App**——標題快照會跟著訊息
+            # 落庫，指到房外的板等於把那塊板的卡名寫進這個房，事後的 ACL
+            # 擋不掉已經寫下的東西
+            if r is None or r["board_id"] != board["id"]:
+                raise _err(422, "card_ref_not_available",
+                           "指涉的卡片不存在，或不在這個房間掛接的板上")
+            literal = _card_ref_literal(r["title"])
+            if _nfc(literal) not in body:
+                raise _err(422, "card_ref_not_in_content",
+                           f"內文缺少這張卡的字面 {literal}——"
+                           "欄位有而內文沒有的話，純文字端看不出你在講哪張卡")
+            out.append({"board_id": r["board_id"], "task_id": r["id"],
+                        "title": r["title"]})
+        return out
+
+    async def _refuse_orphan_literals(room_id: str, content: str,
+                                      refs: list[dict]) -> None:
+        """內文寫了 `#[某卡]`、欄位卻沒帶它 ⇒ 擋下。
+
+        **這是 `mentions` 那個坑的鏡像面**：正向的漏是「欄位有、內文沒有」
+        （純文字端看不懂），反向的漏是「內文有、欄位沒有」——訊息看起來指
+        了一張卡，卻沒有 chip、沒有 preview、點不下去，而且不會有任何地方
+        報錯。兩個方向都要擋，只擋一邊等於留著另一半。
+
+        只認**確實對得上本房掛接板上某張卡標題**的字面。純粹湊巧寫成
+        `#[待辦]` 的一般句子不該被擋——那會讓一個沒人預期的形狀變成禁字。
+        """
+        if "#[" not in content:
+            return
+        titles = {_nfc(t) for t in _CARD_LITERAL_RE.findall(content)}
+        if not titles:
+            return
+        board = await _board_for_room(room_id)
+        if board is None:
+            return
+        taken = {_nfc(x["title"]) for x in refs}
+        rows = await (await app.state.db.execute(
+            "SELECT id, title FROM board_task WHERE board_id=? AND deleted=0",
+            (board["id"],),
+        )).fetchall()
+        for r in rows:
+            t = _nfc(r["title"])
+            if t in titles and t not in taken:
+                raise _err(422, "card_ref_field_missing",
+                           f"內文寫了 {_card_ref_literal(r['title'])}，但"
+                           f" card_refs 沒有帶這張卡（{r['id']}）——"
+                           "看起來指了卡卻點不下去，是另一半的靜默失效")
+
     async def _post_message(
         room_id: str,
         sender_id: str | None,
@@ -1437,8 +1549,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         reply_to: str | None = None,
         system_event: str = "",
         reply_mentions_author: bool = True,
+        card_refs: list[str] | None = None,
     ) -> dict:
         db = app.state.db
+        refs = await _resolve_card_refs(room_id, content, card_refs)
+        if kind == "chat":
+            # 系統訊息不走這條：它的內文是 Hub 自己組的，而使用者的話
+            # （例如被引用的訊息摘要）可能剛好含著某張卡的字面
+            await _refuse_orphan_literals(room_id, content, refs)
         effective, groups, empty_groups = await _expand_mention_groups(
             room_id, sender_id, list(mentions or []),
         )
@@ -1482,10 +1600,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         msg_id = _uid()
         await db.execute(
             "INSERT INTO message (id, room_id, seq, sender_id, kind, content,"
-            " mentions, mention_groups, reply_to, reply_to_seq, system_event,"
-            " created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " mentions, mention_groups, card_refs, reply_to, reply_to_seq,"
+            " system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, kind, content,
-             json.dumps(effective), json.dumps(groups), reply_to, reply_to_seq,
+             json.dumps(effective), json.dumps(groups),
+             json.dumps(refs, ensure_ascii=False), reply_to, reply_to_seq,
              system_event, _now()),
         )
         await _commit_with_retry(db)
@@ -1494,7 +1613,56 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 呼叫端的未解析檢查才不會漏掉自動加的那個名字
         return {"id": msg_id, "seq": seq, "mentions": effective,
                 "mention_groups": groups, "empty_groups": empty_groups,
-                "reply_to_seq": reply_to_seq}
+                "card_refs": refs, "reply_to_seq": reply_to_seq}
+
+    def _row_card_refs(r) -> list[dict]:
+        """舊訊息沒有這個欄位（舊 db 靠 migration 補，補之前讀得到列）。
+
+        缺席時當作「沒有指涉」，不是報錯——這與 mention_groups 的處置一致。
+        """
+        if "card_refs" not in r.keys():
+            return []
+        try:
+            v = json.loads(r["card_refs"] or "[]")
+        except (TypeError, ValueError):
+            return []
+        return v if isinstance(v, list) else []
+
+    def _card_refs_out(r, cards: dict, room_boards: dict) -> list[dict]:
+        """組出帶 card_preview 的 card_refs。
+
+        `status` 四種，對應 App 的 chip 呈現（契約第 3 條）：
+        `ok` 顯示現況標題，其餘三種退回快照標題並加狀態標記。
+
+        ⚠️ **不因為卡被刪／被搬就把 ref 拿掉**。訊息當時說了什麼是歷史，
+        改寫它比顯示「這張卡已刪除」糟得多。
+        """
+        out = []
+        for ref in _row_card_refs(r):
+            tid = ref.get("task_id", "")
+            snapshot = ref.get("title", "")
+            item = {"board_id": ref.get("board_id", ""), "task_id": tid,
+                    "title": snapshot}
+            c = cards.get(tid)
+            if c is None or c["deleted"]:
+                item["card_preview"] = {"status": "deleted", "title": snapshot}
+            elif room_boards.get(r["room_id"], "") != c["board_id"]:
+                # 板已從這間房解除掛接：卡還在，但這個房的人不再有權看它
+                item["card_preview"] = {"status": "no_access", "title": snapshot}
+            elif c["status"] == "moved":
+                item["card_preview"] = {
+                    "status": "moved", "title": c["title"],
+                    "moved_to": c["moved_to"],
+                    "checklist_id": c["checklist_id"],
+                }
+            else:
+                item["card_preview"] = {
+                    "status": "ok", "title": c["title"],
+                    "task_status": c["status"],
+                    "checklist_id": c["checklist_id"],
+                }
+            out.append(item)
+        return out
 
     async def _message_rows_to_json(rows, db) -> list[dict]:
         out = []
@@ -1524,6 +1692,33 @@ def create_app(config: Config | None = None) -> FastAPI:
                 tuple(reply_ids),
             )).fetchall()
             originals = {x["id"]: x for x in rrows}
+        # 卡片指涉的現況。**一批查一次**，理由同上面的 reply_preview——
+        # 每則訊息查一次會讓捲動歷史變成打散的 N 次查詢，而它們全走同一條
+        # aiosqlite 連線。App 也不該自己去板上查：板快取與訊息流是兩條獨立
+        # 的水位線，被指涉的卡很可能根本不在 App 這輪的增量裡
+        cards: dict[str, object] = {}
+        # 房 → 目前掛接的板。指涉當下驗過同板，但板可以事後被解除掛接，
+        # 那時舊訊息的 chip 要退成 no_access，不能還讓人點進去
+        room_boards: dict[str, str] = {}
+        ref_ids = set()
+        for r in rows:
+            for ref in _row_card_refs(r):
+                ref_ids.add(ref.get("task_id", ""))
+        ref_ids.discard("")
+        if ref_ids:
+            marks = ",".join("?" for _ in ref_ids)
+            crows = await (await db.execute(
+                "SELECT id, board_id, checklist_id, title, status, moved_to,"
+                f" deleted FROM board_task WHERE id IN ({marks})",
+                tuple(ref_ids),
+            )).fetchall()
+            cards = {c["id"]: c for c in crows}
+            for room in {r["room_id"] for r in rows}:
+                brow = await (await db.execute(
+                    "SELECT board_id FROM board_room WHERE room_id=?"
+                    " AND detached_at IS NULL", (room,),
+                )).fetchone()
+                room_boards[room] = brow["board_id"] if brow else ""
         for r in rows:
             sender_name = names.get(r["sender_id"]) if r["sender_id"] else None
             reply_preview = None
@@ -1563,6 +1758,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "mention_groups": json.loads(
                     r["mention_groups"] if "mention_groups" in r.keys() else "[]"
                 ),
+                # 快照答「這則訊息當時指的是哪一張」，preview 答「它現在
+                # 怎麼了」。兩層都要：只有快照的話刪掉的卡會變成空 chip，
+                # 只有現況的話卡被改名就等於改寫了這則訊息說過的話
+                "card_refs": _card_refs_out(r, cards, room_boards),
                 "reply_to": r["reply_to"], "reply_to_seq": reply_to_seq,
                 "reply_preview": reply_preview,
                 "pinned": bool(r["pinned"]), "deleted": bool(r["deleted"]),
@@ -3464,7 +3663,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(422, "attachment_not_available",
                            "附件不存在、不屬於這個房間，或已經附在別的訊息上")
         result = await _post_message(
-            room_id, p["id"], body.content, mentions=body.mentions, reply_to=body.reply_to
+            room_id, p["id"], body.content, mentions=body.mentions,
+            reply_to=body.reply_to, card_refs=body.card_refs,
         )
         if body.attachment_ids:
             marks = ",".join("?" for _ in body.attachment_ids)
@@ -10370,6 +10570,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "編輯只能改內文。要 @ 新的人請發一則新訊息——改舊訊息"
                        "補 @ 不會叫醒任何人（喚醒只認新訊息），那是一種看不見"
                        "的失敗")
+        if body.card_refs is not None:
+            # 與 mentions 同一個理由，外加一個自己的：內文與 card_refs 的
+            # 一致性是發文時驗的，開放編輯就得在每次改文時重驗，而漏驗的
+            # 症狀是「欄位指著一張內文沒提到的卡」——純文字端完全看不出來
+            raise _err(422, "card_refs_not_editable",
+                       "編輯只能改內文。要改卡片指涉請發一則新訊息")
         if not body.content.strip():
             raise _err(422, "empty_content",
                        "內容不能是空白。清空一則訊息是撤回，那有自己的端點")
@@ -10379,12 +10585,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         msg = await (
             await db.execute(
-                "SELECT sender_id, deleted, kind FROM message WHERE id=?",
+                "SELECT sender_id, deleted, kind, card_refs FROM message"
+                " WHERE id=?",
                 (message_id,),
             )
         ).fetchone()
         if msg is None:
             raise _err(404, "message_not_found", "找不到這則訊息")
+        # 指涉不可編輯，但**改內文一樣打得破那個不變式**：把 `#[標題]` 刪掉
+        # 就得到「欄位指著一張內文沒提到的卡」——正是發文時擋下來的狀態，
+        # 只是換一條路徑進來。純文字端沒有 chip，看到的會是一則講不出在指
+        # 哪張卡的訊息
+        existing_refs = _row_card_refs(msg)
+        for ref in existing_refs:
+            literal = _card_ref_literal(ref.get("title", ""))
+            if _nfc(literal) not in _nfc(body.content):
+                raise _err(422, "card_ref_not_in_content",
+                           f"內文不能拿掉 {literal}——這則訊息指涉著那張卡，"
+                           "而指涉是不可編輯的")
+        # 反向也要守：改文時**加**一個字面同樣會做出「看起來指了卡卻點不下去」
+        # 的訊息，而指涉不可編輯代表它永遠補不上那個欄位
+        await _refuse_orphan_literals(room_id, body.content, existing_refs)
         # system 訊息不可編輯——即使 sender_id 是你。「Novia 加入了聊天室」
         # 掛在加入者名下，但那句話不是他說的，是房間對事實的紀錄。可編輯的話
         # 每個人都能改寫自己的進出紀錄

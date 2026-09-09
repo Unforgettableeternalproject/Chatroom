@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS message (
     -- mentions 存的是展開後的實名，UI 要靠這個欄位還原成一顆 @all chip——
     -- 否則畫面上會攤出一整排全房名單
     mention_groups TEXT NOT NULL DEFAULT '[]',
+    -- 訊息裡以 `#[卡片標題]` 指涉的板上卡片，JSON list of
+    -- {board_id, task_id, title}。title 是**發文當下的標題快照**，理由同
+    -- reply_to_seq：卡會被改名、被刪、被搬，而「這則訊息當時指的是哪一張」
+    -- 不該被之後的變動改寫。現況由讀取時現查的 card_preview 回答
+    card_refs  TEXT NOT NULL DEFAULT '[]',
     -- 最後一次編輯的時間；NULL = 沒被改過。只存時間戳不留歷史（見 MIGRATIONS）
     edited_at  TEXT,
     reply_to   TEXT,
@@ -695,6 +700,7 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # `edited_at`/`deleted` 這種黏著狀態會讓一次無關的釘選被報成
     # 「剛被編輯」。舊資料留空字串＝不知道，client 退回舊的推斷法
     ("message", "update_kind", "update_kind TEXT NOT NULL DEFAULT ''"),
+    ("message", "card_refs", "card_refs TEXT NOT NULL DEFAULT '[]'"),
     ("participant", "join_ip", "join_ip TEXT"),
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),

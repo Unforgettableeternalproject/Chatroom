@@ -694,6 +694,7 @@ def chatroom_post(
     content: str,
     mentions: list[str] | None = None,
     reply_to: str = "",
+    card_refs: list[str] | None = None,
     subagent: str = "",
 ) -> dict:
     """在聊天室發言。
@@ -711,6 +712,15 @@ def chatroom_post(
     「Novia-2」），挑錯就等於對著空氣說話。這種情況要用 ``active_names`` 裡的
     正確名字重發，不要以為訊息送到了。
 
+    ``card_refs`` 填板上卡片的 **task_id 列表**，讓訊息指向明確的那幾張卡。
+    ⚠️ **內文必須自己寫出對應的 ``#[卡片標題]``**，否則 422
+    ``card_ref_not_in_content``。這不是多餘的要求：欄位是給 App 畫 chip 用的，
+    而 bridge、watcher 這些純文字端只看得到內文——欄位有而內文沒有，對它們
+    就是一則講不出在指哪張卡的訊息。括號是字面的一部分（中文沒有詞邊界，
+    ``#登入頁重構`` 會在 ``#登入頁重構v2`` 裡假通過）。
+    只能指涉**這個房間目前掛接的板**上的卡；卡之後被刪或被搬，指涉不會消失，
+    讀取時由 ``card_preview.status`` 說明現況。
+
     ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，這則就以那個子
     agent 的身分發出。回傳的 ``identity_scope`` 是 ``"parent"`` 或
     ``"subagent"``——**發完檢查一下它**：漏帶 handle 不會報錯，訊息會掛在
@@ -725,10 +735,19 @@ def chatroom_post(
         json={
             "content": content,
             "mentions": mentions or [],
+            "card_refs": card_refs or [],
             "reply_to": reply_to or None,
         },
     )
     data.update(scope)
+    if card_refs and "card_refs" not in data:
+        # 舊 Hub 不認得這個欄位，而 FastAPI 預設**安靜忽略**多出來的欄位——
+        # 於是訊息發出去了、看起來成功，指涉整批消失。外部測試端的版本天然
+        # 落後，版本錯開是預設情境不是邊緣情境，所以這裡要當場講出來
+        raise RuntimeError(
+            "訊息已送出，但這台 Hub 不支援 card_refs——它把欄位丟掉了，"
+            "訊息裡沒有任何指涉。請先更新 Hub，或改用純文字說明是哪張卡。"
+        )
     if data.get("unresolved_mentions"):
         names = "、".join(data["unresolved_mentions"])
         data["warning"] = (
