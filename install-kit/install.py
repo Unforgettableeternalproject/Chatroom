@@ -466,6 +466,15 @@ def write_registry(targets: list[str]) -> None:
 
     每個 target 另外記自己的安裝時間——「哪一端比較舊」比「整包什麼時候裝的」
     有用得多，尤其在分兩次裝的機器上。
+
+    ⚠️ **時間欄位是有用途的，不是裝飾。** Claude Code / Codex 若在安裝之前
+    就開著，它連的是舊的 bridge 進程——設定檔更新了，跑著的那個沒有。
+    那個落差安裝器看得見、使用者看不見（2026-09-09 實際踩過：舊 bridge 沒有
+    `card_refs` 參數，發文被 Hub 擋下，而錯誤訊息指向他手上沒有的東西）。
+
+    ⚠️ 但**不要拿這個時間去要求使用者比較**——他不知道自己的 agent 是什麼
+    時候開的（Claude Code 與 Codex 都沒有顯示啟動時間）。它的用途是**診斷**
+    （出事時看「哪一端比較舊」），不是給使用者的判準。
     """
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     merged = sorted(targets)
