@@ -146,9 +146,15 @@ class MessageBubble extends StatelessWidget {
       ],
     );
 
+    // key 是給測試量位置用的：「光暈有沒有貼合氣泡」只能靠比對兩個
+    // RenderBox 的邊界來驗，沒有它就只能靠人看截圖——而這個缺陷正是
+    // 這樣溜過去的
+    const bodyKey = Key('bubble-body');
+
     final Widget body;
     if (message.deleted) {
       body = Container(
+        key: bodyKey,
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 9),
         decoration: BoxDecoration(
           border: Border.all(color: s.lineStrong, style: BorderStyle.solid),
@@ -159,6 +165,7 @@ class MessageBubble extends StatelessWidget {
       );
     } else {
       body = Container(
+        key: bodyKey,
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
         decoration: BoxDecoration(
           color: isSelf
@@ -242,11 +249,22 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    // 跳轉聚焦：呼吸，不是靜止的框。**它要能與釘選的常駐金框區分開**，
+    // 而兩者都是金色——會動的那個才是「你剛剛跳到這裡」
+    //
+    // 🔴 **包的是 [body]，不是外面那層左軸。** 呼吸框用 `Positioned.fill`
+    // 貼合它 child 的尺寸，而別人的訊息在 body 外面還有一層左軸 +
+    // `14 - axisWidth` 的內距——包在那層上，框會整整往左多出 14px，看起來
+    // 就是「光暈沒有貼合氣泡」。自己的訊息沒有那一層，所以同一份程式碼在
+    // 自己的訊息上是準的，只有別人的偏——「有時候準」正是它被當成小瑕疵
+    // 放過的原因（艾斯維爾 09/09 房 seq 22 附圖）
+    final pulsed = highlighted ? _FocusPulse(child: body) : body;
+
     // 標記的成員左軸加粗到 5px，與整圈邊框、淡底一起構成強調。自己的
     // 訊息沒有左軸也不需要標記——不會有人在等自己回話
     final axisWidth = memberHighlighted ? 5.0 : 2.0;
-    final bubble = isSelf
-        ? body
+    final focused = isSelf
+        ? pulsed
         : Container(
             decoration: BoxDecoration(
               border: Border(
@@ -257,12 +275,8 @@ class MessageBubble extends StatelessWidget {
               ),
             ),
             padding: EdgeInsets.only(left: 14 - axisWidth),
-            child: body,
+            child: pulsed,
           );
-
-    // 跳轉聚焦：呼吸，不是靜止的框。**它要能與釘選的常駐金框區分開**，
-    // 而兩者都是金色——會動的那個才是「你剛剛跳到這裡」
-    final focused = highlighted ? _FocusPulse(child: bubble) : bubble;
 
     final column = Column(
       crossAxisAlignment:
@@ -525,6 +539,7 @@ class _FocusPulseState extends State<_FocusPulse>
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
+                key: const Key('focus-pulse-ring'),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(

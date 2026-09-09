@@ -52,6 +52,27 @@ import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
 
+/// 跳轉粗跳的落點估計。
+///
+/// **用已載入內容的實際總高度回推，不用寫死的每則高度。** 原本是
+/// `fromBottom * 96.0`——一行字約 60px、帶圖的氣泡好幾百，往回兩百則就
+/// 差出好幾個螢幕，而差到目標落在 build 範圍外時，精修那一步拿不到
+/// context，整個跳轉會安靜地停在錯的地方。
+///
+/// `maxExtent` 由 sliver 依已 build 的 children 量測後外推，所以每重跳一輪
+/// 它都更接近真值——這是重跳會收斂而不是碰運氣的原因。
+///
+/// [fromBottom] 目標距離最新一則有幾則（reverse list，0 = 最新）。
+double estimateFocusOffset({
+  required int fromBottom,
+  required int total,
+  required double maxExtent,
+}) {
+  if (total <= 1 || maxExtent <= 0 || fromBottom <= 0) return 0;
+  final ratio = fromBottom / (total - 1);
+  return (ratio * maxExtent).clamp(0.0, maxExtent);
+}
+
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key, required this.roomId, this.focusSeq});
 
@@ -296,6 +317,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// 粗跳最多試幾輪。**有上限是刻意的**：估計不收斂時（例如目標附近全是
+  /// 超高的圖片訊息）無限重跳會把畫面拖著上下跑，那比跳歪更糟。
+  static const _focusMaxAttempts = 4;
+
   Future<void> _focusOn(int seq) async {
     var feed = ref.read(roomFeedProvider(widget.roomId));
     // 先問一次「那則還在不在」，再決定要不要往回翻。一次請求換掉最多 30 輪
@@ -339,37 +364,56 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 先標記目標，_focusKey 才會掛到那一則上——精修那一步要靠它拿到 context
     setState(() => _highlightSeq = seq);
 
-    // 第一段：以估計高度粗跳。這個估計一定不準（一行字約 60px，帶圖片的
-    // 氣泡好幾百），往回兩百則就差出好幾個螢幕；它的任務只是把目標帶進
-    // build 範圍，讓第二段有東西可以量
+    // 兩段式跳轉：粗跳把目標帶進 build 範圍，精修用它自己的高度對到畫面
+    // 中央。ensureVisible 對還沒 build 的 item 無效，所以第一段不能省。
+    //
+    // 🔴 **粗跳會失手，而原本沒有人檢查它有沒有成功**（艾斯維爾 09/09 房
+    // seq 22：訊息多的房間定位會偏）。失手時 `_focusKey.currentContext`
+    // 是 null，精修那一步被安靜跳過，畫面就停在粗跳落到的地方——沒有錯誤、
+    // 沒有提示，看起來只是「跳歪了」。所以這裡改成**重跳到量得到為止**，
+    // 有上限，用完了要說出來
     final fromBottom = list.length - 1 - index;
-    const estimatedExtent = 96.0;
-    final target = (fromBottom * estimatedExtent).clamp(
-      0.0,
-      _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0,
-    );
-    if (_scroll.hasClients) {
-      await _scroll.animateTo(
-        target,
-        duration: const Duration(milliseconds: 320),
-        curve: Curves.easeOut,
-      );
+    BuildContext? ctx;
+    for (var attempt = 0; attempt < _focusMaxAttempts; attempt++) {
+      if (_scroll.hasClients) {
+        await _scroll.animateTo(
+          estimateFocusOffset(
+            fromBottom: fromBottom,
+            total: list.length,
+            maxExtent: _scroll.position.maxScrollExtent,
+          ),
+          // 第一次給得從容一點（使用者看得出來畫面在移動），之後的重跳是
+          // 修正，拖長只會讓人覺得卡住
+          duration: Duration(milliseconds: attempt == 0 ? 320 : 160),
+          curve: Curves.easeOut,
+        );
+      }
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      // 跨了 endOfFrame 這個 async gap，所以要檢查的是**那個 context 自己**
+      // 還在不在（State.mounted 不能代答：目標訊息可能已經被捲出 build 範圍）
+      ctx = _focusKey.currentContext;
+      if (ctx != null && ctx.mounted) break;
+      ctx = null;
+      // 沒量到就再來一次。下一輪的 maxScrollExtent 已經吸收了這一輪捲過的
+      // 那段實際高度，估計會比上一輪準——這是收斂的來源，不是重試碰運氣
     }
 
-    // 第二段：目標真的被 build 出來之後，用它自己的高度精修到畫面中央。
-    // 兩段是必要的——ensureVisible 對還沒 build 的 item 無效，而粗跳的
-    // 誤差正好大到會讓目標落在 viewport 外
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
-    // 跨了 endOfFrame 這個 async gap，所以要檢查的是**那個 context 自己**
-    // 還在不在（State.mounted 不能代答：目標訊息可能已經被捲出 build 範圍）
-    final ctx = _focusKey.currentContext;
+    // `ctx.mounted` 在使用點再確認一次：迴圈裡那次檢查之後又跨了幾個
+    // await，而目標訊息隨時可能被捲出 build 範圍
     if (ctx != null && ctx.mounted) {
       await Scrollable.ensureVisible(
         ctx,
         alignment: 0.5,
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
+      );
+    } else {
+      if (!mounted) return;
+      // 用完重試仍然量不到。**這裡一定要出聲**——安靜結束的話，使用者
+      // 看到的是「跳到一個看起來不對的位置」，而那與功能壞掉分不出來
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('跳轉沒對準那則訊息，再往上捲一段後重試')),
       );
     }
     if (!mounted) return;
