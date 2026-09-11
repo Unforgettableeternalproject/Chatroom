@@ -454,13 +454,30 @@ class _TunnelSection extends ConsumerWidget {
                   label: t.hasUrl ? '再開一條' : '開隧道',
                   onPressed: () => _confirmTunnel(context, ref, actions),
                 ),
+                if (t.hasUrl) ...[
+                  const SizedBox(width: 10),
+                  // 🔴 這顆按鈕原本刻意不做，理由是「做一顆按鈕去殺別人的
+                  // 進程，會在殺錯的時候完全看不出來」。顧慮成立，但代價是
+                  // 使用者只剩「去把那個黑視窗關掉」一條路——而那條路沒有人
+                  // 告訴過他，於是他能做的只有「再開一條」，隧道越積越多。
+                  //
+                  // 解法不是不做，是讓它認得出殺的是誰：`stop-tunnel.py`
+                  // 比對 `.tunnel-pid` 記下的 PID 與它現在的命令列，對不上
+                  // 就拒絕動手。
+                  UepButton(
+                    small: true,
+                    variant: UepButtonVariant.outline,
+                    label: '關閉隧道',
+                    onPressed: () => _confirmStopTunnel(context, ref),
+                  ),
+                ],
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    // 「關」不放在這裡是刻意的：隧道活在自己的視窗裡，
-                    // 關掉那個視窗就是關隧道。做一顆按鈕去殺別人的進程，
-                    // 會在殺錯的時候完全看不出來
-                    '關隧道＝把那個隧道視窗關掉。',
+                    t.hasUrl
+                        ? '關掉那個隧道視窗也等於關閉。網址是臨時的，'
+                            '重開一定是新的網址。'
+                        : '開了之後這台 Hub 就在公網上，擋在前面的只有 token。',
                     style: UepText.serif(
                         size: 11.5, color: s.inkMute, height: 1.5),
                   ),
@@ -518,6 +535,54 @@ class _TunnelSection extends ConsumerWidget {
     // 立刻重讀只會看到「沒開」——那會讓人以為按了沒反應而再按一次
     await Future<void>.delayed(const Duration(seconds: 4));
     ref.invalidate(tunnelStatusProvider);
+  }
+
+  /// 關閉隧道。
+  ///
+  /// 要確認，但講的後果與開隧道那個不同：關掉之後**網址永久失效**，
+  /// 而外面的人手上拿的就是那個網址。重開會是新的一條，要重發給所有人。
+  Future<void> _confirmStopTunnel(BuildContext context, WidgetRef ref) async {
+    final s = context.uep;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text('關閉隧道',
+            style: UepText.serif(
+                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+        content: Text(
+          '現在那個網址會立刻失效，從外面連進來的人全部斷線。\n\n'
+          '重開會拿到**不一樣的**網址——你得再發一次給所有成員。'
+          '只是想換 token 或重啟 Hub 的話，不必關隧道。\n\n'
+          '內網與 VPN 的連線不受影響。',
+          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消',
+                style: UepText.serif(size: 13, color: s.inkMute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('關閉隧道',
+                style: UepText.serif(size: 13, color: UepColors.gold)),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+    final result = parseScriptResult(await actions.stopTunnel());
+    ref.invalidate(tunnelStatusProvider);
+    // 腳本拒絕動手時（PID 被重用、權限不足）要把理由講出來——
+    // 靜靜地什麼都沒發生，與成功關閉在畫面上長得一樣
+    ref.read(lastDataOpProvider.notifier).set({
+      'kind': 'tunnel_stop',
+      ...result,
+    });
   }
 }
 
@@ -740,6 +805,14 @@ class _DataSectionState extends ConsumerState<_DataSection> {
               label: _busy ? '執行中…' : '立即備份',
               onPressed: _busy ? () {} : _backup,
             ),
+            // 備份與還原要並排。**只有備份沒有還原，等於備份沒有出口**——
+            // 而那件事要到真的需要還原的那一天才會被發現
+            UepButton(
+              small: true,
+              variant: UepButtonVariant.outline,
+              label: '還原備份',
+              onPressed: _busy ? () {} : () => _pickAndRestore(context),
+            ),
             UepButton(
               small: true,
               variant: UepButtonVariant.outline,
@@ -751,7 +824,8 @@ class _DataSectionState extends ConsumerState<_DataSection> {
           Text(
             // 為什麼備份是兩份東西——這件事不講，還原的人會以為只要 db
             '備份會把資料庫與 attachments/ 一起收進 backups\\。'
-            '兩份缺一，還原後訊息都在、圖全變 410。',
+            '兩份缺一，還原後訊息都在、圖全變 410。'
+            '還原前 Hub 必須先停，而且會自動先備份現況。',
             style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
           ),
           if (last != null) ...[
@@ -776,6 +850,124 @@ class _DataSectionState extends ConsumerState<_DataSection> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 挑一份備份還原。
+  ///
+  /// 🔴 **清單是腳本給的，不是 UI 自己掃資料夾。** 掃資料夾的話「哪些算是
+  /// 一份備份」就有兩份判準（腳本一份、UI 一份），而它們分岔的那一刻
+  /// 沒有任何地方報錯——畫面上會出現一個腳本根本不肯還原的選項。
+  Future<void> _pickAndRestore(BuildContext context) async {
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+
+    setState(() => _busy = true);
+    List<dynamic> backups;
+    try {
+      final listed = parseScriptResult(await actions.listBackups());
+      if (listed['ok'] != true) {
+        ref.read(lastDataOpProvider.notifier).set({
+          'kind': 'restore', ...listed,
+        });
+        return;
+      }
+      backups = (listed['backups'] as List<dynamic>?) ?? const [];
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+
+    if (!context.mounted) return;
+    if (backups.isEmpty) {
+      ref.read(lastDataOpProvider.notifier).set({
+        'kind': 'restore',
+        'ok': false,
+        'error': '還沒有任何備份可以還原。先按一次「立即備份」。',
+      });
+      return;
+    }
+
+    final chosen = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => _RestorePicker(backups: backups),
+    );
+    if (chosen == null || !context.mounted) return;
+
+    final go = await _confirmRestore(context, chosen);
+    if (go != true) return;
+
+    setState(() => _busy = true);
+    try {
+      final raw = await actions.restoreBackup('${chosen['path']}');
+      ref.read(lastDataOpProvider.notifier).set({
+        'kind': 'restore',
+        ...parseScriptResult(raw),
+      });
+      // 資料換了，整頁的觀察結果全部過期
+      ref.invalidate(hostHealthProvider);
+      ref.invalidate(hostEnvProvider);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 還原的確認框。
+  ///
+  /// 講的後果與其他幾個都不同：**這是唯一會讓現有資料消失的操作**。
+  /// 所以除了後果，還要講那條退路在哪（腳本會先備份現況），
+  /// 否則「確定嗎」只會換來反射性的點下去。
+  Future<bool?> _confirmRestore(
+      BuildContext context, Map<String, dynamic> backup) {
+    final s = context.uep;
+    final complete = backup['complete'] == true;
+    final hasAttachments = backup['attachments_existed'] == true;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text('還原 ${backup['name']}',
+            style: UepText.serif(
+                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '現在的訊息、成員與附件會被這份備份**整個取代**。\n\n'
+              '還原之前會自動備份現況，拿錯備份時從那一份退回來。\n\n'
+              'Hub 必須先停——還在跑的話會中止，不會做一半。\n\n'
+              'server\\.env（token、port）不會被動到：還原的是資料，不是設定。',
+              style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+            ),
+            if (!complete || !hasAttachments) ...[
+              const SizedBox(height: 12),
+              Text(
+                !complete
+                    // 沒有 manifest 的那種要特別講：它不是這支腳本產的，
+                    // 裡面有什麼沒人知道
+                    ? '⚠️ 這份備份沒有 manifest，來歷不明。它裡面有什麼、'
+                        '完不完整，這裡答不出來。'
+                    : '⚠️ 這份備份不含附件。還原後訊息都在，但圖與檔案'
+                        '會變成「metadata 在、內容不在」（下載時回 410）。',
+                style: UepText.serif(
+                    size: 12.5, color: UepColors.errorText, height: 1.6),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消',
+                style: UepText.serif(size: 13, color: s.inkMute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('還原',
+                style: UepText.serif(size: 13, color: UepColors.gold)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 換 token 要確認——**它比停止 Hub 更難復原**。
@@ -837,6 +1029,63 @@ class _DataSectionState extends ConsumerState<_DataSection> {
 /// 🔴 **成功要說出範圍**：備份了幾個附件、多大。「備份完成」四個字
 /// 與「備份完成但附件一個都沒進去」在畫面上長得一樣，而它們的差別
 /// 要到還原那天才看得出來。
+/// 挑一份備份。
+///
+/// 清單直接來自 `restore.py --list`，**連「來歷不明」那種也照列**——
+/// 藏起來的話，使用者會在畫面上找不到一個他明明看得到資料夾的東西，
+/// 然後去猜是不是自己弄丟了。標記出來比消失好。
+class _RestorePicker extends StatelessWidget {
+  const _RestorePicker({required this.backups});
+
+  final List<dynamic> backups;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return AlertDialog(
+      backgroundColor: s.bgCard,
+      title: Text('要還原哪一份',
+          style: UepText.serif(
+              size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+      content: SizedBox(
+        width: 420,
+        child: ListView.separated(
+          shrinkWrap: true,
+          itemCount: backups.length,
+          separatorBuilder: (_, _) => Divider(height: 1, color: s.line),
+          itemBuilder: (ctx, i) {
+            final item = (backups[i] as Map).cast<String, dynamic>();
+            final complete = item['complete'] == true;
+            final files = item['attachment_files'] ?? 0;
+            final bytes = item['db_bytes'] ?? 0;
+            return ListTile(
+              dense: true,
+              title: Text('${item['name']}',
+                  style: UepText.code(size: 12, color: s.ink)),
+              subtitle: Text(
+                complete
+                    ? '資料庫 $bytes 位元組・附件 $files 個檔案'
+                    : '沒有 manifest，來歷不明',
+                style: UepText.serif(
+                    size: 11,
+                    color: complete ? s.inkMute : UepColors.errorText),
+              ),
+              onTap: () => Navigator.pop(ctx, item),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('取消',
+              style: UepText.serif(size: 13, color: s.inkMute)),
+        ),
+      ],
+    );
+  }
+}
+
 class _OpResult extends StatelessWidget {
   const _OpResult({required this.result});
 
@@ -859,6 +1108,31 @@ class _OpResult extends StatelessWidget {
           const SizedBox(height: 6),
           Text('還沒生效，要重啟 Hub。舊設定：${result['backup'] ?? ''}',
               style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
+        ],
+      );
+    }
+    if (result['kind'] == 'tunnel_stop') {
+      // ⚠️ 這裡的 ok:true 有兩種：真的關掉了，與「本來就沒有隧道」。
+      // 兩者都不是失敗，但講成同一句會讓人以為自己關掉了一條不存在的東西
+      return Text('${result['detail'] ?? ''}',
+          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
+    }
+    if (result['kind'] == 'restore') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('已還原：${result['restored_from'] ?? ''}',
+              style: UepText.code(size: 11.5, color: s.inkSoft)),
+          const SizedBox(height: 4),
+          // 退路要跟結果一起講。還原完才發現拿錯備份的人，需要的就是這一行
+          Text('還原前的現況備份在：${result['safety_backup'] ?? ''}',
+              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
+          if (result['attachments_restored'] != true) ...[
+            const SizedBox(height: 4),
+            Text('⚠️ 那份備份不含附件——圖與檔案現在會是 410。',
+                style: UepText.serif(
+                    size: 11.5, color: UepColors.errorText, height: 1.5)),
+          ],
         ],
       );
     }

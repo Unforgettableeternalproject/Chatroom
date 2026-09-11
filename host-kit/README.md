@@ -119,6 +119,14 @@ Hub 要**先跑著**——隧道只是轉發，不會替你把 Hub 叫起來。�
   舊設定留在 `server\.env.bak-<時間戳>`，要退回去時從那裡拿。
   ⚠️ 重啟前舊 token 照樣通、新的不通；重啟的**那一刻**所有 agent 與 App
   一起斷線，直到拿到新的那把。這不是可以順手做的事
+- **還原備份**：`.venv\Scripts\python.exe scripts\restore.py --list` 看有哪些，
+  再 `--from backups\<那一份>` 還原。
+  🔴 **Hub 必須先停**——SQLite 的檔案被開著時換掉，跑著的那個進程會把舊資料寫回去，
+  而**當下完全看不出來**，要到下次重啟才發現還原沒有生效。腳本會擋，但你該知道為什麼。
+  還原前會**自動先備份現況**（拿錯備份時的唯一退路），db 與 attachments 一起換。
+  ⚠️ `server\.env`（token、port）不會被動到：還原的是資料，不是設定。
+- **關閉隧道**：`.venv\Scripts\python.exe scripts\stop-tunnel.py`，
+  或直接把那個隧道視窗關掉。網址關掉就永久失效，重開一定是新的一條，要重發給所有人。
 - **停止 Hub**：`pwsh -File scripts\hub-service.ps1 stop`。
   它連**手動前景起的**那個也停得掉（殺所有 command line 含 `chatroom_server`
   的 python），不是只停排程

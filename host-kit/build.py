@@ -80,6 +80,8 @@ def main() -> None:
         # 時完全看不出來的落差
         "backup.py",
         "rotate-token.py",
+        "stop-tunnel.py",
+        "restore.py",
     ):
         shutil.copy2(REPO / "scripts" / name, stage / "scripts" / name)
 

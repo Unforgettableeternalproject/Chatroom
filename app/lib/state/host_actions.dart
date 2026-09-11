@@ -59,6 +59,24 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
     return TunnelStatus(ProbeState.ok, url, '隧道開著',
         caveat: '網址是臨時的——關掉視窗就失效，重開會是不一樣的網址');
   }
+
+  // 🔴 打不通的時候先問一句「Hub 還在嗎」。
+  //
+  // 原本這裡只講隧道的兩種可能，於是 Hub 沒跑的人會盯著隧道找原因——
+  // 而那是**這一頁答得出來的問題**：`hostHealthProvider` 知道本機 Hub 在不在。
+  // 「兩種可能，本機分不出來」在 Hub 已經停掉時是**假的**：分得出來，
+  // 只是沒有人去問。
+  final health = await ref.watch(hostHealthProvider.future);
+  if (health != null && health.process.state == ProbeState.bad) {
+    return TunnelStatus(
+      ProbeState.bad,
+      url,
+      '隧道還開著，但 Hub 沒有在跑',
+      caveat: '外面的人打這個網址會拿到 502／530——隧道把他們接過來了，'
+          '這一端卻沒有東西回應。先啟動 Hub；網址不必重開，它還是同一條。',
+    );
+  }
+
   return TunnelStatus(
     ProbeState.unknown,
     url,
@@ -140,6 +158,46 @@ class HostActions {
         ['/c', 'start', '', _script('run-tunnel.cmd')],
         mode: ProcessStartMode.detached,
         runInShell: true,
+      );
+
+  /// 關隧道。
+  ///
+  /// 🔴 這裡原本刻意**不做**這顆按鈕，理由是「做一顆按鈕去殺別人的進程，
+  /// 會在殺錯的時候完全看不出來」。那個顧慮成立，但它的解法不是不做，
+  /// 是讓它認得出自己殺的是誰——`tunnel.py` 現在把 cloudflared 的 PID 寫進
+  /// `server/.tunnel-pid`，`stop-tunnel.py` 殺之前會比對那個 PID 的命令列。
+  /// 對不上就拒絕動手（PID 會被系統重用，光看號碼不構成證據）。
+  ///
+  /// 不做的代價是使用者只剩「去把那個黑視窗關掉」一條路——而那條路
+  /// 從來沒有人告訴過他，跟「停止 Hub」原本的處境一模一樣。
+  Future<ProcessResult> stopTunnel() => Process.run(
+        _python,
+        [_script('stop-tunnel.py'), '--json'],
+        runInShell: true,
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
+      );
+
+  /// 有哪些備份可以還原。
+  Future<ProcessResult> listBackups() => Process.run(
+        _python,
+        [_script('restore.py'), '--list', '--json'],
+        runInShell: true,
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
+      );
+
+  /// 從某一份備份還原。
+  ///
+  /// ⚠️ 腳本自己擋著三件事（Hub 還在跑、備份打不開、沒先備份現況），
+  /// **UI 不重複實作那些判斷**——兩份判準會在某次改動後分岔，而分岔的那一刻
+  /// 沒有任何地方報錯。這裡只負責把結果講給使用者聽。
+  Future<ProcessResult> restoreBackup(String path) => Process.run(
+        _python,
+        [_script('restore.py'), '--from', path, '--json'],
+        runInShell: true,
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
       );
 
   Future<ProcessResult> service(String action) => Process.run(

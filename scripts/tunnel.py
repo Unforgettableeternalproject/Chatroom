@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
+import json
 import os
 import platform
 import re
@@ -42,6 +43,10 @@ ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / "server" / ".env"
 BIN_DIR = ROOT / "bin"
 URL_FILE = ROOT / "server" / ".tunnel-url"
+# 誰在跑這條隧道。**存在的唯一理由是「關掉它」要能認得出殺的是哪個進程**
+# ——單靠映像名 `cloudflared.exe` 不夠，這台機器上可能有別人的隧道在跑，
+# 而殺錯別人的隧道是那種當下完全看不出來的失敗。
+PID_FILE = ROOT / "server" / ".tunnel-pid"
 
 # 官方 release 的固定下載點（latest 永遠指向最新穩定版）
 RELEASE = "https://github.com/cloudflare/cloudflared/releases/latest/download"
@@ -422,6 +427,20 @@ def main() -> int:
         errors="replace",
         bufsize=1,
     )
+    # 先寫 PID 再等——網址要幾秒才出現，而使用者可能在那之前就想關掉它。
+    # 只寫 `.tunnel-url` 的話，那段空窗期關不掉（沒有東西指得出是哪個進程）
+    PID_FILE.write_text(
+        json.dumps(
+            {
+                "cloudflared": proc.pid,
+                "launcher": os.getpid(),
+                "target": f"http://{target}:{port}",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
     reader = threading.Thread(
         target=pump, args=(proc, token, port, target), daemon=True
     )
@@ -440,6 +459,7 @@ def main() -> int:
         return 0
     finally:
         URL_FILE.unlink(missing_ok=True)
+        PID_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
