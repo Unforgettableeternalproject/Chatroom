@@ -1,0 +1,80 @@
+# 每次 PR 與 develop／master 的推送都在**乾淨 checkout** 上重跑一次。
+#
+# 這才是這條 workflow 的用途：開發機上「自己跟自己比一定綠」的東西，
+# 只有在乾淨樹上重跑才會現形。2026-09-11 的 focus_pulse golden 就是這樣
+# 混進去的——產圖之後又動了實作，產圖那台機器上沒有任何時刻查得出來，
+# 直到兩天後有人跑完整 flutter test。
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, master]
+  push:
+    branches: [develop, master]
+
+# 同一條分支連推多次時，舊的跑一半就取消——省 runner，也避免看到過期結果
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    # ⚠️ 不要改成 ubuntu。Hub 實際跑在 Windows 上，而 bridge 的安裝器測試
+    # （test_install_capabilities）本來就在處理 Windows 專屬的路徑與行為。
+    # 這個 repo 是 public，Windows runner 不額外計費，沒有省的理由。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安裝依賴
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      # ⚠️ 不要在這裡指定 `tests/`。pytest.ini 的 testpaths 是
+      # `tests bridge/tests`，命令列一給路徑就會覆寫它，bridge 那半整批
+      # 不被收集——而「全綠」在當下完全屬實。2026-08-31 因此漏掉兩條紅燈。
+      - name: pytest
+        run: pytest -q
+
+  flutter:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本釘死：golden 對渲染極度敏感，Flutter 一升版就可能整批紅。
+      # 要升版時連同重產 golden 一起做，不要讓 CI 自己漂。
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: test（含 golden）
+        working-directory: app
+        run: flutter test
+
+      # 紅了要看得到差在哪。golden 失敗會在 test/**/failures/ 留下
+      # 三張圖（masterImage／testImage／isolatedDiff），只看百分比判斷不了
+      # 是渲染漂移還是真的畫錯。
+      - name: 上傳 golden 失敗的比對圖
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures
+          path: app/test/**/failures/
+          if-no-files-found: ignore
