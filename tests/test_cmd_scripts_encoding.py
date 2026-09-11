@@ -36,6 +36,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CMD_FILES = sorted((REPO / "scripts").glob("*.cmd"))
+# `.vbs` 同一個病：wscript 也是用系統 ANSI 碼頁讀檔，不是 UTF-8
+VBS_FILES = sorted((REPO / "scripts").glob("*.vbs"))
 
 
 def test_there_are_cmd_files_to_check():
@@ -72,3 +74,30 @@ def test_cmd_file_has_no_bom(path: Path):
         f"{path.name} 帶 UTF-8 BOM。cmd.exe 不認它，那三個位元組會黏在"
         "第一行前面讓那一行失效。"
     )
+
+
+def test_there_are_vbs_files_to_check():
+    """同樣先證明樣本存在——0 個檔案「全部通過」與真的沒問題長得一樣。"""
+    assert VBS_FILES, "scripts/ 底下找不到任何 .vbs，這條測試等於沒在測"
+
+
+@pytest.mark.parametrize("path", VBS_FILES, ids=lambda p: p.name)
+def test_vbs_file_is_pure_ascii(path: Path):
+    """`.vbs` 與 `.cmd` 同一個病：wscript 用系統 ANSI 碼頁讀檔。
+
+    差別只在後果的形狀——`.cmd` 的亂碼會被當成命令執行（看得到紅字），
+    `.vbs` 的亂碼多半直接是語法錯誤，而它跑在隱藏視窗裡，
+    **使用者只會看到「按了啟動 Hub 但什麼都沒發生」**，連錯誤訊息都沒有。
+    """
+    raw = path.read_bytes()
+    try:
+        raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        line_no = raw[:exc.start].count(b"\n") + 1
+        line = raw.split(b"\n")[line_no - 1].decode("utf-8", errors="replace")
+        pytest.fail(
+            f"{path.name} 第 {line_no} 行有非 ASCII 位元組 {raw[exc.start:exc.end]!r}：\n"
+            f"    {line.strip()}\n"
+            "wscript 用系統 ANSI 碼頁讀 .vbs，非 ASCII 會變亂碼。"
+            "而它跑在隱藏視窗裡，壞掉時使用者看不到任何錯誤。"
+        )

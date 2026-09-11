@@ -140,17 +140,34 @@ class HostActions {
   String get _python => '$_kitRoot${Platform.pathSeparator}.venv'
       '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe';
 
-  /// 前景啟動 Hub。
+  /// 無視窗啟動，而且**不綁這個 App**。
   ///
-  /// 🔴 **detached 是關鍵**：這個 App 只是遙控器，關掉它不能把伺服器一起帶走。
-  /// 不加這個旗標的話，Flutter 進程結束時子進程會跟著收掉——所有人在那一刻
-  /// 斷線，而按下按鈕的人完全不會預期關個視窗會發生這種事。
-  Future<void> startHub() => Process.start(
-        'cmd',
-        ['/c', 'start', '', _script('run-hub.cmd')],
+  /// 🔴 這兩件事必須同時成立，而 Windows 上從 Dart 做不到：
+  /// `ProcessStartMode.detached` 對應 `DETACHED_PROCESS`，而 console 程式用
+  /// 那個旗標啟動時會**自己配一個新 console**——那就是那個空的黑視窗。
+  /// `CREATE_NO_WINDOW` 才是要的，但 Dart 沒有開放那個旗標。
+  ///
+  /// 所以繞道 `wscript`（GUI 宿主）。2026-09-11 實測四種起法，只有這條的
+  /// `IsWindowVisible` 是 0，理由與數據寫在 `scripts/hidden-launch.vbs`。
+  ///
+  /// ⚠️ 隱藏之後 log 從方便升級成**唯一**的診斷來源。`run-hub.cmd` 已經把
+  /// stdout/stderr 導進 `logs\hub-YYYYMMDD.log`，那條路徑不能再被拿掉。
+  Future<void> _launchHidden(String script) => Process.start(
+        'wscript',
+        ['//nologo', _script('hidden-launch.vbs'), script],
         mode: ProcessStartMode.detached,
         runInShell: true,
       );
+
+  /// 前景啟動 Hub（無視窗）。
+  ///
+  /// 🔴 **不綁 App 是關鍵**：這個 App 只是遙控器，關掉它不能把伺服器一起帶走。
+  /// 所有人會在那一刻斷線，而按下按鈕的人完全不會預期關個視窗會發生這種事。
+  ///
+  /// 停止入口不再依賴這個視窗——`7f56a8a` 之後「停止 Hub」就在「啟動 Hub」
+  /// 旁邊。**順序很重要**：先隱藏視窗、後補停止鍵的話，中間會有一段
+  /// Hub 關不掉的空窗。
+  Future<void> startHub() => _launchHidden(_script('run-hub.cmd'));
 
   /// 開隧道。同樣 detached，理由同上。
   Future<void> startTunnel() => Process.start(

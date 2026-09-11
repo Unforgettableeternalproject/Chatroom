@@ -75,6 +75,8 @@ def main() -> None:
         "hub-service.ps1",
         "run-tunnel.cmd",
         "tunnel.py",
+        # 「啟動 Hub」是透過它起的（無視窗）。漏了這支，按鈕會靜默什麼都不做
+        "hidden-launch.vbs",
         # 主機控制台的「備份」與「換 token」呼叫的就是這兩支。漏掉它們的話
         # 開發機一切正常、主持人的 kit 按鈕按下去找不到檔案——而那是打包
         # 時完全看不出來的落差
