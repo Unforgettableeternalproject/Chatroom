@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -18,6 +19,8 @@ import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/invite_manager.dart';
 import '../../widgets/uep_button.dart';
+import '../../ws/ws_client.dart';
+import '../../ws/ws_protocol.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -127,6 +130,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final health = await api.health();
       final rooms = await api.list();
       dio.close();
+
+      // 🔴 **REST 通不代表連得上。**
+      //
+      // 這顆按鈕原本只打 REST，而 App 的即時通道走 WS——**兩條路徑的認證是
+      // 分開實作的**，分歧過兩次：08-29 的 access_token、09-07 的人類憑證，
+      // 兩次都是「REST 收、WS 不收」。
+      //
+      // 那種狀態下這顆按鈕會說「連線成功」，而 App 進去之後一直重連。
+      // 使用者看到的是「設定明明是對的」——**假綠燈比沒有燈更貴**，
+      // 因為它把人推離真正的原因。
+      //
+      // 所以這裡要走一次真的 WS 握手。成本是一個立刻關掉的連線。
+      final wsError = await probeWebSocket(url, token);
+      if (wsError != null) {
+        setState(() {
+          _testOk = false;
+          _testResult = wsError;
+        });
+        return;
+      }
+
       setState(() {
         _testOk = true;
         _testResult =
@@ -557,5 +581,46 @@ class _FieldLabel extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 7),
       child: MonoLabel(text, color: context.uep.inkSoft, letterSpacing: 1.4),
     );
+  }
+}
+
+/// 走一次真的 WS 握手。通了回 null，不通回一句給人看的話。
+///
+/// 🔴 **這是「測試連線」不再說謊的那一半。** 那顆按鈕原本只打 REST，而
+/// App 的即時通道走 WS——兩條路徑的認證是分開實作的，分歧過兩次
+/// （08-29 的 access_token、09-07 的人類憑證），兩次都是「REST 收、WS 不收」。
+/// 那種狀態下按鈕會說「連線成功」，而 App 進去之後一直重連。
+///
+/// ⚠️ **訊息要講「REST 通了但 WS 不通」而不是「連線失敗」**——後者會讓人
+/// 回去檢查網址與 token，而那兩樣剛剛才被證明是對的。把人送去查一個已經
+/// 排除掉的方向，比不講還糟。
+///
+/// `connector` 只為了測試而存在：真的開 socket 的話這條驗不了。
+Future<String?> probeWebSocket(
+  String url,
+  String token, {
+  WsConnector connector = defaultWsConnector,
+  Duration timeout = const Duration(seconds: 8),
+}) async {
+  try {
+    final conn = await connector(WsProtocol.wsUri(url, token)).timeout(timeout);
+    await conn.close();
+    return null;
+  } on TimeoutException {
+    return 'REST 通了，但即時通道（WebSocket）在 ${timeout.inSeconds} 秒內沒有握手成功。\n'
+        '網址與 token 是對的——問題在 WS 這條路徑上，'
+        '中間若有反向代理或隧道，確認它有轉發 WebSocket 升級。';
+  } on Object catch (e) {
+    // 4401 是 Hub 明確拒絕這張憑證。它與「網路不通」是完全不同的處置，
+    // 所以要分開講
+    final text = '$e';
+    final rejected = text.contains('4401') || text.contains('403');
+    return rejected
+        ? 'REST 通了，但即時通道拒絕了這張憑證（4401）。\n'
+            '這台 Hub 的 WS 與 REST 收的憑證不一致——'
+            '若 Hub 啟用了憑證分離，請確認用的是**人類**那把'
+            '（server/.env 的 CHATROOM_HUMAN_TOKEN）。'
+        : 'REST 通了，但即時通道連不上：$e\n'
+            '網址與 token 是對的，問題在 WS 這條路徑上。';
   }
 }
