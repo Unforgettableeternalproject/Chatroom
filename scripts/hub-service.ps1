@@ -84,7 +84,13 @@ switch ($Action) {
         Start-Sleep -Seconds 2
         $still = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
         if ($still) {
-            Write-Warning "埠 $Port 仍有監聽（PID $($still.OwningProcess)）——可能有手動啟動的 Hub，排程管不到它"
+            # 上面那段已經殺過**所有** command line 含 chatroom_server 的
+            # python，手動前景起的也在內——所以走到這裡不是「還有一個排程
+            # 管不到的 Hub」，而是更少見的兩種：殺不掉（那個進程屬於別的
+            # 使用者／需要提權），或占用這個埠的根本不是 Hub。
+            # 舊版這句寫「可能有手動啟動的 Hub，排程管不到它」，會讓人跑去
+            # 找一個剛剛才被殺掉的東西
+            Write-Warning "埠 $Port 仍有監聽（PID $($still.OwningProcess)）——Hub 進程已全部收掉，所以占用它的要嘛是權限不足殺不掉的進程，要嘛不是 Hub。用 Get-Process -Id $($still.OwningProcess) 看一下那是什麼"
         } else {
             Write-Output "已停止 $TaskName（觸發器已停用；start 會自動重新啟用）"
         }
