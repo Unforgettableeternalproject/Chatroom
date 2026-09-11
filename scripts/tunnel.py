@@ -153,9 +153,15 @@ def find_cloudflared(auto_download: bool) -> str:
     if local.exists():
         return str(local)
     if not auto_download:
+        # ⚠️ 這裡只有在使用者**自己加了 `--no-download`** 時才走得到，
+        # 所以不能叫他去加一個開啟下載的旗標——那個旗標不存在（下載是預設），
+        # 而且叫他加旗標等於叫他取消自己剛才的決定。講他實際做得到的事。
         raise SystemExit(
-            "找不到 cloudflared。加 --download 讓本腳本自動抓官方執行檔，"
-            "或自行安裝後重試。"
+            "找不到 cloudflared，而你指定了 --no-download。\n"
+            "  自己裝：https://developers.cloudflare.com/cloudflare-one/"
+            "connections/connect-networks/downloads/\n"
+            f"  或放一份到 {local_binary()}\n"
+            "  或拿掉 --no-download，讓本腳本抓官方執行檔（預設行為）"
         )
     url = f"{RELEASE}/{asset_name()}"
     BIN_DIR.mkdir(parents=True, exist_ok=True)
