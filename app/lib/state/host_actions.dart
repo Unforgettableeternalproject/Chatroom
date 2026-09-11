@@ -169,13 +169,13 @@ class HostActions {
   /// Hub 關不掉的空窗。
   Future<void> startHub() => _launchHidden(_script('run-hub.cmd'));
 
-  /// 開隧道。同樣 detached，理由同上。
-  Future<void> startTunnel() => Process.start(
-        'cmd',
-        ['/c', 'start', '', _script('run-tunnel.cmd')],
-        mode: ProcessStartMode.detached,
-        runInShell: true,
-      );
+  /// 開隧道。同樣無視窗、同樣不綁 App。
+  ///
+  /// ⚠️ 隱藏之後那個視窗就不再是網址的出口了。網址沒有消失——`tunnel.py`
+  /// 會寫 `server/.tunnel-url`，上面的隧道區塊讀的就是它；出錯時的細節在
+  /// `logs\tunnel-YYYYMMDD.log`（`run-tunnel.cmd` 只在隱藏啟動時重導向，
+  /// 雙擊執行仍然留在螢幕上並 pause）。
+  Future<void> startTunnel() => _launchHidden(_script('run-tunnel.cmd'));
 
   /// 關隧道。
   ///

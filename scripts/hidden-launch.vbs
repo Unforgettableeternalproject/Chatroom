@@ -26,6 +26,10 @@ If WScript.Arguments.Count = 0 Then
   WScript.Quit 1
 End If
 Set sh = CreateObject("WScript.Shell")
+' Tell the launched script it has no visible console. run-tunnel.cmd uses this
+' to skip its `pause` -- a pause inside a hidden window waits forever on a key
+' nobody can press, leaving an invisible cmd behind on every failed start.
+sh.Environment("PROCESS")("CHATROOM_HIDDEN") = "1"
 line = ""
 For i = 0 To WScript.Arguments.Count - 1
   line = line & """" & WScript.Arguments(i) & """ "
