@@ -69,6 +69,7 @@ final hostEnvProvider = FutureProvider<HostEnv?>((ref) async {
       host: values['CHATROOM_HOST'] ?? '',
       port: values['CHATROOM_PORT'] ?? '',
       token: values['CHATROOM_TOKEN'] ?? '',
+      humanToken: values['CHATROOM_HUMAN_TOKEN'] ?? '',
     );
   } on Object {
     return null;

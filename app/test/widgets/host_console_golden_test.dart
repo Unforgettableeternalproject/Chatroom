@@ -38,10 +38,14 @@ void main() {
               installedHost: '26.176.231.43',
               installedPort: '8787',
             )),
+        // 畫**憑證分離**的狀態：那是安裝器現在的預設，也是「發給成員」
+        // 那一區唯一會出現兩把鑰匙的樣子。legacy（只有一把）是過渡狀態，
+        // 新裝的 Hub 不會長那樣
         hostEnvProvider.overrideWith((ref) async => const HostEnv(
               host: '26.176.231.43',
               port: '8787',
-              token: 'demo-token-not-a-real-one',
+              token: 'demo-agent-token-not-real',
+              humanToken: 'demo-human-token-not-real',
             )),
         hostHealthProvider.overrideWith((ref) async => const HostHealth(
               process: Probe(ProbeState.ok, 'Hub 正在這台機器上跑'),

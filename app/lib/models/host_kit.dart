@@ -42,11 +42,33 @@ class HostKit {
 /// Hub 現在的設定，**每次都從 `server/.env` 現讀**。
 @immutable
 class HostEnv {
-  const HostEnv({this.host = '', this.port = '', this.token = ''});
+  const HostEnv({
+    this.host = '',
+    this.port = '',
+    this.token = '',
+    this.humanToken = '',
+  });
 
   final String host;
   final String port;
+
+  /// `CHATROOM_TOKEN`。**憑證分離之後這一把是 agent 用的**——它做得了
+  /// agent 該做的一切，但宣稱不了自己是人（開不了主持人模式、發不了邀請）。
   final String token;
+
+  /// `CHATROOM_HUMAN_TOKEN`。空字串＝這台 Hub 還沒啟用憑證分離
+  /// （`credential_mode: legacy`），那時上面那把仍然是萬用的。
+  final String humanToken;
+
+  /// 這台 Hub 有沒有啟用憑證分離。
+  ///
+  /// 判準與 server 端 `/api/health` 的 `credential_mode` 同源：有沒有設
+  /// 人類憑證。**不要用「App 拿的那把是不是 human」去推**——App 看不到
+  /// 自己那把的 audience（`invite_manager.dart` 記過這個限制）。
+  bool get credentialsSplit => humanToken.isNotEmpty;
+
+  /// 要發給**人**的那一把。分離前後都答得出來，呼叫端不必自己分支。
+  String get tokenForHumans => humanToken.isNotEmpty ? humanToken : token;
 
   /// 綁 `0.0.0.0` 表示所有介面都收，那時「位址」要顯示這台機器的實際 IP，
   /// 不是字面上的 0.0.0.0——沒有人連得到 0.0.0.0。

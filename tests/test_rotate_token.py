@@ -142,3 +142,48 @@ def test_missing_env_fails_loudly(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         rotate.rotate(repo=tmp_path)
+
+
+def test_human_flag_rotates_only_the_human_key(tmp_path: Path):
+    """🔴 換人類那把時，agent 那把一個字都不能動。
+
+    這條紅起來的樣子：主持人想換自己的鑰匙，結果所有 agent 一起斷線
+    ——而他完全不會預期那件事。反過來同樣成立。
+    """
+    rotate = load_rotate()
+    env_file = make_env(
+        tmp_path,
+        "CHATROOM_TOKEN=agent-key\nCHATROOM_HUMAN_TOKEN=human-key\n")
+
+    result = rotate.rotate(repo=tmp_path, key=rotate.HUMAN_KEY)
+    text = env_file.read_text(encoding="utf-8")
+
+    assert "CHATROOM_TOKEN=agent-key" in text, "agent 那把被動到了"
+    assert f"CHATROOM_HUMAN_TOKEN={result['token']}" in text
+    assert result["audience"] == "human"
+
+
+def test_default_rotates_the_agent_key_only(tmp_path: Path):
+    rotate = load_rotate()
+    env_file = make_env(
+        tmp_path,
+        "CHATROOM_TOKEN=agent-key\nCHATROOM_HUMAN_TOKEN=human-key\n")
+
+    result = rotate.rotate(repo=tmp_path)
+    text = env_file.read_text(encoding="utf-8")
+
+    assert "CHATROOM_HUMAN_TOKEN=human-key" in text, "人類那把被動到了"
+    assert f"CHATROOM_TOKEN={result['token']}" in text
+    assert result["audience"] == "agent"
+
+
+def test_result_says_which_key_it_changed(tmp_path: Path):
+    """只回 token 的話，呼叫端分不出這一串是誰的鑰匙——而發錯對象的
+    後果是把主持人的權力交出去。"""
+    rotate = load_rotate()
+    make_env(tmp_path, "CHATROOM_TOKEN=old\n")
+
+    result = rotate.rotate(repo=tmp_path)
+
+    assert result["key"] == "CHATROOM_TOKEN"
+    assert result["audience"] == "agent"

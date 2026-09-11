@@ -63,13 +63,71 @@ def ensure_venv() -> None:
     )
 
 
-def write_env(host: str, port: str, token: str) -> None:
-    ENV_FILE.write_text(
-        f"CHATROOM_HOST={host}\n"
-        f"CHATROOM_PORT={port}\n"
-        f"CHATROOM_TOKEN={token}\n",
-        encoding="utf-8",
-    )
+def read_env() -> dict[str, str]:
+    """現有的 `.env`。不存在就是空的。
+
+    解析規則與 server 端 `config.py`、`scripts/backup.py` 一致：忽略空行與
+    `#` 開頭，只切第一個 `=`（token 是 urlsafe base64，值裡可能還有 `=`）。
+    """
+    values: dict[str, str] = {}
+    if not ENV_FILE.exists():
+        return values
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        at = text.find("=")
+        if at <= 0:
+            continue
+        values[text[:at].strip()] = text[at + 1:].strip()
+    return values
+
+
+def update_env(updates: dict[str, str]) -> None:
+    """**只改指定的那幾個鍵，其餘原樣保留。**
+
+    🔴 這裡原本是整份覆寫（只寫 HOST/PORT/TOKEN 三行）。後果是主持人自己
+    加進 `.env` 的任何設定——`CHATROOM_PURGE_ARCHIVED_DAYS`、
+    `CHATROOM_IDLE_TIMEOUT`、附件目錄——**重跑一次安裝器就全部消失**，
+    而安裝器從頭到尾顯示成功。
+
+    它咬人的時機特別惡劣：重跑安裝器多半是因為「有什麼壞了想重裝看看」，
+    那時被清掉的設定正是可能與問題有關的那些。
+
+    註解與排列順序都保留：`.env` 是人會去讀、去改的檔案，把它重排一次
+    等於把使用者寫給自己的說明洗掉。
+    """
+    remaining = dict(updates)
+    out: list[str] = []
+
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines(keepends=True):
+            stripped = line.strip()
+            newline = "\n" if line.endswith("\n") else ""
+            key = ""
+            if stripped and not stripped.startswith("#"):
+                at = stripped.find("=")
+                if at > 0:
+                    key = stripped[:at].strip()
+            if key and key in remaining:
+                out.append(f"{key}={remaining.pop(key)}{newline}")
+            else:
+                out.append(line)
+
+    # 原本沒有的鍵補在檔尾。⚠️ 前一行沒有換行時要先補一個，否則兩個設定
+    # 會黏成 `CHATROOM_PORT=8787CHATROOM_TOKEN=...`——兩個同時失效，
+    # 而檔案看起來還是有內容的
+    if remaining:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        for key, value in remaining.items():
+            out.append(f"{key}={value}\n")
+
+    # 寫暫存檔再換上：直接 open(..,"w") 在寫到一半失敗時留下 0 位元組的
+    # `.env`，那時 Hub 起不來，而本來只是想重裝
+    tmp = ENV_FILE.with_name(ENV_FILE.name + ".tmp")
+    tmp.write_text("".join(out), encoding="utf-8")
+    tmp.replace(ENV_FILE)
     print(f"已寫入 {ENV_FILE}")
 
 
@@ -140,20 +198,33 @@ def main() -> None:
 
     print("=== Chatroom Hub 安裝 ===\n")
 
-    default_token = secrets.token_urlsafe(24)
+    # 🔴 **既有的值優先於新生成的。**
+    #
+    # 原本每次重跑都產一把新 token 當預設——而重跑安裝器是很常見的動作
+    # （升級、修東西、換設定）。照著按 Enter 就換掉了 token，**當場踢掉
+    # 所有成員與 agent**，而畫面上完全看不出剛剛發生了這件事。
+    #
+    # 要換 token 有專門的工具（`scripts/rotate-token.py`），它會備份舊值、
+    # 並講明每個人都要重拿。那才是換 token 該走的路。
+    existing = read_env()
+    default_token = existing.get("CHATROOM_TOKEN") or secrets.token_urlsafe(24)
+    default_host = existing.get("CHATROOM_HOST") or "0.0.0.0"
+    default_port = existing.get("CHATROOM_PORT") or "8787"
+    reusing_token = bool(existing.get("CHATROOM_TOKEN"))
+
     if args.yes:
-        host = args.host or "0.0.0.0"
-        port = args.port or "8787"
+        host = args.host or default_host
+        port = args.port or default_port
         token = args.token or default_token
     else:
-        host = args.host or ask("綁定位址（VPN 介面 IP 或 0.0.0.0）", "0.0.0.0")
-        port = args.port or ask("埠號", "8787")
-        token = args.token or ask("API token（直接 Enter 用自動生成值）", default_token)
-
-    if ENV_FILE.exists() and not args.yes:
-        keep = ask(f"{ENV_FILE.name} 已存在，要覆寫嗎？(y/N)", "N")
-        if keep.lower() != "y":
-            raise SystemExit("保留既有設定，安裝中止。重跑時加 --yes 可強制覆寫。")
+        if existing:
+            print(f"偵測到既有的 {ENV_FILE.name}——沒有動到的設定都會原樣保留。\n")
+        host = args.host or ask("綁定位址（VPN 介面 IP 或 0.0.0.0）", default_host)
+        port = args.port or ask("埠號", default_port)
+        token = args.token or ask(
+            "Agent token" + ("（直接 Enter 沿用現有的）" if reusing_token
+                             else "（直接 Enter 用自動生成值）"),
+            default_token)
 
     if args.tunnel is not None:
         want_tunnel = args.tunnel
@@ -165,8 +236,23 @@ def main() -> None:
             "Y",
         ).lower() != "n"
 
+    # 🔑 **人類主持人自己的鑰匙。**
+    #
+    # 沒有這一把的 Hub 是 `credential_mode: legacy`——整套憑證分離做好了
+    # 卻沒有啟用，因為安裝器從來沒產生過它。那等於它只對「知道有這個環境
+    # 變數的人」存在，而交付給外部人的包裡它不存在。
+    #
+    # 既有的優先：升級時補上新的那把，不動已經在用的那把。
+    human_token = existing.get("CHATROOM_HUMAN_TOKEN") or secrets.token_urlsafe(24)
+    newly_split = not existing.get("CHATROOM_HUMAN_TOKEN")
+
     ensure_venv()
-    write_env(host, port, token)
+    update_env({
+        "CHATROOM_HOST": host,
+        "CHATROOM_PORT": port,
+        "CHATROOM_TOKEN": token,
+        "CHATROOM_HUMAN_TOKEN": human_token,
+    })
     write_registry(host, port)
     tunnel_ready = prepare_tunnel() if want_tunnel else False
 
@@ -176,6 +262,15 @@ def main() -> None:
         if tunnel_ready
         else "對外協作（公網）：  scripts\\run-tunnel.cmd　← 首次執行會下載 cloudflared\n"
     )
+    # 升級到分離模式的那一刻要當場講。只寫進 README 的話，看到症狀的人
+    # 不會知道那是自己剛做的事造成的——他會以為升級把功能弄壞了
+    split_notice = "" if not newly_split else f"""
+⚠️ 這次安裝**啟用了憑證分離**（這台 Hub 原本沒有人類憑證）。
+
+   舊的那把 token 從現在起是 **agent 專用**——你自己的 App 若還填著它，
+   會失去「主持人模式」與「發邀請」的能力，錯誤訊息是 root_token_required。
+   **那不是故障，是換了鑰匙。** 請把 App 設定裡的 token 換成上面那把人類憑證。
+"""
     print(
         f"""
 ✅ 安裝完成。
@@ -184,14 +279,27 @@ def main() -> None:
 開機/登入自啟：    pwsh -File scripts/hub-service.ps1 install
 {tunnel_hint}健康檢查：         curl http://{shown}:{port}/api/health
 
-發給成員的連線資訊（搭配 chatroom-mcp-kit 安裝）：
-  Hub 位址：http://{shown}:{port}
-  Token   ：{token}
+Hub 位址：http://{shown}:{port}
 
+🔑 這台 Hub 有**兩把鑰匙，給的對象不同**：
+
+  給人（你自己的 App，以及其他用 App 的人）：
+    {human_token}
+    這一把才能開主持人模式、才能發邀請。
+
+  給 agent（裝 chatroom-mcp-kit 的那些）：
+    {token}
+    它做得了 agent 該做的一切，但**宣稱不了自己是人**。
+
+  ⚠️ 兩把都等同全權限讀取，只給信任的對象。**不要把人類那把發給 agent**
+  ——那等於把主持人的權力交出去。
+{split_notice}
 注意：
 - Windows 防火牆需放行 TCP {port}（第一次啟動時同意跳窗，或手動加入規則）
-- token 等同全權限，只給信任的成員；換 token 改 server/.env 後重啟 Hub
-- 資料庫檔 chatroom.db 會出現在 server/ 內，備份帶著它走
+- 要換 token 用 scripts\\rotate-token.py（會備份舊值並講明誰要重拿），
+  不要重跑這個安裝器——它現在會沿用既有的 token，不再每次換一把
+- 資料庫檔 chatroom.db 會出現在 server/ 內，備份用 scripts\\backup.py
+  （它連 attachments 一起收；直接複製 chatroom.db 會拿到缺資料的空殼）
 - 隧道要 Hub 已經跑著才有意義（它只是轉發），且**網址每次重開都會變**，
   要固定網址請照 README 改用 named tunnel
 """

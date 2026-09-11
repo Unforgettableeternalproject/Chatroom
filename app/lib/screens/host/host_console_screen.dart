@@ -256,12 +256,43 @@ class _ShareSection extends ConsumerWidget {
         children: [
           _CopyRow(label: 'Hub 位址', value: address),
           const SizedBox(height: 10),
-          _CopyRow(label: 'Token', value: env.token, secret: true),
-          const SizedBox(height: 14),
-          Text(
-            '成員把這兩行填進 chatroom-mcp-kit 的 install.py 提示即可。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
-          ),
+          // 🔴 **憑證分離之後這裡不能只有一把。**
+          //
+          // `CHATROOM_TOKEN` 從分離那一刻起是 **agent 專用**——拿它的人類
+          // 開不了主持人模式、發不了邀請，而錯誤訊息是 `root_token_required`，
+          // 看起來像「這台 Hub 不是你主持的」。主持人照著複製給人類成員，
+          // 對方會拿到一把宣稱不了自己是人的鑰匙。
+          //
+          // 分離前（legacy）只有一把而且是萬用的，那時多畫一個欄位只會
+          // 讓人以為自己少了什麼東西——所以兩種狀態畫的不一樣。
+          if (env.credentialsSplit) ...[
+            _CopyRow(label: '給人的', value: env.humanToken, secret: true),
+            const SizedBox(height: 10),
+            _CopyRow(label: '給 agent', value: env.token, secret: true),
+            const SizedBox(height: 14),
+            Text(
+              '**兩把給的對象不同**：用 App 的人拿「給人的」那把——只有它'
+              '開得了主持人模式、發得了邀請；裝 chatroom-mcp-kit 的 agent '
+              '拿另一把。\n'
+              '⚠️ 不要把「給人的」發給 agent——那等於把主持人的權力交出去。',
+              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+            ),
+          ] else ...[
+            _CopyRow(label: 'Token', value: env.token, secret: true),
+            const SizedBox(height: 14),
+            Text(
+              '成員把這兩行填進 chatroom-mcp-kit 的 install.py 提示即可。',
+              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              // 講出來而不是靜靜地少一個功能：這台沒有人類憑證，所以
+              // 「誰是主持人」這件事現在只靠一把人人都有的鑰匙
+              '這台 Hub 還沒有人類專用憑證（credential_mode: legacy），'
+              '所以這一把是萬用的。重跑安裝器會補上分離用的那把。',
+              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+            ),
+          ],
           if (env.bindsAllInterfaces) ...[
             const SizedBox(height: 6),
             Text(

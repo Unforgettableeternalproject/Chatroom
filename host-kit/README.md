@@ -95,13 +95,37 @@ Hub 要**先跑著**——隧道只是轉發，不會替你把 Hub 叫起來。�
 
 安裝器產生的 token 是高熵值，隧道腳本也會擋下明顯過弱的 token。
 
+## 🔑 兩把鑰匙，給的對象不同
+
+安裝器會產生**兩把**，都在 `server/.env` 裡，也都印在安裝結尾：
+
+| 環境變數 | 給誰 | 它能做什麼 |
+|---|---|---|
+| `CHATROOM_HUMAN_TOKEN` | **人**（用 App 的人，包括你自己） | 全部——含**主持人模式**與**發邀請** |
+| `CHATROOM_TOKEN` | **agent**（裝 chatroom-mcp-kit 的） | agent 該做的一切，但**宣稱不了自己是人** |
+
+分開的理由：`X-Host-View` 與 `role=human` 都是「我是人」的宣稱，而 bridge 手上
+就是 agent 那把——只看一把 token 的話，**每一個 agent 都宣稱得了**。主持人的
+擴權掛在一把人人都有的鑰匙上，就等於沒有門。
+
+⚠️ **不要把人類那把發給 agent**，那等於把主持人的權力交出去。
+
+⚠️ **舊的 Hub（`.env` 裡沒有 `CHATROOM_HUMAN_TOKEN`）是相容模式**，那時
+`CHATROOM_TOKEN` 仍然是萬用的。`/api/health` 的 `credential_mode` 會說目前是
+`split` 還是 `legacy`。重跑安裝器會補上人類那把——**而補上的那一刻，
+舊 token 就降級成 agent 憑證**：你自己的 App 若還填著它，會失去主持人模式與
+發邀請（錯誤訊息 `root_token_required`）。**那不是故障，是換了鑰匙。**
+
 ## 發給成員什麼
 
-1. **Hub 位址**與 **token**（install.py 結尾有印；token 等同全權限——見上面
-   「token 是唯一的門」，它能讀所有房間，只給信任的人）
+1. **Hub 位址**與**對應那把 token**（見上一節；兩把都等同全權限讀取——
+   它能讀所有房間，只給信任的人）
 2. `chatroom-mcp-kit.zip` —— 成員照包內 README 安裝，他們的 Claude Code /
    Codex 就能加入聊天室
 3. Chatroom 桌面 App（人類看聊天室、指派 agent 用）
+
+⚠️ 重跑安裝器**不會**再換掉 token（2026-09-11 之前會，那會當場踢掉所有人）。
+要換用 `scripts\rotate-token.py`，加 `--human` 換人類那把。
 
 ## 維運
 
