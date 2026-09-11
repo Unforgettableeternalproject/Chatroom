@@ -37,9 +37,12 @@ class HostConsoleScreen extends ConsumerWidget {
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bgSoft,
+        // 與設定頁同一套：display 標題 + 底線。這頁原本用 mono 12 的小字
+        // 標題，在其他頁之間看起來像另一個 App 的畫面
+        surfaceTintColor: Colors.transparent,
+        shape: Border(bottom: BorderSide(color: s.line)),
         title: Text('這台機器',
-            style: UepText.mono(
-                size: 12, color: s.inkTitle, letterSpacing: 2.0)),
+            style: UepText.display(size: 22, color: s.inkTitle)),
         actions: [
           IconButton(
             tooltip: '重新檢查',
@@ -65,33 +68,52 @@ class HostConsoleScreen extends ConsumerWidget {
                 ),
               ),
             )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-              children: [
-                // 一個人可以同時是主持人與成員（多半就是），所以兩塊並存；
-                // 沒有的那一塊**整個不出現**，不是空著佔一個標題
-                if (mcp != null) ...[
-                  _McpSection(kit: mcp),
-                  const SizedBox(height: 28),
-                ],
-                if (kit != null) ...[
-                  _HealthSection(),
-                  const SizedBox(height: 28),
-                  _ShareSection(kit: kit),
-                  const SizedBox(height: 28),
-                  const _TunnelSection(),
-                  const SizedBox(height: 28),
-                  const _ControlSection(),
-                  const SizedBox(height: 28),
-                  const _DataSection(),
-                  const SizedBox(height: 28),
-                  _KitSection(kit: kit),
-                ],
-              ],
+          // 與設定頁同寬同內距（560／32）。原本滿寬 24 內距，在寬視窗上
+          // 每一行都拉到螢幕兩端——與其他頁擺在一起時最突兀的就是這件事
+          : Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: ListView(
+                  padding: const EdgeInsets.all(32),
+                  children: [
+                    // 一個人可以同時是主持人與成員（多半就是），所以兩塊並存；
+                    // 沒有的那一塊**整個不出現**，不是空著佔一個標題
+                    if (mcp != null) ...[
+                      _McpSection(kit: mcp),
+                      if (kit != null) _sep(s),
+                    ],
+                    if (kit != null) ...[
+                      _HealthSection(),
+                      _sep(s),
+                      _ShareSection(kit: kit),
+                      _sep(s),
+                      const _TunnelSection(),
+                      _sep(s),
+                      const _ControlSection(),
+                      _sep(s),
+                      const _DataSection(),
+                      _sep(s),
+                      _KitSection(kit: kit),
+                    ],
+                  ],
+                ),
+              ),
             ),
     );
   }
 }
+
+/// 區塊之間的分隔——與設定頁同一組間距（26／線／22）。
+///
+/// 用分隔線而不是把每塊包成有邊框的卡片：卡片在這頁會疊出七個框，
+/// 而設定頁是一條線分段。兩頁擺在一起時，框與線的差別比字級更顯眼。
+Widget _sep(UepSurface s) => Column(
+      children: [
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+      ],
+    );
 
 /// 三盞燈。
 class _HealthSection extends ConsumerWidget {
@@ -427,6 +449,8 @@ class _TunnelSection extends ConsumerWidget {
               const SizedBox(height: 14),
               Row(children: [
                 UepButton(
+                  small: true,
+                  variant: UepButtonVariant.outline,
                   label: t.hasUrl ? '再開一條' : '開隧道',
                   onPressed: () => _confirmTunnel(context, ref, actions),
                 ),
@@ -520,6 +544,7 @@ class _ControlSection extends ConsumerWidget {
           if (windows) ...[
             Row(children: [
               UepButton(
+                small: true,
                 label: '啟動 Hub',
                 onPressed: () async {
                   await actions.startHub();
@@ -535,6 +560,8 @@ class _ControlSection extends ConsumerWidget {
               // 「停掉排程」，於是前景起 Hub 的人只剩「去關那個黑視窗」
               // 這條路，而那條路從來沒有人告訴過他。
               UepButton(
+                small: true,
+                variant: UepButtonVariant.outline,
                 label: '停止 Hub',
                 onPressed: () => _confirmStop(context, ref),
               ),
@@ -564,10 +591,14 @@ class _ControlSection extends ConsumerWidget {
             const SizedBox(height: 10),
             Wrap(spacing: 10, runSpacing: 10, children: [
               UepButton(
+                small: true,
+                variant: UepButtonVariant.outline,
                 label: service?.registered == true ? '重新註冊' : '註冊',
                 onPressed: () => _runService(ref, 'install'),
               ),
               UepButton(
+                small: true,
+                variant: UepButtonVariant.outline,
                 label: '啟動',
                 onPressed: () => _runService(ref, 'start'),
               ),
@@ -576,6 +607,8 @@ class _ControlSection extends ConsumerWidget {
               // 這顆停的是排程、那顆停的是前景
               if (service?.registered == true)
                 UepButton(
+                  small: true,
+                  variant: UepButtonVariant.outline,
                   label: '取消註冊',
                   onPressed: () => _runService(ref, 'uninstall'),
                 ),
@@ -591,8 +624,16 @@ class _ControlSection extends ConsumerWidget {
             const SizedBox(height: 18),
           ],
           Wrap(spacing: 10, runSpacing: 10, children: [
-            UepButton(label: '開啟日誌資料夾', onPressed: actions.openLogs),
-            UepButton(label: '開啟備份資料夾', onPressed: actions.openBackups),
+            UepButton(
+                small: true,
+                variant: UepButtonVariant.outline,
+                label: '開啟日誌資料夾',
+                onPressed: actions.openLogs),
+            UepButton(
+                small: true,
+                variant: UepButtonVariant.outline,
+                label: '開啟備份資料夾',
+                onPressed: actions.openBackups),
           ]),
         ],
       ),
@@ -694,10 +735,14 @@ class _DataSectionState extends ConsumerState<_DataSection> {
         children: [
           Wrap(spacing: 10, runSpacing: 10, children: [
             UepButton(
+              small: true,
+              variant: UepButtonVariant.outline,
               label: _busy ? '執行中…' : '立即備份',
               onPressed: _busy ? () {} : _backup,
             ),
             UepButton(
+              small: true,
+              variant: UepButtonVariant.outline,
               label: '換 token',
               onPressed: _busy ? () {} : () => _confirmRotate(context),
             ),
@@ -944,22 +989,15 @@ class _Panel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = context.uep;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel(title, size: 9.5, letterSpacing: 2.0),
+        // 字級用 MonoLabel 預設（9／1.8），與設定頁的區塊標籤同一組
+        MonoLabel(title),
         const SizedBox(height: 12),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: s.bgCard,
-            border: Border.all(color: s.line),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: child,
-        ),
+        // 不再包邊框卡片——分段交給 `_sep()` 的分隔線。留 width 撐滿，
+        // 否則 Column 會依內容縮寬，右側的說明文字排版跟著跳
+        SizedBox(width: double.infinity, child: child),
       ],
     );
   }
