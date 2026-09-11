@@ -7,7 +7,7 @@ Codex CLI 的 MCP 設定。只用 Python 標準庫，Python 3.12+。
     python install.py
 
 用法（非互動，全部參數給定）：
-    python install.py --url http://26.176.231.43:8787 --token <TOKEN> \
+    python install.py --url http://192.0.2.10:8787 --token <TOKEN> \
         --name 小明 --targets claude,codex
 
 設計原則：
@@ -58,6 +58,19 @@ def ask(prompt: str, default: str = "") -> str:
     tip = f"（預設 {default}）" if default else ""
     value = input(f"{prompt}{tip}：").strip()
     return value or default
+
+
+def ask_required(prompt: str) -> str:
+    """沒有預設值、而且不接受空白的那種問題。
+
+    給的是「按 Enter 就錯」的那些欄位——空字串靜靜收下的話，安裝會一路
+    成功，直到 agent 連不上才發現，而那時沒有人會想到是這一步。
+    """
+    while True:
+        value = input(f"{prompt}：").strip()
+        if value:
+            return value
+        print("  這一項沒有預設值，必須填。")
 
 
 def scripts_dir() -> Path:
@@ -159,7 +172,9 @@ def check_hub(url: str, token: str) -> bool:
     except urllib.error.HTTPError as e:
         print(f"⚠️ Hub 回應 {e.code}（token 可能不對）")
     except OSError as e:
-        print(f"⚠️ 連不上 Hub：{e}（是否已連上 Radmin VPN？）")
+        print(f"⚠️ 連不上 Hub：{e}")
+        print("   Hub 不在公網上時，要先連上主持人指定的網路"
+              "（同區網、VPN、或他給的隧道網址）。")
     return False
 
 
@@ -533,7 +548,7 @@ def write_registry(targets: list[str]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Chatroom MCP Bridge 安裝器")
-    p.add_argument("--url", help="Hub 位址，例 http://26.176.231.43:8787")
+    p.add_argument("--url", help="Hub 位址，例 http://192.0.2.10:8787")
     p.add_argument("--token", help="API token（主持人提供）")
     p.add_argument("--name", help="你在聊天室的預設代稱")
     p.add_argument("--targets", help="要設定的 agent：claude,codex（預設兩者）")
@@ -547,9 +562,25 @@ def main() -> None:
     check_python()
     print("=== Chatroom MCP Bridge 安裝 ===\n")
 
-    url = (args.url or ask("Hub 位址", "http://26.176.231.43:8787")).rstrip("/")
-    token = args.token if args.token is not None else ask("API token")
-    name = args.name or ask("你的聊天室代稱", "Tester")
+    # 🔴 **這裡不可以有預設值。**
+    #
+    # 原本填的是開發機的內網位址——交付給外部人之後，按 Enter 的人
+    # 會拿到一個他連不上的位址；而**更糟的是他剛好也在那個 VPN 裡**，
+    # 那時他會安安靜靜地連到別人的 Hub。
+    #
+    # 「按 Enter 就錯」是最容易踩的一種預設值，所以這一題強制要回答。
+    url = (args.url or ask_required(
+        "Hub 位址（主持人給你的，例 http://192.0.2.10:8787）")).rstrip("/")
+    # 🔑 **主持人手上有兩把，agent 要的是 agent 那把。**
+    #
+    # 憑證分離之後 Hub 有 CHATROOM_TOKEN（agent）與 CHATROOM_HUMAN_TOKEN（人）。
+    # 這包裝的是 agent 的 bridge，拿到人類那把等於把主持人的權力交給 agent；
+    # 而拿錯的症狀不是「裝不起來」，是**裝好了、權限卻不對**。
+    token = args.token if args.token is not None else ask_required(
+        "Agent token（主持人給你的那把 agent 憑證）")
+    # 預設值刻意留空：所有按 Enter 的人都叫同一個名字的話，房內會出現
+    # 一串 Tester / Tester-2 / Tester-3，而名字是用來認人的
+    name = args.name or ask("你在聊天室的代稱（可留空，由 Hub 發一個）")
     targets = {
         t.strip() for t in (args.targets or "claude,codex").split(",") if t.strip()
     }

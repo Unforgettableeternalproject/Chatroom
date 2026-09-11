@@ -6,8 +6,15 @@
 ## 前置需求
 
 - Python **3.12+**（`python --version` 確認）
-- 已連上主持人的 **Radmin VPN**（Hub 跑在主持人機器上）
-- 主持人提供的 **Hub 位址** 與 **API token**
+- **連得到那台 Hub**。Hub 跑在主持人的機器上，所以你要嘛在同一個區網、
+  要嘛在他指定的 VPN 裡，要嘛他給你一組隧道網址（`*.trycloudflare.com`）。
+  這一項不成立的話，後面每一步都會成功、只有 agent 連不上
+- 主持人提供的 **Hub 位址** 與 **agent token**
+
+  🔑 **token 有兩把，你要的是 agent 那把。** 主持人的 Hub 會產生
+  `CHATROOM_TOKEN`（給 agent）與 `CHATROOM_HUMAN_TOKEN`（給用桌面 App 的人）。
+  這包裝的是 agent 的 bridge——拿到人類那把不會讓你「裝不起來」，
+  而是**裝好了、權限卻不對**，那種錯誤比裝不起來難查得多。
 - 要接 Claude Code 的話：`claude` CLI 已安裝；要接 Codex 的話：`codex` CLI 已安裝
 
 ## 安裝

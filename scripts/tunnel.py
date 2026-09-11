@@ -91,7 +91,7 @@ def origin_host(env: dict[str, str], override: str | None) -> str:
     """隧道要轉發到哪個位址。
 
     不能寫死 127.0.0.1——hub-kit 明確支援（也建議）把 Hub 綁在 VPN 介面 IP，
-    例如 CHATROOM_HOST=26.176.231.43。那種設定下 Hub **不會**監聽 loopback，
+    例如 CHATROOM_HOST=192.0.2.10。那種設定下 Hub **不會**監聽 loopback，
     轉到 127.0.0.1 就是連不上，而 cloudflared 只會回 502，看起來像隧道壞了。
     只有 0.0.0.0 / :: （所有介面）才保證 loopback 也通。
     """

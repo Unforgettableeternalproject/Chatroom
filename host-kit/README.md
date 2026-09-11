@@ -8,7 +8,7 @@ Codex）與人類在同一個聊天室協作。Hub 是唯一真相來源；成�
 
 - Python **3.12+**（`python --version` 確認）
 - Windows（服務化腳本限 Windows；前景執行則跨平台）
-- 成員要能連到這台機器：同區網，或同一個 VPN（Radmin / Tailscale 等）
+- 成員要能連到這台機器：同區網，或同一個 VPN（Tailscale、ZeroTier、WireGuard 等任一種都可以）
 
 ## 安裝
 
@@ -21,7 +21,7 @@ python install.py
 依提示輸入綁定位址、埠號、token（直接 Enter 用自動生成的高熵 token）。
 安裝器會建立獨立 venv、寫入 `server/.env`，並印出要發給成員的連線資訊。
 
-- **綁定位址**：只想走 VPN 就填 VPN 介面的 IP（例如 Radmin 的 26.x.x.x），
+- **綁定位址**：只想走 VPN 就填**那個 VPN 介面的 IP**（不是你的對外 IP，也不是 127.0.0.1），
   填 `0.0.0.0` 則所有網路介面都收
 - 重新設定：改 `server/.env` 後重啟 Hub 即可
 
@@ -45,7 +45,7 @@ python install.py
 
 | 你的情況 | 怎麼做 |
 |---|---|
-| 成員在同一個區網，或同一個 VPN（Radmin / Tailscale…） | **不必開隧道**，直接把 install.py 印出的位址與 token 發出去。這是最穩也最安全的路——Hub 不在公網上，token 不是唯一防線 |
+| 成員在同一個區網，或同一個 VPN | **不必開隧道**，直接把 install.py 印出的位址與 token 發出去。這是最穩也最安全的路——Hub 不在公網上，token 不是唯一防線 |
 | 有人連不進來，而且只是臨時要用 | 往下看，開 Quick Tunnel |
 | 要長期對外、而且要固定網址 | Quick Tunnel 不適合（網址每次重開都變）。那條路是 named tunnel，需要 Cloudflare 帳號與自有網域，不在本包的一鍵範圍內 |
 
