@@ -152,6 +152,26 @@ final tokensApiProvider =
 /// 的問題。今天的事故成本就是沒有人答得出來——測試端拿著 16 小時前的產物
 /// 驗收，而三個人用三種方法去猜，全都在猜。
 final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+  // 🔴 **斷線重連之後要重新判斷。**
+  //
+  // 這個 provider 原本這輩子只算一次，沒有任何東西 invalidate 它——於是
+  // 升級 Hub 之後那條橫幅會一直掛著，直到使用者重啟整個 App。而**重啟 App
+  // 正是他剛做完的事**（他更新了東西），所以那條橫幅在他眼裡是「我明明更新
+  // 了它還在說我沒更新」。
+  //
+  // 用「連線由斷轉為 Connected」當觸發點：Hub 更新必然重啟，重啟必然斷 WS。
+  // 那個時刻比任何輪詢都準，而且不花額外的請求。
+  //
+  // ⚠️ **用 `listen` 不用 `watch`**：watch 會讓每次狀態變化都重建，包含
+  // 斷線那一刻——那時 health 打不通會回 unknown，等於把「連不上」偽裝成
+  // 版本問題，正是底下那行註解在防的事。
+  ref.listen(connectionStatusProvider, (previous, next) {
+    final wasConnected = previous?.value is Connected;
+    if (!wasConnected && next.value is Connected) {
+      ref.invalidateSelf();
+    }
+  });
+
   final api = ref.watch(roomsApiProvider);
   try {
     final health = await api.health();
