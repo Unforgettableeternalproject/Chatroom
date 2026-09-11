@@ -2564,10 +2564,14 @@ class _MemberTile extends StatelessWidget {
     } else if (isSelf) {
       subtitle = '你 · 管控權';
     } else if (isIdle) {
-      final remain = idleTimeout.inMinutes - idleMinutes!;
-      subtitle = remain > 0
-          ? '閒置 $idleMinutes 分 · $remain 分後移出'
-          : '閒置 $idleMinutes 分';
+      // 超過一小時要進位——掛了兩天的 agent 顯示「閒置 3120 分」等於要讀的人
+      // 自己除以 60。倒數也一起換：`idle_timeout` 是可設定的，設成幾小時的話
+      // 同一行會同時出現「2 時 5 分」與「180 分後移出」兩種寫法
+      final idle = Duration(minutes: idleMinutes!);
+      final remain = idleTimeout - idle;
+      subtitle = remain > Duration.zero
+          ? '閒置 ${humanDuration(idle)} · ${humanDuration(remain)}後移出'
+          : '閒置 ${humanDuration(idle)}';
     } else {
       subtitle = '活躍 · ${relativeTime(p.lastSeenAt)}';
     }
