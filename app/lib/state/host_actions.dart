@@ -217,10 +217,16 @@ class HostActions {
         stderrEncoding: utf8,
       );
 
+  /// ⚠️ **encoding 一定要設。** 不設的話 Windows 上拿回來的是被系統碼頁
+  /// 解讀過的位元組，腳本講的每一句中文都變成亂碼——而這支腳本的輸出
+  /// 正是「停止到底成功了沒」的唯一來源。
+  /// （backup／rotateToken／stopTunnel 都設了，只有這支漏掉。）
   Future<ProcessResult> service(String action) => Process.run(
         'powershell',
         ['-NoProfile', '-File', _script('hub-service.ps1'), action],
         runInShell: true,
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
       );
 
   /// 停止 Hub——**前景跑的那個也停得掉**。

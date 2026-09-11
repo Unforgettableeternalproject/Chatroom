@@ -781,9 +781,28 @@ class _ControlSection extends ConsumerWidget {
     if (go != true) return;
     final actions = ref.read(hostActionsProvider);
     if (actions == null) return;
-    await actions.stopHub();
+
+    // 🔴 **結果一定要講出來。**
+    //
+    // 這裡原本是 `await actions.stopHub();`——呼叫完就把結果丟掉。於是
+    // 腳本那句「埠 xxxx 仍有監聽」永遠到不了使用者：他按了停止、畫面什麼
+    // 都沒說，而 Hub 還活著、連著的人一個都沒斷。2026-09-12 實際發生。
+    //
+    // 同一天寫的「關閉隧道」有解析結果並顯示，這一顆沒有——**兩顆按鈕、
+    // 同一個人、一顆講一顆不講**，那個不一致本身就是缺陷。
+    final raw = await actions.stopHub();
     ref.invalidate(serviceStatusProvider);
     ref.invalidate(hostHealthProvider);
+
+    // 這支腳本輸出的是人話不是 JSON（它講得夠清楚，重寫一遍只會讓兩邊
+    // 不一致）。判準：stderr 有東西＝Write-Warning 被觸發＝沒有完全停掉
+    final out = '${raw.stdout}'.trim();
+    final err = '${raw.stderr}'.trim();
+    ref.read(lastDataOpProvider.notifier).set({
+      'kind': 'hub_stop',
+      'ok': err.isEmpty,
+      'detail': err.isNotEmpty ? err : (out.isNotEmpty ? out : '已送出停止指令。'),
+    });
   }
 }
 
@@ -1141,6 +1160,11 @@ class _OpResult extends StatelessWidget {
               style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
         ],
       );
+    }
+    if (result['kind'] == 'hub_stop') {
+      // 成功與否都走這裡：停止是那種「你以為做完了」的操作，沉默等於成功
+      return Text('${result['detail'] ?? ''}',
+          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
     }
     if (result['kind'] == 'tunnel_stop') {
       // ⚠️ 這裡的 ok:true 有兩種：真的關掉了，與「本來就沒有隧道」。

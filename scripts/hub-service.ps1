@@ -82,15 +82,41 @@ switch ($Action) {
             Where-Object { $_.CommandLine -match 'chatroom_server' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
         Start-Sleep -Seconds 2
+
+        # 🔴 **命令列比對抓不到 uvicorn spawn 出來的那一層。**
+        #
+        # 進程樹是 cmd -> python -> python，而**真正 listen 的是最後那個**。
+        # 它是 multiprocessing spawn 出來的，命令列長 `python.exe -c "from
+        # multiprocessing.spawn import spawn_main; ..."`——裡面沒有
+        # chatroom_server 這幾個字，所以上面那段掃不到它。
+        #
+        # 症狀：停止「成功」了，8787 卻還有人在聽，連著的人一個都沒斷。
+        # 2026-09-12 在別人的機器上實際發生（父被殺、子活著）。這在自己機器上
+        # 不一定重現得出來——子跟不跟著父死，取決於 uvicorn 當下的設定。
+        #
+        # ⇒ **以埠為準**：停止 Hub 的定義就是「那個埠沒有人在聽」。
+        # 只殺 python.exe，不碰別的程式——占著那個埠的若不是 python，
+        # 那是另一回事，要讓人看見而不是順手殺掉。
+        $listening = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        foreach ($conn in $listening) {
+            $owner = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($owner -and $owner.ProcessName -eq 'python') {
+                Write-Output "埠 $Port 仍被 python PID $($owner.Id) 佔著（命令列比對抓不到它），一併收掉"
+                # /T 連子樹一起：那一層底下可能還有 worker
+                taskkill /PID $owner.Id /T /F 2>&1 | Out-Null
+            }
+        }
+        Start-Sleep -Seconds 2
         $still = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
         if ($still) {
-            # 上面那段已經殺過**所有** command line 含 chatroom_server 的
-            # python，手動前景起的也在內——所以走到這裡不是「還有一個排程
-            # 管不到的 Hub」，而是更少見的兩種：殺不掉（那個進程屬於別的
-            # 使用者／需要提權），或占用這個埠的根本不是 Hub。
-            # 舊版這句寫「可能有手動啟動的 Hub，排程管不到它」，會讓人跑去
-            # 找一個剛剛才被殺掉的東西
-            Write-Warning "埠 $Port 仍有監聽（PID $($still.OwningProcess)）——Hub 進程已全部收掉，所以占用它的要嘛是權限不足殺不掉的進程，要嘛不是 Hub。用 Get-Process -Id $($still.OwningProcess) 看一下那是什麼"
+            # 走到這裡表示兩種殺法都試過了：命令列比對（抓 run-hub.cmd 起的
+            # 那一層）與埠擁有者（抓 uvicorn spawn 出來、命令列比對不到的
+            # 那一層）。所以剩下的可能很窄。
+            #
+            # ⚠️ 這句話改過兩次，每次都是因為前提變了。**警告的前提與上面
+            # 實際做了什麼必須同步**——不然它會把人送去找一個剛被殺掉的東西
+            # （舊版）或一個不存在的原因。
+            Write-Warning "埠 $Port 仍有監聽（PID $($still.OwningProcess)）——命令列比對與埠擁有者兩種殺法都試過了，所以它要嘛權限不足殺不掉（Hub 屬於另一個使用者？試試以系統管理員執行），要嘛占用這個埠的根本不是 Hub。用 Get-Process -Id $($still.OwningProcess) 看一下那是什麼"
         } else {
             Write-Output "已停止 $TaskName（觸發器已停用；start 會自動重新啟用）"
         }
