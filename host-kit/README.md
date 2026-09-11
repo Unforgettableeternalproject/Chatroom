@@ -108,8 +108,9 @@ Hub 要**先跑著**——隧道只是轉發，不會替你把 Hub 叫起來。�
 - **備份**：`.venv\Scripts\python.exe scripts\backup.py`
   → `backups\YYYYMMDD-HHMMSS\`（db + attachments + manifest.json）。
   不必停 Hub：它用 `VACUUM INTO` 取一致快照，WAL 裡已提交的內容也在。
-  ⚠️ **不要在執行中直接複製 `chatroom.db`**——WAL 模式下那樣拿到的是一個
-  *開得起來* 但缺最近訊息的檔案，壞在看不見的地方。
+  🔴 **不要用檔案總管複製 `chatroom.db` 當備份。** WAL 模式下主檔可能幾乎是空的
+  ——2026-09-11 實測的一台：主檔 **4 KB**，同一刻 `VACUUM INTO` 出來的完整快照
+  **405 KB**。複製到的那份*開得起來*、缺最近的訊息，**而且看不出有問題**。
   ⚠️ **附件的實體檔在 `server/attachments/`，是另一份東西**——只備份 db 的話，
   還原後所有圖片與檔案都會變成「metadata 在、內容不在」（下載時回 410）。
   `backup.py` 兩份一起帶走，並把「這份備份含不含附件」寫進 `manifest.json`
