@@ -12,10 +12,19 @@ on:
   push:
     branches: [develop, master]
 
-# 同一條分支連推多次時，舊的跑一半就取消——省 runner，也避免看到過期結果
+# 取消舊 run **只在 PR 上做**。
+#
+# 一開始這裡是無條件 `true`，而那讓 `python` job 在 2026-09-11 連續兩次
+# 都沒跑完：它要 10~15 分鐘（本機 pytest 就要 6 分 13 秒，1306 條的累積），
+# 而那天推 commit 的節奏遠快於此，每一次都在跑完前被下一顆取消。
+# **結果是那半的 CI 等於不存在，而看板上不會顯示成失敗，只顯示 cancelled。**
+#
+# PR 與分支的需求不同：PR 只關心「最新這版過不過」，舊的取消掉沒有損失；
+# 推上 develop／master 的每一顆都是歷史的一部分，要各自有結論——
+# 出事時要答得出「是哪一顆開始紅的」。
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
