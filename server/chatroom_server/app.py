@@ -11883,24 +11883,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         # token），但 08-29 引入可撤銷的 access_token 之後就漏接了：用邀請碼
         # 進來的人 REST 讀得到歷史，卻連不上即時通道。在他眼中那不是
         # 「權限不足」，是「這個聊天室好像死了」。
+        # 🔴 **同一個縫開過兩次，第二次是 09-07 的憑證分離。**
+        #
+        # 那次把 `CHATROOM_HUMAN_TOKEN` 加進 `require_auth`，**但這裡沒跟上**
+        # ——人類憑證既不等於 `api_token`、也不在 `access_token` 表裡，於是
+        # 兩條路都不通，一律 4401。
+        #
+        # 症狀與 08-29 那次一模一樣，而且更難查：**「測試連線」成功（走
+        # REST）、實際連線一直重連（走 WS）**，使用者看到的是「設定明明是
+        # 對的」。它潛伏了四天才被撞到，因為在安裝器開始產生人類憑證之前，
+        # 沒有人手上有那把鑰匙。
         ws_token = ws.query_params.get("token") or ""
-        ws_root = not cfg.api_token or ws_token == cfg.api_token
+        # 「這張憑證能不能宣稱自己是人」——主持人視角要用它，與 REST 的
+        # `require_host_view` 同一個判準
+        ws_human = bool(cfg.human_api_token) and ws_token == cfg.human_api_token
+        ws_root = not cfg.api_token or ws_token == cfg.api_token or ws_human
         if not ws_root:
             row = await app.state.db.execute(
-                "SELECT 1 FROM access_token WHERE token=? AND revoked_at IS NULL",
+                "SELECT * FROM access_token WHERE token=? AND revoked_at IS NULL",
                 (ws_token,),
             )
-            if await row.fetchone() is None:
+            found = await row.fetchone()
+            if found is None:
                 logger.info("ws: 拒絕連線（token 驗證失敗）")
                 await ws.close(code=4401)
                 return
+            # 發出去的邀請碼也帶 audience。舊 DB 沒有這一欄（migration 補的
+            # 預設是 agent），取不到值時只能是 agent——與 `require_auth`
+            # 那段同一個理由
+            if cfg.human_api_token and "audience" in found.keys():
+                ws_human = found["audience"] == "human"
         # 主持人視角。REST 那半開了而這裡沒開等於白做——這是 App 的主要
         # 讀取通道（08-29 收緊讀取邊界時就踩過反方向的同一件事）。
         #
         # 🚨 **必須自己判斷是不是主 token**，不能靠「走到這裡就是主 token」。
         # 那個假設在上面放寬連線驗證的那一刻就沒了，而它一旦失效，任何一張
         # 邀請碼都能打開主持人視角。這兩件事因此在同一個 commit 裡改。
-        ws_host = ws_root and ws.query_params.get("host_view") == "1"
+        #
+        # 🚨 **分離之後「是不是 root」不再等於「是不是人」。** bridge 手上
+        # 那把主 token 仍然是 root（它連得上、做得了 agent 該做的事），但它
+        # 開不了主持人視角——否則每一個 agent 都打得開，而那正是憑證分離
+        # 要防的事。legacy 模式沒有這個區分，維持舊行為。
+        ws_may_host = ws_human if cfg.human_api_token else ws_root
+        ws_host = ws_may_host and ws.query_params.get("host_view") == "1"
         if ws_host:
             logger.info(
                 "ws: 主持人視角連線",

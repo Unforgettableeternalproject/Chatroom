@@ -124,3 +124,90 @@ async def test_host_view_on_ws_requires_root_token(app):
                     break
             else:
                 raise AssertionError("主 token + host_view 應該訂得到訊息")
+
+
+# ---------- 憑證分離（09-07）之後的同一個縫 ----------
+
+HUMAN = "human-token"
+
+
+@pytest.fixture
+def split_app(tmp_path):
+    """啟用憑證分離的 Hub：agent 一把、人類一把。"""
+    return create_app(Config(
+        db_path=str(tmp_path / "ws-split.db"),
+        api_token=ROOT,
+        human_api_token=HUMAN,
+    ))
+
+
+@pytest.mark.asyncio
+async def test_human_token_can_connect_to_ws(split_app):
+    """🔴 人類憑證要連得上 WS。
+
+    **這是 08-29 那個縫原樣再發生一次。** 09-07 的憑證分離把
+    `CHATROOM_HUMAN_TOKEN` 加進 `require_auth`，但 `/ws` 的驗證沒跟上——
+    它只認 `cfg.api_token` 與 `access_token` 表，而人類憑證兩條都不在。
+
+    症狀與上次一模一樣、而且更難查：**「測試連線」成功（走 REST）、
+    實際連線一直重連（走 WS）**。使用者看到的是「設定明明是對的」。
+
+    它潛伏了四天沒被發現，因為在安裝器開始產生人類憑證之前，
+    **沒有人手上有那把鑰匙可以去撞它**。
+    """
+    assert _connects(split_app, f"token={HUMAN}") is True
+
+
+@pytest.mark.asyncio
+async def test_agent_token_still_connects_in_split_mode(split_app):
+    """agent 憑證仍然連得上——它只是不能宣稱自己是人，不是被關在門外。
+
+    修 human 那條時把 agent 一起擋掉的話，所有 bridge 會在同一刻斷線。
+    """
+    assert _connects(split_app, f"token={ROOT}") is True
+
+
+@pytest.mark.asyncio
+async def test_garbage_still_rejected_in_split_mode(split_app):
+    """放寬不可以放寬成「什麼都收」。"""
+    assert _connects(split_app, "token=nonsense") is False
+    assert _connects(split_app, "") is False
+
+
+@pytest.mark.asyncio
+async def test_agent_token_cannot_open_host_view_in_split_mode(split_app):
+    """🚨 分離之後，主持人視角只認人類憑證——WS 要與 REST 同一個判準。
+
+    REST 的 `require_host_view` 在 split 模式下要求 `audience == human`，
+    bridge 手上那把主 token 開不了。WS 若仍只看「是不是 root」，
+    **每一個 agent 都打得開主持人視角**——而那正是憑證分離要防的事。
+    """
+    async with AsyncClient(transport=ASGITransport(app=split_app),
+                           base_url="http://t",
+                           headers={"Authorization": f"Bearer {HUMAN}"}) as c:
+        async with split_app.router.lifespan_context(split_app):
+            rid = (await c.post("/api/rooms", json={
+                "name": "別人的房", "session_key": "someone-else"})).json()["id"]
+            await c.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human",
+                "session_key": "someone-else", "preferred_name": "Owner"})
+
+    # agent 憑證帶 host_view=1：連得上，但訂不到自己沒份的房
+    with TestClient(split_app) as tc:
+        with tc.websocket_connect(f"/ws?token={ROOT}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            evt = ws.receive_json()
+            assert evt["type"] == "error", evt
+            assert evt["code"] in ("participant_header_required", "not_a_member")
+
+    # 對照組：人類憑證帶 host_view=1 訂得到
+    with TestClient(split_app) as tc:
+        with tc.websocket_connect(f"/ws?token={HUMAN}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            for _ in range(8):
+                evt = ws.receive_json()
+                if evt["type"] == "messages":
+                    break
+                assert evt["type"] != "error", evt
+            else:
+                pytest.fail("人類憑證的主持人視角訂不到")
