@@ -23,7 +23,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// 還是只是環境變了（後者用 `--update-goldens` 重產）。
 void main() {
   testWidgets('主機控制台：好／壞／不確定三種狀態並存', (tester) async {
-    tester.view.physicalSize = const Size(760, 1900);
+    // 高度要容得下整頁：新增「資料與安全」那一區之後，1900 會把它
+    // 推到畫面外——ListView 不會 overflow，所以那種漏拍**不會報錯**，
+    // 只是驗收圖裡默默少了一塊
+    tester.view.physicalSize = const Size(760, 2250);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 

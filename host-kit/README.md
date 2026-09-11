@@ -105,13 +105,26 @@ Hub 要**先跑著**——隧道只是轉發，不會替你把 Hub 叫起來。�
 
 ## 維運
 
-- **資料**：訊息與成員在 `server/chatroom.db`（SQLite），備份用
-  `sqlite3 chatroom.db "VACUUM INTO 'backup.db'"`，不要在執行中直接複製檔案。
+- **備份**：`.venv\Scripts\python.exe scripts\backup.py`
+  → `backups\YYYYMMDD-HHMMSS\`（db + attachments + manifest.json）。
+  不必停 Hub：它用 `VACUUM INTO` 取一致快照，WAL 裡已提交的內容也在。
+  ⚠️ **不要在執行中直接複製 `chatroom.db`**——WAL 模式下那樣拿到的是一個
+  *開得起來* 但缺最近訊息的檔案，壞在看不見的地方。
   ⚠️ **附件的實體檔在 `server/attachments/`，是另一份東西**——只備份 db 的話，
   還原後所有圖片與檔案都會變成「metadata 在、內容不在」（下載時回 410）。
-  兩個一起帶走
+  `backup.py` 兩份一起帶走，並把「這份備份含不含附件」寫進 `manifest.json`
 - **日誌**：`logs\hub-YYYYMMDD.log` 按日分檔，自行清理舊檔
-- **換 token**：改 `server/.env` → 重啟 Hub → 通知所有成員更新
+- **換 token**：`.venv\Scripts\python.exe scripts\rotate-token.py`
+  → 重啟 Hub → 通知所有成員更新。
+  舊設定留在 `server\.env.bak-<時間戳>`，要退回去時從那裡拿。
+  ⚠️ 重啟前舊 token 照樣通、新的不通；重啟的**那一刻**所有 agent 與 App
+  一起斷線，直到拿到新的那把。這不是可以順手做的事
+- **停止 Hub**：`pwsh -File scripts\hub-service.ps1 stop`。
+  它連**手動前景起的**那個也停得掉（殺所有 command line 含 `chatroom_server`
+  的 python），不是只停排程
+
+以上每一項在桌面 App 的「這台機器」分頁都有對應按鈕；**這裡寫的是那一頁
+壞掉時的退路**，兩邊做的是同一件事。
 
 ## 疑難排解
 

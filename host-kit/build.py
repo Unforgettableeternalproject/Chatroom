@@ -70,7 +70,17 @@ def main() -> None:
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     shutil.copytree(REPO / "server", stage / "server", ignore=SERVER_IGNORE)
     (stage / "scripts").mkdir()
-    for name in ("run-hub.cmd", "hub-service.ps1", "run-tunnel.cmd", "tunnel.py"):
+    for name in (
+        "run-hub.cmd",
+        "hub-service.ps1",
+        "run-tunnel.cmd",
+        "tunnel.py",
+        # 主機控制台的「備份」與「換 token」呼叫的就是這兩支。漏掉它們的話
+        # 開發機一切正常、主持人的 kit 按鈕按下去找不到檔案——而那是打包
+        # 時完全看不出來的落差
+        "backup.py",
+        "rotate-token.py",
+    ):
         shutil.copy2(REPO / "scripts" / name, stage / "scripts" / name)
 
     # 交付包裡沒有 .git，版本只有在打包這一刻抓得到

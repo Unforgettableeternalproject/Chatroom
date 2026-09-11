@@ -83,6 +83,8 @@ class HostConsoleScreen extends ConsumerWidget {
                   const SizedBox(height: 28),
                   const _ControlSection(),
                   const SizedBox(height: 28),
+                  const _DataSection(),
+                  const SizedBox(height: 28),
                   _KitSection(kit: kit),
                 ],
               ],
@@ -526,11 +528,22 @@ class _ControlSection extends ConsumerWidget {
                 },
               ),
               const SizedBox(width: 10),
+              // 🔴 停止要放在啟動旁邊，不是放在「自啟」那一區。
+              //
+              // 它包的 `hub-service.ps1 stop` 殺的是**所有** chatroom_server
+              // 進程——前景視窗裡那個也算。擺在自啟區底下時它讀起來是
+              // 「停掉排程」，於是前景起 Hub 的人只剩「去關那個黑視窗」
+              // 這條路，而那條路從來沒有人告訴過他。
+              UepButton(
+                label: '停止 Hub',
+                onPressed: () => _confirmStop(context, ref),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   // 講明它跑在哪裡——不講的話，關掉那個黑視窗會讓所有人斷線，
                   // 而按下按鈕的人不會預期那件事
-                  '會開一個獨立的視窗跑 Hub。關掉那個視窗＝停止 Hub；'
+                  '會開一個獨立的視窗跑 Hub。關掉那個視窗也等於停止；'
                   '關掉這個 App 不會——它只是遙控器。',
                   style: UepText.serif(
                       size: 11.5, color: s.inkMute, height: 1.5),
@@ -558,10 +571,9 @@ class _ControlSection extends ConsumerWidget {
                 label: '啟動',
                 onPressed: () => _runService(ref, 'start'),
               ),
-              UepButton(
-                label: '停止',
-                onPressed: () => _runService(ref, 'stop'),
-              ),
+              // 停止不在這裡——它是全域的（連前景起的都殺），放在上面
+              // 「啟動 Hub」旁邊。同一件事出現兩個入口只會讓人以為
+              // 這顆停的是排程、那顆停的是前景
               if (service?.registered == true)
                 UepButton(
                   label: '取消註冊',
@@ -572,12 +584,16 @@ class _ControlSection extends ConsumerWidget {
             Text(
               // 這個差別現在只寫在 README 裡，而它決定「重開機之後還在不在」
               '一般權限註冊＝登入時自啟；以系統管理員執行這個 App 再註冊'
-              '＝開機自啟（沒登入也跑）。',
+              '＝開機自啟（沒登入也跑）。停止 Hub 請用上面那顆——'
+              '它連前景視窗裡跑的那個也停得掉。',
               style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
             ),
             const SizedBox(height: 18),
           ],
-          UepButton(label: '開啟日誌資料夾', onPressed: actions.openLogs),
+          Wrap(spacing: 10, runSpacing: 10, children: [
+            UepButton(label: '開啟日誌資料夾', onPressed: actions.openLogs),
+            UepButton(label: '開啟備份資料夾', onPressed: actions.openBackups),
+          ]),
         ],
       ),
     );
@@ -589,6 +605,240 @@ class _ControlSection extends ConsumerWidget {
     await actions.service(action);
     ref.invalidate(serviceStatusProvider);
     ref.invalidate(hostHealthProvider);
+  }
+
+  /// 停止要確認——**它會把所有人踢下線**，而按的人往往只是想重啟一下。
+  ///
+  /// 講後果不講規則，確認鈕上寫實際會做的事（設計稿 §5，與開隧道那個
+  /// 對話框同一套判準）。
+  Future<void> _confirmStop(BuildContext context, WidgetRef ref) async {
+    final s = context.uep;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text('停止 Hub',
+            style: UepText.serif(
+                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+        content: Text(
+          '現在連著的每一個 agent 與每一台 App 都會在這一刻斷線。\n\n'
+          '排程起的與手動起的都會停——包含那個黑視窗裡跑的。\n\n'
+          '如果有註冊自啟，觸發器會一併停用（按「啟動」會自動啟用回來），'
+          '否則排程會在一分鐘內把它拉回來。',
+          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消',
+                style: UepText.serif(size: 13, color: s.inkMute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('停止 Hub',
+                style: UepText.serif(size: 13, color: UepColors.gold)),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+    await actions.stopHub();
+    ref.invalidate(serviceStatusProvider);
+    ref.invalidate(hostHealthProvider);
+  }
+}
+
+/// 最近一次備份／換 token 的結果。
+///
+/// 🔴 **不放在 widget 的 State 裡。** 這一頁的 provider 一 invalidate
+/// （按了「重新檢查」、或任何一個狀態刷新）整個子樹就重建，那時剛換出來的
+/// token 會跟著消失——而它是隨機字串，畫面上那一次是使用者唯一看得到它的
+/// 機會。同樣的形狀在這個 repo 已經咬過四次（草稿存在 State 裡）。
+class LastDataOp extends Notifier<Map<String, dynamic>?> {
+  @override
+  Map<String, dynamic>? build() => null;
+
+  void set(Map<String, dynamic> result) => state = result;
+}
+
+final lastDataOpProvider =
+    NotifierProvider<LastDataOp, Map<String, dynamic>?>(LastDataOp.new);
+
+/// 資料與安全——備份、換 token。
+///
+/// 這兩件事擺在一起不是因為相似，而是因為**它們是這一頁唯二會改變
+/// 磁碟上那份資料的動作**，其餘區塊都只是起停與觀察。
+class _DataSection extends ConsumerStatefulWidget {
+  const _DataSection();
+
+  @override
+  ConsumerState<_DataSection> createState() => _DataSectionState();
+}
+
+class _DataSectionState extends ConsumerState<_DataSection> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final actions = ref.watch(hostActionsProvider);
+    if (actions == null) return const SizedBox.shrink();
+    final last = ref.watch(lastDataOpProvider);
+
+    return _Panel(
+      title: '資料與安全',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(spacing: 10, runSpacing: 10, children: [
+            UepButton(
+              label: _busy ? '執行中…' : '立即備份',
+              onPressed: _busy ? () {} : _backup,
+            ),
+            UepButton(
+              label: '換 token',
+              onPressed: _busy ? () {} : () => _confirmRotate(context),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text(
+            // 為什麼備份是兩份東西——這件事不講，還原的人會以為只要 db
+            '備份會把資料庫與 attachments/ 一起收進 backups\\。'
+            '兩份缺一，還原後訊息都在、圖全變 410。',
+            style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
+          ),
+          if (last != null) ...[
+            const SizedBox(height: 14),
+            _OpResult(result: last),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _backup() async {
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+    setState(() => _busy = true);
+    try {
+      final raw = await actions.backup();
+      ref.read(lastDataOpProvider.notifier).set({
+        'kind': 'backup',
+        ...parseScriptResult(raw),
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 換 token 要確認——**它比停止 Hub 更難復原**。
+  ///
+  /// 停止之後按「啟動」就回來了；token 換掉之後，每一個成員都要重新拿到
+  /// 新的那把，而那是一件人工的、會拖很久的事。
+  Future<void> _confirmRotate(BuildContext context) async {
+    final s = context.uep;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text('換掉 token',
+            style: UepText.serif(
+                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+        content: Text(
+          '換完要重啟 Hub 才生效。在重啟之前，舊的那把照樣通、新的不通。\n\n'
+          '重啟之後反過來：每一個 agent、每一台 App 都連不上，'
+          '直到你把新 token 一個一個發給他們。\n\n'
+          '舊的會留在 server\\.env.bak-<時間> 裡，要退回去時從那裡拿。',
+          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('取消',
+                style: UepText.serif(size: 13, color: s.inkMute)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('換 token',
+                style: UepText.serif(size: 13, color: UepColors.gold)),
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+
+    final actions = ref.read(hostActionsProvider);
+    if (actions == null) return;
+    setState(() => _busy = true);
+    try {
+      final raw = await actions.rotateToken();
+      ref.read(lastDataOpProvider.notifier).set({
+        'kind': 'rotate',
+        ...parseScriptResult(raw),
+      });
+      // .env 變了，「發給成員的連線資訊」那一區要跟著換——不 invalidate
+      // 的話它會繼續顯示舊 token，而主持人正要把它複製給別人
+      ref.invalidate(hostEnvProvider);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+}
+
+/// 一次操作的結果。
+///
+/// 🔴 **成功要說出範圍**：備份了幾個附件、多大。「備份完成」四個字
+/// 與「備份完成但附件一個都沒進去」在畫面上長得一樣，而它們的差別
+/// 要到還原那天才看得出來。
+class _OpResult extends StatelessWidget {
+  const _OpResult({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final ok = result['ok'] == true;
+    if (!ok) {
+      return Text('失敗：${result['error'] ?? '不知道為什麼'}',
+          style: UepText.code(size: 11.5, color: UepColors.errorText));
+    }
+    if (result['kind'] == 'rotate') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 這是使用者唯一看得到明碼的時刻，所以不遮——遮了他就得去翻 .env
+          _CopyRow(label: '新 token', value: '${result['token'] ?? ''}'),
+          const SizedBox(height: 6),
+          Text('還沒生效，要重啟 Hub。舊設定：${result['backup'] ?? ''}',
+              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
+        ],
+      );
+    }
+    final hadAttachments = result['attachments_existed'] == true;
+    final files = result['attachment_files'] ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('備份完成：${result['dest'] ?? ''}',
+            style: UepText.code(size: 11.5, color: s.inkSoft)),
+        const SizedBox(height: 4),
+        Text(
+          hadAttachments
+              ? '資料庫 ${result['db_bytes'] ?? 0} 位元組，附件 $files 個檔案'
+              // 講明是「來源就沒有」而不是「沒備份到」——這兩者在磁碟上
+              // 一模一樣，意義相反
+              : '資料庫 ${result['db_bytes'] ?? 0} 位元組；'
+                  '來源沒有 attachments/，這份備份不含附件',
+          style: UepText.serif(
+              size: 11.5,
+              color: hadAttachments ? s.inkMute : s.inkSoft,
+              height: 1.5),
+        ),
+      ],
+    );
   }
 }
 
