@@ -15,6 +15,13 @@ import 'package:flutter_test/flutter_test.dart';
 /// 這條路從來就走不完。不明講 audience 的後果是：分離期的 Hub 把每一張
 /// App 發出的邀請都擋在 `role=human` 那一刻，而發的人以為自己給了一把鑰匙。
 void main() {
+  test('發邀請時明講這張是給人的', () async {
+    final rec = _Rec({'token': 't', 'label': '給艾斯維爾'});
+    await TokensApi(_dio(rec)).create(label: '給艾斯維爾');
+
+    expect(rec.seen.single.data, {'label': '給艾斯維爾', 'audience': 'human'});
+  });
+
   test('human_token_required 不是身分失效，不可觸發 re-join', () {
     // 走 ParticipantInvalidException 的話 App 會自動重新加入——而重新加入
     // 一百次也不會讓一張 agent 憑證變成人類憑證。那是一個永遠不會成功、

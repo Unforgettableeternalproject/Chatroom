@@ -103,7 +103,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               ),
               const SizedBox(height: 12),
               Text(
-                '對方在「設定 → 貼上邀請碼」貼進去就能連上。\n'
+                '這張是發給人的邀請碼。對方在「設定 → 貼上邀請碼」貼進去就能連上。\n'
                 '這串字等同密碼——任何拿到的人都能進這台 Hub，'
                 '用私訊給，不要貼在公開頻道。',
                 style:
