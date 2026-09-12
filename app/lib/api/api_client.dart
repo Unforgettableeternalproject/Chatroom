@@ -64,6 +64,10 @@ ApiException translateError(DioException e) {
       if (code == 'root_token_required') {
         return RootTokenRequiredException(_detailMessage(res.data));
       }
+      // 指派的界線（群）。同樣與房間身分無關，re-join 救不了
+      if (code == 'not_your_agent') {
+        return NotYourAgentException(_detailMessage(res.data));
+      }
       // agent 憑證想以人類身分進房。這與房間身分無關，re-join 救不了它
       // ——救它的是「請主持人重發一張給人的邀請碼」
       if (code == 'human_token_required') {

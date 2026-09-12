@@ -22,6 +22,37 @@ void main() {
     expect(rec.seen.single.data, {'label': '給艾斯維爾', 'audience': 'human'});
   });
 
+  test('加發的那張是 agent 憑證，而且掛在指定的邀請底下', () async {
+    // 方案 B（艾斯維爾裁 2026-09-12）：主持人先發人的那張，對方的 agent
+    // 要接入時再從它底下加發一張，兩張從此算同一個人。對方一次只拿一串，
+    // 而「誰的 agent」在畫面上看得見
+    final rec = _Rec({'token': 't2', 'label': '他的 Claude'});
+    await TokensApi(_dio(rec)).create(label: '他的 Claude', parentToken: 't1');
+
+    expect(rec.seen.single.data, {
+      'label': '他的 Claude',
+      'audience': 'agent',
+      'parent_token': 't1',
+    });
+  });
+
+  test('not_your_agent 不是身分失效，不可觸發 re-join', () {
+    // 換掉的不是房間身分，是接入時填的那把 token——re-join 救不了
+    final e = translateError(DioException(
+      requestOptions: RequestOptions(path: '/api/rooms/r1/assignments'),
+      response: Response(
+        requestOptions: RequestOptions(path: '/api/rooms/r1/assignments'),
+        statusCode: 403,
+        data: {
+          'detail': {'code': 'not_your_agent', 'message': '這個 agent 不屬於你'}
+        },
+      ),
+    ));
+
+    expect(e, isA<NotYourAgentException>());
+    expect(e, isNot(isA<ParticipantInvalidException>()));
+  });
+
   test('human_token_required 不是身分失效，不可觸發 re-join', () {
     // 走 ParticipantInvalidException 的話 App 會自動重新加入——而重新加入
     // 一百次也不會讓一張 agent 憑證變成人類憑證。那是一個永遠不會成功、

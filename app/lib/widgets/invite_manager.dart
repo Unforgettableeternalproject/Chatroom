@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/tokens_api.dart';
 import '../core/config/invite_code.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
@@ -9,6 +10,7 @@ import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
 import '../state/app_providers.dart';
 import '../state/assignments_providers.dart';
+import 'kind_badge.dart';
 import 'uep_button.dart';
 
 /// 發不出邀請時要說的話（d49687c5）。
@@ -125,6 +127,101 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               small: true,
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: code));
+                if (context.mounted) Navigator.of(context).pop();
+              },
+            ),
+            UepButton(
+              label: '關閉',
+              variant: UepButtonVariant.outline,
+              small: true,
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 從一張既有的邀請底下加發一張 **agent 憑證**（方案 B）。
+  ///
+  /// 為什麼掛在既有那張底下而不是單獨發：指派的界線是「群」＝一個人連同
+  /// 他的 agent。單獨發的話那個 agent 自成一群，連它的持有者本人都指派
+  /// 不動它——而那個症狀要等到他真的去指派時才看得見。
+  Future<void> _addAgentToken(AccessToken parent) async {
+    setState(() => _busy = true);
+    try {
+      final created = await ref.read(tokensApiProvider).create(
+            label: parent.label.isEmpty ? 'agent' : '${parent.label} 的 agent',
+            parentToken: parent.token,
+          );
+      ref.invalidate(accessTokensProvider);
+      if (mounted) await _showAgentToken(created.token, parent.label);
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(inviteErrorText(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// agent 憑證的交付說明。
+  ///
+  /// ⚠️ **這裡給的是裸 token，不是邀請碼**——mcp-kit 的安裝器讀的就是裸
+  /// 字串（它問的那一格正是「Agent token（主持人給你的那把 agent 憑證）」）。
+  /// 給成 `CHATROOM-INVITE-` 的話對方貼不進去。
+  ///
+  /// ⚠️ 而**已經裝好 kit 的人要重跑一次安裝器**：token 寫在兩個地方（MCP
+  /// 設定與 kit 的 `.env`），改一個不夠；而且 bridge 是活著的進程，改完要
+  /// 讓它重連才算數。只說「換一下 token」的話，他會改一處、看起來成功、
+  /// 然後繼續用舊的跑。
+  Future<void> _showAgentToken(String token, String who) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        final s = context.uep;
+        return AlertDialog(
+          backgroundColor: s.bgCard,
+          title: Text('agent 憑證${who.isEmpty ? '' : '：$who'}',
+              style: UepText.display(size: 22, color: s.inkTitle)),
+          content: SizedBox(
+            width: 440,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: s.bgSunken,
+                  border: Border.all(color: s.lineStrong),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SelectableText(token,
+                    style: UepText.code(size: 11, color: s.ink, height: 1.6)),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '這串填進 mcp-kit 安裝器問的「Agent token」那一格'
+                '（不是貼進 App 的邀請碼）。\n'
+                '裝好之後，他指派得動自己的 agent，而其他人（包括你）'
+                '指派不動。',
+                style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '註：對方如果**已經裝過** kit，要重跑一次 install.py 換上這串'
+                '——token 寫在 MCP 設定與 kit 的 .env 兩個地方，只改一個會'
+                '看起來成功但照舊用舊的。換完要讓 bridge 重連才算數。',
+                style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+              ),
+            ]),
+          ),
+          actions: [
+            UepButton(
+              label: '複製',
+              small: true,
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: token));
                 if (context.mounted) Navigator.of(context).pop();
               },
             ),
@@ -258,12 +355,24 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                                t.label.isEmpty ? '（未命名）' : t.label,
-                                style: UepText.sans(
-                                    size: 12.5,
-                                    weight: FontWeight.w600,
-                                    color: s.inkTitle)),
+                            Row(children: [
+                              Flexible(
+                                child: Text(
+                                    t.label.isEmpty ? '（未命名）' : t.label,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: UepText.sans(
+                                        size: 12.5,
+                                        weight: FontWeight.w600,
+                                        color: s.inkTitle)),
+                              ),
+                              if (t.audience == 'agent') ...[
+                                const SizedBox(width: 6),
+                                MonoLabel('AGENT',
+                                    size: 8,
+                                    color: UepColors.gold,
+                                    letterSpacing: 1.2),
+                              ],
+                            ]),
                             const SizedBox(height: 2),
                             Text(
                               t.lastUsedAt == null
@@ -275,13 +384,33 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                           ],
                         ),
                       ),
-                      IconButton(
-                        tooltip: '重新顯示邀請碼',
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () => _showCode(t.token, t.label),
-                        icon: Icon(Icons.qr_code_2,
-                            size: 15, color: s.inkMute),
-                      ),
+                      // agent 憑證的交付形式完全不同（裸 token vs 邀請碼），
+                      // 共用一個按鈕的話主持人會把邀請碼給 agent，而對方
+                      // 貼不進去——症狀是「照做了卻連不上」
+                      if (t.audience == 'agent')
+                        IconButton(
+                          tooltip: '重新顯示 agent 憑證',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _showAgentToken(t.token, t.label),
+                          icon: Icon(Icons.smart_toy_outlined,
+                              size: 15, color: s.inkMute),
+                        )
+                      else ...[
+                        IconButton(
+                          tooltip: '重新顯示邀請碼',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _showCode(t.token, t.label),
+                          icon: Icon(Icons.qr_code_2,
+                              size: 15, color: s.inkMute),
+                        ),
+                        IconButton(
+                          tooltip: '加發一張 agent 憑證給這個人',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: _busy ? null : () => _addAgentToken(t),
+                          icon: Icon(Icons.add_moderator_outlined,
+                              size: 15, color: s.inkMute),
+                        ),
+                      ],
                       IconButton(
                         tooltip: '撤銷',
                         visualDensity: VisualDensity.compact,

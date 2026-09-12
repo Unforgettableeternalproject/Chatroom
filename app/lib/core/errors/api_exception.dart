@@ -88,6 +88,21 @@ class HumanCredentialRequiredException extends ApiException {
             message ?? '這張憑證是給 agent 用的，人要用人類憑證才進得了房間');
 }
 
+/// 403 + not_your_agent — 那個 agent 不是用你這張憑證接入的。
+///
+/// 指派的界線是「群」＝一個人連同他的 agent（艾斯維爾裁 2026-09-12）。
+/// **主持人也沒有穿透口**——「我能指派所有人的 agent」與「別人能指派我的
+/// agent」是同一條規則的兩面。
+///
+/// 🔴 同樣不可以走 [ParticipantInvalidException]：這與房間身分無關，
+/// re-join 一百次也不會換掉接入時填的那把 token。
+class NotYourAgentException extends ApiException {
+  const NotYourAgentException([String? message])
+      : super('not_your_agent',
+            message ?? '這個 agent 不屬於你——指派只在用同一張憑證接入的 '
+                'agent 之間成立');
+}
+
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
 /// `not_board_supervisor`）。
 ///
