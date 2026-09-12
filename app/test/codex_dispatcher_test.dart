@@ -225,6 +225,48 @@ void main() {
     expect(payload(runs.single)['action'], contains('assignment_id'));
   });
 
+  test('閒著的本機 Codex 也要報到、也收得到指派', () async {
+    // writer lock 只在 Codex 持有寫入鎖時存在，所以 `activeThreadIds()`
+    // 列出的是**正在處理 turn 的那些**。拿它當輪詢名單，等於「只有忙著的
+    // agent 才報到、才撈得到指派」——指派一個閒著的 Codex，要等它自己
+    // 動起來才收得到，而在那之前指派 UI 上它顯示成 idle。
+    //
+    // mention 那側早就改用「曾經見過 lock 的本機名冊」了（_roomRoutes），
+    // 這裡是同一個道理的鏡像。
+    final calls = <String>[];
+    var threads = <String>{threadA};
+    var assignmentReady = false;
+    final d = CodexDispatcher(
+      (_) async => defaultMembers,
+      fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+      fetchAssignments: (thread) async {
+        calls.add(thread);
+        return assignmentReady ? [assignment('a1', threadA)] : const [];
+      },
+      activeThreadResolver: () => threads,
+      runProcess: (argv) async {
+        runs.add(argv);
+        return true;
+      },
+      codexArgvResolver: () => ['codex-bin'],
+      codexHome: codexHome.path,
+    )..enabled = true;
+
+    // 先忙一輪，讓 dispatcher 認得 threadA 是這台機器上的
+    await d.pollAssignments();
+    expect(calls, [threadA]);
+    calls.clear();
+
+    // turn 結束，lock 消失。指派在它閒著的這段期間送進來。
+    threads = <String>{};
+    assignmentReady = true;
+    await d.pollAssignments();
+    expect(calls, [threadA], reason: '閒著不等於不在——報到不能停');
+    expect(runs, hasLength(1), reason: '閒著才是最該投得出去的時候');
+    expect(target(runs.single), threadA);
+    expect(payload(runs.single)['assignment_id'], 'a1');
+  });
+
   test('關閉轉送仍輪詢報到，但不 queue 指派', () async {
     var polls = 0;
     final d = CodexDispatcher(

@@ -109,6 +109,13 @@ class CodexDispatcher {
     return busy;
   }
 
+  /// 這台機器上的 Codex thread——**不分忙閒**。
+  ///
+  /// `activeThreadIds()` 只列當下持有 writer lock 的，也就是正在處理 turn
+  /// 的那些。拿它當「本機有哪些 Codex」的答案，會讓所有需要「閒著時也要
+  /// 做」的事情（報到、撈指派、投遞）在 agent 最閒的時候剛好停擺。
+  Set<String> _localThreads() => {...activeThreadIds(), ..._knownLocalThreads};
+
   /// 投不出去、等著補投的 mention。key 是 messageId（同一則只留一份）。
   ///
   /// mention 與指派的可靠度差距全在這裡：指派每 10 秒輪詢一次，自帶重試，
@@ -427,7 +434,11 @@ class CodexDispatcher {
       } catch (e) {
         _log.warning('mention 補投失敗：$e');
       }
-      for (final thread in activeThreadIds()) {
+      // 🔴 走本機名冊而非 `activeThreadIds()`：後者只有忙著的 thread。
+      // 用它輪詢的話，指派一個閒著的 Codex 要等它自己動起來才收得到，
+      // 而且 `_fetchAssignments` 兼任向 Hub 報到——沒報到的 session 在
+      // 指派 UI 上顯示成 idle，看起來像死了。
+      for (final thread in _localThreads()) {
         try {
           final assignments = await _fetchAssignments(thread);
           if (!enabled) continue;
@@ -452,7 +463,7 @@ class CodexDispatcher {
     try {
       // 「是不是本機的」用曾見過的名冊回答，不用當下的 lock——Codex 閒著
       // 等輸入時掃不到 lock，而那正是該投遞的時刻。
-      final local = {...activeThreadIds(), ..._knownLocalThreads};
+      final local = _localThreads();
       if (local.isEmpty) return const {};
       final sessions = await _fetchSessions();
       final routes = <String, Set<String>>{};
