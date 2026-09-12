@@ -37,6 +37,45 @@ class RoomMembers {
   final Set<String> allNames;
 }
 
+/// 轉送管線的當下狀態快照——**給人看的**。
+///
+/// 這條管線的失敗形狀全是靜默的：投不出去就留在記憶體等補投，畫面上
+/// 一切正常。09/12 追「@ 了 Codex 卻沒醒」時，唯一能回答「現在到底有沒有
+/// 東西卡著」的欄位是 `@visibleForTesting` 的——只有測試看得到，
+/// 使用者與追查的人都看不到。
+class CodexDispatchStatus {
+  const CodexDispatchStatus({
+    this.pending = 0,
+    this.localThreads = 0,
+    this.busyThreads = 0,
+    this.lastEvent = '',
+  });
+
+  /// 投不出去、等著補投的 mention 則數。
+  final int pending;
+
+  /// 這台機器上認得的 Codex thread 數（不分忙閒）。
+  final int localThreads;
+
+  /// 其中正在處理 turn 的——投遞就是在等這個數字降下來。
+  final int busyThreads;
+
+  /// 最後一次有意義的投遞結果，一句中文。
+  final String lastEvent;
+
+  CodexDispatchStatus copyWith({
+    int? pending,
+    int? localThreads,
+    int? busyThreads,
+    String? lastEvent,
+  }) => CodexDispatchStatus(
+    pending: pending ?? this.pending,
+    localThreads: localThreads ?? this.localThreads,
+    busyThreads: busyThreads ?? this.busyThreads,
+    lastEvent: lastEvent ?? this.lastEvent,
+  );
+}
+
 /// 把聊天室訊息經 `codex queue` 轉送進本機的 Codex session（外部喚醒）。
 ///
 /// 這讓 app 同時是「人類看聊天室的視窗」與「本機 agent 的通知樞紐」——
@@ -106,6 +145,7 @@ class CodexDispatcher {
     _knownLocalThreads.addAll(busy);
     // 空下來就重置加入通知的節流：它是 per-turn 的，不是永久靜音
     _joinNoticedThisTurn.removeWhere((t) => !busy.contains(t));
+    _publish();
     return busy;
   }
 
@@ -131,8 +171,22 @@ class CodexDispatcher {
   /// 算數（十分鐘前 @ 你的人還在等），但久到對方已經自己去看了就沒意義。
   static const _pendingTtl = Duration(minutes: 30);
 
-  @visibleForTesting
   int get pendingCount => _pending.length;
+
+  /// 設定頁訂閱它把狀態顯示出來。純顯示用，沒有任何邏輯讀它。
+  final ValueNotifier<CodexDispatchStatus> status =
+      ValueNotifier(const CodexDispatchStatus());
+
+  /// 重算計數並發布。[event] 給 null 時保留上一次的結果描述。
+  void _publish([String? event]) {
+    final busy = activeThreadIds();
+    status.value = status.value.copyWith(
+      pending: _pending.length,
+      localThreads: _localThreads().length,
+      busyThreads: busy.length,
+      lastEvent: event,
+    );
+  }
 
   Future<void> handle(RoomFreshBatch batch) async {
     // 一批裡任何一則出事都不該連累其他則，更不該讓整條訂閱從此靜默。
@@ -304,6 +358,9 @@ class CodexDispatcher {
         })}';
     final ok = await _queue(thread, text);
     if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
+    _publish(ok
+        ? '已投遞 ${msgs.length} 則到 ${_shortThread(thread)}'
+        : 'codex queue 失敗（${_shortThread(thread)}）');
     return ok;
   }
 
@@ -343,6 +400,7 @@ class CodexDispatcher {
       _pending.remove(dropped);
       _log.warning('補投佇列已滿，丟棄最舊的一則 mention（$dropped）');
     }
+    _publish('等 Codex 空下來（${_pending.length} 則待補投）');
   }
 
   /// 重試補投。跟著 [pollAssignments] 的 10 秒輪詢走——指派靠這個節奏顯得
@@ -363,6 +421,8 @@ class CodexDispatcher {
         '${p.message.senderName} @ ${p.message.mentions.join('、')}'
         '——這則喚醒沒有送達任何本機 Codex',
       );
+      _publish('逾時放棄：${p.message.senderName} @ '
+          '${p.message.mentions.join('、')}');
     }
     if (_pending.isEmpty) return;
 
@@ -456,6 +516,10 @@ class CodexDispatcher {
       }
     } finally {
       _pollingAssignments = false;
+      // 計數要等所有增減都做完才發布：投遞成功那次的 `_publish` 發生在
+      // 把訊息移出佇列**之前**，只靠它的話畫面會停在舊數字——而那正是
+      // 這個面板要回答的問題。
+      _publish();
     }
   }
 
@@ -531,6 +595,10 @@ class CodexDispatcher {
       return const {};
     }
   }
+
+  /// thread id 太長，畫面上只顯示尾巴八碼（與指派 UI 的 label 同一套）。
+  static String _shortThread(String t) =>
+      t.length > 8 ? t.substring(t.length - 8) : t;
 
   static final _threadIdPattern = RegExp(
     r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',

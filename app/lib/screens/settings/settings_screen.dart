@@ -15,6 +15,8 @@ import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../state/app_providers.dart';
+import '../../core/logging/redacting_logger.dart';
+import '../../notifications/codex_dispatcher.dart';
 import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/invite_manager.dart';
@@ -466,6 +468,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       },
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  _CodexDispatchStatusView(ref.read(codexDispatcherProvider)),
                 ],
               ],
               const SizedBox(height: 22),
@@ -622,5 +626,59 @@ Future<String?> probeWebSocket(
             '（server/.env 的 CHATROOM_HUMAN_TOKEN）。'
         : 'REST 通了，但即時通道連不上：$e\n'
             '網址與 token 是對的，問題在 WS 這條路徑上。';
+  }
+}
+
+
+/// Codex 轉送的當下狀態。
+///
+/// 這條管線的失敗形狀全是靜默的：投不出去就留在記憶體等補投，畫面上一切
+/// 正常。09/12 追「@ 了 Codex 卻沒醒」時，能回答「現在到底有沒有東西卡著」
+/// 的只有一個測試才看得到的欄位——結論只能靠推理，沒辦法當場看一眼。
+class _CodexDispatchStatusView extends StatelessWidget {
+  const _CodexDispatchStatusView(this.dispatcher);
+
+  final CodexDispatcher dispatcher;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return ValueListenableBuilder<CodexDispatchStatus>(
+      valueListenable: dispatcher.status,
+      builder: (context, st, _) {
+        final lines = <String>[
+          '本機 Codex：${st.localThreads} 個'
+              '${st.busyThreads > 0 ? '（${st.busyThreads} 個處理中）' : '（都閒著）'}',
+          st.pending > 0
+              ? '待補投：${st.pending} 則——等處理中的 turn 結束才投，'
+                  '每 10 秒重試一次'
+              : '待補投：無',
+          if (st.lastEvent.isNotEmpty) '最後一次：${st.lastEvent}',
+        ];
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: s.inkMute.withValues(alpha: .06),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: s.inkMute.withValues(alpha: .18)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final line in lines) ...[
+                Text(line, style: UepText.serif(size: 12, color: s.inkMute)),
+                const SizedBox(height: 3),
+              ],
+              const SizedBox(height: 3),
+              SelectableText(
+                'log：${logFile?.path ?? '（沒有可寫位置，只進 DevTools）'}',
+                style: UepText.mono(size: 10.5, color: s.inkMute),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

@@ -225,6 +225,24 @@ void main() {
     expect(payload(runs.single)['action'], contains('assignment_id'));
   });
 
+  test('狀態快照把「現在卡著什麼」講出來（設定頁顯示用）', () async {
+    // 這條管線的失敗形狀全是靜默的：投不出去就留在記憶體等補投，畫面上
+    // 一切正常。能回答「現在到底有沒有東西卡著」的欄位如果只有測試看得到，
+    // 追查就只能靠推理。
+    final d = make();
+    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
+    expect(d.status.value.pending, 1);
+    expect(d.status.value.busyThreads, 2, reason: '兩個 thread 都在處理 turn');
+    expect(d.status.value.localThreads, 2);
+    expect(d.status.value.lastEvent, contains('待補投'));
+
+    await settle(d);
+    expect(d.status.value.pending, 0);
+    expect(d.status.value.busyThreads, 0);
+    expect(d.status.value.localThreads, 2, reason: '閒下來不等於不在了');
+    expect(d.status.value.lastEvent, contains('已投遞'));
+  });
+
   test('閒著的本機 Codex 也要報到、也收得到指派', () async {
     // writer lock 只在 Codex 持有寫入鎖時存在，所以 `activeThreadIds()`
     // 列出的是**正在處理 turn 的那些**。拿它當輪詢名單，等於「只有忙著的
