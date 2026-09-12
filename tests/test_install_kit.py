@@ -85,18 +85,20 @@ def test_setup_codex_rewrites_stale_block(inst, tmp_path, capsys):
     cfg.parent.mkdir(parents=True)
     cfg.write_text(EXISTING_CONFIG, encoding="utf-8")
 
-    inst.setup_codex(EXE, "http://hub:8787", "TOK", "諾薇亞", cfg)
+    inst.setup_codex(EXE, "諾薇亞", cfg)
 
     data = tomllib.loads(cfg.read_text(encoding="utf-8"))
     chatroom = data["mcp_servers"]["chatroom"]
     assert chatroom["command"] == str(EXE)
     assert chatroom["args"] == []
     assert "enabled" not in chatroom  # 舊機器留下的 enabled = false 必須消失
+    # 連線資訊**不在這裡**：MCP 設定只指向 kit 的 .env（2026-09-12）。
+    # 寫在兩個地方的話換一次 token 要改兩處，而漏改一處的症狀是
+    # 「看起來換好了、實際還在用舊的」
     assert chatroom["env"] == {
-        "CHATROOM_URL": "http://hub:8787",
+        "CHATROOM_ENV_FILE": str(inst.KIT_DIR / ".env"),
         "CHATROOM_AGENT_KIND": "codex",
         "CHATROOM_DEFAULT_NAME": "諾薇亞",
-        "CHATROOM_TOKEN": "TOK",
     }
     # 別人的設定不能被波及
     assert data["model"]["name"] == "gpt-5"
@@ -107,19 +109,41 @@ def test_setup_codex_rewrites_stale_block(inst, tmp_path, capsys):
 def test_setup_codex_is_idempotent(inst, tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text(EXISTING_CONFIG, encoding="utf-8")
-    inst.setup_codex(EXE, "http://hub:8787", "TOK", "諾薇亞", cfg)
+    inst.setup_codex(EXE, "諾薇亞", cfg)
     once = cfg.read_text(encoding="utf-8")
-    inst.setup_codex(EXE, "http://hub:8787", "TOK", "諾薇亞", cfg)
+    inst.setup_codex(EXE, "諾薇亞", cfg)
     assert cfg.read_text(encoding="utf-8") == once
     assert once.count("[mcp_servers.chatroom]") == 1
 
 
 def test_setup_codex_creates_missing_config(inst, tmp_path):
     cfg = tmp_path / "fresh" / "config.toml"
-    inst.setup_codex(EXE, "http://hub:8787", "", "諾薇亞", cfg)
+    inst.setup_codex(EXE, "諾薇亞", cfg)
     chatroom = tomllib.loads(cfg.read_text(encoding="utf-8"))["mcp_servers"]["chatroom"]
-    assert "CHATROOM_TOKEN" not in chatroom["env"]  # 無 token 時不寫空值
+    assert "CHATROOM_TOKEN" not in chatroom["env"]  # token 只存在 kit 的 .env
     assert not any(p.name.startswith("config.toml.bak-") for p in cfg.parent.iterdir())
+
+
+def test_codex_block_survives_a_windows_path(inst, tmp_path):
+    r"""🚨 TOML 的 basic string 會解跳脫，而 env 裡現在有 Windows 路徑。
+
+    `C:\Users\...` 的 `\U` 是合法的 Unicode 跳脫開頭 ⇒ 整份 `config.toml`
+    變成無效 TOML ⇒ Codex 連**別人的** MCP 設定一起讀不到，而安裝器照樣
+    印「完成」。改用 literal string 之後這條釘住它。
+
+    （寫這段 docstring 時 Python 也對 `\U` 做了同一件事——所以它是 raw
+    string。同一個形狀，同一分鐘內出現兩次。）
+    """
+    kit = tmp_path / "Users" / "Bernie" / "kit"
+    inst_kit = getattr(inst, "KIT_DIR")
+    try:
+        inst.KIT_DIR = kit
+        cfg = tmp_path / "config.toml"
+        inst.setup_codex(EXE, "諾薇亞", cfg)
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        assert data["mcp_servers"]["chatroom"]["env"]["CHATROOM_ENV_FILE"] ==             str(kit / ".env")
+    finally:
+        inst.KIT_DIR = inst_kit
 
 
 # ---------- write_env_file ----------
@@ -155,8 +179,18 @@ def test_env_file_carries_connection_info_only(inst, kit_dir):
     }
 
 
-def test_env_file_omits_empty_token(inst, kit_dir):
-    assert "CHATROOM_TOKEN" not in _env_values(inst.write_env_file("http://hub:8787", ""))
+def test_env_file_writes_the_keys_even_when_empty(inst, kit_dir):
+    """留空時**仍然把鍵寫出來**（2026-09-12，安裝與連線分開之後）。
+
+    兩題現在都可以留空——還沒被邀請、或自己的 Hub 還沒架起來的人先把 bridge
+    裝好是合理的。但「之後自己填」如果沒有那兩行，就是一句沒有著落的指示：
+    使用者得先猜到鍵叫什麼、該放哪個檔。**空的鍵值對本身就是說明書。**
+
+    （舊行為是空 token 就不寫那一行，那時它只是 watcher 的補充設定；現在
+    這個檔是連線資訊的唯一真相，缺一行的代價不一樣了。）
+    """
+    values = _env_values(inst.write_env_file("", ""))
+    assert values == {"CHATROOM_URL": "", "CHATROOM_TOKEN": ""}
 
 
 def test_env_file_warns_when_removing_legacy_identity_values(inst, kit_dir, capsys):

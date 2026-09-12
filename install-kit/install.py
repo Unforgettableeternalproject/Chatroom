@@ -300,15 +300,25 @@ def _report_install_failure(
     die("pip 安裝失敗，原因見上方輸出。")
 
 
-def mcp_env(url: str, token: str, kind: str, name: str) -> dict[str, str]:
-    env = {
-        "CHATROOM_URL": url,
+def mcp_env(kind: str, name: str) -> dict[str, str]:
+    """MCP client 設定裡要放的環境變數。
+
+    🔑 **連線資訊（URL／token）不寫在這裡**，只放一個指向 kit `.env` 的
+    路徑（2026-09-12）。理由是那份設定不是唯一的一份：watcher 是獨立進程、
+    拿不到 MCP client 的 env，所以 token 本來要寫兩個地方 ⇒ 換 token 得改
+    兩處，而漏改一處的症狀是「看起來換好了、實際還在用舊的」。
+
+    這也讓**安裝與連線分開**：還沒被邀請、或自己的 Hub 還沒架起來的人可以
+    先把 bridge 裝好，之後把兩行填進那個檔就能用，不必重跑安裝器。
+
+    kind 與 name 留在這裡是刻意的：它們是 per-agent 的**身分**，寫進共用檔
+    就得在 claude 與 codex 之間二選一（見 ENV_FILE_HEADER）。
+    """
+    return {
+        "CHATROOM_ENV_FILE": str(KIT_DIR / ".env"),
         "CHATROOM_AGENT_KIND": kind,
         "CHATROOM_DEFAULT_NAME": name,
     }
-    if token:
-        env["CHATROOM_TOKEN"] = token
-    return env
 
 
 ENV_FILE_HEADER = """\
@@ -334,7 +344,11 @@ ENV_FILE_HEADER = """\
 
 
 def write_env_file(url: str, token: str) -> Path:
-    """在 kit 根目錄寫一份 .env 給 watcher 用（只放 URL/TOKEN）。
+    """在 kit 根目錄寫一份 .env——**連線資訊的唯一真相**（只放 URL/TOKEN）。
+
+    bridge 進程靠 MCP 設定裡的 `CHATROOM_ENV_FILE` 找到它，watcher 靠 cwd
+    找到它。在這之前 token 得同時寫進 MCP 設定與這個檔，換一次要改兩處，
+    而漏改一處的症狀是「看起來換好了、實際還在用舊的」。
 
     位置必須是 kit 根目錄（bridge/ 的上一層）——envfile.load_env_file 的
     候選清單裡有「bridge 套件的 repo 根」，解壓後的 kit 剛好落在那個位置。
@@ -344,9 +358,10 @@ def write_env_file(url: str, token: str) -> Path:
     （詳見 ENV_FILE_HEADER）。那兩個值由 watch.py 的 --kind / --label 給。
     """
     path = KIT_DIR / ".env"
-    values = {"CHATROOM_URL": url}
-    if token:
-        values["CHATROOM_TOKEN"] = token
+    # 留空時仍然把兩行寫出來（空值）。**沒有那兩行的話，「之後自己填」是
+    # 一句沒有著落的指示**——使用者得先猜到鍵叫什麼、該放哪個檔。
+    # 空的鍵值對本身就是說明書。
+    values = {"CHATROOM_URL": url, "CHATROOM_TOKEN": token}
     body = "".join(f"{k}={v}\n" for k, v in values.items())
     content = ENV_FILE_HEADER + body
     old = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
@@ -374,9 +389,9 @@ def write_env_file(url: str, token: str) -> Path:
     return path
 
 
-def setup_claude(exe: Path, url: str, token: str, name: str, mode: str) -> None:
+def setup_claude(exe: Path, name: str, mode: str) -> None:
     config = {"command": str(exe), "args": [],
-              "env": mcp_env(url, token, "claude", name)}
+              "env": mcp_env("claude", name)}
     payload = json.dumps(config, ensure_ascii=False)
     claude = shutil.which("claude")
     if mode == "auto" and claude:
@@ -423,8 +438,7 @@ def strip_codex_block(text: str) -> tuple[str, bool]:
     return "".join(out), removed
 
 
-def setup_codex(exe: Path, url: str, token: str, name: str,
-                config_path: Path) -> None:
+def setup_codex(exe: Path, name: str, config_path: Path) -> None:
     block_lines = [
         "",
         f"[{CODEX_TABLE}]",
@@ -433,8 +447,13 @@ def setup_codex(exe: Path, url: str, token: str, name: str,
         "",
         f"[{CODEX_TABLE}.env]",
     ]
-    for k, v in mcp_env(url, token, "codex", name).items():
-        block_lines.append(f'{k} = "{v}"')
+    for k, v in mcp_env("codex", name).items():
+        # 🚨 TOML 的 basic string 會解跳脫序列，而現在這裡有 Windows 路徑
+        # （`CHATROOM_ENV_FILE`）：`C:\Users\...` 裡的 `\U` 是合法的 Unicode
+        # 跳脫開頭 ⇒ **整份 config.toml 變成無效 TOML**，Codex 連別人的 MCP
+        # 設定一起讀不到。用 literal string（單引號，不解跳脫）。
+        # command 那一行一直都是單引號，正是同一個理由。
+        block_lines.append(f"{k} = '{v}'")
     block = "\n".join(block_lines) + "\n"
 
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
@@ -569,15 +588,24 @@ def main() -> None:
     # 那時他會安安靜靜地連到別人的 Hub。
     #
     # 「按 Enter 就錯」是最容易踩的一種預設值，所以這一題強制要回答。
-    url = (args.url or ask_required(
-        "Hub 位址（主持人給你的，例 http://192.0.2.10:8787）")).rstrip("/")
+    # 可以留空——**安裝 bridge 與決定要連哪台 Hub 是兩件事**（艾斯維爾
+    # 2026-09-12）：還沒被邀請、或自己的 Hub 還沒架起來的人，先把 bridge
+    # 裝好是合理的。留空時連線資訊之後填進 kit 的 `.env` 就生效，不必重裝。
+    #
+    # 🔴 但**仍然沒有預設值**。原本填的是開發機的內網位址——交付出去之後，
+    # 按 Enter 的人會拿到一個他連不上的位址；而更糟的是他剛好也在那個 VPN
+    # 裡，那時他會安安靜靜地連到別人的 Hub。「按 Enter 就錯」與「按 Enter
+    # 就先跳過」是兩回事，這裡要的是後者。
+    url = (args.url or ask(
+        "Hub 位址（主持人給你的，例 http://192.0.2.10:8787；可留空，之後再填）"
+    )).rstrip("/")
     # 🔑 **主持人手上有兩把，agent 要的是 agent 那把。**
     #
     # 憑證分離之後 Hub 有 CHATROOM_TOKEN（agent）與 CHATROOM_HUMAN_TOKEN（人）。
     # 這包裝的是 agent 的 bridge，拿到人類那把等於把主持人的權力交給 agent；
     # 而拿錯的症狀不是「裝不起來」，是**裝好了、權限卻不對**。
-    token = args.token if args.token is not None else ask_required(
-        "Agent token（主持人給你的那把 agent 憑證）")
+    token = args.token if args.token is not None else ask(
+        "Agent token（主持人給你的那把 agent 憑證；可留空，之後再填）")
     # 預設值刻意留空：所有按 Enter 的人都叫同一個名字的話，房內會出現
     # 一串 Tester / Tester-2 / Tester-3，而名字是用來認人的
     name = args.name or ask("你在聊天室的代稱（可留空，由 Hub 發一個）")
@@ -590,27 +618,46 @@ def main() -> None:
     # 在動任何檔案之前檢查：裝到一半才發現環境不支援，使用者要自己收拾殘骸
     check_agent_capabilities(targets)
 
-    print("\n• 測試 Hub 連線…")
-    if check_hub(url, token):
-        print("✅ Hub 連線正常")
-    elif ask("Hub 連線失敗，仍要繼續安裝嗎？(y/N)", "N").lower() != "y":
-        raise SystemExit(1)
+    print()
+    if not url:
+        # 沒有位址就沒有「連得上」這回事。硬測一次只會印出一個看起來像
+        # 故障的失敗，而使用者什麼都還沒做錯
+        print("• 尚未指定 Hub，略過連線測試")
+    else:
+        print("• 測試 Hub 連線…")
+        if check_hub(url, token):
+            print("✅ Hub 連線正常")
+        elif ask("Hub 連線失敗，仍要繼續安裝嗎？(y/N)", "N").lower() != "y":
+            raise SystemExit(1)
 
     exe = install_bridge()
     print()
     if "claude" in targets:
-        setup_claude(exe, url, token, name, args.claude)
+        setup_claude(exe, name, args.claude)
     if "codex" in targets:
-        setup_codex(exe, url, token, name, args.codex_config)
+        setup_codex(exe, name, args.codex_config)
 
     print()
-    # watcher（Monitor 拉起的獨立進程）拿不到 MCP 設定裡的 env，只能靠這份。
+    # 連線資訊的唯一真相：bridge 靠 CHATROOM_ENV_FILE 找到它，watcher
+    # （Monitor 拉起的獨立進程，拿不到 MCP 設定裡的 env）靠 cwd 找到它。
     # 兩種 target 都需要：Codex 的 --codex-thread 備援模式同樣是獨立進程。
-    write_env_file(url, token)
+    env_path = write_env_file(url, token)
 
     write_registry(targets)
 
     print("\n=== 完成 ===")
+    if not url or not token:
+        # 裝好了但還連不上，而那是**使用者自己選的**。講清楚缺什麼、填哪裡，
+        # 否則他下次想用的時候只會看到 401／連不上，然後回來重裝一次
+        missing = "、".join(
+            n for n, v in (("Hub 位址", url), ("agent token", token)) if not v)
+        print(f"⚠️ 還缺 {missing}——bridge 已經裝好，但現在還連不上任何 Hub。")
+        print(f"   拿到之後把這兩行填進：{env_path}")
+        print("     CHATROOM_URL=http://主持人給你的位址:8787")
+        print("     CHATROOM_TOKEN=主持人給你的那把 agent 憑證")
+        print("   填完讓 agent 重連（或重啟 Claude Code / Codex）即可，"
+              "不必重跑這支安裝器。")
+        print()
     print("重啟 Claude Code / Codex 後即可使用 chatroom_* 工具。")
     print("⚠️ 請勿自行設定 CHATROOM_SESSION_KEY——身分由 session 自動決定，")
     print("   固定 key 會讓多個 session 合併成同一個聊天室身分。")

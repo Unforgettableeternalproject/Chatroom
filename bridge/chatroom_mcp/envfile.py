@@ -44,9 +44,30 @@ _BRIDGE_KEYS = frozenset({
 def load_env_file(start: Path | None = None) -> Path | None:
     """載入最近的 .env，回傳實際使用的檔案路徑（找不到時回 None）。
 
-    搜尋順序：start（預設 cwd）往上 _MAX_DEPTH 層 → bridge/ 目錄 →
-    repo 根目錄 → server/（Hub 的 .env 是 token 的單一真相來源）。
+    `CHATROOM_ENV_FILE` 指到某個檔時**只讀它**，不再搜尋。這是 mcp-kit 的
+    安裝方式（2026-09-12）：MCP client 設定裡只放這一個路徑，連線資訊全部
+    留在 kit 的 `.env` 裡。
+
+    📌 為什麼要有這條路：bridge 進程的 cwd 是**使用者自己的專案目錄**，
+    往上找不到 kit 的 `.env` ⇒ 在這之前 token 只能寫進 MCP 設定，而 watcher
+    是獨立進程、拿不到那份 ⇒ 同一個 token 存在兩個地方。改一個不夠，而漏改
+    的症狀是「看起來換好了、實際還在用舊的」。
+
+    搜尋順序（沒有 `CHATROOM_ENV_FILE` 時）：start（預設 cwd）往上
+    _MAX_DEPTH 層 → bridge/ 目錄 → repo 根目錄 → server/（Hub 的 .env）。
     """
+    pinned = os.environ.get("CHATROOM_ENV_FILE", "").strip()
+    if pinned:
+        path = Path(pinned).expanduser()
+        if not path.is_file():
+            return None
+        # 🚨 **指定的檔案也套白名單。** kit 自己的 .env 只有連線資訊，套了
+        # 沒有損失；但這個值是設定檔裡的一個字串，指到 Hub 的 `server/.env`
+        # 是很自然的一個誤設——而那份裡面有 `CHATROOM_HUMAN_TOKEN`，整份
+        # 灌進來等於每個 agent 的環境裡都躺著一把它不該有的鑰匙
+        # （見 `_BRIDGE_KEYS` 的註解，那是同一件事的第一次）
+        _apply(path, only=_BRIDGE_KEYS)
+        return path
     base = (start or Path.cwd()).resolve()
     package_dir = Path(__file__).resolve().parents[1]  # bridge/
     repo_root = package_dir.parent
