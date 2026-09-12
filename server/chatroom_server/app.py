@@ -1062,8 +1062,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 而那與「這個 Hub 的主持人模式壞了」在畫面上一模一樣
         if token == cfg.human_api_token:
             return True
-        if token and await _token_audience(token) == "human":
-            return True
+        # 🚨 **邀請碼開不了主持人模式**（2026-09-12，艾斯維爾連進別人的
+        # Hub 時實測到自己有主持人開關）。這裡原本也放行
+        # `audience=human` 的 access_token——那條是 09/07 寫的，當時那種
+        # 邀請的用途是**主持人自己的 App**（`.env` 還沒有人類憑證可用）。
+        # 那個前提在 App 開始用它邀請外部的人之後就不成立了。
+        #
+        # 判準回到這條規則唯一站得住的論證上：主 token 放在 `server/.env`，
+        # **拿得到它的人本來就讀得到同一個目錄下的 `chatroom.db`**，所以
+        # 給的不是新權限。那句話對持有 `.env` 的人成立，對拿到一張邀請碼
+        # 的人完全不成立——他手上有的只是一把進得了門的鑰匙。
         raise _err(403, "human_token_required",
                    "主持人視角只認人類憑證（CHATROOM_HUMAN_TOKEN 或"
                    " audience=human 的邀請）。agent 的 token 借不到這個身分。")
@@ -1091,7 +1099,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             return token == cfg.api_token
         if token == cfg.human_api_token:
             return True
-        return bool(token) and await _token_audience(token) == "human"
+        # 與 `host_view` 同步（那裡有完整理由）。這兩者必須對同一件事
+        # 說話：畫一個永遠按不動的開關比不畫更難懂，而反過來——畫得出
+        # 開關、按下去也真的生效、但那個人根本不該是主持人——更糟
+        return False
 
     def require_root(request: Request) -> None:
         """發放與撤銷 token 限主 token。
@@ -12562,6 +12573,24 @@ def create_app(config: Config | None = None) -> FastAPI:
     app.state.room_owned_tables_gap = _room_owned_tables_gap  # 對帳給測試守
     app.state.log_purge_preview = _log_purge_preview  # 測試驗預覽內容
 
+    def _public_url() -> str:
+        """這台 Hub 的對外網址，來自 `scripts/tunnel.py` 寫的 `.tunnel-url`。
+
+        那個檔開隧道時寫、關隧道時刪（`tunnel.py` 與 `stop-tunnel.py` 兩邊
+        都刪），所以「檔在」約等於「隧道活著」。**約等於不是等於**——
+        cloudflared 被強制砍掉時檔案會留著，所以這個值是提示不是保證，
+        client 仍要自己處理連不上。
+
+        讀不到就回空字串：這是一個錦上添花的欄位，它壞掉不該讓 health 壞掉。
+        """
+        try:
+            raw = cfg.tunnel_url_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        # 只收像網址的東西。這個檔是別的進程寫的，而 health 的回應會被 App
+        # 直接拿去當連線位址
+        return raw if raw.startswith(("http://", "https://")) else ""
+
     @app.get("/api/health")
     async def health():
         # App 啟動時拿這裡的 build 與自己的比對：版本對不上要當場講出來，
@@ -12577,6 +12606,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 都不生效，而且完全不報錯」，靠翻 .env 才知道的東西等於沒有人
             # 知道。不洩漏 token 本身，只說在哪個模式
             "credential_mode": "split" if cfg.human_api_token else "legacy",
+            # 對外網址（隧道）。**每次現讀那個檔，不快取**：quick tunnel 每次
+            # 重啟都換網址，而 Hub 不會跟著重啟——快取住的話它會很有自信地
+            # 報一個已經死掉的位址，而那比沒有值更糟。
+            #
+            # 這個值存在的理由：邀請碼裡的位址原本取自**發邀請那個人自己的
+            # App 設定**，而他就在 Hub 那台機器上，填的是 127.0.0.1——對他
+            # 完全正常，對收到邀請的人則是一個永遠連不上的位址
+            # （艾斯維爾 2026-09-12 實測）。「主持人怎麼連」與「別人怎麼連」
+            # 從來沒有被分開過。
+            "public_url": _public_url(),
         }
 
     if cfg.debug_endpoints:

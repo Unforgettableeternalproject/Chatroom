@@ -123,7 +123,13 @@ async def test_an_agent_token_still_joins_as_an_agent(tmp_path):
 
 async def test_an_invite_can_be_issued_for_a_human(tmp_path):
     """邀請別人的人類進來時，發的那張要是人類憑證——否則對方一樣冒充不了
-    自己。"""
+    自己。
+
+    ⚠️ 「能以人類身分行事」與「是這台 Hub 的主持人」**是兩件事**。這條
+    測試原本用 `host_view` 當證據，而那正好是 2026-09-12 咬到的東西：
+    受邀者連進別人的 Hub 之後，畫面上出現了主持人模式開關。標題說的一直
+    是前者，證據取的卻是後者。
+    """
     app, client = await _client(tmp_path, "invite-human", human_api_token=HUMAN)
     async with app.router.lifespan_context(app), client:
         issued = await client.post("/api/tokens", headers=_auth(HUMAN),
@@ -132,9 +138,36 @@ async def test_an_invite_can_be_issued_for_a_human(tmp_path):
         assert issued.status_code == 200, issued.text
         token = issued.json()["token"]
         assert issued.json()["audience"] == "human"
-        r = await _host_view_flag(client, token)
+        # 這才是「冒充不了自己」的意思：進得了房，而且是以人的身分
+        rid = (await client.post("/api/rooms", headers=_auth(token),
+                                 json={"name": "房",
+                                       "session_key": "human-1"})).json()["id"]
+        r = await client.post(f"/api/rooms/{rid}/join", headers=_auth(token),
+                              json={"kind": "human", "role": "human",
+                                    "session_key": "human-1"})
         assert r.status_code == 200, r.text
-        assert r.json()["host_view"] is True
+
+
+async def test_an_invite_is_not_a_key_to_the_host_view(tmp_path):
+    """🚨 **邀請碼開不了主持人模式**（艾斯維爾 2026-09-12 實測）。
+
+    主持人視角唯一站得住的論證是：主 token 放在 `server/.env`，拿得到它的
+    人本來就讀得到同一個目錄下的 `chatroom.db`，所以給的不是新權限。
+    那句話對持有 `.env` 的人成立，**對拿到一張邀請碼的人完全不成立**。
+
+    判準原本寫成「audience 是不是 human」——也就是「你是不是人」，而不是
+    「你是不是這台機器的擁有者」。於是每一個受邀的人都讀得到那台 Hub 上
+    所有人的私人房。
+    """
+    app, client = await _client(tmp_path, "invite-not-host",
+                                human_api_token=HUMAN)
+    async with app.router.lifespan_context(app), client:
+        token = (await client.post("/api/tokens", headers=_auth(HUMAN),
+                                   json={"label": "外面的人",
+                                         "audience": "human"})).json()["token"]
+        r = await _host_view_flag(client, token)
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "human_token_required"
 
 
 async def test_invites_default_to_agent(tmp_path):
@@ -218,10 +251,16 @@ async def test_the_host_switch_is_shown_to_whoever_can_actually_use_it(tmp_path)
     async with app.router.lifespan_context(app), client:
         assert await _you_are_host(client, HUMAN) is True
         assert await _you_are_host(client, ROOT) is False
+        # 邀請碼不是主持人的鑰匙（見
+        # `test_an_invite_is_not_a_key_to_the_host_view`）。這裡原本斷言
+        # True——那是 09/07 的前提：當時 `audience=human` 的邀請是發給
+        # **主持人自己的 App** 用的，因為 `.env` 還沒有人類憑證。安裝器
+        # 從 `1d526bf` 起會產生 `CHATROOM_HUMAN_TOKEN`，主持人直接用那把，
+        # 而這種邀請的實際用途已經變成「邀請外面的人」
         invite = (await client.post("/api/tokens", headers=_auth(HUMAN),
-                                    json={"label": "App",
+                                    json={"label": "外面的人",
                                           "audience": "human"})).json()["token"]
-        assert await _you_are_host(client, invite) is True
+        assert await _you_are_host(client, invite) is False
 
 
 async def test_before_the_split_the_main_token_still_owns_the_switch(tmp_path):
