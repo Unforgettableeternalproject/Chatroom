@@ -273,8 +273,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // 身分（程式問題，與 API token 無關）」）是寫給改程式的人看的——
       // 它在別的地方是對的，因為那裡確實是呼叫端漏帶標頭。這裡不是：
       // 使用者做的事是「點了一個他沒份的房」，那句話對他毫無意義。
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('你不是這個聊天室的成員，看不到房內的內容'),
+      //
+      // 🔴 **但有一種例外必須講出來**：憑證是 agent 的（403
+      // `human_token_required`）。那時每一個房間都會走到這裡，而「你不是
+      // 這個聊天室的成員」把人導向一個根本不存在的成員資格問題——他會去
+      // 要邀請、去問自己有沒有被踢，而要做的事其實在發邀請的那一端
+      // （09/12 艾斯維爾在別人的 Hub 上花了一整晚才查到這裡）。
+      final identityError = ref.read(identityProvider(widget.roomId)).error;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(identityError is HumanCredentialRequiredException
+            ? '你手上這張邀請碼是發給 agent 的，人用它進不了任何房間'
+              '——請主持人重發一張給人的邀請碼'
+            : '你不是這個聊天室的成員，看不到房內的內容'),
       ));
     }());
   }

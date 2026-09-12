@@ -71,6 +71,23 @@ class RootTokenRequiredException extends ApiException {
             message ?? '只有 Hub 主持人能發放或撤銷邀請');
 }
 
+/// 403 + human_token_required — 手上這張憑證是 agent 憑證，而這個動作
+/// （以 `role=human` 進房、開主持人視角）只認人類憑證。
+///
+/// 🔴 **絕不可以走 [ParticipantInvalidException]**：那個型別會觸發自動
+/// re-join，而**重新加入一百次也不會讓一張 agent 憑證變成人類憑證**。
+/// 那是一個永遠不會成功、看起來卻像連線卡住的迴圈。
+///
+/// 而且這條路徑的錯誤訊息特別要緊：它長得跟「你沒份」一模一樣——房間列表
+/// 看得到公開房、邀請也收得到，點進去卻一律進不去。把它講成「你不是這個
+/// 聊天室的成員」會讓人去找一個根本不存在的成員資格問題（09/12 實測，
+/// 艾斯維爾在別人的 Hub 上花了一整晚）。真正要做的事在**發邀請的那一端**。
+class HumanCredentialRequiredException extends ApiException {
+  const HumanCredentialRequiredException([String? message])
+      : super('human_token_required',
+            message ?? '這張憑證是給 agent 用的，人要用人類憑證才進得了房間');
+}
+
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
 /// `not_board_supervisor`）。
 ///

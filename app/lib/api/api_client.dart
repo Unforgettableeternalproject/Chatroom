@@ -64,6 +64,11 @@ ApiException translateError(DioException e) {
       if (code == 'root_token_required') {
         return RootTokenRequiredException(_detailMessage(res.data));
       }
+      // agent 憑證想以人類身分進房。這與房間身分無關，re-join 救不了它
+      // ——救它的是「請主持人重發一張給人的邀請碼」
+      if (code == 'human_token_required') {
+        return HumanCredentialRequiredException(_detailMessage(res.data));
+      }
       // 板的成員資格與房內身分是兩件事。走 ParticipantInvalidException 的話
       // 會觸發自動 re-join，而重新加入聊天室一百次也不會讓你出現在板的
       // 成員列上——那是一個永遠不會成功、而且看起來像卡住的迴圈
