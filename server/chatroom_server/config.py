@@ -23,6 +23,24 @@ class Config:
     human_api_token: str = field(
         default_factory=lambda: os.environ.get("CHATROOM_HUMAN_TOKEN", "")
     )
+    # 隧道網址的副本（`scripts/tunnel.py` 開隧道時寫、關掉時刪）。
+    # Hub 靠它回答「外面的人要連哪個位址」——邀請碼需要的是那個，而不是
+    # 主持人自己 App 裡填的 127.0.0.1。
+    #
+    # 預設放在 DB 旁邊：tunnel.py 寫的是 `server/.tunnel-url`，而 Hub 的 DB
+    # 預設也在 `server/`。兩邊要對得起來，所以這裡跟著 db_path 走而不是
+    # 寫死路徑——測試與自訂 DB 位置的安裝才不會各看各的。
+    tunnel_url_file_path: str = field(
+        default_factory=lambda: os.environ.get("CHATROOM_TUNNEL_URL_FILE", "")
+    )
+
+    @property
+    def tunnel_url_file(self):
+        from pathlib import Path
+        if self.tunnel_url_file_path:
+            return Path(self.tunnel_url_file_path)
+        return Path(self.db_path).resolve().parent / ".tunnel-url"
+
     # agent 閒置多久後被自動移出房間（秒）
     idle_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))

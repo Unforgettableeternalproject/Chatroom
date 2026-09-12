@@ -49,6 +49,10 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
   final _label = TextEditingController();
   bool _busy = false;
 
+  /// 主持人上次手填的對外位址。隧道網址每次重啟都會變，但內網／VPN 的 IP
+  /// 不會——記著它，重發邀請時不必每次重打。
+  String _lastPublicUrl = '';
+
   @override
   void dispose() {
     _label.dispose();
@@ -73,73 +77,146 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
     }
   }
 
+  /// 邀請碼裡該放哪個位址。
+  ///
+  /// 順序：Hub 自報的對外網址（隧道）→ 主持人自己 App 設定裡的那個。
+  ///
+  /// 🔑 **「主持人怎麼連」與「別人怎麼連」是兩件事**，而這裡原本只有前者：
+  /// 主持人就在 Hub 那台機器上，設定裡填 `127.0.0.1` 完全正常，於是發出去
+  /// 的邀請碼帶著一個對方永遠連不上的位址——而兩邊都不會看到任何錯誤，
+  /// 對方的 App 會安靜地去連他自己的電腦（艾斯維爾 2026-09-12 實測）。
+  ///
+  /// Hub 讀不到隧道網址（沒開、或版本舊）時回退到設定值，由呼叫端擋本機位址。
+  Future<String> _inviteUrl() async {
+    final fallback = ref.read(appConfigProvider).serverUrl;
+    try {
+      final health = await ref.read(roomsApiProvider).health();
+      return health.publicUrl.isNotEmpty ? health.publicUrl : fallback;
+    } on ApiException {
+      // health 打不到不該讓「發邀請」整個失敗——那是錦上添花的一步
+      return fallback;
+    }
+  }
+
   Future<void> _showCode(String token, String label) async {
-    final config = ref.read(appConfigProvider);
-    final code = InviteCode(
-      serverUrl: config.serverUrl,
-      token: token,
-      label: label,
-    ).encode();
+    final detected = await _inviteUrl();
+    if (!mounted) return;
+    // 偵測到本機位址時**要主持人自己填**，並記住這次填的（隧道網址每次重啟
+    // 都會變，但內網 IP 不會——記住它讓重發不必每次重打）
+    final urlField = TextEditingController(
+        text: isLoopbackUrl(detected) ? _lastPublicUrl : detected);
     await showDialog<void>(
       context: context,
       builder: (context) {
         final s = context.uep;
-        return AlertDialog(
-          backgroundColor: s.bgCard,
-          title: Text('邀請碼${label.isEmpty ? '' : '：$label'}',
-              style: UepText.display(size: 22, color: s.inkTitle)),
-          content: SizedBox(
-            width: 440,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: s.bgSunken,
-                  border: Border.all(color: s.lineStrong),
-                  borderRadius: BorderRadius.circular(6),
+        return StatefulBuilder(builder: (context, setInner) {
+          final url = urlField.text.trim();
+          final blocked = url.isEmpty || isLoopbackUrl(url);
+          final code = blocked
+              ? ''
+              : InviteCode(serverUrl: url, token: token, label: label).encode();
+          return AlertDialog(
+            backgroundColor: s.bgCard,
+            title: Text('邀請碼${label.isEmpty ? '' : '：$label'}',
+                style: UepText.display(size: 22, color: s.inkTitle)),
+            content: SizedBox(
+              width: 440,
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: s.bgSunken,
+                    border: Border.all(
+                        color: blocked ? UepColors.errorText : s.lineStrong),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: TextField(
+                    controller: urlField,
+                    style: UepText.code(size: 11, color: s.ink),
+                    onChanged: (_) => setInner(() {}),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      border: InputBorder.none,
+                      labelText: '對方要連的位址',
+                      labelStyle:
+                          UepText.mono(size: 9, color: s.inkMute),
+                      hintText: 'https://xxx.trycloudflare.com',
+                      hintStyle: UepText.code(size: 11, color: s.inkMute),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
                 ),
-                child: SelectableText(code,
-                    style:
-                        UepText.code(size: 11, color: s.ink, height: 1.6)),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '這張是發給人的邀請碼。對方在「設定 → 貼上邀請碼」貼進去就能連上。\n'
-                '這串字等同密碼——任何拿到的人都能進這台 Hub，'
-                '用私訊給，不要貼在公開頻道。',
-                style:
-                    UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                // 主持人常忘記這件事，事後會以為是邀請壞了
-                '註：隧道網址每次重啟都會變。網址換過之後這份邀請碼要重發一次，'
-                '但 token 本身仍然有效。',
-                style:
-                    UepText.serif(size: 12, color: s.inkMute, height: 1.7),
-              ),
-            ]),
-          ),
-          actions: [
-            UepButton(
-              label: '複製',
-              small: true,
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: code));
-                if (context.mounted) Navigator.of(context).pop();
-              },
+                if (blocked) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    url.isEmpty
+                        ? '這台 Hub 沒有回報對外網址（多半是隧道沒開）。'
+                          '請填一個對方連得到的位址——隧道網址，或你在'
+                          '區網／VPN 上的 IP。'
+                        : '這是只有你這台機器連得到的位址。對方貼進 App 之後，'
+                          '所有請求會連到他自己的電腦上，而且不會有任何錯誤訊息。',
+                    style: UepText.serif(
+                        size: 12, color: UepColors.errorText, height: 1.7),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: s.bgSunken,
+                      border: Border.all(color: s.lineStrong),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: SelectableText(code,
+                        style:
+                            UepText.code(size: 11, color: s.ink, height: 1.6)),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(
+                  '這張是發給人的邀請碼。對方在「設定 → 貼上邀請碼」貼進去就能連上。\n'
+                  '這串字等同密碼——任何拿到的人都能進這台 Hub，'
+                  '用私訊給，不要貼在公開頻道。',
+                  style:
+                      UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  // 主持人常忘記這件事，事後會以為是邀請壞了
+                  '註：隧道網址每次重啟都會變。網址換過之後這份邀請碼要重發一次，'
+                  '但 token 本身仍然有效。',
+                  style:
+                      UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+                ),
+              ]),
             ),
-            UepButton(
-              label: '關閉',
-              variant: UepButtonVariant.outline,
-              small: true,
-              onPressed: () => Navigator.of(context).pop(),
+            actions: [
+              UepButton(
+                label: '複製',
+                small: true,
+                // 擋住的時候不給複製：一串指向 127.0.0.1 的邀請碼，
+                // 送出去之後沒有任何一端會報錯
+                onPressed: blocked
+                    ? null
+                    : () async {
+                        _lastPublicUrl = url;
+                        await Clipboard.setData(ClipboardData(text: code));
+                        if (context.mounted) Navigator.of(context).pop();
+                      },
             ),
-          ],
-        );
+              UepButton(
+                label: '關閉',
+                variant: UepButtonVariant.outline,
+                small: true,
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          );
+        });
       },
     );
+    urlField.dispose();
   }
 
   /// 從一張既有的邀請底下加發一張 **agent 憑證**（方案 B）。
@@ -172,10 +249,10 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
   /// 字串（它問的那一格正是「Agent token（主持人給你的那把 agent 憑證）」）。
   /// 給成 `CHATROOM-INVITE-` 的話對方貼不進去。
   ///
-  /// ⚠️ 而**已經裝好 kit 的人要重跑一次安裝器**：token 寫在兩個地方（MCP
-  /// 設定與 kit 的 `.env`），改一個不夠；而且 bridge 是活著的進程，改完要
-  /// 讓它重連才算數。只說「換一下 token」的話，他會改一處、看起來成功、
-  /// 然後繼續用舊的跑。
+  /// ⚠️ **已經裝好 kit 的人不必重裝**：連線資訊的真相只有 kit 根目錄的
+  /// `.env` 一份（2026-09-12 起，MCP 設定只放指向它的路徑），把 token 那行
+  /// 換掉就生效。但 bridge 是活著的進程，它手上那份是啟動當時讀到的——
+  /// 要讓 agent 重連才算數，這句不能省。
   Future<void> _showAgentToken(String token, String who) async {
     await showDialog<void>(
       context: context,
@@ -209,9 +286,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               ),
               const SizedBox(height: 8),
               Text(
-                '註：對方如果**已經裝過** kit，要重跑一次 install.py 換上這串'
-                '——token 寫在 MCP 設定與 kit 的 .env 兩個地方，只改一個會'
-                '看起來成功但照舊用舊的。換完要讓 bridge 重連才算數。',
+                '註：對方如果已經裝過 kit，不必重裝——把 kit 根目錄 .env 裡的 '
+                'CHATROOM_TOKEN 換成這串就好。換完要讓 agent 重連'
+                '（或重啟 Claude Code / Codex）才算數。',
                 style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
               ),
             ]),

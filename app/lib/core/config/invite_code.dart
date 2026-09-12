@@ -2,6 +2,25 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+/// 這個位址只有**主持人自己那台機器**連得到嗎？
+///
+/// 邀請碼裡的位址原本取自發邀請那個人的 App 設定，而他就在 Hub 那台機器上
+/// ——填 `127.0.0.1` 對他完全正常，對收到邀請的人則是一個永遠連不上的位址，
+/// 而且**兩邊都不會看到任何錯誤**：他那串貼過去、對方貼進 App、然後所有
+/// 請求靜靜地連到對方自己的電腦上（艾斯維爾 2026-09-12 實測）。
+///
+/// 判 host 而不是整串比對：`http://127.0.0.1:8787`、`http://localhost`、
+/// `http://[::1]:8787` 是同一件事的三種寫法。解析失敗回 false——那多半是
+/// 一個怪位址而不是本機位址，擋錯東西比漏擋更煩人。
+bool isLoopbackUrl(String url) {
+  final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+  return host == 'localhost' ||
+      host == '127.0.0.1' ||
+      host == '0.0.0.0' ||
+      host == '::1' ||
+      host.startsWith('127.');
+}
+
 /// 一份邀請：連進哪台 Hub、用哪把 token。
 @immutable
 class InviteCode {

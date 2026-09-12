@@ -156,9 +156,21 @@ class JoinResult {
 }
 
 class HealthResult {
-  const HealthResult({required this.ok, required this.version, this.build});
+  const HealthResult({
+    required this.ok,
+    required this.version,
+    this.build,
+    this.publicUrl = '',
+  });
   final bool ok;
   final String version;
+
+  /// 這台 Hub 的**對外**網址（隧道），Hub 從 `.tunnel-url` 現讀。
+  ///
+  /// 邀請碼要的是這個，不是主持人自己 App 設定裡的位址——他就在 Hub 那台
+  /// 機器上，填的是 `127.0.0.1`，對他正常，對收到邀請的人是一個永遠連不上
+  /// 的位址。空字串＝沒開隧道，或 Hub 版本還沒有這個欄位。
+  final String publicUrl;
 
   /// Hub 的 build 資訊（`{version, commit, built_at, source}`）。
   /// 舊版 Hub 不回這一段——那時是 null，而 null **不等於相符**。
@@ -176,6 +188,7 @@ class RoomsApi {
           ok: (res.data?['ok'] as bool?) ?? false,
           version: (res.data?['version'] as String?) ?? '?',
           build: res.data?['build'] as Map<String, dynamic>?,
+          publicUrl: (res.data?['public_url'] as String?) ?? '',
         );
       });
 

@@ -56,4 +56,36 @@ void main() {
       expect(InviteCode.tryParse(invite.encode())?.label, '');
     });
   });
+
+  group('isLoopbackUrl', () {
+    test('只有主持人自己連得到的位址一律認出來', () {
+      for (final url in [
+        'http://127.0.0.1:8787',
+        'http://localhost:8787',
+        'http://LOCALHOST',
+        'http://0.0.0.0:8787',
+        'http://[::1]:8787',
+        'http://127.0.1.1:8787',
+      ]) {
+        expect(isLoopbackUrl(url), isTrue, reason: url);
+      }
+    });
+
+    test('外面連得到的位址不要誤擋', () {
+      for (final url in [
+        'https://mae-sensitive-roads-cleared.trycloudflare.com',
+        'http://192.168.1.20:8787',
+        'http://26.176.231.43:8787',
+        'http://hub.example.com',
+      ]) {
+        expect(isLoopbackUrl(url), isFalse, reason: url);
+      }
+    });
+
+    test('解析不出來的東西不算本機——擋錯比漏擋更煩人', () {
+      expect(isLoopbackUrl('這不是網址'), isFalse);
+      expect(isLoopbackUrl(''), isFalse);
+    });
+  });
+
 }
