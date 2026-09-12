@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS assignment (
     assigned_name      TEXT NOT NULL DEFAULT '',
     -- cancelled 是指派方收回，與被指派方婉拒的 declined 是兩件事，不可合併
     status             TEXT NOT NULL DEFAULT 'pending', -- pending/accepted/declined/cancelled/expired
+    -- 指派者的群（見 session.party）。空字串＝這一欄存在之前建立的，
+    -- 兌換時放行——升級一次資料庫就讓所有待處理的指派作廢，沒有人會預期
+    party              TEXT NOT NULL DEFAULT '',
     created_at         TEXT NOT NULL,
     resolved_at        TEXT
 );
@@ -131,6 +134,15 @@ CREATE TABLE IF NOT EXISTS session (
     -- 的內容送出去。**僅供辨識與分組，不是授權依據**（自報的東西不可信，
     -- 信任邊界仍然是 token）
     host          TEXT NOT NULL DEFAULT '',
+    -- 這個 session 是拿**哪一群**憑證進來的（見 app.py 的 `_party_of`）。
+    -- `.env` 的兩把（agent／human）同屬 'host'——一台機器上的人與他的
+    -- agent 本來就用不同 token，分開算的話主持人會指派不了自己的 agent。
+    -- 每張邀請自成一群，加發的 agent 憑證沿用發它的那張的群。
+    --
+    -- ⚠️ **空字串是「還不知道」，不是「自成一群」**：這一欄是後來加的，
+    -- 既有 session 要等下一次心跳（watcher 每 15~65 秒一次）才補得上。
+    -- 把未知當成一群會讓升級的那一瞬間所有 agent 互相看不見。
+    party         TEXT NOT NULL DEFAULT '',
     first_seen_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL
 );
@@ -199,6 +211,10 @@ CREATE TABLE IF NOT EXISTS access_token (
     -- 'human' / 'agent'。這是唯一有權限差的一欄：`role=human` 與
     -- `X-Host-View` 只認 human。預設 agent——沒講清楚的一律不給人類的份量
     audience     TEXT NOT NULL DEFAULT 'agent',
+    -- 這張屬於哪一群人（一個人 + 他的 agent）。空字串＝這張自己就是一群，
+    -- 群 id 由 token 的 hash 即時推出（不存明碼，也不外流到 API 回應）。
+    -- 加發 agent 憑證時寫入發它的那張的群，兩張從此是同一個人。
+    party        TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     last_used_at TEXT,
     revoked_at   TEXT                        -- 非 NULL 即失效；不刪列，保留紀錄
@@ -714,6 +730,15 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("session", "host", "host TEXT NOT NULL DEFAULT ''"),
     # 踢出要連著撤銷對方的 access token，得先知道他是拿哪一張進來的
     ("participant", "join_token", "join_token TEXT NOT NULL DEFAULT ''"),
+    # 身分群。**兩欄都是空字串起步，而空＝未知不是一群**——session 那半
+    # 要等下一次心跳才補得上，把未知當成一群會讓升級當下所有 agent 互相
+    # 看不見（見 db 的欄位註解與 app.py 的 `_party_of`）
+    ("access_token", "party", "party TEXT NOT NULL DEFAULT ''"),
+    ("session", "party", "party TEXT NOT NULL DEFAULT ''"),
+    # 指派者的群。指派給一個**還沒上線**的 key 時建立當下判不了群，所以
+    # 記下來，等兌換（join 帶 assignment_id）那一刻再比一次——兩端都關，
+    # 否則「先指派、對方稍後用別群的憑證上線」就是一條繞道
+    ("assignment", "party", "party TEXT NOT NULL DEFAULT ''"),
     # 問題逾時。舊資料的 expires_at 為 NULL＝永不過期，維持原本的語意
     ("question", "expires_at", "expires_at TEXT"),
     # 對話鎖定。舊房一律 public——把既有的房悄悄變成私人，等於在使用者

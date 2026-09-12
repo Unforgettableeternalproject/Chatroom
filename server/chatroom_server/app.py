@@ -182,6 +182,23 @@ STYLE_PATTERN = "^(verbose|concise|casual|custom)$"
 # 這是串流的內部節奏，匯出本來就要跨過整個房間
 EXPORT_BATCH = 500
 
+# 主持人這一群：`.env` 的兩把憑證（agent 用的 `CHATROOM_TOKEN` 與人用的
+# `CHATROOM_HUMAN_TOKEN`）同屬這一群，未設 token 的開放模式也是。
+# 一「群」＝一個人連同他的 agent，見 `_party_of`。
+#
+# 🚨 **這一群是唯一一個不等於「一個人」的群**，而那個差別是不對稱的：
+#
+# - **指派**看它：`.env` 的兩把就是「這台機器上的我和我的 agent」，這正是
+#   要放行的東西（而且共用主 token 的人本來就互相指派得動，不是新開的口）
+# - **私人房可見度**不看它：legacy 模式下主 token 是**所有人共用的那一把**，
+#   把它當成「同一個人」等於讓每個拿到它的人（包含被踢出去的）看見所有
+#   私人房——kick 會就此失效（`test_kick_is_the_one_thing_that_removes_access`
+#   在 2026-09-12 當場抓到這件事）
+#
+# 「同一個人的另一台裝置」這個放寬，只有在群真的**發給某一個人**時才成立，
+# 也就是 access_token 那些。
+HOST_PARTY = "host"
+
 
 def _style_texts(style: str, instructions: str) -> tuple[str, str]:
     """(完整指示, 一行提醒)。未知的 style 一律退回 verbose。
@@ -337,6 +354,13 @@ class TokenCreate(BaseModel):
     # 而人類憑證要是打錯字就靜靜降級成 agent，發的人會以為自己給了對方一把
     # 用不了的鑰匙（所以這裡用 pattern 擋，不做寬鬆解析）
     audience: str = Field(default="agent", pattern="^(human|agent)$")
+    # 加發：把新的這張掛進**既有那張所屬的群**（方案 B，艾斯維爾裁
+    # 2026-09-12）。主持人先發人的那張，對方的 agent 要接入時再從它底下
+    # 加發一張 agent 憑證，兩張從此算同一個人。
+    #
+    # 給的是既有那張 token 的明碼——主持人手上本來就有（`GET /api/tokens`
+    # 回得出來，那是「隧道網址換了要重發一次」的既有需求）。
+    parent_token: str = Field(default="", max_length=128)
 
 
 class AssignmentResolve(BaseModel):
@@ -840,6 +864,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         request.state.is_root_token = False
         request.state.token_label = ""
+        # 這次請求屬於哪一群（見 `_party_of` 與 db 的欄位註解）。**永遠是
+        # 非空字串**——請求一定帶著某一把憑證，未知只會出現在 session 名錄
+        # 那半（那裡的空字串是「還沒回報過」）
+        request.state.party = HOST_PARTY
         # 相容期（未設 human token）一律 human：這個欄位的每一個讀取點都要
         # 在那段期間表現得像它不存在
         request.state.token_audience = "human"
@@ -858,9 +886,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             request.state.is_root_token = True
             request.state.token_audience = "human"
             request.state.token_label = "人類主持人"
+            # `.env` 的兩把同群。**這一條不是便宜行事**：分離憑證之後，一台
+            # 機器上的人用 human token、他的 bridge 用 agent token，分開算的
+            # 話主持人會指派不了自己機器上的 agent——規則會反過來咬自己
+            request.state.party = HOST_PARTY
             return
         if token and token == cfg.api_token:
             request.state.is_root_token = True
+            request.state.party = HOST_PARTY
             # 分離期開始後，舊的單一 token **降級為 agent 憑證**——bridge 手上
             # 就是這一把，它不能再宣稱自己是人
             if cfg.human_api_token:
@@ -887,6 +920,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
             raise _err(401, "invalid_token", "token 無效或未提供")
         request.state.token_label = row["label"]
+        request.state.party = _party_of(token, row)
         if cfg.human_api_token:
             # 舊 token 沒有這一欄（migration 補的預設是 agent），所以取不到
             # 值時也只能是 agent——見 db.py 那條 migration 的理由
@@ -959,6 +993,35 @@ def create_app(config: Config | None = None) -> FastAPI:
                 extra={"event": "deprecated_credential_position",
                        "where": where})
         return old
+
+    def _party(request: Request) -> str:
+        """這次請求所屬的群。`require_auth` 已經算好，這裡只是取用。
+
+        ⚠️ **一律走這支**，不要在各處自己寫 `getattr(...)`——同一條規則在
+        三個地方各寫一次，只要有一處預設值不同就湊得出死局（09/09 一天咬
+        三次）。
+        """
+        return getattr(request.state, "party", HOST_PARTY) or HOST_PARTY
+
+    def _party_of(token: str, row=None) -> str:
+        """這把憑證屬於哪一群人。
+
+        一「群」是**一個人連同他的 agent**：他的 App、他機器上的 bridge、
+        他在第二台裝置上貼同一張碼的那個 App，全部算同一個人。指派看得到
+        誰、私人房對誰可見，判的都是這個，不是單張 token。
+
+        - `.env` 的兩把 → `host`（見 `require_auth` 裡那條註解）
+        - 有 party 的 access_token → 它自己那一群（加發的 agent 憑證就是
+          這樣沿用發它的那張）
+        - 沒有 party 的 → **自成一群**，群 id 由 token 的 hash 推出
+
+        🚨 群 id 用 hash 不用 token 本身：這個值會出現在 API 回應與日誌裡，
+        而那兩個地方都會被複製、貼進聊天室、附在 issue 上（`token_hint` 那
+        條規矩的同一個理由）。hash 認得出「是不是同一群」，不足以登入。
+        """
+        if row is not None and "party" in row.keys() and row["party"]:
+            return row["party"]
+        return "p:" + hashlib.sha256(token.encode()).hexdigest()[:16]
 
     async def host_view(
         x_host_view: str | None = Header(default=None, alias="X-Host-View"),
@@ -1254,11 +1317,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "你已被管理員移出這個聊天室，看不到房內的內容")
         return row
 
-    async def _invited_to_private(room, session_key: str | None) -> bool:
+    async def _invited_to_private(room, session_key: str | None,
+                                  party: str = "") -> bool:
         """這個 session 能不能看到／進入這個私人房。
 
-        三種算數：建立者本人、房內既有紀錄（含已離開的——他當時在場過，
-        房間不該從他的列表上憑空消失）、以及一筆還算數的指派（邀請）。
+        四種算數：建立者本人、**與建立者同一群的另一台裝置**、房內既有紀錄
+        （含已離開的——他當時在場過，房間不該從他的列表上憑空消失）、以及
+        一筆還算數的指派（邀請）。
+
+        🔑 同群那一條是 2026-09-12 加的（艾斯維爾裁）：同一個人貼同一張邀請
+        碼在兩台裝置上，deviceKey 不同，於是他在筆電上建的私人房在桌機上
+        看不到也進不去。**同一個人的東西，一邊進得去一邊進不去很奇怪。**
+
+        ⚠️ 這條規則在 `list_rooms` 的 SQL 裡有第二份實作（那裡是一段
+        WHERE，形狀不同但語意必須一致）。改這裡記得一起看那裡——兩邊分岔
+        的話會長出「列表上看得到、點進去進不去」那種最難查的形狀。
 
         ⚠️ 這是**可見性**，不是安全邊界。拿得到 token 的人本來就能對任何房
         建立指派（見 `POST /api/rooms/{id}/assignments`，它只驗 token）——
@@ -1271,6 +1344,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         if room["creator_session_key"] and session_key == room["creator_session_key"]:
             return True
         db = app.state.db
+        # 同群的另一台裝置。`party!=''` 是必要的：空字串是「還沒回報過」，
+        # 當成一群的話所有還沒心跳的 session 會互相看見對方的私人房
+        if party and party != HOST_PARTY and room["creator_session_key"]:
+            same = await (
+                await db.execute(
+                    "SELECT 1 FROM session WHERE session_key=? AND party=?"
+                    " AND party!=''",
+                    (room["creator_session_key"], party),
+                )
+            ).fetchone()
+            if same is not None:
+                return True
         # 被踢的人不算成員——那是一個「不要再看到這裡」的決定。要回來得靠
         # 踢出**之後**新建的指派，那筆會在下面的 EXISTS 命中
         member = await (
@@ -1334,9 +1419,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         label: str | None = None,
         ip: str | None = None,
         host: str | None = None,
+        party: str | None = None,
     ) -> None:
         """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
-        舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。"""
+        舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。
+
+        `party` 同樣只在非空時覆寫，但理由不同：它不是自報的，是 Hub 從這次
+        請求的憑證推出來的（`request.state.party`），所以**每一次心跳都會把
+        它補上**。既有 session 在升級後的第一次輪詢（最長 65 秒）就有值。
+        """
         db = app.state.db
         if not kind:
             # 舊版 bridge 不自報 kind，但 identity.py 生成的 key 天生帶
@@ -1348,7 +1439,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         now = _now()
         await db.execute(
             "INSERT INTO session (session_key, kind, label, first_seen_at,"
-            " last_seen_at, last_ip, host) VALUES (?,?,?,?,?,?,?)"
+            " last_seen_at, last_ip, host, party) VALUES (?,?,?,?,?,?,?,?)"
             " ON CONFLICT(session_key) DO UPDATE SET"
             " last_seen_at=excluded.last_seen_at,"
             " kind=CASE WHEN excluded.kind!='' THEN excluded.kind ELSE session.kind END,"
@@ -1356,8 +1447,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             " last_ip=COALESCE(excluded.last_ip, session.last_ip),"
             # host 同 kind/label：只在帶到非空值時覆寫。舊 bridge 不自報，
             # 不能因為它呼叫了一次就把已知的主機名洗掉
-            " host=CASE WHEN excluded.host!='' THEN excluded.host ELSE session.host END",
-            (session_key, kind or "", label or "", now, now, ip, host or ""),
+            " host=CASE WHEN excluded.host!='' THEN excluded.host ELSE session.host END,"
+            # 換 token 的人會換群（撤銷重發就是這樣），所以這一欄照最新的走
+            " party=CASE WHEN excluded.party!='' THEN excluded.party"
+            " ELSE session.party END",
+            (session_key, kind or "", label or "", now, now, ip, host or "",
+             party or ""),
         )
         # 首次插入時 kind 空字串會落庫，補回預設值
         await db.execute(
@@ -1892,7 +1987,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         if session_key:
             await _touch_session(session_key, kind, label, _client_ip(request),
-                                 host)
+                                 host, _party(request))
         # 私人房只對「有份的人」出現：建立者、房內（含曾在房內）的成員、
         # 被邀請的 session。沒帶 session_key 就只看得到公開房——匿名的
         # 列表請求無從證明自己有份
@@ -1934,13 +2029,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 整片露出來了。
             sql += ("  (r.visibility='public' AND r.status='active')"
                     "  OR r.creator_session_key=?"
+                    # 同群的另一台裝置——同一個人在筆電上建的私人房，
+                    # 桌機上也該看得到（`_invited_to_private` 有同一條規則的
+                    # 第二份實作，兩邊要一起改）
+                    "  OR EXISTS (SELECT 1 FROM session s"
+                    "             WHERE s.session_key=r.creator_session_key"
+                    "             AND s.party=? AND s.party!='')"
                     "  OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id=r.id"
                     "             AND p.session_key=? AND p.status!='kicked')"
                     "  OR EXISTS (SELECT 1 FROM assignment a WHERE a.room_id=r.id"
                     "             AND a.target_session_key=?"
                     "             AND a.status IN ('pending','accepted'))"
                     " ) ORDER BY last_activity_at DESC")
-            params = (status, session_key, session_key, session_key)
+            # HOST_PARTY 不算「同一個人」（見那個常數的註解）。這裡傳空
+            # 字串進去，SQL 的 `s.party!=''` 就讓那一條自然不成立——**不要
+            # 在 SQL 裡再寫一次判斷**，兩份判準遲早會分岔
+            party = _party(request)
+            params = (status, session_key,
+                      "" if party == HOST_PARTY else party,
+                      session_key, session_key)
         rows = await (await db.execute(sql, params)).fetchall()
         # you_are_admin：列表上要不要顯示「刪除」這種管理員動作，client 得
         # 自己判斷得出來。creator_session_key 不外流（`_room_public` 會拿掉），
@@ -2859,6 +2966,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "assignment_not_joinable",
                     "找不到這筆可加入的指派，或它不屬於這個聊天室",
                 )
+            # 兌換那一刻的群比對。建立時目標可能還沒上線（判不了群），
+            # 所以真正的界線在這裡：拿別人指派的單子上線，用的卻是另一群的
+            # 憑證，就是「別人的 agent 被指派進來」那條繞道。
+            #
+            # 空字串放行：這一欄之前建立的指派仍然有效——升級一次資料庫就讓
+            # 所有待處理的指派作廢，沒有人會預期
+            a_party = assignment["party"] if "party" in assignment.keys() else ""
+            if a_party and a_party != _party(request):
+                raise _err(403, "not_your_agent",
+                           "這筆指派是另一個人發的，而你手上的憑證不屬於他那一群"
+                           "——指派只在同一張憑證接入的 agent 之間成立。")
             # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
             # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
             session_key = assignment["target_session_key"]
@@ -2923,7 +3041,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # subagent。父層已在上面通過驗證且仍是 active 成員，它的可見性就是
         # 這個子代理的可見性（Codex review #2）
         if (parent is None and room["visibility"] == "private"
-                and not await _invited_to_private(room, session_key)):
+                and not await _invited_to_private(room, session_key,
+                                                  _party(request))):
             raise _err(403, "room_is_private",
                        "這是一個私人對話，必須先被邀請才能加入。"
                        "請房內的成員從指派／邀請功能把你加進來。")
@@ -2954,7 +3073,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
                 await _commit_with_retry(db)
             await _touch_session(session_key, body.kind, ip=_client_ip(request),
-                                 host=body.host)
+                                 host=body.host, party=_party(request))
             # rejoin 也給：閒置被移出後重新加入的多半是新的一輪對話，
             # 而上一輪讀到的風格早就滾出 context 了
             style_prompt, _ = _style_texts(room["style"], room["style_instructions"])
@@ -3123,7 +3242,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 看起來可以指派、實際上指派不到的鬼影
         if parent is None:
             await _touch_session(session_key, body.kind, ip=_client_ip(request),
-                                 host=body.host)
+                                 host=body.host, party=_party(request))
         # sender_id 掛上加入者本人：client 要過濾「自己加入」時就不必去解析
         # 中文內容比對名字（改一個字就無聲失效），也讓 UI 認得出是誰
         logger.info(
@@ -10782,7 +10901,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- 指派 ----------
 
     @app.post("/api/rooms/{room_id}/assignments", dependencies=[Depends(require_auth)])
-    async def create_assignment(room_id: str, body: AssignmentCreate):
+    async def create_assignment(room_id: str, body: AssignmentCreate,
+                                request: Request):
         """建立指派，並回報目標 session 目前是不是活的。
 
         指派本身永遠成立（對方稍後上線仍收得到），但派給一把沒有 watcher 在
@@ -10792,12 +10912,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id)
         db = app.state.db
+        party = _party(request)
+        # 只指派得動自己的 agent（艾斯維爾裁 2026-09-12）。**主持人沒有
+        # 穿透口**——「我能指派所有人的 agent」與「別人能指派我的 agent」
+        # 是同一條規則的兩面，開了前者就等於開了後者。
+        #
+        # 目標還沒上線時判不了群（名錄裡沒有它），那種指派照樣建立——派給
+        # 稍後才上線的 key 是正常用法。界線移到兌換那一刻（join 帶
+        # assignment_id 時比對 `assignment.party`），所以這裡記下發起人的群。
+        target = await (
+            await db.execute("SELECT party FROM session WHERE session_key=?",
+                             (body.target_session_key,))
+        ).fetchone()
+        if target is not None and target["party"] and target["party"] != party:
+            raise _err(403, "not_your_agent",
+                       "這個 agent 不屬於你——指派得動的只有用同一張憑證接入"
+                       "的那些（你自己其他裝置上的也算）。")
         aid = _uid()
         await db.execute(
             "INSERT INTO assignment (id, room_id, target_session_key, note,"
-            " assigned_name, created_at) VALUES (?,?,?,?,?,?)",
+            " assigned_name, party, created_at) VALUES (?,?,?,?,?,?,?)",
             (aid, room_id, body.target_session_key, body.note,
-             body.assigned_name.strip(), _now()),
+             body.assigned_name.strip(), party, _now()),
         )
         await _commit_with_retry(db)
         seen = await (
@@ -10855,7 +10991,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "session_key_required",
                        "要帶 X-Session-Key 才知道要看誰的指派")
         # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
-        await _touch_session(session_key, kind, label, _client_ip(request), host)
+        await _touch_session(session_key, kind, label, _client_ip(request), host,
+                             _party(request))
         db = app.state.db
         rows = await (
             await db.execute(
@@ -11717,7 +11854,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     # ---------- Session 名錄 ----------
 
     @app.get("/api/sessions", dependencies=[Depends(require_auth)])
-    async def list_sessions(include_human: bool = False,
+    async def list_sessions(request: Request, include_human: bool = False,
                             exclude_room: str = ""):
         """列出 Hub 見過且仍在存活窗內的 session（指派 UI 的掃描來源）。
 
@@ -11729,13 +11866,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         不列出**——指派是「請一個還沒在場的人進來」，把已經在場的人列進候選
         只會讓人指派他一次，然後得到一個什麼都沒發生的結果（join 是冪等的）。
         清單本身不表態的話，那個錯誤要等到指派送出去才發現。
+
+        🔑 **只列同一群的**（艾斯維爾裁 2026-09-12）。一個人看得到、指派得動
+        的只有他自己的 agent——包含他在別台裝置上、貼同一張邀請碼的那些。
+        主持人**沒有穿透口**：能任意指派所有人的 agent 與被別人指派自己的
+        agent 是同一件事的兩面，而後者顯然不行。
+
+        ⚠️ 過濾在 **server** 做，不是在 App 做。前端過濾只擋得住誤點——
+        繞過 App 直接打 REST 的那條路仍然全開，而那正是要擋的東西。
+
+        ⚠️ `party=''` 是「還沒回報過」，一律列出。那一欄是後加的，既有
+        session 要等下一次心跳（最長 65 秒）才補得上；當成「別群」排掉的話，
+        升級的那一瞬間每個人的指派清單都會變空，而那看起來像 agent 全死了。
+        回應帶 `party_known` 讓 UI 分得出「這是我的」與「還不知道是誰的」。
         """
         db = app.state.db
         now = datetime.now(timezone.utc)
         ttl_cutoff = (now - timedelta(seconds=cfg.session_ttl)).isoformat()
         active_cutoff = (now - timedelta(seconds=cfg.session_active_window)).isoformat()
-        cond = "last_seen_at >= ?"
-        params: list = [ttl_cutoff]
+        cond = "last_seen_at >= ? AND (party=? OR party='')"
+        params: list = [ttl_cutoff, _party(request)]
         if not include_human:
             cond += " AND kind != 'human'"
         if exclude_room:
@@ -11782,6 +11932,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "last_ip": r["last_ip"],
                 # 指派 UI 靠它分組（本機／其他裝置）。自報的值，僅供辨識
                 "host": r["host"],
+                # 這一筆是不是已經回報過自己屬於哪一群。False ＝升級後還沒
+                # 心跳過的舊紀錄，不是「別人的」——UI 要分得出這兩者
+                "party_known": bool(r["party"]) if "party" in r.keys() else False,
                 "status": "active" if r["last_seen_at"] >= active_cutoff else "idle",
                 "first_seen_at": r["first_seen_at"],
                 "last_seen_at": r["last_seen_at"],
@@ -11816,14 +11969,34 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "這台 Hub 未設定 token（完全開放），不需要也不能發邀請")
         token = uuid.uuid4().hex + uuid.uuid4().hex
         db = app.state.db
+        party = ""
+        if body.parent_token:
+            parent = await (
+                await db.execute(
+                    "SELECT * FROM access_token WHERE token=?"
+                    " AND revoked_at IS NULL", (body.parent_token,))
+            ).fetchone()
+            if parent is None:
+                # **不要靜靜地發一張自成一群的**：那張碼會長得跟成功的一模
+                # 一樣，直到對方的 agent 被指派時才發現它不屬於任何人
+                raise _err(404, "parent_token_not_found",
+                           "找不到要掛在底下的那張邀請（或它已經被收回）")
+            party = _party_of(body.parent_token, parent)
+            # 掛進群的同時把**母張**也寫實。母張原本靠 hash 推導群 id，推導
+            # 出來的值與這裡寫進去的相同，但存下來之後兩張在 DB 裡才看得出
+            # 是一夥的——撤銷與稽核要看得到這件事
+            if not (parent["party"] if "party" in parent.keys() else ""):
+                await db.execute(
+                    "UPDATE access_token SET party=? WHERE token=?",
+                    (party, body.parent_token))
         await db.execute(
-            "INSERT INTO access_token (token, label, audience, created_at)"
-            " VALUES (?,?,?,?)",
-            (token, body.label.strip(), body.audience, _now()),
+            "INSERT INTO access_token (token, label, audience, party,"
+            " created_at) VALUES (?,?,?,?,?)",
+            (token, body.label.strip(), body.audience, party, _now()),
         )
         await _commit_with_retry(db)
         return {"token": token, "label": body.label.strip(),
-                "audience": body.audience}
+                "audience": body.audience, "party": party}
 
     @app.get("/api/tokens", dependencies=[Depends(require_auth)])
     async def list_tokens(request: Request, include_revoked: bool = False):

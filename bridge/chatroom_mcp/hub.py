@@ -164,6 +164,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "不會改變這件事。請房內的成員用指派／邀請把你加進來。",
                 status=status, detail=detail,
             )
+        if code == "not_your_agent":
+            # 指派的界線：一個人只指派得動用同一張憑證接入的 agent
+            # （艾斯維爾裁 2026-09-12）。這不是身分問題——重新 join 一百次
+            # 也不會換一把憑證，要換的是**接入時填的那把 token**
+            return HubError(
+                _detail_text(detail)
+                or "這個 agent 不屬於你——指派只在用同一張憑證接入的 agent "
+                "之間成立。重新加入沒有用；要嘛請它的持有者去指派，"
+                "要嘛向主持人要一張掛在你名下的 agent 憑證。",
+                status=status, detail=detail,
+            )
         if code == "kicked":
             # join 端點的「被踢過所以不能自己回來」。與 participant_kicked
             # 不同：那是手上的身分失效，這是根本不讓你取得新身分
