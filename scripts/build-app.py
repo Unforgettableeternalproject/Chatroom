@@ -87,22 +87,41 @@ def flutter_cmd() -> str:
     )
 
 
-def running_app_pids() -> list[str]:
-    """回傳佔用輸出檔的 Chatroom 行程。
+# 這個 App 在工作管理員裡的名字。**進程名跟著 exe 檔名走**（`BINARY_NAME`），
+# 所以改了 exe 名就要改這裡——而且這個閘不改也不會報錯，只會永遠抓不到。
+#
+# ⚠️ **舊名要留著。** 09/14 從 `chatroom_app.exe` 改名成 `Chatroom.exe`，
+# 而**改名那一輪正是舊 exe 最可能還開著的時候**（使用者手上跑的就是舊版）。
+# 只查新名的話，閘會在最需要它的那一次失明。
+#
+# 而且被鎖住的**不是 exe 本身**——新舊 exe 是兩個不同檔案，不衝突。真正會
+# 被鎖的是同目錄的共享產物（`flutter_windows.dll`、`data\`），舊進程照樣
+# 開著它們，於是 build 仍然會失敗，只是失敗的位置換了一個。
+APP_PROCESS_NAMES = ("Chatroom", "chatroom_app")
 
-    ⚠️ 這裡的名字**跟著 exe 檔名走**（`BINARY_NAME`）。改了 exe 名而忘記
-    改這裡的話，這個閘不會報錯，只會永遠抓不到——然後 build 撞 LNK1104，
-    而下面那段「看起來成功的現場」就回來了。
+
+def running_app_pids() -> list[tuple[str, str]]:
+    """回傳還開著的 App 行程：`(進程名, PID)`。
+
+    回傳名字而不只是 PID——過渡期同時查新舊兩個名，**訊息要講得出使用者
+    該關掉哪一個**。只印 PID 的話，開著舊版的人會去工作管理員找一個叫
+    `Chatroom` 的東西，而他手上那個叫 `chatroom_app`。
     """
     if sys.platform != "win32":
         return []
+    names = ",".join(APP_PROCESS_NAMES)
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
-         "Get-Process Chatroom -ErrorAction SilentlyContinue"
-         " | Select-Object -ExpandProperty Id"],
+         f"Get-Process {names} -ErrorAction SilentlyContinue"
+         " | ForEach-Object { \"$($_.ProcessName) $($_.Id)\" }"],
         capture_output=True, text=True,
     )
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    found: list[tuple[str, str]] = []
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            found.append((parts[0], parts[1]))
+    return found
 
 
 # 這份產物實際收錄的路徑。**只問這裡髒不髒**——同一棵樹上另外兩個 kit 各自
@@ -129,12 +148,19 @@ def commit_stamp() -> str:
 
 
 def main() -> int:
-    pids = running_app_pids()
-    if pids:
-        print(f"✕ Chatroom 正在執行（PID {', '.join(pids)}）。", file=sys.stderr)
+    running = running_app_pids()
+    if running:
+        listed = "、".join(f"{name}（PID {pid}）" for name, pid in running)
+        print(f"✕ {listed} 正在執行。", file=sys.stderr)
         print("  linker 寫不進被佔用的 exe，而失敗會留下一個看起來成功的現場——",
               file=sys.stderr)
         print("  舊產物完好地待在原地。請先關閉 App 再重跑。", file=sys.stderr)
+        if any(name == "chatroom_app" for name, _ in running):
+            # 改名過渡期：他手上那個視窗的標題已經是 Chatroom，但工作管理員
+            # 裡的名字還是舊的。不講的話他會找不到要關哪一個
+            print("  （`chatroom_app` 是改名前的舊版。視窗標題一樣是 Chatroom，",
+                  file=sys.stderr)
+            print("   但工作管理員裡叫舊名字。）", file=sys.stderr)
         return 1
 
     version = app_version()

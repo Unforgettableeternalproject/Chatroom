@@ -458,8 +458,7 @@ class _TunnelSection extends ConsumerWidget {
     final status = ref.watch(tunnelStatusProvider);
     final actions = ref.watch(hostActionsProvider);
     final op = _opOf(ref, _tunnelKinds);
-    final pending =
-        (op != null && op['pending'] == true) ? op['kind'] as String? : null;
+    final tunnelOpening = _isPending(ref, 'tunnel_start');
 
     return _Panel(
       title: '對外協作（隧道）',
@@ -489,10 +488,10 @@ class _TunnelSection extends ConsumerWidget {
                 UepButton(
                   small: true,
                   variant: UepButtonVariant.outline,
-                  label: pending == 'tunnel_start'
+                  label: tunnelOpening
                       ? '開通中…'
                       : (t.hasUrl ? '再開一條' : '開隧道'),
-                  onPressed: pending == 'tunnel_start'
+                  onPressed: tunnelOpening
                       ? () {}
                       : () => _confirmTunnel(context, ref, actions),
                 ),
@@ -582,9 +581,24 @@ class _TunnelSection extends ConsumerWidget {
     // 看不到**，而「還在要網址」與「要失敗了」在畫面上長一樣。改成盯著
     // 狀態等，並在等的期間把按鈕標成「開通中…」。
     //
-    // 判準用 `hasUrl` 而不是隧道燈號：那盞燈在本機打不通自己的公網網址時
-    // 會是 unknown（hairpin，見 tunnelStatusProvider 的註解），拿它當成功
-    // 條件的話，一條開好的隧道會被判成沒開。
+    // 判準用網址而不是隧道燈號：那盞燈在本機打不通自己的公網網址時會是
+    // unknown（hairpin，見 tunnelStatusProvider 的註解），拿它當成功條件的
+    // 話，一條開好的隧道會被判成沒開。
+    //
+    // 🔴 **但「有網址」也不是成功的證據——要「換了一條網址」。**
+    // `.tunnel-url` 會殘留（provider 自己的註解就寫了：視窗被強制關掉、
+    // 當機、斷電時 finally 不執行，檔案留在原地）。拿 `hasUrl` 當條件的話，
+    // 一個殘留的死網址會讓畫面立刻說「隧道開了」，而那條隧道早就沒了
+    // ——然後主持人把那個網址發給所有人（審核用Codex 09/14 終審）。
+    //
+    // 記下按之前是哪一條，要求它**變成別的**。重開必定是新網址，所以
+    // 「一樣」只可能是還沒換掉。
+    String beforeUrl = '';
+    try {
+      beforeUrl = (await ref.read(tunnelStatusProvider.future)).url;
+    } on Object {
+      beforeUrl = '';
+    }
     await _launchAndWatch(
       ref,
       kind: 'tunnel_start',
@@ -592,11 +606,15 @@ class _TunnelSection extends ConsumerWidget {
       ready: () async {
         ref.invalidate(tunnelStatusProvider);
         final t = await ref.read(tunnelStatusProvider.future);
-        return t.hasUrl;
+        return t.hasUrl && t.url != beforeUrl;
       },
       okText: '隧道開了，網址在上面。',
-      timeoutText: '送出了，但十幾秒內還沒拿到網址——'
-          'cloudflared 可能還在要，也可能失敗了。看 logs\\tunnel-*.log。',
+      timeoutText: beforeUrl.isEmpty
+          ? '送出了，但十幾秒內還沒拿到網址——'
+              'cloudflared 可能還在要，也可能失敗了。看 logs\\tunnel-*.log。'
+          : '送出了，但上面那個網址還沒換成新的——'
+              '新的還沒下來，或這次沒開成。**先別把舊網址發出去**，'
+              '它可能已經失效了。看 logs\\tunnel-*.log。',
     );
   }
 
@@ -666,8 +684,8 @@ class _ControlSection extends ConsumerWidget {
     // 進行中與結果都從 provider 讀，不放 State——這個區塊是 ConsumerWidget，
     // 而且任何一次狀態刷新都會重建它（理由同 `lastDataOpProvider` 那段註解）
     final op = _opOf(ref, _controlKinds);
-    final pending =
-        (op != null && op['pending'] == true) ? op['kind'] as String? : null;
+    // 按鈕看自己那一格，顯示看這一區最新的——見 `_isPending` 上方
+    final hubStarting = _isPending(ref, 'hub_start');
 
     return _Panel(
       title: '啟動與自啟',
@@ -688,10 +706,8 @@ class _ControlSection extends ConsumerWidget {
               // 起來了沒。這是兩種操作的本質差別，不是少做一步。
               UepButton(
                 small: true,
-                label: pending == 'hub_start' ? '啟動中…' : '啟動 Hub',
-                onPressed: pending == 'hub_start'
-                    ? () {}
-                    : () => _startHub(ref, actions),
+                label: hubStarting ? '啟動中…' : '啟動 Hub',
+                onPressed: hubStarting ? () {} : () => _startHub(ref, actions),
               ),
               const SizedBox(width: 10),
               // 🔴 停止要放在啟動旁邊，不是放在「自啟」那一區。
@@ -787,24 +803,53 @@ class _ControlSection extends ConsumerWidget {
     );
   }
 
-  /// 啟動 Hub：送出之後盯 health 直到它起來。
+  /// 這台機器上的 Hub 現在在不在跑。
   ///
   /// 判準用 `process.state == ok`——那是「這台機器上有 Hub 在跑」，不是
   /// 「網路連得到」。啟動這件事要回答的正是前者。
-  Future<void> _startHub(WidgetRef ref, HostActions actions) =>
-      _launchAndWatch(
-        ref,
-        kind: 'hub_start',
-        launch: actions.startHub,
-        ready: () async {
-          ref.invalidate(hostHealthProvider);
-          final h = await ref.read(hostHealthProvider.future);
-          return h?.process.state == ProbeState.ok;
-        },
-        okText: 'Hub 起來了。',
-        timeoutText: '送出了，但十幾秒內還沒看到它起來——'
-            '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
-      );
+  static Future<bool> _hubRunning(WidgetRef ref) async {
+    ref.invalidate(hostHealthProvider);
+    final h = await ref.read(hostHealthProvider.future);
+    return h?.process.state == ProbeState.ok;
+  }
+
+  /// 啟動 Hub。
+  ///
+  /// 🔴 **先問「它本來就在跑嗎」，因為「現在是 ok」不等於「這次啟動成功」。**
+  /// Hub 已經在跑的時候按這顆，第一次輪詢立刻看到 ok ⇒ 畫面說「Hub 起來
+  /// 了」——即使底下那個腳本根本失敗了。**那是一句沒有根據的成功宣告**，
+  /// 比沒有回饋更糟，因為它會讓人停止追查（審核用Codex 09/14 終審）。
+  ///
+  /// 已經在跑就**不送出啟動**：那條路只會多出一個進程，而使用者按這顆多半
+  /// 是想確認它活著，不是想要第二個。想重啟的人有旁邊那顆「停止 Hub」。
+  Future<void> _startHub(WidgetRef ref, HostActions actions) async {
+    final op = ref.read(lastDataOpProvider.notifier);
+    op.set({'kind': 'hub_start', 'pending': true, 'ok': true, 'detail': ''});
+    bool before;
+    try {
+      before = await _hubRunning(ref);
+    } on Object {
+      // 查不到就當作沒在跑——照常啟動，後面的輪詢會給出真正的答案
+      before = false;
+    }
+    if (before) {
+      op.set({
+        'kind': 'hub_start',
+        'ok': true,
+        'detail': 'Hub 本來就在跑，沒有再啟動一個。要重啟的話先按「停止 Hub」。',
+      });
+      return;
+    }
+    await _launchAndWatch(
+      ref,
+      kind: 'hub_start',
+      launch: actions.startHub,
+      ready: () => _hubRunning(ref),
+      okText: 'Hub 起來了。',
+      timeoutText: '送出了，但十幾秒內還沒看到它起來——'
+          '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
+    );
+  }
 
   Future<void> _runService(WidgetRef ref, String action) async {
     final actions = ref.read(hostActionsProvider);
@@ -882,15 +927,37 @@ class _ControlSection extends ConsumerWidget {
 /// （按了「重新檢查」、或任何一個狀態刷新）整個子樹就重建，那時剛換出來的
 /// token 會跟著消失——而它是隨機字串，畫面上那一次是使用者唯一看得到它的
 /// 機會。同樣的形狀在這個 repo 已經咬過四次（草稿存在 State 裡）。
-class LastDataOp extends Notifier<Map<String, dynamic>?> {
+/// 每種操作**各自一格**，key 是 `kind`。
+///
+/// 🔴 **單格會把還在跑的操作蓋掉。** 原本這裡只存一筆：Hub 啟動輪詢中
+/// （`pending`）時去按備份或開隧道，那一筆就被換掉 ⇒ 啟動區的 `_opOf`
+/// 得到 null ⇒ **按鈕從「啟動中…」變回「啟動 Hub」，再按一次就啟第二個
+/// Hub 進程**。之後兩條輪詢還會各自寫結果，順序由誰先起來決定。
+///
+/// 比「沒有回饋」更糟——沒有回饋時使用者至少不會以為可以再按
+/// （審核用Codex 09/14 終審）。
+///
+/// `_seq` 是寫入序號：同一區可能有好幾種 kind（起、停、服務），要挑
+/// **最近那一筆**顯示，而 Dart 的 Map 更新既有 key 不會把它移到最後，
+/// 光靠插入順序判不出來。
+class LastDataOp extends Notifier<Map<String, Map<String, dynamic>>> {
   @override
-  Map<String, dynamic>? build() => null;
+  Map<String, Map<String, dynamic>> build() => const {};
 
-  void set(Map<String, dynamic> result) => state = result;
+  int _seq = 0;
+
+  void set(Map<String, dynamic> result) {
+    final kind = '${result['kind']}';
+    state = {
+      ...state,
+      kind: {...result, '_seq': ++_seq},
+    };
+  }
 }
 
 final lastDataOpProvider =
-    NotifierProvider<LastDataOp, Map<String, dynamic>?>(LastDataOp.new);
+    NotifierProvider<LastDataOp, Map<String, Map<String, dynamic>>>(
+        LastDataOp.new);
 
 /// 哪些 `kind` 屬於「啟動與自啟」那一區、哪些屬於「對外協作」。
 ///
@@ -904,10 +971,33 @@ const _controlKinds = {'hub_start', 'hub_stop', 'service'};
 const _tunnelKinds = {'tunnel_start', 'tunnel_stop'};
 
 /// 取出屬於這一區的那筆結果；不是這一區的就當作沒有。
-Map<String, dynamic>? _opOf(WidgetRef ref, Set<String> kinds) {
-  final last = ref.watch(lastDataOpProvider);
-  if (last == null) return null;
-  return kinds.contains(last['kind']) ? last : null;
+Map<String, dynamic>? _opOf(WidgetRef ref, Set<String> kinds) =>
+    _latest(ref.watch(lastDataOpProvider), (k) => kinds.contains(k));
+
+/// 直接讀**某一種操作**那一格。
+///
+/// 🔴 **按鈕的「進行中」只能看自己那一格。** 用「這一區最新一筆」判的話：
+/// Hub 啟動輪詢中去按停止，`hub_stop` 比較新 ⇒ 啟動鈕看到的不是自己的
+/// pending ⇒ 從「啟動中…」變回「啟動 Hub」⇒ 再按一次就啟第二個進程。
+/// 分格存對了，但讀的時候又合回去，等於沒分（審核用Codex 09/14）。
+///
+/// 顯示結果仍然用 `_opOf`（最近那一筆）——那是「這一區剛剛發生什麼」，
+/// 與「這顆按鈕現在能不能按」是兩個問題。
+bool _isPending(WidgetRef ref, String kind) =>
+    ref.watch(lastDataOpProvider)[kind]?['pending'] == true;
+
+/// 挑出符合條件的那些 kind 裡**最近寫入**的一筆。
+Map<String, dynamic>? _latest(
+  Map<String, Map<String, dynamic>> all,
+  bool Function(String kind) keep,
+) {
+  Map<String, dynamic>? best;
+  for (final entry in all.entries) {
+    if (!keep(entry.key)) continue;
+    final seq = entry.value['_seq'] as int? ?? 0;
+    if (best == null || seq > (best['_seq'] as int? ?? 0)) best = entry.value;
+  }
+  return best;
 }
 
 /// 送出一個 detached 啟動，然後**去問狀態**直到它起來或逾時。
@@ -936,7 +1026,23 @@ Future<void> _launchAndWatch(
   }
   for (var i = 0; i < tries; i++) {
     await Future<void>.delayed(const Duration(seconds: 1));
-    if (await ready()) {
+    // ⚠️ **`ready()` 也要包。** 它會去讀 provider（health／tunnel），而那些
+    // 會拋——檔案讀不到、HTTP 逾時、kit 不見了。沒包的話這個 Future 直接
+    // 中止，`lastDataOp` **永遠停在 pending**：按鈕卡在「啟動中…」、結果那
+    // 一行卡在「正在啟動…」，而且只有重開 App 才會消失。
+    //
+    // 那正是這張卡要消滅的「按了不知道有沒有用」，只是換了一層皮——
+    // 而且比原本更糟：原本至少畫面沒有承諾任何事，現在它承諾了一個
+    // 永遠不會到的結果（審核用Codex 09/14 終審）。
+    //
+    // 單次失敗不終止輪詢：Hub 正在起來的那幾秒裡 health 本來就可能拋。
+    bool ok;
+    try {
+      ok = await ready();
+    } on Object {
+      ok = false;
+    }
+    if (ok) {
       op.set({'kind': kind, 'ok': true, 'detail': okText});
       return;
     }
@@ -966,11 +1072,9 @@ class _DataSectionState extends ConsumerState<_DataSection> {
     // 只顯示**這一區自己的**結果。起停與隧道的結果現在畫在它們的按鈕旁邊，
     // 再重複一份只會讓人以為剛剛按的動作發生了兩次
     final last = ref.watch(lastDataOpProvider);
-    final dataLast = last == null ||
-            _controlKinds.contains(last['kind']) ||
-            _tunnelKinds.contains(last['kind'])
-        ? null
-        : last;
+    final dataLast = _latest(
+        last,
+        (k) => !_controlKinds.contains(k) && !_tunnelKinds.contains(k));
 
     return _Panel(
       title: '資料與安全',
