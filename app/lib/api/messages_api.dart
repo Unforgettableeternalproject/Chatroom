@@ -34,6 +34,7 @@ class PostResult {
     required this.id,
     required this.seq,
     this.emptyGroups = const [],
+    this.unresolvedMentions = const [],
   });
 
   final String id;
@@ -45,6 +46,12 @@ class PostResult {
   /// 有人被叫醒了。與 `unresolved_mentions`（打錯的人名）同族，都是
   /// 「你以為叫到人了，其實沒有」。
   final List<String> emptyGroups;
+
+  /// 沒有對應到房內任何人的 @ 名字（打錯、或那個人已經離開）。
+  ///
+  /// 與 [emptyGroups] 同族：**你以為叫到人了，其實沒有**。Hub 一直有回
+  /// 這一欄，但這裡以前沒有接——於是發話者手上的回應與成功送達完全一樣。
+  final List<String> unresolvedMentions;
 }
 
 class MessagesApi {
@@ -156,6 +163,10 @@ class MessagesApi {
           id: res.data!['id'] as String,
           seq: res.data!['seq'] as int,
           // 舊版 Hub 不回這個欄位——那時它也不做群組展開，空清單是對的
+          unresolvedMentions:
+              ((res.data!['unresolved_mentions'] as List?) ?? const [])
+                  .map((e) => e.toString())
+                  .toList(),
           emptyGroups: ((res.data!['empty_groups'] as List?) ?? const [])
               .map((e) => e.toString())
               .toList(),
