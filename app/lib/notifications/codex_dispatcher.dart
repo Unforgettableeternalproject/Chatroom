@@ -335,6 +335,15 @@ class CodexDispatcher {
     // 一個都沒送成就是沒送成。原本不論 `_queue` 回什麼都回 true，於是
     // 「找不到 codex CLI」「exit 非零」「逾時」這些**正常的失敗契約**
     // 全被記成已投遞，水位照推，那一則變動從此沒有人會知道。
+    //
+    // ⚠️ **部分成功視為成功，這是刻意的 best-effort**（Codex 複審列為
+    // residual risk，2026-09-14）。房裡兩個本機 Codex 只送成一個時，水位
+    // 照樣前進，沒收到的那個要等下一次 board 變動才會被叫醒。這與 board
+    // 「狀態轉變、不是必達待辦」的定位一致——收到的人做的事是重讀整塊板，
+    // 晚一輪不會讀到錯的東西。
+    //
+    // 若哪天契約改成「房內每個本機 Codex 都必達」，**per-room 水位就不夠
+    // 了**，要改成逐 thread 的水位／失敗集合。不要在這個結構上補釘子。
     if (!any) {
       _log.warning('board 變動一則都沒送出（${_roomLabel(roomId)} seq $boardSeq）');
       return false;
