@@ -14,6 +14,7 @@ class AgentSession {
     this.lastDisplayName,
     this.lastIp,
     this.host = '',
+    this.labelSelfReported = true,
   });
 
   final String sessionKey;
@@ -38,6 +39,16 @@ class AgentSession {
   /// ⚠️ 空值**不能**當成本機：每一台取不到主機名的機器都會混進本機清單，
   /// 而指派是私人房的入場券。
   final String host;
+
+  /// [label] 是 agent 自己報的，還是只是被探索到的佔位。
+  ///
+  /// false ＝ 這個 session 從來沒接過聊天室（沒有 chatroom MCP，或還沒用過）。
+  /// VS Code 擴充套件、Codex 桌面 App、subagent thread 都長這樣——它們與
+  /// CLI 共用同一個 writer lock 目錄，所以 App 看得到，但它們永遠不會自報。
+  ///
+  /// ⚠️ 不能拿它當「不是候選人」：**第一次**指派一個全新的 Codex 時，
+  /// 它本來就還沒自報過。這是排序與摺疊的依據，不是過濾的依據。
+  final bool labelSelfReported;
 
   /// 這個 session 是不是跑在 [me] 這台機器上。
   ///
@@ -74,6 +85,9 @@ class AgentSession {
         lastDisplayName: json['last_display_name'] as String?,
         lastIp: json['last_ip'] as String?,
         host: (json['host'] as String?) ?? '',
+        // 舊 Hub 沒有這一欄——**預設 true**。當成「探索到的」會讓所有既有
+        // session 一夕之間全被收進摺疊區，而那看起來像 agent 全部消失了
+        labelSelfReported: (json['label_self_reported'] as bool?) ?? true,
       );
 }
 

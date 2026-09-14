@@ -44,6 +44,15 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   // 內容送出去。要展開才點得到，手滑一次不夠
   bool _showOtherHosts = false;
 
+  /// 沒自報過名字的（沒接過聊天室的）預設收起。
+  ///
+  /// 本機的 writer lock 目錄是**所有 Codex 安裝共用**的：CLI、VS Code 擴充
+  /// 套件、桌面 App、還有 Codex 自己開的 subagent thread 全在裡面。實測
+  /// 一台機器上「一個 CLI」對應到七個 lock，而其中只有一個是你想指派的
+  /// 那個。分界不是「哪一種安裝」——那要去讀別人家的 sqlite——而是
+  /// **有沒有接過聊天室**：只有載入了 chatroom MCP 的那些會自報名字。
+  bool _showUnlinked = false;
+
   @override
   void initState() {
     super.initState();
@@ -336,6 +345,14 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         // 空值不能當成本機，那會讓每一台報不出主機名的機器都混進來
         final mine = sessions.where((x) => x.isOnHost(localHostName)).toList();
         final others = sessions.where((x) => !x.isOnHost(localHostName)).toList();
+        // 再分一層：自報過名字的（接過聊天室）排前面，只是被掃描到的收起來。
+        // **不是過濾**——第一次指派一個全新的 agent 時，它本來就還沒自報過，
+        // 藏掉就指派不到了
+        final primary = localHostName.isEmpty ? sessions : mine;
+        final primaryKnown =
+            primary.where((x) => x.labelSelfReported).toList();
+        final primaryUnlinked =
+            primary.where((x) => !x.labelSelfReported).toList();
         return Column(children: [
           if (mine.isEmpty && others.isNotEmpty && localHostName.isEmpty)
             // 讀不到自己的主機名時無從分組，照列全部並說清楚為什麼
@@ -347,12 +364,51 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     size: 8.5, color: s.inkMute),
               ),
             ),
-          for (final session in (localHostName.isEmpty ? sessions : mine))
+          for (final session in primaryKnown)
             _SessionRow(
               session: session,
               selected: _target.text.trim() == session.sessionKey,
               onTap: () => setState(() => _target.text = session.sessionKey),
             ),
+          if (primaryUnlinked.isNotEmpty) ...[
+            InkWell(
+              onTap: () => setState(() => _showUnlinked = !_showUnlinked),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Row(children: [
+                  Icon(
+                    _showUnlinked
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    size: 14,
+                    color: s.inkMute,
+                  ),
+                  const SizedBox(width: 4),
+                  MonoLabel('尚未接入聊天室（${primaryUnlinked.length}）',
+                      size: 9, color: s.inkMute),
+                ]),
+              ),
+            ),
+            if (_showUnlinked) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: MonoLabel(
+                      '這些名字是掃描編出來的，不是它們自己報的——'
+                      '第一次指派一個全新的 agent 就從這裡挑',
+                      size: 8.5, color: s.inkMute),
+                ),
+              ),
+              for (final session in primaryUnlinked)
+                _SessionRow(
+                  session: session,
+                  selected: _target.text.trim() == session.sessionKey,
+                  onTap: () =>
+                      setState(() => _target.text = session.sessionKey),
+                ),
+            ],
+          ],
           if (localHostName.isNotEmpty && mine.isEmpty && others.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),

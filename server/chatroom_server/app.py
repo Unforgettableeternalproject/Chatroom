@@ -1431,9 +1431,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         ip: str | None = None,
         host: str | None = None,
         party: str | None = None,
+        label_fallback: bool = False,
     ) -> None:
         """upsert session 名錄。kind/label 只在帶到非空值時覆寫既有紀錄——
         舊版 bridge 不帶這兩個參數，不能因此把已知的 kind 洗回 other。
+
+        `label_fallback=True` 代表這個名字是**探索到的**，不是自報的：
+        呼叫者只是發現了這個 session 存在（App 掃 writer lock 就是這樣），
+        它不知道對方叫什麼。這種名字只在還沒有人自報過時當佔位，之後
+        agent 一自報就退位，而且**不會**再被下一次探索蓋回去。
+
+        不分的話會這樣：Codex 以 CHATROOM_DEFAULT_NAME 自報 `Codex-Sol`，
+        App 的指派輪詢每 10 秒帶著自己編的尾碼報到一次，使用者設好的身分
+        十秒內被洗掉——名單上永遠只看得到十六進位（2026-09-14 實測）。
 
         `party` 同樣只在非空時覆寫，但理由不同：它不是自報的，是 Hub 從這次
         請求的憑證推出來的（`request.state.party`），所以**每一次心跳都會把
@@ -1450,11 +1460,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         now = _now()
         await db.execute(
             "INSERT INTO session (session_key, kind, label, first_seen_at,"
-            " last_seen_at, last_ip, host, party) VALUES (?,?,?,?,?,?,?,?)"
+            " last_seen_at, last_ip, host, party, label_self_reported)"
+            " VALUES (?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(session_key) DO UPDATE SET"
             " last_seen_at=excluded.last_seen_at,"
             " kind=CASE WHEN excluded.kind!='' THEN excluded.kind ELSE session.kind END,"
-            " label=CASE WHEN excluded.label!='' THEN excluded.label ELSE session.label END,"
+            # 探索到的名字只填空位：已經有自報的就不動它
+            " label=CASE WHEN excluded.label!='' AND NOT (?"
+            "   AND session.label_self_reported) THEN excluded.label"
+            "   ELSE session.label END,"
+            " label_self_reported=CASE WHEN excluded.label!=''"
+            "   AND NOT (? AND session.label_self_reported) THEN ?"
+            "   ELSE session.label_self_reported END,"
             " last_ip=COALESCE(excluded.last_ip, session.last_ip),"
             # host 同 kind/label：只在帶到非空值時覆寫。舊 bridge 不自報，
             # 不能因為它呼叫了一次就把已知的主機名洗掉
@@ -1463,7 +1480,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             " party=CASE WHEN excluded.party!='' THEN excluded.party"
             " ELSE session.party END",
             (session_key, kind or "", label or "", now, now, ip, host or "",
-             party or ""),
+             party or "", 0 if label_fallback else 1,
+             1 if label_fallback else 0, 1 if label_fallback else 0,
+             0 if label_fallback else 1),
         )
         # 首次插入時 kind 空字串會落庫，補回預設值
         await db.execute(
@@ -10989,6 +11008,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         kind: str | None = None,
         label: str | None = None,
         host: str | None = None,
+        label_fallback: bool = False,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
     ):
         # ⚠️ 這個參數原本是**必填 query**，於是舊 client 與新 client 只能活
@@ -11002,8 +11022,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "session_key_required",
                        "要帶 X-Session-Key 才知道要看誰的指派")
         # 這是 watcher 的固定輪詢點——session 名錄的主要心跳來源
+        # label_fallback=true ＝「我只是發現了這個 session，不知道它叫什麼」。
+        # App 掃 writer lock 探索到的 thread 走這條，才不會把 agent 自報的
+        # 身分每 10 秒洗掉一次
         await _touch_session(session_key, kind, label, _client_ip(request), host,
-                             _party(request))
+                             _party(request), label_fallback=label_fallback)
         db = app.state.db
         rows = await (
             await db.execute(
@@ -11938,6 +11961,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "session_key": r["session_key"],
                 "kind": r["kind"],
                 "label": r["label"],
+                # 這個名字是 agent 自報的，還是只是被探索到的佔位？
+                # 指派 UI 靠它分出「接過聊天室的」與「只是本機開著的」
+                "label_self_reported": bool(r["label_self_reported"])
+                if "label_self_reported" in r.keys() else True,
                 # 邀請 UI 靠它認人：共用一把 token 時 Hub 眼中所有人長得一樣。
                 # **僅供辨識**——來源可能經 X-Forwarded-For 而來，不可拿來授權
                 "last_ip": r["last_ip"],

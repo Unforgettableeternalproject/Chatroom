@@ -23,6 +23,26 @@ void main() {
         Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = rec);
   });
 
+  group('探索到的名字不可以蓋掉 agent 自報的', () {
+    // App 掃 writer lock 發現一個 thread 時，它**不知道那個 agent 叫什麼**。
+    // 實測：Codex 以 CHATROOM_DEFAULT_NAME=Codex-Sol 自報身分，而這裡的輪詢
+    // 每 10 秒帶著自己編的尾碼報到一次，Hub 的 label 規則是「帶了非空值就
+    // 覆寫」——使用者設好的名字十秒內被洗掉，名單上永遠只看得到十六進位。
+    test('探索用的登記要標記成 fallback', () async {
+      await api.listForSession('01a05774-2650',
+          kind: 'codex', label: 'Codex-1', host: 'TheFantasias',
+          labelFallback: true);
+      expect(rec.seen.single.queryParameters['label_fallback'], true);
+    });
+
+    test('沒標記時不送這個參數——舊 Hub 不認得，而它預設就是自報', () async {
+      await api.listForSession('01a05774-2650',
+          kind: 'codex', label: 'Codex-1', host: 'TheFantasias');
+      expect(rec.seen.single.queryParameters.containsKey('label_fallback'),
+          isFalse);
+    });
+  });
+
   group('登記進名錄時要說清楚自己在哪台機器', () {
     test('host 帶得出去', () async {
       await api.listForSession('01a05774-2650', kind: 'codex',

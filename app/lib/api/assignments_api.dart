@@ -76,6 +76,7 @@ class AssignmentsApi {
     String? kind,
     String? label,
     String? host,
+    bool labelFallback = false,
   }) =>
       unwrap(() async {
         final nonEmptyLabel = label?.isNotEmpty == true ? label : null;
@@ -90,6 +91,10 @@ class AssignmentsApi {
             'kind': ?kind,
             'label': ?nonEmptyLabel,
             'host': ?nonEmptyHost,
+            // 這個名字是不是「探索到的」。App 掃 writer lock 發現一個 thread
+            // 時，它**不知道那個 agent 叫什麼**——帶著自己編的尾碼覆寫，會把
+            // 使用者用 CHATROOM_DEFAULT_NAME 設好的身分每 10 秒洗掉一次
+            if (labelFallback) 'label_fallback': true,
           },
           // 憑證走 header（Hub `f2f9c1e` 起 query 改選填、header 優先）
           options: Options(headers: {'X-Session-Key': sessionKey}),

@@ -351,3 +351,67 @@ async def test_latest_source_wins(client):
     r = await client.get("/api/sessions")
     row = next(s for s in r.json()["sessions"] if s["session_key"] == "claude-c")
     assert row["last_ip"] == "192.168.1.77"
+
+
+# ---------- 探索到的 label 不可以蓋掉自報的 ----------
+
+
+async def test_discovered_label_does_not_overwrite_self_reported(client):
+    """App 只是在 lock 目錄看到一個檔案，它不知道那個 agent 叫什麼。
+
+    實際踩到的形狀：Codex 以 CHATROOM_DEFAULT_NAME 自報 `Codex-Sol`，但 App
+    的指派輪詢每 10 秒帶著自己編的 `Codex-<尾碼>` 報到一次，而 label 的規則
+    是「帶了非空值就覆寫」——於是使用者設好的身分在十秒內被洗掉，名單上
+    永遠只看得到十六進位尾碼。
+    """
+    key = "codex-01a09e0d-b793-72a1-8b5d-9a7ae641a7b2"
+
+    # agent 自己報到：這是唯一知道自己叫什麼的一方
+    r = await client.get("/api/assignments", params={"session_key": key,
+                                                     "kind": "codex",
+                                                     "label": "Codex-Sol"})
+    assert r.status_code == 200, r.text
+
+    # App 探索到同一個 thread，帶著自己編的名字報到
+    r = await client.get("/api/assignments", params={"session_key": key,
+                                                     "kind": "codex",
+                                                     "label": "Codex-9a7ae641",
+                                                     "label_fallback": "true"})
+    assert r.status_code == 200, r.text
+
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label"] == "Codex-Sol", "探索到的名字不可以蓋掉 agent 自報的"
+
+
+async def test_discovered_label_fills_when_nothing_known(client):
+    """但沒有人自報過時要填得上——否則全新的 Codex 在名單上是一片空白，
+    而第一次指派正是發生在它還沒接過聊天室的時候。"""
+    key = "codex-01a09e22-e949-7970-8aac-996bd08d2237"
+    r = await client.get("/api/assignments", params={"session_key": key,
+                                                     "kind": "codex",
+                                                     "label": "Codex-996bd08d",
+                                                     "label_fallback": "true"})
+    assert r.status_code == 200, r.text
+
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label"] == "Codex-996bd08d"
+    assert row["label_self_reported"] is False, "要分得出這是探索到的還是自報的"
+
+
+async def test_self_report_after_discovery_takes_over(client):
+    """探索在前、自報在後——agent 一接上聊天室就該把名字換成它自己的。"""
+    key = "codex-01a09deb-ada1-76f0-8f06-069faf09495c"
+    await client.get("/api/assignments", params={"session_key": key,
+                                                 "kind": "codex",
+                                                 "label": "Codex-069faf09",
+                                                 "label_fallback": "true"})
+    await client.get("/api/assignments", params={"session_key": key,
+                                                 "kind": "codex",
+                                                 "label": "Codex-Sol"})
+
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label"] == "Codex-Sol"
+    assert row["label_self_reported"] is True

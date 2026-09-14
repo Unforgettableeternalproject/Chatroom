@@ -65,6 +65,11 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
         // 指派 UI 的「其他裝置」（預設收起），使用者在自己的機器上找不到
         // 自己的 agent
         host: localHostName,
+        // ⚠️ 這個 label 是**探索到的**：App 只是在 writer lock 目錄看到一個
+        // 檔案，它不知道那個 agent 叫什麼。不標記的話，Codex 用
+        // CHATROOM_DEFAULT_NAME 自報的 `Codex-Sol` 會在 10 秒內被這裡編出來
+        // 的尾碼蓋掉，名單上永遠只看得到十六進位
+        labelFallback: true,
       );
     },
   );

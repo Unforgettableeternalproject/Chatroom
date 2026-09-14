@@ -735,6 +735,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 看不見（見 db 的欄位註解與 app.py 的 `_party_of`）
     ("access_token", "party", "party TEXT NOT NULL DEFAULT ''"),
     ("session", "party", "party TEXT NOT NULL DEFAULT ''"),
+    # 這個 label 是 agent 自己報的，還是別人探索到的？
+    # App 只是在 lock 目錄看到一個檔案，它不知道那個 agent 叫什麼——
+    # 探索到的名字只能在還沒有人自報時當佔位，不可以蓋掉自報的
+    ("session", "label_self_reported",
+     "label_self_reported INTEGER NOT NULL DEFAULT 1"),
     # 指派者的群。指派給一個**還沒上線**的 key 時建立當下判不了群，所以
     # 記下來，等兌換（join 帶 assignment_id）那一刻再比一次——兩端都關，
     # 否則「先指派、對方稍後用別群的憑證上線」就是一條繞道
