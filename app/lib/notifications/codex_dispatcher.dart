@@ -379,6 +379,12 @@ class CodexDispatcher {
       _log.warning('board 變動一則都沒送出（${_roomLabel(roomId)} seq $boardSeq）');
       return _BoardOutcome.failed;
     }
+    // 🔴 **成功也要留一行。** 這條管線的失敗全是靜默的，而成功如果也靜默，
+    // log 就只剩下失敗——「沒有紀錄」同時代表「沒發生」與「一切正常」，
+    // 兩者分不開。09/14 為此卡過兩次診斷：一次是判斷冷啟動抑制有沒有生效，
+    // 一次是判斷板子的變動到底投出去了沒有，兩次都只能靠對方回報。
+    _log.info('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq，'
+        '${threads.length} 個 thread）');
     _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
     return _BoardOutcome.sent;
   }
@@ -558,7 +564,13 @@ class CodexDispatcher {
           },
         })}';
     final ok = await _queue(thread, text);
-    if (!ok) _log.warning('codex queue 轉送失敗（thread=$thread）');
+    if (ok) {
+      // 成功也要留一行，理由同 board（見 `_dispatchBoard`）
+      _log.info('mention 已投遞（${batch.roomName}，${msgs.length} 則 → '
+          '${_shortThread(thread)}）');
+    } else {
+      _log.warning('codex queue 轉送失敗（thread=$thread）');
+    }
     _publish(ok
         ? '已投遞 ${msgs.length} 則到 ${_shortThread(thread)}'
         : 'codex queue 失敗（${_shortThread(thread)}）');
@@ -583,7 +595,12 @@ class CodexDispatcher {
           'latest': {'seq': last.seq, 'participant_id': last.senderId, 'display_name': last.senderName, 'content': last.content},
         })}';
     final ok = await _queue(thread, text);
-    if (!ok) _log.warning('codex queue 轉送失敗（member_joined, thread=$thread）');
+    if (ok) {
+      _log.info('加入事件已投遞（${batch.roomName}，${msgs.length} 則 → '
+          '${_shortThread(thread)}）');
+    } else {
+      _log.warning('codex queue 轉送失敗（member_joined, thread=$thread）');
+    }
   }
 
   /// 記下投不出去的 mention，等下一輪補投。
