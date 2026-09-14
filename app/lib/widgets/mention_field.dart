@@ -773,7 +773,12 @@ class _MessageComposerState extends State<MessageComposer> {
                           decoration: InputDecoration(
                             isDense: true,
                             border: InputBorder.none,
-                            hintText: '輸入訊息…　@ 提及成員，支援 Markdown',
+                            // `#` 只在這間房掛了板、而且板上有卡的時候才
+                            // 有東西可指——沒有卡卻提示得了「# 指涉任務」，
+                            // 打了 `#` 會得到一個空的候選清單，那比不提示糟
+                            hintText: widget.cards.isEmpty
+                                ? '輸入訊息…　@ 提及成員，支援 Markdown'
+                                : '輸入訊息…　@ 提及成員，# 指涉任務，支援 Markdown',
                             hintStyle: UepText.serif(
                                 size: 14, color: s.inkMute, height: 1.7),
                           ),

@@ -181,4 +181,22 @@ void main() {
       expect(refs.single.boardId, 'b1');
     });
   });
+
+  group('placeholder 要講出 # 這件事（艾斯維爾 09/14）', () {
+    String hintOf(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).decoration!.hintText!;
+
+    testWidgets('🔴 本次補的：板上有卡時提示 # 指涉任務', (tester) async {
+      await tester.pumpWidget(wrap(cards: cards));
+      expect(hintOf(tester), contains('#'));
+      expect(hintOf(tester), contains('@'), reason: '原本就有的那半不能被擠掉');
+    });
+
+    testWidgets('沒有卡可指時不提示 #', (tester) async {
+      // 提示得了卻打不出東西比不提示糟：打了 `#` 只會得到一個空的候選清單
+      await tester.pumpWidget(wrap());
+      expect(hintOf(tester), isNot(contains('#')));
+      expect(hintOf(tester), contains('@'));
+    });
+  });
 }
