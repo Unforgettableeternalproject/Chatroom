@@ -95,7 +95,17 @@ BEGIN
             VALUE "InternalName", "chatroom_app" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 dev.uep. All rights reserved." "\0"
             VALUE "OriginalFilename", "chatroom_app.exe" "\0"
-            VALUE "ProductName", "Chatroom" "\0"
+            // ⚠️ ProductName 是識別字，不是顯示名——**改它等於搬走所有人的資料**。
+            // path_provider_windows 用 CompanyName\ProductName 組出 application
+            // support 目錄（%APPDATA%\dev.uep\<ProductName>\），裡面是
+            // shared_preferences.json 與 flutter_secure_storage.dat（token 與
+            // device key）。2026-09-14 把它改成 Chatroom，升級的人一開 App
+            // 就是全新狀態：設定沒了、身分沒了，而舊資料還在舊資料夾裡。
+            //
+            // 人看得到的名字由別的欄位負責：視窗標題（main.cpp）、FileDescription
+            // （工作管理員與檔案總管的「描述」欄）、App 內與通知的 Chatroom。
+            // 這一欄只出現在「屬性 → 詳細資料 → 產品名稱」，而代價是搬家。
+            VALUE "ProductName", "chatroom_app" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
