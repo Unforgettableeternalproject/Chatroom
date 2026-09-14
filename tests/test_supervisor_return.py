@@ -100,3 +100,61 @@ async def test_someone_else_joining_does_not_clear_it(client):
                       json={"kind": "claude", "session_key": "someone-else",
                             "preferred_name": "路人"})
     assert (await _supervisor(client, room, me))["departed"] is True
+
+
+async def test_stale_departed_is_cleared_on_upgrade(tmp_path):
+    """行為修好了，救不了已經卡住的那些。
+
+    join 路徑的解除只管**之後**的加入。在修好之前就已經回來的 supervisor
+    身上仍掛著標記，而他不會再加入第二次——今天早上 `label_self_reported`
+    踩的是同一個形狀：改預設值救不了已經加過欄的 DB。
+    """
+    from chatroom_server.db import open_db
+
+    db_path = str(tmp_path / "legacy.db")
+    db = await open_db(db_path)
+    await db.execute(
+        "INSERT INTO room (id, name, topic, status, created_at, next_seq,"
+        " board_supervisor_session_key, board_supervisor_name,"
+        " board_supervisor_left_at) VALUES"
+        " ('r1','房','','active','2026-09-01T00:00:00Z',1,"
+        "  'agent-key','Codex','2026-09-01T00:00:00Z')")
+    # 他其實已經回來了
+    await db.execute(
+        "INSERT INTO participant (id, room_id, session_key, kind, display_name,"
+        " role, status, joined_at, last_seen_at) VALUES"
+        " ('p1','r1','agent-key','codex','Codex','member','active',"
+        "  '2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')")
+    await db.execute("PRAGMA user_version=2")
+    await db.commit()
+    await db.close()
+
+    db = await open_db(db_path)
+    row = await (await db.execute(
+        "SELECT board_supervisor_left_at FROM room WHERE id='r1'")).fetchone()
+    assert row["board_supervisor_left_at"] == "", "人在房內就不該還掛著已離開"
+    await db.close()
+
+
+async def test_a_supervisor_who_really_left_keeps_the_mark(tmp_path):
+    """真的還沒回來的維持標記——那個標記本來就是要說出
+    「本來是誰在看，但他走了」。"""
+    from chatroom_server.db import open_db
+
+    db_path = str(tmp_path / "legacy2.db")
+    db = await open_db(db_path)
+    await db.execute(
+        "INSERT INTO room (id, name, topic, status, created_at, next_seq,"
+        " board_supervisor_session_key, board_supervisor_name,"
+        " board_supervisor_left_at) VALUES"
+        " ('r1','房','','active','2026-09-01T00:00:00Z',1,"
+        "  'agent-key','Codex','2026-09-01T00:00:00Z')")
+    await db.execute("PRAGMA user_version=2")
+    await db.commit()
+    await db.close()
+
+    db = await open_db(db_path)
+    row = await (await db.execute(
+        "SELECT board_supervisor_left_at FROM room WHERE id='r1'")).fetchone()
+    assert row["board_supervisor_left_at"] != ""
+    await db.close()

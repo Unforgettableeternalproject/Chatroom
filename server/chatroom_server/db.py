@@ -1124,7 +1124,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 2
+DATA_VERSION = 3
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1155,6 +1155,22 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         # agent 下一次心跳（最長 65 秒）就自己修好，留在「尚未接入聊天室」
         # 的正好是已經不在的那些。
         await db.execute("UPDATE session SET label_self_reported=0")
+    if version < 3:
+        # supervisor 的「已離開」原本只設不清（解除那一半不存在），所以
+        # 已經回來的人身上仍掛著那個標記，而新版的 join 路徑只管**之後**
+        # 的加入——它救不了已經加入完的那些。
+        #
+        # 只清「現在真的有 active 身分」的那些：那是正面證據，不是猜測。
+        # 真的還沒回來的維持標記——那個標記本來就是要說出「本來是誰在看，
+        # 但他走了」。
+        await db.execute(
+            "UPDATE room SET board_supervisor_left_at=''"
+            " WHERE board_supervisor_left_at != ''"
+            "   AND EXISTS (SELECT 1 FROM participant p"
+            "               WHERE p.room_id = room.id"
+            "                 AND p.session_key = room.board_supervisor_session_key"
+            "                 AND p.status = 'active')"
+        )
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 
