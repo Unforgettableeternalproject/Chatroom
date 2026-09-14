@@ -33,7 +33,11 @@ class _SeededOp extends LastDataOp {
 }
 
 void main() {
-  Widget wrap(Map<String, dynamic>? op, {List<Map<String, dynamic>>? ops}) =>
+  Widget wrap(
+    Map<String, dynamic>? op, {
+    List<Map<String, dynamic>>? ops,
+    TunnelStatus? tunnel,
+  }) =>
       ProviderScope(
         overrides: [
           hostKitProvider.overrideWith((ref) async => const HostKit(
@@ -53,7 +57,7 @@ void main() {
                 reachable: Probe(ProbeState.ok, '綁定位址打得通'),
                 auth: Probe(ProbeState.ok, 'token 可以通過認證'),
               )),
-          tunnelStatusProvider.overrideWith((ref) async =>
+          tunnelStatusProvider.overrideWith((ref) async => tunnel ??
               const TunnelStatus(ProbeState.unknown, '', '沒有開著的隧道')),
           serviceStatusProvider
               .overrideWith((ref) async => const ServiceStatus(false, '沒註冊')),
@@ -201,6 +205,46 @@ void main() {
       expect(find.text('啟動 Hub'), findsNothing);
       // 顯示的是這一區最近那一筆（停止的結果）——那是另一個問題，不衝突
       expect(find.text('已送出停止指令。'), findsOneWidget);
+    });
+  });
+
+  group('已經有一條隧道時，不能再開第二條', () {
+    // 🚨 安全問題，不是體驗問題：隧道的狀態只有一組檔案，開第二條會把第一條
+    // 的紀錄蓋掉 ⇒ 第一條仍然對外開著，但 UI 與 stop-tunnel.py 都指不到它
+    // ⇒ 一條沒有人管得到的公開入口，而主持人不會知道它還在
+    // （審核用Codex 09/14）
+    const live = TunnelStatus(
+      ProbeState.ok,
+      'https://live.trycloudflare.com',
+      '隧道開著',
+    );
+
+    testWidgets('🔴 有網址時「開隧道」那顆按不下去，而且說得出為什麼', (tester) async {
+      tester.view.physicalSize = const Size(760, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(wrap(null, tunnel: live));
+      await tester.pumpAndSettle();
+
+      expect(find.text('再開一條'), findsNothing,
+          reason: '那顆按鈕會製造一條關不掉的公開入口');
+      expect(find.text('已經有一條'), findsOneWidget);
+      // 光是禁用不夠——要講得出路在哪，否則他會去找別的方法達成同一件事
+      expect(find.textContaining('先按「關閉隧道」'), findsOneWidget);
+      expect(find.text('關閉隧道'), findsOneWidget);
+    });
+
+    testWidgets('沒有隧道時照常可以開', (tester) async {
+      tester.view.physicalSize = const Size(760, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(wrap(null));
+      await tester.pumpAndSettle();
+
+      expect(find.text('開隧道'), findsOneWidget);
+      expect(find.text('已經有一條'), findsNothing);
     });
   });
 }

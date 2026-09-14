@@ -485,13 +485,23 @@ class _TunnelSection extends ConsumerWidget {
                 // Cloudflare 要一個網址，那是**好幾秒**的往返。沒有進行中
                 // 狀態的話使用者會在網址出現之前再按一次，而每按一次就是
                 // 多一條隧道——下面那段註解說的「隧道越積越多」就是這樣來的
+                //
+                // 🚨 **已經有一條在跑時整個封掉，這是安全問題不是體驗問題。**
+                // 隧道的狀態只有一組檔案（`.tunnel-url` / `.tunnel-pid`）⇒
+                // 開第二條會把第一條的紀錄蓋掉 ⇒ **第一條仍然對外開著，但
+                // UI 與 `stop-tunnel.py` 都已經指不到它**（後者會比對 PID，
+                // 對不上就拒絕動手，那是它該做的事）。結果是一條沒有人管得到
+                // 的公開入口，而主持人不會知道它還在
+                // （審核用Codex 09/14，既有行為，本次重審才發現）。
+                //
+                // 要換一條就先關現在這條——那條路是有的，就在旁邊。
                 UepButton(
                   small: true,
                   variant: UepButtonVariant.outline,
                   label: tunnelOpening
                       ? '開通中…'
-                      : (t.hasUrl ? '再開一條' : '開隧道'),
-                  onPressed: tunnelOpening
+                      : (t.hasUrl ? '已經有一條' : '開隧道'),
+                  onPressed: (tunnelOpening || t.hasUrl)
                       ? () {}
                       : () => _confirmTunnel(context, ref, actions),
                 ),
@@ -516,8 +526,10 @@ class _TunnelSection extends ConsumerWidget {
                 Expanded(
                   child: Text(
                     t.hasUrl
-                        ? '關掉那個隧道視窗也等於關閉。網址是臨時的，'
-                            '重開一定是新的網址。'
+                        ? '要換一條網址，先按「關閉隧道」再開——**不能直接開'
+                            '第二條**：紀錄只有一組，開了之後第一條會變成'
+                            '關不掉、卻仍然對外開著的入口。'
+                            '關掉那個隧道視窗也等於關閉。'
                         : '開了之後這台 Hub 就在公網上，擋在前面的只有 token。',
                     style: UepText.serif(
                         size: 11.5, color: s.inkMute, height: 1.5),
