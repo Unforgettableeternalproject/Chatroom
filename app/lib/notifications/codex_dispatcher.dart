@@ -165,8 +165,18 @@ class CodexDispatcher {
   /// 已經讀到更新的水位了，卻被叫醒去看一個比手上還舊的數字
   /// （2026-09-14 實機，Codex 已讀到 10 卻連收兩次 9）。
   ///
-  /// 只前進：board_seq 是單調的，不比現在這個新就沒有東西要看。
+  /// **只在確定送成之後才前進**。曾經改成「先佔位、失敗再還回去」，
+  /// 但單一純量回滾不了巢狀的預約：poll 送 10（previous=9）時 11 同時
+  /// 佔位（previous=10），10 先失敗會先把 11 的名額移掉，11 再失敗又把
+  /// 水位還原成 10——兩則都沒送成，卻記成 10 已送，之後同水位永遠被擋
+  /// （Codex 09/14 審出）。序列化之後就不需要回滾了。
   final Map<String, int> _lastBoardSent = {};
+
+  /// 正在投遞中的房。逐房序列化，讓「判斷 → 送出 → 記錄水位」成為一段
+  /// 不會被同一個房的另一次投遞插進來的區間。
+  ///
+  /// 同步加入、`finally` 同步移除——它自己絕不可以跨 await 被讀寫。
+  final Set<String> _boardInFlight = {};
 
   /// 🔴 **哪些 thread 正在處理一個 turn——目前沒有任何可用訊號。**
   ///
@@ -250,40 +260,47 @@ class CodexDispatcher {
     // 更糟的是先送出的 seq=10 會被後完成的 seq=9 把水位寫回去
     // （Codex 09/14 審出——我前一版把佔位移到 await 之後，正是為了修
     // 另一個 bug，結果換來這個）。
-    final previous = _lastBoardSent[roomId] ?? -1;
-    if (boardSeq <= previous) {
+    if (boardSeq <= (_lastBoardSent[roomId] ?? -1)) {
       _log.info('board 變動略過（${_roomLabel(roomId)}）：'
-          'seq $boardSeq 不新於已通知的 $previous');
-      return; // 陳舊：不佔名額，後面真正新的變動才送得出去
+          'seq $boardSeq 不新於已通知的 ${_lastBoardSent[roomId]}');
+      return; // 已經送過這個水位，沒有東西要看
     }
-    if (_boardNoticedThisTick.contains(roomId)) {
-      // 這個週期已經通知過了，留**最高**水位——並行進來的不保證由新到舊
-      final pending = _pendingBoards[roomId] ?? -1;
-      if (boardSeq > pending) _pendingBoards[roomId] = boardSeq;
+    // 這個房正在投遞、或這個週期已經通知過了：留**最高**水位等合併送出。
+    // 並行進來的不保證由新到舊，所以要比大小不能直接覆蓋。
+    if (_boardInFlight.contains(roomId) ||
+        _boardNoticedThisTick.contains(roomId)) {
+      _rememberPendingBoard(roomId, boardSeq);
       return;
     }
-    _boardNoticedThisTick.add(roomId);
-    _lastBoardSent[roomId] = boardSeq;
+    await _sendBoard(roomId, boardSeq);
+  }
+
+  void _rememberPendingBoard(String roomId, int boardSeq) {
+    if (boardSeq > (_pendingBoards[roomId] ?? -1)) {
+      _pendingBoards[roomId] = boardSeq;
+    }
+  }
+
+  /// 逐房序列化的投遞：進來就同步把房標成投遞中，離開時同步放掉。
+  ///
+  /// 水位**只在確定送成之後**才前進，所以沒有「先佔位、失敗再還」這回事
+  /// ——那正是回滾會出錯的地方。沒送成就把水位記進 pending，下一個輪詢
+  /// 週期會再試一次。
+  Future<void> _sendBoard(String roomId, int boardSeq) async {
+    _boardInFlight.add(roomId);
     var sent = false;
     try {
       sent = await _dispatchBoard(roomId, boardSeq);
     } catch (e, st) {
-      _log.severe('board 通知失敗（$roomId）：$e', e, st);
+      _log.severe('board 通知失敗（${_roomLabel(roomId)}）：$e', e, st);
+    } finally {
+      _boardInFlight.remove(roomId);
     }
-    if (!sent) _releaseBoardSlot(roomId, boardSeq, previous);
-  }
-
-  /// 沒送成就把名額與水位還回去，否則這一則變動從此沒有人會知道。
-  ///
-  /// 還原是安全的：佔位期間並行進來的事件都被正確地收進了 pending，
-  /// 它們不會因為這次還原而漏掉。
-  void _releaseBoardSlot(String roomId, int claimed, int previous) {
-    _boardNoticedThisTick.remove(roomId);
-    if (_lastBoardSent[roomId] != claimed) return; // 已經被更新的蓋過，別動
-    if (previous < 0) {
-      _lastBoardSent.remove(roomId);
+    if (sent) {
+      _lastBoardSent[roomId] = boardSeq;
+      _boardNoticedThisTick.add(roomId); // 名額也只有送成了才算用掉
     } else {
-      _lastBoardSent[roomId] = previous;
+      _rememberPendingBoard(roomId, boardSeq);
     }
   }
 
@@ -307,10 +324,20 @@ class CodexDispatcher {
           'board_seq': boardSeq,
           'action': '請呼叫 chatroom_board(room_id) 讀取變動——通知只說板子動了，不帶內容',
         })}';
+    var any = false;
     for (final thread in threads) {
-      if (!await _queue(thread, text)) {
+      if (await _queue(thread, text)) {
+        any = true;
+      } else {
         _log.warning('codex queue 轉送失敗（board_changed, thread=$thread）');
       }
+    }
+    // 一個都沒送成就是沒送成。原本不論 `_queue` 回什麼都回 true，於是
+    // 「找不到 codex CLI」「exit 非零」「逾時」這些**正常的失敗契約**
+    // 全被記成已投遞，水位照推，那一則變動從此沒有人會知道。
+    if (!any) {
+      _log.warning('board 變動一則都沒送出（${_roomLabel(roomId)} seq $boardSeq）');
+      return false;
     }
     _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
     return true;
@@ -630,16 +657,13 @@ class CodexDispatcher {
       // 立刻送，不必等下一個週期
       _boardNoticedThisTick.clear();
       for (final entry in coalesced.entries) {
-        final previous = _lastBoardSent[entry.key] ?? -1;
-        if (entry.value <= previous) continue;
-        _lastBoardSent[entry.key] = entry.value; // 同步佔住，理由同上
-        var sent = false;
-        try {
-          sent = await _dispatchBoard(entry.key, entry.value);
-        } catch (e) {
-          _log.warning('board 合併通知失敗（${entry.key}）：$e');
+        if (entry.value <= (_lastBoardSent[entry.key] ?? -1)) continue;
+        if (_boardInFlight.contains(entry.key)) {
+          // 這個房正在送——把水位交回 pending，下一輪再說
+          _rememberPendingBoard(entry.key, entry.value);
+          continue;
         }
-        if (!sent) _releaseBoardSlot(entry.key, entry.value, previous);
+        await _sendBoard(entry.key, entry.value);
       }
       // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
       // 要等的東西是同一件事

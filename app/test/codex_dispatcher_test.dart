@@ -427,6 +427,73 @@ void main() {
       expect(seqs.last, 10, reason: '水位只能往前——9 不可以排在 10 後面');
     });
 
+    test('🔴 一則都沒送成就不算送出，水位不可以往前', () async {
+      // 原本不論 _queue 回什麼都回 true，於是「找不到 codex CLI」
+      // 「exit 非零」「逾時」這些**正常的失敗契約**全被記成已投遞，
+      // 水位照推，那一則變動從此沒有人會知道（Codex 審出）。
+      var ok = false;
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+        activeThreadResolver: () => {threadA},
+        runProcess: (argv) async {
+          runs.add(argv);
+          return ok;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
+      await d.handleBoardChange('r1', 5);
+      expect(runs, hasLength(1), reason: '嘗試過');
+      runs.clear();
+
+      ok = true;
+      await d.pollAssignments();
+      expect(runs, hasLength(1), reason: '沒送成就要重試，不能當作已送');
+      expect(payload(runs.single)['board_seq'], 5);
+
+      runs.clear();
+      await d.pollAssignments();
+      expect(runs, isEmpty, reason: '送成之後才不再重送');
+    });
+
+    test('🔴 投遞中與後續水位接連失敗，之後仍重試得回來', () async {
+      // 「先佔位、失敗再還回去」的版本在這裡會壞：10 先失敗會先移掉 11 的
+      // 名額，11 再失敗又把水位還原成 10——兩則都沒送成，卻記成 10 已送，
+      // 之後同水位永遠被擋掉（Codex 審出）。
+      final gate = Completer<void>();
+      var fail = true;
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+        activeThreadResolver: () => {threadA},
+        runProcess: (argv) async {
+          runs.add(argv);
+          if (payload(argv)['board_seq'] == 10) await gate.future;
+          return !fail;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
+      final first = d.handleBoardChange('r1', 10);
+      await Future<void>.delayed(Duration.zero);
+      await d.handleBoardChange('r1', 11); // 投遞中，進合併佇列
+      gate.complete();
+      await first; // 10 失敗
+
+      fail = false;
+      runs.clear();
+      await d.pollAssignments();
+      expect(runs, hasLength(1), reason: '失敗的水位要留得住，重試得回來');
+      expect(payload(runs.single)['board_seq'], 11, reason: '留最高的那個');
+
+      runs.clear();
+      await d.pollAssignments();
+      expect(runs, isEmpty);
+    });
+
     test('通知帶得出房名——只給 roomId 的話收到的人不知道是哪個房', () async {
       final d = make();
       await d.handle(batch([msg(1)])); // 房名從訊息批次順手記下來
