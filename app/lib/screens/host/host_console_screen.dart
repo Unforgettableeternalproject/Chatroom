@@ -502,7 +502,7 @@ class _TunnelSection extends ConsumerWidget {
                       ? '開通中…'
                       : (t.hasUrl ? '已經有一條' : '開隧道'),
                   onPressed: (tunnelOpening || t.hasUrl)
-                      ? () {}
+                      ? null
                       : () => _confirmTunnel(context, ref, actions),
                 ),
                 if (t.hasUrl) ...[
@@ -724,7 +724,7 @@ class _ControlSection extends ConsumerWidget {
               UepButton(
                 small: true,
                 label: hubStarting ? '啟動中…' : '啟動 Hub',
-                onPressed: hubStarting ? () {} : () => _startHub(ref, actions),
+                onPressed: hubStarting ? null : () => _startHub(ref, actions),
               ),
               const SizedBox(width: 10),
               // 🔴 停止要放在啟動旁邊，不是放在「自啟」那一區。
@@ -1170,7 +1170,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
               small: true,
               variant: UepButtonVariant.outline,
               label: _busy ? '執行中…' : '立即備份',
-              onPressed: _busy ? () {} : _backup,
+              onPressed: _busy ? null : _backup,
             ),
             // 備份與還原要並排。**只有備份沒有還原，等於備份沒有出口**——
             // 而那件事要到真的需要還原的那一天才會被發現
@@ -1178,13 +1178,13 @@ class _DataSectionState extends ConsumerState<_DataSection> {
               small: true,
               variant: UepButtonVariant.outline,
               label: '還原備份',
-              onPressed: _busy ? () {} : () => _pickAndRestore(context),
+              onPressed: _busy ? null : () => _pickAndRestore(context),
             ),
             UepButton(
               small: true,
               variant: UepButtonVariant.outline,
               label: '換 token',
-              onPressed: _busy ? () {} : () => _confirmRotate(context),
+              onPressed: _busy ? null : () => _confirmRotate(context),
             ),
           ]),
           const SizedBox(height: 8),
