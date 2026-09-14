@@ -127,7 +127,11 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   GoRoute(
                     path: 'board',
                     builder: (context, state) => BoardScreen(
-                        roomId: state.pathParameters['roomId']!),
+                        roomId: state.pathParameters['roomId']!,
+                        // `?task=` 與板軸那條同名同義：訊息裡的 `#[標題]`
+                        // 點進來時帶著要打開的那張卡。房軸原本吃不到它，
+                        // 於是「從聊天室點卡片」只能繞板軸走（就回不去了）
+                        focusTaskId: state.uri.queryParameters['task']),
                     routes: [
                       // 想法板的房軸入口。板軸那條（`/boards/:bid/pads/:pid`）
                       // 仍是權威路徑；這條的存在只為了讓「從聊天室點進來」

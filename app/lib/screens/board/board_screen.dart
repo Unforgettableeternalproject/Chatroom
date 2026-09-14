@@ -258,9 +258,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
                 // 判準在 model（`defaultObjective`）——「進板先看哪一個」
                 // 是規格不是版面細節，放這裡的話它會與測試分開演化
+                //
+                // 被指名要打開某張卡時（`?task=`），先跳到那張卡所屬的週期：
+                // 少了這一步，抽屜開在前景、背景卻停在預設週期，看起來像
+                // 「卡不在這塊板上」。
                 final selected = objectives.firstWhere(
                   (o) => o.id == _selectedObjectiveId,
-                  orElse: () => defaultObjective(objectives)!,
+                  orElse: () =>
+                      objectiveOfTask(snap, widget.focusTaskId) ??
+                      defaultObjective(objectives)!,
                 );
                 return LayoutBuilder(builder: (context, c) {
                   // 窄螢幕收掉左欄，只留展開的那一條
@@ -1934,3 +1940,20 @@ class _BarButton extends StatelessWidget {
     );
   }
 }
+
+/// 一張任務卡的網址。**從哪裡點進來，就留在哪一軸**——與 [padRoute] 同一
+/// 條規則，理由也一樣。
+///
+/// 板軸（`/boards/:bid?task=`）是權威路徑，但它會讓 `AppShell` 的
+/// `selectedBoardId` 有值 ⇒ 左欄從 ROOMS 跳到 BOARDS。從聊天室點 `#[標題]`
+/// 進來的人因此離開了那段對話，而且回去要自己找路（艾斯維爾 2026-09-14）。
+///
+/// 卡片指涉只指得到「這個房間掛接的板」，所以從房軸開它不會指錯地方。
+String cardRoute({
+  required String boardId,
+  required String taskId,
+  String? roomId,
+}) =>
+    roomId != null
+        ? '/rooms/$roomId/board?task=$taskId'
+        : '/boards/$boardId?task=$taskId';

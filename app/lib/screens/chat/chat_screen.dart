@@ -51,6 +51,7 @@ import '../../state/composer_history.dart';
 import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
+import '../board/board_screen.dart';
 
 /// 跳轉粗跳的落點估計。
 ///
@@ -359,11 +360,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 點了訊息裡的卡片指涉：導到那塊板並把那張卡打開。
   ///
-  /// 走**板的權威路由**（`/boards/:boardId`）而不是房底下那條相容入口——
-  /// 板可以掛在多間房，被指涉的那張卡不一定屬於「從這間房進去」的視角。
+  /// 走**房軸**（`/rooms/:roomId/board`）而不是板的權威路由——後者是另一個
+  /// 分頁，跳過去就離開了 ROOMS，人回不到剛剛那段對話（艾斯維爾 09/14）。
+  /// 卡片指涉本來就只指得到「這個房間掛接的板」，所以這裡不會指錯地方。
   void _openCardRef(CardRef ref) {
-    if (ref.boardId.isEmpty || ref.taskId.isEmpty) return;
-    context.go('/boards/${ref.boardId}?task=${ref.taskId}');
+    if (ref.taskId.isEmpty) return;
+    context.go(cardRoute(
+        boardId: ref.boardId, taskId: ref.taskId, roomId: widget.roomId));
   }
 
   Future<void> _focusOn(int seq) async {

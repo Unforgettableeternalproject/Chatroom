@@ -1851,6 +1851,24 @@ BoardObjective? defaultObjective(List<BoardObjective> sorted) {
   return sorted.first;
 }
 
+/// 被指名要打開的那張卡，屬於哪一個週期。
+///
+/// 🔴 訊息裡的 `#[標題]` 點進來時，抽屜開在前景、背景卻停在
+/// [defaultObjective] 挑的那個週期——卡看得到，但它左邊那一欄指著別的地方，
+/// 讀起來像「這張卡不在這塊板上」（艾斯維爾 09/14）。
+///
+/// 反查要走兩層：卡片指涉只帶得到 `checklist_id`（階段層），週期那一層
+/// Hub 沒給，得自己從板資料接。板還沒載到時回 null——那時照預設走就好，
+/// 不需要等待邏輯，資料到了重建一次自然就對了。
+BoardObjective? objectiveOfTask(BoardSnapshot snap, String? taskId) {
+  if (taskId == null) return null;
+  final checklistId = snap.tasks[taskId]?.checklistId;
+  if (checklistId == null) return null;
+  final objectiveId = snap.checklists[checklistId]?.objectiveId;
+  if (objectiveId == null) return null;
+  return snap.objectives[objectiveId];
+}
+
 /// 這間房到底有沒有掛板。
 ///
 /// ⚠️ 判準是**載入完成而且沒有 board_id**，不是「快照是空的」。
