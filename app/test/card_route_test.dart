@@ -95,9 +95,11 @@ void main() {
       expect(cardIsOnRoomBoard('b1', 'b2'), isFalse);
     });
 
-    test('板還沒載到 ⇒ 當成同一塊，走房軸', () {
-      // 房軸至少回得去；板軸是例外路徑不是預設，不確定時不該把人送出聊天室
-      expect(cardIsOnRoomBoard('b1', ''), isTrue);
+    test('🔴 本房沒有板（沒掛板／還沒載到）⇒ 不留在房軸', () {
+      // 審核用Codex 09/14：這一格原本放行走房軸，但板可以被 detach，而舊
+      // 訊息的指涉活過那次卸除——放行只會開出「還沒掛板」的畫面，那張卡
+      // 一樣看不到，與這條 bug 原本的症狀相同
+      expect(cardIsOnRoomBoard('b1', ''), isFalse);
     });
 
     test('指涉沒帶 board_id ⇒ 同上', () {

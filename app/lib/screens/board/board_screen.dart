@@ -1965,8 +1965,13 @@ String cardRoute({
 /// 而 chip 看起來完全正常：卡沒被刪，`card_preview.status` 還是 `ok`，
 /// 所以它可以點、點了什麼都不會發生，也不會報錯。
 ///
-/// ⚠️ 有一邊不知道自己在哪塊板時（板還沒載到、指涉沒帶 board_id）**當成
-/// 同一塊**：房軸至少回得去，而那是多數情況下對的那條路。板軸是例外路徑，
-/// 不是預設——走它就離開聊天室了。
+/// ⚠️ **本房的板是空的時候不能當成「同一塊」**（審核用Codex 09/14 指出）。
+/// 空有兩種來源：板還沒載到，以及**這間房根本沒掛板**（板可以被 detach，
+/// 而舊訊息的指涉會活過那次卸除）。後者走房軸只會開出一個「還沒掛板」的
+/// 畫面，那張卡依然看不到——與這條 bug 原本的症狀一模一樣。
+///
+/// `refBoardId` 為空則相反，當成同一塊：那是舊版 Hub 不回 `board_id` 的
+/// 遺留（那時 `cardRefs` 本來就是空的，chip 不會出現），真的發生時走板軸
+/// 會組出 `/boards/?task=` 這種壞網址，房軸至少還是個能看的畫面。
 bool cardIsOnRoomBoard(String refBoardId, String roomBoardId) =>
-    refBoardId.isEmpty || roomBoardId.isEmpty || refBoardId == roomBoardId;
+    refBoardId.isEmpty || refBoardId == roomBoardId;
