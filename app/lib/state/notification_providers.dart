@@ -53,6 +53,11 @@ final codexDispatcherProvider = Provider<CodexDispatcher>((ref) {
       );
     },
     fetchSessions: assignmentsApi.scanSessions,
+    // 水位落盤：Hub 在訂閱時會推當前 board 水位，不記住的話每次
+    // App／Hub 重啟都會把現況當成新變動再喚醒一次，而已經進 Codex
+    // queue 的東西撤不回來
+    onBoardNotified: (roomId, seq) =>
+        unawaited(settings.setBoardNotifiedSeq(roomId, seq)),
     fetchAssignments: (threadId) {
       final tail = threadId.length > 8
           ? threadId.substring(threadId.length - 8)
@@ -123,6 +128,11 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     center.retainOnly(joined.map((r) => r.id).toSet());
     // board 通知要講得出房名，而安靜的房間永遠不會有訊息批次餵它
     dispatcher.rememberRoomNames({for (final r in joined) r.id: r.name});
+    // 冷啟動時把「上次通知到哪裡」回填，否則 Hub 訂閱推來的當前水位會被
+    // 當成新變動，每次重啟都重新喚醒一次
+    dispatcher.seedBoardWatermarks({
+      for (final r in joined) r.id: ?settings.boardNotifiedSeq(r.id),
+    });
   }
 
   followJoined();

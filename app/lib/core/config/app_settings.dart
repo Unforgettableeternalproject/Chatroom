@@ -19,6 +19,13 @@ class SettingsRepository {
   static const _kDeviceKey = 'chatroom.device_session_key';
   static const _kLastReadPrefix = 'chatroom.last_read.';
   static const _kParticipantPrefix = 'chatroom.participant.';
+
+  /// 每個房「已經把 board 變動通知到哪個水位」。
+  ///
+  /// **必須落盤**：Hub 在訂閱時會推當前 board 水位，而 dispatcher 的水位
+  /// 只在記憶體——每次 App 或 Hub 重啟都會把現況當成新變動再喚醒一次，
+  /// 而已經進 Codex queue 的東西撤不回來（2026-09-14 實機）。
+  static const _kBoardNotifiedPrefix = 'chatroom.board.notified.';
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
   static const _kHiddenMembersPrefix = 'chatroom.hidden_members.';
@@ -110,6 +117,14 @@ class SettingsRepository {
       .fold(0, (sum, k) => sum + (_prefs.getInt(k) ?? 0));
   Future<void> setLastReadSeq(String roomId, int seq) =>
       _prefs.setInt('$_kLastReadPrefix$roomId', seq);
+
+  /// 這個房的 board 已經通知到哪個水位；沒有紀錄時回 null
+  /// （那與「通知到 0」不同——0 是一個真的水位）。
+  int? boardNotifiedSeq(String roomId) =>
+      _prefs.getInt('$_kBoardNotifiedPrefix$roomId');
+
+  Future<void> setBoardNotifiedSeq(String roomId, int seq) =>
+      _prefs.setInt('$_kBoardNotifiedPrefix$roomId', seq);
 
   String? participantId(String roomId) =>
       _prefs.getString('$_kParticipantPrefix$roomId');

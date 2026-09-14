@@ -535,6 +535,47 @@ void main() {
       expect(runs, isEmpty);
     });
 
+    test('🔴 冷啟動回填水位——Hub 訂閱推來的現況不是新變動', () async {
+      // Hub 在訂閱時就會推目前的 board 水位，而 dispatcher 的水位只在
+      // 記憶體。不回填的話，每次 App 或 Hub 重啟都會把現況當成新變動再
+      // 喚醒一次，而已經進 Codex queue 的東西撤不回來（實機抓到）。
+      final d = make();
+      d.seedBoardWatermarks({'r1': 10});
+      await d.handleBoardChange('r1', 10);
+      expect(runs, isEmpty, reason: '這是重開後 Hub 推來的現況，不是新變動');
+
+      await d.handleBoardChange('r1', 11);
+      expect(runs, hasLength(2), reason: '離線期間真的動過就要通知');
+    });
+
+    test('水位前進時要落盤，否則下次重開又白走一遍', () async {
+      final saved = <String, int>{};
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+        activeThreadResolver: () => {threadA},
+        onBoardNotified: (roomId, seq) => saved[roomId] = seq,
+        runProcess: (argv) async {
+          runs.add(argv);
+          return true;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
+      await d.handleBoardChange('r1', 4);
+      expect(saved, {'r1': 4});
+    });
+
+    test('回填只填沒有的——記憶體裡那份一定比較新', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 12);
+      runs.clear();
+      d.seedBoardWatermarks({'r1': 3}); // 落盤的是舊的
+      await d.handleBoardChange('r1', 12);
+      expect(runs, isEmpty, reason: '不可以被舊的落盤值覆蓋回去');
+    });
+
     test('通知帶得出房名——只給 roomId 的話收到的人不知道是哪個房', () async {
       final d = make();
       await d.handle(batch([msg(1)])); // 房名從訊息批次順手記下來

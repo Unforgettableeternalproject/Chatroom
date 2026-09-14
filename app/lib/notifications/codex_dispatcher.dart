@@ -107,6 +107,7 @@ class CodexDispatcher {
     List<String>? Function()? codexArgvResolver,
     this.activeThreadResolver,
     this.busyThreadResolver,
+    this.onBoardNotified,
     String? codexHome,
   }) : _runProcess = runProcess ?? _defaultRun,
        _codexArgvResolver = codexArgvResolver ?? _codexArgv,
@@ -129,6 +130,10 @@ class CodexDispatcher {
   /// 「哪些 thread 正在處理一個 turn」。**目前沒有任何可用訊號**——
   /// 見 [busyThreadIds]。給 null 時一律視為沒人在忙。
   final Set<String> Function()? busyThreadResolver;
+
+  /// 水位前進時落盤。不落盤的話每次 App／Hub 重啟都會把現況當成新變動
+  /// 再喚醒一次——Hub 訂閱時就會推當前水位，而記憶體裡的水位歸零了。
+  final void Function(String roomId, int boardSeq)? onBoardNotified;
   final String _codexHome;
 
   bool enabled = false;
@@ -151,6 +156,13 @@ class CodexDispatcher {
   /// 第一個 board 事件就會送出空的房名（2026-09-14 實機 board_seq=7
   /// 正是如此，Codex 審出）。所以房間列表那側也要餵一次。
   final Map<String, String> _roomNames = {};
+
+  /// 從落盤的紀錄回填水位。**只填沒有的**——記憶體裡那份一定比較新。
+  void seedBoardWatermarks(Map<String, int> seqs) {
+    for (final e in seqs.entries) {
+      _lastBoardSent.putIfAbsent(e.key, () => e.value);
+    }
+  }
 
   /// 從房間列表餵房名。跟著 `follow` 的節奏走，不必等房裡有人講話。
   void rememberRoomNames(Map<String, String> names) {
@@ -310,12 +322,14 @@ class CodexDispatcher {
     switch (outcome) {
       case _BoardOutcome.sent:
         _lastBoardSent[roomId] = boardSeq;
+        onBoardNotified?.call(roomId, boardSeq);
         _boardNoticedThisTick.add(roomId); // 名額也只有送成了才算用掉
       case _BoardOutcome.noRoute:
         // 沒有人可以投是確定性的結果，不重試。水位照推——否則同一個
         // 水位會被反覆評估，log 每 10 秒刷一行「這個房裡沒有本機 Codex」。
         // 之後才加入的 Codex 不會漏掉什麼：它 join 之後本來就會讀一次板。
         _lastBoardSent[roomId] = boardSeq;
+        onBoardNotified?.call(roomId, boardSeq);
       case _BoardOutcome.failed:
         _rememberPendingBoard(roomId, boardSeq);
     }
