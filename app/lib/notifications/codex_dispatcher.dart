@@ -37,6 +37,17 @@ class RoomMembers {
   final Set<String> allNames;
 }
 
+/// 一次 board 投遞的結果。
+///
+/// **「沒有人可以投」與「投失敗」必須分開。** 前者是確定性的結果——這個房
+/// 裡沒有本機 Codex，再試一百次也一樣；後者是暫時的，值得重試。混在一起的
+/// 代價是安靜的房每 10 秒重試一次、log 每 10 秒刷一行，永遠不會停
+/// （Codex 09/14 實機抓到，成因是 402cac6 把無 route 也歸進了失敗）。
+///
+/// mention 那側早就有這個分界（「查到了、但沒 @ 到它——不重試」），
+/// board 這側沿用同一個判斷。
+enum _BoardOutcome { sent, noRoute, failed }
+
 /// 轉送管線的當下狀態快照——**給人看的**。
 ///
 /// 這條管線的失敗形狀全是靜默的：投不出去就留在記憶體等補投，畫面上
@@ -288,33 +299,39 @@ class CodexDispatcher {
   /// 週期會再試一次。
   Future<void> _sendBoard(String roomId, int boardSeq) async {
     _boardInFlight.add(roomId);
-    var sent = false;
+    var outcome = _BoardOutcome.failed;
     try {
-      sent = await _dispatchBoard(roomId, boardSeq);
+      outcome = await _dispatchBoard(roomId, boardSeq);
     } catch (e, st) {
       _log.severe('board 通知失敗（${_roomLabel(roomId)}）：$e', e, st);
     } finally {
       _boardInFlight.remove(roomId);
     }
-    if (sent) {
-      _lastBoardSent[roomId] = boardSeq;
-      _boardNoticedThisTick.add(roomId); // 名額也只有送成了才算用掉
-    } else {
-      _rememberPendingBoard(roomId, boardSeq);
+    switch (outcome) {
+      case _BoardOutcome.sent:
+        _lastBoardSent[roomId] = boardSeq;
+        _boardNoticedThisTick.add(roomId); // 名額也只有送成了才算用掉
+      case _BoardOutcome.noRoute:
+        // 沒有人可以投是確定性的結果，不重試。水位照推——否則同一個
+        // 水位會被反覆評估，log 每 10 秒刷一行「這個房裡沒有本機 Codex」。
+        // 之後才加入的 Codex 不會漏掉什麼：它 join 之後本來就會讀一次板。
+        _lastBoardSent[roomId] = boardSeq;
+      case _BoardOutcome.failed:
+        _rememberPendingBoard(roomId, boardSeq);
     }
   }
 
-  /// 純粹把通知送出去，回傳是否真的送成了。
+  /// 純粹把通知送出去。
   ///
   /// **守門（陳舊判斷、佔名額、推水位）一律在呼叫端同步做完**——放進來的話
   /// 又會落在 await 的另一側，那正是並行送兩次的成因。
-  Future<bool> _dispatchBoard(String roomId, int boardSeq) async {
+  Future<_BoardOutcome> _dispatchBoard(String roomId, int boardSeq) async {
     final threads = threadOverride.isNotEmpty
         ? {threadOverride}
         : (await _roomRoutes(roomId)).values.expand((t) => t).toSet();
     if (threads.isEmpty) {
       _log.info('board 變動未投遞（${_roomLabel(roomId)}）：這個房裡沒有本機 Codex');
-      return false;
+      return _BoardOutcome.noRoute;
     }
     final text =
         '[chatroom 通知] ${jsonEncode({
@@ -346,10 +363,10 @@ class CodexDispatcher {
     // 了**，要改成逐 thread 的水位／失敗集合。不要在這個結構上補釘子。
     if (!any) {
       _log.warning('board 變動一則都沒送出（${_roomLabel(roomId)} seq $boardSeq）');
-      return false;
+      return _BoardOutcome.failed;
     }
     _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
-    return true;
+    return _BoardOutcome.sent;
   }
 
   String _roomLabel(String roomId) {

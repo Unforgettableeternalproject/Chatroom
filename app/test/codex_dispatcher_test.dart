@@ -339,9 +339,50 @@ void main() {
       expect(runs, hasLength(2), reason: '新的週期第一則照樣立刻送');
     });
 
-    test('房裡沒有本機 Codex 時不投，也不會炸', () async {
-      final d = make(live: const {}, activeThreads: const {});
+    test('🔴 房裡沒有本機 Codex 時不投，而且**不重試**', () async {
+      // 「沒有人可以投」是確定性的結果，不是傳輸失敗。混在一起的代價是
+      // 安靜的房每 10 秒重評估一次、log 每 10 秒刷一行，永遠不會停
+      // （402cac6 的迴歸，Codex 09/14 實機抓到）。
+      //
+      // ⚠️ 斷言要看**重試的痕跡**而不是 runs：沒有 route 的時候重試一百次
+      // 也不會產生任何 queue 呼叫，拿 runs 當斷言等於什麼都沒測。
+      // 本機**有** Codex，只是它不在這個房——這樣 _roomRoutes 才真的會去
+      // 查一次（本機一個都沒有時它提前返回，連查都不查，拿它當探針測不到）
+      var lookups = 0;
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async {
+          lookups++;
+          return [
+            AgentSession(
+              sessionKey: threadA,
+              kind: 'codex',
+              label: 'Codex-別的房',
+              status: 'active',
+              lastSeenAt: '',
+              rooms: const [
+                SessionRoom(
+                    roomId: 'other', roomName: '別的房', displayName: 'Codex-Sol'),
+              ],
+            ),
+          ];
+        },
+        activeThreadResolver: () => {threadA},
+        runProcess: (argv) async {
+          runs.add(argv);
+          return true;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
       await d.handleBoardChange('r1', 1);
+      expect(runs, isEmpty);
+      final after = lookups;
+
+      await d.pollAssignments();
+      await d.pollAssignments();
+      expect(lookups, after, reason: '不重試——再查一百次也一樣沒有人可以投');
       expect(runs, isEmpty);
     });
 
