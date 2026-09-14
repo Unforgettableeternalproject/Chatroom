@@ -6301,10 +6301,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         await _commit_with_retry(db)
         name = (who["display_name"] if who else key)
+        # 指名道姓，否則叫不醒他：watcher 只推「@ 到你的訊息」，不帶 mention
+        # 的 system 訊息等於貼在牆上——房內留了痕，當事人不知道自己被指定了。
+        # ⚠️ 只在他**當下就在房裡**時才填（`who` 有值）：不在房裡的話那個名字
+        # mention 不到任何人，填了只會讓這則訊息看起來通知過了。那種情形本來
+        # 就是用指派把他叫進來的，見本端點 docstring。
         await _post_message(
             room_id, None,
             f"{name} 成為板子的監督者（{me['display_name'] if me else '主持人'} 指定）",
             kind="system", system_event="board_supervisor_set",
+            mentions=[name] if who else None,
         )
         return {"ok": True, "supervisor": key, "display_name": name,
                 "in_room": who is not None}

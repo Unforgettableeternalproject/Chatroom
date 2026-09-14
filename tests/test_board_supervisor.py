@@ -570,3 +570,41 @@ async def test_host_view_does_not_reopen_an_archived_room_for_appointment(
                               json={"session_key": "agent-1"})
         assert r.status_code == 409, r.text
         assert r.json()["detail"]["code"] == "room_archived"
+
+
+async def test_appointment_notice_mentions_the_appointee(tmp_path):
+    """指定 supervisor 的 system 訊息要**叫得醒被指定的那個人**。
+
+    想法版 #30 的原意是「通知被指派的 agent／人類」，而留痕本身叫不醒人：
+    watcher 只推「@ 到你的訊息」，system 訊息不帶 mention 就等於貼在牆上
+    ——房內有痕跡，當事人不知道。艾斯維爾裁定「只要房內 system 訊息」，
+    所以修法留在訊息層（不發 assignment），但那則訊息必須指名道姓。
+    """
+    app, client = await _client(tmp_path, "supervisor-mention")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await _join(client, rid, "agent-1", "諾薇亞")
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          headers={**owner, "X-Session-Key": "human-1"},
+                          json={"session_key": "agent-1"})
+        notices = await _events(client, rid, owner, "board_supervisor_set")
+        assert len(notices) == 1, notices
+        assert "諾薇亞" in notices[0]["mentions"], notices[0]
+
+
+async def test_appointment_notice_has_no_mention_when_appointee_is_absent(
+        tmp_path):
+    """對方還沒進房時不硬塞 mention——那個名字 mention 不到任何人。
+
+    設定的當下對方多半還沒進房（本檔案開頭的要害 1），那種情況本來就靠
+    指派把他叫進來。硬填一個 unresolved 的名字只會讓訊息看起來通知過了。
+    """
+    app, client = await _client(tmp_path, "supervisor-mention-absent")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          headers={**owner, "X-Session-Key": "human-1"},
+                          json={"session_key": "agent-未進房"})
+        notices = await _events(client, rid, owner, "board_supervisor_set")
+        assert len(notices) == 1, notices
+        assert notices[0]["mentions"] == [], notices[0]
