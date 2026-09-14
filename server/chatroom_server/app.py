@@ -3277,6 +3277,39 @@ def create_app(config: Config | None = None) -> FastAPI:
             (name, body.kind, room_id, session_key),
         )
         await _commit_with_retry(db)
+        # supervisor 回來了就把「已離開」解除。
+        #
+        # 標記只接在離場路徑上（見 `_check_supervisor_departed`），而**回來
+        # 的那一半原本不存在**——於是被閒置移出過一次的 supervisor 即使重新
+        # 加入，畫面永遠寫著「已離開・需要重新指定」，除非有人重新指定一次
+        # （2026-09-14 艾斯維爾在畫面上抓到）。
+        #
+        # 比對 session_key 而不是 participant_id：supervisor 是一個**角色**，
+        # 對方重啟之後 participant 會換一個，而角色應該還在——那正是當初存
+        # session_key 的理由。ephemeral 不算：subagent 回來不代表它的父層在。
+        if parent is None:
+            room_sup = await (
+                await db.execute(
+                    "SELECT board_supervisor_name, board_supervisor_left_at"
+                    " FROM room WHERE id=? AND board_supervisor_session_key=?",
+                    (room_id, session_key),
+                )
+            ).fetchone()
+            if room_sup is not None and room_sup["board_supervisor_left_at"]:
+                await db.execute(
+                    "UPDATE room SET board_supervisor_left_at='' WHERE id=?",
+                    (room_id,),
+                )
+                await _commit_with_retry(db)
+                # 離開會公告「需要重新指定」，回來不公告的話，看過那則的人
+                # 不會知道它已經解決了——而畫面上那個提示也不再對得上任何
+                # 東西。標記與解除要同一個規格
+                await _post_message(
+                    room_id, None,
+                    f"板子的監督者 {room_sup['board_supervisor_name'] or name}"
+                    " 回來了。",
+                    kind="system", system_event="board_supervisor_returned",
+                )
         # ephemeral 不進 session 名錄：那份名錄是指派 UI 的掃描來源，而
         # subagent 不可被指派（§3.7）。登記進去只會在清單上長出一堆
         # 看起來可以指派、實際上指派不到的鬼影
