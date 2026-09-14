@@ -593,8 +593,13 @@ class _TunnelSection extends ConsumerWidget {
     //
     // 記下按之前是哪一條，要求它**變成別的**。重開必定是新網址，所以
     // 「一樣」只可能是還沒換掉。
+    // ⚠️ **快照要先 invalidate 才是「現在的」。** 直接 read 拿到的是畫面
+    // 上那份可能早就過期的快取：畫面記得「沒有網址」，而磁碟上其實躺著一條
+    // 殘留的舊網址 ⇒ 快照記成空字串 ⇒ 之後輪詢讀到那條舊的，`!= ''` 成立
+    // ⇒ **假綠燈，而且指向一條死掉的隧道**（審核用Codex 09/14）。
     String beforeUrl = '';
     try {
+      ref.invalidate(tunnelStatusProvider);
       beforeUrl = (await ref.read(tunnelStatusProvider.future)).url;
     } on Object {
       beforeUrl = '';
@@ -822,34 +827,18 @@ class _ControlSection extends ConsumerWidget {
   ///
   /// 已經在跑就**不送出啟動**：那條路只會多出一個進程，而使用者按這顆多半
   /// 是想確認它活著，不是想要第二個。想重啟的人有旁邊那顆「停止 Hub」。
-  Future<void> _startHub(WidgetRef ref, HostActions actions) async {
-    final op = ref.read(lastDataOpProvider.notifier);
-    op.set({'kind': 'hub_start', 'pending': true, 'ok': true, 'detail': ''});
-    bool before;
-    try {
-      before = await _hubRunning(ref);
-    } on Object {
-      // 查不到就當作沒在跑——照常啟動，後面的輪詢會給出真正的答案
-      before = false;
-    }
-    if (before) {
-      op.set({
-        'kind': 'hub_start',
-        'ok': true,
-        'detail': 'Hub 本來就在跑，沒有再啟動一個。要重啟的話先按「停止 Hub」。',
-      });
-      return;
-    }
-    await _launchAndWatch(
-      ref,
-      kind: 'hub_start',
-      launch: actions.startHub,
-      ready: () => _hubRunning(ref),
-      okText: 'Hub 起來了。',
-      timeoutText: '送出了，但十幾秒內還沒看到它起來——'
-          '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
-    );
-  }
+  Future<void> _startHub(WidgetRef ref, HostActions actions) =>
+      _launchAndWatch(
+        ref,
+        kind: 'hub_start',
+        alreadyDone: () => _hubRunning(ref),
+        alreadyText: 'Hub 本來就在跑，沒有再啟動一個。要重啟的話先按「停止 Hub」。',
+        launch: actions.startHub,
+        ready: () => _hubRunning(ref),
+        okText: 'Hub 起來了。',
+        timeoutText: '送出了，但十幾秒內還沒看到它起來——'
+            '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
+      );
 
   Future<void> _runService(WidgetRef ref, String action) async {
     final actions = ref.read(hostActionsProvider);
@@ -1007,6 +996,78 @@ Map<String, dynamic>? _latest(
 ///
 /// 逾時不等於失敗，訊息要講成「還沒起來」並指向 log——講「失敗」會讓人去
 /// 重按，而那時第一個進程可能正要起來。
+/// 「送出一個 detached 動作，然後盯著狀態」的**決策部分**，不碰 UI。
+///
+/// 🔴 **抽出來是為了能被測。** 這裡面有四個行為，每一個都是為了修一個
+/// 實際發生過的缺陷，而它們原本全部只活在 widget 樹裡、只能靠註解宣稱：
+///
+/// 1. `ready()` 拋不能中止輪詢——否則永遠停在 pending（按鈕卡住）
+/// 2. `alreadyDone()` 為真時**不送出** launch——「現在是 ok」不等於
+///    「這次動作成功」，而重複送出會多一個進程
+/// 3. `launch()` 拋要回錯誤，不是繼續輪詢一個不存在的東西
+/// 4. 逾時回的是 `ok: true` 加一句「還沒好」——**逾時不是失敗**，
+///    進程可能正要起來，講成失敗會讓人重按
+///
+/// 回傳最終要寫進 `lastDataOp` 的那一筆（不含 `pending`）。
+/// `gap` 可注入，測試用它把等待縮成零。
+Future<Map<String, dynamic>> runOp({
+  required String kind,
+  required Future<void> Function() launch,
+  required Future<bool> Function() ready,
+  required String okText,
+  required String timeoutText,
+  Future<bool> Function()? alreadyDone,
+  String? alreadyText,
+  int tries = 12,
+  Future<void> Function() gap = _oneSecond,
+}) async {
+  if (alreadyDone != null) {
+    bool before;
+    try {
+      before = await alreadyDone();
+    } on Object catch (e) {
+      // 🔴 **查不到就什麼都不做。**
+      //
+      // 這裡原本當作「沒在跑」照常送出，而那把原本的缺陷原樣放回來：
+      // Hub 其實在跑、只是 health 這一瞬間讀不到 ⇒ 送出 ⇒ **第二個進程**；
+      // 下一輪 health 恢復，輪詢看到那個「本來就在的」Hub ⇒ 回報本次成功。
+      // 兩個錯合起來看起來完全正常（審核用Codex 09/14）。
+      //
+      // 前置檢查存在的理由就是「別在已經好了的時候再送一次」。它答不出來
+      // 的時候，唯一誠實的動作是不動手並且說出來——不是猜一個方向。
+      return {
+        'kind': kind,
+        'ok': false,
+        'error': '查不到現在的狀態，所以沒有送出任何指令（$e）。'
+            '先確認它在不在跑，再決定要不要按。',
+      };
+    }
+    if (before) {
+      return {'kind': kind, 'ok': true, 'detail': alreadyText ?? okText};
+    }
+  }
+  try {
+    await launch();
+  } on Object catch (e) {
+    return {'kind': kind, 'ok': false, 'error': '$e'};
+  }
+  for (var i = 0; i < tries; i++) {
+    await gap();
+    bool ok;
+    try {
+      ok = await ready();
+    } on Object {
+      // 單次失敗不終止輪詢：Hub 正在起來的那幾秒 health 本來就可能拋
+      ok = false;
+    }
+    if (ok) return {'kind': kind, 'ok': true, 'detail': okText};
+  }
+  return {'kind': kind, 'ok': true, 'detail': timeoutText};
+}
+
+Future<void> _oneSecond() => Future<void>.delayed(const Duration(seconds: 1));
+
+/// [runOp] 的 UI 外殼：掛 pending、跑、寫結果。**這裡不做任何判斷**。
 Future<void> _launchAndWatch(
   WidgetRef ref, {
   required String kind,
@@ -1014,40 +1075,22 @@ Future<void> _launchAndWatch(
   required Future<bool> Function() ready,
   required String okText,
   required String timeoutText,
+  Future<bool> Function()? alreadyDone,
+  String? alreadyText,
   int tries = 12,
 }) async {
   final op = ref.read(lastDataOpProvider.notifier);
   op.set({'kind': kind, 'pending': true, 'ok': true, 'detail': ''});
-  try {
-    await launch();
-  } on Object catch (e) {
-    op.set({'kind': kind, 'ok': false, 'error': '$e'});
-    return;
-  }
-  for (var i = 0; i < tries; i++) {
-    await Future<void>.delayed(const Duration(seconds: 1));
-    // ⚠️ **`ready()` 也要包。** 它會去讀 provider（health／tunnel），而那些
-    // 會拋——檔案讀不到、HTTP 逾時、kit 不見了。沒包的話這個 Future 直接
-    // 中止，`lastDataOp` **永遠停在 pending**：按鈕卡在「啟動中…」、結果那
-    // 一行卡在「正在啟動…」，而且只有重開 App 才會消失。
-    //
-    // 那正是這張卡要消滅的「按了不知道有沒有用」，只是換了一層皮——
-    // 而且比原本更糟：原本至少畫面沒有承諾任何事，現在它承諾了一個
-    // 永遠不會到的結果（審核用Codex 09/14 終審）。
-    //
-    // 單次失敗不終止輪詢：Hub 正在起來的那幾秒裡 health 本來就可能拋。
-    bool ok;
-    try {
-      ok = await ready();
-    } on Object {
-      ok = false;
-    }
-    if (ok) {
-      op.set({'kind': kind, 'ok': true, 'detail': okText});
-      return;
-    }
-  }
-  op.set({'kind': kind, 'ok': true, 'detail': timeoutText});
+  op.set(await runOp(
+    kind: kind,
+    launch: launch,
+    ready: ready,
+    okText: okText,
+    timeoutText: timeoutText,
+    alreadyDone: alreadyDone,
+    alreadyText: alreadyText,
+    tries: tries,
+  ));
 }
 
 /// 資料與安全——備份、換 token。
