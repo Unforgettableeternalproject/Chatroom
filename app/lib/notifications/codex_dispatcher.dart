@@ -143,7 +143,15 @@ class CodexDispatcher {
   final Timer Function(Duration, void Function()) _scheduleTimer;
 
   /// 安靜這麼久就送出（debounce）。
-  static const boardQuietWindow = Duration(seconds: 3);
+  ///
+  /// **10 秒是量出來的，不是猜的**（艾斯維爾 2026-09-14 拍板）。原本設 3 秒，
+  /// 對人在 App 上點按夠用，但對 agent 完全無效：實測一次板務操作是一次
+  /// MCP 來回，逐次呼叫間隔 4.9～5.5 秒、平行呼叫也有 2.65 秒——3 秒剛好
+  /// 卡在這個範圍中間，於是逐次操作一次都合併不起來。
+  ///
+  /// 而會連續動板的，agent 至少跟人一樣多。取 10 秒是為了讓最慢的那一端
+  /// 也有餘裕：8 秒只比實測上限多 2.5 秒，Hub 一忙就會再度失效。
+  static const boardQuietWindow = Duration(seconds: 10);
 
   /// 但再怎麼延也不超過這個上限（max-wait）。
   ///
