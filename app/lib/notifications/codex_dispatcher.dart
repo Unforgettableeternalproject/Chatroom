@@ -133,6 +133,20 @@ class CodexDispatcher {
   /// 這個 turn 裡已經送過加入通知的 thread（節流用，見 [_dispatchJoins]）。
   final Set<String> _joinNoticedThisTurn = {};
 
+  /// roomId → 房名。board 事件只帶 roomId，但通知裡要講得出是哪個房——
+  /// 「某個房的板子動了」對收到的人沒有用。從訊息批次順手記下來。
+  final Map<String, String> _roomNames = {};
+
+  /// 這個輪詢週期內已經為哪些房送過 board 通知（節流用）。
+  final Set<String> _boardNoticedThisTick = {};
+
+  /// 節流期間又動過的房：roomId → 最新的 board_seq。
+  ///
+  /// 只留最新的一個數字，不累積清單——board 是**狀態轉變不是待辦**，
+  /// 收到的人要做的事是「去 chatroom_board 讀一次」，而那件事做一次就夠。
+  /// 把中間每一次變動都送過去，對方讀到的還是同一塊板。
+  final Map<String, int> _pendingBoards = {};
+
   /// 🔴 **哪些 thread 正在處理一個 turn——目前沒有任何可用訊號。**
   ///
   /// 2026-09-14 實測推翻了先前的前提：`~/.codex/thread-writer-locks/` 的
@@ -200,6 +214,55 @@ class CodexDispatcher {
     );
   }
 
+  /// 板子動了。
+  ///
+  /// 與加入事件同一類：**狀態轉變，不是待辦**。所以做節流而不是佇列——
+  /// 一個輪詢週期內第一則立刻送（對方馬上知道要去看），後續的合併成一則
+  /// 在週期結束時送出。拖板子時一口氣十幾個 board_seq，逐則喚醒只是把
+  /// 對方的 queue 塞滿同一件事。
+  Future<void> handleBoardChange(String roomId, int boardSeq) async {
+    if (!enabled) return;
+    try {
+      if (!_boardNoticedThisTick.add(roomId)) {
+        // 這個週期已經通知過了，只記下最新水位
+        _pendingBoards[roomId] = boardSeq;
+        return;
+      }
+      await _dispatchBoard(roomId, boardSeq);
+    } catch (e, st) {
+      _log.severe('board 通知失敗（$roomId）：$e', e, st);
+    }
+  }
+
+  Future<void> _dispatchBoard(String roomId, int boardSeq) async {
+    final threads = threadOverride.isNotEmpty
+        ? {threadOverride}
+        : (await _roomRoutes(roomId)).values.expand((t) => t).toSet();
+    if (threads.isEmpty) {
+      _log.info('board 變動未投遞（${_roomLabel(roomId)}）：這個房裡沒有本機 Codex');
+      return;
+    }
+    final text =
+        '[chatroom 通知] ${jsonEncode({
+          'event': 'board_changed',
+          'room_id': roomId,
+          'room_name': _roomNames[roomId] ?? '',
+          'board_seq': boardSeq,
+          'action': '請呼叫 chatroom_board(room_id) 讀取變動——通知只說板子動了，不帶內容',
+        })}';
+    for (final thread in threads) {
+      if (!await _queue(thread, text)) {
+        _log.warning('codex queue 轉送失敗（board_changed, thread=$thread）');
+      }
+    }
+    _publish('board 變動已投遞（${_roomLabel(roomId)}）');
+  }
+
+  String _roomLabel(String roomId) {
+    final name = _roomNames[roomId];
+    return name == null || name.isEmpty ? roomId : name;
+  }
+
   Future<void> handle(RoomFreshBatch batch) async {
     // 一批裡任何一則出事都不該連累其他則，更不該讓整條訂閱從此靜默。
     // 這是無聲失效最好的溫床：轉送停了，畫面上一切正常。
@@ -220,6 +283,7 @@ class CodexDispatcher {
     for (final m in batch.messages) {
       (m.isMemberJoined ? joins : chats).add(m);
     }
+    if (batch.roomName.isNotEmpty) _roomNames[batch.roomId] = batch.roomName;
     final roomLabel =
         batch.roomName.isEmpty ? batch.roomId : batch.roomName;
     final members = await _members(batch.roomId, batch.messages);
@@ -499,6 +563,19 @@ class CodexDispatcher {
       // 返回——把重置掛在那裡的話，「turn 結束了但剛好沒有待補的 mention」
       // 這個常態情況下節流永遠不解除，加入通知就從節流變成**永久靜音**。
       _scanBusyThreads();
+      // 節流視窗以輪詢週期為單位：把這個週期內被合併掉的 board 變動送出去，
+      // 然後開放下一個週期。先送再清，否則送出去的那一刻視窗已經開了，
+      // 同一次變動可能被送兩遍。
+      final coalesced = Map<String, int>.from(_pendingBoards);
+      _pendingBoards.clear();
+      for (final entry in coalesced.entries) {
+        try {
+          await _dispatchBoard(entry.key, entry.value);
+        } catch (e) {
+          _log.warning('board 合併通知失敗（${entry.key}）：$e');
+        }
+      }
+      _boardNoticedThisTick.clear();
       // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
       // 要等的東西是同一件事
       try {

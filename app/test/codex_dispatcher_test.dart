@@ -291,6 +291,74 @@ void main() {
     expect(payload(runs.single)['assignment_id'], 'a1');
   });
 
+  group('board 變動', () {
+    // board 與加入事件同一類：**狀態轉變，不是待辦**。通知只說「板子動了」，
+    // 內容由收到的人自己去 chatroom_board 讀——所以合併是無損的，
+    // 中間每一次變動都送過去，對方讀到的還是同一塊板。
+
+    test('投給房內所有本機 Codex thread，內容只說板子動了', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 7);
+      expect(runs, hasLength(2), reason: 'threadA 與 threadB 都在 r1');
+      expect(
+        runs.map(target).toSet(),
+        {threadA, threadB},
+      );
+      final p = payload(runs.first);
+      expect(p['event'], 'board_changed');
+      expect(p['board_seq'], 7);
+      expect(p['action'], contains('chatroom_board'));
+    });
+
+    test('🔴 同一個週期內連續變動只喚醒一次，結束時補一則最新水位', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 1);
+      expect(runs, hasLength(2), reason: '第一則立刻送');
+      runs.clear();
+
+      // 拖板子：一口氣好幾個 board_seq
+      await d.handleBoardChange('r1', 2);
+      await d.handleBoardChange('r1', 3);
+      await d.handleBoardChange('r1', 4);
+      expect(runs, isEmpty, reason: '節流期間不逐則投');
+
+      await d.pollAssignments();
+      expect(runs, hasLength(2), reason: '週期結束補一則給兩個 thread');
+      expect(payload(runs.first)['board_seq'], 4, reason: '只有最新的水位有意義');
+    });
+
+    test('下一個週期重新開放——節流不是永久靜音', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 1);
+      runs.clear();
+      await d.pollAssignments(); // 週期結束，沒有待合併的
+      expect(runs, isEmpty);
+
+      await d.handleBoardChange('r1', 2);
+      expect(runs, hasLength(2), reason: '新的週期第一則照樣立刻送');
+    });
+
+    test('房裡沒有本機 Codex 時不投，也不會炸', () async {
+      final d = make(live: const {}, activeThreads: const {});
+      await d.handleBoardChange('r1', 1);
+      expect(runs, isEmpty);
+    });
+
+    test('關閉轉送時不投', () async {
+      final d = make()..enabled = false;
+      await d.handleBoardChange('r1', 1);
+      expect(runs, isEmpty);
+    });
+
+    test('通知帶得出房名——只給 roomId 的話收到的人不知道是哪個房', () async {
+      final d = make();
+      await d.handle(batch([msg(1)])); // 房名從訊息批次順手記下來
+      runs.clear();
+      await d.handleBoardChange('r1', 5);
+      expect(payload(runs.first)['room_name'], '設計討論');
+    });
+  });
+
   test('關閉轉送仍輪詢報到，但不 queue 指派', () async {
     var polls = 0;
     final d = CodexDispatcher(

@@ -143,6 +143,12 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）
   final dispatcher = ref.watch(codexDispatcherProvider);
   final codexSub = center.fresh.listen(dispatcher.handle);
+  // board 變動走 WS 的獨立事件，不在訊息流裡——沒接這條的話，agent 只有在
+  // 自己呼叫 chatroom_wait 時才知道板子動了，而它正是醒不過來才需要被通知。
+  final codexBoardSub = ref
+      .watch(realtimeServiceProvider)
+      .boardChanged
+      .listen((e) => unawaited(dispatcher.handleBoardChange(e.roomId, e.boardSeq)));
   // writer locks 是本機 Codex session 的存活名錄。逐一向 Hub 報到並查指派，
   // 才能讓 UI 選到每個 thread，且把 assignment 精準 queue 給被選中的 session。
   unawaited(dispatcher.pollAssignments());
@@ -166,6 +172,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     notifSub.cancel();
     mentionSub.cancel();
     codexSub.cancel();
+    codexBoardSub.cancel();
     codexAssignmentPoll.cancel();
     activitySub.cancel();
     refreshDebounce?.cancel();
