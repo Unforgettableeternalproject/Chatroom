@@ -5,6 +5,7 @@ import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
+import 'package:chatroom_app/widgets/uep_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -33,6 +34,15 @@ class _SeededOp extends LastDataOp {
 }
 
 void main() {
+  /// 那顆按鈕的 `onPressed`。
+  ///
+  /// 🔴 **驗 callback，不是驗文案。** 只斷言「字變了」的話，用
+  /// `onPressed: () {}` 實作禁用照樣全綠——而空函式的按鈕仍然是 enabled：
+  /// 可聚焦、有 ripple、輔助工具也說它可按，只是按下去什麼都不發生。
+  /// 那正是這一整張卡要消滅的東西（審核用Codex 09/14）。
+  VoidCallback? callbackOf(WidgetTester tester, String label) =>
+      tester.widget<UepButton>(find.widgetWithText(UepButton, label)).onPressed;
+
   Widget wrap(
     Map<String, dynamic>? op, {
     List<Map<String, dynamic>>? ops,
@@ -83,6 +93,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('啟動中…'), findsOneWidget);
+      expect(callbackOf(tester, '啟動中…'), isNull,
+          reason: '輪詢期間再按一次就是第二個 Hub 進程');
       expect(find.text('啟動 Hub'), findsNothing,
           reason: '同一顆按鈕換字，不是多長一顆出來');
       expect(find.textContaining('正在啟動'), findsOneWidget);
@@ -202,6 +214,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('啟動中…'), findsOneWidget);
+      expect(callbackOf(tester, '啟動中…'), isNull);
       expect(find.text('啟動 Hub'), findsNothing);
       // 顯示的是這一區最近那一筆（停止的結果）——那是另一個問題，不衝突
       expect(find.text('已送出停止指令。'), findsOneWidget);
@@ -230,9 +243,13 @@ void main() {
       expect(find.text('再開一條'), findsNothing,
           reason: '那顆按鈕會製造一條關不掉的公開入口');
       expect(find.text('已經有一條'), findsOneWidget);
+      expect(callbackOf(tester, '已經有一條'), isNull,
+          reason: '空函式不算禁用——那只是按了沒反應');
       // 光是禁用不夠——要講得出路在哪，否則他會去找別的方法達成同一件事
       expect(find.textContaining('先按「關閉隧道」'), findsOneWidget);
       expect(find.text('關閉隧道'), findsOneWidget);
+      expect(callbackOf(tester, '關閉隧道'), isNotNull,
+          reason: '出路那顆必須真的按得下去');
     });
 
     testWidgets('沒有隧道時照常可以開', (tester) async {
@@ -245,6 +262,8 @@ void main() {
 
       expect(find.text('開隧道'), findsOneWidget);
       expect(find.text('已經有一條'), findsNothing);
+      expect(callbackOf(tester, '開隧道'), isNotNull,
+          reason: '擋「永遠禁用」那種壞修法：它只驗禁用的話也會全綠');
     });
   });
 }
