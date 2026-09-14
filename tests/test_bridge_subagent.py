@@ -1,6 +1,6 @@
 """bridge 側的 subagent 身分：自報、派生 key、以及認不得時絕不退回父層。
 
-這裡守的是 `docs/SUBAGENT-IDENTITY.md` §3 的那條線——bridge 是唯一知道
+這裡守的是 subagent 身分契約 §3 的那條線——bridge 是唯一知道
 「這次呼叫是誰」的地方（Hub 分辨不出來），所以判錯的後果全都是靜默的。
 """
 

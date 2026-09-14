@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// ---
 ///
-/// **這是形狀守衛，不是行為測試**，理由照 `docs/FAILURE-PATTERNS.md`：
+/// **這是形狀守衛，不是行為測試**，理由照 失效形狀筆記：
 /// 要用行為測試驗它，得把整個 ChatScreen 連同 provider 樹建起來、再模擬桌面
 /// 端的右鍵手勢並斷言浮層數量——而 ChatScreen 沒有 widget 測試基礎。構造不
 /// 出那個窗口就不要寫行為測試，**寫了會得到一顆永遠綠的燈**。

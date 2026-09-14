@@ -27,8 +27,7 @@ users to talk in a shared chatroom: read, post, pin, mention, join/leave, assign
 and asking humans questions. It implements the communication layer only — no sandboxing,
 no wrapping of agents.
 
-The concept comes from an unfinished idea in Destiny Weaver. Full design notes in
-[docs/PLANNING.md](docs/PLANNING.md).
+The concept comes from an unfinished idea in Destiny Weaver.
 
 ## Structure
 
@@ -39,7 +38,7 @@ app/          Flutter desktop app — the human-facing client (Windows)
 host-kit/     Source of the host package — zipped for people who run their own Hub
 install-kit/  Source of the MCP package — zipped for people connecting an agent
 scripts/      Build, backup, tunnel and icon tooling
-docs/         Design and planning documents
+docs/         Agent manual and release notes
 tests/        Server tests
 ```
 
@@ -60,7 +59,6 @@ below still succeeds — only the connection doesn't.
 Both packages ship their own documentation: [`host-kit/README.md`](host-kit/README.md),
 [`install-kit/README.md`](install-kit/README.md).
 
-Building the app and the packages from source: [`docs/BUILD.md`](docs/BUILD.md).
 
 ## Developing from source
 
@@ -223,32 +221,3 @@ table below is only an index:
 | **Task board** | `chatroom_boards`, `chatroom_board`, `chatroom_board_add`, `chatroom_board_update`, `chatroom_board_claim`, `chatroom_board_attach` |
 | **Scratchpad** | `chatroom_scratchpads`, `chatroom_scratchpad`, `chatroom_scratchpad_add`, `chatroom_scratchpad_edit` |
 | **Watching** | `chatroom_watch`, `chatroom_notices` — follow a card and hear about it when it lands |
-
-The manual is deliberately a **tool** rather than a Claude Code skill file: Codex and other
-MCP clients cannot read skills, yet they drop mentions and talk to people who already left
-just the same. A tool is the only carrier every client shares.
-
-The same manual is mirrored as plain Markdown in [`docs/CHATROOM.md`](docs/CHATROOM.md), for
-humans and for anyone who wants to package it as a skill. The source of truth is
-`bridge/chatroom_mcp/guide.py` (the bridge is installed standalone and cannot read the repo's
-`docs/` at runtime); `bridge/tests/test_guide.py` keeps the two from drifting apart.
-
-Every tool returns a structured result: success carries `"ok": true`, failure is
-`{"ok": false, "reason": "<explanation>"}`, and an expired identity also carries
-`"need_rejoin": true` — an agent never sees an HTTP exception trace.
-
-Room identity and read cursors persist in `~/.chatroom/state-<session_key>.json`. Identity
-follows the session key: a Claude Code session (key = platform session id) does not need to
-re-join after a resume; when the desktop app assigns work to Codex, the notification carries
-an `assignment_id`, and `chatroom_join(room_id, assignment_id=...)` binds the bridge state to
-that Codex thread id. Without a platform id, an assignment token or an explicit setting,
-every start is a new identity. A corrupted state file is renamed `.corrupt` and rebuilt.
-
-**Notifications**: `bridge/chatroom_mcp/watch.py` is a long-running watcher that turns new
-messages / mentions / assignments into a stdout stream of one JSON event per line. Claude
-Code can mount it with Monitor and be woken passively (repeatedly); other agents can run it
-in the foreground with `--max-events 1` as an equivalent of `chatroom_wait`. The desktop app
-scans every live Codex thread on the machine and reports each to the Hub; a room message is
-`codex queue --thread`-ed precisely to the session tagged by display name, and assignments go
-to the chosen thread. Codex A can tag Codex B, but never wakes itself with its own message.
-See the "notifications" section of `docs/SETUP-CLAUDE-CODE.md`.

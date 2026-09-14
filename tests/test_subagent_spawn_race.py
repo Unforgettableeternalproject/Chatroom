@@ -5,7 +5,7 @@
 subagent 一起移除並 commit、spawn 再拿著手上那份快照 INSERT——INSERT 沒有
 重新要求父層仍是 active，於是插進一個永遠不會被級聯到的 ephemeral 成員。
 
-契約（docs/SUBAGENT-IDENTITY.md §3.5）說這個狀態不可達。要讓它真的不可達，
+契約（subagent 身分契約 §3.5）說這個狀態不可達。要讓它真的不可達，
 條件必須寫進 INSERT 本身，由資料庫保證，而不是靠兩次查詢之間沒有人插隊。
 
 由 Codex review 第三輪抓出（房內 seq 148 #3）。

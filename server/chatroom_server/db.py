@@ -381,7 +381,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised
 -- v1 把 Board 掛在 room 底下（一房一板），代價是 Epic 級的工作面被綁在一次
 -- 可被封存／刪除的臨時對話上。v2 反轉所有權：**房間掛接 Board**，一塊板可
 -- 同時掛在多間房，房封存或刪除只解除關聯。
--- 以下四張表先加、舊欄位先不刪（docs/BOARD_DESIGN.md §11 步驟 1），
+-- 以下四張表先加、舊欄位先不刪（Board 設計稿 §11 步驟 1），
 -- 讓 v1 路由還能當 wrapper 跑，等所有 client 升級後才 rebuild 清乾淨。
 CREATE TABLE IF NOT EXISTS board (
     id              TEXT PRIMARY KEY,

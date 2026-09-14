@@ -16,7 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 刻意畫**混合狀態**而不是全綠：三盞燈裡有一盞 `unknown`、隧道也是
 /// `unknown`——那才看得出「不確定」與「壞掉」在畫面上真的分得開，
-/// 而那是這一頁最關鍵的一個設計決定（`docs/KIT-UI-DESIGN-BRIEF.md` §5）。
+/// 而那是這一頁最關鍵的一個設計決定（kit UI 設計簡報 §5）。
 ///
 /// ⚠️ 與 `focus_pulse_golden_test` 同一個性質：它會跟著一般 `flutter test`
 /// 跑，而 golden 對字型與平台敏感。紅的時候先分辨——版面真的改了，

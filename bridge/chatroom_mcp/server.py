@@ -227,7 +227,7 @@ def _as_subagent(handle: str, room_id: str) -> Subagent:
 
     退回父層是這個介面最誘人也最危險的處置：呼叫端主張了一個身分、沒拿到，
     卻會看到一則成功送出的訊息——它掛在父層名下，而 subagent 以為那是自己
-    說的話。這正是本專案反覆修的靜默失效（`docs/SUBAGENT-IDENTITY.md` §3）。
+    說的話。這正是本專案反覆修的靜默失效（subagent 身分契約 §3）。
     """
     sub = _subagents.get(handle)
     if sub is None:

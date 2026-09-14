@@ -1,4 +1,4 @@
-"""Subagent identity — Hub 側契約（docs/SUBAGENT-IDENTITY.md C1/C2/C6/C8/C9）。
+"""Subagent identity — Hub 側契約（subagent 身分契約 C1/C2/C6/C8/C9）。
 
 這些測試對應的是文件裡的可觀測契約，條號寫在各測試的 docstring 裡，
 改行為時兩邊要一起改。

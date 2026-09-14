@@ -50,3 +50,5 @@ CLAUDE.md
 
 # 測試資料
 test_resources/
+# 內部設計稿與研究筆記：留在磁碟上給我們自己看，不進公開的 master
+.docs-internal/

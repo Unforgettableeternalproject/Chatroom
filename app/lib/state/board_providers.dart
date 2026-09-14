@@ -22,7 +22,7 @@ final boardApiProvider = Provider((ref) => BoardApi(ref.watch(dioProvider)));
 /// 每個房間的 board 快取。
 ///
 /// 拉取一律走**增量**：帶著上次的水位問 Hub，只拿變動的那幾列
-/// （見 `docs/BOARD_DESIGN.md` §5）。需求要「鼓勵 agent 經常調查 board
+/// （見 Board 設計稿 §5）。需求要「鼓勵 agent 經常調查 board
 /// 狀態」，而每次都全量拉一整塊板會讓「經常調查」變成一件該避免的事——
 /// 同一個理由對 App 一樣成立，只是吃掉的是流量而不是 context。
 class BoardCache extends Notifier<Map<String, BoardSnapshot>> {

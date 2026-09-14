@@ -21,9 +21,13 @@ from chatroom_server.config import Config
 ROOT = Path(__file__).resolve().parents[1]
 
 # 會用散文描述 subagent 時限的檔案
+#
+# 這份清單只收**版控裡**的檔案：它用 read_text 實際讀檔，而讀不到就是
+# FileNotFoundError，不是「這個檔沒問題」。設計稿 SUBAGENT-IDENTITY 原本在
+# 這裡，2026-09-15 隨內部文件一起移出版控之後拿掉——它還在磁碟上，但 CI
+# 上不存在，留著等於讓這條測試在別人的機器上必紅。
 PROSE_FILES = [
     "bridge/chatroom_mcp/server.py",
-    "docs/SUBAGENT-IDENTITY.md",
     "app/lib/screens/chat/chat_screen.dart",
 ]
 

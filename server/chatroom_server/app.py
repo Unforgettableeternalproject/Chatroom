@@ -1309,7 +1309,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         `.env` 就握有 `chatroom.db`——擋他等於擋一個從旁邊走就進得來的人。
         代價是「踢出」對主 token 不成立，那是 08-29 讀取邊界的已知例外，
         也是為什麼 **踢出要有效就不能共用主 token**（那條早就寫在
-        docs/FAILURE-PATTERNS.md 裡）。
+        失效形狀筆記裡）。
         """
         if host:
             return None
@@ -3386,7 +3386,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         呼叫端必須在同一個交易裡連父層那筆一起 commit：分兩次的話，兩者之間
         會出現一個「父層已走、subagent 還在」的真實窗口，而那正是這個機制要
-        消滅的狀態（`docs/SUBAGENT-IDENTITY.md` §3.5）。
+        消滅的狀態（subagent 身分契約 §3.5）。
 
         為什麼一定要級聯：subagent 的進出事件只推父層、@ 到它的訊息轉投遞
         父層。父層不在，這兩條路都通向虛空——它會變成成員列上一個永遠不會

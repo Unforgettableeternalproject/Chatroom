@@ -28,7 +28,7 @@ bridge 是 stdio 程序，agent 每次重啟就換一個進程。若身分（par
   正在走訪 ``_rooms`` 時另一條執行緒改它會直接炸；兩條執行緒又會寫同一個
   ``.tmp`` 檔，``os.replace`` 保住的只是「不會有半截檔」，保不住「內容是
   完整的那一份」。單一身分槽的時代碰不到，多 subagent 平行呼叫是常態
-  （見 ``docs/SUBAGENT-IDENTITY.md`` §5）。
+  （見 subagent 身分契約 §5）。
 """
 
 from __future__ import annotations

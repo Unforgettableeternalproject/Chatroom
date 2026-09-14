@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 /// Board（共同任務板）的三層資料模型與本機增量快取。
 ///
-/// 契約見 `docs/BOARD_DESIGN.md`：Objective（一個週期）1—N Checklist
+/// 契約見 Board 設計稿：Objective（一個週期）1—N Checklist
 /// （階段分組）1—N Task（一個人做得完的一件事）。
 ///
 /// ⚠️ **軟刪除的列會照樣從 Hub 回傳**（帶 `deleted: true`），那是 tombstone。

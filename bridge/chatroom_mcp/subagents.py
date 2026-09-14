@@ -7,7 +7,7 @@
 - `BridgeState.save()` 是整檔覆寫，而多個 subagent 平行呼叫工具是**真併發**
   （bridge 的工具是同步 `def`，FastMCP 丟 threadpool 執行）。把 subagent 身分
   也塞進那個檔，等於把一個既有的 lost update 缺陷放大成常態
-  （見 `docs/SUBAGENT-IDENTITY.md` §5）
+  （見 subagent 身分契約 §5）
 
 記憶體這份仍然要鎖：同一個父層平行派兩個 subagent 時，兩條執行緒會同時寫
 這個 dict。

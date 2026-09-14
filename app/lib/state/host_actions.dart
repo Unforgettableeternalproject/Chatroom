@@ -126,7 +126,7 @@ final serviceStatusProvider = FutureProvider<ServiceStatus?>((ref) async {
 ///
 /// **每一個都是既有腳本的包裝，不新增第二條真相來源**——這一頁壞掉的時候，
 /// 主持人照著 README 用命令列仍然做得到同樣的事
-/// （`docs/KIT-UI-DESIGN-BRIEF.md` §5 最後一條）。
+/// （kit UI 設計簡報 §5 最後一條）。
 class HostActions {
   const HostActions(this._kitRoot);
 

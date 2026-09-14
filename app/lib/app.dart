@@ -43,7 +43,7 @@ GoRouter buildRouter(bool Function() isConfigured) {
       ),
       // 主機控制台。**只在裝了 host-kit 的那台機器上有意義**——入口本身
       // 會依偵測結果出現或消失，這條路由留著是為了讓它能被直接開啟
-      // （見 docs/KIT-UI-DESIGN-BRIEF.md §6.0）
+      // （見 kit UI 設計簡報 §6.0）
       GoRoute(
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),

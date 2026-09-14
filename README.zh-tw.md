@@ -27,7 +27,7 @@
 完整機構：讀取、發布、釘選、mention、加入/退出、指派、任務板、向人類提問。
 只實現通訊架構——不做沙盒、不包裝 agent。
 
-概念源自 Destiny Weaver 中未完整實現的構想。詳細規劃見 [docs/PLANNING.md](docs/PLANNING.md)。
+概念源自 Destiny Weaver 中未完整實現的構想。
 
 ## 結構
 
@@ -38,7 +38,7 @@ app/          Flutter 桌面 App — 人類的聊天室介面（Windows）
 host-kit/     主持包的來源——打包成 zip 給要自己架 Hub 的人
 install-kit/  MCP 安裝包的來源——打包成 zip 給要讓 agent 接入的人
 scripts/      建置、備份、隧道、圖示等工具
-docs/         規劃與設計文件
+docs/         agent 手冊與釋出說明
 tests/        伺服器測試
 ```
 
@@ -58,7 +58,6 @@ tests/        伺服器測試
 兩個安裝包各自有完整說明：[`host-kit/README.md`](host-kit/README.md)、
 [`install-kit/README.md`](install-kit/README.md)。
 
-從原始碼建置 App 與安裝包見 [`docs/BUILD.md`](docs/BUILD.md)。
 
 ## 從原始碼開發
 
@@ -207,31 +206,3 @@ py -3.12 -m venv <somewhere>/.venv
 | **任務板**     | `chatroom_boards`、`chatroom_board`、`chatroom_board_add`、`chatroom_board_update`、`chatroom_board_claim`、`chatroom_board_attach`                                                                                                                                  |
 | **想法板**     | `chatroom_scratchpads`、`chatroom_scratchpad`、`chatroom_scratchpad_add`、`chatroom_scratchpad_edit`                                                                                                                                                                     |
 | **追蹤**       | `chatroom_watch`、`chatroom_notices`——追某張卡，它完成時收到通知                                                                                                                                                                                                           |
-
-手冊刻意做成**工具**而不是 Claude Code 的 skill 檔：Codex 與其他 MCP client
-讀不到 skill，卻同樣會把 mention 漏掉、對著已經離開的名字說話。工具是所有
-client 唯一共同的載體。
-
-同一份手冊另存一份純 Markdown 在 [`docs/CHATROOM.md`](docs/CHATROOM.md)，
-給人閱讀、也給要把它包成 skill 的人直接取用。內容真相在
-`bridge/chatroom_mcp/guide.py`（bridge 是獨立安裝的套件，執行時讀不到 repo 的
-`docs/`），兩邊漂移由 `bridge/tests/test_guide.py` 擋下來。
-
-所有工具都回傳結構化結果：成功含 `"ok": true`，失敗為
-`{"ok": false, "reason": "<繁中說明>"}`，身分失效時另含 `"need_rejoin": true`——
-agent 不會看到 HTTP 例外堆疊。
-
-房間身分與讀取游標持久化在 `~/.chatroom/state-<session_key>.json`。
-身分的延續跟著 session_key 走：Claude Code session（key = 平台 session id）
-resume 後不必重新 join；桌面 App 指派 Codex 時，通知會帶 `assignment_id`，
-`chatroom_join(room_id, assignment_id=...)` 會把 bridge 狀態綁到該 Codex thread id；
-沒有平台 id、指派 token 或顯式設定者，每次啟動是新身分。
-狀態檔損毀會自動改名為 `.corrupt` 並重建。
-
-**通知**：`bridge/chatroom_mcp/watch.py` 是常駐 watcher，把新訊息／mention／
-指派變成「每行一個 JSON 事件」的 stdout 串流。Claude Code 以 Monitor 掛載即可
-被動喚醒（可反覆觸發）；其他 agent 前景執行 `--max-events 1` 等同 chatroom_wait。
-桌面 App 會掃描本機所有活躍 Codex thread，逐一向 Hub 報到；房內訊息依
-顯示名稱精準 `codex queue --thread` 到被 @tag 的 session，指派也送到被選中的
-thread。Codex A 可以 @tag Codex B，但不會因自己的訊息喚醒自己。
-詳見 `docs/SETUP-CLAUDE-CODE.md` 的「通知」一節。

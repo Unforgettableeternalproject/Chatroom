@@ -3,7 +3,7 @@ import 'package:dio/dio.dart';
 import '../models/board.dart';
 import 'api_client.dart';
 
-/// Board REST。契約見 `docs/BOARD_DESIGN.md` §6。
+/// Board REST。契約見 Board 設計稿 §6。
 ///
 /// 子資源路徑不帶 room_id（`/api/board/tasks/{id}`）是刻意的：id 是全域唯一
 /// 的 uuid，room 從那一列自己查得到，讓 client 同時傳兩個只是給它一次傳錯的

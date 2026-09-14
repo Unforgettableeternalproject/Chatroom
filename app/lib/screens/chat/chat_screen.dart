@@ -182,7 +182,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 成員列原本只在「系統訊息數量變了」時重抓（見底下的 ref.listen）。
   ///
-  /// **subagent 的進出不進訊息流**（設計如此，見 docs/SUBAGENT-IDENTITY.md
+  /// **subagent 的進出不進訊息流**（設計如此，見 subagent 身分契約
   /// §2），所以那個觸發器對它們完全不作用：子代理加入時列表不會長出來、
   /// 結束時也不會消失，要離房重進才對。實際看到的是後者——一個已經結束的
   /// 子代理**繼續掛在成員列上**，那正是這份設計要消滅的殭屍成員形狀，
@@ -929,7 +929,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       // **房裡有任何動靜就重抓成員列**，不只看系統訊息。
       //
       // 系統訊息本來是成員變動的唯一訊號，但 subagent 的進出刻意不進訊息流
-      // （docs/SUBAGENT-IDENTITY.md §2），那個訊號對它們完全不作用——結果是
+      // （subagent 身分契約 §2），那個訊號對它們完全不作用——結果是
       // 已經結束的子代理繼續掛在列表上，而剛加入的那個頂著「other」徽章
       // （艾斯維爾 2026-08-31 實機發現）。抽掉唯一的更新訊號，就要另外給。
       //
