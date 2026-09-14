@@ -86,6 +86,9 @@ flutter:
     # 工作列角標的數字圖示。setOverlayIcon 只吃 .ico 路徑，不能在執行期
     # 把數字畫上去——由 scripts/make-badge-icons.py 產生
     - assets/badge/
+    # App logo。同一張圖餵三個地方：左上角標示、Windows 的 app_icon.ico
+    # （由 scripts/png-to-app-icon.ps1 轉出，不在執行期讀）、未來的關於頁
+    - assets/logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

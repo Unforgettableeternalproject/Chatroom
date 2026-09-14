@@ -256,18 +256,10 @@ class _AppShellState extends ConsumerState<AppShell>
             border: Border(bottom: BorderSide(color: s.line)),
           ),
           child: Row(children: [
-            Container(
-              width: 22,
-              height: 22,
-              alignment: Alignment.center,
-              decoration:
-                  BoxDecoration(border: Border.all(color: UepColors.gold)),
-              child: Text('U',
-                  style: UepText.display(
-                      size: 13,
-                      weight: FontWeight.w600,
-                      color: UepColors.gold)),
-            ),
+            // logo 自帶深色圓底與留白，所以不再加外框——原本那個金色方框
+            // 是為了讓一個孤零零的「U」站得住，圖本身撐得住的話它只是雜訊
+            Image.asset('assets/logo.png',
+                width: 22, height: 22, filterQuality: FilterQuality.medium),
             const SizedBox(width: 9),
             Text('CHATROOM',
                 style: UepText.mono(
