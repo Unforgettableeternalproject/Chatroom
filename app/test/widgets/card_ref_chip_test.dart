@@ -1,4 +1,5 @@
 import 'package:chatroom_app/core/theme/uep_theme.dart';
+import 'package:chatroom_app/core/theme/uep_tokens.dart';
 import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/markdown_body.dart';
 import 'package:flutter/material.dart';
@@ -179,6 +180,56 @@ void main() {
       });
       expect(m.cardRefs, isEmpty,
           reason: '那時內文裡的 #[標題] 只是普通文字，這是正確的降級');
+    });
+  });
+
+  group('卡片 chip 與 mention chip 的顏色要分得開', () {
+    /// 🔴 艾斯維爾 09/14：兩種 chip 原本都畫成金色，一排看過去分不出
+    /// 哪個點下去會跳到人、哪個會跳到卡。
+    ///
+    /// 判準刻意是「兩者不同色」而不是「卡片必須是某個顏色」——配色之後
+    /// 還會調，但**同色就是這個 bug 本身**，那條不能再回來。
+    /// CardRefChip 的標題色。**它是 `Text.rich`**——顏色掛在第一個
+    /// TextSpan 上，外層 `Text.style` 是 null。照外層讀會拿到 null，而
+    /// `expect(null, isNot(gold))` 會安靜地通過：那是假綠燈，不是修好了。
+    Color? cardChipColor(WidgetTester tester) {
+      final t = tester.widget<Text>(find.descendant(
+          of: find.byType(CardRefChip), matching: find.byType(Text)));
+      final span = t.textSpan! as TextSpan;
+      return (span.children!.first as TextSpan).style?.color;
+    }
+
+    testWidgets('🔴 本次修的 bug：卡片 chip 不再是 mention 的金色', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildUepTheme(Brightness.dark),
+        home: Scaffold(body: CardRefChip(ref())),
+      ));
+      final card = cardChipColor(tester);
+      expect(card, isNotNull, reason: '取不到顏色的話，底下兩條都會假通過');
+      expect(card, isNot(UepColors.gold),
+          reason: '金色在這套色票裡是「人」的顏色（kindHuman == gold）');
+      expect(card, UepColors.info);
+    });
+
+    testWidgets('mention chip 維持金色——這次動的不是它', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildUepTheme(Brightness.dark),
+        home: const Scaffold(body: MentionChip('@Novia')),
+      ));
+      expect(
+          tester.widget<Text>(find.byType(Text)).style?.color, UepColors.gold);
+    });
+
+    testWidgets('現況不明的卡仍然走灰色，不吃新顏色', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: buildUepTheme(Brightness.dark),
+        home: Scaffold(body: CardRefChip(ref(status: 'deleted'))),
+      ));
+      final card = cardChipColor(tester);
+      expect(card, isNotNull);
+      expect(card, isNot(UepColors.info),
+          reason: '點過去沒有東西的卡，顏色要先講出這件事');
+      expect(card, isNot(UepColors.gold));
     });
   });
 }

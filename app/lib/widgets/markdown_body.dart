@@ -240,7 +240,11 @@ class CardRefChip extends StatelessWidget {
     final preview = ref.preview;
     // 現況不明的（刪掉、搬走、看不到）用灰的：它們仍然指著一段歷史，
     // 但點過去沒有東西，顏色要先講出這件事
-    final tint = preview.isOk ? UepColors.gold : s.inkMute;
+    //
+    // 可用時用 info 藍，**刻意不與 mention chip 的金色相同**：金在這套色票裡
+    // 是「人」的顏色（`kindHuman == gold`），而卡片不是人。兩種 chip 原本都
+    // 畫成金色，一排 chip 看過去分不出哪個點下去會跳到人、哪個會跳到卡。
+    final tint = preview.isOk ? UepColors.info : s.inkMute;
     final label = preview.title.isEmpty ? ref.title : preview.title;
     final chip = Container(
       margin: const EdgeInsets.symmetric(horizontal: 1),
