@@ -598,42 +598,28 @@ class _TunnelSection extends ConsumerWidget {
     // 殘留的舊網址 ⇒ 快照記成空字串 ⇒ 之後輪詢讀到那條舊的，`!= ''` 成立
     // ⇒ **假綠燈，而且指向一條死掉的隧道**（審核用Codex 09/14）。
     //
-    // ⚠️ **pending 要在現讀之前掛上。** 那次現讀會去打外網 health，可能好
-    // 幾秒——這段期間按鈕若還能按，使用者會以為沒反應而再按一次，於是開出
-    // 第二條隧道（審核用Codex 09/14）。
-    final op = ref.read(lastDataOpProvider.notifier);
-    op.set({'kind': 'tunnel_start', 'pending': true, 'ok': true, 'detail': ''});
-    final String beforeUrl;
-    try {
-      ref.invalidate(tunnelStatusProvider);
-      beforeUrl = (await ref.read(tunnelStatusProvider.future)).url;
-    } on Object catch (e) {
-      // 與 Hub 那半同一條規則：**快照答不出來就不動手。** 當成空字串照送的
-      // 話，一條殘留的舊網址會在下一輪被當成「新的」而假報成功。
-      op.set({
-        'kind': 'tunnel_start',
-        'ok': false,
-        'error': '查不到現在的隧道狀態，所以沒有送出任何指令（$e）。'
-            '先按上面的「重新檢查」看它現在是什麼樣子。',
-      });
-      return;
-    }
+    // ⚠️ 快照**交給 `runOp` 去取**，不要在這裡先 await 一次再傳進去：那次
+    // 現讀要打外網、可能好幾秒，而 pending 是 `_launchAndWatch` 進去之後才
+    // 掛的 ⇒ 中間那段按鈕還能按 ⇒ 第二條隧道（審核用Codex 09/14）。
     await _launchAndWatch(
       ref,
       kind: 'tunnel_start',
+      baseline: () async {
+        ref.invalidate(tunnelStatusProvider);
+        return (await ref.read(tunnelStatusProvider.future)).url;
+      },
+      baselineFailText: '查不到現在的隧道狀態，所以沒有送出任何指令。'
+          '先按上面的「重新檢查」看它現在是什麼樣子',
       launch: actions.startTunnel,
-      ready: () async {
+      ready: (beforeUrl) async {
         ref.invalidate(tunnelStatusProvider);
         final t = await ref.read(tunnelStatusProvider.future);
         return t.hasUrl && t.url != beforeUrl;
       },
       okText: '隧道開了，網址在上面。',
-      timeoutText: beforeUrl.isEmpty
-          ? '送出了，但十幾秒內還沒拿到網址——'
-              'cloudflared 可能還在要，也可能失敗了。看 logs\\tunnel-*.log。'
-          : '送出了，但上面那個網址還沒換成新的——'
-              '新的還沒下來，或這次沒開成。**先別把舊網址發出去**，'
-              '它可能已經失效了。看 logs\\tunnel-*.log。',
+      timeoutText: '送出了，但上面那個網址還沒換成新的——'
+          '新的還沒下來，或這次沒開成。有舊網址的話**先別發出去**，'
+          '它可能已經失效了。看 logs\\tunnel-*.log。',
     );
   }
 
@@ -848,7 +834,7 @@ class _ControlSection extends ConsumerWidget {
         alreadyDone: () => _hubRunning(ref),
         alreadyText: 'Hub 本來就在跑，沒有再啟動一個。要重啟的話先按「停止 Hub」。',
         launch: actions.startHub,
-        ready: () => _hubRunning(ref),
+        ready: (_) => _hubRunning(ref),
         okText: 'Hub 起來了。',
         timeoutText: '送出了，但十幾秒內還沒看到它起來——'
             '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
@@ -1024,14 +1010,25 @@ Map<String, dynamic>? _latest(
 ///
 /// 回傳最終要寫進 `lastDataOp` 的那一筆（不含 `pending`）。
 /// `gap` 可注入，測試用它把等待縮成零。
+/// `baseline` 是**按下去之前的樣子**，`ready` 會收到它。
+///
+/// 🔴 **它在這裡面取，不是由呼叫端先取好再傳進來。** 原本隧道那邊是呼叫端
+/// 自己 `await` 一次現讀再呼叫這裡，而那次現讀要打外網 health、可能好幾秒
+/// ——那段期間 pending 還沒掛上，按鈕還能按，於是使用者再按一次就開出第二
+/// 條隧道（審核用Codex 09/14）。
+///
+/// 移進來之後，`_launchAndWatch` 先掛 pending 再進這個函式，**時序由結構
+/// 保證**，不靠呼叫端記得把兩行寫成正確的順序。
 Future<Map<String, dynamic>> runOp({
   required String kind,
   required Future<void> Function() launch,
-  required Future<bool> Function() ready,
+  required Future<bool> Function(String baseline) ready,
   required String okText,
   required String timeoutText,
   Future<bool> Function()? alreadyDone,
   String? alreadyText,
+  Future<String> Function()? baseline,
+  String? baselineFailText,
   int tries = 12,
   Future<void> Function() gap = _oneSecond,
 }) async {
@@ -1060,6 +1057,20 @@ Future<Map<String, dynamic>> runOp({
       return {'kind': kind, 'ok': true, 'detail': alreadyText ?? okText};
     }
   }
+  String base = '';
+  if (baseline != null) {
+    try {
+      base = await baseline();
+    } on Object catch (e) {
+      // 與 `alreadyDone` 同一條規則：**快照答不出來就不動手。** 當成空字串
+      // 照送的話，一條殘留的舊網址會在下一輪被當成「新的」而假報成功。
+      return {
+        'kind': kind,
+        'ok': false,
+        'error': '${baselineFailText ?? '查不到現在的狀態，所以沒有送出任何指令'}（$e）。',
+      };
+    }
+  }
   try {
     await launch();
   } on Object catch (e) {
@@ -1069,7 +1080,7 @@ Future<Map<String, dynamic>> runOp({
     await gap();
     bool ok;
     try {
-      ok = await ready();
+      ok = await ready(base);
     } on Object {
       // 單次失敗不終止輪詢：Hub 正在起來的那幾秒 health 本來就可能拋
       ok = false;
@@ -1086,11 +1097,13 @@ Future<void> _launchAndWatch(
   WidgetRef ref, {
   required String kind,
   required Future<void> Function() launch,
-  required Future<bool> Function() ready,
+  required Future<bool> Function(String baseline) ready,
   required String okText,
   required String timeoutText,
   Future<bool> Function()? alreadyDone,
   String? alreadyText,
+  Future<String> Function()? baseline,
+  String? baselineFailText,
   int tries = 12,
 }) async {
   final op = ref.read(lastDataOpProvider.notifier);
@@ -1103,6 +1116,8 @@ Future<void> _launchAndWatch(
     timeoutText: timeoutText,
     alreadyDone: alreadyDone,
     alreadyText: alreadyText,
+    baseline: baseline,
+    baselineFailText: baselineFailText,
     tries: tries,
   ));
 }

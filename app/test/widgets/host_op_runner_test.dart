@@ -15,7 +15,7 @@ void main() {
       final r = await runOp(
         kind: 'hub_start',
         launch: () async => launched++,
-        ready: () async => throw StateError('provider 炸了'),
+        ready: (_) async => throw StateError('provider 炸了'),
         okText: '起來了',
         timeoutText: '還沒起來',
         tries: 3,
@@ -32,7 +32,7 @@ void main() {
       final r = await runOp(
         kind: 'hub_start',
         launch: () async {},
-        ready: () async {
+        ready: (_) async {
           n++;
           if (n < 3) throw StateError('還沒起來');
           return true;
@@ -54,7 +54,7 @@ void main() {
         alreadyDone: () async => true,
         alreadyText: '本來就在跑',
         launch: () async => launched++,
-        ready: () async => true,
+        ready: (_) async => true,
         okText: '起來了',
         timeoutText: '還沒起來',
         gap: noGap,
@@ -72,7 +72,7 @@ void main() {
         alreadyDone: () async => false,
         alreadyText: '本來就在跑',
         launch: () async => launched++,
-        ready: () async => true,
+        ready: (_) async => true,
         okText: '起來了',
         timeoutText: '還沒起來',
         gap: noGap,
@@ -92,7 +92,7 @@ void main() {
         alreadyDone: () async => throw StateError('health 讀不到'),
         alreadyText: '本來就在跑',
         launch: () async => launched++,
-        ready: () async => true,
+        ready: (_) async => true,
         okText: '起來了',
         timeoutText: '還沒起來',
         gap: noGap,
@@ -110,7 +110,7 @@ void main() {
       final r = await runOp(
         kind: 'tunnel_start',
         launch: () async => throw StateError('腳本不見了'),
-        ready: () async {
+        ready: (_) async {
           polled++;
           return true;
         },
@@ -136,7 +136,7 @@ void main() {
       return runOp(
         kind: 'tunnel_start',
         launch: () async {},
-        ready: () async {
+        ready: (_) async {
           final now = i < probes.length ? probes[i] : probes.last;
           i++;
           return now.isNotEmpty && now != before;
@@ -170,6 +170,72 @@ void main() {
     test('本來沒有網址、後來有了 ⇒ 成功', () async {
       final r = await openTunnel(before: '', probes: ['', 'https://a.b']);
       expect(r['detail'], '隧道開了');
+    });
+  });
+
+  group('快照（baseline）', () {
+    test('🔴 baseline 拋 ⇒ 不 launch、回錯誤，而且訊息是給人看的', () async {
+      var launched = 0;
+      final r = await runOp(
+        kind: 'tunnel_start',
+        baseline: () async => throw StateError('讀不到 .tunnel-url'),
+        baselineFailText: '查不到現在的隧道狀態，所以沒有送出任何指令',
+        launch: () async => launched++,
+        ready: (_) async => true,
+        okText: '隧道開了',
+        timeoutText: '還沒換成新的',
+        gap: noGap,
+      );
+      expect(launched, 0, reason: '快照答不出來就送出，等於在賭下一輪讀到的是新的');
+      expect(r['ok'], isFalse);
+      expect('${r['error']}', contains('沒有送出任何指令'));
+      expect('${r['error']}', contains('讀不到 .tunnel-url'),
+          reason: '原始錯誤要留著，不然沒人查得下去');
+    });
+
+    test('🔴 baseline 在 launch 之前取，而且 ready 收到的就是它', () async {
+      // 順序錯的話會拿「已經開始開隧道之後」的狀態當基準，那時網址可能
+      // 已經換了 ⇒ 基準與結果是同一個東西 ⇒ 永遠判不出變化
+      final order = <String>[];
+      String? seen;
+      await runOp(
+        kind: 'tunnel_start',
+        baseline: () async {
+          order.add('baseline');
+          return 'https://old.example';
+        },
+        launch: () async => order.add('launch'),
+        ready: (base) async {
+          order.add('ready');
+          seen = base;
+          return true;
+        },
+        okText: '隧道開了',
+        timeoutText: '還沒換成新的',
+        gap: noGap,
+      );
+      expect(order, ['baseline', 'launch', 'ready']);
+      expect(seen, 'https://old.example');
+    });
+
+    test('alreadyDone 先於 baseline：本來就好了就不必取快照', () async {
+      var baselineCalls = 0;
+      final r = await runOp(
+        kind: 'hub_start',
+        alreadyDone: () async => true,
+        alreadyText: '本來就在跑',
+        baseline: () async {
+          baselineCalls++;
+          return '';
+        },
+        launch: () async {},
+        ready: (_) async => true,
+        okText: '起來了',
+        timeoutText: '還沒起來',
+        gap: noGap,
+      );
+      expect(baselineCalls, 0);
+      expect(r['detail'], '本來就在跑');
     });
   });
 }
