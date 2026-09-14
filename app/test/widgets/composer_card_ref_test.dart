@@ -199,4 +199,53 @@ void main() {
       expect(hintOf(tester), contains('@'));
     });
   });
+
+  group('送出前要看得到「會 tag 到誰」（艾斯維爾 09/14）', () {
+    // 打出 `@名字` 不保證真的 tag 得到：名字打錯、中間多個空格、對方已經
+    // 離開房間——三種都不報錯，發出去才發現要補 tag。這一行答的就是它。
+    testWidgets('沒有 mention 也沒有指涉時，維持快捷鍵提示', (tester) async {
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '普通訊息');
+      expect(find.textContaining('ENTER 送出'), findsOneWidget);
+      expect(find.textContaining('會 tag 到'), findsNothing);
+    });
+
+    testWidgets('🔴 本次補的：對得上的 @名字 要列出來', (tester) async {
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '@Alpha 你看一下');
+      expect(find.textContaining('會 tag 到：Alpha'), findsOneWidget);
+      expect(find.textContaining('ENTER 送出'), findsNothing,
+          reason: '同一行換內容，不是多佔一行版面');
+    });
+
+    testWidgets('🔴 對不上的 @名字 不列——那正是要被看見的情況', (tester) async {
+      // 這條是這個功能的全部理由。打錯名字時畫面必須與「沒 tag」一樣，
+      // 使用者才會發現自己沒 tag 到；若照樣顯示就等於騙他已經 tag 了
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '@Alphaa 你看一下');
+      expect(find.textContaining('會 tag 到'), findsNothing);
+      expect(find.textContaining('ENTER 送出'), findsOneWidget);
+    });
+
+    testWidgets('卡片指涉也算進去', (tester) async {
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '看 #[聊天框用上下鍵遍歷輸入歷史] 這張');
+      expect(find.textContaining('指涉 1 張卡'), findsOneWidget);
+    });
+
+    testWidgets('人與卡同時有，兩半都講', (tester) async {
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '@Alpha 看 #[聊天框用上下鍵遍歷輸入歷史]');
+      expect(find.textContaining('會 tag 到：Alpha'), findsOneWidget);
+      expect(find.textContaining('指涉 1 張卡'), findsOneWidget);
+    });
+
+    testWidgets('群組保留字算 mention', (tester) async {
+      // @agents 不是任何人的名字，但它 tag 得到人——不列的話，
+      // 用群組 tag 的那次會看起來像沒 tag 到
+      await tester.pumpWidget(wrap(cards: cards));
+      await type(tester, '@agents 開工');
+      expect(find.textContaining('會 tag 到：agents'), findsOneWidget);
+    });
+  });
 }

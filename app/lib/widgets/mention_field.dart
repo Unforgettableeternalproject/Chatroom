@@ -785,8 +785,53 @@ class _MessageComposerState extends State<MessageComposer> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      MonoLabel('ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史',
-                          size: 8.5, letterSpacing: 1.2),
+                      // 「這則會 tag 到誰」。**打出 `@名字` 不保證真的 tag
+                      // 得到**——名字打錯、中間多個空格、對方已經離開，
+                      // 三種都不會報錯，發出去才發現要補 tag
+                      // （艾斯維爾 09/14）。
+                      //
+                      // ⚠️ 用 ValueListenableBuilder 而不是在 _onTextChanged
+                      // 裡 setState：**只重建這一行，輸入框不在這個 subtree
+                      // 裡**。整個 composer 每次按鍵重建正是那個未解的 IME
+                      // 症狀的嫌疑區（卡 `7d3db264`），這條回饋不值得去碰它。
+                      //
+                      // 算的人與送出時算的是同一顆（_extractMentions /
+                      // extractCardRefs），所以看到的就是真的會送出的。
+                      // 另寫一套比對規則的話，兩套遲早不一樣，而不一樣的
+                      // 時候畫面上看不出是誰對。
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _controller,
+                        builder: (context, value, _) {
+                          final names = _extractMentions(value.text);
+                          final refs =
+                              extractCardRefs(value.text, widget.cards);
+                          if (names.isEmpty && refs.isEmpty) {
+                            return const MonoLabel(
+                                'ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史',
+                                size: 8.5,
+                                letterSpacing: 1.2);
+                          }
+                          // ⚠️ **這裡不能用 MonoLabel**：它會 `toUpperCase()`，
+                          // 而這一行印的是人名。「會 TAG 到：ALPHA」把名字
+                          // 改寫了，而這一行存在的理由正是讓人核對名字對不對
+                          // ——顯示成另一種寫法就核對不了。
+                          return Text(
+                            [
+                              if (names.isNotEmpty)
+                                '→ 會 tag 到：${names.join('、')}',
+                              if (refs.isNotEmpty) '指涉 ${refs.length} 張卡',
+                            ].join(' · '),
+                            style: UepText.mono(
+                              size: 8.5,
+                              letterSpacing: 1.2,
+                              // 金＝人、藍＝卡，與訊息裡的 chip 同一套語意
+                              color: names.isNotEmpty
+                                  ? UepColors.gold
+                                  : UepColors.info,
+                            ),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
