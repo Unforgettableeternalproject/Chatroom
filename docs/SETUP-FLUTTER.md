@@ -254,6 +254,30 @@ CMake 只看到「compiler id 測試專案 build 失敗」，就回報成
    一分鐘就能證實或排除，比裝 Visual Studio 便宜太多。
 4. CI 上尤其要注意——runner 的工作目錄路徑往往比本機更長。
 
+#### 🔴 已實測（2026-09-14）：`.claude/worktrees/` 底下必定失敗
+
+上面第 2 點說的「餘裕不算多」在 09/14 兌現了。agent 的隔離 worktree
+（`.claude\worktrees\<name>\`）比主樹多 **27 字元**，把
+`flutter_local_notifications_windows` 的 tlog 路徑推到 **261**——`MAX_PATH` 是 260，
+**超出 1 個字元**。
+
+| | 長度 |
+|---|---|
+| `.claude\worktrees\kit-build\` 版本 | **261** |
+| 主樹版本 | 233 |
+
+⚠️ **錯誤訊息不會告訴你這件事。** 收斂前混著 `Permission denied` 與
+`LNK1104`，`flutter clean` 之後才穩定成 `FTK1011`。而且這台機器的
+`LongPathsEnabled` **已經是 1**——它給人「已經處理過」的假象，但
+MSBuild 的 FileTracker 不吃那個設定。
+
+⇒ **要在隔離環境 build Windows 產物，worktree 建在短路徑**
+（實測 `C:\cr-build` 可行，同一條路徑降到約 180 字元，餘裕 81）。
+`git worktree add C:\cr-build <ref>` 就夠，不必動 `.claude/worktrees/` 的慣例。
+
+⚠️ 另一種長得不一樣的 build 失敗：`LNK1104 無法開啟檔案 chatroom_app.exe`
+是**App 正開著**鎖住了 exe，與路徑長度無關。兩者解法不同，別混。
+
 ---
 
 ## 6. 未來升級注意事項
