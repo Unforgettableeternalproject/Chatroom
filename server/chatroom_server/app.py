@@ -341,7 +341,15 @@ class MessageEdit(BaseModel):
 
 
 class AssignmentCreate(BaseModel):
-    target_session_key: str
+    # 兩條路擇一指定目標。
+    #
+    # `target_session_key` 是正典（agent 與 CLI 用）。`target_participant_id`
+    # 給 UI 用——成員的 session_key **刻意不外流**（它同時是指派目標），
+    # 所以 App 手上只有 participant_id。沒有這條路的話，「請一個因閒置被
+    # 移出的 agent 重新加入」在畫面上根本做不出來，而那個 agent 的 watcher
+    # 其實還掛著、指派照樣收得到。
+    target_session_key: str = ""
+    target_participant_id: str = ""
     note: str = ""
     # 指派者預先取的名字：agent 依此指派加入房間時，優先於自取名與名字池
     assigned_name: str = Field(default="", max_length=32)
@@ -10944,6 +10952,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id)
         db = app.state.db
+        # 先把目標解析成一把 session_key，後面一律用它
+        target_key = body.target_session_key.strip()
+        pid = body.target_participant_id.strip()
+        if pid:
+            if target_key:
+                # 「以哪個為準」不可以變成一個沒人講清楚的默契
+                raise _err(422, "ambiguous_target",
+                           "target_session_key 與 target_participant_id 只能給一個")
+            row = await (
+                await db.execute(
+                    "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                    (pid, room_id))
+            ).fetchone()
+            if row is None:
+                # 靜靜建立一筆指派給空字串的話，發的人會以為叫到了人，
+                # 而那與成功長得一模一樣
+                raise _err(404, "participant_not_found",
+                           "這個房間裡沒有這個成員（含已離開的）")
+            target_key = row["session_key"]
+        if not target_key:
+            raise _err(422, "target_required",
+                       "要指定 target_session_key 或 target_participant_id")
         party = _party(request)
         # 只指派得動自己的 agent（艾斯維爾裁 2026-09-12）。**主持人沒有
         # 穿透口**——「我能指派所有人的 agent」與「別人能指派我的 agent」
@@ -10954,7 +10984,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # assignment_id 時比對 `assignment.party`），所以這裡記下發起人的群。
         target = await (
             await db.execute("SELECT party FROM session WHERE session_key=?",
-                             (body.target_session_key,))
+                             (target_key,))
         ).fetchone()
         if target is not None and target["party"] and target["party"] != party:
             raise _err(403, "not_your_agent",
@@ -10964,14 +10994,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "INSERT INTO assignment (id, room_id, target_session_key, note,"
             " assigned_name, party, created_at) VALUES (?,?,?,?,?,?,?)",
-            (aid, room_id, body.target_session_key, body.note,
+            (aid, room_id, target_key, body.note,
              body.assigned_name.strip(), party, _now()),
         )
         await _commit_with_retry(db)
         seen = await (
             await db.execute(
                 "SELECT last_seen_at FROM session WHERE session_key=?",
-                (body.target_session_key,),
+                (target_key,),
             )
         ).fetchone()
         active_cutoff = (

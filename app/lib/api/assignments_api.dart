@@ -9,9 +9,16 @@ class AssignmentsApi {
 
   final Dio _dio;
 
+  /// 兩條路擇一指定目標。
+  ///
+  /// [targetSessionKey] 是正典。[targetParticipantId] 給 UI 用——成員的
+  /// session_key **刻意不外流**（它同時是指派目標），App 手上只有
+  /// participant_id，由 Hub 內部換。沒有這條路的話，「請一個因閒置被移出
+  /// 的 agent 重新加入」在畫面上根本做不出來。
   Future<String> create(
     String roomId, {
-    required String targetSessionKey,
+    String targetSessionKey = '',
+    String targetParticipantId = '',
     String note = '',
     String assignedName = '',
   }) =>
@@ -19,7 +26,10 @@ class AssignmentsApi {
         final res = await _dio.post<Map<String, dynamic>>(
           '/api/rooms/$roomId/assignments',
           data: {
-            'target_session_key': targetSessionKey,
+            if (targetSessionKey.isNotEmpty)
+              'target_session_key': targetSessionKey,
+            if (targetParticipantId.isNotEmpty)
+              'target_participant_id': targetParticipantId,
             'note': note,
             'assigned_name': assignedName,
           },

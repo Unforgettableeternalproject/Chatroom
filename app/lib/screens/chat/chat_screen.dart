@@ -2228,37 +2228,32 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     }
   }
 
-  /// 在房裡發一則 @ 他的固定訊息。
+  /// 請一個已經離開的成員重新加入。
   ///
-  /// 刻意**不做新的 Hub 通知型別**：這樣它走的是與一般 mention 完全相同的
-  /// 喚醒路徑（watcher 與 App 的 Codex 轉送都吃 mentions），不必新增契約，
-  /// 而且房裡留得下痕跡——成員列上的動作若是無聲的，其他人不會知道有人
-  /// 被戳過，同一個沉默的 agent 會被每個人各戳一次。
-  Future<void> _poke(BuildContext context, Participant p) async {
-    final myId = ref.read(settingsRepoProvider).participantId(widget.roomId);
-    if (myId == null) return;
+  /// 走既有的指派——被閒置移出之後 watcher 並沒有跟著消失，那把 session
+  /// 還在 Hub 名錄裡。所以這不是新機制，是把「我本來就會去指派他一次」
+  /// 變成一顆按鈕。
+  ///
+  /// ⚠️ 目標用 **participant_id** 不是 session_key：成員的 session_key
+  /// 刻意不外流（它同時是指派目標），App 手上根本沒有。Hub 端內部換。
+  Future<void> _reinvite(BuildContext context, Participant p) async {
     try {
-      final res = await ref.read(messagesApiProvider).post(
+      await ref.read(assignmentsApiProvider).create(
             widget.roomId,
-            participantId: myId,
-            content: '@${p.displayName} 在嗎？有事找你，回來看一下。',
-            // ⚠️ mention 一定要走參數。內文寫 @名字 不會被解析成 mention，
-            // 也不會報錯——發出去之後看起來一切正常，對方永遠不會醒
-            mentions: [p.displayName],
+            targetParticipantId: p.id,
+            note: '請重新加入這個聊天室。',
+            // 用原本的名字回來——房內的歷史訊息都掛在那個名字上，
+            // 換一個名字回來等於在時間軸上變成另一個人
+            assignedName: p.displayName,
           );
       if (!context.mounted) return;
-      // 名字對不上時 Hub 會把它放進 unresolved——那代表這一戳沒有喚醒
-      // 任何人，而它與「成功」在畫面上長得一模一樣
-      final missed = res.unresolvedMentions.contains(p.displayName);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(missed
-            ? '沒戳到 ${p.displayName}——他可能已經改名或離開了'
-            : '已在房裡戳了 ${p.displayName}'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已請 ${p.displayName} 重新加入')),
+      );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('戳一下失敗：$e')));
+          .showSnackBar(SnackBar(content: Text('請他回來失敗：$e')));
     }
   }
 
@@ -2443,11 +2438,6 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                   onClaimAdmin: hostMode && p.isAdmin && p.id != myId
                       ? () => _claimAdmin(context, p)
                       : null,
-                  // 戳一下：只給別人、封存房不給（那裡發不了言）、
-                  // subagent 不給（它沒有獨立的存在，戳它等於戳它的父層）
-                  onPoke: p.id == myId || widget.archived || p.ephemeral
-                      ? null
-                      : () => _poke(context, p),
                   // 自己隱藏自己只會讓人以為出了問題
                   onHide: p.id == myId ? null : () => _setHidden(p, true),
                   // 標記只給別人：不會有人在等自己回話
@@ -2466,6 +2456,11 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                       p: p,
                       isSelf: false,
                       inactive: true,
+                      // 封存房不給：那裡沒有人需要被叫回來。
+                      // subagent 也不給——它沒有獨立的存在，該回來的是父層
+                      onReinvite: widget.archived || p.ephemeral
+                          ? null
+                          : () => _reinvite(context, p),
                       onHide: () => _setHidden(p, true),
                     ),
                   ),
@@ -2553,7 +2548,7 @@ class _MemberTile extends StatelessWidget {
     this.nested = false,
     this.onKick,
     this.onClaimAdmin,
-    this.onPoke,
+    this.onReinvite,
     this.onHide,
     this.onUnhide,
     this.highlighted = false,
@@ -2576,17 +2571,16 @@ class _MemberTile extends StatelessWidget {
   /// 管理員視角的移出動作；null 表示不顯示。
   final VoidCallback? onKick;
 
-  /// 戳一下這個成員：在房裡發一則 @ 他的固定訊息，走與一般 mention 完全
-  /// 相同的喚醒路徑。
+  /// 請一個**已經離開的**成員重新加入。
   ///
-  /// **只在他閒置時才出現**——沒在閒置的人不需要被戳。與指派刻意分開：
-  /// 指派是「請一個還沒在場的人進來」，已經在場的人指派他一次什麼都不會
-  /// 發生（join 冪等），所以候選清單本來就把房內成員排除掉了。
+  /// 走的就是指派——被閒置移出之後 watcher 並沒有跟著消失，那把 session
+  /// 還在 Hub 名錄裡，指派照樣收得到。所以這不是新機制，是把「我本來就會
+  /// 去指派他一次」變成一顆按鈕。
   ///
-  /// 為什麼發訊息而不是做一個靜默的 Hub 通知：**房裡要留下痕跡**。
-  /// 成員列上的動作若是無聲的，其他人不會知道有人被戳過，於是同一個
-  /// 沉默的 agent 會被每個人各戳一次。
-  final VoidCallback? onPoke;
+  /// **獨立按鈕，不收進「更多動作」**（艾斯維爾指定）：需要它的時候，
+  /// 那一列的整個存在理由就是「這個人不在了，把他叫回來」——藏在選單裡
+  /// 等於要人先猜得到它在那裡。
+  final VoidCallback? onReinvite;
 
   /// Hub 主持人接管這個房間的管理權。只掛在**現任管理員**身上，
   /// 與移交同一個位置——那是使用者找這個動作時會去看的地方。
@@ -2639,10 +2633,6 @@ class _MemberTile extends StatelessWidget {
     }
 
     final menuActions = <_MemberAction>[
-      // 閒置時才給：沒在閒置的人不需要被戳
-      if (onPoke != null && isIdle)
-        _MemberAction('戳一下（在房裡 @ 他）', Icons.waving_hand_outlined,
-            onPoke!, color: UepColors.gold),
       if (onHide != null)
         _MemberAction('從我的列表隱藏', Icons.visibility_off_outlined, onHide!),
       if (onUnhide != null)
@@ -2775,6 +2765,14 @@ class _MemberTile extends StatelessWidget {
                       : UepColors.success,
                   border: isIdle ? Border.all(color: s.inkMute) : null,
                 ),
+              ),
+            // 「請他回來」是獨立按鈕，不進選單——見 [onReinvite]
+            if (onReinvite != null)
+              IconButton(
+                tooltip: '請 ${p.displayName} 重新加入',
+                visualDensity: VisualDensity.compact,
+                onPressed: onReinvite,
+                icon: Icon(Icons.redo, size: 14, color: UepColors.gold),
               ),
             if (onToggleHighlight != null)
               IconButton(
