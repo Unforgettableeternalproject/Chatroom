@@ -1672,7 +1672,7 @@ def chatroom_board_add(
     ``kind`` 三選一，三層是嚴格的樹：
 
     - ``objective``——一個**週期**（一次可交付的成果）。可以同時有好幾條在跑
-    - ``checklist``——週期底下的**階段分組**（「Hub 端」「App 端」「測試」）。
+    - ``checklist``——週期底下的**階段**（「Hub 端」「App 端」「測試」）。
       ``parent_id`` 給 objective 的 id
     - ``task``——**一個人做得完的一件事**。``parent_id`` 給 checklist 的 id；
       **想隨手記一件事就別給**，Hub 會把它放進「未分類」（那兩層會重用，

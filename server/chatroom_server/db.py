@@ -245,7 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_archive_request_room
     ON archive_request(room_id, status);
 
 -- ── Board（共同任務板）──────────────────────────────────────────────
--- 三層：Objective（週期）→ Checklist（階段分組）→ Task（最小單位）。
+-- 三層：Objective（週期）→ Checklist（階段）→ Task（最小單位）。
 -- 掛在 room 底下，不另立 board 表——可見性／封存／權限／long-poll／讀取
 -- 邊界全是 room-scoped 的，獨立就要把那六套機制各重造一份。
 -- 增量讀取用房內獨立的 board_seq（見 room.board_seq），不共用 next_seq：

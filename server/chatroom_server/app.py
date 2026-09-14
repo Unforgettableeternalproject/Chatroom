@@ -4485,7 +4485,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         "task": "board_task",
     }
 
-    BOARD_KIND_NAMES = {"objective": "週期", "checklist": "階段清單", "task": "任務"}
+    BOARD_KIND_NAMES = {"objective": "週期", "checklist": "階段", "task": "任務"}
 
     async def _board_item_or_404(kind: str, item_id: str):
         """取一列 board 資料。找不到與已軟刪除一律當成不存在。
@@ -5845,7 +5845,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     for s in states) \
                     or "done" not in states:
                 raise _err(409, "tasks_incomplete",
-                           "底下還有沒做完的任務，或這份清單裡沒有任何一項真的"
+                           "底下還有沒做完的任務，或這個階段裡沒有任何一項真的"
                            "完成（全部取消不算完成）",
                            total=len(states),
                            done=states.count("done"),
@@ -5853,11 +5853,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                                  if s not in ("done", "cancelled")])
         if old == "done" and not _is_human(me):
             raise _err(403, "human_only",
-                       "只有人類成員可以把已完成的清單重新打開")
+                       "只有人類成員可以把已完成的階段重新打開")
         if body.status == "cancelled" and not _is_human(me) \
                 and not _is_creator(row, me):
             raise _err(403, "human_only",
-                       "只有建立者或人類成員可以取消這份清單")
+                       "只有建立者或人類成員可以取消這個階段")
         seq = await _item_seq(row)
         done = body.status == "done"
         # CAS，理由同 Task。這裡尤其要緊：上面那道「底下所有 task 都收尾了」
@@ -5893,7 +5893,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                              "actual": current["status"]})
             await _commit_with_retry(db)
             raise _err(409, "invalid_transition",
-                       f"這份清單的狀態在你送出的同時被改成"
+                       f"這個階段的狀態在你送出的同時被改成"
                        f"「{current['status']}」了",
                        from_status=current["status"], to_status=body.status,
                        allowed=sorted({"open", "done", "cancelled"}
@@ -5995,7 +5995,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not states or any(s not in ("done", "cancelled") for s in states) \
                 or "done" not in states:
             raise _err(409, "checklists_incomplete",
-                       "底下還有沒收尾的清單，或這個週期裡沒有任何一份清單真的"
+                       "底下還有沒收尾的階段，或這個週期裡沒有任何一個階段真的"
                        "完成（全部取消不算完成）",
                        total=len(states), done=states.count("done"),
                        open=[s for s in states if s not in ("done", "cancelled")])
@@ -6367,7 +6367,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id = room["id"]
         counts = {}
         titles = []
-        for kind, table in (("週期", "board_objective"), ("清單", "board_checklist"),
+        for kind, table in (("週期", "board_objective"), ("階段", "board_checklist"),
                             ("任務", "board_task")):
             rows = await (
                 await db.execute(
