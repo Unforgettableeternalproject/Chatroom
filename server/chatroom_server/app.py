@@ -1190,10 +1190,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(403, "participant_left",
                            "這個身分已離開聊天室，需要時可重新加入")
             raise _err(403, "participant_not_active",
-                       "身分已失效（可能因閒置被移出房間），請重新加入")
+                       "身分已失效（可能因閒置被移出聊天室），請重新加入")
         # participant 是房間層級身分，不可跨房使用
         if room_id is not None and row["room_id"] != room_id:
-            raise _err(403, "participant_wrong_room", "此身分不屬於這個房間")
+            raise _err(403, "participant_wrong_room", "此身分不屬於這個聊天室")
         await db.execute(
             "UPDATE participant SET last_seen_at=? WHERE id=?", (_now(), participant_id)
         )
@@ -1286,7 +1286,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(403, "participant_not_active",
-                       "你已經不在這個聊天室裡了，無法執行房內的管理動作")
+                       "你已經不在這個聊天室裡了，無法執行聊天室內的管理動作")
         return row
 
     async def _member_or_403(room_id: str, participant_id: str | None,
@@ -1319,7 +1319,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 舊 client 沒帶標頭時最容易在這裡被誤導成「我被踢了嗎」
             raise _err(401, "participant_header_required",
                        "請求沒有帶 X-Participant-Id。這不是「你不是成員」，"
-                       "而是「還不知道你是誰」——先加入房間取得身分再讀。")
+                       "而是「還不知道你是誰」——先加入聊天室取得身分再讀。")
         row = await (
             await app.state.db.execute(
                 "SELECT status FROM participant WHERE id=? AND room_id=?",
@@ -1330,10 +1330,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 不分「查無此身分」與「身分屬於別的房間」：對非成員來說，
             # 這個房間的存在與否本來就不該從錯誤碼推得出來
             raise _err(403, "not_a_member",
-                       "你不是這個聊天室的成員（這個身分不屬於這個房間）")
+                       "你不是這個聊天室的成員（這個身分不屬於這個聊天室）")
         if row["status"] == "kicked":
             raise _err(403, "participant_kicked",
-                       "你已被管理員移出這個聊天室，看不到房內的內容")
+                       "你已被管理員移出這個聊天室，看不到聊天室內的內容")
         return row
 
     async def _invited_to_private(room, session_key: str | None,
@@ -1622,7 +1622,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if board is None:
             if seen:
                 raise _err(422, "card_ref_board_not_attached",
-                           "這個房間目前沒有掛接任何板，不能指涉卡片")
+                           "這個聊天室目前沒有掛接任何板，不能指涉卡片")
             # 內文湊巧寫成這個形狀、而房裡根本沒有板：那就只是一句話
             return []
         # 板上的卡標題。反向檢查只認**確實對得上某張卡**的字面——純粹湊巧
@@ -1689,7 +1689,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 擋不掉已經寫下的東西
             if r is None or r["board_id"] != board["id"]:
                 raise _err(422, "card_ref_not_available",
-                           "指涉的卡片不存在，或不在這個房間掛接的板上")
+                           "指涉的卡片不存在，或不在這個聊天室掛接的板上")
             literal = _card_ref_literal(r["title"])
             if literal not in content:
                 raise _err(422, "card_ref_not_in_content",
@@ -1746,7 +1746,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             if target is None:
                 raise _err(422, "reply_target_not_found",
-                           "reply_to 指向的訊息不存在或不在這個房間")
+                           "reply_to 指向的訊息不存在或不在這個聊天室")
             reply_to_seq = target["seq"]
             # 回覆＝mention 對方。「我回你了」與「我 @ 你」在使用者眼裡是同
             # 一件事，但在此之前只有後者會喚醒對方——回覆送出去、看起來成功、
@@ -1987,7 +1987,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 「建板 403 not_room_admin」（09/06 卡 48da086a）
             raise _err(422, "session_key_required",
                        "建立聊天室要帶 X-Session-Key——沒有它你不會是"
-                       "自己這間房的管理者，而那件事要到三步之後才看得出來")
+                       "自己這個聊天室的管理者，而那件事要到三步之後才看得出來")
         db = app.state.db
         room_id = _uid()
         now = _now()
@@ -2370,7 +2370,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 沒有需要撤的（審核用 Codex F11）
             raise _err(409, "admin_already_changed",
                        "管理權在你送出這個請求的同時被移交給別人了。重新讀一次"
-                       "房間狀態再決定——你現在可能已經不是管理員")
+                       "聊天室狀態再決定——你現在可能已經不是管理員")
         await _commit_with_retry(db)
         logger.info(
             "移交管理權 %s → %s（%s）", me["display_name"],
@@ -2442,7 +2442,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _post_message(
             room_id, None,
             "Hub 主持人接管了這個聊天室的管理權"
-            + ("" if previous else "（這個房間原本沒有管理員）"),
+            + ("" if previous else "（這個聊天室原本沒有管理員）"),
             kind="system", system_event="admin_claimed",
         )
         await events.notify(room_id)
@@ -2497,7 +2497,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 而它對非建立者一定回一筆 active participant——沒有 me 是不可能的
         if me is None:
             raise _err(403, "participant_not_active",
-                       "你已經不在這個聊天室裡了，無法執行房內的管理動作")
+                       "你已經不在這個聊天室裡了，無法執行聊天室內的管理動作")
         existing = await _pending_archive_request(room_id)
         if existing is not None:
             # 冪等：第二個人提同一件事，拿回的是既有那筆。**不新建**，
@@ -2693,7 +2693,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         room = await _room_or_404(room_id)
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            "改房間的名字", host)
+                            "改聊天室的名字", host)
         if room["name"] == body.name:
             return {"ok": True, "id": room_id, "name": body.name,
                     "changed": False}
@@ -2744,7 +2744,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "   AND b.visibility='private'", (room_id,))).fetchall()]
             if blocking:
                 raise _err(409, "private_board_attached",
-                           "這間房掛著私人板——先解除掛接再把房間改成公開",
+                           "這個聊天室掛著私人板——先解除掛接再把聊天室改成公開",
                            boards=blocking)
         await db.execute(
             "UPDATE room SET visibility=? WHERE id=?", (body.visibility, room_id)
@@ -2973,7 +2973,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "POST /api/rooms/{id}/join 的 session_key（body）")
         if not joining_key:
             raise _err(422, "session_key_required",
-                       "加入聊天室要帶 X-Session-Key——它是你在房裡的身分，"
+                       "加入聊天室要帶 X-Session-Key——它是你在聊天室裡的身分，"
                        "沒有它連你是誰都說不出來")
         # `role=human` 不只是換個圖示：人類在封存規則、完成別人的卡、確認
         # 週期無誤上都有額外的份量。bridge 手上就是主 token，分離期開始後
@@ -3041,7 +3041,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             if parent is None:
                 raise _err(404, "parent_not_found",
                            "找不到這個父成員，或它已經不在這個聊天室裡。"
-                           "subagent 必須依附於一個仍在房內的成員。")
+                           "subagent 必須依附於一個仍在聊天室內的成員。")
             if parent["ephemeral"]:
                 raise _err(400, "subagent_cannot_nest",
                            "subagent 不能再派 subagent。孫層會讓派生身分與"
@@ -3085,7 +3085,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                                   _party(request))):
             raise _err(403, "room_is_private",
                        "這是一個私人對話，必須先被邀請才能加入。"
-                       "請房內的成員從指派／邀請功能把你加進來。")
+                       "請聊天室內的成員從指派／邀請功能把你加進來。")
         # 同一 session 已在房內 → 冪等返回既有身分
         existing = await (
             await db.execute(
@@ -3100,7 +3100,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 共用一筆成員，其中一個結束就把另一個的身分收掉。
             # 派生 key 帶隨機段本來就不該撞；撞了就表示隨機段出問題，要看得見
             raise _err(409, "subagent_already_exists",
-                       f"這個 subagent 身分已經在房內（{existing['display_name']}）。"
+                       f"這個 subagent 身分已經在聊天室內（{existing['display_name']}）。"
                        "派生 session_key 應該帶隨機段以避免撞號——"
                        "撞到表示那段沒有生效。")
         if existing:
@@ -3306,7 +3306,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 東西。標記與解除要同一個規格
                 await _post_message(
                     room_id, None,
-                    f"板子的監督者 {room_sup['board_supervisor_name'] or name}"
+                    f"任務板的監督者 {room_sup['board_supervisor_name'] or name}"
                     " 回來了。",
                     kind="system", system_event="board_supervisor_returned",
                 )
@@ -3747,7 +3747,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchone()
         if target is None:
-            raise _err(404, "participant_not_found", "找不到這個成員，或已不在房內")
+            raise _err(404, "participant_not_found", "找不到這個成員，或已不在聊天室內")
         now = _now()
         # 被踢者與旗下 subagent 同一個 statement。子代理標 removed 不標
         # kicked——kicked 是對一個 session 的人為封鎖決定，而 subagent 只是
@@ -3891,7 +3891,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             missing = [a for a in body.attachment_ids if a not in found]
             if missing:
                 raise _err(422, "attachment_not_available",
-                           "附件不存在、不屬於這個房間，或已經附在別的訊息上")
+                           "附件不存在、不屬於這個聊天室，或已經附在別的訊息上")
         result = await _post_message(
             room_id, p["id"], body.content, mentions=body.mentions,
             reply_to=body.reply_to, card_refs=body.card_refs,
@@ -4330,7 +4330,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             winner = await _board_for_room(room_id)
             if winner is None:
                 raise _err(503, "board_attach_contended",
-                           "這間房的板正在被同時建立，稍後再試一次")
+                           "這個聊天室的板正在被同時建立，稍後再試一次")
             return winner["id"]
         # 🔑 **從這間房長出來的板，房裡當下的人就是它的成員。**
         #
@@ -4822,7 +4822,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = await _board_item_writer(row, participant_id, session_key)
         if not await _board_can_edit(row, me, host):
             raise _err(403, "not_board_editor",
-                       "只有這塊板的 owner、房間的 supervisor 或"
+                       "只有這塊板的 owner、聊天室的 supervisor 或"
                        "建立者可以改它")
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
@@ -6243,7 +6243,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         room = await _room_or_404(room_id)
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            "指定板子的監督者", host)
+                            "指定任務板的監督者", host)
         db = app.state.db
         # 建立者可能還沒加入自己的房（走 X-Session-Key 那條路），所以 me
         # 可能是 None——「誰指定的」那一欄要能容忍它
@@ -6264,7 +6264,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (body.participant_id.strip(), room_id))).fetchone()
             if target is None:
                 raise _err(404, "participant_not_found",
-                           "找不到這個成員——他不在這間房裡")
+                           "找不到這個成員——他不在這個聊天室裡")
             key = actor_key(target["session_key"])
         now = _now()
         if not key:
@@ -6276,7 +6276,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " WHERE id=?", (room_id,),
             )
             await _commit_with_retry(db)
-            await _post_message(room_id, None, "板子的監督者已取消指定",
+            await _post_message(room_id, None, "任務板的監督者已取消指定",
                                 kind="system", system_event="board_supervisor_set")
             return {"ok": True, "supervisor": None}
         # 名字／種類取快照：他離場之後畫面仍要說得出「本來是誰在看」
@@ -6308,7 +6308,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 就是用指派把他叫進來的，見本端點 docstring。
         await _post_message(
             room_id, None,
-            f"{name} 成為板子的監督者（{me['display_name'] if me else '主持人'} 指定）",
+            f"{name} 成為任務板的監督者（{me['display_name'] if me else '主持人'} 指定）",
             kind="system", system_event="board_supervisor_set",
             mentions=[name] if who else None,
         )
@@ -6351,7 +6351,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # **不可以安靜地標記**——那會變成「沒有人在監督，而且沒有人知道」
         await _post_message(
             room_id, None,
-            f"板子的監督者 {name} 已不在房內，需要重新指定。",
+            f"任務板的監督者 {name} 已不在聊天室內，需要重新指定。",
             kind="system", system_event="board_supervisor_left",
         )
 
@@ -6414,7 +6414,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _commit_with_retry(db)
         await _post_message(
             room_id, None,
-            f"板子摘要：{head}有變動（{sample}{more}）",
+            f"任務板摘要：{head}有變動（{sample}{more}）",
             kind="system", system_event="board_digest",
             mentions=[supervisor] if supervisor else None,
             reply_mentions_author=False,
@@ -6684,7 +6684,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # ——誰都可以把別人分派的工作抹掉，而卡上不會留下是誰做的
             if not await _can_assign_directly(row, me, host):
                 raise _err(403, "not_assign_admin",
-                           "取消指派要是這塊板的管理者（板 owner 或這間房的"
+                           "取消指派要是這塊板的管理者（板 owner 或這個聊天室的"
                            "建立者）——否則任何人都能抹掉別人分派的工作")
             seq = await _apply_assignment(row, None, "", "", me)
             await _commit_with_retry(db)
@@ -7433,7 +7433,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if visibility == "private" and room is not None \
                 and room["visibility"] != "private":
             raise _err(409, "private_board_public_room",
-                       "私人板只能掛進私人聊天室——把房間改成私人，"
+                       "私人板只能掛進私人聊天室——把聊天室改成私人，"
                        "或把這塊板改成公開",
                        room_id=room["id"], room_visibility=room["visibility"])
 
@@ -7486,7 +7486,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         name = board["name"] if board is not None else ""
         if not role:
             raise _err(403, "not_board_member",
-                       "你不是這塊板的成員——房裡的人不會自動變成板上的人。"
+                       "你不是這塊板的成員——聊天室裡的人不會自動變成板上的人。"
                        "請板的 owner 把你加進去。",
                        board_id=board_id, board_name=name)
         raise _err(403, "board_read_only", "你在這塊板上只能看",
@@ -7517,10 +7517,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             room = await _room_or_404(body.origin_room_id)
             if not host and actor_key(room["creator_session_key"]) != actor:
                 raise _err(403, "not_room_admin",
-                           "掛接要同時是這間房的管理者")
+                           "掛接要同時是這個聊天室的管理者")
             if await _board_for_room(body.origin_room_id) is not None:
                 raise _err(409, "room_already_has_board",
-                           "這間房已經掛著一塊板了")
+                           "這個聊天室已經掛著一塊板了")
             # 建的當下就掛房的話，同一道限制也要在這裡擋——否則
             # `attach_board` 那條路守著、這條路繞過去，而繞過去的結果
             # （私人板躺在公開房裡）事後看不出是從哪條路進來的
@@ -8822,9 +8822,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await db.execute(sql + " LIMIT 1", tuple(params))).fetchone()
             if only_archived is not None:
                 raise _err(409, "room_archived",
-                           "收件人只在已封存的聊天室裡——封存房唯讀，"
+                           "收件人只在已封存的聊天室裡——封存的聊天室唯讀，"
                            "這則判斷送不進去，也不會留在稽核串上。"
-                           "請在還活著的房裡說，或先解除封存。")
+                           "請在還活著的聊天室裡說，或先解除封存。")
         # 🔴 **領號要在守門之後。** `_next_seq_for_board` 會推進板的計數器，
         # 而被拒的那則不寫 event ⇒ 稽核串上會多一個沒有對應事件的空號。
         # `tests/test_board_event_completeness.py` 守的正是「每個被領走的號
@@ -10427,13 +10427,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         board = await _board_or_404(board_id)
         if board["status"] != "active":
-            raise _err(409, "board_archived", "封存的板不能掛接新的房間")
+            raise _err(409, "board_archived", "封存的板不能掛接新的聊天室")
         room = await _room_or_404(room_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id)
         await _board_member_or_403(board_id, actor, need_write=True)
         if not host and actor_key(room["creator_session_key"]) != actor:
             raise _err(403, "not_room_admin",
-                       "掛接要同時是這間房的管理者")
+                       "掛接要同時是這個聊天室的管理者")
         _private_board_needs_private_room(board["visibility"], room)
         db = app.state.db
         existing = await _board_for_room(room_id)
@@ -10441,7 +10441,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if existing is not None:
             if existing["id"] != board_id:
                 raise _err(409, "room_already_has_board",
-                           "這間房已經掛著另一塊板了",
+                           "這個聊天室已經掛著另一塊板了",
                            board_id=existing["id"], board_name=existing["name"])
             # 已經掛著同一塊板——**不早退**。App 建新板時先 POST /api/boards
             # 帶 origin_room_id（那時就掛好了），再回頭呼叫這裡要求匯入；
@@ -10525,7 +10525,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "UPDATE board_room SET detached_at=? WHERE board_id=? AND room_id=?"
             " AND detached_at IS NULL RETURNING id", (_now(), board_id, room_id))
         if await cur.fetchone() is None:
-            raise _err(404, "board_not_attached", "這塊板沒有掛在這間房上")
+            raise _err(404, "board_not_attached", "這塊板沒有掛在這個聊天室上")
         # 解除最後一間活著的房 ⇒ 追蹤者從此不會被主動叫醒。**不清掉他們的
         # 追蹤**（那是使用者的意圖），但要讓他們自己知道——通知的是追蹤者，
         # 不是按下解除的那個人：那兩群多半不重疊（艾斯維爾裁決 2026-09-02）
@@ -10776,7 +10776,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             return
         if me["status"] == "kicked":
             raise _err(403, "participant_kicked",
-                       "你已被移出這個聊天室，不能再改動房內的訊息")
+                       "你已被移出這個聊天室，不能再改動聊天室內的訊息")
         raise _err(403, "participant_not_active",
                    "你已經不在這個聊天室裡。讀得到歷史，但改不動它——寫入要求"
                    "的是此刻的成員資格，不是曾經有過")
@@ -10849,7 +10849,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 每個人都能改寫自己的進出紀錄
         if msg["kind"] != "chat":
             raise _err(422, "not_a_chat_message",
-                       "系統訊息不能編輯——它是房間對事實的紀錄，不是誰說的話")
+                       "系統訊息不能編輯——它是聊天室對事實的紀錄，不是誰說的話")
         if msg["deleted"]:
             raise _err(422, "message_deleted",
                        "這則訊息已經被撤回了。改一則撤回的訊息等於讓它復活，"
@@ -11008,7 +11008,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 靜靜建立一筆指派給空字串的話，發的人會以為叫到了人，
                 # 而那與成功長得一模一樣
                 raise _err(404, "participant_not_found",
-                           "這個房間裡沒有這個成員（含已離開的）")
+                           "這個聊天室裡沒有這個成員（含已離開的）")
             target_key = row["session_key"]
         if not target_key:
             raise _err(422, "target_required",
@@ -11559,9 +11559,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row is None:
             candidates = await _human_candidates(room_id)
             raise _err(404, "target_not_found",
-                       "指定的對象不在這個房間裡。"
-                       + (f"目前在房內的人類：{candidates}"
-                          if candidates else "房裡目前沒有人類可以回答。"))
+                       "指定的對象不在這個聊天室裡。"
+                       + (f"目前在聊天室內的人類：{candidates}"
+                          if candidates else "聊天室裡目前沒有人類可以回答。"))
         if row["role"] != "human":
             raise _err(422, "target_not_human",
                        "只能向人類提問；這個機制的用意就是在有人在的時候問人")
