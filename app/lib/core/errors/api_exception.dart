@@ -214,7 +214,7 @@ class MoveHalfDoneException extends ApiException {
   MoveHalfDoneException(this.newTaskId, this.cause)
       : super(
             'move_half_done',
-            '新卡已經建好了（在你選的清單上），但這張卡沒能標成「已搬走」：'
+            '新卡已經建好了（在你選的階段上），但這張卡沒能標成「已搬走」：'
             '${cause.message}　先過去看一眼再決定要不要重試——'
             '直接重按會再建一張。');
 

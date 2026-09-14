@@ -495,7 +495,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     );
     if (newId == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已搬走。新的那張卡在你選的清單上，這張指向它。')),
+      const SnackBar(content: Text('已搬走。新的那張卡在你選的階段上，這張指向它。')),
     );
   }
 

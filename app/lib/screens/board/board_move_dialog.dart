@@ -118,7 +118,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '「${widget.task.title}」會在你選的地方長出一張新卡（標題、描述、'
+              '「${widget.task.title}」會在你選的階段長出一張新卡（標題、描述、'
               '優先度都跟著走），這張則標成「已搬走」並指向那一張。'
               '\n\n搬錯了可以按「收回這裡」拿回來。',
               style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
@@ -171,13 +171,13 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             DropdownButtonFormField<String>(
               initialValue: _checklistId,
               isExpanded: true,
-              hint: Text(_objectiveId == null ? '先選週期' : '搬到哪份清單…',
+              hint: Text(_objectiveId == null ? '先選週期' : '搬到哪個階段…',
                   overflow: TextOverflow.ellipsis,
                   style: UepText.sans(size: 12, color: s.inkMute)),
               decoration: const InputDecoration(
                 isDense: true,
                 border: OutlineInputBorder(),
-                labelText: '清單',
+                labelText: '階段',
               ),
               style: UepText.sans(size: 12, color: s.ink),
               onChanged:
@@ -198,7 +198,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('這個週期底下沒有別的開著的清單可以放。',
+                child: Text('這個週期底下沒有別的開著的階段可以放。',
                     style: UepText.sans(size: 11.5, color: s.inkMute)),
               ),
             ],
