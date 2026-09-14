@@ -360,13 +360,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 點了訊息裡的卡片指涉：導到那塊板並把那張卡打開。
   ///
-  /// 走**房軸**（`/rooms/:roomId/board`）而不是板的權威路由——後者是另一個
-  /// 分頁，跳過去就離開了 ROOMS，人回不到剛剛那段對話（艾斯維爾 09/14）。
-  /// 卡片指涉本來就只指得到「這個房間掛接的板」，所以這裡不會指錯地方。
-  void _openCardRef(CardRef ref) {
-    if (ref.taskId.isEmpty) return;
+  /// 預設走**房軸**（`/rooms/:roomId/board`）而不是板的權威路由——後者是
+  /// 另一個分頁，跳過去就離開了 ROOMS，人回不到剛剛那段對話
+  /// （艾斯維爾 09/14）。
+  ///
+  /// ⚠️ **但指涉只在發文當下保證指著本房的板。** 房換過板之後，舊訊息指的
+  /// 是舊板，那張卡不在新板上——房軸開過去只會看到一塊沒有它的板，而且
+  /// 安靜地什麼都不發生。那種情況退回板軸：離開聊天室是代價，但看得到卡。
+  void _openCardRef(CardRef cardRef) {
+    if (cardRef.taskId.isEmpty) return;
+    final roomBoardId = ref.read(boardProvider(widget.roomId)).value?.boardId;
+    final stay = cardIsOnRoomBoard(cardRef.boardId, roomBoardId ?? '');
     context.go(cardRoute(
-        boardId: ref.boardId, taskId: ref.taskId, roomId: widget.roomId));
+        boardId: cardRef.boardId,
+        taskId: cardRef.taskId,
+        roomId: stay ? widget.roomId : null));
   }
 
   Future<void> _focusOn(int seq) async {

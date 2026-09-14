@@ -82,4 +82,37 @@ void main() {
       expect(objectiveOfTask(orphan, 't9'), isNull);
     });
   });
+
+  group('房換過板之後，舊訊息的指涉還指著舊板', () {
+    // 🔴 09/14 迴歸（本次改動自己造成的）：「一律走房軸」在換過板的房裡
+    // 會開到一塊沒有那張卡的板。而且它不報錯——卡沒被刪，preview 還是 ok，
+    // 所以 chip 看起來可以點，點了什麼都不會發生。
+    test('同一塊板 ⇒ 留在房軸，人回得去', () {
+      expect(cardIsOnRoomBoard('b1', 'b1'), isTrue);
+    });
+
+    test('🔴 指涉指著舊板 ⇒ 不留在房軸', () {
+      expect(cardIsOnRoomBoard('b1', 'b2'), isFalse);
+    });
+
+    test('板還沒載到 ⇒ 當成同一塊，走房軸', () {
+      // 房軸至少回得去；板軸是例外路徑不是預設，不確定時不該把人送出聊天室
+      expect(cardIsOnRoomBoard('b1', ''), isTrue);
+    });
+
+    test('指涉沒帶 board_id ⇒ 同上', () {
+      expect(cardIsOnRoomBoard('', 'b1'), isTrue);
+    });
+
+    test('組起來：舊板的卡走板軸，本房的卡走房軸', () {
+      String route(String refBoard, String roomBoard) => cardRoute(
+            boardId: refBoard,
+            taskId: 't1',
+            roomId: cardIsOnRoomBoard(refBoard, roomBoard) ? 'r1' : null,
+          );
+      expect(route('b1', 'b1'), '/rooms/r1/board?task=t1');
+      expect(route('b1', 'b2'), '/boards/b1?task=t1',
+          reason: '離開聊天室是代價，但那是唯一看得到這張卡的路');
+    });
+  });
 }

@@ -1957,3 +1957,16 @@ String cardRoute({
     roomId != null
         ? '/rooms/$roomId/board?task=$taskId'
         : '/boards/$boardId?task=$taskId';
+
+/// 這則指涉指的板，還是這間房**現在**掛著的那一塊嗎。
+///
+/// 🔴 房可以更換任務板（`board_switch`），而舊訊息裡的指涉仍指著舊板。
+/// 不比對就一律走房軸的話，那張卡不在新板上——畫面開了一塊沒有它的板，
+/// 而 chip 看起來完全正常：卡沒被刪，`card_preview.status` 還是 `ok`，
+/// 所以它可以點、點了什麼都不會發生，也不會報錯。
+///
+/// ⚠️ 有一邊不知道自己在哪塊板時（板還沒載到、指涉沒帶 board_id）**當成
+/// 同一塊**：房軸至少回得去，而那是多數情況下對的那條路。板軸是例外路徑，
+/// 不是預設——走它就離開聊天室了。
+bool cardIsOnRoomBoard(String refBoardId, String roomBoardId) =>
+    refBoardId.isEmpty || roomBoardId.isEmpty || refBoardId == roomBoardId;
