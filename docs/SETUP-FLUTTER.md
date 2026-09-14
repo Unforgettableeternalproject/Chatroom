@@ -275,7 +275,7 @@ MSBuild 的 FileTracker 不吃那個設定。
 （實測 `C:\cr-build` 可行，同一條路徑降到約 180 字元，餘裕 81）。
 `git worktree add C:\cr-build <ref>` 就夠，不必動 `.claude/worktrees/` 的慣例。
 
-⚠️ 另一種長得不一樣的 build 失敗：`LNK1104 無法開啟檔案 chatroom_app.exe`
+⚠️ 另一種長得不一樣的 build 失敗：`LNK1104 無法開啟檔案 Chatroom.exe`
 是**App 正開著**鎖住了 exe，與路徑長度無關。兩者解法不同，別混。
 
 ---

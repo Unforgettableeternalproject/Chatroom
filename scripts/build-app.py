@@ -10,7 +10,7 @@
    exe（LNK1104），但 `flutter build` 結尾只印一行 `Build process failed`，
    前面那行錯誤淹在輸出裡，而舊產物完好地留在原地。這支會先檢查行程。
 2. **exe 的時間戳不代表 Dart 程式碼有沒有更新。** 純 Dart 變更不會重寫
-   `chatroom_app.exe`（那是 C++ runner 殼），更新的是 `data/app.so`。
+   `Chatroom.exe`（那是 C++ runner 殼），更新的是 `data/app.so`。
    照 exe 判會誤報成「沒 rebuild」——這次就是這樣判的。
 """
 
@@ -88,12 +88,17 @@ def flutter_cmd() -> str:
 
 
 def running_app_pids() -> list[str]:
-    """回傳佔用輸出檔的 chatroom_app 行程。"""
+    """回傳佔用輸出檔的 Chatroom 行程。
+
+    ⚠️ 這裡的名字**跟著 exe 檔名走**（`BINARY_NAME`）。改了 exe 名而忘記
+    改這裡的話，這個閘不會報錯，只會永遠抓不到——然後 build 撞 LNK1104，
+    而下面那段「看起來成功的現場」就回來了。
+    """
     if sys.platform != "win32":
         return []
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
-         "Get-Process chatroom_app -ErrorAction SilentlyContinue"
+         "Get-Process Chatroom -ErrorAction SilentlyContinue"
          " | Select-Object -ExpandProperty Id"],
         capture_output=True, text=True,
     )
@@ -126,7 +131,7 @@ def commit_stamp() -> str:
 def main() -> int:
     pids = running_app_pids()
     if pids:
-        print(f"✕ chatroom_app 正在執行（PID {', '.join(pids)}）。", file=sys.stderr)
+        print(f"✕ Chatroom 正在執行（PID {', '.join(pids)}）。", file=sys.stderr)
         print("  linker 寫不進被佔用的 exe，而失敗會留下一個看起來成功的現場——",
               file=sys.stderr)
         print("  舊產物完好地待在原地。請先關閉 App 再重跑。", file=sys.stderr)

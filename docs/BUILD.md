@@ -23,7 +23,7 @@ C:\Users\Bernie\dev\flutter\bin\flutter.bat build windows --release
 ```
 
 產物：`app\build\windows\x64\runner\Release\`——**整個資料夾**就是可攜的
-發行單位（chatroom_app.exe + flutter_windows.dll + data\）。
+發行單位（Chatroom.exe + flutter_windows.dll + data\）。
 複製到未安裝 Flutter 的機器即可執行（需要 VC++ Redistributable 2015+，
 一般機器都有）。
 
