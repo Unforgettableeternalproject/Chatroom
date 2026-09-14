@@ -457,6 +457,9 @@ class _TunnelSection extends ConsumerWidget {
     final s = context.uep;
     final status = ref.watch(tunnelStatusProvider);
     final actions = ref.watch(hostActionsProvider);
+    final op = _opOf(ref, _tunnelKinds);
+    final pending =
+        (op != null && op['pending'] == true) ? op['kind'] as String? : null;
 
     return _Panel(
       title: '對外協作（隧道）',
@@ -479,11 +482,19 @@ class _TunnelSection extends ConsumerWidget {
             if (actions != null && Platform.isWindows) ...[
               const SizedBox(height: 14),
               Row(children: [
+                // 開隧道比啟動 Hub 更需要「進行中」：cloudflared 要先跟
+                // Cloudflare 要一個網址，那是**好幾秒**的往返。沒有進行中
+                // 狀態的話使用者會在網址出現之前再按一次，而每按一次就是
+                // 多一條隧道——下面那段註解說的「隧道越積越多」就是這樣來的
                 UepButton(
                   small: true,
                   variant: UepButtonVariant.outline,
-                  label: t.hasUrl ? '再開一條' : '開隧道',
-                  onPressed: () => _confirmTunnel(context, ref, actions),
+                  label: pending == 'tunnel_start'
+                      ? '開通中…'
+                      : (t.hasUrl ? '再開一條' : '開隧道'),
+                  onPressed: pending == 'tunnel_start'
+                      ? () {}
+                      : () => _confirmTunnel(context, ref, actions),
                 ),
                 if (t.hasUrl) ...[
                   const SizedBox(width: 10),
@@ -514,6 +525,11 @@ class _TunnelSection extends ConsumerWidget {
                   ),
                 ),
               ]),
+            ],
+            // 隧道自己的操作結果，放在它的按鈕底下
+            if (op != null) ...[
+              const SizedBox(height: 14),
+              _OpResult(result: op),
             ],
           ],
         ),
@@ -561,11 +577,27 @@ class _TunnelSection extends ConsumerWidget {
       ),
     );
     if (go != true) return;
-    await actions.startTunnel();
-    // 隧道要幾秒才拿得到網址（cloudflared 要先跟 Cloudflare 要一個），
-    // 立刻重讀只會看到「沒開」——那會讓人以為按了沒反應而再按一次
-    await Future<void>.delayed(const Duration(seconds: 4));
-    ref.invalidate(tunnelStatusProvider);
+    // 隧道要幾秒才拿得到網址（cloudflared 要先跟 Cloudflare 要一個）。
+    // 原本這裡是固定等 4 秒再 invalidate 一次——**等夠了就看得到、不夠就
+    // 看不到**，而「還在要網址」與「要失敗了」在畫面上長一樣。改成盯著
+    // 狀態等，並在等的期間把按鈕標成「開通中…」。
+    //
+    // 判準用 `hasUrl` 而不是隧道燈號：那盞燈在本機打不通自己的公網網址時
+    // 會是 unknown（hairpin，見 tunnelStatusProvider 的註解），拿它當成功
+    // 條件的話，一條開好的隧道會被判成沒開。
+    await _launchAndWatch(
+      ref,
+      kind: 'tunnel_start',
+      launch: actions.startTunnel,
+      ready: () async {
+        ref.invalidate(tunnelStatusProvider);
+        final t = await ref.read(tunnelStatusProvider.future);
+        return t.hasUrl;
+      },
+      okText: '隧道開了，網址在上面。',
+      timeoutText: '送出了，但十幾秒內還沒拿到網址——'
+          'cloudflared 可能還在要，也可能失敗了。看 logs\\tunnel-*.log。',
+    );
   }
 
   /// 關閉隧道。
@@ -631,6 +663,11 @@ class _ControlSection extends ConsumerWidget {
     // 那不是壞掉，是這台機器沒有那個東西（設計稿 §6.3）
     final windows = Platform.isWindows;
     final service = ref.watch(serviceStatusProvider).value;
+    // 進行中與結果都從 provider 讀，不放 State——這個區塊是 ConsumerWidget，
+    // 而且任何一次狀態刷新都會重建它（理由同 `lastDataOpProvider` 那段註解）
+    final op = _opOf(ref, _controlKinds);
+    final pending =
+        (op != null && op['pending'] == true) ? op['kind'] as String? : null;
 
     return _Panel(
       title: '啟動與自啟',
@@ -639,14 +676,22 @@ class _ControlSection extends ConsumerWidget {
         children: [
           if (windows) ...[
             Row(children: [
+              // 🔴 **啟動也要講結果，理由與旁邊那顆停止一樣**（停止那半的
+              // 註解已經寫過一次）。原本這裡是 `await startHub()` ＋ 等 3 秒
+              // ＋ invalidate，**期間畫面完全不動**：按下去沒有任何變化，
+              // 三秒後燈可能亮也可能不亮，而「還在啟動」與「根本沒起來」
+              // 在畫面上長一樣（艾斯維爾 09/14：按了不知道有沒有成功）。
+              //
+              // ⚠️ **停止那半的模式在這裡抄不動**：`startHub` 走
+              // `Process.start(detached)`，沒有 exit code 也沒有輸出可以解析
+              // ——腳本的結果拿不到。所以啟動的「結果」只能是**去問狀態**：
+              // 起來了沒。這是兩種操作的本質差別，不是少做一步。
               UepButton(
                 small: true,
-                label: '啟動 Hub',
-                onPressed: () async {
-                  await actions.startHub();
-                  await Future<void>.delayed(const Duration(seconds: 3));
-                  ref.invalidate(hostHealthProvider);
-                },
+                label: pending == 'hub_start' ? '啟動中…' : '啟動 Hub',
+                onPressed: pending == 'hub_start'
+                    ? () {}
+                    : () => _startHub(ref, actions),
               ),
               const SizedBox(width: 10),
               // 🔴 停止要放在啟動旁邊，不是放在「自啟」那一區。
@@ -731,10 +776,35 @@ class _ControlSection extends ConsumerWidget {
                 label: '開啟備份資料夾',
                 onPressed: actions.openBackups),
           ]),
+          // 這一區自己的操作結果。**放在按鈕底下**，不是放到頁尾那個
+          // 「資料與安全」框裡——見 `_controlKinds` 上方那段
+          if (op != null) ...[
+            const SizedBox(height: 14),
+            _OpResult(result: op),
+          ],
         ],
       ),
     );
   }
+
+  /// 啟動 Hub：送出之後盯 health 直到它起來。
+  ///
+  /// 判準用 `process.state == ok`——那是「這台機器上有 Hub 在跑」，不是
+  /// 「網路連得到」。啟動這件事要回答的正是前者。
+  Future<void> _startHub(WidgetRef ref, HostActions actions) =>
+      _launchAndWatch(
+        ref,
+        kind: 'hub_start',
+        launch: actions.startHub,
+        ready: () async {
+          ref.invalidate(hostHealthProvider);
+          final h = await ref.read(hostHealthProvider.future);
+          return h?.process.state == ProbeState.ok;
+        },
+        okText: 'Hub 起來了。',
+        timeoutText: '送出了，但十幾秒內還沒看到它起來——'
+            '可能還在啟動，也可能起不來。看 logs\\ 裡最新那份。',
+      );
 
   Future<void> _runService(WidgetRef ref, String action) async {
     final actions = ref.read(hostActionsProvider);
@@ -822,6 +892,58 @@ class LastDataOp extends Notifier<Map<String, dynamic>?> {
 final lastDataOpProvider =
     NotifierProvider<LastDataOp, Map<String, dynamic>?>(LastDataOp.new);
 
+/// 哪些 `kind` 屬於「啟動與自啟」那一區、哪些屬於「對外協作」。
+///
+/// 🔴 **結果要出現在按鈕旁邊。** 在這之前所有操作的結果都只畫在
+/// 「資料與安全」區塊裡（整頁的最後第二塊），於是按「停止 Hub」的人得往下
+/// 捲過兩個區塊、在一個標題寫著「資料與安全」的框裡找他剛才那個動作的
+/// 回應——多數人不會找到，而畫面看起來就是「按了沒反應」。
+///
+/// 記錄結果與**讓人看得到結果**是兩件事，前者 09/12 就做了，後者沒有。
+const _controlKinds = {'hub_start', 'hub_stop', 'service'};
+const _tunnelKinds = {'tunnel_start', 'tunnel_stop'};
+
+/// 取出屬於這一區的那筆結果；不是這一區的就當作沒有。
+Map<String, dynamic>? _opOf(WidgetRef ref, Set<String> kinds) {
+  final last = ref.watch(lastDataOpProvider);
+  if (last == null) return null;
+  return kinds.contains(last['kind']) ? last : null;
+}
+
+/// 送出一個 detached 啟動，然後**去問狀態**直到它起來或逾時。
+///
+/// ⚠️ 這是啟動類操作唯一能給的「結果」：`Process.start(detached)` 不等結束、
+/// 沒有 exit code 也沒有輸出。所以成功的證據不是腳本說什麼，是**狀態變了**。
+///
+/// 逾時不等於失敗，訊息要講成「還沒起來」並指向 log——講「失敗」會讓人去
+/// 重按，而那時第一個進程可能正要起來。
+Future<void> _launchAndWatch(
+  WidgetRef ref, {
+  required String kind,
+  required Future<void> Function() launch,
+  required Future<bool> Function() ready,
+  required String okText,
+  required String timeoutText,
+  int tries = 12,
+}) async {
+  final op = ref.read(lastDataOpProvider.notifier);
+  op.set({'kind': kind, 'pending': true, 'ok': true, 'detail': ''});
+  try {
+    await launch();
+  } on Object catch (e) {
+    op.set({'kind': kind, 'ok': false, 'error': '$e'});
+    return;
+  }
+  for (var i = 0; i < tries; i++) {
+    await Future<void>.delayed(const Duration(seconds: 1));
+    if (await ready()) {
+      op.set({'kind': kind, 'ok': true, 'detail': okText});
+      return;
+    }
+  }
+  op.set({'kind': kind, 'ok': true, 'detail': timeoutText});
+}
+
 /// 資料與安全——備份、換 token。
 ///
 /// 這兩件事擺在一起不是因為相似，而是因為**它們是這一頁唯二會改變
@@ -841,7 +963,14 @@ class _DataSectionState extends ConsumerState<_DataSection> {
     final s = context.uep;
     final actions = ref.watch(hostActionsProvider);
     if (actions == null) return const SizedBox.shrink();
+    // 只顯示**這一區自己的**結果。起停與隧道的結果現在畫在它們的按鈕旁邊，
+    // 再重複一份只會讓人以為剛剛按的動作發生了兩次
     final last = ref.watch(lastDataOpProvider);
+    final dataLast = last == null ||
+            _controlKinds.contains(last['kind']) ||
+            _tunnelKinds.contains(last['kind'])
+        ? null
+        : last;
 
     return _Panel(
       title: '資料與安全',
@@ -878,9 +1007,9 @@ class _DataSectionState extends ConsumerState<_DataSection> {
             '還原前 Hub 必須先停，而且會自動先備份現況。',
             style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
           ),
-          if (last != null) ...[
+          if (dataLast != null) ...[
             const SizedBox(height: 14),
-            _OpResult(result: last),
+            _OpResult(result: dataLast),
           ],
         ],
       ),
@@ -1144,10 +1273,29 @@ class _OpResult extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    // 還在跑。**這一格要存在**——按下去到結果出來之間有十幾秒，
+    // 那段空白正是艾斯維爾說的「不知道按了有沒有用」。
+    //
+    // ⚠️ **擺在成敗判斷之前**：進行中還沒有成敗可言，而 `ok` 缺席時
+    // `result['ok'] == true` 是 false ⇒ 會把一個正在跑的操作畫成
+    // 「失敗：不知道為什麼」。測試就是這樣抓到的。
+    if (result['pending'] == true) {
+      return Text(
+        result['kind'] == 'tunnel_start'
+            ? '正在開隧道…要跟 Cloudflare 要一個網址，這一步會等幾秒。'
+            : '正在啟動…起來之前上面那盞燈還會是紅的。',
+        style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
+      );
+    }
     final ok = result['ok'] == true;
     if (!ok) {
       return Text('失敗：${result['error'] ?? '不知道為什麼'}',
           style: UepText.code(size: 11.5, color: UepColors.errorText));
+    }
+    if (result['kind'] == 'hub_start' || result['kind'] == 'tunnel_start') {
+      // 逾時也走這裡：那不是失敗（進程可能正要起來），措辭在送出端寫好了
+      return Text('${result['detail'] ?? ''}',
+          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
     }
     if (result['kind'] == 'rotate') {
       return Column(
