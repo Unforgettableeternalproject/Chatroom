@@ -597,12 +597,26 @@ class _TunnelSection extends ConsumerWidget {
     // 上那份可能早就過期的快取：畫面記得「沒有網址」，而磁碟上其實躺著一條
     // 殘留的舊網址 ⇒ 快照記成空字串 ⇒ 之後輪詢讀到那條舊的，`!= ''` 成立
     // ⇒ **假綠燈，而且指向一條死掉的隧道**（審核用Codex 09/14）。
-    String beforeUrl = '';
+    //
+    // ⚠️ **pending 要在現讀之前掛上。** 那次現讀會去打外網 health，可能好
+    // 幾秒——這段期間按鈕若還能按，使用者會以為沒反應而再按一次，於是開出
+    // 第二條隧道（審核用Codex 09/14）。
+    final op = ref.read(lastDataOpProvider.notifier);
+    op.set({'kind': 'tunnel_start', 'pending': true, 'ok': true, 'detail': ''});
+    final String beforeUrl;
     try {
       ref.invalidate(tunnelStatusProvider);
       beforeUrl = (await ref.read(tunnelStatusProvider.future)).url;
-    } on Object {
-      beforeUrl = '';
+    } on Object catch (e) {
+      // 與 Hub 那半同一條規則：**快照答不出來就不動手。** 當成空字串照送的
+      // 話，一條殘留的舊網址會在下一輪被當成「新的」而假報成功。
+      op.set({
+        'kind': 'tunnel_start',
+        'ok': false,
+        'error': '查不到現在的隧道狀態，所以沒有送出任何指令（$e）。'
+            '先按上面的「重新檢查」看它現在是什麼樣子。',
+      });
+      return;
     }
     await _launchAndWatch(
       ref,
