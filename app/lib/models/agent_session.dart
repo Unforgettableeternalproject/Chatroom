@@ -50,6 +50,17 @@ class AgentSession {
   /// 它本來就還沒自報過。這是排序與摺疊的依據，不是過濾的依據。
   final bool labelSelfReported;
 
+  /// 這個 session 接入過聊天室沒有。
+  ///
+  /// **人在房內是最強的證據**，比自報過名字還強——所以它排在前面。
+  ///
+  /// ⚠️ 只看 [labelSelfReported] 會漏掉正在房裡的 agent：那面旗標要等
+  /// 對方主動碰一次 Hub 才會翻，而 Codex **沒有週期性心跳**，它只在真的
+  /// 呼叫 chatroom 工具時才報到。閒著的時候它就一直是 false，於是房裡
+  /// 明明坐著的那個 agent 被收進「尚未接入聊天室」（2026-09-14 實測，
+  /// 艾斯維爾在畫面上抓到）。
+  bool get linkedToChatroom => rooms.isNotEmpty || labelSelfReported;
+
   /// 這個 session 是不是跑在 [me] 這台機器上。
   ///
   /// 兩邊都要有值才算數，比對忽略大小寫——Windows 慣用大寫、Dart 拿到的

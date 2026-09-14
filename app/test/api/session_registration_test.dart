@@ -23,6 +23,23 @@ void main() {
         Dio(BaseOptions(baseUrl: 'http://test'))..httpClientAdapter = rec);
   });
 
+  group('已經在房裡的人不該出現在候選名單', () {
+    // 指派是「請一個還沒在場的人進來」。對已經在場的人再指派一次不會發生
+    // 任何事（join 冪等），而清單不表態的話，那個錯誤要等送出去才發現。
+    // Hub 從 09/12 就支援 exclude_room，App 一直沒接上——房裡坐著的 Codex
+    // 照樣出現在候選清單（2026-09-14 艾斯維爾在畫面上抓到）。
+    test('掃描候選時把目標房間排除掉', () async {
+      await api.scanSessions(excludeRoom: 'r1');
+      expect(rec.seen.single.queryParameters['exclude_room'], 'r1');
+    });
+
+    test('沒給房間就不送這個參數', () async {
+      await api.scanSessions();
+      expect(rec.seen.single.queryParameters.containsKey('exclude_room'),
+          isFalse);
+    });
+  });
+
   group('探索到的名字不可以蓋掉 agent 自報的', () {
     // App 掃 writer lock 發現一個 thread 時，它**不知道那個 agent 叫什麼**。
     // 實測：Codex 以 CHATROOM_DEFAULT_NAME=Codex-Sol 自報身分，而這裡的輪詢

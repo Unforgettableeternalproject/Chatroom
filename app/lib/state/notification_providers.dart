@@ -101,6 +101,11 @@ final notificationBootstrapProvider = Provider<void>((ref) {
 
   center.mode = settings.notifyMode;
 
+  // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）。
+  // 宣告提前到 followJoined 之前——房名要在跟房的當下就餵給它，
+  // 而不是等房裡有人講話
+  final dispatcher = ref.watch(codexDispatcherProvider);
+
   void followJoined() {
     final rooms = ref.read(roomListProvider('active')).value?.rooms;
     if (rooms == null) return;
@@ -116,6 +121,8 @@ final notificationBootstrapProvider = Provider<void>((ref) {
       );
     }
     center.retainOnly(joined.map((r) => r.id).toSet());
+    // board 通知要講得出房名，而安靜的房間永遠不會有訊息批次餵它
+    dispatcher.rememberRoomNames({for (final r in joined) r.id: r.name});
   }
 
   followJoined();
@@ -145,8 +152,6 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     await TaskbarBadge.instance.apply(currentUnhandled());
   });
 
-  // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）
-  final dispatcher = ref.watch(codexDispatcherProvider);
   final codexSub = center.fresh.listen(dispatcher.handle);
   // board 變動走 WS 的獨立事件，不在訊息流裡——沒接這條的話，agent 只有在
   // 自己呼叫 chatroom_wait 時才知道板子動了，而它正是醒不過來才需要被通知。

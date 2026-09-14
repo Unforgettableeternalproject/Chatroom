@@ -16,10 +16,14 @@ final roomAssignmentsProvider = FutureProvider.autoDispose
 
 /// Hub 掃描到的 agent session（active/idle）。指派畫面的對象清單，
 /// 與指派列表共用畫面層的週期 invalidate。
-final agentSessionsProvider =
-    FutureProvider.autoDispose<List<AgentSession>>((ref) async {
+///
+/// 參數是**要指派進去的那個房間**：已經在那個房裡的 agent 不列出來。
+/// 指派是「請一個還沒在場的人進來」，對已經在場的人再指派一次不會發生
+/// 任何事（join 冪等），而清單不表態的話那個錯誤要等送出去才發現。
+final agentSessionsProvider = FutureProvider.autoDispose
+    .family<List<AgentSession>, String>((ref, roomId) async {
   final api = ref.watch(assignmentsApiProvider);
-  return api.scanSessions();
+  return api.scanSessions(excludeRoom: roomId);
 });
 
 /// 已連上 Hub 的人類 session。邀請人類進房的候選清單。

@@ -350,6 +350,37 @@ void main() {
       expect(runs, isEmpty);
     });
 
+    test('🔴 還沒收過任何訊息就先收到 board 變動——房名照樣講得出來', () async {
+      // 房名原本只從訊息批次記，於是安靜的房間在 App 重啟後的第一個 board
+      // 事件會送出空字串（2026-09-14 實機 board_seq=7 正是如此，Codex 審出）。
+      // 房間列表那側本來就知道房名，跟房的當下餵進來就好。
+      final d = make();
+      d.rememberRoomNames({'r1': '設計討論'});
+      await d.handleBoardChange('r1', 3);
+      expect(payload(runs.first)['room_name'], '設計討論');
+    });
+
+    test('🔴 同一個水位不重複喚醒，也不往回送更舊的', () async {
+      // 同一次變動進來兩次的話：第一次立刻送、第二次進合併佇列，週期結束
+      // 又送一遍同樣的 seq。收到的人已經讀到更新的水位，卻被叫醒去看一個
+      // 比手上還舊的數字（實機：Codex 已讀到 10，連收兩次 9）。
+      final d = make();
+      await d.handleBoardChange('r1', 9);
+      expect(runs, hasLength(2));
+      runs.clear();
+
+      await d.handleBoardChange('r1', 9); // 同一次變動又進來一次
+      await d.pollAssignments();
+      expect(runs, isEmpty, reason: '同水位不再送第二遍');
+
+      await d.handleBoardChange('r1', 8); // 更舊的也不送
+      expect(runs, isEmpty);
+
+      await d.handleBoardChange('r1', 10); // 真的更新了才送
+      expect(runs, hasLength(2));
+      expect(payload(runs.first)['board_seq'], 10);
+    });
+
     test('通知帶得出房名——只給 roomId 的話收到的人不知道是哪個房', () async {
       final d = make();
       await d.handle(batch([msg(1)])); // 房名從訊息批次順手記下來

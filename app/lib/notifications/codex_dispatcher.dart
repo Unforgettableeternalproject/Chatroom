@@ -134,8 +134,19 @@ class CodexDispatcher {
   final Set<String> _joinNoticedThisTurn = {};
 
   /// roomId → 房名。board 事件只帶 roomId，但通知裡要講得出是哪個房——
-  /// 「某個房的板子動了」對收到的人沒有用。從訊息批次順手記下來。
+  /// 「某個房的板子動了」對收到的人沒有用。
+  ///
+  /// ⚠️ **不能只從訊息批次記**：安靜的房間一則訊息都沒有，App 重啟後
+  /// 第一個 board 事件就會送出空的房名（2026-09-14 實機 board_seq=7
+  /// 正是如此，Codex 審出）。所以房間列表那側也要餵一次。
   final Map<String, String> _roomNames = {};
+
+  /// 從房間列表餵房名。跟著 `follow` 的節奏走，不必等房裡有人講話。
+  void rememberRoomNames(Map<String, String> names) {
+    for (final e in names.entries) {
+      if (e.value.isNotEmpty) _roomNames[e.key] = e.value;
+    }
+  }
 
   /// 這個輪詢週期內已經為哪些房送過 board 通知（節流用）。
   final Set<String> _boardNoticedThisTick = {};
@@ -146,6 +157,16 @@ class CodexDispatcher {
   /// 收到的人要做的事是「去 chatroom_board 讀一次」，而那件事做一次就夠。
   /// 把中間每一次變動都送過去，對方讀到的還是同一塊板。
   final Map<String, int> _pendingBoards = {};
+
+  /// 每個房已經喚醒到哪個水位。
+  ///
+  /// 沒有它會「同水位重複喚醒 + 水位倒退」：同一次變動若進來兩次，第一次
+  /// 走立刻送、第二次被收進合併佇列，週期結束又送一遍同樣的 seq。收到的人
+  /// 已經讀到更新的水位了，卻被叫醒去看一個比手上還舊的數字
+  /// （2026-09-14 實機，Codex 已讀到 10 卻連收兩次 9）。
+  ///
+  /// 只前進：board_seq 是單調的，不比現在這個新就沒有東西要看。
+  final Map<String, int> _lastBoardSent = {};
 
   /// 🔴 **哪些 thread 正在處理一個 turn——目前沒有任何可用訊號。**
   ///
@@ -223,24 +244,37 @@ class CodexDispatcher {
   Future<void> handleBoardChange(String roomId, int boardSeq) async {
     if (!enabled) return;
     try {
-      if (!_boardNoticedThisTick.add(roomId)) {
+      if (_boardNoticedThisTick.contains(roomId)) {
         // 這個週期已經通知過了，只記下最新水位
         _pendingBoards[roomId] = boardSeq;
         return;
       }
-      await _dispatchBoard(roomId, boardSeq);
+      // ⚠️ 只有**真的送出去**才算用掉這個週期的名額。被水位守門擋下的
+      // 陳舊事件如果也記一筆，接在它後面的新變動就會被誤判成「這週期
+      // 已經通知過」而延到下一輪——測試抓到的正是這個
+      if (await _dispatchBoard(roomId, boardSeq)) {
+        _boardNoticedThisTick.add(roomId);
+      }
     } catch (e, st) {
       _log.severe('board 通知失敗（$roomId）：$e', e, st);
     }
   }
 
-  Future<void> _dispatchBoard(String roomId, int boardSeq) async {
+  /// 回傳是否真的送出去了。
+  Future<bool> _dispatchBoard(String roomId, int boardSeq) async {
+    // 不比已經送過的新就不送——重複喚醒去看同一塊板沒有意義，而帶著
+    // 比對方手上還舊的水位更會讓人以為漏了東西
+    if (boardSeq <= (_lastBoardSent[roomId] ?? -1)) {
+      _log.info('board 變動略過（${_roomLabel(roomId)}）：'
+          'seq $boardSeq 不新於已通知的 ${_lastBoardSent[roomId]}');
+      return false;
+    }
     final threads = threadOverride.isNotEmpty
         ? {threadOverride}
         : (await _roomRoutes(roomId)).values.expand((t) => t).toSet();
     if (threads.isEmpty) {
       _log.info('board 變動未投遞（${_roomLabel(roomId)}）：這個房裡沒有本機 Codex');
-      return;
+      return false;
     }
     final text =
         '[chatroom 通知] ${jsonEncode({
@@ -255,7 +289,9 @@ class CodexDispatcher {
         _log.warning('codex queue 轉送失敗（board_changed, thread=$thread）');
       }
     }
-    _publish('board 變動已投遞（${_roomLabel(roomId)}）');
+    _lastBoardSent[roomId] = boardSeq;
+    _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
+    return true;
   }
 
   String _roomLabel(String roomId) {

@@ -31,11 +31,21 @@ class AssignmentsApi {
   ///
   /// [includeHuman] 打開時連人類也列出來——邀請人類進房用的是同一份名錄，
   /// 因為那本來就是同一件事：把一個 session 請進一個房間。
-  Future<List<AgentSession>> scanSessions({bool includeHuman = false}) =>
+  /// [excludeRoom] 給房間 id 時，**已經是該房 active 成員的 session 不列出**。
+  /// 指派是「請一個還沒在場的人進來」——把已經在場的列進候選，使用者會指派
+  /// 他一次，然後得到一個什麼都沒發生的結果（join 是冪等的），而清單本身
+  /// 不表態的話那個錯誤要等指派送出去才發現。
+  Future<List<AgentSession>> scanSessions({
+    bool includeHuman = false,
+    String excludeRoom = '',
+  }) =>
       unwrap(() async {
         final res = await _dio.get<Map<String, dynamic>>(
           '/api/sessions',
-          queryParameters: {if (includeHuman) 'include_human': true},
+          queryParameters: {
+            if (includeHuman) 'include_human': true,
+            if (excludeRoom.isNotEmpty) 'exclude_room': excludeRoom,
+          },
         );
         return ((res.data?['sessions'] as List?) ?? const [])
             .map((e) => AgentSession.fromJson(e as Map<String, dynamic>))

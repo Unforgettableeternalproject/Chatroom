@@ -60,7 +60,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
     // session 掃描清單（active/idle 狀態）一併刷新
     _poll = Timer.periodic(const Duration(seconds: 10), (_) {
       ref.invalidate(roomAssignmentsProvider(widget.roomId));
-      ref.invalidate(agentSessionsProvider);
+      ref.invalidate(agentSessionsProvider(widget.roomId));
     });
   }
 
@@ -204,7 +204,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       ),
                       const SizedBox(width: 10),
                       InkWell(
-                        onTap: () => ref.invalidate(agentSessionsProvider),
+                        onTap: () =>
+                            ref.invalidate(agentSessionsProvider(roomId)),
                         child: Icon(Icons.refresh, size: 14, color: s.inkMute),
                       ),
                     ]),
@@ -305,7 +306,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   /// 掃描到的 agent session 清單：點選即填入 TARGET SESSION。
   Widget _buildSessionScan() {
     final s = context.uep;
-    final sessionsAsync = ref.watch(agentSessionsProvider);
+    final sessionsAsync = ref.watch(agentSessionsProvider(widget.roomId));
     return sessionsAsync.when(
       loading: () => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -350,9 +351,9 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         // 藏掉就指派不到了
         final primary = localHostName.isEmpty ? sessions : mine;
         final primaryKnown =
-            primary.where((x) => x.labelSelfReported).toList();
+            primary.where((x) => x.linkedToChatroom).toList();
         final primaryUnlinked =
-            primary.where((x) => !x.labelSelfReported).toList();
+            primary.where((x) => !x.linkedToChatroom).toList();
         return Column(children: [
           if (mine.isEmpty && others.isNotEmpty && localHostName.isEmpty)
             // 讀不到自己的主機名時無從分組，照列全部並說清楚為什麼
