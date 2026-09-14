@@ -95,6 +95,7 @@ class CodexDispatcher {
     Future<bool> Function(List<String> argv)? runProcess,
     List<String>? Function()? codexArgvResolver,
     this.activeThreadResolver,
+    this.busyThreadResolver,
     String? codexHome,
   }) : _runProcess = runProcess ?? _defaultRun,
        _codexArgvResolver = codexArgvResolver ?? _codexArgv,
@@ -113,6 +114,10 @@ class CodexDispatcher {
   final Future<bool> Function(List<String> argv) _runProcess;
   final List<String>? Function() _codexArgvResolver;
   final Set<String> Function()? activeThreadResolver;
+
+  /// 「哪些 thread 正在處理一個 turn」。**目前沒有任何可用訊號**——
+  /// 見 [busyThreadIds]。給 null 時一律視為沒人在忙。
+  final Set<String> Function()? busyThreadResolver;
   final String _codexHome;
 
   bool enabled = false;
@@ -125,36 +130,43 @@ class CodexDispatcher {
   final Set<String> _seenAssignments = {};
   bool _pollingAssignments = false;
 
-  /// 曾經在本機出現過 writer lock 的 thread。
-  ///
-  /// lock 只在 Codex 持有寫入鎖時存在，所以它同時回答了兩個不同的問題：
-  /// 「這個 thread 在這台機器上嗎」與「它現在忙不忙」。投遞時機反轉之後
-  /// 要在**沒有 lock 的那一刻**投遞，前一個問題就沒有現成答案了——不記住
-  /// 的話，反轉的結果是永遠投不出去。
-  ///
-  /// 只增不減：thread 不會從本機搬去別台。
-  final Set<String> _knownLocalThreads = {};
-
   /// 這個 turn 裡已經送過加入通知的 thread（節流用，見 [_dispatchJoins]）。
   final Set<String> _joinNoticedThisTurn = {};
 
-  /// 掃一次 lock，順手把看到的 thread 記進本機名冊。回傳的是**當下忙碌**
-  /// 的那些（有 lock ＝ 正在處理一個 turn）。
+  /// 🔴 **哪些 thread 正在處理一個 turn——目前沒有任何可用訊號。**
+  ///
+  /// 2026-09-14 實測推翻了先前的前提：`~/.codex/thread-writer-locks/` 的
+  /// lock 檔是 **Codex 進程啟動時建立、整個 session 期間都在**的，不是
+  /// 每個 turn 開關一次。證據是 lock 的 CreationTime 與 codex 進程的
+  /// StartTime 逐秒吻合，且數十分鐘內未再被修改。
+  ///
+  /// 把它當忙碌訊號的後果：每個活著的 Codex 都**永遠在忙**，mention 全數
+  /// 沉進補投佇列、等不到「空下來」，30 分鐘後逾時丟棄。實測 @ 一個閒著的
+  /// Codex 完全不會醒，而指派（不檢查忙碌）照常送達——「指派收得到、
+  /// @ 收不到」就是這麼來的。
+  ///
+  /// 所以這裡誠實回傳空集合：**沒有訊號就不要假裝有**。找到真的能回答
+  /// 「你在忙嗎」的介面時，插在這一個點就好，其餘邏輯都不必動。
+  Set<String> busyThreadIds() => busyThreadResolver?.call() ?? const {};
+
   Set<String> _scanBusyThreads() {
-    final busy = activeThreadIds();
-    _knownLocalThreads.addAll(busy);
+    final busy = busyThreadIds();
     // 空下來就重置加入通知的節流：它是 per-turn 的，不是永久靜音
     _joinNoticedThisTurn.removeWhere((t) => !busy.contains(t));
     _publish();
     return busy;
   }
 
-  /// 這台機器上的 Codex thread——**不分忙閒**。
+  /// 這台機器上活著的 Codex thread。
   ///
-  /// `activeThreadIds()` 只列當下持有 writer lock 的，也就是正在處理 turn
-  /// 的那些。拿它當「本機有哪些 Codex」的答案，會讓所有需要「閒著時也要
-  /// 做」的事情（報到、撈指派、投遞）在 agent 最閒的時候剛好停擺。
-  Set<String> _localThreads() => {...activeThreadIds(), ..._knownLocalThreads};
+  /// lock 的壽命就是 session 的壽命，所以它**精準**回答這個問題——
+  /// 一個進程結束、lock 消失，這裡就不再列它。
+  ///
+  /// ⚠️ 曾經有一份「只增不減」的本機名冊疊在這上面，理由是「Codex 閒著時
+  /// lock 會消失」。那個前提是錯的，而名冊的代價是：App 啟動以來見過的
+  /// 每個 thread 都被每 10 秒向 Hub 報到一次，早就結束的 session 被續命成
+  /// ACTIVE——實測本機 4 個 lock、指派名單卻列出 11 個。已移除。
+  Set<String> _localThreads() => activeThreadIds();
 
   /// 投不出去、等著補投的 mention。key 是 messageId（同一則只留一份）。
   ///
@@ -179,7 +191,7 @@ class CodexDispatcher {
 
   /// 重算計數並發布。[event] 給 null 時保留上一次的結果描述。
   void _publish([String? event]) {
-    final busy = activeThreadIds();
+    final busy = busyThreadIds();
     status.value = status.value.copyWith(
       pending: _pending.length,
       localThreads: _localThreads().length,
@@ -525,8 +537,7 @@ class CodexDispatcher {
 
   Future<Map<String, Set<String>>> _roomRoutes(String roomId) async {
     try {
-      // 「是不是本機的」用曾見過的名冊回答，不用當下的 lock——Codex 閒著
-      // 等輸入時掃不到 lock，而那正是該投遞的時刻。
+      // lock 在就代表那個 Codex 進程還活著，這裡問的正是這件事。
       final local = _localThreads();
       if (local.isEmpty) return const {};
       final sessions = await _fetchSessions();

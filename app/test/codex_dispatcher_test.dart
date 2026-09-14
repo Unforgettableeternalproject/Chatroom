@@ -81,7 +81,11 @@ void main() {
   late List<List<String>> runs;
   late Directory codexHome;
 
-  /// 本機當下持有 writer lock 的 thread ＝ **正在處理一個 turn**。
+  /// 本機**活著**的 Codex thread（writer lock 存在＝進程還在）。
+  /// 與忙碌無關——lock 是 session 全程都在的，2026-09-14 實測確認。
+  late Set<String> liveThreads;
+
+  /// 正在處理一個 turn 的 thread。這是**另一個訊號**，lock 答不了。
   /// `make` 預設讓兩個都忙著；投遞發生在它們空下來的時候，見 [settle]。
   late Set<String> busyThreads;
 
@@ -90,7 +94,9 @@ void main() {
     List<AgentSession>? sessions,
     Map<String, List<Assignment>> assignments = const {},
     Set<String>? activeThreads,
+    Set<String>? live,
   }) {
+    liveThreads = live ?? {threadA, threadB};
     busyThreads = activeThreads ?? {threadA, threadB};
     final d = CodexDispatcher(
       (_) async => members,
@@ -98,7 +104,8 @@ void main() {
           sessions ??
           [session(threadA, 'Codex-Sol'), session(threadB, 'Codex-Luna')],
       fetchAssignments: (thread) async => assignments[thread] ?? const [],
-      activeThreadResolver: () => busyThreads,
+      activeThreadResolver: () => liveThreads,
+      busyThreadResolver: () => busyThreads,
       runProcess: (argv) async {
         runs.add(argv);
         return true;
@@ -120,7 +127,8 @@ void main() {
   RoomFreshBatch batch(List<Message> msgs) =>
       RoomFreshBatch(roomId: 'r1', roomName: '設計討論', messages: msgs);
 
-  /// Codex 的 turn 結束、writer lock 消失，下一輪輪詢把累積的批次投出去。
+  /// Codex 的 turn 結束（**不是** lock 消失——那是進程結束），
+  /// 下一輪輪詢把累積的批次投出去。
   /// 忙碌期間累積、空下來才投，所以「投給誰、內容對不對」的斷言都要先
   /// 經過這一步——那不是這些測試的主題，只是它們的前置。
   Future<void> settle(CodexDispatcher d) async {
@@ -189,7 +197,8 @@ void main() {
   });
 
   test('Hub 中的遠端或非本機 thread 不由這台 App 投遞', () async {
-    final d = make(activeThreads: const {threadA});
+    // 本機只有 threadA 活著；訊息 @ 的 Codex-Luna 對應 threadB
+    final d = make(live: const {threadA}, activeThreads: const {});
     await d.handle(
       batch([
         msg(1, mentions: const ['Codex-Luna']),
@@ -252,7 +261,6 @@ void main() {
     // mention 那側早就改用「曾經見過 lock 的本機名冊」了（_roomRoutes），
     // 這裡是同一個道理的鏡像。
     final calls = <String>[];
-    var threads = <String>{threadA};
     var assignmentReady = false;
     final d = CodexDispatcher(
       (_) async => defaultMembers,
@@ -261,7 +269,7 @@ void main() {
         calls.add(thread);
         return assignmentReady ? [assignment('a1', threadA)] : const [];
       },
-      activeThreadResolver: () => threads,
+      activeThreadResolver: () => const {threadA},
       runProcess: (argv) async {
         runs.add(argv);
         return true;
@@ -270,13 +278,11 @@ void main() {
       codexHome: codexHome.path,
     )..enabled = true;
 
-    // 先忙一輪，讓 dispatcher 認得 threadA 是這台機器上的
     await d.pollAssignments();
     expect(calls, [threadA]);
     calls.clear();
 
-    // turn 結束，lock 消失。指派在它閒著的這段期間送進來。
-    threads = <String>{};
+    // 這個 Codex 閒著（沒在跑 turn），指派在這段期間送進來
     assignmentReady = true;
     await d.pollAssignments();
     expect(calls, [threadA], reason: '閒著不等於不在——報到不能停');
@@ -329,7 +335,7 @@ void main() {
   });
 
   test('找不到任何 Codex session 時安靜略過', () async {
-    final d = make(activeThreads: const {});
+    final d = make(live: const {}, activeThreads: const {});
     await d.handle(batch([msg(1)]));
     expect(runs, isEmpty);
   });
@@ -440,10 +446,10 @@ void main() {
     center.dispose();
   });
 
-  test('沒見過 lock 時留著，見過之後等它空下來才投（完整生命週期）', () async {
-    // writer lock 回答的是兩個不同的問題：「這個 thread 在這台機器上嗎」
-    // 與「它現在忙不忙」。舊的判讀只取後者、而且取反了——把「查得到 lock」
-    // 當成「投得出去」，於是恰好在它最忙的時候逐則入列，turn 結束後倒灌。
+  test('lock 還沒出現時留著，Codex 一活過來就投（完整生命週期）', () async {
+    // lock 回答的是「這個 Codex 進程在這台機器上活著嗎」——**只有這個**。
+    // 它答不了「正在處理 turn 嗎」（2026-09-14 實測：lock 是進程啟動時建立、
+    // 整個 session 都在）。所以有了 lock 就該投，不必再等它「空下來」。
     var threads = <String>{};
     final d = CodexDispatcher(
       (_) async => defaultMembers,
@@ -460,16 +466,10 @@ void main() {
     expect(runs, isEmpty, reason: '沒有正面證據說它在這台機器上');
     expect(d.pendingCount, 1, reason: '但要留著');
 
-    // Codex 開始處理一個 turn：這下知道它是本機的了，可是它正忙
+    // Codex 進程起來了，lock 出現——這下知道它是本機的，而且沒有忙碌閘門
     threads = {threadA, threadB};
     await d.pollAssignments();
-    expect(runs, isEmpty, reason: '忙碌期間入列的下場就是 turn 結束後倒灌');
-    expect(d.pendingCount, 1);
-
-    // turn 結束，lock 消失——這才是該投的時刻
-    threads = <String>{};
-    await d.pollAssignments();
-    expect(runs, hasLength(1));
+    expect(runs, hasLength(1), reason: '活著就投，不必等它「空下來」');
     expect(target(runs.single), threadA);
     expect(payload(runs.single)['latest']['content'], '@Codex-Sol 在嗎');
     expect(d.pendingCount, 0, reason: '送到了就不再留');
@@ -491,7 +491,8 @@ void main() {
     final d = CodexDispatcher(
       (_) async => defaultMembers,
       fetchSessions: () async => [session(threadA, 'Codex-Sol')],
-      activeThreadResolver: () => busy,
+      activeThreadResolver: () => const {threadA},
+      busyThreadResolver: () => busy,
       runProcess: (argv) async {
         if (firstCall) {
           firstCall = false;
@@ -616,27 +617,46 @@ void main() {
     expect(d.pendingCount, 0);
   });
 
-  test('busy 期間認得的本機 thread，idle 之後仍認得出來', () async {
-    // 沒有 lock 時 activeThreadIds() 是空的，而它正是「這個 thread 是不是
-    // 本機的」唯一來源。不記住的話，反轉之後永遠投不出去——查不到要投給誰。
-    final active = <String>{threadA};
-    final d = make(activeThreads: active);
-    await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
-    expect(runs, isEmpty);
+  test('🔴 lock 消失就不再向 Hub 報到——結束的 session 不可以被續命', () async {
+    // 曾經有一份「只增不減」的本機名冊疊在 lock 上面，理由是「Codex 閒著
+    // 時 lock 會消失」。那個前提是錯的，而代價是：App 啟動以來見過的每個
+    // thread 每 10 秒被報到一次，早就結束的 session 在指派 UI 上永遠 ACTIVE。
+    // 實測本機 4 個 lock、候選名單卻列出 11 個。
+    final checkedIn = <String>[];
+    final live = <String>{threadA, threadB};
+    final d = CodexDispatcher(
+      (_) async => defaultMembers,
+      fetchSessions: () async => const [],
+      fetchAssignments: (thread) async {
+        checkedIn.add(thread);
+        return const [];
+      },
+      activeThreadResolver: () => live,
+      runProcess: (argv) async {
+        runs.add(argv);
+        return true;
+      },
+      codexArgvResolver: () => ['codex-bin'],
+      codexHome: codexHome.path,
+    )..enabled = true;
 
-    active.clear();
     await d.pollAssignments();
-    expect(runs, hasLength(1), reason: 'threadA 已知是本機的，不因 lock 消失而失憶');
-    expect(target(runs.single), threadA);
+    expect(checkedIn, [threadA, threadB]);
+
+    // threadB 的 Codex 收掉了，lock 隨之消失
+    checkedIn.clear();
+    live.remove(threadB);
+    await d.pollAssignments();
+    expect(checkedIn, [threadA], reason: '死掉的那個不可以繼續報到');
   });
 
-  test('從未見過 lock 的 thread 不投——那不是本機的', () async {
-    // 與上一條的分界：沒有正面證據說它在這台機器上，就不能投。
-    final d = make(activeThreads: const {});
+  test('沒有 lock 的 thread 不投——那台機器上沒有這個 Codex', () async {
+    // 與上一條的分界：沒有正面證據說它在這台機器上活著，就不能投。
+    final d = make(live: const {});
     await d.handle(batch([msg(1, content: '@Codex-Sol 在嗎')]));
     await d.pollAssignments();
     expect(runs, isEmpty);
-    expect(d.pendingCount, 1, reason: '留著等它出現過一次 lock');
+    expect(d.pendingCount, 1, reason: '留著等它活過來');
   });
 
   /// 🔴 忙碌期間的加入事件逐筆入列（原卡 1e3ce054）。
