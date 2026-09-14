@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -379,6 +380,51 @@ void main() {
       await d.handleBoardChange('r1', 10); // 真的更新了才送
       expect(runs, hasLength(2));
       expect(payload(runs.first)['board_seq'], 10);
+    });
+
+    test('🔴 並行進來的同一個事件只喚醒一次', () async {
+      // boardChanged.listen 的 callback 是 unawaited 的，兩個事件會並行。
+      // 守門若落在 await 的另一側，兩邊都會通過而各送一次（Codex 審出）。
+      final d = make();
+      await Future.wait([
+        d.handleBoardChange('r1', 9),
+        d.handleBoardChange('r1', 9),
+      ]);
+      expect(runs, hasLength(2), reason: '兩個 thread 各一則，不是四則');
+    });
+
+    test('🔴 投遞還沒完成時進來的新水位不另外送，也不會把水位寫回去', () async {
+      // 原本的形狀：seq=9 還在 await 時 seq=10 進來，兩邊都通過守門；
+      // 若 10 先完成、9 後完成，9 會把 _lastBoardSent 從 10 寫回 9。
+      final gate = Completer<void>();
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async =>
+            [session(threadA, 'Codex-Sol'), session(threadB, 'Codex-Luna')],
+        activeThreadResolver: () => {threadA, threadB},
+        runProcess: (argv) async {
+          runs.add(argv);
+          if (payload(argv)['board_seq'] == 9) await gate.future;
+          return true;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
+      final first = d.handleBoardChange('r1', 9); // 卡在投遞裡
+      await Future<void>.delayed(Duration.zero);
+      await d.handleBoardChange('r1', 10); // 投遞進行中又來一個更新的
+      expect(runs.where((r) => payload(r)['board_seq'] == 10), isEmpty,
+          reason: '還在送上一則，這則要留到週期結束');
+
+      gate.complete();
+      await first;
+      await d.pollAssignments();
+
+      final seqs = runs.map((r) => payload(r)['board_seq']).toList();
+      expect(seqs.where((x) => x == 9), hasLength(2), reason: '9 只送一輪');
+      expect(seqs.where((x) => x == 10), hasLength(2), reason: '10 由週期結束補送');
+      expect(seqs.last, 10, reason: '水位只能往前——9 不可以排在 10 後面');
     });
 
     test('通知帶得出房名——只給 roomId 的話收到的人不知道是哪個房', () async {

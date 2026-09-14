@@ -243,32 +243,55 @@ class CodexDispatcher {
   /// 對方的 queue 塞滿同一件事。
   Future<void> handleBoardChange(String roomId, int boardSeq) async {
     if (!enabled) return;
+    // 🔴 判斷與佔位**全部在第一個 await 之前**同步做完。
+    //
+    // `boardChanged.listen` 的 callback 是 unawaited 的，兩個事件會並行
+    // 進來。把佔位放在 await 之後，那段空窗會讓兩邊都通過守門各送一次；
+    // 更糟的是先送出的 seq=10 會被後完成的 seq=9 把水位寫回去
+    // （Codex 09/14 審出——我前一版把佔位移到 await 之後，正是為了修
+    // 另一個 bug，結果換來這個）。
+    final previous = _lastBoardSent[roomId] ?? -1;
+    if (boardSeq <= previous) {
+      _log.info('board 變動略過（${_roomLabel(roomId)}）：'
+          'seq $boardSeq 不新於已通知的 $previous');
+      return; // 陳舊：不佔名額，後面真正新的變動才送得出去
+    }
+    if (_boardNoticedThisTick.contains(roomId)) {
+      // 這個週期已經通知過了，留**最高**水位——並行進來的不保證由新到舊
+      final pending = _pendingBoards[roomId] ?? -1;
+      if (boardSeq > pending) _pendingBoards[roomId] = boardSeq;
+      return;
+    }
+    _boardNoticedThisTick.add(roomId);
+    _lastBoardSent[roomId] = boardSeq;
+    var sent = false;
     try {
-      if (_boardNoticedThisTick.contains(roomId)) {
-        // 這個週期已經通知過了，只記下最新水位
-        _pendingBoards[roomId] = boardSeq;
-        return;
-      }
-      // ⚠️ 只有**真的送出去**才算用掉這個週期的名額。被水位守門擋下的
-      // 陳舊事件如果也記一筆，接在它後面的新變動就會被誤判成「這週期
-      // 已經通知過」而延到下一輪——測試抓到的正是這個
-      if (await _dispatchBoard(roomId, boardSeq)) {
-        _boardNoticedThisTick.add(roomId);
-      }
+      sent = await _dispatchBoard(roomId, boardSeq);
     } catch (e, st) {
       _log.severe('board 通知失敗（$roomId）：$e', e, st);
     }
+    if (!sent) _releaseBoardSlot(roomId, boardSeq, previous);
   }
 
-  /// 回傳是否真的送出去了。
-  Future<bool> _dispatchBoard(String roomId, int boardSeq) async {
-    // 不比已經送過的新就不送——重複喚醒去看同一塊板沒有意義，而帶著
-    // 比對方手上還舊的水位更會讓人以為漏了東西
-    if (boardSeq <= (_lastBoardSent[roomId] ?? -1)) {
-      _log.info('board 變動略過（${_roomLabel(roomId)}）：'
-          'seq $boardSeq 不新於已通知的 ${_lastBoardSent[roomId]}');
-      return false;
+  /// 沒送成就把名額與水位還回去，否則這一則變動從此沒有人會知道。
+  ///
+  /// 還原是安全的：佔位期間並行進來的事件都被正確地收進了 pending，
+  /// 它們不會因為這次還原而漏掉。
+  void _releaseBoardSlot(String roomId, int claimed, int previous) {
+    _boardNoticedThisTick.remove(roomId);
+    if (_lastBoardSent[roomId] != claimed) return; // 已經被更新的蓋過，別動
+    if (previous < 0) {
+      _lastBoardSent.remove(roomId);
+    } else {
+      _lastBoardSent[roomId] = previous;
     }
+  }
+
+  /// 純粹把通知送出去，回傳是否真的送成了。
+  ///
+  /// **守門（陳舊判斷、佔名額、推水位）一律在呼叫端同步做完**——放進來的話
+  /// 又會落在 await 的另一側，那正是並行送兩次的成因。
+  Future<bool> _dispatchBoard(String roomId, int boardSeq) async {
     final threads = threadOverride.isNotEmpty
         ? {threadOverride}
         : (await _roomRoutes(roomId)).values.expand((t) => t).toSet();
@@ -289,7 +312,6 @@ class CodexDispatcher {
         _log.warning('codex queue 轉送失敗（board_changed, thread=$thread）');
       }
     }
-    _lastBoardSent[roomId] = boardSeq;
     _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
     return true;
   }
@@ -604,14 +626,21 @@ class CodexDispatcher {
       // 同一次變動可能被送兩遍。
       final coalesced = Map<String, int>.from(_pendingBoards);
       _pendingBoards.clear();
+      // 名額在**進入迴圈前**就放開：期間並行進來的新變動該由 leading edge
+      // 立刻送，不必等下一個週期
+      _boardNoticedThisTick.clear();
       for (final entry in coalesced.entries) {
+        final previous = _lastBoardSent[entry.key] ?? -1;
+        if (entry.value <= previous) continue;
+        _lastBoardSent[entry.key] = entry.value; // 同步佔住，理由同上
+        var sent = false;
         try {
-          await _dispatchBoard(entry.key, entry.value);
+          sent = await _dispatchBoard(entry.key, entry.value);
         } catch (e) {
           _log.warning('board 合併通知失敗（${entry.key}）：$e');
         }
+        if (!sent) _releaseBoardSlot(entry.key, entry.value, previous);
       }
-      _boardNoticedThisTick.clear();
       // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
       // 要等的東西是同一件事
       try {
