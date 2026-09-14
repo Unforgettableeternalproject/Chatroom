@@ -28,8 +28,10 @@ if (-not $Out) {
     $Out = Join-Path $repo "app\windows\runner\resources\app_icon.ico"
 }
 
-$bmpSizes = @(16, 24, 32, 48, 64, 128)   # BMP(DIB)：相容路徑
-$pngSizes = @(256)                        # PNG 內嵌：256 只有這條路
+# 20 與 40 是 125%／250% DPI 的工作列尺寸。少了它們不會壞，但 Windows 會拿
+# 鄰近的張去縮，而縮放過的小圖示正是最容易糊的那種。補齊的成本是兩個數字。
+$bmpSizes = @(16, 20, 24, 32, 40, 48, 64, 128)   # BMP(DIB)：相容路徑
+$pngSizes = @(256)                                # PNG 內嵌：256 只有這條路
 
 $src = [System.Drawing.Image]::FromFile((Resolve-Path $Source))
 if ($src.Width -lt 256 -or $src.Height -lt 256) {
