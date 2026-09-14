@@ -738,8 +738,17 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 這個 label 是 agent 自己報的，還是別人探索到的？
     # App 只是在 lock 目錄看到一個檔案，它不知道那個 agent 叫什麼——
     # 探索到的名字只能在還沒有人自報時當佔位，不可以蓋掉自報的
+    #
+    # ⚠️ 預設 **0**（還沒看過自報）。一開始設 1 是怕升級的瞬間所有既有
+    # session 都被收進摺疊區，結果是：舊資料全被當成已自報，而 fallback
+    # 名字又不准動已自報的列——整個機制對既有資料**永遠不會生效**
+    # （2026-09-14 對正式 Hub 實測，16 筆全是 True）。
+    #
+    # 設 0 之所以安全，是因為這一欄**每一次自報都會被翻回 1**：活著的
+    # agent 下一次心跳（最長 65 秒）就自己修好了，留在摺疊區的正好是
+    # 已經不在的那些。升級後短暫收起，好過一個永遠不作用的欄位。
     ("session", "label_self_reported",
-     "label_self_reported INTEGER NOT NULL DEFAULT 1"),
+     "label_self_reported INTEGER NOT NULL DEFAULT 0"),
     # 指派者的群。指派給一個**還沒上線**的 key 時建立當下判不了群，所以
     # 記下來，等兌換（join 帶 assignment_id）那一刻再比一次——兩端都關，
     # 否則「先指派、對方稍後用別群的憑證上線」就是一條繞道
@@ -1115,7 +1124,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 1
+DATA_VERSION = 2
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1135,6 +1144,17 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         # 這與 `room.visibility` 當初的遷移是同一個判斷：「把既有的東西悄悄
         # 變成私人，等於在使用者毫不知情的情況下讓它們從別人的列表上消失」。
         await db.execute("UPDATE board SET visibility='public'")
+    if version < 2:
+        # `label_self_reported` 第一版用 `DEFAULT 1` 加欄，於是既有的列全被
+        # 當成「agent 自己報的」——而探索到的名字不准動已自報的列，整個
+        # 機制對既有資料**永遠不會生效**（2026-09-14 對正式 Hub 實查，
+        # 16 筆全是 True，其中大半是 App 掃 writer lock 編出來的尾碼）。
+        #
+        # 改 DDL 的預設值救不了已經加過欄的 DB，所以在這裡歸零一次。
+        # 安全的理由與欄位本身相同：**每一次自報都會把它翻回 1**，活著的
+        # agent 下一次心跳（最長 65 秒）就自己修好，留在「尚未接入聊天室」
+        # 的正好是已經不在的那些。
+        await db.execute("UPDATE session SET label_self_reported=0")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

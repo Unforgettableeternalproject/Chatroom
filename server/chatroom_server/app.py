@@ -1469,9 +1469,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             " label=CASE WHEN excluded.label!='' AND NOT (?"
             "   AND session.label_self_reported) THEN excluded.label"
             "   ELSE session.label END,"
-            " label_self_reported=CASE WHEN excluded.label!=''"
-            "   AND NOT (? AND session.label_self_reported) THEN ?"
-            "   ELSE session.label_self_reported END,"
+            # 旗標記的是「**有沒有見過自報**」，與這次有沒有帶 label 無關。
+            # 綁在 label 非空上的話，沒設 CHATROOM_DEFAULT_NAME 的 agent
+            # 即使天天在講話也永遠翻不過來
+            " label_self_reported=CASE WHEN ? THEN session.label_self_reported"
+            "   ELSE 1 END,"
             " last_ip=COALESCE(excluded.last_ip, session.last_ip),"
             # host 同 kind/label：只在帶到非空值時覆寫。舊 bridge 不自報，
             # 不能因為它呼叫了一次就把已知的主機名洗掉
@@ -1481,8 +1483,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             " ELSE session.party END",
             (session_key, kind or "", label or "", now, now, ip, host or "",
              party or "", 0 if label_fallback else 1,
-             1 if label_fallback else 0, 1 if label_fallback else 0,
-             0 if label_fallback else 1),
+             # 下面兩個依序對應 label 與 label_self_reported 的 CASE 條件
+             1 if label_fallback else 0, 1 if label_fallback else 0),
         )
         # 首次插入時 kind 空字串會落庫，補回預設值
         await db.execute(

@@ -415,3 +415,80 @@ async def test_self_report_after_discovery_takes_over(client):
     row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
     assert row["label"] == "Codex-Sol"
     assert row["label_self_reported"] is True
+
+
+async def test_heartbeat_flips_flag_even_without_a_label(client):
+    """旗標記的是「見過自報沒有」，不是「這次有沒有帶名字」。
+
+    綁在 label 非空上的話，沒設 CHATROOM_DEFAULT_NAME 的 agent 就算天天在
+    講話也永遠翻不過來，會一直待在「尚未接入聊天室」那一區。
+    """
+    key = "codex-01a09e22-0000-7000-8000-000000000001"
+    # App 先探索到它
+    await client.get("/api/assignments", params={"session_key": key,
+                                                 "kind": "codex",
+                                                 "label": "Codex-00000001",
+                                                 "label_fallback": "true"})
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label_self_reported"] is False
+
+    # agent 自己來報到，但沒設預設代稱（label 空）
+    await client.get("/api/assignments", params={"session_key": key,
+                                                 "kind": "codex"})
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label_self_reported"] is True, "自報過就是自報過，與有沒有帶名字無關"
+    assert row["label"] == "Codex-00000001", "但也不該把已有的佔位名字洗成空"
+
+
+async def test_discovery_never_marks_itself_as_self_reported(client):
+    """探索重複多少次都不會把自己升格成自報——否則第一次探索之後，
+    真正的 agent 就再也換不掉那個名字了。"""
+    key = "codex-01a09e22-0000-7000-8000-000000000002"
+    for _ in range(3):
+        await client.get("/api/assignments", params={"session_key": key,
+                                                     "kind": "codex",
+                                                     "label": "Codex-00000002",
+                                                     "label_fallback": "true"})
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label_self_reported"] is False
+
+    await client.get("/api/assignments", params={"session_key": key,
+                                                 "kind": "codex",
+                                                 "label": "Codex-Sol"})
+    r = await client.get("/api/sessions")
+    row = next(s for s in r.json()["sessions"] if s["session_key"] == key)
+    assert row["label"] == "Codex-Sol"
+
+
+async def test_existing_rows_are_reset_not_grandfathered(tmp_path):
+    """欄位第一版用 DEFAULT 1 加進去，既有列全被當成已自報——而探索到的
+    名字不准動已自報的列，機制對既有資料永遠不生效。改 DDL 救不了已經加過
+    欄的 DB，所以要有一次資料歸零。"""
+    import aiosqlite
+
+    from chatroom_server.db import open_db
+
+    db_path = str(tmp_path / "legacy.db")
+    # 先開一次，拿到完整 schema
+    db = await open_db(db_path)
+    await db.execute(
+        "INSERT INTO session (session_key, kind, label, first_seen_at,"
+        " last_seen_at, label_self_reported) VALUES"
+        " ('codex-legacy','codex','Codex-deadbeef','2026-09-01T00:00:00Z',"
+        "  '2026-09-01T00:00:00Z', 1)")
+    # 倒回資料遷移之前的版次，模擬「欄位已經用舊預設加過了」的舊庫
+    await db.execute("PRAGMA user_version=1")
+    await db.commit()
+    await db.close()
+
+    db = await open_db(db_path)
+    row = await (await db.execute(
+        "SELECT label_self_reported, label FROM session"
+        " WHERE session_key='codex-legacy'")).fetchone()
+    assert row["label_self_reported"] == 0, "既有列要歸零，否則機制永遠不生效"
+    assert row["label"] == "Codex-deadbeef", "名字本身不動——歸零的是旗標"
+    await db.close()
+    assert aiosqlite  # 用到才 import，避免 lint 抱怨
