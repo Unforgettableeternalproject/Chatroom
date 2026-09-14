@@ -193,6 +193,9 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     mentionSub.cancel();
     codexSub.cancel();
     codexBoardSub.cancel();
+    // board 的 debounce／max-wait 計時器要收掉，否則它們會在一個已經沒有
+    // 人在聽的 dispatcher 上繼續燒
+    dispatcher.dispose();
     codexAssignmentPoll.cancel();
     activitySub.cancel();
     refreshDebounce?.cancel();

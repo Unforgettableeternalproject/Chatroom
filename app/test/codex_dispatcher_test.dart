@@ -11,6 +11,54 @@ import 'package:chatroom_app/notifications/notification_center.dart';
 import 'package:chatroom_app/ws/room_feed.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// 可控時鐘：測試自己決定計時器什麼時候到期。
+///
+/// board 通知的整個重點就是「**什麼時候**送」——用真的時鐘測等於在測運氣，
+/// 而且一條 3 秒的 debounce 會讓整份測試跑起來像在罰站。
+class FakeClock {
+  final List<FakeTimer> pending = [];
+
+  Timer schedule(Duration d, void Function() cb) {
+    final t = FakeTimer(d, cb, this);
+    pending.add(t);
+    return t;
+  }
+
+  /// 讓所有等這個時長的計時器到期。
+  void fire(Duration d) {
+    for (final t in [...pending]) {
+      if (t.duration == d && t.isActive) {
+        t.cancel();
+        t.callback();
+      }
+    }
+  }
+
+  bool armed(Duration d) =>
+      pending.any((t) => t.duration == d && t.isActive);
+}
+
+class FakeTimer implements Timer {
+  FakeTimer(this.duration, this.callback, this.owner);
+
+  final Duration duration;
+  final void Function() callback;
+  final FakeClock owner;
+  bool _active = true;
+
+  @override
+  bool get isActive => _active;
+
+  @override
+  int get tick => 0;
+
+  @override
+  void cancel() {
+    _active = false;
+    owner.pending.remove(this);
+  }
+}
+
 const threadA = '019d0000-0000-7000-8000-000000000001';
 const threadB = '019d0000-0000-7000-8000-000000000002';
 
@@ -89,6 +137,7 @@ void main() {
   /// 正在處理一個 turn 的 thread。這是**另一個訊號**，lock 答不了。
   /// `make` 預設讓兩個都忙著；投遞發生在它們空下來的時候，見 [settle]。
   late Set<String> busyThreads;
+  late FakeClock clock;
 
   CodexDispatcher make({
     RoomMembers members = defaultMembers,
@@ -98,6 +147,7 @@ void main() {
     Set<String>? live,
   }) {
     liveThreads = live ?? {threadA, threadB};
+    clock = FakeClock();
     busyThreads = activeThreads ?? {threadA, threadB};
     final d = CodexDispatcher(
       (_) async => members,
@@ -107,6 +157,7 @@ void main() {
       fetchAssignments: (thread) async => assignments[thread] ?? const [],
       activeThreadResolver: () => liveThreads,
       busyThreadResolver: () => busyThreads,
+      scheduleTimer: clock.schedule,
       runProcess: (argv) async {
         runs.add(argv);
         return true;
@@ -293,62 +344,137 @@ void main() {
   });
 
   group('board 變動', () {
-    // board 與加入事件同一類：**狀態轉變，不是待辦**。通知只說「板子動了」，
-    // 內容由收到的人自己去 chatroom_board 讀——所以合併是無損的，
-    // 中間每一次變動都送過去，對方讀到的還是同一塊板。
+    // 契約：**debounce + max-wait**（艾斯維爾 2026-09-14 裁）。
+    // 每來一則就重設安靜期；一批的第一則啟動上限；任一到期就送一次，
+    // 且只送最高水位。board 通知不帶內容——收到的人重讀整塊板，所以合併
+    // 是無損的，而每一次喚醒都燒掉對方一個 turn。
 
-    test('投給房內所有本機 Codex thread，內容只說板子動了', () async {
+    const quiet = CodexDispatcher.boardQuietWindow;
+    const maxWait = CodexDispatcher.boardMaxWait;
+
+    Future<void> tick(Duration d) async {
+      clock.fire(d);
+      await pumpEventQueue();
+    }
+
+    test('安靜期到了才送，投給房內所有本機 Codex thread', () async {
       final d = make();
       await d.handleBoardChange('r1', 7);
+      expect(runs, isEmpty, reason: '沒有「第一則立刻送」了');
+
+      await tick(quiet);
       expect(runs, hasLength(2), reason: 'threadA 與 threadB 都在 r1');
-      expect(
-        runs.map(target).toSet(),
-        {threadA, threadB},
-      );
+      expect(runs.map(target).toSet(), {threadA, threadB});
       final p = payload(runs.first);
       expect(p['event'], 'board_changed');
       expect(p['board_seq'], 7);
       expect(p['action'], contains('chatroom_board'));
     });
 
-    test('🔴 同一個週期內連續變動只喚醒一次，結束時補一則最新水位', () async {
+    test('🔴 一個 burst 只喚醒一次，水位取最高', () async {
       final d = make();
-      await d.handleBoardChange('r1', 1);
-      expect(runs, hasLength(2), reason: '第一則立刻送');
-      runs.clear();
-
-      // 拖板子：一口氣好幾個 board_seq
-      await d.handleBoardChange('r1', 2);
-      await d.handleBoardChange('r1', 3);
-      await d.handleBoardChange('r1', 4);
-      expect(runs, isEmpty, reason: '節流期間不逐則投');
-
-      await d.pollAssignments();
-      expect(runs, hasLength(2), reason: '週期結束補一則給兩個 thread');
-      expect(payload(runs.first)['board_seq'], 4, reason: '只有最新的水位有意義');
+      for (final seq in [1, 2, 3, 4]) {
+        await d.handleBoardChange('r1', seq);
+      }
+      await tick(quiet);
+      expect(runs, hasLength(2), reason: '兩個 thread 各一則，不是四輪');
+      expect(payload(runs.first)['board_seq'], 4);
     });
 
-    test('下一個週期重新開放——節流不是永久靜音', () async {
+    test('🔴 窗界線前後的兩則不會各送一次——這正是固定窗做不到的', () async {
+      // 固定窗 trailing 保證的是「每窗最多一次」：兩則落在界線前後 0.2 秒
+      // 仍會連醒兩次。debounce 沒有界線可踩。
       final d = make();
       await d.handleBoardChange('r1', 1);
-      runs.clear();
-      await d.pollAssignments(); // 週期結束，沒有待合併的
+      await d.handleBoardChange('r1', 2); // 安靜期被重設，界線消失
+      await tick(quiet);
+      expect(runs, hasLength(2));
+      expect(payload(runs.first)['board_seq'], 2);
+    });
+
+    test('🔴 持續高頻時由 max-wait 擋著，不會被無限期推遲', () async {
+      // 純 debounce 的代價：兩個人整理板子的十分鐘裡 agent 一次都不會醒。
+      final d = make();
+      for (var seq = 1; seq <= 5; seq++) {
+        await d.handleBoardChange('r1', seq); // 每一則都把安靜期推遠
+      }
       expect(runs, isEmpty);
 
+      await tick(maxWait);
+      expect(runs, hasLength(2), reason: '上限到了就強制送一次');
+      expect(payload(runs.first)['board_seq'], 5);
+    });
+
+    test('送完之後重新開放——下一批照樣送得出去', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 1);
+      await tick(quiet);
+      runs.clear();
+
       await d.handleBoardChange('r1', 2);
-      expect(runs, hasLength(2), reason: '新的週期第一則照樣立刻送');
+      expect(runs, isEmpty);
+      await tick(quiet);
+      expect(runs, hasLength(2));
+      expect(payload(runs.first)['board_seq'], 2);
+    });
+
+    test('🔴 投遞進行中進來的新水位歸下一批，不插隊', () async {
+      final gate = Completer<void>();
+      final clock2 = FakeClock();
+      final d = CodexDispatcher(
+        (_) async => defaultMembers,
+        fetchSessions: () async => [session(threadA, 'Codex-Sol')],
+        activeThreadResolver: () => {threadA},
+        scheduleTimer: clock2.schedule,
+        runProcess: (argv) async {
+          runs.add(argv);
+          if (payload(argv)['board_seq'] == 1) await gate.future;
+          return true;
+        },
+        codexArgvResolver: () => ['codex-bin'],
+        codexHome: codexHome.path,
+      )..enabled = true;
+
+      await d.handleBoardChange('r1', 1);
+      clock2.fire(quiet);
+      await Future<void>.delayed(Duration.zero); // 投遞卡在 gate
+
+      await d.handleBoardChange('r1', 2);
+      clock2.fire(quiet);
+      await Future<void>.delayed(Duration.zero);
+      expect(runs.where((r) => payload(r)['board_seq'] == 2), isEmpty,
+          reason: '上一批還在送，這則要等下一批');
+
+      gate.complete();
+      await pumpEventQueue();
+      clock2.fire(quiet);
+      await pumpEventQueue();
+      final seqs = runs.map((r) => payload(r)['board_seq']).toList();
+      expect(seqs, [1, 2], reason: '水位只能往前');
+    });
+
+    test('🔴 並行進來的同一個事件只喚醒一次', () async {
+      final d = make();
+      await Future.wait([
+        d.handleBoardChange('r1', 9),
+        d.handleBoardChange('r1', 9),
+      ]);
+      await tick(quiet);
+      expect(runs, hasLength(2), reason: '兩個 thread 各一則，不是四則');
     });
 
     test('🔴 房裡沒有本機 Codex 時不投，而且**不重試**', () async {
       // 「沒有人可以投」是確定性的結果，不是傳輸失敗。混在一起的代價是
-      // 安靜的房每 10 秒重評估一次、log 每 10 秒刷一行，永遠不會停
-      // （402cac6 的迴歸，Codex 09/14 實機抓到）。
+      // 安靜的房被反覆重評估、log 一直刷，永遠不會停（402cac6 的迴歸，
+      // Codex 09/14 實機抓到）。
       //
       // ⚠️ 斷言要看**重試的痕跡**而不是 runs：沒有 route 的時候重試一百次
       // 也不會產生任何 queue 呼叫，拿 runs 當斷言等於什麼都沒測。
+      //
       // 本機**有** Codex，只是它不在這個房——這樣 _roomRoutes 才真的會去
-      // 查一次（本機一個都沒有時它提前返回，連查都不查，拿它當探針測不到）
+      // 查一次（本機一個都沒有時它提前返回，連查都不查）。
       var lookups = 0;
+      final clock2 = FakeClock();
       final d = CodexDispatcher(
         (_) async => defaultMembers,
         fetchSessions: () async {
@@ -368,6 +494,7 @@ void main() {
           ];
         },
         activeThreadResolver: () => {threadA},
+        scheduleTimer: clock2.schedule,
         runProcess: (argv) async {
           runs.add(argv);
           return true;
@@ -377,106 +504,26 @@ void main() {
       )..enabled = true;
 
       await d.handleBoardChange('r1', 1);
+      clock2.fire(quiet);
+      await pumpEventQueue();
       expect(runs, isEmpty);
       final after = lookups;
 
-      await d.pollAssignments();
-      await d.pollAssignments();
+      clock2.fire(quiet);
+      clock2.fire(maxWait);
+      await pumpEventQueue();
       expect(lookups, after, reason: '不重試——再查一百次也一樣沒有人可以投');
       expect(runs, isEmpty);
     });
 
-    test('關閉轉送時不投', () async {
-      final d = make()..enabled = false;
-      await d.handleBoardChange('r1', 1);
-      expect(runs, isEmpty);
-    });
-
-    test('🔴 還沒收過任何訊息就先收到 board 變動——房名照樣講得出來', () async {
-      // 房名原本只從訊息批次記，於是安靜的房間在 App 重啟後的第一個 board
-      // 事件會送出空字串（2026-09-14 實機 board_seq=7 正是如此，Codex 審出）。
-      // 房間列表那側本來就知道房名，跟房的當下餵進來就好。
-      final d = make();
-      d.rememberRoomNames({'r1': '設計討論'});
-      await d.handleBoardChange('r1', 3);
-      expect(payload(runs.first)['room_name'], '設計討論');
-    });
-
-    test('🔴 同一個水位不重複喚醒，也不往回送更舊的', () async {
-      // 同一次變動進來兩次的話：第一次立刻送、第二次進合併佇列，週期結束
-      // 又送一遍同樣的 seq。收到的人已經讀到更新的水位，卻被叫醒去看一個
-      // 比手上還舊的數字（實機：Codex 已讀到 10，連收兩次 9）。
-      final d = make();
-      await d.handleBoardChange('r1', 9);
-      expect(runs, hasLength(2));
-      runs.clear();
-
-      await d.handleBoardChange('r1', 9); // 同一次變動又進來一次
-      await d.pollAssignments();
-      expect(runs, isEmpty, reason: '同水位不再送第二遍');
-
-      await d.handleBoardChange('r1', 8); // 更舊的也不送
-      expect(runs, isEmpty);
-
-      await d.handleBoardChange('r1', 10); // 真的更新了才送
-      expect(runs, hasLength(2));
-      expect(payload(runs.first)['board_seq'], 10);
-    });
-
-    test('🔴 並行進來的同一個事件只喚醒一次', () async {
-      // boardChanged.listen 的 callback 是 unawaited 的，兩個事件會並行。
-      // 守門若落在 await 的另一側，兩邊都會通過而各送一次（Codex 審出）。
-      final d = make();
-      await Future.wait([
-        d.handleBoardChange('r1', 9),
-        d.handleBoardChange('r1', 9),
-      ]);
-      expect(runs, hasLength(2), reason: '兩個 thread 各一則，不是四則');
-    });
-
-    test('🔴 投遞還沒完成時進來的新水位不另外送，也不會把水位寫回去', () async {
-      // 原本的形狀：seq=9 還在 await 時 seq=10 進來，兩邊都通過守門；
-      // 若 10 先完成、9 後完成，9 會把 _lastBoardSent 從 10 寫回 9。
-      final gate = Completer<void>();
-      final d = CodexDispatcher(
-        (_) async => defaultMembers,
-        fetchSessions: () async =>
-            [session(threadA, 'Codex-Sol'), session(threadB, 'Codex-Luna')],
-        activeThreadResolver: () => {threadA, threadB},
-        runProcess: (argv) async {
-          runs.add(argv);
-          if (payload(argv)['board_seq'] == 9) await gate.future;
-          return true;
-        },
-        codexArgvResolver: () => ['codex-bin'],
-        codexHome: codexHome.path,
-      )..enabled = true;
-
-      final first = d.handleBoardChange('r1', 9); // 卡在投遞裡
-      await Future<void>.delayed(Duration.zero);
-      await d.handleBoardChange('r1', 10); // 投遞進行中又來一個更新的
-      expect(runs.where((r) => payload(r)['board_seq'] == 10), isEmpty,
-          reason: '還在送上一則，這則要留到週期結束');
-
-      gate.complete();
-      await first;
-      await d.pollAssignments();
-
-      final seqs = runs.map((r) => payload(r)['board_seq']).toList();
-      expect(seqs.where((x) => x == 9), hasLength(2), reason: '9 只送一輪');
-      expect(seqs.where((x) => x == 10), hasLength(2), reason: '10 由週期結束補送');
-      expect(seqs.last, 10, reason: '水位只能往前——9 不可以排在 10 後面');
-    });
-
     test('🔴 一則都沒送成就不算送出，水位不可以往前', () async {
-      // 原本不論 _queue 回什麼都回 true，於是「找不到 codex CLI」
-      // 「exit 非零」「逾時」這些**正常的失敗契約**全被記成已投遞，
-      // 水位照推，那一則變動從此沒有人會知道（Codex 審出）。
       var ok = false;
+      final clock2 = FakeClock();
       final d = CodexDispatcher(
         (_) async => defaultMembers,
         fetchSessions: () async => [session(threadA, 'Codex-Sol')],
         activeThreadResolver: () => {threadA},
+        scheduleTimer: clock2.schedule,
         runProcess: (argv) async {
           runs.add(argv);
           return ok;
@@ -486,74 +533,51 @@ void main() {
       )..enabled = true;
 
       await d.handleBoardChange('r1', 5);
+      clock2.fire(quiet);
+      await pumpEventQueue();
       expect(runs, hasLength(1), reason: '嘗試過');
       runs.clear();
 
       ok = true;
-      await d.pollAssignments();
+      clock2.fire(quiet); // 失敗會重新排程，所以這裡等得到
+      await pumpEventQueue();
       expect(runs, hasLength(1), reason: '沒送成就要重試，不能當作已送');
       expect(payload(runs.single)['board_seq'], 5);
 
       runs.clear();
-      await d.pollAssignments();
+      clock2.fire(quiet);
+      clock2.fire(maxWait);
+      await pumpEventQueue();
       expect(runs, isEmpty, reason: '送成之後才不再重送');
     });
 
-    test('🔴 投遞中與後續水位接連失敗，之後仍重試得回來', () async {
-      // 「先佔位、失敗再還回去」的版本在這裡會壞：10 先失敗會先移掉 11 的
-      // 名額，11 再失敗又把水位還原成 10——兩則都沒送成，卻記成 10 已送，
-      // 之後同水位永遠被擋掉（Codex 審出）。
-      final gate = Completer<void>();
-      var fail = true;
-      final d = CodexDispatcher(
-        (_) async => defaultMembers,
-        fetchSessions: () async => [session(threadA, 'Codex-Sol')],
-        activeThreadResolver: () => {threadA},
-        runProcess: (argv) async {
-          runs.add(argv);
-          if (payload(argv)['board_seq'] == 10) await gate.future;
-          return !fail;
-        },
-        codexArgvResolver: () => ['codex-bin'],
-        codexHome: codexHome.path,
-      )..enabled = true;
-
-      final first = d.handleBoardChange('r1', 10);
-      await Future<void>.delayed(Duration.zero);
-      await d.handleBoardChange('r1', 11); // 投遞中，進合併佇列
-      gate.complete();
-      await first; // 10 失敗
-
-      fail = false;
-      runs.clear();
-      await d.pollAssignments();
-      expect(runs, hasLength(1), reason: '失敗的水位要留得住，重試得回來');
-      expect(payload(runs.single)['board_seq'], 11, reason: '留最高的那個');
-
-      runs.clear();
-      await d.pollAssignments();
+    test('關閉轉送時不投', () async {
+      final d = make()..enabled = false;
+      await d.handleBoardChange('r1', 1);
+      await tick(quiet);
       expect(runs, isEmpty);
     });
 
     test('🔴 冷啟動回填水位——Hub 訂閱推來的現況不是新變動', () async {
-      // Hub 在訂閱時就會推目前的 board 水位，而 dispatcher 的水位只在
-      // 記憶體。不回填的話，每次 App 或 Hub 重啟都會把現況當成新變動再
-      // 喚醒一次，而已經進 Codex queue 的東西撤不回來（實機抓到）。
       final d = make();
       d.seedBoardWatermarks({'r1': 10});
       await d.handleBoardChange('r1', 10);
+      await tick(quiet);
       expect(runs, isEmpty, reason: '這是重開後 Hub 推來的現況，不是新變動');
 
       await d.handleBoardChange('r1', 11);
+      await tick(quiet);
       expect(runs, hasLength(2), reason: '離線期間真的動過就要通知');
     });
 
     test('水位前進時要落盤，否則下次重開又白走一遍', () async {
       final saved = <String, int>{};
+      final clock2 = FakeClock();
       final d = CodexDispatcher(
         (_) async => defaultMembers,
         fetchSessions: () async => [session(threadA, 'Codex-Sol')],
         activeThreadResolver: () => {threadA},
+        scheduleTimer: clock2.schedule,
         onBoardNotified: (roomId, seq) => saved[roomId] = seq,
         runProcess: (argv) async {
           runs.add(argv);
@@ -564,15 +588,19 @@ void main() {
       )..enabled = true;
 
       await d.handleBoardChange('r1', 4);
+      clock2.fire(quiet);
+      await pumpEventQueue();
       expect(saved, {'r1': 4});
     });
 
     test('回填只填沒有的——記憶體裡那份一定比較新', () async {
       final d = make();
       await d.handleBoardChange('r1', 12);
+      await tick(quiet);
       runs.clear();
       d.seedBoardWatermarks({'r1': 3}); // 落盤的是舊的
       await d.handleBoardChange('r1', 12);
+      await tick(quiet);
       expect(runs, isEmpty, reason: '不可以被舊的落盤值覆蓋回去');
     });
 
@@ -581,7 +609,25 @@ void main() {
       await d.handle(batch([msg(1)])); // 房名從訊息批次順手記下來
       runs.clear();
       await d.handleBoardChange('r1', 5);
+      await tick(quiet);
       expect(payload(runs.first)['room_name'], '設計討論');
+    });
+
+    test('🔴 還沒收過任何訊息就先收到 board 變動——房名照樣講得出來', () async {
+      final d = make();
+      d.rememberRoomNames({'r1': '設計討論'});
+      await d.handleBoardChange('r1', 3);
+      await tick(quiet);
+      expect(payload(runs.first)['room_name'], '設計討論');
+    });
+
+    test('dispose 之後計時器不會再燒', () async {
+      final d = make();
+      await d.handleBoardChange('r1', 1);
+      expect(clock.armed(quiet), isTrue);
+      d.dispose();
+      expect(clock.armed(quiet), isFalse);
+      expect(clock.armed(maxWait), isFalse);
     });
   });
 

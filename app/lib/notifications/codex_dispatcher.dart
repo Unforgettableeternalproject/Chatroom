@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -108,8 +109,10 @@ class CodexDispatcher {
     this.activeThreadResolver,
     this.busyThreadResolver,
     this.onBoardNotified,
+    Timer Function(Duration, void Function())? scheduleTimer,
     String? codexHome,
-  }) : _runProcess = runProcess ?? _defaultRun,
+  }) : _scheduleTimer = scheduleTimer ?? Timer.new,
+       _runProcess = runProcess ?? _defaultRun,
        _codexArgvResolver = codexArgvResolver ?? _codexArgv,
        _fetchSessions = fetchSessions ?? (() async => const <AgentSession>[]),
        _fetchAssignments =
@@ -134,6 +137,19 @@ class CodexDispatcher {
   /// 水位前進時落盤。不落盤的話每次 App／Hub 重啟都會把現況當成新變動
   /// 再喚醒一次——Hub 訂閱時就會推當前水位，而記憶體裡的水位歸零了。
   final void Function(String roomId, int boardSeq)? onBoardNotified;
+
+  /// 計時器工廠。可注入是為了讓測試**明確地**推進時間——這條邏輯的整個
+  /// 重點就是「什麼時候送」，用真的時鐘測等於在測運氣。
+  final Timer Function(Duration, void Function()) _scheduleTimer;
+
+  /// 安靜這麼久就送出（debounce）。
+  static const boardQuietWindow = Duration(seconds: 3);
+
+  /// 但再怎麼延也不超過這個上限（max-wait）。
+  ///
+  /// 純 debounce 會被持續的變動無限期地推遲——兩個人同時整理板子的十分鐘
+  /// 裡，agent 一次都不會被叫醒。上限讓延遲有天花板。
+  static const boardMaxWait = Duration(seconds: 30);
   final String _codexHome;
 
   bool enabled = false;
@@ -171,10 +187,13 @@ class CodexDispatcher {
     }
   }
 
-  /// 這個輪詢週期內已經為哪些房送過 board 通知（節流用）。
-  final Set<String> _boardNoticedThisTick = {};
+  /// 安靜期計時器：每來一則就重設。
+  final Map<String, Timer> _boardQuietTimers = {};
 
-  /// 節流期間又動過的房：roomId → 最新的 board_seq。
+  /// 上限計時器：一批的**第一則**啟動，之後不重設。
+  final Map<String, Timer> _boardMaxTimers = {};
+
+  /// 等著送出的房：roomId → 最新的 board_seq。
   ///
   /// 只留最新的一個數字，不累積清單——board 是**狀態轉變不是待辦**，
   /// 收到的人要做的事是「去 chatroom_board 讀一次」，而那件事做一次就夠。
@@ -288,14 +307,54 @@ class CodexDispatcher {
           'seq $boardSeq 不新於已通知的 ${_lastBoardSent[roomId]}');
       return; // 已經送過這個水位，沒有東西要看
     }
-    // 這個房正在投遞、或這個週期已經通知過了：留**最高**水位等合併送出。
-    // 並行進來的不保證由新到舊，所以要比大小不能直接覆蓋。
-    if (_boardInFlight.contains(roomId) ||
-        _boardNoticedThisTick.contains(roomId)) {
-      _rememberPendingBoard(roomId, boardSeq);
+    // 一律先進佇列，**沒有「第一則立刻送」**。留最高水位——並行進來的
+    // 不保證由新到舊，所以要比大小不能直接覆蓋。
+    _rememberPendingBoard(roomId, boardSeq);
+    _armBoardTimers(roomId);
+  }
+
+  /// 安靜期每來一則就重設；上限由一批的**第一則**啟動，之後不重設。
+  ///
+  /// 兩個到期條件先發生的那個送出——這就是「debounce + max-wait」的全部。
+  /// 少了上限，持續的變動會把通知無限期推遲；少了安靜期，一組操作固定
+  /// 至少醒兩次。
+  void _armBoardTimers(String roomId) {
+    _boardQuietTimers.remove(roomId)?.cancel();
+    _boardQuietTimers[roomId] =
+        _scheduleTimer(boardQuietWindow, () => unawaited(_fireBoard(roomId)));
+    _boardMaxTimers.putIfAbsent(
+      roomId,
+      () => _scheduleTimer(boardMaxWait, () => unawaited(_fireBoard(roomId))),
+    );
+  }
+
+  void _clearBoardTimers(String roomId) {
+    _boardQuietTimers.remove(roomId)?.cancel();
+    _boardMaxTimers.remove(roomId)?.cancel();
+  }
+
+  /// 安靜期或上限到了，把這個房累積的最高水位送出去。
+  Future<void> _fireBoard(String roomId) async {
+    _clearBoardTimers(roomId);
+    final seq = _pendingBoards.remove(roomId);
+    if (seq == null) return;
+    if (_boardInFlight.contains(roomId)) {
+      // 上一批還在送：放回去、重新排程，這一則歸下一批
+      _rememberPendingBoard(roomId, seq);
+      _armBoardTimers(roomId);
       return;
     }
-    await _sendBoard(roomId, boardSeq);
+    await _sendBoard(roomId, seq);
+  }
+
+  /// 收掉所有計時器。provider 重建或 app 收攤時要呼叫，否則它們會在一個
+  /// 已經沒有人在聽的 dispatcher 上繼續燒。
+  void dispose() {
+    for (final t in [..._boardQuietTimers.values, ..._boardMaxTimers.values]) {
+      t.cancel();
+    }
+    _boardQuietTimers.clear();
+    _boardMaxTimers.clear();
   }
 
   void _rememberPendingBoard(String roomId, int boardSeq) {
@@ -323,7 +382,6 @@ class CodexDispatcher {
       case _BoardOutcome.sent:
         _lastBoardSent[roomId] = boardSeq;
         onBoardNotified?.call(roomId, boardSeq);
-        _boardNoticedThisTick.add(roomId); // 名額也只有送成了才算用掉
       case _BoardOutcome.noRoute:
         // 沒有人可以投是確定性的結果，不重試。水位照推——否則同一個
         // 水位會被反覆評估，log 每 10 秒刷一行「這個房裡沒有本機 Codex」。
@@ -331,7 +389,9 @@ class CodexDispatcher {
         _lastBoardSent[roomId] = boardSeq;
         onBoardNotified?.call(roomId, boardSeq);
       case _BoardOutcome.failed:
+        // 失敗**不推已通知水位**，保留最高 pending 重試
         _rememberPendingBoard(roomId, boardSeq);
+        _armBoardTimers(roomId);
     }
   }
 
@@ -705,23 +765,6 @@ class CodexDispatcher {
       // 返回——把重置掛在那裡的話，「turn 結束了但剛好沒有待補的 mention」
       // 這個常態情況下節流永遠不解除，加入通知就從節流變成**永久靜音**。
       _scanBusyThreads();
-      // 節流視窗以輪詢週期為單位：把這個週期內被合併掉的 board 變動送出去，
-      // 然後開放下一個週期。先送再清，否則送出去的那一刻視窗已經開了，
-      // 同一次變動可能被送兩遍。
-      final coalesced = Map<String, int>.from(_pendingBoards);
-      _pendingBoards.clear();
-      // 名額在**進入迴圈前**就放開：期間並行進來的新變動該由 leading edge
-      // 立刻送，不必等下一個週期
-      _boardNoticedThisTick.clear();
-      for (final entry in coalesced.entries) {
-        if (entry.value <= (_lastBoardSent[entry.key] ?? -1)) continue;
-        if (_boardInFlight.contains(entry.key)) {
-          // 這個房正在送——把水位交回 pending，下一輪再說
-          _rememberPendingBoard(entry.key, entry.value);
-          continue;
-        }
-        await _sendBoard(entry.key, entry.value);
-      }
       // 借同一個節奏補投 mention——投不出去的原因（Codex 沒在跑）與這裡
       // 要等的東西是同一件事
       try {
