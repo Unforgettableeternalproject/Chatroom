@@ -682,7 +682,7 @@ CREATE TABLE IF NOT EXISTS board_watch_notice (
     item_kind   TEXT NOT NULL,
     item_id     TEXT NOT NULL,
     item_title  TEXT NOT NULL DEFAULT '',   -- 快照：卡之後被改名也講得出當時在等什麼
-    event_type  TEXT NOT NULL,              -- task_done / task_cancelled / task_reopened / item_deleted
+    event_type  TEXT NOT NULL,              -- task_done / task_cancelled / task_reopened（item_deleted 尚未實作，沒有任何地方產生它）
     -- 觸發它的那次變更的號。**不是自己領的**——它指回 board_event 的那一筆，
     -- 所以「我收到的通知」與「板上發生的事」對得起來
     board_seq   INTEGER NOT NULL DEFAULT 0,

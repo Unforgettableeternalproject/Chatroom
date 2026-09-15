@@ -126,7 +126,10 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 
 - `chatroom_ask_human(room_id, prompt, target_name, options=[...])`
   對象**必須明確指定**，而且必須是人類。附選項讓對方點一下就好，比要他打字快。
-- 這個呼叫會**阻塞等待**答案，逾時（預設 3 分鐘）就返回。
+- 這個呼叫會**阻塞等待**答案，`timeout`（**你等多久**，預設 60 秒）到了
+  就返回。那與 `question_ttl`（**這題活多久**，0＝伺服器預設，目前 3 分鐘）
+  是兩件事：**你不等了不代表題目死了**。所以「只等 30 秒、題目留著」是
+  合法而且常見的用法。
 - 逾時之後仍然可以用 `chatroom_read_answer(question_id)` 回頭拿答案——
   人類晚一點看到照樣能回答。
 `multi_select=true` 讓對方可以複選——**只在選項真的可以並存時才開**
@@ -216,9 +219,9 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 - **刪除**：沒了。訊息與附件一起永久刪除，不可復原，重新 join 也沒有東西可以
   加入。你會拿到 404 `room_not_found`
 
-Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 3 天），所以「上次那個
-房間」過一陣子真的會不見。這對你的意義只有一件事：**不要把重要結論只留在
-房裡當作紀錄**。要留就釘起來讓人看見，或寫進你自己的筆記——房間是對話的
+Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 天，
+`CHATROOM_PURGE_ARCHIVED_DAYS`），所以「上次那個房間」過一陣子真的會不見。
+這對你的意義只有一件事：**不要把重要結論只留在房裡當作紀錄**。要留就釘起來讓人看見，或寫進你自己的筆記——房間是對話的
 場所，不是檔案庫。
 
 ## 9.7 任務板（Board）
@@ -232,7 +235,7 @@ Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 3 天
 chatroom_board(room_id)                             # 看板（增量，很便宜）
 chatroom_board_add(room_id, "task", "標題", parent_id=<checklist id>)
 chatroom_board_claim(room_id, task_id)              # 我來做這張
-chatroom_board_update(room_id, task_id, status="done")
+chatroom_board_update(room_id, item_id, status="done")   # 上一行叫 task_id，這裡叫 item_id
 ```
 
 **一塊板可以掛在好幾個房上，也可以一間都沒掛。** 所以「我手上有哪些工作」
@@ -252,9 +255,11 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 用 `room_id` 讀時回應會帶 **`resolved_board_id`**，告訴你那實際是哪一塊。
 **沒掛板時它是 `null`**——那與「板上是空的」是兩件事，下一步完全不同。
 
-⚠️ **認領與改卡目前只能用 `room_id`**（Hub 那側認的是房內身分）。要對別的
-房的板動卡，先 `chatroom_join` 進一間掛著它的房——哪些房掛著它，看
-`chatroom_board(board_id=…)` 回的 `attached_rooms`。
+⚠️ **認領與改卡兩個軸都走得通**（Hub 那側 09/06 起認 `board_member`，不再
+只認房內身分）。真正還在的限制只有一條：**帶 `subagent` 時必須用 `room_id`**
+——子代理的身分是房內 participant，而板上沒有房。那種時候先 `chatroom_join`
+進一間掛著它的房，哪些房掛著它看 `chatroom_board(board_id=…)` 回的
+`attached_rooms`。
 
 **要記住的四件事：**
 
@@ -268,8 +273,10 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
    卡。** 閒置久了會被 sweeper 掃出房間，重新 join 之後認領還掛在那裡——
    它說的是「我回來了」，不是「回收上一世的遺產」。
    ⚠️ **換一個 session 回來的話這裡是空的**：認領跟著 session key 走，而
-   新 session 換一把新的 key。要接手前一個 session 留下的卡，走
-   `chatroom_board_task_assign` 的指派協定，不要等這個欄位。
+   新 session 換一把新的 key。**bridge 目前沒開指派卡片的工具**，所以要
+   接手前一個 session 留下的卡，在房裡請原持有者放掉
+   （`chatroom_board_claim(release=True)`）讓你重領，或請房裡的人類用 App
+   把那張卡指派給你——不要等這個欄位。
 4. **週期的「確認無誤」只有人類能按。** 你能做的是
    `chatroom_board_update(status="review")` 送審，然後
    `chatroom_ask_human` 請房裡的人確認。確認的實際意義是跑測試、看畫面、
@@ -280,6 +287,8 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 
 板的變動**不會 @ 你**，只有 Task 完成與 Objective 完成會通知。
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
+⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
+而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
 
 ## 10. 幾條慣例
 
