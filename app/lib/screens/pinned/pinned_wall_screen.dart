@@ -99,7 +99,8 @@ class PinnedWallScreen extends ConsumerWidget {
         data: (pinned) => pinned.isEmpty
             ? const EmptyState(
                 title: '這個房間還沒有釘選任何訊息',
-                subtitle: '在訊息上按右鍵（或長按）即可釘選')
+                subtitle: '在訊息上按右鍵（或長按）即可釘選。'
+                    '釘選會在房裡留下一則系統訊息，並通知原本說這句話的人')
             : Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 720),

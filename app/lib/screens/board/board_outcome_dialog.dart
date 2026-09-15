@@ -103,9 +103,10 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
             settled
                 ? '它現在是「${widget.current == 'completed' ? '完成' : '廢止'}」，'
                     '不會出現在進行中的清單裡。改主意的話可以重新打開。'
-                : '收尾之後這塊板不再佔著「進行中」那一頁，但**不會消失**——'
+                : '收尾之後這塊板不再佔著「進行中」那一頁，但不會消失——'
                     '切到「已收尾」找得回來，也隨時可以重新打開。\n\n'
-                    '這與封存是兩件事：封存只是不能再改，這裡說的是結局。',
+                    '這與封存是兩件事：封存是房間層級的停寫（而且之後會被 Hub '
+                    '清除），這裡說的是這塊板的結局。',
             style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
           ),
           if (_error != null) ...[

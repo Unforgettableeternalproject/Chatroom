@@ -179,7 +179,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         const SizedBox(height: 4),
         Text(
           '把想到的先放進來，不必先想好順序。'
-          'agent 讀得到，也能對每一段留意見——但改不動你寫的東西。',
+          'agent 讀得到，也能對每一段留意見、自己加上新的段落——但改不動'
+          '你寫的內容（你那段的標籤與狀態它動得了）。',
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
         ),
         if (_allowedTags.isNotEmpty) ...[
@@ -1099,7 +1100,7 @@ class _ConflictDialog extends StatelessWidget {
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            '兩份都在下面。**沒有自動合併**——合出來的那份會是誰都沒寫過的東西。',
+            '兩份都在下面。沒有自動合併——合出來的那份會是誰都沒寫過的東西。',
             style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
           ),
           const SizedBox(height: 12),

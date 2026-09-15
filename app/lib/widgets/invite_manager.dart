@@ -324,7 +324,8 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
             style: UepText.display(size: 22, color: s.inkTitle)),
         content: Text(
           '${label.isEmpty ? '這張 token' : label}將立刻失去存取權，'
-          '正在連線中的也會在下一次請求時被擋下。此操作無法復原。',
+          '之後每一次請求都會被擋下；不過已經連上的即時通道要等它自己斷線後'
+          '才會被擋下（下次重連就進不來了）。此操作無法復原。',
           style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.7),
         ),
         actions: [

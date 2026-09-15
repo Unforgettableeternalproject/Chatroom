@@ -131,7 +131,8 @@ class NotFoundException extends ApiException {
 /// 409 — 房間已封存（唯讀）。
 class RoomArchivedException extends ApiException {
   const RoomArchivedException([String code = 'room_archived'])
-      : super(code, '此聊天室已封存，無法發言');
+      : super(code,
+            '此聊天室已封存，只能看不能寫；封存滿一段時間後 Hub 會把它永久刪除');
 }
 
 /// 409 — 與**目前狀態**衝突：卡被別人領走了、狀態轉移不合法⋯⋯
