@@ -742,10 +742,15 @@ class _ControlSection extends ConsumerWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  // 講明它跑在哪裡——不講的話，關掉那個黑視窗會讓所有人斷線，
-                  // 而按下按鈕的人不會預期那件事
-                  '會開一個獨立的視窗跑 Hub。關掉那個視窗也等於停止；'
-                  '關掉這個 App 不會——它只是遙控器。',
+                  // Hub 跑在背景、沒有視窗（2026-09-11 起經
+                  // `hidden-launch.vbs` 隱藏 console）。所以這裡要講的是
+                  // 「怎麼停它」。
+                  //
+                  // 🔴 原本寫的是「關掉那個視窗也等於停止」——那在隱藏之後
+                  // 變成一條**走不通的指示**：那個視窗不存在，照著做的人會
+                  // 在工作列上找一個永遠找不到的東西，然後以為 Hub 關不掉。
+                  'Hub 跑在背景，沒有視窗。要停它按左邊那顆「停止 Hub」；'
+                  '關掉這個 App 不會停——它只是遙控器。',
                   style: UepText.serif(
                       size: 11.5, color: s.inkMute, height: 1.5),
                 ),

@@ -266,4 +266,30 @@ void main() {
           reason: '擋「永遠禁用」那種壞修法：它只驗禁用的話也會全綠');
     });
   });
+
+  group("啟動區的說明文字", () {
+    /// 🔴 **這段文字是一條指示，而指示要他做得到。**
+    ///
+    /// 2026-09-11 起 Hub 經 `hidden-launch.vbs` 在背景跑，沒有 console
+    /// 視窗。但文案還留著「關掉那個視窗也等於停止」——照著做的人會在
+    /// 工作列上找一個永遠找不到的東西，然後以為 Hub 關不掉。
+    ///
+    /// 正面與負面兩半都要驗：只驗「不含舊句子」的話，把整段文字刪掉也會
+    /// 全綠，而那時使用者根本不知道該怎麼停它。
+    testWidgets("講的是背景執行與停止鍵，不是一個不存在的視窗", (tester) async {
+      tester.view.physicalSize = const Size(760, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(wrap(null));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining("沒有視窗"), findsOneWidget,
+          reason: "要講清楚它不會跳視窗——不然使用者會等一個不會出現的東西");
+      expect(find.textContaining("停止 Hub"), findsWidgets,
+          reason: "停它的唯一入口是那顆按鈕，說明文字要指向它");
+      expect(find.textContaining("關掉那個視窗"), findsNothing,
+          reason: "那個視窗在 2026-09-11 之後不存在了");
+    });
+  });
 }
