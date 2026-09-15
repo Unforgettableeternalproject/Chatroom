@@ -1,0 +1,226 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../core/errors/api_exception.dart';
+import '../../core/theme/uep_theme.dart';
+import '../../core/theme/uep_tokens.dart';
+import '../../core/util/relative_time.dart';
+import '../../models/message.dart';
+import '../../state/app_providers.dart';
+import '../../state/messages_providers.dart';
+import '../../state/rooms_providers.dart';
+import '../../widgets/empty_error_states.dart';
+import '../../widgets/kind_badge.dart';
+import '../../widgets/markdown_body.dart';
+
+/// 釘選訊息（pinned_only 直接問 server；client 端再濾掉 deleted）。
+///
+/// ⚠️ 讀訊息一定要帶 `participantId`：房間是讀取邊界，Hub 對沒帶
+/// `X-Participant-Id` 的請求回 401。少帶的後果不是空清單而是「API token
+/// 無效」——同一顆 token 其他畫面都正常，只有這一扇窗打不開。
+///
+/// 身分**走 `identityProvider` 而不是 settings 的快取**：這個路由可以被直接
+/// 開啟（深連結、重啟還原），那時本機可能根本沒有身分，或留著一個已經失效
+/// 的 id；而 settings 不會在 id 變更時通知監聽者，於是錯誤畫面的「重試」會
+/// 拿同一個壞值一直重打同一個 401/403。`identityProvider` 負責 join（server
+/// 端冪等），拿到的一定是當下有效的身分——釘選牆因此不必先逛過聊天畫面。
+final _pinnedProvider = FutureProvider.autoDispose
+    .family<List<Message>, String>((ref, roomId) async {
+  final identity = await ref.watch(identityProvider(roomId).future);
+  final page = await ref.read(messagesApiProvider).read(
+        roomId,
+        pinnedOnly: true,
+        limit: 200,
+        participantId: identity.participantId,
+      );
+  return page.messages.where((m) => !m.deleted).toList();
+});
+
+class PinnedWallScreen extends ConsumerWidget {
+  const PinnedWallScreen({super.key, required this.roomId});
+
+  final String roomId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final pinnedAsync = ref.watch(_pinnedProvider(roomId));
+    final detail = ref.watch(roomDetailProvider(roomId)).value;
+    final archived = detail?.room.isArchived ?? false;
+    final kindById = {
+      for (final p in detail?.participants ?? const [])
+        p.id: p.kind
+    };
+
+    // 房間 feed 有變更（他端釘選/取消）→ 重新抓
+    ref.listen(messagesProvider(roomId), (prev, next) {
+      ref.invalidate(_pinnedProvider(roomId));
+    });
+
+    return Scaffold(
+      backgroundColor: s.bg,
+      appBar: AppBar(
+        backgroundColor: s.bgSoft,
+        surfaceTintColor: Colors.transparent,
+        shape: Border(bottom: BorderSide(color: s.line)),
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back, size: 18, color: s.inkSoft),
+          onPressed: () => context.go('/rooms/$roomId'),
+        ),
+        title: Row(children: [
+          const Text('❖',
+              style: TextStyle(fontSize: 12, color: UepColors.gold)),
+          const SizedBox(width: 10),
+          Text('釘選訊息',
+              style: UepText.display(size: 22, color: s.inkTitle)),
+        ]),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 20),
+            child: Center(
+              child: MonoLabel(
+                '${detail?.room.name ?? ''} · ${pinnedAsync.value?.length ?? 0}',
+                size: 9,
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: pinnedAsync.when(
+        loading: () => const Center(
+            child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: UepColors.gold))),
+        error: (e, _) => ErrorState(
+            error: e, onRetry: () => ref.invalidate(_pinnedProvider(roomId))),
+        data: (pinned) => pinned.isEmpty
+            ? const EmptyState(
+                title: '這個房間還沒有釘選任何訊息',
+                subtitle: '在訊息上按右鍵（或長按）即可釘選')
+            : Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(22),
+                    itemCount: pinned.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 14),
+                    itemBuilder: (context, i) {
+                      final m = pinned[pinned.length - 1 - i];
+                      return _PinnedCard(
+                        roomId: roomId,
+                        message: m,
+                        // system 訊息沒有發話者,`kindById` 查不到是**正常**
+                        // 的——它不該退成 `other`(見 [pinnedSenderLabel])
+                        kind: m.senderId != null
+                            ? (kindById[m.senderId] ?? 'other')
+                            : 'other',
+                        archived: archived,
+                      );
+                    },
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _PinnedCard extends ConsumerWidget {
+  const _PinnedCard({
+    required this.roomId,
+    required this.message,
+    required this.kind,
+    required this.archived,
+  });
+
+  final String roomId;
+  final Message message;
+  final String kind;
+  final bool archived;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final isSystem = message.kind == 'system';
+    // 沒有發話者就沒有 kind 色。用中性線色而不是 `other` 的橘——
+    // 那個顏色的意思是「一個我不認得的 agent」，而這裡根本沒有 agent
+    final color = isSystem ? s.hairlineStrong : kindColor(kind, context: context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 13, 16, 13),
+      decoration: BoxDecoration(
+        color: s.bgCard,
+        border: Border(
+          left: BorderSide(color: color, width: 2),
+          top: BorderSide(color: s.line),
+          right: BorderSide(color: s.line),
+          bottom: BorderSide(color: s.line),
+        ),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text(pinnedSenderLabel(message),
+              style: UepText.sans(
+                  size: 12.5,
+                  weight: FontWeight.w600,
+                  color: isSystem ? s.inkMute : s.inkTitle)),
+          if (!isSystem) ...[
+            const SizedBox(width: 8),
+            KindBadge(kind: kind, compact: true),
+          ],
+          const Spacer(),
+          Text('#${message.seq} · ${clockTime(message.createdAt)}',
+              style: UepText.mono(size: 9, color: s.inkMute)),
+        ]),
+        const SizedBox(height: 9),
+        UepMarkdownBody(
+          data: message.content,
+          mentions: message.mentions,
+          mentionGroups: message.mentionGroups,
+        ),
+        const SizedBox(height: 10),
+        Row(children: [
+          InkWell(
+            onTap: () =>
+                context.go('/rooms/$roomId?focusSeq=${message.seq}'),
+            child: MonoLabel('跳回原文 →',
+                size: 9, color: UepColors.gold, letterSpacing: 1.4),
+          ),
+          const SizedBox(width: 14),
+          if (!archived)
+            InkWell(
+              onTap: () async {
+                try {
+                  final identity =
+                      await ref.read(identityProvider(roomId).future);
+                  await ref.read(messagesApiProvider).unpin(message.id,
+                      participantId: identity.participantId);
+                  ref.invalidate(_pinnedProvider(roomId));
+                } on ApiException catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(e.message)));
+                  }
+                }
+              },
+              child: MonoLabel('取消釘選', size: 9, letterSpacing: 1.4),
+            ),
+        ]),
+      ]),
+    );
+  }
+}
+
+/// 釘選牆上這一列掛在誰名下。
+///
+/// 🔴 **system 訊息沒有發話者,那不是資料壞掉**(09/08 卡 bf3547db,艾斯維爾
+/// 截圖):釘選一則收據之後,牆上出現一個叫「(未知)」、徽章寫 OTHER 的人。
+/// 房裡沒有任何人離開過,而畫面說有——那句話本身是假的,而且它指向一個不
+/// 存在的偵錯方向(去查誰離開了)。
+///
+/// 「(未知)」的 fallback **保留給真正的那種情況**:發話者是人/agent,但名字
+/// 查不到(離開了、或快取還沒補上)。兩者要分得開,因為處置完全不同。
+String pinnedSenderLabel(Message m) =>
+    m.kind == 'system' ? '系統' : (m.senderName ?? '（未知）');

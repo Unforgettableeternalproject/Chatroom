@@ -1,0 +1,957 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../core/mention_groups.dart';
+import '../core/diagnostics/input_diagnostics.dart';
+import '../core/theme/uep_theme.dart';
+import '../core/theme/uep_tokens.dart';
+import '../models/message.dart';
+import '../models/participant.dart';
+import 'composer_attachments.dart';
+import 'kind_badge.dart';
+import 'uep_button.dart';
+
+/// 從送出內容萃取被 @ 提及的成員名單。
+///
+/// 必須最長優先比對——房內天然存在前綴重名（Nova 與 Nova-2 由 Hub 自動編號），
+/// 用 contains('@$name') 會讓「@Nova-2」同時 ping 到 Nova。
+/// 比對成功後還要檢查右邊界：下一個字元若仍是名字字元（英數 / - / _），
+/// 代表 @ 後面其實是更長的字串（@Nova-25 不算提及 Nova-2）。
+List<String> extractMentions(String content, Iterable<String> memberNames) {
+  final names = memberNames.toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
+  final nameChar = RegExp(r'[A-Za-z0-9_-]');
+  final found = <String>{};
+  var i = 0;
+  while (i < content.length) {
+    if (content[i] != '@') {
+      i++;
+      continue;
+    }
+    var matched = false;
+    for (final name in names) {
+      if (name.isEmpty) continue;
+      final end = i + 1 + name.length;
+      if (end > content.length) continue;
+      if (content.substring(i + 1, end) != name) continue;
+      if (end < content.length && nameChar.hasMatch(content[end])) continue;
+      found.add(name);
+      i = end;
+      matched = true;
+      break;
+    }
+    if (!matched) i++;
+  }
+  return found.toList();
+}
+
+/// `#` 候選的一張卡。
+///
+/// 輸入列是純呈現元件，不知道板的存在——所以候選由外層挑好傳進來，
+/// 這個型別只帶著送訊息時需要的三樣東西。
+@immutable
+class CardCandidate {
+  const CardCandidate({
+    required this.boardId,
+    required this.taskId,
+    required this.title,
+    this.status = '',
+  });
+
+  final String boardId;
+  final String taskId;
+
+  /// 卡的**現況**標題。送出時它會被抄成訊息裡的快照——之後卡改了名字，
+  /// 訊息裡那句話說的仍然是當時的那張（契約 v1，09/09 房 seq 32）。
+  final String title;
+  final String status;
+}
+
+/// 從送出內容萃取 `#[標題]` 指涉到的卡。
+///
+/// **字面是有界的 `#[標題]`，不是裸的 `#標題`**（契約 seq 44）：中文沒有
+/// 空白可以當右邊界，裸標題比對會把 `#登入頁重構的問題` 判成含有
+/// `#登入頁重構`，而往任何方向調都只是在「前綴誤放行」與「正常字句誤擋」
+/// 之間換一種錯。兩個括號換掉整類問題。
+///
+/// 依 task_id 去重：同一張卡在一則訊息裡提兩次，是一個指涉不是兩個。
+List<CardCandidate> extractCardRefs(
+  String content,
+  Iterable<CardCandidate> cards,
+) {
+  final found = <String, CardCandidate>{};
+  for (final card in cards) {
+    if (card.title.isEmpty) continue;
+    if (content.contains('#[${card.title}]')) found[card.taskId] = card;
+  }
+  return found.values.toList();
+}
+
+/// 訊息輸入區：回覆預覽 + @ / # 自動完成 + ENTER 送出 / SHIFT+ENTER 換行。
+class MessageComposer extends StatefulWidget {
+  const MessageComposer({
+    super.key,
+    required this.members,
+    required this.onSend,
+    this.enabled = true,
+    this.replyTarget,
+    this.onCancelReply,
+    this.editTarget,
+    this.onCancelEdit,
+    this.attachments = const [],
+    this.onPickFiles,
+    this.onPasteImage,
+    this.onRemoveAttachment,
+    this.onRetryAttachment,
+    this.initialText = '',
+    this.onTextChanged,
+    this.history = const [],
+    this.onHistoryAdd,
+    this.cards = const [],
+    this.onDiagnostic,
+  });
+
+  /// 診斷事件的出口（卡 `7d3db264`）。**省略時走正式的
+  /// [InputDiagnostics]**，測試才注入自己的接收端。
+  ///
+  /// 存在的理由是**測試不該碰檔案系統**：儀器的正式落點是使用者硬碟上的
+  /// 一個檔，而測試要驗的是「記了什麼」與「沒記什麼」，不是檔案怎麼開。
+  final void Function(String kind, Map<String, Object?> data)? onDiagnostic;
+
+  /// 房內 active 成員（@ 選單只列這些，P3-07 條件 2）。
+  final List<Participant> members;
+  final Future<void> Function(String content, List<String> mentions) onSend;
+  final bool enabled;
+  final Message? replyTarget;
+  final VoidCallback? onCancelReply;
+
+  /// 正在編輯的訊息。與 [replyTarget] **同構但互斥**——回覆是「針對那則說
+  /// 一句新的」，編輯是「把那則換掉」，同時成立沒有意義，而且送出時分不出
+  /// 該走哪條路。外層設定其中一個時要清掉另一個。
+  final Message? editTarget;
+  final VoidCallback? onCancelEdit;
+
+  /// 待送附件。上傳流程由外層（持有 provider 的畫面）負責，這裡只負責畫
+  /// 與觸發——輸入列是純呈現元件，不該知道 Hub 的存在。
+  final List<ComposerAttachment> attachments;
+  final VoidCallback? onPickFiles;
+
+  /// Ctrl+V：回傳 true 表示剪貼簿裡真的有圖並已接手，此時不讓貼上事件
+  /// 繼續傳給 TextField（否則會同時貼進一張圖和一段檔名文字）。
+  final Future<bool> Function()? onPasteImage;
+  final void Function(ComposerAttachment)? onRemoveAttachment;
+  final void Function(ComposerAttachment)? onRetryAttachment;
+
+  /// 進場時輸入框裡就該有的字（這個房間上次沒說完的話）。
+  ///
+  /// **只在 initState 讀一次。** 之後的每一次輸入都是使用者在打字，拿外面
+  /// 的值再蓋回去會把游標推到別的位置、也會吃掉正在輸入的組字。
+  final String initialText;
+
+  /// 每次內容變動時回報給外層存起來。
+  ///
+  /// 存放的地方是外層的事——這個 widget 是純呈現元件，不知道有房間這回事，
+  /// 也就不該知道草稿該存到哪一格去。
+  final ValueChanged<String>? onTextChanged;
+
+  /// 這個房間送出過的訊息，由舊到新。上下鍵遍歷的就是它。
+  ///
+  /// **與 [initialText] 不同，這個要持續 watch**——每送出一則就多一筆，
+  /// 而歷史的持有者在外層（見 `state/composer_history.dart`：存在 State
+  /// 裡的東西會隨換房整顆重建而消失）。
+  final List<String> history;
+
+  /// 送出成功後把內容交給外層記進歷史。時機是**送出成功之後**——失敗的
+  /// 那句話還在輸入框裡，先記進歷史等於同一句話同時在兩個地方。
+  final ValueChanged<String>? onHistoryAdd;
+
+  /// `#` 的候選：**本房掛接板上的卡**。
+  ///
+  /// 空清單時 `#` 不會有任何反應——這個房沒有掛板，而契約限制指涉只能指
+  /// 本房掛接的板（標題快照會落在訊息裡，指到房外的板等於把那塊板的卡名
+  /// 洩進這個房，ACL 事後擋不掉已經寫死的快照）。
+  final List<CardCandidate> cards;
+
+  @override
+  State<MessageComposer> createState() => _MessageComposerState();
+}
+
+class _MessageComposerState extends State<MessageComposer> {
+  late final _controller = TextEditingController(text: widget.initialText);
+
+  /// 輸入框裡現在裝的是「要換掉的那則訊息」，不是草稿。
+  bool _editingBuffer = false;
+
+  /// 進編輯模式之前，輸入框裡那句還沒說完的話。取消時要放回去。
+  String _stashedDraft = '';
+  final _focus = FocusNode();
+  final _link = LayerLink();
+  final _overlayController = OverlayPortalController();
+  /// 補全候選：房內成員，或 `all` / `agents` / `humans` 這種群組保留字。
+  /// 群組項的 [_MentionOption.participant] 是 null。
+  List<_MentionOption> _candidates = const [];
+  int _mentionStart = -1;
+  bool _sending = false;
+
+  /// 候選選單裡被選取的那一項。選單每次重新計算都回到 0——候選變了之後
+  /// 還停在第 3 項，選中的會是一個使用者沒看過的名字。
+  int _highlighted = 0;
+
+  /// 高亮項的捲動錨點。候選比選單高度多時，方向鍵一路往下會讓選取跑到
+  /// 看不見的地方，那時它等於沒有作用。
+  final _optionKeys = <int, GlobalKey>{};
+
+  /// 現在瀏覽到歷史的第幾則；`null` = 不在歷史裡，輸入框裝的是草稿。
+  int? _historyIndex;
+
+  /// 進歷史之前那句還沒說完的話。一路按 ↓ 回到底時要放回去——
+  /// 這與編輯模式的 [_stashedDraft] 是同一個道理，也是同一個教訓。
+  String _historyStash = '';
+
+  /// 正在把歷史內容塞進輸入框。這段期間 [_onTextChanged] 不做 @ 偵測。
+  bool _applyingHistory = false;
+
+  /// 輸入框是否有內容。送出鈕的可用狀態靠它——直接在 build 讀 controller
+  /// 的話，打字不會觸發重建，按鈕會一直停在剛進畫面時的狀態。
+  bool _hasText = false;
+
+  /// 上一次看到的組字狀態。**只記「變了」的那一刻**——每個按鍵記一筆的話
+  /// log 會被打字本身淹掉，而我們要找的是那個轉折點（卡 `7d3db264`）。
+  bool _wasComposing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _hasText = _controller.text.trim().isNotEmpty;
+    _controller.addListener(_onTextChanged);
+    _controller.addListener(_traceComposing);
+    _focus.addListener(_traceFocus);
+  }
+
+  @override
+  void dispose() {
+    _focus.removeListener(_traceFocus);
+    _controller.removeListener(_traceComposing);
+    _controller.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  /// 焦點的兩個旗標都記。**「焦點在但打不出字」正是這個症狀的形狀**——
+  /// 只記 `hasFocus` 的話，那個狀態在 log 上看起來完全正常。
+  void _traceFocus() => _trace('focus', {
+        'has': _focus.hasFocus,
+        'primary': _focus.hasPrimaryFocus,
+      });
+
+  /// 診斷事件統一從這裡出去——正式走 [InputDiagnostics]，測試走注入的那個。
+  void _trace(String kind, Map<String, Object?> data) {
+    final out = widget.onDiagnostic;
+    if (out != null) {
+      out(kind, data);
+      return;
+    }
+    InputDiagnostics.instance.log(kind, data);
+  }
+
+  /// IME 組字的起訖。**不記文字內容**，只記範圍與形狀。
+  ///
+  /// `composing` 從有效變無效的那一刻就是「組字被打斷」——如果它與別的
+  /// 事件落在同一毫秒，那個事件就是嫌犯。這是這份儀器要抓的主訊號。
+  void _traceComposing() {
+    final v = _controller.value;
+    final now = v.composing.isValid;
+    if (now == _wasComposing) return;
+    _wasComposing = now;
+    _trace('composing', {
+      'active': now,
+      'start': v.composing.start,
+      'end': v.composing.end,
+      'len': v.text.length,
+      'lines': '\n'.allMatches(v.text).length + 1,
+    });
+  }
+
+  @override
+  void didUpdateWidget(MessageComposer old) {
+    super.didUpdateWidget(old);
+    final target = widget.editTarget;
+    if (target != null && target.id != old.editTarget?.id) {
+      // 編輯是「把那則換掉」，所以輸入框要**帶著原文**進場——空白起手等於
+      // 逼使用者重打一遍，而他多半只是要改一個字
+      // 先把草稿收起來。**不收的話它會變成看不見但還在**——輸入框被原文
+      // 蓋掉、倉裡卻留著，使用者取消編輯後看到空白就重新開始打，而第一個
+      // 按鍵就覆蓋掉那份不可見的草稿。遺失只是延後發生
+      // （@審核用Codex-2 #439）
+      if (!_editingBuffer) _stashedDraft = _controller.text;
+      _editingBuffer = true;
+      _controller.text = target.content;
+      _controller.selection =
+          TextSelection.collapsed(offset: target.content.length);
+      _focus.requestFocus();
+    } else if (target == null && old.editTarget != null) {
+      // 取消編輯要把原文換掉：留著的話下一則新訊息會帶著上一則的內容送出。
+      // 換回來的是**進編輯前那句還沒說完的話**，不是空白。
+      //
+      // ⚠️ 這一步**在旗標放下之前**做。順序反過來的話，它會以「草稿被改成
+      // 這個值」的身分回報出去——而倉裡本來就是這個值，等於白跑一趟；
+      // 更早的版本是 clear()，那時反過來會直接把草稿抹掉
+      _controller.text = _stashedDraft;
+      _controller.selection =
+          TextSelection.collapsed(offset: _stashedDraft.length);
+      _stashedDraft = '';
+      _editingBuffer = false;
+    }
+  }
+
+  void _onTextChanged() {
+    final text = _controller.text;
+    // 回報給外層存起來。**放在最前面**——下面每一條 early return 都是
+    // 「@ 選單不用理它」的意思，不是「這次輸入不算數」。漏在某一條之後的話，
+    // 游標跑到開頭、或使用者按了 ESC 收掉選單，那一次的字就不會被存下來
+    //
+    // ⚠️ **編輯模式除外**：那時輸入框裡的是「已經說出去的那則」，不是
+    // 「還沒說完的話」。存下去會這樣壞——編輯到一半切走房間，State 隨
+    // ValueKey 重建、編輯目標沒了（講好的），但草稿倉裡留著那則的全文，
+    // 切回來它以草稿的樣子出現，而按下送出就是**把同一則再貼一次**。
+    // 全程沒有任何錯誤，畫面看起來完全正常
+    if (!_editingBuffer) widget.onTextChanged?.call(text);
+    final hasText = text.trim().isNotEmpty;
+    if (hasText != _hasText) setState(() => _hasText = hasText);
+    // 歷史召回不是打字。這裡若照常往下走，一則含 `@某人` 的舊訊息會在被
+    // 叫回來的當下彈出候選選單，而選單一開就把方向鍵接管走了——使用者
+    // 按第二下 ↑ 會發現自己在選人名，不是在翻歷史
+    if (_applyingHistory) {
+      _hideMentions();
+      return;
+    }
+    final cursor = _controller.selection.baseOffset;
+    if (cursor < 0) {
+      _hideMentions();
+      return;
+    }
+    // 從游標往回找觸發字元。
+    //
+    // ⚠️ **`@` 與 `#` 的邊界規則不一樣，不能共用一套。** 名字裡沒有空白，
+    // 所以 `@` 一遇到空白就該放棄；卡片標題本來就有空白（「釘選列表跳訊息：
+    // 訊息多的房間定位會偏」），`#` 遇空白就斷的話永遠比不到第二個字以後。
+    // 兩者都遇換行就斷。
+    var at = -1;
+    var trigger = '';
+    var sawSpace = false;
+    for (var i = cursor - 1; i >= 0; i--) {
+      final c = text[i];
+      if (c == '@' || c == '#') {
+        at = i;
+        trigger = c;
+        break;
+      }
+      // `]` 是已經完成的 `#[標題]` 的右界。跨過它往回找，會讓游標停在
+      // 一個插好的指涉後面時又重新彈出選單
+      if (c == '\n' || c == ']') break;
+      if (c == ' ') sawSpace = true;
+      // 往回掃的距離要有上限，否則長訊息每打一個字都在掃整段
+      if (cursor - i > 60) break;
+    }
+    if (at < 0 || (trigger == '@' && sawSpace)) {
+      _hideMentions();
+      return;
+    }
+    var fragment = text.substring(at + 1, cursor).toLowerCase();
+    // 使用者自己打了 `#[` 的話，`[` 不是要搜尋的字
+    if (trigger == '#' && fragment.startsWith('[')) {
+      fragment = fragment.substring(1);
+    }
+    final matches = trigger == '#'
+        ? <_MentionOption>[
+            // 卡片標題**用 contains 比對，不是 startsWith**：沒有人記得住
+            // 一張卡的開頭是什麼，記得住的是中間那幾個字
+            for (final card in widget.cards)
+              if (card.title.toLowerCase().contains(fragment))
+                _MentionOption.card(card),
+          ]
+        : <_MentionOption>[
+            // 群組排在前面：它們是少數幾個固定的名字，而成員清單會很長。
+            // 打了 `@a` 卻要捲過十個人名才看到 `all`，那個選單等於沒用
+            for (final entry in kMentionGroups.entries)
+              if (entry.key.startsWith(fragment))
+                _MentionOption.group(entry.key, entry.value),
+            for (final p in widget.members)
+              if (p.isActive &&
+                  p.displayName.toLowerCase().startsWith(fragment))
+                _MentionOption.member(p),
+          ];
+    if (matches.isEmpty) {
+      _hideMentions();
+      return;
+    }
+    setState(() {
+      _mentionStart = at;
+      _candidates = matches;
+      _highlighted = 0;
+      _optionKeys.clear();
+    });
+    _overlayController.show();
+  }
+
+  void _hideMentions() {
+    if (_overlayController.isShowing) _overlayController.hide();
+    _mentionStart = -1;
+  }
+
+  void _pickMention(_MentionOption option) {
+    final text = _controller.text;
+    final cursor = _controller.selection.baseOffset;
+    final before = text.substring(0, _mentionStart);
+    final after = text.substring(cursor);
+    // 卡片指涉的字面是**有界**的 `#[標題]`（契約 seq 44）——中文沒有空白
+    // 可以當右邊界，沒有那兩個括號就沒有任何可靠的比對方式
+    final inserted =
+        option.card != null ? '#[${option.name}] ' : '@${option.name} ';
+    _controller.value = TextEditingValue(
+      text: '$before$inserted$after',
+      selection:
+          TextSelection.collapsed(offset: before.length + inserted.length),
+    );
+    _hideMentions();
+    _focus.requestFocus();
+  }
+
+  /// 候選選單裡上下移動。**到頭就停住，不繞回去**——繞回去的選單在只有
+  /// 兩三個候選時會讓人以為自己按錯了方向。
+  void _moveHighlight(int delta) {
+    final next = (_highlighted + delta).clamp(0, _candidates.length - 1);
+    if (next == _highlighted) return;
+    setState(() => _highlighted = next);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _optionKeys[next]?.currentContext;
+      if (ctx != null) Scrollable.ensureVisible(ctx, alignment: 0.5);
+    });
+  }
+
+  /// 上下鍵遍歷輸入歷史（終端機式）。回傳是否吃掉這個按鍵。
+  ///
+  /// **不吃的時候一定要回 false**，讓 TextField 拿去移動游標——六行的訊息
+  /// 如果連上下移動游標都做不到，這個功能就是在幫倒忙。
+  bool _travelHistory(bool down) {
+    // 編輯模式裡裝的是「要換掉的那則」，不是草稿。在那上面翻歷史會把
+    // 使用者正在改的訊息換掉，而他按下送出就是把別的內容蓋上去
+    //
+    // ⚠️ 兩個條件都要看。[_editingBuffer] 只在 didUpdateWidget 裡被設起來，
+    // 一開始就帶著 editTarget 進場的那顆 State 走不到那裡——旗標是假的，
+    // 而 widget.editTarget 是真相
+    if (_editingBuffer || widget.editTarget != null) return false;
+    final sel = _controller.selection;
+    // 有選取範圍時方向鍵是「取消選取並移動」，那是輸入框自己的事
+    if (!sel.isCollapsed || sel.baseOffset < 0) return false;
+    final text = _controller.text;
+    final offset = sel.baseOffset;
+    final history = widget.history;
+
+    if (!down) {
+      // 游標上面還有內容時，↑ 是「移到上一行」
+      if (text.substring(0, offset).contains('\n')) return false;
+      if (history.isEmpty) return false;
+      if (_historyIndex == null) {
+        _historyStash = text;
+        _historyIndex = history.length - 1;
+      } else if (_historyIndex! > 0) {
+        _historyIndex = _historyIndex! - 1;
+      } else {
+        // 已經在最舊那一則。吃掉按鍵但不動——放行的話游標會跳到開頭，
+        // 看起來像翻過頭了，其實只是沒有更舊的了
+        return true;
+      }
+      _applyHistory(history[_historyIndex!]);
+      return true;
+    }
+
+    // 游標下面還有內容時，↓ 是「移到下一行」
+    if (text.substring(offset).contains('\n')) return false;
+    // 不在歷史裡就沒有「下一則」可去
+    if (_historyIndex == null) return false;
+    if (_historyIndex! < history.length - 1) {
+      _historyIndex = _historyIndex! + 1;
+      _applyHistory(history[_historyIndex!]);
+    } else {
+      // 回到底：放回進歷史之前那句還沒說完的話
+      _historyIndex = null;
+      _applyHistory(_historyStash);
+      _historyStash = '';
+    }
+    return true;
+  }
+
+  void _applyHistory(String value) {
+    _applyingHistory = true;
+    _controller.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+    _applyingHistory = false;
+  }
+
+  /// 離開歷史瀏覽，回到「輸入框裡是草稿」的狀態。
+  void _resetHistory() {
+    _historyIndex = null;
+    _historyStash = '';
+  }
+
+  /// 送出時從文字內容萃取仍存在的 @成員 名單。
+  ///
+  /// 群組保留字一併送出去，**不在這裡展開**——Hub 才知道此刻房裡有誰，
+  /// 而且 agent 透過 MCP 發的 `@all` 也得走同一條路。
+  List<String> _extractMentions(String content) => extractMentions(
+        content,
+        [...widget.members.map((p) => p.displayName), ...kMentionGroups.keys],
+      );
+
+  /// 有附件還在傳（或傳失敗）時不讓送出。送出去的訊息只會帶已就緒的 id，
+  /// 讓它送出等於默默把那個檔案丟掉——使用者會以為傳成功了。
+  bool get _attachmentsSettled =>
+      widget.attachments.every((a) => a.isReady);
+
+  bool get _canSend =>
+      widget.enabled &&
+      !_sending &&
+      _attachmentsSettled &&
+      (_hasText || widget.attachments.isNotEmpty);
+
+  Future<void> _send() async {
+    if (!_canSend) return;
+    var content = _controller.text.trim();
+    if (content.isEmpty) {
+      // Hub 的 content 是 min_length=1，純附件訊息必須有字。用檔名當說明，
+      // 與 bridge 的 chatroom_send_file 同一套慣例。
+      final first = widget.attachments.first.filename;
+      content = widget.attachments.length == 1
+          ? '（檔案）$first'
+          : '（檔案）$first 等 ${widget.attachments.length} 個';
+    }
+    setState(() => _sending = true);
+    try {
+      await widget.onSend(content, _extractMentions(content));
+      // ⚠️ 清空**在 await 之後**。放前面的話送出失敗那句話就沒了
+      //
+      // 記歷史也一樣要在這裡。送出失敗時那句話還在輸入框，先記的話它會
+      // 同時是「輸入框裡的字」與「歷史最後一則」，使用者按 ↑ 看到重複
+      widget.onHistoryAdd?.call(content);
+      _controller.clear();
+      _hideMentions();
+      _resetHistory();
+    } catch (_) {
+      // 送出端已經把訊息 toast 出來了，這裡只要**不清空**。
+      //
+      // ⚠️ 沒有這個 catch 的話，那個例外會從 `_send()` 逸到 framework——
+      // `_send()` 是 fire-and-forget 叫的（Enter 鍵與按鈕都不 await），
+      // 所以它變成一個未處理的 async error：**功能上看起來正常**
+      // （字保住了、toast 也出來了），只有 log 裡多一筆沒人看的紅字
+      // （@審核用Codex-2 2026-09-03）
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+    _focus.requestFocus();
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    // 方向鍵要吃長按重複（翻十則歷史不該按十次），其餘按鍵只認按下——
+    // Enter 若吃了 repeat，按著不放會把同一則送出好幾次
+    final key = event.logicalKey;
+    final isArrow = key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (event is! KeyDownEvent && !(isArrow && event is KeyRepeatEvent)) {
+      return KeyEventResult.ignored;
+    }
+
+    final menuOpen = _overlayController.isShowing && _candidates.isNotEmpty;
+
+    // 🔴 組字中的方向鍵是 IME 在選候選字，攔下來會讓中文打不完整
+    // （與底下 Enter 那條同一個理由）
+    final composing = _controller.value.composing.isValid;
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (!menuOpen) return KeyEventResult.ignored;
+      _hideMentions();
+      return KeyEventResult.handled;
+    }
+
+    if (isArrow && !composing) {
+      final down = key == LogicalKeyboardKey.arrowDown;
+      // 選單開著時方向鍵歸選單，關著才歸歷史。兩張卡共用同一組按鍵，
+      // 仲裁只有這一處——分散在兩邊各自判斷的話，總有一天會同時成立
+      if (menuOpen) {
+        _moveHighlight(down ? 1 : -1);
+        return KeyEventResult.handled;
+      }
+      return _travelHistory(down)
+          ? KeyEventResult.handled
+          : KeyEventResult.ignored;
+    }
+
+    final paste = widget.onPasteImage;
+    if (paste != null &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed)) {
+      // 剪貼簿是非同步讀的，這裡無法等結果再決定要不要放行。剪貼簿同時有
+      // 圖與文字時（截圖工具常見）兩者都會進來——寧可多一段文字，也不要
+      // 因為攔截而讓一般的文字貼上失效。
+      paste();
+      return KeyEventResult.ignored;
+    }
+    final isEnter = key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter;
+    if (!isEnter) return KeyEventResult.ignored;
+    // 🔴 **輸入法正在組字時，Enter 是「選這個字」不是「送出」。**
+    //
+    // 中文（以及日文、韓文）打字時每一個詞都會先進組字狀態，那時按 Enter
+    // 要確認候選字。攔下來當成送出的話，訊息會在打到一半時飛出去，而且
+    // IME 的 session 被打斷——艾斯維爾的說法是「**打中文的時候卡住，
+    // 要去其他地方聚焦才可以重新打字**」（2026-09-04）。
+    //
+    // `composing.isValid` 就是「現在有一段未確認的組字」。英數字打字時
+    // 它一直是無效的，所以這道判斷不會影響原本的送出行為。
+    if (composing) return KeyEventResult.ignored;
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      return KeyEventResult.ignored; // SHIFT+ENTER → 換行
+    }
+    if (menuOpen) {
+      // 選中的是高亮那一項，不是第一項——方向鍵移動過之後還選第一項，
+      // 等於方向鍵沒有作用
+      _pickMention(_candidates[_highlighted.clamp(0, _candidates.length - 1)]);
+      return KeyEventResult.handled;
+    }
+    _send();
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+
+    if (!widget.enabled) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        decoration: BoxDecoration(
+          color: s.bgSunken,
+          border: Border(top: BorderSide(color: s.line)),
+        ),
+        child: Center(
+          child: MonoLabel('此聊天室已封存，無法發言', size: 10, letterSpacing: 2.4),
+        ),
+      );
+    }
+
+    final reply = widget.replyTarget;
+    final editing = widget.editTarget;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 14),
+      decoration: BoxDecoration(
+        color: s.bgSoft,
+        border: Border(top: BorderSide(color: s.line)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ComposerAttachmentBar(
+          attachments: widget.attachments,
+          onRemove: widget.onRemoveAttachment ?? (_) {},
+          onRetry: widget.onRetryAttachment ?? (_) {},
+        ),
+        if (editing != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(
+              color: s.bgSunken,
+              border: const Border(
+                  left: BorderSide(color: UepColors.gold, width: 2)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('編輯 #${editing.seq}',
+                        style: UepText.mono(
+                            size: 9,
+                            color: UepColors.gold,
+                            letterSpacing: 1.0)),
+                    const SizedBox(height: 2),
+                    Text(
+                      // 講出後果：編輯過的訊息會留下「已編輯」標記，
+                      // 那不是可以偷偷改掉的東西
+                      '送出後會取代原本的內容，並標記為已編輯',
+                      style: UepText.serif(
+                          size: 12, color: s.inkMute, height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: widget.onCancelEdit,
+                icon: Icon(Icons.close, size: 14, color: s.inkMute),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const SizedBox(height: 10),
+        ] else if (reply != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(
+              color: s.bgSunken,
+              border: const Border(
+                  left: BorderSide(color: UepColors.gold, width: 2)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('回覆 ${reply.senderName ?? '（未知）'}',
+                        style: UepText.mono(
+                            size: 9,
+                            color: UepColors.gold,
+                            letterSpacing: 1.0)),
+                    const SizedBox(height: 2),
+                    Text(
+                      reply.content,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: UepText.serif(
+                          size: 12, color: s.inkMute, height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: widget.onCancelReply,
+                icon: Icon(Icons.close, size: 14, color: s.inkMute),
+                visualDensity: VisualDensity.compact,
+              ),
+            ]),
+          ),
+          const SizedBox(height: 10),
+        ],
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          if (widget.onPickFiles != null) ...[
+            IconButton(
+              tooltip: '附加檔案（也可以直接把檔案拖進來、或貼上截圖）',
+              onPressed: widget.onPickFiles,
+              icon: Icon(Icons.attach_file, size: 18, color: s.inkMute),
+            ),
+            const SizedBox(width: 4),
+          ],
+          Expanded(
+            child: CompositedTransformTarget(
+              link: _link,
+              child: OverlayPortal(
+                controller: _overlayController,
+                overlayChildBuilder: (context) => _buildMentionOverlay(context),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: s.bgCard,
+                    border: Border.all(color: s.lineStrong),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Focus(
+                        onKeyEvent: _onKey,
+                        child: TextField(
+                          controller: _controller,
+                          focusNode: _focus,
+                          maxLines: 6,
+                          minLines: 1,
+                          style: UepText.serif(
+                              size: 14, color: s.ink, height: 1.7),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            // `#` 只在這間房掛了板、而且板上有卡的時候才
+                            // 有東西可指——沒有卡卻提示得了「# 指涉任務」，
+                            // 打了 `#` 會得到一個空的候選清單，那比不提示糟
+                            hintText: widget.cards.isEmpty
+                                ? '輸入訊息…　@ 提及成員，支援 Markdown'
+                                : '輸入訊息…　@ 提及成員，# 指涉任務，支援 Markdown',
+                            hintStyle: UepText.serif(
+                                size: 14, color: s.inkMute, height: 1.7),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      // 「這則會 tag 到誰」。**打出 `@名字` 不保證真的 tag
+                      // 得到**——名字打錯、中間多個空格、對方已經離開，
+                      // 三種都不會報錯，發出去才發現要補 tag
+                      // （艾斯維爾 09/14）。
+                      //
+                      // ⚠️ 用 ValueListenableBuilder 而不是在 _onTextChanged
+                      // 裡 setState：**只重建這一行，輸入框不在這個 subtree
+                      // 裡**。整個 composer 每次按鍵重建正是那個未解的 IME
+                      // 症狀的嫌疑區（卡 `7d3db264`），這條回饋不值得去碰它。
+                      //
+                      // 算的人與送出時算的是同一顆（_extractMentions /
+                      // extractCardRefs），所以看到的就是真的會送出的。
+                      // 另寫一套比對規則的話，兩套遲早不一樣，而不一樣的
+                      // 時候畫面上看不出是誰對。
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _controller,
+                        builder: (context, value, _) {
+                          final names = _extractMentions(value.text);
+                          final refs =
+                              extractCardRefs(value.text, widget.cards);
+                          if (names.isEmpty && refs.isEmpty) {
+                            return const MonoLabel(
+                                'ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史',
+                                size: 8.5,
+                                letterSpacing: 1.2);
+                          }
+                          // ⚠️ **這裡不能用 MonoLabel**：它會 `toUpperCase()`，
+                          // 而這一行印的是人名。「會 TAG 到：ALPHA」把名字
+                          // 改寫了，而這一行存在的理由正是讓人核對名字對不對
+                          // ——顯示成另一種寫法就核對不了。
+                          return Text(
+                            [
+                              if (names.isNotEmpty)
+                                '→ 會 tag 到：${names.join('、')}',
+                              if (refs.isNotEmpty) '指涉 ${refs.length} 張卡',
+                            ].join(' · '),
+                            style: UepText.mono(
+                              size: 8.5,
+                              letterSpacing: 1.2,
+                              // 金＝人、藍＝卡，與訊息裡的 chip 同一套語意
+                              color: names.isNotEmpty
+                                  ? UepColors.gold
+                                  : UepColors.info,
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          UepButton(
+            label: '送出 →',
+            onPressed: _canSend ? _send : null,
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _buildMentionOverlay(BuildContext context) {
+    final s = context.uep;
+    return CompositedTransformFollower(
+      link: _link,
+      targetAnchor: Alignment.topLeft,
+      followerAnchor: Alignment.bottomLeft,
+      offset: const Offset(0, -6),
+      child: Align(
+        alignment: Alignment.bottomLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320, maxHeight: 220),
+          child: Material(
+            color: s.bgCard,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(color: s.lineStrong),
+            ),
+            elevation: 12,
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.all(5),
+              children: [
+                for (final (i, option) in _candidates.indexed)
+                  InkWell(
+                    key: _optionKeys[i] ??= GlobalKey(),
+                    borderRadius: BorderRadius.circular(5),
+                    onTap: () => _pickMention(option),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 7),
+                      decoration: BoxDecoration(
+                        // 高亮那一項要看得出來——鍵盤選取如果沒有視覺回饋，
+                        // 使用者按 Enter 之前不知道自己選到誰
+                        color: i == _highlighted ? s.bgSunken : null,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border(
+                          left: BorderSide(
+                              color: option.participant == null
+                                  // 群組與卡片都不屬於任何 kind，用金色與
+                                  // 人名區隔——它們指到的不是一個人
+                                  ? UepColors.gold
+                                  : kindColor(option.participant!.kind,
+                                      context: context),
+                              width: 2),
+                        ),
+                      ),
+                      child: Row(children: [
+                        Expanded(
+                          child: Text(option.name,
+                              // 卡片標題會長，一行放不下就截斷——換行會讓
+                              // 每一項高度不一，方向鍵捲動就跟著跳
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: UepText.sans(
+                                  size: 12.5,
+                                  weight: FontWeight.w600,
+                                  color: s.inkTitle)),
+                        ),
+                        const SizedBox(width: 9),
+                        if (option.participant case final p?)
+                          KindBadge(kind: p.kind, compact: true)
+                        else if (option.card case final c?)
+                          Text(c.status,
+                              style:
+                                  UepText.mono(size: 9.5, color: s.inkMute))
+                        else
+                          Text(option.description,
+                              style:
+                                  UepText.serif(size: 11, color: s.inkMute)),
+                      ]),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 補全選單的一個候選：房內成員，或群組保留字（`all` / `agents` / `humans`）。
+///
+/// 刻意不用「名字是不是保留字」去事後判斷——那會在房裡真的有人叫 `all` 時
+/// 選錯（Hub 端把它們列為保留字正是為了這個，但舊房間可能已經有那個名字）。
+class _MentionOption {
+  const _MentionOption.member(Participant this.participant)
+      : _groupName = null,
+        card = null,
+        description = '';
+  const _MentionOption.group(this._groupName, this.description)
+      : participant = null,
+        card = null;
+  const _MentionOption.card(CardCandidate this.card)
+      : participant = null,
+        _groupName = null,
+        description = '';
+
+  final Participant? participant;
+  final String? _groupName;
+
+  /// 這一項是板上的一張卡（`#` 候選）；`@` 的候選為 null。
+  final CardCandidate? card;
+  final String description;
+
+  String get name => participant?.displayName ?? card?.title ?? _groupName!;
+}

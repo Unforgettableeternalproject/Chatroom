@@ -1,0 +1,465 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../core/config/app_settings.dart';
+import '../../core/theme/uep_theme.dart';
+import '../../core/theme/uep_tokens.dart';
+import '../../notifications/taskbar_badge.dart';
+import '../../core/diagnostics/input_diagnostics.dart';
+import '../../state/app_providers.dart';
+import '../../state/notification_providers.dart';
+import '../../state/rooms_providers.dart';
+import '../../widgets/uep_button.dart';
+import '../../widgets/version_banner.dart';
+import '../../state/host_kit_providers.dart';
+import '../../state/mcp_kit_providers.dart';
+import '../../widgets/connection_pill.dart';
+import '../boards/board_list_screen.dart';
+import '../rooms/room_list_screen.dart';
+
+/// 設定不完整的診斷結果——`null` 表示設定齊全。
+///
+/// 判準刻意涵蓋「存過但沒存完」：router 的首次啟動導向只看「曾經存過
+/// server URL」，token 是空的照樣放行進主畫面，接著每一支 API 都 401，
+/// 而畫面上只有一片空房間列表——**看起來像沒有房間，不像沒有設定**。
+String? settingsGapMessage({
+  required bool hasServerConfig,
+  required String serverUrl,
+  required String token,
+}) {
+  if (!hasServerConfig || serverUrl.trim().isEmpty) {
+    return '尚未儲存伺服器位址。目前用的是預設值，連不到任何 Hub。';
+  }
+  if (token.trim().isEmpty) {
+    return 'API token 是空的。伺服器會拒絕每一次請求（401），'
+        '房間列表因此永遠是空的。';
+  }
+  return null;
+}
+
+/// 桌機雙欄 / 手機堆疊的分流（go_router ShellRoute 的 shell）。
+/// 也負責生命週期與網路恢復時叫醒重連（UI-DESIGN §4.2 的三個觸發點之二）。
+class AppShell extends ConsumerStatefulWidget {
+  const AppShell({
+    super.key,
+    required this.child,
+    this.selectedRoomId,
+    this.selectedBoardId,
+  });
+
+  final Widget child;
+  final String? selectedRoomId;
+
+  /// 正在看哪塊 Board（`/boards/:boardId`）。左欄的 BOARDS 分頁靠它標選取。
+  final String? selectedBoardId;
+
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell>
+    with WidgetsBindingObserver {
+  StreamSubscription<List<ConnectivityResult>>? _connectivity;
+  StreamSubscription<String>? _kicked;
+
+  /// 設定缺口警告在這個 shell 的生命週期內只彈一次——關掉之後不再打斷，
+  /// 但下次啟動仍會再提醒（設定沒補齊，問題就還在）。
+  bool _warnedSettingsGap = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 卡 `7d3db264`：**視窗前後景的第二次嘗試**。
+    //
+    // `didChangeAppLifecycleState` 在 Windows 桌面對「別的視窗跳到前面」
+    // 完全不觸發（除錯 09/07 實測 0 筆），所以那條抓手是空的。這裡改監聽
+    // `FocusManager`——Flutter 收到 view focus 變化時會經它取消 primary
+    // focus，**如果**引擎有把視窗失焦傳下來的話。
+    //
+    // ⚠️ **它也可能是空的，我沒有實機驗過。** 但它有第二個作用而且那個
+    // 一定成立：**primaryFocus 變成 null 的那一刻**會被記下來，而
+    // 「游標還在閃、卻打不出字」正是「primaryFocus 沒變、但打不進去」——
+    // 兩者在 log 上分得出來，這比只有一條 focus 線索多一個維度
+    FocusManager.instance.addListener(_traceAppFocus);
+    _connectivity =
+        Connectivity().onConnectivityChanged.listen((results) {
+      final online = results.any((r) => r != ConnectivityResult.none);
+      if (online) ref.read(realtimeServiceProvider).retryNow();
+    });
+    _kicked = ref.read(realtimeServiceProvider).kicked.listen(_onKicked);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncForeground(WidgetsBinding.instance.lifecycleState);
+      _warnIfSettingsIncomplete();
+    });
+  }
+
+  /// 被管理員移出：本機也要跟著退場。
+  ///
+  /// Hub 那半早就擋了（訂閱被拒、REST 403），但 App 完全沒接那個錯誤，
+  /// 於是畫面停在被踢的前一刻——內容都還在、只是不再更新，看起來像
+  /// 「踢出沒有生效」。房間是邊界，不能只是名冊，而邊界要兩邊都認。
+  Future<void> _onKicked(String roomId) async {
+    final settings = ref.read(settingsRepoProvider);
+    // 清掉本機身分：留著的話房間列表仍把它當「已加入」，通知中心也會
+    // 繼續跟隨它，而每一次訂閱都只會再被拒一次
+    await settings.setParticipantId(roomId, null);
+    await settings.clearPendingMentions(roomId);
+    ref.read(notificationCenterProvider).retainOnly(
+          ref.read(notificationCenterProvider).followedRoomIds
+            ..remove(roomId),
+        );
+    ref.read(realtimeServiceProvider).unsubscribe(roomId);
+    ref.invalidate(roomListProvider('active'));
+    if (!mounted) return;
+    // 正在看那個房就請出來——留在一個讀不到內容的畫面上只會看到空白
+    if (widget.selectedRoomId == roomId) context.go('/rooms');
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('你已被管理員移出這個聊天室，看不到房內的內容了')));
+  }
+
+  /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
+  /// 失焦）與 `hidden`（最小化／被切走）都要讓通知照發。
+  ///
+  /// 初始值刻意從 `lifecycleState` 取而不是預設 true：`didChangeAppLifecycleState`
+  /// 只在**變化時**觸發，App 若不是在前景啟動的，那個猜來的 true 就一直錯著，
+  /// 而錯的方向是「把通知吃掉」。
+  ///
+  /// ⚠️ 殘餘缺口：視窗**有焦點但被別的視窗完全蓋住**時，Flutter 眼中仍是
+  /// `resumed`。那種情況要靠平台端的可見性查詢，目前沒有接。
+  void _syncForeground(AppLifecycleState? state) {
+    if (state == null) return;
+    ref.read(notificationCenterProvider).foreground =
+        state == AppLifecycleState.resumed;
+  }
+
+  Future<void> _clearPendingMentions(String roomId) async {
+    final settings = ref.read(settingsRepoProvider);
+    if (settings.pendingMentions(roomId) == 0) return;
+    await settings.clearPendingMentions(roomId);
+    await TaskbarBadge.instance.apply(unhandledCount(
+      realtime: ref.read(realtimeServiceProvider),
+      pendingInvites: ref.read(myPendingInvitesProvider).length,
+      settings: settings,
+    ));
+  }
+
+  /// 設定沒填完就進到主畫面時，把「為什麼什麼都看不到」講出來。
+  ///
+  /// 不靠 router 擋——擋不住的正是這一類：URL 存了、token 沒存，
+  /// `hasServerConfig` 為真，人就進來了，然後對著空畫面猜。
+  Future<void> _warnIfSettingsIncomplete() async {
+    if (_warnedSettingsGap || !mounted) return;
+    final config = ref.read(appConfigProvider);
+    final gap = settingsGapMessage(
+      hasServerConfig: ref.read(settingsRepoProvider).hasServerConfig,
+      serverUrl: config.serverUrl,
+      token: config.token,
+    );
+    if (gap == null) return;
+    _warnedSettingsGap = true;
+    final goSettings = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('初始設定還沒完成',
+            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+        content: Text(
+          '$gap\n\n到設定頁填好伺服器位址與 API token，'
+          '按「測試連線」確認後再按「儲存設定」——只測試不儲存不會生效。',
+          style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
+        ),
+        actions: [
+          UepButton(
+            label: '稍後再說',
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: '前往設定',
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (goSettings == true && mounted) context.push('/settings');
+  }
+
+  @override
+  void dispose() {
+    _connectivity?.cancel();
+    _kicked?.cancel();
+    FocusManager.instance.removeListener(_traceAppFocus);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 全域焦點的變化。與 composer 自己那條 `focus` 是**兩個層級**：
+  /// 那條說「輸入框認為自己有沒有焦點」，這條說「整個 App 現在把焦點放在
+  /// 哪裡、或根本沒有」。症狀是前者說有、而字打不進去，所以兩條都要。
+  ///
+  /// **不記 widget 的細節**，只記「有沒有」與型別名——debugLabel 可能含
+  /// 使用者資料。
+  void _traceAppFocus() {
+    final f = FocusManager.instance.primaryFocus;
+    InputDiagnostics.instance.log('appfocus', {
+      'has': f != null,
+      'node': f == null ? '-' : f.runtimeType.toString(),
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // ⚠️ **這一格在 Windows 桌面是空的**——實測（除錯 09/07）：讓 App 失去
+    // 前景三秒再回來，`didChangeAppLifecycleState` 一次都沒觸發。留著是因為
+    // 它在其他平台仍然有效，而且成本是零；**但別把它當成「視窗前後景」的
+    // 抓手**，那條走 `_traceAppFocus`
+    InputDiagnostics.instance.lifecycle(state.name);
+    if (state == AppLifecycleState.resumed) {
+      ref.read(realtimeServiceProvider).retryNow();
+      // 回到前景＝人來看了，正在看的那個房的待處理 mention 算處理過。
+      // 清除原本只掛在「有新訊息進來」上，所以「開著房間但沒有新訊息」
+      // 時那個數字會一直掛著——那正是回頭來看的人最常遇到的情況。
+      final roomId = ref.read(notificationCenterProvider).activeRoomId;
+      if (roomId != null) unawaited(_clearPendingMentions(roomId));
+    }
+    _syncForeground(state);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 啟動通知管線（跟隨已加入房間 → OS 通知 / 未讀刷新）
+    ref.watch(notificationBootstrapProvider);
+    final s = context.uep;
+    final wide = MediaQuery.sizeOf(context).width >= 900;
+    final themeMode =
+        ref.watch(appConfigProvider.select((c) => c.themeMode));
+
+    return Scaffold(
+      backgroundColor: s.bg,
+      body: Column(children: [
+        // 版本對不上時的警示。放在最上方、所有畫面之上——這條訊息要回答的
+        // 是「我看到的東西是不是最新的」，而那個疑問發生在你發現功能不見
+        // 的當下，不是在你想起要去翻設定的時候
+        const VersionBanner(),
+        // top bar
+        Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          decoration: BoxDecoration(
+            color: s.bgSoft,
+            border: Border(bottom: BorderSide(color: s.line)),
+          ),
+          child: Row(children: [
+            // logo 自帶深色圓底與留白，所以不再加外框——原本那個金色方框
+            // 是為了讓一個孤零零的「U」站得住，圖本身撐得住的話它只是雜訊
+            Image.asset('assets/logo.png',
+                width: 22, height: 22, filterQuality: FilterQuality.medium),
+            const SizedBox(width: 9),
+            Text('CHATROOM',
+                style: UepText.mono(
+                    size: 11, color: s.inkSoft, letterSpacing: 2.0)),
+            const Spacer(),
+            const ConnectionPill(),
+            const SizedBox(width: 12),
+            _TopIconButton(
+              tooltip: themeMode == ThemeModePref.dark ? '切換亮色' : '切換暗色',
+              glyph: themeMode == ThemeModePref.dark ? '☾' : '☀',
+              onTap: () =>
+                  ref.read(appConfigProvider.notifier).toggleTheme(),
+            ),
+            const SizedBox(width: 8),
+            // 主機控制台的入口。**沒有 host-kit 時整個不存在**，不是變灰
+            // ——絕大多數使用者是成員不是主持人，他們機器上本來就沒有那包，
+            // 而一個永遠按不動的按鈕比沒有這個功能更糟
+            // 主持包或 MCP 接入，有任一個就顯示——一個人可以同時是主持人
+            // 與成員，而兩者都沒有的人（例如只裝了 App 去連別人的 Hub）
+            // 這個入口對他沒有任何意義
+            if (ref.watch(hostKitProvider).value != null ||
+                ref.watch(mcpKitProvider).value != null) ...[
+              _TopIconButton(
+                tooltip: '這台機器（Hub 與 agent 接入的狀態）',
+                glyph: '⌂',
+                onTap: () => context.push('/host'),
+              ),
+              const SizedBox(width: 8),
+            ],
+            _TopIconButton(
+              tooltip: '設定',
+              glyph: '◎',
+              onTap: () => context.push('/settings'),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: wide
+              ? Row(children: [
+                  SizedBox(
+                    width: 272,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border(right: BorderSide(color: s.line)),
+                      ),
+                      child: _LeftPane(
+                        selectedRoomId: widget.selectedRoomId,
+                        selectedBoardId: widget.selectedBoardId,
+                      ),
+                    ),
+                  ),
+                  Expanded(child: widget.child),
+                ])
+              : widget.child,
+        ),
+      ]),
+    );
+  }
+}
+
+/// 左欄：ROOMS 與 BOARDS 兩個分頁。
+///
+/// 分頁狀態刻意**不放進路由**。理由是它會跟著你在看什麼自己走：從 Board 頁
+/// 切回某間房，左欄本來就該回到 ROOMS；把它寫進 URL 只會多出一個能與畫面
+/// 內容互相矛盾的狀態（`/rooms/x?tab=boards` 要顯示什麼？）。
+class _LeftPane extends StatefulWidget {
+  const _LeftPane({this.selectedRoomId, this.selectedBoardId});
+
+  final String? selectedRoomId;
+  final String? selectedBoardId;
+
+  @override
+  State<_LeftPane> createState() => _LeftPaneState();
+}
+
+class _LeftPaneState extends State<_LeftPane> {
+  bool _boards = false;
+
+  @override
+  void didUpdateWidget(_LeftPane old) {
+    super.didUpdateWidget(old);
+    // 導到一塊 Board 上時分頁自己跟過去——否則左欄還停在 ROOMS，
+    // 右邊已經是 Board 了，而選取的那一列在看不見的另一個分頁裡
+    if (widget.selectedBoardId != null &&
+        widget.selectedBoardId != old.selectedBoardId) {
+      _boards = true;
+    }
+    if (widget.selectedRoomId != null &&
+        widget.selectedRoomId != old.selectedRoomId) {
+      _boards = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    Widget tab(String label, bool active, VoidCallback onTap) => Expanded(
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: active ? UepColors.gold : Colors.transparent,
+                    width: 2,
+                  ),
+                ),
+              ),
+              child: Text(
+                label,
+                style: UepText.mono(
+                  size: 9.5,
+                  letterSpacing: 2.0,
+                  color: active ? s.ink : s.inkMute,
+                  weight: active ? FontWeight.w500 : FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+        );
+
+    return Column(children: [
+      Container(
+        decoration: BoxDecoration(
+          color: s.bgSoft,
+          border: Border(bottom: BorderSide(color: s.line)),
+        ),
+        child: Row(children: [
+          tab('ROOMS', !_boards, () => setState(() => _boards = false)),
+          tab('BOARDS', _boards, () => setState(() => _boards = true)),
+        ]),
+      ),
+      Expanded(
+        child: _boards
+            ? BoardListPane(selectedBoardId: widget.selectedBoardId)
+            : RoomListPane(selectedRoomId: widget.selectedRoomId),
+      ),
+    ]);
+  }
+}
+
+class _TopIconButton extends StatelessWidget {
+  const _TopIconButton({
+    required this.glyph,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final String glyph;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          width: 28,
+          height: 28,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(border: Border.all(color: s.line)),
+          child: Text(glyph,
+              style: TextStyle(fontSize: 12, color: s.inkSoft)),
+        ),
+      ),
+    );
+  }
+}
+
+/// 桌機模式下 /rooms 的右欄占位。
+class NoRoomSelected extends StatelessWidget {
+  const NoRoomSelected({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+              border: Border.all(color: UepColors.gold.withValues(alpha: .5))),
+          child: Text('U',
+              style: UepText.display(
+                  size: 24, weight: FontWeight.w600, color: UepColors.gold)),
+        ),
+        const SizedBox(height: 18),
+        Text('選擇一個聊天室開始',
+            style: UepText.serif(size: 14, color: s.inkSoft)),
+        const SizedBox(height: 6),
+        Text('或按左下角「建立房間」，再指派 agent 加入',
+            style: UepText.serif(size: 12.5, color: s.inkMute)),
+      ]),
+    );
+  }
+}

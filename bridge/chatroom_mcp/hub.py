@@ -1,0 +1,537 @@
+"""Hub REST 客戶端與錯誤轉譯（P2-02）。
+
+bridge 的唯一職責是把 Hub 的 HTTP 語意翻成 agent 看得懂的話。原本每個工具都
+``raise_for_status()``，agent 收到的是一串 httpx 堆疊，既無法判斷該怎麼補救、
+也可能誤以為是自己的工具壞了。這裡把所有失敗收斂成 :class:`HubError`，
+由 server 層轉成 ``{"ok": false, "reason": "<繁中說明>"}``。
+
+錯誤格式契約：Hub 的 detail 為 ``{"code", "message"}``——轉譯一律以機器可讀的
+``code`` 為準；字串比對只是對舊版 Hub（純字串 detail）的退路，不得再擴充。
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import httpx
+
+DEFAULT_HUB_URL = "http://127.0.0.1:8787"
+DEFAULT_TIMEOUT = 30.0
+
+
+class HubError(Exception):
+    """對 agent 可讀的失敗說明。
+
+    Attributes:
+        reason: 繁體中文的可讀說明，直接給 agent 看。
+        status: HTTP 狀態碼；連線層失敗為 None。
+        detail: Hub 回傳的原始 detail，保留給除錯用。
+        identity_invalid: 身分已失效，呼叫端應清掉本機身分並提示重新 join。
+        departure: 離場原因（``idle`` / ``kicked`` / ``left``），非離場為 None。
+            ``kicked`` 與其他兩者的處置不同——被踢的人不該再自己加回去。
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        status: int | None = None,
+        detail: Any = None,
+        identity_invalid: bool = False,
+        departure: str | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
+        self.detail = detail
+        self.identity_invalid = identity_invalid
+        self.departure = departure
+
+
+def _detail_text(detail: Any) -> str:
+    """把 FastAPI 的 detail（code/message 物件、字串或驗證錯誤陣列）壓成一行字。"""
+    if detail is None:
+        return ""
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("code") or detail)
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, list):
+        parts = []
+        for item in detail:
+            if isinstance(item, dict):
+                loc = ".".join(str(x) for x in item.get("loc", []))
+                parts.append(f"{loc}: {item.get('msg', '')}".strip(": "))
+            else:
+                parts.append(str(item))
+        return "；".join(p for p in parts if p)
+    return str(detail)
+
+
+def _ends_sentence(text: str) -> bool:
+    """這段話是不是已經自己收尾了。
+
+    Hub 的 message 多半自帶句號，而 bridge 又在後面補一個 ⇒ 「。。」。
+    純外觀，但那兩個點會出現在 agent 讀到的每一則 422／5xx 說明裡。
+    """
+    return text.rstrip().endswith(("。", "！", "？", ".", "!", "?", "）", ")"))
+
+
+def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
+    """把 HTTP 狀態碼 + detail 轉成有行動指引的中文說明。
+
+    以 detail["code"] 為判斷依據；純字串 detail 走子字串退路（舊版 Hub）。
+    """
+    code = detail.get("code") if isinstance(detail, dict) else None
+    text = _detail_text(detail)
+    low = text.lower()
+
+    if status == 401:
+        if code == "participant_header_required" or (code is None and "participant" in low):
+            return HubError(
+                "尚未取得房間身分：請先用 chatroom_join 加入該房間再試一次。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "session_key_header_required":
+            # **不設 identity_invalid**：缺的是請求上的一個標頭，不是房內
+            # 身分。設了的話 watcher 會結束進程、agent 會跑去重新 join——
+            # 而那兩件事都解決不了「這個請求少一個 X-Session-Key」。
+            return HubError(
+                _detail_text(detail)
+                or "這個動作要證明你就是那把 session key 的本人，"
+                   "但請求沒有帶 X-Session-Key。",
+                status=status, detail=detail,
+            )
+        # 走到這裡的 401 一律被當成 token 問題——**那個假設只對
+        # `invalid_token` 成立**。Hub 之後新增的「你沒帶某個身分標頭」類
+        # code 若掉進來，agent 會被指去查一把好好的 token，然後在那裡繞很久。
+        # `tests/test_401_contract.py` 守著這件事：新增 401 code 忘了回來
+        # 加一條就會紅。
+        return HubError(
+            f"Hub 拒絕了這次請求（token 無效或未設定）。請確認環境變數 "
+            f"CHATROOM_TOKEN 與 Hub（{hub_url}）設定一致。",
+            status=status, detail=detail,
+        )
+
+    if status == 403:
+        if code == "participant_wrong_room" or (code is None and "does not belong" in low):
+            return HubError(
+                "這個身分不屬於指定的房間；同一個 participant_id 不能跨房使用，"
+                "請對該房間重新呼叫 chatroom_join。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "participant_kicked":
+            return HubError(
+                "你已被管理員移出這個聊天室。**不要再自己加回去**——移出是人為決定，"
+                "重新加入等於推翻它。可以停掉對這個房間的監看以節省資源；"
+                "若認為是誤會，請透過其他管道向對方確認。",
+                status=status, detail=detail, identity_invalid=True, departure="kicked",
+            )
+        if code == "participant_removed_idle":
+            return HubError(
+                "你因閒置逾時被移出聊天室。這是自動清理不是懲罰——還要繼續參與的話"
+                "重新呼叫 chatroom_join 即可；不再需要時可停掉對這個房間的監看。",
+                status=status, detail=detail, identity_invalid=True, departure="idle",
+            )
+        if code == "participant_not_active":
+            # 明確列出來而不是靠 fallback 接住：fallback 的訊息剛好對，但那
+            # 是巧合——它同時是「所有沒人處理過的 code」的收容所
+            return HubError(
+                "你的房間身分已失效（可能因閒置逾時被移出房間）。"
+                "請重新呼叫 chatroom_join 取得新身分後再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "not_a_member":
+            # 這個身分不屬於這個房間。重新 join 是對的處置（可能根本沒加入過），
+            # 但別說「已失效」——沒加入過的人聽不懂那句話在講什麼
+            return HubError(
+                "你不是這個聊天室的成員（或手上的身分屬於別的房間）。"
+                "先用 chatroom_join 加入這個房間再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        if code == "participant_left":
+            return HubError(
+                "這個身分已經離開聊天室了。要回去的話重新呼叫 chatroom_join。",
+                status=status, detail=detail, identity_invalid=True, departure="left",
+            )
+        # ↑ 以上都是「身分有問題」。↓ 以下的 403 不是——把它們翻成「請重新
+        #   join」會給出一個死路：房間是私人的、你不是管理員、你被踢了，
+        #   這三件事重新加入一次都不會改變，而 agent 會照著做然後再撞一次。
+        if code == "room_is_private":
+            return HubError(
+                "這是一個私人對話，必須先被邀請才能加入——重新呼叫 chatroom_join "
+                "不會改變這件事。請房內的成員用指派／邀請把你加進來。",
+                status=status, detail=detail,
+            )
+        if code == "not_your_agent":
+            # 指派的界線：一個人只指派得動用同一張憑證接入的 agent
+            # （艾斯維爾裁 2026-09-12）。這不是身分問題——重新 join 一百次
+            # 也不會換一把憑證，要換的是**接入時填的那把 token**
+            return HubError(
+                _detail_text(detail)
+                or "這個 agent 不屬於你——指派只在用同一張憑證接入的 agent "
+                "之間成立。重新加入沒有用；要嘛請它的持有者去指派，"
+                "要嘛向主持人要一張掛在你名下的 agent 憑證。",
+                status=status, detail=detail,
+            )
+        if code == "kicked":
+            # join 端點的「被踢過所以不能自己回來」。與 participant_kicked
+            # 不同：那是手上的身分失效，這是根本不讓你取得新身分
+            return HubError(
+                "你先前被管理員移出這個聊天室，不能自己重新加入。"
+                "要回來需要管理員重新指派一次。",
+                status=status, detail=detail, departure="kicked",
+            )
+        if code == "not_your_question":
+            return HubError(
+                "這個問題不是問你的——只有被指名的人能回答。"
+                "用 chatroom_questions 看房內還有哪些問題是問你的。",
+                status=status, detail=detail,
+            )
+        if code == "root_token_required":
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有 Hub 主持人（.env 的主 token）做得到。",
+                status=status, detail=detail,
+            )
+        if code == "not_admin":
+            return HubError(
+                _detail_text(detail) or "這個動作只有聊天室建立者做得到。",
+                status=status, detail=detail,
+            )
+        if code == "not_assignment_target":
+            return HubError(
+                _detail_text(detail)
+                or "這筆指派不是給你的，只有被指派的 session 能回應它。",
+                status=status, detail=detail,
+            )
+        if code == "not_message_owner":
+            return HubError(
+                _detail_text(detail)
+                or "只有發送者本人或聊天室建立者可以刪除這則訊息。",
+                status=status, detail=detail,
+            )
+        if code == "not_room_admin":
+            return HubError(
+                _detail_text(detail)
+                or "只有目前的管理員可以移交管理權。",
+                status=status, detail=detail,
+            )
+        if code == "not_claim_holder":
+            # 認領是別人的。落進 fallback 會叫他重新 join——而重新 join 之後
+            # 卡還是在別人手上，他會照做然後再撞一次
+            return HubError(
+                _detail_text(detail)
+                or "這張卡由別人持有，只有持有者本人或人類成員可以解除認領。",
+                status=status, detail=detail,
+            )
+        if code == "not_board_editor":
+            # 改標題／敘述收緊到 owner／supervisor／建立者（09/08 裁定 B）。
+            # 落進 fallback 會叫他重新 join——而重新加入不會讓他變成建立者
+            return HubError(
+                _detail_text(detail)
+                or "改標題與敘述只有這塊板的 owner、房間的 supervisor "
+                "或建立者做得到。請他們代為修改。",
+                status=status, detail=detail,
+            )
+        if code == "not_board_member":
+            # 房裡的人不會自動變成板上的人（Board v2）。落進 fallback 會叫他
+            # 重新 join 房間——而房內身分再新也不會讓他出現在板的成員列上
+            return HubError(
+                _detail_text(detail)
+                or "你不是這塊板的成員。請板的 owner 把你加進去，"
+                "重新加入聊天室沒有用。",
+                status=status, detail=detail,
+            )
+        if code == "not_board_owner":
+            # 管理成員與指定 Supervisor 只有 owner 能做。落進 fallback 會叫他
+            # 重新 join——而角色不會因為重新加入房間而改變
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有板的 owner 做得到。請 owner 代為執行，"
+                "或請他把你調成 owner。",
+                status=status, detail=detail,
+            )
+        if code == "not_board_supervisor":
+            # 送出判斷限 Supervisor 或 owner。同上，不是身分失效
+            return HubError(
+                _detail_text(detail)
+                or "只有這塊板的 Supervisor 或 owner 能送出判斷。",
+                status=status, detail=detail,
+            )
+        if code == "board_read_only":
+            # viewer 只能看。同上，這不是身分失效，重新 join 不會升級角色
+            return HubError(
+                _detail_text(detail)
+                or "你在這塊板上是 viewer，只能看不能改。"
+                "要寫入請板的 owner 把你調成 editor。",
+                status=status, detail=detail,
+            )
+        if code == "human_block_readonly":
+            # 想法板：agent 不能改人類寫的段落（艾斯維爾 2026-09-02）。
+            # 落進 fallback 會叫他重新 join——而他再新的身分也還是 agent。
+            # **一定要說出替代做法**：不然它會改去把意見寫成新的一段，
+            # 混進本文裡，而那正是這道守門要避免的事
+            return HubError(
+                _detail_text(detail)
+                or "這一段是人類寫的，你不能改寫它。"
+                "要提意見的話用 notes 在它旁邊掛一則註解。",
+                status=status, detail=detail,
+            )
+        if code == "not_your_block":
+            # 同上，只是作者是另一個 agent
+            return HubError(
+                _detail_text(detail)
+                or "這一段是別人寫的，只有作者本人或人類成員可以改寫。"
+                "要提意見的話用 notes 在它旁邊掛一則註解。",
+                status=status, detail=detail,
+            )
+        if code == "human_only":
+            # board 上「只有人類做得到」的動作（刪卡、確認 Objective）。
+            # 落進 fallback 會被翻成「身分失效請重新 join」——而重新 join
+            # 一百次也不會讓 agent 變成人類，那是最典型的死路指引
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有人類成員做得到，agent 不行。"
+                "請在聊天室裡請人類代為執行。",
+                status=status, detail=detail,
+            )
+        if code == "not_assign_admin":
+            # 取消指派要管理權限。落進 fallback 會被翻成「身分失效請重新
+            # join」——而重新 join 不會讓你變成板 owner，agent 會照著那句話
+            # 白跑一趟再撞同一道門
+            return HubError(
+                _detail_text(detail)
+                or "取消指派要是這塊板的管理者（板 owner 或這間房的建立者）。"
+                "不是你分派的工作，請本人或管理者處理。",
+                status=status, detail=detail,
+            )
+        if code == "not_the_request_target":
+            # N-4 的指派請求只有被指名的人能回答。落進 fallback 會被翻成
+            # 「身分失效請重新 join」——而重新 join 不會讓你變成別人，agent
+            # 照著那句話做只會白跑一趟，然後再撞一次同一道門
+            return HubError(
+                _detail_text(detail)
+                or "這筆指派請求不是給你的，只有被指名的人能回答。"
+                "你可以自己去認領那張卡，但不能替別人答應。",
+                status=status, detail=detail,
+            )
+        if code == "host_view_required":
+            # 這條 agent 幾乎不會撞到（接管管理權是 App 的動作），但翻譯
+            # 一定要有：落進 fallback 會被當成身分失效，而 watcher 對身分
+            # 失效的處置是結束自己
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有 Hub 主持人做得到，而且要明示主持人視角。",
+                status=status, detail=detail,
+            )
+        if code == "human_token_required":
+            # 分離憑證（Hub 09/07）：`role=human`、主持人視角、發放邀請只認
+            # 人類憑證。agent 撞到這條**不是設定壞了**，是它正在做一件本來就
+            # 不屬於它的事——落進 fallback 會被讀成身分失效，而 watcher 對身分
+            # 失效的處置是結束自己
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只有人類做得到（需要 Hub 的人類憑證）。"
+                "agent 的 token 借不到人類身分，請改用 role=agent，"
+                "或請艾斯維爾從 App 來做。",
+                status=status, detail=detail,
+            )
+        if code == "not_request_owner":
+            # 收回**自己的**提議與「拒絕別人的提議」是兩件事：後者是建立者
+            # 的動作而且會留紀錄。講成「你沒有權限」會讓建立者去找核准鈕的
+            # 反面，而他要的其實是 resolve(approve=false)
+            return HubError(
+                _detail_text(detail)
+                or "只有提出這筆封存請求的人可以收回它——"
+                   "建立者要表達「不要封」請用婉拒，那會留下紀錄。",
+                status=status, detail=detail,
+            )
+        if code == "not_message_author":
+            # 與 not_message_owner 分開講：刪除連建立者也可以，編輯只限本人。
+            # 講成同一句話會讓建立者以為自己「身分有問題」而去重新 join
+            return HubError(
+                _detail_text(detail)
+                or "只有發送者本人可以編輯這則訊息——聊天室建立者刪得掉它，"
+                   "但改不動。",
+                status=status, detail=detail,
+            )
+        if code is None and ("participant" in low or "身分" in text):
+            # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
+            # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：
+            # 新版 Hub 一律帶 code，走上面那些精確分支
+            return HubError(
+                "你的房間身分已失效（可能因閒置逾時被移出房間）。"
+                "請重新呼叫 chatroom_join 取得新身分後再試。",
+                status=status, detail=detail, identity_invalid=True,
+            )
+        # 沒見過的 code：**維持 identity_invalid=True**。
+        #
+        # 直覺上這裡該跟上面幾個一樣「不要亂猜身分失效」，但滾動升級的保命
+        # 契約優先（見 tests/test_departure.py 的同名測試）：新 Hub 回的新
+        # code，舊 bridge 不認得，只要它仍落在這條路徑，舊 watcher 就會結束
+        # 進程；改成「暫時性錯誤」的話，舊 watcher 會變成永遠退不掉、還一直
+        # 打 Hub 的殭屍。誤判一次 agent 的處置（多 join 一次）遠比放生一隻
+        # 殭屍便宜。
+        #
+        # 所以正確的做法是**逐一把已知的非身分 code 列在上面**，而不是把
+        # fallback 放寬。之後 Hub 新增 403 code 時，記得回來加一條。
+        return HubError(
+            # 措辭刻意與 participant_not_active 不同：這條路徑**不知道**發生
+            # 什麼事，訊息就不該假裝知道。保守地當成身分問題（見上面的滾動
+            # 升級註解），但把 Hub 的原話帶上，讀的人才有機會自己判斷
+            f"Hub 拒絕了這個動作（403）：{_detail_text(detail) or '未提供原因'}。"
+            "若這是身分問題，重新呼叫 chatroom_join 後再試。",
+            status=status, detail=detail, identity_invalid=True,
+        )
+
+    if status == 404:
+        if code == "room_not_found" or (code is None and "room" in low):
+            return HubError(
+                "找不到這個聊天室：room_id 可能有誤，或房間已被刪除。"
+                "可用 chatroom_list_rooms 確認現有房間。",
+                status=status, detail=detail,
+            )
+        if code == "message_not_found" or (code is None and "message" in low):
+            return HubError(
+                "找不到這則訊息：message_id 可能有誤。", status=status, detail=detail
+            )
+        if code == "assignment_not_found" or (code is None and "assignment" in low):
+            return HubError(
+                "找不到這筆指派，或它已經被處理過了。"
+                "可用 chatroom_assignments 重新確認待處理清單。",
+                status=status, detail=detail,
+            )
+        if code is None and text.strip().lower() == "not found":
+            # **端點不存在，不是資源不存在。** FastAPI 的路由層 404 回的是純
+            # 字串 "Not Found"（無 code）；Hub 自己發的資源 404 一律帶 code。
+            #
+            # 這個分野值得一條專門的訊息，因為**歸因決定 agent 的下一步**：
+            # 聽成「找不到資源」它會去查 id、重試、換 id——那條路永遠不會成功；
+            # 聽成「這台沒有這個端點」它才會改走舊路徑或回報要升級。
+            #
+            # 判準要**同時**滿足「無 code」與「detail 恰好是那句 Not Found」：
+            # 只看無 code 的話，舊版 Hub 的純字串資源錯誤會被誤判成端點缺失，
+            # 那只是把錯誤的歸因換到另一邊（見 test_route_vs_resource_404.py）
+            return HubError(
+                f"這台 Hub 沒有這個端點（{hub_url}）——多半是它的版本比目前的 "
+                "bridge 舊。請確認 Hub 已升級；在那之前改用舊的呼叫方式。",
+                status=status, detail=detail,
+            )
+        return HubError(f"Hub 找不到對應資源（{text or '404'}）。",
+                        status=status, detail=detail)
+
+    if status == 409:
+        if code == "room_archived" or (code is None and "archiv" in low):
+            return HubError(
+                "這個聊天室已封存，只能讀取、不能寫入。"
+                "若確定要繼續使用，需由人類在 UI 或 API 端解除封存。",
+                status=status, detail=detail,
+            )
+        return HubError(f"操作與 Hub 目前狀態衝突（{text or '409'}）。",
+                        status=status, detail=detail)
+
+    if status == 422:
+        body = text or "請檢查傳入的欄位"
+        return HubError(
+            f"參數不符合 Hub 的要求：{body}" + ("" if _ends_sentence(body) else "。"),
+            status=status, detail=detail)
+
+    if status >= 500:
+        return HubError(
+            f"Hub 內部發生錯誤（HTTP {status}）。請檢查 Hub 端的日誌。",
+            status=status, detail=detail,
+        )
+
+    body = text or "無說明"
+    return HubError(
+        f"Hub 回傳未預期的狀態 HTTP {status}：{body}"
+        + ("" if _ends_sentence(body) else "。"),
+        status=status, detail=detail)
+
+
+class HubClient:
+    """對 Chatroom Hub 的薄 HTTP 客戶端。
+
+    ``transport`` 供測試注入 ``httpx.MockTransport``，正式執行時保持 None。
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        token: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self.base_url = base_url or os.environ.get("CHATROOM_URL", DEFAULT_HUB_URL)
+        self.token = token if token is not None else os.environ.get("CHATROOM_TOKEN", "")
+        self.timeout = timeout
+        self.transport = transport
+
+    def _headers(
+        self, participant_id: str | None, session_key: str | None = None
+    ) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        if participant_id:
+            headers["X-Participant-Id"] = participant_id
+        if session_key:
+            # 房**外**的身分：回應指派發生在進房之前，那時還沒有 participant
+            headers["X-Session-Key"] = session_key
+        return headers
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        participant_id: str | None = None,
+        session_key: str | None = None,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        files: Any = None,
+        raw: bool = False,
+    ) -> Any:
+        """發出請求並回傳解析後的 JSON；任何失敗都轉成 :class:`HubError`。
+
+        ``files`` 走 multipart（附件上傳）；``raw=True`` 回傳原始 bytes
+        而非 JSON（附件下載）。
+        """
+        try:
+            with httpx.Client(
+                base_url=self.base_url,
+                headers=self._headers(participant_id, session_key),
+                timeout=timeout or self.timeout,
+                transport=self.transport,
+            ) as client:
+                response = client.request(
+                    method, path, params=params, json=json, files=files
+                )
+        except httpx.TimeoutException as exc:
+            raise HubError(
+                f"連線 Hub（{self.base_url}）逾時。Hub 可能忙碌或網路不穩，稍後再試。"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise HubError(
+                f"無法連線到 Chatroom Hub（{self.base_url}）：{exc.__class__.__name__}。"
+                "請確認 Hub 已啟動，且 CHATROOM_URL 設定正確。"
+            ) from exc
+
+        if response.status_code >= 400:
+            detail = None
+            try:
+                body = response.json()
+                detail = body.get("detail") if isinstance(body, dict) else body
+            except ValueError:
+                detail = response.text
+            raise translate_status(response.status_code, detail, self.base_url)
+
+        if raw:
+            return response.content
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise HubError("Hub 回應不是合法的 JSON，版本可能不相容。") from exc

@@ -1,0 +1,99 @@
+"""bridge 的版本識別。
+
+與 Hub 那支（`chatroom_server/version.py`）刻意保持同樣的三段來源與同樣的
+欄位名：**兩邊的版本要能放在一起比對**，而不是各說各話。今天的事故裡最花
+時間的一段，就是沒有人能同時說出「Hub 是哪一版」與「我手上的 kit 是哪一版」。
+
+kit 解開之後沒有 `.git`，所以 `_build.json` 是部署現場唯一可靠的來源。
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from functools import lru_cache
+from pathlib import Path
+
+APP_VERSION = "1.2.2"
+
+# 交付包實際收錄的路徑。dirty 判定只看這裡（見 _from_git）。
+_SHIPPED = "bridge/"
+
+_BUILD_FILE = Path(__file__).with_name("_build.json")
+
+
+@lru_cache(maxsize=1)
+def build_info() -> dict[str, str]:
+    """{version, commit, built_at, source}。"""
+    packed = _from_build_file()
+    if packed is not None:
+        return packed
+    from_git = _from_git()
+    if from_git is not None:
+        return from_git
+    # 不偽造：「不知道自己是哪一版」與「是 1.0.0 版」是完全不同的兩件事
+    return {"version": APP_VERSION, "commit": "", "built_at": "",
+            "source": "unknown"}
+
+
+def version_string() -> str:
+    info = build_info()
+    return f"{info['version']}+{info['commit'] or 'unknown'} ({info['source']})"
+
+
+def handshake_version() -> str:
+    """MCP `initialize` 回的 `serverInfo.version`。
+
+    與 `version_string()` 刻意分開：那支是給人看的 banner（帶空格與來源
+    標註），這支是給 client 比對用的**版本字串**——空格與括號在版本欄位裡
+    是雜訊。
+
+    帶 commit 的理由：server／bridge／app 三包同版號，版號本身沒有鑑別力。
+    交握是 client 呼叫任何工具之前唯一問得到版本的地方，能多說一點就多說。
+    """
+    info = build_info()
+    return f"{info['version']}+{info['commit']}" if info["commit"] else info["version"]
+
+
+def _from_build_file() -> dict[str, str] | None:
+    try:
+        raw = json.loads(_BUILD_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "version": str(raw.get("version") or APP_VERSION),
+        "commit": str(raw.get("commit") or ""),
+        "built_at": str(raw.get("built_at") or ""),
+        "source": "build",
+    }
+
+
+def _from_git() -> dict[str, str] | None:
+    root = Path(__file__).resolve().parents[2]
+    if not (root / ".git").exists():
+        return None
+    commit = _git(root, "rev-parse", "--short=12", "HEAD")
+    if not commit:
+        return None
+    # 工作樹髒 = 這份執行中的程式碼對不回任何 commit。
+    # 只問 `bridge/`：交付包只含這個目錄，別人在改別處（Flutter、
+    # 另一半的 kit）不改變「這份程式碼是哪一版」。scope 開成整個 repo
+    # 會讓 `-dirty` 幾乎恆真，而恆真的警告沒有人看。
+    # ⚠️ scope **內**的 untracked 仍然算髒：新檔案沒 commit，一樣對不回去。
+    if _git(root, "status", "--porcelain", "--", _SHIPPED) != "":
+        commit += "-dirty"
+    return {"version": APP_VERSION, "commit": commit, "built_at": "",
+            "source": "git"}
+
+
+def _git(root: Path, *args: str) -> str | None:
+    try:
+        out = subprocess.run(["git", *args], cwd=root, capture_output=True,
+                             text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()

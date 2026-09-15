@@ -1,0 +1,321 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
+
+import '../models/message.dart';
+import '../core/theme/uep_theme.dart';
+import '../core/theme/uep_tokens.dart';
+
+/// 開啟訊息裡的連結。
+///
+/// **只放行 http/https**：訊息內容來自房內任何一個 agent，而
+/// `launchUrl` 會把 `file:`／`ms-settings:` 這類 scheme 交給作業系統執行。
+/// 一則訊息就能讓收到的人點開本機檔案或系統設定，那不是聊天室該有的能力。
+Future<void> _openLink(BuildContext context, String? href) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final uri = href == null ? null : Uri.tryParse(href);
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    messenger?.showSnackBar(
+      SnackBar(content: Text('這個連結不是 http(s)，不開啟：${href ?? ''}')),
+    );
+    return;
+  }
+  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!ok) {
+    messenger?.showSnackBar(SnackBar(content: Text('開不起來：$href')));
+  }
+}
+
+/// Markdown 套件的唯一接觸點——換套件只改這裡。
+/// 安全限制：訊息內容來自 agent，不啟用 raw HTML / 任意 widget 注入。
+class UepMarkdownBody extends StatelessWidget {
+  const UepMarkdownBody({
+    super.key,
+    required this.data,
+    this.baseColor,
+    this.mentions = const [],
+    this.mentionGroups = const [],
+    this.cardRefs = const [],
+    this.onTapCard,
+  });
+
+  final String data;
+  final Color? baseColor;
+
+  /// 訊息的 mentions 清單：內文中的「@名字」會渲染成帶外框的 chip，
+  /// 與一般內容視覺區分。只認清單裡的名字，不做整段 @ 掃描。
+  final List<String> mentions;
+
+  /// 群組 token（`agents` / `humans` / `all`）。
+  ///
+  /// ⚠️ **它們不在 [mentions] 裡**——Hub 把群組展開成全房名單放進 mentions，
+  /// 原本打的字面留在 `mention_groups`。所以只用 mentions 建比對式時，
+  /// 內文那個 `@agents` 永遠對不上任何一個名字，於是它是整則訊息裡
+  /// **唯一沒有被標起來的 mention**，而它偏偏是涵蓋最廣的那個。
+  final List<String> mentionGroups;
+
+  /// 這則訊息指涉到的卡：內文裡的 `#[標題]` 會渲染成可點的 chip。
+  ///
+  /// **只認這份清單裡的標題**，不做整段 `#[...]` 掃描——使用者自己打的
+  /// `#[買牛奶]` 沒有對應的卡，把它畫成 chip 等於承諾一個點不開的連結。
+  final List<CardRef> cardRefs;
+
+  /// 點了卡片 chip。`no_access` 與 `deleted` 的 chip 不會呼叫它——那兩種
+  /// 點過去只會看到一個空畫面，而使用者會以為是 App 壞了。
+  final void Function(CardRef)? onTapCard;
+
+  /// 內文中要標成 chip 的所有 token：個別名字 ＋ 群組。
+  ///
+  /// 兩者共用同一條比對式，因為它們在正文裡是同一種東西——都是「這則訊息
+  /// 點到了誰」。分開處理的話遲早有一邊漏掉，而漏掉的那邊在畫面上看起來
+  /// 就只是普通文字。
+  List<String> get _chipNames => [...mentions, ...mentionGroups];
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final ink = baseColor ?? s.ink;
+    return MarkdownBody(
+      data: data,
+      // GitHub 風格的 autolink：純文字的 https://… 也算連結，不必寫成
+      // [文字](網址)。agent 與人貼網址時多半是直接貼，不會去包 markdown
+      extensionSet: md.ExtensionSet.gitHubWeb,
+      onTapLink: (text, href, title) => _openLink(context, href),
+      // ⚠️ 不要開 selectable。它會用 SelectableText 渲染，而 SelectableText
+      // **即使沒有選取任何文字也會吃下右鍵**，彈出系統的「Select All」選單，
+      // 把訊息自己的右鍵選單（釘選／回覆／刪除）搶走，位置也由它決定。
+      // 選取能力改由聊天畫面外層的 SelectionArea 提供——它只在真的有選取時
+      // 才顯示選單，右鍵就還給我們了，而且能跨訊息選取（2026-08-30 實測）。
+      selectable: false,
+      inlineSyntaxes: [
+        if (_chipNames.isNotEmpty) _MentionSyntax(_chipNames),
+        if (cardRefs.isNotEmpty) _CardRefSyntax(cardRefs),
+      ],
+      builders: {
+        'uepMention': _MentionChipBuilder(),
+        'uepCardRef': _CardRefChipBuilder(cardRefs, onTapCard),
+      },
+      styleSheet: MarkdownStyleSheet(
+        p: UepText.serif(size: 14.5, color: ink),
+        strong: UepText.serif(
+            size: 14.5, weight: FontWeight.w600, color: s.inkTitle),
+        em: UepText.serif(size: 14.5, color: ink).copyWith(
+            fontStyle: FontStyle.italic),
+        listBullet: UepText.serif(size: 14.5, color: ink),
+        blockquote: UepText.serif(size: 13.5, color: s.inkSoft),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(left: BorderSide(color: s.hairlineStrong, width: 2)),
+        ),
+        blockquotePadding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
+        code: UepText.code(size: 12.5, color: s.inkSoft).copyWith(
+          backgroundColor: s.bgSunken,
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: s.bgSunken,
+          border: Border.all(color: s.line),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        codeblockPadding: const EdgeInsets.symmetric(
+            horizontal: 14, vertical: 12),
+        h1: UepText.display(size: 22, color: s.inkTitle),
+        h2: UepText.display(size: 19, color: s.inkTitle),
+        h3: UepText.serif(
+            size: 16, weight: FontWeight.w600, color: s.inkTitle),
+        horizontalRuleDecoration: BoxDecoration(
+          border: Border(top: BorderSide(color: s.hairline)),
+        ),
+        // 底線是「可以點」的唯一視覺線索——只有顏色的話，在這個配色裡
+        // 跟強調文字分不出來
+        a: TextStyle(
+          color: UepColors.gold,
+          decoration: TextDecoration.underline,
+          decorationColor: UepColors.gold.withValues(alpha: .5),
+        ),
+        tableBorder: TableBorder.all(color: s.line),
+        tableBody: UepText.serif(size: 13, color: ink, height: 1.6),
+      ),
+    );
+  }
+}
+
+/// 「@ + mentions 中任一名字」的比對式。
+///
+/// 名字先逐一 RegExp.escape、長的在前——「Nova-2」要贏過「Nova」。渲染 chip
+/// 與判斷「哪些 mention 沒出現在正文」共用這一份：兩邊若各自實作，
+/// `'@Nova-2'.contains('@Nova')` 這種前綴包含就會讓 Nova 被當成已渲染而從
+/// 泡泡上消失（實際發生過，測試抓到）。
+String mentionPattern(List<String> names) {
+  final sorted = [...names]..sort((a, b) => b.length.compareTo(a.length));
+  return '@(?:${sorted.map(RegExp.escape).join('|')})';
+}
+
+/// 比對「@ + mentions 中任一名字」的 inline syntax。
+class _MentionSyntax extends md.InlineSyntax {
+  _MentionSyntax(List<String> names)
+      : super(mentionPattern(names), caseSensitive: true);
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    parser.addNode(md.Element.text('uepMention', match[0]!));
+    return true;
+  }
+}
+
+/// mention chip：金色細框 + 淡底。
+///
+/// 兩處共用——內文裡的 `@名字`，以及泡泡底下那排「正文沒寫 @ 的 mentions」
+/// （agent 走 API 的 `mentions` 參數時是常態）。樣式只有一份，不會漂移。
+class MentionChip extends StatelessWidget {
+  const MentionChip(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: UepColors.gold.withValues(alpha: .10),
+        border: Border.all(color: UepColors.gold.withValues(alpha: .45)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: UepText.sans(
+                size: 12.5, weight: FontWeight.w600, color: UepColors.gold)
+            .copyWith(height: 1.3),
+      ),
+    );
+  }
+}
+
+/// 把內文中比對到的 `@名字` 交給 [MentionChip] 呈現。
+class _MentionChipBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    return MentionChip(element.textContent);
+  }
+}
+
+/// 「`#[` + 這則訊息指涉到的任一卡片標題 + `]`」的比對式。
+///
+/// **字面是有界的**（契約 seq 44）：中文沒有空白可以當右邊界，裸標題比對會
+/// 讓 `#登入頁重構的問題` 同時中到 `#登入頁重構`。長的排前面，理由與
+/// [mentionPattern] 相同——短標題若是長標題的前綴，先比到短的就錯了。
+String cardRefPattern(List<CardRef> refs) {
+  final sorted = [...refs]
+    ..sort((a, b) => b.title.length.compareTo(a.title.length));
+  return r'#\[(?:' +
+      sorted.map((r) => RegExp.escape(r.title)).join('|') +
+      r')\]';
+}
+
+class _CardRefSyntax extends md.InlineSyntax {
+  _CardRefSyntax(List<CardRef> refs)
+      : super(cardRefPattern(refs), caseSensitive: true);
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    parser.addNode(md.Element.text('uepCardRef', match[0]!));
+    return true;
+  }
+}
+
+/// 卡片指涉 chip。
+///
+/// 標題直接用 `preview.title`——**Hub 已經依 status 挑好該顯示哪一個**
+/// （`ok`/`moved` 現況、`deleted`/`no_access` 快照）。App 再判一次的話，
+/// 兩邊的規則遲早會不一樣，而畫面上看不出是誰對。
+class CardRefChip extends StatelessWidget {
+  const CardRefChip(this.ref, {super.key, this.onTap});
+
+  final CardRef ref;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final preview = ref.preview;
+    // 現況不明的（刪掉、搬走、看不到）用灰的：它們仍然指著一段歷史，
+    // 但點過去沒有東西，顏色要先講出這件事
+    //
+    // 可用時用 info 藍，**刻意不與 mention chip 的金色相同**：金在這套色票裡
+    // 是「人」的顏色（`kindHuman == gold`），而卡片不是人。兩種 chip 原本都
+    // 畫成金色，一排 chip 看過去分不出哪個點下去會跳到人、哪個會跳到卡。
+    final tint = preview.isOk ? UepColors.info : s.inkMute;
+    final label = preview.title.isEmpty ? ref.title : preview.title;
+    final chip = Container(
+      margin: const EdgeInsets.symmetric(horizontal: 1),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: .10),
+        border: Border.all(color: tint.withValues(alpha: .45)),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text.rich(
+        TextSpan(children: [
+          TextSpan(
+            text: label,
+            style: UepText.sans(
+                    size: 12.5, weight: FontWeight.w600, color: tint)
+                .copyWith(height: 1.3),
+          ),
+          if (preview.badge.isNotEmpty)
+            TextSpan(
+              text: '（${preview.badge}）',
+              style: UepText.mono(size: 9.5, color: s.inkMute),
+            ),
+        ]),
+      ),
+    );
+    if (onTap == null) return chip;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: onTap, child: chip),
+    );
+  }
+}
+
+class _CardRefChipBuilder extends MarkdownElementBuilder {
+  _CardRefChipBuilder(this.refs, this.onTapCard);
+
+  final List<CardRef> refs;
+  final void Function(CardRef)? onTapCard;
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
+    // 從字面回推是哪一張。比對式是用這份清單建的，所以一定找得到；
+    // 找不到時退成純文字而不是丟例外——渲染路徑上不該有會炸的地方
+    final literal = element.textContent;
+    final title = literal.length >= 3
+        ? literal.substring(2, literal.length - 1)
+        : '';
+    final ref = refs.where((r) => r.title == title).firstOrNull;
+    if (ref == null) return Text(literal, style: preferredStyle);
+    final handler = onTapCard;
+    // 點不開的不給點：deleted 與 no_access 過去只會是一個空畫面
+    final tappable = handler != null &&
+        ref.preview.status != 'deleted' &&
+        ref.preview.status != 'no_access';
+    return CardRefChip(ref, onTap: tappable ? () => handler(ref) : null);
+  }
+}
+
+/// 這則訊息裡「有被 ping、但正文沒有出現 `@名字`」的對象。
+///
+/// mention 在這個系統裡是結構化欄位（`chatroom_post(mentions=[...])`），與正文
+/// 寫不寫 `@` 無關。人類在 App 用 mention_field 打字會把 `@名字` 帶進正文，
+/// 所以看得到 chip；agent 直接帶 mentions 參數則不會——泡泡上因此完全看不出
+/// 這則訊息 tag 了人，即使收件端的 `mentioned` 判定是 true。這個函式補的就是
+/// 那段落差（2026-08-29 實機發現）。
+List<String> unrenderedMentions(String content, List<String> mentions) {
+  if (mentions.isEmpty) return const [];
+  // 走與渲染同一條比對式，結果才會互補而不是各說各話
+  final rendered = RegExp(mentionPattern(mentions), caseSensitive: true)
+      .allMatches(content)
+      .map((m) => m[0]!.substring(1))
+      .toSet();
+  return [for (final n in mentions) if (!rendered.contains(n)) n];
+}

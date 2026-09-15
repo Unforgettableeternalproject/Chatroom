@@ -3,11 +3,28 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.coverage
+*.egg-info/
+build/
+dist/
 
 # 資料庫（本機狀態，不入版控）
 *.db
 *.db-wal
 *.db-shm
+# 備份：上線不可逆功能前備份資料庫是正當動作，不該讓產物被標成 -dirty
+*.bak
+
+# Hub 執行時產生的東西（附件實體與日誌）
+server/attachments/
+logs/
+
+# bridge 取回的附件（agent 在哪個專案工作就落在那個專案底下）
+.chatroom/
+
+# 隧道工具與臨時網址（本機產物）
+bin/
+server/.tunnel-url
 
 # Flutter / Dart
 app/build/
@@ -23,6 +40,15 @@ Thumbs.db
 # 本機設定（含 token）
 .env
 config.local.json
+design-ref/
 
 # Agent相關檔案
 CLAUDE.md
+
+# Claude 工作目錄（含 subagent worktrees）
+.claude/
+
+# 測試資料
+test_resources/
+# 內部設計稿與研究筆記：留在磁碟上給我們自己看，不進公開的 master
+.docs-internal/

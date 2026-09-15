@@ -1,0 +1,213 @@
+"""WebSocket 的 token 驗證。
+
+`f097230`（08-27）寫這段時 Hub 只有一種 token（`.env` 的主 token），
+那時 `token != cfg.api_token` 就拒絕是對的。`bc1d2ed`（08-29）引入可撤銷的
+access_token，REST 的 `require_auth` 改成查表——**WS 那條路徑沒跟上**，
+於是用邀請碼進來的人 REST 讀得到歷史，卻連不上即時通道。
+
+沒被既有測試擋下的原因：WS 測試不是跑開放模式（`api_token=""`）就是用
+「錯的 token」，**沒有一條用「合法但不是主 token」去連**。這份補的正是
+那個縫。
+"""
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from starlette.testclient import TestClient
+
+from chatroom_server.app import create_app
+from chatroom_server.config import Config
+
+ROOT = "root-token"
+
+
+@pytest.fixture
+def app(tmp_path):
+    return create_app(Config(db_path=str(tmp_path / "ws.db"), api_token=ROOT))
+
+
+async def _issue_token(app, label="guest") -> str:
+    async with AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://t",
+                           headers={"Authorization": f"Bearer {ROOT}"}) as c:
+        async with app.router.lifespan_context(app):
+            r = await c.post("/api/tokens", json={"label": label})
+            return r.json()["token"]
+
+
+async def _revoke(app, token: str) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://t",
+                           headers={"Authorization": f"Bearer {ROOT}"}) as c:
+        async with app.router.lifespan_context(app):
+            await c.delete(f"/api/tokens/{token}")
+
+
+def _connects(app, query: str) -> bool:
+    with TestClient(app) as tc:
+        try:
+            with tc.websocket_connect(f"/ws?{query}"):
+                return True
+        except Exception:
+            return False
+
+
+@pytest.mark.asyncio
+async def test_access_token_can_connect(app):
+    """發出去的邀請碼要連得上——否則那個人讀得到歷史卻收不到任何新訊息。
+
+    在使用者眼中那不是「權限不足」，是「這個聊天室好像死了」。
+    """
+    tok = await _issue_token(app)
+    assert _connects(app, f"token={tok}") is True
+
+
+@pytest.mark.asyncio
+async def test_revoked_token_cannot_connect(app):
+    """撤銷要對 WS 生效。只擋 REST 的話，被撤銷的人照樣即時收得到整個房間
+    ——那正是「踢出擋不住人」那次的形狀（08-29），不可以在這裡重演。"""
+    tok = await _issue_token(app)
+    await _revoke(app, tok)
+    assert _connects(app, f"token={tok}") is False
+
+
+@pytest.mark.asyncio
+async def test_root_token_and_garbage(app):
+    assert _connects(app, f"token={ROOT}") is True
+    assert _connects(app, "token=nonsense") is False
+    assert _connects(app, "") is False
+
+
+@pytest.mark.asyncio
+async def test_host_view_on_ws_requires_root_token(app):
+    """🚨 主持人視角不可以被 access_token 打開。
+
+    在 WS 只收主 token 的年代，`host_view=1` 靠「非主 token 根本連不上」
+    才是安全的。放寬連線驗證的那一刻，那個假設就沒了——所以這兩件事必須
+    在同一個 commit 裡改，中間不存在有洞的狀態。
+
+    這裡驗的是：拿 access_token 帶 host_view=1 連上之後，訂閱一個自己
+    沒份的房仍然被擋。
+    """
+    tok = await _issue_token(app)
+    async with AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://t",
+                           headers={"Authorization": f"Bearer {ROOT}"}) as c:
+        async with app.router.lifespan_context(app):
+            rid = (await c.post("/api/rooms", json={
+                "name": "別人的房", "session_key": "someone-else"})).json()["id"]
+            # 房裡要有東西可推。**完全空的房會讓 receive_json() 永遠等下去**
+            # ——pump 沒有訊息可送就直接掛在 events.wait 上，那不是失敗，
+            # 是測試本身寫錯了（我第一版就是這樣把自己掛住的）
+            await c.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human",
+                "session_key": "someone-else", "preferred_name": "Owner"})
+
+    with TestClient(app) as tc:
+        with tc.websocket_connect(f"/ws?token={tok}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            evt = ws.receive_json()
+            assert evt["type"] == "error", evt
+            assert evt["code"] in ("participant_header_required", "not_a_member")
+
+    # 對照組：主 token 帶 host_view=1 訂得到
+    with TestClient(app) as tc:
+        with tc.websocket_connect(f"/ws?token={ROOT}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            # ⚠️ **不能假設第一則就是 messages。** 訂閱成功後 Hub 會推哪些
+            # 事件、以什麼順序推，是會長出新種類的（board 就是 09-01 加的）。
+            # 這條測試要的是「訂得到 vs 被擋掉」，不是幀的順序——**以 type
+            # 分派、忽略不認得的種類**，那也是所有 WS consumer 該有的寫法。
+            for _ in range(8):
+                evt = ws.receive_json()
+                assert evt["type"] != "error", evt
+                if evt["type"] == "messages":
+                    break
+            else:
+                raise AssertionError("主 token + host_view 應該訂得到訊息")
+
+
+# ---------- 憑證分離（09-07）之後的同一個縫 ----------
+
+HUMAN = "human-token"
+
+
+@pytest.fixture
+def split_app(tmp_path):
+    """啟用憑證分離的 Hub：agent 一把、人類一把。"""
+    return create_app(Config(
+        db_path=str(tmp_path / "ws-split.db"),
+        api_token=ROOT,
+        human_api_token=HUMAN,
+    ))
+
+
+@pytest.mark.asyncio
+async def test_human_token_can_connect_to_ws(split_app):
+    """🔴 人類憑證要連得上 WS。
+
+    **這是 08-29 那個縫原樣再發生一次。** 09-07 的憑證分離把
+    `CHATROOM_HUMAN_TOKEN` 加進 `require_auth`，但 `/ws` 的驗證沒跟上——
+    它只認 `cfg.api_token` 與 `access_token` 表，而人類憑證兩條都不在。
+
+    症狀與上次一模一樣、而且更難查：**「測試連線」成功（走 REST）、
+    實際連線一直重連（走 WS）**。使用者看到的是「設定明明是對的」。
+
+    它潛伏了四天沒被發現，因為在安裝器開始產生人類憑證之前，
+    **沒有人手上有那把鑰匙可以去撞它**。
+    """
+    assert _connects(split_app, f"token={HUMAN}") is True
+
+
+@pytest.mark.asyncio
+async def test_agent_token_still_connects_in_split_mode(split_app):
+    """agent 憑證仍然連得上——它只是不能宣稱自己是人，不是被關在門外。
+
+    修 human 那條時把 agent 一起擋掉的話，所有 bridge 會在同一刻斷線。
+    """
+    assert _connects(split_app, f"token={ROOT}") is True
+
+
+@pytest.mark.asyncio
+async def test_garbage_still_rejected_in_split_mode(split_app):
+    """放寬不可以放寬成「什麼都收」。"""
+    assert _connects(split_app, "token=nonsense") is False
+    assert _connects(split_app, "") is False
+
+
+@pytest.mark.asyncio
+async def test_agent_token_cannot_open_host_view_in_split_mode(split_app):
+    """🚨 分離之後，主持人視角只認人類憑證——WS 要與 REST 同一個判準。
+
+    REST 的 `require_host_view` 在 split 模式下要求 `audience == human`，
+    bridge 手上那把主 token 開不了。WS 若仍只看「是不是 root」，
+    **每一個 agent 都打得開主持人視角**——而那正是憑證分離要防的事。
+    """
+    async with AsyncClient(transport=ASGITransport(app=split_app),
+                           base_url="http://t",
+                           headers={"Authorization": f"Bearer {HUMAN}"}) as c:
+        async with split_app.router.lifespan_context(split_app):
+            rid = (await c.post("/api/rooms", json={
+                "name": "別人的房", "session_key": "someone-else"})).json()["id"]
+            await c.post(f"/api/rooms/{rid}/join", json={
+                "kind": "human", "role": "human",
+                "session_key": "someone-else", "preferred_name": "Owner"})
+
+    # agent 憑證帶 host_view=1：連得上，但訂不到自己沒份的房
+    with TestClient(split_app) as tc:
+        with tc.websocket_connect(f"/ws?token={ROOT}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            evt = ws.receive_json()
+            assert evt["type"] == "error", evt
+            assert evt["code"] in ("participant_header_required", "not_a_member")
+
+    # 對照組：人類憑證帶 host_view=1 訂得到
+    with TestClient(split_app) as tc:
+        with tc.websocket_connect(f"/ws?token={HUMAN}&host_view=1") as ws:
+            ws.send_json({"type": "subscribe", "room_id": rid, "after_seq": 0})
+            for _ in range(8):
+                evt = ws.receive_json()
+                if evt["type"] == "messages":
+                    break
+                assert evt["type"] != "error", evt
+            else:
+                pytest.fail("人類憑證的主持人視角訂不到")

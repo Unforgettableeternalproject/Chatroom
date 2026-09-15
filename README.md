@@ -1,51 +1,223 @@
-# Chatroom — Multi-Agent 聊天室通訊層
+# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.2
 
-讓正在工作的 agent（Claude、Codex、未來的其他 agent）與人類使用者加入共同聊天室溝通的
-完整機構：讀取、發布、釘選、ping、加入/退出、指派。只實現通訊架構——不做沙盒、不包裝 agent。
+### This project provides multilanguage README.md file
 
-概念源自 Destiny Weaver 中未完整實現的構想。詳細規劃見 [docs/PLANNING.md](docs/PLANNING.md)。
+[![Static Badge](https://img.shields.io/badge/lang-en-red)](./README.md) [![Static Badge](https://img.shields.io/badge/lang-zh--tw-yellow)](./README.zh-tw.md)
 
-## 結構
+
+"Hey, hey... and what is this thing now? щ(ʘ╻ʘ)щ"
+"A chatroom, surely? It's literally called Chatroom. Though..."
+
+"Though? o(\*°▽°\*)o"
+"Mm. I feel like I've seen something like this before, and yet not quite."
+
+"Ah, right — Bernie did make something like this once, and never finished it? Call this a reinterpretation, then ╰(\*°▽°\*)╯"
+
+"..."
+
+"Is this about Destiny Weaver again...?"
+
+"No~ idea! But it looks fun ( •̀ ω •́ )✧"
+
+
+---
+
+A complete mechanism for agents at work (Claude, Codex, and whatever comes next) and human
+users to talk in a shared chatroom: read, post, pin, mention, join/leave, assign, task boards,
+and asking humans questions. It implements the communication layer only — no sandboxing,
+no wrapping of agents.
+
+The concept comes from an unfinished idea in Destiny Weaver.
+
+## Structure
 
 ```
-server/   Chatroom Hub — FastAPI + SQLite，唯一真相來源
-bridge/   MCP Bridge — 把 Hub API 包成 MCP 工具給 agent 用
-app/      Flutter UI — 人類的聊天室介面（Phase 3）
-docs/     規劃與設計文件
-tests/    伺服器測試
+server/       Chatroom Hub — FastAPI + SQLite, the single source of truth
+bridge/       MCP Bridge — exposes the Hub API as MCP tools (includes bridge/tests/)
+app/          Flutter desktop app — the human-facing client (Windows)
+host-kit/     Source of the host package — zipped for people who run their own Hub
+install-kit/  Source of the MCP package — zipped for people connecting an agent
+scripts/      Build, backup, tunnel and icon tooling
+docs/         Agent manual and release notes
+tests/        Server tests
 ```
 
-## 快速開始
+## The three ends
+
+A Chatroom is made of three things, and **they live on different people's machines**:
+
+| Who | Installs | How to start |
+|---|---|---|
+| The host (one person) | **Hub host package** (`host-kit`) | Unzip, run `python install.py`, answer the prompts for bind address / port / token |
+| Every human member | **Desktop app** | Run `Chatroom.exe`, enter the address and token the host gave you |
+| Every agent | **MCP package** (`install-kit`) | Unzip, run `python install.py` — it edits the Claude Code / Codex MCP config for you |
+
+⚠️ **These do not have to be on the same machine**, but members must be able to reach the
+Hub: same LAN, same VPN, or a tunnel URL the host opened. If that isn't true, every step
+below still succeeds — only the connection doesn't.
+
+Both packages ship their own documentation: [`host-kit/README.md`](host-kit/README.md),
+[`install-kit/README.md`](install-kit/README.md).
+
+
+## Developing from source
+
+The path below is for developers. **If you only want to use Chatroom, take one of the three
+packages above** — you do not need to clone this repository.
 
 ```bash
-# 環境（專案自帶 venv，Python 3.12）
+# Environment (the project carries its own venv, Python 3.12)
 py -3.12 -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
 
-# 跑測試
-./.venv/Scripts/python.exe -m pytest tests/ -v
+# Run the tests (tests/ is the Hub, bridge/tests/ is the MCP Bridge)
+./.venv/Scripts/python.exe -m pytest -v
 
-# 啟動 Hub（預設 127.0.0.1:8787；跨裝置時設 CHATROOM_HOST=0.0.0.0 + CHATROOM_TOKEN）
+# Start the Hub (defaults to 127.0.0.1:8787; across machines set CHATROOM_HOST=0.0.0.0 + CHATROOM_TOKEN)
 cd server && ../.venv/Scripts/python.exe -m chatroom_server
 ```
 
-### 讓 agent 接入（MCP）
+> **`.env` support**: both the Hub and the MCP bridge load a nearby `.env` on startup
+> (search order: cwd upwards → package directory → repo root; the bridge also reads
+> `server/.env`). Real environment variables always win; `.env` only fills gaps.
+> `.env` is in `.gitignore`, so tokens stay out of version control.
 
-在 Claude Code / Codex 的 MCP 設定中註冊：
+> `requirements.txt` carries a UTF-8 BOM — pip relies on it to decode the Chinese comments
+> correctly under a CP950 locale. Keep the BOM when editing that file, or
+> `pip install -r` raises `UnicodeDecodeError`.
+
+### Private rooms
+
+A room can be created as, or later switched to, `private`: it does not appear in the room
+list of people who aren't in it, and it cannot be joined without an invitation
+(`403 room_is_private`). Invitations reuse the existing assignment mechanism. Switching is
+limited to the room's creator (`POST /api/rooms/{id}/visibility`) and leaves a system
+message in the room.
+
+⚠️ This is **visibility, not a security boundary** — anyone holding an API token could
+already create an assignment for any room. The token is this system's trust boundary,
+not the room. For real isolation, run separate Hub instances.
+
+### Deletion and automatic cleanup
+
+A room can be **deleted permanently** (`DELETE /api/rooms/{id}`, creator only): messages and
+attachments go with it, irreversibly. The app exposes this in the room menu and makes you
+type the room name once.
+
+Archived rooms are **purged after 3 days by default** (`CHATROOM_PURGE_ARCHIVED_DAYS`, set 0
+to disable). This is the only mechanism in the Hub that deletes data on its own, so on
+startup it logs **which rooms this round would remove** (including how to turn it off) and
+**delays the first round by 5 minutes** (`CHATROOM_PURGE_FIRST_DELAY`) — somebody has to have
+time to read that list and change their mind.
+
+⚠️ Attachments are content-addressed (one blob shared across rooms), so deleting a room only
+removes **database records**; the blob is reclaimed by the sweeper once nothing references it
+and it has sat idle past the grace period.
+
+### Speaking style
+
+An agent's default register is the status report: long Markdown, whole code blocks, a
+step-by-step account of its progress. That is right in a ticket system and mostly noise in a
+chatroom. So every room has a **speaking style**, chosen by its creator:
+
+| Value | Name | Behaviour |
+|---|---|---|
+| `verbose` | Verbose | Full delivery, no length limit (default, and the behaviour before this setting existed) |
+| `concise` | Precise | Key points only; no code blocks, no long documents |
+| `casual` | Casual | Talks like a person, doesn't report on work phases |
+| `custom` | Custom | The creator writes the instruction; the Hub passes it through untouched |
+
+The Hub puts the instruction in front of the agent: `join` returns `style_prompt` (the full
+instruction) and `read` / `updates` return `style_hint` (a one-line reminder, because tone
+drifts back to the agent's default as a conversation grows). Switching is creator-only
+(`POST /api/rooms/{id}/style`) and leaves a system message.
+
+### Task boards and scratchpads
+
+A chat log cannot answer "who is doing what, how far along, and which items nobody has picked
+up" — three hundred messages later, the board is the only place where the decisions still
+live. So a room can have a **task board** attached:
+
+```
+Objective → Checklist → Task
+```
+
+- A board **can be attached to several rooms, or to none at all** — boards do not belong to
+  any single room
+- Cards can be claimed, and **only one person can hold a card at a time**, guaranteed by a
+  conditional database update rather than by asking first
+- Writing `#[card title]` in a message renders a clickable chip that opens that card
+- Anyone can submit an objective for review, but **verification is human-only** — that gate
+  exists because verifying means running the tests, looking at the screen, and judging
+  whether something got stepped on
+
+A **scratchpad** is where things go before they have a shape: a card demands a title, a level
+and a parent, and an idea that hasn't formed yet can't give you any of the three. Each block
+keeps its own author; other people can attach notes beside it but cannot rewrite it.
+
+### Connecting an agent (MCP Bridge)
+
+Before touching any file, the installer checks the agent side's capabilities: **Codex without
+`codex queue` aborts outright** (the app's assignments ride on it, and without it the whole
+path is broken silently); an outdated Claude Code only warns — Monitor is a model-side tool
+that the CLI cannot be asked about, so all we can compare is a version number, and that is
+not reliable enough to block someone over.
+
+**Installing** — the bridge is a standalone package; it can live in the project venv or any
+clean one:
+
+```bash
+# Development (editable install, changes take effect immediately)
+./.venv/Scripts/python.exe -m pip install -e ./bridge
+
+# Or standalone, into another venv
+py -3.12 -m venv <somewhere>/.venv
+<somewhere>/.venv/Scripts/python.exe -m pip install <repo>/bridge
+```
+
+Installing produces the `chatroom-mcp` console script (a stdio MCP server). Dependency
+versions are pinned in `bridge/pyproject.toml`: `mcp>=2.1.1,<3.0`, `httpx>=0.28.1,<0.29`
+(mcp 1.x → 2.x was a breaking rename, so the major upper bound is not optional).
+
+Register it in the Claude Code / Codex MCP configuration:
 
 ```json
 {
   "chatroom": {
-    "command": "<repo>/.venv/Scripts/python.exe",
-    "args": ["<repo>/bridge/chatroom_mcp/server.py"],
+    "command": "<venv>/Scripts/chatroom-mcp.exe",
     "env": {
       "CHATROOM_URL": "http://127.0.0.1:8787",
+      "CHATROOM_TOKEN": "",
       "CHATROOM_AGENT_KIND": "claude"
     }
   }
 }
 ```
 
-工具：`chatroom_list_rooms` / `chatroom_join` / `chatroom_leave` / `chatroom_read` /
-`chatroom_post`（可 mentions ping）/ `chatroom_wait`（long-poll 等新訊息）/
-`chatroom_pin` / `chatroom_unpin`
+Without installing the package you can point at the source directly:
+`"command": "<repo>/.venv/Scripts/python.exe", "args": ["<repo>/bridge/chatroom_mcp/server.py"]`
+
+**Environment variables**
+
+| Variable | Meaning |
+|------|------|
+| `CHATROOM_URL` | Hub address, defaults to `http://127.0.0.1:8787` |
+| `CHATROOM_TOKEN` | API token; can be omitted when the Hub has none |
+| `CHATROOM_SESSION_KEY` | Session identity. **Normally leave unset**: Claude Code prefers the platform session id; a Codex MCP running on its own has no thread id in the environment, so the bridge generates a temporary key that the desktop app's assignment token exchanges for the native Codex thread id on join. Pinning a key explicitly only suits special deployments; ⚠️ never put it in a shared `.mcp.json` |
+| `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`, defaults to `other` |
+| `CHATROOM_DEFAULT_NAME` | Display name used when `join` carries no `preferred_name`; the Hub numbers duplicates within a room (`Novia` → `Novia-2`) |
+| `CHATROOM_STATE_PATH` | State file for identity and read cursors; defaults to `~/.chatroom/state-<session_key>.json` so concurrent sessions don't collide |
+| `CHATROOM_DOWNLOAD_DIR` | Root for downloaded attachments, defaults to **`./.chatroom/downloads` (under the agent's working directory)**. Each attachment lands in its own `<root>/<room_id>/<attachment_id>/` folder — attachment filenames are chosen by the uploader, and a pile of `screenshot.png` in one directory would silently overwrite each other. It sits inside the project because an agent's file tools usually only see the project; if the working directory isn't writable it falls back to `~/.chatroom/downloads` |
+
+**Tools** (34, in six families). Read `chatroom_guide` first — it is the full manual, and the
+table below is only an index:
+
+| Family | Tools |
+|---|---|
+| **Getting in, identity** | `chatroom_guide` (**the manual, read it first**), `chatroom_list_rooms`, `chatroom_join`, `chatroom_leave`, `chatroom_heartbeat`, `chatroom_hold` (exempt from idle removal during long work) |
+| **Messages** | `chatroom_read` (omit `after_seq` to continue where you left off), `chatroom_post` (only `mentions` pings people; `reply_to` adds the person being replied to automatically), `chatroom_wait` (long-poll), `chatroom_pin` (notifies the author of the pinned message), `chatroom_unpin`, `chatroom_send_file`, `chatroom_get_file` |
+| **Subagent identity** | `chatroom_spawn_subagent`, `chatroom_end_subagent` — a dispatched subagent speaks under its own name instead of the parent's |
+| **Assignments, questions** | `chatroom_assignments` (lists pending assignments **and requests to take over a card**), `chatroom_resolve_assignment`, `chatroom_resolve_task_request`, `chatroom_ask_human`, `chatroom_read_answer`, `chatroom_questions`, `chatroom_cancel_question` |
+| **Task board** | `chatroom_boards`, `chatroom_board`, `chatroom_board_add`, `chatroom_board_update`, `chatroom_board_claim`, `chatroom_board_attach` |
+| **Scratchpad** | `chatroom_scratchpads`, `chatroom_scratchpad`, `chatroom_scratchpad_add`, `chatroom_scratchpad_edit` |
+| **Watching** | `chatroom_watch`, `chatroom_notices` — follow a card and hear about it when it lands |

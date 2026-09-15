@@ -1,0 +1,111 @@
+# 發 release：打三個產物，附到 GitHub Release。
+#
+# 三個產物共用同一顆 commit 的 `_build.json`／`--dart-define`，所以收到的人
+# 可以交叉比對 Hub、bridge、App 是不是同一份程式碼——那是這整套版本戳
+# 唯一的用途，一邊對不上就失去意義。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # 手動也能發（補發、或先不想動 tag 時）。給的 tag 必須已經存在。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要發的 tag（例：v1.2.1）'
+        required: true
+
+permissions:
+  contents: write  # 建立 Release 需要
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # 打包要讀 git 資訊（buildstamp 取 commit 與 dirty 狀態）
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: 安裝依賴
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      # 🚨 版本一致性：tag 與程式碼裡的 APP_VERSION 必須相同。
+      # 不檢查的話會發出「tag 寫 v1.3.0、產物 _build.json 寫 1.2.1」的
+      # release——收到的人兩邊都看得到，卻無從得知哪個才對。
+      - name: 檢查 tag 與 APP_VERSION 一致
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          WANT="${TAG#v}"
+          for f in server/chatroom_server/version.py bridge/chatroom_mcp/version.py; do
+            # 用 sed 不用 `grep -oP`：PCRE 在 Windows runner 的 Git Bash 上
+            # 不保證有，缺了會變成「檢查沒跑但看起來跑過」
+            GOT=$(sed -n 's/.*APP_VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f")
+            if [ "$GOT" != "$WANT" ]; then
+              echo "✕ $f 的 APP_VERSION=$GOT，與 tag $TAG（期望 $WANT）不符"
+              exit 1
+            fi
+            echo "✓ $f = $GOT"
+          done
+          # App 的版本在 pubspec（格式 `1.2.1+1`，取 + 之前）。三處都要對得上——
+          # 漏掉這處的話，Hub 與 bridge 標 1.3.0 而 App 自報 1.2.1，
+          # 而 App 的版本是使用者唯一看得到的那個
+          GOT=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' app/pubspec.yaml)
+          if [ "$GOT" != "$WANT" ]; then
+            echo "✕ app/pubspec.yaml 的 version=$GOT，與 tag $TAG（期望 $WANT）不符"
+            exit 1
+          fi
+          echo "✓ app/pubspec.yaml = $GOT"
+
+      # 發布前先確認這顆 commit 本身是綠的。CI 是對 PR 與分支跑的，
+      # tag 可能指向任何一顆 commit——包含沒被 CI 跑過的那些。
+      - name: pytest
+        run: pytest -q
+
+      - name: flutter test
+        working-directory: app
+        run: flutter pub get && flutter analyze && flutter test
+
+      - name: 打 install-kit
+        run: python install-kit/build.py
+
+      - name: 打 hub-kit
+        run: python host-kit/build.py
+
+      # ⚠️ 這裡刻意不用管線。`python build-app.py | tee log` 會讓 exit code
+      # 變成 tee 的，build 失敗照樣綠燈——2026-09-11 在本機實際踩過一次。
+      - name: Build App
+        run: python scripts/build-app.py
+
+      # App 不是單一檔案：exe 只是 C++ runner 殼，Dart 程式碼在 data/app.so。
+      # 只發 exe 的話對方拿到的是一個跑不起來的殼。
+      - name: 壓縮 App
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          Compress-Archive -Path app/build/windows/x64/runner/Release/* `
+                           -DestinationPath "dist/chatroom-app-$tag-windows-x64.zip"
+
+      - name: 建立 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          draft: true  # 先出草稿，人看過再按發布
+          generate_release_notes: true
+          files: |
+            dist/chatroom-mcp-kit.zip
+            dist/chatroom-hub-kit.zip
+            dist/chatroom-app-*.zip
