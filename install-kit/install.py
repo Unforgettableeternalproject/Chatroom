@@ -346,12 +346,18 @@ ENV_FILE_HEADER = """\
 def write_env_file(url: str, token: str) -> Path:
     """在 kit 根目錄寫一份 .env——**連線資訊的唯一真相**（只放 URL/TOKEN）。
 
-    bridge 進程靠 MCP 設定裡的 `CHATROOM_ENV_FILE` 找到它，watcher 靠 cwd
-    找到它。在這之前 token 得同時寫進 MCP 設定與這個檔，換一次要改兩處，
-    而漏改一處的症狀是「看起來換好了、實際還在用舊的」。
+    bridge 進程靠 MCP 設定裡的 `CHATROOM_ENV_FILE` 找到它，watcher 靠
+    `watcher_command` 產的 `--env-file` 找到它。在這之前 token 得同時寫進
+    MCP 設定與這個檔，換一次要改兩處，而漏改一處的症狀是「看起來換好了、
+    實際還在用舊的」。
 
-    位置必須是 kit 根目錄（bridge/ 的上一層）——envfile.load_env_file 的
-    候選清單裡有「bridge 套件的 repo 根」，解壓後的 kit 剛好落在那個位置。
+    ⚠️ 兩邊都是**顯式指定**，不要靠搜尋。這裡原本寫著「watcher 靠 cwd 找到
+    它」——那句話只在 watcher 取 kit 的 `bridge/` 原始碼時成立，而
+    `watcher_command` 刻意不走那條（見它的 docstring）。兩個設計決定互相
+    抵銷，而失敗是靜默的。
+
+    位置放在 kit 根目錄（bridge/ 的上一層）——那也是 envfile 候選清單裡
+    「bridge 套件的 repo 根」的位置，走 fallback 路徑時剛好也搆得到。
 
     kind 與 name 刻意不寫：它們是 per-agent 的身分資訊，塞進共用檔就得在
     claude 與 codex 之間二選一，選哪個都會讓另一種 watcher 頂著錯誤身分跑
@@ -425,12 +431,26 @@ def watcher_command(py: Path, name: str) -> str:
 
     ``--kind`` / ``--label`` 走命令列而不是共用 ``.env``：一份 .env 只填得下
     一個 kind，另一種 agent 的 watcher 就會頂著錯身分跑（見 ENV_FILE_HEADER）。
+
+    🚨 ``--env-file`` 也**必須**顯式給。取 site-packages 那支的代價是
+    ``load_env_file`` 推出來的根變成 ``venv/Lib``——kit 根目錄不在它的候選
+    清單裡，而 watcher 的 cwd 是使用者自己的專案。搜尋那條路在這個版面下
+    永遠找不到，症狀是靜靜退回 ``DEFAULT_HUB_URL``（127.0.0.1:8787）：
+    安裝全綠、watcher 掛得起來、指派掃描清單上就是看不到它。
     """
     site = site_packages(py)
-    script = (site / "chatroom_mcp" / "watch.py") if site else (
-        KIT_DIR / "bridge" / "chatroom_mcp" / "watch.py")
+    if site:
+        script = site / "chatroom_mcp" / "watch.py"
+    else:
+        script = KIT_DIR / "bridge" / "chatroom_mcp" / "watch.py"
+        print("⚠️ 找不到 site-packages，watcher 指令改指向 kit 的 bridge/ 原始碼"
+              "（升級後這兩份可能不同版）")
+    if not script.is_file():
+        print(f"⚠️ watcher 腳本不在：{script}")
+        print("   產出的指令會指向一個不存在的檔案——請確認 bridge 裝好了再重跑。")
     label = f' --label {name}' if name else ""
-    return f'"{py}" "{script}" --kind claude{label}'
+    env_file = KIT_DIR / ".env"
+    return f'"{py}" "{script}" --env-file "{env_file}" --kind claude{label}'
 
 
 def setup_skill(py: Path, name: str) -> None:

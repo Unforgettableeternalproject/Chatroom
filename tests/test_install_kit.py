@@ -244,6 +244,105 @@ def test_env_file_is_where_the_watcher_looks(inst, kit_dir, monkeypatch):
     assert os.environ["CHATROOM_URL"] == "http://hub:8787"
 
 
+# ---------- watcher 找不找得到那份 .env ----------
+
+
+def test_watcher_cannot_find_the_env_file_by_searching(inst, kit_dir, tmp_path_factory):
+    """前提本身：site-packages 版面下，**搜尋永遠找不到** kit 的 .env。
+
+    這條不是在守某個修好的行為，是把「為什麼非得顯式指定不可」釘住——
+    而它必須在子進程裡跑：``load_env_file`` 的候選清單有一半是從
+    ``envfile.__file__`` 推的，在本測試進程裡那是 repo 自己的 ``bridge/``，
+    於是它會撈到 repo 的 ``server/.env``，把真正的失效蓋掉。要看見真相，
+    得把套件複製到假的 site-packages 版面、用子進程載入它。
+
+    ``write_env_file`` 的 docstring 原本寫著「watcher 靠 cwd 找到它」，那句話
+    只在 watcher 取 kit 的 ``bridge/`` 原始碼時成立，而 ``watcher_command``
+    刻意不走那條。兩個設計決定互相抵銷，症狀是 watcher 靜靜退回
+    ``DEFAULT_HUB_URL``，一個字都不會報。
+    """
+    import shutil
+
+    inst.write_env_file("http://hub:8787", "TOK")
+    site = kit_dir / "venv" / "Lib" / "site-packages"
+    site.mkdir(parents=True)
+    shutil.copytree(REPO / "bridge" / "chatroom_mcp", site / "chatroom_mcp")
+    # ⚠️ 必須在 kit 樹**外面**：kit_dir 就是 tmp_path 本身，把它建在底下的話
+    # cwd 往上三層那條路撈得到 kit/.env，測到的就不是 site-packages 的真相
+    outside = tmp_path_factory.mktemp("使用者自己的專案")
+
+    probe_src = (
+        "import os, sys",
+        "sys.path.insert(0, sys.argv[1])",
+        "os.chdir(sys.argv[2])",
+        "from chatroom_mcp.envfile import load_env_file",
+        "print(load_env_file())",
+        "print(os.environ.get('CHATROOM_URL', '<none>'))",
+    )
+    probe = outside / "probe.py"
+    probe.write_text(chr(10).join(probe_src), encoding="utf-8")
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CHATROOM_URL", "CHATROOM_TOKEN", "CHATROOM_ENV_FILE")}
+    done = subprocess.run(
+        [sys.executable, str(probe), str(site), str(outside)],
+        capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stderr
+    found, url = done.stdout.splitlines()[:2]
+    assert found == "None", f"預期搜尋不到，卻找到 {found}"
+    assert url == "<none>"
+
+
+def test_watcher_command_pins_the_env_file(inst):
+    """產出的 watcher 指令必須把 .env 顯式指給它。
+
+    `--kind` / `--label` 當初走命令列的理由是「一份共用檔填不下兩種身分」；
+    這條是同一個形狀的另一半——**連線資訊找得到，但只有顯式指定才找得到**。
+    少了它，安裝全綠、watcher 掛得起來、就是連去 127.0.0.1。
+    """
+    cmd = inst.watcher_command(Path(sys.executable), "諾薇亞")
+    assert "--env-file" in cmd, "watcher 指令沒有把 .env 指給它"
+    assert str(inst.KIT_DIR / ".env") in cmd
+    assert "--kind claude" in cmd
+    assert "--label 諾薇亞" in cmd
+
+
+def test_watch_env_file_flag_wins_before_loading(tmp_path, monkeypatch):
+    """`--env-file` 要在 ``load_env_file()`` **之前**套用，否則等於沒給。
+
+    ``main()`` 原本第一行就 ``load_env_file()``、之後才 parse——那個順序下
+    旗標永遠來不及影響載入。
+    """
+    from chatroom_mcp import watch
+
+    env = tmp_path / ".env"
+    env.write_text("CHATROOM_URL=http://pinned:8787\n", encoding="utf-8")
+    for key in ("CHATROOM_URL", "CHATROOM_ENV_FILE"):
+        monkeypatch.delenv(key, raising=False)
+
+    seen = {}
+
+    class _Stub:
+        def __init__(self, args):
+            seen["args"] = args
+
+        def run(self):
+            seen["url"] = os.environ.get("CHATROOM_URL")
+            return 0
+
+    monkeypatch.setattr(watch, "Watcher", _Stub)
+    try:
+        assert watch.main(["--env-file", str(env)]) == 0
+    finally:
+        # main() 與 load_env_file() 是**直接寫 os.environ**，monkeypatch 沒有
+        # 記錄到那兩個鍵，teardown 不會還原。漏掉這段的話 CHATROOM_ENV_FILE
+        # 會留到之後每一條測試——bridge/tests/test_envfile.py 那四條會被釘在
+        # 這裡的 tmp .env 上而集體變紅，而症狀看起來完全不像是這條測試造成的
+        for key in ("CHATROOM_ENV_FILE", "CHATROOM_URL"):
+            os.environ.pop(key, None)
+    assert seen["url"] == "http://pinned:8787"
+
+
 # ---------- pip 中斷後的殘骸還原 ----------
 
 
