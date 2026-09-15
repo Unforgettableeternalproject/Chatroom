@@ -346,12 +346,18 @@ ENV_FILE_HEADER = """\
 def write_env_file(url: str, token: str) -> Path:
     """在 kit 根目錄寫一份 .env——**連線資訊的唯一真相**（只放 URL/TOKEN）。
 
-    bridge 進程靠 MCP 設定裡的 `CHATROOM_ENV_FILE` 找到它，watcher 靠 cwd
-    找到它。在這之前 token 得同時寫進 MCP 設定與這個檔，換一次要改兩處，
-    而漏改一處的症狀是「看起來換好了、實際還在用舊的」。
+    bridge 進程靠 MCP 設定裡的 `CHATROOM_ENV_FILE` 找到它，watcher 靠
+    `watcher_command` 產的 `--env-file` 找到它。在這之前 token 得同時寫進
+    MCP 設定與這個檔，換一次要改兩處，而漏改一處的症狀是「看起來換好了、
+    實際還在用舊的」。
 
-    位置必須是 kit 根目錄（bridge/ 的上一層）——envfile.load_env_file 的
-    候選清單裡有「bridge 套件的 repo 根」，解壓後的 kit 剛好落在那個位置。
+    ⚠️ 兩邊都是**顯式指定**，不要靠搜尋。這裡原本寫著「watcher 靠 cwd 找到
+    它」——那句話只在 watcher 取 kit 的 `bridge/` 原始碼時成立，而
+    `watcher_command` 刻意不走那條（見它的 docstring）。兩個設計決定互相
+    抵銷，而失敗是靜默的。
+
+    位置放在 kit 根目錄（bridge/ 的上一層）——那也是 envfile 候選清單裡
+    「bridge 套件的 repo 根」的位置，走 fallback 路徑時剛好也搆得到。
 
     kind 與 name 刻意不寫：它們是 per-agent 的身分資訊，塞進共用檔就得在
     claude 與 codex 之間二選一，選哪個都會讓另一種 watcher 頂著錯誤身分跑
@@ -409,6 +415,80 @@ def setup_claude(exe: Path, name: str, mode: str) -> None:
         print(f"⚠️ claude mcp add-json 失敗：{done.stderr.strip()}")
     print("→ 請手動執行以下指令完成 Claude Code 設定：")
     print(f"  claude mcp add-json chatroom '{payload}' --scope user")
+
+
+SKILL_TMPL = KIT_DIR / "skill" / "SKILL.md.tmpl"
+SKILL_DIR = Path.home() / ".claude" / "skills" / "chatroom"
+
+
+def watcher_command(py: Path, name: str) -> str:
+    """產出**這台機器**掛 watcher 的實際指令。
+
+    取 site-packages 裡那支 ``watch.py``，不是 kit 的 ``bridge/`` 原始碼：
+    Windows 原地升級撞 ``WinError 32`` 之後兩份會不同版，而跑著的 bridge 是
+    site-packages 那份（2026-08-29 實錄）。與 ``guide.watcher_setup()`` 推的
+    是同一支，兩邊對得起來才有交叉驗證的價值。
+
+    ``--kind`` / ``--label`` 走命令列而不是共用 ``.env``：一份 .env 只填得下
+    一個 kind，另一種 agent 的 watcher 就會頂著錯身分跑（見 ENV_FILE_HEADER）。
+
+    🚨 ``--env-file`` 也**必須**顯式給。取 site-packages 那支的代價是
+    ``load_env_file`` 推出來的根變成 ``venv/Lib``——kit 根目錄不在它的候選
+    清單裡，而 watcher 的 cwd 是使用者自己的專案。搜尋那條路在這個版面下
+    永遠找不到，症狀是靜靜退回 ``DEFAULT_HUB_URL``（127.0.0.1:8787）：
+    安裝全綠、watcher 掛得起來、指派掃描清單上就是看不到它。
+    """
+    site = site_packages(py)
+    if site:
+        script = site / "chatroom_mcp" / "watch.py"
+    else:
+        script = KIT_DIR / "bridge" / "chatroom_mcp" / "watch.py"
+        print("⚠️ 找不到 site-packages，watcher 指令改指向 kit 的 bridge/ 原始碼"
+              "（升級後這兩份可能不同版）")
+    if not script.is_file():
+        print(f"⚠️ watcher 腳本不在：{script}")
+        print("   產出的指令會指向一個不存在的檔案——請確認 bridge 裝好了再重跑。")
+    label = f' --label {name}' if name else ""
+    env_file = KIT_DIR / ".env"
+    return f'"{py}" "{script}" --env-file "{env_file}" --kind claude{label}'
+
+
+def setup_skill(py: Path, name: str) -> None:
+    """裝 Claude Code 的 chatroom skill（把掛 watcher 的路徑填成這台的）。
+
+    為什麼 kit 要管這個：手冊（``chatroom_guide``）講的是「在房裡怎麼做事」，
+    但 agent 得先**知道自己該去讀它**。skill 是 Claude Code 唯一會在對的時機
+    自動載入的載體——沒有它，agent 只能從工具名稱猜，然後猜到 ``chatroom_watch``
+    （那支是追蹤卡片的），而猜錯不會報錯。
+
+    ⚠️ 樣板裡的路徑是佔位符，必須在這裡填。舊版這份 skill 是手寫的、帶著
+    作者那台的開發樹路徑，複製到任何別台機器都是死的。
+    """
+    if not SKILL_TMPL.is_file():
+        # 舊版 kit 沒有這個目錄。講出來——靜默跳過與「裝好了」長得一樣
+        print(f"⚠️ 找不到 skill 樣板（{SKILL_TMPL}），略過 skill 安裝")
+        print("   這包可能是舊版；agent 仍可用 chatroom_guide() 取得掛法")
+        return
+    content = SKILL_TMPL.read_text(encoding="utf-8").replace(
+        "@@WATCHER@@", watcher_command(py, name))
+    if "@@" in content:
+        # assert 在 -O 下會被拿掉，而「沒填完的樣板」正是要擋的東西：
+        # 寫出去的話 agent 會照著貼一個佔位符，然後得到「找不到檔案」
+        die("skill 樣板有沒填掉的佔位符，中止以免寫出壞掉的 skill")
+    target = SKILL_DIR / "SKILL.md"
+    if target.is_file():
+        if target.read_text(encoding="utf-8") == content:
+            print("✅ Claude Code skill 已是最新（未變更）")
+            return
+        # 08/29 盲點一的教訓：遇到既有內容只警告不改、卻照樣印「完成」，
+        # 結果是裝出一個壞環境而輸出看起來成功。備份後覆寫，並講出備份在哪
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        backup = target.with_name(f"SKILL.md.bak-{stamp}")
+        backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"• 既有 skill 已備份 → {backup}")
+    SKILL_DIR.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    print(f"✅ Claude Code skill 已安裝 → {target}")
 
 
 CODEX_TABLE = "mcp_servers.chatroom"
@@ -634,6 +714,10 @@ def main() -> None:
     print()
     if "claude" in targets:
         setup_claude(exe, name, args.claude)
+        # skill 是 Claude Code 專屬機制，Codex 讀不到——所以手冊仍然
+        # 留在 chatroom_guide（見 guide.py 開頭的理由），這裡是加強不是取代
+        setup_skill(scripts_dir() / ("python.exe" if sys.platform == "win32"
+                                    else "python"), name)
     if "codex" in targets:
         setup_codex(exe, name, args.codex_config)
 

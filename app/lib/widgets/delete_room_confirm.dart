@@ -45,7 +45,8 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
               alignment: Alignment.centerLeft,
               child: Text(
                 '「${widget.name}」連同房裡的訊息與附件會被永久刪除，不可復原。'
-                '房內的 agent 下次呼叫時會發現房間已經不存在。\n\n'
+                '房內的 agent 下次呼叫時會發現房間已經不存在。'
+                '掛在這個房間的 Board 上那些卡不會跟著刪掉，會留在板上。\n\n'
                 '確認的話，把房名打一次：',
                 style: UepText.serif(size: 12.5, color: s.ink, height: 1.6),
               ),

@@ -283,8 +283,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final identityError = ref.read(identityProvider(widget.roomId)).error;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(identityError is HumanCredentialRequiredException
-            ? '你手上這張邀請碼是發給 agent 的，人用它進不了任何房間'
-              '——請主持人重發一張給人的邀請碼'
+            ? '你手上這張憑證是給 agent 用的（分家前的舊主 token 被降級後也算），'
+              '人用它進不了任何房間——請主持人重發一份給人的邀請碼'
             : '你不是這個聊天室的成員，看不到房內的內容'),
       ));
     }());
@@ -1248,6 +1248,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             enabled: !archived,
             replyTarget: _replyTarget,
             onCancelReply: () => setState(() => _replyTarget = null),
+            // 用來判斷「自己回自己」——那種回覆 Hub 不會 tag 任何人，
+            // 預覽也就不該列
+            selfParticipantId: ref
+                .watch(identityProvider(widget.roomId))
+                .value
+                ?.participantId,
             editTarget: _editTarget,
             onCancelEdit: () => setState(() => _editTarget = null),
             onSend: _send,
@@ -2010,7 +2016,9 @@ class _OverflowMenu extends ConsumerWidget {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(result.alreadyPending
                       ? '已經有人提議封存了，還在等建立者確認'
-                      : '已送出封存請求，等建立者確認'),
+                      : '已送出封存請求，等建立者確認。封存後只能看不能寫，'
+                          '且封存滿一段時間後 Hub 會把整個房間永久刪除'
+                          '（天數由 Hub 設定）'),
                 ));
               }
             } on ApiException catch (e) {
@@ -2077,7 +2085,8 @@ class _OverflowMenu extends ConsumerWidget {
         PopupMenuItem(
           value: 'archive',
           height: 36,
-          child: Text('封存房間', style: UepText.sans(size: 12.5, color: s.ink)),
+          child: Text('封存房間（唯讀，之後會被永久刪除）',
+              style: UepText.sans(size: 12.5, color: s.ink)),
         ),
         PopupMenuItem(
           value: 'leave',
@@ -2278,7 +2287,9 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           style: UepText.display(size: 22, color: s.inkTitle),
         ),
         content: Text(
-          '被移出後，這個 session 將無法重新加入此聊天室。此操作無法復原。',
+          '被移出後，他當初用來加入的那張邀請碼會被整張撤銷——他會失去這台 Hub '
+          '的存取權，與他共用同一張邀請碼的人也會一起斷。若他是用主 token 進來的，'
+          '則什麼都撤不掉，只是離開這個聊天室。此操作無法復原。',
           style: UepText.serif(size: 13.5, color: s.inkSoft),
         ),
         actions: [
@@ -2637,7 +2648,7 @@ class _MemberTile extends StatelessWidget {
       final idle = Duration(minutes: idleMinutes!);
       final remain = idleTimeout - idle;
       subtitle = remain > Duration.zero
-          ? '閒置 ${humanDuration(idle)} · ${humanDuration(remain)}後移出'
+          ? '閒置 ${humanDuration(idle)} · 最快 ${humanDuration(remain)}後移出'
           : '閒置 ${humanDuration(idle)}';
     } else {
       subtitle = '活躍 · ${relativeTime(p.lastSeenAt)}';

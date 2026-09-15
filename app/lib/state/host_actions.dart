@@ -57,7 +57,8 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
   final ok = await probeHealth('$url/api/health');
   if (ok) {
     return TunnelStatus(ProbeState.ok, url, '隧道開著',
-        caveat: '網址是臨時的——關掉視窗就失效，重開會是不一樣的網址');
+        caveat: '網址是臨時的——按「關閉隧道」之後就失效，'
+            '重開會是不一樣的網址');
   }
 
   // 🔴 打不通的時候先問一句「Hub 還在嗎」。

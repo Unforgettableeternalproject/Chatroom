@@ -271,7 +271,7 @@ class _ShareSection extends ConsumerWidget {
             _CopyRow(label: '給 agent', value: env.token, secret: true),
             const SizedBox(height: 14),
             Text(
-              '**兩把給的對象不同**：用 App 的人拿「給人的」那把——只有它'
+              '兩把給的對象不同：用 App 的人拿「給人的」那把——只有它'
               '開得了主持人模式、發得了邀請；裝 chatroom-mcp-kit 的 agent '
               '拿另一把。\n'
               '⚠️ 不要把「給人的」發給 agent——那等於把主持人的權力交出去。',
@@ -498,9 +498,20 @@ class _TunnelSection extends ConsumerWidget {
                 UepButton(
                   small: true,
                   variant: UepButtonVariant.outline,
+                  // 🔴 **`hasUrl` 只代表那個檔案非空，不代表隧道活著。**
+                  // `.tunnel-url` 會殘留（見 `tunnelStatusProvider` 的註解），
+                  // 所以打不通時（`unknown`）按鈕不能斷言「已經有一條」——
+                  // 那句話在一條早就死掉的隧道上是假的，而它同時是唯一的
+                  // 開啟入口。禁用照舊（殘留與「活著只是繞不回來」在這台
+                  // 機器上分不出來，而後者開第二條就是那個安全問題），
+                  // 但字要講它真正知道的事：偵測到一個舊網址。
                   label: tunnelOpening
                       ? '開通中…'
-                      : (t.hasUrl ? '已經有一條' : '開隧道'),
+                      : !t.hasUrl
+                          ? '開隧道'
+                          : (t.state == ProbeState.unknown
+                              ? '偵測到舊網址'
+                              : '已經有一條'),
                   onPressed: (tunnelOpening || t.hasUrl)
                       ? null
                       : () => _confirmTunnel(context, ref, actions),
@@ -525,12 +536,17 @@ class _TunnelSection extends ConsumerWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    t.hasUrl
-                        ? '要換一條網址，先按「關閉隧道」再開——**不能直接開'
-                            '第二條**：紀錄只有一組，開了之後第一條會變成'
-                            '關不掉、卻仍然對外開著的入口。'
-                            '關掉那個隧道視窗也等於關閉。'
-                        : '開了之後這台 Hub 就在公網上，擋在前面的只有 token。',
+                    !t.hasUrl
+                        ? '開了之後這台 Hub 就在公網上，擋在前面的只有 token。'
+                        : t.state == ProbeState.unknown
+                            ? '這裡有一個舊網址，但從這台機器打不通——它可能'
+                                '還活著，也可能是上次沒關乾淨留下的。不能直接'
+                                '開第二條：紀錄只有一組，開了之後前一條會變成'
+                                '關不掉、卻仍然對外開著的入口。確定不要它了，'
+                                '先按「關閉隧道」清掉再開新的一條。'
+                            : '要換一條網址，先按「關閉隧道」再開——不能直接開'
+                                '第二條：紀錄只有一組，開了之後第一條會變成'
+                                '關不掉、卻仍然對外開著的入口。',
                     style: UepText.serif(
                         size: 11.5, color: s.inkMute, height: 1.5),
                   ),
@@ -630,7 +646,7 @@ class _TunnelSection extends ConsumerWidget {
       },
       okText: '隧道開了，網址在上面。',
       timeoutText: '送出了，但上面那個網址還沒換成新的——'
-          '新的還沒下來，或這次沒開成。有舊網址的話**先別發出去**，'
+          '新的還沒下來，或這次沒開成。有舊網址的話先別發出去，'
           '它可能已經失效了。看 logs\\tunnel-*.log。',
     );
   }
@@ -650,7 +666,7 @@ class _TunnelSection extends ConsumerWidget {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '現在那個網址會立刻失效，從外面連進來的人全部斷線。\n\n'
-          '重開會拿到**不一樣的**網址——你得再發一次給所有成員。'
+          '重開會拿到不一樣的網址——你得再發一次給所有成員。'
           '只是想換 token 或重啟 Hub 的話，不必關隧道。\n\n'
           '內網與 VPN 的連線不受影響。',
           style: UepText.serif(size: 13, color: s.ink, height: 1.7),
@@ -742,10 +758,15 @@ class _ControlSection extends ConsumerWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  // 講明它跑在哪裡——不講的話，關掉那個黑視窗會讓所有人斷線，
-                  // 而按下按鈕的人不會預期那件事
-                  '會開一個獨立的視窗跑 Hub。關掉那個視窗也等於停止；'
-                  '關掉這個 App 不會——它只是遙控器。',
+                  // Hub 跑在背景、沒有視窗（2026-09-11 起經
+                  // `hidden-launch.vbs` 隱藏 console）。所以這裡要講的是
+                  // 「怎麼停它」。
+                  //
+                  // 🔴 原本寫的是「關掉那個視窗也等於停止」——那在隱藏之後
+                  // 變成一條**走不通的指示**：那個視窗不存在，照著做的人會
+                  // 在工作列上找一個永遠找不到的東西，然後以為 Hub 關不掉。
+                  'Hub 跑在背景，沒有視窗。要停它按左邊那顆「停止 Hub」；'
+                  '關掉這個 App 不會停——它只是遙控器。',
                   style: UepText.serif(
                       size: 11.5, color: s.inkMute, height: 1.5),
                 ),
@@ -792,7 +813,7 @@ class _ControlSection extends ConsumerWidget {
               // 這個差別現在只寫在 README 裡，而它決定「重開機之後還在不在」
               '一般權限註冊＝登入時自啟；以系統管理員執行這個 App 再註冊'
               '＝開機自啟（沒登入也跑）。停止 Hub 請用上面那顆——'
-              '它連前景視窗裡跑的那個也停得掉。',
+              '不管是排程起的還是你自己手動起的，它都停得掉。',
               style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
             ),
             const SizedBox(height: 18),
@@ -875,7 +896,8 @@ class _ControlSection extends ConsumerWidget {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '現在連著的每一個 agent 與每一台 App 都會在這一刻斷線。\n\n'
-          '排程起的與手動起的都會停——包含那個黑視窗裡跑的。\n\n'
+          '排程起的與手動起的都會停——Hub 在背景跑，沒有視窗可以關，'
+          '這顆就是出口。\n\n'
           '如果有註冊自啟，觸發器會一併停用（按「啟動」會自動啟用回來），'
           '否則排程會在一分鐘內把它拉回來。',
           style: UepText.serif(size: 13, color: s.ink, height: 1.7),
@@ -1299,7 +1321,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '現在的訊息、成員與附件會被這份備份**整個取代**。\n\n'
+              '現在的訊息、成員與附件會被這份備份整個取代。\n\n'
               '還原之前會自動備份現況，拿錯備份時從那一份退回來。\n\n'
               'Hub 必須先停——還在跑的話會中止，不會做一半。\n\n'
               'server\\.env（token、port）不會被動到：還原的是資料，不是設定。',

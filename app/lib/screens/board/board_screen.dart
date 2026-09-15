@@ -431,7 +431,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         color: s.bgSoft,
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
-      child: Text('房間已封存。板是唯讀的歷史，不能認領、不能改狀態。',
+      child: Text('這塊板已封存。板是唯讀的歷史，不能認領、不能改狀態。',
           style: UepText.serif(size: 12, color: s.inkMute)),
     );
   }

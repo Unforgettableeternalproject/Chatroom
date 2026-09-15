@@ -205,7 +205,9 @@ class _ExistingList extends ConsumerWidget {
         if (usable.isEmpty) {
           return Center(
             child: Text(
-              '沒有你能掛的板。\n（只有板的 owner 或 editor 掛得上去）',
+              '沒有你能掛的板。\n'
+              '（只有板的 owner 或 editor 掛得上去；你還得是這個房間的管理員，'
+              '而私人板只掛得上私人房）',
               textAlign: TextAlign.center,
               style: UepText.serif(size: 12, color: s.inkMute),
             ),

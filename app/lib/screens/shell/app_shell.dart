@@ -24,7 +24,8 @@ import '../rooms/room_list_screen.dart';
 /// 設定不完整的診斷結果——`null` 表示設定齊全。
 ///
 /// 判準刻意涵蓋「存過但沒存完」：router 的首次啟動導向只看「曾經存過
-/// server URL」，token 是空的照樣放行進主畫面，接著每一支 API 都 401，
+/// server URL」，token 是空的照樣放行進主畫面，接著每一支 API 都 401
+/// （除非那台 Hub 自己也沒設 token——那是完全開放模式，空 token 反而通），
 /// 而畫面上只有一片空房間列表——**看起來像沒有房間，不像沒有設定**。
 String? settingsGapMessage({
   required bool hasServerConfig,
@@ -32,11 +33,12 @@ String? settingsGapMessage({
   required String token,
 }) {
   if (!hasServerConfig || serverUrl.trim().isEmpty) {
-    return '尚未儲存伺服器位址。目前用的是預設值，連不到任何 Hub。';
+    return '尚未儲存伺服器位址。目前用的是預設值 http://127.0.0.1:8787——'
+        '除非本機正跑著 Hub，否則連不到。';
   }
   if (token.trim().isEmpty) {
-    return 'API token 是空的。伺服器會拒絕每一次請求（401），'
-        '房間列表因此永遠是空的。';
+    return 'API token 是空的。除非這台 Hub 自己也沒設 token（完全開放模式），'
+        '否則每一次請求都會被拒（401），房間列表因此永遠是空的。';
   }
   return null;
 }

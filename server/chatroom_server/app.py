@@ -1759,6 +1759,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 對象由端點自己決定」的系統訊息用（例如 self-pin 的收據要指回被
             # 釘的訊息，卻不該 ping 任何人）。少了這個開關，端點傳空 mentions
             # 也沒用——這裡會照回覆語意把作者補回去
+            #
+            # 📌 **App 的輸入列在送出前會預覽「這則會 tag 到誰」，而那份預覽
+            # 必須把這裡自動補的人算進去。** `app/lib/widgets/mention_field.
+            # dart` 的 `_replyMentionName()` 為此複製了同一組條件（有作者、
+            # 不是自己回自己、名字非空）。**改這裡要回去改那邊**——不一致時
+            # 不會有任何地方報錯，只會讓預覽說謊，而使用者是照預覽決定要不要
+            # 送出的（2026-09-15：那邊原本完全沒算 reply，回覆送出去會多叫醒
+            # 一個畫面上沒說的人）。
             if (reply_mentions_author and target["sender_id"]
                     and target["sender_id"] != sender_id):
                 name = target["display_name"]

@@ -1062,12 +1062,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--label",
         help="指派掃描清單上顯示的名稱；省略時取 CHATROOM_DEFAULT_NAME",
     )
+    p.add_argument(
+        "--env-file",
+        help="連線資訊（CHATROOM_URL / CHATROOM_TOKEN）從這個檔讀，"
+             "等同設定 CHATROOM_ENV_FILE。⚠️ kit 裝出來的 watcher **必須**帶"
+             "這個：它跑的是 venv/Lib/site-packages 裡那支，load_env_file 從"
+             "那裡往上推出來的根是 venv/Lib，kit 根目錄不在候選清單裡；而 cwd"
+             "是使用者自己的專案，往上三層也碰不到。少了它會靜靜退回"
+             "127.0.0.1:8787，一個字都不會報",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_env_file()  # 只補缺，不覆寫——所以命令列的顯式值要在它之後才蓋得掉
+    # parse 要在 load 之前：--env-file 得先落進環境，load_env_file 才看得到它。
+    # 反過來的順序下那個旗標永遠來不及影響載入，而它不會報錯——只會讓 watcher
+    # 連去預設的 127.0.0.1。build_parser 沒有任何相依於環境變數的 default，
+    # 所以提前 parse 不改變其他旗標的語意
     args = build_parser().parse_args(argv)
+    if args.env_file:
+        os.environ["CHATROOM_ENV_FILE"] = args.env_file
+    load_env_file()  # 只補缺，不覆寫——所以命令列的顯式值要在它之後才蓋得掉
     # 第一行就報版本：測試端回報問題時，「你手上的 kit 是哪一份」必須是
     # 從 log 開頭就答得出來的問題，而不是事後去比對檔案時間
     print(f"[watch] chatroom-mcp {version_string()}", file=sys.stderr, flush=True)

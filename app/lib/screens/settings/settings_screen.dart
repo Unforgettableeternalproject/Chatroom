@@ -388,7 +388,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Text('系統通知',
                           style: UepText.sans(size: 13.5, color: s.inkTitle)),
                       const SizedBox(height: 3),
-                      Text('已加入的聊天室有新訊息時',
+                      Text('只在 app 開著時通知別人發的新訊息；關閉期間的訊息不會補發，'
+                          '回來後靠未讀紅點找。選「關閉」仍會在被 @ 時亮工作列徽章。',
                           style:
                               UepText.serif(size: 12, color: s.inkMute)),
                     ],
@@ -430,7 +431,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             style:
                                 UepText.sans(size: 13.5, color: s.inkTitle)),
                         const SizedBox(height: 3),
-                        Text('被 @tag 到房內 Codex 的訊息經 codex queue 喚醒本機 Codex session',
+                        Text('被 @tag 的訊息、Board 變動、有人加入的廣播、指派投遞，'
+                            '都經 codex queue 喚醒本機 Codex session',
                             style:
                                 UepText.serif(size: 12, color: s.inkMute)),
                       ],
@@ -622,7 +624,7 @@ Future<String?> probeWebSocket(
     return rejected
         ? 'REST 通了，但即時通道拒絕了這張憑證（4401）。\n'
             '這台 Hub 的 WS 與 REST 收的憑證不一致——'
-            '若 Hub 啟用了憑證分離，請確認用的是**人類**那把'
+            '若 Hub 啟用了憑證分離，請確認用的是「人類」那把'
             '（server/.env 的 CHATROOM_HUMAN_TOKEN）。'
         : 'REST 通了，但即時通道連不上：$e\n'
             '網址與 token 是對的，問題在 WS 這條路徑上。';
@@ -649,9 +651,12 @@ class _CodexDispatchStatusView extends StatelessWidget {
         final lines = <String>[
           '本機 Codex：${st.localThreads} 個'
               '${st.busyThreads > 0 ? '（${st.busyThreads} 個處理中）' : '（都閒著）'}',
+          // 30 分鐘 / 50 則是 codex_dispatcher.dart 的 `_pendingTtl` 與
+          // `_pendingLimit`（兩者都是 private，跨檔取不到，只能硬編）；
+          // 10 秒是 notification_providers.dart 的補投輪詢週期。
           st.pending > 0
-              ? '待補投：${st.pending} 則——等處理中的 turn 結束才投，'
-                  '每 10 秒重試一次'
+              ? '待補投：${st.pending} 則——Codex 沒在跑或正忙時投不出去，'
+                  '每 10 秒重試；超過 30 分鐘或佇列超過 50 則就會放棄'
               : '待補投：無',
           if (st.lastEvent.isNotEmpty) '最後一次：${st.lastEvent}',
         ];

@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -241,6 +242,105 @@ def test_env_file_is_where_the_watcher_looks(inst, kit_dir, monkeypatch):
     watcher_dir.mkdir(parents=True)
     assert load_env_file(start=watcher_dir) == expected
     assert os.environ["CHATROOM_URL"] == "http://hub:8787"
+
+
+# ---------- watcher 找不找得到那份 .env ----------
+
+
+def test_watcher_cannot_find_the_env_file_by_searching(inst, kit_dir, tmp_path_factory):
+    """前提本身：site-packages 版面下，**搜尋永遠找不到** kit 的 .env。
+
+    這條不是在守某個修好的行為，是把「為什麼非得顯式指定不可」釘住——
+    而它必須在子進程裡跑：``load_env_file`` 的候選清單有一半是從
+    ``envfile.__file__`` 推的，在本測試進程裡那是 repo 自己的 ``bridge/``，
+    於是它會撈到 repo 的 ``server/.env``，把真正的失效蓋掉。要看見真相，
+    得把套件複製到假的 site-packages 版面、用子進程載入它。
+
+    ``write_env_file`` 的 docstring 原本寫著「watcher 靠 cwd 找到它」，那句話
+    只在 watcher 取 kit 的 ``bridge/`` 原始碼時成立，而 ``watcher_command``
+    刻意不走那條。兩個設計決定互相抵銷，症狀是 watcher 靜靜退回
+    ``DEFAULT_HUB_URL``，一個字都不會報。
+    """
+    import shutil
+
+    inst.write_env_file("http://hub:8787", "TOK")
+    site = kit_dir / "venv" / "Lib" / "site-packages"
+    site.mkdir(parents=True)
+    shutil.copytree(REPO / "bridge" / "chatroom_mcp", site / "chatroom_mcp")
+    # ⚠️ 必須在 kit 樹**外面**：kit_dir 就是 tmp_path 本身，把它建在底下的話
+    # cwd 往上三層那條路撈得到 kit/.env，測到的就不是 site-packages 的真相
+    outside = tmp_path_factory.mktemp("使用者自己的專案")
+
+    probe_src = (
+        "import os, sys",
+        "sys.path.insert(0, sys.argv[1])",
+        "os.chdir(sys.argv[2])",
+        "from chatroom_mcp.envfile import load_env_file",
+        "print(load_env_file())",
+        "print(os.environ.get('CHATROOM_URL', '<none>'))",
+    )
+    probe = outside / "probe.py"
+    probe.write_text(chr(10).join(probe_src), encoding="utf-8")
+
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CHATROOM_URL", "CHATROOM_TOKEN", "CHATROOM_ENV_FILE")}
+    done = subprocess.run(
+        [sys.executable, str(probe), str(site), str(outside)],
+        capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stderr
+    found, url = done.stdout.splitlines()[:2]
+    assert found == "None", f"預期搜尋不到，卻找到 {found}"
+    assert url == "<none>"
+
+
+def test_watcher_command_pins_the_env_file(inst):
+    """產出的 watcher 指令必須把 .env 顯式指給它。
+
+    `--kind` / `--label` 當初走命令列的理由是「一份共用檔填不下兩種身分」；
+    這條是同一個形狀的另一半——**連線資訊找得到，但只有顯式指定才找得到**。
+    少了它，安裝全綠、watcher 掛得起來、就是連去 127.0.0.1。
+    """
+    cmd = inst.watcher_command(Path(sys.executable), "諾薇亞")
+    assert "--env-file" in cmd, "watcher 指令沒有把 .env 指給它"
+    assert str(inst.KIT_DIR / ".env") in cmd
+    assert "--kind claude" in cmd
+    assert "--label 諾薇亞" in cmd
+
+
+def test_watch_env_file_flag_wins_before_loading(tmp_path, monkeypatch):
+    """`--env-file` 要在 ``load_env_file()`` **之前**套用，否則等於沒給。
+
+    ``main()`` 原本第一行就 ``load_env_file()``、之後才 parse——那個順序下
+    旗標永遠來不及影響載入。
+    """
+    from chatroom_mcp import watch
+
+    env = tmp_path / ".env"
+    env.write_text("CHATROOM_URL=http://pinned:8787\n", encoding="utf-8")
+    for key in ("CHATROOM_URL", "CHATROOM_ENV_FILE"):
+        monkeypatch.delenv(key, raising=False)
+
+    seen = {}
+
+    class _Stub:
+        def __init__(self, args):
+            seen["args"] = args
+
+        def run(self):
+            seen["url"] = os.environ.get("CHATROOM_URL")
+            return 0
+
+    monkeypatch.setattr(watch, "Watcher", _Stub)
+    try:
+        assert watch.main(["--env-file", str(env)]) == 0
+    finally:
+        # main() 與 load_env_file() 是**直接寫 os.environ**，monkeypatch 沒有
+        # 記錄到那兩個鍵，teardown 不會還原。漏掉這段的話 CHATROOM_ENV_FILE
+        # 會留到之後每一條測試——bridge/tests/test_envfile.py 那四條會被釘在
+        # 這裡的 tmp .env 上而集體變紅，而症狀看起來完全不像是這條測試造成的
+        for key in ("CHATROOM_ENV_FILE", "CHATROOM_URL"):
+            os.environ.pop(key, None)
+    assert seen["url"] == "http://pinned:8787"
 
 
 # ---------- pip 中斷後的殘骸還原 ----------
@@ -466,3 +566,105 @@ def test_sweep_old_venvs_is_quiet_when_there_is_nothing_to_clean(inst, tmp_path,
 
     assert inst.sweep_old_venvs() == []
     assert capsys.readouterr().out == ""
+
+
+# ---------- skill 安裝 ----------
+
+
+@pytest.fixture
+def skill_env(inst, tmp_path, monkeypatch):
+    """把樣板與安裝落點都搬進 tmp——不能碰使用者真正的 ~/.claude/skills。"""
+    kit = tmp_path / "kit"
+    (kit / "skill").mkdir(parents=True)
+    tmpl = kit / "skill" / "SKILL.md.tmpl"
+    tmpl.write_text("掛法：\n@@WATCHER@@ --room <room_id>\n", encoding="utf-8")
+    target_dir = tmp_path / "home" / ".claude" / "skills" / "chatroom"
+    monkeypatch.setattr(inst, "KIT_DIR", kit)
+    monkeypatch.setattr(inst, "SKILL_TMPL", tmpl)
+    monkeypatch.setattr(inst, "SKILL_DIR", target_dir)
+    # site_packages 要跑真的 python 子進程，測試裡換成固定值
+    site = tmp_path / "site"
+    (site / "chatroom_mcp").mkdir(parents=True)
+    (site / "chatroom_mcp" / "watch.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(inst, "site_packages", lambda py: site)
+    return target_dir / "SKILL.md"
+
+
+def test_skill_is_written_with_this_machines_paths(inst, skill_env, tmp_path):
+    """樣板的佔位符要被**這台**的實際路徑填掉，一個都不能留。
+
+    這是 2026-09-15 的根因：手寫的 skill 帶著作者開發樹的絕對路徑，
+    複製到別台機器就是死的，而 agent 照著貼只會得到「找不到檔案」。
+    """
+    inst.setup_skill(Path("py"), "Novia")
+    text = skill_env.read_text(encoding="utf-8")
+    assert "@@" not in text, "還有沒填的佔位符"
+    assert "watch.py" in text and "--kind claude" in text
+    assert "--label Novia" in text
+
+
+def test_skill_backs_up_an_existing_different_file(inst, skill_env, capsys):
+    """既有內容不同時要備份後覆寫，而且講出備份在哪。
+
+    08/29 盲點一的形狀：遇到既有內容只警告不改、卻照樣印「完成」，
+    結果是裝出一個壞環境而輸出看起來成功。
+    """
+    skill_env.parent.mkdir(parents=True)
+    skill_env.write_text("我是使用者手寫的舊版\n", encoding="utf-8")
+    inst.setup_skill(Path("py"), "Novia")
+    backups = list(skill_env.parent.glob("SKILL.md.bak-*"))
+    assert len(backups) == 1, "既有內容必須留一份"
+    assert backups[0].read_text(encoding="utf-8") == "我是使用者手寫的舊版\n"
+    assert "@@" not in skill_env.read_text(encoding="utf-8"), "新內容沒寫進去"
+    assert str(backups[0]) in capsys.readouterr().out, "備份位置要講出來"
+
+
+def test_skill_rerun_makes_no_backup(inst, skill_env):
+    """冪等重跑不該每次都堆一份備份——備份多到沒人看就等於沒備份。"""
+    inst.setup_skill(Path("py"), "Novia")
+    inst.setup_skill(Path("py"), "Novia")
+    assert list(skill_env.parent.glob("SKILL.md.bak-*")) == []
+
+
+def test_skill_says_so_when_the_template_is_missing(inst, skill_env, capsys,
+                                                    monkeypatch, tmp_path):
+    """舊版 kit 沒有 skill/ 目錄——那時要**明講略過**，不能靜默。
+
+    靜默跳過與「裝好了」在輸出上長得一模一樣，而使用者是靠輸出判斷的。
+    """
+    monkeypatch.setattr(inst, "SKILL_TMPL", tmp_path / "不存在.tmpl")
+    inst.setup_skill(Path("py"), "Novia")
+    out = capsys.readouterr().out
+    assert "略過" in out and "chatroom_guide" in out, "要講出替代的取得方式"
+    assert not skill_env.exists()
+
+
+def test_build_ships_the_skill_template(tmp_path, monkeypatch):
+    """漏帶 skill/ 的話 setup_skill 只會印「略過」而安裝仍算成功。
+
+    要真的打一個包來看 zip 裡有什麼——grep build.py 的字串擋不住「路徑
+    打錯」，那種寫法會替一個產不出樣板的 build 背書。
+    """
+    spec = importlib.util.spec_from_file_location(
+        "install_kit_build", REPO / "install-kit" / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    monkeypatch.setattr(build, "DIST", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["build.py"])
+    build.main()
+    with zipfile.ZipFile(tmp_path / "chatroom-mcp-kit.zip") as zf:
+        names = zf.namelist()
+        tmpl = [n for n in names if n.endswith("skill/SKILL.md.tmpl")]
+        assert tmpl, f"包裡沒有 skill 樣板：{[n for n in names if 'skill' in n]}"
+        body = zf.read(tmpl[0]).decode("utf-8")
+    # 包進去但內容是空的／佔位符掉了，一樣裝不出能用的 skill
+    assert "@@WATCHER@@" in body
+
+
+def test_shipped_template_has_no_authors_machine_in_it():
+    """交付出去的樣板本身不能帶任何人的本機路徑。"""
+    tmpl = (REPO / "install-kit" / "skill" / "SKILL.md.tmpl").read_text(
+        encoding="utf-8")
+    assert "@@WATCHER@@" in tmpl
+    for bad in (r"C:\Users", "C:/Users/", "/home/"):
+        assert bad not in tmpl, f"樣板裡有本機路徑：{bad}"

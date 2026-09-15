@@ -235,7 +235,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         style:
                             UepText.code(size: 12, color: s.ink, height: 1.4),
                         decoration: _decoration(
-                                '幫這個 agent 取房內名稱；留空則由 agent 自取或自動生成')
+                                '幫這個 agent 取房內名稱，最多 32 字；留空則由 agent 自取或自動生成')
                             .copyWith(counterText: ''),
                       ),
                     ),
@@ -260,8 +260,13 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         onPressed: _submitting ? null : _submit,
                       ),
                       const SizedBox(width: 12),
-                      MonoLabel('24 小時未回應自動過期',
-                          size: 9, letterSpacing: 1.2),
+                      // 時限是 server 的 CHATROOM_ASSIGNMENT_TTL（預設 24 小時），
+                      // 沒有端點吐給 client，所以不寫死數字。Expanded 讓它在
+                      // 窄畫面換行而不是溢位。
+                      const Expanded(
+                        child: MonoLabel('逾時未回應自動過期（時限由 Hub 設定）',
+                            size: 9, letterSpacing: 1.2),
+                      ),
                     ]),
                   ],
                 ),

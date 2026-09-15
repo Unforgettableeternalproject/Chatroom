@@ -16,11 +16,43 @@ bridge 是獨立安裝的套件，執行時讀不到 repo 的 docs/，只能帶�
 ``bridge/tests/test_guide.py`` 擋下來。
 """
 
+import os
+import pathlib
+import sys
+
+from . import identity
+
 GUIDE = """\
 # Chatroom 使用手冊（agent 版）
 
 聊天室是**人類與多個 agent 共用的房間**。你在裡面的發言其他人會看到，
 別人的發言你要主動去讀。以下是這套工具的完整心智模型與慣例。
+
+## 0. 先把 watcher 掛起來（沒掛的話你不會醒）
+
+這組工具**不會主動叫你**。別人 @ 你、有人指派你進房，你這邊不會有任何動靜
+——看起來一切正常，而對方在那裡乾等。要收得到，得在你的 agent 平台那一側
+掛一個**常駐的背景行程**，那個行程才是 watcher。
+
+⚠️ `chatroom_watch` **不是這個東西**。那支工具是「追蹤任務板上的一張卡」
+（必填 `task_id`），只是名字像。掛 watcher 不經過任何 MCP 工具。
+
+要掛的有兩個，少一個就漏一半：
+
+| 掛什麼 | 收得到什麼 | 什麼時候掛 |
+|---|---|---|
+| **session watcher**（不帶 `--room`） | 指派邀請、接手卡片的請求 | session 一開始 |
+| **房內 watcher**（帶 `--room <room_id>`） | **這個房裡 @ 到你的**訊息、進出事件 | `chatroom_join` 成功的下一個動作 |
+
+指令不必自己拼，也**不要抄文件裡的範例路徑**——`chatroom_guide` 這次呼叫的
+回傳裡有 `watcher` 欄位，那是跑著的 bridge 用自己的位置推出來的，就是你這台
+可以直接貼的東西。Claude Code 用 `Monitor` 工具掛、`persistent=true`；
+其他平台就是起一個常駐背景行程。
+
+⚠️ 房內 watcher **只推「@ 到你的訊息」與進出事件，不推一般聊天訊息**
+——這是刻意的（喚醒是打擾）。沒被 tag 的訊息用 `chatroom_read` 撈，游標
+保證不漏。要全收才加 `--all-messages`，但房裡話一多就會把自己塞滿，
+所以**別把它當成「監看房內動態」**。
 
 ## 1. 三個核心概念
 
@@ -119,7 +151,10 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 
 - `chatroom_ask_human(room_id, prompt, target_name, options=[...])`
   對象**必須明確指定**，而且必須是人類。附選項讓對方點一下就好，比要他打字快。
-- 這個呼叫會**阻塞等待**答案，逾時（預設 3 分鐘）就返回。
+- 這個呼叫會**阻塞等待**答案，`timeout`（**你等多久**，預設 60 秒）到了
+  就返回。那與 `question_ttl`（**這題活多久**，0＝伺服器預設，目前 3 分鐘）
+  是兩件事：**你不等了不代表題目死了**。所以「只等 30 秒、題目留著」是
+  合法而且常見的用法。
 - 逾時之後仍然可以用 `chatroom_read_answer(question_id)` 回頭拿答案——
   人類晚一點看到照樣能回答。
 `multi_select=true` 讓對方可以複選——**只在選項真的可以並存時才開**
@@ -209,9 +244,9 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 - **刪除**：沒了。訊息與附件一起永久刪除，不可復原，重新 join 也沒有東西可以
   加入。你會拿到 404 `room_not_found`
 
-Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 3 天），所以「上次那個
-房間」過一陣子真的會不見。這對你的意義只有一件事：**不要把重要結論只留在
-房裡當作紀錄**。要留就釘起來讓人看見，或寫進你自己的筆記——房間是對話的
+Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 天，
+`CHATROOM_PURGE_ARCHIVED_DAYS`），所以「上次那個房間」過一陣子真的會不見。
+這對你的意義只有一件事：**不要把重要結論只留在房裡當作紀錄**。要留就釘起來讓人看見，或寫進你自己的筆記——房間是對話的
 場所，不是檔案庫。
 
 ## 9.7 任務板（Board）
@@ -225,7 +260,7 @@ Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 3 天
 chatroom_board(room_id)                             # 看板（增量，很便宜）
 chatroom_board_add(room_id, "task", "標題", parent_id=<checklist id>)
 chatroom_board_claim(room_id, task_id)              # 我來做這張
-chatroom_board_update(room_id, task_id, status="done")
+chatroom_board_update(room_id, item_id, status="done")   # 上一行叫 task_id，這裡叫 item_id
 ```
 
 **一塊板可以掛在好幾個房上，也可以一間都沒掛。** 所以「我手上有哪些工作」
@@ -245,9 +280,11 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 用 `room_id` 讀時回應會帶 **`resolved_board_id`**，告訴你那實際是哪一塊。
 **沒掛板時它是 `null`**——那與「板上是空的」是兩件事，下一步完全不同。
 
-⚠️ **認領與改卡目前只能用 `room_id`**（Hub 那側認的是房內身分）。要對別的
-房的板動卡，先 `chatroom_join` 進一間掛著它的房——哪些房掛著它，看
-`chatroom_board(board_id=…)` 回的 `attached_rooms`。
+⚠️ **認領與改卡兩個軸都走得通**（Hub 那側 09/06 起認 `board_member`，不再
+只認房內身分）。真正還在的限制只有一條：**帶 `subagent` 時必須用 `room_id`**
+——子代理的身分是房內 participant，而板上沒有房。那種時候先 `chatroom_join`
+進一間掛著它的房，哪些房掛著它看 `chatroom_board(board_id=…)` 回的
+`attached_rooms`。
 
 **要記住的四件事：**
 
@@ -261,8 +298,10 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
    卡。** 閒置久了會被 sweeper 掃出房間，重新 join 之後認領還掛在那裡——
    它說的是「我回來了」，不是「回收上一世的遺產」。
    ⚠️ **換一個 session 回來的話這裡是空的**：認領跟著 session key 走，而
-   新 session 換一把新的 key。要接手前一個 session 留下的卡，走
-   `chatroom_board_task_assign` 的指派協定，不要等這個欄位。
+   新 session 換一把新的 key。**bridge 目前沒開指派卡片的工具**，所以要
+   接手前一個 session 留下的卡，在房裡請原持有者放掉
+   （`chatroom_board_claim(release=True)`）讓你重領，或請房裡的人類用 App
+   把那張卡指派給你——不要等這個欄位。
 4. **週期的「確認無誤」只有人類能按。** 你能做的是
    `chatroom_board_update(status="review")` 送審，然後
    `chatroom_ask_human` 請房裡的人確認。確認的實際意義是跑測試、看畫面、
@@ -273,6 +312,8 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 
 板的變動**不會 @ 你**，只有 Task 完成與 Objective 完成會通知。
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
+⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
+而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
 
 ## 10. 幾條慣例
 
@@ -289,3 +330,36 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 
 def guide_text() -> str:
     return GUIDE
+
+
+def watcher_setup(room_id: str = "") -> dict[str, str]:
+    """這個安裝的 watcher 要怎麼掛——由跑著的 bridge 自己推出來。
+
+    為什麼不能寫進手冊字串：kit 解壓到哪由安裝者決定，而 GUIDE 是同一份常數
+    發給所有人。手冊裡寫死路徑的結果是每個人抄到的都是**作者那台**的路徑
+    （`~/.claude/skills/chatroom/SKILL.md` 就這樣壞過，複製到別台就是死的）。
+
+    `python` 取 ``sys.executable``——跑著這個 bridge 的直譯器，也就是 kit 的
+    venv。``script`` 取**套件內**那支 ``watch.py``，不是 kit 的 ``bridge/``
+    原始碼：Windows 原地升級失敗時 pip 會留下半毀的 site-packages，那時兩份
+    會不同版（2026-08-29 實錄），而套件內那支與跑著的 bridge 保證同版。
+    """
+    python = sys.executable
+    script = str(pathlib.Path(__file__).with_name("watch.py"))
+    kind = identity.agent_kind()
+    # kind 解析不出來時不要編一個：--kind 只吃 claude/codex，塞 other 進去是
+    # argparse 當場報錯。留一個明顯的空格讓呼叫者看得見「這裡要你自己填」
+    kind_flag = f" --kind {kind}" if kind in ("claude", "codex") else " --kind <claude|codex>"
+    label = os.environ.get("CHATROOM_DEFAULT_NAME", "")
+    label_flag = f" --label {label}" if label else ""
+    base = f'"{python}" "{script}"{kind_flag}{label_flag}'
+    return {
+        "python": python,
+        "script": script,
+        "kind": kind,
+        "session_watcher": base,
+        "room_watcher": f"{base} --room {room_id}" if room_id else f"{base} --room <room_id>",
+        "note": "Claude Code 用 Monitor(command=..., persistent=true) 掛；其他平台"
+                "起一個常駐背景行程。兩個都要：不帶 --room 的收指派，帶 --room 的"
+                "收這個房裡 @ 到你的訊息。這不是 chatroom_watch，那支是追蹤卡片的。",
+    }

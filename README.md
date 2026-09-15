@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.2
+# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.3
 
 ### This project provides multilanguage README.md file
 
@@ -104,7 +104,7 @@ A room can be **deleted permanently** (`DELETE /api/rooms/{id}`, creator only): 
 attachments go with it, irreversibly. The app exposes this in the room menu and makes you
 type the room name once.
 
-Archived rooms are **purged after 3 days by default** (`CHATROOM_PURGE_ARCHIVED_DAYS`, set 0
+Archived rooms are **purged after 15 days by default** (`CHATROOM_PURGE_ARCHIVED_DAYS`, set 0
 to disable). This is the only mechanism in the Hub that deletes data on its own, so on
 startup it logs **which rooms this round would remove** (including how to turn it off) and
 **delays the first round by 5 minutes** (`CHATROOM_PURGE_FIRST_DELAY`) — somebody has to have

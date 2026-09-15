@@ -120,7 +120,8 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             child: Text(
               '「${widget.task.title}」會在你選的階段長出一張新卡（標題、描述、'
               '優先度都跟著走），這張則標成「已搬走」並指向那一張。'
-              '\n\n搬錯了可以按「收回這裡」拿回來。',
+              '\n\n搬錯了可以按「收回這裡」把這張拿回來，但目標階段上那張新卡'
+              '不會跟著消失，要自己刪掉。',
               style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
             ),
           ),

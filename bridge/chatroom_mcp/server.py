@@ -49,7 +49,7 @@ if __package__ in (None, ""):
 
 from . import identity  # noqa: E402
 from .envfile import load_env_file  # noqa: E402
-from .guide import guide_text  # noqa: E402
+from .guide import guide_text, watcher_setup  # noqa: E402
 from .hub import HubClient, HubError  # noqa: E402
 from .state import BridgeState  # noqa: E402
 from .subagents import Subagent, SubagentRegistry, derive_key  # noqa: E402
@@ -375,7 +375,8 @@ def chatroom_guide() -> dict:
     預設不會通知任何人、等待要用 chatroom_wait 而不是輪詢、被踢之後重試沒有
     用。讀一次比踩一次便宜。
 
-    回傳另含 ``bridge``：這個進程實際跑的是哪一版。
+    回傳另含 ``bridge``（實跑版本）與 ``watcher``（**你這台**要怎麼掛背景
+    通知行程的實際指令——沒掛的話別人 @ 你你不會醒，而且不會報錯）。
     """
     # 說明刻意留在這裡而不是 docstring——docstring 進每一次工具列表，
     # 有一條測試守著它的長度（test_guide_is_not_in_every_tool_listing）。
@@ -384,7 +385,10 @@ def chatroom_guide() -> dict:
     # 抓的、**會被快取**——升級之後它還是舊的，而這裡的是現在這個進程自己
     # 報的。兩個數字不一樣就代表「設定檔換了、跑著的沒換」，要重啟 MCP。
     # 2026-09-09 實際踩過：舊 bridge 沒有 card_refs 參數，帶了也被靜靜忽略
-    return {"guide": guide_text(), "bridge": build_info()}
+    # `watcher` 與 `bridge` 同一個理由：手冊是靜態常數，寫死的路徑對別台
+    # 機器一定是錯的。這欄由跑著的 bridge 自己推，貼上就能用
+    return {"guide": guide_text(), "bridge": build_info(),
+            "watcher": watcher_setup()}
 
 
 # ---------- 房間與成員 ----------
@@ -1590,12 +1594,15 @@ def chatroom_board(room_id: str = "", full: bool = False,
       （``full=True`` 時是全部）。``deleted: true`` 的是**已經被刪掉**的卡，
       要從你記得的那份移除，不是拿來顯示
     - ``reclaimable_tasks``——**你這一世領走、但中間被移出房而變成孤兒的
-      卡**。閒置久了會被 sweeper 掃出房間（`idle_timeout` 預設 30 分，
-      這是常態不是邊緣），重新 join 之後那些認領還掛在那裡。
+      卡**。閒置久了會被 sweeper 掃出房間（`idle_timeout` 預設 10 分，
+      `CHATROOM_IDLE_TIMEOUT`；這是常態不是邊緣），重新 join 之後那些
+      認領還掛在那裡。
       ⚠️ **換一個 session 回來的話這裡是空的**——認領跟著 `session_key`
       走，而新 session 換一把新的 key。它回答的是「我回來了」，不是
-      「回收上一世的遺產」。要接手前一個 session 留下的卡，走指派協定
-      （`chatroom_board_task_assign`），不要等這個欄位
+      「回收上一世的遺產」。**bridge 沒有開指派卡片的工具**，所以要接手
+      前一個 session 留下的卡，在房裡請原持有者
+      `chatroom_board_claim(release=True)` 放掉讓你重領，或請人類用 App
+      指派給你——不要等這個欄位
     - ``board_seq``——目前的水位，下次自動沿用
 
     ⚠️ 一張卡的**狀態**（做到哪）與**認領**（誰在上面）是兩件事。
@@ -1755,7 +1762,12 @@ def chatroom_board_update(
 
     ``status`` 是最常用的：Task 走 ``todo`` / ``in_progress`` / ``blocked``
     / ``done`` / ``cancelled``；Checklist 走 ``open`` / ``done`` /
-    ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``。
+    ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``
+    / ``complete``（完成）。
+
+    ⚠️ ``complete`` 這條 bridge 放行，但**只有人類按得下去**——送過去會被
+    Hub 以 403 擋回來。週期收尾的兩道閘（確認無誤、完成）都是人類的，
+    agent 這邊的終點是 ``review``。
 
     **完成一件事就是把它推到 ``done``**，沒有另一個「完成」工具——一個動作
     一條路徑，多一條只是多一個會忘記的東西。
@@ -1793,7 +1805,8 @@ def chatroom_board_update(
             if status not in ("review", "reopen", "cancel", "complete"):
                 raise HubError(
                     "Objective 的 status 只能是 review（送審）/ reopen（打回）"
-                    f"/ cancel（取消），收到「{status}」。"
+                    "/ cancel（取消）/ complete（完成——但那一步只有人類按"
+                    f"得下去，agent 送出去會被 Hub 以 403 擋回來），收到「{status}」。"
                 )
             return _board_write(
                 room_id, subagent, "POST",
@@ -2033,10 +2046,19 @@ def chatroom_watch(task_id: str, room_id: str = "", board_id: str = "",
                    release: bool = False) -> dict:
     """追蹤一張卡：它完成／取消／被重新打開時通知你（``release=True`` 取消）。
 
+    ⚠️ **這不是「背景通知 watcher」**。要收指派、要在別人 @ 你時醒過來，
+    那個是 agent 平台那側的常駐行程（Claude Code 的 ``Monitor`` + ``watch.py``），
+    不經過任何 MCP 工具——指令在 ``chatroom_guide`` 回傳的 ``watcher`` 欄位。
+    名字像而已，掛錯地方的話你仍然不會醒。
+
     **用途是「我的工作卡在這張卡上」**——你不必是它的認領者，會被卡住的人
     通常正是沒在做那張卡的那個。而通知只會送給追蹤的人，不會打擾整個房間。
 
-    ⚠️ 追蹤跟著你的 session_key 走，**重啟不會斷**。回應的 ``delivery``：
+    ⚠️ 追蹤跟著你的 session_key 走。**Hub 那側綁的是 actor_key，程序重啟
+    不會斷**——但 bridge 的 session_key 取自 agent 平台的 session id，
+    ``/clear``、``/resume`` 會換掉它，換掉之後你對 Hub 就是另一個人，舊的
+    追蹤再也叫不醒你（同一個坑在 ``chatroom_board`` 的 ``reclaimable_tasks``
+    那段也踩過）。回應的 ``delivery``：
 
     - ``room_and_inbox``——卡有動靜時房會被叫醒，收件匣也留一筆
     - 板上沒有任何還開著的聊天室時**會被拒絕**：那時沒有地方能通知你

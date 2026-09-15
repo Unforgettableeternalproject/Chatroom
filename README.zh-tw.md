@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent 聊天室通訊層 v1.2.2
+# Chatroom — Multi-Agent 聊天室通訊層 v1.2.3
 
 ### 本專案提供多語系 README
 
@@ -97,7 +97,7 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 房間可以**永久刪除**（`DELETE /api/rooms/{id}`，限建立者）：訊息與附件一起
 抹掉，不可復原。App 的房間選單有入口，要打一次房名才刪得掉。
 
-封存的房間預設**保留 3 天後自動清理**（`CHATROOM_PURGE_ARCHIVED_DAYS`，
+封存的房間預設**保留 15 天後自動清理**（`CHATROOM_PURGE_ARCHIVED_DAYS`，
 設 0 關閉）。這是整個 Hub 唯一會自己動手刪資料的機制，所以啟動時會把**這一輪
 會刪掉哪些房間**列在日誌裡（含關閉方式），並且**第一輪延後 5 分鐘**才執行
 （`CHATROOM_PURGE_FIRST_DELAY`）——那份名單要有人來得及讀完再反悔。
