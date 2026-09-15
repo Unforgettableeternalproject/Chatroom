@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -466,3 +467,105 @@ def test_sweep_old_venvs_is_quiet_when_there_is_nothing_to_clean(inst, tmp_path,
 
     assert inst.sweep_old_venvs() == []
     assert capsys.readouterr().out == ""
+
+
+# ---------- skill 安裝 ----------
+
+
+@pytest.fixture
+def skill_env(inst, tmp_path, monkeypatch):
+    """把樣板與安裝落點都搬進 tmp——不能碰使用者真正的 ~/.claude/skills。"""
+    kit = tmp_path / "kit"
+    (kit / "skill").mkdir(parents=True)
+    tmpl = kit / "skill" / "SKILL.md.tmpl"
+    tmpl.write_text("掛法：\n@@WATCHER@@ --room <room_id>\n", encoding="utf-8")
+    target_dir = tmp_path / "home" / ".claude" / "skills" / "chatroom"
+    monkeypatch.setattr(inst, "KIT_DIR", kit)
+    monkeypatch.setattr(inst, "SKILL_TMPL", tmpl)
+    monkeypatch.setattr(inst, "SKILL_DIR", target_dir)
+    # site_packages 要跑真的 python 子進程，測試裡換成固定值
+    site = tmp_path / "site"
+    (site / "chatroom_mcp").mkdir(parents=True)
+    (site / "chatroom_mcp" / "watch.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(inst, "site_packages", lambda py: site)
+    return target_dir / "SKILL.md"
+
+
+def test_skill_is_written_with_this_machines_paths(inst, skill_env, tmp_path):
+    """樣板的佔位符要被**這台**的實際路徑填掉，一個都不能留。
+
+    這是 2026-09-15 的根因：手寫的 skill 帶著作者開發樹的絕對路徑，
+    複製到別台機器就是死的，而 agent 照著貼只會得到「找不到檔案」。
+    """
+    inst.setup_skill(Path("py"), "Novia")
+    text = skill_env.read_text(encoding="utf-8")
+    assert "@@" not in text, "還有沒填的佔位符"
+    assert "watch.py" in text and "--kind claude" in text
+    assert "--label Novia" in text
+
+
+def test_skill_backs_up_an_existing_different_file(inst, skill_env, capsys):
+    """既有內容不同時要備份後覆寫，而且講出備份在哪。
+
+    08/29 盲點一的形狀：遇到既有內容只警告不改、卻照樣印「完成」，
+    結果是裝出一個壞環境而輸出看起來成功。
+    """
+    skill_env.parent.mkdir(parents=True)
+    skill_env.write_text("我是使用者手寫的舊版\n", encoding="utf-8")
+    inst.setup_skill(Path("py"), "Novia")
+    backups = list(skill_env.parent.glob("SKILL.md.bak-*"))
+    assert len(backups) == 1, "既有內容必須留一份"
+    assert backups[0].read_text(encoding="utf-8") == "我是使用者手寫的舊版\n"
+    assert "@@" not in skill_env.read_text(encoding="utf-8"), "新內容沒寫進去"
+    assert str(backups[0]) in capsys.readouterr().out, "備份位置要講出來"
+
+
+def test_skill_rerun_makes_no_backup(inst, skill_env):
+    """冪等重跑不該每次都堆一份備份——備份多到沒人看就等於沒備份。"""
+    inst.setup_skill(Path("py"), "Novia")
+    inst.setup_skill(Path("py"), "Novia")
+    assert list(skill_env.parent.glob("SKILL.md.bak-*")) == []
+
+
+def test_skill_says_so_when_the_template_is_missing(inst, skill_env, capsys,
+                                                    monkeypatch, tmp_path):
+    """舊版 kit 沒有 skill/ 目錄——那時要**明講略過**，不能靜默。
+
+    靜默跳過與「裝好了」在輸出上長得一模一樣，而使用者是靠輸出判斷的。
+    """
+    monkeypatch.setattr(inst, "SKILL_TMPL", tmp_path / "不存在.tmpl")
+    inst.setup_skill(Path("py"), "Novia")
+    out = capsys.readouterr().out
+    assert "略過" in out and "chatroom_guide" in out, "要講出替代的取得方式"
+    assert not skill_env.exists()
+
+
+def test_build_ships_the_skill_template(tmp_path, monkeypatch):
+    """漏帶 skill/ 的話 setup_skill 只會印「略過」而安裝仍算成功。
+
+    要真的打一個包來看 zip 裡有什麼——grep build.py 的字串擋不住「路徑
+    打錯」，那種寫法會替一個產不出樣板的 build 背書。
+    """
+    spec = importlib.util.spec_from_file_location(
+        "install_kit_build", REPO / "install-kit" / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    monkeypatch.setattr(build, "DIST", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["build.py"])
+    build.main()
+    with zipfile.ZipFile(tmp_path / "chatroom-mcp-kit.zip") as zf:
+        names = zf.namelist()
+        tmpl = [n for n in names if n.endswith("skill/SKILL.md.tmpl")]
+        assert tmpl, f"包裡沒有 skill 樣板：{[n for n in names if 'skill' in n]}"
+        body = zf.read(tmpl[0]).decode("utf-8")
+    # 包進去但內容是空的／佔位符掉了，一樣裝不出能用的 skill
+    assert "@@WATCHER@@" in body
+
+
+def test_shipped_template_has_no_authors_machine_in_it():
+    """交付出去的樣板本身不能帶任何人的本機路徑。"""
+    tmpl = (REPO / "install-kit" / "skill" / "SKILL.md.tmpl").read_text(
+        encoding="utf-8")
+    assert "@@WATCHER@@" in tmpl
+    for bad in (r"C:\Users", "C:/Users/", "/home/"):
+        assert bad not in tmpl, f"樣板裡有本機路徑：{bad}"

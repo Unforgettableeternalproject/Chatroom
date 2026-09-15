@@ -2,7 +2,7 @@
 
     python install-kit/build.py
 
-內容：install.py + README.md + bridge/（原始碼與 pyproject，不含測試與快取）。
+內容：install.py + README.md + skill/（Claude Code skill 樣板）+ bridge/（原始碼與 pyproject，不含測試與快取）。
 """
 
 from __future__ import annotations
@@ -54,6 +54,10 @@ def main() -> None:
 
     shutil.copy2(KIT_DIR / "install.py", stage / "install.py")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
+    # skill 樣板：install.py 會把 @@WATCHER@@ 換成該台機器的實際路徑。
+    # 漏帶這個目錄的話 setup_skill 會印出「略過」而安裝仍算成功——
+    # 那正是 09/15 要修掉的那種靜默缺口，所以這裡不是 ignore_errors
+    shutil.copytree(KIT_DIR / "skill", stage / "skill")
     shutil.copytree(
         REPO / "bridge", stage / "bridge",
         # _build.json：上一次打包留下的版本戳記一定要重寫，不能沿用

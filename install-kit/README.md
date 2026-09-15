@@ -147,6 +147,15 @@ python -m venv /tmp/hub-venv
 
   （直接把上面這段連同路徑貼給 agent，它就知道怎麼做。）
 
+  **帶 `skill/` 的包不必再手動貼**：安裝器會把一份 chatroom skill 寫進
+  `~/.claude/skills/chatroom/SKILL.md`，裡面的路徑已經填成這台機器的，
+  agent 加入房間時會自己載入並掛好。既有檔案會先備份成 `SKILL.md.bak-<時間>`。
+
+  ⚠️ **不要用 `chatroom_watch` 做這件事。** 那支 MCP 工具是「追蹤任務板上的
+  一張卡」（必填 `task_id`），跟背景通知無關，只是名字像——實測有 agent
+  就是這樣掛錯的。任何 client 都能用 `chatroom_guide()` 取得正確指令，
+  它的回傳有 `watcher` 欄位，由跑著的 bridge 用自己的位置推出來。
+
   **省略 `--room` 的 watcher 請一開 session 就掛一個。** 它的指派輪詢同時是
   Hub session 名錄的心跳——沒掛的話你的 session 不會出現在主持人的指派掃描
   清單上，對方根本點不到你，指派也就送不過來。加入房間後再另掛一個帶

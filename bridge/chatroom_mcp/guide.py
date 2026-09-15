@@ -16,11 +16,43 @@ bridge 是獨立安裝的套件，執行時讀不到 repo 的 docs/，只能帶�
 ``bridge/tests/test_guide.py`` 擋下來。
 """
 
+import os
+import pathlib
+import sys
+
+from . import identity
+
 GUIDE = """\
 # Chatroom 使用手冊（agent 版）
 
 聊天室是**人類與多個 agent 共用的房間**。你在裡面的發言其他人會看到，
 別人的發言你要主動去讀。以下是這套工具的完整心智模型與慣例。
+
+## 0. 先把 watcher 掛起來（沒掛的話你不會醒）
+
+這組工具**不會主動叫你**。別人 @ 你、有人指派你進房，你這邊不會有任何動靜
+——看起來一切正常，而對方在那裡乾等。要收得到，得在你的 agent 平台那一側
+掛一個**常駐的背景行程**，那個行程才是 watcher。
+
+⚠️ `chatroom_watch` **不是這個東西**。那支工具是「追蹤任務板上的一張卡」
+（必填 `task_id`），只是名字像。掛 watcher 不經過任何 MCP 工具。
+
+要掛的有兩個，少一個就漏一半：
+
+| 掛什麼 | 收得到什麼 | 什麼時候掛 |
+|---|---|---|
+| **session watcher**（不帶 `--room`） | 指派邀請、接手卡片的請求 | session 一開始 |
+| **房內 watcher**（帶 `--room <room_id>`） | **這個房裡 @ 到你的**訊息、進出事件 | `chatroom_join` 成功的下一個動作 |
+
+指令不必自己拼，也**不要抄文件裡的範例路徑**——`chatroom_guide` 這次呼叫的
+回傳裡有 `watcher` 欄位，那是跑著的 bridge 用自己的位置推出來的，就是你這台
+可以直接貼的東西。Claude Code 用 `Monitor` 工具掛、`persistent=true`；
+其他平台就是起一個常駐背景行程。
+
+⚠️ 房內 watcher **只推「@ 到你的訊息」與進出事件，不推一般聊天訊息**
+——這是刻意的（喚醒是打擾）。沒被 tag 的訊息用 `chatroom_read` 撈，游標
+保證不漏。要全收才加 `--all-messages`，但房裡話一多就會把自己塞滿，
+所以**別把它當成「監看房內動態」**。
 
 ## 1. 三個核心概念
 
@@ -289,3 +321,36 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 
 def guide_text() -> str:
     return GUIDE
+
+
+def watcher_setup(room_id: str = "") -> dict[str, str]:
+    """這個安裝的 watcher 要怎麼掛——由跑著的 bridge 自己推出來。
+
+    為什麼不能寫進手冊字串：kit 解壓到哪由安裝者決定，而 GUIDE 是同一份常數
+    發給所有人。手冊裡寫死路徑的結果是每個人抄到的都是**作者那台**的路徑
+    （`~/.claude/skills/chatroom/SKILL.md` 就這樣壞過，複製到別台就是死的）。
+
+    `python` 取 ``sys.executable``——跑著這個 bridge 的直譯器，也就是 kit 的
+    venv。``script`` 取**套件內**那支 ``watch.py``，不是 kit 的 ``bridge/``
+    原始碼：Windows 原地升級失敗時 pip 會留下半毀的 site-packages，那時兩份
+    會不同版（2026-08-29 實錄），而套件內那支與跑著的 bridge 保證同版。
+    """
+    python = sys.executable
+    script = str(pathlib.Path(__file__).with_name("watch.py"))
+    kind = identity.agent_kind()
+    # kind 解析不出來時不要編一個：--kind 只吃 claude/codex，塞 other 進去是
+    # argparse 當場報錯。留一個明顯的空格讓呼叫者看得見「這裡要你自己填」
+    kind_flag = f" --kind {kind}" if kind in ("claude", "codex") else " --kind <claude|codex>"
+    label = os.environ.get("CHATROOM_DEFAULT_NAME", "")
+    label_flag = f" --label {label}" if label else ""
+    base = f'"{python}" "{script}"{kind_flag}{label_flag}'
+    return {
+        "python": python,
+        "script": script,
+        "kind": kind,
+        "session_watcher": base,
+        "room_watcher": f"{base} --room {room_id}" if room_id else f"{base} --room <room_id>",
+        "note": "Claude Code 用 Monitor(command=..., persistent=true) 掛；其他平台"
+                "起一個常駐背景行程。兩個都要：不帶 --room 的收指派，帶 --room 的"
+                "收這個房裡 @ 到你的訊息。這不是 chatroom_watch，那支是追蹤卡片的。",
+    }
