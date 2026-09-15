@@ -290,6 +290,80 @@ void main() {
           reason: "停它的唯一入口是那顆按鈕，說明文字要指向它");
       expect(find.textContaining("關掉那個視窗"), findsNothing,
           reason: "那個視窗在 2026-09-11 之後不存在了");
+
+      // 🔴 自啟那段原本寫「它連前景視窗裡跑的那個也停得掉」——與上面
+      // 「Hub 跑在背景，沒有視窗」在**同一頁**互相打臉。它真正要講的是
+      // 「不分來源都停得掉」，那半是對的、留著。
+      expect(find.textContaining("都停得掉"), findsOneWidget,
+          reason: "自啟那段要講的是「不分來源都停得掉」，那半不能連著一起刪");
+      expect(find.textContaining("視窗裡跑"), findsNothing,
+          reason: "同一頁不能一邊說沒有視窗、一邊叫人去停「視窗裡跑的那個」");
+    });
+  });
+
+  group("隧道說明也不能指向那個視窗", () {
+    /// 🔴 **這條的前一版搆不到它要守的字串。**
+    ///
+    /// 舊斷言寫 `find.textContaining("關掉那個視窗")`，而畫面上的實際字串是
+    /// 「關掉那個**隧道**視窗也等於關閉。」——多兩個字，`contains` 不成立，
+    /// 所以它**永遠綠**。更何況它掛在 `wrap(null)`（沒有網址）底下，那段
+    /// 文案在沒有網址時根本不渲染：兩重搆不到。
+    ///
+    /// 現在改成餵一條活著的隧道，並且正負兩半都驗——只驗「不含某句」的話，
+    /// 整段文案沒渲染出來它也會綠。
+    const live = TunnelStatus(
+      ProbeState.ok,
+      'https://live.trycloudflare.com',
+      '隧道開著',
+    );
+
+    testWidgets("有隧道時：出路只有「關閉隧道」那顆，不是關一個視窗", (tester) async {
+      tester.view.physicalSize = const Size(760, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(wrap(null, tunnel: live));
+      await tester.pumpAndSettle();
+
+      // 正面那一半：出路要講得出來，而且指向真的存在的那顆按鈕
+      expect(find.textContaining("先按「關閉隧道」"), findsOneWidget,
+          reason: "光是不提視窗不夠——他得知道到底要按哪裡");
+      expect(find.text("關閉隧道"), findsOneWidget);
+      // 負面那一半：隧道自 2026-09-11（1ae1a61）起也沒有視窗了
+      //
+      // ⚠️ 不能寫成 `textContaining("視窗")` findsNothing：同一頁的啟動區
+      // 有一句「Hub 跑在背景，沒有視窗」，那句是對的、也必須留著，
+      // 泛泛地禁掉「視窗」兩個字會把它一起打掉。
+      expect(find.textContaining("隧道視窗"), findsNothing,
+          reason: "1ae1a61 之後隧道也在背景跑，沒有視窗可以關");
+      expect(find.textContaining("也等於關閉"), findsNothing,
+          reason: "「關掉某個東西也等於關閉」那條路已經不存在了");
+    });
+
+    testWidgets("殘留的舊網址不能被說成「已經有一條」", (tester) async {
+      tester.view.physicalSize = const Size(760, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      // `.tunnel-url` 非空但打不通＝`unknown`：可能還活著（hairpin），
+      // 也可能是殘留。斷言「已經有一條」在後者是假的
+      await tester.pumpWidget(wrap(null,
+          tunnel: const TunnelStatus(
+            ProbeState.unknown,
+            'https://stale.trycloudflare.com',
+            '有網址，但從這台機器打不通',
+          )));
+      await tester.pumpAndSettle();
+
+      expect(find.text("已經有一條"), findsNothing,
+          reason: "打不通的時候這句話可能是假的");
+      expect(find.text("偵測到舊網址"), findsOneWidget);
+      expect(find.textContaining("先按「關閉隧道」"), findsOneWidget,
+          reason: "確定它死了的人要有路把它清掉，否則唯一的入口就是死路");
+      // 禁用照舊：殘留與「活著只是繞不回來」在這台機器上分不出來，
+      // 而後者開第二條就是那個關不掉的公開入口
+      expect(callbackOf(tester, "偵測到舊網址"), isNull,
+          reason: "分不出死活的時候開第二條，就是那個安全問題");
     });
   });
 }
