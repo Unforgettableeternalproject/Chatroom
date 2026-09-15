@@ -96,6 +96,7 @@ class MessageComposer extends StatefulWidget {
     this.enabled = true,
     this.replyTarget,
     this.onCancelReply,
+    this.selfParticipantId,
     this.editTarget,
     this.onCancelEdit,
     this.attachments = const [],
@@ -124,6 +125,16 @@ class MessageComposer extends StatefulWidget {
   final bool enabled;
   final Message? replyTarget;
   final VoidCallback? onCancelReply;
+
+  /// 自己在這個房間的 participant id。
+  ///
+  /// 只有一個用途：判斷 [replyTarget] 是不是自己發的。**回覆會 tag 被回覆
+  /// 的人，但自己回自己不算**——那只會把自己叫醒一次。判準與 Hub 那邊
+  /// 逐條對齊（見 [_replyMentionName]）。
+  ///
+  /// 拿不到時（identity 還沒回來）當作「不是我」：寧可在預覽裡多列一個
+  /// 名字，也不要少列——**少列的那個仍然會被通知**，而畫面說了沒有。
+  final String? selfParticipantId;
 
   /// 正在編輯的訊息。與 [replyTarget] **同構但互斥**——回覆是「針對那則說
   /// 一句新的」，編輯是「把那則換掉」，同時成立沒有意義，而且送出時分不出
@@ -501,6 +512,28 @@ class _MessageComposerState extends State<MessageComposer> {
   ///
   /// 群組保留字一併送出去，**不在這裡展開**——Hub 才知道此刻房裡有誰，
   /// 而且 agent 透過 MCP 發的 `@all` 也得走同一條路。
+  /// 回覆會自動 tag 到誰。沒有人就回 null。
+  ///
+  /// 🔴 **這條規則的真相在 Hub，不在這裡。**
+  /// `server/chatroom_server/app.py` 的 `_insert_message`：送出一則帶
+  /// `reply_to` 的訊息時，Hub 會把被回覆者的名字補進 mentions——理由是
+  /// 「我回你了」與「我 @ 你」在使用者眼裡是同一件事。
+  ///
+  /// 所以這裡是**同一條規則的第二個實作**，存在的唯一理由是「送出前就要
+  /// 看得到」。條件必須與那邊逐條對齊：有作者（系統訊息沒有）、不是自己
+  /// 回自己、名字非空。**改了那邊要回來改這裡，反之亦然**——兩邊不一樣的
+  /// 時候不會有任何地方報錯，只會讓預覽說謊，而那正是這段程式碼要消滅的
+  /// 東西（艾斯維爾 09/15：回覆沒有算進「會 tag 到」）。
+  String? _replyMentionName() {
+    final target = widget.replyTarget;
+    if (target == null) return null;
+    final author = target.senderId;
+    if (author == null || author.isEmpty) return null;
+    if (author == widget.selfParticipantId) return null;
+    final name = target.senderName;
+    return (name != null && name.isNotEmpty) ? name : null;
+  }
+
   List<String> _extractMentions(String content) => extractMentions(
         content,
         [...widget.members.map((p) => p.displayName), ...kMentionGroups.keys],
@@ -802,7 +835,15 @@ class _MessageComposerState extends State<MessageComposer> {
                       ValueListenableBuilder<TextEditingValue>(
                         valueListenable: _controller,
                         builder: (context, value, _) {
-                          final names = _extractMentions(value.text);
+                          final typed = _extractMentions(value.text);
+                          // 回覆帶的那個人也要算進來——他不是打出來的，
+                          // 但他一樣會被通知
+                          final fromReply = _replyMentionName();
+                          final names = [
+                            ...typed,
+                            if (fromReply != null && !typed.contains(fromReply))
+                              fromReply,
+                          ];
                           final refs =
                               extractCardRefs(value.text, widget.cards);
                           if (names.isEmpty && refs.isEmpty) {
@@ -818,7 +859,7 @@ class _MessageComposerState extends State<MessageComposer> {
                           return Text(
                             [
                               if (names.isNotEmpty)
-                                '→ 會 tag 到：${names.join('、')}',
+                                '→ 會 tag 到：${names.map((n) => n == fromReply && !typed.contains(n) ? '$n（回覆）' : n).join('、')}',
                               if (refs.isNotEmpty) '指涉 ${refs.length} 張卡',
                             ].join(' · '),
                             style: UepText.mono(

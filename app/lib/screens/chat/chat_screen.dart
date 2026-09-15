@@ -1248,6 +1248,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             enabled: !archived,
             replyTarget: _replyTarget,
             onCancelReply: () => setState(() => _replyTarget = null),
+            // 用來判斷「自己回自己」——那種回覆 Hub 不會 tag 任何人，
+            // 預覽也就不該列
+            selfParticipantId: ref
+                .watch(identityProvider(widget.roomId))
+                .value
+                ?.participantId,
             editTarget: _editTarget,
             onCancelEdit: () => setState(() => _editTarget = null),
             onSend: _send,
