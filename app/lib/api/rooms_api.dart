@@ -241,6 +241,10 @@ class RoomsApi {
     String visibility = 'public',
     String style = 'verbose',
     String styleInstructions = '',
+    // chat | ops。ops 是遠端派工的工作房（§4.1）：不自動封存，而且 Hub 只
+    // 接受人類憑證建——agent 的 token 借不到這個身分（403
+    // `human_token_required_for_ops_room`）
+    String kind = 'chat',
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -248,6 +252,7 @@ class RoomsApi {
           data: {
             'name': name,
             'topic': topic,
+            'kind': kind,
             'visibility': visibility,
             'style': style,
             'style_instructions': styleInstructions,

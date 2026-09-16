@@ -8,6 +8,7 @@ class Room {
     required this.topic,
     required this.status,
     required this.createdAt,
+    this.kind = 'chat',
     this.visibility = 'public',
     this.style = 'verbose',
     this.styleInstructions = '',
@@ -23,6 +24,15 @@ class Room {
   final String topic;
   final String status; // active | archived
   final String createdAt;
+
+  /// chat（一般對話）/ ops（遠端派工的工作房，REMOTE-OPS-PLAN §4.1）。
+  ///
+  /// ops 房**不自動封存、不進 purge**，而且只有人類憑證建得了。
+  ///
+  /// 舊版 Hub 不回這個欄位——那時一律當成 `chat`，因為那正是這個欄位存在
+  /// 之前所有房間的實際行為（migration 補欄的預設值也是它）。猜成 ops 會讓
+  /// 升級前的每一間房都掛上「不會自動封存」的說明，而那句話是假的。
+  final String kind;
 
   /// public | private。private＝對話鎖定：Hub 不會把它列給沒份的人，
   /// 也不接受沒有邀請的加入。
@@ -55,6 +65,10 @@ class Room {
 
   bool get isArchived => status == 'archived';
 
+  /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
+  /// 一律 409 `room_not_ops`，入口畫出來就是一顆必定失敗的按鈕。
+  bool get isOps => kind == 'ops';
+
   bool get isPrivate => visibility == 'private';
 
   bool get isCustomStyle => style == 'custom';
@@ -65,6 +79,7 @@ class Room {
         topic: (json['topic'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'active',
         createdAt: (json['created_at'] as String?) ?? '',
+        kind: (json['kind'] as String?) ?? 'chat',
         visibility: (json['visibility'] as String?) ?? 'public',
         style: (json['style'] as String?) ?? 'verbose',
         styleInstructions: (json['style_instructions'] as String?) ?? '',
@@ -89,6 +104,7 @@ class Room {
         topic: topic,
         status: status ?? this.status,
         createdAt: createdAt,
+        kind: kind,
         visibility: visibility ?? this.visibility,
         style: style ?? this.style,
         styleInstructions: styleInstructions ?? this.styleInstructions,

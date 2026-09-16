@@ -437,6 +437,20 @@ class _RoomTile extends ConsumerWidget {
                     letterSpacing: 1.0,
                     color: room.isArchived ? s.inkMute : UepColors.gold),
               ],
+              // 工作房的徽章。分區與徽章擇一時選徽章：房間列表已經有
+              // 「進行中／已封存」一個分段器，再切一層會讓搜尋結果散成兩段，
+              // 而人是照名字找房間的
+              if (room.isOps) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.precision_manufacturing_outlined,
+                    size: 11,
+                    color: room.isArchived ? s.inkMute : UepColors.gold),
+                const SizedBox(width: 4),
+                MonoLabel('OPS',
+                    size: 9,
+                    letterSpacing: 1.0,
+                    color: room.isArchived ? s.inkMute : UepColors.gold),
+              ],
               if (room.isArchived) ...[
                 const SizedBox(width: 8),
                 Icon(Icons.inventory_2_outlined, size: 11, color: s.inkMute),
@@ -538,6 +552,12 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   final _styleInstructions = TextEditingController();
   bool _creating = false;
   bool _private = false;
+
+  /// chat | ops。ops 是遠端派工的工作房（REMOTE-OPS-PLAN §4.1）。
+  ///
+  /// **建立時就要選**：Hub 沒有「把一間房改成工作房」的端點，房間類型是
+  /// 建出來就定了的。選錯只能重開一間。
+  String _kind = 'chat';
   String _style = kRoomStyles.first.value;
   String? _error;
 
@@ -579,6 +599,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             // 建立者即管理員
             sessionKey: ref.read(appConfigProvider).deviceKey,
             visibility: _private ? 'private' : 'public',
+            kind: _kind,
             style: _style,
             styleInstructions: instructions,
           );
@@ -624,6 +645,18 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           const SizedBox(height: 14),
           _field(context, 'TOPIC（給 agent 的上下文）', _topic,
               hint: '一句話說明這個房間在做什麼…', lines: 3),
+          const SizedBox(height: 14),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: MonoLabel('房間類型', color: context.uep.inkSoft,
+                letterSpacing: 1.4),
+          ),
+          const SizedBox(height: 7),
+          _KindPicker(
+            value: _kind,
+            enabled: !_creating,
+            onChanged: (v) => setState(() => _kind = v),
+          ),
           const SizedBox(height: 14),
           // 說話方式在**建立時**就選：房間開起來的第一件事往往就是叫 agent
           // 進來，等他講完第一輪長篇再改就已經晚了
@@ -744,6 +777,64 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
 /// **只列既有的，不提供「順便建一塊」**——建板要取名字，而房間名字與板的
 /// 名字是兩件事（板活得比房久，它的名字要撐得住之後的每一間房）。要建新板
 /// 就進房之後用 app bar 那個入口，那裡有完整的建立流程。
+/// 房間類型的二選一。
+///
+/// 說明文字只講**實作真的做得到的事**：ops 房不自動封存（Hub 的 sweeper
+/// 跳過它）、給遠端派工用（派工端點對非 ops 房一律 409）。不要寫成「更安全」
+/// 或「有專屬權限」之類 server 沒做的承諾——畫面上的一句話會被當成事實。
+class _KindPicker extends StatelessWidget {
+  const _KindPicker({
+    required this.value,
+    required this.onChanged,
+    this.enabled = true,
+  });
+
+  final String value;
+  final ValueChanged<String> onChanged;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    Widget option(String kind, String label, String summary) {
+      final active = value == kind;
+      return Expanded(
+        child: InkWell(
+          onTap: enabled ? () => onChanged(kind) : null,
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: active ? s.bgSunken : null,
+              border: Border.all(
+                  color: active ? UepColors.gold : s.line),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: UepText.sans(
+                        size: 12.5,
+                        weight: active ? FontWeight.w600 : FontWeight.w400,
+                        color: enabled ? s.ink : s.inkMute)),
+                const SizedBox(height: 3),
+                Text(summary,
+                    style: UepText.serif(
+                        size: 11, color: s.inkMute, height: 1.4)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      option('chat', '一般對話', '沒有 agent 在場時會自動封存。'),
+      const SizedBox(width: 8),
+      option('ops', '工作房（ops）', '不自動封存，給遠端派工用。'),
+    ]);
+  }
+}
+
 class _BoardPicker extends ConsumerWidget {
   const _BoardPicker({
     required this.value,
