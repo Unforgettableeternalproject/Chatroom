@@ -519,6 +519,34 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             f"參數不符合 Hub 的要求：{body}" + ("" if _ends_sentence(body) else "。"),
             status=status, detail=detail)
 
+    if status == 429:
+        # 派工的兩個配額（REMOTE-OPS-PLAN §4.2）**刻意不是 409**：409 的語意
+        # 是「與目前狀態衝突」，client 對它的處置是換個做法；配額是速率限制，
+        # 對的處置是等一下再來。沒有這個分支的話兩者都會落進最底下那句
+        # 「未預期的狀態」——那句話不會讓任何人知道該等，只會讓它重試
+        if code == "run_daily_quota_exceeded":
+            return HubError(
+                _detail_text(detail)
+                or "今天派的 run 已經達到每日上限。這不是壞掉也不是權限問題"
+                   "——明天再來，或請主持人調整 CHATROOM_RUN_DAILY_QUOTA。"
+                   "**不要重試**，配額不會因為再打一次而變寬。",
+                status=status, detail=detail,
+            )
+        if code == "run_queue_cap_exceeded":
+            return HubError(
+                _detail_text(detail)
+                or "這間工作房排隊中的 run 已經到上限。等前面的做完，"
+                   "或先取消幾筆（chatroom_run_cancel）再派。"
+                   "用 chatroom_runs 看現在排了哪些。",
+                status=status, detail=detail,
+            )
+        return HubError(
+            f"Hub 要你先等一下（429）：{text or '沒有說明'}"
+            + ("" if _ends_sentence(text or "") else "。")
+            + "這是速率限制不是錯誤，立刻重試只會再撞一次。",
+            status=status, detail=detail,
+        )
+
     if status >= 500:
         return HubError(
             f"Hub 內部發生錯誤（HTTP {status}）。請檢查 Hub 端的日誌。",
