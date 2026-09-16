@@ -1054,6 +1054,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             pinnedCount: pinnedMessages.length,
             memberCount: activeMembers.length,
             showMembersButton: !wide,
+            isOps: room?.isOps ?? false,
           ),
           if (pinnedMessages.isNotEmpty && !archived)
             _PinnedStrip(roomId: roomId, latest: pinnedMessages.last),
@@ -1421,6 +1422,7 @@ class RoomHeader extends ConsumerWidget {
     required this.pinnedCount,
     required this.memberCount,
     required this.showMembersButton,
+    this.isOps = false,
   });
 
   final String roomId;
@@ -1433,6 +1435,12 @@ class RoomHeader extends ConsumerWidget {
   final int pinnedCount;
   final int memberCount;
   final bool showMembersButton;
+
+  /// 這是工作房（`room.kind == 'ops'`）。執行儀表板的入口只在這種房出現
+  /// ——其他房沒有佇列，那扇門後面什麼都沒有。
+  ///
+  /// 舊 Hub 不回 `kind`，那時一律是 false：入口不見比一個會 409 的入口好。
+  final bool isOps;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1513,6 +1521,16 @@ class RoomHeader extends ConsumerWidget {
           // 往這裡加入口時先問：**它是去看東西，還是去改東西。**
           _BoardAction(roomId: roomId, archived: archived),
           const SizedBox(width: 8),
+          // 執行儀表板。**檢視類**，所以封存房照樣看得到——面板上的寫入
+          // 動作（派工、推送、取消）由 Hub 各自擋，而「那台執行器現在
+          // 怎麼了」是封存之後仍然成立的問題
+          if (isOps) ...[
+            _HeaderAction(
+              label: '◆ 執行',
+              onTap: () => context.go('/rooms/$roomId/ops'),
+            ),
+            const SizedBox(width: 8),
+          ],
           // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
           // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
           // 重要」無處可去——Board 上沒有一段話的位置

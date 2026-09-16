@@ -1,0 +1,326 @@
+import 'package:chatroom_app/core/theme/uep_theme.dart';
+import 'package:chatroom_app/models/agent_run.dart';
+import 'package:chatroom_app/screens/ops/ops_dashboard_view.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// 執行儀表板：**三種狀態要講三句不同的話**。
+///
+/// 這份測試守的是那條線。online／limited／offline 在資料上只差一個字串，
+/// 而在畫面上差的是「可以派工」「等退避」「那台機器不在了」——講成同一句
+/// 的話，人會對著一台離線的執行器等一個永遠不會開始的 run。
+///
+/// 另一條是「有沒有未推送的 commit」：push 是房內人類從這裡按的，本機沒有
+/// 人看著，所以那份清單與按鈕的狀態是整個面板上最要緊的一格。
+
+AgentRunner _runner({
+  String status = 'online',
+  String? limitedUntil,
+  String limitReason = '',
+  int unpushed = 0,
+  bool? pushable = true,
+  bool dirty = false,
+  Map<String, dynamic>? dashboardOverride,
+}) =>
+    AgentRunner.fromJson({
+      'id': 'runner-1',
+      'host': 'ASVEL-PC',
+      'label': 'main',
+      'status': status,
+      'max_parallel': 3,
+      'running_count': status == 'online' ? 1 : 0,
+      'projects': ['ai-website'],
+      'limited_until': limitedUntil,
+      'limit_reason': limitReason,
+      'usage_window': const {},
+      'dashboard': dashboardOverride ??
+          {
+            'generated_at': '2026-09-16T01:05:00+00:00',
+            'repos': {
+              'ai-website/JSAI-Web': {
+                'path': 'C:/x/JSAI-Web',
+                'branch': 'jsai_dev',
+                'dirty': dirty,
+                'dirty_count': dirty ? 2 : 0,
+                'unpushed_count': unpushed,
+                'unpushed': [
+                  for (var i = 0; i < unpushed; i++)
+                    {
+                      'sha': 'abcdef012345$i',
+                      'title': '第 $i 顆',
+                      'at': '2026-09-16T00:00:00+00:00',
+                    },
+                ],
+                'pushable': ?pushable,
+              },
+            },
+            'usage': const {
+              'window_hours': 5.0,
+              'tokens': 120000,
+              'cost_usd': 3.5,
+              'soft_cap_tokens': 500000,
+              'soft_cap_usd': 20.0,
+              'over_soft_cap': false,
+              'remaining_tokens': 380000,
+            },
+            'runs': const {
+              'running': [],
+              'queued_count': 0,
+              'max_parallel': 3,
+            },
+            'runner': const {
+              'version': '0.1.0',
+              'started_at': '2026-09-16T00:00:00+00:00',
+              'last_restart_reason': '',
+              'selfcheck_problems': <String>[],
+            },
+          },
+      'version': '0.1.0',
+      'registered_at': '2026-09-15T00:00:00+00:00',
+      'last_seen_at': '2026-09-16T01:05:00+00:00',
+    });
+
+Map<String, dynamic> _run({
+  String id = 'run-1',
+  String status = 'queued',
+  bool cancelRequested = false,
+}) =>
+    {
+      'id': id,
+      'room_id': 'room-1',
+      'board_id': '',
+      'kind': 'ticket',
+      'project': 'ai-website',
+      'ref': 'task-9',
+      'brief': '',
+      'requested_by': 'p1',
+      'requested_by_actor_key': 'a1',
+      'requested_by_name': '艾斯維爾',
+      'status': status,
+      'priority': 0,
+      'position': 1,
+      'runner_id': '',
+      'claude_session_id': '',
+      'attempt': 0,
+      'parent_run_id': '',
+      'handoff_depth': 0,
+      'cancel_requested': cancelRequested,
+      'usage': const {},
+      'result': '',
+      'reason': '',
+      'created_at': '2026-09-16T01:00:00+00:00',
+      'claimed_at': null,
+      'started_at': status == 'running' ? '2026-09-16T01:00:09+00:00' : null,
+      'ended_at': null,
+      'updated_at': '2026-09-16T01:00:00+00:00',
+    };
+
+RoomRunnerBoard _board({
+  List<AgentRunner> runners = const [],
+  List<Map<String, dynamic>> activeRuns = const [],
+}) =>
+    RoomRunnerBoard(
+      roomId: 'room-1',
+      runners: runners,
+      activeRuns: [for (final r in activeRuns) AgentRun.fromJson(r)],
+    );
+
+Widget _wrap(Widget child) => MaterialApp(
+      theme: buildUepTheme(Brightness.dark),
+      home: Scaffold(body: child),
+    );
+
+void main() {
+  group('執行器狀態', () {
+    testWidgets('online：狀態是 ONLINE，暫停按得動、恢復不行', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.text('ONLINE'), findsOneWidget);
+      expect(find.text('暫停'), findsOneWidget);
+      expect(find.text('恢復'), findsOneWidget);
+      // 已經在線上的執行器沒有「恢復」可言：停用留著（消失會被讀成
+      // 「沒有這個功能」），但按不動
+      final resume = tester.widget<InkWell>(find.ancestor(
+          of: find.text('恢復'), matching: find.byType(InkWell)));
+      expect(resume.onTap, isNull);
+      final pause = tester.widget<InkWell>(find.ancestor(
+          of: find.text('暫停'), matching: find.byType(InkWell)));
+      expect(pause.onTap, isNotNull);
+    });
+
+    testWidgets('limited：畫倒數，而且頂部狀態列要說為什麼', (tester) async {
+      final until = DateTime.now()
+          .toUtc()
+          .add(const Duration(minutes: 30))
+          .toIso8601String();
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(
+            runners: [
+              _runner(
+                  status: 'limited',
+                  limitedUntil: until,
+                  limitReason: 'rate_limit')
+            ]),
+      )));
+      expect(find.text('LIMITED'), findsOneWidget);
+      expect(find.textContaining('後重試'), findsWidgets);
+      expect(find.textContaining('速率限制'), findsOneWidget);
+    });
+
+    testWidgets('limited 但沒有 limited_until：說「未知」，不編一個倒數',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(status: 'limited')]),
+      )));
+      expect(find.text('退避時間未知'), findsOneWidget);
+      expect(find.textContaining('後重試'), findsNothing);
+    });
+
+    testWidgets('offline：說它離線與最後回報時間', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(status: 'offline')]),
+      )));
+      expect(find.text('OFFLINE'), findsOneWidget);
+      expect(find.textContaining('離線'), findsWidgets);
+    });
+
+    testWidgets('一台執行器都沒有：說清楚派工會被擋，不留白', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(board: _board())));
+      expect(find.text('沒有執行器在線'), findsOneWidget);
+    });
+
+    testWidgets('自檢未過要浮到頂部——在線但做不了事只有這一個線索',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(dashboardOverride: const {
+            'repos': <String, dynamic>{},
+            'usage': <String, dynamic>{},
+            'runs': <String, dynamic>{},
+            'runner': {
+              'version': '0.1.0',
+              'selfcheck_problems': ['GPG 簽章探針失敗'],
+            },
+          }),
+        ]),
+      )));
+      expect(find.textContaining('GPG 簽章探針失敗'), findsOneWidget);
+    });
+  });
+
+  group('未推送的 commit', () {
+    testWidgets('有未推送：列出短碼與標題，推送鈕按得動', (tester) async {
+      RepoView? pushed;
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(unpushed: 2)]),
+        onPush: (_, repo) => pushed = repo,
+      )));
+      expect(find.text('未推送 2 顆'), findsOneWidget);
+      expect(find.text('abcdef01'), findsNWidgets(2)); // 短碼
+      expect(find.text('第 0 顆'), findsOneWidget);
+      await tester.tap(find.text('推送 2 顆'));
+      await tester.pump();
+      expect(pushed, isNotNull);
+      // 按鈕送出去的就是畫面上那一份清單——執行器會拿它比對
+      expect(pushed!.unpushed.map((c) => c.sha),
+          ['abcdef0123450', 'abcdef0123451']);
+    });
+
+    testWidgets('沒有未推送：不畫推送鈕，也不留一顆按不動的', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        onPush: (a, b) {},
+      )));
+      expect(find.text('沒有未推送的 commit'), findsOneWidget);
+      expect(find.text('推送 0 顆'), findsNothing);
+    });
+
+    testWidgets('分支不在可推清單：不給推，並說出是哪一條分支', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(unpushed: 1, pushable: false)]),
+        onPush: (a, b) {},
+      )));
+      expect(find.textContaining('不在執行器的可推清單裡'), findsOneWidget);
+      expect(find.text('推送 1 顆'), findsNothing);
+    });
+
+    testWidgets('🔴 執行器沒回報 pushable：不給推，而且要說是「沒回報」',
+        (tester) async {
+      // null ≠ false。畫成「不准推」的話，舊版執行器的每個 repo 都會長得
+      // 像被禁止，而畫面上沒有任何一句話說那是因為它沒講
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(unpushed: 1, pushable: null)]),
+        onPush: (a, b) {},
+      )));
+      expect(find.textContaining('沒有回報這條分支能不能推'), findsOneWidget);
+      expect(find.text('推送 1 顆'), findsNothing);
+    });
+
+    testWidgets('工作樹有未提交的變更要講出來', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner(unpushed: 1, dirty: true)]),
+      )));
+      expect(find.text('工作樹有未提交的變更'), findsOneWidget);
+    });
+  });
+
+  group('佇列', () {
+    testWidgets('排隊中的顯示位置，且位置是畫面數的', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [
+          _run(id: 'a'),
+          _run(id: 'b'),
+        ]),
+      )));
+      expect(find.text('排隊第 1 位'), findsNothing); // 位置併在 meta 那一行
+      expect(find.textContaining('排隊第 1 位'), findsOneWidget);
+      expect(find.textContaining('排隊第 2 位'), findsOneWidget);
+    });
+
+    testWidgets('running 的取消：畫面說「已要求取消」，不說已取消',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [
+          _run(id: 'a', status: 'running', cancelRequested: true),
+        ]),
+        onCancel: (_) {},
+      )));
+      expect(find.text('已要求取消，等執行器收到後停止'), findsOneWidget);
+      // 已經要求過的不再給第二顆取消鈕
+      expect(find.text('取消'), findsNothing);
+    });
+
+    testWidgets('取消鈕把那一筆交回呼叫端', (tester) async {
+      AgentRun? cancelled;
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [_run(id: 'a')]),
+        onCancel: (r) => cancelled = r,
+      )));
+      await tester.tap(find.text('取消'));
+      await tester.pump();
+      expect(cancelled?.id, 'a');
+    });
+  });
+
+  group('用量', () {
+    testWidgets('有回報：寫出視窗、tokens、cost 與剩餘', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+      )));
+      expect(find.textContaining('近 5 小時'), findsOneWidget);
+      expect(find.textContaining('剩 380000'), findsOneWidget);
+    });
+
+    testWidgets('沒回報：說「尚未回報」，不端出一排 0', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(dashboardOverride: const {}),
+        ]),
+      )));
+      expect(find.text('執行器尚未回報用量。'), findsOneWidget);
+      expect(find.text('這台執行器還沒有回報過儀表板。'), findsOneWidget);
+    });
+  });
+}

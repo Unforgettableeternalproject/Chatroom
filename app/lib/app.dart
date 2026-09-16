@@ -8,6 +8,7 @@ import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
+import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
@@ -111,6 +112,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   GoRoute(
                     path: 'pinned',
                     builder: (context, state) => PinnedWallScreen(
+                        roomId: state.pathParameters['roomId']!),
+                  ),
+                  // 工作房的執行儀表板。與釘選牆／指派同一層——它是這間房
+                  // 底下的東西，跟著房間的成員與權限走
+                  GoRoute(
+                    path: 'ops',
+                    builder: (context, state) => OpsDashboardScreen(
                         roomId: state.pathParameters['roomId']!),
                   ),
                   GoRoute(
