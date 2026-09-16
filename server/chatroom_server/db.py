@@ -785,6 +785,12 @@ CREATE TABLE IF NOT EXISTS runner (
     usage_window_json TEXT NOT NULL DEFAULT '{}',
     -- 儀表板狀態（§4.4）：執行器每次 heartbeat 帶上，Hub **原樣存**不解讀
     dashboard_json TEXT NOT NULL DEFAULT '{}',
+    -- 註冊時發的執行器憑證，**只存 sha256**（§4.3）。明文只在建立那一次
+    -- 回給執行器；Hub 這邊存明文的話，一次 DB 外洩等於所有執行器被接管。
+    -- 空字串＝這一欄存在之前註冊的執行器，驗證放行（見 app.py 的
+    -- `_runner_authed`）——升級一次 Hub 就讓所有在跑的執行器全部 403，
+    -- 而它們在遠端沒有人重跑註冊
+    token_sha256  TEXT NOT NULL DEFAULT '',
     version       TEXT NOT NULL DEFAULT '',
     registered_at TEXT NOT NULL,
     last_seen_at  TEXT NOT NULL
@@ -1015,6 +1021,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 反過來預設成 ops 會讓整個 Hub 上的房間全部停止自動封存，而沒有任何
     # 地方會報錯。⚠️ 這一欄在 SCHEMA 的 CREATE TABLE 也有一份，兩邊都要改
     ("room", "kind", "kind TEXT NOT NULL DEFAULT 'chat'"),
+    # 執行器憑證的 hash（REMOTE-OPS-PLAN §4.3）。既有列一律空字串＝沒有
+    # 憑證，驗證照舊放行；下一次 register 會補發一把（`register_runner`）
+    ("runner", "token_sha256", "token_sha256 TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

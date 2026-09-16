@@ -8,8 +8,10 @@ WebSocket 通道留待 Phase 1（UI 開工前）。
 import asyncio
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
+import secrets
 import sqlite3
 import time
 import uuid
@@ -302,8 +304,10 @@ class RunnerHeartbeat(BaseModel):
 class RunReport(BaseModel):
     status: str = Field(
         pattern="^(running|limited|handoff|done|failed|cancelled)$")
-    # 回報者。與 run 的 runner_id 不符即 403——一台執行器不能替另一台收工
-    runner_id: str = Field(default="", max_length=64)
+    # 回報者。**必填**：留 default="" 的話，省略這一欄就整個跳過「是不是你
+    # 領的」那道檢查——一個猜到 run id 的人可以替別台執行器把 run 收掉，
+    # 而畫面上與正常收工一模一樣
+    runner_id: str = Field(min_length=1, max_length=64)
     result: str = Field(default="", max_length=8000)
     reason: str = Field(default="", max_length=256)
     claude_session_id: str = Field(default="", max_length=128)
@@ -12510,7 +12514,39 @@ def create_app(config: Config | None = None) -> FastAPI:
         d["projects"] = _loads_or(d.pop("projects", "[]"), [])
         d["dashboard"] = _loads_or(d.pop("dashboard_json", "{}"), {})
         d["usage_window"] = _loads_or(d.pop("usage_window_json", "{}"), {})
+        # 憑證的 hash 不出 API。它進得了回應的話，儀表板（房內成員都讀得到）
+        # 會把所有執行器的 hash 一起端出去
+        d.pop("token_sha256", None)
         return d
+
+    def _runner_token_sha(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    async def _runner_authed(runner_id: str, token: str | None):
+        """驗執行器憑證。領單、回報、heartbeat 與取命令都要過這一關。
+
+        沒有這一關的話，「同 host+label 冪等」等於**任何人都能接管一台執行
+        器**：拿 agent token 對同一組 host+label 註冊一次就拿到它的 id，
+        然後替它 heartbeat、把它領的 run 收掉。
+
+        `token_sha256` 是空字串＝這一欄存在之前註冊的執行器，放行。升級一次
+        Hub 就讓所有在跑的執行器全部 403，而遠端沒有人會去重跑註冊。
+        """
+        row = await _runner_or_404(runner_id)
+        stored = row["token_sha256"] or ""
+        if not stored:
+            return row
+        if not token:
+            raise _err(403, "runner_token_required",
+                       "這個動作要帶註冊時拿到的 X-Runner-Token。"
+                       "沒有它的話，任何人對同一組 host+label 重註冊一次"
+                       "就能接管這台執行器。")
+        if not hmac.compare_digest(_runner_token_sha(token), stored):
+            raise _err(403, "runner_token_invalid",
+                       "X-Runner-Token 與這台執行器對不起來。"
+                       "明文只在註冊成功那一次回傳，弄丟了就換一組 label "
+                       "重新註冊。")
+        return row
 
     async def _ops_room_or_409(room_id: str):
         room = await _room_or_404(room_id)
@@ -12599,10 +12635,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                             mentions=mentions)
 
     async def _announce_runner_presence(runner_id: str, online: bool) -> None:
-        """執行器上線／離線在**它有 run 的 ops 房**裡講一句，mention 全部人類。
+        """執行器上線／離線在**它有未結束 run 的 ops 房**裡講一句，mention 人類。
 
-        只在那些房講：一台執行器離線對沒派過工給它的房間沒有意義，而 system
-        訊息發到不相干的房裡，下一次真的要緊時就沒有人在看了。
+        只在那些房講：一台執行器離線對「派過工、但那筆早就做完了」的房間
+        沒有意義——那是一間已經沒有東西在等它的房，而 system 訊息發到不相干
+        的房裡，下一次真的要緊時就沒有人在看了。條件是**現在還佔著它的
+        run**（queued/claimed/running/limited），不是「歷史上曾經有過」。
         """
         row = await (await app.state.db.execute(
             "SELECT * FROM runner WHERE id=?", (runner_id,))).fetchone()
@@ -12611,7 +12649,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         rooms = await (await app.state.db.execute(
             "SELECT DISTINCT a.room_id AS room_id FROM agent_run a JOIN room r"
             " ON r.id=a.room_id WHERE a.runner_id=? AND r.kind='ops'"
-            " AND r.status='active'", (runner_id,))).fetchall()
+            " AND r.status='active'"
+            " AND a.status IN ('queued','claimed','running','limited')",
+            (runner_id,))).fetchall()
         label = row["label"] or row["host"]
         for r in rooms:
             humans = await _room_human_names(r["room_id"])
@@ -12640,6 +12680,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         規則與錯誤碼（**契約，client 可比對 code**）：
 
         - 房間必須是 `kind=ops` ⇒ 否則 409 `room_not_ops`
+        - `project` 必須有至少一台非 offline 的執行器宣告在 `projects` 裡
+          ⇒ 否則 409 `project_not_served`
         - 同一個 `ref` 還有 queued/claimed/running/limited/handoff 的 run
           ⇒ 409 `run_ref_already_active`
         - 派工者當日（UTC）建單數達 `run_daily_quota`
@@ -12666,6 +12708,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "human_actor_required_for_run",
                        "只有房內的人類成員能派工。agent 要開工作請走任務板。")
         db = app.state.db
+        # project 要有人服務。沒有任何非 offline 的執行器宣告過這個 key 的
+        # 話，這筆 run 會安靜地排在佇列裡等一台永遠不會來的執行器——打錯一個
+        # 字與「執行器還沒開機」在畫面上長得一模一樣
+        served = False
+        for r in await (await db.execute(
+                "SELECT projects FROM runner WHERE status != 'offline'"
+        )).fetchall():
+            if body.project in _loads_or(r["projects"], []):
+                served = True
+                break
+        if not served:
+            raise _err(409, "project_not_served",
+                       f"沒有執行器服務 `{body.project}` 這個專案——這筆派工"
+                       "會排在佇列裡等一台不會來的執行器。先確認專案 key "
+                       "沒打錯，或請那台執行器上線並把它加進 projects 白名單。",
+                       project=body.project)
         marks = ",".join("?" for _ in _RUN_ACTIVE)
         dup = await (await db.execute(
             "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
@@ -12816,11 +12874,25 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "cancelled": False}
 
     @app.post("/api/runners/register", dependencies=[Depends(require_auth)])
-    async def register_runner(body: RunnerRegister):
+    async def register_runner(
+        body: RunnerRegister,
+        x_runner_token: str | None = Header(default=None,
+                                            alias="X-Runner-Token"),
+    ):
         """執行器註冊（agent 憑證即可）。**同 host+label 冪等回同一個 id。**
 
         重啟一次就多一列的話，名錄上會排著一串早就不在的執行器，而「離線」
         的通知會對每一個殘影各發一次。
+
+        🚨 冪等**不等於任何人都能接管**：第一次註冊發一把 `runner_token`
+        （明文只回這一次，DB 只存 sha256），之後同 host+label 的重註冊要帶
+        正確的 `X-Runner-Token` 才算「同一台回來了」——不帶或帶錯一律 403
+        `runner_token_required`。少了這一關，拿 agent token 的人對同一組
+        host+label 註冊一次就拿到它的 id，接著替它 heartbeat、把它領的 run
+        收掉，而名錄上看起來完全正常。
+
+        `token_sha256` 是空字串的既有列（這一欄存在之前註冊的）走補發：
+        這一次註冊發一把新的，之後就照規則走。
         """
         db = app.state.db
         now = _now()
@@ -12828,7 +12900,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT * FROM runner WHERE host=? AND label=?",
             (body.host, body.label))).fetchone()
         projects = json.dumps(body.projects, ensure_ascii=False)
-        if found is not None:
+        if found is not None and (found["token_sha256"] or ""):
+            if not (x_runner_token and hmac.compare_digest(
+                    _runner_token_sha(x_runner_token),
+                    found["token_sha256"])):
+                raise _err(403, "runner_token_required",
+                           "這組 host+label 已經註冊過了。要以同一台執行器的"
+                           "身分重註冊，請帶第一次註冊時拿到的 "
+                           "X-Runner-Token；換一台機器請換一組 label。")
             await db.execute(
                 "UPDATE runner SET projects=?, max_parallel=?, version=?,"
                 " status=CASE WHEN status='offline' THEN 'online'"
@@ -12837,22 +12916,45 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (projects, body.max_parallel, body.version, now, found["id"]))
             await _commit_with_retry(db)
             return {"runner": _runner_public(await _runner_or_404(found["id"])),
-                    "created": False}
+                    "created": False, "runner_token": None}
+        token = secrets.token_urlsafe(32)
+        if found is not None:
+            # 升級前註冊的執行器：補發一把，其餘欄位照舊更新
+            await db.execute(
+                "UPDATE runner SET projects=?, max_parallel=?, version=?,"
+                " token_sha256=?,"
+                " status=CASE WHEN status='offline' THEN 'online'"
+                "        ELSE status END,"
+                " last_seen_at=? WHERE id=?",
+                (projects, body.max_parallel, body.version,
+                 _runner_token_sha(token), now, found["id"]))
+            await _commit_with_retry(db)
+            return {"runner": _runner_public(await _runner_or_404(found["id"])),
+                    "created": False, "runner_token": token}
         runner_id = _uid()
         await db.execute(
             "INSERT INTO runner (id, host, label, status, max_parallel,"
-            " projects, version, registered_at, last_seen_at)"
-            " VALUES (?,?,?,'online',?,?,?,?,?)",
+            " projects, version, token_sha256, registered_at, last_seen_at)"
+            " VALUES (?,?,?,'online',?,?,?,?,?,?)",
             (runner_id, body.host, body.label, body.max_parallel, projects,
-             body.version, now, now))
+             body.version, _runner_token_sha(token), now, now))
         await _commit_with_retry(db)
         return {"runner": _runner_public(await _runner_or_404(runner_id)),
-                "created": True}
+                "created": True, "runner_token": token}
 
     @app.post("/api/runners/{runner_id}/heartbeat",
               dependencies=[Depends(require_auth)])
-    async def runner_heartbeat(runner_id: str, body: RunnerHeartbeat):
+    async def runner_heartbeat(
+        runner_id: str,
+        body: RunnerHeartbeat,
+        x_runner_token: str | None = Header(default=None,
+                                            alias="X-Runner-Token"),
+    ):
         """執行器心跳。帶狀態與儀表板，取回待執行命令與取消請求。
+
+        要 `X-Runner-Token`（§4.3）：命令在這裡被**取走並標 acked**，沒有
+        憑證的話別人替這台 heartbeat 一次，人類下的 pause 就被吃掉了，而
+        執行器永遠收不到。
 
         `dashboard_json` **原樣存**：Hub 不解讀它，App 才是讀的人。Hub 一旦
         開始解讀，執行器每加一格就要改兩端。
@@ -12861,7 +12963,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         等於重啟兩次。
         """
         db = app.state.db
-        row = await _runner_or_404(runner_id)
+        row = await _runner_authed(runner_id, x_runner_token)
         was_offline = row["status"] == "offline"
         now = _now()
         await db.execute(
@@ -12894,7 +12996,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/runners/{runner_id}/claim",
               dependencies=[Depends(require_auth)])
-    async def claim_run(runner_id: str, response: Response):
+    async def claim_run(
+        runner_id: str,
+        response: Response,
+        x_runner_token: str | None = Header(default=None,
+                                            alias="X-Runner-Token"),
+    ):
         """領一筆單。**單一 `UPDATE … RETURNING`，沒有第二句。**
 
         🚨 領號的教訓：先 SELECT 再 UPDATE 的話，兩句之間的 `await` 會讓
@@ -12905,12 +13012,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         沒有可領的單回 **204**（不是 200 配空 body）：執行器每隔幾秒問一次，
         「沒事做」是常態而不是結果。`limited` 與 `paused` 的執行器一律 204
         ——停收就是停收，不該靠執行器自己記得別問。
+
+        要 `X-Runner-Token`（§4.3）：領單會把 run 綁到這個 runner_id 上，
+        沒有憑證的話任何人都能替別台把佇列領空。
+
+        ⚠️ `running_count >= max_parallel` 也回 204，但這個數字**是最近一次
+        heartbeat 回報的**，可能落後一個 heartbeat 週期（執行器剛起一個新
+        進程、還沒回報）。這裡只是保險，本地的併發上限仍由執行器自己守；
+        把它當權威的話，Hub 會在執行器剛起第 N+1 個進程的那一格照樣發單。
         """
         db = app.state.db
-        row = await _runner_or_404(runner_id)
+        row = await _runner_authed(runner_id, x_runner_token)
         projects = _loads_or(row["projects"], [])
         # 沒有允許清單就領不到任何東西：`project` 是白名單，不是提示
         if row["status"] != "online" or not projects:
+            response.status_code = 204
+            return None
+        if row["running_count"] >= row["max_parallel"]:
             response.status_code = 204
             return None
         marks = ",".join("?" for _ in projects)
@@ -12935,8 +13053,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"run": _run_public(got)}
 
     @app.post("/api/runs/{run_id}/report", dependencies=[Depends(require_auth)])
-    async def report_run(run_id: str, body: RunReport):
+    async def report_run(
+        run_id: str,
+        body: RunReport,
+        x_runner_token: str | None = Header(default=None,
+                                            alias="X-Runner-Token"),
+    ):
         """執行器回報狀態轉移。非法轉移一律 409 `run_bad_transition`。
+
+        三道關卡，順序是刻意的：
+
+        1. `runner_id` **必填**（省略即 422）。可以省略的話，`not_your_run`
+           整條就繞得過去——一個空字串的回報者永遠不會「與 run 的 runner_id
+           不符」。
+        2. `X-Runner-Token` 要對得上 `body.runner_id` 那台（403）。
+        3. run 上已經有 `runner_id` 的話，回報者必須就是它（403
+           `not_your_run`）。
 
         `handoff` 時 Hub **自動建子 run**（`parent_run_id`、`handoff_depth+1`，
         brief 接上「先讀卡」的指引）。深度超過 `run_handoff_max` 就不再續，
@@ -12945,8 +13077,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         db = app.state.db
         row = await _run_or_404(run_id)
-        if (body.runner_id and row["runner_id"]
-                and body.runner_id != row["runner_id"]):
+        await _runner_authed(body.runner_id, x_runner_token)
+        if row["runner_id"] and body.runner_id != row["runner_id"]:
             raise _err(403, "not_your_run",
                        "這筆派工是別台執行器領走的，不能由你回報。")
         old = row["status"]
@@ -12973,10 +13105,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         if new in ("done", "failed", "cancelled", "handoff"):
             sets.append("ended_at=?")
             params.append(now)
-        params.append(run_id)
-        await db.execute(
-            f"UPDATE agent_run SET {', '.join(sets)} WHERE id=?",
+        params.extend([run_id, old])
+        # 🚨 CAS：`WHERE id=? AND status=?` 帶**舊狀態**。只用 id 的話，兩個
+        # 同時到的 handoff 都會通過上面的轉移檢查（兩次讀到的都是 running），
+        # 然後各建一棵子 run——一張卡從此有兩條交接鏈在跑。判定用
+        # `fetchone() is not None`，不用 `rowcount`（RETURNING 上它不可靠）
+        cur = await db.execute(
+            f"UPDATE agent_run SET {', '.join(sets)}"
+            " WHERE id=? AND status=? RETURNING id",
             tuple(params))
+        if await cur.fetchone() is None:
+            # 這一格被別人先改掉了。回 409 與「非法轉移」同一個 code：對
+            # client 的處置相同——先讀回現況，不要重試同一個回報
+            fresh = await _run_or_404(run_id)
+            raise _err(409, "run_bad_transition",
+                       f"派工不能從 {fresh['status']} 變成 {new}。",
+                       from_status=fresh["status"], to_status=new)
         await _record_run_event(run_id, row["room_id"], old, new,
                                 row["runner_id"], "", body.reason or "report")
 

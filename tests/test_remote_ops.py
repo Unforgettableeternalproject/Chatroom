@@ -49,13 +49,35 @@ async def _join_human(client, rid, key="human-a", name="艾斯維爾"):
             "X-Session-Key": key}
 
 
-async def _register_runner(client, projects=("ai-website",), label="ex1"):
+class _Runner(str):
+    """執行器 id，外加它的 token header。
+
+    `str` 的子類：既有的 `f"/api/runners/{runner}/..."` 照樣是 id，而每一個
+    要憑證的呼叫都拿得到 `runner.headers`——測試裡把 token 另外接一個變數
+    傳來傳去的話，漏掉一處的症狀是 403，而那與「這條測試本來就該 403」
+    長得一樣。
+    """
+
+    token: str
+
+    @property
+    def headers(self) -> dict:
+        return {"X-Runner-Token": self.token}
+
+
+async def _register_runner(client, projects=("ai-website",), label="ex1",
+                           max_parallel=3):
     r = await client.post("/api/runners/register",
                           json={"host": "esvel-pc", "label": label,
                                 "projects": list(projects),
-                                "max_parallel": 3, "version": "0.1"})
+                                "max_parallel": max_parallel,
+                                "version": "0.1"})
     assert r.status_code == 200, r.text
-    return r.json()["runner"]["id"]
+    body = r.json()
+    assert body["runner_token"], "註冊沒有發 token，下面每一個呼叫都會 403"
+    runner = _Runner(body["runner"]["id"])
+    runner.token = body["runner_token"]
+    return runner
 
 
 def _run_body(ref="task-1", kind="investigate", project="ai-website"):
@@ -159,6 +181,9 @@ async def test_agent_credentials_cannot_create_ops_rooms_or_runs(tmp_path):
 
             rid = await _ops_room(human)
             hdr = await _join_human(human, rid)
+            # 執行器用 agent 憑證註冊（§6.4）；沒有它，下面的 run 會先撞
+            # project_not_served
+            await _register_runner(agent)
             # agent 拿著人類的 participant id 也建不了 run——憑證先擋
             r = await agent.post(f"/api/rooms/{rid}/runs", json=_run_body(),
                                  headers=hdr)
@@ -208,6 +233,7 @@ async def test_same_ref_cannot_be_dispatched_twice(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            await _register_runner(client)
             first = await client.post(f"/api/rooms/{rid}/runs",
                                       json=_run_body(), headers=hdr)
             assert first.status_code == 200
@@ -234,6 +260,7 @@ async def test_queue_cap_and_daily_quota_are_429(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            await _register_runner(client)
             for i in range(2):
                 assert (await client.post(f"/api/rooms/{rid}/runs",
                                           json=_run_body(f"task-{i}"),
@@ -269,13 +296,14 @@ async def test_eight_runners_claiming_at_once_only_one_wins(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            runners = [await _register_runner(client, label=f"ex{i}")
+                       for i in range(8)]
             run_id = (await client.post(f"/api/rooms/{rid}/runs",
                                         json=_run_body(),
                                         headers=hdr)).json()["run"]["id"]
-            runners = [await _register_runner(client, label=f"ex{i}")
-                       for i in range(8)]
             results = await asyncio.gather(*[
-                client.post(f"/api/runners/{r}/claim") for r in runners])
+                client.post(f"/api/runners/{r}/claim", headers=r.headers)
+                for r in runners])
             winners = [r for r in results if r.status_code == 200]
             assert len(winners) == 1, (
                 f"{len(winners)} 台執行器領到了同一筆單——"
@@ -298,12 +326,17 @@ async def test_claim_respects_the_project_allowlist(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            runner = await _register_runner(client, projects=("ai-website",))
+            # 這筆單的 project 由**另一台**服務。少了它，create_run 會先回
+            # project_not_served，而這條就再也驗不到領單的白名單
+            await _register_runner(client, projects=("other-project",),
+                                   label="ex2")
             await client.post(f"/api/rooms/{rid}/runs",
                               json=_run_body(project="other-project"),
                               headers=hdr)
-            runner = await _register_runner(client, projects=("ai-website",))
             assert (await client.post(
-                f"/api/runners/{runner}/claim")).status_code == 204
+                f"/api/runners/{runner}/claim",
+                headers=runner.headers)).status_code == 204
 
 
 # ── 狀態機 ──────────────────────────────────────────────────────────
@@ -316,32 +349,32 @@ async def test_illegal_transitions_are_409(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
             run_id = (await client.post(f"/api/rooms/{rid}/runs",
                                         json=_run_body(),
                                         headers=hdr)).json()["run"]["id"]
-            runner = await _register_runner(client)
             # queued → done 跳過中間：擋
             r = await client.post(f"/api/runs/{run_id}/report",
                                   json={"status": "done",
-                                        "runner_id": runner})
+                                        "runner_id": runner}, headers=runner.headers)
             assert r.status_code == 409
             assert r.json()["detail"]["code"] == "run_bad_transition"
             assert r.json()["detail"]["from_status"] == "queued"
 
-            await client.post(f"/api/runners/{runner}/claim")
+            await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
             assert (await client.post(f"/api/runs/{run_id}/report",
                                       json={"status": "running",
-                                            "runner_id": runner})
+                                            "runner_id": runner}, headers=runner.headers)
                     ).status_code == 200
             assert (await client.post(f"/api/runs/{run_id}/report",
                                       json={"status": "done",
                                             "runner_id": runner,
-                                            "result": "查完了"})
+                                            "result": "查完了"}, headers=runner.headers)
                     ).status_code == 200
             # 終局之後任何回報都擋
             r = await client.post(f"/api/runs/{run_id}/report",
                                   json={"status": "running",
-                                        "runner_id": runner})
+                                        "runner_id": runner}, headers=runner.headers)
             assert r.status_code == 409
 
 
@@ -351,17 +384,179 @@ async def test_another_runner_cannot_report_someone_elses_run(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            mine = await _register_runner(client, label="ex1")
+            other = await _register_runner(client, label="ex2")
             run_id = (await client.post(f"/api/rooms/{rid}/runs",
                                         json=_run_body(),
                                         headers=hdr)).json()["run"]["id"]
-            mine = await _register_runner(client, label="ex1")
-            other = await _register_runner(client, label="ex2")
-            await client.post(f"/api/runners/{mine}/claim")
+            await client.post(f"/api/runners/{mine}/claim", headers=mine.headers)
             r = await client.post(f"/api/runs/{run_id}/report",
                                   json={"status": "running",
-                                        "runner_id": other})
+                                        "runner_id": other}, headers=other.headers)
             assert r.status_code == 403
             assert r.json()["detail"]["code"] == "not_your_run"
+
+
+async def test_report_without_a_runner_id_is_422_not_a_free_pass(tmp_path):
+    """🚨 `not_your_run` 本來繞得過去：省略 `runner_id` 就整條跳過。
+
+    舊寫法是 `if body.runner_id and row["runner_id"] and 不相等`——空字串讓
+    第一個條件短路，於是**誰都可以替別台把 run 收掉**，而回應與正常收工
+    一模一樣。必填之後，省略是 422（欄位不合法），帶錯是 403。
+    """
+    app, client = await _client(tmp_path, "reportauth")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            mine = await _register_runner(client, label="ex1")
+            other = await _register_runner(client, label="ex2")
+            run_id = (await client.post(f"/api/rooms/{rid}/runs",
+                                        json=_run_body(),
+                                        headers=hdr)).json()["run"]["id"]
+            await client.post(f"/api/runners/{mine}/claim",
+                              headers=mine.headers)
+
+            # 省略 runner_id：422，不是「反正沒帶就放行」
+            r = await client.post(f"/api/runs/{run_id}/report",
+                                  json={"status": "running"},
+                                  headers=mine.headers)
+            assert r.status_code == 422, "省略 runner_id 被放行了"
+            # 空字串同理（min_length=1）
+            r = await client.post(f"/api/runs/{run_id}/report",
+                                  json={"status": "running", "runner_id": ""},
+                                  headers=mine.headers)
+            assert r.status_code == 422
+
+            # 帶別台的：403（它自己的 token 也不行）
+            r = await client.post(f"/api/runs/{run_id}/report",
+                                  json={"status": "running",
+                                        "runner_id": str(other)},
+                                  headers=other.headers)
+            assert r.status_code == 403
+            assert r.json()["detail"]["code"] == "not_your_run"
+
+            # run 還在 claimed：沒有任何一次回報被放進去
+            row = await (await app.state.db.execute(
+                "SELECT status FROM agent_run WHERE id=?", (run_id,)
+            )).fetchone()
+            assert row["status"] == "claimed"
+
+
+async def test_two_concurrent_handoffs_only_one_is_applied(tmp_path):
+    """🚨 **狀態轉移要 CAS。**
+
+    轉移檢查讀的是 `SELECT` 當下的狀態，而它與 `UPDATE` 之間隔著 await：
+    兩個同時到的 handoff 都會看到 running、都會通過檢查，然後**各建一棵子
+    run**——一張卡從此有兩條交接鏈在跑，兩個 agent 動同一份工作樹。
+
+    `WHERE id=? AND status=?` 帶舊狀態之後，第二個什麼都改不到，回 409。
+    """
+    app, client = await _client(tmp_path, "handoffrace")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+            before = len((await client.get(f"/api/runs/{run_id}",
+                                           headers=hdr)).json()["events"])
+
+            results = await asyncio.gather(*[
+                client.post(f"/api/runs/{run_id}/report",
+                            json={"status": "handoff",
+                                  "runner_id": str(runner)},
+                            headers=runner.headers)
+                for _ in range(2)])
+            oks = [r for r in results if r.status_code == 200]
+            assert len(oks) == 1, (
+                f"{len(oks)} 次 handoff 都被套用了——這張卡會有兩條交接鏈")
+            losers = [r for r in results if r is not oks[0]]
+            assert all(r.status_code == 409 for r in losers)
+            assert all(r.json()["detail"]["code"] == "run_bad_transition"
+                       for r in losers)
+
+            children = await (await app.state.db.execute(
+                "SELECT id FROM agent_run WHERE parent_run_id=?", (run_id,)
+            )).fetchall()
+            assert len(children) == 1, "輸家也建了子 run"
+            after = (await client.get(f"/api/runs/{run_id}",
+                                      headers=hdr)).json()["events"]
+            assert len(after) == before + 1, "被擋下來的那次也留了稽核"
+            assert after[-1]["to_status"] == "handoff"
+
+
+async def test_claim_is_capped_by_the_reported_running_count(tmp_path):
+    """Hub 端的併發保險：`running_count >= max_parallel` 一律 204。
+
+    數字是最近一次 heartbeat 回報的，可能落後一個週期——這是保險，本地上限
+    仍由執行器守。少了它，Hub 會把整條佇列塞給一台已經滿載的執行器，而它
+    只能自己把多的丟掉（或者跑滿機器）。
+    """
+    app, client = await _client(tmp_path, "parallelcap")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client, max_parallel=1)
+            for i in range(2):
+                assert (await client.post(f"/api/rooms/{rid}/runs",
+                                          json=_run_body(f"task-{i}"),
+                                          headers=hdr)).status_code == 200
+            # 還沒回報任何 running：領得到
+            assert (await client.post(f"/api/runners/{runner}/claim",
+                                      headers=runner.headers)
+                    ).status_code == 200
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              json={"status": "online", "running_count": 1},
+                              headers=runner.headers)
+            assert (await client.post(f"/api/runners/{runner}/claim",
+                                      headers=runner.headers)
+                    ).status_code == 204, "滿載的執行器還是領到了單"
+            # 回報跑完一個就又領得到——這是保險，不是關門
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              json={"status": "online", "running_count": 0},
+                              headers=runner.headers)
+            assert (await client.post(f"/api/runners/{runner}/claim",
+                                      headers=runner.headers)
+                    ).status_code == 200
+
+
+async def test_a_project_nobody_serves_is_rejected_at_dispatch(tmp_path):
+    """打錯一個字與「執行器還沒開機」在佇列上長得一模一樣：都是永遠排著。
+
+    所以建單當下就擋（409 `project_not_served`），不要讓它安靜地排進去。
+    """
+    app, client = await _client(tmp_path, "projectserved")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            r = await client.post(f"/api/rooms/{rid}/runs",
+                                  json=_run_body(project="ai-website"),
+                                  headers=hdr)
+            assert r.status_code == 409, "沒有任何執行器時照樣建得出來"
+            assert r.json()["detail"]["code"] == "project_not_served"
+
+            runner = await _register_runner(client, projects=("ai-website",))
+            assert (await client.post(f"/api/rooms/{rid}/runs",
+                                      json=_run_body(project="ai-website"),
+                                      headers=hdr)).status_code == 200
+            # 打錯字擋得住
+            r = await client.post(f"/api/rooms/{rid}/runs",
+                                  json=_run_body("task-2", project="ai-webiste"),
+                                  headers=hdr)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "project_not_served"
+
+            # 執行器離線之後也算沒人服務：它領不到，這筆單只會排著
+            await app.state.db.execute(
+                "UPDATE runner SET status='offline' WHERE id=?", (str(runner),))
+            await app.state.db.commit()
+            r = await client.post(f"/api/rooms/{rid}/runs",
+                                  json=_run_body("task-3"), headers=hdr)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "project_not_served"
 
 
 # ── 取消 ────────────────────────────────────────────────────────────
@@ -374,6 +569,7 @@ async def test_cancel_queued_is_immediate_running_is_a_request(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
             queued = (await client.post(f"/api/rooms/{rid}/runs",
                                         json=_run_body("task-1"),
                                         headers=hdr)).json()["run"]["id"]
@@ -385,10 +581,10 @@ async def test_cancel_queued_is_immediate_running_is_a_request(tmp_path):
             running = (await client.post(f"/api/rooms/{rid}/runs",
                                          json=_run_body("task-2"),
                                          headers=hdr)).json()["run"]["id"]
-            runner = await _register_runner(client)
-            await client.post(f"/api/runners/{runner}/claim")
+            await client.post(f"/api/runners/{runner}/claim",
+                              headers=runner.headers)
             await client.post(f"/api/runs/{running}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             body = (await client.post(f"/api/runs/{running}/cancel",
                                       headers=hdr)).json()
             assert body["cancelled"] is False
@@ -396,12 +592,12 @@ async def test_cancel_queued_is_immediate_running_is_a_request(tmp_path):
             assert body["run"]["cancel_requested"] is True
 
             # 執行器在 heartbeat 拿到取消請求
-            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                                     json={"status": "online"})).json()
             assert hb["cancel_requested_run_ids"] == [running]
             assert (await client.post(f"/api/runs/{running}/report",
                                       json={"status": "cancelled",
-                                            "runner_id": runner})
+                                            "runner_id": runner}, headers=runner.headers)
                     ).status_code == 200
 
 
@@ -410,9 +606,9 @@ async def test_cancel_queued_is_immediate_running_is_a_request(tmp_path):
 async def _drive_to_running(client, rid, hdr, runner, ref):
     run_id = (await client.post(f"/api/rooms/{rid}/runs", json=_run_body(ref),
                                 headers=hdr)).json()["run"]["id"]
-    await client.post(f"/api/runners/{runner}/claim")
+    await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
     await client.post(f"/api/runs/{run_id}/report",
-                      json={"status": "running", "runner_id": runner})
+                      json={"status": "running", "runner_id": runner}, headers=runner.headers)
     return run_id
 
 
@@ -427,7 +623,7 @@ async def test_handoff_creates_a_child_run(tmp_path):
             body = (await client.post(f"/api/runs/{run_id}/report",
                                       json={"status": "handoff",
                                             "runner_id": runner,
-                                            "reason": "context"})).json()
+                                            "reason": "context"}, headers=runner.headers)).json()
             child = body["child_run"]
             assert body["run"]["status"] == "handoff"
             assert child is not None
@@ -452,7 +648,7 @@ async def test_handoff_depth_is_capped(tmp_path):
             for _ in range(3):
                 body = (await client.post(f"/api/runs/{run_id}/report",
                                           json={"status": "handoff",
-                                                "runner_id": runner})).json()
+                                                "runner_id": runner}, headers=runner.headers)).json()
                 child = body["child_run"]
                 if child is None:
                     assert body["run"]["status"] == "failed"
@@ -460,10 +656,10 @@ async def test_handoff_depth_is_capped(tmp_path):
                     break
                 depths.append(child["handoff_depth"])
                 run_id = child["id"]
-                await client.post(f"/api/runners/{runner}/claim")
+                await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
                 await client.post(f"/api/runs/{run_id}/report",
                                   json={"status": "running",
-                                        "runner_id": runner})
+                                        "runner_id": runner}, headers=runner.headers)
             else:
                 pytest.fail("交接鏈沒有被上限擋下來")
             assert depths == [1, 2]
@@ -488,12 +684,12 @@ async def test_every_status_change_leaves_exactly_one_event(tmp_path):
             a = await _drive_to_running(client, rid, hdr, runner, "task-a")
             await client.post(f"/api/runs/{a}/report",
                               json={"status": "limited", "runner_id": runner,
-                                    "reason": "rate_limit"})
+                                    "reason": "rate_limit"}, headers=runner.headers)
             await client.post(f"/api/runs/{a}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             await client.post(f"/api/runs/{a}/report",
                               json={"status": "done", "runner_id": runner,
-                                    "result": "好了"})
+                                    "result": "好了"}, headers=runner.headers)
             trail = (await client.get(f"/api/runs/{a}",
                                       headers=hdr)).json()["events"]
             assert [e["to_status"] for e in trail] == [
@@ -507,7 +703,7 @@ async def test_every_status_change_leaves_exactly_one_event(tmp_path):
             await client.post(f"/api/runs/{b}/cancel", headers=hdr)
             await client.post(f"/api/runs/{b}/report",
                               json={"status": "cancelled",
-                                    "runner_id": runner})
+                                    "runner_id": runner}, headers=runner.headers)
             trail = (await client.get(f"/api/runs/{b}",
                                       headers=hdr)).json()["events"]
             assert [(e["from_status"], e["to_status"]) for e in trail] == [
@@ -519,7 +715,7 @@ async def test_every_status_change_leaves_exactly_one_event(tmp_path):
             before = len((await client.get(f"/api/runs/{b}",
                                            headers=hdr)).json()["events"])
             await client.post(f"/api/runs/{b}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             after = (await client.get(f"/api/runs/{b}",
                                       headers=hdr)).json()["events"]
             assert len(after) == before
@@ -528,16 +724,16 @@ async def test_every_status_change_leaves_exactly_one_event(tmp_path):
             c = await _drive_to_running(client, rid, hdr, runner, "task-c")
             child = (await client.post(f"/api/runs/{c}/report",
                                        json={"status": "handoff",
-                                             "runner_id": runner})
+                                             "runner_id": runner}, headers=runner.headers)
                      ).json()["child_run"]["id"]
             assert [e["to_status"] for e in (
                 await client.get(f"/api/runs/{c}", headers=hdr)
             ).json()["events"]] == ["queued", "claimed", "running", "handoff"]
-            await client.post(f"/api/runners/{runner}/claim")
+            await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
             await client.post(f"/api/runs/{child}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             await client.post(f"/api/runs/{child}/report",
-                              json={"status": "handoff", "runner_id": runner})
+                              json={"status": "handoff", "runner_id": runner}, headers=runner.headers)
             assert [e["to_status"] for e in (
                 await client.get(f"/api/runs/{child}", headers=hdr)
             ).json()["events"]] == [
@@ -576,19 +772,19 @@ async def test_only_the_five_moments_get_a_system_message(tmp_path):
                                         headers=hdr)).json()["run"]["id"]
             assert await events_in_room() == [], "排隊不該發 system 訊息"
 
-            await client.post(f"/api/runners/{runner}/claim")
+            await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
             assert await events_in_room() == [], "領走也不發——那不是 §7 的五件事"
 
             await client.post(f"/api/runs/{run_id}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             await client.post(f"/api/runs/{run_id}/report",
                               json={"status": "limited", "runner_id": runner,
-                                    "reason": "rate_limit"})
+                                    "reason": "rate_limit"}, headers=runner.headers)
             await client.post(f"/api/runs/{run_id}/report",
-                              json={"status": "running", "runner_id": runner})
+                              json={"status": "running", "runner_id": runner}, headers=runner.headers)
             await client.post(f"/api/runs/{run_id}/report",
                               json={"status": "done", "runner_id": runner,
-                                    "result": "查完了"})
+                                    "result": "查完了"}, headers=runner.headers)
             got = await events_in_room()
             assert [e for e, _ in got] == [
                 "run_running", "run_limited", "run_running", "run_done"]
@@ -608,7 +804,7 @@ async def test_runner_going_offline_is_announced_then_stays_quiet(tmp_path):
             runner = await _register_runner(client)
             await client.post(f"/api/rooms/{rid}/runs", json=_run_body(),
                               headers=hdr)
-            await client.post(f"/api/runners/{runner}/claim")
+            await client.post(f"/api/runners/{runner}/claim", headers=runner.headers)
 
             async def presence_msgs():
                 msgs = (await client.get(f"/api/rooms/{rid}/messages",
@@ -623,31 +819,188 @@ async def test_runner_going_offline_is_announced_then_stays_quiet(tmp_path):
             assert len(await presence_msgs()) == 1, "第二輪不該再喊一次"
 
             # 回來也講一句
-            await client.post(f"/api/runners/{runner}/heartbeat",
+            await client.post(f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                               json={"status": "online"})
             assert [e for e, _ in await presence_msgs()] == [
                 "runner_offline", "runner_online"]
 
 
+async def test_offline_notice_skips_rooms_whose_runs_are_finished(tmp_path):
+    """執行器離線，對一間「派過工、但早就做完了」的房沒有意義。
+
+    條件是**現在還佔著它的 run**，不是歷史上曾經有過——發到不相干的房裡，
+    下一次真的要緊時就沒有人在看了。
+    """
+    app, client = await _client(tmp_path, "offlinescope",
+                                runner_offline_after=0.05, sweep_interval=999)
+    async with client:
+        async with app.router.lifespan_context(app):
+            runner = await _register_runner(client)
+            done_room = await _ops_room(client, name="做完的房")
+            live_room = await _ops_room(client, name="還在跑的房")
+            done_hdr = await _join_human(client, done_room)
+            live_hdr = await _join_human(client, live_room)
+
+            finished = await _drive_to_running(client, done_room, done_hdr,
+                                               runner, "task-done")
+            await client.post(f"/api/runs/{finished}/report",
+                              json={"status": "done", "runner_id": str(runner),
+                                    "result": "好了"},
+                              headers=runner.headers)
+            await _drive_to_running(client, live_room, live_hdr, runner,
+                                    "task-live")
+
+            async def presence(rid, hdr):
+                msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                         headers=hdr)).json()["messages"]
+                return [m["system_event"] for m in msgs
+                        if (m["system_event"] or "").startswith("runner_")]
+
+            await asyncio.sleep(0.1)
+            await app.state.sweep_runners()
+            assert await presence(live_room, live_hdr) == ["runner_offline"], (
+                "還有 run 在跑的房沒收到通知，這條測試等於沒驗")
+            assert await presence(done_room, done_hdr) == [], (
+                "run 已經做完的房也收到了執行器離線的通知")
+
+
 # ── 執行器註冊、命令、儀表板 ──────────────────────────────────────────
 
 async def test_register_is_idempotent_per_host_and_label(tmp_path):
-    """重啟一次就多一列的話，離線的通知會對每一個殘影各發一次。"""
+    """重啟一次就多一列的話，離線的通知會對每一個殘影各發一次。
+
+    冪等的入場券是 `X-Runner-Token`：同一台帶著它回來才算重註冊。
+    """
     app, client = await _client(tmp_path, "register")
     async with client:
         async with app.router.lifespan_context(app):
             a = await client.post("/api/runners/register",
                                   json={"host": "esvel-pc", "label": "main",
                                         "projects": ["ai-website"]})
+            token = a.json()["runner_token"]
             b = await client.post("/api/runners/register",
                                   json={"host": "esvel-pc", "label": "main",
                                         "projects": ["ai-website", "x"],
-                                        "version": "0.2"})
+                                        "version": "0.2"},
+                                  headers={"X-Runner-Token": token})
             assert a.json()["created"] is True
             assert b.json()["created"] is False
             assert a.json()["runner"]["id"] == b.json()["runner"]["id"]
             assert b.json()["runner"]["projects"] == ["ai-website", "x"]
             assert b.json()["runner"]["version"] == "0.2"
+            # token 不換：換掉的話，執行器手上那把在下一次 heartbeat 就死了
+            assert b.json()["runner_token"] is None
+            assert (await client.post(
+                f"/api/runners/{a.json()['runner']['id']}/heartbeat",
+                json={"status": "online"},
+                headers={"X-Runner-Token": token})).status_code == 200
+
+
+async def test_register_does_not_hand_a_runner_over_to_whoever_asks(tmp_path):
+    """🚨 **冪等不等於任何人都能接管。**
+
+    `created: False` 這條路本來只看 host+label——拿 agent token 的人對同一組
+    重註冊一次就拿到它的 id，接著替它 heartbeat（把人類下的命令吃掉）、
+    領單、把它領的 run 收掉。名錄上看起來完全正常，因為那**就是**同一列。
+
+    這條驗的是：沒帶 token（或帶錯）一律 403，而且拿不到憑證就做不了
+    heartbeat / claim / report 任何一件事。
+    """
+    app, client = await _client(tmp_path, "takeover")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            victim = await _register_runner(client, label="main")
+            run_id = (await client.post(f"/api/rooms/{rid}/runs",
+                                        json=_run_body(),
+                                        headers=hdr)).json()["run"]["id"]
+            await client.post(f"/api/runners/{victim}/claim",
+                              headers=victim.headers)
+
+            # ① 不帶 token 的重註冊：403
+            r = await client.post("/api/runners/register",
+                                  json={"host": "esvel-pc", "label": "main",
+                                        "projects": ["ai-website"]})
+            assert r.status_code == 403, "任何人都能對同一組 host+label 重註冊"
+            assert r.json()["detail"]["code"] == "runner_token_required"
+
+            # ② 帶錯的 token 一樣擋
+            r = await client.post("/api/runners/register",
+                                  json={"host": "esvel-pc", "label": "main",
+                                        "projects": ["ai-website"]},
+                                  headers={"X-Runner-Token": "not-the-token"})
+            assert r.status_code == 403
+            assert r.json()["detail"]["code"] == "runner_token_required"
+
+            # ③ 就算已經知道 id（儀表板讀得到），三個執行器端點都過不去
+            for r in (
+                await client.post(f"/api/runners/{victim}/heartbeat",
+                                  json={"status": "paused"}),
+                await client.post(f"/api/runners/{victim}/claim"),
+                await client.post(f"/api/runs/{run_id}/report",
+                                  json={"status": "running",
+                                        "runner_id": str(victim)}),
+            ):
+                assert r.status_code == 403, "沒帶憑證就做得到"
+                assert r.json()["detail"]["code"] == "runner_token_required"
+            bad = {"X-Runner-Token": "not-the-token"}
+            for r in (
+                await client.post(f"/api/runners/{victim}/heartbeat",
+                                  json={"status": "paused"}, headers=bad),
+                await client.post(f"/api/runners/{victim}/claim", headers=bad),
+                await client.post(f"/api/runs/{run_id}/report",
+                                  json={"status": "running",
+                                        "runner_id": str(victim)},
+                                  headers=bad),
+            ):
+                assert r.status_code == 403
+                assert r.json()["detail"]["code"] == "runner_token_invalid"
+
+            # ④ 正主拿著 token 照樣做得到——不然這條只是把功能關掉
+            assert (await client.post(
+                f"/api/runs/{run_id}/report",
+                json={"status": "running", "runner_id": str(victim)},
+                headers=victim.headers)).status_code == 200
+            # 執行器還是 online（別人的假 heartbeat 沒有把它改成 paused）
+            row = await (await app.state.db.execute(
+                "SELECT status FROM runner WHERE id=?", (str(victim),)
+            )).fetchone()
+            assert row["status"] == "online"
+
+
+async def test_runners_registered_before_tokens_existed_still_work(tmp_path):
+    """升級一次 Hub 就讓所有在跑的執行器 403 的話，遠端沒有人會去重跑註冊。
+
+    `token_sha256` 空字串＝那一欄存在之前註冊的，驗證放行；下一次 register
+    補發一把，從此照規則走。
+    """
+    app, client = await _client(tmp_path, "legacyrunner")
+    async with client:
+        async with app.router.lifespan_context(app):
+            runner = await _register_runner(client, label="old")
+            await app.state.db.execute(
+                "UPDATE runner SET token_sha256='' WHERE id=?", (str(runner),))
+            await app.state.db.commit()
+            assert (await client.post(
+                f"/api/runners/{runner}/heartbeat",
+                json={"status": "online"})).status_code == 200
+            # 重註冊補發一把新的
+            r = await client.post("/api/runners/register",
+                                  json={"host": "esvel-pc", "label": "old",
+                                        "projects": ["ai-website"]})
+            assert r.status_code == 200
+            assert r.json()["created"] is False
+            fresh = r.json()["runner_token"]
+            assert fresh
+            assert (await client.post(
+                f"/api/runners/{runner}/heartbeat",
+                json={"status": "online"},
+                headers={"X-Runner-Token": "x"})).status_code == 403
+            assert (await client.post(
+                f"/api/runners/{runner}/heartbeat",
+                json={"status": "online"},
+                headers={"X-Runner-Token": fresh})).status_code == 200
 
 
 async def test_commands_are_taken_once(tmp_path):
@@ -663,10 +1016,10 @@ async def test_commands_are_taken_once(tmp_path):
                                       json={"command": cmd, "room_id": rid},
                                       headers=hdr)
                 assert r.status_code == 200, r.text
-            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                                     json={"status": "paused"})).json()
             assert [c["command"] for c in hb["commands"]] == ["pause", "resume"]
-            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                                     json={"status": "online"})).json()
             assert hb["commands"] == []
 
@@ -684,7 +1037,7 @@ async def test_dashboard_json_is_stored_verbatim(tmp_path):
             dash = {"repos": [{"path": "JSAI-Web", "branch": "jsai_dev",
                                "unpushed_count": 2, "dirty": False}],
                     "usage": {"cost_usd": 1.25}}
-            await client.post(f"/api/runners/{runner}/heartbeat",
+            await client.post(f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                               json={"status": "online", "running_count": 1,
                                     "dashboard_json": dash})
             body = (await client.get(f"/api/rooms/{rid}/runner",
@@ -722,6 +1075,7 @@ async def test_response_shapes_are_pinned(tmp_path):
         async with app.router.lifespan_context(app):
             rid = await _ops_room(client)
             hdr = await _join_human(client, rid)
+            runner_id = await _register_runner(client)
             run = (await client.post(f"/api/rooms/{rid}/runs",
                                      json=_run_body(),
                                      headers=hdr)).json()["run"]
@@ -730,7 +1084,6 @@ async def test_response_shapes_are_pinned(tmp_path):
             assert run["usage"] == {}
             assert run["cancel_requested"] is False
 
-            runner_id = await _register_runner(client)
             runner = (await client.get(f"/api/rooms/{rid}/runner",
                                        headers=hdr)).json()["runners"][0]
             assert set(runner) == RUNNER_KEYS
@@ -747,17 +1100,18 @@ async def test_response_shapes_are_pinned(tmp_path):
                 "id", "run_id", "room_id", "from_status", "to_status",
                 "actor", "actor_name", "reason", "detail_json", "created_at"}
 
-            hb = (await client.post(f"/api/runners/{runner_id}/heartbeat",
+            hb = (await client.post(f"/api/runners/{runner_id}/heartbeat", headers=runner_id.headers,
                                     json={"status": "online"})).json()
             assert set(hb) == {"runner_id", "commands",
                                "cancel_requested_run_ids"}
 
-            got = await client.post(f"/api/runners/{runner_id}/claim")
+            got = await client.post(f"/api/runners/{runner_id}/claim", headers=runner_id.headers)
             assert set(got.json()) == {"run"}
 
-            report = (await client.post(f"/api/runs/{run['id']}/report",
-                                        json={"status": "running",
-                                              "runner_id": runner_id})).json()
+            report = (await client.post(
+                f"/api/runs/{run['id']}/report",
+                json={"status": "running", "runner_id": runner_id},
+                headers=runner_id.headers)).json()
             assert set(report) == {"run", "child_run"}
             assert report["child_run"] is None
 

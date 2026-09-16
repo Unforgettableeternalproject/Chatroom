@@ -122,6 +122,10 @@ agent_run_event（稽核串：狀態每一次變化、誰改的、原因）
 
 規則：
 
+- `project` 必須是**至少一台非 offline 執行器**在 `projects` 裡宣告過的
+  key，否則建單當下即 409 `project_not_served`。打錯一個字與「那台執行器
+  還沒開機」在佇列上長得一模一樣——都是一筆永遠排著的 queued，而沒有任何
+  地方會報錯。（2026-09-16 補）
 - 一房一佇列，priority DESC + position ASC；同一 `ref` 在
   **queued / claimed / running / limited / handoff** 任一狀態時不得重複（409
   `run_ref_already_active`）。初稿寫的是「queued/running」，但 claimed 與
@@ -149,6 +153,7 @@ agent_run_event（稽核串：狀態每一次變化、誰改的、原因）
 ```
 runner                                          （P1 已落地）
   id, host, label, status(online|paused|limited|offline)
+  token_sha256  註冊時發的執行器憑證，**只存 sha256**；明文只回傳一次
   max_parallel（預設 3）, running_count
   projects      允許的 project key（JSON 陣列）。**白名單**：空的領不到任何單
   limited_until, limit_reason（rate_limit | weekly_limit | manual）
@@ -164,6 +169,23 @@ runner_command                                  （§5.7，P1 已落地）
 - 執行器用 agent 憑證註冊（`POST /api/runners/register`），**同 host+label
   冪等回同一個 id**（partial unique index）：重啟一次就多一列的話，名錄上會
   排著一串早就不在的執行器，而「離線」的通知會對每個殘影各發一次。
+- 🚨 **冪等不等於任何人都能接管**（2026-09-16 補）。第一次註冊發一把
+  `runner_token`（`secrets.token_urlsafe(32)`，DB 只存 sha256），**明文只在
+  建立那一次回傳**。之後：
+  - 同 host+label 再註冊要帶正確的 `X-Runner-Token` 才算同一台回來（可更新
+    `projects` / `max_parallel` / `version`，**不換 token**）；不帶或帶錯一律
+    403 `runner_token_required`。
+  - `heartbeat` / `claim` / `report`（含在 heartbeat 裡取命令）一律驗
+    `X-Runner-Token`：缺 header 403 `runner_token_required`，對不上 403
+    `runner_token_invalid`。
+  - 人類下命令的 `POST /api/runners/{id}/commands` **不受此限**——那條認的是
+    人類憑證，不是執行器憑證。
+  - `token_sha256` 空字串（這一欄存在之前註冊的）驗證放行，下一次 register
+    補發一把。升級一次 Hub 就讓所有在跑的執行器 403 的話，遠端沒有人會去
+    重跑註冊。
+  少了這一關，拿 agent token 的人對同一組 host+label 註冊一次就拿到它的 id，
+  接著替它 heartbeat（把人類下的 pause 吃掉）、領單、把它領的 run 收掉，而
+  名錄上看起來完全正常——因為那就是同一列。
 - heartbeat 走 `/api/runners/{id}/heartbeat`（帶狀態與 `dashboard_json`），
   回應帶 `commands[]`（取走的同時標 `acked_at`——命令是一次性的）與
   `cancel_requested_run_ids[]`。逾時（`runner_offline_after`，預設 180 秒）
@@ -174,6 +196,15 @@ runner_command                                  （§5.7，P1 已落地）
   CAS 判定用 `fetchone() is not None`，不用 `rowcount`。沒單可領回 **204**。
   `paused` / `limited` / `offline` 的執行器一律 204——停收就是停收，不靠
   執行器自己記得別問。
+- 併發保險（2026-09-16 補）：`running_count >= max_parallel` 也回 **204**。
+  ⚠️ 這個數字是**最近一次 heartbeat 回報的**，可能落後一個 heartbeat 週期
+  （執行器剛起一個新進程、還沒回報），所以它是保險而不是權威——本地的併發
+  上限仍由執行器自己守。少了它，Hub 會把整條佇列塞給一台已經滿載的執行器。
+- 回報（`POST /api/runs/{id}/report`）的 `runner_id` **必填**（省略即 422）：
+  可以省略的話，「這筆是不是你領的」那道檢查整條繞得過去。狀態轉移用 CAS
+  （`WHERE id=? AND status=?` 帶舊狀態 + `RETURNING`），沒套用到回 409
+  `run_bad_transition`；建子 run 等後續只在套用成功後做——兩個同時到的
+  `handoff` 否則會各建一棵子 run，一張卡從此有兩條交接鏈。
 
 ### 4.4 儀表板狀態 `runner.dashboard_json`
 

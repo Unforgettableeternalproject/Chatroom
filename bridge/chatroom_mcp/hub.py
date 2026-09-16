@@ -388,6 +388,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "先確認手上的 runner_id 是不是領到這一筆的那台。",
                 status=status, detail=detail,
             )
+        if code in ("runner_token_required", "runner_token_invalid"):
+            # 執行器憑證（REMOTE-OPS-PLAN §4.3）。**不是房間身分問題**：
+            # 明文只在註冊成功那一次回傳，重新 join 拿不到它。弄丟了只能
+            # 換一組 label 重新註冊——那會是一台新的執行器
+            return HubError(
+                _detail_text(detail)
+                or "這個動作要帶註冊時拿到的 X-Runner-Token。明文只在第一次"
+                   "註冊成功時回傳一次；弄丟或對不上的話，請換一組 label "
+                   "重新註冊，不要對同一組 host+label 重試。",
+                status=status, detail=detail,
+            )
         if code is None and ("participant" in low or "身分" in text):
             # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
             # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：
@@ -472,6 +483,16 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "這個目標已經有一筆還沒結束的派工了。重複派工會讓兩個 "
                    "agent 動同一份工作樹——先看現有那筆的狀態，"
                    "或等它結束再派。",
+                status=status, detail=detail,
+            )
+        if code == "project_not_served":
+            # 打錯專案 key 與「執行器還沒開機」在畫面上長得一樣，所以這句
+            # 要把兩種可能都講出來——只說「不支援」的話，人會去改程式
+            return HubError(
+                _detail_text(detail)
+                or "沒有執行器服務這個專案。先確認 project key 沒打錯，"
+                   "或請那台執行器上線並把這個 key 加進它的 projects 白名單"
+                   "——派下去也只會排在佇列裡等一台不會來的執行器。",
                 status=status, detail=detail,
             )
         if code == "run_already_finished":
