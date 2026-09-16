@@ -14,6 +14,7 @@
 | `weekly` | assistant 講 weekly limit + error_during_execution | 1 |
 | `context` | 連續 assistant，usage 一路衝過閾值 | 0 |
 | `long` | 印一則就長睡，等著被殺 | 0 |
+| `env_dump` | 把 `GIT_*` 環境變數寫進 run 目錄的 `env.json` | 0 |
 | `not_logged_in` | result subtype=success 但 is_error、exit 1（實測形狀） | 1 |
 """
 
@@ -102,6 +103,16 @@ def main(argv: list[str]) -> int:
         while time.time() < deadline:
             time.sleep(0.2)
         result("success", False, "長跑跑完了。")
+        return 0
+    if scenario == "env_dump":
+        # 憑證隔離要驗的是「環境變數真的到得了子進程」，所以由子進程自己寫
+        run_dir = os.environ.get("CHATROOM_RUNNER_RUN_DIR", ".")
+        seen = {k: v for k, v in os.environ.items() if k.startswith("GIT_")}
+        with open(os.path.join(run_dir, "env.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(seen, fh, ensure_ascii=False)
+        assistant("環境已落檔。")
+        result("success", False, "環境已落檔。", turns=1)
         return 0
     if scenario == "not_logged_in":
         # 實測 2.1.273：加 --bare 未登入時 subtype 照樣是 success。

@@ -214,3 +214,61 @@ def test_templates_render_all_placeholders(kind):
 def test_missing_template_is_an_error():
     with pytest.raises(FileNotFoundError):
         prompts.load_template("no-such-kind")
+
+
+# ── weekly limit 的判斷範圍（審查 09/16 Minor）───────────────────
+
+def test_weekly_limit_only_comes_from_result_system_or_error():
+    """🚨 assistant 的**一般文字**不算。
+
+    agent 在摘要裡寫一句「這次沒有撞到 weekly limit」就會被判成撞牆，
+    整台執行器停收，而房裡看到的是一個沒有理由的 limited。
+    """
+    w = StreamWatcher(0)
+    w.feed({"type": "assistant", "message": {
+        "usage": {"input_tokens": 10},
+        "content": [{"type": "text",
+                     "text": "順帶一提，這一輪沒有 weekly limit 的問題"}]}})
+    assert not w.state.weekly_limit, "assistant 的一般文字被當成撞牆"
+
+    w.feed({"type": "assistant", "error": "You've hit your weekly limit",
+            "message": {"usage": {"input_tokens": 10}, "content": []}})
+    assert w.state.weekly_limit, "assistant 的 error 欄位才算"
+
+
+def test_weekly_limit_from_a_plain_system_event():
+    w = StreamWatcher(0)
+    w.feed({"type": "system", "subtype": "notice",
+            "message": "usage limit reached"})
+    assert w.state.weekly_limit
+
+
+# ── 儀表板：先 fetch 再算未推送（審查 09/16 Major）───────────────
+
+async def test_dashboard_fetches_before_counting_unpushed(tmp_path,
+                                                          work_repo,
+                                                          monkeypatch):
+    """不 fetch 的話，`origin/<b>..<b>` 用的是上次 fetch 時的遠端位置：
+    別人推過之後，面板上那份清單與 push run 的比對基準一起過期。"""
+    calls: list[tuple] = []
+    real = dashboard.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append(args)
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(dashboard.gitops, "git", spy)
+    view = await dashboard.repo_view(work_repo, ["jsai_dev"])
+    assert ("fetch", "origin", "jsai_dev") in calls
+    assert view["fetch_stale"] is False
+
+
+async def test_dashboard_marks_fetch_stale_without_blocking(tmp_path,
+                                                            work_repo):
+    """fetch 失敗只標記，不擋儀表板：連不上遠端與「這台機器讀不到 repo」
+    不是同一件事。"""
+    git(work_repo, "remote", "set-url", "origin",
+        str(tmp_path / "gone.git"))
+    view = await dashboard.repo_view(work_repo, ["jsai_dev"])
+    assert view["fetch_stale"] is True
+    assert view["branch"] == "jsai_dev"

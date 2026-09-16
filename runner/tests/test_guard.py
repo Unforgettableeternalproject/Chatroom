@@ -134,7 +134,11 @@ def test_check_tool_routes_by_name(ctx):
     assert not check_tool("PowerShell", {"command": "git push"}, ctx).allowed
     assert not check_tool("Write", {"file_path": "../outside.txt"},
                           ctx).allowed
-    assert check_tool("Read", {"file_path": "../outside.txt"}, ctx).allowed
+    # 讀取類不限 cwd，但敏感路徑一樣擋（審查 09/16）
+    assert check_tool("Read", {"file_path": "../outside.txt"},
+                      ctx).allowed
+    assert not check_tool("Read", {"file_path": "../server/.env"},
+                          ctx).allowed
 
 
 # ── hook 本體（真的跑一次子進程）────────────────────────────────
@@ -195,3 +199,237 @@ def test_hook_blocks_when_guard_config_is_missing(tmp_path):
                              "tool_input": {"command": "git status"}})
     assert proc.returncode == 2
     assert "守衛設定讀不到" in proc.stderr
+
+
+# ── 進程包裝：殼層與直譯器再執行一段命令字串（審查 09/16 Critical）──────
+
+WRAPPED = [
+    # 審查者用 check_command 直接跑出來的繞法，原樣進測試
+    "cmd /c git push",
+    'cmd /c "git push"',
+    "cmd /k git push",
+    'powershell -Command "git push"',
+    'pwsh -Command "git push"',
+    "powershell -EncodedCommand ZwBpAHQAIABwAHUAcwBoAA==",
+    "powershell -File .\\deploy.ps1",
+    'bash -c "git push"',
+    'sh -c "git push"',
+    'zsh -c "git push"',
+    "wsl git push",
+    "python -c \"import subprocess; subprocess.run(['git','push'])\"",
+    'python3 -c "print(1)"',
+    'py -c "print(1)"',
+    "python -m http.server",
+    "node -e \"require('child_process').execSync('git push')\"",
+    'node --eval "1"',
+    'node -p "1"',
+    "perl -e \"system('git push')\"",
+    "ruby -e \"system('git push')\"",
+    'Start-Process -FilePath git -ArgumentList "push"',
+    'Invoke-Expression "git push"',
+    'iex "git push"',
+    "Invoke-Command -ScriptBlock {git push}",
+    "icm -ScriptBlock {git push}",
+    'eval "git push"',
+    "exec git push",
+    "& {git push}",
+    "& { git push }",
+]
+
+
+@pytest.mark.parametrize("command", WRAPPED)
+def test_process_wrappers_are_denied(ctx, command):
+    """🚨 殼層／直譯器再跑一段字串＝整份黑名單的旁路。
+
+    `cmd /c git push` 的第一個 token 不是 git，任何「看 token」的規則都攔不到
+    它，而 push 照樣推上去了。
+    """
+    decision = check_command(command, ctx)
+    assert not decision.allowed, f"{command}：繞過去了"
+    assert decision.rule in ("process_wrapper", "script_outside_cwd")
+    assert "這是系統限制" in decision.reason
+
+
+WRAPPER_ALLOWED = [
+    ("python -m pytest -q", "跑測試是唯一開放的 -m"),
+    ("python scripts/check.py", "cwd 內的腳本"),
+    ("node scripts/build.js", "cwd 內的腳本"),
+    ("npm run lint", "npm 的 run"),
+    ("npx tsc --noEmit", "型別檢查"),
+    ("pnpm test", "pnpm 的測試"),
+]
+
+
+@pytest.mark.parametrize("command, why", WRAPPER_ALLOWED)
+def test_wrapper_rules_do_not_block_normal_work(ctx, command, why):
+    decision = check_command(command, ctx)
+    assert decision.allowed, f"{why}：被擋了（{decision.rule}）"
+
+
+def test_interpreter_script_outside_cwd_is_denied(ctx):
+    d = check_command("python ../outside/evil.py", ctx)
+    assert not d.allowed and d.rule == "script_outside_cwd"
+
+
+# ── git 全域選項（審查 09/16 Critical）──────────────────────────
+
+GIT_GLOBAL_DENIED = [
+    ("git --git-dir=C:/other/.git --work-tree=C:/other commit -am x",
+     "git_global_path", "換一個工作樹就等於在別的 repo 上動手"),
+    ("git -C log push", "git_global_path",
+     "-C 吃掉下一個 token，push 變成看不見的子命令"),
+    ("git -C ../other status", "git_global_path", "cwd 以外的工作樹"),
+    ("git --work-tree=../other status", "git_global_path", "同上"),
+    ("git -c commit.gpgsign=false commit -m x", "git_config_override",
+     "用 -c 關掉簽章"),
+    ("git -c core.hooksPath=/dev/null commit -m x", "git_config_override",
+     "用 -c 把 hooks 指到空的"),
+    ("git -c gpg.program=false commit -m x", "git_config_override",
+     "換掉簽章程式"),
+]
+
+
+@pytest.mark.parametrize("command, rule, why", GIT_GLOBAL_DENIED)
+def test_git_global_options_are_denied(ctx, command, rule, why):
+    decision = check_command(command, ctx)
+    assert not decision.allowed, f"{why}：沒擋住"
+    assert decision.rule == rule
+
+
+def test_git_harmless_dash_c_still_works(ctx):
+    assert check_command("git -c color.ui=false status", ctx).allowed
+
+
+# ── git config／remote 的多旗標（審查 09/16 Minor）───────────────
+
+GIT_READ_ONLY_ALLOWED = [
+    "git config --get user.email",
+    "git config --list",
+    "git config --get-all remote.origin.url",
+    "git config --show-origin --get user.name",
+    "git remote -v",
+    "git remote show origin",
+    "git remote get-url origin",
+]
+
+GIT_READ_ONLY_DENIED = [
+    ("git config user.email x", "git_config"),
+    ("git config --global user.email x", "git_config"),
+    ("git config --get --global user.email", "git_config"),
+    ("git config --unset commit.gpgsign", "git_config"),
+    ("git remote add upstream https://github.com/x/y", "git_remote"),
+    ("git remote set-url origin https://github.com/x/y", "git_remote"),
+    ("git remote get-url --push origin", "git_remote"),
+]
+
+
+@pytest.mark.parametrize("command", GIT_READ_ONLY_ALLOWED)
+def test_git_read_only_forms_are_allowed(ctx, command):
+    d = check_command(command, ctx)
+    assert d.allowed, f"{command} 被擋了（{d.rule}）"
+
+
+@pytest.mark.parametrize("command, rule", GIT_READ_ONLY_DENIED)
+def test_git_config_and_remote_writes_are_denied(ctx, command, rule):
+    d = check_command(command, ctx)
+    assert not d.allowed and d.rule == rule
+
+
+# ── git 憑證設定（艾斯維爾裁決 09/16：推送憑證隔離）──────────────
+
+CREDENTIAL_DENIED = [
+    '$env:GIT_CONFIG_COUNT = "0"',
+    '$env:GIT_ASKPASS = ""',
+    "set GIT_CONFIG_COUNT=0",
+    "export GIT_TERMINAL_PROMPT=1",
+    "Set-Item env:GIT_ASKPASS x",
+    '[Environment]::SetEnvironmentVariable("GIT_ASKPASS", "x")',
+    "git -c credential.helper=manager push origin jsai_dev",
+    "git -c credential.helper=store fetch origin",
+    "git config credential.helper manager",
+    "git config --global credential.helper manager",
+]
+
+
+@pytest.mark.parametrize("command", CREDENTIAL_DENIED)
+def test_credential_setting_changes_are_denied(ctx, command):
+    """run 進程的憑證被清掉了，能把它裝回去就等於沒清。"""
+    d = check_command(command, ctx)
+    assert not d.allowed, f"{command}：沒擋住"
+    assert d.rule in ("git_credential_env", "git_config")
+    assert "這是系統限制" in d.reason
+
+
+def test_reading_a_git_env_var_is_still_allowed(ctx):
+    assert check_command("echo $env:GIT_DIR", ctx).allowed
+
+
+# ── 讀取型工具（審查 09/16 Critical）────────────────────────────
+
+def test_matcher_covers_read_tools():
+    """🚨 Read／Glob／Grep 不在 matcher 裡＝hook 根本不會被呼叫，
+    `.env` 與私鑰照讀不誤。"""
+    for tool in ("Read", "Glob", "Grep"):
+        assert tool in TOOL_MATCHER
+
+
+READ_DENIED = [
+    ("Read", {"file_path": "../server/.env"}, "read_sensitive"),
+    ("Read", {"file_path": "config/.env.local"}, "read_sensitive"),
+    ("Read", {"file_path": "certs/site.pem"}, "read_sensitive"),
+    ("Read", {"file_path": "keys/deploy.key"}, "read_sensitive"),
+    ("Read", {"file_path": "keys/cert.p12"}, "read_sensitive"),
+    ("Read", {"file_path": "C:/Users/x/.ssh/id_rsa"}, "read_sensitive"),
+    ("Read", {"file_path": "C:/Users/x/.claude.json"}, "read_sensitive"),
+    ("Read", {"file_path": "C:/Users/x/credentials.json"}, "read_sensitive"),
+    ("Read", {"file_path": "~/.gnupg/secring.gpg"}, "read_sensitive_dir"),
+    ("Read", {"file_path": "C:/Users/x/.claude/settings.json"},
+     "read_sensitive_dir"),
+    ("Glob", {"pattern": "**/.env*"}, "read_sensitive"),
+    ("Glob", {"pattern": "**/*.pem"}, "read_sensitive"),
+    ("Glob", {"path": "~/.ssh", "pattern": "*"}, "read_sensitive_dir"),
+    ("Grep", {"pattern": "TOKEN", "path": "../../.claude"},
+     "read_sensitive_dir"),
+    ("Grep", {"pattern": "TOKEN", "glob": "*.key"}, "read_sensitive"),
+    ("Grep", {"pattern": "TOKEN", "path": "../server/.env"},
+     "read_sensitive"),
+]
+
+
+@pytest.mark.parametrize("tool, payload, rule", READ_DENIED)
+def test_read_tools_cannot_reach_secrets(ctx, tool, payload, rule):
+    d = check_tool(tool, payload, ctx)
+    assert not d.allowed, f"{tool} {payload}：讀到了"
+    assert d.rule == rule
+    assert "這是系統限制" in d.reason
+
+
+READ_ALLOWED = [
+    ("Read", {"file_path": "src/app.ts"}),
+    # 讀取類**不限 cwd**：看別的 repo 的程式碼是正常的調查
+    ("Read", {"file_path": "../other-repo/src/app.ts"}),
+    ("Glob", {"pattern": "**/*.ts"}),
+    ("Glob", {"path": "src", "pattern": "*"}),
+    ("Grep", {"pattern": "TODO"}),
+    ("Grep", {"pattern": "TODO", "glob": "*.ts", "path": "src"}),
+]
+
+
+@pytest.mark.parametrize("tool, payload", READ_ALLOWED)
+def test_read_tools_still_read_normal_files(ctx, tool, payload):
+    d = check_tool(tool, payload, ctx)
+    assert d.allowed, f"{tool} {payload} 被擋了（{d.rule}）"
+
+
+def test_read_cannot_reach_the_runner_own_dir(ctx, tmp_path):
+    d = check_tool(
+        "Read", {"file_path": str(tmp_path / "runner-state" / "state.json")},
+        ctx)
+    assert not d.allowed and d.rule == "read_protected"
+
+
+def test_hook_blocks_a_read_of_dotenv(run_dir):
+    proc = _run_hook(run_dir, {"tool_name": "Read",
+                               "tool_input": {"file_path": "../.env"}})
+    assert proc.returncode == 2
+    assert "這是系統限制" in proc.stderr

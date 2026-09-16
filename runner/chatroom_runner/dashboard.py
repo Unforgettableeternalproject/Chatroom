@@ -59,12 +59,18 @@ async def repo_view(path: Path, push_branches: list[str]) -> dict:
     if not branch:
         return {"path": str(path), "branch": "", "error": "無法讀取分支",
                 "dirty": False, "unpushed_count": 0, "unpushed": [],
-                "pushable": False}
+                "pushable": False, "fetch_stale": True}
+    # 🚨 先 fetch 再算未推送：不 fetch 的話 `origin/<b>..<b>` 用的是上次
+    # fetch 時的遠端位置，面板上那份清單與 push run 的比對基準會一起過期。
+    # fetch 失敗**只標記不擋**——連不上遠端與「這台機器讀不到 repo」不是同
+    # 一件事，後者才該讓整格變成 error
+    fetched = await gitops.git(path, "fetch", "origin", branch)
     commits = await gitops.unpushed(path, branch)
     dirty = await gitops.status_porcelain(path)
     return {
         "path": str(path),
         "branch": branch,
+        "fetch_stale": not fetched.ok,
         "dirty": bool(dirty),
         "dirty_count": len(dirty),
         "unpushed_count": len(commits),

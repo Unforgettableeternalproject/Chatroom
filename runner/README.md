@@ -79,24 +79,48 @@
 | log | `%LOCALAPPDATA%/UEP/Chatroom/runner/logs/runner.log`（輪替 5MB × 5） |
 | 執行器身分與 token | `.../runner/state.json`（權限只限使用者，**不要外流**） |
 | 用量視窗 | `.../runner/usage.db` |
-| 每筆 run 的暫存 | `.../runner/runs/<run_id>/`：`settings.json`、`mcp.json`、`guard.json`、`stream.jsonl`、`tool.log`、`handoff.flag`、`compacted` |
+| 每筆 run 的暫存 | `.../runner/runs/<run_id>/`：`settings.json`、`mcp.json`、`guard.json`、`stream.jsonl`、`tool.log`、`handoff.flag`、`compacted`、`report_failed.json`（回報送不出去時的落地，下次 heartbeat 重送） |
 
 ## 硬限制（`PreToolUse` hook）
 
-matcher：`Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit`
-（⚠️ **一定要含 PowerShell**：Windows 上模型預設選它）。
+matcher：`Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|Read|Glob|Grep`
+（⚠️ **一定要含 PowerShell**：Windows 上模型預設選它；
+少了 `Read|Glob|Grep` 則 `.env` 與私鑰換一個工具就讀得到）。
 
 - `handoff.flag` 存在 ⇒ 一律擋，要求立刻交接。
 - git：白名單 `status/diff/log/show/add/commit/branch 建立/checkout|switch 到允許分支/stash list/fetch/rev-parse/ls-files/remote 讀/config 讀`，其餘一律擋（含 `push`、`reset`、`clean`、`rebase`、`branch -D`）。
 - 一律擋：`--no-verify`、`--no-gpg-sign`、`rm -r*`、`Remove-Item -Recurse`、
   `npm publish`、`az`、`wrangler deploy`、`gh pr merge`、
   `curl`／`Invoke-WebRequest` 到 `allowed_domains` 以外。
+- 殼層與直譯器包裝一律擋：`cmd /c`、`powershell`／`pwsh`、`bash -c`、`wsl`、
+  `Start-Process`、`iex`／`Invoke-Expression`、`Invoke-Command`、`eval`／`exec`、
+  `& {…}`、`python -c`／`-m`（只留 `-m pytest`）、`node -e`／`-p`、`perl -e`、
+  `ruby -e`。允許 `python`／`node` 跑 cwd 以內的腳本與 `npm`／`npx`／`pnpm`
+  的 test／run／lint 類。
+- git 全域選項先剝除：`-C`／`--git-dir`／`--work-tree` 出現即拒絕，
+  `-c credential.*`／`core.hooksPath`／`gpg.*`／`commit.gpgsign=false` 也拒絕。
+- 改 git 憑證設定（`$env:GIT_*=`、`set`／`export GIT_*=`、
+  `Set-Item env:GIT_*`、`SetEnvironmentVariable`、`git config credential.*`）
+  一律擋——一般 run 的環境是刻意清掉憑證的。
 - 寫入型工具：路徑必須在 cwd 內，且不是 `.env*`／`*.pem`／`.claude`／`.gnupg`／
   執行器自己的目錄。
+- 讀取型工具（`Read`／`Glob`／`Grep`）：**不限 cwd**，但路徑或 glob 命中
+  `.env*`／`*.pem`／`*.key`／`*.p12`／`id_rsa*`／`.ssh`／`.gnupg`／`.claude`／
+  `.claude.json`／`credentials*`／執行器自己的目錄就擋。
 - 其餘放行，並寫進該 run 的 `tool.log`。
 
 被擋時 stderr 的理由會原樣回給模型，開頭一定是「這是系統限制」並指出替代路徑
 ——實測模型被擋之後會換工具再試一次然後放棄，不講清楚它只會在那裡繞。
+
+### 推送憑證隔離（裁決 2026-09-16）
+
+一般 run 的子進程環境清空 `credential.helper`（`GIT_CONFIG_*` 只作用在那個進程，
+本機 git 設定沒動）、`GIT_TERMINAL_PROMPT=0`、`GIT_ASKPASS` 指到
+`hooks/askpass-deny.*`（永遠 exit 1）。`push` run 的 `fetch`／`push` 明確帶
+`-c credential.helper=manager`，不改 remote URL、不存 token。
+
+⚠️ 同一個 Windows 帳號下，決心繞過的對手仍讀得到 Credential Manager——
+真正的硬隔離要第二個帳號，已裁定不做（規劃書 §6.4「結構性限制」）。
 
 ## 退出碼
 

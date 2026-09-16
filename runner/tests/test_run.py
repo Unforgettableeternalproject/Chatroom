@@ -505,3 +505,230 @@ def test_argv_has_verbose_with_stream_json(tmp_path, work_repo):
     assert FAKE_CLAUDE in argv[1]
     resumed = ex._argv("p", "c", cfg.project("ai-website"), tmp_path, "sid-1")
     assert resumed[resumed.index("--resume") + 1] == "sid-1"
+
+
+# ── 回報的容錯（審查 09/16 Major）───────────────────────────────
+
+class _FlakyHub:
+    """前 ``failures`` 次 report 丟 HubError，之後成功。"""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.calls: list[tuple] = []
+
+    async def report(self, run_id, status, **kw):
+        from chatroom_runner.hub import HubError
+        self.calls.append((run_id, status))
+        if len(self.calls) <= self.failures:
+            raise HubError("連不上", code="unreachable")
+        return None
+
+
+async def test_report_retries_before_giving_up(tmp_path, work_repo):
+    """Hub 抖一下不該讓一筆做完的 run 變成永遠 running。"""
+    from chatroom_runner.run import RunOutcome
+
+    cfg = make_config(tmp_path, work_repo)
+    hub = _FlakyHub(failures=2)
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    ex = _executor(cfg, hub, sleep=fake_sleep)
+    ok = await ex._report("r-flaky", RunOutcome("done", reason="success",
+                                                result="做完了"))
+
+    assert ok is True
+    assert len(hub.calls) == 3, "沒有重試"
+    assert slept == [2, 5], "退避沒有拉開"
+    assert not (cfg.runs_dir / "r-flaky" / "report_failed.json").exists()
+
+
+async def test_report_that_never_lands_is_written_to_disk(tmp_path,
+                                                          work_repo, caplog):
+    """🚨 三次都失敗就把回報**落地**。
+
+    不落地的話，那筆 run 的結果只存在於一個已經結束的 process 的記憶體裡：
+    房裡永遠停在 running，而本機一行紀錄都沒有。
+    """
+    import logging
+
+    from chatroom_runner.run import RunOutcome
+
+    cfg = make_config(tmp_path, work_repo)
+    hub = _FlakyHub(failures=99)
+    slept: list[float] = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    ex = _executor(cfg, hub, sleep=fake_sleep)
+    with caplog.at_level(logging.WARNING, logger="chatroom_runner.run"):
+        ok = await ex._report("r-dead", RunOutcome("failed", reason="boom",
+                                                   result="掛了"))
+
+    assert ok is False
+    assert len(hub.calls) == 3
+    landed = cfg.runs_dir / "r-dead" / "report_failed.json"
+    assert landed.exists(), "回報沒有落地"
+    saved = json.loads(landed.read_text(encoding="utf-8"))
+    assert saved["status"] == "failed" and saved["reason"] == "boom"
+    assert saved["run_id"] == "r-dead"
+    assert caplog.records, "log 裡沒有任何痕跡"
+
+
+# ── push 前先 fetch（審查 09/16 Major）───────────────────────────
+
+async def test_push_fetches_before_comparing(hub_app, ops_room, runner_hub,
+                                             work_repo, tmp_path,
+                                             monkeypatch):
+    """🚨 不 fetch 就比對，比的是上次 fetch 時的遠端位置。
+
+    別人在這期間推了東西，`origin/<b>..<b>` 會多算幾顆，而那份清單同時是
+    「按鈕的人看到什麼」的依據。
+    """
+    from chatroom_runner import run as run_mod
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    (work_repo / "a.txt").write_text("a", encoding="utf-8")
+    git(work_repo, "add", "a.txt")
+    git(work_repo, "commit", "-m", "要推的那顆")
+    sha = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+    calls: list[tuple] = []
+    real = run_mod.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append((args, kw))
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_mod.gitops, "git", spy)
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    kinds = [a for a, _kw in calls]
+    fetches = [a for a in kinds if a and a[-3:] == ("fetch", "origin",
+                                                    "jsai_dev")]
+    assert fetches, f"push 前沒有 fetch：{kinds}"
+    pushes = [a for a in kinds if "push" in a]
+    assert pushes, "沒有推"
+    assert kinds.index(fetches[0]) < kinds.index(pushes[0])
+
+
+async def test_push_refuses_when_fetch_fails(hub_app, ops_room, runner_hub,
+                                             work_repo, tmp_path):
+    """fetch 失敗＝不知道遠端現在長什麼樣子。這時推上去是盲推。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    (work_repo / "a.txt").write_text("a", encoding="utf-8")
+    git(work_repo, "add", "a.txt")
+    git(work_repo, "commit", "-m", "要推的那顆")
+    sha = git(work_repo, "rev-parse", "HEAD")
+    git(work_repo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed", "push_fetch_failed")
+
+
+# ── 推送憑證隔離（艾斯維爾裁決 09/16）───────────────────────────
+
+async def test_push_run_carries_the_push_credential_helper(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """push run 是唯一帶憑證的路徑，helper 由執行器**明確指定**。"""
+    from chatroom_runner import run as run_mod
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    (work_repo / "a.txt").write_text("a", encoding="utf-8")
+    git(work_repo, "add", "a.txt")
+    git(work_repo, "commit", "-m", "要推的那顆")
+    sha = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+    calls: list[tuple] = []
+    real = run_mod.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append((args, kw))
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_mod.gitops, "git", spy)
+    await _executor(cfg, runner_hub).execute(run)
+
+    helper = ("-c", f"credential.helper={run_mod.PUSH_CREDENTIAL_HELPER}")
+    for verb in ("fetch", "push"):
+        hit = [a for a, _kw in calls if verb in a]
+        assert hit, f"沒有 {verb}"
+        assert hit[0][:2] == helper, f"{verb} 沒帶憑證 helper：{hit[0]}"
+    # push 的 git 呼叫**不帶**一般 run 的憑證覆寫環境
+    assert all("env" not in kw for _a, kw in calls)
+
+
+def test_child_env_strips_git_credentials(tmp_path, work_repo):
+    """一般 run 的進程拿不到推送憑證：清掉 helper 清單、關掉互動與 askpass。"""
+    from chatroom_runner import run as run_mod
+
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    env = ex._child_env({"id": "r-env"}, tmp_path)
+
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert env["GIT_CONFIG_VALUE_0"] == ""
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert Path(env["GIT_ASKPASS"]).is_file()
+    assert env["GIT_ASKPASS"] == str(run_mod.ASKPASS_SCRIPT)
+
+
+def test_credential_override_really_denies_credentials(tmp_path, work_repo):
+    """不是只看環境變數有沒有設：真的跑一次 `git credential fill`。
+
+    ⚠️ `git config --get-all credential.helper` **驗不到這件事**：它印的是
+    設定檔裡的原始值（會看到 `manager` 加一個空項），清空 helper 清單是
+    credential 那一層的行為。要驗就要驗那一層。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    env = ex._child_env({"id": "r-env"}, tmp_path)
+    query = "\n".join(["protocol=https", "host=github.com", "", ""])
+    out = subprocess.run(["git", "credential", "fill"], input=query,
+                         cwd=str(work_repo), env=env, capture_output=True,
+                         text=True, timeout=60)
+    assert out.returncode != 0, "run 的環境還拿得到憑證"
+    assert "username" not in out.stdout.lower()
+    assert "password" not in out.stdout.lower()
+    # 而且不是卡在問句上：終端提示關掉、askpass 一律失敗
+    assert "terminal prompts disabled" in out.stderr.lower()
+
+
+async def test_child_process_sees_the_isolated_git_env(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """環境變數要真的到得了子進程——這是憑證隔離唯一的執行點。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "env_dump")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-env")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    seen = json.loads((cfg.runs_dir / run["id"] / "env.json")
+                      .read_text(encoding="utf-8"))
+    assert seen["GIT_CONFIG_COUNT"] == "1"
+    assert seen["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert seen["GIT_CONFIG_VALUE_0"] == ""
+    assert seen["GIT_TERMINAL_PROMPT"] == "0"

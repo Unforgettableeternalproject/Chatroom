@@ -1,0 +1,2 @@
+# askpass 腳本在 POSIX 上要 LF：`#!/bin/sh` 會直接執行失敗
+*.sh text eol=lf

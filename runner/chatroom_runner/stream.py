@@ -131,10 +131,8 @@ class StreamWatcher:
         self.state.session_id = event["session_id"]
 
     def _system(self, event: dict) -> None:
-        if event.get("subtype") != "api_retry":
-            return
         err = str(event.get("error") or "")
-        if err == "rate_limit":
+        if event.get("subtype") == "api_retry" and err == "rate_limit":
             self.state.rate_limit_retries += 1
         if looks_like_weekly_limit(str(event.get("message") or err)):
             self.state.weekly_limit = True
@@ -147,12 +145,16 @@ class StreamWatcher:
             self.state.context_tokens = tokens
             self.state.peak_context_tokens = max(
                 self.state.peak_context_tokens, tokens)
+        # 🚨 **只看 `error` 欄位，不掃一般文字**（審查 09/16）：agent 在摘要裡
+        # 寫一句「這次沒有撞到 weekly limit」就會被判成撞牆，整台執行器停收，
+        # 而房裡看到的是一個沒有理由的 limited。撞牆的權威來源是 result／
+        # system 事件與這裡的 error 欄位
+        err = str(event.get("error") or msg.get("error") or "")
+        if looks_like_weekly_limit(err):
+            self.state.weekly_limit = True
         for block in msg.get("content") or []:
             if isinstance(block, dict) and block.get("type") == "text":
-                text = str(block.get("text") or "")
-                self.state.texts.append(text)
-                if looks_like_weekly_limit(text):
-                    self.state.weekly_limit = True
+                self.state.texts.append(str(block.get("text") or ""))
         if (self.soft_limit_tokens > 0
                 and self.state.context_tokens >= self.soft_limit_tokens
                 and not self.state.soft_limit_hit):

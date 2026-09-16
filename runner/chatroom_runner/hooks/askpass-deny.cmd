@@ -1,0 +1,3 @@
+@echo off
+rem 派工 run 的 git 一律拿不到憑證：問到密碼就直接失敗，不要停在那裡等人
+exit /b 1

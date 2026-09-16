@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,8 +30,10 @@ from typing import Awaitable, Callable
 from . import dashboard, gitops
 from .config import RunnerConfig
 from .hub import HubError
-from .run import RepoLocks, RunExecutor
+from .run import REPORT_FAILED_NAME, RepoLocks, RunExecutor
 from .usage import UsageStore
+
+log = logging.getLogger(__name__)
 
 # 排程工作看到這個碼就把執行器重新拉起來（維護窗／restart 命令）
 EXIT_RESTART = 75
@@ -191,8 +195,41 @@ class RunnerLoop:
 
     # ---------- 心跳與命令 ----------
 
+    async def _flush_failed_reports(self) -> None:
+        """把送不出去、落地在 run 目錄的回報再送一次（審查 09/16）。
+
+        送成功才刪檔：刪了又沒送到的話，那筆 run 的結果就真的不見了。
+        """
+        runs_dir = self.cfg.runs_dir
+        if not runs_dir.is_dir():
+            return
+        for path in sorted(runs_dir.glob(f"*/{REPORT_FAILED_NAME}")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                log.warning("落地的回報讀不回來（%s）：%s", path, exc)
+                continue
+            run_id = str(payload.get("run_id") or path.parent.name)
+            try:
+                await self.hub.report(
+                    run_id, str(payload.get("status") or ""),
+                    result=str(payload.get("result") or ""),
+                    reason=str(payload.get("reason") or ""),
+                    claude_session_id=str(payload.get("claude_session_id")
+                                          or ""),
+                    usage=payload.get("usage") or None)
+            except HubError as exc:
+                log.warning("run %s 的落地回報重送失敗：%s", run_id, exc)
+                continue
+            log.info("run %s 的落地回報已補送", run_id)
+            try:
+                path.unlink()
+            except OSError:  # pragma: no cover
+                pass
+
     async def heartbeat(self) -> dict:
-        usage_window = (self.usage.window(self.cfg.usage_window_hours,
+        await self._flush_failed_reports()
+        usage_window =(self.usage.window(self.cfg.usage_window_hours,
                                           self.cfg.usage_soft_cap_tokens,
                                           self.cfg.usage_soft_cap_usd)
                         if self.usage else None)
@@ -281,18 +318,34 @@ class RunnerLoop:
                            executor=executor,
                            started_at=self.now().isoformat())
         self.active[run["id"]] = active
-        task.add_done_callback(lambda _t, rid=run["id"]: self._finish(rid))
+        task.add_done_callback(lambda t, rid=run["id"]: self._finish(rid, t))
         return active
 
-    def _finish(self, run_id: str) -> None:
+    def _finish(self, run_id: str, task: asyncio.Task | None = None) -> None:
+        """🚨 一定要取 ``task.exception()``（審查 09/16）。
+
+        不取的話，executor 自己炸掉的例外會被吃掉：那筆 run 從 active 消失、
+        房裡停在 running，而本機一行紀錄都沒有。
+        """
         self.active.pop(run_id, None)
+        if task is None or task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("run %s 的執行 task 以例外結束", run_id, exc_info=exc)
 
     # ---------- 維護窗 ----------
 
     def maintenance_due(self) -> bool:
-        """到點、沒有 run 在跑、今天還沒做過。有 run 就順延到下一次心跳。"""
+        """到點、沒有 run 在跑、今天還沒做過。有 run 就順延到下一次心跳。
+
+        🚨 ``draining``／``paused`` 時**不重啟**（審查 09/16）：那兩個狀態的
+        語意都是「我要它安靜下來」，而重啟回來的執行器會立刻開始領單。
+        """
         now = self.now()
         if now.hour != self.cfg.maintenance_hour or self.active:
+            return False
+        if self.state.draining or self.state.status == "paused":
             return False
         return self.state.last_maintenance_day != now.date().isoformat()
 

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -331,3 +332,91 @@ async def test_heartbeat_survives_an_unreachable_hub(work_repo, tmp_path):
     loop = _loop(cfg, Broken())
     assert await loop.heartbeat() == {}
     assert await loop.claim_once() is None
+
+
+# ── run 的例外與落地回報（審查 09/16 Major）──────────────────────
+
+async def test_a_task_that_raises_is_logged_not_swallowed(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, caplog):
+    """🚨 `add_done_callback` 不取 `task.exception()` ＝例外被吃掉。
+
+    那筆 run 從 active 消失、房裡停在 running，而本機一行紀錄都沒有。
+    """
+    import logging
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+
+    class Boom:
+        turns = 0
+        context_peak = 0
+
+        async def execute(self, run, cancel=None):
+            raise RuntimeError("執行器自己炸了")
+
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: Boom())
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+
+    with caplog.at_level(logging.ERROR, logger="chatroom_runner.loop"):
+        await loop.tick()
+        await asyncio.gather(*[a.task for a in list(loop.active.values())],
+                             return_exceptions=True)
+        await asyncio.sleep(0)
+
+    assert run["id"] not in loop.active
+    mine = [r for r in caplog.records if r.name == "chatroom_runner.loop"]
+    assert mine, "例外沒有進 log"
+    assert any(run["id"][:8] in r.getMessage() for r in mine)
+
+
+async def test_failed_report_on_disk_is_resent_on_the_next_heartbeat(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """落地的回報要有人再送一次，否則它就只是一個沒人讀的檔案。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+    claimed = await runner_hub.claim()
+    assert claimed is not None
+
+    run_dir = cfg.runs_dir / run["id"]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "report_failed.json").write_text(json.dumps({
+        "run_id": run["id"], "status": "failed", "reason": "boom",
+        "result": "沒送出去的那一筆", "claude_session_id": "", "usage": None,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    await loop.heartbeat()
+
+    assert not (run_dir / "report_failed.json").exists(), "重送成功沒有清掉"
+    final = (await client.get(f"/api/runs/{run['id']}",
+                              headers=headers)).json()["run"]
+    assert final["status"] == "failed"
+    assert "沒送出去的那一筆" in (final["result"] or "")
+
+
+# ── 維護窗（審查 09/16 Major）───────────────────────────────────
+
+async def test_maintenance_does_not_restart_while_paused_or_draining(
+        hub_app, runner_hub, work_repo, tmp_path):
+    """drain／pause 的語意是「安靜下來」，而重啟回來的執行器會立刻領單。"""
+    cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
+    clock = [datetime(2026, 9, 16, 4, 30, tzinfo=timezone.utc)]
+    loop = _loop(cfg, runner_hub, now=lambda: clock[0])
+    assert await loop.start()
+
+    loop.apply_command("drain")
+    await loop.tick()
+    assert loop.exit_code == 0, "draining 還是重啟了"
+
+    loop.apply_command("pause")
+    await loop.tick()
+    assert loop.exit_code == 0, "paused 還是重啟了"
+
+    loop.apply_command("resume")
+    await loop.tick()
+    assert loop.exit_code == EXIT_RESTART, "恢復之後該做的維護沒有做"

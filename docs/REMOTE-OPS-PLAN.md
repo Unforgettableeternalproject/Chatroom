@@ -381,6 +381,41 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 （status/diff/log/add/commit/branch 建立/checkout 允許分支/stash list），其餘 git 一律擋。
 被擋的呼叫回給模型的訊息要說「這是系統限制，請改走 X 或問人類」，不要讓它反覆試。
 
+#### 結構性限制（審查結論，2026-09-16）
+
+guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯的事，擋不住決心繞過
+的對手：一個能跑專案測試腳本（`npm test`、`pytest`）的 agent，原則上就能執行
+任意程式碼——測試檔本身是它寫得到的東西。所以 §6.4 的清單是**降低意外的成本**，
+不是硬邊界。這一輪補上的包裝攔截（`cmd /c`、`powershell -Command`、
+`python -c`、`node -e`、`iex`、`& {…}` 等）把「順手一包就繞過去」這條路關掉，
+但同樣不是硬邊界。
+
+真正的硬邊界只有兩道：
+
+1. **未推送的 commit 全在儀表板上，push 只有人類能觸發**。agent 做的任何事都停
+   在本機工作樹，要離開這台機器一定經過一次人看著清單按下去的動作（§5.6 的 sha
+   比對保證按的就是畫面上那幾顆）。
+2. **推送憑證隔離**（艾斯維爾裁決 2026-09-16，已實作）：
+   - 一般 run（`investigate`／`ticket`／`stage`）的子進程環境帶
+     `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=credential.helper`／
+     `GIT_CONFIG_VALUE_n=`（空值＝清空 helper 清單）、`GIT_TERMINAL_PROMPT=0`、
+     `GIT_ASKPASS` 指到執行器自帶、永遠 exit 1 的腳本。這是**進程層級的覆寫**，
+     本機 git 設定一個字都沒動；已有的 `GIT_CONFIG_COUNT` 用途會接在後面遞增，
+     不覆蓋。效果：run 內對私有遠端的 push／fetch 拿不到憑證就直接失敗，而不是
+     停在一個沒有人能回答的問句上。
+   - `push` run 的 `git fetch`／`git push` 明確以 `-c credential.helper=manager`
+     執行，且**不帶**上面那組覆寫環境。不改 remote URL、不存任何 token——URL 裡
+     帶 token 會留在 `git remote -v` 與 reflog 上。
+   - guard 另外擋掉把憑證裝回去的各種寫法：`$env:GIT_*=`、`set GIT_*=`、
+     `export GIT_*=`、`Set-Item env:GIT_*`、`[Environment]::SetEnvironmentVariable`、
+     `git -c credential.*`、任何寫入型的 `git config credential.*`。
+
+   **邊界說清楚**：run 跑在與人類同一個 Windows 帳號下，決心繞過的對手仍然讀得到
+   Credential Manager 裡的憑證（那是帳號層級的儲存，不是 git 層級的）。真正的硬
+   隔離要第二個 Windows 帳號（或容器），**艾斯維爾裁定不做**——代價是整套開發環境
+   要再裝一份，而這一層擋的對象是「意外」與「順手繞過」，不是一個專心要偷憑證的
+   程式。
+
 ## 7. 通知語意
 
 - run 的狀態變化（queued→running→done/failed/limited/handoff）都是 `agent_run_event`，
@@ -469,6 +504,45 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 - ⚠️ **§1 說 AI-Website 是四個 repo（含 JSAI-Skills），§5.5 說三個。**
   `runner/config.example.json` 先寫三個（JSAI-Web／JSAI-API／JSAI-Functions），
   要不要加第四個等艾斯維爾確認。
+
+**P2 審查修正（2026-09-16，`runner/tests` 219 條）**：
+
+- **包裝攔截**：殼層與直譯器再跑一段命令字串一律擋（`cmd /c`、
+  `powershell`／`pwsh`、`bash -c`、`wsl`、`Start-Process`、`iex`／
+  `Invoke-Expression`、`Invoke-Command`、`eval`／`exec`、`& {…}`、
+  `. <cwd 外的腳本>`、`python -c`／`-m`（只留 `-m pytest`）、`node -e`／`-p`、
+  `perl -e`、`ruby -e`）。允許 `python`／`node` 跑 cwd 以內的腳本，以及
+  `npm`／`npx`／`pnpm` 的 test／run／lint 類。**這是繞過的主要入口**：
+  `cmd /c git push` 的第一個 token 不是 `git`，所有看子命令的規則都攔不到。
+- **git 全域選項先剝除再判子命令**：`-C`／`--git-dir`／`--work-tree` 出現即
+  整條拒絕（會把命令搬到別的工作樹），`--namespace` 剝掉，`-c k=v` 擋
+  `credential.*`、`core.hooksPath`、`gpg.*`、`commit.gpgsign=false`。
+  舊版把 `-` 開頭的 token 直接跳過，於是 `git -C log push` 的子命令被當成
+  `log`，push 整條放行。
+- **`Read`／`Glob`／`Grep` 進 matcher**：讀取類**不限 cwd**（看別的 repo 的
+  程式碼是正常的調查），但路徑或 glob 命中 `.env*`、`*.pem`、`*.key`、`*.p12`、
+  `id_rsa*`、`.ssh/`、`.gnupg/`、`.claude/`、`.claude.json`、`credentials*` 與
+  執行器自己的目錄就擋。glob 要雙向比（`**/.env*` 當名字比比不中，但它撈得到
+  `.env`）。
+- **`git config`／`remote` 看整條**：`config` 只允許 `--get`／`--get-all`／
+  `--list`／`--show-origin` 加一個 key（舊版只看第一個 token，
+  `git config --get --global user.email x` 會寫到全域）；`remote` 只允許
+  `-v`／`show`／`get-url`，不接受其他旗標。
+- **回報有容錯**：`report` 三次嘗試、退避 2／5 秒，仍失敗就把內容落地到
+  `<run 目錄>/report_failed.json`，下一次 heartbeat 重送、送成功才刪。run 的
+  task 例外由 `add_done_callback` 取出寫 log——不取的話那筆 run 從 active 消
+  失、房裡停在 running，而本機一行紀錄都沒有。
+- **push 前先 `git fetch origin <branch>`**，失敗即拒推（`push_fetch_failed`）：
+  不 fetch 就比對，比的是上次 fetch 時的遠端位置。儀表板每次心跳也先 fetch，
+  失敗只標 `fetch_stale: true`，不擋整格。
+- **維護窗在 `draining`／`paused` 時不重啟**：那兩個狀態的語意都是「安靜下來」，
+  而重啟回來的執行器會立刻開始領單。
+- **weekly limit 只認 `result`／`system` 事件與 assistant 的 `error` 欄位**：
+  掃一般文字的話，agent 在摘要裡寫一句「這次沒有撞到 weekly limit」就會讓整台
+  執行器停收。
+- **推送憑證隔離**（§6.4「結構性限制」）：一般 run 的環境清掉
+  `credential.helper`、關掉終端提示與 askpass；`push` run 明確帶
+  `-c credential.helper=manager`。guard 另擋改動 git 憑證設定的各種寫法。
 
 **待驗（只能實機）**：獨立 `CLAUDE_CONFIG_DIR` 下 claude.ai 連接器是否仍可用；
 `--max-budget-usd` 觸頂與週／月上限的真實 stream 樣貌（測試用的是依文件寫的

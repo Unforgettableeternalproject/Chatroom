@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import subprocess
@@ -27,9 +28,22 @@ from typing import Awaitable, Callable
 from . import gitops, prompts
 from .config import ProjectConfig, RepoConfig, RunnerConfig
 from .guard import TOOL_MATCHER, GuardContext
+from .hub import HubError
 from .stream import StreamWatcher
 
+log = logging.getLogger(__name__)
+
 HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
+# 永遠 exit 1 的 askpass：git 問不到密碼就直接失敗，不會停在那裡等人
+ASKPASS_SCRIPT = HOOKS_DIR / ("askpass-deny.cmd" if os.name == "nt"
+                              else "askpass-deny.sh")
+# push run 用的憑證 helper（艾斯維爾裁決 09/16：推送憑證隔離）。
+# 一般 run 的環境把 helper 清單清空，只有 push run 明確把它加回來
+PUSH_CREDENTIAL_HELPER = "manager"
+# 回報的重試（審查 09/16）。三次嘗試、兩段退避；還是送不出去就落地
+REPORT_ATTEMPTS = 3
+REPORT_BACKOFF_SECONDS = (2, 5)
+REPORT_FAILED_NAME = "report_failed.json"
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push"}
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
@@ -181,6 +195,17 @@ class RunExecutor:
                 "failed", reason="push_branch_not_allowed",
                 result=f"分支「{branch}」不在 {repo.name} 的可推清單"
                        f"（{'、'.join(repo.push_branches) or '空'}）裡，沒有推送。")
+        # 🚨 先 fetch 再算未推送：不 fetch 的話比對的是上次 fetch 時的遠端
+        # 位置，而那份清單同時是「按鈕的人看到什麼」的依據。fetch 失敗＝不知
+        # 道遠端現在長什麼樣子，這時推上去是盲推
+        fetched = await gitops.git(repo.path, *self._push_credential_args(),
+                                   "fetch", "origin", branch)
+        if not fetched.ok:
+            return RunOutcome(
+                "failed", reason="push_fetch_failed",
+                result=f"git fetch origin {branch} 失敗，沒有推送："
+                       f"{fetched.err or fetched.out}\n"
+                       "抓不到遠端就無法確認待推的是不是儀表板上那幾顆。")
         expected = {s for s in _SHA_RE.findall(brief.lower())
                     if s != branch.lower()}
         if not expected:
@@ -198,13 +223,25 @@ class RunExecutor:
                         f"派工時是 {len(expected)} 顆："
                         f"{', '.join(sorted(s[:8] for s in expected))}\n"
                         "請重新整理儀表板再按一次。"))
-        res = await gitops.git(repo.path, "push", "origin", branch)
+        res = await gitops.git(repo.path, *self._push_credential_args(),
+                               "push", "origin", branch)
         if not res.ok:
             return RunOutcome("failed", reason="push_failed",
                               result=f"git push 失敗：{res.err or res.out}")
         return RunOutcome(
             "done", reason="pushed",
             result=f"已推送 {repo.name} 的 {branch}（{len(actual)} 顆 commit）。")
+
+    @staticmethod
+    def _push_credential_args() -> list[str]:
+        """push run 是唯一帶推送憑證的路徑（艾斯維爾裁決 09/16）。
+
+        一般 run 的子進程環境把 ``credential.helper`` 清單清空，所以它對私有
+        遠端拿不到憑證；這裡**明確**把執行器自己的 helper 加回來。不改 remote
+        URL、不存任何 token——URL 裡帶 token 會留在 `git remote -v` 與 reflog
+        上，而那是誰都讀得到的地方。
+        """
+        return ["-c", f"credential.helper={PUSH_CREDENTIAL_HELPER}"]
 
     @staticmethod
     def _push_branch(brief: str) -> str:
@@ -352,7 +389,33 @@ class RunExecutor:
                 f"{self.cfg.label}-{short_id(run['id'])}",
             "CHATROOM_RUNNER_RUN_DIR": str(run_dir),
         })
+        env.update(self._git_credential_isolation(env))
         return env
+
+    @staticmethod
+    def _git_credential_isolation(env: dict[str, str]) -> dict[str, str]:
+        """把推送憑證擋在 run 進程外（艾斯維爾裁決 09/16）。
+
+        ``GIT_CONFIG_*`` 是**這個進程**的覆寫，本機 git 設定一個字都沒動：
+        helper 清單被清空，run 裡的 push／fetch 對私有遠端拿不到憑證就失敗。
+        再關掉終端提示與 askpass，否則它會停在一個沒有人能回答的問句上。
+
+        ⚠️ 已經有別的 ``GIT_CONFIG_COUNT`` 用途時**接在後面**，不是覆蓋：
+        直接寫 1 會把前面那幾條設定連號一起吃掉。
+        """
+        try:
+            count = int(env.get("GIT_CONFIG_COUNT", "") or 0)
+        except ValueError:
+            count = 0
+        count = max(count, 0)
+        return {
+            f"GIT_CONFIG_KEY_{count}": "credential.helper",
+            f"GIT_CONFIG_VALUE_{count}": "",
+            "GIT_CONFIG_COUNT": str(count + 1),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": str(ASKPASS_SCRIPT),
+            "SSH_ASKPASS": str(ASKPASS_SCRIPT),
+        }
 
     async def _spawn(self, argv: list[str], cwd: Path, env: dict,
                      watcher: StreamWatcher, run_dir: Path,
@@ -484,11 +547,50 @@ class RunExecutor:
         self.usage_store.record(run_id, state.total_tokens(),
                                 state.total_cost_usd)
 
-    async def _report(self, run_id: str, outcome: RunOutcome) -> None:
-        await self.hub.report(run_id, outcome.status, result=outcome.result,
-                              reason=outcome.reason,
-                              claude_session_id=outcome.claude_session_id,
-                              usage=outcome.usage or None)
+    async def _report(self, run_id: str, outcome: RunOutcome) -> bool:
+        """回報狀態。**送不出去就落地**（審查 09/16）。
+
+        🚨 一次 HubError 就放棄的話，那筆 run 的結果只存在於一個即將結束的
+        process 的記憶體裡：房裡永遠停在 running，而本機一行紀錄都沒有。
+        重試三次（退避 2／5 秒），還是不行就寫進 run 目錄，由下一次 heartbeat
+        重送。
+        """
+        last: Exception | None = None
+        for attempt in range(1, REPORT_ATTEMPTS + 1):
+            try:
+                await self.hub.report(
+                    run_id, outcome.status, result=outcome.result,
+                    reason=outcome.reason,
+                    claude_session_id=outcome.claude_session_id,
+                    usage=outcome.usage or None)
+                return True
+            except HubError as exc:
+                last = exc
+                log.warning("run %s 回報 %s 失敗（第 %d 次）：%s", run_id,
+                            outcome.status, attempt, exc)
+                if attempt < REPORT_ATTEMPTS:
+                    await self.sleep(REPORT_BACKOFF_SECONDS[attempt - 1])
+        self._land_report(run_id, outcome, last)
+        return False
+
+    def _land_report(self, run_id: str, outcome: RunOutcome,
+                     error: Exception | None) -> None:
+        run_dir = self.cfg.runs_dir / run_id
+        payload = {"run_id": run_id, "status": outcome.status,
+                   "reason": outcome.reason, "result": outcome.result,
+                   "claude_session_id": outcome.claude_session_id,
+                   "usage": outcome.usage or None,
+                   "error": str(error) if error else ""}
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / REPORT_FAILED_NAME).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - 連本機都寫不了就只剩 log
+            log.error("run %s 的回報連落地都失敗：%s", run_id, exc)
+            return
+        log.error("run %s 的 %s 回報送不出去，已落地到 %s，等下一次 heartbeat "
+                  "重送", run_id, outcome.status, run_dir / REPORT_FAILED_NAME)
 
     # ---------- run 目錄 ----------
 
