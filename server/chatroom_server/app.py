@@ -17,8 +17,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import (
-    Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile,
-    WebSocket, WebSocketDisconnect,
+    Depends, FastAPI, File, Header, HTTPException, Query, Request, Response,
+    UploadFile, WebSocket, WebSocketDisconnect,
 )
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -98,6 +98,20 @@ async def _commit_with_retry(db) -> None:
                 raise
             await asyncio.sleep(0.005)
     await db.commit()
+
+
+def _loads_or(raw, fallback):
+    """JSON 欄位的寬容讀取：壞掉就回 fallback，不要讓一列爛資料炸掉整個列表。
+
+    這些欄位（`dashboard_json`、`usage_json`、`projects`）是**執行器寫進來
+    的**，Hub 不解讀它們的內容。不解讀就代表 Hub 沒有驗過，而沒驗過的東西
+    遲早會有一列是壞的——那一列不該讓面板整個開不起來。
+    """
+    try:
+        v = json.loads(raw or "")
+    except (ValueError, TypeError):
+        return fallback
+    return v if isinstance(v, type(fallback)) else fallback
 
 
 def _err(status: int, code: str, message: str, **extra) -> HTTPException:
@@ -236,11 +250,70 @@ class RoomCreate(BaseModel):
     # 不是因為它可以不給。** 兩個位置都沒有時端點層一律 422——48da086a 的
     # 保護原封不動，只是換個地方擋
     session_key: str = Field(default="", max_length=128)
+    # chat（一般對話）/ ops（遠端派工的工作房）。ops 房不自動封存、不進
+    # purge，而且只有人類憑證（或主持人）建得了——見 create_room
+    kind: str = Field(default="chat", pattern="^(chat|ops)$")
     # public / private。private 的房不出現在別人的房間列表，也不能自行加入
     visibility: str = Field(default="public", pattern="^(public|private)$")
     # 房內 agent 的說話方式。custom 時 style_instructions 必填
     style: str = Field(default="verbose", pattern=STYLE_PATTERN)
     style_instructions: str = Field(default="", max_length=2000)
+
+
+# ---------- 遠端派工（Remote Ops）的請求模型 ----------
+
+class RunCreate(BaseModel):
+    """派工。**人類不寫自由 prompt**（§6.2）：選模板 + 選目標 + 一段簡述。
+
+    `brief` 上限 2000 字是規劃書訂的：它會被包進模板的一個欄位送給模型，
+    長度沒有上限等於把「模板化」這件事整個讓掉。
+    """
+    # investigate（只讀）/ ticket（實作到 commit）/ stage（整個階段）/
+    # push（固定腳本，不經模型，§5.6）
+    kind: str = Field(pattern="^(investigate|ticket|stage|push)$")
+    project: str = Field(min_length=1, max_length=64)
+    # checklist_id / task_id；push 時是 repo key
+    ref: str = Field(min_length=1, max_length=128)
+    brief: str = Field(default="", max_length=2000)
+    board_id: str = Field(default="", max_length=64)
+    priority: int = Field(default=0, ge=0, le=9)
+
+
+class RunnerRegister(BaseModel):
+    host: str = Field(min_length=1, max_length=128)
+    label: str = Field(default="", max_length=64)
+    # 允許的 project key。**白名單**：空的就領不到任何單
+    projects: list[str] = Field(default_factory=list)
+    max_parallel: int = Field(default=3, ge=1, le=16)
+    version: str = Field(default="", max_length=64)
+
+
+class RunnerHeartbeat(BaseModel):
+    status: str = Field(default="online",
+                        pattern="^(online|paused|limited|offline)$")
+    running_count: int = Field(default=0, ge=0)
+    limited_until: str | None = None
+    limit_reason: str = Field(default="", max_length=64)
+    # 儀表板狀態（§4.4）。Hub **原樣存、不解讀**
+    dashboard_json: dict = Field(default_factory=dict)
+    usage_window_json: dict = Field(default_factory=dict)
+
+
+class RunReport(BaseModel):
+    status: str = Field(
+        pattern="^(running|limited|handoff|done|failed|cancelled)$")
+    # 回報者。與 run 的 runner_id 不符即 403——一台執行器不能替另一台收工
+    runner_id: str = Field(default="", max_length=64)
+    result: str = Field(default="", max_length=8000)
+    reason: str = Field(default="", max_length=256)
+    claude_session_id: str = Field(default="", max_length=128)
+    usage_json: dict | None = None
+
+
+class RunnerCommandCreate(BaseModel):
+    command: str = Field(pattern="^(pause|resume|restart|drain)$")
+    # 從哪間房下的（provenance，可空）
+    room_id: str = Field(default="", max_length=64)
 
 
 class Rename(BaseModel):
@@ -1128,6 +1201,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "human_token_required",
                        "發放與撤銷邀請只認人類憑證（CHATROOM_HUMAN_TOKEN）")
 
+    def _is_human_credential(request: Request, host: bool = False) -> bool:
+        """這次請求拿的是不是**人類憑證**（`CHATROOM_HUMAN_TOKEN` 或
+        `audience=human` 的邀請碼）。
+
+        🚨 **未設 `CHATROOM_HUMAN_TOKEN` 時一律 True。** 那正是分離期之前的
+        行為：當時所有憑證權限相同，沒有任何一把被審視過「該不該當人類用」。
+        在那種組態上改成一律 False，等於升級一次 Hub 就讓所有人建不了 ops
+        房、派不了工，而錯誤訊息會指向一把他根本沒設過的 token。
+
+        `host`（主持人視角）放行的理由與 `host_view` 相同：他握有 `.env`
+        就握有 `chatroom.db`，擋他等於擋一個從旁邊走就進得來的人。
+        """
+        if host:
+            return True
+        if not cfg.human_api_token:
+            return True
+        return getattr(request.state, "token_audience", "agent") == "human"
+
     def _client_ip(request: Request) -> str | None:
         """來源位址。**僅供辨識顯示，不可用於任何授權判斷。**
 
@@ -1984,8 +2075,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/rooms", dependencies=[Depends(require_auth)])
     async def create_room(
+        request: Request,
         body: RoomCreate,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         creator_key = _credential_key(
             x_session_key, body.session_key,
@@ -2006,16 +2099,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "選擇自訂說話方式時必須寫下指示內容")
         instructions = (body.style_instructions.strip()
                         if body.style == CUSTOM_STYLE else "")
+        # ops 房是**遠端派工的入口**，而派工的權限綁人類憑證（§6.4）。
+        # 讓 agent 建得了 ops 房，等於讓一把只能領單與回報的 token 自己開一個
+        # 不會被自動封存的房間出來——那條路上沒有任何人會經過
+        if body.kind == "ops" and not _is_human_credential(request, host):
+            raise _err(403, "human_token_required_for_ops_room",
+                       "工作房（kind=ops）只有人類憑證或 Hub 主持人建得了。"
+                       "agent 的 token 借不到這個身分。")
         await db.execute(
-            "INSERT INTO room (id, name, topic, created_at, activated_at,"
+            "INSERT INTO room (id, name, topic, kind, created_at, activated_at,"
             " creator_session_key, visibility, style, style_instructions)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (room_id, body.name, body.topic, now, now, creator_key,
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (room_id, body.name, body.topic, body.kind, now, now, creator_key,
              body.visibility, body.style, instructions),
         )
         await _commit_with_retry(db)
         return {"id": room_id, "name": body.name, "topic": body.topic,
-                "status": "active", "visibility": body.visibility,
+                "status": "active", "kind": body.kind,
+                "visibility": body.visibility,
                 "style": body.style, "style_instructions": instructions}
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
@@ -2826,7 +2927,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     #   attachment → message                            attachment 指著 message
     #   其餘全部 → participant                          board 四欄、question 兩欄、
     #                                                   message.sender_id 都指著它
-    _ROOM_OWNED_TABLES = ("attachment", "archive_request", "question",
+    #   agent_run_event → agent_run                     event 指著 run
+    #   agent_run → room                                run 帶著房的外鍵
+    _ROOM_OWNED_TABLES = ("agent_run_event", "agent_run",
+                          "attachment", "archive_request", "question",
                           "message", "assignment", "participant")
 
     # 帶 room_id 卻**刻意不隨房刪除**的表。這份清單存在的唯一理由是：
@@ -2844,8 +2948,12 @@ def create_app(config: Config | None = None) -> FastAPI:
     # `board_task_request`：請求綁在**卡**上，而卡屬於板不屬於房。它的
     # `room_id` 只記「這筆請求是從哪間房發出的」，與 board 三表同一個理由。
     # 它跟著**板**走（見 `_BOARD_OWNED_TABLES`），不跟著房走。
+    # `runner_command`：命令屬於**執行器**，不屬於房。它的 `room_id` 只記
+    # 「這筆命令是從哪間房下的」（沒有外鍵），與 board 三表同一個理由——
+    # 房刪掉之後，「誰在什麼時候叫這台執行器重啟過」那段歷史還要成立。
     _ROOM_ID_NOT_OWNED = ("board_room", "board_task", "board_checklist",
-                          "board_objective", "board_task_request")
+                          "board_objective", "board_task_request",
+                          "runner_command")
 
     async def _room_owned_tables_gap() -> list[str]:
         """schema 裡帶 room_id 的表，有哪幾張不在 `_ROOM_OWNED_TABLES` 裡。
@@ -12364,6 +12472,661 @@ def create_app(config: Config | None = None) -> FastAPI:
             for task in pumps.values():
                 task.cancel()
 
+    # ---------- 遠端派工（Remote Ops，REMOTE-OPS-PLAN §4～§7）----------
+    #
+    # Hub 是**佇列與狀態的唯一真相**；執行器（P2）是笨執行者：領一筆、起
+    # 進程、回報、領下一筆。這一層只做資料與規則，不起任何進程。
+    #
+    # 📌 **run 的狀態變化不進 `/updates` 的可觀測狀態。**（09/16 決定）
+    # 那條端點的欄位與「什麼時候該回」是綁死的——只加欄位不加返回條件，
+    # 等於加了一個永遠不會被看見的欄位（board_seq 那次的教訓）。這一輪的
+    # 做法是：狀態變化以 system 訊息進訊息流（開始／結束／limited／交接／
+    # 執行器離線，§7），儀表板由 App 輪詢 `GET /api/rooms/{rid}/runner`。
+
+    # 合法的狀態轉移。**沒列出來的一律 409**——狀態機寫成「試試看能不能改」
+    # 的話，一個回報遲到的執行器可以把已經取消的 run 推回 running
+    _RUN_TRANSITIONS: dict[str, set[str]] = {
+        "queued": {"claimed", "cancelled"},
+        "claimed": {"running", "limited", "failed", "cancelled"},
+        "running": {"limited", "handoff", "done", "failed", "cancelled"},
+        # limited 是「撞到額度，等退避後續跑」，不是終局
+        "limited": {"running", "done", "failed", "cancelled"},
+        "handoff": set(),
+        "done": set(),
+        "failed": set(),
+        "cancelled": set(),
+    }
+    # 還佔著這個 ref 的狀態。handoff 也算——交接鏈還在跑，那張卡沒有空出來
+    _RUN_ACTIVE = ("queued", "claimed", "running", "limited", "handoff")
+
+    def _run_public(row) -> dict:
+        d = dict(row)
+        d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
+        d["cancel_requested"] = bool(d.get("cancel_requested"))
+        return d
+
+    def _runner_public(row) -> dict:
+        d = dict(row)
+        d["projects"] = _loads_or(d.pop("projects", "[]"), [])
+        d["dashboard"] = _loads_or(d.pop("dashboard_json", "{}"), {})
+        d["usage_window"] = _loads_or(d.pop("usage_window_json", "{}"), {})
+        return d
+
+    async def _ops_room_or_409(room_id: str):
+        room = await _room_or_404(room_id)
+        if (room["kind"] or "chat") != "ops":
+            raise _err(409, "room_not_ops",
+                       "派工只在工作房（kind=ops）成立。一般聊天室沒有佇列，"
+                       "也沒有執行器會來領這裡的單。")
+        return room
+
+    async def _room_human_names(room_id: str) -> list[str]:
+        """房內所有 active 人類的顯示名。
+
+        limited 與執行器離線要 mention 全部人類（§7）——那兩件事沒有「派工者
+        的責任」可言，是整間房都該知道的。
+        """
+        rows = await (await app.state.db.execute(
+            "SELECT display_name FROM participant WHERE room_id=?"
+            " AND role='human' AND status='active'", (room_id,))).fetchall()
+        return [r["display_name"] for r in rows if r["display_name"]]
+
+    async def _record_run_event(run_id: str, room_id: str, from_status: str,
+                                to_status: str, actor: str = "",
+                                actor_name: str = "", reason: str = "",
+                                detail: dict | None = None) -> None:
+        """稽核串：狀態的每一次變化留一筆。
+
+        `from_status == to_status` 的那些不是轉移，是**發生在這個 run 身上
+        的事**（目前只有「收到取消請求」）——它們也要留痕：取消送出去、
+        執行器還沒收到的那段時間，沒有別的地方講得出「有人按過取消」。
+        """
+        await app.state.db.execute(
+            "INSERT INTO agent_run_event (id, run_id, room_id, from_status,"
+            " to_status, actor, actor_name, reason, detail_json, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (_uid(), run_id, room_id, from_status, to_status, actor,
+             actor_name, reason,
+             json.dumps(detail or {}, ensure_ascii=False), _now()),
+        )
+
+    async def _run_or_404(run_id: str):
+        row = await (await app.state.db.execute(
+            "SELECT * FROM agent_run WHERE id=?", (run_id,))).fetchone()
+        if row is None:
+            raise _err(404, "run_not_found", "找不到這筆派工")
+        return row
+
+    async def _runner_or_404(runner_id: str):
+        row = await (await app.state.db.execute(
+            "SELECT * FROM runner WHERE id=?", (runner_id,))).fetchone()
+        if row is None:
+            raise _err(404, "runner_not_found", "找不到這台執行器")
+        return row
+
+    async def _announce_run(row, to_status: str, extra: str = "") -> None:
+        """房內 system 訊息。
+
+        **只發 §7 列的那幾種**：開始、結束、limited、交接、執行器離線。
+        排隊與位置變化不發——那是面板的事，發成訊息會把整個房洗掉。
+        """
+        room_id = row["room_id"]
+        requester = row["requested_by_name"]
+        head = f"派工 {row['kind']}／{row['ref'] or '(未指定)'}"
+        mentions: list[str] = []
+        if to_status == "running":
+            text = f"{head} 開始執行。"
+        elif to_status == "done":
+            text = f"{head} 完成。{extra or row['result'] or ''}".strip()
+            mentions = [requester] if requester else []
+        elif to_status == "failed":
+            text = f"{head} 失敗。{extra or row['reason'] or ''}".strip()
+            mentions = [requester] if requester else []
+        elif to_status == "cancelled":
+            text = f"{head} 已取消。"
+            mentions = [requester] if requester else []
+        elif to_status == "limited":
+            tail = extra or row["reason"] or ""
+            text = f"{head} 撞到額度上限，暫停收單。{tail}".strip()
+            mentions = await _room_human_names(room_id)
+        elif to_status == "handoff":
+            text = f"{head} 交接給下一輪。{extra}".strip()
+            mentions = [requester] if requester else []
+        else:
+            return
+        await _post_message(room_id, None, text, kind="system",
+                            system_event=f"run_{to_status}",
+                            mentions=mentions)
+
+    async def _announce_runner_presence(runner_id: str, online: bool) -> None:
+        """執行器上線／離線在**它有 run 的 ops 房**裡講一句，mention 全部人類。
+
+        只在那些房講：一台執行器離線對沒派過工給它的房間沒有意義，而 system
+        訊息發到不相干的房裡，下一次真的要緊時就沒有人在看了。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT * FROM runner WHERE id=?", (runner_id,))).fetchone()
+        if row is None:
+            return
+        rooms = await (await app.state.db.execute(
+            "SELECT DISTINCT a.room_id AS room_id FROM agent_run a JOIN room r"
+            " ON r.id=a.room_id WHERE a.runner_id=? AND r.kind='ops'"
+            " AND r.status='active'", (runner_id,))).fetchall()
+        label = row["label"] or row["host"]
+        for r in rooms:
+            humans = await _room_human_names(r["room_id"])
+            text = (f"執行器「{label}」已恢復連線。" if online
+                    else f"執行器「{label}」失去連線，"
+                         "排隊中的派工暫時沒有人領。")
+            await _post_message(r["room_id"], None, text, kind="system",
+                                system_event=("runner_online" if online
+                                              else "runner_offline"),
+                                mentions=humans)
+            await events.notify(r["room_id"])
+
+    @app.post("/api/rooms/{room_id}/runs", dependencies=[Depends(require_auth)])
+    async def create_run(
+        room_id: str,
+        body: RunCreate,
+        request: Request,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """建立一筆派工（run）。**只有人類憑證做得到。**
+
+        §6.4 的第一條硬限制：執行器手上那把 token 只能領單、回報、heartbeat，
+        建單一律不行——token 洩漏＝任何人能派工，而遠端沒有人看著。
+
+        規則與錯誤碼（**契約，client 可比對 code**）：
+
+        - 房間必須是 `kind=ops` ⇒ 否則 409 `room_not_ops`
+        - 同一個 `ref` 還有 queued/claimed/running/limited/handoff 的 run
+          ⇒ 409 `run_ref_already_active`
+        - 派工者當日（UTC）建單數達 `run_daily_quota`
+          ⇒ **429** `run_daily_quota_exceeded`
+        - 本房 queued 的 run 達 `run_queue_cap`
+          ⇒ **429** `run_queue_cap_exceeded`
+
+        兩個配額**刻意都用 429 而不是 409**：409 的語意是「與目前狀態衝突」，
+        而配額不是狀態衝突，是速率限制——client 對 429 的處置是「等一下再
+        來」，對 409 是「換個做法」，這裡要的是前者。
+
+        建立即 `queued`。**不發 system 訊息**（§7：排隊不是事件，位置變化
+        由面板顯示即可），但仍 `events.notify`——掛在 long-poll 上的 App 要
+        醒過來重撈佇列。
+        """
+        await _ops_room_or_409(room_id)
+        me = await _participant(x_participant_id, room_id)
+        if not _is_human_credential(request, host):
+            raise _err(403, "human_token_required_for_run",
+                       "派工只認人類憑證（CHATROOM_HUMAN_TOKEN 或"
+                       " audience=human 的邀請）。執行器的 token 只能領單、"
+                       "回報與 heartbeat。")
+        if (me["role"] or "") != "human":
+            raise _err(403, "human_actor_required_for_run",
+                       "只有房內的人類成員能派工。agent 要開工作請走任務板。")
+        db = app.state.db
+        marks = ",".join("?" for _ in _RUN_ACTIVE)
+        dup = await (await db.execute(
+            "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
+            f" AND status IN ({marks}) LIMIT 1",
+            (room_id, body.ref, *_RUN_ACTIVE))).fetchone()
+        if dup is not None:
+            raise _err(409, "run_ref_already_active",
+                       "這個目標已經有一筆還沒結束的派工了——重複派工會讓"
+                       "兩個 agent 動同一份工作樹。",
+                       run_id=dup["id"])
+        actor = actor_key(me["session_key"])
+        day = _now()[:10]
+        used = (await (await db.execute(
+            "SELECT COUNT(*) AS n FROM agent_run"
+            " WHERE requested_by_actor_key=? AND created_at >= ?",
+            (actor, day))).fetchone())["n"]
+        if cfg.run_daily_quota > 0 and used >= cfg.run_daily_quota:
+            raise _err(429, "run_daily_quota_exceeded",
+                       f"今天已經派了 {used} 筆，達到每日上限"
+                       f"（{cfg.run_daily_quota}）。明天再來，或請主持人調整"
+                       " CHATROOM_RUN_DAILY_QUOTA。",
+                       used=used, quota=cfg.run_daily_quota)
+        queued = (await (await db.execute(
+            "SELECT COUNT(*) AS n FROM agent_run WHERE room_id=?"
+            " AND status='queued'", (room_id,))).fetchone())["n"]
+        if cfg.run_queue_cap > 0 and queued >= cfg.run_queue_cap:
+            raise _err(429, "run_queue_cap_exceeded",
+                       f"這間房已經有 {queued} 筆在排隊，達到上限"
+                       f"（{cfg.run_queue_cap}）。等前面的做完，"
+                       "或先取消幾筆。",
+                       queued=queued, cap=cfg.run_queue_cap)
+        pos = (await (await db.execute(
+            "SELECT COALESCE(MAX(position), 0) AS p FROM agent_run"
+            " WHERE room_id=?", (room_id,))).fetchone())["p"] + 1
+        run_id = _uid()
+        now = _now()
+        await db.execute(
+            "INSERT INTO agent_run (id, room_id, board_id, kind, project, ref,"
+            " brief, requested_by, requested_by_actor_key, requested_by_name,"
+            " status, priority, position, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
+            (run_id, room_id, body.board_id, body.kind, body.project, body.ref,
+             body.brief, me["id"], actor, me["display_name"],
+             body.priority, pos, now, now),
+        )
+        await _record_run_event(run_id, room_id, "", "queued",
+                                actor, me["display_name"], "created")
+        await _commit_with_retry(db)
+        await events.notify(room_id)
+        return {"run": _run_public(await _run_or_404(run_id))}
+
+    @app.get("/api/rooms/{room_id}/runs", dependencies=[Depends(require_auth)])
+    async def list_runs(
+        room_id: str,
+        status: str | None = None,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """房內的派工佇列。讀取門檻與讀訊息相同（房內成員）。
+
+        `status` 可以帶逗號分隔的多個值（`queued,running`）。
+        """
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        sql = "SELECT * FROM agent_run WHERE room_id=?"
+        params: tuple = (room_id,)
+        if status:
+            wanted = [s for s in status.split(",") if s]
+            marks = ",".join("?" for _ in wanted)
+            sql += f" AND status IN ({marks})"
+            params = (room_id, *wanted)
+        sql += " ORDER BY priority DESC, position ASC"
+        rows = await (await app.state.db.execute(sql, params)).fetchall()
+        return {"runs": [_run_public(r) for r in rows]}
+
+    @app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth)])
+    async def get_run(
+        run_id: str,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """單筆派工，含它的稽核串。"""
+        row = await _run_or_404(run_id)
+        await _member_or_403(row["room_id"], x_participant_id, host)
+        trail = await (await app.state.db.execute(
+            "SELECT * FROM agent_run_event WHERE run_id=?"
+            " ORDER BY created_at, rowid", (run_id,))).fetchall()
+        return {"run": _run_public(row), "events": [dict(e) for e in trail]}
+
+    @app.post("/api/runs/{run_id}/cancel", dependencies=[Depends(require_auth)])
+    async def cancel_run(
+        run_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """取消一筆派工。房內人類成員、房間管理員或 Hub 主持人。
+
+        **queued 立刻變 cancelled**；已經被領走的（claimed/running/limited）
+        只立 `cancel_requested` 旗標，狀態不動——進程還在跑，這一端先把狀態
+        改掉的話，畫面會說它停了而機器上那個 agent 還在寫檔。執行器在下一次
+        heartbeat 拿到 `cancel_requested_run_ids[]`，殺完進程再回報
+        `cancelled`。
+
+        回應的 `cancelled` 布林講的正是這個分野：True＝已經停了，
+        False＝請求已送出，等執行器收。
+        """
+        row = await _run_or_404(run_id)
+        room = await _room_or_404(row["room_id"], allow_archived=True)
+        me = None
+        if x_participant_id:
+            me = await _participant(x_participant_id, row["room_id"])
+        allowed = host or (me is not None and (me["role"] or "") == "human")
+        if not allowed:
+            # 房間管理員也放行：他不一定以人類身分坐在房裡
+            allowed = bool(x_session_key
+                           and room["creator_session_key"] == x_session_key)
+        if not allowed:
+            raise _err(403, "human_actor_required_for_run_cancel",
+                       "取消派工只有房內的人類成員或這間房的管理員做得到。")
+        actor = actor_key(x_session_key or (me["session_key"] if me else ""))
+        name = me["display_name"] if me else "管理員"
+        status = row["status"]
+        if status in ("done", "failed", "cancelled", "handoff"):
+            raise _err(409, "run_already_finished",
+                       f"這筆派工已經結束了（{status}），沒有東西可以取消。")
+        now = _now()
+        if status == "queued":
+            await app.state.db.execute(
+                "UPDATE agent_run SET status='cancelled', cancel_requested=1,"
+                " ended_at=?, updated_at=?, reason='cancelled_by_human'"
+                " WHERE id=?", (now, now, run_id))
+            await _record_run_event(run_id, row["room_id"], "queued",
+                                    "cancelled", actor, name, "cancelled")
+            await _commit_with_retry(app.state.db)
+            final = await _run_or_404(run_id)
+            await _announce_run(final, "cancelled")
+            await events.notify(row["room_id"])
+            return {"run": _run_public(final), "cancelled": True}
+        await app.state.db.execute(
+            "UPDATE agent_run SET cancel_requested=1, updated_at=? WHERE id=?",
+            (now, run_id))
+        await _record_run_event(run_id, row["room_id"], status, status,
+                                actor, name, "cancel_requested")
+        await _commit_with_retry(app.state.db)
+        await events.notify(row["room_id"])
+        return {"run": _run_public(await _run_or_404(run_id)),
+                "cancelled": False}
+
+    @app.post("/api/runners/register", dependencies=[Depends(require_auth)])
+    async def register_runner(body: RunnerRegister):
+        """執行器註冊（agent 憑證即可）。**同 host+label 冪等回同一個 id。**
+
+        重啟一次就多一列的話，名錄上會排著一串早就不在的執行器，而「離線」
+        的通知會對每一個殘影各發一次。
+        """
+        db = app.state.db
+        now = _now()
+        found = await (await db.execute(
+            "SELECT * FROM runner WHERE host=? AND label=?",
+            (body.host, body.label))).fetchone()
+        projects = json.dumps(body.projects, ensure_ascii=False)
+        if found is not None:
+            await db.execute(
+                "UPDATE runner SET projects=?, max_parallel=?, version=?,"
+                " status=CASE WHEN status='offline' THEN 'online'"
+                "        ELSE status END,"
+                " last_seen_at=? WHERE id=?",
+                (projects, body.max_parallel, body.version, now, found["id"]))
+            await _commit_with_retry(db)
+            return {"runner": _runner_public(await _runner_or_404(found["id"])),
+                    "created": False}
+        runner_id = _uid()
+        await db.execute(
+            "INSERT INTO runner (id, host, label, status, max_parallel,"
+            " projects, version, registered_at, last_seen_at)"
+            " VALUES (?,?,?,'online',?,?,?,?,?)",
+            (runner_id, body.host, body.label, body.max_parallel, projects,
+             body.version, now, now))
+        await _commit_with_retry(db)
+        return {"runner": _runner_public(await _runner_or_404(runner_id)),
+                "created": True}
+
+    @app.post("/api/runners/{runner_id}/heartbeat",
+              dependencies=[Depends(require_auth)])
+    async def runner_heartbeat(runner_id: str, body: RunnerHeartbeat):
+        """執行器心跳。帶狀態與儀表板，取回待執行命令與取消請求。
+
+        `dashboard_json` **原樣存**：Hub 不解讀它，App 才是讀的人。Hub 一旦
+        開始解讀，執行器每加一格就要改兩端。
+
+        取命令的同時標 `acked_at`：命令是**一次性**的，重送一次 restart
+        等於重啟兩次。
+        """
+        db = app.state.db
+        row = await _runner_or_404(runner_id)
+        was_offline = row["status"] == "offline"
+        now = _now()
+        await db.execute(
+            "UPDATE runner SET status=?, running_count=?, limited_until=?,"
+            " limit_reason=?, dashboard_json=?, usage_window_json=?,"
+            " last_seen_at=? WHERE id=?",
+            (body.status, body.running_count, body.limited_until,
+             body.limit_reason,
+             json.dumps(body.dashboard_json, ensure_ascii=False),
+             json.dumps(body.usage_window_json, ensure_ascii=False),
+             now, runner_id))
+        cmds = await (await db.execute(
+            "SELECT * FROM runner_command WHERE runner_id=?"
+            " AND acked_at IS NULL ORDER BY created_at, rowid",
+            (runner_id,))).fetchall()
+        if cmds:
+            await db.execute(
+                "UPDATE runner_command SET acked_at=? WHERE runner_id=?"
+                " AND acked_at IS NULL", (now, runner_id))
+        cancels = await (await db.execute(
+            "SELECT id FROM agent_run WHERE runner_id=? AND cancel_requested=1"
+            " AND status IN ('claimed','running','limited')",
+            (runner_id,))).fetchall()
+        await _commit_with_retry(db)
+        if was_offline:
+            await _announce_runner_presence(runner_id, online=True)
+        return {"runner_id": runner_id,
+                "commands": [dict(c) for c in cmds],
+                "cancel_requested_run_ids": [c["id"] for c in cancels]}
+
+    @app.post("/api/runners/{runner_id}/claim",
+              dependencies=[Depends(require_auth)])
+    async def claim_run(runner_id: str, response: Response):
+        """領一筆單。**單一 `UPDATE … RETURNING`，沒有第二句。**
+
+        🚨 領號的教訓：先 SELECT 再 UPDATE 的話，兩句之間的 `await` 會讓
+        另一個執行器領到同一筆——而兩個 agent 在同一個工作樹上互相覆蓋，
+        遠端無人看著時代價更高。CAS 的判定用 `fetchone() is not None`，
+        **不用 `rowcount`**：帶 RETURNING 的語句上它不是可靠的成敗訊號。
+
+        沒有可領的單回 **204**（不是 200 配空 body）：執行器每隔幾秒問一次，
+        「沒事做」是常態而不是結果。`limited` 與 `paused` 的執行器一律 204
+        ——停收就是停收，不該靠執行器自己記得別問。
+        """
+        db = app.state.db
+        row = await _runner_or_404(runner_id)
+        projects = _loads_or(row["projects"], [])
+        # 沒有允許清單就領不到任何東西：`project` 是白名單，不是提示
+        if row["status"] != "online" or not projects:
+            response.status_code = 204
+            return None
+        marks = ",".join("?" for _ in projects)
+        now = _now()
+        cur = await db.execute(
+            "UPDATE agent_run SET status='claimed', runner_id=?, claimed_at=?,"
+            " updated_at=?, attempt=attempt+1 WHERE id = ("
+            "  SELECT id FROM agent_run WHERE status='queued'"
+            f"  AND project IN ({marks})"
+            "  ORDER BY priority DESC, position ASC LIMIT 1"
+            ") RETURNING *",
+            (runner_id, now, now, *projects))
+        got = await cur.fetchone()
+        if got is None:
+            response.status_code = 204
+            return None
+        await _record_run_event(got["id"], got["room_id"], "queued", "claimed",
+                                runner_id, row["label"] or row["host"],
+                                "claimed")
+        await _commit_with_retry(db)
+        await events.notify(got["room_id"])
+        return {"run": _run_public(got)}
+
+    @app.post("/api/runs/{run_id}/report", dependencies=[Depends(require_auth)])
+    async def report_run(run_id: str, body: RunReport):
+        """執行器回報狀態轉移。非法轉移一律 409 `run_bad_transition`。
+
+        `handoff` 時 Hub **自動建子 run**（`parent_run_id`、`handoff_depth+1`，
+        brief 接上「先讀卡」的指引）。深度超過 `run_handoff_max` 就不再續，
+        改把這一輪標成 `failed` 並 mention 派工者——無上限的交接鏈會自己
+        續命，而遠端沒有人看著它續到第幾輪。
+        """
+        db = app.state.db
+        row = await _run_or_404(run_id)
+        if (body.runner_id and row["runner_id"]
+                and body.runner_id != row["runner_id"]):
+            raise _err(403, "not_your_run",
+                       "這筆派工是別台執行器領走的，不能由你回報。")
+        old = row["status"]
+        new = body.status
+        if new not in _RUN_TRANSITIONS.get(old, set()):
+            raise _err(409, "run_bad_transition",
+                       f"派工不能從 {old} 變成 {new}。",
+                       from_status=old, to_status=new)
+        now = _now()
+        sets = ["status=?", "updated_at=?", "reason=?"]
+        params: list = [new, now, body.reason]
+        if body.result:
+            sets.append("result=?")
+            params.append(body.result)
+        if body.claude_session_id:
+            sets.append("claude_session_id=?")
+            params.append(body.claude_session_id)
+        if body.usage_json is not None:
+            sets.append("usage_json=?")
+            params.append(json.dumps(body.usage_json, ensure_ascii=False))
+        if new == "running" and row["started_at"] is None:
+            sets.append("started_at=?")
+            params.append(now)
+        if new in ("done", "failed", "cancelled", "handoff"):
+            sets.append("ended_at=?")
+            params.append(now)
+        params.append(run_id)
+        await db.execute(
+            f"UPDATE agent_run SET {', '.join(sets)} WHERE id=?",
+            tuple(params))
+        await _record_run_event(run_id, row["room_id"], old, new,
+                                row["runner_id"], "", body.reason or "report")
+
+        child_id = None
+        if new == "handoff":
+            depth = row["handoff_depth"] + 1
+            if depth > cfg.run_handoff_max:
+                # 續不下去就**當場收掉這一輪**，不要留一個 handoff 狀態卻沒有
+                # 下一棒的 run——那在面板上與「正在交接」一模一樣
+                await db.execute(
+                    "UPDATE agent_run SET status='failed', ended_at=?,"
+                    " updated_at=?, reason=? WHERE id=?",
+                    (now, now, "handoff_depth_exceeded", run_id))
+                await _record_run_event(run_id, row["room_id"], "handoff",
+                                        "failed", row["runner_id"], "",
+                                        "handoff_depth_exceeded",
+                                        {"depth": depth,
+                                         "max": cfg.run_handoff_max})
+                await _commit_with_retry(db)
+                final = await _run_or_404(run_id)
+                await _announce_run(
+                    final, "failed",
+                    f"交接鏈已達上限（{cfg.run_handoff_max} 輪），不再續跑。")
+                await events.notify(row["room_id"])
+                return {"run": _run_public(final), "child_run": None}
+            child_id = _uid()
+            pos = (await (await db.execute(
+                "SELECT COALESCE(MAX(position), 0) AS p FROM agent_run"
+                " WHERE room_id=?", (row["room_id"],))).fetchone())["p"] + 1
+            brief = (f"{row['brief']}\n\n"
+                     f"前一輪 run {run_id} 已交接，先讀卡 {row['ref']}")
+            await db.execute(
+                "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
+                " ref, brief, requested_by, requested_by_actor_key,"
+                " requested_by_name, status, priority, position,"
+                " parent_run_id, handoff_depth, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?,?,?)",
+                (child_id, row["room_id"], row["board_id"], row["kind"],
+                 row["project"], row["ref"], brief, row["requested_by"],
+                 row["requested_by_actor_key"], row["requested_by_name"],
+                 row["priority"], pos, run_id, depth, now, now))
+            await _record_run_event(child_id, row["room_id"], "", "queued",
+                                    row["runner_id"], "", "handoff_child",
+                                    {"parent_run_id": run_id, "depth": depth})
+        await _commit_with_retry(db)
+        final = await _run_or_404(run_id)
+        await _announce_run(final, new)
+        await events.notify(row["room_id"])
+        return {"run": _run_public(final),
+                "child_run": (_run_public(await _run_or_404(child_id))
+                              if child_id else None)}
+
+    @app.post("/api/runners/{runner_id}/commands",
+              dependencies=[Depends(require_auth)])
+    async def issue_runner_command(
+        runner_id: str,
+        body: RunnerCommandCreate,
+        request: Request,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """人類下的執行器命令：pause / resume / restart / drain（§5.7）。
+
+        命令**存下來等 heartbeat 取**，不是即時推送：執行器可能正卡在一個
+        子進程上，而「已送達」與「已生效」在畫面上長得一樣的話，人會以為
+        按了沒反應而再按五次。
+        """
+        await _runner_or_404(runner_id)
+        if not _is_human_credential(request, host):
+            raise _err(403, "human_token_required_for_runner_command",
+                       "暫停／恢復／重啟執行器只認人類憑證。")
+        name = ""
+        if x_participant_id:
+            me = await (await app.state.db.execute(
+                "SELECT display_name, role FROM participant WHERE id=?",
+                (x_participant_id,))).fetchone()
+            if me is not None:
+                if (me["role"] or "") != "human":
+                    raise _err(403, "human_actor_required_for_runner_command",
+                               "只有人類成員能下執行器命令。")
+                name = me["display_name"]
+        cmd_id = _uid()
+        await app.state.db.execute(
+            "INSERT INTO runner_command (id, runner_id, command, issued_by,"
+            " issued_by_name, room_id, created_at) VALUES (?,?,?,?,?,?,?)",
+            (cmd_id, runner_id, body.command, actor_key(x_session_key), name,
+             body.room_id, _now()))
+        await _commit_with_retry(app.state.db)
+        return {"command": {"id": cmd_id, "runner_id": runner_id,
+                            "command": body.command, "acked_at": None}}
+
+    @app.get("/api/rooms/{room_id}/runner",
+             dependencies=[Depends(require_auth)])
+    async def room_runner_dashboard(
+        room_id: str,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """給 App 的執行儀表板（§4.4）。房內成員可讀。
+
+        ⚠️ 第一階段**不做 project→房 的對應**：列出所有非 offline 的執行器。
+        對應關係現在只存在執行器的設定裡（`runner/config`，P2），Hub 這一端
+        猜一個出來的話，面板會說某台執行器與這間房有關，而那是它自己編的。
+        """
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        db = app.state.db
+        runners = await (await db.execute(
+            "SELECT * FROM runner WHERE status IN ('online','limited','paused')"
+            " ORDER BY last_seen_at DESC")).fetchall()
+        rows = await (await db.execute(
+            "SELECT status, COUNT(*) AS n FROM agent_run WHERE room_id=?"
+            " GROUP BY status", (room_id,))).fetchall()
+        counts = {r["status"]: r["n"] for r in rows}
+        active = await (await db.execute(
+            "SELECT * FROM agent_run WHERE room_id=?"
+            " AND status IN ('queued','claimed','running','limited')"
+            " ORDER BY priority DESC, position ASC", (room_id,))).fetchall()
+        return {
+            "room_id": room_id,
+            "runners": [_runner_public(r) for r in runners],
+            "counts": counts,
+            "queued": counts.get("queued", 0),
+            "running": counts.get("running", 0),
+            "active_runs": [_run_public(r) for r in active],
+        }
+
+    async def _sweep_runners() -> None:
+        """逾時未 heartbeat 的執行器標 offline，並在它有 run 的 ops 房講一句。
+
+        **只標一次**：條件是 `status != 'offline'`，所以第二輪不會再發。
+        每輪都發的話，一台關掉的執行器會每 30 秒在房裡喊一次。
+        """
+        if cfg.runner_offline_after <= 0:
+            return
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(seconds=cfg.runner_offline_after)).isoformat()
+        rows = await (await app.state.db.execute(
+            "SELECT id FROM runner WHERE status != 'offline'"
+            " AND last_seen_at < ?", (cutoff,))).fetchall()
+        for r in rows:
+            await app.state.db.execute(
+                "UPDATE runner SET status='offline', limit_reason=''"
+                " WHERE id=?", (r["id"],))
+            await _commit_with_retry(app.state.db)
+            await _announce_runner_presence(r["id"], online=False)
+
+    app.state.sweep_runners = _sweep_runners
+
     # ---------- Presence sweeper ----------
 
     async def _sweep_once() -> None:
@@ -12485,6 +13248,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 不經過 sweeper，但一樣會把實體留成孤兒
         await _purge_expired_rooms()
         await _sweep_orphan_blobs()
+        # 逾時未 heartbeat 的執行器標 offline 並在房內講一句（§5.7）
+        await _sweep_runners()
         # 過期 pending 指派
         a_cutoff = (now - timedelta(seconds=cfg.assignment_ttl)).isoformat()
         await db.execute(
@@ -12501,6 +13266,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.execute(
                 "SELECT r.id, r.archive_pending_since FROM room r"
                 " WHERE r.status='active'"
+                # 🚨 **ops 房完全不走自動封存**（REMOTE-OPS-PLAN §4.1）。
+                # 判準是「房內沒有 active agent」，而那對 ops 房**恆真**：
+                # 它的 agent 是單次任務，做完就走，兩筆派工之間房裡本來就
+                # 空無一人。不排除的話，工作房會在第一次收工後開始倒數，
+                # 然後在下一個人要派工時發現它已經封存了。
+                # 連 `archive_pending_since` 的倒數都不啟動——先發一則
+                # 「即將封存」再取消，在畫面上與真的要封存一模一樣
+                " AND COALESCE(r.kind, 'chat') != 'ops'"
                 # ephemeral 兩邊都排除：subagent 是父層的臨時分身，不是
                 # 「房裡有人在做事」的證據。級聯移除（§3.5）讓「只剩 subagent」
                 # 在設計上不可達，這裡是縱深防禦——判定條件不該依賴另一個
@@ -12564,6 +13337,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             await app.state.db.execute(
                 "SELECT id, name, archived_at FROM room WHERE status='archived'"
                 " AND archived_at IS NOT NULL AND archived_at < ?"
+                # ops 房不進 purge（§4.1）。它可以被人手動封存，但「封存夠久
+                # 就永久刪除」對一間工作房是錯的——板、佇列與整串 run 的稽核
+                # 都掛在它身上，而這個動作不可復原
+                " AND COALESCE(kind, 'chat') != 'ops'"
                 " ORDER BY archived_at",
                 (cutoff,),
             )
