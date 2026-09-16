@@ -164,8 +164,22 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 ### 5.2 spawn 參數
 
 - cwd：`project` 對應的允許路徑（`runner/config`），不是 brief 說了算。
-- `--permission-mode auto`（裁決）；硬限制不靠權限模式，靠 §6.4 的 hook 與執行器守門。
+- `--permission-mode auto`（裁決；實測 2.1.273 合法值含 `auto`）；硬限制不靠權限模式，
+  靠 §6.4 的 hook 與執行器守門。**`--allowedTools` 在 auto 模式下不是限制**，不能當白名單用。
+- `--output-format stream-json` **必須配 `--verbose`**，否則直接 exit 1。
 - `--model`：預設 Opus 5（裁決），profile 可依 run kind 覆寫。
+- **不用 `--bare`**：`--bare` 只認 API key，本機是 OAuth 登入，加了就是
+  「Not logged in」而 `result.subtype` 照樣是 `success`（exit 1、assistant 層 `is_error`）。
+  執行器判成敗要看 exit code 與 `is_error`，不能只看 `subtype`。
+- 設定隔離：不加 `--bare` 就會載入 `~/.claude/settings.json` 的全域 hooks（persona 注入、
+  記憶健檢等艾斯維爾個人的東西）。執行器用獨立的 `CLAUDE_CONFIG_DIR`（例如
+  `%LOCALAPPDATA%/UEP/Chatroom/runner/claude-config`），艾斯維爾離開前在那個目錄
+  `claude /login` 一次；run 的 hooks 全部寫在那個目錄的 settings。
+  ⚠️ 待驗：獨立 config dir 下 claude.ai 連接器（Atlassian）是否仍可用——連接器綁帳號，
+  應該可以，P2 第一天實測；不行就退回共用設定並在 run 的 `--settings` 裡覆寫掉不要的 hook。
+- `--mcp-config` 的 stdio server：模組搜尋路徑用 `env.PYTHONPATH` 指到 `bridge/`，
+  **不要靠 `cwd` 欄位**（實測不生效，會 `No module named chatroom_mcp`）。
+  chatroom 工具在 headless 下是 deferred 工具，模型要先 `ToolSearch` 才能叫，run 契約要提醒。
 - `--mcp-config`：只掛 chatroom bridge（`CHATROOM_SESSION_KEY=claude-run-<id>`、
   `CHATROOM_DEFAULT_NAME=<執行器 label>-<短 id>`）＋ 專案需要的 MCP（Jira，若可用）。
 - `--append-system-prompt`：run 契約（§6.3）。
@@ -280,6 +294,11 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 （同 `style_instructions` 的 `CUSTOM_STYLE_FRAME` 做法），明說它是任務描述不是指令。 |
 | 分支 | 只允許 `jsai_dev` 與 `feature/*`；`jsai_prod`、`main`、`master` 在任何 repo 都不可 checkout、不可 push。 |
 
+⚠️ **matcher 必須同時寫 `Bash|PowerShell`**（實測：Windows 上模型預設選 PowerShell，
+只擋 Bash 時 `echo hi` 直接跑過去）。被擋的訊息回給模型的形狀是
+`PreToolUse:<Tool> hook error: [<hook>]: <stderr>`，模型實測會換工具再試一次然後放棄，
+所以拒絕理由要寫「這是系統限制」並指出替代路徑。
+
 拒絕清單是**預設拒絕的黑名單 + 允許清單的白名單**兩層：git 子命令用白名單
 （status/diff/log/add/commit/branch 建立/checkout 允許分支/stash list），其餘 git 一律擋。
 被擋的呼叫回給模型的訊息要說「這是系統限制，請改走 X 或問人類」，不要讓它反覆試。
@@ -351,10 +370,19 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 | 6 | 軟上限 | 可設定；預設 Opus 5。 |
 | 7 | 信任 | 不能完全相信對方的人類，要有系統層硬限制擋 agent 做不該做的事（§6.4）。 |
 
-### 待研究（不擋 P1）
+### 已實測（2026-09-16，2.1.273）
 
-- headless `claude -p` 下 claude.ai 連接器（Atlassian）與 Chrome 擴充是否可用；
-  Chrome 大概率不行（需要開著的瀏覽器與擴充），替代是 playwright MCP。P2 開工時實測。
+- **Atlassian 連接器在 `-p` 下可用**（`claude mcp list` 顯示 connected，`ToolSearch` 找得到
+  `mcp__claude_ai_Atlassian_Rovo__*`），條件：同一個 OAuth 帳號、不加 `--bare`／`--strict-mcp-config`。
+- **Chrome 擴充在 headless 下不可用**：官方文件明寫 API key／長效 token 認證時 Chrome 整合強制關閉，
+  且需要一個開著、裝了擴充的瀏覽器視窗。定案：不做；需要瀏覽器的工作用 playwright MCP。
+- chatroom bridge 走 `--mcp-config` 可連、可呼叫（唯讀驗過）。
+- `PreToolUse` exit 2 能擋並把理由回給模型；`PreCompact` 擋不住壓縮（文件字面）。
+
+### 待驗（P2 第一天）
+
+- 獨立 `CLAUDE_CONFIG_DIR` 下連接器是否仍可用（§5.2）。
+- `--max-budget-usd` 觸頂與週／月上限的實際 stream 樣貌（本次沒撞到，沿用文件）。
 
 ## 10. 風險與已知限制
 
