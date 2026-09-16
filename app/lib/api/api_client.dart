@@ -70,7 +70,16 @@ ApiException translateError(DioException e) {
       }
       // agent 憑證想以人類身分進房。這與房間身分無關，re-join 救不了它
       // ——救它的是「請主持人重發一張給人的邀請碼」
-      if (code == 'human_token_required') {
+      //
+      // 前綴比對而不是等於：遠端派工那組的 code 是
+      // `human_token_required_for_run` / `human_actor_required_for_run` /
+      // `..._for_ops_room` / `..._for_runner_command` / `..._for_run_cancel`
+      // ——每一條都是同一件事（這張憑證／這個身分不是人類），而漏接的後果
+      // 不是「錯誤訊息比較醜」：它們會掉進下面的 ParticipantInvalidException
+      // 而觸發自動 re-join，重新加入一百次也不會把 agent 的 token 變成人的
+      if (code != null &&
+          (code.startsWith('human_token_required') ||
+              code.startsWith('human_actor_required'))) {
         return HumanCredentialRequiredException(_detailMessage(res.data));
       }
       // 板的成員資格與房內身分是兩件事。走 ParticipantInvalidException 的話
