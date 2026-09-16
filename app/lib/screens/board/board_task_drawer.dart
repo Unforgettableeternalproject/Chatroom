@@ -13,6 +13,7 @@ import '../../state/board_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/kind_badge.dart';
+import '../ops/ops_actions.dart';
 import 'board_action_feedback.dart';
 import 'board_move_dialog.dart';
 import 'board_task_edit_dialog.dart';
@@ -791,6 +792,29 @@ extension on _TaskActionBarState {
         child: Text(a.label,
             style: UepText.sans(
                 size: 12.5, color: a.danger ? UepColors.error : s.ink)),
+      ));
+    }
+
+    // 「派工」：把這張卡交給遠端的執行器（REMOTE-OPS-PLAN §6.2）。
+    //
+    // **只在工作房出現**——Hub 對非 ops 房的建單一律 409 `room_not_ops`，
+    // 而板軸（沒有房）連派到哪裡都答不出來。停用留著在這裡沒有意義：
+    // 一般房間裡「派工」不是「現在還不行」，是這件事不存在。
+    final roomId = widget.roomId;
+    final isOps = roomId != null &&
+        (ref.watch(roomDetailProvider(roomId)).value?.room.isOps ?? false);
+    if (isOps) {
+      entries.add(PopupMenuItem<VoidCallback>(
+        value: () => dispatchRun(
+          context,
+          ref,
+          roomId: roomId,
+          targetRef: widget.task.id,
+          targetLabel: '卡：${widget.task.title}',
+          boardId: widget.boardId,
+        ),
+        height: 38,
+        child: Text('派工', style: UepText.sans(size: 12.5, color: s.ink)),
       ));
     }
 

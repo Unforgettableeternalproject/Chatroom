@@ -16,6 +16,7 @@ import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
+import '../ops/ops_actions.dart';
 import 'board_outcome_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
@@ -114,6 +115,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       );
 
   bool get _readOnly => _editability != BoardEditability.editable;
+
+  /// 這塊板是不是掛在工作房底下。派工入口只在那時出現——Hub 對非 ops 房
+  /// 的建單一律 409 `room_not_ops`，其他地方畫出來就是一顆必定失敗的按鈕。
+  ///
+  /// 板軸（Board Library）進來時沒有房，一律 false：那條路上連派到哪間房
+  /// 都答不出來。
+  bool get _isOpsRoom =>
+      widget.roomId != null &&
+      (ref.watch(roomDetailProvider(widget.roomId!)).value?.room.isOps ??
+          false);
 
   String? _selectedObjectiveId;
 
@@ -1399,6 +1410,23 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
                 // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
                 // 有實作、一直沒有呼叫端，於是每一份清單都永遠停在 open
+                // 派工：把整個階段交給遠端的執行器（§6.2 的 `stage` 模板，
+                // 但模板由對話框選）。**收尾／取消的階段不給派**——那一段
+                // 已經結束了，派出去的 agent 會對著一份沒有人在等的工作做
+                if (_isOpsRoom && c.status == 'open') ...[
+                  _BarButton(
+                    label: '派工',
+                    onTap: () => dispatchRun(
+                      context,
+                      ref,
+                      roomId: widget.roomId!,
+                      targetRef: c.id,
+                      targetLabel: '階段：${c.title}',
+                      boardId: _boardIdOrNull ?? '',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 if (c.status == 'open') ...[
                   _BarButton(
                     label: '收尾階段',
