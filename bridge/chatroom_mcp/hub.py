@@ -357,6 +357,37 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "但改不動。",
                 status=status, detail=detail,
             )
+        if code in ("human_token_required_for_ops_room",
+                    "human_token_required_for_run",
+                    "human_token_required_for_runner_command"):
+            # 遠端派工的憑證界線（REMOTE-OPS-PLAN §6.4）。**不是身分問題**：
+            # 重新 join 一百次也不會換一把憑證。執行器手上那把 token 只能
+            # 領單、回報、heartbeat，建房／派工／下命令一律要人類憑證
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只認人類憑證（CHATROOM_HUMAN_TOKEN 或 "
+                   "audience=human 的邀請）。重新加入沒有用——"
+                   "請房內的人類代為執行。",
+                status=status, detail=detail,
+            )
+        if code in ("human_actor_required_for_run",
+                    "human_actor_required_for_run_cancel",
+                    "human_actor_required_for_runner_command"):
+            # 憑證之外的第二層：房內的 agent 成員也不能派工。agent 要開工作
+            # 走任務板，不走派工佇列
+            return HubError(
+                _detail_text(detail)
+                or "只有房內的人類成員能做這件事。要開工作的話請走任務板"
+                   "（chatroom_board_add），不要走派工佇列。",
+                status=status, detail=detail,
+            )
+        if code == "not_your_run":
+            return HubError(
+                _detail_text(detail)
+                or "這筆派工是別台執行器領走的，不能由你回報。"
+                   "先確認手上的 runner_id 是不是領到這一筆的那台。",
+                status=status, detail=detail,
+            )
         if code is None and ("participant" in low or "身分" in text):
             # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
             # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：
@@ -427,6 +458,35 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             return HubError(
                 "這個聊天室已封存，只能讀取、不能寫入。"
                 "若確定要繼續使用，需由人類在 UI 或 API 端解除封存。",
+                status=status, detail=detail,
+            )
+        if code == "room_not_ops":
+            return HubError(
+                "派工只在工作房（kind=ops）成立——一般聊天室沒有佇列，"
+                "也沒有執行器會來領這裡的單。要開工作房需要人類憑證。",
+                status=status, detail=detail,
+            )
+        if code == "run_ref_already_active":
+            return HubError(
+                _detail_text(detail)
+                or "這個目標已經有一筆還沒結束的派工了。重複派工會讓兩個 "
+                   "agent 動同一份工作樹——先看現有那筆的狀態，"
+                   "或等它結束再派。",
+                status=status, detail=detail,
+            )
+        if code == "run_already_finished":
+            return HubError(
+                _detail_text(detail)
+                or "這筆派工已經結束了，沒有東西可以取消。",
+                status=status, detail=detail,
+            )
+        if code == "run_bad_transition":
+            # 狀態機擋下來的轉移。**重試不會成功**——要嘛順序錯了，
+            # 要嘛這筆 run 已經被別人推到終局
+            return HubError(
+                _detail_text(detail)
+                or "派工不能從目前的狀態變成你回報的那個。先讀回這筆 run "
+                   "的現況再決定下一步，不要重試同一個回報。",
                 status=status, detail=detail,
             )
         return HubError(f"操作與 Hub 目前狀態衝突（{text or '409'}）。",

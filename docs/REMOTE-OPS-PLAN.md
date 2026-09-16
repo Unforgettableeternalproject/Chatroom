@@ -88,45 +88,92 @@
 ### 4.2 執行請求 `agent_run`
 
 ```
-agent_run
+agent_run                                       （P1 已落地，欄位以此為準）
   id, room_id, board_id
-  kind          ticket | investigate | stage | scheduled | handoff
+  kind          investigate | ticket | stage | push
   project       允許清單的 key（第一階段只有 ai-website）
-  ref           checklist_id 或 task_id（做哪個階段／哪張卡）
-  brief         人類寫的簡述（限長度；模板化，見 §6）
-  requested_by  actor（人類 participant／actor_key）
+  ref           checklist_id 或 task_id；push 時是 repo key
+  brief         人類寫的簡述（≤2000 字；模板化，見 §6）
+  requested_by / requested_by_actor_key / requested_by_name
+                participant id、持久 actor_key、名字快照。三個都存的理由與
+                board 的 claim_* 相同：participant 隨離房消失，而「誰派的」
+                要在那之後還講得出來，配額也要認得出同一個人
   status        queued | claimed | running | limited | handoff | done | failed | cancelled
   priority, position
   runner_id, claude_session_id, attempt, parent_run_id（交接鏈）, handoff_depth
+  cancel_requested  取消旗標。running 的 cancel **不改狀態**（見下方規則）
   usage_json    最後一次回報的 tokens / cost / turns
   result        收工摘要（agent 自己寫，執行器補 exit 資訊）
+  reason        最後一次轉移的原因（rate_limit / handoff_depth_exceeded …）
   created_at, claimed_at, started_at, ended_at, updated_at
 agent_run_event（稽核串：狀態每一次變化、誰改的、原因）
+  id, run_id, room_id, from_status, to_status, actor, actor_name,
+  reason, detail_json, created_at
 ```
+
+⚠️ 與初稿的差異（2026-09-16 實作時對齊）：
+
+- `kind` **不含 `scheduled` 與 `handoff`**。`scheduled` 是 §4.5 的第二階段，
+  現在建不出來；`handoff` 是**狀態不是類型**——子 run 沿用母 run 的 kind，
+  把它同時當成一種 kind 會讓「這是什麼工作」與「它怎麼來的」混成一欄。
+- `push` 補進 kind 清單（§5.6 本來就有，初稿的 §4.2 漏列）。
+- `agent_run` 帶 `room_id` 外鍵且**隨房刪除**；`runner_command` 的 `room_id`
+  只是 provenance，不隨房走（`_ROOM_ID_NOT_OWNED`）。
 
 規則：
 
-- 一房一佇列，FIFO + priority；同一 `ref` 在 queued/running 時**不得重複**（409）。
-- `cancelled` 只有人類或主持人能下；running 的 cancel 由執行器收到後殺進程，
+- 一房一佇列，priority DESC + position ASC；同一 `ref` 在
+  **queued / claimed / running / limited / handoff** 任一狀態時不得重複（409
+  `run_ref_already_active`）。初稿寫的是「queued/running」，但 claimed 與
+  handoff 同樣還佔著那張卡——漏掉它們等於在交接的空檔開一個重複派工的窗。
+- 配額（§6.4）超過回 **429**，不是 409：409 是「與目前狀態衝突」，而配額是
+  速率限制——client 對 429 的處置是「等一下再來」，對 409 是「換個做法」。
+- `cancelled` 只有人類或主持人能下。**queued 立刻 cancelled；claimed/running/
+  limited 只立 `cancel_requested`，狀態不動**——進程還在跑，Hub 先改狀態的話
+  畫面會說它停了而機器上那個 agent 還在寫檔。執行器在 heartbeat 回應裡拿到
+  `cancel_requested_run_ids[]`，殺完再回報 `cancelled`。
   agent 的卡由既有孤兒化流程處理。
-- `handoff`：run 自己宣告交接，Hub 建子 run（`parent_run_id`），
-  `handoff_depth` 上限預設 5，超過即 `failed` 並通知人類。
+- `handoff`：run 自己宣告交接，Hub 建子 run（`parent_run_id`、
+  `handoff_depth+1`，brief ＝ 原 brief ＋「前一輪 run <id> 已交接，先讀卡
+  <ref>」）。`handoff_depth` 上限預設 5（`run_handoff_max`），超過**不再建
+  子 run**，改把這一輪標成 `failed(handoff_depth_exceeded)` 並 mention 派工者
+  ——留一個 handoff 狀態卻沒有下一棒，在面板上與「正在交接」一模一樣。
+- 狀態機只允許列出的轉移，其餘 409 `run_bad_transition`：
+  `queued→{claimed,cancelled}`、`claimed→{running,limited,failed,cancelled}`、
+  `running→{limited,handoff,done,failed,cancelled}`、
+  `limited→{running,done,failed,cancelled}`；
+  `handoff / done / failed / cancelled` 是終局。
 
 ### 4.3 執行器 `runner`
 
 ```
-runner
+runner                                          （P1 已落地）
   id, host, label, status(online|paused|limited|offline)
   max_parallel（預設 3）, running_count
+  projects      允許的 project key（JSON 陣列）。**白名單**：空的領不到任何單
   limited_until, limit_reason（rate_limit | weekly_limit | manual）
   usage_window_json（近 5 小時累計 tokens/cost，供軟上限）
-  last_seen_at, version
+  dashboard_json（§4.4，Hub 原樣存不解讀）
+  registered_at, last_seen_at, version
+
+runner_command                                  （§5.7，P1 已落地）
+  id, runner_id, command(pause|resume|restart|drain)
+  issued_by, issued_by_name, room_id（provenance）, created_at, acked_at
 ```
 
-- 執行器用 agent 憑證註冊，heartbeat 走 `/api/runners/{id}/heartbeat`（帶狀態），
-  逾時未見即 `offline`，房內 system 訊息通知。
+- 執行器用 agent 憑證註冊（`POST /api/runners/register`），**同 host+label
+  冪等回同一個 id**（partial unique index）：重啟一次就多一列的話，名錄上會
+  排著一串早就不在的執行器，而「離線」的通知會對每個殘影各發一次。
+- heartbeat 走 `/api/runners/{id}/heartbeat`（帶狀態與 `dashboard_json`），
+  回應帶 `commands[]`（取走的同時標 `acked_at`——命令是一次性的）與
+  `cancel_requested_run_ids[]`。逾時（`runner_offline_after`，預設 180 秒）
+  未見即 `offline`，**只標一次**，在該執行器有 run 的 ops 房發 system 訊息
+  並 mention 全部人類；再次 heartbeat 回 online 也發一句。
 - 領單：`POST /api/runners/{id}/claim` 由 Hub 用單一 `UPDATE … RETURNING`
   發放（沿用領號教訓：兩句之間的 await 會讓兩個執行器領到同一筆）。
+  CAS 判定用 `fetchone() is not None`，不用 `rowcount`。沒單可領回 **204**。
+  `paused` / `limited` / `offline` 的執行器一律 204——停收就是停收，不靠
+  執行器自己記得別問。
 
 ### 4.4 儀表板狀態 `runner.dashboard_json`
 
@@ -322,9 +369,21 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
   排隊上限、同 ref 不重複）、列 run、取消、執行器註冊／heartbeat（帶 `dashboard_json`）／
   claim／回報／取 `runner_command`；人類下 pause／resume／restart／drain。
   稽核串完整性測試（每個狀態變化一筆 event）。
-- 房內 system 訊息與 mention 規則；`/updates` 加返回條件（不是只加欄位，
-  沿用 board_seq 那次的教訓）。
+- 房內 system 訊息與 mention 規則。**`/updates` 這一輪不動**（09/16 決定）：
+  那條端點的欄位與「什麼時候該回」綁死，只加欄位不加返回條件等於加了一個
+  永遠不會被看見的欄位（board_seq 那次的教訓）。run 的狀態變化靠 system
+  訊息進訊息流就夠，儀表板由 App 輪詢 `GET /api/rooms/{rid}/runner`。
+  決定寫在 `app.py` 的 Remote Ops 區塊開頭與 `create_run` 的 docstring。
 - 驗收：pytest 全綠；並發 claim 只發一筆；ops 房在無 agent 時不封存。
+
+**P1 實際落地（2026-09-16）**：`tests/test_remote_ops.py` 23 條。端點：
+`POST /api/rooms/{rid}/runs`、`GET /api/rooms/{rid}/runs`、`GET /api/runs/{id}`、
+`POST /api/runs/{id}/cancel`、`POST /api/runs/{id}/report`、
+`POST /api/runners/register`、`POST /api/runners/{id}/heartbeat`、
+`POST /api/runners/{id}/claim`、`POST /api/runners/{id}/commands`、
+`GET /api/rooms/{rid}/runner`。設定：`CHATROOM_RUN_DAILY_QUOTA`(20)、
+`CHATROOM_RUN_QUEUE_CAP`(5)、`CHATROOM_RUN_HANDOFF_MAX`(5)、
+`CHATROOM_RUNNER_OFFLINE_AFTER`(180)。
 
 ### P2 執行器
 
