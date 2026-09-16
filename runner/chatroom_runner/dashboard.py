@@ -1,0 +1,96 @@
+"""儀表板狀態（REMOTE-OPS-PLAN §4.4）。
+
+Hub **原樣存、不解讀**，App 才是讀的人。所以形狀的權威在這裡——加一格只要改
+這個檔與 App，不必動 Hub。
+
+最重要的一格是「尚未推送的 commit」：本機沒有人類，push 是房內人類從儀表板
+按的（§5.6），那份 sha 清單同時是 push run 的比對基準。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import gitops
+from .config import RunnerConfig, branch_allowed
+
+
+@dataclass
+class RunView:
+    """面板上一筆進行中的 run。``context_tokens`` 是**估算**（§10）。"""
+
+    run_id: str
+    kind: str = ""
+    ref: str = ""
+    project: str = ""
+    repo: str = ""
+    started_at: str = ""
+    turns: int = 0
+    context_tokens: int = 0
+
+    def to_dict(self) -> dict:
+        return {"run_id": self.run_id, "kind": self.kind, "ref": self.ref,
+                "project": self.project, "repo": self.repo,
+                "started_at": self.started_at, "turns": self.turns,
+                "context_tokens": self.context_tokens}
+
+
+@dataclass
+class RunnerRuntime:
+    """執行器自己的狀態，heartbeat 時一起送。"""
+
+    version: str = ""
+    started_at: str = ""
+    last_restart_reason: str = ""
+    selfcheck: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"version": self.version, "started_at": self.started_at,
+                "last_restart_reason": self.last_restart_reason,
+                "selfcheck_problems": list(self.selfcheck)}
+
+
+async def repo_view(path: Path, push_branches: list[str]) -> dict:
+    """一個 repo 的現況。git 壞掉時把錯誤**放進欄位**而不是丟例外——
+    儀表板少一格與「這台機器上的 repo 讀不到了」不是同一件事。"""
+    branch = await gitops.current_branch(path)
+    if not branch:
+        return {"path": str(path), "branch": "", "error": "無法讀取分支",
+                "dirty": False, "unpushed_count": 0, "unpushed": [],
+                "pushable": False}
+    commits = await gitops.unpushed(path, branch)
+    dirty = await gitops.status_porcelain(path)
+    return {
+        "path": str(path),
+        "branch": branch,
+        "dirty": bool(dirty),
+        "dirty_count": len(dirty),
+        "unpushed_count": len(commits),
+        "unpushed": [c.to_dict() for c in commits],
+        # 面板上的「推送」鈕要不要亮：分支不在可推清單裡就不該亮
+        "pushable": branch_allowed(branch, push_branches),
+    }
+
+
+async def build(cfg: RunnerConfig, usage_window: dict, status: str,
+                limited_until: str | None, limit_reason: str,
+                runs: list[RunView], queued_count: int,
+                runtime: RunnerRuntime) -> dict:
+    repos: dict[str, dict] = {}
+    for project in cfg.projects.values():
+        for name, repo in project.repos.items():
+            repos[f"{project.key}/{name}"] = await repo_view(
+                repo.path, repo.push_branches)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "repos": repos,
+        "usage": usage_window,
+        "limits": {"status": status, "limited_until": limited_until,
+                   "limit_reason": limit_reason},
+        "runs": {"running": [r.to_dict() for r in runs],
+                 "queued_count": queued_count,
+                 "max_parallel": cfg.max_parallel},
+        "runner": runtime.to_dict(),
+    }
