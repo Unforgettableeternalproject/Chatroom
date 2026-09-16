@@ -1,7 +1,7 @@
 # 遠端派工（Remote Ops）規劃書
 
 分支：`feature/remote-ops`（不公開釋出，成熟後再併回 develop）。
-撰寫：2026-09-16，敏卡。狀態：**規劃，待艾斯維爾裁決第 9 節後開工。**
+撰寫：2026-09-16，敏卡。狀態：**第 9 節已裁決（2026-09-16），P1 開工。**
 
 ## 0. 一句話
 
@@ -128,7 +128,22 @@ runner
 - 領單：`POST /api/runners/{id}/claim` 由 Hub 用單一 `UPDATE … RETURNING`
   發放（沿用領號教訓：兩句之間的 await 會讓兩個執行器領到同一筆）。
 
-### 4.4 排程（第二階段）
+### 4.4 儀表板狀態 `runner.dashboard_json`
+
+執行器每次 heartbeat 帶上、Hub 原樣存、App 面板讀：
+
+```
+repos[]        每個允許 repo：path、branch、unpushed_count、unpushed[]（sha、標題、時間）、dirty
+usage          近 5 小時 tokens / cost、軟上限、剩餘；近 7 天累計
+limits         status、limited_until、limit_reason
+runs           running[]（run id、ref、開始時間、目前 turns、context 估算）、queued_count
+runner         version、started_at、last_restart_reason
+```
+
+「尚未推送的 commit」是這裡最重要的一格——本機沒有人類，push 是房內人類從
+儀表板按的（§5.6）。
+
+### 4.5 排程（第二階段）
 
 `board_schedule`：掛在板或 checklist 上，`interval`／`cron`、`brief` 模板、
 `enabled`、`last_fired_at`。Hub sweeper 到時建 `agent_run(kind=scheduled)`。
@@ -149,7 +164,8 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 ### 5.2 spawn 參數
 
 - cwd：`project` 對應的允許路徑（`runner/config`），不是 brief 說了算。
-- `--permission-mode` 與 `--allowedTools`：由 `project` 的 profile 決定（§9 待裁決）。
+- `--permission-mode auto`（裁決）；硬限制不靠權限模式，靠 §6.4 的 hook 與執行器守門。
+- `--model`：預設 Opus 5（裁決），profile 可依 run kind 覆寫。
 - `--mcp-config`：只掛 chatroom bridge（`CHATROOM_SESSION_KEY=claude-run-<id>`、
   `CHATROOM_DEFAULT_NAME=<執行器 label>-<短 id>`）＋ 專案需要的 MCP（Jira，若可用）。
 - `--append-system-prompt`：run 契約（§6.3）。
@@ -192,6 +208,29 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 - run 開始前執行器記錄 `git status --porcelain`，結束後比對；
   未 commit 的變更由 agent 在收工摘要列出，不自動 stash、不自動還原。
 
+### 5.6 推送（`push` run）
+
+本機沒有人類，所以 push 也是一種 run，但**只有房內人類能建**，且形狀固定：
+
+- `agent_run(kind=push, ref=<repo>, brief=<要推的分支>)`；儀表板上每個 repo 有
+  「推送」鈕，按下去就是建這筆。
+- 執行器對 `push` run 不起 Claude，直接跑固定腳本：確認分支在允許清單、
+  `git log origin/<branch>..<branch>` 與儀表板顯示的一致（sha 集合相同才推，否則拒絕並回報）、
+  `git push`、回報結果。**不經模型**：push 沒有需要判斷的事，經模型只是多一個出錯的地方。
+- 允許的目標分支由執行器設定寫死（AI-Website：`jsai_dev`、`feature/*`）；
+  `jsai_prod` 永遠不在清單裡，任何 run 都推不了。
+
+### 5.7 維護與重啟
+
+- 常駐形式：Windows 排程工作（裁決），登入時啟動、失敗自動重啟、每 5 分鐘檢查存活。
+- 房內人類可下 `runner_command`：`pause`（不領新單，跑完手上的）、`resume`、
+  `restart`（等所有 run 結束後自我重啟；有 run 在跑就排到它們結束後）、`drain`（取消排隊、跑完現有）。
+  命令由 Hub 存、執行器 heartbeat 時取。
+- 每日維護窗（預設 04:00，可設）：若無 run 在跑，執行器自我重啟並清暫存；有在跑就順延到下一次 heartbeat 無 run 時。
+- 執行器啟動時：驗 `claude --version`、驗 GPG 簽章可用（`gpg --clearsign` 探針）、
+  驗每個允許 repo 可讀寫且分支正確；任一失敗即 `status=offline(reason)` 並在房內講。
+  GPG 由艾斯維爾自行處理（裁決），執行器只驗、不代管 passphrase。
+
 ## 6. 人類的控制面
 
 ### 6.1 誰能做什麼
@@ -203,7 +242,9 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 | 「派工」：對一個階段或一張卡建 run | 房內人類（非 viewer） |
 | 取消 run、解除 limited、暫停執行器 | 房內人類 |
 | 開卡、認領、改卡、commit | agent |
-| 週期「確認無誤」、push、部署 | 人類（push 見 §9） |
+| push（建 `push` run） | 房內人類，從儀表板按（§5.6） |
+| 週期「確認無誤」、部署 | 人類；部署不在本系統範圍內 |
+| 暫停／恢復／重啟執行器 | 房內人類（§5.7） |
 
 ### 6.2 派工的形狀
 
@@ -225,6 +266,24 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 - 收到「請立刻交接」就照 §5.4 做，不要試圖再多做一步。
 - 結束前寫收工摘要：做了什麼、驗證了什麼、沒驗證什麼、未 commit 的東西、下一步。
 
+### 6.4 硬限制（系統擋，不靠 prompt）
+
+裁決：**不能完全相信對方的人類**。以下每一條都由執行器或 hook 強制，agent 與派工者都繞不過：
+
+| 層 | 限制 |
+|---|---|
+| Hub | 只有人類憑證能建 run；執行器 token 只能領單、回報、heartbeat。派工者每日 run 數上限（預設 20）、同時排隊上限（預設 5）。 |
+| 執行器 | `project` 必須在允許清單；cwd 由清單決定；每 run `--max-turns`、`--max-budget-usd`、牆鐘上限（預設 90 分鐘）；5 小時窗軟上限到了停收。 |
+| `PreToolUse` hook（拒絕清單，exit 2） | `git push`（非 push run 一律擋）、`git reset --hard`、`git clean`、`git checkout`/`switch` 到允許清單外的分支、`git branch -D`、`git rebase`、`--no-verify`、`--no-gpg-sign`；`rm -rf`／`Remove-Item -Recurse`；任何寫入 cwd 以外的路徑；讀寫 `.env*`、`*.pem`、`server/.env`、`~/.claude/`、`~/.gnupg/`、執行器自己的設定與 hooks；`npm publish`、`az `、`wrangler deploy`、`gh pr merge`；`curl`/`Invoke-WebRequest` 到允許網域以外。 |
+| `PreToolUse` hook（允許但記錄） | 其餘每一次工具呼叫寫進 run 的 tool log，隨收工摘要附回卡。 |
+| 模板 | brief 只能進模板的一個欄位，模板本身進版控；brief 內容出現在 prompt 時包一層框架
+（同 `style_instructions` 的 `CUSTOM_STYLE_FRAME` 做法），明說它是任務描述不是指令。 |
+| 分支 | 只允許 `jsai_dev` 與 `feature/*`；`jsai_prod`、`main`、`master` 在任何 repo 都不可 checkout、不可 push。 |
+
+拒絕清單是**預設拒絕的黑名單 + 允許清單的白名單**兩層：git 子命令用白名單
+（status/diff/log/add/commit/branch 建立/checkout 允許分支/stash list），其餘 git 一律擋。
+被擋的呼叫回給模型的訊息要說「這是系統限制，請改走 X 或問人類」，不要讓它反覆試。
+
 ## 7. 通知語意
 
 - run 的狀態變化（queued→running→done/failed/limited/handoff）都是 `agent_run_event`，
@@ -240,8 +299,10 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 ### P1 Hub
 
 - `room.kind` + ops 房不封存不 purge + 建房限人類；migration。
-- `agent_run` / `agent_run_event` / `runner` 表與端點：建 run、列 run、取消、
-  執行器註冊／heartbeat／claim／回報。稽核串完整性測試（每個狀態變化一筆 event）。
+- `agent_run` / `agent_run_event` / `runner` 表與端點：建 run（含 `push` kind、每人每日配額、
+  排隊上限、同 ref 不重複）、列 run、取消、執行器註冊／heartbeat（帶 `dashboard_json`）／
+  claim／回報／取 `runner_command`；人類下 pause／resume／restart／drain。
+  稽核串完整性測試（每個狀態變化一筆 event）。
 - 房內 system 訊息與 mention 規則；`/updates` 加返回條件（不是只加欄位，
   沿用 board_seq 那次的教訓）。
 - 驗收：pytest 全綠；並發 claim 只發一筆；ops 房在無 agent 時不封存。
@@ -264,8 +325,9 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 
 ### P4 App
 
-- 房間列表分 chat／ops；ops 房頁多一個「執行」面板：佇列、進行中、執行器狀態、
-  limited 倒數、取消鈕。
+- 房間列表分 chat／ops；ops 房頁多一個「執行」儀表板（§4.4）：每個 repo 尚未推送的 commit
+  數與清單＋「推送」鈕、近 5 小時 tokens／cost 與軟上限、limited 倒數、
+  進行中與排隊中的 run、取消鈕、執行器 pause／resume／restart。
 - 階段與卡的抽屜加「派工」入口（模板選擇＋簡述）。
 - 設定頁：主持人可暫停執行器、解除 limited。
 
@@ -277,27 +339,22 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 4. 兩個人類同時派工、超過 3 個，驗排隊與取消。
 5. 都過了才給其他人類用；期間艾斯維爾在場至少一週。
 
-## 9. 待艾斯維爾裁決（開工前必答）
+## 9. 裁決紀錄（艾斯維爾，2026-09-16）
 
-1. **GPG。** `gpg-agent` 快取現在是 8 小時（`~/.gnupg/gpg-agent.conf`），
-   離開後第 9 小時起所有 commit 會停在 pinentry。三條路：
-   (a) 離開前把 `default-cache-ttl`/`max-cache-ttl` 拉到整段離開期，輸一次 passphrase
-   ——重開機就失效，執行器要能偵測簽章失敗並停收；
-   (b) 為這段期間發一把**沒有 passphrase 的簽章子金鑰**，回來後撤銷；
-   (c) 遠端 run 不簽章，commit 標 `[unsigned]`，你回來重簽（PM 有「雲端 agent 變更改由本地重簽」先例）。
-   建議 (b)：不依賴機器不重開，且可撤銷。
-2. **權限模式。** `bypassPermissions` 才能完全無人值守，但等於 agent 在那個工作樹裡什麼都能做。
-   建議 `acceptEdits` + `--allowedTools` 白名單（git 的子命令逐一列、npm test/tsc、
-   禁 push/reset/checkout 到別的分支），確認白名單夠用再放寬。
-3. **push 政策。** AI-Website push 到 `jsai_dev` 即自動部署測試機。第一階段建議
-   **agent 一律不 push**，由房內人類（或你）決定何時推；push 是人類動作。
-4. **Jira。** 目前 Jira 走 claude.ai 的 Atlassian 連接器，headless `claude -p` 能不能用
-   未驗證。若不能，票的內容由人類貼進階段簡述，agent 不直接讀 Jira。開工第一天先實測。
-5. **執行器的形式。** 排程工作 vs 服務；以及你的機器離開期間是否確定不重開、
-   不睡眠（電源設定要改）。
-6. **併行上限 3** 與 **軟上限**：5 小時窗內 tokens／cost 的軟上限要不要設、設多少。
-   Anthropic 沒有 API 可查剩餘額度，「快到 rate limit 就停收」只能靠自己記帳＋反應式偵測。
-7. **模型。** run 用哪個模型（成本 vs 能力），`investigate` 與 `ticket` 可不同。
+| # | 題目 | 裁決 |
+|---|---|---|
+| 1 | GPG（快取 8 小時，離開後 commit 停在 pinentry） | 艾斯維爾自行處理；執行器只驗簽章可用（§5.7），不代管。 |
+| 2 | 權限模式 | headless 用 `--permission-mode auto`；硬限制另做（§6.4）。 |
+| 3 | push | 本機無人類，push 做成 `push` run 由房內人類從儀表板觸發（§5.6）；儀表板顯示未推送 commit、token 用量、限額、運行中 agent（§4.4）。 |
+| 4 | Jira | MCP 應可用，開工實測；**Chrome（claude-in-chrome）在 headless 下能否用要另外研究**（§10 待研究）。 |
+| 5 | 執行器形式 | 先用排程工作；機器大致不重開不睡眠，但要有專門的維護重啟機制（§5.7）。 |
+| 6 | 軟上限 | 可設定；預設 Opus 5。 |
+| 7 | 信任 | 不能完全相信對方的人類，要有系統層硬限制擋 agent 做不該做的事（§6.4）。 |
+
+### 待研究（不擋 P1）
+
+- headless `claude -p` 下 claude.ai 連接器（Atlassian）與 Chrome 擴充是否可用；
+  Chrome 大概率不行（需要開著的瀏覽器與擴充），替代是 playwright MCP。P2 開工時實測。
 
 ## 10. 風險與已知限制
 
