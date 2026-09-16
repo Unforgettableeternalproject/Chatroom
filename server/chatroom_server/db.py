@@ -11,6 +11,13 @@ CREATE TABLE IF NOT EXISTS room (
     name        TEXT NOT NULL,
     topic       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'active',   -- active / archived
+    -- 房間類型：chat（一般對話，預設）/ ops（遠端派工的工作房）。
+    -- ops 房**不自動封存、不進 purge**：它的存在理由是「隨時可以派工」，
+    -- 而自動封存的判準是「房內沒有 active agent」——那對 ops 房恆真
+    -- （agent 是單次任務，做完就走），於是它每次都會在無人派工時被收掉。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**（board_task.moved_to
+    -- 的教訓）：舊 db 靠 migration 補欄，而這份 CREATE TABLE 是新庫的來源
+    kind        TEXT NOT NULL DEFAULT 'chat',
     -- public / private。private＝對話鎖定：不在別人的房間列表裡出現，
     -- 也不能沒有邀請就加入。這是**可見性**，不是加密——拿得到 room_id
     -- 又已經是成員的人照樣讀得到，它擋的是「逛到」與「自己走進來」
@@ -699,6 +706,108 @@ CREATE INDEX IF NOT EXISTS idx_board_watch_actor
 
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
+
+-- ── 遠端派工（Remote Ops，REMOTE-OPS-PLAN §4）────────────────────────────
+--
+-- Hub 是佇列與狀態的**唯一真相**，執行器只是笨執行者：領一筆、起進程、
+-- 回報、領下一筆。執行器重啟不丟佇列，Hub 看得到誰在跑、誰在排、限額狀態。
+
+CREATE TABLE IF NOT EXISTS agent_run (
+    id            TEXT PRIMARY KEY,
+    room_id       TEXT NOT NULL REFERENCES room(id),
+    board_id      TEXT NOT NULL DEFAULT '',
+    -- investigate | ticket | stage | push（scheduled 留給 P2 的排程）
+    kind          TEXT NOT NULL,
+    project       TEXT NOT NULL DEFAULT '',
+    -- checklist_id / task_id，push 時是 repo key
+    ref           TEXT NOT NULL DEFAULT '',
+    brief         TEXT NOT NULL DEFAULT '',
+    -- 派工者。participant 會隨離房消失，所以**三個都存**：id 給當下的畫面、
+    -- actor_key 給「這是同一個人回來了」、名字快照給事後顯示
+    requested_by           TEXT NOT NULL DEFAULT '',
+    requested_by_actor_key TEXT NOT NULL DEFAULT '',
+    requested_by_name      TEXT NOT NULL DEFAULT '',
+    -- queued | claimed | running | limited | handoff | done | failed | cancelled
+    status        TEXT NOT NULL DEFAULT 'queued',
+    priority      INTEGER NOT NULL DEFAULT 0,
+    position      INTEGER NOT NULL DEFAULT 0,
+    runner_id     TEXT NOT NULL DEFAULT '',
+    claude_session_id TEXT NOT NULL DEFAULT '',
+    attempt       INTEGER NOT NULL DEFAULT 0,
+    parent_run_id TEXT NOT NULL DEFAULT '',
+    handoff_depth INTEGER NOT NULL DEFAULT 0,
+    -- 取消請求。running 的 run 不能在 Hub 這一端直接殺，只能立旗標讓執行器
+    -- 在下一次 heartbeat 收走——**狀態不先改**，否則畫面會說它停了而進程還在
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    usage_json    TEXT NOT NULL DEFAULT '{}',
+    result        TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    claimed_at    TEXT,
+    started_at    TEXT,
+    ended_at      TEXT,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_room ON agent_run(room_id, status);
+-- 領單的排序鍵：priority 高的先、同 priority 先進先出
+CREATE INDEX IF NOT EXISTS idx_agent_run_queue
+    ON agent_run(status, priority DESC, position);
+
+-- 稽核串：狀態的**每一次**變化都留一筆。缺一筆就是一條看起來完整、
+-- 實際上有洞的稽核串（board_event 的教訓）
+CREATE TABLE IF NOT EXISTS agent_run_event (
+    id          TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL REFERENCES agent_run(id),
+    room_id     TEXT NOT NULL,
+    from_status TEXT NOT NULL DEFAULT '',
+    to_status   TEXT NOT NULL,
+    actor       TEXT NOT NULL DEFAULT '',
+    actor_name  TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_event_run
+    ON agent_run_event(run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS runner (
+    id            TEXT PRIMARY KEY,
+    host          TEXT NOT NULL,
+    label         TEXT NOT NULL DEFAULT '',
+    -- online | paused | limited | offline
+    status        TEXT NOT NULL DEFAULT 'online',
+    max_parallel  INTEGER NOT NULL DEFAULT 3,
+    running_count INTEGER NOT NULL DEFAULT 0,
+    -- 允許的 project key（JSON 陣列）。領單時據此過濾
+    projects      TEXT NOT NULL DEFAULT '[]',
+    limited_until TEXT,
+    limit_reason  TEXT NOT NULL DEFAULT '',
+    usage_window_json TEXT NOT NULL DEFAULT '{}',
+    -- 儀表板狀態（§4.4）：執行器每次 heartbeat 帶上，Hub **原樣存**不解讀
+    dashboard_json TEXT NOT NULL DEFAULT '{}',
+    version       TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
+-- 同 host+label 冪等：執行器重啟不該在名錄上多長一列
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_host_label
+    ON runner(host, label);
+
+CREATE TABLE IF NOT EXISTS runner_command (
+    id          TEXT PRIMARY KEY,
+    runner_id   TEXT NOT NULL REFERENCES runner(id),
+    -- pause | resume | restart | drain
+    command     TEXT NOT NULL,
+    issued_by   TEXT NOT NULL DEFAULT '',
+    issued_by_name TEXT NOT NULL DEFAULT '',
+    -- 從哪間房下的命令。**只是 provenance，沒有外鍵**：命令屬於執行器，
+    -- 房刪掉不代表這筆命令的歷史要跟著消失（board_task.source_room_id 同理）
+    room_id     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    acked_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_runner_command_pending
+    ON runner_command(runner_id, acked_at);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
@@ -901,6 +1010,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 了，事後查不回來。空字串／NULL＝沒發生過這件事
     ("room", "deleted_board_name", "deleted_board_name TEXT NOT NULL DEFAULT ''"),
     ("room", "deleted_board_at", "deleted_board_at TEXT"),
+    # 房間類型（REMOTE-OPS-PLAN §4.1）。**既有房一律 chat**——那正是這一欄
+    # 存在之前的實際行為（所有房都走「無 active agent 即自動封存」）。
+    # 反過來預設成 ops 會讓整個 Hub 上的房間全部停止自動封存，而沒有任何
+    # 地方會報錯。⚠️ 這一欄在 SCHEMA 的 CREATE TABLE 也有一份，兩邊都要改
+    ("room", "kind", "kind TEXT NOT NULL DEFAULT 'chat'"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

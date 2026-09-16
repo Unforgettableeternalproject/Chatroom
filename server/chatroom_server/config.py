@@ -184,5 +184,31 @@ class Config:
             "CHATROOM_DEBUG_ENDPOINTS", "0").strip().lower()
         in ("1", "true", "yes", "on")
     )
+    # ── 遠端派工（Remote Ops，REMOTE-OPS-PLAN §6.4）────────────────────
+    #
+    # 這四個是**系統層的硬限制**，不是建議值：派工的人不一定是這台 Hub 的
+    # 主持人，而「不能完全相信對方的人類」是 09/16 的裁決。
+    #
+    # 每個派工者每日可以建幾筆 run。日界線用 UTC 的當日（與 created_at 同
+    # 一個時區基準），不做本地時區——換算會讓兩端對「今天」的認知不一致
+    run_daily_quota: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_DAILY_QUOTA", "20"))
+    )
+    # 一間 ops 房同時排隊（queued）的 run 上限。排隊爆掉不是資源問題，
+    # 是「有人在亂按」的訊號——擋在建立那一刻才看得出因果
+    run_queue_cap: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_QUEUE_CAP", "5"))
+    )
+    # 交接鏈的深度上限。超過即 failed 並 mention 派工者——無上限的交接鏈
+    # 是一個會自己續命的迴圈，而遠端沒有人看著
+    run_handoff_max: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_HANDOFF_MAX", "5"))
+    )
+    # 執行器多久沒 heartbeat 就標 offline（秒）。取 heartbeat 週期的數倍
+    # 餘裕：偶爾一次網路抖動不該讓房裡收到一則「執行器離線」
+    runner_offline_after: float = field(
+        default_factory=lambda: float(
+            os.environ.get("CHATROOM_RUNNER_OFFLINE_AFTER", "180"))
+    )
     # long-poll 最長掛起秒數上限
     max_poll_timeout: float = 55.0
