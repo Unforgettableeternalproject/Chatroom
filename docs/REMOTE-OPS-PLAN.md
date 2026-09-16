@@ -425,6 +425,55 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
   開機自起、崩潰重啟、log 落檔（`%LOCALAPPDATA%/UEP/Chatroom/runner/`）。
 - 驗收：對測試 Hub（8788）跑一個 `investigate` run，agent 真的進房、讀卡、回報、結束。
 
+**P2 實際落地（2026-09-16）**：`runner/`，`runner/tests` 110 條（`pytest.ini`
+的 `testpaths`／`pythonpath` 各加一項）。模組：`config`（JSON 設定）、
+`hub`（Hub client + 本機 `state.json`）、`loop`（主迴圈、自檢、命令、維護窗）、
+`run`（spawn／判定／push／工作樹守衛）、`stream`（事件解析）、`guard`＋
+`hooks/`（硬限制）、`dashboard`、`usage`（sqlite 用量視窗）、`gitops`。
+常駐用 `runner/install-task.ps1`（只建工作不啟動）。
+
+與前面幾節的差異（**實作為準**）：
+
+- **退出碼是與排程工作的契約**：0 正常、1 自檢沒過、2 設定有問題、
+  **75 請立刻重新拉起**（維護窗與 `restart` 命令）。執行器不自己 re-exec——
+  壞掉的那一次自己就沒有人重試了。自檢沒過也**直接退場**，不留一台「在線
+  但什麼都不做」的執行器在名錄上。
+- **`drain` 不重啟**：停收新單、跑完手上的，然後停在 `paused(draining)` 等
+  `resume`。排隊中的單**留在 Hub**（取消只有人類能下，§6.1），執行器不代為
+  取消。§5.7 的「取消排隊」要由人類在面板上做。
+- **維護窗在 claim 之前判定**：到點、無 run 在跑、當天還沒做過就退 75。有 run
+  就順延到下一次心跳。
+- **命令改了狀態要立刻補一次 heartbeat**：命令是在心跳的**回應**裡拿到的，
+  Hub 手上還是舊狀態，而它對 `paused` 的執行器一律回 204——人按了恢復，
+  畫面上卻要再等一個心跳才動。
+- **一筆 run 在哪個 repo 做**（§5.2 只寫了「cwd 由清單決定」，沒寫多 repo 時
+  怎麼挑）：`push` 看 `ref`；brief 有 `repo: <名稱>` 用那個；否則用
+  `default_repo`；都沒有就 `failed`。**執行器不猜**。
+- **`push` run 一定要帶 sha 清單**：brief 的形狀是 `branch: <分支>` + 每行一個
+  sha。清單缺就拒推（`push_sha_list_missing`），sha 集合或**顆數**不一致也拒
+  （`push_sha_mismatch`）——只比「每個期待的都在」的話，多出來的那幾顆會被一
+  起推上去，而按鈕的人以為推的是畫面上那幾顆。
+- **rate limit 退避用完就 `failed(rate_limit_exhausted)`**，不無限續跑；
+  每一階退避都 report 一次 `limited`（房裡唯一看得到「它還活著、只是在等」的
+  地方），續跑走 `--resume`。
+- **hook 的 git 白名單**比 §6.4 多三個唯讀項：`show`、`rev-parse`、`ls-files`，
+  另加 `remote -v/show/get-url` 與 `config --get/--list`。多擋了
+  `git checkout -- <路徑>`（會吃掉未 commit 的修改）與所有帶 `-r` 的 `rm`。
+- **守衛設定讀不到時 hook 一律擋**：放行的話整個 §6.4 會靜默失效，而那在 log
+  上與「這次沒有違規」長得一模一樣。
+- **儀表板**（§4.4）：`repos` 以 `<project>/<repo>` 為鍵，每格多了 `pushable`
+  （分支在可推清單裡才亮鈕）與 `dirty_count`；`runner` 多了
+  `selfcheck_problems`。**「近 7 天累計」沒做**——只有 5 小時窗，那是軟上限
+  要用的數字，七天累計目前沒有讀的人。
+- `require_gpg` 可關（預設開）：只有明知這台機器不簽章時才關。
+- ⚠️ **§1 說 AI-Website 是四個 repo（含 JSAI-Skills），§5.5 說三個。**
+  `runner/config.example.json` 先寫三個（JSAI-Web／JSAI-API／JSAI-Functions），
+  要不要加第四個等艾斯維爾確認。
+
+**待驗（只能實機）**：獨立 `CLAUDE_CONFIG_DIR` 下 claude.ai 連接器是否仍可用；
+`--max-budget-usd` 觸頂與週／月上限的真實 stream 樣貌（測試用的是依文件寫的
+假事件）；排程工作對退出碼 75 的重啟行為。
+
 ### P3 Bridge
 
 - `chatroom_run_request`（給 Codex／其他 agent 也能派工）、`chatroom_runs`（查佇列）、
