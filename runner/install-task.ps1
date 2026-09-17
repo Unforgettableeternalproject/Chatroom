@@ -48,8 +48,11 @@ $action = New-ScheduledTaskAction `
     -Argument "-m chatroom_runner --config `"$ConfigPath`"" `
     -WorkingDirectory $RepoRoot
 
+# 從 Git Bash 起 pwsh 時 $env:USERNAME 可能是空的，會讓 -User 轉型失敗
+$user = if ($env:USERNAME) { $env:USERNAME } else { [Environment]::UserName }
+
 $triggers = @(
-    New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME,
+    New-ScheduledTaskTrigger -AtLogOn -User $user,
     # 存活檢查：工作已經在跑時這個觸發會被 IgnoreNew 擋掉，等於「沒跑才拉起來」
     (New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 5))
@@ -61,7 +64,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 999 -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -MultipleInstances IgnoreNew
 
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+$principal = New-ScheduledTaskPrincipal -UserId $user `
     -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $action `
