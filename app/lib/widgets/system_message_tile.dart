@@ -4,12 +4,28 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
 import '../models/message.dart';
+import 'kind_badge.dart';
+import 'markdown_body.dart';
+
+/// 這則 system 訊息是不是「一段內容」而不是「一行通知」。
+///
+/// run 的收工摘要走 system 訊息進房（REMOTE-OPS-PLAN §12 待辦 2），而它是
+/// 一整段 Markdown。塞進髮絲線中間那行置中 mono 小字裡，字小、標題不渲染，
+/// 換行後每一行的縮排還會把內容推出訊息框——**看得到但讀不了**。
+///
+/// 門檻刻意寬鬆：誤判成區塊的代價是一行通知變大一點，誤判成一行的代價是
+/// 一份報告讀不到。
+bool systemMessageNeedsBlock(String content) =>
+    content.contains('\n') || content.contains('###') || content.length > 200;
 
 /// system 訊息：兩側髮絲線 + mono 小字（設計稿樣式），
 /// 與一般發言視覺明顯不同（P3-06 條件 3）。
 ///
 /// 「收據」是例外——提問的答案與釘選通知帶著**內容**，塞進髮絲線中間的
 /// 一行小字會被截斷成沒有用的東西。那類走 [_ReceiptTile]。
+///
+/// 帶著整段 Markdown 的（run 的收工摘要）走 [_BlockTile]，判定見
+/// [systemMessageNeedsBlock]。
 class SystemMessageTile extends StatelessWidget {
   const SystemMessageTile({super.key, required this.message});
 
@@ -18,6 +34,9 @@ class SystemMessageTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.isReceipt) return _ReceiptTile(message: message);
+    if (systemMessageNeedsBlock(message.content)) {
+      return _BlockTile(message: message);
+    }
     final s = context.uep;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -102,6 +121,49 @@ class _ReceiptTile extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 帶內容的 system 訊息（run 的收工摘要是主要來源）。
+///
+/// 靠左、正常字級、Markdown 渲染——它是要被讀完的東西，不是掃過去的噪音。
+/// 寬度完全交給父層：內部沒有任何 `IntrinsicWidth`／固定寬，長的路徑與
+/// code block 由 [UepMarkdownBody] 自己換行或在自己的框內水平捲動，不會把
+/// 訊息框撐破（§12 待辦 2 的實機症狀就是被撐出右緣）。
+class _BlockTile extends StatelessWidget {
+  const _BlockTile({required this.message});
+
+  final Message message;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: s.bgSunken,
+          border: Border.all(color: s.line),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              const MonoLabel('系統', size: 8.5, letterSpacing: 2.2),
+              const SizedBox(width: 8),
+              Text(clockTime(message.createdAt),
+                  style: UepText.mono(size: 9, color: s.inkMute)),
+            ]),
+            const SizedBox(height: 8),
+            UepMarkdownBody(data: message.content, baseColor: s.inkSoft),
+          ],
         ),
       ),
     );

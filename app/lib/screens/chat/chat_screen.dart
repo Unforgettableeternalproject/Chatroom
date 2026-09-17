@@ -43,6 +43,7 @@ import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/question_card.dart';
+import '../../widgets/run_report_panel.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
 import '../../state/composer_attachments.dart';
@@ -1286,6 +1287,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               archived: archived,
               limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+              isOps: room?.isOps ?? false,
             ),
           ),
         ),
@@ -1310,6 +1312,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               archived: archived,
               limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+              isOps: room?.isOps ?? false,
             ),
           ),
         ],
@@ -2197,6 +2200,7 @@ class _MembersPanel extends ConsumerStatefulWidget {
     required this.archived,
     required this.youAreAdmin,
     this.limits = const ServerLimits(),
+    this.isOps = false,
   });
 
   final String roomId;
@@ -2207,6 +2211,10 @@ class _MembersPanel extends ConsumerStatefulWidget {
 
   /// 伺服器實際生效的門檻（閒置移出倒數要用它，不能寫死）。
   final ServerLimits limits;
+
+  /// 這是工作房（`room.kind == 'ops'`）。回報區只在這種房出現——其他房
+  /// 沒有 run，掛一個永遠空的區塊只是佔位。
+  final bool isOps;
 
   @override
   ConsumerState<_MembersPanel> createState() => _MembersPanelState();
@@ -2520,6 +2528,12 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                       onUnhide: () => _setHidden(p, false),
                     ),
                   ),
+              ],
+              // 回報區：run 收工後的摘要（§12 待辦 2）。讀 `agent_run.result`
+              // 而不是從訊息流撿——訊息會被後續發言推走
+              if (widget.isOps) ...[
+                const SizedBox(height: 20),
+                RunReportPanel(roomId: widget.roomId),
               ],
             ],
           ),
