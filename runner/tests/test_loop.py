@@ -89,6 +89,24 @@ async def test_selfcheck_failure_goes_offline_and_never_claims(
     assert still["status"] == "queued", "自檢沒過的執行器把單領走了"
 
 
+async def test_selfcheck_failure_is_written_to_the_local_log(
+        hub_app, runner_hub, work_repo, tmp_path, caplog):
+    """原因要留在本機 log。
+
+    排程工作那邊只看得到「退出碼 1」；不寫 log 的話，原因只存在於下一次
+    心跳的 payload 裡，而那個一被覆蓋就查不回來了。
+    """
+    cfg = make_config(tmp_path, work_repo,
+                      claude_bin=[str(tmp_path / "no-such-claude.exe")])
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+
+    with caplog.at_level("ERROR", logger="chatroom_runner.loop"):
+        assert await loop.start() is False
+
+    assert [r for r in caplog.records if r.message.startswith("自檢：")]
+
+
 async def test_selfcheck_catches_a_repo_on_a_forbidden_branch(
         runner_hub, work_repo, tmp_path):
     from ._fixtures import git

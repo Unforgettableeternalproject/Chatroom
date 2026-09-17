@@ -41,10 +41,34 @@ if ($existing -and -not $Force) {
     throw "排程工作「$TaskName」已存在。確定要覆寫請加 -Force。"
 }
 
-# 用 PYTHONPATH 指到 runner/，而不是 cd 進去：工作目錄留給 repo root，
-# 這樣 log 與相對路徑的意義跟手動跑的時候一致
+# 讓 runner/ 進得了 sys.path：**排程工作設不了環境變數**，所以不能靠
+# PYTHONPATH（2026-09-17 的失敗就是這個——動作照跑，但每次都是
+# `No module named chatroom_runner`、退出碼 1，然後被重啟設定每分鐘拉一次）。
+# 改成在直譯器的 site-packages 放一行 .pth，對前景手跑與排程都成立。
+$purelib = (& $Python -c "import sysconfig;print(sysconfig.get_paths()['purelib'])" 2>&1 | Select-Object -Last 1)
+if ($LASTEXITCODE -ne 0 -or -not $purelib -or -not (Test-Path $purelib)) {
+    throw "取不到 site-packages 路徑（$Python）：$purelib"
+}
+$pthFile = Join-Path $purelib "chatroom_runner.pth"
+Set-Content -Path $pthFile -Value ((Resolve-Path $runnerDir).Path) -Encoding ascii
+Write-Host "已寫入 $pthFile"
+
+# 工作目錄留給 repo root，不 cd 進 runner/：這樣 log 與相對路徑的意義
+# 跟手動跑的時候一致
+#
+# 用 pythonw.exe 起：python.exe 是 console 程式，排程工作每次拉起都會閃一個
+# 黑窗（失敗重啟時就是一直閃）。pythonw 沒有 console，子進程那邊由
+# chatroom_runner.procs.no_window_kwargs() 補 CREATE_NO_WINDOW。
+$pythonw = Join-Path (Split-Path -Parent $Python) "pythonw.exe"
+if (Test-Path $pythonw) {
+    $execute = $pythonw
+} else {
+    Write-Warning "找不到 $pythonw，改用 $Python（每次啟動會閃一個 console 視窗）"
+    $execute = $Python
+}
+
 $action = New-ScheduledTaskAction `
-    -Execute $Python `
+    -Execute $execute `
     -Argument "-m chatroom_runner --config `"$ConfigPath`"" `
     -WorkingDirectory $RepoRoot
 
@@ -73,8 +97,15 @@ Register-ScheduledTask -TaskName $TaskName -Action $action `
     -Description "Chatroom 遠端派工執行器（REMOTE-OPS-PLAN P2）" `
     -Force:$Force | Out-Null
 
+# 驗證 .pth 真的生效：不驗的話「工作建好了」與「它跑得起來」是兩件事，
+# 而失敗只會安靜地寫在工作紀錄的退出碼裡
+& $Python -c "import chatroom_runner" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "註冊完成但 import chatroom_runner 失敗：請檢查 $pthFile 是否指向 $runnerDir"
+}
+
 Write-Host "已建立排程工作「$TaskName」。"
-Write-Host "  Python   : $Python"
+Write-Host "  Python   : $execute"
 Write-Host "  設定檔   : $ConfigPath"
 Write-Host "  log      : $env:LOCALAPPDATA\UEP\Chatroom\runner\logs\runner.log"
 Write-Host ""

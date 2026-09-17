@@ -29,6 +29,7 @@ from . import gitops, prompts
 from .config import ProjectConfig, RepoConfig, RunnerConfig
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
+from .procs import no_window_kwargs
 from .stream import StreamWatcher
 
 log = logging.getLogger(__name__)
@@ -130,7 +131,8 @@ def kill_tree(pid: int) -> None:
     if os.name == "nt":
         try:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, timeout=20, check=False)
+                           capture_output=True, timeout=20, check=False,
+                           **no_window_kwargs())
             return
         except (OSError, subprocess.SubprocessError):  # pragma: no cover
             pass
@@ -424,7 +426,8 @@ class RunExecutor:
         """起進程並逐行吃 stream。回 ``(exit_code, 停止原因)``。"""
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(cwd), env=env,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            **no_window_kwargs())
         pump = asyncio.create_task(self._pump(proc, watcher, run_dir))
         waiter = asyncio.create_task(proc.wait())
         canceller = asyncio.create_task(cancel.wait())

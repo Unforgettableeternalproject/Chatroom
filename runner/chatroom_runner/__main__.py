@@ -30,7 +30,11 @@ def _setup_logging(log_dir) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.addHandler(handler)
-    root.addHandler(logging.StreamHandler(sys.stderr))
+    # pythonw.exe 底下沒有 console，``sys.stderr`` 是 None：掛上去的
+    # StreamHandler 會在第一筆 log 就 AttributeError，而那時檔案 handler
+    # 還沒寫到任何東西，看起來就是「執行器一起來就死」
+    if sys.stderr is not None:
+        root.addHandler(logging.StreamHandler(sys.stderr))
 
 
 async def _main(args) -> int:
@@ -72,7 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(_main(args))
     except ConfigError as exc:
-        print(f"設定有問題：{exc}", file=sys.stderr)
+        if sys.stderr is not None:  # pythonw 底下沒有 stderr 可寫
+            print(f"設定有問題：{exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:  # pragma: no cover
         return 0

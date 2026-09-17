@@ -30,6 +30,7 @@ from typing import Awaitable, Callable
 from . import dashboard, gitops
 from .config import RunnerConfig
 from .hub import HubError
+from .procs import no_window_kwargs
 from .run import REPORT_FAILED_NAME, RepoLocks, RunExecutor
 from .usage import UsageStore
 
@@ -112,7 +113,7 @@ class RunnerLoop:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
+                stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
         except (OSError, ValueError) as exc:
             return [f"claude 叫不起來（{argv[0]}）：{exc}"]
         try:
@@ -136,7 +137,7 @@ class RunnerLoop:
                 "gpg", "--clearsign", "--batch", "--yes",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE)
+                stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
         except (OSError, ValueError) as exc:
             return [f"gpg 叫不起來：{exc}"]
         try:
@@ -180,6 +181,10 @@ class RunnerLoop:
                                 list(self.cfg.projects), self.cfg.max_parallel,
                                 self.cfg.version)
         if self.state.selfcheck_problems:
+            # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
+            # 只有「退出碼 1」，而原因在下一次心跳就被覆蓋掉
+            for problem in self.state.selfcheck_problems:
+                log.error("自檢：%s", problem)
             self.state.status = "offline"
             self.state.limit_reason = "selfcheck_failed"
             await self.heartbeat()

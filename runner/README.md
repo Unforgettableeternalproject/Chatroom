@@ -32,8 +32,13 @@
 3. 自檢（不會領單、不會起 agent）：
 
    ```powershell
+   $env:PYTHONPATH = "$PWD\runner"
    .\.venv\Scripts\python.exe -m chatroom_runner --selfcheck-only
    ```
+
+   ⚠️ `runner\` 不在 repo root 的 import 路徑上。**手動前景跑**時用
+   `PYTHONPATH` 補；常駐那條不行（排程工作設不了環境變數），由第 4 步的
+   `install-task.ps1` 寫 `.pth` 解決。
 
    自檢驗三件事：`claude --version`、`gpg --clearsign` 探針、每個 repo
    `git status` 可用且**停在允許分支**。任一沒過就不領單（狀態報 offline，
@@ -41,6 +46,15 @@
 
 4. 常駐：用 `runner\install-task.ps1` 建 Windows 排程工作（登入時啟動、
    失敗重啟、每 5 分鐘存活檢查）。那個腳本**只建工作，不會啟動執行器**。
+
+   它同時做兩件讓排程跑得起來的事：
+
+   - 在直譯器的 site-packages 寫一行 `chatroom_runner.pth` 指向 `runner\`，
+     然後**當場驗** `import chatroom_runner`，不通就 throw。
+   - 動作用同目錄的 `pythonw.exe`（沒有 console，不會閃黑窗）；找不到
+     pythonw 才退回 `python.exe` 並警告。
+
+   搬過位置或換了 venv 就重跑一次（加 `-Force`）——`.pth` 裡是絕對路徑。
 
 ## 設定檔欄位
 

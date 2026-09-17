@@ -11,6 +11,8 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .procs import no_window_kwargs
+
 # 未推送清單的格式：sha \x1f 標題 \x1f ISO 時間
 _LOG_FORMAT = "%H%x1f%s%x1f%cI"
 
@@ -30,7 +32,8 @@ async def git(repo: Path, *args: str, timeout: float = 60.0) -> GitResult:
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", *args, cwd=str(repo),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            **no_window_kwargs())
     except OSError as exc:
         # 路徑不存在（被搬走、被刪掉）時**回一筆失敗**，不要往上炸：
         # 儀表板要能顯示「這個 repo 讀不到」，而不是整份心跳生不出來
