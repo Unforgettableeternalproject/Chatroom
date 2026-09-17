@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS message (
     room_id    TEXT NOT NULL REFERENCES room(id),
     seq        INTEGER NOT NULL,
     sender_id  TEXT REFERENCES participant(id),   -- NULL = 系統訊息
+    -- 發話當下 participant.kind 的快照（claude / codex / human / other）。
+    -- run 成員結束後不進成員名冊，client 從名冊反查 kind 會查不到而退回
+    -- other——一句 agent 說過的話，在他離開之後就長得跟系統雜訊一樣。
+    -- 空字串＝這一欄存在之前的舊訊息或系統訊息。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    sender_kind TEXT NOT NULL DEFAULT '',
     kind       TEXT NOT NULL DEFAULT 'chat',      -- chat / system
     -- system 訊息的機器可讀型別（join / leave / kick / idle_removed /
     -- archive / archive_pending / unarchive）。內容是給人看的中文，client
@@ -311,6 +317,28 @@ CREATE TABLE IF NOT EXISTS board_checklist (
 );
 CREATE INDEX IF NOT EXISTS idx_bchecklist_room
     ON board_checklist(room_id, board_seq);
+
+-- 階段素材：附件掛在 **checklist（階段）** 上，該階段的所有卡與 run 共用
+-- （艾斯維爾 2026-09-17 裁決）。
+--
+-- 掛在階段而不是卡：一輪 run 的「任務相關附件」要答得出來，而卡是會換的
+-- ——上一輪產出的截圖掛在上一張卡上，下一輪就看不到了，於是 agent 只能
+-- 回去掃整間房的歷史附件（而工作房是常駐的，那份歷史只會愈長愈久）。
+--
+-- ⚠️ 這張表**不軟刪除**：它沒有增量讀取的 tombstone 需求（素材清單跟著
+-- checklist 一起讀），留一列已刪的只會讓「這個階段有幾份素材」說謊。
+CREATE TABLE IF NOT EXISTS board_checklist_file (
+    id            TEXT PRIMARY KEY,
+    checklist_id  TEXT NOT NULL REFERENCES board_checklist(id),
+    attachment_id TEXT NOT NULL REFERENCES attachment(id),
+    added_by      TEXT NOT NULL DEFAULT '',   -- actor_key（人類或 agent）
+    added_by_name TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',   -- 一句話：這份素材是什麼
+    created_at    TEXT NOT NULL,
+    UNIQUE(checklist_id, attachment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bchecklist_file
+    ON board_checklist_file(checklist_id, created_at);
 
 CREATE TABLE IF NOT EXISTS board_task (
     id           TEXT PRIMARY KEY,
@@ -1046,6 +1074,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 看起來「已生效」，而那是 Hub 自己編的
     ("runner_command", "applied_at", "applied_at TEXT"),
     ("runner_command", "note", "note TEXT NOT NULL DEFAULT ''"),
+    # 發話者 kind 的快照（REMOTE-OPS-PLAN §12 待辦 3）。既有訊息一律空字串，
+    # 由 `_migrate_data` 版次 4 從 participant 回填一次；回填不到的（成員列
+    # 已經被刪掉的）留空＝說不出來，由 client 自行退回舊的反查法
+    ("message", "sender_kind", "sender_kind TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1269,7 +1301,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 3
+DATA_VERSION = 4
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1315,6 +1347,17 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             "               WHERE p.room_id = room.id"
             "                 AND p.session_key = room.board_supervisor_session_key"
             "                 AND p.status = 'active')"
+        )
+    if version < 4:
+        # `message.sender_kind` 是後來才加的欄位，既有訊息全是空字串。
+        # 回填一次：JOIN 得到 participant 就拿它的 kind，拿不到就留空。
+        #
+        # 只填 sender_id 有值的那些：系統訊息沒有發話者，硬塞一個 kind
+        # 會讓 client 把 Hub 的話當成某個人說的。
+        await db.execute(
+            "UPDATE message SET sender_kind = COALESCE("
+            "  (SELECT p.kind FROM participant p WHERE p.id = message.sender_id), '')"
+            " WHERE sender_id IS NOT NULL AND sender_kind = ''"
         )
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 

@@ -1908,6 +1908,63 @@ def _resolve_board_id(room_id: str, board_id: str) -> str:
 
 @tool()
 @_guard
+def chatroom_stage_files(checklist_id: str, board_id: str = "",
+                         room_id: str = "") -> dict:
+    """看一個**階段**（checklist）掛了哪些素材。
+
+    階段素材是「這個階段共用的附件」：需求圖、上一輪的截圖、規格檔。掛在
+    階段而不是卡上，所以**同一個階段的每一張卡、每一輪派工看到的是同一
+    份**——卡會換，階段不會。
+
+    ⚠️ **這是你的「這輪的附件」該問的地方。** 工作房是常駐的，房裡的歷史
+    附件混著前幾輪的東西；掃整間房找圖只會找到一批看起來很像、但不是這次
+    要用的那些（2026-09-17 實機就發生過）。
+
+    ``checklist_id`` 是卡的 ``checklist_id``（讀板時每張卡都帶）。板用
+    ``board_id`` 或 ``room_id`` 指定，**只能給一個**。
+
+    每一份回 ``id`` / ``attachment_id`` / ``filename`` / ``mime`` / ``size``
+    / ``added_by_name`` / ``note``（一句話：這份素材是什麼）/ ``created_at``。
+    要拿檔案本體用 ``chatroom_get_file(attachment_id)``。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "GET", f"/api/boards/{bid}/checklists/{checklist_id}/files")
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
+def chatroom_stage_file_add(checklist_id: str, attachment_id: str,
+                            note: str = "", board_id: str = "",
+                            room_id: str = "") -> dict:
+    """把一個**既有附件**掛到階段上，給這個階段之後的人與派工共用。
+
+    ``attachment_id`` 要先存在：用 ``chatroom_send_file`` 傳進房裡，或拿
+    房內訊息上的附件 id。這裡做的是「掛上去」，不是上傳。
+
+    ⚠️ 附件必須屬於**掛著這塊板的某一間房**，否則 Hub 回
+    ``stage_file_room_mismatch``——附件的房間邊界不會因為它上了板就消失。
+
+    ``note`` 寫一句「這份素材是什麼」（上限 500 字）。**沒有編輯端點**，
+    寫錯就卸下來重掛。同一個附件重複掛回 ``stage_file_exists``。
+
+    📌 **產出要給下一輪看的檔（截圖、報告）就掛回階段。** 只留在房裡的話，
+    下一輪得從三百則訊息裡把它翻出來——而它多半不會去翻。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "POST", f"/api/boards/{bid}/checklists/{checklist_id}/files",
+        json={"attachment_id": attachment_id, "note": note})
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
 def chatroom_scratchpads(room_id: str = "", board_id: str = "") -> dict:
     """列出這塊板上的想法板（ScratchPad）。
 

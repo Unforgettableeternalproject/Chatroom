@@ -688,12 +688,26 @@ async def test_a_silent_run_is_marked_stalled_once(
     assert active.view().to_dict()["stalled_seconds"] >= 600
     assert active.run["id"] in loop.active, "只標記，不殺進程"
 
+    # 標記那一刻對 Hub 報一次，房裡就看得到——只有儀表板看得到的話，
+    # 人要先想到去開面板，才會知道有件事在等他
+    msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                             headers=headers)).json()["messages"]
+    stalled_msgs = [m for m in msgs if m["system_event"] == "run_stalled"]
+    assert len(stalled_msgs) == 1, "三個心跳報了三次＝把房間洗掉"
+    assert "沒動靜" in stalled_msgs[0]["content"]
+
     # 再收到事件就解除，一樣只記一次
     active.executor.mark_activity()
     for _ in range(3):
         await loop.heartbeat()
     assert not active.stalled and active.stalled_seconds == 0
     assert active.resume_marks == 1 and active.stall_marks == 1
+    msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                             headers=headers)).json()["messages"]
+    assert len([m for m in msgs
+                if m["system_event"] == "run_resumed"]) == 1
+    assert len([m for m in msgs
+                if m["system_event"] == "run_stalled"]) == 1
 
     await loop.shutdown()
 

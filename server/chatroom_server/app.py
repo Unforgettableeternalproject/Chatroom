@@ -337,6 +337,18 @@ class RunReport(BaseModel):
     reason: str = Field(default="", max_length=256)
     claude_session_id: str = Field(default="", max_length=128)
     usage_json: dict | None = None
+    # 同狀態回報（`running` → `running` 帶 reason=stalled）用的秒數。
+    # 只在那條路徑上有意義，其餘回報忽略它
+    stalled_seconds: int = Field(default=0, ge=0)
+
+
+class StageFileAdd(BaseModel):
+    """把一個既有附件掛上階段（stage files 契約 2026-09-17）。"""
+
+    attachment_id: str = Field(min_length=1, max_length=64)
+    # 一句話：這份素材是什麼。上限 500——它是給下一輪 run 看的說明，
+    # 不是報告；沒有編輯端點，寫錯就卸下來重掛
+    note: str = Field(default="", max_length=500)
 
 
 class RunnerCommandCreate(BaseModel):
@@ -1899,11 +1911,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         seq = (await cur.fetchone())[0]
         msg_id = _uid()
+        # 發話當下的 kind 快照。run 成員結束後不進成員名冊，事後從名冊反查
+        # 就查不到——這則訊息是誰說的那件事，不該隨著他離開而失真
+        sender_kind = ""
+        if sender_id:
+            krow = await (await db.execute(
+                "SELECT kind FROM participant WHERE id=?", (sender_id,)
+            )).fetchone()
+            if krow is not None:
+                sender_kind = krow["kind"] or ""
         await db.execute(
-            "INSERT INTO message (id, room_id, seq, sender_id, kind, content,"
+            "INSERT INTO message (id, room_id, seq, sender_id, sender_kind,"
+            " kind, content,"
             " mentions, mention_groups, card_refs, reply_to, reply_to_seq,"
-            " system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (msg_id, room_id, seq, sender_id, kind, content,
+            " system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (msg_id, room_id, seq, sender_id, sender_kind, kind, content,
              json.dumps(effective), json.dumps(groups),
              json.dumps(refs, ensure_ascii=False), reply_to, reply_to_seq,
              system_event, _now()),
@@ -1973,14 +1995,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 會跨過整個房間，一萬則就是額外的一兩萬次查詢——而它們全走同一條
         # aiosqlite 連線，long-poll 與即時推播也在那條線上（F8）
         names: dict[str, str] = {}
+        # 名冊現況的 kind，只在快照是空的時候當後備（回填不到的舊訊息）
+        live_kinds: dict[str, str] = {}
         sender_ids = {r["sender_id"] for r in rows if r["sender_id"]}
         if sender_ids:
             marks = ",".join("?" for _ in sender_ids)
             prows = await (await db.execute(
-                f"SELECT id, display_name FROM participant WHERE id IN ({marks})",
+                f"SELECT id, display_name, kind FROM participant"
+                f" WHERE id IN ({marks})",
                 tuple(sender_ids),
             )).fetchall()
             names = {p["id"]: p["display_name"] for p in prows}
+            live_kinds = {p["id"]: p["kind"] or "" for p in prows}
         originals: dict[str, object] = {}
         reply_ids = {r["reply_to"] for r in rows if r["reply_to"]}
         if reply_ids:
@@ -2022,6 +2048,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 room_boards[room] = brow["board_id"] if brow else ""
         for r in rows:
             sender_name = names.get(r["sender_id"]) if r["sender_id"] else None
+            sender_kind = ""
+            if r["sender_id"]:
+                snap = r["sender_kind"] if "sender_kind" in r.keys() else ""
+                sender_kind = snap or live_kinds.get(r["sender_id"], "")
             reply_preview = None
             reply_to_seq = r["reply_to_seq"]
             if r["reply_to"]:
@@ -2052,6 +2082,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 有人加入時通知）就不必去比對中文內容
                 "system_event": r["system_event"] or None,
                 "sender_id": r["sender_id"], "sender_name": sender_name,
+                # 發話當下的 kind 快照。run 成員結束後不進成員名冊，client
+                # 反查名冊只會拿到 other——這個欄位就是為了不必反查。
+                # 空字串＝系統訊息或說不出來的舊訊息（client 自行退回舊法）
+                "sender_kind": sender_kind,
                 "content": "" if r["deleted"] else r["content"],
                 "mentions": json.loads(r["mentions"]),
                 # 展開後的實名給 client 渲染 chip，原字面讓它還原成一顆
@@ -5036,7 +5070,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             f"UPDATE {table} SET deleted=1, board_seq=? WHERE id=?", (seq, item_id)
         )
+        # 階段素材**跟著階段一起消失**（硬刪）。它沒有 tombstone：素材清單
+        # 是跟著 checklist 讀的，而 checklist 自己已經帶了 deleted 旗標——
+        # 留著那幾列只會讓「這個階段有幾份素材」對一個不存在的階段說話。
+        # ⚠️ 只刪掛接，**不動 attachment 本身**：同一份檔案可能還掛在訊息上
         if kind == "objective":
+            await db.execute(
+                "DELETE FROM board_checklist_file WHERE checklist_id IN"
+                " (SELECT id FROM board_checklist WHERE objective_id=?)",
+                (item_id,),
+            )
             await db.execute(
                 "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id IN"
                 " (SELECT id FROM board_checklist WHERE objective_id=?)",
@@ -5047,6 +5090,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " WHERE objective_id=?", (seq, item_id),
             )
         elif kind == "checklist":
+            await db.execute(
+                "DELETE FROM board_checklist_file WHERE checklist_id=?",
+                (item_id,),
+            )
             await db.execute(
                 "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id=?",
                 (seq, item_id),
@@ -7330,6 +7377,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        # 階段素材**兩軸都要有**：房裡的 agent 多半是拿 room_id 讀板的，
+        # 只加在板軸的話，它讀得到階段卻永遠看不到掛在上面的素材——而那
+        # 正是「這輪的附件」要問的東西
+        stage_files = await _stage_files([c["id"] for c in checklists])
+        for c in checklists:
+            c["files"] = stage_files.get(c["id"], [])
         if attached is not None:
             # v1 client 也看得到追蹤數：舊 client 不會因為沒升級就少一塊
             # 資訊，而「這張卡有誰在等」與版本無關
@@ -8099,6 +8152,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        # 階段素材跟著階段一起回，**不是只給一個數字**：agent 讀板就要看得到
+        # 這個階段有哪些素材，否則它得為每一個階段再打一次 files 端點，而它
+        # 多半不會——沒有人會為了一個計數去猜那裡面是什麼
+        stage_files = await _stage_files([c["id"] for c in checklists])
+        for c in checklists:
+            c["files"] = stage_files.get(c["id"], [])
         await _annotate_watches(board_id, actor, objectives, checklists, tasks)
 
         # 🔑 **這裡刻意沒有頂層 `supervisor`。** Supervisor 屬於 room 不屬於
@@ -10710,6 +10769,162 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "board_id": board_id, "room_id": room_id,
                 "degraded_watchers": degraded}
 
+    # ---------- 階段素材（stage files）----------
+    #
+    # 附件掛在**階段**上，該階段的所有卡與 run 共用（艾斯維爾 2026-09-17
+    # 裁決）。一輪 run 的「任務相關附件」＝所屬階段的素材 + 簡述指到的；
+    # 房內歷史仍讀得到，但不再是預設的來源——工作房是常駐的，把整間房的
+    # 歷史附件當成「這輪的附件」，第三輪起就開始互相汙染。
+
+    async def _stage_checklist_or_404(board_id: str, checklist_id: str):
+        """這個階段，且**必須屬於這塊板**。
+
+        不比對板的話，`/api/boards/A/checklists/<B 的階段>/files` 會照樣
+        回 B 的素材——URL 上那個 board_id 看起來像在守門，其實什麼都沒守。
+        """
+        row = await _board_item_or_404("checklist", checklist_id)
+        if _row_board_id(row) != board_id:
+            raise _err(404, "checklist_not_found", "這塊板上沒有這個階段")
+        return row
+
+    async def _stage_files(checklist_ids: list[str]) -> dict[str, list[dict]]:
+        """階段 → 素材清單（`created_at ASC`）。**一批查一次。**
+
+        逐個階段查的話，讀一塊板就是 N 次查詢，而它們與 long-poll 共用同
+        一條 aiosqlite 連線（`_message_rows_to_json` 的同一個教訓）。
+        """
+        if not checklist_ids:
+            return {}
+        marks = ",".join("?" for _ in checklist_ids)
+        rows = await (await app.state.db.execute(
+            "SELECT f.id, f.checklist_id, f.attachment_id, f.added_by,"
+            " f.added_by_name, f.note, f.created_at,"
+            " a.filename, a.mime, a.size"
+            " FROM board_checklist_file f"
+            " JOIN attachment a ON a.id = f.attachment_id"
+            f" WHERE f.checklist_id IN ({marks})"
+            " ORDER BY f.created_at, f.rowid", tuple(checklist_ids))).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["checklist_id"], []).append({
+                "id": r["id"], "checklist_id": r["checklist_id"],
+                "attachment_id": r["attachment_id"],
+                "filename": r["filename"], "mime": r["mime"],
+                "size": r["size"], "added_by": r["added_by"],
+                "added_by_name": r["added_by_name"], "note": r["note"],
+                "created_at": r["created_at"],
+            })
+        return out
+
+    @app.get("/api/boards/{board_id}/checklists/{checklist_id}/files",
+             dependencies=[Depends(require_auth)])
+    async def list_stage_files(
+        board_id: str, checklist_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """這個階段掛了哪些素材。讀取門檻與讀板相同。"""
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, host=host)
+        await _stage_checklist_or_404(board_id, checklist_id)
+        files = await _stage_files([checklist_id])
+        return {"files": files.get(checklist_id, [])}
+
+    @app.post("/api/boards/{board_id}/checklists/{checklist_id}/files",
+              dependencies=[Depends(require_auth)])
+    async def add_stage_file(
+        board_id: str, checklist_id: str, body: StageFileAdd,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """把一個既有附件掛上階段。
+
+        附件本身走既有的 `POST /api/rooms/{room_id}/attachments`——上傳與
+        掛接分開，理由與訊息附件一樣：上傳會因為檔案大而失敗，綁在一起的話
+        重試就會掛出兩份。
+
+        ⚠️ 附件的房**必須是這塊板的掛接房之一**（400
+        `stage_file_room_mismatch`）。不驗的話，任何拿得到 attachment id 的
+        人可以把別間房的檔案掛到這塊板上，而板成員讀得到它——附件的房間
+        邊界會從這裡整條漏掉。
+        """
+        _board, _room, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id, host=host)
+        await _stage_checklist_or_404(board_id, checklist_id)
+        db = app.state.db
+        att = await (await db.execute(
+            "SELECT id, room_id FROM attachment WHERE id=?",
+            (body.attachment_id,))).fetchone()
+        if att is None:
+            raise _err(404, "attachment_not_found", "找不到這個附件")
+        attached = await (await db.execute(
+            "SELECT 1 FROM board_room WHERE board_id=? AND room_id=?"
+            " AND detached_at IS NULL LIMIT 1",
+            (board_id, att["room_id"]))).fetchone()
+        if attached is None:
+            raise _err(400, "stage_file_room_mismatch",
+                       "這個附件不屬於任何掛著這塊板的聊天室——"
+                       "請先把它上傳到其中一間房。")
+        dup = await (await db.execute(
+            "SELECT id FROM board_checklist_file WHERE checklist_id=?"
+            " AND attachment_id=?",
+            (checklist_id, body.attachment_id))).fetchone()
+        if dup is not None:
+            raise _err(409, "stage_file_exists", "這份素材已經掛在這個階段上",
+                       file_id=dup["id"])
+        fid = _uid()
+        await db.execute(
+            "INSERT INTO board_checklist_file (id, checklist_id,"
+            " attachment_id, added_by, added_by_name, note, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (fid, checklist_id, body.attachment_id, me["session_key"],
+             me["display_name"], body.note.strip(), _now()))
+        await _commit_with_retry(db)
+        # 掛了板的**每一間**房都要醒：素材是板的東西，而「操作發生在哪一間」
+        # 在板軸上根本沒有答案
+        await _notify_board_rooms(board_id)
+        files = await _stage_files([checklist_id])
+        item = next((f for f in files.get(checklist_id, []) if f["id"] == fid),
+                    None)
+        return {"file": item}
+
+    @app.delete("/api/boards/{board_id}/checklists/{checklist_id}"
+                "/files/{file_id}", dependencies=[Depends(require_auth)])
+    async def remove_stage_file(
+        board_id: str, checklist_id: str, file_id: str,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """卸除素材：**掛的人本人、人類成員或主持人**。
+
+        判準與 `_board_can_remove` 同一個形狀（建立者或人類）——agent 拆掉
+        另一個 agent 掛上去的素材，在遠端沒有人看著的時候誰都說不出是什麼
+        時候不見的。
+        """
+        _board, _room, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id, host=host)
+        await _stage_checklist_or_404(board_id, checklist_id)
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT * FROM board_checklist_file WHERE id=? AND checklist_id=?",
+            (file_id, checklist_id))).fetchone()
+        if row is None:
+            raise _err(404, "stage_file_not_found", "找不到這份素材")
+        if not (me["role"] == "human" or row["added_by"] == me["session_key"]):
+            raise _err(403, "human_only",
+                       "只有掛上它的人或人類成員可以卸除這份素材")
+        await db.execute("DELETE FROM board_checklist_file WHERE id=?",
+                         (file_id,))
+        await _commit_with_retry(db)
+        await _notify_board_rooms(board_id)
+        return {"removed": True}
+
     @app.get("/api/rooms/{room_id}/updates", dependencies=[Depends(require_auth)])
     async def wait_updates(
         room_id: str,
@@ -11508,10 +11723,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"id": aid, "size": size, "sha256": sha,
                 "mime": file.content_type or "application/octet-stream"}
 
+    async def _attachment_reader_or_403(
+        room_id: str, participant_id: str | None, host: bool,
+        session_key: str | None,
+    ) -> None:
+        """誰讀得到一個附件：房內成員，**或掛接房的板成員**。
+
+        板軸的理由是階段素材（stage files 契約 2026-09-17 補充）：素材是
+        「屬於掛接房的附件」，而從 Board Library 開板的人手上只有 session
+        key、沒有 participant id——只認房內身分的話，板上列得出素材卻一份
+        也打不開，而那正是掛它上去的目的。
+
+        擴的是**讀取**，而且只擴到「這個附件的房掛著的板」的成員：附件的
+        房間邊界仍然在，只是多認一種在場證明。
+        """
+        try:
+            await _member_or_403(room_id, participant_id, host)
+            return
+        except HTTPException:
+            actor = await _actor_from_headers(session_key, participant_id)
+            if not actor:
+                raise
+            rows = await (await app.state.db.execute(
+                "SELECT board_id FROM board_room WHERE room_id=?"
+                " AND detached_at IS NULL", (room_id,))).fetchall()
+            for r in rows:
+                if await _board_role(r["board_id"], actor, host):
+                    return
+            raise
+
     @app.get("/api/attachments/{attachment_id}/meta",
              dependencies=[Depends(require_auth)])
     async def attachment_meta(
         attachment_id: str, x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         host: bool = Depends(host_view),
     ):
         """附件的 metadata。下載端點回的是檔案本體，拿不到檔名與型別。"""
@@ -11528,7 +11773,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
         # 附件跟著訊息走，門檻就跟著訊息一樣：非成員讀不到房內的檔案
-        await _member_or_403(row["room_id"], x_participant_id, host)
+        await _attachment_reader_or_403(row["room_id"], x_participant_id,
+                                        host, x_session_key)
         meta = dict(row)
         meta["is_image"] = meta["mime"].startswith("image/")
         return {"attachment": meta}
@@ -11536,6 +11782,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/attachments/{attachment_id}", dependencies=[Depends(require_auth)])
     async def download_attachment(
         attachment_id: str, x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         host: bool = Depends(host_view),
     ):
         db = app.state.db
@@ -11546,7 +11793,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         if row is None:
             raise _err(404, "attachment_not_found", "找不到這個附件")
-        await _member_or_403(row["room_id"], x_participant_id, host)
+        await _attachment_reader_or_403(row["room_id"], x_participant_id,
+                                        host, x_session_key)
         path = _blob_path(row["sha256"])
         if not path.exists():
             # metadata 在、實體不在：備份只帶走 db 沒帶 attachments/ 就會這樣，
@@ -12551,6 +12799,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         "failed": set(),
         "cancelled": set(),
     }
+    # 同狀態回報的理由（REMOTE-OPS-PLAN §12 待辦 4）。`running → running`
+    # 不是狀態轉移，是**發生在這個 run 身上的事**：它卡住了、它又動了。
+    # 沒有這條路的話，停滯只能留在儀表板上，而房裡的人要自己去開面板才
+    # 看得到「這筆十分鐘沒動靜」——那件事本來就該來找他，不是等他去找。
+    #
+    # ⚠️ 只認這兩個字面。沒帶 reason 的同狀態回報維持 409：一個會把任何
+    # `running → running` 都收下的端點，等於讓重試變成靜默成功
+    _RUN_SAME_STATUS_REASONS = ("stalled", "resumed")
+
     # 還佔著這個 ref 的狀態。handoff 也算——交接鏈還在跑，那張卡沒有空出來
     _RUN_ACTIVE = ("queued", "claimed", "running", "limited", "handoff")
 
@@ -12734,6 +12991,24 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _post_message(room_id, None, text, kind="system",
                             system_event=f"run_{to_status}",
                             mentions=mentions)
+
+    async def _announce_run_note(row, reason: str,
+                                 stalled_seconds: int) -> None:
+        """同狀態回報的房內 system 訊息（停滯／恢復）。
+
+        風格與 `_announce_run` 一致：同一個 `head`、同樣不 mention 任何人。
+        停滯是「還在跑但沒動靜」，不是失敗——每卡一次就叫醒全房的人類，
+        下一次真的要人來看的時候，那則訊息已經沒有人在讀了。
+        """
+        head = f"派工 {row['kind']}／{row['ref'] or '(未指定)'}"
+        if reason == "stalled":
+            text = f"{head} 已 {stalled_seconds} 秒沒動靜。"
+        elif reason == "resumed":
+            text = f"{head} 恢復活動。"
+        else:
+            return
+        await _post_message(row["room_id"], None, text, kind="system",
+                            system_event=f"run_{reason}")
 
     async def _announce_runner_presence(runner_id: str, online: bool) -> None:
         """執行器上線／離線在**它有未結束 run 的 ops 房**裡講一句，mention 人類。
@@ -13204,6 +13479,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "這筆派工是別台執行器領走的，不能由你回報。")
         old = row["status"]
         new = body.status
+        # 同狀態回報（stalled／resumed）：不轉移、不碰 agent_run 的任何一欄
+        # （尤其 started_at——它是「這輪從什麼時候開始」，不是「最後一次有
+        # 動靜」），只留一筆事件並在房裡講一句
+        if (new == old == "running"
+                and body.reason in _RUN_SAME_STATUS_REASONS):
+            await _record_run_event(
+                run_id, row["room_id"], old, new, row["runner_id"], "",
+                body.reason, {"stalled_seconds": body.stalled_seconds})
+            await _commit_with_retry(db)
+            await _announce_run_note(row, body.reason, body.stalled_seconds)
+            await events.notify(row["room_id"])
+            return {"run": _run_public(await _run_or_404(run_id)),
+                    "child_run": None}
         if new not in _RUN_TRANSITIONS.get(old, set()):
             raise _err(409, "run_bad_transition",
                        f"派工不能從 {old} 變成 {new}。",

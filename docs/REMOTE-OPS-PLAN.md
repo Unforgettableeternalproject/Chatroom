@@ -699,18 +699,23 @@ guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯�
 
 ### 下一輪待辦（艾斯維爾 2026-09-17 觀察）
 
-1. **附件範圍**：run 看得到房裡歷史附件（工作房常駐，前幾輪傳的圖都在），這輪 agent 主動
-   說「已有兩份同樣的圖」。要定：run 只看卡與簡述指到的附件？或只看 run 開始之後的？
-   契約與 `chatroom_read` 起點（`joined_seq`）都要對齊。
+1. ✅ **附件範圍**（2026-09-17 做完）：定案是**階段素材**——附件掛在 checklist 上，
+   該階段的每一張卡與每一輪 run 共用；「這輪的附件」＝階段素材 + 簡述指到的，
+   不掃整間房。Hub `board_checklist_file` 表與 `/api/boards/{id}/checklists/{cid}/files`
+   三支端點（`server/chatroom_server/app.py` 的「階段素材」段）、bridge 的
+   `chatroom_stage_files` / `chatroom_stage_file_add`、runner 四份模板都照這個契約。
 2. **收工摘要的呈現**：現在是 system 訊息，字太小、Markdown 沒渲染。做法：工作房右側
    加「回報面板」，讀 `agent_run.result`（Hub 已存）而不是從訊息流撿；每筆 run 一張可展開
    的卡，附 turns／成本／HEAD 前後／tool.log 位置。收工摘要同時寫到板卡上（現在只在房裡）。
-3. **離房後訊息變 OTHER**：run 成員結束後不進成員名冊（§4.1 這輪加的規則），App 從名冊
-   反查 sender kind 就查不到 → 退回 other。修法在 Hub：訊息本身帶 `sender_kind` 快照
-   （或名冊回 `hidden: true` 的 run 成員），App 改讀快照。
-4. **停滯進訊息流**：Hub `_RUN_TRANSITIONS` 不允許 `running→running`，執行器只能把
-   `stalled_seconds` 放儀表板。要讓房裡看到「這筆 10 分鐘沒動靜」，Hub 要收帶 reason 的
-   同狀態回報。
+3. ✅ **離房後訊息變 OTHER**（2026-09-17 做完）：`message.sender_kind` 存發話當下的
+   快照，寫入在 `_post_message`、輸出在 `_message_rows_to_json`（讀取與匯出共用同
+   一條路）；舊訊息由 `db._migrate_data` 版次 4 從 participant 回填一次，回填不到
+   的留空字串。
+4. ✅ **停滯進訊息流**（2026-09-17 做完）：`POST /api/runs/{id}/report` 的
+   `running → running` 帶 `reason=stalled`／`resumed` 時不轉移狀態、不動 `started_at`，
+   只寫一筆 `agent_run_event`（from=to=running，`detail_json` 帶 `stalled_seconds`）
+   並在房裡發 `run_stalled`／`run_resumed` 的 system 訊息。**沒帶 reason 的同狀態
+   回報維持 409**。執行器端在 `loop.check_stalls` 標記／解除時各報一次（不重複）。
 5. **@ 叫不醒 run**（設計上單回合、無 watcher）。目前靠契約聲明＋ `ask_human`。
    若要改，方向是 bridge 的 `chatroom_wait` 在 run 內當「收件匣」，成本高，先不做。
 6. **未測的路徑**：push run（儀表板「推送」→ 執行器 fetch/push；`dbd17dcf` 正好可以拿來測）、

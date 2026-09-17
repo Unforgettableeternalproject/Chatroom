@@ -20,6 +20,21 @@
 
 {{skills_block}}
 
+## 這輪的附件
+
+**「這輪要看的附件」＝所屬階段（checklist）的素材 + 簡述指到的那些。**
+讀卡之後用 `chatroom_stage_files(checklist_id=<卡的 checklist_id>,
+room_id={{room_id}})` 把它們讀出來；檔案本體用
+`chatroom_get_file(attachment_id)`。
+
+⚠️ **不要掃整間房的歷史附件。** 工作房是常駐的，房裡混著前幾輪傳過的圖，
+翻出來的多半是上一輪的那一份——它跟這次要用的長得一模一樣，而沒有任何
+地方會告訴你拿錯了。
+
+產出要給下一輪看的檔（截圖、報告）用
+`chatroom_stage_file_add(checklist_id, attachment_id, note="一句話")`
+掛回階段。只留在房裡的話，下一輪得從幾百則訊息裡把它翻出來——它不會去翻。
+
 ## 工作範圍
 
 - 只在 `{{cwd}}` 裡工作。分支只能是 `{{allowed_branches}}`。

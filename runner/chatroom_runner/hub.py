@@ -255,7 +255,8 @@ class RunnerHub:
 
     async def report(self, run_id: str, status: str, *, result: str = "",
                      reason: str = "", claude_session_id: str = "",
-                     usage: dict | None = None) -> dict | None:
+                     usage: dict | None = None,
+                     stalled_seconds: int = 0) -> dict | None:
         """回報狀態轉移。``runner_id`` 是**必填**（Hub 契約 09/16 修正）。
 
         🚨 409 ``run_bad_transition`` 當成「這一步已經套用過」而不是錯誤：
@@ -265,6 +266,10 @@ class RunnerHub:
         payload: dict = {"status": status, "runner_id": self.identity.runner_id,
                          "result": result, "reason": reason,
                          "claude_session_id": claude_session_id}
+        # 同狀態回報（stalled）用；其餘回報送 0，Hub 忽略它。舊 Hub 收到
+        # 多出來的欄位不會炸（pydantic 預設忽略未知欄位）
+        if stalled_seconds:
+            payload["stalled_seconds"] = stalled_seconds
         if usage is not None:
             payload["usage_json"] = usage
         try:

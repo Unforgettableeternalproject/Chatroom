@@ -248,6 +248,17 @@ chatroom_board_add(kind="task", title="…", board_id=<板 id>)
 chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（detach=True 解除）
 ```
 
+**階段（checklist）上掛得住附件**，那個階段的每一張卡與每一輪派工共用：
+
+```
+chatroom_stage_files(checklist_id, room_id=…)       # 這個階段有哪些素材
+chatroom_stage_file_add(checklist_id, attachment_id, note="登入頁截圖", room_id=…)
+```
+
+⚠️ **要圖要規格就問階段素材，不要掃整間房的歷史附件**——常駐的工作房裡
+混著前幾輪的東西，掃出來的多半不是這次要用的那一份。產出要給下一輪看的
+檔（截圖、報告）用 `chatroom_stage_file_add` 掛回階段。
+
 ⚠️ **`room_id` 與 `board_id` 只能給一個**，兩個都是 32 hex，給錯不會有任何
 地方報錯——它會安靜地對另一塊板動作。給房間 id 是「我在這個房裡，動它掛
 的那塊板」；給板 id 是「我直接對這塊板動作」。

@@ -411,15 +411,16 @@ class RunnerLoop:
             except OSError:  # pragma: no cover
                 pass
 
-    def check_stalls(self) -> None:
+    async def check_stalls(self) -> None:
         """進行中的 run 多久沒說話。**每次心跳看一眼，狀態轉換各記一次。**
 
-        🚨 **不對 Hub `report`**：Hub 的狀態機（`app._RUN_TRANSITIONS`）沒有
-        `running → running`，同狀態回報會被 409 `run_bad_transition` 擋掉，
-        而那個 code 在 `hub.report` 裡被當成「這一步已經套用過」安靜吞掉——
-        打了等於什麼都沒發生，只是每個心跳多一次往返。停滯目前**只走
-        `dashboard_json`**（App 讀得到），要讓它進訊息流得等 Hub 那端允許
-        帶 `reason` 的同狀態回報。
+        標記與解除**各對 Hub 報一次**（`running → running` 帶
+        `reason=stalled`／`resumed`，Hub 那端不轉移狀態、只留事件並在房裡
+        講一句）。報的時機跟著 `stall_marks`／`resume_marks` 走：每個心跳
+        都報的話，一筆卡住的 run 會把整間房洗掉，而洗掉的正是要人看的那則。
+
+        報不出去**不影響標記**：dashboard 仍然說得出停滯（App 讀得到），
+        而 Hub 的訊息流少一則比執行器的心跳整個斷掉好。
 
         不殺進程：牆鐘上限照舊管終止，這裡只負責讓遠端的人看得見。
         """
@@ -427,6 +428,7 @@ class RunnerLoop:
         if threshold <= 0:
             return
         now = self.monotonic()
+        notices: list[tuple[str, str, int]] = []
         for run_id, active in self.active.items():
             idle = now - active.executor.last_event_at
             if idle >= threshold:
@@ -437,15 +439,24 @@ class RunnerLoop:
                     log.warning("run %s 已經 %d 秒沒有任何 stream 事件"
                                 "（門檻 %s 秒）；不殺進程，只標記",
                                 run_id, active.stalled_seconds, int(threshold))
+                    notices.append((run_id, "stalled", active.stalled_seconds))
             elif active.stalled:
                 active.stalled = False
                 active.stalled_seconds = 0
                 active.resume_marks += 1
                 log.info("run %s 又開始吐事件了", run_id)
+                notices.append((run_id, "resumed", 0))
+        for run_id, reason, seconds in notices:
+            try:
+                await self.hub.report(run_id, "running", reason=reason,
+                                      stalled_seconds=seconds)
+            except HubError as exc:  # pragma: no cover - 視 Hub 版本
+                log.warning("停滯回報沒送成（run %s，%s）：%s",
+                            run_id, reason, exc)
 
     async def heartbeat(self) -> dict:
         await self._flush_failed_reports()
-        self.check_stalls()
+        await self.check_stalls()
         usage_window =(self.usage.window(self.cfg.usage_window_hours,
                                           self.cfg.usage_soft_cap_tokens,
                                           self.cfg.usage_soft_cap_usd)
