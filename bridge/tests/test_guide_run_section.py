@@ -28,6 +28,18 @@ def test_the_run_section_states_the_contract():
         assert topic in section, f"run 段落沒有涵蓋：{topic}"
 
 
+def test_the_run_section_tells_it_to_leave_when_it_is_done():
+    """工作房**不會因為沒人而封存**，所以沒有任何機制會替它收掉成員列。
+
+    Hub 現在會在 run 收場時把它移出，但手冊仍要教它自己走一步——只寫在
+    伺服器那一端的話，agent 會以為自己該留著，而它留著的那段時間裡，房裡的
+    人看不出那一輪已經結束了。
+    """
+    section = GUIDE[GUIDE.index("## 9.8"):GUIDE.index("## 10.")]
+    assert "chatroom_leave" in section, "沒有教它收工之後要離開"
+    assert "run 結束時把你移出" in section, "要說清楚忘了也不會壞事"
+
+
 def test_the_run_section_tells_it_to_stop_retrying_a_blocked_tool():
     """`PreToolUse` 擋下來時實測會換一個工具再試一次。
 
