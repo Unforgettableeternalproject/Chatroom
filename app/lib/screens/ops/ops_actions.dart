@@ -29,6 +29,12 @@ Future<bool> dispatchRun(
 }) async {
   final api = ref.read(runsApiProvider);
   final pid = ref.read(settingsRepoProvider).participantId(roomId);
+  // 送出要用的東西**全部在開對話框之前就抓好**：API、房內身分，以及講話的
+  // 出口。對話框關掉時入口自己可能已經被重建或移除（階段列整列重建、卡片
+  // 抽屜關掉），那時 `context` 就失效了——而**送不送 API 不可以取決於畫面
+  // 還在不在**（09/17 實機：第一次派工按下去只留下一行「畫面已經不在了」，
+  // 第二次才真的建單）
+  final messenger = ScaffoldMessenger.maybeOf(context);
 
   // 專案清單要現撈。**不能用上一次面板留下的那份**：執行器的白名單會變，
   // 而拿著舊清單選出來的專案會被 Hub 以 `project_not_served` 退回，畫面上
@@ -55,13 +61,6 @@ Future<bool> dispatchRun(
     _log.info('派工對話框取消或未送出（target=$targetRef）');
     return false;
   }
-  if (!context.mounted) {
-    // 畫面在對話框關掉之前就走了。**這一行不能省**：少了它，沒建成的那筆
-    // 與根本沒按過長得一樣
-    _log.warning('派工沒有送出（target=$targetRef）：畫面已經不在了');
-    return false;
-  }
-
   try {
     _log.info('create_run 送出：room=$roomId kind=${request.kind} '
         'project=${request.project} ref=$targetRef board=$boardId '
@@ -78,14 +77,11 @@ Future<bool> dispatchRun(
     );
     _log.info('create_run 已建立：run=${run.id} status=${run.status}');
     final position = await _queuePosition(api, roomId, run.id, pid);
-    if (context.mounted) {
-      _say(context,
-          position == null ? '已排隊。' : '已排隊，位置 $position。');
-    }
+    _notify(messenger, position == null ? '已排隊。' : '已排隊，位置 $position。');
     return true;
   } on ApiException catch (e) {
     _log.warning('create_run 被退回：${e.code} ${e.message}');
-    if (context.mounted) _say(context, _dispatchError(e));
+    _notify(messenger, _dispatchError(e));
     return false;
   }
 }
@@ -234,3 +230,15 @@ String _commandLabel(String command) => switch (command) {
 
 void _say(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+/// 對人講一句話，**但畫面不在了就只留一行 log**。
+///
+/// [messenger] 是開對話框之前抓的。顯示不了訊息是「這句話沒人看到」，不是
+/// 「這件事沒做」——把它當成放棄送出的理由，就是 09/17 那個 bug 本身。
+void _notify(ScaffoldMessengerState? messenger, String text) {
+  if (messenger != null && messenger.mounted) {
+    messenger.showSnackBar(SnackBar(content: Text(text)));
+    return;
+  }
+  _log.info('畫面已經不在，這句話只留在 log：$text');
+}
