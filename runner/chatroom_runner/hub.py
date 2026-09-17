@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from typing import Any
 import httpx
 
 DEFAULT_TIMEOUT = 30.0
+
+log = logging.getLogger(__name__)
 
 
 class HubError(Exception):
@@ -266,5 +269,13 @@ class RunnerHub:
                                     json_body=payload)
         except HubError as exc:
             if exc.status == 409 and exc.code == "run_bad_transition":
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                # 回傳值照舊（當成已套用），但**要留痕**：真正的非法轉移與
+                # 「遲到的重送」長得一模一樣，無聲吞掉的話只剩 Hub 上一個停住
+                # 的狀態，沒有任何線索指向是哪一步被擋掉
+                log.warning("回報被 Hub 擋下（409 run_bad_transition）："
+                            "run %s 想報 %s，Hub 說 %s → %s",
+                            run_id, status, detail.get("from_status"),
+                            detail.get("to_status"))
                 return None
             raise

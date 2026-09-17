@@ -396,6 +396,42 @@ async def test_push_run_pushes_when_sha_sets_match(
                "--format=%H") == ""
 
 
+async def test_push_run_reports_running_before_done(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """🚨 push 成功後 Hub 要停在 ``done``，不是還卡在 ``claimed``。
+
+    Hub 的狀態機只讓 ``done`` 從 ``running`` 來；push 路徑若不先回報
+    ``running``，那筆 ``done`` 會被 409 擋掉，而 409 在客戶端是「當成已套用」
+    的——推其實成功了，面板上卻永遠停在領走的樣子。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    (work_repo / "a.txt").write_text("a", encoding="utf-8")
+    git(work_repo, "add", "a.txt")
+    git(work_repo, "commit", "-m", "要推的那顆")
+    sha = git(work_repo, "rev-parse", "HEAD")
+
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+    reported: list[str] = []
+    real_report = runner_hub.report
+
+    async def spy(run_id, status, **kw):
+        reported.append(status)
+        return await real_report(run_id, status, **kw)
+
+    runner_hub.report = spy
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    assert reported == ["running", "done"], reported
+    final, trail = await _trail(client, run["id"], headers)
+    assert final["status"] == "done"
+    assert trail == ["queued", "claimed", "running", "done"]
+
+
 async def test_push_run_refuses_branch_outside_push_list(
         hub_app, ops_room, runner_hub, work_repo, tmp_path):
     _app, client = hub_app

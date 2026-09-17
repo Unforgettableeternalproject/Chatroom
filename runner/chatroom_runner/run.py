@@ -423,6 +423,11 @@ class RunExecutor:
             return outcome
 
         if run["kind"] == "push":
+            # 🚨 先回報 running 再推：Hub 的狀態機只讓 done 從 running 來，
+            # 直接從 claimed 報 done 會吃 409，而 409 在客戶端是「當成已套用」
+            # 的——推成功了，面板上卻還停在 claimed
+            await self._report(run_id, RunOutcome("running",
+                                                  reason="push_start"))
             async with self.locks.get(f"{project.key}/{repo.name}"):
                 outcome = await self._push(run, repo)
             await self._report(run_id, outcome)
