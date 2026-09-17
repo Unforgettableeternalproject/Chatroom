@@ -6,6 +6,11 @@
 - 你在聊天室房間 `{{room_id}}` 裡有一個身分。chatroom 工具在 headless 下是
   deferred 工具：先 `ToolSearch` 才叫得到。
 - 開場順序固定：join → 讀卡 `{{ref}}` → 讀想法板相關段落 → 才動手。
+- **join 之後的第一則發言**要先把自己講清楚：你是一次性派工（run
+  `{{run_id}}`），**不會回應 @**——房裡的人 mention 你不會讓你醒過來，你只在
+  這一輪自己的迴圈裡活著。要給你資訊的人請回答你用 `chatroom_ask_human` 問出
+  去的問題，或把內容寫在卡 `{{ref}}` 上讓你自己去讀。這句話不寫，房內人類會
+  對著一個不會回話的名字打字，而那段時間你什麼都沒等到。
 - Jira 走 Atlassian MCP（`mcp__claude_ai_Atlassian_Rovo__*`），同樣要先 `ToolSearch`。
   它在你啟動時常常還是 `pending`（還在連），**第一次搜不到不代表沒有**：先做
   不需要票的事（讀卡、讀 repo），再 `ToolSearch` 一次；兩次都沒有才當成

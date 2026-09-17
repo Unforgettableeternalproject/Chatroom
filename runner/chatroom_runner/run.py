@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -47,6 +48,17 @@ AGENT_KIND = "claude"
 REPORT_ATTEMPTS = 3
 REPORT_BACKOFF_SECONDS = (2, 5)
 REPORT_FAILED_NAME = "report_failed.json"
+# run 目錄底下放 chatroom 附件的資料夾。**不落在 repo 裡**：實測附件會掉進
+# cwd 的 `.chatroom/downloads/`，把人類的工作樹弄髒，而那些檔案跟這次改動
+# 一點關係也沒有。跟著 run 目錄留著，事後還查得到
+DOWNLOADS_DIR_NAME = "downloads"
+# stream-json 的單行上限。asyncio 的 StreamReader 預設只有 64 KiB，而一行
+# `tool_result` 只要含一張圖的 base64 就會超過——實測 2026-09-17：模型 Read
+# 了一張 141 KB 的 PNG，`readline()` 丟 `ValueError: Separator is not found,
+# and chunk exceed the limit`，pump 整個炸掉、執行任務跟著死，claude 進程沒了
+# 而 Hub 上那筆 run 永遠停在 running。放大到 64 MiB：一行事件再大也是記憶體
+# 裡的一份字串，比「一筆 run 從此無人收屍」便宜太多
+STREAM_LINE_LIMIT = 64 * 1024 * 1024
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push"}
 
@@ -333,7 +345,8 @@ class RunExecutor:
                  locks: RepoLocks | None = None,
                  sleep: Callable[[float], Awaitable[None]] | None = None,
                  on_runner_limited: Callable[[str], None] | None = None,
-                 prompt_dir: Path | None = None) -> None:
+                 prompt_dir: Path | None = None,
+                 monotonic: Callable[[], float] | None = None) -> None:
         self.cfg = cfg
         self.hub = hub
         self.usage_store = usage_store
@@ -341,14 +354,64 @@ class RunExecutor:
         self.sleep = sleep or asyncio.sleep
         self.on_runner_limited = on_runner_limited
         self.prompt_dir = prompt_dir
+        self.monotonic = monotonic or time.monotonic
         self.context_peak = 0
         self.turns = 0
+        # 停滯判斷用：最後一次收到 stream 事件的單調時刻。主迴圈每個心跳讀它
+        self.last_event_at = self.monotonic()
+        self.events_seen = 0
+        # pump 掛掉的原因（有值代表這一輪的 stream 沒讀完）
+        self.pump_error = ""
+        # 現在活著的 claude 子進程。收尾路徑要靠它殺乾淨
+        self.live_proc = None
+
+    def mark_activity(self) -> None:
+        """記一次「這個 run 還活著」。stream 有事件、或退避睡完要續跑時呼叫。"""
+        self.last_event_at = self.monotonic()
+        self.events_seen += 1
 
     # ---------- 對外 ----------
 
     async def execute(self, run: dict,
                       cancel: asyncio.Event | None = None) -> RunOutcome:
+        """執行一筆 run。**任何例外都在這裡收尾。**
+
+        🚨 2026-09-17 事故：`_pump` 丟出的 `ValueError` 把執行任務整個帶走，
+        子進程沒被殺、Hub 上那筆 run 停在 running，人類按取消也沒人處理。
+        所以這一層是安全網——殺進程樹、回報一個有理由的 failed，然後才讓
+        錯誤往上走給 log。少了它，一個未預期的例外＝一筆永遠不會收場的 run。
+        """
         cancel = cancel or asyncio.Event()
+        run_id = run["id"]
+        try:
+            return await self._execute(run, cancel)
+        except asyncio.CancelledError:
+            self.kill_live_proc()
+            await self._report(run_id, RunOutcome(
+                "cancelled", reason="cancel_requested",
+                result="執行任務被取消，子進程已終止。"))
+            raise
+        except Exception as exc:
+            self.kill_live_proc()
+            log.error("run %s 的執行以未預期的例外收場", run_id, exc_info=exc)
+            outcome = RunOutcome(
+                "failed", reason=f"runner_error: {exc.__class__.__name__}",
+                result=f"執行器在跑這筆 run 時丟出未預期的例外："
+                       f"{exc.__class__.__name__}: {exc}\n"
+                       "子進程（若還在）已被終止。詳細堆疊在執行器的 log。")
+            await self._report(run_id, outcome)
+            return outcome
+
+    def kill_live_proc(self) -> None:
+        """把還活著的 claude 子進程樹殺掉。收尾路徑用，重複呼叫無害。"""
+        proc = self.live_proc
+        if proc is None or proc.returncode is not None:
+            return
+        log.warning("收尾：終止仍在跑的 claude 進程（pid %s）", proc.pid)
+        kill_tree(proc.pid)
+
+    async def _execute(self, run: dict,
+                       cancel: asyncio.Event) -> RunOutcome:
         run_id = run["id"]
         try:
             project = self.cfg.project(run["project"])
@@ -494,10 +557,15 @@ class RunExecutor:
         attempt = 0
         outcome = RunOutcome("failed", reason="never_ran")
         while True:
+            # 每一輪（含退避後的 --resume）重新起算：剛起的進程還沒吐東西，
+            # 不該立刻被上一輪的沉默判成停滯
+            self.mark_activity()
             watcher = StreamWatcher(
                 project.context_soft_limit_tokens,
                 on_soft_limit=lambda n, d=run_dir: self._raise_handoff(d, n),
-                rate_limit_threshold=self.cfg.rate_limit_retry_threshold)
+                rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
+                monotonic=self.monotonic,
+                on_event=self.mark_activity)
             argv = self._argv(prompt, contract, project, run_dir,
                               resume, run["kind"])
             code, stop_reason = await self._spawn(argv, repo.path, env,
@@ -584,6 +652,7 @@ class RunExecutor:
             "CHATROOM_DEFAULT_NAME":
                 f"{self.cfg.label}-{short_id(run['id'])}",
             "CHATROOM_RUNNER_RUN_DIR": str(run_dir),
+            "CHATROOM_DOWNLOAD_DIR": str(run_dir / DOWNLOADS_DIR_NAME),
         })
         env.update(self._git_credential_isolation(env))
         return env
@@ -621,7 +690,8 @@ class RunExecutor:
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(cwd), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            **no_window_kwargs())
+            limit=STREAM_LINE_LIMIT, **no_window_kwargs())
+        self.live_proc = proc
         pump = asyncio.create_task(self._pump(proc, watcher, run_dir))
         waiter = asyncio.create_task(proc.wait())
         canceller = asyncio.create_task(cancel.wait())
@@ -646,20 +716,34 @@ class RunExecutor:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 # pragma: no cover - 讀不完就算了，狀態已經夠判斷
                 pump.cancel()
+            self.live_proc = None
         return proc.returncode or 0, stop
 
     async def _pump(self, proc, watcher: StreamWatcher, run_dir: Path) -> None:
-        """stdout 逐行進 watcher，同時原樣落檔（事後要有得看）。"""
+        """stdout 逐行進 watcher，同時原樣落檔（事後要有得看）。
+
+        🚨 **這裡的例外一律吞掉並記錄**（2026-09-17 事故）：pump 是一個獨立的
+        task，它丟出去的例外會把 `_spawn` 的 `wait_for` 一起帶走，整個執行任務
+        死在半路——子進程還活著、Hub 上那筆 run 停在 running，而沒有任何人會去
+        收它。讀不完的 stream 只代表「後面的事件看不到」，那比停屍好處理。
+        """
         path = run_dir / "stream.jsonl"
-        with path.open("a", encoding="utf-8") as fh:
-            while True:
-                raw = await proc.stdout.readline()
-                if not raw:
-                    break
-                line = raw.decode("utf-8", "replace")
-                fh.write(line if line.endswith("\n") else line + "\n")
-                fh.flush()
-                watcher.feed_line(line)
+        try:
+            with path.open("a", encoding="utf-8") as fh:
+                while True:
+                    raw = await proc.stdout.readline()
+                    if not raw:
+                        break
+                    line = raw.decode("utf-8", "replace")
+                    fh.write(line if line.endswith("\n") else line + "\n")
+                    fh.flush()
+                    watcher.feed_line(line)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.pump_error = f"{exc.__class__.__name__}: {exc}"
+            log.error("stream 讀取中斷（%s）；後續事件不會被看到",
+                      self.pump_error, exc_info=exc)
 
     def _raise_handoff(self, run_dir: Path, tokens: int) -> None:
         """立旗標。下一次工具呼叫會被 `PreToolUse` 擋下並要求交接（§5.4）。"""
@@ -838,6 +922,9 @@ class RunExecutor:
                 "CHATROOM_SESSION_KEY": f"claude-run-{run['id']}",
                 "CHATROOM_DEFAULT_NAME":
                     f"{self.cfg.label}-{short_id(run['id'])}",
+                # 附件落在 run 目錄底下，不是 cwd。bridge 預設會寫
+                # `./.chatroom/downloads/`，那個「.」是被派工的 repo
+                "CHATROOM_DOWNLOAD_DIR": str(run_dir / DOWNLOADS_DIR_NAME),
                 # 不帶這個 bridge 會落回 other，成員列顯示 OTHER
                 "CHATROOM_AGENT_KIND": AGENT_KIND,
             },
@@ -845,12 +932,19 @@ class RunExecutor:
         (run_dir / "mcp.json").write_text(
             json.dumps(mcp, ensure_ascii=False, indent=2), encoding="utf-8")
 
+        # 下載目錄先建起來：guard 的放行是比對路徑，但 bridge 要寫得進去
+        downloads = run_dir / DOWNLOADS_DIR_NAME
+        downloads.mkdir(parents=True, exist_ok=True)
+
         ctx = GuardContext(
             cwd=repo.path,
             allowed_branches=list(repo.allowed_branches),
             allowed_domains=list(self.cfg.allowed_domains),
             protected_paths=[self.cfg.state_dir, self.cfg.claude_config_dir,
                              HOOKS_DIR.parent],
+            # run 目錄整個在 state_dir 底下，本來會被「執行器自己的目錄」擋掉。
+            # 附件是 agent 自己要來的，讀得到才有意義——只鑿這一個洞
+            downloads_dir=downloads,
         )
         (run_dir / "guard.json").write_text(
             json.dumps(ctx.to_dict(), ensure_ascii=False, indent=2),

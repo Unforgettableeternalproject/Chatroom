@@ -31,10 +31,13 @@ HOOK = str(Path(__file__).resolve().parents[1]
 def ctx(tmp_path):
     cwd = tmp_path / "repo"
     cwd.mkdir()
+    downloads = tmp_path / "runner-state" / "runs" / "r1" / "downloads"
+    downloads.mkdir(parents=True)
     return GuardContext(cwd=cwd,
                         allowed_branches=["jsai_dev", "feature/*"],
                         allowed_domains=["github.com"],
-                        protected_paths=[tmp_path / "runner-state"])
+                        protected_paths=[tmp_path / "runner-state"],
+                        downloads_dir=downloads)
 
 
 ALLOWED = [
@@ -121,6 +124,40 @@ def test_write_outside_cwd_is_denied(ctx, tmp_path):
 def test_write_to_runner_own_dir_is_denied(ctx, tmp_path):
     d = check_path(str(tmp_path / "runner-state" / "config.json"), ctx)
     assert not d.allowed and d.rule == "path_protected"
+
+
+# ── 附件下載目錄（run 目錄底下的那一個洞）──────────────────────
+
+def _run_dir(tmp_path):
+    return tmp_path / "runner-state" / "runs" / "r1"
+
+
+def test_downloads_dir_is_readable_and_writable(ctx, tmp_path):
+    """`chatroom_get_file` 把附件放在 `<run_dir>/downloads`。那在執行器自己的
+    目錄底下，預設會被 `path_protected` 擋掉——而附件是 agent 自己要來的，
+    讀不到的話那個工具等於沒有。"""
+    png = str(_run_dir(tmp_path) / "downloads" / "x.png")
+    assert check_tool("Read", {"file_path": png}, ctx).allowed
+    assert check_path(png, ctx).allowed, "寫入也要放行：附件可能要被改寫"
+
+
+def test_downloads_exception_does_not_open_the_rest_of_the_run_dir(ctx,
+                                                                   tmp_path):
+    """🚨 鑿的是**一個洞**，不是整個 run 目錄。`settings.json` 與
+    `guard.json` 就在隔壁，agent 讀得到就等於讀得到自己的限制清單。"""
+    settings = str(_run_dir(tmp_path) / "settings.json")
+    d = check_tool("Read", {"file_path": settings}, ctx)
+    assert not d.allowed and d.rule == "read_protected"
+    w = check_path(settings, ctx)
+    assert not w.allowed and w.rule == "path_protected"
+
+
+def test_downloads_dir_still_refuses_secrets(ctx, tmp_path):
+    """放行的是位置，不是「什麼檔都行」。"""
+    d = check_tool("Read",
+                   {"file_path": str(_run_dir(tmp_path) / "downloads"
+                                     / ".env")}, ctx)
+    assert not d.allowed and d.rule == "read_sensitive"
 
 
 @pytest.mark.parametrize("name", [".env", ".env.local", "key.pem"])

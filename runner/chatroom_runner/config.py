@@ -34,6 +34,10 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
 DEFAULT_USAGE_WINDOW_HOURS = 5.0
 DEFAULT_MAINTENANCE_HOUR = 4
 DEFAULT_HEARTBEAT_SECONDS = 30
+# 進行中的 run 多久沒吐出任何 stream 事件就標成停滯。**只標記、不殺進程**
+#（牆鐘上限照舊管終止）——遠端看不到 shell，一個安靜的 run 與一個掛住的 run
+# 在面板上長得一模一樣
+DEFAULT_STALL_WARN_SECONDS = 600
 # 退避階梯（分鐘）。撞到 rate limit 之後用 `--resume` 續跑，每一階報一次
 DEFAULT_BACKOFF_MINUTES = (5, 15, 30, 60)
 # stream 裡連續看到幾次 rate_limit 的 api_retry 就把執行器標 limited
@@ -142,6 +146,7 @@ class RunnerConfig:
     usage_soft_cap_usd: float = 0.0
     maintenance_hour: int = DEFAULT_MAINTENANCE_HOUR
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
+    stall_warn_seconds: float = DEFAULT_STALL_WARN_SECONDS
     allowed_domains: list[str] = field(default_factory=list)
     # 額外要預先授權給子 agent 的工具名（`--allowedTools`），例如
     # "mcp__claude_ai_Atlassian_Rovo__*"。硬限制仍由 PreToolUse hook 守
@@ -295,6 +300,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
                                      DEFAULT_MAINTENANCE_HOUR)),
         heartbeat_seconds=float(raw.get("heartbeat_seconds",
                                         DEFAULT_HEARTBEAT_SECONDS)),
+        stall_warn_seconds=float(raw.get("stall_warn_seconds",
+                                         DEFAULT_STALL_WARN_SECONDS)),
         allowed_domains=list(raw.get("allowed_domains", [])),
         extra_allowed_tools=[
             str(x) for x in raw.get("extra_allowed_tools", [])],

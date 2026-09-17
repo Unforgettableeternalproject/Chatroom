@@ -491,8 +491,15 @@ def test_run_files_carry_the_matcher_and_bridge_pythonpath(tmp_path,
     assert env["CHATROOM_DEFAULT_NAME"].startswith("test-")
     # 少了它 bridge 會落回 other，房間成員列顯示 OTHER
     assert env["CHATROOM_AGENT_KIND"] == "claude"
+    # 🚨 附件要落在 run 目錄，不是 cwd。bridge 預設寫 `./.chatroom/downloads/`，
+    # 而那個「.」是被派工的 repo——實測附件就這樣弄髒了人類的工作樹
+    downloads = run_dir / "downloads"
+    assert env["CHATROOM_DOWNLOAD_DIR"] == str(downloads)
+    assert downloads.is_dir(), "目錄要先建起來，bridge 才寫得進去"
     guard = json.loads((run_dir / "guard.json").read_text("utf-8"))
     assert guard["allowed_branches"] == ["jsai_dev", "feature/*"]
+    # guard 要認得這個例外，否則「執行器自己的目錄」會把附件一起擋掉
+    assert guard["downloads_dir"] == str(downloads)
 
 
 def test_argv_has_verbose_with_stream_json(tmp_path, work_repo):
@@ -886,3 +893,75 @@ async def test_child_process_sees_the_isolated_git_env(
     assert seen["GIT_CONFIG_KEY_0"] == "credential.helper"
     assert seen["GIT_CONFIG_VALUE_0"] == ""
     assert seen["GIT_TERMINAL_PROMPT"] == "0"
+
+
+# ── stream 的單行上限（2026-09-17 事故）────────────────────────
+
+async def test_a_huge_stream_line_does_not_kill_the_pump(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 一行 300 KB 的 tool_result 不能把執行任務帶走。
+
+    實測：模型 `Read` 一張 141 KB 的 PNG，那一行 base64 超過 asyncio
+    StreamReader 預設的 64 KiB，`readline()` 丟
+    `ValueError: Separator is not found, and chunk exceed the limit`；
+    pump 炸掉、執行任務跟著死，claude 進程沒了而 Hub 上那筆 run 永遠停在
+    running。這條測試盯的是「那一行進得來，而且後面的事件照樣被解析」。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "big_line")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-bigline")
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, runner_hub)
+
+    outcome = await ex.execute(run)
+
+    assert ex.pump_error == "", f"pump 掛了：{ex.pump_error}"
+    assert outcome.status == "done"
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "done"
+    # 大行之後的事件要照樣被看到——只吞掉例外而停止讀取也算失敗
+    assert "附件讀得進來" in final["result"]
+    lines = (cfg.runs_dir / run["id"] / "stream.jsonl").read_text(
+        "utf-8").splitlines()
+    assert max(len(ln) for ln in lines) > 200_000
+
+
+# ── 執行任務的安全網（2026-09-17 事故）──────────────────────────
+
+async def test_an_unexpected_exception_still_reports_and_kills_the_child(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 執行任務丟出未預期的例外時，run 一定要收場、進程一定要死。
+
+    事故當時 pump 的 `ValueError` 把整個任務帶走：`_finish` 把它從 active
+    移掉、log 有一行堆疊，但 Hub 上那筆 run 停在 running，人類按取消也沒有
+    人處理——因為已經沒有人在處理它了。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "60")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-boom")
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, runner_hub)
+
+    async def boom(self_proc, watcher, run_dir):
+        raise ValueError("Separator is not found, and chunk exceed the limit")
+
+    monkeypatch.setattr(RunExecutor, "_pump",
+                        lambda self, proc, watcher, run_dir: boom(
+                            proc, watcher, run_dir))
+    killed: list[int] = []
+    real_kill = run_module.kill_tree
+    monkeypatch.setattr(run_module, "kill_tree",
+                        lambda pid: (killed.append(pid), real_kill(pid))[1])
+
+    outcome = await asyncio.wait_for(ex.execute(run), timeout=120)
+
+    assert outcome.status == "failed"
+    assert outcome.reason.startswith("runner_error: ValueError"), outcome.reason
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "failed", "Hub 上不能留一筆沒有人在跑的 running"
+    assert killed, "子進程沒被殺：它會一直跑到牆鐘上限，而沒有人在看它"

@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,7 @@ from typing import Awaitable, Callable
 
 from . import dashboard, gitops
 from .config import RunnerConfig
-from .hub import HubError
+from .hub import HubError, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
                   RunExecutor, parse_mcp_list, remember_claude_ai_servers)
@@ -52,6 +53,12 @@ class ActiveRun:
     executor: RunExecutor
     started_at: str
     repo: str = ""
+    # 停滯標記。`stall_marks`／`resume_marks` 是**次數**，不是布林：
+    # 「只報一次」這件事要驗得出來，計數器才看得到重複
+    stalled: bool = False
+    stalled_seconds: int = 0
+    stall_marks: int = 0
+    resume_marks: int = 0
 
     def view(self) -> dashboard.RunView:
         return dashboard.RunView(
@@ -59,7 +66,8 @@ class ActiveRun:
             ref=self.run.get("ref", ""), project=self.run.get("project", ""),
             repo=self.repo, started_at=self.started_at,
             turns=self.executor.turns,
-            context_tokens=self.executor.context_peak)
+            context_tokens=self.executor.context_peak,
+            stalled_seconds=self.stalled_seconds)
 
 
 @dataclass
@@ -78,13 +86,15 @@ class RunnerLoop:
     def __init__(self, cfg: RunnerConfig, hub, usage_store: UsageStore | None
                  = None, executor_factory: Callable[[], RunExecutor] | None
                  = None, sleep: Callable[[float], Awaitable[None]] | None
-                 = None, now: Callable[[], datetime] | None = None) -> None:
+                 = None, now: Callable[[], datetime] | None = None,
+                 monotonic: Callable[[], float] | None = None) -> None:
         self.cfg = cfg
         self.hub = hub
         self.usage = usage_store
         self.locks = RepoLocks()
         self.sleep = sleep or asyncio.sleep
         self.now = now or (lambda: datetime.now(timezone.utc).astimezone())
+        self.monotonic = monotonic or time.monotonic
         self.state = LoopState()
         self.active: dict[str, ActiveRun] = {}
         self.started_at = self.now().isoformat()
@@ -98,7 +108,8 @@ class RunnerLoop:
     def _default_executor(self) -> RunExecutor:
         return RunExecutor(self.cfg, self.hub, usage_store=self.usage,
                            locks=self.locks, sleep=self.sleep,
-                           on_runner_limited=self.mark_limited)
+                           on_runner_limited=self.mark_limited,
+                           monotonic=self.monotonic)
 
     # ---------- 自檢（§5.7）----------
 
@@ -222,14 +233,83 @@ class RunnerLoop:
                         f"不在允許清單（{'、'.join(repo.allowed_branches)}）裡")
         return problems
 
+    # ---------- 啟動對帳（孤兒 run）----------
+
+    def _persist_active(self) -> None:
+        """把「我手上有哪幾筆 run」立刻落地。
+
+        🚨 **在 spawn／結束的當下就寫**，不是收工時才寫：要對帳的正是「執行器
+        沒有機會收工」的那一次。進程被殺、任務炸掉、機器斷電——那時只有這個
+        檔案記得曾經有一筆 run 在跑。
+        """
+        identity = getattr(self.hub, "identity", None)
+        if identity is None:
+            return
+        identity.active_run_ids = sorted(self.active)
+        try:
+            save_identity(self.cfg.state_file, identity)
+        except OSError as exc:  # pragma: no cover - 寫不進去只少了對帳
+            log.warning("本機狀態檔寫不進去（%s）：%s",
+                        self.cfg.state_file, exc)
+
+    async def reconcile(self) -> list[str]:
+        """收拾上一次崩潰留下的孤兒 run。
+
+        判準是**「Hub 說還在跑、本機卻沒有那個進程」**。啟動時 `self.active`
+        必然是空的，所以狀態檔裡記著的每一筆都算孤兒：它們的 claude 進程隨著
+        上一個執行器進程一起沒了，而 Hub 那邊永遠等不到回報——面板上是一筆
+        正在做事的 run，實際上沒有任何東西在動。
+
+        已經有取消請求的收成 `cancelled`，其餘收成 `failed`
+        （`runner_restarted`）。查不到／權限不足就跳過，不擋啟動。
+        """
+        identity = getattr(self.hub, "identity", None)
+        stale = list(getattr(identity, "active_run_ids", []) or [])
+        recovered: list[str] = []
+        for run_id in stale:
+            if run_id in self.active:
+                continue
+            try:
+                run = await self.hub.get_run(run_id)
+            except HubError as exc:
+                log.warning("對帳：run %s 查不到現況（%s）", run_id, exc)
+                continue
+            if not run:
+                continue
+            if run.get("status") not in ("claimed", "running", "limited"):
+                continue
+            if (run.get("runner_id")
+                    and run["runner_id"] != identity.runner_id):
+                continue
+            cancelled = bool(run.get("cancel_requested"))
+            status = "cancelled" if cancelled else "failed"
+            reason = "cancel_requested" if cancelled else "runner_restarted"
+            try:
+                await self.hub.report(
+                    run_id, status, reason=reason,
+                    result="執行器重新啟動時發現這筆 run 沒有對應的進程"
+                           "（上一個執行器進程已經不在）。它不會自己繼續，"
+                           "所以在這裡收場。")
+            except HubError as exc:
+                log.warning("對帳：run %s 收不掉（%s）", run_id, exc)
+                continue
+            log.warning("對帳：run %s 沒有對應進程，收成 %s（%s）",
+                        run_id, status, reason)
+            recovered.append(run_id)
+        if stale:
+            self._persist_active()
+        return recovered
+
     # ---------- 生命週期 ----------
 
     async def start(self) -> bool:
-        """自檢 → 註冊。回傳「可不可以開始領單」。"""
+        """自檢 → 註冊 → 對帳。回傳「可不可以開始領單」。"""
         self.state.selfcheck_problems = await self.selfcheck()
         await self.hub.register(self.cfg.host, self.cfg.label,
                                 list(self.cfg.projects), self.cfg.max_parallel,
                                 self.cfg.version)
+        # 對帳要在領新單之前：孤兒收掉了，面板上才只剩真的在跑的那幾筆
+        await self.reconcile()
         if self.state.selfcheck_problems:
             # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
             # 只有「退出碼 1」，而原因在下一次心跳就被覆蓋掉
@@ -282,8 +362,41 @@ class RunnerLoop:
             except OSError:  # pragma: no cover
                 pass
 
+    def check_stalls(self) -> None:
+        """進行中的 run 多久沒說話。**每次心跳看一眼，狀態轉換各記一次。**
+
+        🚨 **不對 Hub `report`**：Hub 的狀態機（`app._RUN_TRANSITIONS`）沒有
+        `running → running`，同狀態回報會被 409 `run_bad_transition` 擋掉，
+        而那個 code 在 `hub.report` 裡被當成「這一步已經套用過」安靜吞掉——
+        打了等於什麼都沒發生，只是每個心跳多一次往返。停滯目前**只走
+        `dashboard_json`**（App 讀得到），要讓它進訊息流得等 Hub 那端允許
+        帶 `reason` 的同狀態回報。
+
+        不殺進程：牆鐘上限照舊管終止，這裡只負責讓遠端的人看得見。
+        """
+        threshold = self.cfg.stall_warn_seconds
+        if threshold <= 0:
+            return
+        now = self.monotonic()
+        for run_id, active in self.active.items():
+            idle = now - active.executor.last_event_at
+            if idle >= threshold:
+                active.stalled_seconds = int(idle)
+                if not active.stalled:
+                    active.stalled = True
+                    active.stall_marks += 1
+                    log.warning("run %s 已經 %d 秒沒有任何 stream 事件"
+                                "（門檻 %s 秒）；不殺進程，只標記",
+                                run_id, active.stalled_seconds, int(threshold))
+            elif active.stalled:
+                active.stalled = False
+                active.stalled_seconds = 0
+                active.resume_marks += 1
+                log.info("run %s 又開始吐事件了", run_id)
+
     async def heartbeat(self) -> dict:
         await self._flush_failed_reports()
+        self.check_stalls()
         usage_window =(self.usage.window(self.cfg.usage_window_hours,
                                           self.cfg.usage_soft_cap_tokens,
                                           self.cfg.usage_soft_cap_usd)
@@ -373,6 +486,7 @@ class RunnerLoop:
                            executor=executor,
                            started_at=self.now().isoformat())
         self.active[run["id"]] = active
+        self._persist_active()
         task.add_done_callback(lambda t, rid=run["id"]: self._finish(rid, t))
         return active
 
@@ -383,6 +497,7 @@ class RunnerLoop:
         房裡停在 running，而本機一行紀錄都沒有。
         """
         self.active.pop(run_id, None)
+        self._persist_active()
         if task is None or task.cancelled():
             return
         exc = task.exception()

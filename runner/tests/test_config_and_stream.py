@@ -211,6 +211,13 @@ def test_templates_render_all_placeholders(kind):
     assert "不 push" in contract and "沒驗證什麼" in contract
     # 收工之後要離開房間：工作房是常駐的，不走就一直掛在成員列上
     assert "chatroom_leave" in contract
+    # 🚨 join 之後的第一則發言要講清楚「我不會回應 @」。run 是單回合 headless
+    # 進程，沒有 watcher、bridge 也不會替它心跳——房裡的人 mention 它不會讓它
+    # 醒過來。少了這句，人類會對著一個不會回話的名字打字
+    assert "不會回應 @" in contract
+    assert "chatroom_ask_human" in contract
+    # 替代路徑要寫出來：問題由它問、資訊寫在卡上
+    assert "r1" in contract and "task-1" in contract
 
 
 def test_missing_template_is_an_error():

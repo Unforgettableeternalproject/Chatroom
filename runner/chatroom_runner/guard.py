@@ -102,6 +102,10 @@ class GuardContext:
     allowed_domains: list[str] = field(default_factory=list)
     # 執行器自己的目錄（設定、狀態、hooks）——agent 不准讀寫
     protected_paths: list[Path] = field(default_factory=list)
+    # 這一筆 run 的附件落點（`<run_dir>/downloads`）。它在 run 目錄底下，
+    # 也就是在 `protected_paths` 裡面，所以要**明列一個例外**：附件是 agent
+    # 自己用 `chatroom_get_file` 要來的，讀不到的話那個工具等於沒有
+    downloads_dir: Path | None = None
 
     @classmethod
     def from_dict(cls, raw: dict) -> "GuardContext":
@@ -110,13 +114,17 @@ class GuardContext:
             allowed_branches=list(raw.get("allowed_branches", [])),
             allowed_domains=list(raw.get("allowed_domains", [])),
             protected_paths=[Path(p) for p in raw.get("protected_paths", [])],
+            downloads_dir=(Path(raw["downloads_dir"])
+                           if raw.get("downloads_dir") else None),
         )
 
     def to_dict(self) -> dict:
         return {"cwd": str(self.cwd),
                 "allowed_branches": list(self.allowed_branches),
                 "allowed_domains": list(self.allowed_domains),
-                "protected_paths": [str(p) for p in self.protected_paths]}
+                "protected_paths": [str(p) for p in self.protected_paths],
+                "downloads_dir": (str(self.downloads_dir)
+                                  if self.downloads_dir else "")}
 
 
 @dataclass
@@ -251,6 +259,17 @@ def _within_cwd(raw: str, ctx: GuardContext) -> bool:
     return resolved == cwd or cwd in resolved.parents
 
 
+def _in_downloads(resolved: Path, ctx: GuardContext) -> bool:
+    """路徑是否落在這一筆 run 的附件目錄底下（含目錄本身）。"""
+    if ctx.downloads_dir is None:
+        return False
+    try:
+        root = ctx.downloads_dir.resolve()
+    except OSError:  # pragma: no cover
+        return False
+    return resolved == root or root in resolved.parents
+
+
 def _protected_hit(resolved: Path, ctx: GuardContext) -> bool:
     for prot in ctx.protected_paths:
         try:
@@ -274,12 +293,15 @@ def check_path(raw_path: str, ctx: GuardContext) -> Decision:
         cwd = ctx.cwd.resolve()
     except OSError:  # pragma: no cover
         return _deny("path_unresolvable", "這個路徑無法解析，拒絕寫入。")
-    if _protected_hit(resolved, ctx):
+    # 附件目錄是 cwd 外唯一的例外。敏感檔名的檢查照走——放行的是「位置」，
+    # 不是「什麼檔都行」
+    in_downloads = _in_downloads(resolved, ctx)
+    if not in_downloads and _protected_hit(resolved, ctx):
         return _deny(
             "path_protected",
             "那是執行器自己的目錄（設定與 hooks），任何 run 都不能動。"
             "要調整限制請問人類。")
-    if resolved != cwd and cwd not in resolved.parents:
+    if not in_downloads and resolved != cwd and cwd not in resolved.parents:
         return _deny("path_outside_cwd",
                      f"只能寫工作目錄（{cwd}）以內的檔案。這次的路徑在外面，"
                      "要動別的 repo 請開一張新的卡讓人類派工。")
@@ -321,7 +343,8 @@ def check_read_path(raw_path: str, ctx: GuardContext) -> Decision:
                          "位置。")
     if not any(ch in raw for ch in "*?["):
         resolved = _resolve(raw, ctx)
-        if resolved is not None and _protected_hit(resolved, ctx):
+        if (resolved is not None and not _in_downloads(resolved, ctx)
+                and _protected_hit(resolved, ctx)):
             return _deny("read_protected",
                          "那是執行器自己的目錄（設定、狀態與 hooks），"
                          "任何 run 都不能讀。要調整限制請問人類。")

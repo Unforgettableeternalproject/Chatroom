@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -83,6 +84,10 @@ class StreamState:
     soft_limit_hit: bool = False
     saw_result: bool = False
     texts: list[str] = field(default_factory=list)
+    # 最後一次收到**任何** stream 事件的時刻（單調時鐘）。停滯判斷只認這個：
+    # 牆鐘會被系統校時往回拉，而「這個 run 多久沒說話」不該因此變成負數。
+    # 0 代表一個事件都還沒到
+    last_event_at: float = 0.0
 
     def total_tokens(self) -> int:
         u = self.usage or {}
@@ -101,11 +106,18 @@ class StreamWatcher:
 
     def __init__(self, soft_limit_tokens: int,
                  on_soft_limit: Callable[[int], None] | None = None,
-                 rate_limit_threshold: int = 3) -> None:
+                 rate_limit_threshold: int = 3,
+                 monotonic: Callable[[], float] | None = None,
+                 on_event: Callable[[], None] | None = None) -> None:
         self.soft_limit_tokens = soft_limit_tokens
         self.on_soft_limit = on_soft_limit
         self.rate_limit_threshold = rate_limit_threshold
+        self.monotonic = monotonic or time.monotonic
+        # 每收到一個事件就通知一次（執行器用它更新停滯計時）
+        self.on_event = on_event
         self.state = StreamState()
+        self.state.last_event_at = self.monotonic()
+        self.events_seen = 0
 
     @property
     def rate_limited(self) -> bool:
@@ -119,6 +131,11 @@ class StreamWatcher:
         return event
 
     def feed(self, event: dict) -> None:
+        # 先記時間再分派：不管這是什麼事件、看不看得懂，收到就代表 run 還活著
+        self.state.last_event_at = self.monotonic()
+        self.events_seen += 1
+        if self.on_event is not None:
+            self.on_event()
         kind = event.get("type")
         if kind == "system":
             self._system(event)

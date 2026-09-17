@@ -29,12 +29,16 @@ class RunView:
     started_at: str = ""
     turns: int = 0
     context_tokens: int = 0
+    # 多久沒吐出任何 stream 事件（秒）。0 ＝ 沒有停滯。**只是標記**：
+    # run 沒有被殺，牆鐘上限照舊。面板上看得到才有人會去問它在做什麼
+    stalled_seconds: int = 0
 
     def to_dict(self) -> dict:
         return {"run_id": self.run_id, "kind": self.kind, "ref": self.ref,
                 "project": self.project, "repo": self.repo,
                 "started_at": self.started_at, "turns": self.turns,
-                "context_tokens": self.context_tokens}
+                "context_tokens": self.context_tokens,
+                "stalled_seconds": self.stalled_seconds}
 
 
 @dataclass

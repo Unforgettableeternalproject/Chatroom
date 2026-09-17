@@ -64,6 +64,7 @@
 | `host` / `label` | 註冊身分。**同 host+label 在 Hub 是同一台**（冪等） |
 | `max_parallel` | 同時幾個 run（預設 3）。本地與 Hub 兩端都守 |
 | `heartbeat_seconds` | 心跳間隔（預設 30） |
+| `stall_warn_seconds` | 進行中的 run 多久沒吐出任何 stream 事件就標成停滯（預設 600，`0` ＝關掉）。**只標記、不殺進程**，數字出現在 `dashboard_json.runs.running[].stalled_seconds`；牆鐘上限照舊管終止 |
 | `maintenance_hour` | 每日維護窗（預設 4 點）。到點且無 run 時自我重啟 |
 | `usage_window_hours` / `usage_soft_cap_tokens` / `usage_soft_cap_usd` | 近 N 小時的軟上限，到了就停收新單。**這是自我約束，不是真實額度** |
 | `require_gpg` | 自檢要不要驗簽章（預設 true） |
@@ -94,9 +95,9 @@
 |---|---|
 | 設定 | `%LOCALAPPDATA%/UEP/Chatroom/runner/config.json`（`CHATROOM_RUNNER_CONFIG` 可覆寫） |
 | log | `%LOCALAPPDATA%/UEP/Chatroom/runner/logs/runner.log`（輪替 5MB × 5） |
-| 執行器身分與 token | `.../runner/state.json`（權限只限使用者，**不要外流**） |
+| 執行器身分與 token | `.../runner/state.json`（權限只限使用者，**不要外流**）。同時記著現在手上有哪幾筆 run（`active_run_ids`），啟動對帳靠它認出上一次崩潰留下的孤兒 |
 | 用量視窗 | `.../runner/usage.db` |
-| 每筆 run 的暫存 | `.../runner/runs/<run_id>/`：`settings.json`、`mcp.json`、`guard.json`、`stream.jsonl`、`tool.log`、`handoff.flag`、`compacted`、`report_failed.json`（回報送不出去時的落地，下次 heartbeat 重送） |
+| 每筆 run 的暫存 | `.../runner/runs/<run_id>/`：`settings.json`、`mcp.json`、`guard.json`、`stream.jsonl`、`tool.log`、`handoff.flag`、`compacted`、`report_failed.json`（回報送不出去時的落地，下次 heartbeat 重送）、`downloads/`（`chatroom_get_file` 的落點，`CHATROOM_DOWNLOAD_DIR` 指到這裡；不放在 repo 裡是因為附件會弄髒人類的工作樹，run 結束後隨 run 目錄留著） |
 
 ## 硬限制（`PreToolUse` hook）
 

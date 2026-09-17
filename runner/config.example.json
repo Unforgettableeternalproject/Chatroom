@@ -7,6 +7,7 @@
   "label": "esvel",
   "max_parallel": 3,
   "heartbeat_seconds": 30,
+  "stall_warn_seconds": 600,
   "maintenance_hour": 4,
   "usage_window_hours": 5,
   "usage_soft_cap_tokens": 8000000,

@@ -16,6 +16,7 @@
 | `long` | 印一則就長睡，等著被殺 | 0 |
 | `env_dump` | 把 `GIT_*` 環境變數寫進 run 目錄的 `env.json` | 0 |
 | `not_logged_in` | result subtype=success 但 is_error、exit 1（實測形狀） | 1 |
+| `big_line` | 一行 300 KB 的 tool_result（模擬 Read 一張圖） | 0 |
 """
 
 from __future__ import annotations
@@ -113,6 +114,20 @@ def main(argv: list[str]) -> int:
             json.dump(seen, fh, ensure_ascii=False)
         assistant("環境已落檔。")
         result("success", False, "環境已落檔。", turns=1)
+        return 0
+    if scenario == "big_line":
+        # 2026-09-17 事故的形狀：模型 Read 一張 141 KB 的 PNG，那一行
+        # tool_result 帶著 base64 遠超 asyncio StreamReader 預設的 64 KiB 行
+        # 上限，`readline()` 直接丟 ValueError。這裡吐得比那更大一點
+        blob = "A" * 300_000
+        emit({"type": "user", "session_id": SESSION_ID,
+              "message": {"role": "user", "content": [
+                  {"type": "tool_result", "tool_use_id": "t1",
+                   "content": [{"type": "image", "source": {
+                       "type": "base64", "media_type": "image/png",
+                       "data": blob}}]}]}})
+        assistant("圖我看過了。")
+        result("success", False, "已完成：附件讀得進來。", turns=2)
         return 0
     if scenario == "not_logged_in":
         # 實測 2.1.273：加 --bare 未登入時 subtype 照樣是 success。

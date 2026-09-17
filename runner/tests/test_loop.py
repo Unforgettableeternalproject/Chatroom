@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -29,6 +30,11 @@ class StubExecutor:
         self.turns = 0
         self.context_peak = 0
         self.cancelled = False
+        # 停滯判斷讀這個欄位；stub 預設「剛剛才說過話」
+        self.last_event_at = time.monotonic()
+
+    def mark_activity(self) -> None:
+        self.last_event_at = time.monotonic()
 
     async def execute(self, run, cancel=None):
         StubExecutor.seen.append(run)
@@ -497,3 +503,156 @@ async def test_maintenance_does_not_restart_while_paused_or_draining(
     loop.apply_command("resume")
     await loop.tick()
     assert loop.exit_code == EXIT_RESTART, "恢復之後該做的維護沒有做"
+
+
+# ── 停滯提醒 ────────────────────────────────────────────────────
+
+async def test_a_silent_run_is_marked_stalled_once(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 進行中卻長時間沒有任何 stream 事件的 run 要在面板上看得見。
+
+    run 是單回合 headless 進程，房裡的人 mention 它不會讓它醒過來——一個掛住
+    的 run 與一個正在思考的 run，在面板上長得一模一樣。這裡用假 claude 的
+    `long`（吐兩行就長睡）＋注入的單調時鐘製造「長時間無輸出」。
+
+    **標記只記一次**：每個心跳都記一次的話，log 與面板會被同一件事洗版，
+    而「它什麼時候開始不說話的」反而看不出來。不殺進程，牆鐘上限照舊。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "60")
+    clock = {"t": 0.0}
+    cfg = make_config(tmp_path, work_repo, stall_warn_seconds=600)
+    loop = RunnerLoop(cfg, runner_hub, monotonic=lambda: clock["t"])
+    await _register(loop)
+    await create_run(client, room_id, headers, kind="ticket", ref="task-stall")
+
+    await loop.tick()
+    assert loop.active, "沒領到單就驗不到停滯"
+    active = next(iter(loop.active.values()))
+    stream = cfg.runs_dir / active.run["id"] / "stream.jsonl"
+    for _ in range(200):
+        await asyncio.sleep(0.05)
+        if stream.exists() and len(stream.read_text("utf-8").splitlines()) >= 2:
+            break
+    assert active.executor.events_seen >= 2, "子進程根本沒吐東西"
+
+    # 執行器起的 run id 要立刻落地，崩潰之後才對得了帳
+    saved = json.loads(cfg.state_file.read_text("utf-8"))
+    assert saved["active_run_ids"] == [active.run["id"]]
+
+    # 從這裡開始假 claude 只會睡：時鐘往前跳就是「長時間沒有輸出」
+    clock["t"] = 1200.0
+    for _ in range(3):
+        await loop.heartbeat()
+
+    assert active.stalled and active.stall_marks == 1, "重複標記會洗版"
+    assert active.resume_marks == 0
+    assert active.view().to_dict()["stalled_seconds"] >= 600
+    assert active.run["id"] in loop.active, "只標記，不殺進程"
+
+    # 再收到事件就解除，一樣只記一次
+    active.executor.mark_activity()
+    for _ in range(3):
+        await loop.heartbeat()
+    assert not active.stalled and active.stalled_seconds == 0
+    assert active.resume_marks == 1 and active.stall_marks == 1
+
+    await loop.shutdown()
+
+
+async def test_stall_marking_is_off_when_the_threshold_is_zero(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """門檻 0 ＝關掉。開關留白時該什麼都不做，不是「每個心跳都標」。"""
+    cfg = make_config(tmp_path, work_repo, stall_warn_seconds=0)
+    gate = asyncio.Event()
+    loop = RunnerLoop(cfg, runner_hub, monotonic=lambda: 10_000.0,
+                      executor_factory=lambda: StubExecutor(gate))
+    await _register(loop)
+    _app, client = hub_app
+    room_id, headers = ops_room
+    await create_run(client, room_id, headers, ref="task-nostall")
+    await loop.tick()
+    active = next(iter(loop.active.values()))
+    await loop.heartbeat()
+    assert not active.stalled and active.stall_marks == 0
+    gate.set()
+    await loop.shutdown()
+
+
+# ── 啟動對帳（孤兒 run）──────────────────────────────────────────
+
+async def _orphan(client, room_id, headers, runner_hub, ref):
+    """造一筆「Hub 說在跑、本機沒有進程」的 run。"""
+    await create_run(client, room_id, headers, kind="ticket", ref=ref)
+    claimed = await runner_hub.claim()
+    await runner_hub.report(claimed["id"], "running", reason="spawn")
+    return claimed["id"]
+
+
+async def test_startup_reconciles_a_run_with_no_process(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """🚨 上一次崩潰留下的 run 要在啟動時收掉。
+
+    2026-09-17：執行任務炸掉、claude 進程消失，而 Hub 上那筆 run 停在
+    running。面板上是一筆正在做事的派工，實際上沒有任何東西在動，人類按取消
+    也沒有人處理——因為已經沒有人在處理它了。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-orphan")
+    # 上一個執行器進程死掉：狀態檔還記著它，但本機一個進程都沒有
+    runner_hub.identity.active_run_ids = [run_id]
+
+    recovered = await loop.reconcile()
+
+    assert recovered == [run_id]
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "failed"
+    assert body["run"]["reason"] == "runner_restarted"
+    # 收完就把清單清掉，下一次啟動不會再對同一筆
+    assert json.loads(cfg.state_file.read_text("utf-8"))["active_run_ids"] == []
+
+
+async def test_reconcile_honours_a_pending_cancel(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """人類已經按過取消的孤兒收成 cancelled，不是 failed。
+
+    收成 failed 的話，稽核串會說「執行器把它做壞了」，而事實是人類要它停。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-cancel")
+    r = await client.post(f"/api/runs/{run_id}/cancel", headers=headers)
+    assert r.status_code == 200 and r.json()["cancelled"] is False
+    runner_hub.identity.active_run_ids = [run_id]
+
+    assert await loop.reconcile() == [run_id]
+
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "cancelled"
+
+
+async def test_reconcile_leaves_a_finished_run_alone(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """已經收場的 run 不再動它——狀態機不允許，硬打也只是每次啟動多一輪 409。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-done")
+    await runner_hub.report(run_id, "done", reason="finished")
+    runner_hub.identity.active_run_ids = [run_id]
+
+    assert await loop.reconcile() == []
+
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "done"

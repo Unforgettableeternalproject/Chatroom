@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,9 +41,14 @@ class RunnerIdentity:
 
     runner_id: str = ""
     runner_token: str = ""
+    # 這台執行器現在手上有哪幾筆 run。**進程死了它們還在檔案裡**——啟動對帳
+    # 靠的就是這份清單：Hub 上還是 running、本機卻沒有對應進程的，就是上一次
+    # 崩潰留下的孤兒。沒有它，那筆 run 會永遠停在 running 而沒有人收
+    active_run_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {"runner_id": self.runner_id, "runner_token": self.runner_token}
+        return {"runner_id": self.runner_id, "runner_token": self.runner_token,
+                "active_run_ids": list(self.active_run_ids)}
 
 
 def load_identity(path: Path) -> RunnerIdentity:
@@ -53,8 +58,10 @@ def load_identity(path: Path) -> RunnerIdentity:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return RunnerIdentity()
-    return RunnerIdentity(runner_id=raw.get("runner_id", "") or "",
-                          runner_token=raw.get("runner_token", "") or "")
+    return RunnerIdentity(
+        runner_id=raw.get("runner_id", "") or "",
+        runner_token=raw.get("runner_token", "") or "",
+        active_run_ids=[str(x) for x in raw.get("active_run_ids", []) if x])
 
 
 def save_identity(path: Path, identity: RunnerIdentity) -> None:
@@ -206,6 +213,33 @@ class RunnerHub:
                        "limit_reason": limit_reason,
                        "dashboard_json": dashboard,
                        "usage_window_json": usage_window})
+
+    async def get_run(self, run_id: str) -> dict | None:
+        """查一筆 run 的現況（啟動對帳用）。查不到／讀不到權限回 ``None``。
+
+        `GET /api/runs/{id}` 的門檻是「房內成員或主持人視角」，而執行器不是
+        任何一間房的成員——所以要帶 `X-Host-View: 1`。那個標頭只有配上 Hub
+        的主 token 才成立（見 `app.host_view`），token 不對就是 403，這裡把它
+        當成「這次對不了帳」而不是錯誤：對不到帳比啟動不了好。
+        """
+        client = self._ensure()
+        headers = self._headers(with_runner_token=False)
+        headers["X-Host-View"] = "1"
+        try:
+            resp = await client.request("GET", f"/api/runs/{run_id}",
+                                        headers=headers)
+        except httpx.HTTPError as exc:
+            raise HubError(f"查 run {run_id} 失敗：{exc.__class__.__name__}",
+                           code="unreachable") from exc
+        if resp.status_code in (403, 404):
+            return None
+        if resp.status_code >= 400:
+            raise translate(resp.status_code, _detail_of(resp))
+        try:
+            return resp.json().get("run")
+        except ValueError as exc:
+            raise HubError("Hub 回應不是合法的 JSON，版本可能不相容。",
+                           code="bad_json") from exc
 
     async def claim(self) -> dict | None:
         """領一筆單。沒單可領 Hub 回 204 ⇒ 這裡回 ``None``。"""
