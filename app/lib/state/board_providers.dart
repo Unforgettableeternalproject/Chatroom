@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/board_api.dart';
 import '../core/errors/api_exception.dart';
 import '../models/board.dart';
+import '../models/stage_file.dart';
 import 'app_providers.dart';
 import 'messages_providers.dart';
 import 'rooms_providers.dart';
@@ -516,6 +517,51 @@ class BoardActions {
     final pid = await _pid();
     if (pid == null && _sk == null) return;
     await _api.deleteTask(taskId, participantId: pid, sessionKey: _sk);
+    _reload();
+  }
+
+  /// 把一份已上傳的附件掛到階段上。
+  ///
+  /// [boardId] 要由呼叫端傳進來：房軸的 [BoardActions] 手上只有房，而板的
+  /// id 是**從回應學來的**（見 [BoardCache]）——畫面知道它的時候比這裡早。
+  ///
+  /// 成功之後重拉板，`files` 跟著 checklist 一起回來。**不做樂觀更新**：
+  /// 素材列上要顯示的「誰掛的」與 `created_at` 都由 Hub 決定。
+  Future<StageFile?> addStageFile(
+    String boardId,
+    String checklistId, {
+    required String attachmentId,
+    String note = '',
+  }) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    final file = await _ref.read(boardsApiProvider).addStageFile(
+          boardId,
+          checklistId,
+          attachmentId: attachmentId,
+          note: note,
+          participantId: pid,
+          sessionKey: _sk,
+        );
+    _reload();
+    return file;
+  }
+
+  /// 卸除一份素材。[fileId] 是掛接關係的 id，不是 attachment_id。
+  Future<void> removeStageFile(
+    String boardId,
+    String checklistId,
+    String fileId,
+  ) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _ref.read(boardsApiProvider).removeStageFile(
+          boardId,
+          checklistId,
+          fileId,
+          participantId: pid,
+          sessionKey: _sk,
+        );
     _reload();
   }
 }

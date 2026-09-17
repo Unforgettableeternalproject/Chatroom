@@ -8,6 +8,7 @@ import '../state/app_providers.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../models/attachment.dart';
+import 'stage_files.dart';
 
 /// 訊息底下的附件區。
 ///
@@ -20,11 +21,17 @@ class AttachmentView extends StatelessWidget {
     required this.serverUrl,
     required this.token,
     this.participantId,
+    this.roomId,
   });
 
   final List<Attachment> attachments;
   final String serverUrl;
   final String token;
+
+  /// 這則訊息在哪間房。**有房才畫「加到階段」**——階段是那間房掛著的板
+  /// 底下的東西，沒有房就沒有可以掛上去的階段。素材清單自己重用這個元件
+  /// 時也不給（那裡的附件已經在階段上了）。
+  final String? roomId;
 
   /// 房內身分。房間是讀取邊界，附件跟著訊息走——非成員取不到。
   /// 舊版 Hub 忽略這個標頭，帶了不影響。
@@ -76,6 +83,10 @@ class AttachmentView extends StatelessWidget {
                   // 用途多半就是「這個你看一下」
                   DownloadAttachmentButton(
                       attachment: a, participantId: participantId),
+                  // 「加到階段」與存檔並排：兩者都是「把這個檔案帶去別的
+                  // 地方用」，分開放的話第二條路沒有人會找到
+                  if (roomId != null)
+                    AddToStageButton(attachment: a, roomId: roomId!),
                 ],
               ),
             ),
@@ -325,6 +336,38 @@ class _FullScreenImage extends StatelessWidget {
           ),
         ]),
       ),
+    );
+  }
+}
+
+
+/// 把一則訊息的附件掛到這間房的板上某個階段。
+///
+/// 放在存檔鈕旁邊：找附件的動作只有這一個地方，第二個入口藏在別處等於沒有。
+class AddToStageButton extends ConsumerWidget {
+  const AddToStageButton({
+    super.key,
+    required this.attachment,
+    required this.roomId,
+  });
+
+  final Attachment attachment;
+  final String roomId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    return IconButton(
+      tooltip: '加到階段',
+      visualDensity: VisualDensity.compact,
+      onPressed: () => showAddToStageDialog(
+        context,
+        ref,
+        roomId: roomId,
+        attachmentId: attachment.id,
+        filename: attachment.filename,
+      ),
+      icon: Icon(Icons.playlist_add, size: 15, color: s.inkMute),
     );
   }
 }

@@ -14,6 +14,7 @@ import '../../widgets/board_task_card.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/stage_files.dart';
 import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
 import '../ops/ops_actions.dart';
@@ -1394,6 +1395,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       size: 9, color: s.inkMute, letterSpacing: 1.4)),
               // 收尾與否要看得見——送審擋在它上面，而卡片全綠時最容易
               // 以為已經收好了
+              // 素材數（0 不顯示）。掛在階段上的東西整段共用，
+              // 收起來的時候也要看得出它有沒有
+              if (c.files.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                StageFileCount(count: c.files.length),
+              ],
               if (c.isDone) ...[
                 const SizedBox(width: 8),
                 Text('· 已收尾',
@@ -1423,6 +1430,23 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       targetRef: c.id,
                       targetLabel: '階段：${c.title}',
                       boardId: _boardIdOrNull ?? '',
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                // 加素材。**只有房軸有**：附件要上傳到一間房，而 Board
+                // Library 那條路上連上傳到哪裡都答不出來（見
+                // pickAndAttachStageFile）
+                if (widget.roomId != null && _boardIdOrNull != null) ...[
+                  _BarButton(
+                    label: '加素材',
+                    onTap: () => pickAndAttachStageFile(
+                      context,
+                      ref,
+                      boardId: _boardIdOrNull!,
+                      checklistId: c.id,
+                      roomId: widget.roomId!,
+                      actions: _actions!,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1478,6 +1502,19 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ),
           if (collapsed) const SizedBox(height: 4),
           if (!collapsed) ...[
+          if (c.files.isNotEmpty && _boardIdOrNull != null) ...[
+            const SizedBox(height: 10),
+            StageFilesList(
+              boardId: _boardIdOrNull!,
+              checklistId: c.id,
+              files: c.files,
+              actions: _readOnly ? null : _actions,
+              participantId: widget.roomId == null
+                  ? null
+                  : ref.watch(boardParticipantIdProvider(widget.roomId!)).value,
+              readOnly: _readOnly,
+            ),
+          ],
           const SizedBox(height: 10),
           _taskList(snap, tasks),
           if (tasks.isEmpty)

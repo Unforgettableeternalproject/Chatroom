@@ -53,6 +53,7 @@ class MessageBubble extends StatelessWidget {
     this.serverUrl = '',
     this.token = '',
     this.participantId,
+    this.roomId,
     this.subagentOf,
     this.onTapCard,
   });
@@ -68,6 +69,10 @@ class MessageBubble extends StatelessWidget {
 
   /// 房內身分；附件下載也在讀取邊界內。
   final String? participantId;
+
+  /// 這則訊息在哪間房。給附件的「加到階段」用——階段是這間房掛著的板底下
+  /// 的東西。沒給就不畫那個入口。
+  final String? roomId;
   final bool isSelf;
   final String senderKind;
   final MessageActions? actions;
@@ -251,6 +256,8 @@ class MessageBubble extends StatelessWidget {
                 serverUrl: serverUrl,
                 token: token,
                 participantId: participantId,
+                // 有房才長得出「加到階段」——階段在這間房掛著的板底下
+                roomId: roomId,
               ),
           ],
         ),

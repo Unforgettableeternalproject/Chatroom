@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'stage_file.dart';
+
 /// Board（共同任務板）的三層資料模型與本機增量快取。
 ///
 /// 契約見 Board 設計稿：Objective（一個週期）1—N Checklist
@@ -114,6 +116,7 @@ class BoardChecklist {
     this.completedAt,
     this.deleted = false,
     this.createdAt = '',
+    this.files = const [],
   });
 
   final String id;
@@ -131,6 +134,14 @@ class BoardChecklist {
   final bool deleted;
   final int boardSeq;
   final String createdAt;
+
+  /// 掛在這個階段上的素材（共享附件）。
+  ///
+  /// 🔴 **缺鍵時是空列表，不是錯誤**：`files` 是 2026-09-17 才進契約的，
+  /// 舊 Hub 的 checklist 沒有這個鍵。那時畫面就是「這個階段還沒有素材」
+  /// ——與真的沒有掛任何東西長得一樣，而那正是對的：讀不到與沒有，在
+  /// 使用者要做的下一件事上沒有差別，但讓整塊板讀不出來有。
+  final List<StageFile> files;
 
   bool get isDone => status == 'done';
 
@@ -166,6 +177,7 @@ class BoardChecklist {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    files: StageFile.listFrom(json['files']),
   );
 }
 

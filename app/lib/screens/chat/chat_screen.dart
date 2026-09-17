@@ -1153,6 +1153,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 token: config.token,
                                 // 附件下載也在讀取邊界內（Hub 側 3605638）
                                 participantId: myId,
+                                // 附件的「加到階段」要知道是哪間房
+                                roomId: widget.roomId,
                                 subagentOf: m.senderId == null
                                     ? null
                                     : subagentParentById[m.senderId],
