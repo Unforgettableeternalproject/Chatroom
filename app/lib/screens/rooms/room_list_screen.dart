@@ -65,10 +65,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
   }
 
   Future<void> _createRoom() async {
-    final created = await showDialog<Room>(
-      context: context,
-      builder: (context) => const _CreateRoomDialog(),
-    );
+    final created = await showCreateRoomDialog(context);
     if (created != null && mounted) {
       ref.invalidate(roomListProvider);
       context.go('/rooms/${created.id}');
@@ -539,6 +536,16 @@ class _RoomMenu extends StatelessWidget {
   }
 }
 
+/// 開啟建房對話框。建好回傳那個房間，取消回 null。
+///
+/// 對話框本身是私有的：入口只有這一個，呼叫端不必知道它長什麼樣子。
+@visibleForTesting
+Future<Room?> showCreateRoomDialog(BuildContext context) =>
+    showDialog<Room>(
+      context: context,
+      builder: (_) => const _CreateRoomDialog(),
+    );
+
 class _CreateRoomDialog extends ConsumerStatefulWidget {
   const _CreateRoomDialog();
 
@@ -772,11 +779,6 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   }
 }
 
-/// 建房時選一塊既有的板來掛。
-///
-/// **只列既有的，不提供「順便建一塊」**——建板要取名字，而房間名字與板的
-/// 名字是兩件事（板活得比房久，它的名字要撐得住之後的每一間房）。要建新板
-/// 就進房之後用 app bar 那個入口，那裡有完整的建立流程。
 /// 房間類型的二選一。
 ///
 /// 說明文字只講**實作真的做得到的事**：ops 房不自動封存（Hub 的 sweeper
@@ -796,30 +798,52 @@ class _KindPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    // 直排的單選列，與同一個對話框裡的「說話方式」一致：橫排兩欄那版用了
+    // Row + CrossAxisAlignment.stretch，而這裡的父層是 SingleChildScrollView
+    // ——垂直方向沒有上界，stretch 要求的是一個有界的高度，整個對話框會被
+    // 撐開、後面的欄位被擠出畫面
     Widget option(String kind, String label, String summary) {
       final active = value == kind;
-      return Expanded(
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
         child: InkWell(
           onTap: enabled ? () => onChanged(kind) : null,
           child: Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
             decoration: BoxDecoration(
-              color: active ? s.bgSunken : null,
-              border: Border.all(
-                  color: active ? UepColors.gold : s.line),
+              color: active ? s.bgSunken : Colors.transparent,
+              border: Border.all(color: active ? s.lineStrong : s.line),
+              borderRadius: BorderRadius.circular(8),
             ),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label,
-                    style: UepText.sans(
-                        size: 12.5,
-                        weight: active ? FontWeight.w600 : FontWeight.w400,
-                        color: enabled ? s.ink : s.inkMute)),
-                const SizedBox(height: 3),
-                Text(summary,
-                    style: UepText.serif(
-                        size: 11, color: s.inkMute, height: 1.4)),
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    active
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 15,
+                    color: active ? s.ink : s.inkMute,
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label,
+                          style: UepText.sans(
+                              size: 12.5,
+                              color: enabled ? s.ink : s.inkMute)),
+                      const SizedBox(height: 2),
+                      Text(summary,
+                          style: UepText.serif(
+                              size: 11.5, color: s.inkMute, height: 1.4)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -827,14 +851,18 @@ class _KindPicker extends StatelessWidget {
       );
     }
 
-    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return Column(children: [
       option('chat', '一般對話', '沒有 agent 在場時會自動封存。'),
-      const SizedBox(width: 8),
       option('ops', '工作房（ops）', '不自動封存，給遠端派工用。'),
     ]);
   }
 }
 
+/// 建房時選一塊既有的板來掛。
+///
+/// **只列既有的，不提供「順便建一塊」**——建板要取名字，而房間名字與板的
+/// 名字是兩件事（板活得比房久，它的名字要撐得住之後的每一間房）。要建新板
+/// 就進房之後用 app bar 那個入口，那裡有完整的建立流程。
 class _BoardPicker extends ConsumerWidget {
   const _BoardPicker({
     required this.value,
