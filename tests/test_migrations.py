@@ -144,6 +144,9 @@ async def test_pre_remote_ops_db_gains_room_kind_and_the_new_tables(tmp_path):
         for table in REMOTE_OPS_TABLES:
             await db.execute(f"SELECT * FROM {table} LIMIT 1")
         assert "token_sha256" in await _columns(db, "runner")
+        # run 成員的標記。**舊 DB 補不到這一欄的話，症狀不是啟動失敗**，
+        # 而是每一次 join 都 no such column——整間 Hub 沒有人進得來
+        assert "run_id" in await _columns(db, "participant")
     finally:
         await db.close()
 

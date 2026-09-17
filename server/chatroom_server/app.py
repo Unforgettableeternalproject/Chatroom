@@ -215,6 +215,12 @@ EXPORT_BATCH = 500
 # 也就是 access_token 那些。
 HOST_PARTY = "host"
 
+# 執行器給 run 子進程的 session_key 前綴（`claude-run-<run_id>`，
+# REMOTE-OPS-PLAN §5.4）。**這一個常數是兩端共用的約定**：join 靠它認出
+# 「這個成員是某筆 run 帶進來的」，run 收場時靠那個標記把他請出房間。
+# 寫成兩份字面值的話，改了一邊的症狀是 run 成員永遠不會離房，而沒有地方會報錯
+_RUN_SESSION_PREFIX = "claude-run-"
+
 
 def _style_texts(style: str, instructions: str) -> tuple[str, str]:
     """(完整指示, 一行提醒)。未知的 style 一律退回 verbose。
@@ -2252,7 +2258,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await db.execute(
                 "SELECT id, kind, display_name, role, status, joined_at,"
                 " last_seen_at, session_key, join_ip, parent_id, ephemeral,"
-                " joined_as_host"
+                " joined_as_host, run_id"
                 " FROM participant WHERE room_id=? ORDER BY joined_at",
                 (room_id,),
             )
@@ -2266,6 +2272,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         participants = []
         for group in grouped.values():
             rep = next((g for g in group if g["status"] == "active"), group[-1])
+            # 🔴 **run 帶進來的成員離場後不進名冊**（REMOTE-OPS-PLAN §5.4）。
+            # 工作房是常駐的，而每一筆 run 都是一個新身分——留著的話「已離開」
+            # 會隨派工次數無限變長，而那份名單沒有人讀得完，也沒有任何一列
+            # 對讀的人有意義（他要的是稽核串，不是一排用過即丟的名字）。
+            # 他們的**發言留在訊息歷史裡**（顯示名是當時的快照），
+            # 「那一輪是誰做的」由 `GET /api/runs/{id}` 回答。
+            # 還 active 的照常列出：那是正在跑的 run，房裡的人要看得到它在。
+            if (rep["run_id"] or "") and rep["status"] != "active":
+                continue
             others = [g for g in group if g["id"] != rep["id"]]
             entry = {
                 k: rep[k]
@@ -3301,6 +3316,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         pid = _uid()
         now = _now()
         join_ip = request.client.host if request.client else None
+        # 派工帶進來的身分：執行器把子進程的 session_key 設成
+        # `claude-run-<run_id>`（REMOTE-OPS-PLAN §5.4）。**要對得上一筆屬於
+        # 這間房的 run 才算數**——這個前綴只是一串字，任何人都打得出來，
+        # 而認錯的代價是那個成員會在某筆 run 結束時被請出房間。
+        # 對不上就當一般成員，不報錯：名字長得像不是加入失敗的理由
+        run_tag = ""
+        if session_key.startswith(_RUN_SESSION_PREFIX):
+            candidate = session_key[len(_RUN_SESSION_PREFIX):]
+            hit = await (
+                await db.execute(
+                    "SELECT 1 FROM agent_run WHERE id=? AND room_id=?",
+                    (candidate, room_id),
+                )
+            ).fetchone()
+            if hit is not None:
+                run_tag = candidate
         # joined_seq＝加入當下房內的最後一則 seq（next_seq 指向下一個要發的
         # 號碼）。@ 判定拿它當界線：房內名稱在離開後會被釋出重用，沒有這條
         # 界線的話，帶著同一個名字進來的下一個人首次拉歷史就會被前一任的
@@ -3332,10 +3363,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "INSERT INTO participant (id, room_id, kind, session_key,"
                     " display_name, role, joined_at, last_seen_at, join_ip,"
                     " join_token, parent_id, ephemeral, joined_seq,"
-                    " joined_as_host)"
+                    " joined_as_host, run_id)"
                     " SELECT :pid, :room_id, :kind, :session_key, :name,"
                     " :role, :now, :now, :join_ip, :join_token, :parent_id,"
-                    " :ephemeral, :joined_seq, :joined_as_host"
+                    " :ephemeral, :joined_seq, :joined_as_host, :run_id"
                     " WHERE :parent_id IS NULL OR EXISTS ("
                     "   SELECT 1 FROM participant WHERE id=:parent_id"
                     "   AND room_id=:room_id AND status='active')",
@@ -3354,7 +3385,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                          and body.role == "human") else 0,
                      "parent_id": parent["id"] if parent is not None else None,
                      "ephemeral": 1 if parent is not None else 0,
-                     "joined_seq": joined_seq},
+                     "joined_seq": joined_seq,
+                     "run_id": run_tag},
                 )
                 if cur.rowcount == 0:
                     # 父層在這一瞬間走了。**不重試**——重算名字救不了一個
@@ -12503,6 +12535,56 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 還佔著這個 ref 的狀態。handoff 也算——交接鏈還在跑，那張卡沒有空出來
     _RUN_ACTIVE = ("queued", "claimed", "running", "limited", "handoff")
 
+    # 收場的四個狀態。run 走到這裡就沒有下一步了——它帶進房的那個身分
+    # 也跟著結束（`_depart_run_participants`）
+    _RUN_TERMINAL = ("done", "failed", "cancelled", "handoff")
+
+    async def _depart_run_participants(
+        room_id: str, run_id: str,
+    ) -> tuple[list[str], list[dict]]:
+        """run 收場時，把它帶進這間房的成員標成離開。**不 commit。**
+
+        📌 **不另發離場的系統訊息。** run 結束本來就有一則 `_announce_run`
+        （§7 的五個時刻之一），再補一則「某某離開了聊天室」是同一件事講兩遍
+        ——而工作房是常駐的，那兩則會在時間軸上永遠成對出現。
+        孤兒卡的那則照發：它的主詞是**卡**不是人，講的是「這張卡現在沒有人
+        在上面」，那件事 run 結束的訊息沒有講。
+
+        `handoff` 也算收場：這一棒的身分到此為止，它放掉的卡由子 run 重新
+        認領（§5.4）——所以這裡照樣走既有的孤兒化流程，不為交接開特例。
+
+        回傳 (離場的名字, 被孤兒化的卡)。兩個都要：卡由呼叫端在 commit 之後
+        公告（與 `leave_room` 同形），而「有沒有人真的離場」決定要不要去查
+        supervisor——沒有人走的時候（run 的 agent 早就自己 `chatroom_leave`
+        了）不必為此多打一次資料庫。
+        """
+        db = app.state.db
+        rows = await (
+            await db.execute(
+                "SELECT id, display_name FROM participant"
+                " WHERE room_id=? AND run_id=? AND run_id!=''"
+                "   AND status='active'",
+                (room_id, run_id),
+            )
+        ).fetchall()
+        if not rows:
+            return [], []
+        for r in rows:
+            # 沿用既有的離場函式：run 的 agent 也派得出 subagent，而它們
+            # 要跟著走。自己寫一句 UPDATE 的話會漏掉那一層
+            await _depart_with_subagents(
+                room_id, r["id"], "left", "left", "父層的派工結束",
+            )
+            logger.info(
+                "run %s 結束，成員 %s 離開房間 %s", run_id, r["display_name"],
+                room_id, extra={
+                    "event": "run_participant_departed", "room_id": room_id,
+                    "run_id": run_id, "participant_id": r["id"],
+                    "display_name": r["display_name"],
+                },
+            )
+        return [r["display_name"] for r in rows], await _orphan_claims(room_id)
+
     def _run_public(row) -> dict:
         d = dict(row)
         d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
@@ -13070,6 +13152,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         3. run 上已經有 `runner_id` 的話，回報者必須就是它（403
            `not_your_run`）。
 
+        **走到收場狀態（done／failed／cancelled／handoff）時，這筆 run 帶進
+        房的成員在同一個交易裡被標成離開**（`_depart_run_participants`）。
+        工作房是常駐的，而 agent 不見得記得自己要走——沒有這一步，成員列的
+        「已離開」會隨派工次數無限變長。離場**不另發系統訊息**：run 結束本來
+        就有一則公告，兩則講同一件事只會讓時間軸更難讀。
+
         `handoff` 時 Hub **自動建子 run**（`parent_run_id`、`handoff_depth+1`，
         brief 接上「先讀卡」的指引）。深度超過 `run_handoff_max` 就不再續，
         改把這一輪標成 `failed` 並 mention 派工者——無上限的交接鏈會自己
@@ -13102,7 +13190,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if new == "running" and row["started_at"] is None:
             sets.append("started_at=?")
             params.append(now)
-        if new in ("done", "failed", "cancelled", "handoff"):
+        if new in _RUN_TERMINAL:
             sets.append("ended_at=?")
             params.append(now)
         params.extend([run_id, old])
@@ -13139,7 +13227,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                                         "handoff_depth_exceeded",
                                         {"depth": depth,
                                          "max": cfg.run_handoff_max})
+                # 這一條也是收場（狀態已改成 failed），成員照樣要離房
+                gone, released = await _depart_run_participants(
+                    row["room_id"], run_id)
                 await _commit_with_retry(db)
+                if gone:
+                    await _announce_orphans(row["room_id"], released)
+                    await _check_supervisor_departed(row["room_id"])
                 final = await _run_or_404(run_id)
                 await _announce_run(
                     final, "failed",
@@ -13165,7 +13259,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _record_run_event(child_id, row["room_id"], "", "queued",
                                     row["runner_id"], "", "handoff_child",
                                     {"parent_run_id": run_id, "depth": depth})
+        gone: list[str] = []
+        released: list[dict] = []
+        if new in _RUN_TERMINAL:
+            gone, released = await _depart_run_participants(row["room_id"],
+                                                            run_id)
         await _commit_with_retry(db)
+        if gone:
+            await _announce_orphans(row["room_id"], released)
+            await _check_supervisor_departed(row["room_id"])
         final = await _run_or_404(run_id)
         await _announce_run(final, new)
         await events.notify(row["room_id"])

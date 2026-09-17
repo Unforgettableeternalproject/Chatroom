@@ -66,7 +66,13 @@ CREATE TABLE IF NOT EXISTS participant (
     joined_seq   INTEGER,
     -- hold 標記的到期時間；NULL＝沒有 hold。時限內 presence sweeper 不會
     -- 因閒置移除這個成員（跑長測試、長編譯時自行掛上，做完再解除）
-    hold_until   TEXT
+    hold_until   TEXT,
+    -- 這個成員是哪一筆派工（run）帶進來的。session_key 形如
+    -- `claude-run-<run_id>` 且那筆 run 屬於這間房時填入；空字串＝一般成員。
+    -- 工作房是**常駐**的，而每一筆 run 都是一個新身分——不記下來的話，run
+    -- 結束時沒有人說得出該把誰請出去，成員列的「已離開」會隨派工次數無限
+    -- 變長。⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    run_id       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -1024,6 +1030,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 執行器憑證的 hash（REMOTE-OPS-PLAN §4.3）。既有列一律空字串＝沒有
     # 憑證，驗證照舊放行；下一次 register 會補發一把（`register_runner`）
     ("runner", "token_sha256", "token_sha256 TEXT NOT NULL DEFAULT ''"),
+    # 這個成員是哪一筆 run 帶進來的（REMOTE-OPS-PLAN §5.4）。既有成員一律
+    # 空字串＝不是 run 帶進來的，那正是這一欄存在之前的事實。猜著回填會在
+    # 下一次 run 結束時把一般成員一起請出房間，而他本人什麼都沒做
+    ("participant", "run_id", "run_id TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
