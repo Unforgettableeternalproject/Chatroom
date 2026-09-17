@@ -197,6 +197,114 @@ void main() {
     });
   });
 
+  group('執行器命令（commands）', () {
+    Map<String, dynamic> cmd({
+      String id = 'c1',
+      String command = 'restart',
+      String? acked,
+      String? applied,
+      String note = '',
+      String created = '2026-09-16T01:00:00+00:00',
+    }) =>
+        {
+          'id': id,
+          'command': command,
+          'issued_by_name': '艾斯維爾',
+          'created_at': created,
+          'acked_at': acked,
+          'applied_at': applied,
+          'note': note,
+        };
+
+    test('每一把鍵都讀得到，null 的時間戳讀成空字串', () {
+      final r = AgentRunner.fromJson({
+        ..._runnerJson,
+        'commands': [cmd(note: '等 2 筆 run 結束後重啟')],
+      });
+      expect(r.commands, hasLength(1));
+      final c = r.commands.first;
+      expect(c.id, 'c1');
+      expect(c.command, 'restart');
+      expect(c.issuedByName, '艾斯維爾');
+      expect(c.createdAt, '2026-09-16T01:00:00+00:00');
+      expect(c.ackedAt, '');
+      expect(c.appliedAt, '');
+      expect(c.note, '等 2 筆 run 結束後重啟');
+      expect(c.isAcked, isFalse);
+      expect(c.isApplied, isFalse);
+    });
+
+    test('沒有 commands 這一把鍵時是空清單，不是 null', () {
+      // 舊版 Hub 不會回這一格。面板那一行少一條，而不是整個炸掉
+      expect(AgentRunner.fromJson(_runnerJson).commands, isEmpty);
+    });
+
+    test('restarting 是自己一種狀態，不是離線', () {
+      final r = AgentRunner.fromJson({..._runnerJson, 'status': 'restarting'});
+      expect(r.isRestarting, isTrue);
+      expect(r.isOffline, isFalse);
+      expect(r.isOnline, isFalse);
+    });
+
+    test('未生效的命令進 pendingCommands（同一顆按鈕要停用）', () {
+      final r = AgentRunner.fromJson({
+        ..._runnerJson,
+        'commands': [
+          cmd(id: 'c2', command: 'pause', acked: '2026-09-16T01:00:20+00:00'),
+          cmd(
+              id: 'c1',
+              command: 'drain',
+              acked: '2026-09-16T00:50:20+00:00',
+              applied: '2026-09-16T00:50:30+00:00'),
+        ],
+      });
+      expect(r.pendingCommands, {'pause'});
+    });
+
+    test('該顯示哪一道：沒生效的優先，其次是剛生效的', () {
+      final now = DateTime.utc(2026, 9, 16, 1, 1);
+      final pending = AgentRunner.fromJson({
+        ..._runnerJson,
+        'commands': [
+          cmd(id: 'c2', command: 'pause'),
+          cmd(
+              id: 'c1',
+              command: 'drain',
+              acked: '2026-09-16T01:00:20+00:00',
+              applied: '2026-09-16T01:00:30+00:00'),
+        ],
+      });
+      expect(pending.visibleCommand(now: now)?.id, 'c2');
+
+      final justApplied = AgentRunner.fromJson({
+        ..._runnerJson,
+        'commands': [
+          cmd(
+              id: 'c1',
+              command: 'drain',
+              acked: '2026-09-16T01:00:20+00:00',
+              applied: '2026-09-16T01:00:30+00:00'),
+        ],
+      });
+      expect(justApplied.visibleCommand(now: now)?.id, 'c1');
+    });
+
+    test('生效超過 2 分鐘就不再顯示——過期的話比沒有話更糟', () {
+      final now = DateTime.utc(2026, 9, 16, 1, 10);
+      final r = AgentRunner.fromJson({
+        ..._runnerJson,
+        'commands': [
+          cmd(
+              id: 'c1',
+              command: 'drain',
+              acked: '2026-09-16T01:00:20+00:00',
+              applied: '2026-09-16T01:00:30+00:00'),
+        ],
+      });
+      expect(r.visibleCommand(now: now), isNull);
+    });
+  });
+
   group('儀表板：「沒有」與「沒回報」要分得開', () {
     test('執行器沒回報 dashboard 時，reported 是 false', () {
       final r = AgentRunner.fromJson({..._runnerJson, 'dashboard': {}});

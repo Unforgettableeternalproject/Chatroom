@@ -8,6 +8,7 @@ import '../../models/agent_run.dart';
 import '../../state/app_providers.dart';
 import '../../state/runs_providers.dart';
 import 'dispatch_dialog.dart';
+import 'ops_dashboard_view.dart';
 
 /// 派工與推送的共用動作。
 ///
@@ -179,8 +180,10 @@ Future<bool> sendRunnerCommand(
         sessionKey: ref.read(appConfigProvider).deviceKey);
     if (context.mounted) {
       // 命令**存下來等 heartbeat 取**，不是即時推送。說「已暫停」會讓人
-      // 以為機器已經停了，然後在它還在跑時去做下一件事
-      _say(context, '「${_commandLabel(command)}」已送出，執行器下次回報時生效。');
+      // 以為機器已經停了，然後在它還在跑時去做下一件事。
+      // 這句話只負責「送到了」，「領到了沒、生效了沒」由面板上的命令進度
+      // 那一行講——SnackBar 幾秒就消失，而那段等待有 30 秒到數分鐘
+      _say(context, '「${runnerCommandLabel(command)}」已送出，進度看下方。');
     }
     return true;
   } on ApiException catch (e) {
@@ -218,14 +221,6 @@ String _dispatchError(ApiException e) => switch (e.code) {
       'run_queue_cap_exceeded' => e.message,
       'room_not_ops' => '派工只在工作房（ops）成立。',
       _ => e.message,
-    };
-
-String _commandLabel(String command) => switch (command) {
-      'pause' => '暫停',
-      'resume' => '恢復',
-      'restart' => '重啟',
-      'drain' => '清空佇列',
-      _ => command,
     };
 
 void _say(BuildContext context, String text) =>

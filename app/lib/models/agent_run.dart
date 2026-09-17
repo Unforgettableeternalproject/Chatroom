@@ -480,6 +480,66 @@ class RunnerDashboard {
   }
 }
 
+/// 對執行器下過的一道命令（`runners[].commands[]`，最近 5 筆、新到舊）。
+///
+/// ⚠️ 三個時間戳是**三個不同的事實**，畫面上不能壓成一句「已送出」：
+/// - `ackedAt` 空＝執行器還沒領到（heartbeat 每 30 秒才來一次）。
+/// - `ackedAt` 有、`appliedAt` 空＝它收到了但還沒生效（restart 會等手上的
+///   run 跑完），`note` 是它自己講的等待原因。
+/// - `appliedAt` 有＝真的生效了。
+///
+/// 把前兩者講成「已生效」，人就會在機器還在跑時去做下一件事。
+@immutable
+class RunnerCommandInfo {
+  const RunnerCommandInfo({
+    required this.id,
+    this.command = '',
+    this.issuedByName = '',
+    this.createdAt = '',
+    this.ackedAt = '',
+    this.appliedAt = '',
+    this.note = '',
+  });
+
+  final String id;
+
+  /// pause | resume | restart | drain。
+  final String command;
+  final String issuedByName;
+  final String createdAt;
+
+  /// 執行器領到的時間。空＝還沒領到。
+  final String ackedAt;
+
+  /// 真的生效的時間。空＝還沒生效。
+  final String appliedAt;
+
+  /// 執行器的一句話（等待原因，或生效後的結果）。
+  final String note;
+
+  bool get isAcked => ackedAt.isNotEmpty;
+  bool get isApplied => appliedAt.isNotEmpty;
+
+  DateTime? get appliedTime => DateTime.tryParse(appliedAt);
+
+  factory RunnerCommandInfo.fromJson(Map<String, dynamic> json) =>
+      RunnerCommandInfo(
+        id: (json['id'] as String?) ?? '',
+        command: (json['command'] as String?) ?? '',
+        issuedByName: (json['issued_by_name'] as String?) ?? '',
+        createdAt: (json['created_at'] as String?) ?? '',
+        ackedAt: (json['acked_at'] as String?) ?? '',
+        appliedAt: (json['applied_at'] as String?) ?? '',
+        note: (json['note'] as String?) ?? '',
+      );
+}
+
+/// 一道已生效的命令還要在畫面上留多久。
+///
+/// 生效的那一瞬間畫面多半還沒重新整理，所以「剛剛生效」要留一段時間讓按下
+/// 按鈕的人看得到；留太久則會讓下一次按鈕的回饋與上一道混在一起。
+const Duration kRunnerCommandFreshWindow = Duration(minutes: 2);
+
 /// 一台執行器。鍵集合＝Hub 的 `RUNNER_KEYS`。
 @immutable
 class AgentRunner {
@@ -495,6 +555,7 @@ class AgentRunner {
     this.limitReason = '',
     this.usageWindow = const {},
     this.dashboard = const RunnerDashboard(),
+    this.commands = const [],
     this.version = '',
     this.registeredAt = '',
     this.lastSeenAt = '',
@@ -504,7 +565,10 @@ class AgentRunner {
   final String host;
   final String label;
 
-  /// online | paused | limited | offline。
+  /// online | paused | limited | restarting | offline。
+  ///
+  /// `restarting` 是「它自己說它要重開了」：那段時間它既不是在線、也不是
+  /// 掉線——畫成 OFFLINE 的話，人會以為那台機器出事了。
   final String status;
   final int maxParallel;
 
@@ -518,6 +582,9 @@ class AgentRunner {
   final String limitReason;
   final Map<String, dynamic> usageWindow;
   final RunnerDashboard dashboard;
+
+  /// 最近下過的幾道命令，**新到舊**（Hub 回 5 筆）。
+  final List<RunnerCommandInfo> commands;
   final String version;
   final String registeredAt;
   final String lastSeenAt;
@@ -526,6 +593,35 @@ class AgentRunner {
   bool get isLimited => status == 'limited';
   bool get isPaused => status == 'paused';
   bool get isOffline => status == 'offline';
+  bool get isRestarting => status == 'restarting';
+
+  /// 還沒生效的命令是哪幾種。
+  ///
+  /// 同一種再按一次不會更快——命令要等下一次 heartbeat 才被領走，連按只會
+  /// 在 Hub 那邊堆出好幾道一樣的命令。
+  Set<String> get pendingCommands => {
+        for (final c in commands)
+          if (!c.isApplied) c.command,
+      };
+
+  /// 現在該在面板上講哪一道命令。
+  ///
+  /// 沒生效的最新一道優先；都生效了就挑 [kRunnerCommandFreshWindow] 內剛
+  /// 生效的那道。都沒有就回 null——面板少一行，而不是留一句過期的話。
+  RunnerCommandInfo? visibleCommand({DateTime? now}) {
+    for (final c in commands) {
+      if (!c.isApplied) return c;
+    }
+    final ref = now ?? DateTime.now();
+    for (final c in commands) {
+      final at = c.appliedTime;
+      if (at == null) continue;
+      final diff = ref.difference(at);
+      // 負的＝兩邊的鐘差了一點，那也是「剛剛」
+      if (diff.isNegative || diff <= kRunnerCommandFreshWindow) return c;
+    }
+    return null;
+  }
 
   String get displayName => label.isEmpty ? host : '$host · $label';
 
@@ -561,6 +657,10 @@ class AgentRunner {
         dashboard: RunnerDashboard.fromJson(json['dashboard'] is Map
             ? Map<String, dynamic>.from(json['dashboard'] as Map)
             : const {}),
+        commands: [
+          for (final c in (json['commands'] as List?) ?? const [])
+            RunnerCommandInfo.fromJson(Map<String, dynamic>.from(c as Map)),
+        ],
         version: (json['version'] as String?) ?? '',
         registeredAt: (json['registered_at'] as String?) ?? '',
         lastSeenAt: (json['last_seen_at'] as String?) ?? '',

@@ -20,6 +20,7 @@ class OpsDashboardView extends StatelessWidget {
     this.onPush,
     this.onCancel,
     this.busyRunnerId,
+    this.now,
   });
 
   final RoomRunnerBoard board;
@@ -43,6 +44,10 @@ class OpsDashboardView extends StatelessWidget {
   /// 正在等這台執行器的命令送完。按鈕暫時停用，避免連按五次。
   final String? busyRunnerId;
 
+  /// 測試用的「現在」。命令進度那一行會隨時間變，而驗一個會自己走的時鐘
+  /// 驗不出東西。
+  final DateTime? now;
+
   @override
   Widget build(BuildContext context) {
     if (board.runners.isEmpty) {
@@ -55,13 +60,14 @@ class OpsDashboardView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
       children: [
-        OpsStatusBar(board: board),
+        OpsStatusBar(board: board, now: now),
         for (final runner in board.runners) ...[
           _RunnerSection(
             runner: runner,
             onCommand: onCommand,
             onPush: onPush,
             busy: busyRunnerId == runner.id,
+            now: now,
           ),
           const SizedBox(height: 22),
         ],
@@ -137,10 +143,12 @@ class _RunnerSection extends StatelessWidget {
     required this.busy,
     this.onCommand,
     this.onPush,
+    this.now,
   });
 
   final AgentRunner runner;
   final bool busy;
+  final DateTime? now;
   final void Function(AgentRunner runner, String command)? onCommand;
   final void Function(AgentRunner runner, RepoView repo)? onPush;
 
@@ -148,6 +156,8 @@ class _RunnerSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     final dash = runner.dashboard;
+    final pending = runner.pendingCommands;
+    final progress = runnerCommandProgress(runner, now: now);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -167,32 +177,56 @@ class _RunnerSection extends StatelessWidget {
           ]),
           const SizedBox(height: 4),
           Text(
-            '併行 ${runner.runningCount} / ${runner.maxParallel}'
-            '${runner.version.isEmpty ? '' : ' · v${runner.version}'}'
-            ' · 最後回報 ${relativeTime(runner.lastSeenAt)}',
+            [
+              '併行 ${runner.runningCount} / ${runner.maxParallel}',
+              if (runner.version.isNotEmpty) 'v${runner.version}',
+              '最後回報 ${relativeTime(runner.lastSeenAt, now: now)}',
+              // 啟動時間是判斷「它重開過了沒有」的那一格：restart 生效後這
+              // 個值會變新，而 status 只會在離線與在線之間跳
+              if (dash.startedAt.isNotEmpty)
+                '啟動 ${relativeTime(dash.startedAt, now: now)}',
+              if (dash.lastRestartReason.isNotEmpty)
+                '上次重啟：${_restartReason(dash.lastRestartReason)}',
+            ].join(' · '),
             style: UepText.mono(size: 9.5, color: s.inkMute),
           ),
           if (onCommand != null) ...[
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 8, children: [
               // 命令是**存下來等 heartbeat 取的**，不是即時推送——按鈕的
-              // 回饋要說「已送出」，說「已暫停」會讓人以為機器已經停了
+              // 回饋要說「已送出」，說「已暫停」會讓人以為機器已經停了。
+              // 同一種命令還沒生效就停用那一顆：再按一次不會更快，只會在
+              // Hub 那邊堆出好幾道一模一樣的命令
               _SmallButton(
                   label: '暫停',
-                  enabled: !busy && !runner.isPaused,
+                  enabled:
+                      !busy && !runner.isPaused && !pending.contains('pause'),
                   onTap: () => onCommand!(runner, 'pause')),
               _SmallButton(
                   label: '恢復',
-                  enabled: !busy && runner.isPaused,
+                  enabled:
+                      !busy && runner.isPaused && !pending.contains('resume'),
                   onTap: () => onCommand!(runner, 'resume')),
               _SmallButton(
                   label: '重啟',
-                  enabled: !busy,
+                  enabled: !busy && !pending.contains('restart'),
                   onTap: () => onCommand!(runner, 'restart')),
               _SmallButton(
                   label: '清空佇列',
-                  enabled: !busy,
+                  enabled: !busy && !pending.contains('drain'),
                   onTap: () => onCommand!(runner, 'drain')),
+            ]),
+          ],
+          if (progress != null) ...[
+            const SizedBox(height: 10),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              MonoLabel('命令進度', letterSpacing: 1.6),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(progress,
+                    style:
+                        UepText.serif(size: 11.5, color: s.ink, height: 1.5)),
+              ),
             ]),
           ],
           const SizedBox(height: 16),
@@ -230,6 +264,8 @@ class _StatusPill extends StatelessWidget {
       'online' => ('ONLINE', UepColors.gold),
       'paused' => ('PAUSED', s.inkSoft),
       'limited' => ('LIMITED', UepColors.error),
+      // 重啟中既不是在線也不是掉線：用 info 這一色，免得與「它掛了」同貌
+      'restarting' => ('RESTARTING', UepColors.info),
       _ => ('OFFLINE', s.inkMute),
     };
     final left = runner.isLimited ? runner.remainingLimit() : null;
@@ -597,6 +633,61 @@ class _Empty extends StatelessWidget {
     );
   }
 }
+
+/// 命令進度那一行。沒有東西要講時回 null——面板少一行，而不是留一句過期的話。
+///
+/// 三個時間戳要講成三句不同的話（見 [RunnerCommandInfo]）：還沒領到、領到了
+/// 還沒生效、已經生效。restart 另有第四種狀態——**生效之後那台機器會消失
+/// 1～2 分鐘**，那段離線是預期中的，畫成故障會讓人跑去看一台正在正常重開的
+/// 機器。
+String? runnerCommandProgress(AgentRunner runner, {DateTime? now}) {
+  final c = runner.visibleCommand(now: now);
+  if (c == null) return null;
+  final label = runnerCommandLabel(c.command);
+  if (!c.isAcked) {
+    return '$label：已送出 ${relativeTime(c.createdAt, now: now)}，'
+        '等執行器領取（最多 30 秒）';
+  }
+  if (!c.isApplied) {
+    // note 是執行器講的等待原因（「等 N 筆 run 結束後重啟」）。它沒講就不要
+    // 替它編一個
+    return c.note.isEmpty
+        ? '$label：執行器已收到，還沒生效'
+        : '$label：執行器已收到，${c.note}';
+  }
+  if (c.command == 'restart') {
+    final applied = c.appliedTime;
+    final started = DateTime.tryParse(runner.dashboard.startedAt);
+    // started_at 比 applied_at 新＝它已經重開完回來了
+    if (applied != null && started != null && started.isAfter(applied)) {
+      return '已重啟完成，啟動 '
+          '${relativeTime(runner.dashboard.startedAt, now: now)}';
+    }
+    if (runner.isRestarting || runner.isOffline) {
+      return '重啟中，等它回來（通常 1～2 分鐘）';
+    }
+  }
+  final at = relativeTime(c.appliedAt, now: now);
+  return c.note.isEmpty ? '$label：已生效 $at' : '$label：已生效 $at，${c.note}';
+}
+
+/// 命令的中文名。**與 `ops_actions` 的提示是同一份**——同一道命令在按鈕、
+/// 提示與進度上叫三個名字的話，人會以為那是三件事。
+String runnerCommandLabel(String command) => switch (command) {
+      'pause' => '暫停',
+      'resume' => '恢復',
+      'restart' => '重啟',
+      'drain' => '清空佇列',
+      _ => command,
+    };
+
+/// 執行器回報的重啟原因。認不得的原樣顯示——編一個對照不到的中文，等於把
+/// 「它講了一個我不認識的原因」蓋掉。
+String _restartReason(String reason) => switch (reason) {
+      'restart_command' => '人類下令',
+      'maintenance' => '維護窗',
+      _ => reason,
+    };
 
 String _limitReason(String reason) => switch (reason) {
       'rate_limit' => '速率限制',

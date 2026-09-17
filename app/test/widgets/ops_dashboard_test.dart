@@ -21,6 +21,9 @@ AgentRunner _runner({
   bool? pushable = true,
   bool dirty = false,
   Map<String, dynamic>? dashboardOverride,
+  List<Map<String, dynamic>> commands = const [],
+  String startedAt = '2026-09-16T00:00:00+00:00',
+  String lastRestartReason = '',
 }) =>
     AgentRunner.fromJson({
       'id': 'runner-1',
@@ -68,13 +71,14 @@ AgentRunner _runner({
               'queued_count': 0,
               'max_parallel': 3,
             },
-            'runner': const {
+            'runner': {
               'version': '0.1.0',
-              'started_at': '2026-09-16T00:00:00+00:00',
-              'last_restart_reason': '',
-              'selfcheck_problems': <String>[],
+              'started_at': startedAt,
+              'last_restart_reason': lastRestartReason,
+              'selfcheck_problems': const <String>[],
             },
           },
+      'commands': commands,
       'version': '0.1.0',
       'registered_at': '2026-09-15T00:00:00+00:00',
       'last_seen_at': '2026-09-16T01:05:00+00:00',
@@ -301,6 +305,160 @@ void main() {
       await tester.tap(find.text('取消'));
       await tester.pump();
       expect(cancelled?.id, 'a');
+    });
+  });
+
+  group('命令進度：三個時間戳是三句不同的話', () {
+    /// 相對時間走的是真的時鐘，所以時間戳都從「現在」往回算。
+    String ago(Duration d) =>
+        DateTime.now().toUtc().subtract(d).toIso8601String();
+
+    Map<String, dynamic> cmd({
+      String id = 'c1',
+      String command = 'restart',
+      String? acked,
+      String? applied,
+      String note = '',
+      Duration created = const Duration(seconds: 10),
+    }) =>
+        {
+          'id': id,
+          'command': command,
+          'issued_by_name': '艾斯維爾',
+          'created_at': ago(created),
+          'acked_at': acked,
+          'applied_at': applied,
+          'note': note,
+        };
+
+    testWidgets('還沒領到：說在等執行器領取，並講出 30 秒這個上限',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(commands: [cmd(command: 'pause')]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.text('命令進度'), findsOneWidget);
+      expect(find.textContaining('暫停：已送出'), findsOneWidget);
+      expect(find.textContaining('等執行器領取（最多 30 秒）'), findsOneWidget);
+    });
+
+    testWidgets('🔴 領到了但還沒生效：不能說已生效，要講出執行器在等什麼',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(commands: [
+            cmd(acked: ago(const Duration(seconds: 5)), note: '等 2 筆 run 結束後重啟'),
+          ]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.textContaining('重啟：執行器已收到，等 2 筆 run 結束後重啟'),
+          findsOneWidget);
+      expect(find.textContaining('已生效'), findsNothing);
+    });
+
+    testWidgets('已生效：說已生效並帶上執行器那句話', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(
+              status: 'paused',
+              commands: [
+                cmd(
+                    command: 'drain',
+                    acked: ago(const Duration(seconds: 40)),
+                    applied: ago(const Duration(seconds: 30)),
+                    note: '已清掉 3 筆排隊中的 run'),
+              ]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.textContaining('清空佇列：已生效'), findsOneWidget);
+      expect(find.textContaining('已清掉 3 筆排隊中的 run'), findsOneWidget);
+    });
+
+    testWidgets('restart 生效後那段離線是預期中的，要說「等它回來」',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(status: 'restarting', commands: [
+            cmd(
+                acked: ago(const Duration(seconds: 50)),
+                applied: ago(const Duration(seconds: 40))),
+          ]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.text('RESTARTING'), findsOneWidget);
+      expect(find.textContaining('重啟中，等它回來（通常 1～2 分鐘）'), findsOneWidget);
+    });
+
+    testWidgets('started_at 比 applied_at 新＝它回來了', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(
+              startedAt: ago(const Duration(seconds: 20)),
+              commands: [
+                cmd(
+                    acked: ago(const Duration(seconds: 60)),
+                    applied: ago(const Duration(seconds: 50))),
+              ]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.textContaining('已重啟完成，啟動'), findsOneWidget);
+    });
+
+    testWidgets('生效超過 2 分鐘的命令不再佔一行', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(commands: [
+            cmd(
+                command: 'drain',
+                acked: ago(const Duration(minutes: 6)),
+                applied: ago(const Duration(minutes: 5)),
+                note: '已清掉 3 筆'),
+          ]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      expect(find.text('命令進度'), findsNothing);
+    });
+
+    testWidgets('同一種命令還沒生效時，那一顆按鈕停用', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(commands: [cmd(command: 'drain')]),
+        ]),
+        onCommand: (a, b) {},
+      )));
+      final drain = tester.widget<InkWell>(find.ancestor(
+          of: find.text('清空佇列'), matching: find.byType(InkWell)));
+      expect(drain.onTap, isNull);
+      // 其他種類不受影響——停用的是「再按一次也不會更快」的那一顆
+      final restart = tester.widget<InkWell>(find.ancestor(
+          of: find.text('重啟'), matching: find.byType(InkWell)));
+      expect(restart.onTap, isNotNull);
+    });
+  });
+
+  group('表頭', () {
+    testWidgets('寫出啟動時間與上次重啟的原因（原因轉成中文）', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(lastRestartReason: 'restart_command'),
+        ]),
+      )));
+      expect(find.textContaining('啟動 '), findsOneWidget);
+      expect(find.textContaining('上次重啟：人類下令'), findsOneWidget);
+    });
+
+    testWidgets('沒有重啟過就不畫那一段', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+      )));
+      expect(find.textContaining('上次重啟'), findsNothing);
     });
   });
 
