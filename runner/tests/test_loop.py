@@ -317,6 +317,142 @@ async def test_commands_are_taken_once(hub_app, ops_room, runner_hub,
     assert second["commands"] == []
 
 
+async def _command_row(app, cmd_id):
+    return await (await app.state.db.execute(
+        "SELECT command, acked_at, applied_at, note FROM runner_command"
+        " WHERE id=?", (cmd_id,))).fetchone()
+
+
+async def test_pause_is_reported_back_without_waiting_a_heartbeat(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """§5.7 回饋鏈：命令一生效就**立刻再報一次**，不等下一個心跳週期。
+
+    等 30 秒的話，人按完鈕看到的是一個完全沒有變化的面板——而那 30 秒裡
+    唯一合理的推論是「按了沒反應」，於是他再按五次。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    cmd = (await client.post(
+        f"/api/runners/{runner_hub.identity.runner_id}/commands",
+        json={"command": "pause", "room_id": room_id},
+        headers=headers)).json()["command"]
+
+    await loop.heartbeat()
+
+    row = await _command_row(app, cmd["id"])
+    assert row["applied_at"], "命令生效了，Hub 上卻只有『已送達』"
+    assert row["note"] == "已暫停"
+    runner = await (await app.state.db.execute(
+        "SELECT status FROM runner WHERE id=?",
+        (runner_hub.identity.runner_id,))).fetchone()
+    assert runner["status"] == "paused", "生效的狀態也要在同一輪上去"
+
+
+async def test_restart_reports_waiting_then_restarting(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """restart 的兩段：等 run 跑完（未生效、但有理由）→ 退出前標生效。
+
+    少了前半段，面板停在「已送達」而人不知道它在等什麼；少了後半段，進程
+    退出後 Hub 還寫著 online，要等 180 秒的 sweep 才變 offline——重啟只要
+    1～2 分鐘，全程看不到任何「正在重啟」。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    gate = asyncio.Event()
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: StubExecutor(gate))
+    assert await loop.start()
+    await create_run(client, room_id, headers)
+    await loop.tick()
+    assert len(loop.active) == 1
+    cmd = (await client.post(
+        f"/api/runners/{runner_hub.identity.runner_id}/commands",
+        json={"command": "restart", "room_id": room_id},
+        headers=headers)).json()["command"]
+
+    await loop.tick()
+    row = await _command_row(app, cmd["id"])
+    assert row["applied_at"] is None, "run 還在跑就說重啟好了"
+    assert row["note"] == "等 1 筆 run 結束後重啟"
+    assert loop.exit_code == 0
+
+    gate.set()
+    await asyncio.gather(*[a.task for a in loop.active.values()])
+    await loop.tick()
+
+    assert loop.exit_code == EXIT_RESTART
+    row = await _command_row(app, cmd["id"])
+    assert row["applied_at"], "退出前沒有把命令標成生效"
+    assert row["note"] == "正在重啟，預計 1～2 分鐘內回來"
+    runner = await (await app.state.db.execute(
+        "SELECT status FROM runner WHERE id=?",
+        (runner_hub.identity.runner_id,))).fetchone()
+    assert runner["status"] == "restarting"
+
+
+async def test_a_waiting_restart_keeps_updating_its_count(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """等待中的 restart 每一輪都重報一次：筆數要跟著手上的 run 變少。
+
+    只 ack 一次的話，Hub 上會永遠停在「等 2 筆」，而人會以為它卡死了。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    gate = asyncio.Event()
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: StubExecutor(gate))
+    assert await loop.start()
+    await create_run(client, room_id, headers, ref="task-1")
+    await create_run(client, room_id, headers, ref="task-2")
+    await loop.tick()
+    assert len(loop.active) == 2
+    cmd = (await client.post(
+        f"/api/runners/{runner_hub.identity.runner_id}/commands",
+        json={"command": "restart"}, headers=headers)).json()["command"]
+    await loop.tick()
+    assert (await _command_row(app, cmd["id"]))["note"] ==         "等 2 筆 run 結束後重啟"
+
+    # 一筆收工，另一筆還在：下一次心跳的數字要跟著改
+    done = list(loop.active.values())[0]
+    done.cancel.set()
+    await asyncio.wait_for(done.task, timeout=10)
+    await loop.heartbeat()
+    assert (await _command_row(app, cmd["id"]))["note"] ==         "等 1 筆 run 結束後重啟"
+
+    gate.set()
+    await asyncio.gather(*[a.task for a in loop.active.values()])
+
+
+async def test_the_exit_path_does_not_hang_on_an_unreachable_hub(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """Hub 連不上的時候，「我要重啟了」送不出去也**照樣退出**。
+
+    退出路徑卡在一個 socket 上的話，這台執行器連退場都做不到，而排程工作
+    在等它結束才會把它拉起來。
+    """
+    from chatroom_runner.hub import HubError
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
+                      json={"command": "restart"}, headers=headers)
+    await loop.heartbeat()
+    assert loop.state.restart_pending
+
+    async def broken(*a, **kw):
+        raise HubError("連不上", code="unreachable")
+
+    runner_hub.heartbeat = broken
+    await asyncio.wait_for(loop.tick(), timeout=10)
+    assert loop.exit_code == EXIT_RESTART
+
+
 # ── 取消 ────────────────────────────────────────────────────────
 
 async def test_cancel_request_from_heartbeat_reaches_the_run(

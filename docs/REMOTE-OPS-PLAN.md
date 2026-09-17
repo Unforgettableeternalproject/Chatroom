@@ -152,7 +152,7 @@ agent_run_event（稽核串：狀態每一次變化、誰改的、原因）
 
 ```
 runner                                          （P1 已落地）
-  id, host, label, status(online|paused|limited|offline)
+  id, host, label, status(online|paused|limited|offline|restarting)
   token_sha256  註冊時發的執行器憑證，**只存 sha256**；明文只回傳一次
   max_parallel（預設 3）, running_count
   projects      允許的 project key（JSON 陣列）。**白名單**：空的領不到任何單
@@ -164,6 +164,8 @@ runner                                          （P1 已落地）
 runner_command                                  （§5.7，P1 已落地）
   id, runner_id, command(pause|resume|restart|drain)
   issued_by, issued_by_name, room_id（provenance）, created_at, acked_at
+  applied_at    真正生效的時間（執行器回報，**原樣存它的時鐘**）
+  note          執行器對這筆命令講的一句話（沒生效也要寫）
 ```
 
 - 執行器用 agent 憑證註冊（`POST /api/runners/register`），**同 host+label
@@ -356,6 +358,35 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 - 房內人類可下 `runner_command`：`pause`（不領新單，跑完手上的）、`resume`、
   `restart`（等所有 run 結束後自我重啟；有 run 在跑就排到它們結束後）、`drain`（取消排隊、跑完現有）。
   命令由 Hub 存、執行器 heartbeat 時取。
+
+**回饋鏈：從「按下」到「生效」每一段都要看得見。**命令是存下來等 heartbeat
+取的，中間隔著最多一個心跳週期（30 秒）——Hub 只記「已送達」的話，人按完鈕
+面對的是一個不動的面板，而那 30 秒裡唯一合理的推論是「按了沒反應」，於是他
+再按五次。四段各有自己的時間戳：
+
+| 段 | 欄位 | 誰寫 |
+|---|---|---|
+| 已送出 | `created_at` | Hub（人按下的那一刻） |
+| 已收到 | `acked_at` | Hub（heartbeat 把命令交出去時） |
+| 已生效 | `applied_at` + `note` | 執行器，下一次 heartbeat 的 `command_acks` |
+| 等待中 | `note`（`applied_at` 留空） | 同上 |
+
+- heartbeat body 多一個可選的 `command_acks: [{id, applied_at, note}]`。Hub 只
+  更新**屬於這台執行器**的命令；`applied_at` 已有值就不會被後來的空 ack 洗掉。
+- `applied_at` **原樣存執行器送來的值**，不改成 Hub 的時鐘：它要與
+  `dashboard.runner.started_at` 同源，App 靠 `started_at > applied_at` 判定
+  「這台已經重啟完回來了」。
+- 執行器**收到命令就立刻再送一次 heartbeat**，不等 30 秒。pause／resume／drain
+  當場生效；restart 收到時**不算生效**（`applied_at` 留空、`note` 寫「等 N 筆
+  run 結束後重啟」），而且每一輪都重報一次讓 N 跟著手上的 run 變少。
+- 手上清空、真的要退出前，執行器再送一次 `status="restarting"` 的 heartbeat 並把
+  命令標生效（note「正在重啟，預計 1～2 分鐘內回來」）。少了這一次，進程退出後
+  Hub 還寫著 online，要等 `runner_offline_after`（180 秒）掃到才變 offline——而
+  重啟只要 1～2 分鐘，人從頭到尾看不到任何「正在重啟」。這一次心跳有逾時上限，
+  **送不出去也照樣退出**：退出路徑卡在 socket 上的話，排程工作也拉不起它。
+- `GET /api/rooms/{id}/runner` 的 `runners[]` 每台多一個 `commands`：最近 5 筆
+  `{id, command, issued_by_name, created_at, acked_at, applied_at, note}`（新到舊）。
+  `restarting` 的執行器**留在列表上**——從列表消失與「它掛了」在面板上長得一樣。
 - 每日維護窗（預設 04:00，可設）：若無 run 在跑，執行器自我重啟並清暫存；有在跑就順延到下一次 heartbeat 無 run 時。
 - 執行器啟動時：驗 `claude --version`、驗 GPG 簽章可用（`gpg --clearsign` 探針）、
   驗每個允許 repo 可讀寫且分支正確；任一失敗即 `status=offline(reason)` 並在房內講。

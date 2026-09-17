@@ -816,7 +816,14 @@ CREATE TABLE IF NOT EXISTS runner_command (
     -- 房刪掉不代表這筆命令的歷史要跟著消失（board_task.source_room_id 同理）
     room_id     TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
-    acked_at    TEXT
+    -- 取走的時間（Hub 在 heartbeat 把命令交給執行器時寫）
+    acked_at    TEXT,
+    -- 真正生效的時間（執行器在下一次 heartbeat 用 `command_acks` 回報）。
+    -- 少了它，畫面上只能說「已送達」，而人要的是「已經照做了」
+    applied_at  TEXT,
+    -- 執行器對這筆命令講的一句話（「已暫停」「等 2 筆 run 結束後重啟」）。
+    -- 沒生效也要寫：等待中的 restart 不寫理由的話，面板會停在空白
+    note        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_runner_command_pending
     ON runner_command(runner_id, acked_at);
@@ -1034,6 +1041,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 空字串＝不是 run 帶進來的，那正是這一欄存在之前的事實。猜著回填會在
     # 下一次 run 結束時把一般成員一起請出房間，而他本人什麼都沒做
     ("participant", "run_id", "run_id TEXT NOT NULL DEFAULT ''"),
+    # 命令回饋鏈（REMOTE-OPS-PLAN §5.7）。既有命令的 applied_at 是 NULL＝
+    # 這一欄存在之前下的，沒有人回報過生效；回填成 acked_at 會讓那些命令
+    # 看起來「已生效」，而那是 Hub 自己編的
+    ("runner_command", "applied_at", "applied_at TEXT"),
+    ("runner_command", "note", "note TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

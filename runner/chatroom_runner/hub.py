@@ -208,14 +208,17 @@ class RunnerHub:
     async def heartbeat(self, status: str, running_count: int,
                         dashboard: dict, usage_window: dict,
                         limited_until: str | None = None,
-                        limit_reason: str = "") -> dict:
+                        limit_reason: str = "",
+                        command_acks: list[dict] | None = None) -> dict:
+        """心跳。``command_acks`` 是上一輪取走的命令生效了沒（§5.7）。"""
         return await self._json(
             "POST", f"/api/runners/{self.identity.runner_id}/heartbeat",
             json_body={"status": status, "running_count": running_count,
                        "limited_until": limited_until,
                        "limit_reason": limit_reason,
                        "dashboard_json": dashboard,
-                       "usage_window_json": usage_window})
+                       "usage_window_json": usage_window,
+                       "command_acks": list(command_acks or [])})
 
     async def get_run(self, run_id: str) -> dict | None:
         """查一筆 run 的現況（啟動對帳用）。查不到／讀不到權限回 ``None``。

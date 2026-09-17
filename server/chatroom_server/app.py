@@ -296,15 +296,34 @@ class RunnerRegister(BaseModel):
     version: str = Field(default="", max_length=64)
 
 
+class RunnerCommandAck(BaseModel):
+    """執行器回報一筆命令的下場（§5.7 回饋鏈）。
+
+    `applied_at` 有值＝真的生效了；空的＝收到但還沒生效（等 run 跑完的
+    restart），`note` 照樣要寫——不然面板上那筆命令會停在一片空白，而人
+    唯一能做的推論是「按了沒反應」。
+    """
+
+    id: str = Field(min_length=1, max_length=64)
+    applied_at: str | None = None
+    note: str = Field(default="", max_length=200)
+
+
 class RunnerHeartbeat(BaseModel):
-    status: str = Field(default="online",
-                        pattern="^(online|paused|limited|offline)$")
+    # `restarting`＝退出前的最後一次心跳（§5.7）。少了它，重啟中的執行器
+    # 只能報 online，而人看到的是一台「在線卻什麼都不做」的機器，直到
+    # `_sweep_runners` 在 180 秒後才把它標 offline
+    status: str = Field(
+        default="online",
+        pattern="^(online|paused|limited|offline|restarting)$")
     running_count: int = Field(default=0, ge=0)
     limited_until: str | None = None
     limit_reason: str = Field(default="", max_length=64)
     # 儀表板狀態（§4.4）。Hub **原樣存、不解讀**
     dashboard_json: dict = Field(default_factory=dict)
     usage_window_json: dict = Field(default_factory=dict)
+    # 上一輪取走的命令生效了沒（§5.7）
+    command_acks: list[RunnerCommandAck] = Field(default_factory=list)
 
 
 class RunReport(BaseModel):
@@ -13043,6 +13062,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         取命令的同時標 `acked_at`：命令是**一次性**的，重送一次 restart
         等於重啟兩次。
+
+        `command_acks` 是**回程**那一半（§5.7）：執行器把上一輪取走的命令
+        生效了沒寫回來。`applied_at` **原樣存執行器送來的值**，不改成 Hub
+        的時鐘——它要跟 `dashboard.runner.started_at` 同源，App 靠
+        `started_at > applied_at` 判定「這台已經重啟完回來了」，兩個值出自
+        不同時鐘的話那個比較會在時差上翻掉。
         """
         db = app.state.db
         row = await _runner_authed(runner_id, x_runner_token)
@@ -13057,6 +13082,14 @@ def create_app(config: Config | None = None) -> FastAPI:
              json.dumps(body.dashboard_json, ensure_ascii=False),
              json.dumps(body.usage_window_json, ensure_ascii=False),
              now, runner_id))
+        for ack in body.command_acks:
+            # `runner_id=?` 一起比對：少了它，一台執行器可以替別台把命令
+            # 標成已生效。`COALESCE` 讓已生效的不會被後來的空 ack 洗掉
+            await db.execute(
+                "UPDATE runner_command SET note=?,"
+                " applied_at=COALESCE(applied_at, ?)"
+                " WHERE id=? AND runner_id=?",
+                (ack.note, ack.applied_at or None, ack.id, runner_id))
         cmds = await (await db.execute(
             "SELECT * FROM runner_command WHERE runner_id=?"
             " AND acked_at IS NULL ORDER BY created_at, rowid",
@@ -13332,8 +13365,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
         runners = await (await db.execute(
-            "SELECT * FROM runner WHERE status IN ('online','limited','paused')"
+            "SELECT * FROM runner WHERE status IN"
+            " ('online','limited','paused','restarting')"
             " ORDER BY last_seen_at DESC")).fetchall()
+        # 每台的最近 5 筆命令（新到舊）：App 靠它把「已送出 → 已收到 →
+        # 已生效」那條鏈畫出來。只給最近幾筆，面板要的是現在這一輪，
+        # 不是這台機器一整年的歷史
+        cmd_rows: dict[str, list[dict]] = {}
+        for r in runners:
+            rows = await (await db.execute(
+                "SELECT id, command, issued_by_name, created_at, acked_at,"
+                " applied_at, note FROM runner_command WHERE runner_id=?"
+                " ORDER BY created_at DESC, rowid DESC LIMIT 5",
+                (r["id"],))).fetchall()
+            cmd_rows[r["id"]] = [dict(c) for c in rows]
         rows = await (await db.execute(
             "SELECT status, COUNT(*) AS n FROM agent_run WHERE room_id=?"
             " GROUP BY status", (room_id,))).fetchall()
@@ -13344,7 +13389,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             " ORDER BY priority DESC, position ASC", (room_id,))).fetchall()
         return {
             "room_id": room_id,
-            "runners": [_runner_public(r) for r in runners],
+            "runners": [{**_runner_public(r),
+                         "commands": cmd_rows.get(r["id"], [])}
+                        for r in runners],
             "counts": counts,
             "queued": counts.get("queued", 0),
             "running": counts.get("running", 0),

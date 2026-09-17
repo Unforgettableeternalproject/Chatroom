@@ -44,6 +44,11 @@ EXIT_RESTART = 75
 EXIT_OK = 0
 EXIT_SELFCHECK_FAILED = 1
 
+# 退出前那一次「我要重啟了」的心跳最多等這麼久。**一定要有上限**：
+# Hub 連不上的時候，退出路徑不能卡在一個 socket 上——重啟本來就是
+# 排程工作在收尾，卡住的話那台執行器連退場都做不到
+RESTART_HEARTBEAT_TIMEOUT = 15.0
+
 
 @dataclass
 class ActiveRun:
@@ -80,6 +85,10 @@ class LoopState:
     draining: bool = False
     selfcheck_problems: list[str] = field(default_factory=list)
     last_maintenance_day: str = ""
+    # 收到了、但還沒生效的 restart 命令 id。**要一直帶著**：只在收到那一刻
+    # ack 一次的話，Hub 上會永遠停在「等 3 筆 run 結束後重啟」，而手上其實
+    # 只剩一筆了
+    pending_restart_ids: list[str] = field(default_factory=list)
 
 
 class RunnerLoop:
@@ -104,6 +113,11 @@ class RunnerLoop:
         # 上一次 heartbeat 送出去的狀態。命令是在心跳的**回應**裡拿到的，
         # 所以套用之後 Hub 手上還是舊狀態——那一輪的 claim 會被它擋掉
         self._sent_status = ""
+        # 還沒送出去的命令回報（§5.7）。送成功才清空：Hub 連不上的那一輪
+        # 丟掉的話，那筆命令在面板上永遠停在「已送達」
+        self._pending_acks: list[dict] = []
+        # 正在送「命令已生效」的補心跳，避免它自己再觸發一次
+        self._flushing_ack = False
 
     def _default_executor(self) -> RunExecutor:
         return RunExecutor(self.cfg, self.hub, usage_store=self.usage,
@@ -449,40 +463,93 @@ class RunnerLoop:
             self.state.limit_reason,
             [a.view() for a in self.active.values()], 0, runtime)
         self._sent_status = self.state.status
+        acks = self._collect_acks()
         try:
             reply = await self.hub.heartbeat(
                 self.state.status, len(self.active), board, window_dict,
-                self.state.limited_until, self.state.limit_reason) or {}
+                self.state.limited_until, self.state.limit_reason,
+                command_acks=acks) or {}
         except HubError:
             # Hub 連不上不是執行器的錯，也不該讓它自殺：下一次心跳再試。
-            # 期間照樣不領單（claim 也會失敗），但手上的 run 繼續跑完
+            # 期間照樣不領單（claim 也會失敗），但手上的 run 繼續跑完。
+            # `_pending_acks` **不清**：這一輪沒送到，下一輪要再送一次
             return {}
+        self._pending_acks = []
+        fresh = False
         for cmd in reply.get("commands", []):
-            self.apply_command(str(cmd.get("command") or ""))
+            cmd_id = str(cmd.get("id") or "")
+            applied, note = self.apply_command(
+                str(cmd.get("command") or ""), cmd_id)
+            if not cmd_id or not note:
+                continue
+            self._pending_acks.append(
+                {"id": cmd_id,
+                 "applied_at": self.now().isoformat() if applied else None,
+                 "note": note})
+            fresh = True
         for run_id in reply.get("cancel_requested_run_ids", []):
             self.request_cancel(str(run_id))
+        if fresh and not self._flushing_ack:
+            # 收到命令就**立刻再報一次**：等下一次心跳的話，人按完鈕要盯著
+            # 一個沒有變化的面板 30 秒，而那 30 秒裡唯一合理的推論是「壞了」
+            self._flushing_ack = True
+            try:
+                await self.heartbeat()
+            finally:
+                self._flushing_ack = False
         return reply
 
-    def apply_command(self, command: str) -> None:
-        """人類下的命令（§5.7）。命令是一次性的，Hub 取走時就標 acked。"""
+    def _restart_wait_note(self) -> str:
+        return f"等 {len(self.active)} 筆 run 結束後重啟"
+
+    def _collect_acks(self) -> list[dict]:
+        """這一次心跳要帶的命令回報。
+
+        等待中的 restart **每一輪都重帶一次**，note 裡的筆數跟著手上的 run
+        變少——只 ack 一次的話，面板會一直說「等 3 筆」，而人會以為它卡住了。
+        """
+        acks = list(self._pending_acks)
+        seen = {a["id"] for a in acks}
+        for cmd_id in self.state.pending_restart_ids:
+            if cmd_id in seen:
+                continue
+            acks.append({"id": cmd_id, "applied_at": None,
+                         "note": self._restart_wait_note()})
+        return acks
+
+    def apply_command(self, command: str,
+                      command_id: str = "") -> tuple[bool, str]:
+        """人類下的命令（§5.7）。命令是一次性的，Hub 取走時就標 acked。
+
+        回傳 ``(生效了沒, 給人看的一句話)``：這兩個值會在下一次心跳寫回
+        Hub 的 `runner_command`。restart **收到時一律不算生效**——真正生效
+        是在手上的 run 清空、進程要退出的那一刻（見 `_restarting_heartbeat`）。
+        """
         if command == "pause":
             self.state.status = "paused"
             self.state.limit_reason = "paused_by_human"
-        elif command == "resume":
+            return True, "已暫停"
+        if command == "resume":
             self.state.status = "online"
             self.state.limit_reason = ""
             self.state.limited_until = None
             self.state.draining = False
-        elif command == "restart":
+            return True, "已恢復"
+        if command == "restart":
             self.state.restart_pending = True
             self.state.restart_reason = "restart_command"
-        elif command == "drain":
+            if command_id and command_id not in self.state.pending_restart_ids:
+                self.state.pending_restart_ids.append(command_id)
+            return False, self._restart_wait_note()
+        if command == "drain":
             # drain＝停收新單、跑完手上的，然後停在 paused 等人叫醒。
             # **不自我重啟**：drain 的語意是「我要它安靜下來」，
             # 而重啟回來的執行器會立刻開始領單
             self.state.draining = True
             self.state.status = "paused"
             self.state.limit_reason = "draining"
+            return True, f"停收新單，跑完手上 {len(self.active)} 筆後暫停"
+        return False, ""
 
     def request_cancel(self, run_id: str) -> bool:
         active = self.active.get(run_id)
@@ -564,16 +631,47 @@ class RunnerLoop:
             # 畫面上卻要再等一個心跳才動
             await self.heartbeat()
         if self.state.restart_pending and not self.active:
+            await self._restarting_heartbeat()
             self._request_exit(EXIT_RESTART, self.state.restart_reason
                                or "restart_command")
             return
         if self.maintenance_due():
             self.state.last_maintenance_day = self.now().date().isoformat()
+            await self._restarting_heartbeat()
             self._request_exit(EXIT_RESTART, "maintenance_window")
             return
         while self.can_claim():
             if await self.claim_once() is None:
                 break
+
+    async def _restarting_heartbeat(self) -> None:
+        """退出前的最後一次心跳：狀態 ``restarting``，restart 命令標生效。
+
+        沒有這一次的話，進程退出後 Hub 手上還寫著 online，要等
+        `runner_offline_after`（180 秒）掃到才變 offline——而重啟只要 1～2
+        分鐘，人從頭到尾看不到任何「正在重啟」。
+
+        **送不出去也要退**：整段包在 `wait_for` 裡，Hub 連不上時逾時就走。
+        退出路徑卡在一個 socket 上的話，這台執行器連退場都做不到。
+        """
+        now = self.now().isoformat()
+        for cmd_id in self.state.pending_restart_ids:
+            self._pending_acks.append(
+                {"id": cmd_id, "applied_at": now,
+                 "note": "正在重啟，預計 1～2 分鐘內回來"})
+        self.state.pending_restart_ids = []
+        self.state.status = "restarting"
+        # 這一次不要再因為回應裡的新命令去補一次心跳：下一秒就退出了
+        self._flushing_ack = True
+        try:
+            await asyncio.wait_for(self.heartbeat(),
+                                   RESTART_HEARTBEAT_TIMEOUT)
+        except asyncio.TimeoutError:
+            log.warning("送不出「正在重啟」的心跳（逾時），照樣退出")
+        except Exception:  # pragma: no cover - 退出路徑不因任何例外卡住
+            log.warning("送不出「正在重啟」的心跳，照樣退出", exc_info=True)
+        finally:
+            self._flushing_ack = False
 
     def _request_exit(self, code: int, reason: str) -> None:
         self.state.restart_reason = reason

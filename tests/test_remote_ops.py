@@ -1024,6 +1024,130 @@ async def test_commands_are_taken_once(tmp_path):
             assert hb["commands"] == []
 
 
+async def test_the_command_feedback_chain_reaches_the_dashboard(tmp_path):
+    """§5.7：命令從「按下」到「生效」每一段都要在面板上看得到。
+
+    這條守的是那個**安靜的失敗**：Hub 只記得「已送達」的話，人按完鈕看到
+    的是一個 30 秒不動的面板，而唯一合理的推論是它壞了。
+    """
+    app, client = await _client(tmp_path, "cmdfeedback")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            cmd = (await client.post(f"/api/runners/{runner}/commands",
+                                     json={"command": "pause",
+                                           "room_id": rid},
+                                     headers=hdr)).json()["command"]
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            assert [c["id"] for c in hb["commands"]] == [cmd["id"]]
+
+            # 生效：執行器在下一次心跳寫回來
+            r = await client.post(
+                f"/api/runners/{runner}/heartbeat", headers=runner.headers,
+                json={"status": "paused",
+                      "command_acks": [{"id": cmd["id"],
+                                        "applied_at": "2026-09-17T10:00:00Z",
+                                        "note": "已暫停"}]})
+            assert r.status_code == 200, r.text
+            one = (await client.get(f"/api/rooms/{rid}/runner",
+                                    headers=hdr)).json()["runners"][0]
+            got = one["commands"][0]
+            assert set(got) == {"id", "command", "issued_by_name",
+                                "created_at", "acked_at", "applied_at", "note"}
+            assert got["command"] == "pause" and got["note"] == "已暫停"
+            # `applied_at` **原樣存執行器送來的值**：它要跟
+            # `dashboard.runner.started_at` 同一支時鐘，App 靠
+            # `started_at > applied_at` 判定「已經重啟完回來了」
+            assert got["applied_at"] == "2026-09-17T10:00:00Z"
+            assert got["acked_at"]
+            assert got["issued_by_name"] == "艾斯維爾"
+
+
+async def test_an_unapplied_command_keeps_its_note_and_no_applied_at(tmp_path):
+    """還沒生效的 restart：note 要寫、`applied_at` 要留空。
+
+    兩個都漏掉的話，面板只能在「已送達」與「已生效」之間二選一，而「等 2
+    筆 run 結束後重啟」正是人這時候唯一想知道的事。生效之後**不能被後來
+    的空 ack 洗回去**：那會讓一台已經重啟完的執行器看起來還在等。
+    """
+    app, client = await _client(tmp_path, "unapplied")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            cmd = (await client.post(f"/api/runners/{runner}/commands",
+                                     json={"command": "restart"},
+                                     headers=hdr)).json()["command"]
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "online"})
+            await client.post(
+                f"/api/runners/{runner}/heartbeat", headers=runner.headers,
+                json={"status": "online",
+                      "command_acks": [{"id": cmd["id"], "applied_at": None,
+                                        "note": "等 2 筆 run 結束後重啟"}]})
+            got = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                   ).json()["runners"][0]["commands"][0]
+            assert got["applied_at"] is None
+            assert got["note"] == "等 2 筆 run 結束後重啟"
+
+            # 退出前那一次：狀態 restarting，命令標生效
+            r = await client.post(
+                f"/api/runners/{runner}/heartbeat", headers=runner.headers,
+                json={"status": "restarting",
+                      "command_acks": [{"id": cmd["id"],
+                                        "applied_at": "2026-09-17T10:00:00Z",
+                                        "note": "正在重啟，預計 1～2 分鐘內回來"}]})
+            assert r.status_code == 200, r.text
+            body = (await client.get(f"/api/rooms/{rid}/runner",
+                                     headers=hdr)).json()
+            # restarting 的執行器**要留在列表上**：從列表消失與「它掛了」
+            # 在面板上長得一樣
+            assert body["runners"][0]["status"] == "restarting"
+            applied = body["runners"][0]["commands"][0]["applied_at"]
+            assert applied
+
+            # 再來一次沒帶 applied_at 的 ack，不能把它洗回 None
+            await client.post(
+                f"/api/runners/{runner}/heartbeat", headers=runner.headers,
+                json={"status": "restarting",
+                      "command_acks": [{"id": cmd["id"], "applied_at": None,
+                                        "note": "正在重啟，預計 1～2 分鐘內回來"}]})
+            again = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                     ).json()["runners"][0]["commands"][0]
+            assert again["applied_at"] == applied
+
+
+async def test_another_runner_cannot_ack_someone_elses_command(tmp_path):
+    """別台的 ack 不算數：替別人把命令標成「已生效」＝面板說它照做了，
+    而它其實什麼都沒收到。"""
+    app, client = await _client(tmp_path, "ackowner")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            mine = await _register_runner(client, label="ex1")
+            other = await _register_runner(client, label="ex2")
+            cmd = (await client.post(f"/api/runners/{mine}/commands",
+                                     json={"command": "pause"},
+                                     headers=hdr)).json()["command"]
+            await client.post(
+                f"/api/runners/{other}/heartbeat", headers=other.headers,
+                json={"status": "online",
+                      "command_acks": [{"id": cmd["id"],
+                                        "applied_at": "2026-09-17T10:00:00Z",
+                                        "note": "我替你按的"}]})
+            row = await (await app.state.db.execute(
+                "SELECT applied_at, note FROM runner_command WHERE id=?",
+                (cmd["id"],))).fetchone()
+            assert row["applied_at"] is None and row["note"] == ""
+
+
 async def test_dashboard_json_is_stored_verbatim(tmp_path):
     """Hub **不解讀** dashboard_json：它一旦開始解讀，執行器每加一格就要改兩端。"""
     app, client = await _client(tmp_path, "dashboard")
@@ -1065,6 +1189,8 @@ RUNNER_KEYS = {
     "id", "host", "label", "status", "max_parallel", "running_count",
     "projects", "limited_until", "limit_reason", "usage_window",
     "dashboard", "version", "registered_at", "last_seen_at",
+    # 最近幾筆命令與它們的下場（§5.7 回饋鏈）。只有儀表板那條路徑會帶
+    "commands",
 }
 
 
