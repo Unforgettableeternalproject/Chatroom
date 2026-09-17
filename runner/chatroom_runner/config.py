@@ -148,6 +148,10 @@ class RunnerConfig:
     # 啟動自檢要不要驗 GPG。**預設驗**——簽章不可用時 commit 會停在 pinentry，
     # 而遠端沒有人能按那個視窗。只有明知這台機器不簽章時才關掉
     require_gpg: bool = True
+    # 自檢要用哪一支 gpg。留空＝跟 git 同源（`git config --get gpg.program`），
+    # 再退回 PATH 上的 `gpg`。排程工作的 PATH 跟互動 shell 不一樣，
+    # 「commit 簽得起來」與「自檢叫得到 gpg」必須指同一支才有意義
+    gpg_bin: str = ""
     version: str = "0.1.0"
 
     @property
@@ -289,5 +293,6 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         bridge_path=Path(raw["bridge_path"]) if raw.get("bridge_path")
         else None,
         require_gpg=bool(raw.get("require_gpg", True)),
+        gpg_bin=str(raw.get("gpg_bin") or ""),
         version=raw.get("version") or "0.1.0",
     )

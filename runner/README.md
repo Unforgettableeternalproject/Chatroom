@@ -67,6 +67,7 @@
 | `maintenance_hour` | 每日維護窗（預設 4 點）。到點且無 run 時自我重啟 |
 | `usage_window_hours` / `usage_soft_cap_tokens` / `usage_soft_cap_usd` | 近 N 小時的軟上限，到了就停收新單。**這是自我約束，不是真實額度** |
 | `require_gpg` | 自檢要不要驗簽章（預設 true） |
+| `gpg_bin` | 自檢用哪一支 gpg。留空＝跟 git 同源（`git config --get gpg.program`），再退回 PATH 上的 `gpg`。排程工作的 PATH 跟互動 shell 不一樣 |
 | `claude_bin` | `claude` 的路徑。要帶參數請給陣列 |
 | `claude_config_dir` | 獨立的 `CLAUDE_CONFIG_DIR` |
 | `state_dir` | 狀態根目錄（狀態檔、log、usage.db、run 暫存） |

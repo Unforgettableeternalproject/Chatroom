@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from chatroom_runner import gitops
 from chatroom_runner.loop import (EXIT_RESTART, EXIT_SELFCHECK_FAILED,
                                   RunnerLoop)
 
@@ -105,6 +106,64 @@ async def test_selfcheck_failure_is_written_to_the_local_log(
         assert await loop.start() is False
 
     assert [r for r in caplog.records if r.message.startswith("自檢：")]
+
+
+# ── gpg 的來源 ──────────────────────────────────────────────────
+
+async def _probe_gpg(loop, monkeypatch):
+    """跑 `_check_gpg`，回它實際想叫起來的那支程式。"""
+    seen = {}
+
+    async def fake_exec(program, *args, **kwargs):
+        seen["program"] = program
+        raise OSError("探針不真的起 gpg")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await loop._check_gpg()
+    return seen.get("program")
+
+
+async def test_gpg_falls_back_to_the_program_git_signs_with(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """排程工作的 PATH 上可能根本沒有 gpg，但 git 一直簽得起來。
+
+    要驗的是「commit 簽不簽得動」，所以探針要打 git 用的那一支。
+    """
+    signer = r"C:\Program Files\Git\usr\bin\gpg.exe"
+
+    async def fake_git(repo, *args, **kwargs):
+        assert args == ("config", "--get", "gpg.program")
+        return gitops.GitResult(0, signer, "")
+
+    monkeypatch.setattr(gitops, "git", fake_git)
+    loop = _loop(make_config(tmp_path, work_repo), runner_hub)
+
+    assert await _probe_gpg(loop, monkeypatch) == signer
+
+
+async def test_gpg_falls_back_to_path_when_git_has_no_program(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """git 沒設 `gpg.program` 時就照舊走 PATH。"""
+    async def fake_git(repo, *args, **kwargs):
+        return gitops.GitResult(0, "", "")
+
+    monkeypatch.setattr(gitops, "git", fake_git)
+    loop = _loop(make_config(tmp_path, work_repo), runner_hub)
+
+    assert await _probe_gpg(loop, monkeypatch) == "gpg"
+
+
+async def test_gpg_bin_overrides_git(runner_hub, work_repo, tmp_path,
+                                     monkeypatch):
+    """設定檔寫死的 `gpg_bin` 最優先——連 git 都不必問。"""
+    async def fake_git(repo, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("gpg_bin 設了還去問 git")
+
+    monkeypatch.setattr(gitops, "git", fake_git)
+    loop = _loop(make_config(tmp_path, work_repo, gpg_bin="D:/gnupg/gpg.exe"),
+                 runner_hub)
+
+    assert await _probe_gpg(loop, monkeypatch) == "D:/gnupg/gpg.exe"
 
 
 async def test_selfcheck_catches_a_repo_on_a_forbidden_branch(

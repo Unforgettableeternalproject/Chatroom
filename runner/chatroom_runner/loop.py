@@ -126,20 +126,36 @@ class RunnerLoop:
                     f"{(err or out).decode('utf-8', 'replace').strip()[:200]}"]
         return []
 
+    async def _gpg_program(self) -> str:
+        """挑一支 gpg。**跟 git 同源**，因為要驗的就是「commit 簽不簽得起來」。
+
+        排程工作拿到的 PATH 跟互動 shell 不一樣（2026-09-17：PATH 上根本
+        沒有 gpg，自檢每次都 `[WinError 2]`，而同一台機器的 commit 一直簽
+        得好好的——因為 git 用的是 `gpg.program` 指的那支）。順序：
+        設定檔的 `gpg_bin` → `git config --get gpg.program` → PATH 上的 `gpg`。
+        """
+        if self.cfg.gpg_bin:
+            return self.cfg.gpg_bin
+        res = await gitops.git(self.cfg.state_dir,
+                               "config", "--get", "gpg.program")
+        program = res.out.strip().strip('"') if res.ok else ""
+        return program or "gpg"
+
     async def _check_gpg(self) -> list[str]:
         """簽章探針。**只驗、不代管 passphrase**（裁決 #1）。
 
         卡在 pinentry 就是「現在簽不了」——那時 commit 會停在同一個地方，
         而遠端沒有人能按那個視窗。
         """
+        program = await self._gpg_program()
         try:
             proc = await asyncio.create_subprocess_exec(
-                "gpg", "--clearsign", "--batch", "--yes",
+                program, "--clearsign", "--batch", "--yes",
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
         except (OSError, ValueError) as exc:
-            return [f"gpg 叫不起來：{exc}"]
+            return [f"gpg 叫不起來（{program}）：{exc}"]
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(b"chatroom-runner probe\n"), timeout=60)
