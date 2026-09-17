@@ -209,6 +209,8 @@ def test_templates_render_all_placeholders(kind):
     contract = prompts.build_contract(fields)
     assert "{{" not in contract
     assert "不 push" in contract and "沒驗證什麼" in contract
+    # 收工之後要離開房間：工作房是常駐的，不走就一直掛在成員列上
+    assert "chatroom_leave" in contract
 
 
 def test_missing_template_is_an_error():
