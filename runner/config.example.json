@@ -26,6 +26,7 @@
     "registry.npmjs.org",
     "pypi.org"
   ],
+  "allowed_mcp_servers": ["chatroom"],
   "projects": {
     "ai-website": {
       "model": "claude-opus-5",

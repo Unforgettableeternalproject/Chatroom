@@ -38,6 +38,8 @@ DEFAULT_HEARTBEAT_SECONDS = 30
 DEFAULT_BACKOFF_MINUTES = (5, 15, 30, 60)
 # stream 裡連續看到幾次 rate_limit 的 api_retry 就把執行器標 limited
 DEFAULT_RATE_LIMIT_RETRY_THRESHOLD = 3
+# run 預設只准用 chatroom。其他要開的在設定檔的 `allowed_mcp_servers` 明列
+DEFAULT_ALLOWED_MCP_SERVERS = ("chatroom",)
 
 
 class ConfigError(Exception):
@@ -144,6 +146,12 @@ class RunnerConfig:
     # 額外要預先授權給子 agent 的工具名（`--allowedTools`），例如
     # "mcp__claude_ai_Atlassian_Rovo__*"。硬限制仍由 PreToolUse hook 守
     extra_allowed_tools: list[str] = field(default_factory=list)
+    # run 允許用哪些 MCP 伺服器。**預設拒絕**：不在這裡、也沒被
+    # `extra_allowed_tools` 的 `mcp__<server>__*` 點名的 claude.ai 連接器，
+    # 一律進 run 專用 settings 的 `deniedMcpServers` 與 `--disallowedTools`
+    #（見 run.KNOWN_CLAUDE_AI_SERVERS）
+    allowed_mcp_servers: list[str] = field(
+        default_factory=lambda: list(DEFAULT_ALLOWED_MCP_SERVERS))
     backoff_minutes: list[int] = field(
         default_factory=lambda: list(DEFAULT_BACKOFF_MINUTES))
     rate_limit_retry_threshold: int = DEFAULT_RATE_LIMIT_RETRY_THRESHOLD
@@ -290,6 +298,9 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         allowed_domains=list(raw.get("allowed_domains", [])),
         extra_allowed_tools=[
             str(x) for x in raw.get("extra_allowed_tools", [])],
+        allowed_mcp_servers=[
+            str(x) for x in raw.get("allowed_mcp_servers",
+                                    DEFAULT_ALLOWED_MCP_SERVERS)],
         backoff_minutes=[int(x) for x in raw.get(
             "backoff_minutes", DEFAULT_BACKOFF_MINUTES)],
         rate_limit_retry_threshold=int(

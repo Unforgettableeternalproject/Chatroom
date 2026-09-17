@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from chatroom_runner import run as run_module
 from chatroom_runner.run import RepoLocks, RunExecutor, resolve_repo
 from chatroom_runner.usage import UsageStore
 
@@ -544,6 +545,120 @@ def test_extra_allowed_tools_merges_in(tmp_path, work_repo):
                               tmp_path, "", "investigate"))
     assert "mcp__claude_ai_Atlassian_Rovo__*" in tools
     assert tools.count("Read") == 1, "重複的名字不要疊上去"
+
+
+# ── claude.ai 連接器的封鎖（09/17）─────────────────────────────
+
+# `claude mcp list` 的真實輸出（2026-09-17，執行器的設定目錄）。三種狀態行
+# 都要認得——尤其 ✘ 那行後面還跟著一句帶引號的錯誤訊息
+MCP_LIST_SAMPLE = """Checking MCP server health…
+
+claude.ai Claude Docs: https://api.anthropic.com/v1/pages/mcp - ✔ Connected
+claude.ai Notion: https://mcp.notion.com/mcp - ! Needs authentication
+claude.ai Atlassian Rovo: https://mcp.atlassian.com/v1/mcp - ✘ Failed to \
+connect — MCP server "claude.ai Atlassian Rovo" connection timed out after \
+30000ms
+claude.ai Brand New Thing: https://brand-new.example.com/mcp - ✔ Connected
+chatroom: C:/python.exe -m chatroom_mcp - ✔ Connected
+"""
+
+
+@pytest.fixture(autouse=True)
+def _forget_discovered_servers():
+    """`_discovered_servers` 是模組層的，測試之間不能互相汙染。"""
+    yield
+    run_module._discovered_servers.clear()
+
+
+def _disallowed(argv: list[str]) -> list[str]:
+    return argv[argv.index("--disallowedTools") + 1].split(",")
+
+
+def test_parse_mcp_list_reads_all_three_status_lines():
+    """✔／!／✘ 三種狀態都要撈到，本機 stdio 伺服器不算連接器。"""
+    found = dict(run_module.parse_mcp_list(MCP_LIST_SAMPLE))
+    assert found["claude.ai Claude Docs"] == \
+        "https://api.anthropic.com/v1/pages/mcp"
+    assert found["claude.ai Notion"] == "https://mcp.notion.com/mcp"
+    # 連不上的那行：錯誤訊息裡也有伺服器名，不能把 URL 或名字吃掉
+    assert found["claude.ai Atlassian Rovo"] == \
+        "https://mcp.atlassian.com/v1/mcp"
+    assert "chatroom" not in found, "本機 stdio 伺服器不是要擋的東西"
+
+
+def test_argv_denies_every_connector_except_the_allowed_ones(tmp_path,
+                                                             work_repo):
+    """預設拒絕：chatroom 以外的 claude.ai 連接器全部進 `--disallowedTools`。"""
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    denied = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+                                  tmp_path, "", "ticket"))
+    for name in ("mcp__claude_ai_Gmail__*", "mcp__claude_ai_Google_Drive__*",
+                 "mcp__claude_ai_Canva__*", "mcp__claude_ai_Notion__*",
+                 "mcp__claude_ai_Atlassian_Rovo__*"):
+        assert name in denied
+    assert "mcp__chatroom__*" not in denied
+    assert not [x for x in denied if not x.startswith("mcp__claude_ai_")]
+
+
+def test_extra_allowed_tools_keeps_that_server_out_of_the_deny_list(
+        tmp_path, work_repo):
+    """設定檔放行了 Atlassian 的工具，就不能反手把整台伺服器擋掉——
+    一條規則兩端實作不一致只會湊出死局。"""
+    cfg = make_config(
+        tmp_path, work_repo,
+        extra_allowed_tools=["mcp__claude_ai_Atlassian_Rovo__*"])
+    ex = _executor(cfg, _NullHub())
+    argv = ex._argv("p", "c", cfg.project("ai-website"), tmp_path, "",
+                    "ticket")
+    denied = _disallowed(argv)
+    assert "mcp__claude_ai_Atlassian_Rovo__*" not in denied
+    assert "mcp__claude_ai_Atlassian_Rovo__*" in _allowed(argv)
+    assert "mcp__claude_ai_Gmail__*" in denied
+
+
+def test_allowed_mcp_servers_opens_exactly_what_it_names(tmp_path, work_repo):
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "claude.ai Gmail"])
+    ex = _executor(cfg, _NullHub())
+    denied = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+                                  tmp_path, "", "ticket"))
+    assert "mcp__claude_ai_Gmail__*" not in denied
+    assert "mcp__claude_ai_Canva__*" in denied
+
+
+def test_selfcheck_probe_adds_newly_seen_connectors(tmp_path, work_repo):
+    """保底名單沒有的連接器，自檢探到之後也要被擋。"""
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    before = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+                                  tmp_path, "", "ticket"))
+    assert "mcp__claude_ai_Brand_New_Thing__*" not in before
+    run_module.remember_claude_ai_servers(
+        run_module.parse_mcp_list(MCP_LIST_SAMPLE))
+    after = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+                                 tmp_path, "", "ticket"))
+    assert "mcp__claude_ai_Brand_New_Thing__*" in after
+
+
+def test_run_settings_deny_the_connectors_at_both_layers(tmp_path, work_repo):
+    """雙保險：`deniedMcpServers` 讓伺服器不載入，`permissions.deny` 是
+    萬一它們仍然到齊時的第二道。"""
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    run_dir = cfg.runs_dir / "r-deny"
+    run_dir.mkdir(parents=True)
+    ex._write_run_files(run_dir, {"id": "r-deny"},
+                        cfg.project("ai-website").repos["JSAI-Web"])
+    settings = json.loads((run_dir / "settings.json").read_text("utf-8"))
+    # 有 URL 就用 serverUrl：文件說連接器的顯示名會改，serverName 會失效
+    urls = [e["serverUrl"] for e in settings["deniedMcpServers"]
+            if "serverUrl" in e]
+    assert "https://gmailmcp.googleapis.com/mcp/v1" in urls
+    assert "https://mcp.canva.com/mcp" in urls
+    assert not [u for u in urls if "chatroom" in u]
+    assert "mcp__claude_ai_Gmail__*" in settings["permissions"]["deny"]
+    assert "mcp__chatroom__*" not in settings["permissions"]["deny"]
 
 
 # ── 回報的容錯（審查 09/16 Major）───────────────────────────────

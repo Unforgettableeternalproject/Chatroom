@@ -78,6 +78,159 @@ def allowed_tools(kind: str, extra: list[str] | None = None) -> list[str]:
             tools.append(name)
     return tools
 
+
+# ---------- claude.ai 連接器的封鎖（預設拒絕）----------
+#
+# 問題：執行器用自己的 `CLAUDE_CONFIG_DIR` 起 claude，但**帳號層級的
+# claude.ai 連接器是跟著登入進來的**，不在 `--mcp-config` 裡。實測
+# 2026-09-17，在執行器的設定目錄下 `claude mcp list` 列出 Claude Docs、
+# Microsoft 365、Adobe、Hugging Face、Postman、Google Calendar、Gmail、
+# Canva、Notion、Cloudflare、Atlassian Rovo、Google Drive 共 12 個。
+# 一筆 run 只該碰 chatroom（加設定檔明列的例外），其他都是多出來的攻擊面。
+#
+# 查證（code.claude.com/docs，2026-09-17）：
+#
+# - `--strict-mcp-config`「只用 --mcp-config 的伺服器」**擋不到連接器**。
+#   docs/en/mcp：連接器是 Claude Code 自己去 claude.ai 抓的，不經
+#   `--mcp-config`，所以這面旗子對它們沒有作用。
+# - `disableClaudeAiConnectors: true`（docs/en/mcp#disable-claude-ai-connectors，
+#   等價環境變數 `ENABLE_CLAUDEAI_MCP_SERVERS=false`）是全有全無——會連
+#   設定檔想留的 Atlassian 一起關掉，所以這裡不用它。
+# - **`deniedMcpServers` 才是真正有效的那一條**（docs/en/managed-mcp
+#   #policy-based-control-with-allowlists-and-denylists）：「Denylists merge
+#   from every scope regardless.」——不限管理者設定，`--settings` 這個 scope
+#   也吃。條目是 `{"serverUrl": ...}`（可帶 `*`）或 `{"serverName": ...}`
+#   （deny 清單的 serverName 接受任意字串，連接器的顯示名就是
+#   「claude.ai Gmail」這種）。被擋的伺服器**根本不會載入**，不只是工具被藏。
+#   實測 2026-09-17：在 `--settings` 放 Gmail 的 serverUrl 與 Canva 的
+#   serverName，同一個設定目錄下 `claude mcp list` 那兩行就消失了。
+#   文件也提醒 serverName 會隨改名失效，所以有 URL 時優先用 serverUrl。
+# - 工具層的 deny 是第二道：`--disallowedTools` 與 settings 的
+#   `permissions.deny` 共用同一套規則語法（docs/en/permissions）。
+#   `mcp__<server>` 與 `mcp__<server>__*` 都匹配該伺服器的全部工具；deny
+#   規則的 tool-name 位置吃 glob（`mcp__*` ＝所有 MCP 工具），被 bare-name
+#   或 glob deny 命中的工具會**從 context 移除**。注意 allow 規則的 server
+#   段不能有 glob，所以不能靠 `mcp__claude_ai_*` 之類反向放行。
+# - 連接器的工具名是 `mcp__claude_ai_<server>__<tool>`
+#   （docs/en/permissions），server 段就是顯示名把非 [A-Za-z0-9_] 換成 `_`。
+#
+# 這份是**保底名單**；啟動自檢會跑一次 `claude mcp list` 把實際看到的合併
+# 進來（見 loop.selfcheck），所以之後新長出來的連接器也會被擋。
+KNOWN_CLAUDE_AI_SERVERS: tuple[tuple[str, str], ...] = (
+    ("claude.ai Adobe for creativity", "https://adobe-creativity.adobe.io/mcp"),
+    ("claude.ai Atlassian Rovo", "https://mcp.atlassian.com/v1/mcp"),
+    ("claude.ai Canva", "https://mcp.canva.com/mcp"),
+    ("claude.ai Claude Docs", "https://api.anthropic.com/v1/pages/mcp"),
+    ("claude.ai Cloudflare Developer Platform",
+     "https://bindings.mcp.cloudflare.com/mcp"),
+    ("claude.ai Gmail", "https://gmailmcp.googleapis.com/mcp/v1"),
+    ("claude.ai Google Calendar", "https://calendarmcp.googleapis.com/mcp/v1"),
+    ("claude.ai Google Drive", "https://drivemcp.googleapis.com/mcp/v1"),
+    ("claude.ai Hugging Face", "https://huggingface.co/mcp"),
+    ("claude.ai Microsoft 365", "https://microsoft365.mcp.claude.com/mcp"),
+    ("claude.ai Notion", "https://mcp.notion.com/mcp"),
+    ("claude.ai Postman", "https://mcp.postman.com/minimal"),
+)
+
+# 自檢在執行器設定目錄下跑 `claude mcp list` 的上限。連不上的連接器一個要
+# 等 30 秒健康檢查，12 個排下來可能很久；逾時只當「這次沒探到」，不算失敗
+MCP_LIST_TIMEOUT_SECONDS = 90
+
+# `claude mcp list` 的一行：`<name>: <url or command> - <狀態>`
+_MCP_LIST_RE = re.compile(r"^(?P<name>\S.*?): (?P<target>\S+) - ")
+_NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
+# 自檢探到的連接器（顯示名 → URL）。保底名單之外多出來的那些
+_discovered_servers: dict[str, str] = {}
+
+
+def server_slug(name: str) -> str:
+    """伺服器顯示名 → 工具名裡的 server 段。
+
+    `claude.ai Gmail` → `claude_ai_Gmail`，工具是
+    `mcp__claude_ai_Gmail__send_message`。
+    """
+    return _NON_TOOL_CHAR_RE.sub("_", name)
+
+
+def parse_mcp_list(text: str) -> list[tuple[str, str]]:
+    """從 `claude mcp list` 的輸出撈出 claude.ai 連接器的（顯示名, URL）。
+
+    只認 `claude.ai ` 開頭的行——本機 stdio 伺服器不是這裡要擋的東西。
+    三種狀態行（✔ 已連線 / ! 需要認證 / ✘ 連不上）都要認得：連不上的那行
+    後面還跟著一句帶引號的錯誤訊息，不能讓它把名字吃掉。
+    """
+    found: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        m = _MCP_LIST_RE.match(line.strip())
+        if not m:
+            continue
+        name = m.group("name")
+        if not name.startswith("claude.ai "):
+            continue
+        target = m.group("target")
+        found.append((name, target if target.startswith("http") else ""))
+    return found
+
+
+def remember_claude_ai_servers(servers: list[tuple[str, str]]) -> None:
+    """把自檢探到的連接器併進封鎖名單（保底名單之外的新面孔也會被擋）。"""
+    for name, url in servers:
+        if name:
+            _discovered_servers[name] = url
+
+
+def known_claude_ai_servers() -> list[tuple[str, str]]:
+    """保底名單 ＋ 自檢探到的。依顯示名排序，參數順序才穩定、好比對。"""
+    merged = {name: url for name, url in KNOWN_CLAUDE_AI_SERVERS}
+    for name, url in _discovered_servers.items():
+        if url or name not in merged:
+            merged[name] = url
+    return sorted(merged.items())
+
+
+def allowed_server_slugs(allowed: list[str] | None,
+                         extra_tools: list[str] | None = None) -> set[str]:
+    """這筆 run 允許哪些 MCP 伺服器（用工具名裡的 server 段表示）。
+
+    `extra_allowed_tools` 裡的 `mcp__<server>__*` 也算數——不然設定檔放行了
+    Atlassian 的工具，這裡又把整台伺服器擋掉，只會湊出一個死局。
+    """
+    slugs = {server_slug(x) for x in (allowed or []) if x}
+    for tool in extra_tools or []:
+        if not tool.startswith("mcp__"):
+            continue
+        rest = tool[len("mcp__"):]
+        slugs.add(rest.split("__", 1)[0])
+    return {s for s in slugs if s}
+
+
+def blocked_claude_ai_servers(
+        allowed: list[str] | None,
+        extra_tools: list[str] | None = None) -> list[tuple[str, str]]:
+    """要擋掉的連接器。**預設拒絕**：不在允許清單裡的一律進 deny。"""
+    ok = allowed_server_slugs(allowed, extra_tools)
+    return [(name, url) for name, url in known_claude_ai_servers()
+            if server_slug(name) not in ok]
+
+
+def disallowed_tools(allowed: list[str] | None,
+                     extra_tools: list[str] | None = None) -> list[str]:
+    """`--disallowedTools` 與 `permissions.deny` 共用的那份清單。"""
+    return [f"mcp__{server_slug(name)}__*"
+            for name, _ in blocked_claude_ai_servers(allowed, extra_tools)]
+
+
+def denied_mcp_servers(allowed: list[str] | None,
+                       extra_tools: list[str] | None = None) -> list[dict]:
+    """settings 的 `deniedMcpServers`：讓伺服器連載入都不載入。
+
+    有 URL 就用 `serverUrl`（文件說 serverName 會隨連接器改名失效）。
+    """
+    entries: list[dict] = []
+    for name, url in blocked_claude_ai_servers(allowed, extra_tools):
+        entries.append({"serverUrl": url} if url else {"serverName": name})
+    return entries
+
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 _REPO_HINT_RE = re.compile(r"^\s*repo\s*[:：]\s*(\S+)\s*$",
                            re.IGNORECASE | re.MULTILINE)
@@ -396,6 +549,8 @@ class RunExecutor:
     def _argv(self, prompt: str, contract: str, project: ProjectConfig,
               run_dir: Path, resume: str, kind: str = "") -> list[str]:
         tools = allowed_tools(kind, self.cfg.extra_allowed_tools)
+        denied = disallowed_tools(self.cfg.allowed_mcp_servers,
+                                  self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [
             "-p", prompt,
             # stream-json **必須配 --verbose**，否則 CLI 直接 exit 1
@@ -410,6 +565,10 @@ class RunExecutor:
             "--settings", str(run_dir / "settings.json"),
             "--append-system-prompt", contract,
         ]
+        if denied:
+            # 第二道：把連接器的工具從 context 移除。第一道是 settings 的
+            # `deniedMcpServers`（伺服器根本不載入），見 KNOWN_CLAUDE_AI_SERVERS
+            argv += ["--disallowedTools", ",".join(denied)]
         if resume:
             argv += ["--resume", resume]
         return argv
@@ -636,7 +795,16 @@ class RunExecutor:
         python = sys.executable
         hook = str(HOOKS_DIR / "pretooluse.py")
         precompact = str(HOOKS_DIR / "precompact.py")
+        denied_servers = denied_mcp_servers(self.cfg.allowed_mcp_servers,
+                                            self.cfg.extra_allowed_tools)
+        denied_tools = disallowed_tools(self.cfg.allowed_mcp_servers,
+                                        self.cfg.extra_allowed_tools)
         settings = {
+            # 跟著登入進來的 claude.ai 連接器：預設拒絕。
+            # `deniedMcpServers` 讓它們連載入都不載入，`permissions.deny`
+            # 是萬一伺服器仍然到齊時的第二道。見 KNOWN_CLAUDE_AI_SERVERS
+            "deniedMcpServers": denied_servers,
+            "permissions": {"deny": denied_tools},
             "hooks": {
                 "PreToolUse": [{
                     # ⚠️ 一定要含 PowerShell：Windows 上模型預設選它，
