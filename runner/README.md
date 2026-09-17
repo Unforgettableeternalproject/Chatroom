@@ -80,6 +80,9 @@
 | `projects.<key>.repos.<name>.allowed_branches` | 可以停留／切換的分支 |
 | `projects.<key>.repos.<name>.push_branches` | `push` run 可以推的分支 |
 | `projects.<key>.default_repo` | 沒指名 repo 時用哪一個 |
+| `projects.<key>.skill_dirs` | 起 claude 時每個加一個 `--add-dir`。專案的 skill 放在 cwd 的**上一層**時（cwd 自己是子 repo，skill 發現只往上找到 git root），沒有這個設定就掃不到。啟動自檢驗目錄存在 |
+| `projects.<key>.skills` | kind → 這種派工**必須遵守**的 skill 名清單，例如 `{"ticket": ["jira-ticket-workflow"]}`。名字會進 `--allowedTools` 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它。**載入時就驗** `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
+| `projects.<key>.extra_write_dirs` | guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時）。放行的是**位置**，敏感檔名（`.env`、`*.pem` 這類）與敏感目錄的檢查照走 |
 
 ### 一筆 run 在哪個 repo 做
 

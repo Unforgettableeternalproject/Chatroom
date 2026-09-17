@@ -267,6 +267,44 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
   - `PreCompact`：寫 `compacted` 標記（事後判定這個 run 已經被壓過一次）。
   - `Stop` / `SessionEnd`：通知執行器收尾（保險，主要靠 stream 的 `result`）。
 
+### 5.2.1 專案 skill 槽位
+
+有些專案有一份「這類工作一定要照著做」的 skill（例如 AI-Website 的
+`jira-ticket-workflow`）。Claude Code 的 skill 發現只往上找到 git root，而 run
+的 cwd 常常是一個子 repo（`AI-Website/JSAI-Web` 自己就是 repo，skill 卻放在
+上一層的 `AI-Website/.claude/skills/`）——什麼都不做的話那個 skill 根本不存在。
+
+設定鍵（`projects.<key>` 底下）：
+
+| 鍵 | 語意 |
+|---|---|
+| `skill_dirs` | 每個目錄起 claude 時加一個 `--add-dir`，它的 `.claude/skills/` 會載入。啟動自檢驗目錄存在 |
+| `skills` | kind → 這種派工**必須遵守**的 skill 名清單。載入時就驗 `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
+| `extra_write_dirs` | guard 額外放行寫入的目錄（skill 的產出落在 repo 外時）。放行的是**位置**，敏感檔名與敏感目錄的檢查照走 |
+
+四端要一致，少一端就是一個安靜的失敗：
+
+1. **設定**：`skill_dirs` ＋ `skills` ＋ `extra_write_dirs`（`config.ProjectConfig`）。
+2. **參數**：`--add-dir <skill_dir>`，以及 `--allowedTools` 的 `Skill(<name>)`
+   ——headless 下沒預授權就會停在一個沒有人能按的權限提示。
+3. **契約**：`prompts.skills_block` 產生的段落進 `contract.md`，要求 run 一開始
+   就啟動 `/<skill>`；沒有 skill 時是空字串，模板不留怪句子。
+4. **守衛**：`extra_write_dirs` 寫進 run 目錄的 `guard.json`，寫入型工具與直譯器
+   腳本路徑對這些目錄放行。
+
+**與 skill 衝突時以契約為準**，清單固定寫在那個段落裡：
+
+- headless 沒有 Plan Mode：skill 要等使用者核准的那一步，改成把計畫寫進卡的
+  note 再繼續。
+- skill 說「使用者會 commit 與 push」的地方，改成 run 自己 commit、**不 push**。
+- skill 要求的 Jira 留言與狀態轉換**在工作範圍內、要做**（Atlassian 工具由
+  `extra_allowed_tools` 放行）。找不到「測試中」這類 transition 時不問使用者，
+  把可用的 transition 列進卡再繼續。
+- skill 寫在 repo 外的分析／摘要檔，只有列在 `extra_write_dirs` 的目錄寫得進去。
+- 票上的附件落在 run 目錄（`CHATROOM_DOWNLOAD_DIR`），不落 repo（沿用既有規則）。
+- skill 列的「等使用者確認」檢查點一律換成 `chatroom_ask_human` ＋ timeout，
+  沒人回就寫進卡往下走。
+
 ### 5.3 stream 監看
 
 - 每則 assistant 訊息的 `usage`（input + cache_read + cache_creation）＝當前 context 大小。

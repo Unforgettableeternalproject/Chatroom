@@ -106,6 +106,10 @@ class GuardContext:
     # 也就是在 `protected_paths` 裡面，所以要**明列一個例外**：附件是 agent
     # 自己用 `chatroom_get_file` 要來的，讀不到的話那個工具等於沒有
     downloads_dir: Path | None = None
+    # 設定檔（`ProjectConfig.extra_write_dirs`）額外放行寫入的目錄，例如
+    # skill 要求產出的分析／摘要資料夾落在 repo 外面時。放行的是**位置**，
+    # 敏感檔名與敏感目錄的檢查照走
+    extra_write_dirs: list[Path] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict) -> "GuardContext":
@@ -116,6 +120,8 @@ class GuardContext:
             protected_paths=[Path(p) for p in raw.get("protected_paths", [])],
             downloads_dir=(Path(raw["downloads_dir"])
                            if raw.get("downloads_dir") else None),
+            extra_write_dirs=[Path(p)
+                              for p in raw.get("extra_write_dirs", [])],
         )
 
     def to_dict(self) -> dict:
@@ -124,7 +130,8 @@ class GuardContext:
                 "allowed_domains": list(self.allowed_domains),
                 "protected_paths": [str(p) for p in self.protected_paths],
                 "downloads_dir": (str(self.downloads_dir)
-                                  if self.downloads_dir else "")}
+                                  if self.downloads_dir else ""),
+                "extra_write_dirs": [str(p) for p in self.extra_write_dirs]}
 
 
 @dataclass
@@ -270,6 +277,18 @@ def _in_downloads(resolved: Path, ctx: GuardContext) -> bool:
     return resolved == root or root in resolved.parents
 
 
+def _in_extra_write(resolved: Path, ctx: GuardContext) -> bool:
+    """路徑是否落在設定放行的額外寫入目錄底下（含目錄本身）。"""
+    for extra in ctx.extra_write_dirs:
+        try:
+            root = Path(extra).resolve()
+        except OSError:  # pragma: no cover
+            continue
+        if resolved == root or root in resolved.parents:
+            return True
+    return False
+
+
 def _protected_hit(resolved: Path, ctx: GuardContext) -> bool:
     for prot in ctx.protected_paths:
         try:
@@ -293,15 +312,15 @@ def check_path(raw_path: str, ctx: GuardContext) -> Decision:
         cwd = ctx.cwd.resolve()
     except OSError:  # pragma: no cover
         return _deny("path_unresolvable", "這個路徑無法解析，拒絕寫入。")
-    # 附件目錄是 cwd 外唯一的例外。敏感檔名的檢查照走——放行的是「位置」，
-    # 不是「什麼檔都行」
-    in_downloads = _in_downloads(resolved, ctx)
-    if not in_downloads and _protected_hit(resolved, ctx):
+    # cwd 外只有兩個例外：這筆 run 的附件目錄，與設定明列的 `extra_write_dirs`。
+    # 敏感檔名的檢查照走——放行的是「位置」，不是「什麼檔都行」
+    exempt = _in_downloads(resolved, ctx) or _in_extra_write(resolved, ctx)
+    if not exempt and _protected_hit(resolved, ctx):
         return _deny(
             "path_protected",
             "那是執行器自己的目錄（設定與 hooks），任何 run 都不能動。"
             "要調整限制請問人類。")
-    if not in_downloads and resolved != cwd and cwd not in resolved.parents:
+    if not exempt and resolved != cwd and cwd not in resolved.parents:
         return _deny("path_outside_cwd",
                      f"只能寫工作目錄（{cwd}）以內的檔案。這次的路徑在外面，"
                      "要動別的 repo 請開一張新的卡讓人類派工。")
@@ -528,6 +547,9 @@ def _check_network(tokens: list[str], segment: str,
 
 def _script_decision(raw: str, ctx: GuardContext) -> Decision:
     if _within_cwd(raw, ctx):
+        return ALLOW
+    resolved = _resolve(raw, ctx)
+    if resolved is not None and _in_extra_write(resolved, ctx):
         return ALLOW
     return _deny("script_outside_cwd",
                  "直譯器只能跑工作目錄以內的腳本。工作目錄以外的檔案這邊看不"

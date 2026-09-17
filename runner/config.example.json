@@ -37,6 +37,14 @@
       "context_window_tokens": 200000,
       "context_soft_limit_ratio": 0.7,
       "default_repo": "JSAI-Web",
+      "skill_dirs": ["C:/Users/Bernie/source/repos/mind-door/AI-Website"],
+      "skills": {
+        "ticket": ["jira-ticket-workflow"]
+      },
+      "extra_write_dirs": [
+        "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/analysis",
+        "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/summary"
+      ],
       "repos": {
         "JSAI-Web": {
           "path": "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-Web",

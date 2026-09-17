@@ -124,6 +124,19 @@ class ProjectConfig:
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
     # 沒指名 repo 時用哪一個（見 `run.resolve_repo` 的規則）
     default_repo: str = ""
+    # 起 claude 時要 `--add-dir` 進來的目錄。Claude Code 的 skill 發現只往上
+    # 找到 git root，而專案的 skill 常常放在 repo 的**上一層**（cwd 是子
+    # repo 時根本掃不到）；`--add-dir` 進來的目錄其 `.claude/skills/` 會載入
+    skill_dirs: list[Path] = field(default_factory=list)
+    # kind → 這種派工**必須遵守**的 skill 名清單。名字會進 `--allowedTools`
+    # 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它
+    skills: dict[str, list[str]] = field(default_factory=dict)
+    # guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時用）。
+    # **只放行位置，敏感檔名的檢查照走**
+    extra_write_dirs: list[Path] = field(default_factory=list)
+
+    def skills_for(self, kind: str) -> list[str]:
+        return list(self.skills.get(kind, []))
 
     @property
     def context_soft_limit_tokens(self) -> int:
@@ -207,6 +220,46 @@ def _repo_from(name: str, raw: dict) -> RepoConfig:
     )
 
 
+def skill_manifest(name: str, skill_dirs: list[Path]) -> Path | None:
+    """找 skill 的 ``SKILL.md``。找不到回 ``None``。
+
+    位置就是 Claude Code 的規則：``<dir>/.claude/skills/<name>/SKILL.md``。
+    """
+    for d in skill_dirs:
+        manifest = Path(d) / ".claude" / "skills" / name / "SKILL.md"
+        if manifest.is_file():
+            return manifest
+    return None
+
+
+def _skills_from(key: str, raw: dict, skill_dirs: list[Path]
+                 ) -> dict[str, list[str]]:
+    """``skills`` 的解析與驗證。
+
+    ⚠️ 缺檔就是**設定錯誤**，不是啟動時的一句 warning：契約會叫 run 去跑一個
+    不存在的 skill，而 headless 那邊不會有人發現它其實沒載到。
+    """
+    skills_raw = raw.get("skills") or {}
+    if not isinstance(skills_raw, dict):
+        raise ConfigError(f"專案「{key}」的 skills 要是 kind → 清單的物件")
+    skills: dict[str, list[str]] = {}
+    for kind, names in skills_raw.items():
+        if isinstance(names, str):
+            names = [names]
+        kind_skills = [str(n) for n in names if str(n)]
+        for name in kind_skills:
+            if skill_manifest(name, skill_dirs) is None:
+                where = "、".join(str(d) for d in skill_dirs) or "（沒有設定"\
+                    " skill_dirs）"
+                raise ConfigError(
+                    f"專案「{key}」的 {kind} 指定 skill「{name}」，"
+                    f"但在 {where} 底下都找不到 "
+                    f".claude/skills/{name}/SKILL.md")
+        if kind_skills:
+            skills[str(kind)] = kind_skills
+    return skills
+
+
 def _project_from(key: str, raw: dict) -> ProjectConfig:
     repos_raw = raw.get("repos") or {}
     if not repos_raw:
@@ -217,6 +270,7 @@ def _project_from(key: str, raw: dict) -> ProjectConfig:
     if default_repo and default_repo not in repos:
         raise ConfigError(
             f"專案「{key}」的 default_repo「{default_repo}」不在 repos 裡")
+    skill_dirs = [Path(str(p)) for p in raw.get("skill_dirs", [])]
     return ProjectConfig(
         key=key,
         repos=repos,
@@ -232,6 +286,10 @@ def _project_from(key: str, raw: dict) -> ProjectConfig:
         context_window_tokens=int(raw.get("context_window_tokens",
                                           DEFAULT_CONTEXT_WINDOW_TOKENS)),
         default_repo=default_repo,
+        skill_dirs=skill_dirs,
+        skills=_skills_from(key, raw, skill_dirs),
+        extra_write_dirs=[Path(str(p))
+                          for p in raw.get("extra_write_dirs", [])],
     )
 
 

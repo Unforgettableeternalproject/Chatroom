@@ -18,6 +18,8 @@
 - 卡住、前提不明、需要人類決定時用 `chatroom_ask_human`，**一定要設 timeout**；
   沒人回就把問題寫進卡然後結束，不要空等。
 
+{{skills_block}}
+
 ## 工作範圍
 
 - 只在 `{{cwd}}` 裡工作。分支只能是 `{{allowed_branches}}`。

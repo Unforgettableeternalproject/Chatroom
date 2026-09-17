@@ -80,11 +80,20 @@ BASE_ALLOWED_TOOLS = (
 WRITE_ALLOWED_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
-def allowed_tools(kind: str, extra: list[str] | None = None) -> list[str]:
-    """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。"""
+def allowed_tools(kind: str, extra: list[str] | None = None,
+                  skills: list[str] | None = None) -> list[str]:
+    """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。
+
+    ``skills`` 是這種 kind 必須遵守的 skill 名。headless 下 skill 一樣要
+    預授權（`Skill(<name>)`），不然模型一叫它就停在一個沒有人能按的權限提示。
+    """
     tools = list(BASE_ALLOWED_TOOLS)
     if kind in WRITE_KINDS:
         tools += list(WRITE_ALLOWED_TOOLS)
+    for name in skills or []:
+        entry = f"Skill({name})"
+        if name and entry not in tools:
+            tools.append(entry)
     for name in extra or []:
         if name and name not in tools:
             tools.append(name)
@@ -548,11 +557,13 @@ class RunExecutor:
             "ref": run.get("ref", ""), "repo": repo.name,
             "cwd": str(repo.path), "branch": branch,
             "allowed_branches": "、".join(repo.allowed_branches),
+            "skills_block": prompts.skills_block(
+                project.skills_for(run["kind"])),
         }
         prompt = prompts.build(run["kind"], fields, run.get("brief", ""),
                                self.prompt_dir)
         contract = prompts.build_contract(fields, self.prompt_dir)
-        self._write_run_files(run_dir, run, repo)
+        self._write_run_files(run_dir, run, repo, project)
         env = self._child_env(run, run_dir)
 
         await self._report(run_id, RunOutcome("running", reason="spawn"))
@@ -621,7 +632,8 @@ class RunExecutor:
 
     def _argv(self, prompt: str, contract: str, project: ProjectConfig,
               run_dir: Path, resume: str, kind: str = "") -> list[str]:
-        tools = allowed_tools(kind, self.cfg.extra_allowed_tools)
+        tools = allowed_tools(kind, self.cfg.extra_allowed_tools,
+                              project.skills_for(kind))
         denied = disallowed_tools(self.cfg.allowed_mcp_servers,
                                   self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [
@@ -638,6 +650,11 @@ class RunExecutor:
             "--settings", str(run_dir / "settings.json"),
             "--append-system-prompt", contract,
         ]
+        for extra_dir in project.skill_dirs:
+            # 專案的 skill 常常放在 cwd 的上一層（cwd 自己是子 repo，skill
+            # 發現只往上找到 git root 就停）。`--add-dir` 進來的目錄其
+            # `.claude/skills/` 會載入——沒有這一行，契約叫的 skill 根本不存在
+            argv += ["--add-dir", str(extra_dir)]
         if denied:
             # 第二道：把連接器的工具從 context 移除。第一道是 settings 的
             # `deniedMcpServers`（伺服器根本不載入），見 KNOWN_CLAUDE_AI_SERVERS
@@ -880,7 +897,8 @@ class RunExecutor:
 
     # ---------- run 目錄 ----------
 
-    def _write_run_files(self, run_dir: Path, run: dict, repo) -> None:
+    def _write_run_files(self, run_dir: Path, run: dict, repo,
+                         project: ProjectConfig | None = None) -> None:
         python = sys.executable
         hook = str(HOOKS_DIR / "pretooluse.py")
         precompact = str(HOOKS_DIR / "precompact.py")
@@ -950,6 +968,10 @@ class RunExecutor:
             # run 目錄整個在 state_dir 底下，本來會被「執行器自己的目錄」擋掉。
             # 附件是 agent 自己要來的，讀得到才有意義——只鑿這一個洞
             downloads_dir=downloads,
+            # 設定檔替這個專案放行的額外寫入目錄（skill 要求的產出落在 repo
+            # 外面時）。敏感檔名的檢查照走
+            extra_write_dirs=list(project.extra_write_dirs) if project
+            else [],
         )
         (run_dir / "guard.json").write_text(
             json.dumps(ctx.to_dict(), ensure_ascii=False, indent=2),

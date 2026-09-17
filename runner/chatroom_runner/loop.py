@@ -119,6 +119,7 @@ class RunnerLoop:
         if self.cfg.require_gpg:
             problems += await self._check_gpg()
         problems += await self._check_repos()
+        problems += self._check_skill_dirs()
         await self._probe_claude_ai_connectors()
         return problems
 
@@ -231,6 +232,20 @@ class RunnerLoop:
                     problems.append(
                         f"{project.key}/{name}：目前在分支「{branch}」，"
                         f"不在允許清單（{'、'.join(repo.allowed_branches)}）裡")
+        return problems
+
+    def _check_skill_dirs(self) -> list[str]:
+        """`--add-dir` 進來的 skill 目錄要真的在。
+
+        目錄不在時 claude 那一行參數會失效，而契約仍然叫 run 去跑那個 skill
+        ——遠端只會看到一筆「照自己的想法做完」的 run，沒有任何錯誤。
+        """
+        problems: list[str] = []
+        for project in self.cfg.projects.values():
+            for d in project.skill_dirs:
+                if not Path(d).is_dir():
+                    problems.append(
+                        f"{project.key}：skill_dirs 的「{d}」不是目錄")
         return problems
 
     # ---------- 啟動對帳（孤兒 run）----------
