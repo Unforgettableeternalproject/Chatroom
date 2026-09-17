@@ -656,3 +656,74 @@ async def test_reconcile_leaves_a_finished_run_alone(
 
     body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
     assert body["run"]["status"] == "done"
+
+
+async def test_reconcile_works_without_read_access_to_the_run(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 對帳**不能依賴讀得到那筆 run**。
+
+    實測 2026-09-17：`GET /api/runs/{id}` 的主持人視角只認人類憑證
+    （`human_token_required`），執行器的 agent token 借不到那個身分。查不到
+    現況時要直接回報，讓 Hub 的狀態機當裁判——不然這條保護在正式環境永遠
+    是空轉的，而那正是它要救的那一次。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-blind")
+    runner_hub.identity.active_run_ids = [run_id]
+    # 模擬正式環境：查不到就是 None
+    monkeypatch.setattr(type(runner_hub), "get_run",
+                        lambda self, rid: _none())
+
+    assert await loop.reconcile() == [run_id]
+
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "failed"
+    assert body["run"]["reason"] == "runner_restarted"
+
+
+async def _none():
+    return None
+
+
+async def test_reconcile_uses_the_heartbeat_cancel_list_when_it_cannot_read(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """讀不到 run 時，取消與否改認 heartbeat 的 `cancel_requested_run_ids`。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-blindc")
+    await client.post(f"/api/runs/{run_id}/cancel", headers=headers)
+    runner_hub.identity.active_run_ids = [run_id]
+    monkeypatch.setattr(type(runner_hub), "get_run",
+                        lambda self, rid: _none())
+
+    assert await loop.reconcile({run_id}) == [run_id]
+
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "cancelled"
+
+
+async def test_reconcile_swallows_a_run_that_already_finished(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """讀不到現況又盲報時，Hub 的 409 是**正常結果**，不是錯誤。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    await _register(loop)
+    run_id = await _orphan(client, room_id, headers, runner_hub, "task-blindd")
+    await runner_hub.report(run_id, "done", reason="finished")
+    runner_hub.identity.active_run_ids = [run_id]
+    monkeypatch.setattr(type(runner_hub), "get_run",
+                        lambda self, rid: _none())
+
+    assert await loop.reconcile() == []
+
+    body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
+    assert body["run"]["status"] == "done"

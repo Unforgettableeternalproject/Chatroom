@@ -252,46 +252,63 @@ class RunnerLoop:
             log.warning("本機狀態檔寫不進去（%s）：%s",
                         self.cfg.state_file, exc)
 
-    async def reconcile(self) -> list[str]:
+    async def reconcile(self, cancel_requested: set[str] | None = None
+                        ) -> list[str]:
         """收拾上一次崩潰留下的孤兒 run。
 
-        判準是**「Hub 說還在跑、本機卻沒有那個進程」**。啟動時 `self.active`
-        必然是空的，所以狀態檔裡記著的每一筆都算孤兒：它們的 claude 進程隨著
-        上一個執行器進程一起沒了，而 Hub 那邊永遠等不到回報——面板上是一筆
-        正在做事的 run，實際上沒有任何東西在動。
+        判準是**「狀態檔記著、本機卻沒有那個進程」**。啟動時 `self.active`
+        必然是空的，所以檔案裡的每一筆都算孤兒：它們的 claude 進程隨著上一個
+        執行器進程一起沒了，而 Hub 那邊永遠等不到回報——面板上是一筆正在做事
+        的 run，實際上沒有任何東西在動。
 
-        已經有取消請求的收成 `cancelled`，其餘收成 `failed`
-        （`runner_restarted`）。查不到／權限不足就跳過，不擋啟動。
+        🚨 **不先讀 Hub 再決定要不要報**：`GET /api/runs/{id}` 的門檻是「房內
+        成員或主持人視角」，而主持人視角只認**人類**憑證（`human_token_required`，
+        實測 2026-09-17），執行器的 agent token 借不到那個身分。所以這裡直接
+        回報，讓 Hub 的狀態機當裁判：run 已經收場的話會回 409
+        `run_bad_transition`，而 `hub.report` 把它當成「這一步已經套用過」回
+        `None`——那正是我們要的語意，不是錯誤。有讀得到的環境（測試裡的
+        host view）就順便查一次，省下一次沒必要的回報。
+
+        已經有取消請求的（heartbeat 的 `cancel_requested_run_ids`）收成
+        `cancelled`，其餘收成 `failed`（`runner_restarted`）：收成 failed 的話，
+        稽核串會說「執行器把它做壞了」，而事實是人類要它停。
         """
         identity = getattr(self.hub, "identity", None)
         stale = list(getattr(identity, "active_run_ids", []) or [])
+        cancelled_ids = set(cancel_requested or ())
         recovered: list[str] = []
         for run_id in stale:
             if run_id in self.active:
                 continue
+            run = None
             try:
                 run = await self.hub.get_run(run_id)
             except HubError as exc:
-                log.warning("對帳：run %s 查不到現況（%s）", run_id, exc)
-                continue
-            if not run:
-                continue
-            if run.get("status") not in ("claimed", "running", "limited"):
-                continue
-            if (run.get("runner_id")
-                    and run["runner_id"] != identity.runner_id):
-                continue
-            cancelled = bool(run.get("cancel_requested"))
+                log.warning("對帳：run %s 查不到現況（%s）；改用直接回報",
+                            run_id, exc)
+            if run is not None:
+                if run.get("status") not in ("claimed", "running", "limited"):
+                    continue
+                if (run.get("runner_id")
+                        and run["runner_id"] != identity.runner_id):
+                    continue
+                if run.get("cancel_requested"):
+                    cancelled_ids.add(run_id)
+            cancelled = run_id in cancelled_ids
             status = "cancelled" if cancelled else "failed"
             reason = "cancel_requested" if cancelled else "runner_restarted"
             try:
-                await self.hub.report(
+                applied = await self.hub.report(
                     run_id, status, reason=reason,
                     result="執行器重新啟動時發現這筆 run 沒有對應的進程"
                            "（上一個執行器進程已經不在）。它不會自己繼續，"
                            "所以在這裡收場。")
             except HubError as exc:
                 log.warning("對帳：run %s 收不掉（%s）", run_id, exc)
+                continue
+            if applied is None:
+                # 409＝Hub 那邊早就不是進行中了，沒有東西要收
+                log.info("對帳：run %s 在 Hub 上已經收場了", run_id)
                 continue
             log.warning("對帳：run %s 沒有對應進程，收成 %s（%s）",
                         run_id, status, reason)
@@ -308,20 +325,23 @@ class RunnerLoop:
         await self.hub.register(self.cfg.host, self.cfg.label,
                                 list(self.cfg.projects), self.cfg.max_parallel,
                                 self.cfg.version)
-        # 對帳要在領新單之前：孤兒收掉了，面板上才只剩真的在跑的那幾筆
-        await self.reconcile()
-        if self.state.selfcheck_problems:
+        failed = bool(self.state.selfcheck_problems)
+        if failed:
             # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
             # 只有「退出碼 1」，而原因在下一次心跳就被覆蓋掉
             for problem in self.state.selfcheck_problems:
                 log.error("自檢：%s", problem)
             self.state.status = "offline"
             self.state.limit_reason = "selfcheck_failed"
-            await self.heartbeat()
-            return False
-        self.state.status = "online"
-        await self.heartbeat()
-        return True
+        else:
+            self.state.status = "online"
+        # 對帳要在領新單之前，而且**自檢沒過也要做**：孤兒掛在 Hub 上跟這台
+        # 起不起得來無關，不收的話它會一直是一筆正在做事的 run。
+        # 取消清單只有 heartbeat 拿得到，所以先敲一次心跳再對帳
+        reply = await self.heartbeat()
+        await self.reconcile(
+            {str(x) for x in reply.get("cancel_requested_run_ids", [])})
+        return not failed
 
     def mark_limited(self, reason: str) -> None:
         """撞到額度：停收新單。``weekly_limit`` 要等人類解除（§5.3）。"""
