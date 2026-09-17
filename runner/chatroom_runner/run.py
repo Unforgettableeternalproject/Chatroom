@@ -41,6 +41,8 @@ ASKPASS_SCRIPT = HOOKS_DIR / ("askpass-deny.cmd" if os.name == "nt"
 # push run 用的憑證 helper（艾斯維爾裁決 09/16：推送憑證隔離）。
 # 一般 run 的環境把 helper 清單清空，只有 push run 明確把它加回來
 PUSH_CREDENTIAL_HELPER = "manager"
+# run 進程一律是 claude 執行器；bridge 沒拿到這個鍵會落回 other
+AGENT_KIND = "claude"
 # 回報的重試（審查 09/16）。三次嘗試、兩段退避；還是送不出去就落地
 REPORT_ATTEMPTS = 3
 REPORT_BACKOFF_SECONDS = (2, 5)
@@ -668,6 +670,8 @@ class RunExecutor:
                 "CHATROOM_SESSION_KEY": f"claude-run-{run['id']}",
                 "CHATROOM_DEFAULT_NAME":
                     f"{self.cfg.label}-{short_id(run['id'])}",
+                # 不帶這個 bridge 會落回 other，成員列顯示 OTHER
+                "CHATROOM_AGENT_KIND": AGENT_KIND,
             },
         }}}
         (run_dir / "mcp.json").write_text(

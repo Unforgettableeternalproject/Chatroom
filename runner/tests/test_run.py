@@ -488,6 +488,8 @@ def test_run_files_carry_the_matcher_and_bridge_pythonpath(tmp_path,
     assert env["PYTHONPATH"].endswith("bridge")
     assert env["CHATROOM_SESSION_KEY"] == "claude-run-r-files"
     assert env["CHATROOM_DEFAULT_NAME"].startswith("test-")
+    # 少了它 bridge 會落回 other，房間成員列顯示 OTHER
+    assert env["CHATROOM_AGENT_KIND"] == "claude"
     guard = json.loads((run_dir / "guard.json").read_text("utf-8"))
     assert guard["allowed_branches"] == ["jsai_dev", "feature/*"]
 
