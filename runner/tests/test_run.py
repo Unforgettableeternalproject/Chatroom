@@ -507,6 +507,43 @@ def test_argv_has_verbose_with_stream_json(tmp_path, work_repo):
     assert resumed[resumed.index("--resume") + 1] == "sid-1"
 
 
+def _allowed(argv: list[str]) -> list[str]:
+    return argv[argv.index("--allowedTools") + 1].split(",")
+
+
+def test_argv_preauthorizes_tools(tmp_path, work_repo):
+    """`--permission-mode auto` 不會自動放行 MCP 工具：實測 run 9ee0fd48 裡
+    `mcp__chatroom__chatroom_join` 停在權限提示，headless 沒有人能按允許。"""
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    proj = cfg.project("ai-website")
+
+    ticket = _allowed(ex._argv("p", "c", proj, tmp_path, "", "ticket"))
+    assert "mcp__chatroom__*" in ticket
+    for name in ("ToolSearch", "Read", "Glob", "Grep", "Bash", "PowerShell"):
+        assert name in ticket
+    for name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert name in ticket, "ticket 要能改檔"
+
+    investigate = _allowed(ex._argv("p", "c", proj, tmp_path, "",
+                                    "investigate"))
+    assert "mcp__chatroom__*" in investigate
+    for name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert name not in investigate, "investigate 是唯讀的"
+
+
+def test_extra_allowed_tools_merges_in(tmp_path, work_repo):
+    """設定檔的 `extra_allowed_tools` 要併進 `--allowedTools`。"""
+    cfg = make_config(
+        tmp_path, work_repo,
+        extra_allowed_tools=["mcp__claude_ai_Atlassian_Rovo__*", "Read"])
+    ex = _executor(cfg, _NullHub())
+    tools = _allowed(ex._argv("p", "c", cfg.project("ai-website"),
+                              tmp_path, "", "investigate"))
+    assert "mcp__claude_ai_Atlassian_Rovo__*" in tools
+    assert tools.count("Read") == 1, "重複的名字不要疊上去"
+
+
 # ── 回報的容錯（審查 09/16 Major）───────────────────────────────
 
 class _FlakyHub:

@@ -73,6 +73,7 @@
 | `state_dir` | 狀態根目錄（狀態檔、log、usage.db、run 暫存） |
 | `backoff_minutes` | 撞到 rate limit 後的退避階梯（預設 5／15／30／60 分鐘） |
 | `allowed_domains` | hook 放行的網路目的地。清單以外的 `curl`／`Invoke-WebRequest` 一律擋 |
+| `extra_allowed_tools` | 額外預先授權給 run 的工具名（併進 `--allowedTools`），例如 `mcp__claude_ai_Atlassian_Rovo__*`。只是不要卡在權限提示，硬限制仍由 PreToolUse hook 守 |
 | `projects.<key>.repos.<name>.path` | 工作樹路徑。**cwd 由這裡決定，brief 說了不算** |
 | `projects.<key>.repos.<name>.allowed_branches` | 可以停留／切換的分支 |
 | `projects.<key>.repos.<name>.push_branches` | `push` run 可以推的分支 |

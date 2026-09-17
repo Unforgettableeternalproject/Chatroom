@@ -141,6 +141,9 @@ class RunnerConfig:
     maintenance_hour: int = DEFAULT_MAINTENANCE_HOUR
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     allowed_domains: list[str] = field(default_factory=list)
+    # 額外要預先授權給子 agent 的工具名（`--allowedTools`），例如
+    # "mcp__claude_ai_Atlassian_Rovo__*"。硬限制仍由 PreToolUse hook 守
+    extra_allowed_tools: list[str] = field(default_factory=list)
     backoff_minutes: list[int] = field(
         default_factory=lambda: list(DEFAULT_BACKOFF_MINUTES))
     rate_limit_retry_threshold: int = DEFAULT_RATE_LIMIT_RETRY_THRESHOLD
@@ -285,6 +288,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         heartbeat_seconds=float(raw.get("heartbeat_seconds",
                                         DEFAULT_HEARTBEAT_SECONDS)),
         allowed_domains=list(raw.get("allowed_domains", [])),
+        extra_allowed_tools=[
+            str(x) for x in raw.get("extra_allowed_tools", [])],
         backoff_minutes=[int(x) for x in raw.get(
             "backoff_minutes", DEFAULT_BACKOFF_MINUTES)],
         rate_limit_retry_threshold=int(

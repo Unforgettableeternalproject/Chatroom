@@ -47,6 +47,35 @@ REPORT_BACKOFF_SECONDS = (2, 5)
 REPORT_FAILED_NAME = "report_failed.json"
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push"}
+
+# `--allowedTools` 的預授權清單。
+#
+# 🚨 實測（run 9ee0fd48 的 stream.jsonl）：只給 `--permission-mode auto` **不夠**。
+# agent 呼叫 `mcp__chatroom__chatroom_join` 時 CLI 回
+# 「Claude requested permissions to use mcp__chatroom__chatroom_join, but you
+# haven't granted it yet.」——`auto` 不會自動放行 MCP 工具，而 headless 這邊
+# 沒有人能按那個「允許」，整筆 run 就以「沒有權限」收工。
+#
+# 這裡放行的只是「不要停在權限提示」。真正的硬限制仍然在 PreToolUse hook
+# （見 guard.py）：hook 先於權限判定跑，被 deny 的指令不會因為列在這裡就通過。
+BASE_ALLOWED_TOOLS = (
+    "ToolSearch", "Read", "Glob", "Grep", "Bash", "PowerShell",
+    "mcp__chatroom__*",
+)
+# 只有會寫東西的 kind 才給編輯工具；`investigate` 是唯讀的
+WRITE_ALLOWED_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def allowed_tools(kind: str, extra: list[str] | None = None) -> list[str]:
+    """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。"""
+    tools = list(BASE_ALLOWED_TOOLS)
+    if kind in WRITE_KINDS:
+        tools += list(WRITE_ALLOWED_TOOLS)
+    for name in extra or []:
+        if name and name not in tools:
+            tools.append(name)
+    return tools
+
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 _REPO_HINT_RE = re.compile(r"^\s*repo\s*[:：]\s*(\S+)\s*$",
                            re.IGNORECASE | re.MULTILINE)
@@ -314,7 +343,8 @@ class RunExecutor:
                 project.context_soft_limit_tokens,
                 on_soft_limit=lambda n, d=run_dir: self._raise_handoff(d, n),
                 rate_limit_threshold=self.cfg.rate_limit_retry_threshold)
-            argv = self._argv(prompt, contract, project, run_dir, resume)
+            argv = self._argv(prompt, contract, project, run_dir,
+                              resume, run["kind"])
             code, stop_reason = await self._spawn(argv, repo.path, env,
                                                   watcher, run_dir,
                                                   project.wall_clock_seconds,
@@ -362,12 +392,15 @@ class RunExecutor:
     # ---------- 子進程 ----------
 
     def _argv(self, prompt: str, contract: str, project: ProjectConfig,
-              run_dir: Path, resume: str) -> list[str]:
+              run_dir: Path, resume: str, kind: str = "") -> list[str]:
+        tools = allowed_tools(kind, self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [
             "-p", prompt,
             # stream-json **必須配 --verbose**，否則 CLI 直接 exit 1
             "--output-format", "stream-json", "--verbose",
             "--permission-mode", "auto",
+            # 見 BASE_ALLOWED_TOOLS：`auto` 不會自動放行 MCP 工具
+            "--allowedTools", ",".join(tools),
             "--model", project.model,
             "--max-turns", str(project.max_turns),
             "--max-budget-usd", str(project.max_budget_usd),
