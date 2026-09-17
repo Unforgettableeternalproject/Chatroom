@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:logging/logging.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -25,15 +26,41 @@ class DispatchRequest {
   final int priority;
 }
 
+/// 這個畫面的 log。
+///
+/// **沒送出的那一次也要留下一行**：09/17 兩次實機派工都是「第一次沒反應、
+/// 第二次才送出」，而 App 的 log 對第一次一個字都沒有——「按了沒作用」與
+/// 「根本沒按到」在事後長得一模一樣。
+final _log = Logger('dispatch');
+
+/// 專案清單的載入結果。
+///
+/// **失敗不用例外表達**：這個 Future 在對話框掛上監聽之前就可能完成，未被
+/// 監聽的錯誤會變成 unhandled async error，而畫面上什麼都不會發生——正是
+/// 這次要修掉的那種沉默。
+@immutable
+class DispatchProjects {
+  const DispatchProjects({this.projects = const [], this.error});
+
+  /// 執行器宣告、而且現在還在線的 project key。
+  final List<String> projects;
+
+  /// 撈不到清單時要對人講的那句話；null 代表撈成功（清單可能仍是空的）。
+  final String? error;
+}
+
 /// 對一個階段或一張卡派工（REMOTE-OPS-PLAN §6.2）。
 ///
 /// 人類**不寫自由 prompt**：選模板 + 選目標 + 一段簡述（≤2000）。目標是
 /// 呼叫端給的（抽屜裡的那張卡、那個階段），這裡不讓人改——能改的話它就
 /// 變成了「派工到任何地方」，而那正是模板化要擋掉的事。
+///
+/// 專案清單是 **Future**：撈清單要打一趟 Hub，而先撈完再開對話框的話，這段
+/// 等待期間畫面上沒有任何東西在動，人只會再按一次。
 Future<DispatchRequest?> showDispatchDialog(
   BuildContext context, {
   required String targetLabel,
-  required List<String> projects,
+  required Future<DispatchProjects> projects,
 }) =>
     showDialog<DispatchRequest>(
       context: context,
@@ -57,7 +84,7 @@ class DispatchDialog extends StatefulWidget {
   /// **來自執行器宣告的 `projects`**（儀表板），不是 App 寫死的清單：Hub
   /// 建單時用同一份資料判 `project_not_served`，兩邊各寫一份的話，畫面上
   /// 選得到的專案會被 Hub 退，而使用者看不出自己選錯了什麼。
-  final List<String> projects;
+  final Future<DispatchProjects> projects;
 
   @override
   State<DispatchDialog> createState() => _DispatchDialogState();
@@ -66,16 +93,40 @@ class DispatchDialog extends StatefulWidget {
 class _DispatchDialogState extends State<DispatchDialog> {
   final _brief = TextEditingController();
   late String _kind = kRunTemplates.first.kind;
-  late String? _project =
-      widget.projects.length == 1 ? widget.projects.first : null;
+  String? _project;
   int _priority = 0;
   String? _error;
+
+  /// 清單還沒回來時是 null——**「還沒撈到」與「撈到空的」不是同一件事**：
+  /// 前者要等，後者要去看那台機器。
+  List<String>? _projects;
+  String? _loadError;
+
+  bool get _loading => _projects == null && _loadError == null;
 
   @override
   void initState() {
     super.initState();
     // 計數要跟著字走
     _brief.addListener(() => setState(() {}));
+    widget.projects.then(_onProjects).catchError((Object e) {
+      // Future 說好不會失敗，真的失敗也不能讓畫面停在「載入中」
+      _onProjects(DispatchProjects(error: '專案清單載入失敗：$e'));
+    });
+  }
+
+  void _onProjects(DispatchProjects result) {
+    if (!mounted) return;
+    setState(() {
+      _loadError = result.error;
+      _projects = result.error == null ? result.projects : const [];
+      // 只有一個專案就直接選它——為一個沒有選擇的選擇按一次沒有意義。
+      // 多個時仍然不預設：選錯專案會被 Hub 以 `project_not_served` 退，
+      // 而那時人已經走開了
+      if (_projects!.length == 1) _project = _projects!.first;
+    });
+    _log.info('派工對話框收到專案清單（目標：${widget.targetLabel}）：'
+        '${result.error ?? (result.projects.isEmpty ? '（空）' : result.projects.join('、'))}');
   }
 
   @override
@@ -84,19 +135,43 @@ class _DispatchDialogState extends State<DispatchDialog> {
     super.dispose();
   }
 
+  /// 擋下來就要說出為什麼。
+  ///
+  /// **每一條不送出的路徑都要留下畫面上的字與一行 log**：停用的按鈕按下去
+  /// 什麼都不會發生，而使用者看到的與「這個功能壞了」沒有差別。
+  void _reject(String reason) {
+    setState(() => _error = reason);
+    _log.warning('派工沒有送出（目標：${widget.targetLabel}）：$reason');
+  }
+
   void _submit() {
+    if (_loading) {
+      _reject('專案清單還在載入，等一下再按。');
+      return;
+    }
+    if (_loadError != null) {
+      _reject(_loadError!);
+      return;
+    }
+    if (_projects!.isEmpty) {
+      _reject('沒有可派工的專案：執行器沒有上線，或它的 projects 白名單是空的。');
+      return;
+    }
     final project = _project;
     if (project == null || project.isEmpty) {
-      setState(() => _error = '請先選一個專案');
+      _reject('請先選一個專案');
       return;
     }
     final brief = _brief.text.trim();
     // Hub 也擋（`max_length=2000`），這裡先擋是為了不要讓人打完 2500 字
     // 才在送出時被退回來
     if (brief.length > kRunBriefMaxLength) {
-      setState(() => _error = '簡述超過 $kRunBriefMaxLength 字');
+      _reject('簡述超過 $kRunBriefMaxLength 字');
       return;
     }
+    _log.info('派工送出（目標：${widget.targetLabel}）：'
+        'kind=$_kind project=$project priority=$_priority '
+        'brief=${brief.length} 字');
     Navigator.of(context).pop(DispatchRequest(
         kind: _kind, project: project, brief: brief, priority: _priority));
   }
@@ -104,13 +179,17 @@ class _DispatchDialogState extends State<DispatchDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final noProject = widget.projects.isEmpty;
+    final projects = _projects ?? const <String>[];
     return AlertDialog(
       title: Text('派工', style: UepText.display(size: 24, color: s.inkTitle)),
       content: SizedBox(
         width: 460,
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // 錯誤訊息**不放在捲動區裡**：它接在表單最後面的話，人在對話框上半
+        // 部按下送出時那行字就在看不到的地方，而畫面看起來完全沒有反應
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
             Align(
               alignment: Alignment.centerLeft,
               child: Text('目標：${widget.targetLabel}',
@@ -162,8 +241,30 @@ class _DispatchDialogState extends State<DispatchDialog> {
               child: MonoLabel('專案', color: s.inkSoft, letterSpacing: 1.4),
             ),
             const SizedBox(height: 7),
-            if (noProject)
-              // 停用要說出理由，而且理由要能導向下一步——這一條的下一步在
+            if (_loading)
+              // 等待要看得見。不然這一格看起來就只是「沒有專案」
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 1.6, color: s.inkMute)),
+                  const SizedBox(width: 8),
+                  Text('專案清單載入中…',
+                      style: UepText.serif(size: 11.5, color: s.inkSoft)),
+                ]),
+              )
+            else if (_loadError != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_loadError!,
+                    style: UepText.serif(
+                        size: 11.5, color: UepColors.errorText, height: 1.5)),
+              )
+            else if (projects.isEmpty)
+              // 擋下來要說出理由，而且理由要能導向下一步——這一條的下一步在
               // 那台機器上，不在這個畫面裡
               Align(
                 alignment: Alignment.centerLeft,
@@ -180,7 +281,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                   hint: Text('選一個專案',
                       style: UepText.sans(size: 12.5, color: s.inkMute)),
                   items: [
-                    for (final p in widget.projects)
+                    for (final p in projects)
                       DropdownMenuItem(
                         value: p,
                         child: Text(p,
@@ -236,17 +337,19 @@ class _DispatchDialogState extends State<DispatchDialog> {
                 onChanged: (v) => setState(() => _priority = v ?? 0),
               ),
             ]),
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(_error!,
-                    style: UepText.serif(
-                        size: 12.5, color: UepColors.errorText, height: 1.5)),
-              ),
-            ],
           ]),
-        ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(_error!,
+                  style: UepText.serif(
+                      size: 12.5, color: UepColors.errorText, height: 1.5)),
+            ),
+          ],
+        ]),
       ),
       actions: [
         UepButton(
@@ -255,10 +358,12 @@ class _DispatchDialogState extends State<DispatchDialog> {
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
+        // **一律可按**：停用的按鈕按下去什麼都不會發生，而「不能送」的理由
+        // 在畫面上另一個地方——按了沒反應與功能壞掉分不出來（09/17 實機）
         UepButton(
           label: '送出',
           small: true,
-          onPressed: noProject ? null : _submit,
+          onPressed: _submit,
         ),
       ],
     );

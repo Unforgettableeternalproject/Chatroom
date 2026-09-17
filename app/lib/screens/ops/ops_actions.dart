@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logging/logging.dart';
 
 import '../../api/runs_api.dart';
 import '../../core/errors/api_exception.dart';
@@ -12,6 +13,8 @@ import 'dispatch_dialog.dart';
 ///
 /// 入口有三個（階段、卡、儀表板），**規則只能有一份**：位置怎麼算、哪個
 /// 錯誤碼要講什麼話，散在三個畫面裡就是三份會各自漂移的真相。
+
+final _log = Logger('ops_actions');
 
 /// 對一個階段或一張卡派工。
 ///
@@ -30,21 +33,39 @@ Future<bool> dispatchRun(
   // 專案清單要現撈。**不能用上一次面板留下的那份**：執行器的白名單會變，
   // 而拿著舊清單選出來的專案會被 Hub 以 `project_not_served` 退回，畫面上
   // 看起來像是「這個功能壞了」
-  List<String> projects;
-  try {
-    projects = (await api.dashboard(roomId, participantId: pid))
-        .servedProjects;
-  } on ApiException catch (e) {
-    if (context.mounted) _say(context, e.message);
+  //
+  // 不 await 就開對話框：撈清單期間對話框自己顯示載入中（撈完才開的話，
+  // 那段等待在畫面上什麼都沒有）。這個 Future **不會失敗**——失敗收進
+  // [DispatchProjects.error]，讓對話框把它講出來
+  Future<DispatchProjects> loadProjects() async {
+    try {
+      final projects =
+          (await api.dashboard(roomId, participantId: pid)).servedProjects;
+      return DispatchProjects(projects: projects);
+    } on ApiException catch (e) {
+      _log.warning('派工的專案清單撈不到（room=$roomId）：${e.code} ${e.message}');
+      return DispatchProjects(error: e.message);
+    }
+  }
+
+  _log.info('開啟派工對話框（room=$roomId target=$targetRef「$targetLabel」）');
+  final request = await showDispatchDialog(context,
+      targetLabel: targetLabel, projects: loadProjects());
+  if (request == null) {
+    _log.info('派工對話框取消或未送出（target=$targetRef）');
     return false;
   }
-  if (!context.mounted) return false;
-
-  final request = await showDispatchDialog(context,
-      targetLabel: targetLabel, projects: projects);
-  if (request == null || !context.mounted) return false;
+  if (!context.mounted) {
+    // 畫面在對話框關掉之前就走了。**這一行不能省**：少了它，沒建成的那筆
+    // 與根本沒按過長得一樣
+    _log.warning('派工沒有送出（target=$targetRef）：畫面已經不在了');
+    return false;
+  }
 
   try {
+    _log.info('create_run 送出：room=$roomId kind=${request.kind} '
+        'project=${request.project} ref=$targetRef board=$boardId '
+        'priority=${request.priority} brief=${request.brief.length} 字');
     final run = await api.create(
       roomId,
       kind: request.kind,
@@ -55,6 +76,7 @@ Future<bool> dispatchRun(
       priority: request.priority,
       participantId: pid,
     );
+    _log.info('create_run 已建立：run=${run.id} status=${run.status}');
     final position = await _queuePosition(api, roomId, run.id, pid);
     if (context.mounted) {
       _say(context,
@@ -62,6 +84,7 @@ Future<bool> dispatchRun(
     }
     return true;
   } on ApiException catch (e) {
+    _log.warning('create_run 被退回：${e.code} ${e.message}');
     if (context.mounted) _say(context, _dispatchError(e));
     return false;
   }
