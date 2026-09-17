@@ -114,6 +114,7 @@ class Message {
     required this.createdAt,
     this.senderId,
     this.senderName,
+    this.senderKind,
     this.mentions = const [],
     this.mentionGroups = const [],
     this.cardRefs = const [],
@@ -139,6 +140,13 @@ class Message {
   final String createdAt;
   final String? senderId;
   final String? senderName;
+
+  /// 發話當下的 sender kind 快照（human / claude / codex / …）。
+  ///
+  /// 存在的理由是**名冊查不到不等於沒有 kind**：run 成員結束後不留在成員
+  /// 名冊裡，靠反查名冊的畫面會把它們的歷史發言退成 `other`。舊訊息與舊版
+  /// Hub 沒有這個欄位（或給空字串），那時才輪到反查名冊。
+  final String? senderKind;
   final List<String> mentions;
 
   /// 發話者原本打的群組字面（`["all"]`）。**展開在 Hub 那端做**，所以
@@ -198,6 +206,15 @@ class Message {
 
   bool get isReceipt => receiptEvents.contains(systemEvent);
 
+  /// 這則訊息該顯示的 sender kind。
+  ///
+  /// 順序是「訊息自帶的快照 → 現在的成員名冊 → other」：快照講的是發話當下
+  /// 的事實，名冊講的是現在還在房裡的人；run 成員離房後只剩快照答得出來。
+  String resolveSenderKind(Map<String, String> kindByParticipantId) =>
+      senderKind ??
+      (senderId == null ? null : kindByParticipantId[senderId]) ??
+      'other';
+
   /// 此則訊息對 cursor 的貢獻值。
   int get cursor => seq > updateSeq ? seq : updateSeq;
 
@@ -210,6 +227,10 @@ class Message {
         createdAt: (json['created_at'] as String?) ?? '',
         senderId: json['sender_id'] as String?,
         senderName: json['sender_name'] as String?,
+        senderKind: switch (json['sender_kind'] as String?) {
+          null || '' => null,
+          final k => k,
+        },
         mentions: ((json['mentions'] as List?) ?? const [])
             .map((e) => e.toString())
             .toList(),

@@ -1136,9 +1136,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             if (m.isSystem) {
                               return keyed(SystemMessageTile(message: m));
                             }
-                            final kind = m.senderId != null
-                                ? (kindById[m.senderId] ?? 'other')
-                                : 'other';
+                            // 訊息自帶的 kind 快照優先，名冊只是備援：
+                            // run 成員結束後不在名冊裡，反查會把它們的發言
+                            // 退成 other
+                            final kind = m.resolveSenderKind(kindById);
                             return keyed(Padding(
                               padding: const EdgeInsets.symmetric(vertical: 9),
                               child: MessageBubble(

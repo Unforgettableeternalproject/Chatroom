@@ -48,7 +48,7 @@ class PinnedWallScreen extends ConsumerWidget {
     final pinnedAsync = ref.watch(_pinnedProvider(roomId));
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final archived = detail?.room.isArchived ?? false;
-    final kindById = {
+    final kindById = <String, String>{
       for (final p in detail?.participants ?? const [])
         p.id: p.kind
     };
@@ -113,11 +113,11 @@ class PinnedWallScreen extends ConsumerWidget {
                       return _PinnedCard(
                         roomId: roomId,
                         message: m,
-                        // system 訊息沒有發話者,`kindById` 查不到是**正常**
-                        // 的——它不該退成 `other`(見 [pinnedSenderLabel])
-                        kind: m.senderId != null
-                            ? (kindById[m.senderId] ?? 'other')
-                            : 'other',
+                        // 訊息自帶的 kind 快照優先，名冊只是備援（離房的
+                        // run 成員不在名冊裡）。
+                        // system 訊息沒有發話者,兩邊都查不到是**正常**的
+                        // ——它不該退成 `other`(見 [pinnedSenderLabel])
+                        kind: m.resolveSenderKind(kindById),
                         archived: archived,
                       );
                     },
