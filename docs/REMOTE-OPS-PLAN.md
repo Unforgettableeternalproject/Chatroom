@@ -616,3 +616,36 @@ guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯�
 - PM：`[PM] Chatroom` 「遠端派工（Remote Ops）規劃定案 2026-09-16」
 - 相關記憶：Board v2 三題、身分語意定調、codex queue 外部喚醒、GPG 快取 TTL、
   多 agent 共用工作樹的協作限制
+
+## 12. 首輪實機驗收紀錄與下一輪待辦（2026-09-17）
+
+### 已驗過（正式 Hub 8787 + 排程工作執行器 + App）
+
+- 建工作房、派工（investigate／ticket）、run 進房讀卡、Jira MCP 讀票、只讀調查、
+  實作票並 commit（`JSAI-2377` → jsai_dev `dbd17dcf`，GPG 簽、未 push）、收工摘要、
+  run 結束成員離房、取消、執行器重啟對帳。
+- 一天內抓到並修掉的實機問題：排程工作沒進 sys.path、console 視窗閃、gpg 不在 PATH、
+  `auto` 模式 MCP 工具卡權限、成員 kind=other、第一次派工不送（context unmounted）、
+  帳號層級連接器全部載入、stream 單行 64KB 上限炸 pump、附件下載進 repo。
+
+### 下一輪待辦（艾斯維爾 2026-09-17 觀察）
+
+1. **附件範圍**：run 看得到房裡歷史附件（工作房常駐，前幾輪傳的圖都在），這輪 agent 主動
+   說「已有兩份同樣的圖」。要定：run 只看卡與簡述指到的附件？或只看 run 開始之後的？
+   契約與 `chatroom_read` 起點（`joined_seq`）都要對齊。
+2. **收工摘要的呈現**：現在是 system 訊息，字太小、Markdown 沒渲染。做法：工作房右側
+   加「回報面板」，讀 `agent_run.result`（Hub 已存）而不是從訊息流撿；每筆 run 一張可展開
+   的卡，附 turns／成本／HEAD 前後／tool.log 位置。收工摘要同時寫到板卡上（現在只在房裡）。
+3. **離房後訊息變 OTHER**：run 成員結束後不進成員名冊（§4.1 這輪加的規則），App 從名冊
+   反查 sender kind 就查不到 → 退回 other。修法在 Hub：訊息本身帶 `sender_kind` 快照
+   （或名冊回 `hidden: true` 的 run 成員），App 改讀快照。
+4. **停滯進訊息流**：Hub `_RUN_TRANSITIONS` 不允許 `running→running`，執行器只能把
+   `stalled_seconds` 放儀表板。要讓房裡看到「這筆 10 分鐘沒動靜」，Hub 要收帶 reason 的
+   同狀態回報。
+5. **@ 叫不醒 run**（設計上單回合、無 watcher）。目前靠契約聲明＋ `ask_human`。
+   若要改，方向是 bridge 的 `chatroom_wait` 在 run 內當「收件匣」，成本高，先不做。
+6. **未測的路徑**：push run（儀表板「推送」→ 執行器 fetch/push；`dbd17dcf` 正好可以拿來測）、
+   交接鏈（context 70%）、排隊超過 3、`stage` kind、rate limit 退避（只能等真的撞到）。
+7. **雜項**：Atlassian 在 run 啟動時常 `pending`，契約已教它再搜一次；名冊裡修改前留下的
+   兩個「已離開」舊成員不回溯清；§1 四個 repo vs §5.5 三個（JSAI-Skills）待定；
+   `.chatroom/downloads` 改落 run 目錄後，舊的 `JSAI-Web/.chatroom/` 已手動刪除。
