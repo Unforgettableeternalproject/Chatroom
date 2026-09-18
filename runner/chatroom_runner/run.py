@@ -261,6 +261,10 @@ class RunSetupError(Exception):
     """還沒起進程就知道做不了。直接 failed，不要浪費一個 claude session。"""
 
 
+class _SyncBlocked(Exception):
+    """工作樹沒辦法更新到最新，這一輪不該起跑。訊息直接當 run 的 result。"""
+
+
 @dataclass
 class RunOutcome:
     status: str
@@ -536,6 +540,34 @@ class RunExecutor:
 
     # ---------- claude run ----------
 
+    async def _sync_worktree(self, repo) -> str:
+        """派工前把常駐工作樹更新到最新，回一句要寫進收工摘要的 note。
+
+        run 之間共用同一份工作樹，不先同步的話 agent 會在上一輪留下的舊基礎
+        上動工。三種情況各自有代價，所以分開處理：
+
+        - 工作樹髒：**不 pull**。別人（或上一輪）未提交的東西比「最新」重要，
+          照常執行，只在摘要裡講清楚這一輪沒同步。
+        - fetch 失敗：多半是網路，不值得擋掉整筆 run。
+        - 不能快轉：分支已經分岔，往下跑等於在錯的基礎上做事，直接失敗。
+        """
+        dirty = await gitops.status_porcelain(repo.path)
+        if dirty:
+            return "工作樹有未提交變更，未同步遠端。"
+        if not await gitops.has_upstream(repo.path):
+            return "目前分支沒有 upstream，未同步遠端。"
+        fetched = await gitops.fetch(repo.path)
+        if not fetched.ok:
+            log.warning("同步 %s 時 fetch 失敗：%s", repo.name,
+                        fetched.err or fetched.out)
+            return "fetch 失敗，於本機現況執行。"
+        pulled = await gitops.pull_ff(repo.path)
+        if not pulled.ok:
+            raise _SyncBlocked(
+                "分支落後遠端且無法快轉，請先手動處理。\n"
+                f"git pull --ff-only：{pulled.summary}")
+        return pulled.summary
+
     async def _claude_run(self, run: dict, project: ProjectConfig, repo,
                           cancel: asyncio.Event) -> RunOutcome:
         run_id = run["id"]
@@ -547,6 +579,16 @@ class RunExecutor:
                 "failed", reason="branch_not_allowed",
                 result=f"{repo.name} 目前在分支「{branch}」，不在允許清單裡。"
                        f"允許的分支：{'、'.join(repo.allowed_branches)}。")
+            await self._report(run_id, outcome)
+            return outcome
+
+        # 🚨 同步要在快照**之前**：pull 帶進來的變更不是 agent 改的，
+        # 先拍快照的話那些檔案會被算進「這一輪動了什麼」
+        try:
+            sync_note = await self._sync_worktree(repo)
+        except _SyncBlocked as exc:
+            outcome = RunOutcome("failed", reason="sync_not_fast_forward",
+                                 result=str(exc))
             await self._report(run_id, outcome)
             return outcome
 
@@ -597,7 +639,8 @@ class RunExecutor:
                                      watcher.rate_limited)
             outcome.result = self._compose_result(state, run_dir, before,
                                                   await gitops.snapshot(
-                                                      repo.path))
+                                                      repo.path),
+                                                  sync_note)
             if outcome.reason != "rate_limit" or not backoffs:
                 break
             wait_minutes = backoffs.pop(0)
@@ -819,7 +862,8 @@ class RunExecutor:
 
     def _compose_result(self, state, run_dir: Path,
                         before: gitops.RepoSnapshot,
-                        after: gitops.RepoSnapshot) -> str:
+                        after: gitops.RepoSnapshot,
+                        sync_note: str = "") -> str:
         diff = gitops.diff_snapshots(before, after)
         lines = [state.result_text.strip()] if state.result_text.strip() else []
         lines.append("")
@@ -836,6 +880,8 @@ class RunExecutor:
         if diff["new_dirty"]:
             lines.append("未 commit 的變更："
                          + "、".join(diff["new_dirty"][:20]))
+        if sync_note:
+            lines.append(f"工作樹同步：{sync_note}")
         if (run_dir / "compacted").exists():
             lines.append("這一輪被自動壓縮過，摘要中前段的敘述是二手的。")
         tool_log = run_dir / "tool.log"

@@ -64,6 +64,43 @@ async def status_porcelain(repo: Path) -> list[str]:
     return [line for line in res.out.splitlines() if line.strip()]
 
 
+async def has_upstream(repo: Path) -> bool:
+    """目前分支有沒有設 upstream。沒有的話 ``git pull`` 根本無從比起。"""
+    res = await git(repo, "rev-parse", "--abbrev-ref", "@{u}")
+    return res.ok and bool(res.out)
+
+
+async def fetch(repo: Path) -> GitResult:
+    """把遠端現況抓下來。失敗（多半是網路）由呼叫端決定要不要擋。"""
+    return await git(repo, "fetch")
+
+
+@dataclass
+class PullOutcome:
+    """``pull --ff-only`` 的結果。
+
+    ``ok`` 為假只有一個意思：**不能快轉**（分支分岔或遠端讀不到），不是
+    「沒有更新」——已經是最新時 ``ok`` 仍為真。兩者混在同一個空字串裡的話，
+    呼叫端沒辦法分開處理。
+    """
+
+    ok: bool
+    summary: str
+
+
+async def pull_ff(repo: Path) -> PullOutcome:
+    before = await head_sha(repo)
+    res = await git(repo, "pull", "--ff-only")
+    if not res.ok:
+        return PullOutcome(False, res.err or res.out)
+    after = await head_sha(repo)
+    if not before or before == after:
+        return PullOutcome(True, "已是最新")
+    counted = await git(repo, "rev-list", "--count", f"{before}..{after}")
+    n = counted.out if counted.ok and counted.out else "?"
+    return PullOutcome(True, f"已快轉 {n} 個 commit")
+
+
 @dataclass
 class Commit:
     sha: str

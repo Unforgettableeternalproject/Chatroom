@@ -1001,3 +1001,106 @@ async def test_an_unexpected_exception_still_reports_and_kills_the_child(
     final, _ = await _trail(client, run["id"], headers)
     assert final["status"] == "failed", "Hub 上不能留一筆沒有人在跑的 running"
     assert killed, "子進程沒被殺：它會一直跑到牆鐘上限，而沒有人在看它"
+
+
+# ── 派工前同步工作樹（諾薇亞 09/18）────────────────────────────
+
+def _remote_commit(tmp_path, work_repo, name: str = "遠端那顆") -> str:
+    """從另一份 clone 推一顆上去，模擬「別人先動了」。"""
+    other = tmp_path / "other-clone"
+    origin = git(work_repo, "remote", "get-url", "origin")
+    subprocess.run(["git", "clone", "-b", "jsai_dev", origin, str(other)],
+                   capture_output=True, check=True)
+    (other / "remote.txt").write_text(name, encoding="utf-8")
+    git(other, "add", "remote.txt")
+    git(other, "commit", "-m", name)
+    git(other, "push", "origin", "jsai_dev")
+    return git(other, "rev-parse", "HEAD")
+
+
+async def test_clean_worktree_fetches_and_fast_forwards(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 常駐工作樹跨 run 共用，不先拉就是在上一輪的舊基礎上動工。"""
+    from chatroom_runner import run as run_mod
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    remote_head = _remote_commit(tmp_path, work_repo)
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-sync")
+    cfg = make_config(tmp_path, work_repo)
+    calls: list[tuple] = []
+    real = run_mod.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append(args)
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_mod.gitops, "git", spy)
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    assert ("fetch",) in calls, f"沒有 fetch：{calls}"
+    assert ("pull", "--ff-only") in calls, f"沒有 pull：{calls}"
+    assert git(work_repo, "rev-parse", "HEAD") == remote_head, \
+        "工作樹沒有真的被快轉到遠端的位置"
+    final, _ = await _trail(client, run["id"], headers)
+    assert "已快轉 1 個 commit" in final["result"]
+
+
+async def test_dirty_worktree_skips_pull_and_says_so(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """髒工作樹**不 pull**：未提交的東西比「最新」重要，但摘要要講。"""
+    from chatroom_runner import run as run_mod
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    _remote_commit(tmp_path, work_repo)
+    (work_repo / "wip.txt").write_text("做到一半", encoding="utf-8")
+    before_head = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-dirty")
+    cfg = make_config(tmp_path, work_repo)
+    calls: list[tuple] = []
+    real = run_mod.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append(args)
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_mod.gitops, "git", spy)
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    assert ("pull", "--ff-only") not in calls, "髒工作樹不該 pull"
+    assert git(work_repo, "rev-parse", "HEAD") == before_head
+    final, _ = await _trail(client, run["id"], headers)
+    assert "工作樹有未提交變更，未同步遠端。" in final["result"]
+
+
+async def test_diverged_branch_fails_before_spawning(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """不能快轉＝分支已分岔。往下跑等於在錯的基礎上做事。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    _remote_commit(tmp_path, work_repo)
+    (work_repo / "local.txt").write_text("本機那顆", encoding="utf-8")
+    git(work_repo, "add", "local.txt")
+    git(work_repo, "commit", "-m", "本機那顆")
+    local_head = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-diverged")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "sync_not_fast_forward")
+    assert "無法快轉" in outcome.result
+    assert git(work_repo, "rev-parse", "HEAD") == local_head, \
+        "擋下的這一輪不該動到工作樹"
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "failed"
