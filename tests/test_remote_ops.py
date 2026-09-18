@@ -1344,6 +1344,8 @@ RUN_KEYS = {
     "requested_by", "requested_by_actor_key", "requested_by_name",
     "status", "priority", "position", "runner_id", "claude_session_id",
     "attempt", "parent_run_id", "handoff_depth", "cancel_requested",
+    # 收尾請求與 @ 轉達的游標（軟停止／mention 轉達）
+    "soft_stop_requested_at", "mention_cursor_seq",
     "usage", "result", "reason",
     "created_at", "claimed_at", "started_at", "ended_at", "updated_at",
 }
@@ -1391,7 +1393,9 @@ async def test_response_shapes_are_pinned(tmp_path):
             hb = (await client.post(f"/api/runners/{runner_id}/heartbeat", headers=runner_id.headers,
                                     json={"status": "online"})).json()
             assert set(hb) == {"runner_id", "commands",
-                               "cancel_requested_run_ids"}
+                               "cancel_requested_run_ids",
+                               "soft_stop_requested_run_ids",
+                               "pending_mentions"}
 
             got = await client.post(f"/api/runners/{runner_id}/claim", headers=runner_id.headers)
             assert set(got.json()) == {"run"}
@@ -1461,3 +1465,151 @@ async def test_deleting_an_ops_room_takes_its_runs_with_it(tmp_path):
                 "SELECT COUNT(*) AS n FROM runner_command WHERE room_id=?",
                 (rid,))).fetchone()
             assert kept["n"] == 1
+
+
+# ── 軟停止與 @ 轉達 ─────────────────────────────────────────────────
+
+async def _join_run_agent(client, rid, run_id, name="派工執行者"):
+    """以 run 的身分加入房間（`claude-run-<run_id>`，§5.4）。"""
+    r = await client.post(f"/api/rooms/{rid}/join",
+                          json={"kind": "claude", "role": "agent",
+                                "session_key": f"claude-run-{run_id}",
+                                "preferred_name": name})
+    assert r.status_code == 200, r.text
+    return r.json()["display_name"]
+
+
+async def test_soft_stop_marks_the_run_and_reaches_the_heartbeat(tmp_path):
+    """收尾請求**不改狀態**：它還在跑，改掉的話畫面會說它停了而 agent 正在
+    寫檔。執行器要收得到——只寫進 DB、心跳不帶的話，那顆鈕按下去什麼都沒有
+    發生，而 App 上看起來是成功的。
+    """
+    app, client = await _client(tmp_path, "softstop")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+
+            body = (await client.post(f"/api/runs/{run_id}/soft-stop",
+                                      headers=hdr)).json()
+            assert body["soft_stop_requested"] is True
+            assert body["run"]["soft_stop_requested_at"]
+            assert body["run"]["status"] == "running"
+
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online",
+                                          "running_count": 1})).json()
+            assert hb["soft_stop_requested_run_ids"] == [run_id]
+
+            trail = (await client.get(f"/api/runs/{run_id}",
+                                      headers=hdr)).json()["events"]
+            assert trail[-1]["reason"] == "soft_stop_requested"
+            assert trail[-1]["from_status"] == trail[-1]["to_status"]
+
+            msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                     headers=hdr)).json()["messages"]
+            said = [m for m in msgs
+                    if m.get("system_event") == "run_soft_stop_requested"]
+            assert len(said) == 1 and "收到收尾請求" in said[0]["content"]
+
+            # 再按一次是冪等的：房裡不該多出第二則
+            again = (await client.post(f"/api/runs/{run_id}/soft-stop",
+                                       headers=hdr)).json()
+            assert again["run"]["soft_stop_requested_at"] == \
+                body["run"]["soft_stop_requested_at"]
+            msgs2 = (await client.get(f"/api/rooms/{rid}/messages",
+                                      headers=hdr)).json()["messages"]
+            assert len([m for m in msgs2 if m.get("system_event")
+                        == "run_soft_stop_requested"]) == 1
+
+
+async def test_soft_stop_needs_a_human_and_a_started_run(tmp_path):
+    app, client = await _client(tmp_path, "softstopguard")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            queued = (await client.post(f"/api/rooms/{rid}/runs",
+                                        json=_run_body("task-q"),
+                                        headers=hdr)).json()["run"]["id"]
+            r = await client.post(f"/api/runs/{queued}/soft-stop", headers=hdr)
+            assert r.status_code == 409
+            assert r.json()["detail"]["code"] == "run_not_started"
+
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+            agent = await client.post(
+                f"/api/rooms/{rid}/join",
+                json={"kind": "claude", "role": "agent",
+                      "session_key": "agent-x", "preferred_name": "旁觀者"})
+            r = await client.post(
+                f"/api/runs/{run_id}/soft-stop",
+                headers={"X-Participant-Id": agent.json()["participant_id"],
+                         "X-Session-Key": "agent-x"})
+            assert r.status_code == 403
+
+
+async def test_mentions_reach_the_runner_exactly_once(tmp_path):
+    """@ 只轉達一次。重送的話，agent 每一次心跳都會被同一句話再叫一次，
+    而它分不出那是新的還是上一輪那則。
+    """
+    app, client = await _client(tmp_path, "mentions")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+
+            # 加入之前房裡先有一則 @（給別人的），以及第一次心跳把游標補起來
+            await client.post(f"/api/rooms/{rid}/messages",
+                              json={"content": "先講一句"}, headers=hdr)
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            assert hb["pending_mentions"] == {}
+
+            name = await _join_run_agent(client, rid, run_id)
+            await client.post(f"/api/rooms/{rid}/messages",
+                              json={"content": f"@{name} 先停一下",
+                                    "mentions": [name]}, headers=hdr)
+            await client.post(f"/api/rooms/{rid}/messages",
+                              json={"content": "這句不是給它的"}, headers=hdr)
+
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            items = hb["pending_mentions"][run_id]
+            assert [i["text"] for i in items] == [f"@{name} 先停一下"]
+            assert items[0]["from"] == "艾斯維爾"
+            assert items[0]["seq"] > 0
+
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            assert hb["pending_mentions"] == {}, "同一則被轉達了第二次"
+
+
+async def test_mentions_from_before_the_run_joined_are_not_replayed(tmp_path):
+    """游標是 0 ＝還沒有游標，此時只把它補到現況。歷史上的 @ 是講給上一輪
+    聽的，一次灌進去等於讓剛起跑的 run 先收到一疊跟它無關的話。
+    """
+    app, client = await _client(tmp_path, "mentionsold")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+            name = await _join_run_agent(client, rid, run_id)
+            # 游標還是 0 的狀態下先累積一則 @
+            await client.post(f"/api/rooms/{rid}/messages",
+                              json={"content": f"@{name} 舊話",
+                                    "mentions": [name]}, headers=hdr)
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            assert hb["pending_mentions"] == {}

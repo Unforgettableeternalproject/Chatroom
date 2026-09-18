@@ -72,6 +72,7 @@ class AgentRun {
     this.parentRunId = '',
     this.handoffDepth = 0,
     this.cancelRequested = false,
+    this.softStopRequestedAt,
     this.usage = const {},
     this.result = '',
     this.reason = '',
@@ -112,6 +113,13 @@ class AgentRun {
   /// **running 的取消不改狀態**（§4.2）：進程還在跑，所以畫面要講的是
   /// 「已要求取消」而不是「已取消」——後者在機器上還在寫檔時是假的。
   final bool cancelRequested;
+
+  /// 已經有人請它收尾（軟停止）。null ＝沒有人請過。
+  ///
+  /// 與取消的分別是**誰來收場**：取消是執行器殺進程，收尾是讓 agent 自己把
+  /// 目前這一步做完、寫完收工摘要再結束。狀態一樣不動，所以畫面要講的是
+  /// 「已要求收尾」。
+  final String? softStopRequestedAt;
 
   /// 執行器最後一次回報的 tokens / cost / turns（`usage_json`）。
   final Map<String, dynamic> usage;
@@ -159,6 +167,7 @@ class AgentRun {
         parentRunId: (json['parent_run_id'] as String?) ?? '',
         handoffDepth: _asInt(json['handoff_depth']),
         cancelRequested: (json['cancel_requested'] as bool?) ?? false,
+        softStopRequestedAt: json['soft_stop_requested_at'] as String?,
         usage: json['usage'] is Map
             ? Map<String, dynamic>.from(json['usage'] as Map)
             : const {},

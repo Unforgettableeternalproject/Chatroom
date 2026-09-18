@@ -160,6 +160,30 @@ Future<bool> cancelRun(
   }
 }
 
+/// 請一筆派工收尾（軟停止）。
+Future<bool> softStopRun(
+  BuildContext context,
+  WidgetRef ref, {
+  required AgentRun run,
+}) async {
+  final api = ref.read(runsApiProvider);
+  final pid = ref.read(settingsRepoProvider).participantId(run.roomId);
+  try {
+    await api.softStop(run.id,
+        participantId: pid,
+        sessionKey: ref.read(appConfigProvider).deviceKey);
+    if (context.mounted) {
+      // 🔴 它還在跑：訊息要在下一次工具呼叫之前才到得了那個 agent，
+      // 而「目前這一步」可能還要幾分鐘
+      _say(context, '已要求收尾，它會做完目前這一步再結束。');
+    }
+    return true;
+  } on ApiException catch (e) {
+    if (context.mounted) _say(context, e.message);
+    return false;
+  }
+}
+
 /// 對執行器下命令。
 Future<bool> sendRunnerCommand(
   BuildContext context,

@@ -470,3 +470,63 @@ def test_hook_blocks_a_read_of_dotenv(run_dir):
                                "tool_input": {"file_path": "../.env"}})
     assert proc.returncode == 2
     assert "這是系統限制" in proc.stderr
+
+
+# ── 軟停止與 @ 轉達（hook 是它們唯一的出口）──────────────────────
+
+def test_hook_blocks_everything_once_soft_stop_flag_is_up(run_dir):
+    """房裡請它收尾：下一次工具呼叫就是那句話送到的時機。
+
+    理由要**直接講要做什麼**——只說「被擋了」的話，實測模型會換一個工具再
+    試一次然後放棄，而它其實只要收尾就好。
+    """
+    (run_dir / "soft_stop.flag").write_text("{}", encoding="utf-8")
+    proc = _run_hook(run_dir, {"tool_name": "Bash",
+                               "tool_input": {"command": "git status"}})
+    assert proc.returncode == 2
+    assert "請在目前步驟收尾，寫收工摘要後結束" in proc.stderr
+    assert '"verdict": "soft_stop"' in (
+        run_dir / "tool.log").read_text(encoding="utf-8")
+
+
+def test_hook_hands_mentions_to_the_model_without_blocking(run_dir):
+    """@ 轉達**不擋**這次呼叫：房裡講一句話不該讓它正在做的事停下來。
+
+    走 `hookSpecificOutput.additionalContext`——PreToolUse 底下唯一不必 deny
+    就能讓文字進到模型 context 的欄位（`permissionDecisionReason` 只在 deny
+    時才回給模型）。
+    """
+    (run_dir / "inject.jsonl").write_text(
+        json.dumps({"seq": 12, "from": "艾斯維爾", "text": "先看一下 B 案"},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    proc = _run_hook(run_dir, {"tool_name": "Bash",
+                               "tool_input": {"command": "git status"}})
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    ctx = out["hookSpecificOutput"]
+    assert ctx["hookEventName"] == "PreToolUse"
+    assert "先看一下 B 案" in ctx["additionalContext"]
+    assert "艾斯維爾" in ctx["additionalContext"]
+    # 消費過就不再送第二次
+    again = _run_hook(run_dir, {"tool_name": "Bash",
+                                "tool_input": {"command": "git status"}})
+    assert again.returncode == 0
+    assert again.stdout.strip() == "", "同一則被送了第二次"
+
+
+def test_hook_does_not_consume_mentions_when_it_blocks(run_dir):
+    """被擋下來的那一次**不消費**轉達訊息。
+
+    消費掉的話，那段話只會出現在一次被拒絕的呼叫裡——模型讀到的是拒絕理由，
+    而房裡講的那句從此不存在。
+    """
+    (run_dir / "inject.jsonl").write_text(
+        json.dumps({"seq": 3, "from": "艾斯維爾", "text": "停在這"},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    blocked = _run_hook(run_dir, {"tool_name": "Bash",
+                                  "tool_input": {"command": "git push"}})
+    assert blocked.returncode == 2
+    allowed = _run_hook(run_dir, {"tool_name": "Bash",
+                                  "tool_input": {"command": "git status"}})
+    assert "停在這" in json.loads(allowed.stdout)["hookSpecificOutput"][
+        "additionalContext"]

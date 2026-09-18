@@ -19,6 +19,7 @@ class OpsDashboardView extends StatelessWidget {
     this.onCommand,
     this.onPush,
     this.onCancel,
+    this.onSoftStop,
     this.busyRunnerId,
     this.now,
   });
@@ -40,6 +41,9 @@ class OpsDashboardView extends StatelessWidget {
   final void Function(AgentRunner runner, RepoView repo)? onPush;
 
   final void Function(AgentRun run)? onCancel;
+
+  /// 請執行中的 run 收尾（軟停止）。
+  final void Function(AgentRun run)? onSoftStop;
 
   /// 正在等這台執行器的命令送完。按鈕暫時停用，避免連按五次。
   final String? busyRunnerId;
@@ -70,7 +74,8 @@ class OpsDashboardView extends StatelessWidget {
           ),
           const SizedBox(height: 22),
         ],
-        _QueueSection(board: board, onCancel: onCancel),
+        _QueueSection(
+            board: board, onCancel: onCancel, onSoftStop: onSoftStop),
         if (finished.isNotEmpty) ...[
           const SizedBox(height: 22),
           _FinishedSection(runs: finished),
@@ -428,10 +433,11 @@ class _RepoTile extends StatelessWidget {
 }
 
 class _QueueSection extends StatelessWidget {
-  const _QueueSection({required this.board, this.onCancel});
+  const _QueueSection({required this.board, this.onCancel, this.onSoftStop});
 
   final RoomRunnerBoard board;
   final void Function(AgentRun run)? onCancel;
+  final void Function(AgentRun run)? onSoftStop;
 
   @override
   Widget build(BuildContext context) {
@@ -452,7 +458,11 @@ class _QueueSection extends StatelessWidget {
           Text('目前沒有進行中或排隊中的派工。',
               style: UepText.mono(size: 10.5, color: s.inkMute)),
         for (final run in running)
-          _RunTile(run: run, view: views[run.id], onCancel: onCancel),
+          _RunTile(
+              run: run,
+              view: views[run.id],
+              onCancel: onCancel,
+              onSoftStop: onSoftStop),
         for (var i = 0; i < queued.length; i++)
           _RunTile(
               run: queued[i],
@@ -469,6 +479,7 @@ class _RunTile extends StatelessWidget {
     this.view,
     this.position,
     this.onCancel,
+    this.onSoftStop,
   });
 
   final AgentRun run;
@@ -478,6 +489,9 @@ class _RunTile extends StatelessWidget {
   /// 建單流水號，中間取消掉幾筆之後它就不是「你排第幾」了。
   final int? position;
   final void Function(AgentRun run)? onCancel;
+
+  /// 請它收尾。**只有執行中的 run 有**：排隊中的還沒開始，該按的是取消。
+  final void Function(AgentRun run)? onSoftStop;
 
   @override
   Widget build(BuildContext context) {
@@ -526,9 +540,20 @@ class _RunTile extends StatelessWidget {
               if (run.cancelRequested && !run.isQueued)
                 Text('已要求取消，等執行器收到後停止',
                     style: UepText.mono(size: 10, color: UepColors.error)),
+              if (run.softStopRequestedAt != null && !run.cancelRequested)
+                Text('已要求收尾，它會做完目前這一步再結束',
+                    style: UepText.mono(size: 10, color: s.inkSoft)),
             ],
           ),
         ),
+        if (onSoftStop != null &&
+            !run.isQueued &&
+            !run.cancelRequested &&
+            run.softStopRequestedAt == null) ...[
+          _SmallButton(
+              label: '請收尾', enabled: true, onTap: () => onSoftStop!(run)),
+          const SizedBox(width: 6),
+        ],
         if (onCancel != null && !run.cancelRequested)
           _SmallButton(
               label: '取消', enabled: true, onTap: () => onCancel!(run)),

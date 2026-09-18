@@ -102,6 +102,20 @@ class RunsApi {
         return (res.data?['cancelled'] as bool?) ?? false;
       });
 
+  /// 請一筆派工收尾（軟停止）。
+  ///
+  /// 與 [cancel] 的分別是**誰來收場**：取消是執行器殺進程，收尾是讓 agent
+  /// 自己把目前這一步做完、寫完收工摘要再結束。狀態一樣不動，所以畫面要講
+  /// 的是「已要求收尾」——說成「已停止」而它還在寫檔是騙人的。
+  Future<void> softStop(String runId,
+          {String? participantId, String? sessionKey}) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/runs/$runId/soft-stop',
+          options: _auth(participantId, sessionKey),
+        );
+      });
+
   /// 房間的執行儀表板（§4.4）。輪詢的就是這一支。
   Future<RoomRunnerBoard> dashboard(String roomId, {String? participantId}) =>
       unwrap(() async {

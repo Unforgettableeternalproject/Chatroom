@@ -96,6 +96,11 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
     if (ok) _refresh();
   }
 
+  Future<void> _softStop(AgentRun run) async {
+    final ok = await softStopRun(context, ref, run: run);
+    if (ok) _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -168,6 +173,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                     onCommand: _command,
                     onPush: _push,
                     onCancel: _cancel,
+                    onSoftStop: _softStop,
                   ),
                 ),
         ),

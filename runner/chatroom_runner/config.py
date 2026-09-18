@@ -44,6 +44,19 @@ DEFAULT_BACKOFF_MINUTES = (5, 15, 30, 60)
 DEFAULT_RATE_LIMIT_RETRY_THRESHOLD = 3
 # run 預設只准用 chatroom。其他要開的在設定檔的 `allowed_mcp_servers` 明列
 DEFAULT_ALLOWED_MCP_SERVERS = ("chatroom",)
+# 收尾請求（軟停止）立旗標之後，等進程自己結束的上限。逾時就走既有的
+# `request_cancel` 硬殺——沒有上限的話，一個已經不再呼叫工具的 run（旗標
+# 永遠沒有機會被讀到）會把那個位置佔到牆鐘上限為止
+DEFAULT_SOFT_STOP_TIMEOUT_SECONDS = 300
+
+# run 目錄裡的三個檔名。**執行器與 PreToolUse hook 共用**：寫成兩份字面值
+# 的話，改了一邊的症狀是旗標立了而 hook 永遠看不到，而沒有地方會報錯
+SOFT_STOP_FLAG_NAME = "soft_stop.flag"
+SOFT_STOP_TIMEOUT_FLAG_NAME = "soft_stop_timeout.flag"
+INJECT_FILE_NAME = "inject.jsonl"
+# 已經送進模型的行數。**不刪 `inject.jsonl`**：那份紀錄是事後唯一說得出
+# 「房裡跟它講過什麼」的東西
+INJECT_CURSOR_NAME = "inject.cursor"
 
 
 class ConfigError(Exception):
@@ -160,6 +173,8 @@ class RunnerConfig:
     maintenance_hour: int = DEFAULT_MAINTENANCE_HOUR
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     stall_warn_seconds: float = DEFAULT_STALL_WARN_SECONDS
+    # 收尾請求後等進程自己結束的上限（秒）
+    soft_stop_timeout: float = DEFAULT_SOFT_STOP_TIMEOUT_SECONDS
     allowed_domains: list[str] = field(default_factory=list)
     # 額外要預先授權給子 agent 的工具名（`--allowedTools`），例如
     # "mcp__claude_ai_Atlassian_Rovo__*"。硬限制仍由 PreToolUse hook 守
@@ -360,6 +375,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
                                         DEFAULT_HEARTBEAT_SECONDS)),
         stall_warn_seconds=float(raw.get("stall_warn_seconds",
                                          DEFAULT_STALL_WARN_SECONDS)),
+        soft_stop_timeout=float(raw.get(
+            "soft_stop_timeout", DEFAULT_SOFT_STOP_TIMEOUT_SECONDS)),
         allowed_domains=list(raw.get("allowed_domains", [])),
         extra_allowed_tools=[
             str(x) for x in raw.get("extra_allowed_tools", [])],

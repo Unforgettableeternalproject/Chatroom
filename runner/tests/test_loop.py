@@ -974,3 +974,116 @@ async def test_reconcile_swallows_a_run_that_already_finished(
 
     body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
     assert body["run"]["status"] == "done"
+
+
+# ── 軟停止與 @ 轉達 ─────────────────────────────────────────────
+
+async def _soft_stop(client, headers, run_id):
+    r = await client.post(f"/api/runs/{run_id}/soft-stop", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_soft_stop_raises_the_flag_without_killing_the_process(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """收尾請求立旗標就好。**這一刻不殺進程**——agent 要有機會把目前這一步
+    做完、寫完摘要；殺掉的話那份摘要就不存在了，而它才是遠端唯一看得到的
+    東西。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    gate = asyncio.Event()
+    holder = StubExecutor(gate)
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: holder)
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+    await loop.tick()
+
+    await _soft_stop(client, headers, run["id"])
+    await loop.tick()
+
+    flag = cfg.runs_dir / run["id"] / "soft_stop.flag"
+    assert flag.exists(), "收尾旗標沒立起來，hook 永遠看不到這件事"
+    assert not holder.cancelled, "收尾不該直接終止進程"
+
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(
+        *[a.task for a in loop.active.values()]), timeout=10)
+
+
+async def test_soft_stop_falls_back_to_a_hard_kill_after_the_timeout(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """一個**已經不再呼叫工具**的 run 永遠讀不到旗標。沒有逾時的話，它會把
+    那個併發位置佔到牆鐘上限，而房裡的人以為它在收尾。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo, soft_stop_timeout=60)
+    clock = {"t": 1000.0}
+    gate = asyncio.Event()
+    holder = StubExecutor(gate)
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: holder,
+                 monotonic=lambda: clock["t"])
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+    await loop.tick()
+    await _soft_stop(client, headers, run["id"])
+    await loop.tick()
+    assert not holder.cancelled, "還沒到期就殺了"
+
+    clock["t"] += 61
+    await loop.tick()
+
+    await asyncio.wait_for(asyncio.gather(
+        *[a.task for a in loop.active.values()]), timeout=10)
+    assert holder.cancelled, "逾時之後沒有改為終止進程"
+    assert (cfg.runs_dir / run["id"] / "soft_stop_timeout.flag").exists(), \
+        "沒有留下逾時的痕跡，回報的理由會說成「有人按了取消」"
+
+
+async def test_mentions_are_appended_once_for_the_hook_to_pick_up(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """@ 落到 `inject.jsonl`，由 `PreToolUse` 交到模型面前。
+
+    同一則**只追加一次**：重複追加的話，agent 每一次工具呼叫都會再讀到同一
+    句話，而它分不出那是新的還是剛才那則。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    gate = asyncio.Event()
+    holder = StubExecutor(gate)
+    loop = _loop(cfg, runner_hub, executor_factory=lambda: holder)
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+    await loop.tick()
+
+    joined = await client.post(
+        f"/api/rooms/{room_id}/join",
+        json={"kind": "claude", "role": "agent",
+              "session_key": f"claude-run-{run['id']}",
+              "preferred_name": "派工執行者"})
+    assert joined.status_code == 200, joined.text
+    name = joined.json()["display_name"]
+    # 第一次心跳把游標補到現況（加入之前的 @ 不補送）
+    await loop.tick()
+    await client.post(f"/api/rooms/{room_id}/messages",
+                      json={"content": f"@{name} 先停一下", "mentions": [name]},
+                      headers=headers)
+    await loop.tick()
+
+    inject = cfg.runs_dir / run["id"] / "inject.jsonl"
+    lines = [ln for ln in inject.read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    assert len(lines) == 1
+    assert json.loads(lines[0])["text"] == f"@{name} 先停一下"
+
+    await loop.tick()
+    again = [ln for ln in inject.read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    assert len(again) == 1, "同一則被轉達了第二次"
+
+    gate.set()
+    await asyncio.wait_for(asyncio.gather(
+        *[a.task for a in loop.active.values()]), timeout=10)

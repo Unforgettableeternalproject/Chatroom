@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from . import dashboard, gitops
-from .config import RunnerConfig
+from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
+                     SOFT_STOP_TIMEOUT_FLAG_NAME, RunnerConfig)
 from .hub import HubError, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
@@ -122,6 +123,10 @@ class RunnerLoop:
         # 已經替「不在手上的 run」報過取消的 id。沒有它的話，每一次心跳都會
         # 對同一筆已經收場的 run 再報一次
         self._cancelled_orphans: set[str] = set()
+        # 已經立了收尾旗標的 run → 逾時硬殺的期限（monotonic 秒）。
+        # **放記憶體不落檔**：它只在「這個執行器進程手上還有那筆 run」
+        # 期間有意義，進程重啟之後那個 run 已經被 `reconcile` 收掉了
+        self._soft_stop_deadline: dict[str, float] = {}
         self._restore_maintenance_day()
 
     def _default_executor(self) -> RunExecutor:
@@ -532,6 +537,10 @@ class RunnerLoop:
             fresh = True
         for run_id in reply.get("cancel_requested_run_ids", []):
             await self._apply_cancel(str(run_id))
+        for run_id in reply.get("soft_stop_requested_run_ids", []):
+            self._apply_soft_stop(str(run_id))
+        self._deliver_mentions(reply.get("pending_mentions") or {})
+        self._check_soft_stop_timeouts()
         if fresh and not self._flushing_ack:
             # 收到命令就**立刻再報一次**：等下一次心跳的話，人按完鈕要盯著
             # 一個沒有變化的面板 30 秒，而那 30 秒裡唯一合理的推論是「壞了」
@@ -593,6 +602,82 @@ class RunnerLoop:
             self.state.limit_reason = "draining"
             return True, f"停收新單，跑完手上 {len(self.active)} 筆後暫停"
         return False, ""
+
+    def run_dir(self, run_id: str) -> Path:
+        return self.cfg.runs_dir / run_id
+
+    def _apply_soft_stop(self, run_id: str) -> None:
+        """收尾請求：在 run 目錄立旗標，下一次工具呼叫由 `PreToolUse` 擋下。
+
+        **手上沒有那個進程就什麼都不做**：沒有進程會去讀那個旗標，立了只是
+        在硬碟上留一個沒有人看的檔。那種 run 由取消那條路收場。
+
+        已經立過的不重立，也不重新起算逾時——重按一次收尾不該把硬殺的時限
+        往後推，那正是人第二次按的時候最不想要的效果。
+        """
+        if run_id not in self.active or run_id in self._soft_stop_deadline:
+            return
+        run_dir = self.run_dir(run_id)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / SOFT_STOP_FLAG_NAME).write_text(
+                json.dumps({"requested_at": self.now().isoformat()},
+                           ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            log.warning("收尾旗標寫不進去（run %s）：%s", run_id, exc)
+            return
+        self._soft_stop_deadline[run_id] = (self.monotonic()
+                                            + self.cfg.soft_stop_timeout)
+        log.info("run %s 收到收尾請求，%.0f 秒後仍未結束就硬殺",
+                 run_id, self.cfg.soft_stop_timeout)
+
+    def _check_soft_stop_timeouts(self) -> None:
+        """收尾請求逾時 → 走既有的取消路徑硬殺。
+
+        沒有這一步的話，一個**已經不再呼叫工具**的 run（旗標永遠沒有機會被
+        讀到）會把那個併發位置佔到牆鐘上限為止，而房裡的人以為它在收尾。
+        """
+        now = self.monotonic()
+        for run_id, deadline in list(self._soft_stop_deadline.items()):
+            if run_id not in self.active:
+                self._soft_stop_deadline.pop(run_id, None)
+                continue
+            if now < deadline:
+                continue
+            self._soft_stop_deadline.pop(run_id, None)
+            try:
+                (self.run_dir(run_id) / SOFT_STOP_TIMEOUT_FLAG_NAME
+                 ).write_text("", encoding="utf-8")
+            except OSError:  # pragma: no cover - 只影響回報的理由
+                pass
+            log.warning("run %s 收尾逾時，改為終止進程", run_id)
+            self.request_cancel(run_id)
+
+    def _deliver_mentions(self, mapping) -> None:
+        """房裡 @ 這筆 run 的訊息 → 追加到 run 目錄的 ``inject.jsonl``。
+
+        Hub 已經保證同一則只送一次（`mention_cursor_seq`），所以這裡只管
+        追加；真正把它交到模型面前的是 `PreToolUse` hook。
+        """
+        if not isinstance(mapping, dict):
+            return
+        for raw_id, items in mapping.items():
+            run_id = str(raw_id)
+            if run_id not in self.active or not items:
+                continue
+            run_dir = self.run_dir(run_id)
+            try:
+                run_dir.mkdir(parents=True, exist_ok=True)
+                with (run_dir / INJECT_FILE_NAME).open(
+                        "a", encoding="utf-8") as fh:
+                    for item in items:
+                        fh.write(json.dumps(
+                            {"seq": item.get("seq"),
+                             "from": item.get("from", ""),
+                             "text": item.get("text", "")},
+                            ensure_ascii=False) + "\n")
+            except OSError as exc:
+                log.warning("@ 轉達寫不進去（run %s）：%s", run_id, exc)
 
     def request_cancel(self, run_id: str) -> bool:
         active = self.active.get(run_id)

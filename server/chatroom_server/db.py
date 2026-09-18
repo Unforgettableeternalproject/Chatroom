@@ -773,6 +773,14 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- 取消請求。running 的 run 不能在 Hub 這一端直接殺，只能立旗標讓執行器
     -- 在下一次 heartbeat 收走——**狀態不先改**，否則畫面會說它停了而進程還在
     cancel_requested INTEGER NOT NULL DEFAULT 0,
+    -- 收尾請求（軟停止）。與 `cancel_requested` 的分別是**誰來收場**：取消
+    -- 是殺進程，收尾是讓 agent 自己把目前這一步做完、寫完摘要再結束。
+    -- NULL＝沒有人請它收尾。⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    soft_stop_requested_at TEXT,
+    -- 已經轉達給執行器的 @ 訊息游標（房內遞增 seq）。0＝還沒有游標，此時
+    -- 只把它補到房內現況、不送任何訊息——把歷史上所有 @ 一次灌進去，等於
+    -- 讓一筆剛起跑的 run 先收到一疊跟它無關的話
+    mention_cursor_seq INTEGER NOT NULL DEFAULT 0,
     usage_json    TEXT NOT NULL DEFAULT '{}',
     result        TEXT NOT NULL DEFAULT '',
     reason        TEXT NOT NULL DEFAULT '',
@@ -1078,6 +1086,14 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 由 `_migrate_data` 版次 4 從 participant 回填一次；回填不到的（成員列
     # 已經被刪掉的）留空＝說不出來，由 client 自行退回舊的反查法
     ("message", "sender_kind", "sender_kind TEXT NOT NULL DEFAULT ''"),
+    # 收尾請求（軟停止）。既有 run 一律 NULL＝沒有人請它收尾，那正是這一欄
+    # 存在之前的事實。回填成任何時間戳都會讓一筆正在跑的 run 在下一次心跳
+    # 被要求收尾，而沒有人按過那顆鈕
+    ("agent_run", "soft_stop_requested_at", "soft_stop_requested_at TEXT"),
+    # @ 轉達的游標。既有 run 一律 0＝還沒有游標；0 的處理是「補到房內現況、
+    # 不送」（見 app.py 的 `_collect_run_mentions`），不是「從第一則開始送」
+    ("agent_run", "mention_cursor_seq",
+     "mention_cursor_seq INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

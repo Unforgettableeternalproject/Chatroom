@@ -211,10 +211,15 @@ def test_templates_render_all_placeholders(kind):
     assert "不 push" in contract and "沒驗證什麼" in contract
     # 收工之後要離開房間：工作房是常駐的，不走就一直掛在成員列上
     assert "chatroom_leave" in contract
-    # 🚨 join 之後的第一則發言要講清楚「我不會回應 @」。run 是單回合 headless
-    # 進程，沒有 watcher、bridge 也不會替它心跳——房裡的人 mention 它不會讓它
-    # 醒過來。少了這句，人類會對著一個不會回話的名字打字
-    assert "不會回應 @" in contract
+    # 🚨 join 之後的第一則發言要講清楚 @ 會怎麼到：run 不會被即時叫醒，
+    # 但房裡 @ 它的訊息會在**下一次工具呼叫之前**送到（Hub → 心跳 →
+    # `inject.jsonl` → PreToolUse）。契約不講的話，模型收到那段話時不知道
+    # 那是什麼，而房裡的人以為它聽不見
+    assert "下一次呼叫工具之前" in contract
+    # 軟停止：房裡說「請收尾」時要收尾、寫摘要、結束，不要再開新工作
+    assert "請收尾" in contract and "不要再開新工作" in contract
+    # 每個段落要回報一次進度。少了它，遠端只看得到一段安靜
+    assert "chatroom_post" in contract
     assert "chatroom_ask_human" in contract
     # 替代路徑要寫出來：問題由它問、資訊寫在卡上
     assert "r1" in contract and "task-1" in contract

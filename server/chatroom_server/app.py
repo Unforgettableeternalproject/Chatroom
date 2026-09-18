@@ -13164,6 +13164,29 @@ def create_app(config: Config | None = None) -> FastAPI:
             " ORDER BY created_at, rowid", (run_id,))).fetchall()
         return {"run": _run_public(row), "events": [dict(e) for e in trail]}
 
+    async def _run_human_actor(row, x_participant_id: str | None,
+                               x_session_key: str | None, host: bool,
+                               error_code: str, error_text: str,
+                               ) -> tuple[str, str]:
+        """對一筆 run 的人為操作（取消／收尾）共用的權限與身分解析。
+
+        兩個端點各寫一份的話，放寬其中一邊的那一天，另一邊會維持原樣而沒有
+        任何地方報錯——而它們守的是同一件事：機器不能替人類決定要不要收手。
+        """
+        room = await _room_or_404(row["room_id"], allow_archived=True)
+        me = None
+        if x_participant_id:
+            me = await _participant(x_participant_id, row["room_id"])
+        allowed = host or (me is not None and (me["role"] or "") == "human")
+        if not allowed:
+            # 房間管理員也放行：他不一定以人類身分坐在房裡
+            allowed = bool(x_session_key
+                           and room["creator_session_key"] == x_session_key)
+        if not allowed:
+            raise _err(403, error_code, error_text)
+        return (actor_key(x_session_key or (me["session_key"] if me else "")),
+                me["display_name"] if me else "管理員")
+
     @app.post("/api/runs/{run_id}/cancel", dependencies=[Depends(require_auth)])
     async def cancel_run(
         run_id: str,
@@ -13183,20 +13206,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         False＝請求已送出，等執行器收。
         """
         row = await _run_or_404(run_id)
-        room = await _room_or_404(row["room_id"], allow_archived=True)
-        me = None
-        if x_participant_id:
-            me = await _participant(x_participant_id, row["room_id"])
-        allowed = host or (me is not None and (me["role"] or "") == "human")
-        if not allowed:
-            # 房間管理員也放行：他不一定以人類身分坐在房裡
-            allowed = bool(x_session_key
-                           and room["creator_session_key"] == x_session_key)
-        if not allowed:
-            raise _err(403, "human_actor_required_for_run_cancel",
-                       "取消派工只有房內的人類成員或這間房的管理員做得到。")
-        actor = actor_key(x_session_key or (me["session_key"] if me else ""))
-        name = me["display_name"] if me else "管理員"
+        actor, name = await _run_human_actor(
+            row, x_participant_id, x_session_key, host,
+            "human_actor_required_for_run_cancel",
+            "取消派工只有房內的人類成員或這間房的管理員做得到。")
         status = row["status"]
         if status in ("done", "failed", "cancelled", "handoff"):
             raise _err(409, "run_already_finished",
@@ -13223,6 +13236,52 @@ def create_app(config: Config | None = None) -> FastAPI:
         await events.notify(row["room_id"])
         return {"run": _run_public(await _run_or_404(run_id)),
                 "cancelled": False}
+
+    @app.post("/api/runs/{run_id}/soft-stop",
+              dependencies=[Depends(require_auth)])
+    async def soft_stop_run(
+        run_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """請一筆派工收尾。權限與取消相同。
+
+        與取消的分別是**誰來收場**：取消是執行器殺進程，收尾是讓 agent 自己
+        把目前這一步做完、寫完收工摘要再結束。狀態一樣不動——它還在跑，這一
+        端先改掉的話，畫面會說它停了而機器上那個 agent 正在寫檔。
+
+        `queued` 不給收尾：它還沒開始，該按的是取消。重複請求是**冪等**的，
+        不重寫時間戳也不再發一次系統訊息——房裡的人多按兩下不該多出兩則。
+        """
+        row = await _run_or_404(run_id)
+        actor, name = await _run_human_actor(
+            row, x_participant_id, x_session_key, host,
+            "human_actor_required_for_run_soft_stop",
+            "請派工收尾只有房內的人類成員或這間房的管理員做得到。")
+        status = row["status"]
+        if status in ("done", "failed", "cancelled", "handoff"):
+            raise _err(409, "run_already_finished",
+                       f"這筆派工已經結束：{status}。")
+        if status == "queued":
+            raise _err(409, "run_not_started",
+                       "這筆派工還沒開始執行，要停掉請用取消。")
+        if row["soft_stop_requested_at"]:
+            return {"run": _run_public(row), "soft_stop_requested": True}
+        now = _now()
+        await app.state.db.execute(
+            "UPDATE agent_run SET soft_stop_requested_at=?, updated_at=?"
+            " WHERE id=?", (now, now, run_id))
+        await _record_run_event(run_id, row["room_id"], status, status,
+                                actor, name, "soft_stop_requested")
+        head = f"派工 {row['kind']}／{row['ref'] or '(未指定)'}"
+        await _post_message(row["room_id"], None, f"{head} 收到收尾請求。",
+                            kind="system",
+                            system_event="run_soft_stop_requested")
+        await _commit_with_retry(app.state.db)
+        await events.notify(row["room_id"])
+        return {"run": _run_public(await _run_or_404(run_id)),
+                "soft_stop_requested": True}
 
     @app.post("/api/runners/register", dependencies=[Depends(require_auth)])
     async def register_runner(
@@ -13296,6 +13355,66 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"runner": _runner_public(await _runner_or_404(runner_id)),
                 "created": True, "runner_token": token}
 
+    async def _collect_run_mentions(runner_id: str) -> dict[str, list[dict]]:
+        """這台執行器手上的 run 被 @ 到的新訊息。**送一次就不再送**。
+
+        游標存在 `agent_run.mention_cursor_seq`（房內遞增 seq，與分頁同一個
+        概念）。每一輪心跳把游標推到「這一輪看過的最後一則」，下一輪只看更
+        新的——用時間戳當游標的話，同一秒內的兩則會重送或漏送。
+
+        `mention_cursor_seq = 0` ＝還沒有游標（這一欄存在之前的 run，或剛被
+        領走的）：**只把游標補到房內現況、不送任何訊息**。歷史上的 @ 是講給
+        上一輪聽的，一次灌進去等於讓剛起跑的 run 先收到一疊跟它無關的話。
+
+        run 的身分還沒 join（`participant.run_id` 查不到名字）時同樣只推游
+        標：那段時間的 @ 指不到它。**不 commit**，由呼叫端一起收。
+        """
+        db = app.state.db
+        runs = await (await db.execute(
+            "SELECT id, room_id, mention_cursor_seq FROM agent_run"
+            " WHERE runner_id=? AND status IN ('claimed','running','limited')",
+            (runner_id,))).fetchall()
+        out: dict[str, list[dict]] = {}
+        for run in runs:
+            cursor = int(run["mention_cursor_seq"] or 0)
+            names = {r["display_name"] for r in await (await db.execute(
+                "SELECT display_name FROM participant"
+                " WHERE room_id=? AND run_id=? AND run_id!=''",
+                (run["room_id"], run["id"]))).fetchall() if r["display_name"]}
+            if cursor <= 0 or not names:
+                top = await (await db.execute(
+                    "SELECT COALESCE(MAX(seq), 0) AS s FROM message"
+                    " WHERE room_id=?", (run["room_id"],))).fetchone()
+                if int(top["s"]) != cursor:
+                    await db.execute(
+                        "UPDATE agent_run SET mention_cursor_seq=?"
+                        " WHERE id=?", (int(top["s"]), run["id"]))
+                continue
+            rows = await (await db.execute(
+                "SELECT m.seq AS seq, m.content AS content,"
+                " m.mentions AS mentions, p.display_name AS sender"
+                " FROM message m LEFT JOIN participant p ON p.id = m.sender_id"
+                " WHERE m.room_id=? AND m.seq>? AND m.deleted=0"
+                "   AND m.kind='chat' ORDER BY m.seq",
+                (run["room_id"], cursor))).fetchall()
+            items: list[dict] = []
+            top_seq = cursor
+            for r in rows:
+                top_seq = max(top_seq, int(r["seq"]))
+                mentioned = _loads_or(r["mentions"], [])
+                if not names.intersection(mentioned):
+                    continue
+                items.append({"seq": int(r["seq"]),
+                              "from": r["sender"] or "系統",
+                              "text": r["content"]})
+            if top_seq != cursor:
+                await db.execute(
+                    "UPDATE agent_run SET mention_cursor_seq=? WHERE id=?",
+                    (top_seq, run["id"]))
+            if items:
+                out[run["id"]] = items
+        return out
+
     @app.post("/api/runners/{runner_id}/heartbeat",
               dependencies=[Depends(require_auth)])
     async def runner_heartbeat(
@@ -13360,6 +13479,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT id FROM agent_run WHERE runner_id=? AND cancel_requested=1"
             " AND status IN ('claimed','running','limited')",
             (runner_id,))).fetchall()
+        softs = await (await db.execute(
+            "SELECT id FROM agent_run WHERE runner_id=?"
+            " AND soft_stop_requested_at IS NOT NULL"
+            " AND status IN ('claimed','running','limited')",
+            (runner_id,))).fetchall()
+        pending_mentions = await _collect_run_mentions(runner_id)
         await _commit_with_retry(db)
         if was_offline and runner_id in runner_offline_quiet:
             # 那一次掉線沒有講，回來也不講：面板上有命令進度，房裡不需要
@@ -13369,7 +13494,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _announce_runner_presence(runner_id, online=True)
         return {"runner_id": runner_id,
                 "commands": [dict(c) for c in cmds],
-                "cancel_requested_run_ids": [c["id"] for c in cancels]}
+                "cancel_requested_run_ids": [c["id"] for c in cancels],
+                "soft_stop_requested_run_ids": [s["id"] for s in softs],
+                "pending_mentions": pending_mentions}
 
     @app.post("/api/runners/{runner_id}/claim",
               dependencies=[Depends(require_auth)])

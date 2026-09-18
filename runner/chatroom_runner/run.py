@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from . import gitops, prompts
-from .config import ProjectConfig, RepoConfig, RunnerConfig
+from .config import (SOFT_STOP_FLAG_NAME, SOFT_STOP_TIMEOUT_FLAG_NAME,
+                     ProjectConfig, RepoConfig, RunnerConfig)
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
 from .procs import no_window_kwargs
@@ -826,7 +827,13 @@ class RunExecutor:
                       "num_turns": state.num_turns,
                       "context_peak_tokens": state.peak_context_tokens})
         if stop_reason == "cancelled":
-            return RunOutcome("cancelled", reason="cancel_requested",
+            # 收尾請求逾時被硬殺的，理由要說得出是**哪一件事**把它殺掉的：
+            # 都報 `cancel_requested` 的話，事後看到的是一筆「有人按了取消」，
+            # 而實際上沒有人按過
+            reason = ("soft_stop_timeout"
+                      if (run_dir / SOFT_STOP_TIMEOUT_FLAG_NAME).exists()
+                      else "cancel_requested")
+            return RunOutcome("cancelled", reason=reason,
                               usage=usage, claude_session_id=sid)
         if stop_reason == "wall_clock":
             return RunOutcome("failed", reason="wall_clock", usage=usage,
@@ -866,6 +873,10 @@ class RunExecutor:
                         sync_note: str = "") -> str:
         diff = gitops.diff_snapshots(before, after)
         lines = [state.result_text.strip()] if state.result_text.strip() else []
+        if (run_dir / SOFT_STOP_FLAG_NAME).exists():
+            # 擺在最前面：看報告的人要先知道這一份**不是做完才停的**，
+            # 後面那些「沒做的事」才讀得出是被請下來的，不是漏掉的
+            lines.insert(0, "（依收尾請求提前結束）")
         lines.append("")
         lines.append("— 執行器附註 —")
         lines.append(f"turns：{state.num_turns}；成本："
