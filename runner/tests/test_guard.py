@@ -182,8 +182,10 @@ def test_check_tool_routes_by_name(ctx):
 
 def _run_hook(run_dir: Path, payload: dict):
     return subprocess.run(
+        # 用 UTF-8 解碼，模擬 Claude Code 讀 hook 輸出的方式：text=True 會用
+        # 主控台的 CP950，跟子進程同一套編碼，亂碼在測試裡看不出來
         [sys.executable, HOOK], input=json.dumps(payload), text=True,
-        capture_output=True,
+        encoding="utf-8", capture_output=True,
         env={**_base_env(), "CHATROOM_RUNNER_RUN_DIR": str(run_dir)})
 
 

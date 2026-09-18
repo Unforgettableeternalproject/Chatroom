@@ -104,6 +104,14 @@ def injection_text(items: list[dict]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Claude Code 把 hook 的 stdout／stderr 當 UTF-8 讀，而 Windows 上 Python 的
+    # 預設是 CP950：不設這兩行，additionalContext 與交接／收尾的提示到模型手上
+    # 全是亂碼（2026-09-18 模擬輪次實測，模型回報「Big5 被當 UTF-8 讀」）
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError, ValueError):
+            pass
     run_dir = _run_dir()
     try:
         raw = sys.stdin.read()
