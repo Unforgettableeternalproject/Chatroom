@@ -69,9 +69,6 @@ void main() {
 
     expect(health.reachable.state, ProbeState.ok);
     expect(health.reachable.detail, contains('127.0.0.2'));
-    expect(health.reachable.caveat, contains('同一次探測'),
-        reason: '綁單一介面時只有一個位址可打，「進程活著」與「綁對介面」'
-            '分不開。假裝驗了兩次會讓人以為有兩個獨立的結論');
   });
 
   test('綁 0.0.0.0 時仍走迴環，而②是 unknown 不是綠燈', () async {

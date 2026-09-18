@@ -100,8 +100,7 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
         const SizedBox(height: 8),
         Text(
           '${isMine ? '你提議封存這個聊天室，等建立者確認。' : '$who 提議封存這個聊天室。'}'
-          '封存後只能看不能寫；而且封存滿一段時間後，Hub 會把這個房間連同訊息'
-          '與附件永久刪除（天數由 Hub 設定）。',
+          '封存一段時間後房間會被永久刪除。',
           style: UepText.sans(
               size: 13, weight: FontWeight.w600, color: s.inkTitle),
         ),

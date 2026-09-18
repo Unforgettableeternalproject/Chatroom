@@ -50,15 +50,12 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
     url = '';
   }
   if (url.isEmpty) {
-    return const TunnelStatus(ProbeState.unknown, '', '沒有開著的隧道',
-        caveat: '成員只能從內網或 VPN 連進來');
+    return const TunnelStatus(ProbeState.unknown, '', '未開啟');
   }
 
   final ok = await probeHealth('$url/api/health');
   if (ok) {
-    return TunnelStatus(ProbeState.ok, url, '隧道開著',
-        caveat: '網址是臨時的——按「關閉隧道」之後就失效，'
-            '重開會是不一樣的網址');
+    return TunnelStatus(ProbeState.ok, url, '已開啟');
   }
 
   // 🔴 打不通的時候先問一句「Hub 還在嗎」。
@@ -72,19 +69,14 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
     return TunnelStatus(
       ProbeState.bad,
       url,
-      '隧道還開著，但 Hub 沒有在跑',
-      caveat: '外面的人打這個網址會拿到 502／530——隧道把他們接過來了，'
-          '這一端卻沒有東西回應。先啟動 Hub；網址不必重開，它還是同一條。',
+      '已開啟，但 Hub 已停止',
     );
   }
 
   return TunnelStatus(
     ProbeState.unknown,
     url,
-    '有網址，但從這台機器打不通',
-    caveat: '兩種可能，本機分不出來：①隧道其實活著，只是這台機器繞不回自己的'
-        '公網網址（很常見）②隧道已經關了、這個檔案是殘留的。'
-        '請成員或手機開一次那個網址',
+    '有網址，但這台機器打不通',
   );
 });
 

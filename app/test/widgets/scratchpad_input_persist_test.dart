@@ -58,7 +58,7 @@ Widget _app() => ProviderScope(
     );
 
 Finder get _addField => find.byWidgetPredicate(
-    (w) => w is TextField && w.decoration?.hintText == '再想到什麼就往這裡丟…');
+    (w) => w is TextField && w.decoration?.hintText == '再加一段…');
 
 Future<void> _grow(WidgetTester tester, int to) async {
   _blocks = to;

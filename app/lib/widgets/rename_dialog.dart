@@ -78,7 +78,7 @@ class _RenameDialogState extends State<_RenameDialog> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: Text('改名會在房裡留下一則系統訊息——誰改的、改成什麼，都看得到。',
+            child: Text('改名會在房裡留下一則系統訊息。',
                 style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),

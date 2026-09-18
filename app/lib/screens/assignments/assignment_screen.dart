@@ -221,8 +221,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         onChanged: (_) => setState(() {}),
                         style:
                             UepText.code(size: 12, color: s.ink, height: 1.4),
-                        decoration: _decoration(
-                            '點上方清單自動填入，或手動輸入 session_key'),
+                        decoration: _decoration('session_key'),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -234,8 +233,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         maxLength: 32,
                         style:
                             UepText.code(size: 12, color: s.ink, height: 1.4),
-                        decoration: _decoration(
-                                '幫這個 agent 取房內名稱，最多 32 字；留空則由 agent 自取或自動生成')
+                        decoration: _decoration('房內名稱，最多 32 字（選填）')
                             .copyWith(counterText: ''),
                       ),
                     ),
@@ -248,8 +246,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         maxLines: 3,
                         style: UepText.serif(
                             size: 13, color: s.ink, height: 1.8),
-                        decoration:
-                            _decoration('要 agent 做什麼？加入後會看到這段說明'),
+                        decoration: _decoration('要 agent 做什麼？'),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -264,7 +261,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       // 沒有端點吐給 client，所以不寫死數字。Expanded 讓它在
                       // 窄畫面換行而不是溢位。
                       const Expanded(
-                        child: MonoLabel('逾時未回應自動過期（時限由 Hub 設定）',
+                        child: MonoLabel('逾時未回應自動過期',
                             size: 9, letterSpacing: 1.2),
                       ),
                     ]),
@@ -341,7 +338,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
             child: MonoLabel(
                 hiddenIdle > 0
                     // 有東西卻不顯示時一定要說原因，否則看起來就是掃描壞了
-                    ? '沒有 active 的 session（$hiddenIdle 個閒置中，可切換顯示全部）'
+                    ? '沒有 active 的 session（$hiddenIdle 個閒置中）'
                     : '目前沒有掃描到任何 agent session',
                 size: 9,
                 color: s.inkMute),
@@ -400,9 +397,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: MonoLabel(
-                      '這些名字是掃描編出來的，不是它們自己報的——'
-                      '第一次指派一個全新的 agent 就從這裡挑',
+                  child: MonoLabel('這些名字是掃描編出來的',
                       size: 8.5, color: s.inkMute),
                 ),
               ),

@@ -112,10 +112,8 @@ final mcpStatusProvider = FutureProvider<McpStatus?>((ref) async {
   final reachable = await probeHealth('$base/api/health');
   if (!reachable) {
     return McpStatus(
-      reach: const Probe(ProbeState.bad, 'Hub 連不到',
-          caveat: '主持人的 Hub 沒開、VPN 沒通，或位址變了（隧道網址每次重開都變）'),
-      auth: const Probe(ProbeState.unknown, '連不到就驗不了 token',
-          caveat: '這不是壞掉，是還輪不到這一關'),
+      reach: const Probe(ProbeState.bad, 'Hub 連不到'),
+      auth: const Probe(ProbeState.unknown, '連不到就驗不了 token'),
       bridgeVersion: version,
     );
   }
@@ -123,13 +121,11 @@ final mcpStatusProvider = FutureProvider<McpStatus?>((ref) async {
   final authed = await probeStatus('$base/api/rooms', token: env.token);
   final Probe auth;
   if (authed == 200) {
-    auth = const Probe(ProbeState.ok, 'token 可以通過認證');
+    auth = const Probe(ProbeState.ok, '通過');
   } else if (authed == 401 || authed == 403) {
-    auth = const Probe(ProbeState.bad, 'token 不被接受',
-        caveat: '跟主持人要一份新的——他換過 token，或發給你的那份抄漏了');
+    auth = const Probe(ProbeState.bad, 'token 不被接受');
   } else {
-    auth = const Probe(ProbeState.unknown, '驗不出來',
-        caveat: 'Hub 有回應但不是預期的狀態碼');
+    auth = const Probe(ProbeState.unknown, '驗不出來');
   }
 
   return McpStatus(

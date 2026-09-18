@@ -238,9 +238,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                           : _status == 'active'
                               ? '目前沒有進行中的聊天室'
                               : '沒有已封存的聊天室',
-                      subtitle: query.isEmpty && _status == 'active'
-                          ? '按下方「建立房間」開一間，\n再用指派把 agent 請進來'
-                          : null,
+                      subtitle: null,
                     ),
                   ]);
                 }
@@ -696,7 +694,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             dense: true,
             title: Text('私人對話',
                 style: UepText.sans(size: 12.5, color: s.ink)),
-            subtitle: Text('不會出現在其他人的對話列表，必須受邀才能加入',
+            subtitle: Text('必須受邀才能加入',
                 style: UepText.serif(
                     size: 11.5, color: s.inkMute, height: 1.4)),
           ),

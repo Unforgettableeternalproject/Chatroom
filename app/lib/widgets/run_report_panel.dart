@@ -133,7 +133,7 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
         else if (runs == null)
           note('讀取中…')
         else if (runs.isEmpty)
-          note('還沒有結束的派工。run 收工後的摘要會出現在這裡。', mono: false)
+          note('還沒有結束的派工', mono: false)
         else
           // **限高可捲**：回報筆數是會長的，側欄的高度不是
           Expanded(

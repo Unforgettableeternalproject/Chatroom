@@ -90,12 +90,10 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         // 廣播是「板上沒有任何人在掛接的房裡」。混用同一句話，
         // 送出的人會以為自己挑錯了人
         content: Text(switch ((broadcast, delivered)) {
-          (true, true) => '已送出，板上在線的成員都被叫醒了。',
-          (true, false) =>
-            '已寫進稽核串，但板上沒有人在掛接的聊天室裡——現在沒有人知道這件事。',
-          (false, true) => '已送出，對方已被叫醒。',
-          (false, false) =>
-            '已寫進稽核串，但對方不在任何掛接的聊天室裡——他還不知道這件事。',
+          (true, true) => '已送出',
+          (true, false) => '已寫進稽核串，但沒有人收到通知',
+          (false, true) => '已送出',
+          (false, false) => '已寫進稽核串，但對方沒有收到通知',
         }),
         duration: Duration(seconds: delivered ? 2 : 6),
       ));
@@ -111,7 +109,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       // 無法發言」）：他送的是判斷，不是發言，那句話對不上他做的事。
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('這間房已封存，這則判斷沒有送出，也沒有留在稽核串上。'),
+        content: Text('這間房已封存，這則判斷沒有送出。'),
         duration: Duration(seconds: 6),
       ));
     } on ApiException catch (e) {
@@ -333,7 +331,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         maxLines: 3,
         style: UepText.sans(size: 12.5, color: s.ink),
         decoration: const InputDecoration(
-          hintText: '這輪你看到什麼、建議怎麼走…',
+          hintText: '這輪的判斷…',
           border: OutlineInputBorder(),
           isDense: true,
         ),
@@ -391,8 +389,7 @@ class _AttachedSupervisorsSection extends StatelessWidget {
       const SizedBox(height: 8),
       if (sups.isEmpty)
         Text(
-          '這塊板掛著的聊天室裡還沒有人在看。指派要從聊天室那一邊做——'
-          'Supervisor 是綁在房間上的，不是綁在板上。',
+          '還沒有人在看。',
           style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
         )
       else
@@ -548,7 +545,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
       Row(children: [
         if (sup == null)
           Expanded(
-            child: Text('這間房還沒有指派 Supervisor。',
+            child: Text('還沒有指派 Supervisor。',
                 style: UepText.serif(size: 12.5, color: s.inkMute)),
           )
         else ...[
@@ -563,7 +560,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
                 // 退場是標記不是清空，少了這一句，畫面就只能在「有人在看」
                 // 與「沒有人」之間二選一，而兩個都不是真的
                 if (departed)
-                  Text('已經離開這間房了。指派的紀錄留著，但沒有人在看。',
+                  Text('已離開這間房',
                       style: UepText.serif(size: 11.5, color: UepColors.gold)),
               ],
             ),

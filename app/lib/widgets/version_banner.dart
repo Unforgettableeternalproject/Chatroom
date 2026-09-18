@@ -13,6 +13,10 @@ import '../state/app_providers.dart';
 /// 不是在你想起要去翻設定的時候。
 ///
 /// 相符時完全不畫——正常狀態不該佔用任何版面。
+///
+/// 🔴 **橫幅上不放 commit hash。** 橫幅要回答的是「我現在該做什麼」，
+/// 而 hash 答不了那一題——答得了的是 `built_at`：早的那邊就是舊的那邊。
+/// hash 留在 tooltip 與設定頁，回報問題時才需要。
 class VersionBanner extends ConsumerWidget {
   const VersionBanner({super.key});
 
@@ -24,48 +28,51 @@ class VersionBanner extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    final different = match == VersionMatch.different;
-    final color = different ? UepColors.error : UepColors.gold;
-    final appLabel = _appLabel(ref.watch(appBuildProvider));
-    final hubLabel = _hubLabel(ref.watch(hubBuildProvider).value);
-    final text = different
-        ? 'App 與 Hub 不是同一份程式碼（App $appLabel / Hub $hubLabel）'
-            '——通常是 App 還沒換新版；請確認兩邊都用同一次建置的產物'
-        // unknown 不是「沒事」：至少一邊講不出自己是哪一份，而那正是
-        // 「我以為我更新過了」這種誤判的溫床
-        : '無法確認 App 與 Hub 是不是同一份程式碼（App $appLabel / '
-            'Hub $hubLabel），其中一邊沒有版本資訊';
+    final app = ref.watch(appBuildProvider);
+    final hub = ref.watch(hubBuildProvider).value;
+    final older = _olderSide(app, hub);
+    final color = older == null ? UepColors.gold : UepColors.error;
+    final text = switch (older) {
+      _Side.app => 'App 版本較舊，請更新 App',
+      _Side.hub => 'Hub 版本較舊，請更新 Hub',
+      null => '無法確認版本',
+    };
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .10),
-        border: Border(bottom: BorderSide(color: color.withValues(alpha: .5))),
-      ),
-      child: Row(children: [
-        Icon(different ? Icons.warning_amber_rounded : Icons.help_outline,
-            size: 15, color: color),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Text(text,
-              style: UepText.serif(size: 12, color: s.ink, height: 1.6)),
+    return Tooltip(
+      message: 'App ${_appLabel(app)} · Hub ${_hubLabel(hub)}',
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .10),
+          border: Border(bottom: BorderSide(color: color.withValues(alpha: .5))),
         ),
-        const SizedBox(width: 10),
-        // 實際的版本字串一定要印出**兩邊**，不能只印自己這一半——「對不上」
-        // 這個結論回答不了「哪一邊舊」，而那才是下一步要做什麼的依據
-        Flexible(
-          child: Text(
-            'App $appLabel · Hub $hubLabel',
-            textAlign: TextAlign.right,
-            maxLines: 2,
-            style: UepText.mono(size: 8.5, color: s.inkMute, height: 1.6),
+        child: Row(children: [
+          Icon(older == null ? Icons.help_outline : Icons.warning_amber_rounded,
+              size: 15, color: color),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(text,
+                style: UepText.serif(size: 12, color: s.ink, height: 1.6)),
           ),
-        ),
-      ]),
+        ]),
+      ),
     );
   }
 }
+
+/// 哪一邊比較舊。**判準是建置時間，不是 hash**——hash 只說得出「不一樣」，
+/// 說不出誰要更新。任一邊講不出建置時間（或兩邊同時）就回 null。
+_Side? _olderSide(BuildInfo app, Map<String, dynamic>? hubBuild) {
+  final appAt = DateTime.tryParse(app.builtAt);
+  final hubAt = DateTime.tryParse((hubBuild?['built_at'] as String?) ?? '');
+  if (appAt == null || hubAt == null) return null;
+  if (appAt.isBefore(hubAt)) return _Side.app;
+  if (hubAt.isBefore(appAt)) return _Side.hub;
+  return null;
+}
+
+enum _Side { app, hub }
 
 /// commit 截短成看得完的長度，但**不動 `-dirty`**：那個後綴的意思是
 /// 「這份產物對不回任何一個 commit」，截掉它等於把最該看見的事藏起來。

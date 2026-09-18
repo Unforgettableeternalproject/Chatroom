@@ -149,7 +149,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       setState(() => _conflicts.remove(taskId));
       if (r?.reclaimed == true) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('撿回了你上一世領走的卡。先看一下它的描述。')));
+            content: Text('已撿回你先前領走的卡')));
       }
     } catch (e) {
       // 領不到是正常結果，不是錯誤畫面：把「誰贏了」畫回卡片上
@@ -443,7 +443,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         color: s.bgSoft,
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
-      child: Text('這塊板已封存。板是唯讀的歷史，不能認領、不能改狀態。',
+      child: Text('這塊板已封存，只能看不能改。',
           style: UepText.serif(size: 12, color: s.inkMute)),
     );
   }
@@ -1179,8 +1179,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           if (stats.remaining > 0) '${stats.remaining} 張未完成',
           if (stats.orphans > 0) '${stats.orphans} 張沒有人在上面',
         ].join(' · '),
-      'active' when stats.stagesDone == 0 =>
-        '每個階段都被取消了，這個週期沒有東西可以驗收',
+      'active' when stats.stagesDone == 0 => '每個階段都被取消了',
       'active' => '所有階段都收尾了，可以送審',
       'review' => '已送審，等人確認過才能結束週期',
       'verified' => '已確認，可以結束這個週期',
@@ -1337,7 +1336,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           else if (!_readOnly && c.status == 'open')
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('未分類還有 $loose 張沒收尾，週期送不出審。',
+              child: Text('未分類還有 $loose 張沒收尾',
                   style: UepText.mono(size: 9, color: s.inkMute)),
             ),
         ],
@@ -1548,7 +1547,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             Text(
               _readOnly
                   ? '這塊板結束時是空的。'
-                  : '這塊板還是空的。\n開一條週期，把今天講定的事放進去；\n之後的三百則訊息就不會把它沖走。',
+                  : '這塊板還是空的。',
               textAlign: TextAlign.center,
               style: UepText.serif(size: 13.5, color: s.inkSoft, height: 2),
             ),
@@ -1662,7 +1661,7 @@ class _AttachedRoomsBadge extends StatelessWidget {
       message: empty
           // **事實陳述，不是限制。** 板上的變更不會叫醒任何人（通知走房），
           // 追蹤者只能自己回來看。改是改得動的
-          ? '這塊板沒有掛任何聊天室——改得動，但變更不會叫醒任何人'
+          ? '這塊板沒有掛任何聊天室'
           : '看看它掛在哪些聊天室上',
       child: InkWell(
         onTap: onTap,
@@ -1712,8 +1711,7 @@ class _NotAMember extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               // 講得出「找誰」才有用。只說「沒有權限」的人會去翻設定頁
-              '請板的 owner 把你加進來——'
-              '在同一間房裡不會自動成為板的協作者。',
+              '請板的 owner 把你加進來。',
               textAlign: TextAlign.center,
               style: UepText.sans(size: 12, color: s.inkMute, height: 1.6),
             ),
@@ -1737,7 +1735,7 @@ class _ViewerBadge extends StatelessWidget {
     return Tooltip(
       // A+ 之後「不是板成員」是進房者的預設狀態，所以這顆徽章會從罕見
       // 變常態——它要講的是「下一步怎麼辦」，不是「你的身分是什麼」
-      message: '你在這塊板上是唯讀。請板的 owner 把你設為協作者（editor）',
+      message: '唯讀。請板的 owner 把你設為協作者（editor）',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),

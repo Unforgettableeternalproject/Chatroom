@@ -81,8 +81,6 @@ void main() {
   testWidgets('沒有執行器宣告專案：說出下一步在哪', (tester) async {
     await _open(tester, projects: const []);
     expect(find.textContaining('沒有執行器宣告任何專案'), findsOneWidget);
-    // 擋下來要說出理由，而理由要能導向下一步——這一條的下一步在那台機器上
-    expect(find.textContaining('projects 白名單'), findsOneWidget);
   });
 
   testWidgets('🔴 沒有專案時按送出：不能只是不動，要當場說為什麼',

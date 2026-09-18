@@ -73,7 +73,7 @@ void main() {
 
     await tester.enterText(
       find.byWidgetPredicate((w) =>
-          w is TextField && w.decoration?.hintText == '再想到什麼就往這裡丟…'),
+          w is TextField && w.decoration?.hintText == '再加一段…'),
       '打到一半的想法',
     );
     await tester.pump();

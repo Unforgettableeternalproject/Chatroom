@@ -33,12 +33,10 @@ String? settingsGapMessage({
   required String token,
 }) {
   if (!hasServerConfig || serverUrl.trim().isEmpty) {
-    return '尚未儲存伺服器位址。目前用的是預設值 http://127.0.0.1:8787——'
-        '除非本機正跑著 Hub，否則連不到。';
+    return '尚未設定伺服器位址。';
   }
   if (token.trim().isEmpty) {
-    return 'API token 是空的。除非這台 Hub 自己也沒設 token（完全開放模式），'
-        '否則每一次請求都會被拒（401），房間列表因此永遠是空的。';
+    return '尚未設定 API token。';
   }
   return null;
 }
@@ -121,7 +119,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // 正在看那個房就請出來——留在一個讀不到內容的畫面上只會看到空白
     if (widget.selectedRoomId == roomId) context.go('/rooms');
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('你已被管理員移出這個聊天室，看不到房內的內容了')));
+        content: Text('你已被管理員移出這個聊天室')));
   }
 
   /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
@@ -170,8 +168,7 @@ class _AppShellState extends ConsumerState<AppShell>
         title: Text('初始設定還沒完成',
             style: UepText.display(size: 22, color: context.uep.inkTitle)),
         content: Text(
-          '$gap\n\n到設定頁填好伺服器位址與 API token，'
-          '按「測試連線」確認後再按「儲存設定」——只測試不儲存不會生效。',
+          '$gap到設定頁填好伺服器位址與 API token。',
           style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
         ),
         actions: [
@@ -285,7 +282,7 @@ class _AppShellState extends ConsumerState<AppShell>
             if (ref.watch(hostKitProvider).value != null ||
                 ref.watch(mcpKitProvider).value != null) ...[
               _TopIconButton(
-                tooltip: '這台機器（Hub 與 agent 接入的狀態）',
+                tooltip: '這台機器',
                 glyph: '⌂',
                 onTap: () => context.push('/host'),
               ),
@@ -458,9 +455,6 @@ class NoRoomSelected extends StatelessWidget {
         const SizedBox(height: 18),
         Text('選擇一個聊天室開始',
             style: UepText.serif(size: 14, color: s.inkSoft)),
-        const SizedBox(height: 6),
-        Text('或按左下角「建立房間」，再指派 agent 加入',
-            style: UepText.serif(size: 12.5, color: s.inkMute)),
       ]),
     );
   }

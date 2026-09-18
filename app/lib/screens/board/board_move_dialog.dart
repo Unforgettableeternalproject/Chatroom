@@ -118,10 +118,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '「${widget.task.title}」會在你選的階段長出一張新卡（標題、描述、'
-              '優先度都跟著走），這張則標成「已搬走」並指向那一張。'
-              '\n\n搬錯了可以按「收回這裡」把這張拿回來，但目標階段上那張新卡'
-              '不會跟著消失，要自己刪掉。',
+              '「${widget.task.title}」會在選定的階段建立一張新卡。',
               style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
             ),
           ),
@@ -136,7 +133,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             // 停用要說得出理由，而且理由要導向下一步
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('這塊板上沒有還在跑的週期，先開一個才有地方搬。',
+              child: Text('這塊板上沒有進行中的週期。',
                   style: UepText.sans(size: 12, color: s.inkMute)),
             )
           else ...[

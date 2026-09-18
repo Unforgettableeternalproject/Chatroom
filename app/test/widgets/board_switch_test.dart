@@ -24,8 +24,6 @@ void main() {
     final msg = boardSwitchStatusMessage(detached: true, attached: false);
     expect(msg, contains('已解除原本的任務板'));
     expect(msg, contains('現在沒有板'));
-    // 下一步要講出來——這個狀態不是死路
-    expect(msg, contains('可以再掛一塊'));
   });
 
   test('🔴 解除了、掛新的失敗：錯誤與狀態都要在同一句話裡', () {
@@ -34,10 +32,9 @@ void main() {
     expect(msg, contains('這塊板已經封存'));
     expect(msg, contains('現在沒有板'),
         reason: '只講錯誤的話，人不知道房間被留在哪個狀態');
-    expect(msg, contains('可以再掛一塊'));
   });
 
   test('兩步都過：不要多話', () {
-    expect(boardSwitchStatusMessage(detached: true, attached: true), '換好了。');
+    expect(boardSwitchStatusMessage(detached: true, attached: true), '已更換任務板');
   });
 }

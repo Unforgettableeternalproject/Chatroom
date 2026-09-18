@@ -96,7 +96,7 @@ void main() {
 
     await tester.enterText(
       find.byWidgetPredicate((w) =>
-          w is TextField && w.decoration?.hintText == '再想到什麼就往這裡丟…'),
+          w is TextField && w.decoration?.hintText == '再加一段…'),
       '新的一段',
     );
     await tester.pump();

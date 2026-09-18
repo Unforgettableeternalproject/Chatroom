@@ -48,24 +48,18 @@ void main() {
               humanToken: 'demo-human-token-not-real',
             )),
         hostHealthProvider.overrideWith((ref) async => const HostHealth(
-              process: Probe(ProbeState.ok, 'Hub 正在這台機器上跑'),
-              reachable: Probe(ProbeState.ok, '綁定位址打得通',
-                  caveat: '這只證明本機打得到；別台機器還要防火牆放行與網路可達'),
-              auth: Probe(ProbeState.bad, 'server/.env 裡的 token 不被接受',
-                  caveat: 'Hub 可能還跑著舊的那份——改完 .env 要重啟才生效'),
+              process: Probe(ProbeState.ok, '執行中'),
+              reachable: Probe(ProbeState.ok, '26.176.231.43 打得通'),
+              auth: Probe(ProbeState.bad, 'token 不被接受'),
             )),
         tunnelStatusProvider.overrideWith((ref) async => const TunnelStatus(
               ProbeState.unknown,
               'https://demo-example.trycloudflare.com',
-              '有網址，但從這台機器打不通',
-              caveat: '兩種可能，本機分不出來：①隧道其實活著，只是這台機器繞不回自己的'
-                  '公網網址（很常見）②隧道已經關了、這個檔案是殘留的。'
-                  '請成員或手機開一次那個網址',
+              '有網址，但這台機器打不通',
             )),
         serviceStatusProvider.overrideWith((ref) async => const ServiceStatus(
               true,
-              '狀態：Ready　上次執行：2026/9/9 上午 10:12:00（結果 0）\n'
-              'Hub 進程：PID 24680',
+              '狀態：Ready',
             )),
         hostActionsProvider.overrideWith(
             (ref) => const HostActions(r'C:\kits\chatroom-host-kit')),
@@ -82,7 +76,7 @@ void main() {
             .overrideWith((ref) async => '1.2.1+c123507f9c6f'),
         mcpStatusProvider.overrideWith((ref) async => const McpStatus(
               reach: Probe(ProbeState.ok, 'Hub 連得到'),
-              auth: Probe(ProbeState.ok, 'token 可以通過認證'),
+              auth: Probe(ProbeState.ok, '通過'),
               bridgeVersion: '1.2.1+c123507f9c6f',
             )),
       ],

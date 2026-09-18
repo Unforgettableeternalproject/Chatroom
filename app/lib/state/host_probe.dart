@@ -105,8 +105,7 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
   final env = await ref.watch(hostEnvProvider.future);
   if (env == null || !env.isComplete) return null;
 
-  const blocked = Probe(ProbeState.unknown, '等 Hub 起來才驗得到',
-      caveat: '這不是壞掉，是還輪不到這一關');
+  const blocked = Probe(ProbeState.unknown, '等 Hub 啟動');
 
   // 探測要打哪個位址。
   //
@@ -130,36 +129,24 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
   final local = await _get('http://$probeHost:${env.port}/api/health');
   if (local != 200) {
     return HostHealth(
-      process: Probe(
-        ProbeState.bad,
-        'Hub 沒有在跑',
-        caveat: env.bindsAllInterfaces
-            ? '先啟動它；起不來的話看 logs/ 裡今天那份'
-            : '先啟動它；起不來的話看 logs/ 裡今天那份。'
-                '也可能是它跑著、但綁的不是 $bindHost——'
-                '綁單一介面時本機只打得到 .env 寫的那一個位址',
-      ),
+      process: const Probe(ProbeState.bad, '已停止'),
       reachable: blocked,
       auth: blocked,
     );
   }
-  const process = Probe(ProbeState.ok, 'Hub 正在這台機器上跑');
+  const process = Probe(ProbeState.ok, '執行中');
 
   // ② 綁定位址：綁 0.0.0.0 時所有介面都收，本機這一關必然過，沒有意義——
   // 那時要講的是「別台機器連不連得到我驗不到」，而不是給一個沒有內容的綠燈
   final Probe reachable;
   if (env.bindsAllInterfaces) {
-    reachable = const Probe(ProbeState.unknown, '綁在所有介面（0.0.0.0）',
-        caveat: '本機驗不到防火牆對外放行了沒——要成員連一次才知道');
+    reachable = const Probe(ProbeState.unknown, '綁在所有介面（0.0.0.0）');
   } else {
     // ①打的就是這個位址（綁單一介面時迴環不可達，只有它能打），所以這裡
     // **不再打第二次**。再打一次不會多知道任何事，卻會多一種失敗方式：
     // 兩次探測之間 Hub 剛好停掉時，畫面會變成「進程活著、但綁定位址打不通」
     // ——一個自相矛盾、而且指不出該修什麼的狀態。
-    reachable = Probe(ProbeState.ok, '綁定位址 $bindHost 打得通',
-        caveat: '這與上面那一關是同一次探測：綁單一介面時本機只有這一個'
-            '位址可打，「進程活著」與「綁對介面」分不開。而且它只證明本機打得到'
-            '——別台機器還要防火牆放行與網路可達');
+    reachable = Probe(ProbeState.ok, '$bindHost 打得通');
   }
 
   // ③ token：拿 .env 這份去打一個要認證的端點。401 就是這份不對——
@@ -168,13 +155,11 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
       await _get('http://$probeHost:${env.port}/api/rooms', token: env.token);
   final Probe auth;
   if (code == 200) {
-    auth = const Probe(ProbeState.ok, 'token 可以通過認證');
+    auth = const Probe(ProbeState.ok, '通過');
   } else if (code == 401 || code == 403) {
-    auth = const Probe(ProbeState.bad, 'server/.env 裡的 token 不被接受',
-        caveat: 'Hub 可能還跑著舊的那份——改完 .env 要重啟才生效');
+    auth = const Probe(ProbeState.bad, 'token 不被接受');
   } else {
-    auth = const Probe(ProbeState.unknown, '驗不出來',
-        caveat: 'Hub 有回應但不是預期的狀態碼，看 logs/');
+    auth = const Probe(ProbeState.unknown, '驗不出來');
   }
 
   return HostHealth(process: process, reachable: reachable, auth: auth);

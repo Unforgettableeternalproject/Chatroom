@@ -29,15 +29,14 @@ String boardSwitchStatusMessage({
   if (!detached) {
     // 第一步就沒過：什麼都沒變，原本那塊還掛著
     return error == null
-        ? '沒有更換，原本的任務板還掛在這間房。'
+        ? '沒有更換，原本的任務板還掛在這間房'
         : '沒有更換，原本的任務板還掛在這間房：$error';
   }
-  if (attached) return '換好了。';
+  if (attached) return '已更換任務板';
   // 解除成功、新的沒接上——**這裡最要緊的是講出房間現在的狀態**
   return error == null
-      ? '已解除原本的任務板。這間房現在沒有板，可以再掛一塊。'
-      : '已解除原本的任務板，但新的沒有掛上：$error。'
-          '這間房現在沒有板，可以再掛一塊。';
+      ? '已解除原本的任務板，這間房現在沒有板'
+      : '已解除原本的任務板，但新的沒有掛上：$error。這間房現在沒有板';
 }
 
 /// 換板前的確認。
@@ -57,12 +56,9 @@ Future<bool> confirmBoardSwitch(BuildContext context,
         content: SizedBox(
           width: 420,
           child: Text(
-            '這間房會先解除目前的任務板'
-            '${boardName.isEmpty ? '' : '「$boardName」'}，'
-            '然後讓你挑一塊新的。\n\n'
-            '解除不會刪掉那塊板——它連同上面的卡都留在 BOARDS 裡，'
-            '之後還掛得回來。\n\n'
-            '挑新板之前這間房會處於「沒有板」的狀態，那是正常的。',
+            '先解除目前的任務板'
+            '${boardName.isEmpty ? '' : '「$boardName」'}，再挑一塊新的。'
+            '解除不會刪掉那塊板。',
             style: UepText.serif(size: 12.5, color: s.inkSoft, height: 1.8),
           ),
         ),

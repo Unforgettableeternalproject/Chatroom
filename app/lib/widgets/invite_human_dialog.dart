@@ -88,9 +88,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。'
-              '用別張邀請碼連上的人不會出現在這裡——要邀請他，'
-              '請到設定產生一份邀請碼給他。',
+              '只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。',
               style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.6),
             ),
           ),
@@ -123,7 +121,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Text(
                       all.isEmpty
-                          ? '這裡只列得出與你用同一張邀請碼連進來的人，目前沒有別人'
+                          ? '沒有可邀請的人'
                           // 有人但都在房裡時說清楚，否則看起來像掃描壞了
                           : '列得出來的人都已經在這個房間裡了',
                       textAlign: TextAlign.center,
@@ -161,7 +159,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
-                hintText: '找他來做什麼？（選填，對方會看到）',
+                hintText: '選填，對方會看到',
                 hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),

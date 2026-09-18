@@ -81,10 +81,9 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
   String _messageFor(ApiException e) => switch (e.code) {
         // 這句話幾乎不會出現在 App 上（操作者是人），但出現的時候要說得出
         // 為什麼，而不是一句「沒有權限」
-        'human_only' =>
-          '宣告結局限人類 owner——「真的做完了嗎」要跑測試、看畫面才判斷得出來。',
-        'still_attached' => '這塊板又被掛到聊天室上了，先解除掛接才能收尾。',
-        'never_attached' => '這塊板從沒掛過聊天室，沒有東西可以收尾。',
+        'human_only' => '宣告結局限人類 owner。',
+        'still_attached' => '這塊板還掛在聊天室上，先解除掛接。',
+        'never_attached' => '這塊板從沒掛過聊天室。',
         _ => e.message,
       };
 
@@ -101,12 +100,9 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
             settled
-                ? '它現在是「${widget.current == 'completed' ? '完成' : '廢止'}」，'
-                    '不會出現在進行中的清單裡。改主意的話可以重新打開。'
-                : '收尾之後這塊板不再佔著「進行中」那一頁，但不會消失——'
-                    '切到「已收尾」找得回來，也隨時可以重新打開。\n\n'
-                    '這與封存是兩件事：封存是房間層級的停寫（而且之後會被 Hub '
-                    '清除），這裡說的是這塊板的結局。',
+                ? '目前是「${widget.current == 'completed' ? '完成' : '廢止'}」，'
+                    '可以重新打開。'
+                : '收尾後這塊板移到「已收尾」，隨時可以重新打開。',
             style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
           ),
           if (_error != null) ...[

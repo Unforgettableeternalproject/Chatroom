@@ -59,9 +59,7 @@ class WatchNoticesScreen extends ConsumerWidget {
                 child: Padding(
                   padding: const EdgeInsets.all(32),
                   child: Text(
-                    '沒有在等的東西。\n'
-                    '在卡片上按那顆鈴鐺，它完成、被廢止或又被打開時這裡會出現一筆。\n'
-                    '另外，週期收尾時你動過的卡也會直接通知你，不必先按鈴鐺。',
+                    '沒有在等的東西。',
                     textAlign: TextAlign.center,
                     style: UepText.serif(
                         size: 13, color: s.inkMute, height: 1.6),

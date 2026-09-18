@@ -105,9 +105,7 @@ Future<bool> pushRepo(
     builder: (context) => AlertDialog(
       title: const Text('推送'),
       content: Text('把 ${repo.key} 的 ${repo.unpushedCount} 顆 commit '
-          '推到 origin/${repo.branch}。\n\n'
-          '執行器會先確認待推的 commit 與這裡看到的完全一樣，'
-          '不一樣就不推並回報。'),
+          '推到 origin/${repo.branch}。'),
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -130,7 +128,7 @@ Future<bool> pushRepo(
       brief: buildPushBrief(repo.branch, repo.unpushed.map((c) => c.sha)),
       participantId: pid,
     );
-    if (context.mounted) _say(context, '已排隊：推送 ${repo.repoName}。');
+    if (context.mounted) _say(context, '已排隊：推送 ${repo.repoName}');
     return true;
   } on ApiException catch (e) {
     if (context.mounted) _say(context, _dispatchError(e));

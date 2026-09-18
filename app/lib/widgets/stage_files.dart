@@ -133,7 +133,7 @@ class StageFilesList extends ConsumerWidget {
             style:
                 UepText.display(size: 20, color: context.uep.inkTitle)),
         content: Text(
-          '把「${f.filename}」從這個階段拿下來？\n附件本身仍留在聊天室裡，只是這個階段不再帶著它。',
+          '把「${f.filename}」從這個階段拿下來？',
           style: UepText.serif(
               size: 13, color: context.uep.inkSoft, height: 1.8),
         ),
@@ -320,7 +320,7 @@ Future<String?> showStageNoteDialog(
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: '之後接手的人看到它時需要知道什麼？',
+                    hintText: '說明（選填）',
                     hintStyle: UepText.serif(size: 12, color: s.inkMute),
                     contentPadding:
                         const EdgeInsets.symmetric(vertical: 12),

@@ -235,10 +235,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                       },
                       // 舊文案寫「在聊天室裡建立一塊板」——那在有了上面
                       // 那顆＋之後就是**錯的指引**：它把人送回一條更長的路
-                      subtitle: _status == 'active'
-                          ? '用上面的＋開一塊，或在聊天室裡寫第一張卡。\n'
-                              '板不屬於任何一間房——房間封存了也不會跟著消失'
-                          : null,
+                      subtitle: null,
                     ),
                   ]);
                 }
@@ -294,7 +291,7 @@ class _LibraryNotReady extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '不是沒有任務板，是伺服器還沒開這個端點。\n升級 Hub 之後就會出現。',
+              '請升級 Hub。',
               textAlign: TextAlign.center,
               style: UepText.sans(size: 11.5, color: s.inkMute),
             ),
@@ -678,7 +675,7 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
             style: UepText.sans(size: 13, color: s.ink),
             decoration: const InputDecoration(
               labelText: '名稱',
-              helperText: '之後可以把聊天室掛上來，一塊板可以掛好幾間',
+              helperText: null,
               border: OutlineInputBorder(),
             ),
           ),
@@ -692,14 +689,13 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
           // 這裡選錯要到掛接聊天室的時候才會撞到閘，那時人已經忘了自己選過
           _VisibilityOption(
             label: '公開',
-            detail: '掛著它的聊天室裡的人，都會在 BOARDS 分頁看到這塊板',
+            detail: '掛接的聊天室成員都看得到',
             selected: _visibility == 'public',
             onTap: () => setState(() => _visibility = 'public'),
           ),
           _VisibilityOption(
             label: '私人',
-            detail: '只有你看得到；**只能掛進你自己開的私人聊天室**，'
-                '房裡的人從聊天室進得來，但它不會出現在他們的分頁上',
+            detail: '只有你看得到，且只能掛進私人聊天室',
             selected: _visibility == 'private',
             onTap: () => setState(() => _visibility = 'private'),
           ),

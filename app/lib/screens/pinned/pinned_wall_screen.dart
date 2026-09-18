@@ -97,10 +97,7 @@ class PinnedWallScreen extends ConsumerWidget {
         error: (e, _) => ErrorState(
             error: e, onRetry: () => ref.invalidate(_pinnedProvider(roomId))),
         data: (pinned) => pinned.isEmpty
-            ? const EmptyState(
-                title: '這個房間還沒有釘選任何訊息',
-                subtitle: '在訊息上按右鍵（或長按）即可釘選。'
-                    '釘選會在房裡留下一則系統訊息，並通知原本說這句話的人')
+            ? const EmptyState(title: '還沒有釘選的訊息')
             : Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 720),

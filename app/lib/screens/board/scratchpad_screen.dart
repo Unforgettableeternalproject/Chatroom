@@ -177,12 +177,6 @@ class _PadBodyState extends ConsumerState<_PadBody> {
           ],
         ]),
         const SizedBox(height: 4),
-        Text(
-          '把想到的先放進來，不必先想好順序。'
-          'agent 讀得到，也能對每一段留意見、自己加上新的段落——但改不動'
-          '你寫的內容（你那段的標籤與狀態它動得了）。',
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
-        ),
         if (_allowedTags.isNotEmpty) ...[
           const SizedBox(height: 12),
           _TagFilterBar(
@@ -673,8 +667,7 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            '段落一次只標一個。新增的標籤這塊板上的人都用得到；'
-            '預設的四個每塊板都有，刪不掉。',
+            '段落一次只標一個。',
             style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
           ),
           const SizedBox(height: 12),
@@ -1100,7 +1093,7 @@ class _ConflictDialog extends StatelessWidget {
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            '兩份都在下面。沒有自動合併——合出來的那份會是誰都沒寫過的東西。',
+            '兩份都在下面，不會自動合併。',
             style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
           ),
           const SizedBox(height: 12),
@@ -1218,7 +1211,7 @@ class _AddBlockState extends State<_AddBlock> {
         maxLines: null,
         style: UepText.sans(size: 13, color: s.ink, height: 1.5),
         decoration: InputDecoration(
-          hintText: '再想到什麼就往這裡丟…',
+          hintText: '再加一段…',
           hintStyle: UepText.serif(size: 12, color: s.inkMute),
           border: const OutlineInputBorder(),
           isDense: true,
@@ -1438,9 +1431,7 @@ class ScratchpadSection extends ConsumerWidget {
               ),
         data: (pads) => pads.isEmpty
             ? Text(
-                canEdit
-                    ? '還沒有想法板。想到什麼但還沒想好怎麼拆成卡的，先丟一份進來。'
-                    : '還沒有想法板。',
+                '還沒有想法板。',
                 style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
               )
             : Column(
@@ -1550,7 +1541,6 @@ class _NewPadDialogState extends State<_NewPadDialog> {
           style: UepText.sans(size: 13, color: s.ink),
           decoration: InputDecoration(
             labelText: '叫什麼',
-            helperText: '想到什麼先丟進去，之後再整理成卡',
             helperStyle: UepText.serif(size: 11, color: s.inkMute),
             border: const OutlineInputBorder(),
           ),

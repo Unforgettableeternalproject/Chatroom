@@ -59,9 +59,9 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   String _priority = 'normal';
 
   static const _labels = {
-    'objective': ('新增週期', '一次可交付的成果。做完它就是一個段落。'),
-    'checklist': ('新增階段', '這個週期底下的一組事（「Hub 端」「測試與除錯」）。'),
-    'task': ('新增任務', '一件一個人做得完的事。'),
+    'objective': ('新增週期', ''),
+    'checklist': ('新增階段', ''),
+    'task': ('新增任務', ''),
   };
 
   @override
@@ -104,8 +104,7 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             _field('標題', _title, hint: hint),
             const SizedBox(height: 14),
-            _field('描述（可留白）', _description,
-                hint: '之後接手的人需要知道什麼？', lines: 3),
+            _field('描述（可留白）', _description, lines: 3),
             if (widget.kind == 'task') ...[
               const SizedBox(height: 14),
               Align(

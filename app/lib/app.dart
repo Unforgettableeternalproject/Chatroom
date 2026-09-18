@@ -13,6 +13,7 @@ import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
+import 'screens/help/help_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
 import 'screens/settings/settings_screen.dart';
@@ -48,6 +49,11 @@ GoRouter buildRouter(bool Function() isConfigured) {
       GoRoute(
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),
+      ),
+      // 手冊。各畫面上不放介紹，要解釋的東西集中在這一頁
+      GoRoute(
+        path: '/help',
+        builder: (context, state) => const HelpScreen(),
       ),
       ShellRoute(
         builder: (context, state, child) => AppShell(

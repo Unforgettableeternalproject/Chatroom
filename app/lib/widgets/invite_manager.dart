@@ -29,7 +29,7 @@ import 'uep_button.dart';
 /// ⚠️ 決策 09/07 裁：按鈕留著，用「錯誤講人話」除罪，不做入口隱藏。
 String inviteErrorText(Object error) => switch (error) {
       RootTokenRequiredException() =>
-        '這張憑證發不了邀請——邀請要用主憑證從伺服器端發（已知限制，不是故障）。',
+        '這張憑證發不了邀請，請用主憑證。',
       ApiException(:final message) => message,
       _ => '無法讀取已發出的邀請',
     };
@@ -150,11 +150,8 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                   const SizedBox(height: 8),
                   Text(
                     url.isEmpty
-                        ? '這台 Hub 沒有回報對外網址（多半是隧道沒開）。'
-                          '請填一個對方連得到的位址——隧道網址，或你在'
-                          '區網／VPN 上的 IP。'
-                        : '這是只有你這台機器連得到的位址。對方貼進 App 之後，'
-                          '所有請求會連到他自己的電腦上，而且不會有任何錯誤訊息。',
+                        ? '請填一個對方連得到的位址。'
+                        : '這個位址只有你這台機器連得到。',
                     style: UepText.serif(
                         size: 12, color: UepColors.errorText, height: 1.7),
                   ),
@@ -175,19 +172,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  '這張是發給人的邀請碼。對方在「設定 → 貼上邀請碼」貼進去就能連上。\n'
-                  '這串字等同密碼——任何拿到的人都能進這台 Hub，'
-                  '用私訊給，不要貼在公開頻道。',
+                  '這串字等同密碼，任何拿到的人都能進這台 Hub。',
                   style:
                       UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  // 主持人常忘記這件事，事後會以為是邀請壞了
-                  '註：隧道網址每次重啟都會變。網址換過之後這份邀請碼要重發一次，'
-                  '但 token 本身仍然有效。',
-                  style:
-                      UepText.serif(size: 12, color: s.inkMute, height: 1.7),
                 ),
               ]),
             ),
@@ -278,18 +265,8 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               ),
               const SizedBox(height: 12),
               Text(
-                '這串填進 mcp-kit 安裝器問的「Agent token」那一格'
-                '（不是貼進 App 的邀請碼）。\n'
-                '裝好之後，他指派得動自己的 agent，而其他人（包括你）'
-                '指派不動。',
+                '這串填進 mcp-kit 安裝器的「Agent token」欄位。',
                 style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '註：對方如果已經裝過 kit，不必重裝——把 kit 根目錄 .env 裡的 '
-                'CHATROOM_TOKEN 換成這串就好。換完要讓 agent 重連'
-                '（或重啟 Claude Code / Codex）才算數。',
-                style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
               ),
             ]),
           ),
@@ -323,9 +300,8 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
         title: Text('撤銷這份邀請？',
             style: UepText.display(size: 22, color: s.inkTitle)),
         content: Text(
-          '${label.isEmpty ? '這張 token' : label}將立刻失去存取權，'
-          '之後每一次請求都會被擋下；不過已經連上的即時通道要等它自己斷線後'
-          '才會被擋下（下次重連就進不來了）。此操作無法復原。',
+          '${label.isEmpty ? '這張 token' : label}將立刻失去存取權。'
+          '此操作無法復原。',
           style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.7),
         ),
         actions: [
@@ -366,8 +342,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
       Text('邀請成員', style: UepText.sans(size: 13.5, color: s.inkTitle)),
       const SizedBox(height: 3),
       Text(
-        '發一份邀請給還沒連上這台 Hub 的人。每份邀請可以單獨撤銷，'
-        '不必換掉所有人的 token。',
+        '發一份邀請給還沒連上這台 Hub 的人。',
         style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
       ),
       const SizedBox(height: 12),

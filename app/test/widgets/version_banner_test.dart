@@ -6,16 +6,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 橫幅要印出**兩邊**的 commit。
-///
-/// 只印自己那一半的話，看到的人知道「對不上」卻答不出「哪一邊舊」——而那
-/// 才是決定下一步（重新 build App？還是 Hub 沒更新）的依據。
-const _appBuild =
-    BuildInfo(version: '1.2.3', commit: 'fb150bdccc11', builtAt: '');
+/// 橫幅要講的是**下一步做什麼**：哪一邊舊、去更新哪一邊。
+/// commit hash 回答不了那一題，所以它不在橫幅上（只留在 tooltip）。
+BuildInfo _appBuild(String builtAt) => BuildInfo(
+      version: '1.2.3',
+      commit: 'fb150bdccc11',
+      builtAt: builtAt,
+    );
 
-Widget _host({Map<String, dynamic>? hubBuild}) => ProviderScope(
+Widget _host({
+  required String appBuiltAt,
+  Map<String, dynamic>? hubBuild,
+}) =>
+    ProviderScope(
       overrides: [
-        appBuildProvider.overrideWithValue(_appBuild),
+        appBuildProvider.overrideWithValue(_appBuild(appBuiltAt)),
         hubBuildProvider.overrideWith((ref) async => hubBuild),
       ],
       child: MaterialApp(
@@ -24,40 +29,69 @@ Widget _host({Map<String, dynamic>? hubBuild}) => ProviderScope(
       ),
     );
 
-/// 畫面上所有文字接成一串——訊息本文與右側 mono 是兩個 Text，
-/// 要驗的是「看得到嗎」，不是「在哪一個 widget 裡」。
 String _allText(WidgetTester tester) => tester
     .widgetList<Text>(find.byType(Text))
     .map((t) => t.data ?? '')
     .join(' | ');
 
 void main() {
-  testWidgets('🔴 對不上時兩邊的 commit 都要印出來', (tester) async {
+  testWidgets('App 的建置時間比較早時，叫人更新 App', (tester) async {
     await tester.pumpWidget(_host(
-      hubBuild: {'version': '1.2.3', 'commit': 'f9d4322aaa22'},
+      appBuiltAt: '2026-09-01T00:00:00Z',
+      hubBuild: {
+        'version': '1.2.3',
+        'commit': 'f9d4322aaa22',
+        'built_at': '2026-09-10T00:00:00Z',
+      },
     ));
     await tester.pumpAndSettle();
 
     final text = _allText(tester);
-    expect(text, contains('fb150bd'), reason: 'App 這邊的 commit 不見了');
-    expect(text, contains('f9d4322'),
-        reason: '只印 App 自己那一半，看的人答不出哪一邊舊');
-    expect(text, contains('通常是 App 還沒換新版'));
+    expect(text, contains('App 版本較舊，請更新 App'));
+    // 🔴 hash 不上橫幅
+    expect(text, isNot(contains('fb150bd')));
+    expect(text, isNot(contains('f9d4322')));
   });
 
-  testWidgets('⚠️ Hub 講不出自己是哪一份時印「未知」', (tester) async {
-    // 舊版 Hub 不回 build，或根本連不上——那不是「相符」
-    await tester.pumpWidget(_host());
+  testWidgets('Hub 的建置時間比較早時，叫人更新 Hub', (tester) async {
+    await tester.pumpWidget(_host(
+      appBuiltAt: '2026-09-10T00:00:00Z',
+      hubBuild: {
+        'version': '1.2.3',
+        'commit': 'f9d4322aaa22',
+        'built_at': '2026-09-01T00:00:00Z',
+      },
+    ));
     await tester.pumpAndSettle();
 
-    final text = _allText(tester);
-    expect(text, contains('fb150bd'));
-    expect(text, contains('Hub 未知'));
-    expect(text, contains('無法確認'));
+    expect(_allText(tester), contains('Hub 版本較舊，請更新 Hub'));
+  });
+
+  testWidgets('比不出建置時間時只說無法確認', (tester) async {
+    // 舊版 Hub 不回 build，或根本連不上——那不是「相符」
+    await tester.pumpWidget(_host(appBuiltAt: '2026-09-10T00:00:00Z'));
+    await tester.pumpAndSettle();
+
+    expect(_allText(tester), contains('無法確認版本'));
+  });
+
+  testWidgets('對不上但兩邊建置時間一樣，也只說無法確認', (tester) async {
+    await tester.pumpWidget(_host(
+      appBuiltAt: '2026-09-10T00:00:00Z',
+      hubBuild: {
+        'version': '1.2.3',
+        'commit': 'f9d4322aaa22',
+        'built_at': '2026-09-10T00:00:00Z',
+      },
+    ));
+    await tester.pumpAndSettle();
+
+    expect(_allText(tester), contains('無法確認版本'));
   });
 
   testWidgets('相符時完全不畫', (tester) async {
     await tester.pumpWidget(_host(
+      appBuiltAt: '2026-09-10T00:00:00Z',
       hubBuild: {'version': '1.2.3', 'commit': 'fb150bd'},
     ));
     await tester.pumpAndSettle();

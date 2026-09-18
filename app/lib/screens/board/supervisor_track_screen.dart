@@ -197,22 +197,14 @@ class _Body extends StatelessWidget {
 
     if (snap.visibleTasks.isEmpty) {
       return const Center(
-        child: EmptyState(
-          title: '這塊板上還沒有卡',
-          subtitle: '有人開始做事之後，這裡會列出誰手上有什麼',
-        ),
+        child: EmptyState(title: '這塊板上還沒有卡'),
       );
     }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
       children: [
-        Text(
-          '依人分組，不是依工作分組。板回答「這件事做完了嗎」，'
-          '這裡回答「這個人手上有什麼、卡住了沒」。',
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
-        ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 4),
         for (final k in keys)
           if (!loads[k]!.isEmpty)
             _MemberCard(
@@ -280,7 +272,7 @@ class _MemberCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
               child: Text(
-                '這些卡看起來有人在做，實際上沒有。要有人接手，或由管理者指派。',
+                '這些卡沒有人在做，需要有人接手。',
                 style: UepText.serif(size: 11.5, color: s.inkMute),
               ),
             ),

@@ -222,6 +222,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               )
             : null,
         title: Text('設定', style: UepText.display(size: 22, color: s.inkTitle)),
+        actions: [
+          IconButton(
+            tooltip: '說明',
+            icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
+            onPressed: () => context.push('/help'),
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
@@ -242,8 +249,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onPressed: _pasteInvite,
               ),
               const SizedBox(height: 6),
-              Text('別人給你一份邀請碼時，用它一次填好網址與 token。',
-                  style: UepText.serif(size: 12, color: s.inkMute, height: 1.7)),
               const SizedBox(height: 18),
               _FieldLabel('HUB URL'),
               _box(
@@ -334,15 +339,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Text('App 版本',
                           style: UepText.sans(size: 13.5, color: s.inkTitle)),
                       const SizedBox(height: 3),
-                      Text(
-                        BuildInfo.current.isKnown
-                            ? '回報問題時附上這串，才對得出是哪一份程式碼'
-                            // 明說取不到，不要用版本號填空
-                            : '這份 App 沒有版本標記——build 時沒帶 commit，'
-                                '無法確認它是哪一份程式碼',
-                        style: UepText.serif(
-                            size: 12, color: s.inkMute, height: 1.7),
-                      ),
+                      if (!BuildInfo.current.isKnown)
+                        Text(
+                          '這份 App 沒有版本標記。',
+                          style: UepText.serif(
+                              size: 12, color: s.inkMute, height: 1.7),
+                        ),
                     ],
                   ),
                 ),
@@ -388,8 +390,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Text('系統通知',
                           style: UepText.sans(size: 13.5, color: s.inkTitle)),
                       const SizedBox(height: 3),
-                      Text('只在 app 開著時通知別人發的新訊息；關閉期間的訊息不會補發，'
-                          '回來後靠未讀紅點找。選「關閉」仍會在被 @ 時亮工作列徽章。',
+                      Text('只在 app 開著時通知新訊息。',
                           style:
                               UepText.serif(size: 12, color: s.inkMute)),
                     ],
@@ -431,8 +432,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             style:
                                 UepText.sans(size: 13.5, color: s.inkTitle)),
                         const SizedBox(height: 3),
-                        Text('被 @tag 的訊息、Board 變動、有人加入的廣播、指派投遞，'
-                            '都經 codex queue 喚醒本機 Codex session',
+                        Text('把提及與 Board 變動送到本機 Codex。',
                             style:
                                 UepText.serif(size: 12, color: s.inkMute)),
                       ],
@@ -459,8 +459,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     TextField(
                       controller: _codexThreadController,
                       style: UepText.sans(size: 13, color: s.ink),
-                      decoration: _inputDecoration(
-                          '診斷覆寫 thread id（留空＝依房內成員分流所有 session）', s),
+                      decoration: _inputDecoration('覆寫 thread id（選填）', s),
                       onSubmitted: (v) async {
                         await ref
                             .read(settingsRepoProvider)
@@ -613,21 +612,15 @@ Future<String?> probeWebSocket(
     await conn.close();
     return null;
   } on TimeoutException {
-    return 'REST 通了，但即時通道（WebSocket）在 ${timeout.inSeconds} 秒內沒有握手成功。\n'
-        '網址與 token 是對的——問題在 WS 這條路徑上，'
-        '中間若有反向代理或隧道，確認它有轉發 WebSocket 升級。';
+    return 'REST 正常，但 WebSocket 在 ${timeout.inSeconds} 秒內沒有連上。';
   } on Object catch (e) {
     // 4401 是 Hub 明確拒絕這張憑證。它與「網路不通」是完全不同的處置，
     // 所以要分開講
     final text = '$e';
     final rejected = text.contains('4401') || text.contains('403');
     return rejected
-        ? 'REST 通了，但即時通道拒絕了這張憑證（4401）。\n'
-            '這台 Hub 的 WS 與 REST 收的憑證不一致——'
-            '若 Hub 啟用了憑證分離，請確認用的是「人類」那把'
-            '（server/.env 的 CHATROOM_HUMAN_TOKEN）。'
-        : 'REST 通了，但即時通道連不上：$e\n'
-            '網址與 token 是對的，問題在 WS 這條路徑上。';
+        ? 'REST 正常，但 WebSocket 拒絕了這張憑證（4401）。'
+        : 'REST 正常，但 WebSocket 連不上：$e';
   }
 }
 
@@ -654,10 +647,7 @@ class _CodexDispatchStatusView extends StatelessWidget {
           // 30 分鐘 / 50 則是 codex_dispatcher.dart 的 `_pendingTtl` 與
           // `_pendingLimit`（兩者都是 private，跨檔取不到，只能硬編）；
           // 10 秒是 notification_providers.dart 的補投輪詢週期。
-          st.pending > 0
-              ? '待補投：${st.pending} 則——Codex 沒在跑或正忙時投不出去，'
-                  '每 10 秒重試；超過 30 分鐘或佇列超過 50 則就會放棄'
-              : '待補投：無',
+          st.pending > 0 ? '待補投：${st.pending} 則' : '待補投：無',
           if (st.lastEvent.isNotEmpty) '最後一次：${st.lastEvent}',
         ];
         return Container(

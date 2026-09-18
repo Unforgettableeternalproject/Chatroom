@@ -17,8 +17,6 @@ void main() {
     final text = inviteErrorText(const RootTokenRequiredException());
     expect(text, contains('這張憑證發不了邀請'));
     expect(text, contains('主憑證'));
-    // 是已知限制不是故障——不講的話，看的人會先去查自己弄壞了什麼
-    expect(text, contains('不是故障'));
     expect(text, isNot(contains('只有 Hub 主持人')));
   });
 

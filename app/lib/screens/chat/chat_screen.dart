@@ -768,7 +768,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 卡建在另一個畫面上，這裡不說一聲就沒有任何跡象顯示它成功了
     if (id != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('已加到 Board 的「未分類」，卡片指得回這則訊息。'),
+        content: const Text('已加到 Board 的「未分類」'),
         action: SnackBarAction(
           label: '去看看',
           onPressed: () => context.go('/rooms/${widget.roomId}/board'),
@@ -824,7 +824,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              '訊息會留下「訊息已刪除」的占位，不會從時間軸消失。此操作無法復原。',
+              '此操作無法復原。',
               style: UepText.serif(size: 13.5, color: s.inkSoft),
             ),
           ],
@@ -1093,10 +1093,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                   data: (messages) {
                     if (messages.isEmpty) {
-                      return const EmptyState(
-                        title: '還沒有任何訊息',
-                        subtitle: '發一則訊息，或指派 agent 加入這個房間',
-                      );
+                      return const EmptyState(title: '還沒有任何訊息');
                     }
                     // SelectionArea 取代各訊息自己的 SelectableText：右鍵留給訊息
                     // 選單，而選取可以跨訊息（要複製一整段對話時差很多）
@@ -2068,10 +2065,8 @@ class _OverflowMenu extends ConsumerWidget {
               if (!result.archived && context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(result.alreadyPending
-                      ? '已經有人提議封存了，還在等建立者確認'
-                      : '已送出封存請求，等建立者確認。封存後只能看不能寫，'
-                          '且封存滿一段時間後 Hub 會把整個房間永久刪除'
-                          '（天數由 Hub 設定）'),
+                      ? '已經有人提議封存，等建立者確認'
+                      : '已送出封存請求'),
                 ));
               }
             } on ApiException catch (e) {
@@ -2345,9 +2340,8 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           style: UepText.display(size: 22, color: s.inkTitle),
         ),
         content: Text(
-          '被移出後，他當初用來加入的那張邀請碼會被整張撤銷——他會失去這台 Hub '
-          '的存取權，與他共用同一張邀請碼的人也會一起斷。若他是用主 token 進來的，'
-          '則什麼都撤不掉，只是離開這個聊天室。此操作無法復原。',
+          '他用來加入的邀請碼會被整張撤銷，共用同一張的人也會一起斷線。'
+          '此操作無法復原。',
           style: UepText.serif(size: 13.5, color: s.inkSoft),
         ),
         actions: [
@@ -2395,10 +2389,8 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             style: UepText.display(size: 22, color: s.inkTitle)),
         content: Text(
           who == null
-              ? '這個聊天室目前沒有管理員。接管之後你就是它的管理員，'
-                  '不必再開主持人模式也管得動。'
-              : '$who 目前是這個聊天室的管理員，接管之後他會降為一般成員。'
-                  '房內會留下一則系統訊息，管理權之後可以再移交回去。',
+              ? '接管之後你就是這個聊天室的管理員。'
+              : '$who 目前是管理員，接管之後他會降為一般成員。',
           style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.6),
         ),
         actions: [
@@ -3117,7 +3109,7 @@ class _StyleDialogState extends State<_StyleDialog> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '房內 agent 怎麼跟大家說話。改動會在房裡留下一則系統訊息。',
+                  '房內 agent 的說話方式。',
                   style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
                 ),
               ),

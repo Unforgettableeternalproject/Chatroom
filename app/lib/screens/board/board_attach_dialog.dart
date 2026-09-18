@@ -112,7 +112,7 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
               decoration: InputDecoration(
                 labelText: '板的名字',
                 labelStyle: UepText.mono(size: 10, color: s.inkMute),
-                helperText: '這塊板會活得比這間房久——封存房間不會封存它',
+                helperText: null,
                 helperStyle: UepText.serif(size: 11, color: s.inkMute),
                 border: const OutlineInputBorder(),
               ),
@@ -131,9 +131,7 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             dense: true,
             title: Text('把這間房現在的成員加為板的協作者',
                 style: UepText.sans(size: 12.5, color: s.ink)),
-            subtitle: Text(
-                '只加現在在房裡的人。之後才進來的不會自動拿到權限——'
-                '那要由板的 owner 另外決定',
+            subtitle: Text('只加現在在房裡的人',
                 style: UepText.serif(
                     size: 11.5, color: s.inkMute, height: 1.4)),
           ),
@@ -189,7 +187,7 @@ class _ExistingList extends ConsumerWidget {
       error: (e, _) => boardLibraryUnavailable(e)
           ? Center(
               child: Text(
-                '這個 Hub 還沒有 Board Library，\n只能建新的板。',
+                '這個 Hub 還沒有 Board Library。',
                 textAlign: TextAlign.center,
                 style: UepText.serif(size: 12, color: s.inkMute),
               ),
@@ -205,9 +203,7 @@ class _ExistingList extends ConsumerWidget {
         if (usable.isEmpty) {
           return Center(
             child: Text(
-              '沒有你能掛的板。\n'
-              '（只有板的 owner 或 editor 掛得上去；你還得是這個房間的管理員，'
-              '而私人板只掛得上私人房）',
+              '沒有你能掛的板。',
               textAlign: TextAlign.center,
               style: UepText.serif(size: 12, color: s.inkMute),
             ),

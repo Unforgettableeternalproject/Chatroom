@@ -43,7 +43,7 @@ Future<TaskEdit?> showTaskEditDialog(
     );
 
 /// 改卡片不留痕，與週期／階段改名同一件事（`_board_patch` 不發 system 訊息）。
-const kTaskEditNoTrace = '改動不會在房裡留訊息——看板的人下次看到的就是新的。';
+const kTaskEditNoTrace = '改動不會在房裡留訊息。';
 
 class _TaskEditDialog extends StatefulWidget {
   const _TaskEditDialog({required this.title, required this.description});
@@ -124,7 +124,7 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
               isDense: true,
               border: const OutlineInputBorder(),
               labelText: '敘述',
-              hintText: '選填。這張卡要做什麼、為什麼。',
+              hintText: '選填',
               hintStyle: UepText.sans(size: 12.5, color: s.inkMute),
             ),
           ),

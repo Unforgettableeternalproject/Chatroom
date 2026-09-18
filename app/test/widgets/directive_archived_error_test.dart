@@ -92,8 +92,7 @@ void main() {
     await tester.tap(find.text('送出'));
     await tester.pumpAndSettle();
 
-    expect(find.text('這間房已封存，這則判斷沒有送出，也沒有留在稽核串上。'),
-        findsOneWidget);
+    expect(find.text('這間房已封存，這則判斷沒有送出。'), findsOneWidget);
     // 寫死的那句對不上使用者做的事——他送的是判斷，不是發言
     expect(find.text('此聊天室已封存，無法發言'), findsNothing);
   });

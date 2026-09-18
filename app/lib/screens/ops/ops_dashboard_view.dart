@@ -53,8 +53,7 @@ class OpsDashboardView extends StatelessWidget {
     if (board.runners.isEmpty) {
       return const _Empty(
         title: '沒有執行器在線',
-        subtitle: '派工會排在佇列裡等一台不會來的執行器，所以 Hub 會直接擋下建單。\n'
-            '請確認那台機器上的執行器已經啟動。',
+        subtitle: '請先啟動執行器。',
       );
     }
     return ListView(

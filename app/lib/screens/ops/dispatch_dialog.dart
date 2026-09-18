@@ -154,7 +154,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
       return;
     }
     if (_projects!.isEmpty) {
-      _reject('沒有可派工的專案：執行器沒有上線，或它的 projects 白名單是空的。');
+      _reject('沒有可派工的專案');
       return;
     }
     final project = _project;
@@ -268,8 +268,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               // 那台機器上，不在這個畫面裡
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('沒有執行器宣告任何專案。先確認執行器上線，'
-                    '並把專案加進它的 projects 白名單。',
+                child: Text('沒有執行器宣告任何專案',
                     style: UepText.serif(
                         size: 11.5, color: UepColors.errorText, height: 1.5)),
               )

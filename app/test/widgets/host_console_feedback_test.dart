@@ -109,14 +109,14 @@ void main() {
       await tester.pumpWidget(wrap({'kind': 'tunnel_start', 'pending': true}));
       await tester.pumpAndSettle();
 
-      expect(find.text('開通中…'), findsOneWidget);
+      expect(find.text('開啟中…'), findsOneWidget);
       // 這幾秒不講清楚，人會再按一次——而每按一次就多一條隧道
-      expect(find.textContaining('Cloudflare'), findsOneWidget);
+      expect(find.textContaining('正在開啟隧道'), findsOneWidget);
     });
   });
 
   group('結果要出現在按鈕旁邊，不是頁尾', () {
-    testWidgets('🔴 本次修的：啟動結果畫在「啟動與自啟」區，不在「資料與安全」',
+    testWidgets('🔴 本次修的：啟動結果畫在「HUB」區，不在「備份」',
         (tester) async {
       tester.view.physicalSize = const Size(760, 2400);
       tester.view.devicePixelRatio = 1.0;
@@ -134,14 +134,14 @@ void main() {
       expect(find.text('Hub 起來了。'), findsOneWidget);
 
       final result = tester.getTopLeft(find.text('Hub 起來了。')).dy;
-      final controlTitle = tester.getTopLeft(find.text('啟動與自啟')).dy;
-      final dataTitle = tester.getTopLeft(find.text('資料與安全')).dy;
+      final controlTitle = tester.getTopLeft(find.text('HUB')).dy;
+      final dataTitle = tester.getTopLeft(find.text('備份')).dy;
       expect(result, greaterThan(controlTitle));
       expect(result, lessThan(dataTitle),
-          reason: '結果落在「資料與安全」標題之後＝它畫在別人的框裡');
+          reason: '結果落在「備份」標題之後＝它畫在別人的框裡');
     });
 
-    testWidgets('資料類的結果仍然留在「資料與安全」區', (tester) async {
+    testWidgets('資料類的結果仍然留在「備份」區', (tester) async {
       tester.view.physicalSize = const Size(760, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -149,11 +149,11 @@ void main() {
       await tester.pumpWidget(wrap({
         'kind': 'backup',
         'ok': true,
-        'path': r'C:\kits\chatroom-host-kit\backups\2026-09-14.zip',
+        'dest': r'C:\kits\chatroom-host-kit\backups\2026-09-14.zip',
       }));
       await tester.pumpAndSettle();
 
-      final dataTitle = tester.getTopLeft(find.text('資料與安全')).dy;
+      final dataTitle = tester.getTopLeft(find.text('備份')).dy;
       final result = tester.getTopLeft(find.textContaining('backups')).dy;
       expect(result, greaterThan(dataTitle));
     });
@@ -170,7 +170,7 @@ void main() {
       // 那比沒有回饋更糟——沒有回饋時至少沒有人以為可以再按
       await tester.pumpWidget(wrap(null, ops: [
         {'kind': 'hub_start', 'pending': true},
-        {'kind': 'backup', 'ok': true, 'path': r'C:\kits\backups\x.zip'},
+        {'kind': 'backup', 'ok': true, 'dest': r'C:\kits\backups\x.zip'},
       ]));
       await tester.pumpAndSettle();
 
@@ -245,8 +245,7 @@ void main() {
       expect(find.text('已經有一條'), findsOneWidget);
       expect(callbackOf(tester, '已經有一條'), isNull,
           reason: '空函式不算禁用——那只是按了沒反應');
-      // 光是禁用不夠——要講得出路在哪，否則他會去找別的方法達成同一件事
-      expect(find.textContaining('先按「關閉隧道」'), findsOneWidget);
+      // 光是禁用不夠——出路那顆按鈕要在畫面上
       expect(find.text('關閉隧道'), findsOneWidget);
       expect(callbackOf(tester, '關閉隧道'), isNotNull,
           reason: '出路那顆必須真的按得下去');
@@ -267,80 +266,8 @@ void main() {
     });
   });
 
-  group("啟動區的說明文字", () {
-    /// 🔴 **這段文字是一條指示，而指示要他做得到。**
-    ///
-    /// 2026-09-11 起 Hub 經 `hidden-launch.vbs` 在背景跑，沒有 console
-    /// 視窗。但文案還留著「關掉那個視窗也等於停止」——照著做的人會在
-    /// 工作列上找一個永遠找不到的東西，然後以為 Hub 關不掉。
-    ///
-    /// 正面與負面兩半都要驗：只驗「不含舊句子」的話，把整段文字刪掉也會
-    /// 全綠，而那時使用者根本不知道該怎麼停它。
-    testWidgets("講的是背景執行與停止鍵，不是一個不存在的視窗", (tester) async {
-      tester.view.physicalSize = const Size(760, 2400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-
-      await tester.pumpWidget(wrap(null));
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining("沒有視窗"), findsOneWidget,
-          reason: "要講清楚它不會跳視窗——不然使用者會等一個不會出現的東西");
-      expect(find.textContaining("停止 Hub"), findsWidgets,
-          reason: "停它的唯一入口是那顆按鈕，說明文字要指向它");
-      expect(find.textContaining("關掉那個視窗"), findsNothing,
-          reason: "那個視窗在 2026-09-11 之後不存在了");
-
-      // 🔴 自啟那段原本寫「它連前景視窗裡跑的那個也停得掉」——與上面
-      // 「Hub 跑在背景，沒有視窗」在**同一頁**互相打臉。它真正要講的是
-      // 「不分來源都停得掉」，那半是對的、留著。
-      expect(find.textContaining("都停得掉"), findsOneWidget,
-          reason: "自啟那段要講的是「不分來源都停得掉」，那半不能連著一起刪");
-      expect(find.textContaining("視窗裡跑"), findsNothing,
-          reason: "同一頁不能一邊說沒有視窗、一邊叫人去停「視窗裡跑的那個」");
-    });
-  });
-
-  group("隧道說明也不能指向那個視窗", () {
-    /// 🔴 **這條的前一版搆不到它要守的字串。**
-    ///
-    /// 舊斷言寫 `find.textContaining("關掉那個視窗")`，而畫面上的實際字串是
-    /// 「關掉那個**隧道**視窗也等於關閉。」——多兩個字，`contains` 不成立，
-    /// 所以它**永遠綠**。更何況它掛在 `wrap(null)`（沒有網址）底下，那段
-    /// 文案在沒有網址時根本不渲染：兩重搆不到。
-    ///
-    /// 現在改成餵一條活著的隧道，並且正負兩半都驗——只驗「不含某句」的話，
-    /// 整段文案沒渲染出來它也會綠。
-    const live = TunnelStatus(
-      ProbeState.ok,
-      'https://live.trycloudflare.com',
-      '隧道開著',
-    );
-
-    testWidgets("有隧道時：出路只有「關閉隧道」那顆，不是關一個視窗", (tester) async {
-      tester.view.physicalSize = const Size(760, 2400);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-
-      await tester.pumpWidget(wrap(null, tunnel: live));
-      await tester.pumpAndSettle();
-
-      // 正面那一半：出路要講得出來，而且指向真的存在的那顆按鈕
-      expect(find.textContaining("先按「關閉隧道」"), findsOneWidget,
-          reason: "光是不提視窗不夠——他得知道到底要按哪裡");
-      expect(find.text("關閉隧道"), findsOneWidget);
-      // 負面那一半：隧道自 2026-09-11（1ae1a61）起也沒有視窗了
-      //
-      // ⚠️ 不能寫成 `textContaining("視窗")` findsNothing：同一頁的啟動區
-      // 有一句「Hub 跑在背景，沒有視窗」，那句是對的、也必須留著，
-      // 泛泛地禁掉「視窗」兩個字會把它一起打掉。
-      expect(find.textContaining("隧道視窗"), findsNothing,
-          reason: "1ae1a61 之後隧道也在背景跑，沒有視窗可以關");
-      expect(find.textContaining("也等於關閉"), findsNothing,
-          reason: "「關掉某個東西也等於關閉」那條路已經不存在了");
-    });
-
-    testWidgets("殘留的舊網址不能被說成「已經有一條」", (tester) async {
+  group("殘留的舊網址", () {
+    testWidgets("不能被說成「已經有一條」，而且仍然按不動", (tester) async {
       tester.view.physicalSize = const Size(760, 2400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
@@ -351,15 +278,15 @@ void main() {
           tunnel: const TunnelStatus(
             ProbeState.unknown,
             'https://stale.trycloudflare.com',
-            '有網址，但從這台機器打不通',
+            '有網址，但這台機器打不通',
           )));
       await tester.pumpAndSettle();
 
       expect(find.text("已經有一條"), findsNothing,
           reason: "打不通的時候這句話可能是假的");
       expect(find.text("偵測到舊網址"), findsOneWidget);
-      expect(find.textContaining("先按「關閉隧道」"), findsOneWidget,
-          reason: "確定它死了的人要有路把它清掉，否則唯一的入口就是死路");
+      // 確定它死了的人要有路把它清掉，否則唯一的入口就是死路
+      expect(find.text("關閉隧道"), findsOneWidget);
       // 禁用照舊：殘留與「活著只是繞不回來」在這台機器上分不出來，
       // 而後者開第二條就是那個關不掉的公開入口
       expect(callbackOf(tester, "偵測到舊網址"), isNull,
