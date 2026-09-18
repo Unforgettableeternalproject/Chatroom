@@ -14,6 +14,7 @@ import '../../state/host_probe.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
+import '../../widgets/uep_tab_bar.dart';
 
 /// 主機控制台——**這台機器上的 Hub**。
 ///
@@ -79,34 +80,112 @@ class HostConsoleScreen extends ConsumerWidget {
           : Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
-                child: ListView(
-                  padding: const EdgeInsets.all(32),
-                  children: [
-                    // 一個人可以同時是主持人與成員（多半就是），所以兩塊並存；
-                    // 沒有的那一塊**整個不出現**，不是空著佔一個標題
-                    if (mcp != null) ...[
-                      _McpSection(kit: mcp),
-                      if (kit != null) _sep(s),
-                    ],
-                    if (kit != null) ...[
-                      _HealthSection(),
-                      _sep(s),
-                      _ShareSection(kit: kit),
-                      _sep(s),
-                      const _TunnelSection(),
-                      _sep(s),
-                      const _ControlSection(),
-                      _sep(s),
-                      const _DataSection(),
-                      _sep(s),
-                      _KitSection(kit: kit),
-                    ],
-                  ],
-                ),
+                child: _HostConsoleBody(kit: kit, mcp: mcp),
               ),
             ),
     );
   }
+}
+
+/// 頁內分頁：主持人的事與 agent 接入的事分開放。
+///
+/// 一個人可以同時是主持人與成員（多半就是），但那兩件事要回答的問題完全
+/// 不同——原本一條 ListView 排下來，找「我的 agent 連上了嗎」要先捲過
+/// 六個主持人專用的區塊。
+///
+/// 🔴 **只有一種 kit 時不畫分頁列。** 一個只有一個分頁的分頁列是純粹的
+/// 雜訊，還會讓人以為另一邊有東西可看。那時直接顯示那一頁（大標照舊）。
+class _HostConsoleBody extends StatefulWidget {
+  const _HostConsoleBody({required this.kit, required this.mcp});
+
+  final HostKit? kit;
+  final McpKit? mcp;
+
+  @override
+  State<_HostConsoleBody> createState() => _HostConsoleBodyState();
+}
+
+class _HostConsoleBodyState extends State<_HostConsoleBody>
+    with SingleTickerProviderStateMixin {
+  TabController? _tabController;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // kit 偵測是非同步的：兩種都到齊之後才需要分頁列，而 TabController 的
+    // length 建了就不能改，所以到齊那一刻才建。索引 0 是 Hub——進來的人
+    // 多半是為了主持那一半（沒有 host-kit 時根本不會有這個入口）
+    if (_tabController == null &&
+        widget.kit != null &&
+        widget.mcp != null) {
+      _tabController = TabController(length: 2, vsync: this);
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final kit = widget.kit;
+    final mcp = widget.mcp;
+    final controller = _tabController;
+
+    if (kit == null) {
+      return _agentTab(s, mcp!);
+    }
+    if (mcp == null || controller == null) {
+      return _hubTab(s, kit);
+    }
+    return Column(
+      children: [
+        UepTabBar(
+          controller: controller,
+          labels: const ['Hub 主持', 'Agent 接入'],
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: controller,
+            children: [_hubTab(s, kit), _agentTab(s, mcp)],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 主持人這一半：這台機器上的 Hub 活著嗎、要發什麼給成員、怎麼起停。
+  Widget _hubTab(UepSurface s, HostKit kit) => ListView(
+        padding: const EdgeInsets.all(32),
+        children: [
+          Text('Hub 主持', style: UepText.pageTitle(color: s.inkTitle)),
+          const SizedBox(height: 22),
+          _HealthSection(),
+          _sep(s),
+          _ShareSection(kit: kit),
+          _sep(s),
+          const _TunnelSection(),
+          _sep(s),
+          const _ControlSection(),
+          _sep(s),
+          const _DataSection(),
+          _sep(s),
+          _KitSection(kit: kit),
+        ],
+      );
+
+  /// 成員這一半：這台機器的 agent 連得上 Hub 嗎。
+  Widget _agentTab(UepSurface s, McpKit mcp) => ListView(
+        padding: const EdgeInsets.all(32),
+        children: [
+          Text('Agent 接入', style: UepText.pageTitle(color: s.inkTitle)),
+          const SizedBox(height: 22),
+          _McpSection(kit: mcp),
+        ],
+      );
 }
 
 /// 區塊之間的分隔——與設定頁同一組間距（26／線／22）。
@@ -315,7 +394,7 @@ class _McpSection extends ConsumerWidget {
     final env = ref.watch(mcpEnvProvider).value;
 
     return _Panel(
-      title: 'Agent 接入',
+      title: '接入狀態',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

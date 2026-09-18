@@ -21,6 +21,7 @@ import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/invite_manager.dart';
 import '../../widgets/uep_button.dart';
+import '../../widgets/uep_tab_bar.dart';
 import '../../ws/ws_client.dart';
 import '../../ws/ws_protocol.dart';
 
@@ -242,7 +243,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
           child: Column(
             children: [
-              _tabBar(s),
+              UepTabBar(
+                controller: _tabController,
+                labels: const ['連線', '視覺', '個人化'],
+              ),
               Expanded(
                 child: TabBarView(
                   controller: _tabController,
@@ -256,34 +260,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  /// 分頁列：底線用 `s.line`，選中的標籤走 gold。
-  Widget _tabBar(UepSurface s) {
-    const labels = ['連線', '視覺', '個人化'];
-    return Container(
-      decoration:
-          BoxDecoration(border: Border(bottom: BorderSide(color: s.line))),
-      child: TabBar(
-        controller: _tabController,
-        indicatorColor: UepColors.gold,
-        indicatorSize: TabBarIndicatorSize.tab,
-        dividerColor: Colors.transparent,
-        splashFactory: NoSplash.splashFactory,
-        tabs: [
-          for (var i = 0; i < labels.length; i++)
-            Tab(
-              height: 42,
-              child: MonoLabel(
-                labels[i],
-                size: 11,
-                color:
-                    _tabController.index == i ? UepColors.gold : s.inkMute,
-              ),
-            ),
-        ],
       ),
     );
   }
