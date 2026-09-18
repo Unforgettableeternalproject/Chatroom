@@ -55,3 +55,6 @@ test/**/failures/
 windows/flutter/generated_plugin_registrant.cc
 windows/flutter/generated_plugin_registrant.h
 windows/flutter/generated_plugins.cmake
+
+# gen-l10n 產物，flutter build 會自動產生
+lib/l10n/app_localizations*.dart

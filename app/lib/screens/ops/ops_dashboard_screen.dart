@@ -11,6 +11,7 @@ import '../../state/rooms_providers.dart';
 import '../../state/runs_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import 'exceptions_panel.dart';
 import 'ops_actions.dart';
 import 'ops_dashboard_view.dart';
 
@@ -138,6 +139,10 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                 ],
               ),
             ),
+            // 異常面板的入口：跨房的，所以不畫在這個單房面板裡，只留一顆
+            // 帶未讀計數的 icon
+            const OpsExceptionsEntry(),
+            const SizedBox(width: 4),
             MonoLabel('每 10 秒更新', size: 9, letterSpacing: 1.2),
             const SizedBox(width: 10),
             IconButton(

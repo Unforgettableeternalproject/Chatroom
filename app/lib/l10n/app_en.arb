@@ -1,0 +1,36 @@
+{
+  "@@locale": "en",
+
+  "settingsTitle": "Settings",
+  "helpTooltip": "Help",
+  "hostConsoleTitle": "This machine",
+
+  "settingsTabConnection": "Connection",
+  "settingsTabVisual": "Appearance",
+  "settingsTabPersonal": "Personal",
+
+  "connectionSectionTitle": "Connection settings",
+  "visualSectionTitle": "Appearance",
+  "personalSectionTitle": "Personal",
+
+  "fieldHubUrl": "Hub address",
+  "fieldApiToken": "API token",
+  "fieldDisplayName": "Display name (used when joining a room)",
+  "fieldDeviceKey": "Device identity",
+
+  "darkThemeLabel": "Dark theme",
+  "darkThemeHint": "Can also be switched from the title bar",
+  "fontScaleLabel": "Text size",
+  "fontScaleHint": "Applies to the whole app right away.",
+  "fontScaleTiny": "Tiny",
+  "fontScaleSmall": "Small",
+  "fontScaleMedium": "Medium",
+  "fontScaleLarge": "Large",
+  "fontScaleXLarge": "Huge",
+
+  "languageLabel": "Language",
+  "languageHint": "Applies right away.",
+  "languageSystem": "Follow system",
+  "languageZhTW": "繁體中文",
+  "languageEnglish": "English"
+}

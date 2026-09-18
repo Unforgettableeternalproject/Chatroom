@@ -14,6 +14,7 @@ import '../../core/config/build_info.dart';
 import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/app_localizations.dart';
 import '../../state/app_providers.dart';
 import '../../core/logging/redacting_logger.dart';
 import '../../notifications/codex_dispatcher.dart';
@@ -216,6 +217,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   Widget build(BuildContext context) {
     final s = context.uep;
     final config = ref.watch(appConfigProvider);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       backgroundColor: s.bg,
@@ -229,10 +231,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 onPressed: () => context.pop(),
               )
             : null,
-        title: Text('設定', style: UepText.pageTitle(color: s.inkTitle)),
+        title:
+            Text(l10n.settingsTitle, style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           IconButton(
-            tooltip: '說明',
+            tooltip: l10n.helpTooltip,
             icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
             onPressed: () => context.push('/help/settings'),
           ),
@@ -245,7 +248,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             children: [
               UepTabBar(
                 controller: _tabController,
-                labels: const ['連線', '視覺', '個人化'],
+                labels: [
+                  l10n.settingsTabConnection,
+                  l10n.settingsTabVisual,
+                  l10n.settingsTabPersonal,
+                ],
               ),
               Expanded(
                 child: TabBarView(
@@ -267,10 +274,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   // ---------- 連線 ----------
 
   Widget _connectionTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
-        Text('連線設定', style: UepText.pageTitle(color: s.inkTitle)),
+        Text(l10n.connectionSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
         const SizedBox(height: 22),
         UepButton(
           label: '貼上邀請碼',
@@ -280,7 +289,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           onPressed: _pasteInvite,
         ),
         const SizedBox(height: 18),
-        _FieldLabel('Hub 位址'),
+        _FieldLabel(l10n.fieldHubUrl),
         _box(
           context,
           TextField(
@@ -290,7 +299,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           ),
         ),
         const SizedBox(height: 18),
-        _FieldLabel('API token'),
+        _FieldLabel(l10n.fieldApiToken),
         _box(
           context,
           TextField(
@@ -393,20 +402,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   // ---------- 視覺 ----------
 
   Widget _visualTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
-        Text('視覺', style: UepText.pageTitle(color: s.inkTitle)),
+        Text(l10n.visualSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
         const SizedBox(height: 22),
         Row(children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('深色主題',
+                Text(l10n.darkThemeLabel,
                     style: UepText.sans(size: 13.5, color: s.inkTitle)),
                 const SizedBox(height: 3),
-                Text('也可在標題列直接切換',
+                Text(l10n.darkThemeHint,
                     style: UepText.serif(size: 12, color: s.inkMute)),
               ],
             ),
@@ -423,18 +434,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 26),
         Divider(color: s.line, height: 1),
         const SizedBox(height: 22),
-        Text('字級', style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        Text(l10n.fontScaleLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
         const SizedBox(height: 3),
-        Text('選了立刻套用到整個 App。',
+        Text(l10n.fontScaleHint,
             style: UepText.serif(size: 12, color: s.inkMute)),
         const SizedBox(height: 12),
         Row(children: [
-          for (final (scale, label) in const [
-            (FontScalePref.tiny, '極小'),
-            (FontScalePref.small, '小'),
-            (FontScalePref.medium, '中'),
-            (FontScalePref.large, '大'),
-            (FontScalePref.xlarge, '特大'),
+          for (final (scale, label) in [
+            (FontScalePref.tiny, l10n.fontScaleTiny),
+            (FontScalePref.small, l10n.fontScaleSmall),
+            (FontScalePref.medium, l10n.fontScaleMedium),
+            (FontScalePref.large, l10n.fontScaleLarge),
+            (FontScalePref.xlarge, l10n.fontScaleXLarge),
           ]) ...[
             UepButton(
               label: label,
@@ -448,8 +460,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const SizedBox(width: 10),
           ],
         ]),
-        // 「語言」留在這一格：i18n 還沒做，**不放沒有作用的選項**——
-        // 看得到又切不動比沒有更糟。等字串抽出來之後補在這裡。
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        // 語言。選中即存（跟字級同一個手勢），沒有「套用」按鈕——
+        // 整個 App 立刻換掉，看得到就是套用了
+        Text(l10n.languageLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text(l10n.languageHint,
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Row(children: [
+          for (final (pref, label) in [
+            (LocalePref.system, l10n.languageSystem),
+            (LocalePref.zhTW, l10n.languageZhTW),
+            (LocalePref.en, l10n.languageEnglish),
+          ]) ...[
+            UepButton(
+              label: label,
+              small: true,
+              variant: config.locale == pref
+                  ? UepButtonVariant.gold
+                  : UepButtonVariant.outline,
+              onPressed: () =>
+                  ref.read(appConfigProvider.notifier).setLocale(pref),
+            ),
+            const SizedBox(width: 10),
+          ],
+        ]),
         const SizedBox(height: 26),
       ],
     );
@@ -458,12 +497,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   // ---------- 個人化 ----------
 
   Widget _personalTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
-        Text('個人化', style: UepText.pageTitle(color: s.inkTitle)),
+        Text(l10n.personalSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
         const SizedBox(height: 22),
-        _FieldLabel('顯示名稱（進房時使用）'),
+        _FieldLabel(l10n.fieldDisplayName),
         _box(
           context,
           TextField(
@@ -476,7 +517,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 20),
         _saveRow(s),
         const SizedBox(height: 22),
-        _FieldLabel('本機裝置識別'),
+        _FieldLabel(l10n.fieldDeviceKey),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: BoxDecoration(

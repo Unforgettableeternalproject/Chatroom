@@ -841,6 +841,25 @@ CREATE TABLE IF NOT EXISTS runner (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_host_label
     ON runner(host, label);
 
+-- 執行器上下線：監控面板要的「掉線／恢復」在此之前只是一則房內 system
+-- 訊息，而訊息的內容是給人看的中文，機器要精準過濾就只能解析字串。
+-- 為什麼不塞進 `agent_run_event`：那張表的 `run_id` 有外鍵指著 `agent_run`，
+-- 而掉線這件事**沒有對應的 run**（它掉的時候手上那幾筆還在跑，但事件不屬
+-- 於其中任何一筆）。
+-- `room_id` 是「掉線當下還有它的 run 在跑的 ops 房」——監控面板用它決定
+-- 這筆事件給不給某個人看，所以沒有房的掉線不記（沒有人在等它的機器）。
+CREATE TABLE IF NOT EXISTS runner_event (
+    id          TEXT PRIMARY KEY,
+    runner_id   TEXT NOT NULL,
+    room_id     TEXT NOT NULL,
+    -- runner_offline | runner_online
+    kind        TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runner_event_created
+    ON runner_event(created_at);
+
 CREATE TABLE IF NOT EXISTS runner_command (
     id          TEXT PRIMARY KEY,
     runner_id   TEXT NOT NULL REFERENCES runner(id),

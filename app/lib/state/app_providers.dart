@@ -32,6 +32,7 @@ class AppConfig {
     required this.preferredName,
     required this.deviceKey,
     this.fontScale = FontScalePref.medium,
+    this.locale = LocalePref.system,
   });
 
   /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
@@ -50,6 +51,7 @@ class AppConfig {
         preferredName: settings.preferredName,
         deviceKey: deviceKey,
         fontScale: settings.fontScale,
+        locale: settings.locale,
       );
 
   final String serverUrl;
@@ -61,6 +63,10 @@ class AppConfig {
   /// 字級偏好；套用在 `app.dart` 的 MediaQuery textScaler。
   final FontScalePref fontScale;
 
+  /// 語言偏好；套用在 `app.dart` 的 MaterialApp.locale
+  /// （`system` → 傳 null，交給 Flutter 依系統語言解析）。
+  final LocalePref locale;
+
   bool get isConfigured => serverUrl.isNotEmpty;
 
   AppConfig copyWith({
@@ -70,6 +76,7 @@ class AppConfig {
     String? preferredName,
     String? deviceKey,
     FontScalePref? fontScale,
+    LocalePref? locale,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -78,6 +85,7 @@ class AppConfig {
         preferredName: preferredName ?? this.preferredName,
         deviceKey: deviceKey ?? this.deviceKey,
         fontScale: fontScale ?? this.fontScale,
+        locale: locale ?? this.locale,
       );
 }
 
@@ -111,6 +119,11 @@ class AppConfigNotifier extends Notifier<AppConfig> {
   Future<void> setFontScale(FontScalePref scale) async {
     await _settings.setFontScale(scale);
     state = state.copyWith(fontScale: scale);
+  }
+
+  Future<void> setLocale(LocalePref pref) async {
+    await _settings.setLocale(pref);
+    state = state.copyWith(locale: pref);
   }
 
   Future<void> setPreferredName(String name) async {

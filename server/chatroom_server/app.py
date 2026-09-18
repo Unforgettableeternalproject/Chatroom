@@ -2993,7 +2993,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     #                                                   message.sender_id 都指著它
     #   agent_run_event → agent_run                     event 指著 run
     #   agent_run → room                                run 帶著房的外鍵
-    _ROOM_OWNED_TABLES = ("agent_run_event", "agent_run",
+    _ROOM_OWNED_TABLES = ("runner_event", "agent_run_event", "agent_run",
                           "attachment", "archive_request", "question",
                           "message", "assignment", "participant")
 
@@ -13081,6 +13081,35 @@ def create_app(config: Config | None = None) -> FastAPI:
                            - older_than).isoformat())
         await app.state.db.execute(sql, params)
 
+    async def _record_runner_event(runner_id: str, kind: str) -> None:
+        """執行器上下線留一筆，供監控面板跨房彙總（`GET /api/ops/exceptions`）。
+
+        **與房內那句話分開**：`_announce_runner_presence` 會被節流（同一台
+        30 分鐘一則）、預期中的重啟還會整個不講——那是為了不洗版，不是
+        「這件事沒發生」。監控面板要的是後者，所以這裡不看節流。
+
+        只記在「現在還有它的 run 的 ops 房」：同 `_announce_runner_presence`
+        的判準，也是面板的可見性依據（沒有房就沒有人看得到這筆）。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT * FROM runner WHERE id=?", (runner_id,))).fetchone()
+        if row is None:
+            return
+        rooms = await (await app.state.db.execute(
+            "SELECT DISTINCT a.room_id AS room_id FROM agent_run a JOIN room r"
+            " ON r.id=a.room_id WHERE a.runner_id=? AND r.kind='ops'"
+            " AND r.status='active'"
+            " AND a.status IN ('queued','claimed','running','limited')",
+            (runner_id,))).fetchall()
+        detail = json.dumps({"label": row["label"] or row["host"],
+                             "host": row["host"]}, ensure_ascii=False)
+        now = _now()
+        for r in rooms:
+            await app.state.db.execute(
+                "INSERT INTO runner_event (id, runner_id, room_id, kind,"
+                " detail_json, created_at) VALUES (?,?,?,?,?,?)",
+                (_uid(), runner_id, r["room_id"], kind, detail, now))
+
     async def _announce_runner_presence(runner_id: str, online: bool) -> None:
         """執行器上線／離線在**它有未結束 run 的 ops 房**裡講一句，mention 人類。
 
@@ -13583,6 +13612,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 心跳＝這台手上的 run 還在跑，它們帶進房的身分也就還在工作
         await _extend_runner_holds(runner_id)
         await _commit_with_retry(db)
+        if was_offline:
+            # 恢復連線也要留痕。面板上只有「掉線」而沒有配對的「恢復」時，
+            # 看的人無從判斷那台現在回來了沒——而那正是他要決定去不去重啟
+            # 那台機器的依據
+            await _record_runner_event(runner_id, "runner_online")
+            await _commit_with_retry(db)
         if was_offline and runner_id in runner_offline_quiet:
             # 那一次掉線沒有講，回來也不講：面板上有命令進度，房裡不需要
             # 一則沒有前情的「已恢復連線」
@@ -13916,6 +13951,173 @@ def create_app(config: Config | None = None) -> FastAPI:
             "active_runs": [_run_public(r) for r in active],
         }
 
+    # ---------- 監控器：跨房的派工例外彙總（§8 MVP） ----------
+
+    # 事件的 reason → 面板上的分類。**認 reason 不認中文**：房內那些系統
+    # 訊息的內容是給人看的，改一個字就會讓過濾無聲失效。
+    #
+    # ⚠️ 這份清單是**四類已知例外**，不是「所有派工例外」：hook 擋下的
+    # 工具呼叫、MCP 伺服器沒接上，現在完全沒有事件源（執行器只在本機 log
+    # 擋，不回寫 Hub）。面板的文案要講得出這個範圍，不要讓它看起來像全量。
+    _EXCEPTION_REASON_KINDS: dict[str, str] = {
+        "stalled": "stalled",
+        "resumed": "resumed",
+        # 逾時的兩條路都在 `runner/chatroom_runner/run.py` 的 `_classify`：
+        # 硬牆（`wall_clock`，run 被 timeout 殺掉）與收尾請求逾時
+        # （`soft_stop_timeout`，等不到自己收工而被硬殺）
+        "wall_clock": "timeout",
+        "soft_stop_timeout": "timeout",
+        "rate_limit": "rate_limited",
+        "weekly_limit": "rate_limited",
+        "usage_soft_cap": "rate_limited",
+    }
+    # 退避階梯的 reason 帶分鐘數（`rate_limit_backoff_30m`），前綴比對
+    _EXCEPTION_REASON_PREFIX = "rate_limit_backoff_"
+    _EXCEPTION_SEVERITY: dict[str, str] = {
+        "stalled": "warn",
+        "resumed": "info",
+        "timeout": "error",
+        "rate_limited": "warn",
+        "runner_offline": "error",
+        "runner_online": "info",
+    }
+
+    def _visible_rooms_clause(alias: str, session_key: str, party: str
+                              ) -> tuple[str, tuple]:
+        """「這個人看得到哪些房」的 SQL 條件。
+
+        ⚠️ 與 `GET /api/rooms` 的那一份是**同一條規則的第二份實作**
+        （`_invited_to_private` 是第三份）。兩邊要一起改——一端放寬就是
+        私人房從這個端點漏出去，而列表上看不出任何異狀。
+        """
+        return (
+            f"({alias}.visibility='public' AND {alias}.status='active'"
+            f" OR {alias}.creator_session_key=?"
+            f" OR EXISTS (SELECT 1 FROM session s"
+            f"            WHERE s.session_key={alias}.creator_session_key"
+            f"            AND s.party=? AND s.party!='')"
+            f" OR EXISTS (SELECT 1 FROM participant p WHERE p.room_id={alias}.id"
+            f"            AND p.session_key=? AND p.status!='kicked')"
+            f" OR EXISTS (SELECT 1 FROM assignment g WHERE g.room_id={alias}.id"
+            f"            AND g.target_session_key=?"
+            f"            AND g.status IN ('pending','accepted')))",
+            (session_key, "" if party == HOST_PARTY else party,
+             session_key, session_key),
+        )
+
+    @app.get("/api/ops/exceptions", dependencies=[Depends(require_auth)])
+    async def ops_exceptions(
+        request: Request,
+        since: str | None = None,
+        limit: int = 50,
+        session_key: str | None = None,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """跨房的派工例外彙總：停滯／恢復、逾時、額度受限、執行器上下線。
+
+        為什麼是新端點而不是塞進 `GET /rooms/{id}/runner`：那個面板是**單房**
+        視角（`room_id` 必填），而例外要看的正是「我的哪一間房出事了」。
+
+        排序鍵是 `(created_at, rowid)` 不是 `seq`：`seq` 在房內遞增，跨房
+        彙總時兩間房的 seq 互不可比。
+
+        `since` 吃事件 id 或 ISO 時間：id 先換成它的 `created_at`，之後一律
+        比時間。找不到那個 id 就當它是時間字串——**不報錯**：對方拿著的是
+        一筆已經隨房被刪掉的事件 id，把它當成「從頭讀」比回 404 有用。
+        """
+        db = app.state.db
+        limit = max(1, min(limit, 200))
+        key = _credential_key(x_session_key, session_key,
+                              "GET /api/ops/exceptions 的 session_key（query）")
+        cursor = (since or "").strip()
+        if cursor:
+            row = await (await db.execute(
+                "SELECT created_at FROM agent_run_event WHERE id=?"
+                " UNION ALL SELECT created_at FROM runner_event WHERE id=?",
+                (cursor, cursor))).fetchone()
+            if row is not None:
+                cursor = row["created_at"]
+            else:
+                # 不是 id 也不是時間（例如一筆已經隨房被刪掉的事件 id）：
+                # **當成沒有給游標**。照字串比大小的話，`no-such-event`
+                # 大於任何一個 ISO 時間，於是端點回空——而空清單在畫面上
+                # 與「現在沒有例外」一模一樣
+                try:
+                    datetime.fromisoformat(cursor)
+                except ValueError:
+                    cursor = ""
+        reasons = tuple(_EXCEPTION_REASON_KINDS)
+        marks = ",".join("?" * len(reasons))
+        if host:
+            # 主持人視角：不套「有沒有份」那組條件（同 `list_rooms`）
+            vis, vis_params = "1=1", ()
+        else:
+            vis, vis_params = _visible_rooms_clause("r", key, _party(request))
+        time_sql = " AND e.created_at > ?" if cursor else ""
+        time_params: tuple = (cursor,) if cursor else ()
+        run_rows = await (await db.execute(
+            "SELECT e.id AS id, e.reason AS reason, e.run_id AS run_id,"
+            " e.room_id AS room_id, e.actor AS runner_id,"
+            " e.detail_json AS detail_json, e.created_at AS created_at,"
+            " e.rowid AS rowid, r.name AS room_name, a.kind AS run_kind,"
+            " a.ref AS run_ref FROM agent_run_event e"
+            " JOIN room r ON r.id=e.room_id"
+            " LEFT JOIN agent_run a ON a.id=e.run_id"
+            f" WHERE (e.reason IN ({marks}) OR e.reason LIKE ?)"
+            f" AND {vis}{time_sql}"
+            " ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            reasons + (_EXCEPTION_REASON_PREFIX + "%",) + vis_params
+            + time_params + (limit,))).fetchall()
+        runner_rows = await (await db.execute(
+            "SELECT e.id AS id, e.kind AS reason, '' AS run_id,"
+            " e.room_id AS room_id, e.runner_id AS runner_id,"
+            " e.detail_json AS detail_json, e.created_at AS created_at,"
+            " e.rowid AS rowid, r.name AS room_name, '' AS run_kind,"
+            " '' AS run_ref FROM runner_event e"
+            " JOIN room r ON r.id=e.room_id"
+            f" WHERE {vis}{time_sql}"
+            " ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            vis_params + time_params + (limit,))).fetchall()
+
+        def _shape(row) -> dict:
+            reason = row["reason"]
+            kind = _EXCEPTION_REASON_KINDS.get(reason, "")
+            if not kind:
+                kind = ("rate_limited"
+                        if reason.startswith(_EXCEPTION_REASON_PREFIX)
+                        else reason)
+            try:
+                detail = json.loads(row["detail_json"] or "{}")
+            except json.JSONDecodeError:
+                detail = {}
+            return {
+                "id": row["id"],
+                "kind": kind,
+                "reason": reason,
+                "severity": _EXCEPTION_SEVERITY.get(kind, "warn"),
+                "run_id": row["run_id"] or "",
+                "runner_id": row["runner_id"] or "",
+                "room_id": row["room_id"],
+                "room_name": row["room_name"] or "",
+                "run_kind": row["run_kind"] or "",
+                "run_ref": row["run_ref"] or "",
+                "detail": detail if isinstance(detail, dict) else {},
+                "created_at": row["created_at"],
+            }
+
+        merged = [_shape(r) for r in list(run_rows) + list(runner_rows)]
+        # 兩張表各自取了 limit 筆，合併後**要再截一次**：不截的話回去的是
+        # 兩倍長度，而 client 記的游標會跳過中間那一段
+        merged.sort(key=lambda e: (e["created_at"], e["id"]), reverse=True)
+        merged = merged[:limit]
+        return {
+            "exceptions": merged,
+            # 下一次的游標＝這一批裡最新的那筆時間。空的時候原樣回傳
+            # 呼叫端給的 `since`，否則輪詢會在沒有新事件時退回從頭讀
+            "next_since": merged[0]["created_at"] if merged else (since or ""),
+        }
+
     async def _sweep_runners() -> None:
         """逾時未 heartbeat 的執行器標 offline，並在它有 run 的 ops 房講一句。
 
@@ -13945,6 +14147,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await app.state.db.execute(
                 "UPDATE runner SET status='offline', limit_reason=''"
                 " WHERE id=?", (r["id"],))
+            await _record_runner_event(r["id"], "runner_offline")
             await _commit_with_retry(app.state.db)
             if expected or throttled:
                 runner_offline_quiet.add(r["id"])

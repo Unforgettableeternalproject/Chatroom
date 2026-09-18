@@ -4,10 +4,12 @@ import 'package:go_router/go_router.dart';
 
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
+import 'l10n/app_localizations.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
+import 'screens/ops/exceptions_panel.dart';
 import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
@@ -20,6 +22,7 @@ import 'screens/settings/settings_screen.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
 import 'state/notification_providers.dart';
+import 'state/ops_exceptions_providers.dart';
 
 /// 「正在看訊息流」的路由：`/rooms/<id>`，不含 pinned / assign 子頁
 /// （那些畫面看不到新訊息，該照常通知）。
@@ -46,6 +49,12 @@ GoRouter buildRouter(bool Function() isConfigured) {
       // 主機控制台。**只在裝了 host-kit 的那台機器上有意義**——入口本身
       // 會依偵測結果出現或消失，這條路由留著是為了讓它能被直接開啟
       // （見 kit UI 設計簡報 §6.0）
+      // 監控器：跨房的派工例外。**不掛在任何一間房底下**——它的重點正是
+      // 「我的哪一間房出事了」，掛進房裡等於要先知道答案才找得到入口
+      GoRoute(
+        path: '/ops/exceptions',
+        builder: (context, state) => const OpsExceptionsScreen(),
+      ),
       GoRoute(
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),
@@ -204,6 +213,9 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
       _router.go('/rooms/$roomId');
     };
     LocalNotifier.instance.init();
+    // 派工例外的通知：掉線與逾時要有人立刻知道，而那兩件事不會出現在
+    // 訊息流的通知管線裡（房內那句 system 訊息不發通知）
+    ref.read(opsExceptionNotifierProvider).start();
     _router.routerDelegate.addListener(_syncActiveRoom);
     _syncActiveRoom();
   }
@@ -243,10 +255,20 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
         ref.watch(appConfigProvider.select((c) => c.themeMode));
     final scale = fontScaleFactor(
         ref.watch(appConfigProvider.select((c) => c.fontScale)));
+    final localePref = ref.watch(appConfigProvider.select((c) => c.locale));
     return MaterialApp.router(
       title: 'Chatroom',
       debugShowCheckedModeBanner: false,
       routerConfig: _router,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      // 跟隨系統＝傳 null，讓 Flutter 自己依系統語言在 supportedLocales
+      // 裡挑；寫死一個值的話使用者換系統語言後 App 不會跟著變
+      locale: switch (localePref) {
+        LocalePref.system => null,
+        LocalePref.zhTW => const Locale('zh', 'TW'),
+        LocalePref.en => const Locale('en'),
+      },
       // 字級三檔：整體縮放放在這裡，不改各畫面的硬編碼字級。系統本身的
       // 字級設定不再疊加進來（textScaler 被整個換掉），避免兩層放大相乘。
       builder: (context, child) => MediaQuery(

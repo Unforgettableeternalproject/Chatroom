@@ -1,0 +1,117 @@
+{
+  "@@locale": "zh_TW",
+
+  "settingsTitle": "設定",
+  "@settingsTitle": {
+    "description": "設定畫面的 AppBar 標題"
+  },
+  "helpTooltip": "說明",
+  "@helpTooltip": {
+    "description": "AppBar 上開啟說明的按鈕提示"
+  },
+  "hostConsoleTitle": "這台機器",
+  "@hostConsoleTitle": {
+    "description": "主機控制台畫面的 AppBar 標題"
+  },
+
+  "settingsTabConnection": "連線",
+  "@settingsTabConnection": {
+    "description": "設定頁分頁：連線"
+  },
+  "settingsTabVisual": "視覺",
+  "@settingsTabVisual": {
+    "description": "設定頁分頁：視覺"
+  },
+  "settingsTabPersonal": "個人化",
+  "@settingsTabPersonal": {
+    "description": "設定頁分頁：個人化"
+  },
+
+  "connectionSectionTitle": "連線設定",
+  "@connectionSectionTitle": {
+    "description": "連線分頁的標題"
+  },
+  "visualSectionTitle": "視覺",
+  "@visualSectionTitle": {
+    "description": "視覺分頁的標題"
+  },
+  "personalSectionTitle": "個人化",
+  "@personalSectionTitle": {
+    "description": "個人化分頁的標題"
+  },
+
+  "fieldHubUrl": "Hub 位址",
+  "@fieldHubUrl": {
+    "description": "連線分頁：Hub 位址欄位標籤"
+  },
+  "fieldApiToken": "API token",
+  "@fieldApiToken": {
+    "description": "連線分頁：API token 欄位標籤"
+  },
+  "fieldDisplayName": "顯示名稱（進房時使用）",
+  "@fieldDisplayName": {
+    "description": "個人化分頁：顯示名稱欄位標籤"
+  },
+  "fieldDeviceKey": "本機裝置識別",
+  "@fieldDeviceKey": {
+    "description": "個人化分頁：本機裝置識別欄位標籤"
+  },
+
+  "darkThemeLabel": "深色主題",
+  "@darkThemeLabel": {
+    "description": "視覺分頁：深色主題開關"
+  },
+  "darkThemeHint": "也可在標題列直接切換",
+  "@darkThemeHint": {
+    "description": "視覺分頁：深色主題開關的說明"
+  },
+  "fontScaleLabel": "字級",
+  "@fontScaleLabel": {
+    "description": "視覺分頁：字級區塊標題"
+  },
+  "fontScaleHint": "選了立刻套用到整個 App。",
+  "@fontScaleHint": {
+    "description": "視覺分頁：字級區塊的說明"
+  },
+  "fontScaleTiny": "極小",
+  "@fontScaleTiny": {
+    "description": "字級選項：極小"
+  },
+  "fontScaleSmall": "小",
+  "@fontScaleSmall": {
+    "description": "字級選項：小"
+  },
+  "fontScaleMedium": "中",
+  "@fontScaleMedium": {
+    "description": "字級選項：中"
+  },
+  "fontScaleLarge": "大",
+  "@fontScaleLarge": {
+    "description": "字級選項：大"
+  },
+  "fontScaleXLarge": "特大",
+  "@fontScaleXLarge": {
+    "description": "字級選項：特大"
+  },
+
+  "languageLabel": "語言",
+  "@languageLabel": {
+    "description": "視覺分頁：語言區塊標題"
+  },
+  "languageHint": "選了立刻套用。",
+  "@languageHint": {
+    "description": "視覺分頁：語言區塊的說明"
+  },
+  "languageSystem": "跟隨系統",
+  "@languageSystem": {
+    "description": "語言選項：跟隨系統語言"
+  },
+  "languageZhTW": "繁體中文",
+  "@languageZhTW": {
+    "description": "語言選項：繁體中文（兩種語言下都用本地寫法）"
+  },
+  "languageEnglish": "English",
+  "@languageEnglish": {
+    "description": "語言選項：英文（兩種語言下都用本地寫法）"
+  }
+}
