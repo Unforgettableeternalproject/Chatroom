@@ -37,6 +37,20 @@ class _FakeBoardsApi extends BoardsApi {
   _FakeBoardsApi() : super(Dio());
 
   final removed = <(String, String, String)>[];
+  final noteEdits = <(String, String, String, String)>[];
+
+  @override
+  Future<StageFile?> updateStageFileNote(
+    String boardId,
+    String checklistId,
+    String fileId, {
+    required String note,
+    String? participantId,
+    String? sessionKey,
+  }) async {
+    noteEdits.add((boardId, checklistId, fileId, note));
+    return null;
+  }
 
   @override
   Future<void> removeStageFile(
@@ -211,6 +225,83 @@ void main() {
       expect(api.removed, isEmpty);
     });
 
+    testWidgets('編輯備註：帶現有那句當預設值，確認之後打 PATCH',
+        (tester) async {
+      final api = _FakeBoardsApi();
+      await tester.pumpWidget(_host(
+        Consumer(
+          builder: (context, ref, _) => StageFilesList(
+            boardId: 'b1',
+            checklistId: 'c1',
+            files: const [_file],
+            actions: ref.watch(_probeActionsProvider),
+            participantId: 'p1',
+          ),
+        ),
+        boardsApi: api,
+      ));
+
+      await tester.tap(find.byTooltip('編輯備註'));
+      await tester.pumpAndSettle();
+      // 現有備註是預設值：編輯不是重打
+      expect(
+          find.descendant(
+              of: find.byType(TextField), matching: find.text('這輪要對照的 log')),
+          findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '改過的說明');
+      await tester.tap(find.text('儲存'));
+      await tester.pumpAndSettle();
+
+      expect(api.noteEdits, [('b1', 'c1', 'sf1', '改過的說明')]);
+    });
+
+    testWidgets('編輯備註按取消什麼都不打', (tester) async {
+      final api = _FakeBoardsApi();
+      await tester.pumpWidget(_host(
+        Consumer(
+          builder: (context, ref, _) => StageFilesList(
+            boardId: 'b1',
+            checklistId: 'c1',
+            files: const [_file],
+            actions: ref.watch(_probeActionsProvider),
+            participantId: 'p1',
+          ),
+        ),
+        boardsApi: api,
+      ));
+
+      await tester.tap(find.byTooltip('編輯備註'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(api.noteEdits, isEmpty);
+    });
+
+    testWidgets('沒有動作可用時不畫編輯鈕', (tester) async {
+      await tester.pumpWidget(_host(const StageFilesList(
+        boardId: 'b1',
+        checklistId: 'c1',
+        files: [_file],
+        actions: null,
+        participantId: 'p1',
+        readOnly: true,
+      )));
+
+      expect(find.byTooltip('編輯備註'), findsNothing);
+    });
+  });
+
+  group('多檔匯入', () {
+    test('只有一個檔才問備註——選了八個檔不該連開八次對話框', () {
+      expect(shouldAskStageNote(1), isTrue);
+      expect(shouldAskStageNote(2), isFalse);
+      expect(shouldAskStageNote(8), isFalse);
+    });
+  });
+
+  group('卸除素材（續）', () {
     testWidgets('沒有動作可用時不畫卸除鈕——按下去只會是一個必定失敗的請求',
         (tester) async {
       await tester.pumpWidget(_host(const StageFilesList(

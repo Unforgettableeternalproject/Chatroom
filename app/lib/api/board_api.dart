@@ -905,6 +905,29 @@ class BoardsApi {
               );
       });
 
+  /// 改一份已掛素材的備註。
+  ///
+  /// [fileId] 是掛接關係的 id（`StageFile.id`），不是 attachment_id——同一份
+  /// 附件可以掛在好幾個階段上，改錯一個會動到別的階段那一列。
+  /// 沒資格修改時 Hub 回 403（掛的人本人、人類成員或主持人才行）。
+  Future<StageFile?> updateStageFileNote(
+    String boardId,
+    String checklistId,
+    String fileId, {
+    required String note,
+    String? participantId,
+    String? sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/api/boards/$boardId/checklists/$checklistId/files/$fileId',
+          data: {'note': note},
+          options: _actor(participantId, sessionKey),
+        );
+        final file = res.data?['file'];
+        return file is Map<String, dynamic> ? StageFile.fromJson(file) : null;
+      });
+
   /// 卸除一份素材。**附件本身不會被刪**——它仍在房裡，只是不再屬於這個階段。
   ///
   /// [fileId] 是掛接關係的 id（`StageFile.id`），不是 attachment_id。

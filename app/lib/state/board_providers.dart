@@ -547,6 +547,30 @@ class BoardActions {
     return file;
   }
 
+  /// 改一份素材的備註。[fileId] 是掛接關係的 id，不是 attachment_id。
+  ///
+  /// 與 [addStageFile] 同樣**不做樂觀更新**：成功之後重拉板，畫面上那一行
+  /// 由 Hub 回來的內容決定。
+  Future<StageFile?> updateStageFileNote(
+    String boardId,
+    String checklistId,
+    String fileId, {
+    required String note,
+  }) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    final file = await _ref.read(boardsApiProvider).updateStageFileNote(
+          boardId,
+          checklistId,
+          fileId,
+          note: note,
+          participantId: pid,
+          sessionKey: _sk,
+        );
+    _reload();
+    return file;
+  }
+
   /// 卸除一份素材。[fileId] 是掛接關係的 id，不是 attachment_id。
   Future<void> removeStageFile(
     String boardId,

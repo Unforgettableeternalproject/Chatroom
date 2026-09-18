@@ -136,6 +136,9 @@ class StageFilesList extends ConsumerWidget {
               onRemove: (readOnly || actions == null)
                   ? null
                   : () => _remove(context, f),
+              onEditNote: (readOnly || actions == null)
+                  ? null
+                  : () => _editNote(context, f),
             ),
           ),
         // 入口留在清單底部：要加東西的人是先看過已經有什麼才決定加的。
@@ -202,6 +205,24 @@ class StageFilesList extends ConsumerWidget {
       () => actions!.removeStageFile(boardId, checklistId, f.id),
     );
   }
+
+  /// 改這一列的備註。**現有那句要當預設值帶進去**——不帶的話「編輯」
+  /// 實際上是「重打」，而多數時候要改的只是其中幾個字。
+  Future<void> _editNote(BuildContext context, StageFile f) async {
+    final note = await showStageNoteDialog(
+      context,
+      filename: f.filename,
+      initialNote: f.note,
+      editing: true,
+    );
+    // 取消（null）不動；空字串是「把備註清掉」，那是有意的，要送出去
+    if (note == null || !context.mounted) return;
+    await runStageFileAction(
+      context,
+      () => actions!
+          .updateStageFileNote(boardId, checklistId, f.id, note: note),
+    );
+  }
 }
 
 class _StageFileRow extends ConsumerWidget {
@@ -211,6 +232,7 @@ class _StageFileRow extends ConsumerWidget {
     required this.token,
     required this.participantId,
     required this.onRemove,
+    required this.onEditNote,
   });
 
   final StageFile file;
@@ -218,6 +240,9 @@ class _StageFileRow extends ConsumerWidget {
   final String token;
   final String? participantId;
   final VoidCallback? onRemove;
+
+  /// 改備註。與 [onRemove] 同一組條件：唯讀或沒有動作時是 null。
+  final VoidCallback? onEditNote;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -262,6 +287,13 @@ class _StageFileRow extends ConsumerWidget {
               Text('· ${file.addedByName} 掛上',
                   style: UepText.mono(size: 10, color: s.inkMute)),
             ],
+            if (onEditNote != null)
+              IconButton(
+                tooltip: '編輯備註',
+                visualDensity: VisualDensity.compact,
+                onPressed: onEditNote,
+                icon: Icon(Icons.edit_note, size: 16, color: s.inkMute),
+              ),
             if (onRemove != null)
               IconButton(
                 tooltip: '從階段卸除',
@@ -302,21 +334,24 @@ Future<void> pickAndAttachStageFile(
   final picked = await FilePicker.pickFiles();
   if (picked.isEmpty || !context.mounted) return;
 
+  String note = '';
+  if (shouldAskStageNote(picked.length)) {
+    final answer = await showStageNoteDialog(context, filename: picked.first.name);
+    // 取消就是整批都反悔了
+    if (answer == null || !context.mounted) return;
+    note = answer;
+  }
+
   // 逐檔序列處理，不是只吃第一個：一次選多個檔案時，前面那份少掉的不是
-  // 上傳失敗，是後面的檔案從來沒被問過、也從來沒被送出去過
+  // 上傳失敗，是後面的檔案從來沒被送出去過
   for (final file in picked) {
     final path = file.path;
     if (path == null) continue;
     if (!context.mounted) return;
 
-    final note = await showStageNoteDialog(context, filename: file.name);
-    // 對某一份素材按了取消，就當成整批都反悔了——不是使用者自己選要
-    // 略過這一份，繼續問下一份只會讓人以為剛剛那次取消沒有生效
-    if (note == null || !context.mounted) return;
-
     // 這一份失敗（重複、沒權限……）[runStageFileAction] 已經說過話了，
-    // 不能讓它擋住還沒問過的其餘檔案——選了五個檔案，其中一個已經掛過，
-    // 不該讓剩下四個因此連問都沒問到
+    // 不能讓它擋住其餘檔案——選了五個檔案，其中一個已經掛過，不該讓剩下
+    // 四個因此連送都沒送出去
     await runStageFileAction(context, () async {
       final identity = await ref.read(identityProvider(roomId).future);
       final uploaded = await ref.read(attachmentsApiProvider).uploadPath(
@@ -336,16 +371,27 @@ Future<void> pickAndAttachStageFile(
   }
 }
 
+/// 一次選了幾個檔就決定要不要問備註：**只有一個檔才問**。
+///
+/// 多檔逐個問的話，選了八個檔就是連開八次對話框，而那時使用者要的只是
+/// 「把這批掛上去」——備註之後在清單上逐列補（[StageFilesList] 的編輯鈕）。
+bool shouldAskStageNote(int pickedCount) => pickedCount == 1;
+
 /// 問一句「這份素材是什麼」。**可以留白**——逼人寫一句話才掛得上去，
 /// 結果會是一堆「圖」「log」，那比空的還糟。
+///
+/// [initialNote] 有值時是在改既有的備註：預設值要帶進去，不然「編輯」
+/// 會變成每次都從空白重打。
 ///
 /// 回 `null` 代表取消，回空字串代表留白。
 Future<String?> showStageNoteDialog(
   BuildContext context, {
   required String filename,
   String? stageTitle,
+  String initialNote = '',
+  bool editing = false,
 }) {
-  final controller = TextEditingController();
+  final controller = TextEditingController(text: initialNote);
   return showDialog<String>(
     context: context,
     builder: (dialogContext) {
@@ -356,7 +402,8 @@ Future<String?> showStageNoteDialog(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('加素材', style: UepText.pageTitle(color: s.inkTitle)),
+            Text(editing ? '編輯備註' : '加素材',
+                style: UepText.pageTitle(color: s.inkTitle)),
             const SizedBox(height: 4),
             Text(stageTitle == null ? filename : '$filename › $stageTitle',
                 style: UepText.mono(size: 10.5, color: s.inkMute)),
@@ -402,7 +449,7 @@ Future<String?> showStageNoteDialog(
             variant: UepButtonVariant.outline,
             onPressed: () => Navigator.of(dialogContext).pop(),
           ),
-          UepButton(label: '掛上', onPressed: submit),
+          UepButton(label: editing ? '儲存' : '掛上', onPressed: submit),
         ],
       );
     },

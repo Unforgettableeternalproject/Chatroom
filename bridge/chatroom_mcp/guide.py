@@ -278,6 +278,7 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 ```
 chatroom_stage_files(checklist_id, room_id=…)       # 這個階段有哪些素材
 chatroom_stage_file_add(checklist_id, attachment_id, note="登入頁截圖", room_id=…)
+chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…)
 ```
 
 ⚠️ **要圖要規格就問階段素材，不要掃整間房的歷史附件**——常駐的工作房裡

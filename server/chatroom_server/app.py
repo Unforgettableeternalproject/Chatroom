@@ -347,7 +347,14 @@ class StageFileAdd(BaseModel):
 
     attachment_id: str = Field(min_length=1, max_length=64)
     # 一句話：這份素材是什麼。上限 500——它是給下一輪 run 看的說明，
-    # 不是報告；沒有編輯端點，寫錯就卸下來重掛
+    # 不是報告
+    note: str = Field(default="", max_length=500)
+
+
+class StageFileNoteUpdate(BaseModel):
+    """改一份已掛素材的備註。上限與 `StageFileAdd.note` 同一個數字——
+    兩邊不一樣的話，寫得進去的字改不回來。"""
+
     note: str = Field(default="", max_length=500)
 
 
@@ -10845,6 +10852,48 @@ def create_app(config: Config | None = None) -> FastAPI:
         files = await _stage_files([checklist_id])
         item = next((f for f in files.get(checklist_id, []) if f["id"] == fid),
                     None)
+        return {"file": item}
+
+    @app.patch("/api/boards/{board_id}/checklists/{checklist_id}"
+               "/files/{file_id}", dependencies=[Depends(require_auth)])
+    async def update_stage_file_note(
+        board_id: str, checklist_id: str, file_id: str,
+        body: StageFileNoteUpdate,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """改備註：**掛的人本人、人類成員或主持人**。
+
+        判準與 `remove_stage_file` 同一個形狀——備註是這份素材對下一輪的
+        說明，改掉它與拿掉它一樣會讓別人看到不同的東西。
+        """
+        _board, _room, me = await _board_writer_v2(
+            board_id, x_session_key, x_participant_id, host=host)
+        await _stage_checklist_or_404(board_id, checklist_id)
+        db = app.state.db
+        row = await (await db.execute(
+            "SELECT * FROM board_checklist_file WHERE id=? AND checklist_id=?",
+            (file_id, checklist_id))).fetchone()
+        if row is None:
+            raise _err(404, "stage_file_not_found", "找不到這份素材")
+        if not (me["role"] == "human" or row["added_by"] == me["session_key"]):
+            raise _err(403, "human_only",
+                       "只有掛上它的人或人類成員可以改這份素材的備註")
+        await db.execute(
+            "UPDATE board_checklist_file SET note=? WHERE id=?",
+            (body.note.strip(), file_id))
+        # 同 `add_stage_file` / `remove_stage_file`：備註改了也要讓這個階段
+        # 重新出現在下一次增量讀取裡，不然只做增量讀的 agent 讀到的還是舊那句
+        await db.execute(
+            "UPDATE board_checklist SET board_seq=? WHERE id=?",
+            (await _next_board_seq(_room, board_id), checklist_id))
+        await _commit_with_retry(db)
+        await _notify_board_rooms(board_id)
+        files = await _stage_files([checklist_id])
+        item = next(
+            (f for f in files.get(checklist_id, []) if f["id"] == file_id),
+            None)
         return {"file": item}
 
     @app.delete("/api/boards/{board_id}/checklists/{checklist_id}"

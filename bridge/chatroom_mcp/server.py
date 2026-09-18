@@ -1948,8 +1948,9 @@ def chatroom_stage_file_add(checklist_id: str, attachment_id: str,
     ⚠️ 附件必須屬於**掛著這塊板的某一間房**，否則 Hub 回
     ``stage_file_room_mismatch``——附件的房間邊界不會因為它上了板就消失。
 
-    ``note`` 寫一句「這份素材是什麼」（上限 500 字）。**沒有編輯端點**，
-    寫錯就卸下來重掛。同一個附件重複掛回 ``stage_file_exists``。
+    ``note`` 寫一句「這份素材是什麼」（上限 500 字）。寫錯了用
+    ``chatroom_stage_file_note`` 改，不必卸下來重掛。同一個附件重複掛回
+    ``stage_file_exists``。
 
     📌 **產出要給下一輪看的檔（截圖、報告）就掛回階段。** 只留在房裡的話，
     下一輪得從三百則訊息裡把它翻出來——而它多半不會去翻。
@@ -1958,6 +1959,29 @@ def chatroom_stage_file_add(checklist_id: str, attachment_id: str,
     out = _board_scoped_request(
         "POST", f"/api/boards/{bid}/checklists/{checklist_id}/files",
         json={"attachment_id": attachment_id, "note": note})
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
+def chatroom_stage_file_note(checklist_id: str, file_id: str, note: str,
+                             board_id: str = "", room_id: str = "") -> dict:
+    """改一份已掛素材的備註（上限 500 字）。
+
+    ``file_id`` 是**掛接關係的 id**（``chatroom_stage_files`` 每一份回的
+    ``id``），不是 ``attachment_id``——後者是檔案本體，同一份檔案可以掛在
+    好幾個階段上。
+
+    ⚠️ 只有**掛上它的人本人或人類成員**改得動，否則 Hub 回 403
+    ``human_only``。給空字串就是把備註清掉。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "PATCH",
+        f"/api/boards/{bid}/checklists/{checklist_id}/files/{file_id}",
+        json={"note": note})
     if isinstance(out, dict):
         out["resolved_board_id"] = bid
     return out

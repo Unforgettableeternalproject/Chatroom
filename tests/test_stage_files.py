@@ -231,3 +231,102 @@ async def test_incremental_board_read_surfaces_a_newly_attached_stage_file(tmp_p
         assert stage, (
             "增量讀取沒有再帶出這個階段——新掛的素材因此對 agent 不可見")
         assert [f["attachment_id"] for f in stage[0]["files"]] == [aid]
+
+
+async def test_note_can_be_edited_in_place(tmp_path):
+    """備註改得動，而且這個階段會領到新的 board_seq——只做增量讀取的
+    agent 讀到的必須是改過的那句，不是原本那句。"""
+    app, client = await _client(tmp_path, "stage_note_edit")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        bid, cid = await _stage(client, rid, hdr)
+        aid = await _upload(client, rid, hdr)
+        base = f"/api/boards/{bid}/checklists/{cid}/files"
+        fid = (await client.post(base, json={
+            "attachment_id": aid, "note": "寫錯的那句"},
+            headers=hdr)).json()["file"]["id"]
+
+        seq = (await client.get(f"/api/boards/{bid}",
+                                headers=hdr)).json()["board_seq"]
+
+        r = await client.patch(f"{base}/{fid}",
+                               json={"note": "  改成這句  "}, headers=hdr)
+        assert r.status_code == 200, r.text
+        assert r.json()["file"]["note"] == "改成這句"
+
+        listed = (await client.get(base, headers=hdr)).json()["files"]
+        assert [f["note"] for f in listed] == ["改成這句"]
+
+        # 增量讀取要再帶出這個階段，否則改過的備註對 agent 不存在
+        incremental = (await client.get(
+            f"/api/boards/{bid}", params={"after_board_seq": seq},
+            headers=hdr)).json()
+        stage = [c for c in incremental["checklists"] if c["id"] == cid]
+        assert stage, "改備註沒有推進 board_seq——增量讀取看不到這個階段"
+        assert [f["note"] for f in stage[0]["files"]] == ["改成這句"]
+
+        # 空字串是「把備註清掉」，不是沒帶
+        cleared = await client.patch(f"{base}/{fid}", json={"note": ""},
+                                     headers=hdr)
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["file"]["note"] == ""
+
+        missing = await client.patch(f"{base}/nope", json={"note": "x"},
+                                     headers=hdr)
+        assert missing.status_code == 404, missing.text
+        assert missing.json()["detail"]["code"] == "stage_file_not_found"
+
+
+async def test_agent_cannot_edit_someone_elses_note(tmp_path):
+    """判準與卸除同源：agent 改不動別人掛的，自己掛的可以。"""
+    app, client = await _client(tmp_path, "stage_note_perm")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        bid, cid = await _stage(client, rid, hdr)
+        ahdr = await _join(client, rid, "claude-n", "Novia")
+        base = f"/api/boards/{bid}/checklists/{cid}/files"
+
+        mine = (await client.post(base, json={
+            "attachment_id": await _upload(client, rid, hdr)},
+            headers=hdr)).json()["file"]
+        theirs = (await client.post(base, json={
+            "attachment_id": await _upload(
+                client, rid, ahdr, content=b"other", name="c.png")},
+            headers=ahdr)).json()["file"]
+
+        blocked = await client.patch(f"{base}/{mine['id']}",
+                                     json={"note": "偷改"}, headers=ahdr)
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json()["detail"]["code"] == "human_only"
+
+        ok = await client.patch(f"{base}/{theirs['id']}",
+                                json={"note": "自己掛的"}, headers=ahdr)
+        assert ok.status_code == 200, ok.text
+
+        # 人類誰的都改得動
+        ok2 = await client.patch(f"{base}/{theirs['id']}",
+                                 json={"note": "人類改的"}, headers=hdr)
+        assert ok2.status_code == 200, ok2.text
+
+
+async def test_note_too_long_is_rejected(tmp_path):
+    """上限與 `StageFileAdd.note` 同一個數字（500）。"""
+    app, client = await _client(tmp_path, "stage_note_len")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        bid, cid = await _stage(client, rid, hdr)
+        base = f"/api/boards/{bid}/checklists/{cid}/files"
+        fid = (await client.post(base, json={
+            "attachment_id": await _upload(client, rid, hdr)},
+            headers=hdr)).json()["file"]["id"]
+
+        r = await client.patch(f"{base}/{fid}", json={"note": "字" * 501},
+                               headers=hdr)
+        assert r.status_code == 422, r.text
+
+        ok = await client.patch(f"{base}/{fid}", json={"note": "字" * 500},
+                                headers=hdr)
+        assert ok.status_code == 200, ok.text
