@@ -11,6 +11,7 @@
 """
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -825,6 +826,93 @@ async def test_runner_going_offline_is_announced_then_stays_quiet(tmp_path):
                 "runner_offline", "runner_online"]
 
 
+async def test_an_expected_restart_does_not_announce_losing_connection(tmp_path):
+    """執行器自己說「我要重啟了」之後的離線是**預期中的**（實機 2026-09-18）。
+
+    照樣喊「失去連線，排隊中的派工暫時沒有人領」的話，一個每小時一次的
+    維護窗重啟會在房裡留下一則看起來很嚴重、實際上 1～2 分鐘就結束的警報；
+    回來時的「已恢復連線」也不發——只有後半句的話，房裡看到的是一台從來
+    沒掉線過卻一直在恢復連線的執行器。
+    """
+    app, client = await _client(tmp_path, "restartquiet",
+                                runner_offline_after=0.05, sweep_interval=999)
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            await _drive_to_running(client, rid, hdr, runner, "task-1")
+
+            async def presence():
+                msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                         headers=hdr)).json()["messages"]
+                return [m["system_event"] for m in msgs
+                        if (m["system_event"] or "").startswith("runner_")]
+
+            # 退出前的最後一次心跳：restarting
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "restarting"})
+            await asyncio.sleep(0.1)
+            await app.state.sweep_runners()
+            row = await (await app.state.db.execute(
+                "SELECT status FROM runner WHERE id=?", (str(runner),)
+            )).fetchone()
+            assert row["status"] == "offline", "沒被掃成 offline，這條等於沒驗"
+            assert await presence() == [], "預期中的重啟也喊了失去連線"
+
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "online"})
+            assert await presence() == [], "掉線沒講，回來卻講了"
+
+
+async def test_repeated_offline_is_announced_at_most_once_per_30_minutes(
+        tmp_path):
+    """同一台執行器一直掉線，房裡只留第一則（實機 2026-09-18）。
+
+    重啟迴圈裡的執行器每 5 分鐘掉一次線，而那一小時房裡是 12 則一模一樣的
+    話——要人來看的那一則就埋在裡面。
+    """
+    app, client = await _client(tmp_path, "offlinethrottle",
+                                runner_offline_after=0.05, sweep_interval=999)
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            await _drive_to_running(client, rid, hdr, runner, "task-1")
+
+            async def presence():
+                msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                         headers=hdr)).json()["messages"]
+                return [m["system_event"] for m in msgs
+                        if (m["system_event"] or "").startswith("runner_")]
+
+            async def drop_and_return(status="online"):
+                await asyncio.sleep(0.1)
+                await app.state.sweep_runners()
+                await client.post(f"/api/runners/{runner}/heartbeat",
+                                  headers=runner.headers,
+                                  json={"status": status})
+
+            await drop_and_return()
+            assert await presence() == ["runner_offline", "runner_online"]
+
+            await drop_and_return()
+            assert await presence() == ["runner_offline", "runner_online"], (
+                "30 分鐘內的第二次掉線又喊了一次")
+
+            # 上一則是 31 分鐘前：這一次要講
+            notice = app.state.runner_offline_notice_at
+            notice[str(runner)] = notice[str(runner)] - timedelta(minutes=31)
+            await drop_and_return()
+            assert await presence() == [
+                "runner_offline", "runner_online",
+                "runner_offline", "runner_online"], (
+                "過了節流窗還是不講，那就不是節流而是靜音")
+
+
 async def test_offline_notice_skips_rooms_whose_runs_are_finished(tmp_path):
     """執行器離線，對一間「派過工、但早就做完了」的房沒有意義。
 
@@ -1121,6 +1209,80 @@ async def test_an_unapplied_command_keeps_its_note_and_no_applied_at(tmp_path):
             again = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
                      ).json()["runners"][0]["commands"][0]
             assert again["applied_at"] == applied
+
+
+async def test_reregistering_settles_commands_that_never_reported_back(
+        tmp_path):
+    """重註冊＝上一個進程已經不在，它領走的命令不會再有回音（實機 2026-09-18）。
+
+    App 把 `applied_at IS NULL` 當成「進行中」→ 重啟鈕停用。正式 Hub 上有
+    一筆 restart 被舊版執行器領走後直接退出，於是那顆鈕從 09-18 起一直按
+    不動，而房裡沒有任何地方說得出原因。
+    """
+    app, client = await _client(tmp_path, "reregsettle")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            await client.post(f"/api/runners/{runner}/commands",
+                              json={"command": "restart"}, headers=hdr)
+            hb = (await client.post(f"/api/runners/{runner}/heartbeat",
+                                    headers=runner.headers,
+                                    json={"status": "online"})).json()
+            assert len(hb["commands"]) == 1, "命令沒被取走，這條測試等於沒驗"
+            got = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                   ).json()["runners"][0]["commands"][0]
+            assert got["applied_at"] is None
+
+            # 重啟回來：同 host+label 帶 token 重註冊
+            r = await client.post("/api/runners/register",
+                                  headers=runner.headers,
+                                  json={"host": "esvel-pc", "label": "ex1",
+                                        "projects": ["ai-website"],
+                                        "max_parallel": 3, "version": "0.1"})
+            assert r.status_code == 200, r.text
+            got = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                   ).json()["runners"][0]["commands"][0]
+            assert got["applied_at"], "重註冊了，那筆命令還停在「已收到」"
+            assert "重新啟動" in got["note"]
+
+
+async def test_a_command_acked_long_ago_is_settled_as_timed_out(tmp_path):
+    """取走超過 10 分鐘還沒回報生效＝那個回報丟了，不能讓面板永遠等。"""
+    app, client = await _client(tmp_path, "acktimeout")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            cmd = (await client.post(f"/api/runners/{runner}/commands",
+                                     json={"command": "pause"},
+                                     headers=hdr)).json()["command"]
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "online"})
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "online"})
+            got = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                   ).json()["runners"][0]["commands"][0]
+            assert got["applied_at"] is None, (
+                "剛取走就被當成逾時，那是把還在路上的命令收掉")
+
+            old = (datetime.now(timezone.utc)
+                   - timedelta(minutes=11)).isoformat()
+            await app.state.db.execute(
+                "UPDATE runner_command SET acked_at=? WHERE id=?",
+                (old, cmd["id"]))
+            await app.state.db.commit()
+            await client.post(f"/api/runners/{runner}/heartbeat",
+                              headers=runner.headers,
+                              json={"status": "online"})
+            got = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
+                   ).json()["runners"][0]["commands"][0]
+            assert got["applied_at"], "取走 11 分鐘還停在「已收到」"
+            assert "逾時" in got["note"]
 
 
 async def test_another_runner_cannot_ack_someone_elses_command(tmp_path):

@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 import pytest
 
 from chatroom_runner import gitops
+from chatroom_runner.hub import RunnerHub, load_identity
 from chatroom_runner.loop import (EXIT_RESTART, EXIT_SELFCHECK_FAILED,
                                   RunnerLoop)
 
-from ._fixtures import create_run, make_config
+from ._fixtures import ROOT_TOKEN, create_run, make_config
 
 
 class StubExecutor:
@@ -504,7 +505,7 @@ async def test_maintenance_window_exits_75_only_when_idle(
     _app, client = hub_app
     room_id, headers = ops_room
     cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
-    clock = [datetime(2026, 9, 16, 11, 0, tzinfo=timezone.utc)]
+    clock = [datetime(2026, 9, 16, 2, 0, tzinfo=timezone.utc)]
     gate = asyncio.Event()
     loop = _loop(cfg, runner_hub, now=lambda: clock[0],
                  executor_factory=lambda: StubExecutor(gate))
@@ -524,11 +525,11 @@ async def test_maintenance_window_exits_75_only_when_idle(
     assert loop.state.restart_reason == "maintenance_window"
 
 
-async def test_maintenance_does_not_fire_outside_the_window(
+async def test_maintenance_does_not_fire_before_the_window(
         hub_app, runner_hub, work_repo, tmp_path):
     cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
     loop = _loop(cfg, runner_hub,
-                 now=lambda: datetime(2026, 9, 16, 11, 0, tzinfo=timezone.utc))
+                 now=lambda: datetime(2026, 9, 16, 2, 0, tzinfo=timezone.utc))
     assert await loop.start()
     await loop.tick()
     assert loop.exit_code == 0
@@ -624,9 +625,10 @@ async def test_maintenance_does_not_restart_while_paused_or_draining(
         hub_app, runner_hub, work_repo, tmp_path):
     """drain／pause 的語意是「安靜下來」，而重啟回來的執行器會立刻領單。"""
     cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
-    clock = [datetime(2026, 9, 16, 4, 30, tzinfo=timezone.utc)]
+    clock = [datetime(2026, 9, 16, 2, 0, tzinfo=timezone.utc)]
     loop = _loop(cfg, runner_hub, now=lambda: clock[0])
     assert await loop.start()
+    clock[0] = datetime(2026, 9, 16, 4, 30, tzinfo=timezone.utc)
 
     loop.apply_command("drain")
     await loop.tick()
@@ -639,6 +641,57 @@ async def test_maintenance_does_not_restart_while_paused_or_draining(
     loop.apply_command("resume")
     await loop.tick()
     assert loop.exit_code == EXIT_RESTART, "恢復之後該做的維護沒有做"
+
+
+async def test_maintenance_runs_once_a_day_across_restarts(
+        hub_app, runner_hub, work_repo, tmp_path):
+    """🚨 一天一次，而且跨進程有效（實機 2026-09-18）。
+
+    「今天做過沒」只記在記憶體裡的話，維護窗重啟回來的進程還在同一個小時
+    內，於是再判一次「現在是 maintenance_hour」再退——實機上那一小時每 5
+    分鐘循環了 12 次。
+    """
+    _app, client = hub_app
+    cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
+    clock = [datetime(2026, 9, 18, 2, 0, tzinfo=timezone.utc)]
+    loop = _loop(cfg, runner_hub, now=lambda: clock[0])
+    assert await loop.start()
+
+    clock[0] = datetime(2026, 9, 18, 4, 0, tzinfo=timezone.utc)
+    await loop.tick()
+    assert loop.exit_code == EXIT_RESTART
+    saved = json.loads(cfg.state_file.read_text("utf-8"))
+    assert saved["last_maintenance_day"] == "2026-09-18", (
+        "維護窗日期沒有落地，重啟回來的進程會再退一次")
+
+    # 重啟回來：還在窗裡，但今天做過了
+    clock[0] = datetime(2026, 9, 18, 4, 5, tzinfo=timezone.utc)
+    hub2 = RunnerHub("http://test", ROOT_TOKEN, client=client,
+                     identity=load_identity(cfg.state_file))
+    loop2 = _loop(cfg, hub2, now=lambda: clock[0])
+    assert await loop2.start()
+    await loop2.tick()
+    assert loop2.exit_code == 0, "同一天第二次啟動又退了一次"
+
+    # 隔天到點：照樣要做
+    clock[0] = datetime(2026, 9, 19, 4, 0, tzinfo=timezone.utc)
+    await loop2.tick()
+    assert loop2.exit_code == EXIT_RESTART
+    assert loop2.state.restart_reason == "maintenance_window"
+
+
+async def test_a_runner_started_inside_the_window_does_not_exit_at_once(
+        hub_app, runner_hub, work_repo, tmp_path):
+    """啟動本身就等於重啟過了——沒有狀態檔也不該立刻再退一次。"""
+    cfg = make_config(tmp_path, work_repo, maintenance_hour=4)
+    clock = [datetime(2026, 9, 18, 4, 30, tzinfo=timezone.utc)]
+    loop = _loop(cfg, runner_hub, now=lambda: clock[0])
+    assert await loop.start()
+    await loop.tick()
+    assert loop.exit_code == 0
+    clock[0] = datetime(2026, 9, 18, 4, 55, tzinfo=timezone.utc)
+    await loop.tick()
+    assert loop.exit_code == 0, "同一個維護窗裡又退了一次"
 
 
 # ── 停滯提醒 ────────────────────────────────────────────────────
@@ -788,6 +841,50 @@ async def test_reconcile_honours_a_pending_cancel(
 
     body = (await client.get(f"/api/runs/{run_id}", headers=headers)).json()
     assert body["run"]["status"] == "cancelled"
+
+
+async def test_cancel_of_a_run_we_do_not_hold_is_reported_once(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """🚨 手上沒有那個進程也要收場（實機 2026-09-18）。
+
+    `cancel_requested_run_ids` 只對 `self.active` 動作的話，上一個執行器進程
+    留下的 run 會永遠停在 `claimed`＋`cancel_requested=1`：人按了取消，而
+    Hub 那端永遠等不到回報——正式 Hub 上有一筆從 09-17 掛到隔天。
+
+    同一筆**只報一次**：每次心跳都報的話，那筆 run 的稽核串會被同一句話
+    洗滿，而 Hub 回的 409 也讓它看不出有什麼不對。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    await create_run(client, room_id, headers, kind="ticket", ref="task-ghost")
+    claimed = await runner_hub.claim()
+    run_id = claimed["id"]
+    r = await client.post(f"/api/runs/{run_id}/cancel", headers=headers)
+    assert r.status_code == 200 and r.json()["cancelled"] is False
+    assert run_id not in loop.active, "這條測試要的正是「不在手上」"
+
+    reports: list[tuple] = []
+    real_report = runner_hub.report
+
+    async def counting_report(rid, status, **kw):
+        reports.append((rid, status))
+        return await real_report(rid, status, **kw)
+
+    runner_hub.report = counting_report
+    try:
+        await loop.heartbeat()
+        body = (await client.get(f"/api/runs/{run_id}",
+                                 headers=headers)).json()
+        assert body["run"]["status"] == "cancelled", (
+            "取消請求沒有人收，那筆 run 會一直掛在 claimed")
+        await loop.heartbeat()
+    finally:
+        runner_hub.report = real_report
+    assert reports == [(run_id, "cancelled")], (
+        f"同一筆 run 報了不只一次：{reports}")
 
 
 async def test_reconcile_leaves_a_finished_run_alone(

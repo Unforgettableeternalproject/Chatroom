@@ -162,3 +162,43 @@ async def test_open_db_is_reentrant(tmp_path):
         assert "visibility" in await _columns(db, "room")
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_runner_commands_are_backfilled_as_applied(tmp_path):
+    """卡在「已收到、沒生效」的舊命令要一次收乾淨（實機 2026-09-18）。
+
+    App 把 `applied_at IS NULL` 當成進行中 → 重啟鈕與恢復鈕一起停用。正式
+    Hub 上有四筆這樣的命令（功能上線前的 pause／resume，以及舊版執行器領走
+    就退出的 restart），人看到的是一台永遠按不動的執行器。
+
+    回填成 `applied_at = acked_at`：那筆命令真正發生的時刻就是被取走的那一
+    刻，寫成「現在」等於在面板上編一個新的事件。
+    """
+    path = str(tmp_path / "cmds.db")
+    db = await open_db(path)
+    await db.execute(
+        "INSERT INTO runner (id, host, label, status, max_parallel, projects,"
+        " registered_at, last_seen_at)"
+        " VALUES ('rn1','esvel-pc','main','offline',1,'[]',"
+        "'2026-09-17T00:00:00Z','2026-09-17T00:00:00Z')")
+    await db.execute(
+        "INSERT INTO runner_command (id, runner_id, command, created_at,"
+        " acked_at, applied_at) VALUES"
+        " ('c1','rn1','restart','2026-09-18T09:11:00Z',"
+        "  '2026-09-18T09:12:00Z', NULL),"
+        " ('c2','rn1','pause','2026-09-17T01:00:00Z', NULL, NULL)")
+    # 回到這次遷移之前的版次
+    await db.execute("PRAGMA user_version=4")
+    await db.commit()
+    await db.close()
+
+    db = await open_db(path)
+    rows = {r["id"]: r for r in await (await db.execute(
+        "SELECT id, acked_at, applied_at, note FROM runner_command")
+    ).fetchall()}
+    await db.close()
+    assert rows["c1"]["applied_at"] == rows["c1"]["acked_at"]
+    assert "舊版執行器" in rows["c1"]["note"]
+    assert rows["c2"]["applied_at"] is None, (
+        "還沒被取走的命令也被收掉了——那筆命令執行器根本還沒看到")

@@ -1301,7 +1301,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 4
+DATA_VERSION = 5
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1359,6 +1359,18 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             "  (SELECT p.kind FROM participant p WHERE p.id = message.sender_id), '')"
             " WHERE sender_id IS NOT NULL AND sender_kind = ''"
         )
+    if version < 5:
+        # 遠端派工的命令有「已送出 → 已收到 → 已生效」三段，而 App 把
+        # `applied_at IS NULL` 當成「還在進行中」→ 重啟鈕與恢復鈕一起停用。
+        # 功能上線前、以及舊版執行器（領走命令就退出、從來不回 ack）留下的
+        # 命令永遠停在第二段，正式 Hub 上有四筆從 09-17 卡到 09-18。
+        #
+        # 回填成 `applied_at = acked_at`，不是「現在」：那筆命令真正發生的
+        # 時刻就是被取走的那一刻，寫成今天等於在面板上編一個新的事件。
+        await db.execute(
+            "UPDATE runner_command SET applied_at=acked_at,"
+            " note='舊版執行器未回報生效，這筆命令視為已結束。'"
+            " WHERE acked_at IS NOT NULL AND applied_at IS NULL")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

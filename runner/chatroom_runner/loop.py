@@ -84,6 +84,7 @@ class LoopState:
     restart_reason: str = ""
     draining: bool = False
     selfcheck_problems: list[str] = field(default_factory=list)
+    # 最後一次維護窗重啟的本地日期。開機時從 ``state.json`` 讀回來
     last_maintenance_day: str = ""
     # 收到了、但還沒生效的 restart 命令 id。**要一直帶著**：只在收到那一刻
     # ack 一次的話，Hub 上會永遠停在「等 3 筆 run 結束後重啟」，而手上其實
@@ -118,6 +119,10 @@ class RunnerLoop:
         self._pending_acks: list[dict] = []
         # 正在送「命令已生效」的補心跳，避免它自己再觸發一次
         self._flushing_ack = False
+        # 已經替「不在手上的 run」報過取消的 id。沒有它的話，每一次心跳都會
+        # 對同一筆已經收場的 run 再報一次
+        self._cancelled_orphans: set[str] = set()
+        self._restore_maintenance_day()
 
     def _default_executor(self) -> RunExecutor:
         return RunExecutor(self.cfg, self.hub, usage_store=self.usage,
@@ -271,10 +276,15 @@ class RunnerLoop:
         沒有機會收工」的那一次。進程被殺、任務炸掉、機器斷電——那時只有這個
         檔案記得曾經有一筆 run 在跑。
         """
+        self._persist_identity()
+
+    def _persist_identity(self) -> None:
+        """把本機狀態（手上的 run、維護窗日期）寫回 ``state.json``。"""
         identity = getattr(self.hub, "identity", None)
         if identity is None:
             return
         identity.active_run_ids = sorted(self.active)
+        identity.last_maintenance_day = self.state.last_maintenance_day
         try:
             save_identity(self.cfg.state_file, identity)
         except OSError as exc:  # pragma: no cover - 寫不進去只少了對帳
@@ -371,6 +381,29 @@ class RunnerLoop:
         await self.reconcile(
             {str(x) for x in reply.get("cancel_requested_run_ids", [])})
         return not failed
+
+    def _restore_maintenance_day(self) -> None:
+        """從狀態檔接回「今天做過維護窗了沒」，並處理「一起來就在窗裡」。
+
+        在 `__init__` 跑，不是在 `start()`：判維護窗的是 `tick`，而不是每一
+        條路徑都會先經過 `start()`。
+
+        🚨 **啟動本身就等於重啟過了**（實測 2026-09-18）：這一段少了的話，
+        04:00 起在維護窗裡被排程工作拉起來的進程，會在第一輪就判「現在是
+        maintenance_hour」再退一次，整個小時每 5 分鐘循環一遍。
+        """
+        identity = getattr(self.hub, "identity", None)
+        if identity is not None:
+            self.state.last_maintenance_day = getattr(
+                identity, "last_maintenance_day", "") or ""
+        now = self.now()
+        today = now.date().isoformat()
+        if (now.hour >= self.cfg.maintenance_hour
+                and self.state.last_maintenance_day != today):
+            # 只改記憶體，不寫檔：這一筆是「這個進程剛起來」推出來的，不是
+            # 真的做過一次維護。寫下去的話，凌晨 00:30 開機的人會讓當天的
+            # 維護窗整個被跳過
+            self.state.last_maintenance_day = today
 
     def mark_limited(self, reason: str) -> None:
         """撞到額度：停收新單。``weekly_limit`` 要等人類解除（§5.3）。"""
@@ -499,7 +532,7 @@ class RunnerLoop:
                  "note": note})
             fresh = True
         for run_id in reply.get("cancel_requested_run_ids", []):
-            self.request_cancel(str(run_id))
+            await self._apply_cancel(str(run_id))
         if fresh and not self._flushing_ack:
             # 收到命令就**立刻再報一次**：等下一次心跳的話，人按完鈕要盯著
             # 一個沒有變化的面板 30 秒，而那 30 秒裡唯一合理的推論是「壞了」
@@ -569,6 +602,32 @@ class RunnerLoop:
         active.cancel.set()
         return True
 
+    async def _apply_cancel(self, run_id: str) -> None:
+        """套用一筆取消請求。**手上沒有那個進程也要收場**（實機 2026-09-18）。
+
+        只對 `self.active` 動作的話，上一個執行器進程留下的 run 會永遠停在
+        `claimed`＋`cancel_requested=1`：人按了取消，而 Hub 那端永遠等不到
+        回報——正式 Hub 上有一筆從 09-17 掛到隔天。這裡直接回報，讓 Hub 的
+        狀態機當裁判（已經收場的回 409，`hub.report` 當成「這一步套用過」
+        回 `None`）。
+
+        送不出去就**不記進 set**：下一次心跳再試一次。
+        """
+        if self.request_cancel(run_id):
+            return
+        if run_id in self._cancelled_orphans:
+            return
+        self._cancelled_orphans.add(run_id)
+        try:
+            await self.hub.report(
+                run_id, "cancelled", reason="cancel_requested",
+                result="執行器手上沒有這筆 run 的進程，依取消請求收場。")
+        except HubError as exc:
+            self._cancelled_orphans.discard(run_id)
+            log.warning("取消請求收不掉（run %s）：%s", run_id, exc)
+            return
+        log.warning("run %s 不在手上，依取消請求直接收場", run_id)
+
     # ---------- 領單與執行 ----------
 
     @property
@@ -620,13 +679,17 @@ class RunnerLoop:
     # ---------- 維護窗 ----------
 
     def maintenance_due(self) -> bool:
-        """到點、沒有 run 在跑、今天還沒做過。有 run 就順延到下一次心跳。
+        """一天一次：過了點、沒有 run 在跑、今天還沒做過。
+
+        比的是 ``>= maintenance_hour`` 而不是 ``== maintenance_hour``：整點
+        那一小時剛好在跑 run（或剛好是 paused）就順延，不會因為錯過那一個
+        小時就整天不重啟。「今天做過沒」存在 ``state.json``，跨進程有效。
 
         🚨 ``draining``／``paused`` 時**不重啟**（審查 09/16）：那兩個狀態的
         語意都是「我要它安靜下來」，而重啟回來的執行器會立刻開始領單。
         """
         now = self.now()
-        if now.hour != self.cfg.maintenance_hour or self.active:
+        if now.hour < self.cfg.maintenance_hour or self.active:
             return False
         if self.state.draining or self.state.status == "paused":
             return False
@@ -648,6 +711,9 @@ class RunnerLoop:
             return
         if self.maintenance_due():
             self.state.last_maintenance_day = self.now().date().isoformat()
+            # 退出前一定要落地：只寫記憶體的話，重啟回來的進程還在窗裡，
+            # 會立刻再退一次
+            self._persist_identity()
             await self._restarting_heartbeat()
             self._request_exit(EXIT_RESTART, "maintenance_window")
             return

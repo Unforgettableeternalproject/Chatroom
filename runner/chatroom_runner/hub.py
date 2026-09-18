@@ -48,10 +48,15 @@ class RunnerIdentity:
     # 靠的就是這份清單：Hub 上還是 running、本機卻沒有對應進程的，就是上一次
     # 崩潰留下的孤兒。沒有它，那筆 run 會永遠停在 running 而沒有人收
     active_run_ids: list[str] = field(default_factory=list)
+    # 最後一次做維護窗重啟的**本地日期**（``YYYY-MM-DD``）。一定要落地：只記在
+    # 記憶體裡的話，維護窗重啟回來的進程看到的是一張白紙，於是「現在還在維護
+    # 窗裡」→ 再退一次，整個小時每分鐘被排程工作拉起來一次
+    last_maintenance_day: str = ""
 
     def to_dict(self) -> dict:
         return {"runner_id": self.runner_id, "runner_token": self.runner_token,
-                "active_run_ids": list(self.active_run_ids)}
+                "active_run_ids": list(self.active_run_ids),
+                "last_maintenance_day": self.last_maintenance_day}
 
 
 def load_identity(path: Path) -> RunnerIdentity:
@@ -64,7 +69,8 @@ def load_identity(path: Path) -> RunnerIdentity:
     return RunnerIdentity(
         runner_id=raw.get("runner_id", "") or "",
         runner_token=raw.get("runner_token", "") or "",
-        active_run_ids=[str(x) for x in raw.get("active_run_ids", []) if x])
+        active_run_ids=[str(x) for x in raw.get("active_run_ids", []) if x],
+        last_maintenance_day=str(raw.get("last_maintenance_day", "") or ""))
 
 
 def save_identity(path: Path, identity: RunnerIdentity) -> None:

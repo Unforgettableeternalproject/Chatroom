@@ -373,9 +373,16 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
 
 - heartbeat body 多一個可選的 `command_acks: [{id, applied_at, note}]`。Hub 只
   更新**屬於這台執行器**的命令；`applied_at` 已有值就不會被後來的空 ack 洗掉。
+- **沒有回音的命令由 Hub 收尾**（實機 2026-09-18）：執行器重新註冊時（＝上一個
+  進程已經不在）、或 `acked_at` 超過 10 分鐘仍沒有 `applied_at` 時，Hub 補上
+  `applied_at` 與一句 note。App 把「未 applied」當成進行中，不收的話那顆鈕永遠
+  停用；既有的四筆由 `db._migrate_data` 版次 5 一次性回填（`applied_at = acked_at`）。
 - `applied_at` **原樣存執行器送來的值**，不改成 Hub 的時鐘：它要與
   `dashboard.runner.started_at` 同源，App 靠 `started_at > applied_at` 判定
   「這台已經重啟完回來了」。
+- 人類按的取消，執行器**手上沒有那個進程也要收場**（實機 2026-09-18）：
+  heartbeat 回的 `cancel_requested_run_ids` 裡不在 `self.active` 的 id 直接報
+  `cancelled`（同一筆只報一次），不然上一個進程留下的 run 會永遠停在 `claimed`。
 - 執行器**收到命令就立刻再送一次 heartbeat**，不等 30 秒。pause／resume／drain
   當場生效；restart 收到時**不算生效**（`applied_at` 留空、`note` 寫「等 N 筆
   run 結束後重啟」），而且每一輪都重報一次讓 N 跟著手上的 run 變少。
@@ -388,6 +395,10 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
   `{id, command, issued_by_name, created_at, acked_at, applied_at, note}`（新到舊）。
   `restarting` 的執行器**留在列表上**——從列表消失與「它掛了」在面板上長得一樣。
 - 每日維護窗（預設 04:00，可設）：若無 run 在跑，執行器自我重啟並清暫存；有在跑就順延到下一次 heartbeat 無 run 時。
+  **一天只做一次，且「今天做過沒」要落地在 `state.json`**（實機 2026-09-18）：判準是
+  「本地日期還沒做過且現在 ≥ maintenance_hour」，而剛啟動的執行器就算起在窗裡也算
+  今天做過了——啟動本身就等於重啟過了。少了這兩條，重啟回來的進程還在同一個小時裡，
+  於是再判一次維護窗再退，04:00–05:00 被排程工作每 5 分鐘拉起、循環了 12 次。
 - 執行器啟動時：驗 `claude --version`、驗 GPG 簽章可用（`gpg --clearsign` 探針）、
   驗每個允許 repo 可讀寫且分支正確；任一失敗即 `status=offline(reason)` 並在房內講。
   GPG 由艾斯維爾自行處理（裁決），執行器只驗、不代管 passphrase。
@@ -490,6 +501,11 @@ guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯�
 - run 的狀態變化（queued→running→done/failed/limited/handoff）都是 `agent_run_event`，
   房內 system 訊息只發：開始、結束（含結果一句話）、limited、交接、執行器離線。
   排隊位置變化不發訊息，App 面板顯示即可。
+- **「執行器離線」只發非預期的那一種**（實機 2026-09-18）：最後回報的狀態是
+  `restarting` 時掃成 offline **不發**（那是它自己說要重啟，面板上有命令進度），
+  回來時的「已恢復連線」也跟著不發——只有後半句的話，房裡看到的是一台從來沒掉線過
+  卻一直在恢復連線的執行器。非預期掉線同一台 30 分鐘內最多一則；節流狀態放 Hub
+  記憶體，Hub 自己重啟過就重新講一次。
 - 完成／失敗 mention 派工者；limited 與執行器離線 mention 房內所有人類。
 - agent 自己的發言照現行規則（@ 才喚醒）。
 
@@ -545,8 +561,9 @@ guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯�
 - **`drain` 不重啟**：停收新單、跑完手上的，然後停在 `paused(draining)` 等
   `resume`。排隊中的單**留在 Hub**（取消只有人類能下，§6.1），執行器不代為
   取消。§5.7 的「取消排隊」要由人類在面板上做。
-- **維護窗在 claim 之前判定**：到點、無 run 在跑、當天還沒做過就退 75。有 run
-  就順延到下一次心跳。
+- **維護窗在 claim 之前判定**：過了點（`>= maintenance_hour`）、無 run 在跑、
+  當天還沒做過就退 75。有 run 就順延到下一次心跳；日期記在 `state.json` 的
+  `last_maintenance_day`，跨進程有效（實機 2026-09-18）。
 - **命令改了狀態要立刻補一次 heartbeat**：命令是在心跳的**回應**裡拿到的，
   Hub 手上還是舊狀態，而它對 `paused` 的執行器一律回 204——人按了恢復，
   畫面上卻要再等一個心跳才動。

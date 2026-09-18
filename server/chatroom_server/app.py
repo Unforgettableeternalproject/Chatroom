@@ -13010,6 +13010,40 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _post_message(row["room_id"], None, text, kind="system",
                             system_event=f"run_{reason}")
 
+    # 「執行器失去連線」的節流（實機 2026-09-18）。**放記憶體不進 DB**：
+    # 它只在「現在這一段掉線」裡有意義，Hub 自己重啟過就該重新講一次（那時
+    # 房裡的人也需要一則現況）；為此加一個欄位與一次 migration，換來的是一份
+    # 沒有人會再讀的歷史。
+    runner_offline_notice_at: dict[str, datetime] = {}
+    # 掉線**沒有講出來**的執行器（預期中的重啟，或 30 分鐘內的第二次以上）。
+    # 回來時的「已恢復連線」也要跟著不發：只有回來那一句的話，房裡看到的是
+    # 一台從來沒掉線過卻一直在「恢復連線」的執行器
+    runner_offline_quiet: set[str] = set()
+    # 命令 ack 之後多久還沒回報生效，就當它丟了（§5.7）
+    RUNNER_APPLY_TIMEOUT = timedelta(minutes=10)
+    # 同一台執行器的「失去連線」最多多久講一次
+    RUNNER_OFFLINE_NOTICE_INTERVAL = timedelta(minutes=30)
+
+    async def _settle_stale_commands(runner_id: str, note: str,
+                                     older_than: timedelta | None = None
+                                     ) -> None:
+        """把「已收到、但永遠不會回報生效」的命令收掉（實機 2026-09-18）。
+
+        App 把 `applied_at IS NULL` 當成「這筆還在進行中」，於是重啟鈕與恢復
+        鈕一起停用——正式 Hub 上有四筆這樣的命令從 09-17 卡到現在，人看到的
+        是一台按不動的執行器。執行器重新註冊過（＝上一個進程已經不在），或
+        ack 之後久久沒回報，這兩種情況都代表那筆命令不會再有回音了。
+        """
+        params: list = [_now(), note, runner_id]
+        sql = ("UPDATE runner_command SET applied_at=?, note=?"
+               " WHERE runner_id=? AND acked_at IS NOT NULL"
+               " AND applied_at IS NULL")
+        if older_than is not None:
+            sql += " AND acked_at < ?"
+            params.append((datetime.now(timezone.utc)
+                           - older_than).isoformat())
+        await app.state.db.execute(sql, params)
+
     async def _announce_runner_presence(runner_id: str, online: bool) -> None:
         """執行器上線／離線在**它有未結束 run 的 ops 房**裡講一句，mention 人類。
 
@@ -13290,6 +13324,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "        ELSE status END,"
                 " last_seen_at=? WHERE id=?",
                 (projects, body.max_parallel, body.version, now, found["id"]))
+            await _settle_stale_commands(
+                found["id"], "執行器已重新啟動，這筆命令視為已結束。")
             await _commit_with_retry(db)
             return {"runner": _runner_public(await _runner_or_404(found["id"])),
                     "created": False, "runner_token": None}
@@ -13304,6 +13340,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " last_seen_at=? WHERE id=?",
                 (projects, body.max_parallel, body.version,
                  _runner_token_sha(token), now, found["id"]))
+            await _settle_stale_commands(
+                found["id"], "執行器已重新啟動，這筆命令視為已結束。")
             await _commit_with_retry(db)
             return {"runner": _runner_public(await _runner_or_404(found["id"])),
                     "created": False, "runner_token": token}
@@ -13365,6 +13403,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " applied_at=COALESCE(applied_at, ?)"
                 " WHERE id=? AND runner_id=?",
                 (ack.note, ack.applied_at or None, ack.id, runner_id))
+        # 取走了卻一直沒回報生效的：執行器沒回報就是丟了（進程在套用之前
+        # 就退出，或回報那一輪連不上）。不收的話，App 上那顆鈕永遠停用
+        await _settle_stale_commands(
+            runner_id, "執行器未回報生效（逾時），這筆命令視為已結束。",
+            older_than=RUNNER_APPLY_TIMEOUT)
         cmds = await (await db.execute(
             "SELECT * FROM runner_command WHERE runner_id=?"
             " AND acked_at IS NULL ORDER BY created_at, rowid",
@@ -13378,7 +13421,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND status IN ('claimed','running','limited')",
             (runner_id,))).fetchall()
         await _commit_with_retry(db)
-        if was_offline:
+        if was_offline and runner_id in runner_offline_quiet:
+            # 那一次掉線沒有講，回來也不講：面板上有命令進度，房裡不需要
+            # 一則沒有前情的「已恢復連線」
+            runner_offline_quiet.discard(runner_id)
+        elif was_offline:
             await _announce_runner_presence(runner_id, online=True)
         return {"runner_id": runner_id,
                 "commands": [dict(c) for c in cmds],
@@ -13691,22 +13738,42 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         **只標一次**：條件是 `status != 'offline'`，所以第二輪不會再發。
         每輪都發的話，一台關掉的執行器會每 30 秒在房裡喊一次。
+
+        講不講那一句，看掉線是不是預期中的（實機 2026-09-18）：
+
+        - 最後回報的狀態是 `restarting` ⇒ **不講**。那是執行器自己說「我要
+          重啟了」之後的離線，1～2 分鐘就回來，而面板上有命令進度可看。
+        - 非預期掉線 ⇒ 同一台 30 分鐘內最多一則。一台在重啟迴圈裡的執行器
+          會每 5 分鐘掉一次線，而那一小時的房間全是同一句話。
         """
         if cfg.runner_offline_after <= 0:
             return
-        cutoff = (datetime.now(timezone.utc)
-                  - timedelta(seconds=cfg.runner_offline_after)).isoformat()
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(
+            seconds=cfg.runner_offline_after)).isoformat()
         rows = await (await app.state.db.execute(
-            "SELECT id FROM runner WHERE status != 'offline'"
+            "SELECT id, status FROM runner WHERE status != 'offline'"
             " AND last_seen_at < ?", (cutoff,))).fetchall()
         for r in rows:
+            expected = r["status"] == "restarting"
+            last = runner_offline_notice_at.get(r["id"])
+            throttled = (last is not None
+                         and now - last < RUNNER_OFFLINE_NOTICE_INTERVAL)
             await app.state.db.execute(
                 "UPDATE runner SET status='offline', limit_reason=''"
                 " WHERE id=?", (r["id"],))
             await _commit_with_retry(app.state.db)
+            if expected or throttled:
+                runner_offline_quiet.add(r["id"])
+                continue
+            runner_offline_quiet.discard(r["id"])
+            runner_offline_notice_at[r["id"]] = now
             await _announce_runner_presence(r["id"], online=False)
 
     app.state.sweep_runners = _sweep_runners
+    # 測試要看得到節流的狀態：改不到「上一則是什麼時候發的」，30 分鐘那條
+    # 界線就只能用 sleep 去等，而那種測試沒有人會等它跑完
+    app.state.runner_offline_notice_at = runner_offline_notice_at
 
     # ---------- Presence sweeper ----------
 
