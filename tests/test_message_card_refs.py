@@ -254,7 +254,7 @@ async def test_no_unicode_normalisation_anywhere(tmp_path):
             assert r.status_code == 422
             assert r.json()["detail"]["code"] == "card_ref_not_in_content"
             # 錯誤要指向使用者改得動的東西
-            assert "字形差異" in r.json()["detail"]["message"]
+            assert "重選" in r.json()["detail"]["message"]
 
             # 原樣那條照樣通過
             ok = await _post(client, rid, hdr, f"看 #[{title}]", [tid])

@@ -71,7 +71,7 @@ async def test_asker_can_cancel_and_the_answer_path_closes(tmp_path):
             )
             assert r.status_code == 409
             assert r.json()["detail"]["code"] == "question_cancelled"
-            assert "沒有人在等" in r.json()["detail"]["message"]
+            assert "不用回答" in r.json()["detail"]["message"]
 
 
 @pytest.mark.asyncio

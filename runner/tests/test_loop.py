@@ -387,7 +387,7 @@ async def test_restart_reports_waiting_then_restarting(
     assert loop.exit_code == EXIT_RESTART
     row = await _command_row(app, cmd["id"])
     assert row["applied_at"], "退出前沒有把命令標成生效"
-    assert row["note"] == "正在重啟，預計 1～2 分鐘內回來"
+    assert row["note"] == "正在重啟，預計 1～2 分鐘完成"
     runner = await (await app.state.db.execute(
         "SELECT status FROM runner WHERE id=?",
         (runner_hub.identity.runner_id,))).fetchone()
@@ -747,7 +747,7 @@ async def test_a_silent_run_is_marked_stalled_once(
                              headers=headers)).json()["messages"]
     stalled_msgs = [m for m in msgs if m["system_event"] == "run_stalled"]
     assert len(stalled_msgs) == 1, "三個心跳報了三次＝把房間洗掉"
-    assert "沒動靜" in stalled_msgs[0]["content"]
+    assert "沒有輸出" in stalled_msgs[0]["content"]
 
     # 再收到事件就解除，一樣只記一次
     active.executor.mark_activity()

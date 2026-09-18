@@ -339,9 +339,8 @@ class RunnerLoop:
             try:
                 applied = await self.hub.report(
                     run_id, status, reason=reason,
-                    result="執行器重新啟動時發現這筆 run 沒有對應的進程"
-                           "（上一個執行器進程已經不在）。它不會自己繼續，"
-                           "所以在這裡收場。")
+                    result="執行器重新啟動後，這筆 run 沒有對應的進程，"
+                           "已在此收場。")
             except HubError as exc:
                 log.warning("對帳：run %s 收不掉（%s）", run_id, exc)
                 continue
@@ -735,7 +734,7 @@ class RunnerLoop:
         for cmd_id in self.state.pending_restart_ids:
             self._pending_acks.append(
                 {"id": cmd_id, "applied_at": now,
-                 "note": "正在重啟，預計 1～2 分鐘內回來"})
+                 "note": "正在重啟，預計 1～2 分鐘完成"})
         self.state.pending_restart_ids = []
         self.state.status = "restarting"
         # 這一次不要再因為回應裡的新命令去補一次心跳：下一秒就退出了

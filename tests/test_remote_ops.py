@@ -1190,7 +1190,7 @@ async def test_an_unapplied_command_keeps_its_note_and_no_applied_at(tmp_path):
                 json={"status": "restarting",
                       "command_acks": [{"id": cmd["id"],
                                         "applied_at": "2026-09-17T10:00:00Z",
-                                        "note": "正在重啟，預計 1～2 分鐘內回來"}]})
+                                        "note": "正在重啟，預計 1～2 分鐘完成"}]})
             assert r.status_code == 200, r.text
             body = (await client.get(f"/api/rooms/{rid}/runner",
                                      headers=hdr)).json()
@@ -1205,7 +1205,7 @@ async def test_an_unapplied_command_keeps_its_note_and_no_applied_at(tmp_path):
                 f"/api/runners/{runner}/heartbeat", headers=runner.headers,
                 json={"status": "restarting",
                       "command_acks": [{"id": cmd["id"], "applied_at": None,
-                                        "note": "正在重啟，預計 1～2 分鐘內回來"}]})
+                                        "note": "正在重啟，預計 1～2 分鐘完成"}]})
             again = (await client.get(f"/api/rooms/{rid}/runner", headers=hdr)
                      ).json()["runners"][0]["commands"][0]
             assert again["applied_at"] == applied

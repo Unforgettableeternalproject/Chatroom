@@ -1177,7 +1177,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       'active' when stats.stagesOpen > 0 => [
           '${stats.stagesOpen} 個階段還沒收尾',
           if (stats.remaining > 0) '${stats.remaining} 張未完成',
-          if (stats.orphans > 0) '${stats.orphans} 張沒有人在上面',
+          if (stats.orphans > 0) '${stats.orphans} 張已釋出',
         ].join(' · '),
       'active' when stats.stagesDone == 0 => '每個階段都被取消了',
       'active' => '所有階段都收尾了，可以送審',

@@ -312,15 +312,15 @@ def resolve_repo(run: dict, project: ProjectConfig) -> RepoConfig:
         repo = repos.get(name)
         if repo is None:
             raise RunSetupError(
-                f"簡述指名的 repo「{name}」不在專案 {project.key} 的允許清單裡"
-                f"（可用：{'、'.join(repos)}）。")
+                f"簡述指名的 repo「{name}」不在專案 {project.key} 的允許清單裡。"
+                f"可用：{'、'.join(repos)}。")
         return repo
     if project.default_repo:
         return repos[project.default_repo]
     raise RunSetupError(
-        f"專案 {project.key} 有多個 repo（{'、'.join(repos)}）且沒有設"
-        " default_repo，而簡述裡也沒有 `repo: <名稱>` 這一行——"
-        "執行器不會替你猜要動哪一個工作樹。")
+        f"專案 {project.key} 有多個 repo 且沒有設 default_repo，"
+        "請在簡述裡加一行 `repo: <名稱>`。"
+        f"可用：{'、'.join(repos)}。")
 
 
 def short_id(run_id: str) -> str:
@@ -405,9 +405,9 @@ class RunExecutor:
             log.error("run %s 的執行以未預期的例外收場", run_id, exc_info=exc)
             outcome = RunOutcome(
                 "failed", reason=f"runner_error: {exc.__class__.__name__}",
-                result=f"執行器在跑這筆 run 時丟出未預期的例外："
+                result=f"執行器發生未預期的例外："
                        f"{exc.__class__.__name__}: {exc}\n"
-                       "子進程（若還在）已被終止。詳細堆疊在執行器的 log。")
+                       "子進程已終止，詳細堆疊在執行器的 log。")
             await self._report(run_id, outcome)
             return outcome
 
@@ -456,8 +456,9 @@ class RunExecutor:
         if not repo.allows_push(branch):
             return RunOutcome(
                 "failed", reason="push_branch_not_allowed",
-                result=f"分支「{branch}」不在 {repo.name} 的可推清單"
-                       f"（{'、'.join(repo.push_branches) or '空'}）裡，沒有推送。")
+                result=f"分支「{branch}」不在 {repo.name} 的可推清單裡，"
+                       "沒有推送。可推："
+                       f"{'、'.join(repo.push_branches) or '無'}。")
         # 🚨 先 fetch 再算未推送：不 fetch 的話比對的是上次 fetch 時的遠端
         # 位置，而那份清單同時是「按鈕的人看到什麼」的依據。fetch 失敗＝不知
         # 道遠端現在長什麼樣子，這時推上去是盲推
@@ -467,22 +468,21 @@ class RunExecutor:
             return RunOutcome(
                 "failed", reason="push_fetch_failed",
                 result=f"git fetch origin {branch} 失敗，沒有推送："
-                       f"{fetched.err or fetched.out}\n"
-                       "抓不到遠端就無法確認待推的是不是儀表板上那幾顆。")
+                       f"{fetched.err or fetched.out}")
         expected = {s for s in _SHA_RE.findall(brief.lower())
                     if s != branch.lower()}
         if not expected:
             return RunOutcome(
                 "failed", reason="push_sha_list_missing",
-                result="這筆 push 沒有帶要推的 commit 清單。儀表板上按推送時會"
-                       "把 sha 一起送來；沒有清單就無法確認要推的是不是你看到的"
-                       "那幾顆，所以不推。")
+                result="這筆 push 沒有帶要推的 commit 清單，沒有推送。"
+                       "請從儀表板重新按一次推送。")
         actual = [c.sha for c in await gitops.unpushed(repo.path, branch)]
         if not self._sha_sets_match(expected, actual):
             return RunOutcome(
                 "failed", reason="push_sha_mismatch",
                 result=(f"待推的 commit 與派工當下看到的不一致，沒有推送。\n"
-                        f"現在是 {len(actual)} 顆：{', '.join(a[:8] for a in actual) or '（無）'}\n"
+                        f"現在是 {len(actual)} 顆："
+                        f"{', '.join(a[:8] for a in actual) or '無'}\n"
                         f"派工時是 {len(expected)} 顆："
                         f"{', '.join(sorted(s[:8] for s in expected))}\n"
                         "請重新整理儀表板再按一次。"))
@@ -493,7 +493,8 @@ class RunExecutor:
                               result=f"git push 失敗：{res.err or res.out}")
         return RunOutcome(
             "done", reason="pushed",
-            result=f"已推送 {repo.name} 的 {branch}（{len(actual)} 顆 commit）。")
+            result=f"已推送 {repo.name} 的 {branch}，"
+                   f"共 {len(actual)} 顆 commit。")
 
     @staticmethod
     def _push_credential_args() -> list[str]:
@@ -544,9 +545,8 @@ class RunExecutor:
         if not repo.allows(branch):
             outcome = RunOutcome(
                 "failed", reason="branch_not_allowed",
-                result=f"{repo.name} 目前在分支「{branch}」，不在允許清單"
-                       f"（{'、'.join(repo.allowed_branches)}）裡。"
-                       "執行器不會替你切分支——那是人類的決定。")
+                result=f"{repo.name} 目前在分支「{branch}」，不在允許清單裡。"
+                       f"允許的分支：{'、'.join(repo.allowed_branches)}。")
             await self._report(run_id, outcome)
             return outcome
 
@@ -604,8 +604,8 @@ class RunExecutor:
             attempt += 1
             await self._report(run_id, RunOutcome(
                 "limited", reason=f"rate_limit_backoff_{wait_minutes}m",
-                result=f"撞到額度上限，{wait_minutes} 分鐘後用 --resume 續跑"
-                       f"（第 {attempt} 次退避）。",
+                result=f"已達額度上限，{wait_minutes} 分鐘後續跑，"
+                       f"第 {attempt} 次退避。",
                 claude_session_id=state.session_id))
             await self.sleep(wait_minutes * 60)
             if cancel.is_set():
@@ -829,19 +829,19 @@ class RunExecutor:
                      f"{state.peak_context_tokens} tokens")
         lines.append(f"HEAD：{(diff['head_before'] or '?')[:8]} → "
                      f"{(diff['head_after'] or '?')[:8]}"
-                     f"{'（有新 commit）' if diff['head_changed'] else ''}")
+                     f"{'，有新 commit' if diff['head_changed'] else ''}")
         if diff["branch_changed"]:
-            lines.append(f"⚠️ 分支變了：{diff['branch_before']} → "
+            lines.append(f"分支已變更：{diff['branch_before']} → "
                          f"{diff['branch_after']}")
         if diff["new_dirty"]:
-            lines.append("未 commit 的變更（執行器不會自動處理）："
+            lines.append("未 commit 的變更："
                          + "、".join(diff["new_dirty"][:20]))
         if (run_dir / "compacted").exists():
-            lines.append("⚠️ 這一輪被自動壓縮過，摘要裡對前段的敘述是二手的。")
+            lines.append("這一輪被自動壓縮過，摘要中前段的敘述是二手的。")
         tool_log = run_dir / "tool.log"
         if tool_log.exists():
             n = sum(1 for _ in tool_log.open(encoding="utf-8"))
-            lines.append(f"工具呼叫 {n} 次（完整紀錄：{tool_log}）")
+            lines.append(f"工具呼叫 {n} 次，完整紀錄：{tool_log}")
         return "\n".join(lines).strip()[:8000]
 
     def _record_usage(self, run_id: str, state) -> None:

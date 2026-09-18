@@ -387,7 +387,7 @@ heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境
   當場生效；restart 收到時**不算生效**（`applied_at` 留空、`note` 寫「等 N 筆
   run 結束後重啟」），而且每一輪都重報一次讓 N 跟著手上的 run 變少。
 - 手上清空、真的要退出前，執行器再送一次 `status="restarting"` 的 heartbeat 並把
-  命令標生效（note「正在重啟，預計 1～2 分鐘內回來」）。少了這一次，進程退出後
+  命令標生效（note「正在重啟，預計 1～2 分鐘完成」）。少了這一次，進程退出後
   Hub 還寫著 online，要等 `runner_offline_after`（180 秒）掃到才變 offline——而
   重啟只要 1～2 分鐘，人從頭到尾看不到任何「正在重啟」。這一次心跳有逾時上限，
   **送不出去也照樣退出**：退出路徑卡在 socket 上的話，排程工作也拉不起它。
