@@ -65,6 +65,16 @@ def skills_block(names: list[str] | None) -> str:
     return SKILLS_FRAME.format(names=listed)
 
 
+# 專案設定允許瀏覽器實機測試時，模板多這一句。**預設不加**：模板本文已經
+# 說「實機／瀏覽器測試不是交付門檻」，只有這台機器的設定說可以時才翻案
+LIVETEST_LINE = "這個專案允許瀏覽器實機測試，能做就做。"
+
+
+def livetest_block(allowed: bool) -> str:
+    """瀏覽器實機測試那一句。不允許時回空字串，模板不會留下半句話。"""
+    return LIVETEST_LINE if allowed else ""
+
+
 def repos_block(repos: list[dict]) -> str:
     """專案所有 repo 的條列（名稱、路徑、目前分支、允許分支）。
 
@@ -125,6 +135,7 @@ def build(kind: str, fields: dict[str, str], brief: str,
           prompt_dir: Path | None = None) -> str:
     merged = dict(fields)
     merged["brief_block"] = frame_brief(brief)
+    merged.setdefault("livetest_block", "")
     _fill_repo_defaults(merged)
     return render(load_template(kind, prompt_dir), merged)
 
@@ -135,5 +146,6 @@ def build_contract(fields: dict[str, str],
     merged = dict(fields)
     # 沒有必守 skill 的專案不必傳這個欄位，但模板裡的 placeholder 不能留著
     merged.setdefault("skills_block", "")
+    merged.setdefault("livetest_block", "")
     _fill_repo_defaults(merged)
     return render(load_template("contract", prompt_dir), merged)

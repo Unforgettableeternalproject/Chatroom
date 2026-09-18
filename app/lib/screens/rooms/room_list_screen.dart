@@ -15,6 +15,7 @@ import '../../state/messages_providers.dart';
 import '../../models/board.dart';
 import '../../state/board_providers.dart';
 import '../../state/rooms_providers.dart';
+import '../../state/runner_kit_presence.dart';
 import '../../widgets/delete_room_confirm.dart';
 import '../../widgets/pending_invites_banner.dart';
 import '../../widgets/room_style_picker.dart';
@@ -659,6 +660,10 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           _KindPicker(
             value: _kind,
             enabled: !_creating,
+            // 這台機器沒裝執行器就開不了工作房：工作房的用途是給遠端派工，
+            // 而派工要有一台執行器接。**還在查的時候先當成沒有**——問題
+            // 只在按下去那一刻才成立，而它很快就會回答
+            opsEnabled: ref.watch(runnerKitPresentProvider).value ?? false,
             onChanged: (v) => setState(() => _kind = v),
           ),
           const SizedBox(height: 14),
@@ -787,11 +792,16 @@ class _KindPicker extends StatelessWidget {
     required this.value,
     required this.onChanged,
     this.enabled = true,
+    this.opsEnabled = true,
   });
 
   final String value;
   final ValueChanged<String> onChanged;
   final bool enabled;
+
+  /// 這台機器裝了執行器沒有。沒裝就選不了工作房——開一間沒有人接得了單的
+  /// 工作房，使用者要等到第一次派工才會發現，而那時房已經建好了。
+  final bool opsEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -800,12 +810,14 @@ class _KindPicker extends StatelessWidget {
     // Row + CrossAxisAlignment.stretch，而這裡的父層是 SingleChildScrollView
     // ——垂直方向沒有上界，stretch 要求的是一個有界的高度，整個對話框會被
     // 撐開、後面的欄位被擠出畫面
-    Widget option(String kind, String label, String summary) {
+    Widget option(String kind, String label, String summary,
+        {bool available = true}) {
       final active = value == kind;
+      final usable = enabled && available;
       return Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: InkWell(
-          onTap: enabled ? () => onChanged(kind) : null,
+          onTap: usable ? () => onChanged(kind) : null,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
             decoration: BoxDecoration(
@@ -834,7 +846,7 @@ class _KindPicker extends StatelessWidget {
                       Text(label,
                           style: UepText.sans(
                               size: 13.5,
-                              color: enabled ? s.ink : s.inkMute)),
+                              color: usable ? s.ink : s.inkMute)),
                       const SizedBox(height: 2),
                       Text(summary,
                           style: UepText.serif(
@@ -851,7 +863,20 @@ class _KindPicker extends StatelessWidget {
 
     return Column(children: [
       option('chat', '一般對話', '沒有 agent 在場時會自動封存。'),
-      option('ops', '工作房（ops）', '不自動封存，給遠端派工用。'),
+      option('ops', '工作房（ops）', '不自動封存，給遠端派工用。',
+          available: opsEnabled),
+      // 只講擋住的理由，不解釋原理、也不在這裡教怎麼裝——那是 runner-kit
+      // 的 README 的事
+      if (!opsEnabled)
+        Padding(
+          padding: const EdgeInsets.only(left: 24, bottom: 4),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('這台機器沒裝執行器，開不了工作房',
+                style: UepText.serif(
+                    size: 12.5, color: s.inkMute, height: 1.4)),
+          ),
+        ),
     ]);
   }
 }

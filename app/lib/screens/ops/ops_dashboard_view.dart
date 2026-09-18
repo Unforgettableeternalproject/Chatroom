@@ -702,6 +702,7 @@ String runnerCommandLabel(String command) => switch (command) {
       'resume' => '恢復',
       'restart' => '重啟',
       'drain' => '清空佇列',
+      'reload' => '重讀設定',
       _ => command,
     };
 

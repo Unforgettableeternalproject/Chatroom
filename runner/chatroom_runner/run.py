@@ -687,6 +687,8 @@ class RunExecutor:
             "repo_names": "、".join(item.name for item in repos),
             "skills_block": prompts.skills_block(
                 project.skills_for(run["kind"])),
+            "livetest_block": prompts.livetest_block(
+                project.allow_browser_livetest),
         }
         prompt = prompts.build(run["kind"], fields, run.get("brief", ""),
                                self.prompt_dir)

@@ -24,8 +24,8 @@ REPO = Path(__file__).resolve().parents[1]
 
 # 會被打包進交付物的地方。**測試自己不在這個範圍裡**——否則底下那些
 # 樣式會在這個檔案裡自我觸發
-PACKAGED = [REPO / "install-kit", REPO / "host-kit", REPO / "scripts",
-            REPO / "bridge" / "chatroom_mcp"]
+PACKAGED = [REPO / "install-kit", REPO / "host-kit", REPO / "runner-kit",
+            REPO / "scripts", REPO / "bridge" / "chatroom_mcp"]
 
 SUFFIXES = {".py", ".md", ".cmd", ".ps1", ".vbs", ".json", ".toml"}
 

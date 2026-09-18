@@ -46,7 +46,8 @@ async def _main(args) -> int:
     usage.prune()
     async with RunnerHub(cfg.hub_url, cfg.agent_token,
                          identity=identity) as hub:
-        loop = RunnerLoop(cfg, hub, usage_store=usage)
+        loop = RunnerLoop(cfg, hub, usage_store=usage,
+                          config_path=args.config)
         if args.selfcheck_only:
             problems = await loop.selfcheck()
             for p in problems:

@@ -126,7 +126,10 @@ class RunsApi {
         return RoomRunnerBoard.fromJson(res.data ?? const {});
       });
 
-  /// 對執行器下命令：pause / resume / restart / drain（§5.7）。
+  /// 對執行器下命令：pause / resume / restart / drain / reload（§5.7）。
+  ///
+  /// `reload`＝重讀本機 `config.json`（執行器分頁改完設定後送），不打斷
+  /// 正在跑的 run。
   ///
   /// **命令是存下來等 heartbeat 取的，不是即時推送**——按下去之後畫面要說
   /// 「已送出，執行器下次回報時生效」，不能說「已暫停」。

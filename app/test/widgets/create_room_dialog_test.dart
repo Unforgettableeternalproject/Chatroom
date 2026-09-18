@@ -6,6 +6,7 @@ import 'package:chatroom_app/models/room.dart';
 import 'package:chatroom_app/screens/rooms/room_list_screen.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/board_providers.dart';
+import 'package:chatroom_app/state/runner_kit_presence.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -67,6 +68,10 @@ Future<_FakeRoomsApi> _open(WidgetTester tester) async {
       // 板清單不是這組測試的題目，給一份空的，畫面就不會去打 Hub
       boardLibraryProvider('active')
           .overrideWith((ref) async => const BoardListResult()),
+      // 工作房現在要這台機器裝了執行器才選得動（閘本身在
+      // `create_room_ops_gate_test.dart` 驗）。這裡的題目是版面與 kind，
+      // 不釘住的話這組測試會跟著**跑測試那台機器**有沒有裝執行器而紅綠不定
+      runnerKitPresentProvider.overrideWith((ref) async => true),
     ],
     child: MaterialApp(
       theme: buildUepTheme(Brightness.dark),

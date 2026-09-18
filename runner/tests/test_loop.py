@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 import pytest
 
 from chatroom_runner import gitops
+from chatroom_runner.config import load_config
 from chatroom_runner.hub import RunnerHub, load_identity
 from chatroom_runner.loop import (EXIT_RESTART, EXIT_SELFCHECK_FAILED,
                                   RunnerLoop)
 
-from ._fixtures import ROOT_TOKEN, create_run, make_config
+from ._fixtures import ROOT_TOKEN, create_run, make_config, write_config
 
 
 class StubExecutor:
@@ -1087,3 +1088,127 @@ async def test_mentions_are_appended_once_for_the_hook_to_pick_up(
     gate.set()
     await asyncio.wait_for(asyncio.gather(
         *[a.task for a in loop.active.values()]), timeout=10)
+
+
+# ── reload（執行器分頁改完設定按套用）────────────────────────────
+
+async def test_reload_rereads_the_config_without_touching_running_runs(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """reload：換掉設定與專案表，**手上的 run 照舊跑完**。
+
+    改一次設定就把正在跑的 run 殺掉的話，沒有人敢在白天改設定。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    path = write_config(tmp_path / "config.json", tmp_path, work_repo)
+    cfg = load_config(path)
+    gate = asyncio.Event()
+    loop = _loop(cfg, runner_hub, config_path=path,
+                 executor_factory=lambda: StubExecutor(gate))
+    assert await loop.start()
+    await create_run(client, room_id, headers)
+    await loop.tick()
+    assert len(loop.active) == 1
+
+    # 設定檔換掉：多一個專案，原本那個改成不公開
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    write_config(path, tmp_path, work_repo, projects={
+        "ai-website": {"public": False, "repos": repos},
+        "chatroom": {"repos": repos},
+    })
+    cmd = (await client.post(
+        f"/api/runners/{runner_hub.identity.runner_id}/commands",
+        json={"command": "reload", "room_id": room_id},
+        headers=headers)).json()["command"]
+    await loop.heartbeat()
+
+    assert set(loop.cfg.projects) == {"ai-website", "chatroom"}
+    assert loop.cfg.project("ai-website").public is False
+    assert len(loop.active) == 1, "reload 不該動到正在跑的 run"
+
+    row = await _command_row(app, cmd["id"])
+    assert row["acked_at"] is not None
+    assert row["applied_at"] is not None, "生效了就要說生效"
+    assert "重讀" in row["note"]
+
+    gate.set()
+    await asyncio.gather(*[a.task for a in loop.active.values()])
+
+
+async def test_reload_reports_the_new_public_projects_to_the_hub(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """公開清單是在 register 送的——reload 之後要補報一次。
+
+    不補的話，別人的派工對話框會一直列著已經取消公開的專案，而沒有任何
+    地方會說那份清單是舊的。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    path = write_config(tmp_path / "config.json", tmp_path, work_repo,
+                        projects={"ai-website": {"repos": repos}})
+    loop = _loop(load_config(path), runner_hub, config_path=path)
+    assert await loop.start()
+
+    async def _hub_projects() -> list[str]:
+        row = await (await app.state.db.execute(
+            "SELECT projects FROM runner WHERE id=?",
+            (runner_hub.identity.runner_id,))).fetchone()
+        return json.loads(row["projects"])
+
+    assert await _hub_projects() == ["ai-website"]
+
+    write_config(path, tmp_path, work_repo, projects={
+        "ai-website": {"public": False, "repos": repos},
+        "chatroom": {"repos": repos},
+    })
+    await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
+                      json={"command": "reload"}, headers=headers)
+    await loop.heartbeat()
+
+    assert await _hub_projects() == ["chatroom"]
+    assert loop.state.reregister_pending is False
+
+
+async def test_a_broken_config_is_rejected_and_the_old_one_stays(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """解析失敗**維持舊設定**，並把原因寫進命令的 note。
+
+    套一半的設定比舊設定更難收拾，而「沒生效」要看得見——applied_at 留空
+    正是那條回報鏈存在的理由。
+    """
+    app, client = hub_app
+    room_id, headers = ops_room
+    path = write_config(tmp_path / "config.json", tmp_path, work_repo)
+    loop = _loop(load_config(path), runner_hub, config_path=path)
+    assert await loop.start()
+    before = loop.cfg
+
+    path.write_text("{ 這不是 JSON", encoding="utf-8")
+    cmd = (await client.post(
+        f"/api/runners/{runner_hub.identity.runner_id}/commands",
+        json={"command": "reload"}, headers=headers)).json()["command"]
+    await loop.heartbeat()
+
+    assert loop.cfg is before, "重讀失敗還換掉設定＝把執行器弄啞"
+    row = await _command_row(app, cmd["id"])
+    assert row["acked_at"] is not None
+    assert row["applied_at"] is None
+    assert "維持舊設定" in row["note"]
+
+
+async def test_only_public_projects_are_registered(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """啟動時報給 Hub 的清單就只有公開的那些。"""
+    app, _client = hub_app
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    cfg = make_config(tmp_path, work_repo, projects={
+        "open": {"repos": repos},
+        "secret": {"public": False, "repos": repos},
+    })
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    row = await (await app.state.db.execute(
+        "SELECT projects FROM runner WHERE id=?",
+        (runner_hub.identity.runner_id,))).fetchone()
+    assert json.loads(row["projects"]) == ["open"]

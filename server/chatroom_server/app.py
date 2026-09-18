@@ -359,7 +359,7 @@ class StageFileNoteUpdate(BaseModel):
 
 
 class RunnerCommandCreate(BaseModel):
-    command: str = Field(pattern="^(pause|resume|restart|drain)$")
+    command: str = Field(pattern="^(pause|resume|restart|drain|reload)$")
     # 從哪間房下的（provenance，可空）
     room_id: str = Field(default="", max_length=64)
 
@@ -13832,7 +13832,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         host: bool = Depends(host_view),
     ):
-        """人類下的執行器命令：pause / resume / restart / drain（§5.7）。
+        """人類下的執行器命令：pause / resume / restart / drain / reload。
+
+        `reload` 是「把設定檔重讀一次」（執行器分頁改完設定後送），走的是
+        同一張 `runner_command` 表、同一套 issued→acked→applied 回報鏈——
+        改設定不該另開一條 Hub 不認得的平行通路。
 
         命令**存下來等 heartbeat 取**，不是即時推送：執行器可能正卡在一個
         子進程上，而「已送達」與「已生效」在畫面上長得一樣的話，人會以為

@@ -162,7 +162,7 @@ runner                                          （P1 已落地）
   registered_at, last_seen_at, version
 
 runner_command                                  （§5.7，P1 已落地）
-  id, runner_id, command(pause|resume|restart|drain)
+  id, runner_id, command(pause|resume|restart|drain|reload)
   issued_by, issued_by_name, room_id（provenance）, created_at, acked_at
   applied_at    真正生效的時間（執行器回報，**原樣存它的時鐘**）
   note          執行器對這筆命令講的一句話（沒生效也要寫）

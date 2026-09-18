@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -34,8 +35,12 @@ def git(repo: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
-def make_config(tmp_path, repo: Path, **overrides):
-    """指向假 claude 與測試 repo 的執行器設定。"""
+def config_raw(tmp_path, repo: Path, **overrides) -> dict:
+    """設定檔的原始 dict。`make_config` 與「寫成真的檔案」共用同一份——
+
+    reload 要重讀的是**磁碟上的那一份**，兩邊各寫一份的話，測到的設定
+    與執行器讀到的不是同一個形狀。
+    """
     raw = {
         "hub_url": "http://test",
         "agent_token": ROOT_TOKEN,
@@ -66,7 +71,22 @@ def make_config(tmp_path, repo: Path, **overrides):
         },
     }
     raw.update(overrides)
-    return config_from_dict(raw, base_dir=tmp_path)
+    return raw
+
+
+def make_config(tmp_path, repo: Path, **overrides):
+    """指向假 claude 與測試 repo 的執行器設定。"""
+    return config_from_dict(config_raw(tmp_path, repo, **overrides),
+                            base_dir=tmp_path)
+
+
+def write_config(path: Path, tmp_path, repo: Path, **overrides) -> Path:
+    """把設定寫成真的檔案（reload 用）。"""
+    path.write_text(
+        json.dumps(config_raw(tmp_path, repo, **overrides),
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    return path
 
 
 async def create_run(client, room_id, headers, **body):

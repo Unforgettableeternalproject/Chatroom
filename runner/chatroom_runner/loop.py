@@ -31,7 +31,8 @@ from typing import Awaitable, Callable
 
 from . import dashboard, gitops
 from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
-                     SOFT_STOP_TIMEOUT_FLAG_NAME, RunnerConfig)
+                     SOFT_STOP_TIMEOUT_FLAG_NAME, ConfigError, RunnerConfig,
+                     load_config, public_project_keys)
 from .hub import HubError, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
@@ -49,6 +50,12 @@ EXIT_SELFCHECK_FAILED = 1
 # Hub 連不上的時候，退出路徑不能卡在一個 socket 上——重啟本來就是
 # 排程工作在收尾，卡住的話那台執行器連退場都做不到
 RESTART_HEARTBEAT_TIMEOUT = 15.0
+
+# 命令回報的 note 上限。**與 Hub 的 `RunnerCommandAck.note` 同一個數字**：
+# 超過的那一次是 422，而 422 在心跳裡被當成「Hub 連不上」吞掉——面板上那筆
+# 命令會永遠停在一片空白，而執行器這邊其實早就套用完了（實測：reload 失敗
+# 時把整串 ConfigError 連路徑塞進 note）
+MAX_ACK_NOTE = 200
 
 
 @dataclass
@@ -91,6 +98,9 @@ class LoopState:
     # ack 一次的話，Hub 上會永遠停在「等 3 筆 run 結束後重啟」，而手上其實
     # 只剩一筆了
     pending_restart_ids: list[str] = field(default_factory=list)
+    # reload 換過設定之後要再 register 一次：公開專案清單是在 register 送的，
+    # 不重報的話 Hub 手上會一直是舊的那一份
+    reregister_pending: bool = False
 
 
 class RunnerLoop:
@@ -98,8 +108,12 @@ class RunnerLoop:
                  = None, executor_factory: Callable[[], RunExecutor] | None
                  = None, sleep: Callable[[float], Awaitable[None]] | None
                  = None, now: Callable[[], datetime] | None = None,
-                 monotonic: Callable[[], float] | None = None) -> None:
+                 monotonic: Callable[[], float] | None = None,
+                 config_path: str | os.PathLike[str] | None = None) -> None:
         self.cfg = cfg
+        # `reload` 命令要重讀的那一份。留 None 就走 `load_config` 的預設解析
+        #（環境變數／`%LOCALAPPDATA%`），與啟動時同一條路
+        self.config_path = config_path
         self.hub = hub
         self.usage = usage_store
         self.locks = RepoLocks()
@@ -366,8 +380,8 @@ class RunnerLoop:
         """自檢 → 註冊 → 對帳。回傳「可不可以開始領單」。"""
         self.state.selfcheck_problems = await self.selfcheck()
         await self.hub.register(self.cfg.host, self.cfg.label,
-                                list(self.cfg.projects), self.cfg.max_parallel,
-                                self.cfg.version)
+                                public_project_keys(self.cfg.projects),
+                                self.cfg.max_parallel, self.cfg.version)
         failed = bool(self.state.selfcheck_problems)
         if failed:
             # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
@@ -533,8 +547,10 @@ class RunnerLoop:
             self._pending_acks.append(
                 {"id": cmd_id,
                  "applied_at": self.now().isoformat() if applied else None,
-                 "note": note})
+                 "note": note[:MAX_ACK_NOTE]})
             fresh = True
+        if self.state.reregister_pending:
+            await self._reregister()
         for run_id in reply.get("cancel_requested_run_ids", []):
             await self._apply_cancel(str(run_id))
         for run_id in reply.get("soft_stop_requested_run_ids", []):
@@ -593,6 +609,8 @@ class RunnerLoop:
             if command_id and command_id not in self.state.pending_restart_ids:
                 self.state.pending_restart_ids.append(command_id)
             return False, self._restart_wait_note()
+        if command == "reload":
+            return self._reload_config()
         if command == "drain":
             # drain＝停收新單、跑完手上的，然後停在 paused 等人叫醒。
             # **不自我重啟**：drain 的語意是「我要它安靜下來」，
@@ -602,6 +620,49 @@ class RunnerLoop:
             self.state.limit_reason = "draining"
             return True, f"停收新單，跑完手上 {len(self.active)} 筆後暫停"
         return False, ""
+
+    def _reload_config(self) -> tuple[bool, str]:
+        """重讀設定檔，換掉 `self.cfg` 與專案表。
+
+        🚨 **不碰正在跑的 run**：它們的 `RunExecutor` 是在 spawn 當下拿到
+        設定的，中途換掉 `wall_clock_seconds`／`allowed_mcp_servers` 這種
+        已經寫進子進程啟動參數的值，只會讓面板講的與實際跑的不是同一件事。
+        新設定從下一筆派工開始算。
+
+        解析失敗**維持舊設定**：套一半的設定比舊設定更難收拾，錯誤走
+        既有的 acked／applied／note 鏈路回報，人在面板上看得到。
+        """
+        try:
+            cfg = load_config(self.config_path)
+        except ConfigError as exc:
+            log.error("reload：設定重讀失敗，維持舊設定（%s）", exc)
+            return False, f"設定重讀失敗，維持舊設定：{exc}"
+        self.cfg = cfg
+        # 公開專案清單只在 register 送，所以要補報一次（下一次心跳做）
+        self.state.reregister_pending = True
+        public = public_project_keys(cfg.projects)
+        log.info("reload：設定已重讀，專案 %d 個（公開 %d 個）",
+                 len(cfg.projects), len(public))
+        note = (f"設定已重讀，專案 {len(cfg.projects)} 個"
+                f"（公開 {len(public)} 個）；進行中的 run 不受影響")
+        if self.active:
+            note += f"，手上 {len(self.active)} 筆沿用舊設定跑完"
+        return True, note
+
+    async def _reregister(self) -> None:
+        """把重讀後的公開專案清單報回 Hub。同 host+label 冪等。
+
+        送不出去就**留著旗標**下一輪再送：少報一次的症狀是別人的派工對話框
+        還列著已經取消公開的專案，而沒有任何地方會說那份清單是舊的。
+        """
+        try:
+            await self.hub.register(self.cfg.host, self.cfg.label,
+                                    public_project_keys(self.cfg.projects),
+                                    self.cfg.max_parallel, self.cfg.version)
+        except HubError as exc:
+            log.warning("reload：重新註冊沒送成，下一輪再試（%s）", exc)
+            return
+        self.state.reregister_pending = False
 
     def run_dir(self, run_id: str) -> Path:
         return self.cfg.runs_dir / run_id

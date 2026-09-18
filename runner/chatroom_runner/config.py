@@ -152,6 +152,13 @@ class ProjectConfig:
     # guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時用）。
     # **只放行位置，敏感檔名的檢查照走**
     extra_write_dirs: list[Path] = field(default_factory=list)
+    # 要不要讓**別人**在派工對話框看到這個專案。只影響執行器往 Hub 報的
+    # `projects` 清單，不影響本機白名單語意：非公開的專案照樣能被直接
+    # 指名派工，只是不會出現在別人的選單裡
+    public: bool = True
+    # 這個專案的 run 可不可以開瀏覽器做實機測試。True 時 ticket 模板會多
+    # 一句「能做就做」；False 時整句不出現（模板預設的「不是交付門檻」照舊）
+    allow_browser_livetest: bool = False
 
     def skills_for(self, kind: str) -> list[str]:
         return list(self.skills.get(kind, []))
@@ -312,7 +319,18 @@ def _project_from(key: str, raw: dict) -> ProjectConfig:
         skills=_skills_from(key, raw, skill_dirs),
         extra_write_dirs=[Path(str(p))
                           for p in raw.get("extra_write_dirs", [])],
+        public=bool(raw.get("public", True)),
+        allow_browser_livetest=bool(raw.get("allow_browser_livetest", False)),
     )
+
+
+def public_project_keys(projects: dict[str, ProjectConfig]) -> list[str]:
+    """要報給 Hub 的專案清單——**只有標公開的**。
+
+    Hub 的 `projects` 欄位形狀不變（純字串陣列），變的只是內容：沒標公開的
+    專案留在本機白名單裡照常可執行，但不會出現在別人的派工對話框。
+    """
+    return [k for k, p in projects.items() if p.public]
 
 
 def _as_argv(raw) -> list[str]:

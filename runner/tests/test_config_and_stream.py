@@ -10,7 +10,7 @@ import pytest
 from chatroom_runner import dashboard, prompts
 from chatroom_runner.config import (ConfigError, branch_allowed,
                                     config_from_dict, load_config,
-                                    read_env_file)
+                                    public_project_keys, read_env_file)
 from chatroom_runner.stream import (StreamWatcher, context_tokens_of,
                                     looks_like_weekly_limit, parse_line)
 from chatroom_runner.usage import UsageStore
@@ -333,3 +333,78 @@ def test_init_with_everything_connected_records_nothing():
     w.feed({"type": "system", "subtype": "init", "mcp_servers": [
         {"name": "chatroom", "status": "connected"}]})
     assert w.state.pending_mcp_servers == []
+
+
+# ── 公開旗標與瀏覽器實機測試（執行器分頁）──────────────────────
+
+def test_project_flags_default_when_the_file_does_not_have_them(tmp_path,
+                                                                work_repo):
+    """舊的 `config.json` 沒有這兩個欄位——**讀得起來，而且預設要講得出來**。
+
+    `public` 預設 True：這兩個欄位是後加的，舊設定檔的專案本來就在別人的
+    派工對話框裡，讀進來預設 False 會讓它們一聲不響地消失。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    proj = cfg.project("ai-website")
+    assert proj.public is True
+    assert proj.allow_browser_livetest is False
+
+
+def test_project_flags_are_read_from_the_file(tmp_path, work_repo):
+    cfg = make_config(tmp_path, work_repo, projects={
+        "a": {"public": False, "allow_browser_livetest": True,
+              "repos": {"r": {"path": str(work_repo),
+                              "allowed_branches": ["*"]}}},
+    })
+    proj = cfg.project("a")
+    assert proj.public is False
+    assert proj.allow_browser_livetest is True
+
+
+def test_only_public_projects_are_reported_to_the_hub(tmp_path, work_repo):
+    """Hub 的 `projects` 形狀不變，變的是內容——只有標公開的上去。"""
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    cfg = make_config(tmp_path, work_repo, projects={
+        "open": {"repos": repos},
+        "secret": {"public": False, "repos": repos},
+    })
+    assert public_project_keys(cfg.projects) == ["open"]
+    assert "secret" in cfg.projects, "不公開不等於不能執行"
+
+
+def test_a_saved_config_round_trips_through_the_flags(tmp_path, work_repo):
+    """App 寫回去的檔案，執行器讀得回同一組旗標。"""
+    raw = {
+        "hub_url": "http://test", "agent_token": "t",
+        "projects": {"a": {
+            "public": False, "allow_browser_livetest": True,
+            "repos": {"r": {"path": str(work_repo),
+                            "allowed_branches": ["*"]}},
+            # 這一版執行器還不認得的欄位：讀的時候要無視，不能炸
+            "future_field": {"x": 1},
+        }},
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.project("a").public is False
+    assert cfg.project("a").allow_browser_livetest is True
+
+
+def test_livetest_line_only_shows_up_when_the_project_allows_it():
+    """False 時整句不出現——模板本文已經說實機測試不是交付門檻。"""
+    assert prompts.livetest_block(False) == ""
+    assert "瀏覽器實機測試" in prompts.livetest_block(True)
+
+    template = "前\n\n{{livetest_block}}\n\n後"
+    off = prompts.render(
+        template, {"livetest_block": prompts.livetest_block(False)})
+    assert "瀏覽器" not in off
+    on = prompts.render(
+        template, {"livetest_block": prompts.livetest_block(True)})
+    assert "能做就做" in on
+
+
+def test_the_ticket_template_carries_the_livetest_slot():
+    """模板裡沒有這個欄位的話，設定開了也不會有人看到那句話。"""
+    assert "{{livetest_block}}" in prompts.load_template("ticket")

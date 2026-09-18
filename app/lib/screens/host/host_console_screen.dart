@@ -5,13 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/host_kit.dart';
+import '../../state/app_providers.dart';
 import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
 import '../../state/mcp_kit_providers.dart';
+import '../../state/runner_kit_providers.dart';
+import '../../state/runs_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
 
@@ -33,6 +37,7 @@ class HostConsoleScreen extends ConsumerWidget {
     final s = context.uep;
     final kit = ref.watch(hostKitProvider).value;
     final mcp = ref.watch(mcpKitProvider).value;
+    final runner = ref.watch(runnerKitProvider).value;
 
     return Scaffold(
       backgroundColor: s.bg,
@@ -60,16 +65,19 @@ class HostConsoleScreen extends ConsumerWidget {
               ref.invalidate(serviceStatusProvider);
               ref.invalidate(mcpEnvProvider);
               ref.invalidate(mcpStatusProvider);
+              ref.invalidate(runnerKitProvider);
+              ref.invalidate(runnerConfigProvider);
+              ref.invalidate(runnerIdProvider);
             },
           ),
         ],
       ),
-      body: (kit == null && mcp == null)
+      body: (kit == null && mcp == null && runner == null)
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
                 child: Text(
-                  '這台機器沒有 Hub 主持包。',
+                  '這台機器沒有 Hub 主持包、agent 接入或執行器。',
                   style: UepText.serif(size: 15, color: s.inkMute),
                 ),
               ),
@@ -79,7 +87,7 @@ class HostConsoleScreen extends ConsumerWidget {
           : Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
-                child: _HostConsoleBody(kit: kit, mcp: mcp),
+                child: _HostConsoleBody(kit: kit, mcp: mcp, runner: runner),
               ),
             ),
     );
@@ -95,30 +103,60 @@ class HostConsoleScreen extends ConsumerWidget {
 /// 🔴 **只有一種 kit 時不畫分頁列。** 一個只有一個分頁的分頁列是純粹的
 /// 雜訊，還會讓人以為另一邊有東西可看。那時直接顯示那一頁（大標照舊）。
 class _HostConsoleBody extends StatefulWidget {
-  const _HostConsoleBody({required this.kit, required this.mcp});
+  const _HostConsoleBody({
+    required this.kit,
+    required this.mcp,
+    required this.runner,
+  });
 
   final HostKit? kit;
   final McpKit? mcp;
+  final RunnerKit? runner;
 
   @override
   State<_HostConsoleBody> createState() => _HostConsoleBodyState();
 }
 
 class _HostConsoleBodyState extends State<_HostConsoleBody>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   TabController? _tabController;
+  int _tabCount = 0;
+
+  /// 這台機器上裝了幾種 kit。
+  int get _count =>
+      (widget.kit != null ? 1 : 0) +
+      (widget.mcp != null ? 1 : 0) +
+      (widget.runner != null ? 1 : 0);
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // kit 偵測是非同步的：兩種都到齊之後才需要分頁列，而 TabController 的
-    // length 建了就不能改，所以到齊那一刻才建。索引 0 是 Hub——進來的人
-    // 多半是為了主持那一半（沒有 host-kit 時根本不會有這個入口）
-    if (_tabController == null &&
-        widget.kit != null &&
-        widget.mcp != null) {
-      _tabController = TabController(length: 2, vsync: this);
+    _syncController();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HostConsoleBody old) {
+    super.didUpdateWidget(old);
+    _syncController();
+  }
+
+  /// kit 偵測是非同步的，而且三種是**各自**到齊的：`TabController` 的
+  /// length 建了就不能改，所以數量變了就換一顆新的。第三種 kit 晚一步
+  /// 偵測到時不換的話，分頁列會永遠停在兩個。
+  void _syncController() {
+    final count = _count;
+    if (count < 2) {
+      if (_tabController != null) {
+        _tabController!.dispose();
+        _tabController = null;
+        _tabCount = 0;
+      }
+      return;
     }
+    if (_tabController != null && _tabCount == count) return;
+    _tabController?.dispose();
+    _tabController = TabController(length: count, vsync: this);
+    _tabCount = count;
   }
 
   @override
@@ -132,25 +170,35 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
     final s = context.uep;
     final kit = widget.kit;
     final mcp = widget.mcp;
+    final runner = widget.runner;
     final controller = _tabController;
 
-    if (kit == null) {
-      return _agentTab(s, mcp!);
+    // 索引 0 是 Hub——進來的人多半是為了主持那一半
+    final labels = <String>[];
+    final pages = <Widget>[];
+    if (kit != null) {
+      labels.add('Hub 主持');
+      pages.add(_hubTab(s, kit));
     }
-    if (mcp == null || controller == null) {
-      return _hubTab(s, kit);
+    if (mcp != null) {
+      labels.add('Agent 接入');
+      pages.add(_agentTab(s, mcp));
+    }
+    if (runner != null) {
+      labels.add('執行器');
+      pages.add(_runnerTab(s, runner));
+    }
+
+    // 🔴 只有一種 kit 時不畫分頁列（見上面的說明）
+    if (pages.length == 1) return pages.first;
+    if (controller == null || controller.length != pages.length) {
+      return pages.first;
     }
     return Column(
       children: [
-        UepTabBar(
-          controller: controller,
-          labels: const ['Hub 主持', 'Agent 接入'],
-        ),
+        UepTabBar(controller: controller, labels: labels),
         Expanded(
-          child: TabBarView(
-            controller: controller,
-            children: [_hubTab(s, kit), _agentTab(s, mcp)],
-          ),
+          child: TabBarView(controller: controller, children: pages),
         ),
       ],
     );
@@ -183,6 +231,24 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
           Text('Agent 接入', style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           _McpSection(kit: mcp),
+        ],
+      );
+
+  /// 執行器這一半：這台機器接派工的專案設定。
+  Widget _runnerTab(UepSurface s, RunnerKit runner) => ListView(
+        padding: const EdgeInsets.all(32),
+        children: [
+          Text('執行器', style: UepText.pageTitle(color: s.inkTitle)),
+          const SizedBox(height: 22),
+          _RunnerProjectsSection(kit: runner),
+          _sep(s),
+          _Panel(
+            title: '安裝位置',
+            child: SelectableText(
+              runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
+              style: UepText.code(size: 12, color: s.inkSoft),
+            ),
+          ),
         ],
       );
 }
@@ -1683,6 +1749,268 @@ class _Panel extends StatelessWidget {
         // 否則 Column 會依內容縮寬，右側的說明文字排版跟著跳
         SizedBox(width: double.infinity, child: child),
       ],
+    );
+  }
+}
+
+/// 執行器的專案設定：公開給誰派工、允不允許瀏覽器實機測試、skill 目錄。
+///
+/// ## 權威在本機的 `config.json`，不在 Hub
+///
+/// repo 路徑與 skill 目錄本來就是「這台機器的事」——Hub 驗不了它們在這台
+/// 機器上存不存在。所以這一頁與 Hub 分頁讀寫 `.env` 是同一個模式：直接讀寫
+/// 本機檔案，改完再經 Hub 對**這台**執行器發一個 `reload`，讓它自己重讀。
+///
+/// `reload` 走既有的 `runner_command`（issued→acked→applied）——改設定不另開
+/// 一條 Hub 不認得的平行通路。
+class _RunnerProjectsSection extends ConsumerWidget {
+  const _RunnerProjectsSection({required this.kit});
+
+  final RunnerKit kit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final cfg = ref.watch(runnerConfigProvider);
+
+    return cfg.when(
+      loading: () => const _Panel(
+        title: '專案',
+        child: _LightRow(label: '設定', probe: Probe.checking()),
+      ),
+      error: (e, _) => _Panel(
+        title: '專案',
+        child: _LightRow(label: '設定', probe: Probe(ProbeState.unknown, '$e')),
+      ),
+      data: (config) {
+        if (config == null) {
+          return _Panel(
+            title: '專案',
+            child: _LightRow(
+              label: '設定',
+              probe: Probe(ProbeState.unknown, '讀不到 ${kit.configPath}'),
+            ),
+          );
+        }
+        if (config.projects.isEmpty) {
+          return const _Panel(
+            title: '專案',
+            child: _LightRow(
+              label: '設定',
+              probe: Probe(ProbeState.unknown, 'config.json 裡還沒有任何專案'),
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final p in config.projects) ...[
+              _RunnerProjectCard(config: config, project: p),
+              SizedBox(height: p == config.projects.last ? 0 : 26),
+            ],
+            const SizedBox(height: 18),
+            Text(
+              '未公開的專案照樣能在這台機器上執行，只是不會出現在別人的'
+              '派工對話框裡。',
+              style: UepText.serif(size: 13, color: s.inkMute),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _RunnerProjectCard extends ConsumerStatefulWidget {
+  const _RunnerProjectCard({required this.config, required this.project});
+
+  final RunnerConfigFile config;
+  final RunnerProject project;
+
+  @override
+  ConsumerState<_RunnerProjectCard> createState() => _RunnerProjectCardState();
+}
+
+class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
+  late bool _public = widget.project.public;
+  late bool _livetest = widget.project.allowBrowserLivetest;
+  late List<String> _skillDirs = List.of(widget.project.skillDirs);
+  bool _saving = false;
+
+  bool get _dirty =>
+      _public != widget.project.public ||
+      _livetest != widget.project.allowBrowserLivetest ||
+      !_sameList(_skillDirs, widget.project.skillDirs);
+
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  void _say(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// 存檔 → 發 `reload`。
+  ///
+  /// 兩件事的結果要**分開講**：存進去了但命令沒送出（拿不到 runner_id、
+  /// Hub 連不上）時說「已存檔，執行器還沒收到」，而不是一句籠統的成功——
+  /// 那會讓人以為設定已經在跑著的執行器上生效了。
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await saveRunnerProject(
+        widget.config,
+        projectKey: widget.project.key,
+        public: _public,
+        allowBrowserLivetest: _livetest,
+        skillDirs: _skillDirs,
+      );
+    } on RunnerConfigConflict {
+      if (mounted) setState(() => _saving = false);
+      _say('config.json 在這期間被改過了，沒有覆寫。請按右上角重新檢查再改一次。');
+      return;
+    } on Object catch (e) {
+      if (mounted) setState(() => _saving = false);
+      _say('寫不進 config.json：$e');
+      return;
+    }
+
+    final runnerId = await ref.read(runnerIdProvider.future);
+    ref.invalidate(runnerConfigProvider);
+    if (runnerId == null) {
+      if (mounted) setState(() => _saving = false);
+      _say('已存檔。找不到 state.json 裡的 runner_id，沒發重讀命令——'
+          '執行器下次重啟時會讀到新設定。');
+      return;
+    }
+    try {
+      await ref.read(runsApiProvider).command(
+            runnerId,
+            command: 'reload',
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+          );
+      _say('已存檔，重讀設定的命令已送出（執行器最多 30 秒後領取）。'
+          '進行中的 run 不受影響。');
+    } on ApiException catch (e) {
+      _say('已存檔，但重讀命令沒送出：${e.message}');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _addSkillDir() async {
+    final controller = TextEditingController();
+    final path = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('加一個 skill 目錄'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '這台機器上的絕對路徑'),
+          onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: const Text('加入'),
+          ),
+        ],
+      ),
+    );
+    if (path == null || path.isEmpty) return;
+    if (_skillDirs.contains(path)) return;
+    setState(() => _skillDirs = [..._skillDirs, path]);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final p = widget.project;
+    final repos = p.repos.entries
+        .map((e) => e.key == p.defaultRepo
+            ? '${e.key}（預設）：${e.value}'
+            : '${e.key}：${e.value}')
+        .toList();
+
+    return _Panel(
+      title: p.key,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _public,
+            title: Text('公開給他人派工',
+                style: UepText.serif(size: 14.5, color: s.ink)),
+            onChanged: _saving ? null : (v) => setState(() => _public = v),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _livetest,
+            title: Text('允許瀏覽器實機測試',
+                style: UepText.serif(size: 14.5, color: s.ink)),
+            onChanged: _saving ? null : (v) => setState(() => _livetest = v),
+          ),
+          const SizedBox(height: 14),
+          Text('repo', style: UepText.fieldLabel(color: s.inkMute)),
+          const SizedBox(height: 6),
+          for (final line in repos)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: SelectableText(line,
+                  style: UepText.code(size: 12, color: s.inkSoft)),
+            ),
+          const SizedBox(height: 14),
+          Text('skill 目錄', style: UepText.fieldLabel(color: s.inkMute)),
+          const SizedBox(height: 6),
+          if (_skillDirs.isEmpty)
+            Text('（沒有）', style: UepText.serif(size: 13, color: s.inkMute)),
+          for (final dir in _skillDirs)
+            Row(
+              children: [
+                Expanded(
+                  child: SelectableText(dir,
+                      style: UepText.code(size: 12, color: s.inkSoft)),
+                ),
+                IconButton(
+                  tooltip: '移除',
+                  icon: Icon(Icons.close, size: 16, color: s.inkMute),
+                  onPressed: _saving
+                      ? null
+                      : () => setState(
+                          () => _skillDirs = [..._skillDirs]..remove(dir)),
+                ),
+              ],
+            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              UepButton(
+                label: '加目錄',
+                small: true,
+                variant: UepButtonVariant.outline,
+                onPressed: _saving ? null : _addSkillDir,
+              ),
+              const SizedBox(width: 12),
+              UepButton(
+                label: '儲存並套用',
+                small: true,
+                onPressed: (_saving || !_dirty) ? null : _save,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

@@ -30,4 +30,6 @@
 - 只能動上面列出的那些 repo（{{repo_names}}）以內的檔案。
   一張票橫跨多個 repo 是正常的，**不要把另一半寫進卡裡當成做不到**。
 
+{{livetest_block}}
+
 {{brief_block}}
