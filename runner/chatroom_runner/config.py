@@ -30,7 +30,12 @@ DEFAULT_MAX_TURNS = 120
 DEFAULT_MAX_BUDGET_USD = 5.0
 DEFAULT_WALL_CLOCK_SECONDS = 5400
 DEFAULT_CONTEXT_SOFT_LIMIT_RATIO = 0.7
-DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000
+# 模型的 context 視窗（tokens）。⚠️ 這是**單一 run 的上下文容量**，跟額度
+# 限制（rate limit／weekly limit）是兩套獨立機制：視窗滿了會交接，額度用完
+# 會把執行器標成 limited，兩者誰也不影響誰。填小了的症狀是每一輪都在半路
+# 交接，而沒有任何地方會說「其實還有空間」。
+# 可由環境變數 ``CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS`` 覆寫（優先於設定檔）
+DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000
 DEFAULT_USAGE_WINDOW_HOURS = 5.0
 DEFAULT_MAINTENANCE_HOUR = 4
 DEFAULT_HEARTBEAT_SECONDS = 30
@@ -298,8 +303,10 @@ def _project_from(key: str, raw: dict) -> ProjectConfig:
         context_soft_limit_ratio=float(
             raw.get("context_soft_limit_ratio",
                     DEFAULT_CONTEXT_SOFT_LIMIT_RATIO)),
-        context_window_tokens=int(raw.get("context_window_tokens",
-                                          DEFAULT_CONTEXT_WINDOW_TOKENS)),
+        context_window_tokens=int(
+            os.environ.get("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS")
+            or raw.get("context_window_tokens",
+                       DEFAULT_CONTEXT_WINDOW_TOKENS)),
         default_repo=default_repo,
         skill_dirs=skill_dirs,
         skills=_skills_from(key, raw, skill_dirs),

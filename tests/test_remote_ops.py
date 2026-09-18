@@ -636,6 +636,61 @@ async def test_handoff_creates_a_child_run(tmp_path):
             assert child["requested_by_actor_key"] == "human-a"
 
 
+async def test_handoff_brief_carries_the_parent_summary(tmp_path):
+    """交接摘要要接進子 run 的 brief。
+
+    只給「先讀卡」的話，下一棒得自己把上一輪的結論從卡與房裡拼回來，
+    而那份摘要本來就隨著回報一起送到了。
+    """
+    app, client = await _client(tmp_path, "handoffbrief")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner,
+                                             "task-1")
+            summary = "已做：改了 config。未做：測試。下一步：跑 pytest。"
+            child = (await client.post(
+                f"/api/runs/{run_id}/report",
+                json={"status": "handoff", "runner_id": runner,
+                      "reason": "context", "result": summary},
+                headers=runner.headers)).json()["child_run"]
+            assert "## 前一輪交接摘要" in child["brief"]
+            assert summary in child["brief"]
+            assert child["brief"].index("先讀卡") \
+                < child["brief"].index("前一輪交接摘要"), "摘要接在指引後面"
+
+
+async def test_handoff_brief_takes_a_summary_at_the_size_limit(tmp_path):
+    """上限（8000）長度的摘要要整份帶進去，不能在邊界上被切掉。
+
+    ⚠️ `RunReport.result` 本身就是 `max_length=8000`，所以 brief 這一端的截尾
+    是第二道防線（上限放寬時才會走到），從 API 打不進去。
+    """
+    app, client = await _client(tmp_path, "handofflong")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner,
+                                             "task-1")
+            child = (await client.post(
+                f"/api/runs/{run_id}/report",
+                json={"status": "handoff", "runner_id": runner,
+                      "reason": "context", "result": "長" * 8000},
+                headers=runner.headers)).json()["child_run"]
+            assert child["brief"].count("長") == 8000
+            assert "摘要過長" not in child["brief"]
+            # 再長一點是 422，不是靜默截尾
+            too_long = await client.post(
+                f"/api/runs/{run_id}/report",
+                json={"status": "handoff", "runner_id": runner,
+                      "result": "長" * 8001}, headers=runner.headers)
+            assert too_long.status_code == 422
+
+
 async def test_handoff_depth_is_capped(tmp_path):
     """無上限的交接鏈會自己續命，而遠端沒有人看著它續到第幾輪。"""
     app, client = await _client(tmp_path, "handoffmax", run_handoff_max=2)

@@ -286,3 +286,49 @@ async def test_dashboard_marks_fetch_stale_without_blocking(tmp_path,
     view = await dashboard.repo_view(work_repo, ["jsai_dev"])
     assert view["fetch_stale"] is True
     assert view["branch"] == "jsai_dev"
+
+
+# ── context 視窗預設與覆寫 ──────────────────────────────────────
+
+def test_context_window_defaults_to_the_real_model_window(tmp_path,
+                                                          monkeypatch):
+    """預設視窗是 1M。填 200k 的話每輪都在半路交接，而沒人會說還有空間。"""
+    monkeypatch.delenv("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS", raising=False)
+    cfg = config_from_dict({
+        "agent_token": "x",
+        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}}}},
+    })
+    proj = cfg.project("p")
+    assert proj.context_window_tokens == 1_000_000
+    assert proj.context_soft_limit_tokens == 700_000
+
+
+def test_context_window_env_overrides_the_config_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS", "500000")
+    cfg = config_from_dict({
+        "agent_token": "x",
+        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}},
+                           "context_window_tokens": 200000}},
+    })
+    assert cfg.project("p").context_window_tokens == 500_000
+
+
+# ── init 事件的 MCP 連線狀態 ────────────────────────────────────
+
+def test_init_records_mcp_servers_that_are_not_connected_yet():
+    """外部連接器是非同步連上的：開場 pending 要記下來，附註才講得出。"""
+    w = StreamWatcher(0)
+    w.feed({"type": "system", "subtype": "init", "mcp_servers": [
+        {"name": "chatroom", "status": "connected"},
+        {"name": "claude_ai_Atlassian_Rovo", "status": "pending"},
+        {"name": "claude_ai_Gmail", "status": "failed"},
+    ]})
+    assert w.state.pending_mcp_servers == ["claude_ai_Atlassian_Rovo",
+                                           "claude_ai_Gmail"]
+
+
+def test_init_with_everything_connected_records_nothing():
+    w = StreamWatcher(0)
+    w.feed({"type": "system", "subtype": "init", "mcp_servers": [
+        {"name": "chatroom", "status": "connected"}]})
+    assert w.state.pending_mcp_servers == []

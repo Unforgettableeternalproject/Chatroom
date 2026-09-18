@@ -1104,3 +1104,56 @@ async def test_diverged_branch_fails_before_spawning(
         "擋下的這一輪不該動到工作樹"
     final, _ = await _trail(client, run["id"], headers)
     assert final["status"] == "failed"
+
+
+# ── 執行器附註的排版（App 端用 GFM 算繪）─────────────────────────
+
+def _note(tmp_path, state, before, after, sync_note=""):
+    executor = RunExecutor.__new__(RunExecutor)
+    return executor._compose_result(state, tmp_path, before, after, sync_note)
+
+
+def test_runner_note_is_markdown_bullets(tmp_path):
+    """附註要是條列。純文字逐行在 GFM 底下會黏成一條讀不出欄位的長句。"""
+    from chatroom_runner.gitops import RepoSnapshot
+    from chatroom_runner.stream import StreamState
+
+    state = StreamState(result_text="做完了。", num_turns=7,
+                        total_cost_usd=1.5, peak_context_tokens=123456)
+    before = RepoSnapshot(branch="feature/x", head="a" * 40, dirty=[])
+    after = RepoSnapshot(branch="feature/x", head="b" * 40,
+                         dirty=["M runner/a.py", "M runner/b.py"])
+    (tmp_path / "tool.log").write_text("1\n2\n3\n", encoding="utf-8")
+
+    note = _note(tmp_path, state, before, after)
+
+    assert "\n\n- turns：7" in note, "標題與條列之間要有空行"
+    assert "- 成本：$1.5000" in note
+    assert "- context 峰值：123456 tokens" in note
+    assert "- HEAD：aaaaaaaa → bbbbbbbb，有新 commit" in note
+    assert "- 未 commit 的變更（2 個檔案）：" in note
+    assert "\n    - M runner/a.py\n    - M runner/b.py" in note
+    assert "- 工具呼叫 3 次，完整紀錄：`" in note
+    for line in note.splitlines():
+        assert not line.startswith("turns："), "欄位不能是裸行"
+
+
+def test_runner_note_keeps_a_single_dirty_file_inline(tmp_path):
+    from chatroom_runner.gitops import RepoSnapshot
+    from chatroom_runner.stream import StreamState
+
+    before = RepoSnapshot(branch="b", head="a" * 40, dirty=[])
+    after = RepoSnapshot(branch="b", head="a" * 40, dirty=["M only.py"])
+    note = _note(tmp_path, StreamState(), before, after)
+    assert "- 未 commit 的變更：M only.py" in note
+
+
+def test_runner_note_reports_mcp_servers_that_were_not_ready(tmp_path):
+    """開場沒連上的連接器要進附註，否則只看得到 agent 說『不可用』。"""
+    from chatroom_runner.gitops import RepoSnapshot
+    from chatroom_runner.stream import StreamState
+
+    state = StreamState(pending_mcp_servers=["claude_ai_Atlassian_Rovo"])
+    snap = RepoSnapshot(branch="b", head="a" * 40, dirty=[])
+    note = _note(tmp_path, state, snap, snap)
+    assert "- 開場時未就緒的 MCP：claude_ai_Atlassian_Rovo" in note

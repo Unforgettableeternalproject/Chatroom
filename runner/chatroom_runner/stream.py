@@ -83,6 +83,11 @@ class StreamState:
     weekly_limit: bool = False
     soft_limit_hit: bool = False
     saw_result: bool = False
+    # init 事件裡狀態不是 `connected` 的 MCP 伺服器名。外部 MCP（claude.ai
+    # 連接器）是**非同步連上的**，開場那一刻常常還是 `pending`——不記下來的
+    # 話，事後只看得到 agent 說「那個工具不可用」，而沒有地方說得出它其實
+    # 只是還沒連上
+    pending_mcp_servers: list[str] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)
     # 最後一次收到**任何** stream 事件的時刻（單調時鐘）。停滯判斷只認這個：
     # 牆鐘會被系統校時往回拉，而「這個 run 多久沒說話」不該因此變成負數。
@@ -153,6 +158,29 @@ class StreamWatcher:
             self.state.rate_limit_retries += 1
         if looks_like_weekly_limit(str(event.get("message") or err)):
             self.state.weekly_limit = True
+        if event.get("subtype") == "init":
+            self._init_mcp(event)
+
+    def _init_mcp(self, event: dict) -> None:
+        """記下開場時還沒連上的 MCP 伺服器。
+
+        只看 init 事件的快照：之後連上了也不會再有事件來更正，所以這是一份
+        **「開場時」**的紀錄，不是最終狀態——附註裡也要這樣寫。
+        """
+        servers = event.get("mcp_servers")
+        if not isinstance(servers, list):
+            return
+        pending = []
+        for item in servers:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "") == "connected":
+                continue
+            name = str(item.get("name") or "").strip()
+            if name and name not in pending:
+                pending.append(name)
+        if pending:
+            self.state.pending_mcp_servers = pending
 
     def _assistant(self, event: dict) -> None:
         msg = event.get("message") or {}

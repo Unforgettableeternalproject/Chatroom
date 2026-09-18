@@ -877,28 +877,38 @@ class RunExecutor:
             # 擺在最前面：看報告的人要先知道這一份**不是做完才停的**，
             # 後面那些「沒做的事」才讀得出是被請下來的，不是漏掉的
             lines.insert(0, "（依收尾請求提前結束）")
+        # 🚨 附註走 **markdown 條列**，不是逐行純文字：App 端用 GFM 算繪，
+        # 單一個換行會被吃掉，整段附註在手機上黏成一條讀不出欄位的長句
         lines.append("")
         lines.append("— 執行器附註 —")
-        lines.append(f"turns：{state.num_turns}；成本："
-                     f"${state.total_cost_usd:.4f}；context 峰值："
-                     f"{state.peak_context_tokens} tokens")
-        lines.append(f"HEAD：{(diff['head_before'] or '?')[:8]} → "
+        lines.append("")
+        lines.append(f"- turns：{state.num_turns}")
+        lines.append(f"- 成本：${state.total_cost_usd:.4f}")
+        lines.append(f"- context 峰值：{state.peak_context_tokens} tokens")
+        lines.append(f"- HEAD：{(diff['head_before'] or '?')[:8]} → "
                      f"{(diff['head_after'] or '?')[:8]}"
                      f"{'，有新 commit' if diff['head_changed'] else ''}")
         if diff["branch_changed"]:
-            lines.append(f"分支已變更：{diff['branch_before']} → "
+            lines.append(f"- 分支已變更：{diff['branch_before']} → "
                          f"{diff['branch_after']}")
         if diff["new_dirty"]:
-            lines.append("未 commit 的變更："
-                         + "、".join(diff["new_dirty"][:20]))
+            dirty = diff["new_dirty"][:20]
+            if len(dirty) == 1:
+                lines.append(f"- 未 commit 的變更：{dirty[0]}")
+            else:
+                lines.append(f"- 未 commit 的變更（{len(dirty)} 個檔案）：")
+                lines.extend(f"    - {name}" for name in dirty)
+        if state.pending_mcp_servers:
+            lines.append("- 開場時未就緒的 MCP："
+                         + "、".join(state.pending_mcp_servers))
         if sync_note:
-            lines.append(f"工作樹同步：{sync_note}")
+            lines.append(f"- 工作樹同步：{sync_note}")
         if (run_dir / "compacted").exists():
-            lines.append("這一輪被自動壓縮過，摘要中前段的敘述是二手的。")
+            lines.append("- 這一輪被自動壓縮過，摘要中前段的敘述是二手的。")
         tool_log = run_dir / "tool.log"
         if tool_log.exists():
             n = sum(1 for _ in tool_log.open(encoding="utf-8"))
-            lines.append(f"工具呼叫 {n} 次，完整紀錄：{tool_log}")
+            lines.append(f"- 工具呼叫 {n} 次，完整紀錄：`{tool_log}`")
         return "\n".join(lines).strip()[:8000]
 
     def _record_usage(self, run_id: str, state) -> None:

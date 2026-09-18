@@ -12764,6 +12764,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 也跟著結束（`_depart_run_participants`）
     _RUN_TERMINAL = ("done", "failed", "cancelled", "handoff")
 
+    # 交接摘要接進子 run 的 brief 時，最多帶幾個字。摘要是 agent 自由書寫的
+    # 段落，沒有上限的話一條長交接鏈會把 brief 一輪一輪疊到讀不完
+    _HANDOFF_BRIEF_MAX = 8000
+
     async def _depart_run_participants(
         room_id: str, run_id: str,
     ) -> tuple[list[str], list[dict]]:
@@ -13681,6 +13685,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " WHERE room_id=?", (row["room_id"],))).fetchone())["p"] + 1
             brief = (f"{row['brief']}\n\n"
                      f"前一輪 run {run_id} 已交接，先讀卡 {row['ref']}")
+            # 交接摘要直接接進 brief。只給「先讀卡」的話，下一棒要自己把上一
+            # 輪的結論從卡與房裡拼回來，而那份摘要本來就在手上
+            handoff_summary = (body.result or row["result"] or "").strip()
+            if handoff_summary:
+                if len(handoff_summary) > _HANDOFF_BRIEF_MAX:
+                    handoff_summary = (
+                        handoff_summary[:_HANDOFF_BRIEF_MAX]
+                        + f"\n\n（摘要過長，已截去後半，完整內容見 run "
+                          f"{run_id} 的回報）")
+                brief = f"{brief}\n\n## 前一輪交接摘要\n{handoff_summary}"
             await db.execute(
                 "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
                 " ref, brief, requested_by, requested_by_actor_key,"
