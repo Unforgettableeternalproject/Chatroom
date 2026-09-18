@@ -101,8 +101,11 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
     final s = context.uep;
     final room = ref.watch(roomDetailProvider(widget.roomId)).value?.room;
     final boardAsync = ref.watch(roomRunnerBoardProvider(widget.roomId));
-    final finished =
-        ref.watch(finishedRunsProvider(widget.roomId)).value ?? const [];
+    // 儀表板只列最近結束的那幾筆（截斷從 provider 移到這裡）
+    final finished = (ref.watch(finishedRunsProvider(widget.roomId)).value ??
+            const <AgentRun>[])
+        .take(5)
+        .toList();
 
     return Scaffold(
       backgroundColor: s.bg,

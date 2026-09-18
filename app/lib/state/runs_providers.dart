@@ -40,5 +40,34 @@ final finishedRunsProvider =
   // 位置講的是排隊順序，不是結束順序
   final sorted = [...runs]..sort((a, b) =>
       (b.endedAt ?? b.updatedAt).compareTo(a.endedAt ?? a.updatedAt));
-  return sorted.take(5).toList();
+  // **不在這裡截斷**：要看幾筆是各個畫面自己的事——側欄回報區要能往下載入
+  // 更多，儀表板只要最近那幾筆。在來源截斷等於把「更多」變成做不到
+  return sorted;
 });
+
+/// 側欄回報區現在打開的是哪一筆 run（`null` ＝沒有打開）。
+///
+/// 放在 state 層而不是卡片自己的 `setState`：面板畫在**訊息區上方**，與卡片
+/// 不在同一棵子樹裡，兩邊要看同一個「現在是哪一筆」。存 id 不存 run 物件，
+/// 這樣 10 秒輪詢換掉清單時面板讀到的還是最新那一份。
+class SelectedRunIds extends Notifier<Map<String, String>> {
+  @override
+  Map<String, String> build() => const {};
+
+  String? of(String roomId) => state[roomId];
+
+  /// 點同一張＝收起來，點另一張＝換內容。
+  void toggle(String roomId, String runId) =>
+      state[roomId] == runId ? clear(roomId) : select(roomId, runId);
+
+  void select(String roomId, String runId) =>
+      state = {...state, roomId: runId};
+
+  void clear(String roomId) {
+    if (!state.containsKey(roomId)) return;
+    state = {...state}..remove(roomId);
+  }
+}
+
+final selectedRunIdProvider =
+    NotifierProvider<SelectedRunIds, Map<String, String>>(SelectedRunIds.new);

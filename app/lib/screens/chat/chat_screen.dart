@@ -5,6 +5,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -30,6 +31,7 @@ import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/highlighted_members_provider.dart';
 import '../../state/rooms_providers.dart';
+import '../../state/runs_providers.dart';
 import '../../widgets/archive_request_banner.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
@@ -53,6 +55,10 @@ import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
 import '../board/board_screen.dart';
+
+/// 成員側欄的寬度。回報面板要貼著它的左緣，所以這個數字有第二個讀者，
+/// 不能再寫死在 `Container` 裡。
+const double _sidebarWidth = 288;
 
 /// 跳轉粗跳的落點估計。
 ///
@@ -1297,29 +1303,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         body: chatColumn,
       );
     }
+    final isOps = room?.isOps ?? false;
+    final columns = Row(
+      children: [
+        Expanded(child: chatColumn),
+        Container(
+          width: _sidebarWidth,
+          decoration: BoxDecoration(
+            color: s.bgSoft,
+            border: Border(left: BorderSide(color: s.line)),
+          ),
+          child: _MembersPanel(
+            roomId: roomId,
+            members: members,
+            myId: myId,
+            archived: archived,
+            limits: detailAsync.value?.limits ?? const ServerLimits(),
+            youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+            isOps: isOps,
+          ),
+        ),
+      ],
+    );
     return Scaffold(
       backgroundColor: s.bg,
-      body: Row(
-        children: [
-          Expanded(child: chatColumn),
-          Container(
-            width: 288,
-            decoration: BoxDecoration(
-              color: s.bgSoft,
-              border: Border(left: BorderSide(color: s.line)),
+      // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
+      // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
+      body: !isOps
+          ? columns
+          : CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.escape): () => ref
+                    .read(selectedRunIdProvider.notifier)
+                    .clear(roomId),
+              },
+              child: Stack(
+                children: [
+                  columns,
+                  Positioned.fill(
+                    child: RunReportOverlay(
+                      roomId: roomId,
+                      sidebarWidth: _sidebarWidth,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: _MembersPanel(
-              roomId: roomId,
-              members: members,
-              myId: myId,
-              archived: archived,
-              limits: detailAsync.value?.limits ?? const ServerLimits(),
-              youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-              isOps: room?.isOps ?? false,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -2463,7 +2492,10 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             ],
           ),
         ),
+        // 成員與回報各佔一塊、各自捲：疊在同一個 ListView 裡的話，agent 一多
+        // 兩邊都會把側欄往下拉，而側欄的高度是視窗給的，不是內容給的
         Expanded(
+          flex: 3,
           child: ListView(
             padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
             children: [
@@ -2532,15 +2564,23 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                     ),
                   ),
               ],
-              // 回報區：run 收工後的摘要（§12 待辦 2）。讀 `agent_run.result`
-              // 而不是從訊息流撿——訊息會被後續發言推走
-              if (widget.isOps) ...[
-                const SizedBox(height: 20),
-                RunReportPanel(roomId: widget.roomId),
-              ],
             ],
           ),
         ),
+        // 回報區：run 收工後的摘要（§12 待辦 2）。讀 `agent_run.result`
+        // 而不是從訊息流撿——訊息會被後續發言推走
+        if (widget.isOps)
+          Expanded(
+            flex: 2,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: s.line)),
+              ),
+              child: RunReportPanel(roomId: widget.roomId),
+            ),
+          ),
         // 沒有任何管理員的房（creator_session_key 為 NULL 的舊房）——
         // 那正是**最需要**接管的那些，而成員列表上沒有人掛得住那顆按鈕。
         // 只有這種情況才在底部另開入口，房內有管理員時一律走他身上那顆，
