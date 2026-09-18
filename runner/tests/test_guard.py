@@ -121,6 +121,44 @@ def test_write_outside_cwd_is_denied(ctx, tmp_path):
     assert not d.allowed and d.rule == "path_outside_cwd"
 
 
+# ── 專案的其他 repo（一次派工可以動全部）──────────────────────
+
+@pytest.fixture
+def multi_ctx(ctx, tmp_path):
+    """主工作目錄之外再掛一個同專案的 repo。"""
+    second = tmp_path / "repo-api"
+    second.mkdir()
+    return GuardContext(cwd=ctx.cwd,
+                        repo_roots=[ctx.cwd, second],
+                        allowed_branches=list(ctx.allowed_branches),
+                        allowed_domains=list(ctx.allowed_domains),
+                        protected_paths=list(ctx.protected_paths),
+                        downloads_dir=ctx.downloads_dir)
+
+
+def test_write_into_another_repo_of_the_project_is_allowed(multi_ctx,
+                                                           tmp_path):
+    """🚨 一張票橫跨兩個 repo 是正常的。擋掉第二個 repo 的寫入，
+    agent 只能把那半段寫進卡裡說做不到。"""
+    d = check_path(str(tmp_path / "repo-api" / "src" / "handler.ts"),
+                   multi_ctx)
+    assert d.allowed
+
+
+def test_write_outside_every_repo_is_still_denied(multi_ctx, tmp_path):
+    d = check_path(str(tmp_path / "elsewhere" / "x.ts"), multi_ctx)
+    assert not d.allowed and d.rule == "path_outside_cwd"
+    # 拒絕訊息要列出可以動的 repo，否則 agent 只知道「不是這裡」
+    assert "repo-api" in d.reason and "repo" in d.reason
+
+
+def test_script_in_another_repo_of_the_project_can_run(multi_ctx, tmp_path):
+    script = tmp_path / "repo-api" / "tools" / "gen.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    assert check_command(f"python {script}", multi_ctx).allowed
+
+
 def test_write_to_runner_own_dir_is_denied(ctx, tmp_path):
     d = check_path(str(tmp_path / "runner-state" / "config.json"), ctx)
     assert not d.allowed and d.rule == "path_protected"

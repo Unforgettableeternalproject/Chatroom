@@ -65,7 +65,8 @@ def test_example_config_is_loadable():
     for repo in project.repos.values():
         assert repo.allowed_branches == ["jsai_dev", "feature/*"]
         assert not repo.allows_push("jsai_prod")
-    assert project.context_soft_limit_tokens == 140000
+    # 範例設定的視窗是 1M（2026-09-18 起），0.7 → 700k
+    assert project.context_soft_limit_tokens == 700000
 
 
 def test_single_repo_project_gets_a_default(tmp_path):

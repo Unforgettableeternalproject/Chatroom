@@ -65,6 +65,23 @@ def skills_block(names: list[str] | None) -> str:
     return SKILLS_FRAME.format(names=listed)
 
 
+def repos_block(repos: list[dict]) -> str:
+    """專案所有 repo 的條列（名稱、路徑、目前分支、允許分支）。
+
+    一次派工可以動專案底下的每一個 repo，所以模板列的是**全部**，並標出哪一
+    個是主工作目錄——只寫一個 repo 的話，agent 會以為另一半要留給別人做。
+    """
+    lines = []
+    for item in repos:
+        allowed = "、".join(f"`{b}`" for b in item.get("allowed_branches", []))
+        mark = "（主工作目錄）" if item.get("primary") else ""
+        lines.append(
+            f"- `{item['name']}`{mark}：`{item['path']}`，"
+            f"目前分支 `{item.get('branch', '')}`，"
+            f"允許分支 {allowed or '無'}")
+    return "\n".join(lines)
+
+
 def load_template(kind: str, prompt_dir: Path | None = None) -> str:
     path = (prompt_dir or PROMPT_DIR) / f"{kind}.md"
     if not path.is_file():
@@ -91,10 +108,24 @@ def render(template: str, fields: dict[str, str]) -> str:
     return _BLANK_RUN_RE.sub("\n\n", out)
 
 
+def _fill_repo_defaults(merged: dict[str, str]) -> None:
+    """沒傳多 repo 欄位時，用主工作目錄補一個單 repo 的清單。
+
+    模板裡的 placeholder 留著比缺一個 repo 更糟：它會原封不動出現在 prompt 裡。
+    """
+    merged.setdefault(
+        "repos_block",
+        f"- `{merged.get('repo', '')}`（主工作目錄）："
+        f"`{merged.get('cwd', '')}`，"
+        f"允許分支 {merged.get('allowed_branches', '') or '無'}")
+    merged.setdefault("repo_names", merged.get("repo", ""))
+
+
 def build(kind: str, fields: dict[str, str], brief: str,
           prompt_dir: Path | None = None) -> str:
     merged = dict(fields)
     merged["brief_block"] = frame_brief(brief)
+    _fill_repo_defaults(merged)
     return render(load_template(kind, prompt_dir), merged)
 
 
@@ -104,4 +135,5 @@ def build_contract(fields: dict[str, str],
     merged = dict(fields)
     # 沒有必守 skill 的專案不必傳這個欄位，但模板裡的 placeholder 不能留著
     merged.setdefault("skills_block", "")
+    _fill_repo_defaults(merged)
     return render(load_template("contract", prompt_dir), merged)

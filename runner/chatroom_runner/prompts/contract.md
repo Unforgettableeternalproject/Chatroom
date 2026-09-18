@@ -53,7 +53,11 @@ room_id={{room_id}})` 把它們讀出來；檔案本體用
 
 ## 工作範圍
 
-- 只在 `{{cwd}}` 裡工作。分支只能是 `{{allowed_branches}}`。
+- 只在這個專案的 repo 裡工作（主工作目錄 `{{cwd}}`）：
+
+{{repos_block}}
+
+  每個 repo 只能待在它自己的允許分支上。
 - commit 訊息照 repo 的 `CLAUDE.md`；GPG 簽章卡住就把 staged 狀態留著、
   在卡裡寫清楚卡在哪，**不要**用 `--no-verify` 或 `--no-gpg-sign` 繞過。
 - 不 `git add -A`；commit 前看 `git diff --cached --name-only`，

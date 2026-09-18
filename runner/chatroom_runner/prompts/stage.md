@@ -1,7 +1,12 @@
 # 任務：做完一個階段（stage）
 
-房間 `{{room_id}}`，目標 checklist `{{ref}}`，工作目錄 `{{cwd}}`
-（repo：`{{repo}}`，目前分支 `{{branch}}`，允許分支 `{{allowed_branches}}`）。
+房間 `{{room_id}}`，目標 checklist `{{ref}}`。
+
+這個專案底下的 repo（**都可以動**）：
+
+{{repos_block}}
+
+主工作目錄是 `{{cwd}}`。
 
 ## 你要做的
 
@@ -16,7 +21,7 @@
 
 ## 硬限制
 
-與 ticket 相同：不 push、不刪分支、不繞過簽章、只動 `{{cwd}}` 以內的檔案。
+與 ticket 相同：不 push、不刪分支、不繞過簽章、只動上面列出的那些 repo（{{repo_names}}）以內的檔案。
 commit 前看 index。
 
 {{brief_block}}

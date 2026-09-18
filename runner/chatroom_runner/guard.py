@@ -98,6 +98,11 @@ class GuardContext:
     """判斷需要的環境。全部由執行器寫進 run 目錄的 ``guard.json``。"""
 
     cwd: Path
+    # 這個專案底下**所有** repo 的根目錄（主工作目錄 `cwd` 也在裡面）。
+    # 一次派工可以動專案的每一個 repo：只放行 `cwd` 的話，跨 repo 的票會在
+    # 第二個 repo 的第一次寫入被擋下來，而 agent 只能把那半段寫進卡裡。
+    # 留空＝退回只放行 `cwd`（舊設定檔與單 repo 專案的行為不變）
+    repo_roots: list[Path] = field(default_factory=list)
     allowed_branches: list[str] = field(default_factory=list)
     allowed_domains: list[str] = field(default_factory=list)
     # 執行器自己的目錄（設定、狀態、hooks）——agent 不准讀寫
@@ -115,6 +120,7 @@ class GuardContext:
     def from_dict(cls, raw: dict) -> "GuardContext":
         return cls(
             cwd=Path(raw.get("cwd", ".")),
+            repo_roots=[Path(p) for p in raw.get("repo_roots", [])],
             allowed_branches=list(raw.get("allowed_branches", [])),
             allowed_domains=list(raw.get("allowed_domains", [])),
             protected_paths=[Path(p) for p in raw.get("protected_paths", [])],
@@ -126,6 +132,7 @@ class GuardContext:
 
     def to_dict(self) -> dict:
         return {"cwd": str(self.cwd),
+                "repo_roots": [str(p) for p in self.repo_roots],
                 "allowed_branches": list(self.allowed_branches),
                 "allowed_domains": list(self.allowed_domains),
                 "protected_paths": [str(p) for p in self.protected_paths],
@@ -255,15 +262,34 @@ def _resolve(raw: str, ctx: GuardContext) -> Path | None:
         return None
 
 
+def repo_roots(ctx: GuardContext) -> list[Path]:
+    """這次派工可以動的 repo 根目錄（已解析）。
+
+    設定沒給 ``repo_roots`` 時退回只有 ``cwd`` 一個——舊的 run 目錄與單 repo
+    專案的行為因此完全不變。
+    """
+    raw = list(ctx.repo_roots) or [ctx.cwd]
+    roots: list[Path] = []
+    for root in raw:
+        try:
+            resolved = Path(root).resolve()
+        except OSError:  # pragma: no cover
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _within_roots(resolved: Path, roots: list[Path]) -> bool:
+    return any(resolved == root or root in resolved.parents for root in roots)
+
+
 def _within_cwd(raw: str, ctx: GuardContext) -> bool:
+    """路徑是否落在這次派工的任一個 repo 以內。"""
     resolved = _resolve(raw, ctx)
     if resolved is None:
         return False
-    try:
-        cwd = ctx.cwd.resolve()
-    except OSError:  # pragma: no cover
-        return False
-    return resolved == cwd or cwd in resolved.parents
+    return _within_roots(resolved, repo_roots(ctx))
 
 
 def _in_downloads(resolved: Path, ctx: GuardContext) -> bool:
@@ -308,11 +334,10 @@ def check_path(raw_path: str, ctx: GuardContext) -> Decision:
     resolved = _resolve(raw_path, ctx)
     if resolved is None:
         return _deny("path_unresolvable", "這個路徑無法解析，拒絕寫入。")
-    try:
-        cwd = ctx.cwd.resolve()
-    except OSError:  # pragma: no cover
+    roots = repo_roots(ctx)
+    if not roots:  # pragma: no cover - cwd 解析不出來
         return _deny("path_unresolvable", "這個路徑無法解析，拒絕寫入。")
-    # cwd 外只有兩個例外：這筆 run 的附件目錄，與設定明列的 `extra_write_dirs`。
+    # repo 外只有兩個例外：這筆 run 的附件目錄，與設定明列的 `extra_write_dirs`。
     # 敏感檔名的檢查照走——放行的是「位置」，不是「什麼檔都行」
     exempt = _in_downloads(resolved, ctx) or _in_extra_write(resolved, ctx)
     if not exempt and _protected_hit(resolved, ctx):
@@ -320,10 +345,11 @@ def check_path(raw_path: str, ctx: GuardContext) -> Decision:
             "path_protected",
             "那是執行器自己的目錄（設定與 hooks），任何 run 都不能動。"
             "要調整限制請問人類。")
-    if not exempt and resolved != cwd and cwd not in resolved.parents:
+    if not exempt and not _within_roots(resolved, roots):
+        listed = "、".join(str(r) for r in roots)
         return _deny("path_outside_cwd",
-                     f"只能寫工作目錄（{cwd}）以內的檔案。這次的路徑在外面，"
-                     "要動別的 repo 請開一張新的卡讓人類派工。")
+                     f"只能寫這個專案的 repo（{listed}）以內的檔案。"
+                     "這次的路徑在外面，要動別的專案請開一張新的卡讓人類派工。")
     if _is_sensitive_name(resolved.name):
         return _deny("path_sensitive",
                      "設定檔與金鑰（.env、*.pem 這類）不能讀也不能寫。"
@@ -552,8 +578,8 @@ def _script_decision(raw: str, ctx: GuardContext) -> Decision:
     if resolved is not None and _in_extra_write(resolved, ctx):
         return ALLOW
     return _deny("script_outside_cwd",
-                 "直譯器只能跑工作目錄以內的腳本。工作目錄以外的檔案這邊看不"
-                 "到也管不到，要跑它請在卡裡說明由人類處理。")
+                 "直譯器只能跑這個專案的 repo 以內的腳本。這些 repo 以外的"
+                 "檔案這邊看不到也管不到，要跑它請在卡裡說明由人類處理。")
 
 
 def _short_flag_has(tok: str, letter: str) -> bool:

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -283,6 +284,22 @@ class RepoLocks:
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
 
+    @contextlib.asynccontextmanager
+    async def hold(self, keys: list[str]):
+        """一次握住多把鎖（寫入型 run 會動專案底下每一個 repo）。
+
+        🚨 **取得順序在這裡重排成 key 的字典序**，不照傳進來的順序：呼叫端給
+        的是 `project_repos()` 的順序（主 repo 在前），而同一個專案的兩筆 run
+        主 repo 不同時那個順序就不一樣——A 拿到 web 等 api、B 拿到 api 等 web
+        就是一個死鎖，而它在面板上與「兩筆都在跑」長得一模一樣。
+        釋放走 `AsyncExitStack`，順序與取得相反。
+        """
+        seen = sorted(set(keys))
+        async with contextlib.AsyncExitStack() as stack:
+            for key in seen:
+                await stack.enter_async_context(self.get(key))
+            yield
+
     def get(self, key: str) -> asyncio.Lock:
         lock = self._locks.get(key)
         if lock is None:
@@ -293,6 +310,50 @@ class RepoLocks:
     def is_held(self, key: str) -> bool:
         lock = self._locks.get(key)
         return bool(lock and lock.locked())
+
+
+def project_repos(project: ProjectConfig,
+                  primary: RepoConfig) -> list[RepoConfig]:
+    """這次派工可以動的 repo，**主工作目錄排第一**。
+
+    順序是固定的：附註、prompt 與快照三處都照這個順序列，主 repo 換位置的話
+    同一份報告在兩輪之間會長得不一樣。
+    """
+    ordered = [primary]
+    for name in sorted(project.repos):
+        item = project.repos[name]
+        if item.name != primary.name:
+            ordered.append(item)
+    return ordered
+
+
+def _repo_touched(diff: dict) -> bool:
+    """這個 repo 這一輪有沒有被動過（新 commit、未提交變更或換分支）。"""
+    return bool(diff["head_changed"] or diff["new_dirty"]
+                or diff["branch_changed"])
+
+
+def _repo_diff_lines(diff: dict, prefix: str) -> list[str]:
+    """一個 repo 的 HEAD／分支／未 commit 變更條列。
+
+    ``prefix`` 決定縮排：單 repo 是頂層的 ``"- "``，多 repo 時掛在 repo 那一
+    節底下（``"    - "``）。
+    """
+    indent = " " * (len(prefix) - 2)
+    lines = [f"{prefix}HEAD：{(diff['head_before'] or '?')[:8]} → "
+             f"{(diff['head_after'] or '?')[:8]}"
+             f"{'，有新 commit' if diff['head_changed'] else ''}"]
+    if diff["branch_changed"]:
+        lines.append(f"{prefix}分支已變更：{diff['branch_before']} → "
+                     f"{diff['branch_after']}")
+    if diff["new_dirty"]:
+        dirty = diff["new_dirty"][:20]
+        if len(dirty) == 1:
+            lines.append(f"{prefix}未 commit 的變更：{dirty[0]}")
+        else:
+            lines.append(f"{prefix}未 commit 的變更（{len(dirty)} 個檔案）：")
+            lines.extend(f"{indent}    - {name}" for name in dirty)
+    return lines
 
 
 def resolve_repo(run: dict, project: ProjectConfig) -> RepoConfig:
@@ -448,7 +509,12 @@ class RunExecutor:
             return outcome
 
         if run["kind"] in WRITE_KINDS:
-            async with self.locks.get(f"{project.key}/{repo.name}"):
+            # 寫入型 run 可以動專案底下**每一個** repo，所以鎖也要拿全部：
+            # 只鎖主 repo 的話，兩筆主 repo 不同的 run 會同時寫同一個副 repo，
+            # 而那是「同一個 repo 只允許一個寫入者」本來就要擋掉的事
+            keys = [f"{project.key}/{item.name}"
+                    for item in project_repos(project, repo)]
+            async with self.locks.hold(keys):
                 return await self._claude_run(run, project, repo, cancel)
         return await self._claude_run(run, project, repo, cancel)
 
@@ -574,32 +640,51 @@ class RunExecutor:
         run_id = run["id"]
         run_dir = self.cfg.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        branch = await gitops.current_branch(repo.path)
-        if not repo.allows(branch):
-            outcome = RunOutcome(
-                "failed", reason="branch_not_allowed",
-                result=f"{repo.name} 目前在分支「{branch}」，不在允許清單裡。"
-                       f"允許的分支：{'、'.join(repo.allowed_branches)}。")
-            await self._report(run_id, outcome)
-            return outcome
+        # 一次派工可以動專案底下**每一個** repo（主工作目錄仍是被選中的那個），
+        # 所以分支檢查、同步與快照都要對全部做：只顧主 repo 的話，另一個 repo
+        # 會在沒有檢查、沒有同步、也沒有人記得它動過什麼的狀態下被改
+        repos = project_repos(project, repo)
+        branches: dict[str, str] = {}
+        for item in repos:
+            branch = await gitops.current_branch(item.path)
+            branches[item.name] = branch
+            if not item.allows(branch):
+                outcome = RunOutcome(
+                    "failed", reason="branch_not_allowed",
+                    result=f"{item.name} 目前在分支「{branch}」，不在允許清單裡。"
+                           f"允許的分支：{'、'.join(item.allowed_branches)}。")
+                await self._report(run_id, outcome)
+                return outcome
+        branch = branches[repo.name]
 
         # 🚨 同步要在快照**之前**：pull 帶進來的變更不是 agent 改的，
         # 先拍快照的話那些檔案會被算進「這一輪動了什麼」
-        try:
-            sync_note = await self._sync_worktree(repo)
-        except _SyncBlocked as exc:
-            outcome = RunOutcome("failed", reason="sync_not_fast_forward",
-                                 result=str(exc))
-            await self._report(run_id, outcome)
-            return outcome
+        sync_notes: dict[str, str] = {}
+        for item in repos:
+            try:
+                sync_notes[item.name] = await self._sync_worktree(item)
+            except _SyncBlocked as exc:
+                detail = (f"{item.name}：{exc}" if len(repos) > 1 else str(exc))
+                outcome = RunOutcome("failed", reason="sync_not_fast_forward",
+                                     result=detail)
+                await self._report(run_id, outcome)
+                return outcome
 
-        before = await gitops.snapshot(repo.path)
+        before = {item.name: await gitops.snapshot(item.path)
+                  for item in repos}
         fields = {
             "run_id": run_id, "room_id": run.get("room_id", ""),
             "kind": run["kind"], "project": project.key,
             "ref": run.get("ref", ""), "repo": repo.name,
             "cwd": str(repo.path), "branch": branch,
             "allowed_branches": "、".join(repo.allowed_branches),
+            "repos_block": prompts.repos_block([
+                {"name": item.name, "path": str(item.path),
+                 "branch": branches[item.name],
+                 "allowed_branches": list(item.allowed_branches),
+                 "primary": item.name == repo.name}
+                for item in repos]),
+            "repo_names": "、".join(item.name for item in repos),
             "skills_block": prompts.skills_block(
                 project.skills_for(run["kind"])),
         }
@@ -638,10 +723,10 @@ class RunExecutor:
             self._record_usage(run_id, state)
             outcome = self._classify(state, code, stop_reason, run_dir,
                                      watcher.rate_limited)
+            after = {item.name: await gitops.snapshot(item.path)
+                     for item in repos}
             outcome.result = self._compose_result(state, run_dir, before,
-                                                  await gitops.snapshot(
-                                                      repo.path),
-                                                  sync_note)
+                                                  after, sync_notes)
             if outcome.reason != "rate_limit" or not backoffs:
                 break
             wait_minutes = backoffs.pop(0)
@@ -868,10 +953,19 @@ class RunExecutor:
                           usage=usage, claude_session_id=sid)
 
     def _compose_result(self, state, run_dir: Path,
-                        before: gitops.RepoSnapshot,
-                        after: gitops.RepoSnapshot,
-                        sync_note: str = "") -> str:
-        diff = gitops.diff_snapshots(before, after)
+                        before: dict[str, gitops.RepoSnapshot],
+                        after: dict[str, gitops.RepoSnapshot],
+                        sync_notes: dict[str, str] | None = None) -> str:
+        """收工附註。``before``／``after`` 以 repo 名為 key，**主 repo 排第一**。
+
+        單 repo 專案維持原本的平鋪格式；多 repo 時每個 repo 一節，只列有變動
+        或有新 commit 的——全都沒動就只列主 repo，讓讀的人知道那一節不是漏掉。
+        """
+        sync_notes = dict(sync_notes or {})
+        names = list(before)
+        primary = names[0] if names else ""
+        diffs = {name: gitops.diff_snapshots(before[name], after[name])
+                 for name in names}
         lines = [state.result_text.strip()] if state.result_text.strip() else []
         if (run_dir / SOFT_STOP_FLAG_NAME).exists():
             # 擺在最前面：看報告的人要先知道這一份**不是做完才停的**，
@@ -885,24 +979,27 @@ class RunExecutor:
         lines.append(f"- turns：{state.num_turns}")
         lines.append(f"- 成本：${state.total_cost_usd:.4f}")
         lines.append(f"- context 峰值：{state.peak_context_tokens} tokens")
-        lines.append(f"- HEAD：{(diff['head_before'] or '?')[:8]} → "
-                     f"{(diff['head_after'] or '?')[:8]}"
-                     f"{'，有新 commit' if diff['head_changed'] else ''}")
-        if diff["branch_changed"]:
-            lines.append(f"- 分支已變更：{diff['branch_before']} → "
-                         f"{diff['branch_after']}")
-        if diff["new_dirty"]:
-            dirty = diff["new_dirty"][:20]
-            if len(dirty) == 1:
-                lines.append(f"- 未 commit 的變更：{dirty[0]}")
-            else:
-                lines.append(f"- 未 commit 的變更（{len(dirty)} 個檔案）：")
-                lines.extend(f"    - {name}" for name in dirty)
+        if len(names) <= 1:
+            lines.extend(_repo_diff_lines(diffs[primary], "- ") if primary
+                         else [])
+        else:
+            shown = [name for name in names if _repo_touched(diffs[name])]
+            if not shown:
+                shown = [primary]
+            for name in shown:
+                lines.append(f"- {name}")
+                lines.extend(_repo_diff_lines(diffs[name], "    - "))
         if state.pending_mcp_servers:
             lines.append("- 開場時未就緒的 MCP："
                          + "、".join(state.pending_mcp_servers))
-        if sync_note:
-            lines.append(f"- 工作樹同步：{sync_note}")
+        for name in names:
+            note = sync_notes.get(name, "")
+            if not note:
+                continue
+            # 同步的結果不跟著「有沒有變動」走：fetch 失敗或工作樹本來就髒的
+            # repo 照樣要說出來，那正是「這一輪不是在最新的基礎上做的」
+            label = "工作樹同步" if len(names) <= 1 else f"工作樹同步（{name}）"
+            lines.append(f"- {label}：{note}")
         if (run_dir / "compacted").exists():
             lines.append("- 這一輪被自動壓縮過，摘要中前段的敘述是二手的。")
         tool_log = run_dir / "tool.log"
@@ -1028,6 +1125,9 @@ class RunExecutor:
 
         ctx = GuardContext(
             cwd=repo.path,
+            # 專案底下所有 repo 都可以動，主工作目錄只是其中一個
+            repo_roots=([r.path for r in project_repos(project, repo)]
+                        if project else [repo.path]),
             allowed_branches=list(repo.allowed_branches),
             allowed_domains=list(self.cfg.allowed_domains),
             protected_paths=[self.cfg.state_dir, self.cfg.claude_config_dir,

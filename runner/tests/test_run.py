@@ -213,7 +213,8 @@ async def test_context_soft_limit_raises_flag_and_hands_off(
         [sys.executable, HOOK],
         input=json.dumps({"tool_name": "Bash",
                           "tool_input": {"command": "git status"}}),
-        text=True, capture_output=True,
+        # hook 的 stderr 是 UTF-8（Claude Code 就是這樣讀），不能用主控台的 CP950 解
+        text=True, encoding="utf-8", capture_output=True,
         env={**_env(), "CHATROOM_RUNNER_RUN_DIR": str(run_dir)})
     assert proc.returncode == 2
     assert "context 已達上限" in proc.stderr
@@ -1109,8 +1110,16 @@ async def test_diverged_branch_fails_before_spawning(
 # ── 執行器附註的排版（App 端用 GFM 算繪）─────────────────────────
 
 def _note(tmp_path, state, before, after, sync_note=""):
+    """單 repo 的附註（多 repo 走 `_multi_note`）。"""
     executor = RunExecutor.__new__(RunExecutor)
-    return executor._compose_result(state, tmp_path, before, after, sync_note)
+    return executor._compose_result(state, tmp_path, {"JSAI-Web": before},
+                                    {"JSAI-Web": after},
+                                    {"JSAI-Web": sync_note})
+
+
+def _multi_note(tmp_path, state, before: dict, after: dict, sync=None):
+    executor = RunExecutor.__new__(RunExecutor)
+    return executor._compose_result(state, tmp_path, before, after, sync)
 
 
 def test_runner_note_is_markdown_bullets(tmp_path):
@@ -1157,3 +1166,224 @@ def test_runner_note_reports_mcp_servers_that_were_not_ready(tmp_path):
     snap = RepoSnapshot(branch="b", head="a" * 40, dirty=[])
     note = _note(tmp_path, state, snap, snap)
     assert "- 開場時未就緒的 MCP：claude_ai_Atlassian_Rovo" in note
+
+
+# ── 多 repo 專案：一次派工可以動全部 ─────────────────────────────
+
+def _extra_repo(tmp_path, name: str, branch: str = "jsai_dev") -> Path:
+    """再開一個掛著 origin 的工作樹（`work_repo` 的兄弟）。"""
+    bare = tmp_path / f"{name}-origin.git"
+    bare.mkdir()
+    subprocess.run(["git", "init", "--bare", "-b", branch, str(bare)],
+                   capture_output=True, check=True)
+    repo = tmp_path / name
+    repo.mkdir()
+    git(repo, "init", "-b", branch)
+    git(repo, "remote", "add", "origin", str(bare))
+    (repo / "README.md").write_text(f"{name}\n", encoding="utf-8")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-m", "init")
+    git(repo, "push", "-u", "origin", branch)
+    return repo
+
+
+def _multi_config(tmp_path, web: Path, api: Path, **overrides):
+    projects = {
+        "ai-website": {
+            "default_repo": "JSAI-Web",
+            "wall_clock_seconds": 60,
+            "repos": {
+                "JSAI-Web": {"path": str(web),
+                             "allowed_branches": ["jsai_dev", "feature/*"],
+                             "push_branches": ["jsai_dev"]},
+                "JSAI-API": {"path": str(api),
+                             "allowed_branches": ["jsai_dev", "feature/*"],
+                             "push_branches": ["jsai_dev"]},
+            },
+        },
+    }
+    return make_config(tmp_path, web, projects=projects, **overrides)
+
+
+async def test_every_repo_of_the_project_is_synced_and_snapshotted(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 一次派工可以動專案底下每一個 repo：只同步主 repo 的話，第二個 repo
+    會在舊基礎上被改，而沒有任何地方會說它動過。"""
+    from chatroom_runner import run as run_mod
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    api = _extra_repo(tmp_path, "JSAI-API")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-multi")
+    cfg = _multi_config(tmp_path, work_repo, api)
+    calls: list[tuple] = []
+    real = run_mod.gitops.git
+
+    async def spy(repo, *args, **kw):
+        calls.append((Path(repo).name, args))
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_mod.gitops, "git", spy)
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    for name in ("JSAI-Web", "JSAI-API"):
+        assert (name, ("fetch",)) in calls, f"{name} 沒有 fetch：{calls}"
+        assert (name, ("pull", "--ff-only")) in calls, f"{name} 沒有 pull"
+        assert (name, ("rev-parse", "HEAD")) in calls, f"{name} 沒有快照"
+
+
+async def test_a_second_repo_on_a_forbidden_branch_stops_the_run(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """分支檢查要對每個 repo 做：第二個 repo 停在不允許的分支上時，
+    這一輪本來就不該開始——agent 會去改它。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    api = _extra_repo(tmp_path, "JSAI-API")
+    git(api, "checkout", "-b", "master")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-branch")
+    cfg = _multi_config(tmp_path, work_repo, api)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "branch_not_allowed")
+    assert "JSAI-API" in outcome.result and "master" in outcome.result
+
+
+def test_runner_note_has_a_section_per_touched_repo(tmp_path):
+    """多 repo 的附註分節。混成一段的話，看報告的人分不出那顆 commit 在哪。"""
+    from chatroom_runner.gitops import RepoSnapshot
+    from chatroom_runner.stream import StreamState
+
+    before = {"JSAI-Web": RepoSnapshot("jsai_dev", "a" * 40, []),
+              "JSAI-API": RepoSnapshot("jsai_dev", "c" * 40, []),
+              "JSAI-Functions": RepoSnapshot("jsai_dev", "e" * 40, [])}
+    after = {"JSAI-Web": RepoSnapshot("jsai_dev", "b" * 40, []),
+             "JSAI-API": RepoSnapshot("jsai_dev", "c" * 40,
+                                      ["M src/api.ts"]),
+             "JSAI-Functions": RepoSnapshot("jsai_dev", "e" * 40, [])}
+    note = _multi_note(tmp_path, StreamState(result_text="做完了。"),
+                       before, after,
+                       {"JSAI-API": "已是最新"})
+
+    assert "- JSAI-Web\n    - HEAD：aaaaaaaa → bbbbbbbb，有新 commit" in note
+    assert "- JSAI-API\n    - HEAD：cccccccc → cccccccc" in note
+    assert "    - 未 commit 的變更：M src/api.ts" in note
+    # 沒動過的 repo 不佔版面
+    assert "JSAI-Functions" not in note
+    # 同步結果要標明是哪個 repo 的
+    assert "- 工作樹同步（JSAI-API）：已是最新" in note
+
+
+def test_runner_note_lists_the_primary_repo_when_nothing_moved(tmp_path):
+    """全都沒動就只列主 repo——空白一片會被讀成「附註漏了」。"""
+    from chatroom_runner.gitops import RepoSnapshot
+    from chatroom_runner.stream import StreamState
+
+    snap = {"JSAI-Web": RepoSnapshot("jsai_dev", "a" * 40, []),
+            "JSAI-API": RepoSnapshot("jsai_dev", "c" * 40, [])}
+    note = _multi_note(tmp_path, StreamState(), snap, dict(snap))
+
+    assert "- JSAI-Web\n    - HEAD：aaaaaaaa → aaaaaaaa" in note
+    assert "JSAI-API\n" not in note
+
+
+def test_prompt_lists_every_repo_of_the_project():
+    """prompt 只列一個 repo 的話，agent 會把另一半寫進卡裡說「我只能動這個」。"""
+    from chatroom_runner import prompts
+
+    block = prompts.repos_block([
+        {"name": "JSAI-Web", "path": "C:/x/JSAI-Web", "branch": "jsai_dev",
+         "allowed_branches": ["jsai_dev", "feature/*"], "primary": True},
+        {"name": "JSAI-API", "path": "C:/x/JSAI-API", "branch": "jsai_dev",
+         "allowed_branches": ["jsai_dev"], "primary": False},
+    ])
+    fields = {"run_id": "r1", "room_id": "room", "kind": "ticket",
+              "project": "ai-website", "ref": "task-1", "repo": "JSAI-Web",
+              "cwd": "C:/x/JSAI-Web", "branch": "jsai_dev",
+              "allowed_branches": "jsai_dev、feature/*",
+              "repos_block": block, "repo_names": "JSAI-Web、JSAI-API"}
+    for kind in ("ticket", "stage", "investigate"):
+        text = prompts.build(kind, fields, "簡述在這")
+        assert "{{" not in text
+        assert "JSAI-API" in text and "C:/x/JSAI-API" in text
+        assert "（主工作目錄）" in text
+    contract = prompts.build_contract(fields)
+    assert "{{" not in contract and "JSAI-API" in contract
+
+
+async def test_a_shared_second_repo_serialises_two_runs(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 寫入型 run 會動專案底下每一個 repo，所以鎖要拿全部。
+
+    只鎖主 repo 的話，兩筆主 repo 不同的 run 會同時寫同一個副 repo——
+    那正是「同一個 repo 只允許一個寫入者」本來要擋掉的事，而面板上看起來
+    只是兩筆都在跑。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "60")
+    api = _extra_repo(tmp_path, "JSAI-API")
+    await runner_hub.register("test-host", "test", ["ai-website"], 2, "0.1")
+    await create_run(client, room_id, headers, kind="ticket",
+                     ref="task-web", brief="repo: JSAI-Web")
+    await create_run(client, room_id, headers, kind="ticket",
+                     ref="task-api", brief="repo: JSAI-API")
+    a = await runner_hub.claim()
+    b = await runner_hub.claim()
+    cfg = _multi_config(tmp_path, work_repo, api)
+    locks = RepoLocks()
+    cancel_a, cancel_b = asyncio.Event(), asyncio.Event()
+    task_a = asyncio.ensure_future(
+        _executor(cfg, runner_hub, locks=locks).execute(a, cancel_a))
+    task_b = asyncio.ensure_future(
+        _executor(cfg, runner_hub, locks=locks).execute(b, cancel_b))
+    try:
+        started: list[dict] = []
+        for _ in range(600):
+            await asyncio.sleep(0.05)
+            started = [r for r in (a, b)
+                       if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
+            if started:
+                break
+        await asyncio.sleep(0.5)
+        # 兩把鎖都在同一筆手上
+        assert locks.is_held("ai-website/JSAI-Web")
+        assert locks.is_held("ai-website/JSAI-API")
+        started = [r for r in (a, b)
+                   if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
+        assert len(started) == 1, "主 repo 不同也只准一筆起進程"
+        other = b if started[0] is a else a
+        blocked = (await client.get(f"/api/runs/{other['id']}",
+                                    headers=headers)).json()["run"]
+        assert blocked["status"] == "claimed", "它連 running 都還不該報"
+    finally:
+        cancel_a.set()
+        cancel_b.set()
+        await asyncio.wait_for(asyncio.gather(task_a, task_b,
+                                              return_exceptions=True),
+                               timeout=90)
+
+
+async def test_lock_keys_are_taken_in_a_fixed_order(tmp_path):
+    """取得順序不照主 repo 走，否則兩筆主 repo 相反的 run 會互等。"""
+    locks = RepoLocks()
+    taken: list[str] = []
+    real_get = locks.get
+
+    def spy(key):
+        taken.append(key)
+        return real_get(key)
+
+    locks.get = spy  # type: ignore[assignment]
+    async with locks.hold(["p/JSAI-Web", "p/JSAI-API"]):
+        pass
+    async with locks.hold(["p/JSAI-API", "p/JSAI-Web"]):
+        pass
+    assert taken == ["p/JSAI-API", "p/JSAI-Web"] * 2

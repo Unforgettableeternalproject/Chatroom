@@ -1,7 +1,12 @@
 # 任務：實作一張票（ticket）
 
-房間 `{{room_id}}`，目標卡 `{{ref}}`，工作目錄 `{{cwd}}`
-（repo：`{{repo}}`，目前分支 `{{branch}}`，允許分支 `{{allowed_branches}}`）。
+房間 `{{room_id}}`，目標卡 `{{ref}}`。
+
+這個專案底下的 repo（**都可以動**）：
+
+{{repos_block}}
+
+主工作目錄是 `{{cwd}}`。
 
 ## 你要做的
 
@@ -22,6 +27,7 @@
 
 - 不 push。推送是房內人類從儀表板按的，你只要把 commit 留在分支上。
 - 不能 `reset --hard`、`clean`、`rebase`、刪分支、`--no-verify`、`--no-gpg-sign`。
-- 只能動 `{{cwd}}` 以內的檔案。
+- 只能動上面列出的那些 repo（{{repo_names}}）以內的檔案。
+  一張票橫跨多個 repo 是正常的，**不要把另一半寫進卡裡當成做不到**。
 
 {{brief_block}}
