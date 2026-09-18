@@ -34,7 +34,7 @@
       "max_turns": 120,
       "max_budget_usd": 5.0,
       "wall_clock_seconds": 5400,
-      "context_window_tokens": 200000,
+      "context_window_tokens": 1000000,
       "context_soft_limit_ratio": 0.7,
       "default_repo": "JSAI-Web",
       "skill_dirs": ["C:/Users/Bernie/source/repos/mind-door/AI-Website"],
