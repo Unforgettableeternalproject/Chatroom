@@ -10,7 +10,7 @@
   "stall_warn_seconds": 600,
   "maintenance_hour": 4,
   "usage_window_hours": 5,
-  "usage_soft_cap_tokens": 8000000,
+  "usage_soft_cap_tokens": 0,
   "usage_soft_cap_usd": 40.0,
   "require_gpg": true,
   "claude_bin": "claude",
