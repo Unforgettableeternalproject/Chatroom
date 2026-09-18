@@ -73,7 +73,22 @@ class StageFileCount extends StatelessWidget {
   }
 }
 
-/// 展開之後的素材清單。圖片沿用附件元件預覽，非圖片顯示成一列檔案資訊。
+/// 依 mime 給一個圖示。**只是讓人一眼分得出哪一列是圖、哪一列是報告**，
+/// 認不出來的型別就用通用檔案圖示，不要為了精準去猜副檔名。
+IconData stageFileIcon(String mime) {
+  if (mime.startsWith('image/')) return Icons.image_outlined;
+  if (mime == 'application/pdf') return Icons.picture_as_pdf_outlined;
+  if (mime.startsWith('video/')) return Icons.movie_outlined;
+  if (mime.startsWith('audio/')) return Icons.audiotrack_outlined;
+  if (mime.startsWith('text/')) return Icons.description_outlined;
+  if (mime.contains('zip') || mime.contains('compressed')) {
+    return Icons.folder_zip_outlined;
+  }
+  return Icons.insert_drive_file_outlined;
+}
+
+/// 展開之後的素材清單。每列一份素材，點檔名開檢視（圖片在 App 內，其餘
+/// 交給系統程式），右邊一顆卸除。
 class StageFilesList extends ConsumerWidget {
   const StageFilesList({
     super.key,
@@ -83,6 +98,7 @@ class StageFilesList extends ConsumerWidget {
     required this.actions,
     this.participantId,
     this.readOnly = false,
+    this.onAdd,
   });
 
   /// 這塊板。**還不知道時（房軸要等第一次回應）呼叫端不要畫這個元件**。
@@ -98,16 +114,20 @@ class StageFilesList extends ConsumerWidget {
   final String? participantId;
   final bool readOnly;
 
+  /// 「新增素材」。唯讀或沒有房（附件要上傳到某一間房）時是 null，那時
+  /// 空清單整個不佔版面。
+  final VoidCallback? onAdd;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (files.isEmpty) return const SizedBox.shrink();
+    if (files.isEmpty && onAdd == null) return const SizedBox.shrink();
     final config = ref.watch(appConfigProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (final f in files)
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.only(bottom: 6),
             child: _StageFileRow(
               file: f,
               serverUrl: config.serverUrl,
@@ -116,6 +136,23 @@ class StageFilesList extends ConsumerWidget {
               onRemove: (readOnly || actions == null)
                   ? null
                   : () => _remove(context, f),
+            ),
+          ),
+        // 入口留在清單底部：要加東西的人是先看過已經有什麼才決定加的。
+        // 空清單不放空狀態文案——那句話佔的位置比這顆按鈕還大
+        if (onAdd != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: TextButton.icon(
+              onPressed: onAdd,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: Icon(Icons.add, size: 14, color: context.uep.inkMute),
+              label: Text('新增素材',
+                  style: UepText.fieldLabel(color: context.uep.inkMute)),
             ),
           ),
       ],
@@ -128,11 +165,20 @@ class StageFilesList extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('卸除素材',
-            style:
-                UepText.sectionTitle(color: context.uep.inkTitle)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('卸除素材',
+                style: UepText.sectionTitle(color: context.uep.inkTitle)),
+            const SizedBox(height: 4),
+            // 檔名放在標題底下：確認的那句話要短，但按錯一列的人需要看得到
+            // 自己按的是哪一份
+            Text(f.filename,
+                style: UepText.mono(size: 10.5, color: context.uep.inkMute)),
+          ],
+        ),
         content: Text(
-          '把「${f.filename}」從這個階段拿下來？',
+          '移除這份素材？',
           style: UepText.serif(
               size: 14, color: context.uep.inkSoft, height: 1.8),
         ),
@@ -155,7 +201,7 @@ class StageFilesList extends ConsumerWidget {
   }
 }
 
-class _StageFileRow extends StatelessWidget {
+class _StageFileRow extends ConsumerWidget {
   const _StageFileRow({
     required this.file,
     required this.serverUrl,
@@ -171,24 +217,48 @@ class _StageFileRow extends StatelessWidget {
   final VoidCallback? onRemove;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // 預覽與下載整組沿用訊息附件那份——素材與附件在使用者眼裡
-            // 是同一種東西，兩套元件會長出兩種行為
+            Icon(stageFileIcon(file.mime), size: 15, color: s.inkMute),
+            const SizedBox(width: 8),
+            // 檔名就是開啟的入口：檢視與下載整組沿用訊息附件那份
+            // （[openAttachmentPreview]）——素材與附件在使用者眼裡是同一種
+            // 東西，兩套實作會長出兩種行為
             Flexible(
-              child: AttachmentView(
-                attachments: [file.asAttachment],
-                serverUrl: serverUrl,
-                token: token,
-                participantId: participantId,
+              child: InkWell(
+                onTap: () => openAttachmentPreview(
+                  context,
+                  ref,
+                  attachment: file.asAttachment,
+                  serverUrl: serverUrl,
+                  token: token,
+                  participantId: participantId,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    file.filename,
+                    style: UepText.serif(size: 13.5, color: s.ink, height: 1.5),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
             ),
+            const SizedBox(width: 10),
+            Text(file.readableSize,
+                style: UepText.mono(
+                    size: 10, color: s.inkMute, letterSpacing: 1.1)),
+            if (file.addedByName.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text('· ${file.addedByName} 掛上',
+                  style: UepText.mono(size: 10, color: s.inkMute)),
+            ],
             if (onRemove != null)
               IconButton(
                 tooltip: '從階段卸除',
@@ -198,28 +268,11 @@ class _StageFileRow extends StatelessWidget {
               ),
           ],
         ),
-        Padding(
-          padding: const EdgeInsets.only(left: 2, top: 2),
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 8,
-            children: [
-              Text(file.filename,
-                  style: UepText.sans(size: 12.5, color: s.ink)),
-              Text(file.readableSize,
-                  style: UepText.mono(
-                      size: 10, color: s.inkMute, letterSpacing: 1.1)),
-              if (file.addedByName.isNotEmpty)
-                Text('· ${file.addedByName} 掛上',
-                    style: UepText.mono(size: 10, color: s.inkMute)),
-            ],
-          ),
-        ),
         // note 是「這份素材是什麼」。沒有的話這一行整個不出現——空白的
         // 一行會讓清單看起來每一列都少了東西
         if (file.note.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(left: 2, top: 3),
+            padding: const EdgeInsets.only(left: 23, top: 1),
             child: Text(file.note,
                 style: UepText.serif(size: 13, color: s.inkSoft, height: 1.6)),
           ),
@@ -241,32 +294,43 @@ Future<void> pickAndAttachStageFile(
   required String roomId,
   required BoardActions actions,
 }) async {
-  // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null
+  // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null，
+  // 而且預設就是多選——選了三個檔案，這裡就要問三次、掛三次
   final picked = await FilePicker.pickFiles();
   if (picked.isEmpty || !context.mounted) return;
-  final file = picked.first;
-  final path = file.path;
-  if (path == null) return;
 
-  final note = await showStageNoteDialog(context, filename: file.name);
-  if (note == null || !context.mounted) return;
+  // 逐檔序列處理，不是只吃第一個：一次選多個檔案時，前面那份少掉的不是
+  // 上傳失敗，是後面的檔案從來沒被問過、也從來沒被送出去過
+  for (final file in picked) {
+    final path = file.path;
+    if (path == null) continue;
+    if (!context.mounted) return;
 
-  await runStageFileAction(context, () async {
-    final identity = await ref.read(identityProvider(roomId).future);
-    final uploaded = await ref.read(attachmentsApiProvider).uploadPath(
-          roomId,
-          participantId: identity.participantId,
-          path: path,
-          filename: file.name,
-          mime: ComposerAttachmentDrafts.guessMime(file.name),
-        );
-    return actions.addStageFile(
-      boardId,
-      checklistId,
-      attachmentId: uploaded.id,
-      note: note,
-    );
-  });
+    final note = await showStageNoteDialog(context, filename: file.name);
+    // 對某一份素材按了取消，就當成整批都反悔了——不是使用者自己選要
+    // 略過這一份，繼續問下一份只會讓人以為剛剛那次取消沒有生效
+    if (note == null || !context.mounted) return;
+
+    // 這一份失敗（重複、沒權限……）[runStageFileAction] 已經說過話了，
+    // 不能讓它擋住還沒問過的其餘檔案——選了五個檔案，其中一個已經掛過，
+    // 不該讓剩下四個因此連問都沒問到
+    await runStageFileAction(context, () async {
+      final identity = await ref.read(identityProvider(roomId).future);
+      final uploaded = await ref.read(attachmentsApiProvider).uploadPath(
+            roomId,
+            participantId: identity.participantId,
+            path: path,
+            filename: file.name,
+            mime: ComposerAttachmentDrafts.guessMime(file.name),
+          );
+      return actions.addStageFile(
+        boardId,
+        checklistId,
+        attachmentId: uploaded.id,
+        note: note,
+      );
+    });
+  }
 }
 
 /// 問一句「這份素材是什麼」。**可以留白**——逼人寫一句話才掛得上去，

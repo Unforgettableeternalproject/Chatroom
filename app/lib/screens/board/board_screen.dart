@@ -1428,23 +1428,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ),
                   const SizedBox(width: 8),
                 ],
-                // 加素材。**只有房軸有**：附件要上傳到一間房，而 Board
-                // Library 那條路上連上傳到哪裡都答不出來（見
-                // pickAndAttachStageFile）
-                if (widget.roomId != null && _boardIdOrNull != null) ...[
-                  _BarButton(
-                    label: '加素材',
-                    onTap: () => pickAndAttachStageFile(
-                      context,
-                      ref,
-                      boardId: _boardIdOrNull!,
-                      checklistId: c.id,
-                      roomId: widget.roomId!,
-                      actions: _actions!,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
+                // 加素材的入口在素材清單底部（見 StageFilesList.onAdd）：
+                // 要加東西的人是先看過已經有什麼才決定加的
                 if (c.status == 'open') ...[
                   _BarButton(
                     label: '收尾階段',
@@ -1496,7 +1481,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ),
           if (collapsed) const SizedBox(height: 4),
           if (!collapsed) ...[
-          if (c.files.isNotEmpty && _boardIdOrNull != null) ...[
+          if (_boardIdOrNull != null) ...[
             const SizedBox(height: 10),
             StageFilesList(
               boardId: _boardIdOrNull!,
@@ -1507,6 +1492,19 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ? null
                   : ref.watch(boardParticipantIdProvider(widget.roomId!)).value,
               readOnly: _readOnly,
+              // 新增素材**只有房軸有**：附件要上傳到一間房，而 Board
+              // Library 那條路上連上傳到哪裡都答不出來（見
+              // pickAndAttachStageFile）
+              onAdd: (_readOnly || widget.roomId == null || _actions == null)
+                  ? null
+                  : () => pickAndAttachStageFile(
+                        context,
+                        ref,
+                        boardId: _boardIdOrNull!,
+                        checklistId: c.id,
+                        roomId: widget.roomId!,
+                        actions: _actions!,
+                      ),
             ),
           ],
           const SizedBox(height: 10),

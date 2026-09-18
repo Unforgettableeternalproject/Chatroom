@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/errors/api_exception.dart';
 import '../state/app_providers.dart';
@@ -9,6 +12,81 @@ import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../models/attachment.dart';
 import 'stage_files.dart';
+
+/// 附件的取檔網址。`GET /api/attachments/{id}`——用的是附件 id。
+String attachmentUrl(String serverUrl, String attachmentId) =>
+    '$serverUrl/api/attachments/$attachmentId';
+
+/// 取附件要帶的標頭。房內身分是 Hub 的讀取邊界。
+Map<String, String> attachmentHeaders(String token, String? participantId) => {
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      if (participantId != null && participantId.isNotEmpty)
+        'X-Participant-Id': participantId,
+    };
+
+/// 開啟一份附件的檢視。
+///
+/// 圖片留在 App 內（[_FullScreenImage]，可縮放平移）；PDF 與其他型別沒有
+/// 內建的檢視器，下載到暫存再交給系統程式開——**那份暫存檔不是使用者的
+/// 存檔**，要留下來請用存檔鈕。
+///
+/// 沒有房內身分時連請求都不發：那個空窗期發出去的只會是 401。
+Future<void> openAttachmentPreview(
+  BuildContext context,
+  WidgetRef ref, {
+  required Attachment attachment,
+  required String serverUrl,
+  required String token,
+  String? participantId,
+}) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  void toast(String message) =>
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+
+  if (participantId == null || participantId.isEmpty) {
+    toast('還在取得房間身分，稍候再試');
+    return;
+  }
+  final headers = attachmentHeaders(token, participantId);
+  if (attachment.isImage) {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FullScreenImage(
+        url: attachmentUrl(serverUrl, attachment.id),
+        headers: headers,
+        filename: attachment.filename,
+      ),
+    );
+    return;
+  }
+
+  try {
+    final bytes = await ref
+        .read(attachmentsApiProvider)
+        .download(attachment.id, participantId: participantId);
+    // 暫存檔放在各自的資料夾裡：同名檔案（screenshot.png、report.pdf）
+    // 在素材清單裡很常見，直接落在系統暫存目錄會互相蓋掉
+    final dir = await Directory.systemTemp.createTemp('chatroom_preview_');
+    final file = File('${dir.path}${Platform.pathSeparator}'
+        '${_safeFilename(attachment.filename)}');
+    await file.writeAsBytes(bytes);
+    final ok = await launchUrl(file.uri, mode: LaunchMode.externalApplication);
+    if (!ok) toast('這台機器沒有可以開啟這種檔案的程式');
+  } on AttachmentGoneException catch (e) {
+    toast(e.message);
+  } on ApiException catch (e) {
+    toast('開啟失敗：${e.message}');
+  } on FileSystemException catch (e) {
+    toast('開啟失敗：${e.message}');
+  }
+}
+
+/// 檔名只用來落一個暫存檔，**不可以讓它跳出那個資料夾**——原始檔名來自
+/// 上傳者，`..\..\` 在 Windows 上一樣成立。
+String _safeFilename(String filename) {
+  final cleaned = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  return cleaned.isEmpty ? 'attachment' : cleaned;
+}
 
 /// 訊息底下的附件區。
 ///
@@ -47,13 +125,9 @@ class AttachmentView extends StatelessWidget {
   bool get _canFetch =>
       participantId != null && participantId!.isNotEmpty;
 
-  Map<String, String> get _headers => {
-        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        if (participantId != null && participantId!.isNotEmpty)
-          'X-Participant-Id': participantId!,
-      };
+  Map<String, String> get _headers => attachmentHeaders(token, participantId);
 
-  String _url(Attachment a) => '$serverUrl/api/attachments/${a.id}';
+  String _url(Attachment a) => attachmentUrl(serverUrl, a.id);
 
   @override
   Widget build(BuildContext context) {
