@@ -293,6 +293,12 @@ class _AppShellState extends ConsumerState<AppShell>
               glyph: '◎',
               onTap: () => context.push('/settings'),
             ),
+            const SizedBox(width: 8),
+            _TopIconButton(
+              tooltip: '說明',
+              icon: Icons.help_outline,
+              onTap: () => context.push('/help/main'),
+            ),
           ]),
         ),
         Expanded(
@@ -404,12 +410,15 @@ class _LeftPaneState extends State<_LeftPane> {
 
 class _TopIconButton extends StatelessWidget {
   const _TopIconButton({
-    required this.glyph,
+    this.glyph,
+    this.icon,
     required this.onTap,
     required this.tooltip,
-  });
+  }) : assert(glyph != null || icon != null);
 
-  final String glyph;
+  /// 字符圖示（頂欄原本的做法）。與 [icon] 擇一。
+  final String? glyph;
+  final IconData? icon;
   final VoidCallback onTap;
   final String tooltip;
 
@@ -425,8 +434,10 @@ class _TopIconButton extends StatelessWidget {
           height: 28,
           alignment: Alignment.center,
           decoration: BoxDecoration(border: Border.all(color: s.line)),
-          child: Text(glyph,
-              style: TextStyle(fontSize: 12, color: s.inkSoft)),
+          child: glyph != null
+              ? Text(glyph!,
+                  style: TextStyle(fontSize: 12, color: s.inkSoft))
+              : Icon(icon, size: 14, color: s.inkSoft),
         ),
       ),
     );

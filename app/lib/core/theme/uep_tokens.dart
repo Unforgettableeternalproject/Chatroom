@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+/// 單欄頁面（設定、這台機器、說明）的內容最大寬度。
+/// 三頁共用一個值——寬視窗上各頁一邊寬一邊窄比留白本身更礙眼。
+const double kPageMaxWidth = 760;
+
 /// U.E.P Imaginary Space 設計系統 token。
 /// 值逐字對照 design system 的 tokens/colors.css 與 tokens/zones.css，
 /// 不要在這裡「順手調色」——設計稿才是真相來源。

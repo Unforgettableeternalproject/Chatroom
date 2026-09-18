@@ -48,7 +48,7 @@ class HostConsoleScreen extends ConsumerWidget {
           IconButton(
             tooltip: '說明',
             icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
-            onPressed: () => context.push('/help'),
+            onPressed: () => context.push('/help/host'),
           ),
           IconButton(
             tooltip: '重新檢查',
@@ -74,11 +74,11 @@ class HostConsoleScreen extends ConsumerWidget {
                 ),
               ),
             )
-          // 與設定頁同寬同內距（560／32）。原本滿寬 24 內距，在寬視窗上
+          // 與設定頁同寬同內距（kPageMaxWidth／32）。原本滿寬 24 內距，在寬視窗上
           // 每一行都拉到螢幕兩端——與其他頁擺在一起時最突兀的就是這件事
           : Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 560),
+                constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
                 child: ListView(
                   padding: const EdgeInsets.all(32),
                   children: [

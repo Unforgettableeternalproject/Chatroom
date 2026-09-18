@@ -226,13 +226,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           IconButton(
             tooltip: '說明',
             icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
-            onPressed: () => context.push('/help'),
+            onPressed: () => context.push('/help/settings'),
           ),
         ],
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
+          constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
           child: ListView(
             padding: const EdgeInsets.all(32),
             children: [

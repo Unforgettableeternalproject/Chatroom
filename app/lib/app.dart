@@ -50,10 +50,17 @@ GoRouter buildRouter(bool Function() isConfigured) {
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),
       ),
-      // 手冊。各畫面上不放介紹，要解釋的東西集中在這一頁
+      // 手冊。各畫面上不放介紹，要解釋的東西集中在這裡；依入口分成三份，
+      // 按進來的人只看到自己那個畫面的說明
       GoRoute(
         path: '/help',
-        builder: (context, state) => const HelpScreen(),
+        redirect: (context, state) => '/help/main',
+      ),
+      GoRoute(
+        path: '/help/:topic',
+        builder: (context, state) => HelpScreen(
+          topic: helpTopicFromSlug(state.pathParameters['topic']),
+        ),
       ),
       ShellRoute(
         builder: (context, state, child) => AppShell(
