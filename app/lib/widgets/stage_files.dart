@@ -164,7 +164,9 @@ class StageFilesList extends ConsumerWidget {
     // 按錯一格與按對一格在畫面上沒有差別
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      // 用對話框自己的 context pop：外層 context 屬於板畫面那一層 Navigator，
+      // 從那裡 pop 會關掉板而不是對話框，遮罩留在原地，整個畫面變成一片灰
+      builder: (dialogContext) => AlertDialog(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -186,10 +188,11 @@ class StageFilesList extends ConsumerWidget {
           UepButton(
             label: '取消',
             variant: UepButtonVariant.outline,
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
           ),
           UepButton(
-              label: '卸除', onPressed: () => Navigator.of(context).pop(true)),
+              label: '卸除',
+              onPressed: () => Navigator.of(dialogContext).pop(true)),
         ],
       ),
     );
