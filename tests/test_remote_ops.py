@@ -636,6 +636,38 @@ async def test_handoff_creates_a_child_run(tmp_path):
             assert child["requested_by_actor_key"] == "human-a"
 
 
+async def test_a_finished_handoff_chain_does_not_block_redispatch(tmp_path):
+    """交接過的卡要能再派工。
+
+    父 run 永遠停在 handoff（它同時在 _RUN_ACTIVE 與 _RUN_TERMINAL 裡）；
+    重複檢查若把它算成「還沒結束」，子 run 收場後這張卡就再也派不了工。
+    2026-09-18 實測：佇列空、人已離房，建單仍回 run_ref_already_active。
+    """
+    app, client = await _client(tmp_path, "handoff-redispatch")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+            run_id = await _drive_to_running(client, rid, hdr, runner, "task-1")
+            body = (await client.post(f"/api/runs/{run_id}/report",
+                                      json={"status": "handoff",
+                                            "runner_id": runner,
+                                            "reason": "context"},
+                                      headers=runner.headers)).json()
+            child_id = body["child_run"]["id"]
+            # 子 run 還在排隊：同一張卡仍要被擋，而且指向子 run
+            r = await client.post(f"/api/rooms/{rid}/runs", json=_run_body(),
+                                  headers=hdr)
+            assert r.status_code == 409
+            assert r.json()["detail"]["run_id"] == child_id
+            # 子 run 收場後就放得出來
+            await client.post(f"/api/runs/{child_id}/cancel", headers=hdr)
+            r = await client.post(f"/api/rooms/{rid}/runs", json=_run_body(),
+                                  headers=hdr)
+            assert r.status_code == 200, r.json()
+
+
 async def test_handoff_brief_carries_the_parent_summary(tmp_path):
     """交接摘要要接進子 run 的 brief。
 

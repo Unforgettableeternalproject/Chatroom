@@ -13167,11 +13167,16 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"沒有執行器服務 `{body.project}` 這個專案，"
                        "請確認專案 key，或讓對應的執行器上線。",
                        project=body.project)
-        marks = ",".join("?" for _ in _RUN_ACTIVE)
+        # 重複檢查**不含 handoff**：交接的父 run 永遠停在 handoff（它同時
+        # 在 _RUN_TERMINAL 裡），把它算成「還沒結束」的話，一張卡只要交接過
+        # 一次就再也派不了工——子 run 早就 done、人也離房了（2026-09-18 實測）。
+        # 子 run 若仍在跑，它自己就在 queued/claimed/running 裡，擋得住。
+        open_statuses = tuple(st for st in _RUN_ACTIVE if st != "handoff")
+        marks = ",".join("?" for _ in open_statuses)
         dup = await (await db.execute(
             "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
             f" AND status IN ({marks}) LIMIT 1",
-            (room_id, body.ref, *_RUN_ACTIVE))).fetchone()
+            (room_id, body.ref, *open_statuses))).fetchone()
         if dup is not None:
             raise _err(409, "run_ref_already_active",
                        "這個目標已經有一筆還沒結束的派工。",
