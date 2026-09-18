@@ -52,14 +52,14 @@ Future<bool> confirmBoardSwitch(BuildContext context,
       return AlertDialog(
         backgroundColor: s.bgCard,
         title: Text('更換任務板',
-            style: UepText.display(size: 20, color: s.inkTitle)),
+            style: UepText.sectionTitle(color: s.inkTitle)),
         content: SizedBox(
           width: 420,
           child: Text(
             '先解除目前的任務板'
             '${boardName.isEmpty ? '' : '「$boardName」'}，再挑一塊新的。'
             '解除不會刪掉那塊板。',
-            style: UepText.serif(size: 12.5, color: s.inkSoft, height: 1.8),
+            style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.8),
           ),
         ),
         actions: [

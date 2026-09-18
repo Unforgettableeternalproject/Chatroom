@@ -94,7 +94,7 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text(settled ? '這塊板的結局' : '宣告結局',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 380,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -103,13 +103,13 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
                 ? '目前是「${widget.current == 'completed' ? '完成' : '廢止'}」，'
                     '可以重新打開。'
                 : '收尾後這塊板移到「已收尾」，隨時可以重新打開。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.55),
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!,
                 style: UepText.sans(
-                    size: 12, color: UepColors.error, height: 1.45)),
+                    size: 13, color: UepColors.error, height: 1.45)),
           ],
         ]),
       ),

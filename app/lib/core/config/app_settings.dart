@@ -14,6 +14,7 @@ class SettingsRepository {
 
   static const _kServerUrl = 'chatroom.server_url';
   static const _kThemeMode = 'chatroom.theme_mode';
+  static const _kFontScale = 'chatroom.font_scale';
   static const _kPreferredName = 'chatroom.preferred_name';
   static const _kToken = 'chatroom.api_token';
   static const _kDeviceKey = 'chatroom.device_session_key';
@@ -68,6 +69,14 @@ class SettingsRepository {
       );
   Future<void> setThemeMode(ThemeModePref mode) =>
       _prefs.setString(_kThemeMode, mode.name);
+
+  /// 字級偏好：整個 App 的文字縮放，預設「中」。
+  FontScalePref get fontScale => FontScalePref.values.firstWhere(
+        (f) => f.name == _prefs.getString(_kFontScale),
+        orElse: () => FontScalePref.medium,
+      );
+  Future<void> setFontScale(FontScalePref scale) =>
+      _prefs.setString(_kFontScale, scale.name);
 
   String get preferredName => _prefs.getString(_kPreferredName) ?? '';
   Future<void> setPreferredName(String name) =>
@@ -196,6 +205,12 @@ class SettingsRepository {
 }
 
 enum ThemeModePref { dark, light }
+
+/// 字級偏好：small 小、medium 中（預設）、large 大。
+///
+/// 只存偏好本身，實際的縮放倍率由套用端（`app.dart` 的 MediaQuery）決定——
+/// 倍率是視覺決策，會被調整，而落盤的值不該跟著改。
+enum FontScalePref { small, medium, large }
 
 /// 通知模式：off 不通知、mentions 僅被 @mention、all 所有新訊息。
 enum NotifyModePref { off, mentions, all }

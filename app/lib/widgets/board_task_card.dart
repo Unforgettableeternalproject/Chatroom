@@ -109,7 +109,7 @@ class BoardTaskCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: UepText.serif(
-                              size: 12, color: s.inkSoft, height: 1.7),
+                              size: 13, color: s.inkSoft, height: 1.7),
                         ),
                       ],
                       const SizedBox(height: 7),
@@ -134,11 +134,10 @@ class BoardTaskCard extends StatelessWidget {
           child: Text(
             task.title,
             style: UepText.sans(
-              size: 13.5,
+              size: 14.5,
               weight: FontWeight.w600,
               color: s.inkTitle,
-              height: 1.5,
-            ),
+              height: 1.5),
           ),
         ),
         const SizedBox(width: 8),
@@ -167,13 +166,13 @@ class BoardTaskCard extends StatelessWidget {
         edge: s.hairlineStrong,
         child: Text.rich(
           TextSpan(
-            style: UepText.serif(size: 12, color: s.inkSoft),
+            style: UepText.serif(size: 13, color: s.inkSoft),
             children: [
               const TextSpan(text: '已經被 '),
               TextSpan(
                 text: conflict,
                 style: UepText.serif(
-                    size: 12, weight: FontWeight.w600, color: s.inkTitle),
+                    size: 13, weight: FontWeight.w600, color: s.inkTitle),
               ),
               const TextSpan(text: ' 領走了。'),
             ],
@@ -188,7 +187,7 @@ class BoardTaskCard extends StatelessWidget {
           if (task.priority == 'high') ...[
             const SizedBox(width: 9),
             Text('▲ 高',
-                style: UepText.mono(size: 8.5, color: s.inkTitle)),
+                style: UepText.mono(size: 10, color: s.inkTitle)),
           ],
           if (onRelease != null) ...[
             const SizedBox(width: 9),
@@ -215,7 +214,7 @@ class BoardTaskCard extends StatelessWidget {
                     : _TinyAction(
                         label: '撿回', onTap: onClaim!, color: UepColors.gold),
                 child: Text('這是你上一世領走的卡。',
-                    style: UepText.serif(size: 12, color: UepColors.gold)),
+                    style: UepText.serif(size: 13, color: UepColors.gold)),
               ),
             ] else if (onClaim != null) ...[
               const SizedBox(height: 8),
@@ -228,9 +227,9 @@ class BoardTaskCard extends StatelessWidget {
         ),
       ClaimAxis.suggested => Row(children: [
           Text('建議給 ',
-              style: UepText.mono(size: 8.5, color: s.inkSoft)),
+              style: UepText.mono(size: 10, color: s.inkSoft)),
           Text(assigneeName ?? '（已不在房內）',
-              style: UepText.mono(size: 8.5, color: s.ink)),
+              style: UepText.mono(size: 10, color: s.ink)),
           const SizedBox(width: 9),
           _Dot(color: s.inkMute),
           const SizedBox(width: 9),
@@ -238,19 +237,19 @@ class BoardTaskCard extends StatelessWidget {
           Flexible(
             child: Text('建議不是鎖，誰都能領',
                 overflow: TextOverflow.ellipsis,
-                style: UepText.mono(size: 8.5, color: s.inkMute)),
+                style: UepText.mono(size: 10, color: s.inkMute)),
           ),
           const Spacer(),
           if (onClaim != null) _TinyAction(label: '我來做', onTap: onClaim!),
         ]),
       _ => Row(children: [
           Text('尚未認領',
-              style: UepText.mono(size: 8.5, color: s.inkMute)),
+              style: UepText.mono(size: 10, color: s.inkMute)),
           if (task.priority == 'high') ...[
             const SizedBox(width: 9),
             _Dot(color: s.inkMute),
             const SizedBox(width: 9),
-            Text('▲ 高', style: UepText.mono(size: 8.5, color: s.inkTitle)),
+            Text('▲ 高', style: UepText.mono(size: 10, color: s.inkTitle)),
           ],
           const Spacer(),
           if (onClaim != null) _TinyAction(label: '認領', onTap: onClaim!),
@@ -283,7 +282,7 @@ class BoardTaskCard extends StatelessWidget {
               task.claimName.isEmpty ? '（不明）' : task.claimName,
               // 名字劃掉：他曾經在這張卡上，那是事實；他現在不在，也是事實
               style: UepText.sans(
-                      size: 11.5,
+                      size: 12.5,
                       weight: FontWeight.w600,
                       color: struck ? s.inkMute : s.ink)
                   .copyWith(
@@ -308,7 +307,7 @@ class BoardTaskCard extends StatelessWidget {
                     : '$when 認領',
             // 孤兒的那句話用 error 色：它是這張卡上最該被看見的一件事
             style: UepText.mono(
-                size: 8.5, color: struck ? UepColors.error : s.inkMute),
+                size: 10, color: struck ? UepColors.error : s.inkMute),
           ),
         ],
     );
@@ -356,7 +355,7 @@ class BoardTaskCard extends StatelessWidget {
                         // ✓ 做完了／✕ 不做了／→ 去別的地方做了
                         Text(cancelled ? '✕' : (moved ? '→' : '✓'),
                             style: UepText.mono(
-                                size: 10,
+                                size: 10.5,
                                 color: faded
                                     ? s.inkMute
                                     : UepColors.success)),
@@ -366,7 +365,7 @@ class BoardTaskCard extends StatelessWidget {
                             task.title,
                             overflow: TextOverflow.ellipsis,
                             style: UepText.sans(
-                                    size: 13,
+                                    size: 14,
                                     color:
                                         faded ? s.inkMute : s.inkSoft,
                                     height: 1.5)
@@ -386,7 +385,7 @@ class BoardTaskCard extends StatelessWidget {
                           else
                             Text(task.claimName,
                                 style: UepText.sans(
-                                    size: 11.5, color: s.inkMute)),
+                                    size: 12.5, color: s.inkMute)),
                           if (task.claimKind.isNotEmpty) ...[
                             const SizedBox(width: 12),
                             _KindText(kind: task.claimKind, muted: true),
@@ -487,12 +486,11 @@ class _KindText extends StatelessWidget {
     return Text(
       kind.toUpperCase(),
       style: UepText.mono(
-        size: 8,
+        size: 10,
         letterSpacing: 1.0,
         color: muted
             ? context.uep.inkMute
-            : kindColor(kind, context: context),
-      ),
+            : kindColor(kind, context: context)),
     );
   }
 }
@@ -593,7 +591,7 @@ class _StatusBadge extends StatelessWidget {
       ),
       child: Text(
         _labels[status] ?? status,
-        style: UepText.mono(size: 8, color: color, letterSpacing: 1.1),
+        style: UepText.mono(size: 10, color: color, letterSpacing: 1.1),
       ),
     );
   }
@@ -622,7 +620,7 @@ class _TinyAction extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: UepText.mono(size: 8.5, color: c, letterSpacing: 1.0),
+          style: UepText.mono(size: 10, color: c, letterSpacing: 1.0),
         ),
       ),
     );
@@ -662,7 +660,7 @@ class _WatchToggle extends StatelessWidget {
       if (count > 0) ...[
         const SizedBox(width: 3),
         Text('$count',
-            style: UepText.mono(size: 9, letterSpacing: .8, color: color)),
+            style: UepText.mono(size: 10, letterSpacing: .8, color: color)),
       ],
     ]);
     if (onTap == null) {

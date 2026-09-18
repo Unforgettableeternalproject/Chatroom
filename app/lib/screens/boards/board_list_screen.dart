@@ -143,7 +143,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
           child: Column(children: [
             Row(children: [
-              const MonoLabel('BOARDS', letterSpacing: 2.0),
+              const MonoLabel('任務板', letterSpacing: 2.0),
               const Spacer(),
               // 追蹤收件匣的入口。**紅點在這裡是必要的**，不是裝飾：
               // 裁決 #392 ②A 是「離線通知留著，回來就知道」，而知道的
@@ -282,18 +282,18 @@ class _LibraryNotReady extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            MonoLabel('NOT READY', color: s.inkMute.withValues(alpha: .6)),
+            MonoLabel('未就緒', color: s.inkMute.withValues(alpha: .6)),
             const SizedBox(height: 10),
             Text(
               '這個 Hub 還沒有 Board Library',
               textAlign: TextAlign.center,
-              style: UepText.serif(size: 13, color: s.inkSoft),
+              style: UepText.serif(size: 14, color: s.inkSoft),
             ),
             const SizedBox(height: 6),
             Text(
               '請升級 Hub。',
               textAlign: TextAlign.center,
-              style: UepText.sans(size: 11.5, color: s.inkMute),
+              style: UepText.sans(size: 12.5, color: s.inkMute),
             ),
           ],
         ),
@@ -323,11 +323,10 @@ class _BoardStatusToggle extends StatelessWidget {
             child: Text(
               label,
               style: UepText.mono(
-                size: 9,
+                size: 10,
                 letterSpacing: 1.2,
                 color: active ? UepColors.goldInkOn : s.inkMute,
-                weight: active ? FontWeight.w500 : FontWeight.w400,
-              ),
+                weight: active ? FontWeight.w500 : FontWeight.w400),
             ),
           ),
         ),
@@ -393,7 +392,7 @@ class _BoardMenu extends StatelessWidget {
         PopupMenuItem(
           value: 'rename',
           height: 36,
-          child: Text('重新命名…', style: UepText.sans(size: 12.5, color: s.ink)),
+          child: Text('重新命名…', style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         PopupMenuItem(
           value: 'archive',
@@ -401,7 +400,7 @@ class _BoardMenu extends StatelessWidget {
           // 同一個項目切換文字，不是兩個項目——與 ROOMS 一致，也避免
           // 「封存」與「解除封存」同時出現時要人自己判斷現在是哪個狀態
           child: Text(archived ? '解除封存' : '封存',
-              style: UepText.sans(size: 12.5, color: s.ink)),
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ),
       ],
     );
@@ -458,10 +457,9 @@ class _BoardTile extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.serif(
-                    size: 13.5,
+                    size: 14.5,
                     // 封存的板去飽和，與封存的房同一套語彙
-                    color: board.isArchived ? s.inkMute : s.ink,
-                  ),
+                    color: board.isArchived ? s.inkMute : s.ink),
                 ),
               ),
               // 私人板要看得出來。**這是「別人看不看得到」的唯一線索**——
@@ -519,7 +517,7 @@ class _BoardTile extends StatelessWidget {
                     // 讀成自己的板
                     ? '別人的板'
                     : '${board.ownerDisplayName} 的板',
-                style: UepText.sans(size: 10.5, color: UepColors.gold),
+                style: UepText.sans(size: 11.5, color: UepColors.gold),
               ),
             ],
             const SizedBox(height: 5),
@@ -580,7 +578,7 @@ class _Meta extends StatelessWidget {
         children: [
           Text(glyph, style: TextStyle(fontSize: 9, color: color)),
           const SizedBox(width: 3),
-          Text(text, style: UepText.mono(size: 9.5, color: color)),
+          Text(text, style: UepText.mono(size: 10.5, color: color)),
         ],
       );
 }
@@ -661,7 +659,7 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
         side: BorderSide(color: s.lineStrong),
       ),
       title: Text('開一塊板',
-          style: UepText.display(size: 19, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -672,7 +670,7 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
             onSubmitted: (_) => _submit(),
             // 空字串時「建立」要是灰的，不重畫的話它永遠亮著
             onChanged: (_) => setState(() {}),
-            style: UepText.sans(size: 13, color: s.ink),
+            style: UepText.sans(size: 14, color: s.ink),
             decoration: const InputDecoration(
               labelText: '名稱',
               helperText: null,
@@ -746,7 +744,7 @@ class _VisibilityOption extends StatelessWidget {
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(selected ? '◉' : '○',
               style: UepText.mono(
-                  size: 11, color: selected ? UepColors.gold : s.inkMute)),
+                  size: 11.5, color: selected ? UepColors.gold : s.inkMute)),
           const SizedBox(width: 9),
           Expanded(
             child: Column(
@@ -754,12 +752,12 @@ class _VisibilityOption extends StatelessWidget {
               children: [
                 Text(label,
                     style: UepText.sans(
-                        size: 12.5,
+                        size: 13.5,
                         color: selected ? s.inkTitle : s.inkSoft)),
                 const SizedBox(height: 2),
                 Text(detail.replaceAll('**', ''),
                     style: UepText.serif(
-                        size: 11, color: s.inkMute, height: 1.4)),
+                        size: 12, color: s.inkMute, height: 1.4)),
               ],
             ),
           ),

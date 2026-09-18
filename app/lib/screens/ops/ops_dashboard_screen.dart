@@ -127,9 +127,9 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('執行儀表板',
-                      style: UepText.display(size: 22, color: s.inkTitle)),
+                      style: UepText.pageTitle(color: s.inkTitle)),
                   Text(room?.name ?? widget.roomId,
-                      style: UepText.mono(size: 9.5, color: s.inkMute)),
+                      style: UepText.mono(size: 10.5, color: s.inkMute)),
                 ],
               ),
             ),
@@ -150,7 +150,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                   child: Padding(
                     padding: const EdgeInsets.all(32),
                     child: Text('這不是工作房（ops），沒有派工佇列。',
-                        style: UepText.serif(size: 13, color: s.inkMute)),
+                        style: UepText.serif(size: 14, color: s.inkMute)),
                   ),
                 )
               : boardAsync.when(

@@ -28,7 +28,7 @@ class WatchNoticesScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: s.bg,
         title: Text('我在等的東西',
-            style: UepText.display(size: 20, color: s.inkTitle)),
+            style: UepText.sectionTitle(color: s.inkTitle)),
         actions: [
           async.maybeWhen(
             data: (d) => d.unread == 0
@@ -62,7 +62,7 @@ class WatchNoticesScreen extends ConsumerWidget {
                     '沒有在等的東西。',
                     textAlign: TextAlign.center,
                     style: UepText.serif(
-                        size: 13, color: s.inkMute, height: 1.6),
+                        size: 14, color: s.inkMute, height: 1.6),
                   ),
                 ),
               )
@@ -146,10 +146,9 @@ class _NoticeRow extends StatelessWidget {
           Text(
             watchNoticeLabel(notice.eventType, notice.itemTitle),
             style: UepText.sans(
-              size: 13,
+              size: 14,
               color: notice.unread ? s.inkTitle : s.inkMute,
-              height: 1.45,
-            ),
+              height: 1.45),
           ),
           const SizedBox(height: 3),
           Text(
@@ -157,7 +156,7 @@ class _NoticeRow extends StatelessWidget {
               if (notice.boardName.isNotEmpty) notice.boardName,
               if (notice.actorName.isNotEmpty) notice.actorName,
             ].join(' · '),
-            style: UepText.mono(size: 9, letterSpacing: 1.0, color: s.inkMute),
+            style: UepText.mono(size: 10, letterSpacing: 1.0, color: s.inkMute),
           ),
         ]),
       ),

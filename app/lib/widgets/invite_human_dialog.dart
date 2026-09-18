@@ -81,7 +81,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text('邀請成員加入',
-          style: UepText.display(size: 22, color: s.inkTitle)),
+          style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -89,7 +89,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
             alignment: Alignment.centerLeft,
             child: Text(
               '只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。',
-              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.6),
+              style: UepText.serif(size: 13.5, color: s.inkMute, height: 1.6),
             ),
           ),
           const SizedBox(height: 14),
@@ -125,7 +125,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
                           // 有人但都在房裡時說清楚，否則看起來像掃描壞了
                           : '列得出來的人都已經在這個房間裡了',
                       textAlign: TextAlign.center,
-                      style: UepText.serif(size: 12.5, color: s.inkMute),
+                      style: UepText.serif(size: 13.5, color: s.inkMute),
                     ),
                   );
                 }
@@ -155,12 +155,12 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
             child: TextField(
               controller: _note,
               maxLines: 2,
-              style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+              style: UepText.serif(size: 14, color: s.ink, height: 1.7),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 hintText: '選填，對方會看到',
-                hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+                hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),
             ),
@@ -230,20 +230,20 @@ class _HumanRow extends StatelessWidget {
                 Text(session.displayTitle,
                     overflow: TextOverflow.ellipsis,
                     style: UepText.sans(
-                        size: 13,
+                        size: 14,
                         weight: FontWeight.w600,
                         color: s.inkTitle)),
                 const SizedBox(height: 2),
                 Text(
                   // 位址是共用 token 時唯一分得開「這是誰」的線索
                   session.lastIp ?? '來源不明',
-                  style: UepText.mono(size: 9, color: s.inkMute),
+                  style: UepText.mono(size: 10, color: s.inkMute),
                 ),
               ],
             ),
           ),
           Text(relativeTime(session.lastSeenAt),
-              style: UepText.mono(size: 9, color: s.inkMute)),
+              style: UepText.mono(size: 10, color: s.inkMute)),
         ]),
       ),
     );

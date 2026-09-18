@@ -53,7 +53,7 @@ class VersionBanner extends ConsumerWidget {
           const SizedBox(width: 9),
           Expanded(
             child: Text(text,
-                style: UepText.serif(size: 12, color: s.ink, height: 1.6)),
+                style: UepText.serif(size: 13, color: s.ink, height: 1.6)),
           ),
         ]),
       ),

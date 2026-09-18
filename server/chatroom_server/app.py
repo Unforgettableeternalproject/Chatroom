@@ -12904,7 +12904,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         if to_status == "running":
             text = f"{head} 開始執行。"
         elif to_status == "done":
-            text = f"{head} 完成。{extra or row['result'] or ''}".strip()
+            # 只講「完成」，不附收工摘要——全文已經收在右側回報面板裡，
+            # 貼進房內等於同一份報告出現兩次，把訊息流洗掉
+            text = f"{head} 完成。{extra}".strip()
             mentions = [requester] if requester else []
         elif to_status == "failed":
             text = f"{head} 失敗。{extra or row['reason'] or ''}".strip()

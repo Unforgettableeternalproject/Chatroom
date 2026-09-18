@@ -91,20 +91,20 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text('編輯任務卡',
-          style: UepText.display(size: 20, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
             child: Text(kTaskEditNoTrace,
-                style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
+                style: UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _title,
             autofocus: true,
-            style: UepText.sans(size: 13, color: s.ink),
+            style: UepText.sans(size: 14, color: s.ink),
             onChanged: (_) {
               if (_error != null) setState(() => _error = null);
             },
@@ -119,13 +119,13 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
             controller: _desc,
             minLines: 3,
             maxLines: 8,
-            style: UepText.sans(size: 13, color: s.ink),
+            style: UepText.sans(size: 14, color: s.ink),
             decoration: InputDecoration(
               isDense: true,
               border: const OutlineInputBorder(),
               labelText: '敘述',
               hintText: '選填',
-              hintStyle: UepText.sans(size: 12.5, color: s.inkMute),
+              hintStyle: UepText.sans(size: 13.5, color: s.inkMute),
             ),
           ),
           if (_error != null) ...[
@@ -133,7 +133,7 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(_error!,
-                  style: UepText.serif(size: 12.5, color: UepColors.errorText)),
+                  style: UepText.serif(size: 13.5, color: UepColors.errorText)),
             ),
           ],
         ]),

@@ -30,7 +30,7 @@ class KindBadge extends StatelessWidget {
     final label = kind.toUpperCase();
     if (compact) {
       return Text(label,
-          style: UepText.mono(size: 8, color: color, letterSpacing: 1.0));
+          style: UepText.mono(size: 10, color: color, letterSpacing: 1.0));
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -38,7 +38,7 @@ class KindBadge extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: .4)),
       ),
       child: Text(label,
-          style: UepText.mono(size: 8.5, color: color, letterSpacing: 1.2)),
+          style: UepText.mono(size: 10, color: color, letterSpacing: 1.2)),
     );
   }
 }
@@ -46,7 +46,7 @@ class KindBadge extends StatelessWidget {
 /// mono uppercase 標籤（設計稿隨處可見的小標）。
 class MonoLabel extends StatelessWidget {
   const MonoLabel(this.text,
-      {super.key, this.size = 9, this.color, this.letterSpacing = 1.8});
+      {super.key, this.size = 10.5, this.color, this.letterSpacing = 1.6});
 
   final String text;
   final double size;
@@ -56,7 +56,9 @@ class MonoLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(
-      text.toUpperCase(),
+      // 不再強制 uppercase：中文小標用不到，保留下來的專有名詞
+      // （Hub／Agent／Bridge）也要照原樣顯示
+      text,
       style: UepText.mono(
         size: size,
         color: color ?? context.uep.inkMute,

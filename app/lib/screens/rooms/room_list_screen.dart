@@ -148,7 +148,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
           child: Column(children: [
             Row(children: [
-              MonoLabel('ROOMS', letterSpacing: 2.0),
+              MonoLabel('聊天室', letterSpacing: 2.0),
               const Spacer(),
               IconButton(
                 tooltip: '重新整理',
@@ -186,12 +186,12 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                   child: TextField(
                     controller: _search,
                     onChanged: (_) => setState(() {}),
-                    style: UepText.sans(size: 12.5, color: s.ink),
+                    style: UepText.sans(size: 13.5, color: s.ink),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
                       hintText: '搜尋聊天室…',
-                      hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                      hintStyle: UepText.serif(size: 13, color: s.inkMute),
                       contentPadding:
                           const EdgeInsets.symmetric(vertical: 8),
                     ),
@@ -268,7 +268,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                 label: '＋ 建立房間', small: true, expand: true,
                 onPressed: _createRoom),
             const SizedBox(height: 10),
-            MonoLabel('SWEEP 10 MIN · IDLE AUTO-REMOVE',
+            MonoLabel('每 10 分鐘掃描 · 閒置自動移除',
                 size: 8.5, letterSpacing: 1.2),
           ]),
         ),
@@ -298,11 +298,10 @@ class _StatusToggle extends StatelessWidget {
             child: Text(
               label,
               style: UepText.mono(
-                size: 9,
+                size: 10,
                 letterSpacing: 1.2,
                 color: active ? UepColors.goldInkOn : s.inkMute,
-                weight: active ? FontWeight.w500 : FontWeight.w400,
-              ),
+                weight: active ? FontWeight.w500 : FontWeight.w400),
             ),
           ),
         ),
@@ -375,7 +374,7 @@ class _RoomTile extends ConsumerWidget {
                       room.name,
                       overflow: TextOverflow.ellipsis,
                       style: UepText.sans(
-                          size: 13.5,
+                          size: 14.5,
                           weight: FontWeight.w600,
                           // 封存房整體灰掉，與進行中的房間一眼區分
                           color: room.isArchived
@@ -397,7 +396,7 @@ class _RoomTile extends ConsumerWidget {
                 ]),
               ),
               Text(relativeTime(room.lastActivityAt ?? room.createdAt),
-                  style: UepText.mono(size: 9, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
               _RoomMenu(
                   room: room,
                   onToggleArchive: onToggleArchive,
@@ -412,12 +411,12 @@ class _RoomTile extends ConsumerWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style:
-                    UepText.serif(size: 11.5, color: s.inkSoft, height: 1.5),
+                    UepText.serif(size: 12.5, color: s.inkSoft, height: 1.5),
               ),
             ],
             const SizedBox(height: 5),
             Row(children: [
-              MonoLabel('${room.memberCount} MEMBERS',
+              MonoLabel('${room.memberCount} 位成員',
                   size: 9, letterSpacing: 1.0),
               // 私人房：只有你有份才會出現在這份列表上，所以標記的用途是
               // 「這個房別人看不到」——發言前該知道的事
@@ -441,7 +440,7 @@ class _RoomTile extends ConsumerWidget {
                     size: 11,
                     color: room.isArchived ? s.inkMute : UepColors.gold),
                 const SizedBox(width: 4),
-                MonoLabel('OPS',
+                MonoLabel('派工',
                     size: 9,
                     letterSpacing: 1.0,
                     color: room.isArchived ? s.inkMute : UepColors.gold),
@@ -506,14 +505,14 @@ class _RoomMenu extends StatelessWidget {
           value: 'archive',
           height: 36,
           child: Text(room.isArchived ? '解除封存' : '封存',
-              style: UepText.sans(size: 12.5, color: s.ink)),
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         if (!room.isArchived)
           PopupMenuItem(
             value: 'assign',
             height: 36,
             child: Text('指派 agent',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
         // 刪除也要在**列表上**給得到：封存房的操作場景就在這裡，沒有人會
         // 為了刪掉一個封存房而先點進去。
@@ -527,7 +526,7 @@ class _RoomMenu extends StatelessWidget {
             value: 'delete',
             height: 36,
             child: Text('永久刪除…',
-                style: UepText.sans(size: 12.5, color: UepColors.errorText)),
+                style: UepText.sans(size: 13.5, color: UepColors.errorText)),
           ),
       ],
     );
@@ -638,7 +637,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
     final s = context.uep;
     return AlertDialog(
       title: Text('建立房間',
-          style: UepText.display(size: 24, color: s.inkTitle)),
+          style: UepText.pageTitle(color: s.inkTitle)),
       // 內容要能捲：加上說話方式（四個選項＋自訂輸入框）之後，這個對話框
       // 在一般筆電螢幕上就已經高過視窗，而 AlertDialog 不會自己處理——
       // 它會讓按鈕直接壓在內容上，下面的欄位整個被擠出畫面
@@ -646,9 +645,9 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
         width: 420,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-          _field(context, 'NAME', _name, hint: 'chatroom-phase4'),
+          _field(context, '名稱', _name, hint: 'chatroom-phase4'),
           const SizedBox(height: 14),
-          _field(context, 'TOPIC（給 agent 的上下文）', _topic,
+          _field(context, '主題（給 agent 的上下文）', _topic,
               hint: '一句話說明這個房間在做什麼…', lines: 3),
           const SizedBox(height: 14),
           Align(
@@ -693,10 +692,10 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
             contentPadding: EdgeInsets.zero,
             dense: true,
             title: Text('私人對話',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+                style: UepText.sans(size: 13.5, color: s.ink)),
             subtitle: Text('必須受邀才能加入',
                 style: UepText.serif(
-                    size: 11.5, color: s.inkMute, height: 1.4)),
+                    size: 12.5, color: s.inkMute, height: 1.4)),
           ),
           const SizedBox(height: 6),
           Align(
@@ -716,7 +715,7 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
               alignment: Alignment.centerLeft,
               child: Text(_error!,
                   style: UepText.serif(
-                      size: 12.5, color: UepColors.errorText, height: 1.5)),
+                      size: 13.5, color: UepColors.errorText, height: 1.5)),
             ),
           ],
           ]),
@@ -761,13 +760,13 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           maxLines: lines,
           autofocus: lines == 1,
           style: lines == 1
-              ? UepText.code(size: 12.5, color: s.ink, height: 1.4)
-              : UepText.serif(size: 13, color: s.ink, height: 1.8),
+              ? UepText.code(size: 13, color: s.ink, height: 1.4)
+              : UepText.serif(size: 14, color: s.ink, height: 1.8),
           decoration: InputDecoration(
             isDense: true,
             border: InputBorder.none,
             hintText: hint,
-            hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+            hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
             contentPadding: const EdgeInsets.symmetric(vertical: 10),
           ),
           onSubmitted: lines == 1 ? (_) => _create() : null,
@@ -833,12 +832,12 @@ class _KindPicker extends StatelessWidget {
                     children: [
                       Text(label,
                           style: UepText.sans(
-                              size: 12.5,
+                              size: 13.5,
                               color: enabled ? s.ink : s.inkMute)),
                       const SizedBox(height: 2),
                       Text(summary,
                           style: UepText.serif(
-                              size: 11.5, color: s.inkMute, height: 1.4)),
+                              size: 12.5, color: s.inkMute, height: 1.4)),
                     ],
                   ),
                 ),
@@ -886,7 +885,7 @@ class _BoardPicker extends ConsumerWidget {
         alignment: Alignment.centerLeft,
         child: Text(
           async.isLoading ? '正在看有哪些板…' : '目前沒有可掛的板，進房之後再開一塊',
-          style: UepText.serif(size: 11.5, color: s.inkMute),
+          style: UepText.serif(size: 12.5, color: s.inkMute),
         ),
       );
     }
@@ -897,13 +896,13 @@ class _BoardPicker extends ConsumerWidget {
         isDense: true,
         border: OutlineInputBorder(),
       ),
-      style: UepText.sans(size: 12.5, color: s.ink),
+      style: UepText.sans(size: 13.5, color: s.ink),
       onChanged: enabled ? onChanged : null,
       items: [
         DropdownMenuItem(
           value: null,
           child: Text('不掛任務板',
-              style: UepText.sans(size: 12.5, color: s.inkMute)),
+              style: UepText.sans(size: 13.5, color: s.inkMute)),
         ),
         for (final b in boards)
           DropdownMenuItem(
@@ -911,7 +910,7 @@ class _BoardPicker extends ConsumerWidget {
             child: Text(
               '${b.name}　·　${b.attachedRoomCount} 房',
               overflow: TextOverflow.ellipsis,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
       ],

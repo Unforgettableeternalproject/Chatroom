@@ -100,8 +100,8 @@ void main() {
       (tester) async {
     await _open(tester);
 
-    expect(find.text('NAME'), findsOneWidget);
-    expect(find.text('TOPIC（給 AGENT 的上下文）'), findsOneWidget);
+    expect(find.text('名稱'), findsOneWidget);
+    expect(find.text('主題（給 agent 的上下文）'), findsOneWidget);
     expect(find.text('房間類型'), findsOneWidget);
     // 可見性＝私人對話那個勾。它在房間類型**後面**，被擠出畫面時第一個不見
     expect(find.text('私人對話'), findsOneWidget);

@@ -85,10 +85,9 @@ class HostModeToggle extends ConsumerWidget {
                   ? '主持人模式沒有生效——伺服器沒有照做'
                   : (on ? onLabel : '主持人模式'),
               style: UepText.sans(
-                size: 11.5,
+                size: 12.5,
                 color: on ? accent : s.inkMute,
-                weight: on ? FontWeight.w600 : FontWeight.w400,
-              ),
+                weight: on ? FontWeight.w600 : FontWeight.w400),
             ),
           ),
         ]),

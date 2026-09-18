@@ -706,7 +706,7 @@ class _MessageComposerState extends State<MessageComposer> {
                   children: [
                     Text('編輯 #${editing.seq}',
                         style: UepText.mono(
-                            size: 9,
+                            size: 10,
                             color: UepColors.gold,
                             letterSpacing: 1.0)),
                     const SizedBox(height: 2),
@@ -715,7 +715,7 @@ class _MessageComposerState extends State<MessageComposer> {
                       // 那不是可以偷偷改掉的東西
                       '送出後會取代原本的內容，並標記為已編輯',
                       style: UepText.serif(
-                          size: 12, color: s.inkMute, height: 1.5),
+                          size: 13, color: s.inkMute, height: 1.5),
                     ),
                   ],
                 ),
@@ -744,7 +744,7 @@ class _MessageComposerState extends State<MessageComposer> {
                   children: [
                     Text('回覆 ${reply.senderName ?? '（未知）'}',
                         style: UepText.mono(
-                            size: 9,
+                            size: 10,
                             color: UepColors.gold,
                             letterSpacing: 1.0)),
                     const SizedBox(height: 2),
@@ -753,7 +753,7 @@ class _MessageComposerState extends State<MessageComposer> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: UepText.serif(
-                          size: 12, color: s.inkMute, height: 1.5),
+                          size: 13, color: s.inkMute, height: 1.5),
                     ),
                   ],
                 ),
@@ -802,7 +802,7 @@ class _MessageComposerState extends State<MessageComposer> {
                           maxLines: 6,
                           minLines: 1,
                           style: UepText.serif(
-                              size: 14, color: s.ink, height: 1.7),
+                              size: 15, color: s.ink, height: 1.7),
                           decoration: InputDecoration(
                             isDense: true,
                             border: InputBorder.none,
@@ -813,7 +813,7 @@ class _MessageComposerState extends State<MessageComposer> {
                                 ? '輸入訊息…　@ 提及成員，支援 Markdown'
                                 : '輸入訊息…　@ 提及成員，# 指涉任務，支援 Markdown',
                             hintStyle: UepText.serif(
-                                size: 14, color: s.inkMute, height: 1.7),
+                                size: 15, color: s.inkMute, height: 1.7),
                           ),
                         ),
                       ),
@@ -863,13 +863,12 @@ class _MessageComposerState extends State<MessageComposer> {
                               if (refs.isNotEmpty) '指涉 ${refs.length} 張卡',
                             ].join(' · '),
                             style: UepText.mono(
-                              size: 8.5,
+                              size: 10,
                               letterSpacing: 1.2,
                               // 金＝人、藍＝卡，與訊息裡的 chip 同一套語意
                               color: names.isNotEmpty
                                   ? UepColors.gold
-                                  : UepColors.info,
-                            ),
+                                  : UepColors.info),
                           );
                         },
                       ),
@@ -943,7 +942,7 @@ class _MessageComposerState extends State<MessageComposer> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: UepText.sans(
-                                  size: 12.5,
+                                  size: 13.5,
                                   weight: FontWeight.w600,
                                   color: s.inkTitle)),
                         ),
@@ -953,11 +952,11 @@ class _MessageComposerState extends State<MessageComposer> {
                         else if (option.card case final c?)
                           Text(c.status,
                               style:
-                                  UepText.mono(size: 9.5, color: s.inkMute))
+                                  UepText.mono(size: 10.5, color: s.inkMute))
                         else
                           Text(option.description,
                               style:
-                                  UepText.serif(size: 11, color: s.inkMute)),
+                                  UepText.serif(size: 12, color: s.inkMute)),
                       ]),
                     ),
                   ),

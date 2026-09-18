@@ -73,7 +73,7 @@ class PinnedWallScreen extends ConsumerWidget {
               style: TextStyle(fontSize: 12, color: UepColors.gold)),
           const SizedBox(width: 10),
           Text('釘選訊息',
-              style: UepText.display(size: 22, color: s.inkTitle)),
+              style: UepText.pageTitle(color: s.inkTitle)),
         ]),
         actions: [
           Padding(
@@ -161,7 +161,7 @@ class _PinnedCard extends ConsumerWidget {
         Row(children: [
           Text(pinnedSenderLabel(message),
               style: UepText.sans(
-                  size: 12.5,
+                  size: 13.5,
                   weight: FontWeight.w600,
                   color: isSystem ? s.inkMute : s.inkTitle)),
           if (!isSystem) ...[
@@ -170,7 +170,7 @@ class _PinnedCard extends ConsumerWidget {
           ],
           const Spacer(),
           Text('#${message.seq} · ${clockTime(message.createdAt)}',
-              style: UepText.mono(size: 9, color: s.inkMute)),
+              style: UepText.mono(size: 10, color: s.inkMute)),
         ]),
         const SizedBox(height: 9),
         UepMarkdownBody(

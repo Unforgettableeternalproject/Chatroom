@@ -46,7 +46,7 @@ class SystemMessageTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
             '${message.content} · ${clockTime(message.createdAt)}',
-            style: UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.4),
+            style: UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4),
             textAlign: TextAlign.center,
           ),
         ),
@@ -106,17 +106,17 @@ class _ReceiptTile extends StatelessWidget {
                     ),
                     child: Text(label,
                         style: UepText.mono(
-                            size: 9, color: color, letterSpacing: 1.2)),
+                            size: 10, color: color, letterSpacing: 1.2)),
                   ),
                   const SizedBox(width: 8),
                   Text(clockTime(message.createdAt),
-                      style: UepText.mono(size: 9, color: s.inkMute)),
+                      style: UepText.mono(size: 10, color: s.inkMute)),
                 ]),
                 const SizedBox(height: 6),
                 Text(
                   message.content,
                   style: UepText.serif(
-                      size: 12.5, color: s.inkSoft, height: 1.55),
+                      size: 13.5, color: s.inkSoft, height: 1.55),
                 ),
               ],
             ),
@@ -159,7 +159,7 @@ class _BlockTile extends StatelessWidget {
               const MonoLabel('系統', size: 8.5, letterSpacing: 2.2),
               const SizedBox(width: 8),
               Text(clockTime(message.createdAt),
-                  style: UepText.mono(size: 9, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
             ]),
             const SizedBox(height: 8),
             UepMarkdownBody(data: message.content, baseColor: s.inkSoft),

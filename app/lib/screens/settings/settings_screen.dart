@@ -31,7 +31,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   late final TextEditingController _urlController;
   late final TextEditingController _tokenController;
   late final TextEditingController _nameController;
@@ -45,6 +47,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    // 連線固定是第 0 頁：首次啟動被 redirect 進來的人還沒有任何設定，
+    // 落在別的分頁等於要他自己找入口
+    _tabController = TabController(length: 3, vsync: this)
+      ..addListener(() => setState(() {}));
     final config = ref.read(appConfigProvider);
     _urlController = TextEditingController(text: config.serverUrl);
     _tokenController = TextEditingController(text: config.token);
@@ -109,6 +115,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     _urlController.dispose();
     _tokenController.dispose();
     _nameController.dispose();
@@ -178,7 +185,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text('重新產生裝置識別？',
-            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+            style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
           '所有房間會把你視為新成員，舊身分留在原房間的成員紀錄中。此操作無法復原。',
           style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
@@ -221,7 +228,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onPressed: () => context.pop(),
               )
             : null,
-        title: Text('設定', style: UepText.display(size: 22, color: s.inkTitle)),
+        title: Text('設定', style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           IconButton(
             tooltip: '說明',
@@ -233,323 +240,405 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
-          child: ListView(
-            padding: const EdgeInsets.all(32),
+          child: Column(
             children: [
-              MonoLabel('SERVER'),
-              const SizedBox(height: 6),
-              Text('連線設定',
-                  style: UepText.display(size: 28, color: s.inkTitle)),
-              const SizedBox(height: 22),
-              UepButton(
-                label: '貼上邀請碼',
-                small: true,
-                variant: UepButtonVariant.outline,
-                expand: true,
-                onPressed: _pasteInvite,
-              ),
-              const SizedBox(height: 6),
-              const SizedBox(height: 18),
-              _FieldLabel('HUB URL'),
-              _box(
-                context,
-                TextField(
-                  controller: _urlController,
-                  style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
-                  decoration: _inputDecoration('http://127.0.0.1:8787', s),
-                ),
-              ),
-              const SizedBox(height: 18),
-              _FieldLabel('API TOKEN'),
-              _box(
-                context,
-                TextField(
-                  controller: _tokenController,
-                  obscureText: !_showToken,
-                  style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
-                  decoration: _inputDecoration('（未設定 token 的 Hub 可留空）', s)
-                      .copyWith(
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _showToken
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        size: 16,
-                        color: s.inkMute,
-                      ),
-                      onPressed: () =>
-                          setState(() => _showToken = !_showToken),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(children: [
-                UepButton(
-                  label: '測試連線',
-                  small: true,
-                  variant: UepButtonVariant.outline,
-                  onPressed: _testing ? null : _testConnection,
-                ),
-                const SizedBox(width: 14),
-                if (_testing)
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: UepColors.gold),
-                  )
-                else if (_testResult != null)
-                  Expanded(
-                    child: Row(children: [
-                      Text(_testOk ? '✓ ' : '✕ ',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: _testOk
-                                  ? UepColors.success
-                                  : UepColors.errorText)),
-                      Expanded(
-                        child: Text(_testResult!,
-                            style: UepText.serif(
-                                size: 13, color: s.inkSoft, height: 1.5)),
-                      ),
-                    ]),
-                  ),
-              ]),
-              // 首次啟動經 redirect 進來時沒有返回鍵可用，
-              // 設定完成後要有明確的出口，否則會被卡在這裡（驗收 A1）
-              if (!context.canPop() && config.isConfigured) ...[
-                const SizedBox(height: 18),
-                UepButton(
-                  label: '進入主畫面 →',
-                  expand: true,
-                  onPressed: () => context.go('/rooms'),
-                ),
-              ],
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              // 版本一定要在設定頁看得到：回報問題時要問的第一件事就是
-              // 「你手上是哪一份」，而使用者得找得到那個字串才答得出來
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('App 版本',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      if (!BuildInfo.current.isKnown)
-                        Text(
-                          '這份 App 沒有版本標記。',
-                          style: UepText.serif(
-                              size: 12, color: s.inkMute, height: 1.7),
-                        ),
-                    ],
-                  ),
-                ),
-                SelectableText(BuildInfo.current.label,
-                    style: UepText.code(size: 11, color: s.inkSoft)),
-              ]),
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              const InviteManager(),
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('深色主題',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      Text('也可在標題列直接切換',
-                          style:
-                              UepText.serif(size: 12, color: s.inkMute)),
-                    ],
-                  ),
-                ),
-                Switch(
-                  value: config.themeMode == ThemeModePref.dark,
-                  activeThumbColor: UepColors.gold,
-                  activeTrackColor: UepColors.gold.withValues(alpha: .28),
-                  onChanged: (v) => ref
-                      .read(appConfigProvider.notifier)
-                      .setThemeMode(v ? ThemeModePref.dark : ThemeModePref.light),
-                ),
-              ]),
-              const SizedBox(height: 22),
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('系統通知',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      Text('只在 app 開著時通知新訊息。',
-                          style:
-                              UepText.serif(size: 12, color: s.inkMute)),
-                    ],
-                  ),
-                ),
-                DropdownButton<NotifyModePref>(
-                  value: ref.watch(settingsRepoProvider).notifyMode,
-                  underline: const SizedBox.shrink(),
-                  style: UepText.sans(size: 13, color: s.ink),
-                  dropdownColor: s.bgCard,
-                  items: const [
-                    DropdownMenuItem(
-                        value: NotifyModePref.all, child: Text('所有訊息')),
-                    DropdownMenuItem(
-                        value: NotifyModePref.mentions,
-                        child: Text('僅提及我時')),
-                    DropdownMenuItem(
-                        value: NotifyModePref.off, child: Text('關閉')),
+              _tabBar(s),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _connectionTab(s, config),
+                    _visualTab(s, config),
+                    _personalTab(s, config),
                   ],
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await ref.read(settingsRepoProvider).setNotifyMode(v);
-                    // 通知中心即時吃到新模式，不必重啟 app
-                    ref.read(notificationCenterProvider).mode = v;
-                    setState(() {});
-                  },
                 ),
-              ]),
-              if (Platform.isWindows ||
-                  Platform.isLinux ||
-                  Platform.isMacOS) ...[
-                const SizedBox(height: 22),
-                Row(children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('轉送通知給 Codex',
-                            style:
-                                UepText.sans(size: 13.5, color: s.inkTitle)),
-                        const SizedBox(height: 3),
-                        Text('把提及與 Board 變動送到本機 Codex。',
-                            style:
-                                UepText.serif(size: 12, color: s.inkMute)),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value:
-                        ref.watch(settingsRepoProvider).codexDispatchEnabled,
-                    activeThumbColor: UepColors.gold,
-                    activeTrackColor: UepColors.gold.withValues(alpha: .28),
-                    onChanged: (v) async {
-                      await ref
-                          .read(settingsRepoProvider)
-                          .setCodexDispatchEnabled(v);
-                      ref.read(codexDispatcherProvider).enabled = v;
-                      setState(() {});
-                    },
-                  ),
-                ]),
-                if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
-                  const SizedBox(height: 8),
-                  _box(
-                    context,
-                    TextField(
-                      controller: _codexThreadController,
-                      style: UepText.sans(size: 13, color: s.ink),
-                      decoration: _inputDecoration('覆寫 thread id（選填）', s),
-                      onSubmitted: (v) async {
-                        await ref
-                            .read(settingsRepoProvider)
-                            .setCodexDispatchThread(v);
-                        ref.read(codexDispatcherProvider).threadOverride =
-                            v.trim();
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _CodexDispatchStatusView(ref.read(codexDispatcherProvider)),
-                ],
-              ],
-              const SizedBox(height: 22),
-              _FieldLabel('顯示名稱（進房時的 PREFERRED NAME）'),
-              _box(
-                context,
-                TextField(
-                  controller: _nameController,
-                  style: UepText.sans(size: 13, color: s.ink),
-                  decoration:
-                      _inputDecoration('留空則由 Hub 隨機指派代稱', s),
-                  onSubmitted: (_) => _save(),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(children: [
-                UepButton(
-                  label: '儲存設定',
-                  small: true,
-                  onPressed: _dirty ? _save : null,
-                ),
-                const SizedBox(width: 12),
-                UepButton(
-                  label: '復原',
-                  variant: UepButtonVariant.outline,
-                  small: true,
-                  onPressed: _dirty ? _revert : null,
-                ),
-                const SizedBox(width: 14),
-                if (_dirty)
-                  Text('有尚未儲存的變更',
-                      style: UepText.serif(
-                          size: 12.5, color: UepColors.gold, height: 1.4))
-                else if (_justSaved)
-                  Text('✓ 已儲存',
-                      style: UepText.serif(
-                          size: 12.5, color: UepColors.success, height: 1.4)),
-              ]),
-              const SizedBox(height: 22),
-              _FieldLabel('本機裝置識別'),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(
-                  color: s.bgSoft,
-                  border: Border.all(color: s.line),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(children: [
-                  Expanded(
-                    child: Text(
-                      config.deviceKey,
-                      overflow: TextOverflow.ellipsis,
-                      style: UepText.code(size: 11, color: s.inkSoft),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      await Clipboard.setData(
-                          ClipboardData(text: config.deviceKey));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已複製裝置識別')));
-                      }
-                    },
-                    child: MonoLabel('複製', size: 9),
-                  ),
-                  TextButton(
-                    onPressed: _regenerateKey,
-                    child: MonoLabel('重新產生',
-                        size: 9, color: UepColors.errorText),
-                  ),
-                ]),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 分頁列：底線用 `s.line`，選中的標籤走 gold。
+  Widget _tabBar(UepSurface s) {
+    const labels = ['連線', '視覺', '個人化'];
+    return Container(
+      decoration:
+          BoxDecoration(border: Border(bottom: BorderSide(color: s.line))),
+      child: TabBar(
+        controller: _tabController,
+        indicatorColor: UepColors.gold,
+        indicatorSize: TabBarIndicatorSize.tab,
+        dividerColor: Colors.transparent,
+        splashFactory: NoSplash.splashFactory,
+        tabs: [
+          for (var i = 0; i < labels.length; i++)
+            Tab(
+              height: 42,
+              child: MonoLabel(
+                labels[i],
+                size: 11,
+                color:
+                    _tabController.index == i ? UepColors.gold : s.inkMute,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- 連線 ----------
+
+  Widget _connectionTab(UepSurface s, AppConfig config) {
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        Text('連線設定', style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
+        UepButton(
+          label: '貼上邀請碼',
+          small: true,
+          variant: UepButtonVariant.outline,
+          expand: true,
+          onPressed: _pasteInvite,
+        ),
+        const SizedBox(height: 18),
+        _FieldLabel('Hub 位址'),
+        _box(
+          context,
+          TextField(
+            controller: _urlController,
+            style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
+            decoration: _inputDecoration('http://127.0.0.1:8787', s),
+          ),
+        ),
+        const SizedBox(height: 18),
+        _FieldLabel('API token'),
+        _box(
+          context,
+          TextField(
+            controller: _tokenController,
+            obscureText: !_showToken,
+            style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
+            decoration:
+                _inputDecoration('（未設定 token 的 Hub 可留空）', s).copyWith(
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _showToken
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 16,
+                  color: s.inkMute,
+                ),
+                onPressed: () => setState(() => _showToken = !_showToken),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        _saveRow(s),
+        const SizedBox(height: 18),
+        Row(children: [
+          UepButton(
+            label: '測試連線',
+            small: true,
+            variant: UepButtonVariant.outline,
+            onPressed: _testing ? null : _testConnection,
+          ),
+          const SizedBox(width: 14),
+          if (_testing)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: UepColors.gold),
+            )
+          else if (_testResult != null)
+            Expanded(
+              child: Row(children: [
+                Text(_testOk ? '✓ ' : '✕ ',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _testOk
+                            ? UepColors.success
+                            : UepColors.errorText)),
+                Expanded(
+                  child: Text(_testResult!,
+                      style: UepText.serif(
+                          size: 13, color: s.inkSoft, height: 1.5)),
+                ),
+              ]),
+            ),
+        ]),
+        // 首次啟動經 redirect 進來時沒有返回鍵可用，
+        // 設定完成後要有明確的出口，否則會被卡在這裡（驗收 A1）
+        if (!context.canPop() && config.isConfigured) ...[
+          const SizedBox(height: 18),
+          UepButton(
+            label: '進入主畫面 →',
+            expand: true,
+            onPressed: () => context.go('/rooms'),
+          ),
+        ],
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        // 版本一定要在設定頁看得到：回報問題時要問的第一件事就是
+        // 「你手上是哪一份」，而使用者得找得到那個字串才答得出來
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('App 版本',
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                if (!BuildInfo.current.isKnown)
+                  Text(
+                    '這份 App 沒有版本標記。',
+                    style:
+                        UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+                  ),
+              ],
+            ),
+          ),
+          SelectableText(BuildInfo.current.label,
+              style: UepText.code(size: 11, color: s.inkSoft)),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        const InviteManager(),
+      ],
+    );
+  }
+
+  // ---------- 視覺 ----------
+
+  Widget _visualTab(UepSurface s, AppConfig config) {
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('深色主題',
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text('也可在標題列直接切換',
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          Switch(
+            value: config.themeMode == ThemeModePref.dark,
+            activeThumbColor: UepColors.gold,
+            activeTrackColor: UepColors.gold.withValues(alpha: .28),
+            onChanged: (v) => ref
+                .read(appConfigProvider.notifier)
+                .setThemeMode(v ? ThemeModePref.dark : ThemeModePref.light),
+          ),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        Text('字級', style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text('選了立刻套用到整個 App。',
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Row(children: [
+          for (final (scale, label) in const [
+            (FontScalePref.small, '小'),
+            (FontScalePref.medium, '中'),
+            (FontScalePref.large, '大'),
+          ]) ...[
+            UepButton(
+              label: label,
+              small: true,
+              variant: config.fontScale == scale
+                  ? UepButtonVariant.gold
+                  : UepButtonVariant.outline,
+              onPressed: () =>
+                  ref.read(appConfigProvider.notifier).setFontScale(scale),
+            ),
+            const SizedBox(width: 10),
+          ],
+        ]),
+        // 「語言」留在這一格：i18n 還沒做，**不放沒有作用的選項**——
+        // 看得到又切不動比沒有更糟。等字串抽出來之後補在這裡。
+        const SizedBox(height: 26),
+      ],
+    );
+  }
+
+  // ---------- 個人化 ----------
+
+  Widget _personalTab(UepSurface s, AppConfig config) {
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        _FieldLabel('顯示名稱（進房時使用）'),
+        _box(
+          context,
+          TextField(
+            controller: _nameController,
+            style: UepText.sans(size: 13, color: s.ink),
+            decoration: _inputDecoration('留空則由 Hub 隨機指派代稱', s),
+            onSubmitted: (_) => _save(),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _saveRow(s),
+        const SizedBox(height: 22),
+        _FieldLabel('本機裝置識別'),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: s.bgSoft,
+            border: Border.all(color: s.line),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                config.deviceKey,
+                overflow: TextOverflow.ellipsis,
+                style: UepText.code(size: 11, color: s.inkSoft),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: config.deviceKey));
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已複製裝置識別')));
+                }
+              },
+              child: MonoLabel('複製', size: 9),
+            ),
+            TextButton(
+              onPressed: _regenerateKey,
+              child: MonoLabel('重新產生', size: 9, color: UepColors.errorText),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('系統通知',
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text('只在 app 開著時通知新訊息。',
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          DropdownButton<NotifyModePref>(
+            value: ref.watch(settingsRepoProvider).notifyMode,
+            underline: const SizedBox.shrink(),
+            style: UepText.sans(size: 13, color: s.ink),
+            dropdownColor: s.bgCard,
+            items: const [
+              DropdownMenuItem(
+                  value: NotifyModePref.all, child: Text('所有訊息')),
+              DropdownMenuItem(
+                  value: NotifyModePref.mentions, child: Text('僅提及我時')),
+              DropdownMenuItem(value: NotifyModePref.off, child: Text('關閉')),
+            ],
+            onChanged: (v) async {
+              if (v == null) return;
+              await ref.read(settingsRepoProvider).setNotifyMode(v);
+              // 通知中心即時吃到新模式，不必重啟 app
+              ref.read(notificationCenterProvider).mode = v;
+              setState(() {});
+            },
+          ),
+        ]),
+        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
+          const SizedBox(height: 22),
+          Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('轉送通知給 Codex',
+                      style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                  const SizedBox(height: 3),
+                  Text('把提及與 Board 變動送到本機 Codex。',
+                      style: UepText.serif(size: 12, color: s.inkMute)),
+                ],
+              ),
+            ),
+            Switch(
+              value: ref.watch(settingsRepoProvider).codexDispatchEnabled,
+              activeThumbColor: UepColors.gold,
+              activeTrackColor: UepColors.gold.withValues(alpha: .28),
+              onChanged: (v) async {
+                await ref.read(settingsRepoProvider).setCodexDispatchEnabled(v);
+                ref.read(codexDispatcherProvider).enabled = v;
+                setState(() {});
+              },
+            ),
+          ]),
+          if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
+            const SizedBox(height: 8),
+            _box(
+              context,
+              TextField(
+                controller: _codexThreadController,
+                style: UepText.sans(size: 13, color: s.ink),
+                decoration: _inputDecoration('覆寫 thread id（選填）', s),
+                onSubmitted: (v) async {
+                  await ref
+                      .read(settingsRepoProvider)
+                      .setCodexDispatchThread(v);
+                  ref.read(codexDispatcherProvider).threadOverride = v.trim();
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            _CodexDispatchStatusView(ref.read(codexDispatcherProvider)),
+          ],
+        ],
+      ],
+    );
+  }
+
+  /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
+  /// （`_save` 本來就一次寫三個欄位）。
+  Widget _saveRow(UepSurface s) {
+    return Row(children: [
+      UepButton(
+        label: '儲存設定',
+        small: true,
+        onPressed: _dirty ? _save : null,
+      ),
+      const SizedBox(width: 12),
+      UepButton(
+        label: '復原',
+        variant: UepButtonVariant.outline,
+        small: true,
+        onPressed: _dirty ? _revert : null,
+      ),
+      const SizedBox(width: 14),
+      if (_dirty)
+        Text('有尚未儲存的變更',
+            style:
+                UepText.serif(size: 12.5, color: UepColors.gold, height: 1.4))
+      else if (_justSaved)
+        Text('✓ 已儲存',
+            style: UepText.serif(
+                size: 12.5, color: UepColors.success, height: 1.4)),
+    ]);
   }
 
   Widget _box(BuildContext context, Widget child) {
@@ -575,6 +664,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
 }
 
+/// 欄位小標。
+///
+/// 不用 [MonoLabel]：它會把文字轉大寫，而這裡的標籤已經是中文與
+/// 大小寫有意義的專有名詞（`API token`），轉過去就回不來了。
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.text);
 
@@ -584,7 +677,11 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 7),
-      child: MonoLabel(text, color: context.uep.inkSoft, letterSpacing: 1.4),
+      child: Text(
+        text,
+        style: UepText.mono(
+            size: 9, color: context.uep.inkSoft, letterSpacing: 1.4),
+      ),
     );
   }
 }

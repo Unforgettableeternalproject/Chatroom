@@ -46,7 +46,7 @@ class SupervisorTrackScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: s.bg,
         title: Text('誰在做什麼',
-            style: UepText.display(size: 20, color: s.inkTitle)),
+            style: UepText.sectionTitle(color: s.inkTitle)),
         actions: [
           IconButton(
             tooltip: '重新整理',
@@ -218,7 +218,7 @@ class _Body extends StatelessWidget {
             padding: const EdgeInsets.only(top: 40),
             child: Text('房裡沒有人手上有卡。',
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
       ],
     );
@@ -259,7 +259,7 @@ class _MemberCard extends StatelessWidget {
               Expanded(
                 child: Text(load.name,
                     style: UepText.sans(
-                        size: 13.5,
+                        size: 14.5,
                         color:
                             isOrphanBucket ? UepColors.gold : s.inkTitle)),
               ),
@@ -273,7 +273,7 @@ class _MemberCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
               child: Text(
                 '這些卡沒有人在做，需要有人接手。',
-                style: UepText.serif(size: 11.5, color: s.inkMute),
+                style: UepText.serif(size: 12.5, color: s.inkMute),
               ),
             ),
           _group(context, '卡住', load.blocked, danger: true),
@@ -315,7 +315,7 @@ class _MemberCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 5, 14, 6),
               child: Row(children: [
                 Text('·',
-                    style: UepText.mono(size: 11, color: s.inkMute)),
+                    style: UepText.mono(size: 11.5, color: s.inkMute)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -323,7 +323,7 @@ class _MemberCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: UepText.serif(
-                        size: 12.5, color: dim ? s.inkMute : s.ink),
+                        size: 13.5, color: dim ? s.inkMute : s.ink),
                   ),
                 ),
                 if (t.watcherCount > 0) ...[

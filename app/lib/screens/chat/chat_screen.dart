@@ -801,7 +801,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       builder: (context) => AlertDialog(
         title: Text(
           '刪除這則訊息？',
-          style: UepText.display(size: 24, color: s.inkTitle),
+          style: UepText.pageTitle(color: s.inkTitle),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -818,14 +818,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Text(
                   '${m.senderName ?? '（未知）'} · ${clockTime(m.createdAt)}　'
                   '${m.content.length > 60 ? '${m.content.substring(0, 60)}…' : m.content}',
-                  style: UepText.serif(size: 13, color: s.inkMute, height: 1.8),
+                  style: UepText.serif(size: 14, color: s.inkMute, height: 1.8),
                 ),
               ),
             ),
             const SizedBox(height: 14),
             Text(
               '此操作無法復原。',
-              style: UepText.serif(size: 13.5, color: s.inkSoft),
+              style: UepText.serif(size: 14.5, color: s.inkSoft),
             ),
           ],
         ),
@@ -1206,10 +1206,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               Text(
                                 '有 $_newWhileAway 則新訊息',
                                 style: UepText.mono(
-                                  size: 9.5,
+                                  size: 10.5,
                                   color: UepColors.gold,
-                                  letterSpacing: 1.2,
-                                ),
+                                  letterSpacing: 1.2),
                               ),
                               const SizedBox(width: 8),
                               const Text(
@@ -1496,10 +1495,7 @@ class RoomHeader extends ConsumerWidget {
                       child: Text(
                         roomName,
                         overflow: TextOverflow.ellipsis,
-                        style: UepText.display(
-                          size: 26,
-                          color: archived ? s.inkSoft : s.inkTitle,
-                        ),
+                        style: UepText.pageTitle(color: archived ? s.inkSoft : s.inkTitle),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1514,7 +1510,7 @@ class RoomHeader extends ConsumerWidget {
                         ),
                       ),
                       child: MonoLabel(
-                        archived ? 'ARCHIVED' : zoneLabel,
+                        archived ? '已封存' : zoneLabel,
                         size: 9,
                         color: archived ? s.inkMute : zoneColor,
                         letterSpacing: 1.4,
@@ -1529,10 +1525,9 @@ class RoomHeader extends ConsumerWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: UepText.serif(
-                      size: 12.5,
+                      size: 13.5,
                       color: archived ? s.inkMute : s.inkSoft,
-                      height: 1.5,
-                    ),
+                      height: 1.5),
                   ),
                 ],
               ],
@@ -1663,14 +1658,13 @@ class _HeaderAction extends StatelessWidget {
         child: Text(
           label.toUpperCase(),
           style: UepText.mono(
-            size: 10,
+            size: 10.5,
             color: accent
                 ? UepColors.gold
                 : dead
                     ? s.inkMute
                     : s.inkSoft,
-            letterSpacing: 1.4,
-          ),
+            letterSpacing: 1.4),
         ),
       ),
     );
@@ -2104,13 +2098,13 @@ class _OverflowMenu extends ConsumerWidget {
             value: 'switch_board',
             height: 36,
             child: Text('更換任務板…',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'rename',
             height: 36,
-            child: Text('重新命名…', style: UepText.sans(size: 12.5, color: s.ink)),
+            child: Text('重新命名…', style: UepText.sans(size: 13.5, color: s.ink)),
           ),
         if (youAreAdmin)
           PopupMenuItem(
@@ -2118,7 +2112,7 @@ class _OverflowMenu extends ConsumerWidget {
             height: 36,
             child: Text(
               '說話方式（${roomStyleLabel(style)}）',
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
         if (youAreAdmin)
@@ -2127,21 +2121,21 @@ class _OverflowMenu extends ConsumerWidget {
             height: 36,
             child: Text(
               isPrivate ? '解除鎖定（改為公開）' : '鎖定為私人對話',
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
         PopupMenuItem(
           value: 'archive',
           height: 36,
           child: Text('封存房間（唯讀，之後會被永久刪除）',
-              style: UepText.sans(size: 12.5, color: s.ink)),
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         PopupMenuItem(
           value: 'leave',
           height: 36,
           child: Text(
             '離開房間',
-            style: UepText.sans(size: 12.5, color: UepColors.errorText),
+            style: UepText.sans(size: 13.5, color: UepColors.errorText),
           ),
         ),
         // 刪除排在最後、與其他項目隔開：它是這個選單裡唯一不可復原的動作
@@ -2151,7 +2145,7 @@ class _OverflowMenu extends ConsumerWidget {
             height: 36,
             child: Text(
               '永久刪除房間…',
-              style: UepText.sans(size: 12.5, color: UepColors.errorText),
+              style: UepText.sans(size: 13.5, color: UepColors.errorText),
             ),
           ),
       ],
@@ -2193,12 +2187,11 @@ class _PinnedStrip extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Text(
-              'PINNED',
+              '釘選',
               style: UepText.mono(
-                size: 9,
+                size: 10,
                 color: UepColors.gold,
-                letterSpacing: 1.6,
-              ),
+                letterSpacing: 1.6),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -2206,7 +2199,7 @@ class _PinnedStrip extends StatelessWidget {
                 '${latest.senderName ?? ''}：${latest.content}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: UepText.serif(size: 12.5, color: s.inkSoft, height: 1.4),
+                style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.4),
               ),
             ),
             MonoLabel('查看全部 →', size: 9, letterSpacing: 1.2),
@@ -2337,12 +2330,12 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
       builder: (context) => AlertDialog(
         title: Text(
           '將 ${p.displayName} 移出聊天室？',
-          style: UepText.display(size: 22, color: s.inkTitle),
+          style: UepText.pageTitle(color: s.inkTitle),
         ),
         content: Text(
           '他用來加入的邀請碼會被整張撤銷，共用同一張的人也會一起斷線。'
           '此操作無法復原。',
-          style: UepText.serif(size: 13.5, color: s.inkSoft),
+          style: UepText.serif(size: 14.5, color: s.inkSoft),
         ),
         actions: [
           UepButton(
@@ -2386,12 +2379,12 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text('接管這個聊天室？',
-            style: UepText.display(size: 22, color: s.inkTitle)),
+            style: UepText.pageTitle(color: s.inkTitle)),
         content: Text(
           who == null
               ? '接管之後你就是這個聊天室的管理員。'
               : '$who 目前是管理員，接管之後他會降為一般成員。',
-          style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.6),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6),
         ),
         actions: [
           UepButton(
@@ -2491,7 +2484,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
             children: [
-              MonoLabel('ACTIVE', size: 8.5, letterSpacing: 2.2),
+              MonoLabel('進行中', size: 8.5, letterSpacing: 2.2),
               const SizedBox(height: 8),
               for (final p in nestSubagents(active))
                 _MemberTile(
@@ -2768,10 +2761,9 @@ class _MemberTile extends StatelessWidget {
                           p.displayName,
                           overflow: TextOverflow.ellipsis,
                           style: UepText.sans(
-                            size: 13,
+                            size: 14,
                             weight: FontWeight.w600,
-                            color: inactive ? s.ink : s.inkTitle,
-                          ),
+                            color: inactive ? s.ink : s.inkTitle),
                         ),
                       ),
                       const SizedBox(width: 7),
@@ -2789,7 +2781,7 @@ class _MemberTile extends StatelessWidget {
                           ),
                           child: Text(
                             '子代理',
-                            style: UepText.sans(size: 9, color: s.inkMute),
+                            style: UepText.sans(size: 10, color: s.inkMute),
                           ),
                         )
                       else
@@ -2800,11 +2792,11 @@ class _MemberTile extends StatelessWidget {
                       // 所有房」變得分不出來
                       if (p.showsHostBadge) ...[
                         const SizedBox(width: 5),
-                        _RoleBadge(label: 'HOST', color: UepColors.gold),
+                        _RoleBadge(label: '主機', color: UepColors.gold),
                       ],
                       if (p.isAdmin) ...[
                         const SizedBox(width: 5),
-                        _RoleBadge(label: 'ADMIN', color: s.inkMute),
+                        _RoleBadge(label: '房主', color: s.inkMute),
                       ],
                       if (p.previousName != null) ...[
                         const SizedBox(width: 7),
@@ -2812,7 +2804,7 @@ class _MemberTile extends StatelessWidget {
                           child: Text(
                             '（原：${p.previousName}）',
                             overflow: TextOverflow.ellipsis,
-                            style: UepText.serif(size: 11, color: s.inkMute),
+                            style: UepText.serif(size: 12, color: s.inkMute),
                           ),
                         ),
                       ],
@@ -2822,7 +2814,7 @@ class _MemberTile extends StatelessWidget {
                           child: Text(
                             '（${p.distinctHint}）',
                             overflow: TextOverflow.ellipsis,
-                            style: UepText.mono(size: 9, color: s.inkMute),
+                            style: UepText.mono(size: 10, color: s.inkMute),
                           ),
                         ),
                       ],
@@ -2832,10 +2824,9 @@ class _MemberTile extends StatelessWidget {
                   Text(
                     subtitle,
                     style: UepText.mono(
-                      size: 9,
+                      size: 10,
                       color: isSelf ? UepColors.gold : s.inkMute,
-                      letterSpacing: 1.0,
-                    ),
+                      letterSpacing: 1.0),
                   ),
                 ],
               ),
@@ -2899,9 +2890,8 @@ class _MemberTile extends StatelessWidget {
                           Text(
                             a.label,
                             style: UepText.sans(
-                              size: 12,
-                              color: a.color ?? s.ink,
-                            ),
+                              size: 13,
+                              color: a.color ?? s.ink),
                           ),
                         ],
                       ),
@@ -3099,7 +3089,7 @@ class _StyleDialogState extends State<_StyleDialog> {
   Widget build(BuildContext context) {
     final s = context.uep;
     return AlertDialog(
-      title: Text('說話方式', style: UepText.display(size: 22, color: s.inkTitle)),
+      title: Text('說話方式', style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
@@ -3110,7 +3100,7 @@ class _StyleDialogState extends State<_StyleDialog> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   '房內 agent 的說話方式。',
-                  style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+                  style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
                 ),
               ),
               const SizedBox(height: 12),
@@ -3133,12 +3123,12 @@ class _StyleDialogState extends State<_StyleDialog> {
                   child: TextField(
                     controller: _text,
                     maxLines: 4,
-                    style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+                    style: UepText.serif(size: 14, color: s.ink, height: 1.7),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
                       hintText: '例：一律用英文回答，句子不要超過兩行。',
-                      hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+                      hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
@@ -3151,10 +3141,9 @@ class _StyleDialogState extends State<_StyleDialog> {
                   child: Text(
                     _error!,
                     style: UepText.serif(
-                      size: 12.5,
+                      size: 13.5,
                       color: UepColors.errorText,
-                      height: 1.5,
-                    ),
+                      height: 1.5),
                   ),
                 ),
               ],
@@ -3207,7 +3196,7 @@ class _RoleBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: UepText.mono(size: 8, color: color, letterSpacing: 1.1),
+        style: UepText.mono(size: 10, color: color, letterSpacing: 1.1),
       ),
     );
   }

@@ -118,7 +118,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
           return AlertDialog(
             backgroundColor: s.bgCard,
             title: Text('邀請碼${label.isEmpty ? '' : '：$label'}',
-                style: UepText.display(size: 22, color: s.inkTitle)),
+                style: UepText.pageTitle(color: s.inkTitle)),
             content: SizedBox(
               width: 440,
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -132,16 +132,16 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   child: TextField(
                     controller: urlField,
-                    style: UepText.code(size: 11, color: s.ink),
+                    style: UepText.code(size: 12, color: s.ink),
                     onChanged: (_) => setInner(() {}),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
                       labelText: '對方要連的位址',
                       labelStyle:
-                          UepText.mono(size: 9, color: s.inkMute),
+                          UepText.mono(size: 10, color: s.inkMute),
                       hintText: 'https://xxx.trycloudflare.com',
-                      hintStyle: UepText.code(size: 11, color: s.inkMute),
+                      hintStyle: UepText.code(size: 12, color: s.inkMute),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
@@ -153,7 +153,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                         ? '請填一個對方連得到的位址。'
                         : '這個位址只有你這台機器連得到。',
                     style: UepText.serif(
-                        size: 12, color: UepColors.errorText, height: 1.7),
+                        size: 13, color: UepColors.errorText, height: 1.7),
                   ),
                 ] else ...[
                   const SizedBox(height: 10),
@@ -167,14 +167,14 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                     ),
                     child: SelectableText(code,
                         style:
-                            UepText.code(size: 11, color: s.ink, height: 1.6)),
+                            UepText.code(size: 12, color: s.ink, height: 1.6)),
                   ),
                 ],
                 const SizedBox(height: 12),
                 Text(
                   '這串字等同密碼，任何拿到的人都能進這台 Hub。',
                   style:
-                      UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
+                      UepText.serif(size: 13.5, color: s.inkMute, height: 1.7),
                 ),
               ]),
             ),
@@ -248,7 +248,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
         return AlertDialog(
           backgroundColor: s.bgCard,
           title: Text('agent 憑證${who.isEmpty ? '' : '：$who'}',
-              style: UepText.display(size: 22, color: s.inkTitle)),
+              style: UepText.pageTitle(color: s.inkTitle)),
           content: SizedBox(
             width: 440,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -261,12 +261,12 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(token,
-                    style: UepText.code(size: 11, color: s.ink, height: 1.6)),
+                    style: UepText.code(size: 12, color: s.ink, height: 1.6)),
               ),
               const SizedBox(height: 12),
               Text(
                 '這串填進 mcp-kit 安裝器的「Agent token」欄位。',
-                style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.7),
+                style: UepText.serif(size: 13.5, color: s.inkMute, height: 1.7),
               ),
             ]),
           ),
@@ -298,11 +298,11 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
       builder: (context) => AlertDialog(
         backgroundColor: s.bgCard,
         title: Text('撤銷這份邀請？',
-            style: UepText.display(size: 22, color: s.inkTitle)),
+            style: UepText.pageTitle(color: s.inkTitle)),
         content: Text(
           '${label.isEmpty ? '這張 token' : label}將立刻失去存取權。'
           '此操作無法復原。',
-          style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.7),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.7),
         ),
         actions: [
           UepButton(
@@ -339,11 +339,11 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
     final tokensAsync = ref.watch(accessTokensProvider);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('邀請成員', style: UepText.sans(size: 13.5, color: s.inkTitle)),
+      Text('邀請成員', style: UepText.sans(size: 14.5, color: s.inkTitle)),
       const SizedBox(height: 3),
       Text(
         '發一份邀請給還沒連上這台 Hub 的人。',
-        style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+        style: UepText.serif(size: 13, color: s.inkMute, height: 1.7),
       ),
       const SizedBox(height: 12),
       Row(children: [
@@ -358,13 +358,13 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
             child: TextField(
               controller: _label,
               maxLength: 64,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 counterText: '',
                 hintText: '這份發給誰？（選填，只有你看得到）',
-                hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+                hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                 contentPadding: const EdgeInsets.symmetric(vertical: 11),
               ),
             ),
@@ -391,11 +391,11 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
           // 不是故障。兩處共用同一份文案——分開寫的話，同一個 403 會在
           // 「按下去」與「讀清單」上講出兩句不同的話
           inviteErrorText(e),
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+          style: UepText.serif(size: 13, color: s.inkMute, height: 1.7),
         ),
         data: (tokens) => tokens.isEmpty
             ? Text('還沒發出任何邀請',
-                style: UepText.serif(size: 12, color: s.inkMute))
+                style: UepText.serif(size: 13, color: s.inkMute))
             : Column(children: [
                 for (final t in tokens)
                   Container(
@@ -414,13 +414,13 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                                     t.label.isEmpty ? '（未命名）' : t.label,
                                     overflow: TextOverflow.ellipsis,
                                     style: UepText.sans(
-                                        size: 12.5,
+                                        size: 13.5,
                                         weight: FontWeight.w600,
                                         color: s.inkTitle)),
                               ),
                               if (t.audience == 'agent') ...[
                                 const SizedBox(width: 6),
-                                MonoLabel('AGENT',
+                                MonoLabel('Agent',
                                     size: 8,
                                     color: UepColors.gold,
                                     letterSpacing: 1.2),
@@ -432,7 +432,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                                   // 從沒用過通常表示邀請沒送到，而不是對方不想用
                                   ? '尚未使用 · 發於 ${relativeTime(t.createdAt)}'
                                   : '最後使用 ${relativeTime(t.lastUsedAt!)}',
-                              style: UepText.mono(size: 9, color: s.inkMute),
+                              style: UepText.mono(size: 10, color: s.inkMute),
                             ),
                           ],
                         ),

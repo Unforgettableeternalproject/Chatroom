@@ -134,7 +134,7 @@ void main() {
       expect(find.text('Hub 起來了。'), findsOneWidget);
 
       final result = tester.getTopLeft(find.text('Hub 起來了。')).dy;
-      final controlTitle = tester.getTopLeft(find.text('HUB')).dy;
+      final controlTitle = tester.getTopLeft(find.text('Hub')).dy;
       final dataTitle = tester.getTopLeft(find.text('備份')).dy;
       expect(result, greaterThan(controlTitle));
       expect(result, lessThan(dataTitle),

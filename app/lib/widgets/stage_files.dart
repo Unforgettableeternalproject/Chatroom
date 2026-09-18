@@ -69,7 +69,7 @@ class StageFileCount extends StatelessWidget {
       const SizedBox(width: 3),
       Text('素材 $count',
           style:
-              UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.4)),
+              UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
     ]);
   }
 }
@@ -131,11 +131,11 @@ class StageFilesList extends ConsumerWidget {
       builder: (_) => AlertDialog(
         title: Text('卸除素材',
             style:
-                UepText.display(size: 20, color: context.uep.inkTitle)),
+                UepText.sectionTitle(color: context.uep.inkTitle)),
         content: Text(
           '把「${f.filename}」從這個階段拿下來？',
           style: UepText.serif(
-              size: 13, color: context.uep.inkSoft, height: 1.8),
+              size: 14, color: context.uep.inkSoft, height: 1.8),
         ),
         actions: [
           UepButton(
@@ -206,13 +206,13 @@ class _StageFileRow extends StatelessWidget {
             spacing: 8,
             children: [
               Text(file.filename,
-                  style: UepText.sans(size: 11.5, color: s.ink)),
+                  style: UepText.sans(size: 12.5, color: s.ink)),
               Text(file.readableSize,
                   style: UepText.mono(
-                      size: 9, color: s.inkMute, letterSpacing: 1.1)),
+                      size: 10, color: s.inkMute, letterSpacing: 1.1)),
               if (file.addedByName.isNotEmpty)
                 Text('· ${file.addedByName} 掛上',
-                    style: UepText.mono(size: 9, color: s.inkMute)),
+                    style: UepText.mono(size: 10, color: s.inkMute)),
             ],
           ),
         ),
@@ -222,7 +222,7 @@ class _StageFileRow extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(left: 2, top: 3),
             child: Text(file.note,
-                style: UepText.serif(size: 12, color: s.inkSoft, height: 1.6)),
+                style: UepText.serif(size: 13, color: s.inkSoft, height: 1.6)),
           ),
       ],
     );
@@ -290,10 +290,10 @@ Future<String?> showStageNoteDialog(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('加素材', style: UepText.display(size: 22, color: s.inkTitle)),
+            Text('加素材', style: UepText.pageTitle(color: s.inkTitle)),
             const SizedBox(height: 4),
             Text(stageTitle == null ? filename : '$filename › $stageTitle',
-                style: UepText.mono(size: 10, color: s.inkMute)),
+                style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ),
         content: SizedBox(
@@ -316,12 +316,12 @@ Future<String?> showStageNoteDialog(
                   controller: controller,
                   autofocus: true,
                   onSubmitted: (_) => submit(),
-                  style: UepText.serif(size: 13, color: s.ink, height: 1.6),
+                  style: UepText.serif(size: 14, color: s.ink, height: 1.6),
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
                     hintText: '說明（選填）',
-                    hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                    hintStyle: UepText.serif(size: 13, color: s.inkMute),
                     contentPadding:
                         const EdgeInsets.symmetric(vertical: 12),
                   ),
@@ -379,9 +379,9 @@ Future<void> showAddToStageDialog(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('加到階段',
-                style: UepText.display(size: 22, color: s.inkTitle)),
+                style: UepText.pageTitle(color: s.inkTitle)),
             const SizedBox(height: 4),
-            Text(filename, style: UepText.mono(size: 10, color: s.inkMute)),
+            Text(filename, style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ),
         content: SizedBox(
@@ -401,14 +401,14 @@ Future<void> showAddToStageDialog(
                         children: [
                           Text(c.title,
                               style: UepText.sans(
-                                  size: 13,
+                                  size: 14,
                                   weight: FontWeight.w600,
                                   color: s.ink)),
                           // 階段名字在不同週期底下會重複（「測試」「收尾」），
                           // 只列階段的話挑的人分不出是哪一個
                           Text(o.title,
                               style:
-                                  UepText.mono(size: 9.5, color: s.inkMute)),
+                                  UepText.mono(size: 10.5, color: s.inkMute)),
                         ],
                       ),
                     ),

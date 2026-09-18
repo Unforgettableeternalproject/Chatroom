@@ -43,7 +43,7 @@ class HostConsoleScreen extends ConsumerWidget {
         surfaceTintColor: Colors.transparent,
         shape: Border(bottom: BorderSide(color: s.line)),
         title: Text('這台機器',
-            style: UepText.display(size: 22, color: s.inkTitle)),
+            style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           IconButton(
             tooltip: '說明',
@@ -70,7 +70,7 @@ class HostConsoleScreen extends ConsumerWidget {
                 padding: const EdgeInsets.all(32),
                 child: Text(
                   '這台機器沒有 Hub 主持包。',
-                  style: UepText.serif(size: 14, color: s.inkMute),
+                  style: UepText.serif(size: 15, color: s.inkMute),
                 ),
               ),
             )
@@ -208,7 +208,7 @@ class _LightRow extends StatelessWidget {
               const SizedBox(width: 10),
               Flexible(
                 child: Text(probe.detail,
-                    style: UepText.serif(size: 13.5, color: s.ink)),
+                    style: UepText.serif(size: 14.5, color: s.ink)),
               ),
             ]),
             // ⚠️ **綠燈也可能有 caveat。** 「本機打得到」不等於「別台機器
@@ -217,7 +217,7 @@ class _LightRow extends StatelessWidget {
               const SizedBox(height: 3),
               Text(probe.caveat,
                   style: UepText.serif(
-                      size: 11.5, color: s.inkMute, height: 1.5)),
+                      size: 12.5, color: s.inkMute, height: 1.5)),
             ],
           ],
         ),
@@ -244,7 +244,7 @@ class _ShareSection extends ConsumerWidget {
       return _Panel(
         title: '連線資訊',
         child: Text('讀不到 server/.env。',
-            style: UepText.serif(size: 13, color: s.inkMute)),
+            style: UepText.serif(size: 14, color: s.inkMute)),
       );
     }
 
@@ -277,21 +277,21 @@ class _ShareSection extends ConsumerWidget {
             const SizedBox(height: 12),
             Text(
               'Agent token 不能開主持人模式。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ] else ...[
             _CopyRow(label: 'Token', value: env.token, secret: true),
             const SizedBox(height: 12),
             Text(
               '這台 Hub 只有一把共用 token。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
           if (env.bindsAllInterfaces) ...[
             const SizedBox(height: 6),
             Text(
               '位址請改成成員連得到的 IP。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6),
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
         ],
@@ -315,7 +315,7 @@ class _McpSection extends ConsumerWidget {
     final env = ref.watch(mcpEnvProvider).value;
 
     return _Panel(
-      title: 'AGENT 接入',
+      title: 'Agent 接入',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -402,7 +402,7 @@ class _VersionCheck extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MonoLabel('BRIDGE 版本', size: 9, letterSpacing: 1.6),
+          MonoLabel('Bridge 版本', size: 9, letterSpacing: 1.6),
           const SizedBox(height: 5),
           SelectableText(
             version.isEmpty ? '讀不到 _build.json' : version,
@@ -415,7 +415,7 @@ class _VersionCheck extends ConsumerWidget {
             Text(
               '要確認 agent 用的是這一份，讓它呼叫 chatroom_join，'
               '比對回傳的 bridge.commit。',
-              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.6),
+              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.6),
             ),
           ],
           const SizedBox(height: 10),
@@ -423,10 +423,10 @@ class _VersionCheck extends ConsumerWidget {
           Wrap(spacing: 18, runSpacing: 4, children: [
             if (when.isNotEmpty)
               Text('安裝於 $when',
-                  style: UepText.code(size: 10.5, color: s.inkMute)),
+                  style: UepText.code(size: 11.5, color: s.inkMute)),
             if (kit.targets.isNotEmpty)
               Text('裝給 ${kit.targets.join('、')}',
-                  style: UepText.code(size: 10.5, color: s.inkMute)),
+                  style: UepText.code(size: 11.5, color: s.inkMute)),
           ]),
         ],
       ),
@@ -551,18 +551,18 @@ class _TunnelSection extends ConsumerWidget {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '開啟後任何拿到網址與 token 的人都能讀取所有房間。',
-          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('取消',
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('開啟',
-                style: UepText.serif(size: 13, color: UepColors.gold)),
+                style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
       ),
@@ -627,18 +627,18 @@ class _TunnelSection extends ConsumerWidget {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '目前的網址會立刻失效，重開會是新的網址。',
-          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('取消',
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('關閉隧道',
-                style: UepText.serif(size: 13, color: UepColors.gold)),
+                style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
       ),
@@ -679,7 +679,7 @@ class _ControlSection extends ConsumerWidget {
     final hubStarting = _isPending(ref, 'hub_start');
 
     return _Panel(
-      title: 'HUB',
+      title: 'Hub',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -832,18 +832,18 @@ class _ControlSection extends ConsumerWidget {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '所有 agent 與 App 會立即斷線。',
-          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('取消',
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('停止 Hub',
-                style: UepText.serif(size: 13, color: UepColors.gold)),
+                style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
       ),
@@ -1244,7 +1244,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
           children: [
             Text(
               '現有的訊息、成員與附件會被這份備份取代。還原前 Hub 必須先停止。',
-              style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+              style: UepText.serif(size: 14, color: s.ink, height: 1.7),
             ),
             if (!complete || !hasAttachments) ...[
               const SizedBox(height: 12),
@@ -1253,7 +1253,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
                     ? '這份備份沒有 manifest，內容不明。'
                     : '這份備份不含附件。',
                 style: UepText.serif(
-                    size: 12.5, color: UepColors.errorText, height: 1.6),
+                    size: 13.5, color: UepColors.errorText, height: 1.6),
               ),
             ],
           ],
@@ -1262,12 +1262,12 @@ class _DataSectionState extends ConsumerState<_DataSection> {
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('取消',
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('還原',
-                style: UepText.serif(size: 13, color: UepColors.gold)),
+                style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
       ),
@@ -1289,18 +1289,18 @@ class _DataSectionState extends ConsumerState<_DataSection> {
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
           '重啟 Hub 後舊 token 失效，所有成員都要換成新的。',
-          style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text('取消',
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: Text('換 token',
-                style: UepText.serif(size: 13, color: UepColors.gold)),
+                style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
       ),
@@ -1362,13 +1362,13 @@ class _RestorePicker extends StatelessWidget {
             return ListTile(
               dense: true,
               title: Text('${item['name']}',
-                  style: UepText.code(size: 12, color: s.ink)),
+                  style: UepText.code(size: 12.5, color: s.ink)),
               subtitle: Text(
                 complete
                     ? '資料庫 $bytes 位元組・附件 $files 個檔案'
                     : '沒有 manifest',
                 style: UepText.serif(
-                    size: 11,
+                    size: 12,
                     color: complete ? s.inkMute : UepColors.errorText),
               ),
               onTap: () => Navigator.pop(ctx, item),
@@ -1380,7 +1380,7 @@ class _RestorePicker extends StatelessWidget {
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text('取消',
-              style: UepText.serif(size: 13, color: s.inkMute)),
+              style: UepText.serif(size: 14, color: s.inkMute)),
         ),
       ],
     );
@@ -1404,18 +1404,18 @@ class _OpResult extends StatelessWidget {
     if (result['pending'] == true) {
       return Text(
         result['kind'] == 'tunnel_start' ? '正在開啟隧道…' : '正在啟動…',
-        style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
+        style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5),
       );
     }
     final ok = result['ok'] == true;
     if (!ok) {
       return Text('失敗：${result['error'] ?? '原因不明'}',
-          style: UepText.code(size: 11.5, color: UepColors.errorText));
+          style: UepText.code(size: 12, color: UepColors.errorText));
     }
     if (result['kind'] == 'hub_start' || result['kind'] == 'tunnel_start') {
       // 逾時也走這裡：那不是失敗（進程可能正要起來），措辭在送出端寫好了
       return Text('${result['detail'] ?? ''}',
-          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
+          style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5));
     }
     if (result['kind'] == 'rotate') {
       return Column(
@@ -1425,36 +1425,36 @@ class _OpResult extends StatelessWidget {
           _CopyRow(label: '新 token', value: '${result['token'] ?? ''}'),
           const SizedBox(height: 6),
           Text('重啟 Hub 後生效。舊設定：${result['backup'] ?? ''}',
-              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
+              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
         ],
       );
     }
     if (result['kind'] == 'hub_stop') {
       // 成功與否都走這裡：停止是那種「你以為做完了」的操作，沉默等於成功
       return Text('${result['detail'] ?? ''}',
-          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
+          style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5));
     }
     if (result['kind'] == 'tunnel_stop') {
       // ⚠️ 這裡的 ok:true 有兩種：真的關掉了，與「本來就沒有隧道」。
       // 兩者都不是失敗，但講成同一句會讓人以為自己關掉了一條不存在的東西
       return Text('${result['detail'] ?? ''}',
-          style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5));
+          style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5));
     }
     if (result['kind'] == 'restore') {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('已還原：${result['restored_from'] ?? ''}',
-              style: UepText.code(size: 11.5, color: s.inkSoft)),
+              style: UepText.code(size: 12, color: s.inkSoft)),
           const SizedBox(height: 4),
           // 退路要跟結果一起講。還原完才發現拿錯備份的人，需要的就是這一行
           Text('還原前的備份：${result['safety_backup'] ?? ''}',
-              style: UepText.serif(size: 11.5, color: s.inkMute, height: 1.5)),
+              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
           if (result['attachments_restored'] != true) ...[
             const SizedBox(height: 4),
             Text('這份備份不含附件。',
                 style: UepText.serif(
-                    size: 11.5, color: UepColors.errorText, height: 1.5)),
+                    size: 12.5, color: UepColors.errorText, height: 1.5)),
           ],
         ],
       );
@@ -1465,7 +1465,7 @@ class _OpResult extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('已備份：${result['dest'] ?? ''}',
-            style: UepText.code(size: 11.5, color: s.inkSoft)),
+            style: UepText.code(size: 12, color: s.inkSoft)),
         const SizedBox(height: 4),
         Text(
           hadAttachments
@@ -1474,7 +1474,7 @@ class _OpResult extends StatelessWidget {
               // 一模一樣，意義相反
               : '資料庫 ${result['db_bytes'] ?? 0} 位元組，不含附件',
           style: UepText.serif(
-              size: 11.5,
+              size: 12.5,
               color: hadAttachments ? s.inkMute : s.inkSoft,
               height: 1.5),
         ),
@@ -1522,7 +1522,7 @@ class _CopyRowState extends State<_CopyRow> {
             hidden ? '•' * 24 : widget.value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: UepText.code(size: 12, color: s.ink),
+            style: UepText.code(size: 12.5, color: s.ink),
           ),
         ),
       ),
@@ -1561,7 +1561,7 @@ class _KitSection extends StatelessWidget {
     return _Panel(
       title: '安裝位置',
       child: SelectableText(kit.kitRoot,
-          style: UepText.code(size: 11.5, color: s.inkSoft)),
+          style: UepText.code(size: 12, color: s.inkSoft)),
     );
   }
 }
@@ -1581,7 +1581,7 @@ class _StatusLine extends StatelessWidget {
         width: 78,
         child: MonoLabel(label, size: 9, letterSpacing: 1.4),
       ),
-      Text(value, style: UepText.serif(size: 13.5, color: s.ink)),
+      Text(value, style: UepText.serif(size: 14.5, color: s.ink)),
     ]);
   }
 }

@@ -36,7 +36,7 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
     final matches = _typed.text.trim() == widget.name;
     return AlertDialog(
       title: Text('永久刪除房間',
-          style: UepText.display(size: 22, color: s.inkTitle)),
+          style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
@@ -46,7 +46,7 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
               child: Text(
                 '「${widget.name}」連同房裡的訊息與附件會被永久刪除，不可復原。\n\n'
                 '確認的話，把房名打一次：',
-                style: UepText.serif(size: 12.5, color: s.ink, height: 1.6),
+                style: UepText.serif(size: 13.5, color: s.ink, height: 1.6),
               ),
             ),
             const SizedBox(height: 12),
@@ -61,12 +61,12 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
                 controller: _typed,
                 autofocus: true,
                 onChanged: (_) => setState(() {}),
-                style: UepText.code(size: 12.5, color: s.ink),
+                style: UepText.code(size: 13, color: s.ink),
                 decoration: InputDecoration(
                   isDense: true,
                   border: InputBorder.none,
                   hintText: widget.name,
-                  hintStyle: UepText.code(size: 12.5, color: s.inkMute),
+                  hintStyle: UepText.code(size: 13, color: s.inkMute),
                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 ),
               ),

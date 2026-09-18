@@ -31,13 +31,35 @@ class AppConfig {
     required this.themeMode,
     required this.preferredName,
     required this.deviceKey,
+    this.fontScale = FontScalePref.medium,
   });
+
+  /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
+  ///
+  /// token 與 deviceKey 要 await 才拿得到，所以仍由呼叫端傳進來；
+  /// 其餘偏好一律從這裡讀，新增欄位時不必再改一次啟動程式。
+  factory AppConfig.fromSettings(
+    SettingsRepository settings, {
+    required String token,
+    required String deviceKey,
+  }) =>
+      AppConfig(
+        serverUrl: settings.serverUrl,
+        token: token,
+        themeMode: settings.themeMode,
+        preferredName: settings.preferredName,
+        deviceKey: deviceKey,
+        fontScale: settings.fontScale,
+      );
 
   final String serverUrl;
   final String token;
   final ThemeModePref themeMode;
   final String preferredName;
   final String deviceKey;
+
+  /// 字級偏好；套用在 `app.dart` 的 MediaQuery textScaler。
+  final FontScalePref fontScale;
 
   bool get isConfigured => serverUrl.isNotEmpty;
 
@@ -47,6 +69,7 @@ class AppConfig {
     ThemeModePref? themeMode,
     String? preferredName,
     String? deviceKey,
+    FontScalePref? fontScale,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -54,6 +77,7 @@ class AppConfig {
         themeMode: themeMode ?? this.themeMode,
         preferredName: preferredName ?? this.preferredName,
         deviceKey: deviceKey ?? this.deviceKey,
+        fontScale: fontScale ?? this.fontScale,
       );
 }
 
@@ -83,6 +107,11 @@ class AppConfigNotifier extends Notifier<AppConfig> {
       state.themeMode == ThemeModePref.dark
           ? ThemeModePref.light
           : ThemeModePref.dark);
+
+  Future<void> setFontScale(FontScalePref scale) async {
+    await _settings.setFontScale(scale);
+    state = state.copyWith(fontScale: scale);
+  }
 
   Future<void> setPreferredName(String name) async {
     await _settings.setPreferredName(name);

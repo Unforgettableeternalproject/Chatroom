@@ -107,10 +107,10 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         final s = context.uep;
         return AlertDialog(
           title: Text('收回這筆指派？',
-              style: UepText.display(size: 22, color: s.inkTitle)),
+              style: UepText.pageTitle(color: s.inkTitle)),
           content: Text(
             '${a.targetSessionKey} 還沒回應。收回後對方就不會再收到這個邀請。',
-            style: UepText.serif(size: 13.5, color: s.inkSoft),
+            style: UepText.serif(size: 14.5, color: s.inkSoft),
           ),
           actions: [
             UepButton(
@@ -165,7 +165,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
           onPressed: () => context.go('/rooms/$roomId'),
         ),
         title: Text('指派 agent',
-            style: UepText.display(size: 22, color: s.inkTitle)),
+            style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 20),
@@ -189,7 +189,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    MonoLabel('NEW ASSIGNMENT', letterSpacing: 2.2),
+                    MonoLabel('新指派', letterSpacing: 2.2),
                     const SizedBox(height: 14),
                     Row(children: [
                       MonoLabel('掃描到的 SESSION',
@@ -197,7 +197,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       const Spacer(),
                       InkWell(
                         onTap: () => setState(() => _showIdle = !_showIdle),
-                        child: MonoLabel(_showIdle ? '顯示全部' : '僅 ACTIVE',
+                        child: MonoLabel(_showIdle ? '顯示全部' : '僅進行中',
                             size: 8.5,
                             color: _showIdle ? s.inkMute : UepColors.gold,
                             letterSpacing: 1.4),
@@ -212,7 +212,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     const SizedBox(height: 6),
                     _buildSessionScan(),
                     const SizedBox(height: 14),
-                    MonoLabel('TARGET SESSION',
+                    MonoLabel('目標 session',
                         color: s.inkSoft, letterSpacing: 1.4),
                     const SizedBox(height: 6),
                     _inputBox(
@@ -220,7 +220,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         controller: _target,
                         onChanged: (_) => setState(() {}),
                         style:
-                            UepText.code(size: 12, color: s.ink, height: 1.4),
+                            UepText.code(size: 12.5, color: s.ink, height: 1.4),
                         decoration: _decoration('session_key'),
                       ),
                     ),
@@ -232,20 +232,20 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         controller: _name,
                         maxLength: 32,
                         style:
-                            UepText.code(size: 12, color: s.ink, height: 1.4),
+                            UepText.code(size: 12.5, color: s.ink, height: 1.4),
                         decoration: _decoration('房內名稱，最多 32 字（選填）')
                             .copyWith(counterText: ''),
                       ),
                     ),
                     const SizedBox(height: 14),
-                    MonoLabel('NOTE', color: s.inkSoft, letterSpacing: 1.4),
+                    MonoLabel('備註', color: s.inkSoft, letterSpacing: 1.4),
                     const SizedBox(height: 6),
                     _inputBox(
                       TextField(
                         controller: _note,
                         maxLines: 3,
                         style: UepText.serif(
-                            size: 13, color: s.ink, height: 1.8),
+                            size: 14, color: s.ink, height: 1.8),
                         decoration: _decoration('要 agent 做什麼？'),
                       ),
                     ),
@@ -478,7 +478,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
         isDense: true,
         border: InputBorder.none,
         hintText: hint,
-        hintStyle: UepText.serif(size: 12.5, color: context.uep.inkMute),
+        hintStyle: UepText.serif(size: 13.5, color: context.uep.inkMute),
         contentPadding: const EdgeInsets.symmetric(vertical: 10),
       );
 }
@@ -535,7 +535,7 @@ class _SessionRow extends StatelessWidget {
                     child: Text(session.displayTitle,
                         overflow: TextOverflow.ellipsis,
                         style: UepText.code(
-                            size: 12, color: s.ink, height: 1.3)),
+                            size: 12.5, color: s.ink, height: 1.3)),
                   ),
                   const SizedBox(width: 8),
                   KindBadge(kind: session.kind, compact: true),
@@ -548,7 +548,7 @@ class _SessionRow extends StatelessWidget {
                           '${session.rooms.length > 1 ? '（+${session.rooms.length - 1} 房）' : ''}'
                       : keyTail,
                   overflow: TextOverflow.ellipsis,
-                  style: UepText.mono(size: 9, color: s.inkMute),
+                  style: UepText.mono(size: 10, color: s.inkMute),
                 ),
                 // 非本機的一定要標出來源，展開之後才不會又變回一片分不出
                 // 誰是誰的清單。未知主機名同樣要講——它不是「本機」
@@ -556,17 +556,17 @@ class _SessionRow extends StatelessWidget {
                   Text(
                     session.host.isEmpty ? '未知裝置' : '在 ${session.host}',
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.mono(size: 9, color: UepColors.gold),
+                    style: UepText.mono(size: 10, color: UepColors.gold),
                   ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          MonoLabel(active ? 'ACTIVE' : 'IDLE',
+          MonoLabel(active ? '進行中' : '閒置',
               size: 8.5, color: statusColor, letterSpacing: 1.4),
           const SizedBox(width: 10),
           Text(relativeTime(session.lastSeenAt),
-              style: UepText.mono(size: 9, color: s.inkMute)),
+              style: UepText.mono(size: 10, color: s.inkMute)),
         ]),
       ),
     );
@@ -580,6 +580,16 @@ class _AssignmentRow extends StatelessWidget {
 
   /// 收回這筆指派；null 表示不可收回（已被處理過）。
   final VoidCallback? onCancel;
+
+  /// 指派狀態 → 中文徽章。未知狀態原樣顯示，免得新狀態被吃成空白。
+  static String _statusLabel(String status) => switch (status) {
+        'pending' => '等待回應',
+        'accepted' => '已接受',
+        'declined' => '已婉拒',
+        'cancelled' => '已收回',
+        'expired' => '已逾時',
+        _ => status,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -615,13 +625,13 @@ class _AssignmentRow extends StatelessWidget {
                     child: Text(assignment.targetSessionKey,
                         overflow: TextOverflow.ellipsis,
                         style: UepText.code(
-                            size: 11.5, color: s.ink, height: 1.4)),
+                            size: 12, color: s.ink, height: 1.4)),
                   ),
                   if (assignment.assignedName.isNotEmpty) ...[
                     const SizedBox(width: 6),
                     Text('→ ${assignment.assignedName}',
                         style: UepText.code(
-                            size: 11, color: UepColors.gold, height: 1.4)),
+                            size: 12, color: UepColors.gold, height: 1.4)),
                   ],
                 ]),
                 if (assignment.note.isNotEmpty) ...[
@@ -630,7 +640,7 @@ class _AssignmentRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: UepText.serif(
-                          size: 11.5, color: s.inkMute, height: 1.5)),
+                          size: 12.5, color: s.inkMute, height: 1.5)),
                 ],
               ],
             ),
@@ -638,7 +648,7 @@ class _AssignmentRow extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(border: Border.all(color: border)),
-            child: MonoLabel(assignment.status,
+            child: MonoLabel(_statusLabel(assignment.status),
                 size: 8.5, color: color, letterSpacing: 1.4),
           ),
           SizedBox(
@@ -646,7 +656,7 @@ class _AssignmentRow extends StatelessWidget {
             child: Text(
               relativeTime(assignment.createdAt),
               textAlign: TextAlign.right,
-              style: UepText.mono(size: 9, color: s.inkMute),
+              style: UepText.mono(size: 10, color: s.inkMute),
             ),
           ),
           if (onCancel != null)

@@ -141,7 +141,7 @@ void main() {
         board: _board(runners: [_runner()]),
         onCommand: (a, b) {},
       )));
-      expect(find.text('ONLINE'), findsOneWidget);
+      expect(find.text('上線'), findsOneWidget);
       expect(find.text('暫停'), findsOneWidget);
       expect(find.text('恢復'), findsOneWidget);
       // 已經在線上的執行器沒有「恢復」可言：停用留著（消失會被讀成
@@ -168,7 +168,7 @@ void main() {
                   limitReason: 'rate_limit')
             ]),
       )));
-      expect(find.text('LIMITED'), findsOneWidget);
+      expect(find.text('受限'), findsOneWidget);
       expect(find.textContaining('後重試'), findsWidgets);
       expect(find.textContaining('速率限制'), findsOneWidget);
     });
@@ -186,7 +186,7 @@ void main() {
       await tester.pumpWidget(_wrap(OpsDashboardView(
         board: _board(runners: [_runner(status: 'offline')]),
       )));
-      expect(find.text('OFFLINE'), findsOneWidget);
+      expect(find.text('離線'), findsOneWidget);
       expect(find.textContaining('離線'), findsWidgets);
     });
 
@@ -390,7 +390,7 @@ void main() {
         ]),
         onCommand: (a, b) {},
       )));
-      expect(find.text('RESTARTING'), findsOneWidget);
+      expect(find.text('重啟中'), findsOneWidget);
       expect(find.textContaining('重啟中，等它回來（通常 1～2 分鐘）'), findsOneWidget);
     });
 

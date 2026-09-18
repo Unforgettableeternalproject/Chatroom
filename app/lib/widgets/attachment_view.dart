@@ -288,14 +288,14 @@ class _FileAttachment extends StatelessWidget {
         Flexible(
           child: Text(
             attachment.filename,
-            style: UepText.sans(size: 12.5, color: s.ink),
+            style: UepText.sans(size: 13.5, color: s.ink),
             overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(width: 10),
         Text(
           note ?? attachment.readableSize,
-          style: UepText.mono(size: 9.5, color: s.inkMute, letterSpacing: 1.1),
+          style: UepText.mono(size: 10.5, color: s.inkMute, letterSpacing: 1.1),
         ),
       ]),
     );
@@ -332,7 +332,7 @@ class _FullScreenImage extends StatelessWidget {
           Text(
             filename,
             style: UepText.mono(
-                size: 10, color: Colors.white70, letterSpacing: 1.2),
+                size: 10.5, color: Colors.white70, letterSpacing: 1.2),
           ),
         ]),
       ),

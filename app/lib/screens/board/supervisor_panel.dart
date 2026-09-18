@@ -142,7 +142,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         side: BorderSide(color: s.lineStrong),
       ),
       title: Text('Supervisor',
-          style: UepText.display(size: 20, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       // ⚠️ **一定要能捲。** AlertDialog 的 content 不會自己給捲軸：內容一長
       // 就直接被裁掉，而畫面上沒有任何東西表示下面還有東西
       // （艾斯維爾 2026-09-03：「也無法捲動，因此後面我還沒測」）。
@@ -212,7 +212,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
     if (items.isEmpty) {
       return Center(
         child: Text('還沒有人下過判斷。',
-            style: UepText.serif(size: 12, color: s.inkMute)),
+            style: UepText.serif(size: 13, color: s.inkMute)),
       );
     }
     return ListView.builder(
@@ -224,7 +224,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Center(
               child: Text('還有更早的紀錄（只顯示最近 50 則）',
-                  style: UepText.mono(size: 9, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
             ),
           );
         }
@@ -238,7 +238,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
               // 送的人只有名字快照可用——Supervisor 不必是板成員，
               // 查 members[] 會查不到
               Text(d.fromName.isEmpty ? '（不明）' : d.fromName,
-                  style: UepText.sans(size: 10.5, color: s.inkSoft)),
+                  style: UepText.sans(size: 11.5, color: s.inkSoft)),
               const SizedBox(width: 6),
               Text(
                 // 沒有指定收件者＝對整塊板講的。那與「對某個人講」是兩件事，
@@ -246,19 +246,19 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
                 to == null
                     ? '→ 全體'
                     : '→ ${to.displayName.isEmpty ? d.toActorKey : to.displayName}',
-                style: UepText.mono(size: 9, color: s.inkMute),
+                style: UepText.mono(size: 10, color: s.inkMute),
               ),
               // 沒投影出去＝沒有人被叫醒。稽核串上要看得出這一則是
               // 「說了但對方不知道」，否則之後回頭查會以為他讀過了
               if (d.originRoomId.isEmpty && d.toActorKey.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 Text('未送達',
-                    style: UepText.mono(size: 9, color: UepColors.errorText)),
+                    style: UepText.mono(size: 10, color: UepColors.errorText)),
               ],
             ]),
             const SizedBox(height: 3),
             Text(d.text,
-                style: UepText.serif(size: 12.5, color: s.ink, height: 1.5)),
+                style: UepText.serif(size: 13.5, color: s.ink, height: 1.5)),
           ]),
         );
       },
@@ -273,7 +273,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
         Align(
           alignment: Alignment.centerLeft,
           child: Text('這塊板上還沒有成員，沒有人可以收。',
-              style: UepText.serif(size: 12, color: s.inkMute)),
+              style: UepText.serif(size: 13, color: s.inkMute)),
         )
       else
       Row(children: [
@@ -293,12 +293,12 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
             // 一個是你還沒挑、一個是沒有人可以收——處置完全相反
             hint: Text('選一個收件者…',
                 overflow: TextOverflow.ellipsis,
-                style: UepText.sans(size: 12, color: s.inkMute)),
+                style: UepText.sans(size: 13, color: s.inkMute)),
             decoration: const InputDecoration(
               isDense: true,
               border: OutlineInputBorder(),
             ),
-            style: UepText.sans(size: 12, color: s.ink),
+            style: UepText.sans(size: 13, color: s.ink),
             onChanged: (v) => setState(() => _toActorKey = v),
             // 空字串＝**對整塊板說**（Hub `5fbd7db` 起支援；在那之前
             // `target_actor_key` 是 min_length=1，這個選項放上來等於把
@@ -312,14 +312,14 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
                 value: '',
                 child: Text('所有板成員（${members.length}）',
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.sans(size: 12, color: s.inkSoft)),
+                    style: UepText.sans(size: 13, color: s.inkSoft)),
               ),
               for (final m in members)
                 DropdownMenuItem(
                   value: m.actorKey,
                   child: Text(m.displayName,
                       overflow: TextOverflow.ellipsis,
-                      style: UepText.sans(size: 12, color: s.ink)),
+                      style: UepText.sans(size: 13, color: s.ink)),
                 ),
             ],
           ),
@@ -329,7 +329,7 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
       TextField(
         controller: _message,
         maxLines: 3,
-        style: UepText.sans(size: 12.5, color: s.ink),
+        style: UepText.sans(size: 13.5, color: s.ink),
         decoration: const InputDecoration(
           hintText: '這輪的判斷…',
           border: OutlineInputBorder(),
@@ -390,7 +390,7 @@ class _AttachedSupervisorsSection extends StatelessWidget {
       if (sups.isEmpty)
         Text(
           '還沒有人在看。',
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+          style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
         )
       else
         for (final sup in sups)
@@ -404,9 +404,8 @@ class _AttachedSupervisorsSection extends StatelessWidget {
                 // 走了的人名字劃掉——三種狀態要分得出來，只有「有人／
                 // 沒人」兩種畫法時，人走了會被畫成「還有人在看」
                 style: UepText.sans(
-                  size: 13,
-                  color: sup.departed ? s.inkMute : s.ink,
-                ).copyWith(
+                  size: 14,
+                  color: sup.departed ? s.inkMute : s.ink).copyWith(
                   decoration:
                       sup.departed ? TextDecoration.lineThrough : null,
                 ),
@@ -415,7 +414,7 @@ class _AttachedSupervisorsSection extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text('已離開',
                     style: UepText.mono(
-                        size: 8.5, letterSpacing: 1.0, color: UepColors.error)),
+                        size: 10, letterSpacing: 1.0, color: UepColors.error)),
               ],
               const Spacer(),
               // 來源房。**這是這份清單唯一有意義的欄位**——少了它，多房時
@@ -426,7 +425,7 @@ class _AttachedSupervisorsSection extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
                   style: UepText.mono(
-                      size: 9, letterSpacing: 1.0, color: s.inkMute),
+                      size: 10, letterSpacing: 1.0, color: s.inkMute),
                 ),
               ),
             ]),
@@ -478,7 +477,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
       context: context,
       builder: (ctx) => SimpleDialog(
         title: Text('這間房的 Supervisor',
-            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+            style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final m in members)
             SimpleDialogOption(
@@ -488,7 +487,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(m.displayName,
-                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                      style: UepText.sans(size: 13.5, color: ctx.uep.ink)),
                 ),
               ]),
             ),
@@ -496,7 +495,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
               child: Text('這間房裡沒有其他人。',
-                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+                  style: UepText.serif(size: 13, color: ctx.uep.inkMute)),
             ),
         ],
       ),
@@ -546,7 +545,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
         if (sup == null)
           Expanded(
             child: Text('還沒有指派 Supervisor。',
-                style: UepText.serif(size: 12.5, color: s.inkMute)),
+                style: UepText.serif(size: 13.5, color: s.inkMute)),
           )
         else ...[
           KindBadge(kind: sup.actorKind),
@@ -561,7 +560,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
                 // 與「沒有人」之間二選一，而兩個都不是真的
                 if (departed)
                   Text('已離開這間房',
-                      style: UepText.serif(size: 11.5, color: UepColors.gold)),
+                      style: UepText.serif(size: 12.5, color: UepColors.gold)),
               ],
             ),
           ),
@@ -608,7 +607,7 @@ class _RoomSupervisorSection extends ConsumerWidget {
         Align(
           alignment: Alignment.centerLeft,
           child: Text('這間房已封存，人事不再變動。',
-              style: UepText.serif(size: 11.5, color: s.inkMute)),
+              style: UepText.serif(size: 12.5, color: s.inkMute)),
         ),
       ],
     ]);
@@ -650,7 +649,7 @@ class _BoardOwnerSection extends ConsumerWidget {
       context: context,
       builder: (ctx) => SimpleDialog(
         title: Text('把這塊板交給誰',
-            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+            style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final m in members)
             SimpleDialogOption(
@@ -665,7 +664,7 @@ class _BoardOwnerSection extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
               child: Text('板上沒有別人可以接。先把人加進來。',
-                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+                  style: UepText.serif(size: 13, color: ctx.uep.inkMute)),
             ),
         ],
       ),
@@ -730,7 +729,7 @@ class _BoardOwnerSection extends ConsumerWidget {
         if (owner == null)
           Expanded(
             child: Text('這塊板現在沒有人管得動。',
-                style: UepText.serif(size: 12.5, color: s.inkMute)),
+                style: UepText.serif(size: 13.5, color: s.inkMute)),
           )
         else ...[
           KindBadge(kind: owner.actorKind),

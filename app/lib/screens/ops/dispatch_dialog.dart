@@ -181,7 +181,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
     final s = context.uep;
     final projects = _projects ?? const <String>[];
     return AlertDialog(
-      title: Text('派工', style: UepText.display(size: 24, color: s.inkTitle)),
+      title: Text('派工', style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         // 錯誤訊息**不放在捲動區裡**：它接在表單最後面的話，人在對話框上半
@@ -194,7 +194,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               alignment: Alignment.centerLeft,
               child: Text('目標：${widget.targetLabel}',
                   style: UepText.serif(
-                      size: 12.5, color: s.inkSoft, height: 1.5)),
+                      size: 13.5, color: s.inkSoft, height: 1.5)),
             ),
             const SizedBox(height: 14),
             Align(
@@ -222,7 +222,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                     children: [
                       Text(t.label,
                           style: UepText.sans(
-                              size: 12.5,
+                              size: 13.5,
                               weight: _kind == t.kind
                                   ? FontWeight.w600
                                   : FontWeight.w400,
@@ -230,7 +230,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                       const SizedBox(height: 3),
                       Text(t.summary,
                           style: UepText.serif(
-                              size: 11, color: s.inkMute, height: 1.4)),
+                              size: 12, color: s.inkMute, height: 1.4)),
                     ],
                   ),
                 ),
@@ -253,7 +253,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                           strokeWidth: 1.6, color: s.inkMute)),
                   const SizedBox(width: 8),
                   Text('專案清單載入中…',
-                      style: UepText.serif(size: 11.5, color: s.inkSoft)),
+                      style: UepText.serif(size: 12.5, color: s.inkSoft)),
                 ]),
               )
             else if (_loadError != null)
@@ -261,7 +261,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                 alignment: Alignment.centerLeft,
                 child: Text(_loadError!,
                     style: UepText.serif(
-                        size: 11.5, color: UepColors.errorText, height: 1.5)),
+                        size: 12.5, color: UepColors.errorText, height: 1.5)),
               )
             else if (projects.isEmpty)
               // 擋下來要說出理由，而且理由要能導向下一步——這一條的下一步在
@@ -270,7 +270,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                 alignment: Alignment.centerLeft,
                 child: Text('沒有執行器宣告任何專案',
                     style: UepText.serif(
-                        size: 11.5, color: UepColors.errorText, height: 1.5)),
+                        size: 12.5, color: UepColors.errorText, height: 1.5)),
               )
             else
               Align(
@@ -278,7 +278,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                 child: DropdownButton<String>(
                   value: _project,
                   hint: Text('選一個專案',
-                      style: UepText.sans(size: 12.5, color: s.inkMute)),
+                      style: UepText.sans(size: 13.5, color: s.inkMute)),
                   items: [
                     for (final p in projects)
                       DropdownMenuItem(
@@ -300,12 +300,12 @@ class _DispatchDialogState extends State<DispatchDialog> {
             TextField(
               controller: _brief,
               maxLines: 5,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
               decoration: InputDecoration(
                 isDense: true,
                 border: const OutlineInputBorder(),
                 hintText: '要做什麼、從哪裡看起、什麼算做完…',
-                hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                hintStyle: UepText.serif(size: 13, color: s.inkMute),
               ),
             ),
             const SizedBox(height: 4),
@@ -313,7 +313,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               alignment: Alignment.centerRight,
               child: Text('${_brief.text.trim().length} / $kRunBriefMaxLength',
                   style: UepText.mono(
-                      size: 9.5,
+                      size: 10.5,
                       color: _brief.text.trim().length > kRunBriefMaxLength
                           ? UepColors.error
                           : s.inkMute)),
@@ -330,7 +330,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                     DropdownMenuItem(
                       value: p,
                       child: Text(p == 0 ? '一般' : '插隊 $p',
-                          style: UepText.sans(size: 12.5, color: s.ink)),
+                          style: UepText.sans(size: 13.5, color: s.ink)),
                     ),
                 ],
                 onChanged: (v) => setState(() => _priority = v ?? 0),
@@ -345,7 +345,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               alignment: Alignment.centerLeft,
               child: Text(_error!,
                   style: UepText.serif(
-                      size: 12.5, color: UepColors.errorText, height: 1.5)),
+                      size: 13.5, color: UepColors.errorText, height: 1.5)),
             ),
           ],
         ]),

@@ -90,11 +90,11 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(heading, style: UepText.display(size: 22, color: s.inkTitle)),
+          Text(heading, style: UepText.pageTitle(color: s.inkTitle)),
           if (widget.parentTitle != null) ...[
             const SizedBox(height: 4),
             Text(widget.parentTitle!,
-                style: UepText.mono(size: 10, color: s.inkMute)),
+                style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ],
       ),
@@ -162,12 +162,12 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
           maxLines: lines,
           autofocus: lines == 1,
           onSubmitted: lines == 1 ? (_) => _submit() : null,
-          style: UepText.serif(size: 13, color: s.ink, height: 1.6),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.6),
           decoration: InputDecoration(
             isDense: true,
             border: InputBorder.none,
             hintText: hint,
-            hintStyle: UepText.serif(size: 12, color: s.inkMute),
+            hintStyle: UepText.serif(size: 13, color: s.inkMute),
             contentPadding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -202,7 +202,7 @@ class _PriorityChip extends StatelessWidget {
         ),
         child: Text(label,
             style: UepText.mono(
-                size: 11, color: selected ? UepColors.gold : s.ink)),
+                size: 11.5, color: selected ? UepColors.gold : s.ink)),
       ),
     );
   }

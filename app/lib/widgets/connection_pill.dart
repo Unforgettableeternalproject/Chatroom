@@ -73,7 +73,7 @@ Widget _pill(
       Text(
         text.toUpperCase(),
         style: UepText.mono(
-            size: 9, color: fg ?? context.uep.inkSoft, letterSpacing: 1.2),
+            size: 10, color: fg ?? context.uep.inkSoft, letterSpacing: 1.2),
       ),
     ]),
   );

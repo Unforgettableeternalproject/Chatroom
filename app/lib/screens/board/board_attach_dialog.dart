@@ -82,7 +82,7 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
         side: BorderSide(color: s.lineStrong),
       ),
       title: Text('這間房要掛哪塊任務板',
-          style: UepText.display(size: 20, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -108,12 +108,12 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             TextField(
               controller: _name,
               autofocus: true,
-              style: UepText.sans(size: 13, color: s.ink),
+              style: UepText.sans(size: 14, color: s.ink),
               decoration: InputDecoration(
                 labelText: '板的名字',
-                labelStyle: UepText.mono(size: 10, color: s.inkMute),
+                labelStyle: UepText.mono(size: 10.5, color: s.inkMute),
                 helperText: null,
-                helperStyle: UepText.serif(size: 11, color: s.inkMute),
+                helperStyle: UepText.serif(size: 12, color: s.inkMute),
                 border: const OutlineInputBorder(),
               ),
             )
@@ -130,10 +130,10 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             contentPadding: EdgeInsets.zero,
             dense: true,
             title: Text('把這間房現在的成員加為板的協作者',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+                style: UepText.sans(size: 13.5, color: s.ink)),
             subtitle: Text('只加現在在房裡的人',
                 style: UepText.serif(
-                    size: 11.5, color: s.inkMute, height: 1.4)),
+                    size: 12.5, color: s.inkMute, height: 1.4)),
           ),
         ]),
       ),
@@ -189,7 +189,7 @@ class _ExistingList extends ConsumerWidget {
               child: Text(
                 '這個 Hub 還沒有 Board Library。',
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 12, color: s.inkMute),
+                style: UepText.serif(size: 13, color: s.inkMute),
               ),
             )
           : ErrorState(
@@ -205,7 +205,7 @@ class _ExistingList extends ConsumerWidget {
             child: Text(
               '沒有你能掛的板。',
               textAlign: TextAlign.center,
-              style: UepText.serif(size: 12, color: s.inkMute),
+              style: UepText.serif(size: 13, color: s.inkMute),
             ),
           );
         }
@@ -256,7 +256,7 @@ class _BoardRow extends StatelessWidget {
               board.name.isEmpty ? '（未命名）' : board.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
           // 已經掛了幾間房——**這是掛既有板時唯一要判斷的事**：
@@ -298,10 +298,9 @@ class _Choice extends StatelessWidget {
         child: Text(
           label,
           style: UepText.mono(
-            size: 10,
+            size: 10.5,
             letterSpacing: 1.2,
-            color: active ? UepColors.goldInkOn : s.inkSoft,
-          ),
+            color: active ? UepColors.goldInkOn : s.inkSoft),
         ),
       ),
     );

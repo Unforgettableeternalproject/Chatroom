@@ -57,12 +57,12 @@ class PendingInvitesBanner extends ConsumerWidget {
         for (final a in invites) ...[
           Text(a.roomName ?? '（未命名聊天室）',
               style: UepText.sans(
-                  size: 13, weight: FontWeight.w600, color: s.inkTitle)),
+                  size: 14, weight: FontWeight.w600, color: s.inkTitle)),
           if (a.note.isNotEmpty) ...[
             const SizedBox(height: 3),
             Text(a.note,
                 style:
-                    UepText.serif(size: 12, color: s.inkSoft, height: 1.6)),
+                    UepText.serif(size: 13, color: s.inkSoft, height: 1.6)),
           ],
           const SizedBox(height: 8),
           Row(children: [

@@ -128,7 +128,7 @@ class OpsStatusBar extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
               child: Text(line,
-                  style: UepText.serif(size: 12.5, color: s.ink, height: 1.5)),
+                  style: UepText.serif(size: 13.5, color: s.ink, height: 1.5)),
             ),
         ],
       ),
@@ -170,7 +170,7 @@ class _RunnerSection extends StatelessWidget {
             Expanded(
               child: Text(runner.displayName,
                   style: UepText.sans(
-                      size: 14, weight: FontWeight.w600, color: s.inkTitle)),
+                      size: 15, weight: FontWeight.w600, color: s.inkTitle)),
             ),
             _StatusPill(runner: runner),
           ]),
@@ -187,7 +187,7 @@ class _RunnerSection extends StatelessWidget {
               if (dash.lastRestartReason.isNotEmpty)
                 '上次重啟：${_restartReason(dash.lastRestartReason)}',
             ].join(' · '),
-            style: UepText.mono(size: 9.5, color: s.inkMute),
+            style: UepText.mono(size: 10.5, color: s.inkMute),
           ),
           if (onCommand != null) ...[
             const SizedBox(height: 12),
@@ -224,21 +224,21 @@ class _RunnerSection extends StatelessWidget {
               Expanded(
                 child: Text(progress,
                     style:
-                        UepText.serif(size: 11.5, color: s.ink, height: 1.5)),
+                        UepText.serif(size: 12.5, color: s.ink, height: 1.5)),
               ),
             ]),
           ],
           const SizedBox(height: 16),
           _UsageRow(usage: dash.usage),
           const SizedBox(height: 16),
-          MonoLabel('REPOS', letterSpacing: 1.6),
+          MonoLabel('專案', letterSpacing: 1.6),
           const SizedBox(height: 8),
           if (!dash.reported)
             Text('這台執行器還沒有回報過儀表板。',
-                style: UepText.mono(size: 10, color: s.inkMute))
+                style: UepText.mono(size: 10.5, color: s.inkMute))
           else if (dash.repos.isEmpty)
             Text('這台執行器沒有宣告任何 repo。',
-                style: UepText.mono(size: 10, color: s.inkMute))
+                style: UepText.mono(size: 10.5, color: s.inkMute))
           else
             for (final repo in dash.repos)
               _RepoTile(
@@ -260,12 +260,12 @@ class _StatusPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     final (label, color) = switch (runner.status) {
-      'online' => ('ONLINE', UepColors.gold),
-      'paused' => ('PAUSED', s.inkSoft),
-      'limited' => ('LIMITED', UepColors.error),
+      'online' => ('上線', UepColors.gold),
+      'paused' => ('暫停', s.inkSoft),
+      'limited' => ('受限', UepColors.error),
       // 重啟中既不是在線也不是掉線：用 info 這一色，免得與「它掛了」同貌
-      'restarting' => ('RESTARTING', UepColors.info),
-      _ => ('OFFLINE', s.inkMute),
+      'restarting' => ('重啟中', UepColors.info),
+      _ => ('離線', s.inkMute),
     };
     final left = runner.isLimited ? runner.remainingLimit() : null;
     return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -278,12 +278,12 @@ class _StatusPill extends StatelessWidget {
         const SizedBox(width: 8),
         // 算不出來時說「退避時間未知」，**不編一個倒數**
         Text(left == null ? '退避時間未知' : '約 ${_short(left)}後重試',
-            style: UepText.mono(size: 9.5, color: s.inkSoft)),
+            style: UepText.mono(size: 10.5, color: s.inkSoft)),
       ],
       if (runner.isOffline) ...[
         const SizedBox(width: 8),
         Text('離線 ${relativeTime(runner.lastSeenAt)}',
-            style: UepText.mono(size: 9.5, color: s.inkMute)),
+            style: UepText.mono(size: 10.5, color: s.inkMute)),
       ],
     ]);
   }
@@ -299,7 +299,7 @@ class _UsageRow extends StatelessWidget {
     final s = context.uep;
     if (!usage.reported) {
       return Text('執行器尚未回報用量。',
-          style: UepText.mono(size: 10, color: s.inkMute));
+          style: UepText.mono(size: 10.5, color: s.inkMute));
     }
     final hours = usage.windowHours == 0
         ? ''
@@ -307,12 +307,12 @@ class _UsageRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('USAGE', letterSpacing: 1.6),
+        MonoLabel('用量', letterSpacing: 1.6),
         const SizedBox(height: 6),
         Text(
           '$hours ${usage.tokens} tokens · '
           '\$${usage.costUsd.toStringAsFixed(2)}',
-          style: UepText.sans(size: 12.5, color: s.ink),
+          style: UepText.sans(size: 13.5, color: s.ink),
         ),
         const SizedBox(height: 3),
         Text(
@@ -325,12 +325,12 @@ class _UsageRow extends StatelessWidget {
                   : '軟上限 ${usage.softCapTokens} tokens'
                       '${usage.remainingTokens == null ? '' : '，剩 ${usage.remainingTokens}'}',
           style: UepText.mono(
-              size: 9.5,
+              size: 10.5,
               color: usage.overSoftCap ? UepColors.error : s.inkMute),
         ),
         if (usage.overSoftCap)
           Text('已達軟上限，這台暫時不再領新單。',
-              style: UepText.mono(size: 9.5, color: UepColors.error)),
+              style: UepText.mono(size: 10.5, color: UepColors.error)),
       ],
     );
   }
@@ -367,7 +367,7 @@ class _RepoTile extends StatelessWidget {
             Expanded(
               child: Text(repo.key,
                   style: UepText.sans(
-                      size: 12.5, weight: FontWeight.w600, color: s.ink)),
+                      size: 13.5, weight: FontWeight.w600, color: s.ink)),
             ),
             if (canPush)
               _SmallButton(
@@ -378,22 +378,22 @@ class _RepoTile extends StatelessWidget {
           const SizedBox(height: 3),
           if (repo.hasError)
             Text(repo.error,
-                style: UepText.mono(size: 9.5, color: UepColors.error))
+                style: UepText.mono(size: 10.5, color: UepColors.error))
           else ...[
             Row(children: [
               Text(repo.branch.isEmpty ? '（無分支）' : repo.branch,
-                  style: UepText.mono(size: 9.5, color: s.inkSoft)),
+                  style: UepText.mono(size: 10.5, color: s.inkSoft)),
               const SizedBox(width: 10),
               Text(
                 hasCommits ? '未推送 ${repo.unpushedCount} 顆' : '沒有未推送的 commit',
                 style: UepText.mono(
-                    size: 9.5,
+                    size: 10.5,
                     color: hasCommits ? UepColors.gold : s.inkMute),
               ),
               if (repo.dirty) ...[
                 const SizedBox(width: 10),
                 Text('工作樹有未提交的變更',
-                    style: UepText.mono(size: 9.5, color: UepColors.error)),
+                    style: UepText.mono(size: 10.5, color: UepColors.error)),
               ],
             ]),
             for (final c in repo.unpushed)
@@ -401,24 +401,24 @@ class _RepoTile extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4, left: 2),
                 child: Row(children: [
                   Text(c.shortSha,
-                      style: UepText.mono(size: 9.5, color: UepColors.gold)),
+                      style: UepText.mono(size: 10.5, color: UepColors.gold)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(c.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: UepText.serif(size: 11.5, color: s.inkSoft)),
+                        style: UepText.serif(size: 12.5, color: s.inkSoft)),
                   ),
                   const SizedBox(width: 8),
                   Text(relativeTime(c.at),
-                      style: UepText.mono(size: 9, color: s.inkMute)),
+                      style: UepText.mono(size: 10, color: s.inkMute)),
                 ]),
               ),
             if (blocked != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(blocked,
-                    style: UepText.mono(size: 9.5, color: s.inkMute)),
+                    style: UepText.mono(size: 10.5, color: s.inkMute)),
               ),
           ],
         ],
@@ -446,11 +446,11 @@ class _QueueSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('QUEUE', letterSpacing: 1.6),
+        MonoLabel('佇列', letterSpacing: 1.6),
         const SizedBox(height: 8),
         if (running.isEmpty && queued.isEmpty)
           Text('目前沒有進行中或排隊中的派工。',
-              style: UepText.mono(size: 10, color: s.inkMute)),
+              style: UepText.mono(size: 10.5, color: s.inkMute)),
         for (final run in running)
           _RunTile(run: run, view: views[run.id], onCancel: onCancel),
         for (var i = 0; i < queued.length; i++)
@@ -507,7 +507,7 @@ class _RunTile extends StatelessWidget {
               Row(children: [
                 Text(run.status,
                     style: UepText.mono(
-                        size: 9.5,
+                        size: 10.5,
                         letterSpacing: 1.4,
                         color: run.isQueued ? s.inkMute : UepColors.gold)),
                 const SizedBox(width: 8),
@@ -515,17 +515,17 @@ class _RunTile extends StatelessWidget {
                   child: Text(run.id,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: UepText.mono(size: 9.5, color: s.inkSoft)),
+                      style: UepText.mono(size: 10.5, color: s.inkSoft)),
                 ),
               ]),
               const SizedBox(height: 3),
               Text(meta.join(' · '),
-                  style: UepText.mono(size: 9, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
               // 🔴 running 的取消**不改狀態**（§4.2）：進程還在跑，這裡說
               // 「已取消」的話，畫面會與機器上正在寫檔的那個 agent 對不上
               if (run.cancelRequested && !run.isQueued)
                 Text('已要求取消，等執行器收到後停止',
-                    style: UepText.mono(size: 9, color: UepColors.error)),
+                    style: UepText.mono(size: 10, color: UepColors.error)),
             ],
           ),
         ),
@@ -560,14 +560,14 @@ class _FinishedSection extends StatelessWidget {
                   '${run.status} · ${run.kind}'
                   '${run.ref.isEmpty ? '' : ' · ${run.ref}'}'
                   ' · ${relativeTime(run.endedAt ?? run.updatedAt)}',
-                  style: UepText.mono(size: 9.5, color: s.inkSoft),
+                  style: UepText.mono(size: 10.5, color: s.inkSoft),
                 ),
                 if (run.result.isNotEmpty)
                   Text(run.result,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: UepText.serif(
-                          size: 11.5, color: s.inkMute, height: 1.5)),
+                          size: 12.5, color: s.inkMute, height: 1.5)),
               ],
             ),
           ),
@@ -600,7 +600,7 @@ class _SmallButton extends StatelessWidget {
         ),
         child: Text(label,
             style: UepText.mono(
-                size: 10,
+                size: 10.5,
                 letterSpacing: 1.2,
                 color: enabled ? s.ink : s.inkMute)),
       ),
@@ -621,12 +621,12 @@ class _Empty extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(title, style: UepText.sans(size: 14, color: s.inkTitle)),
+          Text(title, style: UepText.sans(size: 15, color: s.inkTitle)),
           const SizedBox(height: 8),
           Text(subtitle,
               textAlign: TextAlign.center,
               style:
-                  UepText.serif(size: 12.5, color: s.inkMute, height: 1.6)),
+                  UepText.serif(size: 13.5, color: s.inkMute, height: 1.6)),
         ]),
       ),
     );

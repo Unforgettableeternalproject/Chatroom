@@ -241,10 +241,19 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
   Widget build(BuildContext context) {
     final themeMode =
         ref.watch(appConfigProvider.select((c) => c.themeMode));
+    final scale = fontScaleFactor(
+        ref.watch(appConfigProvider.select((c) => c.fontScale)));
     return MaterialApp.router(
       title: 'Chatroom',
       debugShowCheckedModeBanner: false,
       routerConfig: _router,
+      // 字級三檔：整體縮放放在這裡，不改各畫面的硬編碼字級。系統本身的
+      // 字級設定不再疊加進來（textScaler 被整個換掉），避免兩層放大相乘。
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(scale)),
+        child: child ?? const SizedBox.shrink(),
+      ),
       theme: buildUepTheme(Brightness.light),
       darkTheme: buildUepTheme(Brightness.dark),
       themeMode: themeMode == ThemeModePref.dark

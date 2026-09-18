@@ -166,7 +166,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         Row(children: [
           Expanded(
             child: Text(pad.title,
-                style: UepText.display(size: 22, color: s.inkTitle)),
+                style: UepText.pageTitle(color: s.inkTitle)),
           ),
           MonoLabel('${pad.blocks.length} 段', size: 9, letterSpacing: 1.2),
           // 管理這塊板的自訂標籤。**只在標籤功能真的在時出現**——
@@ -224,7 +224,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
               child: Text(
                 '這個標籤底下還沒有段落。',
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 12, color: s.inkMute),
+                style: UepText.serif(size: 13, color: s.inkMute),
               ),
             ),
         ],
@@ -245,7 +245,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 initialTag: _filter,
               )
             : Text('你在這塊板上是唯讀的，只能看。',
-                style: UepText.serif(size: 12, color: s.inkMute)),
+                style: UepText.serif(size: 13, color: s.inkMute)),
       );
 
   Widget _blockCard(Scratchpad pad, ScratchpadBlock b) => _BlockCard(
@@ -662,13 +662,13 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text('這塊板的標籤',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
             '段落一次只標一個。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
           ),
           const SizedBox(height: 12),
           Wrap(spacing: 6, runSpacing: 6, children: [
@@ -683,7 +683,7 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(tagLabel(t),
                       style: UepText.mono(
-                          size: 9, letterSpacing: 1.0, color: tagColor(t))),
+                          size: 10, letterSpacing: 1.0, color: tagColor(t))),
                   // 預設標籤不畫刪除鈕——畫一顆按下去必定拿 422 的按鈕，
                   // 比沒有那顆按鈕更難懂（同主持人開關那條）
                   if (_removable(t))
@@ -706,10 +706,10 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
             Expanded(
               child: TextField(
                 controller: _input,
-                style: UepText.sans(size: 13, color: s.ink),
+                style: UepText.sans(size: 14, color: s.ink),
                 decoration: InputDecoration(
                   hintText: '新增一個標籤…',
-                  hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                  hintStyle: UepText.serif(size: 13, color: s.inkMute),
                   border: const OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -722,7 +722,7 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!,
-                style: UepText.sans(size: 12, color: UepColors.error,
+                style: UepText.sans(size: 13, color: UepColors.error,
                     height: 1.45)),
           ],
         ]),
@@ -793,10 +793,9 @@ class _TagFilterBar extends StatelessWidget {
           child: Text(
             label,
             style: UepText.mono(
-              size: 9,
+              size: 10,
               letterSpacing: 1.0,
-              color: on ? color : s.inkMute,
-            ),
+              color: on ? color : s.inkMute),
           ),
         ),
       );
@@ -905,7 +904,7 @@ class _BlockCardState extends State<_BlockCard> {
           Expanded(
             child: Text(
               b.authorName.isEmpty ? '（不知道是誰寫的）' : b.authorName,
-              style: UepText.mono(size: 9, letterSpacing: 1.1,
+              style: UepText.mono(size: 10, letterSpacing: 1.1,
                   color: s.inkMute),
             ),
           ),
@@ -935,7 +934,7 @@ class _BlockCardState extends State<_BlockCard> {
             controller: _text,
             maxLines: null,
             autofocus: true,
-            style: UepText.sans(size: 13, color: s.ink, height: 1.5),
+            style: UepText.sans(size: 14, color: s.ink, height: 1.5),
             decoration: const InputDecoration(
                 border: OutlineInputBorder(), isDense: true),
           ),
@@ -960,7 +959,7 @@ class _BlockCardState extends State<_BlockCard> {
         ] else
           SelectableText(
             b.content,
-            style: UepText.sans(size: 13, color: s.ink, height: 1.55),
+            style: UepText.sans(size: 14, color: s.ink, height: 1.55),
           ),
         if (b.notes.isNotEmpty || widget.onNote != null) ...[
           const SizedBox(height: 8),
@@ -975,7 +974,7 @@ class _BlockCardState extends State<_BlockCard> {
               Text(
                 open.isEmpty ? '註解 ${b.notes.length}' : '註解 ${open.length} 則未處理',
                 style: UepText.mono(
-                    size: 9,
+                    size: 10,
                     letterSpacing: 1.1,
                     color: open.isEmpty ? s.inkMute : UepColors.gold),
               ),
@@ -992,17 +991,16 @@ class _BlockCardState extends State<_BlockCard> {
                       child: Text.rich(TextSpan(children: [
                         TextSpan(
                           text: '${n.authorName}：',
-                          style: UepText.mono(size: 9, color: s.inkMute),
+                          style: UepText.mono(size: 10, color: s.inkMute),
                         ),
                         TextSpan(
                           text: n.content,
                           // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
                           // 起來的話，人會找不到自己剛剛處理的是哪一則
                           style: UepText.serif(
-                            size: 12,
+                            size: 13,
                             height: 1.45,
-                            color: n.resolved ? s.inkMute : s.inkSoft,
-                          ).copyWith(
+                            color: n.resolved ? s.inkMute : s.inkSoft).copyWith(
                             decoration: n.resolved
                                 ? TextDecoration.lineThrough
                                 : null,
@@ -1034,7 +1032,7 @@ class _BlockCardState extends State<_BlockCard> {
                     child: TextField(
                       controller: _note,
                       autofocus: true,
-                      style: UepText.sans(size: 12, color: s.ink),
+                      style: UepText.sans(size: 13, color: s.ink),
                       decoration: const InputDecoration(
                           isDense: true, border: OutlineInputBorder()),
                     ),
@@ -1088,13 +1086,13 @@ class _ConflictDialog extends StatelessWidget {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text('這一段在你打字的時候被改過了',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
             '兩份都在下面，不會自動合併。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.45),
           ),
           const SizedBox(height: 12),
           _Side(label: '你剛打的', text: mine, accent: UepColors.gold),
@@ -1152,7 +1150,7 @@ class _Side extends StatelessWidget {
           child: SingleChildScrollView(
             child: SelectableText(
               text.isEmpty ? '（空的）' : text,
-              style: UepText.sans(size: 12, color: s.ink, height: 1.5),
+              style: UepText.sans(size: 13, color: s.ink, height: 1.5),
             ),
           ),
         ),
@@ -1209,10 +1207,10 @@ class _AddBlockState extends State<_AddBlock> {
       TextField(
         controller: _c,
         maxLines: null,
-        style: UepText.sans(size: 13, color: s.ink, height: 1.5),
+        style: UepText.sans(size: 14, color: s.ink, height: 1.5),
         decoration: InputDecoration(
           hintText: '再加一段…',
-          hintStyle: UepText.serif(size: 12, color: s.inkMute),
+          hintStyle: UepText.serif(size: 13, color: s.inkMute),
           border: const OutlineInputBorder(),
           isDense: true,
         ),
@@ -1266,7 +1264,7 @@ class _Tiny extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         child: Text(label,
             style: UepText.mono(
-                size: 9,
+                size: 10,
                 letterSpacing: 1.1,
                 color: onTap == null ? s.inkMute : s.inkSoft)),
       ),
@@ -1295,7 +1293,7 @@ class ScratchpadPage extends StatelessWidget {
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bg,
-        title: Text('想法板', style: UepText.display(size: 20, color: s.inkTitle)),
+        title: Text('想法板', style: UepText.sectionTitle(color: s.inkTitle)),
       ),
       body: ScratchpadScreen(boardId: boardId, padId: padId),
     );
@@ -1363,11 +1361,11 @@ class RoomScratchpadPage extends ConsumerWidget {
               appBar: AppBar(
                 backgroundColor: s.bg,
                 title: Text('想法板',
-                    style: UepText.display(size: 20, color: s.inkTitle)),
+                    style: UepText.sectionTitle(color: s.inkTitle)),
               ),
               body: Center(
                 child: Text('這個聊天室還沒有掛上任何板。',
-                    style: UepText.serif(size: 13, color: s.inkMute)),
+                    style: UepText.serif(size: 14, color: s.inkMute)),
               ),
             )
           : ScratchpadPage(boardId: snap.boardId, padId: padId),
@@ -1432,7 +1430,7 @@ class ScratchpadSection extends ConsumerWidget {
         data: (pads) => pads.isEmpty
             ? Text(
                 '還沒有想法板。',
-                style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
+                style: UepText.serif(size: 13, color: s.inkMute, height: 1.45),
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1493,7 +1491,7 @@ class _PadRow extends StatelessWidget {
               pad.title.isEmpty ? '（未命名）' : pad.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
           // 未處理的註解數。**這是唯一能讓人知道「有人對你的段落提了意見」
@@ -1532,16 +1530,16 @@ class _NewPadDialogState extends State<_NewPadDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title: Text('開一份想法板',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
         child: TextField(
           controller: _c,
           autofocus: true,
-          style: UepText.sans(size: 13, color: s.ink),
+          style: UepText.sans(size: 14, color: s.ink),
           decoration: InputDecoration(
             labelText: '叫什麼',
-            helperStyle: UepText.serif(size: 11, color: s.inkMute),
+            helperStyle: UepText.serif(size: 12, color: s.inkMute),
             border: const OutlineInputBorder(),
           ),
           onChanged: (_) => setState(() {}),

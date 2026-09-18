@@ -163,7 +163,7 @@ class _AttachmentChip extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: UepText.sans(
-                    size: 12, weight: FontWeight.w600, color: s.inkTitle),
+                    size: 13, weight: FontWeight.w600, color: s.inkTitle),
               ),
               const SizedBox(height: 2),
               Text(
@@ -171,7 +171,7 @@ class _AttachmentChip extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: UepText.mono(
-                    size: 8.5,
+                    size: 10,
                     color: failed ? UepColors.error : s.inkMute,
                     letterSpacing: 1.0),
               ),

@@ -76,7 +76,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
     title: '使用說明',
     sections: [
       HelpSection(
-        label: 'CHAT',
+        label: '聊天',
         title: '聊天室',
         icon: Icons.forum_outlined,
         items: [
@@ -100,7 +100,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'BOARD',
+        label: '任務板',
         title: '任務板',
         icon: Icons.dashboard_outlined,
         items: [
@@ -116,7 +116,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'DISPATCH',
+        label: '派工',
         title: '派工',
         icon: Icons.play_circle_outline,
         items: [
@@ -129,7 +129,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'NOTIFY',
+        label: '通知',
         title: '通知',
         icon: Icons.notifications_outlined,
         items: [
@@ -142,7 +142,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
     title: '設定說明',
     sections: [
       HelpSection(
-        label: 'INVITE',
+        label: '邀請',
         title: '邀請與 token',
         icon: Icons.vpn_key_outlined,
         items: [
@@ -157,7 +157,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'VERSION',
+        label: '版本',
         title: '版本',
         icon: Icons.verified_outlined,
         items: [
@@ -173,7 +173,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'NOTIFY',
+        label: '通知',
         title: '通知',
         icon: Icons.notifications_outlined,
         items: [
@@ -186,7 +186,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
     title: '主控台說明',
     sections: [
       HelpSection(
-        label: 'HOST',
+        label: '主機',
         title: '這台機器',
         icon: Icons.dns_outlined,
         items: [
@@ -201,7 +201,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'TUNNEL',
+        label: '通道',
         title: '隧道、備份與 token',
         icon: Icons.cloud_outlined,
         items: [
@@ -218,7 +218,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         ],
       ),
       HelpSection(
-        label: 'VERSION',
+        label: '版本',
         title: '版本',
         icon: Icons.verified_outlined,
         items: [
@@ -286,7 +286,7 @@ class _HelpScreenState extends State<HelpScreen> {
                 onPressed: () => context.pop(),
               )
             : null,
-        title: Text('說明', style: UepText.display(size: 22, color: s.inkTitle)),
+        title: Text('說明', style: UepText.pageTitle(color: s.inkTitle)),
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -295,10 +295,10 @@ class _HelpScreenState extends State<HelpScreen> {
           final content = ListView(
             padding: const EdgeInsets.all(32),
             children: [
-              MonoLabel('HELP'),
+              MonoLabel('說明'),
               const SizedBox(height: 6),
               Text(doc.title,
-                  style: UepText.display(size: 28, color: s.inkTitle)),
+                  style: UepText.pageTitle(color: s.inkTitle)),
               const SizedBox(height: 22),
               if (!wide) ...[
                 _NavChips(doc: doc, onTap: _jumpTo),
@@ -356,7 +356,7 @@ class _NavColumn extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MonoLabel('SECTIONS'),
+          MonoLabel('分節'),
           const SizedBox(height: 10),
           for (var i = 0; i < doc.sections.length; i++)
             InkWell(
@@ -369,7 +369,7 @@ class _NavColumn extends StatelessWidget {
                   Flexible(
                     child: Text(
                       doc.sections[i].title,
-                      style: UepText.sans(size: 13, color: s.inkSoft),
+                      style: UepText.sans(size: 14, color: s.inkSoft),
                     ),
                   ),
                 ]),
@@ -409,7 +409,7 @@ class _NavChips extends StatelessWidget {
                 Icon(doc.sections[i].icon, size: 13, color: s.inkMute),
                 const SizedBox(width: 6),
                 Text(doc.sections[i].title,
-                    style: UepText.sans(size: 12.5, color: s.inkSoft)),
+                    style: UepText.sans(size: 13.5, color: s.inkSoft)),
               ]),
             ),
           ),
@@ -440,9 +440,12 @@ class _SectionCard extends StatelessWidget {
             Icon(section.icon, size: 16, color: s.inkSoft),
             const SizedBox(width: 8),
             Text(section.title,
-                style: UepText.display(size: 19, color: s.inkTitle)),
-            const SizedBox(width: 10),
-            MonoLabel(section.label, color: s.inkMute.withValues(alpha: .7)),
+                style: UepText.sectionTitle(color: s.inkTitle)),
+            // 小標中文化後有幾節的 label 與標題同字，重複列出只是雜訊
+            if (section.label != section.title) ...[
+              const SizedBox(width: 10),
+              MonoLabel(section.label, color: s.inkMute.withValues(alpha: .7)),
+            ],
           ]),
           const SizedBox(height: 10),
           for (final item in section.items)
@@ -464,7 +467,7 @@ class _ItemRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final body = UepText.serif(size: 13.5, color: s.ink, height: 1.75);
+    final body = UepText.serif(size: 14.5, color: s.ink, height: 1.75);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -510,7 +513,7 @@ class _CodeChip extends StatelessWidget {
         border: Border.all(color: s.line),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(text, style: UepText.code(size: 11.5, color: s.ink, height: 1.3)),
+      child: Text(text, style: UepText.code(size: 12, color: s.ink, height: 1.3)),
     );
   }
 }

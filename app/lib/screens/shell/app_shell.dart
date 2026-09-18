@@ -166,10 +166,10 @@ class _AppShellState extends ConsumerState<AppShell>
       context: context,
       builder: (context) => AlertDialog(
         title: Text('初始設定還沒完成',
-            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+            style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
           '$gap到設定頁填好伺服器位址與 API token。',
-          style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
+          style: UepText.serif(size: 14.5, color: context.uep.inkSoft),
         ),
         actions: [
           UepButton(
@@ -262,7 +262,7 @@ class _AppShellState extends ConsumerState<AppShell>
             const SizedBox(width: 9),
             Text('CHATROOM',
                 style: UepText.mono(
-                    size: 11, color: s.inkSoft, letterSpacing: 2.0)),
+                    size: 11.5, color: s.inkSoft, letterSpacing: 2.0)),
             const Spacer(),
             const ConnectionPill(),
             const SizedBox(width: 12),
@@ -378,11 +378,10 @@ class _LeftPaneState extends State<_LeftPane> {
               child: Text(
                 label,
                 style: UepText.mono(
-                  size: 9.5,
+                  size: 10.5,
                   letterSpacing: 2.0,
                   color: active ? s.ink : s.inkMute,
-                  weight: active ? FontWeight.w500 : FontWeight.w400,
-                ),
+                  weight: active ? FontWeight.w500 : FontWeight.w400),
               ),
             ),
           ),
@@ -395,8 +394,8 @@ class _LeftPaneState extends State<_LeftPane> {
           border: Border(bottom: BorderSide(color: s.line)),
         ),
         child: Row(children: [
-          tab('ROOMS', !_boards, () => setState(() => _boards = false)),
-          tab('BOARDS', _boards, () => setState(() => _boards = true)),
+          tab('聊天室', !_boards, () => setState(() => _boards = false)),
+          tab('任務板', _boards, () => setState(() => _boards = true)),
         ]),
       ),
       Expanded(
@@ -460,12 +459,11 @@ class NoRoomSelected extends StatelessWidget {
           decoration: BoxDecoration(
               border: Border.all(color: UepColors.gold.withValues(alpha: .5))),
           child: Text('U',
-              style: UepText.display(
-                  size: 24, weight: FontWeight.w600, color: UepColors.gold)),
+              style: UepText.pageTitle(color: UepColors.gold)),
         ),
         const SizedBox(height: 18),
         Text('選擇一個聊天室開始',
-            style: UepText.serif(size: 14, color: s.inkSoft)),
+            style: UepText.serif(size: 15, color: s.inkSoft)),
       ]),
     );
   }

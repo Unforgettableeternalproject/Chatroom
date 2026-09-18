@@ -72,20 +72,20 @@ class _RenameDialogState extends State<_RenameDialog> {
     return AlertDialog(
       backgroundColor: s.bgCard,
       title:
-          Text(widget.title, style: UepText.display(size: 20, color: s.inkTitle)),
+          Text(widget.title, style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
             child: Text('改名會在房裡留下一則系統訊息。',
-                style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
+                style: UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _text,
             autofocus: true,
-            style: UepText.sans(size: 13, color: s.ink),
+            style: UepText.sans(size: 14, color: s.ink),
             onChanged: (_) {
               if (_error != null) setState(() => _error = null);
             },
@@ -94,7 +94,7 @@ class _RenameDialogState extends State<_RenameDialog> {
               isDense: true,
               border: const OutlineInputBorder(),
               hintText: widget.hint,
-              hintStyle: UepText.sans(size: 12.5, color: s.inkMute),
+              hintStyle: UepText.sans(size: 13.5, color: s.inkMute),
             ),
           ),
           if (_error != null) ...[
@@ -102,7 +102,7 @@ class _RenameDialogState extends State<_RenameDialog> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(_error!,
-                  style: UepText.serif(size: 12.5, color: UepColors.errorText)),
+                  style: UepText.serif(size: 13.5, color: UepColors.errorText)),
             ),
           ],
         ]),

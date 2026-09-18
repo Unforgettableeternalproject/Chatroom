@@ -106,7 +106,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                   const SizedBox(height: 18),
                   Text(task.description,
                       style: UepText.serif(
-                          size: 13, color: s.inkSoft, height: 1.95)),
+                          size: 14, color: s.inkSoft, height: 1.95)),
                 ],
                 const SizedBox(height: 18),
                 _meta(context, ref, requests),
@@ -164,10 +164,10 @@ class BoardTaskDrawer extends ConsumerWidget {
       child: Row(children: [
         Expanded(
           child: Text(
-            checklistTitle.isEmpty ? 'TASK' : 'TASK · $checklistTitle',
+            checklistTitle.isEmpty ? '任務' : '任務 · $checklistTitle',
             overflow: TextOverflow.ellipsis,
             style:
-                UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.8),
+                UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.8),
           ),
         ),
         if (!readOnly) ...[
@@ -177,7 +177,7 @@ class BoardTaskDrawer extends ConsumerWidget {
               padding: const EdgeInsets.symmetric(horizontal: 6),
               child: Text('編輯',
                   style: UepText.mono(
-                      size: 9, color: s.inkSoft, letterSpacing: 1.4)),
+                      size: 10, color: s.inkSoft, letterSpacing: 1.4)),
             ),
           ),
           const SizedBox(width: 4),
@@ -187,7 +187,7 @@ class BoardTaskDrawer extends ConsumerWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Text('✕',
-                style: UepText.mono(size: 11, color: s.inkSoft)),
+                style: UepText.mono(size: 11.5, color: s.inkSoft)),
           ),
         ),
       ]),
@@ -214,10 +214,7 @@ class BoardTaskDrawer extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(task.title,
-                    style: UepText.display(
-                        size: 21,
-                        weight: FontWeight.w600,
-                        color: s.inkTitle,
+                    style: UepText.pageTitle(color: s.inkTitle,
                         height: 1.35)),
                 const SizedBox(height: 9),
                 Row(children: [
@@ -225,7 +222,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                   if (task.priority == 'high') ...[
                     const SizedBox(width: 8),
                     Text('▲ 高',
-                        style: UepText.mono(size: 8.5, color: s.inkTitle)),
+                        style: UepText.mono(size: 10, color: s.inkTitle)),
                   ],
                 ]),
               ],
@@ -349,7 +346,7 @@ class BoardTaskDrawer extends ConsumerWidget {
       children: [
         Text('長出這張卡的訊息',
             style:
-                UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.6)),
+                UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.6)),
         const SizedBox(height: 8),
         InkWell(
           onTap: () => context.go('/rooms/$rid?focusSeq=$seq'),
@@ -381,7 +378,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                                 child: Text(message.senderName ?? '',
                                     overflow: TextOverflow.ellipsis,
                                     style: UepText.sans(
-                                        size: 12,
+                                        size: 13,
                                         weight: FontWeight.w600,
                                         color: s.inkTitle)),
                               ),
@@ -390,7 +387,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                             const Spacer(),
                             Text('#$seq',
                                 style: UepText.mono(
-                                    size: 8.5, color: s.inkMute)),
+                                    size: 10, color: s.inkMute)),
                           ],
                         ),
                         if (message != null) ...[
@@ -400,18 +397,18 @@ class BoardTaskDrawer extends ConsumerWidget {
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
                             style: UepText.serif(
-                                size: 12, color: s.inkSoft, height: 1.75),
+                                size: 13, color: s.inkSoft, height: 1.75),
                           ),
                         ] else ...[
                           const SizedBox(height: 6),
                           Text('這則訊息還沒載入到手上。',
                               style: UepText.serif(
-                                  size: 12, color: s.inkMute)),
+                                  size: 13, color: s.inkMute)),
                         ],
                         const SizedBox(height: 6),
                         Text('↩ 跳回聊天室',
                             style: UepText.mono(
-                                size: 8.5,
+                                size: 10,
                                 color: UepColors.gold,
                                 letterSpacing: 1.2)),
                       ],
@@ -524,7 +521,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       context: context,
       builder: (ctx) => SimpleDialog(
         title: Text('指到哪一間聊天室',
-            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+            style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final r in rooms)
             SimpleDialogOption(
@@ -532,14 +529,14 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
               child: Row(children: [
                 Expanded(
                   child: Text(r.name.isEmpty ? r.id : r.name,
-                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                      style: UepText.sans(size: 13.5, color: ctx.uep.ink)),
                 ),
                 // 封存房也列出來，但要看得出來：那間房裡的人多半已經散了，
                 // 指過去的卡不會有人接。藏掉的話，多房時使用者會覺得
                 // 「少了一間」而去找它
                 if (r.status == 'archived')
                   Text('已封存',
-                      style: UepText.mono(size: 8.5, color: ctx.uep.inkMute)),
+                      style: UepText.mono(size: 10, color: ctx.uep.inkMute)),
               ]),
             ),
         ],
@@ -582,7 +579,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       context: context,
       builder: (ctx) => SimpleDialog(
         title: Text('請誰接手這張卡',
-            style: UepText.display(size: 17, color: ctx.uep.inkTitle)),
+            style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final m in members)
             SimpleDialogOption(
@@ -592,7 +589,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(m.displayName,
-                      style: UepText.sans(size: 12.5, color: ctx.uep.ink)),
+                      style: UepText.sans(size: 13.5, color: ctx.uep.ink)),
                 ),
               ]),
             ),
@@ -600,7 +597,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
               child: Text('這間房裡沒有其他人。',
-                  style: UepText.serif(size: 12, color: ctx.uep.inkMute)),
+                  style: UepText.serif(size: 13, color: ctx.uep.inkMute)),
             ),
         ],
       ),
@@ -791,7 +788,7 @@ extension on _TaskActionBarState {
         height: 38,
         child: Text(a.label,
             style: UepText.sans(
-                size: 12.5, color: a.danger ? UepColors.error : s.ink)),
+                size: 13.5, color: a.danger ? UepColors.error : s.ink)),
       ));
     }
 
@@ -814,7 +811,7 @@ extension on _TaskActionBarState {
           boardId: widget.boardId,
         ),
         height: 38,
-        child: Text('派工', style: UepText.sans(size: 12.5, color: s.ink)),
+        child: Text('派工', style: UepText.sans(size: 13.5, color: s.ink)),
       ));
     }
 
@@ -840,11 +837,11 @@ extension on _TaskActionBarState {
           children: [
             Text(assigned ? '改請別人' : '請人接手',
                 style: UepText.sans(
-                    size: 12.5, color: noRoomToAssign ? s.inkMute : s.ink)),
+                    size: 13.5, color: noRoomToAssign ? s.inkMute : s.ink)),
             // 停用要說出理由，而且理由要能導向下一步
             if (noRoomToAssign)
               Text('掛到房間後才能指派',
-                  style: UepText.mono(size: 8.5, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
           ],
         ),
       ));
@@ -858,7 +855,7 @@ extension on _TaskActionBarState {
         entries.add(PopupMenuItem<VoidCallback>(
           value: () => _clearAssignee(actions),
           height: 38,
-          child: Text('取消指派', style: UepText.sans(size: 12.5, color: s.ink)),
+          child: Text('取消指派', style: UepText.sans(size: 13.5, color: s.ink)),
         ));
       }
     }
@@ -880,7 +877,7 @@ extension on _TaskActionBarState {
           border: Border.all(color: s.hairline),
           borderRadius: BorderRadius.circular(3),
         ),
-        child: Text('⋯', style: UepText.sans(size: 14, color: s.inkSoft)),
+        child: Text('⋯', style: UepText.sans(size: 15, color: s.inkSoft)),
       ),
     );
   }
@@ -913,7 +910,7 @@ class _MetaRow extends StatelessWidget {
           width: 76,
           child: Text(label,
               style: UepText.mono(
-                  size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+                  size: 10, color: s.inkMute, letterSpacing: 1.4)),
         ),
         const SizedBox(width: 12),
         Flexible(
@@ -921,7 +918,7 @@ class _MetaRow extends StatelessWidget {
             value,
             overflow: TextOverflow.ellipsis,
             style: UepText.sans(
-                    size: 12.5,
+                    size: 13.5,
                     weight: struck ? FontWeight.w400 : FontWeight.w600,
                     color: struck ? s.inkMute : s.inkTitle)
                 .copyWith(
@@ -933,16 +930,15 @@ class _MetaRow extends StatelessWidget {
           const SizedBox(width: 8),
           Text(kind.toUpperCase(),
               style: UepText.mono(
-                size: 8,
+                size: 10,
                 letterSpacing: 1.0,
-                color: struck ? s.inkMute : kindColor(kind, context: context),
-              )),
+                color: struck ? s.inkMute : kindColor(kind, context: context))),
         ],
         const Spacer(),
         if (trailing.isNotEmpty)
           Text(trailing,
               style: UepText.mono(
-                  size: 8.5,
+                  size: 10,
                   color: trailingIsAlert ? UepColors.error : s.inkMute)),
       ]),
     );
@@ -995,7 +991,7 @@ class _StatusChip extends StatelessWidget {
         border: Border.all(color: border),
       ),
       child: Text(_labels[status] ?? status,
-          style: UepText.mono(size: 8, color: color, letterSpacing: 1.1)),
+          style: UepText.mono(size: 10, color: color, letterSpacing: 1.1)),
     );
   }
 }
@@ -1034,7 +1030,7 @@ class _DrawerAction extends StatelessWidget {
             : null,
         child: Text(label,
             style: UepText.mono(
-                size: 9,
+                size: 10,
                 color: disabled
                     ? s.inkMute.withValues(alpha: .5)
                     : (accent ?? s.inkSoft),

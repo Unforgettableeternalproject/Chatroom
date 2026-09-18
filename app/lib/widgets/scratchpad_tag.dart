@@ -144,7 +144,7 @@ class ScratchpadTagChip extends StatelessWidget {
                     color: tagColor(t), shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
-              Text(tagLabel(t), style: UepText.sans(size: 12, color: s.ink)),
+              Text(tagLabel(t), style: UepText.sans(size: 13, color: s.ink)),
             ]),
           ),
         if (tag != null) ...[
@@ -152,7 +152,7 @@ class ScratchpadTagChip extends StatelessWidget {
           PopupMenuItem(
             value: '',
             child: Text('不標',
-                style: UepText.sans(size: 12, color: s.inkMute)),
+                style: UepText.sans(size: 13, color: s.inkMute)),
           ),
         ],
       ],
@@ -171,7 +171,7 @@ class ScratchpadTagChip extends StatelessWidget {
           borderRadius: BorderRadius.circular(3),
         ),
         child: Text('＋標籤',
-            style: UepText.mono(size: 8.5, letterSpacing: 1.0,
+            style: UepText.mono(size: 10, letterSpacing: 1.0,
                 color: s.inkMute)),
       );
     }
@@ -184,7 +184,7 @@ class ScratchpadTagChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(tagLabel(t),
-          style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
+          style: UepText.mono(size: 10, letterSpacing: 1.0, color: c)),
     );
   }
 }
@@ -254,7 +254,7 @@ class ScratchpadStateChip extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(blockStateLabel(v),
-                  style: UepText.sans(size: 12, color: s.ink)),
+                  style: UepText.sans(size: 13, color: s.ink)),
             ]),
           ),
         if (st != null) ...[
@@ -262,7 +262,7 @@ class ScratchpadStateChip extends StatelessWidget {
           PopupMenuItem(
             value: '',
             child: Text('清除標記',
-                style: UepText.sans(size: 12, color: s.inkMute)),
+                style: UepText.sans(size: 13, color: s.inkMute)),
           ),
         ],
       ],
@@ -281,7 +281,7 @@ class ScratchpadStateChip extends StatelessWidget {
         ),
         child: Text('＋狀態',
             style: UepText.mono(
-                size: 8.5, letterSpacing: 1.0, color: s.inkMute)),
+                size: 10, letterSpacing: 1.0, color: s.inkMute)),
       );
     }
     final c = blockStateColor(st);
@@ -293,7 +293,7 @@ class ScratchpadStateChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(blockStateLabel(st),
-          style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
+          style: UepText.mono(size: 10, letterSpacing: 1.0, color: c)),
     );
   }
 }

@@ -444,7 +444,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
       child: Text('這塊板已封存，只能看不能改。',
-          style: UepText.serif(size: 12, color: s.inkMute)),
+          style: UepText.serif(size: 13, color: s.inkMute)),
     );
   }
 
@@ -547,8 +547,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 : (room?.name ??
                     (attached.isEmpty ? '任務板' : attached.first.name)),
             overflow: TextOverflow.ellipsis,
-            style: UepText.display(
-                size: 19, weight: FontWeight.w600, color: s.inkTitle),
+            style: UepText.pageTitle(color: s.inkTitle),
           ),
         ),
         if (room != null) ...[
@@ -561,13 +560,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             ),
             child: Text(zone.name.toUpperCase(),
                 style: UepText.mono(
-                    size: 8.5, color: palette.soft, letterSpacing: 1.2)),
+                    size: 10, color: palette.soft, letterSpacing: 1.2)),
           ),
         ],
         const SizedBox(width: 12),
-        Text('BOARD',
+        Text('任務板',
             style:
-                UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.6)),
+                UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.6)),
         const Spacer(),
         // ⚠️ **「＋ 新週期」不在這裡**，雖然設計稿把它畫在頁首右上。
         //
@@ -686,7 +685,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         return SimpleDialog(
           backgroundColor: s.bgCard,
           title: Text('掛在這塊板上的聊天室',
-              style: UepText.display(size: 17, color: s.inkTitle)),
+              style: UepText.itemTitle(color: s.inkTitle)),
           children: [
             for (final r in rooms)
               SimpleDialogOption(
@@ -699,16 +698,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 child: Row(children: [
                   Text('◫',
                       style: UepText.mono(
-                          size: 10,
+                          size: 10.5,
                           color: r.detached ? s.inkMute : s.inkSoft)),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       r.name.isEmpty ? '（未命名）' : r.name,
                       style: UepText.serif(
-                        size: 12.5,
-                        color: r.detached ? s.inkMute : s.ink,
-                      ),
+                        size: 13.5,
+                        color: r.detached ? s.inkMute : s.ink),
                     ),
                   ),
                   // 現在站在哪一間，講出來——不然點進去會發現「怎麼沒動」
@@ -750,7 +748,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             padding: const EdgeInsets.fromLTRB(16, 14, 12, 11),
             child: Row(children: [
               Expanded(
-                child: MonoLabel('OBJECTIVES · ${active.length} ACTIVE',
+                child: MonoLabel('週期 · ${active.length} 進行中',
                     color: s.inkMute, letterSpacing: 2.2),
               ),
               if (!_readOnly && (_actions?.canAddObjective ?? false))
@@ -814,7 +812,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         child: Text(o.title,
                             overflow: TextOverflow.ellipsis,
                             style:
-                                UepText.sans(size: 12.5, color: s.inkSoft)),
+                                UepText.sans(size: 13.5, color: s.inkSoft)),
                       ),
                     ),
                 ],
@@ -871,7 +869,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 Expanded(
                   child: Text(o.title,
                       style: UepText.sans(
-                          size: 13.5,
+                          size: 14.5,
                           weight: FontWeight.w600,
                           height: 1.5,
                           color: o.status == 'done'
@@ -898,7 +896,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             Row(children: [
               Text(
                 o.status == 'done' ? '${stats.summary} · 已結束' : stats.summary,
-                style: UepText.mono(size: 8.5, color: s.inkMute),
+                style: UepText.mono(size: 10, color: s.inkMute),
               ),
               // 孤兒直接寫在清單上——它是「看起來有人在做、實際上沒有」，
               // 價值全在於有人在點開之前就注意到
@@ -908,7 +906,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 const SizedBox(width: 8),
                 Text('${stats.orphans} 孤兒',
                     style:
-                        UepText.mono(size: 8.5, color: UepColors.error)),
+                        UepText.mono(size: 10, color: UepColors.error)),
               ],
             ]),
             const SizedBox(height: 9),
@@ -957,7 +955,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Text('這個週期還沒有階段。',
-                      style: UepText.mono(size: 11, color: s.inkMute)),
+                      style: UepText.mono(size: 11.5, color: s.inkMute)),
                 ),
                 if (o.acceptsNewChecklists)
                   Align(
@@ -1001,10 +999,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(o.title,
-                        style: UepText.display(
-                            size: 30,
-                            weight: FontWeight.w600,
-                            color: s.inkTitle,
+                        style: UepText.pageTitle(color: s.inkTitle,
                             height: 1.25)),
                     if (o.description.isNotEmpty) ...[
                       const SizedBox(height: 8),
@@ -1012,7 +1007,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         constraints: const BoxConstraints(maxWidth: 620),
                         child: Text(o.description,
                             style: UepText.serif(
-                                size: 13, color: s.inkSoft, height: 1.85)),
+                                size: 14, color: s.inkSoft, height: 1.85)),
                       ),
                     ],
                   ],
@@ -1046,7 +1041,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             ),
             const SizedBox(width: 14),
             Text('${stats.done} / ${stats.total} 完成',
-                style: UepText.mono(size: 9, color: s.inkSoft)),
+                style: UepText.mono(size: 10, color: s.inkSoft)),
           ]),
         ],
       ),
@@ -1164,7 +1159,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         const SizedBox(height: 10),
         Text(_closeoutHint(o, stats),
             textAlign: TextAlign.right,
-            style: UepText.mono(size: 8.5, color: s.inkMute)),
+            style: UepText.mono(size: 10, color: s.inkMute)),
       ],
     );
   }
@@ -1218,13 +1213,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         children: [
           Text('${stats.orphans} 張卡的持有者已不在房內',
               style: UepText.mono(
-                  size: 9, color: UepColors.error, letterSpacing: 1.4)),
+                  size: 10, color: UepColors.error, letterSpacing: 1.4)),
           if (lines.isNotEmpty) ...[
             const SizedBox(width: 12),
             Flexible(
               child: Text('$lines。',
                   overflow: TextOverflow.ellipsis,
-                  style: UepText.serif(size: 12.5, color: s.inkSoft)),
+                  style: UepText.serif(size: 13.5, color: s.inkSoft)),
             ),
           ],
           const Spacer(),
@@ -1337,7 +1332,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text('未分類還有 $loose 張沒收尾',
-                  style: UepText.mono(size: 9, color: s.inkMute)),
+                  style: UepText.mono(size: 10, color: s.inkMute)),
             ),
         ],
       ),
@@ -1380,18 +1375,18 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 child: SizedBox(
                   width: 16,
                   child: Text(collapsed ? '＋' : '−',
-                      style: UepText.mono(size: 9, color: s.inkMute)),
+                      style: UepText.mono(size: 10, color: s.inkMute)),
                 ),
               ),
               Text(c.title,
                   style: UepText.sans(
-                      size: 14,
+                      size: 15,
                       weight: FontWeight.w600,
                       color: s.inkTitle)),
               const SizedBox(width: 12),
               Text('$done / $total DONE',
                   style: UepText.mono(
-                      size: 9, color: s.inkMute, letterSpacing: 1.4)),
+                      size: 10, color: s.inkMute, letterSpacing: 1.4)),
               // 收尾與否要看得見——送審擋在它上面，而卡片全綠時最容易
               // 以為已經收好了
               // 素材數（0 不顯示）。掛在階段上的東西整段共用，
@@ -1404,7 +1399,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 const SizedBox(width: 8),
                 Text('· 已收尾',
                     style: UepText.mono(
-                        size: 9, color: UepColors.gold, letterSpacing: 1.4)),
+                        size: 10, color: UepColors.gold, letterSpacing: 1.4)),
               ],
               const SizedBox(width: 12),
               // 標題與動作之間拉一條線：讓每一段的抬頭在視覺上自成一列
@@ -1518,7 +1513,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           _taskList(snap, tasks),
           if (tasks.isEmpty)
             Text('這個階段還沒有任務。',
-                style: UepText.mono(size: 10, color: s.inkMute)),
+                style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ],
       ),
@@ -1541,7 +1536,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             Opacity(
               opacity: .5,
               child: Text('卷',
-                  style: UepText.display(size: 34, color: palette.soft)),
+                  style: UepText.pageTitle(color: palette.soft)),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1549,7 +1544,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ? '這塊板結束時是空的。'
                   : '這塊板還是空的。',
               textAlign: TextAlign.center,
-              style: UepText.serif(size: 13.5, color: s.inkSoft, height: 2),
+              style: UepText.serif(size: 14.5, color: s.inkSoft, height: 2),
             ),
             if (!_readOnly && (_actions?.canAddObjective ?? false)) ...[
               const SizedBox(height: 16),
@@ -1634,7 +1629,7 @@ class _ArchivedBadge extends StatelessWidget {
       decoration: BoxDecoration(border: Border.all(color: s.hairline)),
       child: Text('封存 · 唯讀',
           style:
-              UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+              UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
     );
   }
 }
@@ -1671,7 +1666,7 @@ class _AttachedRoomsBadge extends StatelessWidget {
           child: Text(
             empty ? '未掛接聊天室' : '◫ $count 間聊天室',
             style: UepText.mono(
-                size: 8.5, color: s.inkMute, letterSpacing: 1.4),
+                size: 10, color: s.inkMute, letterSpacing: 1.4),
           ),
         ),
       ),
@@ -1699,21 +1694,21 @@ class _NotAMember extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('卷', style: UepText.display(size: 30, color: s.inkMute)),
+            Text('卷', style: UepText.pageTitle(color: s.inkMute)),
             const SizedBox(height: 14),
             Text(
               name.isEmpty
                   ? '這間房掛著一塊任務板，但你還不是它的成員。'
                   : '這間房掛著《$name》，但你還不是它的成員。',
               textAlign: TextAlign.center,
-              style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.8),
+              style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.8),
             ),
             const SizedBox(height: 8),
             Text(
               // 講得出「找誰」才有用。只說「沒有權限」的人會去翻設定頁
               '請板的 owner 把你加進來。',
               textAlign: TextAlign.center,
-              style: UepText.sans(size: 12, color: s.inkMute, height: 1.6),
+              style: UepText.sans(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
         ),
@@ -1741,7 +1736,7 @@ class _ViewerBadge extends StatelessWidget {
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),
         child: Text('唯讀 · VIEWER',
             style:
-                UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 1.4)),
+                UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
       ),
     );
   }
@@ -1770,7 +1765,7 @@ class _ObjectiveBadge extends StatelessWidget {
                 : s.hairlineStrong),
       ),
       child: Text(label,
-          style: UepText.mono(size: 8, color: color, letterSpacing: 1.1)),
+          style: UepText.mono(size: 10, color: color, letterSpacing: 1.1)),
     );
   }
 }
@@ -1830,7 +1825,7 @@ class _HeaderAction extends StatelessWidget {
         padding: EdgeInsets.zero,
         child: Text(label,
             style: UepText.mono(
-                size: 9.5, color: s.inkSoft, letterSpacing: 1.3)),
+                size: 10.5, color: s.inkSoft, letterSpacing: 1.3)),
       ),
     );
   }
@@ -1897,7 +1892,7 @@ class _OutcomePill extends StatelessWidget {
         // 沒有結局時講「宣告結局」而不是「完成」——那顆按鈕不是「按了就
         // 完成」，是「去決定它的結局」，而其中一個選項是廢止
         settled ? (done ? '完成' : '廢止') : '宣告結局',
-        style: UepText.mono(size: 8.5, letterSpacing: 1.1, color: c),
+        style: UepText.mono(size: 10, letterSpacing: 1.1, color: c),
       ),
     );
     if (blocked) {
@@ -1946,7 +1941,7 @@ class _SupervisorPill extends StatelessWidget {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text('◎',
               style: UepText.mono(
-                  size: 9, color: empty ? s.inkMute : s.inkSoft)),
+                  size: 10, color: empty ? s.inkMute : s.inkSoft)),
           const SizedBox(width: 8),
           Text(
             // 沒有指定時講「未指派」而不是留一個空的「SUPERVISOR · 」——
@@ -1957,7 +1952,7 @@ class _SupervisorPill extends StatelessWidget {
                     ? 'SUPERVISOR · ${name.toUpperCase()}（已離開）'
                     : 'SUPERVISOR · ${name.toUpperCase()}',
             style: UepText.mono(
-                size: 9,
+                size: 10,
                 color: empty
                     ? s.inkMute
                     : departed

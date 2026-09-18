@@ -97,18 +97,18 @@ class UepMarkdownBody extends StatelessWidget {
         'uepCardRef': _CardRefChipBuilder(cardRefs, onTapCard),
       },
       styleSheet: MarkdownStyleSheet(
-        p: UepText.serif(size: 14.5, color: ink),
+        p: UepText.serif(size: 15.5, color: ink),
         strong: UepText.serif(
-            size: 14.5, weight: FontWeight.w600, color: s.inkTitle),
-        em: UepText.serif(size: 14.5, color: ink).copyWith(
+            size: 15.5, weight: FontWeight.w600, color: s.inkTitle),
+        em: UepText.serif(size: 15.5, color: ink).copyWith(
             fontStyle: FontStyle.italic),
-        listBullet: UepText.serif(size: 14.5, color: ink),
-        blockquote: UepText.serif(size: 13.5, color: s.inkSoft),
+        listBullet: UepText.serif(size: 15.5, color: ink),
+        blockquote: UepText.serif(size: 14.5, color: s.inkSoft),
         blockquoteDecoration: BoxDecoration(
           border: Border(left: BorderSide(color: s.hairlineStrong, width: 2)),
         ),
         blockquotePadding: const EdgeInsets.only(left: 12, top: 2, bottom: 2),
-        code: UepText.code(size: 12.5, color: s.inkSoft).copyWith(
+        code: UepText.code(size: 13, color: s.inkSoft).copyWith(
           backgroundColor: s.bgSunken,
         ),
         codeblockDecoration: BoxDecoration(
@@ -118,10 +118,9 @@ class UepMarkdownBody extends StatelessWidget {
         ),
         codeblockPadding: const EdgeInsets.symmetric(
             horizontal: 14, vertical: 12),
-        h1: UepText.display(size: 22, color: s.inkTitle),
-        h2: UepText.display(size: 19, color: s.inkTitle),
-        h3: UepText.serif(
-            size: 16, weight: FontWeight.w600, color: s.inkTitle),
+        h1: UepText.pageTitle(color: s.inkTitle),
+        h2: UepText.sectionTitle(color: s.inkTitle),
+        h3: UepText.itemTitle(color: s.inkTitle),
         horizontalRuleDecoration: BoxDecoration(
           border: Border(top: BorderSide(color: s.hairline)),
         ),
@@ -133,7 +132,7 @@ class UepMarkdownBody extends StatelessWidget {
           decorationColor: UepColors.gold.withValues(alpha: .5),
         ),
         tableBorder: TableBorder.all(color: s.line),
-        tableBody: UepText.serif(size: 13, color: ink, height: 1.6),
+        tableBody: UepText.serif(size: 14, color: ink, height: 1.6),
       ),
     );
   }
@@ -184,7 +183,7 @@ class MentionChip extends StatelessWidget {
       child: Text(
         label,
         style: UepText.sans(
-                size: 12.5, weight: FontWeight.w600, color: UepColors.gold)
+                size: 13.5, weight: FontWeight.w600, color: UepColors.gold)
             .copyWith(height: 1.3),
       ),
     );
@@ -259,13 +258,13 @@ class CardRefChip extends StatelessWidget {
           TextSpan(
             text: label,
             style: UepText.sans(
-                    size: 12.5, weight: FontWeight.w600, color: tint)
+                    size: 13.5, weight: FontWeight.w600, color: tint)
                 .copyWith(height: 1.3),
           ),
           if (preview.badge.isNotEmpty)
             TextSpan(
               text: '（${preview.badge}）',
-              style: UepText.mono(size: 9.5, color: s.inkMute),
+              style: UepText.mono(size: 10.5, color: s.inkMute),
             ),
         ]),
       ),

@@ -111,7 +111,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
 
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('搬到別處', style: UepText.display(size: 18, color: s.inkTitle)),
+      title: Text('搬到別處', style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -119,7 +119,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             alignment: Alignment.centerLeft,
             child: Text(
               '「${widget.task.title}」會在選定的階段建立一張新卡。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.55),
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.55),
             ),
           ),
           const SizedBox(height: 14),
@@ -127,14 +127,14 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text('還在讀這塊板…',
-                  style: UepText.sans(size: 12, color: s.inkMute)),
+                  style: UepText.sans(size: 13, color: s.inkMute)),
             )
           else if (objectives.isEmpty)
             // 停用要說得出理由，而且理由要導向下一步
             Align(
               alignment: Alignment.centerLeft,
               child: Text('這塊板上沒有進行中的週期。',
-                  style: UepText.sans(size: 12, color: s.inkMute)),
+                  style: UepText.sans(size: 13, color: s.inkMute)),
             )
           else ...[
             DropdownButtonFormField<String>(
@@ -142,13 +142,13 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               isExpanded: true,
               hint: Text('搬到哪個週期…',
                   overflow: TextOverflow.ellipsis,
-                  style: UepText.sans(size: 12, color: s.inkMute)),
+                  style: UepText.sans(size: 13, color: s.inkMute)),
               decoration: const InputDecoration(
                 isDense: true,
                 border: OutlineInputBorder(),
                 labelText: '週期',
               ),
-              style: UepText.sans(size: 12, color: s.ink),
+              style: UepText.sans(size: 13, color: s.ink),
               // 換週期時把清單清掉——留著上一個週期的選擇，送出的會是一個
               // 與畫面上那行字無關的目標
               onChanged: (v) => setState(() {
@@ -161,7 +161,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
                     value: o.id,
                     child: Text(o.title,
                         overflow: TextOverflow.ellipsis,
-                        style: UepText.sans(size: 12, color: s.ink)),
+                        style: UepText.sans(size: 13, color: s.ink)),
                   ),
               ],
             ),
@@ -171,13 +171,13 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               isExpanded: true,
               hint: Text(_objectiveId == null ? '先選週期' : '搬到哪個階段…',
                   overflow: TextOverflow.ellipsis,
-                  style: UepText.sans(size: 12, color: s.inkMute)),
+                  style: UepText.sans(size: 13, color: s.inkMute)),
               decoration: const InputDecoration(
                 isDense: true,
                 border: OutlineInputBorder(),
                 labelText: '階段',
               ),
-              style: UepText.sans(size: 12, color: s.ink),
+              style: UepText.sans(size: 13, color: s.ink),
               onChanged:
                   lists.isEmpty ? null : (v) => setState(() => _checklistId = v),
               items: [
@@ -186,7 +186,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
                     value: c.id,
                     child: Text(c.title,
                         overflow: TextOverflow.ellipsis,
-                        style: UepText.sans(size: 12, color: s.ink)),
+                        style: UepText.sans(size: 13, color: s.ink)),
                   ),
               ],
             ),
@@ -197,7 +197,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text('這個週期底下沒有別的開著的階段可以放。',
-                    style: UepText.sans(size: 11.5, color: s.inkMute)),
+                    style: UepText.sans(size: 12.5, color: s.inkMute)),
               ),
             ],
           ],
@@ -207,7 +207,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               alignment: Alignment.centerLeft,
               child: Text(_error!,
                   style: UepText.sans(
-                      size: 12, color: UepColors.error, height: 1.45)),
+                      size: 13, color: UepColors.error, height: 1.45)),
             ),
           ],
         ]),

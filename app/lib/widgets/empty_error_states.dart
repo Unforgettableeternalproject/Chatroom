@@ -20,13 +20,13 @@ class EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          MonoLabel('EMPTY', color: s.inkMute.withValues(alpha: .6)),
+          MonoLabel('沒有內容', color: s.inkMute.withValues(alpha: .6)),
           const SizedBox(height: 10),
-          Text(title, style: UepText.serif(size: 14, color: s.inkSoft)),
+          Text(title, style: UepText.serif(size: 15, color: s.inkSoft)),
           if (subtitle != null) ...[
             const SizedBox(height: 6),
             Text(subtitle!,
-                style: UepText.serif(size: 12.5, color: s.inkMute),
+                style: UepText.serif(size: 13.5, color: s.inkMute),
                 textAlign: TextAlign.center),
           ],
         ],
@@ -51,10 +51,10 @@ class ErrorState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          MonoLabel('ERROR', color: UepColors.errorText),
+          MonoLabel('錯誤', color: UepColors.errorText),
           const SizedBox(height: 10),
           Text(message,
-              style: UepText.serif(size: 14, color: s.inkSoft),
+              style: UepText.serif(size: 15, color: s.inkSoft),
               textAlign: TextAlign.center),
           if (onRetry != null) ...[
             const SizedBox(height: 14),
@@ -66,7 +66,7 @@ class ErrorState extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(999)),
               ),
-              child: Text('重試', style: UepText.sans(size: 12.5)),
+              child: Text('重試', style: UepText.sans(size: 13.5)),
             ),
           ],
         ],

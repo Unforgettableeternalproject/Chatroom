@@ -117,8 +117,8 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
             text,
             style: mono
                 ? UepText.mono(
-                    size: 9.5, color: error ? UepColors.errorText : s.inkMute)
-                : UepText.serif(size: 11.5, color: s.inkMute, height: 1.5),
+                    size: 10.5, color: error ? UepColors.errorText : s.inkMute)
+                : UepText.serif(size: 12.5, color: s.inkMute, height: 1.5),
           ),
         );
 
@@ -279,7 +279,7 @@ class RunReportDetailPanel extends StatelessWidget {
                     run.kind,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.mono(size: 10, color: s.inkSoft),
+                    style: UepText.mono(size: 10.5, color: s.inkSoft),
                   ),
                 ),
                 IconButton(
@@ -293,14 +293,14 @@ class RunReportDetailPanel extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   run.ref,
-                  style: UepText.sans(size: 14, color: s.ink),
+                  style: UepText.sans(size: 15, color: s.ink),
                 ),
               ],
               const SizedBox(height: 4),
               Text(
                 '${relativeTime(run.endedAt ?? run.updatedAt)} · '
                 '${runUsageLine(run)}',
-                style: UepText.mono(size: 9.5, color: s.inkMute),
+                style: UepText.mono(size: 10.5, color: s.inkMute),
               ),
             ],
           ),
@@ -312,7 +312,7 @@ class RunReportDetailPanel extends StatelessWidget {
                 ? Text(
                     run.reason.isEmpty ? '這一筆沒有留下回報內容。' : run.reason,
                     style:
-                        UepText.serif(size: 12.5, color: s.inkMute, height: 1.6),
+                        UepText.serif(size: 13.5, color: s.inkMute, height: 1.6),
                   )
                 : UepMarkdownBody(data: run.result, baseColor: s.inkSoft),
           ),
@@ -356,7 +356,7 @@ class _StatusChip extends StatelessWidget {
         ),
         child: Text(label,
             style:
-                UepText.mono(size: 8.5, color: color, letterSpacing: 1.2)),
+                UepText.mono(size: 10, color: color, letterSpacing: 1.2)),
       );
 }
 
@@ -406,7 +406,7 @@ class RunReportCard extends StatelessWidget {
                     run.kind,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.mono(size: 9.5, color: s.inkSoft),
+                    style: UepText.mono(size: 10.5, color: s.inkSoft),
                   ),
                 ),
                 Icon(
@@ -421,7 +421,7 @@ class RunReportCard extends StatelessWidget {
                   run.ref,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: UepText.sans(size: 12, color: s.ink),
+                  style: UepText.sans(size: 13, color: s.ink),
                 ),
               ],
               const SizedBox(height: 4),
@@ -430,7 +430,7 @@ class RunReportCard extends StatelessWidget {
                 '${runUsageLine(run)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: UepText.mono(size: 9, color: s.inkMute),
+                style: UepText.mono(size: 10, color: s.inkMute),
               ),
             ],
           ),

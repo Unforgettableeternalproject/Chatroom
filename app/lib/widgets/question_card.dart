@@ -172,12 +172,12 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
               child: Text(
                 q.askerName == null ? '有人在問你' : '${q.askerName} 在問你',
                 style: UepText.mono(
-                    size: 9.5, color: s.inkMute, letterSpacing: 1.4),
+                    size: 10.5, color: s.inkMute, letterSpacing: 1.4),
               ),
             ),
           ]),
           const SizedBox(height: 10),
-          Text(q.prompt, style: UepText.sans(size: 14, color: s.ink)),
+          Text(q.prompt, style: UepText.sans(size: 15, color: s.ink)),
           const SizedBox(height: 14),
           if (q.options.isNotEmpty) ...[
             Wrap(
@@ -220,7 +220,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                           // 那是 Hub 沒有 extra 之前的限制，不是我們想要的行為
                           ? '已選 ${_picked.length} 項，補充會一併帶上'
                           : '已選 ${_picked.length} 項'),
-                  style: UepText.mono(size: 9.5, color: s.inkMute,
+                  style: UepText.mono(size: 10.5, color: s.inkMute,
                       letterSpacing: 1.2),
                 ),
                 const Spacer(),
@@ -247,10 +247,10 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                 child: TextField(
                   controller: _controller,
                   enabled: !_busy,
-                  style: UepText.sans(size: 13, color: s.ink),
+                  style: UepText.sans(size: 14, color: s.ink),
                   decoration: InputDecoration(
                     hintText: q.options.isEmpty ? '你的回答…' : '或自己寫…',
-                    hintStyle: UepText.sans(size: 13, color: s.inkMute),
+                    hintStyle: UepText.sans(size: 14, color: s.inkMute),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
@@ -283,7 +283,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                 icon: Icon(Icons.attach_file, size: 14, color: s.inkMute),
                 label: Text(
                   _uploading ? '上傳中…' : '附加檔案',
-                  style: UepText.mono(size: 9.5, color: s.inkMute,
+                  style: UepText.mono(size: 10.5, color: s.inkMute,
                       letterSpacing: 1.2),
                 ),
               ),
@@ -292,7 +292,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                   child: Text(
                     _files.map((f) => f.filename).join('、'),
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.mono(size: 9.5, color: s.ink),
+                    style: UepText.mono(size: 10.5, color: s.ink),
                   ),
                 ),
               if (_files.isNotEmpty)
@@ -311,7 +311,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
               child: Text(
                 '略過，改在原本的對話裡問我',
                 style: UepText.mono(
-                    size: 9.5, color: s.inkMute, letterSpacing: 1.2),
+                    size: 10.5, color: s.inkMute, letterSpacing: 1.2),
               ),
             ),
           ),
@@ -390,14 +390,14 @@ class _OptionChip extends StatelessWidget {
                           size: 13, color: UepColors.gold),
                     ),
                   Text(option.label,
-                      style: UepText.sans(size: 12.5, color: s.ink)),
+                      style: UepText.sans(size: 13.5, color: s.ink)),
                 ]),
                 if (option.description.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
                       option.description,
-                      style: UepText.sans(size: 10.5, color: s.inkMute),
+                      style: UepText.sans(size: 11.5, color: s.inkMute),
                     ),
                   ),
               ],

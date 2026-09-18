@@ -102,12 +102,12 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
           '${isMine ? '你提議封存這個聊天室，等建立者確認。' : '$who 提議封存這個聊天室。'}'
           '封存一段時間後房間會被永久刪除。',
           style: UepText.sans(
-              size: 13, weight: FontWeight.w600, color: s.inkTitle),
+              size: 14, weight: FontWeight.w600, color: s.inkTitle),
         ),
         if (widget.request.reason.isNotEmpty) ...[
           const SizedBox(height: 3),
           Text(widget.request.reason,
-              style: UepText.serif(size: 12, color: s.inkSoft, height: 1.6)),
+              style: UepText.serif(size: 13, color: s.inkSoft, height: 1.6)),
         ],
         const SizedBox(height: 8),
         if (widget.youAreAdmin)
@@ -136,7 +136,7 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
           // 既不是建立者也不是提議者：只告訴他狀態。沒有這一行的話，
           // 他會以為是自己該處理的事
           Text('等建立者確認。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6)),
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.6)),
       ]),
     );
   }
