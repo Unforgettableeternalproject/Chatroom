@@ -197,3 +197,37 @@ async def test_board_member_can_read_the_attachment_by_session_key(tmp_path):
         # 於是原本的拒絕原樣往上拋——擴的是放行，不是把拒絕換一種說法
         assert blocked.status_code == 401, blocked.text
         assert blocked.json()["detail"]["code"] == "participant_header_required"
+
+
+async def test_incremental_board_read_surfaces_a_newly_attached_stage_file(tmp_path):
+    """agent 已經讀過一次板（拿到 board_seq），人類才把素材掛上去——
+    agent 接著用 after_board_seq 做增量讀取，仍然要看得到這份素材。
+
+    根因假設：`add_stage_file` 只寫 `board_checklist_file`，沒有替
+    `board_checklist` 領新的 board_seq；增量讀取只挑 `board_seq>after` 的
+    checklist 列，於是這個階段不會再出現在 diff 裡，`files` 也跟著消失。
+    """
+    app, client = await _client(tmp_path, "stage_incremental")
+    async with client, app.router.lifespan_context(app):
+        rid = await _room(client)
+        hdr = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        bid, cid = await _stage(client, rid, hdr)
+
+        # agent 先讀一次板，記下水位
+        first = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
+        seq = first["board_seq"]
+
+        aid = await _upload(client, rid, hdr)
+        r = await client.post(f"/api/boards/{bid}/checklists/{cid}/files",
+                              json={"attachment_id": aid, "note": "追加的截圖"},
+                              headers=hdr)
+        assert r.status_code == 200, r.text
+
+        # agent 用上次記下的水位做增量讀取
+        incremental = (await client.get(
+            f"/api/boards/{bid}", params={"after_board_seq": seq},
+            headers=hdr)).json()
+        stage = [c for c in incremental["checklists"] if c["id"] == cid]
+        assert stage, (
+            "增量讀取沒有再帶出這個階段——新掛的素材因此對 agent 不可見")
+        assert [f["attachment_id"] for f in stage[0]["files"]] == [aid]

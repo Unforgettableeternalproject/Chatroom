@@ -10831,6 +10831,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             " VALUES (?,?,?,?,?,?,?)",
             (fid, checklist_id, body.attachment_id, me["session_key"],
              me["display_name"], body.note.strip(), _now()))
+        # 素材掛在 `board_checklist_file`，不是 `board_checklist` 本體——不領
+        # 新水位的話，這個階段不會出現在下一次的增量讀取（`board_seq>after`）
+        # 裡，剛掛上去的素材對只做增量讀的 agent 等於不存在（除非牠又整份
+        # full=True 重讀一次）
+        await db.execute(
+            "UPDATE board_checklist SET board_seq=? WHERE id=?",
+            (await _next_board_seq(_room, board_id), checklist_id))
         await _commit_with_retry(db)
         # 掛了板的**每一間**房都要醒：素材是板的東西，而「操作發生在哪一間」
         # 在板軸上根本沒有答案
@@ -10868,6 +10875,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有掛上它的人或人類成員可以卸除這份素材")
         await db.execute("DELETE FROM board_checklist_file WHERE id=?",
                          (file_id,))
+        # 同 `add_stage_file`：卸除也要讓這個階段重新出現在下一次增量讀取裡，
+        # 不然已讀過舊清單的 agent 永遠看不到這份素材被拿掉了
+        await db.execute(
+            "UPDATE board_checklist SET board_seq=? WHERE id=?",
+            (await _next_board_seq(_room, board_id), checklist_id))
         await _commit_with_retry(db)
         await _notify_board_rooms(board_id)
         return {"removed": True}
@@ -13742,13 +13754,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             "            AND TRIM(t.claim_session_key)"
             "            = TRIM(participant.session_key))))"
         )
-        not_held = not_held + not_claiming
+        # 派工進行中的成員不掃。run 帶進房的身分（`claude-run-<run_id>`）只靠
+        # 心跳撐著，而 agent 想久一點就會停止打心跳——被當閒置踢出去的話，
+        # 它手上的卡變孤兒、房內身分失效，而它自己完全不知道。
+        #
+        # **它有自己的離場路徑**：run 收場時由 `_depart_run_participants` 帶走
+        # （§7）。run 中的成員不歸閒置掃描管，掃描不該搶在前面；收場之後條件
+        # 自然不成立，該走的那一輪本來就已經走了。
+        run_ph = ",".join("?" for _ in _RUN_ACTIVE)
+        not_in_active_run = (
+            " AND NOT EXISTS (SELECT 1 FROM agent_run r"
+            " WHERE participant.run_id != '' AND r.id = participant.run_id"
+            f"   AND r.status IN ({run_ph}))"
+        )
+        not_held = not_held + not_claiming + not_in_active_run
         stale_subs = await (
             await db.execute(
                 "SELECT id, room_id, display_name, parent_id FROM participant"
                 " WHERE status='active' AND ephemeral=1 AND last_seen_at < ?"
                 + not_held,
-                (sub_cutoff, now_iso),
+                (sub_cutoff, now_iso, *_RUN_ACTIVE),
             )
         ).fetchall()
         for s in stale_subs:
@@ -13774,7 +13799,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "SELECT id, room_id, display_name, session_key FROM participant"
                 " WHERE status='active' AND role='agent' AND ephemeral=0"
                 " AND last_seen_at < ?" + not_held,
-                (cutoff, now_iso),
+                (cutoff, now_iso, *_RUN_ACTIVE),
             )
         ).fetchall()
         for p in idle:
