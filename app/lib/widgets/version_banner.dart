@@ -5,7 +5,6 @@ import '../core/config/build_info.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../state/app_providers.dart';
-import 'kind_badge.dart';
 
 /// App 與 Hub 版本對不上時的警示條。
 ///
@@ -27,12 +26,15 @@ class VersionBanner extends ConsumerWidget {
 
     final different = match == VersionMatch.different;
     final color = different ? UepColors.error : UepColors.gold;
+    final appLabel = _appLabel(ref.watch(appBuildProvider));
+    final hubLabel = _hubLabel(ref.watch(hubBuildProvider).value);
     final text = different
-        ? 'App 與 Hub 不是同一份程式碼——畫面上的功能可能與伺服器對不起來，'
-            '請重新取得最新版本'
+        ? 'App 與 Hub 不是同一份程式碼（App $appLabel / Hub $hubLabel）'
+            '——通常是 App 還沒換新版；請確認兩邊都用同一次建置的產物'
         // unknown 不是「沒事」：至少一邊講不出自己是哪一份，而那正是
         // 「我以為我更新過了」這種誤判的溫床
-        : '無法確認 App 與 Hub 是不是同一份程式碼（其中一邊沒有版本資訊）';
+        : '無法確認 App 與 Hub 是不是同一份程式碼（App $appLabel / '
+            'Hub $hubLabel），其中一邊沒有版本資訊';
 
     return Container(
       width: double.infinity,
@@ -50,10 +52,38 @@ class VersionBanner extends ConsumerWidget {
               style: UepText.serif(size: 12, color: s.ink, height: 1.6)),
         ),
         const SizedBox(width: 10),
-        // 實際的版本字串一定要印出來，不能只說「對不上」——回報問題的人
-        // 需要的是這兩個值，而不是一個結論
-        MonoLabel(BuildInfo.current.label, size: 8.5, color: s.inkMute),
+        // 實際的版本字串一定要印出**兩邊**，不能只印自己這一半——「對不上」
+        // 這個結論回答不了「哪一邊舊」，而那才是下一步要做什麼的依據
+        Flexible(
+          child: Text(
+            'App $appLabel · Hub $hubLabel',
+            textAlign: TextAlign.right,
+            maxLines: 2,
+            style: UepText.mono(size: 8.5, color: s.inkMute, height: 1.6),
+          ),
+        ),
       ]),
     );
   }
+}
+
+/// commit 截短成看得完的長度，但**不動 `-dirty`**：那個後綴的意思是
+/// 「這份產物對不回任何一個 commit」，截掉它等於把最該看見的事藏起來。
+String _shortCommit(String commit) {
+  final dirty = commit.endsWith('-dirty');
+  final hash = dirty ? commit.substring(0, commit.length - '-dirty'.length) : commit;
+  final head = hash.length > 7 ? '${hash.substring(0, 7)}…' : hash;
+  return dirty ? '$head-dirty' : head;
+}
+
+String _appLabel(BuildInfo b) {
+  // 講不出自己是哪一份時印「未知」，不拿版本號去填
+  return b.isKnown ? '${b.version}+${_shortCommit(b.commit)}' : '未知';
+}
+
+String _hubLabel(Map<String, dynamic>? build) {
+  final commit = (build?['commit'] as String?) ?? '';
+  if (commit.isEmpty) return '未知';
+  final version = (build?['version'] as String?) ?? '?';
+  return '$version+${_shortCommit(commit)}';
 }

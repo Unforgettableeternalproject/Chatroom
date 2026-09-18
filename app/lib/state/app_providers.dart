@@ -146,12 +146,18 @@ final questionsApiProvider =
 final tokensApiProvider =
     Provider((ref) => TokensApi(ref.watch(dioProvider)));
 
-/// Hub 的版本資訊與本機 App 的比對結果。
+/// Hub 自報的 build 資訊（`{version, commit, built_at, source}`）。
 ///
 /// 這整套機制的用途只有一個：讓「手上跑的是哪一份程式碼」變成一個可以回答
 /// 的問題。今天的事故成本就是沒有人答得出來——測試端拿著 16 小時前的產物
 /// 驗收，而三個人用三種方法去猜，全都在猜。
-final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+///
+/// ⚠️ **原始的 build map 要留著，不能只留比對結果。**「對不上」這個結論
+/// 回答不了「哪一邊舊」，而回報問題的人需要的正是兩邊的 commit。
+///
+/// 連不上 Hub、或舊版 Hub 不回這一段時是 null——null **不等於相符**，由
+/// [BuildInfo.compare] 判成 [VersionMatch.unknown]。
+final hubBuildProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   // 🔴 **斷線重連之後要重新判斷。**
   //
   // 這個 provider 原本這輩子只算一次，沒有任何東西 invalidate 它——於是
@@ -175,11 +181,27 @@ final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
   final api = ref.watch(roomsApiProvider);
   try {
     final health = await api.health();
-    return BuildInfo.compare(BuildInfo.current, health.build);
+    return health.build;
   } on ApiException {
     // 連不上 Hub 是另一回事，不要偽裝成版本問題
-    return VersionMatch.unknown;
+    return null;
   }
+});
+
+/// 這份 App 自己的 build 識別。
+///
+/// 值在編譯期由 `--dart-define` 固定，執行期改不了——包成 provider 只是為了
+/// 讓測試餵得進一份有 commit 的產物（測試環境沒有那些 define，
+/// `BuildInfo.current.commit` 永遠是空的）。
+final appBuildProvider = Provider<BuildInfo>((ref) => BuildInfo.current);
+
+/// Hub 與本機 App 的比對結果。
+///
+/// 只做比對，不再自己去問 Hub——問的那一次在 [hubBuildProvider]，兩者共用
+/// 同一次 health 請求（重連時的重算也在那裡）。
+final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+  final hubBuild = await ref.watch(hubBuildProvider.future);
+  return BuildInfo.compare(ref.watch(appBuildProvider), hubBuild);
 });
 
 // ---------- Realtime ----------
