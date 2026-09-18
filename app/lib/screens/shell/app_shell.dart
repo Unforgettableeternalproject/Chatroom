@@ -16,6 +16,7 @@ import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
+import '../../state/runner_kit_providers.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../widgets/connection_pill.dart';
 import '../boards/board_list_screen.dart';
@@ -268,7 +269,9 @@ class _AppShellState extends ConsumerState<AppShell>
             const SizedBox(width: 12),
             _TopIconButton(
               tooltip: themeMode == ThemeModePref.dark ? '切換亮色' : '切換暗色',
-              glyph: themeMode == ThemeModePref.dark ? '☾' : '☀',
+              icon: themeMode == ThemeModePref.dark
+                  ? Icons.dark_mode_outlined
+                  : Icons.light_mode_outlined,
               onTap: () =>
                   ref.read(appConfigProvider.notifier).toggleTheme(),
             ),
@@ -280,17 +283,18 @@ class _AppShellState extends ConsumerState<AppShell>
             // 與成員，而兩者都沒有的人（例如只裝了 App 去連別人的 Hub）
             // 這個入口對他沒有任何意義
             if (ref.watch(hostKitProvider).value != null ||
-                ref.watch(mcpKitProvider).value != null) ...[
+                ref.watch(mcpKitProvider).value != null ||
+                ref.watch(runnerKitProvider).value != null) ...[
               _TopIconButton(
                 tooltip: '這台機器',
-                glyph: '⌂',
+                icon: Icons.dns_outlined,
                 onTap: () => context.push('/host'),
               ),
               const SizedBox(width: 8),
             ],
             _TopIconButton(
               tooltip: '設定',
-              glyph: '◎',
+              icon: Icons.settings_outlined,
               onTap: () => context.push('/settings'),
             ),
             const SizedBox(width: 8),
