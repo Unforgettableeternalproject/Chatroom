@@ -50,3 +50,8 @@ app.*.map.json
 # golden 比對失敗時 flutter_test 產生的診斷圖。是除錯用的暫存物，
 # 不是產物——留在版控裡只會讓每次 golden 紅一次就多四個檔案。
 test/**/failures/
+
+# Flutter 每次 pub get 都重生，不追蹤（build-app.py 會先 pub get）
+windows/flutter/generated_plugin_registrant.cc
+windows/flutter/generated_plugin_registrant.h
+windows/flutter/generated_plugins.cmake

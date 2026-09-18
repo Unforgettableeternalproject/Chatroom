@@ -1,2 +1,0 @@
-# Flutter 每次 pub get 都以 LF 重寫這些產生檔；固定 LF 免得只有行尾差異就把 build 標成 dirty
-windows/flutter/generated_* text eol=lf
