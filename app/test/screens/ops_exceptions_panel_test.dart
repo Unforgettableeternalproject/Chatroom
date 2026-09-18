@@ -47,11 +47,18 @@ void main() {
   });
 
   String? lastRoute;
+  // 導覽結果以 router 當下的位置為準：push 之後底下那頁會跟著重建，
+  // 靠 builder 記下的 lastRoute 會指到被蓋住的那一頁
+  late GoRouter router;
 
-  Widget host(List<OpsException> list, {Widget? home}) {
+  String here() =>
+      router.routerDelegate.currentConfiguration.last.matchedLocation;
+
+  Widget host(List<OpsException> list,
+      {Widget? home, String initialLocation = '/ops/exceptions'}) {
     lastRoute = null;
-    final router = GoRouter(
-      initialLocation: '/ops/exceptions',
+    router = GoRouter(
+      initialLocation: initialLocation,
       routes: [
         GoRoute(
           path: '/ops/exceptions',
@@ -61,10 +68,31 @@ void main() {
           },
         ),
         GoRoute(
+          path: '/rooms',
+          builder: (context, state) {
+            lastRoute = '/rooms';
+            return const Scaffold(body: Text('房間列表'));
+          },
+        ),
+        GoRoute(
           path: '/rooms/:roomId',
           builder: (context, state) {
             lastRoute = '/rooms/${state.pathParameters['roomId']}';
             return const Scaffold(body: Text('房間'));
+          },
+        ),
+        // 執行儀表板攤平成獨立路由：這裡要驗的是返回導向，不是巢狀路由的
+        // 堆疊行為
+        GoRoute(
+          path: '/rooms/:roomId/ops',
+          builder: (context, state) {
+            lastRoute = '/rooms/${state.pathParameters['roomId']}/ops';
+            return const Scaffold(
+                body: Center(
+                    child: Column(children: [
+              Text('執行儀表板'),
+              OpsExceptionsEntry(),
+            ])));
           },
         ),
       ],
@@ -131,5 +159,46 @@ void main() {
     expect(find.text('2'), findsNothing);
     expect(settings.opsExceptionSeenAt,
         '2026-09-18T12:00:00Z');
+  });
+
+  testWidgets('從執行儀表板開面板，返回要回到那個儀表板', (tester) async {
+    await tester.pumpWidget(host(
+      [_e(id: 'a', kind: 'timeout', createdAt: '2026-09-18T10:00:00Z')],
+      initialLocation: '/rooms/room-1/ops',
+    ));
+    await tester.pumpAndSettle();
+    expect(here(), '/rooms/room-1/ops');
+
+    await tester.tap(find.byTooltip('派工異常'));
+    await tester.pumpAndSettle();
+    expect(here(), '/ops/exceptions');
+
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(here(), '/rooms/room-1/ops', reason: '返回要回到來源頁，不是房間列表');
+  });
+
+  testWidgets('直接開網址時，返回靠 ?from= 回到來源頁', (tester) async {
+    await tester.pumpWidget(host(
+      [_e(id: 'a', kind: 'timeout', createdAt: '2026-09-18T10:00:00Z')],
+      initialLocation:
+          '/ops/exceptions?from=${Uri.encodeComponent('/rooms/room-7/ops')}',
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(here(), '/rooms/room-7/ops');
+  });
+
+  testWidgets('沒有堆疊也沒有來源時才退回房間列表', (tester) async {
+    await tester.pumpWidget(host(
+      [_e(id: 'a', kind: 'timeout', createdAt: '2026-09-18T10:00:00Z')],
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(here(), '/rooms');
   });
 }

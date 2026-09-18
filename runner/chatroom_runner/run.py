@@ -63,6 +63,15 @@ DOWNLOADS_DIR_NAME = "downloads"
 STREAM_LINE_LIMIT = 64 * 1024 * 1024
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push"}
+# 🚨 進房是 run 的**前置條件**（艾斯維爾裁決 09/19）。實測 run 401a66ab：
+# `system/init` 的 mcp_servers 裡 chatroom 是 `pending`（bridge 起得比 Claude
+# Code 的 MCP 連線逾時慢），整份 stream 零筆 chatroom 工具呼叫——agent 自己
+# 判斷「稍後重試」，然後改走別的工具盲做一整輪：沒有 join、沒讀卡、收尾也沒
+# 寫卡。連不上就沒有素材可做，所以直接殺掉重起，重試耗盡就報 failed
+REQUIRED_MCP_SERVER = "chatroom"
+MCP_UNAVAILABLE_REASON = "chatroom_mcp_unavailable"
+# 重試前探一次 bridge 能不能 import（啟動競速的第一個嫌疑是它起不來）
+BRIDGE_PROBE_TIMEOUT_SECONDS = 60
 
 # `--allowedTools` 的預授權清單。
 #
@@ -390,6 +399,7 @@ def resolve_repo(run: dict, project: ProjectConfig) -> RepoConfig:
 
 
 def short_id(run_id: str) -> str:
+    """run id 的短碼。目前只給人看（日誌、訊息），**不再拿來當房內名字**。"""
     return (run_id or "")[:8] or "run"
 
 
@@ -701,34 +711,68 @@ class RunExecutor:
         resume: str = ""
         backoffs = list(self.cfg.backoff_minutes)
         attempt = 0
+        mcp_attempt = 0
         outcome = RunOutcome("failed", reason="never_ran")
         while True:
             # 每一輪（含退避後的 --resume）重新起算：剛起的進程還沒吐東西，
             # 不該立刻被上一輪的沉默判成停滯
             self.mark_activity()
+            # chatroom 開場沒連上時由這個事件把子進程叫停。每一輪一個新的：
+            # 上一輪立過的旗子不能讓這一輪一起跑就被判死
+            mcp_not_ready = asyncio.Event()
             watcher = StreamWatcher(
                 project.context_soft_limit_tokens,
                 on_soft_limit=lambda n, d=run_dir: self._raise_handoff(d, n),
                 rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
                 monotonic=self.monotonic,
-                on_event=self.mark_activity)
+                on_event=self.mark_activity,
+                on_init_mcp=lambda servers, ev=mcp_not_ready, rid=run_id:
+                    self._check_init_mcp(servers, ev, rid))
             argv = self._argv(prompt, contract, project, run_dir,
                               resume, run["kind"])
             code, stop_reason = await self._spawn(argv, repo.path, env,
                                                   watcher, run_dir,
                                                   project.wall_clock_seconds,
-                                                  cancel)
+                                                  cancel, mcp_not_ready)
             state = watcher.state
             self.context_peak = max(self.context_peak,
                                     state.peak_context_tokens)
             self.turns = state.num_turns
             self._record_usage(run_id, state)
+            if (stop_reason == "mcp_not_ready"
+                    and mcp_attempt < self.cfg.mcp_retries
+                    and not cancel.is_set()):
+                mcp_attempt += 1
+                wait_seconds = self._mcp_backoff(mcp_attempt)
+                probe = await self._probe_bridge(env)
+                await self._report(run_id, RunOutcome(
+                    "running", reason=f"mcp_retry_{mcp_attempt}",
+                    result=f"chatroom MCP 開場未連上"
+                           f"（{self._mcp_status_text(state)}），"
+                           f"{wait_seconds:g} 秒後重起，"
+                           f"第 {mcp_attempt} 次重試。{probe}"))
+                await self.sleep(wait_seconds)
+                if cancel.is_set():
+                    outcome = RunOutcome("cancelled",
+                                         reason="cancel_requested",
+                                         result="等待 chatroom MCP 期間收到取消。")
+                    break
+                # 重起是**全新的一輪**：上一輪連房都沒進，沒有值得續的 session
+                resume = ""
+                continue
             outcome = self._classify(state, code, stop_reason, run_dir,
                                      watcher.rate_limited)
             after = {item.name: await gitops.snapshot(item.path)
                      for item in repos}
             outcome.result = self._compose_result(state, run_dir, before,
                                                   after, sync_notes)
+            if outcome.reason == MCP_UNAVAILABLE_REASON:
+                outcome.result = (
+                    f"chatroom MCP 在 {mcp_attempt + 1} 次嘗試內都沒有連上"
+                    f"（{self._mcp_status_text(state)}）。"
+                    "進房是這筆 run 的前置條件——沒有進房就讀不到卡與階段素材，"
+                    "整輪只會是盲做，因此已中止，沒有執行任何工作。\n\n"
+                    + outcome.result)
             if outcome.reason != "rate_limit" or not backoffs:
                 break
             wait_minutes = backoffs.pop(0)
@@ -802,11 +846,21 @@ class RunExecutor:
             "CHATROOM_URL": self.cfg.hub_url,
             "CHATROOM_TOKEN": self.cfg.agent_token,
             "CHATROOM_SESSION_KEY": f"claude-run-{run['id']}",
-            "CHATROOM_DEFAULT_NAME":
-                f"{self.cfg.label}-{short_id(run['id'])}",
+            # 名字留空＝讓 Hub 從名字池發一個名號。塞 `<label>-<run 短碼>`
+            # 的話，房間成員列上顯示的就是一串 id；run 的識別本來就在
+            # `participant.run_id`，不必靠名字帶。
+            # **空字串是必要的**：不寫這一鍵會沿用執行器自己的
+            # CHATROOM_DEFAULT_NAME（`env = dict(os.environ)`），run 會頂著
+            # 執行器的代稱進房。bridge 的 .env 載入也只補「不在 env 裡」的鍵。
+            "CHATROOM_DEFAULT_NAME": "",
             "CHATROOM_RUNNER_RUN_DIR": str(run_dir),
             "CHATROOM_DOWNLOAD_DIR": str(run_dir / DOWNLOADS_DIR_NAME),
         })
+        if self.cfg.mcp_startup_timeout_ms > 0:
+            # MCP 伺服器的啟動／連線逾時（docs/en/mcp「Timeouts &
+            # Performance」，單位毫秒，stdio 也適用）。第一道防線：bridge
+            # 冷啟動比預設的等待久時，拉長等待比事後重起便宜
+            env["MCP_TIMEOUT"] = str(self.cfg.mcp_startup_timeout_ms)
         env.update(self._git_credential_isolation(env))
         return env
 
@@ -835,10 +889,75 @@ class RunExecutor:
             "SSH_ASKPASS": str(ASKPASS_SCRIPT),
         }
 
+    def _bridge_dir(self) -> Path:
+        """bridge（`chatroom_mcp`）的模組路徑。run 的 mcp.json 也用同一份。"""
+        return self.cfg.bridge_path or (
+            Path(__file__).resolve().parents[2] / "bridge")
+
+    def _mcp_backoff(self, attempt: int) -> float:
+        """第 ``attempt`` 次重試前等幾秒。用完最後一段就一直沿用它。"""
+        waits = [float(x) for x in self.cfg.mcp_retry_backoff_seconds]
+        if not waits:
+            return 0.0
+        return waits[min(attempt, len(waits)) - 1]
+
+    @staticmethod
+    def _mcp_status_text(state) -> str:
+        servers = state.mcp_servers or {}
+        status = servers.get(REQUIRED_MCP_SERVER)
+        if status is None:
+            return f"init 事件裡沒有 {REQUIRED_MCP_SERVER}"
+        return f"{REQUIRED_MCP_SERVER}：{status}"
+
+    def _check_init_mcp(self, servers: dict[str, str],
+                        event: asyncio.Event, run_id: str) -> None:
+        """init 的 MCP 快照 ⇒ 這一輪還能不能跑。
+
+        ``connected`` 以外的任何狀態（``pending``／``failed``／根本沒列出來）
+        都當作不能跑：**開場沒連上就不會有第二個事件來更正**，而 agent 看到
+        工具不在時會自己找路走，那條路上沒有卡、沒有房、也沒有人在看。
+        """
+        status = servers.get(REQUIRED_MCP_SERVER)
+        if status == "connected":
+            return
+        log.warning("run %s：chatroom MCP 開場狀態為 %s，中止這一輪",
+                    run_id, status or "（未列出）")
+        event.set()
+
+    async def _probe_bridge(self, env: dict) -> str:
+        """重試前探一次 bridge 能不能 import。回一句要寫進回報的附註。
+
+        探得過不代表下一輪一定連得上（那是啟動時序），但探不過就**確定**連不
+        上——那時重試多少次都一樣，把原因寫出來比再等 30 秒有用。
+        順帶把 bytecode 快取熱起來，下一次 import 會快一點。
+        """
+        probe_env = dict(env)
+        probe_env["PYTHONPATH"] = str(self._bridge_dir())
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import chatroom_mcp",
+                env=probe_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
+        except OSError as exc:
+            return f"（bridge 探測起不來：{exc}）"
+        try:
+            _, err = await asyncio.wait_for(
+                proc.communicate(), timeout=BRIDGE_PROBE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            kill_tree(proc.pid)
+            return "（bridge 探測逾時）"
+        if proc.returncode == 0:
+            return ""
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        return f"（bridge 探測失敗：{detail[-1] if detail else proc.returncode}）"
+
     async def _spawn(self, argv: list[str], cwd: Path, env: dict,
                      watcher: StreamWatcher, run_dir: Path,
                      wall_clock: float,
-                     cancel: asyncio.Event) -> tuple[int, str]:
+                     cancel: asyncio.Event,
+                     mcp_not_ready: asyncio.Event | None = None
+                     ) -> tuple[int, str]:
         """起進程並逐行吃 stream。回 ``(exit_code, 停止原因)``。"""
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(cwd), env=env,
@@ -848,14 +967,26 @@ class RunExecutor:
         pump = asyncio.create_task(self._pump(proc, watcher, run_dir))
         waiter = asyncio.create_task(proc.wait())
         canceller = asyncio.create_task(cancel.wait())
+        # chatroom 開場沒連上時由這一條把進程叫停（見 REQUIRED_MCP_SERVER）
+        mcp_waiter = (asyncio.create_task(mcp_not_ready.wait())
+                      if mcp_not_ready is not None else None)
         stop = "exited"
         try:
+            waits = {waiter, canceller}
+            if mcp_waiter is not None:
+                waits.add(mcp_waiter)
             done, _ = await asyncio.wait(
-                {waiter, canceller},
+                waits,
                 timeout=wall_clock if wall_clock > 0 else None,
                 return_when=asyncio.FIRST_COMPLETED)
             if waiter not in done:
-                stop = "cancelled" if canceller in done else "wall_clock"
+                if canceller in done:
+                    # 取消優先：人按了取消就是取消，即使 MCP 也沒連上
+                    stop = "cancelled"
+                elif mcp_waiter is not None and mcp_waiter in done:
+                    stop = "mcp_not_ready"
+                else:
+                    stop = "wall_clock"
                 kill_tree(proc.pid)
                 try:
                     await asyncio.wait_for(waiter, timeout=30)
@@ -864,6 +995,8 @@ class RunExecutor:
                     await waiter
         finally:
             canceller.cancel()
+            if mcp_waiter is not None:
+                mcp_waiter.cancel()
             try:
                 await asyncio.wait_for(pump, timeout=30)
             except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -925,6 +1058,10 @@ class RunExecutor:
         if stop_reason == "wall_clock":
             return RunOutcome("failed", reason="wall_clock", usage=usage,
                               claude_session_id=sid)
+        if stop_reason == "mcp_not_ready":
+            # 重試已經在 `_claude_run` 用完了；走到這裡就是前置條件不成立
+            return RunOutcome("failed", reason=MCP_UNAVAILABLE_REASON,
+                              usage=usage, claude_session_id=sid)
         if state.weekly_limit:
             return RunOutcome("limited", reason="weekly_limit", usage=usage,
                               claude_session_id=sid,
@@ -1097,8 +1234,7 @@ class RunExecutor:
             json.dumps(settings, ensure_ascii=False, indent=2),
             encoding="utf-8")
 
-        bridge = self.cfg.bridge_path or (
-            Path(__file__).resolve().parents[2] / "bridge")
+        bridge = self._bridge_dir()
         mcp = {"mcpServers": {"chatroom": {
             "command": python,
             "args": ["-m", "chatroom_mcp"],
@@ -1109,8 +1245,9 @@ class RunExecutor:
                 "CHATROOM_URL": self.cfg.hub_url,
                 "CHATROOM_TOKEN": self.cfg.agent_token,
                 "CHATROOM_SESSION_KEY": f"claude-run-{run['id']}",
-                "CHATROOM_DEFAULT_NAME":
-                    f"{self.cfg.label}-{short_id(run['id'])}",
+                # 同 `_child_env`：留空讓 Hub 的名字池取名，不要把 run id
+                # 當名字。這一鍵不能省——省掉會沿用外層的代稱
+                "CHATROOM_DEFAULT_NAME": "",
                 # 附件落在 run 目錄底下，不是 cwd。bridge 預設會寫
                 # `./.chatroom/downloads/`，那個「.」是被派工的 repo
                 "CHATROOM_DOWNLOAD_DIR": str(run_dir / DOWNLOADS_DIR_NAME),

@@ -16,6 +16,7 @@ import '../../state/assignments_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/reveal.dart';
 import '../../widgets/uep_button.dart';
 
 class AssignmentScreen extends ConsumerStatefulWidget {
@@ -210,7 +211,9 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       ),
                     ]),
                     const SizedBox(height: 6),
-                    _buildSessionScan(),
+                    // 換過濾條件是整批清單換掉，高度直接跳的話底下的欄位
+                    // 會整個位移
+                    UepResize(child: _buildSessionScan()),
                     const SizedBox(height: 14),
                     Text('目標 session',
                         style: UepText.fieldLabel(color: s.inkSoft)),
@@ -394,23 +397,30 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 ]),
               ),
             ),
-            if (_showUnlinked) ...[
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: MonoLabel('這些名字是掃描編出來的',
-                      size: 8.5, color: s.inkMute),
-                ),
+            UepExpand(
+              expanded: _showUnlinked,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: MonoLabel('這些名字是掃描編出來的',
+                          size: 8.5, color: s.inkMute),
+                    ),
+                  ),
+                  for (final session in primaryUnlinked)
+                    _SessionRow(
+                      session: session,
+                      selected: _target.text.trim() == session.sessionKey,
+                      onTap: () =>
+                          setState(() => _target.text = session.sessionKey),
+                    ),
+                ],
               ),
-              for (final session in primaryUnlinked)
-                _SessionRow(
-                  session: session,
-                  selected: _target.text.trim() == session.sessionKey,
-                  onTap: () =>
-                      setState(() => _target.text = session.sessionKey),
-                ),
-            ],
+            ),
           ],
           if (localHostName.isNotEmpty && mine.isEmpty && others.isNotEmpty)
             Padding(
@@ -440,14 +450,22 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 ]),
               ),
             ),
-            if (_showOtherHosts)
-              for (final session in others)
-                _SessionRow(
-                  session: session,
-                  selected: _target.text.trim() == session.sessionKey,
-                  onTap: () =>
-                      setState(() => _target.text = session.sessionKey),
-                ),
+            UepExpand(
+              expanded: _showOtherHosts,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final session in others)
+                    _SessionRow(
+                      session: session,
+                      selected: _target.text.trim() == session.sessionKey,
+                      onTap: () =>
+                          setState(() => _target.text = session.sessionKey),
+                    ),
+                ],
+              ),
+            ),
           ],
           if (hiddenIdle > 0)
             Padding(

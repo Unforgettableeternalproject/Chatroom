@@ -5,6 +5,7 @@ import '../core/config/build_info.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../state/app_providers.dart';
+import 'reveal.dart';
 
 /// App 與 Hub 版本對不上時的警示條。
 ///
@@ -22,12 +23,17 @@ class VersionBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = context.uep;
     final match = ref.watch(versionMatchProvider).value;
-    if (match == null || match == VersionMatch.same) {
-      return const SizedBox.shrink();
-    }
+    final show = match != null && match != VersionMatch.same;
+    // 撐高／收合：它插在畫面最上方，直接冒出來會把底下整個 App 往下推一格
+    return UepReveal(
+      grow: true,
+      child: show ? _banner(context, ref) : null,
+    );
+  }
 
+  Widget _banner(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
     final app = ref.watch(appBuildProvider);
     final hub = ref.watch(hubBuildProvider).value;
     final older = _olderSide(app, hub);

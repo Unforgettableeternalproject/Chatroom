@@ -18,6 +18,9 @@
   "state_dir": "C:/Users/Bernie/AppData/Local/UEP/Chatroom/runner",
   "backoff_minutes": [5, 15, 30, 60],
   "rate_limit_retry_threshold": 3,
+  "mcp_retries": 3,
+  "mcp_retry_backoff_seconds": [5, 15, 30],
+  "mcp_startup_timeout_ms": 60000,
   "allowed_domains": [
     "github.com",
     "raw.githubusercontent.com",

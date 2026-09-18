@@ -15,6 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from chatroom_server.app import create_app
+from chatroom_server.naming import _ADJECTIVES, _NOUNS
 from chatroom_server.config import Config
 
 pytestmark = pytest.mark.asyncio
@@ -157,6 +158,65 @@ async def test_a_run_from_another_room_does_not_count(tmp_path):
         assert (await _row(app, body["participant_id"]))["run_id"] == ""
 
 
+# ── 命名 ─────────────────────────────────────────────────────────────
+
+async def test_a_run_member_gets_a_pool_name_not_its_own(tmp_path):
+    """run 自報的名字**不採用**：那個位置送過來的一直是編號或模板名。
+
+    實測進房的名字是 `Runner-01ad9f1e`（執行器塞的 `<label>-<run 短碼>`）與
+    `Minka-Ticket`（模型自己編的），成員列讀起來就是一串 id。run 的識別在
+    `participant.run_id` 上，名字該是名字。
+    """
+    app, client = await _client(tmp_path, "poolname")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}",
+                                    f"Runner-{run_id[:8]}")
+        name = body["display_name"]
+        assert name != f"Runner-{run_id[:8]}"
+        assert run_id[:8] not in name and run_id not in name
+        # 名字池是「形容詞-名詞」，兩端都在池子裡
+        adj, _, noun = name.partition("-")
+        assert adj in _ADJECTIVES and noun in _NOUNS, name
+        # 識別沒有因此消失
+        assert (await _row(app, body["participant_id"]))["run_id"] == run_id
+
+
+async def test_a_lookalike_keeps_its_self_reported_name(tmp_path):
+    """特例只套在**真的對得上**的 run 上。
+
+    綁在前綴上的話，任何自己打得出 `claude-run-` 的 agent 都會被沒收名字。
+    """
+    app, client = await _client(tmp_path, "poolname-lookalike")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        await _join_human(client, rid)
+        _, body = await _join_agent(client, rid, "claude-run-不存在的", "假冒")
+        assert body["display_name"] == "假冒"
+
+
+async def test_an_assigned_name_still_wins_for_a_run(tmp_path):
+    """指派者取的名字仍然優先——那是人挑的名字，不是自動生成的編號。"""
+    app, client = await _client(tmp_path, "poolname-assigned")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        r = await client.post(
+            f"/api/rooms/{rid}/assignments",
+            json={"target_session_key": f"claude-run-{run_id}",
+                  "assigned_name": "鐵衛", "note": "去做"},
+            headers=hdr)
+        assert r.status_code == 200, r.text
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}",
+                                    f"Runner-{run_id[:8]}")
+        assert body["display_name"] == "鐵衛"
+
+
 # ── 收場即離房 ───────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("final_status", ["done", "failed", "cancelled"])
@@ -176,8 +236,8 @@ async def test_a_finished_run_takes_its_member_out_of_the_room(
         await _report(client, run_id, runner, final_status)
 
         assert (await _row(app, pid))["status"] == "left"
-        names = [p["display_name"] for p in await _participants(client, rid, hdr)]
-        assert "Runner" not in names, (
+        ids = [p["id"] for p in await _participants(client, rid, hdr)]
+        assert pid not in ids, (
             "run 成員留在名冊上——工作房常駐，這份名單會無限變長")
 
 
@@ -227,9 +287,9 @@ async def test_the_run_member_is_listed_while_the_run_is_still_running(tmp_path)
         hdr = await _join_human(client, rid)
         runner = await _register_runner(client)
         run_id = await _dispatch_running(client, rid, hdr, runner)
-        await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
         listed = await _participants(client, rid, hdr)
-        assert "Runner" in [p["display_name"] for p in listed]
+        assert body["participant_id"] in [p["id"] for p in listed]
 
 
 async def test_a_subagent_of_the_run_member_goes_with_it(tmp_path):
@@ -312,17 +372,18 @@ async def test_handoff_frees_the_card_for_the_child_run(tmp_path):
         assert child_id
 
         assert (await _row(app, first_body["participant_id"]))["status"] == "left"
-        assert "一棒" not in [p["display_name"]
-                             for p in await _participants(client, rid, hdr)]
+        assert first_body["participant_id"] not in [
+            p["id"] for p in await _participants(client, rid, hdr)]
         assert (await _task_row(client, rid, tid))["claim_state"] == "orphaned"
 
         # 下一棒真的領得走——「孤兒化了」本身不是驗收，接手成功才是
         child_key = f"claude-run-{child_id}"
-        second, _ = await _join_agent(client, rid, child_key, "二棒")
+        second, second_body = await _join_agent(client, rid, child_key, "二棒")
         await _add_to_board(client, board_id, child_key)
         r = await client.post(f"/api/board/tasks/{tid}/claim", headers=second)
         assert r.status_code == 200, r.text
-        assert (await _task_row(client, rid, tid))["claim_name"] == "二棒"
+        # 名字由 Hub 發，拿 join 回來的那個比對，不是自報的「二棒」
+        assert (await _task_row(client, rid, tid))["claim_name"] ==             second_body["display_name"]
 
 
 async def test_the_capped_handoff_also_sends_its_member_home(tmp_path):
@@ -342,8 +403,8 @@ async def test_the_capped_handoff_also_sends_its_member_home(tmp_path):
         assert out["child_run"] is None
         assert out["run"]["status"] == "failed"
         assert (await _row(app, body["participant_id"]))["status"] == "left"
-        assert "末棒" not in [p["display_name"]
-                             for p in await _participants(client, rid, hdr)]
+        assert body["participant_id"] not in [
+            p["id"] for p in await _participants(client, rid, hdr)]
 
 
 # ── hold 與成員列表 ──────────────────────────────────────────────────
@@ -425,8 +486,8 @@ async def test_the_member_list_says_which_run_a_member_belongs_to(tmp_path):
         hdr = await _join_human(client, rid)
         runner = await _register_runner(client)
         run_id = await _dispatch_running(client, rid, hdr, runner)
-        await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
-        listed = {p["display_name"]: p for p in
-                  await _participants(client, rid, hdr)}
-        assert listed["Runner"]["run_id"] == run_id
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        listed = {p["id"]: p for p in await _participants(client, rid, hdr)}
+        assert listed[body["participant_id"]]["run_id"] == run_id
+        listed = {p["display_name"]: p for p in listed.values()}
         assert listed["艾斯維爾"]["run_id"] == ""

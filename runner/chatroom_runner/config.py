@@ -47,6 +47,18 @@ DEFAULT_STALL_WARN_SECONDS = 600
 DEFAULT_BACKOFF_MINUTES = (5, 15, 30, 60)
 # stream 裡連續看到幾次 rate_limit 的 api_retry 就把執行器標 limited
 DEFAULT_RATE_LIMIT_RETRY_THRESHOLD = 3
+# chatroom MCP 開場沒連上時重起 claude 的次數與間隔（秒）。
+# 進房是 run 的前置條件（艾斯維爾裁決 09/19）：連不上就沒有卡、沒有
+# 階段素材，那一輪只會盲做。間隔遞增是給 bridge 起來的時間——實測的
+# 形狀是啟動競速，不是 bridge 壞掉
+DEFAULT_MCP_RETRIES = 3
+DEFAULT_MCP_RETRY_BACKOFF_SECONDS = (5, 15, 30)
+# 傳給 claude 的 `MCP_TIMEOUT`（毫秒）＝ MCP 伺服器啟動／連線逾時。
+# 依 docs/en/mcp「Timeouts & Performance」：單位毫秒，HTTP／SSE／
+# WebSocket 與 **stdio** 都適用（chatroom 走 stdio）。cli-reference 說
+# `--mcp-config` 預設等約 30 秒——bridge 冷啟動輸給它就是這次的事故，
+# 所以拉到 60 秒當第一道防線；擋不住的才走重試
+DEFAULT_MCP_STARTUP_TIMEOUT_MS = 60_000
 # run 預設只准用 chatroom。其他要開的在設定檔的 `allowed_mcp_servers` 明列
 DEFAULT_ALLOWED_MCP_SERVERS = ("chatroom",)
 # 收尾請求（軟停止）立旗標之後，等進程自己結束的上限。逾時就走既有的
@@ -200,6 +212,15 @@ class RunnerConfig:
     backoff_minutes: list[int] = field(
         default_factory=lambda: list(DEFAULT_BACKOFF_MINUTES))
     rate_limit_retry_threshold: int = DEFAULT_RATE_LIMIT_RETRY_THRESHOLD
+    # chatroom MCP 開場不是 `connected` 時，最多重起 claude 幾次。
+    # 0 ＝不重試，第一次就判 `chatroom_mcp_unavailable`
+    mcp_retries: int = DEFAULT_MCP_RETRIES
+    # 每一次重試前等幾秒。用完最後一個就一直沿用它
+    mcp_retry_backoff_seconds: list[float] = field(
+        default_factory=lambda: list(DEFAULT_MCP_RETRY_BACKOFF_SECONDS))
+    # 傳給 claude 子進程的 `MCP_TIMEOUT`（毫秒，MCP 伺服器啟動逾時）。
+    # 0 ＝不設，沿用 CLI 預設
+    mcp_startup_timeout_ms: int = DEFAULT_MCP_STARTUP_TIMEOUT_MS
     bridge_path: Path | None = None
     # 啟動自檢要不要驗 GPG。**預設驗**——簽章不可用時 commit 會停在 pinentry，
     # 而遠端沒有人能按那個視窗。只有明知這台機器不簽章時才關掉
@@ -413,6 +434,13 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         rate_limit_retry_threshold=int(
             raw.get("rate_limit_retry_threshold",
                     DEFAULT_RATE_LIMIT_RETRY_THRESHOLD)),
+        mcp_retries=int(raw.get("mcp_retries", DEFAULT_MCP_RETRIES)),
+        mcp_retry_backoff_seconds=[
+            float(x) for x in raw.get("mcp_retry_backoff_seconds",
+                                      DEFAULT_MCP_RETRY_BACKOFF_SECONDS)],
+        mcp_startup_timeout_ms=int(
+            raw.get("mcp_startup_timeout_ms",
+                    DEFAULT_MCP_STARTUP_TIMEOUT_MS)),
         bridge_path=Path(raw["bridge_path"]) if raw.get("bridge_path")
         else None,
         require_gpg=bool(raw.get("require_gpg", True)),

@@ -14,6 +14,7 @@ import '../../widgets/board_task_card.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/reveal.dart';
 import '../../widgets/stage_files.dart';
 import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
@@ -310,7 +311,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   // 重排一次，讀的人會失去自己剛才在看哪一張卡。
                   return Stack(children: [
                     board,
-                    ?_drawer(context, snap, c.maxWidth),
+                    // 抽屜與遮罩一起淡入淡出。**不做位移**：位移吃的是整塊
+                    // child，遮罩跟著移開會在左緣露出一條沒遮到的板
+                    Positioned.fill(
+                      child: UepReveal(
+                        child: _drawer(context, snap, c.maxWidth),
+                      ),
+                    ),
                   ]);
                 });
               },
@@ -455,30 +462,34 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final task = snap.tasks[_openTaskId];
     if (task == null || task.deleted) return null;
     void close() => setState(() => _openTaskId = null);
-    return Positioned.fill(
+    // 回的是抽屜的內容，疊放與過場由呼叫端的 [UepReveal] 負責。
+    // `SizedBox.expand`：外面那層疊法給的是鬆約束，不撐開的話遮罩的高度會
+    // 縮成抽屜那麼高，底下的板就露出來了
+    return SizedBox.expand(
       child: Row(children: [
-        // 遮罩：點板子的任何地方就關掉抽屜。**它同時是那句「底下這塊還在，
-        // 只是現在不是主角」**——設計稿用 opacity .35 講同一件事
-        Expanded(
-          child: GestureDetector(
-            onTap: close,
-            child: ColoredBox(
-              color: Colors.black.withValues(alpha: .45),
+          // 遮罩：點板子的任何地方就關掉抽屜。**它同時是那句「底下這塊還在，
+          // 只是現在不是主角」**——設計稿用 opacity .35 講同一件事
+          Expanded(
+            child: GestureDetector(
+              onTap: close,
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: .45),
+              ),
             ),
           ),
-        ),
-        BoardTaskDrawer(
-          roomId: widget.roomId,
-          boardId: _boardIdOrNull ?? '',
-          task: task,
-          // 抽屜不吃滿整個視窗：留一段板子看得到，才知道自己還在板上
-          width: maxWidth < 480 ? maxWidth : 420,
-          checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
-          assigneeName: _assigneeName(task),
-          readOnly: _readOnly,
-          onClose: close,
-        ),
-      ]),
+          BoardTaskDrawer(
+            roomId: widget.roomId,
+            boardId: _boardIdOrNull ?? '',
+            task: task,
+            // 抽屜不吃滿整個視窗：留一段板子看得到，才知道自己還在板上
+            width: maxWidth < 480 ? maxWidth : 420,
+            checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
+            assigneeName: _assigneeName(task),
+            readOnly: _readOnly,
+            onClose: close,
+          ),
+        ],
+      ),
     );
   }
 

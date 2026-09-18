@@ -12,6 +12,7 @@ import '../state/board_providers.dart';
 import '../state/composer_attachments.dart';
 import '../state/messages_providers.dart';
 import 'attachment_view.dart';
+import 'reveal.dart';
 import 'uep_button.dart';
 
 /// 階段素材（共享附件）的畫面元件。
@@ -120,45 +121,57 @@ class StageFilesList extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (files.isEmpty && onAdd == null) return const SizedBox.shrink();
+    // 整塊出現／消失（最後一份被卸除、或唯讀切換）時撐高收合，
+    // 免得階段底下的卡片整排跳位。
+    //
+    // ⚠️ **不畫的時候連 provider 都不 watch**：`appConfigProvider` 在只掛
+    // 板子的情境下可能根本沒被覆寫，提前 watch 會把那些畫面弄成錯誤狀態
+    final show = !(files.isEmpty && onAdd == null);
+    return UepExpand(
+      expanded: show,
+      child: show ? _list(context, ref) : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _list(BuildContext context, WidgetRef ref) {
     final config = ref.watch(appConfigProvider);
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final f in files)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: _StageFileRow(
-              file: f,
-              serverUrl: config.serverUrl,
-              token: config.token,
-              participantId: participantId,
-              onRemove: (readOnly || actions == null)
-                  ? null
-                  : () => _remove(context, f),
-              onEditNote: (readOnly || actions == null)
-                  ? null
-                  : () => _editNote(context, f),
-            ),
-          ),
-        // 入口留在清單底部：要加東西的人是先看過已經有什麼才決定加的。
-        // 空清單不放空狀態文案——那句話佔的位置比這顆按鈕還大
-        if (onAdd != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: TextButton.icon(
-              onPressed: onAdd,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final f in files)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _StageFileRow(
+                file: f,
+                serverUrl: config.serverUrl,
+                token: config.token,
+                participantId: participantId,
+                onRemove: (readOnly || actions == null)
+                    ? null
+                    : () => _remove(context, f),
+                onEditNote: (readOnly || actions == null)
+                    ? null
+                    : () => _editNote(context, f),
               ),
-              icon: Icon(Icons.add, size: 14, color: context.uep.inkMute),
-              label: Text('新增素材',
-                  style: UepText.fieldLabel(color: context.uep.inkMute)),
             ),
-          ),
-      ],
+          // 入口留在清單底部：要加東西的人是先看過已經有什麼才決定加的。
+          // 空清單不放空狀態文案——那句話佔的位置比這顆按鈕還大
+          if (onAdd != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: TextButton.icon(
+                onPressed: onAdd,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                icon: Icon(Icons.add, size: 14, color: context.uep.inkMute),
+                label: Text('新增素材',
+                    style: UepText.fieldLabel(color: context.uep.inkMute)),
+              ),
+            ),
+        ],
     );
   }
 

@@ -732,7 +732,7 @@ class BoardDelta {
 class BoardEntryHint {
   const BoardEntryHint({this.label = '', this.needsYou = false});
 
-  /// 接在「❖ Board」後面的那一小段。空字串＝平常，板上沒有需要你的東西。
+  /// 接在「❖ 任務板」後面的那一小段。空字串＝平常，板上沒有需要你的東西。
   final String label;
 
   /// 點亮。**只給「需要你動手、而且只有你能動」的那一種。**

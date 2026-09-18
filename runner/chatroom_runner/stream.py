@@ -88,6 +88,9 @@ class StreamState:
     # 話，事後只看得到 agent 說「那個工具不可用」，而沒有地方說得出它其實
     # 只是還沒連上
     pending_mcp_servers: list[str] = field(default_factory=list)
+    # init 事件裡每個 MCP 伺服器的狀態快照（名稱 → status）。開場沒帶
+    # `mcp_servers` 欄位時留空 dict——「沒講」與「講了但沒連上」不一樣
+    mcp_servers: dict[str, str] = field(default_factory=dict)
     texts: list[str] = field(default_factory=list)
     # 最後一次收到**任何** stream 事件的時刻（單調時鐘）。停滯判斷只認這個：
     # 牆鐘會被系統校時往回拉，而「這個 run 多久沒說話」不該因此變成負數。
@@ -113,13 +116,17 @@ class StreamWatcher:
                  on_soft_limit: Callable[[int], None] | None = None,
                  rate_limit_threshold: int = 3,
                  monotonic: Callable[[], float] | None = None,
-                 on_event: Callable[[], None] | None = None) -> None:
+                 on_event: Callable[[], None] | None = None,
+                 on_init_mcp: Callable[[dict[str, str]], None] | None = None
+                 ) -> None:
         self.soft_limit_tokens = soft_limit_tokens
         self.on_soft_limit = on_soft_limit
         self.rate_limit_threshold = rate_limit_threshold
         self.monotonic = monotonic or time.monotonic
         # 每收到一個事件就通知一次（執行器用它更新停滯計時）
         self.on_event = on_event
+        # init 事件的 MCP 狀態快照送出去一次，由執行器決定「這輪還能不能跑」
+        self.on_init_mcp = on_init_mcp
         self.state = StreamState()
         self.state.last_event_at = self.monotonic()
         self.events_seen = 0
@@ -171,16 +178,24 @@ class StreamWatcher:
         if not isinstance(servers, list):
             return
         pending = []
+        status_map: dict[str, str] = {}
         for item in servers:
             if not isinstance(item, dict):
                 continue
-            if str(item.get("status") or "") == "connected":
-                continue
             name = str(item.get("name") or "").strip()
+            status = str(item.get("status") or "")
+            if name:
+                status_map[name] = status
+            if status == "connected":
+                continue
             if name and name not in pending:
                 pending.append(name)
         if pending:
             self.state.pending_mcp_servers = pending
+        if status_map:
+            self.state.mcp_servers = status_map
+            if self.on_init_mcp is not None:
+                self.on_init_mcp(status_map)
 
     def _assistant(self, event: dict) -> None:
         msg = event.get("message") or {}

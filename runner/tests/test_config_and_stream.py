@@ -335,6 +335,35 @@ def test_init_with_everything_connected_records_nothing():
     assert w.state.pending_mcp_servers == []
 
 
+def test_init_hands_the_mcp_status_map_to_the_executor():
+    """狀態快照要**逐一**交出去：執行器判的是 chatroom 這一個，不是「有沒有人 pending」。
+
+    只看 `pending_mcp_servers` 的話，chatroom 連上、別的連接器 pending 的
+    正常開場會被誤判成前置條件不成立。
+    """
+    seen: list[dict] = []
+    w = StreamWatcher(0, on_init_mcp=seen.append)
+    w.feed({"type": "system", "subtype": "init", "mcp_servers": [
+        {"name": "chatroom", "status": "pending"},
+        {"name": "claude.ai Atlassian Rovo", "status": "connected"},
+    ]})
+    assert seen == [{"chatroom": "pending",
+                     "claude.ai Atlassian Rovo": "connected"}]
+    assert w.state.mcp_servers["chatroom"] == "pending"
+
+
+def test_init_without_mcp_servers_field_says_nothing():
+    """沒帶 `mcp_servers` 的 init ⇒ 不呼叫、不留紀錄。
+
+    「沒講」與「講了但沒連上」不一樣：把沒講當成沒連上，會讓不列 MCP 的
+    CLI 版本每一輪都被判死。
+    """
+    seen: list[dict] = []
+    w = StreamWatcher(0, on_init_mcp=seen.append)
+    w.feed({"type": "system", "subtype": "init"})
+    assert seen == [] and w.state.mcp_servers == {}
+
+
 # ── 公開旗標與瀏覽器實機測試（執行器分頁）──────────────────────
 
 def test_project_flags_default_when_the_file_does_not_have_them(tmp_path,

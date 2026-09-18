@@ -17,6 +17,12 @@
 | `env_dump` | 把 `GIT_*` 環境變數寫進 run 目錄的 `env.json` | 0 |
 | `not_logged_in` | result subtype=success 但 is_error、exit 1（實測形狀） | 1 |
 | `big_line` | 一行 300 KB 的 tool_result（模擬 Read 一張圖） | 0 |
+| `mcp_pending` | init 裡 chatroom 是 pending，然後長睡等著被殺 | 0 |
+| `mcp_pending_then_ok` | 前 N-1 次 pending，第 N 次 connected 並成功 | 0 |
+| `mcp_connected` | init 裡 chatroom 是 connected，正常成功 | 0 |
+
+`mcp_pending_then_ok` 第幾次才連上由 `FAKE_CLAUDE_MCP_OK_AT` 決定
+（預設 3），次數記在 run 目錄的 `mcp_attempts`——跨進程的計數只能落檔。
 """
 
 from __future__ import annotations
@@ -60,14 +66,59 @@ def result(subtype: str, is_error: bool, text: str, turns: int = 3,
                     "cache_creation_input_tokens": 0}})
 
 
+def init(mcp_servers: list[dict] | None = None) -> None:
+    event = {"type": "system", "subtype": "init", "session_id": SESSION_ID,
+             "cwd": os.getcwd()}
+    if mcp_servers is not None:
+        event["mcp_servers"] = mcp_servers
+    emit(event)
+
+
+def sleep_until_killed() -> None:
+    """吐完 init 就等著被殺。真的 claude 在這裡會開始做事。"""
+    deadline = time.time() + float(os.environ.get("FAKE_CLAUDE_SLEEP", "30"))
+    while time.time() < deadline:
+        time.sleep(0.1)
+
+
+def bump_attempt() -> int:
+    """這是第幾次被起（跨進程，所以記在 run 目錄的檔案裡）。"""
+    run_dir = os.environ.get("CHATROOM_RUNNER_RUN_DIR", ".")
+    path = os.path.join(run_dir, "mcp_attempts")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            n = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        n = 0
+    n += 1
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(str(n))
+    return n
+
+
 def main(argv: list[str]) -> int:
     scenario = os.environ.get("FAKE_CLAUDE_SCENARIO", "success")
     resuming = "--resume" in argv
     if "--version" in argv:
         print("2.1.273 (fake)")
         return 0
-    emit({"type": "system", "subtype": "init", "session_id": SESSION_ID,
-          "cwd": os.getcwd()})
+    if scenario in ("mcp_pending", "mcp_pending_then_ok", "mcp_connected"):
+        ok_at = int(os.environ.get("FAKE_CLAUDE_MCP_OK_AT", "3"))
+        attempt = bump_attempt()
+        connected = (scenario == "mcp_connected"
+                     or (scenario == "mcp_pending_then_ok"
+                         and attempt >= ok_at))
+        status = "connected" if connected else "pending"
+        init([{"name": "chatroom", "status": status},
+              {"name": "claude.ai Atlassian Rovo", "status": "connected"}])
+        if not connected:
+            sleep_until_killed()
+            result("success", False, "盲做了一輪。", turns=3)
+            return 0
+        assistant("進房了，開始做。")
+        result("success", False, "已完成：進房讀卡後動工。", turns=4)
+        return 0
+    init()
 
     if scenario == "success":
         assistant("我看過卡了，開始做。")

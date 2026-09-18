@@ -41,6 +41,25 @@ class _OpsExceptionsScreenState extends ConsumerState<OpsExceptionsScreen> {
     super.dispose();
   }
 
+  /// 返回：先回堆疊上的來源頁，沒有堆疊時靠 `?from=` 找回入口
+  /// （通常是某間房的執行儀表板），兩者都沒有才退回房間列表。
+  void _back() {
+    if (context.canPop()) {
+      context.pop();
+      return;
+    }
+    final from = GoRouterState.of(context).uri.queryParameters['from'];
+    // 只接受站內的絕對路徑，而且不能指回這個面板自己——否則返回鈕會原地打轉
+    if (from != null &&
+        from.startsWith('/') &&
+        !from.startsWith('//') &&
+        !from.startsWith('/ops/exceptions')) {
+      context.go(from);
+      return;
+    }
+    context.go('/rooms');
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -66,8 +85,7 @@ class _OpsExceptionsScreenState extends ConsumerState<OpsExceptionsScreen> {
             IconButton(
               tooltip: '返回',
               icon: Icon(Icons.arrow_back, size: 18, color: s.inkSoft),
-              onPressed: () =>
-                  context.canPop() ? context.pop() : context.go('/rooms'),
+              onPressed: _back,
             ),
             const SizedBox(width: 6),
             Expanded(
@@ -202,7 +220,11 @@ class OpsExceptionsEntry extends ConsumerWidget {
       IconButton(
         tooltip: '派工異常',
         icon: Icon(Icons.warning_amber_rounded, size: 17, color: s.inkMute),
-        onPressed: () => context.go('/ops/exceptions'),
+        // 用 push 不用 go：go 會把導覽堆疊整個換掉，面板的返回鈕於是找不到
+        // 來源頁，一路退回房間列表。`?from=` 是堆疊被清掉（或直接開網址）
+        // 時的備援，讓返回至少回得到這個入口所在的畫面
+        onPressed: () => context.push('/ops/exceptions?from='
+            '${Uri.encodeComponent(GoRouterState.of(context).uri.toString())}'),
       ),
       if (unread > 0)
         Positioned(

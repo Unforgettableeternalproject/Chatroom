@@ -239,7 +239,7 @@ const Map<HelpTopic, HelpDoc> kHelpDocs = {
         icon: Icons.palette_outlined,
         items: [
           HelpItem([HelpChunk.text('深色主題這裡與標題列那顆切的是同一個開關。')]),
-          HelpItem([HelpChunk.text('字級五檔（極小／小／中／大／特大）選了立刻套用到整個 App，不必重開。')]),
+          HelpItem([HelpChunk.text('字級五檔（極小／小／中 (預設)／大／特大）選了立刻套用到整個 App，不必重開。')]),
           HelpItem([HelpChunk.text('「極小」是半個字級，實際上讀不了——它留著是個玩笑，要縮小從「小」開始試。')]),
           HelpItem([HelpChunk.text('語言還沒做，所以這頁沒有語言選項。')]),
         ],

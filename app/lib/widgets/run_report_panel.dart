@@ -11,6 +11,7 @@ import '../models/agent_run.dart';
 import '../state/runs_providers.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
+import 'reveal.dart';
 import 'uep_button.dart';
 
 /// 工作房側欄的「回報」區（REMOTE-OPS-PLAN §12 待辦 2）。
@@ -170,6 +171,12 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
 /// 掛法是 `Positioned.fill` 疊在聊天列上：它要蓋住訊息區，但**不蓋側欄**
 /// ——點另一張卡要能直接換內容，而不是先被關掉一次。左邊那塊透明區域就是
 /// 「點外面關閉」的接收面。
+///
+/// **開關有過場**：窄版走 bottom sheet，Flutter 自己會滑上來；寬版這塊是
+/// 自己疊的，沒有人替它做動畫，一塊 560 寬的面板瞬間出現在訊息上像是畫面
+/// 壞掉。這裡用共用的 [UepReveal]（淡入＋自右微幅滑入）補上。
+///
+/// 不撐高（`grow`）：它是 `Positioned.fill` 的疊層，高度本來就是整條。
 class RunReportOverlay extends ConsumerWidget {
   const RunReportOverlay({
     super.key,
@@ -184,10 +191,10 @@ class RunReportOverlay extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = context.uep;
     final id = ref.watch(selectedRunIdProvider)[roomId];
-    if (id == null) return const SizedBox.shrink();
-    final runs = ref.watch(finishedRunsProvider(roomId)).value ?? const [];
+    final runs = id == null
+        ? const <AgentRun>[]
+        : ref.watch(finishedRunsProvider(roomId)).value ?? const [];
     AgentRun? run;
     for (final r in runs) {
       if (r.id == id) {
@@ -195,10 +202,17 @@ class RunReportOverlay extends ConsumerWidget {
         break;
       }
     }
-    // 那一筆已經不在清單裡（換房、被過濾掉）就當沒開，不畫一塊空面板
-    if (run == null) return const SizedBox.shrink();
     void close() => ref.read(selectedRunIdProvider.notifier).clear(roomId);
 
+    return UepReveal(
+      slide: const Offset(.04, 0),
+      // 那一筆已經不在清單裡（換房、被過濾掉）就當沒開，不畫一塊空面板
+      child: run == null ? null : _buildPanel(context, run, close),
+    );
+  }
+
+  Widget _buildPanel(BuildContext context, AgentRun run, VoidCallback close) {
+    final s = context.uep;
     return LayoutBuilder(
       builder: (context, c) {
         final mainWidth = math.max(0.0, c.maxWidth - sidebarWidth);
@@ -232,7 +246,7 @@ class RunReportOverlay extends ConsumerWidget {
                       right: BorderSide(color: s.line),
                     ),
                   ),
-                  child: RunReportDetailPanel(run: run!, onClose: close),
+                  child: RunReportDetailPanel(run: run, onClose: close),
                 ),
               ),
             ),

@@ -48,6 +48,7 @@ import '../../widgets/question_card.dart';
 import '../../widgets/run_report_panel.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
+import '../../widgets/reveal.dart';
 import '../../state/composer_attachments.dart';
 import '../../state/composer_drafts.dart';
 import '../../state/composer_history.dart';
@@ -1066,13 +1067,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           if (pinnedMessages.isNotEmpty && !archived)
             _PinnedStrip(roomId: roomId, latest: pinnedMessages.last),
           // 封存請求。封存房裡不會有 pending（封存時一律標 superseded），
-          // 所以不必自己判斷 archived
-          if (detailAsync.value?.archiveRequest case final req?)
-            ArchiveRequestBanner(
-              roomId: roomId,
-              request: req,
-              youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-            ),
+          // 所以不必自己判斷 archived。
+          // 撐高／收合：它插在訊息區上方，出現與消失都會推動整串訊息
+          UepReveal(
+            grow: true,
+            child: switch (detailAsync.value?.archiveRequest) {
+              final req? => ArchiveRequestBanner(
+                  roomId: roomId,
+                  request: req,
+                  youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+                ),
+              _ => null,
+            },
+          ),
           Expanded(
             child: Stack(
               children: [
@@ -1548,6 +1555,14 @@ class RoomHeader extends ConsumerWidget {
           // 往這裡加入口時先問：**它是去看東西，還是去改東西。**
           _BoardAction(roomId: roomId, archived: archived),
           const SizedBox(width: 8),
+          // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
+          // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
+          // 重要」無處可去——Board 上沒有一段話的位置
+          _HeaderAction(
+            label: '◈ 釘選 $pinnedCount',
+            onTap: () => context.go('/rooms/$roomId/pinned'),
+          ),
+          const SizedBox(width: 8),
           // 執行儀表板。**檢視類**，所以封存房照樣看得到——面板上的寫入
           // 動作（派工、推送、取消）由 Hub 各自擋，而「那台執行器現在
           // 怎麼了」是封存之後仍然成立的問題
@@ -1558,14 +1573,6 @@ class RoomHeader extends ConsumerWidget {
             ),
             const SizedBox(width: 8),
           ],
-          // 釘選與 Board 並存（Q1）：釘選是「這則訊息很重要」（訊息的
-          // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
-          // 重要」無處可去——Board 上沒有一段話的位置
-          _HeaderAction(
-            label: '❖ 釘選 $pinnedCount',
-            onTap: () => context.go('/rooms/$roomId/pinned'),
-          ),
-          const SizedBox(width: 8),
           if (archived) ...[
             _HeaderAction(
               label: '解除封存',
@@ -1679,10 +1686,10 @@ class _HeaderAction extends StatelessWidget {
 ///
 /// | 狀態 | 顯示 | 為什麼 |
 /// |---|---|---|
-/// | 平常 | `❖ BOARD` | 板上沒有需要你的東西 |
-/// | 有進度 | `❖ BOARD 8/14` | 數字是資訊不是警示，**不上色** |
-/// | 有孤兒 | `❖ BOARD 2 孤兒` | 有卡看起來有人在做、實際上沒有 |
-/// | 等你確認 | `❖ BOARD 1 等你確認`（金） | 需要你動手，而且**只有你能動** |
+/// | 平常 | `❖ 任務板` | 板上沒有需要你的東西 |
+/// | 有進度 | `❖ 任務板 8/14` | 數字是資訊不是警示，**不上色** |
+/// | 有孤兒 | `❖ 任務板 2 孤兒` | 有卡看起來有人在做、實際上沒有 |
+/// | 等你確認 | `❖ 任務板 1 等你確認`（金） | 需要你動手，而且**只有你能動** |
 ///
 /// ⚠️ board 讀不到時退成最平常那一種，**不擋聊天**——聊天室不該因為附屬
 /// 功能的一次請求失敗而顯示錯誤。
@@ -1814,7 +1821,7 @@ class _BoardAction extends ConsumerWidget {
     final hint = (archived ? snap?.archivedEntryHint : snap?.entryHint) ??
         const BoardEntryHint();
     return _HeaderAction(
-      label: hint.label.isEmpty ? '❖ Board' : '❖ Board ${hint.label}',
+      label: hint.label.isEmpty ? '❖ 任務板' : '❖ 任務板 ${hint.label}',
       accent: hint.needsYou,
       onTap: () => context.go('/rooms/$roomId/board'),
     );
@@ -2149,10 +2156,14 @@ class _OverflowMenu extends ConsumerWidget {
             ),
           ),
       ],
+      // 與 `_HeaderAction` 同一套邊距與字級，整排按鈕才會同高
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(border: Border.all(color: s.line)),
-        child: Text('⋯', style: TextStyle(fontSize: 11, color: s.inkSoft)),
+        child: Text(
+          '⋯',
+          style: UepText.mono(size: 10.5, color: s.inkSoft, letterSpacing: 1.4),
+        ),
       ),
     );
   }
@@ -2182,7 +2193,7 @@ class _PinnedStrip extends StatelessWidget {
         child: Row(
           children: [
             const Text(
-              '❖',
+              '◈',
               style: TextStyle(fontSize: 11, color: UepColors.gold),
             ),
             const SizedBox(width: 10),
@@ -2533,22 +2544,30 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                     ),
                   ),
               ],
-              if (_showHidden && hidden.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                MonoLabel('已隱藏', size: 8.5, letterSpacing: 2.2),
-                const SizedBox(height: 8),
-                for (final p in hidden)
-                  Opacity(
-                    opacity: .35,
-                    child: _MemberTile(
-                      p: p,
-                      isSelf: p.id == myId,
-                      inactive: !p.isActive,
-                      idleTimeout: widget.limits.idleTimeout,
-                      onUnhide: () => _setHidden(p, false),
-                    ),
-                  ),
-              ],
+              // 一次多／少好幾列，直接跳的話上面那些人會瞬間位移
+              UepExpand(
+                expanded: _showHidden && hidden.isNotEmpty,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 16),
+                    MonoLabel('已隱藏', size: 8.5, letterSpacing: 2.2),
+                    const SizedBox(height: 8),
+                    for (final p in hidden)
+                      Opacity(
+                        opacity: .35,
+                        child: _MemberTile(
+                          p: p,
+                          isSelf: p.id == myId,
+                          inactive: !p.isActive,
+                          idleTimeout: widget.limits.idleTimeout,
+                          onUnhide: () => _setHidden(p, false),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -3030,8 +3049,10 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
               ),
             ),
           ),
-          if (!_collapsed)
-            ConstrainedBox(
+          // 收合時整塊（最高 420）會消失，輸入框整條跟著跳位
+          UepExpand(
+            expanded: !_collapsed,
+            child: ConstrainedBox(
               // 不限高的話，多題或長題會把輸入框整個擠出畫面，而外層是
               // Column 不能捲——使用者既看不完問題也打不了字（實機回報）
               constraints: BoxConstraints(
@@ -3055,6 +3076,7 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
                 ],
               ),
             ),
+          ),
         ],
       ),
     );

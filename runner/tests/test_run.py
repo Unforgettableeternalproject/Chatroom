@@ -182,6 +182,90 @@ async def test_weekly_limit_stops_the_runner_and_never_retries(
     assert final["status"] == "limited"
 
 
+# ── chatroom MCP 是前置條件 ─────────────────────────────────────
+
+async def test_chatroom_mcp_pending_is_retried_until_it_connects(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """開場 chatroom 不是 `connected` ⇒ 殺掉重起，連上了就照常跑。
+
+    實測 run 401a66ab：pending 的那一輪整份 stream 零筆 chatroom 工具呼叫，
+    agent 自己改走別的工具盲做一整輪——沒有 join、沒讀卡、收尾也沒寫卡。
+    重起才有第二次機會，而這是**唯一**的機會：init 之後不會再有事件來更正。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "mcp_pending_then_ok")
+    monkeypatch.setenv("FAKE_CLAUDE_MCP_OK_AT", "3")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-mcp-retry")
+    cfg = make_config(tmp_path, work_repo,
+                      mcp_retries=3, mcp_retry_backoff_seconds=[1, 2, 3])
+    slept: list[float] = []
+
+    outcome = await _executor(
+        cfg, runner_hub, sleep=lambda s: _record(slept, s)).execute(run)
+
+    assert outcome.status == "done"
+    assert slept == [1, 2], "第三次才連上 ⇒ 只該退避兩次，間隔遞增"
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "done"
+    attempts = (cfg.runs_dir / run["id"] / "mcp_attempts").read_text(
+        encoding="utf-8")
+    assert attempts == "3", "前兩次都該被殺掉，不是讓它繼續盲做"
+
+
+async def test_chatroom_mcp_never_connects_fails_with_a_named_error(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """重試耗盡 ⇒ `failed` + `chatroom_mcp_unavailable`，**不盲跑**。
+
+    艾斯維爾裁決 09/19：進不了房就直接報錯誤並收尾。理由字串要叫得出名字
+    ——報一個 `exit_0` 的話，房裡看到的是一筆莫名其妙失敗的 run。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "mcp_pending")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-mcp-dead")
+    cfg = make_config(tmp_path, work_repo,
+                      mcp_retries=2, mcp_retry_backoff_seconds=[1, 2])
+    slept: list[float] = []
+
+    outcome = await _executor(
+        cfg, runner_hub, sleep=lambda s: _record(slept, s)).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "chatroom_mcp_unavailable")
+    assert slept == [1, 2], "兩次重試都用完才放棄"
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "failed"
+    assert "chatroom MCP" in final["result"]
+    assert "前置條件" in final["result"], "要講得出為什麼不跑，不只是失敗"
+    attempts = (cfg.runs_dir / run["id"] / "mcp_attempts").read_text(
+        encoding="utf-8")
+    assert attempts == "3", "首次 + 兩次重試"
+
+
+async def test_chatroom_mcp_connected_runs_without_any_retry(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """connected 的開場一切照舊——前置條件檢查不該動到正常路徑。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "mcp_connected")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-mcp-ok")
+    cfg = make_config(tmp_path, work_repo)
+    slept: list[float] = []
+
+    outcome = await _executor(
+        cfg, runner_hub, sleep=lambda s: _record(slept, s)).execute(run)
+
+    assert outcome.status == "done"
+    assert slept == []
+    final, trail = await _trail(client, run["id"], headers)
+    assert trail == ["queued", "claimed", "running", "done"]
+    assert "進房讀卡" in final["result"]
+
+
 # ── context 軟閾值 → 交接 ───────────────────────────────────────
 
 async def test_context_soft_limit_raises_flag_and_hands_off(
@@ -525,7 +609,9 @@ def test_run_files_carry_the_matcher_and_bridge_pythonpath(tmp_path,
     env = mcp["mcpServers"]["chatroom"]["env"]
     assert env["PYTHONPATH"].endswith("bridge")
     assert env["CHATROOM_SESSION_KEY"] == "claude-run-r-files"
-    assert env["CHATROOM_DEFAULT_NAME"].startswith("test-")
+    # 名字留空＝Hub 的名字池發名號。塞 `<label>-<run 短碼>` 的話成員列上
+    # 顯示的是一串 id；**鍵本身不能省**，省掉會沿用執行器自己的代稱
+    assert env["CHATROOM_DEFAULT_NAME"] == ""
     # 少了它 bridge 會落回 other，房間成員列顯示 OTHER
     assert env["CHATROOM_AGENT_KIND"] == "claude"
     # 🚨 附件要落在 run 目錄，不是 cwd。bridge 預設寫 `./.chatroom/downloads/`，
@@ -888,6 +974,22 @@ def test_child_env_strips_git_credentials(tmp_path, work_repo):
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert Path(env["GIT_ASKPASS"]).is_file()
     assert env["GIT_ASKPASS"] == str(run_mod.ASKPASS_SCRIPT)
+
+
+def test_child_env_does_not_hand_the_run_a_name(tmp_path, work_repo, monkeypatch):
+    """run 的名字由 Hub 的名字池發，執行器不塞。
+
+    🚨 要**明寫空字串**：`env = dict(os.environ)` 會把執行器自己的
+    CHATROOM_DEFAULT_NAME 一路帶進去，run 就頂著執行器的代稱進房；bridge
+    載 `.env` 時也只補「不在 env 裡」的鍵，空字串擋得住那一路。
+    """
+    monkeypatch.setenv("CHATROOM_DEFAULT_NAME", "Minka")
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    env = ex._child_env({"id": "r-env"}, tmp_path)
+
+    assert env["CHATROOM_DEFAULT_NAME"] == ""
+    assert env["CHATROOM_SESSION_KEY"] == "claude-run-r-env"
 
 
 def test_credential_override_really_denies_credentials(tmp_path, work_repo):

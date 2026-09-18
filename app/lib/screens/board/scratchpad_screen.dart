@@ -13,6 +13,7 @@ import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/reveal.dart';
 import '../../widgets/scratchpad_tag.dart';
 import '../../widgets/uep_button.dart';
 
@@ -980,93 +981,101 @@ class _BlockCardState extends State<_BlockCard> {
               ),
             ]),
           ),
-          if (_notesOpen) ...[
-            for (final n in b.notes)
-              Padding(
-                padding: const EdgeInsets.only(top: 6, left: 18),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text.rich(TextSpan(children: [
-                        TextSpan(
-                          text: '${n.authorName}：',
-                          style: UepText.mono(size: 10, color: s.inkMute),
-                        ),
-                        TextSpan(
-                          text: n.content,
-                          // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
-                          // 起來的話，人會找不到自己剛剛處理的是哪一則
-                          style: UepText.serif(
-                            size: 13,
-                            height: 1.45,
-                            color: n.resolved ? s.inkMute : s.inkSoft).copyWith(
-                            decoration: n.resolved
-                                ? TextDecoration.lineThrough
-                                : null,
+          // 註解一開一關是一整段的高低差，直接跳會讓底下的段落位移
+          UepExpand(
+            expanded: _notesOpen,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                  for (final n in b.notes)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 18),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text.rich(TextSpan(children: [
+                              TextSpan(
+                                text: '${n.authorName}：',
+                                style: UepText.mono(size: 10, color: s.inkMute),
+                              ),
+                              TextSpan(
+                                text: n.content,
+                                // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
+                                // 起來的話，人會找不到自己剛剛處理的是哪一則
+                                style: UepText.serif(
+                                  size: 13,
+                                  height: 1.45,
+                                  color: n.resolved ? s.inkMute : s.inkSoft).copyWith(
+                                  decoration: n.resolved
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                ),
+                              ),
+                            ])),
+                          ),
+                          if (widget.onResolveNote != null)
+                            _Tiny(
+                              label: n.resolved ? '收回' : '處理掉',
+                              onTap: () =>
+                                  widget.onResolveNote!(n.id, n.resolved),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (widget.onNote != null) ...[
+                    const SizedBox(height: 6),
+                    if (!_noting)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _Tiny(
+                            label: '＋ 留一則意見',
+                            onTap: () => setState(() => _noting = true)),
+                      )
+                    else
+                      Row(children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _note,
+                            autofocus: true,
+                            style: UepText.sans(size: 13, color: s.ink),
+                            decoration: const InputDecoration(
+                                isDense: true, border: OutlineInputBorder()),
                           ),
                         ),
-                      ])),
-                    ),
-                    if (widget.onResolveNote != null)
-                      _Tiny(
-                        label: n.resolved ? '收回' : '處理掉',
-                        onTap: () =>
-                            widget.onResolveNote!(n.id, n.resolved),
-                      ),
+                        const SizedBox(width: 6),
+                        _Tiny(
+                          label: _sendingNote ? '送出中…' : '送出',
+                          onTap: _sendingNote
+                              ? null
+                              : () async {
+                                  final t = _note.text.trim();
+                                  if (t.isEmpty) return;
+                                  setState(() => _sendingNote = true);
+                                  try {
+                                    await widget.onNote!(t);
+                                    if (!mounted) return;
+                                    // 成功了才清。失敗時那句話還在框裡，
+                                    // 他可以再送一次
+                                    _note.clear();
+                                    setState(() => _noting = false);
+                                  } catch (_) {
+                                    // ⚠️ **要接住。** 呼叫端已經 toast 過並 rethrow，
+                                    // 這裡只有 try/finally 的話那個例外會從 async
+                                    // onTap 逸出去變成未處理錯誤——輸入框裡的字保住
+                                    // 了，卻多了一個沒有人接的例外
+                                    // （@審核用Codex-2 2026-09-03）
+                                  } finally {
+                                    if (mounted) setState(() => _sendingNote = false);
+                                  }
+                                },
+                        ),
+                      ]),
                   ],
-                ),
-              ),
-            if (widget.onNote != null) ...[
-              const SizedBox(height: 6),
-              if (!_noting)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _Tiny(
-                      label: '＋ 留一則意見',
-                      onTap: () => setState(() => _noting = true)),
-                )
-              else
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _note,
-                      autofocus: true,
-                      style: UepText.sans(size: 13, color: s.ink),
-                      decoration: const InputDecoration(
-                          isDense: true, border: OutlineInputBorder()),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  _Tiny(
-                    label: _sendingNote ? '送出中…' : '送出',
-                    onTap: _sendingNote
-                        ? null
-                        : () async {
-                            final t = _note.text.trim();
-                            if (t.isEmpty) return;
-                            setState(() => _sendingNote = true);
-                            try {
-                              await widget.onNote!(t);
-                              if (!mounted) return;
-                              // 成功了才清。失敗時那句話還在框裡，
-                              // 他可以再送一次
-                              _note.clear();
-                              setState(() => _noting = false);
-                            } catch (_) {
-                              // ⚠️ **要接住。** 呼叫端已經 toast 過並 rethrow，
-                              // 這裡只有 try/finally 的話那個例外會從 async
-                              // onTap 逸出去變成未處理錯誤——輸入框裡的字保住
-                              // 了，卻多了一個沒有人接的例外
-                              // （@審核用Codex-2 2026-09-03）
-                            } finally {
-                              if (mounted) setState(() => _sendingNote = false);
-                            }
-                          },
-                  ),
-                ]),
-            ],
-          ],
+              ],
+            ),
+          ),
         ],
       ]),
     );

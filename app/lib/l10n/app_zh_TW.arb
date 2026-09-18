@@ -81,9 +81,9 @@
   "@fontScaleSmall": {
     "description": "字級選項：小"
   },
-  "fontScaleMedium": "中",
+  "fontScaleMedium": "預設",
   "@fontScaleMedium": {
-    "description": "字級選項：中"
+    "description": "字級選項：預設"
   },
   "fontScaleLarge": "大",
   "@fontScaleLarge": {

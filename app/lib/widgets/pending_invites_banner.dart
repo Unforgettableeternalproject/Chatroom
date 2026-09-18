@@ -9,6 +9,7 @@ import '../models/assignment.dart';
 import '../state/app_providers.dart';
 import '../state/rooms_providers.dart';
 import 'kind_badge.dart';
+import 'reveal.dart';
 import 'uep_button.dart';
 
 /// 別人邀我進房的待處理邀請。
@@ -38,10 +39,17 @@ class PendingInvitesBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = context.uep;
     final invites = ref.watch(myPendingInvitesProvider);
-    if (invites.isEmpty) return const SizedBox.shrink();
+    // 撐高／收合：它在房間列表最上方，答覆完直接消失會讓整串房間跳一格
+    return UepReveal(
+      grow: true,
+      child: invites.isEmpty ? null : _banner(context, ref, invites),
+    );
+  }
 
+  Widget _banner(
+      BuildContext context, WidgetRef ref, List<Assignment> invites) {
+    final s = context.uep;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),

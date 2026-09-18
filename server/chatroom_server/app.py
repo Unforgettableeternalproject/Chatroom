@@ -3335,23 +3335,6 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, my_parent),
             )
         ).fetchall()
-        # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
-        if assignment is not None and assignment["assigned_name"]:
-            assigned = assignment
-        else:
-            assigned = await (
-                await db.execute(
-                    "SELECT assigned_name FROM assignment WHERE room_id=?"
-                    " AND target_session_key=? AND status='pending' AND assigned_name!=''"
-                    " ORDER BY created_at DESC LIMIT 1",
-                    (room_id, session_key),
-                )
-            ).fetchone()
-        preferred = assigned["assigned_name"] if assigned else body.preferred_name
-        name = generate_name({r["display_name"] for r in taken_rows}, preferred)
-        pid = _uid()
-        now = _now()
-        join_ip = request.client.host if request.client else None
         # 派工帶進來的身分：執行器把子進程的 session_key 設成
         # `claude-run-<run_id>`（REMOTE-OPS-PLAN §5.4）。**要對得上一筆屬於
         # 這間房的 run 才算數**——這個前綴只是一串字，任何人都打得出來，
@@ -3368,6 +3351,29 @@ def create_app(config: Config | None = None) -> FastAPI:
             ).fetchone()
             if hit is not None:
                 run_tag = candidate
+        # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
+        if assignment is not None and assignment["assigned_name"]:
+            assigned = assignment
+        else:
+            assigned = await (
+                await db.execute(
+                    "SELECT assigned_name FROM assignment WHERE room_id=?"
+                    " AND target_session_key=? AND status='pending' AND assigned_name!=''"
+                    " ORDER BY created_at DESC LIMIT 1",
+                    (room_id, session_key),
+                )
+            ).fetchone()
+        preferred = assigned["assigned_name"] if assigned else body.preferred_name
+        # run 進房**不採自報名**：執行器與模型自己送過來的名字都是編號或模板
+        # 名（實測 `Runner-01ad9f1e`、`Minka-Ticket`），成員列上讀起來就是一串
+        # id。run 的識別留在 `participant.run_id`，顯示名一律走名字池。
+        # 指派者預先取的名字不受影響——那是人挑的，不是自動生成的編號。
+        if run_tag and not assigned:
+            preferred = None
+        name = generate_name({r["display_name"] for r in taken_rows}, preferred)
+        pid = _uid()
+        now = _now()
+        join_ip = request.client.host if request.client else None
         # joined_seq＝加入當下房內的最後一則 seq（next_seq 指向下一個要發的
         # 號碼）。@ 判定拿它當界線：房內名稱在離開後會被釋出重用，沒有這條
         # 界線的話，帶著同一個名字進來的下一個人首次拉歷史就會被前一任的

@@ -35,7 +35,7 @@ void main() {
   testWidgets('🔴 封存房仍看得到釘選牆的入口', (tester) async {
     await tester.pumpWidget(_wrap(archived: true));
 
-    expect(find.text('❖ 釘選 3'), findsOneWidget);
+    expect(find.text('◈ 釘選 3'), findsOneWidget);
     // 門後那一頁自己會收掉「取消釘選」，Hub 的讀取也明寫允許封存房——
     // 缺的自始至終只有這扇門
     expect(find.text('解除封存'), findsOneWidget);
@@ -50,7 +50,7 @@ void main() {
   testWidgets('活著的房兩類都在', (tester) async {
     await tester.pumpWidget(_wrap(archived: false));
 
-    expect(find.text('❖ 釘選 3'), findsOneWidget);
+    expect(find.text('◈ 釘選 3'), findsOneWidget);
     expect(find.text('指派'), findsOneWidget);
     expect(find.text('解除封存'), findsNothing);
   });
