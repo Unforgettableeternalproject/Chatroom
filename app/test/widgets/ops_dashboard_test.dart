@@ -1,6 +1,7 @@
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/agent_run.dart';
 import 'package:chatroom_app/screens/ops/ops_dashboard_view.dart';
+import 'package:chatroom_app/widgets/markdown_body.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -88,14 +89,18 @@ Map<String, dynamic> _run({
   String id = 'run-1',
   String status = 'queued',
   bool cancelRequested = false,
+  String kind = 'ticket',
+  String ref = 'task-9',
+  String result = '',
+  String runnerId = '',
 }) =>
     {
       'id': id,
       'room_id': 'room-1',
       'board_id': '',
-      'kind': 'ticket',
+      'kind': kind,
       'project': 'ai-website',
-      'ref': 'task-9',
+      'ref': ref,
       'brief': '',
       'requested_by': 'p1',
       'requested_by_actor_key': 'a1',
@@ -103,14 +108,14 @@ Map<String, dynamic> _run({
       'status': status,
       'priority': 0,
       'position': 1,
-      'runner_id': '',
+      'runner_id': runnerId,
       'claude_session_id': '',
       'attempt': 0,
       'parent_run_id': '',
       'handoff_depth': 0,
       'cancel_requested': cancelRequested,
       'usage': const {},
-      'result': '',
+      'result': result,
       'reason': '',
       'created_at': '2026-09-16T01:00:00+00:00',
       'claimed_at': null,
@@ -479,6 +484,112 @@ void main() {
       )));
       expect(find.text('執行器尚未回報用量。'), findsOneWidget);
       expect(find.text('這台執行器還沒有回報過儀表板。'), findsOneWidget);
+    });
+  });
+
+  group('卡片', () {
+    /// 最近結束那一區原本把 `result` 原樣印出來：整段 Markdown（`## 收工摘要`、
+    /// 粗體、反引號）沒截、長度不一，於是這一區讀起來像 log。卡片上要的是
+    /// 「這筆做了什麼」的頭幾行，全文在點開的回報面板裡。
+    testWidgets('最近結束：摘要截短，標題行不進卡片', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        finished: [
+          AgentRun.fromJson(_run(
+              id: 'f1',
+              status: 'done',
+              result: '## 收工摘要\n\n**做了什麼**：改了 A\n第二行\n'
+                  '第三行\n第四行不該出現')),
+        ],
+      )));
+      final body =
+          tester.widget<UepMarkdownBody>(find.byType(UepMarkdownBody));
+      expect(body.data.contains('#'), isFalse);
+      expect(body.data.contains('第四行不該出現'), isFalse);
+      expect(body.data.split('\n').length, 3);
+      // 狀態與 kind 改成看得懂的中文，不再是 done / ticket
+      expect(find.text('完成'), findsOneWidget);
+      expect(find.text('實作一張票'), findsOneWidget);
+    });
+
+    testWidgets('最近結束：超長的一行也要截，不把卡片撐開', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        finished: [
+          AgentRun.fromJson(
+              _run(id: 'f1', status: 'done', result: '字' * 400)),
+        ],
+      )));
+      final body =
+          tester.widget<UepMarkdownBody>(find.byType(UepMarkdownBody));
+      expect(body.data.length, lessThanOrEqualTo(161));
+      expect(body.data.endsWith('…'), isTrue);
+    });
+
+    testWidgets('ref 只顯示前 8 碼，全碼留在 tooltip', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        finished: [
+          AgentRun.fromJson(
+              _run(id: 'f1', status: 'done', ref: '0123456789abcdef')),
+        ],
+      )));
+      expect(find.text('01234567'), findsOneWidget);
+      expect(find.text('0123456789abcdef'), findsNothing);
+      final tip = tester.widget<Tooltip>(find.ancestor(
+          of: find.text('01234567'), matching: find.byType(Tooltip)));
+      expect(tip.message, '0123456789abcdef');
+    });
+
+    testWidgets('佇列卡片：序號、執行器名與等待時間', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner()
+        ], activeRuns: [
+          _run(id: 'a', runnerId: 'runner-1'),
+          _run(id: 'b'),
+        ]),
+        now: DateTime.parse('2026-09-16T01:20:00+00:00').toLocal(),
+      )));
+      expect(find.text('排隊'), findsNWidgets(2));
+      expect(find.textContaining('排隊第 1 位 · ASVEL-PC · main'),
+          findsOneWidget);
+      expect(find.textContaining('排隊第 2 位'), findsOneWidget);
+      // created_at 是 01:00，now 是 01:20
+      expect(find.textContaining('等待 20 分'), findsNWidgets(2));
+    });
+
+    testWidgets('執行中的卡片：狀態說「執行中」，並帶上 turns', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(dashboardOverride: {
+            'repos': const <String, dynamic>{},
+            'usage': const <String, dynamic>{},
+            'runs': const {
+              'running': [
+                {
+                  'run_id': 'a',
+                  'kind': 'ticket',
+                  'ref': 'task-9',
+                  'turns': 7,
+                  'context_peak_tokens': 12000,
+                },
+              ],
+              'queued_count': 0,
+              'max_parallel': 3,
+            },
+            'runner': const {'version': '0.1.0'},
+          }),
+        ], activeRuns: [
+          _run(id: 'a', status: 'running'),
+        ]),
+        onSoftStop: (_) {},
+        onCancel: (_) {},
+      )));
+      expect(find.text('執行中'), findsOneWidget);
+      expect(find.textContaining('7 turns'), findsOneWidget);
+      expect(find.text('請收尾'), findsOneWidget);
+      expect(find.text('取消'), findsOneWidget);
     });
   });
 }

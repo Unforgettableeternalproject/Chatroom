@@ -5,6 +5,8 @@ import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
 import '../../models/agent_run.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/markdown_body.dart';
+import '../../widgets/run_report_panel.dart';
 
 /// 執行儀表板的畫面本體（REMOTE-OPS-PLAN §4.4）。
 ///
@@ -75,10 +77,13 @@ class OpsDashboardView extends StatelessWidget {
           const SizedBox(height: 22),
         ],
         _QueueSection(
-            board: board, onCancel: onCancel, onSoftStop: onSoftStop),
+            board: board,
+            onCancel: onCancel,
+            onSoftStop: onSoftStop,
+            now: now),
         if (finished.isNotEmpty) ...[
           const SizedBox(height: 22),
-          _FinishedSection(runs: finished),
+          _FinishedSection(runs: finished, now: now),
         ],
       ],
     );
@@ -433,11 +438,17 @@ class _RepoTile extends StatelessWidget {
 }
 
 class _QueueSection extends StatelessWidget {
-  const _QueueSection({required this.board, this.onCancel, this.onSoftStop});
+  const _QueueSection({
+    required this.board,
+    this.onCancel,
+    this.onSoftStop,
+    this.now,
+  });
 
   final RoomRunnerBoard board;
   final void Function(AgentRun run)? onCancel;
   final void Function(AgentRun run)? onSoftStop;
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
@@ -448,6 +459,10 @@ class _QueueSection extends StatelessWidget {
     final views = <String, RunnerRunView>{
       for (final r in board.runners)
         for (final v in r.dashboard.running) v.runId: v,
+    };
+    // run 上只有 runner_id，而畫面上要講的是那台機器的名字
+    final runnerNames = <String, String>{
+      for (final r in board.runners) r.id: r.displayName,
     };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -461,13 +476,17 @@ class _QueueSection extends StatelessWidget {
           _RunTile(
               run: run,
               view: views[run.id],
+              runnerName: runnerNames[run.runnerId] ?? '',
               onCancel: onCancel,
-              onSoftStop: onSoftStop),
+              onSoftStop: onSoftStop,
+              now: now),
         for (var i = 0; i < queued.length; i++)
           _RunTile(
               run: queued[i],
               position: i + 1,
-              onCancel: onCancel),
+              runnerName: runnerNames[queued[i].runnerId] ?? '',
+              onCancel: onCancel,
+              now: now),
       ],
     );
   }
@@ -480,6 +499,8 @@ class _RunTile extends StatelessWidget {
     this.position,
     this.onCancel,
     this.onSoftStop,
+    this.runnerName = '',
+    this.now,
   });
 
   final AgentRun run;
@@ -493,112 +514,278 @@ class _RunTile extends StatelessWidget {
   /// 請它收尾。**只有執行中的 run 有**：排隊中的還沒開始，該按的是取消。
   final void Function(AgentRun run)? onSoftStop;
 
+  final String runnerName;
+  final DateTime? now;
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final turns = view?.turns ?? run.turns;
     final meta = <String>[
-      run.kind,
-      if (run.ref.isNotEmpty) run.ref,
       if (position != null) '排隊第 $position 位',
+      if (runnerName.isNotEmpty) runnerName,
+      if (run.isQueued)
+        '等待 ${_waited(run.createdAt, now)}'
+      else if (run.startedAt != null)
+        '開始 ${relativeTime(run.startedAt, now: now)}',
       if (run.priority > 0) '優先 ${run.priority}',
-      if (run.startedAt != null) '開始 ${relativeTime(run.startedAt)}',
-      if (view != null) '${view!.turns} turns',
+      // 執行中才講 turns／成本：排隊中的那兩格一定是 0，而那個 0 不是量測值
+      if (!run.isQueued && turns > 0) '$turns turns',
+      if (!run.isQueued && run.usage.isNotEmpty)
+        '\$${run.costUsd.toStringAsFixed(2)}',
       if (view != null && view!.contextTokens > 0)
         'context 約 ${view!.contextTokens}',
     ];
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: s.bgCard,
-        border: Border.all(color: s.line),
-      ),
-      child: Row(children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Text(run.status,
-                    style: UepText.mono(
-                        size: 10.5,
-                        letterSpacing: 1.4,
-                        color: run.isQueued ? s.inkMute : UepColors.gold)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(run.id,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: UepText.mono(size: 10.5, color: s.inkSoft)),
-                ),
-              ]),
-              const SizedBox(height: 3),
-              Text(meta.join(' · '),
-                  style: UepText.mono(size: 10, color: s.inkMute)),
-              // 🔴 running 的取消**不改狀態**（§4.2）：進程還在跑，這裡說
-              // 「已取消」的話，畫面會與機器上正在寫檔的那個 agent 對不上
-              if (run.cancelRequested && !run.isQueued)
-                Text('已要求取消，等執行器收到後停止',
-                    style: UepText.mono(size: 10, color: UepColors.error)),
-              if (run.softStopRequestedAt != null && !run.cancelRequested)
-                Text('已要求收尾，它會做完目前這一步再結束',
-                    style: UepText.mono(size: 10, color: s.inkSoft)),
-            ],
+    final actions = <Widget>[
+      if (onSoftStop != null &&
+          !run.isQueued &&
+          !run.cancelRequested &&
+          run.softStopRequestedAt == null)
+        _SmallButton(
+            label: '請收尾', enabled: true, onTap: () => onSoftStop!(run)),
+      if (onCancel != null && !run.cancelRequested)
+        _SmallButton(label: '取消', enabled: true, onTap: () => onCancel!(run)),
+    ];
+    return _RunCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _RunCardHeader(
+            run: run,
+            timeIso: run.startedAt ?? run.createdAt,
+            now: now,
           ),
-        ),
-        if (onSoftStop != null &&
-            !run.isQueued &&
-            !run.cancelRequested &&
-            run.softStopRequestedAt == null) ...[
-          _SmallButton(
-              label: '請收尾', enabled: true, onTap: () => onSoftStop!(run)),
-          const SizedBox(width: 6),
+          const SizedBox(height: 6),
+          Text(meta.join(' · '),
+              style: UepText.mono(size: 10, color: s.inkMute)),
+          // 🔴 running 的取消**不改狀態**（§4.2）：進程還在跑，這裡說
+          // 「已取消」的話，畫面會與機器上正在寫檔的那個 agent 對不上
+          if (run.cancelRequested && !run.isQueued)
+            Text('已要求取消，等執行器收到後停止',
+                style: UepText.mono(size: 10, color: UepColors.error)),
+          if (run.softStopRequestedAt != null && !run.cancelRequested)
+            Text('已要求收尾，它會做完目前這一步再結束',
+                style: UepText.mono(size: 10, color: s.inkSoft)),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.end,
+              children: actions,
+            ),
+          ],
         ],
-        if (onCancel != null && !run.cancelRequested)
-          _SmallButton(
-              label: '取消', enabled: true, onTap: () => onCancel!(run)),
-      ]),
+      ),
     );
   }
 }
 
 class _FinishedSection extends StatelessWidget {
-  const _FinishedSection({required this.runs});
+  const _FinishedSection({required this.runs, this.now});
 
   final List<AgentRun> runs;
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
-    final s = context.uep;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         MonoLabel('最近結束', size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 8),
-        for (final run in runs)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${run.status} · ${run.kind}'
-                  '${run.ref.isEmpty ? '' : ' · ${run.ref}'}'
-                  ' · ${relativeTime(run.endedAt ?? run.updatedAt)}',
-                  style: UepText.mono(size: 10.5, color: s.inkSoft),
-                ),
-                if (run.result.isNotEmpty)
-                  Text(run.result,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: UepText.serif(
-                          size: 12.5, color: s.inkMute, height: 1.5)),
-              ],
-            ),
-          ),
+        for (final run in runs) _FinishedCard(run: run, now: now),
       ],
     );
   }
+}
+
+/// 一筆結束的 run 在儀表板上的那張卡。
+///
+/// **摘要只留節錄**：`result` 是整段 Markdown（收工摘要動輒幾十行），原樣
+/// 印在清單裡會把這一區變成 log。全文在既有的回報面板裡，點卡片打開。
+class _FinishedCard extends StatelessWidget {
+  const _FinishedCard({required this.run, this.now});
+
+  final AgentRun run;
+  final DateTime? now;
+
+  void _open(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.uep.bgSoft,
+      builder: (sheetContext) => FractionallySizedBox(
+        heightFactor: .85,
+        child: RunReportDetailPanel(
+          run: run,
+          onClose: () => Navigator.of(sheetContext).pop(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final excerpt = opsResultExcerpt(run.result);
+    return _RunCard(
+      onTap: () => _open(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _RunCardHeader(
+            run: run,
+            timeIso: run.endedAt ?? run.updatedAt,
+            now: now,
+          ),
+          if (excerpt.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            UepMarkdownBody(data: excerpt, baseColor: s.inkMute),
+          ] else if (run.reason.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(run.reason,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 佇列與最近結束共用的卡片外框。與回報面板的卡片同一個做法。
+class _RunCard extends StatelessWidget {
+  const _RunCard({required this.child, this.onTap});
+
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    const radius = BorderRadius.all(Radius.circular(10));
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: s.bgSoft,
+        border: Border.all(color: s.line),
+        borderRadius: radius,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: radius,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Padding(padding: const EdgeInsets.all(12), child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// 卡片第一行：狀態 chip ＋ kind ＋ ref 短碼 ＋ 相對時間。
+class _RunCardHeader extends StatelessWidget {
+  const _RunCardHeader({required this.run, required this.timeIso, this.now});
+
+  final AgentRun run;
+  final String? timeIso;
+  final DateTime? now;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final (label, color) = opsRunStatusLabel(context, run);
+    final short = run.ref.length <= 8 ? run.ref : run.ref.substring(0, 8);
+    return Row(children: [
+      _RunStatusChip(label: label, color: color),
+      const SizedBox(width: 8),
+      Flexible(
+        child: Text(runKindLabel(run.kind),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: UepText.mono(size: 10.5, color: s.inkSoft)),
+      ),
+      if (short.isNotEmpty) ...[
+        const SizedBox(width: 8),
+        // 短碼夠認人，全碼留在 tooltip——它長到會把這一行擠掉
+        Tooltip(
+          message: run.ref,
+          child: Text(short,
+              style: UepText.mono(size: 10.5, color: UepColors.gold)),
+        ),
+      ],
+      const Spacer(),
+      const SizedBox(width: 8),
+      Text(relativeTime(timeIso, now: now),
+          style: UepText.mono(size: 10, color: s.inkMute)),
+    ]);
+  }
+}
+
+class _RunStatusChip extends StatelessWidget {
+  const _RunStatusChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withValues(alpha: .5)),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child:
+            Text(label, style: UepText.mono(size: 10, color: color, letterSpacing: 1.2)),
+      );
+}
+
+/// 狀態 → (標籤, 顏色)。結束的那幾種沿用回報面板那一份，另外補上佇列才有的
+/// 兩種——同一個狀態在兩個畫面上長不一樣的話，人會以為那是兩件事。
+(String, Color) opsRunStatusLabel(BuildContext context, AgentRun run) =>
+    switch (run.status) {
+      'running' || 'claimed' => ('執行中', UepColors.gold),
+      'queued' => ('排隊', context.uep.inkMute),
+      _ => runStatusLabel(context, run),
+    };
+
+/// kind → 中文。沿用派工模板那一份對照；`push` 不在模板裡（它是儀表板按出來
+/// 的，見 [kRunTemplates]），所以單獨補。認不得的原樣顯示。
+String runKindLabel(String kind) {
+  for (final t in kRunTemplates) {
+    if (t.kind == kind) return t.label;
+  }
+  return kind == 'push' ? '推送' : kind;
+}
+
+/// 最近結束卡片上的摘要節錄：去掉標題行，最多 [maxLines] 行、[maxChars] 字。
+///
+/// **標題行整行丟掉**（`## 收工摘要` 這類）：它在卡片上佔的是第一行內容的
+/// 位置，而它講的是「接下來是摘要」——那件事卡片本身已經說了。
+String opsResultExcerpt(String result,
+    {int maxLines = 3, int maxChars = 160}) {
+  final picked = <String>[];
+  for (final raw in result.split(RegExp(r'\r?\n'))) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    if (RegExp(r'^#{1,6}\s').hasMatch(line)) continue;
+    picked.add(line);
+    if (picked.length >= maxLines) break;
+  }
+  final text = picked.join('\n');
+  if (text.length <= maxChars) return text;
+  return '${text.substring(0, maxChars).trimRight()}…';
+}
+
+String _waited(String? since, DateTime? now) {
+  final t = parseIso(since);
+  if (t == null) return '—';
+  return humanDuration((now ?? DateTime.now()).difference(t));
 }
 
 class _SmallButton extends StatelessWidget {
