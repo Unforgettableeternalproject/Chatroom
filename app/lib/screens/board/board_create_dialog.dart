@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
-import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 
 /// 建立 Objective / Checklist / Task 的對話框（設計稿 artboard 04）。
@@ -109,8 +108,8 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
               const SizedBox(height: 14),
               Align(
                 alignment: Alignment.centerLeft,
-                child: MonoLabel('優先度', color: s.inkSoft,
-                    letterSpacing: 1.4),
+                child: Text('優先度',
+                    style: UepText.fieldLabel(color: s.inkSoft)),
               ),
               const SizedBox(height: 7),
               Row(
@@ -148,7 +147,8 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       {String? hint, int lines = 1}) {
     final s = context.uep;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      MonoLabel(label, color: s.inkSoft, letterSpacing: 1.4),
+      Text(label,
+          style: UepText.fieldLabel(color: s.inkSoft)),
       const SizedBox(height: 7),
       Container(
         decoration: BoxDecoration(

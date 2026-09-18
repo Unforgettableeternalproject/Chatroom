@@ -680,7 +680,8 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
           const SizedBox(height: 18),
           Align(
             alignment: Alignment.centerLeft,
-            child: MonoLabel('誰看得到', color: s.inkSoft, letterSpacing: 1.4),
+            child: Text('誰看得到',
+                style: UepText.fieldLabel(color: s.inkSoft)),
           ),
           const SizedBox(height: 6),
           // 兩個選項各自把**結果**講完，而不是只給「公開／私人」兩個詞——

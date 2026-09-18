@@ -4,7 +4,6 @@ import 'package:logging/logging.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../models/agent_run.dart';
-import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 
 /// 派工對話框填完之後的東西。
@@ -199,7 +198,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
             const SizedBox(height: 14),
             Align(
               alignment: Alignment.centerLeft,
-              child: MonoLabel('模板', color: s.inkSoft, letterSpacing: 1.4),
+              child: Text('模板',
+                  style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
             // 每個模板都附一句說明。**選項的名字講不完它會做什麼**——
@@ -238,7 +238,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
-              child: MonoLabel('專案', color: s.inkSoft, letterSpacing: 1.4),
+              child: Text('專案',
+                  style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
             if (_loading)
@@ -293,8 +294,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: MonoLabel('簡述（給 agent 的任務描述）',
-                  color: s.inkSoft, letterSpacing: 1.4),
+              child: Text('簡述（給 agent 的任務描述）',
+                  style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
             TextField(
@@ -320,7 +321,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
             ),
             const SizedBox(height: 10),
             Row(children: [
-              MonoLabel('優先', color: s.inkSoft, letterSpacing: 1.4),
+              Text('優先',
+                  style: UepText.fieldLabel(color: s.inkSoft)),
               const SizedBox(width: 10),
               // 佇列是 priority DESC + position ASC。數字大的先做
               DropdownButton<int>(

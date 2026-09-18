@@ -396,6 +396,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
+        Text('視覺', style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
         Row(children: [
           Expanded(
             child: Column(
@@ -428,9 +430,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 12),
         Row(children: [
           for (final (scale, label) in const [
+            (FontScalePref.tiny, '極小'),
             (FontScalePref.small, '小'),
             (FontScalePref.medium, '中'),
             (FontScalePref.large, '大'),
+            (FontScalePref.xlarge, '特大'),
           ]) ...[
             UepButton(
               label: label,
@@ -457,6 +461,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
+        Text('個人化', style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
         _FieldLabel('顯示名稱（進房時使用）'),
         _box(
           context,
@@ -655,8 +661,7 @@ class _FieldLabel extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 7),
       child: Text(
         text,
-        style: UepText.mono(
-            size: 9, color: context.uep.inkSoft, letterSpacing: 1.4),
+        style: UepText.fieldLabel(color: context.uep.inkSoft),
       ),
     );
   }

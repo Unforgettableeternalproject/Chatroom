@@ -138,8 +138,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                       isDense: true,
                       border: InputBorder.none,
                       labelText: '對方要連的位址',
-                      labelStyle:
-                          UepText.mono(size: 10, color: s.inkMute),
+                      labelStyle: UepText.fieldLabel(color: s.inkMute),
                       hintText: 'https://xxx.trycloudflare.com',
                       hintStyle: UepText.code(size: 12, color: s.inkMute),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),

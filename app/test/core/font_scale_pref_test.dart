@@ -1,4 +1,5 @@
 import 'package:chatroom_app/core/config/app_settings.dart';
+import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +29,24 @@ void main() {
 
     expect(settings.fontScale, FontScalePref.large);
     expect(settings.prefs.getString('chatroom.font_scale'), 'large');
+  });
+
+  test('新增的兩檔也落盤讀得回來', () async {
+    await settings.setFontScale(FontScalePref.tiny);
+    expect(settings.fontScale, FontScalePref.tiny);
+    expect(settings.prefs.getString('chatroom.font_scale'), 'tiny');
+
+    await settings.setFontScale(FontScalePref.xlarge);
+    expect(settings.fontScale, FontScalePref.xlarge);
+    expect(settings.prefs.getString('chatroom.font_scale'), 'xlarge');
+  });
+
+  test('五檔各自對到不同倍率，順序遞增', () {
+    final factors =
+        FontScalePref.values.map(fontScaleFactor).toList(growable: false);
+
+    expect(factors, [0.5, 0.9, 1.0, 1.15, 1.3]);
+    expect(fontScaleFactor(FontScalePref.medium), 1.0);
   });
 
   test('prefs 裡是壞值時回預設，不丟例外', () async {

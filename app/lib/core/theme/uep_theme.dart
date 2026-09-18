@@ -31,9 +31,17 @@ class UepText {
   static TextStyle itemTitle({Color? color, double? height}) =>
       display(size: 17, color: color, height: height);
 
-  /// 區塊小標：mono 全大寫或中文短標，靠字距拉出標籤感。
-  static TextStyle label({Color? color, double letterSpacing = 1.6}) =>
-      mono(size: 10.5, color: color, letterSpacing: letterSpacing);
+  /// 區塊小標／徽章：mono 全大寫或中文短標，靠字距拉出標籤感。
+  static TextStyle label(
+          {Color? color, double size = 10.5, double letterSpacing = 1.6}) =>
+      mono(size: size, color: color, letterSpacing: letterSpacing);
+
+  /// 欄位標籤：緊貼輸入框、開關或狀態值，說明「這一欄是什麼」。
+  ///
+  /// 比 [label] 大一級：那些字要跟旁邊的值一起讀，縮到徽章的尺寸會讀不動。
+  static TextStyle fieldLabel({Color? color, double letterSpacing = 1.2}) =>
+      mono(size: 12, weight: FontWeight.w500, color: color,
+          letterSpacing: letterSpacing);
 
   static TextStyle serif({
     double size = 15,
@@ -79,16 +87,20 @@ class UepText {
         fontSize: size, color: color, height: height);
 }
 
-/// 字級三檔對應的整體縮放倍率——套在 MediaQuery 的 textScaler 上，
+/// 字級五檔對應的整體縮放倍率——套在 MediaQuery 的 textScaler 上，
 /// 所有硬編碼字級一起放大，版面比例不變。
 double fontScaleFactor(FontScalePref pref) {
   switch (pref) {
+    case FontScalePref.tiny:
+      return 0.5;
     case FontScalePref.small:
       return 0.9;
     case FontScalePref.medium:
       return 1.0;
     case FontScalePref.large:
       return 1.15;
+    case FontScalePref.xlarge:
+      return 1.3;
   }
 }
 

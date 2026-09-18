@@ -12,7 +12,6 @@ import '../state/board_providers.dart';
 import '../state/composer_attachments.dart';
 import '../state/messages_providers.dart';
 import 'attachment_view.dart';
-import 'kind_badge.dart';
 import 'uep_button.dart';
 
 /// 階段素材（共享附件）的畫面元件。
@@ -302,8 +301,8 @@ Future<String?> showStageNoteDialog(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              MonoLabel('這是什麼（可留白）',
-                  color: s.inkSoft, letterSpacing: 1.4),
+              Text('這是什麼（可留白）',
+                  style: UepText.fieldLabel(color: s.inkSoft)),
               const SizedBox(height: 7),
               Container(
                 decoration: BoxDecoration(

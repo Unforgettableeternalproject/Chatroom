@@ -206,11 +206,14 @@ class SettingsRepository {
 
 enum ThemeModePref { dark, light }
 
-/// 字級偏好：small 小、medium 中（預設）、large 大。
+/// 字級偏好：tiny 極小、small 小、medium 中（預設）、large 大、xlarge 特大。
 ///
 /// 只存偏好本身，實際的縮放倍率由套用端（`app.dart` 的 MediaQuery）決定——
 /// 倍率是視覺決策，會被調整，而落盤的值不該跟著改。
-enum FontScalePref { small, medium, large }
+///
+/// 落盤的是 `enum.name`，所以加新檔不會動到舊值：存過 small／medium／large
+/// 的裝置照樣讀得回來。
+enum FontScalePref { tiny, small, medium, large, xlarge }
 
 /// 通知模式：off 不通知、mentions 僅被 @mention、all 所有新訊息。
 enum NotifyModePref { off, mentions, all }

@@ -111,7 +111,7 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
               style: UepText.sans(size: 14, color: s.ink),
               decoration: InputDecoration(
                 labelText: '板的名字',
-                labelStyle: UepText.mono(size: 10.5, color: s.inkMute),
+                labelStyle: UepText.fieldLabel(color: s.inkMute),
                 helperText: null,
                 helperStyle: UepText.serif(size: 12, color: s.inkMute),
                 border: const OutlineInputBorder(),

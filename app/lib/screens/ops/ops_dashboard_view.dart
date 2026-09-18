@@ -219,7 +219,7 @@ class _RunnerSection extends StatelessWidget {
           if (progress != null) ...[
             const SizedBox(height: 10),
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              MonoLabel('命令進度', letterSpacing: 1.6),
+              MonoLabel('命令進度', size: 11.5, letterSpacing: 1.6),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(progress,
@@ -231,7 +231,7 @@ class _RunnerSection extends StatelessWidget {
           const SizedBox(height: 16),
           _UsageRow(usage: dash.usage),
           const SizedBox(height: 16),
-          MonoLabel('專案', letterSpacing: 1.6),
+          MonoLabel('專案', size: 11.5, letterSpacing: 1.6),
           const SizedBox(height: 8),
           if (!dash.reported)
             Text('這台執行器還沒有回報過儀表板。',
@@ -307,7 +307,7 @@ class _UsageRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('用量', letterSpacing: 1.6),
+        MonoLabel('用量', size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 6),
         Text(
           '$hours ${usage.tokens} tokens · '
@@ -446,7 +446,7 @@ class _QueueSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('佇列', letterSpacing: 1.6),
+        MonoLabel('佇列', size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 8),
         if (running.isEmpty && queued.isEmpty)
           Text('目前沒有進行中或排隊中的派工。',
@@ -548,7 +548,7 @@ class _FinishedSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('最近結束', letterSpacing: 1.6),
+        MonoLabel('最近結束', size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 8),
         for (final run in runs)
           Padding(

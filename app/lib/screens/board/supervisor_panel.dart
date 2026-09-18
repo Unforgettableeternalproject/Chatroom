@@ -184,7 +184,8 @@ class _SupervisorPanelState extends ConsumerState<_SupervisorPanel> {
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
-            child: MonoLabel('判斷與建議', color: s.inkSoft, letterSpacing: 1.4),
+            child: Text('判斷與建議',
+                style: UepText.fieldLabel(color: s.inkSoft)),
           ),
           const SizedBox(height: 8),
           SizedBox(height: 180, child: _trail(context, snap)),
@@ -385,7 +386,8 @@ class _AttachedSupervisorsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      MonoLabel('掛接聊天室的 SUPERVISOR', color: s.inkSoft, letterSpacing: 1.4),
+      Text('掛接聊天室的 SUPERVISOR',
+          style: UepText.fieldLabel(color: s.inkSoft)),
       const SizedBox(height: 8),
       if (sups.isEmpty)
         Text(
@@ -537,8 +539,8 @@ class _RoomSupervisorSection extends ConsumerWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Align(
         alignment: Alignment.centerLeft,
-        child: MonoLabel('這間房的 SUPERVISOR', color: s.inkSoft,
-            letterSpacing: 1.4),
+        child: Text('這間房的 SUPERVISOR',
+            style: UepText.fieldLabel(color: s.inkSoft)),
       ),
       const SizedBox(height: 8),
       Row(children: [
@@ -722,7 +724,8 @@ class _BoardOwnerSection extends ConsumerWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Align(
         alignment: Alignment.centerLeft,
-        child: MonoLabel('這塊板是誰的', color: s.inkSoft, letterSpacing: 1.4),
+        child: Text('這塊板是誰的',
+            style: UepText.fieldLabel(color: s.inkSoft)),
       ),
       const SizedBox(height: 8),
       Row(children: [

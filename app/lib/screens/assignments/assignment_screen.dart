@@ -192,8 +192,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     MonoLabel('新指派', letterSpacing: 2.2),
                     const SizedBox(height: 14),
                     Row(children: [
-                      MonoLabel('掃描到的 SESSION',
-                          color: s.inkSoft, letterSpacing: 1.4),
+                      Text('掃描到的 SESSION',
+                          style: UepText.fieldLabel(color: s.inkSoft)),
                       const Spacer(),
                       InkWell(
                         onTap: () => setState(() => _showIdle = !_showIdle),
@@ -212,8 +212,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     const SizedBox(height: 6),
                     _buildSessionScan(),
                     const SizedBox(height: 14),
-                    MonoLabel('目標 session',
-                        color: s.inkSoft, letterSpacing: 1.4),
+                    Text('目標 session',
+                        style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
                       TextField(
@@ -225,7 +225,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       ),
                     ),
                     const SizedBox(height: 14),
-                    MonoLabel('命名（選填）', color: s.inkSoft, letterSpacing: 1.4),
+                    Text('命名（選填）',
+                        style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
                       TextField(
@@ -238,7 +239,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       ),
                     ),
                     const SizedBox(height: 14),
-                    MonoLabel('備註', color: s.inkSoft, letterSpacing: 1.4),
+                    Text('備註',
+                        style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
                       TextField(

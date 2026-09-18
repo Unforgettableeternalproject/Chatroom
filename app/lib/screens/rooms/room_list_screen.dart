@@ -652,8 +652,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           const SizedBox(height: 14),
           Align(
             alignment: Alignment.centerLeft,
-            child: MonoLabel('房間類型', color: context.uep.inkSoft,
-                letterSpacing: 1.4),
+            child: Text('房間類型',
+                style: UepText.fieldLabel(color: context.uep.inkSoft)),
           ),
           const SizedBox(height: 7),
           _KindPicker(
@@ -666,8 +666,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           // 進來，等他講完第一輪長篇再改就已經晚了
           Align(
             alignment: Alignment.centerLeft,
-            child: MonoLabel('說話方式', color: context.uep.inkSoft,
-                letterSpacing: 1.4),
+            child: Text('說話方式',
+                style: UepText.fieldLabel(color: context.uep.inkSoft)),
           ),
           const SizedBox(height: 7),
           RoomStylePicker(
@@ -700,8 +700,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
           const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerLeft,
-            child: MonoLabel('任務板（可不掛）', color: context.uep.inkSoft,
-                letterSpacing: 1.4),
+            child: Text('任務板（可不掛）',
+                style: UepText.fieldLabel(color: context.uep.inkSoft)),
           ),
           const SizedBox(height: 7),
           _BoardPicker(
@@ -746,7 +746,8 @@ class _CreateRoomDialogState extends ConsumerState<_CreateRoomDialog> {
   }) {
     final s = context.uep;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      MonoLabel(label, color: s.inkSoft, letterSpacing: 1.4),
+      Text(label,
+          style: UepText.fieldLabel(color: s.inkSoft)),
       const SizedBox(height: 7),
       Container(
         decoration: BoxDecoration(

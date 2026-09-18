@@ -12,7 +12,6 @@ import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
 import '../../state/mcp_kit_providers.dart';
-import '../../widgets/kind_badge.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
 
@@ -283,7 +282,7 @@ class _LightRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              MonoLabel(label, size: 9, letterSpacing: 1.6),
+              Text(label, style: UepText.fieldLabel(color: s.inkMute)),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(probe.detail,
@@ -481,7 +480,8 @@ class _VersionCheck extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MonoLabel('Bridge 版本', size: 9, letterSpacing: 1.6),
+          Text('Bridge 版本',
+              style: UepText.fieldLabel(color: s.inkMute)),
           const SizedBox(height: 5),
           SelectableText(
             version.isEmpty ? '讀不到 _build.json' : version,
@@ -1586,8 +1586,8 @@ class _CopyRowState extends State<_CopyRow> {
     final hidden = widget.secret && !_revealed;
     return Row(children: [
       SizedBox(
-        width: 78,
-        child: MonoLabel(widget.label, size: 9, letterSpacing: 1.4),
+        width: 92,
+        child: Text(widget.label, style: UepText.fieldLabel(color: s.inkMute)),
       ),
       Expanded(
         child: Container(
@@ -1657,8 +1657,8 @@ class _StatusLine extends StatelessWidget {
     final s = context.uep;
     return Row(children: [
       SizedBox(
-        width: 78,
-        child: MonoLabel(label, size: 9, letterSpacing: 1.4),
+        width: 92,
+        child: Text(label, style: UepText.fieldLabel(color: s.inkMute)),
       ),
       Text(value, style: UepText.serif(size: 14.5, color: s.ink)),
     ]);
@@ -1676,8 +1676,8 @@ class _Panel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 字級用 MonoLabel 預設（9／1.8），與設定頁的區塊標籤同一組
-        MonoLabel(title),
+        // 與設定頁的欄位標籤同一組字級（fieldLabel：mono 12／w500）
+        Text(title, style: UepText.fieldLabel(color: context.uep.inkMute)),
         const SizedBox(height: 12),
         // 不再包邊框卡片——分段交給 `_sep()` 的分隔線。留 width 撐滿，
         // 否則 Column 會依內容縮寬，右側的說明文字排版跟著跳
