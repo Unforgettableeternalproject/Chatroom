@@ -2352,6 +2352,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 限定只推父層的是**進出事件**，不是存在本身（§3.5）
             entry["ephemeral"] = bool(rep["ephemeral"])
             entry["parent_id"] = rep["parent_id"]
+            # 派工帶進來的身分。空字串＝一般成員。App 靠它標「派工中」，
+            # 而不是拿 last_seen 去算一個不會發生的閒置倒數
+            entry["run_id"] = rep["run_id"] or ""
             prev = next(
                 (
                     g["display_name"]
@@ -3443,6 +3446,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                     {r["display_name"] for r in taken_rows}, preferred
                 )
         await _commit_with_retry(db)
+        # 派工帶進來的身分一進房就掛 hold：它會安靜地跑很久，而 last_seen
+        # 只在它說話時才動。續期在執行器心跳與 run 回報
+        if run_tag:
+            await _extend_run_hold(room_id, run_tag)
+            await _commit_with_retry(db)
         # 有 agent 加入時，若房間曾被指派給這個 session，順手標記完成
         await db.execute(
             "UPDATE assignment SET status='accepted', resolved_at=? WHERE room_id=?"
@@ -12817,6 +12825,35 @@ def create_app(config: Config | None = None) -> FastAPI:
     # 段落，沒有上限的話一條長交接鏈會把 brief 一輪一輪疊到讀不完
     _HANDOFF_BRIEF_MAX = 8000
 
+    async def _extend_run_hold(room_id: str, run_id: str) -> None:
+        """把某筆 run 帶進房的成員 hold 續到上限。**不 commit。**
+
+        掃描豁免看的是「run 還在跑」（`_sweep_once`），但 `hold_until` 是
+        **對外那一半**：舊版 App 與任何讀這一欄的地方都只看得到它，沒有它
+        的話畫面照樣倒數「最快 N 分後移出」，而那件事不會發生。
+        續期語意與 `toggle_hold` 相同（`now + cfg.hold_max`）。
+        """
+        if not run_id:
+            return
+        until = (datetime.now(timezone.utc)
+                 + timedelta(seconds=cfg.hold_max)).isoformat()
+        await app.state.db.execute(
+            "UPDATE participant SET hold_until=? WHERE room_id=? AND run_id=?"
+            " AND run_id!='' AND status='active'",
+            (until, room_id, run_id))
+
+    async def _extend_runner_holds(runner_id: str) -> None:
+        """這台執行器手上還在跑的 run，其成員 hold 一起續期。**不 commit。**"""
+        marks = ",".join("?" for _ in _RUN_ACTIVE)
+        until = (datetime.now(timezone.utc)
+                 + timedelta(seconds=cfg.hold_max)).isoformat()
+        await app.state.db.execute(
+            "UPDATE participant SET hold_until=?"
+            " WHERE status='active' AND run_id!='' AND run_id IN ("
+            "   SELECT id FROM agent_run WHERE runner_id=?"
+            f"   AND status IN ({marks}))",
+            (until, runner_id, *_RUN_ACTIVE))
+
     async def _depart_run_participants(
         room_id: str, run_id: str,
     ) -> tuple[list[str], list[dict]]:
@@ -13538,6 +13575,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             " AND status IN ('claimed','running','limited')",
             (runner_id,))).fetchall()
         pending_mentions = await _collect_run_mentions(runner_id)
+        # 心跳＝這台手上的 run 還在跑，它們帶進房的身分也就還在工作
+        await _extend_runner_holds(runner_id)
         await _commit_with_retry(db)
         if was_offline and runner_id in runner_offline_quiet:
             # 那一次掉線沒有講，回來也不講：面板上有命令進度，房裡不需要
@@ -13654,6 +13693,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _record_run_event(
                 run_id, row["room_id"], old, new, row["runner_id"], "",
                 body.reason, {"stalled_seconds": body.stalled_seconds})
+            await _extend_run_hold(row["room_id"], run_id)
             await _commit_with_retry(db)
             await _announce_run_note(row, body.reason, body.stalled_seconds)
             await events.notify(row["room_id"])
@@ -13699,6 +13739,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                        from_status=fresh["status"], to_status=new)
         await _record_run_event(run_id, row["room_id"], old, new,
                                 row["runner_id"], "", body.reason or "report")
+        # 還沒收場的回報＝這一輪仍在進行。收場的那幾個不用續：
+        # `_depart_run_participants` 會把人帶走
+        if new not in _RUN_TERMINAL:
+            await _extend_run_hold(row["room_id"], run_id)
 
         child_id = None
         if new == "handoff":

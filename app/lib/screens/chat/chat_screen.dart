@@ -2686,7 +2686,11 @@ class _MemberTile extends StatelessWidget {
     final idleMinutes = lastSeen == null
         ? null
         : DateTime.now().difference(lastSeen).inMinutes;
-    final isIdle = !inactive && !p.isHuman && (idleMinutes ?? 0) >= 2;
+    // 派工帶進房的成員：run 還在跑的期間 Hub 不會把它掃掉（掃描豁免，
+    // 且 hold 一路續著），這一列不算閒置、也不印倒數
+    final onRun = p.isOnRun && !inactive;
+    final isIdle =
+        !inactive && !onRun && !p.isHuman && (idleMinutes ?? 0) >= 2;
 
     String subtitle;
     if (nested && !inactive) {
@@ -2790,6 +2794,12 @@ class _MemberTile extends StatelessWidget {
                       // HOST＝這台 Hub 是他的，ADMIN＝這個房是他開的。
                       // 合成一顆「管理員」會讓「誰能封這個房」與「誰能看
                       // 所有房」變得分不出來
+                      // 「它現在在替一筆派工工作」。掛在名字旁邊而不是寫進
+                      // 下面那行：那一行原本印倒數，而這個成員沒有倒數
+                      if (onRun) ...[
+                        const SizedBox(width: 5),
+                        _RoleBadge(label: '派工中', color: UepColors.gold),
+                      ],
                       if (p.showsHostBadge) ...[
                         const SizedBox(width: 5),
                         _RoleBadge(label: '主機', color: UepColors.gold),

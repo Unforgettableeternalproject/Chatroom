@@ -344,3 +344,89 @@ async def test_the_capped_handoff_also_sends_its_member_home(tmp_path):
         assert (await _row(app, body["participant_id"]))["status"] == "left"
         assert "末棒" not in [p["display_name"]
                              for p in await _participants(client, rid, hdr)]
+
+
+# ── hold 與成員列表 ──────────────────────────────────────────────────
+
+async def _set_hold(app, pid, value):
+    await app.state.db.execute(
+        "UPDATE participant SET hold_until=? WHERE id=?", (value, pid))
+    await app.state.db.commit()
+
+
+async def test_a_run_member_holds_from_the_moment_it_joins(tmp_path):
+    """run 帶進來的身分一進房就有 hold。
+
+    掃描本來就豁免它（run 還在跑），但 `hold_until` 是**對外那一半**：
+    App 的成員列讀的是這一欄，沒有它就照樣印「最快 N 分後移出」——一個
+    不會發生的倒數，而使用者會以為 hold 沒生效。
+    """
+    app, client = await _client(tmp_path, "hold-join")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        assert (await _row(app, body["participant_id"]))["hold_until"]
+        # 一般成員不受影響：他該照常被閒置掃描看見
+        _, plain = await _join_agent(client, rid, "codex-main", "米絲媞")
+        assert not (await _row(app, plain["participant_id"]))["hold_until"]
+
+
+async def test_the_runner_heartbeat_extends_the_hold(tmp_path):
+    """心跳＝這台手上的 run 還在跑，hold 要跟著往前推。
+
+    `hold_max` 是有上限的（掛著 hold 就 crash 的 agent 不能永遠掃不掉），
+    所以長時間的 run 一定會走到過期那一刻——不續期的話，畫面在那之後又
+    開始倒數。
+    """
+    app, client = await _client(tmp_path, "hold-hb")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        pid = body["participant_id"]
+        await _set_hold(app, pid, "2020-01-01T00:00:00+00:00")
+        r = await client.post(f"/api/runners/{runner}/heartbeat",
+                              json={"status": "online", "running_count": 1},
+                              headers=runner.headers)
+        assert r.status_code == 200, r.text
+        assert (await _row(app, pid))["hold_until"] > "2021-01-01"
+
+
+async def test_a_run_report_extends_the_hold(tmp_path):
+    """回報也是「這一輪還在」的證據——執行器可能只回報、不心跳。"""
+    app, client = await _client(tmp_path, "hold-report")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        pid = body["participant_id"]
+        await _set_hold(app, pid, "2020-01-01T00:00:00+00:00")
+        await _report(client, run_id, runner, "running", reason="stalled",
+                      stalled_seconds=90)
+        assert (await _row(app, pid))["hold_until"] > "2021-01-01"
+
+
+async def test_the_member_list_says_which_run_a_member_belongs_to(tmp_path):
+    """成員列表要帶 `run_id`：空字串＝一般成員。
+
+    App 靠它把那一列標成「派工中」。沒有這個欄位，client 只能拿
+    `last_seen` 自己算倒數，而那個倒數對 run 成員永遠不會發生。
+    """
+    app, client = await _client(tmp_path, "list-run-id")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        listed = {p["display_name"]: p for p in
+                  await _participants(client, rid, hdr)}
+        assert listed["Runner"]["run_id"] == run_id
+        assert listed["艾斯維爾"]["run_id"] == ""
