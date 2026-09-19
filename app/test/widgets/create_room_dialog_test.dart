@@ -11,6 +11,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 建房對話框的版面與房間類型。
 ///
@@ -74,6 +75,9 @@ Future<_FakeRoomsApi> _open(WidgetTester tester) async {
       runnerKitPresentProvider.overrideWith((ref) async => true),
     ],
     child: MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
+      locale: kTestLocale,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Builder(

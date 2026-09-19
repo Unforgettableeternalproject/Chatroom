@@ -1,3 +1,5 @@
+import 'package:chatroom_app/l10n/l10n.dart';
+import 'package:flutter/widgets.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/models/scratchpad.dart';
 import 'package:chatroom_app/state/scratchpad_providers.dart';
@@ -7,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 這裡測的都是**靜默失效**：欄位讀不到、預設值偏向危險的那一邊、
 /// 不認得的事件被吞掉。每一種都不會拋錯，只會讓畫面上少一塊東西。
+/// 模板 locale 的字串。文案本身就是用繁中寫定的，所以斷言照原樣比對。
+final _l10n = lookupAppLocalizations(const Locale('zh', 'TW'));
+
 void main() {
   group('段落', () {
     test('can_edit 是伺服器算的，缺了就當不能改', () {
@@ -75,19 +80,19 @@ void main() {
     test('不認得的事件照樣說得出來，不吞掉', () {
       // ⚠️ 吞掉的話收件匣裡會少一筆，而使用者不會知道少了——
       // 他正在等的可能就是那一筆。難看但看得見，勝過乾淨但不見了
-      final label = watchNoticeLabel('task_something_new', '換軸');
+      final label = watchNoticeLabel(_l10n, 'task_something_new', '換軸');
       expect(label, contains('換軸'));
       expect(label, contains('task_something_new'));
     });
 
     test('「又重新打開了」跟「完成了」一樣要講', () {
       // 漏掉 reopen 等於讓人以為可以動工了
-      expect(watchNoticeLabel('task_reopened', 'A'), contains('重新打開'));
-      expect(watchNoticeLabel('task_done', 'A'), contains('完成'));
+      expect(watchNoticeLabel(_l10n, 'task_reopened', 'A'), contains('重新打開'));
+      expect(watchNoticeLabel(_l10n, 'task_done', 'A'), contains('完成'));
     });
 
     test('沒有標題時不印出一個空的引號', () {
-      expect(watchNoticeLabel('task_done', ''), '一張卡 完成了');
+      expect(watchNoticeLabel(_l10n, 'task_done', ''), '一張卡 完成了');
     });
   });
 

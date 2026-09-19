@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../l10n/l10n.dart';
 import 'host_kit_providers.dart';
 
 /// 一盞燈的狀態。
@@ -19,7 +20,7 @@ enum ProbeState { checking, ok, bad, unknown }
 class Probe {
   const Probe(this.state, this.detail, {this.caveat = ''});
 
-  const Probe.checking() : this(ProbeState.checking, '檢查中…');
+  Probe.checking() : this(ProbeState.checking, L10n.current.hostProbeChecking);
 
   final ProbeState state;
 
@@ -105,7 +106,7 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
   final env = await ref.watch(hostEnvProvider.future);
   if (env == null || !env.isComplete) return null;
 
-  const blocked = Probe(ProbeState.unknown, '等 Hub 啟動');
+  final blocked = Probe(ProbeState.unknown, L10n.current.hostProbeWaitingHub);
 
   // 探測要打哪個位址。
   //
@@ -129,24 +130,24 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
   final local = await _get('http://$probeHost:${env.port}/api/health');
   if (local != 200) {
     return HostHealth(
-      process: const Probe(ProbeState.bad, '已停止'),
+      process: Probe(ProbeState.bad, L10n.current.hostProbeStopped),
       reachable: blocked,
       auth: blocked,
     );
   }
-  const process = Probe(ProbeState.ok, '執行中');
+  final process = Probe(ProbeState.ok, L10n.current.hostProbeRunning);
 
   // ② 綁定位址：綁 0.0.0.0 時所有介面都收，本機這一關必然過，沒有意義——
   // 那時要講的是「別台機器連不連得到我驗不到」，而不是給一個沒有內容的綠燈
   final Probe reachable;
   if (env.bindsAllInterfaces) {
-    reachable = const Probe(ProbeState.unknown, '綁在所有介面（0.0.0.0）');
+    reachable = Probe(ProbeState.unknown, L10n.current.hostProbeBindAll);
   } else {
     // ①打的就是這個位址（綁單一介面時迴環不可達，只有它能打），所以這裡
     // **不再打第二次**。再打一次不會多知道任何事，卻會多一種失敗方式：
     // 兩次探測之間 Hub 剛好停掉時，畫面會變成「進程活著、但綁定位址打不通」
     // ——一個自相矛盾、而且指不出該修什麼的狀態。
-    reachable = Probe(ProbeState.ok, '$bindHost 打得通');
+    reachable = Probe(ProbeState.ok, L10n.current.hostProbeReachable(bindHost));
   }
 
   // ③ token：拿 .env 這份去打一個要認證的端點。401 就是這份不對——
@@ -155,11 +156,11 @@ final hostHealthProvider = FutureProvider<HostHealth?>((ref) async {
       await _get('http://$probeHost:${env.port}/api/rooms', token: env.token);
   final Probe auth;
   if (code == 200) {
-    auth = const Probe(ProbeState.ok, '通過');
+    auth = Probe(ProbeState.ok, L10n.current.hostProbeAuthOk);
   } else if (code == 401 || code == 403) {
-    auth = const Probe(ProbeState.bad, 'token 不被接受');
+    auth = Probe(ProbeState.bad, L10n.current.hostProbeAuthBad);
   } else {
-    auth = const Probe(ProbeState.unknown, '驗不出來');
+    auth = Probe(ProbeState.unknown, L10n.current.hostProbeAuthUnknown);
   }
 
   return HostHealth(process: process, reachable: reachable, auth: auth);

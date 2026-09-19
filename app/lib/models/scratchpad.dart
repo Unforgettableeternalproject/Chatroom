@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
+
 /// 想法板：**一串有 id 的段落**，不是一份自由文字。
 ///
 /// 那個形狀是被「agent 不得改寫人類的段落，只能註解」逼出來的
@@ -335,21 +337,23 @@ class WatchNotice {
 /// ⚠️ 不認得的事件**照樣要說出來**，不要吞掉——收件匣裡少一筆，使用者不會
 /// 知道少了，而他正在等的可能就是那一筆。所以 default 分支印出原始事件名，
 /// 難看，但看得見。
-String watchNoticeLabel(String eventType, String itemTitle) {
-  final t = itemTitle.isEmpty ? '一張卡' : '「$itemTitle」';
+String watchNoticeLabel(
+    AppLocalizations l10n, String eventType, String itemTitle) {
+  final t = itemTitle.isEmpty
+      ? l10n.boardWatchNoticeSomeCard
+      : l10n.commonQuoted(itemTitle);
+  // ⚠️ 這兩個的 item_title 是**板名**，不是卡名（Hub 寫 item_kind='board'）。
+  // 套上面那個 `t` 的話會變成「「某某板」完成了」那種句子
+  final b = itemTitle.isEmpty
+      ? l10n.boardWatchNoticeWatchedBoard
+      : l10n.commonQuoted(itemTitle);
   return switch (eventType) {
-    'task_done' => '$t 完成了',
-    'task_cancelled' => '$t 被取消了',
-    'task_reopened' => '$t 又重新打開了',
-    // ⚠️ 這兩個的 item_title 是**板名**，不是卡名（Hub 寫 item_kind='board'）。
-    // 套上面那個 `t` 的話會變成「「某某板」完成了」那種句子
-    'delivery_degraded' =>
-      '${itemTitle.isEmpty ? '你追蹤的板' : '「$itemTitle」'} '
-          '不再有聊天室，通知改為只能自己回來看',
-    'delivery_restored' =>
-      '${itemTitle.isEmpty ? '你追蹤的板' : '「$itemTitle」'} '
-          '又有聊天室了，會重新叫醒你',
-    _ => '$t 有變動（$eventType）',
+    'task_done' => l10n.boardWatchNoticeTaskDone(t),
+    'task_cancelled' => l10n.boardWatchNoticeTaskCancelled(t),
+    'task_reopened' => l10n.boardWatchNoticeTaskReopened(t),
+    'delivery_degraded' => l10n.boardWatchNoticeDeliveryDegraded(b),
+    'delivery_restored' => l10n.boardWatchNoticeDeliveryRestored(b),
+    _ => l10n.boardWatchNoticeOther(t, eventType),
   };
 }
 

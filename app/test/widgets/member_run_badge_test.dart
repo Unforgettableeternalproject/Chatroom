@@ -58,7 +58,9 @@ void main() {
     });
 
     test('派工中的成員掛金色標籤', () {
-      expect(source, contains("_RoleBadge(label: '派工中'"),
+      // 文案抽成翻譯鍵之後，守的是**那顆徽章讀的是哪一個鍵**——
+      // 直接比中文字的話，換語言就等於把這條守衛關掉
+      expect(source, contains('label: l10n.chatBadgeOnRun'),
           reason: '成員列上看不出它正在替一筆派工工作');
     });
 
@@ -77,12 +79,13 @@ void main() {
       // 有人把 `後移出` 搬到別的分支時這條會紅
       final branch = source.indexOf('} else if (isIdle) {');
       expect(branch, isNot(-1));
-      // 只找字串常值（結尾那個單引號），不找註解裡的同一個詞
-      final copy = source.indexOf("後移出'");
+      // 文案抽成翻譯鍵之後找那個鍵的呼叫；鍵名不會出現在註解裡，
+      // 所以仍然只數到真正會被畫出來的那一處
+      final copy = source.indexOf('l10n.chatMemberIdleWithRemain(');
       expect(copy, isNot(-1), reason: '倒數文案被改名了，請一起更新這條守衛');
       expect(copy, greaterThan(branch),
           reason: '倒數文案跑到閒置分支之前了——派工中的成員會讀到它');
-      expect(source.indexOf("後移出'", copy + 1), -1,
+      expect(source.indexOf('l10n.chatMemberIdleWithRemain(', copy + 1), -1,
           reason: '倒數文案出現在第二個地方，這條守衛只守得住第一個');
     });
   });

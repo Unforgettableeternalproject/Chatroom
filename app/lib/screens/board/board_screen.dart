@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
@@ -149,8 +150,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       if (!mounted) return;
       setState(() => _conflicts.remove(taskId));
       if (r?.reclaimed == true) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('已撿回你先前領走的卡')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(AppLocalizations.of(context).boardTaskReclaimedToast)));
       }
     } catch (e) {
       // 領不到是正常結果，不是錯誤畫面：把「誰贏了」畫回卡片上
@@ -162,7 +164,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 從 409 的訊息裡取出現任持有者。取不到就講一句誠實的話，不要留白。
   String _holderFrom(Object e) {
     final m = RegExp(r'「(.+?)」').firstMatch('$e');
-    return m?.group(1) ?? '別人';
+    return m?.group(1) ?? AppLocalizations.of(context).boardClaimConflictOther;
   }
 
   /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
@@ -205,7 +207,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.message),
           action: SnackBarAction(
-            label: '重新開啟並繼續',
+            label: AppLocalizations.of(context).boardReopenAndRetry,
             onPressed: () =>
                 _reopenAndRetry(blockedKind, blocked, kind, parentId, result),
           ),
@@ -450,7 +452,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         color: s.bgSoft,
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
-      child: Text('這塊板已封存，只能看不能改。',
+      child: Text(AppLocalizations.of(context).boardArchivedNotice,
           style: UepText.serif(size: 13, color: s.inkMute)),
     );
   }
@@ -543,7 +545,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 板不屬於任何一間房，硬給一個返回目標只會把人送到他沒去過的地方
         if (widget.roomId != null) ...[
           _HeaderAction(
-            label: '← 回到聊天室',
+            label: AppLocalizations.of(context).boardBackToRoom,
             onTap: () => context.go('/rooms/${widget.roomId}'),
           ),
           const SizedBox(width: 16),
@@ -556,7 +558,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             snap?.name.isNotEmpty == true
                 ? snap!.name
                 : (room?.name ??
-                    (attached.isEmpty ? '任務板' : attached.first.name)),
+                    (attached.isEmpty
+                        ? AppLocalizations.of(context).boardLibraryTitle
+                        : attached.first.name)),
             overflow: TextOverflow.ellipsis,
             style: UepText.pageTitle(color: s.inkTitle),
           ),
@@ -575,7 +579,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ),
         ],
         const SizedBox(width: 12),
-        Text('任務板',
+        Text(AppLocalizations.of(context).boardLibraryTitle,
             style:
                 UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.6)),
         const Spacer(),
@@ -695,7 +699,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         final s = ctx.uep;
         return SimpleDialog(
           backgroundColor: s.bgCard,
-          title: Text('掛在這塊板上的聊天室',
+          title: Text(AppLocalizations.of(ctx).boardAttachedRoomsTitle,
               style: UepText.itemTitle(color: s.inkTitle)),
           children: [
             for (final r in rooms)
@@ -714,7 +718,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      r.name.isEmpty ? '（未命名）' : r.name,
+                      r.name.isEmpty
+                          ? AppLocalizations.of(ctx).commonUnnamed
+                          : r.name,
                       style: UepText.serif(
                         size: 13.5,
                         color: r.detached ? s.inkMute : s.ink),
@@ -722,11 +728,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ),
                   // 現在站在哪一間，講出來——不然點進去會發現「怎麼沒動」
                   if (r.id == widget.roomId)
-                    const MonoLabel('目前', size: 8.5, letterSpacing: 1.0),
+                    MonoLabel(AppLocalizations.of(ctx).boardRoomCurrent,
+                        size: 8.5, letterSpacing: 1.0),
                   if (r.detached)
-                    const MonoLabel('已解除', size: 8.5, letterSpacing: 1.0),
+                    MonoLabel(AppLocalizations.of(ctx).boardRoomDetached,
+                        size: 8.5, letterSpacing: 1.0),
                   if (!r.detached && r.status == 'archived')
-                    const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
+                    MonoLabel(AppLocalizations.of(ctx).boardBadgeArchived,
+                        size: 8.5, letterSpacing: 1.0),
                 ]),
               ),
           ],
@@ -759,12 +768,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             padding: const EdgeInsets.fromLTRB(16, 14, 12, 11),
             child: Row(children: [
               Expanded(
-                child: MonoLabel('週期 · ${active.length} 進行中',
+                child: MonoLabel(
+                    AppLocalizations.of(context)
+                        .boardObjectiveActiveCount(active.length),
                     color: s.inkMute, letterSpacing: 2.2),
               ),
               if (!_readOnly && (_actions?.canAddObjective ?? false))
                 _BarButton(
-                    label: '＋ 新週期', onTap: () => _create('objective')),
+                    label: AppLocalizations.of(context).boardNewObjective,
+                    onTap: () => _create('objective')),
             ]),
           ),
           if (_canReorder && active.length > 1)
@@ -806,7 +818,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           if (done.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 22, 16, 10),
-              child: MonoLabel('已完成 · ${done.length}',
+              child: MonoLabel(
+                  AppLocalizations.of(context)
+                      .boardObjectiveDoneCount(done.length),
                   color: s.inkMute, letterSpacing: 2.2),
             ),
             Opacity(
@@ -896,17 +910,24 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 // 而那個週期其實還停在倒數第二格（測試端 2026-09-01 指出）。
                 if (o.status == 'review') ...[
                   const SizedBox(width: 9),
-                  const _ObjectiveBadge(label: '等你確認', gold: true),
+                  _ObjectiveBadge(
+                      label: AppLocalizations.of(context).boardAwaitVerify,
+                      gold: true),
                 ] else if (o.status == 'verified') ...[
                   const SizedBox(width: 9),
-                  const _ObjectiveBadge(label: '等你收尾', gold: true),
+                  _ObjectiveBadge(
+                      label: AppLocalizations.of(context).boardAwaitClose,
+                      gold: true),
                 ],
               ],
             ),
             const SizedBox(height: 9),
             Row(children: [
               Text(
-                o.status == 'done' ? '${stats.summary} · 已結束' : stats.summary,
+                o.status == 'done'
+                    ? AppLocalizations.of(context)
+                        .boardObjectiveSummaryEnded(stats.summary(context))
+                    : stats.summary(context),
                 style: UepText.mono(size: 10, color: s.inkMute),
               ),
               // 孤兒直接寫在清單上——它是「看起來有人在做、實際上沒有」，
@@ -915,7 +936,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 const SizedBox(width: 8),
                 _Dot(color: s.inkMute),
                 const SizedBox(width: 8),
-                Text('${stats.orphans} 孤兒',
+                Text(
+                    AppLocalizations.of(context)
+                        .boardEntryHintOrphans(stats.orphans),
                     style:
                         UepText.mono(size: 10, color: UepColors.error)),
               ],
@@ -965,14 +988,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               if (checklists.isEmpty) ...[
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text('這個週期還沒有階段。',
+                  child: Text(AppLocalizations.of(context).boardNoChecklistYet,
                       style: UepText.mono(size: 11.5, color: s.inkMute)),
                 ),
                 if (o.acceptsNewChecklists)
                   Align(
                     alignment: Alignment.centerLeft,
                     child: _BarButton(
-                      label: '＋ 階段',
+                      label: AppLocalizations.of(context).boardNewChecklist,
                       onTap: _readOnly
                           ? null
                           : () => _create('checklist',
@@ -1051,7 +1074,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               ),
             ),
             const SizedBox(width: 14),
-            Text('${stats.done} / ${stats.total} 完成',
+            Text(
+                AppLocalizations.of(context)
+                    .boardDoneOfTotal(stats.done, stats.total),
                 style: UepText.mono(size: 10, color: s.inkSoft)),
           ]),
         ],
@@ -1126,13 +1151,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           // 改名／改敘述。**收尾了也還能改**——那與「還能不能往裡面加東西」
           // 是兩件事：一個週期做完之後才發現標題打錯字，沒有理由改不了
           _BarButton(
-            label: '編輯',
+            label: AppLocalizations.of(context).commonEdit,
             onTap: () => _editObjective(o),
           ),
           const SizedBox(width: 8),
           if (o.acceptsNewChecklists) ...[
             _BarButton(
-              label: '＋ 階段',
+              label: AppLocalizations.of(context).boardNewChecklist,
               onTap: () =>
                   _create('checklist', parentId: o.id, parentTitle: o.title),
             ),
@@ -1140,7 +1165,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ],
           if (o.status == 'active')
             _BarButton(
-              label: '送審',
+              label: AppLocalizations.of(context).boardObjectiveReview,
               // 條件未滿時按鈕是死的，而且底下寫著為什麼
               onTap: canReview
                   ? () => runBoardAction(
@@ -1149,47 +1174,49 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             )
           else if (o.status == 'review') ...[
             _BarButton(
-                label: '打回',
+                label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
                     context, () => actions.reopenObjective(o.id))),
             const SizedBox(width: 8),
             _BarButton(
-              label: '確認',
+              label: AppLocalizations.of(context).boardObjectiveVerify,
               accent: true,
               onTap: () => runBoardAction(
                   context, () => actions.verifyObjective(o.id)),
             ),
           ] else if (o.status == 'verified')
             _BarButton(
-              label: '結束週期',
+              label: AppLocalizations.of(context).boardObjectiveComplete,
               accent: true,
               onTap: () => runBoardAction(
                   context, () => actions.completeObjective(o.id)),
             ),
         ]),
         const SizedBox(height: 10),
-        Text(_closeoutHint(o, stats),
+        Text(_closeoutHint(context, o, stats),
             textAlign: TextAlign.right,
             style: UepText.mono(size: 10, color: s.inkMute)),
       ],
     );
   }
 
-  String _closeoutHint(BoardObjective o, _Stats stats) {
+  String _closeoutHint(
+      BuildContext context, BoardObjective o, _Stats stats) {
+    final l10n = AppLocalizations.of(context);
     return switch (o.status) {
       // 說的是**擋住送審的那件事**。原本寫「N 張未完成」，而真正擋著的是
       // 清單沒收尾——照著它做完所有卡，按鈕依然不會亮
-      'active' when stats.stages == 0 => '還沒有階段，先開一個',
+      'active' when stats.stages == 0 => l10n.boardCloseoutNoStage,
       'active' when stats.stagesOpen > 0 => [
-          '${stats.stagesOpen} 個階段還沒收尾',
-          if (stats.remaining > 0) '${stats.remaining} 張未完成',
-          if (stats.orphans > 0) '${stats.orphans} 張已釋出',
+          l10n.boardCloseoutStagesOpen(stats.stagesOpen),
+          if (stats.remaining > 0) l10n.boardCloseoutRemaining(stats.remaining),
+          if (stats.orphans > 0) l10n.boardCloseoutOrphans(stats.orphans),
         ].join(' · '),
-      'active' when stats.stagesDone == 0 => '每個階段都被取消了',
-      'active' => '所有階段都收尾了，可以送審',
-      'review' => '已送審，等人確認過才能結束週期',
-      'verified' => '已確認，可以結束這個週期',
-      'done' => '這個週期已經結束',
+      'active' when stats.stagesDone == 0 => l10n.boardCloseoutAllCancelled,
+      'active' => l10n.boardCloseoutReadyForReview,
+      'review' => l10n.boardCloseoutInReview,
+      'verified' => l10n.boardCloseoutVerified,
+      'done' => l10n.boardCloseoutDone,
       _ => '',
     };
   }
@@ -1203,9 +1230,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     // 一件事，混成一句「有人離開了」就等於沒說
     final lines = orphans
         .take(3)
-        .map((t) => t.orphanedReasonLabel.isEmpty
-            ? '${t.claimName} 已不在房內'
-            : '${t.claimName} ${t.orphanedReasonLabel}')
+        .map((t) => '${t.claimName} '
+            '${t.orphanedReasonLabel.isEmpty
+                ? AppLocalizations.of(context).boardTaskGone
+                : t.orphanedReasonLabel}')
         .toSet()
         .join('，');
 
@@ -1222,13 +1250,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       ),
       child: Row(
         children: [
-          Text('${stats.orphans} 張卡的持有者已不在房內',
+          Text(
+              AppLocalizations.of(context).boardOrphanBanner(stats.orphans),
               style: UepText.mono(
                   size: 10, color: UepColors.error, letterSpacing: 1.4)),
           if (lines.isNotEmpty) ...[
             const SizedBox(width: 12),
             Flexible(
-              child: Text('$lines。',
+              child: Text(AppLocalizations.of(context).boardOrphanLines(lines),
                   overflow: TextOverflow.ellipsis,
                   style: UepText.serif(size: 13.5, color: s.inkSoft)),
             ),
@@ -1236,7 +1265,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           const Spacer(),
           const SizedBox(width: 12),
           _BarButton(
-            label: _orphansOnly ? '看全部' : '只看孤兒 →',
+            label: _orphansOnly
+                ? AppLocalizations.of(context).boardShowAll
+                : AppLocalizations.of(context).boardShowOrphansOnly,
             onTap: () => setState(() => _orphansOnly = !_orphansOnly),
           ),
         ],
@@ -1331,7 +1362,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: _BarButton(
-                  label: '收尾未分類',
+                  label: AppLocalizations.of(context).boardCloseUncategorised,
                   onTap: () => runBoardAction(
                       context,
                       () => _actions!
@@ -1342,7 +1373,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           else if (!_readOnly && c.status == 'open')
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('未分類還有 $loose 張沒收尾',
+              child: Text(
+                  AppLocalizations.of(context).boardUncategorisedOpen(loose),
                   style: UepText.mono(size: 10, color: s.inkMute)),
             ),
         ],
@@ -1408,7 +1440,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               ],
               if (c.isDone) ...[
                 const SizedBox(width: 8),
-                Text('· 已收尾',
+                Text(AppLocalizations.of(context).boardChecklistDone,
                     style: UepText.mono(
                         size: 10, color: UepColors.gold, letterSpacing: 1.4)),
               ],
@@ -1417,7 +1449,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               Expanded(child: Container(height: 1, color: s.hairline)),
               const SizedBox(width: 12),
               if (!_readOnly) ...[
-                _BarButton(label: '編輯', onTap: () => _editChecklist(c)),
+                _BarButton(
+                    label: AppLocalizations.of(context).commonEdit,
+                    onTap: () => _editChecklist(c)),
                 const SizedBox(width: 8),
                 // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
                 // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
@@ -1427,13 +1461,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 // 已經結束了，派出去的 agent 會對著一份沒有人在等的工作做
                 if (_isOpsRoom && c.status == 'open') ...[
                   _BarButton(
-                    label: '派工',
+                    label: AppLocalizations.of(context).boardDispatchRun,
                     onTap: () => dispatchRun(
                       context,
                       ref,
                       roomId: widget.roomId!,
                       targetRef: c.id,
-                      targetLabel: '階段：${c.title}',
+                      targetLabel: AppLocalizations.of(context)
+                          .boardDispatchTargetStage(c.title),
                       boardId: _boardIdOrNull ?? '',
                     ),
                   ),
@@ -1443,7 +1478,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 // 要加東西的人是先看過已經有什麼才決定加的
                 if (c.status == 'open') ...[
                   _BarButton(
-                    label: '收尾階段',
+                    label: AppLocalizations.of(context).boardChecklistClose,
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
@@ -1451,7 +1486,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ),
                   const SizedBox(width: 8),
                   _BarButton(
-                    label: '取消階段',
+                    label: AppLocalizations.of(context).boardChecklistCancel,
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
@@ -1460,7 +1495,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   const SizedBox(width: 8),
                 ] else if (c.status == 'done') ...[
                   _BarButton(
-                    label: '重新開啟階段',
+                    label: AppLocalizations.of(context).boardChecklistReopen,
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
@@ -1484,7 +1519,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 「＋ 任務」的人不會預期自己撤銷了一次驗收。
               if (c.acceptsNewTasks)
                 _BarButton(
-                  label: '＋ 任務',
+                  label: AppLocalizations.of(context).boardNewTask,
                   onTap: () =>
                       _create('task', parentId: c.id, parentTitle: c.title),
                 ),
@@ -1521,7 +1556,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           const SizedBox(height: 10),
           _taskList(snap, tasks),
           if (tasks.isEmpty)
-            Text('這個階段還沒有任務。',
+            Text(AppLocalizations.of(context).boardNoTaskYet,
                 style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ],
@@ -1544,21 +1579,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             // 說出這是哪個房間的板
             Opacity(
               opacity: .5,
-              child: Text('卷',
+              child: Text(AppLocalizations.of(context).boardGlyphScroll,
                   style: UepText.pageTitle(color: palette.soft)),
             ),
             const SizedBox(height: 16),
             Text(
               _readOnly
-                  ? '這塊板結束時是空的。'
-                  : '這塊板還是空的。',
+                  ? AppLocalizations.of(context).boardEmptyArchived
+                  : AppLocalizations.of(context).boardEmpty,
               textAlign: TextAlign.center,
               style: UepText.serif(size: 14.5, color: s.inkSoft, height: 2),
             ),
             if (!_readOnly && (_actions?.canAddObjective ?? false)) ...[
               const SizedBox(height: 16),
               UepButton(
-                  label: '＋ 新週期', onPressed: () => _create('objective')),
+                  label: AppLocalizations.of(context).boardNewObjective,
+                  onPressed: () => _create('objective')),
             ],
           ],
         ),
@@ -1622,7 +1658,8 @@ class _Stats {
   final int remaining;
   final int orphans;
 
-  String get summary => '$stages 階段 · $total 任務';
+  String summary(BuildContext context) =>
+      AppLocalizations.of(context).boardObjectiveSummary(stages, total);
 }
 
 /// 封存徽章。它站在「＋ 新週期」原本的位置——**那個動作沒有了，
@@ -1636,7 +1673,7 @@ class _ArchivedBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(border: Border.all(color: s.hairline)),
-      child: Text('封存 · 唯讀',
+      child: Text(AppLocalizations.of(context).boardArchivedReadOnly,
           style:
               UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
     );
@@ -1665,15 +1702,17 @@ class _AttachedRoomsBadge extends StatelessWidget {
       message: empty
           // **事實陳述，不是限制。** 板上的變更不會叫醒任何人（通知走房），
           // 追蹤者只能自己回來看。改是改得動的
-          ? '這塊板沒有掛任何聊天室'
-          : '看看它掛在哪些聊天室上',
+          ? AppLocalizations.of(context).boardNoAttachedRoomTooltip
+          : AppLocalizations.of(context).boardSeeAttachedRoomsTooltip,
       child: InkWell(
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(border: Border.all(color: s.hairline)),
           child: Text(
-            empty ? '未掛接聊天室' : '◫ $count 間聊天室',
+            empty
+                ? AppLocalizations.of(context).boardNoAttachedRoom
+                : AppLocalizations.of(context).boardAttachedRooms(count),
             style: UepText.mono(
                 size: 10, color: s.inkMute, letterSpacing: 1.4),
           ),
@@ -1703,19 +1742,20 @@ class _NotAMember extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('卷', style: UepText.pageTitle(color: s.inkMute)),
+            Text(AppLocalizations.of(context).boardGlyphScroll,
+                style: UepText.pageTitle(color: s.inkMute)),
             const SizedBox(height: 14),
             Text(
               name.isEmpty
-                  ? '這間房掛著一塊任務板，但你還不是它的成員。'
-                  : '這間房掛著《$name》，但你還不是它的成員。',
+                  ? AppLocalizations.of(context).boardNotMemberUnnamed
+                  : AppLocalizations.of(context).boardNotMember(name),
               textAlign: TextAlign.center,
               style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.8),
             ),
             const SizedBox(height: 8),
             Text(
               // 講得出「找誰」才有用。只說「沒有權限」的人會去翻設定頁
-              '請板的 owner 把你加進來。',
+              AppLocalizations.of(context).boardAskOwnerToAdd,
               textAlign: TextAlign.center,
               style: UepText.sans(size: 13, color: s.inkMute, height: 1.6),
             ),
@@ -1739,11 +1779,11 @@ class _ViewerBadge extends StatelessWidget {
     return Tooltip(
       // A+ 之後「不是板成員」是進房者的預設狀態，所以這顆徽章會從罕見
       // 變常態——它要講的是「下一步怎麼辦」，不是「你的身分是什麼」
-      message: '唯讀。請板的 owner 把你設為協作者（editor）',
+      message: AppLocalizations.of(context).boardViewerTooltip,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(border: Border.all(color: s.hairline)),
-        child: Text('唯讀 · VIEWER',
+        child: Text(AppLocalizations.of(context).boardViewerBadge,
             style:
                 UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
       ),
@@ -1872,10 +1912,11 @@ class _OutcomePill extends StatelessWidget {
   final VoidCallback? onTap;
 
   /// 擋下來的理由怎麼講給人聽。
-  static String _reasonText(String reason) => switch (reason) {
-        'still_attached' => '還掛在聊天室上，先解除掛接才能收尾',
-        'never_attached' => '從沒掛過聊天室，沒有東西可以收尾',
-        _ => '現在還不能宣告結局',
+  static String _reasonText(AppLocalizations l10n, String reason) =>
+      switch (reason) {
+        'still_attached' => l10n.boardOutcomeBlockedStillAttached,
+        'never_attached' => l10n.boardOutcomeBlockedNeverAttached,
+        _ => l10n.boardOutcomeBlockedGeneric,
       };
 
   @override
@@ -1900,12 +1941,18 @@ class _OutcomePill extends StatelessWidget {
       child: Text(
         // 沒有結局時講「宣告結局」而不是「完成」——那顆按鈕不是「按了就
         // 完成」，是「去決定它的結局」，而其中一個選項是廢止
-        settled ? (done ? '完成' : '廢止') : '宣告結局',
+        settled
+            ? (done
+                ? AppLocalizations.of(context).boardOutcomeCompleted
+                : AppLocalizations.of(context).boardOutcomeAbandoned)
+            : AppLocalizations.of(context).boardOutcomeTitle,
         style: UepText.mono(size: 10, letterSpacing: 1.1, color: c),
       ),
     );
     if (blocked) {
-      return Tooltip(message: _reasonText(blockReason), child: pill);
+      return Tooltip(
+          message: _reasonText(AppLocalizations.of(context), blockReason),
+          child: pill);
     }
     // 唯讀：不包 InkWell。包了的話它會有點擊水波，而那在畫面上就是
     // 「這裡可以按」——按下去卻什麼都不會發生
@@ -1956,10 +2003,12 @@ class _SupervisorPill extends StatelessWidget {
             // 沒有指定時講「未指派」而不是留一個空的「SUPERVISOR · 」——
             // 後者看起來像名字讀不出來，而那是完全不同的一件事
             empty
-                ? 'SUPERVISOR · 未指派'
+                ? AppLocalizations.of(context).boardSupervisorPillNone
                 : departed
-                    ? 'SUPERVISOR · ${name.toUpperCase()}（已離開）'
-                    : 'SUPERVISOR · ${name.toUpperCase()}',
+                    ? AppLocalizations.of(context)
+                        .boardSupervisorPillDeparted(name.toUpperCase())
+                    : AppLocalizations.of(context)
+                        .boardSupervisorPill(name.toUpperCase()),
             style: UepText.mono(
                 size: 10,
                 color: empty

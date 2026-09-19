@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/assignment.dart';
 import '../state/app_providers.dart';
 import '../state/rooms_providers.dart';
@@ -50,6 +51,7 @@ class PendingInvitesBanner extends ConsumerWidget {
   Widget _banner(
       BuildContext context, WidgetRef ref, List<Assignment> invites) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -59,11 +61,11 @@ class PendingInvitesBanner extends ConsumerWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MonoLabel('邀請你加入（${invites.length}）',
+        MonoLabel(l10n.inviteBannerTitle(invites.length),
             size: 9, color: UepColors.gold, letterSpacing: 1.6),
         const SizedBox(height: 8),
         for (final a in invites) ...[
-          Text(a.roomName ?? '（未命名聊天室）',
+          Text(a.roomName ?? l10n.roomsUnnamedRoom,
               style: UepText.sans(
                   size: 14, weight: FontWeight.w600, color: s.inkTitle)),
           if (a.note.isNotEmpty) ...[
@@ -75,14 +77,14 @@ class PendingInvitesBanner extends ConsumerWidget {
           const SizedBox(height: 8),
           Row(children: [
             UepButton(
-              label: '加入',
+              label: l10n.commonJoin,
               small: true,
               // 進房時 Hub 會自動把對應指派標成 accepted，這裡不必先 resolve
               onPressed: () => context.go('/rooms/${a.roomId}'),
             ),
             const SizedBox(width: 10),
             UepButton(
-              label: '婉拒',
+              label: l10n.commonDecline,
               variant: UepButtonVariant.outline,
               small: true,
               onPressed: () => _decline(context, ref, a),

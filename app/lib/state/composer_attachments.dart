@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/errors/api_exception.dart';
+import '../l10n/l10n.dart';
 import '../widgets/composer_attachments.dart';
 import 'app_providers.dart';
 import 'messages_providers.dart';
@@ -70,11 +71,11 @@ class ComposerAttachmentDrafts
     if (size > maxBytes) {
       // 先擋在本機：明知會被拒絕還是把整個檔案推上去，只是白白佔用頻寬與時間
       final mb = (maxBytes / (1024 * 1024)).toStringAsFixed(0);
-      return '$filename 超過上限 $mb MB，未加入';
+      return L10n.current.attachTooLargeLocal(filename, mb);
     }
     final current = of(roomId);
     if (current.length >= maxPerMessage) {
-      return '一則訊息最多 $maxPerMessage 個附件';
+      return L10n.current.attachMaxPerMessage(maxPerMessage);
     }
     final item = ComposerAttachment(
       localId: '${DateTime.now().microsecondsSinceEpoch}-${current.length}',
@@ -149,7 +150,9 @@ class ComposerAttachmentDrafts
       _replace(
         roomId,
         item.localId,
-        item.copyWith(status: ComposerAttachmentStatus.failed, error: '上傳失敗'),
+        item.copyWith(
+            status: ComposerAttachmentStatus.failed,
+            error: L10n.current.attachUploadFailed),
       );
     }
   }

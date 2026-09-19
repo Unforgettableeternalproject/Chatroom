@@ -4,6 +4,7 @@ import 'package:logging/logging.dart';
 
 import '../../api/runs_api.dart';
 import '../../core/errors/api_exception.dart';
+import '../../l10n/l10n.dart';
 import '../../models/agent_run.dart';
 import '../../state/app_providers.dart';
 import '../../state/runs_providers.dart';
@@ -29,6 +30,7 @@ Future<bool> dispatchRun(
   String boardId = '',
 }) async {
   final api = ref.read(runsApiProvider);
+  final l10n = AppLocalizations.of(context);
   final pid = ref.read(settingsRepoProvider).participantId(roomId);
   // 送出要用的東西**全部在開對話框之前就抓好**：API、房內身分，以及講話的
   // 出口。對話框關掉時入口自己可能已經被重建或移除（階段列整列重建、卡片
@@ -78,11 +80,12 @@ Future<bool> dispatchRun(
     );
     _log.info('create_run 已建立：run=${run.id} status=${run.status}');
     final position = await _queuePosition(api, roomId, run.id, pid);
-    _notify(messenger, position == null ? '已排隊。' : '已排隊，位置 $position。');
+    _notify(messenger,
+        position == null ? l10n.opsQueued : l10n.opsQueuedAt(position));
     return true;
   } on ApiException catch (e) {
     _log.warning('create_run 被退回：${e.code} ${e.message}');
-    _notify(messenger, _dispatchError(e));
+    _notify(messenger, _dispatchError(l10n, e));
     return false;
   }
 }
@@ -99,20 +102,21 @@ Future<bool> pushRepo(
   required RepoView repo,
 }) async {
   final api = ref.read(runsApiProvider);
+  final l10n = AppLocalizations.of(context);
   final pid = ref.read(settingsRepoProvider).participantId(roomId);
   final ok = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('推送'),
-      content: Text('把 ${repo.key} 的 ${repo.unpushedCount} 顆 commit '
-          '推到 origin/${repo.branch}。'),
+      title: Text(l10n.opsPush),
+      content: Text(l10n.opsPushConfirm(
+          repo.key, repo.unpushedCount, repo.branch)),
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消')),
+            child: Text(l10n.commonCancel)),
         TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('推送')),
+            child: Text(l10n.opsPush)),
       ],
     ),
   );
@@ -128,10 +132,10 @@ Future<bool> pushRepo(
       brief: buildPushBrief(repo.branch, repo.unpushed.map((c) => c.sha)),
       participantId: pid,
     );
-    if (context.mounted) _say(context, '已排隊：推送 ${repo.repoName}');
+    if (context.mounted) _say(context, l10n.opsPushQueued(repo.repoName));
     return true;
   } on ApiException catch (e) {
-    if (context.mounted) _say(context, _dispatchError(e));
+    if (context.mounted) _say(context, _dispatchError(l10n, e));
     return false;
   }
 }
@@ -143,6 +147,7 @@ Future<bool> cancelRun(
   required AgentRun run,
 }) async {
   final api = ref.read(runsApiProvider);
+  final l10n = AppLocalizations.of(context);
   final pid = ref.read(settingsRepoProvider).participantId(run.roomId);
   try {
     final done = await api.cancel(run.id,
@@ -151,7 +156,8 @@ Future<bool> cancelRun(
     if (context.mounted) {
       // 🔴 兩件事要講成不一樣的話：queued 是真的停了，其餘只是把旗標立
       // 起來——那個 agent 還在對方機器上寫檔
-      _say(context, done ? '已取消。' : '已要求取消，等執行器收到後停止。');
+      _say(context,
+          done ? l10n.opsCancelDone : l10n.opsCancelRequestedSnack);
     }
     return true;
   } on ApiException catch (e) {
@@ -167,6 +173,7 @@ Future<bool> softStopRun(
   required AgentRun run,
 }) async {
   final api = ref.read(runsApiProvider);
+  final l10n = AppLocalizations.of(context);
   final pid = ref.read(settingsRepoProvider).participantId(run.roomId);
   try {
     await api.softStop(run.id,
@@ -175,7 +182,7 @@ Future<bool> softStopRun(
     if (context.mounted) {
       // 🔴 它還在跑：訊息要在下一次工具呼叫之前才到得了那個 agent，
       // 而「目前這一步」可能還要幾分鐘
-      _say(context, '已要求收尾，它會做完目前這一步再結束。');
+      _say(context, l10n.opsSoftStopRequestedSnack);
     }
     return true;
   } on ApiException catch (e) {
@@ -193,6 +200,7 @@ Future<bool> sendRunnerCommand(
   required String roomId,
 }) async {
   final api = ref.read(runsApiProvider);
+  final l10n = AppLocalizations.of(context);
   final pid = ref.read(settingsRepoProvider).participantId(roomId);
   try {
     await api.command(runner.id,
@@ -205,7 +213,8 @@ Future<bool> sendRunnerCommand(
       // 以為機器已經停了，然後在它還在跑時去做下一件事。
       // 這句話只負責「送到了」，「領到了沒、生效了沒」由面板上的命令進度
       // 那一行講——SnackBar 幾秒就消失，而那段等待有 30 秒到數分鐘
-      _say(context, '「${runnerCommandLabel(command)}」已送出，進度看下方。');
+      _say(context,
+          l10n.opsCommandSentSnack(runnerCommandLabel(command)));
     }
     return true;
   } on ApiException catch (e) {
@@ -235,13 +244,13 @@ Future<int?> _queuePosition(
 ///
 /// code 是契約（Hub 的 `create_run` 明寫「client 可比對 code」）；Hub 自己
 /// 那句話已經寫得夠清楚，所以這裡只在**它講不到的地方**補一句，其餘原樣用。
-String _dispatchError(ApiException e) => switch (e.code) {
-      'run_ref_already_active' => '這個目標已經有一筆還沒結束的派工。'
-          '先到執行面板看那一筆，或取消它。',
+String _dispatchError(AppLocalizations l10n, ApiException e) =>
+    switch (e.code) {
+      'run_ref_already_active' => l10n.opsErrorRefActive,
       'project_not_served' => e.message,
       'run_daily_quota_exceeded' => e.message,
       'run_queue_cap_exceeded' => e.message,
-      'room_not_ops' => '派工只在工作房（ops）成立。',
+      'room_not_ops' => l10n.opsErrorRoomNotOps,
       _ => e.message,
     };
 

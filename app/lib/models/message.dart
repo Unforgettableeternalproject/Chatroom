@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
 import 'attachment.dart';
 
 @immutable
@@ -88,9 +89,9 @@ class CardRefPreview {
 
   /// chip 上要不要加狀態標記。
   String get badge => switch (status) {
-        'deleted' => '已刪除',
-        'moved' => '已搬走',
-        'no_access' => '看不到',
+        'deleted' => L10n.current.msgCardDeleted,
+        'moved' => L10n.current.msgCardMoved,
+        'no_access' => L10n.current.msgCardNoAccess,
         _ => '',
       };
 

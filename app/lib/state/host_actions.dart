@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../l10n/l10n.dart';
 import 'host_kit_providers.dart';
 import 'host_probe.dart';
 
@@ -39,7 +40,7 @@ class TunnelStatus {
 final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
   final kit = await ref.watch(hostKitProvider.future);
   if (kit == null) {
-    return const TunnelStatus(ProbeState.unknown, '', '找不到主持包');
+    return TunnelStatus(ProbeState.unknown, '', L10n.current.hostTunnelNoKit);
   }
   final file = File('${kit.kitRoot}${Platform.pathSeparator}server'
       '${Platform.pathSeparator}.tunnel-url');
@@ -50,12 +51,12 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
     url = '';
   }
   if (url.isEmpty) {
-    return const TunnelStatus(ProbeState.unknown, '', '未開啟');
+    return TunnelStatus(ProbeState.unknown, '', L10n.current.hostTunnelOff);
   }
 
   final ok = await probeHealth('$url/api/health');
   if (ok) {
-    return TunnelStatus(ProbeState.ok, url, '已開啟');
+    return TunnelStatus(ProbeState.ok, url, L10n.current.hostTunnelOn);
   }
 
   // 🔴 打不通的時候先問一句「Hub 還在嗎」。
@@ -69,14 +70,14 @@ final tunnelStatusProvider = FutureProvider<TunnelStatus>((ref) async {
     return TunnelStatus(
       ProbeState.bad,
       url,
-      '已開啟，但 Hub 已停止',
+      L10n.current.hostTunnelHubStopped,
     );
   }
 
   return TunnelStatus(
     ProbeState.unknown,
     url,
-    '有網址，但這台機器打不通',
+    L10n.current.hostTunnelUnreachable,
   );
 });
 
@@ -111,7 +112,7 @@ final serviceStatusProvider = FutureProvider<ServiceStatus?>((ref) async {
     final out = '${r.stdout}'.trim();
     return ServiceStatus(!out.startsWith('未註冊'), out);
   } on Object catch (e) {
-    return ServiceStatus(false, '問不到服務狀態（$e）');
+    return ServiceStatus(false, L10n.current.hostServiceStatusError('$e'));
   }
 });
 
@@ -293,7 +294,9 @@ Map<String, dynamic> parseScriptResult(ProcessResult result) {
     'ok': false,
     'error': err.isNotEmpty
         ? err
-        : (out.isNotEmpty ? out : '腳本沒有輸出（結束碼 ${result.exitCode}）'),
+        : (out.isNotEmpty
+            ? out
+            : L10n.current.hostScriptNoOutput('${result.exitCode}')),
   };
 }
 

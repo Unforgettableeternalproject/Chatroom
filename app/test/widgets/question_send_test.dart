@@ -4,6 +4,7 @@ import 'package:chatroom_app/widgets/question_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 複選題的送出：一顆按鈕，選項與補充**一起送**。
 ///
@@ -32,6 +33,8 @@ void main() {
   // 視窗會被回收，草稿放 State 裡就沒了），所以它需要一個 ProviderScope
   Widget host(Question q) => ProviderScope(
           child: MaterialApp(
+            localizationsDelegates: kTestLocalizationsDelegates,
+            supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: QuestionCard(

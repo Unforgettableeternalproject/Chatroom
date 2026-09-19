@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../state/board_providers.dart';
 import '../../state/app_providers.dart';
 import '../../widgets/uep_button.dart';
@@ -78,31 +79,36 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
   /// 前置條件的 409 **是兜底不是判準**——按鈕本來就會依 `outcome_eligible`
   /// 先擋掉。走到這裡表示畫面上那份判斷已經過期（別人剛把板掛回某間房），
   /// 所以要講的是「現在的狀況變了」，不是重述一次規則。
-  String _messageFor(ApiException e) => switch (e.code) {
-        // 這句話幾乎不會出現在 App 上（操作者是人），但出現的時候要說得出
-        // 為什麼，而不是一句「沒有權限」
-        'human_only' => '宣告結局限人類 owner。',
-        'still_attached' => '這塊板還掛在聊天室上，先解除掛接。',
-        'never_attached' => '這塊板從沒掛過聊天室。',
-        _ => e.message,
-      };
+  String _messageFor(ApiException e) {
+    final l10n = AppLocalizations.of(context);
+    return switch (e.code) {
+      // 這句話幾乎不會出現在 App 上（操作者是人），但出現的時候要說得出
+      // 為什麼，而不是一句「沒有權限」
+      'human_only' => l10n.boardOutcomeHumanOnly,
+      'still_attached' => l10n.boardOutcomeStillAttached,
+      'never_attached' => l10n.boardOutcomeNeverAttached,
+      _ => e.message,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final settled = widget.current.isNotEmpty;
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text(settled ? '這塊板的結局' : '宣告結局',
+      title: Text(settled ? l10n.boardOutcomeTitleSettled : l10n.boardOutcomeTitle,
           style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 380,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
             settled
-                ? '目前是「${widget.current == 'completed' ? '完成' : '廢止'}」，'
-                    '可以重新打開。'
-                : '收尾後這塊板移到「已收尾」，隨時可以重新打開。',
+                ? l10n.boardOutcomeCurrent(widget.current == 'completed'
+                    ? l10n.boardOutcomeCompleted
+                    : l10n.boardOutcomeAbandoned)
+                : l10n.boardOutcomeExplain,
             style: UepText.serif(size: 13, color: s.inkMute, height: 1.55),
           ),
           if (_error != null) ...[
@@ -115,14 +121,14 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
         if (settled)
           UepButton(
-            label: '重新打開',
+            label: l10n.boardOutcomeReopen,
             small: true,
             onPressed: _busy ? null : () => _set(''),
           )
@@ -130,13 +136,13 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
           // 廢止畫成 danger：它與完成同樣是收尾，但語意是「不做了」，
           // 兩顆長一樣的話按錯不會有任何提示
           UepButton(
-            label: '廢止',
+            label: l10n.boardOutcomeAbandoned,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: _busy ? null : () => _set('abandoned'),
           ),
           UepButton(
-            label: '完成',
+            label: l10n.boardOutcomeCompleted,
             small: true,
             onPressed: _busy ? null : () => _set('completed'),
           ),

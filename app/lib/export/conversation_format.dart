@@ -1,3 +1,4 @@
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 
 /// 把一段對話排版成人看的 log。
@@ -27,7 +28,7 @@ String _formatMessage(Message m) {
   // 撤回的訊息 content 已被 Hub 清空，照印會變成一行空白的發言——那看起來
   // 像資料壞掉，而不像「這則被撤回了」
   if (m.deleted) {
-    return '[$time] ${_who(m)}：（已撤回）';
+    return '[$time] ${_who(m)}：${L10n.current.exportRetracted}';
   }
   if (m.isSystem) {
     return '[$time] · ${m.content}';
@@ -51,7 +52,9 @@ String _formatMessage(Message m) {
 /// 「誰說的」缺席要看得出來是缺席。
 String _who(Message m) => (m.senderName?.isNotEmpty ?? false)
     ? m.senderName!
-    : (m.senderId == null ? '（系統）' : '（不明）');
+    : (m.senderId == null
+        ? L10n.current.exportSystemSender
+        : L10n.current.exportUnknownSender);
 
 /// `2026-08-31T09:15:22.480645+00:00` → `2026-08-31 09:15:22Z`。
 ///

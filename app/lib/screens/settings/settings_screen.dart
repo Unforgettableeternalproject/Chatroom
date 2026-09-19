@@ -14,7 +14,7 @@ import '../../core/config/build_info.dart';
 import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
-import '../../l10n/app_localizations.dart';
+import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../core/logging/redacting_logger.dart';
 import '../../notifications/codex_dispatcher.dart';
@@ -82,8 +82,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     final invite = InviteCode.tryParse(raw);
     if (invite == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('剪貼簿裡沒有邀請碼。先複製對方給你的那一整串字。')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(AppLocalizations.of(context).settingsInviteNotFound)));
       }
       return;
     }
@@ -94,8 +95,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     });
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('已填入 ${invite.serverUrl}，'
-              '確認後按「儲存」；建議先測試連線')));
+          content: Text(AppLocalizations.of(context)
+              .settingsInviteFilled(invite.serverUrl))));
     }
   }
 
@@ -165,12 +166,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       setState(() {
         _testOk = true;
         _testResult =
-            '連線成功 · hub ${health.version} · ${rooms.rooms.length} 個房間';
+            L10n.current.settingsTestOk(health.version, rooms.rooms.length);
       });
     } on AuthException {
       setState(() {
         _testOk = false;
-        _testResult = 'token 錯誤：伺服器拒絕了這組 API token';
+        _testResult = L10n.current.settingsTestTokenRejected;
       });
     } on ApiException catch (e) {
       setState(() {
@@ -186,21 +187,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('重新產生裝置識別？',
+        title: Text(AppLocalizations.of(context).settingsRegenerateKeyTitle,
             style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
-          '所有房間會把你視為新成員，舊身分留在原房間的成員紀錄中。此操作無法復原。',
+          AppLocalizations.of(context).settingsRegenerateKeyBody,
           style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(context).commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '重新產生',
+            label: AppLocalizations.of(context).commonRegenerate,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
@@ -282,7 +283,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             style: UepText.pageTitle(color: s.inkTitle)),
         const SizedBox(height: 22),
         UepButton(
-          label: '貼上邀請碼',
+          label: l10n.settingsPasteInvite,
           small: true,
           variant: UepButtonVariant.outline,
           expand: true,
@@ -307,7 +308,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             obscureText: !_showToken,
             style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
             decoration:
-                _inputDecoration('（未設定 token 的 Hub 可留空）', s).copyWith(
+                _inputDecoration(l10n.settingsTokenHint, s).copyWith(
               suffixIcon: IconButton(
                 icon: Icon(
                   _showToken
@@ -326,7 +327,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 18),
         Row(children: [
           UepButton(
-            label: '測試連線',
+            label: l10n.settingsTestConnection,
             small: true,
             variant: UepButtonVariant.outline,
             onPressed: _testing ? null : _testConnection,
@@ -361,7 +362,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         if (!context.canPop() && config.isConfigured) ...[
           const SizedBox(height: 18),
           UepButton(
-            label: '進入主畫面 →',
+            label: l10n.settingsEnterApp,
             expand: true,
             onPressed: () => context.go('/rooms'),
           ),
@@ -376,12 +377,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('App 版本',
+                Text(l10n.settingsAppVersion,
                     style: UepText.sans(size: 13.5, color: s.inkTitle)),
                 const SizedBox(height: 3),
                 if (!BuildInfo.current.isKnown)
                   Text(
-                    '這份 App 沒有版本標記。',
+                    l10n.settingsNoVersionMark,
                     style:
                         UepText.serif(size: 12, color: s.inkMute, height: 1.7),
                   ),
@@ -510,7 +511,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           TextField(
             controller: _nameController,
             style: UepText.sans(size: 13, color: s.ink),
-            decoration: _inputDecoration('留空則由 Hub 隨機指派代稱', s),
+            decoration: _inputDecoration(l10n.settingsDisplayNameHint, s),
             onSubmitted: (_) => _save(),
           ),
         ),
@@ -537,15 +538,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: config.deviceKey));
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已複製裝置識別')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(l10n.settingsDeviceKeyCopied)));
                 }
               },
-              child: MonoLabel('複製', size: 9),
+              child: MonoLabel(l10n.commonCopy, size: 9),
             ),
             TextButton(
               onPressed: _regenerateKey,
-              child: MonoLabel('重新產生', size: 9, color: UepColors.errorText),
+              child: MonoLabel(l10n.commonRegenerate,
+                  size: 9, color: UepColors.errorText),
             ),
           ]),
         ),
@@ -557,10 +559,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('系統通知',
+                Text(l10n.settingsNotifyLabel,
                     style: UepText.sans(size: 13.5, color: s.inkTitle)),
                 const SizedBox(height: 3),
-                Text('只在 app 開著時通知新訊息。',
+                Text(l10n.settingsNotifyHint,
                     style: UepText.serif(size: 12, color: s.inkMute)),
               ],
             ),
@@ -570,12 +572,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             underline: const SizedBox.shrink(),
             style: UepText.sans(size: 13, color: s.ink),
             dropdownColor: s.bgCard,
-            items: const [
+            items: [
               DropdownMenuItem(
-                  value: NotifyModePref.all, child: Text('所有訊息')),
+                  value: NotifyModePref.all,
+                  child: Text(l10n.settingsNotifyAll)),
               DropdownMenuItem(
-                  value: NotifyModePref.mentions, child: Text('僅提及我時')),
-              DropdownMenuItem(value: NotifyModePref.off, child: Text('關閉')),
+                  value: NotifyModePref.mentions,
+                  child: Text(l10n.settingsNotifyMentions)),
+              DropdownMenuItem(
+                  value: NotifyModePref.off,
+                  child: Text(l10n.settingsNotifyOff)),
             ],
             onChanged: (v) async {
               if (v == null) return;
@@ -593,10 +599,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('轉送通知給 Codex',
+                  Text(l10n.settingsCodexForwardLabel,
                       style: UepText.sans(size: 13.5, color: s.inkTitle)),
                   const SizedBox(height: 3),
-                  Text('把提及與 Board 變動送到本機 Codex。',
+                  Text(l10n.settingsCodexForwardHint,
                       style: UepText.serif(size: 12, color: s.inkMute)),
                 ],
               ),
@@ -619,7 +625,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               TextField(
                 controller: _codexThreadController,
                 style: UepText.sans(size: 13, color: s.ink),
-                decoration: _inputDecoration('覆寫 thread id（選填）', s),
+                decoration: _inputDecoration(l10n.settingsCodexThreadHint, s),
                 onSubmitted: (v) async {
                   await ref
                       .read(settingsRepoProvider)
@@ -639,26 +645,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
   /// （`_save` 本來就一次寫三個欄位）。
   Widget _saveRow(UepSurface s) {
+    final l10n = AppLocalizations.of(context);
     return Row(children: [
       UepButton(
-        label: '儲存設定',
+        label: l10n.settingsSaveButton,
         small: true,
         onPressed: _dirty ? _save : null,
       ),
       const SizedBox(width: 12),
       UepButton(
-        label: '復原',
+        label: l10n.settingsRevertButton,
         variant: UepButtonVariant.outline,
         small: true,
         onPressed: _dirty ? _revert : null,
       ),
       const SizedBox(width: 14),
       if (_dirty)
-        Text('有尚未儲存的變更',
+        Text(l10n.settingsUnsavedChanges,
             style:
                 UepText.serif(size: 12.5, color: UepColors.gold, height: 1.4))
       else if (_justSaved)
-        Text('✓ 已儲存',
+        Text(l10n.settingsSaved,
             style: UepText.serif(
                 size: 12.5, color: UepColors.success, height: 1.4)),
     ]);
@@ -731,15 +738,15 @@ Future<String?> probeWebSocket(
     await conn.close();
     return null;
   } on TimeoutException {
-    return 'REST 正常，但 WebSocket 在 ${timeout.inSeconds} 秒內沒有連上。';
+    return L10n.current.settingsWsTimeout(timeout.inSeconds);
   } on Object catch (e) {
     // 4401 是 Hub 明確拒絕這張憑證。它與「網路不通」是完全不同的處置，
     // 所以要分開講
     final text = '$e';
     final rejected = text.contains('4401') || text.contains('403');
     return rejected
-        ? 'REST 正常，但 WebSocket 拒絕了這張憑證（4401）。'
-        : 'REST 正常，但 WebSocket 連不上：$e';
+        ? L10n.current.settingsWsRejected
+        : L10n.current.settingsWsFailed('$e');
   }
 }
 
@@ -760,14 +767,19 @@ class _CodexDispatchStatusView extends StatelessWidget {
     return ValueListenableBuilder<CodexDispatchStatus>(
       valueListenable: dispatcher.status,
       builder: (context, st, _) {
+        final l10n = AppLocalizations.of(context);
         final lines = <String>[
-          '本機 Codex：${st.localThreads} 個'
-              '${st.busyThreads > 0 ? '（${st.busyThreads} 個處理中）' : '（都閒著）'}',
+          st.busyThreads > 0
+              ? l10n.settingsCodexThreadsBusy(st.localThreads, st.busyThreads)
+              : l10n.settingsCodexThreadsIdle(st.localThreads),
           // 30 分鐘 / 50 則是 codex_dispatcher.dart 的 `_pendingTtl` 與
           // `_pendingLimit`（兩者都是 private，跨檔取不到，只能硬編）；
           // 10 秒是 notification_providers.dart 的補投輪詢週期。
-          st.pending > 0 ? '待補投：${st.pending} 則' : '待補投：無',
-          if (st.lastEvent.isNotEmpty) '最後一次：${st.lastEvent}',
+          st.pending > 0
+              ? l10n.settingsCodexPending(st.pending)
+              : l10n.settingsCodexPendingNone,
+          if (st.lastEvent.isNotEmpty)
+            l10n.settingsCodexLastEvent(st.lastEvent),
         ];
         return Container(
           width: double.infinity,
@@ -786,7 +798,8 @@ class _CodexDispatchStatusView extends StatelessWidget {
               ],
               const SizedBox(height: 3),
               SelectableText(
-                'log：${logFile?.path ?? '（沒有可寫位置，只進 DevTools）'}',
+                l10n.settingsCodexLogPath(
+                    logFile?.path ?? l10n.settingsCodexLogNone),
                 style: UepText.mono(size: 10.5, color: s.inkMute),
               ),
             ],

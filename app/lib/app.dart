@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
-import 'l10n/app_localizations.dart';
+import 'l10n/l10n.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
@@ -274,7 +274,9 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context)
             .copyWith(textScaler: TextScaler.linear(scale)),
-        child: child ?? const SizedBox.shrink(),
+        // 沒有 context 的程式碼（模型、通知、API 例外）從 L10n.current 拿字，
+        // 這裡讓它跟著 MaterialApp 的 locale 走
+        child: L10nSync(child: child ?? const SizedBox.shrink()),
       ),
       theme: buildUepTheme(Brightness.light),
       darkTheme: buildUepTheme(Brightness.dark),

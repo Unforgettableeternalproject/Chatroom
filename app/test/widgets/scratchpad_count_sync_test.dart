@@ -9,6 +9,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-04：**板頁上的「N 段」與想法板裡的段數對不上**
 /// （艾斯維爾在想法板上的觀察）。
@@ -86,6 +87,8 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const Scaffold(
           body: ScratchpadScreen(boardId: 'bd1', padId: 'p1'),

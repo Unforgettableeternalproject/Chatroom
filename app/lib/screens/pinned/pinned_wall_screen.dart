@@ -6,6 +6,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/message.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
@@ -72,7 +73,7 @@ class PinnedWallScreen extends ConsumerWidget {
           const Text('❖',
               style: TextStyle(fontSize: 12, color: UepColors.gold)),
           const SizedBox(width: 10),
-          Text('釘選訊息',
+          Text(AppLocalizations.of(context).chatPinnedWallTitle,
               style: UepText.pageTitle(color: s.inkTitle)),
         ]),
         actions: [
@@ -97,7 +98,7 @@ class PinnedWallScreen extends ConsumerWidget {
         error: (e, _) => ErrorState(
             error: e, onRetry: () => ref.invalidate(_pinnedProvider(roomId))),
         data: (pinned) => pinned.isEmpty
-            ? const EmptyState(title: '還沒有釘選的訊息')
+            ? EmptyState(title: AppLocalizations.of(context).chatNoPinnedMessages)
             : Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 720),
@@ -183,7 +184,7 @@ class _PinnedCard extends ConsumerWidget {
           InkWell(
             onTap: () =>
                 context.go('/rooms/$roomId?focusSeq=${message.seq}'),
-            child: MonoLabel('跳回原文 →',
+            child: MonoLabel(AppLocalizations.of(context).chatJumpToOriginal,
                 size: 9, color: UepColors.gold, letterSpacing: 1.4),
           ),
           const SizedBox(width: 14),
@@ -203,7 +204,7 @@ class _PinnedCard extends ConsumerWidget {
                   }
                 }
               },
-              child: MonoLabel('取消釘選', size: 9, letterSpacing: 1.4),
+              child: MonoLabel(AppLocalizations.of(context).chatUnpin, size: 9, letterSpacing: 1.4),
             ),
         ]),
       ]),
@@ -221,4 +222,6 @@ class _PinnedCard extends ConsumerWidget {
 /// 「(未知)」的 fallback **保留給真正的那種情況**:發話者是人/agent,但名字
 /// 查不到(離開了、或快取還沒補上)。兩者要分得開,因為處置完全不同。
 String pinnedSenderLabel(Message m) =>
-    m.kind == 'system' ? '系統' : (m.senderName ?? '（未知）');
+    m.kind == 'system'
+        ? L10n.current.commonSystem
+        : (m.senderName ?? L10n.current.commonUnknownParen);

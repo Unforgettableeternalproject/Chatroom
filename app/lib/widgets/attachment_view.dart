@@ -10,6 +10,7 @@ import '../state/app_providers.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/attachment.dart';
 import 'stage_files.dart';
 
@@ -40,11 +41,12 @@ Future<void> openAttachmentPreview(
   String? participantId,
 }) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
+  final l10n = AppLocalizations.of(context);
   void toast(String message) =>
       messenger?.showSnackBar(SnackBar(content: Text(message)));
 
   if (participantId == null || participantId.isEmpty) {
-    toast('還在取得房間身分，稍候再試');
+    toast(l10n.roomsIdentityPending);
     return;
   }
   final headers = attachmentHeaders(token, participantId);
@@ -71,13 +73,13 @@ Future<void> openAttachmentPreview(
         '${_safeFilename(attachment.filename)}');
     await file.writeAsBytes(bytes);
     final ok = await launchUrl(file.uri, mode: LaunchMode.externalApplication);
-    if (!ok) toast('這台機器沒有可以開啟這種檔案的程式');
+    if (!ok) toast(l10n.msgAttachNoOpener);
   } on AttachmentGoneException catch (e) {
     toast(e.message);
   } on ApiException catch (e) {
-    toast('開啟失敗：${e.message}');
+    toast(l10n.msgAttachOpenFailed(e.message));
   } on FileSystemException catch (e) {
-    toast('開啟失敗：${e.message}');
+    toast(l10n.msgAttachOpenFailed(e.message));
   }
 }
 
@@ -217,7 +219,7 @@ class _ImageAttachment extends StatelessWidget {
             // 目錄可能不同步（只備份了 db），那時圖片會永久取不回來
             errorBuilder: (context, error, stack) => _FileAttachment(
               attachment: attachment,
-              note: '圖片載入失敗',
+              note: AppLocalizations.of(context).msgAttachImageFailed,
             ),
           ),
         ),
@@ -257,10 +259,11 @@ class _DownloadAttachmentButtonState
   }
 
   Future<void> _save() async {
+    final l10n = AppLocalizations.of(context);
     final pid = widget.participantId;
     if (pid == null || pid.isEmpty) {
       // 房間是讀取邊界，沒有身分連請求都不該發
-      _toast('還在取得房間身分，稍候再試');
+      _toast(l10n.roomsIdentityPending);
       return;
     }
     setState(() => _busy = true);
@@ -274,15 +277,15 @@ class _DownloadAttachmentButtonState
         fileName: widget.attachment.filename,
         bytes: bytes,
         mimeType: widget.attachment.mime,
-        dialogTitle: '儲存附件',
+        dialogTitle: l10n.msgAttachSaveDialogTitle,
       );
       if (saved == null) return;   // 使用者按了取消，不是錯誤
-      _toast('已存檔：${widget.attachment.filename}');
+      _toast(l10n.msgAttachSaved(widget.attachment.filename));
     } on AttachmentGoneException catch (e) {
       // metadata 在、實體不在：講清楚它回不來了，別讓人一直重試
       _toast(e.message);
     } on ApiException catch (e) {
-      _toast('下載失敗：${e.message}');
+      _toast(l10n.msgAttachDownloadFailed(e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -292,7 +295,7 @@ class _DownloadAttachmentButtonState
   Widget build(BuildContext context) {
     final s = context.uep;
     return IconButton(
-      tooltip: '存到本機',
+      tooltip: AppLocalizations.of(context).msgAttachSaveTooltip,
       visualDensity: VisualDensity.compact,
       onPressed: _busy ? null : _save,
       icon: _busy
@@ -432,7 +435,7 @@ class AddToStageButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
     return IconButton(
-      tooltip: '加到階段',
+      tooltip: AppLocalizations.of(context).msgAttachStageTooltip,
       visualDensity: VisualDensity.compact,
       onPressed: () => showAddToStageDialog(
         context,

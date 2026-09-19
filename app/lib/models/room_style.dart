@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
+
 /// 房內 agent 的說話方式，UI 端的顯示定義。
 ///
 /// ⚠️ 這裡的 [description] 是**給人看的一句話**，不是送給 agent 的指示。
@@ -18,12 +20,17 @@ class RoomStyleOption {
 
 const kRoomStyleCustom = 'custom';
 
-const kRoomStyles = <RoomStyleOption>[
-  RoomStyleOption('verbose', '詳細', '完整交付：任務結果、程式碼、Markdown 報告，篇幅不限'),
-  RoomStyleOption('concise', '精確', '只列重點，不貼程式碼與長篇文件'),
-  RoomStyleOption('casual', '親和', '像人一樣說話，不報告工作階段'),
-  RoomStyleOption(kRoomStyleCustom, '自訂', '自己寫下這個房間的說話方式'),
-];
+/// 說話方式的選項。文字跟著語言走，所以是 getter 而不是 `const`。
+List<RoomStyleOption> get kRoomStyles {
+  final l10n = L10n.current;
+  return <RoomStyleOption>[
+    RoomStyleOption('verbose', l10n.roomStyleVerbose, l10n.roomStyleVerboseDesc),
+    RoomStyleOption('concise', l10n.roomStyleConcise, l10n.roomStyleConciseDesc),
+    RoomStyleOption('casual', l10n.roomStyleCasual, l10n.roomStyleCasualDesc),
+    RoomStyleOption(
+        kRoomStyleCustom, l10n.roomStyleCustom, l10n.roomStyleCustomDesc),
+  ];
+}
 
 /// 未知的值一律顯示成「詳細」——與 Hub 的退路一致（見 `_style_texts`）。
 /// 顯示成「未知」只會讓人以為房間壞了，而 agent 那邊其實運作正常。

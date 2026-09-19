@@ -7,6 +7,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../models/participant.dart';
 import '../../state/board_providers.dart';
@@ -155,6 +156,7 @@ class BoardTaskDrawer extends ConsumerWidget {
 
   Widget _header(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
@@ -164,7 +166,9 @@ class BoardTaskDrawer extends ConsumerWidget {
       child: Row(children: [
         Expanded(
           child: Text(
-            checklistTitle.isEmpty ? '任務' : '任務 · $checklistTitle',
+            checklistTitle.isEmpty
+                ? l10n.boardTaskDrawerTitle
+                : l10n.boardTaskDrawerTitleIn(checklistTitle),
             overflow: TextOverflow.ellipsis,
             style:
                 UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.8),
@@ -175,7 +179,7 @@ class BoardTaskDrawer extends ConsumerWidget {
             onTap: () => _edit(context, ref),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text('編輯',
+              child: Text(l10n.commonEdit,
                   style: UepText.mono(
                       size: 10, color: s.inkSoft, letterSpacing: 1.4)),
             ),
@@ -221,7 +225,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                   _StatusChip(status: task.status),
                   if (task.priority == 'high') ...[
                     const SizedBox(width: 8),
-                    Text('▲ 高',
+                    Text(AppLocalizations.of(context).boardPriorityHighMark,
                         style: UepText.mono(size: 10, color: s.inkTitle)),
                   ],
                 ]),
@@ -238,6 +242,7 @@ class BoardTaskDrawer extends ConsumerWidget {
   Widget _meta(
       BuildContext context, WidgetRef ref, List<TaskRequest> requests) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final rows = <Widget>[];
 
     // 搬走的卡**留在原地顯示**（09/08 可見度規則，@開發Novia (除錯) 定），
@@ -252,59 +257,64 @@ class BoardTaskDrawer extends ConsumerWidget {
           : ref.watch(boardByIdProvider(boardId)).value;
       final target = task.movedTo.isEmpty ? null : snap?.tasks[task.movedTo];
       rows.add(_MetaRow(
-        label: '搬去了',
+        label: l10n.boardTaskMetaMovedTo,
         // 查不到不等於不存在——目標可能在還沒載入的週期裡，或已經被刪掉。
         // 兩種都不該講成「沒有去向」，那是另一件事
         value: task.movedTo.isEmpty
-            ? '沒說去哪'
-            : (target?.title ?? '這份快取裡找不到的一張卡'),
-        trailing: task.movedTo.isEmpty ? '去向留白' : '',
+            ? l10n.boardTaskMovedUnknown
+            : (target?.title ?? l10n.boardTaskMovedNotInCache),
+        trailing: task.movedTo.isEmpty ? l10n.boardTaskMovedBlank : '',
         trailingIsAlert: task.movedTo.isEmpty,
       ));
     }
 
     if (task.claimName.isNotEmpty) {
       rows.add(_MetaRow(
-        label: '持有者',
+        label: l10n.boardTaskMetaHolder,
         value: task.claimName,
         struck: task.isOrphaned,
         kind: task.claimKind,
         trailing: task.isOrphaned
             ? (task.orphanedReasonLabel.isEmpty
-                ? '已不在房內'
+                ? l10n.boardTaskGone
                 : task.orphanedReasonLabel)
             : (task.claimedAt == null
                 ? ''
-                : '${relativeTime(task.claimedAt)} 認領'),
+                : l10n.boardTaskClaimedAt(relativeTime(task.claimedAt))),
         trailingIsAlert: task.isOrphaned,
       ));
     }
     if (assigneeName != null) {
       rows.add(_MetaRow(
-        label: '指定對象',
+        label: l10n.boardTaskMetaAssignee,
         value: assigneeName!,
         // 誰指定的要寫出來——「建議」不是規則，看得到是誰提的才知道份量
         trailing: task.assignedByName.isEmpty
-            ? '建議'
-            : '${task.assignedByName}指定 · 建議',
+            ? l10n.boardTaskSuggestion
+            : l10n.boardTaskSuggestionBy(task.assignedByName),
       ));
     }
     for (final r in requests) {
       rows.add(_MetaRow(
-        label: r.isPending ? '待回覆' : (r.isAccepted ? '已接受' : '已婉拒'),
-        value: r.targetName.isEmpty ? '某人' : r.targetName,
+        label: r.isPending
+            ? l10n.boardTaskRequestPending
+            : (r.isAccepted
+                ? l10n.boardTaskRequestAccepted
+                : l10n.boardTaskRequestDeclined),
+        value: r.targetName.isEmpty ? l10n.commonSomeone : r.targetName,
         // 🔴 **拒絕留紀錄不刪除**（Hub 刻意）：提議者要分得出「他看過了
         // 說不要」與「他還沒看到」——前者要換人，後者要再等。把拒絕的
         // 那筆從畫面上拿掉，兩種處境會長得一模一樣
         trailing: r.requesterName.isEmpty
             ? ''
-            : '${r.requesterName}提出 · ${relativeTime(r.createdAt)}',
+            : l10n.boardTaskRequestBy(
+                r.requesterName, relativeTime(r.createdAt)),
         struck: r.isDeclined,
       ));
     }
     if (task.createdByName.isNotEmpty) {
       rows.add(_MetaRow(
-        label: '建立',
+        label: l10n.boardTaskMetaCreated,
         value: task.createdByName,
         trailing: relativeTime(task.createdAt),
       ));
@@ -344,7 +354,7 @@ class BoardTaskDrawer extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('長出這張卡的訊息',
+        Text(AppLocalizations.of(context).boardTaskSourceMessage,
             style:
                 UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.6)),
         const SizedBox(height: 8),
@@ -401,12 +411,13 @@ class BoardTaskDrawer extends ConsumerWidget {
                           ),
                         ] else ...[
                           const SizedBox(height: 6),
-                          Text('這則訊息還沒載入到手上。',
+                          Text(AppLocalizations.of(context)
+                              .boardTaskSourceNotLoaded,
                               style: UepText.serif(
                                   size: 13, color: s.inkMute)),
                         ],
                         const SizedBox(height: 6),
-                        Text('↩ 跳回聊天室',
+                        Text(AppLocalizations.of(context).boardTaskJumpToRoom,
                             style: UepText.mono(
                                 size: 10,
                                 color: UepColors.gold,
@@ -473,7 +484,9 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       await actions.resolveTaskRequest(r.id, accept: accept);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(accept ? '接下了，這張卡現在指向你' : '已回覆婉拒'),
+        content: Text(accept
+            ? AppLocalizations.of(context).boardTaskRequestAcceptedToast
+            : AppLocalizations.of(context).boardTaskRequestDeclinedToast),
       ));
     });
   }
@@ -493,7 +506,8 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     );
     if (newId == null || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已搬走。新的那張卡在你選的階段上，這張指向它。')),
+      SnackBar(
+          content: Text(AppLocalizations.of(context).boardTaskMovedToast)),
     );
   }
 
@@ -505,7 +519,9 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         // ⚠️ `cleared` 與 `assigned` 都是 false 時**不是同一件事**：
         // 只看 assigned 的話，取消成功會被講成「送出了一筆請求」
-        content: Text(out.cleared ? '已取消指派' : '沒有東西可以取消'),
+        content: Text(out.cleared
+            ? AppLocalizations.of(context).boardTaskAssignCleared
+            : AppLocalizations.of(context).boardTaskAssignNothingToClear),
       ));
     });
   }
@@ -520,7 +536,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     final picked = await showDialog<AttachedRoom>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: Text('指到哪一間聊天室',
+        title: Text(AppLocalizations.of(ctx).boardTaskPickRoomTitle,
             style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final r in rooms)
@@ -535,7 +551,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
                 // 指過去的卡不會有人接。藏掉的話，多房時使用者會覺得
                 // 「少了一間」而去找它
                 if (r.status == 'archived')
-                  Text('已封存',
+                  Text(AppLocalizations.of(ctx).commonArchived,
                       style: UepText.mono(size: 10, color: ctx.uep.inkMute)),
               ]),
             ),
@@ -566,7 +582,9 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('讀不到那間房的成員：${e.message}')));
+          SnackBar(
+              content: Text(AppLocalizations.of(context)
+                  .boardTaskRoomMembersUnreadable(e.message))));
       return;
     }
     if (!mounted) return;
@@ -578,7 +596,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     final picked = await showDialog<Participant>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: Text('請誰接手這張卡',
+        title: Text(AppLocalizations.of(ctx).boardTaskAssignTitle,
             style: UepText.itemTitle(color: ctx.uep.inkTitle)),
         children: [
           for (final m in members)
@@ -596,7 +614,7 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
           if (members.isEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-              child: Text('這間房裡沒有其他人。',
+              child: Text(AppLocalizations.of(ctx).boardRoomHasNobodyElse,
                   style: UepText.serif(size: 13, color: ctx.uep.inkMute)),
             ),
         ],
@@ -610,11 +628,14 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
           out.assigned
-              ? '已指派給 ${picked.displayName}'
+              ? AppLocalizations.of(context)
+                  .boardTaskAssignedTo(picked.displayName)
+              // 重按不是失敗，但要講清楚沒有生出第二筆
               : out.alreadyPending
-                  // 重按不是失敗，但要講清楚沒有生出第二筆
-                  ? '已經在等 ${picked.displayName} 回覆了'
-                  : '已送出請求，等 ${picked.displayName} 回覆',
+                  ? AppLocalizations.of(context)
+                      .boardTaskAssignAlreadyPending(picked.displayName)
+                  : AppLocalizations.of(context)
+                      .boardTaskAssignRequested(picked.displayName),
         ),
       ));
     });
@@ -727,19 +748,20 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
               // 否則「需要對方同意」在畫面上就不成立
               if (pending != null) ...[
                 _DrawerAction(
-                  label: '接下',
+                  label: AppLocalizations.of(context).boardTaskAccept,
                   bordered: false,
                   onTap: () => _respond(actions, pending, true),
                 ),
                 _DrawerAction(
-                  label: '婉拒',
+                  label: AppLocalizations.of(context).commonDecline,
                   bordered: true,
                   onTap: () => _respond(actions, pending, false),
                 ),
               ],
               if (primary != null)
                 _DrawerAction(
-                  label: primary.label,
+                  label: taskActionLabel(
+                      AppLocalizations.of(context), primary.kind),
                   // 有人在等回答時，主要動作退成外框——同一排兩顆實心會讓
                   // 「先回答那件事」這個順序在畫面上消失
                   bordered: pending != null,
@@ -786,7 +808,7 @@ extension on _TaskActionBarState {
       entries.add(PopupMenuItem<VoidCallback>(
         value: () => run(a),
         height: 38,
-        child: Text(a.label,
+        child: Text(taskActionLabel(AppLocalizations.of(context), a.kind),
             style: UepText.sans(
                 size: 13.5, color: a.danger ? UepColors.error : s.ink)),
       ));
@@ -807,11 +829,13 @@ extension on _TaskActionBarState {
           ref,
           roomId: roomId,
           targetRef: widget.task.id,
-          targetLabel: '卡：${widget.task.title}',
+          targetLabel: AppLocalizations.of(context)
+              .boardDispatchTargetTask(widget.task.title),
           boardId: widget.boardId,
         ),
         height: 38,
-        child: Text('派工', style: UepText.sans(size: 13.5, color: s.ink)),
+        child: Text(AppLocalizations.of(context).boardDispatchRun,
+            style: UepText.sans(size: 13.5, color: s.ink)),
       ));
     }
 
@@ -835,12 +859,15 @@ extension on _TaskActionBarState {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(assigned ? '改請別人' : '請人接手',
+            Text(
+                assigned
+                    ? AppLocalizations.of(context).boardTaskAssignSomeoneElse
+                    : AppLocalizations.of(context).boardTaskAssignSomeone,
                 style: UepText.sans(
                     size: 13.5, color: noRoomToAssign ? s.inkMute : s.ink)),
             // 停用要說出理由，而且理由要能導向下一步
             if (noRoomToAssign)
-              Text('掛到房間後才能指派',
+              Text(AppLocalizations.of(context).boardTaskAssignNeedsRoom,
                   style: UepText.mono(size: 10, color: s.inkMute)),
           ],
         ),
@@ -855,7 +882,8 @@ extension on _TaskActionBarState {
         entries.add(PopupMenuItem<VoidCallback>(
           value: () => _clearAssignee(actions),
           height: 38,
-          child: Text('取消指派', style: UepText.sans(size: 13.5, color: s.ink)),
+          child: Text(AppLocalizations.of(context).boardTaskAssignClear,
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ));
       }
     }
@@ -863,7 +891,7 @@ extension on _TaskActionBarState {
     if (entries.isEmpty) return const SizedBox.shrink();
 
     return PopupMenuButton<VoidCallback>(
-      tooltip: '更多動作',
+      tooltip: AppLocalizations.of(context).commonMoreActions,
       color: s.bgCard,
       padding: EdgeInsets.zero,
       position: PopupMenuPosition.under,
@@ -952,15 +980,15 @@ class _StatusChip extends StatelessWidget {
 
   final String status;
 
-  static const _labels = {
-    'todo': '待辦',
-    'in_progress': '進行中',
-    'blocked': '卡住',
-    'done': '完成',
-    'cancelled': '已取消',
+  static Map<String, String> _labels(AppLocalizations l10n) => {
+    'todo': l10n.boardStatusTodo,
+    'in_progress': l10n.boardStatusInProgress,
+    'blocked': l10n.boardStatusBlocked,
+    'done': l10n.boardStatusDone,
+    'cancelled': l10n.boardStatusCancelled,
     // 「已搬走」不是完成也不是取消——講錯的話，讀板的人會以為這件事
     // 在這裡做完了（done）或不做了（cancelled），而它其實在別的地方進行
-    'moved': '已搬走',
+    'moved': l10n.boardStatusMoved,
   };
 
   @override
@@ -990,7 +1018,7 @@ class _StatusChip extends StatelessWidget {
         color: background,
         border: Border.all(color: border),
       ),
-      child: Text(_labels[status] ?? status,
+      child: Text(_labels(AppLocalizations.of(context))[status] ?? status,
           style: UepText.mono(size: 10, color: color, letterSpacing: 1.1)),
     );
   }

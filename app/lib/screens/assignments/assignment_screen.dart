@@ -9,6 +9,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/local_host.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/agent_session.dart';
 import '../../models/assignment.dart';
 import '../../state/app_providers.dart';
@@ -77,8 +78,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   Future<void> _submit() async {
     final target = _target.text.trim();
     if (target.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('請從掃描清單選擇對象，或輸入 session key')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context).assignNeedTarget)));
       return;
     }
     setState(() => _submitting = true);
@@ -106,22 +107,23 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
       context: context,
       builder: (context) {
         final s = context.uep;
+        final l10n = AppLocalizations.of(context);
         return AlertDialog(
-          title: Text('收回這筆指派？',
+          title: Text(l10n.assignCancelTitle,
               style: UepText.pageTitle(color: s.inkTitle)),
           content: Text(
-            '${a.targetSessionKey} 還沒回應。收回後對方就不會再收到這個邀請。',
+            l10n.assignCancelBody(a.targetSessionKey),
             style: UepText.serif(size: 14.5, color: s.inkSoft),
           ),
           actions: [
             UepButton(
-              label: '不要',
+              label: l10n.assignCancelNo,
               variant: UepButtonVariant.outline,
               small: true,
               onPressed: () => Navigator.of(context).pop(false),
             ),
             UepButton(
-              label: '收回',
+              label: l10n.assignCancelConfirm,
               variant: UepButtonVariant.danger,
               small: true,
               onPressed: () => Navigator.of(context).pop(true),
@@ -151,6 +153,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final roomId = widget.roomId;
     final assignmentsAsync = ref.watch(roomAssignmentsProvider(roomId));
     final detail = ref.watch(roomDetailProvider(roomId)).value;
@@ -165,7 +168,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
           icon: Icon(Icons.arrow_back, size: 18, color: s.inkSoft),
           onPressed: () => context.go('/rooms/$roomId'),
         ),
-        title: Text('指派 agent',
+        title: Text(l10n.assignTitle,
             style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           Padding(
@@ -190,15 +193,18 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    MonoLabel('新指派', letterSpacing: 2.2),
+                    MonoLabel(l10n.assignNewLabel, letterSpacing: 2.2),
                     const SizedBox(height: 14),
                     Row(children: [
-                      Text('掃描到的 SESSION',
+                      Text(l10n.assignScannedSessions,
                           style: UepText.fieldLabel(color: s.inkSoft)),
                       const Spacer(),
                       InkWell(
                         onTap: () => setState(() => _showIdle = !_showIdle),
-                        child: MonoLabel(_showIdle ? '顯示全部' : '僅進行中',
+                        child: MonoLabel(
+                            _showIdle
+                                ? l10n.assignShowAll
+                                : l10n.assignShowActiveOnly,
                             size: 8.5,
                             color: _showIdle ? s.inkMute : UepColors.gold,
                             letterSpacing: 1.4),
@@ -215,7 +221,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     // 會整個位移
                     UepResize(child: _buildSessionScan()),
                     const SizedBox(height: 14),
-                    Text('目標 session',
+                    Text(l10n.assignFieldTarget,
                         style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
@@ -228,7 +234,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       ),
                     ),
                     const SizedBox(height: 14),
-                    Text('命名（選填）',
+                    Text(l10n.assignFieldName,
                         style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
@@ -237,12 +243,12 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         maxLength: 32,
                         style:
                             UepText.code(size: 12.5, color: s.ink, height: 1.4),
-                        decoration: _decoration('房內名稱，最多 32 字（選填）')
+                        decoration: _decoration(l10n.assignFieldNameHint)
                             .copyWith(counterText: ''),
                       ),
                     ),
                     const SizedBox(height: 14),
-                    Text('備註',
+                    Text(l10n.assignFieldNote,
                         style: UepText.fieldLabel(color: s.inkSoft)),
                     const SizedBox(height: 6),
                     _inputBox(
@@ -251,13 +257,13 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                         maxLines: 3,
                         style: UepText.serif(
                             size: 14, color: s.ink, height: 1.8),
-                        decoration: _decoration('要 agent 做什麼？'),
+                        decoration: _decoration(l10n.assignFieldNoteHint),
                       ),
                     ),
                     const SizedBox(height: 14),
                     Row(children: [
                       UepButton(
-                        label: '送出指派',
+                        label: l10n.assignSubmit,
                         small: true,
                         onPressed: _submitting ? null : _submit,
                       ),
@@ -265,8 +271,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                       // 時限是 server 的 CHATROOM_ASSIGNMENT_TTL（預設 24 小時），
                       // 沒有端點吐給 client，所以不寫死數字。Expanded 讓它在
                       // 窄畫面換行而不是溢位。
-                      const Expanded(
-                        child: MonoLabel('逾時未回應自動過期',
+                      Expanded(
+                        child: MonoLabel(l10n.assignExpiryNote,
                             size: 9, letterSpacing: 1.2),
                       ),
                     ]),
@@ -274,7 +280,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              MonoLabel('本房間的指派', letterSpacing: 2.2),
+              MonoLabel(l10n.assignRoomListLabel, letterSpacing: 2.2),
               const SizedBox(height: 10),
               assignmentsAsync.when(
                 loading: () => const Padding(
@@ -291,9 +297,9 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     onRetry: () =>
                         ref.invalidate(roomAssignmentsProvider(roomId))),
                 data: (assignments) => assignments.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 30),
-                        child: EmptyState(title: '這個房間還沒有任何指派'),
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 30),
+                        child: EmptyState(title: l10n.assignEmpty),
                       )
                     : Column(children: [
                         for (final a in assignments)
@@ -313,6 +319,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
   /// 掃描到的 agent session 清單：點選即填入 TARGET SESSION。
   Widget _buildSessionScan() {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final sessionsAsync = ref.watch(agentSessionsProvider(widget.roomId));
     return sessionsAsync.when(
       loading: () => Padding(
@@ -324,12 +331,12 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
               child: CircularProgressIndicator(
                   strokeWidth: 1.5, color: UepColors.gold)),
           const SizedBox(width: 8),
-          MonoLabel('掃描中…', size: 9, color: s.inkMute),
+          MonoLabel(l10n.assignScanning, size: 9, color: s.inkMute),
         ]),
       ),
       error: (e, _) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: MonoLabel('掃描失敗，可手動輸入 session key',
+        child: MonoLabel(l10n.assignScanFailed,
             size: 9, color: UepColors.errorText),
       ),
       data: (all) {
@@ -343,8 +350,8 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
             child: MonoLabel(
                 hiddenIdle > 0
                     // 有東西卻不顯示時一定要說原因，否則看起來就是掃描壞了
-                    ? '沒有 active 的 session（$hiddenIdle 個閒置中）'
-                    : '目前沒有掃描到任何 agent session',
+                    ? l10n.assignNoActiveSessions(hiddenIdle)
+                    : l10n.assignNoSessions,
                 size: 9,
                 color: s.inkMute),
           );
@@ -368,7 +375,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
               padding: const EdgeInsets.only(bottom: 4),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: MonoLabel('讀不到本機主機名，無法分辨裝置',
+                child: MonoLabel(l10n.assignNoHostName,
                     size: 8.5, color: s.inkMute),
               ),
             ),
@@ -392,7 +399,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     color: s.inkMute,
                   ),
                   const SizedBox(width: 4),
-                  MonoLabel('尚未接入聊天室（${primaryUnlinked.length}）',
+                  MonoLabel(l10n.assignUnlinkedGroup(primaryUnlinked.length),
                       size: 9, color: s.inkMute),
                 ]),
               ),
@@ -407,7 +414,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: MonoLabel('這些名字是掃描編出來的',
+                      child: MonoLabel(l10n.assignUnlinkedNote,
                           size: 8.5, color: s.inkMute),
                     ),
                   ),
@@ -427,7 +434,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: MonoLabel('這台機器上沒有掃描到 agent',
+                child: MonoLabel(l10n.assignNoLocalSessions,
                     size: 9, color: s.inkMute),
               ),
             ),
@@ -445,7 +452,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
                     color: s.inkMute,
                   ),
                   const SizedBox(width: 4),
-                  MonoLabel('其他裝置（${others.length}）',
+                  MonoLabel(l10n.assignOtherHostsGroup(others.length),
                       size: 9, color: s.inkMute),
                 ]),
               ),
@@ -472,7 +479,7 @@ class _AssignmentScreenState extends ConsumerState<AssignmentScreen> {
               padding: const EdgeInsets.only(top: 4),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: MonoLabel('另有 $hiddenIdle 個閒置的 session 未顯示',
+                child: MonoLabel(l10n.assignHiddenIdle(hiddenIdle),
                     size: 8.5, color: s.inkMute),
               ),
             ),
@@ -517,6 +524,7 @@ class _SessionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final active = session.status == 'active';
     final statusColor = active ? UepColors.success : s.inkMute;
     final keyTail = session.sessionKey.length > 12
@@ -563,9 +571,13 @@ class _SessionRow extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   session.rooms.isNotEmpty
-                      ? '在「${session.rooms.first.roomName}」'
-                          '為 ${session.rooms.first.displayName}'
-                          '${session.rooms.length > 1 ? '（+${session.rooms.length - 1} 房）' : ''}'
+                      ? l10n.assignSessionInRoom(
+                              session.rooms.first.roomName,
+                              session.rooms.first.displayName) +
+                          (session.rooms.length > 1
+                              ? l10n.assignSessionMoreRooms(
+                                  session.rooms.length - 1)
+                              : '')
                       : keyTail,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.mono(size: 10, color: s.inkMute),
@@ -574,7 +586,9 @@ class _SessionRow extends StatelessWidget {
                 // 誰是誰的清單。未知主機名同樣要講——它不是「本機」
                 if (!session.isOnHost(localHostName))
                   Text(
-                    session.host.isEmpty ? '未知裝置' : '在 ${session.host}',
+                    session.host.isEmpty
+                        ? l10n.assignSessionUnknownHost
+                        : l10n.assignSessionOnHost(session.host),
                     overflow: TextOverflow.ellipsis,
                     style: UepText.mono(size: 10, color: UepColors.gold),
                   ),
@@ -582,7 +596,7 @@ class _SessionRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          MonoLabel(active ? '進行中' : '閒置',
+          MonoLabel(active ? l10n.commonActive : l10n.commonIdle,
               size: 8.5, color: statusColor, letterSpacing: 1.4),
           const SizedBox(width: 10),
           Text(relativeTime(session.lastSeenAt),
@@ -601,19 +615,21 @@ class _AssignmentRow extends StatelessWidget {
   /// 收回這筆指派；null 表示不可收回（已被處理過）。
   final VoidCallback? onCancel;
 
-  /// 指派狀態 → 中文徽章。未知狀態原樣顯示，免得新狀態被吃成空白。
-  static String _statusLabel(String status) => switch (status) {
-        'pending' => '等待回應',
-        'accepted' => '已接受',
-        'declined' => '已婉拒',
-        'cancelled' => '已收回',
-        'expired' => '已逾時',
+  /// 指派狀態 → 徽章文字。未知狀態原樣顯示，免得新狀態被吃成空白。
+  static String _statusLabel(AppLocalizations l10n, String status) =>
+      switch (status) {
+        'pending' => l10n.assignStatusPending,
+        'accepted' => l10n.assignStatusAccepted,
+        'declined' => l10n.assignStatusDeclined,
+        'cancelled' => l10n.assignStatusCancelled,
+        'expired' => l10n.assignStatusExpired,
         _ => status,
       };
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final (color, border) = switch (assignment.status) {
       'accepted' => (
           UepColors.success,
@@ -668,7 +684,7 @@ class _AssignmentRow extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(border: Border.all(color: border)),
-            child: MonoLabel(_statusLabel(assignment.status),
+            child: MonoLabel(_statusLabel(l10n, assignment.status),
                 size: 8.5, color: color, letterSpacing: 1.4),
           ),
           SizedBox(
@@ -681,7 +697,7 @@ class _AssignmentRow extends StatelessWidget {
           ),
           if (onCancel != null)
             IconButton(
-              tooltip: '收回這筆指派',
+              tooltip: l10n.assignCancelTooltip,
               visualDensity: VisualDensity.compact,
               constraints: const BoxConstraints(),
               padding: const EdgeInsets.only(left: 6),

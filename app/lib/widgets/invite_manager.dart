@@ -8,6 +8,7 @@ import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 import '../state/assignments_providers.dart';
 import 'kind_badge.dart';
@@ -28,10 +29,9 @@ import 'uep_button.dart';
 ///
 /// ⚠️ 決策 09/07 裁：按鈕留著，用「錯誤講人話」除罪，不做入口隱藏。
 String inviteErrorText(Object error) => switch (error) {
-      RootTokenRequiredException() =>
-        '這張憑證發不了邀請，請用主憑證。',
+      RootTokenRequiredException() => L10n.current.inviteErrorRootTokenRequired,
       ApiException(:final message) => message,
-      _ => '無法讀取已發出的邀請',
+      _ => L10n.current.inviteErrorListFailed,
     };
 
 /// 設定頁的「邀請成員」區塊：發一份邀請給還沒連上 Hub 的人，以及收回已發出的。
@@ -117,7 +117,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               : InviteCode(serverUrl: url, token: token, label: label).encode();
           return AlertDialog(
             backgroundColor: s.bgCard,
-            title: Text('邀請碼${label.isEmpty ? '' : '：$label'}',
+            title: Text(label.isEmpty
+                ? AppLocalizations.of(context).inviteCodeTitle
+                : AppLocalizations.of(context).inviteCodeTitleLabeled(label),
                 style: UepText.pageTitle(color: s.inkTitle)),
             content: SizedBox(
               width: 440,
@@ -137,7 +139,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      labelText: '對方要連的位址',
+                      labelText: AppLocalizations.of(context).inviteFieldTargetUrl,
                       labelStyle: UepText.fieldLabel(color: s.inkMute),
                       hintText: 'https://xxx.trycloudflare.com',
                       hintStyle: UepText.code(size: 12, color: s.inkMute),
@@ -149,8 +151,8 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                   const SizedBox(height: 8),
                   Text(
                     url.isEmpty
-                        ? '請填一個對方連得到的位址。'
-                        : '這個位址只有你這台機器連得到。',
+                        ? AppLocalizations.of(context).inviteUrlEmpty
+                        : AppLocalizations.of(context).inviteUrlLoopback,
                     style: UepText.serif(
                         size: 13, color: UepColors.errorText, height: 1.7),
                   ),
@@ -171,7 +173,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  '這串字等同密碼，任何拿到的人都能進這台 Hub。',
+                  AppLocalizations.of(context).inviteCodeWarning,
                   style:
                       UepText.serif(size: 13.5, color: s.inkMute, height: 1.7),
                 ),
@@ -179,7 +181,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
             ),
             actions: [
               UepButton(
-                label: '複製',
+                label: AppLocalizations.of(context).commonCopy,
                 small: true,
                 // 擋住的時候不給複製：一串指向 127.0.0.1 的邀請碼，
                 // 送出去之後沒有任何一端會報錯
@@ -192,7 +194,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                       },
             ),
               UepButton(
-                label: '關閉',
+                label: AppLocalizations.of(context).commonClose,
                 variant: UepButtonVariant.outline,
                 small: true,
                 onPressed: () => Navigator.of(context).pop(),
@@ -214,7 +216,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
     setState(() => _busy = true);
     try {
       final created = await ref.read(tokensApiProvider).create(
-            label: parent.label.isEmpty ? 'agent' : '${parent.label} 的 agent',
+            label: parent.label.isEmpty
+                ? 'agent'
+                : AppLocalizations.of(context).inviteAgentTokenLabel(parent.label),
             parentToken: parent.token,
           );
       ref.invalidate(accessTokensProvider);
@@ -246,7 +250,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
         final s = context.uep;
         return AlertDialog(
           backgroundColor: s.bgCard,
-          title: Text('agent 憑證${who.isEmpty ? '' : '：$who'}',
+          title: Text(who.isEmpty
+              ? AppLocalizations.of(context).inviteAgentTokenTitle
+              : AppLocalizations.of(context).inviteAgentTokenTitleLabeled(who),
               style: UepText.pageTitle(color: s.inkTitle)),
           content: SizedBox(
             width: 440,
@@ -264,14 +270,14 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               ),
               const SizedBox(height: 12),
               Text(
-                '這串填進 mcp-kit 安裝器的「Agent token」欄位。',
+                AppLocalizations.of(context).inviteAgentTokenNote,
                 style: UepText.serif(size: 13.5, color: s.inkMute, height: 1.7),
               ),
             ]),
           ),
           actions: [
             UepButton(
-              label: '複製',
+              label: AppLocalizations.of(context).commonCopy,
               small: true,
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: token));
@@ -279,7 +285,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
               },
             ),
             UepButton(
-              label: '關閉',
+              label: AppLocalizations.of(context).commonClose,
               variant: UepButtonVariant.outline,
               small: true,
               onPressed: () => Navigator.of(context).pop(),
@@ -296,22 +302,22 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('撤銷這份邀請？',
+        title: Text(AppLocalizations.of(context).inviteRevokeTitle,
             style: UepText.pageTitle(color: s.inkTitle)),
         content: Text(
-          '${label.isEmpty ? '這張 token' : label}將立刻失去存取權。'
-          '此操作無法復原。',
+          '${AppLocalizations.of(context).inviteRevokeBody(label.isEmpty ? AppLocalizations.of(context).inviteThisToken : label)}'
+          '${AppLocalizations.of(context).commonIrreversible}',
           style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.7),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(context).commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '撤銷',
+            label: AppLocalizations.of(context).inviteRevokeAction,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
@@ -335,13 +341,15 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final tokensAsync = ref.watch(accessTokensProvider);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('邀請成員', style: UepText.sans(size: 14.5, color: s.inkTitle)),
+      Text(l10n.inviteSectionTitle,
+          style: UepText.sans(size: 14.5, color: s.inkTitle)),
       const SizedBox(height: 3),
       Text(
-        '發一份邀請給還沒連上這台 Hub 的人。',
+        l10n.inviteSectionHint,
         style: UepText.serif(size: 13, color: s.inkMute, height: 1.7),
       ),
       const SizedBox(height: 12),
@@ -362,7 +370,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                 isDense: true,
                 border: InputBorder.none,
                 counterText: '',
-                hintText: '這份發給誰？（選填，只有你看得到）',
+                hintText: l10n.inviteLabelHint,
                 hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                 contentPadding: const EdgeInsets.symmetric(vertical: 11),
               ),
@@ -371,7 +379,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
         ),
         const SizedBox(width: 10),
         UepButton(
-          label: '產生邀請碼',
+          label: l10n.inviteCreateAction,
           small: true,
           onPressed: _busy ? null : _create,
         ),
@@ -393,7 +401,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
           style: UepText.serif(size: 13, color: s.inkMute, height: 1.7),
         ),
         data: (tokens) => tokens.isEmpty
-            ? Text('還沒發出任何邀請',
+            ? Text(l10n.inviteNoneIssued,
                 style: UepText.serif(size: 13, color: s.inkMute))
             : Column(children: [
                 for (final t in tokens)
@@ -410,7 +418,9 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                             Row(children: [
                               Flexible(
                                 child: Text(
-                                    t.label.isEmpty ? '（未命名）' : t.label,
+                                    t.label.isEmpty
+                                        ? l10n.commonUnnamed
+                                        : t.label,
                                     overflow: TextOverflow.ellipsis,
                                     style: UepText.sans(
                                         size: 13.5,
@@ -429,8 +439,10 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                             Text(
                               t.lastUsedAt == null
                                   // 從沒用過通常表示邀請沒送到，而不是對方不想用
-                                  ? '尚未使用 · 發於 ${relativeTime(t.createdAt)}'
-                                  : '最後使用 ${relativeTime(t.lastUsedAt!)}',
+                                  ? l10n.inviteNeverUsed(
+                                      relativeTime(t.createdAt))
+                                  : l10n.inviteLastUsed(
+                                      relativeTime(t.lastUsedAt!)),
                               style: UepText.mono(size: 10, color: s.inkMute),
                             ),
                           ],
@@ -441,7 +453,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                       // 貼不進去——症狀是「照做了卻連不上」
                       if (t.audience == 'agent')
                         IconButton(
-                          tooltip: '重新顯示 agent 憑證',
+                          tooltip: l10n.inviteShowAgentToken,
                           visualDensity: VisualDensity.compact,
                           onPressed: () => _showAgentToken(t.token, t.label),
                           icon: Icon(Icons.smart_toy_outlined,
@@ -449,14 +461,14 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                         )
                       else ...[
                         IconButton(
-                          tooltip: '重新顯示邀請碼',
+                          tooltip: l10n.inviteShowCode,
                           visualDensity: VisualDensity.compact,
                           onPressed: () => _showCode(t.token, t.label),
                           icon: Icon(Icons.qr_code_2,
                               size: 15, color: s.inkMute),
                         ),
                         IconButton(
-                          tooltip: '加發一張 agent 憑證給這個人',
+                          tooltip: l10n.inviteAddAgentToken,
                           visualDensity: VisualDensity.compact,
                           onPressed: _busy ? null : () => _addAgentToken(t),
                           icon: Icon(Icons.add_moderator_outlined,
@@ -464,7 +476,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                         ),
                       ],
                       IconButton(
-                        tooltip: '撤銷',
+                        tooltip: l10n.inviteRevokeAction,
                         visualDensity: VisualDensity.compact,
                         onPressed: () => _revoke(t.token, t.label),
                         icon: Icon(Icons.block,

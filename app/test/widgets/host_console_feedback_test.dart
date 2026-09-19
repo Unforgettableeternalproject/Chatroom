@@ -9,6 +9,7 @@ import 'package:chatroom_app/widgets/uep_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 按了按鈕要知道發生了什麼（艾斯維爾 09/14：「不確定按鈕按了是否有正常運作」）。
 ///
@@ -78,6 +79,9 @@ void main() {
               () => _SeededOp(ops ?? (op == null ? const [] : [op]))),
         ],
         child: MaterialApp(
+          locale: kTestLocale,
+          localizationsDelegates: kTestLocalizationsDelegates,
+          supportedLocales: kTestSupportedLocales,
           theme: buildUepTheme(Brightness.dark),
           home: const HostConsoleScreen(),
         ),

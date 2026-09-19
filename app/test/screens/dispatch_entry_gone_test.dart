@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-17 實機：第一次按「派工」填完送出，Hub 上什麼都沒有，App 的
 /// log 只留下一行「派工沒有送出：畫面已經不在了」；第二次按同一張卡才真的
@@ -70,6 +71,8 @@ Widget _host({
         settingsRepoProvider.overrideWithValue(settings),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: ValueListenableBuilder<bool>(

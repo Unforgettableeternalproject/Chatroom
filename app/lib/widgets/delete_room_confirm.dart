@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import 'uep_button.dart';
 
 /// 刪除房間的確認。要把房名打一次才刪得掉。
@@ -33,9 +34,10 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final matches = _typed.text.trim() == widget.name;
     return AlertDialog(
-      title: Text('永久刪除房間',
+      title: Text(l10n.roomsDeleteTitle,
           style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
@@ -44,8 +46,8 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '「${widget.name}」連同房裡的訊息與附件會被永久刪除，不可復原。\n\n'
-                '確認的話，把房名打一次：',
+                '${l10n.roomsDeleteBody(widget.name)}\n\n'
+                '${l10n.roomsDeleteTypeName}',
                 style: UepText.serif(size: 13.5, color: s.ink, height: 1.6),
               ),
             ),
@@ -76,13 +78,13 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(false),
         ),
         UepButton(
-          label: '永久刪除',
+          label: l10n.roomsDeleteAction,
           small: true,
           onPressed: matches ? () => Navigator.of(context).pop(true) : null,
         ),

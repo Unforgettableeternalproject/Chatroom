@@ -11,6 +11,7 @@ import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 主機控制台的驗收圖。
 ///
@@ -81,6 +82,9 @@ void main() {
             )),
       ],
       child: MaterialApp(
+        locale: kTestLocale,
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const HostConsoleScreen(),
       ),

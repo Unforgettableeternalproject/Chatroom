@@ -3,6 +3,7 @@ import 'package:logging/logging.dart';
 
 import '../core/errors/api_exception.dart';
 import '../core/logging/redacting_logger.dart';
+import '../l10n/l10n.dart';
 
 final _log = Logger('api');
 
@@ -90,7 +91,7 @@ ApiException translateError(DioException e) {
           code == 'not_board_supervisor') {
         return BoardAccessException(
             code!,
-            _detailMessage(res.data) ?? '你還不是這塊板的成員',
+            _detailMessage(res.data) ?? L10n.current.errorNotBoardMember,
             _detailMap(res.data));
       }
       // Hub 對每個 403 code 都寫了一句對應的話（「只有聊天室建立者可以…」、
@@ -109,7 +110,7 @@ ApiException translateError(DioException e) {
       }
       return ConflictException(
         code,
-        _detailMessage(res.data) ?? '目前的狀態不允許這個動作',
+        _detailMessage(res.data) ?? L10n.current.errorConflictDefault,
         allowed: _detailList(res.data, 'allowed'),
         // 其餘欄位原樣帶過去。Hub 把「往下走的資訊」放在拒絕裡
         // （`container_settled` 的 kind / item_id / reopen_to 就是這樣來的），
@@ -123,7 +124,8 @@ ApiException translateError(DioException e) {
       return AttachmentTooLargeException(_detailMessage(res.data));
     case 422:
       return ValidationException(
-          code ?? 'validation', _detailMessage(res.data) ?? '請求內容不合法');
+          code ?? 'validation',
+          _detailMessage(res.data) ?? L10n.current.errorValidationDefault);
     default:
       return ServerException(res.statusCode ?? 0);
   }

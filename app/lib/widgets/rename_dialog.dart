@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import 'uep_button.dart';
 
 /// 改名對話框——房間與板共用（c271c7ff）。
@@ -54,7 +55,8 @@ class _RenameDialogState extends State<_RenameDialog> {
     // 空字串 Hub 回 422。擋在這裡是為了讓拒絕的理由**看起來像它自己**——
     // 422 的原話講的是欄位驗證，讀的人得自己翻譯成「名字不能空白」
     if (name.isEmpty) {
-      setState(() => _error = '名字不能是空的');
+      setState(
+          () => _error = AppLocalizations.of(context).commonNameRequired);
       return;
     }
     // 沒改就當取消。送一個一樣的名字上去會在房裡留下一則
@@ -69,6 +71,7 @@ class _RenameDialogState extends State<_RenameDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
       backgroundColor: s.bgCard,
       title:
@@ -78,7 +81,7 @@ class _RenameDialogState extends State<_RenameDialog> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: Text('改名會在房裡留下一則系統訊息。',
+            child: Text(l10n.commonRenameSystemNote,
                 style: UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),
@@ -109,12 +112,12 @@ class _RenameDialogState extends State<_RenameDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        UepButton(label: '改名', small: true, onPressed: _submit),
+        UepButton(label: l10n.commonRename, small: true, onPressed: _submit),
       ],
     );
   }

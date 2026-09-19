@@ -9,6 +9,7 @@ import 'package:chatroom_app/state/runner_kit_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 「這台機器」頁的執行器分頁**何時出現**。
 ///
@@ -51,6 +52,9 @@ void main() {
           runnerIdProvider.overrideWith((ref) async => null),
         ],
         child: MaterialApp(
+          locale: kTestLocale,
+          localizationsDelegates: kTestLocalizationsDelegates,
+          supportedLocales: kTestSupportedLocales,
           theme: buildUepTheme(Brightness.dark),
           home: const HostConsoleScreen(),
         ),

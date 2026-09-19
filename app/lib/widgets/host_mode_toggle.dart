@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 
 /// 這一刻該不該亮「伺服器沒有照做」。
@@ -82,8 +83,8 @@ class HostModeToggle extends ConsumerWidget {
           Expanded(
             child: Text(
               warn
-                  ? '主持人模式沒有生效——伺服器沒有照做'
-                  : (on ? onLabel : '主持人模式'),
+                  ? AppLocalizations.of(context).hostModeNotEffective
+                  : (on ? onLabel : AppLocalizations.of(context).hostModeLabel),
               style: UepText.sans(
                 size: 12.5,
                 color: on ? accent : s.inkMute,

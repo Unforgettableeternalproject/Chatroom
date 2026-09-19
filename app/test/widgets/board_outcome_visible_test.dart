@@ -5,6 +5,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 Bernie 2026-09-07（想法板 #13 段）：已結局的板，從**封存的聊天室**
 /// 回去看時右上角要標得出結局狀態。
@@ -36,6 +37,8 @@ Future<void> _pump(WidgetTester tester, BoardSnapshot snap) async {
       boardByIdProvider('b1').overrideWith((ref) async => snap),
     ],
     child: MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: const BoardScreen(boardId: 'b1'),
     ),

@@ -1,14 +1,26 @@
+import '../../l10n/l10n.dart';
+
 /// App 層例外家族。Server 的 HTTPException 一律回
 /// `{"detail": {"code": "...", "message": "..."}}`——code 是穩定契約，
 /// message 僅供人讀，client 絕不對 message 做字串比對。
 sealed class ApiException implements Exception {
-  const ApiException(this.code, this.message, [this.detail = const {}]);
+  const ApiException(this.code, String? message, [this.detail = const {}])
+      : _message = message;
 
   /// server 的機器可讀錯誤碼（無法取得時為空字串）。
   final String code;
 
-  /// 給使用者看的中文訊息。
-  final String message;
+  /// Hub 的原話；null 代表這個型別自己講（見 [defaultMessage]）。
+  final String? _message;
+
+  /// 給使用者看的訊息。Hub 有原話就用原話。
+  String get message => _message ?? defaultMessage;
+
+  /// 沒有 Hub 原話時這個型別要說的那句話。
+  ///
+  /// **是 getter 不是建構子參數**：文字跟著語言走，而這些例外全是 `const`
+  /// 建構的——把翻譯塞進建構子會讓每一處 `const XxxException()` 失效。
+  String get defaultMessage => code;
 
   /// Hub 塞在 `detail` 裡的其餘欄位（原樣）。
   ///
@@ -27,8 +39,10 @@ sealed class ApiException implements Exception {
 
 /// 401 — token 錯誤或未提供。設定問題，UI 導向設定頁。
 class AuthException extends ApiException {
-  const AuthException([String code = 'invalid_token'])
-      : super(code, 'API token 無效，請至設定檢查');
+  const AuthException([String code = 'invalid_token']) : super(code, null);
+
+  @override
+  String get defaultMessage => L10n.current.errorInvalidToken;
 }
 
 /// 401 + participant_header_required — 請求沒帶 `X-Participant-Id`。
@@ -38,8 +52,10 @@ class AuthException extends ApiException {
 /// 死。把兩者混成同一句話，找的人會去翻設定頁，而錯在呼叫端。
 class ParticipantHeaderMissingException extends ApiException {
   const ParticipantHeaderMissingException()
-      : super('participant_header_required',
-            '這個畫面沒有帶上房間身分（程式問題，與 API token 無關）');
+      : super('participant_header_required', null);
+
+  @override
+  String get defaultMessage => L10n.current.errorParticipantHeaderMissing;
 }
 
 /// 403 — participant 非 active 或不屬於此房。觸發自動 re-join，
@@ -55,9 +71,12 @@ class ParticipantHeaderMissingException extends ApiException {
 /// 話，所以換掉 message 不影響自癒行為。
 class ParticipantInvalidException extends ApiException {
   const ParticipantInvalidException([
-    String code = 'participant_not_active',
-    String? message,
-  ]) : super(code, message ?? '你的房間身分已失效，正在重新加入…');
+    super.code = 'participant_not_active',
+    super.message,
+  ]);
+
+  @override
+  String get defaultMessage => L10n.current.errorParticipantInvalid;
 }
 
 /// 403 + root_token_required — 這台 Hub 由別人主持，發放/撤銷邀請的權限
@@ -67,8 +86,10 @@ class ParticipantInvalidException extends ApiException {
 /// 而這裡的 403 跟房間身分毫無關係，重新加入一百次也不會變成主持人。
 class RootTokenRequiredException extends ApiException {
   const RootTokenRequiredException([String? message])
-      : super('root_token_required',
-            message ?? '只有 Hub 主持人能發放或撤銷邀請');
+      : super('root_token_required', message);
+
+  @override
+  String get defaultMessage => L10n.current.errorRootTokenRequired;
 }
 
 /// 403 + human_token_required — 手上這張憑證是 agent 憑證，而這個動作
@@ -84,8 +105,10 @@ class RootTokenRequiredException extends ApiException {
 /// 艾斯維爾在別人的 Hub 上花了一整晚）。真正要做的事在**發邀請的那一端**。
 class HumanCredentialRequiredException extends ApiException {
   const HumanCredentialRequiredException([String? message])
-      : super('human_token_required',
-            message ?? '這張憑證是給 agent 用的，人要用人類憑證才進得了房間');
+      : super('human_token_required', message);
+
+  @override
+  String get defaultMessage => L10n.current.errorHumanCredentialRequired;
 }
 
 /// 403 + not_your_agent — 那個 agent 不是用你這張憑證接入的。
@@ -98,9 +121,10 @@ class HumanCredentialRequiredException extends ApiException {
 /// re-join 一百次也不會換掉接入時填的那把 token。
 class NotYourAgentException extends ApiException {
   const NotYourAgentException([String? message])
-      : super('not_your_agent',
-            message ?? '這個 agent 不屬於你——指派只在用同一張憑證接入的 '
-                'agent 之間成立');
+      : super('not_your_agent', message);
+
+  @override
+  String get defaultMessage => L10n.current.errorNotYourAgent;
 }
 
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
@@ -124,15 +148,19 @@ class BoardAccessException extends ApiException {
 
 /// 404 — 房間 / 訊息 / 指派不存在。
 class NotFoundException extends ApiException {
-  const NotFoundException([String code = 'not_found'])
-      : super(code, '找不到指定的房間或訊息');
+  const NotFoundException([String code = 'not_found']) : super(code, null);
+
+  @override
+  String get defaultMessage => L10n.current.errorNotFound;
 }
 
 /// 409 — 房間已封存（唯讀）。
 class RoomArchivedException extends ApiException {
   const RoomArchivedException([String code = 'room_archived'])
-      : super(code,
-            '此聊天室已封存，只能看不能寫；封存滿一段時間後 Hub 會把它永久刪除');
+      : super(code, null);
+
+  @override
+  String get defaultMessage => L10n.current.errorRoomArchived;
 }
 
 /// 409 — 與**目前狀態**衝突：卡被別人領走了、狀態轉移不合法⋯⋯
@@ -165,8 +193,10 @@ class ConflictException extends ApiException {
 /// 而這裡 re-join 一百次都會被同一個 409 擋下來。
 class ArchivedWithoutIdentityException extends ApiException {
   const ArchivedWithoutIdentityException()
-      : super('archived_no_identity',
-            '這個聊天室已封存，而你沒有加入過它——封存後無法再加入');
+      : super('archived_no_identity', null);
+
+  @override
+  String get defaultMessage => L10n.current.errorArchivedNoIdentity;
 }
 
 /// 422 — 請求內容不合法（如 reply_to 目標不存在）。
@@ -179,26 +209,38 @@ class ValidationException extends ApiException {
 class AttachmentTooLargeException extends ApiException {
   /// [message] 用 Hub 回的那句——它知道實際上限是幾 MB，我們不知道。
   const AttachmentTooLargeException([String? message])
-      : super('attachment_too_large', message ?? '檔案超過伺服器允許的大小上限');
+      : super('attachment_too_large', message);
+
+  @override
+  String get defaultMessage => L10n.current.errorAttachmentTooLarge;
 }
 
 /// 410 — metadata 還在、實體檔案已不在伺服器上（db 與 attachments/ 不同步）。
 /// 對使用者而言不是「找不到」，是「這個東西回不來了」，訊息要講清楚。
 class AttachmentGoneException extends ApiException {
   const AttachmentGoneException([String code = 'attachment_blob_missing'])
-      : super(code, '附件內容已不在伺服器上（資料庫與附件目錄可能不同步）');
+      : super(code, null);
+
+  @override
+  String get defaultMessage => L10n.current.errorAttachmentGone;
 }
 
 /// 連不上 Hub（逾時 / socket 錯誤）。
 class NetworkException extends ApiException {
-  const NetworkException()
-      : super('network', '無法連線到 Hub，請確認伺服器位址');
+  const NetworkException() : super('network', null);
+
+  @override
+  String get defaultMessage => L10n.current.errorNetwork;
 }
 
 /// 其他 5xx。
 class ServerException extends ApiException {
-  ServerException(int statusCode)
-      : super('server_$statusCode', '伺服器發生錯誤（HTTP $statusCode）');
+  ServerException(this.statusCode) : super('server_$statusCode', null);
+
+  final int statusCode;
+
+  @override
+  String get defaultMessage => L10n.current.errorServer(statusCode);
 }
 
 /// 搬卡搬到一半：**新卡建好了，舊卡沒能標成「已搬走」**。
@@ -213,11 +255,10 @@ class ServerException extends ApiException {
 /// 一次就會再建一張，而那才是真正的損害**。
 class MoveHalfDoneException extends ApiException {
   MoveHalfDoneException(this.newTaskId, this.cause)
-      : super(
-            'move_half_done',
-            '新卡已經建好了（在你選的階段上），但這張卡沒能標成「已搬走」：'
-            '${cause.message}　先過去看一眼再決定要不要重試——'
-            '直接重按會再建一張。');
+      : super('move_half_done', null);
+
+  @override
+  String get defaultMessage => L10n.current.errorMoveHalfDone(cause.message);
 
   /// 已經建好的那張卡。畫面要有辦法把人帶過去。
   final String newTaskId;

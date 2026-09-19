@@ -7,6 +7,7 @@ import 'package:chatroom_app/state/scratchpad_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-04：艾斯維爾「**寫到一半他會跳一下，然後字就被清空了**」。
 ///
@@ -63,6 +64,8 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const Scaffold(
           body: ScratchpadScreen(boardId: 'bd1', padId: 'p1'),

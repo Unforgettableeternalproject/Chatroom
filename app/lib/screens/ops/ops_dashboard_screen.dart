@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/agent_run.dart';
 import '../../state/rooms_providers.dart';
 import '../../state/runs_providers.dart';
@@ -105,6 +106,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final room = ref.watch(roomDetailProvider(widget.roomId)).value?.room;
     final boardAsync = ref.watch(roomRunnerBoardProvider(widget.roomId));
     // 儀表板只列最近結束的那幾筆（截斷從 provider 移到這裡）
@@ -123,7 +125,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
           ),
           child: Row(children: [
             IconButton(
-              tooltip: '回到聊天室',
+              tooltip: l10n.opsBackToChat,
               icon: Icon(Icons.arrow_back, size: 18, color: s.inkSoft),
               onPressed: () => context.go('/rooms/${widget.roomId}'),
             ),
@@ -132,7 +134,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('執行儀表板',
+                  Text(l10n.opsDashboardTitle,
                       style: UepText.pageTitle(color: s.inkTitle)),
                   Text(room?.name ?? widget.roomId,
                       style: UepText.mono(size: 10.5, color: s.inkMute)),
@@ -143,10 +145,10 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
             // 帶未讀計數的 icon
             const OpsExceptionsEntry(),
             const SizedBox(width: 4),
-            MonoLabel('每 10 秒更新', size: 9, letterSpacing: 1.2),
+            MonoLabel(l10n.opsRefreshEvery10s, size: 9, letterSpacing: 1.2),
             const SizedBox(width: 10),
             IconButton(
-              tooltip: '重新整理',
+              tooltip: l10n.commonRefresh,
               icon: Icon(Icons.refresh, size: 16, color: s.inkMute),
               onPressed: _refresh,
             ),
@@ -159,7 +161,7 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
               ? Center(
                   child: Padding(
                     padding: const EdgeInsets.all(32),
-                    child: Text('這不是工作房（ops），沒有派工佇列。',
+                    child: Text(l10n.opsNotOpsRoom,
                         style: UepText.serif(size: 14, color: s.inkMute)),
                   ),
                 )

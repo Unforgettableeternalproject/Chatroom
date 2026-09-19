@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
 
 /// 一張卡改完之後的樣子：標題與敘述。
@@ -42,9 +43,6 @@ Future<TaskEdit?> showTaskEditDialog(
       builder: (_) => _TaskEditDialog(title: title, description: description),
     );
 
-/// 改卡片不留痕，與週期／階段改名同一件事（`_board_patch` 不發 system 訊息）。
-const kTaskEditNoTrace = '改動不會在房裡留訊息。';
-
 class _TaskEditDialog extends StatefulWidget {
   const _TaskEditDialog({required this.title, required this.description});
 
@@ -73,7 +71,8 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
     // 變成 None ⇒ 靜靜地不改）。擋在這裡是為了讓「我清空了標題卻沒反應」
     // 有一個說得出口的理由
     if (title.isEmpty) {
-      setState(() => _error = '標題不能是空的');
+      setState(
+          () => _error = AppLocalizations.of(context).boardTaskEditTitleEmpty);
       return;
     }
     final desc = _desc.text;
@@ -88,16 +87,17 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('編輯任務卡',
+      title: Text(l10n.boardTaskEditTitle,
           style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: Text(kTaskEditNoTrace,
+            child: Text(l10n.boardTaskEditNoTrace,
                 style: UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
           ),
           const SizedBox(height: 12),
@@ -108,10 +108,10 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
             onChanged: (_) {
               if (_error != null) setState(() => _error = null);
             },
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              border: OutlineInputBorder(),
-              labelText: '標題',
+              border: const OutlineInputBorder(),
+              labelText: l10n.commonTitleField,
             ),
           ),
           const SizedBox(height: 12),
@@ -123,8 +123,8 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
             decoration: InputDecoration(
               isDense: true,
               border: const OutlineInputBorder(),
-              labelText: '敘述',
-              hintText: '選填',
+              labelText: l10n.boardTaskEditDescription,
+              hintText: l10n.commonOptional,
               hintStyle: UepText.sans(size: 13.5, color: s.inkMute),
             ),
           ),
@@ -140,12 +140,12 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        UepButton(label: '儲存', small: true, onPressed: _submit),
+        UepButton(label: l10n.commonSave, small: true, onPressed: _submit),
       ],
     );
   }

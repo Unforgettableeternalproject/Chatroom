@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
+
 /// 監控器的一筆派工例外（Hub `GET /api/ops/exceptions`）。
 ///
 /// ⚠️ 這份清單是**四類已知例外**，不是「所有派工例外」：
@@ -66,31 +68,35 @@ class OpsException {
     return runnerId;
   }
 
-  /// 面板上的一句話。**中文在這裡生成，不從 Hub 拿**：Hub 回的是機器可讀
+  /// 面板上的一句話。**文案在這裡生成，不從 Hub 拿**：Hub 回的是機器可讀
   /// 的分類，文案改一個字不該要求 Hub 一起改版。
   String get title {
-    final target = runRef.isEmpty ? '(未指定)' : runRef;
-    final head = runKind.isEmpty ? '派工' : '派工 $runKind／$target';
+    final l10n = L10n.current;
+    final target =
+        runRef.isEmpty ? l10n.opsExceptionTargetUnspecified : runRef;
+    final head = runKind.isEmpty
+        ? l10n.opsExceptionHeadPlain
+        : l10n.opsExceptionHead(runKind, target);
     switch (kind) {
       case 'stalled':
         final secs = detail['stalled_seconds'];
         return secs is int && secs > 0
-            ? '$head 已 $secs 秒沒有輸出'
-            : '$head 停滯';
+            ? l10n.opsExceptionStalledSeconds(head, secs)
+            : l10n.opsExceptionStalled(head);
       case 'resumed':
-        return '$head 已恢復輸出';
+        return l10n.opsExceptionResumed(head);
       case 'timeout':
         return reason == 'soft_stop_timeout'
-            ? '$head 收尾逾時，被強制終止'
-            : '$head 逾時，被強制終止';
+            ? l10n.opsExceptionSoftStopTimeout(head)
+            : l10n.opsExceptionTimeout(head);
       case 'rate_limited':
-        return '$head 受額度限制（$reason）';
+        return l10n.opsExceptionRateLimited(head, reason);
       case 'runner_offline':
-        return '執行器 $runnerLabel 已離線';
+        return l10n.opsExceptionRunnerOffline(runnerLabel);
       case 'runner_online':
-        return '執行器 $runnerLabel 已恢復連線';
+        return l10n.opsExceptionRunnerOnline(runnerLabel);
       default:
-        return '$head $reason';
+        return l10n.opsExceptionOther(head, reason);
     }
   }
 

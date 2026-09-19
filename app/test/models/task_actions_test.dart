@@ -1,3 +1,5 @@
+import 'package:chatroom_app/l10n/l10n.dart';
+import 'package:flutter/widgets.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,6 +12,9 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 所以這裡驗的是兩件事：**不該出的沒出**，以及**該出的有出**。後者才是
 /// 那條阻斷缺陷，只驗前者的話它會原封不動地留著。
+/// 模板 locale 的字串。按鈕上的字是用繁中寫定的，所以斷言照原樣比對。
+final _l10n = lookupAppLocalizations(const Locale('zh', 'TW'));
+
 Set<String> _targets(String status) =>
     taskActionsFor(status).map((a) => a.target).toSet();
 
@@ -51,7 +56,7 @@ void main() {
     test('todo 有「開始」，否則沒有人能把卡做完', () {
       final start = taskActionsFor('todo').where((a) => a.target == 'in_progress');
       expect(start, hasLength(1));
-      expect(start.first.label, '開始');
+      expect(taskActionLabel(_l10n, start.first.kind), '開始');
     });
 
     test('cancelled 可以復原', () {
@@ -60,9 +65,9 @@ void main() {
   });
 
   group('標籤依來源狀態而定', () {
-    String labelFor(String from, String target) => taskActionsFor(from)
-        .firstWhere((a) => a.target == target)
-        .label;
+    String labelFor(String from, String target) => taskActionLabel(
+        _l10n,
+        taskActionsFor(from).firstWhere((a) => a.target == target).kind);
 
     test('推去 in_progress 的三種語境是三句不同的話', () {
       expect(labelFor('todo', 'in_progress'), '開始');

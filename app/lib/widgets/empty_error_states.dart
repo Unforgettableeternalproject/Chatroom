@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import 'kind_badge.dart';
 
 /// 空狀態 / 錯誤狀態的中文文案集中處。
@@ -20,7 +21,8 @@ class EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          MonoLabel('沒有內容', color: s.inkMute.withValues(alpha: .6)),
+          MonoLabel(AppLocalizations.of(context).commonNoContent,
+              color: s.inkMute.withValues(alpha: .6)),
           const SizedBox(height: 10),
           Text(title, style: UepText.serif(size: 15, color: s.inkSoft)),
           if (subtitle != null) ...[
@@ -44,14 +46,15 @@ class ErrorState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final message = error is ApiException
         ? (error as ApiException).message
-        : '發生未預期的錯誤';
+        : l10n.errorUnexpected;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          MonoLabel('錯誤', color: UepColors.errorText),
+          MonoLabel(l10n.commonError, color: UepColors.errorText),
           const SizedBox(height: 10),
           Text(message,
               style: UepText.serif(size: 15, color: s.inkSoft),
@@ -66,7 +69,7 @@ class ErrorState extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(999)),
               ),
-              child: Text('重試', style: UepText.sans(size: 13.5)),
+              child: Text(l10n.commonRetry, style: UepText.sans(size: 13.5)),
             ),
           ],
         ],

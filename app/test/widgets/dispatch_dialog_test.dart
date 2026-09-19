@@ -5,6 +5,7 @@ import 'package:chatroom_app/models/agent_run.dart';
 import 'package:chatroom_app/screens/ops/dispatch_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 派工對話框：**人類不寫自由 prompt**（REMOTE-OPS-PLAN §6.2）。
 ///
@@ -20,6 +21,8 @@ Future<DispatchRequest?> _open(
 }) async {
   DispatchRequest? result;
   await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
     theme: buildUepTheme(Brightness.dark),
     home: Scaffold(
       body: Builder(
@@ -141,6 +144,8 @@ void main() {
   testWidgets('填完之後把選擇交回呼叫端——對話框自己不送出', (tester) async {
     DispatchRequest? result;
     await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Builder(
@@ -173,6 +178,8 @@ void main() {
     DispatchRequest? result;
     var done = false;
     await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Builder(

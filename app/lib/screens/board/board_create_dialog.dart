@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
 
 /// 建立 Objective / Checklist / Task 的對話框（設計稿 artboard 04）。
@@ -57,11 +58,6 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   final _description = TextEditingController();
   String _priority = 'normal';
 
-  static const _labels = {
-    'objective': ('新增週期', ''),
-    'checklist': ('新增階段', ''),
-    'task': ('新增任務', ''),
-  };
 
   @override
   void dispose() {
@@ -83,7 +79,12 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final (heading, hint) = _labels[widget.kind]!;
+    final l10n = AppLocalizations.of(context);
+    final heading = switch (widget.kind) {
+      'objective' => l10n.boardCreateObjectiveTitle,
+      'checklist' => l10n.boardCreateChecklistTitle,
+      _ => l10n.boardCreateTaskTitle,
+    };
 
     return AlertDialog(
       title: Column(
@@ -101,23 +102,23 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
         width: 420,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            _field('標題', _title, hint: hint),
+            _field(l10n.commonTitleField, _title),
             const SizedBox(height: 14),
-            _field('描述（可留白）', _description, lines: 3),
+            _field(l10n.boardCreateDescriptionField, _description, lines: 3),
             if (widget.kind == 'task') ...[
               const SizedBox(height: 14),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('優先度',
+                child: Text(l10n.boardCreatePriority,
                     style: UepText.fieldLabel(color: s.inkSoft)),
               ),
               const SizedBox(height: 7),
               Row(
                 children: [
-                  for (final p in const [
-                    ('low', '低'),
-                    ('normal', '中'),
-                    ('high', '高'),
+                  for (final p in [
+                    ('low', l10n.boardPriorityLow),
+                    ('normal', l10n.boardPriorityNormal),
+                    ('high', l10n.boardPriorityHigh),
                   ]) ...[
                     _PriorityChip(
                       label: p.$2,
@@ -134,11 +135,11 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        UepButton(label: '建立', onPressed: _submit),
+        UepButton(label: l10n.commonCreate, onPressed: _submit),
       ],
     );
   }

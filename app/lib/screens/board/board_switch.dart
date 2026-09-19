@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
 
 /// 更換房間的任務板：**detach → attach 兩步，不包成一支端點**
@@ -21,22 +22,25 @@ import '../../widgets/uep_button.dart';
 /// 原本的板還在（什麼都不必做）／房間現在沒有板（要再掛一塊）／換好了。
 /// 全部講成「更換失敗」的話，人不知道自己的房間現在是什麼狀態——
 /// 而這條流程中途的狀態剛好就是「沒有板」。
+/// ⚠️ 這裡用 [L10n.current] 而不是收一個 `AppLocalizations` 參數：呼叫端
+/// 散在聊天室畫面與測試裡，拿不到 context 的那幾處沒有東西可以傳。
 String boardSwitchStatusMessage({
   required bool detached,
   required bool attached,
   String? error,
 }) {
+  final l10n = L10n.current;
   if (!detached) {
     // 第一步就沒過：什麼都沒變，原本那塊還掛著
     return error == null
-        ? '沒有更換，原本的任務板還掛在這間房'
-        : '沒有更換，原本的任務板還掛在這間房：$error';
+        ? l10n.boardSwitchNotSwitched
+        : l10n.boardSwitchNotSwitchedError(error);
   }
-  if (attached) return '已更換任務板';
+  if (attached) return l10n.boardSwitchDone;
   // 解除成功、新的沒接上——**這裡最要緊的是講出房間現在的狀態**
   return error == null
-      ? '已解除原本的任務板，這間房現在沒有板'
-      : '已解除原本的任務板，但新的沒有掛上：$error。這間房現在沒有板';
+      ? l10n.boardSwitchDetachedOnly
+      : l10n.boardSwitchDetachedOnlyError(error);
 }
 
 /// 換板前的確認。
@@ -49,28 +53,29 @@ Future<bool> confirmBoardSwitch(BuildContext context,
     context: context,
     builder: (ctx) {
       final s = ctx.uep;
+      final l10n = AppLocalizations.of(ctx);
       return AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('更換任務板',
+        title: Text(l10n.boardSwitchConfirmTitle,
             style: UepText.sectionTitle(color: s.inkTitle)),
         content: SizedBox(
           width: 420,
           child: Text(
-            '先解除目前的任務板'
-            '${boardName.isEmpty ? '' : '「$boardName」'}，再挑一塊新的。'
-            '解除不會刪掉那塊板。',
+            boardName.isEmpty
+                ? l10n.boardSwitchConfirmBodyUnnamed
+                : l10n.boardSwitchConfirmBody(boardName),
             style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.8),
           ),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: l10n.commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(ctx).pop(false),
           ),
           UepButton(
-            label: '解除並挑一塊新的',
+            label: l10n.boardSwitchConfirmAction,
             small: true,
             onPressed: () => Navigator.of(ctx).pop(true),
           ),

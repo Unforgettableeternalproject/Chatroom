@@ -3,6 +3,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
@@ -14,16 +15,20 @@ import '../core/theme/uep_tokens.dart';
 /// 一則訊息就能讓收到的人點開本機檔案或系統設定，那不是聊天室該有的能力。
 Future<void> _openLink(BuildContext context, String? href) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
+  final l10n = AppLocalizations.of(context);
   final uri = href == null ? null : Uri.tryParse(href);
   if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
     messenger?.showSnackBar(
-      SnackBar(content: Text('這個連結不是 http(s)，不開啟：${href ?? ''}')),
+      SnackBar(
+          content: Text(
+              l10n.msgLinkNotHttp(href ?? ''))),
     );
     return;
   }
   final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
   if (!ok) {
-    messenger?.showSnackBar(SnackBar(content: Text('開不起來：$href')));
+    messenger?.showSnackBar(
+        SnackBar(content: Text(l10n.msgLinkOpenFailed(uri.toString()))));
   }
 }
 

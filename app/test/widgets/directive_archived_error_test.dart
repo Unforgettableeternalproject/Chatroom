@@ -10,6 +10,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// c81f757a 的 App 半邊：**directive 投到封存房，被送出端拒的時候要講對話。**
 ///
@@ -64,6 +65,8 @@ void main() {
         boardByIdProvider('b1').overrideWith((ref) async => _snap()),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Builder(

@@ -10,6 +10,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../core/diagnostics/input_diagnostics.dart';
+import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
@@ -34,10 +35,10 @@ String? settingsGapMessage({
   required String token,
 }) {
   if (!hasServerConfig || serverUrl.trim().isEmpty) {
-    return '尚未設定伺服器位址。';
+    return L10n.current.shellSettingsGapNoUrl;
   }
   if (token.trim().isEmpty) {
-    return '尚未設定 API token。';
+    return L10n.current.shellSettingsGapNoToken;
   }
   return null;
 }
@@ -119,8 +120,8 @@ class _AppShellState extends ConsumerState<AppShell>
     if (!mounted) return;
     // 正在看那個房就請出來——留在一個讀不到內容的畫面上只會看到空白
     if (widget.selectedRoomId == roomId) context.go('/rooms');
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('你已被管理員移出這個聊天室')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(AppLocalizations.of(context).shellKickedOut)));
   }
 
   /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
@@ -166,21 +167,21 @@ class _AppShellState extends ConsumerState<AppShell>
     final goSettings = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('初始設定還沒完成',
+        title: Text(AppLocalizations.of(context).shellSetupIncompleteTitle,
             style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
-          '$gap到設定頁填好伺服器位址與 API token。',
+          AppLocalizations.of(context).shellSetupIncompleteBody(gap),
           style: UepText.serif(size: 14.5, color: context.uep.inkSoft),
         ),
         actions: [
           UepButton(
-            label: '稍後再說',
+            label: AppLocalizations.of(context).commonLater,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '前往設定',
+            label: AppLocalizations.of(context).shellGoSettings,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
           ),
@@ -236,6 +237,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // 啟動通知管線（跟隨已加入房間 → OS 通知 / 未讀刷新）
     ref.watch(notificationBootstrapProvider);
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 900;
     final themeMode =
         ref.watch(appConfigProvider.select((c) => c.themeMode));
@@ -268,7 +270,9 @@ class _AppShellState extends ConsumerState<AppShell>
             const ConnectionPill(),
             const SizedBox(width: 12),
             _TopIconButton(
-              tooltip: themeMode == ThemeModePref.dark ? '切換亮色' : '切換暗色',
+              tooltip: themeMode == ThemeModePref.dark
+                  ? l10n.shellThemeToLight
+                  : l10n.shellThemeToDark,
               icon: themeMode == ThemeModePref.dark
                   ? Icons.dark_mode_outlined
                   : Icons.light_mode_outlined,
@@ -286,20 +290,20 @@ class _AppShellState extends ConsumerState<AppShell>
                 ref.watch(mcpKitProvider).value != null ||
                 ref.watch(runnerKitProvider).value != null) ...[
               _TopIconButton(
-                tooltip: '這台機器',
+                tooltip: l10n.hostConsoleTitle,
                 icon: Icons.dns_outlined,
                 onTap: () => context.push('/host'),
               ),
               const SizedBox(width: 8),
             ],
             _TopIconButton(
-              tooltip: '設定',
+              tooltip: l10n.settingsTitle,
               icon: Icons.settings_outlined,
               onTap: () => context.push('/settings'),
             ),
             const SizedBox(width: 8),
             _TopIconButton(
-              tooltip: '說明',
+              tooltip: l10n.helpTooltip,
               icon: Icons.help_outline,
               onTap: () => context.push('/help/main'),
             ),
@@ -365,6 +369,7 @@ class _LeftPaneState extends State<_LeftPane> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     Widget tab(String label, bool active, VoidCallback onTap) => Expanded(
           child: InkWell(
             onTap: onTap,
@@ -398,8 +403,10 @@ class _LeftPaneState extends State<_LeftPane> {
           border: Border(bottom: BorderSide(color: s.line)),
         ),
         child: Row(children: [
-          tab('聊天室', !_boards, () => setState(() => _boards = false)),
-          tab('任務板', _boards, () => setState(() => _boards = true)),
+          tab(l10n.shellTabRooms, !_boards,
+              () => setState(() => _boards = false)),
+          tab(l10n.shellTabBoards, _boards,
+              () => setState(() => _boards = true)),
         ]),
       ),
       Expanded(
@@ -466,7 +473,7 @@ class NoRoomSelected extends StatelessWidget {
               style: UepText.pageTitle(color: UepColors.gold)),
         ),
         const SizedBox(height: 18),
-        Text('選擇一個聊天室開始',
+        Text(AppLocalizations.of(context).shellNoRoomSelected,
             style: UepText.serif(size: 15, color: s.inkSoft)),
       ]),
     );

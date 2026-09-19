@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/l10n.dart';
 
 /// 異常面板：列表、倒序、點一筆跳到那間房，以及入口的未讀計數。
 OpsException _e({
@@ -103,6 +104,8 @@ void main() {
         opsExceptionsProvider.overrideWith((ref) async => list),
       ],
       child: MaterialApp.router(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         routerConfig: router,
       ),

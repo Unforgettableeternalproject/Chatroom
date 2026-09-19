@@ -5,6 +5,7 @@ import 'package:logging/logging.dart';
 import 'package:windows_taskbar/windows_taskbar.dart';
 
 import '../core/diagnostics/input_diagnostics.dart';
+import '../l10n/l10n.dart';
 
 final _log = Logger('badge');
 
@@ -47,7 +48,7 @@ class TaskbarBadge {
       final asset = n > 9 ? 'assets/badge/9plus.ico' : 'assets/badge/$n.ico';
       await WindowsTaskbar.setOverlayIcon(
         ThumbnailToolbarAssetIcon(asset),
-        tooltip: '$n 件未處理',
+        tooltip: L10n.current.notifyBadgeTooltip(n),
       );
     } catch (e) {
       // 角標失敗不該影響任何功能。但也不要靜靜吞掉——「徽章沒出現」

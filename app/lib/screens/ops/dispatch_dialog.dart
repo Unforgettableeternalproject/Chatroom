@@ -3,6 +3,7 @@ import 'package:logging/logging.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/agent_run.dart';
 import '../../widgets/uep_button.dart';
 
@@ -110,7 +111,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
     _brief.addListener(() => setState(() {}));
     widget.projects.then(_onProjects).catchError((Object e) {
       // Future 說好不會失敗，真的失敗也不能讓畫面停在「載入中」
-      _onProjects(DispatchProjects(error: '專案清單載入失敗：$e'));
+      _onProjects(DispatchProjects(
+          error: L10n.current.opsDispatchProjectsLoadFailed('$e')));
     });
   }
 
@@ -144,8 +146,9 @@ class _DispatchDialogState extends State<DispatchDialog> {
   }
 
   void _submit() {
+    final l10n = AppLocalizations.of(context);
     if (_loading) {
-      _reject('專案清單還在載入，等一下再按。');
+      _reject(l10n.opsDispatchStillLoading);
       return;
     }
     if (_loadError != null) {
@@ -153,19 +156,19 @@ class _DispatchDialogState extends State<DispatchDialog> {
       return;
     }
     if (_projects!.isEmpty) {
-      _reject('沒有可派工的專案');
+      _reject(l10n.opsDispatchNoProjects);
       return;
     }
     final project = _project;
     if (project == null || project.isEmpty) {
-      _reject('請先選一個專案');
+      _reject(l10n.opsDispatchPickProject);
       return;
     }
     final brief = _brief.text.trim();
     // Hub 也擋（`max_length=2000`），這裡先擋是為了不要讓人打完 2500 字
     // 才在送出時被退回來
     if (brief.length > kRunBriefMaxLength) {
-      _reject('簡述超過 $kRunBriefMaxLength 字');
+      _reject(l10n.opsDispatchBriefTooLong(kRunBriefMaxLength));
       return;
     }
     _log.info('派工送出（目標：${widget.targetLabel}）：'
@@ -178,9 +181,11 @@ class _DispatchDialogState extends State<DispatchDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final projects = _projects ?? const <String>[];
     return AlertDialog(
-      title: Text('派工', style: UepText.pageTitle(color: s.inkTitle)),
+      title: Text(l10n.opsDispatchTitle,
+          style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         // 錯誤訊息**不放在捲動區裡**：它接在表單最後面的話，人在對話框上半
@@ -191,14 +196,14 @@ class _DispatchDialogState extends State<DispatchDialog> {
               child: Column(mainAxisSize: MainAxisSize.min, children: [
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('目標：${widget.targetLabel}',
+              child: Text(l10n.opsDispatchTarget(widget.targetLabel),
                   style: UepText.serif(
                       size: 13.5, color: s.inkSoft, height: 1.5)),
             ),
             const SizedBox(height: 14),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('模板',
+              child: Text(l10n.opsDispatchTemplate,
                   style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
@@ -238,7 +243,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('專案',
+              child: Text(l10n.opsDispatchProject,
                   style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
@@ -253,7 +258,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                       child: CircularProgressIndicator(
                           strokeWidth: 1.6, color: s.inkMute)),
                   const SizedBox(width: 8),
-                  Text('專案清單載入中…',
+                  Text(l10n.opsDispatchProjectsLoading,
                       style: UepText.serif(size: 12.5, color: s.inkSoft)),
                 ]),
               )
@@ -269,7 +274,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               // 那台機器上，不在這個畫面裡
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('沒有執行器宣告任何專案',
+                child: Text(l10n.opsDispatchNoDeclaredProjects,
                     style: UepText.serif(
                         size: 12.5, color: UepColors.errorText, height: 1.5)),
               )
@@ -278,7 +283,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
                 alignment: Alignment.centerLeft,
                 child: DropdownButton<String>(
                   value: _project,
-                  hint: Text('選一個專案',
+                  hint: Text(l10n.opsDispatchSelectProjectHint,
                       style: UepText.sans(size: 13.5, color: s.inkMute)),
                   items: [
                     for (final p in projects)
@@ -294,7 +299,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('簡述（給 agent 的任務描述）',
+              child: Text(l10n.opsDispatchBriefLabel,
                   style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
@@ -305,7 +310,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
               decoration: InputDecoration(
                 isDense: true,
                 border: const OutlineInputBorder(),
-                hintText: '要做什麼、從哪裡看起、什麼算做完…',
+                hintText: l10n.opsDispatchBriefHint,
                 hintStyle: UepText.serif(size: 13, color: s.inkMute),
               ),
             ),
@@ -321,7 +326,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
             ),
             const SizedBox(height: 10),
             Row(children: [
-              Text('優先',
+              Text(l10n.opsDispatchPriorityLabel,
                   style: UepText.fieldLabel(color: s.inkSoft)),
               const SizedBox(width: 10),
               // 佇列是 priority DESC + position ASC。數字大的先做
@@ -331,7 +336,10 @@ class _DispatchDialogState extends State<DispatchDialog> {
                   for (final p in [0, 1, 2, 3])
                     DropdownMenuItem(
                       value: p,
-                      child: Text(p == 0 ? '一般' : '插隊 $p',
+                      child: Text(
+                          p == 0
+                              ? l10n.opsPriorityNormal
+                              : l10n.opsPriorityJump(p),
                           style: UepText.sans(size: 13.5, color: s.ink)),
                     ),
                 ],
@@ -354,7 +362,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
@@ -362,7 +370,7 @@ class _DispatchDialogState extends State<DispatchDialog> {
         // **一律可按**：停用的按鈕按下去什麼都不會發生，而「不能送」的理由
         // 在畫面上另一個地方——按了沒反應與功能壞掉分不出來（09/17 實機）
         UepButton(
-          label: '送出',
+          label: l10n.commonSubmit,
           small: true,
           onPressed: _submit,
         ),

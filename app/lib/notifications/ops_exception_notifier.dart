@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../l10n/l10n.dart';
 import '../models/ops_exception.dart';
 import 'notification_center.dart';
 
@@ -58,7 +59,9 @@ class OpsExceptionNotifier {
     for (final e in fresh) {
       show(RoomNotification(
         roomId: e.roomId,
-        roomName: e.roomName.isEmpty ? '工作房' : e.roomName,
+        roomName: e.roomName.isEmpty
+            ? L10n.current.opsExceptionFallbackRoom
+            : e.roomName,
         body: e.title,
         // 例外不是「有人提及你」。借用 mentioned 會讓標題變成一句假話
         mentioned: false,

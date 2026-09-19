@@ -3,6 +3,7 @@ import 'package:chatroom_app/screens/chat/chat_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 聊天室頂端那一排入口，分的是**檢視／寫入**，不是活著／封存。
 ///
@@ -13,6 +14,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// 這排從來沒有被 widget 測試蓋到，所以兩次都要等人在實機上撞見。
 Widget _wrap({required bool archived}) => ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: RoomHeader(

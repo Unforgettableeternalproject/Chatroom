@@ -5,6 +5,7 @@ import 'package:chatroom_app/widgets/run_report_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 側欄回報區的**版面**契約。
 ///
@@ -33,6 +34,8 @@ void main() {
           finishedRunsProvider('r1').overrideWith((ref) async => runs),
         ],
         child: MaterialApp(
+          localizationsDelegates: kTestLocalizationsDelegates,
+          supportedLocales: kTestSupportedLocales,
           theme: buildUepTheme(Brightness.dark),
           home: Scaffold(
             body: Stack(

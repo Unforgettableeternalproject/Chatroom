@@ -58,3 +58,6 @@ windows/flutter/generated_plugins.cmake
 
 # gen-l10n 產物，flutter build 會自動產生
 lib/l10n/app_localizations*.dart
+
+# scripts/l10n_add.py 的寫入鎖
+lib/l10n/.l10n.lock

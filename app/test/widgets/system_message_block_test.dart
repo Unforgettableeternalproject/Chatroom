@@ -3,6 +3,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/system_message_tile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// run 的收工摘要（REMOTE-OPS-PLAN §12 待辦 2）。
 ///
@@ -33,6 +34,8 @@ Message _msg(String content) => Message(
     );
 
 Widget _wrap(Widget child, {double width = 320}) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Center(

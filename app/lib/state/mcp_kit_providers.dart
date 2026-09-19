@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../l10n/l10n.dart';
 import '../models/host_kit.dart';
 import 'host_probe.dart';
 
@@ -112,8 +113,8 @@ final mcpStatusProvider = FutureProvider<McpStatus?>((ref) async {
   final reachable = await probeHealth('$base/api/health');
   if (!reachable) {
     return McpStatus(
-      reach: const Probe(ProbeState.bad, 'Hub 連不到'),
-      auth: const Probe(ProbeState.unknown, '連不到就驗不了 token'),
+      reach: Probe(ProbeState.bad, L10n.current.hostMcpUnreachable),
+      auth: Probe(ProbeState.unknown, L10n.current.hostMcpAuthSkipped),
       bridgeVersion: version,
     );
   }
@@ -121,15 +122,15 @@ final mcpStatusProvider = FutureProvider<McpStatus?>((ref) async {
   final authed = await probeStatus('$base/api/rooms', token: env.token);
   final Probe auth;
   if (authed == 200) {
-    auth = const Probe(ProbeState.ok, '通過');
+    auth = Probe(ProbeState.ok, L10n.current.hostProbeAuthOk);
   } else if (authed == 401 || authed == 403) {
-    auth = const Probe(ProbeState.bad, 'token 不被接受');
+    auth = Probe(ProbeState.bad, L10n.current.hostProbeAuthBad);
   } else {
-    auth = const Probe(ProbeState.unknown, '驗不出來');
+    auth = Probe(ProbeState.unknown, L10n.current.hostProbeAuthUnknown);
   }
 
   return McpStatus(
-    reach: const Probe(ProbeState.ok, 'Hub 連得到'),
+    reach: Probe(ProbeState.ok, L10n.current.hostMcpReachable),
     auth: auth,
     bridgeVersion: version,
   );

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/board.dart';
 import '../models/stage_file.dart';
 import '../state/app_providers.dart';
@@ -26,14 +27,14 @@ import 'uep_button.dart';
 /// 兩個特例值得寫死：重複掛不是錯誤而是「它已經在上面了」，403 則要講「沒有
 /// 權限」而不是 Hub 那句與房間身分有關的話——素材的權限來自板與掛接房，
 /// 重新加入聊天室一百次也不會改變它。
-String stageFileErrorText(ApiException e) {
-  if (e.code == 'stage_file_exists') return '這份素材已經在階段上';
+String stageFileErrorText(AppLocalizations l10n, ApiException e) {
+  if (e.code == 'stage_file_exists') return l10n.stageFileAlreadyAttached;
   if (e is BoardAccessException ||
       e is ParticipantInvalidException ||
       e is RootTokenRequiredException ||
       e is HumanCredentialRequiredException ||
       e is NotYourAgentException) {
-    return '沒有權限';
+    return l10n.commonNoPermission;
   }
   return e.message;
 }
@@ -48,7 +49,9 @@ Future<T?> runStageFileAction<T>(
   } on ApiException catch (e) {
     if (!context.mounted) return null;
     ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(stageFileErrorText(e))));
+        .showSnackBar(SnackBar(
+            content: Text(
+                stageFileErrorText(AppLocalizations.of(context), e))));
     return null;
   }
 }
@@ -67,7 +70,7 @@ class StageFileCount extends StatelessWidget {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(Icons.attach_file, size: 12, color: s.inkMute),
       const SizedBox(width: 3),
-      Text('素材 $count',
+      Text(AppLocalizations.of(context).stageFileCount(count),
           style:
               UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
     ]);
@@ -167,7 +170,7 @@ class StageFilesList extends ConsumerWidget {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 icon: Icon(Icons.add, size: 14, color: context.uep.inkMute),
-                label: Text('新增素材',
+                label: Text(AppLocalizations.of(context).stageFileAdd,
                     style: UepText.fieldLabel(color: context.uep.inkMute)),
               ),
             ),
@@ -186,7 +189,7 @@ class StageFilesList extends ConsumerWidget {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('卸除素材',
+            Text(AppLocalizations.of(context).stageFileRemoveTitle,
                 style: UepText.sectionTitle(color: context.uep.inkTitle)),
             const SizedBox(height: 4),
             // 檔名放在標題底下：確認的那句話要短，但按錯一列的人需要看得到
@@ -196,18 +199,18 @@ class StageFilesList extends ConsumerWidget {
           ],
         ),
         content: Text(
-          '移除這份素材？',
+          AppLocalizations.of(context).stageFileRemoveConfirm,
           style: UepText.serif(
               size: 14, color: context.uep.inkSoft, height: 1.8),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(context).commonCancel,
             variant: UepButtonVariant.outline,
             onPressed: () => Navigator.of(dialogContext).pop(false),
           ),
           UepButton(
-              label: '卸除',
+              label: AppLocalizations.of(context).stageFileRemoveAction,
               onPressed: () => Navigator.of(dialogContext).pop(true)),
         ],
       ),
@@ -297,19 +300,21 @@ class _StageFileRow extends ConsumerWidget {
                     size: 10, color: s.inkMute, letterSpacing: 1.1)),
             if (file.addedByName.isNotEmpty) ...[
               const SizedBox(width: 8),
-              Text('· ${file.addedByName} 掛上',
+              Text(
+                  AppLocalizations.of(context)
+                      .stageFileAddedBy(file.addedByName),
                   style: UepText.mono(size: 10, color: s.inkMute)),
             ],
             if (onEditNote != null)
               IconButton(
-                tooltip: '編輯備註',
+                tooltip: AppLocalizations.of(context).stageFileEditNote,
                 visualDensity: VisualDensity.compact,
                 onPressed: onEditNote,
                 icon: Icon(Icons.edit_note, size: 16, color: s.inkMute),
               ),
             if (onRemove != null)
               IconButton(
-                tooltip: '從階段卸除',
+                tooltip: AppLocalizations.of(context).stageFileRemoveTooltip,
                 visualDensity: VisualDensity.compact,
                 onPressed: onRemove,
                 icon: Icon(Icons.link_off, size: 15, color: s.inkMute),
@@ -415,7 +420,10 @@ Future<String?> showStageNoteDialog(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(editing ? '編輯備註' : '加素材',
+            Text(
+                editing
+                    ? AppLocalizations.of(dialogContext).stageFileEditNote
+                    : AppLocalizations.of(dialogContext).stageFileAddTitle,
                 style: UepText.pageTitle(color: s.inkTitle)),
             const SizedBox(height: 4),
             Text(stageTitle == null ? filename : '$filename › $stageTitle',
@@ -428,7 +436,7 @@ Future<String?> showStageNoteDialog(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('這是什麼（可留白）',
+              Text(AppLocalizations.of(dialogContext).stageFileNoteLabel,
                   style: UepText.fieldLabel(color: s.inkSoft)),
               const SizedBox(height: 7),
               Container(
@@ -446,7 +454,8 @@ Future<String?> showStageNoteDialog(
                   decoration: InputDecoration(
                     isDense: true,
                     border: InputBorder.none,
-                    hintText: '說明（選填）',
+                    hintText:
+                        AppLocalizations.of(dialogContext).stageFileNoteHint,
                     hintStyle: UepText.serif(size: 13, color: s.inkMute),
                     contentPadding:
                         const EdgeInsets.symmetric(vertical: 12),
@@ -458,11 +467,15 @@ Future<String?> showStageNoteDialog(
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(dialogContext).commonCancel,
             variant: UepButtonVariant.outline,
             onPressed: () => Navigator.of(dialogContext).pop(),
           ),
-          UepButton(label: editing ? '儲存' : '掛上', onPressed: submit),
+          UepButton(
+              label: editing
+                  ? AppLocalizations.of(dialogContext).commonSave
+                  : AppLocalizations.of(dialogContext).stageFileAttach,
+              onPressed: submit),
         ],
       );
     },
@@ -491,7 +504,9 @@ Future<void> showAddToStageDialog(
 
   if (snapshot == null || boardId == null || stages.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('這間房的板上還沒有開著的階段')),
+      SnackBar(
+          content:
+              Text(AppLocalizations.of(context).stageFileNoOpenStage)),
     );
     return;
   }
@@ -504,7 +519,7 @@ Future<void> showAddToStageDialog(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('加到階段',
+            Text(AppLocalizations.of(dialogContext).stageFilePickStageTitle,
                 style: UepText.pageTitle(color: s.inkTitle)),
             const SizedBox(height: 4),
             Text(filename, style: UepText.mono(size: 10.5, color: s.inkMute)),
@@ -545,7 +560,7 @@ Future<void> showAddToStageDialog(
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(dialogContext).commonCancel,
             variant: UepButtonVariant.outline,
             onPressed: () => Navigator.of(dialogContext).pop(),
           ),
@@ -572,6 +587,8 @@ Future<void> showAddToStageDialog(
   );
   if (added == null || !context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('已掛到階段：${picked.title}')),
+    SnackBar(
+        content: Text(
+            AppLocalizations.of(context).stageFileAttached(picked.title))),
   );
 }

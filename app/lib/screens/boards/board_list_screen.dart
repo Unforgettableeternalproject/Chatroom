@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/errors/api_exception.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
@@ -64,7 +65,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
         // 403 在這裡幾乎不會發生（只對 owner 畫那顆選單），但真的發生時
         // 要說得出為什麼，而不是一句「操作失敗」
         e.code == 'board_owner_required' || e.code == 'forbidden'
-            ? '只有這塊板的 owner 能封存它。'
+            ? AppLocalizations.of(context).boardArchiveOwnerOnly
             : e.message,
       )));
     }
@@ -77,9 +78,9 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   Future<void> _rename(BoardSummary board) async {
     final name = await showRenameDialog(
       context,
-      title: '板改名',
+      title: AppLocalizations.of(context).boardRenameTitle,
       current: board.name,
-      hint: '例：09/07 週期',
+      hint: AppLocalizations.of(context).boardRenameHint,
     );
     if (name == null || !mounted) return;
     try {
@@ -97,7 +98,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(e.code == 'board_owner_required' || e.code == 'forbidden'
-            ? '只有這塊板的 owner 能改它的名字。'
+            ? AppLocalizations.of(context).boardRenameOwnerOnly
             : e.message),
       ));
     }
@@ -133,6 +134,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final boardsAsync = ref.watch(boardLibraryProvider(_status));
     final hostOn = ref.watch(hostViewProvider);
 
@@ -143,7 +145,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
           child: Column(children: [
             Row(children: [
-              const MonoLabel('任務板', letterSpacing: 2.0),
+              MonoLabel(l10n.boardLibraryTitle, letterSpacing: 2.0),
               const Spacer(),
               // 追蹤收件匣的入口。**紅點在這裡是必要的**，不是裝飾：
               // 裁決 #392 ②A 是「離線通知留著，回來就知道」，而知道的
@@ -156,13 +158,13 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               // （艾斯維爾 2026-09-03：「等同於沒有創立板子的途徑」）。
               // server 這邊一直是支援的，缺的只有這顆按鈕
               IconButton(
-                tooltip: '開一塊板',
+                tooltip: l10n.boardCreateBoardTooltip,
                 visualDensity: VisualDensity.compact,
                 onPressed: _createBoard,
                 icon: Icon(Icons.add, size: 17, color: s.inkMute),
               ),
               IconButton(
-                tooltip: '重新整理',
+                tooltip: l10n.commonRefresh,
                 visualDensity: VisualDensity.compact,
                 onPressed: _refresh,
                 icon: Icon(Icons.refresh, size: 15, color: s.inkMute),
@@ -187,7 +189,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               const SizedBox(height: 8),
               HostModeToggle(
                 on: hostOn,
-                onLabel: '主持人模式：看得到所有人的板',
+                onLabel: l10n.boardHostModeLabel,
                 // 開著、但這份清單不是主持人視角撈的 ⇒ server 沒照做。
                 // 不講的話它與「別人沒有私人板」在畫面上完全一樣。
                 //
@@ -229,9 +231,9 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                     const SizedBox(height: 120),
                     EmptyState(
                       title: switch (_status) {
-                        'active' => '目前沒有進行中的任務板',
-                        'archived' => '沒有已封存的任務板',
-                        _ => '還沒有板被宣告完成或廢止',
+                        'active' => l10n.boardLibraryEmptyActive,
+                        'archived' => l10n.boardLibraryEmptyArchived,
+                        _ => l10n.boardLibraryEmptySettled,
                       },
                       // 舊文案寫「在聊天室裡建立一塊板」——那在有了上面
                       // 那顆＋之後就是**錯的指引**：它把人送回一條更長的路
@@ -282,16 +284,17 @@ class _LibraryNotReady extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            MonoLabel('未就緒', color: s.inkMute.withValues(alpha: .6)),
+            MonoLabel(AppLocalizations.of(context).boardLibraryNotReady,
+                color: s.inkMute.withValues(alpha: .6)),
             const SizedBox(height: 10),
             Text(
-              '這個 Hub 還沒有 Board Library',
+              AppLocalizations.of(context).boardLibraryMissing,
               textAlign: TextAlign.center,
               style: UepText.serif(size: 14, color: s.inkSoft),
             ),
             const SizedBox(height: 6),
             Text(
-              '請升級 Hub。',
+              AppLocalizations.of(context).boardLibraryUpgradeHub,
               textAlign: TextAlign.center,
               style: UepText.sans(size: 12.5, color: s.inkMute),
             ),
@@ -341,11 +344,11 @@ class _BoardStatusToggle extends StatelessWidget {
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(children: [
-          segment('active', '進行中'),
-          segment('archived', '已封存'),
+          segment('active', AppLocalizations.of(context).commonActive),
+          segment('archived', AppLocalizations.of(context).commonArchived),
           // 第三個軸。**不是 status**－—收尾與封存正交，做完的板可能
           // 還開著也可能已封存，所以這一頁不能綁在某一個 status 上
-          segment('settled', '已收尾'),
+          segment('settled', AppLocalizations.of(context).boardStatusSettled),
         ]),
       ),
     );
@@ -376,7 +379,7 @@ class _BoardMenu extends StatelessWidget {
       iconSize: 14,
       padding: EdgeInsets.zero,
       color: s.bgCard,
-      tooltip: '這塊板的操作',
+      tooltip: AppLocalizations.of(context).boardMenuTooltip,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: s.lineStrong),
@@ -392,14 +395,17 @@ class _BoardMenu extends StatelessWidget {
         PopupMenuItem(
           value: 'rename',
           height: 36,
-          child: Text('重新命名…', style: UepText.sans(size: 13.5, color: s.ink)),
+          child: Text(AppLocalizations.of(context).boardMenuRename,
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         PopupMenuItem(
           value: 'archive',
           height: 36,
           // 同一個項目切換文字，不是兩個項目——與 ROOMS 一致，也避免
           // 「封存」與「解除封存」同時出現時要人自己判斷現在是哪個狀態
-          child: Text(archived ? '解除封存' : '封存',
+          child: Text(archived
+              ? AppLocalizations.of(context).boardMenuUnarchive
+              : AppLocalizations.of(context).boardMenuArchive,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ),
       ],
@@ -453,7 +459,9 @@ class _BoardTile extends StatelessWidget {
             Row(children: [
               Expanded(
                 child: Text(
-                  board.name.isEmpty ? '（未命名）' : board.name,
+                  board.name.isEmpty
+                      ? AppLocalizations.of(context).commonUnnamed
+                      : board.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.serif(
@@ -467,11 +475,13 @@ class _BoardTile extends StatelessWidget {
               // 分頁上看到它，而那兩件事都不會在畫面別處出現
               if (board.isPrivate) ...[
                 const SizedBox(width: 6),
-                const MonoLabel('私人', size: 8.5, letterSpacing: 1.0),
+                MonoLabel(AppLocalizations.of(context).boardVisibilityPrivate,
+                    size: 8.5, letterSpacing: 1.0),
               ],
               if (board.isArchived) ...[
                 const SizedBox(width: 6),
-                const MonoLabel('封存', size: 8.5, letterSpacing: 1.0),
+                MonoLabel(AppLocalizations.of(context).boardBadgeArchived,
+                    size: 8.5, letterSpacing: 1.0),
               ],
               // 🔴 **結局是另一個軸，與「封存」並排而不是取代它。**
               //
@@ -484,7 +494,9 @@ class _BoardTile extends StatelessWidget {
               if (board.isSettled) ...[
                 const SizedBox(width: 6),
                 MonoLabel(
-                  board.isCompleted ? '完成' : '廢止',
+                  board.isCompleted
+                      ? AppLocalizations.of(context).boardOutcomeCompleted
+                      : AppLocalizations.of(context).boardOutcomeAbandoned,
                   size: 8.5,
                   letterSpacing: 1.0,
                   color: board.isCompleted ? UepColors.gold : s.inkMute,
@@ -515,8 +527,9 @@ class _BoardTile extends StatelessWidget {
                 board.ownerDisplayName.isEmpty
                     // 名字查不到也要講出「這不是你的」——留白的話它會被
                     // 讀成自己的板
-                    ? '別人的板'
-                    : '${board.ownerDisplayName} 的板',
+                    ? AppLocalizations.of(context).boardSomeoneElses
+                    : AppLocalizations.of(context)
+                        .boardOwnedBy(board.ownerDisplayName),
                 style: UepText.sans(size: 11.5, color: UepColors.gold),
               ),
             ],
@@ -526,7 +539,8 @@ class _BoardTile extends StatelessWidget {
               // 之後唯一看得出「這塊板被多少對話共用」的地方
               _Meta(
                 glyph: '◫',
-                text: '${board.attachedRoomCount} 房',
+                text: AppLocalizations.of(context)
+                    .boardAttachedRoomCount(board.attachedRoomCount),
                 color: s.inkMute,
               ),
               // ⚠️ **「掛 1 房」與「掛 1 房但沒有一間活著」在畫面上不能長得
@@ -537,7 +551,7 @@ class _BoardTile extends StatelessWidget {
                 const SizedBox(width: 10),
                 _Meta(
                   glyph: '⚑',
-                  text: '通知要自己來看',
+                  text: AppLocalizations.of(context).boardInboxOnly,
                   color: UepColors.gold,
                 ),
               ],
@@ -553,7 +567,8 @@ class _BoardTile extends StatelessWidget {
                 // 隨時可能變的
                 _Meta(
                   glyph: '●',
-                  text: '${board.taskClaimed} 進行中',
+                  text: AppLocalizations.of(context)
+                      .boardTaskClaimedCount(board.taskClaimed),
                   color: UepColors.gold,
                 ),
               ],
@@ -595,7 +610,9 @@ class _NoticesButton extends ConsumerWidget {
           orElse: () => 0,
         );
     return IconButton(
-      tooltip: unread == 0 ? '我在等的東西' : '我在等的東西（$unread 筆新的）',
+      tooltip: unread == 0
+          ? AppLocalizations.of(context).boardWatchNoticesTitle
+          : AppLocalizations.of(context).boardWatchNoticesTitleUnread(unread),
       visualDensity: VisualDensity.compact,
       onPressed: () => context.go('/notices'),
       icon: Stack(clipBehavior: Clip.none, children: [
@@ -652,13 +669,14 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
       backgroundColor: s.bgCard,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(4),
         side: BorderSide(color: s.lineStrong),
       ),
-      title: Text('開一塊板',
+      title: Text(l10n.boardCreateBoardTitle,
           style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
@@ -671,30 +689,30 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
             // 空字串時「建立」要是灰的，不重畫的話它永遠亮著
             onChanged: (_) => setState(() {}),
             style: UepText.sans(size: 14, color: s.ink),
-            decoration: const InputDecoration(
-              labelText: '名稱',
+            decoration: InputDecoration(
+              labelText: l10n.boardCreateBoardNameLabel,
               helperText: null,
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 18),
           Align(
             alignment: Alignment.centerLeft,
-            child: Text('誰看得到',
+            child: Text(l10n.boardVisibilityLabel,
                 style: UepText.fieldLabel(color: s.inkSoft)),
           ),
           const SizedBox(height: 6),
           // 兩個選項各自把**結果**講完，而不是只給「公開／私人」兩個詞——
           // 這裡選錯要到掛接聊天室的時候才會撞到閘，那時人已經忘了自己選過
           _VisibilityOption(
-            label: '公開',
-            detail: '掛接的聊天室成員都看得到',
+            label: l10n.boardVisibilityPublic,
+            detail: l10n.boardVisibilityPublicDetail,
             selected: _visibility == 'public',
             onTap: () => setState(() => _visibility = 'public'),
           ),
           _VisibilityOption(
-            label: '私人',
-            detail: '只有你看得到，且只能掛進私人聊天室',
+            label: l10n.boardVisibilityPrivate,
+            detail: l10n.boardVisibilityPrivateDetail,
             selected: _visibility == 'private',
             onTap: () => setState(() => _visibility = 'private'),
           ),
@@ -702,13 +720,13 @@ class _NewBoardDialogState extends State<_NewBoardDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: '建立',
+          label: l10n.commonCreate,
           small: true,
           onPressed: _name.text.trim().isEmpty ? null : _submit,
         ),

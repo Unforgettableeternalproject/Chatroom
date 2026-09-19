@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
+
 /// 遠端派工（Remote Ops，REMOTE-OPS-PLAN §4）的資料模型。
 ///
 /// 形狀的權威有兩處，**不是同一份**：
@@ -39,11 +41,19 @@ class RunTemplate {
 /// **`push` 不在這裡**：它不是人寫簡述的派工，是儀表板上按「推送」時由
 /// App 組出來的固定形狀（§5.6）。讓它出現在模板清單裡，等於請人手打
 /// 要推的 sha。
-const List<RunTemplate> kRunTemplates = [
-  RunTemplate('investigate', '調查（只讀）', '查票、查程式，回房報告與建議，不改檔。'),
-  RunTemplate('ticket', '實作一張票', '讀票、實作、跑既有驗證、commit 到允許的分支，不推送。'),
-  RunTemplate('stage', '做完整個階段', 'agent 自己拆卡、逐張做，直到階段做完或交接。'),
-];
+///
+/// 文字跟著語言走，所以是 getter 而不是 `const`；`kind` 仍是固定的契約值。
+List<RunTemplate> get kRunTemplates {
+  final l10n = L10n.current;
+  return [
+    RunTemplate('investigate', l10n.opsTemplateInvestigateLabel,
+        l10n.opsTemplateInvestigateSummary),
+    RunTemplate('ticket', l10n.opsTemplateTicketLabel,
+        l10n.opsTemplateTicketSummary),
+    RunTemplate(
+        'stage', l10n.opsTemplateStageLabel, l10n.opsTemplateStageSummary),
+  ];
+}
 
 /// 簡述上限。Hub 的 `RunCreate.brief` 是 `max_length=2000`——這裡先擋是為了
 /// 讓人在打字時就看得到剩多少，不是取代 Hub 那道。

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../helpers/l10n.dart';
 
 /// 建房對話框的「工作房」閘。
 ///
@@ -19,6 +20,9 @@ Widget _host({required bool hasRunner}) => ProviderScope(
         runnerKitPresentProvider.overrideWith((ref) async => hasRunner),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
+        locale: kTestLocale,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Builder(

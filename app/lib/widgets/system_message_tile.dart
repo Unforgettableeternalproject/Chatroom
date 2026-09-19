@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
@@ -68,17 +69,18 @@ class _ReceiptTile extends StatelessWidget {
 
   /// 事件 → (標籤, 顏色)。未知事件不會走到這裡（isReceipt 已經過濾），
   /// 但仍給一個中性的預設，免得日後新增事件時整塊消失。
-  (String, Color) _badge() => switch (message.systemEvent) {
-        'question_answered' => ('已回答', UepColors.success),
-        'question_skipped' => ('未在此回答', UepColors.info),
-        'pin' => ('已釘選', UepColors.gold),
-        _ => ('紀錄', UepColors.info),
+  (String, Color) _badge(AppLocalizations l10n) =>
+      switch (message.systemEvent) {
+        'question_answered' => (l10n.msgReceiptAnswered, UepColors.success),
+        'question_skipped' => (l10n.msgReceiptSkipped, UepColors.info),
+        'pin' => (l10n.msgReceiptPinned, UepColors.gold),
+        _ => (l10n.msgReceiptRecord, UepColors.info),
       };
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final (label, color) = _badge();
+    final (label, color) = _badge(AppLocalizations.of(context));
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 7),
       child: Align(
@@ -156,7 +158,8 @@ class _BlockTile extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(children: [
-              const MonoLabel('系統', size: 8.5, letterSpacing: 2.2),
+              MonoLabel(AppLocalizations.of(context).commonSystem,
+                  size: 8.5, letterSpacing: 2.2),
               const SizedBox(width: 8),
               Text(clockTime(message.createdAt),
                   style: UepText.mono(size: 10, color: s.inkMute)),

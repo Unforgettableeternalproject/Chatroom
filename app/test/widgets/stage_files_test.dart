@@ -9,6 +9,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 const _file = StageFile(
   id: 'sf1',
@@ -80,6 +81,8 @@ Widget _host(Widget child, {BoardsApi? boardsApi}) => ProviderScope(
         )),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: child),
       ),

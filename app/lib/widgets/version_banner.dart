@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/config/build_info.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 import 'reveal.dart';
 
@@ -34,14 +35,15 @@ class VersionBanner extends ConsumerWidget {
 
   Widget _banner(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final app = ref.watch(appBuildProvider);
     final hub = ref.watch(hubBuildProvider).value;
     final older = _olderSide(app, hub);
     final color = older == null ? UepColors.gold : UepColors.error;
     final text = switch (older) {
-      _Side.app => 'App 版本較舊，請更新 App',
-      _Side.hub => 'Hub 版本較舊，請更新 Hub',
-      null => '無法確認版本',
+      _Side.app => l10n.commonVersionAppOlder,
+      _Side.hub => l10n.commonVersionHubOlder,
+      null => l10n.commonVersionUnconfirmed,
     };
 
     return Tooltip(
@@ -91,12 +93,12 @@ String _shortCommit(String commit) {
 
 String _appLabel(BuildInfo b) {
   // 講不出自己是哪一份時印「未知」，不拿版本號去填
-  return b.isKnown ? '${b.version}+${_shortCommit(b.commit)}' : '未知';
+  return b.isKnown ? '${b.version}+${_shortCommit(b.commit)}' : L10n.current.commonUnknown;
 }
 
 String _hubLabel(Map<String, dynamic>? build) {
   final commit = (build?['commit'] as String?) ?? '';
-  if (commit.isEmpty) return '未知';
+  if (commit.isEmpty) return L10n.current.commonUnknown;
   final version = (build?['version'] as String?) ?? '?';
   return '$version+${_shortCommit(commit)}';
 }

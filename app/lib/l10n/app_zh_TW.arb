@@ -1,6 +1,5 @@
 {
   "@@locale": "zh_TW",
-
   "settingsTitle": "設定",
   "@settingsTitle": {
     "description": "設定畫面的 AppBar 標題"
@@ -13,7 +12,6 @@
   "@hostConsoleTitle": {
     "description": "主機控制台畫面的 AppBar 標題"
   },
-
   "settingsTabConnection": "連線",
   "@settingsTabConnection": {
     "description": "設定頁分頁：連線"
@@ -26,7 +24,6 @@
   "@settingsTabPersonal": {
     "description": "設定頁分頁：個人化"
   },
-
   "connectionSectionTitle": "連線設定",
   "@connectionSectionTitle": {
     "description": "連線分頁的標題"
@@ -39,7 +36,6 @@
   "@personalSectionTitle": {
     "description": "個人化分頁的標題"
   },
-
   "fieldHubUrl": "Hub 位址",
   "@fieldHubUrl": {
     "description": "連線分頁：Hub 位址欄位標籤"
@@ -56,7 +52,6 @@
   "@fieldDeviceKey": {
     "description": "個人化分頁：本機裝置識別欄位標籤"
   },
-
   "darkThemeLabel": "深色主題",
   "@darkThemeLabel": {
     "description": "視覺分頁：深色主題開關"
@@ -93,7 +88,6 @@
   "@fontScaleXLarge": {
     "description": "字級選項：特大"
   },
-
   "languageLabel": "語言",
   "@languageLabel": {
     "description": "視覺分頁：語言區塊標題"
@@ -113,5 +107,6198 @@
   "languageEnglish": "English",
   "@languageEnglish": {
     "description": "語言選項：英文（兩種語言下都用本地寫法）"
+  },
+  "commonCancel": "取消",
+  "@commonCancel": {
+    "description": "通用：取消"
+  },
+  "commonCopy": "複製",
+  "@commonCopy": {
+    "description": "通用：複製"
+  },
+  "commonCopied": "已複製",
+  "@commonCopied": {
+    "description": "通用：複製完成的提示"
+  },
+  "commonShow": "顯示",
+  "@commonShow": {
+    "description": "通用：顯示被遮起來的值"
+  },
+  "commonHide": "遮起來",
+  "@commonHide": {
+    "description": "通用：把值遮起來"
+  },
+  "commonRemove": "移除",
+  "@commonRemove": {
+    "description": "通用：移除一項"
+  },
+  "commonAdd": "加入",
+  "@commonAdd": {
+    "description": "通用：加入一項"
+  },
+  "commonRestore": "還原",
+  "@commonRestore": {
+    "description": "通用：還原"
+  },
+  "commonOpen": "開啟",
+  "@commonOpen": {
+    "description": "通用：開啟"
+  },
+  "commonLater": "稍後再說",
+  "@commonLater": {
+    "description": "通用：對話框的延後選項"
+  },
+  "commonRegenerate": "重新產生",
+  "@commonRegenerate": {
+    "description": "通用：重新產生"
+  },
+  "settingsPasteInvite": "貼上邀請碼",
+  "@settingsPasteInvite": {
+    "description": "連線分頁：從剪貼簿套用邀請碼的按鈕"
+  },
+  "settingsInviteNotFound": "剪貼簿裡沒有邀請碼。先複製對方給你的那一整串字。",
+  "@settingsInviteNotFound": {
+    "description": "貼上邀請碼失敗的提示"
+  },
+  "settingsInviteFilled": "已填入 {url}，確認後按「儲存」；建議先測試連線",
+  "@settingsInviteFilled": {
+    "description": "貼上邀請碼成功的提示",
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsTokenHint": "（未設定 token 的 Hub 可留空）",
+  "@settingsTokenHint": {
+    "description": "API token 欄位的提示文字"
+  },
+  "settingsTestConnection": "測試連線",
+  "@settingsTestConnection": {
+    "description": "連線分頁：測試連線按鈕"
+  },
+  "settingsTestOk": "連線成功 · hub {version} · {count} 個房間",
+  "@settingsTestOk": {
+    "description": "測試連線成功的結果",
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsTestTokenRejected": "token 錯誤：伺服器拒絕了這組 API token",
+  "@settingsTestTokenRejected": {
+    "description": "測試連線遇到認證失敗"
+  },
+  "settingsEnterApp": "進入主畫面 →",
+  "@settingsEnterApp": {
+    "description": "首次設定完成後的出口按鈕"
+  },
+  "settingsAppVersion": "App 版本",
+  "@settingsAppVersion": {
+    "description": "連線分頁：App 版本標題"
+  },
+  "settingsNoVersionMark": "這份 App 沒有版本標記。",
+  "@settingsNoVersionMark": {
+    "description": "App 沒有版本資訊時的說明"
+  },
+  "settingsRegenerateKeyTitle": "重新產生裝置識別？",
+  "@settingsRegenerateKeyTitle": {
+    "description": "重新產生裝置識別的確認標題"
+  },
+  "settingsRegenerateKeyBody": "所有房間會把你視為新成員，舊身分留在原房間的成員紀錄中。此操作無法復原。",
+  "@settingsRegenerateKeyBody": {
+    "description": "重新產生裝置識別的後果說明"
+  },
+  "settingsDeviceKeyCopied": "已複製裝置識別",
+  "@settingsDeviceKeyCopied": {
+    "description": "複製裝置識別後的提示"
+  },
+  "settingsDisplayNameHint": "留空則由 Hub 隨機指派代稱",
+  "@settingsDisplayNameHint": {
+    "description": "顯示名稱欄位的提示文字"
+  },
+  "settingsNotifyLabel": "系統通知",
+  "@settingsNotifyLabel": {
+    "description": "個人化分頁：系統通知標題"
+  },
+  "settingsNotifyHint": "只在 app 開著時通知新訊息。",
+  "@settingsNotifyHint": {
+    "description": "系統通知的說明"
+  },
+  "settingsNotifyAll": "所有訊息",
+  "@settingsNotifyAll": {
+    "description": "通知模式：所有訊息"
+  },
+  "settingsNotifyMentions": "僅提及我時",
+  "@settingsNotifyMentions": {
+    "description": "通知模式：只在被提及時"
+  },
+  "settingsNotifyOff": "關閉",
+  "@settingsNotifyOff": {
+    "description": "通知模式：關閉"
+  },
+  "settingsCodexForwardLabel": "轉送通知給 Codex",
+  "@settingsCodexForwardLabel": {
+    "description": "個人化分頁：Codex 轉送開關"
+  },
+  "settingsCodexForwardHint": "把提及與 Board 變動送到本機 Codex。",
+  "@settingsCodexForwardHint": {
+    "description": "Codex 轉送的說明"
+  },
+  "settingsCodexThreadHint": "覆寫 thread id（選填）",
+  "@settingsCodexThreadHint": {
+    "description": "Codex thread id 欄位的提示文字"
+  },
+  "settingsCodexThreadsBusy": "本機 Codex：{total} 個（{busy} 個處理中）",
+  "@settingsCodexThreadsBusy": {
+    "description": "Codex 轉送狀態：有執行緒忙碌中",
+    "placeholders": {
+      "total": {
+        "type": "int"
+      },
+      "busy": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsCodexThreadsIdle": "本機 Codex：{total} 個（都閒著）",
+  "@settingsCodexThreadsIdle": {
+    "description": "Codex 轉送狀態：全部閒置",
+    "placeholders": {
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsCodexPending": "待補投：{count} 則",
+  "@settingsCodexPending": {
+    "description": "Codex 轉送狀態：待補投數量",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsCodexPendingNone": "待補投：無",
+  "@settingsCodexPendingNone": {
+    "description": "Codex 轉送狀態：沒有待補投"
+  },
+  "settingsCodexLastEvent": "最後一次：{event}",
+  "@settingsCodexLastEvent": {
+    "description": "Codex 轉送狀態：最後一次事件",
+    "placeholders": {
+      "event": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsCodexLogPath": "log：{path}",
+  "@settingsCodexLogPath": {
+    "description": "Codex 轉送狀態：log 檔位置",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsCodexLogNone": "（沒有可寫位置，只進 DevTools）",
+  "@settingsCodexLogNone": {
+    "description": "沒有 log 檔可寫時的說明"
+  },
+  "settingsSaveButton": "儲存設定",
+  "@settingsSaveButton": {
+    "description": "儲存設定按鈕"
+  },
+  "settingsRevertButton": "復原",
+  "@settingsRevertButton": {
+    "description": "把欄位還原成已儲存值的按鈕"
+  },
+  "settingsUnsavedChanges": "有尚未儲存的變更",
+  "@settingsUnsavedChanges": {
+    "description": "欄位與已儲存設定有出入時的提示"
+  },
+  "settingsSaved": "✓ 已儲存",
+  "@settingsSaved": {
+    "description": "剛儲存完的提示"
+  },
+  "settingsWsTimeout": "REST 正常，但 WebSocket 在 {seconds} 秒內沒有連上。",
+  "@settingsWsTimeout": {
+    "description": "測試連線：WS 握手逾時",
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "settingsWsRejected": "REST 正常，但 WebSocket 拒絕了這張憑證（4401）。",
+  "@settingsWsRejected": {
+    "description": "測試連線：WS 拒絕憑證"
+  },
+  "settingsWsFailed": "REST 正常，但 WebSocket 連不上：{error}",
+  "@settingsWsFailed": {
+    "description": "測試連線：WS 連不上",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "shellSettingsGapNoUrl": "尚未設定伺服器位址。",
+  "@shellSettingsGapNoUrl": {
+    "description": "設定缺口：沒有伺服器位址"
+  },
+  "shellSettingsGapNoToken": "尚未設定 API token。",
+  "@shellSettingsGapNoToken": {
+    "description": "設定缺口：沒有 API token"
+  },
+  "shellKickedOut": "你已被管理員移出這個聊天室",
+  "@shellKickedOut": {
+    "description": "被管理員移出房間的提示"
+  },
+  "shellSetupIncompleteTitle": "初始設定還沒完成",
+  "@shellSetupIncompleteTitle": {
+    "description": "設定沒填完的對話框標題"
+  },
+  "shellSetupIncompleteBody": "{gap}到設定頁填好伺服器位址與 API token。",
+  "@shellSetupIncompleteBody": {
+    "description": "設定沒填完的對話框內文",
+    "placeholders": {
+      "gap": {
+        "type": "String"
+      }
+    }
+  },
+  "shellGoSettings": "前往設定",
+  "@shellGoSettings": {
+    "description": "前往設定頁的按鈕"
+  },
+  "shellThemeToLight": "切換亮色",
+  "@shellThemeToLight": {
+    "description": "頂欄主題切換提示（目前是深色）"
+  },
+  "shellThemeToDark": "切換暗色",
+  "@shellThemeToDark": {
+    "description": "頂欄主題切換提示（目前是亮色）"
+  },
+  "shellTabRooms": "聊天室",
+  "@shellTabRooms": {
+    "description": "左欄分頁：聊天室"
+  },
+  "shellTabBoards": "任務板",
+  "@shellTabBoards": {
+    "description": "左欄分頁：任務板"
+  },
+  "shellNoRoomSelected": "選擇一個聊天室開始",
+  "@shellNoRoomSelected": {
+    "description": "桌機模式沒選房間時的占位文字"
+  },
+  "hostProbeChecking": "檢查中…",
+  "@hostProbeChecking": {
+    "description": "燈號：檢查中"
+  },
+  "hostProbeWaitingHub": "等 Hub 啟動",
+  "@hostProbeWaitingHub": {
+    "description": "燈號：Hub 沒起來，這一項還輪不到"
+  },
+  "hostProbeStopped": "已停止",
+  "@hostProbeStopped": {
+    "description": "燈號：Hub 進程已停止"
+  },
+  "hostProbeRunning": "執行中",
+  "@hostProbeRunning": {
+    "description": "燈號：Hub 進程執行中"
+  },
+  "hostProbeBindAll": "綁在所有介面（0.0.0.0）",
+  "@hostProbeBindAll": {
+    "description": "燈號：綁 0.0.0.0，本機驗不出對外可達性"
+  },
+  "hostProbeReachable": "{host} 打得通",
+  "@hostProbeReachable": {
+    "description": "燈號：綁定位址打得通",
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "hostProbeAuthOk": "通過",
+  "@hostProbeAuthOk": {
+    "description": "燈號：token 通過認證"
+  },
+  "hostProbeAuthBad": "token 不被接受",
+  "@hostProbeAuthBad": {
+    "description": "燈號：token 被拒"
+  },
+  "hostProbeAuthUnknown": "驗不出來",
+  "@hostProbeAuthUnknown": {
+    "description": "燈號：驗不出 token 對不對"
+  },
+  "hostTunnelNoKit": "找不到主持包",
+  "@hostTunnelNoKit": {
+    "description": "隧道狀態：這台機器沒有主持包"
+  },
+  "hostTunnelOff": "未開啟",
+  "@hostTunnelOff": {
+    "description": "隧道狀態：沒開"
+  },
+  "hostTunnelOn": "已開啟",
+  "@hostTunnelOn": {
+    "description": "隧道狀態：開著且打得通"
+  },
+  "hostTunnelHubStopped": "已開啟，但 Hub 已停止",
+  "@hostTunnelHubStopped": {
+    "description": "隧道狀態：隧道在但 Hub 沒跑"
+  },
+  "hostTunnelUnreachable": "有網址，但這台機器打不通",
+  "@hostTunnelUnreachable": {
+    "description": "隧道狀態：有網址但本機驗不到"
+  },
+  "hostServiceStatusError": "問不到服務狀態（{error}）",
+  "@hostServiceStatusError": {
+    "description": "查詢服務狀態失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostScriptNoOutput": "腳本沒有輸出（結束碼 {code}）",
+  "@hostScriptNoOutput": {
+    "description": "腳本沒有任何輸出可解析",
+    "placeholders": {
+      "code": {
+        "type": "String"
+      }
+    }
+  },
+  "hostMcpUnreachable": "Hub 連不到",
+  "@hostMcpUnreachable": {
+    "description": "Agent 接入：連不到 Hub"
+  },
+  "hostMcpAuthSkipped": "連不到就驗不了 token",
+  "@hostMcpAuthSkipped": {
+    "description": "Agent 接入：連不到所以驗不了"
+  },
+  "hostMcpReachable": "Hub 連得到",
+  "@hostMcpReachable": {
+    "description": "Agent 接入：連得到 Hub"
+  },
+  "hostRecheckTooltip": "重新檢查",
+  "@hostRecheckTooltip": {
+    "description": "主機控制台：重新檢查按鈕"
+  },
+  "hostNoKits": "這台機器沒有 Hub 主持包、agent 接入或執行器。",
+  "@hostNoKits": {
+    "description": "主機控制台：三種 kit 都沒有"
+  },
+  "hostTabHub": "Hub 主持",
+  "@hostTabHub": {
+    "description": "主機控制台分頁：Hub 主持"
+  },
+  "hostTabAgent": "Agent 接入",
+  "@hostTabAgent": {
+    "description": "主機控制台分頁：Agent 接入"
+  },
+  "hostTabRunner": "執行器",
+  "@hostTabRunner": {
+    "description": "主機控制台分頁：執行器"
+  },
+  "hostInstallPath": "安裝位置",
+  "@hostInstallPath": {
+    "description": "區塊標題：kit 安裝位置"
+  },
+  "hostPanelStatus": "狀態",
+  "@hostPanelStatus": {
+    "description": "區塊標題／欄位標籤：狀態"
+  },
+  "hostLabelChecking": "檢查中",
+  "@hostLabelChecking": {
+    "description": "燈號標籤：檢查中"
+  },
+  "hostLabelCheckFailed": "檢查失敗",
+  "@hostLabelCheckFailed": {
+    "description": "燈號標籤：檢查失敗"
+  },
+  "hostEnvMissing": "server/.env 缺少埠號或 token",
+  "@hostEnvMissing": {
+    "description": "主機控制台：.env 不完整"
+  },
+  "hostLabelProcess": "進程",
+  "@hostLabelProcess": {
+    "description": "燈號標籤：Hub 進程"
+  },
+  "hostLabelBinding": "對外綁定",
+  "@hostLabelBinding": {
+    "description": "燈號標籤：綁定位址"
+  },
+  "hostLabelAuth": "認證",
+  "@hostLabelAuth": {
+    "description": "燈號標籤：認證"
+  },
+  "hostPanelConnectionInfo": "連線資訊",
+  "@hostPanelConnectionInfo": {
+    "description": "區塊標題：要發給成員的連線資訊"
+  },
+  "hostEnvUnreadable": "讀不到 server/.env。",
+  "@hostEnvUnreadable": {
+    "description": "主機控制台：讀不到 .env"
+  },
+  "hostAddressAnyInterface": "http://<這台機器的 IP>:{port}",
+  "@hostAddressAnyInterface": {
+    "description": "綁 0.0.0.0 時要發給成員的位址樣板",
+    "placeholders": {
+      "port": {
+        "type": "String"
+      }
+    }
+  },
+  "hostFieldHumanToken": "人類 token",
+  "@hostFieldHumanToken": {
+    "description": "連線資訊欄位：人類 token"
+  },
+  "hostFieldAgentToken": "Agent token",
+  "@hostFieldAgentToken": {
+    "description": "連線資訊欄位：agent token"
+  },
+  "hostFieldToken": "Token",
+  "@hostFieldToken": {
+    "description": "連線資訊欄位：共用 token"
+  },
+  "hostAgentTokenNote": "Agent token 不能開主持人模式。",
+  "@hostAgentTokenNote": {
+    "description": "憑證分離時的說明"
+  },
+  "hostSharedTokenNote": "這台 Hub 只有一把共用 token。",
+  "@hostSharedTokenNote": {
+    "description": "憑證未分離時的說明"
+  },
+  "hostBindAllNote": "位址請改成成員連得到的 IP。",
+  "@hostBindAllNote": {
+    "description": "綁 0.0.0.0 時的提醒"
+  },
+  "hostPanelBridgeStatus": "接入狀態",
+  "@hostPanelBridgeStatus": {
+    "description": "區塊標題：Agent 接入狀態"
+  },
+  "hostMcpEnvMissing": "讀不到 kit 根目錄的 .env",
+  "@hostMcpEnvMissing": {
+    "description": "Agent 接入：讀不到 .env"
+  },
+  "hostFieldConnectedHub": "連的 Hub",
+  "@hostFieldConnectedHub": {
+    "description": "Agent 接入欄位：連的是哪台 Hub"
+  },
+  "hostBridgeVersion": "Bridge 版本",
+  "@hostBridgeVersion": {
+    "description": "Agent 接入：bridge 版本標題"
+  },
+  "hostBridgeVersionUnknown": "讀不到 _build.json",
+  "@hostBridgeVersionUnknown": {
+    "description": "Agent 接入：讀不到 bridge 版本"
+  },
+  "hostBridgeVerifyHint": "要確認 agent 用的是這一份，讓它呼叫 chatroom_join，比對回傳的 bridge.commit。",
+  "@hostBridgeVerifyHint": {
+    "description": "怎麼確認 agent 跑的是哪一份 bridge"
+  },
+  "hostInstalledAt": "安裝於 {when}",
+  "@hostInstalledAt": {
+    "description": "Agent 接入：安裝時間",
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "hostInstalledFor": "裝給 {targets}",
+  "@hostInstalledFor": {
+    "description": "Agent 接入：裝給哪些 agent",
+    "placeholders": {
+      "targets": {
+        "type": "String"
+      }
+    }
+  },
+  "hostPanelTunnel": "隧道",
+  "@hostPanelTunnel": {
+    "description": "區塊標題：對外協作的隧道"
+  },
+  "hostTunnelOpening": "開啟中…",
+  "@hostTunnelOpening": {
+    "description": "隧道按鈕：開啟中"
+  },
+  "hostTunnelOpenButton": "開隧道",
+  "@hostTunnelOpenButton": {
+    "description": "隧道按鈕：開一條隧道"
+  },
+  "hostTunnelStaleUrl": "偵測到舊網址",
+  "@hostTunnelStaleUrl": {
+    "description": "隧道按鈕：偵測到殘留網址所以不能開"
+  },
+  "hostTunnelAlreadyOne": "已經有一條",
+  "@hostTunnelAlreadyOne": {
+    "description": "隧道按鈕：已經開著一條"
+  },
+  "hostFieldTunnelUrl": "隧道網址",
+  "@hostFieldTunnelUrl": {
+    "description": "隧道欄位：對外網址"
+  },
+  "hostTunnelCloseButton": "關閉隧道",
+  "@hostTunnelCloseButton": {
+    "description": "隧道按鈕與確認標題：關閉隧道"
+  },
+  "hostTunnelConfirmTitle": "開啟隧道",
+  "@hostTunnelConfirmTitle": {
+    "description": "開隧道的確認標題"
+  },
+  "hostTunnelConfirmBody": "開啟後任何拿到網址與 token 的人都能讀取所有房間。",
+  "@hostTunnelConfirmBody": {
+    "description": "開隧道的後果說明"
+  },
+  "hostTunnelBaselineFail": "讀不到隧道狀態，沒有送出指令",
+  "@hostTunnelBaselineFail": {
+    "description": "開隧道前讀不到現況"
+  },
+  "hostTunnelOpened": "隧道已開啟",
+  "@hostTunnelOpened": {
+    "description": "開隧道成功"
+  },
+  "hostTunnelOpenTimeout": "已送出，網址尚未更新。請查看 logs\\tunnel-*.log",
+  "@hostTunnelOpenTimeout": {
+    "description": "開隧道輪詢逾時（不是失敗）"
+  },
+  "hostStopTunnelBody": "目前的網址會立刻失效，重開會是新的網址。",
+  "@hostStopTunnelBody": {
+    "description": "關隧道的後果說明"
+  },
+  "hostHubStarting": "啟動中…",
+  "@hostHubStarting": {
+    "description": "Hub 按鈕：啟動中"
+  },
+  "hostHubStartButton": "啟動 Hub",
+  "@hostHubStartButton": {
+    "description": "Hub 按鈕：啟動"
+  },
+  "hostHubStopButton": "停止 Hub",
+  "@hostHubStopButton": {
+    "description": "Hub 按鈕與確認標題：停止"
+  },
+  "hostAutoStartLabel": "自動啟動",
+  "@hostAutoStartLabel": {
+    "description": "Hub 區塊：自啟狀態標籤"
+  },
+  "hostServiceRegistered": "已註冊",
+  "@hostServiceRegistered": {
+    "description": "自啟狀態：已註冊"
+  },
+  "hostServiceUnregistered": "未註冊",
+  "@hostServiceUnregistered": {
+    "description": "自啟狀態：未註冊"
+  },
+  "hostServiceReregister": "重新註冊",
+  "@hostServiceReregister": {
+    "description": "自啟按鈕：重新註冊"
+  },
+  "hostServiceRegister": "註冊",
+  "@hostServiceRegister": {
+    "description": "自啟按鈕：註冊"
+  },
+  "hostServiceStart": "啟動",
+  "@hostServiceStart": {
+    "description": "自啟按鈕：啟動排程任務"
+  },
+  "hostServiceUninstall": "取消註冊",
+  "@hostServiceUninstall": {
+    "description": "自啟按鈕：取消註冊"
+  },
+  "hostOpenLogs": "開啟日誌資料夾",
+  "@hostOpenLogs": {
+    "description": "按鈕：開啟 logs 資料夾"
+  },
+  "hostOpenBackups": "開啟備份資料夾",
+  "@hostOpenBackups": {
+    "description": "按鈕：開啟 backups 資料夾"
+  },
+  "hostHubAlreadyRunning": "Hub 已在執行中",
+  "@hostHubAlreadyRunning": {
+    "description": "啟動 Hub：本來就在跑"
+  },
+  "hostHubStarted": "Hub 已啟動",
+  "@hostHubStarted": {
+    "description": "啟動 Hub 成功"
+  },
+  "hostHubStartTimeout": "已送出，尚未啟動完成。請查看 logs\\",
+  "@hostHubStartTimeout": {
+    "description": "啟動 Hub 輪詢逾時（不是失敗）"
+  },
+  "hostStopHubBody": "所有 agent 與 App 會立即斷線。",
+  "@hostStopHubBody": {
+    "description": "停止 Hub 的後果說明"
+  },
+  "hostHubStopped": "Hub 已停止",
+  "@hostHubStopped": {
+    "description": "停止 Hub 完成且腳本沒有其他訊息"
+  },
+  "hostOpNoStatus": "讀不到目前狀態，沒有送出指令",
+  "@hostOpNoStatus": {
+    "description": "操作前置檢查答不出來"
+  },
+  "hostOpReasonWithError": "{reason}（{error}）",
+  "@hostOpReasonWithError": {
+    "description": "把原因與錯誤訊息併成一句",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostPanelBackup": "備份",
+  "@hostPanelBackup": {
+    "description": "區塊標題：資料與安全"
+  },
+  "hostBackupRunning": "執行中…",
+  "@hostBackupRunning": {
+    "description": "備份按鈕：執行中"
+  },
+  "hostBackupNow": "立即備份",
+  "@hostBackupNow": {
+    "description": "按鈕：立即備份"
+  },
+  "hostRestoreBackupButton": "還原備份",
+  "@hostRestoreBackupButton": {
+    "description": "按鈕：還原備份"
+  },
+  "hostRotateTokenButton": "換 token",
+  "@hostRotateTokenButton": {
+    "description": "按鈕與確認鈕：換掉 token"
+  },
+  "hostNoBackups": "沒有可還原的備份",
+  "@hostNoBackups": {
+    "description": "還原時找不到任何備份"
+  },
+  "hostRestoreTitle": "還原 {name}",
+  "@hostRestoreTitle": {
+    "description": "還原備份的確認標題",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRestoreBody": "現有的訊息、成員與附件會被這份備份取代。還原前 Hub 必須先停止。",
+  "@hostRestoreBody": {
+    "description": "還原備份的後果說明"
+  },
+  "hostBackupNoManifestNote": "這份備份沒有 manifest，內容不明。",
+  "@hostBackupNoManifestNote": {
+    "description": "備份缺 manifest 的警告"
+  },
+  "hostBackupNoAttachmentsNote": "這份備份不含附件。",
+  "@hostBackupNoAttachmentsNote": {
+    "description": "備份不含附件的警告"
+  },
+  "hostRotateTitle": "換掉 token",
+  "@hostRotateTitle": {
+    "description": "換 token 的確認標題"
+  },
+  "hostRotateBody": "重啟 Hub 後舊 token 失效，所有成員都要換成新的。",
+  "@hostRotateBody": {
+    "description": "換 token 的後果說明"
+  },
+  "hostPickBackupTitle": "選擇備份",
+  "@hostPickBackupTitle": {
+    "description": "還原時挑一份備份的對話框標題"
+  },
+  "hostBackupMeta": "資料庫 {bytes} 位元組・附件 {files} 個檔案",
+  "@hostBackupMeta": {
+    "description": "備份清單：一份備份的內容",
+    "placeholders": {
+      "bytes": {
+        "type": "String"
+      },
+      "files": {
+        "type": "String"
+      }
+    }
+  },
+  "hostBackupNoManifest": "沒有 manifest",
+  "@hostBackupNoManifest": {
+    "description": "備份清單：這份沒有 manifest"
+  },
+  "hostOpTunnelPending": "正在開啟隧道…",
+  "@hostOpTunnelPending": {
+    "description": "操作進行中：開隧道"
+  },
+  "hostOpPending": "正在啟動…",
+  "@hostOpPending": {
+    "description": "操作進行中：啟動 Hub"
+  },
+  "hostOpFailed": "失敗：{reason}",
+  "@hostOpFailed": {
+    "description": "操作失敗的結果",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "hostOpUnknownReason": "原因不明",
+  "@hostOpUnknownReason": {
+    "description": "操作失敗但沒有原因可講"
+  },
+  "hostFieldNewToken": "新 token",
+  "@hostFieldNewToken": {
+    "description": "換 token 結果：新的那把"
+  },
+  "hostRotateResult": "重啟 Hub 後生效。舊設定：{backup}",
+  "@hostRotateResult": {
+    "description": "換 token 的結果說明",
+    "placeholders": {
+      "backup": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRestoredFrom": "已還原：{path}",
+  "@hostRestoredFrom": {
+    "description": "還原結果：來源",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "hostSafetyBackup": "還原前的備份：{path}",
+  "@hostSafetyBackup": {
+    "description": "還原結果：退路在哪",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "hostBackupDest": "已備份：{path}",
+  "@hostBackupDest": {
+    "description": "備份結果：存到哪",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "hostBackupWithAttachments": "資料庫 {bytes} 位元組，附件 {files} 個檔案",
+  "@hostBackupWithAttachments": {
+    "description": "備份結果：含附件",
+    "placeholders": {
+      "bytes": {
+        "type": "String"
+      },
+      "files": {
+        "type": "String"
+      }
+    }
+  },
+  "hostBackupWithoutAttachments": "資料庫 {bytes} 位元組，不含附件",
+  "@hostBackupWithoutAttachments": {
+    "description": "備份結果：來源本來就沒有附件",
+    "placeholders": {
+      "bytes": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerPanelProjects": "專案",
+  "@hostRunnerPanelProjects": {
+    "description": "執行器分頁：專案區塊標題"
+  },
+  "hostRunnerConfigUnreadable": "讀不到 {path}",
+  "@hostRunnerConfigUnreadable": {
+    "description": "執行器：讀不到 config.json",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerNoProjects": "config.json 裡還沒有任何專案",
+  "@hostRunnerNoProjects": {
+    "description": "執行器：設定檔裡沒有專案"
+  },
+  "hostRunnerPrivateNote": "未公開的專案照樣能在這台機器上執行，只是不會出現在別人的派工對話框裡。",
+  "@hostRunnerPrivateNote": {
+    "description": "執行器：公開與否的說明"
+  },
+  "hostRunnerConflict": "config.json 在這期間被改過了，沒有覆寫。請按右上角重新檢查再改一次。",
+  "@hostRunnerConflict": {
+    "description": "執行器：存檔時偵測到衝突"
+  },
+  "hostRunnerWriteFailed": "寫不進 config.json：{error}",
+  "@hostRunnerWriteFailed": {
+    "description": "執行器：寫檔失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerSavedNoRunnerId": "已存檔。找不到 state.json 裡的 runner_id，沒發重讀命令——執行器下次重啟時會讀到新設定。",
+  "@hostRunnerSavedNoRunnerId": {
+    "description": "執行器：存檔了但沒發重讀命令"
+  },
+  "hostRunnerSavedReloadSent": "已存檔，重讀設定的命令已送出（執行器最多 30 秒後領取）。進行中的 run 不受影響。",
+  "@hostRunnerSavedReloadSent": {
+    "description": "執行器：存檔並送出重讀命令"
+  },
+  "hostRunnerReloadFailed": "已存檔，但重讀命令沒送出：{error}",
+  "@hostRunnerReloadFailed": {
+    "description": "執行器：重讀命令送不出去",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerAddSkillDirTitle": "加一個 skill 目錄",
+  "@hostRunnerAddSkillDirTitle": {
+    "description": "執行器：加 skill 目錄的對話框標題"
+  },
+  "hostRunnerSkillDirHint": "這台機器上的絕對路徑",
+  "@hostRunnerSkillDirHint": {
+    "description": "執行器：skill 目錄輸入框提示"
+  },
+  "hostRunnerPublic": "公開給他人派工",
+  "@hostRunnerPublic": {
+    "description": "執行器：專案是否公開"
+  },
+  "hostRunnerLivetest": "允許瀏覽器實機測試",
+  "@hostRunnerLivetest": {
+    "description": "執行器：是否允許瀏覽器實機測試"
+  },
+  "hostRunnerSkillDirs": "skill 目錄",
+  "@hostRunnerSkillDirs": {
+    "description": "執行器：skill 目錄欄位標籤"
+  },
+  "hostRunnerNone": "（沒有）",
+  "@hostRunnerNone": {
+    "description": "執行器：沒有 skill 目錄"
+  },
+  "hostRunnerAddDir": "加目錄",
+  "@hostRunnerAddDir": {
+    "description": "執行器：加目錄按鈕"
+  },
+  "hostRunnerSaveApply": "儲存並套用",
+  "@hostRunnerSaveApply": {
+    "description": "執行器：儲存並發重讀命令"
+  },
+  "hostRunnerRepoDefault": "{name}（預設）：{path}",
+  "@hostRunnerRepoDefault": {
+    "description": "執行器：預設 repo 那一行",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerRepoEntry": "{name}：{path}",
+  "@hostRunnerRepoEntry": {
+    "description": "執行器：一般 repo 那一行",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "commonUnknown": "未知",
+  "@commonUnknown": {
+    "description": "講不出是哪一份時的替代字"
+  },
+  "commonUnnamed": "（未命名）",
+  "@commonUnnamed": {
+    "description": "沒有名字時的替代字"
+  },
+  "commonRetry": "重試",
+  "@commonRetry": {
+    "description": "重試按鈕"
+  },
+  "commonError": "錯誤",
+  "@commonError": {
+    "description": "錯誤狀態的小標"
+  },
+  "commonNoContent": "沒有內容",
+  "@commonNoContent": {
+    "description": "空狀態的小標"
+  },
+  "commonSystem": "系統",
+  "@commonSystem": {
+    "description": "系統訊息的小標"
+  },
+  "commonSomeone": "有人",
+  "@commonSomeone": {
+    "description": "不知道是誰時的替代稱呼"
+  },
+  "commonDecline": "婉拒",
+  "@commonDecline": {
+    "description": "拒絕邀請或請求的按鈕"
+  },
+  "commonJoin": "加入",
+  "@commonJoin": {
+    "description": "加入聊天室的按鈕"
+  },
+  "commonRename": "改名",
+  "@commonRename": {
+    "description": "改名對話框的確認按鈕"
+  },
+  "commonNameRequired": "名字不能是空的",
+  "@commonNameRequired": {
+    "description": "改名時名字空白的錯誤"
+  },
+  "commonRenameSystemNote": "改名會在房裡留下一則系統訊息。",
+  "@commonRenameSystemNote": {
+    "description": "改名對話框的說明"
+  },
+  "commonConnected": "已連線",
+  "@commonConnected": {
+    "description": "連線狀態 pill：已連線"
+  },
+  "commonConnectedHost": "已連線 · {host}",
+  "@commonConnectedHost": {
+    "description": "連線狀態 pill：已連線並帶主機位址",
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "commonSyncing": "正在補齊訊息…",
+  "@commonSyncing": {
+    "description": "連線狀態 pill：補齊中"
+  },
+  "commonConnecting": "連線中…",
+  "@commonConnecting": {
+    "description": "連線狀態 pill：連線中"
+  },
+  "commonTokenInvalid": "TOKEN 無效",
+  "@commonTokenInvalid": {
+    "description": "連線狀態 pill：憑證被拒"
+  },
+  "commonOffline": "已離線",
+  "@commonOffline": {
+    "description": "連線狀態 pill：離線"
+  },
+  "commonRetryNowTooltip": "點擊立即重試",
+  "@commonRetryNowTooltip": {
+    "description": "重連倒數的提示"
+  },
+  "commonReconnectingIn": "重連中 · {secs} 秒後重試",
+  "@commonReconnectingIn": {
+    "description": "連線狀態 pill：重連倒數",
+    "placeholders": {
+      "secs": {
+        "type": "int"
+      }
+    }
+  },
+  "commonVersionAppOlder": "App 版本較舊，請更新 App",
+  "@commonVersionAppOlder": {
+    "description": "版本警示條：App 較舊"
+  },
+  "commonVersionHubOlder": "Hub 版本較舊，請更新 Hub",
+  "@commonVersionHubOlder": {
+    "description": "版本警示條：Hub 較舊"
+  },
+  "commonVersionUnconfirmed": "無法確認版本",
+  "@commonVersionUnconfirmed": {
+    "description": "版本警示條：兩邊都講不出建置時間"
+  },
+  "errorUnexpected": "發生未預期的錯誤",
+  "@errorUnexpected": {
+    "description": "非 ApiException 的錯誤狀態文案"
+  },
+  "hostModeNotEffective": "主持人模式沒有生效——伺服器沒有照做",
+  "@hostModeNotEffective": {
+    "description": "主持人模式開著但伺服器降級了"
+  },
+  "hostModeLabel": "主持人模式",
+  "@hostModeLabel": {
+    "description": "主持人模式開關關著時的標籤"
+  },
+  "boardActorAliasTitle": "這個人在別的地方叫：",
+  "@boardActorAliasTitle": {
+    "description": "Board actor 別名提示的抬頭"
+  },
+  "boardActorAliasInRoom": "{name}（在「{room}」）",
+  "@boardActorAliasInRoom": {
+    "description": "Board actor 別名連同它來自哪一間房",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "room": {
+        "type": "String"
+      }
+    }
+  },
+  "msgReceiptAnswered": "已回答",
+  "@msgReceiptAnswered": {
+    "description": "系統收據：問題已回答"
+  },
+  "msgReceiptSkipped": "未在此回答",
+  "@msgReceiptSkipped": {
+    "description": "系統收據：問題未在此回答"
+  },
+  "msgReceiptPinned": "已釘選",
+  "@msgReceiptPinned": {
+    "description": "系統收據：訊息已釘選"
+  },
+  "msgReceiptRecord": "紀錄",
+  "@msgReceiptRecord": {
+    "description": "系統收據：未知事件的中性標籤"
+  },
+  "msgLinkNotHttp": "這個連結不是 http(s)，不開啟：{href}",
+  "@msgLinkNotHttp": {
+    "description": "訊息裡的連結被擋下",
+    "placeholders": {
+      "href": {
+        "type": "String"
+      }
+    }
+  },
+  "msgLinkOpenFailed": "開不起來：{href}",
+  "@msgLinkOpenFailed": {
+    "description": "訊息裡的連結開啟失敗",
+    "placeholders": {
+      "href": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsArchiveRequestLabel": "封存請求",
+  "@roomsArchiveRequestLabel": {
+    "description": "封存請求橫幅的小標"
+  },
+  "roomsArchiveRequestMine": "你提議封存這個聊天室，等建立者確認。",
+  "@roomsArchiveRequestMine": {
+    "description": "封存請求橫幅：提議者是自己"
+  },
+  "roomsArchiveRequestBy": "{who} 提議封存這個聊天室。",
+  "@roomsArchiveRequestBy": {
+    "description": "封存請求橫幅：提議者是別人",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsArchiveRequestNote": "封存一段時間後房間會被永久刪除。",
+  "@roomsArchiveRequestNote": {
+    "description": "封存請求橫幅的後果說明"
+  },
+  "roomsArchiveAction": "封存",
+  "@roomsArchiveAction": {
+    "description": "同意封存的按鈕"
+  },
+  "roomsArchiveWithdraw": "收回提議",
+  "@roomsArchiveWithdraw": {
+    "description": "收回封存提議的按鈕"
+  },
+  "roomsArchiveWaitingCreator": "等建立者確認。",
+  "@roomsArchiveWaitingCreator": {
+    "description": "旁觀者看到的封存請求狀態"
+  },
+  "inviteBannerTitle": "邀請你加入（{count}）",
+  "@inviteBannerTitle": {
+    "description": "待接受邀請橫幅的小標",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "roomsUnnamedRoom": "（未命名聊天室）",
+  "@roomsUnnamedRoom": {
+    "description": "沒有名字的聊天室"
+  },
+  "roomsDeleteTitle": "永久刪除房間",
+  "@roomsDeleteTitle": {
+    "description": "刪除房間確認框的標題"
+  },
+  "roomsDeleteBody": "「{name}」連同房裡的訊息與附件會被永久刪除，不可復原。",
+  "@roomsDeleteBody": {
+    "description": "刪除房間確認框的內文",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsDeleteTypeName": "確認的話，把房名打一次：",
+  "@roomsDeleteTypeName": {
+    "description": "刪除房間確認框的輸入提示"
+  },
+  "roomsDeleteAction": "永久刪除",
+  "@roomsDeleteAction": {
+    "description": "刪除房間的確認按鈕"
+  },
+  "roomsIdentityPending": "還在取得房間身分，稍候再試",
+  "@roomsIdentityPending": {
+    "description": "尚未拿到成員身分時的提示"
+  },
+  "roomsExportLog": "匯出對話紀錄",
+  "@roomsExportLog": {
+    "description": "匯出對話紀錄的按鈕與存檔對話框標題"
+  },
+  "roomsExporting": "匯出中…",
+  "@roomsExporting": {
+    "description": "匯出進行中的按鈕文字"
+  },
+  "roomsExportDone": "已匯出 {count} 則",
+  "@roomsExportDone": {
+    "description": "匯出完成的提示",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "roomsExportFailed": "匯出失敗：{message}",
+  "@roomsExportFailed": {
+    "description": "匯出失敗的提示",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsExportParseFailed": "匯出失敗：Hub 回的內容有一則解析不了，這份檔案不完整，沒有存下來",
+  "@roomsExportParseFailed": {
+    "description": "匯出時 JSONL 有壞行"
+  },
+  "commonSubmit": "送出",
+  "@commonSubmit": {
+    "description": "通用：送出按鈕"
+  },
+  "commonBack": "返回",
+  "@commonBack": {
+    "description": "通用：返回按鈕提示"
+  },
+  "commonRefresh": "重新整理",
+  "@commonRefresh": {
+    "description": "通用：重新整理按鈕提示"
+  },
+  "opsDashboardTitle": "執行儀表板",
+  "@opsDashboardTitle": {
+    "description": "執行儀表板頁標題"
+  },
+  "opsBackToChat": "回到聊天室",
+  "@opsBackToChat": {
+    "description": "執行儀表板返回鈕提示"
+  },
+  "opsRefreshEvery10s": "每 10 秒更新",
+  "@opsRefreshEvery10s": {
+    "description": "執行儀表板的更新頻率標籤"
+  },
+  "opsRefreshEvery15s": "每 15 秒更新",
+  "@opsRefreshEvery15s": {
+    "description": "派工異常面板的更新頻率標籤"
+  },
+  "opsNotOpsRoom": "這不是工作房（ops），沒有派工佇列。",
+  "@opsNotOpsRoom": {
+    "description": "非工作房開啟儀表板時的說明"
+  },
+  "opsNoRunnersTitle": "沒有執行器在線",
+  "@opsNoRunnersTitle": {
+    "description": "儀表板空狀態標題"
+  },
+  "opsNoRunnersSubtitle": "請先啟動執行器。",
+  "@opsNoRunnersSubtitle": {
+    "description": "儀表板空狀態說明"
+  },
+  "opsLimitReasonFallback": "額度",
+  "@opsLimitReasonFallback": {
+    "description": "執行器沒講受限原因時的預設詞"
+  },
+  "opsStatusLimitedUnknown": "{name}：因{reason}暫停收單，退避時間未知",
+  "@opsStatusLimitedUnknown": {
+    "description": "頂欄狀態：受限但算不出退避時間",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "opsStatusLimitedRetry": "{name}：因{reason}暫停收單，約 {left}後重試",
+  "@opsStatusLimitedRetry": {
+    "description": "頂欄狀態：受限並有退避倒數",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      },
+      "left": {
+        "type": "String"
+      }
+    }
+  },
+  "opsStatusOffline": "{name}：離線，最後回報 {time}",
+  "@opsStatusOffline": {
+    "description": "頂欄狀態：執行器離線",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsStatusPaused": "{name}：已暫停，跑完手上的就不再領新單",
+  "@opsStatusPaused": {
+    "description": "頂欄狀態：執行器已暫停",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "opsStatusSelfcheck": "{name}：自檢未過 — {problem}",
+  "@opsStatusSelfcheck": {
+    "description": "頂欄狀態：自檢問題",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "problem": {
+        "type": "String"
+      }
+    }
+  },
+  "opsMetaParallel": "併行 {running} / {max}",
+  "@opsMetaParallel": {
+    "description": "執行器卡片：併行數",
+    "placeholders": {
+      "running": {
+        "type": "int"
+      },
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "opsMetaLastSeen": "最後回報 {time}",
+  "@opsMetaLastSeen": {
+    "description": "執行器卡片：最後回報時間",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsMetaStarted": "啟動 {time}",
+  "@opsMetaStarted": {
+    "description": "執行器卡片：啟動時間",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsMetaLastRestart": "上次重啟：{reason}",
+  "@opsMetaLastRestart": {
+    "description": "執行器卡片：上次重啟原因",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCommandPause": "暫停",
+  "@opsCommandPause": {
+    "description": "執行器命令：暫停"
+  },
+  "opsCommandResume": "恢復",
+  "@opsCommandResume": {
+    "description": "執行器命令：恢復"
+  },
+  "opsCommandRestart": "重啟",
+  "@opsCommandRestart": {
+    "description": "執行器命令：重啟"
+  },
+  "opsCommandDrain": "清空佇列",
+  "@opsCommandDrain": {
+    "description": "執行器命令：清空佇列"
+  },
+  "opsCommandReload": "重讀設定",
+  "@opsCommandReload": {
+    "description": "執行器命令：重讀設定"
+  },
+  "opsCommandProgressLabel": "命令進度",
+  "@opsCommandProgressLabel": {
+    "description": "執行器卡片上的命令進度標籤"
+  },
+  "opsCommandSent": "{label}：已送出 {time}，等執行器領取（最多 30 秒）",
+  "@opsCommandSent": {
+    "description": "命令進度：已送出還沒被領取",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCommandAcked": "{label}：執行器已收到，還沒生效",
+  "@opsCommandAcked": {
+    "description": "命令進度：已領取還沒生效",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCommandAckedNote": "{label}：執行器已收到，{note}",
+  "@opsCommandAckedNote": {
+    "description": "命令進度：已領取，附執行器說明",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "note": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCommandApplied": "{label}：已生效 {time}",
+  "@opsCommandApplied": {
+    "description": "命令進度：已生效",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCommandAppliedNote": "{label}：已生效 {time}，{note}",
+  "@opsCommandAppliedNote": {
+    "description": "命令進度：已生效，附執行器說明",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "time": {
+        "type": "String"
+      },
+      "note": {
+        "type": "String"
+      }
+    }
+  },
+  "opsRestartDone": "已重啟完成，啟動 {time}",
+  "@opsRestartDone": {
+    "description": "命令進度：重啟已完成",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsRestarting": "重啟中，等它回來（通常 1～2 分鐘）",
+  "@opsRestarting": {
+    "description": "命令進度：重啟中"
+  },
+  "opsSectionProjects": "專案",
+  "@opsSectionProjects": {
+    "description": "執行器卡片的專案區標題"
+  },
+  "opsSectionUsage": "用量",
+  "@opsSectionUsage": {
+    "description": "執行器卡片的用量區標題"
+  },
+  "opsSectionQueue": "佇列",
+  "@opsSectionQueue": {
+    "description": "儀表板的佇列區標題"
+  },
+  "opsSectionFinished": "最近結束",
+  "@opsSectionFinished": {
+    "description": "儀表板的最近結束區標題"
+  },
+  "opsNoDashboardReport": "這台執行器還沒有回報過儀表板。",
+  "@opsNoDashboardReport": {
+    "description": "執行器沒回報過儀表板"
+  },
+  "opsNoRepos": "這台執行器沒有宣告任何 repo。",
+  "@opsNoRepos": {
+    "description": "執行器沒有宣告 repo"
+  },
+  "opsRunnerOnline": "上線",
+  "@opsRunnerOnline": {
+    "description": "執行器狀態標籤：上線"
+  },
+  "opsRunnerPaused": "暫停",
+  "@opsRunnerPaused": {
+    "description": "執行器狀態標籤：暫停"
+  },
+  "opsRunnerLimited": "受限",
+  "@opsRunnerLimited": {
+    "description": "執行器狀態標籤：受限"
+  },
+  "opsRunnerRestarting": "重啟中",
+  "@opsRunnerRestarting": {
+    "description": "執行器狀態標籤：重啟中"
+  },
+  "opsRunnerOffline": "離線",
+  "@opsRunnerOffline": {
+    "description": "執行器狀態標籤：離線"
+  },
+  "opsBackoffUnknown": "退避時間未知",
+  "@opsBackoffUnknown": {
+    "description": "受限但算不出退避時間"
+  },
+  "opsRetryIn": "約 {left}後重試",
+  "@opsRetryIn": {
+    "description": "受限的退避倒數",
+    "placeholders": {
+      "left": {
+        "type": "String"
+      }
+    }
+  },
+  "opsOfflineSince": "離線 {time}",
+  "@opsOfflineSince": {
+    "description": "執行器離線多久",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsUsageNotReported": "執行器尚未回報用量。",
+  "@opsUsageNotReported": {
+    "description": "用量未回報"
+  },
+  "opsUsageWindow": "近 {hours} 小時",
+  "@opsUsageWindow": {
+    "description": "用量統計的時間窗",
+    "placeholders": {
+      "hours": {
+        "type": "String"
+      }
+    }
+  },
+  "opsSoftCapNotReported": "軟上限：執行器未回報",
+  "@opsSoftCapNotReported": {
+    "description": "軟上限未回報"
+  },
+  "opsSoftCapUnset": "軟上限：未設定",
+  "@opsSoftCapUnset": {
+    "description": "軟上限為 0＝不設限"
+  },
+  "opsSoftCapTokens": "軟上限 {tokens} tokens",
+  "@opsSoftCapTokens": {
+    "description": "軟上限數值",
+    "placeholders": {
+      "tokens": {
+        "type": "String"
+      }
+    }
+  },
+  "opsSoftCapTokensRemaining": "軟上限 {tokens} tokens，剩 {remaining}",
+  "@opsSoftCapTokensRemaining": {
+    "description": "軟上限數值與剩餘量",
+    "placeholders": {
+      "tokens": {
+        "type": "String"
+      },
+      "remaining": {
+        "type": "String"
+      }
+    }
+  },
+  "opsOverSoftCap": "已達軟上限，這台暫時不再領新單。",
+  "@opsOverSoftCap": {
+    "description": "超過軟上限的警告"
+  },
+  "opsPush": "推送",
+  "@opsPush": {
+    "description": "推送動作（按鈕、對話框標題、派工種類）"
+  },
+  "opsPushCommits": "推送 {count} 顆",
+  "@opsPushCommits": {
+    "description": "repo 上的推送按鈕",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "opsPushBlockedUnknown": "執行器沒有回報這條分支能不能推，先確認它的版本",
+  "@opsPushBlockedUnknown": {
+    "description": "推送被擋：執行器沒回報 pushable"
+  },
+  "opsPushBlockedNotAllowed": "分支「{branch}」不在執行器的可推清單裡",
+  "@opsPushBlockedNotAllowed": {
+    "description": "推送被擋：分支不在可推清單",
+    "placeholders": {
+      "branch": {
+        "type": "String"
+      }
+    }
+  },
+  "opsNoBranch": "（無分支）",
+  "@opsNoBranch": {
+    "description": "repo 沒有分支時的顯示"
+  },
+  "opsUnpushedCount": "未推送 {count} 顆",
+  "@opsUnpushedCount": {
+    "description": "未推送的 commit 數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "opsNoUnpushed": "沒有未推送的 commit",
+  "@opsNoUnpushed": {
+    "description": "沒有未推送的 commit"
+  },
+  "opsDirtyWorktree": "工作樹有未提交的變更",
+  "@opsDirtyWorktree": {
+    "description": "repo 工作樹不乾淨"
+  },
+  "opsQueueEmpty": "目前沒有進行中或排隊中的派工。",
+  "@opsQueueEmpty": {
+    "description": "佇列空狀態"
+  },
+  "opsQueuePosition": "排隊第 {position} 位",
+  "@opsQueuePosition": {
+    "description": "排隊中的名次",
+    "placeholders": {
+      "position": {
+        "type": "int"
+      }
+    }
+  },
+  "opsWaited": "等待 {duration}",
+  "@opsWaited": {
+    "description": "排隊已等待多久",
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "opsStartedAt": "開始 {time}",
+  "@opsStartedAt": {
+    "description": "run 的開始時間",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "opsPriorityValue": "優先 {priority}",
+  "@opsPriorityValue": {
+    "description": "run 的優先值",
+    "placeholders": {
+      "priority": {
+        "type": "int"
+      }
+    }
+  },
+  "opsContextTokens": "context 約 {count}",
+  "@opsContextTokens": {
+    "description": "run 的 context 估算",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "opsActionSoftStop": "請收尾",
+  "@opsActionSoftStop": {
+    "description": "請執行中的 run 收尾"
+  },
+  "opsCancelRequested": "已要求取消，等執行器收到後停止",
+  "@opsCancelRequested": {
+    "description": "卡片上的取消中狀態"
+  },
+  "opsSoftStopRequested": "已要求收尾，它會做完目前這一步再結束",
+  "@opsSoftStopRequested": {
+    "description": "卡片上的收尾中狀態"
+  },
+  "opsRunStatusRunning": "執行中",
+  "@opsRunStatusRunning": {
+    "description": "run 狀態：執行中"
+  },
+  "opsRunStatusQueued": "排隊",
+  "@opsRunStatusQueued": {
+    "description": "run 狀態：排隊"
+  },
+  "opsRestartReasonCommand": "人類下令",
+  "@opsRestartReasonCommand": {
+    "description": "重啟原因：人類下令"
+  },
+  "opsRestartReasonMaintenance": "維護窗",
+  "@opsRestartReasonMaintenance": {
+    "description": "重啟原因：維護窗"
+  },
+  "opsLimitReasonRate": "速率限制",
+  "@opsLimitReasonRate": {
+    "description": "受限原因：速率限制"
+  },
+  "opsLimitReasonWeekly": "週上限",
+  "@opsLimitReasonWeekly": {
+    "description": "受限原因：週上限"
+  },
+  "opsLimitReasonManual": "人工暫停",
+  "@opsLimitReasonManual": {
+    "description": "受限原因：人工暫停"
+  },
+  "opsTemplateInvestigateLabel": "調查（只讀）",
+  "@opsTemplateInvestigateLabel": {
+    "description": "派工模板：調查"
+  },
+  "opsTemplateInvestigateSummary": "查票、查程式，回房報告與建議，不改檔。",
+  "@opsTemplateInvestigateSummary": {
+    "description": "派工模板說明：調查"
+  },
+  "opsTemplateTicketLabel": "實作一張票",
+  "@opsTemplateTicketLabel": {
+    "description": "派工模板：實作一張票"
+  },
+  "opsTemplateTicketSummary": "讀票、實作、跑既有驗證、commit 到允許的分支，不推送。",
+  "@opsTemplateTicketSummary": {
+    "description": "派工模板說明：實作一張票"
+  },
+  "opsTemplateStageLabel": "做完整個階段",
+  "@opsTemplateStageLabel": {
+    "description": "派工模板：做完整個階段"
+  },
+  "opsTemplateStageSummary": "agent 自己拆卡、逐張做，直到階段做完或交接。",
+  "@opsTemplateStageSummary": {
+    "description": "派工模板說明：做完整個階段"
+  },
+  "opsDispatchTitle": "派工",
+  "@opsDispatchTitle": {
+    "description": "派工對話框標題"
+  },
+  "opsDispatchTarget": "目標：{target}",
+  "@opsDispatchTarget": {
+    "description": "派工對話框的目標",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "opsDispatchTemplate": "模板",
+  "@opsDispatchTemplate": {
+    "description": "派工對話框的模板欄標籤"
+  },
+  "opsDispatchProject": "專案",
+  "@opsDispatchProject": {
+    "description": "派工對話框的專案欄標籤"
+  },
+  "opsDispatchProjectsLoading": "專案清單載入中…",
+  "@opsDispatchProjectsLoading": {
+    "description": "派工對話框：專案清單載入中"
+  },
+  "opsDispatchProjectsLoadFailed": "專案清單載入失敗：{error}",
+  "@opsDispatchProjectsLoadFailed": {
+    "description": "派工對話框：專案清單載入失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "opsDispatchNoDeclaredProjects": "沒有執行器宣告任何專案",
+  "@opsDispatchNoDeclaredProjects": {
+    "description": "派工對話框：沒有可選專案"
+  },
+  "opsDispatchSelectProjectHint": "選一個專案",
+  "@opsDispatchSelectProjectHint": {
+    "description": "派工對話框的專案下拉提示"
+  },
+  "opsDispatchBriefLabel": "簡述（給 agent 的任務描述）",
+  "@opsDispatchBriefLabel": {
+    "description": "派工對話框的簡述欄標籤"
+  },
+  "opsDispatchBriefHint": "要做什麼、從哪裡看起、什麼算做完…",
+  "@opsDispatchBriefHint": {
+    "description": "派工對話框的簡述輸入提示"
+  },
+  "opsDispatchPriorityLabel": "優先",
+  "@opsDispatchPriorityLabel": {
+    "description": "派工對話框的優先欄標籤"
+  },
+  "opsPriorityNormal": "一般",
+  "@opsPriorityNormal": {
+    "description": "派工優先：一般"
+  },
+  "opsPriorityJump": "插隊 {level}",
+  "@opsPriorityJump": {
+    "description": "派工優先：插隊",
+    "placeholders": {
+      "level": {
+        "type": "int"
+      }
+    }
+  },
+  "opsDispatchStillLoading": "專案清單還在載入，等一下再按。",
+  "@opsDispatchStillLoading": {
+    "description": "派工被擋：清單還在載入"
+  },
+  "opsDispatchNoProjects": "沒有可派工的專案",
+  "@opsDispatchNoProjects": {
+    "description": "派工被擋：沒有專案"
+  },
+  "opsDispatchPickProject": "請先選一個專案",
+  "@opsDispatchPickProject": {
+    "description": "派工被擋：沒選專案"
+  },
+  "opsDispatchBriefTooLong": "簡述超過 {max} 字",
+  "@opsDispatchBriefTooLong": {
+    "description": "派工被擋：簡述超長",
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "opsQueued": "已排隊。",
+  "@opsQueued": {
+    "description": "派工建立成功（算不出位置）"
+  },
+  "opsQueuedAt": "已排隊，位置 {position}。",
+  "@opsQueuedAt": {
+    "description": "派工建立成功並有位置",
+    "placeholders": {
+      "position": {
+        "type": "int"
+      }
+    }
+  },
+  "opsPushConfirm": "把 {repo} 的 {count} 顆 commit 推到 origin/{branch}。",
+  "@opsPushConfirm": {
+    "description": "推送確認對話框內文",
+    "placeholders": {
+      "repo": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      },
+      "branch": {
+        "type": "String"
+      }
+    }
+  },
+  "opsPushQueued": "已排隊：推送 {repo}",
+  "@opsPushQueued": {
+    "description": "推送已排隊",
+    "placeholders": {
+      "repo": {
+        "type": "String"
+      }
+    }
+  },
+  "opsCancelDone": "已取消。",
+  "@opsCancelDone": {
+    "description": "排隊中的派工已直接取消"
+  },
+  "opsCancelRequestedSnack": "已要求取消，等執行器收到後停止。",
+  "@opsCancelRequestedSnack": {
+    "description": "執行中的派工已要求取消"
+  },
+  "opsSoftStopRequestedSnack": "已要求收尾，它會做完目前這一步再結束。",
+  "@opsSoftStopRequestedSnack": {
+    "description": "已要求派工收尾"
+  },
+  "opsCommandSentSnack": "「{label}」已送出，進度看下方。",
+  "@opsCommandSentSnack": {
+    "description": "執行器命令已送出",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "opsErrorRefActive": "這個目標已經有一筆還沒結束的派工。先到執行面板看那一筆，或取消它。",
+  "@opsErrorRefActive": {
+    "description": "派工被 Hub 退：目標已有進行中的派工"
+  },
+  "opsErrorRoomNotOps": "派工只在工作房（ops）成立。",
+  "@opsErrorRoomNotOps": {
+    "description": "派工被 Hub 退：不是工作房"
+  },
+  "opsExceptionsTitle": "派工異常",
+  "@opsExceptionsTitle": {
+    "description": "派工異常面板標題與入口提示"
+  },
+  "opsExceptionsScope": "停滯、逾時、額度受限、執行器上下線",
+  "@opsExceptionsScope": {
+    "description": "派工異常面板的範圍說明"
+  },
+  "opsExceptionsEmptyTitle": "目前沒有派工異常",
+  "@opsExceptionsEmptyTitle": {
+    "description": "派工異常空狀態標題"
+  },
+  "opsExceptionsEmptySubtitle": "這份清單只收停滯／恢復、逾時、額度受限與執行器上下線；hook 擋下的工具呼叫與 MCP 未就緒目前還沒有事件源。",
+  "@opsExceptionsEmptySubtitle": {
+    "description": "派工異常空狀態說明"
+  },
+  "opsExceptionTargetUnspecified": "(未指定)",
+  "@opsExceptionTargetUnspecified": {
+    "description": "派工例外：沒有目標時的顯示"
+  },
+  "opsExceptionHeadPlain": "派工",
+  "@opsExceptionHeadPlain": {
+    "description": "派工例外標題的前綴（不知道種類時）"
+  },
+  "opsExceptionHead": "派工 {kind}／{target}",
+  "@opsExceptionHead": {
+    "description": "派工例外標題的前綴",
+    "placeholders": {
+      "kind": {
+        "type": "String"
+      },
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionStalledSeconds": "{head} 已 {seconds} 秒沒有輸出",
+  "@opsExceptionStalledSeconds": {
+    "description": "派工例外：停滯（有秒數）",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "int"
+      }
+    }
+  },
+  "opsExceptionStalled": "{head} 停滯",
+  "@opsExceptionStalled": {
+    "description": "派工例外：停滯",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionResumed": "{head} 已恢復輸出",
+  "@opsExceptionResumed": {
+    "description": "派工例外：恢復輸出",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionSoftStopTimeout": "{head} 收尾逾時，被強制終止",
+  "@opsExceptionSoftStopTimeout": {
+    "description": "派工例外：收尾逾時",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionTimeout": "{head} 逾時，被強制終止",
+  "@opsExceptionTimeout": {
+    "description": "派工例外：逾時",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionRateLimited": "{head} 受額度限制（{reason}）",
+  "@opsExceptionRateLimited": {
+    "description": "派工例外：額度受限",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionRunnerOffline": "執行器 {runner} 已離線",
+  "@opsExceptionRunnerOffline": {
+    "description": "派工例外：執行器離線",
+    "placeholders": {
+      "runner": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionRunnerOnline": "執行器 {runner} 已恢復連線",
+  "@opsExceptionRunnerOnline": {
+    "description": "派工例外：執行器恢復連線",
+    "placeholders": {
+      "runner": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionOther": "{head} {reason}",
+  "@opsExceptionOther": {
+    "description": "派工例外：認不得的分類，原樣接上 reason",
+    "placeholders": {
+      "head": {
+        "type": "String"
+      },
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "opsExceptionFallbackRoom": "工作房",
+  "@opsExceptionFallbackRoom": {
+    "description": "派工例外通知：房名缺席時的替代"
+  },
+  "timeJustNow": "剛剛",
+  "@timeJustNow": {
+    "description": "相對時間：一分鐘內"
+  },
+  "timeMinutesAgo": "{count} 分前",
+  "@timeMinutesAgo": {
+    "description": "相對時間：幾分鐘前",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeHoursAgo": "{count} 小時前",
+  "@timeHoursAgo": {
+    "description": "相對時間：幾小時前",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeYesterday": "昨天",
+  "@timeYesterday": {
+    "description": "相對時間：昨天"
+  },
+  "timeDurationDays": "{count} 日",
+  "@timeDurationDays": {
+    "description": "時長：天",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeDurationHours": "{count} 時",
+  "@timeDurationHours": {
+    "description": "時長：小時",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeDurationMinutes": "{count} 分",
+  "@timeDurationMinutes": {
+    "description": "時長：分鐘",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeDurationSeconds": "{count} 秒",
+  "@timeDurationSeconds": {
+    "description": "時長：秒",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "timeDurationHoursLong": "{hours} 小時 {minutes} 分",
+  "@timeDurationHoursLong": {
+    "description": "退避倒數：小時與分鐘",
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      },
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "mentionGroupAll": "房內所有人（不含你自己與子代理）",
+  "@mentionGroupAll": {
+    "description": "群組 @：all"
+  },
+  "mentionGroupAgents": "房內所有 agent（不含子代理）",
+  "@mentionGroupAgents": {
+    "description": "群組 @：agents"
+  },
+  "mentionGroupHumans": "房內所有人類（不含你自己）",
+  "@mentionGroupHumans": {
+    "description": "群組 @：humans"
+  },
+  "roomStyleVerbose": "詳細",
+  "@roomStyleVerbose": {
+    "description": "房間說話方式：詳細"
+  },
+  "roomStyleVerboseDesc": "完整交付：任務結果、程式碼、Markdown 報告，篇幅不限",
+  "@roomStyleVerboseDesc": {
+    "description": "房間說話方式說明：詳細"
+  },
+  "roomStyleConcise": "精確",
+  "@roomStyleConcise": {
+    "description": "房間說話方式：精確"
+  },
+  "roomStyleConciseDesc": "只列重點，不貼程式碼與長篇文件",
+  "@roomStyleConciseDesc": {
+    "description": "房間說話方式說明：精確"
+  },
+  "roomStyleCasual": "親和",
+  "@roomStyleCasual": {
+    "description": "房間說話方式：親和"
+  },
+  "roomStyleCasualDesc": "像人一樣說話，不報告工作階段",
+  "@roomStyleCasualDesc": {
+    "description": "房間說話方式說明：親和"
+  },
+  "roomStyleCustom": "自訂",
+  "@roomStyleCustom": {
+    "description": "房間說話方式：自訂"
+  },
+  "roomStyleCustomDesc": "自己寫下這個房間的說話方式",
+  "@roomStyleCustomDesc": {
+    "description": "房間說話方式說明：自訂"
+  },
+  "msgCardDeleted": "已刪除",
+  "@msgCardDeleted": {
+    "description": "卡片引用：卡已刪除"
+  },
+  "msgCardMoved": "已搬走",
+  "@msgCardMoved": {
+    "description": "卡片引用：卡已搬走"
+  },
+  "msgCardNoAccess": "看不到",
+  "@msgCardNoAccess": {
+    "description": "卡片引用：沒有權限看"
+  },
+  "exportRetracted": "（已撤回）",
+  "@exportRetracted": {
+    "description": "匯出對話：已撤回的訊息"
+  },
+  "exportSystemSender": "（系統）",
+  "@exportSystemSender": {
+    "description": "匯出對話：system 訊息的發送者"
+  },
+  "exportUnknownSender": "（不明）",
+  "@exportUnknownSender": {
+    "description": "匯出對話：查不到名字的發送者"
+  },
+  "notifyMentionedTitle": "{room}（有人提及你）",
+  "@notifyMentionedTitle": {
+    "description": "系統通知標題：被提及",
+    "placeholders": {
+      "room": {
+        "type": "String"
+      }
+    }
+  },
+  "notifyChannelName": "聊天室訊息",
+  "@notifyChannelName": {
+    "description": "Android 通知頻道名稱"
+  },
+  "notifyChannelDesc": "聊天室新訊息與提及通知",
+  "@notifyChannelDesc": {
+    "description": "Android 通知頻道說明"
+  },
+  "notifyUnknownSender": "（未知成員）",
+  "@notifyUnknownSender": {
+    "description": "通知內文：查不到名字的發送者"
+  },
+  "notifyBody": "{sender}：{preview}",
+  "@notifyBody": {
+    "description": "通知內文：單則新訊息",
+    "placeholders": {
+      "sender": {
+        "type": "String"
+      },
+      "preview": {
+        "type": "String"
+      }
+    }
+  },
+  "notifyBodyMulti": "{count} 則新訊息，最新—{sender}：{preview}",
+  "@notifyBodyMulti": {
+    "description": "通知內文：多則新訊息",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "sender": {
+        "type": "String"
+      },
+      "preview": {
+        "type": "String"
+      }
+    }
+  },
+  "notifyBadgeTooltip": "{count} 件未處理",
+  "@notifyBadgeTooltip": {
+    "description": "工作列角標提示",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "notifyCodexBoardDelivered": "board 變動已投遞（{room} seq {seq}）",
+  "@notifyCodexBoardDelivered": {
+    "description": "Codex 轉送狀態：板變動已投遞",
+    "placeholders": {
+      "room": {
+        "type": "String"
+      },
+      "seq": {
+        "type": "int"
+      }
+    }
+  },
+  "notifyCodexDelivered": "已投遞 {count} 則到 {thread}",
+  "@notifyCodexDelivered": {
+    "description": "Codex 轉送狀態：訊息已投遞",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "thread": {
+        "type": "String"
+      }
+    }
+  },
+  "notifyCodexQueueFailed": "codex queue 失敗（{thread}）",
+  "@notifyCodexQueueFailed": {
+    "description": "Codex 轉送狀態：queue 失敗",
+    "placeholders": {
+      "thread": {
+        "type": "String"
+      }
+    }
+  },
+  "notifyCodexWaiting": "等 Codex 空下來（{count} 則待補投）",
+  "@notifyCodexWaiting": {
+    "description": "Codex 轉送狀態：等對方空下來",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "notifyCodexGaveUp": "逾時放棄：{sender} @ {names}",
+  "@notifyCodexGaveUp": {
+    "description": "Codex 轉送狀態：補投逾時放棄",
+    "placeholders": {
+      "sender": {
+        "type": "String"
+      },
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "errorInvalidToken": "API token 無效，請至設定檢查",
+  "@errorInvalidToken": {
+    "description": "401：token 錯誤或未提供"
+  },
+  "errorParticipantHeaderMissing": "這個畫面沒有帶上房間身分（程式問題，與 API token 無關）",
+  "@errorParticipantHeaderMissing": {
+    "description": "401：請求漏帶 X-Participant-Id"
+  },
+  "errorParticipantInvalid": "你的房間身分已失效，正在重新加入…",
+  "@errorParticipantInvalid": {
+    "description": "403：房間身分失效"
+  },
+  "errorRootTokenRequired": "只有 Hub 主持人能發放或撤銷邀請",
+  "@errorRootTokenRequired": {
+    "description": "403：需要主持人憑證"
+  },
+  "errorHumanCredentialRequired": "這張憑證是給 agent 用的，人要用人類憑證才進得了房間",
+  "@errorHumanCredentialRequired": {
+    "description": "403：需要人類憑證"
+  },
+  "errorNotYourAgent": "這個 agent 不屬於你——指派只在用同一張憑證接入的 agent 之間成立",
+  "@errorNotYourAgent": {
+    "description": "403：不是你的 agent"
+  },
+  "errorNotBoardMember": "你還不是這塊板的成員",
+  "@errorNotBoardMember": {
+    "description": "403：板成員資格（Hub 沒給原話時的替代）"
+  },
+  "errorNotFound": "找不到指定的房間或訊息",
+  "@errorNotFound": {
+    "description": "404"
+  },
+  "errorRoomArchived": "此聊天室已封存，只能看不能寫；封存滿一段時間後 Hub 會把它永久刪除",
+  "@errorRoomArchived": {
+    "description": "409：房間已封存"
+  },
+  "errorConflictDefault": "目前的狀態不允許這個動作",
+  "@errorConflictDefault": {
+    "description": "409：Hub 沒給原話時的替代"
+  },
+  "errorValidationDefault": "請求內容不合法",
+  "@errorValidationDefault": {
+    "description": "422：Hub 沒給原話時的替代"
+  },
+  "errorArchivedNoIdentity": "這個聊天室已封存，而你沒有加入過它——封存後無法再加入",
+  "@errorArchivedNoIdentity": {
+    "description": "封存房唯讀瀏覽但本機沒有身分"
+  },
+  "errorAttachmentTooLarge": "檔案超過伺服器允許的大小上限",
+  "@errorAttachmentTooLarge": {
+    "description": "413：附件超過上限"
+  },
+  "errorAttachmentGone": "附件內容已不在伺服器上（資料庫與附件目錄可能不同步）",
+  "@errorAttachmentGone": {
+    "description": "410：附件實體檔案不在了"
+  },
+  "errorNetwork": "無法連線到 Hub，請確認伺服器位址",
+  "@errorNetwork": {
+    "description": "連不上 Hub"
+  },
+  "errorServer": "伺服器發生錯誤（HTTP {status}）",
+  "@errorServer": {
+    "description": "5xx",
+    "placeholders": {
+      "status": {
+        "type": "int"
+      }
+    }
+  },
+  "errorMoveHalfDone": "新卡已經建好了（在你選的階段上），但這張卡沒能標成「已搬走」：{cause}　先過去看一眼再決定要不要重試——直接重按會再建一張。",
+  "@errorMoveHalfDone": {
+    "description": "搬卡搬到一半",
+    "placeholders": {
+      "cause": {
+        "type": "String"
+      }
+    }
+  },
+  "attachTooLargeLocal": "{filename} 超過上限 {limit} MB，未加入",
+  "@attachTooLargeLocal": {
+    "description": "附件在本機就被擋下：超過大小上限",
+    "placeholders": {
+      "filename": {
+        "type": "String"
+      },
+      "limit": {
+        "type": "String"
+      }
+    }
+  },
+  "attachMaxPerMessage": "一則訊息最多 {max} 個附件",
+  "@attachMaxPerMessage": {
+    "description": "附件在本機就被擋下：超過數量上限",
+    "placeholders": {
+      "max": {
+        "type": "int"
+      }
+    }
+  },
+  "attachUploadFailed": "上傳失敗",
+  "@attachUploadFailed": {
+    "description": "附件上傳失敗"
+  },
+  "helpNavLabel": "分節",
+  "@helpNavLabel": {
+    "description": "說明頁側邊導覽的小標"
+  },
+  "helpDocMainTitle": "使用說明",
+  "@helpDocMainTitle": {
+    "description": "說明頁：主畫面那份文件的標題"
+  },
+  "helpDocSettingsTitle": "設定說明",
+  "@helpDocSettingsTitle": {
+    "description": "說明頁：設定那份文件的標題"
+  },
+  "helpDocHostTitle": "主控台說明",
+  "@helpDocHostTitle": {
+    "description": "說明頁：這台機器那份文件的標題"
+  },
+  "helpSecChatLabel": "聊天",
+  "@helpSecChatLabel": {
+    "description": "說明頁分節小標：聊天"
+  },
+  "helpSecChatTitle": "聊天室",
+  "@helpSecChatTitle": {
+    "description": "說明頁分節標題：聊天室"
+  },
+  "helpSecMemberLabel": "成員",
+  "@helpSecMemberLabel": {
+    "description": "說明頁分節小標：成員"
+  },
+  "helpSecMemberTitle": "成員與在線",
+  "@helpSecMemberTitle": {
+    "description": "說明頁分節標題：成員與在線"
+  },
+  "helpSecBoardLabel": "任務板",
+  "@helpSecBoardLabel": {
+    "description": "說明頁分節小標：任務板"
+  },
+  "helpSecBoardTitle": "任務板",
+  "@helpSecBoardTitle": {
+    "description": "說明頁分節標題：任務板"
+  },
+  "helpSecAssetLabel": "素材",
+  "@helpSecAssetLabel": {
+    "description": "說明頁分節小標：素材"
+  },
+  "helpSecAssetTitle": "階段素材",
+  "@helpSecAssetTitle": {
+    "description": "說明頁分節標題：階段素材"
+  },
+  "helpSecOpsLabel": "派工",
+  "@helpSecOpsLabel": {
+    "description": "說明頁分節小標：派工"
+  },
+  "helpSecOpsTitle": "派工",
+  "@helpSecOpsTitle": {
+    "description": "說明頁分節標題：派工"
+  },
+  "helpSecNotifyLabel": "通知",
+  "@helpSecNotifyLabel": {
+    "description": "說明頁分節小標：通知"
+  },
+  "helpSecNotifyTitle": "通知",
+  "@helpSecNotifyTitle": {
+    "description": "說明頁分節標題：通知"
+  },
+  "helpSecInviteLabel": "邀請",
+  "@helpSecInviteLabel": {
+    "description": "說明頁分節小標：邀請"
+  },
+  "helpSecInviteTitle": "邀請與 token",
+  "@helpSecInviteTitle": {
+    "description": "說明頁分節標題：邀請與 token"
+  },
+  "helpSecVersionLabel": "版本",
+  "@helpSecVersionLabel": {
+    "description": "說明頁分節小標：版本"
+  },
+  "helpSecVersionTitle": "版本",
+  "@helpSecVersionTitle": {
+    "description": "說明頁分節標題：版本"
+  },
+  "helpSecMachineLabel": "主機",
+  "@helpSecMachineLabel": {
+    "description": "說明頁分節小標：主機"
+  },
+  "helpSecTunnelLabel": "通道",
+  "@helpSecTunnelLabel": {
+    "description": "說明頁分節小標：通道"
+  },
+  "helpSecTunnelTitle": "隧道、備份與 token",
+  "@helpSecTunnelTitle": {
+    "description": "說明頁分節標題：隧道、備份與 token"
+  },
+  "helpSecLinkLabel": "接入",
+  "@helpSecLinkLabel": {
+    "description": "說明頁分節小標：接入"
+  },
+  "helpSecLinkTitle": "Agent 接入",
+  "@helpSecLinkTitle": {
+    "description": "說明頁分節標題：Agent 接入"
+  },
+  "helpSecRunnerLabel": "執行器",
+  "@helpSecRunnerLabel": {
+    "description": "說明頁分節小標：執行器"
+  },
+  "helpSecRunnerTitle": "執行器（runner）",
+  "@helpSecRunnerTitle": {
+    "description": "說明頁分節標題：執行器"
+  },
+  "helpChat1a": " 提及成員，",
+  "@helpChat1a": {
+    "description": "說明：@名字 與 #[標題] 之間的文字"
+  },
+  "helpChat1b": " 指涉任務卡。",
+  "@helpChat1b": {
+    "description": "說明：#[標題] 後面的文字"
+  },
+  "helpChat2a": "、",
+  "@helpChat2a": {
+    "description": "說明：群組提及三個代號之間的頓號"
+  },
+  "helpChat2c": " 一次提及一整群，送出時展開成當下在房裡的實名。",
+  "@helpChat2c": {
+    "description": "說明：群組提及的行為"
+  },
+  "helpChat3": "那一類人不在房裡時會展開成空，App 會講出來——沒有人被通知到，訊息還是送出去了。",
+  "@helpChat3": {
+    "description": "說明：群組提及展開成空"
+  },
+  "helpChat4a": " 送出，",
+  "@helpChat4a": {
+    "description": "說明：Enter 之後的文字"
+  },
+  "helpChat4b": " 換行，",
+  "@helpChat4b": {
+    "description": "說明：Shift+Enter 之後的文字"
+  },
+  "helpChat4c": " 叫回歷史。",
+  "@helpChat4c": {
+    "description": "說明：上下鍵之後的文字"
+  },
+  "helpChat5": "檔案可以拖進輸入框，也可以直接貼上截圖。",
+  "@helpChat5": {
+    "description": "說明：附件輸入方式"
+  },
+  "helpChat6": "私人聊天室不會出現在別人的列表裡，必須受邀才能加入。",
+  "@helpChat6": {
+    "description": "說明：私人聊天室"
+  },
+  "helpChat7": "釘選是整間房共用的：誰釘的所有人都看得到，取消釘選也一樣。釘選牆只收還在的訊息，原訊息被刪就不在牆上。",
+  "@helpChat7": {
+    "description": "說明：釘選"
+  },
+  "helpChat8": "「匯出對話紀錄」把整間房存成一個檔，包含全部訊息與附件資訊——那是一次外流，存到哪裡自己負責。",
+  "@helpChat8": {
+    "description": "說明：匯出對話紀錄"
+  },
+  "helpChat9": "匯出要有這間房的成員身分；時間一律是 Hub 給的 UTC 原字串，不轉本地時間。",
+  "@helpChat9": {
+    "description": "說明：匯出的條件與時間格式"
+  },
+  "helpChat10": "封存後只能看不能寫；封存一段時間後 Hub 會把房間連同訊息與附件永久刪除。要留底就在刪除前匯出。",
+  "@helpChat10": {
+    "description": "說明：封存與永久刪除"
+  },
+  "helpMember1": "名字旁的「派工中」＝這個成員是某一筆派工帶進房的。Hub 不會把它當閒置掃掉，所以那一列沒有倒數。",
+  "@helpMember1": {
+    "description": "說明：派工中的成員"
+  },
+  "helpMember2": "派工結束它會自己離房；沒離開的話 Hub 也會在 run 收場時把它移出——不必自己去踢。",
+  "@helpMember2": {
+    "description": "說明：派工結束後成員離房"
+  },
+  "helpMember3": "一般 agent 超過兩分鐘沒動作，那一列會印閒置多久、最快多久後被移出。被移出的人重新指派一次就會回來。",
+  "@helpMember3": {
+    "description": "說明：閒置 agent 的倒數"
+  },
+  "helpMember4a": "agent 要做一件很久的事時可以自己掛 ",
+  "@helpMember4a": {
+    "description": "說明：chatroom_hold 之前的文字"
+  },
+  "helpMember4b": " 免掃，但 hold 有到期時間，不是無限期。",
+  "@helpMember4b": {
+    "description": "說明：chatroom_hold 之後的文字"
+  },
+  "helpMember5": "隱藏與重點標記只動我這台裝置的視圖，移出成員才是動到所有人。",
+  "@helpMember5": {
+    "description": "說明：隱藏、重點標記與移出的差別"
+  },
+  "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。",
+  "@helpBoard1": {
+    "description": "說明：板與房的關係"
+  },
+  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段收尾後才能送審，未分類的卡也要先收尾。",
+  "@helpBoard2": {
+    "description": "說明：任務板結構"
+  },
+  "helpBoard3": "「搬到別處」會在目標階段建立一張新卡，原本那張標成「已搬走」。",
+  "@helpBoard3": {
+    "description": "說明：搬到別處"
+  },
+  "helpBoard4a": "想法板（",
+  "@helpBoard4a": {
+    "description": "說明：SCRATCHPAD 之前的文字"
+  },
+  "helpBoard4b": "）放還沒拆成卡的東西；agent 讀得到、也能留意見，但改不動你寫的內容。",
+  "@helpBoard4b": {
+    "description": "說明：SCRATCHPAD 之後的文字"
+  },
+  "helpBoard5": "板的 owner 決定誰能編輯。在同一間房裡不會自動成為板的協作者。",
+  "@helpBoard5": {
+    "description": "說明：板的編輯權"
+  },
+  "helpAsset1": "素材掛在「階段」上，那個階段底下的每一張卡與每一筆派工共用，所以入口在階段標題列，不在某一張卡裡面。",
+  "@helpAsset1": {
+    "description": "說明：素材掛在階段上"
+  },
+  "helpAsset2": "階段標題列上的「素材 N」點開才是清單；沒有素材時那個數字整個不顯示。",
+  "@helpAsset2": {
+    "description": "說明：素材清單入口"
+  },
+  "helpAsset3": "「新增素材」會把檔案上傳到目前這間聊天室再掛上階段——沒有房的時候掛不了。",
+  "@helpAsset3": {
+    "description": "說明：新增素材"
+  },
+  "helpAsset4": "一次選多個檔不問備註，直接整批掛上去；只選一個檔才會問一句「這份素材是什麼」，可以留白。",
+  "@helpAsset4": {
+    "description": "說明：多檔與單檔上傳的差別"
+  },
+  "helpAsset5": "備註之後在清單上逐列編輯，改成空字串就是把備註清掉。",
+  "@helpAsset5": {
+    "description": "說明：編輯素材備註"
+  },
+  "helpAsset6": "點檔名開檢視：圖片在 App 內看，其餘交給系統預設程式開。",
+  "@helpAsset6": {
+    "description": "說明：檢視素材"
+  },
+  "helpAsset7": "「卸除」只把這份素材從這個階段拿掉，聊天室裡原本那則附件還在。別人可能正在用，所以會問一次。",
+  "@helpAsset7": {
+    "description": "說明：卸除素材"
+  },
+  "helpAsset8": "agent 讀得到素材列表與備註——要它看的規格、截圖、草稿放這裡，比貼在聊天裡讓它自己翻可靠。",
+  "@helpAsset8": {
+    "description": "說明：agent 讀得到素材"
+  },
+  "helpOps1a": "派工要有執行器在線，而且目標專案在它的 ",
+  "@helpOps1a": {
+    "description": "說明：projects 之前的文字"
+  },
+  "helpOps1b": " 白名單裡，否則 Hub 會擋下建單。",
+  "@helpOps1b": {
+    "description": "說明：projects 之後的文字"
+  },
+  "helpOps2a": "開工前執行器會先 ",
+  "@helpOps2a": {
+    "description": "說明：fetch 之前的文字"
+  },
+  "helpOps2b": " 並用 ",
+  "@helpOps2b": {
+    "description": "說明：fetch 與 pull --ff-only 之間的文字"
+  },
+  "helpOps2c": " 把常駐工作樹快轉到最新——工作樹是跨 run 共用的，不同步就等於在上一輪的舊基礎上動工。",
+  "@helpOps2c": {
+    "description": "說明：工作樹快轉"
+  },
+  "helpOps3": "工作樹有未提交變更時不同步，照現況執行並在收工摘要裡講明；分支已經分岔而快轉不了則整筆派工直接失敗，要先自己處理。",
+  "@helpOps3": {
+    "description": "說明：未提交變更與分岔分支"
+  },
+  "helpOps4": "一次派工動得到那個專案底下的所有 repo，不只你選的那個。每個 repo 都必須停在自己的允許分支上，有一個不合就不開工。",
+  "@helpOps4": {
+    "description": "說明：派工的 repo 範圍"
+  },
+  "helpOps5": "agent 每完成一個可交付的小步驟就在房裡回報一次——看回報就知道它走到哪，不必去翻卡。",
+  "@helpOps5": {
+    "description": "說明：agent 的階段回報"
+  },
+  "helpOps6": "在房裡 @ 它就能補指示，但訊息是在它下一次工具呼叫之前才送到，不會打斷手上那一步。",
+  "@helpOps6": {
+    "description": "說明：中途補指示"
+  },
+  "helpOps7": "「請收尾」是軟停止：它把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束才會被硬取消。",
+  "@helpOps7": {
+    "description": "說明：請收尾"
+  },
+  "helpOps8": "「取消」是執行器直接殺進程，寫到一半的東西就停在那裡。趕時間才用它，否則用請收尾。",
+  "@helpOps8": {
+    "description": "說明：取消派工"
+  },
+  "helpOps9": "上下文用滿會觸發交接：它把已做／未做／下一步寫在卡上並釋放認領，下一輪的 brief 直接接上那份摘要。",
+  "@helpOps9": {
+    "description": "說明：上下文交接"
+  },
+  "helpOps10": "瀏覽器實機測試除非派工簡述明確要求，否則不是交付門檻——沒跑不影響這一輪算不算完成。",
+  "@helpOps10": {
+    "description": "說明：瀏覽器實機測試"
+  },
+  "helpOps11": "推送會先比對待推的 commit 與畫面上看到的是否一致，不一致就不推並回報。",
+  "@helpOps11": {
+    "description": "說明：推送前的比對"
+  },
+  "helpNotify1": "系統通知只在 App 開著時發，關閉期間的訊息不會補發，回來後靠未讀紅點找。",
+  "@helpNotify1": {
+    "description": "說明：系統通知的限制"
+  },
+  "helpConn1": "拿到邀請碼就按「貼上邀請碼」，Hub 位址與 token 會一起填好——手動兩個欄位各填一次容易配錯對。",
+  "@helpConn1": {
+    "description": "說明：貼上邀請碼"
+  },
+  "helpConn2a": "Hub 位址是那台機器連得到的網址（例如 ",
+  "@helpConn2a": {
+    "description": "說明：Hub 位址範例之前的文字"
+  },
+  "helpConn2b": "）。主持人綁 ",
+  "@helpConn2b": {
+    "description": "說明：Hub 位址範例與 0.0.0.0 之間的文字"
+  },
+  "helpConn2c": " 時，要填的是他那台機器的 IP。",
+  "@helpConn2c": {
+    "description": "說明：0.0.0.0 之後的文字"
+  },
+  "helpConn3": "API token 填人類 token；沒設 token 的 Hub 才留空。改完要按「儲存設定」，連線與個人化兩頁共用同一顆。",
+  "@helpConn3": {
+    "description": "說明：API token 欄位"
+  },
+  "helpConn4": "「測試連線」只驗這台機器到 Hub 這一段：它綠了不代表別人連得到，那是主持人那邊的事。",
+  "@helpConn4": {
+    "description": "說明：測試連線"
+  },
+  "helpConn5": "「App 版本」那串在這頁最底下，回報問題時先附上它。",
+  "@helpConn5": {
+    "description": "說明：App 版本在哪"
+  },
+  "helpInvite1": "邀請成員在連線頁底下：產生一份邀請碼給對方，之後可以單獨撤銷，不必換掉所有人的 token。",
+  "@helpInvite1": {
+    "description": "說明：邀請成員入口"
+  },
+  "helpInvite2": "邀請碼等同密碼，用私訊給，不要貼在公開頻道。",
+  "@helpInvite2": {
+    "description": "說明：邀請碼要保密"
+  },
+  "helpInvite3": "人類 token 與 Agent token 是兩把：只有人類 token 開得了主持人模式、發得了邀請。",
+  "@helpInvite3": {
+    "description": "說明：兩種 token 的差別"
+  },
+  "helpInvite4a": "Agent token 填進 mcp-kit 安裝器的「",
+  "@helpInvite4a": {
+    "description": "說明：Agent token 欄位名稱之前的文字"
+  },
+  "helpInvite4b": "」欄位。",
+  "@helpInvite4b": {
+    "description": "說明：Agent token 欄位名稱之後的文字"
+  },
+  "helpInvite5": "把成員移出聊天室會撤銷他當初用的那張邀請碼，與他共用同一張的人會一起斷線。",
+  "@helpInvite5": {
+    "description": "說明：移出成員會撤銷邀請碼"
+  },
+  "helpVisual1": "深色主題這裡與標題列那顆切的是同一個開關。",
+  "@helpVisual1": {
+    "description": "說明：深色主題開關"
+  },
+  "helpVisual2": "字級五檔（極小／小／中 (預設)／大／特大）選了立刻套用到整個 App，不必重開。",
+  "@helpVisual2": {
+    "description": "說明：字級五檔"
+  },
+  "helpVisual3": "「極小」是半個字級，實際上讀不了——它留著是個玩笑，要縮小從「小」開始試。",
+  "@helpVisual3": {
+    "description": "說明：極小字級"
+  },
+  "helpVisual4": "語言還沒做，所以這頁沒有語言選項。",
+  "@helpVisual4": {
+    "description": "說明：視覺頁沒有語言選項"
+  },
+  "helpPersonal1": "顯示名稱是進房時用的名字，留空則由 Hub 隨機指派代稱。房內名字不能重複。",
+  "@helpPersonal1": {
+    "description": "說明：顯示名稱"
+  },
+  "helpPersonal2": "本機裝置識別是這台機器的身分。「重新產生」等於換一個人：原本的成員身分、未讀與管控權都接不回來。",
+  "@helpPersonal2": {
+    "description": "說明：本機裝置識別"
+  },
+  "helpPersonal3": "系統通知分「所有訊息／僅提及我時／關閉」，改完立刻生效，但仍然只在 App 開著時才會發。",
+  "@helpPersonal3": {
+    "description": "說明：系統通知三檔"
+  },
+  "helpPersonal4": "「轉送通知給 Codex」會把提及與 Board 變動送到本機 Codex session；thread id 留空就用預設那條。",
+  "@helpPersonal4": {
+    "description": "說明：轉送通知給 Codex"
+  },
+  "helpVersionApp1": "橫幅說「App 版本較舊」就更新 App。",
+  "@helpVersionApp1": {
+    "description": "說明：App 版本較舊的處理"
+  },
+  "helpVersionApp2": "兩邊的 commit 在設定頁與橫幅的 tooltip 上，回報問題時附上。",
+  "@helpVersionApp2": {
+    "description": "說明：commit 在哪裡看"
+  },
+  "helpVersionApp3a": "要確認 agent 用的是哪一份 bridge，讓它呼叫 ",
+  "@helpVersionApp3a": {
+    "description": "說明：chatroom_join 之前的文字"
+  },
+  "helpVersionApp3b": "，比對回傳的 ",
+  "@helpVersionApp3b": {
+    "description": "說明：chatroom_join 與 bridge.commit 之間的文字"
+  },
+  "helpVersionApp3c": "。",
+  "@helpVersionApp3c": {
+    "description": "說明：bridge.commit 之後的句點"
+  },
+  "helpVersionApp4": "不要看工具說明結尾那個版本：宿主端會快取，同一刻三支工具可能報三個不同的數字。",
+  "@helpVersionApp4": {
+    "description": "說明：工具說明結尾的版本不可信"
+  },
+  "helpMachine1": "只有裝了 host-kit 或 mcp-kit 的機器看得到這個入口。兩個都裝就分成「Hub 主持」與「Agent 接入」兩頁。",
+  "@helpMachine1": {
+    "description": "說明：主控台入口條件"
+  },
+  "helpMachine2": "狀態那三盞燈是進程、對外綁定、認證。空心灰圈＝沒有資訊，不是警告，不用去修。",
+  "@helpMachine2": {
+    "description": "說明：三盞狀態燈"
+  },
+  "helpMachine3": "「本機打得到」不等於別台機器連得到——綠燈底下的那句備註要讀。",
+  "@helpMachine3": {
+    "description": "說明：本機打得到的意義"
+  },
+  "helpMachine4": "連線資訊那一區是要發給成員的東西：Hub 位址、人類 token、Agent token。",
+  "@helpMachine4": {
+    "description": "說明：連線資訊區"
+  },
+  "helpMachine5": "兩把 token 別發錯：Agent token 開不了主持人模式也發不了邀請，人類拿到它會看到像「這台 Hub 不是你主持的」的錯誤。",
+  "@helpMachine5": {
+    "description": "說明：別把 token 發錯"
+  },
+  "helpMachine6a": "綁在 ",
+  "@helpMachine6a": {
+    "description": "說明：0.0.0.0 之前的文字"
+  },
+  "helpMachine6b": " 時，發給成員的位址要換成他們連得到的 IP。",
+  "@helpMachine6b": {
+    "description": "說明：0.0.0.0 之後的文字"
+  },
+  "helpMachine7": "Hub 是本機的伺服器進程，關掉 App 不會停 Hub。「停止 Hub」殺掉所有 Hub 進程，包含自己在前景視窗開的那個。",
+  "@helpMachine7": {
+    "description": "說明：Hub 進程與停止"
+  },
+  "helpMachine8": "自動啟動：一般權限註冊＝登入時自啟；以系統管理員執行 App 再註冊＝開機自啟。",
+  "@helpMachine8": {
+    "description": "說明：自動啟動"
+  },
+  "helpMachine9": "「安裝位置」是 kit 的根目錄，要手動改設定或看 log 時從那裡進去。",
+  "@helpMachine9": {
+    "description": "說明：安裝位置"
+  },
+  "helpTunnel1": "隧道：把這台 Hub 放到公網上，擋在前面的只有 token。",
+  "@helpTunnel1": {
+    "description": "說明：隧道是什麼"
+  },
+  "helpTunnel2": "一次只能有一條，要換網址先關閉再開。網址每次重開都會變，換過之後邀請碼要重發。",
+  "@helpTunnel2": {
+    "description": "說明：隧道數量與網址"
+  },
+  "helpTunnel3a": "備份：資料庫與 ",
+  "@helpTunnel3a": {
+    "description": "說明：attachments/ 之前的文字"
+  },
+  "helpTunnel3b": " 一起收進 ",
+  "@helpTunnel3b": {
+    "description": "說明：attachments/ 與 backups 之間的文字"
+  },
+  "helpTunnel3c": "。還原前 Hub 必須先停止，而且會自動先備份現況。",
+  "@helpTunnel3c": {
+    "description": "說明：還原前要停 Hub"
+  },
+  "helpTunnel4": "換 token：重啟 Hub 後才生效，之後每個成員都要換成新的，agent 那邊的 kit 也要一起換。",
+  "@helpTunnel4": {
+    "description": "說明：換 token"
+  },
+  "helpLink1": "接入狀態的兩盞燈只回答「這台機器連不連得到 Hub」與「這把 token 認不認得」。",
+  "@helpLink1": {
+    "description": "說明：接入狀態兩盞燈"
+  },
+  "helpLink2": "它答不了「agent 認得那些工具了嗎」——那要看 agent 進程載了哪一份 bridge，App 看不到。",
+  "@helpLink2": {
+    "description": "說明：接入燈答不了的事"
+  },
+  "helpLink3a": "要確認跑著的是哪一份，讓 agent 呼叫 ",
+  "@helpLink3a": {
+    "description": "說明：chatroom_join 之前的文字（接入）"
+  },
+  "helpLink3b": " 並看回傳的 ",
+  "@helpLink3b": {
+    "description": "說明：chatroom_join 與 bridge.commit 之間的文字（接入）"
+  },
+  "helpLink3c": "；對不上就重開那個 agent。",
+  "@helpLink3c": {
+    "description": "說明：bridge.commit 對不上時"
+  },
+  "helpRunner1": "執行器是替派工跑 agent 的那個常駐程式，目前沒有 UI 分頁，全部設定都在設定檔裡改。",
+  "@helpRunner1": {
+    "description": "說明：執行器是什麼"
+  },
+  "helpRunner2a": "設定檔在 ",
+  "@helpRunner2a": {
+    "description": "說明：設定檔路徑之前的文字"
+  },
+  "helpRunner2b": "，可以照 ",
+  "@helpRunner2b": {
+    "description": "說明：設定檔路徑與範例檔之間的文字"
+  },
+  "helpRunner2c": " 複製一份再改。",
+  "@helpRunner2c": {
+    "description": "說明：範例設定檔之後的文字"
+  },
+  "helpRunner3a": " 是白名單：沒列在裡面的專案派不了工，Hub 會在建單時就擋下來。",
+  "@helpRunner3a": {
+    "description": "說明：projects 設定"
+  },
+  "helpRunner4a": " 列這個專案底下每一個 repo 的本機路徑。一次派工動得到全部，所以漏掉的那個 agent 碰不到。",
+  "@helpRunner4a": {
+    "description": "說明：repos 設定"
+  },
+  "helpRunner5a": " 是這個 repo 准許動工的分支。工作樹停在清單外的分支時整筆派工直接失敗，而不是幫你切過去。",
+  "@helpRunner5a": {
+    "description": "說明：allowed_branches 設定"
+  },
+  "helpRunner6a": " 是建單沒指定時的主工作目錄，必須是 ",
+  "@helpRunner6a": {
+    "description": "說明：default_repo 設定前半"
+  },
+  "helpRunner6b": " 裡真的有的那個名字，否則設定讀不起來。",
+  "@helpRunner6b": {
+    "description": "說明：default_repo 設定後半"
+  },
+  "helpRunner7a": " 是判斷何時該交接的依據（預設 1000000）。填得比模型實際的視窗大，交接會來不及。",
+  "@helpRunner7a": {
+    "description": "說明：context_window_tokens 設定"
+  },
+  "helpRunner8": "設定檔是啟動時讀的：改完要重啟執行器才算數。",
+  "@helpRunner8": {
+    "description": "說明：改設定檔要重啟"
+  },
+  "helpVersionHub1": "橫幅說「Hub 版本較舊」就更新 Hub。",
+  "@helpVersionHub1": {
+    "description": "說明：Hub 版本較舊的處理"
+  },
+  "commonCreate": "建立",
+  "@commonCreate": {
+    "description": "對話框的建立鈕"
+  },
+  "commonActive": "進行中",
+  "@commonActive": {
+    "description": "狀態：進行中"
+  },
+  "commonArchived": "已封存",
+  "@commonArchived": {
+    "description": "狀態：已封存"
+  },
+  "commonIdle": "閒置",
+  "@commonIdle": {
+    "description": "狀態：閒置"
+  },
+  "roomsDeleted": "已刪除「{name}」（訊息 {messages} 則、附件 {attachments} 個）",
+  "@roomsDeleted": {
+    "description": "刪除房間後的 snackbar",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "messages": {
+        "type": "int"
+      },
+      "attachments": {
+        "type": "int"
+      }
+    }
+  },
+  "roomsArchivePendingAlready": "已經有人提議封存了，還在等建立者確認",
+  "@roomsArchivePendingAlready": {
+    "description": "封存提議重複時的 snackbar"
+  },
+  "roomsArchiveRequested": "已送出封存請求，等建立者確認",
+  "@roomsArchiveRequested": {
+    "description": "送出封存提議後的 snackbar"
+  },
+  "roomsPaneLabel": "聊天室",
+  "@roomsPaneLabel": {
+    "description": "房間列表頂端的小標"
+  },
+  "roomsHostModeLabel": "主持人模式：看得到全部聊天室",
+  "@roomsHostModeLabel": {
+    "description": "房間列表的主持人模式開關說明"
+  },
+  "roomsSearchHint": "搜尋聊天室…",
+  "@roomsSearchHint": {
+    "description": "房間列表搜尋框的提示字"
+  },
+  "roomsEmptySearch": "沒有符合「{query}」的聊天室",
+  "@roomsEmptySearch": {
+    "description": "搜尋沒有結果時的空狀態",
+    "placeholders": {
+      "query": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsEmptyActive": "目前沒有進行中的聊天室",
+  "@roomsEmptyActive": {
+    "description": "沒有進行中房間的空狀態"
+  },
+  "roomsEmptyArchived": "沒有已封存的聊天室",
+  "@roomsEmptyArchived": {
+    "description": "沒有封存房間的空狀態"
+  },
+  "roomsCreateButton": "＋ 建立房間",
+  "@roomsCreateButton": {
+    "description": "房間列表底部的建立房間鈕"
+  },
+  "roomsSweepNote": "每 10 分鐘掃描 · 閒置自動移除",
+  "@roomsSweepNote": {
+    "description": "房間列表底部的掃描說明"
+  },
+  "roomsMemberCount": "{count} 位成員",
+  "@roomsMemberCount": {
+    "description": "房間卡片上的成員數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "roomsPrivateBadge": "私人",
+  "@roomsPrivateBadge": {
+    "description": "房間卡片上的私人徽章"
+  },
+  "roomsOpsBadge": "派工",
+  "@roomsOpsBadge": {
+    "description": "房間卡片上的工作房徽章"
+  },
+  "roomsMenuUnarchive": "解除封存",
+  "@roomsMenuUnarchive": {
+    "description": "房間選單：解除封存"
+  },
+  "roomsMenuArchive": "封存",
+  "@roomsMenuArchive": {
+    "description": "房間選單：封存"
+  },
+  "roomsMenuDelete": "永久刪除…",
+  "@roomsMenuDelete": {
+    "description": "房間選單：永久刪除"
+  },
+  "roomsErrorNameEmpty": "房間名稱不可為空",
+  "@roomsErrorNameEmpty": {
+    "description": "建房對話框：名稱空白的錯誤"
+  },
+  "roomsErrorCustomStyleEmpty": "選擇自訂說話方式時要寫下指示內容",
+  "@roomsErrorCustomStyleEmpty": {
+    "description": "建房對話框：自訂說話方式沒填指示的錯誤"
+  },
+  "roomsBoardAttachFailed": "房間建好了，但板沒掛上：{message}",
+  "@roomsBoardAttachFailed": {
+    "description": "建房成功但掛板失敗的 snackbar",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsCreateTitle": "建立房間",
+  "@roomsCreateTitle": {
+    "description": "建房對話框標題"
+  },
+  "roomsFieldName": "名稱",
+  "@roomsFieldName": {
+    "description": "建房對話框：名稱欄位"
+  },
+  "roomsFieldTopic": "主題（給 agent 的上下文）",
+  "@roomsFieldTopic": {
+    "description": "建房對話框：主題欄位"
+  },
+  "roomsFieldTopicHint": "一句話說明這個房間在做什麼…",
+  "@roomsFieldTopicHint": {
+    "description": "建房對話框：主題欄位的提示字"
+  },
+  "roomsFieldKind": "房間類型",
+  "@roomsFieldKind": {
+    "description": "建房對話框：房間類型"
+  },
+  "roomsFieldStyle": "說話方式",
+  "@roomsFieldStyle": {
+    "description": "建房對話框：說話方式"
+  },
+  "roomsFieldStyleInstructions": "自訂指示",
+  "@roomsFieldStyleInstructions": {
+    "description": "建房對話框：自訂指示欄位"
+  },
+  "roomsFieldStyleInstructionsHint": "例：一律用英文回答，句子不要超過兩行。",
+  "@roomsFieldStyleInstructionsHint": {
+    "description": "建房對話框：自訂指示的提示字"
+  },
+  "roomsPrivateTitle": "私人對話",
+  "@roomsPrivateTitle": {
+    "description": "建房對話框：私人對話選項"
+  },
+  "roomsPrivateSubtitle": "必須受邀才能加入",
+  "@roomsPrivateSubtitle": {
+    "description": "建房對話框：私人對話的說明"
+  },
+  "roomsFieldBoard": "任務板（可不掛）",
+  "@roomsFieldBoard": {
+    "description": "建房對話框：任務板欄位"
+  },
+  "roomsKindChat": "一般對話",
+  "@roomsKindChat": {
+    "description": "房間類型：一般對話"
+  },
+  "roomsKindChatSummary": "沒有 agent 在場時會自動封存。",
+  "@roomsKindChatSummary": {
+    "description": "房間類型一般對話的說明"
+  },
+  "roomsKindOps": "工作房（ops）",
+  "@roomsKindOps": {
+    "description": "房間類型：工作房"
+  },
+  "roomsKindOpsSummary": "不自動封存，給遠端派工用。",
+  "@roomsKindOpsSummary": {
+    "description": "房間類型工作房的說明"
+  },
+  "roomsKindOpsUnavailable": "這台機器沒裝執行器，開不了工作房",
+  "@roomsKindOpsUnavailable": {
+    "description": "沒有執行器時工作房被擋住的理由"
+  },
+  "roomsBoardLoading": "正在看有哪些板…",
+  "@roomsBoardLoading": {
+    "description": "建房對話框：板清單載入中"
+  },
+  "roomsBoardNone": "目前沒有可掛的板，進房之後再開一塊",
+  "@roomsBoardNone": {
+    "description": "建房對話框：沒有可掛的板"
+  },
+  "roomsBoardNoAttach": "不掛任務板",
+  "@roomsBoardNoAttach": {
+    "description": "建房對話框：不掛板的選項"
+  },
+  "roomsBoardOption": "{name}　·　{count} 房",
+  "@roomsBoardOption": {
+    "description": "建房對話框：板的下拉選項",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignTitle": "指派 agent",
+  "@assignTitle": {
+    "description": "指派畫面標題，也用在房間選單"
+  },
+  "assignNeedTarget": "請從掃描清單選擇對象，或輸入 session key",
+  "@assignNeedTarget": {
+    "description": "沒有目標就送出指派的 snackbar"
+  },
+  "assignCancelTitle": "收回這筆指派？",
+  "@assignCancelTitle": {
+    "description": "收回指派的確認對話框標題"
+  },
+  "assignCancelBody": "{key} 還沒回應。收回後對方就不會再收到這個邀請。",
+  "@assignCancelBody": {
+    "description": "收回指派的確認對話框內文",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "assignCancelNo": "不要",
+  "@assignCancelNo": {
+    "description": "收回指派對話框的否定鈕"
+  },
+  "assignCancelConfirm": "收回",
+  "@assignCancelConfirm": {
+    "description": "收回指派對話框的確認鈕"
+  },
+  "assignNewLabel": "新指派",
+  "@assignNewLabel": {
+    "description": "指派畫面：新增指派卡的小標"
+  },
+  "assignScannedSessions": "掃描到的 SESSION",
+  "@assignScannedSessions": {
+    "description": "指派畫面：掃描清單的欄位標題"
+  },
+  "assignShowAll": "顯示全部",
+  "@assignShowAll": {
+    "description": "指派畫面：掃描清單顯示全部"
+  },
+  "assignShowActiveOnly": "僅進行中",
+  "@assignShowActiveOnly": {
+    "description": "指派畫面：掃描清單只顯示進行中"
+  },
+  "assignFieldTarget": "目標 session",
+  "@assignFieldTarget": {
+    "description": "指派畫面：目標 session 欄位"
+  },
+  "assignFieldName": "命名（選填）",
+  "@assignFieldName": {
+    "description": "指派畫面：命名欄位"
+  },
+  "assignFieldNameHint": "房內名稱，最多 32 字（選填）",
+  "@assignFieldNameHint": {
+    "description": "指派畫面：命名欄位的提示字"
+  },
+  "assignFieldNote": "備註",
+  "@assignFieldNote": {
+    "description": "指派畫面：備註欄位"
+  },
+  "assignFieldNoteHint": "要 agent 做什麼？",
+  "@assignFieldNoteHint": {
+    "description": "指派畫面：備註欄位的提示字"
+  },
+  "assignSubmit": "送出指派",
+  "@assignSubmit": {
+    "description": "指派畫面：送出鈕"
+  },
+  "assignExpiryNote": "逾時未回應自動過期",
+  "@assignExpiryNote": {
+    "description": "指派畫面：逾時說明"
+  },
+  "assignRoomListLabel": "本房間的指派",
+  "@assignRoomListLabel": {
+    "description": "指派畫面：本房指派清單的小標"
+  },
+  "assignEmpty": "這個房間還沒有任何指派",
+  "@assignEmpty": {
+    "description": "指派清單的空狀態"
+  },
+  "assignScanning": "掃描中…",
+  "@assignScanning": {
+    "description": "指派畫面：掃描中"
+  },
+  "assignScanFailed": "掃描失敗，可手動輸入 session key",
+  "@assignScanFailed": {
+    "description": "指派畫面：掃描失敗"
+  },
+  "assignNoActiveSessions": "沒有 active 的 session（{count} 個閒置中）",
+  "@assignNoActiveSessions": {
+    "description": "只顯示進行中卻一個都沒有時的說明",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignNoSessions": "目前沒有掃描到任何 agent session",
+  "@assignNoSessions": {
+    "description": "完全沒掃到 session 時的說明"
+  },
+  "assignNoHostName": "讀不到本機主機名，無法分辨裝置",
+  "@assignNoHostName": {
+    "description": "讀不到主機名時的說明"
+  },
+  "assignUnlinkedGroup": "尚未接入聊天室（{count}）",
+  "@assignUnlinkedGroup": {
+    "description": "尚未接入聊天室的 session 分組標題",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignUnlinkedNote": "這些名字是掃描編出來的",
+  "@assignUnlinkedNote": {
+    "description": "尚未接入聊天室分組底下的備註"
+  },
+  "assignNoLocalSessions": "這台機器上沒有掃描到 agent",
+  "@assignNoLocalSessions": {
+    "description": "本機沒有掃到 agent 時的說明"
+  },
+  "assignOtherHostsGroup": "其他裝置（{count}）",
+  "@assignOtherHostsGroup": {
+    "description": "其他裝置的 session 分組標題",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignHiddenIdle": "另有 {count} 個閒置的 session 未顯示",
+  "@assignHiddenIdle": {
+    "description": "被過濾掉的閒置 session 數量",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignSessionInRoom": "在「{room}」為 {name}",
+  "@assignSessionInRoom": {
+    "description": "session 列：它在哪間房、叫什麼名字",
+    "placeholders": {
+      "room": {
+        "type": "String"
+      },
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "assignSessionMoreRooms": "（+{count} 房）",
+  "@assignSessionMoreRooms": {
+    "description": "session 列：還在其他幾間房",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "assignSessionUnknownHost": "未知裝置",
+  "@assignSessionUnknownHost": {
+    "description": "session 列：讀不到主機名"
+  },
+  "assignSessionOnHost": "在 {host}",
+  "@assignSessionOnHost": {
+    "description": "session 列：它在哪一台機器上",
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "assignStatusPending": "等待回應",
+  "@assignStatusPending": {
+    "description": "指派狀態：等待回應"
+  },
+  "assignStatusAccepted": "已接受",
+  "@assignStatusAccepted": {
+    "description": "指派狀態：已接受"
+  },
+  "assignStatusDeclined": "已婉拒",
+  "@assignStatusDeclined": {
+    "description": "指派狀態：已婉拒"
+  },
+  "assignStatusCancelled": "已收回",
+  "@assignStatusCancelled": {
+    "description": "指派狀態：已收回"
+  },
+  "assignStatusExpired": "已逾時",
+  "@assignStatusExpired": {
+    "description": "指派狀態：已逾時"
+  },
+  "assignCancelTooltip": "收回這筆指派",
+  "@assignCancelTooltip": {
+    "description": "指派列上收回鈕的 tooltip"
+  },
+  "commonSave": "儲存",
+  "@commonSave": {
+    "description": "通用：儲存按鈕"
+  },
+  "commonUnknownParenthesised": "（不明）",
+  "@commonUnknownParenthesised": {
+    "description": "通用：查不到的人名或值"
+  },
+  "commonTitleField": "標題",
+  "@commonTitleField": {
+    "description": "通用：標題欄位"
+  },
+  "commonOptional": "選填",
+  "@commonOptional": {
+    "description": "通用：選填欄位提示"
+  },
+  "commonNoPermission": "沒有權限",
+  "@commonNoPermission": {
+    "description": "通用：權限不足"
+  },
+  "commonQuoted": "「{text}」",
+  "@commonQuoted": {
+    "description": "通用：把一段文字加上引號",
+    "placeholders": {
+      "text": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskActionStart": "開始",
+  "@boardTaskActionStart": {
+    "description": "任務卡動作：從待辦開始做"
+  },
+  "boardTaskActionFinishDirectly": "直接完成",
+  "@boardTaskActionFinishDirectly": {
+    "description": "任務卡動作：待辦直接標成完成"
+  },
+  "boardTaskActionMarkBlocked": "標記卡住",
+  "@boardTaskActionMarkBlocked": {
+    "description": "任務卡動作：標記卡住"
+  },
+  "boardTaskActionMoveElsewhere": "搬到別處",
+  "@boardTaskActionMoveElsewhere": {
+    "description": "任務卡動作：搬到別的階段"
+  },
+  "boardTaskActionCancel": "取消任務",
+  "@boardTaskActionCancel": {
+    "description": "任務卡動作：取消這張卡"
+  },
+  "boardTaskActionMarkDone": "標記完成",
+  "@boardTaskActionMarkDone": {
+    "description": "任務卡動作：進行中標成完成"
+  },
+  "boardTaskActionUnblock": "解除卡住",
+  "@boardTaskActionUnblock": {
+    "description": "任務卡動作：解除卡住"
+  },
+  "boardTaskActionReopen": "重新開啟",
+  "@boardTaskActionReopen": {
+    "description": "任務卡動作：把完成的卡重新打開"
+  },
+  "boardTaskActionRestore": "復原",
+  "@boardTaskActionRestore": {
+    "description": "任務卡動作：復原被取消的卡"
+  },
+  "boardTaskActionTakeBack": "收回這裡",
+  "@boardTaskActionTakeBack": {
+    "description": "任務卡動作：把搬走的卡收回這個階段"
+  },
+  "boardOrphanReasonIdle": "因閒置移出",
+  "@boardOrphanReasonIdle": {
+    "description": "孤兒卡成因：閒置"
+  },
+  "boardOrphanReasonLeft": "session 已結束",
+  "@boardOrphanReasonLeft": {
+    "description": "孤兒卡成因：session 結束"
+  },
+  "boardOrphanReasonKicked": "被移出聊天室",
+  "@boardOrphanReasonKicked": {
+    "description": "孤兒卡成因：被踢出房間"
+  },
+  "boardOrphanReasonSubagent": "子代理已回收",
+  "@boardOrphanReasonSubagent": {
+    "description": "孤兒卡成因：子代理回收"
+  },
+  "boardWatchBlockedArchived": "這塊板已經封存，追蹤不會再有任何動靜",
+  "@boardWatchBlockedArchived": {
+    "description": "不能追蹤的理由：板已封存"
+  },
+  "boardWatchBlockedRoomsArchived": "這塊板掛著的聊天室都已經封存，通知送不進去。掛一間還開著的房上來才追蹤得到",
+  "@boardWatchBlockedRoomsArchived": {
+    "description": "不能追蹤的理由：掛的房全封存"
+  },
+  "boardWatchBlockedNoRoom": "這塊板還沒有掛接任何聊天室，通知沒有地方可以送。掛一間房上來就可以追蹤了",
+  "@boardWatchBlockedNoRoom": {
+    "description": "不能追蹤的理由：沒有掛接房間"
+  },
+  "boardEntryHintAwaitClose": "{count} 等你收尾",
+  "@boardEntryHintAwaitClose": {
+    "description": "聊天室入口提示：幾個週期等你收尾",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardEntryHintAwaitVerify": "{count} 等你確認",
+  "@boardEntryHintAwaitVerify": {
+    "description": "聊天室入口提示：幾個週期等你確認",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardEntryHintAwaitYou": "{count} 等你",
+  "@boardEntryHintAwaitYou": {
+    "description": "聊天室入口提示：幾件事等你",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardEntryHintOrphans": "{count} 孤兒",
+  "@boardEntryHintOrphans": {
+    "description": "聊天室入口提示：幾張孤兒卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardWatchNoticeSomeCard": "一張卡",
+  "@boardWatchNoticeSomeCard": {
+    "description": "追蹤通知：沒有卡名時的代稱"
+  },
+  "boardWatchNoticeWatchedBoard": "你追蹤的板",
+  "@boardWatchNoticeWatchedBoard": {
+    "description": "追蹤通知：沒有板名時的代稱"
+  },
+  "boardWatchNoticeTaskDone": "{target} 完成了",
+  "@boardWatchNoticeTaskDone": {
+    "description": "追蹤通知：卡完成",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchNoticeTaskCancelled": "{target} 被取消了",
+  "@boardWatchNoticeTaskCancelled": {
+    "description": "追蹤通知：卡被取消",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchNoticeTaskReopened": "{target} 又重新打開了",
+  "@boardWatchNoticeTaskReopened": {
+    "description": "追蹤通知：卡重新打開",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchNoticeDeliveryDegraded": "{target} 不再有聊天室，通知改為只能自己回來看",
+  "@boardWatchNoticeDeliveryDegraded": {
+    "description": "追蹤通知：板沒有掛接房了",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchNoticeDeliveryRestored": "{target} 又有聊天室了，會重新叫醒你",
+  "@boardWatchNoticeDeliveryRestored": {
+    "description": "追蹤通知：板又有掛接房了",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchNoticeOther": "{target} 有變動（{event}）",
+  "@boardWatchNoticeOther": {
+    "description": "追蹤通知：不認得的事件",
+    "placeholders": {
+      "target": {
+        "type": "String"
+      },
+      "event": {
+        "type": "String"
+      }
+    }
+  },
+  "boardAttachTitle": "這間房要掛哪塊任務板",
+  "@boardAttachTitle": {
+    "description": "掛接任務板對話框標題"
+  },
+  "boardAttachCreateNew": "建一塊新的",
+  "@boardAttachCreateNew": {
+    "description": "掛接對話框：建新板"
+  },
+  "boardAttachUseExisting": "掛既有的板",
+  "@boardAttachUseExisting": {
+    "description": "掛接對話框：掛既有板"
+  },
+  "boardAttachNameLabel": "板的名字",
+  "@boardAttachNameLabel": {
+    "description": "掛接對話框：新板名稱欄位"
+  },
+  "boardAttachImportMembers": "把這間房現在的成員加為板的協作者",
+  "@boardAttachImportMembers": {
+    "description": "掛接對話框：匯入成員選項"
+  },
+  "boardAttachImportMembersHint": "只加現在在房裡的人",
+  "@boardAttachImportMembersHint": {
+    "description": "掛接對話框：匯入成員說明"
+  },
+  "boardAttachConfirmExisting": "掛上去",
+  "@boardAttachConfirmExisting": {
+    "description": "掛接對話框：掛既有板的送出鈕"
+  },
+  "boardAttachConfirmNew": "建立並掛上",
+  "@boardAttachConfirmNew": {
+    "description": "掛接對話框：建新板的送出鈕"
+  },
+  "boardLibraryUnavailableText": "這個 Hub 還沒有 Board Library。",
+  "@boardLibraryUnavailableText": {
+    "description": "Hub 不支援 Board Library"
+  },
+  "boardAttachNoUsable": "沒有你能掛的板。",
+  "@boardAttachNoUsable": {
+    "description": "掛接對話框：沒有可掛的板"
+  },
+  "boardAttachedRoomCount": "{count} 房",
+  "@boardAttachedRoomCount": {
+    "description": "板已掛接的聊天室數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardCreateObjectiveTitle": "新增週期",
+  "@boardCreateObjectiveTitle": {
+    "description": "建立對話框標題：週期"
+  },
+  "boardCreateChecklistTitle": "新增階段",
+  "@boardCreateChecklistTitle": {
+    "description": "建立對話框標題：階段"
+  },
+  "boardCreateTaskTitle": "新增任務",
+  "@boardCreateTaskTitle": {
+    "description": "建立對話框標題：任務"
+  },
+  "boardCreateDescriptionField": "描述（可留白）",
+  "@boardCreateDescriptionField": {
+    "description": "建立對話框：描述欄位"
+  },
+  "boardCreatePriority": "優先度",
+  "@boardCreatePriority": {
+    "description": "建立對話框：優先度"
+  },
+  "boardPriorityLow": "低",
+  "@boardPriorityLow": {
+    "description": "優先度：低"
+  },
+  "boardPriorityNormal": "中",
+  "@boardPriorityNormal": {
+    "description": "優先度：中"
+  },
+  "boardPriorityHigh": "高",
+  "@boardPriorityHigh": {
+    "description": "優先度：高"
+  },
+  "boardPriorityHighMark": "▲ 高",
+  "@boardPriorityHighMark": {
+    "description": "卡片上的高優先度標記"
+  },
+  "boardMoveNoIdentity": "沒有可用的身分，這個動作送不出去。",
+  "@boardMoveNoIdentity": {
+    "description": "搬卡失敗：沒有身分"
+  },
+  "boardMoveExplain": "「{title}」會在選定的階段建立一張新卡。",
+  "@boardMoveExplain": {
+    "description": "搬卡對話框說明",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "boardMoveLoading": "還在讀這塊板…",
+  "@boardMoveLoading": {
+    "description": "搬卡對話框：讀取中"
+  },
+  "boardMoveNoObjective": "這塊板上沒有進行中的週期。",
+  "@boardMoveNoObjective": {
+    "description": "搬卡對話框：沒有可搬的週期"
+  },
+  "boardMoveObjectiveHint": "搬到哪個週期…",
+  "@boardMoveObjectiveHint": {
+    "description": "搬卡對話框：週期下拉提示"
+  },
+  "boardObjectiveLabel": "週期",
+  "@boardObjectiveLabel": {
+    "description": "欄位標籤：週期"
+  },
+  "boardChecklistLabel": "階段",
+  "@boardChecklistLabel": {
+    "description": "欄位標籤：階段"
+  },
+  "boardMovePickObjectiveFirst": "先選週期",
+  "@boardMovePickObjectiveFirst": {
+    "description": "搬卡對話框：還沒選週期"
+  },
+  "boardMoveChecklistHint": "搬到哪個階段…",
+  "@boardMoveChecklistHint": {
+    "description": "搬卡對話框：階段下拉提示"
+  },
+  "boardMoveNoChecklist": "這個週期底下沒有別的開著的階段可以放。",
+  "@boardMoveNoChecklist": {
+    "description": "搬卡對話框：沒有可放的階段"
+  },
+  "boardMoveConfirm": "搬過去",
+  "@boardMoveConfirm": {
+    "description": "搬卡對話框：送出鈕"
+  },
+  "boardOutcomeHumanOnly": "宣告結局限人類 owner。",
+  "@boardOutcomeHumanOnly": {
+    "description": "宣告結局失敗：限人類 owner"
+  },
+  "boardOutcomeStillAttached": "這塊板還掛在聊天室上，先解除掛接。",
+  "@boardOutcomeStillAttached": {
+    "description": "宣告結局失敗：還掛著房"
+  },
+  "boardOutcomeNeverAttached": "這塊板從沒掛過聊天室。",
+  "@boardOutcomeNeverAttached": {
+    "description": "宣告結局失敗：從沒掛過房"
+  },
+  "boardOutcomeTitleSettled": "這塊板的結局",
+  "@boardOutcomeTitleSettled": {
+    "description": "宣告結局對話框標題（已收尾）"
+  },
+  "boardOutcomeTitle": "宣告結局",
+  "@boardOutcomeTitle": {
+    "description": "宣告結局對話框標題"
+  },
+  "boardOutcomeCurrent": "目前是「{outcome}」，可以重新打開。",
+  "@boardOutcomeCurrent": {
+    "description": "宣告結局：目前的結局",
+    "placeholders": {
+      "outcome": {
+        "type": "String"
+      }
+    }
+  },
+  "boardOutcomeExplain": "收尾後這塊板移到「已收尾」，隨時可以重新打開。",
+  "@boardOutcomeExplain": {
+    "description": "宣告結局：說明"
+  },
+  "boardOutcomeReopen": "重新打開",
+  "@boardOutcomeReopen": {
+    "description": "宣告結局：重新打開鈕"
+  },
+  "boardOutcomeAbandoned": "廢止",
+  "@boardOutcomeAbandoned": {
+    "description": "宣告結局：廢止"
+  },
+  "boardOutcomeCompleted": "完成",
+  "@boardOutcomeCompleted": {
+    "description": "宣告結局：完成"
+  },
+  "boardSwitchNotSwitched": "沒有更換，原本的任務板還掛在這間房",
+  "@boardSwitchNotSwitched": {
+    "description": "換板結果：第一步就沒過"
+  },
+  "boardSwitchNotSwitchedError": "沒有更換，原本的任務板還掛在這間房：{error}",
+  "@boardSwitchNotSwitchedError": {
+    "description": "換板結果：第一步失敗並帶原因",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "boardSwitchDone": "已更換任務板",
+  "@boardSwitchDone": {
+    "description": "換板結果：成功"
+  },
+  "boardSwitchDetachedOnly": "已解除原本的任務板，這間房現在沒有板",
+  "@boardSwitchDetachedOnly": {
+    "description": "換板結果：只解除了"
+  },
+  "boardSwitchDetachedOnlyError": "已解除原本的任務板，但新的沒有掛上：{error}。這間房現在沒有板",
+  "@boardSwitchDetachedOnlyError": {
+    "description": "換板結果：解除成功但沒掛上",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "boardSwitchConfirmTitle": "更換任務板",
+  "@boardSwitchConfirmTitle": {
+    "description": "換板確認對話框標題"
+  },
+  "boardSwitchConfirmBody": "先解除目前的任務板「{name}」，再挑一塊新的。解除不會刪掉那塊板。",
+  "@boardSwitchConfirmBody": {
+    "description": "換板確認說明（有板名）",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardSwitchConfirmBodyUnnamed": "先解除目前的任務板，再挑一塊新的。解除不會刪掉那塊板。",
+  "@boardSwitchConfirmBodyUnnamed": {
+    "description": "換板確認說明（沒有板名）"
+  },
+  "boardSwitchConfirmAction": "解除並挑一塊新的",
+  "@boardSwitchConfirmAction": {
+    "description": "換板確認：送出鈕"
+  },
+  "boardTaskEditNoTrace": "改動不會在房裡留訊息。",
+  "@boardTaskEditNoTrace": {
+    "description": "編輯任務卡：不留痕說明"
+  },
+  "boardTaskEditTitleEmpty": "標題不能是空的",
+  "@boardTaskEditTitleEmpty": {
+    "description": "編輯任務卡：空標題錯誤"
+  },
+  "boardTaskEditTitle": "編輯任務卡",
+  "@boardTaskEditTitle": {
+    "description": "編輯任務卡對話框標題"
+  },
+  "boardTaskEditDescription": "敘述",
+  "@boardTaskEditDescription": {
+    "description": "編輯任務卡：敘述欄位"
+  },
+  "boardWatchNoticesTitle": "我在等的東西",
+  "@boardWatchNoticesTitle": {
+    "description": "追蹤收件匣標題"
+  },
+  "boardWatchMarkAllRead": "全部標為已讀",
+  "@boardWatchMarkAllRead": {
+    "description": "追蹤收件匣：全部標為已讀"
+  },
+  "boardWatchNoticesEmpty": "沒有在等的東西。",
+  "@boardWatchNoticesEmpty": {
+    "description": "追蹤收件匣：空狀態"
+  },
+  "boardWatchNoUnread": "沒有可以標記的未讀",
+  "@boardWatchNoUnread": {
+    "description": "追蹤收件匣：沒有未讀"
+  },
+  "boardWatchMarkedRead": "{count} 筆標為已讀",
+  "@boardWatchMarkedRead": {
+    "description": "追蹤收件匣：標記了幾筆",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardTrackTitle": "誰在做什麼",
+  "@boardTrackTitle": {
+    "description": "誰在做什麼畫面標題"
+  },
+  "boardTrackOrphanBucket": "已經不在房裡的人",
+  "@boardTrackOrphanBucket": {
+    "description": "誰在做什麼：孤兒卡那一堆的名稱"
+  },
+  "boardTrackEmpty": "這塊板上還沒有卡",
+  "@boardTrackEmpty": {
+    "description": "誰在做什麼：板上沒有卡"
+  },
+  "boardTrackNobodyHolds": "房裡沒有人手上有卡。",
+  "@boardTrackNobodyHolds": {
+    "description": "誰在做什麼：沒有人手上有卡"
+  },
+  "boardTrackInHand": "{count} 在手上",
+  "@boardTrackInHand": {
+    "description": "誰在做什麼：某人手上的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardTrackOrphanExplain": "這些卡沒有人在做，需要有人接手。",
+  "@boardTrackOrphanExplain": {
+    "description": "誰在做什麼：孤兒卡說明"
+  },
+  "boardTrackGroupUnclaimed": "無人接手",
+  "@boardTrackGroupUnclaimed": {
+    "description": "誰在做什麼：孤兒堆的分組名"
+  },
+  "boardTrackGroupSuggested": "被指派但還沒認領",
+  "@boardTrackGroupSuggested": {
+    "description": "誰在做什麼：分組名"
+  },
+  "boardTrackWatchers": "{count} 人在等",
+  "@boardTrackWatchers": {
+    "description": "誰在做什麼：幾個人在追蹤這張卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardStatusTodo": "待辦",
+  "@boardStatusTodo": {
+    "description": "任務狀態：待辦"
+  },
+  "boardStatusInProgress": "進行中",
+  "@boardStatusInProgress": {
+    "description": "任務狀態：進行中"
+  },
+  "boardStatusBlocked": "卡住",
+  "@boardStatusBlocked": {
+    "description": "任務狀態：卡住"
+  },
+  "boardStatusDone": "完成",
+  "@boardStatusDone": {
+    "description": "任務狀態：完成"
+  },
+  "boardStatusCancelled": "已取消",
+  "@boardStatusCancelled": {
+    "description": "任務狀態：已取消"
+  },
+  "boardStatusMoved": "已搬走",
+  "@boardStatusMoved": {
+    "description": "任務狀態：已搬走"
+  },
+  "boardClaimConflictPrefix": "已經被 ",
+  "@boardClaimConflictPrefix": {
+    "description": "認領衝突：前半句"
+  },
+  "boardClaimConflictSuffix": " 領走了。",
+  "@boardClaimConflictSuffix": {
+    "description": "認領衝突：後半句"
+  },
+  "boardTaskRelease": "釋放認領",
+  "@boardTaskRelease": {
+    "description": "卡片動作：釋放認領"
+  },
+  "boardTaskReclaim": "撿回",
+  "@boardTaskReclaim": {
+    "description": "卡片動作：撿回上一世領走的卡"
+  },
+  "boardTaskReclaimHint": "這是你上一世領走的卡。",
+  "@boardTaskReclaimHint": {
+    "description": "卡片說明：可撿回"
+  },
+  "boardTaskTakeOver": "接手",
+  "@boardTaskTakeOver": {
+    "description": "卡片動作：接手孤兒卡"
+  },
+  "boardTaskSuggestedTo": "建議給 ",
+  "@boardTaskSuggestedTo": {
+    "description": "卡片：被建議的人前綴"
+  },
+  "boardTaskGoneParenthesised": "（已不在房內）",
+  "@boardTaskGoneParenthesised": {
+    "description": "卡片：被建議的人已離開"
+  },
+  "boardTaskSuggestionNotLock": "建議不是鎖，誰都能領",
+  "@boardTaskSuggestionNotLock": {
+    "description": "卡片說明：建議不是鎖"
+  },
+  "boardTaskIllDoIt": "我來做",
+  "@boardTaskIllDoIt": {
+    "description": "卡片動作：認領被建議給別人的卡"
+  },
+  "boardTaskUnclaimed": "尚未認領",
+  "@boardTaskUnclaimed": {
+    "description": "卡片：沒有人認領"
+  },
+  "boardTaskClaim": "認領",
+  "@boardTaskClaim": {
+    "description": "卡片動作：認領"
+  },
+  "boardTaskGone": "已不在房內",
+  "@boardTaskGone": {
+    "description": "卡片：持有者已離開"
+  },
+  "boardTaskClaimedAt": "{when} 認領",
+  "@boardTaskClaimedAt": {
+    "description": "卡片：何時認領的",
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "boardWatchBlockedGeneric": "現在不能追蹤這張卡",
+  "@boardWatchBlockedGeneric": {
+    "description": "追蹤停用的泛用理由"
+  },
+  "boardWatchOffTooltip": "取消追蹤。已經送到收件匣的通知不會收回",
+  "@boardWatchOffTooltip": {
+    "description": "追蹤鈴鐺 tooltip：取消追蹤"
+  },
+  "boardWatchOnTooltip": "追蹤：它完成、取消或重新打開時通知我",
+  "@boardWatchOnTooltip": {
+    "description": "追蹤鈴鐺 tooltip：開始追蹤"
+  },
+  "stageFileAlreadyAttached": "這份素材已經在階段上",
+  "@stageFileAlreadyAttached": {
+    "description": "階段素材：重複掛接"
+  },
+  "stageFileAdd": "新增素材",
+  "@stageFileAdd": {
+    "description": "階段素材：新增按鈕"
+  },
+  "stageFileRemoveTitle": "卸除素材",
+  "@stageFileRemoveTitle": {
+    "description": "階段素材：卸除對話框標題"
+  },
+  "stageFileRemoveConfirm": "移除這份素材？",
+  "@stageFileRemoveConfirm": {
+    "description": "階段素材：卸除確認"
+  },
+  "stageFileRemoveAction": "卸除",
+  "@stageFileRemoveAction": {
+    "description": "階段素材：卸除按鈕"
+  },
+  "stageFileAddedBy": "· {name} 掛上",
+  "@stageFileAddedBy": {
+    "description": "階段素材：誰掛上的",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "stageFileEditNote": "編輯備註",
+  "@stageFileEditNote": {
+    "description": "階段素材：編輯備註"
+  },
+  "stageFileRemoveTooltip": "從階段卸除",
+  "@stageFileRemoveTooltip": {
+    "description": "階段素材：卸除 tooltip"
+  },
+  "stageFileAddTitle": "加素材",
+  "@stageFileAddTitle": {
+    "description": "階段素材：加素材對話框標題"
+  },
+  "stageFileNoteLabel": "這是什麼（可留白）",
+  "@stageFileNoteLabel": {
+    "description": "階段素材：備註欄位標籤"
+  },
+  "stageFileNoteHint": "說明（選填）",
+  "@stageFileNoteHint": {
+    "description": "階段素材：備註欄位提示"
+  },
+  "stageFileAttach": "掛上",
+  "@stageFileAttach": {
+    "description": "階段素材：掛上按鈕"
+  },
+  "stageFileNoOpenStage": "這間房的板上還沒有開著的階段",
+  "@stageFileNoOpenStage": {
+    "description": "階段素材：沒有可掛的階段"
+  },
+  "stageFilePickStageTitle": "加到階段",
+  "@stageFilePickStageTitle": {
+    "description": "階段素材：挑階段對話框標題"
+  },
+  "stageFileAttached": "已掛到階段：{title}",
+  "@stageFileAttached": {
+    "description": "階段素材：掛上成功",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "stageFileCount": "素材 {count}",
+  "@stageFileCount": {
+    "description": "階段素材：數量標籤",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "commonUnknownParen": "（未知）",
+  "@commonUnknownParen": {
+    "description": "不知道是誰時的替代名"
+  },
+  "commonClose": "關閉",
+  "@commonClose": {
+    "description": "關閉按鈕或提示"
+  },
+  "commonLoading": "讀取中…",
+  "@commonLoading": {
+    "description": "讀取中的提示"
+  },
+  "commonIrreversible": "此操作無法復原。",
+  "@commonIrreversible": {
+    "description": "不可逆操作的提醒"
+  },
+  "commonListSeparator": "、",
+  "@commonListSeparator": {
+    "description": "把一串名字或檔名串起來的分隔符"
+  },
+  "commonSend": "送出",
+  "@commonSend": {
+    "description": "送出按鈕"
+  },
+  "msgSubagentOf": "↳ {name} 的子代理",
+  "@msgSubagentOf": {
+    "description": "訊息氣泡：這個發話者是誰的子代理",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "msgPinnedBadge": "❖ 已釘選",
+  "@msgPinnedBadge": {
+    "description": "訊息氣泡：已釘選標記"
+  },
+  "msgEditedBadge": "已編輯",
+  "@msgEditedBadge": {
+    "description": "訊息氣泡：已編輯標記"
+  },
+  "msgDeletedBody": "訊息已刪除",
+  "@msgDeletedBody": {
+    "description": "訊息氣泡：訊息已刪除"
+  },
+  "msgMentionGroupAll": "{group}（全體）",
+  "@msgMentionGroupAll": {
+    "description": "群組提及摺疊成的 chip",
+    "placeholders": {
+      "group": {
+        "type": "String"
+      }
+    }
+  },
+  "msgPingedLabel": "提及",
+  "@msgPingedLabel": {
+    "description": "訊息氣泡下方的提及名單小標"
+  },
+  "msgReplyTo": "回覆 {name}",
+  "@msgReplyTo": {
+    "description": "回覆引言的抬頭",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "msgReplyToSeq": "回覆 {name} · #{seq}",
+  "@msgReplyToSeq": {
+    "description": "回覆引言的抬頭，帶原訊息編號",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "seq": {
+        "type": "int"
+      }
+    }
+  },
+  "msgReplyOriginDeleted": "（原訊息已刪除）",
+  "@msgReplyOriginDeleted": {
+    "description": "回覆引言：原訊息已刪除"
+  },
+  "msgMenuPin": "❖　釘選",
+  "@msgMenuPin": {
+    "description": "訊息選單：釘選"
+  },
+  "msgMenuUnpin": "❖　取消釘選",
+  "@msgMenuUnpin": {
+    "description": "訊息選單：取消釘選"
+  },
+  "msgMenuReply": "↩　回覆",
+  "@msgMenuReply": {
+    "description": "訊息選單：回覆"
+  },
+  "msgMenuCreateTask": "❖　建立任務",
+  "@msgMenuCreateTask": {
+    "description": "訊息選單：建立任務"
+  },
+  "msgMenuEdit": "✎　編輯",
+  "@msgMenuEdit": {
+    "description": "訊息選單：編輯"
+  },
+  "msgMenuCopy": "⧉　複製內容",
+  "@msgMenuCopy": {
+    "description": "訊息選單：複製內容"
+  },
+  "msgMenuDelete": "✕　刪除（需確認）",
+  "@msgMenuDelete": {
+    "description": "訊息選單：刪除"
+  },
+  "msgAttachNoOpener": "這台機器沒有可以開啟這種檔案的程式",
+  "@msgAttachNoOpener": {
+    "description": "開啟附件時找不到可用程式"
+  },
+  "msgAttachOpenFailed": "開啟失敗：{message}",
+  "@msgAttachOpenFailed": {
+    "description": "附件開啟失敗",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "msgAttachImageFailed": "圖片載入失敗",
+  "@msgAttachImageFailed": {
+    "description": "圖片附件載入失敗"
+  },
+  "msgAttachSaveDialogTitle": "儲存附件",
+  "@msgAttachSaveDialogTitle": {
+    "description": "存檔對話框標題"
+  },
+  "msgAttachSaved": "已存檔：{filename}",
+  "@msgAttachSaved": {
+    "description": "附件存檔完成",
+    "placeholders": {
+      "filename": {
+        "type": "String"
+      }
+    }
+  },
+  "msgAttachDownloadFailed": "下載失敗：{message}",
+  "@msgAttachDownloadFailed": {
+    "description": "附件下載失敗",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "msgAttachSaveTooltip": "存到本機",
+  "@msgAttachSaveTooltip": {
+    "description": "附件存檔按鈕提示"
+  },
+  "msgAttachStageTooltip": "加到階段",
+  "@msgAttachStageTooltip": {
+    "description": "把附件加到階段的按鈕提示"
+  },
+  "chatFileOnly": "（檔案）{name}",
+  "@chatFileOnly": {
+    "description": "純附件訊息的內容：只有一個檔",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatFileOnlyMore": "（檔案）{name} 等 {count} 個",
+  "@chatFileOnlyMore": {
+    "description": "純附件訊息的內容：多個檔",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatArchivedCannotPost": "此聊天室已封存，無法發言",
+  "@chatArchivedCannotPost": {
+    "description": "封存房的輸入區提示"
+  },
+  "chatEditingSeq": "編輯 #{seq}",
+  "@chatEditingSeq": {
+    "description": "輸入區：正在編輯哪一則",
+    "placeholders": {
+      "seq": {
+        "type": "int"
+      }
+    }
+  },
+  "chatEditNote": "送出後會取代原本的內容，並標記為已編輯",
+  "@chatEditNote": {
+    "description": "輸入區：編輯的後果"
+  },
+  "chatAttachTooltip": "附加檔案（也可以直接把檔案拖進來、或貼上截圖）",
+  "@chatAttachTooltip": {
+    "description": "輸入區附加檔案按鈕的提示"
+  },
+  "chatComposerHint": "輸入訊息…　@ 提及成員，支援 Markdown",
+  "@chatComposerHint": {
+    "description": "輸入框提示（這間房沒有卡可指涉）"
+  },
+  "chatComposerHintCards": "輸入訊息…　@ 提及成員，# 指涉任務，支援 Markdown",
+  "@chatComposerHintCards": {
+    "description": "輸入框提示（這間房有卡可指涉）"
+  },
+  "chatComposerKeys": "ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史",
+  "@chatComposerKeys": {
+    "description": "輸入框下的快捷鍵提示"
+  },
+  "chatWillTag": "→ 會 tag 到：{names}",
+  "@chatWillTag": {
+    "description": "輸入框下：這則會通知到誰",
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "chatTagFromReply": "{name}（回覆）",
+  "@chatTagFromReply": {
+    "description": "會被 tag 到的人來自回覆對象",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatRefsCards": "指涉 {count} 張卡",
+  "@chatRefsCards": {
+    "description": "輸入框下：這則指涉了幾張卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatSendButton": "送出 →",
+  "@chatSendButton": {
+    "description": "輸入框旁的送出鈕"
+  },
+  "chatUploadFailed": "上傳失敗",
+  "@chatUploadFailed": {
+    "description": "附件上傳失敗"
+  },
+  "chatCancelUpload": "取消上傳",
+  "@chatCancelUpload": {
+    "description": "取消上傳的按鈕提示"
+  },
+  "chatUploading": "上傳中…",
+  "@chatUploading": {
+    "description": "附件上傳中"
+  },
+  "chatAttachFiles": "附加檔案",
+  "@chatAttachFiles": {
+    "description": "附加檔案按鈕"
+  },
+  "chatClearAttachments": "清掉附件",
+  "@chatClearAttachments": {
+    "description": "清掉已附加檔案的按鈕提示"
+  },
+  "chatSeeAttachment": "（見附件）",
+  "@chatSeeAttachment": {
+    "description": "只附檔案沒打字時的回答內容"
+  },
+  "chatSend": "送出",
+  "@chatSend": {
+    "description": "問題卡的送出鈕"
+  },
+  "chatQuestionSendPicksPlus": "送出所選 {count} ＋補充",
+  "@chatQuestionSendPicksPlus": {
+    "description": "問題卡：有選項也有補充",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatQuestionSendPicks": "送出所選 {count}",
+  "@chatQuestionSendPicks": {
+    "description": "問題卡：只有選項",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatQuestionAskerUnknown": "有人在問你",
+  "@chatQuestionAskerUnknown": {
+    "description": "問題卡：不知道是誰問的"
+  },
+  "chatQuestionAskerNamed": "{name} 在問你",
+  "@chatQuestionAskerNamed": {
+    "description": "問題卡：問的人是誰",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatQuestionMultiHint": "可以複選",
+  "@chatQuestionMultiHint": {
+    "description": "問題卡：可複選的提示"
+  },
+  "chatQuestionPicked": "已選 {count} 項",
+  "@chatQuestionPicked": {
+    "description": "問題卡：已選幾項",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatQuestionPickedWithNote": "已選 {count} 項，補充會一併帶上",
+  "@chatQuestionPickedWithNote": {
+    "description": "問題卡：已選幾項且有補充",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatQuestionSendSelected": "送出所選",
+  "@chatQuestionSendSelected": {
+    "description": "問題卡：送出所選按鈕"
+  },
+  "chatQuestionAnswerHint": "你的回答…",
+  "@chatQuestionAnswerHint": {
+    "description": "問題卡：自由作答欄提示（沒有選項）"
+  },
+  "chatQuestionOwnAnswerHint": "或自己寫…",
+  "@chatQuestionOwnAnswerHint": {
+    "description": "問題卡：自由作答欄提示（另有選項）"
+  },
+  "chatQuestionSkip": "略過，改在原本的對話裡問我",
+  "@chatQuestionSkip": {
+    "description": "問題卡：略過"
+  },
+  "opsReportLabel": "回報",
+  "@opsReportLabel": {
+    "description": "派工回報區的小標"
+  },
+  "opsReportLoadFailed": "讀不到派工回報：{error}",
+  "@opsReportLoadFailed": {
+    "description": "派工回報讀取失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "opsNoFinishedRuns": "還沒有結束的派工",
+  "@opsNoFinishedRuns": {
+    "description": "派工回報區沒有內容"
+  },
+  "opsMoreRuns": "更多（還有 {count}）",
+  "@opsMoreRuns": {
+    "description": "載入更多派工回報",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "opsRunNoReport": "這一筆沒有留下回報內容。",
+  "@opsRunNoReport": {
+    "description": "派工沒有回報內容"
+  },
+  "opsRunDone": "完成",
+  "@opsRunDone": {
+    "description": "派工狀態：完成"
+  },
+  "opsRunFailed": "失敗",
+  "@opsRunFailed": {
+    "description": "派工狀態：失敗"
+  },
+  "opsRunCancelled": "已取消",
+  "@opsRunCancelled": {
+    "description": "派工狀態：已取消"
+  },
+  "opsRunHandoff": "交接",
+  "@opsRunHandoff": {
+    "description": "派工狀態：交接"
+  },
+  "opsUsageUnreported": "用量未回報",
+  "@opsUsageUnreported": {
+    "description": "執行器沒有回報用量"
+  },
+  "boardTagFeature": "新功能",
+  "@boardTagFeature": {
+    "description": "想法板預設標籤：新功能"
+  },
+  "boardTagDesign": "設計",
+  "@boardTagDesign": {
+    "description": "想法板預設標籤：設計"
+  },
+  "boardTagQuestion": "疑問",
+  "@boardTagQuestion": {
+    "description": "想法板預設標籤：疑問"
+  },
+  "boardTagInUse": "還有 {count} 則段落標著「{tag}」，先把它們改成別的標籤才刪得掉。",
+  "@boardTagInUse": {
+    "description": "標籤還有人在用，刪不掉",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTagIsDefault": "「{tag}」是預設標籤，每塊板都有，刪不掉。",
+  "@boardTagIsDefault": {
+    "description": "預設標籤刪不掉",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTagTooltip": "標籤",
+  "@boardTagTooltip": {
+    "description": "標籤選單的提示"
+  },
+  "boardTagNone": "不標",
+  "@boardTagNone": {
+    "description": "標籤選單：清掉標籤"
+  },
+  "boardTagAdd": "＋標籤",
+  "@boardTagAdd": {
+    "description": "還沒標時的 chip"
+  },
+  "boardStateImplemented": "已實作",
+  "@boardStateImplemented": {
+    "description": "段落狀態：已實作"
+  },
+  "boardStateAbandoned": "已放棄",
+  "@boardStateAbandoned": {
+    "description": "段落狀態：已放棄"
+  },
+  "boardStateTooltip": "這則後來怎麼了",
+  "@boardStateTooltip": {
+    "description": "段落狀態選單的提示"
+  },
+  "boardStateClear": "清除標記",
+  "@boardStateClear": {
+    "description": "段落狀態選單：清除標記"
+  },
+  "boardStateAdd": "＋狀態",
+  "@boardStateAdd": {
+    "description": "還沒標狀態時的 chip"
+  },
+  "inviteErrorRootTokenRequired": "這張憑證發不了邀請，請用主憑證。",
+  "@inviteErrorRootTokenRequired": {
+    "description": "非主憑證發不了邀請"
+  },
+  "inviteErrorListFailed": "無法讀取已發出的邀請",
+  "@inviteErrorListFailed": {
+    "description": "讀取邀請清單失敗"
+  },
+  "inviteCodeTitle": "邀請碼",
+  "@inviteCodeTitle": {
+    "description": "邀請碼對話框標題"
+  },
+  "inviteCodeTitleLabeled": "邀請碼：{label}",
+  "@inviteCodeTitleLabeled": {
+    "description": "邀請碼對話框標題，帶備註",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteFieldTargetUrl": "對方要連的位址",
+  "@inviteFieldTargetUrl": {
+    "description": "邀請碼對話框的位址欄"
+  },
+  "inviteUrlEmpty": "請填一個對方連得到的位址。",
+  "@inviteUrlEmpty": {
+    "description": "位址欄空白"
+  },
+  "inviteUrlLoopback": "這個位址只有你這台機器連得到。",
+  "@inviteUrlLoopback": {
+    "description": "位址是 loopback"
+  },
+  "inviteCodeWarning": "這串字等同密碼，任何拿到的人都能進這台 Hub。",
+  "@inviteCodeWarning": {
+    "description": "邀請碼的安全提醒"
+  },
+  "inviteAgentTokenLabel": "{label} 的 agent",
+  "@inviteAgentTokenLabel": {
+    "description": "加發 agent 憑證時的備註",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteAgentTokenTitle": "agent 憑證",
+  "@inviteAgentTokenTitle": {
+    "description": "agent 憑證對話框標題"
+  },
+  "inviteAgentTokenTitleLabeled": "agent 憑證：{who}",
+  "@inviteAgentTokenTitleLabeled": {
+    "description": "agent 憑證對話框標題，帶備註",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteAgentTokenNote": "這串填進 mcp-kit 安裝器的「Agent token」欄位。",
+  "@inviteAgentTokenNote": {
+    "description": "agent 憑證的交付說明"
+  },
+  "inviteRevokeTitle": "撤銷這份邀請？",
+  "@inviteRevokeTitle": {
+    "description": "撤銷邀請的確認標題"
+  },
+  "inviteRevokeBody": "{label}將立刻失去存取權。",
+  "@inviteRevokeBody": {
+    "description": "撤銷邀請的後果",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteThisToken": "這張 token",
+  "@inviteThisToken": {
+    "description": "沒有備註時對這張憑證的稱呼"
+  },
+  "inviteRevokeAction": "撤銷",
+  "@inviteRevokeAction": {
+    "description": "撤銷邀請的按鈕"
+  },
+  "inviteSectionTitle": "邀請成員",
+  "@inviteSectionTitle": {
+    "description": "設定頁邀請區塊標題"
+  },
+  "inviteSectionHint": "發一份邀請給還沒連上這台 Hub 的人。",
+  "@inviteSectionHint": {
+    "description": "設定頁邀請區塊說明"
+  },
+  "inviteLabelHint": "這份發給誰？（選填，只有你看得到）",
+  "@inviteLabelHint": {
+    "description": "邀請備註欄提示"
+  },
+  "inviteCreateAction": "產生邀請碼",
+  "@inviteCreateAction": {
+    "description": "產生邀請碼按鈕"
+  },
+  "inviteNoneIssued": "還沒發出任何邀請",
+  "@inviteNoneIssued": {
+    "description": "邀請清單為空"
+  },
+  "inviteNeverUsed": "尚未使用 · 發於 {time}",
+  "@inviteNeverUsed": {
+    "description": "邀請從沒被用過",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteLastUsed": "最後使用 {time}",
+  "@inviteLastUsed": {
+    "description": "邀請最後一次被用的時間",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteShowAgentToken": "重新顯示 agent 憑證",
+  "@inviteShowAgentToken": {
+    "description": "重新顯示 agent 憑證的按鈕提示"
+  },
+  "inviteShowCode": "重新顯示邀請碼",
+  "@inviteShowCode": {
+    "description": "重新顯示邀請碼的按鈕提示"
+  },
+  "inviteAddAgentToken": "加發一張 agent 憑證給這個人",
+  "@inviteAddAgentToken": {
+    "description": "加發 agent 憑證的按鈕提示"
+  },
+  "inviteHumanTitle": "邀請成員加入",
+  "@inviteHumanTitle": {
+    "description": "邀請人類進房的對話框標題"
+  },
+  "inviteHumanHint": "只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。",
+  "@inviteHumanHint": {
+    "description": "邀請人類進房的範圍說明"
+  },
+  "inviteScanFailed": "掃描失敗，稍後再試",
+  "@inviteScanFailed": {
+    "description": "掃描可邀請的人失敗"
+  },
+  "inviteNobodyToInvite": "沒有可邀請的人",
+  "@inviteNobodyToInvite": {
+    "description": "完全沒有人可邀請"
+  },
+  "inviteAllAlreadyHere": "列得出來的人都已經在這個房間裡了",
+  "@inviteAllAlreadyHere": {
+    "description": "有人但都已在房裡"
+  },
+  "inviteNoteHint": "選填，對方會看到",
+  "@inviteNoteHint": {
+    "description": "邀請附註欄提示"
+  },
+  "inviteSendAction": "送出邀請",
+  "@inviteSendAction": {
+    "description": "送出邀請按鈕"
+  },
+  "inviteUnknownSource": "來源不明",
+  "@inviteUnknownSource": {
+    "description": "沒有來源位址的連線"
+  },
+  "settingsVersionUnknownCommit": "{version}（commit 未知）",
+  "@settingsVersionUnknownCommit": {
+    "description": "App 版本：取不到 commit 時的一行",
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "helpVisualLanguage": "語言在這裡選：跟隨系統／繁體中文／English，選了立刻套用。",
+  "@helpVisualLanguage": {
+    "description": "說明：視覺頁的語言選項"
+  },
+  "helpChatMentionSyntax": "@名字",
+  "@helpChatMentionSyntax": {
+    "description": "說明頁的語法示範：提及成員"
+  },
+  "helpChatCardSyntax": "#[標題]",
+  "@helpChatCardSyntax": {
+    "description": "說明頁的語法示範：指涉任務卡"
+  },
+  "commonDelete": "刪除",
+  "@commonDelete": {
+    "description": "刪除按鈕"
+  },
+  "commonExpand": "展開",
+  "@commonExpand": {
+    "description": "展開按鈕"
+  },
+  "commonCollapse": "收合",
+  "@commonCollapse": {
+    "description": "收合按鈕"
+  },
+  "commonApply": "套用",
+  "@commonApply": {
+    "description": "套用按鈕"
+  },
+  "chatPinnedWallTitle": "釘選訊息",
+  "@chatPinnedWallTitle": {
+    "description": "釘選牆的標題"
+  },
+  "chatNoPinnedMessages": "還沒有釘選的訊息",
+  "@chatNoPinnedMessages": {
+    "description": "釘選牆為空"
+  },
+  "chatJumpToOriginal": "跳回原文 →",
+  "@chatJumpToOriginal": {
+    "description": "釘選牆：跳回訊息原文"
+  },
+  "chatUnpin": "取消釘選",
+  "@chatUnpin": {
+    "description": "釘選牆：取消釘選"
+  },
+  "chatAgentTokenNoRooms": "你手上這張憑證是給 agent 用的（分家前的舊主 token 被降級後也算），人用它進不了任何房間——請主持人重發一份給人的邀請碼",
+  "@chatAgentTokenNoRooms": {
+    "description": "人拿 agent 憑證進房失敗"
+  },
+  "chatNotAMember": "你不是這個聊天室的成員，看不到房內的內容",
+  "@chatNotAMember": {
+    "description": "非成員進房失敗"
+  },
+  "chatMessageGone": "那則訊息已經不在這個聊天室裡了",
+  "@chatMessageGone": {
+    "description": "跳轉目標訊息已不存在"
+  },
+  "chatFocusTooOld": "那則訊息太舊了，已載入 {count} 則仍沒跳到——再往上捲一段後重試",
+  "@chatFocusTooOld": {
+    "description": "往回載仍找不到目標訊息",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatFocusNotFound": "找不到那則訊息",
+  "@chatFocusNotFound": {
+    "description": "找不到目標訊息"
+  },
+  "chatFocusMisaligned": "跳轉沒對準那則訊息，再往上捲一段後重試",
+  "@chatFocusMisaligned": {
+    "description": "跳轉沒對準"
+  },
+  "chatDropIsFolder": "{name} 是資料夾，未加入",
+  "@chatDropIsFolder": {
+    "description": "拖進來的是資料夾",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatEmptyGroupsWarn": "{names} 現在房裡沒有對應的人，沒有人被叫醒",
+  "@chatEmptyGroupsWarn": {
+    "description": "群組提及展開成空",
+    "placeholders": {
+      "names": {
+        "type": "String"
+      }
+    }
+  },
+  "chatTaskUncategorizedFrom": "未分類（來自 #{seq}）",
+  "@chatTaskUncategorizedFrom": {
+    "description": "從訊息建任務時落腳的階段名",
+    "placeholders": {
+      "seq": {
+        "type": "int"
+      }
+    }
+  },
+  "chatTaskAddedToBoard": "已加到 Board 的「未分類」",
+  "@chatTaskAddedToBoard": {
+    "description": "從訊息建任務成功"
+  },
+  "chatGoSee": "去看看",
+  "@chatGoSee": {
+    "description": "提示列上跳到 Board 的動作"
+  },
+  "chatDeleteMessageTitle": "刪除這則訊息？",
+  "@chatDeleteMessageTitle": {
+    "description": "刪除訊息的確認標題"
+  },
+  "chatNoMessages": "還沒有任何訊息",
+  "@chatNoMessages": {
+    "description": "聊天室空狀態"
+  },
+  "chatLoadOlder": "載入更早的訊息…",
+  "@chatLoadOlder": {
+    "description": "往上捲時的載入提示"
+  },
+  "chatNewMessages": "有 {count} 則新訊息",
+  "@chatNewMessages": {
+    "description": "離開視窗期間的新訊息數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDropToAttach": "放開以附加檔案",
+  "@chatDropToAttach": {
+    "description": "拖放檔案的提示"
+  },
+  "chatTopicPrefix": "主題：{topic}",
+  "@chatTopicPrefix": {
+    "description": "標題列的房間主題",
+    "placeholders": {
+      "topic": {
+        "type": "String"
+      }
+    }
+  },
+  "chatHeaderPinned": "◈ 釘選 {count}",
+  "@chatHeaderPinned": {
+    "description": "頂欄：釘選牆入口",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatHeaderOps": "◆ 執行",
+  "@chatHeaderOps": {
+    "description": "頂欄：執行儀表板入口"
+  },
+  "chatHeaderAssign": "指派",
+  "@chatHeaderAssign": {
+    "description": "頂欄：指派入口"
+  },
+  "chatHeaderMembers": "成員 {count}",
+  "@chatHeaderMembers": {
+    "description": "頂欄與成員面板的成員數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatPinnedStripLabel": "釘選",
+  "@chatPinnedStripLabel": {
+    "description": "最新釘選橫條的小標"
+  },
+  "chatPinnedPreview": "{name}：{content}",
+  "@chatPinnedPreview": {
+    "description": "最新釘選橫條的內容預覽",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "content": {
+        "type": "String"
+      }
+    }
+  },
+  "chatPinnedViewAll": "查看全部 →",
+  "@chatPinnedViewAll": {
+    "description": "最新釘選橫條：去釘選牆"
+  },
+  "chatReinviteNote": "請重新加入這個聊天室。",
+  "@chatReinviteNote": {
+    "description": "請離開的成員回來時附的指派說明"
+  },
+  "chatReinviteSent": "已請 {name} 重新加入",
+  "@chatReinviteSent": {
+    "description": "請人回來送出成功",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatReinviteFailed": "請他回來失敗：{error}",
+  "@chatReinviteFailed": {
+    "description": "請人回來失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "chatReinviteTooltip": "請 {name} 重新加入",
+  "@chatReinviteTooltip": {
+    "description": "成員列上請人回來的按鈕提示",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatKickTitle": "將 {name} 移出聊天室？",
+  "@chatKickTitle": {
+    "description": "移出成員的確認標題",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatKickBody": "他用來加入的邀請碼會被整張撤銷，共用同一張的人也會一起斷線。",
+  "@chatKickBody": {
+    "description": "移出成員的後果"
+  },
+  "chatKickAction": "移出",
+  "@chatKickAction": {
+    "description": "移出成員的確認按鈕"
+  },
+  "chatClaimAdminTitle": "接管這個聊天室？",
+  "@chatClaimAdminTitle": {
+    "description": "接管管理權的確認標題"
+  },
+  "chatClaimAdminBodyNoAdmin": "接管之後你就是這個聊天室的管理員。",
+  "@chatClaimAdminBodyNoAdmin": {
+    "description": "接管管理權（目前沒有管理員）"
+  },
+  "chatClaimAdminBody": "{who} 目前是管理員，接管之後他會降為一般成員。",
+  "@chatClaimAdminBody": {
+    "description": "接管管理權（目前有管理員）",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "chatClaimAdminAction": "接管",
+  "@chatClaimAdminAction": {
+    "description": "接管管理權的確認按鈕"
+  },
+  "chatClaimAdminDone": "你現在是這個聊天室的管理員",
+  "@chatClaimAdminDone": {
+    "description": "接管成功"
+  },
+  "chatClaimAdminAlreadyYours": "這個聊天室本來就是你的",
+  "@chatClaimAdminAlreadyYours": {
+    "description": "接管時本來就是自己"
+  },
+  "chatClaimThisRoom": "接管這個聊天室",
+  "@chatClaimThisRoom": {
+    "description": "成員面板底部的接管按鈕"
+  },
+  "chatHideHiddenMembers": "收起已隱藏的成員",
+  "@chatHideHiddenMembers": {
+    "description": "成員面板：收起已隱藏"
+  },
+  "chatShowHiddenMembers": "顯示已隱藏的成員（{count}）",
+  "@chatShowHiddenMembers": {
+    "description": "成員面板：顯示已隱藏",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatMembersActive": "進行中",
+  "@chatMembersActive": {
+    "description": "成員面板：進行中的成員"
+  },
+  "chatMembersGone": "已離開",
+  "@chatMembersGone": {
+    "description": "成員面板：已離開的成員"
+  },
+  "chatMembersHidden": "已隱藏",
+  "@chatMembersHidden": {
+    "description": "成員面板：已隱藏的成員"
+  },
+  "chatAssignAgentJoin": "指派 AGENT 加入",
+  "@chatAssignAgentJoin": {
+    "description": "成員面板底部的指派按鈕"
+  },
+  "chatMemberEphemeral": "臨時 · 工作結束即移除",
+  "@chatMemberEphemeral": {
+    "description": "子代理成員的說明"
+  },
+  "chatMemberRemovedIdle": "因閒置移出",
+  "@chatMemberRemovedIdle": {
+    "description": "成員離開原因：閒置"
+  },
+  "chatMemberKicked": "被管理員移出",
+  "@chatMemberKicked": {
+    "description": "成員離開原因：被移出"
+  },
+  "chatMemberSelf": "你 · 管控權",
+  "@chatMemberSelf": {
+    "description": "自己那一列的說明"
+  },
+  "chatMemberIdleWithRemain": "閒置 {idle} · 最快 {remain}後移出",
+  "@chatMemberIdleWithRemain": {
+    "description": "閒置中且會被移出",
+    "placeholders": {
+      "idle": {
+        "type": "String"
+      },
+      "remain": {
+        "type": "String"
+      }
+    }
+  },
+  "chatMemberIdle": "閒置 {idle}",
+  "@chatMemberIdle": {
+    "description": "閒置中",
+    "placeholders": {
+      "idle": {
+        "type": "String"
+      }
+    }
+  },
+  "chatMemberActive": "活躍 · {time}",
+  "@chatMemberActive": {
+    "description": "活躍中",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "chatMemberHide": "從我的列表隱藏",
+  "@chatMemberHide": {
+    "description": "成員選單：隱藏"
+  },
+  "chatMemberUnhide": "取消隱藏",
+  "@chatMemberUnhide": {
+    "description": "成員選單：取消隱藏"
+  },
+  "chatMemberClaimAdmin": "接管管理權（主持人）",
+  "@chatMemberClaimAdmin": {
+    "description": "成員選單：接管管理權"
+  },
+  "chatMemberKick": "移出聊天室",
+  "@chatMemberKick": {
+    "description": "成員選單：移出"
+  },
+  "chatBadgeSubagent": "子代理",
+  "@chatBadgeSubagent": {
+    "description": "成員徽章：子代理"
+  },
+  "chatBadgeOnRun": "派工中",
+  "@chatBadgeOnRun": {
+    "description": "成員徽章：正在替派工工作"
+  },
+  "chatBadgeHost": "主機",
+  "@chatBadgeHost": {
+    "description": "成員徽章：這台 Hub 的主持人"
+  },
+  "chatBadgeRoomOwner": "房主",
+  "@chatBadgeRoomOwner": {
+    "description": "成員徽章：房間建立者"
+  },
+  "chatPreviousName": "（原：{name}）",
+  "@chatPreviousName": {
+    "description": "成員改名前的名字",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatUnhighlight": "取消標記",
+  "@chatUnhighlight": {
+    "description": "取消標記成員"
+  },
+  "chatHighlightMember": "標記這個人（他的訊息會以他的顏色框起）",
+  "@chatHighlightMember": {
+    "description": "標記成員"
+  },
+  "chatMoreActions": "更多動作",
+  "@chatMoreActions": {
+    "description": "成員列的更多動作選單"
+  },
+  "chatAnswerFailed": "回答失敗：{message}",
+  "@chatAnswerFailed": {
+    "description": "回答問題失敗",
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "chatUploadFailedNamed": "{name} 上傳失敗：{message}",
+  "@chatUploadFailedNamed": {
+    "description": "回答問題時附件上傳失敗",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "chatPendingQuestions": "待答問題 {count}",
+  "@chatPendingQuestions": {
+    "description": "待答問題區的小標",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardAttachAction": "❖ 掛接任務板",
+  "@boardAttachAction": {
+    "description": "頂欄：掛接任務板"
+  },
+  "boardNoBoard": "❖ 尚無任務板",
+  "@boardNoBoard": {
+    "description": "頂欄：這間房還沒有任務板"
+  },
+  "boardPreviousDeletedCanAttach": "原先的任務板已被刪除，可以掛一塊新的",
+  "@boardPreviousDeletedCanAttach": {
+    "description": "原先的板被刪掉，還能再掛"
+  },
+  "boardOnlyAdminCanAttach": "只有房間管理者能掛接任務板",
+  "@boardOnlyAdminCanAttach": {
+    "description": "非管理者掛不了板"
+  },
+  "boardDeletedLabel": "❖ 任務板已刪除",
+  "@boardDeletedLabel": {
+    "description": "頂欄：任務板已被刪除"
+  },
+  "boardPreviousDeleted": "這間房原先的任務板已被刪除",
+  "@boardPreviousDeleted": {
+    "description": "封存房的板已被刪除"
+  },
+  "boardPreviousDeletedNamed": "這間房原先的任務板「{name}」已被刪除",
+  "@boardPreviousDeletedNamed": {
+    "description": "封存房的板已被刪除，帶名字",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardArchivedNoBoard": "這間房已封存，沒有任務板",
+  "@boardArchivedNoBoard": {
+    "description": "封存房從沒有過板"
+  },
+  "boardEntryLabel": "❖ 任務板",
+  "@boardEntryLabel": {
+    "description": "頂欄：任務板入口"
+  },
+  "boardEntryLabelWith": "❖ 任務板 {label}",
+  "@boardEntryLabelWith": {
+    "description": "頂欄：任務板入口帶進度",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "boardAttachedNoNewMembers": "掛好了。沒有新的協作者——房裡的人本來就都在這塊板上",
+  "@boardAttachedNoNewMembers": {
+    "description": "掛板成功但沒有新協作者"
+  },
+  "boardAttachedWithMembers": "掛好了，把 {count} 位成員加為協作者",
+  "@boardAttachedWithMembers": {
+    "description": "掛板成功並匯入成員",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardSwitchMenu": "更換任務板…",
+  "@boardSwitchMenu": {
+    "description": "溢位選單：更換任務板"
+  },
+  "roomsArchivedBadge": "已封存",
+  "@roomsArchivedBadge": {
+    "description": "標題列的封存徽章"
+  },
+  "roomsUnarchive": "解除封存",
+  "@roomsUnarchive": {
+    "description": "頂欄：解除封存"
+  },
+  "roomsRenameTitle": "房間改名",
+  "@roomsRenameTitle": {
+    "description": "房間改名對話框標題"
+  },
+  "roomsRenameHint": "例：Chatroom 開發 09/07",
+  "@roomsRenameHint": {
+    "description": "房間改名的輸入範例"
+  },
+  "roomsDeletedSummary": "已刪除「{name}」（訊息 {messages} 則、附件 {attachments} 個）",
+  "@roomsDeletedSummary": {
+    "description": "刪除房間完成的摘要",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "messages": {
+        "type": "int"
+      },
+      "attachments": {
+        "type": "int"
+      }
+    }
+  },
+  "roomsArchiveAlreadyPending": "已經有人提議封存，等建立者確認",
+  "@roomsArchiveAlreadyPending": {
+    "description": "封存請求已存在"
+  },
+  "roomsArchiveRequestSent": "已送出封存請求",
+  "@roomsArchiveRequestSent": {
+    "description": "封存請求送出"
+  },
+  "roomsRenameMenu": "重新命名…",
+  "@roomsRenameMenu": {
+    "description": "溢位選單：重新命名"
+  },
+  "roomsStyleMenu": "說話方式（{style}）",
+  "@roomsStyleMenu": {
+    "description": "溢位選單：說話方式",
+    "placeholders": {
+      "style": {
+        "type": "String"
+      }
+    }
+  },
+  "roomsUnlockPublic": "解除鎖定（改為公開）",
+  "@roomsUnlockPublic": {
+    "description": "溢位選單：改為公開"
+  },
+  "roomsLockPrivate": "鎖定為私人對話",
+  "@roomsLockPrivate": {
+    "description": "溢位選單：鎖定為私人"
+  },
+  "roomsArchiveMenu": "封存房間（唯讀，之後會被永久刪除）",
+  "@roomsArchiveMenu": {
+    "description": "溢位選單：封存房間"
+  },
+  "roomsLeaveMenu": "離開房間",
+  "@roomsLeaveMenu": {
+    "description": "溢位選單：離開房間"
+  },
+  "roomsDeleteMenu": "永久刪除房間…",
+  "@roomsDeleteMenu": {
+    "description": "溢位選單：永久刪除房間"
+  },
+  "roomsStyleCustomRequired": "選擇自訂說話方式時要寫下指示內容",
+  "@roomsStyleCustomRequired": {
+    "description": "自訂說話方式沒寫內容"
+  },
+  "roomsStyleTitle": "說話方式",
+  "@roomsStyleTitle": {
+    "description": "說話方式對話框標題"
+  },
+  "roomsStyleHint": "房內 agent 的說話方式。",
+  "@roomsStyleHint": {
+    "description": "說話方式對話框說明"
+  },
+  "roomsStyleCustomHint": "例：一律用英文回答，句子不要超過兩行。",
+  "@roomsStyleCustomHint": {
+    "description": "自訂說話方式的輸入範例"
+  },
+  "inviteSentJoinRoom": "邀請已送出，對方接受後會加入這個聊天室",
+  "@inviteSentJoinRoom": {
+    "description": "邀請人類進房送出成功"
+  },
+  "commonEdit": "編輯",
+  "@commonEdit": {
+    "description": "通用：編輯"
+  },
+  "commonCloseUp": "關起來",
+  "@commonCloseUp": {
+    "description": "通用：把對話框收起來"
+  },
+  "commonSending": "送出中…",
+  "@commonSending": {
+    "description": "通用：送出中"
+  },
+  "commonMoreActions": "更多動作",
+  "@commonMoreActions": {
+    "description": "通用：更多動作選單"
+  },
+  "commonAll": "全部",
+  "@commonAll": {
+    "description": "通用：全部（篩選）"
+  },
+  "commonEmpty": "（空的）",
+  "@commonEmpty": {
+    "description": "通用：內容是空的"
+  },
+  "boardTaskDrawerTitle": "任務",
+  "@boardTaskDrawerTitle": {
+    "description": "任務抽屜標題"
+  },
+  "boardTaskDrawerTitleIn": "任務 · {stage}",
+  "@boardTaskDrawerTitleIn": {
+    "description": "任務抽屜標題（帶階段）",
+    "placeholders": {
+      "stage": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskMetaMovedTo": "搬去了",
+  "@boardTaskMetaMovedTo": {
+    "description": "任務抽屜：搬去哪了"
+  },
+  "boardTaskMovedUnknown": "沒說去哪",
+  "@boardTaskMovedUnknown": {
+    "description": "任務抽屜：去向留白"
+  },
+  "boardTaskMovedNotInCache": "這份快取裡找不到的一張卡",
+  "@boardTaskMovedNotInCache": {
+    "description": "任務抽屜：目標卡不在快取"
+  },
+  "boardTaskMovedBlank": "去向留白",
+  "@boardTaskMovedBlank": {
+    "description": "任務抽屜：去向留白的警示標"
+  },
+  "boardTaskMetaHolder": "持有者",
+  "@boardTaskMetaHolder": {
+    "description": "任務抽屜：持有者"
+  },
+  "boardTaskMetaAssignee": "指定對象",
+  "@boardTaskMetaAssignee": {
+    "description": "任務抽屜：指定對象"
+  },
+  "boardTaskSuggestion": "建議",
+  "@boardTaskSuggestion": {
+    "description": "任務抽屜：這是建議不是指派"
+  },
+  "boardTaskSuggestionBy": "{name}指定 · 建議",
+  "@boardTaskSuggestionBy": {
+    "description": "任務抽屜：誰提的建議",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskRequestPending": "待回覆",
+  "@boardTaskRequestPending": {
+    "description": "任務抽屜：請求待回覆"
+  },
+  "boardTaskRequestAccepted": "已接受",
+  "@boardTaskRequestAccepted": {
+    "description": "任務抽屜：請求已接受"
+  },
+  "boardTaskRequestDeclined": "已婉拒",
+  "@boardTaskRequestDeclined": {
+    "description": "任務抽屜：請求已婉拒"
+  },
+  "boardTaskRequestBy": "{name}提出 · {when}",
+  "@boardTaskRequestBy": {
+    "description": "任務抽屜：誰在何時提出的請求",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskMetaCreated": "建立",
+  "@boardTaskMetaCreated": {
+    "description": "任務抽屜：建立者"
+  },
+  "boardTaskSourceMessage": "長出這張卡的訊息",
+  "@boardTaskSourceMessage": {
+    "description": "任務抽屜：來源訊息標題"
+  },
+  "boardTaskSourceNotLoaded": "這則訊息還沒載入到手上。",
+  "@boardTaskSourceNotLoaded": {
+    "description": "任務抽屜：來源訊息還沒載入"
+  },
+  "boardTaskJumpToRoom": "↩ 跳回聊天室",
+  "@boardTaskJumpToRoom": {
+    "description": "任務抽屜：跳回聊天室"
+  },
+  "boardTaskRequestAcceptedToast": "接下了，這張卡現在指向你",
+  "@boardTaskRequestAcceptedToast": {
+    "description": "接下請求的回饋"
+  },
+  "boardTaskRequestDeclinedToast": "已回覆婉拒",
+  "@boardTaskRequestDeclinedToast": {
+    "description": "婉拒請求的回饋"
+  },
+  "boardTaskMovedToast": "已搬走。新的那張卡在你選的階段上，這張指向它。",
+  "@boardTaskMovedToast": {
+    "description": "搬卡成功的回饋"
+  },
+  "boardTaskAssignCleared": "已取消指派",
+  "@boardTaskAssignCleared": {
+    "description": "取消指派成功"
+  },
+  "boardTaskAssignNothingToClear": "沒有東西可以取消",
+  "@boardTaskAssignNothingToClear": {
+    "description": "取消指派：本來就沒有指派"
+  },
+  "boardTaskPickRoomTitle": "指到哪一間聊天室",
+  "@boardTaskPickRoomTitle": {
+    "description": "板軸指派：先選房"
+  },
+  "boardTaskRoomMembersUnreadable": "讀不到那間房的成員：{error}",
+  "@boardTaskRoomMembersUnreadable": {
+    "description": "板軸指派：讀不到房間成員",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskAssignTitle": "請誰接手這張卡",
+  "@boardTaskAssignTitle": {
+    "description": "指派對話框標題"
+  },
+  "boardRoomHasNobodyElse": "這間房裡沒有其他人。",
+  "@boardRoomHasNobodyElse": {
+    "description": "房裡沒有其他人"
+  },
+  "boardTaskAssignedTo": "已指派給 {name}",
+  "@boardTaskAssignedTo": {
+    "description": "指派成功",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskAssignAlreadyPending": "已經在等 {name} 回覆了",
+  "@boardTaskAssignAlreadyPending": {
+    "description": "指派：已經有一筆在等",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskAssignRequested": "已送出請求，等 {name} 回覆",
+  "@boardTaskAssignRequested": {
+    "description": "指派：送出請求",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskAccept": "接下",
+  "@boardTaskAccept": {
+    "description": "任務請求：接下"
+  },
+  "boardDispatchRun": "派工",
+  "@boardDispatchRun": {
+    "description": "派工按鈕"
+  },
+  "boardDispatchTargetTask": "卡：{title}",
+  "@boardDispatchTargetTask": {
+    "description": "派工目標：一張卡",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDispatchTargetStage": "階段：{title}",
+  "@boardDispatchTargetStage": {
+    "description": "派工目標：一個階段",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "boardTaskAssignSomeoneElse": "改請別人",
+  "@boardTaskAssignSomeoneElse": {
+    "description": "選單：改請別人接手"
+  },
+  "boardTaskAssignSomeone": "請人接手",
+  "@boardTaskAssignSomeone": {
+    "description": "選單：請人接手"
+  },
+  "boardTaskAssignNeedsRoom": "掛到房間後才能指派",
+  "@boardTaskAssignNeedsRoom": {
+    "description": "選單：指派停用的理由"
+  },
+  "boardTaskAssignClear": "取消指派",
+  "@boardTaskAssignClear": {
+    "description": "選單：取消指派"
+  },
+  "boardDirectiveSent": "已送出",
+  "@boardDirectiveSent": {
+    "description": "判斷送出成功"
+  },
+  "boardDirectiveAuditedNobodyNotified": "已寫進稽核串，但沒有人收到通知",
+  "@boardDirectiveAuditedNobodyNotified": {
+    "description": "判斷：廣播沒有人收到通知"
+  },
+  "boardDirectiveAuditedTargetNotNotified": "已寫進稽核串，但對方沒有收到通知",
+  "@boardDirectiveAuditedTargetNotNotified": {
+    "description": "判斷：單點沒有送達"
+  },
+  "boardDirectiveRoomArchived": "這間房已封存，這則判斷沒有送出。",
+  "@boardDirectiveRoomArchived": {
+    "description": "判斷：封存房拒收"
+  },
+  "boardDirectiveSectionTitle": "判斷與建議",
+  "@boardDirectiveSectionTitle": {
+    "description": "Supervisor 面板：判斷串標題"
+  },
+  "boardDirectiveEmpty": "還沒有人下過判斷。",
+  "@boardDirectiveEmpty": {
+    "description": "判斷串：空狀態"
+  },
+  "boardDirectiveTruncated": "還有更早的紀錄（只顯示最近 50 則）",
+  "@boardDirectiveTruncated": {
+    "description": "判斷串：截斷提示"
+  },
+  "boardDirectiveToAll": "→ 全體",
+  "@boardDirectiveToAll": {
+    "description": "判斷：廣播給全體"
+  },
+  "boardDirectiveTo": "→ {name}",
+  "@boardDirectiveTo": {
+    "description": "判斷：送給某個人",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDirectiveUndelivered": "未送達",
+  "@boardDirectiveUndelivered": {
+    "description": "判斷：沒有送達"
+  },
+  "boardDirectiveNoMembers": "這塊板上還沒有成員，沒有人可以收。",
+  "@boardDirectiveNoMembers": {
+    "description": "判斷：板上沒有成員"
+  },
+  "boardDirectivePickRecipient": "選一個收件者…",
+  "@boardDirectivePickRecipient": {
+    "description": "判斷：收件者下拉提示"
+  },
+  "boardDirectiveAllMembers": "所有板成員（{count}）",
+  "@boardDirectiveAllMembers": {
+    "description": "判斷：廣播選項",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardDirectiveHint": "這輪的判斷…",
+  "@boardDirectiveHint": {
+    "description": "判斷：輸入框提示"
+  },
+  "boardSupervisorsAttachedTitle": "掛接聊天室的 SUPERVISOR",
+  "@boardSupervisorsAttachedTitle": {
+    "description": "掛接房 supervisor 區標題"
+  },
+  "boardSupervisorNobodyWatching": "還沒有人在看。",
+  "@boardSupervisorNobodyWatching": {
+    "description": "掛接房沒有 supervisor"
+  },
+  "boardSupervisorDeparted": "已離開",
+  "@boardSupervisorDeparted": {
+    "description": "supervisor 已離開"
+  },
+  "boardRoomSupervisorPickTitle": "這間房的 Supervisor",
+  "@boardRoomSupervisorPickTitle": {
+    "description": "指派 supervisor 對話框標題"
+  },
+  "boardRoomSupervisorTitle": "這間房的 SUPERVISOR",
+  "@boardRoomSupervisorTitle": {
+    "description": "房間 supervisor 區標題"
+  },
+  "boardSupervisorNone": "還沒有指派 Supervisor。",
+  "@boardSupervisorNone": {
+    "description": "沒有指派 supervisor"
+  },
+  "boardSupervisorLeftRoom": "已離開這間房",
+  "@boardSupervisorLeftRoom": {
+    "description": "supervisor 已離開這間房"
+  },
+  "boardSupervisorAssign": "指派",
+  "@boardSupervisorAssign": {
+    "description": "指派 supervisor"
+  },
+  "boardSupervisorReplace": "換人",
+  "@boardSupervisorReplace": {
+    "description": "換 supervisor"
+  },
+  "boardSupervisorStepDown": "卸任",
+  "@boardSupervisorStepDown": {
+    "description": "supervisor 卸任"
+  },
+  "boardRoomArchivedNoStaffChange": "這間房已封存，人事不再變動。",
+  "@boardRoomArchivedNoStaffChange": {
+    "description": "封存房不改人事"
+  },
+  "boardOwnerTransferTitle": "把這塊板交給誰",
+  "@boardOwnerTransferTitle": {
+    "description": "移交 owner 對話框標題"
+  },
+  "boardOwnerNobodyToTransfer": "板上沒有別人可以接。先把人加進來。",
+  "@boardOwnerNobodyToTransfer": {
+    "description": "移交：沒有人可以接"
+  },
+  "boardOwnerStillOwner": "{name} 還是這塊板的 owner——接管只在無主的板上做得到",
+  "@boardOwnerStillOwner": {
+    "description": "接管失敗：還有 owner",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardOwnerStillOwnerSeen": "{name} 還是這塊板的 owner（最後出現：{seen}）——接管只在無主的板上做得到",
+  "@boardOwnerStillOwnerSeen": {
+    "description": "接管失敗：還有 owner 且知道最後出現時間",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "seen": {
+        "type": "String"
+      }
+    }
+  },
+  "boardOwnerSectionTitle": "這塊板是誰的",
+  "@boardOwnerSectionTitle": {
+    "description": "板 owner 區標題"
+  },
+  "boardOwnerNone": "這塊板現在沒有人管得動。",
+  "@boardOwnerNone": {
+    "description": "板沒有 owner"
+  },
+  "boardOwnerTransfer": "移交",
+  "@boardOwnerTransfer": {
+    "description": "移交 owner 按鈕"
+  },
+  "boardOwnerClaim": "接管",
+  "@boardOwnerClaim": {
+    "description": "接管 owner 按鈕"
+  },
+  "boardRenameTitle": "板改名",
+  "@boardRenameTitle": {
+    "description": "板改名對話框標題"
+  },
+  "boardRenameHint": "例：09/07 週期",
+  "@boardRenameHint": {
+    "description": "板改名輸入提示"
+  },
+  "boardRenameOwnerOnly": "只有這塊板的 owner 能改它的名字。",
+  "@boardRenameOwnerOnly": {
+    "description": "改名失敗：限 owner"
+  },
+  "boardArchiveOwnerOnly": "只有這塊板的 owner 能封存它。",
+  "@boardArchiveOwnerOnly": {
+    "description": "封存失敗：限 owner"
+  },
+  "boardLibraryTitle": "任務板",
+  "@boardLibraryTitle": {
+    "description": "BOARDS 分頁抬頭"
+  },
+  "boardCreateBoardTooltip": "開一塊板",
+  "@boardCreateBoardTooltip": {
+    "description": "開板按鈕 tooltip"
+  },
+  "boardHostModeLabel": "主持人模式：看得到所有人的板",
+  "@boardHostModeLabel": {
+    "description": "主持人模式開關說明"
+  },
+  "boardLibraryEmptyActive": "目前沒有進行中的任務板",
+  "@boardLibraryEmptyActive": {
+    "description": "板清單空：進行中"
+  },
+  "boardLibraryEmptyArchived": "沒有已封存的任務板",
+  "@boardLibraryEmptyArchived": {
+    "description": "板清單空：已封存"
+  },
+  "boardLibraryEmptySettled": "還沒有板被宣告完成或廢止",
+  "@boardLibraryEmptySettled": {
+    "description": "板清單空：已收尾"
+  },
+  "boardLibraryNotReady": "未就緒",
+  "@boardLibraryNotReady": {
+    "description": "Board Library 未就緒標籤"
+  },
+  "boardLibraryMissing": "這個 Hub 還沒有 Board Library",
+  "@boardLibraryMissing": {
+    "description": "Hub 沒有 Board Library"
+  },
+  "boardLibraryUpgradeHub": "請升級 Hub。",
+  "@boardLibraryUpgradeHub": {
+    "description": "請升級 Hub"
+  },
+  "boardStatusSettled": "已收尾",
+  "@boardStatusSettled": {
+    "description": "板清單分頁：已收尾"
+  },
+  "boardMenuTooltip": "這塊板的操作",
+  "@boardMenuTooltip": {
+    "description": "板卡選單 tooltip"
+  },
+  "boardMenuRename": "重新命名…",
+  "@boardMenuRename": {
+    "description": "板卡選單：重新命名"
+  },
+  "boardMenuUnarchive": "解除封存",
+  "@boardMenuUnarchive": {
+    "description": "板卡選單：解除封存"
+  },
+  "boardMenuArchive": "封存",
+  "@boardMenuArchive": {
+    "description": "板卡選單：封存"
+  },
+  "boardBadgeArchived": "封存",
+  "@boardBadgeArchived": {
+    "description": "徽章：封存"
+  },
+  "boardSomeoneElses": "別人的板",
+  "@boardSomeoneElses": {
+    "description": "主持人模式：查不到 owner 名字"
+  },
+  "boardOwnedBy": "{name} 的板",
+  "@boardOwnedBy": {
+    "description": "主持人模式：這是誰的板",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardInboxOnly": "通知要自己來看",
+  "@boardInboxOnly": {
+    "description": "板沒有活的掛接房"
+  },
+  "boardTaskClaimedCount": "{count} 進行中",
+  "@boardTaskClaimedCount": {
+    "description": "板卡上進行中的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardWatchNoticesTitleUnread": "我在等的東西（{count} 筆新的）",
+  "@boardWatchNoticesTitleUnread": {
+    "description": "追蹤收件匣入口（有未讀）",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardCreateBoardTitle": "開一塊板",
+  "@boardCreateBoardTitle": {
+    "description": "開板對話框標題"
+  },
+  "boardCreateBoardNameLabel": "名稱",
+  "@boardCreateBoardNameLabel": {
+    "description": "開板：名稱欄位"
+  },
+  "boardVisibilityLabel": "誰看得到",
+  "@boardVisibilityLabel": {
+    "description": "開板：可見度標題"
+  },
+  "boardVisibilityPublic": "公開",
+  "@boardVisibilityPublic": {
+    "description": "開板：公開"
+  },
+  "boardVisibilityPublicDetail": "掛接的聊天室成員都看得到",
+  "@boardVisibilityPublicDetail": {
+    "description": "開板：公開說明"
+  },
+  "boardVisibilityPrivate": "私人",
+  "@boardVisibilityPrivate": {
+    "description": "開板：私人"
+  },
+  "boardVisibilityPrivateDetail": "只有你看得到，且只能掛進私人聊天室",
+  "@boardVisibilityPrivateDetail": {
+    "description": "開板：私人說明"
+  },
+  "boardPadBlockCount": "{count} 段",
+  "@boardPadBlockCount": {
+    "description": "想法板：段落數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardPadTags": "標籤",
+  "@boardPadTags": {
+    "description": "想法板：標籤管理按鈕"
+  },
+  "boardPadNoBlockForTag": "這個標籤底下還沒有段落。",
+  "@boardPadNoBlockForTag": {
+    "description": "想法板：篩選後沒有段落"
+  },
+  "boardPadReadOnly": "你在這塊板上是唯讀的，只能看。",
+  "@boardPadReadOnly": {
+    "description": "想法板：唯讀說明"
+  },
+  "boardPadBlockStale": "這一段剛被別人改過，重新載入後再標一次",
+  "@boardPadBlockStale": {
+    "description": "想法板：段落過期"
+  },
+  "boardPadChangedAgain": "又被改了一次：{error}",
+  "@boardPadChangedAgain": {
+    "description": "想法板：再次衝突",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "boardPadTagsTitle": "這塊板的標籤",
+  "@boardPadTagsTitle": {
+    "description": "想法板標籤對話框標題"
+  },
+  "boardPadOneTagPerBlock": "段落一次只標一個。",
+  "@boardPadOneTagPerBlock": {
+    "description": "想法板標籤：一次只標一個"
+  },
+  "boardPadNewTagHint": "新增一個標籤…",
+  "@boardPadNewTagHint": {
+    "description": "想法板標籤：新增輸入提示"
+  },
+  "boardPadUnknownAuthor": "（不知道是誰寫的）",
+  "@boardPadUnknownAuthor": {
+    "description": "想法板：作者不明"
+  },
+  "boardPadSaveBlock": "存起來",
+  "@boardPadSaveBlock": {
+    "description": "想法板：存下這一段"
+  },
+  "boardPadNoteCount": "註解 {count}",
+  "@boardPadNoteCount": {
+    "description": "想法板：註解數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardPadNoteOpenCount": "註解 {count} 則未處理",
+  "@boardPadNoteOpenCount": {
+    "description": "想法板：未處理的註解數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardPadNoteUnresolve": "收回",
+  "@boardPadNoteUnresolve": {
+    "description": "想法板：把處理掉的註解收回"
+  },
+  "boardPadNoteResolve": "處理掉",
+  "@boardPadNoteResolve": {
+    "description": "想法板：處理掉一則註解"
+  },
+  "boardPadAddNote": "＋ 留一則意見",
+  "@boardPadAddNote": {
+    "description": "想法板：留意見"
+  },
+  "boardPadConflictTitle": "這一段在你打字的時候被改過了",
+  "@boardPadConflictTitle": {
+    "description": "想法板衝突對話框標題"
+  },
+  "boardPadConflictExplain": "兩份都在下面，不會自動合併。",
+  "@boardPadConflictExplain": {
+    "description": "想法板衝突說明"
+  },
+  "boardPadConflictMine": "你剛打的",
+  "@boardPadConflictMine": {
+    "description": "想法板衝突：我的版本"
+  },
+  "boardPadConflictTheirs": "現在存著的",
+  "@boardPadConflictTheirs": {
+    "description": "想法板衝突：目前存著的版本"
+  },
+  "boardPadConflictDecideLater": "先不決定",
+  "@boardPadConflictDecideLater": {
+    "description": "想法板衝突：先不決定"
+  },
+  "boardPadConflictUseTheirs": "用現在存著的",
+  "@boardPadConflictUseTheirs": {
+    "description": "想法板衝突：用他們的"
+  },
+  "boardPadConflictUseMine": "用我打的蓋過去",
+  "@boardPadConflictUseMine": {
+    "description": "想法板衝突：用我的蓋過去"
+  },
+  "boardPadAddBlockHint": "再加一段…",
+  "@boardPadAddBlockHint": {
+    "description": "想法板：新段落輸入提示"
+  },
+  "boardPadAddBlock": "加一段",
+  "@boardPadAddBlock": {
+    "description": "想法板：加一段"
+  },
+  "boardPadTitle": "想法板",
+  "@boardPadTitle": {
+    "description": "想法板標題"
+  },
+  "boardPadRoomHasNoBoard": "這個聊天室還沒有掛上任何板。",
+  "@boardPadRoomHasNoBoard": {
+    "description": "房間沒有掛板"
+  },
+  "boardPadCreate": "＋ 開一份",
+  "@boardPadCreate": {
+    "description": "想法板清單：開一份"
+  },
+  "boardPadListEmpty": "還沒有想法板。",
+  "@boardPadListEmpty": {
+    "description": "想法板清單：空狀態"
+  },
+  "boardPadUnresolvedNotes": "{count} 則意見",
+  "@boardPadUnresolvedNotes": {
+    "description": "想法板清單：未處理意見數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardPadNewTitle": "開一份想法板",
+  "@boardPadNewTitle": {
+    "description": "新想法板對話框標題"
+  },
+  "boardPadNameLabel": "叫什麼",
+  "@boardPadNameLabel": {
+    "description": "新想法板：名稱欄位"
+  },
+  "boardPadCreateAction": "開",
+  "@boardPadCreateAction": {
+    "description": "新想法板：建立鈕"
+  },
+  "boardTaskReclaimedToast": "已撿回你先前領走的卡",
+  "@boardTaskReclaimedToast": {
+    "description": "撿回卡片的回饋"
+  },
+  "boardClaimConflictOther": "別人",
+  "@boardClaimConflictOther": {
+    "description": "認領衝突：解析不出持有者名字時的說法"
+  },
+  "boardReopenAndRetry": "重新開啟並繼續",
+  "@boardReopenAndRetry": {
+    "description": "容器已收尾時的補救動作"
+  },
+  "boardArchivedNotice": "這塊板已封存，只能看不能改。",
+  "@boardArchivedNotice": {
+    "description": "封存板的橫幅"
+  },
+  "boardBackToRoom": "← 回到聊天室",
+  "@boardBackToRoom": {
+    "description": "板畫面：回到聊天室"
+  },
+  "boardAttachedRoomsTitle": "掛在這塊板上的聊天室",
+  "@boardAttachedRoomsTitle": {
+    "description": "掛接房清單標題"
+  },
+  "boardRoomCurrent": "目前",
+  "@boardRoomCurrent": {
+    "description": "掛接房清單：目前所在的房"
+  },
+  "boardRoomDetached": "已解除",
+  "@boardRoomDetached": {
+    "description": "掛接房清單：已解除掛接"
+  },
+  "boardObjectiveActiveCount": "週期 · {count} 進行中",
+  "@boardObjectiveActiveCount": {
+    "description": "週期清單抬頭",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardNewObjective": "＋ 新週期",
+  "@boardNewObjective": {
+    "description": "新增週期"
+  },
+  "boardObjectiveDoneCount": "已完成 · {count}",
+  "@boardObjectiveDoneCount": {
+    "description": "已完成的週期清單抬頭",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardAwaitVerify": "等你確認",
+  "@boardAwaitVerify": {
+    "description": "週期徽章：等人確認"
+  },
+  "boardAwaitClose": "等你收尾",
+  "@boardAwaitClose": {
+    "description": "週期徽章：等人收尾"
+  },
+  "boardObjectiveSummary": "{stages} 階段 · {tasks} 任務",
+  "@boardObjectiveSummary": {
+    "description": "週期摘要",
+    "placeholders": {
+      "stages": {
+        "type": "int"
+      },
+      "tasks": {
+        "type": "int"
+      }
+    }
+  },
+  "boardObjectiveSummaryEnded": "{summary} · 已結束",
+  "@boardObjectiveSummaryEnded": {
+    "description": "週期摘要（已結束）",
+    "placeholders": {
+      "summary": {
+        "type": "String"
+      }
+    }
+  },
+  "boardNoChecklistYet": "這個週期還沒有階段。",
+  "@boardNoChecklistYet": {
+    "description": "週期底下沒有階段"
+  },
+  "boardNewChecklist": "＋ 階段",
+  "@boardNewChecklist": {
+    "description": "新增階段"
+  },
+  "boardDoneOfTotal": "{done} / {total} 完成",
+  "@boardDoneOfTotal": {
+    "description": "完成比例",
+    "placeholders": {
+      "done": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "boardObjectiveReview": "送審",
+  "@boardObjectiveReview": {
+    "description": "週期：送審"
+  },
+  "boardObjectiveReopen": "打回",
+  "@boardObjectiveReopen": {
+    "description": "週期：打回"
+  },
+  "boardObjectiveVerify": "確認",
+  "@boardObjectiveVerify": {
+    "description": "週期：確認"
+  },
+  "boardObjectiveComplete": "結束週期",
+  "@boardObjectiveComplete": {
+    "description": "週期：結束"
+  },
+  "boardCloseoutNoStage": "還沒有階段，先開一個",
+  "@boardCloseoutNoStage": {
+    "description": "送審提示：沒有階段"
+  },
+  "boardCloseoutStagesOpen": "{count} 個階段還沒收尾",
+  "@boardCloseoutStagesOpen": {
+    "description": "送審提示：階段沒收尾",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardCloseoutRemaining": "{count} 張未完成",
+  "@boardCloseoutRemaining": {
+    "description": "送審提示：未完成的卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardCloseoutOrphans": "{count} 張已釋出",
+  "@boardCloseoutOrphans": {
+    "description": "送審提示：孤兒卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardCloseoutAllCancelled": "每個階段都被取消了",
+  "@boardCloseoutAllCancelled": {
+    "description": "送審提示：全被取消"
+  },
+  "boardCloseoutReadyForReview": "所有階段都收尾了，可以送審",
+  "@boardCloseoutReadyForReview": {
+    "description": "送審提示：可以送審"
+  },
+  "boardCloseoutInReview": "已送審，等人確認過才能結束週期",
+  "@boardCloseoutInReview": {
+    "description": "送審提示：等確認"
+  },
+  "boardCloseoutVerified": "已確認，可以結束這個週期",
+  "@boardCloseoutVerified": {
+    "description": "送審提示：可以結束"
+  },
+  "boardCloseoutDone": "這個週期已經結束",
+  "@boardCloseoutDone": {
+    "description": "送審提示：已結束"
+  },
+  "boardOrphanBanner": "{count} 張卡的持有者已不在房內",
+  "@boardOrphanBanner": {
+    "description": "孤兒橫幅",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardOrphanLines": "{lines}。",
+  "@boardOrphanLines": {
+    "description": "孤兒橫幅：每個人的成因",
+    "placeholders": {
+      "lines": {
+        "type": "String"
+      }
+    }
+  },
+  "boardShowAll": "看全部",
+  "@boardShowAll": {
+    "description": "孤兒橫幅：看全部"
+  },
+  "boardShowOrphansOnly": "只看孤兒 →",
+  "@boardShowOrphansOnly": {
+    "description": "孤兒橫幅：只看孤兒"
+  },
+  "boardCloseUncategorised": "收尾未分類",
+  "@boardCloseUncategorised": {
+    "description": "收尾未分類那一格"
+  },
+  "boardUncategorisedOpen": "未分類還有 {count} 張沒收尾",
+  "@boardUncategorisedOpen": {
+    "description": "未分類還有沒收尾的卡",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardChecklistDone": "· 已收尾",
+  "@boardChecklistDone": {
+    "description": "階段已收尾"
+  },
+  "boardChecklistClose": "收尾階段",
+  "@boardChecklistClose": {
+    "description": "階段：收尾"
+  },
+  "boardChecklistCancel": "取消階段",
+  "@boardChecklistCancel": {
+    "description": "階段：取消"
+  },
+  "boardChecklistReopen": "重新開啟階段",
+  "@boardChecklistReopen": {
+    "description": "階段：重新開啟"
+  },
+  "boardNewTask": "＋ 任務",
+  "@boardNewTask": {
+    "description": "新增任務"
+  },
+  "boardNoTaskYet": "這個階段還沒有任務。",
+  "@boardNoTaskYet": {
+    "description": "階段底下沒有任務"
+  },
+  "boardGlyphScroll": "卷",
+  "@boardGlyphScroll": {
+    "description": "空畫面中央的那個字（設計用字，不翻）"
+  },
+  "boardEmptyArchived": "這塊板結束時是空的。",
+  "@boardEmptyArchived": {
+    "description": "空板（封存）"
+  },
+  "boardEmpty": "這塊板還是空的。",
+  "@boardEmpty": {
+    "description": "空板"
+  },
+  "boardArchivedReadOnly": "封存 · 唯讀",
+  "@boardArchivedReadOnly": {
+    "description": "封存徽章"
+  },
+  "boardNoAttachedRoomTooltip": "這塊板沒有掛任何聊天室",
+  "@boardNoAttachedRoomTooltip": {
+    "description": "沒有掛接房 tooltip"
+  },
+  "boardSeeAttachedRoomsTooltip": "看看它掛在哪些聊天室上",
+  "@boardSeeAttachedRoomsTooltip": {
+    "description": "看掛接房 tooltip"
+  },
+  "boardNoAttachedRoom": "未掛接聊天室",
+  "@boardNoAttachedRoom": {
+    "description": "沒有掛接房徽章"
+  },
+  "boardAttachedRooms": "◫ {count} 間聊天室",
+  "@boardAttachedRooms": {
+    "description": "掛接房數徽章",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardNotMemberUnnamed": "這間房掛著一塊任務板，但你還不是它的成員。",
+  "@boardNotMemberUnnamed": {
+    "description": "不是板成員（沒有板名）"
+  },
+  "boardNotMember": "這間房掛著《{name}》，但你還不是它的成員。",
+  "@boardNotMember": {
+    "description": "不是板成員",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardAskOwnerToAdd": "請板的 owner 把你加進來。",
+  "@boardAskOwnerToAdd": {
+    "description": "不是板成員：下一步"
+  },
+  "boardViewerTooltip": "唯讀。請板的 owner 把你設為協作者（editor）",
+  "@boardViewerTooltip": {
+    "description": "viewer 徽章 tooltip"
+  },
+  "boardViewerBadge": "唯讀 · VIEWER",
+  "@boardViewerBadge": {
+    "description": "viewer 徽章"
+  },
+  "boardOutcomeBlockedStillAttached": "還掛在聊天室上，先解除掛接才能收尾",
+  "@boardOutcomeBlockedStillAttached": {
+    "description": "宣告結局停用：還掛著房"
+  },
+  "boardOutcomeBlockedNeverAttached": "從沒掛過聊天室，沒有東西可以收尾",
+  "@boardOutcomeBlockedNeverAttached": {
+    "description": "宣告結局停用：從沒掛過房"
+  },
+  "boardOutcomeBlockedGeneric": "現在還不能宣告結局",
+  "@boardOutcomeBlockedGeneric": {
+    "description": "宣告結局停用：泛用理由"
+  },
+  "boardSupervisorPillNone": "SUPERVISOR · 未指派",
+  "@boardSupervisorPillNone": {
+    "description": "supervisor 膠囊：未指派"
+  },
+  "boardSupervisorPillDeparted": "SUPERVISOR · {name}（已離開）",
+  "@boardSupervisorPillDeparted": {
+    "description": "supervisor 膠囊：已離開",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardSupervisorPill": "SUPERVISOR · {name}",
+  "@boardSupervisorPill": {
+    "description": "supervisor 膠囊",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
   }
 }

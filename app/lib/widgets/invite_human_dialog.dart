@@ -5,6 +5,7 @@ import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../models/agent_session.dart';
 import '../models/participant.dart';
 import '../state/app_providers.dart';
@@ -80,7 +81,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
 
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('邀請成員加入',
+      title: Text(AppLocalizations.of(context).inviteHumanTitle,
           style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
@@ -88,7 +89,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。',
+              AppLocalizations.of(context).inviteHumanHint,
               style: UepText.serif(size: 13.5, color: s.inkMute, height: 1.6),
             ),
           ),
@@ -107,7 +108,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
               ),
               error: (e, _) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                child: MonoLabel('掃描失敗，稍後再試',
+                child: MonoLabel(AppLocalizations.of(context).inviteScanFailed,
                     size: 9, color: UepColors.errorText),
               ),
               data: (all) {
@@ -121,9 +122,9 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Text(
                       all.isEmpty
-                          ? '沒有可邀請的人'
+                          ? AppLocalizations.of(context).inviteNobodyToInvite
                           // 有人但都在房裡時說清楚，否則看起來像掃描壞了
-                          : '列得出來的人都已經在這個房間裡了',
+                          : AppLocalizations.of(context).inviteAllAlreadyHere,
                       textAlign: TextAlign.center,
                       style: UepText.serif(size: 13.5, color: s.inkMute),
                     ),
@@ -159,7 +160,7 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
-                hintText: '選填，對方會看到',
+                hintText: AppLocalizations.of(context).inviteNoteHint,
                 hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),
@@ -169,13 +170,13 @@ class _InviteHumanDialogState extends ConsumerState<InviteHumanDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: AppLocalizations.of(context).commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(false),
         ),
         UepButton(
-          label: '送出邀請',
+          label: AppLocalizations.of(context).inviteSendAction,
           small: true,
           onPressed: (_selected == null || _sending) ? null : _invite,
         ),
@@ -236,7 +237,7 @@ class _HumanRow extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   // 位址是共用 token 時唯一分得開「這是誰」的線索
-                  session.lastIp ?? '來源不明',
+                  session.lastIp ?? AppLocalizations.of(context).inviteUnknownSource,
                   style: UepText.mono(size: 10, color: s.inkMute),
                 ),
               ],

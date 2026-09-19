@@ -3,6 +3,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/screens/board/board_action_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// Board 按鈕的錯誤回饋。
 ///
@@ -15,6 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   /// 按一下就跑 [body] 的最小畫面。SnackBar 需要 Scaffold 才活得起來。
   Widget harness(Future<void> Function(BuildContext) body) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
     theme: buildUepTheme(Brightness.dark),
     home: Scaffold(
       body: Builder(

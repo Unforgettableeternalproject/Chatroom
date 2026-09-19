@@ -5,6 +5,7 @@ import 'package:chatroom_app/widgets/version_banner.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 橫幅要講的是**下一步做什麼**：哪一邊舊、去更新哪一邊。
 /// commit hash 回答不了那一題，所以它不在橫幅上（只留在 tooltip）。
@@ -24,6 +25,8 @@ Widget _host({
         hubBuildProvider.overrideWith((ref) async => hubBuild),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const Scaffold(body: VersionBanner()),
       ),

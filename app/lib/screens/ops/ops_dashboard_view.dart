@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/agent_run.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/markdown_body.dart';
@@ -57,9 +58,10 @@ class OpsDashboardView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (board.runners.isEmpty) {
-      return const _Empty(
-        title: '沒有執行器在線',
-        subtitle: '請先啟動執行器。',
+      final l10n = AppLocalizations.of(context);
+      return _Empty(
+        title: l10n.opsNoRunnersTitle,
+        subtitle: l10n.opsNoRunnersSubtitle,
       );
     }
     return ListView(
@@ -105,21 +107,25 @@ class OpsStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final lines = <String>[];
     for (final r in board.runners) {
       if (r.isLimited) {
         final left = r.remainingLimit(now: now);
-        final reason = r.limitReason.isEmpty ? '額度' : _limitReason(r.limitReason);
+        final reason = r.limitReason.isEmpty
+            ? l10n.opsLimitReasonFallback
+            : _limitReason(r.limitReason);
         lines.add(left == null
-            ? '${r.displayName}：因$reason暫停收單，退避時間未知'
-            : '${r.displayName}：因$reason暫停收單，約 ${_short(left)}後重試');
+            ? l10n.opsStatusLimitedUnknown(r.displayName, reason)
+            : l10n.opsStatusLimitedRetry(r.displayName, reason, _short(left)));
       } else if (r.isOffline) {
-        lines.add('${r.displayName}：離線，最後回報 ${relativeTime(r.lastSeenAt)}');
+        lines.add(
+            l10n.opsStatusOffline(r.displayName, relativeTime(r.lastSeenAt)));
       } else if (r.isPaused) {
-        lines.add('${r.displayName}：已暫停，跑完手上的就不再領新單');
+        lines.add(l10n.opsStatusPaused(r.displayName));
       }
       for (final p in r.dashboard.selfcheckProblems) {
-        lines.add('${r.displayName}：自檢未過 — $p');
+        lines.add(l10n.opsStatusSelfcheck(r.displayName, p));
       }
     }
     if (lines.isEmpty) return const SizedBox.shrink();
@@ -164,6 +170,7 @@ class _RunnerSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final dash = runner.dashboard;
     final pending = runner.pendingCommands;
     final progress = runnerCommandProgress(runner, now: now);
@@ -187,15 +194,16 @@ class _RunnerSection extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             [
-              '併行 ${runner.runningCount} / ${runner.maxParallel}',
+              l10n.opsMetaParallel(runner.runningCount, runner.maxParallel),
               if (runner.version.isNotEmpty) 'v${runner.version}',
-              '最後回報 ${relativeTime(runner.lastSeenAt, now: now)}',
+              l10n.opsMetaLastSeen(relativeTime(runner.lastSeenAt, now: now)),
               // 啟動時間是判斷「它重開過了沒有」的那一格：restart 生效後這
               // 個值會變新，而 status 只會在離線與在線之間跳
               if (dash.startedAt.isNotEmpty)
-                '啟動 ${relativeTime(dash.startedAt, now: now)}',
+                l10n.opsMetaStarted(relativeTime(dash.startedAt, now: now)),
               if (dash.lastRestartReason.isNotEmpty)
-                '上次重啟：${_restartReason(dash.lastRestartReason)}',
+                l10n.opsMetaLastRestart(
+                    _restartReason(dash.lastRestartReason)),
             ].join(' · '),
             style: UepText.mono(size: 10.5, color: s.inkMute),
           ),
@@ -207,21 +215,21 @@ class _RunnerSection extends StatelessWidget {
               // 同一種命令還沒生效就停用那一顆：再按一次不會更快，只會在
               // Hub 那邊堆出好幾道一模一樣的命令
               _SmallButton(
-                  label: '暫停',
+                  label: l10n.opsCommandPause,
                   enabled:
                       !busy && !runner.isPaused && !pending.contains('pause'),
                   onTap: () => onCommand!(runner, 'pause')),
               _SmallButton(
-                  label: '恢復',
+                  label: l10n.opsCommandResume,
                   enabled:
                       !busy && runner.isPaused && !pending.contains('resume'),
                   onTap: () => onCommand!(runner, 'resume')),
               _SmallButton(
-                  label: '重啟',
+                  label: l10n.opsCommandRestart,
                   enabled: !busy && !pending.contains('restart'),
                   onTap: () => onCommand!(runner, 'restart')),
               _SmallButton(
-                  label: '清空佇列',
+                  label: l10n.opsCommandDrain,
                   enabled: !busy && !pending.contains('drain'),
                   onTap: () => onCommand!(runner, 'drain')),
             ]),
@@ -229,7 +237,8 @@ class _RunnerSection extends StatelessWidget {
           if (progress != null) ...[
             const SizedBox(height: 10),
             Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              MonoLabel('命令進度', size: 11.5, letterSpacing: 1.6),
+              MonoLabel(l10n.opsCommandProgressLabel,
+                  size: 11.5, letterSpacing: 1.6),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(progress,
@@ -241,13 +250,13 @@ class _RunnerSection extends StatelessWidget {
           const SizedBox(height: 16),
           _UsageRow(usage: dash.usage),
           const SizedBox(height: 16),
-          MonoLabel('專案', size: 11.5, letterSpacing: 1.6),
+          MonoLabel(l10n.opsSectionProjects, size: 11.5, letterSpacing: 1.6),
           const SizedBox(height: 8),
           if (!dash.reported)
-            Text('這台執行器還沒有回報過儀表板。',
+            Text(l10n.opsNoDashboardReport,
                 style: UepText.mono(size: 10.5, color: s.inkMute))
           else if (dash.repos.isEmpty)
-            Text('這台執行器沒有宣告任何 repo。',
+            Text(l10n.opsNoRepos,
                 style: UepText.mono(size: 10.5, color: s.inkMute))
           else
             for (final repo in dash.repos)
@@ -269,13 +278,14 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final (label, color) = switch (runner.status) {
-      'online' => ('上線', UepColors.gold),
-      'paused' => ('暫停', s.inkSoft),
-      'limited' => ('受限', UepColors.error),
+      'online' => (l10n.opsRunnerOnline, UepColors.gold),
+      'paused' => (l10n.opsRunnerPaused, s.inkSoft),
+      'limited' => (l10n.opsRunnerLimited, UepColors.error),
       // 重啟中既不是在線也不是掉線：用 info 這一色，免得與「它掛了」同貌
-      'restarting' => ('重啟中', UepColors.info),
-      _ => ('離線', s.inkMute),
+      'restarting' => (l10n.opsRunnerRestarting, UepColors.info),
+      _ => (l10n.opsRunnerOffline, s.inkMute),
     };
     final left = runner.isLimited ? runner.remainingLimit() : null;
     return Row(mainAxisSize: MainAxisSize.min, children: [
@@ -287,12 +297,15 @@ class _StatusPill extends StatelessWidget {
       if (runner.isLimited) ...[
         const SizedBox(width: 8),
         // 算不出來時說「退避時間未知」，**不編一個倒數**
-        Text(left == null ? '退避時間未知' : '約 ${_short(left)}後重試',
+        Text(
+            left == null
+                ? l10n.opsBackoffUnknown
+                : l10n.opsRetryIn(_short(left)),
             style: UepText.mono(size: 10.5, color: s.inkSoft)),
       ],
       if (runner.isOffline) ...[
         const SizedBox(width: 8),
-        Text('離線 ${relativeTime(runner.lastSeenAt)}',
+        Text(l10n.opsOfflineSince(relativeTime(runner.lastSeenAt)),
             style: UepText.mono(size: 10.5, color: s.inkMute)),
       ],
     ]);
@@ -307,17 +320,18 @@ class _UsageRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     if (!usage.reported) {
-      return Text('執行器尚未回報用量。',
+      return Text(l10n.opsUsageNotReported,
           style: UepText.mono(size: 10.5, color: s.inkMute));
     }
     final hours = usage.windowHours == 0
         ? ''
-        : '近 ${_num(usage.windowHours)} 小時';
+        : l10n.opsUsageWindow(_num(usage.windowHours));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('用量', size: 11.5, letterSpacing: 1.6),
+        MonoLabel(l10n.opsSectionUsage, size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 6),
         Text(
           '$hours ${usage.tokens} tokens · '
@@ -329,17 +343,20 @@ class _UsageRow extends StatelessWidget {
           // 沒回報軟上限就說沒回報。0 在執行器那端是「不設上限」，
           // 兩者都不能畫成「剩 0」——那會讓人以為額度用完了
           usage.softCapTokens == null
-              ? '軟上限：執行器未回報'
+              ? l10n.opsSoftCapNotReported
               : usage.softCapTokens == 0
-                  ? '軟上限：未設定'
-                  : '軟上限 ${usage.softCapTokens} tokens'
-                      '${usage.remainingTokens == null ? '' : '，剩 ${usage.remainingTokens}'}',
+                  ? l10n.opsSoftCapUnset
+                  : usage.remainingTokens == null
+                      ? l10n.opsSoftCapTokens('${usage.softCapTokens}')
+                      : l10n.opsSoftCapTokensRemaining(
+                          '${usage.softCapTokens}',
+                          '${usage.remainingTokens}'),
           style: UepText.mono(
               size: 10.5,
               color: usage.overSoftCap ? UepColors.error : s.inkMute),
         ),
         if (usage.overSoftCap)
-          Text('已達軟上限，這台暫時不再領新單。',
+          Text(l10n.opsOverSoftCap,
               style: UepText.mono(size: 10.5, color: UepColors.error)),
       ],
     );
@@ -355,6 +372,7 @@ class _RepoTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     // 推送鈕要不要能按，三個條件缺一不可：有東西可推、分支在可推清單裡、
     // 而且**執行器真的回報過那一格**（null ≠ false，見 RepoView.pushable）
     final hasCommits = repo.unpushedCount > 0;
@@ -363,9 +381,9 @@ class _RepoTile extends StatelessWidget {
     final String? blocked = !hasCommits
         ? null
         : pushable == null
-            ? '執行器沒有回報這條分支能不能推，先確認它的版本'
+            ? l10n.opsPushBlockedUnknown
             : pushable == false
-                ? '分支「${repo.branch}」不在執行器的可推清單裡'
+                ? l10n.opsPushBlockedNotAllowed(repo.branch)
                 : null;
 
     return Padding(
@@ -381,7 +399,7 @@ class _RepoTile extends StatelessWidget {
             ),
             if (canPush)
               _SmallButton(
-                  label: '推送 ${repo.unpushedCount} 顆',
+                  label: l10n.opsPushCommits(repo.unpushedCount),
                   enabled: true,
                   onTap: onPush!),
           ]),
@@ -391,18 +409,20 @@ class _RepoTile extends StatelessWidget {
                 style: UepText.mono(size: 10.5, color: UepColors.error))
           else ...[
             Row(children: [
-              Text(repo.branch.isEmpty ? '（無分支）' : repo.branch,
+              Text(repo.branch.isEmpty ? l10n.opsNoBranch : repo.branch,
                   style: UepText.mono(size: 10.5, color: s.inkSoft)),
               const SizedBox(width: 10),
               Text(
-                hasCommits ? '未推送 ${repo.unpushedCount} 顆' : '沒有未推送的 commit',
+                hasCommits
+                    ? l10n.opsUnpushedCount(repo.unpushedCount)
+                    : l10n.opsNoUnpushed,
                 style: UepText.mono(
                     size: 10.5,
                     color: hasCommits ? UepColors.gold : s.inkMute),
               ),
               if (repo.dirty) ...[
                 const SizedBox(width: 10),
-                Text('工作樹有未提交的變更',
+                Text(l10n.opsDirtyWorktree,
                     style: UepText.mono(size: 10.5, color: UepColors.error)),
               ],
             ]),
@@ -467,10 +487,11 @@ class _QueueSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('佇列', size: 11.5, letterSpacing: 1.6),
+        MonoLabel(AppLocalizations.of(context).opsSectionQueue,
+            size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 8),
         if (running.isEmpty && queued.isEmpty)
-          Text('目前沒有進行中或排隊中的派工。',
+          Text(AppLocalizations.of(context).opsQueueEmpty,
               style: UepText.mono(size: 10.5, color: s.inkMute)),
         for (final run in running)
           _RunTile(
@@ -520,21 +541,22 @@ class _RunTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final turns = view?.turns ?? run.turns;
     final meta = <String>[
-      if (position != null) '排隊第 $position 位',
+      if (position != null) l10n.opsQueuePosition(position!),
       if (runnerName.isNotEmpty) runnerName,
       if (run.isQueued)
-        '等待 ${_waited(run.createdAt, now)}'
+        l10n.opsWaited(_waited(run.createdAt, now))
       else if (run.startedAt != null)
-        '開始 ${relativeTime(run.startedAt, now: now)}',
-      if (run.priority > 0) '優先 ${run.priority}',
+        l10n.opsStartedAt(relativeTime(run.startedAt, now: now)),
+      if (run.priority > 0) l10n.opsPriorityValue(run.priority),
       // 執行中才講 turns／成本：排隊中的那兩格一定是 0，而那個 0 不是量測值
       if (!run.isQueued && turns > 0) '$turns turns',
       if (!run.isQueued && run.usage.isNotEmpty)
         '\$${run.costUsd.toStringAsFixed(2)}',
       if (view != null && view!.contextTokens > 0)
-        'context 約 ${view!.contextTokens}',
+        l10n.opsContextTokens(view!.contextTokens),
     ];
     final actions = <Widget>[
       if (onSoftStop != null &&
@@ -542,9 +564,14 @@ class _RunTile extends StatelessWidget {
           !run.cancelRequested &&
           run.softStopRequestedAt == null)
         _SmallButton(
-            label: '請收尾', enabled: true, onTap: () => onSoftStop!(run)),
+            label: l10n.opsActionSoftStop,
+            enabled: true,
+            onTap: () => onSoftStop!(run)),
       if (onCancel != null && !run.cancelRequested)
-        _SmallButton(label: '取消', enabled: true, onTap: () => onCancel!(run)),
+        _SmallButton(
+            label: l10n.commonCancel,
+            enabled: true,
+            onTap: () => onCancel!(run)),
     ];
     return _RunCard(
       child: Column(
@@ -561,10 +588,10 @@ class _RunTile extends StatelessWidget {
           // 🔴 running 的取消**不改狀態**（§4.2）：進程還在跑，這裡說
           // 「已取消」的話，畫面會與機器上正在寫檔的那個 agent 對不上
           if (run.cancelRequested && !run.isQueued)
-            Text('已要求取消，等執行器收到後停止',
+            Text(l10n.opsCancelRequested,
                 style: UepText.mono(size: 10, color: UepColors.error)),
           if (run.softStopRequestedAt != null && !run.cancelRequested)
-            Text('已要求收尾，它會做完目前這一步再結束',
+            Text(l10n.opsSoftStopRequested,
                 style: UepText.mono(size: 10, color: s.inkSoft)),
           if (actions.isNotEmpty) ...[
             const SizedBox(height: 10),
@@ -592,7 +619,8 @@ class _FinishedSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel('最近結束', size: 11.5, letterSpacing: 1.6),
+        MonoLabel(AppLocalizations.of(context).opsSectionFinished,
+            size: 11.5, letterSpacing: 1.6),
         const SizedBox(height: 8),
         for (final run in runs) _FinishedCard(run: run, now: now),
       ],
@@ -749,8 +777,14 @@ class _RunStatusChip extends StatelessWidget {
 /// 兩種——同一個狀態在兩個畫面上長不一樣的話，人會以為那是兩件事。
 (String, Color) opsRunStatusLabel(BuildContext context, AgentRun run) =>
     switch (run.status) {
-      'running' || 'claimed' => ('執行中', UepColors.gold),
-      'queued' => ('排隊', context.uep.inkMute),
+      'running' || 'claimed' => (
+          AppLocalizations.of(context).opsRunStatusRunning,
+          UepColors.gold
+        ),
+      'queued' => (
+          AppLocalizations.of(context).opsRunStatusQueued,
+          context.uep.inkMute
+        ),
       _ => runStatusLabel(context, run),
     };
 
@@ -760,7 +794,7 @@ String runKindLabel(String kind) {
   for (final t in kRunTemplates) {
     if (t.kind == kind) return t.label;
   }
-  return kind == 'push' ? '推送' : kind;
+  return kind == 'push' ? L10n.current.opsPush : kind;
 }
 
 /// 最近結束卡片上的摘要節錄：去掉標題行，最多 [maxLines] 行、[maxChars] 字。
@@ -855,63 +889,66 @@ String? runnerCommandProgress(AgentRunner runner, {DateTime? now}) {
   final c = runner.visibleCommand(now: now);
   if (c == null) return null;
   final label = runnerCommandLabel(c.command);
+  final l10n = L10n.current;
   if (!c.isAcked) {
-    return '$label：已送出 ${relativeTime(c.createdAt, now: now)}，'
-        '等執行器領取（最多 30 秒）';
+    return l10n.opsCommandSent(label, relativeTime(c.createdAt, now: now));
   }
   if (!c.isApplied) {
     // note 是執行器講的等待原因（「等 N 筆 run 結束後重啟」）。它沒講就不要
     // 替它編一個
     return c.note.isEmpty
-        ? '$label：執行器已收到，還沒生效'
-        : '$label：執行器已收到，${c.note}';
+        ? l10n.opsCommandAcked(label)
+        : l10n.opsCommandAckedNote(label, c.note);
   }
   if (c.command == 'restart') {
     final applied = c.appliedTime;
     final started = DateTime.tryParse(runner.dashboard.startedAt);
     // started_at 比 applied_at 新＝它已經重開完回來了
     if (applied != null && started != null && started.isAfter(applied)) {
-      return '已重啟完成，啟動 '
-          '${relativeTime(runner.dashboard.startedAt, now: now)}';
+      return l10n.opsRestartDone(
+          relativeTime(runner.dashboard.startedAt, now: now));
     }
     if (runner.isRestarting || runner.isOffline) {
-      return '重啟中，等它回來（通常 1～2 分鐘）';
+      return l10n.opsRestarting;
     }
   }
   final at = relativeTime(c.appliedAt, now: now);
-  return c.note.isEmpty ? '$label：已生效 $at' : '$label：已生效 $at，${c.note}';
+  return c.note.isEmpty
+      ? l10n.opsCommandApplied(label, at)
+      : l10n.opsCommandAppliedNote(label, at, c.note);
 }
 
 /// 命令的中文名。**與 `ops_actions` 的提示是同一份**——同一道命令在按鈕、
 /// 提示與進度上叫三個名字的話，人會以為那是三件事。
 String runnerCommandLabel(String command) => switch (command) {
-      'pause' => '暫停',
-      'resume' => '恢復',
-      'restart' => '重啟',
-      'drain' => '清空佇列',
-      'reload' => '重讀設定',
+      'pause' => L10n.current.opsCommandPause,
+      'resume' => L10n.current.opsCommandResume,
+      'restart' => L10n.current.opsCommandRestart,
+      'drain' => L10n.current.opsCommandDrain,
+      'reload' => L10n.current.opsCommandReload,
       _ => command,
     };
 
 /// 執行器回報的重啟原因。認不得的原樣顯示——編一個對照不到的中文，等於把
 /// 「它講了一個我不認識的原因」蓋掉。
 String _restartReason(String reason) => switch (reason) {
-      'restart_command' => '人類下令',
-      'maintenance' => '維護窗',
+      'restart_command' => L10n.current.opsRestartReasonCommand,
+      'maintenance' => L10n.current.opsRestartReasonMaintenance,
       _ => reason,
     };
 
 String _limitReason(String reason) => switch (reason) {
-      'rate_limit' => '速率限制',
-      'weekly_limit' => '週上限',
-      'manual' => '人工暫停',
+      'rate_limit' => L10n.current.opsLimitReasonRate,
+      'weekly_limit' => L10n.current.opsLimitReasonWeekly,
+      'manual' => L10n.current.opsLimitReasonManual,
       _ => reason,
     };
 
 String _short(Duration d) {
-  if (d.inMinutes < 1) return '${d.inSeconds} 秒';
-  if (d.inHours < 1) return '${d.inMinutes} 分';
-  return '${d.inHours} 小時 ${d.inMinutes % 60} 分';
+  final l10n = L10n.current;
+  if (d.inMinutes < 1) return l10n.timeDurationSeconds(d.inSeconds);
+  if (d.inHours < 1) return l10n.timeDurationMinutes(d.inMinutes);
+  return l10n.timeDurationHoursLong(d.inHours, d.inMinutes % 60);
 }
 
 String _num(double v) =>

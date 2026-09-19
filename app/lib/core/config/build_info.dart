@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../l10n/l10n.dart';
+
 /// App 的版本識別。
 ///
 /// 存在的理由是一次真實事故：測試端手上的 App 是 16 小時前的產物，中間隔著
@@ -41,7 +43,9 @@ class BuildInfo {
 
   /// 給人看的一行。**取不到時明說 unknown**，不退回版本號。
   String get label =>
-      isKnown ? '$version+$commit' : '$version（commit 未知）';
+      isKnown
+          ? '$version+$commit'
+          : L10n.current.settingsVersionUnknownCommit(version);
 
   static const _version = String.fromEnvironment(
     'CHATROOM_VERSION',

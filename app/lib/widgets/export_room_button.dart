@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/errors/api_exception.dart';
 import '../export/conversation_format.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 import '../state/rooms_providers.dart';
 import 'uep_button.dart';
@@ -33,10 +34,11 @@ class _ExportRoomButtonState extends ConsumerState<ExportRoomButton> {
   }
 
   Future<void> _export() async {
+    final l10n = AppLocalizations.of(context);
     final pid = ref.read(settingsRepoProvider).participantId(widget.roomId);
     if (pid == null) {
       // 匯出要成員身分（Hub 端驗）。這句講清楚是「還沒拿到」而不是「不准」
-      _toast('還在取得房間身分，稍候再試');
+      _toast(l10n.roomsIdentityPending);
       return;
     }
     setState(() => _busy = true);
@@ -55,15 +57,15 @@ class _ExportRoomButtonState extends ConsumerState<ExportRoomButton> {
         fileName: _fileName(),
         bytes: utf8.encode(text),
         mimeType: 'text/plain',
-        dialogTitle: '匯出對話紀錄',
+        dialogTitle: l10n.roomsExportLog,
       );
       if (saved == null) return; // 按了取消，不是錯誤
-      _toast('已匯出 ${messages.length} 則');
+      _toast(l10n.roomsExportDone(messages.length));
     } on ApiException catch (e) {
-      _toast('匯出失敗：${e.message}');
+      _toast(l10n.roomsExportFailed(e.message));
     } on FormatException {
       // parseJsonl 在有壞行時整份失敗——那是刻意的，但錯誤要說得出人話
-      _toast('匯出失敗：Hub 回的內容有一則解析不了，這份檔案不完整，沒有存下來');
+      _toast(l10n.roomsExportParseFailed);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -93,7 +95,9 @@ class _ExportRoomButtonState extends ConsumerState<ExportRoomButton> {
   @override
   Widget build(BuildContext context) {
     return UepButton(
-      label: _busy ? '匯出中…' : '匯出對話紀錄',
+      label: _busy
+          ? AppLocalizations.of(context).roomsExporting
+          : AppLocalizations.of(context).roomsExportLog,
       variant: UepButtonVariant.outline,
       small: true,
       expand: true,

@@ -4,6 +4,7 @@ import 'package:chatroom_app/models/participant.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 輸入卡死的診斷儀器（卡 `7d3db264` 第一階段）。
 ///
@@ -15,6 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 ///    少了這條約束，這份 log 會變成一個沒有人敢交出來的東西
 /// 3. **組字狀態的轉折要被記到**（進入／離開），那是這份儀器的主訊號
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(body: child),
     );

@@ -7,6 +7,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 艾斯維爾 2026-09-06 實機（#237 截圖）：Supervisor 對話框「判斷與建議」
 /// 那顆下拉選單**看起來是空的**。
@@ -44,6 +45,8 @@ Widget _wrap(BoardSnapshot snap) => ProviderScope(
         boardByIdProvider('b1').overrideWith((ref) async => snap),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Builder(

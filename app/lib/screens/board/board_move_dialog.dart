@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/board_providers.dart';
 import '../../widgets/uep_button.dart';
@@ -82,7 +83,8 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
       );
       if (!mounted) return;
       if (newId == null) {
-        setState(() => _error = '沒有可用的身分，這個動作送不出去。');
+        setState(() =>
+            _error = AppLocalizations.of(context).boardMoveNoIdentity);
         return;
       }
       Navigator.of(context).pop(newId);
@@ -97,6 +99,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final snap = widget.roomId != null
         ? ref.watch(boardProvider(widget.roomId!)).value
         : ref.watch(boardByIdProvider(widget.boardId)).value;
@@ -111,14 +114,15 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
 
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('搬到別處', style: UepText.sectionTitle(color: s.inkTitle)),
+      title: Text(l10n.boardTaskActionMoveElsewhere,
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              '「${widget.task.title}」會在選定的階段建立一張新卡。',
+              l10n.boardMoveExplain(widget.task.title),
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.55),
             ),
           ),
@@ -126,27 +130,27 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
           if (snap == null)
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('還在讀這塊板…',
+              child: Text(l10n.boardMoveLoading,
                   style: UepText.sans(size: 13, color: s.inkMute)),
             )
           else if (objectives.isEmpty)
             // 停用要說得出理由，而且理由要導向下一步
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('這塊板上沒有進行中的週期。',
+              child: Text(l10n.boardMoveNoObjective,
                   style: UepText.sans(size: 13, color: s.inkMute)),
             )
           else ...[
             DropdownButtonFormField<String>(
               initialValue: _objectiveId,
               isExpanded: true,
-              hint: Text('搬到哪個週期…',
+              hint: Text(l10n.boardMoveObjectiveHint,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.sans(size: 13, color: s.inkMute)),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
-                border: OutlineInputBorder(),
-                labelText: '週期',
+                border: const OutlineInputBorder(),
+                labelText: l10n.boardObjectiveLabel,
               ),
               style: UepText.sans(size: 13, color: s.ink),
               // 換週期時把清單清掉——留著上一個週期的選擇，送出的會是一個
@@ -169,13 +173,16 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
             DropdownButtonFormField<String>(
               initialValue: _checklistId,
               isExpanded: true,
-              hint: Text(_objectiveId == null ? '先選週期' : '搬到哪個階段…',
+              hint: Text(
+                  _objectiveId == null
+                      ? l10n.boardMovePickObjectiveFirst
+                      : l10n.boardMoveChecklistHint,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.sans(size: 13, color: s.inkMute)),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
-                border: OutlineInputBorder(),
-                labelText: '階段',
+                border: const OutlineInputBorder(),
+                labelText: l10n.boardChecklistLabel,
               ),
               style: UepText.sans(size: 13, color: s.ink),
               onChanged:
@@ -196,7 +203,7 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
               const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text('這個週期底下沒有別的開著的階段可以放。',
+                child: Text(l10n.boardMoveNoChecklist,
                     style: UepText.sans(size: 12.5, color: s.inkMute)),
               ),
             ],
@@ -214,13 +221,13 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: '搬過去',
+          label: l10n.boardMoveConfirm,
           small: true,
           onPressed:
               (_busy || _checklistId == null) ? null : () => _submit(actions),

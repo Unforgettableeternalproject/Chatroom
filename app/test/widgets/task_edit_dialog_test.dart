@@ -2,6 +2,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/screens/board/board_task_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 改一張卡的標題與敘述（艾斯維爾 09/08）。
 ///
@@ -16,6 +17,8 @@ Future<TaskEdit?> _open(
   TaskEdit? result;
   var opened = false;
   await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
     theme: buildUepTheme(Brightness.dark),
     home: Scaffold(
       body: Builder(builder: (context) {
@@ -43,6 +46,8 @@ Future<TaskEdit?> _submitAfter(
   TaskEdit? result;
   var opened = false;
   await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
     theme: buildUepTheme(Brightness.dark),
     home: Scaffold(
       body: Builder(builder: (context) {

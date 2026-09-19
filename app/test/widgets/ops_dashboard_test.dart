@@ -4,6 +4,7 @@ import 'package:chatroom_app/screens/ops/ops_dashboard_view.dart';
 import 'package:chatroom_app/widgets/markdown_body.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 執行儀表板：**三種狀態要講三句不同的話**。
 ///
@@ -135,6 +136,8 @@ RoomRunnerBoard _board({
     );
 
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(body: child),
     );

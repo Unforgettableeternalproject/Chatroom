@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../models/agent_run.dart';
 import '../state/runs_providers.dart';
 import 'kind_badge.dart';
@@ -108,6 +109,7 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final async = ref.watch(finishedRunsProvider(widget.roomId));
     final runs = async.value;
     final selectedId = ref.watch(selectedRunIdProvider)[widget.roomId];
@@ -126,15 +128,15 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const MonoLabel('回報', size: 8.5, letterSpacing: 2.2),
+        MonoLabel(l10n.opsReportLabel, size: 8.5, letterSpacing: 2.2),
         const SizedBox(height: 8),
         // 讀不到與「沒有」講成兩句話：前者是這一區壞了，後者是真的沒有派過
         if (runs == null && async.hasError)
-          note('讀不到派工回報：${async.error}', error: true)
+          note(l10n.opsReportLoadFailed('${async.error}'), error: true)
         else if (runs == null)
-          note('讀取中…')
+          note(l10n.commonLoading)
         else if (runs.isEmpty)
-          note('還沒有結束的派工', mono: false)
+          note(l10n.opsNoFinishedRuns, mono: false)
         else
           // **限高可捲**：回報筆數是會長的，側欄的高度不是
           Expanded(
@@ -152,7 +154,7 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
                   ),
                 if (runs.length > _limit)
                   UepButton(
-                    label: '更多（還有 ${runs.length - _limit}）',
+                    label: l10n.opsMoreRuns(runs.length - _limit),
                     variant: UepButtonVariant.outline,
                     small: true,
                     expand: true,
@@ -297,7 +299,7 @@ class RunReportDetailPanel extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  tooltip: '關閉',
+                  tooltip: AppLocalizations.of(context).commonClose,
                   visualDensity: VisualDensity.compact,
                   onPressed: onClose,
                   icon: Icon(Icons.close, size: 16, color: s.inkMute),
@@ -324,7 +326,9 @@ class RunReportDetailPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
             child: run.result.isEmpty
                 ? Text(
-                    run.reason.isEmpty ? '這一筆沒有留下回報內容。' : run.reason,
+                    run.reason.isEmpty
+                        ? AppLocalizations.of(context).opsRunNoReport
+                        : run.reason,
                     style:
                         UepText.serif(size: 13.5, color: s.inkMute, height: 1.6),
                   )
@@ -339,10 +343,10 @@ class RunReportDetailPanel extends StatelessWidget {
 /// 狀態 → (標籤, 顏色)。
 (String, Color) runStatusLabel(BuildContext context, AgentRun run) =>
     switch (run.status) {
-      'done' => ('完成', UepColors.success),
-      'failed' => ('失敗', UepColors.error),
-      'cancelled' => ('已取消', context.uep.inkMute),
-      'handoff' => ('交接', UepColors.info),
+      'done' => (AppLocalizations.of(context).opsRunDone, UepColors.success),
+      'failed' => (AppLocalizations.of(context).opsRunFailed, UepColors.error),
+      'cancelled' => (AppLocalizations.of(context).opsRunCancelled, context.uep.inkMute),
+      'handoff' => (AppLocalizations.of(context).opsRunHandoff, UepColors.info),
       _ => (run.status, context.uep.inkMute),
     };
 
@@ -351,7 +355,7 @@ class RunReportDetailPanel extends StatelessWidget {
 /// **執行器沒回報 `usage_json` 時不寫 0**：一個沒有人講過的 0 會讓人以為
 /// 這筆沒花成本（同 `RunnerUsage.reported` 的理由）。
 String runUsageLine(AgentRun run) {
-  if (run.usage.isEmpty) return '用量未回報';
+  if (run.usage.isEmpty) return L10n.current.opsUsageUnreported;
   return '${run.turns} turns · \$${run.costUsd.toStringAsFixed(2)}';
 }
 

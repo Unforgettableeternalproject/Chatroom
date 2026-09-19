@@ -7,6 +7,7 @@ import 'package:chatroom_app/state/scratchpad_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-04：**想法板的輸入框會自己清空**（艾斯維爾在想法板上的觀察）。
 ///
@@ -50,6 +51,8 @@ Widget _app() => ProviderScope(
         scratchpadProvider.overrideWith((ref, key) async => _pad(_blocks)),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const Scaffold(
           body: ScratchpadScreen(boardId: 'bd1', padId: 'p1'),

@@ -4,6 +4,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 標記成員的訊息強調：整圈 kind 色邊框 + 淡底 + 名字旁的 ★。
 ///
@@ -23,6 +24,8 @@ Message _msg({bool pinned = false}) => Message(
     );
 
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(body: SingleChildScrollView(child: child)),
     );

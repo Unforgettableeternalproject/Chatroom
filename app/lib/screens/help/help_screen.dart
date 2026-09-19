@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../widgets/kind_badge.dart';
 
 /// 手冊。
@@ -71,309 +72,312 @@ class HelpDoc {
   final List<HelpSection> sections;
 }
 
-const Map<HelpTopic, HelpDoc> kHelpDocs = {
+/// 三份說明文件。文案全部走 l10n，所以這裡是函式而不是 const map——
+/// 語言換了要跟著換，內容就不能在編譯期定死。
+Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
   HelpTopic.main: HelpDoc(
-    title: '使用說明',
+    title: l10n.helpDocMainTitle,
     sections: [
       HelpSection(
-        label: '聊天',
-        title: '聊天室',
+        label: l10n.helpSecChatLabel,
+        title: l10n.helpSecChatTitle,
         icon: Icons.forum_outlined,
         items: [
           HelpItem([
-            HelpChunk.code('@名字'),
-            HelpChunk.text(' 提及成員，'),
-            HelpChunk.code('#[標題]'),
-            HelpChunk.text(' 指涉任務卡。'),
+            HelpChunk.code(l10n.helpChatMentionSyntax),
+            HelpChunk.text(l10n.helpChat1a),
+            HelpChunk.code(l10n.helpChatCardSyntax),
+            HelpChunk.text(l10n.helpChat1b),
           ]),
           HelpItem([
-            HelpChunk.code('@agents'),
-            HelpChunk.text('、'),
-            HelpChunk.code('@humans'),
-            HelpChunk.text('、'),
-            HelpChunk.code('@all'),
-            HelpChunk.text(' 一次提及一整群，送出時展開成當下在房裡的實名。'),
+            const HelpChunk.code('@agents'),
+            HelpChunk.text(l10n.helpChat2a),
+            const HelpChunk.code('@humans'),
+            HelpChunk.text(l10n.helpChat2a),
+            const HelpChunk.code('@all'),
+            HelpChunk.text(l10n.helpChat2c),
           ]),
-          HelpItem([HelpChunk.text('那一類人不在房裡時會展開成空，App 會講出來——沒有人被通知到，訊息還是送出去了。')]),
+          HelpItem([HelpChunk.text(l10n.helpChat3)]),
           HelpItem([
-            HelpChunk.code('Enter'),
-            HelpChunk.text(' 送出，'),
-            HelpChunk.code('Shift+Enter'),
-            HelpChunk.text(' 換行，'),
-            HelpChunk.code('↑↓'),
-            HelpChunk.text(' 叫回歷史。'),
+            const HelpChunk.code('Enter'),
+            HelpChunk.text(l10n.helpChat4a),
+            const HelpChunk.code('Shift+Enter'),
+            HelpChunk.text(l10n.helpChat4b),
+            const HelpChunk.code('↑↓'),
+            HelpChunk.text(l10n.helpChat4c),
           ]),
-          HelpItem([HelpChunk.text('檔案可以拖進輸入框，也可以直接貼上截圖。')]),
-          HelpItem([HelpChunk.text('私人聊天室不會出現在別人的列表裡，必須受邀才能加入。')]),
-          HelpItem([HelpChunk.text('釘選是整間房共用的：誰釘的所有人都看得到，取消釘選也一樣。釘選牆只收還在的訊息，原訊息被刪就不在牆上。')]),
-          HelpItem([HelpChunk.text('「匯出對話紀錄」把整間房存成一個檔，包含全部訊息與附件資訊——那是一次外流，存到哪裡自己負責。')]),
-          HelpItem([HelpChunk.text('匯出要有這間房的成員身分；時間一律是 Hub 給的 UTC 原字串，不轉本地時間。')]),
-          HelpItem([HelpChunk.text('封存後只能看不能寫；封存一段時間後 Hub 會把房間連同訊息與附件永久刪除。要留底就在刪除前匯出。')]),
+          HelpItem([HelpChunk.text(l10n.helpChat5)]),
+          HelpItem([HelpChunk.text(l10n.helpChat6)]),
+          HelpItem([HelpChunk.text(l10n.helpChat7)]),
+          HelpItem([HelpChunk.text(l10n.helpChat8)]),
+          HelpItem([HelpChunk.text(l10n.helpChat9)]),
+          HelpItem([HelpChunk.text(l10n.helpChat10)]),
         ],
       ),
       HelpSection(
-        label: '成員',
-        title: '成員與在線',
+        label: l10n.helpSecMemberLabel,
+        title: l10n.helpSecMemberTitle,
         icon: Icons.group_outlined,
         items: [
-          HelpItem([HelpChunk.text('名字旁的「派工中」＝這個成員是某一筆派工帶進房的。Hub 不會把它當閒置掃掉，所以那一列沒有倒數。')]),
-          HelpItem([HelpChunk.text('派工結束它會自己離房；沒離開的話 Hub 也會在 run 收場時把它移出——不必自己去踢。')]),
-          HelpItem([HelpChunk.text('一般 agent 超過兩分鐘沒動作，那一列會印閒置多久、最快多久後被移出。被移出的人重新指派一次就會回來。')]),
+          HelpItem([HelpChunk.text(l10n.helpMember1)]),
+          HelpItem([HelpChunk.text(l10n.helpMember2)]),
+          HelpItem([HelpChunk.text(l10n.helpMember3)]),
           HelpItem([
-            HelpChunk.text('agent 要做一件很久的事時可以自己掛 '),
-            HelpChunk.code('chatroom_hold'),
-            HelpChunk.text(' 免掃，但 hold 有到期時間，不是無限期。'),
+            HelpChunk.text(l10n.helpMember4a),
+            const HelpChunk.code('chatroom_hold'),
+            HelpChunk.text(l10n.helpMember4b),
           ]),
-          HelpItem([HelpChunk.text('隱藏與重點標記只動我這台裝置的視圖，移出成員才是動到所有人。')]),
+          HelpItem([HelpChunk.text(l10n.helpMember5)]),
         ],
       ),
       HelpSection(
-        label: '任務板',
-        title: '任務板',
+        label: l10n.helpSecBoardLabel,
+        title: l10n.helpSecBoardTitle,
         icon: Icons.dashboard_outlined,
         items: [
-          HelpItem([HelpChunk.text('板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。')]),
-          HelpItem([HelpChunk.text('結構是週期 → 階段 → 任務。所有階段收尾後才能送審，未分類的卡也要先收尾。')]),
-          HelpItem([HelpChunk.text('「搬到別處」會在目標階段建立一張新卡，原本那張標成「已搬走」。')]),
+          HelpItem([HelpChunk.text(l10n.helpBoard1)]),
+          HelpItem([HelpChunk.text(l10n.helpBoard2)]),
+          HelpItem([HelpChunk.text(l10n.helpBoard3)]),
           HelpItem([
-            HelpChunk.text('想法板（'),
-            HelpChunk.code('SCRATCHPAD'),
-            HelpChunk.text('）放還沒拆成卡的東西；agent 讀得到、也能留意見，但改不動你寫的內容。'),
+            HelpChunk.text(l10n.helpBoard4a),
+            const HelpChunk.code('SCRATCHPAD'),
+            HelpChunk.text(l10n.helpBoard4b),
           ]),
-          HelpItem([HelpChunk.text('板的 owner 決定誰能編輯。在同一間房裡不會自動成為板的協作者。')]),
+          HelpItem([HelpChunk.text(l10n.helpBoard5)]),
         ],
       ),
       HelpSection(
-        label: '素材',
-        title: '階段素材',
+        label: l10n.helpSecAssetLabel,
+        title: l10n.helpSecAssetTitle,
         icon: Icons.attachment_outlined,
         items: [
-          HelpItem([HelpChunk.text('素材掛在「階段」上，那個階段底下的每一張卡與每一筆派工共用，所以入口在階段標題列，不在某一張卡裡面。')]),
-          HelpItem([HelpChunk.text('階段標題列上的「素材 N」點開才是清單；沒有素材時那個數字整個不顯示。')]),
-          HelpItem([HelpChunk.text('「新增素材」會把檔案上傳到目前這間聊天室再掛上階段——沒有房的時候掛不了。')]),
-          HelpItem([HelpChunk.text('一次選多個檔不問備註，直接整批掛上去；只選一個檔才會問一句「這份素材是什麼」，可以留白。')]),
-          HelpItem([HelpChunk.text('備註之後在清單上逐列編輯，改成空字串就是把備註清掉。')]),
-          HelpItem([HelpChunk.text('點檔名開檢視：圖片在 App 內看，其餘交給系統預設程式開。')]),
-          HelpItem([HelpChunk.text('「卸除」只把這份素材從這個階段拿掉，聊天室裡原本那則附件還在。別人可能正在用，所以會問一次。')]),
-          HelpItem([HelpChunk.text('agent 讀得到素材列表與備註——要它看的規格、截圖、草稿放這裡，比貼在聊天裡讓它自己翻可靠。')]),
+          HelpItem([HelpChunk.text(l10n.helpAsset1)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset2)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset3)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset4)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset5)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset6)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset7)]),
+          HelpItem([HelpChunk.text(l10n.helpAsset8)]),
         ],
       ),
       HelpSection(
-        label: '派工',
-        title: '派工',
+        label: l10n.helpSecOpsLabel,
+        title: l10n.helpSecOpsTitle,
         icon: Icons.play_circle_outline,
         items: [
           HelpItem([
-            HelpChunk.text('派工要有執行器在線，而且目標專案在它的 '),
-            HelpChunk.code('projects'),
-            HelpChunk.text(' 白名單裡，否則 Hub 會擋下建單。'),
+            HelpChunk.text(l10n.helpOps1a),
+            const HelpChunk.code('projects'),
+            HelpChunk.text(l10n.helpOps1b),
           ]),
           HelpItem([
-            HelpChunk.text('開工前執行器會先 '),
-            HelpChunk.code('fetch'),
-            HelpChunk.text(' 並用 '),
-            HelpChunk.code('pull --ff-only'),
-            HelpChunk.text(' 把常駐工作樹快轉到最新——工作樹是跨 run 共用的，不同步就等於在上一輪的舊基礎上動工。'),
+            HelpChunk.text(l10n.helpOps2a),
+            const HelpChunk.code('fetch'),
+            HelpChunk.text(l10n.helpOps2b),
+            const HelpChunk.code('pull --ff-only'),
+            HelpChunk.text(l10n.helpOps2c),
           ]),
-          HelpItem([HelpChunk.text('工作樹有未提交變更時不同步，照現況執行並在收工摘要裡講明；分支已經分岔而快轉不了則整筆派工直接失敗，要先自己處理。')]),
-          HelpItem([HelpChunk.text('一次派工動得到那個專案底下的所有 repo，不只你選的那個。每個 repo 都必須停在自己的允許分支上，有一個不合就不開工。')]),
-          HelpItem([HelpChunk.text('agent 每完成一個可交付的小步驟就在房裡回報一次——看回報就知道它走到哪，不必去翻卡。')]),
-          HelpItem([HelpChunk.text('在房裡 @ 它就能補指示，但訊息是在它下一次工具呼叫之前才送到，不會打斷手上那一步。')]),
-          HelpItem([HelpChunk.text('「請收尾」是軟停止：它把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束才會被硬取消。')]),
-          HelpItem([HelpChunk.text('「取消」是執行器直接殺進程，寫到一半的東西就停在那裡。趕時間才用它，否則用請收尾。')]),
-          HelpItem([HelpChunk.text('上下文用滿會觸發交接：它把已做／未做／下一步寫在卡上並釋放認領，下一輪的 brief 直接接上那份摘要。')]),
-          HelpItem([HelpChunk.text('瀏覽器實機測試除非派工簡述明確要求，否則不是交付門檻——沒跑不影響這一輪算不算完成。')]),
-          HelpItem([HelpChunk.text('推送會先比對待推的 commit 與畫面上看到的是否一致，不一致就不推並回報。')]),
+          HelpItem([HelpChunk.text(l10n.helpOps3)]),
+          HelpItem([HelpChunk.text(l10n.helpOps4)]),
+          HelpItem([HelpChunk.text(l10n.helpOps5)]),
+          HelpItem([HelpChunk.text(l10n.helpOps6)]),
+          HelpItem([HelpChunk.text(l10n.helpOps7)]),
+          HelpItem([HelpChunk.text(l10n.helpOps8)]),
+          HelpItem([HelpChunk.text(l10n.helpOps9)]),
+          HelpItem([HelpChunk.text(l10n.helpOps10)]),
+          HelpItem([HelpChunk.text(l10n.helpOps11)]),
         ],
       ),
       HelpSection(
-        label: '通知',
-        title: '通知',
+        label: l10n.helpSecNotifyLabel,
+        title: l10n.helpSecNotifyTitle,
         icon: Icons.notifications_outlined,
         items: [
-          HelpItem([HelpChunk.text('系統通知只在 App 開著時發，關閉期間的訊息不會補發，回來後靠未讀紅點找。')]),
+          HelpItem([HelpChunk.text(l10n.helpNotify1)]),
         ],
       ),
     ],
   ),
   HelpTopic.settings: HelpDoc(
-    title: '設定說明',
+    title: l10n.helpDocSettingsTitle,
     sections: [
       HelpSection(
-        label: '連線',
-        title: '連線',
+        label: l10n.settingsTabConnection,
+        title: l10n.settingsTabConnection,
         icon: Icons.settings_ethernet,
         items: [
-          HelpItem([HelpChunk.text('拿到邀請碼就按「貼上邀請碼」，Hub 位址與 token 會一起填好——手動兩個欄位各填一次容易配錯對。')]),
+          HelpItem([HelpChunk.text(l10n.helpConn1)]),
           HelpItem([
-            HelpChunk.text('Hub 位址是那台機器連得到的網址（例如 '),
-            HelpChunk.code('http://127.0.0.1:8787'),
-            HelpChunk.text('）。主持人綁 '),
-            HelpChunk.code('0.0.0.0'),
-            HelpChunk.text(' 時，要填的是他那台機器的 IP。'),
+            HelpChunk.text(l10n.helpConn2a),
+            const HelpChunk.code('http://127.0.0.1:8787'),
+            HelpChunk.text(l10n.helpConn2b),
+            const HelpChunk.code('0.0.0.0'),
+            HelpChunk.text(l10n.helpConn2c),
           ]),
-          HelpItem([HelpChunk.text('API token 填人類 token；沒設 token 的 Hub 才留空。改完要按「儲存設定」，連線與個人化兩頁共用同一顆。')]),
-          HelpItem([HelpChunk.text('「測試連線」只驗這台機器到 Hub 這一段：它綠了不代表別人連得到，那是主持人那邊的事。')]),
-          HelpItem([HelpChunk.text('「App 版本」那串在這頁最底下，回報問題時先附上它。')]),
+          HelpItem([HelpChunk.text(l10n.helpConn3)]),
+          HelpItem([HelpChunk.text(l10n.helpConn4)]),
+          HelpItem([HelpChunk.text(l10n.helpConn5)]),
         ],
       ),
       HelpSection(
-        label: '邀請',
-        title: '邀請與 token',
+        label: l10n.helpSecInviteLabel,
+        title: l10n.helpSecInviteTitle,
         icon: Icons.vpn_key_outlined,
         items: [
-          HelpItem([HelpChunk.text('邀請成員在連線頁底下：產生一份邀請碼給對方，之後可以單獨撤銷，不必換掉所有人的 token。')]),
-          HelpItem([HelpChunk.text('邀請碼等同密碼，用私訊給，不要貼在公開頻道。')]),
-          HelpItem([HelpChunk.text('人類 token 與 Agent token 是兩把：只有人類 token 開得了主持人模式、發得了邀請。')]),
+          HelpItem([HelpChunk.text(l10n.helpInvite1)]),
+          HelpItem([HelpChunk.text(l10n.helpInvite2)]),
+          HelpItem([HelpChunk.text(l10n.helpInvite3)]),
           HelpItem([
-            HelpChunk.text('Agent token 填進 mcp-kit 安裝器的「'),
-            HelpChunk.code('Agent token'),
-            HelpChunk.text('」欄位。'),
+            HelpChunk.text(l10n.helpInvite4a),
+            const HelpChunk.code('Agent token'),
+            HelpChunk.text(l10n.helpInvite4b),
           ]),
-          HelpItem([HelpChunk.text('把成員移出聊天室會撤銷他當初用的那張邀請碼，與他共用同一張的人會一起斷線。')]),
+          HelpItem([HelpChunk.text(l10n.helpInvite5)]),
         ],
       ),
       HelpSection(
-        label: '視覺',
-        title: '視覺',
+        label: l10n.settingsTabVisual,
+        title: l10n.settingsTabVisual,
         icon: Icons.palette_outlined,
         items: [
-          HelpItem([HelpChunk.text('深色主題這裡與標題列那顆切的是同一個開關。')]),
-          HelpItem([HelpChunk.text('字級五檔（極小／小／中 (預設)／大／特大）選了立刻套用到整個 App，不必重開。')]),
-          HelpItem([HelpChunk.text('「極小」是半個字級，實際上讀不了——它留著是個玩笑，要縮小從「小」開始試。')]),
-          HelpItem([HelpChunk.text('語言還沒做，所以這頁沒有語言選項。')]),
+          HelpItem([HelpChunk.text(l10n.helpVisual1)]),
+          HelpItem([HelpChunk.text(l10n.helpVisual2)]),
+          HelpItem([HelpChunk.text(l10n.helpVisual3)]),
+          HelpItem([HelpChunk.text(l10n.helpVisualLanguage)]),
         ],
       ),
       HelpSection(
-        label: '個人化',
-        title: '個人化',
+        label: l10n.settingsTabPersonal,
+        title: l10n.settingsTabPersonal,
         icon: Icons.person_outline,
         items: [
-          HelpItem([HelpChunk.text('顯示名稱是進房時用的名字，留空則由 Hub 隨機指派代稱。房內名字不能重複。')]),
-          HelpItem([HelpChunk.text('本機裝置識別是這台機器的身分。「重新產生」等於換一個人：原本的成員身分、未讀與管控權都接不回來。')]),
-          HelpItem([HelpChunk.text('系統通知分「所有訊息／僅提及我時／關閉」，改完立刻生效，但仍然只在 App 開著時才會發。')]),
-          HelpItem([HelpChunk.text('「轉送通知給 Codex」會把提及與 Board 變動送到本機 Codex session；thread id 留空就用預設那條。')]),
+          HelpItem([HelpChunk.text(l10n.helpPersonal1)]),
+          HelpItem([HelpChunk.text(l10n.helpPersonal2)]),
+          HelpItem([HelpChunk.text(l10n.helpPersonal3)]),
+          HelpItem([HelpChunk.text(l10n.helpPersonal4)]),
         ],
       ),
       HelpSection(
-        label: '版本',
-        title: '版本',
+        label: l10n.helpSecVersionLabel,
+        title: l10n.helpSecVersionTitle,
         icon: Icons.verified_outlined,
         items: [
-          HelpItem([HelpChunk.text('橫幅說「App 版本較舊」就更新 App。')]),
-          HelpItem([HelpChunk.text('兩邊的 commit 在設定頁與橫幅的 tooltip 上，回報問題時附上。')]),
+          HelpItem([HelpChunk.text(l10n.helpVersionApp1)]),
+          HelpItem([HelpChunk.text(l10n.helpVersionApp2)]),
           HelpItem([
-            HelpChunk.text('要確認 agent 用的是哪一份 bridge，讓它呼叫 '),
-            HelpChunk.code('chatroom_join'),
-            HelpChunk.text('，比對回傳的 '),
-            HelpChunk.code('bridge.commit'),
-            HelpChunk.text('。'),
+            HelpChunk.text(l10n.helpVersionApp3a),
+            const HelpChunk.code('chatroom_join'),
+            HelpChunk.text(l10n.helpVersionApp3b),
+            const HelpChunk.code('bridge.commit'),
+            HelpChunk.text(l10n.helpVersionApp3c),
           ]),
-          HelpItem([HelpChunk.text('不要看工具說明結尾那個版本：宿主端會快取，同一刻三支工具可能報三個不同的數字。')]),
+          HelpItem([HelpChunk.text(l10n.helpVersionApp4)]),
         ],
       ),
     ],
   ),
   HelpTopic.host: HelpDoc(
-    title: '主控台說明',
+    title: l10n.helpDocHostTitle,
     sections: [
       HelpSection(
-        label: '主機',
-        title: '這台機器',
+        label: l10n.helpSecMachineLabel,
+        title: l10n.hostConsoleTitle,
         icon: Icons.dns_outlined,
         items: [
-          HelpItem([HelpChunk.text('只有裝了 host-kit 或 mcp-kit 的機器看得到這個入口。兩個都裝就分成「Hub 主持」與「Agent 接入」兩頁。')]),
-          HelpItem([HelpChunk.text('狀態那三盞燈是進程、對外綁定、認證。空心灰圈＝沒有資訊，不是警告，不用去修。')]),
-          HelpItem([HelpChunk.text('「本機打得到」不等於別台機器連得到——綠燈底下的那句備註要讀。')]),
-          HelpItem([HelpChunk.text('連線資訊那一區是要發給成員的東西：Hub 位址、人類 token、Agent token。')]),
-          HelpItem([HelpChunk.text('兩把 token 別發錯：Agent token 開不了主持人模式也發不了邀請，人類拿到它會看到像「這台 Hub 不是你主持的」的錯誤。')]),
+          HelpItem([HelpChunk.text(l10n.helpMachine1)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine2)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine3)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine4)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine5)]),
           HelpItem([
-            HelpChunk.text('綁在 '),
-            HelpChunk.code('0.0.0.0'),
-            HelpChunk.text(' 時，發給成員的位址要換成他們連得到的 IP。'),
+            HelpChunk.text(l10n.helpMachine6a),
+            const HelpChunk.code('0.0.0.0'),
+            HelpChunk.text(l10n.helpMachine6b),
           ]),
-          HelpItem([HelpChunk.text('Hub 是本機的伺服器進程，關掉 App 不會停 Hub。「停止 Hub」殺掉所有 Hub 進程，包含自己在前景視窗開的那個。')]),
-          HelpItem([HelpChunk.text('自動啟動：一般權限註冊＝登入時自啟；以系統管理員執行 App 再註冊＝開機自啟。')]),
-          HelpItem([HelpChunk.text('「安裝位置」是 kit 的根目錄，要手動改設定或看 log 時從那裡進去。')]),
+          HelpItem([HelpChunk.text(l10n.helpMachine7)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine8)]),
+          HelpItem([HelpChunk.text(l10n.helpMachine9)]),
         ],
       ),
       HelpSection(
-        label: '通道',
-        title: '隧道、備份與 token',
+        label: l10n.helpSecTunnelLabel,
+        title: l10n.helpSecTunnelTitle,
         icon: Icons.cloud_outlined,
         items: [
-          HelpItem([HelpChunk.text('隧道：把這台 Hub 放到公網上，擋在前面的只有 token。')]),
-          HelpItem([HelpChunk.text('一次只能有一條，要換網址先關閉再開。網址每次重開都會變，換過之後邀請碼要重發。')]),
+          HelpItem([HelpChunk.text(l10n.helpTunnel1)]),
+          HelpItem([HelpChunk.text(l10n.helpTunnel2)]),
           HelpItem([
-            HelpChunk.text('備份：資料庫與 '),
-            HelpChunk.code('attachments/'),
-            HelpChunk.text(' 一起收進 '),
-            HelpChunk.code('backups\\'),
-            HelpChunk.text('。還原前 Hub 必須先停止，而且會自動先備份現況。'),
+            HelpChunk.text(l10n.helpTunnel3a),
+            const HelpChunk.code('attachments/'),
+            HelpChunk.text(l10n.helpTunnel3b),
+            const HelpChunk.code('backups\\'),
+            HelpChunk.text(l10n.helpTunnel3c),
           ]),
-          HelpItem([HelpChunk.text('換 token：重啟 Hub 後才生效，之後每個成員都要換成新的，agent 那邊的 kit 也要一起換。')]),
+          HelpItem([HelpChunk.text(l10n.helpTunnel4)]),
         ],
       ),
       HelpSection(
-        label: '接入',
-        title: 'Agent 接入',
+        label: l10n.helpSecLinkLabel,
+        title: l10n.helpSecLinkTitle,
         icon: Icons.smart_toy_outlined,
         items: [
-          HelpItem([HelpChunk.text('接入狀態的兩盞燈只回答「這台機器連不連得到 Hub」與「這把 token 認不認得」。')]),
-          HelpItem([HelpChunk.text('它答不了「agent 認得那些工具了嗎」——那要看 agent 進程載了哪一份 bridge，App 看不到。')]),
+          HelpItem([HelpChunk.text(l10n.helpLink1)]),
+          HelpItem([HelpChunk.text(l10n.helpLink2)]),
           HelpItem([
-            HelpChunk.text('要確認跑著的是哪一份，讓 agent 呼叫 '),
-            HelpChunk.code('chatroom_join'),
-            HelpChunk.text(' 並看回傳的 '),
-            HelpChunk.code('bridge.commit'),
-            HelpChunk.text('；對不上就重開那個 agent。'),
+            HelpChunk.text(l10n.helpLink3a),
+            const HelpChunk.code('chatroom_join'),
+            HelpChunk.text(l10n.helpLink3b),
+            const HelpChunk.code('bridge.commit'),
+            HelpChunk.text(l10n.helpLink3c),
           ]),
         ],
       ),
       HelpSection(
-        label: '執行器',
-        title: '執行器（runner）',
+        label: l10n.helpSecRunnerLabel,
+        title: l10n.helpSecRunnerTitle,
         icon: Icons.terminal,
         items: [
-          HelpItem([HelpChunk.text('執行器是替派工跑 agent 的那個常駐程式，目前沒有 UI 分頁，全部設定都在設定檔裡改。')]),
+          HelpItem([HelpChunk.text(l10n.helpRunner1)]),
           HelpItem([
-            HelpChunk.text('設定檔在 '),
-            HelpChunk.code('%LOCALAPPDATA%\\UEP\\Chatroom\\runner\\config.json'),
-            HelpChunk.text('，可以照 '),
-            HelpChunk.code('runner/config.example.json'),
-            HelpChunk.text(' 複製一份再改。'),
+            HelpChunk.text(l10n.helpRunner2a),
+            const HelpChunk.code(
+                '%LOCALAPPDATA%\\UEP\\Chatroom\\runner\\config.json'),
+            HelpChunk.text(l10n.helpRunner2b),
+            const HelpChunk.code('runner/config.example.json'),
+            HelpChunk.text(l10n.helpRunner2c),
           ]),
           HelpItem([
-            HelpChunk.code('projects'),
-            HelpChunk.text(' 是白名單：沒列在裡面的專案派不了工，Hub 會在建單時就擋下來。'),
+            const HelpChunk.code('projects'),
+            HelpChunk.text(l10n.helpRunner3a),
           ]),
           HelpItem([
-            HelpChunk.code('repos'),
-            HelpChunk.text(' 列這個專案底下每一個 repo 的本機路徑。一次派工動得到全部，所以漏掉的那個 agent 碰不到。'),
+            const HelpChunk.code('repos'),
+            HelpChunk.text(l10n.helpRunner4a),
           ]),
           HelpItem([
-            HelpChunk.code('allowed_branches'),
-            HelpChunk.text(' 是這個 repo 准許動工的分支。工作樹停在清單外的分支時整筆派工直接失敗，而不是幫你切過去。'),
+            const HelpChunk.code('allowed_branches'),
+            HelpChunk.text(l10n.helpRunner5a),
           ]),
           HelpItem([
-            HelpChunk.code('default_repo'),
-            HelpChunk.text(' 是建單沒指定時的主工作目錄，必須是 '),
-            HelpChunk.code('repos'),
-            HelpChunk.text(' 裡真的有的那個名字，否則設定讀不起來。'),
+            const HelpChunk.code('default_repo'),
+            HelpChunk.text(l10n.helpRunner6a),
+            const HelpChunk.code('repos'),
+            HelpChunk.text(l10n.helpRunner6b),
           ]),
           HelpItem([
-            HelpChunk.code('context_window_tokens'),
-            HelpChunk.text(' 是判斷何時該交接的依據（預設 1000000）。填得比模型實際的視窗大，交接會來不及。'),
+            const HelpChunk.code('context_window_tokens'),
+            HelpChunk.text(l10n.helpRunner7a),
           ]),
-          HelpItem([HelpChunk.text('設定檔是啟動時讀的：改完要重啟執行器才算數。')]),
+          HelpItem([HelpChunk.text(l10n.helpRunner8)]),
         ],
       ),
       HelpSection(
-        label: '版本',
-        title: '版本',
+        label: l10n.helpSecVersionLabel,
+        title: l10n.helpSecVersionTitle,
         icon: Icons.verified_outlined,
         items: [
-          HelpItem([HelpChunk.text('橫幅說「Hub 版本較舊」就更新 Hub。')]),
+          HelpItem([HelpChunk.text(l10n.helpVersionHub1)]),
         ],
       ),
     ],
@@ -393,9 +397,11 @@ class _HelpScreenState extends State<HelpScreen> {
   /// 每個 section 一把 key，導覽靠它捲過去。
   late List<GlobalKey> _sectionKeys;
 
+  // 分節數量要先拿到文件才知道，而文件現在要 l10n——所以在
+  // didChangeDependencies 建 key，那裡才查得到 Localizations。
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     _rebuildKeys();
   }
 
@@ -406,7 +412,7 @@ class _HelpScreenState extends State<HelpScreen> {
   }
 
   void _rebuildKeys() {
-    final doc = kHelpDocs[widget.topic]!;
+    final doc = helpDocs(AppLocalizations.of(context))[widget.topic]!;
     _sectionKeys = List.generate(doc.sections.length, (_) => GlobalKey());
   }
 
@@ -424,7 +430,8 @@ class _HelpScreenState extends State<HelpScreen> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final doc = kHelpDocs[widget.topic]!;
+    final l10n = AppLocalizations.of(context);
+    final doc = helpDocs(l10n)[widget.topic]!;
     return Scaffold(
       backgroundColor: s.bg,
       appBar: AppBar(
@@ -437,7 +444,8 @@ class _HelpScreenState extends State<HelpScreen> {
                 onPressed: () => context.pop(),
               )
             : null,
-        title: Text('說明', style: UepText.pageTitle(color: s.inkTitle)),
+        title:
+            Text(l10n.helpTooltip, style: UepText.pageTitle(color: s.inkTitle)),
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -446,7 +454,7 @@ class _HelpScreenState extends State<HelpScreen> {
           final content = ListView(
             padding: const EdgeInsets.all(32),
             children: [
-              MonoLabel('說明'),
+              MonoLabel(l10n.helpTooltip),
               const SizedBox(height: 6),
               Text(doc.title,
                   style: UepText.pageTitle(color: s.inkTitle)),
@@ -507,7 +515,7 @@ class _NavColumn extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          MonoLabel('分節'),
+          MonoLabel(AppLocalizations.of(context).helpNavLabel),
           const SizedBox(height: 10),
           for (var i = 0; i < doc.sections.length; i++)
             InkWell(

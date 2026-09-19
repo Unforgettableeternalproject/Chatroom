@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/host_kit.dart';
 import '../../state/app_providers.dart';
 import '../../state/host_actions.dart';
@@ -35,6 +36,7 @@ class HostConsoleScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final kit = ref.watch(hostKitProvider).value;
     final mcp = ref.watch(mcpKitProvider).value;
     final runner = ref.watch(runnerKitProvider).value;
@@ -47,16 +49,16 @@ class HostConsoleScreen extends ConsumerWidget {
         // 標題，在其他頁之間看起來像另一個 App 的畫面
         surfaceTintColor: Colors.transparent,
         shape: Border(bottom: BorderSide(color: s.line)),
-        title: Text('這台機器',
+        title: Text(l10n.hostConsoleTitle,
             style: UepText.pageTitle(color: s.inkTitle)),
         actions: [
           IconButton(
-            tooltip: '說明',
+            tooltip: l10n.helpTooltip,
             icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
             onPressed: () => context.push('/help/host'),
           ),
           IconButton(
-            tooltip: '重新檢查',
+            tooltip: l10n.hostRecheckTooltip,
             icon: Icon(Icons.refresh, size: 18, color: s.inkMute),
             onPressed: () {
               ref.invalidate(hostEnvProvider);
@@ -77,7 +79,7 @@ class HostConsoleScreen extends ConsumerWidget {
               child: Padding(
                 padding: const EdgeInsets.all(32),
                 child: Text(
-                  '這台機器沒有 Hub 主持包、agent 接入或執行器。',
+                  l10n.hostNoKits,
                   style: UepText.serif(size: 15, color: s.inkMute),
                 ),
               ),
@@ -172,20 +174,21 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
     final mcp = widget.mcp;
     final runner = widget.runner;
     final controller = _tabController;
+    final l10n = AppLocalizations.of(context);
 
     // 索引 0 是 Hub——進來的人多半是為了主持那一半
     final labels = <String>[];
     final pages = <Widget>[];
     if (kit != null) {
-      labels.add('Hub 主持');
+      labels.add(l10n.hostTabHub);
       pages.add(_hubTab(s, kit));
     }
     if (mcp != null) {
-      labels.add('Agent 接入');
+      labels.add(l10n.hostTabAgent);
       pages.add(_agentTab(s, mcp));
     }
     if (runner != null) {
-      labels.add('執行器');
+      labels.add(l10n.hostTabRunner);
       pages.add(_runnerTab(s, runner));
     }
 
@@ -208,7 +211,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
   Widget _hubTab(UepSurface s, HostKit kit) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
-          Text('Hub 主持', style: UepText.pageTitle(color: s.inkTitle)),
+          Text(AppLocalizations.of(context).hostTabHub,
+              style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           _HealthSection(),
           _sep(s),
@@ -228,7 +232,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
   Widget _agentTab(UepSurface s, McpKit mcp) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
-          Text('Agent 接入', style: UepText.pageTitle(color: s.inkTitle)),
+          Text(AppLocalizations.of(context).hostTabAgent,
+              style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           _McpSection(kit: mcp),
         ],
@@ -238,12 +243,13 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
   Widget _runnerTab(UepSurface s, RunnerKit runner) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
-          Text('執行器', style: UepText.pageTitle(color: s.inkTitle)),
+          Text(AppLocalizations.of(context).hostTabRunner,
+              style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           _RunnerProjectsSection(kit: runner),
           _sep(s),
           _Panel(
-            title: '安裝位置',
+            title: AppLocalizations.of(context).hostInstallPath,
             child: SelectableText(
               runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
               style: UepText.code(size: 12, color: s.inkSoft),
@@ -270,33 +276,34 @@ class _HealthSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final health = ref.watch(hostHealthProvider);
+    final l10n = AppLocalizations.of(context);
 
     return _Panel(
-      title: '狀態',
+      title: l10n.hostPanelStatus,
       // 主持人多半只是想確認一切正常，所以三盞燈要能一眼掃過去——
       // 「掃視」比「操作」重要（設計稿 §5）
       child: health.when(
-        loading: () => const _LightRow(
-          label: '檢查中',
+        loading: () => _LightRow(
+          label: l10n.hostLabelChecking,
           probe: Probe.checking(),
         ),
         error: (e, _) => _LightRow(
-          label: '檢查失敗',
+          label: l10n.hostLabelCheckFailed,
           probe: Probe(ProbeState.unknown, '$e'),
         ),
         data: (h) {
           if (h == null) {
-            return const _LightRow(
-              label: '設定',
-              probe: Probe(ProbeState.unknown, 'server/.env 缺少埠號或 token'),
+            return _LightRow(
+              label: l10n.settingsTitle,
+              probe: Probe(ProbeState.unknown, l10n.hostEnvMissing),
             );
           }
           return Column(children: [
-            _LightRow(label: '進程', probe: h.process),
+            _LightRow(label: l10n.hostLabelProcess, probe: h.process),
             const SizedBox(height: 14),
-            _LightRow(label: '對外綁定', probe: h.reachable),
+            _LightRow(label: l10n.hostLabelBinding, probe: h.reachable),
             const SizedBox(height: 14),
-            _LightRow(label: '認證', probe: h.auth),
+            _LightRow(label: l10n.hostLabelAuth, probe: h.auth),
           ]);
         },
       ),
@@ -382,12 +389,13 @@ class _ShareSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final env = ref.watch(hostEnvProvider).value;
 
     if (env == null || !env.isComplete) {
       return _Panel(
-        title: '連線資訊',
-        child: Text('讀不到 server/.env。',
+        title: l10n.hostPanelConnectionInfo,
+        child: Text(l10n.hostEnvUnreadable,
             style: UepText.serif(size: 14, color: s.inkMute)),
       );
     }
@@ -395,15 +403,15 @@ class _ShareSection extends ConsumerWidget {
     // 綁 0.0.0.0 時字面上的位址沒有意義——**沒有人連得到 0.0.0.0**。
     // 這裡不猜一個 IP 填進去（猜錯比留白更糟），而是講明要填什麼
     final address = env.bindsAllInterfaces
-        ? 'http://<這台機器的 IP>:${env.port}'
+        ? l10n.hostAddressAnyInterface(env.port)
         : 'http://${env.host}:${env.port}';
 
     return _Panel(
-      title: '連線資訊',
+      title: l10n.hostPanelConnectionInfo,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CopyRow(label: 'Hub 位址', value: address),
+          _CopyRow(label: l10n.fieldHubUrl, value: address),
           const SizedBox(height: 10),
           // 🔴 **憑證分離之後這裡不能只有一把。**
           //
@@ -415,26 +423,33 @@ class _ShareSection extends ConsumerWidget {
           // 分離前（legacy）只有一把而且是萬用的，那時多畫一個欄位只會
           // 讓人以為自己少了什麼東西——所以兩種狀態畫的不一樣。
           if (env.credentialsSplit) ...[
-            _CopyRow(label: '人類 token', value: env.humanToken, secret: true),
+            _CopyRow(
+                label: l10n.hostFieldHumanToken,
+                value: env.humanToken,
+                secret: true),
             const SizedBox(height: 10),
-            _CopyRow(label: 'Agent token', value: env.token, secret: true),
+            _CopyRow(
+                label: l10n.hostFieldAgentToken,
+                value: env.token,
+                secret: true),
             const SizedBox(height: 12),
             Text(
-              'Agent token 不能開主持人模式。',
+              l10n.hostAgentTokenNote,
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ] else ...[
-            _CopyRow(label: 'Token', value: env.token, secret: true),
+            _CopyRow(
+                label: l10n.hostFieldToken, value: env.token, secret: true),
             const SizedBox(height: 12),
             Text(
-              '這台 Hub 只有一把共用 token。',
+              l10n.hostSharedTokenNote,
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
           if (env.bindsAllInterfaces) ...[
             const SizedBox(height: 6),
             Text(
-              '位址請改成成員連得到的 IP。',
+              l10n.hostBindAllNote,
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
@@ -457,34 +472,36 @@ class _McpSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final status = ref.watch(mcpStatusProvider);
     final env = ref.watch(mcpEnvProvider).value;
+    final l10n = AppLocalizations.of(context);
 
     return _Panel(
-      title: '接入狀態',
+      title: l10n.hostPanelBridgeStatus,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           status.when(
-            loading: () =>
-                const _LightRow(label: '連線', probe: Probe.checking()),
+            loading: () => _LightRow(
+                label: l10n.settingsTabConnection, probe: Probe.checking()),
             error: (e, _) => _LightRow(
-                label: '連線', probe: Probe(ProbeState.unknown, '$e')),
+                label: l10n.settingsTabConnection,
+                probe: Probe(ProbeState.unknown, '$e')),
             data: (m) {
               if (m == null) {
-                return const _LightRow(
-                  label: '設定',
-                  probe: Probe(ProbeState.unknown, '讀不到 kit 根目錄的 .env'),
+                return _LightRow(
+                  label: l10n.settingsTitle,
+                  probe: Probe(ProbeState.unknown, l10n.hostMcpEnvMissing),
                 );
               }
               return Column(children: [
-                _LightRow(label: '連線', probe: m.reach),
+                _LightRow(label: l10n.settingsTabConnection, probe: m.reach),
                 const SizedBox(height: 14),
-                _LightRow(label: '認證', probe: m.auth),
+                _LightRow(label: l10n.hostLabelAuth, probe: m.auth),
               ]);
             },
           ),
           if (env != null && env.url.isNotEmpty) ...[
             const SizedBox(height: 14),
-            _CopyRow(label: '連的 Hub', value: env.url),
+            _CopyRow(label: l10n.hostFieldConnectedHub, value: env.url),
           ],
           const SizedBox(height: 16),
           _VersionCheck(kit: kit),
@@ -531,6 +548,7 @@ class _VersionCheck extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final version = ref.watch(mcpBridgeVersionProvider).value ?? '';
     final when = kit.installedAt.isEmpty
         ? ''
@@ -546,11 +564,11 @@ class _VersionCheck extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Bridge 版本',
+          Text(l10n.hostBridgeVersion,
               style: UepText.fieldLabel(color: s.inkMute)),
           const SizedBox(height: 5),
           SelectableText(
-            version.isEmpty ? '讀不到 _build.json' : version,
+            version.isEmpty ? l10n.hostBridgeVersionUnknown : version,
             style: UepText.code(
                 size: 13,
                 color: version.isEmpty ? s.inkMute : UepColors.gold),
@@ -558,8 +576,7 @@ class _VersionCheck extends ConsumerWidget {
           if (version.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(
-              '要確認 agent 用的是這一份，讓它呼叫 chatroom_join，'
-              '比對回傳的 bridge.commit。',
+              l10n.hostBridgeVerifyHint,
               style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.6),
             ),
           ],
@@ -567,10 +584,10 @@ class _VersionCheck extends ConsumerWidget {
           // 次要資訊：對照不上時拿來判斷「這包是什麼時候、裝給誰的」
           Wrap(spacing: 18, runSpacing: 4, children: [
             if (when.isNotEmpty)
-              Text('安裝於 $when',
+              Text(l10n.hostInstalledAt(when),
                   style: UepText.code(size: 11.5, color: s.inkMute)),
             if (kit.targets.isNotEmpty)
-              Text('裝給 ${kit.targets.join('、')}',
+              Text(l10n.hostInstalledFor(kit.targets.join('、')),
                   style: UepText.code(size: 11.5, color: s.inkMute)),
           ]),
         ],
@@ -589,24 +606,26 @@ class _TunnelSection extends ConsumerWidget {
     final actions = ref.watch(hostActionsProvider);
     final op = _opOf(ref, _tunnelKinds);
     final tunnelOpening = _isPending(ref, 'tunnel_start');
+    final l10n = AppLocalizations.of(context);
 
     return _Panel(
-      title: '隧道',
+      title: l10n.hostPanelTunnel,
       child: status.when(
-        loading: () => const _LightRow(
-            label: '狀態', probe: Probe.checking()),
+        loading: () =>
+            _LightRow(label: l10n.hostPanelStatus, probe: Probe.checking()),
         error: (e, _) => _LightRow(
-            label: '狀態', probe: Probe(ProbeState.unknown, '$e')),
+            label: l10n.hostPanelStatus,
+            probe: Probe(ProbeState.unknown, '$e')),
         data: (t) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _LightRow(
-              label: '狀態',
+              label: l10n.hostPanelStatus,
               probe: Probe(t.state, t.detail, caveat: t.caveat),
             ),
             if (t.hasUrl) ...[
               const SizedBox(height: 12),
-              _CopyRow(label: '隧道網址', value: t.url),
+              _CopyRow(label: l10n.hostFieldTunnelUrl, value: t.url),
             ],
             if (actions != null && Platform.isWindows) ...[
               const SizedBox(height: 14),
@@ -636,12 +655,12 @@ class _TunnelSection extends ConsumerWidget {
                   // 機器上分不出來，而後者開第二條就是那個安全問題），
                   // 但字要講它真正知道的事：偵測到一個舊網址。
                   label: tunnelOpening
-                      ? '開啟中…'
+                      ? l10n.hostTunnelOpening
                       : !t.hasUrl
-                          ? '開隧道'
+                          ? l10n.hostTunnelOpenButton
                           : (t.state == ProbeState.unknown
-                              ? '偵測到舊網址'
-                              : '已經有一條'),
+                              ? l10n.hostTunnelStaleUrl
+                              : l10n.hostTunnelAlreadyOne),
                   onPressed: (tunnelOpening || t.hasUrl)
                       ? null
                       : () => _confirmTunnel(context, ref, actions),
@@ -659,7 +678,7 @@ class _TunnelSection extends ConsumerWidget {
                   UepButton(
                     small: true,
                     variant: UepButtonVariant.outline,
-                    label: '關閉隧道',
+                    label: l10n.hostTunnelCloseButton,
                     onPressed: () => _confirmStopTunnel(context, ref),
                   ),
                 ],
@@ -687,26 +706,27 @@ class _TunnelSection extends ConsumerWidget {
   Future<void> _confirmTunnel(
     BuildContext context, WidgetRef ref, HostActions actions) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('開啟隧道',
+        title: Text(l10n.hostTunnelConfirmTitle,
             style: UepText.serif(
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
-          '開啟後任何拿到網址與 token 的人都能讀取所有房間。',
+          l10n.hostTunnelConfirmBody,
           style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消',
+            child: Text(l10n.commonCancel,
                 style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('開啟',
+            child: Text(l10n.commonOpen,
                 style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
@@ -745,15 +765,15 @@ class _TunnelSection extends ConsumerWidget {
         ref.invalidate(tunnelStatusProvider);
         return (await ref.read(tunnelStatusProvider.future)).url;
       },
-      baselineFailText: '讀不到隧道狀態，沒有送出指令',
+      baselineFailText: l10n.hostTunnelBaselineFail,
       launch: actions.startTunnel,
       ready: (beforeUrl) async {
         ref.invalidate(tunnelStatusProvider);
         final t = await ref.read(tunnelStatusProvider.future);
         return t.hasUrl && t.url != beforeUrl;
       },
-      okText: '隧道已開啟',
-      timeoutText: '已送出，網址尚未更新。請查看 logs\\tunnel-*.log',
+      okText: l10n.hostTunnelOpened,
+      timeoutText: l10n.hostTunnelOpenTimeout,
     );
   }
 
@@ -763,26 +783,27 @@ class _TunnelSection extends ConsumerWidget {
   /// 而外面的人手上拿的就是那個網址。重開會是新的一條，要重發給所有人。
   Future<void> _confirmStopTunnel(BuildContext context, WidgetRef ref) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('關閉隧道',
+        title: Text(l10n.hostTunnelCloseButton,
             style: UepText.serif(
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
-          '目前的網址會立刻失效，重開會是新的網址。',
+          l10n.hostStopTunnelBody,
           style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消',
+            child: Text(l10n.commonCancel,
                 style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('關閉隧道',
+            child: Text(l10n.hostTunnelCloseButton,
                 style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
@@ -822,6 +843,7 @@ class _ControlSection extends ConsumerWidget {
     final op = _opOf(ref, _controlKinds);
     // 按鈕看自己那一格，顯示看這一區最新的——見 `_isPending` 上方
     final hubStarting = _isPending(ref, 'hub_start');
+    final l10n = AppLocalizations.of(context);
 
     return _Panel(
       title: 'Hub',
@@ -830,10 +852,10 @@ class _ControlSection extends ConsumerWidget {
         children: [
           if (windows) ...[
             _StatusLine(
-              label: '狀態',
+              label: l10n.hostPanelStatus,
               value: switch (health?.process.state) {
-                ProbeState.ok => '執行中',
-                ProbeState.bad => '已停止',
+                ProbeState.ok => l10n.hostProbeRunning,
+                ProbeState.bad => l10n.hostProbeStopped,
                 _ => '—',
               },
             ),
@@ -851,8 +873,11 @@ class _ControlSection extends ConsumerWidget {
               // 起來了沒。這是兩種操作的本質差別，不是少做一步。
               UepButton(
                 small: true,
-                label: hubStarting ? '啟動中…' : '啟動 Hub',
-                onPressed: hubStarting ? null : () => _startHub(ref, actions),
+                label: hubStarting
+                    ? l10n.hostHubStarting
+                    : l10n.hostHubStartButton,
+                onPressed:
+                    hubStarting ? null : () => _startHub(ref, actions, l10n),
               ),
               const SizedBox(width: 10),
               // 🔴 停止要放在啟動旁邊，不是放在「自啟」那一區。
@@ -864,27 +889,31 @@ class _ControlSection extends ConsumerWidget {
               UepButton(
                 small: true,
                 variant: UepButtonVariant.outline,
-                label: '停止 Hub',
+                label: l10n.hostHubStopButton,
                 onPressed: () => _confirmStop(context, ref),
               ),
             ]),
             const SizedBox(height: 18),
             _StatusLine(
-              label: '自動啟動',
-              value: service?.registered == true ? '已註冊' : '未註冊',
+              label: l10n.hostAutoStartLabel,
+              value: service?.registered == true
+                  ? l10n.hostServiceRegistered
+                  : l10n.hostServiceUnregistered,
             ),
             const SizedBox(height: 10),
             Wrap(spacing: 10, runSpacing: 10, children: [
               UepButton(
                 small: true,
                 variant: UepButtonVariant.outline,
-                label: service?.registered == true ? '重新註冊' : '註冊',
+                label: service?.registered == true
+                    ? l10n.hostServiceReregister
+                    : l10n.hostServiceRegister,
                 onPressed: () => _runService(ref, 'install'),
               ),
               UepButton(
                 small: true,
                 variant: UepButtonVariant.outline,
-                label: '啟動',
+                label: l10n.hostServiceStart,
                 onPressed: () => _runService(ref, 'start'),
               ),
               // 停止不在這裡——它是全域的（連前景起的都殺），放在上面
@@ -894,7 +923,7 @@ class _ControlSection extends ConsumerWidget {
                 UepButton(
                   small: true,
                   variant: UepButtonVariant.outline,
-                  label: '取消註冊',
+                  label: l10n.hostServiceUninstall,
                   onPressed: () => _runService(ref, 'uninstall'),
                 ),
             ]),
@@ -904,12 +933,12 @@ class _ControlSection extends ConsumerWidget {
             UepButton(
                 small: true,
                 variant: UepButtonVariant.outline,
-                label: '開啟日誌資料夾',
+                label: l10n.hostOpenLogs,
                 onPressed: actions.openLogs),
             UepButton(
                 small: true,
                 variant: UepButtonVariant.outline,
-                label: '開啟備份資料夾',
+                label: l10n.hostOpenBackups,
                 onPressed: actions.openBackups),
           ]),
           // 這一區自己的操作結果。**放在按鈕底下**，不是放到頁尾那個
@@ -942,16 +971,17 @@ class _ControlSection extends ConsumerWidget {
   ///
   /// 已經在跑就**不送出啟動**：那條路只會多出一個進程，而使用者按這顆多半
   /// 是想確認它活著，不是想要第二個。想重啟的人有旁邊那顆「停止 Hub」。
-  Future<void> _startHub(WidgetRef ref, HostActions actions) =>
+  Future<void> _startHub(
+          WidgetRef ref, HostActions actions, AppLocalizations l10n) =>
       _launchAndWatch(
         ref,
         kind: 'hub_start',
         alreadyDone: () => _hubRunning(ref),
-        alreadyText: 'Hub 已在執行中',
+        alreadyText: l10n.hostHubAlreadyRunning,
         launch: actions.startHub,
         ready: (_) => _hubRunning(ref),
-        okText: 'Hub 已啟動',
-        timeoutText: '已送出，尚未啟動完成。請查看 logs\\',
+        okText: l10n.hostHubStarted,
+        timeoutText: l10n.hostHubStartTimeout,
       );
 
   Future<void> _runService(WidgetRef ref, String action) async {
@@ -968,26 +998,27 @@ class _ControlSection extends ConsumerWidget {
   /// 對話框同一套判準）。
   Future<void> _confirmStop(BuildContext context, WidgetRef ref) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('停止 Hub',
+        title: Text(l10n.hostHubStopButton,
             style: UepText.serif(
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
-          '所有 agent 與 App 會立即斷線。',
+          l10n.hostStopHubBody,
           style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消',
+            child: Text(l10n.commonCancel,
                 style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('停止 Hub',
+            child: Text(l10n.hostHubStopButton,
                 style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
@@ -1016,7 +1047,9 @@ class _ControlSection extends ConsumerWidget {
     ref.read(lastDataOpProvider.notifier).set({
       'kind': 'hub_stop',
       'ok': err.isEmpty,
-      'detail': err.isNotEmpty ? err : (out.isNotEmpty ? out : 'Hub 已停止'),
+      'detail': err.isNotEmpty
+          ? err
+          : (out.isNotEmpty ? out : l10n.hostHubStopped),
     });
   }
 }
@@ -1160,7 +1193,8 @@ Future<Map<String, dynamic>> runOp({
       return {
         'kind': kind,
         'ok': false,
-        'error': '讀不到目前狀態，沒有送出指令（$e）',
+        'error': L10n.current
+            .hostOpReasonWithError(L10n.current.hostOpNoStatus, '$e'),
       };
     }
     if (before) {
@@ -1177,7 +1211,8 @@ Future<Map<String, dynamic>> runOp({
       return {
         'kind': kind,
         'ok': false,
-        'error': '${baselineFailText ?? '讀不到目前狀態，沒有送出指令'}（$e）',
+        'error': L10n.current.hostOpReasonWithError(
+            baselineFailText ?? L10n.current.hostOpNoStatus, '$e'),
       };
     }
   }
@@ -1257,8 +1292,10 @@ class _DataSectionState extends ConsumerState<_DataSection> {
         last,
         (k) => !_controlKinds.contains(k) && !_tunnelKinds.contains(k));
 
+    final l10n = AppLocalizations.of(context);
+
     return _Panel(
-      title: '備份',
+      title: l10n.hostPanelBackup,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1266,7 +1303,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
             UepButton(
               small: true,
               variant: UepButtonVariant.outline,
-              label: _busy ? '執行中…' : '立即備份',
+              label: _busy ? l10n.hostBackupRunning : l10n.hostBackupNow,
               onPressed: _busy ? null : _backup,
             ),
             // 備份與還原要並排。**只有備份沒有還原，等於備份沒有出口**——
@@ -1274,13 +1311,13 @@ class _DataSectionState extends ConsumerState<_DataSection> {
             UepButton(
               small: true,
               variant: UepButtonVariant.outline,
-              label: '還原備份',
+              label: l10n.hostRestoreBackupButton,
               onPressed: _busy ? null : () => _pickAndRestore(context),
             ),
             UepButton(
               small: true,
               variant: UepButtonVariant.outline,
-              label: '換 token',
+              label: l10n.hostRotateTokenButton,
               onPressed: _busy ? null : () => _confirmRotate(context),
             ),
           ]),
@@ -1337,7 +1374,7 @@ class _DataSectionState extends ConsumerState<_DataSection> {
       ref.read(lastDataOpProvider.notifier).set({
         'kind': 'restore',
         'ok': false,
-        'error': '沒有可還原的備份',
+        'error': AppLocalizations.of(context).hostNoBackups,
       });
       return;
     }
@@ -1374,13 +1411,14 @@ class _DataSectionState extends ConsumerState<_DataSection> {
   Future<bool?> _confirmRestore(
       BuildContext context, Map<String, dynamic> backup) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final complete = backup['complete'] == true;
     final hasAttachments = backup['attachments_existed'] == true;
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('還原 ${backup['name']}',
+        title: Text(l10n.hostRestoreTitle('${backup['name']}'),
             style: UepText.serif(
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Column(
@@ -1388,15 +1426,15 @@ class _DataSectionState extends ConsumerState<_DataSection> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '現有的訊息、成員與附件會被這份備份取代。還原前 Hub 必須先停止。',
+              l10n.hostRestoreBody,
               style: UepText.serif(size: 14, color: s.ink, height: 1.7),
             ),
             if (!complete || !hasAttachments) ...[
               const SizedBox(height: 12),
               Text(
                 !complete
-                    ? '這份備份沒有 manifest，內容不明。'
-                    : '這份備份不含附件。',
+                    ? l10n.hostBackupNoManifestNote
+                    : l10n.hostBackupNoAttachmentsNote,
                 style: UepText.serif(
                     size: 13.5, color: UepColors.errorText, height: 1.6),
               ),
@@ -1406,12 +1444,12 @@ class _DataSectionState extends ConsumerState<_DataSection> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消',
+            child: Text(l10n.commonCancel,
                 style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('還原',
+            child: Text(l10n.commonRestore,
                 style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
@@ -1425,26 +1463,27 @@ class _DataSectionState extends ConsumerState<_DataSection> {
   /// 新的那把，而那是一件人工的、會拖很久的事。
   Future<void> _confirmRotate(BuildContext context) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: s.bgCard,
-        title: Text('換掉 token',
+        title: Text(l10n.hostRotateTitle,
             style: UepText.serif(
                 size: 15, weight: FontWeight.w600, color: s.inkTitle)),
         content: Text(
-          '重啟 Hub 後舊 token 失效，所有成員都要換成新的。',
+          l10n.hostRotateBody,
           style: UepText.serif(size: 14, color: s.ink, height: 1.7),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text('取消',
+            child: Text(l10n.commonCancel,
                 style: UepText.serif(size: 14, color: s.inkMute)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('換 token',
+            child: Text(l10n.hostRotateTokenButton,
                 style: UepText.serif(size: 14, color: UepColors.gold)),
           ),
         ],
@@ -1488,9 +1527,10 @@ class _RestorePicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('選擇備份',
+      title: Text(l10n.hostPickBackupTitle,
           style: UepText.serif(
               size: 15, weight: FontWeight.w600, color: s.inkTitle)),
       content: SizedBox(
@@ -1510,8 +1550,8 @@ class _RestorePicker extends StatelessWidget {
                   style: UepText.code(size: 12.5, color: s.ink)),
               subtitle: Text(
                 complete
-                    ? '資料庫 $bytes 位元組・附件 $files 個檔案'
-                    : '沒有 manifest',
+                    ? l10n.hostBackupMeta('$bytes', '$files')
+                    : l10n.hostBackupNoManifest,
                 style: UepText.serif(
                     size: 12,
                     color: complete ? s.inkMute : UepColors.errorText),
@@ -1524,7 +1564,7 @@ class _RestorePicker extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: Text('取消',
+          child: Text(l10n.commonCancel,
               style: UepText.serif(size: 14, color: s.inkMute)),
         ),
       ],
@@ -1540,6 +1580,7 @@ class _OpResult extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     // 還在跑。**這一格要存在**——按下去到結果出來之間有十幾秒，
     // 那段空白正是艾斯維爾說的「不知道按了有沒有用」。
     //
@@ -1548,13 +1589,16 @@ class _OpResult extends StatelessWidget {
     // 「失敗：不知道為什麼」。測試就是這樣抓到的。
     if (result['pending'] == true) {
       return Text(
-        result['kind'] == 'tunnel_start' ? '正在開啟隧道…' : '正在啟動…',
+        result['kind'] == 'tunnel_start'
+            ? l10n.hostOpTunnelPending
+            : l10n.hostOpPending,
         style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5),
       );
     }
     final ok = result['ok'] == true;
     if (!ok) {
-      return Text('失敗：${result['error'] ?? '原因不明'}',
+      return Text(
+          l10n.hostOpFailed('${result['error'] ?? l10n.hostOpUnknownReason}'),
           style: UepText.code(size: 12, color: UepColors.errorText));
     }
     if (result['kind'] == 'hub_start' || result['kind'] == 'tunnel_start') {
@@ -1567,9 +1611,11 @@ class _OpResult extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 這是使用者唯一看得到明碼的時刻，所以不遮——遮了他就得去翻 .env
-          _CopyRow(label: '新 token', value: '${result['token'] ?? ''}'),
+          _CopyRow(
+              label: l10n.hostFieldNewToken,
+              value: '${result['token'] ?? ''}'),
           const SizedBox(height: 6),
-          Text('重啟 Hub 後生效。舊設定：${result['backup'] ?? ''}',
+          Text(l10n.hostRotateResult('${result['backup'] ?? ''}'),
               style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
         ],
       );
@@ -1589,15 +1635,15 @@ class _OpResult extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('已還原：${result['restored_from'] ?? ''}',
+          Text(l10n.hostRestoredFrom('${result['restored_from'] ?? ''}'),
               style: UepText.code(size: 12, color: s.inkSoft)),
           const SizedBox(height: 4),
           // 退路要跟結果一起講。還原完才發現拿錯備份的人，需要的就是這一行
-          Text('還原前的備份：${result['safety_backup'] ?? ''}',
+          Text(l10n.hostSafetyBackup('${result['safety_backup'] ?? ''}'),
               style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
           if (result['attachments_restored'] != true) ...[
             const SizedBox(height: 4),
-            Text('這份備份不含附件。',
+            Text(l10n.hostBackupNoAttachmentsNote,
                 style: UepText.serif(
                     size: 12.5, color: UepColors.errorText, height: 1.5)),
           ],
@@ -1609,15 +1655,17 @@ class _OpResult extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('已備份：${result['dest'] ?? ''}',
+        Text(l10n.hostBackupDest('${result['dest'] ?? ''}'),
             style: UepText.code(size: 12, color: s.inkSoft)),
         const SizedBox(height: 4),
         Text(
           hadAttachments
-              ? '資料庫 ${result['db_bytes'] ?? 0} 位元組，附件 $files 個檔案'
+              ? l10n.hostBackupWithAttachments(
+                  '${result['db_bytes'] ?? 0}', '$files')
               // 講明是「來源就沒有」而不是「沒備份到」——這兩者在磁碟上
               // 一模一樣，意義相反
-              : '資料庫 ${result['db_bytes'] ?? 0} 位元組，不含附件',
+              : l10n.hostBackupWithoutAttachments(
+                  '${result['db_bytes'] ?? 0}'),
           style: UepText.serif(
               size: 12.5,
               color: hadAttachments ? s.inkMute : s.inkSoft,
@@ -1673,13 +1721,17 @@ class _CopyRowState extends State<_CopyRow> {
       ),
       if (widget.secret)
         IconButton(
-          tooltip: _revealed ? '遮起來' : '顯示',
+          tooltip: _revealed
+              ? AppLocalizations.of(context).commonHide
+              : AppLocalizations.of(context).commonShow,
           icon: Icon(_revealed ? Icons.visibility_off : Icons.visibility,
               size: 16, color: s.inkMute),
           onPressed: () => setState(() => _revealed = !_revealed),
         ),
       IconButton(
-        tooltip: _copied ? '已複製' : '複製',
+        tooltip: _copied
+            ? AppLocalizations.of(context).commonCopied
+            : AppLocalizations.of(context).commonCopy,
         icon: Icon(_copied ? Icons.check : Icons.copy,
             size: 16, color: _copied ? UepColors.success : s.inkMute),
         onPressed: () async {
@@ -1704,7 +1756,7 @@ class _KitSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     return _Panel(
-      title: '安裝位置',
+      title: AppLocalizations.of(context).hostInstallPath,
       child: SelectableText(kit.kitRoot,
           style: UepText.code(size: 12, color: s.inkSoft)),
     );
@@ -1771,33 +1823,39 @@ class _RunnerProjectsSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final cfg = ref.watch(runnerConfigProvider);
 
     return cfg.when(
-      loading: () => const _Panel(
-        title: '專案',
-        child: _LightRow(label: '設定', probe: Probe.checking()),
+      loading: () => _Panel(
+        title: l10n.hostRunnerPanelProjects,
+        child: _LightRow(
+            label: l10n.settingsTitle, probe: Probe.checking()),
       ),
       error: (e, _) => _Panel(
-        title: '專案',
-        child: _LightRow(label: '設定', probe: Probe(ProbeState.unknown, '$e')),
+        title: l10n.hostRunnerPanelProjects,
+        child: _LightRow(
+            label: l10n.settingsTitle,
+            probe: Probe(ProbeState.unknown, '$e')),
       ),
       data: (config) {
         if (config == null) {
           return _Panel(
-            title: '專案',
+            title: l10n.hostRunnerPanelProjects,
             child: _LightRow(
-              label: '設定',
-              probe: Probe(ProbeState.unknown, '讀不到 ${kit.configPath}'),
+              label: l10n.settingsTitle,
+              probe: Probe(ProbeState.unknown,
+                  l10n.hostRunnerConfigUnreadable(kit.configPath)),
             ),
           );
         }
         if (config.projects.isEmpty) {
-          return const _Panel(
-            title: '專案',
+          return _Panel(
+            title: l10n.hostRunnerPanelProjects,
             child: _LightRow(
-              label: '設定',
-              probe: Probe(ProbeState.unknown, 'config.json 裡還沒有任何專案'),
+              label: l10n.settingsTitle,
+              probe:
+                  Probe(ProbeState.unknown, l10n.hostRunnerNoProjects),
             ),
           );
         }
@@ -1810,8 +1868,7 @@ class _RunnerProjectsSection extends ConsumerWidget {
             ],
             const SizedBox(height: 18),
             Text(
-              '未公開的專案照樣能在這台機器上執行，只是不會出現在別人的'
-              '派工對話框裡。',
+              l10n.hostRunnerPrivateNote,
               style: UepText.serif(size: 13, color: s.inkMute),
             ),
           ],
@@ -1861,6 +1918,8 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
   /// Hub 連不上）時說「已存檔，執行器還沒收到」，而不是一句籠統的成功——
   /// 那會讓人以為設定已經在跑著的執行器上生效了。
   Future<void> _save() async {
+    // await 之後不能再碰 context，先把字拿在手上
+    final l10n = AppLocalizations.of(context);
     setState(() => _saving = true);
     try {
       await saveRunnerProject(
@@ -1872,11 +1931,11 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
       );
     } on RunnerConfigConflict {
       if (mounted) setState(() => _saving = false);
-      _say('config.json 在這期間被改過了，沒有覆寫。請按右上角重新檢查再改一次。');
+      _say(l10n.hostRunnerConflict);
       return;
     } on Object catch (e) {
       if (mounted) setState(() => _saving = false);
-      _say('寫不進 config.json：$e');
+      _say(l10n.hostRunnerWriteFailed('$e'));
       return;
     }
 
@@ -1884,8 +1943,7 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
     ref.invalidate(runnerConfigProvider);
     if (runnerId == null) {
       if (mounted) setState(() => _saving = false);
-      _say('已存檔。找不到 state.json 裡的 runner_id，沒發重讀命令——'
-          '執行器下次重啟時會讀到新設定。');
+      _say(l10n.hostRunnerSavedNoRunnerId);
       return;
     }
     try {
@@ -1894,10 +1952,9 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
             command: 'reload',
             sessionKey: ref.read(appConfigProvider).deviceKey,
           );
-      _say('已存檔，重讀設定的命令已送出（執行器最多 30 秒後領取）。'
-          '進行中的 run 不受影響。');
+      _say(l10n.hostRunnerSavedReloadSent);
     } on ApiException catch (e) {
-      _say('已存檔，但重讀命令沒送出：${e.message}');
+      _say(l10n.hostRunnerReloadFailed(e.message));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -1908,21 +1965,22 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
     final path = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('加一個 skill 目錄'),
+        title: Text(AppLocalizations.of(context).hostRunnerAddSkillDirTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '這台機器上的絕對路徑'),
+          decoration: InputDecoration(
+              hintText: AppLocalizations.of(context).hostRunnerSkillDirHint),
           onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
+            child: Text(AppLocalizations.of(context).commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: const Text('加入'),
+            child: Text(AppLocalizations.of(context).commonAdd),
           ),
         ],
       ),
@@ -1935,11 +1993,12 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final p = widget.project;
     final repos = p.repos.entries
         .map((e) => e.key == p.defaultRepo
-            ? '${e.key}（預設）：${e.value}'
-            : '${e.key}：${e.value}')
+            ? l10n.hostRunnerRepoDefault(e.key, e.value)
+            : l10n.hostRunnerRepoEntry(e.key, e.value))
         .toList();
 
     return _Panel(
@@ -1950,14 +2009,14 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _public,
-            title: Text('公開給他人派工',
+            title: Text(l10n.hostRunnerPublic,
                 style: UepText.serif(size: 14.5, color: s.ink)),
             onChanged: _saving ? null : (v) => setState(() => _public = v),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _livetest,
-            title: Text('允許瀏覽器實機測試',
+            title: Text(l10n.hostRunnerLivetest,
                 style: UepText.serif(size: 14.5, color: s.ink)),
             onChanged: _saving ? null : (v) => setState(() => _livetest = v),
           ),
@@ -1971,10 +2030,12 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
                   style: UepText.code(size: 12, color: s.inkSoft)),
             ),
           const SizedBox(height: 14),
-          Text('skill 目錄', style: UepText.fieldLabel(color: s.inkMute)),
+          Text(l10n.hostRunnerSkillDirs,
+              style: UepText.fieldLabel(color: s.inkMute)),
           const SizedBox(height: 6),
           if (_skillDirs.isEmpty)
-            Text('（沒有）', style: UepText.serif(size: 13, color: s.inkMute)),
+            Text(l10n.hostRunnerNone,
+                style: UepText.serif(size: 13, color: s.inkMute)),
           for (final dir in _skillDirs)
             Row(
               children: [
@@ -1983,7 +2044,7 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
                       style: UepText.code(size: 12, color: s.inkSoft)),
                 ),
                 IconButton(
-                  tooltip: '移除',
+                  tooltip: l10n.commonRemove,
                   icon: Icon(Icons.close, size: 16, color: s.inkMute),
                   onPressed: _saving
                       ? null
@@ -1996,14 +2057,14 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
           Row(
             children: [
               UepButton(
-                label: '加目錄',
+                label: l10n.hostRunnerAddDir,
                 small: true,
                 variant: UepButtonVariant.outline,
                 onPressed: _saving ? null : _addSkillDir,
               ),
               const SizedBox(width: 12),
               UepButton(
-                label: '儲存並套用',
+                label: l10n.hostRunnerSaveApply,
                 small: true,
                 onPressed: (_saving || !_dirty) ? null : _save,
               ),
