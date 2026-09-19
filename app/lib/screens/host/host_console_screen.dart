@@ -14,11 +14,13 @@ import '../../state/app_providers.dart';
 import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
+import '../../state/kit_installer.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../state/runner_kit_providers.dart';
 import '../../state/runs_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
+import 'kit_install_section.dart';
 
 /// 主機控制台——**這台機器上的 Hub**。
 ///
@@ -73,11 +75,20 @@ class HostConsoleScreen extends ConsumerWidget {
               ref.invalidate(runnerConfigProvider);
               ref.invalidate(runnerVersionProvider);
               ref.invalidate(runnerIdProvider);
+              ref.invalidate(kitReleaseProvider);
+              ref.invalidate(kitPythonProvider);
+              ref.invalidate(runnerBusyProvider);
             },
           ),
         ],
       ),
-      body: (kit == null && mcp == null && runner == null)
+      // 🔴 一包都沒有時這頁**仍然有用**：它是唯一能把三包裝起來的地方。
+      // 「沒有 kit 就什麼都別畫」是這個功能存在之前的規則——那時這頁確實
+      // 什麼都做不了；現在做得了一件事，而且是第一件事。
+      body: (kit == null &&
+              mcp == null &&
+              runner == null &&
+              !ref.watch(kitInstallSupportedProvider))
           ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
@@ -92,7 +103,12 @@ class HostConsoleScreen extends ConsumerWidget {
           : Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
-                child: _HostConsoleBody(kit: kit, mcp: mcp, runner: runner),
+                child: _HostConsoleBody(
+                  kit: kit,
+                  mcp: mcp,
+                  runner: runner,
+                  canInstall: ref.watch(kitInstallSupportedProvider),
+                ),
               ),
             ),
     );
@@ -112,11 +128,16 @@ class _HostConsoleBody extends StatefulWidget {
     required this.kit,
     required this.mcp,
     required this.runner,
+    required this.canInstall,
   });
 
   final HostKit? kit;
   final McpKit? mcp;
   final RunnerKit? runner;
+
+  /// 這台機器裝得了 kit 嗎（Windows）。裝得了的話**三個分頁都在**——
+  /// 沒裝的那一頁就是它的安裝入口，而不是一個不存在的分頁。
+  final bool canInstall;
 
   @override
   State<_HostConsoleBody> createState() => _HostConsoleBodyState();
@@ -128,10 +149,11 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
   int _tabCount = 0;
 
   /// 這台機器上裝了幾種 kit。
-  int get _count =>
-      (widget.kit != null ? 1 : 0) +
-      (widget.mcp != null ? 1 : 0) +
-      (widget.runner != null ? 1 : 0);
+  int get _count => widget.canInstall
+      ? 3
+      : (widget.kit != null ? 1 : 0) +
+          (widget.mcp != null ? 1 : 0) +
+          (widget.runner != null ? 1 : 0);
 
   @override
   void didChangeDependencies() {
@@ -182,15 +204,15 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
     // 索引 0 是 Hub——進來的人多半是為了主持那一半
     final labels = <String>[];
     final pages = <Widget>[];
-    if (kit != null) {
+    if (kit != null || widget.canInstall) {
       labels.add(l10n.hostTabHub);
       pages.add(_hubTab(s, kit));
     }
-    if (mcp != null) {
+    if (mcp != null || widget.canInstall) {
       labels.add(l10n.hostTabAgent);
       pages.add(_agentTab(s, mcp));
     }
-    if (runner != null) {
+    if (runner != null || widget.canInstall) {
       labels.add(l10n.hostTabRunner);
       pages.add(_runnerTab(s, runner));
     }
@@ -211,62 +233,109 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
   }
 
   /// 主持人這一半：這台機器上的 Hub 活著嗎、要發什麼給成員、怎麼起停。
-  Widget _hubTab(UepSurface s, HostKit kit) => ListView(
+  Widget _hubTab(UepSurface s, HostKit? kit) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
           Text(AppLocalizations.of(context).hostTabHub,
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
-          _HealthSection(),
-          _sep(s),
-          _ShareSection(kit: kit),
-          _sep(s),
-          const _TunnelSection(),
-          _sep(s),
-          const _ControlSection(),
-          _sep(s),
-          const _DataSection(),
-          _sep(s),
-          _KitSection(kit: kit),
+          if (kit != null) ...[
+            _HealthSection(),
+            _sep(s),
+            _ShareSection(kit: kit),
+            _sep(s),
+            const _TunnelSection(),
+            _sep(s),
+            const _ControlSection(),
+            _sep(s),
+            const _DataSection(),
+            _sep(s),
+            _KitSection(kit: kit),
+          ],
+          // 裝不了 kit 的機器（手機）上連這一塊都不畫——一顆按不動的
+          // 「安裝」比沒有那顆按鈕更糟
+          if (widget.canInstall) ...[
+            if (kit != null) _sep(s),
+            KitInstallSection(kit: KitId.hub, installed: kit != null),
+          ],
         ],
       );
 
   /// 成員這一半：這台機器的 agent 連得上 Hub 嗎。
-  Widget _agentTab(UepSurface s, McpKit mcp) => ListView(
+  Widget _agentTab(UepSurface s, McpKit? mcp) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
           Text(AppLocalizations.of(context).hostTabAgent,
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
-          _McpSection(kit: mcp),
+          if (mcp != null) _McpSection(kit: mcp),
+          if (widget.canInstall) ...[
+            if (mcp != null) _sep(s),
+            _McpInstallSection(installed: mcp != null),
+          ],
         ],
       );
 
   /// 執行器這一半：這台機器接派工的專案設定。
-  Widget _runnerTab(UepSurface s, RunnerKit runner) => ListView(
+  Widget _runnerTab(UepSurface s, RunnerKit? runner) => ListView(
         padding: const EdgeInsets.all(32),
         children: [
           Text(AppLocalizations.of(context).hostTabRunner,
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
-          _RunnerProjectsSection(kit: runner),
-          _sep(s),
-          _Panel(
-            title: AppLocalizations.of(context).hostInstallPath,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(
-                  runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
-                  style: UepText.code(size: 12, color: s.inkSoft),
-                ),
-                const SizedBox(height: 8),
-                _SourceLine(source: runner.source),
-                const _RunnerVersionLine(),
-              ],
+          if (runner != null) ...[
+            _RunnerProjectsSection(kit: runner),
+            _sep(s),
+            _Panel(
+              title: AppLocalizations.of(context).hostInstallPath,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SelectableText(
+                    runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
+                    style: UepText.code(size: 12, color: s.inkSoft),
+                  ),
+                  const SizedBox(height: 8),
+                  _SourceLine(source: runner.source),
+                  const _RunnerVersionLine(),
+                ],
+              ),
             ),
-          ),
+          ],
+          if (widget.canInstall) ...[
+            if (runner != null) _sep(s),
+            _RunnerInstallSection(installed: runner != null),
+          ],
         ],
+      );
+}
+
+/// MCP 那一包的安裝區塊。已裝版本現讀 `mcpBridgeVersionProvider`——
+/// 「已經是 Release 那一版了嗎」要拿真的版本去比，不能拿安裝時間猜。
+class _McpInstallSection extends ConsumerWidget {
+  const _McpInstallSection({required this.installed});
+
+  final bool installed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => KitInstallSection(
+        kit: KitId.mcp,
+        installed: installed,
+        installedVersion: ref.watch(mcpBridgeVersionProvider).value ?? '',
+      );
+}
+
+/// 執行器那一包的安裝區塊。
+class _RunnerInstallSection extends ConsumerWidget {
+  const _RunnerInstallSection({required this.installed});
+
+  final bool installed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => KitInstallSection(
+        kit: KitId.runner,
+        installed: installed,
+        installedVersion: ref.watch(runnerVersionProvider).value ?? '',
       );
 }
 

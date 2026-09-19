@@ -17,6 +17,7 @@ import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
+import '../../state/kit_installer.dart';
 import '../../state/runner_kit_providers.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../widgets/connection_pill.dart';
@@ -286,7 +287,10 @@ class _AppShellState extends ConsumerState<AppShell>
             // 主持包或 MCP 接入，有任一個就顯示——一個人可以同時是主持人
             // 與成員，而兩者都沒有的人（例如只裝了 App 去連別人的 Hub）
             // 這個入口對他沒有任何意義
-            if (ref.watch(hostKitProvider).value != null ||
+            // 🔴 裝得了 kit 的機器上這個入口**一直都在**：那頁現在是唯一
+            // 能把三包裝起來的地方，而「還沒裝」正是最需要它的時候。
+            if (ref.watch(kitInstallSupportedProvider) ||
+                ref.watch(hostKitProvider).value != null ||
                 ref.watch(mcpKitProvider).value != null ||
                 ref.watch(runnerKitProvider).value != null) ...[
               _TopIconButton(

@@ -411,9 +411,10 @@ def test_locked_exe_failure_explains_the_real_cause(
         inst._report_install_failure(
             done, Path(sys.executable), tmp_path / "chatroom-mcp.exe")
 
-    out = capsys.readouterr().out
-    assert "已還原" in out  # 先把 venv 修回可用，才談失敗原因
-    assert "關閉" in out and "chatroom-mcp.exe" in out
+    captured = capsys.readouterr()
+    assert "已還原" in captured.out  # 先把 venv 修回可用，才談失敗原因
+    # 失敗原因走 stderr：App 以子進程跑安裝器，stdout 留給那條 RESULT
+    assert "關閉" in captured.err and "chatroom-mcp.exe" in captured.err
     assert (tmp_path / "chatroom_mcp").is_dir()
 
 

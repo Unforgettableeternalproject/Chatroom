@@ -52,6 +52,18 @@ python install.py --targets codex  --name 小明-Codex  --url ... --token ...
 
 （第二次不會動到第一次的設定，兩邊各自獨立。）
 
+非互動安裝（桌面 App 就是這樣呼叫的）：
+
+```
+python install.py --yes --url http://192.0.2.10:8787 --token <TOKEN> --name 小明
+```
+
+- `--yes`：一個問題都不問，沒給的值一律留空（之後填進 `.env` 就生效）。
+  Hub 連線測試失敗時也不會停下來問，照裝並印警告
+- stdout 的最後一行固定是 `RESULT {"ok":true,"kit":"mcp-kit","kit_root":…,
+  "version":…,"commit":…,"registry":…,"targets":[…]}`，給呼叫端解析用
+  （三包安裝器同一個格式）。失敗時退出碼非 0、原因走 stderr
+
 ## 指派與命名
 
 - bridge 或桌面 App 帶 session_key 的呼叫（含 watcher／Codex 指派輪詢）會讓 Hub 記住你的 session，

@@ -32,6 +32,13 @@ python install.py --yes --hub-url http://192.0.2.10:8787 --token <TOKEN> --label
 
 安裝器**不啟動執行器**，也不會覆寫已經存在的設定檔。
 
+`--yes` 下一個問題都不問（桌面 App 就是這樣以子進程呼叫的），stdout 的最後
+一行固定是 `RESULT {"ok":true,"kit":"runner-kit","kit_root":…,"version":…,
+"commit":…,"registry":…,"config_written":…,"task_registered":…}`，給呼叫端
+解析用（三包安裝器同一個格式）。失敗時退出碼非 0、原因走 stderr。
+設定檔本來就在時 `config_written` 是 `false`——這次給的 `--hub-url`／
+`--token` **沒有**寫進去。
+
 ## 裝完還有兩件事
 
 1. **加專案**。新裝的設定檔 `projects` 是空的——執行器會上線，但一筆單都

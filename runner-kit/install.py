@@ -4,6 +4,10 @@
     python install.py --yes            # 不互動，全用預設／參數值
     python install.py --uninstall      # 移除排程工作與註冊檔（設定與資料留著）
 
+`--yes` 下**一個問題都不會問**（App 是以子進程跑這支的），而且 stdout 的
+最後一行固定是 `RESULT {"ok":true,...}`——三包安裝器同一個格式。失敗時
+退出碼非 0、原因走 stderr。
+
 做五件事：
 1. 把這一包搬到安裝目錄（預設 %LOCALAPPDATA%\\UEP\\Chatroom\\runner-kit）
 2. 在包內建立獨立 venv 並安裝執行器與 bridge 的相依（不污染系統 Python）
@@ -33,6 +37,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 KIT = Path(__file__).resolve().parent
+KIT_NAME = "runner-kit"
 
 # 桌面 App 靠這份檔案知道「這台機器上有一台執行器，它在哪」。
 #
@@ -47,6 +52,42 @@ DEFAULT_TASK_NAME = "ChatroomRunner"
 # 版本界線沿用 bridge/pyproject.toml——**兩邊一定要一致**，不然這包裡的
 # bridge 與 install-kit 發出去的那包會是不同的東西。
 DEPS = ["httpx>=0.28.1,<0.29", "mcp>=2.1.1,<3.0"]
+
+
+def emit_result(payload: dict) -> None:
+    """印出給呼叫端（桌面 App 以子進程跑這支）解析的單行結果。
+
+    ⚠️ **三包安裝器的格式一致、而且永遠是 stdout 的最後一行**：
+    `RESULT {"ok":true,...}`。App 只讀這一行，上面的人類文字它不解析——
+    格式漂掉的話 App 會判成「裝失敗」，而安裝其實是成功的。
+    """
+    print("RESULT " + json.dumps(payload, ensure_ascii=False,
+                                 separators=(",", ":")), flush=True)
+
+
+def die(msg: str, **extra) -> "NoReturn":  # noqa: F821
+    """錯誤走 stderr、結果行走 stdout、退出碼非 0。"""
+    print(f"❌ {msg}", file=sys.stderr, flush=True)
+    emit_result({"ok": False, "kit": KIT_NAME, "error": msg, **extra})
+    raise SystemExit(1)
+
+
+def build_info(root: Path) -> dict[str, str]:
+    """這一包的版本與 commit（打包時寫下的 `_build.json`）。
+
+    讀不到就是空字串——原始碼樹裡跑安裝器時本來就沒有這個檔案，
+    「不知道」要看得出來，不要編一個版本出來。
+    """
+    try:
+        data = json.loads(
+            (root / "runner" / "chatroom_runner" / "_build.json")
+            .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"version": "", "commit": ""}
+    if not isinstance(data, dict):
+        return {"version": "", "commit": ""}
+    return {"version": str(data.get("version") or ""),
+            "commit": str(data.get("commit") or "")}
 
 
 def local_app_data() -> Path:
@@ -95,8 +136,10 @@ def stage_kit(target: Path) -> None:
     for name in ("runner", "bridge"):
         src = KIT / name
         if not src.exists():
-            raise SystemExit(f"❌ 這一包裡沒有 {name}/——交付包不完整，"
-                             "請重新解壓 chatroom-runner-kit.zip")
+            # 走 die()：錯誤要進 stderr，而且結果行仍然要印，否則以子進程
+            # 呼叫的 App 只看得到一個沒有理由的非 0 退出碼
+            die(f"這一包裡沒有 {name}/——交付包不完整，"
+                "請重新解壓 chatroom-runner-kit.zip")
         shutil.copytree(src, target / name, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__"))
     print(f"已安裝到 {target}")
@@ -230,7 +273,7 @@ def register_task(target: Path, python: Path, config_path: Path,
     return True
 
 
-def write_registry(kit_dir: Path, python: Path, config_path: Path) -> None:
+def write_registry(kit_dir: Path, python: Path, config_path: Path) -> dict:
     """寫下指路牌，讓桌面 App 認得這台機器上的執行器。
 
     **欄位名是與 App 約好的契約**（`kit_dir`／`python`／`config`／
@@ -238,12 +281,22 @@ def write_registry(kit_dir: Path, python: Path, config_path: Path) -> None:
 
     **失敗不中止安裝**：沒有它只是 App 少一個分頁，執行器本身照跑。
     """
+    info = build_info(kit_dir)
     payload = {
+        # ⚠️ `version` 是**這份登錄檔的格式版本**，kit 的版本在
+        # `kit_version`／`commit`。兩者混用過一次就再也分不開
+        "version": 1,
         "kit_dir": str(kit_dir),
+        # `kit_root` 與 `kit_dir` 同值：前者是三包共用的欄位名（host-kit 與
+        # mcp-kit 都叫這個），後者是 App 現在讀的那個。**兩個都要寫**——
+        # 只留新的會讓現有的 App 當成「沒裝」
+        "kit_root": str(kit_dir),
         "python": str(python),
         "config": str(config_path),
         "installed_at": datetime.now(timezone.utc).isoformat(
             timespec="seconds"),
+        "kit_version": info["version"],
+        "commit": info["commit"],
     }
     try:
         REGISTRY.parent.mkdir(parents=True, exist_ok=True)
@@ -257,6 +310,7 @@ def write_registry(kit_dir: Path, python: Path, config_path: Path) -> None:
     except OSError as exc:
         print(f"⚠️ 註冊檔寫不進去（{exc}）——桌面 App 會以為這台沒有執行器，"
               f"但執行器本身不受影響。手動建立：{REGISTRY}")
+    return payload
 
 
 def uninstall(task_name: str) -> None:
@@ -302,14 +356,17 @@ def uninstall(task_name: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Chatroom 執行器安裝器")
+    # ⚠️ help 字串會被 argparse 拿去做 `%` 展開，所以 `%LOCALAPPDATA%` 必須
+    # 寫成 `%%LOCALAPPDATA%%`。不跳脫的話 `--help` 直接拋 ValueError——
+    # 而那是使用者（與 App 的作者）查得到參數清單的唯一入口
     p.add_argument("--dir", help="安裝目錄，預設 "
-                                 "%LOCALAPPDATA%\\UEP\\Chatroom\\runner-kit")
+                                 "%%LOCALAPPDATA%%\\UEP\\Chatroom\\runner-kit")
     p.add_argument("--hub-url", help="Hub 位址，例如 http://192.0.2.10:8787")
     p.add_argument("--token", help="Agent token（Hub 的 CHATROOM_TOKEN）")
     p.add_argument("--host", help="註冊用的機器名，預設本機名稱")
     p.add_argument("--label", help="註冊用的標籤（同 host+label 在 Hub 是同一台）")
     p.add_argument("--config", help="設定檔路徑，預設 "
-                                    "%LOCALAPPDATA%\\UEP\\Chatroom\\runner\\config.json")
+                                    "%%LOCALAPPDATA%%\\UEP\\Chatroom\\runner\\config.json")
     p.add_argument("--task-name", default=DEFAULT_TASK_NAME,
                    help=f"排程工作名稱，預設 {DEFAULT_TASK_NAME}")
     p.add_argument("--no-task", action="store_true",
@@ -321,10 +378,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.uninstall:
         uninstall(args.task_name)
+        emit_result({"ok": True, "kit": KIT_NAME, "action": "uninstall",
+                     "registry": str(REGISTRY)})
         return
 
     if sys.version_info < (3, 12):
-        raise SystemExit(f"需要 Python 3.12+（目前 {sys.version.split()[0]}）")
+        die(f"需要 Python 3.12+（目前 {sys.version.split()[0]}）")
 
     print("=== Chatroom 執行器安裝 ===\n")
 
@@ -349,19 +408,27 @@ def main(argv: list[str] | None = None) -> None:
         host = args.host or ask("機器名", default_host)
         label = args.label or ask("標籤", "runner")
 
-    stage_kit(target)
-    python = ensure_venv(target)
-    write_pth(python, target)
+    # 這三步任何一步失敗都是真的裝不起來。讓它變成一句話 + 非 0 退出碼，
+    # 而不是一坨 traceback——呼叫端（App）要讀得懂
+    try:
+        stage_kit(target)
+        python = ensure_venv(target)
+        write_pth(python, target)
 
-    example = json.loads(
-        (target / "runner" / "config.example.json").read_text(encoding="utf-8"))
-    wrote = write_config(config_path, build_config(
-        example, hub_url=hub_url, agent_token=token, host=host, label=label,
-        kit_dir=target, state_dir=config_path.parent))
+        example = json.loads(
+            (target / "runner" / "config.example.json")
+            .read_text(encoding="utf-8"))
+        wrote = write_config(config_path, build_config(
+            example, hub_url=hub_url, agent_token=token, host=host,
+            label=label, kit_dir=target, state_dir=config_path.parent))
+    except SystemExit:
+        raise
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        die(f"安裝失敗：{exc}")
 
     task_ok = False if args.no_task else register_task(
         target, python, config_path, args.task_name)
-    write_registry(target, python, config_path)
+    registry = write_registry(target, python, config_path)
 
     config_note = "" if wrote else (
         "\n   （設定檔原本就在，這次沒有動它——上面問的 Hub 位址與 token "
@@ -395,6 +462,23 @@ def main(argv: list[str] | None = None) -> None:
 {task_note}
 自檢過了再 Start-ScheduledTask -TaskName {args.task_name}。
 """)
+
+    # ⚠️ 這一行要是 stdout 的最後一行：App 解析它來判斷裝到哪、版本是什麼
+    emit_result({
+        "ok": True,
+        "kit": KIT_NAME,
+        "registry": str(REGISTRY),
+        "kit_root": str(target),
+        "python": str(python),
+        "config": str(config_path),
+        "version": registry["kit_version"],
+        "commit": registry["commit"],
+        "installed_at": registry["installed_at"],
+        # 設定檔本來就在的話，這次問到的 hub_url／token **沒有**寫進去。
+        # App 要顯示得出這個差別，不然使用者會以為自己剛剛換好了位址
+        "config_written": wrote,
+        "task_registered": task_ok,
+    })
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import 'package:chatroom_app/models/host_kit.dart';
 import 'package:chatroom_app/screens/host/host_console_screen.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
+import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:chatroom_app/state/runner_kit_providers.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +21,12 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(ProviderScope(overrides: [
+      // 這一題問的是「來源標示」，不是安裝入口：關掉安裝分頁，畫面就是
+      // 加這個功能之前的兩分頁樣子。**也擋住真網路**——kitReleaseProvider
+      // 沒有覆寫的話，這支測試會去打 GitHub
+      kitInstallSupportedProvider.overrideWithValue(false),
+      kitReleaseProvider.overrideWith((ref) async => null),
+      kitPythonProvider.overrideWith((ref) async => null),
       hostKitProvider.overrideWith((ref) async => null),
       hostEnvProvider.overrideWith((ref) async => null),
       hostHealthProvider.overrideWith((ref) async => null),

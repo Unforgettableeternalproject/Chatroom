@@ -25,6 +25,21 @@ python install.py
   填 `0.0.0.0` 則所有網路介面都收
 - 重新設定：改 `server/.env` 後重啟 Hub 即可
 
+非互動安裝（桌面 App 就是這樣呼叫的）：
+
+```
+python install.py --yes --no-tunnel --host 0.0.0.0 --port 8787 --register-service
+```
+
+- `--yes`：一個問題都不問，沒給的值用既有設定／預設值（token 沿用既有的，
+  沒有才自動生成）。**未指定 `--tunnel`／`--no-tunnel` 時預設會抓
+  cloudflared（約 40 MB）**，不要就明確給 `--no-tunnel`
+- `--register-service`：順便註冊登入／開機自啟的排程工作（等同
+  `pwsh -File scripts/hub-service.ps1 install`）。**預設不註冊**
+- stdout 的最後一行固定是 `RESULT {"ok":true,"kit":"host-kit","kit_root":…,
+  "version":…,"commit":…,"registry":…}`，給呼叫端解析用（三包安裝器同一個
+  格式）。失敗時退出碼非 0、原因走 stderr，RESULT 那行的 `ok` 是 `false`
+
 ## 啟動
 
 | 方式 | 指令 |

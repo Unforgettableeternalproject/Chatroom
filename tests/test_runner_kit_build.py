@@ -203,7 +203,9 @@ def test_registry_shape_is_the_contract_with_the_app(installer, tmp_path):
     installer.write_registry(kit, python, config)
     data = json.loads(installer.REGISTRY.read_text(encoding="utf-8"))
 
-    assert set(data) == {"kit_dir", "python", "config", "installed_at"}
+    # 這四個是 App 現在讀的欄位，**一個都不能改名或消失**（多幾個是可以的：
+    # 版本欄位是後來補的，App 讀不懂的鍵會被忽略）
+    assert {"kit_dir", "python", "config", "installed_at"} <= set(data)
     assert data["kit_dir"] == str(kit)
     assert data["python"] == str(python)
     assert data["config"] == str(config)

@@ -4,6 +4,7 @@ import 'package:chatroom_app/screens/host/host_console_screen.dart';
 import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
+import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:chatroom_app/state/runner_kit_providers.dart';
 import 'package:flutter/material.dart';
@@ -35,8 +36,23 @@ void main() {
     modified: DateTime(2026, 9, 18),
   );
 
-  Widget wrap({HostKit? host, McpKit? mcp, RunnerKit? runner}) => ProviderScope(
+  /// `canInstall` 預設 **false**：這一組題目問的是「偵測到 kit 才有分頁」，
+  /// 而安裝入口是另一條規則（裝得了的機器上三個分頁都在）。兩條規則分開測，
+  /// 一支測試同時驗兩件事的話，改動其中一條會讓人看不出壞的是哪一條。
+  ///
+  /// `kitReleaseProvider` 一定要覆寫：不覆寫的話這支測試會去打 GitHub。
+  Widget wrap({
+    HostKit? host,
+    McpKit? mcp,
+    RunnerKit? runner,
+    bool canInstall = false,
+  }) =>
+      ProviderScope(
         overrides: [
+          kitInstallSupportedProvider.overrideWithValue(canInstall),
+          kitReleaseProvider.overrideWith((ref) async => null),
+          kitPythonProvider.overrideWith((ref) async => null),
+          runnerBusyProvider.overrideWith((ref) async => false),
           hostKitProvider.overrideWith((ref) async => host),
           hostEnvProvider.overrideWith((ref) async => null),
           hostHealthProvider.overrideWith((ref) async => null),
@@ -66,7 +82,8 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  testWidgets('🔴 沒裝執行器 → 連分頁標籤都不存在', (tester) async {
+  testWidgets('🔴 裝不了 kit 的機器上，沒裝執行器 → 連分頁標籤都不存在',
+      (tester) async {
     sizeUp(tester);
     await tester.pumpWidget(wrap(
       host: const HostKit(kitRoot: r'C:\kit', envFile: r'C:\kit\.env'),
@@ -107,5 +124,31 @@ void main() {
     expect(find.byType(TabBar), findsNothing,
         reason: '只有一個分頁的分頁列會讓人以為另一邊還有東西可看');
     expect(find.text('公開給他人派工'), findsOneWidget);
+  });
+
+  testWidgets('🔴 裝得了 kit 的機器：一包都沒有也有三個分頁，那是安裝入口',
+      (tester) async {
+    sizeUp(tester);
+    await tester.pumpWidget(wrap(canInstall: true));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Hub 主持'), findsWidgets);
+    expect(find.text('Agent 接入'), findsWidgets);
+    expect(find.text('執行器'), findsWidgets);
+    expect(find.text('這台機器還沒裝這一包。'), findsOneWidget,
+        reason: '沒裝的那一頁要講得出「這裡能做什麼」');
+  });
+
+  testWidgets('裝了執行器 → 那一頁照舊有設定，底下多一塊安裝與更新',
+      (tester) async {
+    sizeUp(tester);
+    await tester.pumpWidget(wrap(runner: runnerKit, canInstall: true));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('執行器').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('公開給他人派工'), findsOneWidget);
+    expect(find.text('安裝與更新'), findsOneWidget);
   });
 }

@@ -7,6 +7,7 @@ import 'package:chatroom_app/screens/host/host_console_screen.dart';
 import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
+import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,6 +34,12 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [
+        // 這張圖驗的是三盞燈與「不確定」怎麼畫，不是安裝入口：關掉安裝
+        // 分頁，版面就是加那個功能之前的樣子。**也擋住真網路**——
+        // kitReleaseProvider 沒覆寫的話，這支測試會去打 GitHub
+        kitInstallSupportedProvider.overrideWithValue(false),
+        kitReleaseProvider.overrideWith((ref) async => null),
+        kitPythonProvider.overrideWith((ref) async => null),
         hostKitProvider.overrideWith((ref) async => const HostKit(
               kitRoot: r'C:\kits\chatroom-host-kit',
               envFile: r'C:\kits\chatroom-host-kit\server\.env',

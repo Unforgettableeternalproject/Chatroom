@@ -6361,5 +6361,127 @@
   "boardSupervisorLeftRunsBadge": "監督者離場",
   "@boardSupervisorLeftRunsBadge": {
     "description": "訊息流 system tile 的標籤：監督者離場但還有派工在排隊"
+  },
+  "hostKitInstallTitle": "安裝與更新",
+  "@hostKitInstallTitle": {
+    "description": "「這台機器」頁每個分頁的安裝／更新區塊標題"
+  },
+  "hostKitInstallSource": "來源：GitHub Release {tag}",
+  "@hostKitInstallSource": {
+    "description": "安裝來源那一行",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallNoRelease": "此版本沒有對應的 Release，請用安裝包",
+  "@hostKitInstallNoRelease": {
+    "description": "App 是 dev build、查不到對應 Release 時的停用說明"
+  },
+  "hostKitInstallTargetVersion": "要裝的版本 {version}",
+  "@hostKitInstallTargetVersion": {
+    "description": "Release 上那一版的版號",
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallNotInstalled": "這台機器還沒裝這一包。",
+  "@hostKitInstallNotInstalled": {
+    "description": "某種 kit 還沒安裝時的說明"
+  },
+  "hostKitInstallAssetMissing": "這個 Release 裡沒有 {asset}",
+  "@hostKitInstallAssetMissing": {
+    "description": "Release 少了對應資產",
+    "placeholders": {
+      "asset": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallButton": "安裝",
+  "@hostKitInstallButton": {
+    "description": "安裝按鈕"
+  },
+  "hostKitUpdateButton": "更新",
+  "@hostKitUpdateButton": {
+    "description": "已安裝且版本不同時的按鈕"
+  },
+  "hostKitInstallUpToDate": "已經是 Release 上那一版",
+  "@hostKitInstallUpToDate": {
+    "description": "已安裝版本與 Release 相同"
+  },
+  "hostKitInstallDownloading": "下載中 {percent}%",
+  "@hostKitInstallDownloading": {
+    "description": "下載進度",
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallExtracting": "解壓中…",
+  "@hostKitInstallExtracting": {
+    "description": "解壓階段"
+  },
+  "hostKitInstallRunning": "執行安裝器…",
+  "@hostKitInstallRunning": {
+    "description": "呼叫 install.py 階段"
+  },
+  "hostKitInstallChecking": "準備中…",
+  "@hostKitInstallChecking": {
+    "description": "安裝前的檢查階段"
+  },
+  "hostKitInstallDone": "安裝完成（{version}）",
+  "@hostKitInstallDone": {
+    "description": "安裝成功",
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallFailed": "安裝失敗：{error}",
+  "@hostKitInstallFailed": {
+    "description": "安裝失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitInstallNoPython": "找不到 Python 3.12。裝好之後回來重新整理，App 不會代你安裝。",
+  "@hostKitInstallNoPython": {
+    "description": "缺 Python 3.12"
+  },
+  "hostKitInstallPythonLink": "前往 python.org 下載",
+  "@hostKitInstallPythonLink": {
+    "description": "python 下載連結按鈕"
+  },
+  "hostKitInstallRunnerBusy": "執行器手上還有 run，請先到儀表板按 drain",
+  "@hostKitInstallRunnerBusy": {
+    "description": "執行器忙碌時擋住更新"
+  },
+  "hostKitInstallHubNote": "Hub 更新會先停掉它再重裝，裝完要自己按啟動。",
+  "@hostKitInstallHubNote": {
+    "description": "Hub 更新的提示"
+  },
+  "hostKitInstallUacNote": "安裝過程可能會跳出 Windows 授權視窗。",
+  "@hostKitInstallUacNote": {
+    "description": "排程工作註冊可能觸發 UAC"
+  },
+  "hostKitRegisterService": "註冊為排程工作",
+  "@hostKitRegisterService": {
+    "description": "Hub 安裝後註冊排程工作的按鈕"
+  },
+  "hostKitRegisterServiceHint": "註冊之後才有「啟動」可按。",
+  "@hostKitRegisterServiceHint": {
+    "description": "排程工作按鈕旁的說明"
+  },
+  "hostKitInstallConfigKept": "設定檔原本就在，沒有覆寫它。",
+  "@hostKitInstallConfigKept": {
+    "description": "runner-kit 安裝器回報 config_written=false 時的說明"
   }
 }

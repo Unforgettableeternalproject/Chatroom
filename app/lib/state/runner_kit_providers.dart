@@ -448,29 +448,39 @@ Future<void> saveRunnerProject(
   await tmp.rename(cfg.path);
 }
 
-/// 本機執行器在 Hub 上的 `runner_id`，從 `state.json` 現讀。
+/// 執行器的 `state.json` 在哪。
 ///
 /// 位置由 `config.json` 的 `state_dir` 決定；沒設就走執行器的預設
 /// （`%LOCALAPPDATA%/UEP/Chatroom/runner`，與 `config.default_state_dir()`
-/// 同一條規則）。**拿不到就是拿不到**：回 `null`，畫面少一個「套用到執行器」
-/// 的動作，而不是對著一個猜出來的 id 發命令。
-final runnerIdProvider = FutureProvider<String?>((ref) async {
-  final cfg = await ref.watch(runnerConfigProvider.future);
-  if (cfg == null) return null;
+/// 同一條規則）。推不出來就回 `null`——**不猜一個路徑**。
+File? runnerStateFileFor(RunnerConfigFile cfg,
+    [Map<String, String>? environment]) {
+  final env = environment ?? Platform.environment;
   final sep = Platform.pathSeparator;
   var dir = cfg.stateDir;
   if (dir.isEmpty) {
-    final local = Platform.environment['LOCALAPPDATA'] ?? '';
+    final local = env['LOCALAPPDATA'] ?? '';
     if (local.isNotEmpty) {
       dir = [local, 'UEP', 'Chatroom', 'runner'].join(sep);
     } else {
-      final home = Platform.environment['HOME'] ?? '';
+      final home = env['HOME'] ?? '';
       if (home.isEmpty) return null;
       dir = [home, '.local', 'share', 'uep', 'chatroom', 'runner'].join(sep);
     }
   }
+  return File('$dir${sep}state.json');
+}
+
+/// 本機執行器在 Hub 上的 `runner_id`，從 `state.json` 現讀。
+///
+/// **拿不到就是拿不到**：回 `null`，畫面少一個「套用到執行器」的動作，
+/// 而不是對著一個猜出來的 id 發命令。
+final runnerIdProvider = FutureProvider<String?>((ref) async {
+  final cfg = await ref.watch(runnerConfigProvider.future);
+  if (cfg == null) return null;
+  final file = runnerStateFileFor(cfg);
+  if (file == null) return null;
   try {
-    final file = File('$dir${sep}state.json');
     if (!await file.exists()) return null;
     final json = jsonDecode(await file.readAsString());
     if (json is! Map) return null;
