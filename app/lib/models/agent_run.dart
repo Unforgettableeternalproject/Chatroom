@@ -73,6 +73,8 @@ class AgentRun {
     this.requestedBy = '',
     this.requestedByActorKey = '',
     this.requestedByName = '',
+    this.requesterKind = 'human',
+    this.requesterName = '',
     this.status = 'queued',
     this.priority = 0,
     this.position = 0,
@@ -107,6 +109,22 @@ class AgentRun {
   final String requestedBy;
   final String requestedByActorKey;
   final String requestedByName;
+
+  /// 動手的人是誰：`human`（人類自己按的）或 `agent`（Supervisor 代派）。
+  ///
+  /// ⚠️ 與 [requestedByActorKey]／[requestedByName] **不是同一個人**：後者
+  /// 是「配額算誰的」，Supervisor 代派時記的是指定它的那個人類。壓成同一格
+  /// 的話，畫面上會出現一筆「某人派的」而那個人根本沒按過任何按鈕。
+  ///
+  /// 這一欄 2026-09-19 才加，舊資料一律 `human`。
+  final String requesterKind;
+
+  /// 動手的那一位的房內名。`requesterKind == 'agent'` 時是 Supervisor 的名字；
+  /// 人類自己派時 Hub 不保證填，所以畫面不拿它當派工者的唯一來源。
+  final String requesterName;
+
+  /// 這一筆是 Supervisor 代派的。
+  bool get isAgentRequested => requesterKind == 'agent';
 
   /// queued | claimed | running | limited | handoff | done | failed | cancelled
   final String status;
@@ -168,6 +186,9 @@ class AgentRun {
         requestedBy: (json['requested_by'] as String?) ?? '',
         requestedByActorKey: (json['requested_by_actor_key'] as String?) ?? '',
         requestedByName: (json['requested_by_name'] as String?) ?? '',
+        // 舊 Hub 不回這兩把鍵——`human` 與空字串就是這一欄存在之前的事實
+        requesterKind: (json['requester_kind'] as String?) ?? 'human',
+        requesterName: (json['requester_name'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'queued',
         priority: _asInt(json['priority']),
         position: _asInt(json['position']),

@@ -132,6 +132,10 @@
   "hostBridgeVersion": "Bridge version",
   "hostBridgeVersionUnknown": "Cannot read _build.json",
   "hostBridgeVerifyHint": "To confirm the agent runs this build, have it call chatroom_join and compare bridge.commit in the response.",
+  "hostKitSource": "Source: {source}",
+  "hostKitSourceInstalled": "Installed kit",
+  "hostKitSourceLocal": "Local files",
+  "hostRunnerVersion": "Runner version {version}",
   "hostInstalledAt": "Installed {when}",
   "hostInstalledFor": "Installed for {targets}",
   "hostPanelTunnel": "Tunnel",
@@ -1241,5 +1245,10 @@
   "boardOutcomeBlockedGeneric": "You can't settle it right now",
   "boardSupervisorPillNone": "SUPERVISOR · UNASSIGNED",
   "boardSupervisorPillDeparted": "SUPERVISOR · {name} (LEFT)",
-  "boardSupervisorPill": "SUPERVISOR · {name}"
+  "boardSupervisorPill": "SUPERVISOR · {name}",
+  "opsRequesterSupervisor": "Dispatched by Supervisor {name}",
+  "opsRequesterQuota": "Quota: {name}",
+  "opsErrorSupervisorKindNotAllowed": "Supervisor cannot dispatch {kind} runs.",
+  "boardErrorSupervisorCannotBeRun": "A run's temporary member cannot be the supervisor.",
+  "boardSupervisorLeftRunsBadge": "Supervisor left"
 }

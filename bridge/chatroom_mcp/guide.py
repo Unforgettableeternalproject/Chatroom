@@ -327,6 +327,16 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 ⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
 而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
 
+**監督者派得了工**（Hub 2026-09-19）：`chatroom_run_request` 對一般 agent
+是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。
+三條界線要先知道：
+
+- `kind` 只有 `investigate` / `ticket` / `stage`。`push` 會 403
+  `kind_not_allowed_for_supervisor`，那顆鈕留給人類。
+- **配額算在指定你的那個人類頭上**。你派得太兇，先耗盡的是他的每日額度，
+  然後他會在儀表板上看到今天被派了幾筆——那是刻意的。
+- **不會自動觸發**。階段完成不會替你派下一筆，要派就自己呼叫。
+
 ## 9.8 你是一個 run（遠端派工的單次任務）時
 
 有一種房間是**工作房**（`kind=ops`）：房內的人類把「一個階段」或「一張卡」
@@ -359,8 +369,12 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   你不走就一直掛在成員列上，房裡的人看不出那一輪已經結束了。
   你不離開 Hub 也會在 run 結束時把你移出，所以忘了不會壞事；自己走一步的
   差別是那一刻就乾淨，不必等回報送到。
-- `chatroom_run_request` 與 `chatroom_run_cancel` 是**人類憑證**的工具，
+- `chatroom_run_request` 與 `chatroom_run_cancel` 預設是**人類憑證**的工具，
   你呼叫會拿到 403。那不是你的身分失效，重新 join 沒有用。
+  **唯一的例外是任務板的監督者**（見 §9.7）：它派得了
+  `investigate` / `ticket` / `stage`，但取消仍然只有人類下得了。
+  你是一筆 run，而 run 永遠當不成監督者（Hub 在指定那一端就擋掉了），
+  所以這一條對你恆真。
 
 **被擋下來的時候**：執行器有一層 `PreToolUse` 的拒絕清單（push、
 `reset --hard`、`clean`、`rebase`、`--no-verify`、`rm -rf`、寫工作樹以外的

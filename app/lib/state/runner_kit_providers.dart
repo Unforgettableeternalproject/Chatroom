@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/host_kit.dart' show KitSource;
+
 /// 這台機器上裝著的執行器（`runner-kit`）。
 ///
 /// ## 它是指路牌，不是設定
@@ -18,7 +20,11 @@ class RunnerKit {
     required this.configPath,
     this.python = '',
     this.installedAt = '',
+    this.source = KitSource.installed,
   });
+
+  /// 這一份資訊的來源（安裝包／本機來源）。
+  final KitSource source;
 
   /// runner-kit 解開後的根目錄。
   final String kitDir;
@@ -141,16 +147,102 @@ File? runnerKitRegistryFile() {
       '${Platform.pathSeparator}runner-kit.json');
 }
 
-/// 這台機器上有沒有裝執行器。
+/// 執行器設定檔的預設位置，與 `chatroom_runner.config.default_state_dir()`
+/// 同一條規則。`CHATROOM_RUNNER_CONFIG` 可以指到別處。
+String runnerConfigPathFor([Map<String, String>? environment]) {
+  final env = environment ?? Platform.environment;
+  final explicit = (env['CHATROOM_RUNNER_CONFIG'] ?? '').trim();
+  if (explicit.isNotEmpty) return explicit;
+  final sep = Platform.pathSeparator;
+  final local = env['LOCALAPPDATA'] ?? '';
+  if (local.isNotEmpty) {
+    return [local, 'UEP', 'Chatroom', 'runner', 'config.json'].join(sep);
+  }
+  final home = env['HOME'] ?? '';
+  if (home.isEmpty) return '';
+  return [home, '.local', 'share', 'uep', 'chatroom', 'runner', 'config.json']
+      .join(sep);
+}
+
+/// 這台機器上有沒有執行器。
 ///
-/// **`null` 是正常狀態，不是錯誤**（同 `hostKitProvider`）：沒裝的人照樣能
+/// **`null` 是正常狀態，不是錯誤**（同 `hostKitProvider`）：沒有的人照樣能
 /// 加入別人的工作房、看派工結果，只是「執行器」分頁**整個不存在**。
+///
+/// ⚠️ 但判準不能只有登錄檔：手動部署的執行器（程式放在某個目錄、排程工作
+/// 自己建）沒有 `runner-kit.json`，而它**正在接派工**。那時退回本機來源，
+/// 見 [resolveRunnerKit]。
 final runnerKitProvider = FutureProvider<RunnerKit?>((ref) async {
-  final file = runnerKitRegistryFile();
-  if (file == null) return null;
+  return resolveRunnerKit(
+    registry: runnerKitRegistryFile(),
+    environment: Platform.environment,
+    scheduledTask: queryRunnerScheduledTask,
+  );
+});
+
+/// 偵測順序：
+///
+/// 1. 安裝包登錄檔 `~/.chatroom/runner-kit.json`
+/// 2. 執行器設定 `config.json`（`CHATROOM_RUNNER_CONFIG` 或預設位置）
+/// 3. 排程工作 `ChatroomRunner`——它的 `Execute`／工作目錄與 `--config`
+///    參數就是這台機器實際在跑的那一份
+///
+/// 程式目錄從 `bridge_path` 的上一層或排程工作的工作目錄推；推不出來時
+/// 留空（分頁照出，「安裝位置」改顯示設定檔路徑）。
+Future<RunnerKit?> resolveRunnerKit({
+  File? registry,
+  Map<String, String> environment = const {},
+  Future<RunnerTaskInfo?> Function()? scheduledTask,
+}) async {
+  final installed = await _runnerFromRegistry(registry);
+  if (installed != null) return installed;
+
+  var configPath = runnerConfigPathFor(environment);
+  var kitDir = '';
+  var python = '';
+  var hasConfig = false;
   try {
-    if (!await file.exists()) return null;
-    final json = jsonDecode(await file.readAsString());
+    final file = File(configPath);
+    if (await file.exists()) {
+      hasConfig = true;
+      final json = jsonDecode(await file.readAsString());
+      if (json is Map) {
+        final bridge = ((json['bridge_path'] as String?) ?? '').trim();
+        if (bridge.isNotEmpty) kitDir = Directory(bridge).parent.path;
+      }
+    }
+  } on Object {
+    // 壞掉的設定仍然算「這台有執行器」：分頁裡的讀取端各自會說讀不到
+  }
+
+  if (!hasConfig || kitDir.isEmpty) {
+    final task = await (scheduledTask?.call() ?? Future.value(null));
+    if (task != null) {
+      if (!hasConfig && task.configPath.isNotEmpty) {
+        configPath = task.configPath;
+        hasConfig = true;
+      }
+      if (kitDir.isEmpty) kitDir = task.workingDirectory;
+      python = task.command;
+    }
+    if (!hasConfig && task == null) return null;
+  }
+
+  if (kitDir.isNotEmpty && !await Directory(kitDir).exists()) kitDir = '';
+  if (configPath.isEmpty && kitDir.isEmpty) return null;
+  return RunnerKit(
+    kitDir: kitDir,
+    configPath: configPath,
+    python: python,
+    source: KitSource.local,
+  );
+}
+
+Future<RunnerKit?> _runnerFromRegistry(File? registry) async {
+  if (registry == null) return null;
+  try {
+    if (!await registry.exists()) return null;
+    final json = jsonDecode(await registry.readAsString());
     if (json is! Map) return null;
     final kit = RunnerKit.fromJson(json.cast<String, dynamic>());
     if (kit.configPath.isEmpty) return null;
@@ -162,7 +254,116 @@ final runnerKitProvider = FutureProvider<RunnerKit?>((ref) async {
   } on Object {
     return null;
   }
+}
+
+/// 排程工作裡問得到的三件事。
+@immutable
+class RunnerTaskInfo {
+  const RunnerTaskInfo({
+    this.command = '',
+    this.workingDirectory = '',
+    this.configPath = '',
+  });
+
+  final String command;
+  final String workingDirectory;
+  final String configPath;
+}
+
+/// 查 Windows 排程工作 `ChatroomRunner`。查不到、不是 Windows、或 schtasks
+/// 自己出錯都回 `null`——**問不到就是問不到**，不往上丟例外。
+Future<RunnerTaskInfo?> queryRunnerScheduledTask(
+    {String taskName = 'ChatroomRunner'}) async {
+  if (!Platform.isWindows) return null;
+  try {
+    final out = await Process.run(
+      'schtasks',
+      ['/query', '/tn', taskName, '/xml', 'ONE'],
+      stdoutEncoding: null,
+    ).timeout(const Duration(seconds: 8));
+    if (out.exitCode != 0) return null;
+    return parseRunnerTaskXml(_decodeConsole(out.stdout as List<int>));
+  } on Object {
+    return null;
+  }
+}
+
+/// schtasks `/xml` 吐的是 UTF-16LE（帶 BOM），照 UTF-8 解會整份變亂碼。
+String _decodeConsole(List<int> bytes) {
+  if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+    final units = <int>[];
+    for (var i = 2; i + 1 < bytes.length; i += 2) {
+      units.add(bytes[i] | (bytes[i + 1] << 8));
+    }
+    return String.fromCharCodes(units);
+  }
+  try {
+    return utf8.decode(bytes, allowMalformed: true);
+  } on Object {
+    return String.fromCharCodes(bytes);
+  }
+}
+
+/// 從工作的 XML 取出程式、工作目錄與 `--config` 指到的設定檔。
+RunnerTaskInfo? parseRunnerTaskXml(String xml) {
+  String pick(String tag) =>
+      RegExp('<$tag>(.*?)</$tag>', dotAll: true).firstMatch(xml)?.group(1)?.trim() ??
+      '';
+  final command = pick('Command');
+  final workingDirectory = pick('WorkingDirectory');
+  final args = pick('Arguments');
+  final config = RegExp(r'--config\s+"([^"]+)"').firstMatch(args)?.group(1) ??
+      RegExp(r'--config\s+(\S+)').firstMatch(args)?.group(1) ??
+      '';
+  if (command.isEmpty && workingDirectory.isEmpty && config.isEmpty) {
+    return null;
+  }
+  return RunnerTaskInfo(
+    command: command,
+    workingDirectory: workingDirectory,
+    configPath: config,
+  );
+}
+
+/// 這台機器上的執行器版本：`runner/chatroom_runner/_build.json`，沒有就
+/// 讀程式目錄的 `VERSION.txt`。兩個都沒有就是讀不到，回空字串。
+final runnerVersionProvider = FutureProvider<String>((ref) async {
+  final kit = await ref.watch(runnerKitProvider.future);
+  if (kit == null || kit.kitDir.isEmpty) return '';
+  return readRunnerVersion(kit.kitDir);
 });
+
+Future<String> readRunnerVersion(String kitDir) async {
+  final sep = Platform.pathSeparator;
+  try {
+    final build =
+        File([kitDir, 'runner', 'chatroom_runner', '_build.json'].join(sep));
+    if (await build.exists()) {
+      final json = jsonDecode(await build.readAsString());
+      if (json is Map) {
+        final version = (json['version'] as String?) ?? '';
+        final commit = (json['commit'] as String?) ?? '';
+        if (version.isNotEmpty) {
+          return commit.isEmpty ? version : '$version+$commit';
+        }
+        if (commit.isNotEmpty) return commit;
+      }
+    }
+  } on Object {
+    // 往下試 VERSION.txt
+  }
+  try {
+    final file = File('$kitDir${sep}VERSION.txt');
+    if (!await file.exists()) return '';
+    final lines = await file.readAsLines();
+    for (final line in lines) {
+      if (line.trim().isNotEmpty) return line.trim();
+    }
+  } on Object {
+    return '';
+  }
+  return '';
+}
 
 /// 執行器現在的設定，從 `config.json` **現讀**。不跨 session 快取。
 final runnerConfigProvider = FutureProvider<RunnerConfigFile?>((ref) async {

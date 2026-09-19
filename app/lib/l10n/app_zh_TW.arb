@@ -604,6 +604,32 @@
   "@hostBridgeVerifyHint": {
     "description": "怎麼確認 agent 跑的是哪一份 bridge"
   },
+  "hostKitSource": "來源：{source}",
+  "@hostKitSource": {
+    "description": "這一頁的資訊是安裝包還是本機來源",
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitSourceInstalled": "安裝包",
+  "@hostKitSourceInstalled": {
+    "description": "來源：安裝器裝的那一包"
+  },
+  "hostKitSourceLocal": "本機來源",
+  "@hostKitSourceLocal": {
+    "description": "來源：沒有登錄檔，偵測到的本機檔案"
+  },
+  "hostRunnerVersion": "執行器版本 {version}",
+  "@hostRunnerVersion": {
+    "description": "執行器分頁：程式目錄讀到的版本",
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
   "hostInstalledAt": "安裝於 {when}",
   "@hostInstalledAt": {
     "description": "Agent 接入：安裝時間",
@@ -6300,5 +6326,40 @@
         "type": "String"
       }
     }
+  },
+  "opsRequesterSupervisor": "Supervisor {name} 派工",
+  "@opsRequesterSupervisor": {
+    "description": "執行儀表板的 run 卡片：這一筆是 Supervisor 代派的",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "opsRequesterQuota": "配額算 {name}",
+  "@opsRequesterQuota": {
+    "description": "執行儀表板的 run 卡片：配額歸給哪個人類",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "opsErrorSupervisorKindNotAllowed": "Supervisor 不能派 {kind} 這種工。",
+  "@opsErrorSupervisorKindNotAllowed": {
+    "description": "派工被 Hub 以 kind_not_allowed_for_supervisor 退回",
+    "placeholders": {
+      "kind": {
+        "type": "String"
+      }
+    }
+  },
+  "boardErrorSupervisorCannotBeRun": "派工的臨時成員不能當監督者。",
+  "@boardErrorSupervisorCannotBeRun": {
+    "description": "指定監督者被 Hub 以 supervisor_cannot_be_run 退回"
+  },
+  "boardSupervisorLeftRunsBadge": "監督者離場",
+  "@boardSupervisorLeftRunsBadge": {
+    "description": "訊息流 system tile 的標籤：監督者離場但還有派工在排隊"
   }
 }

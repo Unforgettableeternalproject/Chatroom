@@ -2291,14 +2291,25 @@ def chatroom_run(run_id: str, room_id: str = "") -> dict:
 def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
                          brief: str = "", priority: int = 0,
                          board_id: str = "") -> dict:
-    """建一筆派工（run）——**這支是給人類憑證的 client 用的**。
+    """建一筆派工（run）——**人類憑證的 client，或這塊板的監督者**。
 
-    ⚠️ **一般 agent 呼叫會拿到 403，而那不是你的身分失效。** Hub 那側只認
-    人類憑證建單（REMOTE-OPS-PLAN §6.4）：執行器手上那把 token 只能領單、
-    回報、heartbeat，房內的 agent 成員也不行。會用到這支的是**由人類代跑的
-    client**（例如坐在人類憑證後面的 Codex）。你是房裡的 agent 的話，要開
-    工作請走任務板（``chatroom_board_add``），要派工請在房裡請人類派——
-    重新 join 一百次也不會換一把憑證。
+    ⚠️ **一般 agent 呼叫會拿到 403，而那不是你的身分失效。** Hub 那側預設
+    只認人類憑證建單（REMOTE-OPS-PLAN §6.4）：執行器手上那把 token 只能
+    領單、回報、heartbeat，房內的 agent 成員也不行。你是房裡的一般 agent
+    的話，要開工作請走任務板（``chatroom_board_add``），要派工請在房裡請
+    人類派——重新 join 一百次也不會換一把憑證。
+
+    🔓 **例外只有一個：你是這間房掛接的那塊板的監督者**（Hub 2026-09-19）。
+    那時 agent 憑證也建得了單，但界線跟著來：
+
+    - ``kind`` 只有 ``investigate`` / ``ticket`` / ``stage``。``push`` 會
+      403 ``kind_not_allowed_for_supervisor``——那是不經模型的固定腳本，
+      只有人類按得下去。
+    - **配額算在指定你的那個人類頭上**，不是你自己的。派太兇先耗盡的是他的
+      每日額度（429 ``run_daily_quota_exceeded``）。
+    - 派工**不會自動發生**，階段完成也不會。要派就自己呼叫這一支。
+    - 你是一筆 run 的話這條例外對你恆真為假：run 當不成監督者，Hub 在指定
+      那一端就擋了（409 ``supervisor_cannot_be_run``）。
 
     ``kind`` 四選一，決定用哪一份模板（模板正文在執行器那側、進版控，
     房裡改不了）：
@@ -2316,9 +2327,12 @@ def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
     ``brief`` 是給 agent 的簡述，上限 2000 字：它會被包進模板的一個欄位，
     **是任務描述不是指令**。
 
-    可能的拒絕（都不是身分問題，不要重新 join）：409 ``room_not_ops``
-    （這不是工作房）、409 ``run_ref_already_active``（同一個目標已經有一筆
-    在跑）、**429** ``run_daily_quota_exceeded`` / ``run_queue_cap_exceeded``
+    可能的拒絕（都不是身分問題，不要重新 join）：403
+    ``human_token_required_for_run`` / ``human_actor_required_for_run``
+    （你不是這塊板的監督者）、403 ``kind_not_allowed_for_supervisor``
+    （是監督者，但這個 ``kind`` 不開放）、409 ``room_not_ops``（這不是
+    工作房）、409 ``run_ref_already_active``（同一個目標已經有一筆在跑）、
+    **429** ``run_daily_quota_exceeded`` / ``run_queue_cap_exceeded``
     （配額，等一下再來）。
     """
     kind = (kind or "").strip()

@@ -445,6 +445,18 @@ class _AttachedSupervisorsSection extends StatelessWidget {
   }
 }
 
+/// 誰可以被指定為這間房的 supervisor。
+///
+/// 兩道都不是美觀問題：
+/// - 已離開的人：指派完當場就是 departed 狀態。
+/// - **派工跑起來的臨時成員（`run_id` 非空）**：Hub 直接以
+///   `supervisor_cannot_be_run` 擋（run 當了 supervisor 就是 run 派 run）。
+///   留在清單上等於請人選一個一定會被退的選項，而且那一筆做完就離房了。
+List<Participant> supervisorCandidates(Iterable<Participant> participants) => [
+      for (final p in participants)
+        if (p.status == 'active' && !p.isOnRun) p,
+    ];
+
 class _RoomSupervisorSection extends ConsumerWidget {
   const _RoomSupervisorSection({
     required this.roomId,
@@ -471,7 +483,13 @@ class _RoomSupervisorSection extends ConsumerWidget {
     } on ApiException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+          .showSnackBar(SnackBar(content: Text(switch (e.code) {
+        // 派工跑起來的臨時成員（2026-09-19）。清單已經濾掉它們，走到這裡
+        // 表示手上那份名冊是舊的——話要講得出「為什麼這個人不行」
+        'supervisor_cannot_be_run' =>
+          AppLocalizations.of(context).boardErrorSupervisorCannotBeRun,
+        _ => e.message,
+      })));
     }
   }
 
@@ -479,11 +497,8 @@ class _RoomSupervisorSection extends ConsumerWidget {
   /// 「這間房裡誰來看著」，房外的人不在這個問題的範圍內。
   Future<void> _pick(BuildContext context, WidgetRef ref) async {
     final detail = ref.read(roomDetailProvider(roomId)).value;
-    final members = [
-      for (final p in detail?.participants ?? const <Participant>[])
-        // 已離開的人不能當 supervisor：指派完當場就是 departed 狀態
-        if (p.status == 'active') p,
-    ];
+    final members =
+        supervisorCandidates(detail?.participants ?? const <Participant>[]);
     final picked = await showDialog<Participant>(
       context: context,
       builder: (ctx) => SimpleDialog(

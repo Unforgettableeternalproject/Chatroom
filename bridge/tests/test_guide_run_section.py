@@ -78,3 +78,22 @@ def test_the_run_section_says_request_and_cancel_are_human_only():
     assert "chatroom_run_request" in section
     assert "chatroom_run_cancel" in section
     assert "403" in section
+
+
+def test_the_run_section_names_the_supervisor_exception():
+    """Hub 2026-09-19 放寬了一條，手冊還寫「一律 403」的話它就在說謊。
+
+    而且要當場說清楚這條對 run 不成立——run 當不成監督者，否則它讀到
+    「監督者可以派工」會去試，然後撞一個它解不開的 403。
+    """
+    section = GUIDE[GUIDE.index("## 9.8"):GUIDE.index("## 10.")]
+    assert "監督者" in section, "沒有提到監督者這條例外"
+    assert "當不成" in section or "永遠" in section, "沒有說清楚 run 不適用"
+
+
+def test_the_board_section_tells_a_supervisor_what_it_may_dispatch():
+    """監督者要知道三條界線：kind、配額算誰的、不會自動觸發。"""
+    section = GUIDE[GUIDE.index("## 9.7"):GUIDE.index("## 9.8")]
+    assert "chatroom_run_request" in section
+    for topic in ("push", "配額", "自動"):
+        assert topic in section, f"監督者段落沒有涵蓋：{topic}"

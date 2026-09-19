@@ -761,6 +761,12 @@ CREATE TABLE IF NOT EXISTS agent_run (
     requested_by           TEXT NOT NULL DEFAULT '',
     requested_by_actor_key TEXT NOT NULL DEFAULT '',
     requested_by_name      TEXT NOT NULL DEFAULT '',
+    -- **誰動的手**，與上面三欄分開。上面那組是「配額算誰的」：Supervisor
+    -- 代派時記的是**指定它的那個人類**（艾斯維爾 2026-09-19 裁定），所以
+    -- 它說不出這一筆其實是 agent 按的。human | agent，名字是房內顯示名。
+    -- ⚠️ 這兩欄在 MIGRATIONS 也有一份，兩邊都要改
+    requester_kind         TEXT NOT NULL DEFAULT 'human',
+    requester_name         TEXT NOT NULL DEFAULT '',
     -- queued | claimed | running | limited | handoff | done | failed | cancelled
     status        TEXT NOT NULL DEFAULT 'queued',
     priority      INTEGER NOT NULL DEFAULT 0,
@@ -1113,6 +1119,15 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 不送」（見 app.py 的 `_collect_run_mentions`），不是「從第一則開始送」
     ("agent_run", "mention_cursor_seq",
      "mention_cursor_seq INTEGER NOT NULL DEFAULT 0"),
+    # 派工者身分（Supervisor 自派工，2026-09-19）。既有 run 一律 human＝
+    # 這兩欄存在之前，建單就只有人類做得到，那正是事實。預設成 agent 會讓
+    # 所有歷史 run 的房內訊息開始說「由 Supervisor 派工」，而沒有人派過
+    ("agent_run", "requester_kind",
+     "requester_kind TEXT NOT NULL DEFAULT 'human'"),
+    # 名字留空＝說不出來；回填成 requested_by_name 會把「配額算誰的」那個
+    # 人寫成動手的人，而這兩件事正是這一欄要分開的
+    ("agent_run", "requester_name",
+     "requester_name TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1336,7 +1351,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 5
+DATA_VERSION = 6
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1375,9 +1390,12 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         # 只清「現在真的有 active 身分」的那些：那是正面證據，不是猜測。
         # 真的還沒回來的維持標記——那個標記本來就是要說出「本來是誰在看，
         # 但他走了」。
+        # ⚠️ 清成 **NULL** 不是空字串（版次 6 一併把當初寫成空字串的那些
+        # 收乾淨）：資格判準問的是 `board_supervisor_left_at IS NULL`。
         await db.execute(
-            "UPDATE room SET board_supervisor_left_at=''"
-            " WHERE board_supervisor_left_at != ''"
+            "UPDATE room SET board_supervisor_left_at=NULL"
+            " WHERE board_supervisor_left_at IS NOT NULL"
+            "   AND board_supervisor_left_at != ''"
             "   AND EXISTS (SELECT 1 FROM participant p"
             "               WHERE p.room_id = room.id"
             "                 AND p.session_key = room.board_supervisor_session_key"
@@ -1406,6 +1424,18 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             "UPDATE runner_command SET applied_at=acked_at,"
             " note='舊版執行器未回報生效，這筆命令視為已結束。'"
             " WHERE acked_at IS NOT NULL AND applied_at IS NULL")
+    if version < 6:
+        # supervisor 的「已離開」解除，兩邊用的寫法本來對不上：解除那一半
+        # 寫的是**空字串**，而資格判準（`_board_supervisor_room`）問的是
+        # `IS NULL`。於是離開過一次再回來的 supervisor，畫面上寫著他在、
+        # 房裡也公告過「回來了」，確認週期與派工卻照樣 403——沒有任何地方
+        # 說得出為什麼，因為兩邊各自看都完全正確。
+        #
+        # 以 NULL 為正，把存量的空字串一次收乾淨。空字串與 NULL 在這一欄
+        # 的語意本來就是同一件事（沒有離開），只是形狀不同。
+        await db.execute(
+            "UPDATE room SET board_supervisor_left_at=NULL"
+            " WHERE board_supervisor_left_at=''")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

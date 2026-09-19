@@ -127,6 +127,27 @@ class NotYourAgentException extends ApiException {
   String get defaultMessage => L10n.current.errorNotYourAgent;
 }
 
+/// 403 + kind_not_allowed_for_supervisor — Supervisor 代派時的 kind 白名單
+/// （Supervisor 自派工 2026-09-19）。
+///
+/// 🔴 同樣不可以走 [ParticipantInvalidException]：被擋的是**這張憑證不是
+/// 人類**（只有人類派得了 `push`），與房內身分無關——re-join 一百次也不會
+/// 讓 Supervisor 變成人。要做的事是請房內的人類自己按。
+///
+/// `kind` 從 Hub 的 detail 帶出來：講不出是哪一種，人就不知道換誰來按。
+class SupervisorKindNotAllowedException extends ApiException {
+  const SupervisorKindNotAllowedException(String? message,
+      [Map<String, dynamic> detail = const {}])
+      : super('kind_not_allowed_for_supervisor', message, detail);
+
+  String get kind => (detail['kind'] as String?) ?? '';
+
+  @override
+  String get defaultMessage =>
+      L10n.current.opsErrorSupervisorKindNotAllowed(
+          kind.isEmpty ? L10n.current.commonUnknown : kind);
+}
+
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
 /// `not_board_supervisor`）。
 ///

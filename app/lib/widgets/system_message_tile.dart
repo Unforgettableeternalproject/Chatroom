@@ -74,6 +74,11 @@ class _ReceiptTile extends StatelessWidget {
         'question_answered' => (l10n.msgReceiptAnswered, UepColors.success),
         'question_skipped' => (l10n.msgReceiptSkipped, UepColors.info),
         'pin' => (l10n.msgReceiptPinned, UepColors.gold),
+        // 要人去處理的，不是已經有結論的——用 error 軸與收據區分開
+        'board_supervisor_left_runs' => (
+            l10n.boardSupervisorLeftRunsBadge,
+            UepColors.error
+          ),
         _ => (l10n.msgReceiptRecord, UepColors.info),
       };
 

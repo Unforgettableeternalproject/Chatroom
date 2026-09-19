@@ -94,6 +94,8 @@ Map<String, dynamic> _run({
   String ref = 'task-9',
   String result = '',
   String runnerId = '',
+  String requesterKind = 'human',
+  String requesterName = '',
 }) =>
     {
       'id': id,
@@ -106,6 +108,8 @@ Map<String, dynamic> _run({
       'requested_by': 'p1',
       'requested_by_actor_key': 'a1',
       'requested_by_name': '艾斯維爾',
+      'requester_kind': requesterKind,
+      'requester_name': requesterName,
       'status': status,
       'priority': 0,
       'position': 1,
@@ -593,6 +597,53 @@ void main() {
       expect(find.textContaining('7 turns'), findsOneWidget);
       expect(find.text('請收尾'), findsOneWidget);
       expect(find.text('取消'), findsOneWidget);
+    });
+  });
+
+  /// Supervisor 代派（2026-09-19）：卡片上要分得出**誰按的**與**配額算誰的**。
+  ///
+  /// 把兩者壓成一句「艾斯維爾派的」的話，房內那位人類會在自己沒碰過任何
+  /// 按鈕的情況下被寫成派工者——而要去看那一筆為什麼存在的人就沒有線索。
+  group('派工者', () {
+    testWidgets('agent 代派：標 Supervisor，配額歸屬另外講', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [
+          _run(requesterKind: 'agent', requesterName: '米絲媞'),
+        ]),
+      )));
+      expect(find.textContaining('Supervisor 米絲媞 派工'), findsOneWidget);
+      expect(find.textContaining('配額算 艾斯維爾'), findsOneWidget);
+    });
+
+    testWidgets('人類派工：維持現狀，不多一行', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [_run()]),
+      )));
+      expect(find.textContaining('Supervisor'), findsNothing);
+      expect(find.textContaining('配額算'), findsNothing);
+    });
+
+    testWidgets('最近結束的那張卡也要講', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()]),
+        finished: [
+          AgentRun.fromJson(_run(
+              id: 'done-1',
+              status: 'done',
+              requesterKind: 'agent',
+              requesterName: '米絲媞')),
+        ],
+      )));
+      expect(find.textContaining('Supervisor 米絲媞 派工'), findsOneWidget);
+    });
+
+    testWidgets('🔴 Supervisor 沒留名字時不留白，講「未知」', (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [_runner()], activeRuns: [
+          _run(requesterKind: 'agent'),
+        ]),
+      )));
+      expect(find.textContaining('Supervisor 未知 派工'), findsOneWidget);
     });
   });
 }

@@ -74,6 +74,31 @@ void main() {
     expect(e, isA<HumanCredentialRequiredException>());
     expect(e, isNot(isA<ParticipantInvalidException>()));
   });
+
+  test('kind_not_allowed_for_supervisor 不是身分失效，不可觸發 re-join', () {
+    // Supervisor 代派的 kind 白名單（2026-09-19）。擋的是「這不是人類」，
+    // re-join 一百次也不會讓 Supervisor 變成人——要做的事是請人類自己按。
+    // 被擋的 kind 要跟著出來，不然畫面講不出「不能派的是哪一種」
+    final e = translateError(DioException(
+      requestOptions: RequestOptions(path: '/api/rooms/r1/runs'),
+      response: Response(
+        requestOptions: RequestOptions(path: '/api/rooms/r1/runs'),
+        statusCode: 403,
+        data: {
+          'detail': {
+            'code': 'kind_not_allowed_for_supervisor',
+            'message': '監督者不能派這種工',
+            'kind': 'push',
+          }
+        },
+      ),
+    ));
+
+    expect(e, isA<SupervisorKindNotAllowedException>());
+    expect(e, isNot(isA<ParticipantInvalidException>()));
+    expect((e as SupervisorKindNotAllowedException).kind, 'push');
+    expect(e.code, 'kind_not_allowed_for_supervisor');
+  });
 }
 
 class _Rec implements HttpClientAdapter {

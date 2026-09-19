@@ -1429,6 +1429,9 @@ async def test_dashboard_json_is_stored_verbatim(tmp_path):
 RUN_KEYS = {
     "id", "room_id", "board_id", "kind", "project", "ref", "brief",
     "requested_by", "requested_by_actor_key", "requested_by_name",
+    # 誰動的手（Supervisor 自派工 2026-09-19）。與上面那組「配額算誰的」
+    # 分開：Supervisor 代派時兩組是不同的人
+    "requester_kind", "requester_name",
     "status", "priority", "position", "runner_id", "claude_session_id",
     "attempt", "parent_run_id", "handoff_depth", "cancel_requested",
     # 收尾請求與 @ 轉達的游標（軟停止／mention 轉達）

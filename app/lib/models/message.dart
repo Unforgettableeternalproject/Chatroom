@@ -203,6 +203,10 @@ class Message {
     'question_answered',
     'question_skipped',
     'pin',
+    // 監督者離場、但它派的 run 還在排隊（Supervisor 自派工 2026-09-19）。
+    // 這一則帶著「還有幾筆」與「不會自動取消」，而且是指名要人去處理的——
+    // 混進髮絲線中間那行小字會被當成 join／leave 那種噪音掃過去
+    'board_supervisor_left_runs',
   };
 
   bool get isReceipt => receiptEvents.contains(systemEvent);

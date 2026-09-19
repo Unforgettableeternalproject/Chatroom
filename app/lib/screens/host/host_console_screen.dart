@@ -65,10 +65,13 @@ class HostConsoleScreen extends ConsumerWidget {
               ref.invalidate(hostHealthProvider);
               ref.invalidate(tunnelStatusProvider);
               ref.invalidate(serviceStatusProvider);
+              ref.invalidate(mcpKitProvider);
               ref.invalidate(mcpEnvProvider);
+              ref.invalidate(mcpBridgeVersionProvider);
               ref.invalidate(mcpStatusProvider);
               ref.invalidate(runnerKitProvider);
               ref.invalidate(runnerConfigProvider);
+              ref.invalidate(runnerVersionProvider);
               ref.invalidate(runnerIdProvider);
             },
           ),
@@ -250,9 +253,17 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
           _sep(s),
           _Panel(
             title: AppLocalizations.of(context).hostInstallPath,
-            child: SelectableText(
-              runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
-              style: UepText.code(size: 12, color: s.inkSoft),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  runner.kitDir.isEmpty ? runner.configPath : runner.kitDir,
+                  style: UepText.code(size: 12, color: s.inkSoft),
+                ),
+                const SizedBox(height: 8),
+                _SourceLine(source: runner.source),
+                const _RunnerVersionLine(),
+              ],
             ),
           ),
         ],
@@ -583,6 +594,7 @@ class _VersionCheck extends ConsumerWidget {
           const SizedBox(height: 10),
           // 次要資訊：對照不上時拿來判斷「這包是什麼時候、裝給誰的」
           Wrap(spacing: 18, runSpacing: 4, children: [
+            _SourceLine(source: kit.source),
             if (when.isNotEmpty)
               Text(l10n.hostInstalledAt(when),
                   style: UepText.code(size: 11.5, color: s.inkMute)),
@@ -1759,6 +1771,44 @@ class _KitSection extends StatelessWidget {
       title: AppLocalizations.of(context).hostInstallPath,
       child: SelectableText(kit.kitRoot,
           style: UepText.code(size: 12, color: s.inkSoft)),
+    );
+  }
+}
+
+/// 這一頁的東西是**怎麼找到的**：安裝包，還是直接偵測到的本機檔案。
+///
+/// 不是裝飾：兩種來源能做的事一樣，但「裝了一包」與「找到你 repo 裡那份」
+/// 出問題時要找的地方完全不同——升級安裝包救不了本機來源的那一份。
+class _SourceLine extends StatelessWidget {
+  const _SourceLine({required this.source});
+
+  final KitSource source;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final name = source == KitSource.installed
+        ? l10n.hostKitSourceInstalled
+        : l10n.hostKitSourceLocal;
+    return Text(l10n.hostKitSource(name),
+        style: UepText.code(size: 11.5, color: context.uep.inkMute));
+  }
+}
+
+/// 執行器版本。讀不到就不畫——空的一行比沒有那一行更容易被當成「沒版本」。
+class _RunnerVersionLine extends ConsumerWidget {
+  const _RunnerVersionLine();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final version = ref.watch(runnerVersionProvider).value ?? '';
+    if (version.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        AppLocalizations.of(context).hostRunnerVersion(version),
+        style: UepText.code(size: 11.5, color: context.uep.inkMute),
+      ),
     );
   }
 }

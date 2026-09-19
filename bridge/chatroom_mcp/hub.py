@@ -367,7 +367,9 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 _detail_text(detail)
                 or "這個動作只認人類憑證（CHATROOM_HUMAN_TOKEN 或 "
                    "audience=human 的邀請）。重新加入沒有用——"
-                   "請房內的人類代為執行。",
+                   "請房內的人類代為執行。"
+                   "（派工的例外是任務板的監督者；你是的話，"
+                   "請確認你沒有離開過那間房。）",
                 status=status, detail=detail,
             )
         if code in ("human_actor_required_for_run",
@@ -377,8 +379,20 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             # 走任務板，不走派工佇列
             return HubError(
                 _detail_text(detail)
-                or "只有房內的人類成員能做這件事。要開工作的話請走任務板"
-                   "（chatroom_board_add），不要走派工佇列。",
+                or "只有房內的人類成員或這塊板的監督者能做這件事。"
+                   "要開工作的話請走任務板（chatroom_board_add），"
+                   "不要走派工佇列。",
+                status=status, detail=detail,
+            )
+        if code == "kind_not_allowed_for_supervisor":
+            # 這一支**不是**「你沒有權限」：呼叫者確實是監督者，只是這個
+            # kind 不在它那份清單裡。壓成同一句話會讓它去重新確認身分，
+            # 而它要做的是換一個 kind，或把 push 留給人類
+            return HubError(
+                _detail_text(detail)
+                or "你是這塊板的監督者，但這個 kind 不開放給監督者派。"
+                   "investigate／ticket／stage 可以，push 是不經模型的固定"
+                   "腳本，只有人類按得下去。",
                 status=status, detail=detail,
             )
         if code == "not_your_run":
@@ -508,6 +522,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 _detail_text(detail)
                 or "派工不能從目前的狀態變成你回報的那個。先讀回這筆 run "
                    "的現況再決定下一步，不要重試同一個回報。",
+                status=status, detail=detail,
+            )
+        if code == "supervisor_cannot_be_run":
+            # **不是權限問題**：下命令的人是房間建立者，被指定的那個成員
+            # 是一筆 run。派工跑起來的臨時成員做完就離房，而監督者是一個要
+            # 留著的角色——這也是「run 派 run」那條迴圈唯一的那道閘
+            return HubError(
+                _detail_text(detail)
+                or "派工跑起來的臨時成員不能當任務板的監督者——"
+                   "它做完就會離房，而監督者是一個要留著的角色。"
+                   "請改指定一個常駐的成員。",
                 status=status, detail=detail,
             )
         return HubError(f"操作與 Hub 目前狀態衝突（{text or '409'}）。",

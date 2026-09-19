@@ -251,6 +251,11 @@ String _dispatchError(AppLocalizations l10n, ApiException e) =>
       'run_daily_quota_exceeded' => e.message,
       'run_queue_cap_exceeded' => e.message,
       'room_not_ops' => l10n.opsErrorRoomNotOps,
+      // Supervisor 代派時的 kind 白名單（2026-09-19）。Hub 把被擋下的 kind
+      // 放在 detail 裡，講出是哪一種才知道下一步該換誰來按
+      'kind_not_allowed_for_supervisor' => l10n
+          .opsErrorSupervisorKindNotAllowed(
+              '${e.detail['kind'] ?? l10n.commonUnknown}'),
       _ => e.message,
     };
 

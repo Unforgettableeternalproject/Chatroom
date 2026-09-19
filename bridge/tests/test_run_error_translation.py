@@ -27,6 +27,9 @@ def _err(status, code, message="（Hub 的說明）"):
     "not_your_run",
     "runner_token_required",
     "runner_token_invalid",
+    # Supervisor 自派工（Hub 2026-09-19）：它確實是監督者，只是這個 kind
+    # 不開放——讀成身分失效的話，watcher 的處置是結束自己
+    "kind_not_allowed_for_supervisor",
 ])
 def test_run_403_codes_are_not_identity_failures(code):
     """撞到這幾條的 agent 沒有掉出房間——叫它重新 join 是一條死路。"""
@@ -79,3 +82,27 @@ def test_429_never_claims_the_identity_is_gone():
     """反向守衛：429 是速率限制，watcher 不該因為它結束自己。"""
     for code in ("run_daily_quota_exceeded", "run_queue_cap_exceeded", "x"):
         assert _err(429, code).identity_invalid is False
+
+
+def test_a_supervisor_blocked_on_push_is_told_to_change_the_kind():
+    """它是監督者，缺的不是身分而是那個 kind。
+
+    壓成「只有人類做得到」的話，它會去重新確認身分（重新 join、請人再指定
+    一次），而正確的動作是換一個 kind 或把 push 留給人類。
+    """
+    err = translate_status(403, {"code": "kind_not_allowed_for_supervisor"},
+                           "u")
+    assert err.identity_invalid is False
+    assert not err.reason.startswith("Hub 拒絕了這個動作（403）")
+    # Hub 有話要說時原樣交出去——它已經把 kind 寫進訊息了
+    spoken = _err(403, "kind_not_allowed_for_supervisor",
+                  "監督者派不了 push。")
+    assert "push" in spoken.reason
+
+
+def test_a_run_cannot_be_appointed_supervisor_says_why():
+    """409 而不是 403：那是狀態問題（那個成員是 run），不是權限問題。"""
+    err = _err(409, "supervisor_cannot_be_run")
+    assert err.status == 409
+    assert "操作與 Hub 目前狀態衝突" not in err.reason
+    assert err.identity_invalid is False

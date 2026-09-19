@@ -593,6 +593,7 @@ class _RunTile extends StatelessWidget {
           if (run.softStopRequestedAt != null && !run.cancelRequested)
             Text(l10n.opsSoftStopRequested,
                 style: UepText.mono(size: 10, color: s.inkSoft)),
+          _RequesterLine(run: run),
           if (actions.isNotEmpty) ...[
             const SizedBox(height: 10),
             Wrap(
@@ -667,6 +668,7 @@ class _FinishedCard extends StatelessWidget {
             timeIso: run.endedAt ?? run.updatedAt,
             now: now,
           ),
+          _RequesterLine(run: run),
           if (excerpt.isNotEmpty) ...[
             const SizedBox(height: 6),
             UepMarkdownBody(data: excerpt, baseColor: s.inkMute),
@@ -680,6 +682,38 @@ class _FinishedCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// 這一筆是誰動的手。
+///
+/// **只在 Supervisor 代派時出現**：人類自己按的那筆，動手的人就是畫面前
+/// 的那個人，多一行等於每張卡都貼一句廢話。
+///
+/// 兩個名字分開講：`requester_name` 是**按下去的那一位**，
+/// `requested_by_name` 是**配額算誰的**（Supervisor 代派時是指定它的那個
+/// 人類）。壓成一句「某人派的」的話，那個人會在自己沒按過任何按鈕的情況下
+/// 被寫成派工者。
+class _RequesterLine extends StatelessWidget {
+  const _RequesterLine({required this.run});
+
+  final AgentRun run;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!run.isAgentRequested) return const SizedBox.shrink();
+    final l10n = AppLocalizations.of(context);
+    final parts = <String>[
+      l10n.opsRequesterSupervisor(
+          run.requesterName.isEmpty ? l10n.commonUnknown : run.requesterName),
+      if (run.requestedByName.isNotEmpty)
+        l10n.opsRequesterQuota(run.requestedByName),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(parts.join(' · '),
+          style: UepText.mono(size: 10, color: UepColors.info)),
     );
   }
 }

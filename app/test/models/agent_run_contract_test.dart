@@ -18,6 +18,10 @@ const Map<String, dynamic> _runJson = {
   'requested_by': 'p-1',
   'requested_by_actor_key': 'actor-1',
   'requested_by_name': '艾斯維爾',
+  // 誰動的手（Supervisor 自派工 2026-09-19）。與上面那組「配額算誰的」
+  // 是兩個人
+  'requester_kind': 'human',
+  'requester_name': '艾斯維爾',
   'status': 'running',
   'priority': 2,
   'position': 3,
@@ -115,6 +119,9 @@ void main() {
       expect(run.brief, '修掉登入頁的 500');
       expect(run.requestedByName, '艾斯維爾');
       expect(run.requestedByActorKey, 'actor-1');
+      expect(run.requesterKind, 'human');
+      expect(run.requesterName, '艾斯維爾');
+      expect(run.isAgentRequested, isFalse);
       expect(run.status, 'running');
       expect(run.priority, 2);
       expect(run.position, 3);
@@ -128,6 +135,28 @@ void main() {
       expect(run.contextTokens, 90000);
       expect(run.startedAt, isNotNull);
       expect(run.endedAt, isNull);
+    });
+
+    test('Supervisor 代派：動手的與配額歸屬是兩個人', () {
+      final run = AgentRun.fromJson({
+        ..._runJson,
+        'requester_kind': 'agent',
+        'requester_name': '米絲媞',
+      });
+      expect(run.isAgentRequested, isTrue);
+      expect(run.requesterName, '米絲媞');
+      // 配額仍然算在指定 Supervisor 的那個人類身上
+      expect(run.requestedByName, '艾斯維爾');
+    });
+
+    test('🔴 舊 Hub 沒有這兩把鍵 → human ＋空字串，不是 agent', () {
+      final old = Map<String, dynamic>.from(_runJson)
+        ..remove('requester_kind')
+        ..remove('requester_name');
+      final run = AgentRun.fromJson(old);
+      expect(run.requesterKind, 'human');
+      expect(run.requesterName, '');
+      expect(run.isAgentRequested, isFalse);
     });
 
     test('queued 的取消是立刻的，running 的不是', () {

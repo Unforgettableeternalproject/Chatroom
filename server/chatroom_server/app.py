@@ -3494,8 +3494,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
             ).fetchone()
             if room_sup is not None and room_sup["board_supervisor_left_at"]:
+                # 🔑 清成 **NULL**，不是空字串：資格判準
+                # （`_board_supervisor_room`）問的是 `IS NULL`。寫成空字串的
+                # 那段時間裡，畫面說他回來了、房裡也公告了，而他在確認週期
+                # 與派工上照樣 403——兩邊各自看都完全正確，所以沒有任何地方
+                # 會報錯（2026-09-19 修）。
                 await db.execute(
-                    "UPDATE room SET board_supervisor_left_at='' WHERE id=?",
+                    "UPDATE room SET board_supervisor_left_at=NULL WHERE id=?",
                     (room_id,),
                 )
                 await _commit_with_retry(db)
@@ -6220,8 +6225,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "id": objective_id, "status": "review",
                 "board_seq": seq}
 
-    async def _is_board_supervisor(row, me) -> bool:
-        """這個人是不是這塊板**任一掛接房**的 supervisor。
+    async def _board_supervisor_room(row, me):
+        """回傳「指定這個人當 supervisor」的那間房（`room` 的整列），沒有就 None。
 
         supervisor 存在 `room.board_supervisor_session_key`（per-room，
         艾斯維爾 2026-09-03），所以要問的是「這塊板掛的那些房裡，有沒有哪一
@@ -6236,23 +6241,31 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         key = (me["session_key"] or "").strip()
         if not key:
-            return False
+            return None
         db = app.state.db
         bid = (row["board_id"] or "").strip() if "board_id" in row.keys() else ""
         if bid:
-            hit = await (await db.execute(
-                "SELECT 1 FROM room r JOIN board_room br ON br.room_id = r.id"
+            return await (await db.execute(
+                "SELECT r.* FROM room r JOIN board_room br ON br.room_id = r.id"
                 " WHERE br.board_id=? AND br.detached_at IS NULL"
                 "   AND r.board_supervisor_session_key=?"
                 "   AND r.board_supervisor_left_at IS NULL LIMIT 1",
                 (bid, key))).fetchone()
-        else:
-            hit = await (await db.execute(
-                "SELECT 1 FROM room WHERE id=?"
-                "   AND board_supervisor_session_key=?"
-                "   AND board_supervisor_left_at IS NULL LIMIT 1",
-                (row["room_id"], key))).fetchone()
-        return hit is not None
+        return await (await db.execute(
+            "SELECT * FROM room WHERE id=?"
+            "   AND board_supervisor_session_key=?"
+            "   AND board_supervisor_left_at IS NULL LIMIT 1",
+            (row["room_id"], key))).fetchone()
+
+    async def _is_board_supervisor(row, me) -> bool:
+        """這個人是不是這塊板**任一掛接房**的 supervisor。
+
+        判斷全在 `_board_supervisor_room`，這裡只把它壓成布林——派工那條路
+        （`create_run`）要的是「是哪一間房指定的」（配額歸屬要從那間房的
+        `board_supervisor_set_by` 反查），而資格判準必須與這裡完全一樣。
+        兩邊各寫一份 SQL 的話，放寬其中一邊的那一天不會有任何地方報錯。
+        """
+        return await _board_supervisor_room(row, me) is not None
 
     @app.post("/api/board/objectives/{objective_id}/verify",
               dependencies=[Depends(require_auth)])
@@ -6441,6 +6454,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         ⚠️ 被指定的對象**在設定的當下多半還沒進房**——那正是要用指派把它叫
         進來的情形。所以這裡不驗證「他是不是房內成員」，退場判定也只接在離場
         路徑上（見 `_check_supervisor_departed`）。
+
+        🔴 **派工跑起來的臨時成員（`participant.run_id` 非空）一律拒絕**
+        ⇒ 409 `supervisor_cannot_be_run`。Supervisor 可以派工（見
+        `create_run`），而 run 成了 Supervisor 就等於 run 派 run——遞迴的口
+        堵在這裡，所以派工那一端不需要任何深度上限（艾斯維爾 2026-09-19）。
         """
         room = await _room_or_404(room_id)
         await _admin_or_403(room, x_participant_id, x_session_key,
@@ -6461,12 +6479,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 是房內身分，拿別間房的 id 來指定就不是他了
         if not key and body.participant_id.strip():
             target = await (await db.execute(
-                "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+                "SELECT session_key, run_id FROM participant"
+                " WHERE id=? AND room_id=?",
                 (body.participant_id.strip(), room_id))).fetchone()
             if target is None:
                 raise _err(404, "participant_not_found",
                            "找不到這個成員")
+            if (target["run_id"] or "").strip():
+                raise _err(409, "supervisor_cannot_be_run",
+                           "派工跑起來的臨時成員不能當監督者——"
+                           "它做完就會離房，而監督者是一個要留著的角色。")
             key = actor_key(target["session_key"])
+        elif key:
+            # 直接給 session_key 的那條路也要擋：run 帶進來的成員有自己的
+            # session_key，指定它一樣會讓「Supervisor 派工」變成 run 派 run
+            # （艾斯維爾 2026-09-19：臨時 run 永遠不能成為 Supervisor，
+            # 遞迴的口就堵在這裡，不另設深度上限）
+            as_run = await (await db.execute(
+                "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
+                " AND status='active' AND run_id!='' LIMIT 1",
+                (room_id, key))).fetchone()
+            if as_run is not None:
+                raise _err(409, "supervisor_cannot_be_run",
+                           "派工跑起來的臨時成員不能當監督者——"
+                           "它做完就會離房，而監督者是一個要留著的角色。")
         now = _now()
         if not key:
             await db.execute(
@@ -6556,6 +6592,28 @@ def create_app(config: Config | None = None) -> FastAPI:
             f"任務板的監督者 {name} 已不在聊天室內，需要重新指定。",
             kind="system", system_event="board_supervisor_left",
         )
+        # 它派過的還在排隊的 run **不自動取消**（艾斯維爾 2026-09-19：取消
+        # 只有人類或主持人下得了，見 §6.1）。但也不能就這樣留著不講：那幾筆
+        # 會照常被領走、照常跑，而當初決定要派它們的那個身分已經不在房裡了。
+        # 指名 mention 房內人類——不帶 mention 的 system 訊息等於貼在牆上。
+        pending = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM agent_run"
+                " WHERE room_id=? AND status='queued' AND requester_kind='agent'"
+                " AND requested_by IN (SELECT id FROM participant"
+                "   WHERE room_id=? AND session_key=?)",
+                (room_id, room_id, room["board_supervisor_session_key"]),
+            )
+        ).fetchone()
+        if pending and pending["n"]:
+            humans = await _room_human_names(room_id)
+            await _post_message(
+                room_id, None,
+                f"監督者 {name} 還有 {pending['n']} 筆派工在排隊，"
+                "不會自動取消，請確認要不要取消或讓它們跑完。",
+                kind="system", system_event="board_supervisor_left_runs",
+                mentions=humans,
+            )
 
     async def _flush_board_digest(room) -> None:
         """把上次摘要之後的 board 變動彙整成一則，mention supervisor。
@@ -12906,10 +12964,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         return [r["display_name"] for r in rows], await _orphan_claims(room_id)
 
+    def _requester_kind(row) -> str:
+        """這一筆是誰動的手：`human`／`agent`（Supervisor 代派）。
+
+        欄位是 2026-09-19 才加的，存量 run 一律 `human`；讀不到欄位（測試裡
+        自組的 row）也退回 `human`——那是這一欄存在之前的事實。
+        """
+        if "requester_kind" not in row.keys():
+            return "human"
+        return (row["requester_kind"] or "human")
+
     def _run_public(row) -> dict:
         d = dict(row)
         d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
         d["cancel_requested"] = bool(d.get("cancel_requested"))
+        # 兩組人分開帶出去：`requested_by_*` 是「配額算誰的」，
+        # `requester_*` 是「誰動的手」。Supervisor 代派時兩者不同
+        d["requester_kind"] = d.get("requester_kind") or "human"
+        d["requester_name"] = d.get("requester_name") or ""
         return d
 
     def _runner_public(row) -> dict:
@@ -13031,6 +13103,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             mentions = [requester] if requester else []
         else:
             return
+        # 誰派的要寫在訊息裡。房裡看到的是「派工 X 完成」，而它可能根本不是
+        # 任何人類按的——標出來才有人去看那一筆為什麼會存在
+        if _requester_kind(row) == "agent":
+            who = (row["requester_name"] if "requester_name" in row.keys()
+                   else "") or "監督者"
+            text = f"{text}（由 Supervisor {who} 派工）"
         await _post_message(room_id, None, text, kind="system",
                             system_event=f"run_{to_status}",
                             mentions=mentions)
@@ -13153,10 +13231,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
-        """建立一筆派工（run）。**只有人類憑證做得到。**
+        """建立一筆派工（run）。**人類憑證，或這塊板的 Supervisor。**
 
-        §6.4 的第一條硬限制：執行器手上那把 token 只能領單、回報、heartbeat，
-        建單一律不行——token 洩漏＝任何人能派工，而遠端沒有人看著。
+        §6.4 的第一條硬限制原本是「只有人類憑證做得到」：執行器手上那把
+        token 只能領單、回報、heartbeat，建單一律不行——token 洩漏＝任何人
+        能派工，而遠端沒有人看著。
+
+        🔓 **2026-09-19（艾斯維爾）放寬一條**：agent 憑證 ＋ 呼叫者是「這間房
+        掛接的板」的 Supervisor 也建得了。判準沿用 `_is_board_supervisor`
+        同一道（經 `_board_supervisor_room`），不另寫一份——Supervisor 已經被
+        賦予「這塊板我負責」的角色，派工是那個角色的延伸。伴隨的三條界線：
+
+        - **`kind` 不含 `push`** ⇒ 403 `kind_not_allowed_for_supervisor`。
+          push 是不經模型的固定腳本，那顆鈕留給人類。
+        - **配額算在「指定這位 Supervisor 的人類」頭上**（那間房的
+          `board_supervisor_set_by`），查不到才退回 agent 自己。不開獨立
+          配額池：那等於給 agent 一個不受人類每日上限牽制的派工池。
+        - **run 永遠不能成為 Supervisor**（`set_board_supervisor` 擋在源頭），
+          所以沒有「run 派 run 派 run」的遞迴面，這裡不設深度上限。
+
+        `requester_kind` / `requester_name` 記的是**誰動的手**，與
+        `requested_by_actor_key` / `requested_by_name`（配額算誰的）分開——
+        Supervisor 代派時這兩組是不同的人，壓成一組就再也分不出來了。
 
         規則與錯誤碼（**契約，client 可比對 code**）：
 
@@ -13180,13 +13276,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _ops_room_or_409(room_id)
         me = await _participant(x_participant_id, room_id)
-        if not _is_human_credential(request, host):
-            raise _err(403, "human_token_required_for_run",
-                       "派工需要人類憑證 CHATROOM_HUMAN_TOKEN")
-        if (me["role"] or "") != "human":
-            raise _err(403, "human_actor_required_for_run",
-                       "只有房內的人類成員能派工，agent 請改用任務板")
         db = app.state.db
+        # Supervisor 那條路要先問出來：它同時決定「憑證那一關放不放」與
+        # 「配額算誰的」，分兩處各問一次的話，兩次之間的答案可以不一樣
+        sup_room = None
+        if (me["role"] or "") != "human":
+            sup_room = await _board_supervisor_room(
+                {"board_id": body.board_id, "room_id": room_id}, me)
+        if sup_room is None:
+            if not _is_human_credential(request, host):
+                raise _err(403, "human_token_required_for_run",
+                           "派工需要人類憑證 CHATROOM_HUMAN_TOKEN")
+            if (me["role"] or "") != "human":
+                raise _err(403, "human_actor_required_for_run",
+                           "只有房內的人類成員或這塊板的監督者能派工，"
+                           "agent 請改用任務板")
+        elif body.kind == "push":
+            # 身分邊界不是狀態衝突，所以是 403 不是 409
+            raise _err(403, "kind_not_allowed_for_supervisor",
+                       "監督者派得了 investigate／ticket／stage，"
+                       "push 是不經模型的固定腳本，只有人類按得下去。",
+                       kind=body.kind)
         # project 要有人服務。沒有任何非 offline 的執行器宣告過這個 key 的
         # 話，這筆 run 會安靜地排在佇列裡等一台永遠不會來的執行器——打錯一個
         # 字與「執行器還沒開機」在畫面上長得一模一樣
@@ -13216,7 +13326,20 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "run_ref_already_active",
                        "這個目標已經有一筆還沒結束的派工。",
                        run_id=dup["id"])
+        # 配額歸屬。Supervisor 代派算在**指定它的那個人類**頭上：濫用時
+        # 那個人自己的每日上限會先耗盡，而他是唯一看得到、也該負責的人。
+        # `board_supervisor_set_by` 是 participant id，反查得到 session_key
+        # 才算數——那一列被刪掉的話退回 agent 自己，沒有人的配額憑空變多
         actor = actor_key(me["session_key"])
+        quota_name = me["display_name"]
+        if sup_room is not None and sup_room["board_supervisor_set_by"]:
+            setter = await (await db.execute(
+                "SELECT session_key, display_name FROM participant WHERE id=?",
+                (sup_room["board_supervisor_set_by"],))).fetchone()
+            if setter is not None:
+                actor = actor_key(setter["session_key"])
+                quota_name = (sup_room["board_supervisor_set_by_name"]
+                              or setter["display_name"])
         day = _now()[:10]
         used = (await (await db.execute(
             "SELECT COUNT(*) AS n FROM agent_run"
@@ -13241,17 +13364,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             " WHERE room_id=?", (room_id,))).fetchone())["p"] + 1
         run_id = _uid()
         now = _now()
+        requester_kind = "agent" if sup_room is not None else "human"
         await db.execute(
             "INSERT INTO agent_run (id, room_id, board_id, kind, project, ref,"
             " brief, requested_by, requested_by_actor_key, requested_by_name,"
+            " requester_kind, requester_name,"
             " status, priority, position, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
             (run_id, room_id, body.board_id, body.kind, body.project, body.ref,
-             body.brief, me["id"], actor, me["display_name"],
+             body.brief, me["id"], actor, quota_name,
+             requester_kind, me["display_name"],
              body.priority, pos, now, now),
         )
         await _record_run_event(run_id, room_id, "", "queued",
-                                actor, me["display_name"], "created")
+                                actor, me["display_name"], "created",
+                                detail={"requester_kind": requester_kind,
+                                        "requester_name": me["display_name"]})
         await _commit_with_retry(db)
         await events.notify(room_id)
         return {"run": _run_public(await _run_or_404(run_id))}
@@ -13834,15 +13962,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                         + f"\n\n（摘要過長，已截去後半，完整內容見 run "
                           f"{run_id} 的回報）")
                 brief = f"{brief}\n\n## 前一輪交接摘要\n{handoff_summary}"
+            # 派工者身分整組**原樣繼承**：交接是同一份工作的接力，不是新的
+            # 派工。漏掉 `requester_*` 的話，Supervisor 派的工作一交接就變成
+            # 「人類派的」，房內訊息與稽核串從第二棒起都在說錯話
             await db.execute(
                 "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
                 " ref, brief, requested_by, requested_by_actor_key,"
-                " requested_by_name, status, priority, position,"
+                " requested_by_name, requester_kind, requester_name,"
+                " status, priority, position,"
                 " parent_run_id, handoff_depth, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?,?,?)",
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?,?,?)",
                 (child_id, row["room_id"], row["board_id"], row["kind"],
                  row["project"], row["ref"], brief, row["requested_by"],
                  row["requested_by_actor_key"], row["requested_by_name"],
+                 _requester_kind(row),
+                 row["requester_name"] if "requester_name" in row.keys() else "",
                  row["priority"], pos, run_id, depth, now, now))
             await _record_run_event(child_id, row["room_id"], "", "queued",
                                     row["runner_id"], "", "handoff_child",
