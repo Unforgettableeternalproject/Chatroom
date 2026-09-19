@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -18,6 +17,7 @@ import '../../state/runner_kit_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
 import 'env_settings_section.dart';
+import 'host_value_row.dart';
 import 'kit_install_section.dart';
 import 'runner_workspaces_section.dart';
 
@@ -496,7 +496,7 @@ class _ShareSection extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CopyRow(label: l10n.fieldHubUrl, value: address),
+          CopyRow(label: l10n.fieldHubUrl, value: address),
           const SizedBox(height: 10),
           // 🔴 **憑證分離之後這裡不能只有一把。**
           //
@@ -508,12 +508,12 @@ class _ShareSection extends ConsumerWidget {
           // 分離前（legacy）只有一把而且是萬用的，那時多畫一個欄位只會
           // 讓人以為自己少了什麼東西——所以兩種狀態畫的不一樣。
           if (env.credentialsSplit) ...[
-            _CopyRow(
+            CopyRow(
                 label: l10n.hostFieldHumanToken,
                 value: env.humanToken,
                 secret: true),
             const SizedBox(height: 10),
-            _CopyRow(
+            CopyRow(
                 label: l10n.hostFieldAgentToken,
                 value: env.token,
                 secret: true),
@@ -523,7 +523,7 @@ class _ShareSection extends ConsumerWidget {
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ] else ...[
-            _CopyRow(
+            CopyRow(
                 label: l10n.hostFieldToken, value: env.token, secret: true),
             const SizedBox(height: 12),
             Text(
@@ -531,6 +531,8 @@ class _ShareSection extends ConsumerWidget {
               style: UepText.serif(size: 13, color: s.inkMute, height: 1.6),
             ),
           ],
+          const SizedBox(height: 14),
+          _RotateTokenRow(),
           if (env.bindsAllInterfaces) ...[
             const SizedBox(height: 6),
             Text(
@@ -586,7 +588,7 @@ class _McpSection extends ConsumerWidget {
           ),
           if (env != null && env.url.isNotEmpty) ...[
             const SizedBox(height: 14),
-            _CopyRow(label: l10n.hostFieldConnectedHub, value: env.url),
+            CopyRow(label: l10n.hostFieldConnectedHub, value: env.url),
           ],
           const SizedBox(height: 16),
           _VersionCheck(kit: kit),
@@ -711,7 +713,7 @@ class _TunnelSection extends ConsumerWidget {
             ),
             if (t.hasUrl) ...[
               const SizedBox(height: 12),
-              _CopyRow(label: l10n.hostFieldTunnelUrl, value: t.url),
+              CopyRow(label: l10n.hostFieldTunnelUrl, value: t.url),
             ],
             if (actions != null && Platform.isWindows) ...[
               const SizedBox(height: 14),
@@ -1376,7 +1378,10 @@ class _DataSectionState extends ConsumerState<_DataSection> {
     final last = ref.watch(lastDataOpProvider);
     final dataLast = _latest(
         last,
-        (k) => !_controlKinds.contains(k) && !_tunnelKinds.contains(k));
+        (k) =>
+            !_controlKinds.contains(k) &&
+            !_tunnelKinds.contains(k) &&
+            k != 'rotate');
 
     final l10n = AppLocalizations.of(context);
 
@@ -1399,12 +1404,6 @@ class _DataSectionState extends ConsumerState<_DataSection> {
               variant: UepButtonVariant.outline,
               label: l10n.hostRestoreBackupButton,
               onPressed: _busy ? null : () => _pickAndRestore(context),
-            ),
-            UepButton(
-              small: true,
-              variant: UepButtonVariant.outline,
-              label: l10n.hostRotateTokenButton,
-              onPressed: _busy ? null : () => _confirmRotate(context),
             ),
           ]),
           if (dataLast != null) ...[
@@ -1543,56 +1542,6 @@ class _DataSectionState extends ConsumerState<_DataSection> {
     );
   }
 
-  /// 換 token 要確認——**它比停止 Hub 更難復原**。
-  ///
-  /// 停止之後按「啟動」就回來了；token 換掉之後，每一個成員都要重新拿到
-  /// 新的那把，而那是一件人工的、會拖很久的事。
-  Future<void> _confirmRotate(BuildContext context) async {
-    final s = context.uep;
-    final l10n = AppLocalizations.of(context);
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: s.bgCard,
-        title: Text(l10n.hostRotateTitle,
-            style: UepText.serif(
-                size: 15, weight: FontWeight.w600, color: s.inkTitle)),
-        content: Text(
-          l10n.hostRotateBody,
-          style: UepText.serif(size: 14, color: s.ink, height: 1.7),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(l10n.commonCancel,
-                style: UepText.serif(size: 14, color: s.inkMute)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(l10n.hostRotateTokenButton,
-                style: UepText.serif(size: 14, color: UepColors.gold)),
-          ),
-        ],
-      ),
-    );
-    if (go != true) return;
-
-    final actions = ref.read(hostActionsProvider);
-    if (actions == null) return;
-    setState(() => _busy = true);
-    try {
-      final raw = await actions.rotateToken();
-      ref.read(lastDataOpProvider.notifier).set({
-        'kind': 'rotate',
-        ...parseScriptResult(raw),
-      });
-      // .env 變了，「發給成員的連線資訊」那一區要跟著換——不 invalidate
-      // 的話它會繼續顯示舊 token，而主持人正要把它複製給別人
-      ref.invalidate(hostEnvProvider);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 }
 
 /// 一次操作的結果。
@@ -1697,7 +1646,7 @@ class _OpResult extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 這是使用者唯一看得到明碼的時刻，所以不遮——遮了他就得去翻 .env
-          _CopyRow(
+          CopyRow(
               label: l10n.hostFieldNewToken,
               value: '${result['token'] ?? ''}'),
           const SizedBox(height: 6),
@@ -1759,77 +1708,6 @@ class _OpResult extends StatelessWidget {
         ),
       ],
     );
-  }
-}
-
-class _CopyRow extends StatefulWidget {
-  const _CopyRow({required this.label, required this.value, this.secret = false});
-
-  final String label;
-  final String value;
-
-  /// token 這種東西預設遮起來——這個畫面很可能在螢幕分享或截圖裡。
-  /// 遮的是顯示，不是複製：按鈕照樣把真值放進剪貼簿。
-  final bool secret;
-
-  @override
-  State<_CopyRow> createState() => _CopyRowState();
-}
-
-class _CopyRowState extends State<_CopyRow> {
-  bool _revealed = false;
-  bool _copied = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.uep;
-    final hidden = widget.secret && !_revealed;
-    return Row(children: [
-      SizedBox(
-        width: 92,
-        child: Text(widget.label, style: UepText.fieldLabel(color: s.inkMute)),
-      ),
-      Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-          decoration: BoxDecoration(
-            color: s.bgSunken,
-            border: Border.all(color: s.line),
-            borderRadius: BorderRadius.circular(5),
-          ),
-          child: Text(
-            hidden ? '•' * 24 : widget.value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: UepText.code(size: 12.5, color: s.ink),
-          ),
-        ),
-      ),
-      if (widget.secret)
-        IconButton(
-          tooltip: _revealed
-              ? AppLocalizations.of(context).commonHide
-              : AppLocalizations.of(context).commonShow,
-          icon: Icon(_revealed ? Icons.visibility_off : Icons.visibility,
-              size: 16, color: s.inkMute),
-          onPressed: () => setState(() => _revealed = !_revealed),
-        ),
-      IconButton(
-        tooltip: _copied
-            ? AppLocalizations.of(context).commonCopied
-            : AppLocalizations.of(context).commonCopy,
-        icon: Icon(_copied ? Icons.check : Icons.copy,
-            size: 16, color: _copied ? UepColors.success : s.inkMute),
-        onPressed: () async {
-          await Clipboard.setData(ClipboardData(text: widget.value));
-          if (!mounted) return;
-          setState(() => _copied = true);
-          // 回到原狀，否則下一次複製看不出來有沒有成功
-          await Future<void>.delayed(const Duration(seconds: 2));
-          if (mounted) setState(() => _copied = false);
-        },
-      ),
-    ]);
   }
 }
 
@@ -1929,3 +1807,85 @@ class _Panel extends StatelessWidget {
   }
 }
 
+/// 換 token 要確認——**它比停止 Hub 更難復原**。
+///
+/// 停止之後按「啟動」就回來了；token 換掉之後，每一個成員都要重新拿到
+/// 新的那把，而那是一件人工的、會拖很久的事。
+///
+/// 入口只有一個（「發給成員的連線資訊」那一區），而且不讓人手打 token：
+/// 手打的那一把會落在 `.env` 與某個人的剪貼簿裡，誰拿過它沒有人知道。
+Future<void> confirmRotateToken(BuildContext context, WidgetRef ref) async {
+  final s = context.uep;
+  final l10n = AppLocalizations.of(context);
+  final go = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: s.bgCard,
+      title: Text(l10n.hostRotateTitle,
+          style: UepText.serif(
+              size: 15, weight: FontWeight.w600, color: s.inkTitle)),
+      content: Text(
+        l10n.hostRotateBody,
+        style: UepText.serif(size: 14, color: s.ink, height: 1.7),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: Text(l10n.commonCancel,
+              style: UepText.serif(size: 14, color: s.inkMute)),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(l10n.hostRotateTokenButton,
+              style: UepText.serif(size: 14, color: UepColors.gold)),
+        ),
+      ],
+    ),
+  );
+  if (go != true) return;
+
+  final actions = ref.read(hostActionsProvider);
+  if (actions == null) return;
+  // 進行中也要畫出來：跑腳本有幾秒，按下去沒反應的人會再按一次
+  ref.read(lastDataOpProvider.notifier)
+      .set({'kind': 'rotate', 'pending': true});
+  final raw = await actions.rotateToken();
+  ref.read(lastDataOpProvider.notifier).set({
+    'kind': 'rotate',
+    ...parseScriptResult(raw),
+  });
+  // .env 變了，「發給成員的連線資訊」那一區要跟著換——不 invalidate 的話
+  // 它會繼續顯示舊 token，而主持人正要把它複製給別人
+  ref.invalidate(hostEnvProvider);
+  ref.invalidate(hostEnvRawProvider);
+}
+
+/// 換 token 的入口。**放在連線資訊這一區**——要換的那把就在上面幾列，
+/// 而換完之後要複製給成員的也是這一區的東西。
+class _RotateTokenRow extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final actions = ref.watch(hostActionsProvider);
+    if (actions == null) return const SizedBox.shrink();
+    final op = _opOf(ref, const {'rotate'});
+    final running = _isPending(ref, 'rotate');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        UepButton(
+          small: true,
+          variant: UepButtonVariant.outline,
+          label: l10n.hostRotateTokenButton,
+          onPressed: running ? null : () => confirmRotateToken(context, ref),
+        ),
+        // 結果畫在按的這一區，不是頁尾的「備份」框
+        if (op != null) ...[
+          const SizedBox(height: 12),
+          _OpResult(result: op),
+        ],
+      ],
+    );
+  }
+}

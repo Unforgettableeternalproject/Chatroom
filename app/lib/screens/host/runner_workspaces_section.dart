@@ -700,23 +700,26 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
             (v) => setState(() => _public = v)),
         _switchRow(s, l10n.hostRunnerLivetest, _livetest,
             (v) => setState(() => _livetest = v)),
-        Row(
-          children: [
-            Expanded(
-              child: SelectableText(
-                _folder.isEmpty ? l10n.hostRunnerNone : _folder,
-                maxLines: 1,
-                style: UepText.code(size: 11.5, color: s.inkSoft),
+        SizedBox(
+          height: _kSettingRowHeight,
+          child: Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  _folder.isEmpty ? l10n.hostRunnerNone : _folder,
+                  maxLines: 1,
+                  style: UepText.code(size: 11.5, color: s.inkSoft),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            UepButton(
-              label: l10n.hostRunnerBrowse,
-              small: true,
-              variant: UepButtonVariant.outline,
-              onPressed: _saving ? null : _pickFolder,
-            ),
-          ],
+              const SizedBox(width: 12),
+              UepButton(
+                label: l10n.hostRunnerBrowse,
+                small: true,
+                variant: UepButtonVariant.outline,
+                onPressed: _saving ? null : _pickFolder,
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 10),
         InkWell(
@@ -758,18 +761,24 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     );
   }
 
+  /// 開關列。字級、金色與排法照設定頁那兩顆（`settings_screen` 的視覺分頁）；
+  /// 這裡多一個 `shrinkWrap`——設定頁一頁只放兩三顆，卡片裡一連三列，
+  /// Material 預設的點擊區會把這一塊撐成別的東西。
   Widget _switchRow(
       UepSurface s, String label, bool value, ValueChanged<bool> onChanged) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+    return SizedBox(
+      height: _kSettingRowHeight,
       child: Row(
         children: [
           Expanded(
             child: Text(label,
-                style: UepText.serif(size: 14, color: s.ink, height: 1.5)),
+                style: UepText.sans(size: 13.5, color: s.inkTitle)),
           ),
           Switch(
             value: value,
+            activeThumbColor: UepColors.gold,
+            activeTrackColor: UepColors.gold.withValues(alpha: .28),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             onChanged: _saving ? null : onChanged,
           ),
         ],
@@ -807,6 +816,9 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     );
   }
 }
+
+/// 設定區三列（兩個開關、資料夾）的列高，對齊同一條線。
+const double _kSettingRowHeight = 36;
 
 /// 標題列上的狀態 chip。開著＝金線，關著＝灰線。
 class _StatusChip extends StatelessWidget {

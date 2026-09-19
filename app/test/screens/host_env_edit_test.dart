@@ -19,10 +19,11 @@ import '../helpers/l10n.dart';
 
 /// 「這台機器」頁改 `.env`。
 ///
-/// 兩件事要分開驗：**檔案有沒有被正確改到**（只動那一行，別人的註解還在），
-/// 與**存完之後說了什麼**——Hub 這邊要重啟進程才生效，MCP 那邊是下次連線
-/// 才生效，兩句提示講的是不同的事，混在一起的話照著做的人會去重啟一個
-/// 不必重啟的東西。
+/// 三件事要分開驗：**檔案有沒有被正確改到**（只動那一行，別人的註解還在）、
+/// **存完之後說了什麼**（Hub 要重啟進程才生效，agent 那邊是下次連線才生效，
+/// 混在一起的話照著做的人會去重啟一個不必重啟的東西），以及**哪些東西不准
+/// 在這裡改**——位址、埠號與 token 改錯的代價是所有成員同時斷線，它們在這
+/// 一頁上只能看。
 void main() {
   late Directory dir;
   late File envFile;
@@ -33,7 +34,7 @@ void main() {
   });
   tearDown(() => dir.deleteSync(recursive: true));
 
-  Widget wrap({HostKit? host, McpKit? mcp}) => ProviderScope(
+  Widget wrap({HostKit? host, McpKit? mcp, HostEnv? env}) => ProviderScope(
         overrides: [
           kitInstallSupportedProvider.overrideWithValue(false),
           kitReleaseProvider.overrideWith((ref) async => null),
@@ -48,7 +49,7 @@ void main() {
               host == null ? null : parseEnvText(envFile.readAsStringSync())),
           mcpEnvRawProvider.overrideWith((ref) async =>
               mcp == null ? null : parseEnvText(envFile.readAsStringSync())),
-          hostEnvProvider.overrideWith((ref) async => null),
+          hostEnvProvider.overrideWith((ref) async => env),
           hostHealthProvider.overrideWith((ref) async => null),
           tunnelStatusProvider.overrideWith(
               (ref) async => const TunnelStatus(ProbeState.unknown, '', '沒有')),
@@ -78,7 +79,7 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  /// 欄位用 key 認：標籤現在是人話（「埠號」），變數名只是底下那行小字。
+  /// 欄位用 key 認：標籤現在是人話（「每日派工配額」），變數名只在 tooltip。
   Finder field(String key) => find.byKey(Key('env-field-$key'));
 
   Future<void> typeInto(WidgetTester tester, String key, String value) async {
@@ -100,21 +101,21 @@ void main() {
   testWidgets('🔴 Hub：只改那一行，註解與別人的設定原樣留著', (tester) async {
     envFile.writeAsStringSync('# 我自己加的\n'
         'CHATROOM_HOST=127.0.0.1\n'
-        'CHATROOM_PORT=8787\n'
+        'CHATROOM_RUN_DAILY_QUOTA=20\n'
         'CHATROOM_UNKNOWN_KEY=keep-me\n');
     sizeUp(tester);
     await tester.pumpWidget(
         wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
     await tester.pumpAndSettle();
 
-    await typeInto(tester, 'CHATROOM_PORT', '9000');
+    await typeInto(tester, 'CHATROOM_RUN_DAILY_QUOTA', '50');
     await tapSave(tester);
 
     expect(
       envFile.readAsStringSync(),
       '# 我自己加的\n'
       'CHATROOM_HOST=127.0.0.1\n'
-      'CHATROOM_PORT=9000\n'
+      'CHATROOM_RUN_DAILY_QUOTA=50\n'
       'CHATROOM_UNKNOWN_KEY=keep-me\n',
       reason: '這一版不認得的 key 在存檔那一刻消失是最難查的一種壞法',
     );
@@ -122,7 +123,7 @@ void main() {
   });
 
   testWidgets('Hub：本來沒有的 key 追加在尾端', (tester) async {
-    envFile.writeAsStringSync('CHATROOM_PORT=8787\n');
+    envFile.writeAsStringSync('CHATROOM_RUN_QUEUE_CAP=5\n');
     sizeUp(tester);
     await tester.pumpWidget(
         wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
@@ -133,21 +134,21 @@ void main() {
     await tapSave(tester);
 
     expect(envFile.readAsStringSync(),
-        'CHATROOM_PORT=8787\nCHATROOM_IDLE_TIMEOUT=300\n');
+        'CHATROOM_RUN_QUEUE_CAP=5\nCHATROOM_IDLE_TIMEOUT=300\n');
   });
 
-  testWidgets('🔴 埠號填錯：欄位下面講原因，檔案一個字都不動', (tester) async {
-    envFile.writeAsStringSync('CHATROOM_PORT=8787\n');
+  testWidgets('🔴 填錯：欄位下面講原因，檔案一個字都不動', (tester) async {
+    envFile.writeAsStringSync('CHATROOM_RUN_QUEUE_CAP=5\n');
     sizeUp(tester);
     await tester.pumpWidget(
         wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
     await tester.pumpAndSettle();
 
-    await typeInto(tester, 'CHATROOM_PORT', '70000');
+    await typeInto(tester, 'CHATROOM_RUN_QUEUE_CAP', '五個');
     await tapSave(tester);
 
-    expect(find.text('要在 1–65535 之間'), findsOneWidget);
-    expect(envFile.readAsStringSync(), 'CHATROOM_PORT=8787\n');
+    expect(find.text('要填整數'), findsOneWidget);
+    expect(envFile.readAsStringSync(), 'CHATROOM_RUN_QUEUE_CAP=5\n');
   });
 
   testWidgets('🔴 本來有值的欄位不准清空——空值會讓 Hub 起不來', (tester) async {
@@ -164,40 +165,50 @@ void main() {
     expect(envFile.readAsStringSync(), 'CHATROOM_IDLE_TIMEOUT=600\n');
   });
 
-  testWidgets('🔴 Hub token 是唯讀的——要換它得走 rotate-token.py', (tester) async {
-    envFile.writeAsStringSync('CHATROOM_TOKEN=secret-value\n');
+  testWidgets('🔴 位址、埠號與 token 在這一頁改不了', (tester) async {
+    envFile.writeAsStringSync('CHATROOM_HOST=127.0.0.1\n'
+        'CHATROOM_PORT=8787\n'
+        'CHATROOM_TOKEN=secret-value\n'
+        'CHATROOM_IDLE_TIMEOUT=600\n');
     sizeUp(tester);
     await tester.pumpWidget(
         wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
     await tester.pumpAndSettle();
 
-    // 在這裡隨手改一個字，結果是所有 agent 同時連不上，而畫面上只寫「已存檔」
+    // 改錯它們的代價是所有成員同時斷線，而那是一顆滑鼠點得到的按鈕
+    expect(field('CHATROOM_HOST'), findsNothing);
+    expect(field('CHATROOM_PORT'), findsNothing);
     expect(field('CHATROOM_TOKEN'), findsNothing);
-    expect(find.text('要換 token 請跑 scripts/rotate-token.py'), findsOneWidget);
-    // 遮著，但看得到也複製得走
-    expect(find.text('secret-value'), findsNothing);
-    await tester.tap(find.byIcon(Icons.visibility_outlined));
-    await tester.pumpAndSettle();
-    expect(find.text('secret-value'), findsOneWidget);
+    // 收合區也沒有——藏起來的入口還是入口
+    expect(find.text('進階'), findsNothing);
+    expect(field('CHATROOM_IDLE_TIMEOUT'), findsOneWidget);
   });
 
-  testWidgets('agent token 遮起來，按眼睛才顯示', (tester) async {
+  testWidgets('🔴 換 token 要先確認，取消就什麼都沒發生', (tester) async {
     envFile.writeAsStringSync('CHATROOM_TOKEN=secret-value\n');
     sizeUp(tester);
-    await tester.pumpWidget(
-        wrap(mcp: McpKit(kitRoot: dir.path, envFile: envFile.path)));
+    await tester.pumpWidget(wrap(
+      host: HostKit(kitRoot: dir.path, envFile: envFile.path),
+      env: const HostEnv(
+        host: '127.0.0.1',
+        port: '8787',
+        token: 'agent-token',
+        humanToken: 'human-token',
+      ),
+    ));
     await tester.pumpAndSettle();
 
-    expect(
-        tester.widget<TextField>(field('CHATROOM_TOKEN')).obscureText, isTrue);
-
-    await tester.tap(find.byIcon(Icons.visibility_off_outlined));
+    // UepButton 的字是大寫的（英數才看得出來）
+    await tester.tap(find.text('換 TOKEN'));
     await tester.pumpAndSettle();
-    expect(
-        tester.widget<TextField>(field('CHATROOM_TOKEN')).obscureText, isFalse);
+    expect(find.text('重啟 Hub 後舊 token 失效，所有成員都要換成新的。'), findsOneWidget);
+
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(envFile.readAsStringSync(), 'CHATROOM_TOKEN=secret-value\n');
   });
 
-  testWidgets('🔴 MCP kit：存完講的是「下次連線」，不是重啟 Hub', (tester) async {
+  testWidgets('🔴 agent：存完講的是「下次連線」，不是重啟 Hub', (tester) async {
     envFile.writeAsStringSync('CHATROOM_URL=http://127.0.0.1:8787\n');
     sizeUp(tester);
     await tester.pumpWidget(
@@ -213,40 +224,29 @@ void main() {
     expect(find.text('已存檔。要重啟 Hub 才生效。'), findsNothing);
   });
 
-  testWidgets('MCP kit：網址格式不對就不寫', (tester) async {
-    envFile.writeAsStringSync('CHATROOM_URL=http://127.0.0.1:8787\n');
+  testWidgets('🔴 agent：位址與 token 只能看，改不了', (tester) async {
+    envFile.writeAsStringSync('CHATROOM_URL=http://127.0.0.1:8787\n'
+        'CHATROOM_TOKEN=agent-token\n');
     sizeUp(tester);
     await tester.pumpWidget(
         wrap(mcp: McpKit(kitRoot: dir.path, envFile: envFile.path)));
     await tester.pumpAndSettle();
 
-    await typeInto(tester, 'CHATROOM_URL', '127.0.0.1:8787');
-    await tapSave(tester);
-
-    expect(find.text('要是 http:// 或 https:// 開頭的網址'), findsOneWidget);
-    expect(envFile.readAsStringSync(), 'CHATROOM_URL=http://127.0.0.1:8787\n');
+    expect(field('CHATROOM_URL'), findsNothing);
+    expect(field('CHATROOM_TOKEN'), findsNothing);
+    expect(find.text('進階'), findsNothing);
+    // 看得到：位址照原樣，token 遮著
+    expect(find.text('http://127.0.0.1:8787'), findsOneWidget);
+    expect(find.text('agent-token'), findsNothing);
+    expect(field('CHATROOM_DEFAULT_NAME'), findsOneWidget);
   });
 
-  testWidgets('不常碰的設定收在「進階」裡，不預設攤開', (tester) async {
-    envFile.writeAsStringSync('CHATROOM_PORT=8787\n');
-    sizeUp(tester);
-    await tester.pumpWidget(
-        wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
-    await tester.pumpAndSettle();
-
-    expect(field('CHATROOM_PORT'), findsOneWidget);
-    expect(field('CHATROOM_HOLD_MAX'), findsNothing);
-
-    await tester.tap(find.text('進階'));
-    await tester.pumpAndSettle();
-    expect(field('CHATROOM_HOLD_MAX'), findsOneWidget);
-  });
-
-  testWidgets('🔴 兩邊讀同一個檔：agent 那區不再出現位址與 token', (tester) async {
+  testWidgets('🔴 兩邊讀同一個檔：agent 那區連唯讀的位址與 token 都不重複',
+      (tester) async {
     // 本機來源模式下 MCP 讀到的就是 Hub 那份 server/.env。同一個 key 在兩個
     // 區塊各出現一次的話，先存的那次會被後存的那次蓋回去
     envFile.writeAsStringSync(
-        'CHATROOM_PORT=8787\nCHATROOM_TOKEN=shared-token\n');
+        'CHATROOM_URL=http://127.0.0.1:8787\nCHATROOM_TOKEN=shared-token\n');
     sizeUp(tester);
     await tester.pumpWidget(wrap(
       host: HostKit(kitRoot: dir.path, envFile: envFile.path),
@@ -259,9 +259,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final mcp = find.byType(McpEnvSection);
-    expect(
-        find.descendant(of: mcp, matching: field('CHATROOM_URL')), findsNothing);
-    expect(find.descendant(of: mcp, matching: field('CHATROOM_TOKEN')),
+    expect(find.descendant(of: mcp, matching: find.text('http://127.0.0.1:8787')),
         findsNothing);
     expect(find.descendant(of: mcp, matching: field('CHATROOM_DEFAULT_NAME')),
         findsOneWidget);
@@ -273,7 +271,7 @@ void main() {
 
     expect(
       envFile.readAsStringSync(),
-      'CHATROOM_PORT=8787\n'
+      'CHATROOM_URL=http://127.0.0.1:8787\n'
       'CHATROOM_TOKEN=shared-token\n'
       'CHATROOM_DEFAULT_NAME=Novia\n',
       reason: 'agent 那區存檔不能把 Hub 的 token 一起蓋掉',
