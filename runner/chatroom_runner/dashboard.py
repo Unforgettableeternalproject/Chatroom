@@ -88,11 +88,13 @@ async def build(cfg: RunnerConfig, usage_window: dict, status: str,
                 limited_until: str | None, limit_reason: str,
                 runs: list[RunView], queued_count: int,
                 runtime: RunnerRuntime) -> dict:
+    # 面板欄位名 `repos` 不動：那是送給 Hub／App 的既有形狀。
+    # 內容是每個工作區底下的每個專案（git repo）
     repos: dict[str, dict] = {}
-    for project in cfg.projects.values():
-        for name, repo in project.repos.items():
-            repos[f"{project.key}/{name}"] = await repo_view(
-                repo.path, repo.push_branches)
+    for workspace in cfg.workspaces.values():
+        for name, project in workspace.projects.items():
+            repos[f"{workspace.key}/{name}"] = await repo_view(
+                project.path, project.push_branches)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "repos": repos,

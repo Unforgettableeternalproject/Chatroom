@@ -2743,15 +2743,15 @@
   "@helpOps6": {
     "description": "說明：中途補指示"
   },
-  "helpOps7": "「請收尾」是軟停止：它把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束才會被硬取消。",
+  "helpOps7": "軟停止：它把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束才會被硬取消。",
   "@helpOps7": {
     "description": "說明：請收尾"
   },
-  "helpOps8": "「取消」是執行器直接殺進程，寫到一半的東西就停在那裡。趕時間才用它，否則用請收尾。",
+  "helpOps8": "執行器直接殺進程，寫到一半的東西就停在那裡。趕時間才用它，否則用請收尾。",
   "@helpOps8": {
     "description": "說明：取消派工"
   },
-  "helpOps9": "上下文用滿會觸發交接：它把已做／未做／下一步寫在卡上並釋放認領，下一輪的 brief 直接接上那份摘要。",
+  "helpOps9": "上下文用滿就交接：它把已做／未做／下一步寫在卡上並釋放認領，下一輪的 brief 接上那份摘要。",
   "@helpOps9": {
     "description": "說明：上下文交接"
   },
@@ -2831,10 +2831,6 @@
   "@helpVisual3": {
     "description": "說明：極小字級"
   },
-  "helpVisual4": "語言還沒做，所以這頁沒有語言選項。",
-  "@helpVisual4": {
-    "description": "說明：視覺頁沒有語言選項"
-  },
   "helpPersonal1": "顯示名稱是進房時用的名字，留空則由 Hub 隨機指派代稱。房內名字不能重複。",
   "@helpPersonal1": {
     "description": "說明：顯示名稱"
@@ -2875,7 +2871,7 @@
   "@helpVersionApp4": {
     "description": "說明：工具說明結尾的版本不可信"
   },
-  "helpMachine1": "只有裝了 host-kit 或 mcp-kit 的機器看得到這個入口。兩個都裝就分成「Hub 主持」與「Agent 接入」兩頁。",
+  "helpMachine1": "只有裝了 host-kit、mcp-kit 或執行器的機器看得到這個入口。裝了幾種就分成幾頁：「Hub 主持」「Agent 接入」「執行器」。",
   "@helpMachine1": {
     "description": "說明：主控台入口條件"
   },
@@ -2887,11 +2883,11 @@
   "@helpMachine3": {
     "description": "說明：本機打得到的意義"
   },
-  "helpMachine4": "連線資訊那一區是要發給成員的東西：Hub 位址、人類 token、Agent token。",
+  "helpMachine4": "這一區是要發給成員的東西：Hub 位址、人類 token、Agent token。",
   "@helpMachine4": {
     "description": "說明：連線資訊區"
   },
-  "helpMachine5": "兩把 token 別發錯：Agent token 開不了主持人模式也發不了邀請，人類拿到它會看到像「這台 Hub 不是你主持的」的錯誤。",
+  "helpMachine5": "別發錯：Agent token 開不了主持人模式也發不了邀請，人類拿到它會看到像「這台 Hub 不是你主持的」的錯誤。",
   "@helpMachine5": {
     "description": "說明：別把 token 發錯"
   },
@@ -2959,7 +2955,7 @@
   "@helpLink3c": {
     "description": "說明：bridge.commit 對不上時"
   },
-  "helpRunner1": "執行器是替派工跑 agent 的那個常駐程式，目前沒有 UI 分頁，全部設定都在設定檔裡改。",
+  "helpRunner1": "執行器是替派工跑 agent 的那個常駐程式，在「這台機器」有自己的分頁：裝與更新在那裡按，參數仍然只能改設定檔。",
   "@helpRunner1": {
     "description": "說明：執行器是什麼"
   },
@@ -6483,5 +6479,363 @@
   "hostKitInstallConfigKept": "設定檔原本就在，沒有覆寫它。",
   "@hostKitInstallConfigKept": {
     "description": "runner-kit 安裝器回報 config_written=false 時的說明"
+  },
+  "hostEnvPanelHubSettings": "Hub 設定",
+  "@hostEnvPanelHubSettings": {
+    "description": "這台機器頁 Hub 分頁的 .env 編輯區標題"
+  },
+  "hostEnvPanelMcpSettings": "連線設定",
+  "@hostEnvPanelMcpSettings": {
+    "description": "這台機器頁 MCP kit 分頁的 .env 編輯區標題"
+  },
+  "hostEnvSavedRestartHub": "已存檔。要重啟 Hub 才生效。",
+  "@hostEnvSavedRestartHub": {
+    "description": "Hub .env 存檔後的提示"
+  },
+  "hostEnvSavedNextConnect": "已存檔。下次 agent 連線生效。",
+  "@hostEnvSavedNextConnect": {
+    "description": "MCP kit .env 存檔後的提示"
+  },
+  "hostEnvWriteFailed": "寫不進 .env：{error}",
+  "@hostEnvWriteFailed": {
+    "description": ".env 寫入失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostEnvErrorRequired": "不能留空",
+  "@hostEnvErrorRequired": {
+    "description": ".env 欄位驗證：必填"
+  },
+  "hostEnvErrorInteger": "要填整數",
+  "@hostEnvErrorInteger": {
+    "description": ".env 欄位驗證：整數"
+  },
+  "hostEnvErrorPortRange": "要在 1–65535 之間",
+  "@hostEnvErrorPortRange": {
+    "description": ".env 欄位驗證：埠號範圍"
+  },
+  "hostEnvErrorNegative": "不能是負數",
+  "@hostEnvErrorNegative": {
+    "description": ".env 欄位驗證：非負"
+  },
+  "hostEnvErrorUrl": "要是 http:// 或 https:// 開頭的網址",
+  "@hostEnvErrorUrl": {
+    "description": ".env 欄位驗證：網址格式"
+  },
+  "helpGroupBefore": "開工前",
+  "@helpGroupBefore": {
+    "description": "說明頁派工節的分組小標"
+  },
+  "helpGroupDuring": "進行中",
+  "@helpGroupDuring": {
+    "description": "說明頁派工節的分組小標"
+  },
+  "helpGroupWrap": "收尾與推送",
+  "@helpGroupWrap": {
+    "description": "說明頁派工節的分組小標"
+  },
+  "helpGroupConfig": "設定檔",
+  "@helpGroupConfig": {
+    "description": "說明頁執行器節的分組小標"
+  },
+  "helpGroupInstall": "安裝與更新",
+  "@helpGroupInstall": {
+    "description": "說明頁主機節的分組小標"
+  },
+  "helpChatStyleLead": "說話方式",
+  "@helpChatStyleLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpChatStyle": "頂欄選單決定 agent 在這間房怎麼說話：詳細、精確、親和，或自訂一段指示。只有房間管理者改得動。",
+  "@helpChatStyle": {
+    "description": "說明：房間說話方式"
+  },
+  "helpBoardSupLead": "Supervisor",
+  "@helpBoardSupLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardSup1": "每間房可以指定一個 Supervisor，房間管理者按「指派」。派工帶進來的臨時成員不能當。",
+  "@helpBoardSup1": {
+    "description": "說明：房間 Supervisor 指派"
+  },
+  "helpBoardSupDispatchLead": "Supervisor 派得了工",
+  "@helpBoardSupDispatchLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardSup2": "Supervisor 身分的 agent 可以自己對這塊板派工：調查、實作一張票、做完整個階段。推送只有人類按得動。",
+  "@helpBoardSup2": {
+    "description": "說明：Supervisor 自派工"
+  },
+  "helpBoardSupQuotaLead": "額度與觸發",
+  "@helpBoardSupQuotaLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardSup3": "它派的工算在指定它的那個人類的額度上，而且不會自動觸發——階段做完不會替它派下一筆。",
+  "@helpBoardSup3": {
+    "description": "說明：Supervisor 派工的額度與觸發"
+  },
+  "helpBoardDirectiveLead": "判斷與建議",
+  "@helpBoardDirectiveLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardDirective": "Supervisor 與 owner 在板上下的判斷會寫進稽核串，可以發給全體或點名一個人，板上的人都看得到。",
+  "@helpBoardDirective": {
+    "description": "說明：板上的判斷與稽核串"
+  },
+  "helpBoardOwnerLead": "移交與接管",
+  "@helpBoardOwnerLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardOwner": "owner 可以把板交給板上另一個人；只有沒有 owner 的板才接管得了。",
+  "@helpBoardOwner": {
+    "description": "說明：板 owner 移交與接管"
+  },
+  "helpOpsStartLead": "怎麼開始一筆派工",
+  "@helpOpsStartLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsStart": "選一個模板、選目標專案、寫一段簡述，簡述最多 2000 字。",
+  "@helpOpsStart": {
+    "description": "說明：派工怎麼開始"
+  },
+  "helpOpsTemplatesLead": "三個模板",
+  "@helpOpsTemplatesLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsTemplates": "調查只讀不改檔；實作一張票會 commit 到允許的分支但不推送；做完整個階段由 agent 自己拆卡做到底。",
+  "@helpOpsTemplates": {
+    "description": "說明：三種派工模板的差別"
+  },
+  "helpOpsPushLead": "推送",
+  "@helpOpsPushLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsPush": "推送不是模板，是儀表板上按鈕組出來的那一筆，只有房內的人類按得動——agent 自己派不了。",
+  "@helpOpsPush": {
+    "description": "說明：推送只有人類能建"
+  },
+  "helpOpsDashboardLead": "儀表板在哪",
+  "@helpOpsDashboardLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsDashboard": "工作房裡的執行儀表板：未推送的 commit、近幾小時的用量、進行中與排隊中的派工、執行器狀態都在那裡看。",
+  "@helpOpsDashboard": {
+    "description": "說明：執行儀表板的位置"
+  },
+  "helpOpsLead2": "同步工作樹",
+  "@helpOpsLead2": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsLead3": "同步不了的時候",
+  "@helpOpsLead3": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsLead7": "請收尾",
+  "@helpOpsLead7": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsLead8": "取消",
+  "@helpOpsLead8": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpOpsLead9": "交接",
+  "@helpOpsLead9": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpNotifyExcLead": "派工異常",
+  "@helpNotifyExcLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpNotifyExc1": "頂欄的鈴鐺收跨房的派工異常：停滯與恢復、逾時、額度受限、執行器上下線。",
+  "@helpNotifyExc1": {
+    "description": "說明：派工異常鈴鐺"
+  },
+  "helpNotifyExc2": "未讀數字只算比你上次看過更新的那幾筆，點一筆會跳到出事的那間房。",
+  "@helpNotifyExc2": {
+    "description": "說明：派工異常未讀計數"
+  },
+  "helpMachineLead4": "連線資訊",
+  "@helpMachineLead4": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpMachineLead5": "兩把 token",
+  "@helpMachineLead5": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstallLead": "從 Release 安裝",
+  "@helpInstallLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstall1": "每個分頁底下都有「安裝與更新」：從 GitHub Release 抓對應版本，下載、解壓、跑安裝器。",
+  "@helpInstall1": {
+    "description": "說明：從 Release 安裝 kit"
+  },
+  "helpInstallReleaseLead": "只認對版的 Release",
+  "@helpInstallReleaseLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstall2": "沒有對應 Release 的版本裝不了，那時只能用安裝包。",
+  "@helpInstall2": {
+    "description": "說明：沒有對應 Release 的版本"
+  },
+  "helpInstallBlockedLead": "按鈕按不動",
+  "@helpInstallBlockedLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstall3": "四種理由：已經是 Release 那一版、這個版本沒有 Release、找不到 Python 3.12、執行器手上還有 run（先到儀表板按 drain）。",
+  "@helpInstall3": {
+    "description": "說明：安裝鈕停用的理由"
+  },
+  "helpInstallHubLead": "Hub 更新",
+  "@helpInstallHubLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstall4": "會先停掉 Hub 再重裝，裝完要自己按啟動。過程中可能跳出 Windows 授權視窗。",
+  "@helpInstall4": {
+    "description": "說明：Hub 更新流程"
+  },
+  "helpInstallConfigLead": "設定檔",
+  "@helpInstallConfigLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpInstall5": "設定檔原本就在的話不會被覆寫，安裝完會講一句。",
+  "@helpInstall5": {
+    "description": "說明：安裝不覆寫設定檔"
+  },
+  "helpEnvLead": "直接改 .env",
+  "@helpEnvLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpEnv1": "Hub 主持與 Agent 接入兩頁可以直接編那一包的 .env：Hub 改完要重啟才生效，MCP 是下次連線才生效。",
+  "@helpEnv1": {
+    "description": "說明：分頁上直接改 .env"
+  },
+  "helpRunnerWorkspaceLead": "工作區與專案",
+  "@helpRunnerWorkspaceLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpRunnerWorkspace": "執行器分頁分兩層：工作區是一個資料夾，底下的專案必須是 git repo。",
+  "@helpRunnerWorkspace": {
+    "description": "說明：執行器的工作區與專案兩層"
+  },
+  "helpRunnerSkillLead": "優先載入的 skill",
+  "@helpRunnerSkillLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpRunnerSkill": "每個工作區可以指定一個優先載入的 skill，最多一個。",
+  "@helpRunnerSkill": {
+    "description": "說明：工作區的優先 skill"
+  },
+  "hostRunnerPanelWorkspaces": "工作區",
+  "@hostRunnerPanelWorkspaces": {
+    "description": "執行器分頁的工作區區塊標題"
+  },
+  "hostRunnerNoWorkspaces": "config.json 裡還沒有任何工作區",
+  "@hostRunnerNoWorkspaces": {
+    "description": "執行器設定裡沒有工作區時的說明"
+  },
+  "hostRunnerWorkspacePrivateNote": "未公開的工作區照樣能在這台機器上執行，只是不會出現在別人的派工對話框裡。",
+  "@hostRunnerWorkspacePrivateNote": {
+    "description": "工作區區塊底下的說明"
+  },
+  "hostRunnerAddWorkspace": "新增工作區",
+  "@hostRunnerAddWorkspace": {
+    "description": "新增工作區的按鈕與對話框標題"
+  },
+  "hostRunnerWorkspaceKey": "工作區名稱",
+  "@hostRunnerWorkspaceKey": {
+    "description": "新增工作區對話框的名稱欄"
+  },
+  "hostRunnerFolder": "資料夾",
+  "@hostRunnerFolder": {
+    "description": "工作區的外層資料夾欄位標籤"
+  },
+  "hostRunnerBrowse": "瀏覽",
+  "@hostRunnerBrowse": {
+    "description": "開系統資料夾選擇器的按鈕"
+  },
+  "hostRunnerFirstProjectPath": "第一個專案路徑",
+  "@hostRunnerFirstProjectPath": {
+    "description": "新增工作區對話框裡第一個專案的路徑欄"
+  },
+  "hostRunnerFirstProjectHint": "資料夾不是 git repo 才要填",
+  "@hostRunnerFirstProjectHint": {
+    "description": "第一個專案路徑欄的提示"
+  },
+  "hostRunnerRemoveWorkspace": "移除工作區",
+  "@hostRunnerRemoveWorkspace": {
+    "description": "移除工作區的按鈕"
+  },
+  "hostRunnerRemoveWorkspaceConfirm": "要移除工作區「{key}」嗎？",
+  "@hostRunnerRemoveWorkspaceConfirm": {
+    "description": "移除工作區的確認問句",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerProjects": "專案",
+  "@hostRunnerProjects": {
+    "description": "工作區卡片裡的專案清單標籤"
+  },
+  "hostRunnerAddProject": "加專案",
+  "@hostRunnerAddProject": {
+    "description": "在工作區裡新增專案的按鈕與對話框標題"
+  },
+  "hostRunnerProjectName": "專案名稱",
+  "@hostRunnerProjectName": {
+    "description": "加專案對話框的名稱欄"
+  },
+  "hostRunnerProjectPath": "專案路徑",
+  "@hostRunnerProjectPath": {
+    "description": "加專案對話框的路徑欄"
+  },
+  "hostRunnerSetDefaultProject": "設為預設",
+  "@hostRunnerSetDefaultProject": {
+    "description": "把某個專案設成工作區預設的按鈕"
+  },
+  "hostRunnerDefaultTag": "預設",
+  "@hostRunnerDefaultTag": {
+    "description": "標示預設專案的小標"
+  },
+  "hostRunnerPrimarySkill": "優先載入 skill",
+  "@hostRunnerPrimarySkill": {
+    "description": "工作區優先載入的 skill 下拉標籤"
+  },
+  "hostRunnerPrimarySkillNone": "不指定",
+  "@hostRunnerPrimarySkillNone": {
+    "description": "優先載入 skill 下拉的空選項"
+  },
+  "hostRunnerAdvanced": "進階",
+  "@hostRunnerAdvanced": {
+    "description": "工作區進階欄位的收合標題"
+  },
+  "hostRunnerModel": "模型",
+  "@hostRunnerModel": {
+    "description": "工作區的模型欄位"
+  },
+  "hostRunnerMaxTurns": "回合上限",
+  "@hostRunnerMaxTurns": {
+    "description": "工作區的回合上限欄位"
+  },
+  "hostRunnerMaxBudget": "預算上限（USD）",
+  "@hostRunnerMaxBudget": {
+    "description": "工作區的預算上限欄位"
+  },
+  "hostRunnerWallClock": "時限（秒）",
+  "@hostRunnerWallClock": {
+    "description": "工作區的執行時限欄位"
+  },
+  "hostRunnerContextWindow": "context 視窗（token）",
+  "@hostRunnerContextWindow": {
+    "description": "工作區的 context 視窗欄位"
+  },
+  "hostRunnerFieldDefaultHint": "留空＝沿用執行器預設",
+  "@hostRunnerFieldDefaultHint": {
+    "description": "進階數值欄位的提示"
   }
 }

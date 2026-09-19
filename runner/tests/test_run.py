@@ -581,7 +581,7 @@ async def test_unknown_project_fails_without_spawning(
 
 def test_resolve_repo_rules(tmp_path, work_repo):
     cfg = make_config(tmp_path, work_repo)
-    project = cfg.project("ai-website")
+    project = cfg.workspace("ai-website")
     base = {"id": "r", "kind": "ticket", "project": "ai-website", "ref": "t",
             "brief": "", "room_id": "room"}
     assert resolve_repo(base, project).name == "JSAI-Web"
@@ -600,7 +600,7 @@ def test_run_files_carry_the_matcher_and_bridge_pythonpath(tmp_path,
     run_dir = cfg.runs_dir / "r-files"
     run_dir.mkdir(parents=True)
     ex._write_run_files(run_dir, {"id": "r-files"},
-                        cfg.project("ai-website").repos["JSAI-Web"])
+                        cfg.workspace("ai-website").projects["JSAI-Web"])
     settings = json.loads((run_dir / "settings.json").read_text("utf-8"))
     matcher = settings["hooks"]["PreToolUse"][0]["matcher"]
     assert "PowerShell" in matcher and "Bash" in matcher
@@ -629,14 +629,15 @@ def test_argv_has_verbose_with_stream_json(tmp_path, work_repo):
     """`--output-format stream-json` 沒配 `--verbose` 會直接 exit 1。"""
     cfg = make_config(tmp_path, work_repo)
     ex = _executor(cfg, _NullHub())
-    argv = ex._argv("prompt", "contract", cfg.project("ai-website"),
+    argv = ex._argv("prompt", "contract", cfg.workspace("ai-website"),
                     tmp_path, "")
     assert "--verbose" in argv
     assert argv[argv.index("--output-format") + 1] == "stream-json"
     assert argv[argv.index("--permission-mode") + 1] == "auto"
     assert "--bare" not in argv, "--bare 只認 API key，本機是 OAuth 登入"
     assert FAKE_CLAUDE in argv[1]
-    resumed = ex._argv("p", "c", cfg.project("ai-website"), tmp_path, "sid-1")
+    ws = cfg.workspace("ai-website")
+    resumed = ex._argv("p", "c", ws, tmp_path, "sid-1")
     assert resumed[resumed.index("--resume") + 1] == "sid-1"
 
 
@@ -649,7 +650,7 @@ def test_argv_preauthorizes_tools(tmp_path, work_repo):
     `mcp__chatroom__chatroom_join` 停在權限提示，headless 沒有人能按允許。"""
     cfg = make_config(tmp_path, work_repo)
     ex = _executor(cfg, _NullHub())
-    proj = cfg.project("ai-website")
+    proj = cfg.workspace("ai-website")
 
     ticket = _allowed(ex._argv("p", "c", proj, tmp_path, "", "ticket"))
     assert "mcp__chatroom__*" in ticket
@@ -671,7 +672,7 @@ def test_extra_allowed_tools_merges_in(tmp_path, work_repo):
         tmp_path, work_repo,
         extra_allowed_tools=["mcp__claude_ai_Atlassian_Rovo__*", "Read"])
     ex = _executor(cfg, _NullHub())
-    tools = _allowed(ex._argv("p", "c", cfg.project("ai-website"),
+    tools = _allowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                               tmp_path, "", "investigate"))
     assert "mcp__claude_ai_Atlassian_Rovo__*" in tools
     assert tools.count("Read") == 1, "重複的名字不要疊上去"
@@ -721,7 +722,7 @@ def test_argv_denies_every_connector_except_the_allowed_ones(tmp_path,
     """預設拒絕：chatroom 以外的 claude.ai 連接器全部進 `--disallowedTools`。"""
     cfg = make_config(tmp_path, work_repo)
     ex = _executor(cfg, _NullHub())
-    denied = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+    denied = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                   tmp_path, "", "ticket"))
     for name in ("mcp__claude_ai_Gmail__*", "mcp__claude_ai_Google_Drive__*",
                  "mcp__claude_ai_Canva__*", "mcp__claude_ai_Notion__*",
@@ -739,7 +740,7 @@ def test_extra_allowed_tools_keeps_that_server_out_of_the_deny_list(
         tmp_path, work_repo,
         extra_allowed_tools=["mcp__claude_ai_Atlassian_Rovo__*"])
     ex = _executor(cfg, _NullHub())
-    argv = ex._argv("p", "c", cfg.project("ai-website"), tmp_path, "",
+    argv = ex._argv("p", "c", cfg.workspace("ai-website"), tmp_path, "",
                     "ticket")
     denied = _disallowed(argv)
     assert "mcp__claude_ai_Atlassian_Rovo__*" not in denied
@@ -751,7 +752,7 @@ def test_allowed_mcp_servers_opens_exactly_what_it_names(tmp_path, work_repo):
     cfg = make_config(tmp_path, work_repo,
                       allowed_mcp_servers=["chatroom", "claude.ai Gmail"])
     ex = _executor(cfg, _NullHub())
-    denied = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+    denied = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                   tmp_path, "", "ticket"))
     assert "mcp__claude_ai_Gmail__*" not in denied
     assert "mcp__claude_ai_Canva__*" in denied
@@ -761,12 +762,12 @@ def test_selfcheck_probe_adds_newly_seen_connectors(tmp_path, work_repo):
     """保底名單沒有的連接器，自檢探到之後也要被擋。"""
     cfg = make_config(tmp_path, work_repo)
     ex = _executor(cfg, _NullHub())
-    before = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+    before = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                   tmp_path, "", "ticket"))
     assert "mcp__claude_ai_Brand_New_Thing__*" not in before
     run_module.remember_claude_ai_servers(
         run_module.parse_mcp_list(MCP_LIST_SAMPLE))
-    after = _disallowed(ex._argv("p", "c", cfg.project("ai-website"),
+    after = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                  tmp_path, "", "ticket"))
     assert "mcp__claude_ai_Brand_New_Thing__*" in after
 
@@ -779,7 +780,7 @@ def test_run_settings_deny_the_connectors_at_both_layers(tmp_path, work_repo):
     run_dir = cfg.runs_dir / "r-deny"
     run_dir.mkdir(parents=True)
     ex._write_run_files(run_dir, {"id": "r-deny"},
-                        cfg.project("ai-website").repos["JSAI-Web"])
+                        cfg.workspace("ai-website").projects["JSAI-Web"])
     settings = json.loads((run_dir / "settings.json").read_text("utf-8"))
     # 有 URL 就用 serverUrl：文件說連接器的顯示名會改，serverName 會失效
     urls = [e["serverUrl"] for e in settings["deniedMcpServers"]
@@ -1290,11 +1291,11 @@ def _extra_repo(tmp_path, name: str, branch: str = "jsai_dev") -> Path:
 
 
 def _multi_config(tmp_path, web: Path, api: Path, **overrides):
-    projects = {
+    workspaces = {
         "ai-website": {
-            "default_repo": "JSAI-Web",
+            "default_project": "JSAI-Web",
             "wall_clock_seconds": 60,
-            "repos": {
+            "projects": {
                 "JSAI-Web": {"path": str(web),
                              "allowed_branches": ["jsai_dev", "feature/*"],
                              "push_branches": ["jsai_dev"]},
@@ -1304,7 +1305,7 @@ def _multi_config(tmp_path, web: Path, api: Path, **overrides):
             },
         },
     }
-    return make_config(tmp_path, web, projects=projects, **overrides)
+    return make_config(tmp_path, web, workspaces=workspaces, **overrides)
 
 
 async def test_every_repo_of_the_project_is_synced_and_snapshotted(

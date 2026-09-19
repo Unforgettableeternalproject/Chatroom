@@ -67,12 +67,14 @@ SANITIZED = {
     "claude_config_dir": "",
     "state_dir": "",
     "token_env_file": "",
+    # 新舊鍵都清：樣板換成 `workspaces` 之後，舊鍵留著也一樣不該外流
+    "workspaces": {},
     "projects": {},
 }
 EXAMPLE_NOTE = (
     "安裝器（install.py）會依這份樣板產生 "
     "%LOCALAPPDATA%/UEP/Chatroom/runner/config.json。"
-    "專案（projects）安裝時留空，裝完再用 App 的執行器分頁或手動加。"
+    "工作區（workspaces）安裝時留空，裝完再用 App 的執行器分頁或手動加。"
 )
 
 

@@ -13,7 +13,7 @@
    Copy-Item runner\config.example.json "$env:LOCALAPPDATA\UEP\Chatroom\runner\config.json"
    ```
 
-   改裡面的 `hub_url`、`label`、`projects`（repo 路徑與允許分支）。
+   改裡面的 `hub_url`、`label`、`workspaces`（工作區底下的專案路徑與允許分支）。
    `agent_token` 留空、用 `token_env_file` 指到 `server/.env` 比較安全——
    那個檔案本來就不進版控。
 
@@ -76,19 +76,25 @@
 | `allowed_domains` | hook 放行的網路目的地。清單以外的 `curl`／`Invoke-WebRequest` 一律擋 |
 | `extra_allowed_tools` | 額外預先授權給 run 的工具名（併進 `--allowedTools`），例如 `mcp__claude_ai_Atlassian_Rovo__*`。只是不要卡在權限提示，硬限制仍由 PreToolUse hook 守 |
 | `allowed_mcp_servers` | run 准用的 MCP 伺服器（預設 `["chatroom"]`）。**預設拒絕**：跟著登入進來的 claude.ai 連接器，不在這裡也沒被 `extra_allowed_tools` 的 `mcp__<server>__*` 點名的，一律寫進 run 專用 settings 的 `deniedMcpServers`（伺服器不載入）與 `--disallowedTools`／`permissions.deny`（工具移出 context） |
-| `projects.<key>.repos.<name>.path` | 工作樹路徑。**cwd 由這裡決定，brief 說了不算** |
-| `projects.<key>.repos.<name>.allowed_branches` | 可以停留／切換的分支 |
-| `projects.<key>.repos.<name>.push_branches` | `push` run 可以推的分支 |
-| `projects.<key>.default_repo` | 沒指名 repo 時用哪一個 |
-| `projects.<key>.skill_dirs` | 起 claude 時每個加一個 `--add-dir`。專案的 skill 放在 cwd 的**上一層**時（cwd 自己是子 repo，skill 發現只往上找到 git root），沒有這個設定就掃不到。啟動自檢驗目錄存在 |
-| `projects.<key>.skills` | kind → 這種派工**必須遵守**的 skill 名清單，例如 `{"ticket": ["jira-ticket-workflow"]}`。名字會進 `--allowedTools` 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它。**載入時就驗** `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
-| `projects.<key>.extra_write_dirs` | guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時）。放行的是**位置**，敏感檔名（`.env`、`*.pem` 這類）與敏感目錄的檢查照走 |
+| `workspaces.<key>.folder` | 工作區的外層資料夾（絕對路徑，選填）。**執行器的邏輯不依賴它**：給 App 顯示與當新增專案／skill 目錄的預設起點。路徑不存在只在 log 警告，不影響載入 |
+| `workspaces.<key>.projects.<name>.path` | 專案（git 工作樹）路徑。**cwd 由這裡決定，brief 說了不算**；不是 git repo（找不到 `.git`）的專案在載入時被排除，並在自檢與 log 點名 |
+| `workspaces.<key>.projects.<name>.allowed_branches` | 可以停留／切換的分支 |
+| `workspaces.<key>.projects.<name>.push_branches` | `push` run 可以推的分支 |
+| `workspaces.<key>.default_project` | 沒指名專案時用哪一個 |
+| `workspaces.<key>.primary_skill` | 這個工作區**不分 kind**都要開工先載入的 skill（至多一個）。驗證與 `skills` 同一套（缺 `SKILL.md` 就是設定錯誤），名字一樣進 `--allowedTools` 的 `Skill(<name>)`，並寫進契約 |
+| `workspaces.<key>.skill_dirs` | 起 claude 時每個加一個 `--add-dir`。專案的 skill 放在 cwd 的**上一層**時（cwd 自己是子 repo，skill 發現只往上找到 git root），沒有這個設定就掃不到。啟動自檢驗目錄存在 |
+| `workspaces.<key>.skills` | kind → 這種派工**必須遵守**的 skill 名清單，例如 `{"ticket": ["jira-ticket-workflow"]}`。名字會進 `--allowedTools` 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它。**載入時就驗** `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
+| `workspaces.<key>.extra_write_dirs` | guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時）。放行的是**位置**，敏感檔名（`.env`、`*.pem` 這類）與敏感目錄的檢查照走 |
 
-### 一筆 run 在哪個 repo 做
+### 一筆 run 在哪個專案（repo）做
+
+> 舊鍵 `projects`／`repos`／`default_repo` 仍然讀得進來（新鍵優先，同時
+> 存在時 log 會警告）。Hub／App 對外的 `project` 欄位沒有跟著改名：
+> 執行器的**工作區 key 就是 Hub 的 project key**。
 
 1. `push`：`ref` 就是 repo 名。
 2. brief 裡有一行 `repo: <名稱>` ⇒ 用那個。
-3. 專案只有一個 repo，或設了 `default_repo` ⇒ 用它。
+3. 工作區只有一個專案，或設了 `default_project` ⇒ 用它。
 4. 都不成立 ⇒ 這筆 run 直接 failed。**執行器不猜**：猜錯等於在錯的工作樹上
    commit，而遠端沒有人看得到。
 

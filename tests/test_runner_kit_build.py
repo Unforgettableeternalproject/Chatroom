@@ -111,7 +111,7 @@ def test_packaged_example_config_has_no_machine_paths(packed):
         raw = zf.read("chatroom-runner-kit/runner/config.example.json")
     text = raw.decode("utf-8")
     cfg = json.loads(text)
-    assert cfg["projects"] == {}
+    assert cfg["workspaces"] == {}
     assert cfg["host"] == "this-machine"
     assert "C:/Users/" not in text and "C:\\Users\\" not in text
 
@@ -149,7 +149,7 @@ def test_config_is_never_overwritten(installer, tmp_path):
     """
     config = tmp_path / "runner" / "config.json"
     config.parent.mkdir(parents=True)
-    original = '{"hub_url": "http://192.0.2.9:8787", "projects": {"a": {}}}\n'
+    original = '{"hub_url": "http://192.0.2.9:8787", "workspaces": {"a": {}}}\n'
     config.write_text(original, encoding="utf-8")
 
     wrote = installer.write_config(config, {"hub_url": "http://127.0.0.1:1"})
@@ -186,8 +186,10 @@ def test_generated_config_points_at_this_kit(installer, tmp_path):
     assert cfg["state_dir"] == str(state)
     # 樣板指到 repo 的 server/.env，kit 形態下那個檔案不存在
     assert cfg["token_env_file"] == ""
-    # 專案要人自己加：安裝當下答不出 repo 路徑與允許分支
-    assert cfg["projects"] == {}
+    # 工作區要人自己加：安裝當下答不出專案路徑與允許分支
+    assert cfg["workspaces"] == {}
+    # 舊鍵不留在產出的設定裡（留著會變成「新舊同時存在」的警告）
+    assert "projects" not in cfg
     # 樣板的說明鍵不進實際設定
     assert not [k for k in cfg if k.startswith("_")]
     # 其餘欄位沿用樣板，不重寫一份預設值

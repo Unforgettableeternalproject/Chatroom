@@ -111,7 +111,7 @@ class GuardContext:
     # 也就是在 `protected_paths` 裡面，所以要**明列一個例外**：附件是 agent
     # 自己用 `chatroom_get_file` 要來的，讀不到的話那個工具等於沒有
     downloads_dir: Path | None = None
-    # 設定檔（`ProjectConfig.extra_write_dirs`）額外放行寫入的目錄，例如
+    # 設定檔（`WorkspaceConfig.extra_write_dirs`）額外放行寫入的目錄，例如
     # skill 要求產出的分析／摘要資料夾落在 repo 外面時。放行的是**位置**，
     # 敏感檔名與敏感目錄的檢查照走
     extra_write_dirs: list[Path] = field(default_factory=list)

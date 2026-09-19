@@ -1,11 +1,13 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/errors/api_exception.dart';
+import '../../core/util/env_file.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
@@ -248,6 +250,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
             _sep(s),
             const _ControlSection(),
             _sep(s),
+            _HubEnvSection(kit: kit),
+            _sep(s),
             const _DataSection(),
             _sep(s),
             _KitSection(kit: kit),
@@ -268,7 +272,11 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
           Text(AppLocalizations.of(context).hostTabAgent,
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
-          if (mcp != null) _McpSection(kit: mcp),
+          if (mcp != null) ...[
+            _McpSection(kit: mcp),
+            _sep(s),
+            _McpEnvSection(kit: mcp),
+          ],
           if (widget.canInstall) ...[
             if (mcp != null) _sep(s),
             _McpInstallSection(installed: mcp != null),
@@ -284,7 +292,7 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           if (runner != null) ...[
-            _RunnerProjectsSection(kit: runner),
+            _RunnerWorkspacesSection(kit: runner),
             _sep(s),
             _Panel(
               title: AppLocalizations.of(context).hostInstallPath,
@@ -1924,18 +1932,22 @@ class _Panel extends StatelessWidget {
   }
 }
 
-/// 執行器的專案設定：公開給誰派工、允不允許瀏覽器實機測試、skill 目錄。
+/// 執行器的工作區設定：工作區裡有哪些專案、公開給誰派工、優先載入哪個 skill。
+///
+/// ## 兩層：工作區 → 專案
+///
+/// 工作區是外層資料夾（派工時 Hub 認得的那個 key），專案是它底下的 git repo。
 ///
 /// ## 權威在本機的 `config.json`，不在 Hub
 ///
-/// repo 路徑與 skill 目錄本來就是「這台機器的事」——Hub 驗不了它們在這台
+/// 專案路徑與 skill 目錄本來就是「這台機器的事」——Hub 驗不了它們在這台
 /// 機器上存不存在。所以這一頁與 Hub 分頁讀寫 `.env` 是同一個模式：直接讀寫
 /// 本機檔案，改完再經 Hub 對**這台**執行器發一個 `reload`，讓它自己重讀。
 ///
 /// `reload` 走既有的 `runner_command`（issued→acked→applied）——改設定不另開
 /// 一條 Hub 不認得的平行通路。
-class _RunnerProjectsSection extends ConsumerWidget {
-  const _RunnerProjectsSection({required this.kit});
+class _RunnerWorkspacesSection extends ConsumerWidget {
+  const _RunnerWorkspacesSection({required this.kit});
 
   final RunnerKit kit;
 
@@ -1947,12 +1959,12 @@ class _RunnerProjectsSection extends ConsumerWidget {
 
     return cfg.when(
       loading: () => _Panel(
-        title: l10n.hostRunnerPanelProjects,
+        title: l10n.hostRunnerPanelWorkspaces,
         child: _LightRow(
             label: l10n.settingsTitle, probe: Probe.checking()),
       ),
       error: (e, _) => _Panel(
-        title: l10n.hostRunnerPanelProjects,
+        title: l10n.hostRunnerPanelWorkspaces,
         child: _LightRow(
             label: l10n.settingsTitle,
             probe: Probe(ProbeState.unknown, '$e')),
@@ -1960,7 +1972,7 @@ class _RunnerProjectsSection extends ConsumerWidget {
       data: (config) {
         if (config == null) {
           return _Panel(
-            title: l10n.hostRunnerPanelProjects,
+            title: l10n.hostRunnerPanelWorkspaces,
             child: _LightRow(
               label: l10n.settingsTitle,
               probe: Probe(ProbeState.unknown,
@@ -1968,26 +1980,37 @@ class _RunnerProjectsSection extends ConsumerWidget {
             ),
           );
         }
-        if (config.projects.isEmpty) {
-          return _Panel(
-            title: l10n.hostRunnerPanelProjects,
-            child: _LightRow(
-              label: l10n.settingsTitle,
-              probe:
-                  Probe(ProbeState.unknown, l10n.hostRunnerNoProjects),
-            ),
-          );
-        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final p in config.projects) ...[
-              _RunnerProjectCard(config: config, project: p),
-              SizedBox(height: p == config.projects.last ? 0 : 26),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(l10n.hostRunnerPanelWorkspaces,
+                      style: UepText.fieldLabel(color: s.inkMute)),
+                ),
+                UepButton(
+                  label: l10n.hostRunnerAddWorkspace,
+                  small: true,
+                  variant: UepButtonVariant.outline,
+                  onPressed: () => _addWorkspace(context, ref, config),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            if (config.workspaces.isEmpty)
+              Text(l10n.hostRunnerNoWorkspaces,
+                  style: UepText.serif(size: 14, color: s.inkMute)),
+            for (final w in config.workspaces) ...[
+              _RunnerWorkspaceCard(
+                  key: ValueKey('ws:${config.path}:${w.key}'),
+                  config: config,
+                  workspace: w),
+              SizedBox(height: w == config.workspaces.last ? 0 : 26),
             ],
             const SizedBox(height: 18),
             Text(
-              l10n.hostRunnerPrivateNote,
+              l10n.hostRunnerWorkspacePrivateNote,
               style: UepText.serif(size: 13, color: s.inkMute),
             ),
           ],
@@ -1995,28 +2018,139 @@ class _RunnerProjectsSection extends ConsumerWidget {
       },
     );
   }
+
+  Future<void> _addWorkspace(
+      BuildContext context, WidgetRef ref, RunnerConfigFile config) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AddWorkspaceDialog(config: config),
+    );
+    if (added != true) return;
+    final said = await _runnerApplyReload(ref, l10n);
+    messenger.showSnackBar(SnackBar(content: Text(said)));
+  }
 }
 
-class _RunnerProjectCard extends ConsumerStatefulWidget {
-  const _RunnerProjectCard({required this.config, required this.project});
+/// 存檔之後：重讀設定，並對這台執行器發 `reload`。
+///
+/// 回傳的是要給使用者看的那一句——**存檔與命令是兩件事**：寫進去了但命令
+/// 沒送出（拿不到 runner_id、Hub 連不上）時要講「已存檔，執行器還沒收到」，
+/// 而不是一句籠統的成功，那會讓人以為設定已經在跑著的執行器上生效了。
+Future<String> _runnerApplyReload(WidgetRef ref, AppLocalizations l10n) async {
+  ref.invalidate(runnerConfigProvider);
+  final runnerId = await ref.read(runnerIdProvider.future);
+  if (runnerId == null) return l10n.hostRunnerSavedNoRunnerId;
+  try {
+    await ref.read(runsApiProvider).command(
+          runnerId,
+          command: 'reload',
+          sessionKey: ref.read(appConfigProvider).deviceKey,
+        );
+    return l10n.hostRunnerSavedReloadSent;
+  } on ApiException catch (e) {
+    return l10n.hostRunnerReloadFailed(e.message);
+  }
+}
+
+/// 把資料層的例外翻成一句話。衝突（重讀再試）與值不對（改了再存也一樣）
+/// 是兩種不同的處置，訊息要分得開。
+String _runnerErrorText(Object error, AppLocalizations l10n) {
+  if (error is RunnerConfigConflict) return l10n.hostRunnerConflict;
+  if (error is RunnerConfigInvalid) return error.message;
+  return l10n.hostRunnerWriteFailed('$error');
+}
+
+/// 路徑的最後一段，拿來當專案的預設名稱。
+String _lastSegment(String path) {
+  final parts = path
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((p) => p.isNotEmpty)
+      .toList();
+  return parts.isEmpty ? '' : parts.last;
+}
+
+/// 開系統的資料夾選擇器。取消回 `null`。
+Future<String?> _pickDirectory(String title) async {
+  try {
+    final path = await FilePicker.getDirectoryPath(dialogTitle: title);
+    if (path == null || path.trim().isEmpty) return null;
+    return path;
+  } on Object {
+    // 沒有選擇器可用的平台：旁邊的輸入框照樣打得了字
+    return null;
+  }
+}
+
+/// 一個工作區一張卡。
+class _RunnerWorkspaceCard extends ConsumerStatefulWidget {
+  const _RunnerWorkspaceCard({
+    super.key,
+    required this.config,
+    required this.workspace,
+  });
 
   final RunnerConfigFile config;
-  final RunnerProject project;
+  final RunnerWorkspace workspace;
 
   @override
-  ConsumerState<_RunnerProjectCard> createState() => _RunnerProjectCardState();
+  ConsumerState<_RunnerWorkspaceCard> createState() =>
+      _RunnerWorkspaceCardState();
 }
 
-class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
-  late bool _public = widget.project.public;
-  late bool _livetest = widget.project.allowBrowserLivetest;
-  late List<String> _skillDirs = List.of(widget.project.skillDirs);
+class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
+  late bool _public = widget.workspace.public;
+  late bool _livetest = widget.workspace.allowBrowserLivetest;
+  late String _folder = widget.workspace.folder;
+  late List<String> _skillDirs = List.of(widget.workspace.skillDirs);
+  late String _primarySkill = widget.workspace.primarySkill;
   bool _saving = false;
 
+  late final _model = TextEditingController(text: widget.workspace.model);
+  late final _maxTurns = TextEditingController(text: _num(widget.workspace.maxTurns));
+  late final _budget = TextEditingController(text: _num(widget.workspace.maxBudgetUsd));
+  late final _wallClock =
+      TextEditingController(text: _num(widget.workspace.wallClockSeconds));
+  late final _contextWindow =
+      TextEditingController(text: _num(widget.workspace.contextWindowTokens));
+
+  /// 0 ＝ 沒設，欄位就留空（空的意思是「沿用執行器的預設」，不是 0）。
+  static String _num(num value) {
+    if (value <= 0) return '';
+    if (value is int || value == value.roundToDouble()) {
+      return value.toInt().toString();
+    }
+    return value.toString();
+  }
+
+  @override
+  void dispose() {
+    _model.dispose();
+    _maxTurns.dispose();
+    _budget.dispose();
+    _wallClock.dispose();
+    _contextWindow.dispose();
+    super.dispose();
+  }
+
+  int get _maxTurnsValue => int.tryParse(_maxTurns.text.trim()) ?? 0;
+  double get _budgetValue => double.tryParse(_budget.text.trim()) ?? 0;
+  int get _wallClockValue => int.tryParse(_wallClock.text.trim()) ?? 0;
+  int get _contextWindowValue => int.tryParse(_contextWindow.text.trim()) ?? 0;
+
   bool get _dirty =>
-      _public != widget.project.public ||
-      _livetest != widget.project.allowBrowserLivetest ||
-      !_sameList(_skillDirs, widget.project.skillDirs);
+      _public != widget.workspace.public ||
+      _livetest != widget.workspace.allowBrowserLivetest ||
+      _folder != widget.workspace.folder ||
+      _primarySkill != widget.workspace.primarySkill ||
+      _model.text.trim() != widget.workspace.model ||
+      _maxTurnsValue != widget.workspace.maxTurns ||
+      _budgetValue != widget.workspace.maxBudgetUsd ||
+      _wallClockValue != widget.workspace.wallClockSeconds ||
+      _contextWindowValue != widget.workspace.contextWindowTokens ||
+      !_sameList(_skillDirs, widget.workspace.skillDirs);
 
   static bool _sameList(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -2026,82 +2160,79 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
     return true;
   }
 
-  void _say(String text) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
-  /// 存檔 → 發 `reload`。
+  /// 表單存檔 → 發 `reload`。
   ///
-  /// 兩件事的結果要**分開講**：存進去了但命令沒送出（拿不到 runner_id、
-  /// Hub 連不上）時說「已存檔，執行器還沒收到」，而不是一句籠統的成功——
-  /// 那會讓人以為設定已經在跑著的執行器上生效了。
+  /// 優先載入 skill 是**另一次寫入**（它要對著 skill_dirs 驗證），所以這裡
+  /// 存完要重讀一份設定再寫第二次——拿舊的那份寫會撞上 mtime 檢查。
   Future<void> _save() async {
-    // await 之後不能再碰 context，先把字拿在手上
     final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
     try {
-      await saveRunnerProject(
+      await saveRunnerWorkspace(
         widget.config,
-        projectKey: widget.project.key,
+        workspaceKey: widget.workspace.key,
+        folder: _folder,
         public: _public,
         allowBrowserLivetest: _livetest,
+        model: _model.text.trim(),
+        maxTurns: _maxTurnsValue,
+        maxBudgetUsd: _budgetValue,
+        wallClockSeconds: _wallClockValue,
+        contextWindowTokens: _contextWindowValue,
         skillDirs: _skillDirs,
       );
-    } on RunnerConfigConflict {
-      if (mounted) setState(() => _saving = false);
-      _say(l10n.hostRunnerConflict);
-      return;
+      if (_primarySkill != widget.workspace.primarySkill) {
+        ref.invalidate(runnerConfigProvider);
+        final fresh = await readRunnerConfig(widget.config.path);
+        if (fresh == null) throw const RunnerConfigConflict();
+        await setRunnerPrimarySkill(
+          fresh,
+          workspaceKey: widget.workspace.key,
+          skill: _primarySkill,
+        );
+      }
     } on Object catch (e) {
       if (mounted) setState(() => _saving = false);
-      _say(l10n.hostRunnerWriteFailed('$e'));
+      ref.invalidate(runnerConfigProvider);
+      messenger.showSnackBar(
+          SnackBar(content: Text(_runnerErrorText(e, l10n))));
       return;
     }
 
-    final runnerId = await ref.read(runnerIdProvider.future);
-    ref.invalidate(runnerConfigProvider);
-    if (runnerId == null) {
+    final said = await _runnerApplyReload(ref, l10n);
+    if (mounted) setState(() => _saving = false);
+    messenger.showSnackBar(SnackBar(content: Text(said)));
+  }
+
+  /// 立刻寫檔的動作（加／移除專案、設預設、移除工作區）。
+  ///
+  /// 與表單的「儲存並套用」同一條路：寫完重讀設定、發 `reload`、把結果講出來。
+  Future<void> _write(Future<void> Function() action) async {
+    final l10n = AppLocalizations.of(context);
+    // 移除工作區之後這張卡就不在了；訊息要交給不會跟著消失的 messenger
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _saving = true);
+    try {
+      await action();
+    } on Object catch (e) {
       if (mounted) setState(() => _saving = false);
-      _say(l10n.hostRunnerSavedNoRunnerId);
+      ref.invalidate(runnerConfigProvider);
+      messenger.showSnackBar(
+          SnackBar(content: Text(_runnerErrorText(e, l10n))));
       return;
     }
-    try {
-      await ref.read(runsApiProvider).command(
-            runnerId,
-            command: 'reload',
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-          );
-      _say(l10n.hostRunnerSavedReloadSent);
-    } on ApiException catch (e) {
-      _say(l10n.hostRunnerReloadFailed(e.message));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
+    final said = await _runnerApplyReload(ref, l10n);
+    if (mounted) setState(() => _saving = false);
+    messenger.showSnackBar(SnackBar(content: Text(said)));
   }
 
   Future<void> _addSkillDir() async {
-    final controller = TextEditingController();
     final path = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.of(context).hostRunnerAddSkillDirTitle),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-              hintText: AppLocalizations.of(context).hostRunnerSkillDirHint),
-          onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(AppLocalizations.of(context).commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-            child: Text(AppLocalizations.of(context).commonAdd),
-          ),
-        ],
+      builder: (context) => _PathDialog(
+        title: AppLocalizations.of(context).hostRunnerAddSkillDirTitle,
+        label: AppLocalizations.of(context).hostRunnerSkillDirHint,
       ),
     );
     if (path == null || path.isEmpty) return;
@@ -2109,22 +2240,80 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
     setState(() => _skillDirs = [..._skillDirs, path]);
   }
 
+  Future<void> _pickFolder() async {
+    final l10n = AppLocalizations.of(context);
+    final path = await _pickDirectory(l10n.hostRunnerFolder);
+    if (path == null) return;
+    setState(() => _folder = path);
+  }
+
+  Future<void> _addProject() async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AddProjectDialog(
+        config: widget.config,
+        workspaceKey: widget.workspace.key,
+      ),
+    );
+    if (added != true) return;
+    final said = await _runnerApplyReload(ref, l10n);
+    messenger.showSnackBar(SnackBar(content: Text(said)));
+  }
+
+  Future<void> _removeWorkspace() async {
+    final l10n = AppLocalizations.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+            l10n.hostRunnerRemoveWorkspaceConfirm(widget.workspace.key)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10n.commonCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10n.commonRemove),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _write(() => removeRunnerWorkspace(widget.config,
+        key: widget.workspace.key));
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
-    final p = widget.project;
-    final repos = p.repos.entries
-        .map((e) => e.key == p.defaultRepo
-            ? l10n.hostRunnerRepoDefault(e.key, e.value)
-            : l10n.hostRunnerRepoEntry(e.key, e.value))
-        .toList();
+    final w = widget.workspace;
 
     return _Panel(
-      title: p.key,
+      title: w.key,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  _folder.isEmpty ? l10n.hostRunnerNone : _folder,
+                  style: UepText.code(size: 12, color: s.inkSoft),
+                ),
+              ),
+              const SizedBox(width: 12),
+              UepButton(
+                label: l10n.hostRunnerBrowse,
+                small: true,
+                variant: UepButtonVariant.outline,
+                onPressed: _saving ? null : _pickFolder,
+              ),
+            ],
+          ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: _public,
@@ -2140,14 +2329,7 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
             onChanged: _saving ? null : (v) => setState(() => _livetest = v),
           ),
           const SizedBox(height: 14),
-          Text('repo', style: UepText.fieldLabel(color: s.inkMute)),
-          const SizedBox(height: 6),
-          for (final line in repos)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: SelectableText(line,
-                  style: UepText.code(size: 12, color: s.inkSoft)),
-            ),
+          _projects(context, s, l10n, w),
           const SizedBox(height: 14),
           Text(l10n.hostRunnerSkillDirs,
               style: UepText.fieldLabel(color: s.inkMute)),
@@ -2172,6 +2354,10 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
                 ),
               ],
             ),
+          const SizedBox(height: 10),
+          _primarySkillField(s, l10n),
+          const SizedBox(height: 10),
+          _advanced(s, l10n),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -2187,10 +2373,854 @@ class _RunnerProjectCardState extends ConsumerState<_RunnerProjectCard> {
                 small: true,
                 onPressed: (_saving || !_dirty) ? null : _save,
               ),
+              const Spacer(),
+              UepButton(
+                label: l10n.hostRunnerRemoveWorkspace,
+                small: true,
+                variant: UepButtonVariant.outline,
+                onPressed: _saving ? null : _removeWorkspace,
+              ),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  /// 工作區裡的專案：名稱、路徑、預設標記，加與減。
+  Widget _projects(BuildContext context, UepSurface s, AppLocalizations l10n,
+      RunnerWorkspace w) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(l10n.hostRunnerProjects,
+                  style: UepText.fieldLabel(color: s.inkMute)),
+            ),
+            UepButton(
+              label: l10n.hostRunnerAddProject,
+              small: true,
+              variant: UepButtonVariant.outline,
+              onPressed: _saving ? null : _addProject,
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        for (final e in w.projects.entries)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SelectableText(
+                    e.key == w.defaultProject
+                        ? l10n.hostRunnerRepoDefault(e.key, e.value.path)
+                        : l10n.hostRunnerRepoEntry(e.key, e.value.path),
+                    style: UepText.code(size: 12, color: s.inkSoft),
+                  ),
+                ),
+                if (e.key != w.defaultProject)
+                  TextButton(
+                    onPressed: _saving
+                        ? null
+                        : () => _write(() => saveRunnerWorkspace(
+                              widget.config,
+                              workspaceKey: w.key,
+                              defaultProject: e.key,
+                            )),
+                    child: Text(l10n.hostRunnerSetDefaultProject,
+                        style: UepText.serif(size: 12.5, color: s.inkMute)),
+                  ),
+                IconButton(
+                  tooltip: l10n.commonRemove,
+                  icon: Icon(Icons.close, size: 16, color: s.inkMute),
+                  onPressed: _saving
+                      ? null
+                      : () => _write(() => removeRunnerProject(
+                            widget.config,
+                            workspaceKey: w.key,
+                            name: e.key,
+                          )),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 優先載入 skill：選項來自這個工作區 `skill_dirs` 底下掃到的 skill。
+  ///
+  /// 目前選著的那個即使掃不到也要留在清單裡——不然它會在畫面上無聲消失，
+  /// 而檔案裡還寫著它。
+  Widget _primarySkillField(UepSurface s, AppLocalizations l10n) {
+    return FutureBuilder<List<String>>(
+      future: listRunnerSkills(_skillDirs),
+      builder: (context, snap) {
+        final names = <String>{...(snap.data ?? const <String>[])};
+        if (_primarySkill.isNotEmpty) names.add(_primarySkill);
+        final items = names.toList()..sort();
+        return Row(
+          children: [
+            SizedBox(
+              width: 140,
+              child: Text(l10n.hostRunnerPrimarySkill,
+                  style: UepText.fieldLabel(color: s.inkMute)),
+            ),
+            Expanded(
+              child: DropdownButton<String>(
+                value: _primarySkill,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                style: UepText.serif(size: 14, color: s.ink),
+                dropdownColor: s.bgSoft,
+                items: [
+                  DropdownMenuItem(
+                    value: '',
+                    child: Text(l10n.hostRunnerPrimarySkillNone,
+                        style: UepText.serif(size: 14, color: s.inkMute)),
+                  ),
+                  for (final name in items)
+                    DropdownMenuItem(
+                      value: name,
+                      child: Text(name,
+                          style: UepText.serif(size: 14, color: s.ink)),
+                    ),
+                ],
+                onChanged: _saving
+                    ? null
+                    : (v) => setState(() => _primarySkill = v ?? ''),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 模型與各種上限。預設收起來——大部分工作區不會碰它們。
+  Widget _advanced(UepSurface s, AppLocalizations l10n) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        title: Text(l10n.hostRunnerAdvanced,
+            style: UepText.fieldLabel(color: s.inkMute)),
+        children: [
+          _field(s, l10n.hostRunnerModel, _model),
+          _field(s, l10n.hostRunnerMaxTurns, _maxTurns, numeric: true),
+          _field(s, l10n.hostRunnerMaxBudget, _budget, numeric: true),
+          _field(s, l10n.hostRunnerWallClock, _wallClock, numeric: true),
+          _field(s, l10n.hostRunnerContextWindow, _contextWindow,
+              numeric: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(UepSurface s, String label, TextEditingController controller,
+      {bool numeric = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 140,
+            child:
+                Text(label, style: UepText.fieldLabel(color: s.inkMute)),
+          ),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: !_saving,
+              keyboardType: numeric ? TextInputType.number : null,
+              style: UepText.code(size: 12.5, color: s.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: AppLocalizations.of(context)
+                    .hostRunnerFieldDefaultHint,
+                hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 打一個路徑，或按「瀏覽」從系統選一個。
+///
+/// 兩種都留著：沒有選擇器的平台照樣打得了字，而貼路徑常常比一層層點快。
+class _PathDialog extends StatefulWidget {
+  const _PathDialog({required this.title, required this.label});
+
+  final String title;
+  final String label;
+
+  @override
+  State<_PathDialog> createState() => _PathDialogState();
+}
+
+class _PathDialogState extends State<_PathDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: InputDecoration(hintText: widget.label),
+              onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: () async {
+              final path = await _pickDirectory(widget.title);
+              if (path == null || !mounted) return;
+              setState(() => _controller.text = path);
+            },
+            child: Text(l10n.hostRunnerBrowse),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.commonCancel),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+          child: Text(l10n.commonAdd),
+        ),
+      ],
+    );
+  }
+}
+
+/// 新增工作區：名稱、資料夾，資料夾不是 git repo 時還要一個專案路徑。
+///
+/// 驗證交給資料層（同一條規則只留一份），錯誤**留在對話框裡**顯示——關掉
+/// 再從頭填一次是這種表單最討人厭的一件事。
+class _AddWorkspaceDialog extends StatefulWidget {
+  const _AddWorkspaceDialog({required this.config});
+
+  final RunnerConfigFile config;
+
+  @override
+  State<_AddWorkspaceDialog> createState() => _AddWorkspaceDialogState();
+}
+
+class _AddWorkspaceDialogState extends State<_AddWorkspaceDialog> {
+  final _key = TextEditingController();
+  final _folder = TextEditingController();
+  final _project = TextEditingController();
+  String _error = '';
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _key.dispose();
+    _folder.dispose();
+    _project.dispose();
+    super.dispose();
+  }
+
+  bool get _ready =>
+      !_busy && _key.text.trim().isNotEmpty && _folder.text.trim().isNotEmpty;
+
+  Future<void> _submit() async {
+    final l10n = AppLocalizations.of(context);
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      await addRunnerWorkspace(
+        widget.config,
+        key: _key.text.trim(),
+        folder: _folder.text.trim(),
+        projectPath: _project.text.trim(),
+      );
+    } on Object catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _runnerErrorText(e, l10n);
+      });
+      return;
+    }
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(l10n.hostRunnerAddWorkspace),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _key,
+              autofocus: true,
+              enabled: !_busy,
+              decoration:
+                  InputDecoration(labelText: l10n.hostRunnerWorkspaceKey),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 10),
+            _pathRow(l10n, _folder, l10n.hostRunnerFolder, ''),
+            const SizedBox(height: 10),
+            _pathRow(l10n, _project, l10n.hostRunnerFirstProjectPath,
+                l10n.hostRunnerFirstProjectHint),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(_error,
+                  style: UepText.serif(size: 13, color: UepColors.error)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+          child: Text(l10n.commonCancel),
+        ),
+        TextButton(
+          onPressed: _ready ? _submit : null,
+          child: Text(l10n.commonAdd),
+        ),
+      ],
+    );
+  }
+
+  Widget _pathRow(AppLocalizations l10n, TextEditingController controller,
+      String label, String hint) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            enabled: !_busy,
+            decoration: InputDecoration(
+              labelText: label,
+              hintText: hint.isEmpty ? null : hint,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: _busy
+              ? null
+              : () async {
+                  final path = await _pickDirectory(label);
+                  if (path == null || !mounted) return;
+                  setState(() => controller.text = path);
+                },
+          child: Text(l10n.hostRunnerBrowse),
+        ),
+      ],
+    );
+  }
+}
+
+/// 在工作區裡加一個專案。名稱留空就用路徑的最後一段。
+class _AddProjectDialog extends StatefulWidget {
+  const _AddProjectDialog({required this.config, required this.workspaceKey});
+
+  final RunnerConfigFile config;
+  final String workspaceKey;
+
+  @override
+  State<_AddProjectDialog> createState() => _AddProjectDialogState();
+}
+
+class _AddProjectDialogState extends State<_AddProjectDialog> {
+  final _name = TextEditingController();
+  final _path = TextEditingController();
+  String _error = '';
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _path.dispose();
+    super.dispose();
+  }
+
+  bool get _ready => !_busy && _path.text.trim().isNotEmpty;
+
+  Future<void> _submit() async {
+    final l10n = AppLocalizations.of(context);
+    final path = _path.text.trim();
+    final name =
+        _name.text.trim().isEmpty ? _lastSegment(path) : _name.text.trim();
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      await addRunnerProject(
+        widget.config,
+        workspaceKey: widget.workspaceKey,
+        name: name,
+        path: path,
+      );
+    } on Object catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = _runnerErrorText(e, l10n);
+      });
+      return;
+    }
+    if (mounted) Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(l10n.hostRunnerAddProject),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _name,
+              enabled: !_busy,
+              decoration:
+                  InputDecoration(labelText: l10n.hostRunnerProjectName),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _path,
+                    autofocus: true,
+                    enabled: !_busy,
+                    decoration: InputDecoration(
+                        labelText: l10n.hostRunnerProjectPath),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          final path = await _pickDirectory(
+                              l10n.hostRunnerProjectPath);
+                          if (path == null || !mounted) return;
+                          setState(() => _path.text = path);
+                        },
+                  child: Text(l10n.hostRunnerBrowse),
+                ),
+              ],
+            ),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(_error,
+                  style: UepText.serif(size: 13, color: UepColors.error)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(false),
+          child: Text(l10n.commonCancel),
+        ),
+        TextButton(
+          onPressed: _ready ? _submit : null,
+          child: Text(l10n.commonAdd),
+        ),
+      ],
+    );
+  }
+}
+
+/// `.env` 一個欄位的規格。**標籤就是 key 本身**——這頁改的是 `.env`，
+/// 翻譯一個變數名只會讓人對不上自己檔案裡的那一行。
+enum _EnvKind { text, port, nonNegInt, url, choice }
+
+class _EnvFieldSpec {
+  const _EnvFieldSpec(this.key,
+      {this.kind = _EnvKind.text,
+      this.secret = false,
+      this.options = const []});
+
+  final String key;
+  final _EnvKind kind;
+
+  /// 遮罩顯示，可按眼睛看。
+  final bool secret;
+
+  /// `choice` 用的選項，第一項是空字串（沒設，用預設值）。
+  final List<String> options;
+}
+
+/// Hub 那份 `.env` 可改的欄位。
+///
+/// `CHATROOM_DB`／`CHATROOM_HUMAN_TOKEN`／`CHATROOM_TUNNEL_URL_FILE` **不在
+/// 這裡**：那三個是安裝時決定的，改錯的代價（資料庫換成一個空的、主持人
+/// 把自己鎖在外面）遠大於在這頁改它的方便。
+const _hubEnvFields = <_EnvFieldSpec>[
+  _EnvFieldSpec('CHATROOM_HOST'),
+  _EnvFieldSpec('CHATROOM_PORT', kind: _EnvKind.port),
+  _EnvFieldSpec('CHATROOM_TOKEN', secret: true),
+  _EnvFieldSpec('CHATROOM_IDLE_TIMEOUT', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_SUBAGENT_TIMEOUT', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_HOLD_MAX', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_PURGE_ARCHIVED_DAYS', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_RUN_DAILY_QUOTA', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_RUN_QUEUE_CAP', kind: _EnvKind.nonNegInt),
+  _EnvFieldSpec('CHATROOM_ATTACHMENT_DIR'),
+  _EnvFieldSpec('CHATROOM_LOG_LEVEL',
+      kind: _EnvKind.choice,
+      options: ['', 'DEBUG', 'INFO', 'WARNING', 'ERROR']),
+];
+
+/// bridge 那份 `.env` 可改的欄位。
+const _mcpEnvFields = <_EnvFieldSpec>[
+  _EnvFieldSpec('CHATROOM_URL', kind: _EnvKind.url),
+  _EnvFieldSpec('CHATROOM_TOKEN', secret: true),
+  _EnvFieldSpec('CHATROOM_DEFAULT_NAME'),
+  _EnvFieldSpec('CHATROOM_AGENT_KIND'),
+  _EnvFieldSpec('CHATROOM_HOST_NAME'),
+  _EnvFieldSpec('CHATROOM_STATE_TTL_DAYS', kind: _EnvKind.nonNegInt),
+];
+
+/// Hub 分頁的 `.env` 表單。緊接在起停那一區後面——改完要重啟才生效，
+/// 那兩顆按鈕就在上面。
+class _HubEnvSection extends ConsumerWidget {
+  const _HubEnvSection({required this.kit});
+
+  final HostKit kit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final values = ref.watch(hostEnvRawProvider);
+
+    return values.when(
+      loading: () => _Panel(
+        title: l10n.hostEnvPanelHubSettings,
+        child: _LightRow(label: l10n.settingsTitle, probe: Probe.checking()),
+      ),
+      error: (e, _) => _Panel(
+        title: l10n.hostEnvPanelHubSettings,
+        child: _LightRow(
+            label: l10n.settingsTitle, probe: Probe(ProbeState.unknown, '$e')),
+      ),
+      data: (map) {
+        if (map == null) {
+          return _Panel(
+            title: l10n.hostEnvPanelHubSettings,
+            child: Text(l10n.hostEnvUnreadable,
+                style: UepText.serif(size: 14, color: s.inkMute)),
+          );
+        }
+        return _EnvEditor(
+          key: ValueKey('hub:${kit.envFile}'),
+          title: l10n.hostEnvPanelHubSettings,
+          path: kit.envFile,
+          specs: _hubEnvFields,
+          values: map,
+          savedMessage: l10n.hostEnvSavedRestartHub,
+          onSaved: (ref) {
+            ref.invalidate(hostEnvProvider);
+            ref.invalidate(hostEnvRawProvider);
+          },
+        );
+      },
+    );
+  }
+}
+
+/// MCP kit 分頁的 `.env` 表單。
+class _McpEnvSection extends ConsumerWidget {
+  const _McpEnvSection({required this.kit});
+
+  final McpKit kit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final values = ref.watch(mcpEnvRawProvider);
+
+    return values.when(
+      loading: () => _Panel(
+        title: l10n.hostEnvPanelMcpSettings,
+        child: _LightRow(label: l10n.settingsTitle, probe: Probe.checking()),
+      ),
+      error: (e, _) => _Panel(
+        title: l10n.hostEnvPanelMcpSettings,
+        child: _LightRow(
+            label: l10n.settingsTitle, probe: Probe(ProbeState.unknown, '$e')),
+      ),
+      data: (map) {
+        if (map == null) {
+          return _Panel(
+            title: l10n.hostEnvPanelMcpSettings,
+            child: Text(l10n.hostMcpEnvMissing,
+                style: UepText.serif(size: 14, color: s.inkMute)),
+          );
+        }
+        return _EnvEditor(
+          key: ValueKey('mcp:${kit.envFile}'),
+          title: l10n.hostEnvPanelMcpSettings,
+          path: kit.envFile,
+          specs: _mcpEnvFields,
+          values: map,
+          savedMessage: l10n.hostEnvSavedNextConnect,
+          onSaved: (ref) {
+            ref.invalidate(mcpEnvProvider);
+            ref.invalidate(mcpEnvRawProvider);
+            ref.invalidate(mcpStatusProvider);
+          },
+        );
+      },
+    );
+  }
+}
+
+/// 兩個分頁共用的 `.env` 表單。
+///
+/// 寫回走 `writeEnvUpdates()`：**只覆寫改過的那幾個 key**，其餘行、註解與
+/// 順序原樣保留（規則與 `host-kit/install.py:update_env()` 同一套）。
+///
+/// 「改過」的判準是與讀進來那一刻的值不同——沒碰過的空欄位不進 updates，
+/// 所以存一次檔不會在檔案裡多出一堆空的 `KEY=`。
+class _EnvEditor extends ConsumerStatefulWidget {
+  const _EnvEditor({
+    super.key,
+    required this.title,
+    required this.path,
+    required this.specs,
+    required this.values,
+    required this.savedMessage,
+    required this.onSaved,
+  });
+
+  final String title;
+  final String path;
+  final List<_EnvFieldSpec> specs;
+  final Map<String, String> values;
+  final String savedMessage;
+  final void Function(WidgetRef ref) onSaved;
+
+  @override
+  ConsumerState<_EnvEditor> createState() => _EnvEditorState();
+}
+
+class _EnvEditorState extends ConsumerState<_EnvEditor> {
+  final _controllers = <String, TextEditingController>{};
+  final _errors = <String, EnvFieldError?>{};
+  final _revealed = <String>{};
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final spec in widget.specs) {
+      _controllers[spec.key] =
+          TextEditingController(text: widget.values[spec.key] ?? '');
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  String _original(String key) => (widget.values[key] ?? '').trim();
+
+  bool get _dirty => widget.specs.any(
+      (spec) => _controllers[spec.key]!.text.trim() != _original(spec.key));
+
+  /// 本來就有值的欄位不能被清空——`CHATROOM_IDLE_TIMEOUT=` 這種空值會讓
+  /// Hub 在讀設定時就起不來，而畫面上只會顯示「已存檔」。
+  EnvFieldError? _validate(_EnvFieldSpec spec, String value) {
+    final required = _original(spec.key).isNotEmpty;
+    switch (spec.kind) {
+      case _EnvKind.port:
+        return validateEnvPort(value, required: required);
+      case _EnvKind.nonNegInt:
+        return validateEnvNonNegativeInt(value, required: required);
+      case _EnvKind.url:
+        return validateEnvUrl(value, required: required);
+      case _EnvKind.text:
+      case _EnvKind.choice:
+        return required ? validateEnvRequiredText(value) : null;
+    }
+  }
+
+  String _message(EnvFieldError error, AppLocalizations l10n) =>
+      switch (error) {
+        EnvFieldError.required => l10n.hostEnvErrorRequired,
+        EnvFieldError.notInteger => l10n.hostEnvErrorInteger,
+        EnvFieldError.portRange => l10n.hostEnvErrorPortRange,
+        EnvFieldError.negative => l10n.hostEnvErrorNegative,
+        EnvFieldError.badUrl => l10n.hostEnvErrorUrl,
+      };
+
+  void _say(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _save() async {
+    // await 之後不能再碰 context，先把字拿在手上
+    final l10n = AppLocalizations.of(context);
+
+    final errors = <String, EnvFieldError?>{};
+    for (final spec in widget.specs) {
+      errors[spec.key] = _validate(spec, _controllers[spec.key]!.text);
+    }
+    if (errors.values.any((e) => e != null)) {
+      setState(() => _errors
+        ..clear()
+        ..addAll(errors));
+      return;
+    }
+
+    final updates = <String, String>{};
+    for (final spec in widget.specs) {
+      final value = _controllers[spec.key]!.text.trim();
+      if (value == _original(spec.key)) continue;
+      updates[spec.key] = value;
+    }
+    if (updates.isEmpty) return;
+
+    setState(() => _saving = true);
+    try {
+      await writeEnvUpdates(File(widget.path), updates);
+    } on Object catch (e) {
+      if (mounted) setState(() => _saving = false);
+      // 🔴 訊息裡只有例外本身，不帶欄位值——token 走的是同一條路
+      _say(l10n.hostEnvWriteFailed('$e'));
+      return;
+    }
+    widget.onSaved(ref);
+    if (mounted) setState(() => _saving = false);
+    _say(widget.savedMessage);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+
+    return _Panel(
+      title: widget.title,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final spec in widget.specs)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _field(spec, l10n),
+            ),
+          SelectableText(widget.path,
+              style: UepText.code(size: 11.5, color: s.inkMute)),
+          const SizedBox(height: 12),
+          UepButton(
+            label: l10n.commonSave,
+            small: true,
+            onPressed: (_saving || !_dirty) ? null : _save,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(_EnvFieldSpec spec, AppLocalizations l10n) {
+    final s = context.uep;
+    final error = _errors[spec.key];
+    final errorText = error == null ? null : _message(error, l10n);
+
+    if (spec.kind == _EnvKind.choice) {
+      final current = _controllers[spec.key]!.text.trim();
+      final value = spec.options.contains(current) ? current : '';
+      return DropdownButtonFormField<String>(
+        initialValue: value,
+        decoration: InputDecoration(
+          labelText: spec.key,
+          errorText: errorText,
+          isDense: true,
+          border: const OutlineInputBorder(),
+        ),
+        items: [
+          for (final option in spec.options)
+            DropdownMenuItem(
+              value: option,
+              child: Text(option.isEmpty ? '—' : option,
+                  style: UepText.code(size: 13, color: s.ink)),
+            ),
+        ],
+        onChanged: _saving
+            ? null
+            : (v) => setState(() {
+                  _controllers[spec.key]!.text = v ?? '';
+                  _errors[spec.key] = null;
+                }),
+      );
+    }
+
+    final hidden = spec.secret && !_revealed.contains(spec.key);
+    return TextField(
+      controller: _controllers[spec.key],
+      enabled: !_saving,
+      obscureText: hidden,
+      style: UepText.code(size: 13, color: s.ink),
+      decoration: InputDecoration(
+        labelText: spec.key,
+        errorText: errorText,
+        isDense: true,
+        border: const OutlineInputBorder(),
+        suffixIcon: spec.secret
+            ? IconButton(
+                tooltip: hidden ? l10n.commonShow : l10n.commonHide,
+                icon: Icon(hidden ? Icons.visibility_off : Icons.visibility,
+                    size: 18, color: s.inkMute),
+                onPressed: () => setState(() => hidden
+                    ? _revealed.add(spec.key)
+                    : _revealed.remove(spec.key)),
+              )
+            : null,
+      ),
+      onChanged: (v) => setState(() => _errors[spec.key] = _validate(spec, v)),
     );
   }
 }

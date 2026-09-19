@@ -31,8 +31,9 @@
     "pypi.org"
   ],
   "allowed_mcp_servers": ["chatroom"],
-  "projects": {
+  "workspaces": {
     "ai-website": {
+      "folder": "C:/Users/Bernie/source/repos/mind-door/AI-Website",
       "public": true,
       "allow_browser_livetest": false,
       "model": "claude-opus-5",
@@ -41,7 +42,8 @@
       "wall_clock_seconds": 5400,
       "context_window_tokens": 1000000,
       "context_soft_limit_ratio": 0.7,
-      "default_repo": "JSAI-Web",
+      "default_project": "JSAI-Web",
+      "primary_skill": "",
       "skill_dirs": ["C:/Users/Bernie/source/repos/mind-door/AI-Website"],
       "skills": {
         "ticket": ["jira-ticket-workflow"]
@@ -50,7 +52,7 @@
         "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/analysis",
         "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/summary"
       ],
-      "repos": {
+      "projects": {
         "JSAI-Web": {
           "path": "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-Web",
           "allowed_branches": ["jsai_dev", "feature/*"],

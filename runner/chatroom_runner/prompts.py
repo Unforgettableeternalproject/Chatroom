@@ -56,6 +56,22 @@ SKILLS_FRAME = """## 這個專案必須遵守的 skill
   自己照同樣的檢查項目審一遍，把結果寫進卡，然後繼續。"""
 
 
+PRIMARY_SKILL_FRAME = """## 開工先載入的 skill
+
+- `/{name}`
+
+**一開始就啟動它**（`Skill` 工具，或在回應裡寫 `/{name}`），然後照它寫的步驟
+做。它與本契約衝突時**以契約為準**（上面那幾條改寫照樣適用）。"""
+
+
+def primary_skill_block(name: str) -> str:
+    """工作區指定的優先載入 skill。沒設時回空字串，契約不會留下怪句子。"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    return PRIMARY_SKILL_FRAME.format(name=name)
+
+
 def skills_block(names: list[str] | None) -> str:
     """必守 skill 的段落。沒有 skill 時回空字串，模板不會留下怪句子。"""
     names = [n for n in (names or []) if n]
@@ -144,8 +160,9 @@ def build_contract(fields: dict[str, str],
                    prompt_dir: Path | None = None) -> str:
     """``--append-system-prompt`` 的骨幹（§6.3）。"""
     merged = dict(fields)
-    # 沒有必守 skill 的專案不必傳這個欄位，但模板裡的 placeholder 不能留著
+    # 沒有必守 skill 的工作區不必傳這個欄位，但模板裡的 placeholder 不能留著
     merged.setdefault("skills_block", "")
+    merged.setdefault("primary_skill_block", "")
     merged.setdefault("livetest_block", "")
     _fill_repo_defaults(merged)
     return render(load_template("contract", prompt_dir), merged)

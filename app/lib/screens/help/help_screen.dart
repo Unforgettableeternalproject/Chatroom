@@ -30,22 +30,37 @@ HelpTopic helpTopicFromSlug(String? slug) {
   }
 }
 
-/// 條目裡的一段文字。`code` 的那段畫成 chip（快捷鍵、語法、位址）。
+/// 條目裡的一段文字。`code` 的那段畫成 chip（快捷鍵、語法、位址），
+/// `bold` 的那段是要被掃到的關鍵詞。
 @immutable
 class HelpChunk {
-  const HelpChunk.text(this.text) : isCode = false;
-  const HelpChunk.code(this.text) : isCode = true;
+  const HelpChunk.text(this.text)
+      : isCode = false,
+        isBold = false;
+  const HelpChunk.code(this.text)
+      : isCode = true,
+        isBold = false;
+  const HelpChunk.bold(this.text)
+      : isCode = false,
+        isBold = true;
 
   final String text;
   final bool isCode;
+  final bool isBold;
 }
 
 /// 一條說明。一到兩句，太長就拆成兩條。
+///
+/// 慣例：**第一個 chunk 是 `bold` 就當這條的小標**，單獨一行，後面接一句
+/// 說明。「一句話結論＋一句話原因」比一句塞三件事好讀，而且掃得到。
 @immutable
 class HelpItem {
   const HelpItem(this.chunks);
 
   final List<HelpChunk> chunks;
+
+  /// 首個 chunk 是粗體 ⇒ 那段是小標，其餘是內文。
+  bool get hasLead => chunks.isNotEmpty && chunks.first.isBold;
 }
 
 @immutable
@@ -55,6 +70,7 @@ class HelpSection {
     required this.title,
     required this.icon,
     required this.items,
+    this.groups = const {},
   });
 
   /// 導覽上的 mono 小標。
@@ -62,6 +78,9 @@ class HelpSection {
   final String title;
   final IconData icon;
   final List<HelpItem> items;
+
+  /// 節內分組：index → 小標，那一條之前插一行。條目多的節才需要。
+  final Map<int, String> groups;
 }
 
 @immutable
@@ -112,6 +131,10 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
           HelpItem([HelpChunk.text(l10n.helpChat8)]),
           HelpItem([HelpChunk.text(l10n.helpChat9)]),
           HelpItem([HelpChunk.text(l10n.helpChat10)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpChatStyleLead),
+            HelpChunk.text(l10n.helpChatStyle),
+          ]),
         ],
       ),
       HelpSection(
@@ -144,6 +167,26 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
             HelpChunk.text(l10n.helpBoard4b),
           ]),
           HelpItem([HelpChunk.text(l10n.helpBoard5)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpBoardOwnerLead),
+            HelpChunk.text(l10n.helpBoardOwner),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpBoardSupLead),
+            HelpChunk.text(l10n.helpBoardSup1),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpBoardSupDispatchLead),
+            HelpChunk.text(l10n.helpBoardSup2),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpBoardSupQuotaLead),
+            HelpChunk.text(l10n.helpBoardSup3),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpBoardDirectiveLead),
+            HelpChunk.text(l10n.helpBoardDirective),
+          ]),
         ],
       ),
       HelpSection(
@@ -165,26 +208,62 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
         label: l10n.helpSecOpsLabel,
         title: l10n.helpSecOpsTitle,
         icon: Icons.play_circle_outline,
+        // 11 條一路念到底沒人找得到自己那一段，所以分「開工前／進行中／
+        // 收尾與推送」三段。
+        groups: {
+          0: l10n.helpGroupBefore,
+          8: l10n.helpGroupDuring,
+          11: l10n.helpGroupWrap,
+        },
         items: [
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsStartLead),
+            HelpChunk.text(l10n.helpOpsStart),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsTemplatesLead),
+            HelpChunk.text(l10n.helpOpsTemplates),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsPushLead),
+            HelpChunk.text(l10n.helpOpsPush),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsDashboardLead),
+            HelpChunk.text(l10n.helpOpsDashboard),
+          ]),
           HelpItem([
             HelpChunk.text(l10n.helpOps1a),
             const HelpChunk.code('projects'),
             HelpChunk.text(l10n.helpOps1b),
           ]),
           HelpItem([
+            HelpChunk.bold(l10n.helpOpsLead2),
             HelpChunk.text(l10n.helpOps2a),
             const HelpChunk.code('fetch'),
             HelpChunk.text(l10n.helpOps2b),
             const HelpChunk.code('pull --ff-only'),
             HelpChunk.text(l10n.helpOps2c),
           ]),
-          HelpItem([HelpChunk.text(l10n.helpOps3)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsLead3),
+            HelpChunk.text(l10n.helpOps3),
+          ]),
           HelpItem([HelpChunk.text(l10n.helpOps4)]),
           HelpItem([HelpChunk.text(l10n.helpOps5)]),
           HelpItem([HelpChunk.text(l10n.helpOps6)]),
-          HelpItem([HelpChunk.text(l10n.helpOps7)]),
-          HelpItem([HelpChunk.text(l10n.helpOps8)]),
-          HelpItem([HelpChunk.text(l10n.helpOps9)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsLead9),
+            HelpChunk.text(l10n.helpOps9),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsLead7),
+            HelpChunk.text(l10n.helpOps7),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpOpsLead8),
+            HelpChunk.text(l10n.helpOps8),
+          ]),
           HelpItem([HelpChunk.text(l10n.helpOps10)]),
           HelpItem([HelpChunk.text(l10n.helpOps11)]),
         ],
@@ -195,6 +274,11 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
         icon: Icons.notifications_outlined,
         items: [
           HelpItem([HelpChunk.text(l10n.helpNotify1)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpNotifyExcLead),
+            HelpChunk.text(l10n.helpNotifyExc1),
+          ]),
+          HelpItem([HelpChunk.text(l10n.helpNotifyExc2)]),
         ],
       ),
     ],
@@ -284,12 +368,19 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
         label: l10n.helpSecMachineLabel,
         title: l10n.hostConsoleTitle,
         icon: Icons.dns_outlined,
+        groups: {9: l10n.helpGroupInstall},
         items: [
           HelpItem([HelpChunk.text(l10n.helpMachine1)]),
           HelpItem([HelpChunk.text(l10n.helpMachine2)]),
           HelpItem([HelpChunk.text(l10n.helpMachine3)]),
-          HelpItem([HelpChunk.text(l10n.helpMachine4)]),
-          HelpItem([HelpChunk.text(l10n.helpMachine5)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpMachineLead4),
+            HelpChunk.text(l10n.helpMachine4),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpMachineLead5),
+            HelpChunk.text(l10n.helpMachine5),
+          ]),
           HelpItem([
             HelpChunk.text(l10n.helpMachine6a),
             const HelpChunk.code('0.0.0.0'),
@@ -298,6 +389,30 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
           HelpItem([HelpChunk.text(l10n.helpMachine7)]),
           HelpItem([HelpChunk.text(l10n.helpMachine8)]),
           HelpItem([HelpChunk.text(l10n.helpMachine9)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpInstallLead),
+            HelpChunk.text(l10n.helpInstall1),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpInstallReleaseLead),
+            HelpChunk.text(l10n.helpInstall2),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpInstallBlockedLead),
+            HelpChunk.text(l10n.helpInstall3),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpInstallHubLead),
+            HelpChunk.text(l10n.helpInstall4),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpInstallConfigLead),
+            HelpChunk.text(l10n.helpInstall5),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpEnvLead),
+            HelpChunk.text(l10n.helpEnv1),
+          ]),
         ],
       ),
       HelpSection(
@@ -337,8 +452,17 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) => {
         label: l10n.helpSecRunnerLabel,
         title: l10n.helpSecRunnerTitle,
         icon: Icons.terminal,
+        groups: {3: l10n.helpGroupConfig},
         items: [
           HelpItem([HelpChunk.text(l10n.helpRunner1)]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpRunnerWorkspaceLead),
+            HelpChunk.text(l10n.helpRunnerWorkspace),
+          ]),
+          HelpItem([
+            HelpChunk.bold(l10n.helpRunnerSkillLead),
+            HelpChunk.text(l10n.helpRunnerSkill),
+          ]),
           HelpItem([
             HelpChunk.text(l10n.helpRunner2a),
             const HelpChunk.code(
@@ -607,11 +731,18 @@ class _SectionCard extends StatelessWidget {
             ],
           ]),
           const SizedBox(height: 10),
-          for (final item in section.items)
+          for (var i = 0; i < section.items.length; i++) ...[
+            if (section.groups.containsKey(i))
+              Padding(
+                padding: EdgeInsets.only(top: i == 0 ? 0 : 8, bottom: 6),
+                child: MonoLabel(section.groups[i]!,
+                    color: s.inkMute.withValues(alpha: .7)),
+              ),
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: _ItemRow(item: item),
+              child: _ItemRow(item: section.items[i]),
             ),
+          ],
         ],
       ),
     );
@@ -627,6 +758,36 @@ class _ItemRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     final body = UepText.serif(size: 14.5, color: s.ink, height: 1.75);
+    // 首個 chunk 是粗體 ⇒ 它自己一行當小標，剩下的接在下面。
+    final lead = item.hasLead ? item.chunks.first : null;
+    final rest = lead == null ? item.chunks : item.chunks.sublist(1);
+    final text = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (lead != null)
+          Text(lead.text,
+              style: body.copyWith(fontWeight: FontWeight.w700, height: 1.5)),
+        if (rest.isNotEmpty)
+          Text.rich(
+            TextSpan(children: [
+              for (final chunk in rest)
+                if (chunk.isCode)
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: _CodeChip(text: chunk.text),
+                  )
+                else
+                  TextSpan(
+                    text: chunk.text,
+                    style: chunk.isBold
+                        ? const TextStyle(fontWeight: FontWeight.w700)
+                        : null,
+                  ),
+            ]),
+            style: body,
+          ),
+      ],
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -635,21 +796,7 @@ class _ItemRow extends StatelessWidget {
           child: Container(width: 10, height: 1, color: s.lineStrong),
         ),
         const SizedBox(width: 10),
-        Expanded(
-          child: Text.rich(
-            TextSpan(children: [
-              for (final chunk in item.chunks)
-                if (chunk.isCode)
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: _CodeChip(text: chunk.text),
-                  )
-                else
-                  TextSpan(text: chunk.text),
-            ]),
-            style: body,
-          ),
-        ),
+        Expanded(child: text),
       ],
     );
   }

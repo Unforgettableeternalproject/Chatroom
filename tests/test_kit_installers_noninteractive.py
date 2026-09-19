@@ -285,7 +285,7 @@ def test_runner_kit_yes_is_silent_and_reports(tmp_path, monkeypatch, capsys,
     assert cfg["hub_url"] == "http://127.0.0.1:8787"
     assert cfg["agent_token"] == "agent-key"
     assert cfg["label"] == "runner-a"
-    assert cfg["projects"] == {}
+    assert cfg["workspaces"] == {}
 
 
 def test_runner_kit_yes_keeps_an_existing_config_and_says_so(

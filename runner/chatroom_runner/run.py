@@ -28,8 +28,11 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from . import gitops, prompts
+# 🚨 命名對照（跨界）：這個檔案裡的 `project` 一律是 **Hub 的 project key**
+# ＝本機的**工作區**（`WorkspaceConfig`），`repo` 是工作區底下的一個 git
+# **專案**（`ProjectConfig`）。Hub／DB／bridge 的欄位名沒有跟著換
 from .config import (SOFT_STOP_FLAG_NAME, SOFT_STOP_TIMEOUT_FLAG_NAME,
-                     ProjectConfig, RepoConfig, RunnerConfig)
+                     ProjectConfig, RunnerConfig, WorkspaceConfig)
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
 from .procs import no_window_kwargs
@@ -95,8 +98,10 @@ def allowed_tools(kind: str, extra: list[str] | None = None,
                   skills: list[str] | None = None) -> list[str]:
     """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。
 
-    ``skills`` 是這種 kind 必須遵守的 skill 名。headless 下 skill 一樣要
-    預授權（`Skill(<name>)`），不然模型一叫它就停在一個沒有人能按的權限提示。
+    ``skills`` 是這一輪要授權的 skill 名：工作區的 `primary_skill`（不分
+    kind）加上這種 kind 必須遵守的那些（見 `WorkspaceConfig.all_skills_for`）。
+    headless 下 skill 一樣要預授權（`Skill(<name>)`），不然模型一叫它就停在
+    一個沒有人能按的權限提示。
     """
     tools = list(BASE_ALLOWED_TOOLS)
     if kind in WRITE_KINDS:
@@ -321,16 +326,16 @@ class RepoLocks:
         return bool(lock and lock.locked())
 
 
-def project_repos(project: ProjectConfig,
-                  primary: RepoConfig) -> list[RepoConfig]:
+def project_repos(project: WorkspaceConfig,
+                  primary: ProjectConfig) -> list[ProjectConfig]:
     """這次派工可以動的 repo，**主工作目錄排第一**。
 
     順序是固定的：附註、prompt 與快照三處都照這個順序列，主 repo 換位置的話
     同一份報告在兩輪之間會長得不一樣。
     """
     ordered = [primary]
-    for name in sorted(project.repos):
-        item = project.repos[name]
+    for name in sorted(project.projects):
+        item = project.projects[name]
         if item.name != primary.name:
             ordered.append(item)
     return ordered
@@ -365,15 +370,15 @@ def _repo_diff_lines(diff: dict, prefix: str) -> list[str]:
     return lines
 
 
-def resolve_repo(run: dict, project: ProjectConfig) -> RepoConfig:
+def resolve_repo(run: dict, project: WorkspaceConfig) -> ProjectConfig:
     """這筆 run 在哪個 repo 做。**規則寫死在這裡，brief 只能「指名」不能「指路」。**
 
     1. ``push``：``ref`` 就是 repo key（§5.6 的形狀是固定的）。
     2. brief 裡有一行 ``repo: <name>``：用那個（必須在專案的 repos 裡）。
-    3. 專案只有一個 repo，或設了 ``default_repo``：用它。
+    3. 工作區只有一個專案，或設了 ``default_project``：用它。
     4. 以上都不成立 ⇒ 失敗。**不猜**：猜錯的代價是在錯的工作樹上 commit。
     """
-    repos = project.repos
+    repos = project.projects
     if run.get("kind") == "push":
         name = (run.get("ref") or "").strip()
         repo = repos.get(name)
@@ -390,10 +395,10 @@ def resolve_repo(run: dict, project: ProjectConfig) -> RepoConfig:
                 f"簡述指名的 repo「{name}」不在專案 {project.key} 的允許清單裡。"
                 f"可用：{'、'.join(repos)}。")
         return repo
-    if project.default_repo:
-        return repos[project.default_repo]
+    if project.default_project:
+        return repos[project.default_project]
     raise RunSetupError(
-        f"專案 {project.key} 有多個 repo 且沒有設 default_repo，"
+        f"工作區 {project.key} 有多個專案且沒有設 default_project，"
         "請在簡述裡加一行 `repo: <名稱>`。"
         f"可用：{'、'.join(repos)}。")
 
@@ -499,7 +504,8 @@ class RunExecutor:
                        cancel: asyncio.Event) -> RunOutcome:
         run_id = run["id"]
         try:
-            project = self.cfg.project(run["project"])
+            # run["project"] 是 Hub 的 project key ＝ 本機工作區 key
+            project = self.cfg.workspace(run["project"])
             repo = resolve_repo(run, project)
         except Exception as exc:
             outcome = RunOutcome("failed", reason="setup_error",
@@ -645,7 +651,7 @@ class RunExecutor:
                 f"git pull --ff-only：{pulled.summary}")
         return pulled.summary
 
-    async def _claude_run(self, run: dict, project: ProjectConfig, repo,
+    async def _claude_run(self, run: dict, project: WorkspaceConfig, repo,
                           cancel: asyncio.Event) -> RunOutcome:
         run_id = run["id"]
         run_dir = self.cfg.runs_dir / run_id
@@ -697,6 +703,8 @@ class RunExecutor:
             "repo_names": "、".join(item.name for item in repos),
             "skills_block": prompts.skills_block(
                 project.skills_for(run["kind"])),
+            "primary_skill_block": prompts.primary_skill_block(
+                project.primary_skill),
             "livetest_block": prompts.livetest_block(
                 project.allow_browser_livetest),
         }
@@ -805,10 +813,11 @@ class RunExecutor:
 
     # ---------- 子進程 ----------
 
-    def _argv(self, prompt: str, contract: str, project: ProjectConfig,
+    def _argv(self, prompt: str, contract: str, project: WorkspaceConfig,
               run_dir: Path, resume: str, kind: str = "") -> list[str]:
+        # 優先載入的 skill 不分 kind 都要授權，否則契約叫它就卡權限提示
         tools = allowed_tools(kind, self.cfg.extra_allowed_tools,
-                              project.skills_for(kind))
+                              project.all_skills_for(kind))
         denied = disallowed_tools(self.cfg.allowed_mcp_servers,
                                   self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [
@@ -1201,7 +1210,7 @@ class RunExecutor:
     # ---------- run 目錄 ----------
 
     def _write_run_files(self, run_dir: Path, run: dict, repo,
-                         project: ProjectConfig | None = None) -> None:
+                         project: WorkspaceConfig | None = None) -> None:
         python = sys.executable
         hook = str(HOOKS_DIR / "pretooluse.py")
         precompact = str(HOOKS_DIR / "precompact.py")

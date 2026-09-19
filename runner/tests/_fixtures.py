@@ -54,13 +54,13 @@ def config_raw(tmp_path, repo: Path, **overrides) -> dict:
         "claude_config_dir": str(tmp_path / "claude-config"),
         "backoff_minutes": [1, 2],
         "allowed_domains": ["github.com"],
-        "projects": {
+        "workspaces": {
             "ai-website": {
-                "default_repo": "JSAI-Web",
+                "default_project": "JSAI-Web",
                 "wall_clock_seconds": 60,
                 "context_window_tokens": 200000,
                 "context_soft_limit_ratio": 0.7,
-                "repos": {
+                "projects": {
                     "JSAI-Web": {
                         "path": str(repo),
                         "allowed_branches": ["jsai_dev", "feature/*"],

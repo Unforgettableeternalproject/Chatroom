@@ -20,8 +20,11 @@ from ._fixtures import git, make_config
 
 # ── 設定 ────────────────────────────────────────────────────────
 
-def test_empty_project_list_is_rejected():
+def test_empty_workspace_list_is_rejected():
     """空的允許清單領不到任何單——那是白名單，不是「不限制」。"""
+    with pytest.raises(ConfigError):
+        config_from_dict({"workspaces": {}})
+    # 舊鍵留空也一樣要擋
     with pytest.raises(ConfigError):
         config_from_dict({"projects": {}})
 
@@ -35,13 +38,13 @@ def test_branch_allow_list_is_a_whitelist():
     assert not branch_allowed("", ["*"])
 
 
-def test_token_can_come_from_an_env_file(tmp_path, monkeypatch):
+def test_token_can_come_from_an_env_file(tmp_path, work_repo, monkeypatch):
     monkeypatch.delenv("CHATROOM_TOKEN", raising=False)
     env = tmp_path / ".env"
     env.write_text('CHATROOM_TOKEN="從檔案讀的"\nOTHER=x\n', encoding="utf-8")
     cfg = config_from_dict({
         "token_env_file": ".env",
-        "projects": {"p": {"repos": {"r": {"path": str(tmp_path)}}}},
+        "workspaces": {"p": {"projects": {"r": {"path": str(work_repo)}}}},
     }, base_dir=tmp_path)
     assert cfg.agent_token == "從檔案讀的"
     assert read_env_file(env, "NOPE") == ""
@@ -60,30 +63,135 @@ def test_example_config_is_loadable():
     raw["token_env_file"] = ""
     raw["agent_token"] = "x"
     cfg = config_from_dict(raw, base_dir=example.parent)
-    project = cfg.project("ai-website")
-    assert set(project.repos) == {"JSAI-Web", "JSAI-API", "JSAI-Functions"}
-    for repo in project.repos.values():
+    project = cfg.workspace("ai-website")
+    assert set(project.projects) == {"JSAI-Web", "JSAI-API", "JSAI-Functions"}
+    for repo in project.projects.values():
         assert repo.allowed_branches == ["jsai_dev", "feature/*"]
         assert not repo.allows_push("jsai_prod")
     # 範例設定的視窗是 1M（2026-09-18 起），0.7 → 700k
     assert project.context_soft_limit_tokens == 700000
 
 
-def test_single_repo_project_gets_a_default(tmp_path):
+def test_single_project_workspace_gets_a_default(work_repo):
     cfg = config_from_dict({
         "agent_token": "x",
-        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}}}},
+        "workspaces": {"p": {"projects": {"only": {"path": str(work_repo)}}}},
     })
-    assert cfg.project("p").default_repo == "only"
+    assert cfg.workspace("p").default_project == "only"
 
 
-def test_unknown_project_raises(tmp_path):
+def test_unknown_workspace_raises(work_repo):
     cfg = config_from_dict({
         "agent_token": "x",
-        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}}}},
+        "workspaces": {"p": {"projects": {"only": {"path": str(work_repo)}}}},
     })
     with pytest.raises(ConfigError):
-        cfg.project("nope")
+        cfg.workspace("nope")
+
+
+# ── 舊鍵相容與 git 專案檢查 ─────────────────────────────────────
+
+def test_legacy_keys_still_load(work_repo):
+    """舊設定檔（projects／repos／default_repo）照樣讀得進來。
+
+    不吃舊鍵的話，升級後執行器會註冊上線但一筆單都領不到，而畫面上
+    看起來一切正常。
+    """
+    cfg = config_from_dict({
+        "agent_token": "x",
+        "projects": {"p": {
+            "default_repo": "only",
+            "repos": {"only": {"path": str(work_repo),
+                               "allowed_branches": ["jsai_dev"]}}}},
+    })
+    ws = cfg.workspace("p")
+    assert set(ws.projects) == {"only"}
+    assert ws.default_project == "only"
+    assert ws.projects["only"].allows("jsai_dev")
+
+
+def test_new_keys_win_when_both_are_present(work_repo, caplog):
+    """新舊鍵同時存在時以新鍵為準，而且要留一句警告。"""
+    raw = {
+        "agent_token": "x",
+        "workspaces": {"new": {"projects": {"a": {"path": str(work_repo)}}}},
+        "projects": {"old": {"repos": {"b": {"path": str(work_repo)}}}},
+    }
+    with caplog.at_level("WARNING", logger="chatroom_runner.config"):
+        cfg = config_from_dict(raw)
+    assert set(cfg.workspaces) == {"new"}
+    assert set(cfg.workspace("new").projects) == {"a"}
+    assert "workspaces" in caplog.text and "projects" in caplog.text
+
+    inner = config_from_dict({
+        "agent_token": "x",
+        "workspaces": {"p": {
+            "default_project": "new",
+            "default_repo": "old",
+            "projects": {"new": {"path": str(work_repo)}},
+            "repos": {"old": {"path": str(work_repo)}}}},
+    })
+    assert set(inner.workspace("p").projects) == {"new"}
+    assert inner.workspace("p").default_project == "new"
+
+
+def test_a_project_that_is_not_a_git_repo_is_excluded(tmp_path, work_repo):
+    """不是 git repo 的專案被排除，**但其他專案照常載入**。
+
+    整台執行器因為一個打錯的路徑起不來的話，其他工作區也一起領不到單。
+    """
+    plain = tmp_path / "just-a-folder"
+    plain.mkdir()
+    cfg = config_from_dict({
+        "agent_token": "x",
+        "workspaces": {"p": {
+            "default_project": "good",
+            "projects": {"good": {"path": str(work_repo)},
+                         "bad": {"path": str(plain)}}}},
+    })
+    ws = cfg.workspace("p")
+    assert set(ws.projects) == {"good"}
+    assert "bad" in ws.invalid_projects
+    assert str(plain) in ws.invalid_projects["bad"]
+
+
+def test_workspace_folder_is_optional_and_never_blocks_loading(tmp_path,
+                                                                work_repo,
+                                                                caplog):
+    """`folder` 只給 App 顯示用：不存在留一句警告，工作區照常載入。"""
+    folder = tmp_path / "AI-Website"
+    folder.mkdir()
+    cfg = config_from_dict({
+        "agent_token": "x",
+        "workspaces": {"p": {"folder": str(folder),
+                             "projects": {"a": {"path": str(work_repo)}}}},
+    })
+    assert cfg.workspace("p").folder == str(folder)
+
+    with caplog.at_level("WARNING", logger="chatroom_runner.config"):
+        gone = config_from_dict({
+            "agent_token": "x",
+            "workspaces": {"p": {"folder": str(tmp_path / "nope"),
+                                 "projects": {"a": {"path": str(work_repo)}}}},
+        })
+    assert set(gone.workspace("p").projects) == {"a"}, "folder 壞掉不排除專案"
+    assert "folder" in caplog.text
+    # 沒寫就是空字串，不是 None
+    assert config_from_dict({
+        "agent_token": "x",
+        "workspaces": {"p": {"projects": {"a": {"path": str(work_repo)}}}},
+    }).workspace("p").folder == ""
+
+
+def test_a_worktree_pointer_file_counts_as_a_git_project(tmp_path):
+    """worktree／submodule 的 `.git` 是**檔案**，一樣算 git 專案。"""
+    from chatroom_runner.config import is_git_project
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: ../repo/.git/worktrees/wt",
+                             encoding="utf-8")
+    assert is_git_project(wt)
+    assert not is_git_project(tmp_path / "nope")
 
 
 # ── stream 解析 ─────────────────────────────────────────────────
@@ -291,27 +399,27 @@ async def test_dashboard_marks_fetch_stale_without_blocking(tmp_path,
 
 # ── context 視窗預設與覆寫 ──────────────────────────────────────
 
-def test_context_window_defaults_to_the_real_model_window(tmp_path,
+def test_context_window_defaults_to_the_real_model_window(work_repo,
                                                           monkeypatch):
     """預設視窗是 1M。填 200k 的話每輪都在半路交接，而沒人會說還有空間。"""
     monkeypatch.delenv("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS", raising=False)
     cfg = config_from_dict({
         "agent_token": "x",
-        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}}}},
+        "workspaces": {"p": {"projects": {"only": {"path": str(work_repo)}}}},
     })
-    proj = cfg.project("p")
+    proj = cfg.workspace("p")
     assert proj.context_window_tokens == 1_000_000
     assert proj.context_soft_limit_tokens == 700_000
 
 
-def test_context_window_env_overrides_the_config_file(tmp_path, monkeypatch):
+def test_context_window_env_overrides_the_config_file(work_repo, monkeypatch):
     monkeypatch.setenv("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS", "500000")
     cfg = config_from_dict({
         "agent_token": "x",
-        "projects": {"p": {"repos": {"only": {"path": str(tmp_path)}},
-                           "context_window_tokens": 200000}},
+        "workspaces": {"p": {"projects": {"only": {"path": str(work_repo)}},
+                             "context_window_tokens": 200000}},
     })
-    assert cfg.project("p").context_window_tokens == 500_000
+    assert cfg.workspace("p").context_window_tokens == 500_000
 
 
 # ── init 事件的 MCP 連線狀態 ────────────────────────────────────
@@ -374,18 +482,18 @@ def test_project_flags_default_when_the_file_does_not_have_them(tmp_path,
     派工對話框裡，讀進來預設 False 會讓它們一聲不響地消失。
     """
     cfg = make_config(tmp_path, work_repo)
-    proj = cfg.project("ai-website")
+    proj = cfg.workspace("ai-website")
     assert proj.public is True
     assert proj.allow_browser_livetest is False
 
 
 def test_project_flags_are_read_from_the_file(tmp_path, work_repo):
-    cfg = make_config(tmp_path, work_repo, projects={
+    cfg = make_config(tmp_path, work_repo, workspaces={
         "a": {"public": False, "allow_browser_livetest": True,
-              "repos": {"r": {"path": str(work_repo),
+              "projects": {"r": {"path": str(work_repo),
                               "allowed_branches": ["*"]}}},
     })
-    proj = cfg.project("a")
+    proj = cfg.workspace("a")
     assert proj.public is False
     assert proj.allow_browser_livetest is True
 
@@ -393,21 +501,21 @@ def test_project_flags_are_read_from_the_file(tmp_path, work_repo):
 def test_only_public_projects_are_reported_to_the_hub(tmp_path, work_repo):
     """Hub 的 `projects` 形狀不變，變的是內容——只有標公開的上去。"""
     repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
-    cfg = make_config(tmp_path, work_repo, projects={
-        "open": {"repos": repos},
-        "secret": {"public": False, "repos": repos},
+    cfg = make_config(tmp_path, work_repo, workspaces={
+        "open": {"projects": repos},
+        "secret": {"public": False, "projects": repos},
     })
-    assert public_project_keys(cfg.projects) == ["open"]
-    assert "secret" in cfg.projects, "不公開不等於不能執行"
+    assert public_project_keys(cfg.workspaces) == ["open"]
+    assert "secret" in cfg.workspaces, "不公開不等於不能執行"
 
 
 def test_a_saved_config_round_trips_through_the_flags(tmp_path, work_repo):
     """App 寫回去的檔案，執行器讀得回同一組旗標。"""
     raw = {
         "hub_url": "http://test", "agent_token": "t",
-        "projects": {"a": {
+        "workspaces": {"a": {
             "public": False, "allow_browser_livetest": True,
-            "repos": {"r": {"path": str(work_repo),
+            "projects": {"r": {"path": str(work_repo),
                             "allowed_branches": ["*"]}},
             # 這一版執行器還不認得的欄位：讀的時候要無視，不能炸
             "future_field": {"x": 1},
@@ -416,8 +524,8 @@ def test_a_saved_config_round_trips_through_the_flags(tmp_path, work_repo):
     path = tmp_path / "config.json"
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
     cfg = load_config(path)
-    assert cfg.project("a").public is False
-    assert cfg.project("a").allow_browser_livetest is True
+    assert cfg.workspace("a").public is False
+    assert cfg.workspace("a").allow_browser_livetest is True
 
 
 def test_livetest_line_only_shows_up_when_the_project_allows_it():

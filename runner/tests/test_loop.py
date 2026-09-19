@@ -66,7 +66,7 @@ def _loop(cfg, hub, **kw):
 
 async def _register(loop):
     await loop.hub.register(loop.cfg.host, loop.cfg.label,
-                            list(loop.cfg.projects), loop.cfg.max_parallel,
+                            list(loop.cfg.workspaces), loop.cfg.max_parallel,
                             loop.cfg.version)
 
 
@@ -1112,9 +1112,9 @@ async def test_reload_rereads_the_config_without_touching_running_runs(
 
     # 設定檔換掉：多一個專案，原本那個改成不公開
     repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
-    write_config(path, tmp_path, work_repo, projects={
-        "ai-website": {"public": False, "repos": repos},
-        "chatroom": {"repos": repos},
+    write_config(path, tmp_path, work_repo, workspaces={
+        "ai-website": {"public": False, "projects": repos},
+        "chatroom": {"projects": repos},
     })
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
@@ -1122,8 +1122,8 @@ async def test_reload_rereads_the_config_without_touching_running_runs(
         headers=headers)).json()["command"]
     await loop.heartbeat()
 
-    assert set(loop.cfg.projects) == {"ai-website", "chatroom"}
-    assert loop.cfg.project("ai-website").public is False
+    assert set(loop.cfg.workspaces) == {"ai-website", "chatroom"}
+    assert loop.cfg.workspace("ai-website").public is False
     assert len(loop.active) == 1, "reload 不該動到正在跑的 run"
 
     row = await _command_row(app, cmd["id"])
@@ -1146,7 +1146,7 @@ async def test_reload_reports_the_new_public_projects_to_the_hub(
     room_id, headers = ops_room
     repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
     path = write_config(tmp_path / "config.json", tmp_path, work_repo,
-                        projects={"ai-website": {"repos": repos}})
+                        workspaces={"ai-website": {"projects": repos}})
     loop = _loop(load_config(path), runner_hub, config_path=path)
     assert await loop.start()
 
@@ -1158,9 +1158,9 @@ async def test_reload_reports_the_new_public_projects_to_the_hub(
 
     assert await _hub_projects() == ["ai-website"]
 
-    write_config(path, tmp_path, work_repo, projects={
-        "ai-website": {"public": False, "repos": repos},
-        "chatroom": {"repos": repos},
+    write_config(path, tmp_path, work_repo, workspaces={
+        "ai-website": {"public": False, "projects": repos},
+        "chatroom": {"projects": repos},
     })
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
                       json={"command": "reload"}, headers=headers)
@@ -1202,9 +1202,9 @@ async def test_only_public_projects_are_registered(
     """啟動時報給 Hub 的清單就只有公開的那些。"""
     app, _client = hub_app
     repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
-    cfg = make_config(tmp_path, work_repo, projects={
-        "open": {"repos": repos},
-        "secret": {"public": False, "repos": repos},
+    cfg = make_config(tmp_path, work_repo, workspaces={
+        "open": {"projects": repos},
+        "secret": {"public": False, "projects": repos},
     })
     loop = _loop(cfg, runner_hub)
     assert await loop.start()

@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger("chatroom_runner.config")
 
 # 預設值集中在這裡，改一個地方就好
 DEFAULT_MAX_PARALLEL = 3
@@ -125,8 +128,13 @@ def branch_allowed(branch: str, patterns: list[str]) -> bool:
 
 
 @dataclass(frozen=True)
-class RepoConfig:
-    """一個 git 工作樹。``path`` 由設定決定，brief 說了不算（§5.2）。"""
+class ProjectConfig:
+    """一個**專案**＝一個 git 工作樹（舊名 ``RepoConfig``）。
+
+    ``path`` 由設定決定，brief 說了不算（§5.2）；而且**必須是 git repo**，
+    載入時就驗（見 ``is_git_project``）——不是 git 的目錄在這裡沒有分支、
+    沒有快照，整套守衛與收尾附註都建立在「它是 repo」這個前提上。
+    """
 
     name: str
     path: Path
@@ -141,19 +149,29 @@ class RepoConfig:
 
 
 @dataclass(frozen=True)
-class ProjectConfig:
-    """一個允許的專案（Hub 的 ``project`` key）。"""
+class WorkspaceConfig:
+    """一個**工作區**＝底下擺著數個專案的外層資料夾（舊名 ``ProjectConfig``）。
+
+    🚨 跨界對照：這裡的 ``key`` 就是 **Hub 對外的 ``project`` key**（派工
+    body 的 ``project``、register 的 ``projects`` 清單）。Hub 不知道工作區
+    底下有幾個專案——那是這台機器本機的事。
+    """
 
     key: str
-    repos: dict[str, RepoConfig] = field(default_factory=dict)
+    # 工作區底下的專案（名稱 → 一個 git repo）
+    projects: dict[str, ProjectConfig] = field(default_factory=dict)
+    # 工作區的外層資料夾（絕對路徑，選填）。**執行器的邏輯不依賴它**：只給
+    # App 顯示，以及當 skill_dirs／專案路徑的預設起點。不存在只警告不排除
+    # ——路徑打錯不該讓一個本來跑得動的工作區停擺
+    folder: str = ""
     model: str = DEFAULT_MODEL
     max_turns: int = DEFAULT_MAX_TURNS
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
     wall_clock_seconds: int = DEFAULT_WALL_CLOCK_SECONDS
     context_soft_limit_ratio: float = DEFAULT_CONTEXT_SOFT_LIMIT_RATIO
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW_TOKENS
-    # 沒指名 repo 時用哪一個（見 `run.resolve_repo` 的規則）
-    default_repo: str = ""
+    # 沒指名專案時用哪一個（見 `run.resolve_repo` 的規則）
+    default_project: str = ""
     # 起 claude 時要 `--add-dir` 進來的目錄。Claude Code 的 skill 發現只往上
     # 找到 git root，而專案的 skill 常常放在 repo 的**上一層**（cwd 是子
     # repo 時根本掃不到）；`--add-dir` 進來的目錄其 `.claude/skills/` 會載入
@@ -161,19 +179,40 @@ class ProjectConfig:
     # kind → 這種派工**必須遵守**的 skill 名清單。名字會進 `--allowedTools`
     # 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它
     skills: dict[str, list[str]] = field(default_factory=dict)
+    # 這個工作區**不分 kind**都要一開始就載入的 skill（至多一個）。
+    # 與 `skills`（kind → 必守清單）是兩套語意：那個看派工類型，這個是
+    # 「在這個工作區工作就要先載它」
+    primary_skill: str = ""
     # guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時用）。
     # **只放行位置，敏感檔名的檢查照走**
     extra_write_dirs: list[Path] = field(default_factory=list)
-    # 要不要讓**別人**在派工對話框看到這個專案。只影響執行器往 Hub 報的
-    # `projects` 清單，不影響本機白名單語意：非公開的專案照樣能被直接
+    # 要不要讓**別人**在派工對話框看到這個工作區。只影響執行器往 Hub 報的
+    # `projects` 清單，不影響本機白名單語意：非公開的工作區照樣能被直接
     # 指名派工，只是不會出現在別人的選單裡
     public: bool = True
-    # 這個專案的 run 可不可以開瀏覽器做實機測試。True 時 ticket 模板會多
+    # 這個工作區的 run 可不可以開瀏覽器做實機測試。True 時 ticket 模板會多
     # 一句「能做就做」；False 時整句不出現（模板預設的「不是交付門檻」照舊）
     allow_browser_livetest: bool = False
+    # 被排除的專案（名稱 → 原因）。**不讓整台執行器起不來**，但要留著讓
+    # 自檢與 log 講得出「少了哪一個、為什麼」——靜默少一個專案的症狀是
+    # 派工落在剩下那個上面，而沒有地方說另一個被跳過了
+    invalid_projects: dict[str, str] = field(default_factory=dict)
 
     def skills_for(self, kind: str) -> list[str]:
         return list(self.skills.get(kind, []))
+
+    def all_skills_for(self, kind: str) -> list[str]:
+        """這一輪要預先授權／寫進契約的 skill：優先載入的那個 + kind 的必守。
+
+        `primary_skill` 不分 kind 都要在，否則 run 一叫它就卡在權限提示。
+        """
+        names: list[str] = []
+        if self.primary_skill:
+            names.append(self.primary_skill)
+        for name in self.skills_for(kind):
+            if name not in names:
+                names.append(name)
+        return names
 
     @property
     def context_soft_limit_tokens(self) -> int:
@@ -186,7 +225,8 @@ class RunnerConfig:
     agent_token: str
     host: str
     label: str
-    projects: dict[str, ProjectConfig]
+    # 本機工作區（key ＝ Hub 對外的 `project` key）
+    workspaces: dict[str, WorkspaceConfig]
     claude_bin: list[str]
     claude_config_dir: Path
     state_dir: Path
@@ -248,19 +288,31 @@ class RunnerConfig:
     def usage_db(self) -> Path:
         return self.state_dir / "usage.db"
 
-    def project(self, key: str) -> ProjectConfig:
-        proj = self.projects.get(key)
-        if proj is None:
+    def workspace(self, key: str) -> WorkspaceConfig:
+        """依 key 取工作區。``key`` 就是 Hub 派工 body 裡的 ``project``。"""
+        ws = self.workspaces.get(key)
+        if ws is None:
             raise ConfigError(
-                f"專案「{key}」不在允許清單裡，這筆派工不會執行。")
-        return proj
+                f"工作區「{key}」不在允許清單裡，這筆派工不會執行。")
+        return ws
 
 
-def _repo_from(name: str, raw: dict) -> RepoConfig:
+def is_git_project(path: str | os.PathLike[str]) -> bool:
+    """``<path>/.git`` 在不在。
+
+    目錄＝一般 clone，**檔案**＝worktree／submodule 的指標檔（``gitdir: ...``），
+    兩種都算。不跑 `git rev-parse`：自檢那一關本來就會對每個專案跑 git，
+    載入時多起一個子進程只會讓啟動變慢。
+    """
+    p = Path(path) / ".git"
+    return p.is_dir() or p.is_file()
+
+
+def _project_from(name: str, raw: dict) -> ProjectConfig:
     path = raw.get("path")
     if not path:
-        raise ConfigError(f"repo「{name}」沒有 path")
-    return RepoConfig(
+        raise ConfigError(f"專案「{name}」沒有 path")
+    return ProjectConfig(
         name=name,
         path=Path(path),
         allowed_branches=list(raw.get("allowed_branches", [])),
@@ -280,6 +332,21 @@ def skill_manifest(name: str, skill_dirs: list[Path]) -> Path | None:
     return None
 
 
+def _alias_get(raw: dict, new_key: str, old_key: str, where: str):
+    """新鍵優先、舊鍵相容。兩個都寫了就用新的，並留一句警告。
+
+    舊設定檔（``projects``／``repos``／``default_repo``）照樣讀得進來；靜默
+    只吃一邊的話，改了舊鍵的人會看到設定「沒有生效」而沒有任何地方說原因。
+    """
+    if new_key in raw and old_key in raw:
+        log.warning("%s 同時有「%s」與舊鍵「%s」，以「%s」為準",
+                    where, new_key, old_key, new_key)
+        return raw.get(new_key)
+    if new_key in raw:
+        return raw.get(new_key)
+    return raw.get(old_key)
+
+
 def _skills_from(key: str, raw: dict, skill_dirs: list[Path]
                  ) -> dict[str, list[str]]:
     """``skills`` 的解析與驗證。
@@ -289,7 +356,7 @@ def _skills_from(key: str, raw: dict, skill_dirs: list[Path]
     """
     skills_raw = raw.get("skills") or {}
     if not isinstance(skills_raw, dict):
-        raise ConfigError(f"專案「{key}」的 skills 要是 kind → 清單的物件")
+        raise ConfigError(f"工作區「{key}」的 skills 要是 kind → 清單的物件")
     skills: dict[str, list[str]] = {}
     for kind, names in skills_raw.items():
         if isinstance(names, str):
@@ -300,7 +367,7 @@ def _skills_from(key: str, raw: dict, skill_dirs: list[Path]
                 where = "、".join(str(d) for d in skill_dirs) or "（沒有設定"\
                     " skill_dirs）"
                 raise ConfigError(
-                    f"專案「{key}」的 {kind} 指定 skill「{name}」，"
+                    f"工作區「{key}」的 {kind} 指定 skill「{name}」，"
                     f"但在 {where} 底下都找不到 "
                     f".claude/skills/{name}/SKILL.md")
         if kind_skills:
@@ -308,20 +375,56 @@ def _skills_from(key: str, raw: dict, skill_dirs: list[Path]
     return skills
 
 
-def _project_from(key: str, raw: dict) -> ProjectConfig:
-    repos_raw = raw.get("repos") or {}
-    if not repos_raw:
-        raise ConfigError(f"專案「{key}」沒有任何 repo")
-    repos = {n: _repo_from(n, r) for n, r in repos_raw.items()}
-    default_repo = raw.get("default_repo") or (
-        next(iter(repos)) if len(repos) == 1 else "")
-    if default_repo and default_repo not in repos:
+def _primary_skill_from(key: str, raw: dict, skill_dirs: list[Path]) -> str:
+    """``primary_skill`` 的解析與驗證（沿用 `skills` 那一套）。
+
+    缺 SKILL.md 一樣是**設定錯誤**：契約會叫 run 開工先載它，而載不到的時候
+    headless 那邊不會有人發現。
+    """
+    name = str(raw.get("primary_skill") or "").strip()
+    if not name:
+        return ""
+    if skill_manifest(name, skill_dirs) is None:
+        where = "、".join(str(d) for d in skill_dirs) or "（沒有設定 skill_dirs）"
         raise ConfigError(
-            f"專案「{key}」的 default_repo「{default_repo}」不在 repos 裡")
+            f"工作區「{key}」的 primary_skill「{name}」，"
+            f"但在 {where} 底下都找不到 .claude/skills/{name}/SKILL.md")
+    return name
+
+
+def _workspace_from(key: str, raw: dict) -> WorkspaceConfig:
+    where = f"工作區「{key}」"
+    projects_raw = _alias_get(raw, "projects", "repos", where) or {}
+    if not projects_raw:
+        raise ConfigError(f"{where}沒有任何專案")
+    projects: dict[str, ProjectConfig] = {}
+    invalid: dict[str, str] = {}
+    for name, item in projects_raw.items():
+        proj = _project_from(name, item)
+        # 專案必須是 git repo。**只排除那一個，不讓整台執行器起不來**：
+        # 一個打錯的路徑不該讓其他工作區也領不到單
+        if not is_git_project(proj.path):
+            reason = f"不是 git 專案（{proj.path} 底下找不到 .git），已排除"
+            invalid[name] = reason
+            log.error("%s的專案「%s」%s", where, name, reason)
+            continue
+        projects[name] = proj
+    default_project = _alias_get(raw, "default_project", "default_repo",
+                                 where) or (
+        next(iter(projects)) if len(projects) == 1 else "")
+    if default_project and default_project not in projects:
+        raise ConfigError(
+            f"{where}的 default_project「{default_project}」不在專案清單裡"
+            + (f"（被排除的：{'、'.join(invalid)}）" if invalid else ""))
+    folder = str(raw.get("folder") or "").strip()
+    if folder and not Path(folder).is_dir():
+        log.warning("%s的 folder「%s」不存在（只是顯示用，不影響執行）",
+                    where, folder)
     skill_dirs = [Path(str(p)) for p in raw.get("skill_dirs", [])]
-    return ProjectConfig(
+    return WorkspaceConfig(
         key=key,
-        repos=repos,
+        projects=projects,
+        folder=folder,
         model=raw.get("model") or DEFAULT_MODEL,
         max_turns=int(raw.get("max_turns", DEFAULT_MAX_TURNS)),
         max_budget_usd=float(raw.get("max_budget_usd",
@@ -335,23 +438,26 @@ def _project_from(key: str, raw: dict) -> ProjectConfig:
             os.environ.get("CHATROOM_RUNNER_CONTEXT_WINDOW_TOKENS")
             or raw.get("context_window_tokens",
                        DEFAULT_CONTEXT_WINDOW_TOKENS)),
-        default_repo=default_repo,
+        default_project=default_project,
         skill_dirs=skill_dirs,
         skills=_skills_from(key, raw, skill_dirs),
+        primary_skill=_primary_skill_from(key, raw, skill_dirs),
         extra_write_dirs=[Path(str(p))
                           for p in raw.get("extra_write_dirs", [])],
         public=bool(raw.get("public", True)),
         allow_browser_livetest=bool(raw.get("allow_browser_livetest", False)),
+        invalid_projects=invalid,
     )
 
 
-def public_project_keys(projects: dict[str, ProjectConfig]) -> list[str]:
-    """要報給 Hub 的專案清單——**只有標公開的**。
+def public_project_keys(workspaces: dict[str, WorkspaceConfig]) -> list[str]:
+    """要報給 Hub 的 `projects` 清單——**只有標公開的**。
 
-    Hub 的 `projects` 欄位形狀不變（純字串陣列），變的只是內容：沒標公開的
-    專案留在本機白名單裡照常可執行，但不會出現在別人的派工對話框。
+    🚨 跨界：回傳的是 Hub 語意的 `project` key（＝本機工作區 key）。Hub 的
+    `projects` 欄位形狀不變（純字串陣列），變的只是內容：沒標公開的工作區
+    留在本機白名單裡照常可執行，但不會出現在別人的派工對話框。
     """
-    return [k for k, p in projects.items() if p.public]
+    return [k for k, w in workspaces.items() if w.public]
 
 
 def _as_argv(raw) -> list[str]:
@@ -383,10 +489,10 @@ def load_config(path: str | os.PathLike[str] | None = None) -> RunnerConfig:
 
 
 def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
-    projects_raw = raw.get("projects") or {}
-    if not projects_raw:
-        raise ConfigError("設定檔沒有 projects——空的允許清單領不到任何單。")
-    projects = {k: _project_from(k, v) for k, v in projects_raw.items()}
+    workspaces_raw = _alias_get(raw, "workspaces", "projects", "設定檔") or {}
+    if not workspaces_raw:
+        raise ConfigError("設定檔沒有 workspaces——空的允許清單領不到任何單。")
+    workspaces = {k: _workspace_from(k, v) for k, v in workspaces_raw.items()}
 
     token = (raw.get("agent_token") or os.environ.get("CHATROOM_TOKEN") or "")
     if not token and raw.get("token_env_file"):
@@ -406,7 +512,7 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         agent_token=token,
         host=raw.get("host") or os.environ.get("COMPUTERNAME") or "localhost",
         label=raw.get("label") or "runner",
-        projects=projects,
+        workspaces=workspaces,
         claude_bin=_as_argv(raw.get("claude_bin")),
         claude_config_dir=claude_config_dir,
         state_dir=state_dir,

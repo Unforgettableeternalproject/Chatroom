@@ -198,6 +198,10 @@ class RunnerHub:
                        max_parallel: int, version: str) -> dict:
         """註冊。同 host+label 冪等；Hub 只在**建立那一次**回 ``runner_token``。
 
+        🚨 跨界：``projects`` 是 **Hub 語意**的專案白名單，內容是本機的
+        **工作區 key**（見 `config.public_project_keys`）。Hub／DB／bridge
+        的欄位名沒有跟著本機改名，這裡送的形狀不變。
+
         回來若帶 token 就存進本機狀態檔——下一次啟動沒有它就註冊不回去。
         """
         body = await self._json(

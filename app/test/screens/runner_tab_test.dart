@@ -25,12 +25,12 @@ void main() {
   final config = RunnerConfigFile(
     path: r'E:\Chatroom\Runner\config.json',
     raw: const {},
-    projects: const [
-      RunnerProject(
+    workspaces: const [
+      RunnerWorkspace(
         key: 'chatroom',
         skillDirs: [r'C:\repos'],
-        repos: {'Chatroom': r'C:\repos\Chatroom'},
-        defaultRepo: 'Chatroom',
+        projects: {'Chatroom': RunnerProject(path: r'C:\repos\Chatroom')},
+        defaultProject: 'Chatroom',
       ),
     ],
     modified: DateTime(2026, 9, 18),

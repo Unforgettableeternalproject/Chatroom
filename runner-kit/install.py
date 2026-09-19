@@ -192,7 +192,7 @@ def build_config(example: dict, *, hub_url: str, agent_token: str,
     以樣板為底、只覆蓋安裝器問得到的那幾個欄位：其餘（退避階梯、允許的
     網域、軟上限…）是樣板作者調過的預設值，安裝器沒有理由自己重寫一份。
 
-    `projects` 一律留空：安裝器不問 repo 路徑——那是「加專案」的事，
+    `workspaces` 一律留空：安裝器不問專案路徑——那是「加工作區」的事，
     而它需要的資訊（哪些分支可動、skill 目錄在哪）不是安裝當下答得出來的。
     """
     cfg = dict(example)
@@ -211,8 +211,10 @@ def build_config(example: dict, *, hub_url: str, agent_token: str,
         "claude_config_dir": str(state_dir / "claude-config"),
         # 執行器起 run 時掛給 claude 的 MCP 伺服器就在這一包裡
         "bridge_path": str(kit_dir / "bridge"),
-        "projects": {},
+        # 工作區（舊鍵 `projects`）留空；樣板若是舊格式，舊鍵也要一起清掉
+        "workspaces": {},
     })
+    cfg.pop("projects", None)
     return cfg
 
 
@@ -445,10 +447,10 @@ def main(argv: list[str] | None = None) -> None:
 
 還要做兩件只有人做得到的事：
 
-1. 加專案——設定檔的 `projects` 現在是空的，執行器會註冊上線但領不到任何
-   單。用 App 的執行器分頁加，或直接編輯 {config_path}。
+1. 加工作區——設定檔的 `workspaces` 現在是空的，執行器會註冊上線但領不到
+   任何單。用 App 的執行器分頁加，或直接編輯 {config_path}。
    ⚠️ kit 不含要被派工的 repo：那些工作樹仍然要存在於這台機器上，路徑填進
-   `projects.<key>.repos.<name>.path`。
+   `workspaces.<key>.projects.<name>.path`。
 
 2. 登入獨立的 CLAUDE_CONFIG_DIR（只要做一次）：
 

@@ -156,7 +156,7 @@ class RunnerLoop:
         problems += await self._check_claude()
         if self.cfg.require_gpg:
             problems += await self._check_gpg()
-        problems += await self._check_repos()
+        problems += await self._check_projects()
         problems += self._check_skill_dirs()
         await self._probe_claude_ai_connectors()
         return problems
@@ -252,24 +252,29 @@ class RunnerLoop:
                     f"{err.decode('utf-8', 'replace').strip()[:200]}"]
         return []
 
-    async def _check_repos(self) -> list[str]:
+    async def _check_projects(self) -> list[str]:
         problems: list[str] = []
-        for project in self.cfg.projects.values():
-            for name, repo in project.repos.items():
-                if not Path(repo.path).is_dir():
-                    problems.append(f"{project.key}/{name}：路徑不存在"
-                                    f"（{repo.path}）")
+        for workspace in self.cfg.workspaces.values():
+            # 載入時被排除的專案要在這裡講出來：靜默少一個專案的症狀是
+            # 派工全落在剩下那個上面，而沒有地方說另一個沒被載進來
+            for name, reason in workspace.invalid_projects.items():
+                problems.append(f"{workspace.key}/{name}：{reason}")
+            for name, project in workspace.projects.items():
+                if not Path(project.path).is_dir():
+                    problems.append(f"{workspace.key}/{name}：路徑不存在"
+                                    f"（{project.path}）")
                     continue
-                res = await gitops.git(repo.path, "status", "--porcelain")
+                res = await gitops.git(project.path, "status", "--porcelain")
                 if not res.ok:
-                    problems.append(f"{project.key}/{name}：git status 失敗"
+                    problems.append(f"{workspace.key}/{name}：git status 失敗"
                                     f"（{res.err[:120]}）")
                     continue
-                branch = await gitops.current_branch(repo.path)
-                if not repo.allows(branch):
+                branch = await gitops.current_branch(project.path)
+                if not project.allows(branch):
                     problems.append(
-                        f"{project.key}/{name}：目前在分支「{branch}」，"
-                        f"不在允許清單（{'、'.join(repo.allowed_branches)}）裡")
+                        f"{workspace.key}/{name}：目前在分支「{branch}」，"
+                        f"不在允許清單"
+                        f"（{'、'.join(project.allowed_branches)}）裡")
         return problems
 
     def _check_skill_dirs(self) -> list[str]:
@@ -279,11 +284,11 @@ class RunnerLoop:
         ——遠端只會看到一筆「照自己的想法做完」的 run，沒有任何錯誤。
         """
         problems: list[str] = []
-        for project in self.cfg.projects.values():
-            for d in project.skill_dirs:
+        for workspace in self.cfg.workspaces.values():
+            for d in workspace.skill_dirs:
                 if not Path(d).is_dir():
                     problems.append(
-                        f"{project.key}：skill_dirs 的「{d}」不是目錄")
+                        f"{workspace.key}：skill_dirs 的「{d}」不是目錄")
         return problems
 
     # ---------- 啟動對帳（孤兒 run）----------
@@ -380,7 +385,7 @@ class RunnerLoop:
         """自檢 → 註冊 → 對帳。回傳「可不可以開始領單」。"""
         self.state.selfcheck_problems = await self.selfcheck()
         await self.hub.register(self.cfg.host, self.cfg.label,
-                                public_project_keys(self.cfg.projects),
+                                public_project_keys(self.cfg.workspaces),
                                 self.cfg.max_parallel, self.cfg.version)
         failed = bool(self.state.selfcheck_problems)
         if failed:
@@ -640,10 +645,10 @@ class RunnerLoop:
         self.cfg = cfg
         # 公開專案清單只在 register 送，所以要補報一次（下一次心跳做）
         self.state.reregister_pending = True
-        public = public_project_keys(cfg.projects)
-        log.info("reload：設定已重讀，專案 %d 個（公開 %d 個）",
-                 len(cfg.projects), len(public))
-        note = (f"設定已重讀，專案 {len(cfg.projects)} 個"
+        public = public_project_keys(cfg.workspaces)
+        log.info("reload：設定已重讀，工作區 %d 個（公開 %d 個）",
+                 len(cfg.workspaces), len(public))
+        note = (f"設定已重讀，工作區 {len(cfg.workspaces)} 個"
                 f"（公開 {len(public)} 個）；進行中的 run 不受影響")
         if self.active:
             note += f"，手上 {len(self.active)} 筆沿用舊設定跑完"
@@ -657,7 +662,7 @@ class RunnerLoop:
         """
         try:
             await self.hub.register(self.cfg.host, self.cfg.label,
-                                    public_project_keys(self.cfg.projects),
+                                    public_project_keys(self.cfg.workspaces),
                                     self.cfg.max_parallel, self.cfg.version)
         except HubError as exc:
             log.warning("reload：重新註冊沒送成，下一輪再試（%s）", exc)

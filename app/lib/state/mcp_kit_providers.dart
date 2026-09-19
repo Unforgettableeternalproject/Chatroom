@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/util/env_file.dart';
 import '../l10n/l10n.dart';
 import '../models/host_kit.dart';
 import 'host_probe.dart';
@@ -182,18 +183,27 @@ final mcpEnvProvider = FutureProvider<McpEnv?>((ref) async {
   try {
     final file = File(kit.envFile);
     if (!await file.exists()) return null;
-    final values = <String, String>{};
-    for (final line in await file.readAsLines()) {
-      final text = line.trim();
-      if (text.isEmpty || text.startsWith('#')) continue;
-      final at = text.indexOf('=');
-      if (at <= 0) continue;
-      values[text.substring(0, at).trim()] = text.substring(at + 1).trim();
-    }
+    final values = parseEnvText(await file.readAsString());
     return McpEnv(
       url: _urlFrom(values),
       token: values['CHATROOM_TOKEN'] ?? '',
     );
+  } on Object {
+    return null;
+  }
+});
+
+/// bridge 那份 `.env` 的**原始鍵值**，給可編輯的連線設定表單用。
+///
+/// 與 `mcpEnvProvider` 分開：那個回的是畫面要的兩題（連哪裡、拿哪把鑰匙），
+/// 表單要的是每一個 key 現在寫著什麼。讀不到檔案回 `null`。
+final mcpEnvRawProvider = FutureProvider<Map<String, String>?>((ref) async {
+  final kit = await ref.watch(mcpKitProvider.future);
+  if (kit == null || kit.envFile.isEmpty) return null;
+  try {
+    final file = File(kit.envFile);
+    if (!await file.exists()) return null;
+    return parseEnvText(await file.readAsString());
   } on Object {
     return null;
   }

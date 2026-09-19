@@ -18,6 +18,33 @@ void main() {
       }
     });
 
+    test('分組小標指得到真的存在的條目（$locale）', () {
+      for (final entry in docs.entries) {
+        for (final section in entry.value.sections) {
+          for (final at in section.groups.entries) {
+            expect(at.key, inInclusiveRange(0, section.items.length - 1),
+                reason: '${entry.key} 的「${section.title}」分組指到第 ${at.key} 條，'
+                    '但那一節只有 ${section.items.length} 條');
+            expect(at.value, isNotEmpty);
+          }
+        }
+      }
+    });
+
+    // 只有小標沒有內文的條目在畫面上是一行粗體字，看起來像「這段還沒寫」。
+    test('粗體小標後面要有內文（$locale）', () {
+      for (final entry in docs.entries) {
+        for (final section in entry.value.sections) {
+          for (final item in section.items) {
+            if (!item.hasLead) continue;
+            expect(item.chunks.length, greaterThan(1),
+                reason: '${entry.key} 的「${section.title}」有一條只有小標'
+                    '「${item.chunks.first.text}」');
+          }
+        }
+      }
+    });
+
     test('每一節都有標題與至少一條說明（$locale）', () {
       for (final entry in docs.entries) {
         final doc = entry.value;
