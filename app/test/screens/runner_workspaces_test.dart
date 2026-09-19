@@ -77,18 +77,33 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
-  testWidgets('工作區卡：資料夾、專案清單與預設標記、加減的入口都在',
+  /// 卡片預設收合，內容要點開標題列才在。
+  Future<void> expand(WidgetTester tester) async {
+    await tester.tap(find.text('chatroom'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('工作區卡：收合時只剩標題列，展開才有專案、預設標記與加減入口',
       (tester) async {
     sizeUp(tester);
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
 
+    // 收合：標題列（key、資料夾、公開狀態）在，底下那一層不在
     expect(find.text('新增工作區'), findsOneWidget);
     expect(find.text('chatroom'), findsOneWidget);
     expect(find.text(r'C:\repos'), findsWidgets);
-    expect(find.text(r'Chatroom（預設）：C:\repos\Chatroom'), findsOneWidget);
-    expect(find.text(r'UEP：C:\repos\UEP'), findsOneWidget);
-    // 預設的那個不給「設為預設」，非預設的才有
+    expect(find.text('公開'), findsOneWidget);
+    expect(find.text('加專案'), findsNothing);
+
+    await expand(tester);
+
+    expect(find.text('Chatroom'), findsOneWidget);
+    expect(find.text(r'C:\repos\Chatroom'), findsOneWidget);
+    expect(find.text('UEP'), findsOneWidget);
+    expect(find.text(r'C:\repos\UEP'), findsOneWidget);
+    // 預設的那一張掛「預設」標記，且不給「設為預設」，非預設的才有
+    expect(find.text('預設'), findsOneWidget);
     expect(find.text('設為預設'), findsOneWidget);
     expect(find.text('加專案'), findsOneWidget);
     expect(find.text('優先載入 skill'), findsOneWidget);
@@ -99,6 +114,7 @@ void main() {
     sizeUp(tester);
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
+    await expand(tester);
 
     expect(find.text('pm'), findsOneWidget,
         reason: '檔案裡寫著 pm，畫面卻看不到的話，存檔就會把它洗掉');
@@ -109,9 +125,10 @@ void main() {
     await tester.pumpWidget(wrap());
     await tester.pumpAndSettle();
 
-    final button = find.text('移除工作區');
-    await tester.ensureVisible(button);
-    await tester.tap(button);
+    // 移除搬進標題列的溢位選單
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移除工作區'));
     await tester.pumpAndSettle();
 
     expect(find.text('要移除工作區「chatroom」嗎？'), findsOneWidget);

@@ -28,7 +28,7 @@ void main() {
     // 高度要容得下整頁：新增「資料與安全」那一區之後，1900 會把它
     // 推到畫面外——ListView 不會 overflow，所以那種漏拍**不會報錯**，
     // 只是驗收圖裡默默少了一塊
-    tester.view.physicalSize = const Size(760, 2250);
+    tester.view.physicalSize = const Size(760, 2100);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -69,6 +69,21 @@ void main() {
               true,
               '狀態：Ready',
             )),
+        // 設定區要畫出實際的表單，不是「讀不到」那一行——版面改了就是這裡
+        hostEnvRawProvider.overrideWith((ref) async => const {
+              'CHATROOM_HOST': '0.0.0.0',
+              'CHATROOM_PORT': '8787',
+              'CHATROOM_TOKEN': 'demo-agent-token-not-real',
+              'CHATROOM_IDLE_TIMEOUT': '600',
+              'CHATROOM_PURGE_ARCHIVED_DAYS': '30',
+              'CHATROOM_RUN_DAILY_QUOTA': '20',
+              'CHATROOM_RUN_QUEUE_CAP': '5',
+            }),
+        mcpEnvRawProvider.overrideWith((ref) async => const {
+              'CHATROOM_URL': 'http://26.176.231.43:8787',
+              'CHATROOM_TOKEN': 'demo-agent-token-not-real',
+              'CHATROOM_DEFAULT_NAME': 'Minka',
+            }),
         hostActionsProvider.overrideWith(
             (ref) => const HostActions(r'C:\kits\chatroom-host-kit')),
         // 同一台機器同時是主持人與成員——多半就是這樣，所以圖要涵蓋兩塊

@@ -6837,5 +6837,131 @@
   "hostRunnerFieldDefaultHint": "留空＝沿用執行器預設",
   "@hostRunnerFieldDefaultHint": {
     "description": "進階數值欄位的提示"
+  },
+  "hostRunnerChipPublic": "公開",
+  "@hostRunnerChipPublic": {
+    "description": "工作區卡標題列的狀態 chip：這個工作區公開給他人派工"
+  },
+  "hostRunnerChipPrivate": "私有",
+  "@hostRunnerChipPrivate": {
+    "description": "工作區卡標題列的狀態 chip：這個工作區不公開"
+  },
+  "hostRunnerChipLivetest": "瀏覽器測試",
+  "@hostRunnerChipLivetest": {
+    "description": "工作區卡標題列的狀態 chip：允許瀏覽器實機測試"
+  },
+  "hostRunnerBranchesAllowed": "可切換：{branches}",
+  "@hostRunnerBranchesAllowed": {
+    "description": "專案子卡上的分支規則摘要：允許 checkout 的分支",
+    "placeholders": {
+      "branches": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerBranchesPush": "可推送：{branches}",
+  "@hostRunnerBranchesPush": {
+    "description": "專案子卡上的分支規則摘要：允許推上去的分支",
+    "placeholders": {
+      "branches": {
+        "type": "String"
+      }
+    }
+  },
+  "hostEnvLabelBind": "綁定位址",
+  "@hostEnvLabelBind": {
+    "description": "Hub 設定：Hub 監聽哪個網路位址"
+  },
+  "hostEnvLabelPort": "埠號",
+  "@hostEnvLabelPort": {
+    "description": "Hub 設定：Hub 監聽的埠號"
+  },
+  "hostEnvLabelHubToken": "Hub token",
+  "@hostEnvLabelHubToken": {
+    "description": "Hub 設定：唯讀顯示的 Hub token"
+  },
+  "hostEnvLabelIdle": "閒置逾時（分鐘）",
+  "@hostEnvLabelIdle": {
+    "description": "Hub 設定：agent 閒置多久被移出房間"
+  },
+  "hostEnvLabelPurge": "封存房自動刪除（天）",
+  "@hostEnvLabelPurge": {
+    "description": "Hub 設定：封存房保留幾天"
+  },
+  "hostEnvLabelQuota": "每日派工配額",
+  "@hostEnvLabelQuota": {
+    "description": "Hub 設定：一天最多派幾次工"
+  },
+  "hostEnvLabelQueueCap": "派工佇列上限",
+  "@hostEnvLabelQueueCap": {
+    "description": "Hub 設定：排隊中的派工上限"
+  },
+  "hostEnvLabelAttachmentDir": "附件目錄",
+  "@hostEnvLabelAttachmentDir": {
+    "description": "Hub 進階設定：附件存哪裡"
+  },
+  "hostEnvLabelLogLevel": "日誌等級",
+  "@hostEnvLabelLogLevel": {
+    "description": "Hub 進階設定：日誌詳細程度"
+  },
+  "hostEnvLabelSubagentTimeout": "子代理逾時（秒）",
+  "@hostEnvLabelSubagentTimeout": {
+    "description": "Hub 進階設定：子代理閒置多久被回收"
+  },
+  "hostEnvLabelHoldMax": "hold 最長時間（秒）",
+  "@hostEnvLabelHoldMax": {
+    "description": "Hub 進階設定：一次 hold 最久多長"
+  },
+  "hostEnvLabelDefaultName": "預設代稱",
+  "@hostEnvLabelDefaultName": {
+    "description": "Agent 設定：這台機器的 agent 進房時用的名字"
+  },
+  "hostEnvLabelAgentToken": "Agent token",
+  "@hostEnvLabelAgentToken": {
+    "description": "Agent 設定：agent 連 Hub 用的 token"
+  },
+  "hostEnvLabelAgentKind": "Agent 種類",
+  "@hostEnvLabelAgentKind": {
+    "description": "Agent 設定：claude／codex 之類"
+  },
+  "hostEnvLabelHostName": "主機名稱",
+  "@hostEnvLabelHostName": {
+    "description": "Agent 設定：這台機器對外顯示的名字"
+  },
+  "hostEnvLabelStateTtl": "狀態保留天數",
+  "@hostEnvLabelStateTtl": {
+    "description": "Agent 進階設定：本機狀態檔保留幾天"
+  },
+  "hostEnvDefaultHint": "留空＝用預設值",
+  "@hostEnvDefaultHint": {
+    "description": "設定欄位的提示：沒填就用內建預設"
+  },
+  "hostEnvLogLevelDefault": "預設",
+  "@hostEnvLogLevelDefault": {
+    "description": "日誌等級下拉選單裡的「沒設定」那一項"
+  },
+  "hostEnvTokenReadOnly": "要換 token 請跑 scripts/rotate-token.py",
+  "@hostEnvTokenReadOnly": {
+    "description": "Hub token 唯讀的說明"
+  },
+  "hostEnvSharedFile": "與 Hub 共用同一份設定檔，連線位址與 token 在 Hub 分頁改。",
+  "@hostEnvSharedFile": {
+    "description": "MCP 與 Hub 讀同一個 .env 時的說明"
+  },
+  "hostEnvRestartHub": "重啟 Hub",
+  "@hostEnvRestartHub": {
+    "description": "存檔後直接重啟 Hub 的按鈕"
+  },
+  "hostEnvRestarting": "重啟中…",
+  "@hostEnvRestarting": {
+    "description": "重啟 Hub 進行中的按鈕字樣"
+  },
+  "hostEnvRestartDone": "已重啟 Hub。",
+  "@hostEnvRestartDone": {
+    "description": "重啟完成後的一句提示"
+  },
+  "hostEnvPanelAgentSettings": "Agent 接入",
+  "@hostEnvPanelAgentSettings": {
+    "description": "成員分頁上設定區的標題"
   }
 }

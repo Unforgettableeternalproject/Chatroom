@@ -110,9 +110,12 @@ void main() {
     await tester.tap(find.text('執行器'));
     await tester.pumpAndSettle();
 
+    expect(find.text('chatroom'), findsOneWidget);
+    // 工作區卡預設收合，兩個開關在展開的那一層
+    await tester.tap(find.text('chatroom'));
+    await tester.pumpAndSettle();
     expect(find.text('公開給他人派工'), findsOneWidget);
     expect(find.text('允許瀏覽器實機測試'), findsOneWidget);
-    expect(find.text('chatroom'), findsOneWidget);
   });
 
   testWidgets('🔴 只有執行器一種 kit → 不畫分頁列，直接顯示那一頁',
@@ -123,7 +126,7 @@ void main() {
 
     expect(find.byType(TabBar), findsNothing,
         reason: '只有一個分頁的分頁列會讓人以為另一邊還有東西可看');
-    expect(find.text('公開給他人派工'), findsOneWidget);
+    expect(find.text('chatroom'), findsOneWidget);
   });
 
   testWidgets('🔴 裝得了 kit 的機器：一包都沒有也有三個分頁，那是安裝入口',
@@ -148,7 +151,7 @@ void main() {
     await tester.tap(find.text('執行器').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('公開給他人派工'), findsOneWidget);
+    expect(find.text('chatroom'), findsOneWidget);
     expect(find.text('安裝與更新'), findsOneWidget);
   });
 }
