@@ -6838,6 +6838,10 @@
   "@hostRunnerFieldDefaultHint": {
     "description": "進階數值欄位的提示"
   },
+  "hostRunnerNoLimitHint": "留空＝不設上限",
+  "@hostRunnerNoLimitHint": {
+    "description": "回合上限欄位的提示：執行器預設不設輪數上限"
+  },
   "hostRunnerChipPublic": "公開",
   "@hostRunnerChipPublic": {
     "description": "工作區卡標題列的狀態 chip：這個工作區公開給他人派工"

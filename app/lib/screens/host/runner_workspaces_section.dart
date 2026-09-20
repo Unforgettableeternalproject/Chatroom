@@ -12,6 +12,7 @@ import '../../state/runs_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/reveal.dart';
 import '../../widgets/uep_button.dart';
+import 'host_value_row.dart';
 
 /// 執行器的工作區設定：工作區裡有哪些專案、公開給誰派工、優先載入哪個 skill。
 ///
@@ -747,11 +748,12 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
             padding: const EdgeInsets.only(top: 8),
             child: Column(
               children: [
-                _field(s, l10n.hostRunnerModel, _model),
-                _field(s, l10n.hostRunnerMaxTurns, _maxTurns, numeric: true),
-                _field(s, l10n.hostRunnerMaxBudget, _budget, numeric: true),
-                _field(s, l10n.hostRunnerWallClock, _wallClock, numeric: true),
-                _field(s, l10n.hostRunnerContextWindow, _contextWindow,
+                _field(l10n.hostRunnerModel, _model),
+                _field(l10n.hostRunnerMaxTurns, _maxTurns,
+                    numeric: true, hint: l10n.hostRunnerNoLimitHint),
+                _field(l10n.hostRunnerMaxBudget, _budget, numeric: true),
+                _field(l10n.hostRunnerWallClock, _wallClock, numeric: true),
+                _field(l10n.hostRunnerContextWindow, _contextWindow,
                     numeric: true),
               ],
             ),
@@ -786,32 +788,20 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     );
   }
 
-  Widget _field(UepSurface s, String label, TextEditingController controller,
-      {bool numeric = false}) {
+  /// 一列，外殼與 Hub 設定那幾列同一個（[EditRow]）。這張卡裡沒有眼睛與
+  /// 複製鈕，右邊不留圖示的位置。
+  Widget _field(String label, TextEditingController controller,
+      {bool numeric = false, String? hint}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(label, style: UepText.fieldLabel(color: s.inkMute)),
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: !_saving,
-              keyboardType: numeric ? TextInputType.number : null,
-              style: UepText.code(size: 12.5, color: s.ink),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText:
-                    AppLocalizations.of(context).hostRunnerFieldDefaultHint,
-                hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-          ),
-        ],
+      child: EditRow(
+        label: label,
+        controller: controller,
+        enabled: !_saving,
+        numeric: numeric,
+        hint: hint ?? AppLocalizations.of(context).hostRunnerFieldDefaultHint,
+        trailingSlots: 0,
+        onChanged: (_) => setState(() {}),
       ),
     );
   }

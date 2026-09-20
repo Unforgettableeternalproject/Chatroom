@@ -1360,6 +1360,7 @@
   "hostRunnerWallClock": "Time limit (s)",
   "hostRunnerContextWindow": "Context window (tokens)",
   "hostRunnerFieldDefaultHint": "Leave empty to use the runner default",
+  "hostRunnerNoLimitHint": "Leave empty = no limit",
   "hostRunnerChipPublic": "Public",
   "hostRunnerChipPrivate": "Private",
   "hostRunnerChipLivetest": "Browser test",

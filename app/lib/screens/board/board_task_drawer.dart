@@ -14,6 +14,7 @@ import '../../state/board_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/markdown_body.dart';
 import '../ops/ops_actions.dart';
 import 'board_action_feedback.dart';
 import 'board_move_dialog.dart';
@@ -105,9 +106,11 @@ class BoardTaskDrawer extends ConsumerWidget {
                 _title(context),
                 if (task.description.isNotEmpty) ...[
                   const SizedBox(height: 18),
-                  Text(task.description,
-                      style: UepText.serif(
-                          size: 14, color: s.inkSoft, height: 1.95)),
+                  // 卡片內文是 agent 寫的，慣例上是 markdown（`## 票`、清單、
+                  // 反引號）。純文字渲染會把那些記號原樣印出來，改走與聊天
+                  // 泡泡同一個 [UepMarkdownBody]，連結行為與主題也一併沿用。
+                  UepMarkdownBody(
+                      data: task.description, baseColor: s.inkSoft),
                 ],
                 const SizedBox(height: 18),
                 _meta(context, ref, requests),
