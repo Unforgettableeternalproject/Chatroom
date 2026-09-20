@@ -1,5 +1,10 @@
 # Chatroom 執行器安裝包（runner-kit）
 
+> ⚠️ **支援範圍**
+> - 執行器只支援 Claude Code（派工用 `claude -p`）。
+> - MCP 只支援 Claude Code 全域設定裡已經有的那些。
+> - Codex 或其他 agent 不能當執行器。
+
 這包把**遠端派工的執行端**裝到一台 Windows 機器上：獨立 venv、設定檔、
 Windows 排程工作。裝好之後這台機器就能從 Hub 領單，在你指定的工作樹上
 起 `claude -p` 做事。
@@ -34,10 +39,14 @@ python install.py --yes --hub-url http://192.0.2.10:8787 --token <TOKEN> --label
 
 `--yes` 下一個問題都不問（桌面 App 就是這樣以子進程呼叫的），stdout 的最後
 一行固定是 `RESULT {"ok":true,"kit":"runner-kit","kit_root":…,"version":…,
-"commit":…,"registry":…,"config_written":…,"task_registered":…}`，給呼叫端
-解析用（三包安裝器同一個格式）。失敗時退出碼非 0、原因走 stderr。
+"commit":…,"registry":…,"config_written":…,"task_registered":…,
+"login_required":…,"login_hint":…}`，給呼叫端解析用（三包安裝器同一個
+格式）。失敗時退出碼非 0、原因走 stderr。
 設定檔本來就在時 `config_written` 是 `false`——這次給的 `--hub-url`／
 `--token` **沒有**寫進去。
+`login_required` 是「那個 `claude_config_dir` 底下看不到登入憑證」，
+`login_hint` 是補登入的那一行 PowerShell 指令；`--yes` 下安裝器**不起**
+登入流程。
 
 ## 裝完還有兩件事
 
@@ -47,12 +56,16 @@ python install.py --yes --hub-url http://192.0.2.10:8787 --token <TOKEN> --label
    ⚠️ 這包**不含要被派工的 repo**。工作樹仍然要存在於這台機器上，把路徑填進
    `projects.<key>.repos.<name>.path`；`skill_dirs` 同理，指的是真實的本機路徑。
 
-2. **登入獨立的 Claude 設定目錄**（只要做一次，而且要在本人還在電腦前時做）：
+2. **登入獨立的 Claude 設定目錄**（只要做一次，而且要在本人還在電腦前時做）。
+   互動安裝的最後會問「現在登入 Claude Code？」，答 Y 就直接跑這一段；
+   `--yes` 不會起登入，要自己跑：
 
    ```powershell
    $env:CLAUDE_CONFIG_DIR = "$env:LOCALAPPDATA\UEP\Chatroom\runner\claude-config"
-   claude /login
+   claude auth login
    ```
+
+   沒登入的話執行器會上線，但派工的 `claude -p` 起不來。
 
 然後自檢（不領單、不起 agent）：
 

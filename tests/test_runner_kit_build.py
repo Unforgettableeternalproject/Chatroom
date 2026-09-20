@@ -196,6 +196,52 @@ def test_generated_config_points_at_this_kit(installer, tmp_path):
     assert cfg["backoff_minutes"] == example["backoff_minutes"]
 
 
+def test_readme_and_installer_state_the_supported_agent(installer):
+    """支援範圍要在 README 開頭與安裝器開頭各講一次。
+
+    「我用 Codex，裝起來應該也能派工吧」是裝完才發現最貴的誤會。
+    """
+    readme = (KIT / "README.md").read_text(encoding="utf-8")
+    head = readme.split("## ", 1)[0]
+    assert "只支援 Claude Code" in head
+    assert "Codex" in head
+    assert "只支援 Claude Code" in installer.DISCLAIMER
+    assert "Codex" in installer.DISCLAIMER
+
+
+def test_login_hint_follows_the_existing_config(installer, tmp_path):
+    """設定檔沒被覆寫時，登入指令要指到**它**寫的 `claude_config_dir`。
+
+    照安裝器自己的預設算一個路徑出來的話，人會登入到一個執行器不看的目錄，
+    然後對著「已登入卻還是派不了工」發呆。
+    """
+    config = tmp_path / "state" / "config.json"
+    config.parent.mkdir(parents=True)
+    elsewhere = tmp_path / "別的地方" / "claude-config"
+    config.write_text(json.dumps({"claude_config_dir": str(elsewhere)}),
+                      encoding="utf-8")
+
+    assert installer.claude_config_dir_for(config) == elsewhere
+    hint = installer.login_hint(elsewhere)
+    assert str(elsewhere) in hint and "CLAUDE_CONFIG_DIR" in hint
+    assert "claude auth login" in hint
+    # 沒有設定檔時退回 <state_dir>/claude-config
+    assert installer.claude_config_dir_for(tmp_path / "無" / "config.json") \
+        == tmp_path / "無" / "claude-config"
+
+
+def test_login_detection_defaults_to_requiring_login(installer, tmp_path):
+    """偵測不到憑證就當成「還沒登入」——不確定要落在安全的那一邊。"""
+    empty = tmp_path / "claude-config"
+    empty.mkdir()
+    assert installer.has_claude_login(empty) is False
+    assert installer.has_claude_login(tmp_path / "根本沒有") is False
+
+    (empty / ".credentials.json").write_text(
+        '{"claudeAiOauth":{"accessToken":"x"}}', encoding="utf-8")
+    assert installer.has_claude_login(empty) is True
+
+
 def test_registry_shape_is_the_contract_with_the_app(installer, tmp_path):
     """欄位改名＝App 當成「這台沒裝執行器」，而一切看起來都成功。"""
     kit = tmp_path / "kit"

@@ -288,6 +288,54 @@ def test_runner_kit_yes_is_silent_and_reports(tmp_path, monkeypatch, capsys,
     assert cfg["workspaces"] == {}
 
 
+def test_runner_kit_yes_reports_login_required_and_does_not_log_in(
+        tmp_path, monkeypatch, capsys, no_input):
+    """`--yes` 下**不起登入流程**，只在 RESULT 講「還要登入」與那一行指令。
+
+    App 是以子進程跑這支的，stdin 是 null——起 `claude auth login` 等於掛在
+    一個沒有人的終端機前面。少了 `login_required`，App 會顯示「可以開跑了」，
+    而執行器第一筆單就會因為沒登入而失敗。
+    """
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_login")
+    monkeypatch.setattr(inst, "REGISTRY", tmp_path / "home" / "runner-kit.json")
+    _fake_stage(inst, REPO, monkeypatch)
+    # 起了登入就是錯：這條線抓的是行為，不是字串
+    monkeypatch.setattr(inst, "run_login", lambda _dir: pytest.fail(
+        "非互動模式下不可以起登入流程"))
+    config = tmp_path / "state" / "config.json"
+
+    inst.main(["--yes", "--dir", str(tmp_path / "install"),
+               "--config", str(config), "--no-task"])
+
+    out = capsys.readouterr().out
+    payload = result_line(out)
+    assert payload["login_required"] is True
+    assert str(tmp_path / "state" / "claude-config") in payload["login_hint"]
+    assert "CLAUDE_CONFIG_DIR" in payload["login_hint"]
+    assert "claude auth login" in payload["login_hint"]
+    # 免責聲明照印（走 stdout、不擋流程）
+    assert "只支援 Claude Code" in out
+    assert "Codex" in out
+
+
+def test_runner_kit_yes_sees_an_existing_login(tmp_path, monkeypatch, capsys,
+                                               no_input):
+    """憑證在就不要叫人再登一次——`login_required` 要是 false。"""
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_in")
+    monkeypatch.setattr(inst, "REGISTRY", tmp_path / "home" / "runner-kit.json")
+    _fake_stage(inst, REPO, monkeypatch)
+    config = tmp_path / "state" / "config.json"
+    claude_config = config.parent / "claude-config"
+    claude_config.mkdir(parents=True)
+    (claude_config / ".credentials.json").write_text(
+        '{"claudeAiOauth":{"accessToken":"x"}}', encoding="utf-8")
+
+    inst.main(["--yes", "--dir", str(tmp_path / "install"),
+               "--config", str(config), "--no-task"])
+
+    assert result_line(capsys.readouterr().out)["login_required"] is False
+
+
 def test_runner_kit_yes_keeps_an_existing_config_and_says_so(
         tmp_path, monkeypatch, capsys, no_input):
     """設定檔已存在時不覆寫——而 RESULT 要講出「這次沒寫」。

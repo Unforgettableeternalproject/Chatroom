@@ -18,7 +18,9 @@
 5. 寫下註冊檔 ~/.chatroom/runner-kit.json，讓桌面 App 知道這台機器是執行器
 
 ⚠️ 裝完還**不能**直接開跑，還有兩件只有人做得到的事（README 有步驟）：
-獨立 CLAUDE_CONFIG_DIR 要先 `claude /login`，以及設定檔裡要加專案。
+獨立 CLAUDE_CONFIG_DIR 要先 `claude auth login`，以及設定檔裡要加專案。
+互動模式會問要不要順手登入；`--yes` 下只在 RESULT 報 `login_required` 與
+`login_hint`——那條路上沒有人在鍵盤前面，起登入流程只會掛住。
 """
 
 from __future__ import annotations
@@ -47,6 +49,17 @@ KIT_NAME = "runner-kit"
 REGISTRY = Path.home() / ".chatroom" / "runner-kit.json"
 
 DEFAULT_TASK_NAME = "ChatroomRunner"
+
+# 開頭就要講清楚支援範圍——互動與 `--yes` 都印。裝到一半才發現「我的
+# Codex 不能當執行器」比裝之前就知道貴得多。
+DISCLAIMER = """⚠️ 支援範圍
+- 執行器只支援 Claude Code（派工用 `claude -p`）。
+- MCP 只支援 Claude Code 全域設定裡已經有的那些。
+- Codex 或其他 agent 不能當執行器。
+"""
+
+# 登入子命令（`claude auth login`，見 `claude auth --help`）。
+CLAUDE_LOGIN_ARGS = ("auth", "login")
 
 # 執行器本身只用到 httpx（其餘是標準庫）；bridge 另外要 mcp。
 # 版本界線沿用 bridge/pyproject.toml——**兩邊一定要一致**，不然這包裡的
@@ -315,6 +328,80 @@ def write_registry(kit_dir: Path, python: Path, config_path: Path) -> dict:
     return payload
 
 
+def claude_config_dir_for(config_path: Path) -> Path:
+    """執行器實際會用的 `CLAUDE_CONFIG_DIR`。
+
+    設定檔已經存在時以它裡面的 `claude_config_dir` 為準——這次沒有覆寫它，
+    印一個安裝器自己算出來的路徑會叫人登入到執行器根本不看的目錄。
+    """
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        value = data.get("claude_config_dir") if isinstance(data, dict) else ""
+        if value:
+            return Path(str(value)).expanduser()
+    except (OSError, ValueError):
+        pass
+    return config_path.parent / "claude-config"
+
+
+def login_hint(claude_config_dir: Path) -> str:
+    """一行 PowerShell：設好 CLAUDE_CONFIG_DIR 再叫登入。"""
+    return (f'$env:CLAUDE_CONFIG_DIR = "{claude_config_dir}"; '
+            f'claude {" ".join(CLAUDE_LOGIN_ARGS)}')
+
+
+def has_claude_login(claude_config_dir: Path) -> bool:
+    """這個設定目錄底下看不看得到登入憑證。
+
+    ⚠️ 只是**痕跡偵測**：憑證檔在 `.credentials.json`（Claude Code 寫在
+    `CLAUDE_CONFIG_DIR` 根下），舊一點的版本把帳號記在 `.claude.json` 的
+    `oauthAccount`。兩個都看不到就回 False——**寧可多叫一次登入**，也不要
+    讓 App 顯示「已登入」而執行器第一筆單就因為沒登入而炸掉。
+    """
+    cred = claude_config_dir / ".credentials.json"
+    try:
+        if cred.is_file() and cred.stat().st_size > 2:
+            return True
+    except OSError:
+        return False
+    try:
+        data = json.loads(
+            (claude_config_dir / ".claude.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and bool(data.get("oauthAccount"))
+
+
+def run_login(claude_config_dir: Path) -> bool:
+    """在執行器的設定目錄下起 `claude auth login`。
+
+    **前景、繼承 console**：登入要人看瀏覽器連結、貼授權碼，把 stdout 收走
+    等於讓人對著一個不動的畫面等。
+
+    失敗不中止安裝：安裝本身已經成功，登入之後再補就好。
+    """
+    claude = shutil.which("claude")
+    if claude is None:
+        print("⚠️ 找不到 claude 指令——請先安裝 Claude Code，再手動登入：\n"
+              f"   {login_hint(claude_config_dir)}")
+        return False
+    claude_config_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
+    print(f"\n在 {claude_config_dir} 底下登入 Claude Code…")
+    try:
+        done = subprocess.run([claude, *CLAUDE_LOGIN_ARGS], env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"⚠️ 登入叫不起來（{exc}）。手動執行：\n"
+              f"   {login_hint(claude_config_dir)}")
+        return False
+    if done.returncode != 0:
+        print(f"⚠️ 登入沒有完成（退出碼 {done.returncode}）。手動執行：\n"
+              f"   {login_hint(claude_config_dir)}")
+        return False
+    return True
+
+
 def uninstall(task_name: str) -> None:
     """移除排程工作與註冊檔。
 
@@ -378,6 +465,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="移除排程工作與註冊檔；設定與資料留著")
     args = p.parse_args(argv)
 
+    # 走 stdout、不擋流程：`--yes` 下 App 也收得到，而它只解析最後那行 RESULT
+    print(DISCLAIMER, flush=True)
+
     if args.uninstall:
         uninstall(args.task_name)
         emit_result({"ok": True, "kit": KIT_NAME, "action": "uninstall",
@@ -432,6 +522,10 @@ def main(argv: list[str] | None = None) -> None:
         target, python, config_path, args.task_name)
     registry = write_registry(target, python, config_path)
 
+    claude_config = claude_config_dir_for(config_path)
+    hint = login_hint(claude_config)
+    logged_in = has_claude_login(claude_config)
+
     config_note = "" if wrote else (
         "\n   （設定檔原本就在，這次沒有動它——上面問的 Hub 位址與 token "
         "**沒有**寫進去）")
@@ -452,10 +546,9 @@ def main(argv: list[str] | None = None) -> None:
    ⚠️ kit 不含要被派工的 repo：那些工作樹仍然要存在於這台機器上，路徑填進
    `workspaces.<key>.projects.<name>.path`。
 
-2. 登入獨立的 CLAUDE_CONFIG_DIR（只要做一次）：
+2. 登入獨立的 CLAUDE_CONFIG_DIR（只要做一次，沒登入就派不了工）：
 
-   $env:CLAUDE_CONFIG_DIR = "{config_path.parent}\\claude-config"
-   claude /login
+   {hint}
 
 接著自檢（不領單、不起 agent）：
 
@@ -464,6 +557,19 @@ def main(argv: list[str] | None = None) -> None:
 {task_note}
 自檢過了再 Start-ScheduledTask -TaskName {args.task_name}。
 """)
+
+    # 互動模式順手把第 2 件事做掉；`--yes` 下**不起登入**——那條路上 stdin
+    # 是 null，登入流程會在一個沒有人的終端機前面等到天荒地老
+    if not args.yes and not logged_in:
+        answer = ask("現在登入 Claude Code？[Y/n]", "Y")
+        if answer.strip().lower() in ("y", "yes", ""):
+            if run_login(claude_config):
+                logged_in = has_claude_login(claude_config)
+                print("✅ 已登入。" if logged_in else
+                      "登入流程結束了，但這個設定目錄下看不到憑證——"
+                      f"自檢前請再確認一次：\n   {hint}")
+        else:
+            print(f"之後要登入：{hint}")
 
     # ⚠️ 這一行要是 stdout 的最後一行：App 解析它來判斷裝到哪、版本是什麼
     emit_result({
@@ -480,6 +586,10 @@ def main(argv: list[str] | None = None) -> None:
         # App 要顯示得出這個差別，不然使用者會以為自己剛剛換好了位址
         "config_written": wrote,
         "task_registered": task_ok,
+        # 裝完還要在 claude_config_dir 底下登入一次才派得出工。偵測不到憑證
+        # 就是 True——「不確定」要落在「還要登入」那一邊
+        "login_required": not logged_in,
+        "login_hint": hint,
     })
 
 
