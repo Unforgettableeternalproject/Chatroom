@@ -83,6 +83,8 @@
 
 ## kit 與安裝
 
+- 三包各附雙擊即可的 `install.bat`：自動找 Python 3.12+，太舊或沒有分開提示；
+  `install.py` 互動模式改為逐步安裝，問題帶預設值、答錯重問、收尾印下一步。
 - runner-kit 安裝器開頭印免責聲明：目前只支援 Claude Code，MCP 也限 Claude Code
   設定裡有的。互動安裝完成後可直接在執行器設定目錄登入；`--yes` 回
   `login_required` 與 `login_hint`。
@@ -97,6 +99,8 @@
 
 ## App
 
+- 三個 kit 分頁安裝前顯示前置條件（Python／Claude Code 或 Codex／Hub 可連），
+  不通過就擋安裝；執行器分頁顯示登入狀態與登入指令。找 Python 改判 3.12 以上。
 - 任務卡詳情內文改 markdown 渲染。
 - 執行器工作區「進階」欄位沿用 Hub 設定的欄位樣式；回合上限提示改「留空＝不設上限」。
 - Hub 設定加「隨機代稱語言」；執行器分頁加 MCP 允許清單，來源合併 claude.ai
