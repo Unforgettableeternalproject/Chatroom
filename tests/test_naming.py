@@ -6,7 +6,13 @@
 """
 
 from chatroom_server.naming import (
-    _ADJECTIVES, _NOUNS, _PREMADE_NAMES, generate_name)
+    _ADJECTIVES, _NOUNS, _POOLS, _PREMADE_NAMES, generate_name)
+
+
+def _zh_names() -> set[str]:
+    zh = _POOLS["zh"]
+    return {*zh["premade"],
+            *(f"{a}-{n}" for a in zh["adjectives"] for n in zh["nouns"])}
 
 
 def test_preferred_name_used_when_free():
@@ -25,9 +31,12 @@ def test_english_locale_uses_adjective_noun_pool():
         assert adj in _ADJECTIVES and noun in _NOUNS
 
 
-def test_chinese_locale_uses_premade_names():
-    for _ in range(50):
-        assert generate_name(set(), locale="zh-TW") in _PREMADE_NAMES
+def test_chinese_locale_uses_chinese_pool():
+    # 中文池是預製名單＋中文形容詞-名詞組合，兩種都會出現
+    seen = {generate_name(set(), locale="zh-TW") for _ in range(200)}
+    assert seen <= _zh_names()
+    assert seen & set(_PREMADE_NAMES)
+    assert seen - set(_PREMADE_NAMES)
 
 
 def test_unknown_locale_falls_back_to_english_pool():
@@ -47,11 +56,11 @@ def test_pool_exhaustion_falls_back_to_suffix():
 
 
 def test_chinese_pool_exhaustion_falls_back_to_suffix():
-    taken = set(_PREMADE_NAMES)
+    taken = _zh_names()
     name = generate_name(taken, locale="zh-TW")
     assert name not in taken
     base, _, suffix = name.rpartition("-")
-    assert base in _PREMADE_NAMES and suffix.isdigit()
+    assert base in taken and suffix.isdigit()
 
 
 def test_preferred_name_trimmed_to_32_chars():

@@ -2,16 +2,46 @@
 
 import random
 
-# 名字池：中性、好唸、跟 agent 種類無關
-_ADJECTIVES = [
-    "Swift", "Quiet", "Bright", "Amber", "Cobalt", "Ivory", "Crimson", "Silver",
-    "Nimble", "Steady", "Vivid", "Mellow", "Astral", "Lucid", "Ember", "Frost",
-]
-_NOUNS = [
-    "Falcon", "Otter", "Lynx", "Heron", "Fox", "Raven", "Wren", "Badger",
-    "Comet", "Harbor", "Cinder", "Willow", "Beacon", "Drift", "Quill", "Sable",
-]
-_PREMADE_NAMES = ["振宇二號", "超級堅固大龍蝦", "神奇人", "桶神", "黃泉 (不是本人)", "小小世界", "以愛與恨之名", "莊嚴哀悼", "派翠西亞·斯特爾諾", "諾薇亞", "Maximizer", "Bernie", "哈密瓜", "哈哈瓜", "蜜瓜瓜", "哈瓜密", "蜜瓜哈哈", "磨鞋喬喬", "人類太可惡", "Agent", "去澳洲留學兩年半發現物價太貴", "事件視界", "芋園柚子", "巢狀意識 A031"]
+# 名字池：每個語言一組。`adjectives`＋`nouns` 組合出「形容詞-名詞」，
+# `premade` 是整個名字直接抽；兩種都有時各半抽，只有一種就抽那種。
+# 英文的預製名單刻意留空——要放什麼名字是主持人的事，不替他編。
+_POOLS: dict[str, dict[str, list[str]]] = {
+    "en": {
+        "adjectives": [
+            "Swift", "Quiet", "Bright", "Amber", "Cobalt", "Ivory", "Crimson",
+            "Silver", "Nimble", "Steady", "Vivid", "Mellow", "Astral", "Lucid",
+            "Ember", "Frost",
+        ],
+        "nouns": [
+            "Falcon", "Otter", "Lynx", "Heron", "Fox", "Raven", "Wren", "Badger",
+            "Comet", "Harbor", "Cinder", "Willow", "Beacon", "Drift", "Quill",
+            "Sable",
+        ],
+        "premade": ["Paul Jackson", "Maximizer", "Bernie", "Agent", "Hollow Earth", "KungFu Panda", "Bibilabu", "Better Call Saul", "Six-Seven", "The Stranger", "Ark Night", "Calamity Devs", "JomamaRush", "Beast Senpai"],
+    },
+    "zh": {
+        "adjectives": [
+            "敏捷的", "靜謐的", "明亮的", "琥珀的", "鈷藍的", "象牙的", "緋紅的", "銀白的",
+            "輕巧的", "沉穩的", "鮮明的", "溫潤的", "星輝的", "清澈的", "餘燼的", "霜白的",
+        ],
+        "nouns": [
+            "隼", "水獺", "山貓", "蒼鷺", "狐", "渡鴉", "鷦鷯", "獾",
+            "彗星", "港灣", "灰燼", "柳", "燈塔", "浮流", "羽筆", "黑貂",
+        ],
+        "premade": [
+            "振宇二號", "超級堅固大龍蝦", "神奇人", "桶神", "黃泉 (不是本人)",
+            "小小世界", "以愛與恨之名", "莊嚴哀悼", "派翠西亞·斯特爾諾", "諾薇亞",
+            "Maximizer", "Bernie", "哈密瓜", "哈哈瓜", "蜜瓜瓜", "哈瓜密",
+            "蜜瓜哈哈", "磨鞋喬喬", "人類太可惡", "Agent",
+            "去澳洲留學兩年半發現物價太貴", "事件視界", "芋園柚子", "巢狀意識 A031",
+            "水熊",
+        ],
+    },
+}
+# 舊名稱保留給測試與外部引用：英文組合池與中文預製名單
+_ADJECTIVES = _POOLS["en"]["adjectives"]
+_NOUNS = _POOLS["en"]["nouns"]
+_PREMADE_NAMES = _POOLS["zh"]["premade"]
 
 # 群組標籤的名字，房內成員不得使用。
 #
@@ -22,15 +52,24 @@ _PREMADE_NAMES = ["振宇二號", "超級堅固大龍蝦", "神奇人", "桶神"
 RESERVED_NAMES = frozenset({"all", "agents", "humans"})
 
 
-def _pool_for(locale: str | None) -> list[str] | None:
-    """依語言挑名字池；回傳 None 代表用 `{Adjective}-{Noun}` 組合。
+def _pool_for(locale: str | None) -> dict[str, list[str]]:
+    """依語言挑名字池。
 
-    只看開頭是不是 `zh`：`zh-TW`、`zh_CN`、`zh` 都該拿中文名單，而未知值
-    （含空字串）退回英文組合——那條路永遠組得出名字，不必維護名單。
+    只看開頭是不是 `zh`：`zh-TW`、`zh_CN`、`zh` 都拿中文池，未知值（含空
+    字串）退回英文池——英文組合永遠組得出名字，不必維護名單。
     """
     if (locale or "").strip().lower().startswith("zh"):
-        return _PREMADE_NAMES
-    return None
+        return _POOLS["zh"]
+    return _POOLS["en"]
+
+
+def _draw(pool: dict[str, list[str]]) -> str:
+    """從一組名字池抽一個候選：組合與預製各半，缺哪種就抽另一種。"""
+    combo = pool["adjectives"] and pool["nouns"]
+    premade = pool["premade"]
+    if premade and (not combo or random.random() < 0.5):
+        return random.choice(premade)
+    return f"{random.choice(pool['adjectives'])}-{random.choice(pool['nouns'])}"
 
 
 def generate_name(
@@ -60,16 +99,10 @@ def generate_name(
 
     pool = _pool_for(locale)
     for _ in range(64):
-        candidate = (
-            random.choice(pool) if pool is not None
-            else f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
-        )
+        candidate = _draw(pool)
         if candidate not in taken:
             return candidate
-    base = (
-        random.choice(pool) if pool is not None
-        else f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
-    )
+    base = _draw(pool)
     i = 2
     while f"{base}-{i}" in taken:
         i += 1
