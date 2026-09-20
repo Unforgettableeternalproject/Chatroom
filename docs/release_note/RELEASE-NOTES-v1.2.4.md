@@ -20,6 +20,9 @@
 
 ## Hub
 
+- 隨機代稱依 `CHATROOM_LOCALE` 選名字池：每個語言一組形容詞／名詞／預製名單，
+  兩種都有時各半抽；zh 系走中文池，其餘走英文池。
+- 板讀取加 `checklist_id`：只回那一個階段、其卡片與所屬週期一列，增量也只回該階段。
 - 新增 `room.kind` 與 `agent_run`／`agent_run_event`／`runner`／`runner_command`
   四張表，以及記錄執行器掉線／恢復的 `runner_event`。存量房間一律 `chat`。
 - 執行器註冊時發 `runner_token`（DB 只存 hash，明文只回一次），之後的心跳、領單、
@@ -40,6 +43,9 @@
 
 ## bridge
 
+- `chatroom_board` 加 `checklist_id`，派工 agent 找一個階段的卡不必拉全量板。
+- `chatroom_ask_human` 被略過時，run 身分的說明改為「由你自行判斷並繼續」，
+  不再叫它回到不存在的「原本的對話」。
 - 新增五支派工工具：`chatroom_runs`、`chatroom_run`、`chatroom_run_request`、
   `chatroom_run_handoff`、`chatroom_run_cancel`。`run_request` 與 `run_cancel`
   只認人類憑證，說明裡明講 agent 會被 403 拒絕。
@@ -70,9 +76,17 @@
 - 維護窗一天只跑一次，不再在 04:00–05:00 每 5 分鐘重啟一次。
 - 預設值調整：context 視窗 1M、token 軟上限關閉（只留成本上限）、
   `max_turns` 不設上限。
+- `allowed_mcp_servers` 真正生效：探測收全部 MCP 伺服器（含本機 stdio），
+  不在清單的一律 deny；勾選的全域 `~/.claude.json` 伺服器定義併進 run 的 `mcp.json`。
+- 啟動自檢加 Claude 登入檢查（`claude auth status`），未登入在自檢就擋下，
+  不再到第一筆真單才炸。
 
 ## kit 與安裝
 
+- runner-kit 安裝器開頭印免責聲明：目前只支援 Claude Code，MCP 也限 Claude Code
+  設定裡有的。互動安裝完成後可直接在執行器設定目錄登入；`--yes` 回
+  `login_required` 與 `login_hint`。
+- 從 App 安裝 kit 前可選安裝路徑，不合法路徑在下載前擋下。
 - 新增 `runner-kit`：打包 runner 與 bridge、建 venv、註冊排程工作、寫
   `~/.chatroom/runner-kit.json`，支援 `--uninstall`。GitHub Release 一併附上。
 - host-kit／install-kit／runner-kit 的 `install.py` 全部支援非互動安裝：`--yes`
@@ -83,6 +97,12 @@
 
 ## App
 
+- 任務卡詳情內文改 markdown 渲染。
+- 執行器工作區「進階」欄位沿用 Hub 設定的欄位樣式；回合上限提示改「留空＝不設上限」。
+- Hub 設定加「隨機代稱語言」；執行器分頁加 MCP 允許清單，來源合併 claude.ai
+  連接器與全域 `.claude.json`，逐列標來源。
+- 派工 agent 的提問卡略過鍵改為「不回答，讓它自己決定」。
+- 沒裝的 kit 分頁說明帶包名；沒有 Release 時指出對應的 `build.py`。
 - 全面 i18n：1242 個鍵、繁體中文／English／簡體中文三份 ARB，設定頁可選
   跟隨系統或指定語言。
 - 新增「這台機器」頁，依已裝的 kit 分 Hub 主持／Agent 接入／執行器三個分頁；

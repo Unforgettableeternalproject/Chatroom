@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from chatroom_server.app import create_app
 from chatroom_server.config import Config
-from chatroom_server.naming import _ADJECTIVES, _NOUNS
+from chatroom_server.naming import all_names
 
 pytestmark = pytest.mark.asyncio
 
@@ -36,5 +36,4 @@ async def test_join_without_preferred_name_uses_locale_pool(tmp_path):
             r = await client.post(f"/api/rooms/{rid}/join", json={
                 "kind": "claude", "session_key": f"agent-{i}"})
             assert r.status_code == 200, r.text
-            adj, noun = r.json()["display_name"].split("-")
-            assert adj in _ADJECTIVES and noun in _NOUNS
+            assert r.json()["display_name"] in all_names("en")

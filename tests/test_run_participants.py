@@ -15,7 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from chatroom_server.app import create_app
-from chatroom_server.naming import _ADJECTIVES, _NOUNS
+from chatroom_server.naming import all_names
 from chatroom_server.config import Config
 
 pytestmark = pytest.mark.asyncio
@@ -179,9 +179,8 @@ async def test_a_run_member_gets_a_pool_name_not_its_own(tmp_path):
         name = body["display_name"]
         assert name != f"Runner-{run_id[:8]}"
         assert run_id[:8] not in name and run_id not in name
-        # 名字池是「形容詞-名詞」，兩端都在池子裡
-        adj, _, noun = name.partition("-")
-        assert adj in _ADJECTIVES and noun in _NOUNS, name
+        # 名字來自英文名字池（預製名單或「形容詞-名詞」組合）
+        assert name in all_names("en"), name
         # 識別沒有因此消失
         assert (await _row(app, body["participant_id"]))["run_id"] == run_id
 

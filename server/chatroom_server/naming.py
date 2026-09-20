@@ -63,6 +63,13 @@ def _pool_for(locale: str | None) -> dict[str, list[str]]:
     return _POOLS["en"]
 
 
+def all_names(locale: str | None) -> set[str]:
+    """該語言名字池能產出的全部名字（不含後綴）。測試與除錯用。"""
+    pool = _pool_for(locale)
+    return {*pool["premade"],
+            *(f"{a}-{n}" for a in pool["adjectives"] for n in pool["nouns"])}
+
+
 def _draw(pool: dict[str, list[str]]) -> str:
     """從一組名字池抽一個候選：組合與預製各半，缺哪種就抽另一種。"""
     combo = pool["adjectives"] and pool["nouns"]
