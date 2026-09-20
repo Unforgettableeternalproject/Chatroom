@@ -3,8 +3,8 @@
   "hub_url": "http://127.0.0.1:8787",
   "agent_token": "",
   "token_env_file": "../server/.env",
-  "host": "esvel-pc",
-  "label": "esvel",
+  "host": "this-machine",
+  "label": "runner-1",
   "max_parallel": 3,
   "heartbeat_seconds": 30,
   "stall_warn_seconds": 600,
@@ -14,8 +14,6 @@
   "usage_soft_cap_usd": 40.0,
   "require_gpg": true,
   "claude_bin": "claude",
-  "claude_config_dir": "C:/Users/Bernie/AppData/Local/UEP/Chatroom/runner/claude-config",
-  "state_dir": "C:/Users/Bernie/AppData/Local/UEP/Chatroom/runner",
   "backoff_minutes": [5, 15, 30, 60],
   "rate_limit_retry_threshold": 3,
   "mcp_retries": 3,
@@ -33,7 +31,7 @@
   "allowed_mcp_servers": ["chatroom"],
   "workspaces": {
     "ai-website": {
-      "folder": "C:/Users/Bernie/source/repos/mind-door/AI-Website",
+      "folder": "C:/path/to/AI-Website",
       "public": true,
       "allow_browser_livetest": false,
       "model": "claude-opus-5",
@@ -43,27 +41,27 @@
       "context_soft_limit_ratio": 0.7,
       "default_project": "JSAI-Web",
       "primary_skill": "",
-      "skill_dirs": ["C:/Users/Bernie/source/repos/mind-door/AI-Website"],
+      "skill_dirs": ["C:/path/to/AI-Website"],
       "skills": {
         "ticket": ["jira-ticket-workflow"]
       },
       "extra_write_dirs": [
-        "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/analysis",
-        "C:/Users/Bernie/source/repos/mind-door/AI-Website/global_docs/summary"
+        "C:/path/to/AI-Website/global_docs/analysis",
+        "C:/path/to/AI-Website/global_docs/summary"
       ],
       "projects": {
         "JSAI-Web": {
-          "path": "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-Web",
+          "path": "C:/path/to/AI-Website/JSAI-Web",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"]
         },
         "JSAI-API": {
-          "path": "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-API",
+          "path": "C:/path/to/AI-Website/JSAI-API",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"]
         },
         "JSAI-Functions": {
-          "path": "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-Functions",
+          "path": "C:/path/to/AI-Website/JSAI-Functions",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"]
         }

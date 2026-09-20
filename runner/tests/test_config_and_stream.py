@@ -56,12 +56,30 @@ def test_missing_config_file_says_where_it_looked(tmp_path):
     assert "config.example.json" in str(exc.value)
 
 
-def test_example_config_is_loadable():
-    """範例設定要真的能讀——不能讀的範例只會讓第一次安裝的人卡住。"""
+def test_example_config_is_loadable(tmp_path):
+    """範例設定要真的能讀——不能讀的範例只會讓第一次安裝的人卡住。
+
+    範例裡的專案路徑是佔位（`C:/path/to/…`），不指向任何機器；這裡把每個
+    專案換成 tmp 底下的 git repo 再載入，驗的是結構與其他欄位。
+    """
     example = Path(__file__).resolve().parents[1] / "config.example.json"
     raw = json.loads(example.read_text(encoding="utf-8-sig"))
     raw["token_env_file"] = ""
     raw["agent_token"] = "x"
+    ws = raw["workspaces"]["ai-website"]
+    for name, item in ws["projects"].items():
+        repo = tmp_path / name
+        repo.mkdir()
+        git(repo, "init", "-b", "jsai_dev")
+        item["path"] = str(repo)
+    # 範例掛了一個 skill，載入時會去 skill_dirs 底下找 SKILL.md
+    for kind_skills in ws["skills"].values():
+        for skill in kind_skills:
+            manifest = tmp_path / ".claude" / "skills" / skill / "SKILL.md"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(f"---\nname: {skill}\n---\n",
+                                encoding="utf-8")
+    ws["skill_dirs"] = [str(tmp_path)]
     cfg = config_from_dict(raw, base_dir=example.parent)
     project = cfg.workspace("ai-website")
     assert set(project.projects) == {"JSAI-Web", "JSAI-API", "JSAI-Functions"}
