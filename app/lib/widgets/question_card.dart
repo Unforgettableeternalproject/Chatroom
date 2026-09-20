@@ -17,6 +17,11 @@ import 'uep_button.dart';
 ///
 /// 「略過」與放著不管是兩件事：略過會明確告訴 agent 改用它原本的方式問，
 /// 放著不管則讓它繼續等。所以略過必須是一個看得見、按得到的動作。
+///
+/// 但**派工跑出來的臨時 agent（run 成員）沒有「原本的對話」**——它是一次性
+/// 的無頭進程，退回去問的那個地方不存在。那時仍要留一個不回答的出口
+/// （抽掉的話問題只會擱到過期，而 bridge 把 expired 講成「人沒看到」，
+/// 那是假的），只是它的意思變成「我不回答，你自己決定」。
 class QuestionCard extends ConsumerStatefulWidget {
   const QuestionCard({
     super.key,
@@ -24,6 +29,7 @@ class QuestionCard extends ConsumerStatefulWidget {
     required this.onAnswer,
     required this.onSkip,
     this.onPickFiles,
+    this.askerOnRun = false,
   });
 
   final Question question;
@@ -43,6 +49,10 @@ class QuestionCard extends ConsumerStatefulWidget {
   /// 選檔並上傳，回傳已上傳的附件。上傳邏輯留在聊天畫面（它已經有一整套
   /// 進度與錯誤處理），這張卡只負責顯示與送出。null＝不提供附加檔案。
   final Future<List<UploadedAttachment>> Function()? onPickFiles;
+
+  /// 提問者是派工帶進房的臨時成員（`run_id` 非空）。預設 false——查不到
+  /// 提問者時維持原本的說法，在不確定的情況下改寫文案比較糟。
+  final bool askerOnRun;
 
   @override
   ConsumerState<QuestionCard> createState() => _QuestionCardState();
@@ -318,7 +328,9 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
             child: TextButton(
               onPressed: _busy ? null : () => _run(widget.onSkip),
               child: Text(
-                l10n.chatQuestionSkip,
+                widget.askerOnRun
+                    ? l10n.chatQuestionSkipRun
+                    : l10n.chatQuestionSkip,
                 style: UepText.mono(
                     size: 10.5, color: s.inkMute, letterSpacing: 1.2),
               ),

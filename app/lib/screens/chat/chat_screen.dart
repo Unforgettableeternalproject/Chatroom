@@ -3040,6 +3040,15 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
     final questions =
         ref.watch(roomQuestionsProvider(widget.roomId)).value ?? const [];
     if (questions.isEmpty) return const SizedBox.shrink();
+    // 問題本身只帶 asker_name，所以「它是不是派工跑出來的臨時 agent」要回
+    // 房內成員去查（名字在 active 成員裡是唯一的）。查不到就當一般成員——
+    // 已離開的提問者不該讓卡片改口
+    final onRunAskers = {
+      for (final p in ref.watch(roomDetailProvider(widget.roomId)).value
+              ?.participants ??
+          const <Participant>[])
+        if (p.isActive && p.isOnRun) p.displayName,
+    };
 
     return Container(
       decoration: BoxDecoration(
@@ -3101,6 +3110,8 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
                       onAnswer: (kind, answer, selected, files, extra) =>
                           _respond(q.id, kind, answer, selected, files, extra),
                       onSkip: () => _respond(q.id, 'skip', ''),
+                      askerOnRun: q.askerName != null &&
+                          onRunAskers.contains(q.askerName),
                       onPickFiles: _pickAnswerFiles,
                     ),
                 ],
