@@ -153,7 +153,10 @@ class RunnerLoop:
 
     async def selfcheck(self) -> list[str]:
         problems: list[str] = []
-        problems += await self._check_claude()
+        claude_problems = await self._check_claude()
+        problems += claude_problems
+        if not claude_problems:
+            problems += await self._check_claude_login()
         if self.cfg.require_gpg:
             problems += await self._check_gpg()
         problems += await self._check_projects()
@@ -211,6 +214,60 @@ class RunnerLoop:
         if proc.returncode != 0:
             return [f"claude --version 失敗："
                     f"{(err or out).decode('utf-8', 'replace').strip()[:200]}"]
+        return []
+
+    def _has_claude_credentials(self) -> bool:
+        """執行器設定目錄底下看不看得到憑證檔。
+
+        跟安裝器 `runner-kit/install.py` 的 `has_claude_login()` 同一個判準：
+        Claude Code 把憑證寫在 `CLAUDE_CONFIG_DIR` 根下的 `.credentials.json`。
+        """
+        cred = self.cfg.claude_config_dir / ".credentials.json"
+        try:
+            return cred.is_file() and cred.stat().st_size > 2
+        except OSError:
+            return False
+
+    async def _check_claude_login(self) -> list[str]:
+        """這個設定目錄到底有沒有登入。
+
+        **`claude --version` 沒登入也回 0**——自檢一片綠，然後第一筆真單才
+        炸，而炸點在 agent 那邊，房裡只看得到一張 failed。
+
+        判準是 `claude auth status --json` 的 `loggedIn`。那支叫不起來、
+        非零退出或輸出看不懂時，退回看憑證檔（安裝器用的同一個判準）：
+        **寧可多叫一次登入**，也不要放一台沒登入的執行器去領單。
+        """
+        hint = ('登入：$env:CLAUDE_CONFIG_DIR = '
+                f'"{self.cfg.claude_config_dir}"; claude auth login')
+        argv = list(self.cfg.claude_bin) + ["auth", "status", "--json"]
+        env = dict(os.environ)
+        env["CLAUDE_CONFIG_DIR"] = str(self.cfg.claude_config_dir)
+        logged_in: bool | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
+        except (OSError, ValueError) as exc:
+            log.warning("claude auth status 叫不起來（%s）：%s；改看憑證檔",
+                        argv[0], exc)
+        else:
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return [f"claude auth status 逾時。{hint}"]
+            if proc.returncode == 0:
+                try:
+                    data = json.loads(out.decode("utf-8", "replace"))
+                    logged_in = bool(data.get("loggedIn"))
+                except (ValueError, AttributeError):
+                    log.warning("claude auth status 的輸出看不懂；改看憑證檔")
+        if logged_in is None:
+            logged_in = self._has_claude_credentials()
+        if not logged_in:
+            return [f"claude 在執行器設定目錄下沒登入"
+                    f"（{self.cfg.claude_config_dir}）。{hint}"]
         return []
 
     async def _gpg_program(self) -> str:

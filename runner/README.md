@@ -40,9 +40,11 @@
    `PYTHONPATH` 補；常駐那條不行（排程工作設不了環境變數），由第 4 步的
    `install-task.ps1` 寫 `.pth` 解決。
 
-   自檢驗三件事：`claude --version`、`gpg --clearsign` 探針、每個 repo
-   `git status` 可用且**停在允許分支**。任一沒過就不領單（狀態報 offline，
-   原因會出現在房裡與儀表板上）。
+   自檢驗四件事：`claude --version`、`claude auth status`（執行器設定目錄
+   下有沒有登入——`--version` 沒登入也回 0，不驗的話第一筆真單才炸；那支
+   問不出來就退回看 `.credentials.json`，沒過的訊息會印出登入指令）、
+   `gpg --clearsign` 探針、每個 repo `git status` 可用且**停在允許分支**。
+   任一沒過就不領單（狀態報 offline，原因會出現在房裡與儀表板上）。
 
 4. 常駐：用 `runner\install-task.ps1` 建 Windows 排程工作（登入時啟動、
    失敗重啟、每 5 分鐘存活檢查）。那個腳本**只建工作，不會啟動執行器**。

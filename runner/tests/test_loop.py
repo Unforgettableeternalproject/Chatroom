@@ -53,6 +53,19 @@ class StubExecutor:
 
 
 @pytest.fixture(autouse=True)
+def _claude_logged_in(tmp_path):
+    """測試用的設定目錄預設「已登入」。
+
+    啟動自檢會驗登入，而假 claude 的 `auth status` 吐不出可解析的 JSON，
+    判準會退回憑證檔——不先放一份，每個 `start()` 都會卡在自檢。
+    """
+    cfg_dir = tmp_path / "claude-config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / ".credentials.json").write_text('{"claudeAiOauth": {}}',
+                                               encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
 def _clear_seen():
     StubExecutor.seen = []
     yield
@@ -114,6 +127,72 @@ async def test_selfcheck_failure_is_written_to_the_local_log(
         assert await loop.start() is False
 
     assert [r for r in caplog.records if r.message.startswith("自檢：")]
+
+
+# ── claude 有沒有登入 ──────────────────────────────────────────
+
+class _FakeProc:
+    """假的 `claude auth status`：只回一段 stdout 與退出碼。"""
+
+    def __init__(self, stdout: bytes, returncode: int = 0) -> None:
+        self._stdout = stdout
+        self.returncode = returncode
+
+    async def communicate(self):
+        return self._stdout, b""
+
+
+def _fake_auth_status(monkeypatch, stdout: bytes, returncode: int = 0):
+    async def fake_exec(*argv, **kwargs):
+        assert argv[-2:] == ("auth", "status") or argv[-3:-1] == ("auth",
+                                                                  "status")
+        return _FakeProc(stdout, returncode)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+
+async def test_selfcheck_passes_when_claude_is_logged_in(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    _fake_auth_status(monkeypatch, b'{"loggedIn": true}')
+
+    assert await loop._check_claude_login() == []
+
+
+async def test_selfcheck_fails_when_claude_is_not_logged_in(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 `claude --version` 沒登入也回 0，所以這一項要自己驗。
+
+    沒過的訊息要帶得走：印出那個設定目錄的登入指令。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    _fake_auth_status(monkeypatch, b'{"loggedIn": false}')
+
+    problems = await loop._check_claude_login()
+
+    assert problems and "沒登入" in problems[0]
+    assert "claude auth login" in problems[0]
+    assert str(cfg.claude_config_dir) in problems[0]
+
+
+async def test_login_check_falls_back_to_the_credentials_file(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """`claude auth status` 叫不起來時退回憑證檔（安裝器的判準）。"""
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+
+    async def fake_exec(*argv, **kwargs):
+        raise OSError("探針不真的起 claude")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    (cfg.claude_config_dir / ".credentials.json").unlink()
+    assert await loop._check_claude_login()
+
+    (cfg.claude_config_dir / ".credentials.json").write_text(
+        '{"claudeAiOauth": {}}', encoding="utf-8")
+    assert await loop._check_claude_login() == []
 
 
 # ── gpg 的來源 ──────────────────────────────────────────────────
