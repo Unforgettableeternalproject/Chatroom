@@ -6494,6 +6494,101 @@
   "@hostKitInstallConfigKept": {
     "description": "runner-kit 安裝器回報 config_written=false 時的說明"
   },
+  "hostKitPrereqTitle": "前置條件",
+  "@hostKitPrereqTitle": {
+    "description": "安裝按鈕上方那幾列檢查的標題"
+  },
+  "hostKitPrereqRecheck": "重讀",
+  "@hostKitPrereqRecheck": {
+    "description": "重跑前置條件檢查"
+  },
+  "hostKitPrereqChecking": "檢查中…",
+  "@hostKitPrereqChecking": {
+    "description": "前置條件還在查"
+  },
+  "hostKitPrereqBlocked": "先處理上面的項目",
+  "@hostKitPrereqBlocked": {
+    "description": "有前置條件沒過，安裝鈕按不動時寫在旁邊"
+  },
+  "hostKitPrereqFound": "找到 {what}",
+  "@hostKitPrereqFound": {
+    "description": "前置條件過了，講出找到的是哪一個",
+    "placeholders": {
+      "what": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitPrereqPython": "Python",
+  "@hostKitPrereqPython": {
+    "description": "前置條件的項目名"
+  },
+  "hostKitPrereqPythonMissing": "找不到 Python 3.12",
+  "@hostKitPrereqPythonMissing": {
+    "description": "前置條件：沒有直譯器"
+  },
+  "hostKitPrereqAgentCli": "Claude Code 或 Codex",
+  "@hostKitPrereqAgentCli": {
+    "description": "前置條件的項目名，兩個 CLI 有一個就算過"
+  },
+  "hostKitPrereqAgentCliMissing": "claude 與 codex 都叫不起來",
+  "@hostKitPrereqAgentCliMissing": {
+    "description": "前置條件：兩個 CLI 都沒有"
+  },
+  "hostKitPrereqClaudeCli": "Claude Code",
+  "@hostKitPrereqClaudeCli": {
+    "description": "前置條件的項目名"
+  },
+  "hostKitPrereqClaudeCliMissing": "claude 叫不起來",
+  "@hostKitPrereqClaudeCliMissing": {
+    "description": "前置條件：沒有 Claude Code CLI"
+  },
+  "hostKitPrereqHub": "Hub 位址",
+  "@hostKitPrereqHub": {
+    "description": "前置條件的項目名"
+  },
+  "hostKitPrereqHubOk": "{url} 連得上",
+  "@hostKitPrereqHubOk": {
+    "description": "前置條件：Hub 打得到",
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
+  },
+  "hostKitPrereqHubUnset": "設定頁還沒填 Hub 位址",
+  "@hostKitPrereqHubUnset": {
+    "description": "前置條件：位址是空的"
+  },
+  "hostKitPrereqHubUnreachable": "{url} 連不上",
+  "@hostKitPrereqHubUnreachable": {
+    "description": "前置條件：Hub 打不到",
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerLoginTitle": "Claude 登入",
+  "@hostRunnerLoginTitle": {
+    "description": "執行器分頁的登入狀態區塊"
+  },
+  "hostRunnerLoginOk": "已登入",
+  "@hostRunnerLoginOk": {
+    "description": "執行器的設定目錄底下有憑證"
+  },
+  "hostRunnerLoginMissing": "尚未登入",
+  "@hostRunnerLoginMissing": {
+    "description": "執行器的設定目錄底下沒有憑證"
+  },
+  "hostRunnerLoginHint": "在 PowerShell 執行這一行：",
+  "@hostRunnerLoginHint": {
+    "description": "登入指令前的一句話"
+  },
+  "hostRunnerLoginCommand": "登入指令",
+  "@hostRunnerLoginCommand": {
+    "description": "可複製的登入指令那一列的標籤"
+  },
   "hostKitNameHub": "Hub 主持包",
   "@hostKitNameHub": {
     "description": "三包的名稱，用在「尚未安裝 X」那句話裡"

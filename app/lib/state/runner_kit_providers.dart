@@ -322,6 +322,60 @@ String? runnerClaudeConfigDirFor(RunnerConfigFile cfg,
   return '$dir${Platform.pathSeparator}claude-config';
 }
 
+/// 執行器那個設定目錄底下，claude 登入了沒。
+@immutable
+class RunnerClaudeLogin {
+  const RunnerClaudeLogin({required this.configDir, required this.loggedIn});
+
+  /// 執行器起 claude 時用的 `CLAUDE_CONFIG_DIR`。
+  final String configDir;
+
+  final bool loggedIn;
+
+  /// 沒登入時要人去打的那一行。`CLAUDE_CONFIG_DIR` **一定要帶**：執行器用
+  /// 的是自己的設定目錄，在別的目錄登入等於沒登入。
+  String get loginCommand =>
+      '\$env:CLAUDE_CONFIG_DIR = "$configDir"; claude auth login';
+}
+
+/// 這個設定目錄底下看不看得到登入憑證。
+///
+/// 🔴 **與 `runner-kit/install.py` 的 `has_claude_login()` 同一份判準**：
+/// `.credentials.json`（Claude Code 寫在 `CLAUDE_CONFIG_DIR` 根下），舊版本
+/// 把帳號記在 `.claude.json` 的 `oauthAccount`。兩邊分頭改的話，安裝器與
+/// App 會對同一台機器講出相反的話。
+///
+/// 只是痕跡偵測：讀不到就回 `false`——**寧可多叫一次登入**，也不要顯示
+/// 「已登入」而執行器第一筆單就因為沒登入而炸掉。
+Future<bool> hasClaudeLogin(String claudeConfigDir) async {
+  if (claudeConfigDir.isEmpty) return false;
+  final sep = Platform.pathSeparator;
+  try {
+    final cred = File('$claudeConfigDir$sep.credentials.json');
+    if (await cred.exists() && await cred.length() > 2) return true;
+  } on Object {
+    return false;
+  }
+  try {
+    final json =
+        jsonDecode(await File('$claudeConfigDir$sep.claude.json').readAsString());
+    return json is Map && (json['oauthAccount'] != null);
+  } on Object {
+    return false;
+  }
+}
+
+/// 執行器的 claude 登入狀態。推不出設定目錄就回 `null`（畫面少一列，
+/// 而不是對著一個猜出來的路徑說「尚未登入」）。
+final runnerClaudeLoginProvider =
+    FutureProvider<RunnerClaudeLogin?>((ref) async {
+  final cfg = await ref.watch(runnerConfigProvider.future);
+  if (cfg == null) return null;
+  final dir = runnerClaudeConfigDirFor(cfg) ?? '';
+  if (dir.isEmpty) return null;
+  return RunnerClaudeLogin(configDir: dir, loggedIn: await hasClaudeLogin(dir));
+});
+
 /// 本機執行器在 Hub 上的 `runner_id`，從 `state.json` 現讀。
 ///
 /// **拿不到就是拿不到**：回 `null`，畫面少一個「套用到執行器」的動作，

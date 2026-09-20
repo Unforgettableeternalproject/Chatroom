@@ -6,6 +6,7 @@ import 'package:chatroom_app/screens/host/kit_install_section.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/kit_installer.dart';
+import 'package:chatroom_app/state/kit_prereq.dart';
 import 'package:chatroom_app/widgets/uep_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +35,7 @@ void main() {
     PythonExe? python = const PythonExe(executable: 'py', prefixArgs: ['-3.12']),
     bool runnerBusy = false,
     KitInstaller? installer,
+    List<KitPrereq> prereqs = const [KitPrereq(KitPrereqKind.python)],
   }) =>
       ProviderScope(
         overrides: [
@@ -49,6 +51,9 @@ void main() {
           kitReleaseProvider.overrideWith((ref) async => found),
           kitPythonProvider.overrideWith((ref) async => python),
           runnerBusyProvider.overrideWith((ref) async => runnerBusy),
+          // 前置條件在這一組測試裡不是被測的東西——不覆寫的話，它會去
+          // 跑真的 `claude --version` 並打真的 Hub
+          kitPrereqsProvider.overrideWith((ref, kit) async => prereqs),
           hostKitProvider.overrideWith((ref) async => null),
         ],
         child: MaterialApp(

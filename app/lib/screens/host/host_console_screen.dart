@@ -12,6 +12,7 @@ import '../../state/host_actions.dart';
 import '../../state/host_kit_providers.dart';
 import '../../state/host_probe.dart';
 import '../../state/kit_installer.dart';
+import '../../state/kit_prereq.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../state/runner_kit_providers.dart';
 import '../../widgets/uep_button.dart';
@@ -19,6 +20,7 @@ import '../../widgets/uep_tab_bar.dart';
 import 'env_settings_section.dart';
 import 'host_value_row.dart';
 import 'kit_install_section.dart';
+import 'runner_login_row.dart';
 import 'runner_mcp_section.dart';
 import 'runner_workspaces_section.dart';
 
@@ -76,8 +78,10 @@ class HostConsoleScreen extends ConsumerWidget {
               ref.invalidate(runnerVersionProvider);
               ref.invalidate(runnerIdProvider);
               ref.invalidate(kitReleaseProvider);
-              ref.invalidate(kitPythonProvider);
               ref.invalidate(runnerBusyProvider);
+              ref.invalidate(runnerClaudeLoginProvider);
+              // 前置條件那幾列也跟著重查（含 kitPythonProvider）
+              recheckKitPrereqs(ref);
             },
           ),
         ],
@@ -290,6 +294,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           if (runner != null) ...[
+            const RunnerLoginRow(),
+            _sep(s),
             RunnerWorkspacesSection(kit: runner),
             _sep(s),
             const RunnerMcpSection(),

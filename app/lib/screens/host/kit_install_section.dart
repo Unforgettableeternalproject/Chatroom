@@ -8,9 +8,11 @@ import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../state/host_actions.dart';
 import '../../state/kit_installer.dart';
+import '../../state/kit_prereq.dart';
 import '../../widgets/uep_button.dart';
 import 'host_directory_picker.dart';
 import 'host_value_row.dart';
+import 'kit_prereq_rows.dart';
 
 /// 一包 kit 的「安裝／更新」區塊。
 ///
@@ -150,7 +152,17 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
     final busyRunner =
         kit == KitId.runner && (ref.watch(runnerBusyProvider).value ?? false);
 
-    final blocked = upToDate || missingPython || busyRunner || state.busy;
+    // 前置條件還在查的時候**不擋**：那與「查出來不通過」是兩件事，而把
+    // 「還不知道」擋成「不能裝」會讓一台其實沒問題的機器按不動按鈕，
+    // 旁邊還寫著一句指不出東西的「先處理上面的項目」。
+    final prereqs = ref.watch(kitPrereqsProvider(kit)).value;
+    final prereqBad = prereqs != null && prereqs.any((p) => !p.ok);
+
+    final blocked =
+        upToDate || missingPython || busyRunner || state.busy || prereqBad;
+
+    rows.add(KitPrereqRows(kit: kit));
+    rows.add(const SizedBox(height: 12));
 
     rows.add(_pathRow(context, l10n, enabled: !state.busy));
     rows.add(const SizedBox(height: 12));
@@ -169,6 +181,13 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
         const SizedBox(width: 12),
         Flexible(
           child: Text(l10n.hostKitInstallRunnerBusy,
+              style: UepText.serif(size: 13, color: UepColors.gold)),
+        ),
+      ],
+      if (prereqBad && !upToDate && !busyRunner) ...[
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(l10n.hostKitPrereqBlocked,
               style: UepText.serif(size: 13, color: UepColors.gold)),
         ),
       ],
