@@ -2,7 +2,7 @@
 
     python runner-kit/build.py
 
-內容：install.py + README.md + runner/（原始碼、install-task.ps1、
+內容：install.bat（雙擊入口）+ install-help.txt + install.py + README.md + runner/（原始碼、install-task.ps1、
 　　　config.example.json，不含 tests／快取）+ bridge/（執行器起 run 時
 　　　掛給 claude 的 MCP 伺服器，`run.py` 預設找 kit 根目錄下的 bridge/）。
 
@@ -117,6 +117,11 @@ def build(dist: Path, expect: str = "") -> tuple[Path, dict, str]:
     stage.mkdir(parents=True)
 
     shutil.copy2(KIT_DIR / "install.py", stage / "install.py")
+    # 雙擊入口：install.bat 找 Python、跑 install.py；找不到 Python 時印的
+    # 中文說明在 install-help.txt（bat 本身必須純 ASCII，見它開頭的註解）。
+    # 漏掉任何一支，拿到包的人就只剩「用命令列跑 install.py」這條路
+    shutil.copy2(KIT_DIR / "install.bat", stage / "install.bat")
+    shutil.copy2(KIT_DIR / "install-help.txt", stage / "install-help.txt")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     shutil.copytree(REPO / "runner", stage / "runner", ignore=RUNNER_IGNORE)
     _sanitize_example(REPO / "runner" / "config.example.json",

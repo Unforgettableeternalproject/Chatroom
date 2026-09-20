@@ -1,5 +1,6 @@
 """Chatroom 執行器安裝器（runner 端）。
 
+    install.bat                        # 雙擊入口：找 Python 後跑下面這支
     python install.py                  # 互動式：Hub 位址 / token / 標籤
     python install.py --yes            # 不互動，全用預設／參數值
     python install.py --uninstall      # 移除排程工作與註冊檔（設定與資料留著）
@@ -124,9 +125,68 @@ def default_config_path() -> Path:
     return local_app_data() / "UEP" / "Chatroom" / "runner" / "config.json"
 
 
-def ask(prompt: str, default: str = "") -> str:
-    tip = f"（預設 {default}）" if default else ""
-    return input(f"{prompt}{tip}: ").strip() or default
+# 互動安裝共有幾步。印在每一步前面（`[2/5] …`）——雙擊進來的人需要知道
+# 「還有多久」與「現在卡在哪一步」，尤其 pip 那一步會安靜好幾分鐘
+TOTAL_STEPS = 5
+
+
+def step(index: int, text: str) -> None:
+    print(f"\n[{index}/{TOTAL_STEPS}] {text}", flush=True)
+
+
+def ask(prompt: str, default: str = "", check=None) -> str:
+    """互動提問：`問題 [預設值]: `，直接 Enter 用預設值。
+
+    ⚠️ **不合法就重問，不要丟例外。** 這支現在是雙擊進來的——使用者看到
+    一片 traceback 只會把視窗關掉，而他多半只是位址少打了 `http://`。
+
+    EOF（stdin 是空管道）同樣不能炸：照預設值收場，讓安裝走完。
+    """
+    label = f"{prompt} [{default}]" if default else prompt
+    while True:
+        try:
+            value = input(f"{label}: ").strip() or default
+        except EOFError:
+            print()
+            return default
+        problem = check(value) if check else ""
+        if not problem:
+            return value
+        print(f"    ⚠️ {problem}")
+
+
+def ask_yes_no(prompt: str, default: bool = True) -> bool:
+    """是非題。看不懂的輸入重問一次，不要默默當成「否」。"""
+    hint = "Y/n" if default else "y/N"
+    while True:
+        # 預設值寫在 (Y/n) 的大寫那一邊，不再另外掛一個 [Y]——同一件事
+        # 講兩次只會讓人以為那是兩個欄位
+        raw = ask(f"{prompt}（{hint}）").strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print("    ⚠️ 請輸入 y（要）或 n（不要）。")
+
+
+def check_hub_url(value: str) -> str:
+    if not value:
+        return "不能留空。同一台電腦上的 Hub 就填 http://127.0.0.1:8787。"
+    if not value.startswith(("http://", "https://")):
+        return "位址要以 http:// 或 https:// 開頭，例如 http://192.0.2.10:8787。"
+    if " " in value:
+        return "位址裡不能有空白，確認一下是不是貼到了多餘的字。"
+    return ""
+
+
+def check_name(value: str) -> str:
+    if not value:
+        return "不能留空——Hub 靠 機器名+標籤 認出是哪一台執行器。"
+    if " " in value:
+        return "不要有空白，用短的英數字比較好認（例如 desk-01）。"
+    return ""
 
 
 def venv_python(target: Path) -> Path:
@@ -142,7 +202,7 @@ def stage_kit(target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     if KIT == target:
         return
-    for name in ("install.py", "README.md"):
+    for name in ("install.py", "install.bat", "install-help.txt", "README.md"):
         src = KIT / name
         if src.exists():
             shutil.copy2(src, target / name)
@@ -155,16 +215,16 @@ def stage_kit(target: Path) -> None:
                 "請重新解壓 chatroom-runner-kit.zip")
         shutil.copytree(src, target / name, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__"))
-    print(f"已安裝到 {target}")
+    print(f"  已安裝到 {target}")
 
 
 def ensure_venv(target: Path) -> Path:
     python = venv_python(target)
     if not python.exists():
-        print("建立 venv…")
+        print("  建立 venv…", flush=True)
         subprocess.run([sys.executable, "-m", "venv", str(target / ".venv")],
                        check=True)
-    print("安裝相依套件…")
+    print("  安裝相依套件（第一次會下載，請等幾分鐘）…", flush=True)
     subprocess.run([str(python), "-m", "pip", "install", "--quiet", *DEPS],
                    check=True)
     return python
@@ -461,6 +521,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--no-task", action="store_true",
                    help="不註冊排程工作（之後可手動跑 runner/install-task.ps1）")
     p.add_argument("--yes", action="store_true", help="不互動，全用預設／參數值")
+    p.add_argument("--verbose", action="store_true",
+                   help="失敗時印出完整技術細節（traceback）")
     p.add_argument("--uninstall", action="store_true",
                    help="移除排程工作與註冊檔；設定與資料留著")
     args = p.parse_args(argv)
@@ -477,12 +539,39 @@ def main(argv: list[str] | None = None) -> None:
     if sys.version_info < (3, 12):
         die(f"需要 Python 3.12+（目前 {sys.version.split()[0]}）")
 
-    print("=== Chatroom 執行器安裝 ===\n")
+    print("=== Chatroom 執行器安裝 ===")
+    info = build_info(KIT)
+    print(f"版本 {info['version']}（commit {info['commit']}）"
+          if info["version"] else "版本未知（從原始碼樹執行）")
 
     target = Path(args.dir).expanduser().resolve() if args.dir \
         else default_install_dir()
     config_path = Path(args.config).expanduser().resolve() if args.config \
         else default_config_path()
+
+    if not args.yes:
+        # 先講「這次會做什麼」。雙擊進來的人下一步就要回答問題了，
+        # 在那之前他有權知道這支程式打算動哪些東西
+        print(f"""
+這一包讓這台電腦變成**執行器**：在聊天室接到派工時自動跑 Claude Code。
+
+接下來會做 {TOTAL_STEPS} 件事：
+  [1/{TOTAL_STEPS}] 把這一包複製到安裝目錄
+  [2/{TOTAL_STEPS}] 在那裡建獨立 Python 環境並裝上相依套件
+  [3/{TOTAL_STEPS}] 產生設定檔（**已經有的話原樣不動**）
+  [4/{TOTAL_STEPS}] 註冊 Windows 排程工作（只建工作，不啟動執行器）
+  [5/{TOTAL_STEPS}] 寫註冊檔，並帶你把登入做掉
+
+安裝目錄：{target}
+設定檔　：{config_path}
+
+沒有把握的問題就直接按 Enter。
+""")
+        # 既有安裝先講明白，再問——不然使用者會以為自己要從頭再來一次
+        for _label, _path in (("設定檔", config_path), ("註冊檔", REGISTRY),
+                              ("安裝目錄", target)):
+            if _path.exists():
+                print(f"偵測到既有安裝：{_path}（{_label}），將沿用")
 
     default_host = os.environ.get("COMPUTERNAME") or ""
     if not default_host and hasattr(os, "uname"):
@@ -495,18 +584,23 @@ def main(argv: list[str] | None = None) -> None:
         host = args.host or default_host
         label = args.label or "runner"
     else:
-        hub_url = args.hub_url or ask("Hub 位址", "http://127.0.0.1:8787")
-        token = args.token or ask("Agent token（可留空，之後填進設定檔）")
-        host = args.host or ask("機器名", default_host)
-        label = args.label or ask("標籤", "runner")
+        hub_url = args.hub_url or ask("Hub 位址", "http://127.0.0.1:8787",
+                                      check_hub_url)
+        token = args.token or ask("Agent token（主持人給的那把；可留空，之後填）")
+        host = args.host or ask("機器名", default_host, check_name)
+        label = args.label or ask("標籤（同 機器名+標籤 在 Hub 算同一台）",
+                                  "runner", check_name)
 
     # 這三步任何一步失敗都是真的裝不起來。讓它變成一句話 + 非 0 退出碼，
     # 而不是一坨 traceback——呼叫端（App）要讀得懂
     try:
+        step(1, "把這一包複製到安裝目錄…")
         stage_kit(target)
+        step(2, "建立獨立的 Python 環境並安裝相依套件…")
         python = ensure_venv(target)
         write_pth(python, target)
 
+        step(3, "產生設定檔…")
         example = json.loads(
             (target / "runner" / "config.example.json")
             .read_text(encoding="utf-8"))
@@ -516,10 +610,17 @@ def main(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        die(f"安裝失敗：{exc}")
+        # 中文原因 + 下一步，不是 traceback（要細節的話 --verbose）
+        die(f"安裝失敗：{exc}\n"
+            f"   常見原因：網路連不到 PyPI、或安裝目錄沒有寫入權限。\n"
+            f"   確認後重跑一次即可；要看完整技術細節請加上 --verbose。")
 
+    step(4, "註冊 Windows 排程工作…")
     task_ok = False if args.no_task else register_task(
         target, python, config_path, args.task_name)
+    if args.no_task:
+        print("  這次不註冊（--no-task）。")
+    step(5, "寫註冊檔…")
     registry = write_registry(target, python, config_path)
 
     claude_config = claude_config_dir_for(config_path)
@@ -539,7 +640,9 @@ def main(argv: list[str] | None = None) -> None:
    直譯器　：{python}
    設定檔　：{config_path}{config_note}
 
-還要做兩件只有人做得到的事：
+=== 接下來做什麼 ===
+
+還有兩件只有人做得到的事：
 
 1. 加工作區——設定檔的 `workspaces` 現在是空的，執行器會註冊上線但領不到
    任何單。用 App 的執行器分頁加，或直接編輯 {config_path}。
@@ -561,8 +664,7 @@ def main(argv: list[str] | None = None) -> None:
     # 互動模式順手把第 2 件事做掉；`--yes` 下**不起登入**——那條路上 stdin
     # 是 null，登入流程會在一個沒有人的終端機前面等到天荒地老
     if not args.yes and not logged_in:
-        answer = ask("現在登入 Claude Code？[Y/n]", "Y")
-        if answer.strip().lower() in ("y", "yes", ""):
+        if ask_yes_no("現在就登入 Claude Code？", True):
             if run_login(claude_config):
                 logged_in = has_claude_login(claude_config)
                 print("✅ 已登入。" if logged_in else
@@ -593,5 +695,27 @@ def main(argv: list[str] | None = None) -> None:
     })
 
 
+def run() -> None:
+    """把沒接到的例外翻成一句中文 + 下一步。
+
+    ⚠️ 這支現在是**雙擊**進來的：一片 traceback 對雙擊的人等於沒有訊息，
+    他會直接關掉視窗，而問題本身多半只是「沒有權限寫安裝目錄」。
+    要技術細節的人可以加 `--verbose`，那時原樣拋出去。
+    """
+    try:
+        main()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\n已取消。", file=sys.stderr, flush=True)
+        emit_result({"ok": False, "kit": KIT_NAME, "error": "使用者取消"})
+        raise SystemExit(130)
+    except Exception as exc:
+        if "--verbose" in sys.argv:
+            raise
+        die(f"安裝中止：{type(exc).__name__}: {exc}\n"
+            f"   重跑一次通常就過了；要看完整技術細節請加上 --verbose。")
+
+
 if __name__ == "__main__":
-    main()
+    run()

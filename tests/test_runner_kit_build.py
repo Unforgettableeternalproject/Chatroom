@@ -76,6 +76,10 @@ def test_zip_has_the_pieces_that_make_it_run(packed):
     files = _rel(packed[2])
     for need in (
         "install.py",
+        # 雙擊入口。漏了它，不會下 python 指令的人手上就只有一包原始碼——
+        # 而那正是這包要解決的那件事
+        "install.bat",
+        "install-help.txt",      # bat 在找不到 Python 時印的中文說明
         "README.md",
         "runner/install-task.ps1",       # 沒有它就註冊不了排程工作
         "runner/config.example.json",    # install.py 以它為底產生設定

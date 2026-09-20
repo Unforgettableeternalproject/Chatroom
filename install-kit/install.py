@@ -4,6 +4,7 @@
 Codex CLI 的 MCP 設定。只用 Python 標準庫，Python 3.12+。
 
 用法（互動）：
+    install.bat          # 雙擊入口：找 Python 後跑下面這支
     python install.py
 
 用法（非互動，全部參數給定）：
@@ -91,10 +92,50 @@ def build_info() -> dict[str, str]:
             "commit": str(data.get("commit") or "")}
 
 
-def ask(prompt: str, default: str = "") -> str:
-    tip = f"（預設 {default}）" if default else ""
-    value = input(f"{prompt}{tip}：").strip()
-    return value or default
+# 互動安裝共有幾步。印在每一步前面（`[2/4] …`）——雙擊進來的人需要知道
+# 「還有多久」與「現在卡在哪一步」，尤其 pip 那一步會安靜好幾分鐘
+TOTAL_STEPS = 4
+
+
+def step(index: int, text: str) -> None:
+    print(f"\n[{index}/{TOTAL_STEPS}] {text}", flush=True)
+
+
+def ask(prompt: str, default: str = "", check=None) -> str:
+    """互動提問：`問題 [預設值]: `，直接 Enter 用預設值。
+
+    ⚠️ **不合法就重問，不要丟例外。** 這支現在是雙擊進來的——使用者看到
+    一片 traceback 只會把視窗關掉，而他多半只是位址少打了 `http://`。
+
+    EOF（stdin 是空管道）同樣不能炸：照預設值收場，讓安裝走完。
+    """
+    label = f"{prompt} [{default}]" if default else prompt
+    while True:
+        try:
+            value = input(f"{label}: ").strip() or default
+        except EOFError:
+            print()
+            return default
+        problem = check(value) if check else ""
+        if not problem:
+            return value
+        print(f"    ⚠️ {problem}")
+
+
+def ask_yes_no(prompt: str, default: bool = True) -> bool:
+    """是非題。看不懂的輸入重問一次，不要默默當成「否」。"""
+    hint = "Y/n" if default else "y/N"
+    while True:
+        # 預設值寫在 (Y/n) 的大寫那一邊，不再另外掛一個 [Y]——同一件事
+        # 講兩次只會讓人以為那是兩個欄位
+        raw = ask(f"{prompt}（{hint}）").strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print("    ⚠️ 請輸入 y（要）或 n（不要）。")
 
 
 def ask_required(prompt: str) -> str:
@@ -104,10 +145,25 @@ def ask_required(prompt: str) -> str:
     成功，直到 agent 連不上才發現，而那時沒有人會想到是這一步。
     """
     while True:
-        value = input(f"{prompt}：").strip()
+        try:
+            value = input(f"{prompt}: ").strip()
+        except EOFError:
+            die(f"{prompt}：沒有輸入（stdin 是空的）。"
+                "非互動請改用 --yes 並把值當參數給。")
         if value:
             return value
-        print("  這一項沒有預設值，必須填。")
+        print("    ⚠️ 這一項沒有預設值，必須填。")
+
+
+def check_url(value: str) -> str:
+    """Hub 位址。**留空是合法的**（之後再填進 .env），打錯才要擋。"""
+    if not value:
+        return ""
+    if not value.startswith(("http://", "https://")):
+        return "位址要以 http:// 或 https:// 開頭，例如 http://192.0.2.10:8787。"
+    if " " in value:
+        return "位址裡不能有空白，確認一下是不是貼到了多餘的字。"
+    return ""
 
 
 def scripts_dir() -> Path:
@@ -704,6 +760,8 @@ def main() -> None:
         help="不互動：沒給的值一律留空（之後填進 kit 的 .env），"
              "Hub 連線測試失敗也不停下來問",
     )
+    p.add_argument("--verbose", action="store_true",
+                   help="失敗時印出完整技術細節（traceback）")
     args = p.parse_args()
 
     # 🔴 **`--yes` 下這支不可以問任何問題。**
@@ -711,11 +769,38 @@ def main() -> None:
     # App 是以子進程跑它的：`input()` 讀到的是一個沒有人在打字的管道，
     # 安裝會就地停住或拿到 EOF，而 App 那邊只看得到「沒有輸出、沒有結束」。
     # 所以下面每一處 `ask()` 都必須先過這個閘。
-    def prompt(question: str, default: str = "") -> str:
-        return default if args.yes else ask(question, default)
+    def prompt(question: str, default: str = "", check=None) -> str:
+        return default if args.yes else ask(question, default, check)
 
     check_python()
-    print("=== Chatroom MCP Bridge 安裝 ===\n")
+    info = build_info()
+    where = f"版本 {info['version']}（commit {info['commit']}）" if info["version"] \
+        else "版本未知（從原始碼樹執行）"
+    print(f"=== Chatroom MCP Bridge 安裝 ===\n{where}\n")
+
+    env_file = KIT_DIR / ".env"
+    if not args.yes:
+        # 先講「這次會做什麼」。雙擊進來的人下一步就要回答問題了，
+        # 在那之前他有權知道這支程式打算動哪些東西
+        print(f"""這一包讓你的 Claude Code / Codex 連得上聊天室（多出一批 chatroom_* 工具）。
+
+接下來會做 {TOTAL_STEPS} 件事：
+  [1/{TOTAL_STEPS}] 問你要連哪台 Hub、用什麼代稱（都可以留空，之後再填）
+  [2/{TOTAL_STEPS}] 在這個資料夾裡建獨立 Python 環境並裝上 bridge
+  [3/{TOTAL_STEPS}] 寫進 Claude Code／Codex 的 MCP 設定
+  [4/{TOTAL_STEPS}] 寫下連線設定與註冊檔
+
+沒有把握的問題就直接按 Enter。
+""")
+        # 既有安裝先講明白，再問——不然使用者會以為自己要從頭再來一次
+        for label, path in (("連線設定", env_file), ("註冊檔", REGISTRY),
+                            ("Codex 設定", args.codex_config)):
+            if path.exists():
+                print(f"偵測到既有安裝：{path}（{label}），將沿用／就地更新")
+        if env_file.exists() or REGISTRY.exists():
+            print()
+
+    step(1, "確認要連哪台 Hub…")
 
     # 🔴 **這裡不可以有預設值。**
     #
@@ -733,7 +818,8 @@ def main() -> None:
     # 裡，那時他會安安靜靜地連到別人的 Hub。「按 Enter 就錯」與「按 Enter
     # 就先跳過」是兩回事，這裡要的是後者。
     url = (args.url or prompt(
-        "Hub 位址（主持人給你的，例 http://192.0.2.10:8787；可留空，之後再填）"
+        "Hub 位址（主持人給你的，例 http://192.0.2.10:8787；可留空，之後再填）",
+        check=check_url,
     )).rstrip("/")
     # 🔑 **主持人手上有兩把，agent 要的是 agent 那把。**
     #
@@ -768,14 +854,16 @@ def main() -> None:
             # 照裝並把話說明白，不要停在一個沒有人回答得了的問題上
             print("⚠️ Hub 連線失敗——仍繼續安裝（--yes）。"
                   "連線資訊之後改 kit 的 .env 即可，不必重裝。")
-        elif ask("Hub 連線失敗，仍要繼續安裝嗎？(y/N)", "N").lower() != "y":
+        elif not ask_yes_no("Hub 連線失敗，仍要繼續安裝嗎？", False):
             print("❌ 已中止安裝（Hub 連線失敗）", file=sys.stderr, flush=True)
             emit_result({"ok": False, "kit": KIT_NAME,
                          "error": "Hub 連線失敗，使用者選擇中止"})
             raise SystemExit(1)
 
+    step(2, "建立獨立的 Python 環境並安裝 bridge…")
     exe = install_bridge()
     print()
+    step(3, "寫入 Claude Code／Codex 的 MCP 設定…")
     if "claude" in targets:
         setup_claude(exe, name, args.claude)
         # skill 是 Claude Code 專屬機制，Codex 讀不到——所以手冊仍然
@@ -789,11 +877,12 @@ def main() -> None:
     # 連線資訊的唯一真相：bridge 靠 CHATROOM_ENV_FILE 找到它，watcher
     # （Monitor 拉起的獨立進程，拿不到 MCP 設定裡的 env）靠 cwd 找到它。
     # 兩種 target 都需要：Codex 的 --codex-thread 備援模式同樣是獨立進程。
+    step(4, "寫下連線設定與註冊檔…")
     env_path = write_env_file(url, token)
 
     registry = write_registry(targets)
 
-    print("\n=== 完成 ===")
+    print("\n=== 安裝完成 ===")
     if not url or not token:
         # 裝好了但還連不上，而那是**使用者自己選的**。講清楚缺什麼、填哪裡，
         # 否則他下次想用的時候只會看到 401／連不上，然後回來重裝一次
@@ -806,7 +895,11 @@ def main() -> None:
         print("   填完讓 agent 重連（或重啟 Claude Code / Codex）即可，"
               "不必重跑這支安裝器。")
         print()
-    print("重啟 Claude Code / Codex 後即可使用 chatroom_* 工具。")
+    print("接下來做什麼：")
+    print("  1. **完全關掉**正在跑的 Claude Code / Codex，再重新開啟")
+    print("     （MCP 設定是啟動時讀的，不重開就看不到新工具）")
+    print("  2. 重開後問它「有哪些 chatroom 工具？」，看得到 chatroom_* 就成功了")
+    print("  3. 第一次使用前先讓它讀 chatroom_guide，那是聊天室的操作手冊")
     print("⚠️ 請勿自行設定 CHATROOM_SESSION_KEY——身分由 session 自動決定，")
     print("   固定 key 會讓多個 session 合併成同一個聊天室身分。")
     print("通知用法見 kit 內 README。")
@@ -828,5 +921,28 @@ def main() -> None:
     })
 
 
+def run() -> None:
+    """把沒接到的例外翻成一句中文 + 下一步。
+
+    ⚠️ 這支現在是**雙擊**進來的：一片 traceback 對雙擊的人等於沒有訊息，
+    他會直接關掉視窗，而問題本身多半只是「網路連不到 PyPI」。
+    要技術細節的人可以加 `--verbose`，那時原樣拋出去。
+    """
+    try:
+        main()
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\n已取消。", file=sys.stderr, flush=True)
+        emit_result({"ok": False, "kit": KIT_NAME, "error": "使用者取消"})
+        raise SystemExit(130)
+    except Exception as exc:
+        if "--verbose" in sys.argv:
+            raise
+        die(f"安裝中止：{type(exc).__name__}: {exc}\n"
+            f"   常見原因：網路連不到 PyPI、或這個資料夾沒有寫入權限。\n"
+            f"   要看完整技術細節請加上 --verbose。")
+
+
 if __name__ == "__main__":
-    main()
+    run()

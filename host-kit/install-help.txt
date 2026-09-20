@@ -1,0 +1,9 @@
+
+找不到可用的 Python。
+
+這一包（Chatroom Hub 主機包）需要 Python 3.12 以上。
+若上面印出了一個版本號，那就是這台電腦目前裝的版本——它太舊了。
+
+請到 https://www.python.org/downloads/ 下載並安裝 Python 3.12 以上，
+安裝畫面最下方記得勾選「Add python.exe to PATH」（很容易漏掉的一格），
+裝完之後重新雙擊 install.bat 就可以了。

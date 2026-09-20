@@ -13,8 +13,14 @@ Windows 排程工作。裝好之後這台機器就能從 Hub 領單，在你指�
 
 ## 安裝
 
+解壓 `chatroom-runner-kit.zip` 之後**雙擊 `install.bat`**。
+
+它會自己找 Python（找不到或版本太舊會告訴你去哪裡裝），再帶你一步一步走完
+安裝；視窗不會閃退，裝完的訊息留在畫面上。
+
+已經習慣命令列的話，這條也還在（`install.bat` 跑的就是它，參數原樣轉傳）：
+
 ```powershell
-# 解壓 chatroom-runner-kit.zip 之後
 python install.py
 ```
 
