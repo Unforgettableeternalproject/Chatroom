@@ -45,13 +45,21 @@ void main() {
     RunnerConfigFile config, {
     List<String>? machine,
     String machineError = '',
+    Map<String, McpServerOrigin> origins = const {},
+    String globalError = '',
+    bool complete = true,
   }) =>
       ProviderScope(
         overrides: [
           runnerConfigProvider.overrideWith((ref) async => config),
           runnerIdProvider.overrideWith((ref) async => null),
           machineMcpServersProvider.overrideWith((ref) async =>
-              MachineMcpServers(names: machine, error: machineError)),
+              MachineMcpServers(
+                  names: machine,
+                  error: machineError,
+                  origins: origins,
+                  globalError: globalError,
+                  complete: complete)),
         ],
         child: MaterialApp(
           locale: kTestLocale,
@@ -100,6 +108,60 @@ void main() {
     expect(find.text('正在讀這台機器的 MCP 清單…'), findsNothing,
         reason: '一直停在「正在讀」＝「讀不到」永遠不會被說出來');
     expect(find.text('claude.ai Atlassian Rovo'), findsOneWidget);
+  });
+
+  testWidgets('🔴 兩邊的伺服器都列得出來，而且各標各的來源', (tester) async {
+    // 連接器只有 `claude mcp list` 問得到，fff 只在全域 .claude.json 裡；
+    // 少列一邊的症狀是「勾不到」，而畫面上不會有任何跡象
+    await tester.pumpWidget(wrap(
+      await load(tester),
+      machine: const ['chatroom', 'claude.ai Atlassian Rovo', 'fff'],
+      origins: const {
+        'chatroom': McpServerOrigin.connector,
+        'claude.ai Atlassian Rovo': McpServerOrigin.connector,
+        'fff': McpServerOrigin.global,
+      },
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('fff'), findsOneWidget);
+    expect(find.text('全域 .claude.json'), findsOneWidget);
+    expect(find.text('claude.ai 連接器'), findsNWidgets(2));
+    expect(find.text('本機找不到'), findsNothing);
+  });
+
+  testWidgets('🔴 兩邊都有的名字只列一次，來源以全域為準', (tester) async {
+    // run 帶進去的是全域那一份定義，標示要跟實際載入的一致
+    final merged = mergeMcpServers(
+        const MachineMcpServers(names: ['chatroom', 'fff']),
+        const MachineMcpServers(names: ['fff', 'mempal']));
+    await tester.pumpWidget(wrap(await load(tester),
+        machine: merged.names, origins: merged.origins));
+    await tester.pumpAndSettle();
+
+    expect(find.text('fff'), findsOneWidget);
+    expect(merged.origins['fff'], McpServerOrigin.global);
+    expect(find.text('全域 .claude.json'), findsNWidgets(2));
+  });
+
+  testWidgets('🔴 讀不到全域檔：只列另一邊，說一句，不說「本機找不到」',
+      (tester) async {
+    await tester.pumpWidget(wrap(
+      await load(tester),
+      machine: const ['chatroom', 'claude.ai Atlassian Rovo'],
+      origins: const {
+        'chatroom': McpServerOrigin.connector,
+        'claude.ai Atlassian Rovo': McpServerOrigin.connector,
+      },
+      globalError: 'C:/Users/x/.claude.json',
+      complete: false,
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('讀不到全域 .claude.json'), findsOneWidget);
+    expect(find.text('claude.ai Atlassian Rovo'), findsOneWidget);
+    expect(find.text('本機找不到'), findsNothing,
+        reason: '缺的那些很可能就在沒問到的那一邊');
   });
 
   testWidgets('勾一台本機伺服器 → 存檔寫進 allowed_mcp_servers', (tester) async {

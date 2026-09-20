@@ -373,13 +373,75 @@ const Duration kMcpListTimeout = Duration(seconds: 90);
 /// 「本機找不到」，那是「我們沒問到」。
 @immutable
 class MachineMcpServers {
-  const MachineMcpServers({this.names, this.error = ''});
+  const MachineMcpServers({
+    this.names,
+    this.error = '',
+    this.origins = const {},
+    this.globalError = '',
+    this.complete = true,
+  });
 
   /// 本機列到的伺服器；`null` ＝這次沒問到（不是「一台都沒有」）。
   final List<String>? names;
 
   /// 沒問到的原因，要給使用者看的那一句。
   final String error;
+
+  /// 每個名字是從哪一邊來的。重複的名字以全域為準（畫面只列一次）。
+  final Map<String, McpServerOrigin> origins;
+
+  /// 全域 `.claude.json` 讀不到的原因；空字串＝讀到了。
+  final String globalError;
+
+  /// 兩邊都問到了。🔴 只有這時候畫面才能說某個名字「本機找不到」——
+  /// 少問到一邊時，缺的那些很可能就在沒問到的那一邊。
+  final bool complete;
+}
+
+/// 一台 MCP 伺服器是從哪裡來的。
+///
+/// 兩邊問到的是**不同的東西**：連接器綁執行器的設定目錄，只有
+/// `claude mcp list` 問得到；fff、mempal 這種自訂 stdio 伺服器只寫在使用者
+/// 全域 `.claude.json` 的 `mcpServers` 裡，執行器的設定目錄看不到它們。
+enum McpServerOrigin { connector, global }
+
+/// 使用者全域 `.claude.json`。
+///
+/// `CLAUDE_CONFIG_DIR` 有設而且那裡真的有檔案就用它（人類把設定搬走的
+/// 情況），否則是家目錄底下那一份（Windows 是 `%USERPROFILE%`）。
+/// **與執行器 `run.global_config_path()` 是同一條規則**：畫面上勾得到的
+/// 名字，就是 run 組 mcp.json 時找得到定義的名字。
+File? globalClaudeConfigFile() {
+  final env = Platform.environment;
+  final dir = (env['CLAUDE_CONFIG_DIR'] ?? '').trim();
+  final sep = Platform.pathSeparator;
+  if (dir.isNotEmpty) {
+    final moved = File('$dir$sep.claude.json');
+    if (moved.existsSync()) return moved;
+  }
+  final home = env['USERPROFILE'] ?? env['HOME'] ?? '';
+  if (home.isEmpty) return null;
+  return File('$home$sep.claude.json');
+}
+
+/// 全域 `.claude.json` 的 `mcpServers` 名字，以及讀不到時的原因。
+///
+/// 🔴 **讀不到不是空清單**：回 `null` 讓畫面說「這一邊沒問到」，而不是
+/// 讓人以為自己機器上沒有那些伺服器。
+Future<MachineMcpServers> readGlobalMcpServers({File? file}) async {
+  final f = file ?? globalClaudeConfigFile();
+  if (f == null) return const MachineMcpServers(globalError: 'no home dir');
+  try {
+    if (!await f.exists()) return MachineMcpServers(globalError: f.path);
+    final json = jsonDecode(await f.readAsString());
+    if (json is! Map) return MachineMcpServers(globalError: f.path);
+    final servers = json['mcpServers'];
+    if (servers is! Map) return const MachineMcpServers(names: []);
+    return MachineMcpServers(
+        names: servers.keys.map((e) => '$e').toList()..sort());
+  } on Object catch (e) {
+    return MachineMcpServers(globalError: '$e');
+  }
 }
 
 /// 這台機器上 `claude mcp list` 看得到的 MCP 伺服器名稱。
@@ -418,10 +480,38 @@ Future<MachineMcpServers> listMachineMcpServers(RunnerConfigFile cfg) async {
   return MachineMcpServers(names: names);
 }
 
+/// 兩邊合併成一份清單：連接器（執行器設定目錄）＋全域 `.claude.json`。
+///
+/// 重複的名字**以全域為準**：run 的 mcp.json 帶得進去的是全域那一份定義，
+/// 畫面標的來源要跟實際載入的那一份一致。
+MachineMcpServers mergeMcpServers(
+    MachineMcpServers connectors, MachineMcpServers global) {
+  if (connectors.names == null && global.names == null) {
+    return MachineMcpServers(
+        error: connectors.error, globalError: global.globalError);
+  }
+  final origins = <String, McpServerOrigin>{};
+  for (final name in connectors.names ?? const <String>[]) {
+    origins[name] = McpServerOrigin.connector;
+  }
+  for (final name in global.names ?? const <String>[]) {
+    origins[name] = McpServerOrigin.global;
+  }
+  return MachineMcpServers(
+      names: origins.keys.toList(),
+      origins: origins,
+      error: connectors.error,
+      globalError: global.globalError,
+      complete: connectors.names != null && global.names != null);
+}
+
 /// 這台機器現在看得到的 MCP 伺服器。重讀＝`ref.invalidate`。
 final machineMcpServersProvider =
     FutureProvider<MachineMcpServers>((ref) async {
   final cfg = await ref.watch(runnerConfigProvider.future);
-  if (cfg == null) return const MachineMcpServers(names: []);
-  return listMachineMcpServers(cfg);
+  final global = await readGlobalMcpServers();
+  if (cfg == null) {
+    return mergeMcpServers(const MachineMcpServers(names: []), global);
+  }
+  return mergeMcpServers(await listMachineMcpServers(cfg), global);
 });

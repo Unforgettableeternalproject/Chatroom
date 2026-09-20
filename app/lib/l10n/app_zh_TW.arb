@@ -6799,6 +6799,23 @@
   "@hostRunnerMcpMissing": {
     "description": "設定裡有、但本機清單沒列到的伺服器"
   },
+  "hostRunnerMcpFromConnector": "claude.ai 連接器",
+  "@hostRunnerMcpFromConnector": {
+    "description": "這一列的伺服器來自執行器設定目錄的 claude mcp list"
+  },
+  "hostRunnerMcpFromGlobal": "全域 .claude.json",
+  "@hostRunnerMcpFromGlobal": {
+    "description": "這一列的伺服器來自使用者全域 .claude.json 的 mcpServers"
+  },
+  "hostRunnerMcpGlobalFailed": "讀不到全域 .claude.json：{error}",
+  "@hostRunnerMcpGlobalFailed": {
+    "description": "全域設定檔讀不到時的說明",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
   "hostRunnerMcpListFailed": "讀不到本機 MCP 清單：{error}",
   "@hostRunnerMcpListFailed": {
     "description": "claude mcp list 失敗時的說明",

@@ -842,6 +842,96 @@ def test_run_settings_deny_the_connectors_at_both_layers(tmp_path, work_repo):
     assert "mcp__chatroom__*" not in settings["permissions"]["deny"]
 
 
+# ── 全域 .claude.json 的 MCP 伺服器 ─────────────────────────────
+
+def _fake_global_config(tmp_path, monkeypatch, servers: dict | None,
+                        broken: bool = False):
+    """假的使用者全域 `.claude.json`。servers 是 None ＝檔案根本不存在。"""
+    path = tmp_path / "home" / ".claude.json"
+    if servers is not None or broken:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{壞掉" if broken else json.dumps(
+            {"mcpServers": servers}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(run_module, "global_config_path", lambda: path)
+    return path
+
+
+GLOBAL_SERVERS = {
+    "fff": {"command": "C:/fff.exe", "args": ["serve"],
+            "env": {"FFF_TOKEN": "$KEEP_ME"}},
+    "mempal": {"command": "C:/py.exe", "args": ["-m", "mempal"]},
+}
+
+
+def _write_files(cfg, run_id):
+    ex = _executor(cfg, _NullHub())
+    run_dir = cfg.runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    ex._write_run_files(run_dir, {"id": run_id},
+                        cfg.workspace("ai-website").projects["JSAI-Web"])
+    return run_dir
+
+
+def test_allowed_global_server_lands_in_run_mcp_json(tmp_path, work_repo,
+                                                     monkeypatch):
+    """勾了全域的 fff，run 的 mcp.json 就要有它原樣的定義。
+
+    🚨 run 用的是執行器自己的設定目錄，那裡沒有這些伺服器；不複製定義
+    進來的話，畫面上勾了也只是放行一台根本不會被載入的伺服器。
+    """
+    _fake_global_config(tmp_path, monkeypatch, GLOBAL_SERVERS)
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "fff"])
+    mcp = json.loads((_write_files(cfg, "r-global") / "mcp.json")
+                     .read_text("utf-8"))
+    assert mcp["mcpServers"]["fff"] == GLOBAL_SERVERS["fff"]
+    # env 原樣帶，不做展開——那是人類自己寫的值
+    assert mcp["mcpServers"]["fff"]["env"]["FFF_TOKEN"] == "$KEEP_ME"
+    # 沒勾的不帶
+    assert "mempal" not in mcp["mcpServers"]
+    # chatroom 仍然是執行器自己那一份
+    assert mcp["mcpServers"]["chatroom"]["env"]["CHATROOM_URL"]
+
+
+def test_global_server_outside_the_allow_list_is_denied(tmp_path, work_repo,
+                                                        monkeypatch):
+    """沒勾的全域伺服器要進 deny：run 不帶 --strict-mcp-config，claude 仍然
+    會自己載入它設定目錄的伺服器，允許清單必須管得到每一個名字。"""
+    _fake_global_config(tmp_path, monkeypatch, GLOBAL_SERVERS)
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "fff"])
+    settings = json.loads((_write_files(cfg, "r-global-deny") /
+                           "settings.json").read_text("utf-8"))
+    names = [e.get("serverName") for e in settings["deniedMcpServers"]]
+    assert "mempal" in names
+    assert "fff" not in names
+    assert "mcp__mempal__*" in settings["permissions"]["deny"]
+    assert "mcp__fff__*" not in settings["permissions"]["deny"]
+
+
+def test_chatroom_is_never_taken_from_the_global_file(tmp_path, work_repo,
+                                                      monkeypatch):
+    """全域也有一台叫 chatroom 也不能蓋掉執行器自己的那一份。"""
+    _fake_global_config(tmp_path, monkeypatch,
+                        {"chatroom": {"command": "別人的", "args": []}})
+    cfg = make_config(tmp_path, work_repo)
+    mcp = json.loads((_write_files(cfg, "r-global-chatroom") / "mcp.json")
+                     .read_text("utf-8"))
+    assert mcp["mcpServers"]["chatroom"]["args"] == ["-m", "chatroom_mcp"]
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_missing_or_broken_global_file_does_not_block_the_run(
+        tmp_path, work_repo, monkeypatch, broken):
+    """全域檔不存在或壞掉：略過就好，run 照起。"""
+    _fake_global_config(tmp_path, monkeypatch, None, broken=broken)
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "fff"])
+    mcp = json.loads((_write_files(cfg, f"r-global-{broken}") / "mcp.json")
+                     .read_text("utf-8"))
+    assert list(mcp["mcpServers"]) == ["chatroom"]
+
+
 # ── 回報的容錯（審查 09/16 Major）───────────────────────────────
 
 class _FlakyHub:

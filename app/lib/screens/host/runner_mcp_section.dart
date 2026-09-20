@@ -19,10 +19,16 @@ import 'runner_workspaces_section.dart';
 ///
 /// ## 選項從哪裡來
 ///
-/// `claude mcp list`，而且是在**執行器自己的 `CLAUDE_CONFIG_DIR`** 底下列。
-/// 跟著登入進來的 claude.ai 連接器不在任何 `.claude.json` 的 `mcpServers`
-/// 裡，只有這一條命令問得到；本機 stdio 伺服器也一起列出來，因為執行器
-/// 對它們同樣是預設拒絕。
+/// **兩邊合併**：
+///
+/// 1. `claude mcp list`，在**執行器自己的 `CLAUDE_CONFIG_DIR`** 底下列。
+///    跟著登入進來的 claude.ai 連接器不在任何 `.claude.json` 的
+///    `mcpServers` 裡，只有這一條命令問得到。
+/// 2. 使用者全域 `.claude.json` 的 `mcpServers`（fff、mempal 這種自訂的
+///    本機伺服器）。執行器的設定目錄看不到它們，勾了之後由執行器把定義
+///    複製進每一筆 run 的 `mcp.json`。
+///
+/// 每一列標來源；兩邊都有的名字以全域為準，只列一次。
 ///
 /// 已經寫在設定裡、但這次沒列到的名字**照樣要畫出來**並標「本機找不到」：
 /// 靜默丟掉的症狀是存檔那一刻把別人設的允許項目一起拿掉。
@@ -148,8 +154,12 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
             error: (e, _) => _rows(s, l10n, machine: null, error: '$e'),
             // 🔴 問不到不等於「本機沒有這些」：`names` 是 null 時照樣列出
             // 設定裡的名字，但**不**在它們旁邊標「本機找不到」
-            data: (found) =>
-                _rows(s, l10n, machine: found.names, error: found.error),
+            data: (found) => _rows(s, l10n,
+                machine: found.names,
+                error: found.error,
+                origins: found.origins,
+                globalError: found.globalError,
+                complete: found.complete),
           ),
           const SizedBox(height: 8),
           Align(
@@ -167,7 +177,11 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
 
   /// 一台伺服器一列。清單＝本機列到的 ∪ 設定裡已經有的。
   Widget _rows(UepSurface s, AppLocalizations l10n,
-      {required List<String>? machine, required String error}) {
+      {required List<String>? machine,
+      required String error,
+      Map<String, McpServerOrigin> origins = const {},
+      String globalError = '',
+      bool complete = true}) {
     final known = <String>{...?machine, ..._initial(), ..._selected};
     final names = known.toList()
       ..sort((a, b) {
@@ -186,19 +200,29 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
             child: Text(l10n.hostRunnerMcpListFailed(error),
                 style: UepText.serif(size: 12.5, color: UepColors.error)),
           ),
+        if (globalError.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(l10n.hostRunnerMcpGlobalFailed(globalError),
+                style: UepText.serif(size: 12.5, color: UepColors.error)),
+          ),
         for (final name in names)
           _row(
             s,
             l10n,
             name: name,
-            missing: machine != null && !machine.contains(name),
+            missing:
+                complete && machine != null && !machine.contains(name),
+            origin: origins[name],
           ),
       ],
     );
   }
 
   Widget _row(UepSurface s, AppLocalizations l10n,
-      {required String name, required bool missing}) {
+      {required String name,
+      required bool missing,
+      McpServerOrigin? origin}) {
     final required = name == kRunnerRequiredMcpServer;
     final checked = required || _selected.contains(name);
     void toggle(bool? v) {
@@ -234,6 +258,12 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
                   overflow: TextOverflow.ellipsis,
                   style: UepText.code(size: 12.5, color: s.ink)),
             ),
+            if (origin != null)
+              _tag(
+                  s,
+                  origin == McpServerOrigin.global
+                      ? l10n.hostRunnerMcpFromGlobal
+                      : l10n.hostRunnerMcpFromConnector),
             if (required)
               _tag(s, l10n.hostRunnerMcpRequired)
             else if (missing)

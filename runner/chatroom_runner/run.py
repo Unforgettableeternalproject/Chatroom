@@ -227,12 +227,66 @@ def remember_mcp_servers(servers: list[tuple[str, str]]) -> None:
 
 
 def known_mcp_servers() -> list[tuple[str, str]]:
-    """保底名單 ＋ 自檢探到的。依顯示名排序，參數順序才穩定、好比對。"""
+    """保底名單 ＋ 自檢探到的 ＋ 全域 `.claude.json` 的。依顯示名排序，
+    參數順序才穩定、好比對。
+
+    全域那些也要收進來：允許清單是預設拒絕，名單裡沒有的伺服器就沒有規則
+    管得到它。它們沒有 URL，deny 時用 `serverName`。
+    """
     merged = {name: url for name, url in KNOWN_CLAUDE_AI_SERVERS}
+    for name in global_mcp_servers():
+        merged.setdefault(name, "")
     for name, url in _discovered_servers.items():
         if url or name not in merged:
             merged[name] = url
     return sorted(merged.items())
+
+
+# 🔴 使用者全域 `~/.claude.json` 的 `mcpServers`（fff、mempal、open-notebook
+# 這種自訂的本機 stdio 伺服器）。執行器用自己的 `CLAUDE_CONFIG_DIR` 起
+# claude，所以那個設定目錄下的 `claude mcp list` **問不到它們**——只有
+# 人類自己的設定檔裡有定義。允許清單勾了這種伺服器時，光放行沒有用，
+# 要把定義**原樣複製**進 run 的 mcp.json，claude 才載得到。
+_GLOBAL_CONFIG_NAME = ".claude.json"
+# 允許清單點名、卻哪裡都找不到定義的名字。同一個進程只念一次
+_warned_unknown_allowed: set[str] = set()
+
+
+def global_config_path() -> Path:
+    """使用者全域 `.claude.json` 的位置。
+
+    `CLAUDE_CONFIG_DIR` 有設而且那裡真的有檔案就用它（人類把設定搬走的
+    情況），否則回 `~/.claude.json`（Windows 是 `%USERPROFILE%`）。
+    """
+    env = (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip()
+    if env:
+        candidate = Path(env).expanduser() / _GLOBAL_CONFIG_NAME
+        if candidate.is_file():
+            return candidate
+    return Path.home() / _GLOBAL_CONFIG_NAME
+
+
+def global_mcp_servers() -> dict[str, dict]:
+    """全域設定檔裡的 `mcpServers`（顯示名 → 原樣定義）。
+
+    檔案不在、讀不動或壞掉都只記 warning 回空字典——這不該擋住一筆 run。
+    定義裡的 `env` 原樣帶，不做任何展開（那是人類自己寫的值）。
+    """
+    path = global_config_path()
+    try:
+        raw = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        log.warning("全域 %s 不存在，允許清單裡的自訂 MCP 伺服器帶不進 run",
+                    path)
+        return {}
+    except (OSError, ValueError) as exc:
+        log.warning("全域 %s 讀不了或格式壞掉（%s），這次略過", path, exc)
+        return {}
+    servers = raw.get("mcpServers")
+    if not isinstance(servers, dict):
+        return {}
+    return {str(name): dict(spec) for name, spec in servers.items()
+            if isinstance(spec, dict)}
 
 
 def allowed_server_slugs(allowed: list[str] | None,
@@ -265,6 +319,35 @@ def disallowed_tools(allowed: list[str] | None,
     """`--disallowedTools` 與 `permissions.deny` 共用的那份清單。"""
     return [f"mcp__{server_slug(name)}__*"
             for name, _ in blocked_mcp_servers(allowed, extra_tools)]
+
+
+def global_mcp_definitions(
+        allowed: list[str] | None,
+        reserved: tuple[str, ...] = ()) -> dict[str, dict]:
+    """允許清單點名、而且全域設定檔裡真的有定義的那幾台（原樣的定義）。
+
+    `reserved` 的名字（chatroom）永遠是執行器自己那一份，不從全域取。
+    允許清單裡有、全域沒有、`claude mcp list` 也沒看過的名字，記一次
+    warning——那多半是打錯字或伺服器已經被移掉了。
+    """
+    servers = global_mcp_servers()
+    picked: dict[str, dict] = {}
+    for name in allowed or []:
+        if not name or name in reserved:
+            continue
+        spec = servers.get(name)
+        if spec is not None:
+            picked[name] = spec
+    seen = {name for name, _ in known_mcp_servers()} | set(reserved)
+    unknown = [name for name in (allowed or [])
+               if name and name not in seen
+               and name not in _warned_unknown_allowed]
+    if unknown:
+        _warned_unknown_allowed.update(unknown)
+        log.warning("允許清單點名的 MCP 伺服器找不到定義：%s"
+                    "（全域 %s 與執行器設定目錄都沒有）",
+                    "、".join(unknown), global_config_path())
+    return picked
 
 
 def denied_mcp_servers(allowed: list[str] | None,
@@ -1276,6 +1359,12 @@ class RunExecutor:
                 "CHATROOM_AGENT_KIND": AGENT_KIND,
             },
         }}}
+        # 允許清單勾到的全域伺服器（fff、mempal 這種）：定義原樣複製進來，
+        # 不然 run 用的是執行器的設定目錄，那裡根本沒有它們。chatroom 永遠
+        # 是上面那一份，不被全域同名的蓋掉
+        for name, spec in global_mcp_definitions(
+                self.cfg.allowed_mcp_servers, reserved=("chatroom",)).items():
+            mcp["mcpServers"].setdefault(name, spec)
         (run_dir / "mcp.json").write_text(
             json.dumps(mcp, ensure_ascii=False, indent=2), encoding="utf-8")
 

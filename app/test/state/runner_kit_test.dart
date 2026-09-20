@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:chatroom_app/state/runner_kit_providers.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -77,6 +80,75 @@ chatroom: C:/python.exe -m chatroom_mcp - ✔ Connected
       final dir = runnerClaudeConfigDirFor(cfg(stateDir: r'C:\state'));
       expect(dir, endsWith('claude-config'));
       expect(dir, startsWith(r'C:\state'));
+    });
+  });
+
+  group('全域 .claude.json 的 mcpServers', () {
+    late Directory dir;
+
+    setUp(() => dir = Directory.systemTemp.createTempSync('global_mcp'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    File write(Object json) {
+      final f = File('${dir.path}${Platform.pathSeparator}.claude.json');
+      f.writeAsStringSync(json is String ? json : jsonEncode(json));
+      return f;
+    }
+
+    test('🔴 讀得出自訂的本機伺服器名字', () async {
+      final found = await readGlobalMcpServers(
+          file: write({
+        'mcpServers': {
+          'fff': {'command': 'fff.exe'},
+          'mempal': {'command': 'py.exe'},
+        },
+        'other': 1,
+      }));
+      expect(found.names, ['fff', 'mempal']);
+      expect(found.globalError, isEmpty);
+    });
+
+    test('🔴 檔案不在或壞掉：names 是 null，不是空清單', () async {
+      final missing = await readGlobalMcpServers(
+          file: File('${dir.path}${Platform.pathSeparator}nope.json'));
+      expect(missing.names, isNull, reason: '「沒問到」不等於「一台都沒有」');
+      expect(missing.globalError, isNotEmpty);
+
+      final broken = await readGlobalMcpServers(file: write('{壞掉'));
+      expect(broken.names, isNull);
+      expect(broken.globalError, isNotEmpty);
+    });
+
+    test('沒有 mcpServers 這一鍵＝真的一台都沒有', () async {
+      final found = await readGlobalMcpServers(file: write({'x': 1}));
+      expect(found.names, isEmpty);
+      expect(found.globalError, isEmpty);
+    });
+  });
+
+  group('mergeMcpServers', () {
+    test('🔴 兩邊合併，重複的以全域為準', () {
+      final merged = mergeMcpServers(
+          const MachineMcpServers(names: ['chatroom', 'claude.ai Gmail']),
+          const MachineMcpServers(names: ['chatroom', 'fff']));
+      expect(merged.names, ['chatroom', 'claude.ai Gmail', 'fff']);
+      expect(merged.origins['claude.ai Gmail'], McpServerOrigin.connector);
+      expect(merged.origins['chatroom'], McpServerOrigin.global);
+      expect(merged.complete, isTrue);
+    });
+
+    test('🔴 少問到一邊就不准說誰「本機找不到」', () {
+      final merged = mergeMcpServers(
+          const MachineMcpServers(error: '逾時'),
+          const MachineMcpServers(names: ['fff']));
+      expect(merged.names, ['fff']);
+      expect(merged.complete, isFalse);
+      expect(merged.error, '逾時');
+
+      final none = mergeMcpServers(const MachineMcpServers(error: '逾時'),
+          const MachineMcpServers(globalError: '沒有家目錄'));
+      expect(none.names, isNull);
+      expect(none.globalError, '沒有家目錄');
     });
   });
 }
