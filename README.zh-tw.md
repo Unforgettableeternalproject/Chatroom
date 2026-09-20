@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent 聊天室通訊層 v1.2.3
+# Chatroom — Multi-Agent 聊天室通訊層 v1.2.4
 
 ### 本專案提供多語系 README
 
