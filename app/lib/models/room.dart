@@ -17,6 +17,8 @@ class Room {
     this.lastSeq = 0,
     this.lastActivityAt,
     this.archivedAt,
+    this.workspaceKey,
+    this.workspaceServed = false,
   });
 
   final String id;
@@ -63,11 +65,35 @@ class Room {
   final String? lastActivityAt;
   final String? archivedAt;
 
+  /// 這間工作房綁定的工作區 key。**綁了就不能改**（Hub 對第二次綁定回
+  /// 409 `workspace_already_bound`），所以畫面上要先確認再送。
+  ///
+  /// null ＝還沒綁（也涵蓋舊版 Hub 不回這個欄位的情況）。缺鍵猜一個 key
+  /// 出來的話，畫面會說「只能派工到 X」而 Hub 其實誰都收——那句話是假的。
+  final String? workspaceKey;
+
+  /// 現在有沒有執行器在服務 [workspaceKey]。
+  ///
+  /// 舊版 Hub 不回這個欄位一律 false：派工入口要靠它，而把入口畫出來卻
+  /// 沒有人領單，等於一顆按下去只會排隊到天亮的按鈕。
+  final bool workspaceServed;
+
   bool get isArchived => status == 'archived';
 
   /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
   /// 一律 409 `room_not_ops`，入口畫出來就是一顆必定失敗的按鈕。
   bool get isOps => kind == 'ops';
+
+  /// 這間房現在派得出工嗎。**兩個條件缺一不可**：是工作房（非 ops 房的
+  /// 建單是 409 `room_not_ops`），而且綁定的工作區現在有執行器在服務
+  /// （沒綁是 409 `workspace_not_bound`，綁了沒人服務則是一筆沒有人會領
+  /// 的單）。派工入口的判準只有這一份——散在各個畫面裡就是幾份會各自漂移
+  /// 的真相。
+  bool get canDispatchRuns => isOps && workspaceServed;
+
+  /// 綁好了沒。空字串與 null 都是「還沒綁」——Hub 不會回空字串當 key，
+  /// 但畫面不能因為多一個空白就說出「只能派工到「」」這種話。
+  bool get hasWorkspace => (workspaceKey ?? '').isNotEmpty;
 
   bool get isPrivate => visibility == 'private';
 
@@ -88,6 +114,8 @@ class Room {
         lastSeq: (json['last_seq'] as int?) ?? 0,
         lastActivityAt: json['last_activity_at'] as String?,
         archivedAt: json['archived_at'] as String?,
+        workspaceKey: _workspaceKey(json['workspace_key']),
+        workspaceServed: (json['workspace_served'] as bool?) ?? false,
       );
 
   Room copyWith({
@@ -97,6 +125,8 @@ class Room {
     String? style,
     String? styleInstructions,
     bool? youAreAdmin,
+    String? workspaceKey,
+    bool? workspaceServed,
   }) =>
       Room(
         id: id,
@@ -113,6 +143,8 @@ class Room {
         lastSeq: lastSeq,
         lastActivityAt: lastActivityAt,
         archivedAt: archivedAt,
+        workspaceKey: workspaceKey ?? this.workspaceKey,
+        workspaceServed: workspaceServed ?? this.workspaceServed,
       );
 
   @override
@@ -120,4 +152,10 @@ class Room {
 
   @override
   int get hashCode => id.hashCode;
+}
+
+/// 缺鍵、null 與空字串一律收成 null：只有真的綁了才算綁了。
+String? _workspaceKey(dynamic v) {
+  final s = v is String ? v.trim() : '';
+  return s.isEmpty ? null : s;
 }

@@ -466,4 +466,24 @@ void main() {
       expect(buildPushBrief('jsai_dev', [full]), contains(full));
     });
   });
+
+  group('工作區候選（`workspace_candidates`）', () {
+    test('Hub 給的那一份原樣收下', () {
+      final board = RoomRunnerBoard.fromJson(const {
+        'room_id': 'room-1',
+        'runners': [],
+        'workspace_candidates': ['ai-website', 'uep'],
+      });
+      // 🔴 **不能自己從 runners 算**：房間還沒綁工作區時 Hub 的 runners
+      // 是空的，而那正是要選工作區的那一刻——自己算的話下拉永遠是空的，
+      // 房主永遠綁不了
+      expect(board.runners, isEmpty);
+      expect(board.workspaceCandidates, ['ai-website', 'uep']);
+    });
+
+    test('舊 Hub 沒有這個欄位＝沒有候選，不是猜一份出來', () {
+      final board = RoomRunnerBoard.fromJson(const {'room_id': 'room-1'});
+      expect(board.workspaceCandidates, isEmpty);
+    });
+  });
 }

@@ -43,6 +43,11 @@ async def _setup(client):
                                   "max_parallel": 3, "version": "0.1"})
     runner = reg.json()["runner"]["id"]
     rhdr = {"X-Runner-Token": reg.json()["runner_token"]}
+    # 工作房要先綁工作區才派得了工（Hub 契約）
+    assert (await client.post(
+        f"/api/rooms/{rid}/workspace",
+        json={"workspace_key": "ai-website"},
+        headers={"X-Session-Key": "human-a"})).status_code == 200
     run_id = (await client.post(
         f"/api/rooms/{rid}/runs",
         json={"kind": "ticket", "project": "ai-website", "ref": "JSAI-1",

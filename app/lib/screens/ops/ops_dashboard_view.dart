@@ -8,6 +8,7 @@ import '../../models/agent_run.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/markdown_body.dart';
 import '../../widgets/run_report_panel.dart';
+import '../../widgets/uep_button.dart';
 
 /// 執行儀表板的畫面本體（REMOTE-OPS-PLAN §4.4）。
 ///
@@ -25,6 +26,10 @@ class OpsDashboardView extends StatelessWidget {
     this.onSoftStop,
     this.busyRunnerId,
     this.now,
+    this.workspaceKey,
+    this.workspaceServed = false,
+    this.youAreAdmin = false,
+    this.onBindWorkspace,
   });
 
   final RoomRunnerBoard board;
@@ -55,18 +60,49 @@ class OpsDashboardView extends StatelessWidget {
   /// 驗不出東西。
   final DateTime? now;
 
+  /// 這間房綁定的工作區 key（null ＝還沒綁）。
+  final String? workspaceKey;
+
+  /// 現在有沒有執行器在服務它。
+  final bool workspaceServed;
+
+  /// 我是不是房主。綁定是**一次性**的，只有房主做得到——不是房主時整段
+  /// 不畫按鈕，而是講「房主尚未綁定」：按下去必定 403 的按鈕跟沒有一樣。
+  final bool youAreAdmin;
+
+  /// 送出綁定。null ＝這個畫面不給綁（唯讀的預覽）。
+  final void Function(String workspaceKey)? onBindWorkspace;
+
   @override
   Widget build(BuildContext context) {
+    final workspace = OpsWorkspaceSection(
+      board: board,
+      workspaceKey: workspaceKey,
+      workspaceServed: workspaceServed,
+      youAreAdmin: youAreAdmin,
+      onBind: onBindWorkspace,
+    );
     if (board.runners.isEmpty) {
       final l10n = AppLocalizations.of(context);
-      return _Empty(
-        title: l10n.opsNoRunnersTitle,
-        subtitle: l10n.opsNoRunnersSubtitle,
-      );
+      // 工作區那一段照畫：沒有執行器在線的時候，「這個房綁到哪裡」正是
+      // 人接下來要看的那件事
+      return Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
+          child: workspace,
+        ),
+        Expanded(
+          child: _Empty(
+            title: l10n.opsNoRunnersTitle,
+            subtitle: l10n.opsNoRunnersSubtitle,
+          ),
+        ),
+      ]);
     }
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
       children: [
+        workspace,
         OpsStatusBar(board: board, now: now),
         for (final runner in board.runners) ...[
           _RunnerSection(
@@ -88,6 +124,158 @@ class OpsDashboardView extends StatelessWidget {
           _FinishedSection(runs: finished, now: now),
         ],
       ],
+    );
+  }
+}
+
+/// 「這個房間派工到哪裡」那一段。
+///
+/// 工作房**一次性綁定一個工作區**：綁了之後 Hub 只收這個 key 的單
+/// （409 `workspace_project_mismatch`），沒綁之前一筆都收不了
+/// （409 `workspace_not_bound`）。所以這一段講的是三件不同的事：
+/// 已經綁在哪、還沒綁而我能綁、還沒綁而我不能綁。壓成同一句話的話，
+/// 非房主會對著一顆必定 403 的按鈕按，而房主會找不到入口。
+class OpsWorkspaceSection extends StatefulWidget {
+  const OpsWorkspaceSection({
+    super.key,
+    required this.board,
+    this.workspaceKey,
+    this.workspaceServed = false,
+    this.youAreAdmin = false,
+    this.onBind,
+  });
+
+  final RoomRunnerBoard board;
+  final String? workspaceKey;
+  final bool workspaceServed;
+  final bool youAreAdmin;
+  final void Function(String workspaceKey)? onBind;
+
+  @override
+  State<OpsWorkspaceSection> createState() => _OpsWorkspaceSectionState();
+}
+
+class _OpsWorkspaceSectionState extends State<OpsWorkspaceSection> {
+  /// 選到一半的那個 key。**不預設**：選錯就綁死了，而綁定不可復原。
+  /// 唯一的例外是只有一個候選——那時沒有東西可以選錯。
+  String? _picked;
+
+  Future<void> _confirm(String key) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.opsWorkspaceBindTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        content: Text(
+          '${l10n.opsWorkspaceBindConfirmBody(key)}${l10n.commonIrreversible}',
+          style: UepText.serif(size: 14.5, color: s.inkSoft),
+        ),
+        actions: [
+          UepButton(
+            label: l10n.commonCancel,
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: l10n.opsWorkspaceBindAction,
+            variant: UepButtonVariant.danger,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.onBind?.call(key);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final key = widget.workspaceKey;
+
+    // 已經綁了：頁首講清楚派到哪，沒人服務時再補一句
+    if (key != null && key.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.opsWorkspaceBound(key),
+                style: UepText.mono(size: 12, color: s.ink)),
+            if (!widget.workspaceServed) ...[
+              const SizedBox(height: 4),
+              Text(l10n.opsWorkspaceNotServed,
+                  style: UepText.serif(
+                      size: 12.5, color: UepColors.errorText, height: 1.5)),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // 還沒綁，而我不是房主：講出在等誰，不畫一顆必定 403 的按鈕
+    if (!widget.youAreAdmin) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Text(l10n.opsWorkspaceUnbound,
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
+      );
+    }
+
+    // 還沒綁，而我是房主。候選是 Hub 給的那一份（`workspace_candidates`）
+    // ——它綁定時用同一份資料判 `project_not_served`，App 自己從 `runners`
+    // 算一份的話，選得到的會被 Hub 退。而且未綁定時 `runners` 本來就是空的
+    final candidates = widget.board.workspaceCandidates;
+    final picked =
+        _picked ?? (candidates.length == 1 ? candidates.first : null);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(border: Border.all(color: s.line)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(l10n.opsWorkspaceBindTitle,
+              style: UepText.sans(size: 14, weight: FontWeight.w600, color: s.ink)),
+          const SizedBox(height: 4),
+          Text(l10n.opsWorkspaceBindHint,
+              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
+          const SizedBox(height: 10),
+          if (candidates.isEmpty)
+            // 擋下來要說出理由，而且理由的下一步在那台機器上
+            Text(l10n.opsWorkspaceNoCandidates,
+                style: UepText.serif(
+                    size: 12.5, color: UepColors.errorText, height: 1.5))
+          else
+            Row(children: [
+              DropdownButton<String>(
+                value: picked,
+                hint: Text(l10n.opsWorkspaceSelectHint,
+                    style: UepText.sans(size: 13.5, color: s.inkMute)),
+                items: [
+                  for (final k in candidates)
+                    DropdownMenuItem(
+                      value: k,
+                      child:
+                          Text(k, style: UepText.mono(size: 11.5, color: s.ink)),
+                    ),
+                ],
+                onChanged: (v) => setState(() => _picked = v),
+              ),
+              const SizedBox(width: 12),
+              UepButton(
+                label: l10n.opsWorkspaceBindAction,
+                small: true,
+                onPressed: picked == null ? null : () => _confirm(picked),
+              ),
+            ]),
+        ],
+      ),
     );
   }
 }

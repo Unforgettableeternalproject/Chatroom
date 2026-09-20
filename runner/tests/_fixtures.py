@@ -89,10 +89,28 @@ def write_config(path: Path, tmp_path, repo: Path, **overrides) -> Path:
     return path
 
 
+async def bind_workspace(client, room_id, headers, project="ai-website"):
+    """把工作房綁到工作區。**冪等**：綁過了就當成功。
+
+    Hub 契約：工作房要先綁工作區才派得了工，而綁定當下必須已經有執行器宣告
+    這個 key——所以這一步在執行器註冊之後（`create_run` 會自己叫），不在建房
+    那一刻。房主才綁得動，用的是 `ops_room` 那把人類 session key。
+    """
+    r = await client.post(
+        f"/api/rooms/{room_id}/workspace",
+        json={"workspace_key": project},
+        headers={"X-Session-Key": headers.get("X-Session-Key", "human-a")})
+    if r.status_code == 200:
+        return
+    detail = r.json().get("detail", {})
+    assert detail.get("code") == "workspace_already_bound", r.text
+
+
 async def create_run(client, room_id, headers, **body):
     payload = {"kind": "investigate", "project": "ai-website",
                "ref": "task-1", "brief": "查一下"}
     payload.update(body)
+    await bind_workspace(client, room_id, headers, payload["project"])
     r = await client.post(f"/api/rooms/{room_id}/runs", json=payload,
                           headers=headers)
     assert r.status_code == 200, r.text

@@ -212,6 +212,14 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有發送者本人或聊天室建立者可以刪除這則訊息。",
                 status=status, detail=detail,
             )
+        if code == "room_owner_required":
+            # 綁定工作區：那是「這間房以後派到哪」，不是成員做得了的決定。
+            # 重新 join 不會換一個房主
+            return HubError(
+                _detail_text(detail)
+                or "只有建立這間工作房的人能綁定工作區。",
+                status=status, detail=detail,
+            )
         if code == "not_room_admin":
             return HubError(
                 _detail_text(detail)
@@ -507,6 +515,33 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "沒有執行器服務這個專案。先確認 project key 沒打錯，"
                    "或請那台執行器上線並把這個 key 加進它的 projects 白名單"
                    "——派下去也只會排在佇列裡等一台不會來的執行器。",
+                status=status, detail=detail,
+            )
+        if code == "workspace_not_bound":
+            # 這間工作房還沒綁工作區。**agent 自己解不掉**：綁定只給人類
+            # 房主，bridge 這側連工具都沒有——講成「再試一次」會讓它空轉
+            return HubError(
+                _detail_text(detail)
+                or "這間工作房還沒綁定工作區，所以派不了工。"
+                   "請房主在 App 的執行頁把房間綁到一個工作區，綁完再派"
+                   "——這是一次性的，綁過就不必再綁。",
+                status=status, detail=detail,
+            )
+        if code == "workspace_project_mismatch":
+            bound = detail.get("workspace_key") if isinstance(detail, dict) else None
+            if bound:
+                # 正解就在回應裡，直接講出來——只說「對不上」的話，
+                # 下一步會變成猜 key
+                return HubError(
+                    f"這間房綁的工作區是「{bound}」，project 必須填這個值。"
+                    "房間一旦綁定就只派得動那一個工作區，不是換台執行器"
+                    "就能繞過。",
+                    status=status, detail=detail,
+                )
+            return HubError(
+                _detail_text(detail)
+                or "project 與這間房綁定的工作區不一致。用 chatroom_runs 的"
+                   "儀表板看房間綁的 workspace_key，把 project 改成那個值。",
                 status=status, detail=detail,
             )
         if code == "run_already_finished":

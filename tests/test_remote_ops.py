@@ -28,17 +28,35 @@ HUMAN = "human-token"
 async def _client(tmp_path, name, token=ROOT, **cfg_kw):
     cfg = Config(db_path=str(tmp_path / f"{name}.db"), api_token=ROOT, **cfg_kw)
     app = create_app(cfg)
-    return app, AsyncClient(transport=ASGITransport(app=app),
-                            base_url="http://test",
-                            headers={"Authorization": f"Bearer {token}"})
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://test",
+                         headers={"Authorization": f"Bearer {token}"})
+    # `_bind_workspace` 要拿得到 db；換成各個呼叫點多傳一個 app 的話，
+    # 漏掉一處的症狀是一條跟工作區無關的測試跑出 409
+    client.hub_app = app
+    return app, client
 
 
-async def _ops_room(client, key="human-a", name="工作房"):
+async def _bind_workspace(client, rid, workspace="ai-website"):
+    # 工作房要先綁工作區才派得了工（Hub 契約）。這裡直接寫欄位而不走
+    # `POST /api/rooms/{id}/workspace`：那個端點要求綁定當下已經有執行器
+    # 服務這個 key，而這些測試多半是先建房、後註冊執行器。綁定端點本身的
+    # 契約在 tests/test_room_workspace.py
+    db = client.hub_app.state.db
+    await db.execute("UPDATE room SET workspace_key=? WHERE id=?",
+                     (workspace, rid))
+    await db.commit()
+
+
+async def _ops_room(client, key="human-a", name="工作房",
+                    workspace="ai-website"):
     r = await client.post("/api/rooms",
                           json={"name": name, "kind": "ops",
                                 "session_key": key})
     assert r.status_code == 200, r.text
-    return r.json()["id"]
+    rid = r.json()["id"]
+    await _bind_workspace(client, rid, workspace)
+    return rid
 
 
 async def _join_human(client, rid, key="human-a", name="艾斯維爾"):
@@ -168,6 +186,7 @@ async def test_agent_credentials_cannot_create_ops_rooms_or_runs(tmp_path):
     agent = AsyncClient(transport=ASGITransport(app=app),
                         base_url="http://test",
                         headers={"Authorization": f"Bearer {ROOT}"})
+    human.hub_app = agent.hub_app = app
     async with human, agent:
         async with app.router.lifespan_context(app):
             # agent 憑證建不了 ops 房
@@ -325,16 +344,17 @@ async def test_claim_respects_the_project_allowlist(tmp_path):
     app, client = await _client(tmp_path, "allowlist")
     async with client:
         async with app.router.lifespan_context(app):
-            rid = await _ops_room(client)
+            rid = await _ops_room(client, workspace="other-project")
             hdr = await _join_human(client, rid)
             runner = await _register_runner(client, projects=("ai-website",))
             # 這筆單的 project 由**另一台**服務。少了它，create_run 會先回
             # project_not_served，而這條就再也驗不到領單的白名單
             await _register_runner(client, projects=("other-project",),
                                    label="ex2")
-            await client.post(f"/api/rooms/{rid}/runs",
-                              json=_run_body(project="other-project"),
-                              headers=hdr)
+            assert (await client.post(
+                f"/api/rooms/{rid}/runs",
+                json=_run_body(project="other-project"),
+                headers=hdr)).status_code == 200, "這筆單沒建起來，領單那一步等於沒驗"
             assert (await client.post(
                 f"/api/runners/{runner}/claim",
                 headers=runner.headers)).status_code == 204
@@ -543,12 +563,14 @@ async def test_a_project_nobody_serves_is_rejected_at_dispatch(tmp_path):
             assert (await client.post(f"/api/rooms/{rid}/runs",
                                       json=_run_body(project="ai-website"),
                                       headers=hdr)).status_code == 200
-            # 打錯字擋得住
+            # 打錯字擋得住。房間綁定工作區之後，擋它的是**前一層**：
+            # project 跟這間房的 workspace_key 對不上，連「有沒有人服務」
+            # 都不必問。優先序是故意的：要人改的是這一筆單，不是執行器
             r = await client.post(f"/api/rooms/{rid}/runs",
                                   json=_run_body("task-2", project="ai-webiste"),
                                   headers=hdr)
             assert r.status_code == 409
-            assert r.json()["detail"]["code"] == "project_not_served"
+            assert r.json()["detail"]["code"] == "workspace_project_mismatch"
 
             # 執行器離線之後也算沒人服務：它領不到，這筆單只會排著
             await app.state.db.execute(
@@ -1415,8 +1437,10 @@ async def test_dashboard_json_is_stored_verbatim(tmp_path):
                                     "dashboard_json": dash})
             body = (await client.get(f"/api/rooms/{rid}/runner",
                                      headers=hdr)).json()
-            assert set(body) == {"room_id", "runners", "counts", "queued",
-                                 "running", "active_runs"}
+            assert set(body) == {"room_id", "workspace_key",
+                                 "workspace_candidates", "runners",
+                                 "counts", "queued", "running",
+                                 "active_runs"}
             assert body["runners"][0]["dashboard"] == dash
             assert body["runners"][0]["running_count"] == 1
             assert body["queued"] == 1

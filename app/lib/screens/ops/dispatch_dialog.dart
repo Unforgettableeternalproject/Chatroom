@@ -61,11 +61,14 @@ Future<DispatchRequest?> showDispatchDialog(
   BuildContext context, {
   required String targetLabel,
   required Future<DispatchProjects> projects,
+  String? workspaceKey,
 }) =>
     showDialog<DispatchRequest>(
       context: context,
-      builder: (context) =>
-          DispatchDialog(targetLabel: targetLabel, projects: projects),
+      builder: (context) => DispatchDialog(
+          targetLabel: targetLabel,
+          projects: projects,
+          workspaceKey: workspaceKey),
     );
 
 class DispatchDialog extends StatefulWidget {
@@ -73,6 +76,7 @@ class DispatchDialog extends StatefulWidget {
     super.key,
     required this.targetLabel,
     required this.projects,
+    this.workspaceKey,
   });
 
   /// 要派給誰做的那個東西，寫在對話框頂上。派工是**對一個目標**做的，
@@ -85,6 +89,13 @@ class DispatchDialog extends StatefulWidget {
   /// 建單時用同一份資料判 `project_not_served`，兩邊各寫一份的話，畫面上
   /// 選得到的專案會被 Hub 退，而使用者看不出自己選錯了什麼。
   final Future<DispatchProjects> projects;
+
+  /// 這間房綁定的工作區 key。非 null ＝專案**不給選**：Hub 對別的 key 一律
+  /// 409 `workspace_project_mismatch`，選得到而送不出去比不給選更糟。
+  final String? workspaceKey;
+
+  /// 專案鎖死了沒。
+  bool get isLocked => (workspaceKey ?? '').isNotEmpty;
 
   @override
   State<DispatchDialog> createState() => _DispatchDialogState();
@@ -109,6 +120,8 @@ class _DispatchDialogState extends State<DispatchDialog> {
     super.initState();
     // 計數要跟著字走
     _brief.addListener(() => setState(() {}));
+    // 綁定的房間沒有選擇：專案就是那個 key，從一開始就填好
+    if (widget.isLocked) _project = widget.workspaceKey;
     widget.projects.then(_onProjects).catchError((Object e) {
       // Future 說好不會失敗，真的失敗也不能讓畫面停在「載入中」
       _onProjects(DispatchProjects(
@@ -147,6 +160,11 @@ class _DispatchDialogState extends State<DispatchDialog> {
 
   void _submit() {
     final l10n = AppLocalizations.of(context);
+    // 鎖定時不看清單：專案由房間決定，撈不撈得到清單都不影響送得出去
+    if (widget.isLocked) {
+      _submitWith(widget.workspaceKey!);
+      return;
+    }
     if (_loading) {
       _reject(l10n.opsDispatchStillLoading);
       return;
@@ -164,6 +182,11 @@ class _DispatchDialogState extends State<DispatchDialog> {
       _reject(l10n.opsDispatchPickProject);
       return;
     }
+    _submitWith(project);
+  }
+
+  void _submitWith(String project) {
+    final l10n = AppLocalizations.of(context);
     final brief = _brief.text.trim();
     // Hub 也擋（`max_length=2000`），這裡先擋是為了不要讓人打完 2500 字
     // 才在送出時被退回來
@@ -247,7 +270,20 @@ class _DispatchDialogState extends State<DispatchDialog> {
                   style: UepText.fieldLabel(color: s.inkSoft)),
             ),
             const SizedBox(height: 7),
-            if (_loading)
+            if (widget.isLocked)
+              // 唯讀列。**不是停用的下拉**：停用的下拉看起來還是一個選擇，
+              // 而這裡根本沒有第二個選項
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(widget.workspaceKey!,
+                      style: UepText.mono(size: 11.5, color: s.ink)),
+                  const SizedBox(width: 8),
+                  Text(l10n.opsDispatchProjectLocked,
+                      style: UepText.serif(size: 12, color: s.inkMute)),
+                ]),
+              )
+            else if (_loading)
               // 等待要看得見。不然這一格看起來就只是「沒有專案」
               Align(
                 alignment: Alignment.centerLeft,

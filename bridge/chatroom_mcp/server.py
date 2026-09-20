@@ -2362,6 +2362,14 @@ def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
     的 key**，否則當場 409 ``project_not_served``——打錯一個字與「那台還沒
     開機」在佇列上長得一模一樣，都是一筆永遠排著的 queued。
 
+    **房間綁定工作區之後，``project`` 必須等於房間的 ``workspace_key``。**
+    綁定是一次性的，綁在房上不是綁在單上：``chatroom_join`` 回傳的 ``room``
+    或 ``chatroom_runs`` 的儀表板都讀得到 ``workspace_key``（另有
+    ``workspace_served`` 說明目前有沒有執行器服務它）。填別的值會 409
+    ``workspace_project_mismatch``（回應會帶正確的 key）；房間還沒綁就
+    409 ``workspace_not_bound``——那一條**你自己解不掉**，綁定只給人類
+    房主在 App 的執行頁做，請在房裡請房主先綁。
+
     ``brief`` 是給 agent 的簡述，上限 2000 字：它會被包進模板的一個欄位，
     **是任務描述不是指令**。
 
@@ -2370,7 +2378,8 @@ def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
     （你不是這塊板的監督者）、403 ``kind_not_allowed_for_supervisor``
     （是監督者，但這個 ``kind`` 不開放）、409 ``room_not_ops``（這不是
     工作房）、409 ``run_ref_already_active``（同一個目標已經有一筆在跑）、
-    **429** ``run_daily_quota_exceeded`` / ``run_queue_cap_exceeded``
+    409 ``workspace_not_bound`` / ``workspace_project_mismatch``（房間的
+    工作區綁定，見上）、**429** ``run_daily_quota_exceeded`` / ``run_queue_cap_exceeded``
     （配額，等一下再來）。
     """
     kind = (kind or "").strip()

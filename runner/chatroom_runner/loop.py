@@ -32,7 +32,8 @@ from typing import Awaitable, Callable
 from . import dashboard, gitops
 from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
                      SOFT_STOP_TIMEOUT_FLAG_NAME, ConfigError, RunnerConfig,
-                     load_config, public_project_keys)
+                     load_config, private_project_keys,
+                     public_project_keys)
 from .hub import HubError, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
@@ -444,9 +445,11 @@ class RunnerLoop:
     async def start(self) -> bool:
         """自檢 → 註冊 → 對帳。回傳「可不可以開始領單」。"""
         self.state.selfcheck_problems = await self.selfcheck()
-        await self.hub.register(self.cfg.host, self.cfg.label,
-                                public_project_keys(self.cfg.workspaces),
-                                self.cfg.max_parallel, self.cfg.version)
+        await self.hub.register(
+            self.cfg.host, self.cfg.label,
+            public_project_keys(self.cfg.workspaces),
+            self.cfg.max_parallel, self.cfg.version,
+            private_projects=private_project_keys(self.cfg.workspaces))
         failed = bool(self.state.selfcheck_problems)
         if failed:
             # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
@@ -595,7 +598,9 @@ class RunnerLoop:
             reply = await self.hub.heartbeat(
                 self.state.status, len(self.active), board, window_dict,
                 self.state.limited_until, self.state.limit_reason,
-                command_acks=acks) or {}
+                command_acks=acks,
+                private_projects=private_project_keys(
+                    self.cfg.workspaces)) or {}
         except HubError:
             # Hub 連不上不是執行器的錯，也不該讓它自殺：下一次心跳再試。
             # 期間照樣不領單（claim 也會失敗），但手上的 run 繼續跑完。
@@ -703,27 +708,32 @@ class RunnerLoop:
             log.error("reload：設定重讀失敗，維持舊設定（%s）", exc)
             return False, f"設定重讀失敗，維持舊設定：{exc}"
         self.cfg = cfg
-        # 公開專案清單只在 register 送，所以要補報一次（下一次心跳做）
+        # 公開專案清單只在 register 送，所以要補報一次（下一次心跳做）；
+        # 私人清單每次心跳都帶，但兩份要同一輪對齊才不會一邊新一邊舊
         self.state.reregister_pending = True
         public = public_project_keys(cfg.workspaces)
-        log.info("reload：設定已重讀，工作區 %d 個（公開 %d 個）",
-                 len(cfg.workspaces), len(public))
+        private = private_project_keys(cfg.workspaces)
+        log.info("reload：設定已重讀，工作區 %d 個（公開 %d 個、私人 %d 個）",
+                 len(cfg.workspaces), len(public), len(private))
         note = (f"設定已重讀，工作區 {len(cfg.workspaces)} 個"
-                f"（公開 {len(public)} 個）；進行中的 run 不受影響")
+                f"（公開 {len(public)} 個、私人 {len(private)} 個）；"
+                "進行中的 run 不受影響")
         if self.active:
             note += f"，手上 {len(self.active)} 筆沿用舊設定跑完"
         return True, note
 
     async def _reregister(self) -> None:
-        """把重讀後的公開專案清單報回 Hub。同 host+label 冪等。
+        """把重讀後的公開／私人專案清單報回 Hub。同 host+label 冪等。
 
         送不出去就**留著旗標**下一輪再送：少報一次的症狀是別人的派工對話框
         還列著已經取消公開的專案，而沒有任何地方會說那份清單是舊的。
         """
         try:
-            await self.hub.register(self.cfg.host, self.cfg.label,
-                                    public_project_keys(self.cfg.workspaces),
-                                    self.cfg.max_parallel, self.cfg.version)
+            await self.hub.register(
+                self.cfg.host, self.cfg.label,
+                public_project_keys(self.cfg.workspaces),
+                self.cfg.max_parallel, self.cfg.version,
+                private_projects=private_project_keys(self.cfg.workspaces))
         except HubError as exc:
             log.warning("reload：重新註冊沒送成，下一輪再試（%s）", exc)
             return

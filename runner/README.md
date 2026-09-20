@@ -86,6 +86,7 @@
 | `workspaces.<key>.primary_skill` | 這個工作區**不分 kind**都要開工先載入的 skill（至多一個）。驗證與 `skills` 同一套（缺 `SKILL.md` 就是設定錯誤），名字一樣進 `--allowedTools` 的 `Skill(<name>)`，並寫進契約 |
 | `workspaces.<key>.skill_dirs` | 起 claude 時每個加一個 `--add-dir`。專案的 skill 放在 cwd 的**上一層**時（cwd 自己是子 repo，skill 發現只往上找到 git root），沒有這個設定就掃不到。啟動自檢驗目錄存在 |
 | `workspaces.<key>.skills` | kind → 這種派工**必須遵守**的 skill 名清單，例如 `{"ticket": ["jira-ticket-workflow"]}`。名字會進 `--allowedTools` 的 `Skill(<name>)`，也會寫進契約要求 run 一開始就啟動它。**載入時就驗** `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
+| `workspaces.<key>.public` | 這個工作區公不公開（預設 `true`）。公開的進註冊的 `projects`，沒標公開的進 `private_projects`——**兩份清單都會報給 Hub**，私人工作區只能被私人房派工，那條規則在 Hub。本機白名單不看這個欄位：派到手的私人工作區照常執行 |
 | `workspaces.<key>.extra_write_dirs` | guard 額外放行寫入的目錄（skill 要求的產出落在 repo 外時）。放行的是**位置**，敏感檔名（`.env`、`*.pem` 這類）與敏感目錄的檢查照走 |
 
 ### 一筆 run 在哪個專案（repo）做

@@ -50,6 +50,34 @@ async def test_register_stores_the_runner_token_and_sends_it_afterwards():
     await hub.aclose()
 
 
+async def test_register_and_heartbeat_carry_the_private_project_list():
+    """私人工作區走 `private_projects`，**不進 `projects`**。
+
+    兩份清單互斥：混在一起的話 Hub 沒辦法擋「公開房派私人工作區」，而
+    那個錯誤在派工對話框上看起來完全正常。
+    """
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if request.url.path == "/api/runners/register":
+            return httpx.Response(200, json={"runner": {"id": "run-1"},
+                                             "created": True})
+        return httpx.Response(200, json={"runner_id": "run-1",
+                                         "commands": [],
+                                         "cancel_requested_run_ids": []})
+
+    hub = _hub(handler, RunnerIdentity("run-1", "secret-1"))
+    await hub.register("host", "label", ["open"], 3, "0.1",
+                       private_projects=["secret"])
+    assert bodies[0]["projects"] == ["open"]
+    assert bodies[0]["private_projects"] == ["secret"]
+
+    await hub.heartbeat("online", 0, {}, {}, private_projects=["secret"])
+    assert bodies[1]["private_projects"] == ["secret"]
+    await hub.aclose()
+
+
 async def test_report_always_carries_runner_id():
     bodies: list[dict] = []
 

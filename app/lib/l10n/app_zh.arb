@@ -1430,5 +1430,19 @@
   "hostEnvRestartHub": "重启 Hub",
   "hostEnvRestarting": "重启中…",
   "hostEnvRestartDone": "已重启 Hub。",
-  "hostEnvPanelAgentSettings": "Agent 接入"
+  "hostEnvPanelAgentSettings": "Agent 接入",
+  "opsWorkspaceBound": "工作区：{key}",
+  "opsWorkspaceNotServed": "目前没有执行器在服务这个工作区。",
+  "opsWorkspaceBindTitle": "绑定工作区",
+  "opsWorkspaceBindHint": "绑定后不可更改。",
+  "opsWorkspaceSelectHint": "选择工作区",
+  "opsWorkspaceBindAction": "绑定",
+  "opsWorkspaceNoCandidates": "没有执行器宣告任何工作区。",
+  "opsWorkspaceUnbound": "房主尚未绑定工作区。",
+  "opsWorkspaceBindConfirmBody": "绑定后这个房间只能派工到「{key}」，不可再更改。",
+  "opsWorkspaceBindDone": "已绑定「{key}」。",
+  "opsDispatchProjectLocked": "已绑定，不可更改",
+  "opsErrorWorkspaceNotBound": "这个房间还没绑定工作区，请房主先绑。",
+  "opsErrorWorkspaceMismatch": "这个房间只派工到「{key}」。",
+  "opsErrorWorkspacePrivateRoomRequired": "这是私人工作区，只能绑到私人房间。"
 }

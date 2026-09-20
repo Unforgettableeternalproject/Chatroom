@@ -81,6 +81,11 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
     _refresh();
   }
 
+  Future<void> _bindWorkspace(String key) async {
+    await bindRoomWorkspace(context, ref,
+        roomId: widget.roomId, workspaceKey: key);
+  }
+
   Future<void> _push(AgentRunner runner, RepoView repo) async {
     final ok = await pushRepo(context, ref,
         roomId: widget.roomId,
@@ -107,7 +112,8 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
   Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
-    final room = ref.watch(roomDetailProvider(widget.roomId)).value?.room;
+    final detail = ref.watch(roomDetailProvider(widget.roomId)).value;
+    final room = detail?.room;
     final boardAsync = ref.watch(roomRunnerBoardProvider(widget.roomId));
     // 儀表板只列最近結束的那幾筆（截斷從 provider 移到這裡）
     final finished = (ref.watch(finishedRunsProvider(widget.roomId)).value ??
@@ -175,6 +181,13 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                   error: (e, _) => ErrorState(error: e, onRetry: _refresh),
                   data: (board) => OpsDashboardView(
                     board: board,
+                    workspaceKey: room?.workspaceKey,
+                    workspaceServed: room?.workspaceServed ?? false,
+                    // 房主由 Hub 回答（`you_are_admin`）。自己猜的話，
+                    // 猜錯的兩種結果都是壞的：多畫一顆必定 403 的按鈕，
+                    // 或讓真正的房主找不到入口
+                    youAreAdmin: detail?.youAreAdmin ?? false,
+                    onBindWorkspace: _bindWorkspace,
                     finished: finished,
                     busyRunnerId: _busyRunnerId,
                     onCommand: _command,

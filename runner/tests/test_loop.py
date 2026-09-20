@@ -1291,3 +1291,86 @@ async def test_only_public_projects_are_registered(
         "SELECT projects FROM runner WHERE id=?",
         (runner_hub.identity.runner_id,))).fetchone()
     assert json.loads(row["projects"]) == ["open"]
+def _spy_uplink(loop) -> tuple[list[dict], list[dict]]:
+    """側錄送給 Hub 的清單。
+
+    不看 Hub 的 DB：`private_projects` 那一欄是 Hub 那邊同時在做的事，
+    執行器送了什麼跟 Hub 存不存得下來是兩件事，這裡只驗前者。
+    """
+    registers: list[dict] = []
+    beats: list[dict] = []
+    real_register = loop.hub.register
+    real_heartbeat = loop.hub.heartbeat
+
+    async def register(host, label, projects, max_parallel, version,
+                       private_projects=None):
+        registers.append({"projects": list(projects),
+                          "private_projects": list(private_projects or [])})
+        return await real_register(host, label, projects, max_parallel,
+                                   version,
+                                   private_projects=private_projects)
+
+    async def heartbeat(*args, private_projects=None, **kw):
+        beats.append({"private_projects": list(private_projects or [])})
+        return await real_heartbeat(*args, private_projects=private_projects,
+                                    **kw)
+
+    loop.hub.register = register
+    loop.hub.heartbeat = heartbeat
+    return registers, beats
+
+
+async def test_private_projects_are_reported_on_their_own_list(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """沒標公開的工作區進 `private_projects`，**不進 `projects`**。
+
+    兩份清單互斥：混進 `projects` 的話，公開房的派工對話框就列得出私人
+    工作區，而那一步在 Hub 看起來是一筆再正常不過的派工。
+    """
+    app, _client = hub_app
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    cfg = make_config(tmp_path, work_repo, workspaces={
+        "open": {"projects": repos},
+        "secret": {"public": False, "projects": repos},
+    })
+    loop = _loop(cfg, runner_hub)
+    registers, beats = _spy_uplink(loop)
+    assert await loop.start()
+
+    assert registers[0] == {"projects": ["open"],
+                            "private_projects": ["secret"]}
+    assert beats and beats[0]["private_projects"] == ["secret"], (
+        "心跳也要帶私人清單")
+    row = await (await app.state.db.execute(
+        "SELECT projects FROM runner WHERE id=?",
+        (runner_hub.identity.runner_id,))).fetchone()
+    assert json.loads(row["projects"]) == ["open"]
+
+
+async def test_reload_reports_both_lists_again(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """reload 之後兩份清單一起補報——一邊新一邊舊比兩邊都舊更難看出來。"""
+    _app, client = hub_app
+    _room_id, headers = ops_room
+    repos = {"r": {"path": str(work_repo), "allowed_branches": ["*"]}}
+    path = write_config(tmp_path / "config.json", tmp_path, work_repo,
+                        workspaces={"ai-website": {"projects": repos}})
+    loop = _loop(load_config(path), runner_hub, config_path=path)
+    registers, beats = _spy_uplink(loop)
+    assert await loop.start()
+    assert registers[0] == {"projects": ["ai-website"],
+                            "private_projects": []}
+
+    write_config(path, tmp_path, work_repo, workspaces={
+        "ai-website": {"public": False, "projects": repos},
+        "chatroom": {"projects": repos},
+    })
+    await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
+                      json={"command": "reload"}, headers=headers)
+    await loop.heartbeat()
+
+    assert registers[-1] == {"projects": ["chatroom"],
+                             "private_projects": ["ai-website"]}
+    assert loop.state.reregister_pending is False
+    await loop.heartbeat()
+    assert beats[-1]["private_projects"] == ["ai-website"]

@@ -287,11 +287,23 @@ class RunCreate(BaseModel):
     priority: int = Field(default=0, ge=0, le=9)
 
 
+class WorkspaceBind(BaseModel):
+    """把一間工作房綁到一個工作區 key（一次性）。
+
+    key 的語意與 `RunCreate.project` 同一個命名空間——執行器在 `projects`
+    裡宣告的就是它，兩邊長度上限也要一致，否則綁得進去的 key 派不出工。
+    """
+    workspace_key: str = Field(min_length=1, max_length=64)
+
+
 class RunnerRegister(BaseModel):
     host: str = Field(min_length=1, max_length=128)
     label: str = Field(default="", max_length=64)
     # 允許的 project key。**白名單**：空的就領不到任何單
     projects: list[str] = Field(default_factory=list)
+    # 私人工作區：**只綁得到私人房**。舊執行器不報這一欄 ⇒ 空，
+    # 行為跟這個欄位存在之前一樣
+    private_projects: list[str] = Field(default_factory=list)
     max_parallel: int = Field(default=3, ge=1, le=16)
     version: str = Field(default="", max_length=64)
 
@@ -324,6 +336,10 @@ class RunnerHeartbeat(BaseModel):
     usage_window_json: dict = Field(default_factory=dict)
     # 上一輪取走的命令生效了沒（§5.7）
     command_acks: list[RunnerCommandAck] = Field(default_factory=list)
+    # 私人工作區。**沒帶這一欄＝不改**（None），不是「清空」：舊執行器
+    # 的每一次心跳都不帶，預設空陣列的話它註冊時宣告的那些 key
+    # 會在下一個心跳被抹掉，而名錄上看不出發生過什麼
+    private_projects: list[str] | None = None
 
 
 class RunReport(BaseModel):
@@ -2392,8 +2408,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 自己提的還在等，其他人才不會重複提；卡片上的核准鈕才是只有
         # 建立者才有的東西，那由 you_are_admin 決定
         pending_req = await _pending_archive_request(room_id)
+        # 工作房綁的工作區。`workspace_served` 是**現在**有沒有執行器服務它，
+        # 與「綁了沒有」是兩件事：綁著但執行器全離線時，派工會排進一條永遠
+        # 不會動的佇列，而那在畫面上與正常排隊長得一樣
+        room_public = _room_public(room)
+        room_public["workspace_served"] = bool(
+            room_public.get("workspace_key")
+            and await _project_is_served(room, room_public["workspace_key"]))
         return {
-            "room": _room_public(room),
+            "room": room_public,
             "participants": [e for e, _ in participants],
             "you_are_admin": is_admin,
             "archive_request": _archive_request_public(pending_req)
@@ -13096,6 +13119,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 憑證的 hash 不出 API。它進得了回應的話，儀表板（房內成員都讀得到）
         # 會把所有執行器的 hash 一起端出去
         d.pop("token_sha256", None)
+        # 私人工作區的**名字**也不出 API。儲存儀表板房內成員都讀得到，
+        # 這一欄跟著出去的話，一間公開房就把那台機器上所有私人專案的 key
+        # 列給所有人看——可見性規則在這一步就漏了
+        d.pop("private_projects", None)
         return d
 
     def _runner_token_sha(token: str) -> str:
@@ -13130,6 +13157,123 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "room_not_ops",
                        "派工只能在工作房建立")
         return room
+
+    async def _declared_workspaces() -> tuple[set[str], set[str]]:
+        """非 offline 的執行器宣告的（公開, 私人）工作區 key。
+
+        offline 的不算：它領不到單，綁在它身上的房派出去的工只會排著，
+        而「排著」跟「正在做」在畫面上差不多。
+        """
+        public: set[str] = set()
+        private: set[str] = set()
+        for r in await (await app.state.db.execute(
+                "SELECT projects, private_projects FROM runner"
+                " WHERE status != 'offline'")).fetchall():
+            public.update(_loads_or(r["projects"], []))
+            private.update(_loads_or(r["private_projects"], []))
+        return public, private
+
+    async def _workspace_candidates(room) -> list[str]:
+        """**這間房**綁得上的工作區（排序、去重）。
+
+        私人工作區只出現在私人房：公開房的成員名單不受控制，連名字
+        都不該列出去——下拉選單本身就是一份「這台機器上有哪些專案」的清單。
+        """
+        public, private = await _declared_workspaces()
+        if (room["visibility"] or "public") == "private":
+            return sorted(public | private)
+        return sorted(public)
+
+    async def _project_is_served(room, project: str) -> bool:
+        """這間房用得了這個 key 嗎？綁定、建單與面板共用這一道。
+
+        各寫一份的話，綁得進去卻派不出工（或反過來）就是一個沒有人看得懂
+        的死局——而畫面上只會顯示「排隊中」。
+        """
+        return project in await _workspace_candidates(room)
+
+    def _runner_serves(room, runner_row, key: str) -> bool:
+        """這台執行器服務這間房的這個 key 嗎？同一條可見性規則。"""
+        if key in _loads_or(runner_row["projects"], []):
+            return True
+        return ((room["visibility"] or "public") == "private"
+                and key in _loads_or(runner_row["private_projects"], []))
+
+    @app.post("/api/rooms/{room_id}/workspace",
+              dependencies=[Depends(require_auth)])
+    async def bind_room_workspace(
+        room_id: str,
+        body: WorkspaceBind,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """把這間工作房綁到一個工作區（**一次性，不能改**）。
+
+        規則與錯誤碼（**契約，client 可比對 code**）：
+
+        - 房間必須是 `kind=ops` ⇒ 否則 409 `room_not_ops`
+        - 只有建房的人做得到 ⇒ 否則 403 `room_owner_required`
+        - 已經綁過 ⇒ 409 `workspace_already_bound`（附現有的 `workspace_key`）
+        - 沒有非 offline 的執行器宣告這個 key ⇒ 409 `project_not_served`
+        - key 是私人工作區而這間房是公開的
+          ⇒ 409 `workspace_private_room_required`
+
+        不提供解綁：run 的稽核串全掛在這間房下，中途換工作區等於讓同一串
+        歷史橫跨兩份工作樹，而回頭看時分不出哪一筆是在哪邊跑的。
+
+        綁定會發一則 system 訊息——它改變的是「這間房以後能派什麼工」，
+        房裡的人得從對話本身看得到，不能只在面板上悄悄換一個欄位。
+        """
+        room = await _ops_room_or_409(room_id)
+        # 管理權判定與 `GET /api/rooms/{id}` 的 is_admin 同一套：比 header 的
+        # session key，creator 為空（欄位存在之前建的房）一律不算房主
+        if not room["creator_session_key"] or                 x_session_key != room["creator_session_key"]:
+            raise _err(403, "room_owner_required",
+                       "只有建立這間工作房的人能綁定工作區")
+        if room["workspace_key"]:
+            raise _err(409, "workspace_already_bound",
+                       f"這間房已經綁在工作區「{room['workspace_key']}」上，"
+                       "換工作區請另開一間工作房。",
+                       workspace_key=room["workspace_key"])
+        if not await _project_is_served(room, body.workspace_key):
+            # 先分開「沒人服務」與「有人服務但它是私人的」：兩者都回
+            # project_not_served 的話，使用者會去檢查一台本來就在線上的機器
+            _, private = await _declared_workspaces()
+            if body.workspace_key in private:
+                raise _err(409, "workspace_private_room_required",
+                           "這個工作區是私人的，只能綁到私人房間",
+                           project=body.workspace_key)
+            raise _err(409, "project_not_served",
+                       f"沒有執行器服務 `{body.workspace_key}` 這個工作區，"
+                       "請確認 key，或讓對應的執行器上線。",
+                       project=body.workspace_key)
+        db = app.state.db
+        # 帶著「原本是 NULL」當條件，用 rowcount 判自己是不是贏家：兩個人
+        # 同時綁不同的 key 時，後到的那個要看到 409，不是默默被覆蓋
+        cur = await db.execute(
+            "UPDATE room SET workspace_key=? WHERE id=? AND workspace_key IS NULL",
+            (body.workspace_key, room_id))
+        if cur.rowcount == 0:
+            # 不 rollback：這是**共用連線**，把它清掉會連同別的請求已寫入、
+            # 還沒 commit 的東西一起丟。這條路徑本來就沒改到任何一列
+            current = await _room_or_404(room_id, allow_archived=True)
+            raise _err(409, "workspace_already_bound",
+                       f"這間房已經綁在工作區「{current['workspace_key']}」上，"
+                       "換工作區請另開一間工作房。",
+                       workspace_key=current["workspace_key"])
+        await _commit_with_retry(db)
+        owner = await (await db.execute(
+            "SELECT display_name FROM participant WHERE room_id=? AND"
+            " session_key=? AND status='active' ORDER BY joined_at LIMIT 1",
+            (room_id, room["creator_session_key"]))).fetchone()
+        who = (owner["display_name"] if owner is not None
+               and owner["display_name"] else "房主")
+        await _post_message(
+            room_id, None,
+            f"{who} 將這個房間綁定到工作區「{body.workspace_key}」",
+            kind="system", system_event="workspace_bound")
+        await events.notify(room_id)
+        updated = await _room_or_404(room_id, allow_archived=True)
+        return {"room": {**_room_public(updated), "workspace_served": True}}
 
     async def _room_human_names(room_id: str) -> list[str]:
         """房內所有 active 人類的顯示名。
@@ -13361,6 +13505,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         規則與錯誤碼（**契約，client 可比對 code**）：
 
         - 房間必須是 `kind=ops` ⇒ 否則 409 `room_not_ops`
+        - 房間必須已綁定工作區 ⇒ 否則 409 `workspace_not_bound`
+        - `project` 必須等於房間的 `workspace_key`
+          ⇒ 否則 409 `workspace_project_mismatch`
         - `project` 必須有至少一台非 offline 的執行器宣告在 `projects` 裡
           ⇒ 否則 409 `project_not_served`
         - 同一個 `ref` 還有 queued/claimed/running/limited/handoff 的 run
@@ -13378,7 +13525,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         由面板顯示即可），但仍 `events.notify`——掛在 long-poll 上的 App 要
         醒過來重撈佇列。
         """
-        await _ops_room_or_409(room_id)
+        room = await _ops_room_or_409(room_id)
         me = await _participant(x_participant_id, room_id)
         db = app.state.db
         # Supervisor 那條路要先問出來：它同時決定「憑證那一關放不放」與
@@ -13404,14 +13551,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         # project 要有人服務。沒有任何非 offline 的執行器宣告過這個 key 的
         # 話，這筆 run 會安靜地排在佇列裡等一台永遠不會來的執行器——打錯一個
         # 字與「執行器還沒開機」在畫面上長得一模一樣
-        served = False
-        for r in await (await db.execute(
-                "SELECT projects FROM runner WHERE status != 'offline'"
-        )).fetchall():
-            if body.project in _loads_or(r["projects"], []):
-                served = True
-                break
-        if not served:
+        # 工作區先於專案：這間房綁在哪，就只能派那一個 key 的工。沒有這
+        # 一關的話，一間房可以同時派工到好幾份工作樹，而 run 的歷史全部
+        # 混在同一串裡——回頭看時分不出哪一筆動的是哪邊的檔案
+        workspace = room["workspace_key"] or ""
+        if not workspace:
+            raise _err(409, "workspace_not_bound",
+                       "這間工作房還沒綁定工作區，請房主先綁定再派工。")
+        if body.project != workspace:
+            raise _err(409, "workspace_project_mismatch",
+                       f"這間房綁在工作區「{workspace}」，"
+                       f"派不了 `{body.project}` 的工。",
+                       project=body.project, workspace_key=workspace)
+        if not await _project_is_served(room, body.project):
             raise _err(409, "project_not_served",
                        f"沒有執行器服務 `{body.project}` 這個專案，"
                        "請確認專案 key，或讓對應的執行器上線。",
@@ -13672,6 +13824,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT * FROM runner WHERE host=? AND label=?",
             (body.host, body.label))).fetchone()
         projects = json.dumps(body.projects, ensure_ascii=False)
+        private_projects = json.dumps(body.private_projects,
+                                      ensure_ascii=False)
         if found is not None and (found["token_sha256"] or ""):
             if not (x_runner_token and hmac.compare_digest(
                     _runner_token_sha(x_runner_token),
@@ -13680,11 +13834,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "這組 host+label 已經註冊過，重註冊請帶 "
                            "X-Runner-Token，換一台機器請換一組 label")
             await db.execute(
-                "UPDATE runner SET projects=?, max_parallel=?, version=?,"
+                "UPDATE runner SET projects=?, private_projects=?,"
+                " max_parallel=?, version=?,"
                 " status=CASE WHEN status='offline' THEN 'online'"
                 "        ELSE status END,"
                 " last_seen_at=? WHERE id=?",
-                (projects, body.max_parallel, body.version, now, found["id"]))
+                (projects, private_projects, body.max_parallel, body.version,
+                 now, found["id"]))
             await _settle_stale_commands(
                 found["id"], "執行器已重新啟動，這筆命令視為已結束。")
             await _commit_with_retry(db)
@@ -13694,12 +13850,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         if found is not None:
             # 升級前註冊的執行器：補發一把，其餘欄位照舊更新
             await db.execute(
-                "UPDATE runner SET projects=?, max_parallel=?, version=?,"
+                "UPDATE runner SET projects=?, private_projects=?,"
+                " max_parallel=?, version=?,"
                 " token_sha256=?,"
                 " status=CASE WHEN status='offline' THEN 'online'"
                 "        ELSE status END,"
                 " last_seen_at=? WHERE id=?",
-                (projects, body.max_parallel, body.version,
+                (projects, private_projects, body.max_parallel, body.version,
                  _runner_token_sha(token), now, found["id"]))
             await _settle_stale_commands(
                 found["id"], "執行器已重新啟動，這筆命令視為已結束。")
@@ -13709,10 +13866,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         runner_id = _uid()
         await db.execute(
             "INSERT INTO runner (id, host, label, status, max_parallel,"
-            " projects, version, token_sha256, registered_at, last_seen_at)"
-            " VALUES (?,?,?,'online',?,?,?,?,?,?)",
+            " projects, private_projects, version, token_sha256,"
+            " registered_at, last_seen_at)"
+            " VALUES (?,?,?,'online',?,?,?,?,?,?,?)",
             (runner_id, body.host, body.label, body.max_parallel, projects,
-             body.version, _runner_token_sha(token), now, now))
+             private_projects, body.version, _runner_token_sha(token),
+             now, now))
         await _commit_with_retry(db)
         return {"runner": _runner_public(await _runner_or_404(runner_id)),
                 "created": True, "runner_token": token}
@@ -13816,6 +13975,13 @@ def create_app(config: Config | None = None) -> FastAPI:
              json.dumps(body.dashboard_json, ensure_ascii=False),
              json.dumps(body.usage_window_json, ensure_ascii=False),
              now, runner_id))
+        if body.private_projects is not None:
+            # 帶了才改。舊執行器的心跳不帶這一欄，每一輪都改的話它
+            # 註冊時宣告的私人工作區會在下一個心跳被抹掉
+            await db.execute(
+                "UPDATE runner SET private_projects=? WHERE id=?",
+                (json.dumps(body.private_projects, ensure_ascii=False),
+                 runner_id))
         for ack in body.command_acks:
             # `runner_id=?` 一起比對：少了它，一台執行器可以替別台把命令
             # 標成已生效。`COALESCE` 讓已生效的不會被後來的空 ack 洗掉
@@ -13897,7 +14063,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         db = app.state.db
         row = await _runner_authed(runner_id, x_runner_token)
-        projects = _loads_or(row["projects"], [])
+        # 公開與私人兩份名單都算：私人工作區的 run 只來自私人房（綁定
+        # 那一關已經擋了），領單這一端再排除它的話，那些單永遠排著
+        projects = sorted(set(_loads_or(row["projects"], []))
+                          | set(_loads_or(row["private_projects"], [])))
         # 沒有允許清單就領不到任何東西：`project` 是白名單，不是提示
         if row["status"] != "online" or not projects:
             response.status_code = 204
@@ -14154,17 +14323,28 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         """給 App 的執行儀表板（§4.4）。房內成員可讀。
 
-        ⚠️ 第一階段**不做 project→房 的對應**：列出所有非 offline 的執行器。
-        對應關係現在只存在執行器的設定裡（`runner/config`，P2），Hub 這一端
-        猜一個出來的話，面板會說某台執行器與這間房有關，而那是它自己編的。
+        **只列服務這間房工作區的執行器**：房間綁定之後，「哪些執行器與這
+        間房有關」有了確定的答案（`projects` 含 `workspace_key`），面板不必
+        再列全部讓人自己猜。還沒綁定就回空清單——這時候誰都還不相關。
+
+        `workspace_candidates` 則是**綁定前後都給**：未綁定時 `runners` 是空的，
+        沒有它的話 App 找不到任何一個可以綁的 key，這間房就永遠綁不了。
+        私人工作區只出現在私人房的清單裡。
         """
-        await _room_or_404(room_id, allow_archived=True)
+        room = await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id, host)
         db = app.state.db
-        runners = await (await db.execute(
-            "SELECT * FROM runner WHERE status IN"
-            " ('online','limited','paused','restarting')"
-            " ORDER BY last_seen_at DESC")).fetchall()
+        workspace = room["workspace_key"] or None
+        runners = []
+        if workspace:
+            runners = [
+                r for r in await (await db.execute(
+                    "SELECT * FROM runner WHERE status IN"
+                    " ('online','limited','paused','restarting')"
+                    " ORDER BY last_seen_at DESC")).fetchall()
+                if _runner_serves(room, r, workspace)
+            ]
+        candidates = await _workspace_candidates(room)
         # 每台的最近 5 筆命令（新到舊）：App 靠它把「已送出 → 已收到 →
         # 已生效」那條鏈畫出來。只給最近幾筆，面板要的是現在這一輪，
         # 不是這台機器一整年的歷史
@@ -14187,6 +14367,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             (room_id,))).fetchall()
         return {
             "room_id": room_id,
+            "workspace_key": workspace,
+            # 還沒綁的時候 `runners` 是空的，而房主得從某個地方挑一個
+            # key 出來——這一欄就是那個下拉選單。綁完也照給：面板要
+            # 說得出「還有哪些工作區」，而不是只有自己綁的那一個
+            "workspace_candidates": candidates,
             "runners": [{**_runner_public(r),
                          "commands": cmd_rows.get(r["id"], [])}
                         for r in runners],

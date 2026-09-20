@@ -41,6 +41,7 @@ def test_run_403_codes_are_not_identity_failures(code):
 @pytest.mark.parametrize("code", [
     "room_not_ops", "run_ref_already_active", "project_not_served",
     "run_already_finished", "run_bad_transition",
+    "workspace_not_bound", "workspace_project_mismatch",
 ])
 def test_run_409_codes_have_their_own_wording(code):
     err = _err(409, code)
@@ -106,3 +107,26 @@ def test_a_run_cannot_be_appointed_supervisor_says_why():
     assert err.status == 409
     assert "操作與 Hub 目前狀態衝突" not in err.reason
     assert err.identity_invalid is False
+
+
+def test_workspace_not_bound_points_at_the_human_owner():
+    """agent 自己綁不了工作區——講成「再試一次」它只會重打同一支。"""
+    err = _err(409, "workspace_not_bound",
+               "這間房還沒綁定工作區。")
+    assert err.status == 409
+    assert err.identity_invalid is False
+    assert "綁" in err.reason
+
+
+def test_workspace_mismatch_tells_you_the_key_to_use():
+    """Hub 回應帶 workspace_key 時要直接講出該填什麼，不要讓人去猜。"""
+    err = translate_status(
+        409,
+        {"code": "workspace_project_mismatch",
+         "message": "project 與房間綁定的工作區不一致。",
+         "workspace_key": "chatroom"},
+        "u",
+    )
+    assert err.status == 409
+    assert "chatroom" in err.reason
+    assert "project" in err.reason

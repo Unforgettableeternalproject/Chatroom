@@ -819,13 +819,18 @@ extension on _TaskActionBarState {
 
     // 「派工」：把這張卡交給遠端的執行器（REMOTE-OPS-PLAN §6.2）。
     //
-    // **只在工作房出現**——Hub 對非 ops 房的建單一律 409 `room_not_ops`，
-    // 而板軸（沒有房）連派到哪裡都答不出來。停用留著在這裡沒有意義：
-    // 一般房間裡「派工」不是「現在還不行」，是這件事不存在。
+    // **只在工作房、而且那個房綁定的工作區有人在服務時出現**——Hub 對非
+    // ops 房的建單是 409 `room_not_ops`，沒綁工作區是 409
+    // `workspace_not_bound`，而板軸（沒有房）連派到哪裡都答不出來。停用
+    // 留著在這裡沒有意義：一般房間裡「派工」不是「現在還不行」，是這件事
+    // 不存在。
     final roomId = widget.roomId;
-    final isOps = roomId != null &&
-        (ref.watch(roomDetailProvider(roomId)).value?.room.isOps ?? false);
-    if (isOps) {
+    final room = roomId == null
+        ? null
+        : ref.watch(roomDetailProvider(roomId)).value?.room;
+    final canDispatch =
+        roomId != null && (room?.canDispatchRuns ?? false);
+    if (canDispatch) {
       entries.add(PopupMenuItem<VoidCallback>(
         value: () => dispatchRun(
           context,

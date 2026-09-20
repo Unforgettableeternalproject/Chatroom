@@ -119,15 +119,21 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   bool get _readOnly => _editability != BoardEditability.editable;
 
-  /// 這塊板是不是掛在工作房底下。派工入口只在那時出現——Hub 對非 ops 房
-  /// 的建單一律 409 `room_not_ops`，其他地方畫出來就是一顆必定失敗的按鈕。
+  /// 派工入口該不該出現。**兩個條件**：
+  ///
+  /// 1. 掛在工作房底下——Hub 對非 ops 房的建單一律 409 `room_not_ops`。
+  /// 2. 這個房綁定的工作區現在有執行器在服務（`workspace_served`）——沒綁
+  ///    是 409 `workspace_not_bound`，綁了但沒人服務則是一筆永遠沒有人領
+  ///    的單。兩種都是按下去不會有結果的按鈕。
   ///
   /// 板軸（Board Library）進來時沒有房，一律 false：那條路上連派到哪間房
   /// 都答不出來。
-  bool get _isOpsRoom =>
-      widget.roomId != null &&
-      (ref.watch(roomDetailProvider(widget.roomId!)).value?.room.isOps ??
-          false);
+  bool get _canDispatch {
+    final roomId = widget.roomId;
+    if (roomId == null) return false;
+    final room = ref.watch(roomDetailProvider(roomId)).value?.room;
+    return room?.canDispatchRuns ?? false;
+  }
 
   String? _selectedObjectiveId;
 
@@ -1459,7 +1465,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 // 派工：把整個階段交給遠端的執行器（§6.2 的 `stage` 模板，
                 // 但模板由對話框選）。**收尾／取消的階段不給派**——那一段
                 // 已經結束了，派出去的 agent 會對著一份沒有人在等的工作做
-                if (_isOpsRoom && c.status == 'open') ...[
+                if (_canDispatch && c.status == 'open') ...[
                   _BarButton(
                     label: AppLocalizations.of(context).boardDispatchRun,
                     onTap: () => dispatchRun(

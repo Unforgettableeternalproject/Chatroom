@@ -7,6 +7,7 @@ import '../../core/errors/api_exception.dart';
 import '../../l10n/l10n.dart';
 import '../../models/agent_run.dart';
 import '../../state/app_providers.dart';
+import '../../state/rooms_providers.dart';
 import '../../state/runs_providers.dart';
 import 'dispatch_dialog.dart';
 import 'ops_dashboard_view.dart';
@@ -57,9 +58,19 @@ Future<bool> dispatchRun(
     }
   }
 
-  _log.info('開啟派工對話框（room=$roomId target=$targetRef「$targetLabel」）');
+  // 房間綁定了工作區的話，專案就不是一個選擇：Hub 對別的 key 回 409
+  // `workspace_project_mismatch`。這時連清單都不必撈——那一趟的唯一用途
+  // 就是把下拉填起來
+  final bound = ref.read(roomDetailProvider(roomId)).value?.room.workspaceKey;
+
+  _log.info('開啟派工對話框（room=$roomId target=$targetRef「$targetLabel」'
+      '${bound == null ? '' : ' workspace=$bound'}）');
   final request = await showDispatchDialog(context,
-      targetLabel: targetLabel, projects: loadProjects());
+      targetLabel: targetLabel,
+      workspaceKey: bound,
+      projects: bound == null
+          ? loadProjects()
+          : Future.value(DispatchProjects(projects: [bound])));
   if (request == null) {
     _log.info('派工對話框取消或未送出（target=$targetRef）');
     return false;
@@ -86,6 +97,50 @@ Future<bool> dispatchRun(
   } on ApiException catch (e) {
     _log.warning('create_run 被退回：${e.code} ${e.message}');
     _notify(messenger, _dispatchError(l10n, e));
+    return false;
+  }
+}
+
+/// 把工作房綁到一個工作區 key。**一次性，綁了不能改**——確認框在按鈕那端
+/// （[OpsWorkspaceSection]），這裡只負責送出與善後。
+///
+/// 成功之後 [roomDetailProvider] 與 [roomRunnerBoardProvider] 都要重抓：
+/// 前者是「綁到哪」的真相（派工入口的條件也看它），後者的 `runners` 在綁定
+/// 之前是空的——只 invalidate 一個的話，畫面會停在一個已經不成立的狀態。
+Future<bool> bindRoomWorkspace(
+  BuildContext context,
+  WidgetRef ref, {
+  required String roomId,
+  required String workspaceKey,
+}) async {
+  final api = ref.read(roomsApiProvider);
+  final l10n = AppLocalizations.of(context);
+  // 送出要用的東西在畫面還在的時候就抓好——綁定區塊自己會在成功後消失
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final pid = ref.read(settingsRepoProvider).participantId(roomId);
+  final deviceKey = ref.read(appConfigProvider).deviceKey;
+  try {
+    _log.info('綁定工作區送出：room=$roomId key=$workspaceKey');
+    final room = await api.bindWorkspace(roomId,
+        workspaceKey: workspaceKey,
+        sessionKey: deviceKey,
+        participantId: pid);
+    ref.invalidate(roomDetailProvider(roomId));
+    ref.invalidate(roomRunnerBoardProvider(roomId));
+    _notify(messenger,
+        l10n.opsWorkspaceBindDone(room.workspaceKey ?? workspaceKey));
+    return true;
+  } on ApiException catch (e) {
+    _log.warning('綁定工作區被退回：${e.code} ${e.message}');
+    // Hub 那幾句話（不是房主／已經綁過／沒有執行器服務）已經夠清楚，
+    // 原樣用——在這裡改寫只會多一份會漂移的真相。只有一條要自己講：
+    // 私人工作區綁到公開房間，下一步是**先把房間改成私人**，而那件事
+    // 在另一個畫面上，錯誤碼本身看不出來
+    _notify(
+        messenger,
+        e.code == 'workspace_private_room_required'
+            ? l10n.opsErrorWorkspacePrivateRoomRequired
+            : e.message);
     return false;
   }
 }
@@ -251,6 +306,12 @@ String _dispatchError(AppLocalizations l10n, ApiException e) =>
       'run_daily_quota_exceeded' => e.message,
       'run_queue_cap_exceeded' => e.message,
       'room_not_ops' => l10n.opsErrorRoomNotOps,
+      // 工作房一次性綁定工作區之後的兩種退法（契約 2026-09-21）。**處置
+      // 不一樣**：沒綁是去找房主，綁錯邊是這張卡根本不該派到這間房——
+      // 講成同一句「派工失敗」等於什麼都沒說
+      'workspace_not_bound' => l10n.opsErrorWorkspaceNotBound,
+      'workspace_project_mismatch' => l10n.opsErrorWorkspaceMismatch(
+          '${e.detail['workspace_key'] ?? l10n.commonUnknown}'),
       // Supervisor 代派時的 kind 白名單（2026-09-19）。Hub 把被擋下的 kind
       // 放在 detail 裡，講出是哪一種才知道下一步該換誰來按
       'kind_not_allowed_for_supervisor' => l10n

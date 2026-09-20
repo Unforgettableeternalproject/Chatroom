@@ -34,7 +34,12 @@ CREATE TABLE IF NOT EXISTS room (
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
     archived_at TEXT,
     creator_session_key TEXT,                     -- 建立者（管理員）的 session；不外流
-    archive_pending_since TEXT                    -- 自動封存倒數的起點；NULL = 未在倒數
+    archive_pending_since TEXT,                   -- 自動封存倒數的起點；NULL = 未在倒數
+    -- 工作房綁定的工作區 key（ops 房專用）。NULL＝尚未綁定，不能派工。
+    -- 一次性：綁定後不提供解綁——run 的歷史都掛在這間房下，中途換工作區
+    -- 等於讓同一串稽核記錄橫跨兩份工作樹，而回頭看時分不出哪筆是哪邊的。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    workspace_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -826,8 +831,16 @@ CREATE TABLE IF NOT EXISTS runner (
     status        TEXT NOT NULL DEFAULT 'online',
     max_parallel  INTEGER NOT NULL DEFAULT 3,
     running_count INTEGER NOT NULL DEFAULT 0,
-    -- 允許的 project key（JSON 陣列）。領單時據此過濾
+    -- 允許的 project key（JSON 陣列）。領單時據此過濾。
+    -- 這一欄是**公開**工作區：哪間房都綁得上、任何看得到那間房的人都
+    -- 看得到這個 key
     projects      TEXT NOT NULL DEFAULT '[]',
+    -- 私人工作區（JSON 陣列）。**只能綁到私人房**：公開房的成員
+    -- 名單不受控制，把它當成普通工作區的話，工作區的名字跟那裡的
+    -- 派工會在一間逆法人都進得來的房裡走光。
+    -- 與 `projects` 分開兩欄而不是加一個旗標：同一台執行器常常兩種都有。
+    -- 舊執行器不報這一欄 ⇒ '[]'，行為跟這個欄位存在之前一模一樣
+    private_projects TEXT NOT NULL DEFAULT '[]',
     limited_until TEXT,
     limit_reason  TEXT NOT NULL DEFAULT '',
     usage_window_json TEXT NOT NULL DEFAULT '{}',
@@ -909,6 +922,13 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("participant", "join_ip", "join_ip TEXT"),
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),
+    # 工作房綁定的工作區。舊 ops 房一律 NULL＝未綁定：派工前要先綁，
+    # 而猜一個 key 填進去的話，派出去的工作會落在別人的工作樹上
+    ("room", "workspace_key", "workspace_key TEXT"),
+    # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
+    # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
+    ("runner", "private_projects",
+     "private_projects TEXT NOT NULL DEFAULT '[]'"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，

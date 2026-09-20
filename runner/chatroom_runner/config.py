@@ -464,6 +464,16 @@ def public_project_keys(workspaces: dict[str, WorkspaceConfig]) -> list[str]:
     return [k for k, w in workspaces.items() if w.public]
 
 
+def private_project_keys(workspaces: dict[str, WorkspaceConfig]) -> list[str]:
+    """要報給 Hub 的 `private_projects` 清單——**沒標公開的那些**。
+
+    🚨 跨界：形狀與 `public_project_keys` 一樣（純字串陣列，內容是本機工作
+    區 key），兩份清單互斥。私人工作區照樣在本機白名單裡可執行，差別只在
+    Hub 那端只讓私人房派它的工——那條規則在 Hub，本機不重複判斷。
+    """
+    return [k for k, w in workspaces.items() if not w.public]
+
+
 def _as_argv(raw) -> list[str]:
     """``claude_bin`` 可以是字串或陣列。
 

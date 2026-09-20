@@ -398,6 +398,42 @@ class RoomsApi {
         return (res.data?['name'] as String?) ?? name.trim();
       });
 
+  /// 把工作房綁到一個工作區 key。**一次性，綁了不能改。**
+  ///
+  /// 權限是房主；Hub 的退法是契約（`ApiException.code`）：
+  /// - 403 `room_owner_required`：不是房主。
+  /// - 409 `workspace_already_bound`：已經綁過了。
+  /// - 409 `project_not_served`：沒有執行器服務這個 key。
+  /// - 409 `room_not_ops`：這不是工作房。
+  ///
+  /// 兩個身分標頭都帶：房主可能還沒 join 自己的房（那時只有 session key），
+  /// 與 [setVisibility]／[archive] 同一套理由。
+  ///
+  /// Hub 回 `{room: {...}}`（與 `GET /api/rooms/{id}` 同形，2026-09-21 落地後
+  /// 實際對過）。這裡兩種都接：有 `room` 鍵就拆，沒有就當扁平——上一次
+  /// （rename，09/07）兩邊各自照同一份文字實作，對出來是不一致的，而
+  /// `res.data!['room']` 是 null 時 `fromJson` 當場炸。
+  Future<Room> bindWorkspace(
+    String roomId, {
+    required String workspaceKey,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/workspace',
+          data: {'workspace_key': workspaceKey.trim()},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        final data = res.data!;
+        final room = data['room'];
+        return Room.fromJson(
+            room is Map<String, dynamic> ? room : data);
+      });
+
   /// 管理員移出成員（被移出的 session 無法重新加入該房）。
   Future<void> kick(
     String roomId, {

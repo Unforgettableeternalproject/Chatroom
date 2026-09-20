@@ -1429,5 +1429,19 @@
   "hostEnvRestartHub": "Restart Hub",
   "hostEnvRestarting": "Restarting...",
   "hostEnvRestartDone": "Hub restarted.",
-  "hostEnvPanelAgentSettings": "Agent connection"
+  "hostEnvPanelAgentSettings": "Agent connection",
+  "opsWorkspaceBound": "Workspace: {key}",
+  "opsWorkspaceNotServed": "No runner is serving this workspace right now.",
+  "opsWorkspaceBindTitle": "Bind a workspace",
+  "opsWorkspaceBindHint": "It can't be changed afterwards.",
+  "opsWorkspaceSelectHint": "Pick a workspace",
+  "opsWorkspaceBindAction": "Bind",
+  "opsWorkspaceNoCandidates": "No runner declares any workspace.",
+  "opsWorkspaceUnbound": "The room owner hasn't bound a workspace yet.",
+  "opsWorkspaceBindConfirmBody": "Once bound, this room can only dispatch to “{key}”, and it can't be changed.",
+  "opsWorkspaceBindDone": "Bound to “{key}”.",
+  "opsDispatchProjectLocked": "Bound; can't be changed",
+  "opsErrorWorkspaceNotBound": "This room has no workspace bound yet. Ask the owner to bind one.",
+  "opsErrorWorkspaceMismatch": "This room only dispatches to “{key}”.",
+  "opsErrorWorkspacePrivateRoomRequired": "This is a private workspace; it can only be bound to a private room."
 }

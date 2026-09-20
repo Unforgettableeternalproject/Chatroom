@@ -20,16 +20,33 @@ ROOT = "root-token"
 async def _client(tmp_path, name, **cfg_kw):
     cfg = Config(db_path=str(tmp_path / f"{name}.db"), api_token=ROOT, **cfg_kw)
     app = create_app(cfg)
-    return app, AsyncClient(transport=ASGITransport(app=app),
-                            base_url="http://test",
-                            headers={"Authorization": f"Bearer {ROOT}"})
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://test",
+                         headers={"Authorization": f"Bearer {ROOT}"})
+    # `_bind_workspace` 要拿得到 db；換成各個呼叫點多傳一個 app 的話，
+    # 漏掉一處的症狀是一條跟工作區無關的測試跑出 409
+    client.hub_app = app
+    return app, client
 
 
-async def _ops_room(client, key="human-a"):
+async def _bind_workspace(client, rid, workspace="ai-website"):
+    # 工作房要先綁工作區才派得了工（Hub 契約）。這裡直接寫欄位而不走
+    # `POST /api/rooms/{id}/workspace`：那個端點要求綁定當下已經有執行器
+    # 服務這個 key，而這些測試多半是先建房、後註冊執行器。綁定端點本身的
+    # 契約在 tests/test_room_workspace.py
+    db = client.hub_app.state.db
+    await db.execute("UPDATE room SET workspace_key=? WHERE id=?",
+                     (workspace, rid))
+    await db.commit()
+
+
+async def _ops_room(client, key="human-a", workspace="ai-website"):
     r = await client.post("/api/rooms", json={"name": "工作房", "kind": "ops",
                                               "session_key": key})
     assert r.status_code == 200, r.text
-    return r.json()["id"]
+    rid = r.json()["id"]
+    await _bind_workspace(client, rid, workspace)
+    return rid
 
 
 async def _join_human(client, rid, key="human-a", name="艾斯維爾"):

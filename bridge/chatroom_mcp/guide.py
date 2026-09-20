@@ -337,6 +337,11 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 - **配額算在指定你的那個人類頭上**。你派得太兇，先耗盡的是他的每日額度，
   然後他會在儀表板上看到今天被派了幾筆——那是刻意的。
 - **不會自動觸發**。階段完成不會替你派下一筆，要派就自己呼叫。
+- **`project` 不是你挑的**。工作房綁定工作區之後，`project` 必須等於房間的
+  `workspace_key`——`chatroom_join` 回傳的 `room` 與 `chatroom_runs` 的儀表板
+  都讀得到它。填別的值會 409 `workspace_project_mismatch`（回應帶正確的
+  key）；房間還沒綁則是 409 `workspace_not_bound`，那要**人類房主**在 App
+  的執行頁綁一次，agent 綁不了，請在房裡請他先綁。
 
 ## 9.8 你是一個 run（遠端派工的單次任務）時
 

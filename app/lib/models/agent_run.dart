@@ -732,6 +732,7 @@ class RoomRunnerBoard {
     this.queued = 0,
     this.running = 0,
     this.activeRuns = const [],
+    this.workspaceCandidates = const [],
   });
 
   final String roomId;
@@ -745,6 +746,16 @@ class RoomRunnerBoard {
 
   /// queued / claimed / running / limited，按 priority DESC + position ASC。
   final List<AgentRun> activeRuns;
+
+  /// 這個房**還可以綁**的工作區 key（所有非 offline 執行器宣告的聯集）。
+  ///
+  /// ⚠️ 不能用 [runners] 自己算：房間還沒綁工作區時 Hub 的 `runners` 是空
+  /// 的，而那正是要選工作區的那一刻——自己算的話下拉永遠是空的，房主永遠
+  /// 綁不了（契約 2026-09-21）。
+  ///
+  /// 舊版 Hub 不回這個欄位＝空清單：那時綁定這件事還不存在，畫面上端出
+  /// 一份猜來的候選，選下去會被 Hub 以 `project_not_served` 退。
+  final List<String> workspaceCandidates;
 
   /// 執行器宣告過的 project key（派工對話框的下拉）。
   ///
@@ -782,6 +793,10 @@ class RoomRunnerBoard {
         activeRuns: [
           for (final r in (json['active_runs'] as List?) ?? const [])
             AgentRun.fromJson(Map<String, dynamic>.from(r as Map)),
+        ],
+        workspaceCandidates: [
+          for (final k in (json['workspace_candidates'] as List?) ?? const [])
+            '$k',
         ],
       );
 }

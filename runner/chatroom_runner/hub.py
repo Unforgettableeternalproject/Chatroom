@@ -195,18 +195,24 @@ class RunnerHub:
     # ---------- 端點 ----------
 
     async def register(self, host: str, label: str, projects: list[str],
-                       max_parallel: int, version: str) -> dict:
+                       max_parallel: int, version: str,
+                       private_projects: list[str] | None = None) -> dict:
         """註冊。同 host+label 冪等；Hub 只在**建立那一次**回 ``runner_token``。
 
         🚨 跨界：``projects`` 是 **Hub 語意**的專案白名單，內容是本機的
         **工作區 key**（見 `config.public_project_keys`）。Hub／DB／bridge
         的欄位名沒有跟著本機改名，這裡送的形狀不變。
 
+        ``private_projects`` 是沒標公開的工作區 key，形狀與 ``projects``
+        一樣、內容互斥。私人工作區只能被私人房派工，那條規則在 Hub——本機
+        照樣執行收到的每一筆派工，不重複判斷。
+
         回來若帶 token 就存進本機狀態檔——下一次啟動沒有它就註冊不回去。
         """
         body = await self._json(
             "POST", "/api/runners/register",
             json_body={"host": host, "label": label, "projects": projects,
+                       "private_projects": list(private_projects or []),
                        "max_parallel": max_parallel, "version": version})
         runner = body["runner"]
         self.identity.runner_id = runner["id"]
@@ -219,8 +225,14 @@ class RunnerHub:
                         dashboard: dict, usage_window: dict,
                         limited_until: str | None = None,
                         limit_reason: str = "",
-                        command_acks: list[dict] | None = None) -> dict:
-        """心跳。``command_acks`` 是上一輪取走的命令生效了沒（§5.7）。"""
+                        command_acks: list[dict] | None = None,
+                        private_projects: list[str] | None = None) -> dict:
+        """心跳。``command_acks`` 是上一輪取走的命令生效了沒（§5.7）。
+
+        ``private_projects`` 跟著每一次心跳送：私人工作區只能被私人房派工，
+        規則在 Hub，這裡只負責把清單講清楚。公開清單仍只在 register 送
+        （形狀不變），reload 之後靠重新註冊補報。
+        """
         return await self._json(
             "POST", f"/api/runners/{self.identity.runner_id}/heartbeat",
             json_body={"status": status, "running_count": running_count,
@@ -228,6 +240,7 @@ class RunnerHub:
                        "limit_reason": limit_reason,
                        "dashboard_json": dashboard,
                        "usage_window_json": usage_window,
+                       "private_projects": list(private_projects or []),
                        "command_acks": list(command_acks or [])})
 
     async def get_run(self, run_id: str) -> dict | None:

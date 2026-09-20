@@ -7162,5 +7162,81 @@
   "hostEnvPanelAgentSettings": "Agent 接入",
   "@hostEnvPanelAgentSettings": {
     "description": "成員分頁上設定區的標題"
+  },
+  "opsWorkspaceBound": "工作區：{key}",
+  "@opsWorkspaceBound": {
+    "description": "已綁定工作區時頁首那一行",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "opsWorkspaceNotServed": "目前沒有執行器在服務這個工作區。",
+  "@opsWorkspaceNotServed": {
+    "description": "綁好了但沒有執行器服務它"
+  },
+  "opsWorkspaceBindTitle": "綁定工作區",
+  "@opsWorkspaceBindTitle": {
+    "description": "房主的綁定區塊標題，也是確認框標題"
+  },
+  "opsWorkspaceBindHint": "綁定後不可更改。",
+  "@opsWorkspaceBindHint": {
+    "description": "綁定區塊的一句說明"
+  },
+  "opsWorkspaceSelectHint": "選擇工作區",
+  "@opsWorkspaceSelectHint": {
+    "description": "綁定下拉的提示字"
+  },
+  "opsWorkspaceBindAction": "綁定",
+  "@opsWorkspaceBindAction": {
+    "description": "綁定按鈕"
+  },
+  "opsWorkspaceNoCandidates": "沒有執行器宣告任何工作區。",
+  "@opsWorkspaceNoCandidates": {
+    "description": "沒有可選的工作區 key"
+  },
+  "opsWorkspaceUnbound": "房主尚未綁定工作區。",
+  "@opsWorkspaceUnbound": {
+    "description": "非房主看到的未綁定說明"
+  },
+  "opsWorkspaceBindConfirmBody": "綁定後這個房間只能派工到「{key}」，不可再更改。",
+  "@opsWorkspaceBindConfirmBody": {
+    "description": "綁定確認框內文",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "opsWorkspaceBindDone": "已綁定「{key}」。",
+  "@opsWorkspaceBindDone": {
+    "description": "綁定成功的提示",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "opsDispatchProjectLocked": "已綁定，不可更改",
+  "@opsDispatchProjectLocked": {
+    "description": "派工對話框：專案由房間綁定，唯讀"
+  },
+  "opsErrorWorkspaceNotBound": "這個房間還沒綁定工作區，請房主先綁。",
+  "@opsErrorWorkspaceNotBound": {
+    "description": "派工被退：房間還沒綁定工作區"
+  },
+  "opsErrorWorkspaceMismatch": "這個房間只派工到「{key}」。",
+  "@opsErrorWorkspaceMismatch": {
+    "description": "派工被退：專案不是房間綁定的那一個",
+    "placeholders": {
+      "key": {
+        "type": "String"
+      }
+    }
+  },
+  "opsErrorWorkspacePrivateRoomRequired": "這是私人工作區，只能綁到私人房間。",
+  "@opsErrorWorkspacePrivateRoomRequired": {
+    "description": "綁定被退：私人工作區要私人房間"
   }
 }
