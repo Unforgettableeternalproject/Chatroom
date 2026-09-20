@@ -359,11 +359,14 @@ class KitInstaller {
     return KitRelease.fromJson(body);
   }
 
-  /// 找 Python 3.12。找不到回 `null`——**不代裝**。
+  /// 找 Python 3.12 以上。找不到回 `null`——**不代裝**。
+  ///
+  /// 三包安裝器的 `check_python()` 判的是下限（3.12+，3.13／3.14 實測可用），
+  /// 這裡的判準要跟它一致，否則會出現「App 說沒有 Python，安裝器卻裝得動」。
   Future<PythonExe?> findPython() async {
     for (final candidate in const [
-      PythonExe(executable: 'py', prefixArgs: ['-3.12']),
-      PythonExe(executable: 'python3.12'),
+      PythonExe(executable: 'py', prefixArgs: ['-3']),
+      PythonExe(executable: 'python3'),
       PythonExe(executable: 'python'),
     ]) {
       try {
@@ -371,14 +374,21 @@ class KitInstaller {
             .run(candidate.executable, candidate.argsFor(['--version']));
         if (r.exitCode != 0) continue;
         final text = '${r.stdout}${r.stderr}';
-        // `py -3.12` 挑的一定是 3.12，但 `python` 可能是任何一版——
-        // 版號對不上就往下一個找，不假裝它可以用
-        if (RegExp(r'Python\s+3\.12\.').hasMatch(text)) return candidate;
+        // `python` 可能是任何一版——低於 3.12 就往下一個找，不假裝它可以用
+        if (_pythonAtLeast312(text)) return candidate;
       } on Object {
         continue;
       }
     }
     return null;
+  }
+
+  static bool _pythonAtLeast312(String versionText) {
+    final m = RegExp(r'Python\s+(\d+)\.(\d+)\.').firstMatch(versionText);
+    if (m == null) return false;
+    final major = int.parse(m.group(1)!);
+    final minor = int.parse(m.group(2)!);
+    return major > 3 || (major == 3 && minor >= 12);
   }
 
   /// 走完一次安裝。

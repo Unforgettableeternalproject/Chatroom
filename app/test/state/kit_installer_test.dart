@@ -242,11 +242,19 @@ void main() {
       expect(http.downloaded, isEmpty, reason: '裝不了就不要先下載 40MB');
     });
 
-    test('python 在但版本不是 3.12 → 也算沒有', () async {
+    test('python 在但版本低於 3.12 → 也算沒有', () async {
       final http = _FakeHttp(body: releaseJson);
       final runner = _FakeRunner(pythonVersion: 'Python 3.11.9');
 
       expect(await make(http, runner).findPython(), isNull);
+    });
+
+    test('3.13／3.14 也算有：判的是下限，跟安裝器的 check_python 一致', () async {
+      for (final v in ['Python 3.13.2', 'Python 3.14.7']) {
+        final runner = _FakeRunner(pythonVersion: v);
+        expect(await make(_FakeHttp(body: releaseJson), runner).findPython(),
+            isNotNull, reason: v);
+      }
     });
 
     test('下載失敗 → download，而且不留半份 zip', () async {
