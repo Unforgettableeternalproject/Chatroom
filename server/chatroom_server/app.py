@@ -7189,8 +7189,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     SETTLED_OBJECTIVE_SQL = "('done','cancelled')"
 
     def _cycle_scope(table: str, scope_sql: str, scope_params: list,
-                     include_settled: bool, objective_id: str
-                     ) -> tuple[str, list]:
+                     include_settled: bool, objective_id: str,
+                     stage=None) -> tuple[str, list]:
         """把全量讀取限縮在**進行中的週期**（或指定的那一個）。
 
         起因：本專案的板全量回 274,701 字元 / 5,943 行，**超過 agent 單次
@@ -7203,7 +7203,19 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         ⚠️ **子項要跟著週期走**：只篩掉 objective 而留下它的卡，畫面上會是
         一堆沒有歸屬的卡。
+
+        `stage`（`checklist_id=` 指定的那一列）**比週期更優先**：週期粒度
+        對長跑的板還是太粗——一期底下十幾個階段、上百張卡，要「這個階段
+        還有哪幾張沒做完」的人照樣讀不下來。給了階段就只回那一個階段、
+        它底下的卡、以及**它所屬週期那一列**（少了週期，讀的人不知道這
+        階段掛在哪一期，而那正是他要回報的座標）。
         """
+        if stage is not None:
+            if table == "board_objective":
+                return " AND id=?", [stage["objective_id"]]
+            if table == "board_checklist":
+                return " AND id=?", [stage["id"]]
+            return " AND checklist_id=?", [stage["id"]]
         if objective_id:
             if table == "board_objective":
                 return " AND id=?", [objective_id]
@@ -7221,6 +7233,61 @@ def create_app(config: Config | None = None) -> FastAPI:
             return f" AND objective_id NOT IN ({settled})", list(scope_params)
         return (" AND checklist_id NOT IN (SELECT id FROM board_checklist"
                 f" WHERE objective_id IN ({settled}))", list(scope_params))
+
+    async def _stage_in_scope_or_404(scope_sql: str, scope_params: list,
+                                     checklist_id: str):
+        """`checklist_id=` 指的那個階段，**而且必須落在這次讀取的範圍內**。
+
+        不比對範圍的話，拿別塊板的階段 id 來讀照樣回得到它的卡——URL 上
+        那個 board_id／room_id 看起來像在守門，其實什麼都沒守（與
+        `_stage_checklist_or_404` 同一個理由）。
+
+        錯的 id 分兩種：**不存在**與**是別的層**。後者交給
+        `_board_item_or_404` 去講（`board_item_wrong_kind`）——把週期 id
+        當階段傳進來的人收到「這塊板上沒有這個階段」會去重讀板、確認它
+        還在、再試一次，然後再撞一次。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT * FROM board_checklist WHERE id=? AND deleted=0"
+            f" AND {scope_sql}", (checklist_id, *scope_params))).fetchone()
+        if row is not None:
+            return row
+        # 在範圍外、或根本不是階段——先讓 `_board_item_or_404` 有機會講出
+        # 「它是別的層」（422），那是唯一值得分開講的一種錯。
+        # ⚠️ 它的 404（`board_item_not_found`）要**換成**這裡的 code：
+        # 「不存在」與「不在這塊板上」對呼叫端是同一個下一步（回去重讀板
+        # 拿正確的階段 id），兩個 code 只會讓他多寫一條分支
+        try:
+            await _board_item_or_404("checklist", checklist_id)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+        raise _err(404, "checklist_not_found", "這塊板上沒有這個階段")
+
+    async def _stage_filtered_notice(stage) -> dict:
+        """階段粒度也要說「你手上這份不是整塊板」（理由見 `_filtered_notice`）。
+
+        這裡不必數被篩掉的東西：讀的人是**自己指定**只要這個階段的，他要
+        的不是「少了多少」而是「我在哪一期、要回到整塊板怎麼走」。
+        """
+        obj = await (await app.state.db.execute(
+            "SELECT id, title FROM board_objective WHERE id=?",
+            (stage["objective_id"],))).fetchone()
+        return {
+            "scope": "checklist",
+            "checklist_id": stage["id"],
+            "checklist_title": stage["title"],
+            "objective_id": stage["objective_id"],
+            "objective_title": obj["title"] if obj is not None else "",
+            "reason": f"⚠️ 你手上這份**只有「{stage['title']}」這一個階段**"
+                      "（以及它所屬的週期那一列）：板上其他階段與其他週期"
+                      "都沒有回傳給你。",
+            "how_to_see_them": "要看整個週期：objective_id="
+                               f"{stage['objective_id']}；要看整塊板："
+                               "不要傳 checklist_id。 MCP 工具寫法："
+                               "chatroom_board(objective_id=\""
+                               f"{stage['objective_id']}\")。",
+        }
 
     async def _filtered_notice(scope_sql: str, scope_params: list
                                ) -> dict | None:
@@ -7300,6 +7367,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         after_board_seq: int = 0,
         include_settled: bool = False,
         objective_id: str = "",
+        checklist_id: str = "",
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
@@ -7370,11 +7438,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 收尾的週期照樣要送達，篩掉的話 client 手上那份會永遠停在「還在做」
         narrowing = after_board_seq == 0
 
+        # 🔑 **階段粒度兩條路都篩**（增量也篩）。週期收窄只在全量成立的
+        # 理由是「斷線期間收尾的週期照樣要送達」；而 `checklist_id=` 是
+        # 讀的人**這一次明確要的範圍**，增量卻把別的階段塞回去的話，那個
+        # 參數就只有第一次有用——而他正是因為讀不下整塊板才傳它
+        stage = (await _stage_in_scope_or_404(scope_sql, scope_params,
+                                              checklist_id)
+                 if checklist_id else None)
+
         async def _rows(table: str) -> list:
             extra, extra_params = (
                 _cycle_scope(table, scope_sql, scope_params,
-                             include_settled, objective_id)
-                if narrowing else ("", []))
+                             include_settled, objective_id, stage)
+                if (narrowing or stage is not None) else ("", []))
             cur = await db.execute(
                 f"SELECT * FROM {table} WHERE {scope_sql} AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
@@ -7448,9 +7524,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             "board_id": attached["id"] if attached else None,
             "previous_board": previous_board,
             # 篩掉了什麼、以及怎麼看得到（見 `_filtered_notice`）
-            "filtered": (await _filtered_notice(scope_sql, scope_params)
-                         if narrowing and not include_settled
-                         and not objective_id else None),
+            "filtered": (await _stage_filtered_notice(stage)
+                         if stage is not None else
+                         (await _filtered_notice(scope_sql, scope_params)
+                          if narrowing and not include_settled
+                          and not objective_id else None)),
             "board_seq": await _board_seq(room_id),
             "full": after_board_seq == 0,
             "objectives": objectives,
@@ -8089,6 +8167,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         after_board_seq: int = 0,
         include_settled: bool = False,
         objective_id: str = "",
+        checklist_id: str = "",
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
@@ -8109,11 +8188,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 與房軸同一個判斷（09/07 卡 659e9ff0）：只有全量路徑收窄，增量不篩
         narrowing = after_board_seq == 0
 
+        # 與房軸同一條（見那邊的註解）：`checklist_id=` 連增量一起篩
+        stage = (await _stage_in_scope_or_404("board_id=?", [board_id],
+                                              checklist_id)
+                 if checklist_id else None)
+
         async def _rows(table: str) -> list:
             extra, extra_params = (
                 _cycle_scope(table, "board_id=?", [board_id],
-                             include_settled, objective_id)
-                if narrowing else ("", []))
+                             include_settled, objective_id, stage)
+                if (narrowing or stage is not None) else ("", []))
             cur = await db.execute(
                 f"SELECT * FROM {table} WHERE board_id=? AND board_seq>?"
                 + ("" if tombstones else " AND deleted=0")
@@ -8230,9 +8314,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             "outcome_eligible": outcome_eligible,
             "outcome_block_reason": outcome_block_reason,
             # 篩掉了什麼、以及怎麼看得到（見 `_filtered_notice`）
-            "filtered": (await _filtered_notice("board_id=?", [board_id])
-                         if narrowing and not include_settled
-                         and not objective_id else None),
+            "filtered": (await _stage_filtered_notice(stage)
+                         if stage is not None else
+                         (await _filtered_notice("board_id=?", [board_id])
+                          if narrowing and not include_settled
+                          and not objective_id else None)),
             # **兩個計數各答一個問題**（09/07 卡 1c920235）：前者是歷史
             # （掛過幾間、還沒解除），後者是現況（還有幾間活著）。詳情頁
             # 少了它們，畫面只能拿 `attached_rooms` 自己數——而那正是

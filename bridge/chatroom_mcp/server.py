@@ -163,6 +163,24 @@ def _my_session_key() -> str:
     return state().session_key("") or SESSION_KEY
 
 
+# 執行器給 run 子進程的 session_key 前綴（Hub 側 `_RUN_SESSION_PREFIX`，
+# REMOTE-OPS-PLAN §5.4）。兩端共用的約定，改一邊不會有地方報錯
+_RUN_SESSION_PREFIX = "claude-run-"
+
+
+def _i_am_a_run() -> bool:
+    """這個 bridge 是不是派工產生的 run 進程。
+
+    用途是**措辭**，不是權限：run 是一次性無頭進程，沒有終端機、沒有人在
+    看它，所以「改回你原本的方式問他」對它是一句做不到的指示——照著做只會
+    卡在那裡，而 run 停住不會有人發現。
+
+    判準取 `_my_session_key()` 而不是 `SESSION_KEY`：身分可能在 join 之後
+    被 Hub 改寫（見上），拿啟動當下那份會判錯。
+    """
+    return _my_session_key().startswith(_RUN_SESSION_PREFIX)
+
+
 def _presence_params() -> dict[str, str]:
     """向 Hub 自報 kind 與代稱的查詢參數。
 
@@ -1086,7 +1104,9 @@ def chatroom_ask_human(
       複選時另有 ``answer_options``，有附件時另有 ``attachments``
     - ``answered: false`` 且 ``reason`` 為：
       - ``skipped``——對方明確選擇不在這裡回答。**改回你原本的方式問他**，
-        不要再用這個工具問同一件事
+        不要再用這個工具問同一件事。**你是派工產生的 run 的話不是這樣**：
+        你沒有「原本的方式」，那顆按鈕在他畫面上寫的是「不回答，讓它自己
+        決定」——照 ``hint`` 說的，自行判斷並繼續，不要停在這裡
       - ``timeout``——你等夠了，但**問題還活著**。回應會附上還剩幾秒；
         先做你能做的，之後用 ``chatroom_read_answer`` 拿。不要重問
       - ``expired``——**這題過期了，人沒看到**。回頭也拿不到答案，
@@ -1162,8 +1182,12 @@ def chatroom_ask_human(
             return {
                 "answered": False, "reason": "skipped", "question_id": qid,
                 "target_name": created.get("target_name"),
-                "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
-                        "不要再用這個工具問同一件事。",
+                "hint": ("對方選擇不回答這一題，由你自行判斷並繼續——"
+                         "你是派工產生的 run，沒有別的管道可以再問一次，"
+                         "停在這裡不會有人來接。"
+                         if _i_am_a_run() else
+                         "對方選擇不在聊天室回答，請改用你原本的方式問他，"
+                         "不要再用這個工具問同一件事。"),
                 **_ask_scope,
             }
 
@@ -1564,7 +1588,8 @@ def chatroom_boards() -> dict:
 def chatroom_board(room_id: str = "", full: bool = False,
                    subagent: str = "", board_id: str = "",
                    include_settled: bool = False,
-                   objective_id: str = "") -> dict:
+                   objective_id: str = "",
+                   checklist_id: str = "") -> dict:
     """看一塊任務板（Objective → Checklist → Task）。
 
     給 ``room_id`` ＝「我在這個房裡，看它掛的那塊板」；給 ``board_id`` ＝
@@ -1583,6 +1608,17 @@ def chatroom_board(room_id: str = "", full: bool = False,
     回傳會超過你單次讀得下的量（本專案實測 274,701 字元），那時你拿到的是
     一個讀取失敗，不是一塊板。已收尾的週期要看就傳 ``include_settled=True``
     （全部）或 ``objective_id=<週期 id>``（只要那一個）。
+
+    🎯 **只要某個階段的卡時傳 ``checklist_id=<階段 id>``，不要全量。**
+    週期粒度對長跑的板還是太粗：一期底下十幾個階段、上百張卡，照樣超過
+    你單次讀得下的量（實測一塊板全量 72,970 字元，而要找的只是某階段裡
+    兩張卡的 ``task_id``）。傳了就只回那一個階段、它底下的卡、以及它所屬
+    的週期那一列（讓你知道自己在哪一期）；其他階段與週期一律不回。
+    **``checklist_id`` 與 ``objective_id`` 同時給時以 ``checklist_id``
+    為準**，週期那個被忽略——兩個都給的意思就是「要更細的那個」。
+    階段 id ＝ App 上的「階段」、run 派工 ``ref`` 裡 ``stage/<id>`` 的那一段；
+    找不到（或不在這塊板上）回 ``checklist_not_found``。
+    ⚠️ 它**連增量一起篩**：傳了它，之後的增量讀取也只給那個階段的變動。
 
     **被篩掉的話回應會有 ``filtered``** 講明篩了幾個週期／幾張卡、以及怎麼
     看得到它們；沒篩到東西時它是 ``None``。**看到它就不要把手上這份當成
@@ -1618,7 +1654,8 @@ def chatroom_board(room_id: str = "", full: bool = False,
             "GET", f"/api/boards/{target}",
             params={"after_board_seq": known,
                     "include_settled": include_settled,
-                    "objective_id": objective_id})
+                    "objective_id": objective_id,
+                    "checklist_id": checklist_id})
         seq = data.get("board_seq")
         if isinstance(seq, int) and not subagent:
             state().set_board_cursor(target, seq)
@@ -1638,7 +1675,8 @@ def chatroom_board(room_id: str = "", full: bool = False,
         participant_id=participant_id,
         params={"after_board_seq": known,
                 "include_settled": include_settled,
-                "objective_id": objective_id},
+                "objective_id": objective_id,
+                "checklist_id": checklist_id},
     )
     seq = data.get("board_seq")
     board_id = data.get("board_id")
