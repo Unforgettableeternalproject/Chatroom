@@ -305,17 +305,16 @@ class RunReportDetailPanel extends StatelessWidget {
                   icon: Icon(Icons.close, size: 16, color: s.inkMute),
                 ),
               ]),
-              if (run.ref.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  run.ref,
-                  style: UepText.sans(size: 15, color: s.ink),
-                ),
-              ],
+              const SizedBox(height: 4),
+              Text(
+                runTitleLine(run),
+                style: UepText.sans(size: 15, color: s.ink),
+              ),
               const SizedBox(height: 4),
               Text(
                 '${relativeTime(run.endedAt ?? run.updatedAt)} · '
-                '${runUsageLine(run)}',
+                '${runUsageLine(run)}'
+                '${run.ref.isEmpty ? '' : ' · ${run.ref}'}',
                 style: UepText.mono(size: 10.5, color: s.inkMute),
               ),
             ],
@@ -357,6 +356,22 @@ class RunReportDetailPanel extends StatelessWidget {
 String runUsageLine(AgentRun run) {
   if (run.usage.isEmpty) return L10n.current.opsUsageUnreported;
   return '${run.turns} turns · \$${run.costUsd.toStringAsFixed(2)}';
+}
+
+/// ref 的短碼。整串是 32 碼的 id，在 288 寬的側欄裡除了佔掉一行之外
+/// 什麼都沒講——8 碼已經夠把一筆回報對回派出去的那張卡。
+String runRefShort(String ref) => ref.length <= 8 ? ref : ref.substring(0, 8);
+
+/// 卡片與面板的標題：**這一輪是誰做的**。
+///
+/// 房裡講話的是 `Amber-Badger`，卡上卻寫 `5e61ec64…` 的話，看回報的人要自己
+/// 在兩串之間對照。名字缺席（還在排隊、剛被領走）時才退回 `kind · 短碼`
+/// ——那時候確實還沒有人，而整串 ref 仍在時間那行與 tooltip 裡找得到。
+String runTitleLine(AgentRun run) {
+  final name = run.agentName;
+  if (name != null && name.isNotEmpty) return name;
+  final short = runRefShort(run.ref);
+  return short.isEmpty ? run.kind : '${run.kind} · $short';
 }
 
 class _StatusChip extends StatelessWidget {
@@ -433,19 +448,22 @@ class RunReportCard extends StatelessWidget {
                   color: selected ? UepColors.gold : s.inkMute,
                 ),
               ]),
-              if (run.ref.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  run.ref,
+              const SizedBox(height: 4),
+              Tooltip(
+                // 整串 ref 只在這裡給：對回派工要用它，但它不該佔掉一整行
+                message: run.ref,
+                child: Text(
+                  runTitleLine(run),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: UepText.sans(size: 13, color: s.ink),
                 ),
-              ],
+              ),
               const SizedBox(height: 4),
               Text(
                 '${relativeTime(run.endedAt ?? run.updatedAt)} · '
-                '${runUsageLine(run)}',
+                '${runUsageLine(run)}'
+                '${run.ref.isEmpty ? '' : ' · ${runRefShort(run.ref)}'}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: UepText.mono(size: 10, color: s.inkMute),

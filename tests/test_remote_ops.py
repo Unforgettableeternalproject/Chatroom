@@ -1437,6 +1437,8 @@ RUN_KEYS = {
     # 收尾請求與 @ 轉達的游標（軟停止／mention 轉達）
     "soft_stop_requested_at", "mention_cursor_seq",
     "usage", "result", "reason",
+    # 這一輪是誰做的（participant.run_id 反查）。還沒進房時為 None
+    "agent_name",
     "created_at", "claimed_at", "started_at", "ended_at", "updated_at",
 }
 RUNNER_KEYS = {

@@ -22,6 +22,8 @@ const Map<String, dynamic> _runJson = {
   // 是兩個人
   'requester_kind': 'human',
   'requester_name': '艾斯維爾',
+  // 這一輪是誰做的（participant.run_id 反查）；還沒進房時 Hub 給 null
+  'agent_name': 'Amber-Badger',
   'status': 'running',
   'priority': 2,
   'position': 3,
@@ -157,6 +159,17 @@ void main() {
       expect(run.requesterKind, 'human');
       expect(run.requesterName, '');
       expect(run.isAgentRequested, isFalse);
+    });
+
+    test('agent 的名字：null 與空字串都是「還沒有人」，不是名字', () {
+      expect(AgentRun.fromJson(_runJson).agentName, 'Amber-Badger');
+      // 排隊中的 run（Hub 給 null）、舊 Hub（沒這把鍵）、空字串都一樣
+      expect(AgentRun.fromJson({..._runJson, 'agent_name': null}).agentName,
+          isNull);
+      expect(AgentRun.fromJson({..._runJson, 'agent_name': ''}).agentName,
+          isNull);
+      final old = Map<String, dynamic>.from(_runJson)..remove('agent_name');
+      expect(AgentRun.fromJson(old).agentName, isNull);
     });
 
     test('queued 的取消是立刻的，running 的不是', () {

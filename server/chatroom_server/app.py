@@ -13062,9 +13062,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             return "human"
         return (row["requester_kind"] or "human")
 
+    # run 連同「它帶進房的那個 agent 叫什麼」一起讀出來。
+    # `participant.run_id` 是唯一的反查路徑，而那一列在 run 結束後會變成
+    # `left`（名冊不列，但列還在），所以**不濾 status**：回報卡要顯示的是
+    # 當時做事的人是誰，不是他現在還在不在。`parent_id IS NULL` 擋掉
+    # subagent——他們共用同一個 run_id，取到的可能是子代理的名字。
+    # 還沒進房（queued／claimed）時為 NULL，那是「還沒有人」而不是沒名字。
+    RUN_SELECT_SQL = (
+        "SELECT r.*, (SELECT p.display_name FROM participant p"
+        " WHERE p.run_id = r.id AND p.parent_id IS NULL"
+        " ORDER BY p.joined_at, p.rowid LIMIT 1) AS agent_name"
+        " FROM agent_run r"
+    )
+
     def _run_public(row) -> dict:
         d = dict(row)
         d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
+        # 沒帶到這一欄的路徑（例如領單當下的 RETURNING *）一律 None：
+        # 那時候確實還沒有人進房
+        d["agent_name"] = d.get("agent_name") or None
         d["cancel_requested"] = bool(d.get("cancel_requested"))
         # 兩組人分開帶出去：`requested_by_*` 是「配額算誰的」，
         # `requester_*` 是「誰動的手」。Supervisor 代派時兩者不同
@@ -13147,7 +13163,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _run_or_404(run_id: str):
         row = await (await app.state.db.execute(
-            "SELECT * FROM agent_run WHERE id=?", (run_id,))).fetchone()
+            RUN_SELECT_SQL + " WHERE r.id=?", (run_id,))).fetchone()
         if row is None:
             raise _err(404, "run_not_found", "找不到這筆派工")
         return row
@@ -13485,14 +13501,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id, host)
-        sql = "SELECT * FROM agent_run WHERE room_id=?"
+        sql = RUN_SELECT_SQL + " WHERE r.room_id=?"
         params: tuple = (room_id,)
         if status:
             wanted = [s for s in status.split(",") if s]
             marks = ",".join("?" for _ in wanted)
-            sql += f" AND status IN ({marks})"
+            sql += f" AND r.status IN ({marks})"
             params = (room_id, *wanted)
-        sql += " ORDER BY priority DESC, position ASC"
+        sql += " ORDER BY r.priority DESC, r.position ASC"
         rows = await (await app.state.db.execute(sql, params)).fetchall()
         return {"runs": [_run_public(r) for r in rows]}
 
@@ -14165,9 +14181,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             " GROUP BY status", (room_id,))).fetchall()
         counts = {r["status"]: r["n"] for r in rows}
         active = await (await db.execute(
-            "SELECT * FROM agent_run WHERE room_id=?"
-            " AND status IN ('queued','claimed','running','limited')"
-            " ORDER BY priority DESC, position ASC", (room_id,))).fetchall()
+            RUN_SELECT_SQL + " WHERE r.room_id=?"
+            " AND r.status IN ('queued','claimed','running','limited')"
+            " ORDER BY r.priority DESC, r.position ASC",
+            (room_id,))).fetchall()
         return {
             "room_id": room_id,
             "runners": [{**_runner_public(r),

@@ -21,6 +21,7 @@ void main() {
         kind: 'ticket',
         project: 'chatroom',
         ref: 'T-$i',
+        agentName: 'Amber-$i',
         status: 'done',
         usage: const {'num_turns': 12, 'total_cost_usd': 1.5},
         result: '# 第 $i 筆的回報\n\n${'這一段是收工摘要，會有很多行。\n\n' * 40}',
@@ -109,7 +110,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(RunReportDetailPanel), findsNothing);
-    await tester.tap(find.text('T-0'));
+    await tester.tap(find.text('Amber-0'));
     await tester.pumpAndSettle();
 
     final detail = find.byType(RunReportDetailPanel);
@@ -137,11 +138,11 @@ void main() {
     await tester.pumpWidget(harness([for (var i = 0; i < 10; i++) run(i)]));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('T-0'));
+    await tester.tap(find.text('Amber-0'));
     await tester.pumpAndSettle();
     expect(find.textContaining('第 0 筆的回報'), findsOneWidget);
 
-    await tester.tap(find.text('T-1'));
+    await tester.tap(find.text('Amber-1'));
     await tester.pumpAndSettle();
     expect(find.byType(RunReportDetailPanel), findsOneWidget);
     expect(find.textContaining('第 1 筆的回報'), findsOneWidget);
@@ -153,13 +154,51 @@ void main() {
     await tester.pumpWidget(harness([for (var i = 0; i < 10; i++) run(i)]));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('T-0'));
+    await tester.tap(find.text('Amber-0'));
     await tester.pumpAndSettle();
     expect(find.byType(RunReportDetailPanel), findsOneWidget);
 
     await tester.tapAt(const Offset(60, 400));
     await tester.pumpAndSettle();
     expect(find.byType(RunReportDetailPanel), findsNothing);
+  });
+
+  /// 實測進房的 run，ref 是一串 32 碼的 id。
+  const longRef = '5e61ec64edf54a779b10dd18e5d82aaa';
+
+  AgentRun titled({String? agentName}) => AgentRun(
+        id: 'run-x',
+        roomId: 'r1',
+        kind: 'ticket',
+        project: 'chatroom',
+        ref: longRef,
+        agentName: agentName,
+        status: 'done',
+        usage: const {'num_turns': 51, 'total_cost_usd': 3.12},
+        result: '做完了',
+        endedAt: '2026-09-17T01:00:00+00:00',
+        updatedAt: '2026-09-17T01:00:00+00:00',
+      );
+
+  testWidgets('卡片的標題是那一輪的 agent，不是 ref 的 id', (tester) async {
+    await sized(tester, const Size(1400, 800));
+    await tester.pumpWidget(harness([titled(agentName: 'Amber-Badger')]));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Amber-Badger'), findsOneWidget);
+    // 整串 id 不進畫面——它只在 tooltip 裡
+    expect(find.text(longRef), findsNothing);
+    // 但對得回派工：短碼還在時間那行
+    expect(find.textContaining(longRef.substring(0, 8)), findsOneWidget);
+  });
+
+  testWidgets('🔴 還沒有 agent：退回 kind ＋短碼，不是整串 id', (tester) async {
+    await sized(tester, const Size(1400, 800));
+    await tester.pumpWidget(harness([titled()]));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ticket · ${longRef.substring(0, 8)}'), findsOneWidget);
+    expect(find.text(longRef), findsNothing);
   });
 
   testWidgets('超過一頁：先給 20 筆，按「更多」再載入', (tester) async {
@@ -172,14 +211,14 @@ void main() {
       matching: find.byType(Scrollable),
     );
     // 第 20 筆（index 19）在一頁內，第 21 筆要按了才有
-    await tester.scrollUntilVisible(find.text('T-19'), 200, scrollable: list);
-    expect(find.text('T-19'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Amber-19'), 200, scrollable: list);
+    expect(find.text('Amber-19'), findsOneWidget);
 
     final more = find.textContaining('更多');
     await tester.scrollUntilVisible(more, 200, scrollable: list);
     await tester.tap(more);
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('T-24'), 200, scrollable: list);
-    expect(find.text('T-24'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Amber-24'), 200, scrollable: list);
+    expect(find.text('Amber-24'), findsOneWidget);
   });
 }

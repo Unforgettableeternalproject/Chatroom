@@ -75,6 +75,7 @@ class AgentRun {
     this.requestedByName = '',
     this.requesterKind = 'human',
     this.requesterName = '',
+    this.agentName,
     this.status = 'queued',
     this.priority = 0,
     this.position = 0,
@@ -125,6 +126,13 @@ class AgentRun {
 
   /// 這一筆是 Supervisor 代派的。
   bool get isAgentRequested => requesterKind == 'agent';
+
+  /// 接下這一輪的 agent 在房內的名字（`participant.run_id` 反查）。
+  ///
+  /// `null` ＝**還沒有人**（排隊中、剛被領走），或舊 Hub 沒有這一欄——兩者
+  /// 都不是「他沒有名字」。空字串會讓畫面把「還沒進房」畫成一個有名字的人，
+  /// 所以 Hub 給空字串時一樣收成 null。
+  final String? agentName;
 
   /// queued | claimed | running | limited | handoff | done | failed | cancelled
   final String status;
@@ -189,6 +197,7 @@ class AgentRun {
         // 舊 Hub 不回這兩把鍵——`human` 與空字串就是這一欄存在之前的事實
         requesterKind: (json['requester_kind'] as String?) ?? 'human',
         requesterName: (json['requester_name'] as String?) ?? '',
+        agentName: _nameOrNull(json['agent_name']),
         status: (json['status'] as String?) ?? 'queued',
         priority: _asInt(json['priority']),
         position: _asInt(json['position']),
@@ -793,6 +802,12 @@ String buildPushBrief(String branch, Iterable<String> shas) {
     if (v.isNotEmpty) lines.add(v);
   }
   return lines.join('\n');
+}
+
+/// 缺鍵、null 與空字串一律收成 null：只有真的有名字才是名字。
+String? _nameOrNull(dynamic v) {
+  final s = v is String ? v.trim() : '';
+  return s.isEmpty ? null : s;
 }
 
 int _asInt(dynamic v) {

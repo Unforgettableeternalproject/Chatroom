@@ -491,3 +491,95 @@ async def test_the_member_list_says_which_run_a_member_belongs_to(tmp_path):
         assert listed[body["participant_id"]]["run_id"] == run_id
         listed = {p["display_name"]: p for p in listed.values()}
         assert listed["艾斯維爾"]["run_id"] == ""
+
+
+# ── 回報卡的標題 ──────────────────────────────────────────────────────
+
+async def _run_body(client, run_id, hdr):
+    r = await client.get(f"/api/runs/{run_id}", headers=hdr)
+    assert r.status_code == 200, r.text
+    return r.json()["run"]
+
+
+async def test_a_run_carries_the_name_of_the_agent_that_joined(tmp_path):
+    """run 的回應要答得出「這一輪是誰做的」。
+
+    沒有這一欄，回報卡只剩下 run id 可以當標題——而那串 32 碼對讀的人沒有
+    任何意義，房裡講話的是 `Amber-Badger`，卡上寫的是 `5e61ec64…`。
+    """
+    app, client = await _client(tmp_path, "agent-name")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        name = body["display_name"]
+
+        assert (await _run_body(client, run_id, hdr))["agent_name"] == name
+        listing = (await client.get(f"/api/rooms/{rid}/runs",
+                                    headers=hdr)).json()["runs"]
+        assert [r["agent_name"] for r in listing] == [name]
+
+
+async def test_the_name_survives_the_run_ending(tmp_path):
+    """成員離場之後還要答得出來——回報卡是**做完之後**才在看的。
+
+    跟著 `status='active'` 濾的話，卡片會在那一輪結束的瞬間把標題換回 id。
+    """
+    app, client = await _client(tmp_path, "agent-name-ended")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        name = body["display_name"]
+        await _report(client, run_id, runner, "done", result="做完了")
+
+        assert (await _row(app, body["participant_id"]))["status"] == "left"
+        assert (await _run_body(client, run_id, hdr))["agent_name"] == name
+
+
+async def test_a_run_with_nobody_in_the_room_yet_has_no_name(tmp_path):
+    """排隊中的 run 沒有 agent_name——那是「還沒有人」，不是沒名字。
+
+    退回空字串的話，App 分不出「還沒進房」與「Hub 沒講」。
+    """
+    app, client = await _client(tmp_path, "agent-name-queued")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        await _register_runner(client)
+        r = await client.post(
+            f"/api/rooms/{rid}/runs",
+            json={"kind": "investigate", "project": "ai-website",
+                  "ref": "T-1", "brief": "等一下"}, headers=hdr)
+        assert r.status_code == 200, r.text
+        run_id = r.json()["run"]["id"]
+        assert (await _run_body(client, run_id, hdr))["agent_name"] is None
+
+
+async def test_a_subagent_does_not_take_over_the_title(tmp_path):
+    """子代理與父層共用同一個 `run_id`，但卡上要寫的是領這一輪的人。
+
+    不濾 `parent_id` 的話，標題會在子代理進房的那一刻換成別人的名字。
+    """
+    app, client = await _client(tmp_path, "agent-name-sub")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, body = await _join_agent(client, rid, f"claude-run-{run_id}", "Runner")
+        parent_id, name = body["participant_id"], body["display_name"]
+
+        _, sub = await _join_agent(client, rid, "claude-sub", "子代理")
+        # 直接改欄位：這裡要驗的是查詢的濾法，不是 spawn 的那條路徑
+        await app.state.db.execute(
+            "UPDATE participant SET run_id=?, parent_id=?,"
+            " joined_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+            (run_id, parent_id, sub["participant_id"]))
+        await app.state.db.commit()
+
+        assert (await _run_body(client, run_id, hdr))["agent_name"] == name
