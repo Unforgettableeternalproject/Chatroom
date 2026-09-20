@@ -167,7 +167,8 @@ async def test_a_run_member_gets_a_pool_name_not_its_own(tmp_path):
     `Minka-Ticket`（模型自己編的），成員列讀起來就是一串 id。run 的識別在
     `participant.run_id` 上，名字該是名字。
     """
-    app, client = await _client(tmp_path, "poolname")
+    # 斷言的是英文 Adjective-Noun 池，語言要說死，不吃 Hub 預設的 zh-TW
+    app, client = await _client(tmp_path, "poolname", locale="en")
     async with app.router.lifespan_context(app), client:
         rid = await _ops_room(client)
         hdr = await _join_human(client, rid)
