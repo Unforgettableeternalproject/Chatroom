@@ -99,6 +99,7 @@
 
 ## App
 
+- 回報卡標題顯示做這筆 run 的 agent 名稱；沒進房前顯示 kind 與 ref 短碼。
 - 三個 kit 分頁安裝前顯示前置條件（Python／Claude Code 或 Codex／Hub 可連），
   不通過就擋安裝；執行器分頁顯示登入狀態與登入指令。找 Python 改判 3.12 以上。
 - 任務卡詳情內文改 markdown 渲染。
