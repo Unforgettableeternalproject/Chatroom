@@ -6375,9 +6375,14 @@
       }
     }
   },
-  "hostKitInstallNoRelease": "此版本沒有對應的 Release，請用安裝包",
+  "hostKitInstallNoRelease": "這份 App 沒有對應的 Release。請在 repo 執行 {script} 打包，再手動安裝。",
   "@hostKitInstallNoRelease": {
-    "description": "App 是 dev build、查不到對應 Release 時的停用說明"
+    "description": "App 是 dev build、查不到對應 Release 時的停用說明",
+    "placeholders": {
+      "script": {
+        "type": "String"
+      }
+    }
   },
   "hostKitInstallTargetVersion": "要裝的版本 {version}",
   "@hostKitInstallTargetVersion": {
@@ -6388,9 +6393,14 @@
       }
     }
   },
-  "hostKitInstallNotInstalled": "這台機器還沒裝這一包。",
+  "hostKitInstallNotInstalled": "尚未安裝 {kit}。",
   "@hostKitInstallNotInstalled": {
-    "description": "某種 kit 還沒安裝時的說明"
+    "description": "某種 kit 還沒安裝時的說明",
+    "placeholders": {
+      "kit": {
+        "type": "String"
+      }
+    }
   },
   "hostKitInstallAssetMissing": "這個 Release 裡沒有 {asset}",
   "@hostKitInstallAssetMissing": {
@@ -6483,6 +6493,38 @@
   "hostKitInstallConfigKept": "設定檔原本就在，沒有覆寫它。",
   "@hostKitInstallConfigKept": {
     "description": "runner-kit 安裝器回報 config_written=false 時的說明"
+  },
+  "hostKitNameHub": "Hub 主持包",
+  "@hostKitNameHub": {
+    "description": "三包的名稱，用在「尚未安裝 X」那句話裡"
+  },
+  "hostKitNameMcp": "Agent 接入包",
+  "@hostKitNameMcp": {
+    "description": "三包的名稱，用在「尚未安裝 X」那句話裡"
+  },
+  "hostKitNameRunner": "執行器包",
+  "@hostKitNameRunner": {
+    "description": "三包的名稱，用在「尚未安裝 X」那句話裡"
+  },
+  "hostKitInstallPathLabel": "安裝到",
+  "@hostKitInstallPathLabel": {
+    "description": "安裝前選解壓位置的欄位標籤"
+  },
+  "hostKitInstallPathEmpty": "請填安裝位置",
+  "@hostKitInstallPathEmpty": {
+    "description": "安裝位置留空"
+  },
+  "hostKitInstallPathRelative": "請填完整路徑（含磁碟機代號）",
+  "@hostKitInstallPathRelative": {
+    "description": "安裝位置不是絕對路徑"
+  },
+  "hostKitInstallPathMissingRoot": "找不到這個磁碟機或上層資料夾",
+  "@hostKitInstallPathMissingRoot": {
+    "description": "安裝位置的磁碟機或上層都不存在"
+  },
+  "hostKitInstallPathNotWritable": "這個位置寫不進去，換一個位置或以系統管理員身分執行",
+  "@hostKitInstallPathNotWritable": {
+    "description": "安裝位置不可寫"
   },
   "hostEnvPanelHubSettings": "Hub 設定",
   "@hostEnvPanelHubSettings": {

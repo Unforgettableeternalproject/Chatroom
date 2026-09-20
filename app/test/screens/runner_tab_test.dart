@@ -149,8 +149,21 @@ void main() {
     expect(find.text('Hub 主持'), findsWidgets);
     expect(find.text('Agent 接入'), findsWidgets);
     expect(find.text('執行器'), findsWidgets);
-    expect(find.text('這台機器還沒裝這一包。'), findsOneWidget,
-        reason: '沒裝的那一頁要講得出「這裡能做什麼」');
+
+    // 三頁各自講自己缺的是哪一包，並給出「那我該做什麼」——這一組
+    // `kitReleaseProvider` 是 null（本機來源），所以是自己打包那條路
+    for (final (tab, name, script) in const [
+      ('Hub 主持', 'Hub 主持包', 'host-kit/build.py'),
+      ('Agent 接入', 'Agent 接入包', 'install-kit/build.py'),
+      ('執行器', '執行器包', 'runner-kit/build.py'),
+    ]) {
+      await tester.tap(find.text(tab).first);
+      await tester.pumpAndSettle();
+      expect(find.text('尚未安裝 $name。'), findsOneWidget,
+          reason: '沒裝的那一頁要講得出「這裡缺什麼」');
+      expect(find.textContaining(script), findsOneWidget,
+          reason: '沒有線上安裝時要講得出手動那條路');
+    }
   });
 
   testWidgets('裝了執行器 → 那一頁照舊有設定，底下多一塊安裝與更新',

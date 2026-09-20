@@ -9,6 +9,8 @@ import '../../state/app_providers.dart';
 import '../../state/host_actions.dart';
 import '../../state/kit_installer.dart';
 import '../../widgets/uep_button.dart';
+import 'host_directory_picker.dart';
+import 'host_value_row.dart';
 
 /// 一包 kit 的「安裝／更新」區塊。
 ///
@@ -22,7 +24,7 @@ import '../../widgets/uep_button.dart';
 ///
 /// 成敗只看安裝器最後印的那一行 `RESULT`。畫面不去數檔案、不去猜 exit code
 /// ——兩份判準會在某次改動後分岔，而分岔的那一刻沒有任何地方報錯。
-class KitInstallSection extends ConsumerWidget {
+class KitInstallSection extends ConsumerStatefulWidget {
   const KitInstallSection({
     super.key,
     required this.kit,
@@ -39,7 +41,40 @@ class KitInstallSection extends ConsumerWidget {
   final String installedVersion;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<KitInstallSection> createState() => _KitInstallSectionState();
+}
+
+class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
+  /// 解壓到哪。預設就是安裝器原本的固定位置——**同一份**
+  /// （`KitInstaller.defaultTargetFor`），畫面上寫的與實際裝的不會分岔。
+  ///
+  /// 🔴 在 `initState` 就建好，不要 `late`：沒走到安裝那一段的畫面（沒有
+  /// Release、少了資產）不會碰到它，於是 `dispose()` 才第一次初始化，
+  /// 而那時 `ref` 已經不能用了。
+  late final TextEditingController _path;
+
+  /// 位置不能用的理由。按下安裝當下才算，算完擋在解壓之前。
+  KitPathProblem? _problem;
+
+  KitId get kit => widget.kit;
+  bool get installed => widget.installed;
+  String get installedVersion => widget.installedVersion;
+
+  @override
+  void initState() {
+    super.initState();
+    _path = TextEditingController(
+        text: ref.read(kitInstallerProvider).defaultTargetFor(widget.kit));
+  }
+
+  @override
+  void dispose() {
+    _path.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
     final release = ref.watch(kitReleaseProvider);
@@ -48,7 +83,7 @@ class KitInstallSection extends ConsumerWidget {
     final rows = <Widget>[];
 
     if (!installed) {
-      rows.add(Text(l10n.hostKitInstallNotInstalled,
+      rows.add(Text(l10n.hostKitInstallNotInstalled(_kitName(l10n)),
           style: UepText.serif(size: 14, color: s.inkSoft)));
       rows.add(const SizedBox(height: 10));
     }
@@ -57,8 +92,10 @@ class KitInstallSection extends ConsumerWidget {
     if (release.isLoading) {
       rows.add(_note(context, l10n.hostKitInstallChecking));
     } else if (value == null) {
-      // dev build，或那一版根本沒發——這句話要講得出「那我該做什麼」
-      rows.add(_note(context, l10n.hostKitInstallNoRelease));
+      // 本機來源（dev build）或那一版根本沒發：沒有線上安裝可用，這句話
+      // 要講得出「那我該做什麼」——自己打包，而不是一句「請用安裝包」
+      rows.add(Text(l10n.hostKitInstallNoRelease(kit.buildScript),
+          style: UepText.serif(size: 13.5, color: s.inkSoft)));
     } else {
       rows.addAll(_releaseRows(context, ref, value, state));
     }
@@ -114,6 +151,9 @@ class KitInstallSection extends ConsumerWidget {
         kit == KitId.runner && (ref.watch(runnerBusyProvider).value ?? false);
 
     final blocked = upToDate || missingPython || busyRunner || state.busy;
+
+    rows.add(_pathRow(context, l10n, enabled: !state.busy));
+    rows.add(const SizedBox(height: 12));
 
     rows.add(Row(children: [
       UepButton(
@@ -191,6 +231,14 @@ class KitInstallSection extends ConsumerWidget {
   /// Hub 的更新要**先停再裝**：覆蓋一個正在跑的 Hub 的檔案，壞的是所有
   /// 連著它的人，而不是按下按鈕的那一個。停完才裝，裝完再起回來。
   Future<void> _start(WidgetRef ref, KitRelease release) async {
+    // 🔴 位置不能用的話**連下載都不要開始**：解壓到一半才發現寫不進去，
+    // 磁碟上會留下半包東西，而畫面只講得出一句沒有指向的「安裝失敗」。
+    final target = _path.text.trim();
+    final problem = await checkKitInstallPath(target);
+    if (!mounted) return;
+    setState(() => _problem = problem);
+    if (problem != null) return;
+
     final config = ref.read(appConfigProvider);
     final extra = <String>[];
     switch (kit) {
@@ -215,7 +263,7 @@ class KitInstallSection extends ConsumerWidget {
 
     await ref
         .read(kitInstallsProvider.notifier)
-        .install(kit, release: release, extraArgs: extra);
+        .install(kit, release: release, targetDir: target, extraArgs: extra);
 
     if (!restartHub) return;
     final done = (ref.read(kitInstallsProvider)[kit] ?? const KitInstallState())
@@ -255,6 +303,65 @@ class KitInstallSection extends ConsumerWidget {
         KitInstallFailure.assetMissing =>
           l10n.hostKitInstallAssetMissing(kit.assetName),
         _ => l10n.hostKitInstallFailed(state.detail),
+      };
+
+  /// 「尚未安裝 X」裡的那個 X。
+  String _kitName(AppLocalizations l10n) => switch (kit) {
+        KitId.hub => l10n.hostKitNameHub,
+        KitId.mcp => l10n.hostKitNameMcp,
+        KitId.runner => l10n.hostKitNameRunner,
+      };
+
+  /// 安裝位置那一列：欄位（外殼與 Hub 設定那幾列同一個）＋「瀏覽」。
+  ///
+  /// 填的是**解壓到哪**。host-kit 與 mcp-kit 的 `install.py` 以自己所在的
+  /// 位置為 kit 根（原地安裝），runner-kit 另外收 `--dir`——那一層由
+  /// `KitInstaller` 補上，這裡只負責問出一個位置。
+  Widget _pathRow(BuildContext context, AppLocalizations l10n,
+      {required bool enabled}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: EditRow(
+            label: l10n.hostKitInstallPathLabel,
+            controller: _path,
+            enabled: enabled,
+            trailingSlots: 0,
+            errorText: _problem == null ? null : _problemText(l10n, _problem!),
+            // 改過之後舊的理由就不成立了，留著會讓人以為改了也沒用
+            onChanged: (_) {
+              if (_problem != null) setState(() => _problem = null);
+            },
+          ),
+        ),
+        const SizedBox(width: 12),
+        UepButton(
+          label: l10n.hostRunnerBrowse,
+          small: true,
+          variant: UepButtonVariant.outline,
+          onPressed: !enabled
+              ? null
+              : () async {
+                  final picked =
+                      await pickHostDirectory(l10n.hostKitInstallPathLabel);
+                  if (picked == null || !mounted) return;
+                  setState(() {
+                    _path.text = picked;
+                    _problem = null;
+                  });
+                },
+        ),
+      ],
+    );
+  }
+
+  String _problemText(AppLocalizations l10n, KitPathProblem problem) =>
+      switch (problem) {
+        KitPathProblem.empty => l10n.hostKitInstallPathEmpty,
+        KitPathProblem.relative => l10n.hostKitInstallPathRelative,
+        KitPathProblem.missingRoot => l10n.hostKitInstallPathMissingRoot,
+        KitPathProblem.notWritable => l10n.hostKitInstallPathNotWritable,
       };
 
   Widget _note(BuildContext context, String text) => Text(

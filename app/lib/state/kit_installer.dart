@@ -41,6 +41,55 @@ extension KitIdInfo on KitId {
         KitId.mcp => 'mcp-kit',
         KitId.runner => 'runner-kit',
       };
+
+  /// repo 裡打包這一包的腳本。查不到 Release 時（dev build）畫面要講得出
+  /// 「那我該做什麼」——答案是自己打包，而不是一句「請用安裝包」。
+  String get buildScript => switch (this) {
+        KitId.hub => 'host-kit/build.py',
+        KitId.mcp => 'install-kit/build.py',
+        KitId.runner => 'runner-kit/build.py',
+      };
+}
+
+/// 安裝位置不能用的理由。**安裝前就要擋下來**：解壓到一半才發現寫不進去的
+/// 話，磁碟上會留下半包東西，而畫面只講得出一句沒有指向的「安裝失敗」。
+enum KitPathProblem { empty, relative, missingRoot, notWritable }
+
+/// 這個安裝位置現在寫得進去嗎。可以就回 `null`。
+Future<KitPathProblem?> checkKitInstallPath(String path) async {
+  final text = path.trim();
+  if (text.isEmpty) return KitPathProblem.empty;
+  if (!isAbsoluteKitPath(text)) return KitPathProblem.relative;
+  // 往上找第一個真的存在的資料夾：底下幾層還不存在沒關係（解壓時會建），
+  // 但整條路連磁碟機都不在時，往下建幾層都沒有用。
+  var dir = Directory(text);
+  while (!await dir.exists()) {
+    final parent = dir.parent;
+    if (parent.path == dir.path) return KitPathProblem.missingRoot;
+    dir = parent;
+  }
+  // 可不可寫**只有真的寫一次才知道**：唯讀磁碟、沒有權限的資料夾、被政策
+  // 鎖住的路徑，從屬性上都看不出來。
+  final probe = File('${dir.path}${Platform.pathSeparator}'
+      '.chatroom-write-probe-${DateTime.now().microsecondsSinceEpoch}');
+  try {
+    await probe.writeAsString('');
+  } on Object {
+    return KitPathProblem.notWritable;
+  } finally {
+    try {
+      if (await probe.exists()) await probe.delete();
+    } on Object {
+      // 探針刪不掉不影響判斷，不要讓它蓋掉結果
+    }
+  }
+  return null;
+}
+
+/// 絕對路徑嗎（Windows 的磁碟機、UNC 的雙反斜線，以及 POSIX 的 `/`）。
+bool isAbsoluteKitPath(String path) {
+  if (path.startsWith('/') || path.startsWith(r'\\')) return true;
+  return RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path);
 }
 
 /// GitHub 上的來源。公開 repo，所以不帶任何憑證——**也不可以帶**：
@@ -298,6 +347,10 @@ class KitInstaller {
 
   static final _sep = Platform.pathSeparator;
 
+  /// 這一包預設裝在哪。安裝欄位的預設值就是它——**不另外算一份**，
+  /// 兩邊各算一次的話，畫面上寫的位置與實際解壓的位置會分岔。
+  String defaultTargetFor(KitId kit) => '$installRoot$_sep${kit.dirName}';
+
   /// 查這一版的 Release。**404 回 `null`**——那是「這份 App 沒有對應的
   /// Release」，不是錯誤，也不退到 latest。
   Future<KitRelease?> fetchRelease(String version) async {
@@ -332,9 +385,15 @@ class KitInstaller {
   ///
   /// `extraArgs` 是那一包自己的參數（Hub 位址、token…），由呼叫端決定；
   /// 這裡只負責把 `--yes` 擺在最前面。
+  ///
+  /// `targetDir` 是解壓到哪（省略＝[defaultTargetFor]）。三包的安裝器對位置
+  /// 的態度不同：host-kit 與 mcp-kit 是**原地安裝**（`install.py` 以自己所在
+  /// 的位置為 kit 根），runner-kit 會再搬一次，所以要把同一個位置用 `--dir`
+  /// 告訴它——**這件事留在這一層**，讓解壓位置與安裝位置不可能分岔。
   Future<KitInstallResult> install(
     KitId kit, {
     required KitRelease release,
+    String? targetDir,
     List<String> extraArgs = const [],
     void Function(KitInstallPhase phase, double progress)? onProgress,
   }) async {
@@ -366,7 +425,12 @@ class KitInstaller {
       }
 
       onProgress?.call(KitInstallPhase.extracting, 0);
-      final target = await _extract(kit, zipPath);
+      final dir = (targetDir == null || targetDir.trim().isEmpty)
+          ? defaultTargetFor(kit)
+          : targetDir.trim();
+      final target = await _extract(dir, zipPath);
+      final dirArgs =
+          kit == KitId.runner ? <String>['--dir', target] : const <String>[];
 
       onProgress?.call(KitInstallPhase.installing, 0);
       final script = await _findInstallScript(target);
@@ -378,7 +442,7 @@ class KitInstaller {
       try {
         run = await processRunner.run(
           python.executable,
-          python.argsFor([script.path, '--yes', ...extraArgs]),
+          python.argsFor([script.path, '--yes', ...dirArgs, ...extraArgs]),
           workingDirectory: script.parent.path,
         );
       } on Object catch (e) {
@@ -408,13 +472,13 @@ class KitInstaller {
     }
   }
 
-  /// 解壓到 `<installRoot>/<kit>-kit/`；已存在的先備份成 `.bak-<時間>`。
+  /// 解壓到指定的位置；已存在的先備份成 `.bak-<時間>`。
   ///
   /// 用 PowerShell 的 `Expand-Archive` 而不是拉一個解壓套件進來：這條路
   /// 本來就只在 Windows 上走得通（排程工作、`py` 啟動器都是），而少一個
   /// 依賴就少一次 Windows build 出事的機會。
-  Future<String> _extract(KitId kit, String zipPath) async {
-    final target = Directory('$installRoot$_sep${kit.dirName}');
+  Future<String> _extract(String dir, String zipPath) async {
+    final target = Directory(dir);
     try {
       if (await target.exists()) {
         final stamp = _stamp(_clock());
@@ -576,6 +640,7 @@ class KitInstalls extends Notifier<Map<KitId, KitInstallState>> {
   Future<void> install(
     KitId kit, {
     required KitRelease release,
+    String? targetDir,
     List<String> extraArgs = const [],
   }) async {
     if (of(kit).busy) return;
@@ -584,6 +649,7 @@ class KitInstalls extends Notifier<Map<KitId, KitInstallState>> {
       final result = await ref.read(kitInstallerProvider).install(
             kit,
             release: release,
+            targetDir: targetDir,
             extraArgs: extraArgs,
             onProgress: (phase, progress) =>
                 _set(kit, KitInstallState(phase: phase, progress: progress)),

@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +11,7 @@ import '../../state/runs_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/reveal.dart';
 import '../../widgets/uep_button.dart';
+import 'host_directory_picker.dart';
 import 'host_value_row.dart';
 
 /// 執行器的工作區設定：工作區裡有哪些專案、公開給誰派工、優先載入哪個 skill。
@@ -153,18 +153,6 @@ String _lastSegment(String path) {
       .where((p) => p.isNotEmpty)
       .toList();
   return parts.isEmpty ? '' : parts.last;
-}
-
-/// 開系統的資料夾選擇器。取消回 `null`。
-Future<String?> _pickDirectory(String title) async {
-  try {
-    final path = await FilePicker.getDirectoryPath(dialogTitle: title);
-    if (path == null || path.trim().isEmpty) return null;
-    return path;
-  } on Object {
-    // 沒有選擇器可用的平台：旁邊的輸入框照樣打得了字
-    return null;
-  }
 }
 
 /// 一個工作區一張卡。收合時只剩標題列。
@@ -329,7 +317,7 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
 
   Future<void> _pickFolder() async {
     final l10n = AppLocalizations.of(context);
-    final path = await _pickDirectory(l10n.hostRunnerFolder);
+    final path = await pickHostDirectory(l10n.hostRunnerFolder);
     if (path == null) return;
     setState(() => _folder = path);
   }
@@ -1017,7 +1005,7 @@ class _PathDialogState extends State<_PathDialog> {
           const SizedBox(width: 8),
           TextButton(
             onPressed: () async {
-              final path = await _pickDirectory(widget.title);
+              final path = await pickHostDirectory(widget.title);
               if (path == null || !mounted) return;
               setState(() => _controller.text = path);
             },
@@ -1159,7 +1147,7 @@ class _AddWorkspaceDialogState extends State<_AddWorkspaceDialog> {
           onPressed: _busy
               ? null
               : () async {
-                  final path = await _pickDirectory(label);
+                  final path = await pickHostDirectory(label);
                   if (path == null || !mounted) return;
                   setState(() => controller.text = path);
                 },
@@ -1259,7 +1247,7 @@ class _AddProjectDialogState extends State<_AddProjectDialog> {
                       ? null
                       : () async {
                           final path =
-                              await _pickDirectory(l10n.hostRunnerProjectPath);
+                              await pickHostDirectory(l10n.hostRunnerProjectPath);
                           if (path == null || !mounted) return;
                           setState(() => _path.text = path);
                         },
