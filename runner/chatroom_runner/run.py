@@ -828,7 +828,6 @@ class RunExecutor:
             # 見 BASE_ALLOWED_TOOLS：`auto` 不會自動放行 MCP 工具
             "--allowedTools", ",".join(tools),
             "--model", project.model,
-            "--max-turns", str(project.max_turns),
             "--max-budget-usd", str(project.max_budget_usd),
             "--mcp-config", str(run_dir / "mcp.json"),
             "--settings", str(run_dir / "settings.json"),
@@ -843,6 +842,9 @@ class RunExecutor:
             # 第二道：把連接器的工具從 context 移除。第一道是 settings 的
             # `deniedMcpServers`（伺服器根本不載入），見 KNOWN_CLAUDE_AI_SERVERS
             argv += ["--disallowedTools", ",".join(denied)]
+        if project.max_turns > 0:
+            # 預設不設：輪數不是硬限制，context 才是（config.DEFAULT_MAX_TURNS）
+            argv += ["--max-turns", str(project.max_turns)]
         if resume:
             argv += ["--resume", resume]
         return argv

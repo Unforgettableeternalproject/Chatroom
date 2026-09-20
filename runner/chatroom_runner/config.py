@@ -29,7 +29,10 @@ log = logging.getLogger("chatroom_runner.config")
 # 預設值集中在這裡，改一個地方就好
 DEFAULT_MAX_PARALLEL = 3
 DEFAULT_MODEL = "claude-opus-5"
-DEFAULT_MAX_TURNS = 120
+# 0 ＝ 不設輪數上限。真正的硬限制是 context（見 context_soft_limit_ratio
+# 的交接機制），輪數只是人為的天花板：複雜票本來就要跑很多輪，撞到它
+# 是把做到一半的變更砍在收尾前（2026-09-20 JSAI-2383 實測，121 輪）
+DEFAULT_MAX_TURNS = 0
 DEFAULT_MAX_BUDGET_USD = 5.0
 DEFAULT_WALL_CLOCK_SECONDS = 5400
 DEFAULT_CONTEXT_SOFT_LIMIT_RATIO = 0.7
@@ -165,6 +168,7 @@ class WorkspaceConfig:
     # ——路徑打錯不該讓一個本來跑得動的工作區停擺
     folder: str = ""
     model: str = DEFAULT_MODEL
+    # 0 ＝ 不傳 --max-turns
     max_turns: int = DEFAULT_MAX_TURNS
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
     wall_clock_seconds: int = DEFAULT_WALL_CLOCK_SECONDS

@@ -37,7 +37,6 @@
       "public": true,
       "allow_browser_livetest": false,
       "model": "claude-opus-5",
-      "max_turns": 120,
       "max_budget_usd": 5.0,
       "wall_clock_seconds": 5400,
       "context_window_tokens": 1000000,

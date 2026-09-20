@@ -11,6 +11,7 @@ _NOUNS = [
     "Falcon", "Otter", "Lynx", "Heron", "Fox", "Raven", "Wren", "Badger",
     "Comet", "Harbor", "Cinder", "Willow", "Beacon", "Drift", "Quill", "Sable",
 ]
+_PREMADE_NAMES = ["振宇二號", "超級堅固大龍蝦", "神奇人", "桶神", "黃泉 (不是本人)", "小小世界", "以愛與恨之名", "莊嚴哀悼", "派翠西亞·斯特爾諾", "諾薇亞", "Maximizer", "Bernie", "哈密瓜", "哈哈瓜", "蜜瓜瓜", "哈瓜密", "蜜瓜哈哈", "磨鞋喬喬", "人類太可惡", "Agent", "去澳洲留學兩年半發現物價太貴", "事件視界", "芋園柚子", "巢狀意識 A031"]
 
 # 群組標籤的名字，房內成員不得使用。
 #
@@ -45,7 +46,7 @@ def generate_name(taken: set[str], preferred: str | None = None) -> str:
                 return candidate
 
     for _ in range(64):
-        candidate = f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
+        candidate = f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}" if random.random() < 0.25 else random.choice(_PREMADE_NAMES)
         if candidate not in taken:
             return candidate
     base = f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
