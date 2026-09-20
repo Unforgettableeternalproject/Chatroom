@@ -6900,6 +6900,10 @@
   "@hostEnvLabelQueueCap": {
     "description": "Hub 設定：排隊中的派工上限"
   },
+  "hostEnvLabelLocale": "隨機代稱語言",
+  "@hostEnvLabelLocale": {
+    "description": "Hub 設定：沒自報名的成員進房時，代稱要用哪種語言（zh-TW 或 en）"
+  },
   "hostEnvLabelAttachmentDir": "附件目錄",
   "@hostEnvLabelAttachmentDir": {
     "description": "Hub 進階設定：附件存哪裡"

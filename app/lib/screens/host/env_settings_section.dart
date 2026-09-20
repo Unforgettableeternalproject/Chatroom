@@ -59,6 +59,8 @@ final _hubFields = <_EnvFieldSpec>[
       kind: _EnvKind.nonNegInt),
   _EnvFieldSpec('CHATROOM_RUN_QUEUE_CAP', (l) => l.hostEnvLabelQueueCap,
       kind: _EnvKind.nonNegInt),
+  // 沒自報名的成員進房時，代稱要用哪一種語言（`zh-TW` 或 `en`）
+  _EnvFieldSpec('CHATROOM_LOCALE', (l) => l.hostEnvLabelLocale),
 ];
 
 /// agent 這邊唯一可改的一件事：這台機器進房時叫什麼。

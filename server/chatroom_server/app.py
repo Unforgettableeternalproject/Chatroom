@@ -3370,7 +3370,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 指派者預先取的名字不受影響——那是人挑的，不是自動生成的編號。
         if run_tag and not assigned:
             preferred = None
-        name = generate_name({r["display_name"] for r in taken_rows}, preferred)
+        name = generate_name(
+            {r["display_name"] for r in taken_rows}, preferred, cfg.locale
+        )
         pid = _uid()
         now = _now()
         join_ip = request.client.host if request.client else None
@@ -3449,7 +3451,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     )
                 ).fetchall()
                 name = generate_name(
-                    {r["display_name"] for r in taken_rows}, preferred
+                    {r["display_name"] for r in taken_rows}, preferred, cfg.locale
                 )
         await _commit_with_retry(db)
         # 派工帶進來的身分一進房就掛 hold：它會安靜地跑很久，而 last_seen

@@ -1373,6 +1373,7 @@
   "hostEnvLabelPurge": "Delete archived rooms after (days)",
   "hostEnvLabelQuota": "Daily dispatch quota",
   "hostEnvLabelQueueCap": "Dispatch queue limit",
+  "hostEnvLabelLocale": "Random name language",
   "hostEnvLabelAttachmentDir": "Attachment folder",
   "hostEnvLabelLogLevel": "Log level",
   "hostEnvLabelSubagentTimeout": "Subagent timeout (seconds)",

@@ -41,6 +41,12 @@ class Config:
             return Path(self.tunnel_url_file_path)
         return Path(self.db_path).resolve().parent / ".tunnel-url"
 
+    # 隨機代稱的語言。`zh` 開頭走中文名單，其餘（含未知值）走
+    # `{Adjective}-{Noun}` 英文組合。只影響沒帶 preferred_name 的 join——
+    # 自報名是使用者挑的字，不該被 Hub 的語言設定改掉
+    locale: str = field(
+        default_factory=lambda: os.environ.get("CHATROOM_LOCALE", "zh-TW")
+    )
     # agent 閒置多久後被自動移出房間（秒）
     idle_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))

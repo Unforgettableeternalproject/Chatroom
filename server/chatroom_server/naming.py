@@ -22,11 +22,24 @@ _PREMADE_NAMES = ["振宇二號", "超級堅固大龍蝦", "神奇人", "桶神"
 RESERVED_NAMES = frozenset({"all", "agents", "humans"})
 
 
-def generate_name(taken: set[str], preferred: str | None = None) -> str:
+def _pool_for(locale: str | None) -> list[str] | None:
+    """依語言挑名字池；回傳 None 代表用 `{Adjective}-{Noun}` 組合。
+
+    只看開頭是不是 `zh`：`zh-TW`、`zh_CN`、`zh` 都該拿中文名單，而未知值
+    （含空字串）退回英文組合——那條路永遠組得出名字，不必維護名單。
+    """
+    if (locale or "").strip().lower().startswith("zh"):
+        return _PREMADE_NAMES
+    return None
+
+
+def generate_name(
+    taken: set[str], preferred: str | None = None, locale: str = "zh-TW"
+) -> str:
     """回傳一個不在 taken 中、也不是保留字的顯示名稱。
 
     preferred 有值時優先使用；衝突則加 -2、-3… 後綴。
-    無 preferred 時從名字池隨機組合，池子撞滿了就退回加後綴。
+    無 preferred 時依 locale 從對應的名字池取，池子撞滿了就退回加後綴。
     """
     # 保留字比照「已被使用」處理——撞到就走加後綴那條路（all → all-2），
     # 拒絕加入太粗暴：那會讓一個只是取錯名字的 agent 進不了房間
@@ -45,11 +58,18 @@ def generate_name(taken: set[str], preferred: str | None = None) -> str:
             if candidate not in taken:
                 return candidate
 
+    pool = _pool_for(locale)
     for _ in range(64):
-        candidate = f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}" if random.random() < 0.25 else random.choice(_PREMADE_NAMES)
+        candidate = (
+            random.choice(pool) if pool is not None
+            else f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
+        )
         if candidate not in taken:
             return candidate
-    base = f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
+    base = (
+        random.choice(pool) if pool is not None
+        else f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
+    )
     i = 2
     while f"{base}-{i}" in taken:
         i += 1

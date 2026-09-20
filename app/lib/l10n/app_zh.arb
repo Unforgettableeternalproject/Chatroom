@@ -1373,6 +1373,7 @@
   "hostEnvLabelPurge": "封存房自动删除（天）",
   "hostEnvLabelQuota": "每日派工配额",
   "hostEnvLabelQueueCap": "派工伫列上限",
+  "hostEnvLabelLocale": "随机代称语言",
   "hostEnvLabelAttachmentDir": "附件目录",
   "hostEnvLabelLogLevel": "日志等级",
   "hostEnvLabelSubagentTimeout": "子代理逾时（秒）",
