@@ -111,7 +111,7 @@ class RunnerWorkspacesSection extends ConsumerWidget {
       builder: (_) => _AddWorkspaceDialog(config: config),
     );
     if (added != true) return;
-    final said = await _runnerApplyReload(ref, l10n);
+    final said = await runnerApplyReload(ref, l10n);
     messenger.showSnackBar(SnackBar(content: Text(said)));
   }
 }
@@ -121,7 +121,7 @@ class RunnerWorkspacesSection extends ConsumerWidget {
 /// 回傳的是要給使用者看的那一句——**存檔與命令是兩件事**：寫進去了但命令
 /// 沒送出（拿不到 runner_id、Hub 連不上）時要講「已存檔，執行器還沒收到」，
 /// 而不是一句籠統的成功，那會讓人以為設定已經在跑著的執行器上生效了。
-Future<String> _runnerApplyReload(WidgetRef ref, AppLocalizations l10n) async {
+Future<String> runnerApplyReload(WidgetRef ref, AppLocalizations l10n) async {
   ref.invalidate(runnerConfigProvider);
   final runnerId = await ref.read(runnerIdProvider.future);
   if (runnerId == null) return l10n.hostRunnerSavedNoRunnerId;
@@ -139,7 +139,7 @@ Future<String> _runnerApplyReload(WidgetRef ref, AppLocalizations l10n) async {
 
 /// 把資料層的例外翻成一句話。衝突（重讀再試）與值不對（改了再存也一樣）
 /// 是兩種不同的處置，訊息要分得開。
-String _runnerErrorText(Object error, AppLocalizations l10n) {
+String runnerErrorText(Object error, AppLocalizations l10n) {
   if (error is RunnerConfigConflict) return l10n.hostRunnerConflict;
   if (error is RunnerConfigInvalid) return error.message;
   return l10n.hostRunnerWriteFailed('$error');
@@ -283,11 +283,11 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
       if (mounted) setState(() => _saving = false);
       ref.invalidate(runnerConfigProvider);
       messenger
-          .showSnackBar(SnackBar(content: Text(_runnerErrorText(e, l10n))));
+          .showSnackBar(SnackBar(content: Text(runnerErrorText(e, l10n))));
       return;
     }
 
-    final said = await _runnerApplyReload(ref, l10n);
+    final said = await runnerApplyReload(ref, l10n);
     if (mounted) setState(() => _saving = false);
     messenger.showSnackBar(SnackBar(content: Text(said)));
   }
@@ -306,10 +306,10 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
       if (mounted) setState(() => _saving = false);
       ref.invalidate(runnerConfigProvider);
       messenger
-          .showSnackBar(SnackBar(content: Text(_runnerErrorText(e, l10n))));
+          .showSnackBar(SnackBar(content: Text(runnerErrorText(e, l10n))));
       return;
     }
-    final said = await _runnerApplyReload(ref, l10n);
+    final said = await runnerApplyReload(ref, l10n);
     if (mounted) setState(() => _saving = false);
     messenger.showSnackBar(SnackBar(content: Text(said)));
   }
@@ -345,7 +345,7 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
       ),
     );
     if (added != true) return;
-    final said = await _runnerApplyReload(ref, l10n);
+    final said = await runnerApplyReload(ref, l10n);
     messenger.showSnackBar(SnackBar(content: Text(said)));
   }
 
@@ -1087,7 +1087,7 @@ class _AddWorkspaceDialogState extends State<_AddWorkspaceDialog> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = _runnerErrorText(e, l10n);
+        _error = runnerErrorText(e, l10n);
       });
       return;
     }
@@ -1216,7 +1216,7 @@ class _AddProjectDialogState extends State<_AddProjectDialog> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = _runnerErrorText(e, l10n);
+        _error = runnerErrorText(e, l10n);
       });
       return;
     }

@@ -36,7 +36,7 @@ from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
 from .hub import HubError, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
-                  RunExecutor, parse_mcp_list, remember_claude_ai_servers)
+                  RunExecutor, parse_mcp_list, remember_mcp_servers)
 from .usage import UsageStore
 
 log = logging.getLogger(__name__)
@@ -158,15 +158,18 @@ class RunnerLoop:
             problems += await self._check_gpg()
         problems += await self._check_projects()
         problems += self._check_skill_dirs()
-        await self._probe_claude_ai_connectors()
+        await self._probe_mcp_servers()
         return problems
 
-    async def _probe_claude_ai_connectors(self) -> None:
+    async def _probe_mcp_servers(self) -> None:
         """在執行器的設定目錄下跑一次 `claude mcp list`，把實際看到的
-        claude.ai 連接器併進封鎖名單（`run.KNOWN_CLAUDE_AI_SERVERS` 只是保底）。
+        MCP 伺服器併進名單（`run.KNOWN_CLAUDE_AI_SERVERS` 只是保底）。
+
+        claude.ai 連接器與本機 stdio 伺服器都收：允許清單是預設拒絕，沒被
+        探到的伺服器就沒有規則管得到它。
 
         **探不到不算自檢失敗**：保底名單仍然會產生 deny，這裡只是讓新長出來
-        的連接器也被擋。連不上的連接器一個要等 30 秒健康檢查，所以逾時很常
+        的伺服器也被擋。連不上的連接器一個要等 30 秒健康檢查，所以逾時很常
         見——那時只留一句 warning，不要拿它擋住整台執行器領單。
         """
         argv = list(self.cfg.claude_bin) + ["mcp", "list"]
@@ -178,7 +181,7 @@ class RunnerLoop:
                 stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
         except (OSError, ValueError) as exc:
             log.warning("claude mcp list 叫不起來（%s）：%s；"
-                        "連接器封鎖只用保底名單", argv[0], exc)
+                        "MCP 封鎖只用保底名單", argv[0], exc)
             return
         try:
             out, _ = await asyncio.wait_for(
@@ -186,11 +189,11 @@ class RunnerLoop:
         except asyncio.TimeoutError:
             proc.kill()
             log.warning("claude mcp list 逾時（%s 秒）；"
-                        "連接器封鎖只用保底名單", MCP_LIST_TIMEOUT_SECONDS)
+                        "MCP 封鎖只用保底名單", MCP_LIST_TIMEOUT_SECONDS)
             return
         servers = parse_mcp_list(out.decode("utf-8", "replace"))
-        remember_claude_ai_servers(servers)
-        log.info("claude mcp list 探到 %d 個 claude.ai 連接器", len(servers))
+        remember_mcp_servers(servers)
+        log.info("claude mcp list 探到 %d 台 MCP 伺服器", len(servers))
 
     async def _check_claude(self) -> list[str]:
         argv = list(self.cfg.claude_bin) + ["--version"]

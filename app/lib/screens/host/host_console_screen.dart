@@ -19,6 +19,7 @@ import '../../widgets/uep_tab_bar.dart';
 import 'env_settings_section.dart';
 import 'host_value_row.dart';
 import 'kit_install_section.dart';
+import 'runner_mcp_section.dart';
 import 'runner_workspaces_section.dart';
 
 /// 主機控制台——**這台機器上的 Hub**。
@@ -290,6 +291,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
           const SizedBox(height: 22),
           if (runner != null) ...[
             RunnerWorkspacesSection(kit: runner),
+            _sep(s),
+            const RunnerMcpSection(),
             _sep(s),
             _Panel(
               title: AppLocalizations.of(context).hostInstallPath,

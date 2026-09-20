@@ -4443,6 +4443,10 @@
   "@chatQuestionSkip": {
     "description": "問題卡：略過"
   },
+  "chatQuestionSkipRun": "不回答，讓它自己決定",
+  "@chatQuestionSkipRun": {
+    "description": "問題卡：提問者是派工的臨時 agent 時的略過"
+  },
   "opsReportLabel": "回報",
   "@opsReportLabel": {
     "description": "派工回報區的小標"
@@ -6728,6 +6732,39 @@
   "helpRunnerSkill": "每個工作區可以指定一個優先載入的 skill，最多一個。",
   "@helpRunnerSkill": {
     "description": "說明：工作區的優先 skill"
+  },
+  "hostRunnerPanelMcp": "允許派工使用的 MCP",
+  "@hostRunnerPanelMcp": {
+    "description": "執行器分頁的 MCP 允許清單區塊標題"
+  },
+  "hostRunnerMcpNote": "只有勾起來的伺服器會載入；其餘的在 run 裡一律擋掉。chatroom 是進房領卡的必要條件，取消不了。",
+  "@hostRunnerMcpNote": {
+    "description": "MCP 允許清單的說明"
+  },
+  "hostRunnerMcpLoading": "正在讀這台機器的 MCP 清單…",
+  "@hostRunnerMcpLoading": {
+    "description": "執行 claude mcp list 期間"
+  },
+  "hostRunnerMcpRefresh": "重新讀清單",
+  "@hostRunnerMcpRefresh": {
+    "description": "重讀本機 MCP 清單的按鈕提示"
+  },
+  "hostRunnerMcpRequired": "必要",
+  "@hostRunnerMcpRequired": {
+    "description": "chatroom 那一列的標記"
+  },
+  "hostRunnerMcpMissing": "本機找不到",
+  "@hostRunnerMcpMissing": {
+    "description": "設定裡有、但本機清單沒列到的伺服器"
+  },
+  "hostRunnerMcpListFailed": "讀不到本機 MCP 清單：{error}",
+  "@hostRunnerMcpListFailed": {
+    "description": "claude mcp list 失敗時的說明",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "hostRunnerPanelWorkspaces": "工作區",
   "@hostRunnerPanelWorkspaces": {

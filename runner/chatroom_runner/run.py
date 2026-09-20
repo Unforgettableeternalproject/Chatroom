@@ -153,6 +153,12 @@ def allowed_tools(kind: str, extra: list[str] | None = None,
 #
 # 這份是**保底名單**；啟動自檢會跑一次 `claude mcp list` 把實際看到的合併
 # 進來（見 loop.selfcheck），所以之後新長出來的連接器也會被擋。
+#
+# 🔴 **不只連接器**：自檢探到的**本機 stdio 伺服器**（執行器設定目錄的
+# `.claude.json` 裡註冊的那些）也一起收進來。沒有 `--strict-mcp-config`，
+# 那些伺服器照樣會載入；只擋連接器的話，「允許清單」對它們等於沒有規則，
+# 而畫面上勾了什麼都不會改變 run 看得到的工具。chatroom 本來就在允許
+# 清單裡（`DEFAULT_ALLOWED_MCP_SERVERS`），所以它不會被自己擋掉。
 KNOWN_CLAUDE_AI_SERVERS: tuple[tuple[str, str], ...] = (
     ("claude.ai Adobe for creativity", "https://adobe-creativity.adobe.io/mcp"),
     ("claude.ai Atlassian Rovo", "https://mcp.atlassian.com/v1/mcp"),
@@ -173,10 +179,14 @@ KNOWN_CLAUDE_AI_SERVERS: tuple[tuple[str, str], ...] = (
 # 等 30 秒健康檢查，12 個排下來可能很久；逾時只當「這次沒探到」，不算失敗
 MCP_LIST_TIMEOUT_SECONDS = 90
 
-# `claude mcp list` 的一行：`<name>: <url or command> - <狀態>`
-_MCP_LIST_RE = re.compile(r"^(?P<name>\S.*?): (?P<target>\S+) - ")
+# `claude mcp list` 的一行：`<name>: <url or command> - <狀態>`。
+# 🔴 target 不能用 `\S+`：本機 stdio 伺服器的那一段是**帶參數的命令**
+#（`C:/python.exe -m chatroom_mcp`），`\S+` 只吃到執行檔就對不上後面的
+# ` - `，整行會被當成沒有伺服器而靜默跳過。改成非貪婪吃到狀態符號為止
+_MCP_LIST_RE = re.compile(r"^(?P<name>\S.*?): (?P<target>.+?) - [✔!✘]")
 _NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
-# 自檢探到的連接器（顯示名 → URL）。保底名單之外多出來的那些
+# 自檢探到的 MCP 伺服器（顯示名 → URL；本機 stdio 伺服器的 URL 是空字串）。
+# 保底名單之外多出來的那些
 _discovered_servers: dict[str, str] = {}
 
 
@@ -190,9 +200,11 @@ def server_slug(name: str) -> str:
 
 
 def parse_mcp_list(text: str) -> list[tuple[str, str]]:
-    """從 `claude mcp list` 的輸出撈出 claude.ai 連接器的（顯示名, URL）。
+    """從 `claude mcp list` 的輸出撈出每一台 MCP 伺服器的（顯示名, URL）。
 
-    只認 `claude.ai ` 開頭的行——本機 stdio 伺服器不是這裡要擋的東西。
+    claude.ai 連接器與本機 stdio 伺服器**都要撈**：允許清單是預設拒絕，
+    沒被撈到的伺服器就沒有規則管得到它。stdio 那種沒有 URL，回空字串
+    （deny 時改用 `serverName`）。
     三種狀態行（✔ 已連線 / ! 需要認證 / ✘ 連不上）都要認得：連不上的那行
     後面還跟著一句帶引號的錯誤訊息，不能讓它把名字吃掉。
     """
@@ -202,21 +214,19 @@ def parse_mcp_list(text: str) -> list[tuple[str, str]]:
         if not m:
             continue
         name = m.group("name")
-        if not name.startswith("claude.ai "):
-            continue
         target = m.group("target")
         found.append((name, target if target.startswith("http") else ""))
     return found
 
 
-def remember_claude_ai_servers(servers: list[tuple[str, str]]) -> None:
-    """把自檢探到的連接器併進封鎖名單（保底名單之外的新面孔也會被擋）。"""
+def remember_mcp_servers(servers: list[tuple[str, str]]) -> None:
+    """把自檢探到的伺服器併進名單（保底名單之外的新面孔也會被擋）。"""
     for name, url in servers:
         if name:
             _discovered_servers[name] = url
 
 
-def known_claude_ai_servers() -> list[tuple[str, str]]:
+def known_mcp_servers() -> list[tuple[str, str]]:
     """保底名單 ＋ 自檢探到的。依顯示名排序，參數順序才穩定、好比對。"""
     merged = {name: url for name, url in KNOWN_CLAUDE_AI_SERVERS}
     for name, url in _discovered_servers.items():
@@ -241,12 +251,12 @@ def allowed_server_slugs(allowed: list[str] | None,
     return {s for s in slugs if s}
 
 
-def blocked_claude_ai_servers(
+def blocked_mcp_servers(
         allowed: list[str] | None,
         extra_tools: list[str] | None = None) -> list[tuple[str, str]]:
-    """要擋掉的連接器。**預設拒絕**：不在允許清單裡的一律進 deny。"""
+    """要擋掉的伺服器。**預設拒絕**：不在允許清單裡的一律進 deny。"""
     ok = allowed_server_slugs(allowed, extra_tools)
-    return [(name, url) for name, url in known_claude_ai_servers()
+    return [(name, url) for name, url in known_mcp_servers()
             if server_slug(name) not in ok]
 
 
@@ -254,7 +264,7 @@ def disallowed_tools(allowed: list[str] | None,
                      extra_tools: list[str] | None = None) -> list[str]:
     """`--disallowedTools` 與 `permissions.deny` 共用的那份清單。"""
     return [f"mcp__{server_slug(name)}__*"
-            for name, _ in blocked_claude_ai_servers(allowed, extra_tools)]
+            for name, _ in blocked_mcp_servers(allowed, extra_tools)]
 
 
 def denied_mcp_servers(allowed: list[str] | None,
@@ -264,7 +274,7 @@ def denied_mcp_servers(allowed: list[str] | None,
     有 URL 就用 `serverUrl`（文件說 serverName 會隨連接器改名失效）。
     """
     entries: list[dict] = []
-    for name, url in blocked_claude_ai_servers(allowed, extra_tools):
+    for name, url in blocked_mcp_servers(allowed, extra_tools):
         entries.append({"serverUrl": url} if url else {"serverName": name})
     return entries
 

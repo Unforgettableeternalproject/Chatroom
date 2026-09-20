@@ -1,6 +1,7 @@
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/host_kit.dart';
 import 'package:chatroom_app/screens/host/host_console_screen.dart';
+import 'package:chatroom_app/screens/host/runner_workspaces_section.dart';
 import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
@@ -66,6 +67,9 @@ void main() {
           runnerKitProvider.overrideWith((ref) async => runner),
           runnerConfigProvider.overrideWith((ref) async => config),
           runnerIdProvider.overrideWith((ref) async => null),
+          // 不覆寫的話這支測試會去跑 `claude mcp list`
+          machineMcpServersProvider.overrideWith(
+              (ref) async => const MachineMcpServers(names: ['chatroom'])),
         ],
         child: MaterialApp(
           locale: kTestLocale,
@@ -75,6 +79,13 @@ void main() {
           home: const HostConsoleScreen(),
         ),
       );
+
+  /// 工作區卡的標題。MCP 允許清單那一塊也有一列叫 `chatroom`，
+  /// 只用文字找會同時找到兩個。
+  final workspaceCard = find.descendant(
+    of: find.byType(RunnerWorkspacesSection),
+    matching: find.text('chatroom'),
+  );
 
   void sizeUp(WidgetTester tester) {
     tester.view.physicalSize = const Size(900, 2400);
@@ -110,9 +121,9 @@ void main() {
     await tester.tap(find.text('執行器'));
     await tester.pumpAndSettle();
 
-    expect(find.text('chatroom'), findsOneWidget);
+    expect(workspaceCard, findsOneWidget);
     // 工作區卡預設收合，兩個開關在展開的那一層
-    await tester.tap(find.text('chatroom'));
+    await tester.tap(workspaceCard);
     await tester.pumpAndSettle();
     expect(find.text('公開給他人派工'), findsOneWidget);
     expect(find.text('允許瀏覽器實機測試'), findsOneWidget);
@@ -126,7 +137,7 @@ void main() {
 
     expect(find.byType(TabBar), findsNothing,
         reason: '只有一個分頁的分頁列會讓人以為另一邊還有東西可看');
-    expect(find.text('chatroom'), findsOneWidget);
+    expect(workspaceCard, findsOneWidget);
   });
 
   testWidgets('🔴 裝得了 kit 的機器：一包都沒有也有三個分頁，那是安裝入口',
@@ -151,7 +162,7 @@ void main() {
     await tester.tap(find.text('執行器').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('chatroom'), findsOneWidget);
+    expect(workspaceCard, findsOneWidget);
     expect(find.text('安裝與更新'), findsOneWidget);
   });
 }

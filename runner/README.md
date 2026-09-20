@@ -75,7 +75,7 @@
 | `backoff_minutes` | 撞到 rate limit 後的退避階梯（預設 5／15／30／60 分鐘） |
 | `allowed_domains` | hook 放行的網路目的地。清單以外的 `curl`／`Invoke-WebRequest` 一律擋 |
 | `extra_allowed_tools` | 額外預先授權給 run 的工具名（併進 `--allowedTools`），例如 `mcp__claude_ai_Atlassian_Rovo__*`。只是不要卡在權限提示，硬限制仍由 PreToolUse hook 守 |
-| `allowed_mcp_servers` | run 准用的 MCP 伺服器（預設 `["chatroom"]`）。**預設拒絕**：跟著登入進來的 claude.ai 連接器，不在這裡也沒被 `extra_allowed_tools` 的 `mcp__<server>__*` 點名的，一律寫進 run 專用 settings 的 `deniedMcpServers`（伺服器不載入）與 `--disallowedTools`／`permissions.deny`（工具移出 context） |
+| `allowed_mcp_servers` | run 准用的 MCP 伺服器（預設 `["chatroom"]`）。**預設拒絕**：自檢 `claude mcp list` 看得到的每一台（跟著登入進來的 claude.ai 連接器，以及執行器設定目錄註冊的本機 stdio 伺服器），不在這裡也沒被 `extra_allowed_tools` 的 `mcp__<server>__*` 點名的，一律寫進 run 專用 settings 的 `deniedMcpServers`（伺服器不載入）與 `--disallowedTools`／`permissions.deny`（工具移出 context）。App 的「這台機器 → 執行器」分頁有勾選介面 |
 | `workspaces.<key>.folder` | 工作區的外層資料夾（絕對路徑，選填）。**執行器的邏輯不依賴它**：給 App 顯示與當新增專案／skill 目錄的預設起點。路徑不存在只在 log 警告，不影響載入 |
 | `workspaces.<key>.projects.<name>.path` | 專案（git 工作樹）路徑。**cwd 由這裡決定，brief 說了不算**；不是 git repo（找不到 `.git`）的專案在載入時被排除，並在自檢與 log 點名 |
 | `workspaces.<key>.projects.<name>.allowed_branches` | 可以停留／切換的分支 |

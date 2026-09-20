@@ -706,7 +706,7 @@ def _disallowed(argv: list[str]) -> list[str]:
 
 
 def test_parse_mcp_list_reads_all_three_status_lines():
-    """✔／!／✘ 三種狀態都要撈到，本機 stdio 伺服器不算連接器。"""
+    """✔／!／✘ 三種狀態都要撈到；本機 stdio 伺服器也要，只是沒有 URL。"""
     found = dict(run_module.parse_mcp_list(MCP_LIST_SAMPLE))
     assert found["claude.ai Claude Docs"] == \
         "https://api.anthropic.com/v1/pages/mcp"
@@ -714,7 +714,8 @@ def test_parse_mcp_list_reads_all_three_status_lines():
     # 連不上的那行：錯誤訊息裡也有伺服器名，不能把 URL 或名字吃掉
     assert found["claude.ai Atlassian Rovo"] == \
         "https://mcp.atlassian.com/v1/mcp"
-    assert "chatroom" not in found, "本機 stdio 伺服器不是要擋的東西"
+    # 本機 stdio 伺服器：允許清單是預設拒絕，撈不到就沒有規則管得到它
+    assert found["chatroom"] == "", "stdio 沒有 URL，deny 要改用 serverName"
 
 
 def test_argv_denies_every_connector_except_the_allowed_ones(tmp_path,
@@ -729,7 +730,6 @@ def test_argv_denies_every_connector_except_the_allowed_ones(tmp_path,
                  "mcp__claude_ai_Atlassian_Rovo__*"):
         assert name in denied
     assert "mcp__chatroom__*" not in denied
-    assert not [x for x in denied if not x.startswith("mcp__claude_ai_")]
 
 
 def test_extra_allowed_tools_keeps_that_server_out_of_the_deny_list(
@@ -765,11 +765,61 @@ def test_selfcheck_probe_adds_newly_seen_connectors(tmp_path, work_repo):
     before = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                   tmp_path, "", "ticket"))
     assert "mcp__claude_ai_Brand_New_Thing__*" not in before
-    run_module.remember_claude_ai_servers(
+    run_module.remember_mcp_servers(
         run_module.parse_mcp_list(MCP_LIST_SAMPLE))
     after = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
                                  tmp_path, "", "ticket"))
     assert "mcp__claude_ai_Brand_New_Thing__*" in after
+
+
+# `claude mcp list` 在一台有本機 stdio 伺服器的執行器上看到的樣子
+MCP_LIST_WITH_LOCAL = """\
+claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
+fff: C:/fff.exe serve - ✔ Connected
+playwright: npx @playwright/mcp - ✔ Connected
+chatroom: C:/python.exe -m chatroom_mcp - ✔ Connected
+"""
+
+
+def test_local_stdio_servers_outside_the_allow_list_are_denied(tmp_path,
+                                                               work_repo):
+    """本機 stdio 伺服器也吃允許清單。
+
+    🚨 沒有 `--strict-mcp-config`，執行器設定目錄註冊的 stdio 伺服器照樣
+    會載入。只擋連接器的話，App 上那份允許清單對它們等於沒有規則。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    run_module.remember_mcp_servers(
+        run_module.parse_mcp_list(MCP_LIST_WITH_LOCAL))
+    denied = _disallowed(ex._argv("p", "c", cfg.workspace("ai-website"),
+                                  tmp_path, "", "ticket"))
+    assert "mcp__fff__*" in denied
+    assert "mcp__playwright__*" in denied
+    # chatroom 在預設允許清單裡，不能被自己擋掉——擋掉就連不上聊天室
+    assert "mcp__chatroom__*" not in denied
+
+
+def test_allowed_local_server_stays_out_of_both_deny_layers(tmp_path,
+                                                            work_repo):
+    """允許清單點名的本機伺服器，兩層 deny 都不能有它。"""
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "fff"])
+    ex = _executor(cfg, _NullHub())
+    run_module.remember_mcp_servers(
+        run_module.parse_mcp_list(MCP_LIST_WITH_LOCAL))
+    run_dir = cfg.runs_dir / "r-local"
+    run_dir.mkdir(parents=True)
+    ex._write_run_files(run_dir, {"id": "r-local"},
+                        cfg.workspace("ai-website").projects["JSAI-Web"])
+    settings = json.loads((run_dir / "settings.json").read_text("utf-8"))
+    names = [e.get("serverName") for e in settings["deniedMcpServers"]]
+    assert "fff" not in names
+    assert "chatroom" not in names
+    # 沒有 URL 的本機伺服器只能靠 serverName
+    assert "playwright" in names
+    assert "mcp__fff__*" not in settings["permissions"]["deny"]
+    assert "mcp__playwright__*" in settings["permissions"]["deny"]
 
 
 def test_run_settings_deny_the_connectors_at_both_layers(tmp_path, work_repo):

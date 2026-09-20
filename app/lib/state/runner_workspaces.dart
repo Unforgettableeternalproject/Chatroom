@@ -171,6 +171,9 @@ class RunnerConfigFile {
     this.host = '',
     this.label = '',
     this.stateDir = '',
+    this.allowedMcpServers = const [],
+    this.claudeBin = const [],
+    this.claudeConfigDir = '',
   });
 
   final String path;
@@ -186,6 +189,19 @@ class RunnerConfigFile {
 
   /// `state_dir`（空＝走執行器的預設位置）。`state.json` 在它底下。
   final String stateDir;
+
+  /// `allowed_mcp_servers`：**執行器層**的允許清單，整台共用一份，不是
+  /// 工作區的設定。沒寫這一鍵時是空清單——它的意思是「沿用執行器的預設」
+  /// （`config.DEFAULT_ALLOWED_MCP_SERVERS`＝只有 chatroom），不是「全開」。
+  final List<String> allowedMcpServers;
+
+  /// `claude_bin`（argv）。列本機 MCP 清單時要用同一支 claude。
+  final List<String> claudeBin;
+
+  /// `claude_config_dir`：執行器自己的 `CLAUDE_CONFIG_DIR`。
+  /// **列清單一定要在這個目錄下列**——跟著登入進來的 claude.ai 連接器是
+  /// 綁設定目錄的，拿使用者的目錄去列會列出另一台機器的答案。
+  final String claudeConfigDir;
 }
 
 /// 外部改動撞上存檔。
@@ -236,6 +252,9 @@ Future<RunnerConfigFile?> readRunnerConfig(String path) async {
       host: (raw['host'] as String?) ?? '',
       label: (raw['label'] as String?) ?? '',
       stateDir: (raw['state_dir'] as String?) ?? '',
+      allowedMcpServers: _stringList(raw['allowed_mcp_servers']),
+      claudeBin: _argvList(raw['claude_bin']),
+      claudeConfigDir: (raw['claude_config_dir'] as String?) ?? '',
     );
   } on Object {
     return null;
@@ -389,6 +408,32 @@ Future<void> setRunnerPrimarySkill(
     ws['primary_skill'] = name;
   });
 }
+
+/// 執行器層的「允許 run 使用的 MCP 伺服器」。
+///
+/// 🔴 **chatroom 一定在裡面**：run 靠它進房領卡、回報階段，被自己的允許清單
+/// 擋掉的話那一輪只會盲做（執行器端 `DEFAULT_ALLOWED_MCP_SERVERS` 也是它）。
+/// 所以這裡不信任呼叫端傳什麼，一律補上去。
+///
+/// 名稱**照 `claude mcp list` 顯示的原樣**寫（例如 `claude.ai Gmail`）：
+/// 執行器比對時才會把它換算成工具名裡的 server 段（`claude_ai_Gmail`）。
+Future<void> saveRunnerAllowedMcpServers(
+  RunnerConfigFile cfg, {
+  required List<String> servers,
+}) async {
+  final names = <String>[kRunnerRequiredMcpServer];
+  for (final name in servers) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || names.contains(trimmed)) continue;
+    names.add(trimmed);
+  }
+  await _mutate(cfg, (raw) async {
+    raw['allowed_mcp_servers'] = names;
+  });
+}
+
+/// 永遠勾著、拿不掉的那一台。
+const String kRunnerRequiredMcpServer = 'chatroom';
 
 /// 新增一個工作區（登記既有資料夾）。
 ///
@@ -603,6 +648,17 @@ String _baseName(String path) {
       .where((p) => p.isNotEmpty)
       .toList();
   return parts.isEmpty ? '' : parts.last;
+}
+
+/// `claude_bin`：字串或陣列都認，**字串不切**——與執行器 `config._as_argv`
+/// 同一條規則（Windows 路徑的反斜線會被當成跳脫字元吃掉）。沒設就是 `claude`。
+List<String> _argvList(Object? value) {
+  if (value is List) {
+    final argv = value.map((e) => e.toString()).toList();
+    return argv.isEmpty ? const ['claude'] : argv;
+  }
+  final text = value?.toString().trim() ?? '';
+  return text.isEmpty ? const ['claude'] : [text];
 }
 
 List<String> _stringList(Object? value) {

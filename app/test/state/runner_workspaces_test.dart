@@ -185,6 +185,42 @@ void main() {
       expect(await readRunnerConfig(path), isNull);
     });
 
+    group('allowed_mcp_servers（執行器層）', () {
+      test('讀得出允許清單與 claude_bin／claude_config_dir', () async {
+        final data = await sample();
+        data['allowed_mcp_servers'] = ['chatroom', 'claude.ai Gmail'];
+        data['claude_bin'] = 'claude';
+        data['claude_config_dir'] = r'C:\cfg';
+        await File(path).writeAsString(jsonEncode(data));
+        final cfg = await read();
+        expect(cfg.allowedMcpServers, ['chatroom', 'claude.ai Gmail']);
+        expect(cfg.claudeBin, ['claude']);
+        expect(cfg.claudeConfigDir, r'C:\cfg');
+      });
+
+      test('🔴 沒有這一鍵＝空清單（意思是沿用執行器預設，不是全開）', () async {
+        expect((await read()).allowedMcpServers, isEmpty);
+        expect((await read()).claudeBin, ['claude'],
+            reason: 'claude_bin 沒設時執行器叫的就是 claude');
+      });
+
+      test('🔴 chatroom 一定寫進去，重複的名字不疊', () async {
+        await saveRunnerAllowedMcpServers(await read(),
+            servers: ['claude.ai Gmail', 'claude.ai Gmail']);
+        expect((await raw())['allowed_mcp_servers'],
+            ['chatroom', 'claude.ai Gmail'],
+            reason: 'run 沒有 chatroom 就進不了房，那一輪只會盲做');
+      });
+
+      test('存檔不碰其他欄位', () async {
+        await saveRunnerAllowedMcpServers(await read(), servers: const []);
+        expect((await raw())['allowed_mcp_servers'], ['chatroom']);
+        expect((await raw())['hub_url'], 'http://127.0.0.1:8787');
+        final ws = ((await raw())['projects'] as Map)['a'] as Map;
+        expect(ws['future_field'], {'x': 1});
+      });
+    });
+
     test('🔴 存檔只動被碰到的鍵，沒認得的欄位留著', () async {
       await saveRunnerWorkspace(await read(),
           workspaceKey: 'a',
