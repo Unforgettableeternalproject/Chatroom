@@ -4872,6 +4872,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         # **還沒有板的房不擋**——那時第一個寫入的人正要建板，他會成為 owner
         existing = await _board_for_room(room_id)
         if existing is not None:
+            # 封存的板一律唯讀，房軸這條路也不例外——漏了這道閘，v1 的建卡
+            # 與 reorder 就成了繞過封存的後門（`_board_writer_v2` 與
+            # `_board_item_writer` 本來就擋，只有這裡沒擋）
+            if existing["status"] != "active":
+                raise _err(409, "board_archived",
+                           "這塊板已經封存，唯讀", board_id=existing["id"],
+                           board_name=existing["name"])
             await _board_member_or_403(
                 existing["id"], actor_key(me["session_key"]), need_write=True,
                 board=existing)
@@ -5415,7 +5422,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             還沒做的事進來了，週期本來就不該再停在「全部收尾」的狀態上。
             打回會推 board_seq，畫面自己會反應，不另發系統訊息（隨手記一件
             事是很輕的動作，不值得在房裡響一聲）。
+
+            🔒 **但 `done` 與 `cancelled` 打不回來。** 判準與
+            `reopen_objective` 同一份：解凍只在 `review`／`verified`，終局的
+            兩個狀態永久唯讀（艾斯維爾 2026-09-21 裁決）。原本這裡寫的是
+            `!= "active"`，於是「隨手記一件事」會把一個已完成的週期打回
+            active 並清掉 completed／reviewed／verified——**完成被一個最輕的
+            動作收回**，而按下完成的人不會收到任何提示。那時就回 409
+            `objective_closed`，卡不建、週期不動。
+
+            ⚠️ **解凍 review／verified 只要房內成員、而 `reopen_objective`
+            限人類，這個不對稱是刻意的**：隨手記本來就是低門檻的動作，它
+            打回的是「還沒被人類確認完」的週期，而且確實有一件沒做的事進來
+            了。要收緊的話該連「隨手記」一起收，不是只在這裡補一道人類閘。
             """
+            if row["o_status"] in ("done", "cancelled"):
+                # 訊息形狀共用那一份，不另寫——兩處說法漂移的話，client 分不出
+                # 是同一道閘
+                await _assert_objective_writable(row["o_id"], "objective")
             if row["o_status"] != "active":
                 await db.execute(
                     "UPDATE board_objective SET status='active',"
@@ -7263,6 +7287,29 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "排序必須列出這一層現在的每一張卡，一張不多一張不少",
                        missing=sorted(have - set(ids)))
 
+    async def _assert_reorder_writable(kind: str, ids: list[str]):
+        """排序也是修改：凍結的週期底下不能重排它的階段與任務。
+
+        `_assert_objective_writable` 守的是「已經收尾的週期不能再改」，而
+        reorder 兩條路都沒接上它——`done` 的週期底下，階段與卡的順序照樣
+        拖得動，板上寫著這個週期已經結束而它的內容還在變（與 09/21
+        「週期凍結」同一個漏洞）。
+
+        同一個父週期只查一次：`objective` 就是它自己，`checklist` 反查
+        `objective_id`，`task` 反查 `checklist_id`（再由
+        `_assert_objective_writable` 往上一層）。
+        """
+        seen: set[str] = set()
+        for item_id in ids:
+            row = await _board_item_or_404(kind, item_id)
+            parent = (row["id"] if kind == "objective"
+                      else row["objective_id"] if kind == "checklist"
+                      else row["checklist_id"])
+            if parent in seen:
+                continue
+            seen.add(parent)
+            await _assert_objective_writable(row, kind)
+
     @app.post("/api/rooms/{room_id}/board/reorder",
               dependencies=[Depends(require_auth)])
     async def reorder_board(
@@ -7283,6 +7330,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 沒有人在看——v1 與 v2 排的是同一批卡
         await _assert_reorder_fullset(table, body.kind, ids,
                                       "room_id=?", (room_id,))
+        await _assert_reorder_writable(body.kind, ids)
         seq = await _next_board_seq(room_id)
         for item in body.items:
             await db.execute(
@@ -9352,6 +9400,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         ids = [i.id for i in body.items]
         await _assert_reorder_fullset(table, body.kind, ids,
                                       "board_id=?", (board_id,))
+        await _assert_reorder_writable(body.kind, ids)
         seq = await _next_seq_for_board(board_id)
         for item in body.items:
             await db.execute(

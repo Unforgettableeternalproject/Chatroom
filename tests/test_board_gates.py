@@ -517,3 +517,84 @@ async def test_an_active_objective_is_untouched(tmp_path):
             await _task_status(client, tids[0], "in_progress", human),
         ):
             assert r.status_code == 200, r.text
+
+
+# ── 排序也受週期凍結（09/22 補）──────────────────────────────────────
+# 兩條 reorder 都只驗了「這份順序完整且同層」，沒有人問過那個父週期還開不開
+# ——`done` 的週期底下，階段與卡的順序照樣拖得動。與上面那組是同一個漏洞。
+
+
+async def _reorder(client, path, kind, ids, hdr):
+    return await client.post(path, headers=hdr, json={
+        "kind": kind,
+        "items": [{"id": i, "order_index": n} for n, i in enumerate(ids)]})
+
+
+async def _board_id(client, rid, hdr):
+    return (await client.get(f"/api/rooms/{rid}/board",
+                             headers=hdr)).json()["board_id"]
+
+
+async def test_a_done_objective_freezes_reorder_on_both_axes(tmp_path):
+    """完成的週期底下，房軸與板軸的排序都要擋。
+
+    **兩條路各驗一次**：它們的守門是分開寫的，只修一條的話另一條就是繞過
+    凍結的後門，而畫面上兩條路拖的是同一批卡。
+    """
+    app, client = await _client(tmp_path, "freeze-done-reorder")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _done_objective(client, rid, human, agent)
+        bid = await _board_id(client, rid, human)
+
+        detail = await _closed(await _reorder(
+            client, f"/api/rooms/{rid}/board/reorder", "checklist", [cid],
+            human))
+        assert detail["objective_id"] == oid
+        assert detail["objective_status"] == "done"
+
+        detail = await _closed(await _reorder(
+            client, f"/api/boards/{bid}/reorder", "checklist", [cid], human))
+        assert detail["objective_id"] == oid
+
+
+async def test_an_active_objective_can_still_be_reordered(tmp_path):
+    """對照組。**沒有這條的話，「一律拒絕」也會讓上面那條通過。**"""
+    app, client = await _client(tmp_path, "active-reorder")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human, tasks=2)
+        bid = await _board_id(client, rid, human)
+
+        for path in (f"/api/rooms/{rid}/board/reorder",
+                     f"/api/boards/{bid}/reorder"):
+            r = await _reorder(client, path, "task", list(reversed(tids)),
+                               human)
+            assert r.status_code == 200, r.text
+
+
+async def test_an_archived_board_is_read_only_on_the_room_axis(tmp_path):
+    """封存的板在 v1（房軸）也唯讀。
+
+    `_board_item_writer` 與 `_board_writer_v2` 本來就擋，只有建卡／排序共用的
+    `_board_writer` 沒擋——那條路就是繞過封存的後門。
+    """
+    app, client = await _client(tmp_path, "archived-board-v1")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human)
+        bid = await _board_id(client, rid, human)
+        r = await client.post(f"/api/boards/{bid}/archive", headers=human)
+        assert r.status_code == 200, r.text
+
+        r = await _reorder(client, f"/api/rooms/{rid}/board/reorder", "task",
+                           tids, human)
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "board_archived", detail
+        assert detail["board_id"] == bid and detail["board_name"]
+
+        r = await client.post(f"/api/rooms/{rid}/board/objectives",
+                              json={"title": "新週期"}, headers=human)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "board_archived"
