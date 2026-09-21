@@ -209,3 +209,56 @@ async def test_stale_runner_commands_are_backfilled_as_applied(tmp_path):
     assert "舊版執行器" in rows["c1"]["note"]
     assert rows["c2"]["applied_at"] is None, (
         "還沒被取走的命令也被收掉了——那筆命令執行器根本還沒看到")
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_runs_do_not_block_startup(tmp_path):
+    """存量資料已經違反「同 ref 只能一筆進行中」時，Hub 還是要起得來。
+
+    唯一性索引是新加的約束，而它要面對的是一個一直在跑的 `chatroom.db`。
+    建不起來就退回沒有索引（行為等同加索引之前）並記一筆 warning——在開
+    DB 的路徑上丟例外的話，使用者看到的是一個再也打不開的 Hub，而原因是
+    兩筆半年前的重複派工。
+    """
+    path = str(tmp_path / "dupruns.db")
+    db = await open_db(path)
+    # 存量 DB 的樣子：索引還不存在，所以那兩筆重複當初寫得進去
+    await db.execute("DROP INDEX IF EXISTS idx_agent_run_ref_active")
+    await db.execute(
+        "INSERT INTO room (id, name, next_seq, created_at)"
+        " VALUES ('r1','工作房',1,'2026-09-01T00:00:00Z')")
+    for rid in ("run-a", "run-b"):
+        await db.execute(
+            "INSERT INTO agent_run (id, room_id, kind, project, ref, status,"
+            " created_at, updated_at) VALUES (?,'r1','investigate',"
+            "'ai-website','task-1','queued','2026-09-01T00:00:00Z',"
+            "'2026-09-01T00:00:00Z')", (rid,))
+    await db.commit()
+    await db.close()
+
+    db = await open_db(path)
+    try:
+        rows = await (await db.execute(
+            "SELECT id FROM agent_run ORDER BY id")).fetchall()
+        # 舊列一律不動：這裡沒有依據決定該取消哪一筆
+        assert [r[0] for r in rows] == ["run-a", "run-b"]
+        idx = await (await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+            " AND name='idx_agent_run_ref_active'")).fetchall()
+        assert idx == [], "重複資料還在，索引不該建得起來"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_ref_unique_index_exists_on_a_clean_db(tmp_path):
+    """乾淨的 DB 要拿到 `idx_agent_run_ref_active`（併發派工靠它擋）。"""
+    db = await open_db(str(tmp_path / "clean.db"))
+    try:
+        idx = await (await db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index'"
+            " AND name='idx_agent_run_ref_active'")).fetchone()
+        assert idx is not None
+        assert "queued" in idx[0] and "handoff" not in idx[0]
+    finally:
+        await db.close()

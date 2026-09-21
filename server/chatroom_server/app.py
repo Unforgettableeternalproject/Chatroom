@@ -13716,17 +13716,31 @@ def create_app(config: Config | None = None) -> FastAPI:
         run_id = _uid()
         now = _now()
         requester_kind = "agent" if sup_room is not None else "human"
-        await db.execute(
-            "INSERT INTO agent_run (id, room_id, board_id, kind, project, ref,"
-            " brief, requested_by, requested_by_actor_key, requested_by_name,"
-            " requester_kind, requester_name,"
-            " status, priority, position, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
-            (run_id, room_id, body.board_id, body.kind, body.project, body.ref,
-             body.brief, me["id"], actor, quota_name,
-             requester_kind, me["display_name"],
-             body.priority, pos, now, now),
-        )
+        try:
+            await db.execute(
+                "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
+                " ref, brief, requested_by, requested_by_actor_key,"
+                " requested_by_name, requester_kind, requester_name,"
+                " status, priority, position, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
+                (run_id, room_id, body.board_id, body.kind, body.project,
+                 body.ref, body.brief, me["id"], actor, quota_name,
+                 requester_kind, me["display_name"],
+                 body.priority, pos, now, now),
+            )
+        except sqlite3.IntegrityError:
+            # `idx_agent_run_ref_active` 擋下來了：上面那條 SELECT 與這句
+            # INSERT 之間有 await，兩個併發請求都會通過快速路徑，真正的
+            # 唯一性只有資料庫說了算。這裡重查一次拿既有的 run_id——先前
+            # 查到的是「沒有」，手上沒有任何 id 可以回給對方。
+            marks = ",".join("?" for _ in open_statuses)
+            other = await (await db.execute(
+                "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
+                f" AND status IN ({marks}) LIMIT 1",
+                (room_id, body.ref, *open_statuses))).fetchone()
+            raise _err(409, "run_ref_already_active",
+                       "這個目標已經有一筆還沒結束的派工。",
+                       run_id=other["id"] if other is not None else "")
         await _record_run_event(run_id, room_id, "", "queued",
                                 actor, me["display_name"], "created",
                                 detail={"requester_kind": requester_kind,
@@ -14552,8 +14566,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         排序鍵是 `(created_at, rowid)` 不是 `seq`：`seq` 在房內遞增，跨房
         彙總時兩間房的 seq 互不可比。
 
-        `since` 吃事件 id 或 ISO 時間：id 先換成它的 `created_at`，之後一律
-        比時間。找不到那個 id 就當它是時間字串——**不報錯**：對方拿著的是
+        **游標帶 tie-breaker**：只比 `created_at` 的話，同一個時間戳的其餘
+        事件會被永久跳過——`_record_runner_event` 一台執行器影響幾間房就
+        寫幾筆，那幾筆共用同一個 `now`，而下一次輪詢的 `> created_at` 把
+        它們全部排除。游標形狀是 `"<created_at>|<rowid>"`，事件 id 也照舊
+        吃得下（換成它自己的時間與 rowid）。只給純時間戳（舊 client）時
+        沒有 tie-breaker 可用，維持原本的嚴格 `>`：同時間戳也送的話，那個
+        client 每一輪都會再收到它拿來當游標的那一筆。
+
+        **有游標時往前補、沒有游標時給最新一頁**：沒有游標是「面板要現在
+        的樣子」，所以取最新的 limit 筆；帶游標是「我讀到這裡，後面還有
+        什麼」，此時從游標往後一筆一筆補（backlog 比 limit 長時照樣翻得
+        完），否則超出 limit 的那一段沒有人再回頭去讀。兩種情況回去的順序
+        都是**新的在前**，client 不必分辨。
+
+        `since` 吃事件 id 或 ISO 時間：id 先換成它的 `(created_at, rowid)`。
+        找不到那個 id 就當它是時間字串——**不報錯**：對方拿著的是
         一筆已經隨房被刪掉的事件 id，把它當成「從頭讀」比回 404 有用。
         """
         db = app.state.db
@@ -14561,13 +14589,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         key = _credential_key(x_session_key, session_key,
                               "GET /api/ops/exceptions 的 session_key（query）")
         cursor = (since or "").strip()
+        # None＝手上沒有 tie-breaker（舊 client 給的純時間戳）。此時維持
+        # 原本的嚴格 `>`：退成「同時間戳也送」的話，那個 client 每一輪都
+        # 會再收到它自己當游標的那一筆，輪詢變成永遠重送
+        cursor_rowid: int | None = None
+        if cursor:
+            if "|" in cursor:
+                # 這一端自己發出去的游標：`"<created_at>|<rowid>"`
+                head, _, tail = cursor.rpartition("|")
+                try:
+                    cursor_rowid = int(tail)
+                except ValueError:
+                    cursor_rowid = None
+                else:
+                    cursor = head
         if cursor:
             row = await (await db.execute(
-                "SELECT created_at FROM agent_run_event WHERE id=?"
-                " UNION ALL SELECT created_at FROM runner_event WHERE id=?",
+                "SELECT created_at, rowid AS rid FROM agent_run_event"
+                " WHERE id=? UNION ALL SELECT created_at, rowid AS rid"
+                " FROM runner_event WHERE id=?",
                 (cursor, cursor))).fetchone()
             if row is not None:
-                cursor = row["created_at"]
+                cursor, cursor_rowid = row["created_at"], row["rid"]
+                # 這個 id 在另一張表也可能有同名的 rowid，但 id 是 uuid4，
+                # 撞不到
             else:
                 # 不是 id 也不是時間（例如一筆已經隨房被刪掉的事件 id）：
                 # **當成沒有給游標**。照字串比大小的話，`no-such-event`
@@ -14576,7 +14621,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 try:
                     datetime.fromisoformat(cursor)
                 except ValueError:
-                    cursor = ""
+                    cursor, cursor_rowid = "", None
         reasons = tuple(_EXCEPTION_REASON_KINDS)
         marks = ",".join("?" * len(reasons))
         if host:
@@ -14584,8 +14629,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             vis, vis_params = "1=1", ()
         else:
             vis, vis_params = _visible_rooms_clause("r", key, _party(request))
-        time_sql = " AND e.created_at > ?" if cursor else ""
-        time_params: tuple = (cursor,) if cursor else ()
+        # rowid 的 tie-breaker 跨兩張表共用一個值。兩張表的 rowid 各自獨立，
+        # 嚴格說來不可比——但 `created_at` 是微秒精度的 ISO 時間，兩張表
+        # 同時間戳的機率可以忽略；會撞在一起的是同一張表內同一次寫入的那
+        # 幾筆（`_record_runner_event` 的多房迴圈），而它們的 rowid 本來就
+        # 是同一個序列。
+        if not cursor:
+            time_sql, time_params = "", ()
+        elif cursor_rowid is None:
+            time_sql, time_params = " AND e.created_at > ?", (cursor,)
+        else:
+            time_sql = (" AND (e.created_at > ? OR (e.created_at = ?"
+                        " AND e.rowid > ?))")
+            time_params = (cursor, cursor, cursor_rowid)
+        # 有游標＝往前補（由舊往新取 limit 筆），沒有＝最新一頁
+        order = "ASC" if cursor else "DESC"
         run_rows = await (await db.execute(
             "SELECT e.id AS id, e.reason AS reason, e.run_id AS run_id,"
             " e.room_id AS room_id, e.actor AS runner_id,"
@@ -14596,7 +14654,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " LEFT JOIN agent_run a ON a.id=e.run_id"
             f" WHERE (e.reason IN ({marks}) OR e.reason LIKE ?)"
             f" AND {vis}{time_sql}"
-            " ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            f" ORDER BY e.created_at {order}, e.rowid {order} LIMIT ?",
             reasons + (_EXCEPTION_REASON_PREFIX + "%",) + vis_params
             + time_params + (limit,))).fetchall()
         runner_rows = await (await db.execute(
@@ -14607,7 +14665,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             " '' AS run_ref FROM runner_event e"
             " JOIN room r ON r.id=e.room_id"
             f" WHERE {vis}{time_sql}"
-            " ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            f" ORDER BY e.created_at {order}, e.rowid {order} LIMIT ?",
             vis_params + time_params + (limit,))).fetchall()
 
         def _shape(row) -> dict:
@@ -14634,19 +14692,29 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "run_ref": row["run_ref"] or "",
                 "detail": detail if isinstance(detail, dict) else {},
                 "created_at": row["created_at"],
+                # 排序與游標用，回給 client 之前拿掉
+                "_rowid": row["rowid"],
             }
 
         merged = [_shape(r) for r in list(run_rows) + list(runner_rows)]
         # 兩張表各自取了 limit 筆，合併後**要再截一次**：不截的話回去的是
-        # 兩倍長度，而 client 記的游標會跳過中間那一段
-        merged.sort(key=lambda e: (e["created_at"], e["id"]), reverse=True)
+        # 兩倍長度，而 client 記的游標會跳過中間那一段。
+        # 往前補的時候截掉的是**新的那一端**（下一頁還讀得到），沒有游標
+        # 時截掉的是舊的那一端（面板只要最新的一頁）
+        merged.sort(key=lambda e: (e["created_at"], e["_rowid"]),
+                    reverse=not cursor)
         merged = merged[:limit]
-        return {
-            "exceptions": merged,
-            # 下一次的游標＝這一批裡最新的那筆時間。空的時候原樣回傳
-            # 呼叫端給的 `since`，否則輪詢會在沒有新事件時退回從頭讀
-            "next_since": merged[0]["created_at"] if merged else (since or ""),
-        }
+        if cursor:
+            merged.reverse()
+        # 下一次的游標＝這一批裡最新的那一筆，含 tie-breaker。空的時候
+        # 原樣回傳呼叫端給的 `since`，否則輪詢會在沒有新事件時退回從頭讀
+        next_since = since or ""
+        if merged:
+            top = merged[0]
+            next_since = "{}|{}".format(top["created_at"], top["_rowid"])
+        for item in merged:
+            item.pop("_rowid", None)
+        return {"exceptions": merged, "next_since": next_since}
 
     async def _sweep_runners() -> None:
         """逾時未 heartbeat 的執行器標 offline，並在它有 run 的 ops 房講一句。

@@ -1,6 +1,11 @@
 """SQLite schema 與連線管理（aiosqlite, WAL 模式）。"""
 
+import logging
+import sqlite3
+
 import aiosqlite
+
+logger = logging.getLogger("chatroom")
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -810,6 +815,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_run_room ON agent_run(room_id, status);
 -- 領單的排序鍵：priority 高的先、同 priority 先進先出
 CREATE INDEX IF NOT EXISTS idx_agent_run_queue
     ON agent_run(status, priority DESC, position);
+-- 同一個 ref 只能有一筆還沒結束的 run，靠 `idx_agent_run_ref_active`
+-- 這條 partial unique index 擋。**它不在這份 SCHEMA 裡**：executescript
+-- 是開 DB 的必經路徑，既有資料若已經違反唯一性，建在這裡等於 Hub 直接
+-- 起不來。建立與退場都在 `_ensure_run_ref_unique()`。
 
 -- 稽核串：狀態的**每一次**變化都留一筆。缺一筆就是一條看起來完整、
 -- 實際上有洞的稽核串（board_event 的教訓）
@@ -1364,6 +1373,51 @@ async def _rebuild_board_tables(db: aiosqlite.Connection) -> None:
         await db.execute("PRAGMA foreign_keys=ON")
 
 
+# 同一個 ref 的「還沒結束」定義。**不含 handoff**：交接的父 run 永遠停在
+# handoff（它同時在 app.py 的 _RUN_TERMINAL 裡），把它算成還沒結束的話，
+# 一張卡只要交接過一次就再也派不了工。與 app.py `create_run` 的
+# `_RUN_ACTIVE` 減去 handoff 是同一組，改一邊就要改另一邊。
+RUN_REF_ACTIVE_STATUSES = ("queued", "claimed", "running", "limited")
+
+_RUN_REF_UNIQUE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_ref_active"
+    " ON agent_run(room_id, ref)"
+    " WHERE status IN ('queued','claimed','running','limited')")
+
+
+async def _ensure_run_ref_unique(db: aiosqlite.Connection) -> None:
+    """同房同 ref 只能有一筆進行中的 run——交給資料庫保證。
+
+    `create_run` 的 SELECT 檢查擋不住併發：兩個請求可以同時查到「沒有」
+    再各自 INSERT。那條 SELECT 留著當快速路徑，真正的唯一性在這條索引。
+
+    **既有資料違反唯一性時不擋開機**：那是已經發生過的事，建不起來就
+    記一筆 warning 退回沒有索引的狀態（行為等同今天），讓 Hub 起得來，
+    由人去收拾那幾筆重複的 run。舊列一律不動——這裡沒有任何依據可以
+    決定該取消哪一筆。
+    """
+    marks = ",".join("?" for _ in RUN_REF_ACTIVE_STATUSES)
+    try:
+        dups = await (await db.execute(
+            "SELECT room_id, ref, COUNT(*) AS n FROM agent_run"
+            f" WHERE status IN ({marks})"
+            " GROUP BY room_id, ref HAVING n > 1",
+            RUN_REF_ACTIVE_STATUSES)).fetchall()
+    except sqlite3.Error:  # 表還不存在（更舊的 DB）：讓索引自己去試
+        dups = []
+    for row in dups:
+        logger.warning(
+            "agent_run 有重複的進行中派工：room=%s ref=%s 共 %s 筆，"
+            "唯一性索引會建不起來，請先收掉多出來的那幾筆",
+            row["room_id"], row["ref"], row["n"])
+    try:
+        await db.execute(_RUN_REF_UNIQUE_INDEX)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "idx_agent_run_ref_active 建不起來（%s）：重複派工這一關"
+            "暫時只剩 create_run 的檢查擋著", exc)
+
+
 async def _migrate(db: aiosqlite.Connection) -> None:
     """為舊版 DB 補上後續版本新增的欄位（冪等）。"""
     for table, column, ddl in MIGRATIONS:
@@ -1373,6 +1427,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
+    await _ensure_run_ref_unique(db)
     await _migrate_data(db)
 
 

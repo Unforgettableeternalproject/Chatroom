@@ -363,6 +363,30 @@ class RunnerLoop:
         """
         self._persist_identity()
 
+    def _persist_registration(self) -> None:
+        """註冊一回來就把身分（``runner_id``／``runner_token``）落地。
+
+        🚨 **Hub 只在建立那一次回 `runner_token`，而且沒有補發端點**（審查
+        09/21）：等到有 run 或正常退出才寫的話，第一次註冊完就被殺掉／斷電
+        的執行器，token 只活在記憶體裡而永遠消失——下一次同 host+label 啟動
+        會被 403 `runner_token_required` 擋在門外，只能換 label 才回得來。
+
+        🚨 **不碰 ``active_run_ids`` 與 ``last_maintenance_day``**：這裡只把
+        identity 現在的內容寫回去。前者在 `start()` 註冊的當下還沒對帳，覆寫
+        成空的話孤兒 run 就沒有人收；後者是刻意只留在記憶體的推測值。
+
+        寫不進去只是回到原本的風險，不該擋下啟動：記 error 之後照常往下走。
+        """
+        identity = getattr(self.hub, "identity", None)
+        if identity is None:
+            return
+        try:
+            save_identity(self.cfg.state_file, identity)
+        except OSError as exc:
+            log.error("註冊後的本機狀態檔寫不進去（%s）：%s；"
+                      "這個進程若在寫檔前結束，runner_token 會遺失",
+                      self.cfg.state_file, exc)
+
     def _persist_identity(self) -> None:
         """把本機狀態（手上的 run、維護窗日期）寫回 ``state.json``。"""
         identity = getattr(self.hub, "identity", None)
@@ -450,6 +474,8 @@ class RunnerLoop:
             public_project_keys(self.cfg.workspaces),
             self.cfg.max_parallel, self.cfg.version,
             private_projects=private_project_keys(self.cfg.workspaces))
+        # 註冊一回來就落地：這之後的每一步都可能是這個進程的最後一步
+        self._persist_registration()
         failed = bool(self.state.selfcheck_problems)
         if failed:
             # 一定要留在本機 log：問題只上報 Hub 的話，排程工作那邊看到的
@@ -737,6 +763,7 @@ class RunnerLoop:
         except HubError as exc:
             log.warning("reload：重新註冊沒送成，下一輪再試（%s）", exc)
             return
+        self._persist_registration()
         self.state.reregister_pending = False
 
     def run_dir(self, run_id: str) -> Path:

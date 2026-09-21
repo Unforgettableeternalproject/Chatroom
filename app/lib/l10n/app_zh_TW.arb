@@ -7121,6 +7121,18 @@
       }
     }
   },
+  "hostRunnerBranchesLabel": "可切換分支",
+  "@hostRunnerBranchesLabel": {
+    "description": "專案子卡上可編輯的 allowed_branches 欄位標題"
+  },
+  "hostRunnerBranchesHint": "逗號分隔，可用 feature/*",
+  "@hostRunnerBranchesHint": {
+    "description": "分支欄的輸入提示"
+  },
+  "hostRunnerBranchesMissing": "請在設定檔補 allowed_branches",
+  "@hostRunnerBranchesMissing": {
+    "description": "專案沒有 allowed_branches 時的警告：執行器會判定目前分支不允許而退出"
+  },
   "hostEnvLabelBind": "綁定位址",
   "@hostEnvLabelBind": {
     "description": "Hub 設定：Hub 監聽哪個網路位址"

@@ -101,6 +101,7 @@ class StageFilesList extends ConsumerWidget {
     required this.files,
     required this.actions,
     this.participantId,
+    this.useSessionKey = false,
     this.readOnly = false,
     this.onAdd,
   });
@@ -116,6 +117,17 @@ class StageFilesList extends ConsumerWidget {
   /// 房內身分。附件是房內內容，取圖要它——沒有時圖片畫佔位而不是發出
   /// 一個註定 401 的請求（同 [AttachmentView] 的理由）。
   final String? participantId;
+
+  /// 板軸（Board Library 的 `/boards/:id`）：**那條路上沒有房、也就沒有
+  /// participant**，附件要靠 `X-Session-Key` 才讀得到；只認 participant 的話
+  /// 素材點開只會是「身分待定」。
+  ///
+  /// 房軸維持 false：那裡的 participant 只是還沒到，要的是「稍候再試」，
+  /// 不是改拿另一個身分去敲門。
+  ///
+  /// ⚠️ 是旗標不是金鑰本身——key 要在**真的要畫**的時候才去讀
+  /// [appConfigProvider]（理由見 [build] 裡那段）。
+  final bool useSessionKey;
   final bool readOnly;
 
   /// 「新增素材」。唯讀或沒有房（附件要上傳到某一間房）時是 null，那時
@@ -138,6 +150,7 @@ class StageFilesList extends ConsumerWidget {
 
   Widget _list(BuildContext context, WidgetRef ref) {
     final config = ref.watch(appConfigProvider);
+    final sessionKey = useSessionKey ? config.deviceKey : null;
     return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -149,6 +162,7 @@ class StageFilesList extends ConsumerWidget {
                 serverUrl: config.serverUrl,
                 token: config.token,
                 participantId: participantId,
+                sessionKey: sessionKey,
                 onRemove: (readOnly || actions == null)
                     ? null
                     : () => _remove(context, f),
@@ -247,6 +261,7 @@ class _StageFileRow extends ConsumerWidget {
     required this.serverUrl,
     required this.token,
     required this.participantId,
+    required this.sessionKey,
     required this.onRemove,
     required this.onEditNote,
   });
@@ -255,6 +270,7 @@ class _StageFileRow extends ConsumerWidget {
   final String serverUrl;
   final String token;
   final String? participantId;
+  final String? sessionKey;
   final VoidCallback? onRemove;
 
   /// 改備註。與 [onRemove] 同一組條件：唯讀或沒有動作時是 null。
@@ -283,6 +299,7 @@ class _StageFileRow extends ConsumerWidget {
                   serverUrl: serverUrl,
                   token: token,
                   participantId: participantId,
+                  sessionKey: sessionKey,
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),

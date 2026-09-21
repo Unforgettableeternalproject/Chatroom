@@ -19,10 +19,17 @@ String attachmentUrl(String serverUrl, String attachmentId) =>
     '$serverUrl/api/attachments/$attachmentId';
 
 /// 取附件要帶的標頭。房內身分是 Hub 的讀取邊界。
-Map<String, String> attachmentHeaders(String token, String? participantId) => {
+///
+/// [sessionKey] 是**沒有房**的那條路（Board Library 的 `/boards/:id`）：那裡
+/// 的身分是板成員，Hub 認 `X-Session-Key`。兩個都帶得動，帶了不衝突。
+Map<String, String> attachmentHeaders(String token, String? participantId,
+        {String? sessionKey}) =>
+    {
       if (token.isNotEmpty) 'Authorization': 'Bearer $token',
       if (participantId != null && participantId.isNotEmpty)
         'X-Participant-Id': participantId,
+      if (sessionKey != null && sessionKey.isNotEmpty)
+        'X-Session-Key': sessionKey,
     };
 
 /// 開啟一份附件的檢視。
@@ -31,7 +38,9 @@ Map<String, String> attachmentHeaders(String token, String? participantId) => {
 /// 內建的檢視器，下載到暫存再交給系統程式開——**那份暫存檔不是使用者的
 /// 存檔**，要留下來請用存檔鈕。
 ///
-/// 沒有房內身分時連請求都不發：那個空窗期發出去的只會是 401。
+/// 沒有任何身分時連請求都不發：那個空窗期發出去的只會是 401。**身分有兩種**
+/// ——房內的 [participantId]，與板軸（`/boards/:id`，沒有房）的 [sessionKey]。
+/// 只認前者的話，板庫進來的素材永遠只會顯示「身分待定」。
 Future<void> openAttachmentPreview(
   BuildContext context,
   WidgetRef ref, {
@@ -39,17 +48,21 @@ Future<void> openAttachmentPreview(
   required String serverUrl,
   required String token,
   String? participantId,
+  String? sessionKey,
 }) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   final l10n = AppLocalizations.of(context);
   void toast(String message) =>
       messenger?.showSnackBar(SnackBar(content: Text(message)));
 
-  if (participantId == null || participantId.isEmpty) {
+  final hasIdentity = (participantId != null && participantId.isNotEmpty) ||
+      (sessionKey != null && sessionKey.isNotEmpty);
+  if (!hasIdentity) {
     toast(l10n.roomsIdentityPending);
     return;
   }
-  final headers = attachmentHeaders(token, participantId);
+  final headers =
+      attachmentHeaders(token, participantId, sessionKey: sessionKey);
   if (attachment.isImage) {
     await showDialog<void>(
       context: context,
@@ -65,7 +78,8 @@ Future<void> openAttachmentPreview(
   try {
     final bytes = await ref
         .read(attachmentsApiProvider)
-        .download(attachment.id, participantId: participantId);
+        .download(attachment.id,
+            participantId: participantId, sessionKey: sessionKey);
     // 暫存檔放在各自的資料夾裡：同名檔案（screenshot.png、report.pdf）
     // 在素材清單裡很常見，直接落在系統暫存目錄會互相蓋掉
     final dir = await Directory.systemTemp.createTemp('chatroom_preview_');

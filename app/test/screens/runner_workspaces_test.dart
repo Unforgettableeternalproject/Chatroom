@@ -6,6 +6,7 @@ import 'package:chatroom_app/state/host_probe.dart';
 import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:chatroom_app/state/runner_kit_providers.dart';
+import 'package:chatroom_app/widgets/uep_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -33,7 +34,10 @@ void main() {
         // 掃不到的 skill：檔案裡寫著它，畫面就不該讓它無聲消失
         primarySkill: 'pm',
         projects: {
-          'Chatroom': RunnerProject(path: r'C:\repos\Chatroom'),
+          'Chatroom': RunnerProject(
+              path: r'C:\repos\Chatroom',
+              allowedBranches: ['develop', 'feature/*']),
+          // 沒有 allowed_branches 的那一種：執行器會判定目前分支不允許
           'UEP': RunnerProject(path: r'C:\repos\UEP'),
         },
         defaultProject: 'Chatroom',
@@ -107,6 +111,46 @@ void main() {
     expect(find.text('設為預設'), findsOneWidget);
     expect(find.text('加專案'), findsOneWidget);
     expect(find.text('優先載入 skill'), findsOneWidget);
+  });
+
+  testWidgets('🔴 分支欄：有值的照著顯示，空的那一列要講出來要去補',
+      (tester) async {
+    sizeUp(tester);
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    await expand(tester);
+
+    expect(find.text('可切換分支'), findsNWidgets(2),
+        reason: '每一個專案都要有一欄能改，不然被擋住的人在畫面上找不到地方改');
+    expect(find.text('develop, feature/*'), findsOneWidget);
+    // 空的那一列（UEP）：空清單在執行器眼裡是「一個分支都不允許」
+    expect(find.text('請在設定檔補 allowed_branches'), findsOneWidget);
+  });
+
+  testWidgets('分支欄改過之後「儲存並套用」才按得下去', (tester) async {
+    sizeUp(tester);
+    await tester.pumpWidget(wrap());
+    await tester.pumpAndSettle();
+    await expand(tester);
+
+    // 畫面上不只一顆「儲存並套用」（Hub 設定那幾張卡也有）：看的是
+    // 「有沒有任何一顆變成按得下去」
+    int enabled() => tester
+        .widgetList<UepButton>(find.widgetWithText(UepButton, '儲存並套用'))
+        .where((b) => b.onPressed != null)
+        .length;
+
+    expect(enabled(), 0, reason: '什麼都沒改的卡片不該可以按');
+
+    await tester.enterText(
+        // 空著的那一列（UEP）：把它補起來
+        find.widgetWithText(TextField, '逗號分隔，可用 feature/*').last,
+        'develop, release/*');
+    await tester.pumpAndSettle();
+
+    expect(enabled(), 1);
+    expect(find.text('請在設定檔補 allowed_branches'), findsNothing,
+        reason: '補上分支之後那句警告就該收掉');
   });
 
   testWidgets('🔴 掃不到的優先載入 skill 仍留在下拉裡，不無聲消失',

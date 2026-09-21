@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
+import 'package:chatroom_app/api/attachments_api.dart';
 import 'package:chatroom_app/api/board_api.dart';
+import 'package:chatroom_app/core/errors/api_exception.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/stage_file.dart';
@@ -65,13 +69,37 @@ class _FakeBoardsApi extends BoardsApi {
   }
 }
 
+/// 記下「取附件時報上的是哪一種身分」。板庫路由（`/boards/:id`）沒有房，
+/// 身分只有 session key——這份假件要看住那條路不會在還沒發請求就短路。
+class _FakeAttachmentsApi extends AttachmentsApi {
+  _FakeAttachmentsApi() : super(Dio());
+
+  final calls = <(String?, String?)>[];
+
+  @override
+  Future<Uint8List> download(
+    String attachmentId, {
+    String? participantId,
+    String? sessionKey,
+    ProgressCallback? onProgress,
+  }) async {
+    calls.add((participantId, sessionKey));
+    // 測試環境沒有「交給系統程式開」的下一步，記完就讓它走失敗路徑
+    throw const AttachmentGoneException();
+  }
+}
+
 /// 板軸的動作：測試裡沒有房，身分走 session key（[AppConfig.deviceKey]）。
 final _probeActionsProvider =
     Provider<BoardActions>((ref) => BoardActions.forBoard(ref, 'b1'));
 
-Widget _host(Widget child, {BoardsApi? boardsApi}) => ProviderScope(
+Widget _host(Widget child,
+        {BoardsApi? boardsApi, AttachmentsApi? attachmentsApi}) =>
+    ProviderScope(
       overrides: [
         if (boardsApi != null) boardsApiProvider.overrideWithValue(boardsApi),
+        if (attachmentsApi != null)
+          attachmentsApiProvider.overrideWithValue(attachmentsApi),
         initialConfigProvider.overrideWithValue(const AppConfig(
           serverUrl: 'http://hub.test',
           token: 'tok',
@@ -293,6 +321,70 @@ void main() {
       )));
 
       expect(find.byTooltip('編輯備註'), findsNothing);
+    });
+  });
+
+  group('點開素材的身分', () {
+    testWidgets('🔴 板庫路由沒有房：身分走 session key，不該停在「身分待定」',
+        (tester) async {
+      final api = _FakeAttachmentsApi();
+      await tester.pumpWidget(_host(
+        const StageFilesList(
+          boardId: 'b1',
+          checklistId: 'c1',
+          files: [_file],
+          actions: null,
+          // `/boards/:id` 進來的板：沒有 participant
+          participantId: null,
+          useSessionKey: true,
+        ),
+        attachmentsApi: api,
+      ));
+
+      await tester.tap(find.text('run.log'));
+      await tester.pumpAndSettle();
+
+      expect(api.calls, [(null, 'device-key')],
+          reason: '只認 participant 的話這條路連請求都不會發出去');
+      expect(find.text('還在取得房間身分，稍候再試'), findsNothing);
+    });
+
+    testWidgets('兩種身分都沒有才是「身分待定」', (tester) async {
+      final api = _FakeAttachmentsApi();
+      await tester.pumpWidget(_host(
+        const StageFilesList(
+          boardId: 'b1',
+          checklistId: 'c1',
+          files: [_file],
+          actions: null,
+        ),
+        attachmentsApi: api,
+      ));
+
+      await tester.tap(find.text('run.log'));
+      await tester.pumpAndSettle();
+
+      expect(api.calls, isEmpty);
+      expect(find.text('還在取得房間身分，稍候再試'), findsOneWidget);
+    });
+
+    testWidgets('房軸行為不變：帶的是 participant', (tester) async {
+      final api = _FakeAttachmentsApi();
+      await tester.pumpWidget(_host(
+        const StageFilesList(
+          boardId: 'b1',
+          checklistId: 'c1',
+          files: [_file],
+          actions: null,
+          participantId: 'p1',
+        ),
+        attachmentsApi: api,
+      ));
+
+      await tester.tap(find.text('run.log'));
+      await tester.pumpAndSettle();
+
+      expect(api.calls, [('p1', null)]);
     });
   });
 

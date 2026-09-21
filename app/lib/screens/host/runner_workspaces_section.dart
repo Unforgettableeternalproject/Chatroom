@@ -191,6 +191,12 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
   late final _contextWindow =
       TextEditingController(text: _num(widget.workspace.contextWindowTokens));
 
+  /// 專案名 → 那一列的分支欄（`allowed_branches`，逗號分隔）。
+  ///
+  /// 這一欄要編輯得了，是因為**空的 `allowed_branches` 在執行器眼裡是「一個
+  /// 分支都不允許」**：只顯示規則的話，被擋住的人在畫面上找不到能改的地方。
+  final _branchFields = <String, TextEditingController>{};
+
   /// 0 ＝ 沒設，欄位就留空（空的意思是「沿用執行器的預設」，不是 0）。
   static String _num(num value) {
     if (value <= 0) return '';
@@ -207,8 +213,36 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     _budget.dispose();
     _wallClock.dispose();
     _contextWindow.dispose();
+    for (final c in _branchFields.values) {
+      c.dispose();
+    }
     super.dispose();
   }
+
+  /// 某一列的分支欄。檔案裡的值是它的初始內容。
+  TextEditingController _branchField(String name, RunnerProject project) =>
+      _branchFields.putIfAbsent(
+          name,
+          () => TextEditingController(
+              text: project.allowedBranches.join(', ')));
+
+  /// 分支欄被改過的專案：名稱 → 新的清單。沒動過的不在裡面。
+  Map<String, List<String>> get _branchEdits {
+    final edits = <String, List<String>>{};
+    for (final e in widget.workspace.projects.entries) {
+      final field = _branchFields[e.key];
+      if (field == null) continue;
+      final next = _parseBranches(field.text);
+      if (!_sameList(next, e.value.allowedBranches)) edits[e.key] = next;
+    }
+    return edits;
+  }
+
+  /// 逗號分隔（全形半形都收）。空段落丟掉——`main,` 與 `main` 是同一件事。
+  static List<String> _parseBranches(String text) => [
+        for (final part in text.split(RegExp('[,，]')))
+          if (part.trim().isNotEmpty) part.trim(),
+      ];
 
   int get _maxTurnsValue => int.tryParse(_maxTurns.text.trim()) ?? 0;
   double get _budgetValue => double.tryParse(_budget.text.trim()) ?? 0;
@@ -225,7 +259,8 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
       _budgetValue != widget.workspace.maxBudgetUsd ||
       _wallClockValue != widget.workspace.wallClockSeconds ||
       _contextWindowValue != widget.workspace.contextWindowTokens ||
-      !_sameList(_skillDirs, widget.workspace.skillDirs);
+      !_sameList(_skillDirs, widget.workspace.skillDirs) ||
+      _branchEdits.isNotEmpty;
 
   static bool _sameList(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -258,13 +293,18 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
         skillDirs: _skillDirs,
       );
       if (_primarySkill != widget.workspace.primarySkill) {
-        ref.invalidate(runnerConfigProvider);
-        final fresh = await readRunnerConfig(widget.config.path);
-        if (fresh == null) throw const RunnerConfigConflict();
         await setRunnerPrimarySkill(
-          fresh,
+          await _reread(),
           workspaceKey: widget.workspace.key,
           skill: _primarySkill,
+        );
+      }
+      for (final e in _branchEdits.entries) {
+        await saveRunnerProject(
+          await _reread(),
+          workspaceKey: widget.workspace.key,
+          name: e.key,
+          allowedBranches: e.value,
         );
       }
     } on Object catch (e) {
@@ -278,6 +318,15 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     final said = await runnerApplyReload(ref, l10n);
     if (mounted) setState(() => _saving = false);
     messenger.showSnackBar(SnackBar(content: Text(said)));
+  }
+
+  /// 第二次（以後）的寫入要拿**剛剛寫完**的那一份設定：`_mutate` 會比對
+  /// mtime，拿手上這份舊的去寫必定撞成 [RunnerConfigConflict]。
+  Future<RunnerConfigFile> _reread() async {
+    ref.invalidate(runnerConfigProvider);
+    final fresh = await readRunnerConfig(widget.config.path);
+    if (fresh == null) throw const RunnerConfigConflict();
+    return fresh;
   }
 
   /// 立刻寫檔的動作（加／移除專案、設預設、移除工作區）。
@@ -520,10 +569,8 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
   Widget _projectCard(UepSurface s, AppLocalizations l10n, RunnerWorkspace w,
       String name, RunnerProject project) {
     final isDefault = name == w.defaultProject;
+    final branches = _branchField(name, project);
     final rules = <String>[
-      if (project.allowedBranches.isNotEmpty)
-        l10n.hostRunnerBranchesAllowed(
-            project.allowedBranches.join(l10n.commonListSeparator)),
       if (project.pushBranches.isNotEmpty)
         l10n.hostRunnerBranchesPush(
             project.pushBranches.join(l10n.commonListSeparator)),
@@ -569,6 +616,23 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
                       overflow: TextOverflow.ellipsis,
                       style: UepText.serif(
                           size: 12, color: s.inkMute, height: 1.5)),
+                ],
+                const SizedBox(height: 6),
+                EditRow(
+                  label: l10n.hostRunnerBranchesLabel,
+                  controller: branches,
+                  enabled: !_saving,
+                  hint: l10n.hostRunnerBranchesHint,
+                  trailingSlots: 0,
+                  onChanged: (_) => setState(() {}),
+                ),
+                // 🔴 空著不是「不限制」：執行器會判定目前分支不在清單裡而
+                // 退出，而那件事發生在畫面看不到的地方
+                if (_parseBranches(branches.text).isEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(l10n.hostRunnerBranchesMissing,
+                      style: UepText.serif(
+                          size: 12, color: UepColors.error, height: 1.5)),
                 ],
               ],
             ),

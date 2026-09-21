@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'kit_installer.dart' show KitProcessRunner, SystemKitProcessRunner;
+
 /// 執行器 `config.json` 的「工作區／專案」兩層資料層。
 ///
 /// ## 兩層是什麼
@@ -271,6 +273,40 @@ Future<bool> isGitRepoDir(String path) async {
   return await Directory(dot).exists() || await File(dot).exists();
 }
 
+/// 這個 repo 目前在哪個分支。取不到就回空字串。
+///
+/// 🔴 **新增專案時一定要問一次**：`allowed_branches` 空著在執行器眼裡是
+/// 「一個分支都不允許」，reload／自檢會判定目前分支不允許而直接退出——而那
+/// 個失敗發生在 App 這邊看不到的地方，畫面上只會是「加好了」。
+///
+/// 回空字串的情況：不是 git repo、git 不在 PATH、指令失敗，或 detached HEAD
+/// （`rev-parse --abbrev-ref HEAD` 那時回的是字串 `HEAD`，不是分支名）。
+Future<String> currentGitBranch(
+  String path, {
+  KitProcessRunner processRunner = const SystemKitProcessRunner(),
+}) async {
+  if (path.trim().isEmpty) return '';
+  try {
+    final r = await processRunner.run(
+      'git',
+      const ['rev-parse', '--abbrev-ref', 'HEAD'],
+      workingDirectory: path,
+    );
+    if (r.exitCode != 0) return '';
+    final branch = r.stdout.toString().trim();
+    return branch == 'HEAD' ? '' : branch;
+  } on Object {
+    return '';
+  }
+}
+
+/// 新增專案時的分支預設值：目前分支一個；問不到就空清單。
+Future<List<String>> _defaultBranches(
+    String path, KitProcessRunner processRunner) async {
+  final branch = await currentGitBranch(path, processRunner: processRunner);
+  return branch.isEmpty ? const <String>[] : <String>[branch];
+}
+
 /// 掃 `skill_dirs` 底下有哪些 skill，給下拉用。
 ///
 /// 位置與執行器的 `skill_manifest()` 同一條規則：
@@ -441,12 +477,15 @@ const String kRunnerRequiredMcpServer = 'chatroom';
 /// 工作區至少要有一個專案，否則執行器讀設定就會炸（`沒有任何 repo`）——所以
 /// 這裡要嘛給 `projectName`／`projectPath`，要嘛 `folder` 自己就是 git repo
 /// （那就用它當第一個專案，名稱取資料夾名）。
+///
+/// 第一個專案的分支規則預設是**目前分支**（見 [currentGitBranch]）。
 Future<void> addRunnerWorkspace(
   RunnerConfigFile cfg, {
   required String key,
   required String folder,
   String projectName = '',
   String projectPath = '',
+  KitProcessRunner processRunner = const SystemKitProcessRunner(),
 }) async {
   final wsKey = key.trim();
   if (wsKey.isEmpty) throw const RunnerConfigInvalid('工作區名稱不可空白');
@@ -472,6 +511,8 @@ Future<void> addRunnerWorkspace(
     throw RunnerConfigInvalid('「$path」不是 git repo（找不到 .git）');
   }
 
+  final branches = await _defaultBranches(path, processRunner);
+
   await _mutate(cfg, (raw) async {
     final all = _workspacesRaw(raw, create: true)!;
     if (all.containsKey(wsKey)) {
@@ -480,7 +521,11 @@ Future<void> addRunnerWorkspace(
     all[wsKey] = <String, dynamic>{
       'folder': folder,
       'projects': <String, dynamic>{
-        name: RunnerProject(path: path).toJson(),
+        name: RunnerProject(
+          path: path,
+          allowedBranches: branches,
+          pushBranches: branches,
+        ).toJson(),
       },
       'default_project': name,
     };
@@ -502,13 +547,18 @@ Future<void> removeRunnerWorkspace(
 }
 
 /// 在工作區裡新增一個專案（git repo）。
+///
+/// `allowedBranches`／`pushBranches` 給 `null` ＝ **用目前分支當預設**
+/// （見 [currentGitBranch]）；問不到分支就寫空清單，那時畫面要提醒人去設定檔
+/// 補 `allowed_branches`。給了清單就照給的寫，空清單也算「明確指定」。
 Future<void> addRunnerProject(
   RunnerConfigFile cfg, {
   required String workspaceKey,
   required String name,
   required String path,
-  List<String> allowedBranches = const [],
-  List<String> pushBranches = const [],
+  List<String>? allowedBranches,
+  List<String>? pushBranches,
+  KitProcessRunner processRunner = const SystemKitProcessRunner(),
 }) async {
   final projectName = name.trim();
   final projectPath = path.trim();
@@ -520,6 +570,10 @@ Future<void> addRunnerProject(
     throw RunnerConfigInvalid('「$projectPath」不是 git repo（找不到 .git）');
   }
 
+  final fallback = (allowedBranches == null || pushBranches == null)
+      ? await _defaultBranches(projectPath, processRunner)
+      : const <String>[];
+
   await _mutate(cfg, (raw) async {
     final ws = _workspaceRaw(raw, workspaceKey);
     final projects = _projectsRaw(ws, create: true)!;
@@ -529,9 +583,43 @@ Future<void> addRunnerProject(
     }
     projects[projectName] = RunnerProject(
       path: projectPath,
-      allowedBranches: allowedBranches,
-      pushBranches: pushBranches,
+      allowedBranches: allowedBranches ?? fallback,
+      pushBranches: pushBranches ?? fallback,
     ).toJson();
+  });
+}
+
+/// 改一個專案的分支規則。
+///
+/// `null` ＝ 不碰這個欄位；空清單＝把那個鍵清掉（回到「檔案裡沒寫」）。
+/// 與 [saveRunnerWorkspace] 同一條規矩：只動被碰到的鍵，專案底下其他欄位
+/// （這一版還不認得的）原樣留著。
+Future<void> saveRunnerProject(
+  RunnerConfigFile cfg, {
+  required String workspaceKey,
+  required String name,
+  List<String>? allowedBranches,
+  List<String>? pushBranches,
+}) async {
+  await _mutate(cfg, (raw) async {
+    final ws = _workspaceRaw(raw, workspaceKey);
+    final projects = _projectsRaw(ws, create: false);
+    final current = projects?[name];
+    if (projects == null || current == null) {
+      throw RunnerConfigInvalid('工作區「$workspaceKey」裡沒有專案「$name」');
+    }
+    // 舊設定有人把值直接寫成路徑字串；要改欄位就得先補成物件
+    final entry = current is Map
+        ? current.cast<String, dynamic>()
+        : <String, dynamic>{'path': current.toString()};
+    if (allowedBranches != null) {
+      _put(entry, 'allowed_branches',
+          allowedBranches.isEmpty ? null : allowedBranches);
+    }
+    if (pushBranches != null) {
+      _put(entry, 'push_branches', pushBranches.isEmpty ? null : pushBranches);
+    }
+    projects[name] = entry;
   });
 }
 

@@ -15,7 +15,7 @@ import pytest
 
 from chatroom_runner import gitops
 from chatroom_runner.config import load_config
-from chatroom_runner.hub import RunnerHub, load_identity
+from chatroom_runner.hub import HubError, RunnerHub, load_identity
 from chatroom_runner.loop import (EXIT_RESTART, EXIT_SELFCHECK_FAILED,
                                   RunnerLoop)
 
@@ -862,6 +862,50 @@ async def test_stall_marking_is_off_when_the_threshold_is_zero(
     assert not active.stalled and active.stall_marks == 0
     gate.set()
     await loop.shutdown()
+
+
+# ── 身分落地（審查 09/21 P1）────────────────────────────────────
+
+async def test_registration_is_persisted_before_any_run(
+        hub_app, runner_hub, work_repo, tmp_path):
+    """🚨 註冊一回來就要把 `runner_token` 寫進 ``state.json``。
+
+    Hub 只在**建立那一次**回 token，而且沒有補發端點。等到有 run 或正常
+    退出才寫的話，第一次註冊完就被殺掉（斷電、關機、工作被砍）的執行器，
+    token 只活在那個進程的記憶體裡——下一次同 host+label 啟動會被 403
+    `runner_token_required` 擋下來，只能換一組 label 才回得來。
+    """
+    _app, client = hub_app
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+
+    # 註冊之後、任何 run 之前就把進程砍掉：`start()` 的下一步是心跳
+    async def _killed(*_a, **_kw):
+        raise RuntimeError("進程在註冊之後、領單之前被殺掉")
+
+    runner_hub.heartbeat = _killed
+    with pytest.raises(RuntimeError):
+        await loop.start()
+
+    saved = json.loads(cfg.state_file.read_text("utf-8"))
+    assert saved["runner_token"], "token 只留在記憶體，這台再也註冊不回去"
+    assert saved["runner_id"] == runner_hub.identity.runner_id
+    assert saved["active_run_ids"] == []
+
+    # 沒有那把 token 的話，同 host+label 註冊就是被擋在門外
+    blind = RunnerHub("http://test", ROOT_TOKEN, client=client)
+    with pytest.raises(HubError) as blocked:
+        await blind.register(cfg.host, cfg.label, [], cfg.max_parallel,
+                             cfg.version)
+    assert blocked.value.code == "runner_token_required"
+
+    # 讀回落地的身分：重新起來的是同一台，心跳照樣打得出去
+    hub2 = RunnerHub("http://test", ROOT_TOKEN, client=client,
+                     identity=load_identity(cfg.state_file))
+    loop2 = _loop(cfg, hub2)
+    assert await loop2.start()
+    assert hub2.identity.runner_id == saved["runner_id"]
+    assert await loop2.heartbeat() != {}
 
 
 # ── 啟動對帳（孤兒 run）──────────────────────────────────────────

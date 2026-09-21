@@ -247,7 +247,9 @@ async def test_since_cursor_only_returns_newer(tmp_path):
             first = await _exceptions(client)
             assert len(first["exceptions"]) == 1
             cursor = first["exceptions"][0]["id"]
-            assert first["next_since"] == first["exceptions"][0]["created_at"]
+            # 游標帶 tie-breaker：`"<created_at>|<rowid>"`
+            assert first["next_since"].startswith(
+                first["exceptions"][0]["created_at"] + "|")
 
             again = await _exceptions(client, since=cursor)
             assert again["exceptions"] == []
@@ -265,6 +267,51 @@ async def test_since_cursor_only_returns_newer(tmp_path):
             after = await _exceptions(client,
                                       since=first["exceptions"][0]["created_at"])
             assert [e["kind"] for e in after["exceptions"]] == ["timeout"]
+
+
+async def test_same_timestamp_events_are_all_paged_through(tmp_path):
+    """同一個時間戳的多筆事件要翻得完，不能被游標永久跳過。
+
+    `_record_runner_event` 一台執行器影響幾間房就寫幾筆，那幾筆共用同一個
+    `now`。游標只比 `created_at` 的話，第一頁之後的那些永遠 `> created_at`
+    不成立——面板再也不會知道其餘那幾間房也出事了。
+    """
+    app, client = await _client(tmp_path, "tiebreak", runner_offline_after=60)
+    async with client:
+        async with app.router.lifespan_context(app):
+            runner = await _register_runner(client)
+            for i in range(5):
+                rid = await _ops_room(client, name=f"工作房{i}")
+                hdr = await _join_human(client, rid)
+                await _running_run(client, rid, hdr, runner, f"task-{i}")
+            old = (datetime.now(timezone.utc)
+                   - timedelta(seconds=300)).isoformat()
+            await app.state.db.execute(
+                "UPDATE runner SET last_seen_at=? WHERE id=?", (old, runner))
+            await app.state.db.commit()
+            await app.state.sweep_runners()
+
+            all_ids = [e["id"] for e in
+                       (await _exceptions(client, limit=50))["exceptions"]]
+            assert len(all_ids) == 5, "五間房各一筆掉線事件"
+            stamps = {e["created_at"] for e in
+                      (await _exceptions(client, limit=50))["exceptions"]}
+            assert len(stamps) == 1, "這條測試要的正是同一個時間戳"
+
+            # 從「最早那一筆之前」開始往前翻：limit 2，三頁要拿齊五筆
+            cursor = (datetime.now(timezone.utc)
+                      - timedelta(days=1)).isoformat()
+            seen: list[str] = []
+            for _ in range(3):
+                page = await _exceptions(client, since=cursor, limit=2)
+                seen += [e["id"] for e in page["exceptions"]]
+                cursor = page["next_since"]
+            assert len(seen) == len(set(seen)), f"翻頁重覆：{seen}"
+            assert set(seen) == set(all_ids), f"翻頁漏掉：{seen}"
+
+            # 翻完之後就沒有了，不會把同一批再送一次
+            assert (await _exceptions(client, since=cursor,
+                                      limit=2))["exceptions"] == []
 
 
 async def test_limit_is_applied_after_merging_two_tables(tmp_path):

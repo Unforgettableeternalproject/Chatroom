@@ -272,6 +272,40 @@ async def test_same_ref_cannot_be_dispatched_twice(tmp_path):
                                       headers=hdr)).status_code == 200
 
 
+async def test_same_ref_concurrent_dispatch_only_one_wins(tmp_path):
+    """同一張卡**同時**派兩筆：資料庫那一關要擋得住。
+
+    重複檢查是「先 SELECT 再 INSERT」，兩句之間有 await——兩個併發請求
+    都會查到「沒有」，然後各自建一筆。症狀與領號那條一樣：兩個 agent
+    動同一份工作樹。擋它的是 `idx_agent_run_ref_active`，SELECT 只是
+    快速路徑。
+    """
+    app, client = await _client(tmp_path, "dupref-race")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            await _register_runner(client)
+            first, second = await asyncio.gather(
+                client.post(f"/api/rooms/{rid}/runs", json=_run_body(),
+                            headers=hdr),
+                client.post(f"/api/rooms/{rid}/runs", json=_run_body(),
+                            headers=hdr))
+            codes = sorted([first.status_code, second.status_code])
+            assert codes == [200, 409], (first.text, second.text)
+            ok = first if first.status_code == 200 else second
+            clash = second if first.status_code == 200 else first
+            detail = clash.json()["detail"]
+            assert detail["code"] == "run_ref_already_active"
+            # 撞到的那一邊要說得出「已經在跑的是哪一筆」，否則 client
+            # 只知道失敗，跳不到那筆 run
+            assert detail["run_id"] == ok.json()["run"]["id"]
+
+            rows = await (await client.hub_app.state.db.execute(
+                "SELECT id FROM agent_run WHERE room_id=? AND ref=?",
+                (rid, "task-1"))).fetchall()
+            assert len(rows) == 1, "兩筆都寫進去了：唯一性索引沒有生效"
+
 async def test_queue_cap_and_daily_quota_are_429(tmp_path):
     """配額用 **429** 不是 409（create_run 的 docstring 講了為什麼）。"""
     app, client = await _client(tmp_path, "quota", run_queue_cap=2,

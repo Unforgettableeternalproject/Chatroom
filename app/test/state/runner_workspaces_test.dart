@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/runner_workspaces.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -350,6 +351,72 @@ void main() {
         expect(ws['default_project'], isNull);
       });
 
+      test('🔴 新增專案預設帶目前分支——空清單在執行器眼裡是「一個都不允許」',
+          () async {
+        final repoB = await makeRepo('repo_b');
+        final git = _FakeGit('feature/remote-ops');
+        await addRunnerProject(await read(),
+            workspaceKey: 'a', name: 'b', path: repoB, processRunner: git);
+
+        final ws = ((await raw())['projects'] as Map)['a'] as Map;
+        expect((ws['repos'] as Map)['b'], {
+          'path': repoB,
+          'allowed_branches': ['feature/remote-ops'],
+          'push_branches': ['feature/remote-ops'],
+        });
+        expect(git.calls.single.$2, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        expect(git.calls.single.$3, repoB, reason: '要問的是那個 repo 的分支');
+      });
+
+      test('問不到分支（git 失敗）就寫空清單，由畫面去提醒補設定', () async {
+        final repoB = await makeRepo('repo_b');
+        await addRunnerProject(await read(),
+            workspaceKey: 'a',
+            name: 'b',
+            path: repoB,
+            processRunner: _FakeGit('', exitCode: 128));
+
+        final ws = ((await raw())['projects'] as Map)['a'] as Map;
+        expect((ws['repos'] as Map)['b'], {'path': repoB});
+      });
+
+      test('detached HEAD 不是分支名，一樣當作問不到', () async {
+        final repoB = await makeRepo('repo_b');
+        await addRunnerProject(await read(),
+            workspaceKey: 'a',
+            name: 'b',
+            path: repoB,
+            processRunner: _FakeGit('HEAD'));
+
+        final ws = ((await raw())['projects'] as Map)['a'] as Map;
+        expect((ws['repos'] as Map)['b'], {'path': repoB});
+      });
+
+      test('分支欄改過就寫回去；清空＝把鍵拿掉', () async {
+        await saveRunnerProject(await read(),
+            workspaceKey: 'a', name: 'r', allowedBranches: ['develop', 'feature/*']);
+        var project =
+            ((((await raw())['projects'] as Map)['a'] as Map)['repos'] as Map)['r']
+                as Map;
+        expect(project['allowed_branches'], ['develop', 'feature/*']);
+        expect(project['path'], repoA, reason: '只動被碰到的鍵');
+
+        await saveRunnerProject(await read(),
+            workspaceKey: 'a', name: 'r', allowedBranches: []);
+        project =
+            ((((await raw())['projects'] as Map)['a'] as Map)['repos'] as Map)['r']
+                as Map;
+        expect(project.containsKey('allowed_branches'), isFalse);
+      });
+
+      test('改不存在的專案要當場拒絕', () async {
+        await expectLater(
+          saveRunnerProject(await read(),
+              workspaceKey: 'a', name: 'nope', allowedBranches: ['x']),
+          throwsA(isA<RunnerConfigInvalid>()),
+        );
+      });
+
       test('預設專案不在工作區裡就拒絕', () async {
         await expectLater(
           saveRunnerWorkspace(await read(),
@@ -368,6 +435,19 @@ void main() {
         expect(((ws['projects'] as Map)['repo_b'] as Map)['path'], repoB);
         expect(ws['default_project'], 'repo_b',
             reason: '新的工作區一律寫新鍵');
+      });
+
+      test('🔴 登記資料夾時第一個專案也要帶目前分支', () async {
+        final repoB = await makeRepo('repo_b');
+        await addRunnerWorkspace(await read(),
+            key: 'b', folder: repoB, processRunner: _FakeGit('develop'));
+
+        final ws = ((await raw())['projects'] as Map)['b'] as Map;
+        expect((ws['projects'] as Map)['repo_b'], {
+          'path': repoB,
+          'allowed_branches': ['develop'],
+          'push_branches': ['develop'],
+        });
       });
 
       test('🔴 資料夾不是 git repo 時要指定專案路徑', () async {
@@ -504,4 +584,25 @@ void main() {
       });
     });
   });
+}
+
+/// 假的子進程。只回答 `git rev-parse --abbrev-ref HEAD`——新增專案要靠它
+/// 決定分支預設值，測試不該真的去跑 git（跑出來的是跑測試那台機器的分支）。
+class _FakeGit implements KitProcessRunner {
+  _FakeGit(this.branch, {this.exitCode = 0});
+
+  final String branch;
+  final int exitCode;
+  final calls = <(String, List<String>, String?)>[];
+
+  @override
+  Future<ProcessResult> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) async {
+    calls.add((executable, arguments, workingDirectory));
+    return ProcessResult(1, exitCode, exitCode == 0 ? '$branch\n' : '',
+        exitCode == 0 ? '' : 'fatal: not a git repository');
+  }
 }

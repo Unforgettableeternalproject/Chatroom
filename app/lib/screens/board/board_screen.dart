@@ -1543,6 +1543,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               participantId: widget.roomId == null
                   ? null
                   : ref.watch(boardParticipantIdProvider(widget.roomId!)).value,
+              // 板軸（`/boards/:id`）沒有房 ⇒ 沒有 participant，身分只有
+              // session key。不帶的話素材點開一律是「身分待定」
+              useSessionKey: widget.roomId == null,
               readOnly: _readOnly,
               // 新增素材**只有房軸有**：附件要上傳到一間房，而 Board
               // Library 那條路上連上傳到哪裡都答不出來（見
