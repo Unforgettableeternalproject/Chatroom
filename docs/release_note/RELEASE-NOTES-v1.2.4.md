@@ -59,6 +59,8 @@
 
 ## 執行器（runner）
 
+- 同 repo 的第二筆寫入 run 等鎖時會回報 running（附註寫等哪個 run）並留 log，
+  等超過牆鐘上限收成 failed；之前這段完全看不見。
 - 契約開頭加最強規則：開工第一步 `chatroom_join`，失敗或工具不在就不讀檔、不跑命令，
   只輸出收尾說明後結束。mcp 重試前的回報不再撞 409。
 - 設定全部來自 JSON（`%LOCALAPPDATA%` 或 `CHATROOM_RUNNER_CONFIG`），分支與專案
@@ -105,6 +107,7 @@
 
 ## App
 
+- 執行器分頁加狀態與啟停開關；Hub 設定的隨機代稱語言改下拉。
 - 派工異常改成右側面板；點一筆就地展開全部欄位與該 run 的最後回報，「前往聊天室」是次要按鈕。
 - 回報卡標題顯示做這筆 run 的 agent 名稱；沒進房前顯示 kind 與 ref 短碼。
 - 三個 kit 分頁安裝前顯示前置條件（Python／Claude Code 或 Codex／Hub 可連），
