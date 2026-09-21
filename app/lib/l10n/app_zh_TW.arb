@@ -6589,6 +6589,64 @@
   "@hostRunnerLoginCommand": {
     "description": "可複製的登入指令那一列的標籤"
   },
+  "hostRunnerServiceTitle": "執行器狀態",
+  "@hostRunnerServiceTitle": {
+    "description": "執行器分頁頂部那一列的標題：排程工作的起停"
+  },
+  "hostRunnerServiceRunning": "執行中",
+  "@hostRunnerServiceRunning": {
+    "description": "排程工作在跑，或找得到執行器的進程"
+  },
+  "hostRunnerServiceStopped": "已停止",
+  "@hostRunnerServiceStopped": {
+    "description": "排程工作在，但現在沒有執行"
+  },
+  "hostRunnerServiceDisabled": "已停用",
+  "@hostRunnerServiceDisabled": {
+    "description": "觸發器被停用了，不按啟動就不會自己回來"
+  },
+  "hostRunnerServiceUnknown": "狀態不明",
+  "@hostRunnerServiceUnknown": {
+    "description": "問不到排程工作（沒有那個工作、PowerShell 出錯）"
+  },
+  "hostRunnerServiceStartButton": "啟動執行器",
+  "@hostRunnerServiceStartButton": {
+    "description": "啟動本機執行器的按鈕"
+  },
+  "hostRunnerServiceStopButton": "停止執行器",
+  "@hostRunnerServiceStopButton": {
+    "description": "停止本機執行器的按鈕"
+  },
+  "hostRunnerServiceStarting": "啟動中…",
+  "@hostRunnerServiceStarting": {
+    "description": "啟動進行中的按鈕字樣"
+  },
+  "hostRunnerServiceStopping": "停止中…",
+  "@hostRunnerServiceStopping": {
+    "description": "停止進行中的按鈕字樣"
+  },
+  "hostRunnerServiceStopBody": "停止後這台機器不再接派工，直到你按啟動執行器。",
+  "@hostRunnerServiceStopBody": {
+    "description": "停止確認框：手上沒有派工在跑時"
+  },
+  "hostRunnerServiceStopBusyBody": "目前有 {count} 筆派工在跑，停止會把它們砍掉並在 Hub 上標成失敗。",
+  "@hostRunnerServiceStopBusyBody": {
+    "description": "停止確認框：手上還有 run 時講出後果",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "hostRunnerServiceFailed": "操作失敗：{detail}",
+  "@hostRunnerServiceFailed": {
+    "description": "起停或查狀態失敗時，把 PowerShell 說的第一句轉述出來",
+    "placeholders": {
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
   "hostKitNameHub": "Hub 主持包",
   "@hostKitNameHub": {
     "description": "三包的名稱，用在「尚未安裝 X」那句話裡"

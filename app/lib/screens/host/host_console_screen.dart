@@ -22,6 +22,7 @@ import 'host_value_row.dart';
 import 'kit_install_section.dart';
 import 'runner_login_row.dart';
 import 'runner_mcp_section.dart';
+import 'runner_service_row.dart';
 import 'runner_workspaces_section.dart';
 
 /// 主機控制台——**這台機器上的 Hub**。
@@ -294,6 +295,8 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
               style: UepText.pageTitle(color: s.inkTitle)),
           const SizedBox(height: 22),
           if (runner != null) ...[
+            const RunnerServiceRow(),
+            _sep(s),
             const RunnerLoginRow(),
             _sep(s),
             RunnerWorkspacesSection(kit: runner),

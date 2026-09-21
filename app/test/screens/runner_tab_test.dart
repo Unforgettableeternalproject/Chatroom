@@ -8,6 +8,7 @@ import 'package:chatroom_app/state/host_probe.dart';
 import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:chatroom_app/state/runner_kit_providers.dart';
+import 'package:chatroom_app/state/runner_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -54,6 +55,9 @@ void main() {
           kitReleaseProvider.overrideWith((ref) async => null),
           kitPythonProvider.overrideWith((ref) async => null),
           runnerBusyProvider.overrideWith((ref) async => false),
+          // 不覆寫的話這支測試會去查這台機器上真正的排程工作
+          runnerServiceStatusProvider.overrideWith((ref) async =>
+              const RunnerServiceStatus(RunnerServiceState.stopped)),
           hostKitProvider.overrideWith((ref) async => host),
           hostEnvProvider.overrideWith((ref) async => null),
           hostHealthProvider.overrideWith((ref) async => null),
