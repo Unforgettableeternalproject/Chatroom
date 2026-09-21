@@ -45,7 +45,9 @@ class Config:
     # `{Adjective}-{Noun}` 英文組合。只影響沒帶 preferred_name 的 join——
     # 自報名是使用者挑的字，不該被 Hub 的語言設定改掉
     locale: str = field(
-        default_factory=lambda: os.environ.get("CHATROOM_LOCALE", "zh-TW")
+        # `CHATROOM_LOCALE=`（空值）也算沒設：envfile 會把空字串塞進環境，
+        # 空字串不以 zh 開頭會掉進英文池，選「預設」反而拿到英文代稱
+        default_factory=lambda: os.environ.get("CHATROOM_LOCALE") or "zh-TW"
     )
     # agent 閒置多久後被自動移出房間（秒）
     idle_timeout: float = field(

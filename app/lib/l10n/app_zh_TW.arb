@@ -7193,6 +7193,19 @@
   "@hostEnvDefaultHint": {
     "description": "設定欄位的提示：沒填就用內建預設"
   },
+  "hostEnvLocaleDefault": "預設（zh-TW）",
+  "@hostEnvLocaleDefault": {
+    "description": "隨機代稱語言下拉選單裡的「沒設定」那一項"
+  },
+  "hostEnvLocaleCustom": "自訂：{value}",
+  "@hostEnvLocaleCustom": {
+    "description": "設定檔裡的語言不在選單的選項內時，原樣留著的那一項",
+    "placeholders": {
+      "value": {
+        "type": "String"
+      }
+    }
+  },
   "hostEnvLogLevelDefault": "預設",
   "@hostEnvLogLevelDefault": {
     "description": "日誌等級下拉選單裡的「沒設定」那一項"

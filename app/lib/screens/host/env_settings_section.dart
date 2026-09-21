@@ -29,10 +29,11 @@ import '../../widgets/uep_button.dart';
 import 'host_value_row.dart';
 
 /// `.env` 一個欄位的規格。
-enum _EnvKind { text, port, minutes, nonNegInt, url }
+enum _EnvKind { text, port, minutes, nonNegInt, url, select }
 
 class _EnvFieldSpec {
-  const _EnvFieldSpec(this.key, this.label, {this.kind = _EnvKind.text});
+  const _EnvFieldSpec(this.key, this.label,
+      {this.kind = _EnvKind.text, this.options = const []});
 
   /// `.env` 裡的變數名。畫面上只出現在 tooltip 裡。
   final String key;
@@ -41,7 +42,29 @@ class _EnvFieldSpec {
   final String Function(AppLocalizations l10n) label;
 
   final _EnvKind kind;
+
+  /// [_EnvKind.select] 的選項。**不含空值那一項**——「用預設值」由畫面自己
+  /// 補在最前面。
+  final List<_EnvOption> options;
 }
+
+/// 下拉選單的一個選項。
+class _EnvOption {
+  const _EnvOption(this.value, this.label);
+
+  /// 寫回 `.env` 的值。
+  final String value;
+
+  final String Function(AppLocalizations l10n) label;
+}
+
+/// 隨機代稱的語言。選項只列 Hub 名字池真的有的那幾種
+/// （`server/chatroom_server/naming.py` 的 `_POOLS`：`zh` 開頭走中文池，
+/// 其餘走英文池），填一個池子裡沒有的值等於悄悄退回英文。
+final _localeOptions = <_EnvOption>[
+  _EnvOption('zh-TW', (l) => '繁體中文'),
+  _EnvOption('en', (l) => 'English'),
+];
 
 /// Hub 真的會有人來改的那幾個。
 ///
@@ -60,7 +83,8 @@ final _hubFields = <_EnvFieldSpec>[
   _EnvFieldSpec('CHATROOM_RUN_QUEUE_CAP', (l) => l.hostEnvLabelQueueCap,
       kind: _EnvKind.nonNegInt),
   // 沒自報名的成員進房時，代稱要用哪一種語言（`zh-TW` 或 `en`）
-  _EnvFieldSpec('CHATROOM_LOCALE', (l) => l.hostEnvLabelLocale),
+  _EnvFieldSpec('CHATROOM_LOCALE', (l) => l.hostEnvLabelLocale,
+      kind: _EnvKind.select, options: _localeOptions),
 ];
 
 /// agent 這邊唯一可改的一件事：這台機器進房時叫什麼。
@@ -299,6 +323,10 @@ class _EnvEditorState extends ConsumerState<_EnvEditor> {
         return validateEnvUrl(value, required: required);
       case _EnvKind.text:
         return required ? validateEnvRequiredText(value) : null;
+      // 選項是畫面給的，選不出壞值；空的那一項代表「用預設值」，那是刪掉
+      // 整行而不是寫一個空字串
+      case _EnvKind.select:
+        return null;
     }
   }
 
@@ -342,14 +370,23 @@ class _EnvEditorState extends ConsumerState<_EnvEditor> {
     }
 
     final updates = <String, String>{};
+    final removals = <String>{};
     for (final spec in _all.where(_changed)) {
-      updates[spec.key] = _stored(spec, _controllers[spec.key]!.text);
+      final stored = _stored(spec, _controllers[spec.key]!.text);
+      // 下拉選單選回「預設」＝把那一行刪掉。留一個 `KEY=` 在檔案裡的話，
+      // Hub 讀到的是空字串而不是預設值——代稱會悄悄變成英文
+      if (spec.kind == _EnvKind.select && stored.isEmpty) {
+        removals.add(spec.key);
+      } else {
+        updates[spec.key] = stored;
+      }
     }
-    if (updates.isEmpty) return;
+    if (updates.isEmpty && removals.isEmpty) return;
 
     setState(() => _saving = true);
     try {
-      await writeEnvUpdates(File(widget.path), updates);
+      await writeEnvUpdates(File(widget.path), updates,
+          removeKeys: removals);
     } on Object catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -451,6 +488,15 @@ class _EnvEditorState extends ConsumerState<_EnvEditor> {
     final error = _errors[spec.key];
     final errorText = error == null ? null : _message(error, l10n);
 
+    if (spec.kind == _EnvKind.select) {
+      return EditRow(
+        label: spec.label(l10n),
+        tooltip: spec.key,
+        errorText: errorText,
+        child: _select(spec, l10n),
+      );
+    }
+
     return EditRow(
       label: spec.label(l10n),
       tooltip: spec.key,
@@ -466,6 +512,53 @@ class _EnvEditorState extends ConsumerState<_EnvEditor> {
         _errors[spec.key] = _validate(spec, v);
         _saved = false;
       }),
+    );
+  }
+
+  /// 下拉選單那一格。外殼是 [EditRow] 自己的，這裡只放選單本身。
+  ///
+  /// 檔案裡本來的值不在選項內（例如手寫的 `zh_CN`）時，它照原樣留在清單
+  /// 最後——把它靜默換成別的值，等於在使用者沒碰這一欄的情況下改了 Hub
+  /// 的行為。
+  Widget _select(_EnvFieldSpec spec, AppLocalizations l10n) {
+    final s = context.uep;
+    final current = _controllers[spec.key]!.text.trim();
+    final known = spec.options.map((o) => o.value).toSet();
+
+    return DropdownButton<String>(
+      key: Key('env-field-${spec.key}'),
+      value: current,
+      isExpanded: true,
+      isDense: true,
+      underline: const SizedBox.shrink(),
+      style: UepText.code(size: 12.5, color: s.ink),
+      dropdownColor: s.bgSoft,
+      items: [
+        DropdownMenuItem(
+          value: '',
+          child: Text(l10n.hostEnvLocaleDefault,
+              style: UepText.serif(size: 12.5, color: s.inkMute)),
+        ),
+        for (final option in spec.options)
+          DropdownMenuItem(
+            value: option.value,
+            child: Text(option.label(l10n),
+                style: UepText.serif(size: 12.5, color: s.ink)),
+          ),
+        if (current.isNotEmpty && !known.contains(current))
+          DropdownMenuItem(
+            value: current,
+            child: Text(l10n.hostEnvLocaleCustom(current),
+                style: UepText.serif(size: 12.5, color: s.ink)),
+          ),
+      ],
+      onChanged: _saving
+          ? null
+          : (v) => setState(() {
+                _controllers[spec.key]!.text = v ?? '';
+                _errors[spec.key] = null;
+                _saved = false;
+              }),
     );
   }
 }

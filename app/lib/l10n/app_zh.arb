@@ -1436,6 +1436,8 @@
   "hostEnvLabelHostName": "主机名称",
   "hostEnvLabelStateTtl": "状态保留天数",
   "hostEnvDefaultHint": "留空＝用预设值",
+  "hostEnvLocaleDefault": "预设（zh-TW）",
+  "hostEnvLocaleCustom": "自订：{value}",
   "hostEnvLogLevelDefault": "预设",
   "hostEnvTokenReadOnly": "要换 token 请跑 scripts/rotate-token.py",
   "hostEnvSharedFile": "与 Hub 共用同一份设定档，连线位址与 token 在 Hub 分页改。",

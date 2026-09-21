@@ -137,6 +137,61 @@ void main() {
         'CHATROOM_RUN_QUEUE_CAP=5\nCHATROOM_IDLE_TIMEOUT=300\n');
   });
 
+  /// 下拉選單：先點開，再點選單裡的那一項（同樣的字在按鈕上也有一份，
+  /// 所以點 `.last`）。
+  Future<void> pick(WidgetTester tester, String key, String option) async {
+    await tester.tap(field(key));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(option).last);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('🔴 代稱語言：選 English 寫回 en', (tester) async {
+    envFile.writeAsStringSync('CHATROOM_LOCALE=zh-TW\n');
+    sizeUp(tester);
+    await tester.pumpWidget(
+        wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
+    await tester.pumpAndSettle();
+
+    await pick(tester, 'CHATROOM_LOCALE', 'English');
+    await tapSave(tester);
+
+    expect(envFile.readAsStringSync(), 'CHATROOM_LOCALE=en\n');
+  });
+
+  testWidgets('🔴 代稱語言：選「預設」是把那一行刪掉，不是留一個空值',
+      (tester) async {
+    // `CHATROOM_LOCALE=` 在 Hub 那邊是一個真的值（空字串不以 zh 開頭），
+    // 代稱會變成英文——而使用者選的是「預設（zh-TW）」
+    envFile.writeAsStringSync('CHATROOM_LOCALE=en\nCHATROOM_RUN_QUEUE_CAP=5\n');
+    sizeUp(tester);
+    await tester.pumpWidget(
+        wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
+    await tester.pumpAndSettle();
+
+    await pick(tester, 'CHATROOM_LOCALE', '預設（zh-TW）');
+    await tapSave(tester);
+
+    expect(envFile.readAsStringSync(), 'CHATROOM_RUN_QUEUE_CAP=5\n');
+  });
+
+  testWidgets('🔴 代稱語言：選項外的既有值原樣留著', (tester) async {
+    envFile.writeAsStringSync('CHATROOM_LOCALE=zh_CN\n');
+    sizeUp(tester);
+    await tester.pumpWidget(
+        wrap(host: HostKit(kitRoot: dir.path, envFile: envFile.path)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('自訂：zh_CN'), findsOneWidget);
+
+    // 沒碰這一欄，存別的欄位也不能把它改掉
+    await typeInto(tester, 'CHATROOM_RUN_QUEUE_CAP', '9');
+    await tapSave(tester);
+
+    expect(envFile.readAsStringSync(),
+        'CHATROOM_LOCALE=zh_CN\nCHATROOM_RUN_QUEUE_CAP=9\n');
+  });
+
   testWidgets('🔴 填錯：欄位下面講原因，檔案一個字都不動', (tester) async {
     envFile.writeAsStringSync('CHATROOM_RUN_QUEUE_CAP=5\n');
     sizeUp(tester);

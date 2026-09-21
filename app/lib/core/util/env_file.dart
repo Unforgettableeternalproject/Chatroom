@@ -38,7 +38,11 @@ Map<String, String> parseEnvText(String text) {
 /// ⚠️ 追加之前要確認前一行有換行，否則兩個設定會黏成
 /// `CHATROOM_PORT=8787CHATROOM_TOKEN=...`——兩個同時失效，而檔案看起來
 /// 還是有內容的。
-String applyEnvUpdates(String original, Map<String, String> updates) {
+/// [removeKeys] 裡的 key 整行刪掉——「用預設值」跟「值是空字串」不是同一
+/// 件事：`CHATROOM_LOCALE=` 在 Hub 那邊會被當成一個真的值（空字串不以
+/// `zh` 開頭，代稱會變成英文），而使用者選的是「預設（zh-TW）」。
+String applyEnvUpdates(String original, Map<String, String> updates,
+    {Set<String> removeKeys = const {}}) {
   final remaining = Map<String, String>.of(updates);
   final out = <String>[];
   // 追加的行跟著這份檔案原本的行尾走。`.env` 在 Windows 上多半是 CRLF，
@@ -57,6 +61,9 @@ String applyEnvUpdates(String original, Map<String, String> updates) {
       if (stripped.isNotEmpty && !stripped.startsWith('#')) {
         final at = stripped.indexOf('=');
         if (at > 0) key = stripped.substring(0, at).trim();
+      }
+      if (key.isNotEmpty && removeKeys.contains(key)) {
+        continue;
       }
       if (key.isNotEmpty && remaining.containsKey(key)) {
         out.add('$key=${remaining.remove(key)}$newline');
@@ -93,10 +100,11 @@ List<String> _linesKeepingEnds(String text) {
 }
 
 /// 把 [updates] 寫回 [file]。檔案不存在時就從空的開始（只寫這幾個 key）。
-Future<void> writeEnvUpdates(File file, Map<String, String> updates) async {
-  if (updates.isEmpty) return;
+Future<void> writeEnvUpdates(File file, Map<String, String> updates,
+    {Set<String> removeKeys = const {}}) async {
+  if (updates.isEmpty && removeKeys.isEmpty) return;
   final original = await file.exists() ? await file.readAsString() : '';
-  final text = applyEnvUpdates(original, updates);
+  final text = applyEnvUpdates(original, updates, removeKeys: removeKeys);
   final tmp = File('${file.path}.tmp');
   await tmp.writeAsString(text);
   await tmp.rename(file.path);

@@ -1435,6 +1435,8 @@
   "hostEnvLabelHostName": "Host name",
   "hostEnvLabelStateTtl": "State kept for (days)",
   "hostEnvDefaultHint": "Leave empty for the default",
+  "hostEnvLocaleDefault": "Default (zh-TW)",
+  "hostEnvLocaleCustom": "Custom: {value}",
   "hostEnvLogLevelDefault": "Default",
   "hostEnvTokenReadOnly": "To change it, run scripts/rotate-token.py",
   "hostEnvSharedFile": "Shares one settings file with the Hub; change the address and token on the Hub tab.",
