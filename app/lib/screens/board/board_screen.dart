@@ -210,6 +210,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       // 眼前這個階段
       final blocked = e.detail['item_id'] as String?;
       final blockedKind = e.detail['kind'] as String?;
+      // ⚠️ 週期凍結（`objective_closed`）**不給「重開並重試」**：解凍只有
+      // 「打回」那一條，而那是人要自己決定的一次動作，不是一顆重試按鈕
+      // 順手做掉的副作用
       if (e.code == 'container_settled' && blocked != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.message),
@@ -221,13 +224,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ));
         return;
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(boardActionMessage(context, e))));
     } on ApiException catch (e) {
       // 沒有這個 catch 的話，失敗只會拋進 framework，畫面上什麼都不會發生
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(boardActionMessage(context, e))));
     }
   }
 
@@ -402,11 +405,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   /// 可拖曳的卡片清單。不能拖時退回原本的 Column——**不要留一個拖不動的
   /// 拖曳把手**，那比沒有把手更讓人以為壞了。
-  Widget _taskList(BoardSnapshot snap, List<BoardTask> tasks) {
-    if (!_canReorder || tasks.length < 2) {
+  Widget _taskList(BoardSnapshot snap, List<BoardTask> tasks,
+      {required bool frozen}) {
+    // 拖曳也是寫入（`reorder` 會改 order_index）⇒ 凍結的週期裡連把手都
+    // 不給，不然拖一次就是一次 409 再彈回原位
+    if (!_canReorder || frozen || tasks.length < 2) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [for (final t in tasks) _taskCard(snap, t)],
+        children: [for (final t in tasks) _taskCard(snap, t, frozen: frozen)],
       );
     }
     return ReorderableListView(
@@ -420,7 +426,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ReorderableDragStartListener(
             key: ValueKey(tasks[i].id),
             index: i,
-            child: _taskCard(snap, tasks[i]),
+            child: _taskCard(snap, tasks[i], frozen: frozen),
           ),
       ],
     );
@@ -451,6 +457,24 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 現在看 delta 的 `board.status`（Hub 在 c72c92d 補上）。
   bool get _archived => _watchBoard().value?.isArchived ?? false;
 
+  /// 週期凍結時那一行短提示。沒凍結就是空字串。
+  ///
+  /// **判準在 model（`BoardObjective.frozen`），這裡只負責挑話講**——
+  /// 「已取消」要講的是另一句：取消的週期**打不回**（Hub 只讓
+  /// active/review/verified/done 走 reopen），叫人去打回是把他送去按一顆
+  /// 必然失敗的按鈕。
+  String _frozenHint(BuildContext context, BoardObjective o) {
+    final l10n = AppLocalizations.of(context);
+    return switch (o.status) {
+      'review' => l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateReview),
+      'verified' =>
+        l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateVerified),
+      'done' => l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateDone),
+      'cancelled' => l10n.boardObjectiveFrozenCancelled,
+      _ => '',
+    };
+  }
+
   Widget _archivedNotice(BuildContext context) {
     final s = context.uep;
     return Container(
@@ -471,6 +495,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final task = snap.tasks[_openTaskId];
     if (task == null || task.deleted) return null;
     void close() => setState(() => _openTaskId = null);
+    // 抽屜是從卡片開的，而卡片的凍結狀態在它的**祖父層**——週期收尾之後
+    // 底下每一張卡都不可寫（Hub 409 `objective_closed`）。這裡不查的話，
+    // 板面上的入口都收了，抽屜裡那一排照樣按得下去
+    final objective = objectiveOfTask(snap, task.id);
+    final frozen = objective?.frozen ?? false;
     // 回的是抽屜的內容，疊放與過場由呼叫端的 [UepReveal] 負責。
     // `SizedBox.expand`：外面那層疊法給的是鬆約束，不撐開的話遮罩的高度會
     // 縮成抽屜那麼高，底下的板就露出來了
@@ -494,7 +523,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             width: maxWidth < 480 ? maxWidth : 420,
             checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
             assigneeName: _assigneeName(task),
-            readOnly: _readOnly,
+            readOnly: _readOnly || frozen,
+            // 唯讀的兩個來源要講不同的話：封存是「這塊板結束了」，凍結是
+            // 「這個週期收尾了，打回就能再改」——後者有下一步
+            readOnlyReason:
+                frozen && objective != null ? _frozenHint(context, objective) : '',
             onClose: close,
           ),
         ],
@@ -985,11 +1018,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(26, 20, 26, 48),
             children: [
+              // 凍結沿著三層往下傳：Hub 擋的是「這個週期底下的任何寫入」，
+              // 所以階段與任務的入口也要一起收（判準在 `o.frozen`，不在
+              // 這裡各自比對狀態）
               for (final c in checklists)
                 if (c.isUncategorised)
-                  _looseTasks(context, snap, c)
+                  _looseTasks(context, snap, c, frozen: o.frozen)
                 else
-                  _checklistSection(context, snap, c),
+                  _checklistSection(context, snap, c, frozen: o.frozen),
               // 空的時候才在這裡再給一次入口——抬頭那顆已經在了，
               // 兩顆一樣的按鈕只會讓人懷疑它們是不是不同的東西
               if (checklists.isEmpty) ...[
@@ -1157,11 +1193,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           // 從沒做完的東西。要加就先按「打回」
           // 改名／改敘述。**收尾了也還能改**——那與「還能不能往裡面加東西」
           // 是兩件事：一個週期做完之後才發現標題打錯字，沒有理由改不了
-          _BarButton(
-            label: AppLocalizations.of(context).commonEdit,
-            onTap: () => _editObjective(o),
-          ),
-          const SizedBox(width: 8),
+          // 🔴 **凍結之後連改標題都不行。** 這裡曾經是「收尾了也還能改」
+          // ——那條在 Hub 收緊之前成立（2026-09-21 起非 active 的週期一律
+          // 409 `objective_closed`）。留著的話它是一顆按下去必然失敗的
+          // 按鈕，而旁邊那行提示已經說了要先打回
+          if (!o.frozen) ...[
+            _BarButton(
+              label: AppLocalizations.of(context).commonEdit,
+              onTap: () => _editObjective(o),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (o.acceptsNewChecklists) ...[
             _BarButton(
               label: AppLocalizations.of(context).boardNewChecklist,
@@ -1194,15 +1236,36 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               onTap: () => showObjectiveVerifyDialog(context,
                   actions: actions, objectiveId: o.id),
             ),
-          ] else if (o.status == 'verified')
+          ] else if (o.status == 'verified') ...[
+            // 「打回」在 verified／done 也要在。旁邊那行提示叫人先打回才能
+            // 改，而打回的入口從前只畫在 review——提示指向一顆畫面上不存在
+            // 的按鈕，人會去找一個沒有的東西（`cancelled` 例外：Hub 不讓它
+            // 打回，所以那一格什麼都不畫）
+            _BarButton(
+                label: AppLocalizations.of(context).boardObjectiveReopen,
+                onTap: () => runBoardAction(
+                    context, () => actions.reopenObjective(o.id))),
+            const SizedBox(width: 8),
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveComplete,
               accent: true,
               onTap: () => runBoardAction(
                   context, () => actions.completeObjective(o.id)),
             ),
+          ] else if (o.status == 'done')
+            _BarButton(
+                label: AppLocalizations.of(context).boardObjectiveReopen,
+                onTap: () => runBoardAction(
+                    context, () => actions.reopenObjective(o.id))),
         ]),
         const SizedBox(height: 10),
+        // 凍結的理由排在收尾提示前面：它回答的是「為什麼下面的東西都動
+        // 不了」，而那是看到這個畫面的人第一個會問的事
+        if (o.frozen)
+          Text(_frozenHint(context, o),
+              textAlign: TextAlign.right,
+              style: UepText.mono(size: 10, color: s.inkSoft)),
+        if (o.frozen) const SizedBox(height: 4),
         Text(_closeoutHint(context, o, stats),
             textAlign: TextAlign.right,
             style: UepText.mono(size: 10, color: s.inkMute)),
@@ -1287,7 +1350,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   // ---------- Checklist 區段 ----------
 
-  Widget _taskCard(BoardSnapshot snap, BoardTask t) => BoardTaskCard(
+  Widget _taskCard(BoardSnapshot snap, BoardTask t,
+          {required bool frozen}) =>
+      BoardTaskCard(
         task: t,
         conflict: _conflicts[t.id],
         assigneeName: _assigneeName(t),
@@ -1297,8 +1362,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             t.claimActorKey.isEmpty ? null : t.claimActorKey),
         onTap: () => setState(() => _openTaskId = t.id),
         isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
-        onClaim: (t.isClaimable && !_readOnly) ? () => _claim(t.id) : null,
-        onRelease: (t.isHeld && !_readOnly)
+        // 認領／釋出同樣是這個週期底下的寫入。**追蹤不算**：watch 寫的是
+        // 「誰在等這張卡的消息」，不動卡本身，凍結的週期照樣看得到進展
+        onClaim: (t.isClaimable && !_readOnly && !frozen)
+            ? () => _claim(t.id)
+            : null,
+        onRelease: (t.isHeld && !_readOnly && !frozen)
             ? () => runBoardAction(
                 context,
                 () => _actions!
@@ -1352,8 +1421,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// ⚠️ 唯一留下來的是收尾：它在 Hub 眼裡仍是一份 Checklist，**沒收尾就
   /// 送不出審**。藏了那一層又不給收尾的入口，週期會永遠卡在送審前一步，
   /// 而畫面上完全看不出是什麼擋著。
-  Widget _looseTasks(
-      BuildContext context, BoardSnapshot snap, BoardChecklist c) {
+  Widget _looseTasks(BuildContext context, BoardSnapshot snap,
+      BoardChecklist c, {required bool frozen}) {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
@@ -1365,8 +1434,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _taskList(snap, tasks),
-          if (!_readOnly && c.status == 'open' && loose == 0)
+          _taskList(snap, tasks, frozen: frozen),
+          if (!_readOnly && !frozen && c.status == 'open' && loose == 0)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Align(
@@ -1380,7 +1449,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 ),
               ),
             )
-          else if (!_readOnly && c.status == 'open')
+          else if (!_readOnly && !frozen && c.status == 'open')
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
@@ -1392,8 +1461,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
-  Widget _checklistSection(
-      BuildContext context, BoardSnapshot snap, BoardChecklist c) {
+  Widget _checklistSection(BuildContext context, BoardSnapshot snap,
+      BoardChecklist c, {required bool frozen}) {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
@@ -1458,7 +1527,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 標題與動作之間拉一條線：讓每一段的抬頭在視覺上自成一列
               Expanded(child: Container(height: 1, color: s.hairline)),
               const SizedBox(width: 12),
-              if (!_readOnly) ...[
+              // 🔴 **週期凍結 ⇒ 階段這一整排都收掉**（編輯／派工／收尾／
+              // 取消／重新開啟）。Hub 對這些一律 409 `objective_closed`，
+              // 而「重新開啟階段」尤其要收：它看起來正是那個解凍的動作，
+              // 按下去卻打不開任何東西——真正的解凍在上面一層（打回週期）
+              if (!_readOnly && !frozen) ...[
                 _BarButton(
                     label: AppLocalizations.of(context).commonEdit,
                     onTap: () => _editChecklist(c)),
@@ -1527,7 +1600,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 要往這裡加東西，先按旁邊那顆「重新開啟階段」。**讓人明確做一
               // 次「我要重開這一段」，比幫他默默把週期拖回未完成好**——按下
               // 「＋ 任務」的人不會預期自己撤銷了一次驗收。
-              if (c.acceptsNewTasks)
+              if (c.acceptsNewTasks && !frozen)
                 _BarButton(
                   label: AppLocalizations.of(context).boardNewTask,
                   onTap: () =>
@@ -1543,18 +1616,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               boardId: _boardIdOrNull!,
               checklistId: c.id,
               files: c.files,
-              actions: _readOnly ? null : _actions,
+              // 素材也是這個週期底下的寫入——凍結時一起收
+              actions: (_readOnly || frozen) ? null : _actions,
               participantId: widget.roomId == null
                   ? null
                   : ref.watch(boardParticipantIdProvider(widget.roomId!)).value,
               // 板軸（`/boards/:id`）沒有房 ⇒ 沒有 participant，身分只有
               // session key。不帶的話素材點開一律是「身分待定」
               useSessionKey: widget.roomId == null,
-              readOnly: _readOnly,
+              readOnly: _readOnly || frozen,
               // 新增素材**只有房軸有**：附件要上傳到一間房，而 Board
               // Library 那條路上連上傳到哪裡都答不出來（見
               // pickAndAttachStageFile）
-              onAdd: (_readOnly || widget.roomId == null || _actions == null)
+              onAdd: (_readOnly ||
+                      frozen ||
+                      widget.roomId == null ||
+                      _actions == null)
                   ? null
                   : () => pickAndAttachStageFile(
                         context,
@@ -1567,7 +1644,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             ),
           ],
           const SizedBox(height: 10),
-          _taskList(snap, tasks),
+          _taskList(snap, tasks, frozen: frozen),
           if (tasks.isEmpty)
             Text(AppLocalizations.of(context).boardNoTaskYet,
                 style: UepText.mono(size: 10.5, color: s.inkMute)),

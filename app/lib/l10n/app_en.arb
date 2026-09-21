@@ -1501,5 +1501,11 @@
   "boardReleaseInProgress": "A release for this objective is already running",
   "boardReleaseRepoNotEligible": "A repo is no longer eligible; reopen this dialog",
   "errorReleaseRequiresHuman": "Only a human can trigger a release",
-  "opsRelease": "Release"
+  "opsRelease": "Release",
+  "boardObjectiveFrozenHint": "Objective {status} — send it back to edit",
+  "boardObjectiveFrozenCancelled": "Objective cancelled — no changes possible",
+  "boardObjectiveStateReview": "is in review",
+  "boardObjectiveStateVerified": "is verified",
+  "boardObjectiveStateDone": "is completed",
+  "boardErrorObjectiveClosed": "This objective is closed — send it back first."
 }

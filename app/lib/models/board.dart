@@ -70,7 +70,19 @@ class BoardObjective {
   /// 成上面一層。
   ///
   /// 要加就先把週期打回 `active`（「打回」那顆按鈕就在旁邊）。
-  bool get acceptsNewChecklists => status == 'active';
+  bool get acceptsNewChecklists => !frozen;
+
+  /// 這個週期連同底下的一切現在是不是唯讀。
+  ///
+  /// 🔴 **判準只有這一個**：Hub 自 2026-09-21 起對非 `active` 週期底下的
+  /// 任何寫入回 409 `objective_closed`（週期自己的狀態轉移除外）。畫面上
+  /// 每顆會寫入的按鈕都要看這個 getter——各自寫一次 `status == 'done'`
+  /// 之類的比對，漏掉的那顆就是一顆按下去必然 409 的按鈕，而它跟能用的
+  /// 按鈕長得一模一樣。
+  ///
+  /// 解凍只有一條路：把週期「打回」（reopen，只有人類按得動；`cancelled`
+  /// 打不回）。
+  bool get frozen => status != 'active';
   bool get isVerified => status == 'verified' || status == 'done';
 
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(

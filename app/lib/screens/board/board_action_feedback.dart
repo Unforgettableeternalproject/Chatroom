@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/errors/api_exception.dart';
+import '../../l10n/l10n.dart';
 
 /// Board 畫面所有「按下去會打 API」的動作共用的執行殼。
 ///
@@ -25,18 +26,35 @@ Future<T?> runBoardAction<T>(
   try {
     return await body();
   } on ConflictException catch (e) {
-    if (onConflict != null) {
+    // ⚠️ `objective_closed` 不走 [onConflict]：呼叫端拿它沒有第二條路可走
+    // （解凍只有「打回」，而那是人要自己決定的一次動作），而 onConflict
+    // 的既有呼叫端都是在處理 `container_settled` 那種「重開並重試」。
+    if (onConflict != null && e.code != 'objective_closed') {
       onConflict(e);
       return null;
     }
-    _say(context, e.message);
+    _say(context, boardActionMessage(context, e));
     return null;
   } on ApiException catch (e) {
-    // 訊息一律用 Hub 的原話：它知道為什麼被拒絕，我們只知道被拒絕了
-    _say(context, e.message);
+    _say(context, boardActionMessage(context, e));
     return null;
   }
 }
+
+/// 一次被拒絕要對使用者說的那句話。
+///
+/// **原則仍是用 Hub 的原話**：它知道為什麼被拒絕，我們只知道被拒絕了。
+/// 這裡列的是 App 講得比它具體的少數幾個 code——判準一律是 `code`，
+/// 絕不對 message 做字串比對（見 [ApiException]）。
+String boardActionMessage(BuildContext context, ApiException e) =>
+    switch (e.code) {
+      // 409 — 週期不是 active，它自己與底下的階段、任務都不可寫。
+      // Hub 的原話講的是「這個 objective 關著」，而使用者手上要的是
+      // 下一步：打回那顆按鈕就在週期抬頭右邊
+      'objective_closed' => AppLocalizations.of(context)
+          .boardErrorObjectiveClosed,
+      _ => e.message,
+    };
 
 void _say(BuildContext context, String message) {
   if (!context.mounted) return;

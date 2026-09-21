@@ -1502,5 +1502,11 @@
   "boardReleaseInProgress": "这个周期已经有一笔上板在跑",
   "boardReleaseRepoNotEligible": "有 repo 不能上板了，重开一次对话框",
   "errorReleaseRequiresHuman": "上板只有人类按得动",
-  "opsRelease": "上板"
+  "opsRelease": "上板",
+  "boardObjectiveFrozenHint": "周期{status}，先打回才能修改",
+  "boardObjectiveFrozenCancelled": "周期已取消，无法修改",
+  "boardObjectiveStateReview": "已送审",
+  "boardObjectiveStateVerified": "已确认",
+  "boardObjectiveStateDone": "已完成",
+  "boardErrorObjectiveClosed": "周期已收尾，先打回才能改动。"
 }

@@ -7515,5 +7515,34 @@
   "opsRelease": "上板",
   "@opsRelease": {
     "description": "run.kind = release 的顯示名稱"
+  },
+  "boardObjectiveFrozenHint": "週期{status}，先打回才能修改",
+  "@boardObjectiveFrozenHint": {
+    "description": "週期非 active 時，階段與任務的入口被收起來的原因",
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "boardObjectiveFrozenCancelled": "週期已取消，無法修改",
+  "@boardObjectiveFrozenCancelled": {
+    "description": "取消的週期打不回，所以不能說「先打回」"
+  },
+  "boardObjectiveStateReview": "已送審",
+  "@boardObjectiveStateReview": {
+    "description": "週期狀態字（嵌在凍結提示裡）"
+  },
+  "boardObjectiveStateVerified": "已確認",
+  "@boardObjectiveStateVerified": {
+    "description": "週期狀態字（嵌在凍結提示裡）"
+  },
+  "boardObjectiveStateDone": "已完成",
+  "@boardObjectiveStateDone": {
+    "description": "週期狀態字（嵌在凍結提示裡）"
+  },
+  "boardErrorObjectiveClosed": "週期已收尾，先打回才能改動。",
+  "@boardErrorObjectiveClosed": {
+    "description": "Hub 回 409 objective_closed 時的轉述"
   }
 }

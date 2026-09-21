@@ -5157,6 +5157,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_board_editor",
                        "只有這塊板的 owner、聊天室的 supervisor 或"
                        "建立者可以改它")
+        await _assert_objective_writable(row, kind)
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
         seq = await _item_seq(row)
@@ -5192,6 +5193,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not _board_can_remove(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以刪除這張卡")
+        await _assert_objective_writable(row, kind)
         db = app.state.db
         seq = await _item_seq(row)
         table = BOARD_TABLES[kind]
@@ -5566,6 +5568,53 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _assert_container_open("objective", row["objective_id"])
         return row
 
+
+    # 週期的中文說法，給 `objective_closed` 的訊息用。
+    OBJECTIVE_FROZEN_REASON = {
+        "review": "送審", "verified": "確認無誤",
+        "done": "完成", "cancelled": "取消",
+    }
+
+    async def _assert_objective_writable(row_or_id, kind: str = "objective"):
+        """週期只有 `active` 時，它自己與底下的階段、任務才可寫。
+
+        🔑 **收尾不是只擋「再加東西」，是整片凍結。** `_assert_container_open`
+        只守新增的入口，於是 `done` 的週期底下，階段照樣 reopen 得了、標題
+        照樣改得動、卡照樣推得動狀態——板上寫著這個週期已經結束，而它的
+        內容還在變（艾斯維爾 2026-09-21 實測）。**已經被人類確認過的東西
+        不能在確認之後繼續改**，否則那次確認什麼都不保證。
+
+        解凍只有一個入口：週期自己的 `reopen`（人類，從 review／verified／
+        done 回 active）。`cancelled` 沒有 reopen ⇒ 取消的週期是永久唯讀。
+
+        `kind` 決定怎麼反查週期：`objective` 就是它自己，`checklist` 看
+        `objective_id`，`task` 再往上一層。傳 id（str）或已讀到的那一列都可以。
+        """
+        row = row_or_id
+        if isinstance(row_or_id, str):
+            row = await _board_item_or_404(kind, row_or_id)
+        if kind == "objective":
+            obj = row
+        else:
+            cid = row["id"] if kind == "checklist" else row["checklist_id"]
+            obj = await (await app.state.db.execute(
+                "SELECT o.id AS id, o.status AS status"
+                " FROM board_checklist c JOIN board_objective o"
+                "   ON o.id = c.objective_id"
+                " WHERE c.id=?", (cid,))).fetchone()
+            # 找不到上層（舊資料或剛被刪掉）就不擋——這道閘是狀態閘，
+            # 不是存在閘，存在與否由 `_board_item_or_404` 去講
+            if obj is None:
+                return None
+        if obj["status"] == "active":
+            return obj
+        reason = OBJECTIVE_FROZEN_REASON.get(
+            obj["status"], f"變成「{obj['status']}」")
+        raise _err(409, "objective_closed",
+                   f"這個週期已{reason}，要修改請先把週期打回",
+                   # ⚠️ 不能叫 status——那是 _err() 自己的第一個參數名
+                   objective_id=obj["id"], objective_status=obj["status"])
+
     async def _assert_assignee_in_room(assignee_id: str | None,
                                        room_id: str) -> str:
         """指定的對象必須是**這個房間**的 active 成員，回傳他的 actor_key。
@@ -5591,6 +5640,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return actor_key(row["session_key"])
 
     async def _insert_task(checklist_id: str, room_id: str, body, me) -> dict:
+        await _assert_objective_writable(checklist_id, "checklist")
         assignee_actor = await _assert_assignee_in_room(
             body.assignee_participant_id, room_id)
         db = app.state.db
@@ -5921,11 +5971,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             if dest == task_id:
                 raise _err(409, "moved_to_self", "一張卡不能搬到它自己身上")
             found = await (await app.state.db.execute(
-                "SELECT 1 FROM board_task WHERE id=? AND deleted=0 LIMIT 1",
+                "SELECT id, checklist_id FROM board_task"
+                " WHERE id=? AND deleted=0 LIMIT 1",
                 (dest,))).fetchone()
             if found is None:
                 raise _err(404, "moved_to_not_found",
                            "指向的那張卡不存在，或已被刪除")
+            # 搬**出去**由下面那道閘擋；這裡擋的是搬**進**一個凍結的週期
+            # ——目的地那邊已經收尾了，搬過去的東西不會再被任何人看一眼
+            await _assert_objective_writable(found, "task")
         # **板 owner 也推得動別人的卡**（09/07 卡 0a19355051）：他是這塊板
         # 的負責人，而卡的持有者可能早就不在了。人類那條之外還要這一條，是
         # 因為 owner 不一定是人——agent 開的板，agent 自己收不掉，等於沒有人
@@ -5947,6 +6001,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有持有者本人、這塊板的 owner 或人類成員可以推動它",
                        held_by_same_name=same_name,
                        claim_name=row["claim_name"] or "")
+        await _assert_objective_writable(row, "task")
         db = app.state.db
         seq = await _item_seq(row)
         done = body.status == "done"
@@ -6201,6 +6256,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 and not _is_creator(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這個階段")
+        await _assert_objective_writable(row, "checklist")
         seq = await _item_seq(row)
         done = body.status == "done"
         # CAS，理由同 Task。這裡尤其要緊：上面那道「底下所有 task 都收尾了」
@@ -7332,6 +7388,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "task_already_settled",
                        f"這張卡已經是「{row['status']}」，不能再指派",
                        task_status=row["status"])
+        await _assert_objective_writable(row, "task")
         target_pid, target_key, target_name = await _assign_target(row, body)
         db = app.state.db
         clearing = not target_pid and not target_key
@@ -7425,6 +7482,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "task_request_resolved",
                        f"這筆請求已經是「{req['status']}」，不能再回答一次",
                        request_status=req["status"])
+        await _assert_objective_writable(row, "task")
         now = _now()
         await db.execute(
             "UPDATE board_task_request SET status=?, resolved_at=?"
@@ -7483,6 +7541,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         row = await _board_item_or_404("task", task_id)
         me = await _board_item_writer(row, x_participant_id, x_session_key)
+        await _assert_objective_writable(row, "task")
         db = app.state.db
         # 認回自己上一世領的卡要能被看見——RETURNING 給的是更新**後**的值，
         # 所以先把舊的持有者記下來
@@ -7559,6 +7618,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有持有者本人或人類成員可以解除認領",
                        held_by_same_name=same_name,
                        claim_name=row["claim_name"] or "")
+        await _assert_objective_writable(row, "task")
         db = app.state.db
         seq = await _item_seq(row)
         await db.execute(
@@ -11366,6 +11426,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         _board, _room, me = await _board_writer_v2(
             board_id, x_session_key, x_participant_id, host=host)
         await _stage_checklist_or_404(board_id, checklist_id)
+        await _assert_objective_writable(checklist_id, "checklist")
         db = app.state.db
         att = await (await db.execute(
             "SELECT id, room_id FROM attachment WHERE id=?",
@@ -11426,6 +11487,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         _board, _room, me = await _board_writer_v2(
             board_id, x_session_key, x_participant_id, host=host)
         await _stage_checklist_or_404(board_id, checklist_id)
+        await _assert_objective_writable(checklist_id, "checklist")
         db = app.state.db
         row = await (await db.execute(
             "SELECT * FROM board_checklist_file WHERE id=? AND checklist_id=?",
@@ -11468,6 +11530,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         _board, _room, me = await _board_writer_v2(
             board_id, x_session_key, x_participant_id, host=host)
         await _stage_checklist_or_404(board_id, checklist_id)
+        await _assert_objective_writable(checklist_id, "checklist")
         db = app.state.db
         row = await (await db.execute(
             "SELECT * FROM board_checklist_file WHERE id=? AND checklist_id=?",

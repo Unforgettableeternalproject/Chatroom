@@ -38,6 +38,7 @@ class BoardTaskDrawer extends ConsumerWidget {
     required this.onClose,
     this.assigneeName,
     this.readOnly = false,
+    this.readOnlyReason = '',
     this.width = 420,
   });
 
@@ -63,6 +64,14 @@ class BoardTaskDrawer extends ConsumerWidget {
   /// 封存的房間：只讀不動。抽屜照樣開得起來——**看歷史是唯讀的用途，
   /// 不是被禁止的動作**，收掉的只有底下那排轉移。
   final bool readOnly;
+
+  /// 為什麼現在動不了。空字串 ＝ 不必解釋（封存的板整片都灰了，頁首那條
+  /// 橫幅已經說過）。
+  ///
+  /// **有話要講的是週期凍結**：底下那排動作整排消失，而板面上看不出原因
+  /// ——「這張卡不能動」與「這個週期收尾了，打回就能再動」是兩件事，
+  /// 後者有下一步。
+  final String readOnlyReason;
 
   /// 抽屜寬度。窄視窗時由呼叫端縮，但**不吃滿**——留一段板子看得到，
   /// 才知道自己還在板上而不是換了一個畫面。
@@ -129,6 +138,17 @@ class BoardTaskDrawer extends ConsumerWidget {
               roomId: roomId,
               boardId: boardId,
               task: task,
+            )
+          // 動作整排收掉的地方要留下那一行原因，不能只是空掉
+          else if (readOnlyReason.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: s.hairline)),
+              ),
+              child: Text(readOnlyReason,
+                  style: UepText.mono(size: 10, color: s.inkMute)),
             ),
         ],
       ),
