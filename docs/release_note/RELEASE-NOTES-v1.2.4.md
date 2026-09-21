@@ -149,6 +149,29 @@
 - 執行器 README 補安裝、獨立 `CLAUDE_CONFIG_DIR` 首次登入、設定欄位、log 位置、
   hook 的黑白名單與退出碼。
 
+## 上板（release）
+
+- 週期確認時可一併上板：把指定的來源分支併進各 repo 的穩定分支並推送，選填打 tag。
+  已確認的週期也能事後單獨上板。
+- 候選 repo 只列本週期內有 run 動過 HEAD 的；沒設穩定分支的不可勾。執行器每筆 run 終局
+  回報結構化 git 欄位（repo／branch／head 前後），存在 `agent_run`。
+- 執行器設定：每個 repo 的 `stable_branch`（空＝不參與）；每個工作區的 `release`
+  （`merge_method` merge／squash／ff_only、`merge_message`、`tag_message`，佔位符
+  `{source}` `{stable}` `{objective}` `{date}` `{tag}` `{repo}`），App 執行器分頁可編輯。
+- release run 不經模型：逐 repo fetch → 工作樹須乾淨 → merge → push → tag；衝突還原，
+  單 repo 失敗不擋其他，整筆收 `release_partial`。之後派一個唯讀 agent 讀板與 git log，
+  把週期報告發到房間。
+- **只有掛著這塊板的工作房的人類成員能上板**：從板分頁進來拿不到候選，agent 與
+  Supervisor 一律 403。分支名與 tag 走白名單，擋 `-` 開頭與 `..`。
+
+## 週期凍結
+
+- 週期只有 `active` 時可寫。送審、確認、完成、取消後，週期本身與底下的階段、任務
+  （編輯、刪除、狀態、認領、指派、搬移、排序、階段素材）一律 409 `objective_closed`。
+- 打回只允許 `review`／`verified`；`done` 與 `cancelled` 永久唯讀。
+- 「隨手記一件事」不再把終局週期靜默打回 active。房軸建卡與排序補上板封存檢查，
+  與板軸一致。
+
 ## 其他
 
 - `.gitignore` 忽略所有 `.env*` 變體；Flutter 產生檔不再追蹤並固定 LF。
@@ -184,6 +207,6 @@
 
 ## 驗證
 
-- Python：2047 passed / 1 xfailed
-- Flutter：1242 passed，`flutter analyze` 無問題
+- Python：2218 passed / 1 xfailed
+- Flutter：1382 passed，`flutter analyze` 無問題
 - 三端版本一致（Hub／bridge／App 皆 1.2.4）
