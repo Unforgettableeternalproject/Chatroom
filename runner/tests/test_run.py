@@ -8,6 +8,7 @@ push 推了不是畫面上那幾顆。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 import sys
@@ -16,7 +17,8 @@ from pathlib import Path
 import pytest
 
 from chatroom_runner import run as run_module
-from chatroom_runner.run import RepoLocks, RunExecutor, resolve_repo
+from chatroom_runner.run import (RepoLocks, RepoLockTimeout, RunExecutor,
+                                 resolve_repo, short_id)
 from chatroom_runner.usage import UsageStore
 
 from ._fixtures import FAKE_CLAUDE, create_run, git, make_config
@@ -430,15 +432,20 @@ async def test_cancel_kills_the_child_and_reports_cancelled(
 
 async def test_one_writer_per_repo(hub_app, ops_room, runner_hub, work_repo,
                                    tmp_path, monkeypatch):
-    """同一個 repo 同時只有一個寫入型 run。
+    """同一個 repo 同時只有一個寫入型 run；等待中的那一筆要看得見、要收得完。
 
     PM 記憶裡「共用工作樹互相覆蓋」「commit 帶走別人的 index」發生過不只
     一次；遠端無人看著時代價更高。
+
+    埃里爾 09/21 除錯：`a70bcd9a` 領到單後卡在這把鎖上，Hub 停在 claimed、
+    沒有回報、沒有 run 目錄、log 一個字都沒有——跟「執行器掛了」長得一模
+    一樣。等待中要主動回報一次 running（reason=repo_lock_wait），第一筆
+    結束後要自己接著跑完，不能永遠卡住。
     """
     _app, client = hub_app
     room_id, headers = ops_room
     monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
-    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "60")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "1.5")
     await runner_hub.register("test-host", "test", ["ai-website"], 2, "0.1")
     first = await create_run(client, room_id, headers, kind="ticket",
                              ref="task-lock-1")
@@ -448,31 +455,99 @@ async def test_one_writer_per_repo(hub_app, ops_room, runner_hub, work_repo,
     b = await runner_hub.claim()
     cfg = make_config(tmp_path, work_repo)
     locks = RepoLocks()
+    reported: list[tuple[str, str, str]] = []
+    real_report = runner_hub.report
+
+    async def spy_report(run_id, status, **kw):
+        reported.append((run_id, status, kw.get("reason", "")))
+        return await real_report(run_id, status, **kw)
+
+    monkeypatch.setattr(runner_hub, "report", spy_report)
+
     cancel_a, cancel_b = asyncio.Event(), asyncio.Event()
     task_a = asyncio.ensure_future(
         _executor(cfg, runner_hub, locks=locks).execute(a, cancel_a))
     task_b = asyncio.ensure_future(
         _executor(cfg, runner_hub, locks=locks).execute(b, cancel_b))
     try:
+        # 🚨 等 `locks.is_held()` 不夠：那把鎖在拿到的當下就會是 True，遠早於
+        # `_write_run_files` 真的落地 `stream.jsonl`——用它判斷 holder 會兩邊
+        # 都還不存在，隨便挑到一個當 holder。要等到**真的有一邊起了進程**
+        started: list[dict] = []
         for _ in range(200):
-            await asyncio.sleep(0.05)
-            if locks.is_held("ai-website/JSAI-Web"):
+            started = [r for r in (a, b)
+                      if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
+            if started:
                 break
-        await asyncio.sleep(0.5)
-        holder = a if (cfg.runs_dir / a["id"] / "stream.jsonl").exists() else b
+            await asyncio.sleep(0.05)
+        assert started, "等了 10 秒，兩筆都沒有起進程"
+        holder = started[0]
         other = b if holder is a else a
         assert not (cfg.runs_dir / other["id"] / "stream.jsonl").exists(), \
             "第二筆不該在第一筆還握著 repo 鎖時起進程"
-        blocked = (await client.get(f"/api/runs/{other['id']}",
-                                    headers=headers)).json()["run"]
-        assert blocked["status"] == "claimed", "它連 running 都還不該報"
-    finally:
+        # 等待回報是另一個 task 的 await 鏈，不保證跟這裡的 `sleep(0)` 同一輪
+        # 排到——用輪詢代替固定 sleep，避免系統忙的時候變成假性失敗
+        blocked = {}
+        for _ in range(200):
+            blocked = (await client.get(f"/api/runs/{other['id']}",
+                                        headers=headers)).json()["run"]
+            if blocked["status"] != "claimed":
+                break
+            await asyncio.sleep(0.05)
+        assert blocked["status"] == "running", \
+            "等待中要主動報一次 running，不能停在 claimed 看起來像掛了"
+        assert blocked["reason"] == "repo_lock_wait"
+        assert short_id(holder["id"]) in (blocked.get("result") or ""), \
+            "附註要講出正在等哪一筆 run"
+
+        # 上面都對了才讓兩筆自然跑完——**不能在這裡先 cancel**：
+        # 那正是要驗的事（第一筆結束後，等待中的那一筆會不會自己接著跑）
+        outcome_a, outcome_b = await asyncio.wait_for(
+            asyncio.gather(task_a, task_b), timeout=90)
+    except BaseException:
+        # 🚨 任何一個 assert 炸掉都要在這裡把兩個 task 收乾淨，不能留給測試
+        # 函式回來之後才收：沒等到的 task 會撞進下一個測試已經關掉的
+        # httpx client（埃里爾 09/21 除錯：這裡漏收曾經拖垮過後面兩個測試）
         cancel_a.set()
         cancel_b.set()
-        await asyncio.wait_for(asyncio.gather(task_a, task_b,
-                                              return_exceptions=True),
-                               timeout=90)
+        await asyncio.wait_for(
+            asyncio.gather(task_a, task_b, return_exceptions=True),
+            timeout=90)
+        raise
+    assert outcome_a.status == "done"
+    assert outcome_b.status == "done", "第一筆結束後，等待中的那一筆要自己接著跑完"
+    other_reports = [(status, reason) for run_id, status, reason in reported
+                     if run_id == other["id"]]
+    assert ("running", "repo_lock_wait") in other_reports
+    final_other, _ = await _trail(client, other["id"], headers)
+    assert final_other["status"] == "done"
     assert first["id"] and second["id"]
+
+
+async def test_repo_lock_wait_timeout_reports_failed(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """等 repo 鎖等過牆鐘上限就收成 failed，不能永遠空等。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-lock-timeout")
+    cfg = make_config(tmp_path, work_repo)
+
+    class _AlwaysTimesOut(RepoLocks):
+        @contextlib.asynccontextmanager
+        async def hold(self, keys, *, run_id="", timeout=None, on_wait=None):
+            raise RepoLockTimeout(keys, {keys[0]: "abc12345"})
+            yield  # pragma: no cover - 上一行必定先丟例外
+
+    executor = _executor(cfg, runner_hub, locks=_AlwaysTimesOut())
+    outcome = await executor.execute(run)
+
+    assert outcome.status == "failed"
+    assert outcome.reason == "repo_lock_timeout"
+    assert "abc12345" in outcome.result
+    final, trail = await _trail(client, run["id"], headers)
+    assert final["status"] == "failed"
+    assert final["reason"] == "repo_lock_timeout"
 
 
 async def test_investigate_does_not_take_the_write_lock(work_repo, tmp_path,
@@ -1667,7 +1742,6 @@ async def test_a_shared_second_repo_serialises_two_runs(
                        if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
             if started:
                 break
-        await asyncio.sleep(0.5)
         # 兩把鎖都在同一筆手上
         assert locks.is_held("ai-website/JSAI-Web")
         assert locks.is_held("ai-website/JSAI-API")
@@ -1675,9 +1749,18 @@ async def test_a_shared_second_repo_serialises_two_runs(
                    if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
         assert len(started) == 1, "主 repo 不同也只准一筆起進程"
         other = b if started[0] is a else a
-        blocked = (await client.get(f"/api/runs/{other['id']}",
-                                    headers=headers)).json()["run"]
-        assert blocked["status"] == "claimed", "它連 running 都還不該報"
+        # 等待中要主動報一次 running（reason=repo_lock_wait），輪詢代替固定
+        # sleep，避免系統忙的時候變成假性失敗
+        blocked = {}
+        for _ in range(200):
+            blocked = (await client.get(f"/api/runs/{other['id']}",
+                                        headers=headers)).json()["run"]
+            if blocked["status"] != "claimed":
+                break
+            await asyncio.sleep(0.05)
+        assert blocked["status"] == "running", \
+            "等待中要主動報一次 running，不能停在 claimed 看起來像掛了"
+        assert blocked["reason"] == "repo_lock_wait"
     finally:
         cancel_a.set()
         cancel_b.set()

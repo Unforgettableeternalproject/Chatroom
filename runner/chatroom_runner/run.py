@@ -385,14 +385,29 @@ class RunOutcome:
     runner_limit_reason: str = ""
 
 
+class RepoLockTimeout(Exception):
+    """等 repo 鎖等到牆鐘上限（除錯報告 09/21）。帶著卡住的 key 與持有者短碼。"""
+
+    def __init__(self, keys: list[str], holders: dict[str, str]) -> None:
+        self.keys = keys
+        self.holders = holders
+        super().__init__(f"等 repo 鎖逾時：{keys}")
+
+
 class RepoLocks:
     """每個 repo 一把鎖（§5.5）。跨 repo 的票序列做，第一階段不開 worktree。"""
 
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
+        # key → 目前握著它的 run 短碼。**只給人看**（等待通知用），
+        # 不參與鎖本身的邏輯——鎖的正確性完全靠 asyncio.Lock
+        self._holders: dict[str, str] = {}
 
     @contextlib.asynccontextmanager
-    async def hold(self, keys: list[str]):
+    async def hold(self, keys: list[str], *, run_id: str = "",
+                   timeout: float | None = None,
+                   on_wait: Callable[[list[str], dict[str, str]],
+                                     Awaitable[None]] | None = None):
         """一次握住多把鎖（寫入型 run 會動專案底下每一個 repo）。
 
         🚨 **取得順序在這裡重排成 key 的字典序**，不照傳進來的順序：呼叫端給
@@ -400,12 +415,41 @@ class RepoLocks:
         主 repo 不同時那個順序就不一樣——A 拿到 web 等 api、B 拿到 api 等 web
         就是一個死鎖，而它在面板上與「兩筆都在跑」長得一模一樣。
         釋放走 `AsyncExitStack`，順序與取得相反。
+
+        🚨 **卡在鎖上要讓外面看得到**（除錯報告 09/21：`a70bcd9a` 領到單後
+        一路等到這裡，Hub 上停在 claimed、沒有回報、沒有 run 目錄、log 一
+        個字都沒有，跟「執行器掛了」長得一模一樣）。任何一把鎖已經被佔用時
+        先呼叫一次 ``on_wait``（帶著被卡住的 key 與持有者短碼），呼叫端拿
+        這個機會回報一次 running 並留一行 log。``timeout`` 給每一把鎖的
+        `acquire()` 設上限；逾時就整段放棄，丟 `RepoLockTimeout` 讓呼叫端
+        收成 failed——不然一筆卡住的 run 會把併發位置吃到天荒地老，而且
+        看起來跟「它在正常等待」一模一樣。
         """
         seen = sorted(set(keys))
+        held_keys = [k for k in seen if self.is_held(k)]
+        if held_keys and on_wait is not None:
+            holders = {k: self._holders.get(k, "") for k in held_keys}
+            await on_wait(held_keys, holders)
         async with contextlib.AsyncExitStack() as stack:
             for key in seen:
-                await stack.enter_async_context(self.get(key))
+                lock = self.get(key)
+                if timeout is None:
+                    await lock.acquire()
+                else:
+                    try:
+                        await asyncio.wait_for(lock.acquire(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        holders = {k: self._holders.get(k, "")
+                                   for k in seen if self.is_held(k)}
+                        raise RepoLockTimeout(seen, holders) from None
+                stack.callback(self._release, key, lock)
+                if run_id:
+                    self._holders[key] = run_id
             yield
+
+    def _release(self, key: str, lock: asyncio.Lock) -> None:
+        self._holders.pop(key, None)
+        lock.release()
 
     def get(self, key: str) -> asyncio.Lock:
         lock = self._locks.get(key)
@@ -556,6 +600,10 @@ class RunExecutor:
         self.pump_error = ""
         # 現在活著的 claude 子進程。收尾路徑要靠它殺乾淨
         self.live_proc = None
+        # 等 repo 鎖時已經回報過一次 running（除錯報告 09/21）。
+        # `_claude_run` 起跑前不用再報一次「running/spawn」——那會撞上
+        # Hub 的 running→running 白名單，變成一句無害但誤導人的 409 警告
+        self._pre_reported_running = False
 
     def mark_activity(self) -> None:
         """記一次「這個 run 還活著」。stream 有事件、或退避睡完要續跑時呼叫。"""
@@ -632,8 +680,35 @@ class RunExecutor:
             # 而那是「同一個 repo 只允許一個寫入者」本來就要擋掉的事
             keys = [f"{project.key}/{item.name}"
                     for item in project_repos(project, repo)]
-            async with self.locks.hold(keys):
-                return await self._claude_run(run, project, repo, cancel)
+
+            async def _on_wait(held_keys: list[str],
+                               holders: dict[str, str]) -> None:
+                blockers = "、".join(
+                    holders.get(k) or k for k in held_keys)
+                log.warning("run %s 等待 repo 鎖，卡在：%s", run_id, blockers)
+                await self._report(run_id, RunOutcome(
+                    "running", reason="repo_lock_wait",
+                    result=f"等待同一 repo 的 run {blockers} 完成。"))
+                self._pre_reported_running = True
+
+            try:
+                async with self.locks.hold(
+                        keys, run_id=short_id(run_id),
+                        timeout=project.wall_clock_seconds,
+                        on_wait=_on_wait):
+                    return await self._claude_run(run, project, repo, cancel)
+            except RepoLockTimeout as exc:
+                blockers = "、".join(
+                    exc.holders.get(k) or k for k in exc.keys) or "未知"
+                log.error("run %s 等 repo 鎖逾時（%s 秒），卡在：%s",
+                         run_id, int(project.wall_clock_seconds), blockers)
+                outcome = RunOutcome(
+                    "failed", reason="repo_lock_timeout",
+                    result=f"等待同一 repo 的 run {blockers} 完成，"
+                           f"超過 {int(project.wall_clock_seconds)} 秒仍未"
+                           "取得鎖，已收場。")
+                await self._report(run_id, outcome)
+                return outcome
         return await self._claude_run(run, project, repo, cancel)
 
     # ---------- push（不經模型，§5.6）----------
@@ -816,7 +891,11 @@ class RunExecutor:
         self._write_run_files(run_dir, run, repo, project)
         env = self._child_env(run, run_dir)
 
-        await self._report(run_id, RunOutcome("running", reason="spawn"))
+        # 等 repo 鎖時已經報過一次 running（`_on_wait`）：這裡再報 spawn
+        # 會是 running→running 且 reason 不在 Hub 的同狀態白名單裡，
+        # 送出去只換一句無害但誤導人的 409 警告
+        if not self._pre_reported_running:
+            await self._report(run_id, RunOutcome("running", reason="spawn"))
 
         resume: str = ""
         backoffs = list(self.cfg.backoff_minutes)
