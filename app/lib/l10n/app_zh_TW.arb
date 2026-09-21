@@ -7544,5 +7544,13 @@
   "boardErrorObjectiveClosed": "週期已收尾，先打回才能改動。",
   "@boardErrorObjectiveClosed": {
     "description": "Hub 回 409 objective_closed 時的轉述"
+  },
+  "boardObjectiveFrozenDone": "週期已完成，無法修改",
+  "@boardObjectiveFrozenDone": {
+    "description": "done 之後永久唯讀，打不回，所以不能說「先打回」"
+  },
+  "boardReleaseNoWorkspaceRoom": "這塊板沒有掛在綁了工作區的工作房",
+  "@boardReleaseNoWorkspaceRoom": {
+    "description": "上板候選取不到：房已封存或未綁工作區，不要轉述 Hub 的封存訊息"
   }
 }

@@ -60,10 +60,30 @@ void main() {
     expect(find.text('收尾階段'), findsNothing);
     expect(find.text('取消階段'), findsNothing);
     expect(find.text('＋ 任務'), findsNothing);
-    // 收掉之後要說出為什麼，而且要指向下一步
-    expect(find.text('週期已完成，先打回才能修改'), findsOneWidget);
-    // 週期自己的狀態按鈕不受影響——提示叫人打回，那顆按鈕就得在
+    // 收掉之後要說出為什麼
+    expect(find.text('週期已完成，無法修改'), findsOneWidget);
+  });
+
+  testWidgets('done 的週期沒有打回入口，提示也不叫人打回', (tester) async {
+    await tester.pumpWidget(_wrap(_snap('done')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    // 完成是終點：Hub 只讓 review／verified 走 reopen，畫一顆打回就是畫一顆
+    // 必然 409 的按鈕
+    expect(find.text('打回'), findsNothing);
+    // 提示也不能指過去——沒有那條路了
+    final hint = tester.widget<Text>(find.text('週期已完成，無法修改'));
+    expect(hint.data, isNot(contains('打回')));
+  });
+
+  testWidgets('verified 的週期還有打回入口', (tester) async {
+    await tester.pumpWidget(_wrap(_snap('verified')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
     expect(find.text('打回'), findsOneWidget);
+    expect(find.text('週期已確認，先打回才能修改'), findsOneWidget);
   });
 
   testWidgets('review 的週期沒有任何編輯入口（週期自己的也沒有）',
@@ -89,11 +109,12 @@ void main() {
     expect(find.text('收尾階段'), findsOneWidget);
     expect(find.text('＋ 任務'), findsOneWidget);
     // 沒凍結就沒有那行提示
-    expect(find.text('週期已完成，先打回才能修改'), findsNothing);
+    expect(find.text('週期已完成，無法修改'), findsNothing);
   });
 
   testWidgets('打回之後入口回來', (tester) async {
-    var status = 'done';
+    // 從 `verified` 起算——`done` 打不回，那條路不存在
+    var status = 'verified';
     final container = ProviderContainer(overrides: [
       boardByIdProvider('b1').overrideWith((ref) async => _snap(status)),
     ]);
@@ -113,6 +134,6 @@ void main() {
 
     expect(find.text('重新開啟階段'), findsOneWidget);
     expect(find.text('編輯'), findsNWidgets(3));
-    expect(find.text('週期已完成，先打回才能修改'), findsNothing);
+    expect(find.text('週期已確認，先打回才能修改'), findsNothing);
   });
 }

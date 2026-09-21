@@ -460,16 +460,16 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 週期凍結時那一行短提示。沒凍結就是空字串。
   ///
   /// **判準在 model（`BoardObjective.frozen`），這裡只負責挑話講**——
-  /// 「已取消」要講的是另一句：取消的週期**打不回**（Hub 只讓
-  /// active/review/verified/done 走 reopen），叫人去打回是把他送去按一顆
-  /// 必然失敗的按鈕。
+  /// 「已取消」與「已完成」要講的是另一句：這兩種週期**打不回**（Hub 只讓
+  /// review／verified 走 reopen），叫人去打回是把他送去按一顆必然失敗的
+  /// 按鈕。
   String _frozenHint(BuildContext context, BoardObjective o) {
     final l10n = AppLocalizations.of(context);
     return switch (o.status) {
       'review' => l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateReview),
       'verified' =>
         l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateVerified),
-      'done' => l10n.boardObjectiveFrozenHint(l10n.boardObjectiveStateDone),
+      'done' => l10n.boardObjectiveFrozenDone,
       'cancelled' => l10n.boardObjectiveFrozenCancelled,
       _ => '',
     };
@@ -1237,10 +1237,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   actions: actions, objectiveId: o.id),
             ),
           ] else if (o.status == 'verified') ...[
-            // 「打回」在 verified／done 也要在。旁邊那行提示叫人先打回才能
-            // 改，而打回的入口從前只畫在 review——提示指向一顆畫面上不存在
-            // 的按鈕，人會去找一個沒有的東西（`cancelled` 例外：Hub 不讓它
-            // 打回，所以那一格什麼都不畫）
+            // 「打回」在 verified 也要在。旁邊那行提示叫人先打回才能改，而
+            // 打回的入口從前只畫在 review——提示指向一顆畫面上不存在的按鈕，
+            // 人會去找一個沒有的東西。
+            //
+            // 🔴 **`done` 與 `cancelled` 沒有這一格**：Hub 只讓 review／
+            // verified 走 reopen，完成的週期是永久唯讀。畫了就是一顆必然
+            // 失敗的按鈕，所以那兩個狀態的提示也不提「打回」
             _BarButton(
                 label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
@@ -1252,11 +1255,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               onTap: () => runBoardAction(
                   context, () => actions.completeObjective(o.id)),
             ),
-          ] else if (o.status == 'done')
-            _BarButton(
-                label: AppLocalizations.of(context).boardObjectiveReopen,
-                onTap: () => runBoardAction(
-                    context, () => actions.reopenObjective(o.id))),
+          ],
         ]),
         const SizedBox(height: 10),
         // 凍結的理由排在收尾提示前面：它回答的是「為什麼下面的東西都動

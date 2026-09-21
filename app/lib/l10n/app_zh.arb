@@ -1508,5 +1508,7 @@
   "boardObjectiveStateReview": "已送审",
   "boardObjectiveStateVerified": "已确认",
   "boardObjectiveStateDone": "已完成",
-  "boardErrorObjectiveClosed": "周期已收尾，先打回才能改动。"
+  "boardErrorObjectiveClosed": "周期已收尾，先打回才能改动。",
+  "boardObjectiveFrozenDone": "周期已完成，无法修改",
+  "boardReleaseNoWorkspaceRoom": "这块板没有挂在绑了工作区的工作房"
 }

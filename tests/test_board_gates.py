@@ -352,6 +352,17 @@ async def _done_objective(client, rid, human, agent):
     return oid, cid, tids
 
 
+async def _verified_objective(client, rid, human, agent):
+    """走到 verified 就停。**打回的入口只剩這一段**（review／verified），
+    done 之後是終局，所以解凍的測試不能再從 done 出發。"""
+    oid, cid, tids = await _tree(client, rid, human)
+    await _finish_everything(client, cid, tids, human)
+    await client.post(f"/api/board/objectives/{oid}/review", headers=agent)
+    r = await client.post(f"/api/board/objectives/{oid}/verify", headers=human)
+    assert r.status_code == 200, r.text
+    return oid, cid, tids
+
+
 async def test_a_done_objective_freezes_its_checklists(tmp_path):
     """實測撞到的那一條：週期完成之後，底下的階段還打得開。"""
     app, client = await _client(tmp_path, "freeze-done-checklist")
@@ -407,11 +418,11 @@ async def test_a_reviewed_objective_freezes_everything_under_it(tmp_path):
 
 
 async def test_reopen_is_the_way_back_in(tmp_path):
-    """唯一的解凍入口：把週期打回。打回之後同一組操作要成功。"""
+    """唯一的解凍入口：把**還沒完成**的週期打回。之後同一組操作要成功。"""
     app, client = await _client(tmp_path, "freeze-reopen")
     async with app.router.lifespan_context(app), client:
         rid, human, agent = await _room(client)
-        oid, cid, tids = await _done_objective(client, rid, human, agent)
+        oid, cid, tids = await _verified_objective(client, rid, human, agent)
 
         r = await client.post(f"/api/board/objectives/{oid}/reopen",
                               headers=human)
@@ -428,6 +439,32 @@ async def test_reopen_is_the_way_back_in(tmp_path):
         assert r.status_code == 200, r.text
         r = await _task_status(client, tids[0], "in_progress", human)
         assert r.status_code == 200, r.text
+
+
+async def test_a_done_objective_cannot_be_reopened(tmp_path):
+    """🚨 完成是終局：`done` 打不回來（艾斯維爾 2026-09-21 裁決）。
+
+    打得回來的話，「完成」隨時可以被收回，而依它收尾的東西（結算通知、
+    上板、板的結局）都已經送出去了。訊息也不能再叫人先打回——那顆按鈕
+    對 done 不存在。
+    """
+    app, client = await _client(tmp_path, "freeze-done-forever")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _done_objective(client, rid, human, agent)
+
+        r = await client.post(f"/api/board/objectives/{oid}/reopen",
+                              headers=human)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "invalid_transition"
+        assert r.json()["detail"]["from_status"] == "done"
+
+        # 沒有被打回 ⇒ 底下仍然凍著，而且訊息不再指向一顆不存在的按鈕
+        detail = await _closed(await client.patch(
+            f"/api/board/objectives/{oid}", json={"title": "改個名"},
+            headers=human))
+        assert detail["objective_status"] == "done"
+        assert "打回" not in detail["message"]
 
 
 async def test_a_cancelled_objective_is_read_only_forever(tmp_path):

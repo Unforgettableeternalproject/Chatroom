@@ -1507,5 +1507,7 @@
   "boardObjectiveStateReview": "is in review",
   "boardObjectiveStateVerified": "is verified",
   "boardObjectiveStateDone": "is completed",
-  "boardErrorObjectiveClosed": "This objective is closed — send it back first."
+  "boardErrorObjectiveClosed": "This objective is closed — send it back first.",
+  "boardObjectiveFrozenDone": "Objective completed — no changes possible",
+  "boardReleaseNoWorkspaceRoom": "This board is not attached to a room bound to a workspace"
 }

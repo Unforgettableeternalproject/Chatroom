@@ -5584,8 +5584,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         內容還在變（艾斯維爾 2026-09-21 實測）。**已經被人類確認過的東西
         不能在確認之後繼續改**，否則那次確認什麼都不保證。
 
-        解凍只有一個入口：週期自己的 `reopen`（人類，從 review／verified／
-        done 回 active）。`cancelled` 沒有 reopen ⇒ 取消的週期是永久唯讀。
+        解凍只有一個入口：週期自己的 `reopen`（人類，從 review／verified
+        回 active）。**`done` 與 `cancelled` 沒有解凍**：完成與取消都是
+        終局，打不回來（艾斯維爾 2026-09-21 裁決）。
 
         `kind` 決定怎麼反查週期：`objective` 就是它自己，`checklist` 看
         `objective_id`，`task` 再往上一層。傳 id（str）或已讀到的那一列都可以。
@@ -5610,8 +5611,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             return obj
         reason = OBJECTIVE_FROZEN_REASON.get(
             obj["status"], f"變成「{obj['status']}」")
+        # 終局的兩個狀態不能叫人「先打回」——那顆按鈕不存在。講得出下一步
+        # 的才講，講不出的就直說沒有下一步
+        if obj["status"] in ("done", "cancelled"):
+            tail = f"這個週期已{reason}，不能再修改"
+        else:
+            tail = f"這個週期已{reason}，要修改請先把週期打回"
         raise _err(409, "objective_closed",
-                   f"這個週期已{reason}，要修改請先把週期打回",
+                   tail,
                    # ⚠️ 不能叫 status——那是 _err() 自己的第一個參數名
                    objective_id=obj["id"], objective_status=obj["status"])
 
@@ -6641,13 +6648,68 @@ def create_app(config: Config | None = None) -> FastAPI:
             return repos, settings if isinstance(settings, dict) else {}
         return {}, {}
 
-    async def _release_candidates(obj_row) -> dict:
+    async def _release_room_for(obj_row, me=None):
+        """上板要用的工作房：**看板現在掛在哪，不看週期是在哪建的**。
+
+        `board_objective.room_id` 是建卡當下那一間房。板之後可以掛到別的
+        房、原始房可以封存——拿它去查房，上板就會在一間早就沒人用的房上
+        409 `room_archived`，而 App 顯示的是「此聊天室已封存」，看起來像
+        週期壞了（艾斯維爾 2026-09-21 實測）。
+
+        判準：這塊板**目前掛著**（`detached_at IS NULL`）、房還活著、
+        `kind='ops'`、而且綁了工作區。`me` 所在的那間房符合就優先用它
+        ——同一塊板掛在兩間工作房時，人按下去的那一間才是他以為會動的
+        那一間；其餘取**最早掛上去的那一間**（`attached_at, rowid`）。
+        `id` 是隨機 uuid，拿它當第二鍵雖然穩定，卻會在同一秒掛上的兩間房
+        之間挑出一間沒有道理的——rowid 才對得上「誰先掛」。
+
+        ⚠️ **`me["room_id"]` 只在他真的有房內身分時才算數。** 從板分頁
+        進來的呼叫端沒有 participant（`_board_item_writer` 退回 session_key
+        身分），那時 `me["room_id"]` 是**週期的原始房**——正是這支要避開的
+        那一間。優先權只是偏好，篩選仍然由上面那組條件說了算，所以就算
+        傳進一間封存房也只會被忽略。
+
+        一間都沒有就回 `None`，由呼叫端決定那是「沒有候選」還是 409。
+        """
+        bid = ""
+        if "board_id" in obj_row.keys():
+            bid = (obj_row["board_id"] or "").strip()
+        if not bid:
+            # 換軸前的存量週期沒有 board_id，查不出它掛在哪
+            return None
+        rows = await (await app.state.db.execute(
+            "SELECT r.* FROM room r JOIN board_room br ON br.room_id = r.id"
+            " WHERE br.board_id=? AND br.detached_at IS NULL"
+            "   AND r.status='active' AND COALESCE(r.kind,'chat')='ops'"
+            "   AND COALESCE(r.workspace_key,'') <> ''"
+            " ORDER BY br.attached_at, br.rowid", (bid,))).fetchall()
+        if not rows:
+            return None
+        mine = ""
+        if me is not None:
+            cols = set(me.keys())
+            if {"id", "room_id"} <= cols and me["id"]:
+                mine = me["room_id"] or ""
+        for row in rows:
+            if row["id"] == mine:
+                return row
+        return rows[0]
+
+    async def _release_candidates(obj_row, me=None, room=None) -> dict:
         """候選清單的完整形狀。GET 端點與 POST 的閘共用這一份。
 
         兩邊各算一次的話，畫面上勾得到的 repo 可以在送出時被判定不合格，
         而人看到的只是一個沒有理由的 409。
+
+        `room` 由 `_release_plan` 傳進來（它自己要同一間房去建 run）；
+        沒傳就現查。查不到工作房**不報錯**——回一份空的候選，讓畫面上
+        「沒有東西可以上板」是同一種顯示。
         """
-        room = await _room_or_404(obj_row["room_id"])
+        if room is None:
+            room = await _release_room_for(obj_row, me)
+        if room is None:
+            return {"workspace_key": "", "possible": False, "repos": [],
+                    "release_settings": {}}
         ws = room["workspace_key"] or ""
         facts = await _release_touched_repos(obj_row)
         dash_repos, settings = await _release_workspace_view(ws)
@@ -6685,10 +6747,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "release_requires_human",
                        "上板只有人類成員按得下去，"
                        "包含監督者在內的 agent 一律不行。")
-        room = await _ops_room_or_409(obj_row["room_id"])
-        if not (room["workspace_key"] or ""):
+        room = await _release_room_for(obj_row, me)
+        if room is None:
             raise _err(409, "workspace_not_bound",
-                       "這個週期所在的工作房還沒綁定工作區，上不了板。")
+                       "這塊板沒有掛在綁了工作區的工作房，上不了板。")
         if check_status and obj_row["status"] not in _RELEASE_READY:
             raise _err(409, "objective_not_verified",
                        "週期要先確認無誤才能上板，目前是"
@@ -6703,7 +6765,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "release_in_progress",
                        "這個週期已經有一筆還沒結束的上板。",
                        run_id=dup["id"])
-        cand = await _release_candidates(obj_row)
+        cand = await _release_candidates(obj_row, me, room=room)
         by_name = {r["name"]: r for r in cand["repos"]}
         plan = []
         for item in rel.repos:
@@ -6723,7 +6785,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                          "stable_branch": c["stable_branch"]})
         spec = {"objective_id": obj_row["id"],
                 "objective_title": obj_row["title"],
-                "room_id": obj_row["room_id"],
+                # 上板跑在**板現在掛著的那間工作房**，不是建卡那間
+                "room_id": room["id"],
                 "repos": plan,
                 "tag": rel.tag}
         return room, spec
@@ -6749,9 +6812,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         commit 過，在畫面上都是同一件事（沒有東西可以上板），而確認週期
         本身不該因為上板不成立而被擋下來。
         """
-        row, _me = await _objective_write(objective_id, x_participant_id,
-                                          x_session_key)
-        return await _release_candidates(row)
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
+        return await _release_candidates(row, me)
 
     @app.post("/api/board/objectives/{objective_id}/release",
               dependencies=[Depends(require_auth)])
@@ -6768,8 +6831,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         錯誤碼（**契約，client 可比對 code**）：
 
         - agent 憑證或 agent 成員（含 Supervisor）⇒ 403 `release_requires_human`
-        - 房不是工作房 ⇒ 409 `room_not_ops`
-        - 房沒綁工作區 ⇒ 409 `workspace_not_bound`
+        - 板沒掛在綁了工作區的工作房 ⇒ 409 `workspace_not_bound`
         - 週期還沒確認 ⇒ 409 `objective_not_verified`
         - 同一週期還有沒結束的上板 ⇒ 409 `release_in_progress`
         - repo 不在候選裡、或沒設穩定分支 ⇒ 409 `release_repo_not_eligible`
@@ -6829,12 +6891,18 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         不清的話，下一輪送審會留著上一輪的 `reviewed_by`，閘 4 就會拿一個
         過期的送審者去比對——那是一道看起來還在、實際上比錯對象的閘。
+
+        🔒 **打得回來的只有 `review` 與 `verified`。** `done` 與 `cancelled`
+        一樣是終局，永久唯讀（艾斯維爾 2026-09-21 裁決）：人類按下完成之後
+        那個週期就結案了，要繼續做就開新的週期。之前允許 `done → active`
+        等於讓「完成」隨時可以被收回，而所有依它收尾的東西（結算通知、
+        上板、板的結局）都已經送出去了。
         """
         row, me = await _objective_write(objective_id, x_participant_id,
                                          x_session_key)
         if not _is_human(me):
             raise _err(403, "human_only", "只有人類成員可以把週期打回")
-        if row["status"] not in ("review", "verified", "done"):
+        if row["status"] not in ("review", "verified"):
             raise _err(409, "invalid_transition",
                        f"「{row['status']}」的週期沒有東西可以打回",
                        from_status=row["status"])
@@ -14070,8 +14138,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " requested_by_name, requester_kind, requester_name, spec_json,"
                 " status, priority, position, created_at, updated_at)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
+                # `me["id"]` 在板軸那條路是 None（沒有 participant）。這一欄
+                # 是 NOT NULL DEFAULT ''，None 會變成 IntegrityError，而那個
+                # 例外在下面被一律當成「重複派工」——上板會回一個 run_id 空的
+                # 409 `run_ref_already_active`，指著一筆不存在的 run
                 (run_id, room_id, board_id, kind, project,
-                 ref, brief, me["id"], actor, quota_name,
+                 ref, brief, me["id"] or "", actor, quota_name,
                  requester_kind, me["display_name"],
                  json.dumps(spec, ensure_ascii=False) if spec else "",
                  priority, pos, now, now),
@@ -14086,9 +14158,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
                 f" AND status IN ({marks}) LIMIT 1",
                 (room_id, ref, *open_statuses))).fetchone()
+            if other is None:
+                # 重查不到同 ref 的 run ⇒ 撞的不是那條唯一索引，是別的完整
+                # 性錯誤（例如 NOT NULL 欄位塞了 None）。翻成「重複派工」
+                # 會指向一筆不存在的 run，把真正的原因吃掉——原樣往上丟
+                raise
             raise _err(409, "run_ref_already_active",
                        "這個目標已經有一筆還沒結束的派工。",
-                       run_id=other["id"] if other is not None else "")
+                       run_id=other["id"])
         await _record_run_event(run_id, room_id, "", "queued",
                                 actor, me["display_name"], "created",
                                 detail={"requester_kind": requester_kind,

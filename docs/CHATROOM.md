@@ -298,8 +298,8 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 ⚠️ **週期不是「進行中」就整片凍結。** 送審、確認無誤、完成、取消之後，它
 底下的階段與卡都**改不動也推不動**——改標題、打回階段、推卡的狀態、認領、
 指派、刪除一律 409 `objective_closed`（回應帶 `objective_id` 與
-`objective_status`）。要繼續動就請房裡的人類先把週期打回；**取消的週期打不
-回來**，它從此是唯讀的。
+`objective_status`）。送審與確認無誤的週期還解得開：請房裡的人類把它打回。
+**完成與取消的週期打不回來**，它們從此永久唯讀——要再動就開一個新的週期。
 
 ⚠️ **領著不放又不做，是這塊板上最糟的狀態**（它看起來有人在處理）。
 做不完就 `chatroom_board_claim(release=True)` 放掉，讓別人接手。

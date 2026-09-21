@@ -24,6 +24,9 @@ pytestmark = pytest.mark.asyncio
 ROOT = "root-token"
 HUMAN = "human-token"
 WS = "ai-website"
+# 第二個工作區：板改掛到別間工作房時，候選要跟著換成**那一間**的 key。
+# 兩間房綁同一個 key 的話，「拿錯房」與「拿對房」在斷言上長得一模一樣
+WS_B = "ai-app"
 
 
 def _clients(tmp_path, name, **cfg_kw):
@@ -116,6 +119,35 @@ DASH = {
                                     "merge_message": "release: {source}",
                                     "tag_message": "{objective}"}}},
 }
+
+
+DASH_BOTH = {
+    "repos": {
+        f"{WS}/hub": {"branch": "develop", "stable_branch": "main",
+                      "stable_branch_exists": True},
+        f"{WS_B}/hub": {"branch": "develop", "stable_branch": "release",
+                        "stable_branch_exists": True},
+    },
+    "workspaces": {
+        WS: {"release": {"merge_method": "squash"}},
+        WS_B: {"release": {"merge_method": "ff_only"}},
+    },
+}
+
+
+async def _archive_room(client, rid):
+    """直接改欄位：封存端點的契約（誰按得動、成員只能提請求）在別處
+    測，這裡要的只是「那間房已經封存」這個事實。"""
+    db = client.hub_app.state.db
+    await db.execute("UPDATE room SET status=? WHERE id=?",
+                     ("archived", rid))
+    await db.commit()
+
+
+async def _attach(client, bid, rid, key="human-a"):
+    r = await client.post(f"/api/boards/{bid}/rooms/{rid}",
+                          headers={"X-Session-Key": key})
+    assert r.status_code == 200, r.text
 
 
 async def _heartbeat(client, runner, dashboard=None):
@@ -296,6 +328,194 @@ async def test_candidates_count_checklist_level_runs_too(tmp_path):
                 f"/api/board/objectives/{oid}/release/candidates",
                 headers=hdr)).json()
             assert _cand(body, "hub")["last_branch"] == "feature/x"
+
+
+# ── 上板走哪一間房 ───────────────────────────────────────────────────
+
+async def _cycle_in_a_then_move_to_b(human, agent):
+    """週期建在房 A，板改掛到房 B，A 封存。回 `(oid, bid, rid_a, rid_b,
+    hdr)`。
+
+    這正是實測撞到的形狀（艾斯維爾 2026-09-21）：`board_objective.room_id`
+    記的是建卡那間房，而它已經不是這塊板現在所在的地方。
+    """
+    rid_a = await _ops_room(human, workspace=WS)
+    hdr = await _join_human(human, rid_a)
+    runner = await _register_runner(agent, projects=(WS, WS_B))
+    await _heartbeat(agent, runner, DASH_BOTH)
+    oid, cid, tids = await _tree(human, rid_a, hdr)
+    bid = await _board_id(human, oid)
+    await _ran(human, agent, rid_a, hdr, runner, ref=tids[0], board_id=bid,
+               repo="hub", branch="develop", before="k1", after="k2")
+    await _to_review(human, agent, rid_a, oid, cid, tids, hdr)
+    rid_b = await _ops_room(human, workspace=WS_B)
+    await _attach(human, bid, rid_b)
+    await _archive_room(human, rid_a)
+    return oid, bid, rid_a, rid_b, hdr
+
+
+async def test_candidates_follow_the_board_not_the_original_room(tmp_path):
+    """🚨 候選看**板現在掛在哪**，不看週期是在哪一間房建的。
+
+    原始房封存之後，拿 `objective.room_id` 去查房會 409 `room_archived`，
+    而 App 顯示的是「此聊天室已封存」——週期看起來壞了，實際上只是查錯
+    了房（艾斯維爾 2026-09-21 實測）。
+    """
+    app, human, agent = _clients(tmp_path, "roomfollow")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            oid, bid, rid_a, rid_b, hdr = await _cycle_in_a_then_move_to_b(
+                human, agent)
+            r = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=hdr)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # B 的工作區，不是 A 的
+            assert body["workspace_key"] == WS_B
+            assert [x["name"] for x in body["repos"]] == ["hub"]
+            assert _cand(body, "hub")["stable_branch"] == "release"
+            assert body["possible"] is True
+            assert body["release_settings"]["merge_method"] == "ff_only"
+
+
+async def test_the_release_run_lands_in_the_room_the_board_is_on(tmp_path):
+    """verify 帶 release 建出來的 run，`room_id` 是板現在掛著的那間房。
+
+    建在原始房的話，那筆 run 掛在一間封存的房底下：執行頁看不到它，
+    收尾的週期報告也發不進任何人在看的地方。
+    """
+    app, human, agent = _clients(tmp_path, "runroom")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            oid, bid, rid_a, rid_b, hdr = await _cycle_in_a_then_move_to_b(
+                human, agent)
+            r = await human.post(
+                f"/api/board/objectives/{oid}/verify",
+                json={"release": {
+                    "repos": [{"name": "hub",
+                               "source_branch": "develop"}]}},
+                headers=hdr)
+            assert r.status_code == 200, r.text
+            run = r.json()["release_run"]
+            assert run["room_id"] == rid_b
+            assert run["room_id"] != rid_a
+            assert run["project"] == WS_B
+            assert run["spec"]["room_id"] == rid_b
+            assert run["spec"]["repos"] == [{"name": "hub",
+                                             "source_branch": "develop",
+                                             "stable_branch": "release"}]
+
+
+async def test_the_board_axis_caller_has_no_room_context(tmp_path):
+    """只帶 `X-Session-Key`（板分頁那條路）也要落在房 B。
+
+    那條路沒有 participant，`_board_item_writer` 退回 session_key 身分，
+    而它補出來的 `room_id` 正是**週期的原始房**——拿它去查房就回到原本
+    那個缺陷。所以房的來源只能是板的掛接，不能是 `me["room_id"]`。
+    """
+    app, human, agent = _clients(tmp_path, "boardaxis")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            oid, bid, rid_a, rid_b, _hdr = await _cycle_in_a_then_move_to_b(
+                human, agent)
+            # 刻意不帶 X-Participant-Id，也不 join 房 B
+            only_key = {"X-Session-Key": "human-a"}
+            r = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=only_key)
+            assert r.status_code == 200, r.text
+            assert r.json()["workspace_key"] == WS_B
+
+            # 再掛一間也綁了工作區的工作房：沒有房內身分可以偏好時，
+            # 取的是**最早掛上去的**那一間（`attached_at, rowid`）。
+            # 這裡不能靠 `id` 當第二鍵——它是隨機 uuid
+            rid_c = await _ops_room(human, workspace="ai-docs")
+            await _attach(human, bid, rid_c)
+            r2 = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=only_key)
+            assert r2.json()["workspace_key"] == WS_B
+
+            v = await human.post(
+                f"/api/board/objectives/{oid}/verify",
+                json={"release": {
+                    "repos": [{"name": "hub",
+                               "source_branch": "develop"}]}},
+                headers=only_key)
+            assert v.status_code == 200, v.text
+            assert v.json()["release_run"]["room_id"] == rid_b
+
+
+async def test_two_bound_ops_rooms_prefer_the_callers_own(tmp_path):
+    """板同時掛兩間綁了工作區的工作房：呼叫者所在的那一間優先。
+
+    他按下去的那一間才是他以為會動的那一間——同一塊板、同一個週期，
+    兩個人按下去動到的會是不同的工作區。沒有房內身分時的退路
+    （最早掛上去的那一間）在 `test_the_board_axis_caller_has_no_room_context`。
+    """
+    app, human, agent = _clients(tmp_path, "tworooms")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid_a = await _ops_room(human, workspace=WS)
+            hdr_a = await _join_human(human, rid_a)
+            runner = await _register_runner(agent, projects=(WS, WS_B))
+            await _heartbeat(agent, runner, DASH_BOTH)
+            oid, cid, tids = await _tree(human, rid_a, hdr_a)
+            bid = await _board_id(human, oid)
+            rid_b = await _ops_room(human, workspace=WS_B)
+            await _attach(human, bid, rid_b)
+            hdr_b = await _join_human(human, rid_b)
+
+            # 從 B 房的身分打進來是 B
+            r2 = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=hdr_b)
+            assert r2.json()["workspace_key"] == WS_B
+            # 從 A 房的身分打進來仍然是 A
+            r3 = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=hdr_a)
+            assert r3.json()["workspace_key"] == WS
+
+
+async def test_a_board_on_no_bound_ops_room_is_quiet_then_loud(tmp_path):
+    """板沒掛在任何綁了工作區的工作房：候選靜靜地空，上板才 409。
+
+    候選**不報錯**是刻意的——確認週期本身不該因為上板不成立而被擋下來，
+    而畫面上「沒有東西可以上板」只有一種顯示。真的按下上板才要說清楚
+    為什麼：409 `workspace_not_bound`。
+    """
+    app, human, agent = _clients(tmp_path, "unbound")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            r = await human.post("/api/rooms",
+                                 json={"name": "沒綁的工作房",
+                                       "kind": "ops",
+                                       "session_key": "human-a"})
+            rid = r.json()["id"]
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, cid, tids = await _tree(human, rid, hdr)
+            # 沒綁工作區的房連 ticket 都派不出去（409 `workspace_not_bound`），
+            # 所以這裡本來就不會有動過的 repo——候選空是雙重的
+
+            c = await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=hdr)
+            assert c.status_code == 200, c.text
+            assert c.json() == {"workspace_key": "", "possible": False,
+                                "repos": [], "release_settings": {}}
+
+            # 這道閘排在狀態閘之前，所以週期還在 active 也驗得到
+            rel = await human.post(
+                f"/api/board/objectives/{oid}/release",
+                json={"repos": [{"name": "hub",
+                                 "source_branch": "develop"}]},
+                headers=hdr)
+            assert rel.status_code == 409, rel.text
+            assert rel.json()["detail"]["code"] == "workspace_not_bound"
 
 
 # ── report 帶 git ────────────────────────────────────────────────────

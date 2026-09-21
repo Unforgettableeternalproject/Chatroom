@@ -50,7 +50,10 @@ class _VerifyDialog extends StatefulWidget {
 class _VerifyDialogState extends State<_VerifyDialog> {
   ReleaseCandidates? _candidates;
   bool _loading = true;
-  String? _loadError;
+
+  /// 候選拿不到的那一筆。**存例外不存字串**：要講哪句話得看 `code`，而
+  /// 文字跟著語言走——在 `setState` 裡就把話定下來的話，切語言之後它不會變。
+  ApiException? _loadFailure;
   bool _busy = false;
   String? _error;
 
@@ -98,10 +101,21 @@ class _VerifyDialogState extends State<_VerifyDialog> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _loadError = e.message;
+        _loadFailure = e;
       });
     }
   }
+
+  /// 候選失敗那一行要說的話。
+  ///
+  /// **「房間已封存」不是這裡該講的事**：候選打的是板背後那間工作房，房沒
+  /// 封存、或根本沒綁工作區時 Hub 回的都是它自己那套話。原樣轉述的話，看的
+  /// 人會去找一個他根本沒封存過的房間。這兩種都收斂成同一句——對他而言
+  /// 下一步是一樣的：把板掛到綁了工作區的房上。
+  String _loadErrorText(AppLocalizations l10n, ApiException e) =>
+      (e is RoomArchivedException || e.code == 'workspace_not_bound')
+          ? l10n.boardReleaseNoWorkspaceRoom
+          : e.message;
 
   List<ReleaseRepoCandidate> get _repos => _candidates?.repos ?? const [];
 
@@ -182,9 +196,10 @@ class _VerifyDialogState extends State<_VerifyDialog> {
                 Text(l10n.commonLoading,
                     style: UepText.serif(size: 13, color: s.inkMute)),
               ],
-              if (_loadError != null) ...[
+              if (_loadFailure != null) ...[
                 const SizedBox(height: 12),
-                Text(l10n.boardReleaseCandidatesFailed(_loadError!),
+                Text(l10n.boardReleaseCandidatesFailed(
+                        _loadErrorText(l10n, _loadFailure!)),
                     style:
                         UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
               ],

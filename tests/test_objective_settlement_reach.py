@@ -156,13 +156,15 @@ async def test_the_trace_reaches_every_active_attached_room(tmp_path):
 
         assert (await client.post(f"/api/board/objectives/{oid}/review",
                                   headers=worker)).status_code == 200
-        for step in ("verify", "complete"):
-            r = await client.post(f"/api/board/objectives/{oid}/{step}",
-                                  headers=human_a)
-            assert r.status_code == 200, f"{step}: {r.text}"
+        # 停在 verified：下面要從這裡打回，而 `done` 是終局、打不回來
+        # （艾斯維爾 2026-09-21 裁決）
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=human_a)
+        assert r.status_code == 200, r.text
 
-        assert "board_objective_done" in await _events(client, rb, human_b), (
-            "另一間掛接房完全看不到這個週期收尾了——留痕只發在週期出生的那一間"
+        assert ("board_objective_verified"
+                in await _events(client, rb, human_b)), (
+            "另一間掛接房完全看不到這個週期的轉折——留痕只發在週期出生的那一間"
         )
 
         # 封存的房不發：B 房封存後再打回，B 房不該多出新的週期留痕
