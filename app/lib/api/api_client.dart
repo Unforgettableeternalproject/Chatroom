@@ -88,6 +88,11 @@ ApiException translateError(DioException e) {
       if (code == 'release_requires_human') {
         return ReleaseRequiresHumanException(_detailMessage(res.data));
       }
+      // 上板只能從掛著這塊板、綁了工作區的工作房觸發。被擋的是「按的地方
+      // 不對」，re-join 換不掉你人在哪一間房
+      if (code == 'release_requires_ops_room') {
+        return ReleaseRequiresOpsRoomException(_detailMessage(res.data));
+      }
       // Supervisor 代派的 kind 白名單。與上面那組同一個道理：被擋的是
       // 「這不是人類」，而 re-join 換不掉憑證的身分
       if (code == 'kind_not_allowed_for_supervisor') {

@@ -413,6 +413,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "要不要一併上板。",
                 status=status, detail=detail,
             )
+        if code == "release_requires_ops_room":
+            # **不是身分失效**：上板只認「掛著這塊板、綁了工作區的 ops 房」
+            # 的房內成員，從板分頁（只有 session_key）按下去也不算。要它
+            # 重新 join 沒有用——它要的是換一條路，或請人類到那間房裡按
+            return HubError(
+                _detail_text(detail)
+                or "上板只能由掛著這塊板的工作房人類成員觸發，"
+                   "從板分頁（沒有房內身分）按不到。"
+                   "請在那間工作房裡由人類按下上板。",
+                status=status, detail=detail,
+            )
         if code == "not_your_run":
             return HubError(
                 _detail_text(detail)

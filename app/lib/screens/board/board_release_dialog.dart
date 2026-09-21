@@ -122,6 +122,18 @@ class _VerifyDialogState extends State<_VerifyDialog> {
   /// 上板區塊該不該出現：Hub 說可以，而且真的有候選。
   bool get _releasable => (_candidates?.possible ?? false) && _repos.isNotEmpty;
 
+  /// `possible` 為 false 時，要不要多講一句「換個地方按」。
+  ///
+  /// 只有 `board_axis`（從板分頁進來）與 `not_ops_room_member`（人不在那間
+  /// 工作房）值得講：這兩種**換個地方按就成立**。其餘（例如
+  /// `workspace_not_bound`）維持完全不畫上板區——講了也沒有當場做得到的
+  /// 下一步。
+  bool get _showOpsRoomHint {
+    final c = _candidates;
+    if (c == null || c.possible) return false;
+    return c.reason == 'board_axis' || c.reason == 'not_ops_room_member';
+  }
+
   ReleaseRequest? _request() {
     if (!_release || !_releasable) return null;
     final picked = <ReleaseRepoSelection>[];
@@ -169,6 +181,7 @@ class _VerifyDialogState extends State<_VerifyDialog> {
       'objective_not_verified' => l10n.boardReleaseNotVerified,
       'release_in_progress' => l10n.boardReleaseInProgress,
       'release_repo_not_eligible' => l10n.boardReleaseRepoNotEligible,
+      'release_requires_ops_room' => l10n.boardReleaseOpsRoomOnly,
       _ => e.message,
     };
   }
@@ -200,6 +213,12 @@ class _VerifyDialogState extends State<_VerifyDialog> {
                 const SizedBox(height: 12),
                 Text(l10n.boardReleaseCandidatesFailed(
                         _loadErrorText(l10n, _loadFailure!)),
+                    style:
+                        UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
+              ],
+              if (_showOpsRoomHint) ...[
+                const SizedBox(height: 12),
+                Text(l10n.boardReleaseOpsRoomOnly,
                     style:
                         UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
               ],

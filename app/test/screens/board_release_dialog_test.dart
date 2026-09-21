@@ -129,6 +129,34 @@ void main() {
     expect(api.sent, isNull);
   });
 
+  testWidgets('possible 為 false＋reason=board_axis：講一句要從工作房按', (tester) async {
+    final api = _FakeBoardApi(ReleaseCandidates.fromJson(const {
+      'workspace_key': 'chatroom',
+      'possible': false,
+      'reason': 'board_axis',
+      'repos': [],
+    }));
+    await open(tester, api);
+
+    expect(find.text('上板要從掛著這塊板的工作房進行'), findsOneWidget);
+    // 提示歸提示，上板區還是不畫
+    expect(find.byType(Switch), findsNothing);
+  });
+
+  testWidgets('🔴 reason=workspace_not_bound：不講那句（換個地方按也沒用）',
+      (tester) async {
+    final api = _FakeBoardApi(ReleaseCandidates.fromJson(const {
+      'workspace_key': 'chatroom',
+      'possible': false,
+      'reason': 'workspace_not_bound',
+      'repos': [],
+    }));
+    await open(tester, api);
+
+    expect(find.text('上板要從掛著這塊板的工作房進行'), findsNothing);
+    expect(find.byType(Switch), findsNothing);
+  });
+
   testWidgets('possible 為 true：開關預設關著，不開就不帶 release', (tester) async {
     final api = _FakeBoardApi(twoRepos);
     await open(tester, api);

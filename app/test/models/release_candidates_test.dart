@@ -82,6 +82,25 @@ void main() {
     expect(c.settings.mergeMethod, 'merge');
   });
 
+  test('possible 為 false 時帶回 reason', () {
+    expect(
+        ReleaseCandidates.fromJson(const {
+          'possible': false,
+          'reason': 'board_axis',
+        }).reason,
+        'board_axis');
+    expect(
+        ReleaseCandidates.fromJson(const {
+          'possible': false,
+          'reason': 'not_ops_room_member',
+        }).reason,
+        'not_ops_room_member');
+  });
+
+  test('🔴 舊 Hub 沒回 reason：空字串，不是 null', () {
+    expect(ReleaseCandidates.fromJson(const {'possible': false}).reason, '');
+  });
+
   test('送出去的 body：repos 用 name／source_branch，tag 一律帶（空＝不打）', () {
     final body = const ReleaseRequest(repos: [
       ReleaseRepoSelection(name: 'Chatroom', sourceBranch: 'develop'),

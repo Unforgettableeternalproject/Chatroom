@@ -162,6 +162,19 @@ class ReleaseRequiresHumanException extends ApiException {
   String get defaultMessage => L10n.current.errorReleaseRequiresHuman;
 }
 
+/// 403 + release_requires_ops_room — 上板只能從掛著這塊板、綁了工作區的
+/// 工作房觸發（艾斯維爾裁決）。從板分頁按不算。
+///
+/// 🔴 同樣不可以走 [ParticipantInvalidException]：被擋的是**呼叫的地方不對**
+/// ，與房內身分無關——自動 re-join 換不掉你人在哪一間房。
+class ReleaseRequiresOpsRoomException extends ApiException {
+  const ReleaseRequiresOpsRoomException([String? message])
+      : super('release_requires_ops_room', message);
+
+  @override
+  String get defaultMessage => L10n.current.boardReleaseOpsRoomOnly;
+}
+
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
 /// `not_board_supervisor`）。
 ///

@@ -7552,5 +7552,9 @@
   "boardReleaseNoWorkspaceRoom": "這塊板沒有掛在綁了工作區的工作房",
   "@boardReleaseNoWorkspaceRoom": {
     "description": "上板候選取不到：房已封存或未綁工作區，不要轉述 Hub 的封存訊息"
+  },
+  "boardReleaseOpsRoomOnly": "上板要從掛著這塊板的工作房進行",
+  "@boardReleaseOpsRoomOnly": {
+    "description": "possible=false 且 reason 為 board_axis／not_ops_room_member，以及 403 release_requires_ops_room"
   }
 }

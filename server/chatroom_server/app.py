@@ -6673,51 +6673,54 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {}, {}
 
     async def _release_room_for(obj_row, me=None):
-        """上板要用的工作房：**看板現在掛在哪，不看週期是在哪建的**。
+        """上板要用的工作房：**只有呼叫者自己所在的那一間**。
 
-        `board_objective.room_id` 是建卡當下那一間房。板之後可以掛到別的
-        房、原始房可以封存——拿它去查房，上板就會在一間早就沒人用的房上
-        409 `room_archived`，而 App 顯示的是「此聊天室已封存」，看起來像
-        週期壞了（艾斯維爾 2026-09-21 實測）。
+        回 `(room, reason)`。`room` 是 None 時 `reason` 說明為什麼，
+        由呼叫端決定那是「沒有候選」還是 403。
 
-        判準：這塊板**目前掛著**（`detached_at IS NULL`）、房還活著、
-        `kind='ops'`、而且綁了工作區。`me` 所在的那間房符合就優先用它
-        ——同一塊板掛在兩間工作房時，人按下去的那一間才是他以為會動的
-        那一間；其餘取**最早掛上去的那一間**（`attached_at, rowid`）。
-        `id` 是隨機 uuid，拿它當第二鍵雖然穩定，卻會在同一秒掛上的兩間房
-        之間挑出一間沒有道理的——rowid 才對得上「誰先掛」。
+        艾斯維爾 2026-09-22 的裁定：**上板只能從工作房觸發**。呼叫者要是
+        「掛著這塊板、綁了工作區的 ops 房」的人類房內成員，上板才動得了
+        那間房的工作區。原本的退路（沒有房內身分時取最早掛上的那一間）
+        會讓從板分頁按下去的人上到一個他沒有在看的工作區——板可以同時掛
+        很多房，而板分頁上看不出這一次會動到誰。
 
-        ⚠️ **`me["room_id"]` 只在他真的有房內身分時才算數。** 從板分頁
-        進來的呼叫端沒有 participant（`_board_item_writer` 退回 session_key
-        身分），那時 `me["room_id"]` 是**週期的原始房**——正是這支要避開的
-        那一間。優先權只是偏好，篩選仍然由上面那組條件說了算，所以就算
-        傳進一間封存房也只會被忽略。
+        判準（全部要成立，否則 None）：
 
-        一間都沒有就回 `None`，由呼叫端決定那是「沒有候選」還是 409。
+        - `me["id"]` 非空。板分頁那條路沒有 participant
+          （`_board_item_writer` 退回 session_key 身分），那時 `me["room_id"]`
+          是**週期的原始房**，不是他以為的任何一間 ⇒ `board_axis`
+        - `me["room_id"]` 那間房掛著這塊板（`detached_at IS NULL`）、
+          `status='active'`、`kind='ops'` ⇒ 否則 `not_ops_room_member`
+        - 那間房綁了工作區 ⇒ 否則 `workspace_not_bound`
+
+        `board_objective.room_id` 一律不參與：它是建卡當下那一間房，可能
+        早就封存了（艾斯維爾 2026-09-21 實測撞到的 409 `room_archived`）。
         """
-        bid = ""
-        if "board_id" in obj_row.keys():
-            bid = (obj_row["board_id"] or "").strip()
-        if not bid:
-            # 換軸前的存量週期沒有 board_id，查不出它掛在哪
-            return None
-        rows = await (await app.state.db.execute(
-            "SELECT r.* FROM room r JOIN board_room br ON br.room_id = r.id"
-            " WHERE br.board_id=? AND br.detached_at IS NULL"
-            "   AND r.status='active' AND COALESCE(r.kind,'chat')='ops'"
-            "   AND COALESCE(r.workspace_key,'') <> ''"
-            " ORDER BY br.attached_at, br.rowid", (bid,))).fetchall()
-        if not rows:
-            return None
         mine = ""
         if me is not None:
             cols = set(me.keys())
             if {"id", "room_id"} <= cols and me["id"]:
                 mine = me["room_id"] or ""
-        for row in rows:
-            if row["id"] == mine:
-                return row
-        return rows[0]
+        if not mine:
+            return None, "board_axis"
+        bid = ""
+        if "board_id" in obj_row.keys():
+            bid = (obj_row["board_id"] or "").strip()
+        if not bid:
+            # 換軸前的存量週期沒有 board_id，查不出它掛在哪
+            return None, "not_ops_room_member"
+        row = await (await app.state.db.execute(
+            "SELECT r.* FROM room r JOIN board_room br ON br.room_id = r.id"
+            " WHERE br.board_id=? AND br.room_id=? AND br.detached_at IS NULL"
+            "   AND r.status='active' AND COALESCE(r.kind,'chat')='ops'"
+            " LIMIT 1", (bid, mine))).fetchone()
+        if row is None:
+            return None, "not_ops_room_member"
+        if not (row["workspace_key"] or "").strip():
+            # 房本身沒問題，缺的是綁定——那要人類房主去執行頁綁一次，
+            # 與「你不在這塊板的工作房裡」是兩件要做的事
+            return None, "workspace_not_bound"
+        return row, ""
 
     async def _release_candidates(obj_row, me=None, room=None) -> dict:
         """候選清單的完整形狀。GET 端點與 POST 的閘共用這一份。
@@ -6727,13 +6730,19 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         `room` 由 `_release_plan` 傳進來（它自己要同一間房去建 run）；
         沒傳就現查。查不到工作房**不報錯**——回一份空的候選，讓畫面上
-        「沒有東西可以上板」是同一種顯示。
+        「沒有東西可以上板」是同一種顯示；確認週期本身不該因為上板不成立
+        而被擋下來。
+
+        `reason` 永遠在（成立時是空字串），值域見 `_release_room_for`：
+        `board_axis`／`not_ops_room_member`／`workspace_not_bound`。App 拿它
+        決定要不要在對話框上說一句為什麼上不了板。
         """
+        reason = ""
         if room is None:
-            room = await _release_room_for(obj_row, me)
+            room, reason = await _release_room_for(obj_row, me)
         if room is None:
             return {"workspace_key": "", "possible": False, "repos": [],
-                    "release_settings": {}}
+                    "release_settings": {}, "reason": reason}
         ws = room["workspace_key"] or ""
         facts = await _release_touched_repos(obj_row)
         dash_repos, settings = await _release_workspace_view(ws)
@@ -6755,7 +6764,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"workspace_key": ws,
                 "possible": any(r["stable_branch"] for r in repos),
                 "repos": repos,
-                "release_settings": settings}
+                "release_settings": settings,
+                "reason": ""}
 
     async def _release_plan(obj_row, me, request, host, rel,
                             *, check_status: bool):
@@ -6771,10 +6781,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "release_requires_human",
                        "上板只有人類成員按得下去，"
                        "包含監督者在內的 agent 一律不行。")
-        room = await _release_room_for(obj_row, me)
+        room, reason = await _release_room_for(obj_row, me)
         if room is None:
-            raise _err(409, "workspace_not_bound",
-                       "這塊板沒有掛在綁了工作區的工作房，上不了板。")
+            # 人類判定在前：agent 先看到 `release_requires_human`，不會被
+            # 這一條引去找一間他就算進去也按不下去的房
+            raise _err(403, "release_requires_ops_room",
+                       "上板只能由掛著這塊板的工作房人類成員觸發。",
+                       reason=reason)
         if check_status and obj_row["status"] not in _RELEASE_READY:
             raise _err(409, "objective_not_verified",
                        "週期要先確認無誤才能上板，目前是"
@@ -6855,7 +6868,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         錯誤碼（**契約，client 可比對 code**）：
 
         - agent 憑證或 agent 成員（含 Supervisor）⇒ 403 `release_requires_human`
-        - 板沒掛在綁了工作區的工作房 ⇒ 409 `workspace_not_bound`
+        - 呼叫者不是「掛著這塊板、綁了工作區的 ops 房」的房內成員（含板分頁
+          那條沒有 participant 的路）⇒ 403 `release_requires_ops_room`
+          （`detail.reason` 說明是哪一種）
         - 週期還沒確認 ⇒ 409 `objective_not_verified`
         - 同一週期還有沒結束的上板 ⇒ 409 `release_in_progress`
         - repo 不在候選裡、或沒設穩定分支 ⇒ 409 `release_repo_not_eligible`

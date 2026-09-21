@@ -94,15 +94,27 @@ class ReleaseCandidates {
   const ReleaseCandidates({
     this.workspaceKey = '',
     this.possible = false,
+    this.reason = '',
     this.repos = const [],
     this.settings = const ReleaseSettings(),
   });
 
   final String workspaceKey;
 
-  /// 至少一個 repo 設了穩定分支。**false 就不顯示上板區塊**——把一個一定
-  /// 會被 Hub 擋下來的開關畫出來，只是讓人多按一次。
+  /// 至少一個 repo 設了穩定分支，而且這次的呼叫路徑允許上板。**false 就不
+  /// 顯示上板區塊**——把一個一定會被 Hub 擋下來的開關畫出來，只是讓人多按
+  /// 一次。
   final bool possible;
+
+  /// [possible] 為 false 的原因，只在那時有意義；舊 Hub 不回就是空字串。
+  ///
+  /// - `board_axis`：從板分頁進來的，不是從工作房
+  /// - `not_ops_room_member`：呼叫者所在的房不是掛著此板、綁了工作區的 ops 房
+  /// - `workspace_not_bound`：那間房沒綁工作區
+  ///
+  /// 前兩種是**換個地方按就成立**，值得在對話框講一句；`workspace_not_bound`
+  /// 講了也沒有下一步可做（要去綁工作區），維持原本的完全不畫。
+  final String reason;
 
   final List<ReleaseRepoCandidate> repos;
 
@@ -113,6 +125,7 @@ class ReleaseCandidates {
     return ReleaseCandidates(
       workspaceKey: json['workspace_key']?.toString() ?? '',
       possible: json['possible'] == true,
+      reason: json['reason']?.toString() ?? '',
       repos: [
         if (raw is List)
           for (final e in raw)

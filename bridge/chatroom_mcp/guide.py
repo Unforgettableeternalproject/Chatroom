@@ -356,6 +356,16 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   也不行**——上板動的是正式分支，而遠端沒有人看著。`chatroom_run_request`
   帶 `kind=release` 同樣是 403 `kind_not_allowed_for_supervisor`（與 `push`
   同一級）。
+- **而且只能從工作房按。**（Hub 2026-09-22）呼叫者要是「掛著這塊板、綁了
+  工作區的 ops 房」的房內成員，上板才動得了**那一間房**的工作區。從板分頁
+  進來（只有 session_key、沒有房內身分）按不到——板可以同時掛好幾間工作房，
+  板分頁上看不出這一次會動到哪一個工作區。不符合就是 403
+  `release_requires_ops_room`，`detail.reason` 說明是哪一種：`board_axis`
+  （沒有房內身分）、`not_ops_room_member`（你那間房沒掛這塊板、不是 ops、
+  或已封存）、`workspace_not_bound`（房沒綁工作區，要人類房主在 App 的執行
+  頁綁一次）。候選那一支（`release/candidates`）**不報錯**：回
+  `possible=false`、`workspace_key=""`、`repos=[]`，同一個 `reason` 也在
+  裡面——確認週期本身不該因為上板不成立而被擋下來。
 - **候選只有這個週期真的動過的 repo。** 判準是：那筆 run 屬於這塊板、
   它的 `ref` 落在這個週期底下的階段或任務、而且它回報的
   `head_before != head_after`。沒回報過 git 的 run 是「說不出來」，不算動
