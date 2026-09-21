@@ -2,6 +2,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/widgets/rename_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 改名對話框（c271c7ff）：房間與板共用同一份規則。
 ///
@@ -16,6 +17,8 @@ Future<List<String?>> _open(WidgetTester tester,
     {String current = '舊名字'}) async {
   final got = <String?>[];
   await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
     theme: buildUepTheme(Brightness.dark),
     home: Scaffold(
       body: Builder(

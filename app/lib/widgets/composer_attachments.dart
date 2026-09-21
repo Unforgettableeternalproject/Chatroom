@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 
 enum ComposerAttachmentStatus { uploading, ready, failed }
 
@@ -163,15 +164,17 @@ class _AttachmentChip extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: UepText.sans(
-                    size: 12, weight: FontWeight.w600, color: s.inkTitle),
+                    size: 13, weight: FontWeight.w600, color: s.inkTitle),
               ),
               const SizedBox(height: 2),
               Text(
-                failed ? (a.error ?? '上傳失敗') : a.readableSize,
+                failed
+                    ? (a.error ?? AppLocalizations.of(context).chatUploadFailed)
+                    : a.readableSize,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: UepText.mono(
-                    size: 8.5,
+                    size: 10,
                     color: failed ? UepColors.error : s.inkMute,
                     letterSpacing: 1.0),
               ),
@@ -193,7 +196,7 @@ class _AttachmentChip extends StatelessWidget {
         ),
         if (failed)
           IconButton(
-            tooltip: '重試',
+            tooltip: AppLocalizations.of(context).commonRetry,
             visualDensity: VisualDensity.compact,
             constraints: const BoxConstraints(),
             padding: const EdgeInsets.all(4),
@@ -201,7 +204,9 @@ class _AttachmentChip extends StatelessWidget {
             icon: Icon(Icons.refresh, size: 14, color: s.inkMute),
           ),
         IconButton(
-          tooltip: uploading ? '取消上傳' : '移除',
+          tooltip: uploading
+              ? AppLocalizations.of(context).chatCancelUpload
+              : AppLocalizations.of(context).commonRemove,
           visualDensity: VisualDensity.compact,
           constraints: const BoxConstraints(),
           padding: const EdgeInsets.all(4),

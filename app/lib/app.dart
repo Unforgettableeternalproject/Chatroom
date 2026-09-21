@@ -4,20 +4,24 @@ import 'package:go_router/go_router.dart';
 
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
+import 'l10n/l10n.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
+import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
+import 'screens/help/help_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
 import 'state/notification_providers.dart';
+import 'state/ops_exceptions_providers.dart';
 
 /// 「正在看訊息流」的路由：`/rooms/<id>`，不含 pinned / assign 子頁
 /// （那些畫面看不到新訊息，該照常通知）。
@@ -47,6 +51,18 @@ GoRouter buildRouter(bool Function() isConfigured) {
       GoRoute(
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),
+      ),
+      // 手冊。各畫面上不放介紹，要解釋的東西集中在這裡；依入口分成三份，
+      // 按進來的人只看到自己那個畫面的說明
+      GoRoute(
+        path: '/help',
+        redirect: (context, state) => '/help/main',
+      ),
+      GoRoute(
+        path: '/help/:topic',
+        builder: (context, state) => HelpScreen(
+          topic: helpTopicFromSlug(state.pathParameters['topic']),
+        ),
       ),
       ShellRoute(
         builder: (context, state, child) => AppShell(
@@ -111,6 +127,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   GoRoute(
                     path: 'pinned',
                     builder: (context, state) => PinnedWallScreen(
+                        roomId: state.pathParameters['roomId']!),
+                  ),
+                  // 工作房的執行儀表板。與釘選牆／指派同一層——它是這間房
+                  // 底下的東西，跟著房間的成員與權限走
+                  GoRoute(
+                    path: 'ops',
+                    builder: (context, state) => OpsDashboardScreen(
                         roomId: state.pathParameters['roomId']!),
                   ),
                   GoRoute(
@@ -183,6 +206,9 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
       _router.go('/rooms/$roomId');
     };
     LocalNotifier.instance.init();
+    // 派工例外的通知：掉線與逾時要有人立刻知道，而那兩件事不會出現在
+    // 訊息流的通知管線裡（房內那句 system 訊息不發通知）
+    ref.read(opsExceptionNotifierProvider).start();
     _router.routerDelegate.addListener(_syncActiveRoom);
     _syncActiveRoom();
   }
@@ -220,10 +246,31 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
   Widget build(BuildContext context) {
     final themeMode =
         ref.watch(appConfigProvider.select((c) => c.themeMode));
+    final scale = fontScaleFactor(
+        ref.watch(appConfigProvider.select((c) => c.fontScale)));
+    final localePref = ref.watch(appConfigProvider.select((c) => c.locale));
     return MaterialApp.router(
       title: 'Chatroom',
       debugShowCheckedModeBanner: false,
       routerConfig: _router,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      // 跟隨系統＝傳 null，讓 Flutter 自己依系統語言在 supportedLocales
+      // 裡挑；寫死一個值的話使用者換系統語言後 App 不會跟著變
+      locale: switch (localePref) {
+        LocalePref.system => null,
+        LocalePref.zhTW => const Locale('zh', 'TW'),
+        LocalePref.en => const Locale('en'),
+      },
+      // 字級三檔：整體縮放放在這裡，不改各畫面的硬編碼字級。系統本身的
+      // 字級設定不再疊加進來（textScaler 被整個換掉），避免兩層放大相乘。
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: TextScaler.linear(scale)),
+        // 沒有 context 的程式碼（模型、通知、API 例外）從 L10n.current 拿字，
+        // 這裡讓它跟著 MaterialApp 的 locale 走
+        child: L10nSync(child: child ?? const SizedBox.shrink()),
+      ),
       theme: buildUepTheme(Brightness.light),
       darkTheme: buildUepTheme(Brightness.dark),
       themeMode: themeMode == ThemeModePref.dark

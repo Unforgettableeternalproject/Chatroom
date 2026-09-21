@@ -4,6 +4,7 @@ import 'package:chatroom_app/models/participant.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 輸入列底下那行「會 tag 到誰」要**把回覆帶的那個人算進去**。
 ///
@@ -29,6 +30,8 @@ void main() {
       );
 
   Widget wrap({Message? replyTarget, String? selfId = me}) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: MessageComposer(

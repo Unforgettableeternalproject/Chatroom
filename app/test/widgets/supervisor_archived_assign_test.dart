@@ -10,6 +10,7 @@ import 'package:chatroom_app/state/rooms_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 Bernie 2026-09-07 想法板（4cc16199）：**從已封存房間的入口進去，
 /// 指派 Supervisor 的按鈕還在**。
@@ -65,6 +66,8 @@ Future<void> _open(WidgetTester tester, String roomStatus) async {
           )),
     ],
     child: MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Builder(

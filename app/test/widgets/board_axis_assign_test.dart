@@ -7,6 +7,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 板軸沒有「請人接手」入口（原卡 444d5ceb，決策 2026-09-07 裁「房選擇器」路）。
 ///
@@ -62,6 +63,8 @@ Future<void> _pump(WidgetTester tester, BoardSnapshot snap) async {
       boardByIdProvider('b1').overrideWith((ref) async => snap),
     ],
     child: MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: BoardTaskDrawer(

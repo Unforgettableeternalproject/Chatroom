@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/board.dart';
 import 'kind_badge.dart';
 
@@ -51,15 +52,19 @@ class ActorName extends StatelessWidget {
       final room = a.roomName.isNotEmpty
           ? a.roomName
           : (a.roomId.isEmpty ? null : roomNameOf?.call(a.roomId));
-      return room == null ? '· ${a.name}' : '· ${a.name}（在「$room」）';
+      return room == null
+          ? '· ${a.name}'
+          : '· ${L10n.current.boardActorAliasInRoom(a.name, room)}';
     });
-    return '這個人在別的地方叫：\n${lines.join('\n')}';
+    return '${L10n.current.boardActorAliasTitle}\n${lines.join('\n')}';
   }
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final name = actor.displayName.isEmpty ? '（未命名）' : actor.displayName;
+    final name = actor.displayName.isEmpty
+        ? AppLocalizations.of(context).commonUnnamed
+        : actor.displayName;
 
     final label = Row(
       mainAxisSize: MainAxisSize.min,

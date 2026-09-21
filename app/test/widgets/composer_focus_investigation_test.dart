@@ -2,6 +2,7 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-07：艾斯維爾「**打字時 focus 會不見，注音會出現字還沒打出來
 /// 但不能動了，得在其他地方有過 text focus 才可以繼續打字**」，而且
@@ -15,6 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// 走一次），要嘛釘住一個確認過的行為。**沒有驗證過的推測不寫進來。**
 void main() {
   Widget wrap({required bool showLeading}) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Column(

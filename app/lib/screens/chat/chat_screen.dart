@@ -5,6 +5,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +16,7 @@ import '../../core/theme/uep_tokens.dart';
 import '../../core/util/image_bytes.dart';
 import '../../core/util/member_nesting.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../models/message.dart';
 import '../../api/attachments_api.dart';
@@ -30,6 +32,7 @@ import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/highlighted_members_provider.dart';
 import '../../state/rooms_providers.dart';
+import '../../state/runs_providers.dart';
 import '../../widgets/archive_request_banner.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
@@ -43,8 +46,10 @@ import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/question_card.dart';
+import '../../widgets/run_report_panel.dart';
 import '../../widgets/system_message_tile.dart';
 import '../../widgets/uep_button.dart';
+import '../../widgets/reveal.dart';
 import '../../state/composer_attachments.dart';
 import '../../state/composer_drafts.dart';
 import '../../state/composer_history.dart';
@@ -52,6 +57,10 @@ import '../../ws/realtime_service.dart';
 import '../board/board_action_feedback.dart';
 import '../board/board_create_dialog.dart';
 import '../board/board_screen.dart';
+
+/// 成員側欄的寬度。回報面板要貼著它的左緣，所以這個數字有第二個讀者，
+/// 不能再寫死在 `Container` 裡。
+const double _sidebarWidth = 288;
 
 /// 跳轉粗跳的落點估計。
 ///
@@ -283,9 +292,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final identityError = ref.read(identityProvider(widget.roomId)).error;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(identityError is HumanCredentialRequiredException
-            ? '你手上這張憑證是給 agent 用的（分家前的舊主 token 被降級後也算），'
-              '人用它進不了任何房間——請主持人重發一份給人的邀請碼'
-            : '你不是這個聊天室的成員，看不到房內的內容'),
+            ? AppLocalizations.of(context).chatAgentTokenNoRooms
+            : AppLocalizations.of(context).chatNotAMember),
       ));
     }());
   }
@@ -385,7 +393,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (feed.bySeq(seq) == null && !await _messageStillExists(seq)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('那則訊息已經不在這個聊天室裡了')),
+          SnackBar(content: Text(AppLocalizations.of(context).chatMessageGone)),
         );
       }
       return;
@@ -406,8 +414,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         SnackBar(
           content: Text(
             feed.hasMoreHistory
-                ? '那則訊息太舊了，已載入 ${feed.length} 則仍沒跳到——再往上捲一段後重試'
-                : '找不到那則訊息',
+                ? AppLocalizations.of(context).chatFocusTooOld(feed.length)
+                : AppLocalizations.of(context).chatFocusNotFound,
           ),
         ),
       );
@@ -493,8 +501,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(vanished
-              ? '那則訊息已經不在這個聊天室裡了'
-              : '跳轉沒對準那則訊息，再往上捲一段後重試'),
+              ? AppLocalizations.of(context).chatMessageGone
+              : AppLocalizations.of(context).chatFocusMisaligned),
         ),
       );
     }
@@ -528,12 +536,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _dropFiles(List<DropItem> items) async {
+    final l10n = AppLocalizations.of(context);
     for (final item in items) {
       final stat = await FileStat.stat(item.path);
       // 拖進來的可能是資料夾。整包上傳不是這個功能該做的事，靜默跳過又會
       // 讓人以為是壞了，所以講一句
       if (stat.type == FileSystemEntityType.directory) {
-        _toast('${item.name} 是資料夾，未加入');
+        _toast(l10n.chatDropIsFolder(item.name));
         continue;
       }
       await _enqueue(filename: item.name, size: stat.size, path: item.path);
@@ -597,8 +606,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 其實沒有**。
   void _warnEmptyGroups(PostResult sent) {
     if (sent.emptyGroups.isEmpty) return;
-    final names = sent.emptyGroups.map((g) => '@$g').join('、');
-    _toast('$names 現在房裡沒有對應的人，沒有人被叫醒');
+    final l10n = AppLocalizations.of(context);
+    final names =
+        sent.emptyGroups.map((g) => '@$g').join(l10n.commonListSeparator);
+    _toast(l10n.chatEmptyGroupsWarn(names));
   }
 
   void _toast(String message) {
@@ -745,7 +756,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final result = await showBoardCreateDialog(
       context,
       kind: 'task',
-      parentTitle: '未分類（來自 #${m.seq}）',
+      parentTitle: AppLocalizations.of(context).chatTaskUncategorizedFrom(m.seq),
       initialTitle: excerpt.length > 60 ? excerpt.substring(0, 60) : excerpt,
     );
     if (result == null || !mounted) return;
@@ -761,9 +772,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 卡建在另一個畫面上，這裡不說一聲就沒有任何跡象顯示它成功了
     if (id != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('已加到 Board 的「未分類」，卡片指得回這則訊息。'),
+        content: Text(AppLocalizations.of(context).chatTaskAddedToBoard),
         action: SnackBarAction(
-          label: '去看看',
+          label: AppLocalizations.of(context).chatGoSee,
           onPressed: () => context.go('/rooms/${widget.roomId}/board'),
         ),
       ));
@@ -789,12 +800,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _delete(Message m) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
-          '刪除這則訊息？',
-          style: UepText.display(size: 24, color: s.inkTitle),
+          l10n.chatDeleteMessageTitle,
+          style: UepText.pageTitle(color: s.inkTitle),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -809,28 +821,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '${m.senderName ?? '（未知）'} · ${clockTime(m.createdAt)}　'
+                  '${m.senderName ?? l10n.commonUnknownParen} · ${clockTime(m.createdAt)}　'
                   '${m.content.length > 60 ? '${m.content.substring(0, 60)}…' : m.content}',
-                  style: UepText.serif(size: 13, color: s.inkMute, height: 1.8),
+                  style: UepText.serif(size: 14, color: s.inkMute, height: 1.8),
                 ),
               ),
             ),
             const SizedBox(height: 14),
             Text(
-              '訊息會留下「訊息已刪除」的占位，不會從時間軸消失。此操作無法復原。',
-              style: UepText.serif(size: 13.5, color: s.inkSoft),
+              l10n.commonIrreversible,
+              style: UepText.serif(size: 14.5, color: s.inkSoft),
             ),
           ],
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: l10n.commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '刪除',
+            label: l10n.commonDelete,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
@@ -1034,7 +1046,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final subagentParentById = {
       for (final p in members)
         if (p.ephemeral && p.parentId != null)
-          p.id: nameById[p.parentId!] ?? '（未知）',
+          p.id: nameById[p.parentId!] ?? AppLocalizations.of(context).commonUnknownParen,
     };
 
     final wide = MediaQuery.sizeOf(context).width >= 1200;
@@ -1054,17 +1066,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             pinnedCount: pinnedMessages.length,
             memberCount: activeMembers.length,
             showMembersButton: !wide,
+            isOps: room?.isOps ?? false,
           ),
           if (pinnedMessages.isNotEmpty && !archived)
             _PinnedStrip(roomId: roomId, latest: pinnedMessages.last),
           // 封存請求。封存房裡不會有 pending（封存時一律標 superseded），
-          // 所以不必自己判斷 archived
-          if (detailAsync.value?.archiveRequest case final req?)
-            ArchiveRequestBanner(
-              roomId: roomId,
-              request: req,
-              youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-            ),
+          // 所以不必自己判斷 archived。
+          // 撐高／收合：它插在訊息區上方，出現與消失都會推動整串訊息
+          UepReveal(
+            grow: true,
+            child: switch (detailAsync.value?.archiveRequest) {
+              final req? => ArchiveRequestBanner(
+                  roomId: roomId,
+                  request: req,
+                  youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+                ),
+              _ => null,
+            },
+          ),
           Expanded(
             child: Stack(
               children: [
@@ -1085,10 +1104,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                   data: (messages) {
                     if (messages.isEmpty) {
-                      return const EmptyState(
-                        title: '還沒有任何訊息',
-                        subtitle: '發一則訊息，或指派 agent 加入這個房間',
-                      );
+                      return EmptyState(title: AppLocalizations.of(context).chatNoMessages);
                     }
                     // SelectionArea 取代各訊息自己的 SelectableText：右鍵留給訊息
                     // 選單，而選取可以跨訊息（要複製一整段對話時差很多）
@@ -1120,7 +1136,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   vertical: 16,
                                 ),
                                 child: Center(
-                                  child: MonoLabel('載入更早的訊息…', size: 9),
+                                  child: MonoLabel(AppLocalizations.of(context).chatLoadOlder,
+                                      size: 9),
                                 ),
                               );
                             }
@@ -1134,9 +1151,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             if (m.isSystem) {
                               return keyed(SystemMessageTile(message: m));
                             }
-                            final kind = m.senderId != null
-                                ? (kindById[m.senderId] ?? 'other')
-                                : 'other';
+                            // 訊息自帶的 kind 快照優先，名冊只是備援：
+                            // run 成員結束後不在名冊裡，反查會把它們的發言
+                            // 退成 other
+                            final kind = m.resolveSenderKind(kindById);
                             return keyed(Padding(
                               padding: const EdgeInsets.symmetric(vertical: 9),
                               child: MessageBubble(
@@ -1151,6 +1169,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 token: config.token,
                                 // 附件下載也在讀取邊界內（Hub 側 3605638）
                                 participantId: myId,
+                                // 附件的「加到階段」要知道是哪間房
+                                roomId: widget.roomId,
                                 subagentOf: m.senderId == null
                                     ? null
                                     : subagentParentById[m.senderId],
@@ -1196,12 +1216,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                '有 $_newWhileAway 則新訊息',
+                                AppLocalizations.of(context).chatNewMessages(_newWhileAway),
                                 style: UepText.mono(
-                                  size: 9.5,
+                                  size: 10.5,
                                   color: UepColors.gold,
-                                  letterSpacing: 1.2,
-                                ),
+                                  letterSpacing: 1.2),
                               ),
                               const SizedBox(width: 8),
                               const Text(
@@ -1285,34 +1304,59 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               archived: archived,
               limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+              isOps: room?.isOps ?? false,
             ),
           ),
         ),
         body: chatColumn,
       );
     }
+    final isOps = room?.isOps ?? false;
+    final columns = Row(
+      children: [
+        Expanded(child: chatColumn),
+        Container(
+          width: _sidebarWidth,
+          decoration: BoxDecoration(
+            color: s.bgSoft,
+            border: Border(left: BorderSide(color: s.line)),
+          ),
+          child: _MembersPanel(
+            roomId: roomId,
+            members: members,
+            myId: myId,
+            archived: archived,
+            limits: detailAsync.value?.limits ?? const ServerLimits(),
+            youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+            isOps: isOps,
+          ),
+        ),
+      ],
+    );
     return Scaffold(
       backgroundColor: s.bg,
-      body: Row(
-        children: [
-          Expanded(child: chatColumn),
-          Container(
-            width: 288,
-            decoration: BoxDecoration(
-              color: s.bgSoft,
-              border: Border(left: BorderSide(color: s.line)),
+      // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
+      // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
+      body: !isOps
+          ? columns
+          : CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.escape): () => ref
+                    .read(selectedRunIdProvider.notifier)
+                    .clear(roomId),
+              },
+              child: Stack(
+                children: [
+                  columns,
+                  Positioned.fill(
+                    child: RunReportOverlay(
+                      roomId: roomId,
+                      sidebarWidth: _sidebarWidth,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: _MembersPanel(
-              roomId: roomId,
-              members: members,
-              myId: myId,
-              archived: archived,
-              limits: detailAsync.value?.limits ?? const ServerLimits(),
-              youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1353,7 +1397,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         border: Border.all(color: UepColors.gold),
                       ),
                       child: MonoLabel(
-                        '放開以附加檔案',
+                        AppLocalizations.of(context).chatDropToAttach,
                         size: 10,
                         color: UepColors.gold,
                         letterSpacing: 2.0,
@@ -1421,6 +1465,7 @@ class RoomHeader extends ConsumerWidget {
     required this.pinnedCount,
     required this.memberCount,
     required this.showMembersButton,
+    this.isOps = false,
   });
 
   final String roomId;
@@ -1433,6 +1478,12 @@ class RoomHeader extends ConsumerWidget {
   final int pinnedCount;
   final int memberCount;
   final bool showMembersButton;
+
+  /// 這是工作房（`room.kind == 'ops'`）。執行儀表板的入口只在這種房出現
+  /// ——其他房沒有佇列，那扇門後面什麼都沒有。
+  ///
+  /// 舊 Hub 不回 `kind`，那時一律是 false：入口不見比一個會 409 的入口好。
+  final bool isOps;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1456,10 +1507,7 @@ class RoomHeader extends ConsumerWidget {
                       child: Text(
                         roomName,
                         overflow: TextOverflow.ellipsis,
-                        style: UepText.display(
-                          size: 26,
-                          color: archived ? s.inkSoft : s.inkTitle,
-                        ),
+                        style: UepText.pageTitle(color: archived ? s.inkSoft : s.inkTitle),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1474,7 +1522,7 @@ class RoomHeader extends ConsumerWidget {
                         ),
                       ),
                       child: MonoLabel(
-                        archived ? 'ARCHIVED' : zoneLabel,
+                        archived ? AppLocalizations.of(context).roomsArchivedBadge : zoneLabel,
                         size: 9,
                         color: archived ? s.inkMute : zoneColor,
                         letterSpacing: 1.4,
@@ -1485,14 +1533,13 @@ class RoomHeader extends ConsumerWidget {
                 if (topic.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
-                    '主題：$topic',
+                    AppLocalizations.of(context).chatTopicPrefix(topic),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: UepText.serif(
-                      size: 12.5,
+                      size: 13.5,
                       color: archived ? s.inkMute : s.inkSoft,
-                      height: 1.5,
-                    ),
+                      height: 1.5),
                   ),
                 ],
               ],
@@ -1517,13 +1564,23 @@ class RoomHeader extends ConsumerWidget {
           // 屬性），Board 是結構化的任務。移除釘選會讓「把一段話標成
           // 重要」無處可去——Board 上沒有一段話的位置
           _HeaderAction(
-            label: '❖ 釘選 $pinnedCount',
+            label: AppLocalizations.of(context).chatHeaderPinned(pinnedCount),
             onTap: () => context.go('/rooms/$roomId/pinned'),
           ),
           const SizedBox(width: 8),
+          // 執行儀表板。**檢視類**，所以封存房照樣看得到——面板上的寫入
+          // 動作（派工、推送、取消）由 Hub 各自擋，而「那台執行器現在
+          // 怎麼了」是封存之後仍然成立的問題
+          if (isOps) ...[
+            _HeaderAction(
+              label: AppLocalizations.of(context).chatHeaderOps,
+              onTap: () => context.go('/rooms/$roomId/ops'),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (archived) ...[
             _HeaderAction(
-              label: '解除封存',
+              label: AppLocalizations.of(context).roomsUnarchive,
               onTap: () async {
                 try {
                   await ref.read(roomsApiProvider).unarchive(
@@ -1552,7 +1609,7 @@ class RoomHeader extends ConsumerWidget {
             ),
           ] else ...[
             _HeaderAction(
-              label: '指派',
+              label: AppLocalizations.of(context).chatHeaderAssign,
               onTap: () => context.go('/rooms/$roomId/assign'),
             ),
             const SizedBox(width: 8),
@@ -1562,7 +1619,7 @@ class RoomHeader extends ConsumerWidget {
             const SizedBox(width: 8),
             Builder(
               builder: (context) => _HeaderAction(
-                label: '成員 $memberCount',
+                label: AppLocalizations.of(context).chatHeaderMembers(memberCount),
                 onTap: () => Scaffold.of(context).openEndDrawer(),
               ),
             ),
@@ -1613,14 +1670,13 @@ class _HeaderAction extends StatelessWidget {
         child: Text(
           label.toUpperCase(),
           style: UepText.mono(
-            size: 10,
+            size: 10.5,
             color: accent
                 ? UepColors.gold
                 : dead
                     ? s.inkMute
                     : s.inkSoft,
-            letterSpacing: 1.4,
-          ),
+            letterSpacing: 1.4),
         ),
       ),
     );
@@ -1635,10 +1691,10 @@ class _HeaderAction extends StatelessWidget {
 ///
 /// | 狀態 | 顯示 | 為什麼 |
 /// |---|---|---|
-/// | 平常 | `❖ BOARD` | 板上沒有需要你的東西 |
-/// | 有進度 | `❖ BOARD 8/14` | 數字是資訊不是警示，**不上色** |
-/// | 有孤兒 | `❖ BOARD 2 孤兒` | 有卡看起來有人在做、實際上沒有 |
-/// | 等你確認 | `❖ BOARD 1 等你確認`（金） | 需要你動手，而且**只有你能動** |
+/// | 平常 | `❖ 任務板` | 板上沒有需要你的東西 |
+/// | 有進度 | `❖ 任務板 8/14` | 數字是資訊不是警示，**不上色** |
+/// | 有孤兒 | `❖ 任務板 2 孤兒` | 有卡看起來有人在做、實際上沒有 |
+/// | 等你確認 | `❖ 任務板 1 等你確認`（金） | 需要你動手，而且**只有你能動** |
 ///
 /// ⚠️ board 讀不到時退成最平常那一種，**不擋聊天**——聊天室不該因為附屬
 /// 功能的一次請求失敗而顯示錯誤。
@@ -1689,8 +1745,8 @@ class _BoardAction extends ConsumerWidget {
         final n = outcome.importedMembers.length;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(n == 0
-              ? '掛好了。沒有新的協作者——房裡的人本來就都在這塊板上'
-              : '掛好了，把 $n 位成員加為協作者'),
+              ? AppLocalizations.of(context).boardAttachedNoNewMembers
+              : AppLocalizations.of(context).boardAttachedWithMembers(n)),
         ));
       }
       context.go('/rooms/$roomId/board');
@@ -1733,15 +1789,17 @@ class _BoardAction extends ConsumerWidget {
           // 列表那支端點會塞，在詳情裡永遠是 false
           ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
       return _HeaderAction(
-        label: admin ? '❖ 掛接任務板' : '❖ 尚無任務板',
+        label: admin
+            ? AppLocalizations.of(context).boardAttachAction
+            : AppLocalizations.of(context).boardNoBoard,
         // 原先那塊被刪掉的話，這裡順帶說一句——**空白要有原因**。
         // 進行中的房不畫墓碑（它有下一步），但那個下一步旁邊值得註明
         // 「你看到的空白是這麼來的」
         hint: admin
             ? (snap?.previousBoard == null
                 ? null
-                : '原先的任務板已被刪除，可以掛一塊新的')
-            : '只有房間管理者能掛接任務板',
+                : AppLocalizations.of(context).boardPreviousDeletedCanAttach)
+            : AppLocalizations.of(context).boardOnlyAdminCanAttach,
         onTap: admin ? () => _attach(context, ref) : null,
       );
     }
@@ -1752,17 +1810,17 @@ class _BoardAction extends ConsumerWidget {
     if (kind == BoardEntryKind.deleted) {
       final gone = snap!.previousBoard!;
       return _HeaderAction(
-        label: '❖ 任務板已刪除',
+        label: AppLocalizations.of(context).boardDeletedLabel,
         hint: gone.name.isEmpty
-            ? '這間房原先的任務板已被刪除'
-            : '這間房原先的任務板「${gone.name}」已被刪除',
+            ? AppLocalizations.of(context).boardPreviousDeleted
+            : AppLocalizations.of(context).boardPreviousDeletedNamed(gone.name),
         onTap: null,
       );
     }
     if (kind == BoardEntryKind.none) {
-      return const _HeaderAction(
-        label: '❖ 尚無任務板',
-        hint: '這間房已封存，沒有任務板',
+      return _HeaderAction(
+        label: AppLocalizations.of(context).boardNoBoard,
+        hint: AppLocalizations.of(context).boardArchivedNoBoard,
         onTap: null,
       );
     }
@@ -1770,7 +1828,9 @@ class _BoardAction extends ConsumerWidget {
     final hint = (archived ? snap?.archivedEntryHint : snap?.entryHint) ??
         const BoardEntryHint();
     return _HeaderAction(
-      label: hint.label.isEmpty ? '❖ Board' : '❖ Board ${hint.label}',
+      label: hint.label.isEmpty
+          ? AppLocalizations.of(context).boardEntryLabel
+          : AppLocalizations.of(context).boardEntryLabelWith(hint.label),
       accent: hint.needsYou,
       onTap: () => context.go('/rooms/$roomId/board'),
     );
@@ -1890,9 +1950,9 @@ class _OverflowMenu extends ConsumerWidget {
             // 「X 將房間改名為 Y」的系統訊息，而什麼都沒變
             final name = await showRenameDialog(
               context,
-              title: '房間改名',
+              title: AppLocalizations.of(context).roomsRenameTitle,
               current: detail?.room.name ?? '',
-              hint: '例：Chatroom 開發 09/07',
+              hint: AppLocalizations.of(context).roomsRenameHint,
             );
             if (name == null || !context.mounted) return;
             try {
@@ -1987,9 +2047,8 @@ class _OverflowMenu extends ConsumerWidget {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                      '已刪除「$name」'
-                      '（訊息 ${counts['message'] ?? 0} 則、'
-                      '附件 ${counts['attachment'] ?? 0} 個）',
+                      AppLocalizations.of(context).roomsDeletedSummary(name,
+                          counts['message'] ?? 0, counts['attachment'] ?? 0),
                     ),
                   ),
                 );
@@ -2015,10 +2074,8 @@ class _OverflowMenu extends ConsumerWidget {
               if (!result.archived && context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text(result.alreadyPending
-                      ? '已經有人提議封存了，還在等建立者確認'
-                      : '已送出封存請求，等建立者確認。封存後只能看不能寫，'
-                          '且封存滿一段時間後 Hub 會把整個房間永久刪除'
-                          '（天數由 Hub 設定）'),
+                      ? AppLocalizations.of(context).roomsArchiveAlreadyPending
+                      : AppLocalizations.of(context).roomsArchiveRequestSent),
                 ));
               }
             } on ApiException catch (e) {
@@ -2055,22 +2112,23 @@ class _OverflowMenu extends ConsumerWidget {
           PopupMenuItem(
             value: 'switch_board',
             height: 36,
-            child: Text('更換任務板…',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+            child: Text(AppLocalizations.of(context).boardSwitchMenu,
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'rename',
             height: 36,
-            child: Text('重新命名…', style: UepText.sans(size: 12.5, color: s.ink)),
+            child: Text(AppLocalizations.of(context).roomsRenameMenu,
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
         if (youAreAdmin)
           PopupMenuItem(
             value: 'style',
             height: 36,
             child: Text(
-              '說話方式（${roomStyleLabel(style)}）',
-              style: UepText.sans(size: 12.5, color: s.ink),
+              AppLocalizations.of(context).roomsStyleMenu(roomStyleLabel(style)),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
         if (youAreAdmin)
@@ -2078,22 +2136,22 @@ class _OverflowMenu extends ConsumerWidget {
             value: 'visibility',
             height: 36,
             child: Text(
-              isPrivate ? '解除鎖定（改為公開）' : '鎖定為私人對話',
-              style: UepText.sans(size: 12.5, color: s.ink),
+              isPrivate ? AppLocalizations.of(context).roomsUnlockPublic : AppLocalizations.of(context).roomsLockPrivate,
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
         PopupMenuItem(
           value: 'archive',
           height: 36,
-          child: Text('封存房間（唯讀，之後會被永久刪除）',
-              style: UepText.sans(size: 12.5, color: s.ink)),
+          child: Text(AppLocalizations.of(context).roomsArchiveMenu,
+              style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         PopupMenuItem(
           value: 'leave',
           height: 36,
           child: Text(
-            '離開房間',
-            style: UepText.sans(size: 12.5, color: UepColors.errorText),
+            AppLocalizations.of(context).roomsLeaveMenu,
+            style: UepText.sans(size: 13.5, color: UepColors.errorText),
           ),
         ),
         // 刪除排在最後、與其他項目隔開：它是這個選單裡唯一不可復原的動作
@@ -2102,15 +2160,19 @@ class _OverflowMenu extends ConsumerWidget {
             value: 'delete',
             height: 36,
             child: Text(
-              '永久刪除房間…',
-              style: UepText.sans(size: 12.5, color: UepColors.errorText),
+              AppLocalizations.of(context).roomsDeleteMenu,
+              style: UepText.sans(size: 13.5, color: UepColors.errorText),
             ),
           ),
       ],
+      // 與 `_HeaderAction` 同一套邊距與字級，整排按鈕才會同高
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(border: Border.all(color: s.line)),
-        child: Text('⋯', style: TextStyle(fontSize: 11, color: s.inkSoft)),
+        child: Text(
+          '⋯',
+          style: UepText.mono(size: 10.5, color: s.inkSoft, letterSpacing: 1.4),
+        ),
       ),
     );
   }
@@ -2140,28 +2202,28 @@ class _PinnedStrip extends StatelessWidget {
         child: Row(
           children: [
             const Text(
-              '❖',
+              '◈',
               style: TextStyle(fontSize: 11, color: UepColors.gold),
             ),
             const SizedBox(width: 10),
             Text(
-              'PINNED',
+              AppLocalizations.of(context).chatPinnedStripLabel,
               style: UepText.mono(
-                size: 9,
+                size: 10,
                 color: UepColors.gold,
-                letterSpacing: 1.6,
-              ),
+                letterSpacing: 1.6),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                '${latest.senderName ?? ''}：${latest.content}',
+                AppLocalizations.of(context)
+                    .chatPinnedPreview(latest.senderName ?? '', latest.content),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: UepText.serif(size: 12.5, color: s.inkSoft, height: 1.4),
+                style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.4),
               ),
             ),
-            MonoLabel('查看全部 →', size: 9, letterSpacing: 1.2),
+            MonoLabel(AppLocalizations.of(context).chatPinnedViewAll, size: 9, letterSpacing: 1.2),
           ],
         ),
       ),
@@ -2179,6 +2241,7 @@ class _MembersPanel extends ConsumerStatefulWidget {
     required this.archived,
     required this.youAreAdmin,
     this.limits = const ServerLimits(),
+    this.isOps = false,
   });
 
   final String roomId;
@@ -2189,6 +2252,10 @@ class _MembersPanel extends ConsumerStatefulWidget {
 
   /// 伺服器實際生效的門檻（閒置移出倒數要用它，不能寫死）。
   final ServerLimits limits;
+
+  /// 這是工作房（`room.kind == 'ops'`）。回報區只在這種房出現——其他房
+  /// 沒有 run，掛一個永遠空的區塊只是佔位。
+  final bool isOps;
 
   @override
   ConsumerState<_MembersPanel> createState() => _MembersPanelState();
@@ -2244,7 +2311,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     );
     if ((sent ?? false) && context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('邀請已送出，對方接受後會加入這個聊天室')));
+          .showSnackBar(SnackBar(content: Text(AppLocalizations.of(context).inviteSentJoinRoom)));
     }
   }
 
@@ -2261,46 +2328,46 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
       await ref.read(assignmentsApiProvider).create(
             widget.roomId,
             targetParticipantId: p.id,
-            note: '請重新加入這個聊天室。',
+            note: AppLocalizations.of(context).chatReinviteNote,
             // 用原本的名字回來——房內的歷史訊息都掛在那個名字上，
             // 換一個名字回來等於在時間軸上變成另一個人
             assignedName: p.displayName,
           );
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已請 ${p.displayName} 重新加入')),
+        SnackBar(content: Text(AppLocalizations.of(context).chatReinviteSent(p.displayName))),
       );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('請他回來失敗：$e')));
+          .showSnackBar(
+              SnackBar(content: Text(AppLocalizations.of(context).chatReinviteFailed('$e'))));
     }
   }
 
   Future<void> _kick(BuildContext context, Participant p) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
-          '將 ${p.displayName} 移出聊天室？',
-          style: UepText.display(size: 22, color: s.inkTitle),
+          l10n.chatKickTitle(p.displayName),
+          style: UepText.pageTitle(color: s.inkTitle),
         ),
         content: Text(
-          '被移出後，他當初用來加入的那張邀請碼會被整張撤銷——他會失去這台 Hub '
-          '的存取權，與他共用同一張邀請碼的人也會一起斷。若他是用主 token 進來的，'
-          '則什麼都撤不掉，只是離開這個聊天室。此操作無法復原。',
-          style: UepText.serif(size: 13.5, color: s.inkSoft),
+          '${l10n.chatKickBody}${l10n.commonIrreversible}',
+          style: UepText.serif(size: 14.5, color: s.inkSoft),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: l10n.commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '移出',
+            label: l10n.chatKickAction,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
@@ -2329,29 +2396,28 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
   /// 但它**不是**破壞性的——管理權可以再移交回去，所以用 outline 不用 danger。
   Future<void> _claimAdmin(BuildContext context, Participant? current) async {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final who = current?.displayName;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('接管這個聊天室？',
-            style: UepText.display(size: 22, color: s.inkTitle)),
+        title: Text(l10n.chatClaimAdminTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
         content: Text(
           who == null
-              ? '這個聊天室目前沒有管理員。接管之後你就是它的管理員，'
-                  '不必再開主持人模式也管得動。'
-              : '$who 目前是這個聊天室的管理員，接管之後他會降為一般成員。'
-                  '房內會留下一則系統訊息，管理權之後可以再移交回去。',
-          style: UepText.serif(size: 13.5, color: s.inkSoft, height: 1.6),
+              ? l10n.chatClaimAdminBodyNoAdmin
+              : l10n.chatClaimAdminBody(who),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: l10n.commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '接管',
+            label: l10n.chatClaimAdminAction,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
           ),
@@ -2368,7 +2434,9 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
       ref.invalidate(roomListProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(changed ? '你現在是這個聊天室的管理員' : '這個聊天室本來就是你的'),
+          content: Text(changed
+              ? l10n.chatClaimAdminDone
+              : l10n.chatClaimAdminAlreadyYours),
         ));
       }
     } on ApiException catch (e) {
@@ -2406,7 +2474,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             alignment: Alignment.center,
             children: [
               MonoLabel(
-                '成員 ${active.length}',
+                AppLocalizations.of(context).chatHeaderMembers(active.length),
                 size: 9,
                 color: UepColors.gold,
                 letterSpacing: 1.6,
@@ -2416,8 +2484,8 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                   right: 4,
                   child: IconButton(
                     tooltip: _showHidden
-                        ? '收起已隱藏的成員'
-                        : '顯示已隱藏的成員（${hidden.length}）',
+                        ? AppLocalizations.of(context).chatHideHiddenMembers
+                        : AppLocalizations.of(context).chatShowHiddenMembers(hidden.length),
                     visualDensity: VisualDensity.compact,
                     constraints: const BoxConstraints(),
                     padding: EdgeInsets.zero,
@@ -2434,11 +2502,15 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
             ],
           ),
         ),
+        // 成員與回報各佔一塊、各自捲：疊在同一個 ListView 裡的話，agent 一多
+        // 兩邊都會把側欄往下拉，而側欄的高度是視窗給的，不是內容給的
         Expanded(
+          flex: 3,
           child: ListView(
             padding: const EdgeInsets.fromLTRB(14, 16, 14, 16),
             children: [
-              MonoLabel('ACTIVE', size: 8.5, letterSpacing: 2.2),
+              MonoLabel(AppLocalizations.of(context).chatMembersActive,
+                  size: 8.5, letterSpacing: 2.2),
               const SizedBox(height: 8),
               for (final p in nestSubagents(active))
                 _MemberTile(
@@ -2469,7 +2541,8 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                 ),
               if (gone.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                MonoLabel('已離開', size: 8.5, letterSpacing: 2.2),
+                MonoLabel(AppLocalizations.of(context).chatMembersGone,
+                    size: 8.5, letterSpacing: 2.2),
                 const SizedBox(height: 8),
                 for (final p in gone)
                   Opacity(
@@ -2487,25 +2560,48 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                     ),
                   ),
               ],
-              if (_showHidden && hidden.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                MonoLabel('已隱藏', size: 8.5, letterSpacing: 2.2),
-                const SizedBox(height: 8),
-                for (final p in hidden)
-                  Opacity(
-                    opacity: .35,
-                    child: _MemberTile(
-                      p: p,
-                      isSelf: p.id == myId,
-                      inactive: !p.isActive,
-                      idleTimeout: widget.limits.idleTimeout,
-                      onUnhide: () => _setHidden(p, false),
-                    ),
-                  ),
-              ],
+              // 一次多／少好幾列，直接跳的話上面那些人會瞬間位移
+              UepExpand(
+                expanded: _showHidden && hidden.isNotEmpty,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 16),
+                    MonoLabel(AppLocalizations.of(context).chatMembersHidden,
+                        size: 8.5, letterSpacing: 2.2),
+                    const SizedBox(height: 8),
+                    for (final p in hidden)
+                      Opacity(
+                        opacity: .35,
+                        child: _MemberTile(
+                          p: p,
+                          isSelf: p.id == myId,
+                          inactive: !p.isActive,
+                          idleTimeout: widget.limits.idleTimeout,
+                          onUnhide: () => _setHidden(p, false),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
+        // 回報區：run 收工後的摘要（§12 待辦 2）。讀 `agent_run.result`
+        // 而不是從訊息流撿——訊息會被後續發言推走
+        if (widget.isOps)
+          Expanded(
+            flex: 2,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: s.line)),
+              ),
+              child: RunReportPanel(roomId: widget.roomId),
+            ),
+          ),
         // 沒有任何管理員的房（creator_session_key 為 NULL 的舊房）——
         // 那正是**最需要**接管的那些，而成員列表上沒有人掛得住那顆按鈕。
         // 只有這種情況才在底部另開入口，房內有管理員時一律走他身上那顆，
@@ -2514,7 +2610,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           Container(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
             child: UepButton(
-              label: '接管這個聊天室',
+              label: AppLocalizations.of(context).chatClaimThisRoom,
               variant: UepButtonVariant.outline,
               small: true,
               expand: true,
@@ -2539,7 +2635,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
               if (!widget.archived) ...[
                 const SizedBox(height: 8),
                 UepButton(
-                  label: '指派 AGENT 加入',
+                  label: AppLocalizations.of(context).chatAssignAgentJoin,
                   variant: UepButtonVariant.outline,
                   small: true,
                   expand: true,
@@ -2547,7 +2643,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                 ),
                 const SizedBox(height: 8),
                 UepButton(
-                  label: '邀請成員加入',
+                  label: AppLocalizations.of(context).inviteHumanTitle,
                   variant: UepButtonVariant.outline,
                   small: true,
                   expand: true,
@@ -2621,26 +2717,31 @@ class _MemberTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final color = kindColor(p.kind, context: context);
     final lastSeen = parseIso(p.lastSeenAt);
     final idleMinutes = lastSeen == null
         ? null
         : DateTime.now().difference(lastSeen).inMinutes;
-    final isIdle = !inactive && !p.isHuman && (idleMinutes ?? 0) >= 2;
+    // 派工帶進房的成員：run 還在跑的期間 Hub 不會把它掃掉（掃描豁免，
+    // 且 hold 一路續著），這一列不算閒置、也不印倒數
+    final onRun = p.isOnRun && !inactive;
+    final isIdle =
+        !inactive && !onRun && !p.isHuman && (idleMinutes ?? 0) >= 2;
 
     String subtitle;
     if (nested && !inactive) {
       // 不沿用一般成員那套倒數：subagent 走的是完全不同的短時限，
       // 顯示父層的門檻等於印一個永遠不會發生的倒數
-      subtitle = '臨時 · 工作結束即移除';
+      subtitle = l10n.chatMemberEphemeral;
     } else if (inactive) {
       subtitle = switch (p.status) {
-        'removed' => '因閒置移出',
-        'kicked' => '被管理員移出',
-        _ => '已離開',
+        'removed' => l10n.chatMemberRemovedIdle,
+        'kicked' => l10n.chatMemberKicked,
+        _ => l10n.chatMembersGone,
       };
     } else if (isSelf) {
-      subtitle = '你 · 管控權';
+      subtitle = l10n.chatMemberSelf;
     } else if (isIdle) {
       // 超過一小時要進位——掛了兩天的 agent 顯示「閒置 3120 分」等於要讀的人
       // 自己除以 60。倒數也一起換：`idle_timeout` 是可設定的，設成幾小時的話
@@ -2648,22 +2749,27 @@ class _MemberTile extends StatelessWidget {
       final idle = Duration(minutes: idleMinutes!);
       final remain = idleTimeout - idle;
       subtitle = remain > Duration.zero
-          ? '閒置 ${humanDuration(idle)} · 最快 ${humanDuration(remain)}後移出'
-          : '閒置 ${humanDuration(idle)}';
+          ? l10n.chatMemberIdleWithRemain(
+              humanDuration(idle), humanDuration(remain))
+          : l10n.chatMemberIdle(humanDuration(idle));
     } else {
-      subtitle = '活躍 · ${relativeTime(p.lastSeenAt)}';
+      subtitle = l10n.chatMemberActive(relativeTime(p.lastSeenAt));
     }
 
     final menuActions = <_MemberAction>[
       if (onHide != null)
-        _MemberAction('從我的列表隱藏', Icons.visibility_off_outlined, onHide!),
+        _MemberAction(
+            l10n.chatMemberHide, Icons.visibility_off_outlined, onHide!),
       if (onUnhide != null)
-        _MemberAction('取消隱藏', Icons.visibility_outlined, onUnhide!),
+        _MemberAction(
+            l10n.chatMemberUnhide, Icons.visibility_outlined, onUnhide!),
       if (onClaimAdmin != null)
-        _MemberAction('接管管理權（主持人）', Icons.admin_panel_settings_outlined,
-            onClaimAdmin!, color: UepColors.gold),
+        _MemberAction(l10n.chatMemberClaimAdmin,
+            Icons.admin_panel_settings_outlined, onClaimAdmin!,
+            color: UepColors.gold),
       if (onKick != null)
-        _MemberAction('移出聊天室', Icons.person_remove_outlined, onKick!),
+        _MemberAction(
+            l10n.chatMemberKick, Icons.person_remove_outlined, onKick!),
     ];
 
     return Opacity(
@@ -2701,10 +2807,9 @@ class _MemberTile extends StatelessWidget {
                           p.displayName,
                           overflow: TextOverflow.ellipsis,
                           style: UepText.sans(
-                            size: 13,
+                            size: 14,
                             weight: FontWeight.w600,
-                            color: inactive ? s.ink : s.inkTitle,
-                          ),
+                            color: inactive ? s.ink : s.inkTitle),
                         ),
                       ),
                       const SizedBox(width: 7),
@@ -2721,8 +2826,8 @@ class _MemberTile extends StatelessWidget {
                             borderRadius: BorderRadius.circular(3),
                           ),
                           child: Text(
-                            '子代理',
-                            style: UepText.sans(size: 9, color: s.inkMute),
+                            l10n.chatBadgeSubagent,
+                            style: UepText.sans(size: 10, color: s.inkMute),
                           ),
                         )
                       else
@@ -2731,21 +2836,29 @@ class _MemberTile extends StatelessWidget {
                       // HOST＝這台 Hub 是他的，ADMIN＝這個房是他開的。
                       // 合成一顆「管理員」會讓「誰能封這個房」與「誰能看
                       // 所有房」變得分不出來
+                      // 「它現在在替一筆派工工作」。掛在名字旁邊而不是寫進
+                      // 下面那行：那一行原本印倒數，而這個成員沒有倒數
+                      if (onRun) ...[
+                        const SizedBox(width: 5),
+                        _RoleBadge(
+                            label: l10n.chatBadgeOnRun, color: UepColors.gold),
+                      ],
                       if (p.showsHostBadge) ...[
                         const SizedBox(width: 5),
-                        _RoleBadge(label: 'HOST', color: UepColors.gold),
+                        _RoleBadge(
+                            label: l10n.chatBadgeHost, color: UepColors.gold),
                       ],
                       if (p.isAdmin) ...[
                         const SizedBox(width: 5),
-                        _RoleBadge(label: 'ADMIN', color: s.inkMute),
+                        _RoleBadge(label: l10n.chatBadgeRoomOwner, color: s.inkMute),
                       ],
                       if (p.previousName != null) ...[
                         const SizedBox(width: 7),
                         Flexible(
                           child: Text(
-                            '（原：${p.previousName}）',
+                            l10n.chatPreviousName(p.previousName!),
                             overflow: TextOverflow.ellipsis,
-                            style: UepText.serif(size: 11, color: s.inkMute),
+                            style: UepText.serif(size: 12, color: s.inkMute),
                           ),
                         ),
                       ],
@@ -2755,7 +2868,7 @@ class _MemberTile extends StatelessWidget {
                           child: Text(
                             '（${p.distinctHint}）',
                             overflow: TextOverflow.ellipsis,
-                            style: UepText.mono(size: 9, color: s.inkMute),
+                            style: UepText.mono(size: 10, color: s.inkMute),
                           ),
                         ),
                       ],
@@ -2765,10 +2878,9 @@ class _MemberTile extends StatelessWidget {
                   Text(
                     subtitle,
                     style: UepText.mono(
-                      size: 9,
+                      size: 10,
                       color: isSelf ? UepColors.gold : s.inkMute,
-                      letterSpacing: 1.0,
-                    ),
+                      letterSpacing: 1.0),
                   ),
                 ],
               ),
@@ -2791,14 +2903,16 @@ class _MemberTile extends StatelessWidget {
             // 「請他回來」是獨立按鈕，不進選單——見 [onReinvite]
             if (onReinvite != null)
               IconButton(
-                tooltip: '請 ${p.displayName} 重新加入',
+                tooltip: l10n.chatReinviteTooltip(p.displayName),
                 visualDensity: VisualDensity.compact,
                 onPressed: onReinvite,
                 icon: Icon(Icons.redo, size: 14, color: UepColors.gold),
               ),
             if (onToggleHighlight != null)
               IconButton(
-                tooltip: highlighted ? '取消標記' : '標記這個人（他的訊息會以他的顏色框起）',
+                tooltip: highlighted
+                    ? l10n.chatUnhighlight
+                    : l10n.chatHighlightMember,
                 visualDensity: VisualDensity.compact,
                 onPressed: onToggleHighlight,
                 icon: Icon(
@@ -2813,7 +2927,7 @@ class _MemberTile extends StatelessWidget {
             // 出誰被標記了。
             if (menuActions.isNotEmpty)
               PopupMenuButton<VoidCallback>(
-                tooltip: '更多動作',
+                tooltip: l10n.chatMoreActions,
                 padding: EdgeInsets.zero,
                 iconSize: 14,
                 splashRadius: 14,
@@ -2832,9 +2946,8 @@ class _MemberTile extends StatelessWidget {
                           Text(
                             a.label,
                             style: UepText.sans(
-                              size: 12,
-                              color: a.color ?? s.ink,
-                            ),
+                              size: 13,
+                              color: a.color ?? s.ink),
                           ),
                         ],
                       ),
@@ -2887,7 +3000,8 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('回答失敗：${e.message}')));
+          .showSnackBar(SnackBar(
+              content: Text(AppLocalizations.of(context).chatAnswerFailed(e.message))));
     }
   }
 
@@ -2911,7 +3025,9 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
       } on ApiException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${f.name} 上傳失敗：${e.message}')));
+              SnackBar(
+                  content: Text(AppLocalizations.of(context)
+                      .chatUploadFailedNamed(f.name, e.message))));
         }
       }
     }
@@ -2924,6 +3040,15 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
     final questions =
         ref.watch(roomQuestionsProvider(widget.roomId)).value ?? const [];
     if (questions.isEmpty) return const SizedBox.shrink();
+    // 問題本身只帶 asker_name，所以「它是不是派工跑出來的臨時 agent」要回
+    // 房內成員去查（名字在 active 成員裡是唯一的）。查不到就當一般成員——
+    // 已離開的提問者不該讓卡片改口
+    final onRunAskers = {
+      for (final p in ref.watch(roomDetailProvider(widget.roomId)).value
+              ?.participants ??
+          const <Participant>[])
+        if (p.isActive && p.isOnRun) p.displayName,
+    };
 
     return Container(
       decoration: BoxDecoration(
@@ -2941,14 +3066,14 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
               child: Row(
                 children: [
                   MonoLabel(
-                    '待答問題 ${questions.length}',
+                    AppLocalizations.of(context).chatPendingQuestions(questions.length),
                     size: 9,
                     color: UepColors.gold,
                     letterSpacing: 1.6,
                   ),
                   const Spacer(),
                   MonoLabel(
-                    _collapsed ? '展開' : '收合',
+                    _collapsed ? AppLocalizations.of(context).commonExpand : AppLocalizations.of(context).commonCollapse,
                     size: 8.5,
                     color: s.inkMute,
                     letterSpacing: 1.4,
@@ -2963,8 +3088,10 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
               ),
             ),
           ),
-          if (!_collapsed)
-            ConstrainedBox(
+          // 收合時整塊（最高 420）會消失，輸入框整條跟著跳位
+          UepExpand(
+            expanded: !_collapsed,
+            child: ConstrainedBox(
               // 不限高的話，多題或長題會把輸入框整個擠出畫面，而外層是
               // Column 不能捲——使用者既看不完問題也打不了字（實機回報）
               constraints: BoxConstraints(
@@ -2983,11 +3110,14 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
                       onAnswer: (kind, answer, selected, files, extra) =>
                           _respond(q.id, kind, answer, selected, files, extra),
                       onSkip: () => _respond(q.id, 'skip', ''),
+                      askerOnRun: q.askerName != null &&
+                          onRunAskers.contains(q.askerName),
                       onPickFiles: _pickAnswerFiles,
                     ),
                 ],
               ),
             ),
+          ),
         ],
       ),
     );
@@ -3022,7 +3152,8 @@ class _StyleDialogState extends State<_StyleDialog> {
   void _submit() {
     final text = _text.text.trim();
     if (_style == kRoomStyleCustom && text.isEmpty) {
-      setState(() => _error = '選擇自訂說話方式時要寫下指示內容');
+      setState(() =>
+          _error = AppLocalizations.of(context).roomsStyleCustomRequired);
       return;
     }
     Navigator.of(context).pop((style: _style, text: text));
@@ -3032,7 +3163,8 @@ class _StyleDialogState extends State<_StyleDialog> {
   Widget build(BuildContext context) {
     final s = context.uep;
     return AlertDialog(
-      title: Text('說話方式', style: UepText.display(size: 22, color: s.inkTitle)),
+      title: Text(AppLocalizations.of(context).roomsStyleTitle,
+          style: UepText.pageTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
@@ -3042,8 +3174,8 @@ class _StyleDialogState extends State<_StyleDialog> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '房內 agent 怎麼跟大家說話。改動會在房裡留下一則系統訊息。',
-                  style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+                  AppLocalizations.of(context).roomsStyleHint,
+                  style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
                 ),
               ),
               const SizedBox(height: 12),
@@ -3066,12 +3198,12 @@ class _StyleDialogState extends State<_StyleDialog> {
                   child: TextField(
                     controller: _text,
                     maxLines: 4,
-                    style: UepText.serif(size: 13, color: s.ink, height: 1.7),
+                    style: UepText.serif(size: 14, color: s.ink, height: 1.7),
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      hintText: '例：一律用英文回答，句子不要超過兩行。',
-                      hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
+                      hintText: AppLocalizations.of(context).roomsStyleCustomHint,
+                      hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
@@ -3084,10 +3216,9 @@ class _StyleDialogState extends State<_StyleDialog> {
                   child: Text(
                     _error!,
                     style: UepText.serif(
-                      size: 12.5,
+                      size: 13.5,
                       color: UepColors.errorText,
-                      height: 1.5,
-                    ),
+                      height: 1.5),
                   ),
                 ),
               ],
@@ -3097,12 +3228,13 @@ class _StyleDialogState extends State<_StyleDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: AppLocalizations.of(context).commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        UepButton(label: '套用', small: true, onPressed: _submit),
+        UepButton(
+            label: AppLocalizations.of(context).commonApply, small: true, onPressed: _submit),
       ],
     );
   }
@@ -3140,7 +3272,7 @@ class _RoleBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: UepText.mono(size: 8, color: color, letterSpacing: 1.1),
+        style: UepText.mono(size: 10, color: color, letterSpacing: 1.1),
       ),
     );
   }

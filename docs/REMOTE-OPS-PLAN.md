@@ -1,0 +1,742 @@
+# 遠端派工（Remote Ops）規劃書
+
+分支：`feature/remote-ops`（不公開釋出，成熟後再併回 develop）。
+撰寫：2026-09-16，敏卡。狀態：**第 9 節已裁決（2026-09-16），P1 開工。**
+
+## 0. 一句話
+
+讓房裡的人類在**有限控制**下，從聊天室啟動艾斯維爾這台機器上的 Claude Code，
+對 AI-Website 讀票、調查、實作、commit；agent 是**單次任務、用完即結束**，
+超過上限就排隊，撞到 rate limit 就停收並自動續跑，房間本身**持續存在**。
+
+## 1. 起源與範圍
+
+- 起源：艾斯維爾將離開公司一段時間，這段期間他的機器仍要能對 AI-Website 提供
+  實作與調查能力，操作者是其他人類（房內成員）。
+- 第一階段只開放 **AI-Website**（`mind-door/AI-Website/` 下的 JSAI-Web / JSAI-API /
+  JSAI-Functions / JSAI-Skills）。其他專案不在允許清單內，執行器直接拒絕。
+- 不做：持久 agent、多主機分派、其他專案、公開釋出。
+
+## 2. 現況（探索與 PM 記憶的結論）
+
+**已經有的、直接復用：**
+
+| 能力 | 位置 | 用途 |
+|---|---|---|
+| Board v2：Objective（週期）→ Checklist（階段）→ Task（卡） | `board*` 表 | 人類開階段與想法板，agent 開卡 |
+| Task claim CAS、orphaned、task_request | `board_task`、`board_task_request` | 卡的認領與接手 |
+| 想法板（段落制，人類段落 agent 不可改） | `board_scratchpad*` | 人類記錄想法／需求 |
+| 指派（assignment）與 session 名錄 | `assignment`、`session` | 「召喚」某個 session 進房 |
+| watcher（session／房內）與 `codex queue` 外部推入 | `bridge/chatroom_mcp/watch.py` | 通知；Codex 冷啟動以外的喚醒先例 |
+| 人類／agent 分離憑證、主持人模式 | `access_token.audience` | 人類操作與 agent 操作分權 |
+| `chatroom_hold`、heartbeat、subagent 身分 | bridge + Hub | 長工作不被 sweeper 踢 |
+
+**完全沒有的（本階段核心新件）：**
+
+1. 「遠端請求 → 本機**冷啟動**一個新的 Claude Code session」的執行器。
+   現有鏈路止於通知；Codex 那條 `codex queue` 只能餵給**已在跑**的 thread。
+2. 房間類型。`room` 沒有 `kind` 欄位，所有房都走「無 active agent 即自動封存」。
+3. 執行請求的資料模型、佇列、併行上限、rate limit 狀態。
+
+**Claude Code headless 能力（已查證，2.1.273）：**
+
+- `claude -p --output-format stream-json` 一行一事件；最終 `result` 事件帶
+  `session_id`、`usage`、`total_cost_usd`、`num_turns`、`subtype`
+  （`success` / `error_max_turns` / `error_max_budget_usd` / `error_during_execution`）。
+- 參數：`--max-turns`、`--max-budget-usd`、`--permission-mode`、`--allowedTools`、
+  `--mcp-config`、`--append-system-prompt`、`--resume <session_id>`、`--model`。
+- 429：CLI 自動重試（`CLAUDE_CODE_MAX_RETRIES`，預設 10），stream 裡有
+  `system/api_retry` 事件（`error: rate_limit`、`retry_delay_ms`）；重試耗盡
+  → `subtype: error_during_execution`。週／月上限是終端錯誤，訊息是
+  `You've hit your weekly limit` 類字串，**不會自動重試**。
+- Hooks：`PreCompact` **不能取消壓縮**、`SessionEnd` 只是通知；
+  `PreToolUse` 回 exit 2 可以**擋下工具並把理由回給模型**。
+  **沒有任何方式從外部讀 context 使用百分比**；只能自己從每則
+  assistant 訊息的 `usage` 累計。
+
+## 3. 架構
+
+```
+房內人類（App）──► Hub（權威：agent_run 佇列、狀態、事件）◄── 執行器 runner（艾斯維爾機器）
+                          │                                        │ 每次一個子進程
+                          ▼                                        ▼
+                    任務板 / 想法板                      claude -p（AI-Website 工作樹）
+                                                                   │ MCP bridge
+                                                                   └──► 回房發言、開卡、更新卡、ask_human
+```
+
+三個原則：
+
+1. **Hub 是佇列與狀態的唯一真相**，執行器是笨執行者：領一筆、起進程、回報、領下一筆。
+   執行器重啟不丟佇列；Hub 看得到「誰在跑、誰在排、限額狀態」。
+2. **agent 進房用的是既有 bridge**，一個 run 一個 session_key
+   （`claude-run-<run_id>`），身分、發言、開卡走現有工具，Hub 不為 run 另開通訊路徑。
+3. **人類的控制面是板不是 shell**：人類決定「做什麼、什麼時候做、要不要做」，
+   agent 決定「怎麼做」。人類不能下任意 prompt 給執行器（見 §6）。
+
+## 4. 資料模型（Hub）
+
+### 4.1 房間類型
+
+`room.kind`：`chat`（預設，現況）／`ops`（工作房）。
+
+- `ops` 房**不自動封存**、不進 purge；agent 閒置移除照舊（它們本來就該走）。
+- `ops` 房固定掛一塊板（建房時建或指定），板隨房；解掛要主持人。
+- 建 `ops` 房限人類憑證（split 模式）或主持人。
+- 列表與 App 用 `kind` 分區顯示；既有房一律 `chat`（migration 補欄預設）。
+
+### 4.2 執行請求 `agent_run`
+
+```
+agent_run                                       （P1 已落地，欄位以此為準）
+  id, room_id, board_id
+  kind          investigate | ticket | stage | push
+  project       允許清單的 key（第一階段只有 ai-website）
+  ref           checklist_id 或 task_id；push 時是 repo key
+  brief         人類寫的簡述（≤2000 字；模板化，見 §6）
+  requested_by / requested_by_actor_key / requested_by_name
+                participant id、持久 actor_key、名字快照。三個都存的理由與
+                board 的 claim_* 相同：participant 隨離房消失，而「誰派的」
+                要在那之後還講得出來，配額也要認得出同一個人
+  status        queued | claimed | running | limited | handoff | done | failed | cancelled
+  priority, position
+  runner_id, claude_session_id, attempt, parent_run_id（交接鏈）, handoff_depth
+  cancel_requested  取消旗標。running 的 cancel **不改狀態**（見下方規則）
+  usage_json    最後一次回報的 tokens / cost / turns
+  result        收工摘要（agent 自己寫，執行器補 exit 資訊）
+  reason        最後一次轉移的原因（rate_limit / handoff_depth_exceeded …）
+  created_at, claimed_at, started_at, ended_at, updated_at
+agent_run_event（稽核串：狀態每一次變化、誰改的、原因）
+  id, run_id, room_id, from_status, to_status, actor, actor_name,
+  reason, detail_json, created_at
+```
+
+⚠️ 與初稿的差異（2026-09-16 實作時對齊）：
+
+- `kind` **不含 `scheduled` 與 `handoff`**。`scheduled` 是 §4.5 的第二階段，
+  現在建不出來；`handoff` 是**狀態不是類型**——子 run 沿用母 run 的 kind，
+  把它同時當成一種 kind 會讓「這是什麼工作」與「它怎麼來的」混成一欄。
+- `push` 補進 kind 清單（§5.6 本來就有，初稿的 §4.2 漏列）。
+- `agent_run` 帶 `room_id` 外鍵且**隨房刪除**；`runner_command` 的 `room_id`
+  只是 provenance，不隨房走（`_ROOM_ID_NOT_OWNED`）。
+
+規則：
+
+- `project` 必須是**至少一台非 offline 執行器**在 `projects` 裡宣告過的
+  key，否則建單當下即 409 `project_not_served`。打錯一個字與「那台執行器
+  還沒開機」在佇列上長得一模一樣——都是一筆永遠排著的 queued，而沒有任何
+  地方會報錯。（2026-09-16 補）
+- 一房一佇列，priority DESC + position ASC；同一 `ref` 在
+  **queued / claimed / running / limited / handoff** 任一狀態時不得重複（409
+  `run_ref_already_active`）。初稿寫的是「queued/running」，但 claimed 與
+  handoff 同樣還佔著那張卡——漏掉它們等於在交接的空檔開一個重複派工的窗。
+- 配額（§6.4）超過回 **429**，不是 409：409 是「與目前狀態衝突」，而配額是
+  速率限制——client 對 429 的處置是「等一下再來」，對 409 是「換個做法」。
+- `cancelled` 只有人類或主持人能下。**queued 立刻 cancelled；claimed/running/
+  limited 只立 `cancel_requested`，狀態不動**——進程還在跑，Hub 先改狀態的話
+  畫面會說它停了而機器上那個 agent 還在寫檔。執行器在 heartbeat 回應裡拿到
+  `cancel_requested_run_ids[]`，殺完再回報 `cancelled`。
+  agent 的卡由既有孤兒化流程處理。
+- `handoff`：run 自己宣告交接，Hub 建子 run（`parent_run_id`、
+  `handoff_depth+1`，brief ＝ 原 brief ＋「前一輪 run <id> 已交接，先讀卡
+  <ref>」）。`handoff_depth` 上限預設 5（`run_handoff_max`），超過**不再建
+  子 run**，改把這一輪標成 `failed(handoff_depth_exceeded)` 並 mention 派工者
+  ——留一個 handoff 狀態卻沒有下一棒，在面板上與「正在交接」一模一樣。
+- 狀態機只允許列出的轉移，其餘 409 `run_bad_transition`：
+  `queued→{claimed,cancelled}`、`claimed→{running,limited,failed,cancelled}`、
+  `running→{limited,handoff,done,failed,cancelled}`、
+  `limited→{running,done,failed,cancelled}`；
+  `handoff / done / failed / cancelled` 是終局。
+
+### 4.3 執行器 `runner`
+
+```
+runner                                          （P1 已落地）
+  id, host, label, status(online|paused|limited|offline|restarting)
+  token_sha256  註冊時發的執行器憑證，**只存 sha256**；明文只回傳一次
+  max_parallel（預設 3）, running_count
+  projects      允許的 project key（JSON 陣列）。**白名單**：空的領不到任何單
+  limited_until, limit_reason（rate_limit | weekly_limit | manual）
+  usage_window_json（近 5 小時累計 tokens/cost，供軟上限）
+  dashboard_json（§4.4，Hub 原樣存不解讀）
+  registered_at, last_seen_at, version
+
+runner_command                                  （§5.7，P1 已落地）
+  id, runner_id, command(pause|resume|restart|drain|reload)
+  issued_by, issued_by_name, room_id（provenance）, created_at, acked_at
+  applied_at    真正生效的時間（執行器回報，**原樣存它的時鐘**）
+  note          執行器對這筆命令講的一句話（沒生效也要寫）
+```
+
+- 執行器用 agent 憑證註冊（`POST /api/runners/register`），**同 host+label
+  冪等回同一個 id**（partial unique index）：重啟一次就多一列的話，名錄上會
+  排著一串早就不在的執行器，而「離線」的通知會對每個殘影各發一次。
+- 🚨 **冪等不等於任何人都能接管**（2026-09-16 補）。第一次註冊發一把
+  `runner_token`（`secrets.token_urlsafe(32)`，DB 只存 sha256），**明文只在
+  建立那一次回傳**。之後：
+  - 同 host+label 再註冊要帶正確的 `X-Runner-Token` 才算同一台回來（可更新
+    `projects` / `max_parallel` / `version`，**不換 token**）；不帶或帶錯一律
+    403 `runner_token_required`。
+  - `heartbeat` / `claim` / `report`（含在 heartbeat 裡取命令）一律驗
+    `X-Runner-Token`：缺 header 403 `runner_token_required`，對不上 403
+    `runner_token_invalid`。
+  - 人類下命令的 `POST /api/runners/{id}/commands` **不受此限**——那條認的是
+    人類憑證，不是執行器憑證。
+  - `token_sha256` 空字串（這一欄存在之前註冊的）驗證放行，下一次 register
+    補發一把。升級一次 Hub 就讓所有在跑的執行器 403 的話，遠端沒有人會去
+    重跑註冊。
+  少了這一關，拿 agent token 的人對同一組 host+label 註冊一次就拿到它的 id，
+  接著替它 heartbeat（把人類下的 pause 吃掉）、領單、把它領的 run 收掉，而
+  名錄上看起來完全正常——因為那就是同一列。
+- heartbeat 走 `/api/runners/{id}/heartbeat`（帶狀態與 `dashboard_json`），
+  回應帶 `commands[]`（取走的同時標 `acked_at`——命令是一次性的）與
+  `cancel_requested_run_ids[]`。逾時（`runner_offline_after`，預設 180 秒）
+  未見即 `offline`，**只標一次**，在該執行器有 run 的 ops 房發 system 訊息
+  並 mention 全部人類；再次 heartbeat 回 online 也發一句。
+- 領單：`POST /api/runners/{id}/claim` 由 Hub 用單一 `UPDATE … RETURNING`
+  發放（沿用領號教訓：兩句之間的 await 會讓兩個執行器領到同一筆）。
+  CAS 判定用 `fetchone() is not None`，不用 `rowcount`。沒單可領回 **204**。
+  `paused` / `limited` / `offline` 的執行器一律 204——停收就是停收，不靠
+  執行器自己記得別問。
+- 併發保險（2026-09-16 補）：`running_count >= max_parallel` 也回 **204**。
+  ⚠️ 這個數字是**最近一次 heartbeat 回報的**，可能落後一個 heartbeat 週期
+  （執行器剛起一個新進程、還沒回報），所以它是保險而不是權威——本地的併發
+  上限仍由執行器自己守。少了它，Hub 會把整條佇列塞給一台已經滿載的執行器。
+- 回報（`POST /api/runs/{id}/report`）的 `runner_id` **必填**（省略即 422）：
+  可以省略的話，「這筆是不是你領的」那道檢查整條繞得過去。狀態轉移用 CAS
+  （`WHERE id=? AND status=?` 帶舊狀態 + `RETURNING`），沒套用到回 409
+  `run_bad_transition`；建子 run 等後續只在套用成功後做——兩個同時到的
+  `handoff` 否則會各建一棵子 run，一張卡從此有兩條交接鏈。
+
+### 4.4 儀表板狀態 `runner.dashboard_json`
+
+執行器每次 heartbeat 帶上、Hub 原樣存、App 面板讀：
+
+```
+repos[]        每個允許 repo：path、branch、unpushed_count、unpushed[]（sha、標題、時間）、dirty
+usage          近 5 小時 tokens / cost、軟上限、剩餘；近 7 天累計
+limits         status、limited_until、limit_reason
+runs           running[]（run id、ref、開始時間、目前 turns、context 估算）、queued_count
+runner         version、started_at、last_restart_reason
+```
+
+「尚未推送的 commit」是這裡最重要的一格——本機沒有人類，push 是房內人類從
+儀表板按的（§5.6）。
+
+### 4.5 排程（第二階段）
+
+`board_schedule`：掛在板或 checklist 上，`interval`／`cron`、`brief` 模板、
+`enabled`、`last_fired_at`。Hub sweeper 到時建 `agent_run(kind=scheduled)`。
+先做人工觸發，排程等主流程穩了再開。
+
+## 5. 執行器（本機常駐）
+
+新子系統 `runner/`（Python，沿用專案 `.venv`），與 bridge 分開：bridge 是 agent 在房裡的手，
+runner 是「起 agent」的手，職責不能混。
+
+### 5.1 主迴圈
+
+```
+heartbeat → 若 status 允許且 slots 有空 → claim → 準備工作環境 → spawn → 監看 stream
+        → 結束時回報（done/failed/handoff/limited）→ 清理 → 回到 heartbeat
+```
+
+### 5.2 spawn 參數
+
+- cwd：`project` 對應的允許路徑（`runner/config`），不是 brief 說了算。
+- `--permission-mode auto`（裁決；實測 2.1.273 合法值含 `auto`）；硬限制不靠權限模式，
+  靠 §6.4 的 hook 與執行器守門。**`--allowedTools` 在 auto 模式下不是限制**，不能當白名單用。
+- `--output-format stream-json` **必須配 `--verbose`**，否則直接 exit 1。
+- `--model`：預設 Opus 5（裁決），profile 可依 run kind 覆寫。
+- **不用 `--bare`**：`--bare` 只認 API key，本機是 OAuth 登入，加了就是
+  「Not logged in」而 `result.subtype` 照樣是 `success`（exit 1、assistant 層 `is_error`）。
+  執行器判成敗要看 exit code 與 `is_error`，不能只看 `subtype`。
+- 設定隔離：不加 `--bare` 就會載入 `~/.claude/settings.json` 的全域 hooks（persona 注入、
+  記憶健檢等艾斯維爾個人的東西）。執行器用獨立的 `CLAUDE_CONFIG_DIR`（例如
+  `%LOCALAPPDATA%/UEP/Chatroom/runner/claude-config`），艾斯維爾離開前在那個目錄
+  `claude /login` 一次；run 的 hooks 全部寫在那個目錄的 settings。
+  ⚠️ 待驗：獨立 config dir 下 claude.ai 連接器（Atlassian）是否仍可用——連接器綁帳號，
+  應該可以，P2 第一天實測；不行就退回共用設定並在 run 的 `--settings` 裡覆寫掉不要的 hook。
+- `--mcp-config` 的 stdio server：模組搜尋路徑用 `env.PYTHONPATH` 指到 `bridge/`，
+  **不要靠 `cwd` 欄位**（實測不生效，會 `No module named chatroom_mcp`）。
+  chatroom 工具在 headless 下是 deferred 工具，模型要先 `ToolSearch` 才能叫，run 契約要提醒。
+- `--mcp-config`：只掛 chatroom bridge（`CHATROOM_SESSION_KEY=claude-run-<id>`、
+  `CHATROOM_DEFAULT_NAME=<執行器 label>-<短 id>`）＋ 專案需要的 MCP（Jira，若可用）。
+- `--append-system-prompt`：run 契約（§6.3）。
+- `--max-turns`、`--max-budget-usd`：每 run 上限，profile 設定。
+- hooks（run 專用 settings，寫進暫存 `--settings`）：
+  - `PreToolUse`：讀 `handoff.flag`；有旗標就回 exit 2 並附「請立刻交接」訊息。
+  - `PreCompact`：寫 `compacted` 標記（事後判定這個 run 已經被壓過一次）。
+  - `Stop` / `SessionEnd`：通知執行器收尾（保險，主要靠 stream 的 `result`）。
+
+### 5.2.1 專案 skill 槽位
+
+有些專案有一份「這類工作一定要照著做」的 skill（例如 AI-Website 的
+`jira-ticket-workflow`）。Claude Code 的 skill 發現只往上找到 git root，而 run
+的 cwd 常常是一個子 repo（`AI-Website/JSAI-Web` 自己就是 repo，skill 卻放在
+上一層的 `AI-Website/.claude/skills/`）——什麼都不做的話那個 skill 根本不存在。
+
+設定鍵（`projects.<key>` 底下）：
+
+| 鍵 | 語意 |
+|---|---|
+| `skill_dirs` | 每個目錄起 claude 時加一個 `--add-dir`，它的 `.claude/skills/` 會載入。啟動自檢驗目錄存在 |
+| `skills` | kind → 這種派工**必須遵守**的 skill 名清單。載入時就驗 `<skill_dir>/.claude/skills/<name>/SKILL.md` 存在，缺就是設定錯誤 |
+| `extra_write_dirs` | guard 額外放行寫入的目錄（skill 的產出落在 repo 外時）。放行的是**位置**，敏感檔名與敏感目錄的檢查照走 |
+
+四端要一致，少一端就是一個安靜的失敗：
+
+1. **設定**：`skill_dirs` ＋ `skills` ＋ `extra_write_dirs`（`config.ProjectConfig`）。
+2. **參數**：`--add-dir <skill_dir>`，以及 `--allowedTools` 的 `Skill(<name>)`
+   ——headless 下沒預授權就會停在一個沒有人能按的權限提示。
+3. **契約**：`prompts.skills_block` 產生的段落進 `contract.md`，要求 run 一開始
+   就啟動 `/<skill>`；沒有 skill 時是空字串，模板不留怪句子。
+4. **守衛**：`extra_write_dirs` 寫進 run 目錄的 `guard.json`，寫入型工具與直譯器
+   腳本路徑對這些目錄放行。
+
+**與 skill 衝突時以契約為準**，清單固定寫在那個段落裡：
+
+- headless 沒有 Plan Mode：skill 要等使用者核准的那一步，改成把計畫寫進卡的
+  note 再繼續。
+- skill 說「使用者會 commit 與 push」的地方，改成 run 自己 commit、**不 push**。
+- skill 要求的 Jira 留言與狀態轉換**在工作範圍內、要做**（Atlassian 工具由
+  `extra_allowed_tools` 放行）。找不到「測試中」這類 transition 時不問使用者，
+  把可用的 transition 列進卡再繼續。
+- skill 寫在 repo 外的分析／摘要檔，只有列在 `extra_write_dirs` 的目錄寫得進去。
+- 票上的附件落在 run 目錄（`CHATROOM_DOWNLOAD_DIR`），不落 repo（沿用既有規則）。
+- skill 列的「等使用者確認」檢查點一律換成 `chatroom_ask_human` ＋ timeout，
+  沒人回就寫進卡往下走。
+
+### 5.3 stream 監看
+
+- 每則 assistant 訊息的 `usage`（input + cache_read + cache_creation）＝當前 context 大小。
+  超過 `context_soft_limit`（預設模型視窗的 70%）→ 寫 `handoff.flag`。
+  這是**唯一**能在自動壓縮之前逼 agent 交接的路徑；壓縮本身擋不住。
+- `system/api_retry` 且 `error == rate_limit`：記錄；連續出現達門檻即把 runner 標
+  `limited`，**停止領新單**，房內發 system 訊息。既有 run 讓 CLI 自己重試。
+- `result.subtype == error_during_execution` 且最後錯誤是 rate limit：
+  run 標 `limited`，執行器排 `--resume <session_id>` 的重試，退避 5→15→30→60 分鐘，
+  每次退避都在房內說一句；恢復成功也說一句。
+- 訊息含週／月上限字串：runner `limited(weekly_limit)`，**不自動重試**，等人類解除。
+- 其他非零 exit／`error_max_turns`：run `failed`，卡留給人類決定。
+
+### 5.4 交接
+
+1. 收到 `handoff.flag` 的下一次工具呼叫被擋，理由文字要求 agent：
+   把「已做／未做／下一步／注意事項」寫到卡（`chatroom_board_update` 的 note 或附件），
+   卡狀態保持 `in_progress` 但**釋放認領**，然後結束。
+2. run 以 `handoff` 收尾，Hub 建子 run，brief = 原 brief + 指向那張卡。
+3. 子 run 開場先讀卡再動手。認領由子 run 自己做（沿用「Hub 不代為認領」原則）。
+4. 若 agent 沒照做就結束（stream 沒看到交接寫入）：執行器仍建子 run，但 brief 註明
+   「前一輪未留交接，請從卡的 git 狀態與工作樹重建現況」。
+
+### 5.5 併行與工作樹
+
+- `max_parallel` 預設 3；超過即排隊，房內看得到位置。
+- **同一 repo 同時只允許一個 run 寫入**（AI-Website 是三個 repo，各一把鎖）。
+  PM 記憶裡「共用工作樹互相覆蓋」「commit 帶走別人的 index」發生過不只一次，
+  遠端無人看著時代價更高。第一階段：一個 run 一個 repo 鎖，跨 repo 的票序列做；
+  第二階段再評估 worktree（放 repo 外）。
+- run 開始前執行器記錄 `git status --porcelain`，結束後比對；
+  未 commit 的變更由 agent 在收工摘要列出，不自動 stash、不自動還原。
+
+### 5.6 推送（`push` run）
+
+本機沒有人類，所以 push 也是一種 run，但**只有房內人類能建**，且形狀固定：
+
+- `agent_run(kind=push, ref=<repo>, brief=<要推的分支>)`；儀表板上每個 repo 有
+  「推送」鈕，按下去就是建這筆。
+- 執行器對 `push` run 不起 Claude，直接跑固定腳本：確認分支在允許清單、
+  `git log origin/<branch>..<branch>` 與儀表板顯示的一致（sha 集合相同才推，否則拒絕並回報）、
+  `git push`、回報結果。**不經模型**：push 沒有需要判斷的事，經模型只是多一個出錯的地方。
+- 允許的目標分支由執行器設定寫死（AI-Website：`jsai_dev`、`feature/*`）；
+  `jsai_prod` 永遠不在清單裡，任何 run 都推不了。
+
+### 5.7 維護與重啟
+
+- 常駐形式：Windows 排程工作（裁決），登入時啟動、失敗自動重啟、每 5 分鐘檢查存活。
+- 房內人類可下 `runner_command`：`pause`（不領新單，跑完手上的）、`resume`、
+  `restart`（等所有 run 結束後自我重啟；有 run 在跑就排到它們結束後）、`drain`（取消排隊、跑完現有）。
+  命令由 Hub 存、執行器 heartbeat 時取。
+
+**回饋鏈：從「按下」到「生效」每一段都要看得見。**命令是存下來等 heartbeat
+取的，中間隔著最多一個心跳週期（30 秒）——Hub 只記「已送達」的話，人按完鈕
+面對的是一個不動的面板，而那 30 秒裡唯一合理的推論是「按了沒反應」，於是他
+再按五次。四段各有自己的時間戳：
+
+| 段 | 欄位 | 誰寫 |
+|---|---|---|
+| 已送出 | `created_at` | Hub（人按下的那一刻） |
+| 已收到 | `acked_at` | Hub（heartbeat 把命令交出去時） |
+| 已生效 | `applied_at` + `note` | 執行器，下一次 heartbeat 的 `command_acks` |
+| 等待中 | `note`（`applied_at` 留空） | 同上 |
+
+- heartbeat body 多一個可選的 `command_acks: [{id, applied_at, note}]`。Hub 只
+  更新**屬於這台執行器**的命令；`applied_at` 已有值就不會被後來的空 ack 洗掉。
+- **沒有回音的命令由 Hub 收尾**（實機 2026-09-18）：執行器重新註冊時（＝上一個
+  進程已經不在）、或 `acked_at` 超過 10 分鐘仍沒有 `applied_at` 時，Hub 補上
+  `applied_at` 與一句 note。App 把「未 applied」當成進行中，不收的話那顆鈕永遠
+  停用；既有的四筆由 `db._migrate_data` 版次 5 一次性回填（`applied_at = acked_at`）。
+- `applied_at` **原樣存執行器送來的值**，不改成 Hub 的時鐘：它要與
+  `dashboard.runner.started_at` 同源，App 靠 `started_at > applied_at` 判定
+  「這台已經重啟完回來了」。
+- 人類按的取消，執行器**手上沒有那個進程也要收場**（實機 2026-09-18）：
+  heartbeat 回的 `cancel_requested_run_ids` 裡不在 `self.active` 的 id 直接報
+  `cancelled`（同一筆只報一次），不然上一個進程留下的 run 會永遠停在 `claimed`。
+- 執行器**收到命令就立刻再送一次 heartbeat**，不等 30 秒。pause／resume／drain
+  當場生效；restart 收到時**不算生效**（`applied_at` 留空、`note` 寫「等 N 筆
+  run 結束後重啟」），而且每一輪都重報一次讓 N 跟著手上的 run 變少。
+- 手上清空、真的要退出前，執行器再送一次 `status="restarting"` 的 heartbeat 並把
+  命令標生效（note「正在重啟，預計 1～2 分鐘完成」）。少了這一次，進程退出後
+  Hub 還寫著 online，要等 `runner_offline_after`（180 秒）掃到才變 offline——而
+  重啟只要 1～2 分鐘，人從頭到尾看不到任何「正在重啟」。這一次心跳有逾時上限，
+  **送不出去也照樣退出**：退出路徑卡在 socket 上的話，排程工作也拉不起它。
+- `GET /api/rooms/{id}/runner` 的 `runners[]` 每台多一個 `commands`：最近 5 筆
+  `{id, command, issued_by_name, created_at, acked_at, applied_at, note}`（新到舊）。
+  `restarting` 的執行器**留在列表上**——從列表消失與「它掛了」在面板上長得一樣。
+- 每日維護窗（預設 04:00，可設）：若無 run 在跑，執行器自我重啟並清暫存；有在跑就順延到下一次 heartbeat 無 run 時。
+  **一天只做一次，且「今天做過沒」要落地在 `state.json`**（實機 2026-09-18）：判準是
+  「本地日期還沒做過且現在 ≥ maintenance_hour」，而剛啟動的執行器就算起在窗裡也算
+  今天做過了——啟動本身就等於重啟過了。少了這兩條，重啟回來的進程還在同一個小時裡，
+  於是再判一次維護窗再退，04:00–05:00 被排程工作每 5 分鐘拉起、循環了 12 次。
+- 執行器啟動時：驗 `claude --version`、驗 GPG 簽章可用（`gpg --clearsign` 探針）、
+  驗每個允許 repo 可讀寫且分支正確；任一失敗即 `status=offline(reason)` 並在房內講。
+  GPG 由艾斯維爾自行處理（裁決），執行器只驗、不代管 passphrase。
+
+## 6. 人類的控制面
+
+### 6.1 誰能做什麼
+
+| 動作 | 誰 |
+|---|---|
+| 建 ops 房、指定執行器允許的專案 | 主持人（艾斯維爾，離開前設好） |
+| 開週期／階段、寫想法板 | 房內人類 |
+| 「派工」：對一個階段或一張卡建 run | 房內人類（非 viewer） |
+| 取消 run、解除 limited、暫停執行器 | 房內人類 |
+| 開卡、認領、改卡、commit | agent |
+| push（建 `push` run） | 房內人類，從儀表板按（§5.6） |
+| 週期「確認無誤」、部署 | 人類；部署不在本系統範圍內 |
+| 暫停／恢復／重啟執行器 | 房內人類（§5.7） |
+
+### 6.2 派工的形狀
+
+人類**不寫自由 prompt**。派工 = 選「階段或卡」+ 選「模板」+ 一段簡述（限 2000 字）：
+
+- `investigate`：只讀。查票、查程式、回房報告與建議，不改檔。
+- `ticket`：讀票（Jira key 在階段標題或簡述）、實作、跑既有驗證、commit 到指定分支、
+  在卡上回報；未實機測試要明說。
+- `stage`：把整個階段當一組工作，agent 自己拆卡、逐張做，直到階段做完或交接。
+
+模板正文在 `runner/prompts/`，改模板要進版控，房裡改不了。
+
+### 6.3 run 契約（append system prompt 的骨幹）
+
+- 你是單次任務執行者，房間 `<room>`、卡 `<ref>`；開場先 join、讀卡、讀想法板相關段落。
+- 工作只在 `<cwd>`；分支規則、commit 格式（單行 ≤15 字＋日期）、GPG、不 push、
+  不 `git add -A`、commit 前看 index——沿用 AI-Website 三個 repo 的 CLAUDE.md。
+- 卡住就 `chatroom_ask_human`（timeout 要設，沒人答就寫進卡結束，不空等）。
+- 收到「請立刻交接」就照 §5.4 做，不要試圖再多做一步。
+- 結束前寫收工摘要：做了什麼、驗證了什麼、沒驗證什麼、未 commit 的東西、下一步。
+
+### 6.4 硬限制（系統擋，不靠 prompt）
+
+裁決：**不能完全相信對方的人類**。以下每一條都由執行器或 hook 強制，agent 與派工者都繞不過：
+
+| 層 | 限制 |
+|---|---|
+| Hub | 只有人類憑證能建 run；執行器 token 只能領單、回報、heartbeat。派工者每日 run 數上限（預設 20）、同時排隊上限（預設 5）。 |
+| 執行器 | `project` 必須在允許清單；cwd 由清單決定；每 run `--max-turns`、`--max-budget-usd`、牆鐘上限（預設 90 分鐘）；5 小時窗軟上限到了停收。 |
+| `PreToolUse` hook（拒絕清單，exit 2） | `git push`（非 push run 一律擋）、`git reset --hard`、`git clean`、`git checkout`/`switch` 到允許清單外的分支、`git branch -D`、`git rebase`、`--no-verify`、`--no-gpg-sign`；`rm -rf`／`Remove-Item -Recurse`；任何寫入 cwd 以外的路徑；讀寫 `.env*`、`*.pem`、`server/.env`、`~/.claude/`、`~/.gnupg/`、執行器自己的設定與 hooks；`npm publish`、`az `、`wrangler deploy`、`gh pr merge`；`curl`/`Invoke-WebRequest` 到允許網域以外。 |
+| `PreToolUse` hook（允許但記錄） | 其餘每一次工具呼叫寫進 run 的 tool log，隨收工摘要附回卡。 |
+| 模板 | brief 只能進模板的一個欄位，模板本身進版控；brief 內容出現在 prompt 時包一層框架
+（同 `style_instructions` 的 `CUSTOM_STYLE_FRAME` 做法），明說它是任務描述不是指令。 |
+| 分支 | 只允許 `jsai_dev` 與 `feature/*`；`jsai_prod`、`main`、`master` 在任何 repo 都不可 checkout、不可 push。 |
+
+⚠️ **matcher 必須同時寫 `Bash|PowerShell`**（實測：Windows 上模型預設選 PowerShell，
+只擋 Bash 時 `echo hi` 直接跑過去）。被擋的訊息回給模型的形狀是
+`PreToolUse:<Tool> hook error: [<hook>]: <stderr>`，模型實測會換工具再試一次然後放棄，
+所以拒絕理由要寫「這是系統限制」並指出替代路徑。
+
+拒絕清單是**預設拒絕的黑名單 + 允許清單的白名單**兩層：git 子命令用白名單
+（status/diff/log/add/commit/branch 建立/checkout 允許分支/stash list），其餘 git 一律擋。
+被擋的呼叫回給模型的訊息要說「這是系統限制，請改走 X 或問人類」，不要讓它反覆試。
+
+#### 結構性限制（審查結論，2026-09-16）
+
+guard 擋的是**模型直接下的那一條指令**。它擋得住順手做錯的事，擋不住決心繞過
+的對手：一個能跑專案測試腳本（`npm test`、`pytest`）的 agent，原則上就能執行
+任意程式碼——測試檔本身是它寫得到的東西。所以 §6.4 的清單是**降低意外的成本**，
+不是硬邊界。這一輪補上的包裝攔截（`cmd /c`、`powershell -Command`、
+`python -c`、`node -e`、`iex`、`& {…}` 等）把「順手一包就繞過去」這條路關掉，
+但同樣不是硬邊界。
+
+真正的硬邊界只有兩道：
+
+1. **未推送的 commit 全在儀表板上，push 只有人類能觸發**。agent 做的任何事都停
+   在本機工作樹，要離開這台機器一定經過一次人看著清單按下去的動作（§5.6 的 sha
+   比對保證按的就是畫面上那幾顆）。
+2. **推送憑證隔離**（艾斯維爾裁決 2026-09-16，已實作）：
+   - 一般 run（`investigate`／`ticket`／`stage`）的子進程環境帶
+     `GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_n=credential.helper`／
+     `GIT_CONFIG_VALUE_n=`（空值＝清空 helper 清單）、`GIT_TERMINAL_PROMPT=0`、
+     `GIT_ASKPASS` 指到執行器自帶、永遠 exit 1 的腳本。這是**進程層級的覆寫**，
+     本機 git 設定一個字都沒動；已有的 `GIT_CONFIG_COUNT` 用途會接在後面遞增，
+     不覆蓋。效果：run 內對私有遠端的 push／fetch 拿不到憑證就直接失敗，而不是
+     停在一個沒有人能回答的問句上。
+   - `push` run 的 `git fetch`／`git push` 明確以 `-c credential.helper=manager`
+     執行，且**不帶**上面那組覆寫環境。不改 remote URL、不存任何 token——URL 裡
+     帶 token 會留在 `git remote -v` 與 reflog 上。
+   - guard 另外擋掉把憑證裝回去的各種寫法：`$env:GIT_*=`、`set GIT_*=`、
+     `export GIT_*=`、`Set-Item env:GIT_*`、`[Environment]::SetEnvironmentVariable`、
+     `git -c credential.*`、任何寫入型的 `git config credential.*`。
+
+   **邊界說清楚**：run 跑在與人類同一個 Windows 帳號下，決心繞過的對手仍然讀得到
+   Credential Manager 裡的憑證（那是帳號層級的儲存，不是 git 層級的）。真正的硬
+   隔離要第二個 Windows 帳號（或容器），**艾斯維爾裁定不做**——代價是整套開發環境
+   要再裝一份，而這一層擋的對象是「意外」與「順手繞過」，不是一個專心要偷憑證的
+   程式。
+
+## 7. 通知語意
+
+- run 的狀態變化（queued→running→done/failed/limited/handoff）都是 `agent_run_event`，
+  房內 system 訊息只發：開始、結束（含結果一句話）、limited、交接、執行器離線。
+  排隊位置變化不發訊息，App 面板顯示即可。
+- **「執行器離線」只發非預期的那一種**（實機 2026-09-18）：最後回報的狀態是
+  `restarting` 時掃成 offline **不發**（那是它自己說要重啟，面板上有命令進度），
+  回來時的「已恢復連線」也跟著不發——只有後半句的話，房裡看到的是一台從來沒掉線過
+  卻一直在恢復連線的執行器。非預期掉線同一台 30 分鐘內最多一則；節流狀態放 Hub
+  記憶體，Hub 自己重啟過就重新講一次。
+- 完成／失敗 mention 派工者；limited 與執行器離線 mention 房內所有人類。
+- agent 自己的發言照現行規則（@ 才喚醒）。
+
+## 8. 分期與驗收
+
+### P0 前置（艾斯維爾裁決，見 §9）
+
+### P1 Hub
+
+- `room.kind` + ops 房不封存不 purge + 建房限人類；migration。
+- `agent_run` / `agent_run_event` / `runner` 表與端點：建 run（含 `push` kind、每人每日配額、
+  排隊上限、同 ref 不重複）、列 run、取消、執行器註冊／heartbeat（帶 `dashboard_json`）／
+  claim／回報／取 `runner_command`；人類下 pause／resume／restart／drain。
+  稽核串完整性測試（每個狀態變化一筆 event）。
+- 房內 system 訊息與 mention 規則。**`/updates` 這一輪不動**（09/16 決定）：
+  那條端點的欄位與「什麼時候該回」綁死，只加欄位不加返回條件等於加了一個
+  永遠不會被看見的欄位（board_seq 那次的教訓）。run 的狀態變化靠 system
+  訊息進訊息流就夠，儀表板由 App 輪詢 `GET /api/rooms/{rid}/runner`。
+  決定寫在 `app.py` 的 Remote Ops 區塊開頭與 `create_run` 的 docstring。
+- 驗收：pytest 全綠；並發 claim 只發一筆；ops 房在無 agent 時不封存。
+
+**P1 實際落地（2026-09-16）**：`tests/test_remote_ops.py` 23 條。端點：
+`POST /api/rooms/{rid}/runs`、`GET /api/rooms/{rid}/runs`、`GET /api/runs/{id}`、
+`POST /api/runs/{id}/cancel`、`POST /api/runs/{id}/report`、
+`POST /api/runners/register`、`POST /api/runners/{id}/heartbeat`、
+`POST /api/runners/{id}/claim`、`POST /api/runners/{id}/commands`、
+`GET /api/rooms/{rid}/runner`。設定：`CHATROOM_RUN_DAILY_QUOTA`(20)、
+`CHATROOM_RUN_QUEUE_CAP`(5)、`CHATROOM_RUN_HANDOFF_MAX`(5)、
+`CHATROOM_RUNNER_OFFLINE_AFTER`(180)。
+
+### P2 執行器
+
+- `runner/`：設定、主迴圈、spawn、stream 解析、hooks、交接、限額狀態機。
+- 用假的 `claude` 可執行檔（吐固定 stream-json）做單元測試：
+  正常結束、max_turns、rate_limit 重試、weekly limit、context 觸發交接、cancel 殺進程。
+- Windows 常駐：排程工作或 WinSW（同 Hub 的 `hub-service.ps1` 做法），
+  開機自起、崩潰重啟、log 落檔（`%LOCALAPPDATA%/UEP/Chatroom/runner/`）。
+- 驗收：對測試 Hub（8788）跑一個 `investigate` run，agent 真的進房、讀卡、回報、結束。
+
+**P2 實際落地（2026-09-16）**：`runner/`，`runner/tests` 110 條（`pytest.ini`
+的 `testpaths`／`pythonpath` 各加一項）。模組：`config`（JSON 設定）、
+`hub`（Hub client + 本機 `state.json`）、`loop`（主迴圈、自檢、命令、維護窗）、
+`run`（spawn／判定／push／工作樹守衛）、`stream`（事件解析）、`guard`＋
+`hooks/`（硬限制）、`dashboard`、`usage`（sqlite 用量視窗）、`gitops`。
+常駐用 `runner/install-task.ps1`（只建工作不啟動）。
+
+與前面幾節的差異（**實作為準**）：
+
+- **退出碼是與排程工作的契約**：0 正常、1 自檢沒過、2 設定有問題、
+  **75 請立刻重新拉起**（維護窗與 `restart` 命令）。執行器不自己 re-exec——
+  壞掉的那一次自己就沒有人重試了。自檢沒過也**直接退場**，不留一台「在線
+  但什麼都不做」的執行器在名錄上。
+- **`drain` 不重啟**：停收新單、跑完手上的，然後停在 `paused(draining)` 等
+  `resume`。排隊中的單**留在 Hub**（取消只有人類能下，§6.1），執行器不代為
+  取消。§5.7 的「取消排隊」要由人類在面板上做。
+- **維護窗在 claim 之前判定**：過了點（`>= maintenance_hour`）、無 run 在跑、
+  當天還沒做過就退 75。有 run 就順延到下一次心跳；日期記在 `state.json` 的
+  `last_maintenance_day`，跨進程有效（實機 2026-09-18）。
+- **命令改了狀態要立刻補一次 heartbeat**：命令是在心跳的**回應**裡拿到的，
+  Hub 手上還是舊狀態，而它對 `paused` 的執行器一律回 204——人按了恢復，
+  畫面上卻要再等一個心跳才動。
+- **一筆 run 在哪個 repo 做**（§5.2 只寫了「cwd 由清單決定」，沒寫多 repo 時
+  怎麼挑）：`push` 看 `ref`；brief 有 `repo: <名稱>` 用那個；否則用
+  `default_repo`；都沒有就 `failed`。**執行器不猜**。
+- **`push` run 一定要帶 sha 清單**：brief 的形狀是 `branch: <分支>` + 每行一個
+  sha。清單缺就拒推（`push_sha_list_missing`），sha 集合或**顆數**不一致也拒
+  （`push_sha_mismatch`）——只比「每個期待的都在」的話，多出來的那幾顆會被一
+  起推上去，而按鈕的人以為推的是畫面上那幾顆。
+- **rate limit 退避用完就 `failed(rate_limit_exhausted)`**，不無限續跑；
+  每一階退避都 report 一次 `limited`（房裡唯一看得到「它還活著、只是在等」的
+  地方），續跑走 `--resume`。
+- **hook 的 git 白名單**比 §6.4 多三個唯讀項：`show`、`rev-parse`、`ls-files`，
+  另加 `remote -v/show/get-url` 與 `config --get/--list`。多擋了
+  `git checkout -- <路徑>`（會吃掉未 commit 的修改）與所有帶 `-r` 的 `rm`。
+- **守衛設定讀不到時 hook 一律擋**：放行的話整個 §6.4 會靜默失效，而那在 log
+  上與「這次沒有違規」長得一模一樣。
+- **儀表板**（§4.4）：`repos` 以 `<project>/<repo>` 為鍵，每格多了 `pushable`
+  （分支在可推清單裡才亮鈕）與 `dirty_count`；`runner` 多了
+  `selfcheck_problems`。**「近 7 天累計」沒做**——只有 5 小時窗，那是軟上限
+  要用的數字，七天累計目前沒有讀的人。
+- `require_gpg` 可關（預設開）：只有明知這台機器不簽章時才關。
+- ⚠️ **§1 說 AI-Website 是四個 repo（含 JSAI-Skills），§5.5 說三個。**
+  `runner/config.example.json` 先寫三個（JSAI-Web／JSAI-API／JSAI-Functions），
+  要不要加第四個等艾斯維爾確認。
+
+**P2 審查修正（2026-09-16，`runner/tests` 219 條）**：
+
+- **包裝攔截**：殼層與直譯器再跑一段命令字串一律擋（`cmd /c`、
+  `powershell`／`pwsh`、`bash -c`、`wsl`、`Start-Process`、`iex`／
+  `Invoke-Expression`、`Invoke-Command`、`eval`／`exec`、`& {…}`、
+  `. <cwd 外的腳本>`、`python -c`／`-m`（只留 `-m pytest`）、`node -e`／`-p`、
+  `perl -e`、`ruby -e`）。允許 `python`／`node` 跑 cwd 以內的腳本，以及
+  `npm`／`npx`／`pnpm` 的 test／run／lint 類。**這是繞過的主要入口**：
+  `cmd /c git push` 的第一個 token 不是 `git`，所有看子命令的規則都攔不到。
+- **git 全域選項先剝除再判子命令**：`-C`／`--git-dir`／`--work-tree` 出現即
+  整條拒絕（會把命令搬到別的工作樹），`--namespace` 剝掉，`-c k=v` 擋
+  `credential.*`、`core.hooksPath`、`gpg.*`、`commit.gpgsign=false`。
+  舊版把 `-` 開頭的 token 直接跳過，於是 `git -C log push` 的子命令被當成
+  `log`，push 整條放行。
+- **`Read`／`Glob`／`Grep` 進 matcher**：讀取類**不限 cwd**（看別的 repo 的
+  程式碼是正常的調查），但路徑或 glob 命中 `.env*`、`*.pem`、`*.key`、`*.p12`、
+  `id_rsa*`、`.ssh/`、`.gnupg/`、`.claude/`、`.claude.json`、`credentials*` 與
+  執行器自己的目錄就擋。glob 要雙向比（`**/.env*` 當名字比比不中，但它撈得到
+  `.env`）。
+- **`git config`／`remote` 看整條**：`config` 只允許 `--get`／`--get-all`／
+  `--list`／`--show-origin` 加一個 key（舊版只看第一個 token，
+  `git config --get --global user.email x` 會寫到全域）；`remote` 只允許
+  `-v`／`show`／`get-url`，不接受其他旗標。
+- **回報有容錯**：`report` 三次嘗試、退避 2／5 秒，仍失敗就把內容落地到
+  `<run 目錄>/report_failed.json`，下一次 heartbeat 重送、送成功才刪。run 的
+  task 例外由 `add_done_callback` 取出寫 log——不取的話那筆 run 從 active 消
+  失、房裡停在 running，而本機一行紀錄都沒有。
+- **push 前先 `git fetch origin <branch>`**，失敗即拒推（`push_fetch_failed`）：
+  不 fetch 就比對，比的是上次 fetch 時的遠端位置。儀表板每次心跳也先 fetch，
+  失敗只標 `fetch_stale: true`，不擋整格。
+- **維護窗在 `draining`／`paused` 時不重啟**：那兩個狀態的語意都是「安靜下來」，
+  而重啟回來的執行器會立刻開始領單。
+- **weekly limit 只認 `result`／`system` 事件與 assistant 的 `error` 欄位**：
+  掃一般文字的話，agent 在摘要裡寫一句「這次沒有撞到 weekly limit」就會讓整台
+  執行器停收。
+- **推送憑證隔離**（§6.4「結構性限制」）：一般 run 的環境清掉
+  `credential.helper`、關掉終端提示與 askpass；`push` run 明確帶
+  `-c credential.helper=manager`。guard 另擋改動 git 憑證設定的各種寫法。
+
+**待驗（只能實機）**：獨立 `CLAUDE_CONFIG_DIR` 下 claude.ai 連接器是否仍可用；
+`--max-budget-usd` 觸頂與週／月上限的真實 stream 樣貌（測試用的是依文件寫的
+假事件）；排程工作對退出碼 75 的重啟行為。
+
+### P3 Bridge
+
+- `chatroom_run_request`（給 Codex／其他 agent 也能派工）、`chatroom_runs`（查佇列）、
+  `chatroom_run_handoff`（agent 主動宣告交接）。
+- `guide.py` 加「你是一個 run 時」的段落；403/409 新碼要進 bridge 翻譯
+  （`test_403_contract` 會抓）。
+
+### P4 App
+
+- 房間列表分 chat／ops；ops 房頁多一個「執行」儀表板（§4.4）：每個 repo 尚未推送的 commit
+  數與清單＋「推送」鈕、近 5 小時 tokens／cost 與軟上限、limited 倒數、
+  進行中與排隊中的 run、取消鈕、執行器 pause／resume／restart。
+- 階段與卡的抽屜加「派工」入口（模板選擇＋簡述）。
+- 設定頁：主持人可暫停執行器、解除 limited。
+
+### P5 端到端
+
+1. 測試 Hub + 真執行器 + AI-Website 只讀 `investigate` 一票。
+2. 一張真的低風險票走 `ticket` 到 commit（不 push），艾斯維爾在場驗。
+3. 故意打滿 `--max-turns` 與模擬 context 上限，驗交接鏈。
+4. 兩個人類同時派工、超過 3 個，驗排隊與取消。
+5. 都過了才給其他人類用；期間艾斯維爾在場至少一週。
+
+## 9. 裁決紀錄（艾斯維爾，2026-09-16）
+
+| # | 題目 | 裁決 |
+|---|---|---|
+| 1 | GPG（快取 8 小時，離開後 commit 停在 pinentry） | 艾斯維爾自行處理；執行器只驗簽章可用（§5.7），不代管。 |
+| 2 | 權限模式 | headless 用 `--permission-mode auto`；硬限制另做（§6.4）。 |
+| 3 | push | 本機無人類，push 做成 `push` run 由房內人類從儀表板觸發（§5.6）；儀表板顯示未推送 commit、token 用量、限額、運行中 agent（§4.4）。 |
+| 4 | Jira | MCP 應可用，開工實測；**Chrome（claude-in-chrome）在 headless 下能否用要另外研究**（§10 待研究）。 |
+| 5 | 執行器形式 | 先用排程工作；機器大致不重開不睡眠，但要有專門的維護重啟機制（§5.7）。 |
+| 6 | 軟上限 | 可設定；預設 Opus 5。 |
+| 7 | 信任 | 不能完全相信對方的人類，要有系統層硬限制擋 agent 做不該做的事（§6.4）。 |
+
+### 已實測（2026-09-16，2.1.273）
+
+- **Atlassian 連接器在 `-p` 下可用**（`claude mcp list` 顯示 connected，`ToolSearch` 找得到
+  `mcp__claude_ai_Atlassian_Rovo__*`），條件：同一個 OAuth 帳號、不加 `--bare`／`--strict-mcp-config`。
+- **Chrome 擴充在 headless 下不可用**：官方文件明寫 API key／長效 token 認證時 Chrome 整合強制關閉，
+  且需要一個開著、裝了擴充的瀏覽器視窗。定案：不做；需要瀏覽器的工作用 playwright MCP。
+- chatroom bridge 走 `--mcp-config` 可連、可呼叫（唯讀驗過）。
+- `PreToolUse` exit 2 能擋並把理由回給模型；`PreCompact` 擋不住壓縮（文件字面）。
+
+### 待驗（P2 第一天）
+
+- 獨立 `CLAUDE_CONFIG_DIR` 下連接器是否仍可用（§5.2）。
+- `--max-budget-usd` 觸頂與週／月上限的實際 stream 樣貌（本次沒撞到，沿用文件）。
+
+## 10. 風險與已知限制
+
+- **context 觸發交接是估算**：靠 `usage` 累計，不是 Claude Code 自己的判斷；
+  閾值訂保守（70%），寧可多交接一次。
+- **rate limit「快要到」偵測不到**，只能「撞到後停收」。軟上限是自我約束，不是真實額度。
+- **agent 不照契約交接**：有兜底（§5.4 第 4 點），但那一輪的工作樹狀態要靠下一輪重建。
+- **同名不同 session 是不同個體**（PM 定調）：每個 run 都是新個體，卡的接手走
+  task_request／孤兒接手，不做「上一輪的我」。
+- **執行器在你的機器上跑 agent 憑證**：token 洩漏＝任何人能派工。ops 房的派工權限
+  綁人類憑證，執行器 token 只能領單與回報，不能建 run。
+- **人類看不到 shell**：所有可觀測面都在卡與房內訊息。agent 收工摘要的品質決定一切，
+  模板要逼它寫「沒驗證什麼」。
+
+## 11. 索引
+
+- 契約：`docs/CHATROOM.md`（agent 手冊）、本文件（規劃）
+- PM：`[PM] Chatroom` 「遠端派工（Remote Ops）規劃定案 2026-09-16」
+- 相關記憶：Board v2 三題、身分語意定調、codex queue 外部喚醒、GPG 快取 TTL、
+  多 agent 共用工作樹的協作限制
+
+## 12. 首輪實機驗收紀錄與下一輪待辦（2026-09-17）
+
+### 已驗過（正式 Hub 8787 + 排程工作執行器 + App）
+
+- 建工作房、派工（investigate／ticket）、run 進房讀卡、Jira MCP 讀票、只讀調查、
+  實作票並 commit（`JSAI-2377` → jsai_dev `dbd17dcf`，GPG 簽、未 push）、收工摘要、
+  run 結束成員離房、取消、執行器重啟對帳。
+- 一天內抓到並修掉的實機問題：排程工作沒進 sys.path、console 視窗閃、gpg 不在 PATH、
+  `auto` 模式 MCP 工具卡權限、成員 kind=other、第一次派工不送（context unmounted）、
+  帳號層級連接器全部載入、stream 單行 64KB 上限炸 pump、附件下載進 repo。
+
+### 下一輪待辦（艾斯維爾 2026-09-17 觀察）
+
+1. ✅ **附件範圍**（2026-09-17 做完）：定案是**階段素材**——附件掛在 checklist 上，
+   該階段的每一張卡與每一輪 run 共用；「這輪的附件」＝階段素材 + 簡述指到的，
+   不掃整間房。Hub `board_checklist_file` 表與 `/api/boards/{id}/checklists/{cid}/files`
+   三支端點（`server/chatroom_server/app.py` 的「階段素材」段）、bridge 的
+   `chatroom_stage_files` / `chatroom_stage_file_add`、runner 四份模板都照這個契約。
+2. **收工摘要的呈現**：現在是 system 訊息，字太小、Markdown 沒渲染。做法：工作房右側
+   加「回報面板」，讀 `agent_run.result`（Hub 已存）而不是從訊息流撿；每筆 run 一張可展開
+   的卡，附 turns／成本／HEAD 前後／tool.log 位置。收工摘要同時寫到板卡上（現在只在房裡）。
+3. ✅ **離房後訊息變 OTHER**（2026-09-17 做完）：`message.sender_kind` 存發話當下的
+   快照，寫入在 `_post_message`、輸出在 `_message_rows_to_json`（讀取與匯出共用同
+   一條路）；舊訊息由 `db._migrate_data` 版次 4 從 participant 回填一次，回填不到
+   的留空字串。
+4. ✅ **停滯進訊息流**（2026-09-17 做完）：`POST /api/runs/{id}/report` 的
+   `running → running` 帶 `reason=stalled`／`resumed` 時不轉移狀態、不動 `started_at`，
+   只寫一筆 `agent_run_event`（from=to=running，`detail_json` 帶 `stalled_seconds`）
+   並在房裡發 `run_stalled`／`run_resumed` 的 system 訊息。**沒帶 reason 的同狀態
+   回報維持 409**。執行器端在 `loop.check_stalls` 標記／解除時各報一次（不重複）。
+5. **@ 叫不醒 run**（設計上單回合、無 watcher）。目前靠契約聲明＋ `ask_human`。
+   若要改，方向是 bridge 的 `chatroom_wait` 在 run 內當「收件匣」，成本高，先不做。
+6. **未測的路徑**：push run（儀表板「推送」→ 執行器 fetch/push；`dbd17dcf` 正好可以拿來測）、
+   交接鏈（context 70%）、排隊超過 3、`stage` kind、rate limit 退避（只能等真的撞到）。
+7. **雜項**：Atlassian 在 run 啟動時常 `pending`，契約已教它再搜一次；名冊裡修改前留下的
+   兩個「已離開」舊成員不回溯清；§1 四個 repo vs §5.5 三個（JSAI-Skills）待定；
+   `.chatroom/downloads` 改落 run 目錄後，舊的 `JSAI-Web/.chatroom/` 已手動刪除。

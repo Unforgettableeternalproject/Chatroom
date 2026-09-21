@@ -215,6 +215,10 @@ async def test_response_shape_is_pinned(tmp_path):
             "order_index", "created_by", "created_by_name", "completed_by",
             "completed_at", "deleted", "board_seq", "created_at",
             "created_by_actor_key", "completed_by_actor_key",
+            # 階段素材（2026-09-17 契約）：附件掛在階段上，該階段的每一張卡
+            # 與每一輪派工共用。**跟著階段一起回而不是只給計數**——agent
+            # 不會為了一個數字再打一次 API 去猜那裡面是什麼
+            "files",
         }
         assert set(body["tasks"][0]) == {
             "id", "room_id", "checklist_id", "title", "description", "status",

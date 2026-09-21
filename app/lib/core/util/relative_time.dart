@@ -1,18 +1,23 @@
-/// ISO 時間字串 → 相對時間中文顯示。
+import '../../l10n/l10n.dart';
+
+/// ISO 時間字串 → 相對時間顯示。
 /// server 存 UTC ISO 格式；顯示一律轉本地時區。
 String relativeTime(String? iso, {DateTime? now}) {
   final t = parseIso(iso);
   if (t == null) return '—';
   final ref = now ?? DateTime.now();
   final diff = ref.difference(t);
-  if (diff.inSeconds < 60) return '剛剛';
-  if (diff.inMinutes < 60) return '${diff.inMinutes} 分前';
-  if (diff.inHours < 24 && ref.day == t.day) return '${diff.inHours} 小時前';
+  final l10n = L10n.current;
+  if (diff.inSeconds < 60) return l10n.timeJustNow;
+  if (diff.inMinutes < 60) return l10n.timeMinutesAgo(diff.inMinutes);
+  if (diff.inHours < 24 && ref.day == t.day) {
+    return l10n.timeHoursAgo(diff.inHours);
+  }
   final yesterday = ref.subtract(const Duration(days: 1));
   if (t.year == yesterday.year &&
       t.month == yesterday.month &&
       t.day == yesterday.day) {
-    return '昨天';
+    return l10n.timeYesterday;
   }
   if (diff.inDays < 365) {
     return '${_two(t.month)}-${_two(t.day)}';
@@ -20,7 +25,7 @@ String relativeTime(String? iso, {DateTime? now}) {
   return '${t.year}-${_two(t.month)}-${_two(t.day)}';
 }
 
-/// 一段時長的中文顯示（閒置多久、還剩多久）。
+/// 一段時長的顯示（閒置多久、還剩多久）。
 ///
 /// 這與 [relativeTime] 是兩件事：那個答「什麼時候發生的」，這個答「持續了
 /// 多久」。原本成員列直接印 `'閒置 $minutes 分'`，於是掛了兩天的 agent 會
@@ -31,21 +36,24 @@ String relativeTime(String? iso, {DateTime? now}) {
 /// 但中間段保留（`1500 分` → `1 日 1 時`），否則 `1 日 5 分` 會讀成
 /// 「一天又五分鐘」與「一天一小時五分」分不出來。
 String humanDuration(Duration d) {
-  if (d.isNegative) return '0 分';
+  final l10n = L10n.current;
+  if (d.isNegative) return l10n.timeDurationMinutes(0);
   final days = d.inDays;
   final hours = d.inHours % 24;
   final minutes = d.inMinutes % 60;
 
   if (days > 0) {
-    final parts = ['$days 日'];
-    if (hours > 0) parts.add('$hours 時');
-    if (minutes > 0) parts.add('$minutes 分');
+    final parts = [l10n.timeDurationDays(days)];
+    if (hours > 0) parts.add(l10n.timeDurationHours(hours));
+    if (minutes > 0) parts.add(l10n.timeDurationMinutes(minutes));
     return parts.join(' ');
   }
   if (hours > 0) {
-    return minutes > 0 ? '$hours 時 $minutes 分' : '$hours 時';
+    return minutes > 0
+        ? '${l10n.timeDurationHours(hours)} ${l10n.timeDurationMinutes(minutes)}'
+        : l10n.timeDurationHours(hours);
   }
-  return '$minutes 分';
+  return l10n.timeDurationMinutes(minutes);
 }
 
 /// 訊息時間戳（HH:mm；跨日加上日期）。

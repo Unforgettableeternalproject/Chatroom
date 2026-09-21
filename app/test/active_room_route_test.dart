@@ -5,7 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:go_router/go_router.dart';
+import 'package:go_router/go_router.dart';
+import 'helpers/l10n.dart';
 
 /// 通知抑制的依據是「當前路由」，不是「ChatScreen 還活著」。
 ///
@@ -112,7 +113,11 @@ void main() {
     String path() =>
         router.routerDelegate.currentConfiguration.last.matchedLocation;
 
-    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpWidget(MaterialApp.router(
+      routerConfig: router,
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
+    ));
     expect(activeRoomIdFor(path()), isNull);
 
     router.go('/rooms/r1');

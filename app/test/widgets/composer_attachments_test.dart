@@ -4,6 +4,7 @@ import 'package:chatroom_app/widgets/composer_attachments.dart';
 import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 ComposerAttachment _att({
   String id = 'a1',
@@ -25,6 +26,8 @@ Widget _host({
   required Future<void> Function(String, List<String>) onSend,
 }) =>
     MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: MessageComposer(
@@ -115,6 +118,8 @@ void main() {
         error: '檔案超過上限 25 MB',
       );
       await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: ComposerAttachmentBar(

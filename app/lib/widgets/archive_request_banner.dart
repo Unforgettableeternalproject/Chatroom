@@ -5,6 +5,7 @@ import '../api/rooms_api.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 import '../state/rooms_providers.dart';
 import 'kind_badge.dart';
@@ -80,10 +81,11 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final myId = ref.watch(settingsRepoProvider).participantId(widget.roomId);
     final isMine = myId != null && myId == widget.request.requesterId;
     final who = widget.request.requesterName.isEmpty
-        ? '有人'
+        ? l10n.commonSomeone
         : widget.request.requesterName;
 
     return Container(
@@ -95,32 +97,31 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        MonoLabel('封存請求',
+        MonoLabel(l10n.roomsArchiveRequestLabel,
             size: 9, color: UepColors.gold, letterSpacing: 1.6),
         const SizedBox(height: 8),
         Text(
-          '${isMine ? '你提議封存這個聊天室，等建立者確認。' : '$who 提議封存這個聊天室。'}'
-          '封存後只能看不能寫；而且封存滿一段時間後，Hub 會把這個房間連同訊息'
-          '與附件永久刪除（天數由 Hub 設定）。',
+          '${isMine ? l10n.roomsArchiveRequestMine : l10n.roomsArchiveRequestBy(who)}'
+          '${l10n.roomsArchiveRequestNote}',
           style: UepText.sans(
-              size: 13, weight: FontWeight.w600, color: s.inkTitle),
+              size: 14, weight: FontWeight.w600, color: s.inkTitle),
         ),
         if (widget.request.reason.isNotEmpty) ...[
           const SizedBox(height: 3),
           Text(widget.request.reason,
-              style: UepText.serif(size: 12, color: s.inkSoft, height: 1.6)),
+              style: UepText.serif(size: 13, color: s.inkSoft, height: 1.6)),
         ],
         const SizedBox(height: 8),
         if (widget.youAreAdmin)
           Row(children: [
             UepButton(
-              label: '封存',
+              label: l10n.roomsArchiveAction,
               small: true,
               onPressed: _busy ? null : () => _resolve(true),
             ),
             const SizedBox(width: 10),
             UepButton(
-              label: '婉拒',
+              label: l10n.commonDecline,
               variant: UepButtonVariant.outline,
               small: true,
               onPressed: _busy ? null : () => _resolve(false),
@@ -128,7 +129,7 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
           ])
         else if (isMine)
           UepButton(
-            label: '收回提議',
+            label: l10n.roomsArchiveWithdraw,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: _busy ? null : _cancel,
@@ -136,8 +137,8 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
         else
           // 既不是建立者也不是提議者：只告訴他狀態。沒有這一行的話，
           // 他會以為是自己該處理的事
-          Text('等建立者確認。',
-              style: UepText.serif(size: 12, color: s.inkMute, height: 1.6)),
+          Text(l10n.roomsArchiveWaitingCreator,
+              style: UepText.serif(size: 13, color: s.inkMute, height: 1.6)),
       ]),
     );
   }

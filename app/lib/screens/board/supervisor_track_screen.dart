@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../models/participant.dart';
 import '../../state/board_providers.dart';
@@ -45,11 +46,11 @@ class SupervisorTrackScreen extends ConsumerWidget {
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bg,
-        title: Text('誰在做什麼',
-            style: UepText.display(size: 20, color: s.inkTitle)),
+        title: Text(AppLocalizations.of(context).boardTrackTitle,
+            style: UepText.sectionTitle(color: s.inkTitle)),
         actions: [
           IconButton(
-            tooltip: '重新整理',
+            tooltip: AppLocalizations.of(context).commonRefresh,
             onPressed: () {
               ref.invalidate(boardProvider(roomId));
               ref.invalidate(roomDetailProvider(roomId));
@@ -161,7 +162,8 @@ Map<String, MemberWorkload> workloadsByMember(
   ];
   if (orphans.isNotEmpty) {
     result[_kOrphanKey] = MemberWorkload(
-      name: '已經不在房裡的人',
+      // 這支函式沒有 context（測試也直接呼叫它），所以名字走 L10n.current
+      name: L10n.current.boardTrackOrphanBucket,
       kind: 'other',
       active: orphans,
     );
@@ -196,23 +198,15 @@ class _Body extends StatelessWidget {
       });
 
     if (snap.visibleTasks.isEmpty) {
-      return const Center(
-        child: EmptyState(
-          title: '這塊板上還沒有卡',
-          subtitle: '有人開始做事之後，這裡會列出誰手上有什麼',
-        ),
+      return Center(
+        child: EmptyState(title: AppLocalizations.of(context).boardTrackEmpty),
       );
     }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
       children: [
-        Text(
-          '依人分組，不是依工作分組。板回答「這件事做完了嗎」，'
-          '這裡回答「這個人手上有什麼、卡住了沒」。',
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
-        ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 4),
         for (final k in keys)
           if (!loads[k]!.isEmpty)
             _MemberCard(
@@ -224,9 +218,9 @@ class _Body extends StatelessWidget {
         if (keys.every((k) => loads[k]!.isEmpty))
           Padding(
             padding: const EdgeInsets.only(top: 40),
-            child: Text('房裡沒有人手上有卡。',
+            child: Text(AppLocalizations.of(context).boardTrackNobodyHolds,
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 13, color: s.inkMute)),
+                style: UepText.serif(size: 14, color: s.inkMute)),
           ),
       ],
     );
@@ -247,6 +241,7 @@ class _MemberCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
@@ -267,12 +262,14 @@ class _MemberCard extends StatelessWidget {
               Expanded(
                 child: Text(load.name,
                     style: UepText.sans(
-                        size: 13.5,
+                        size: 14.5,
                         color:
                             isOrphanBucket ? UepColors.gold : s.inkTitle)),
               ),
               if (load.openCount > 0)
-                MonoLabel('${load.openCount} 在手上',
+                MonoLabel(
+                    AppLocalizations.of(context)
+                        .boardTrackInHand(load.openCount),
                     size: 9, letterSpacing: 1.2),
             ]),
           ),
@@ -280,14 +277,20 @@ class _MemberCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
               child: Text(
-                '這些卡看起來有人在做，實際上沒有。要有人接手，或由管理者指派。',
-                style: UepText.serif(size: 11.5, color: s.inkMute),
+                AppLocalizations.of(context).boardTrackOrphanExplain,
+                style: UepText.serif(size: 12.5, color: s.inkMute),
               ),
             ),
-          _group(context, '卡住', load.blocked, danger: true),
-          _group(context, isOrphanBucket ? '無人接手' : '進行中', load.active),
-          _group(context, '被指派但還沒認領', load.suggested),
-          _group(context, '完成', load.done, dim: true),
+          _group(context, l10n.boardStatusBlocked, load.blocked,
+              danger: true),
+          _group(
+              context,
+              isOrphanBucket
+                  ? l10n.boardTrackGroupUnclaimed
+                  : l10n.boardStatusInProgress,
+              load.active),
+          _group(context, l10n.boardTrackGroupSuggested, load.suggested),
+          _group(context, l10n.boardStatusDone, load.done, dim: true),
         ],
       ),
     );
@@ -323,7 +326,7 @@ class _MemberCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 5, 14, 6),
               child: Row(children: [
                 Text('·',
-                    style: UepText.mono(size: 11, color: s.inkMute)),
+                    style: UepText.mono(size: 11.5, color: s.inkMute)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -331,12 +334,14 @@ class _MemberCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: UepText.serif(
-                        size: 12.5, color: dim ? s.inkMute : s.ink),
+                        size: 13.5, color: dim ? s.inkMute : s.ink),
                   ),
                 ),
                 if (t.watcherCount > 0) ...[
                   const SizedBox(width: 6),
-                  MonoLabel('${t.watcherCount} 人在等',
+                  MonoLabel(
+                      AppLocalizations.of(context)
+                          .boardTrackWatchers(t.watcherCount),
                       size: 8, letterSpacing: 1.0),
                 ],
               ]),

@@ -241,6 +241,10 @@ class RoomsApi {
     String visibility = 'public',
     String style = 'verbose',
     String styleInstructions = '',
+    // chat | ops。ops 是遠端派工的工作房（§4.1）：不自動封存，而且 Hub 只
+    // 接受人類憑證建——agent 的 token 借不到這個身分（403
+    // `human_token_required_for_ops_room`）
+    String kind = 'chat',
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -248,6 +252,7 @@ class RoomsApi {
           data: {
             'name': name,
             'topic': topic,
+            'kind': kind,
             'visibility': visibility,
             'style': style,
             'style_instructions': styleInstructions,
@@ -391,6 +396,73 @@ class RoomsApi {
         // 拿 Hub 說的那個名字，不是自己送出去的那份——正規化（trim、
         // 長度截斷）發生在它那邊，兩者不保證相同
         return (res.data?['name'] as String?) ?? name.trim();
+      });
+
+  /// 把工作房綁到一個工作區 key。**一次性，綁了不能改。**
+  ///
+  /// 權限是房主；Hub 的退法是契約（`ApiException.code`）：
+  /// - 403 `room_owner_required`：不是房主。
+  /// - 409 `workspace_already_bound`：已經綁過了。
+  /// - 409 `project_not_served`：沒有執行器服務這個 key。
+  /// - 409 `room_not_ops`：這不是工作房。
+  ///
+  /// 兩個身分標頭都帶：房主可能還沒 join 自己的房（那時只有 session key），
+  /// 與 [setVisibility]／[archive] 同一套理由。
+  ///
+  /// Hub 回 `{room: {...}}`（與 `GET /api/rooms/{id}` 同形，2026-09-21 落地後
+  /// 實際對過）。這裡兩種都接：有 `room` 鍵就拆，沒有就當扁平——上一次
+  /// （rename，09/07）兩邊各自照同一份文字實作，對出來是不一致的，而
+  /// `res.data!['room']` 是 null 時 `fromJson` 當場炸。
+  Future<Room> bindWorkspace(
+    String roomId, {
+    required String workspaceKey,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/workspace',
+          data: {'workspace_key': workspaceKey.trim()},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        final data = res.data!;
+        final room = data['room'];
+        return Room.fromJson(
+            room is Map<String, dynamic> ? room : data);
+      });
+
+  /// 同一專案一次只跑一筆的開關。房主可改。
+  ///
+  /// 關掉之後同一個工作區的多筆 run 會同時動同一份 repo——這是使用者自己
+  /// 選的，不是預設。Hub 的退法是契約（`ApiException.code`）：
+  /// - 403 `room_owner_required`：不是房主。
+  /// - 409 `room_not_ops`：這不是工作房。
+  ///
+  /// 兩個身分標頭都帶，與 [bindWorkspace] 同一套理由（房主可能還沒 join
+  /// 自己的房）。回應是 `{room: {...}}`；這裡兩種形狀都接——上一次
+  /// （rename，09/07）兩邊各自照同一份文字實作，對出來是不一致的，而
+  /// `res.data!['room']` 是 null 時 `fromJson` 當場炸。
+  Future<Room> setSingleWriter(
+    String roomId, {
+    required bool enabled,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/api/rooms/$roomId/single-writer',
+          data: {'enabled': enabled},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        final data = res.data!;
+        final room = data['room'];
+        return Room.fromJson(room is Map<String, dynamic> ? room : data);
       });
 
   /// 管理員移出成員（被移出的 session 無法重新加入該房）。

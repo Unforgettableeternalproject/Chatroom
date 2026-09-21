@@ -1,0 +1,2 @@
+# askpass 腳本在 POSIX 上一定要 LF：行尾多一個 CR，shebang 就找不到直譯器
+*.sh text eol=lf

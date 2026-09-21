@@ -4,6 +4,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/markdown_body.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// `#[標題]` 在訊息裡的呈現（契約 v1 第 3、4 條 — 09/09 房 seq 32）。
 ///
@@ -26,6 +27,8 @@ void main() {
   Widget wrap(String content, List<CardRef> refs,
           {void Function(CardRef)? onTap}) =>
       MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: UepMarkdownBody(
@@ -201,6 +204,8 @@ void main() {
 
     testWidgets('🔴 本次修的 bug：卡片 chip 不再是 mention 的金色', (tester) async {
       await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: CardRefChip(ref())),
       ));
@@ -213,6 +218,8 @@ void main() {
 
     testWidgets('mention chip 維持金色——這次動的不是它', (tester) async {
       await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const Scaffold(body: MentionChip('@Novia')),
       ));
@@ -222,6 +229,8 @@ void main() {
 
     testWidgets('現況不明的卡仍然走灰色，不吃新顏色', (tester) async {
       await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: CardRefChip(ref(status: 'deleted'))),
       ));

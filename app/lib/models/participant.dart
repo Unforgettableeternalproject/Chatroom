@@ -18,6 +18,7 @@ class Participant {
     this.parentId,
     this.isAdmin = false,
     this.isHost = false,
+    this.runId = '',
   });
 
   final String id;
@@ -47,6 +48,14 @@ class Participant {
 
   /// 依附的父成員 id；一般成員為 null。
   final String? parentId;
+
+  /// 派工（run）帶進房的身分；一般成員為空字串。
+  ///
+  /// 非空＝這個成員正在替一筆 run 工作，Hub 不會把它當閒置掃掉，所以成員
+  /// 列上**不可以**顯示閒置倒數——那是一個不會發生的倒數。
+  final String runId;
+
+  bool get isOnRun => runId.isNotEmpty;
 
   /// 這個房的建立者（管理員）。
   final bool isAdmin;
@@ -90,6 +99,9 @@ class Participant {
         // 舊 Hub 不回 is_host——false＝不知道。在別人的名字旁邊掛一個他
         // 沒有的身分，比留白糟得多
         isHost: (json['is_host'] as bool?) ?? false,
+        // 舊 Hub 不回 run_id——空字串＝一般成員，也就是這個欄位存在之前
+        // 的實際語意
+        runId: (json['run_id'] as String?) ?? '',
       );
 
   @override
@@ -100,9 +112,10 @@ class Participant {
       other.lastSeenAt == lastSeenAt &&
       other.parentId == parentId &&
       other.isAdmin == isAdmin &&
-      other.isHost == isHost;
+      other.isHost == isHost &&
+      other.runId == runId;
 
   @override
   int get hashCode =>
-      Object.hash(id, status, lastSeenAt, parentId, isAdmin, isHost);
+      Object.hash(id, status, lastSeenAt, parentId, isAdmin, isHost, runId);
 }

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../api/attachments_api.dart';
+import '../l10n/l10n.dart';
 import '../models/question.dart';
 import '../state/composer_drafts.dart';
 import 'uep_button.dart';
@@ -16,6 +17,11 @@ import 'uep_button.dart';
 ///
 /// 「略過」與放著不管是兩件事：略過會明確告訴 agent 改用它原本的方式問，
 /// 放著不管則讓它繼續等。所以略過必須是一個看得見、按得到的動作。
+///
+/// 但**派工跑出來的臨時 agent（run 成員）沒有「原本的對話」**——它是一次性
+/// 的無頭進程，退回去問的那個地方不存在。那時仍要留一個不回答的出口
+/// （抽掉的話問題只會擱到過期，而 bridge 把 expired 講成「人沒看到」，
+/// 那是假的），只是它的意思變成「我不回答，你自己決定」。
 class QuestionCard extends ConsumerStatefulWidget {
   const QuestionCard({
     super.key,
@@ -23,6 +29,7 @@ class QuestionCard extends ConsumerStatefulWidget {
     required this.onAnswer,
     required this.onSkip,
     this.onPickFiles,
+    this.askerOnRun = false,
   });
 
   final Question question;
@@ -42,6 +49,10 @@ class QuestionCard extends ConsumerStatefulWidget {
   /// 選檔並上傳，回傳已上傳的附件。上傳邏輯留在聊天畫面（它已經有一整套
   /// 進度與錯誤處理），這張卡只負責顯示與送出。null＝不提供附加檔案。
   final Future<List<UploadedAttachment>> Function()? onPickFiles;
+
+  /// 提問者是派工帶進房的臨時成員（`run_id` 非空）。預設 false——查不到
+  /// 提問者時維持原本的說法，在不確定的情況下改寫文案比較糟。
+  final bool askerOnRun;
 
   @override
   ConsumerState<QuestionCard> createState() => _QuestionCardState();
@@ -107,9 +118,12 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
   /// 按鈕的字要說出**按下去會送什麼**。三種情形三句話——寫死一個「送出」
   /// 的話，選了三張又打了字的人按下去之前不知道自己送的是哪一種。
   String get _sendLabel {
-    if (_hasPicks && _hasText) return '送出所選 ${_picked.length} ＋補充';
-    if (_hasPicks) return '送出所選 ${_picked.length}';
-    return '送出';
+    final l10n = AppLocalizations.of(context);
+    if (_hasPicks && _hasText) {
+      return l10n.chatQuestionSendPicksPlus(_picked.length);
+    }
+    if (_hasPicks) return l10n.chatQuestionSendPicks(_picked.length);
+    return l10n.chatSend;
   }
 
   /// 送出。
@@ -152,6 +166,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final q = widget.question;
 
     return Container(
@@ -170,14 +185,16 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                q.askerName == null ? '有人在問你' : '${q.askerName} 在問你',
+                q.askerName == null
+                    ? l10n.chatQuestionAskerUnknown
+                    : l10n.chatQuestionAskerNamed(q.askerName!),
                 style: UepText.mono(
-                    size: 9.5, color: s.inkMute, letterSpacing: 1.4),
+                    size: 10.5, color: s.inkMute, letterSpacing: 1.4),
               ),
             ),
           ]),
           const SizedBox(height: 10),
-          Text(q.prompt, style: UepText.sans(size: 14, color: s.ink)),
+          Text(q.prompt, style: UepText.sans(size: 15, color: s.ink)),
           const SizedBox(height: 14),
           if (q.options.isNotEmpty) ...[
             Wrap(
@@ -214,13 +231,13 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
               Row(children: [
                 Text(
                   _picked.isEmpty
-                      ? '可以複選'
+                      ? l10n.chatQuestionMultiHint
                       : (q.allowFreeText
                           // 打了字時要講出來會一起送——上一版是「取代」，
                           // 那是 Hub 沒有 extra 之前的限制，不是我們想要的行為
-                          ? '已選 ${_picked.length} 項，補充會一併帶上'
-                          : '已選 ${_picked.length} 項'),
-                  style: UepText.mono(size: 9.5, color: s.inkMute,
+                          ? l10n.chatQuestionPickedWithNote(_picked.length)
+                          : l10n.chatQuestionPicked(_picked.length)),
+                  style: UepText.mono(size: 10.5, color: s.inkMute,
                       letterSpacing: 1.2),
                 ),
                 const Spacer(),
@@ -230,7 +247,7 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                 // 不是「送這個」與「送那個」的並列選擇
                 if (!q.allowFreeText)
                   UepButton(
-                    label: '送出所選',
+                    label: l10n.chatQuestionSendSelected,
                     small: true,
                     onPressed: (_busy || _picked.isEmpty)
                         ? null
@@ -247,10 +264,12 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                 child: TextField(
                   controller: _controller,
                   enabled: !_busy,
-                  style: UepText.sans(size: 13, color: s.ink),
+                  style: UepText.sans(size: 14, color: s.ink),
                   decoration: InputDecoration(
-                    hintText: q.options.isEmpty ? '你的回答…' : '或自己寫…',
-                    hintStyle: UepText.sans(size: 13, color: s.inkMute),
+                    hintText: q.options.isEmpty
+                        ? l10n.chatQuestionAnswerHint
+                        : l10n.chatQuestionOwnAnswerHint,
+                    hintStyle: UepText.sans(size: 14, color: s.inkMute),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
@@ -282,24 +301,24 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
                 onPressed: (_busy || _uploading) ? null : _pickFiles,
                 icon: Icon(Icons.attach_file, size: 14, color: s.inkMute),
                 label: Text(
-                  _uploading ? '上傳中…' : '附加檔案',
-                  style: UepText.mono(size: 9.5, color: s.inkMute,
+                  _uploading ? l10n.chatUploading : l10n.chatAttachFiles,
+                  style: UepText.mono(size: 10.5, color: s.inkMute,
                       letterSpacing: 1.2),
                 ),
               ),
               if (_files.isNotEmpty)
                 Expanded(
                   child: Text(
-                    _files.map((f) => f.filename).join('、'),
+                    _files.map((f) => f.filename).join(l10n.commonListSeparator),
                     overflow: TextOverflow.ellipsis,
-                    style: UepText.mono(size: 9.5, color: s.ink),
+                    style: UepText.mono(size: 10.5, color: s.ink),
                   ),
                 ),
               if (_files.isNotEmpty)
                 IconButton(
                   onPressed: _busy ? null : () => setState(_files.clear),
                   icon: Icon(Icons.close, size: 14, color: s.inkMute),
-                  tooltip: '清掉附件',
+                  tooltip: l10n.chatClearAttachments,
                 ),
             ]),
           ],
@@ -309,9 +328,11 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
             child: TextButton(
               onPressed: _busy ? null : () => _run(widget.onSkip),
               child: Text(
-                '略過，改在原本的對話裡問我',
+                widget.askerOnRun
+                    ? l10n.chatQuestionSkipRun
+                    : l10n.chatQuestionSkip,
                 style: UepText.mono(
-                    size: 9.5, color: s.inkMute, letterSpacing: 1.2),
+                    size: 10.5, color: s.inkMute, letterSpacing: 1.2),
               ),
             ),
           ),
@@ -339,7 +360,10 @@ class _QuestionCardState extends ConsumerState<QuestionCard> {
     // 附了檔案就不必再逼人打字——「就是這張圖」本身就是答案
     if (text.isEmpty && _files.isEmpty) return;
     _run(() => widget.onAnswer('free_text',
-        text.isEmpty ? '（見附件）' : text, const [], _fileIds(), ''));
+        text.isEmpty ? AppLocalizations.of(context).chatSeeAttachment : text,
+        const [],
+        _fileIds(),
+        ''));
   }
 }
 
@@ -390,14 +414,14 @@ class _OptionChip extends StatelessWidget {
                           size: 13, color: UepColors.gold),
                     ),
                   Text(option.label,
-                      style: UepText.sans(size: 12.5, color: s.ink)),
+                      style: UepText.sans(size: 13.5, color: s.ink)),
                 ]),
                 if (option.description.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
                       option.description,
-                      style: UepText.sans(size: 10.5, color: s.inkMute),
+                      style: UepText.sans(size: 11.5, color: s.inkMute),
                     ),
                   ),
               ],

@@ -3,6 +3,7 @@ import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-04：艾斯維爾「**我在打中文的時候卡住，要去其他地方聚焦
 /// 才可以重新打字**」。
@@ -20,6 +21,8 @@ void main() {
   late List<String> sent;
 
   Widget wrap({String initial = ''}) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: MessageComposer(

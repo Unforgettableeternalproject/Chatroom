@@ -8,6 +8,7 @@ class Room {
     required this.topic,
     required this.status,
     required this.createdAt,
+    this.kind = 'chat',
     this.visibility = 'public',
     this.style = 'verbose',
     this.styleInstructions = '',
@@ -16,6 +17,9 @@ class Room {
     this.lastSeq = 0,
     this.lastActivityAt,
     this.archivedAt,
+    this.workspaceKey,
+    this.workspaceServed = false,
+    this.singleWriter = true,
   });
 
   final String id;
@@ -23,6 +27,15 @@ class Room {
   final String topic;
   final String status; // active | archived
   final String createdAt;
+
+  /// chat（一般對話）/ ops（遠端派工的工作房，REMOTE-OPS-PLAN §4.1）。
+  ///
+  /// ops 房**不自動封存、不進 purge**，而且只有人類憑證建得了。
+  ///
+  /// 舊版 Hub 不回這個欄位——那時一律當成 `chat`，因為那正是這個欄位存在
+  /// 之前所有房間的實際行為（migration 補欄的預設值也是它）。猜成 ops 會讓
+  /// 升級前的每一間房都掛上「不會自動封存」的說明，而那句話是假的。
+  final String kind;
 
   /// public | private。private＝對話鎖定：Hub 不會把它列給沒份的人，
   /// 也不接受沒有邀請的加入。
@@ -53,7 +66,42 @@ class Room {
   final String? lastActivityAt;
   final String? archivedAt;
 
+  /// 這間工作房綁定的工作區 key。**綁了就不能改**（Hub 對第二次綁定回
+  /// 409 `workspace_already_bound`），所以畫面上要先確認再送。
+  ///
+  /// null ＝還沒綁（也涵蓋舊版 Hub 不回這個欄位的情況）。缺鍵猜一個 key
+  /// 出來的話，畫面會說「只能派工到 X」而 Hub 其實誰都收——那句話是假的。
+  final String? workspaceKey;
+
+  /// 現在有沒有執行器在服務 [workspaceKey]。
+  ///
+  /// 舊版 Hub 不回這個欄位一律 false：派工入口要靠它，而把入口畫出來卻
+  /// 沒有人領單，等於一顆按下去只會排隊到天亮的按鈕。
+  final bool workspaceServed;
+
+  /// 同一專案一次只跑一筆（Hub 的寫入鎖）。
+  ///
+  /// 舊版 Hub 不回這個欄位一律 true：那正是這個開關存在之前的實際行為
+  /// （Hub 一直都在鎖）。缺鍵猜 false 會讓畫面說「多筆派工會同時改同一個
+  /// repo」，而 Hub 其實還是一筆一筆跑——那句話是假的。
+  final bool singleWriter;
+
   bool get isArchived => status == 'archived';
+
+  /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
+  /// 一律 409 `room_not_ops`，入口畫出來就是一顆必定失敗的按鈕。
+  bool get isOps => kind == 'ops';
+
+  /// 這間房現在派得出工嗎。**兩個條件缺一不可**：是工作房（非 ops 房的
+  /// 建單是 409 `room_not_ops`），而且綁定的工作區現在有執行器在服務
+  /// （沒綁是 409 `workspace_not_bound`，綁了沒人服務則是一筆沒有人會領
+  /// 的單）。派工入口的判準只有這一份——散在各個畫面裡就是幾份會各自漂移
+  /// 的真相。
+  bool get canDispatchRuns => isOps && workspaceServed;
+
+  /// 綁好了沒。空字串與 null 都是「還沒綁」——Hub 不會回空字串當 key，
+  /// 但畫面不能因為多一個空白就說出「只能派工到「」」這種話。
+  bool get hasWorkspace => (workspaceKey ?? '').isNotEmpty;
 
   bool get isPrivate => visibility == 'private';
 
@@ -65,6 +113,7 @@ class Room {
         topic: (json['topic'] as String?) ?? '',
         status: (json['status'] as String?) ?? 'active',
         createdAt: (json['created_at'] as String?) ?? '',
+        kind: (json['kind'] as String?) ?? 'chat',
         visibility: (json['visibility'] as String?) ?? 'public',
         style: (json['style'] as String?) ?? 'verbose',
         styleInstructions: (json['style_instructions'] as String?) ?? '',
@@ -73,6 +122,9 @@ class Room {
         lastSeq: (json['last_seq'] as int?) ?? 0,
         lastActivityAt: json['last_activity_at'] as String?,
         archivedAt: json['archived_at'] as String?,
+        workspaceKey: _workspaceKey(json['workspace_key']),
+        workspaceServed: (json['workspace_served'] as bool?) ?? false,
+        singleWriter: (json['single_writer'] as bool?) ?? true,
       );
 
   Room copyWith({
@@ -82,6 +134,9 @@ class Room {
     String? style,
     String? styleInstructions,
     bool? youAreAdmin,
+    String? workspaceKey,
+    bool? workspaceServed,
+    bool? singleWriter,
   }) =>
       Room(
         id: id,
@@ -89,6 +144,7 @@ class Room {
         topic: topic,
         status: status ?? this.status,
         createdAt: createdAt,
+        kind: kind,
         visibility: visibility ?? this.visibility,
         style: style ?? this.style,
         styleInstructions: styleInstructions ?? this.styleInstructions,
@@ -97,6 +153,9 @@ class Room {
         lastSeq: lastSeq,
         lastActivityAt: lastActivityAt,
         archivedAt: archivedAt,
+        workspaceKey: workspaceKey ?? this.workspaceKey,
+        workspaceServed: workspaceServed ?? this.workspaceServed,
+        singleWriter: singleWriter ?? this.singleWriter,
       );
 
   @override
@@ -104,4 +163,10 @@ class Room {
 
   @override
   int get hashCode => id.hashCode;
+}
+
+/// 缺鍵、null 與空字串一律收成 null：只有真的綁了才算綁了。
+String? _workspaceKey(dynamic v) {
+  final s = v is String ? v.trim() : '';
+  return s.isEmpty ? null : s;
 }

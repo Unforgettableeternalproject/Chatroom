@@ -1,6 +1,7 @@
-# 發 release：打三個產物，附到 GitHub Release。
+# 發 release：打四個產物（App、hub-kit、mcp-kit、runner-kit），附到 GitHub
+# Release。App 的「下載安裝」就是從這裡的資產抓的，少附一個等於那一包裝不了。
 #
-# 三個產物共用同一顆 commit 的 `_build.json`／`--dart-define`，所以收到的人
+# 四個產物共用同一顆 commit 的 `_build.json`／`--dart-define`，所以收到的人
 # 可以交叉比對 Hub、bridge、App 是不是同一份程式碼——那是這整套版本戳
 # 唯一的用途，一邊對不上就失去意義。
 name: Release
@@ -85,6 +86,17 @@ jobs:
       - name: 打 hub-kit
         run: python host-kit/build.py
 
+      # runner-kit 用 `--expect`：期望值取自 **tag 指向的那顆 commit**，
+      # 不是 `HEAD`。拿 HEAD 當期望值只驗得出自我一致——而 checkout 沒做
+      # 或做錯的那個失效，自我一致照樣成立（見 buildstamp.require_commit）。
+      - name: 打 runner-kit
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          EXPECT=$(git rev-parse --short=12 "$TAG^{commit}")
+          echo "期望的 commit：$EXPECT"
+          python runner-kit/build.py --expect "$EXPECT"
+
       # ⚠️ 這裡刻意不用管線。`python build-app.py | tee log` 會讓 exit code
       # 變成 tee 的，build 失敗照樣綠燈——2026-09-11 在本機實際踩過一次。
       - name: Build App
@@ -108,4 +120,5 @@ jobs:
           files: |
             dist/chatroom-mcp-kit.zip
             dist/chatroom-hub-kit.zip
+            dist/chatroom-runner-kit.zip
             dist/chatroom-app-*.zip

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
 import '../../state/scratchpad_providers.dart';
@@ -22,13 +23,14 @@ class WatchNoticesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final async = ref.watch(watchNoticesProvider);
     return Scaffold(
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bg,
-        title: Text('我在等的東西',
-            style: UepText.display(size: 20, color: s.inkTitle)),
+        title: Text(l10n.boardWatchNoticesTitle,
+            style: UepText.sectionTitle(color: s.inkTitle)),
         actions: [
           async.maybeWhen(
             data: (d) => d.unread == 0
@@ -37,7 +39,7 @@ class WatchNoticesScreen extends ConsumerWidget {
                     padding: const EdgeInsets.only(right: 12),
                     child: Center(
                       child: UepButton(
-                        label: '全部標為已讀',
+                        label: l10n.boardWatchMarkAllRead,
                         variant: UepButtonVariant.outline,
                         small: true,
                         onPressed: () => _markAll(context, ref),
@@ -59,12 +61,10 @@ class WatchNoticesScreen extends ConsumerWidget {
                 child: Padding(
                   padding: const EdgeInsets.all(32),
                   child: Text(
-                    '沒有在等的東西。\n'
-                    '在卡片上按那顆鈴鐺，它完成、被廢止或又被打開時這裡會出現一筆。\n'
-                    '另外，週期收尾時你動過的卡也會直接通知你，不必先按鈴鐺。',
+                    l10n.boardWatchNoticesEmpty,
                     textAlign: TextAlign.center,
                     style: UepText.serif(
-                        size: 13, color: s.inkMute, height: 1.6),
+                        size: 14, color: s.inkMute, height: 1.6),
                   ),
                 ),
               )
@@ -91,7 +91,9 @@ class WatchNoticesScreen extends ConsumerWidget {
       // 標了幾筆要說出來。**0 也說**——「本來就沒有未讀」與「這個請求
       // 根本沒送到」在畫面上長得一模一樣，而後者今天出現過兩次
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(n == 0 ? '沒有可以標記的未讀' : '$n 筆標為已讀'),
+        content: Text(n == 0
+            ? AppLocalizations.of(context).boardWatchNoUnread
+            : AppLocalizations.of(context).boardWatchMarkedRead(n)),
       ));
     } on ApiException catch (e) {
       if (!context.mounted) return;
@@ -146,12 +148,12 @@ class _NoticeRow extends StatelessWidget {
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(
-            watchNoticeLabel(notice.eventType, notice.itemTitle),
+            watchNoticeLabel(AppLocalizations.of(context), notice.eventType,
+                notice.itemTitle),
             style: UepText.sans(
-              size: 13,
+              size: 14,
               color: notice.unread ? s.inkTitle : s.inkMute,
-              height: 1.45,
-            ),
+              height: 1.45),
           ),
           const SizedBox(height: 3),
           Text(
@@ -159,7 +161,7 @@ class _NoticeRow extends StatelessWidget {
               if (notice.boardName.isNotEmpty) notice.boardName,
               if (notice.actorName.isNotEmpty) notice.actorName,
             ].join(' · '),
-            style: UepText.mono(size: 9, letterSpacing: 1.0, color: s.inkMute),
+            style: UepText.mono(size: 10, letterSpacing: 1.0, color: s.inkMute),
           ),
         ]),
       ),

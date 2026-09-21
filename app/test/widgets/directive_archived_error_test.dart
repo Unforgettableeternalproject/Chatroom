@@ -10,6 +10,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// c81f757a 的 App 半邊：**directive 投到封存房，被送出端拒的時候要講對話。**
 ///
@@ -64,6 +65,8 @@ void main() {
         boardByIdProvider('b1').overrideWith((ref) async => _snap()),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Builder(
@@ -92,8 +95,7 @@ void main() {
     await tester.tap(find.text('送出'));
     await tester.pumpAndSettle();
 
-    expect(find.text('這間房已封存，這則判斷沒有送出，也沒有留在稽核串上。'),
-        findsOneWidget);
+    expect(find.text('這間房已封存，這則判斷沒有送出。'), findsOneWidget);
     // 寫死的那句對不上使用者做的事——他送的是判斷，不是發言
     expect(find.text('此聊天室已封存，無法發言'), findsNothing);
   });

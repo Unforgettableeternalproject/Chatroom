@@ -1,13 +1,108 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/errors/api_exception.dart';
 import '../state/app_providers.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/attachment.dart';
+import 'stage_files.dart';
+
+/// 附件的取檔網址。`GET /api/attachments/{id}`——用的是附件 id。
+String attachmentUrl(String serverUrl, String attachmentId) =>
+    '$serverUrl/api/attachments/$attachmentId';
+
+/// 取附件要帶的標頭。房內身分是 Hub 的讀取邊界。
+///
+/// [sessionKey] 是**沒有房**的那條路（Board Library 的 `/boards/:id`）：那裡
+/// 的身分是板成員，Hub 認 `X-Session-Key`。兩個都帶得動，帶了不衝突。
+Map<String, String> attachmentHeaders(String token, String? participantId,
+        {String? sessionKey}) =>
+    {
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      if (participantId != null && participantId.isNotEmpty)
+        'X-Participant-Id': participantId,
+      if (sessionKey != null && sessionKey.isNotEmpty)
+        'X-Session-Key': sessionKey,
+    };
+
+/// 開啟一份附件的檢視。
+///
+/// 圖片留在 App 內（[_FullScreenImage]，可縮放平移）；PDF 與其他型別沒有
+/// 內建的檢視器，下載到暫存再交給系統程式開——**那份暫存檔不是使用者的
+/// 存檔**，要留下來請用存檔鈕。
+///
+/// 沒有任何身分時連請求都不發：那個空窗期發出去的只會是 401。**身分有兩種**
+/// ——房內的 [participantId]，與板軸（`/boards/:id`，沒有房）的 [sessionKey]。
+/// 只認前者的話，板庫進來的素材永遠只會顯示「身分待定」。
+Future<void> openAttachmentPreview(
+  BuildContext context,
+  WidgetRef ref, {
+  required Attachment attachment,
+  required String serverUrl,
+  required String token,
+  String? participantId,
+  String? sessionKey,
+}) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final l10n = AppLocalizations.of(context);
+  void toast(String message) =>
+      messenger?.showSnackBar(SnackBar(content: Text(message)));
+
+  final hasIdentity = (participantId != null && participantId.isNotEmpty) ||
+      (sessionKey != null && sessionKey.isNotEmpty);
+  if (!hasIdentity) {
+    toast(l10n.roomsIdentityPending);
+    return;
+  }
+  final headers =
+      attachmentHeaders(token, participantId, sessionKey: sessionKey);
+  if (attachment.isImage) {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FullScreenImage(
+        url: attachmentUrl(serverUrl, attachment.id),
+        headers: headers,
+        filename: attachment.filename,
+      ),
+    );
+    return;
+  }
+
+  try {
+    final bytes = await ref
+        .read(attachmentsApiProvider)
+        .download(attachment.id,
+            participantId: participantId, sessionKey: sessionKey);
+    // 暫存檔放在各自的資料夾裡：同名檔案（screenshot.png、report.pdf）
+    // 在素材清單裡很常見，直接落在系統暫存目錄會互相蓋掉
+    final dir = await Directory.systemTemp.createTemp('chatroom_preview_');
+    final file = File('${dir.path}${Platform.pathSeparator}'
+        '${_safeFilename(attachment.filename)}');
+    await file.writeAsBytes(bytes);
+    final ok = await launchUrl(file.uri, mode: LaunchMode.externalApplication);
+    if (!ok) toast(l10n.msgAttachNoOpener);
+  } on AttachmentGoneException catch (e) {
+    toast(e.message);
+  } on ApiException catch (e) {
+    toast(l10n.msgAttachOpenFailed(e.message));
+  } on FileSystemException catch (e) {
+    toast(l10n.msgAttachOpenFailed(e.message));
+  }
+}
+
+/// 檔名只用來落一個暫存檔，**不可以讓它跳出那個資料夾**——原始檔名來自
+/// 上傳者，`..\..\` 在 Windows 上一樣成立。
+String _safeFilename(String filename) {
+  final cleaned = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+  return cleaned.isEmpty ? 'attachment' : cleaned;
+}
 
 /// 訊息底下的附件區。
 ///
@@ -20,11 +115,17 @@ class AttachmentView extends StatelessWidget {
     required this.serverUrl,
     required this.token,
     this.participantId,
+    this.roomId,
   });
 
   final List<Attachment> attachments;
   final String serverUrl;
   final String token;
+
+  /// 這則訊息在哪間房。**有房才畫「加到階段」**——階段是那間房掛著的板
+  /// 底下的東西，沒有房就沒有可以掛上去的階段。素材清單自己重用這個元件
+  /// 時也不給（那裡的附件已經在階段上了）。
+  final String? roomId;
 
   /// 房內身分。房間是讀取邊界，附件跟著訊息走——非成員取不到。
   /// 舊版 Hub 忽略這個標頭，帶了不影響。
@@ -40,13 +141,9 @@ class AttachmentView extends StatelessWidget {
   bool get _canFetch =>
       participantId != null && participantId!.isNotEmpty;
 
-  Map<String, String> get _headers => {
-        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-        if (participantId != null && participantId!.isNotEmpty)
-          'X-Participant-Id': participantId!,
-      };
+  Map<String, String> get _headers => attachmentHeaders(token, participantId);
 
-  String _url(Attachment a) => '$serverUrl/api/attachments/${a.id}';
+  String _url(Attachment a) => attachmentUrl(serverUrl, a.id);
 
   @override
   Widget build(BuildContext context) {
@@ -76,6 +173,10 @@ class AttachmentView extends StatelessWidget {
                   // 用途多半就是「這個你看一下」
                   DownloadAttachmentButton(
                       attachment: a, participantId: participantId),
+                  // 「加到階段」與存檔並排：兩者都是「把這個檔案帶去別的
+                  // 地方用」，分開放的話第二條路沒有人會找到
+                  if (roomId != null)
+                    AddToStageButton(attachment: a, roomId: roomId!),
                 ],
               ),
             ),
@@ -132,7 +233,7 @@ class _ImageAttachment extends StatelessWidget {
             // 目錄可能不同步（只備份了 db），那時圖片會永久取不回來
             errorBuilder: (context, error, stack) => _FileAttachment(
               attachment: attachment,
-              note: '圖片載入失敗',
+              note: AppLocalizations.of(context).msgAttachImageFailed,
             ),
           ),
         ),
@@ -172,10 +273,11 @@ class _DownloadAttachmentButtonState
   }
 
   Future<void> _save() async {
+    final l10n = AppLocalizations.of(context);
     final pid = widget.participantId;
     if (pid == null || pid.isEmpty) {
       // 房間是讀取邊界，沒有身分連請求都不該發
-      _toast('還在取得房間身分，稍候再試');
+      _toast(l10n.roomsIdentityPending);
       return;
     }
     setState(() => _busy = true);
@@ -189,15 +291,15 @@ class _DownloadAttachmentButtonState
         fileName: widget.attachment.filename,
         bytes: bytes,
         mimeType: widget.attachment.mime,
-        dialogTitle: '儲存附件',
+        dialogTitle: l10n.msgAttachSaveDialogTitle,
       );
       if (saved == null) return;   // 使用者按了取消，不是錯誤
-      _toast('已存檔：${widget.attachment.filename}');
+      _toast(l10n.msgAttachSaved(widget.attachment.filename));
     } on AttachmentGoneException catch (e) {
       // metadata 在、實體不在：講清楚它回不來了，別讓人一直重試
       _toast(e.message);
     } on ApiException catch (e) {
-      _toast('下載失敗：${e.message}');
+      _toast(l10n.msgAttachDownloadFailed(e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -207,7 +309,7 @@ class _DownloadAttachmentButtonState
   Widget build(BuildContext context) {
     final s = context.uep;
     return IconButton(
-      tooltip: '存到本機',
+      tooltip: AppLocalizations.of(context).msgAttachSaveTooltip,
       visualDensity: VisualDensity.compact,
       onPressed: _busy ? null : _save,
       icon: _busy
@@ -277,14 +379,14 @@ class _FileAttachment extends StatelessWidget {
         Flexible(
           child: Text(
             attachment.filename,
-            style: UepText.sans(size: 12.5, color: s.ink),
+            style: UepText.sans(size: 13.5, color: s.ink),
             overflow: TextOverflow.ellipsis,
           ),
         ),
         const SizedBox(width: 10),
         Text(
           note ?? attachment.readableSize,
-          style: UepText.mono(size: 9.5, color: s.inkMute, letterSpacing: 1.1),
+          style: UepText.mono(size: 10.5, color: s.inkMute, letterSpacing: 1.1),
         ),
       ]),
     );
@@ -321,10 +423,42 @@ class _FullScreenImage extends StatelessWidget {
           Text(
             filename,
             style: UepText.mono(
-                size: 10, color: Colors.white70, letterSpacing: 1.2),
+                size: 10.5, color: Colors.white70, letterSpacing: 1.2),
           ),
         ]),
       ),
+    );
+  }
+}
+
+
+/// 把一則訊息的附件掛到這間房的板上某個階段。
+///
+/// 放在存檔鈕旁邊：找附件的動作只有這一個地方，第二個入口藏在別處等於沒有。
+class AddToStageButton extends ConsumerWidget {
+  const AddToStageButton({
+    super.key,
+    required this.attachment,
+    required this.roomId,
+  });
+
+  final Attachment attachment;
+  final String roomId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    return IconButton(
+      tooltip: AppLocalizations.of(context).msgAttachStageTooltip,
+      visualDensity: VisualDensity.compact,
+      onPressed: () => showAddToStageDialog(
+        context,
+        ref,
+        roomId: roomId,
+        attachmentId: attachment.id,
+        filename: attachment.filename,
+      ),
+      icon: Icon(Icons.playlist_add, size: 15, color: s.inkMute),
     );
   }
 }

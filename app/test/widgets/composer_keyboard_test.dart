@@ -5,6 +5,7 @@ import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 輸入框的鍵盤操作：@ 候選列表方向鍵選取 ＋ 上下鍵遍歷輸入歷史。
 ///
@@ -35,6 +36,8 @@ void main() {
     Message? editTarget,
   }) =>
       MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: MessageComposer(

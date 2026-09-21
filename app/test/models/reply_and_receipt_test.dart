@@ -66,6 +66,13 @@ void main() {
       expect(system('pin').isReceipt, isTrue);
     });
 
+    test('🔴 監督者離場但還有派工在排隊：要成塊，不能混進髮絲線那行小字', () {
+      // 這一則帶著「還有幾筆」與「不會自動取消」，而且是指名要人去處理的
+      expect(system('board_supervisor_left_runs').isReceipt, isTrue);
+      // 單純的離場通知照舊走一行小字——兩者差的是「有沒有事要做」
+      expect(system('board_supervisor_left').isReceipt, isFalse);
+    });
+
     test('加入／離開／封存那類事件不是收據，維持髮絲線樣式', () {
       for (final e in ['join', 'leave', 'kick', 'archive', 'visibility']) {
         expect(system(e).isReceipt, isFalse, reason: e);

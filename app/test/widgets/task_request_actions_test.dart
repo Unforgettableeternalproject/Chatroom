@@ -4,6 +4,7 @@ import 'package:chatroom_app/screens/board/board_task_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// N-4 的兩顆按鈕：**請人接手**（提出）與 **接下／婉拒**（回答）。
 ///
@@ -21,6 +22,8 @@ BoardTask _task({String status = 'todo'}) => BoardTask.fromJson({
 
 Widget _wrap(Widget child) => ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: child),
       ),

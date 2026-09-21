@@ -14,6 +14,8 @@ class SettingsRepository {
 
   static const _kServerUrl = 'chatroom.server_url';
   static const _kThemeMode = 'chatroom.theme_mode';
+  static const _kFontScale = 'chatroom.font_scale';
+  static const _kLocale = 'chatroom.locale';
   static const _kPreferredName = 'chatroom.preferred_name';
   static const _kToken = 'chatroom.api_token';
   static const _kDeviceKey = 'chatroom.device_session_key';
@@ -34,6 +36,7 @@ class SettingsRepository {
   static const _kNotifyMode = 'chatroom.notify_mode';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
+  static const _kOpsExceptionSeen = 'ops.exceptions.seenAt';
 
   static Future<SettingsRepository> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -69,6 +72,26 @@ class SettingsRepository {
   Future<void> setThemeMode(ThemeModePref mode) =>
       _prefs.setString(_kThemeMode, mode.name);
 
+  /// 字級偏好：整個 App 的文字縮放，預設「中」。
+  FontScalePref get fontScale => FontScalePref.values.firstWhere(
+        (f) => f.name == _prefs.getString(_kFontScale),
+        orElse: () => FontScalePref.medium,
+      );
+  Future<void> setFontScale(FontScalePref scale) =>
+      _prefs.setString(_kFontScale, scale.name);
+
+  /// 語言偏好，預設跟隨系統。
+  ///
+  /// 只存偏好本身；`system` 要對應到哪個 locale 由套用端（`app.dart`）交給
+  /// Flutter 自己解析——這裡不把系統語言寫死成一個值，否則使用者換系統語言
+  /// 之後 App 還停在舊的那個。
+  LocalePref get locale => LocalePref.values.firstWhere(
+        (l) => l.name == _prefs.getString(_kLocale),
+        orElse: () => LocalePref.system,
+      );
+  Future<void> setLocale(LocalePref pref) =>
+      _prefs.setString(_kLocale, pref.name);
+
   String get preferredName => _prefs.getString(_kPreferredName) ?? '';
   Future<void> setPreferredName(String name) =>
       _prefs.setString(_kPreferredName, name.trim());
@@ -91,6 +114,14 @@ class SettingsRepository {
   String get codexDispatchThread => _prefs.getString(_kCodexThread) ?? '';
   Future<void> setCodexDispatchThread(String id) =>
       _prefs.setString(_kCodexThread, id.trim());
+
+  /// 監控器（派工異常）看到哪裡了：最後一筆看過的事件時間（ISO）。
+  ///
+  /// 記時間不記 id：清單是跨房合併出來的，「這筆比我看過的新」要能比大小。
+  String get opsExceptionSeenAt =>
+      _prefs.getString(_kOpsExceptionSeen) ?? '';
+  Future<void> setOpsExceptionSeenAt(String createdAt) =>
+      _prefs.setString(_kOpsExceptionSeen, createdAt);
 
   // ---------- 房間層級快取 ----------
 
@@ -197,5 +228,20 @@ class SettingsRepository {
 
 enum ThemeModePref { dark, light }
 
+/// 字級偏好：tiny 極小、small 小、medium 中（預設）、large 大、xlarge 特大。
+///
+/// 只存偏好本身，實際的縮放倍率由套用端（`app.dart` 的 MediaQuery）決定——
+/// 倍率是視覺決策，會被調整，而落盤的值不該跟著改。
+///
+/// 落盤的是 `enum.name`，所以加新檔不會動到舊值：存過 small／medium／large
+/// 的裝置照樣讀得回來。
+enum FontScalePref { tiny, small, medium, large, xlarge }
+
 /// 通知模式：off 不通知、mentions 僅被 @mention、all 所有新訊息。
 enum NotifyModePref { off, mentions, all }
+
+/// 語言偏好：system 跟隨系統、zhTW 繁體中文、en 英文。
+///
+/// 落盤的是 `enum.name`（`system` / `zhTW` / `en`），不是 BCP-47 字串——
+/// 選項是一份有限清單，而 locale 字串的寫法（`zh_TW`／`zh-Hant-TW`）會變。
+enum LocalePref { system, zhTW, en }

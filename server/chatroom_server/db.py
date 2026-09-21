@@ -1,6 +1,11 @@
 """SQLite schema 與連線管理（aiosqlite, WAL 模式）。"""
 
+import logging
+import sqlite3
+
 import aiosqlite
+
+logger = logging.getLogger("chatroom")
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -11,6 +16,13 @@ CREATE TABLE IF NOT EXISTS room (
     name        TEXT NOT NULL,
     topic       TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'active',   -- active / archived
+    -- 房間類型：chat（一般對話，預設）/ ops（遠端派工的工作房）。
+    -- ops 房**不自動封存、不進 purge**：它的存在理由是「隨時可以派工」，
+    -- 而自動封存的判準是「房內沒有 active agent」——那對 ops 房恆真
+    -- （agent 是單次任務，做完就走），於是它每次都會在無人派工時被收掉。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**（board_task.moved_to
+    -- 的教訓）：舊 db 靠 migration 補欄，而這份 CREATE TABLE 是新庫的來源
+    kind        TEXT NOT NULL DEFAULT 'chat',
     -- public / private。private＝對話鎖定：不在別人的房間列表裡出現，
     -- 也不能沒有邀請就加入。這是**可見性**，不是加密——拿得到 room_id
     -- 又已經是成員的人照樣讀得到，它擋的是「逛到」與「自己走進來」
@@ -27,7 +39,17 @@ CREATE TABLE IF NOT EXISTS room (
     activated_at TEXT,                            -- 最近一次變為 active 的時間（建立或解封）
     archived_at TEXT,
     creator_session_key TEXT,                     -- 建立者（管理員）的 session；不外流
-    archive_pending_since TEXT                    -- 自動封存倒數的起點；NULL = 未在倒數
+    archive_pending_since TEXT,                   -- 自動封存倒數的起點；NULL = 未在倒數
+    -- 工作房綁定的工作區 key（ops 房專用）。NULL＝尚未綁定，不能派工。
+    -- 一次性：綁定後不提供解綁——run 的歷史都掛在這間房下，中途換工作區
+    -- 等於讓同一串稽核記錄橫跨兩份工作樹，而回頭看時分不出哪筆是哪邊的。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    workspace_key TEXT,
+    -- 同一個工作區一次只允許一個寫入者（ops 房專用開關，預設開）。
+    -- 關掉＝這間房的 run 容許併行動同一份工作樹，由房主自己負責。
+    -- 預設 1（開）：安全的那一邊要是預設值，舊房升級後行為不變。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    single_writer INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -59,7 +81,13 @@ CREATE TABLE IF NOT EXISTS participant (
     joined_seq   INTEGER,
     -- hold 標記的到期時間；NULL＝沒有 hold。時限內 presence sweeper 不會
     -- 因閒置移除這個成員（跑長測試、長編譯時自行掛上，做完再解除）
-    hold_until   TEXT
+    hold_until   TEXT,
+    -- 這個成員是哪一筆派工（run）帶進來的。session_key 形如
+    -- `claude-run-<run_id>` 且那筆 run 屬於這間房時填入；空字串＝一般成員。
+    -- 工作房是**常駐**的，而每一筆 run 都是一個新身分——不記下來的話，run
+    -- 結束時沒有人說得出該把誰請出去，成員列的「已離開」會隨派工次數無限
+    -- 變長。⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    run_id       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_participant_room ON participant(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_participant_session ON participant(session_key, status);
@@ -72,6 +100,12 @@ CREATE TABLE IF NOT EXISTS message (
     room_id    TEXT NOT NULL REFERENCES room(id),
     seq        INTEGER NOT NULL,
     sender_id  TEXT REFERENCES participant(id),   -- NULL = 系統訊息
+    -- 發話當下 participant.kind 的快照（claude / codex / human / other）。
+    -- run 成員結束後不進成員名冊，client 從名冊反查 kind 會查不到而退回
+    -- other——一句 agent 說過的話，在他離開之後就長得跟系統雜訊一樣。
+    -- 空字串＝這一欄存在之前的舊訊息或系統訊息。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    sender_kind TEXT NOT NULL DEFAULT '',
     kind       TEXT NOT NULL DEFAULT 'chat',      -- chat / system
     -- system 訊息的機器可讀型別（join / leave / kick / idle_removed /
     -- archive / archive_pending / unarchive）。內容是給人看的中文，client
@@ -298,6 +332,28 @@ CREATE TABLE IF NOT EXISTS board_checklist (
 );
 CREATE INDEX IF NOT EXISTS idx_bchecklist_room
     ON board_checklist(room_id, board_seq);
+
+-- 階段素材：附件掛在 **checklist（階段）** 上，該階段的所有卡與 run 共用
+-- （艾斯維爾 2026-09-17 裁決）。
+--
+-- 掛在階段而不是卡：一輪 run 的「任務相關附件」要答得出來，而卡是會換的
+-- ——上一輪產出的截圖掛在上一張卡上，下一輪就看不到了，於是 agent 只能
+-- 回去掃整間房的歷史附件（而工作房是常駐的，那份歷史只會愈長愈久）。
+--
+-- ⚠️ 這張表**不軟刪除**：它沒有增量讀取的 tombstone 需求（素材清單跟著
+-- checklist 一起讀），留一列已刪的只會讓「這個階段有幾份素材」說謊。
+CREATE TABLE IF NOT EXISTS board_checklist_file (
+    id            TEXT PRIMARY KEY,
+    checklist_id  TEXT NOT NULL REFERENCES board_checklist(id),
+    attachment_id TEXT NOT NULL REFERENCES attachment(id),
+    added_by      TEXT NOT NULL DEFAULT '',   -- actor_key（人類或 agent）
+    added_by_name TEXT NOT NULL DEFAULT '',
+    note          TEXT NOT NULL DEFAULT '',   -- 一句話：這份素材是什麼
+    created_at    TEXT NOT NULL,
+    UNIQUE(checklist_id, attachment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bchecklist_file
+    ON board_checklist_file(checklist_id, created_at);
 
 CREATE TABLE IF NOT EXISTS board_task (
     id           TEXT PRIMARY KEY,
@@ -699,6 +755,166 @@ CREATE INDEX IF NOT EXISTS idx_board_watch_actor
 
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
+
+-- ── 遠端派工（Remote Ops，REMOTE-OPS-PLAN §4）────────────────────────────
+--
+-- Hub 是佇列與狀態的**唯一真相**，執行器只是笨執行者：領一筆、起進程、
+-- 回報、領下一筆。執行器重啟不丟佇列，Hub 看得到誰在跑、誰在排、限額狀態。
+
+CREATE TABLE IF NOT EXISTS agent_run (
+    id            TEXT PRIMARY KEY,
+    room_id       TEXT NOT NULL REFERENCES room(id),
+    board_id      TEXT NOT NULL DEFAULT '',
+    -- investigate | ticket | stage | push（scheduled 留給 P2 的排程）
+    kind          TEXT NOT NULL,
+    project       TEXT NOT NULL DEFAULT '',
+    -- checklist_id / task_id，push 時是 repo key
+    ref           TEXT NOT NULL DEFAULT '',
+    brief         TEXT NOT NULL DEFAULT '',
+    -- 派工者。participant 會隨離房消失，所以**三個都存**：id 給當下的畫面、
+    -- actor_key 給「這是同一個人回來了」、名字快照給事後顯示
+    requested_by           TEXT NOT NULL DEFAULT '',
+    requested_by_actor_key TEXT NOT NULL DEFAULT '',
+    requested_by_name      TEXT NOT NULL DEFAULT '',
+    -- **誰動的手**，與上面三欄分開。上面那組是「配額算誰的」：Supervisor
+    -- 代派時記的是**指定它的那個人類**（艾斯維爾 2026-09-19 裁定），所以
+    -- 它說不出這一筆其實是 agent 按的。human | agent，名字是房內顯示名。
+    -- ⚠️ 這兩欄在 MIGRATIONS 也有一份，兩邊都要改
+    requester_kind         TEXT NOT NULL DEFAULT 'human',
+    requester_name         TEXT NOT NULL DEFAULT '',
+    -- queued | claimed | running | limited | handoff | done | failed | cancelled
+    status        TEXT NOT NULL DEFAULT 'queued',
+    priority      INTEGER NOT NULL DEFAULT 0,
+    position      INTEGER NOT NULL DEFAULT 0,
+    runner_id     TEXT NOT NULL DEFAULT '',
+    claude_session_id TEXT NOT NULL DEFAULT '',
+    attempt       INTEGER NOT NULL DEFAULT 0,
+    parent_run_id TEXT NOT NULL DEFAULT '',
+    handoff_depth INTEGER NOT NULL DEFAULT 0,
+    -- 取消請求。running 的 run 不能在 Hub 這一端直接殺，只能立旗標讓執行器
+    -- 在下一次 heartbeat 收走——**狀態不先改**，否則畫面會說它停了而進程還在
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    -- 收尾請求（軟停止）。與 `cancel_requested` 的分別是**誰來收場**：取消
+    -- 是殺進程，收尾是讓 agent 自己把目前這一步做完、寫完摘要再結束。
+    -- NULL＝沒有人請它收尾。⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    soft_stop_requested_at TEXT,
+    -- 已經轉達給執行器的 @ 訊息游標（房內遞增 seq）。0＝還沒有游標，此時
+    -- 只把它補到房內現況、不送任何訊息——把歷史上所有 @ 一次灌進去，等於
+    -- 讓一筆剛起跑的 run 先收到一疊跟它無關的話
+    mention_cursor_seq INTEGER NOT NULL DEFAULT 0,
+    usage_json    TEXT NOT NULL DEFAULT '{}',
+    result        TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    claimed_at    TEXT,
+    started_at    TEXT,
+    ended_at      TEXT,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_room ON agent_run(room_id, status);
+-- 領單的排序鍵：priority 高的先、同 priority 先進先出
+CREATE INDEX IF NOT EXISTS idx_agent_run_queue
+    ON agent_run(status, priority DESC, position);
+-- 同一個 ref 只能有一筆還沒結束的 run，靠 `idx_agent_run_ref_active`
+-- 這條 partial unique index 擋。**它不在這份 SCHEMA 裡**：executescript
+-- 是開 DB 的必經路徑，既有資料若已經違反唯一性，建在這裡等於 Hub 直接
+-- 起不來。建立與退場都在 `_ensure_run_ref_unique()`。
+
+-- 稽核串：狀態的**每一次**變化都留一筆。缺一筆就是一條看起來完整、
+-- 實際上有洞的稽核串（board_event 的教訓）
+CREATE TABLE IF NOT EXISTS agent_run_event (
+    id          TEXT PRIMARY KEY,
+    run_id      TEXT NOT NULL REFERENCES agent_run(id),
+    room_id     TEXT NOT NULL,
+    from_status TEXT NOT NULL DEFAULT '',
+    to_status   TEXT NOT NULL,
+    actor       TEXT NOT NULL DEFAULT '',
+    actor_name  TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_run_event_run
+    ON agent_run_event(run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS runner (
+    id            TEXT PRIMARY KEY,
+    host          TEXT NOT NULL,
+    label         TEXT NOT NULL DEFAULT '',
+    -- online | paused | limited | offline
+    status        TEXT NOT NULL DEFAULT 'online',
+    max_parallel  INTEGER NOT NULL DEFAULT 3,
+    running_count INTEGER NOT NULL DEFAULT 0,
+    -- 允許的 project key（JSON 陣列）。領單時據此過濾。
+    -- 這一欄是**公開**工作區：哪間房都綁得上、任何看得到那間房的人都
+    -- 看得到這個 key
+    projects      TEXT NOT NULL DEFAULT '[]',
+    -- 私人工作區（JSON 陣列）。**只能綁到私人房**：公開房的成員
+    -- 名單不受控制，把它當成普通工作區的話，工作區的名字跟那裡的
+    -- 派工會在一間逆法人都進得來的房裡走光。
+    -- 與 `projects` 分開兩欄而不是加一個旗標：同一台執行器常常兩種都有。
+    -- 舊執行器不報這一欄 ⇒ '[]'，行為跟這個欄位存在之前一模一樣
+    private_projects TEXT NOT NULL DEFAULT '[]',
+    limited_until TEXT,
+    limit_reason  TEXT NOT NULL DEFAULT '',
+    usage_window_json TEXT NOT NULL DEFAULT '{}',
+    -- 儀表板狀態（§4.4）：執行器每次 heartbeat 帶上，Hub **原樣存**不解讀
+    dashboard_json TEXT NOT NULL DEFAULT '{}',
+    -- 註冊時發的執行器憑證，**只存 sha256**（§4.3）。明文只在建立那一次
+    -- 回給執行器；Hub 這邊存明文的話，一次 DB 外洩等於所有執行器被接管。
+    -- 空字串＝這一欄存在之前註冊的執行器，驗證放行（見 app.py 的
+    -- `_runner_authed`）——升級一次 Hub 就讓所有在跑的執行器全部 403，
+    -- 而它們在遠端沒有人重跑註冊
+    token_sha256  TEXT NOT NULL DEFAULT '',
+    version       TEXT NOT NULL DEFAULT '',
+    registered_at TEXT NOT NULL,
+    last_seen_at  TEXT NOT NULL
+);
+-- 同 host+label 冪等：執行器重啟不該在名錄上多長一列
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_host_label
+    ON runner(host, label);
+
+-- 執行器上下線：監控面板要的「掉線／恢復」在此之前只是一則房內 system
+-- 訊息，而訊息的內容是給人看的中文，機器要精準過濾就只能解析字串。
+-- 為什麼不塞進 `agent_run_event`：那張表的 `run_id` 有外鍵指著 `agent_run`，
+-- 而掉線這件事**沒有對應的 run**（它掉的時候手上那幾筆還在跑，但事件不屬
+-- 於其中任何一筆）。
+-- `room_id` 是「掉線當下還有它的 run 在跑的 ops 房」——監控面板用它決定
+-- 這筆事件給不給某個人看，所以沒有房的掉線不記（沒有人在等它的機器）。
+CREATE TABLE IF NOT EXISTS runner_event (
+    id          TEXT PRIMARY KEY,
+    runner_id   TEXT NOT NULL,
+    room_id     TEXT NOT NULL,
+    -- runner_offline | runner_online
+    kind        TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runner_event_created
+    ON runner_event(created_at);
+
+CREATE TABLE IF NOT EXISTS runner_command (
+    id          TEXT PRIMARY KEY,
+    runner_id   TEXT NOT NULL REFERENCES runner(id),
+    -- pause | resume | restart | drain
+    command     TEXT NOT NULL,
+    issued_by   TEXT NOT NULL DEFAULT '',
+    issued_by_name TEXT NOT NULL DEFAULT '',
+    -- 從哪間房下的命令。**只是 provenance，沒有外鍵**：命令屬於執行器，
+    -- 房刪掉不代表這筆命令的歷史要跟著消失（board_task.source_room_id 同理）
+    room_id     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    -- 取走的時間（Hub 在 heartbeat 把命令交給執行器時寫）
+    acked_at    TEXT,
+    -- 真正生效的時間（執行器在下一次 heartbeat 用 `command_acks` 回報）。
+    -- 少了它，畫面上只能說「已送達」，而人要的是「已經照做了」
+    applied_at  TEXT,
+    -- 執行器對這筆命令講的一句話（「已暫停」「等 2 筆 run 結束後重啟」）。
+    -- 沒生效也要寫：等待中的 restart 不寫理由的話，面板會停在空白
+    note        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_runner_command_pending
+    ON runner_command(runner_id, acked_at);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
@@ -720,6 +936,16 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("participant", "join_ip", "join_ip TEXT"),
     ("room", "creator_session_key", "creator_session_key TEXT"),
     ("room", "archive_pending_since", "archive_pending_since TEXT"),
+    # 工作房綁定的工作區。舊 ops 房一律 NULL＝未綁定：派工前要先綁，
+    # 而猜一個 key 填進去的話，派出去的工作會落在別人的工作樹上
+    ("room", "workspace_key", "workspace_key TEXT"),
+    # 同一個工作區一次只跑一筆。舊房一律補 1（開）：預設值要落在安全的
+    # 那一邊，補成 0 的話升級一次就讓所有既有工作房開始併行動同一份工作樹
+    ("room", "single_writer", "single_writer INTEGER NOT NULL DEFAULT 1"),
+    # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
+    # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
+    ("runner", "private_projects",
+     "private_projects TEXT NOT NULL DEFAULT '[]'"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
@@ -901,6 +1127,44 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 了，事後查不回來。空字串／NULL＝沒發生過這件事
     ("room", "deleted_board_name", "deleted_board_name TEXT NOT NULL DEFAULT ''"),
     ("room", "deleted_board_at", "deleted_board_at TEXT"),
+    # 房間類型（REMOTE-OPS-PLAN §4.1）。**既有房一律 chat**——那正是這一欄
+    # 存在之前的實際行為（所有房都走「無 active agent 即自動封存」）。
+    # 反過來預設成 ops 會讓整個 Hub 上的房間全部停止自動封存，而沒有任何
+    # 地方會報錯。⚠️ 這一欄在 SCHEMA 的 CREATE TABLE 也有一份，兩邊都要改
+    ("room", "kind", "kind TEXT NOT NULL DEFAULT 'chat'"),
+    # 執行器憑證的 hash（REMOTE-OPS-PLAN §4.3）。既有列一律空字串＝沒有
+    # 憑證，驗證照舊放行；下一次 register 會補發一把（`register_runner`）
+    ("runner", "token_sha256", "token_sha256 TEXT NOT NULL DEFAULT ''"),
+    # 這個成員是哪一筆 run 帶進來的（REMOTE-OPS-PLAN §5.4）。既有成員一律
+    # 空字串＝不是 run 帶進來的，那正是這一欄存在之前的事實。猜著回填會在
+    # 下一次 run 結束時把一般成員一起請出房間，而他本人什麼都沒做
+    ("participant", "run_id", "run_id TEXT NOT NULL DEFAULT ''"),
+    # 命令回饋鏈（REMOTE-OPS-PLAN §5.7）。既有命令的 applied_at 是 NULL＝
+    # 這一欄存在之前下的，沒有人回報過生效；回填成 acked_at 會讓那些命令
+    # 看起來「已生效」，而那是 Hub 自己編的
+    ("runner_command", "applied_at", "applied_at TEXT"),
+    ("runner_command", "note", "note TEXT NOT NULL DEFAULT ''"),
+    # 發話者 kind 的快照（REMOTE-OPS-PLAN §12 待辦 3）。既有訊息一律空字串，
+    # 由 `_migrate_data` 版次 4 從 participant 回填一次；回填不到的（成員列
+    # 已經被刪掉的）留空＝說不出來，由 client 自行退回舊的反查法
+    ("message", "sender_kind", "sender_kind TEXT NOT NULL DEFAULT ''"),
+    # 收尾請求（軟停止）。既有 run 一律 NULL＝沒有人請它收尾，那正是這一欄
+    # 存在之前的事實。回填成任何時間戳都會讓一筆正在跑的 run 在下一次心跳
+    # 被要求收尾，而沒有人按過那顆鈕
+    ("agent_run", "soft_stop_requested_at", "soft_stop_requested_at TEXT"),
+    # @ 轉達的游標。既有 run 一律 0＝還沒有游標；0 的處理是「補到房內現況、
+    # 不送」（見 app.py 的 `_collect_run_mentions`），不是「從第一則開始送」
+    ("agent_run", "mention_cursor_seq",
+     "mention_cursor_seq INTEGER NOT NULL DEFAULT 0"),
+    # 派工者身分（Supervisor 自派工，2026-09-19）。既有 run 一律 human＝
+    # 這兩欄存在之前，建單就只有人類做得到，那正是事實。預設成 agent 會讓
+    # 所有歷史 run 的房內訊息開始說「由 Supervisor 派工」，而沒有人派過
+    ("agent_run", "requester_kind",
+     "requester_kind TEXT NOT NULL DEFAULT 'human'"),
+    # 名字留空＝說不出來；回填成 requested_by_name 會把「配額算誰的」那個
+    # 人寫成動手的人，而這兩件事正是這一欄要分開的
+    ("agent_run", "requester_name",
+     "requester_name TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1109,6 +1373,51 @@ async def _rebuild_board_tables(db: aiosqlite.Connection) -> None:
         await db.execute("PRAGMA foreign_keys=ON")
 
 
+# 同一個 ref 的「還沒結束」定義。**不含 handoff**：交接的父 run 永遠停在
+# handoff（它同時在 app.py 的 _RUN_TERMINAL 裡），把它算成還沒結束的話，
+# 一張卡只要交接過一次就再也派不了工。與 app.py `create_run` 的
+# `_RUN_ACTIVE` 減去 handoff 是同一組，改一邊就要改另一邊。
+RUN_REF_ACTIVE_STATUSES = ("queued", "claimed", "running", "limited")
+
+_RUN_REF_UNIQUE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_ref_active"
+    " ON agent_run(room_id, ref)"
+    " WHERE status IN ('queued','claimed','running','limited')")
+
+
+async def _ensure_run_ref_unique(db: aiosqlite.Connection) -> None:
+    """同房同 ref 只能有一筆進行中的 run——交給資料庫保證。
+
+    `create_run` 的 SELECT 檢查擋不住併發：兩個請求可以同時查到「沒有」
+    再各自 INSERT。那條 SELECT 留著當快速路徑，真正的唯一性在這條索引。
+
+    **既有資料違反唯一性時不擋開機**：那是已經發生過的事，建不起來就
+    記一筆 warning 退回沒有索引的狀態（行為等同今天），讓 Hub 起得來，
+    由人去收拾那幾筆重複的 run。舊列一律不動——這裡沒有任何依據可以
+    決定該取消哪一筆。
+    """
+    marks = ",".join("?" for _ in RUN_REF_ACTIVE_STATUSES)
+    try:
+        dups = await (await db.execute(
+            "SELECT room_id, ref, COUNT(*) AS n FROM agent_run"
+            f" WHERE status IN ({marks})"
+            " GROUP BY room_id, ref HAVING n > 1",
+            RUN_REF_ACTIVE_STATUSES)).fetchall()
+    except sqlite3.Error:  # 表還不存在（更舊的 DB）：讓索引自己去試
+        dups = []
+    for row in dups:
+        logger.warning(
+            "agent_run 有重複的進行中派工：room=%s ref=%s 共 %s 筆，"
+            "唯一性索引會建不起來，請先收掉多出來的那幾筆",
+            row["room_id"], row["ref"], row["n"])
+    try:
+        await db.execute(_RUN_REF_UNIQUE_INDEX)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "idx_agent_run_ref_active 建不起來（%s）：重複派工這一關"
+            "暫時只剩 create_run 的檢查擋著", exc)
+
+
 async def _migrate(db: aiosqlite.Connection) -> None:
     """為舊版 DB 補上後續版本新增的欄位（冪等）。"""
     for table, column, ddl in MIGRATIONS:
@@ -1118,13 +1427,14 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
+    await _ensure_run_ref_unique(db)
     await _migrate_data(db)
 
 
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 3
+DATA_VERSION = 6
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1163,14 +1473,52 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         # 只清「現在真的有 active 身分」的那些：那是正面證據，不是猜測。
         # 真的還沒回來的維持標記——那個標記本來就是要說出「本來是誰在看，
         # 但他走了」。
+        # ⚠️ 清成 **NULL** 不是空字串（版次 6 一併把當初寫成空字串的那些
+        # 收乾淨）：資格判準問的是 `board_supervisor_left_at IS NULL`。
         await db.execute(
-            "UPDATE room SET board_supervisor_left_at=''"
-            " WHERE board_supervisor_left_at != ''"
+            "UPDATE room SET board_supervisor_left_at=NULL"
+            " WHERE board_supervisor_left_at IS NOT NULL"
+            "   AND board_supervisor_left_at != ''"
             "   AND EXISTS (SELECT 1 FROM participant p"
             "               WHERE p.room_id = room.id"
             "                 AND p.session_key = room.board_supervisor_session_key"
             "                 AND p.status = 'active')"
         )
+    if version < 4:
+        # `message.sender_kind` 是後來才加的欄位，既有訊息全是空字串。
+        # 回填一次：JOIN 得到 participant 就拿它的 kind，拿不到就留空。
+        #
+        # 只填 sender_id 有值的那些：系統訊息沒有發話者，硬塞一個 kind
+        # 會讓 client 把 Hub 的話當成某個人說的。
+        await db.execute(
+            "UPDATE message SET sender_kind = COALESCE("
+            "  (SELECT p.kind FROM participant p WHERE p.id = message.sender_id), '')"
+            " WHERE sender_id IS NOT NULL AND sender_kind = ''"
+        )
+    if version < 5:
+        # 遠端派工的命令有「已送出 → 已收到 → 已生效」三段，而 App 把
+        # `applied_at IS NULL` 當成「還在進行中」→ 重啟鈕與恢復鈕一起停用。
+        # 功能上線前、以及舊版執行器（領走命令就退出、從來不回 ack）留下的
+        # 命令永遠停在第二段，正式 Hub 上有四筆從 09-17 卡到 09-18。
+        #
+        # 回填成 `applied_at = acked_at`，不是「現在」：那筆命令真正發生的
+        # 時刻就是被取走的那一刻，寫成今天等於在面板上編一個新的事件。
+        await db.execute(
+            "UPDATE runner_command SET applied_at=acked_at,"
+            " note='舊版執行器未回報生效，這筆命令視為已結束。'"
+            " WHERE acked_at IS NOT NULL AND applied_at IS NULL")
+    if version < 6:
+        # supervisor 的「已離開」解除，兩邊用的寫法本來對不上：解除那一半
+        # 寫的是**空字串**，而資格判準（`_board_supervisor_room`）問的是
+        # `IS NULL`。於是離開過一次再回來的 supervisor，畫面上寫著他在、
+        # 房裡也公告過「回來了」，確認週期與派工卻照樣 403——沒有任何地方
+        # 說得出為什麼，因為兩邊各自看都完全正確。
+        #
+        # 以 NULL 為正，把存量的空字串一次收乾淨。空字串與 NULL 在這一欄
+        # 的語意本來就是同一件事（沒有離開），只是形狀不同。
+        await db.execute(
+            "UPDATE room SET board_supervisor_left_at=NULL"
+            " WHERE board_supervisor_left_at=''")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

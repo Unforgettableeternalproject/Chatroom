@@ -39,7 +39,9 @@ CREATE TABLE message (
 
 async def _columns(db, table):
     rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
-    return {r["name"] for r in rows}
+    # 用位置取（table_info 的第 1 欄是名字）：升級前的 DB 是原始連線，
+    # row_factory 要 open_db 才設，用鍵取會 TypeError
+    return {r[1] for r in rows}
 
 
 @pytest.mark.asyncio
@@ -81,6 +83,77 @@ async def test_legacy_db_gains_new_columns_without_losing_rows(tmp_path):
         ).fetchone()
         assert row["content"] == "舊訊息"
         assert row["reply_to_seq"] is None
+        # 舊房一律補成「開」：這個開關管的是同一個工作區能不能同時跑兩筆，
+        # 補成 0 等於升級一次就讓所有既有工作房開始併行動同一份工作樹
+        assert "single_writer" in await _columns(db, "room")
+        row = await (
+            await db.execute("SELECT single_writer FROM room WHERE id='r1'")
+        ).fetchone()
+        assert row["single_writer"] == 1
+    finally:
+        await db.close()
+
+
+# Remote Ops（REMOTE-OPS-PLAN §4）之前的樣子：房沒有 kind，四張新表都不存在
+REMOTE_OPS_TABLES = ("agent_run", "agent_run_event", "runner", "runner_command")
+
+
+async def _tables(db):
+    rows = await (await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+    return {r[0] for r in rows}
+
+
+@pytest.mark.asyncio
+async def test_pre_remote_ops_db_gains_room_kind_and_the_new_tables(tmp_path):
+    """升級到 Remote Ops：既有 DB 要補 `room.kind` 與四張新表，舊房仍可讀。
+
+    `kind` 的預設**必須是 chat**：反過來預設 ops 會讓整個 Hub 上的房間全部
+    停止自動封存，而沒有任何地方會報錯——那是一個只會在幾天後才被發現的
+    行為改變。四張表則是「建得起來」的問題：少一張的話，症狀不是啟動失敗，
+    而是第一次有人派工時才 no such table。
+    """
+    path = str(tmp_path / "preops.db")
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(LEGACY)
+        await db.execute(
+            "INSERT INTO room (id, name, created_at)"
+            " VALUES ('r1','升級前的房','2026-01-01')"
+        )
+        await db.execute(
+            "INSERT INTO message (id, room_id, seq, kind, content, created_at)"
+            " VALUES ('m1','r1',1,'chat','升級前的訊息','2026-01-01')"
+        )
+        await db.commit()
+        before = await _tables(db)
+        assert not (before & set(REMOTE_OPS_TABLES)), (
+            "升級前的 schema 就已經有這些表了，這條測試等於沒驗")
+        assert "kind" not in await _columns(db, "room")
+
+    db = await open_db(path)
+    try:
+        assert "kind" in await _columns(db, "room")
+        row = await (
+            await db.execute("SELECT name, kind FROM room WHERE id='r1'")
+        ).fetchone()
+        assert row["name"] == "升級前的房"
+        assert row["kind"] == "chat", "既有房被改成 ops 的話，它們會停止自動封存"
+        # 舊訊息仍讀得到（補欄不動資料）
+        row = await (
+            await db.execute("SELECT content FROM message WHERE id='m1'")
+        ).fetchone()
+        assert row["content"] == "升級前的訊息"
+
+        now = await _tables(db)
+        missing = [t for t in REMOTE_OPS_TABLES if t not in now]
+        assert not missing, f"升級後還是少了這幾張表：{missing}"
+        # 建得起來還不夠：每一張都要真的寫得進去（欄位對得上）
+        for table in REMOTE_OPS_TABLES:
+            await db.execute(f"SELECT * FROM {table} LIMIT 1")
+        assert "token_sha256" in await _columns(db, "runner")
+        # run 成員的標記。**舊 DB 補不到這一欄的話，症狀不是啟動失敗**，
+        # 而是每一次 join 都 no such column——整間 Hub 沒有人進得來
+        assert "run_id" in await _columns(db, "participant")
     finally:
         await db.close()
 
@@ -94,5 +167,98 @@ async def test_open_db_is_reentrant(tmp_path):
     db = await open_db(path)
     try:
         assert "visibility" in await _columns(db, "room")
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_runner_commands_are_backfilled_as_applied(tmp_path):
+    """卡在「已收到、沒生效」的舊命令要一次收乾淨（實機 2026-09-18）。
+
+    App 把 `applied_at IS NULL` 當成進行中 → 重啟鈕與恢復鈕一起停用。正式
+    Hub 上有四筆這樣的命令（功能上線前的 pause／resume，以及舊版執行器領走
+    就退出的 restart），人看到的是一台永遠按不動的執行器。
+
+    回填成 `applied_at = acked_at`：那筆命令真正發生的時刻就是被取走的那一
+    刻，寫成「現在」等於在面板上編一個新的事件。
+    """
+    path = str(tmp_path / "cmds.db")
+    db = await open_db(path)
+    await db.execute(
+        "INSERT INTO runner (id, host, label, status, max_parallel, projects,"
+        " registered_at, last_seen_at)"
+        " VALUES ('rn1','esvel-pc','main','offline',1,'[]',"
+        "'2026-09-17T00:00:00Z','2026-09-17T00:00:00Z')")
+    await db.execute(
+        "INSERT INTO runner_command (id, runner_id, command, created_at,"
+        " acked_at, applied_at) VALUES"
+        " ('c1','rn1','restart','2026-09-18T09:11:00Z',"
+        "  '2026-09-18T09:12:00Z', NULL),"
+        " ('c2','rn1','pause','2026-09-17T01:00:00Z', NULL, NULL)")
+    # 回到這次遷移之前的版次
+    await db.execute("PRAGMA user_version=4")
+    await db.commit()
+    await db.close()
+
+    db = await open_db(path)
+    rows = {r["id"]: r for r in await (await db.execute(
+        "SELECT id, acked_at, applied_at, note FROM runner_command")
+    ).fetchall()}
+    await db.close()
+    assert rows["c1"]["applied_at"] == rows["c1"]["acked_at"]
+    assert "舊版執行器" in rows["c1"]["note"]
+    assert rows["c2"]["applied_at"] is None, (
+        "還沒被取走的命令也被收掉了——那筆命令執行器根本還沒看到")
+
+
+@pytest.mark.asyncio
+async def test_duplicate_active_runs_do_not_block_startup(tmp_path):
+    """存量資料已經違反「同 ref 只能一筆進行中」時，Hub 還是要起得來。
+
+    唯一性索引是新加的約束，而它要面對的是一個一直在跑的 `chatroom.db`。
+    建不起來就退回沒有索引（行為等同加索引之前）並記一筆 warning——在開
+    DB 的路徑上丟例外的話，使用者看到的是一個再也打不開的 Hub，而原因是
+    兩筆半年前的重複派工。
+    """
+    path = str(tmp_path / "dupruns.db")
+    db = await open_db(path)
+    # 存量 DB 的樣子：索引還不存在，所以那兩筆重複當初寫得進去
+    await db.execute("DROP INDEX IF EXISTS idx_agent_run_ref_active")
+    await db.execute(
+        "INSERT INTO room (id, name, next_seq, created_at)"
+        " VALUES ('r1','工作房',1,'2026-09-01T00:00:00Z')")
+    for rid in ("run-a", "run-b"):
+        await db.execute(
+            "INSERT INTO agent_run (id, room_id, kind, project, ref, status,"
+            " created_at, updated_at) VALUES (?,'r1','investigate',"
+            "'ai-website','task-1','queued','2026-09-01T00:00:00Z',"
+            "'2026-09-01T00:00:00Z')", (rid,))
+    await db.commit()
+    await db.close()
+
+    db = await open_db(path)
+    try:
+        rows = await (await db.execute(
+            "SELECT id FROM agent_run ORDER BY id")).fetchall()
+        # 舊列一律不動：這裡沒有依據決定該取消哪一筆
+        assert [r[0] for r in rows] == ["run-a", "run-b"]
+        idx = await (await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+            " AND name='idx_agent_run_ref_active'")).fetchall()
+        assert idx == [], "重複資料還在，索引不該建得起來"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_run_ref_unique_index_exists_on_a_clean_db(tmp_path):
+    """乾淨的 DB 要拿到 `idx_agent_run_ref_active`（併發派工靠它擋）。"""
+    db = await open_db(str(tmp_path / "clean.db"))
+    try:
+        idx = await (await db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index'"
+            " AND name='idx_agent_run_ref_active'")).fetchone()
+        assert idx is not None
+        assert "queued" in idx[0] and "handoff" not in idx[0]
     finally:
         await db.close()

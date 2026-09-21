@@ -3,6 +3,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 從一則訊息長出一張 Task。
 ///
@@ -35,6 +36,8 @@ MessageActions _actions({
     );
 
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(body: SingleChildScrollView(child: child)),
     );

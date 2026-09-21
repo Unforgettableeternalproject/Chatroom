@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../models/board.dart';
 import 'actor_name.dart';
 import 'kind_badge.dart';
@@ -109,7 +110,7 @@ class BoardTaskCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: UepText.serif(
-                              size: 12, color: s.inkSoft, height: 1.7),
+                              size: 13, color: s.inkSoft, height: 1.7),
                         ),
                       ],
                       const SizedBox(height: 7),
@@ -134,11 +135,10 @@ class BoardTaskCard extends StatelessWidget {
           child: Text(
             task.title,
             style: UepText.sans(
-              size: 13.5,
+              size: 14.5,
               weight: FontWeight.w600,
               color: s.inkTitle,
-              height: 1.5,
-            ),
+              height: 1.5),
           ),
         ),
         const SizedBox(width: 8),
@@ -158,6 +158,7 @@ class BoardTaskCard extends StatelessWidget {
   /// 卡片下緣那一行：誰在這張卡上，以及還能對它做什麼。
   Widget _footer(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
 
     // 認領失敗＝一個事實，不是錯誤。放在最前面判斷：這一瞬間其他資訊
     // 都不重要，使用者只需要知道「誰贏了」
@@ -167,15 +168,15 @@ class BoardTaskCard extends StatelessWidget {
         edge: s.hairlineStrong,
         child: Text.rich(
           TextSpan(
-            style: UepText.serif(size: 12, color: s.inkSoft),
+            style: UepText.serif(size: 13, color: s.inkSoft),
             children: [
-              const TextSpan(text: '已經被 '),
+              TextSpan(text: l10n.boardClaimConflictPrefix),
               TextSpan(
                 text: conflict,
                 style: UepText.serif(
-                    size: 12, weight: FontWeight.w600, color: s.inkTitle),
+                    size: 13, weight: FontWeight.w600, color: s.inkTitle),
               ),
-              const TextSpan(text: ' 領走了。'),
+              TextSpan(text: l10n.boardClaimConflictSuffix),
             ],
           ),
         ),
@@ -187,12 +188,12 @@ class BoardTaskCard extends StatelessWidget {
           Expanded(child: _holder(context, struck: false)),
           if (task.priority == 'high') ...[
             const SizedBox(width: 9),
-            Text('▲ 高',
-                style: UepText.mono(size: 8.5, color: s.inkTitle)),
+            Text(l10n.boardPriorityHighMark,
+                style: UepText.mono(size: 10, color: s.inkTitle)),
           ],
           if (onRelease != null) ...[
             const SizedBox(width: 9),
-            _TinyAction(label: '釋放認領', onTap: onRelease!),
+            _TinyAction(label: l10n.boardTaskRelease, onTap: onRelease!),
           ],
         ]),
       ClaimAxis.orphaned => Column(
@@ -202,7 +203,7 @@ class BoardTaskCard extends StatelessWidget {
               Expanded(child: _holder(context, struck: true)),
               if (onRelease != null) ...[
                 const SizedBox(width: 9),
-                _TinyAction(label: '釋放認領', onTap: onRelease!),
+                _TinyAction(label: l10n.boardTaskRelease, onTap: onRelease!),
               ],
             ]),
             if (isMineToReclaim) ...[
@@ -213,47 +214,52 @@ class BoardTaskCard extends StatelessWidget {
                 trailing: onClaim == null
                     ? null
                     : _TinyAction(
-                        label: '撿回', onTap: onClaim!, color: UepColors.gold),
-                child: Text('這是你上一世領走的卡。',
-                    style: UepText.serif(size: 12, color: UepColors.gold)),
+                        label: l10n.boardTaskReclaim,
+                        onTap: onClaim!,
+                        color: UepColors.gold),
+                child: Text(l10n.boardTaskReclaimHint,
+                    style: UepText.serif(size: 13, color: UepColors.gold)),
               ),
             ] else if (onClaim != null) ...[
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerRight,
-                child: _TinyAction(label: '接手', onTap: onClaim!),
+                child: _TinyAction(label: l10n.boardTaskTakeOver, onTap: onClaim!),
               ),
             ],
           ],
         ),
       ClaimAxis.suggested => Row(children: [
-          Text('建議給 ',
-              style: UepText.mono(size: 8.5, color: s.inkSoft)),
-          Text(assigneeName ?? '（已不在房內）',
-              style: UepText.mono(size: 8.5, color: s.ink)),
+          Text(l10n.boardTaskSuggestedTo,
+              style: UepText.mono(size: 10, color: s.inkSoft)),
+          Text(assigneeName ?? l10n.boardTaskGoneParenthesised,
+              style: UepText.mono(size: 10, color: s.ink)),
           const SizedBox(width: 9),
           _Dot(color: s.inkMute),
           const SizedBox(width: 9),
           // 「建議不是鎖」要寫出來——不寫的話被指名者以外的人會以為自己不該碰
           Flexible(
-            child: Text('建議不是鎖，誰都能領',
+            child: Text(l10n.boardTaskSuggestionNotLock,
                 overflow: TextOverflow.ellipsis,
-                style: UepText.mono(size: 8.5, color: s.inkMute)),
+                style: UepText.mono(size: 10, color: s.inkMute)),
           ),
           const Spacer(),
-          if (onClaim != null) _TinyAction(label: '我來做', onTap: onClaim!),
+          if (onClaim != null)
+            _TinyAction(label: l10n.boardTaskIllDoIt, onTap: onClaim!),
         ]),
       _ => Row(children: [
-          Text('尚未認領',
-              style: UepText.mono(size: 8.5, color: s.inkMute)),
+          Text(l10n.boardTaskUnclaimed,
+              style: UepText.mono(size: 10, color: s.inkMute)),
           if (task.priority == 'high') ...[
             const SizedBox(width: 9),
             _Dot(color: s.inkMute),
             const SizedBox(width: 9),
-            Text('▲ 高', style: UepText.mono(size: 8.5, color: s.inkTitle)),
+            Text(l10n.boardPriorityHighMark,
+                style: UepText.mono(size: 10, color: s.inkTitle)),
           ],
           const Spacer(),
-          if (onClaim != null) _TinyAction(label: '認領', onTap: onClaim!),
+          if (onClaim != null)
+            _TinyAction(label: l10n.boardTaskClaim, onTap: onClaim!),
         ]),
     };
   }
@@ -265,6 +271,7 @@ class BoardTaskCard extends StatelessWidget {
   /// 要撐滿的那一邊自己包。
   Widget _holder(BuildContext context, {required bool struck}) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final when = task.claimedAt == null
         ? ''
         : relativeTime(task.claimedAt);
@@ -280,10 +287,12 @@ class BoardTaskCard extends StatelessWidget {
             )
           else
             Text(
-              task.claimName.isEmpty ? '（不明）' : task.claimName,
+              task.claimName.isEmpty
+                  ? l10n.commonUnknownParenthesised
+                  : task.claimName,
               // 名字劃掉：他曾經在這張卡上，那是事實；他現在不在，也是事實
               style: UepText.sans(
-                      size: 11.5,
+                      size: 12.5,
                       weight: FontWeight.w600,
                       color: struck ? s.inkMute : s.ink)
                   .copyWith(
@@ -300,15 +309,15 @@ class BoardTaskCard extends StatelessWidget {
                     if (task.orphanedReasonLabel.isNotEmpty)
                       task.orphanedReasonLabel
                     else
-                      '已不在房內',
-                    if (when.isNotEmpty) '$when 認領',
+                      l10n.boardTaskGone,
+                    if (when.isNotEmpty) l10n.boardTaskClaimedAt(when),
                   ].join(' · ')
                 : when.isEmpty
                     ? ''
-                    : '$when 認領',
+                    : l10n.boardTaskClaimedAt(when),
             // 孤兒的那句話用 error 色：它是這張卡上最該被看見的一件事
             style: UepText.mono(
-                size: 8.5, color: struck ? UepColors.error : s.inkMute),
+                size: 10, color: struck ? UepColors.error : s.inkMute),
           ),
         ],
     );
@@ -356,7 +365,7 @@ class BoardTaskCard extends StatelessWidget {
                         // ✓ 做完了／✕ 不做了／→ 去別的地方做了
                         Text(cancelled ? '✕' : (moved ? '→' : '✓'),
                             style: UepText.mono(
-                                size: 10,
+                                size: 10.5,
                                 color: faded
                                     ? s.inkMute
                                     : UepColors.success)),
@@ -366,7 +375,7 @@ class BoardTaskCard extends StatelessWidget {
                             task.title,
                             overflow: TextOverflow.ellipsis,
                             style: UepText.sans(
-                                    size: 13,
+                                    size: 14,
                                     color:
                                         faded ? s.inkMute : s.inkSoft,
                                     height: 1.5)
@@ -386,7 +395,7 @@ class BoardTaskCard extends StatelessWidget {
                           else
                             Text(task.claimName,
                                 style: UepText.sans(
-                                    size: 11.5, color: s.inkMute)),
+                                    size: 12.5, color: s.inkMute)),
                           if (task.claimKind.isNotEmpty) ...[
                             const SizedBox(width: 12),
                             _KindText(kind: task.claimKind, muted: true),
@@ -487,12 +496,11 @@ class _KindText extends StatelessWidget {
     return Text(
       kind.toUpperCase(),
       style: UepText.mono(
-        size: 8,
+        size: 10,
         letterSpacing: 1.0,
         color: muted
             ? context.uep.inkMute
-            : kindColor(kind, context: context),
-      ),
+            : kindColor(kind, context: context)),
     );
   }
 }
@@ -546,18 +554,18 @@ class _StatusBadge extends StatelessWidget {
 
   final String status;
 
-  static const _labels = {
-    'todo': '待辦',
-    'in_progress': '進行中',
-    'blocked': '卡住',
-    'done': '完成',
-    'cancelled': '已取消',
+  static Map<String, String> _labels(AppLocalizations l10n) => {
+    'todo': l10n.boardStatusTodo,
+    'in_progress': l10n.boardStatusInProgress,
+    'blocked': l10n.boardStatusBlocked,
+    'done': l10n.boardStatusDone,
+    'cancelled': l10n.boardStatusCancelled,
     // 「已搬走」不是完成也不是取消——講錯的話，讀板的人會以為這件事在這裡
     // 做完了（done）或不做了（cancelled），而它其實在別的地方進行。
     // ⚠️ 這顆與抽屜的 `_StatusChip` 是**兩份表**，加狀態要兩邊一起加：
     // 漏掉一邊不報錯（兩處都有 `?? status` 的退路），症狀只是徽章上冒出
     // 一個英文碼，而那讀起來像「這張卡壞了」
-    'moved': '已搬走',
+    'moved': l10n.boardStatusMoved,
   };
 
   @override
@@ -592,8 +600,8 @@ class _StatusBadge extends StatelessWidget {
         border: Border.all(color: border),
       ),
       child: Text(
-        _labels[status] ?? status,
-        style: UepText.mono(size: 8, color: color, letterSpacing: 1.1),
+        _labels(AppLocalizations.of(context))[status] ?? status,
+        style: UepText.mono(size: 10, color: color, letterSpacing: 1.1),
       ),
     );
   }
@@ -622,7 +630,7 @@ class _TinyAction extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: UepText.mono(size: 8.5, color: c, letterSpacing: 1.0),
+          style: UepText.mono(size: 10, color: c, letterSpacing: 1.0),
         ),
       ),
     );
@@ -662,21 +670,23 @@ class _WatchToggle extends StatelessWidget {
       if (count > 0) ...[
         const SizedBox(width: 3),
         Text('$count',
-            style: UepText.mono(size: 9, letterSpacing: .8, color: color)),
+            style: UepText.mono(size: 10, letterSpacing: .8, color: color)),
       ],
     ]);
     if (onTap == null) {
       // ⚠️ 原因走 Tooltip：桌面 hover、行動端長按都拿得到，而它不佔版面。
       // 完全不解釋的話，使用者只看到一顆按不動的鈴鐺
       return Tooltip(
-        message: blockedReason.isEmpty ? '現在不能追蹤這張卡' : blockedReason,
+        message: blockedReason.isEmpty
+            ? AppLocalizations.of(context).boardWatchBlockedGeneric
+            : blockedReason,
         child: Opacity(opacity: .4, child: chip),
       );
     }
     return Tooltip(
       message: watching
-          ? '取消追蹤。已經送到收件匣的通知不會收回'
-          : '追蹤：它完成、取消或重新打開時通知我',
+          ? AppLocalizations.of(context).boardWatchOffTooltip
+          : AppLocalizations.of(context).boardWatchOnTooltip,
       child: InkWell(
         onTap: onTap,
         child: Padding(

@@ -50,9 +50,8 @@ void main() {
     expect(result, isNotNull);
     // 這是整條修正的重點：**不可以只說「連線失敗」**。那會讓人回去檢查
     // 網址與 token，而那兩樣剛剛才被 REST 證明是對的
-    expect(result, contains('REST 通了'));
+    expect(result, contains('REST 正常'));
     expect(result, contains('4401'));
-    expect(result, contains('CHATROOM_HUMAN_TOKEN'));
   });
 
   test('逾時要講是 WS 這條路徑', () async {
@@ -63,7 +62,7 @@ void main() {
     );
 
     expect(result, isNotNull);
-    expect(result, contains('REST 通了'));
+    expect(result, contains('REST 正常'));
     expect(result, contains('WebSocket'));
   });
 
@@ -72,10 +71,10 @@ void main() {
         connector: (_) async => throw Exception('SocketException: refused'));
 
     expect(result, isNotNull);
-    expect(result, contains('REST 通了'));
+    expect(result, contains('REST 正常'));
     // 沒有 4401 就不要亂指憑證——把人送去換 token 而問題在網路，
     // 比不講還糟
-    expect(result, isNot(contains('CHATROOM_HUMAN_TOKEN')));
+    expect(result, isNot(contains('4401')));
   });
 
   test('每一種失敗都說得出「問題在 WS 這條路徑」', () async {
@@ -88,7 +87,7 @@ void main() {
       final result = await probeWebSocket(url, token,
           connector: (_) async => throw failure);
       expect(result, isNotNull, reason: '$failure 應該回一句話');
-      expect(result, contains('REST 通了'), reason: '$failure 漏了前提');
+      expect(result, contains('REST 正常'), reason: '$failure 漏了前提');
     }
   });
 }
