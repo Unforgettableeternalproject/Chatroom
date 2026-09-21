@@ -57,6 +57,13 @@ def make_repo(tmp_path, name: str, *, stable: str = "main",
     repo = tmp_path / name
     repo.mkdir()
     git(repo, "init", "-b", stable)
+    # 被測的 gitops 用的是 repo 自己的設定，不是測試 helper 塞的 -c：CI 的
+    # runner 沒有全域身分也沒有簽章金鑰，merge／squash 那顆 commit 會在那裡
+    # 炸成「Committer identity unknown」。寫進 repo 本機設定，兩邊同一份
+    git(repo, "config", "user.email", "runner@test")
+    git(repo, "config", "user.name", "runner")
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "config", "tag.gpgsign", "false")
     git(repo, "remote", "add", "origin", str(bare))
     (repo / "README.md").write_text("測試用\n", encoding="utf-8")
     git(repo, "add", "README.md")
