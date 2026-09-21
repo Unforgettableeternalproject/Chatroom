@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../config/app_settings.dart';
 import 'uep_tokens.dart';
 
 /// 字型層：對照設計稿的 --font-display（Cormorant Garamond）、
@@ -18,8 +19,32 @@ class UepText {
       GoogleFonts.cormorantGaramond(
         fontSize: size, fontWeight: weight, color: color, height: height);
 
+  /// 頁面主標：AppBar 標題、頁內大標、對話框標題。
+  static TextStyle pageTitle({Color? color, double? height}) =>
+      display(size: 26, color: color, height: height);
+
+  /// 區塊標題：一段內容的開頭。
+  static TextStyle sectionTitle({Color? color, double? height}) =>
+      display(size: 20, color: color, height: height);
+
+  /// 列表項／卡片標題。
+  static TextStyle itemTitle({Color? color, double? height}) =>
+      display(size: 17, color: color, height: height);
+
+  /// 區塊小標／徽章：mono 全大寫或中文短標，靠字距拉出標籤感。
+  static TextStyle label(
+          {Color? color, double size = 10.5, double letterSpacing = 1.6}) =>
+      mono(size: size, color: color, letterSpacing: letterSpacing);
+
+  /// 欄位標籤：緊貼輸入框、開關或狀態值，說明「這一欄是什麼」。
+  ///
+  /// 比 [label] 大一級：那些字要跟旁邊的值一起讀，縮到徽章的尺寸會讀不動。
+  static TextStyle fieldLabel({Color? color, double letterSpacing = 1.2}) =>
+      mono(size: 12, weight: FontWeight.w500, color: color,
+          letterSpacing: letterSpacing);
+
   static TextStyle serif({
-    double size = 14.5,
+    double size = 15,
     FontWeight weight = FontWeight.w400,
     Color? color,
     double height = 1.85,
@@ -28,7 +53,7 @@ class UepText {
         fontSize: size, fontWeight: weight, color: color, height: height);
 
   static TextStyle sans({
-    double size = 13.5,
+    double size = 14.5,
     FontWeight weight = FontWeight.w400,
     Color? color,
     double? height,
@@ -38,7 +63,7 @@ class UepText {
 
   /// mono 小字 uppercase 標籤——設計稿最鮮明的識別元素。
   static TextStyle mono({
-    double size = 9,
+    double size = 10,
     FontWeight weight = FontWeight.w400,
     Color? color,
     double letterSpacing = 1.4,
@@ -54,12 +79,29 @@ class UepText {
 
   /// 程式碼區塊 / 行內 code 用（不加 letterSpacing）。
   static TextStyle code({
-    double size = 12.5,
+    double size = 13,
     Color? color,
     double height = 1.7,
   }) =>
       GoogleFonts.jetBrainsMono(
         fontSize: size, color: color, height: height);
+}
+
+/// 字級五檔對應的整體縮放倍率——套在 MediaQuery 的 textScaler 上，
+/// 所有硬編碼字級一起放大，版面比例不變。
+double fontScaleFactor(FontScalePref pref) {
+  switch (pref) {
+    case FontScalePref.tiny:
+      return 0.5;
+    case FontScalePref.small:
+      return 0.9;
+    case FontScalePref.medium:
+      return 1.0;
+    case FontScalePref.large:
+      return 1.15;
+    case FontScalePref.xlarge:
+      return 1.3;
+  }
 }
 
 ThemeData buildUepTheme(Brightness brightness) {
@@ -103,7 +145,7 @@ ThemeData buildUepTheme(Brightness brightness) {
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: s.bgCard,
-      contentTextStyle: UepText.serif(size: 13, color: s.ink, height: 1.5),
+      contentTextStyle: UepText.serif(size: 14, color: s.ink, height: 1.5),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: s.lineStrong),

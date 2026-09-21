@@ -59,11 +59,11 @@ class RoomStylePicker extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(o.label,
-                              style: UepText.sans(size: 12.5, color: s.ink)),
+                              style: UepText.sans(size: 13.5, color: s.ink)),
                           const SizedBox(height: 2),
                           Text(o.description,
                               style: UepText.serif(
-                                  size: 11.5, color: s.inkMute, height: 1.4)),
+                                  size: 12.5, color: s.inkMute, height: 1.4)),
                         ],
                       ),
                     ),

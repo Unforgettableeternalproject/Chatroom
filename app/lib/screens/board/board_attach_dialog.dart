@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/board_providers.dart';
 import '../../widgets/empty_error_states.dart';
@@ -75,21 +76,22 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
       backgroundColor: s.bgCard,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(4),
         side: BorderSide(color: s.lineStrong),
       ),
-      title: Text('這間房要掛哪塊任務板',
-          style: UepText.display(size: 20, color: s.inkTitle)),
+      title: Text(l10n.boardAttachTitle,
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 420,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Row(children: [
             Expanded(
               child: _Choice(
-                label: '建一塊新的',
+                label: l10n.boardAttachCreateNew,
                 active: !_existing,
                 onTap: () => setState(() => _existing = false),
               ),
@@ -97,7 +99,7 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             const SizedBox(width: 8),
             Expanded(
               child: _Choice(
-                label: '掛既有的板',
+                label: l10n.boardAttachUseExisting,
                 active: _existing,
                 onTap: () => setState(() => _existing = true),
               ),
@@ -108,12 +110,12 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             TextField(
               controller: _name,
               autofocus: true,
-              style: UepText.sans(size: 13, color: s.ink),
+              style: UepText.sans(size: 14, color: s.ink),
               decoration: InputDecoration(
-                labelText: '板的名字',
-                labelStyle: UepText.mono(size: 10, color: s.inkMute),
-                helperText: '這塊板會活得比這間房久——封存房間不會封存它',
-                helperStyle: UepText.serif(size: 11, color: s.inkMute),
+                labelText: l10n.boardAttachNameLabel,
+                labelStyle: UepText.fieldLabel(color: s.inkMute),
+                helperText: null,
+                helperStyle: UepText.serif(size: 12, color: s.inkMute),
                 border: const OutlineInputBorder(),
               ),
             )
@@ -129,25 +131,25 @@ class _BoardAttachDialogState extends ConsumerState<_BoardAttachDialog> {
             controlAffinity: ListTileControlAffinity.leading,
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: Text('把這間房現在的成員加為板的協作者',
-                style: UepText.sans(size: 12.5, color: s.ink)),
-            subtitle: Text(
-                '只加現在在房裡的人。之後才進來的不會自動拿到權限——'
-                '那要由板的 owner 另外決定',
+            title: Text(l10n.boardAttachImportMembers,
+                style: UepText.sans(size: 13.5, color: s.ink)),
+            subtitle: Text(l10n.boardAttachImportMembersHint,
                 style: UepText.serif(
-                    size: 11.5, color: s.inkMute, height: 1.4)),
+                    size: 12.5, color: s.inkMute, height: 1.4)),
           ),
         ]),
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: _existing ? '掛上去' : '建立並掛上',
+          label: _existing
+              ? l10n.boardAttachConfirmExisting
+              : l10n.boardAttachConfirmNew,
           small: true,
           // 沒選、沒填就不給按。灰掉的按鈕會讓人回頭看自己漏了什麼，
           // 按下去彈一句錯誤只是把同一件事講得比較晚
@@ -189,9 +191,9 @@ class _ExistingList extends ConsumerWidget {
       error: (e, _) => boardLibraryUnavailable(e)
           ? Center(
               child: Text(
-                '這個 Hub 還沒有 Board Library，\n只能建新的板。',
+                AppLocalizations.of(context).boardLibraryUnavailableText,
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 12, color: s.inkMute),
+                style: UepText.serif(size: 13, color: s.inkMute),
               ),
             )
           : ErrorState(
@@ -205,11 +207,9 @@ class _ExistingList extends ConsumerWidget {
         if (usable.isEmpty) {
           return Center(
             child: Text(
-              '沒有你能掛的板。\n'
-              '（只有板的 owner 或 editor 掛得上去；你還得是這個房間的管理員，'
-              '而私人板只掛得上私人房）',
+              AppLocalizations.of(context).boardAttachNoUsable,
               textAlign: TextAlign.center,
-              style: UepText.serif(size: 12, color: s.inkMute),
+              style: UepText.serif(size: 13, color: s.inkMute),
             ),
           );
         }
@@ -257,15 +257,19 @@ class _BoardRow extends StatelessWidget {
         child: Row(children: [
           Expanded(
             child: Text(
-              board.name.isEmpty ? '（未命名）' : board.name,
+              board.name.isEmpty
+                  ? AppLocalizations.of(context).commonUnnamed
+                  : board.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
           // 已經掛了幾間房——**這是掛既有板時唯一要判斷的事**：
           // 它是不是已經在別的對話裡用著
-          MonoLabel('${board.attachedRoomCount} 房',
+          MonoLabel(
+              AppLocalizations.of(context)
+                  .boardAttachedRoomCount(board.attachedRoomCount),
               size: 9, letterSpacing: 1.0),
           const SizedBox(width: 8),
           MonoLabel('${board.taskDone}/${board.taskTotal}',
@@ -302,10 +306,9 @@ class _Choice extends StatelessWidget {
         child: Text(
           label,
           style: UepText.mono(
-            size: 10,
+            size: 10.5,
             letterSpacing: 1.2,
-            color: active ? UepColors.goldInkOn : s.inkSoft,
-          ),
+            color: active ? UepColors.goldInkOn : s.inkSoft),
         ),
       ),
     );

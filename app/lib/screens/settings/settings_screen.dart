@@ -14,6 +14,7 @@ import '../../core/config/build_info.dart';
 import '../../core/config/invite_code.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../core/logging/redacting_logger.dart';
 import '../../notifications/codex_dispatcher.dart';
@@ -21,6 +22,7 @@ import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/invite_manager.dart';
 import '../../widgets/uep_button.dart';
+import '../../widgets/uep_tab_bar.dart';
 import '../../ws/ws_client.dart';
 import '../../ws/ws_protocol.dart';
 
@@ -31,7 +33,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+class _SettingsScreenState extends ConsumerState<SettingsScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   late final TextEditingController _urlController;
   late final TextEditingController _tokenController;
   late final TextEditingController _nameController;
@@ -45,6 +49,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    // 連線固定是第 0 頁：首次啟動被 redirect 進來的人還沒有任何設定，
+    // 落在別的分頁等於要他自己找入口
+    _tabController = TabController(length: 3, vsync: this)
+      ..addListener(() => setState(() {}));
     final config = ref.read(appConfigProvider);
     _urlController = TextEditingController(text: config.serverUrl);
     _tokenController = TextEditingController(text: config.token);
@@ -74,8 +82,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final invite = InviteCode.tryParse(raw);
     if (invite == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('剪貼簿裡沒有邀請碼。先複製對方給你的那一整串字。')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(AppLocalizations.of(context).settingsInviteNotFound)));
       }
       return;
     }
@@ -86,8 +95,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('已填入 ${invite.serverUrl}，'
-              '確認後按「儲存」；建議先測試連線')));
+          content: Text(AppLocalizations.of(context)
+              .settingsInviteFilled(invite.serverUrl))));
     }
   }
 
@@ -109,6 +118,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   void dispose() {
+    _tabController.dispose();
     _urlController.dispose();
     _tokenController.dispose();
     _nameController.dispose();
@@ -156,12 +166,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       setState(() {
         _testOk = true;
         _testResult =
-            '連線成功 · hub ${health.version} · ${rooms.rooms.length} 個房間';
+            L10n.current.settingsTestOk(health.version, rooms.rooms.length);
       });
     } on AuthException {
       setState(() {
         _testOk = false;
-        _testResult = 'token 錯誤：伺服器拒絕了這組 API token';
+        _testResult = L10n.current.settingsTestTokenRejected;
       });
     } on ApiException catch (e) {
       setState(() {
@@ -177,21 +187,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('重新產生裝置識別？',
-            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+        title: Text(AppLocalizations.of(context).settingsRegenerateKeyTitle,
+            style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
-          '所有房間會把你視為新成員，舊身分留在原房間的成員紀錄中。此操作無法復原。',
+          AppLocalizations.of(context).settingsRegenerateKeyBody,
           style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
         ),
         actions: [
           UepButton(
-            label: '取消',
+            label: AppLocalizations.of(context).commonCancel,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '重新產生',
+            label: AppLocalizations.of(context).commonRegenerate,
             variant: UepButtonVariant.danger,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
@@ -208,6 +218,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final config = ref.watch(appConfigProvider);
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       backgroundColor: s.bg,
@@ -221,336 +232,443 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onPressed: () => context.pop(),
               )
             : null,
-        title: Text('設定', style: UepText.display(size: 22, color: s.inkTitle)),
+        title:
+            Text(l10n.settingsTitle, style: UepText.pageTitle(color: s.inkTitle)),
+        actions: [
+          IconButton(
+            tooltip: l10n.helpTooltip,
+            icon: Icon(Icons.help_outline, size: 18, color: s.inkMute),
+            onPressed: () => context.push('/help/settings'),
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: ListView(
-            padding: const EdgeInsets.all(32),
+          constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
+          child: Column(
             children: [
-              MonoLabel('SERVER'),
-              const SizedBox(height: 6),
-              Text('連線設定',
-                  style: UepText.display(size: 28, color: s.inkTitle)),
-              const SizedBox(height: 22),
-              UepButton(
-                label: '貼上邀請碼',
-                small: true,
-                variant: UepButtonVariant.outline,
-                expand: true,
-                onPressed: _pasteInvite,
-              ),
-              const SizedBox(height: 6),
-              Text('別人給你一份邀請碼時，用它一次填好網址與 token。',
-                  style: UepText.serif(size: 12, color: s.inkMute, height: 1.7)),
-              const SizedBox(height: 18),
-              _FieldLabel('HUB URL'),
-              _box(
-                context,
-                TextField(
-                  controller: _urlController,
-                  style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
-                  decoration: _inputDecoration('http://127.0.0.1:8787', s),
-                ),
-              ),
-              const SizedBox(height: 18),
-              _FieldLabel('API TOKEN'),
-              _box(
-                context,
-                TextField(
-                  controller: _tokenController,
-                  obscureText: !_showToken,
-                  style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
-                  decoration: _inputDecoration('（未設定 token 的 Hub 可留空）', s)
-                      .copyWith(
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _showToken
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        size: 16,
-                        color: s.inkMute,
-                      ),
-                      onPressed: () =>
-                          setState(() => _showToken = !_showToken),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(children: [
-                UepButton(
-                  label: '測試連線',
-                  small: true,
-                  variant: UepButtonVariant.outline,
-                  onPressed: _testing ? null : _testConnection,
-                ),
-                const SizedBox(width: 14),
-                if (_testing)
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: UepColors.gold),
-                  )
-                else if (_testResult != null)
-                  Expanded(
-                    child: Row(children: [
-                      Text(_testOk ? '✓ ' : '✕ ',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: _testOk
-                                  ? UepColors.success
-                                  : UepColors.errorText)),
-                      Expanded(
-                        child: Text(_testResult!,
-                            style: UepText.serif(
-                                size: 13, color: s.inkSoft, height: 1.5)),
-                      ),
-                    ]),
-                  ),
-              ]),
-              // 首次啟動經 redirect 進來時沒有返回鍵可用，
-              // 設定完成後要有明確的出口，否則會被卡在這裡（驗收 A1）
-              if (!context.canPop() && config.isConfigured) ...[
-                const SizedBox(height: 18),
-                UepButton(
-                  label: '進入主畫面 →',
-                  expand: true,
-                  onPressed: () => context.go('/rooms'),
-                ),
-              ],
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              // 版本一定要在設定頁看得到：回報問題時要問的第一件事就是
-              // 「你手上是哪一份」，而使用者得找得到那個字串才答得出來
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('App 版本',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      Text(
-                        BuildInfo.current.isKnown
-                            ? '回報問題時附上這串，才對得出是哪一份程式碼'
-                            // 明說取不到，不要用版本號填空
-                            : '這份 App 沒有版本標記——build 時沒帶 commit，'
-                                '無法確認它是哪一份程式碼',
-                        style: UepText.serif(
-                            size: 12, color: s.inkMute, height: 1.7),
-                      ),
-                    ],
-                  ),
-                ),
-                SelectableText(BuildInfo.current.label,
-                    style: UepText.code(size: 11, color: s.inkSoft)),
-              ]),
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              const InviteManager(),
-              const SizedBox(height: 26),
-              Divider(color: s.line, height: 1),
-              const SizedBox(height: 22),
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('深色主題',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      Text('也可在標題列直接切換',
-                          style:
-                              UepText.serif(size: 12, color: s.inkMute)),
-                    ],
-                  ),
-                ),
-                Switch(
-                  value: config.themeMode == ThemeModePref.dark,
-                  activeThumbColor: UepColors.gold,
-                  activeTrackColor: UepColors.gold.withValues(alpha: .28),
-                  onChanged: (v) => ref
-                      .read(appConfigProvider.notifier)
-                      .setThemeMode(v ? ThemeModePref.dark : ThemeModePref.light),
-                ),
-              ]),
-              const SizedBox(height: 22),
-              Row(children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('系統通知',
-                          style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                      const SizedBox(height: 3),
-                      Text('只在 app 開著時通知別人發的新訊息；關閉期間的訊息不會補發，'
-                          '回來後靠未讀紅點找。選「關閉」仍會在被 @ 時亮工作列徽章。',
-                          style:
-                              UepText.serif(size: 12, color: s.inkMute)),
-                    ],
-                  ),
-                ),
-                DropdownButton<NotifyModePref>(
-                  value: ref.watch(settingsRepoProvider).notifyMode,
-                  underline: const SizedBox.shrink(),
-                  style: UepText.sans(size: 13, color: s.ink),
-                  dropdownColor: s.bgCard,
-                  items: const [
-                    DropdownMenuItem(
-                        value: NotifyModePref.all, child: Text('所有訊息')),
-                    DropdownMenuItem(
-                        value: NotifyModePref.mentions,
-                        child: Text('僅提及我時')),
-                    DropdownMenuItem(
-                        value: NotifyModePref.off, child: Text('關閉')),
-                  ],
-                  onChanged: (v) async {
-                    if (v == null) return;
-                    await ref.read(settingsRepoProvider).setNotifyMode(v);
-                    // 通知中心即時吃到新模式，不必重啟 app
-                    ref.read(notificationCenterProvider).mode = v;
-                    setState(() {});
-                  },
-                ),
-              ]),
-              if (Platform.isWindows ||
-                  Platform.isLinux ||
-                  Platform.isMacOS) ...[
-                const SizedBox(height: 22),
-                Row(children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('轉送通知給 Codex',
-                            style:
-                                UepText.sans(size: 13.5, color: s.inkTitle)),
-                        const SizedBox(height: 3),
-                        Text('被 @tag 的訊息、Board 變動、有人加入的廣播、指派投遞，'
-                            '都經 codex queue 喚醒本機 Codex session',
-                            style:
-                                UepText.serif(size: 12, color: s.inkMute)),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value:
-                        ref.watch(settingsRepoProvider).codexDispatchEnabled,
-                    activeThumbColor: UepColors.gold,
-                    activeTrackColor: UepColors.gold.withValues(alpha: .28),
-                    onChanged: (v) async {
-                      await ref
-                          .read(settingsRepoProvider)
-                          .setCodexDispatchEnabled(v);
-                      ref.read(codexDispatcherProvider).enabled = v;
-                      setState(() {});
-                    },
-                  ),
-                ]),
-                if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
-                  const SizedBox(height: 8),
-                  _box(
-                    context,
-                    TextField(
-                      controller: _codexThreadController,
-                      style: UepText.sans(size: 13, color: s.ink),
-                      decoration: _inputDecoration(
-                          '診斷覆寫 thread id（留空＝依房內成員分流所有 session）', s),
-                      onSubmitted: (v) async {
-                        await ref
-                            .read(settingsRepoProvider)
-                            .setCodexDispatchThread(v);
-                        ref.read(codexDispatcherProvider).threadOverride =
-                            v.trim();
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _CodexDispatchStatusView(ref.read(codexDispatcherProvider)),
+              UepTabBar(
+                controller: _tabController,
+                labels: [
+                  l10n.settingsTabConnection,
+                  l10n.settingsTabVisual,
+                  l10n.settingsTabPersonal,
                 ],
-              ],
-              const SizedBox(height: 22),
-              _FieldLabel('顯示名稱（進房時的 PREFERRED NAME）'),
-              _box(
-                context,
-                TextField(
-                  controller: _nameController,
-                  style: UepText.sans(size: 13, color: s.ink),
-                  decoration:
-                      _inputDecoration('留空則由 Hub 隨機指派代稱', s),
-                  onSubmitted: (_) => _save(),
-                ),
               ),
-              const SizedBox(height: 20),
-              Row(children: [
-                UepButton(
-                  label: '儲存設定',
-                  small: true,
-                  onPressed: _dirty ? _save : null,
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _connectionTab(s, config),
+                    _visualTab(s, config),
+                    _personalTab(s, config),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                UepButton(
-                  label: '復原',
-                  variant: UepButtonVariant.outline,
-                  small: true,
-                  onPressed: _dirty ? _revert : null,
-                ),
-                const SizedBox(width: 14),
-                if (_dirty)
-                  Text('有尚未儲存的變更',
-                      style: UepText.serif(
-                          size: 12.5, color: UepColors.gold, height: 1.4))
-                else if (_justSaved)
-                  Text('✓ 已儲存',
-                      style: UepText.serif(
-                          size: 12.5, color: UepColors.success, height: 1.4)),
-              ]),
-              const SizedBox(height: 22),
-              _FieldLabel('本機裝置識別'),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(
-                  color: s.bgSoft,
-                  border: Border.all(color: s.line),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(children: [
-                  Expanded(
-                    child: Text(
-                      config.deviceKey,
-                      overflow: TextOverflow.ellipsis,
-                      style: UepText.code(size: 11, color: s.inkSoft),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      await Clipboard.setData(
-                          ClipboardData(text: config.deviceKey));
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已複製裝置識別')));
-                      }
-                    },
-                    child: MonoLabel('複製', size: 9),
-                  ),
-                  TextButton(
-                    onPressed: _regenerateKey,
-                    child: MonoLabel('重新產生',
-                        size: 9, color: UepColors.errorText),
-                  ),
-                ]),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  // ---------- 連線 ----------
+
+  Widget _connectionTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        Text(l10n.connectionSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
+        UepButton(
+          label: l10n.settingsPasteInvite,
+          small: true,
+          variant: UepButtonVariant.outline,
+          expand: true,
+          onPressed: _pasteInvite,
+        ),
+        const SizedBox(height: 18),
+        _FieldLabel(l10n.fieldHubUrl),
+        _box(
+          context,
+          TextField(
+            controller: _urlController,
+            style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
+            decoration: _inputDecoration('http://127.0.0.1:8787', s),
+          ),
+        ),
+        const SizedBox(height: 18),
+        _FieldLabel(l10n.fieldApiToken),
+        _box(
+          context,
+          TextField(
+            controller: _tokenController,
+            obscureText: !_showToken,
+            style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
+            decoration:
+                _inputDecoration(l10n.settingsTokenHint, s).copyWith(
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _showToken
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 16,
+                  color: s.inkMute,
+                ),
+                onPressed: () => setState(() => _showToken = !_showToken),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        _saveRow(s),
+        const SizedBox(height: 18),
+        Row(children: [
+          UepButton(
+            label: l10n.settingsTestConnection,
+            small: true,
+            variant: UepButtonVariant.outline,
+            onPressed: _testing ? null : _testConnection,
+          ),
+          const SizedBox(width: 14),
+          if (_testing)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: UepColors.gold),
+            )
+          else if (_testResult != null)
+            Expanded(
+              child: Row(children: [
+                Text(_testOk ? '✓ ' : '✕ ',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _testOk
+                            ? UepColors.success
+                            : UepColors.errorText)),
+                Expanded(
+                  child: Text(_testResult!,
+                      style: UepText.serif(
+                          size: 13, color: s.inkSoft, height: 1.5)),
+                ),
+              ]),
+            ),
+        ]),
+        // 首次啟動經 redirect 進來時沒有返回鍵可用，
+        // 設定完成後要有明確的出口，否則會被卡在這裡（驗收 A1）
+        if (!context.canPop() && config.isConfigured) ...[
+          const SizedBox(height: 18),
+          UepButton(
+            label: l10n.settingsEnterApp,
+            expand: true,
+            onPressed: () => context.go('/rooms'),
+          ),
+        ],
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        // 版本一定要在設定頁看得到：回報問題時要問的第一件事就是
+        // 「你手上是哪一份」，而使用者得找得到那個字串才答得出來
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.settingsAppVersion,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                if (!BuildInfo.current.isKnown)
+                  Text(
+                    l10n.settingsNoVersionMark,
+                    style:
+                        UepText.serif(size: 12, color: s.inkMute, height: 1.7),
+                  ),
+              ],
+            ),
+          ),
+          SelectableText(BuildInfo.current.label,
+              style: UepText.code(size: 11, color: s.inkSoft)),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        const InviteManager(),
+      ],
+    );
+  }
+
+  // ---------- 視覺 ----------
+
+  Widget _visualTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        Text(l10n.visualSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.darkThemeLabel,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text(l10n.darkThemeHint,
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          Switch(
+            value: config.themeMode == ThemeModePref.dark,
+            activeThumbColor: UepColors.gold,
+            activeTrackColor: UepColors.gold.withValues(alpha: .28),
+            onChanged: (v) => ref
+                .read(appConfigProvider.notifier)
+                .setThemeMode(v ? ThemeModePref.dark : ThemeModePref.light),
+          ),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        Text(l10n.fontScaleLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text(l10n.fontScaleHint,
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Row(children: [
+          for (final (scale, label) in [
+            (FontScalePref.tiny, l10n.fontScaleTiny),
+            (FontScalePref.small, l10n.fontScaleSmall),
+            (FontScalePref.medium, l10n.fontScaleMedium),
+            (FontScalePref.large, l10n.fontScaleLarge),
+            (FontScalePref.xlarge, l10n.fontScaleXLarge),
+          ]) ...[
+            UepButton(
+              label: label,
+              small: true,
+              variant: config.fontScale == scale
+                  ? UepButtonVariant.gold
+                  : UepButtonVariant.outline,
+              onPressed: () =>
+                  ref.read(appConfigProvider.notifier).setFontScale(scale),
+            ),
+            const SizedBox(width: 10),
+          ],
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        // 語言。選中即存（跟字級同一個手勢），沒有「套用」按鈕——
+        // 整個 App 立刻換掉，看得到就是套用了
+        Text(l10n.languageLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text(l10n.languageHint,
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Row(children: [
+          for (final (pref, label) in [
+            (LocalePref.system, l10n.languageSystem),
+            (LocalePref.zhTW, l10n.languageZhTW),
+            (LocalePref.en, l10n.languageEnglish),
+          ]) ...[
+            UepButton(
+              label: label,
+              small: true,
+              variant: config.locale == pref
+                  ? UepButtonVariant.gold
+                  : UepButtonVariant.outline,
+              onPressed: () =>
+                  ref.read(appConfigProvider.notifier).setLocale(pref),
+            ),
+            const SizedBox(width: 10),
+          ],
+        ]),
+        const SizedBox(height: 26),
+      ],
+    );
+  }
+
+  // ---------- 個人化 ----------
+
+  Widget _personalTab(UepSurface s, AppConfig config) {
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        Text(l10n.personalSectionTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        const SizedBox(height: 22),
+        _FieldLabel(l10n.fieldDisplayName),
+        _box(
+          context,
+          TextField(
+            controller: _nameController,
+            style: UepText.sans(size: 13, color: s.ink),
+            decoration: _inputDecoration(l10n.settingsDisplayNameHint, s),
+            onSubmitted: (_) => _save(),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _saveRow(s),
+        const SizedBox(height: 22),
+        _FieldLabel(l10n.fieldDeviceKey),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: s.bgSoft,
+            border: Border.all(color: s.line),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(children: [
+            Expanded(
+              child: Text(
+                config.deviceKey,
+                overflow: TextOverflow.ellipsis,
+                style: UepText.code(size: 11, color: s.inkSoft),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: config.deviceKey));
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(l10n.settingsDeviceKeyCopied)));
+                }
+              },
+              child: MonoLabel(l10n.commonCopy, size: 9),
+            ),
+            TextButton(
+              onPressed: _regenerateKey,
+              child: MonoLabel(l10n.commonRegenerate,
+                  size: 9, color: UepColors.errorText),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.settingsNotifyLabel,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text(l10n.settingsNotifyHint,
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          DropdownButton<NotifyModePref>(
+            value: ref.watch(settingsRepoProvider).notifyMode,
+            underline: const SizedBox.shrink(),
+            style: UepText.sans(size: 13, color: s.ink),
+            dropdownColor: s.bgCard,
+            items: [
+              DropdownMenuItem(
+                  value: NotifyModePref.all,
+                  child: Text(l10n.settingsNotifyAll)),
+              DropdownMenuItem(
+                  value: NotifyModePref.mentions,
+                  child: Text(l10n.settingsNotifyMentions)),
+              DropdownMenuItem(
+                  value: NotifyModePref.off,
+                  child: Text(l10n.settingsNotifyOff)),
+            ],
+            onChanged: (v) async {
+              if (v == null) return;
+              await ref.read(settingsRepoProvider).setNotifyMode(v);
+              // 通知中心即時吃到新模式，不必重啟 app
+              ref.read(notificationCenterProvider).mode = v;
+              setState(() {});
+            },
+          ),
+        ]),
+        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
+          const SizedBox(height: 22),
+          Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l10n.settingsCodexForwardLabel,
+                      style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                  const SizedBox(height: 3),
+                  Text(l10n.settingsCodexForwardHint,
+                      style: UepText.serif(size: 12, color: s.inkMute)),
+                ],
+              ),
+            ),
+            Switch(
+              value: ref.watch(settingsRepoProvider).codexDispatchEnabled,
+              activeThumbColor: UepColors.gold,
+              activeTrackColor: UepColors.gold.withValues(alpha: .28),
+              onChanged: (v) async {
+                await ref.read(settingsRepoProvider).setCodexDispatchEnabled(v);
+                ref.read(codexDispatcherProvider).enabled = v;
+                setState(() {});
+              },
+            ),
+          ]),
+          if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
+            const SizedBox(height: 8),
+            _box(
+              context,
+              TextField(
+                controller: _codexThreadController,
+                style: UepText.sans(size: 13, color: s.ink),
+                decoration: _inputDecoration(l10n.settingsCodexThreadHint, s),
+                onSubmitted: (v) async {
+                  await ref
+                      .read(settingsRepoProvider)
+                      .setCodexDispatchThread(v);
+                  ref.read(codexDispatcherProvider).threadOverride = v.trim();
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            _CodexDispatchStatusView(ref.read(codexDispatcherProvider)),
+          ],
+        ],
+      ],
+    );
+  }
+
+  /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
+  /// （`_save` 本來就一次寫三個欄位）。
+  Widget _saveRow(UepSurface s) {
+    final l10n = AppLocalizations.of(context);
+    return Row(children: [
+      UepButton(
+        label: l10n.settingsSaveButton,
+        small: true,
+        onPressed: _dirty ? _save : null,
+      ),
+      const SizedBox(width: 12),
+      UepButton(
+        label: l10n.settingsRevertButton,
+        variant: UepButtonVariant.outline,
+        small: true,
+        onPressed: _dirty ? _revert : null,
+      ),
+      const SizedBox(width: 14),
+      if (_dirty)
+        Text(l10n.settingsUnsavedChanges,
+            style:
+                UepText.serif(size: 12.5, color: UepColors.gold, height: 1.4))
+      else if (_justSaved)
+        Text(l10n.settingsSaved,
+            style: UepText.serif(
+                size: 12.5, color: UepColors.success, height: 1.4)),
+    ]);
   }
 
   Widget _box(BuildContext context, Widget child) {
@@ -576,6 +694,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
 }
 
+/// 欄位小標。
+///
+/// 不用 [MonoLabel]：它會把文字轉大寫，而這裡的標籤已經是中文與
+/// 大小寫有意義的專有名詞（`API token`），轉過去就回不來了。
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.text);
 
@@ -585,7 +707,10 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 7),
-      child: MonoLabel(text, color: context.uep.inkSoft, letterSpacing: 1.4),
+      child: Text(
+        text,
+        style: UepText.fieldLabel(color: context.uep.inkSoft),
+      ),
     );
   }
 }
@@ -613,21 +738,15 @@ Future<String?> probeWebSocket(
     await conn.close();
     return null;
   } on TimeoutException {
-    return 'REST 通了，但即時通道（WebSocket）在 ${timeout.inSeconds} 秒內沒有握手成功。\n'
-        '網址與 token 是對的——問題在 WS 這條路徑上，'
-        '中間若有反向代理或隧道，確認它有轉發 WebSocket 升級。';
+    return L10n.current.settingsWsTimeout(timeout.inSeconds);
   } on Object catch (e) {
     // 4401 是 Hub 明確拒絕這張憑證。它與「網路不通」是完全不同的處置，
     // 所以要分開講
     final text = '$e';
     final rejected = text.contains('4401') || text.contains('403');
     return rejected
-        ? 'REST 通了，但即時通道拒絕了這張憑證（4401）。\n'
-            '這台 Hub 的 WS 與 REST 收的憑證不一致——'
-            '若 Hub 啟用了憑證分離，請確認用的是「人類」那把'
-            '（server/.env 的 CHATROOM_HUMAN_TOKEN）。'
-        : 'REST 通了，但即時通道連不上：$e\n'
-            '網址與 token 是對的，問題在 WS 這條路徑上。';
+        ? L10n.current.settingsWsRejected
+        : L10n.current.settingsWsFailed('$e');
   }
 }
 
@@ -648,17 +767,19 @@ class _CodexDispatchStatusView extends StatelessWidget {
     return ValueListenableBuilder<CodexDispatchStatus>(
       valueListenable: dispatcher.status,
       builder: (context, st, _) {
+        final l10n = AppLocalizations.of(context);
         final lines = <String>[
-          '本機 Codex：${st.localThreads} 個'
-              '${st.busyThreads > 0 ? '（${st.busyThreads} 個處理中）' : '（都閒著）'}',
+          st.busyThreads > 0
+              ? l10n.settingsCodexThreadsBusy(st.localThreads, st.busyThreads)
+              : l10n.settingsCodexThreadsIdle(st.localThreads),
           // 30 分鐘 / 50 則是 codex_dispatcher.dart 的 `_pendingTtl` 與
           // `_pendingLimit`（兩者都是 private，跨檔取不到，只能硬編）；
           // 10 秒是 notification_providers.dart 的補投輪詢週期。
           st.pending > 0
-              ? '待補投：${st.pending} 則——Codex 沒在跑或正忙時投不出去，'
-                  '每 10 秒重試；超過 30 分鐘或佇列超過 50 則就會放棄'
-              : '待補投：無',
-          if (st.lastEvent.isNotEmpty) '最後一次：${st.lastEvent}',
+              ? l10n.settingsCodexPending(st.pending)
+              : l10n.settingsCodexPendingNone,
+          if (st.lastEvent.isNotEmpty)
+            l10n.settingsCodexLastEvent(st.lastEvent),
         ];
         return Container(
           width: double.infinity,
@@ -677,7 +798,8 @@ class _CodexDispatchStatusView extends StatelessWidget {
               ],
               const SizedBox(height: 3),
               SelectableText(
-                'log：${logFile?.path ?? '（沒有可寫位置，只進 DevTools）'}',
+                l10n.settingsCodexLogPath(
+                    logFile?.path ?? l10n.settingsCodexLogNone),
                 style: UepText.mono(size: 10.5, color: s.inkMute),
               ),
             ],

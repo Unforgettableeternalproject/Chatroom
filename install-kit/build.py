@@ -2,7 +2,7 @@
 
     python install-kit/build.py
 
-內容：install.py + README.md + skill/（Claude Code skill 樣板）+ bridge/（原始碼與 pyproject，不含測試與快取）。
+內容：install.bat（雙擊入口）+ install-help.txt + install.py + README.md + skill/（Claude Code skill 樣板）+ bridge/（原始碼與 pyproject，不含測試與快取）。
 """
 
 from __future__ import annotations
@@ -53,6 +53,11 @@ def main() -> None:
     stage.mkdir(parents=True)
 
     shutil.copy2(KIT_DIR / "install.py", stage / "install.py")
+    # 雙擊入口：install.bat 找 Python、跑 install.py；找不到 Python 時印的
+    # 中文說明在 install-help.txt（bat 本身必須純 ASCII，見它開頭的註解）。
+    # 漏掉任何一支，拿到包的人就只剩「用命令列跑 install.py」這條路
+    shutil.copy2(KIT_DIR / "install.bat", stage / "install.bat")
+    shutil.copy2(KIT_DIR / "install-help.txt", stage / "install-help.txt")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     # skill 樣板：install.py 會把 @@WATCHER@@ 換成該台機器的實際路徑。
     # 漏帶這個目錄的話 setup_skill 會印出「略過」而安裝仍算成功——

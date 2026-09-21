@@ -163,6 +163,24 @@ def _my_session_key() -> str:
     return state().session_key("") or SESSION_KEY
 
 
+# 執行器給 run 子進程的 session_key 前綴（Hub 側 `_RUN_SESSION_PREFIX`，
+# REMOTE-OPS-PLAN §5.4）。兩端共用的約定，改一邊不會有地方報錯
+_RUN_SESSION_PREFIX = "claude-run-"
+
+
+def _i_am_a_run() -> bool:
+    """這個 bridge 是不是派工產生的 run 進程。
+
+    用途是**措辭**，不是權限：run 是一次性無頭進程，沒有終端機、沒有人在
+    看它，所以「改回你原本的方式問他」對它是一句做不到的指示——照著做只會
+    卡在那裡，而 run 停住不會有人發現。
+
+    判準取 `_my_session_key()` 而不是 `SESSION_KEY`：身分可能在 join 之後
+    被 Hub 改寫（見上），拿啟動當下那份會判錯。
+    """
+    return _my_session_key().startswith(_RUN_SESSION_PREFIX)
+
+
 def _presence_params() -> dict[str, str]:
     """向 Hub 自報 kind 與代稱的查詢參數。
 
@@ -1086,7 +1104,9 @@ def chatroom_ask_human(
       複選時另有 ``answer_options``，有附件時另有 ``attachments``
     - ``answered: false`` 且 ``reason`` 為：
       - ``skipped``——對方明確選擇不在這裡回答。**改回你原本的方式問他**，
-        不要再用這個工具問同一件事
+        不要再用這個工具問同一件事。**你是派工產生的 run 的話不是這樣**：
+        你沒有「原本的方式」，那顆按鈕在他畫面上寫的是「不回答，讓它自己
+        決定」——照 ``hint`` 說的，自行判斷並繼續，不要停在這裡
       - ``timeout``——你等夠了，但**問題還活著**。回應會附上還剩幾秒；
         先做你能做的，之後用 ``chatroom_read_answer`` 拿。不要重問
       - ``expired``——**這題過期了，人沒看到**。回頭也拿不到答案，
@@ -1162,8 +1182,12 @@ def chatroom_ask_human(
             return {
                 "answered": False, "reason": "skipped", "question_id": qid,
                 "target_name": created.get("target_name"),
-                "hint": "對方選擇不在聊天室回答，請改用你原本的方式問他，"
-                        "不要再用這個工具問同一件事。",
+                "hint": ("對方選擇不回答這一題，由你自行判斷並繼續——"
+                         "你是派工產生的 run，沒有別的管道可以再問一次，"
+                         "停在這裡不會有人來接。"
+                         if _i_am_a_run() else
+                         "對方選擇不在聊天室回答，請改用你原本的方式問他，"
+                         "不要再用這個工具問同一件事。"),
                 **_ask_scope,
             }
 
@@ -1564,7 +1588,8 @@ def chatroom_boards() -> dict:
 def chatroom_board(room_id: str = "", full: bool = False,
                    subagent: str = "", board_id: str = "",
                    include_settled: bool = False,
-                   objective_id: str = "") -> dict:
+                   objective_id: str = "",
+                   checklist_id: str = "") -> dict:
     """看一塊任務板（Objective → Checklist → Task）。
 
     給 ``room_id`` ＝「我在這個房裡，看它掛的那塊板」；給 ``board_id`` ＝
@@ -1583,6 +1608,17 @@ def chatroom_board(room_id: str = "", full: bool = False,
     回傳會超過你單次讀得下的量（本專案實測 274,701 字元），那時你拿到的是
     一個讀取失敗，不是一塊板。已收尾的週期要看就傳 ``include_settled=True``
     （全部）或 ``objective_id=<週期 id>``（只要那一個）。
+
+    🎯 **只要某個階段的卡時傳 ``checklist_id=<階段 id>``，不要全量。**
+    週期粒度對長跑的板還是太粗：一期底下十幾個階段、上百張卡，照樣超過
+    你單次讀得下的量（實測一塊板全量 72,970 字元，而要找的只是某階段裡
+    兩張卡的 ``task_id``）。傳了就只回那一個階段、它底下的卡、以及它所屬
+    的週期那一列（讓你知道自己在哪一期）；其他階段與週期一律不回。
+    **``checklist_id`` 與 ``objective_id`` 同時給時以 ``checklist_id``
+    為準**，週期那個被忽略——兩個都給的意思就是「要更細的那個」。
+    階段 id ＝ App 上的「階段」、run 派工 ``ref`` 裡 ``stage/<id>`` 的那一段；
+    找不到（或不在這塊板上）回 ``checklist_not_found``。
+    ⚠️ 它**連增量一起篩**：傳了它，之後的增量讀取也只給那個階段的變動。
 
     **被篩掉的話回應會有 ``filtered``** 講明篩了幾個週期／幾張卡、以及怎麼
     看得到它們；沒篩到東西時它是 ``None``。**看到它就不要把手上這份當成
@@ -1618,7 +1654,8 @@ def chatroom_board(room_id: str = "", full: bool = False,
             "GET", f"/api/boards/{target}",
             params={"after_board_seq": known,
                     "include_settled": include_settled,
-                    "objective_id": objective_id})
+                    "objective_id": objective_id,
+                    "checklist_id": checklist_id})
         seq = data.get("board_seq")
         if isinstance(seq, int) and not subagent:
             state().set_board_cursor(target, seq)
@@ -1638,7 +1675,8 @@ def chatroom_board(room_id: str = "", full: bool = False,
         participant_id=participant_id,
         params={"after_board_seq": known,
                 "include_settled": include_settled,
-                "objective_id": objective_id},
+                "objective_id": objective_id,
+                "checklist_id": checklist_id},
     )
     seq = data.get("board_seq")
     board_id = data.get("board_id")
@@ -1908,6 +1946,87 @@ def _resolve_board_id(room_id: str, board_id: str) -> str:
 
 @tool()
 @_guard
+def chatroom_stage_files(checklist_id: str, board_id: str = "",
+                         room_id: str = "") -> dict:
+    """看一個**階段**（checklist）掛了哪些素材。
+
+    階段素材是「這個階段共用的附件」：需求圖、上一輪的截圖、規格檔。掛在
+    階段而不是卡上，所以**同一個階段的每一張卡、每一輪派工看到的是同一
+    份**——卡會換，階段不會。
+
+    ⚠️ **這是你的「這輪的附件」該問的地方。** 工作房是常駐的，房裡的歷史
+    附件混著前幾輪的東西；掃整間房找圖只會找到一批看起來很像、但不是這次
+    要用的那些（2026-09-17 實機就發生過）。
+
+    ``checklist_id`` 是卡的 ``checklist_id``（讀板時每張卡都帶）。板用
+    ``board_id`` 或 ``room_id`` 指定，**只能給一個**。
+
+    每一份回 ``id`` / ``attachment_id`` / ``filename`` / ``mime`` / ``size``
+    / ``added_by_name`` / ``note``（一句話：這份素材是什麼）/ ``created_at``。
+    要拿檔案本體用 ``chatroom_get_file(attachment_id)``。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "GET", f"/api/boards/{bid}/checklists/{checklist_id}/files")
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
+def chatroom_stage_file_add(checklist_id: str, attachment_id: str,
+                            note: str = "", board_id: str = "",
+                            room_id: str = "") -> dict:
+    """把一個**既有附件**掛到階段上，給這個階段之後的人與派工共用。
+
+    ``attachment_id`` 要先存在：用 ``chatroom_send_file`` 傳進房裡，或拿
+    房內訊息上的附件 id。這裡做的是「掛上去」，不是上傳。
+
+    ⚠️ 附件必須屬於**掛著這塊板的某一間房**，否則 Hub 回
+    ``stage_file_room_mismatch``——附件的房間邊界不會因為它上了板就消失。
+
+    ``note`` 寫一句「這份素材是什麼」（上限 500 字）。寫錯了用
+    ``chatroom_stage_file_note`` 改，不必卸下來重掛。同一個附件重複掛回
+    ``stage_file_exists``。
+
+    📌 **產出要給下一輪看的檔（截圖、報告）就掛回階段。** 只留在房裡的話，
+    下一輪得從三百則訊息裡把它翻出來——而它多半不會去翻。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "POST", f"/api/boards/{bid}/checklists/{checklist_id}/files",
+        json={"attachment_id": attachment_id, "note": note})
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
+def chatroom_stage_file_note(checklist_id: str, file_id: str, note: str,
+                             board_id: str = "", room_id: str = "") -> dict:
+    """改一份已掛素材的備註（上限 500 字）。
+
+    ``file_id`` 是**掛接關係的 id**（``chatroom_stage_files`` 每一份回的
+    ``id``），不是 ``attachment_id``——後者是檔案本體，同一份檔案可以掛在
+    好幾個階段上。
+
+    ⚠️ 只有**掛上它的人本人或人類成員**改得動，否則 Hub 回 403
+    ``human_only``。給空字串就是把備註清掉。
+    """
+    bid = _resolve_board_id(room_id, board_id)
+    out = _board_scoped_request(
+        "PATCH",
+        f"/api/boards/{bid}/checklists/{checklist_id}/files/{file_id}",
+        json={"note": note})
+    if isinstance(out, dict):
+        out["resolved_board_id"] = bid
+    return out
+
+
+@tool()
+@_guard
 def chatroom_scratchpads(room_id: str = "", board_id: str = "") -> dict:
     """列出這塊板上的想法板（ScratchPad）。
 
@@ -2109,6 +2228,297 @@ def chatroom_notices(unread_only: bool = True,
                           session_key=_my_session_key(),
                           json={"notice_ids": ids})
     return out
+
+
+# ---------- 遠端派工（Remote Ops，REMOTE-OPS-PLAN §4～§7） ----------
+
+# 與 Hub 的 `RunCreate` 同一份契約。**在 bridge 先擋一次**是為了讓錯誤講得
+# 出替代做法：Hub 的 422 只會說「不符合這個正規式」，而 agent 手上需要的是
+# 「有哪四種、你要的那件事屬於哪一種」
+_RUN_KINDS = ("investigate", "ticket", "stage", "push")
+_RUN_BRIEF_MAX = 2000
+
+
+def _run_room(room_id: str = "") -> str:
+    """這筆 run 屬於哪間房——Hub 的 run 端點認的是**房內身分**。
+
+    工具介面上只有 `run_id`（那是 run 手上唯一有的東西），而 Hub 要
+    `X-Participant-Id`。房間 id 因此從本機身分推：一個 run 的 agent 就待在
+    一間工作房，所以「只有一間有身分」是常態。
+
+    **不猜、不逐間試**：試錯的那條路會拿 403 `not_a_member` 回來，而那條
+    錯誤的處置是清掉本機身分——用探測的方式找房間，等於每探錯一次就毀掉
+    一個好端端的身分。
+    """
+    room_id = (room_id or "").strip()
+    if room_id:
+        return room_id
+    known = [rid for rid in state().rooms() if state().participant_id(rid)]
+    if len(known) == 1:
+        return known[0]
+    if not known:
+        raise HubError(
+            "你還沒有任何房間的身分——派工的讀寫都走房內身分。"
+            "先 chatroom_join 那間工作房再試。",
+            identity_invalid=True,
+        )
+    raise HubError(
+        "你同時在好幾個房間裡（"
+        + "、".join(known)
+        + "），bridge 認不出這筆派工屬於哪一間。請補上 room_id。",
+    )
+
+
+@tool()
+@_guard
+def chatroom_runs(room_id: str = "", status: str = "") -> dict:
+    """這間工作房現在誰在跑、排了幾個、限額到了沒。
+
+    工作房（``kind=ops``）比一般聊天室多一條佇列：房內的人類把「一個階段」
+    或「一張卡」派成一筆 **run**，執行器領走、起一個單次任務的 agent 去做。
+    這支工具把**佇列**與**執行器儀表板**一次回給你——兩邊分開讀的話，
+    「沒有人在跑」與「沒有執行器可以跑」在畫面上長得一模一樣。
+
+    ``status`` 可以帶逗號分隔的多個值（``queued,running``）篩佇列；
+    儀表板那半不受它影響。
+
+    回應：
+
+    - ``runs``——佇列。priority 高的在前、同優先度照 position。每筆有
+      ``kind`` / ``ref``（階段或卡的 id）/ ``status`` / ``requested_by_name``
+    - ``runners``——非 offline 的執行器：``status``（online／paused／limited）、
+      ``max_parallel`` 與 ``running_count``、``limited_until``、``projects``
+      白名單、``dashboard``（各 repo 尚未推送的 commit、近 5 小時的
+      tokens／cost、進行中的 run）
+    - ``queued`` / ``running`` / ``counts``——房內各狀態的筆數
+    - ``active_runs``——還沒結束的那些（queued／claimed／running／limited）
+
+    ⚠️ **``runners`` 是空的就別再派工**：那表示沒有任何執行器在線，派下去
+    只會排在佇列裡等一台不會來的機器，而佇列上看起來與正常排隊一樣。
+    """
+    rid = _run_room(room_id)
+    params: dict[str, Any] = {}
+    if status.strip():
+        params["status"] = status.strip()
+    runs = _room_request(rid, "GET", f"/api/rooms/{rid}/runs", params=params)
+    board = _room_request(rid, "GET", f"/api/rooms/{rid}/runner")
+    out: dict[str, Any] = {"room_id": rid, "runs": (runs or {}).get("runs", [])}
+    for key in ("runners", "counts", "queued", "running", "active_runs"):
+        out[key] = (board or {}).get(key)
+    return out
+
+
+@tool()
+@_guard
+def chatroom_run(run_id: str, room_id: str = "") -> dict:
+    """單筆派工的現況，連同它的稽核串。
+
+    ``events`` 是這筆 run 每一次狀態變化的紀錄（誰改的、從哪變到哪、原因）。
+    要回答「它為什麼停了」「這是不是上一輪交接過來的」就看它——run 本身只
+    留得住**最後一次**的 ``reason``。
+
+    ``parent_run_id`` 有值＝這一輪是上一輪交接過來的；``handoff_depth`` 是
+    交接了幾次（上限預設 5，超過不再建下一棒，那一輪會直接 failed）。
+    """
+    rid = _run_room(room_id)
+    return _room_request(rid, "GET", f"/api/runs/{run_id}")
+
+
+@tool()
+@_guard
+def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
+                         brief: str = "", priority: int = 0,
+                         board_id: str = "") -> dict:
+    """建一筆派工（run）——**人類憑證的 client，或這塊板的監督者**。
+
+    ⚠️ **一般 agent 呼叫會拿到 403，而那不是你的身分失效。** Hub 那側預設
+    只認人類憑證建單（REMOTE-OPS-PLAN §6.4）：執行器手上那把 token 只能
+    領單、回報、heartbeat，房內的 agent 成員也不行。你是房裡的一般 agent
+    的話，要開工作請走任務板（``chatroom_board_add``），要派工請在房裡請
+    人類派——重新 join 一百次也不會換一把憑證。
+
+    🔓 **例外只有一個：你是這間房掛接的那塊板的監督者**（Hub 2026-09-19）。
+    那時 agent 憑證也建得了單，但界線跟著來：
+
+    - ``kind`` 只有 ``investigate`` / ``ticket`` / ``stage``。``push`` 會
+      403 ``kind_not_allowed_for_supervisor``——那是不經模型的固定腳本，
+      只有人類按得下去。
+    - **配額算在指定你的那個人類頭上**，不是你自己的。派太兇先耗盡的是他的
+      每日額度（429 ``run_daily_quota_exceeded``）。
+    - 派工**不會自動發生**，階段完成也不會。要派就自己呼叫這一支。
+    - 你是一筆 run 的話這條例外對你恆真為假：run 當不成監督者，Hub 在指定
+      那一端就擋了（409 ``supervisor_cannot_be_run``）。
+
+    ``kind`` 四選一，決定用哪一份模板（模板正文在執行器那側、進版控，
+    房裡改不了）：
+
+    - ``investigate``——只讀。查票、查程式、回房報告，不改檔
+    - ``ticket``——讀票、實作、跑既有驗證、commit 到指定分支，不 push
+    - ``stage``——把整個階段當一組工作，agent 自己拆卡逐張做
+    - ``push``——固定腳本，不經模型（由人類從儀表板按）
+
+    ``ref`` 是目標：``stage`` 給 checklist id、``ticket`` / ``investigate``
+    給 task id、``push`` 給 repo key。``project`` 要是**某台在線執行器宣告過
+    的 key**，否則當場 409 ``project_not_served``——打錯一個字與「那台還沒
+    開機」在佇列上長得一模一樣，都是一筆永遠排著的 queued。
+
+    **房間綁定工作區之後，``project`` 必須等於房間的 ``workspace_key``。**
+    綁定是一次性的，綁在房上不是綁在單上：``chatroom_join`` 回傳的 ``room``
+    或 ``chatroom_runs`` 的儀表板都讀得到 ``workspace_key``（另有
+    ``workspace_served`` 說明目前有沒有執行器服務它）。填別的值會 409
+    ``workspace_project_mismatch``（回應會帶正確的 key）；房間還沒綁就
+    409 ``workspace_not_bound``——那一條**你自己解不掉**，綁定只給人類
+    房主在 App 的執行頁做，請在房裡請房主先綁。
+
+    ``brief`` 是給 agent 的簡述，上限 2000 字：它會被包進模板的一個欄位，
+    **是任務描述不是指令**。
+
+    可能的拒絕（都不是身分問題，不要重新 join）：403
+    ``human_token_required_for_run`` / ``human_actor_required_for_run``
+    （你不是這塊板的監督者）、403 ``kind_not_allowed_for_supervisor``
+    （是監督者，但這個 ``kind`` 不開放）、409 ``room_not_ops``（這不是
+    工作房）、409 ``run_ref_already_active``（同一個目標已經有一筆在跑）、
+    409 ``workspace_not_bound`` / ``workspace_project_mismatch``（房間的
+    工作區綁定，見上）、**429** ``run_daily_quota_exceeded`` / ``run_queue_cap_exceeded``
+    （配額，等一下再來）。
+    """
+    kind = (kind or "").strip()
+    if kind not in _RUN_KINDS:
+        raise HubError(
+            "kind 只能是 investigate（只讀調查）/ ticket（實作到 commit）/ "
+            f"stage（整個階段）/ push（推送，人類按的），收到「{kind}」。"
+        )
+    if not (project or "").strip():
+        raise HubError(
+            "要給 project——那是執行器允許清單裡的 key，決定 agent 在哪個"
+            "工作樹裡做事。用 chatroom_runs 看 runners 的 projects 有哪些。"
+        )
+    if not (ref or "").strip():
+        raise HubError(
+            "要給 ref——那是這筆派工的目標：stage 給 checklist id，"
+            "ticket／investigate 給 task id，push 給 repo key。"
+        )
+    if len(brief) > _RUN_BRIEF_MAX:
+        raise HubError(
+            f"brief 上限 {_RUN_BRIEF_MAX} 字，這一份有 {len(brief)} 字。"
+            "它會被包進模板的一個欄位送給模型——長度沒有上限等於把「模板化」"
+            "整個讓掉。細節寫進卡的敘述，brief 只留要點。"
+        )
+    body: dict[str, Any] = {
+        "kind": kind,
+        "project": project.strip(),
+        "ref": ref.strip(),
+        "brief": brief,
+        "priority": priority,
+    }
+    if (board_id or "").strip():
+        body["board_id"] = board_id.strip()
+    return _room_request(room_id, "POST", f"/api/rooms/{room_id}/runs",
+                         json=body)
+
+
+@tool()
+@_guard
+def chatroom_run_handoff(run_id: str, note: str, task_id: str = "",
+                         room_id: str = "") -> dict:
+    """**你是一個 run、而且快撐不住了**：把交接寫進卡、放掉認領，然後收工。
+
+    什麼時候用：上下文快滿了、被告知「請立刻交接」、或這一輪明顯做不完。
+    做完這一支就**結束你的回合**——執行器會替你建下一棒，子 run 開場會先讀
+    你留在卡上的這段話。不要再多做一步。
+
+    這支做兩件事，兩件都走既有的寫入路徑：
+
+    1. 把 ``note`` **附加**到卡的敘述（同 ``chatroom_board_update`` 那條
+       PATCH）。原本的敘述保留，交接寫在它後面
+    2. 放掉認領（同 ``chatroom_board_claim(release=True)``）。**卡的狀態不動**
+       ——它還在 ``in_progress``，因為這件事還沒做完
+
+    ⚠️ **它不會替你向 Hub 回報 ``handoff``。** 那是執行器的動作（要執行器的
+    token，你沒有），而且該由看著進程結束的那一端來記。你這邊的責任就是把
+    話留在卡上。
+
+    ``note`` 要包含**已做／未做／下一步／注意事項**。下一棒對你這一輪沒有
+    任何記憶，卡上這段話是它唯一的交接。
+
+    ``task_id``：這筆 run 的 ``ref`` 是 checklist（``stage`` 派工）時**必填**
+    ——階段本身不是一張卡，交接要寫在你自己在那個階段底下開的卡上。
+    """
+    if not (note or "").strip():
+        raise HubError(
+            "note 不能是空的——那是下一棒唯一拿得到的交接。"
+            "至少寫清楚：已做／未做／下一步／注意事項。"
+        )
+    rid = _run_room(room_id)
+    data = _room_request(rid, "GET", f"/api/runs/{run_id}")
+    run = (data or {}).get("run") or {}
+    target = (task_id or "").strip() or str(run.get("ref") or "")
+    if not target:
+        raise HubError(
+            "這筆派工沒有目標（ref 是空的），bridge 不知道該把交接寫到哪張"
+            "卡。請補上 task_id。"
+        )
+    # 卡的現況只有整塊板讀得到（Hub 沒有單卡端點）。**這一趟的內容不回給
+    # 你**——它只是用來把原敘述接回去，不佔你的上下文。不先讀就 PATCH 的話
+    # 交接會把卡原本的敘述整個蓋掉，而那正是下一棒要讀的東西
+    board = _room_request(rid, "GET", f"/api/rooms/{rid}/board",
+                          params={"after_board_seq": 0,
+                                  "include_settled": True})
+    tasks = (board or {}).get("tasks") or []
+    card = next((t for t in tasks if t.get("id") == target), None)
+    if card is None:
+        if any(c.get("id") == target
+               for c in ((board or {}).get("checklists") or [])):
+            raise HubError(
+                "這筆派工的目標是一個**階段**（checklist），不是一張卡"
+                "——交接要寫在卡上。請把 task_id 設成你在這個階段底下開的"
+                "那張卡；還沒開的話先用 chatroom_board_add(kind='task', "
+                "parent_id=<這個階段>) 開一張。"
+            )
+        raise HubError(
+            f"這塊板上找不到卡「{target}」。先用 chatroom_board 確認 id，"
+            "或用 task_id 指定要寫進哪一張。"
+        )
+    old = (card.get("description") or "").rstrip()
+    stamp = f"交接（run {run_id}）"
+    body = f"## {stamp}\n\n{note.strip()}"
+    merged = f"{old}\n\n---\n\n{body}" if old else body
+    _board_write(rid, "", "PATCH", f"/api/board/tasks/{target}",
+                 json={"description": merged})
+    released = _board_write(rid, "", "POST",
+                            f"/api/board/tasks/{target}/release")
+    return {
+        "run_id": run_id,
+        "task_id": target,
+        "note_written": True,
+        "released": True,
+        "task": (released or {}).get("task"),
+        "next": "交接已經寫在卡上、認領也放掉了。**現在結束你的回合**"
+                "——不要再開新工作、不要再改檔。執行器會替你建下一棒，"
+                "子 run 開場會先讀這張卡。",
+    }
+
+
+@tool()
+@_guard
+def chatroom_run_cancel(run_id: str, room_id: str = "") -> dict:
+    """取消一筆派工——**人類憑證用**，agent 呼叫會拿到 403。
+
+    與 ``chatroom_run_request`` 同一條界線（§6.4）：取消只有房內的人類成員
+    或這間房的管理員做得到。撞到 403 **不是你的身分失效**，重新 join 不會
+    改變它——請在房裡請人類代為取消。
+
+    回應的 ``cancelled`` 講的是兩件不同的事：
+
+    - ``true``——它還在排隊，已經直接停掉了
+    - ``false``——它已經被執行器領走，**進程還在跑**。Hub 只立了取消旗標，
+      執行器在下一次 heartbeat 拿到、殺完再回報。狀態這時**刻意不動**：
+      先改掉的話畫面會說它停了，而那台機器上的 agent 還在寫檔
+
+    已經結束的 run 回 409 ``run_already_finished``——沒有東西可以取消。
+    """
+    rid = _run_room(room_id)
+    return _room_request(rid, "POST", f"/api/runs/{run_id}/cancel")
 
 
 def main() -> None:

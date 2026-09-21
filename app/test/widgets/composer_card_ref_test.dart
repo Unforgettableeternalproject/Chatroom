@@ -4,6 +4,7 @@ import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// `#` 卡片指涉的 App 側：候選與插入那半（契約 v1 — 09/09 房 seq 32／40／44）。
 ///
@@ -25,6 +26,8 @@ void main() {
   ];
 
   Widget wrap({List<CardCandidate> cards = const []}) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: MessageComposer(

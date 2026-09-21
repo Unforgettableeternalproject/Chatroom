@@ -38,7 +38,7 @@ app/ios/Pods/
 Thumbs.db
 
 # 本機設定（含 token）
-.env
+.env*
 config.local.json
 design-ref/
 

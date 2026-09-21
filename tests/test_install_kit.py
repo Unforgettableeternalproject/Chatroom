@@ -411,9 +411,10 @@ def test_locked_exe_failure_explains_the_real_cause(
         inst._report_install_failure(
             done, Path(sys.executable), tmp_path / "chatroom-mcp.exe")
 
-    out = capsys.readouterr().out
-    assert "已還原" in out  # 先把 venv 修回可用，才談失敗原因
-    assert "關閉" in out and "chatroom-mcp.exe" in out
+    captured = capsys.readouterr()
+    assert "已還原" in captured.out  # 先把 venv 修回可用，才談失敗原因
+    # 失敗原因走 stderr：App 以子進程跑安裝器，stdout 留給那條 RESULT
+    assert "關閉" in captured.err and "chatroom-mcp.exe" in captured.err
     assert (tmp_path / "chatroom_mcp").is_dir()
 
 
@@ -654,6 +655,11 @@ def test_build_ships_the_skill_template(tmp_path, monkeypatch):
     build.main()
     with zipfile.ZipFile(tmp_path / "chatroom-mcp-kit.zip") as zf:
         names = zf.namelist()
+        rel = {n.split("/", 1)[1] for n in names if "/" in n}
+        # 雙擊入口與它的中文說明檔：漏任何一支，不會下 python 指令的人
+        # 手上就只有一包原始碼
+        assert "install.bat" in rel, f"包裡沒有 install.bat：{sorted(rel)[:10]}"
+        assert "install-help.txt" in rel
         tmpl = [n for n in names if n.endswith("skill/SKILL.md.tmpl")]
         assert tmpl, f"包裡沒有 skill 樣板：{[n for n in names if 'skill' in n]}"
         body = zf.read(tmpl[0]).decode("utf-8")

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:chatroom_app/api/api_client.dart';
+import 'package:chatroom_app/api/runs_api.dart';
 import 'package:chatroom_app/ws/ws_protocol.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,6 +62,30 @@ void main() {
         ..httpClientAdapter = rec;
       await dio.get('/api/rooms');
       expect(rec.seen.single.headers.containsKey('X-Host-View'), isFalse);
+    });
+  });
+
+  group('執行器命令：主機頁那條路徑自己帶標頭，不靠全域開關', () {
+    /// Hub 要求 `POST /api/runners/{id}/commands` 帶 `X-Participant-Id`，
+    /// 唯一豁免是主持人視角。主機頁沒有房內身分，所以要能單請求明示。
+    RunsApi apiWith(_Recorder rec) {
+      final dio = createApiDio(baseUrl: 'http://test', token: 't')
+        ..httpClientAdapter = rec;
+      return RunsApi(dio);
+    }
+
+    test('hostView: true 時這一個請求帶 X-Host-View: 1', () async {
+      final rec = _Recorder();
+      await apiWith(rec).command('r1', command: 'reload', hostView: true);
+      expect(rec.seen.single.headers['X-Host-View'], '1');
+    });
+
+    test('沒帶 hostView 時不出現那個標頭——ops 頁走的是房內身分', () async {
+      final rec = _Recorder();
+      await apiWith(rec)
+          .command('r1', command: 'pause', roomId: 'rm', participantId: 'p1');
+      expect(rec.seen.single.headers.containsKey('X-Host-View'), isFalse);
+      expect(rec.seen.single.headers['X-Participant-Id'], 'p1');
     });
   });
 

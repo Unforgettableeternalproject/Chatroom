@@ -3,6 +3,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-09（艾斯維爾 09/09 房 seq 22，附圖）：釘選跳轉的呼吸光暈框
 /// 沒有貼合訊息氣泡，往左偏了一段。
@@ -25,6 +26,8 @@ void main() {
       );
 
   Widget wrap({required bool isSelf}) => MaterialApp(
+    localizationsDelegates: kTestLocalizationsDelegates,
+    supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: Center(
@@ -69,6 +72,8 @@ void main() {
 
   testWidgets('沒有跳轉高亮時不畫光暈框', (tester) async {
     await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: Center(

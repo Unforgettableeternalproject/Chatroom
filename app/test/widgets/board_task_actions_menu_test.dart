@@ -4,6 +4,7 @@ import 'package:chatroom_app/screens/board/board_task_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 任務卡的操作**一次只外露一顆**，其餘收進 `⋯`（09/08 卡 9e8e53d1）。
 ///
@@ -22,6 +23,8 @@ BoardTask _task({String status = 'todo'}) => BoardTask.fromJson({
 
 Widget _wrap(BoardTask task) => ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: BoardTaskDrawer(

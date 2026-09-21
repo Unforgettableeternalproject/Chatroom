@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/config/app_settings.dart';
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 import '../ws/room_feed.dart';
 
@@ -35,7 +36,7 @@ class RoomNotification {
 
 /// 通知中心：跟隨「已加入的房間」的 feed，把新訊息轉成通知事件。
 ///
-/// 純 Dart（不 import flutter），OS 通知與 UI 刷新由外層訂閱
+/// OS 通知與 UI 刷新由外層訂閱
 /// [notifications] / [activity] 接手。設計約束：
 /// - **首批快照不通知**：feed 初次載入的是歷史視窗，逐則通知等於轟炸。
 ///   基準線取第一次看到內容時的 cursor，之後的增量才算「新」。
@@ -262,11 +263,12 @@ class NotificationCenter {
   }
 
   static String _composeBody(List<Message> fresh) {
+    final l10n = L10n.current;
     final last = fresh.last;
-    final sender = last.senderName ?? '（未知成員）';
+    final sender = last.senderName ?? l10n.notifyUnknownSender;
     final preview = _preview(last.content);
-    if (fresh.length == 1) return '$sender：$preview';
-    return '${fresh.length} 則新訊息，最新—$sender：$preview';
+    if (fresh.length == 1) return l10n.notifyBody(sender, preview);
+    return l10n.notifyBodyMulti(fresh.length, sender, preview);
   }
 
   static String _preview(String content) {

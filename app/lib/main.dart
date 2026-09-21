@@ -19,13 +19,8 @@ Future<void> main() async {
   final token = await settings.readToken() ?? '';
   final deviceKey = await DeviceIdentity(settings).ensureKey();
 
-  final initialConfig = AppConfig(
-    serverUrl: settings.serverUrl,
-    token: token,
-    themeMode: settings.themeMode,
-    preferredName: settings.preferredName,
-    deviceKey: deviceKey,
-  );
+  final initialConfig =
+      AppConfig.fromSettings(settings, token: token, deviceKey: deviceKey);
 
   runApp(ProviderScope(
     overrides: [

@@ -465,6 +465,36 @@ async def test_the_rooms_supervisor_can_verify_even_as_an_agent(tmp_path):
         assert r.status_code == 200, r.text
 
 
+async def test_a_supervisor_who_came_back_can_verify_again(tmp_path):
+    """離開過一次再回來，資格要跟著回來。
+
+    `board_supervisor_left_at` 在離場被設、在回房被清，而清的那一半原本寫的
+    是**空字串**，資格判準問的卻是 `IS NULL`——於是畫面上寫著「監督者回來
+    了」、房裡也公告過了，他卻在確認週期與派工上永遠 403，而沒有任何地方
+    說得出為什麼。兩邊對同一件事用不同的寫法，就是這個形狀。
+    """
+    app, client = await _client(tmp_path, "sup-return-verify")
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        agent = await _join(client, rid, "agent-sup", "監察者")
+        worker = await _join(client, rid, "agent-worker", "工人")
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"session_key": "agent-sup"}, headers=owner)
+        assert r.status_code == 200, r.text
+
+        # 離開再用同一把 key 回來
+        assert (await client.post(f"/api/rooms/{rid}/leave",
+                                  headers=agent)).status_code == 200
+        agent = await _join(client, rid, "agent-sup", "監察者")
+
+        oid = await _objective_ready_for_verify(client, rid, worker)
+        assert (await client.post(f"/api/board/objectives/{oid}/review",
+                                  headers=worker)).status_code == 200
+        r = await client.post(f"/api/board/objectives/{oid}/verify",
+                              headers=agent)
+        assert r.status_code == 200, r.text
+
+
 async def test_a_supervisor_still_cannot_verify_what_he_sent_for_review(tmp_path):
     """supervisor 送審後不能自己確認。
 

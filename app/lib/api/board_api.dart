@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 
 import '../models/board.dart';
+import '../models/release.dart';
+import '../models/stage_file.dart';
 import 'api_client.dart';
 
 /// Board REST。契約見 Board 設計稿 §6。
@@ -310,9 +312,42 @@ class BoardApi {
           {String? participantId, String? sessionKey}) =>
       _objectiveAction(objectiveId, 'review', participantId, sessionKey);
 
+  /// [release] 非 null 時：先 verify，成功後同一筆請求裡建立 release run。
+  /// 任一道閘沒過就整筆 4xx，**週期不會被 verify**——兩件事要嘛一起成立，
+  /// 要嘛都不發生，不然人會看到一個已確認卻沒上板的週期而不知道缺了哪一步。
   Future<void> verifyObjective(String objectiveId,
+          {String? participantId,
+          String? sessionKey,
+          ReleaseRequest? release}) =>
+      _objectiveAction(objectiveId, 'verify', participantId, sessionKey,
+          data: release == null ? null : {'release': release.toJson()});
+
+  /// 這個週期能不能上板、有哪些候選 repo。
+  ///
+  /// **按下確認之前先問一次**：候選是「本週期 commit 過的 repo」，那份清單
+  /// 只有 Hub 算得出來；穩定分支則來自線上執行器回報的 dashboard。
+  Future<ReleaseCandidates> releaseCandidates(String objectiveId,
           {String? participantId, String? sessionKey}) =>
-      _objectiveAction(objectiveId, 'verify', participantId, sessionKey);
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId/release/candidates',
+          options: _auth(participantId, sessionKey),
+        );
+        return ReleaseCandidates.fromJson(res.data ?? const {});
+      });
+
+  /// 已經 verify 過的週期補一次上板（不再動狀態）。
+  Future<void> createRelease(String objectiveId,
+          {String? participantId,
+          String? sessionKey,
+          required ReleaseRequest release}) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId/release',
+          data: release.toJson(),
+          options: _auth(participantId, sessionKey),
+        );
+      });
 
   Future<void> completeObjective(String objectiveId,
           {String? participantId, String? sessionKey}) =>
@@ -330,11 +365,13 @@ class BoardApi {
     String id,
     String action,
     String? pid,
-    String? sessionKey,
-  ) =>
+    String? sessionKey, {
+    Map<String, dynamic>? data,
+  }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/objectives/$id/$action',
+          data: data,
           options: _auth(pid, sessionKey),
         );
       });
@@ -848,6 +885,111 @@ class BoardsApi {
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });
+
+  /// 一個階段上的素材。
+  ///
+  /// **板讀回來時 checklist 已經帶著 `files`**（契約 §Hub 端點），所以這條
+  /// 路只在需要單獨重讀一個階段時用——例如剛掛完一份、還不想為它重拉整塊板。
+  ///
+  /// 身分兩條都收：從聊天室進來的人手上是 participant_id，從 Board Library
+  /// 進來的人只有 session key。Hub 的 `_actor_from_headers` 優先讀後者。
+  Future<List<StageFile>> stageFiles(
+    String boardId,
+    String checklistId, {
+    String? participantId,
+    String? sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/boards/$boardId/checklists/$checklistId/files',
+          options: _actor(participantId, sessionKey),
+        );
+        return StageFile.listFrom(res.data?['files']);
+      });
+
+  /// 把一份已經上傳好的附件掛到階段上。
+  ///
+  /// [attachmentId] 來自既有的上傳端點（`POST /api/rooms/{rid}/attachments`）
+  /// ——**這裡不上傳檔案**，上傳與掛接是兩次請求，中間那段時間附件已經在
+  /// 房裡但還不屬於任何階段。
+  ///
+  /// ⚠️ 同一份附件重複掛同一個階段時 Hub 回 **409 `stage_file_exists`**。
+  /// 那不是錯誤，是「它已經在上面了」——呼叫端要照這個意思講。
+  Future<StageFile> addStageFile(
+    String boardId,
+    String checklistId, {
+    required String attachmentId,
+    String note = '',
+    String? participantId,
+    String? sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/boards/$boardId/checklists/$checklistId/files',
+          data: {'attachment_id': attachmentId, 'note': note},
+          options: _actor(participantId, sessionKey),
+        );
+        final file = res.data?['file'];
+        return file is Map<String, dynamic>
+            ? StageFile.fromJson(file)
+            : StageFile(
+                id: '',
+                checklistId: checklistId,
+                attachmentId: attachmentId,
+                filename: '檔案',
+                note: note,
+              );
+      });
+
+  /// 改一份已掛素材的備註。
+  ///
+  /// [fileId] 是掛接關係的 id（`StageFile.id`），不是 attachment_id——同一份
+  /// 附件可以掛在好幾個階段上，改錯一個會動到別的階段那一列。
+  /// 沒資格修改時 Hub 回 403（掛的人本人、人類成員或主持人才行）。
+  Future<StageFile?> updateStageFileNote(
+    String boardId,
+    String checklistId,
+    String fileId, {
+    required String note,
+    String? participantId,
+    String? sessionKey,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/api/boards/$boardId/checklists/$checklistId/files/$fileId',
+          data: {'note': note},
+          options: _actor(participantId, sessionKey),
+        );
+        final file = res.data?['file'];
+        return file is Map<String, dynamic> ? StageFile.fromJson(file) : null;
+      });
+
+  /// 卸除一份素材。**附件本身不會被刪**——它仍在房裡，只是不再屬於這個階段。
+  ///
+  /// [fileId] 是掛接關係的 id（`StageFile.id`），不是 attachment_id。
+  /// 沒資格卸除時 Hub 回 403（掛的人本人、人類成員或主持人才行）。
+  Future<void> removeStageFile(
+    String boardId,
+    String checklistId,
+    String fileId, {
+    String? participantId,
+    String? sessionKey,
+  }) =>
+      unwrap(() async {
+        await _dio.delete<Map<String, dynamic>>(
+          '/api/boards/$boardId/checklists/$checklistId/files/$fileId',
+          options: _actor(participantId, sessionKey),
+        );
+      });
+
+  /// 兩條身分都帶得上的 options。素材可以從房軸掛（聊天室裡的附件）也可以
+  /// 從板軸掛（Board Library），而這支 API 兩邊都會被呼叫。
+  static Options _actor(String? participantId, String? sessionKey) => Options(
+        headers: {
+          'X-Participant-Id': ?participantId,
+          'X-Session-Key': ?sessionKey,
+        },
+      );
 
   /// Hub 主持人把一塊**無主**的板接管到自己身上。限主持人模式
   /// （`X-Host-View` 由 api_client 依開關自動帶）。

@@ -6,6 +6,7 @@ import '../../api/board_api.dart' show BoardsApi;
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../l10n/l10n.dart';
 import '../../models/board.dart' show BoardTagsResult, reorderedIdsAt;
 import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
@@ -13,6 +14,7 @@ import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/reveal.dart';
 import '../../widgets/scratchpad_tag.dart';
 import '../../widgets/uep_button.dart';
 
@@ -166,23 +168,23 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         Row(children: [
           Expanded(
             child: Text(pad.title,
-                style: UepText.display(size: 22, color: s.inkTitle)),
+                style: UepText.pageTitle(color: s.inkTitle)),
           ),
-          MonoLabel('${pad.blocks.length} 段', size: 9, letterSpacing: 1.2),
+          MonoLabel(
+              AppLocalizations.of(context).boardPadBlockCount(
+                  pad.blocks.length),
+              size: 9,
+              letterSpacing: 1.2),
           // 管理這塊板的自訂標籤。**只在標籤功能真的在時出現**——
           // 舊 Hub 沒有 `allowed_tags`，那時這顆按鈕按下去是一個空對話框
           if (pad.canEdit && _allowedTags.isNotEmpty) ...[
             const SizedBox(width: 8),
-            _Tiny(label: '標籤', onTap: _manageTags),
+            _Tiny(
+                label: AppLocalizations.of(context).boardPadTags,
+                onTap: _manageTags),
           ],
         ]),
         const SizedBox(height: 4),
-        Text(
-          '把想到的先放進來，不必先想好順序。'
-          'agent 讀得到，也能對每一段留意見、自己加上新的段落——但改不動'
-          '你寫的內容（你那段的標籤與狀態它動得了）。',
-          style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
-        ),
         if (_allowedTags.isNotEmpty) ...[
           const SizedBox(height: 12),
           _TagFilterBar(
@@ -228,9 +230,9 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
-                '這個標籤底下還沒有段落。',
+                AppLocalizations.of(context).boardPadNoBlockForTag,
                 textAlign: TextAlign.center,
-                style: UepText.serif(size: 12, color: s.inkMute),
+                style: UepText.serif(size: 13, color: s.inkMute),
               ),
             ),
         ],
@@ -250,8 +252,8 @@ class _PadBodyState extends ConsumerState<_PadBody> {
                 allowedTags: _allowedTags,
                 initialTag: _filter,
               )
-            : Text('你在這塊板上是唯讀的，只能看。',
-                style: UepText.serif(size: 12, color: s.inkMute)),
+            : Text(AppLocalizations.of(context).boardPadReadOnly,
+                style: UepText.serif(size: 13, color: s.inkMute)),
       );
 
   Widget _blockCard(Scratchpad pad, ScratchpadBlock b) => _BlockCard(
@@ -342,7 +344,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.code == 'scratchpad_block_stale'
-              ? '這一段剛被別人改過，重新載入後再標一次'
+              ? AppLocalizations.of(context).boardPadBlockStale
               : e.message),
         ));
       }
@@ -368,7 +370,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.code == 'scratchpad_block_stale'
-              ? '這一段剛被別人改過，重新載入後再標一次'
+              ? AppLocalizations.of(context).boardPadBlockStale
               : e.message),
         ));
       }
@@ -477,7 +479,9 @@ class _PadBodyState extends ConsumerState<_PadBody> {
       // 又被搶了。**不要自動再試**——重試會變成一場誰按得快的比賽，
       // 而每一輪都在覆蓋別人剛寫的東西
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('又被改了一次：${e2.message}')),
+        SnackBar(
+            content: Text(AppLocalizations.of(context)
+                .boardPadChangedAgain(e2.message))),
       );
     }
   }
@@ -667,15 +671,14 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
     final s = context.uep;
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('這塊板的標籤',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+      title: Text(AppLocalizations.of(context).boardPadTagsTitle,
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            '段落一次只標一個。新增的標籤這塊板上的人都用得到；'
-            '預設的四個每塊板都有，刪不掉。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+            AppLocalizations.of(context).boardPadOneTagPerBlock,
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
           ),
           const SizedBox(height: 12),
           Wrap(spacing: 6, runSpacing: 6, children: [
@@ -690,12 +693,12 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(tagLabel(t),
                       style: UepText.mono(
-                          size: 9, letterSpacing: 1.0, color: tagColor(t))),
+                          size: 10, letterSpacing: 1.0, color: tagColor(t))),
                   // 預設標籤不畫刪除鈕——畫一顆按下去必定拿 422 的按鈕，
                   // 比沒有那顆按鈕更難懂（同主持人開關那條）
                   if (_removable(t))
                     IconButton(
-                      tooltip: '刪掉',
+                      tooltip: AppLocalizations.of(context).commonDelete,
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints:
@@ -713,10 +716,10 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
             Expanded(
               child: TextField(
                 controller: _input,
-                style: UepText.sans(size: 13, color: s.ink),
+                style: UepText.sans(size: 14, color: s.ink),
                 decoration: InputDecoration(
-                  hintText: '新增一個標籤…',
-                  hintStyle: UepText.serif(size: 12, color: s.inkMute),
+                  hintText: AppLocalizations.of(context).boardPadNewTagHint,
+                  hintStyle: UepText.serif(size: 13, color: s.inkMute),
                   border: const OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -724,19 +727,22 @@ class _TagManagerDialogState extends State<_TagManagerDialog> {
               ),
             ),
             const SizedBox(width: 8),
-            UepButton(label: '新增', small: true, onPressed: _busy ? null : _add),
+            UepButton(
+                label: AppLocalizations.of(context).commonAdd,
+                small: true,
+                onPressed: _busy ? null : _add),
           ]),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!,
-                style: UepText.sans(size: 12, color: UepColors.error,
+                style: UepText.sans(size: 13, color: UepColors.error,
                     height: 1.45)),
           ],
         ]),
       ),
       actions: [
         UepButton(
-          label: '關起來',
+          label: AppLocalizations.of(context).commonCloseUp,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context)
@@ -767,7 +773,10 @@ class _TagFilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = context.uep;
     return Wrap(spacing: 6, runSpacing: 6, children: [
-      _pill(s, label: '全部', on: selected == null, onTap: () => onPick(null),
+      _pill(s,
+          label: AppLocalizations.of(context).commonAll,
+          on: selected == null,
+          onTap: () => onPick(null),
           color: s.inkMute),
       for (final t in allowed)
         _pill(
@@ -800,10 +809,9 @@ class _TagFilterBar extends StatelessWidget {
           child: Text(
             label,
             style: UepText.mono(
-              size: 9,
+              size: 10,
               letterSpacing: 1.0,
-              color: on ? color : s.inkMute,
-            ),
+              color: on ? color : s.inkMute),
           ),
         ),
       );
@@ -911,8 +919,10 @@ class _BlockCardState extends State<_BlockCard> {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              b.authorName.isEmpty ? '（不知道是誰寫的）' : b.authorName,
-              style: UepText.mono(size: 9, letterSpacing: 1.1,
+              b.authorName.isEmpty
+                  ? AppLocalizations.of(context).boardPadUnknownAuthor
+                  : b.authorName,
+              style: UepText.mono(size: 10, letterSpacing: 1.1,
                   color: s.inkMute),
             ),
           ),
@@ -930,10 +940,14 @@ class _BlockCardState extends State<_BlockCard> {
           if (b.state != null || widget.onSetState != null)
             const SizedBox(width: 6),
           if (!widget.editing && widget.onEdit != null)
-            _Tiny(label: '編輯', onTap: widget.onEdit!),
+            _Tiny(
+                label: AppLocalizations.of(context).commonEdit,
+                onTap: widget.onEdit!),
           if (!widget.editing && widget.onDelete != null) ...[
             const SizedBox(width: 6),
-            _Tiny(label: '刪除', onTap: widget.onDelete!),
+            _Tiny(
+                label: AppLocalizations.of(context).commonDelete,
+                onTap: widget.onDelete!),
           ],
         ]),
         const SizedBox(height: 8),
@@ -942,14 +956,14 @@ class _BlockCardState extends State<_BlockCard> {
             controller: _text,
             maxLines: null,
             autofocus: true,
-            style: UepText.sans(size: 13, color: s.ink, height: 1.5),
+            style: UepText.sans(size: 14, color: s.ink, height: 1.5),
             decoration: const InputDecoration(
                 border: OutlineInputBorder(), isDense: true),
           ),
           const SizedBox(height: 8),
           Row(mainAxisAlignment: MainAxisAlignment.end, children: [
             UepButton(
-              label: '取消',
+              label: AppLocalizations.of(context).commonCancel,
               variant: UepButtonVariant.outline,
               small: true,
               onPressed: () {
@@ -959,7 +973,7 @@ class _BlockCardState extends State<_BlockCard> {
             ),
             const SizedBox(width: 8),
             UepButton(
-              label: '存起來',
+              label: AppLocalizations.of(context).boardPadSaveBlock,
               small: true,
               onPressed: () => widget.onSave(_text.text),
             ),
@@ -967,7 +981,7 @@ class _BlockCardState extends State<_BlockCard> {
         ] else
           SelectableText(
             b.content,
-            style: UepText.sans(size: 13, color: s.ink, height: 1.55),
+            style: UepText.sans(size: 14, color: s.ink, height: 1.55),
           ),
         if (b.notes.isNotEmpty || widget.onNote != null) ...[
           const SizedBox(height: 8),
@@ -980,102 +994,119 @@ class _BlockCardState extends State<_BlockCard> {
                   size: 14, color: s.inkMute),
               const SizedBox(width: 4),
               Text(
-                open.isEmpty ? '註解 ${b.notes.length}' : '註解 ${open.length} 則未處理',
+                open.isEmpty
+                    ? AppLocalizations.of(context).boardPadNoteCount(
+                        b.notes.length)
+                    : AppLocalizations.of(context).boardPadNoteOpenCount(
+                        open.length),
                 style: UepText.mono(
-                    size: 9,
+                    size: 10,
                     letterSpacing: 1.1,
                     color: open.isEmpty ? s.inkMute : UepColors.gold),
               ),
             ]),
           ),
-          if (_notesOpen) ...[
-            for (final n in b.notes)
-              Padding(
-                padding: const EdgeInsets.only(top: 6, left: 18),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text.rich(TextSpan(children: [
-                        TextSpan(
-                          text: '${n.authorName}：',
-                          style: UepText.mono(size: 9, color: s.inkMute),
-                        ),
-                        TextSpan(
-                          text: n.content,
-                          // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
-                          // 起來的話，人會找不到自己剛剛處理的是哪一則
-                          style: UepText.serif(
-                            size: 12,
-                            height: 1.45,
-                            color: n.resolved ? s.inkMute : s.inkSoft,
-                          ).copyWith(
-                            decoration: n.resolved
-                                ? TextDecoration.lineThrough
-                                : null,
+          // 註解一開一關是一整段的高低差，直接跳會讓底下的段落位移
+          UepExpand(
+            expanded: _notesOpen,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                  for (final n in b.notes)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 18),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text.rich(TextSpan(children: [
+                              TextSpan(
+                                text: '${n.authorName}：',
+                                style: UepText.mono(size: 10, color: s.inkMute),
+                              ),
+                              TextSpan(
+                                text: n.content,
+                                // 處理過的畫刪除線：**留在原地但不再喊**。直接藏
+                                // 起來的話，人會找不到自己剛剛處理的是哪一則
+                                style: UepText.serif(
+                                  size: 13,
+                                  height: 1.45,
+                                  color: n.resolved ? s.inkMute : s.inkSoft).copyWith(
+                                  decoration: n.resolved
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                ),
+                              ),
+                            ])),
+                          ),
+                          if (widget.onResolveNote != null)
+                            _Tiny(
+                              label: n.resolved
+                                  ? AppLocalizations.of(context)
+                                      .boardPadNoteUnresolve
+                                  : AppLocalizations.of(context)
+                                      .boardPadNoteResolve,
+                              onTap: () =>
+                                  widget.onResolveNote!(n.id, n.resolved),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (widget.onNote != null) ...[
+                    const SizedBox(height: 6),
+                    if (!_noting)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _Tiny(
+                            label: AppLocalizations.of(context).boardPadAddNote,
+                            onTap: () => setState(() => _noting = true)),
+                      )
+                    else
+                      Row(children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _note,
+                            autofocus: true,
+                            style: UepText.sans(size: 13, color: s.ink),
+                            decoration: const InputDecoration(
+                                isDense: true, border: OutlineInputBorder()),
                           ),
                         ),
-                      ])),
-                    ),
-                    if (widget.onResolveNote != null)
-                      _Tiny(
-                        label: n.resolved ? '收回' : '處理掉',
-                        onTap: () =>
-                            widget.onResolveNote!(n.id, n.resolved),
-                      ),
+                        const SizedBox(width: 6),
+                        _Tiny(
+                          label: _sendingNote
+                              ? AppLocalizations.of(context).commonSending
+                              : AppLocalizations.of(context).commonSubmit,
+                          onTap: _sendingNote
+                              ? null
+                              : () async {
+                                  final t = _note.text.trim();
+                                  if (t.isEmpty) return;
+                                  setState(() => _sendingNote = true);
+                                  try {
+                                    await widget.onNote!(t);
+                                    if (!mounted) return;
+                                    // 成功了才清。失敗時那句話還在框裡，
+                                    // 他可以再送一次
+                                    _note.clear();
+                                    setState(() => _noting = false);
+                                  } catch (_) {
+                                    // ⚠️ **要接住。** 呼叫端已經 toast 過並 rethrow，
+                                    // 這裡只有 try/finally 的話那個例外會從 async
+                                    // onTap 逸出去變成未處理錯誤——輸入框裡的字保住
+                                    // 了，卻多了一個沒有人接的例外
+                                    // （@審核用Codex-2 2026-09-03）
+                                  } finally {
+                                    if (mounted) setState(() => _sendingNote = false);
+                                  }
+                                },
+                        ),
+                      ]),
                   ],
-                ),
-              ),
-            if (widget.onNote != null) ...[
-              const SizedBox(height: 6),
-              if (!_noting)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: _Tiny(
-                      label: '＋ 留一則意見',
-                      onTap: () => setState(() => _noting = true)),
-                )
-              else
-                Row(children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _note,
-                      autofocus: true,
-                      style: UepText.sans(size: 12, color: s.ink),
-                      decoration: const InputDecoration(
-                          isDense: true, border: OutlineInputBorder()),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  _Tiny(
-                    label: _sendingNote ? '送出中…' : '送出',
-                    onTap: _sendingNote
-                        ? null
-                        : () async {
-                            final t = _note.text.trim();
-                            if (t.isEmpty) return;
-                            setState(() => _sendingNote = true);
-                            try {
-                              await widget.onNote!(t);
-                              if (!mounted) return;
-                              // 成功了才清。失敗時那句話還在框裡，
-                              // 他可以再送一次
-                              _note.clear();
-                              setState(() => _noting = false);
-                            } catch (_) {
-                              // ⚠️ **要接住。** 呼叫端已經 toast 過並 rethrow，
-                              // 這裡只有 try/finally 的話那個例外會從 async
-                              // onTap 逸出去變成未處理錯誤——輸入框裡的字保住
-                              // 了，卻多了一個沒有人接的例外
-                              // （@審核用Codex-2 2026-09-03）
-                            } finally {
-                              if (mounted) setState(() => _sendingNote = false);
-                            }
-                          },
-                  ),
-                ]),
-            ],
-          ],
+              ],
+            ),
+          ),
         ],
       ]),
     );
@@ -1094,24 +1125,30 @@ class _ConflictDialog extends StatelessWidget {
     final s = context.uep;
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('這一段在你打字的時候被改過了',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+      title: Text(AppLocalizations.of(context).boardPadConflictTitle,
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            '兩份都在下面。沒有自動合併——合出來的那份會是誰都沒寫過的東西。',
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
+            AppLocalizations.of(context).boardPadConflictExplain,
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.45),
           ),
           const SizedBox(height: 12),
-          _Side(label: '你剛打的', text: mine, accent: UepColors.gold),
+          _Side(
+              label: AppLocalizations.of(context).boardPadConflictMine,
+              text: mine,
+              accent: UepColors.gold),
           const SizedBox(height: 8),
-          _Side(label: '現在存著的', text: theirs, accent: s.line),
+          _Side(
+              label: AppLocalizations.of(context).boardPadConflictTheirs,
+              text: theirs,
+              accent: s.line),
         ]),
       ),
       actions: [
         UepButton(
-          label: '先不決定',
+          label: AppLocalizations.of(context).boardPadConflictDecideLater,
           variant: UepButtonVariant.outline,
           small: true,
           // 關掉＝什麼都不做，輸入框裡那份還在。**這是預設**，因為
@@ -1119,13 +1156,13 @@ class _ConflictDialog extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: '用現在存著的',
+          label: AppLocalizations.of(context).boardPadConflictUseTheirs,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(false),
         ),
         UepButton(
-          label: '用我打的蓋過去',
+          label: AppLocalizations.of(context).boardPadConflictUseMine,
           small: true,
           onPressed: () => Navigator.of(context).pop(true),
         ),
@@ -1158,8 +1195,8 @@ class _Side extends StatelessWidget {
           constraints: const BoxConstraints(maxHeight: 140),
           child: SingleChildScrollView(
             child: SelectableText(
-              text.isEmpty ? '（空的）' : text,
-              style: UepText.sans(size: 12, color: s.ink, height: 1.5),
+              text.isEmpty ? AppLocalizations.of(context).commonEmpty : text,
+              style: UepText.sans(size: 13, color: s.ink, height: 1.5),
             ),
           ),
         ),
@@ -1216,10 +1253,10 @@ class _AddBlockState extends State<_AddBlock> {
       TextField(
         controller: _c,
         maxLines: null,
-        style: UepText.sans(size: 13, color: s.ink, height: 1.5),
+        style: UepText.sans(size: 14, color: s.ink, height: 1.5),
         decoration: InputDecoration(
-          hintText: '再想到什麼就往這裡丟…',
-          hintStyle: UepText.serif(size: 12, color: s.inkMute),
+          hintText: AppLocalizations.of(context).boardPadAddBlockHint,
+          hintStyle: UepText.serif(size: 13, color: s.inkMute),
           border: const OutlineInputBorder(),
           isDense: true,
         ),
@@ -1234,7 +1271,9 @@ class _AddBlockState extends State<_AddBlock> {
         ),
         const Spacer(),
         UepButton(
-          label: _sending ? '送出中…' : '加一段',
+          label: _sending
+              ? AppLocalizations.of(context).commonSending
+              : AppLocalizations.of(context).boardPadAddBlock,
           small: true,
           onPressed: (_sending || _c.text.trim().isEmpty)
               ? null
@@ -1273,7 +1312,7 @@ class _Tiny extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         child: Text(label,
             style: UepText.mono(
-                size: 9,
+                size: 10,
                 letterSpacing: 1.1,
                 color: onTap == null ? s.inkMute : s.inkSoft)),
       ),
@@ -1302,7 +1341,8 @@ class ScratchpadPage extends StatelessWidget {
       backgroundColor: s.bg,
       appBar: AppBar(
         backgroundColor: s.bg,
-        title: Text('想法板', style: UepText.display(size: 20, color: s.inkTitle)),
+        title: Text(AppLocalizations.of(context).boardPadTitle,
+            style: UepText.sectionTitle(color: s.inkTitle)),
       ),
       body: ScratchpadScreen(boardId: boardId, padId: padId),
     );
@@ -1369,12 +1409,12 @@ class RoomScratchpadPage extends ConsumerWidget {
               backgroundColor: s.bg,
               appBar: AppBar(
                 backgroundColor: s.bg,
-                title: Text('想法板',
-                    style: UepText.display(size: 20, color: s.inkTitle)),
+                title: Text(AppLocalizations.of(context).boardPadTitle,
+                    style: UepText.sectionTitle(color: s.inkTitle)),
               ),
               body: Center(
-                child: Text('這個聊天室還沒有掛上任何板。',
-                    style: UepText.serif(size: 13, color: s.inkMute)),
+                child: Text(AppLocalizations.of(context).boardPadRoomHasNoBoard,
+                    style: UepText.serif(size: 14, color: s.inkMute)),
               ),
             )
           : ScratchpadPage(boardId: snap.boardId, padId: padId),
@@ -1413,10 +1453,13 @@ class ScratchpadSection extends ConsumerWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Expanded(
-          child: MonoLabel('想法板', size: 9, letterSpacing: 2.2),
+          child: MonoLabel(AppLocalizations.of(context).boardPadTitle,
+              size: 9, letterSpacing: 2.2),
         ),
         if (canEdit)
-          _Tiny(label: '＋ 開一份', onTap: () => _create(context, ref)),
+          _Tiny(
+              label: AppLocalizations.of(context).boardPadCreate,
+              onTap: () => _create(context, ref)),
       ]),
       const SizedBox(height: 8),
       async.when(
@@ -1438,10 +1481,8 @@ class ScratchpadSection extends ConsumerWidget {
               ),
         data: (pads) => pads.isEmpty
             ? Text(
-                canEdit
-                    ? '還沒有想法板。想到什麼但還沒想好怎麼拆成卡的，先丟一份進來。'
-                    : '還沒有想法板。',
-                style: UepText.serif(size: 12, color: s.inkMute, height: 1.45),
+                AppLocalizations.of(context).boardPadListEmpty,
+                style: UepText.serif(size: 13, color: s.inkMute, height: 1.45),
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1499,20 +1540,29 @@ class _PadRow extends StatelessWidget {
         child: Row(children: [
           Expanded(
             child: Text(
-              pad.title.isEmpty ? '（未命名）' : pad.title,
+              pad.title.isEmpty
+                  ? AppLocalizations.of(context).commonUnnamed
+                  : pad.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: UepText.sans(size: 12.5, color: s.ink),
+              style: UepText.sans(size: 13.5, color: s.ink),
             ),
           ),
           // 未處理的註解數。**這是唯一能讓人知道「有人對你的段落提了意見」
           // 的線索**——不放在這裡，就只能一份一份打開去發現
           if (pad.unresolvedNotes > 0) ...[
-            MonoLabel('${pad.unresolvedNotes} 則意見',
-                size: 9, letterSpacing: 1.0, color: UepColors.gold),
+            MonoLabel(
+                AppLocalizations.of(context)
+                    .boardPadUnresolvedNotes(pad.unresolvedNotes),
+                size: 9,
+                letterSpacing: 1.0,
+                color: UepColors.gold),
             const SizedBox(width: 8),
           ],
-          MonoLabel('${pad.blockCount} 段', size: 9, letterSpacing: 1.0),
+          MonoLabel(
+              AppLocalizations.of(context).boardPadBlockCount(pad.blockCount),
+              size: 9,
+              letterSpacing: 1.0),
         ]),
       ),
     );
@@ -1540,18 +1590,17 @@ class _NewPadDialogState extends State<_NewPadDialog> {
     final s = context.uep;
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text('開一份想法板',
-          style: UepText.display(size: 18, color: s.inkTitle)),
+      title: Text(AppLocalizations.of(context).boardPadNewTitle,
+          style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 360,
         child: TextField(
           controller: _c,
           autofocus: true,
-          style: UepText.sans(size: 13, color: s.ink),
+          style: UepText.sans(size: 14, color: s.ink),
           decoration: InputDecoration(
-            labelText: '叫什麼',
-            helperText: '想到什麼先丟進去，之後再整理成卡',
-            helperStyle: UepText.serif(size: 11, color: s.inkMute),
+            labelText: AppLocalizations.of(context).boardPadNameLabel,
+            helperStyle: UepText.serif(size: 12, color: s.inkMute),
             border: const OutlineInputBorder(),
           ),
           onChanged: (_) => setState(() {}),
@@ -1561,13 +1610,13 @@ class _NewPadDialogState extends State<_NewPadDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: AppLocalizations.of(context).commonCancel,
           variant: UepButtonVariant.outline,
           small: true,
           onPressed: () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: '開',
+          label: AppLocalizations.of(context).boardPadCreateAction,
           small: true,
           onPressed: _c.text.trim().isEmpty
               ? null

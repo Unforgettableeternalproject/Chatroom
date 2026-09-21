@@ -12,17 +12,18 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 
 /// 預設集合的繁中顯示名。**不在這份表裡的是板自訂標籤，原樣顯示**——
 /// 那是使用者自己取的名字，翻譯它只會讓他認不出來。
-const _defaultTagLabels = {
-  'bug': 'Bug',
-  'feature': '新功能',
-  'design': '設計',
-  'question': '疑問',
-};
+Map<String, String> _defaultTagLabels() => {
+      'bug': 'Bug',
+      'feature': L10n.current.boardTagFeature,
+      'design': L10n.current.boardTagDesign,
+      'question': L10n.current.boardTagQuestion,
+    };
 
-String tagLabel(String tag) => _defaultTagLabels[tag] ?? tag;
+String tagLabel(String tag) => _defaultTagLabels()[tag] ?? tag;
 
 /// 標籤的顏色。預設集合各有一個固定色，自訂標籤走中性色——
 /// 自訂的可以有無限多個，硬要給每個一個顏色只會撞在一起。
@@ -74,9 +75,8 @@ List<String> removableTags({
 String tagRemovalError(String code, String tag,
     {int blockCount = 0, String fallback = ''}) =>
     switch (code) {
-      'tag_in_use' => '還有 $blockCount 則段落標著「${tagLabel(tag)}」，'
-          '先把它們改成別的標籤才刪得掉。',
-      'tag_is_default' => '「${tagLabel(tag)}」是預設標籤，每塊板都有，刪不掉。',
+      'tag_in_use' => L10n.current.boardTagInUse(blockCount, tagLabel(tag)),
+      'tag_is_default' => L10n.current.boardTagIsDefault(tagLabel(tag)),
       _ => fallback,
     };
 
@@ -127,7 +127,7 @@ class ScratchpadTagChip extends StatelessWidget {
     if (onPick == null || allowed.isEmpty) return chip;
 
     return PopupMenuButton<String>(
-      tooltip: '標籤',
+      tooltip: AppLocalizations.of(context).boardTagTooltip,
       position: PopupMenuPosition.under,
       // 「不標」與「標成別的」是同一個選單裡的兩個選項——分成兩個入口的話，
       // 取消標籤會變成一個要先找到才做得到的動作
@@ -144,15 +144,15 @@ class ScratchpadTagChip extends StatelessWidget {
                     color: tagColor(t), shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
-              Text(tagLabel(t), style: UepText.sans(size: 12, color: s.ink)),
+              Text(tagLabel(t), style: UepText.sans(size: 13, color: s.ink)),
             ]),
           ),
         if (tag != null) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
             value: '',
-            child: Text('不標',
-                style: UepText.sans(size: 12, color: s.inkMute)),
+            child: Text(AppLocalizations.of(context).boardTagNone,
+                style: UepText.sans(size: 13, color: s.inkMute)),
           ),
         ],
       ],
@@ -170,8 +170,8 @@ class ScratchpadTagChip extends StatelessWidget {
           border: Border.all(color: s.line),
           borderRadius: BorderRadius.circular(3),
         ),
-        child: Text('＋標籤',
-            style: UepText.mono(size: 8.5, letterSpacing: 1.0,
+        child: Text(L10n.current.boardTagAdd,
+            style: UepText.mono(size: 10, letterSpacing: 1.0,
                 color: s.inkMute)),
       );
     }
@@ -184,15 +184,15 @@ class ScratchpadTagChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(tagLabel(t),
-          style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
+          style: UepText.mono(size: 10, letterSpacing: 1.0, color: c)),
     );
   }
 }
 
 /// 段落狀態的繁中顯示名。
 String blockStateLabel(String state) => switch (state) {
-      'implemented' => '已實作',
-      'abandoned' => '已放棄',
+      'implemented' => L10n.current.boardStateImplemented,
+      'abandoned' => L10n.current.boardStateAbandoned,
       _ => state,
     };
 
@@ -236,7 +236,7 @@ class ScratchpadStateChip extends StatelessWidget {
     if (onPick == null) return chip;
 
     return PopupMenuButton<String>(
-      tooltip: '這則後來怎麼了',
+      tooltip: AppLocalizations.of(context).boardStateTooltip,
       position: PopupMenuPosition.under,
       // 「清除標記」與「改成別的」在同一個選單裡——分成兩個入口的話，
       // 標錯了要改回「還沒決定」會變成一個找不到的動作
@@ -254,15 +254,15 @@ class ScratchpadStateChip extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(blockStateLabel(v),
-                  style: UepText.sans(size: 12, color: s.ink)),
+                  style: UepText.sans(size: 13, color: s.ink)),
             ]),
           ),
         if (st != null) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
             value: '',
-            child: Text('清除標記',
-                style: UepText.sans(size: 12, color: s.inkMute)),
+            child: Text(AppLocalizations.of(context).boardStateClear,
+                style: UepText.sans(size: 13, color: s.inkMute)),
           ),
         ],
       ],
@@ -279,9 +279,9 @@ class ScratchpadStateChip extends StatelessWidget {
           border: Border.all(color: s.line),
           borderRadius: BorderRadius.circular(3),
         ),
-        child: Text('＋狀態',
+        child: Text(L10n.current.boardStateAdd,
             style: UepText.mono(
-                size: 8.5, letterSpacing: 1.0, color: s.inkMute)),
+                size: 10, letterSpacing: 1.0, color: s.inkMute)),
       );
     }
     final c = blockStateColor(st);
@@ -293,7 +293,7 @@ class ScratchpadStateChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(3),
       ),
       child: Text(blockStateLabel(st),
-          style: UepText.mono(size: 8.5, letterSpacing: 1.0, color: c)),
+          style: UepText.mono(size: 10, letterSpacing: 1.0, color: c)),
     );
   }
 }

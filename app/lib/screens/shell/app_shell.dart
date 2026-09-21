@@ -10,12 +10,15 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../core/diagnostics/input_diagnostics.dart';
+import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
+import '../../state/kit_installer.dart';
+import '../../state/runner_kit_providers.dart';
 import '../../state/mcp_kit_providers.dart';
 import '../../widgets/connection_pill.dart';
 import '../boards/board_list_screen.dart';
@@ -33,12 +36,10 @@ String? settingsGapMessage({
   required String token,
 }) {
   if (!hasServerConfig || serverUrl.trim().isEmpty) {
-    return '尚未儲存伺服器位址。目前用的是預設值 http://127.0.0.1:8787——'
-        '除非本機正跑著 Hub，否則連不到。';
+    return L10n.current.shellSettingsGapNoUrl;
   }
   if (token.trim().isEmpty) {
-    return 'API token 是空的。除非這台 Hub 自己也沒設 token（完全開放模式），'
-        '否則每一次請求都會被拒（401），房間列表因此永遠是空的。';
+    return L10n.current.shellSettingsGapNoToken;
   }
   return null;
 }
@@ -120,8 +121,8 @@ class _AppShellState extends ConsumerState<AppShell>
     if (!mounted) return;
     // 正在看那個房就請出來——留在一個讀不到內容的畫面上只會看到空白
     if (widget.selectedRoomId == roomId) context.go('/rooms');
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('你已被管理員移出這個聊天室，看不到房內的內容了')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(AppLocalizations.of(context).shellKickedOut)));
   }
 
   /// 前景狀態餵給通知中心。**只有 `resumed` 算前景**——`inactive`（視窗
@@ -167,22 +168,21 @@ class _AppShellState extends ConsumerState<AppShell>
     final goSettings = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('初始設定還沒完成',
-            style: UepText.display(size: 22, color: context.uep.inkTitle)),
+        title: Text(AppLocalizations.of(context).shellSetupIncompleteTitle,
+            style: UepText.pageTitle(color: context.uep.inkTitle)),
         content: Text(
-          '$gap\n\n到設定頁填好伺服器位址與 API token，'
-          '按「測試連線」確認後再按「儲存設定」——只測試不儲存不會生效。',
-          style: UepText.serif(size: 13.5, color: context.uep.inkSoft),
+          AppLocalizations.of(context).shellSetupIncompleteBody(gap),
+          style: UepText.serif(size: 14.5, color: context.uep.inkSoft),
         ),
         actions: [
           UepButton(
-            label: '稍後再說',
+            label: AppLocalizations.of(context).commonLater,
             variant: UepButtonVariant.outline,
             small: true,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           UepButton(
-            label: '前往設定',
+            label: AppLocalizations.of(context).shellGoSettings,
             small: true,
             onPressed: () => Navigator.of(context).pop(true),
           ),
@@ -238,6 +238,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // 啟動通知管線（跟隨已加入房間 → OS 通知 / 未讀刷新）
     ref.watch(notificationBootstrapProvider);
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 900;
     final themeMode =
         ref.watch(appConfigProvider.select((c) => c.themeMode));
@@ -265,13 +266,17 @@ class _AppShellState extends ConsumerState<AppShell>
             const SizedBox(width: 9),
             Text('CHATROOM',
                 style: UepText.mono(
-                    size: 11, color: s.inkSoft, letterSpacing: 2.0)),
+                    size: 11.5, color: s.inkSoft, letterSpacing: 2.0)),
             const Spacer(),
             const ConnectionPill(),
             const SizedBox(width: 12),
             _TopIconButton(
-              tooltip: themeMode == ThemeModePref.dark ? '切換亮色' : '切換暗色',
-              glyph: themeMode == ThemeModePref.dark ? '☾' : '☀',
+              tooltip: themeMode == ThemeModePref.dark
+                  ? l10n.shellThemeToLight
+                  : l10n.shellThemeToDark,
+              icon: themeMode == ThemeModePref.dark
+                  ? Icons.dark_mode_outlined
+                  : Icons.light_mode_outlined,
               onTap: () =>
                   ref.read(appConfigProvider.notifier).toggleTheme(),
             ),
@@ -282,19 +287,29 @@ class _AppShellState extends ConsumerState<AppShell>
             // 主持包或 MCP 接入，有任一個就顯示——一個人可以同時是主持人
             // 與成員，而兩者都沒有的人（例如只裝了 App 去連別人的 Hub）
             // 這個入口對他沒有任何意義
-            if (ref.watch(hostKitProvider).value != null ||
-                ref.watch(mcpKitProvider).value != null) ...[
+            // 🔴 裝得了 kit 的機器上這個入口**一直都在**：那頁現在是唯一
+            // 能把三包裝起來的地方，而「還沒裝」正是最需要它的時候。
+            if (ref.watch(kitInstallSupportedProvider) ||
+                ref.watch(hostKitProvider).value != null ||
+                ref.watch(mcpKitProvider).value != null ||
+                ref.watch(runnerKitProvider).value != null) ...[
               _TopIconButton(
-                tooltip: '這台機器（Hub 與 agent 接入的狀態）',
-                glyph: '⌂',
+                tooltip: l10n.hostConsoleTitle,
+                icon: Icons.dns_outlined,
                 onTap: () => context.push('/host'),
               ),
               const SizedBox(width: 8),
             ],
             _TopIconButton(
-              tooltip: '設定',
-              glyph: '◎',
+              tooltip: l10n.settingsTitle,
+              icon: Icons.settings_outlined,
               onTap: () => context.push('/settings'),
+            ),
+            const SizedBox(width: 8),
+            _TopIconButton(
+              tooltip: l10n.helpTooltip,
+              icon: Icons.help_outline,
+              onTap: () => context.push('/help/main'),
             ),
           ]),
         ),
@@ -358,6 +373,7 @@ class _LeftPaneState extends State<_LeftPane> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     Widget tab(String label, bool active, VoidCallback onTap) => Expanded(
           child: InkWell(
             onTap: onTap,
@@ -375,11 +391,10 @@ class _LeftPaneState extends State<_LeftPane> {
               child: Text(
                 label,
                 style: UepText.mono(
-                  size: 9.5,
+                  size: 10.5,
                   letterSpacing: 2.0,
                   color: active ? s.ink : s.inkMute,
-                  weight: active ? FontWeight.w500 : FontWeight.w400,
-                ),
+                  weight: active ? FontWeight.w500 : FontWeight.w400),
               ),
             ),
           ),
@@ -392,8 +407,10 @@ class _LeftPaneState extends State<_LeftPane> {
           border: Border(bottom: BorderSide(color: s.line)),
         ),
         child: Row(children: [
-          tab('ROOMS', !_boards, () => setState(() => _boards = false)),
-          tab('BOARDS', _boards, () => setState(() => _boards = true)),
+          tab(l10n.shellTabRooms, !_boards,
+              () => setState(() => _boards = false)),
+          tab(l10n.shellTabBoards, _boards,
+              () => setState(() => _boards = true)),
         ]),
       ),
       Expanded(
@@ -407,12 +424,15 @@ class _LeftPaneState extends State<_LeftPane> {
 
 class _TopIconButton extends StatelessWidget {
   const _TopIconButton({
-    required this.glyph,
+    this.glyph,
+    this.icon,
     required this.onTap,
     required this.tooltip,
-  });
+  }) : assert(glyph != null || icon != null);
 
-  final String glyph;
+  /// 字符圖示（頂欄原本的做法）。與 [icon] 擇一。
+  final String? glyph;
+  final IconData? icon;
   final VoidCallback onTap;
   final String tooltip;
 
@@ -428,8 +448,10 @@ class _TopIconButton extends StatelessWidget {
           height: 28,
           alignment: Alignment.center,
           decoration: BoxDecoration(border: Border.all(color: s.line)),
-          child: Text(glyph,
-              style: TextStyle(fontSize: 12, color: s.inkSoft)),
+          child: glyph != null
+              ? Text(glyph!,
+                  style: TextStyle(fontSize: 12, color: s.inkSoft))
+              : Icon(icon, size: 14, color: s.inkSoft),
         ),
       ),
     );
@@ -452,15 +474,11 @@ class NoRoomSelected extends StatelessWidget {
           decoration: BoxDecoration(
               border: Border.all(color: UepColors.gold.withValues(alpha: .5))),
           child: Text('U',
-              style: UepText.display(
-                  size: 24, weight: FontWeight.w600, color: UepColors.gold)),
+              style: UepText.pageTitle(color: UepColors.gold)),
         ),
         const SizedBox(height: 18),
-        Text('選擇一個聊天室開始',
-            style: UepText.serif(size: 14, color: s.inkSoft)),
-        const SizedBox(height: 6),
-        Text('或按左下角「建立房間」，再指派 agent 加入',
-            style: UepText.serif(size: 12.5, color: s.inkMute)),
+        Text(AppLocalizations.of(context).shellNoRoomSelected,
+            style: UepText.serif(size: 15, color: s.inkSoft)),
       ]),
     );
   }

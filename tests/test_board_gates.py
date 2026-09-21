@@ -320,3 +320,281 @@ async def test_second_agent_still_cannot_verify_after_first_reviews(tmp_path):
                               headers=other)
         assert r.status_code == 403, "換一個 agent 來按仍然不行"
         assert r.json()["detail"]["code"] == "human_only"
+
+
+# ---------- 週期收尾＝整片凍結（objective_closed） ----------
+#
+# 🔑 **收尾不是只擋「再加東西」。** `_assert_container_open` 守的是新增的入口，
+# 於是 `done` 的週期底下，階段照樣 reopen 得了、標題照樣改得動、卡照樣推得動
+# 狀態（艾斯維爾 2026-09-21 實測）。板上寫著這個週期已經結束，而它的內容還在
+# 變——那次「確認無誤」就什麼都不保證了。
+#
+# 解凍只有一個入口：週期自己的 `reopen`。`cancelled` 沒有 reopen ⇒ 永久唯讀。
+
+
+async def _closed(r):
+    """回 409 objective_closed，且 detail 帶得出是哪個週期、卡在什麼狀態。"""
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["code"] == "objective_closed", detail
+    assert detail["objective_id"] and detail["objective_status"]
+    return detail
+
+
+async def _done_objective(client, rid, human, agent):
+    """走完整條：active → review → verified → done。"""
+    oid, cid, tids = await _tree(client, rid, human)
+    await _finish_everything(client, cid, tids, human)
+    await client.post(f"/api/board/objectives/{oid}/review", headers=agent)
+    await client.post(f"/api/board/objectives/{oid}/verify", headers=human)
+    r = await client.post(f"/api/board/objectives/{oid}/complete", headers=human)
+    assert r.status_code == 200, r.text
+    return oid, cid, tids
+
+
+async def _verified_objective(client, rid, human, agent):
+    """走到 verified 就停。**打回的入口只剩這一段**（review／verified），
+    done 之後是終局，所以解凍的測試不能再從 done 出發。"""
+    oid, cid, tids = await _tree(client, rid, human)
+    await _finish_everything(client, cid, tids, human)
+    await client.post(f"/api/board/objectives/{oid}/review", headers=agent)
+    r = await client.post(f"/api/board/objectives/{oid}/verify", headers=human)
+    assert r.status_code == 200, r.text
+    return oid, cid, tids
+
+
+async def test_a_done_objective_freezes_its_checklists(tmp_path):
+    """實測撞到的那一條：週期完成之後，底下的階段還打得開。"""
+    app, client = await _client(tmp_path, "freeze-done-checklist")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _done_objective(client, rid, human, agent)
+
+        r = await client.post(f"/api/board/checklists/{cid}/status",
+                              json={"status": "open"}, headers=human)
+        detail = await _closed(r)
+        assert detail["objective_id"] == oid
+        assert detail["objective_status"] == "done"
+        # 人類擋、agent 也擋——這不是權限，是狀態
+        r = await client.post(f"/api/board/tasks/{tids[0]}/claim",
+                              headers=agent)
+        await _closed(r)
+
+
+async def test_a_reviewed_objective_freezes_everything_under_it(tmp_path):
+    """送審之後整片凍結：週期自己、階段、卡，全部。"""
+    app, client = await _client(tmp_path, "freeze-review")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human)
+        await _finish_everything(client, cid, tids, human)
+        r = await client.post(f"/api/board/objectives/{oid}/review",
+                              headers=agent)
+        assert r.status_code == 200, r.text
+
+        await _closed(await client.patch(f"/api/board/objectives/{oid}",
+                                         json={"title": "改個名"},
+                                         headers=human))
+        await _closed(await client.patch(f"/api/board/checklists/{cid}",
+                                         json={"title": "改個名"},
+                                         headers=human))
+        await _closed(await client.patch(f"/api/board/tasks/{tids[0]}",
+                                         json={"title": "改個名"},
+                                         headers=human))
+        await _closed(await _task_status(client, tids[0], "in_progress", human))
+        await _closed(await client.delete(f"/api/board/checklists/{cid}",
+                                          headers=human))
+        await _closed(await client.delete(f"/api/board/tasks/{tids[0]}",
+                                          headers=human))
+        await _closed(await client.post(f"/api/board/tasks/{tids[0]}/claim",
+                                        headers=human))
+
+        # 建卡那條路徑自己那道閘更早擋下（`container_settled`，既有行為）：
+        # 週期送得出審就表示底下每一份階段都收尾了
+        r = await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": "偷渡一張"}, headers=human)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "container_settled"
+
+
+async def test_reopen_is_the_way_back_in(tmp_path):
+    """唯一的解凍入口：把**還沒完成**的週期打回。之後同一組操作要成功。"""
+    app, client = await _client(tmp_path, "freeze-reopen")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _verified_objective(client, rid, human, agent)
+
+        r = await client.post(f"/api/board/objectives/{oid}/reopen",
+                              headers=human)
+        assert r.status_code == 200, r.text
+
+        r = await client.post(f"/api/board/checklists/{cid}/status",
+                              json={"status": "open"}, headers=human)
+        assert r.status_code == 200, r.text
+        r = await client.patch(f"/api/board/objectives/{oid}",
+                               json={"title": "打回之後改得動"}, headers=human)
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": "打回之後加得進來"}, headers=human)
+        assert r.status_code == 200, r.text
+        r = await _task_status(client, tids[0], "in_progress", human)
+        assert r.status_code == 200, r.text
+
+
+async def test_a_done_objective_cannot_be_reopened(tmp_path):
+    """🚨 完成是終局：`done` 打不回來（艾斯維爾 2026-09-21 裁決）。
+
+    打得回來的話，「完成」隨時可以被收回，而依它收尾的東西（結算通知、
+    上板、板的結局）都已經送出去了。訊息也不能再叫人先打回——那顆按鈕
+    對 done 不存在。
+    """
+    app, client = await _client(tmp_path, "freeze-done-forever")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _done_objective(client, rid, human, agent)
+
+        r = await client.post(f"/api/board/objectives/{oid}/reopen",
+                              headers=human)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "invalid_transition"
+        assert r.json()["detail"]["from_status"] == "done"
+
+        # 沒有被打回 ⇒ 底下仍然凍著，而且訊息不再指向一顆不存在的按鈕
+        detail = await _closed(await client.patch(
+            f"/api/board/objectives/{oid}", json={"title": "改個名"},
+            headers=human))
+        assert detail["objective_status"] == "done"
+        assert "打回" not in detail["message"]
+
+
+async def test_a_cancelled_objective_is_read_only_forever(tmp_path):
+    """`cancelled` 沒有 reopen（既有行為）⇒ 它的凍結是永久的。"""
+    app, client = await _client(tmp_path, "freeze-cancelled")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human)
+        r = await client.post(f"/api/board/objectives/{oid}/cancel",
+                              headers=human)
+        assert r.status_code == 200, r.text
+
+        detail = await _closed(await client.patch(
+            f"/api/board/objectives/{oid}", json={"title": "改個名"},
+            headers=human))
+        assert detail["objective_status"] == "cancelled"
+        await _closed(await client.patch(f"/api/board/checklists/{cid}",
+                                         json={"title": "改個名"},
+                                         headers=human))
+        await _closed(await _task_status(client, tids[0], "in_progress", human))
+        await _closed(await client.post(f"/api/board/tasks/{tids[0]}/claim",
+                                        headers=human))
+
+        r = await client.post(f"/api/board/objectives/{oid}/reopen",
+                              headers=human)
+        assert r.status_code == 409, "取消的週期打不回來"
+        assert r.json()["detail"]["code"] == "invalid_transition"
+
+
+async def test_an_active_objective_is_untouched(tmp_path):
+    """對照組：週期還在進行中的話，這一整組操作照舊。"""
+    app, client = await _client(tmp_path, "freeze-active")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human)
+
+        for r in (
+            await client.patch(f"/api/board/objectives/{oid}",
+                               json={"title": "改得動"}, headers=human),
+            await client.patch(f"/api/board/checklists/{cid}",
+                               json={"title": "改得動"}, headers=human),
+            await client.patch(f"/api/board/tasks/{tids[0]}",
+                               json={"title": "改得動"}, headers=human),
+            await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": "加得進來"}, headers=human),
+            await client.post(f"/api/board/tasks/{tids[0]}/claim",
+                              headers=agent),
+            await client.post(f"/api/board/tasks/{tids[0]}/release",
+                              headers=agent),
+            await _task_status(client, tids[0], "in_progress", human),
+        ):
+            assert r.status_code == 200, r.text
+
+
+# ── 排序也受週期凍結（09/22 補）──────────────────────────────────────
+# 兩條 reorder 都只驗了「這份順序完整且同層」，沒有人問過那個父週期還開不開
+# ——`done` 的週期底下，階段與卡的順序照樣拖得動。與上面那組是同一個漏洞。
+
+
+async def _reorder(client, path, kind, ids, hdr):
+    return await client.post(path, headers=hdr, json={
+        "kind": kind,
+        "items": [{"id": i, "order_index": n} for n, i in enumerate(ids)]})
+
+
+async def _board_id(client, rid, hdr):
+    return (await client.get(f"/api/rooms/{rid}/board",
+                             headers=hdr)).json()["board_id"]
+
+
+async def test_a_done_objective_freezes_reorder_on_both_axes(tmp_path):
+    """完成的週期底下，房軸與板軸的排序都要擋。
+
+    **兩條路各驗一次**：它們的守門是分開寫的，只修一條的話另一條就是繞過
+    凍結的後門，而畫面上兩條路拖的是同一批卡。
+    """
+    app, client = await _client(tmp_path, "freeze-done-reorder")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _done_objective(client, rid, human, agent)
+        bid = await _board_id(client, rid, human)
+
+        detail = await _closed(await _reorder(
+            client, f"/api/rooms/{rid}/board/reorder", "checklist", [cid],
+            human))
+        assert detail["objective_id"] == oid
+        assert detail["objective_status"] == "done"
+
+        detail = await _closed(await _reorder(
+            client, f"/api/boards/{bid}/reorder", "checklist", [cid], human))
+        assert detail["objective_id"] == oid
+
+
+async def test_an_active_objective_can_still_be_reordered(tmp_path):
+    """對照組。**沒有這條的話，「一律拒絕」也會讓上面那條通過。**"""
+    app, client = await _client(tmp_path, "active-reorder")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human, tasks=2)
+        bid = await _board_id(client, rid, human)
+
+        for path in (f"/api/rooms/{rid}/board/reorder",
+                     f"/api/boards/{bid}/reorder"):
+            r = await _reorder(client, path, "task", list(reversed(tids)),
+                               human)
+            assert r.status_code == 200, r.text
+
+
+async def test_an_archived_board_is_read_only_on_the_room_axis(tmp_path):
+    """封存的板在 v1（房軸）也唯讀。
+
+    `_board_item_writer` 與 `_board_writer_v2` 本來就擋，只有建卡／排序共用的
+    `_board_writer` 沒擋——那條路就是繞過封存的後門。
+    """
+    app, client = await _client(tmp_path, "archived-board-v1")
+    async with app.router.lifespan_context(app), client:
+        rid, human, agent = await _room(client)
+        oid, cid, tids = await _tree(client, rid, human)
+        bid = await _board_id(client, rid, human)
+        r = await client.post(f"/api/boards/{bid}/archive", headers=human)
+        assert r.status_code == 200, r.text
+
+        r = await _reorder(client, f"/api/rooms/{rid}/board/reorder", "task",
+                           tids, human)
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["code"] == "board_archived", detail
+        assert detail["board_id"] == bid and detail["board_name"]
+
+        r = await client.post(f"/api/rooms/{rid}/board/objectives",
+                              json={"title": "新週期"}, headers=human)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "board_archived"

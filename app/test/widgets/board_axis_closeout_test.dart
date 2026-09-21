@@ -5,6 +5,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-07（Bernie 想法板 e86dd552）：**從 Board 分頁進板看不到
 /// 「＋ 階段」與「送審」**，從聊天室進去則正常。
@@ -41,6 +42,8 @@ Widget _wrap(Widget child, {required BoardSnapshot snap, String? boardId}) =>
           boardByIdProvider(boardId).overrideWith((ref) async => snap),
       ],
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: child,
       ),

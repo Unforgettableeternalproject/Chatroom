@@ -212,6 +212,14 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 or "只有發送者本人或聊天室建立者可以刪除這則訊息。",
                 status=status, detail=detail,
             )
+        if code == "room_owner_required":
+            # 綁定工作區：那是「這間房以後派到哪」，不是成員做得了的決定。
+            # 重新 join 不會換一個房主
+            return HubError(
+                _detail_text(detail)
+                or "只有建立這間工作房的人能綁定工作區。",
+                status=status, detail=detail,
+            )
         if code == "not_room_admin":
             return HubError(
                 _detail_text(detail)
@@ -357,6 +365,94 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "但改不動。",
                 status=status, detail=detail,
             )
+        if code in ("human_token_required_for_ops_room",
+                    "human_token_required_for_run",
+                    "human_token_required_for_runner_command"):
+            # 遠端派工的憑證界線（REMOTE-OPS-PLAN §6.4）。**不是身分問題**：
+            # 重新 join 一百次也不會換一把憑證。執行器手上那把 token 只能
+            # 領單、回報、heartbeat，建房／派工／下命令一律要人類憑證
+            return HubError(
+                _detail_text(detail)
+                or "這個動作只認人類憑證（CHATROOM_HUMAN_TOKEN 或 "
+                   "audience=human 的邀請）。重新加入沒有用——"
+                   "請房內的人類代為執行。"
+                   "（派工的例外是任務板的監督者；你是的話，"
+                   "請確認你沒有離開過那間房。）",
+                status=status, detail=detail,
+            )
+        if code in ("human_actor_required_for_run",
+                    "human_actor_required_for_run_cancel",
+                    "human_actor_required_for_runner_command"):
+            # 憑證之外的第二層：房內的 agent 成員也不能派工。agent 要開工作
+            # 走任務板，不走派工佇列
+            return HubError(
+                _detail_text(detail)
+                or "只有房內的人類成員或這塊板的監督者能做這件事。"
+                   "要開工作的話請走任務板（chatroom_board_add），"
+                   "不要走派工佇列。",
+                status=status, detail=detail,
+            )
+        if code == "runner_not_serving_room":
+            # **不是身分問題**：你確實是人類、確實在房裡，只是這台執行器
+            # 不服務你這間工作房。翻成「請重新加入」會讓人在自己房裡繞，
+            # 而要做的是回到面板列得出這台執行器的那間房
+            return HubError(
+                _detail_text(detail)
+                or "這台執行器沒有服務你所在的工作房——"
+                   "執行器命令只能從面板列得出它的那間工作房下。"
+                   "請確認你帶的 room_id 是綁了這台執行器工作區的 ops 房。",
+                status=status, detail=detail,
+            )
+        if code == "kind_not_allowed_for_supervisor":
+            # 這一支**不是**「你沒有權限」：呼叫者確實是監督者，只是這個
+            # kind 不在它那份清單裡。壓成同一句話會讓它去重新確認身分，
+            # 而它要做的是換一個 kind，或把 push 留給人類
+            return HubError(
+                _detail_text(detail)
+                or "你是這塊板的監督者，但這個 kind 不開放給監督者派。"
+                   "investigate／ticket／stage 可以，push／release 是不經模型的固定"
+                   "腳本，只有人類按得下去。",
+                status=status, detail=detail,
+            )
+        if code == "release_requires_human":
+            # 上板（把分支併進穩定分支並推送）只有人類按得下去，監督者也
+            # 不行。agent 該做的是把週期送審，讓人類在確認時決定要不要上板
+            return HubError(
+                _detail_text(detail)
+                or "上板只能由人類觸發，agent 與監督者都不行。"
+                   "把週期送審（status=review）後，由人類在確認時決定"
+                   "要不要一併上板。",
+                status=status, detail=detail,
+            )
+        if code == "release_requires_ops_room":
+            # **不是身分失效**：上板只認「掛著這塊板、綁了工作區的 ops 房」
+            # 的房內成員，從板分頁（只有 session_key）按下去也不算。要它
+            # 重新 join 沒有用——它要的是換一條路，或請人類到那間房裡按
+            return HubError(
+                _detail_text(detail)
+                or "上板只能由掛著這塊板的工作房人類成員觸發，"
+                   "從板分頁（沒有房內身分）按不到。"
+                   "請在那間工作房裡由人類按下上板。",
+                status=status, detail=detail,
+            )
+        if code == "not_your_run":
+            return HubError(
+                _detail_text(detail)
+                or "這筆派工是別台執行器領走的，不能由你回報。"
+                   "先確認手上的 runner_id 是不是領到這一筆的那台。",
+                status=status, detail=detail,
+            )
+        if code in ("runner_token_required", "runner_token_invalid"):
+            # 執行器憑證（REMOTE-OPS-PLAN §4.3）。**不是房間身分問題**：
+            # 明文只在註冊成功那一次回傳，重新 join 拿不到它。弄丟了只能
+            # 換一組 label 重新註冊——那會是一台新的執行器
+            return HubError(
+                _detail_text(detail)
+                or "這個動作要帶註冊時拿到的 X-Runner-Token。明文只在第一次"
+                   "註冊成功時回傳一次；弄丟或對不上的話，請換一組 label "
+                   "重新註冊，不要對同一組 host+label 重試。",
+                status=status, detail=detail,
+            )
         if code is None and ("participant" in low or "身分" in text):
             # 舊版 Hub 的 403 不帶 code，只有一句英文。它會這樣講的情況就是
             # 身分失效，所以這條退路要留著——但**限定在沒有 code 的時候**：
@@ -429,6 +525,83 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "若確定要繼續使用，需由人類在 UI 或 API 端解除封存。",
                 status=status, detail=detail,
             )
+        if code == "room_not_ops":
+            return HubError(
+                "派工只在工作房（kind=ops）成立——一般聊天室沒有佇列，"
+                "也沒有執行器會來領這裡的單。要開工作房需要人類憑證。",
+                status=status, detail=detail,
+            )
+        if code == "run_ref_already_active":
+            return HubError(
+                _detail_text(detail)
+                or "這個目標已經有一筆還沒結束的派工了。重複派工會讓兩個 "
+                   "agent 動同一份工作樹——先看現有那筆的狀態，"
+                   "或等它結束再派。",
+                status=status, detail=detail,
+            )
+        if code == "project_not_served":
+            # 打錯專案 key 與「執行器還沒開機」在畫面上長得一樣，所以這句
+            # 要把兩種可能都講出來——只說「不支援」的話，人會去改程式
+            return HubError(
+                _detail_text(detail)
+                or "沒有執行器服務這個專案。先確認 project key 沒打錯，"
+                   "或請那台執行器上線並把這個 key 加進它的 projects 白名單"
+                   "——派下去也只會排在佇列裡等一台不會來的執行器。",
+                status=status, detail=detail,
+            )
+        if code == "workspace_not_bound":
+            # 這間工作房還沒綁工作區。**agent 自己解不掉**：綁定只給人類
+            # 房主，bridge 這側連工具都沒有——講成「再試一次」會讓它空轉
+            return HubError(
+                _detail_text(detail)
+                or "這間工作房還沒綁定工作區，所以派不了工。"
+                   "請房主在 App 的執行頁把房間綁到一個工作區，綁完再派"
+                   "——這是一次性的，綁過就不必再綁。",
+                status=status, detail=detail,
+            )
+        if code == "workspace_project_mismatch":
+            bound = detail.get("workspace_key") if isinstance(detail, dict) else None
+            if bound:
+                # 正解就在回應裡，直接講出來——只說「對不上」的話，
+                # 下一步會變成猜 key
+                return HubError(
+                    f"這間房綁的工作區是「{bound}」，project 必須填這個值。"
+                    "房間一旦綁定就只派得動那一個工作區，不是換台執行器"
+                    "就能繞過。",
+                    status=status, detail=detail,
+                )
+            return HubError(
+                _detail_text(detail)
+                or "project 與這間房綁定的工作區不一致。用 chatroom_runs 的"
+                   "儀表板看房間綁的 workspace_key，把 project 改成那個值。",
+                status=status, detail=detail,
+            )
+        if code == "run_already_finished":
+            return HubError(
+                _detail_text(detail)
+                or "這筆派工已經結束了，沒有東西可以取消。",
+                status=status, detail=detail,
+            )
+        if code == "run_bad_transition":
+            # 狀態機擋下來的轉移。**重試不會成功**——要嘛順序錯了，
+            # 要嘛這筆 run 已經被別人推到終局
+            return HubError(
+                _detail_text(detail)
+                or "派工不能從目前的狀態變成你回報的那個。先讀回這筆 run "
+                   "的現況再決定下一步，不要重試同一個回報。",
+                status=status, detail=detail,
+            )
+        if code == "supervisor_cannot_be_run":
+            # **不是權限問題**：下命令的人是房間建立者，被指定的那個成員
+            # 是一筆 run。派工跑起來的臨時成員做完就離房，而監督者是一個要
+            # 留著的角色——這也是「run 派 run」那條迴圈唯一的那道閘
+            return HubError(
+                _detail_text(detail)
+                or "派工跑起來的臨時成員不能當任務板的監督者——"
+                   "它做完就會離房，而監督者是一個要留著的角色。"
+                   "請改指定一個常駐的成員。",
+                status=status, detail=detail,
+            )
         return HubError(f"操作與 Hub 目前狀態衝突（{text or '409'}）。",
                         status=status, detail=detail)
 
@@ -437,6 +610,34 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
         return HubError(
             f"參數不符合 Hub 的要求：{body}" + ("" if _ends_sentence(body) else "。"),
             status=status, detail=detail)
+
+    if status == 429:
+        # 派工的兩個配額（REMOTE-OPS-PLAN §4.2）**刻意不是 409**：409 的語意
+        # 是「與目前狀態衝突」，client 對它的處置是換個做法；配額是速率限制，
+        # 對的處置是等一下再來。沒有這個分支的話兩者都會落進最底下那句
+        # 「未預期的狀態」——那句話不會讓任何人知道該等，只會讓它重試
+        if code == "run_daily_quota_exceeded":
+            return HubError(
+                _detail_text(detail)
+                or "今天派的 run 已經達到每日上限。這不是壞掉也不是權限問題"
+                   "——明天再來，或請主持人調整 CHATROOM_RUN_DAILY_QUOTA。"
+                   "**不要重試**，配額不會因為再打一次而變寬。",
+                status=status, detail=detail,
+            )
+        if code == "run_queue_cap_exceeded":
+            return HubError(
+                _detail_text(detail)
+                or "這間工作房排隊中的 run 已經到上限。等前面的做完，"
+                   "或先取消幾筆（chatroom_run_cancel）再派。"
+                   "用 chatroom_runs 看現在排了哪些。",
+                status=status, detail=detail,
+            )
+        return HubError(
+            f"Hub 要你先等一下（429）：{text or '沒有說明'}"
+            + ("" if _ends_sentence(text or "") else "。")
+            + "這是速率限制不是錯誤，立刻重試只會再撞一次。",
+            status=status, detail=detail,
+        )
 
     if status >= 500:
         return HubError(

@@ -6,6 +6,7 @@ import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/util/relative_time.dart';
+import '../../l10n/l10n.dart';
 import '../../models/message.dart';
 import '../../state/app_providers.dart';
 import '../../state/messages_providers.dart';
@@ -48,7 +49,7 @@ class PinnedWallScreen extends ConsumerWidget {
     final pinnedAsync = ref.watch(_pinnedProvider(roomId));
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final archived = detail?.room.isArchived ?? false;
-    final kindById = {
+    final kindById = <String, String>{
       for (final p in detail?.participants ?? const [])
         p.id: p.kind
     };
@@ -72,8 +73,8 @@ class PinnedWallScreen extends ConsumerWidget {
           const Text('❖',
               style: TextStyle(fontSize: 12, color: UepColors.gold)),
           const SizedBox(width: 10),
-          Text('釘選訊息',
-              style: UepText.display(size: 22, color: s.inkTitle)),
+          Text(AppLocalizations.of(context).chatPinnedWallTitle,
+              style: UepText.pageTitle(color: s.inkTitle)),
         ]),
         actions: [
           Padding(
@@ -97,10 +98,7 @@ class PinnedWallScreen extends ConsumerWidget {
         error: (e, _) => ErrorState(
             error: e, onRetry: () => ref.invalidate(_pinnedProvider(roomId))),
         data: (pinned) => pinned.isEmpty
-            ? const EmptyState(
-                title: '這個房間還沒有釘選任何訊息',
-                subtitle: '在訊息上按右鍵（或長按）即可釘選。'
-                    '釘選會在房裡留下一則系統訊息，並通知原本說這句話的人')
+            ? EmptyState(title: AppLocalizations.of(context).chatNoPinnedMessages)
             : Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 720),
@@ -113,11 +111,11 @@ class PinnedWallScreen extends ConsumerWidget {
                       return _PinnedCard(
                         roomId: roomId,
                         message: m,
-                        // system 訊息沒有發話者,`kindById` 查不到是**正常**
-                        // 的——它不該退成 `other`(見 [pinnedSenderLabel])
-                        kind: m.senderId != null
-                            ? (kindById[m.senderId] ?? 'other')
-                            : 'other',
+                        // 訊息自帶的 kind 快照優先，名冊只是備援（離房的
+                        // run 成員不在名冊裡）。
+                        // system 訊息沒有發話者,兩邊都查不到是**正常**的
+                        // ——它不該退成 `other`(見 [pinnedSenderLabel])
+                        kind: m.resolveSenderKind(kindById),
                         archived: archived,
                       );
                     },
@@ -164,7 +162,7 @@ class _PinnedCard extends ConsumerWidget {
         Row(children: [
           Text(pinnedSenderLabel(message),
               style: UepText.sans(
-                  size: 12.5,
+                  size: 13.5,
                   weight: FontWeight.w600,
                   color: isSystem ? s.inkMute : s.inkTitle)),
           if (!isSystem) ...[
@@ -173,7 +171,7 @@ class _PinnedCard extends ConsumerWidget {
           ],
           const Spacer(),
           Text('#${message.seq} · ${clockTime(message.createdAt)}',
-              style: UepText.mono(size: 9, color: s.inkMute)),
+              style: UepText.mono(size: 10, color: s.inkMute)),
         ]),
         const SizedBox(height: 9),
         UepMarkdownBody(
@@ -186,7 +184,7 @@ class _PinnedCard extends ConsumerWidget {
           InkWell(
             onTap: () =>
                 context.go('/rooms/$roomId?focusSeq=${message.seq}'),
-            child: MonoLabel('跳回原文 →',
+            child: MonoLabel(AppLocalizations.of(context).chatJumpToOriginal,
                 size: 9, color: UepColors.gold, letterSpacing: 1.4),
           ),
           const SizedBox(width: 14),
@@ -206,7 +204,7 @@ class _PinnedCard extends ConsumerWidget {
                   }
                 }
               },
-              child: MonoLabel('取消釘選', size: 9, letterSpacing: 1.4),
+              child: MonoLabel(AppLocalizations.of(context).chatUnpin, size: 9, letterSpacing: 1.4),
             ),
         ]),
       ]),
@@ -224,4 +222,6 @@ class _PinnedCard extends ConsumerWidget {
 /// 「(未知)」的 fallback **保留給真正的那種情況**:發話者是人/agent,但名字
 /// 查不到(離開了、或快取還沒補上)。兩者要分得開,因為處置完全不同。
 String pinnedSenderLabel(Message m) =>
-    m.kind == 'system' ? '系統' : (m.senderName ?? '（未知）');
+    m.kind == 'system'
+        ? L10n.current.commonSystem
+        : (m.senderName ?? L10n.current.commonUnknownParen);

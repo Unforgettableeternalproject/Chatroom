@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 import 'attachment_view.dart';
 import 'kind_badge.dart';
@@ -53,6 +54,7 @@ class MessageBubble extends StatelessWidget {
     this.serverUrl = '',
     this.token = '',
     this.participantId,
+    this.roomId,
     this.subagentOf,
     this.onTapCard,
   });
@@ -68,6 +70,10 @@ class MessageBubble extends StatelessWidget {
 
   /// 房內身分；附件下載也在讀取邊界內。
   final String? participantId;
+
+  /// 這則訊息在哪間房。給附件的「加到階段」用——階段是這間房掛著的板底下
+  /// 的東西。沒給就不畫那個入口。
+  final String? roomId;
   final bool isSelf;
   final String senderKind;
   final MessageActions? actions;
@@ -95,8 +101,9 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final color = kindColor(senderKind, context: context);
-    final name = message.senderName ?? '（未知）';
+    final name = message.senderName ?? l10n.commonUnknownParen;
     final time = clockTime(message.createdAt);
     final isSub = subagentOf != null;
 
@@ -106,47 +113,47 @@ class MessageBubble extends StatelessWidget {
       textBaseline: TextBaseline.alphabetic,
       children: [
         if (isSelf) ...[
-          Text(time, style: UepText.mono(size: 9, color: s.inkMute)),
+          Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
           Text(name,
               style: UepText.sans(
-                  size: 13, weight: FontWeight.w600, color: s.inkTitle)),
+                  size: 14, weight: FontWeight.w600, color: s.inkTitle)),
         ] else ...[
           Text(name,
               style: UepText.sans(
-                  size: 13,
+                  size: 14,
                   weight: FontWeight.w600,
                   color: message.deleted ? s.inkMute : s.inkTitle)),
           // 成員面板上的標記開關是一顆星，這裡回應同一顆星——兩個畫面
           // 用同一個符號講同一件事
           if (memberHighlighted) ...[
             const SizedBox(width: 6),
-            Text('★', style: UepText.sans(size: 10, color: color)),
+            Text('★', style: UepText.sans(size: 11, color: color)),
           ],
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
-          Text(time, style: UepText.mono(size: 9, color: s.inkMute)),
+          Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
           if (isSub) ...[
             const SizedBox(width: 8),
-            Text('↳ $subagentOf 的子代理',
-                style: UepText.serif(size: 10, color: s.inkMute)),
+            Text(l10n.msgSubagentOf(subagentOf!),
+                style: UepText.serif(size: 11, color: s.inkMute)),
           ],
           if (message.pinned) ...[
             const SizedBox(width: 8),
-            Text('❖ 已釘選',
+            Text(l10n.msgPinnedBadge,
                 style: UepText.mono(
-                    size: 9, color: UepColors.gold, letterSpacing: 1.0)),
+                    size: 10, color: UepColors.gold, letterSpacing: 1.0)),
           ],
           // 編輯與刪除的差別就是「改了看不出來」——不畫這個標記，那條把
           // 建立者擋在編輯之外的界線就在最後一哩失守
           if (message.editedAt != null) ...[
             const SizedBox(width: 8),
-            Text('已編輯',
+            Text(l10n.msgEditedBadge,
                 style: UepText.mono(
-                    size: 9, color: s.inkMute, letterSpacing: 1.0)),
+                    size: 10, color: s.inkMute, letterSpacing: 1.0)),
           ],
         ],
       ],
@@ -166,8 +173,8 @@ class MessageBubble extends StatelessWidget {
           border: Border.all(color: s.lineStrong, style: BorderStyle.solid),
           borderRadius: BorderRadius.circular(10),
         ),
-        child: Text('訊息已刪除',
-            style: UepText.mono(size: 11, color: s.inkMute, letterSpacing: .8)),
+        child: Text(l10n.msgDeletedBody,
+            style: UepText.mono(size: 11.5, color: s.inkMute, letterSpacing: .8)),
       );
     } else {
       body = Container(
@@ -238,7 +245,10 @@ class MessageBubble extends StatelessWidget {
             if (message.mentionGroups.isNotEmpty) ...[
               const SizedBox(height: 7),
               _PingedRow(
-                names: [for (final g in message.mentionGroups) '$g（全體）'],
+                names: [
+                  for (final g in message.mentionGroups)
+                    l10n.msgMentionGroupAll(g)
+                ],
               ),
             ] else if (unrenderedMentions(message.content, message.mentions)
                 case final pinged when pinged.isNotEmpty) ...[
@@ -251,6 +261,8 @@ class MessageBubble extends StatelessWidget {
                 serverUrl: serverUrl,
                 token: token,
                 participantId: participantId,
+                // 有房才長得出「加到階段」——階段在這間房掛著的板底下
+                roomId: roomId,
               ),
           ],
         ),
@@ -332,7 +344,7 @@ class _PingedRow extends StatelessWidget {
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Text('提及',
+        Text(AppLocalizations.of(context).msgPingedLabel,
             style: UepText.mono(size: 10.5, color: s.inkMute, letterSpacing: .8)),
         for (final n in names) MentionChip('@$n'),
       ],
@@ -348,6 +360,7 @@ class _ReplyQuote extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     return Container(
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: s.hairlineStrong, width: 2)),
@@ -359,16 +372,19 @@ class _ReplyQuote extends StatelessWidget {
         children: [
           Text(
               preview.seq == null
-                  ? '回覆 ${preview.senderName ?? '（未知）'}'
-                  : '回覆 ${preview.senderName ?? '（未知）'} · #${preview.seq}',
+                  ? l10n.msgReplyTo(
+                      preview.senderName ?? l10n.commonUnknownParen)
+                  : l10n.msgReplyToSeq(
+                      preview.senderName ?? l10n.commonUnknownParen,
+                      preview.seq!),
               style:
-                  UepText.mono(size: 9, color: s.inkMute, letterSpacing: 1.0)),
+                  UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.0)),
           const SizedBox(height: 2),
           Text(
-            preview.deleted ? '（原訊息已刪除）' : preview.excerpt,
+            preview.deleted ? l10n.msgReplyOriginDeleted : preview.excerpt,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5),
+            style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
           ),
         ],
       ),
@@ -397,6 +413,7 @@ class _ContextMenuRegion extends StatelessWidget {
     final a = actions;
     if (a == null || message.deleted || message.isSystem) return;
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     // **兩端都要指定 root，否則座標系對不上。**
     //
     // `globalPos` 是全視窗座標（`details.globalPosition`），而 `showMenu` 的
@@ -430,20 +447,21 @@ class _ContextMenuRegion extends StatelessWidget {
           height: 30,
           child: Text('MESSAGE #${message.seq}',
               style:
-                  UepText.mono(size: 8.5, color: s.inkMute, letterSpacing: 2)),
+                  UepText.mono(size: 10, color: s.inkMute, letterSpacing: 2)),
         ),
         // 封存房唯讀：只留複製，不列出一排停用的動作
         if (a.enabled) ...[
           PopupMenuItem(
             value: 'pin',
             height: 36,
-            child: Text(message.pinned ? '❖　取消釘選' : '❖　釘選',
-                style: UepText.sans(size: 12.5, color: s.ink)),
+            child: Text(message.pinned ? l10n.msgMenuUnpin : l10n.msgMenuPin,
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
           PopupMenuItem(
             value: 'reply',
             height: 36,
-            child: Text('↩　回覆', style: UepText.sans(size: 12.5, color: s.ink)),
+            child: Text(l10n.msgMenuReply,
+                style: UepText.sans(size: 13.5, color: s.ink)),
           ),
           // 釘選與建立任務是兩件事，並存（同 Q1 的理由）：釘選是「這則訊息
           // 很重要」，任務是「這則訊息要有人去做」。而卡片會指回這裡——
@@ -452,29 +470,32 @@ class _ContextMenuRegion extends StatelessWidget {
             value: 'task',
             height: 36,
             child:
-                Text('❖　建立任務', style: UepText.sans(size: 12.5, color: s.ink)),
+                Text(l10n.msgMenuCreateTask,
+                    style: UepText.sans(size: 13.5, color: s.ink)),
           ),
           if (isSelf)
             PopupMenuItem(
               value: 'edit',
               height: 36,
               child:
-                  Text('✎　編輯', style: UepText.sans(size: 12.5, color: s.ink)),
+                  Text(l10n.msgMenuEdit,
+                      style: UepText.sans(size: 13.5, color: s.ink)),
             ),
         ],
         PopupMenuItem(
           value: 'copy',
           height: 36,
           child:
-              Text('⧉　複製內容', style: UepText.sans(size: 12.5, color: s.ink)),
+              Text(l10n.msgMenuCopy,
+                  style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         if (a.enabled) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
             value: 'delete',
             height: 36,
-            child: Text('✕　刪除（需確認）',
-                style: UepText.sans(size: 12.5, color: UepColors.errorText)),
+            child: Text(l10n.msgMenuDelete,
+                style: UepText.sans(size: 13.5, color: UepColors.errorText)),
           ),
         ],
       ],

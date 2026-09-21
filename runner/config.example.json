@@ -1,0 +1,81 @@
+{
+  "_說明": "複製到 %LOCALAPPDATA%/UEP/Chatroom/runner/config.json 再改。這個檔案裡不要放 token 以外的祕密，agent_token 建議留空改用 token_env_file。",
+  "hub_url": "http://127.0.0.1:8787",
+  "agent_token": "",
+  "token_env_file": "../server/.env",
+  "host": "this-machine",
+  "label": "runner-1",
+  "max_parallel": 3,
+  "heartbeat_seconds": 30,
+  "stall_warn_seconds": 600,
+  "maintenance_hour": 4,
+  "usage_window_hours": 5,
+  "usage_soft_cap_tokens": 0,
+  "usage_soft_cap_usd": 40.0,
+  "require_gpg": true,
+  "claude_bin": "claude",
+  "backoff_minutes": [5, 15, 30, 60],
+  "rate_limit_retry_threshold": 3,
+  "mcp_retries": 3,
+  "mcp_retry_backoff_seconds": [5, 15, 30],
+  "mcp_startup_timeout_ms": 60000,
+  "allowed_domains": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "atlassian.net",
+    "npmjs.org",
+    "registry.npmjs.org",
+    "pypi.org"
+  ],
+  "allowed_mcp_servers": ["chatroom"],
+  "workspaces": {
+    "ai-website": {
+      "folder": "C:/path/to/AI-Website",
+      "public": true,
+      "allow_browser_livetest": false,
+      "model": "claude-opus-5",
+      "max_budget_usd": 5.0,
+      "wall_clock_seconds": 5400,
+      "context_window_tokens": 1000000,
+      "context_soft_limit_ratio": 0.7,
+      "default_project": "JSAI-Web",
+      "_release說明": "上板（把週期成果併進穩定分支）怎麼合、commit 與 tag 的訊息長什麼樣。merge_method 只吃 merge（--no-ff）／squash／ff_only，不認得的值會退回 merge。訊息模板的佔位符：{source} {stable} {objective} {date}（MM/DD）{tag} {repo}，不認得的佔位符會變成空字串。tag_message 留空時用週期標題。",
+      "release": {
+        "merge_method": "merge",
+        "merge_message": "release: 併入 {source}（週期：{objective}）. {date}",
+        "tag_message": "{objective}"
+      },
+      "primary_skill": "",
+      "skill_dirs": ["C:/path/to/AI-Website"],
+      "skills": {
+        "ticket": ["jira-ticket-workflow"]
+      },
+      "extra_write_dirs": [
+        "C:/path/to/AI-Website/global_docs/analysis",
+        "C:/path/to/AI-Website/global_docs/summary"
+      ],
+      "projects": {
+        "JSAI-Web": {
+          "path": "C:/path/to/AI-Website/JSAI-Web",
+          "allowed_branches": ["jsai_dev", "feature/*"],
+          "push_branches": ["jsai_dev", "feature/*"],
+          "_stable_branch說明": "上板要併進去的穩定分支（通常 main／master）。留空＝這個 repo 不參與上板，不是「預設用 main」。",
+          "stable_branch": "main"
+        },
+        "JSAI-API": {
+          "path": "C:/path/to/AI-Website/JSAI-API",
+          "allowed_branches": ["jsai_dev", "feature/*"],
+          "push_branches": ["jsai_dev", "feature/*"],
+          "stable_branch": "main"
+        },
+        "JSAI-Functions": {
+          "path": "C:/path/to/AI-Website/JSAI-Functions",
+          "allowed_branches": ["jsai_dev", "feature/*"],
+          "push_branches": ["jsai_dev", "feature/*"],
+          "stable_branch": ""
+        }
+      }
+    }
+  }
+}

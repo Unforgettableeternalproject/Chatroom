@@ -1,0 +1,7 @@
+# gen-l10n 設定。模板是繁中那份：字先用繁中寫定，英文從它翻過去。
+arb-dir: lib/l10n
+template-arb-file: app_zh_TW.arb
+output-localization-file: app_localizations.dart
+# getter 不可為 null：畫面上每一處都直接用 AppLocalizations.of(context)，
+# 不必每次判空（delegate 沒掛時是設定錯誤，該當場炸，不該悄悄少一段字）
+nullable-getter: false

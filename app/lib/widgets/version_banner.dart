@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/config/build_info.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
-import 'kind_badge.dart';
+import 'reveal.dart';
 
 /// App 與 Hub 版本對不上時的警示條。
 ///
@@ -14,46 +15,90 @@ import 'kind_badge.dart';
 /// 不是在你想起要去翻設定的時候。
 ///
 /// 相符時完全不畫——正常狀態不該佔用任何版面。
+///
+/// 🔴 **橫幅上不放 commit hash。** 橫幅要回答的是「我現在該做什麼」，
+/// 而 hash 答不了那一題——答得了的是 `built_at`：早的那邊就是舊的那邊。
+/// hash 留在 tooltip 與設定頁，回報問題時才需要。
 class VersionBanner extends ConsumerWidget {
   const VersionBanner({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final s = context.uep;
     final match = ref.watch(versionMatchProvider).value;
-    if (match == null || match == VersionMatch.same) {
-      return const SizedBox.shrink();
-    }
-
-    final different = match == VersionMatch.different;
-    final color = different ? UepColors.error : UepColors.gold;
-    final text = different
-        ? 'App 與 Hub 不是同一份程式碼——畫面上的功能可能與伺服器對不起來，'
-            '請重新取得最新版本'
-        // unknown 不是「沒事」：至少一邊講不出自己是哪一份，而那正是
-        // 「我以為我更新過了」這種誤判的溫床
-        : '無法確認 App 與 Hub 是不是同一份程式碼（其中一邊沒有版本資訊）';
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .10),
-        border: Border(bottom: BorderSide(color: color.withValues(alpha: .5))),
-      ),
-      child: Row(children: [
-        Icon(different ? Icons.warning_amber_rounded : Icons.help_outline,
-            size: 15, color: color),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Text(text,
-              style: UepText.serif(size: 12, color: s.ink, height: 1.6)),
-        ),
-        const SizedBox(width: 10),
-        // 實際的版本字串一定要印出來，不能只說「對不上」——回報問題的人
-        // 需要的是這兩個值，而不是一個結論
-        MonoLabel(BuildInfo.current.label, size: 8.5, color: s.inkMute),
-      ]),
+    final show = match != null && match != VersionMatch.same;
+    // 撐高／收合：它插在畫面最上方，直接冒出來會把底下整個 App 往下推一格
+    return UepReveal(
+      grow: true,
+      child: show ? _banner(context, ref) : null,
     );
   }
+
+  Widget _banner(BuildContext context, WidgetRef ref) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final app = ref.watch(appBuildProvider);
+    final hub = ref.watch(hubBuildProvider).value;
+    final older = _olderSide(app, hub);
+    final color = older == null ? UepColors.gold : UepColors.error;
+    final text = switch (older) {
+      _Side.app => l10n.commonVersionAppOlder,
+      _Side.hub => l10n.commonVersionHubOlder,
+      null => l10n.commonVersionUnconfirmed,
+    };
+
+    return Tooltip(
+      message: 'App ${_appLabel(app)} · Hub ${_hubLabel(hub)}',
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .10),
+          border: Border(bottom: BorderSide(color: color.withValues(alpha: .5))),
+        ),
+        child: Row(children: [
+          Icon(older == null ? Icons.help_outline : Icons.warning_amber_rounded,
+              size: 15, color: color),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(text,
+                style: UepText.serif(size: 13, color: s.ink, height: 1.6)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// 哪一邊比較舊。**判準是建置時間，不是 hash**——hash 只說得出「不一樣」，
+/// 說不出誰要更新。任一邊講不出建置時間（或兩邊同時）就回 null。
+_Side? _olderSide(BuildInfo app, Map<String, dynamic>? hubBuild) {
+  final appAt = DateTime.tryParse(app.builtAt);
+  final hubAt = DateTime.tryParse((hubBuild?['built_at'] as String?) ?? '');
+  if (appAt == null || hubAt == null) return null;
+  if (appAt.isBefore(hubAt)) return _Side.app;
+  if (hubAt.isBefore(appAt)) return _Side.hub;
+  return null;
+}
+
+enum _Side { app, hub }
+
+/// commit 截短成看得完的長度，但**不動 `-dirty`**：那個後綴的意思是
+/// 「這份產物對不回任何一個 commit」，截掉它等於把最該看見的事藏起來。
+String _shortCommit(String commit) {
+  final dirty = commit.endsWith('-dirty');
+  final hash = dirty ? commit.substring(0, commit.length - '-dirty'.length) : commit;
+  final head = hash.length > 7 ? '${hash.substring(0, 7)}…' : hash;
+  return dirty ? '$head-dirty' : head;
+}
+
+String _appLabel(BuildInfo b) {
+  // 講不出自己是哪一份時印「未知」，不拿版本號去填
+  return b.isKnown ? '${b.version}+${_shortCommit(b.commit)}' : L10n.current.commonUnknown;
+}
+
+String _hubLabel(Map<String, dynamic>? build) {
+  final commit = (build?['commit'] as String?) ?? '';
+  if (commit.isEmpty) return L10n.current.commonUnknown;
+  final version = (build?['version'] as String?) ?? '?';
+  return '$version+${_shortCommit(commit)}';
 }

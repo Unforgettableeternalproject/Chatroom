@@ -3,6 +3,7 @@ import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/widgets/board_task_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// Task 卡片：**色軸講誰，徽章講到哪**。
 ///
@@ -31,6 +32,8 @@ BoardTask _task({
 );
 
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
   theme: buildUepTheme(Brightness.dark),
   home: Scaffold(body: SingleChildScrollView(child: child)),
 );

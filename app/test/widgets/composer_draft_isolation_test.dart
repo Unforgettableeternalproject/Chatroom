@@ -5,6 +5,7 @@ import 'package:chatroom_app/widgets/mention_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 草稿的第二層：輸入列與外層草稿倉之間那條線（艾斯維爾 2026-09-02）。
 ///
@@ -22,6 +23,8 @@ Widget _host({
 }) =>
     ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(
           body: MessageComposer(

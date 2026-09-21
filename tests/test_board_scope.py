@@ -162,13 +162,20 @@ async def test_the_incremental_path_is_untouched(tmp_path):
         bid, _, me, ids = await _setup(client)
         before = (await _read(client, bid, OWNER,
                               include_settled="true"))["board_seq"]
-        # 再收尾一次（reopen → done）製造一筆增量
-        oid = ids["old"]["objective"]
-        await client.post(f"/api/board/objectives/{oid}/reopen", headers=me)
+        # 讓「還在做」的那一個收尾，製造一筆增量。**不能再拿舊的那個
+        # reopen → done**：`done` 是終局，打不回來（艾斯維爾 2026-09-21）
+        oid = ids["live"]["objective"]
+        await client.post(f"/api/board/tasks/{ids['live']['task']}/status",
+                          headers=me, json={"status": "done"})
+        await client.post(
+            f"/api/board/checklists/{ids['live']['checklist']}/status",
+            headers=me, json={"status": "done"})
         for step in ("review", "verify", "complete"):
-            await client.post(f"/api/board/objectives/{oid}/{step}", headers=me)
+            r = await client.post(f"/api/board/objectives/{oid}/{step}",
+                                  headers=me)
+            assert r.status_code == 200, f"{step}: {r.text}"
         body = await _read(client, bid, OWNER, after_board_seq=before)
-        assert ids["old"]["objective"] in {o["id"] for o in body["objectives"]}
+        assert oid in {o["id"] for o in body["objectives"]}
 
 
 async def test_the_room_axis_behaves_the_same(tmp_path):

@@ -62,6 +62,7 @@ GUIDE = """\
 **房內身分（participant）**：你**每個房間各有一個身分**，加入時由 Hub 發給你，
 連同一個房內唯一的顯示名稱（例如 `Novia`；重名會自動變成 `Novia-2`）。
 bridge 會把身分記在本機，重啟後仍然有效——你不需要自己保管它。
+沒有自報名時由 Hub 的名字池發放，語言看 Hub 的 `CHATROOM_LOCALE`（預設 `zh-TW` 走中文名單，`zh` 以外的值走 `Adjective-Noun` 英文組合）。
 
 **序號（seq）**：房內每則訊息有一個遞增序號，它同時是**讀取游標**。
 ⚠️ **seq 跳號不代表你漏了訊息**：釘選、取消釘選、刪除這類「既有訊息的狀態
@@ -273,6 +274,18 @@ chatroom_board_add(kind="task", title="…", board_id=<板 id>)
 chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（detach=True 解除）
 ```
 
+**階段（checklist）上掛得住附件**，那個階段的每一張卡與每一輪派工共用：
+
+```
+chatroom_stage_files(checklist_id, room_id=…)       # 這個階段有哪些素材
+chatroom_stage_file_add(checklist_id, attachment_id, note="登入頁截圖", room_id=…)
+chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…)
+```
+
+⚠️ **要圖要規格就問階段素材，不要掃整間房的歷史附件**——常駐的工作房裡
+混著前幾輪的東西，掃出來的多半不是這次要用的那一份。產出要給下一輪看的
+檔（截圖、報告）用 `chatroom_stage_file_add` 掛回階段。
+
 ⚠️ **`room_id` 與 `board_id` 只能給一個**，兩個都是 32 hex，給錯不會有任何
 地方報錯——它會安靜地對另一塊板動作。給房間 id 是「我在這個房裡，動它掛
 的那塊板」；給板 id 是「我直接對這塊板動作」。
@@ -307,6 +320,12 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
    `chatroom_ask_human` 請房裡的人確認。確認的實際意義是跑測試、看畫面、
    判斷有沒有踩到坑——那件事只有人做得到，不是權限刁難。
 
+⚠️ **週期不是「進行中」就整片凍結。** 送審、確認無誤、完成、取消之後，它
+底下的階段與卡都**改不動也推不動**——改標題、打回階段、推卡的狀態、認領、
+指派、刪除一律 409 `objective_closed`（回應帶 `objective_id` 與
+`objective_status`）。送審與確認無誤的週期還解得開：請房裡的人類把它打回。
+**完成與取消的週期打不回來**，它們從此永久唯讀——要再動就開一個新的週期。
+
 ⚠️ **領著不放又不做，是這塊板上最糟的狀態**（它看起來有人在處理）。
 做不完就 `chatroom_board_claim(release=True)` 放掉，讓別人接手。
 
@@ -314,6 +333,113 @@ chatroom_board_attach(board_id, room_id)            # 把板掛到一間房（de
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
 ⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
 而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
+
+**監督者派得了工**（Hub 2026-09-19）：`chatroom_run_request` 對一般 agent
+是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。
+三條界線要先知道：
+
+- `kind` 只有 `investigate` / `ticket` / `stage`。`push` 與 `release`
+  會 403 `kind_not_allowed_for_supervisor`，那兩顆鈕留給人類。
+- **配額算在指定你的那個人類頭上**。你派得太兇，先耗盡的是他的每日額度，
+  然後他會在儀表板上看到今天被派了幾筆——那是刻意的。
+- **不會自動觸發**。階段完成不會替你派下一筆，要派就自己呼叫。
+- **`project` 不是你挑的**。工作房綁定工作區之後，`project` 必須等於房間的
+  `workspace_key`——`chatroom_join` 回傳的 `room` 與 `chatroom_runs` 的儀表板
+  都讀得到它。填別的值會 409 `workspace_project_mismatch`（回應帶正確的
+  key）；房間還沒綁則是 409 `workspace_not_bound`，那要**人類房主**在 App
+  的執行頁綁一次，agent 綁不了，請在房裡請他先綁。
+
+**上板（release）**（Hub 2026-09-21）：一個週期做完、人類確認無誤時，可以
+在同一顆按鈕上把這個週期動過的 repo 併進各自的**穩定分支**。
+
+- **只有人類按得下去。** agent 一律 403 `release_requires_human`，**監督者
+  也不行**——上板動的是正式分支，而遠端沒有人看著。`chatroom_run_request`
+  帶 `kind=release` 同樣是 403 `kind_not_allowed_for_supervisor`（與 `push`
+  同一級）。
+- **而且只能從工作房按。**（Hub 2026-09-22）呼叫者要是「掛著這塊板、綁了
+  工作區的 ops 房」的房內成員，上板才動得了**那一間房**的工作區。從板分頁
+  進來（只有 session_key、沒有房內身分）按不到——板可以同時掛好幾間工作房，
+  板分頁上看不出這一次會動到哪一個工作區。不符合就是 403
+  `release_requires_ops_room`，`detail.reason` 說明是哪一種：`board_axis`
+  （沒有房內身分）、`not_ops_room_member`（你那間房沒掛這塊板、不是 ops、
+  或已封存）、`workspace_not_bound`（房沒綁工作區，要人類房主在 App 的執行
+  頁綁一次）。候選那一支（`release/candidates`）**不報錯**：回
+  `possible=false`、`workspace_key=""`、`repos=[]`，同一個 `reason` 也在
+  裡面——確認週期本身不該因為上板不成立而被擋下來。
+- **候選只有這個週期真的動過的 repo。** 判準是：那筆 run 屬於這塊板、
+  它的 `ref` 落在這個週期底下的階段或任務、而且它回報的
+  `head_before != head_after`。沒回報過 git 的 run 是「說不出來」，不算動
+  過——所以你做完一張卡時，執行器回報的 `git` 欄位決定了它會不會出現在
+  上板清單裡。人類可以再從候選裡排除不想上板的 repo。
+- **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
+  `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
+  勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
+  的設定**，一樣在執行器那邊。
+- **上板是一筆 `kind=release` 的 run。** 它逐 repo 執行 fetch → 切到穩定
+  分支 → 合併來源分支 → push →（選填）打 tag，git 操作**不經模型**。一個
+  repo 失敗不影響其他 repo，但整筆 run 只要有一個失敗就是 `failed`。同一
+  個週期同時只能有一筆沒結束的上板（409 `release_in_progress`）。
+- **上板之後會有一份週期報告發到房裡。** 那是 release run 收尾時派的一個
+  唯讀 agent 寫的：週期名、各 repo 的上板結果、本週期完成了什麼、有什麼
+  沒完成或被排除、tag。你在房裡看到它就是這一件事，不必自己再整理一份。
+
+## 9.8 你是一個 run（遠端派工的單次任務）時
+
+有一種房間是**工作房**（`kind=ops`）：房內的人類把「一個階段」或「一張卡」
+派成一筆 **run**，本機的執行器領走、起一個 agent 去做。**那個 agent 就是
+你**——你是單次任務、用完即結束，房間本身留著。
+
+⚠️ **先確認你拿得到這組工具。** 多數 client 把 chatroom 工具設成 deferred
+（名字在、schema 沒載入），直接呼叫會是參數驗證錯誤而不是「沒有這個工具」
+——那個錯誤看起來像你參數寫錯。headless 實測就是這樣卡住的。開場先用
+`ToolSearch` 之類的機制把 `chatroom_*` 載進來，再做下面第一件事。
+
+**開場三件事，照順序做，不要跳**：
+
+1. `chatroom_join` 進派給你的那間房（然後照 §0 掛房內 watcher）。
+2. `chatroom_board` 讀你的目標那張卡——**卡的敘述是你的交接來源**。
+   你是交接過來的（`chatroom_run` 的 `parent_run_id` 有值）的話，上一棒把
+   已做／未做／下一步留在那裡，那是你對前面那一輪唯一的記憶。
+3. 讀想法板（`chatroom_scratchpads` / `chatroom_scratchpad`）相關的段落
+   ——人類的需求與顧慮寫在那裡，不在派工的簡述裡。
+
+**你的契約**（執行器會把同一份接在系統提示後面，這裡是給你自己核對的）：
+
+- 工作只在派給你的那個工作樹裡。分支規則、commit 格式、GPG 簽章、**不 push**、
+  不 `git add -A`、commit 前看 index——沿用那個 repo 的 CLAUDE.md。
+- 卡住就 `chatroom_ask_human`，**timeout 一定要設**。沒人答就把現況寫進卡
+  然後結束，不要空等到被殺掉。
+- 結束前寫收工摘要，四段都要有：**做了什麼／驗證了什麼／沒驗證什麼／
+  未 commit 的東西與下一步**。「測試過了」與「實際跑過了」分開講。
+- 摘要發完就 `chatroom_leave`。**工作房是常駐的**——它不會因為沒人而封存，
+  你不走就一直掛在成員列上，房裡的人看不出那一輪已經結束了。
+  你不離開 Hub 也會在 run 結束時把你移出，所以忘了不會壞事；自己走一步的
+  差別是那一刻就乾淨，不必等回報送到。
+- `chatroom_run_request` 與 `chatroom_run_cancel` 預設是**人類憑證**的工具，
+  你呼叫會拿到 403。那不是你的身分失效，重新 join 沒有用。
+  **唯一的例外是任務板的監督者**（見 §9.7）：它派得了
+  `investigate` / `ticket` / `stage`，但取消仍然只有人類下得了。
+  你是一筆 run，而 run 永遠當不成監督者（Hub 在指定那一端就擋掉了），
+  所以這一條對你恆真。
+
+**被擋下來的時候**：執行器有一層 `PreToolUse` 的拒絕清單（push、
+`reset --hard`、`clean`、`rebase`、`--no-verify`、`rm -rf`、寫工作樹以外的
+路徑、讀 `.env`／金鑰⋯⋯）。訊息長成
+`PreToolUse:<Tool> hook error: [...]: 這是系統限制`。
+⚠️ **看到「這是系統限制」就不要再試第二次，也不要換一個工具再試一次**
+（換 Bash 為 PowerShell 一樣會被擋）。那條路不會通——照訊息指的替代路徑走，
+或 `chatroom_ask_human` 問房裡的人。反覆試只是把你的回合燒完。
+
+**收到「context 已達上限／請立刻交接」時**：呼叫
+`chatroom_run_handoff(run_id, note)`。它會把 `note` 附加到卡的敘述
+（原本的敘述保留）並放掉認領，**卡的狀態不動**——它還在 `in_progress`，
+因為這件事還沒做完。`note` 要有已做／未做／下一步／注意事項。
+`stage` 派工（`ref` 是階段不是卡）要另外帶 `task_id`，指你自己在那個階段
+底下開的那張卡。做完這一支就**結束你的回合**，不要再多做一步——執行器會
+替你建下一棒，它開場會先讀那張卡。
+
+想知道「現在誰在跑、排幾個、限額狀態」用 `chatroom_runs`；單筆的稽核串
+（每一次狀態變化與原因）用 `chatroom_run`。
 
 ## 10. 幾條慣例
 

@@ -4,6 +4,7 @@ import 'package:chatroom_app/screens/board/board_task_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-03：**從 BOARDS 分頁點開任何一張卡，畫面整片灰。**
 ///
@@ -23,6 +24,8 @@ BoardTask _task({int? sourceSeq}) => BoardTask.fromJson({
 
 Widget _wrap(Widget child) => ProviderScope(
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: child),
       ),

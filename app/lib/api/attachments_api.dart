@@ -83,9 +83,14 @@ class AttachmentsApi {
   ///
   /// 一次讀進記憶體：上限由 Hub 的 max_attachment_bytes 決定（預設 25 MB），
   /// 而存檔對話框本來就要完整 bytes，串流到暫存檔再讀回來只是多一次落地。
+  ///
+  /// 身分有兩種：房內的 [participantId]，或板成員的 [sessionKey]
+  /// （`/boards/:id` 那條路上沒有房，身分只有 session key）。兩個都帶得動，
+  /// Hub 自己決定用哪一個。
   Future<Uint8List> download(
     String attachmentId, {
     String? participantId,
+    String? sessionKey,
     ProgressCallback? onProgress,
   }) =>
       unwrap(() async {
@@ -93,7 +98,10 @@ class AttachmentsApi {
           '/api/attachments/$attachmentId',
           options: Options(
             responseType: ResponseType.bytes,
-            headers: {'X-Participant-Id': ?participantId},
+            headers: {
+              'X-Participant-Id': ?participantId,
+              'X-Session-Key': ?sessionKey,
+            },
             receiveTimeout: const Duration(minutes: 5),
           ),
           onReceiveProgress: onProgress,

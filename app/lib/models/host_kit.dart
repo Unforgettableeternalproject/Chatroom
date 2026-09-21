@@ -1,4 +1,20 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
+
+/// 這一包是**怎麼找到的**。
+///
+/// 安裝器不是唯一的落地方式：同一台機器可以直接跑 repo 裡的 bridge、
+/// 或把程式放在某個目錄手動接上排程。那時登錄檔不存在，但東西確實在跑——
+/// **把「沒有登錄檔」當成「沒有這個功能」，畫面就會對著一台正在運作的機器
+/// 說它什麼都沒有**。所以偵測要退回本機來源，並在畫面上講清楚是哪一種。
+enum KitSource {
+  /// 安裝器裝的，資訊來自登錄檔。
+  installed,
+
+  /// 沒有登錄檔，從環境／設定／相對位置推出來的本機檔案。
+  local,
+}
 
 /// 這台機器上裝著的 Hub 主持包（`host-kit`）。
 ///
@@ -88,10 +104,23 @@ class McpKit {
     required this.envFile,
     this.installedAt = '',
     this.targets = const [],
+    this.source = KitSource.installed,
+    this.bridgeDir = '',
   });
 
   final String kitRoot;
   final String envFile;
+
+  /// 這一份資訊的來源（安裝包／本機來源）。
+  final KitSource source;
+
+  /// bridge 目錄。安裝包沒有記這一欄，那就是 kit 根目錄底下的 `bridge/`；
+  /// 本機來源時可能不在那個相對位置，所以偵測端會把它填明白。
+  final String bridgeDir;
+
+  String get bridgePath => bridgeDir.isNotEmpty
+      ? bridgeDir
+      : '$kitRoot${Platform.pathSeparator}bridge';
 
   /// 安裝完成的時間。
   ///

@@ -5,6 +5,7 @@ import '../core/mention_groups.dart';
 import '../core/diagnostics/input_diagnostics.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../l10n/l10n.dart';
 import '../models/message.dart';
 import '../models/participant.dart';
 import 'composer_attachments.dart';
@@ -552,14 +553,15 @@ class _MessageComposerState extends State<MessageComposer> {
 
   Future<void> _send() async {
     if (!_canSend) return;
+    final l10n = AppLocalizations.of(context);
     var content = _controller.text.trim();
     if (content.isEmpty) {
       // Hub 的 content 是 min_length=1，純附件訊息必須有字。用檔名當說明，
       // 與 bridge 的 chatroom_send_file 同一套慣例。
       final first = widget.attachments.first.filename;
       content = widget.attachments.length == 1
-          ? '（檔案）$first'
-          : '（檔案）$first 等 ${widget.attachments.length} 個';
+          ? l10n.chatFileOnly(first)
+          : l10n.chatFileOnlyMore(first, widget.attachments.length);
     }
     setState(() => _sending = true);
     try {
@@ -661,6 +663,7 @@ class _MessageComposerState extends State<MessageComposer> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
 
     if (!widget.enabled) {
       return Container(
@@ -670,7 +673,8 @@ class _MessageComposerState extends State<MessageComposer> {
           border: Border(top: BorderSide(color: s.line)),
         ),
         child: Center(
-          child: MonoLabel('此聊天室已封存，無法發言', size: 10, letterSpacing: 2.4),
+          child: MonoLabel(l10n.chatArchivedCannotPost,
+              size: 10, letterSpacing: 2.4),
         ),
       );
     }
@@ -704,18 +708,18 @@ class _MessageComposerState extends State<MessageComposer> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('編輯 #${editing.seq}',
+                    Text(l10n.chatEditingSeq(editing.seq),
                         style: UepText.mono(
-                            size: 9,
+                            size: 10,
                             color: UepColors.gold,
                             letterSpacing: 1.0)),
                     const SizedBox(height: 2),
                     Text(
                       // 講出後果：編輯過的訊息會留下「已編輯」標記，
                       // 那不是可以偷偷改掉的東西
-                      '送出後會取代原本的內容，並標記為已編輯',
+                      l10n.chatEditNote,
                       style: UepText.serif(
-                          size: 12, color: s.inkMute, height: 1.5),
+                          size: 13, color: s.inkMute, height: 1.5),
                     ),
                   ],
                 ),
@@ -742,9 +746,10 @@ class _MessageComposerState extends State<MessageComposer> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('回覆 ${reply.senderName ?? '（未知）'}',
+                    Text(l10n.msgReplyTo(
+                        reply.senderName ?? l10n.commonUnknownParen),
                         style: UepText.mono(
-                            size: 9,
+                            size: 10,
                             color: UepColors.gold,
                             letterSpacing: 1.0)),
                     const SizedBox(height: 2),
@@ -753,7 +758,7 @@ class _MessageComposerState extends State<MessageComposer> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: UepText.serif(
-                          size: 12, color: s.inkMute, height: 1.5),
+                          size: 13, color: s.inkMute, height: 1.5),
                     ),
                   ],
                 ),
@@ -770,7 +775,7 @@ class _MessageComposerState extends State<MessageComposer> {
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           if (widget.onPickFiles != null) ...[
             IconButton(
-              tooltip: '附加檔案（也可以直接把檔案拖進來、或貼上截圖）',
+              tooltip: l10n.chatAttachTooltip,
               onPressed: widget.onPickFiles,
               icon: Icon(Icons.attach_file, size: 18, color: s.inkMute),
             ),
@@ -802,7 +807,7 @@ class _MessageComposerState extends State<MessageComposer> {
                           maxLines: 6,
                           minLines: 1,
                           style: UepText.serif(
-                              size: 14, color: s.ink, height: 1.7),
+                              size: 15, color: s.ink, height: 1.7),
                           decoration: InputDecoration(
                             isDense: true,
                             border: InputBorder.none,
@@ -810,10 +815,10 @@ class _MessageComposerState extends State<MessageComposer> {
                             // 有東西可指——沒有卡卻提示得了「# 指涉任務」，
                             // 打了 `#` 會得到一個空的候選清單，那比不提示糟
                             hintText: widget.cards.isEmpty
-                                ? '輸入訊息…　@ 提及成員，支援 Markdown'
-                                : '輸入訊息…　@ 提及成員，# 指涉任務，支援 Markdown',
+                                ? l10n.chatComposerHint
+                                : l10n.chatComposerHintCards,
                             hintStyle: UepText.serif(
-                                size: 14, color: s.inkMute, height: 1.7),
+                                size: 15, color: s.inkMute, height: 1.7),
                           ),
                         ),
                       ),
@@ -847,10 +852,8 @@ class _MessageComposerState extends State<MessageComposer> {
                           final refs =
                               extractCardRefs(value.text, widget.cards);
                           if (names.isEmpty && refs.isEmpty) {
-                            return const MonoLabel(
-                                'ENTER 送出 · SHIFT+ENTER 換行 · ↑↓ 歷史',
-                                size: 8.5,
-                                letterSpacing: 1.2);
+                            return MonoLabel(l10n.chatComposerKeys,
+                                size: 8.5, letterSpacing: 1.2);
                           }
                           // ⚠️ **這裡不能用 MonoLabel**：它會 `toUpperCase()`，
                           // 而這一行印的是人名。「會 TAG 到：ALPHA」把名字
@@ -859,17 +862,21 @@ class _MessageComposerState extends State<MessageComposer> {
                           return Text(
                             [
                               if (names.isNotEmpty)
-                                '→ 會 tag 到：${names.map((n) => n == fromReply && !typed.contains(n) ? '$n（回覆）' : n).join('、')}',
-                              if (refs.isNotEmpty) '指涉 ${refs.length} 張卡',
+                                l10n.chatWillTag(names
+                                    .map((n) =>
+                                        n == fromReply && !typed.contains(n)
+                                            ? l10n.chatTagFromReply(n)
+                                            : n)
+                                    .join('、')),
+                              if (refs.isNotEmpty) l10n.chatRefsCards(refs.length),
                             ].join(' · '),
                             style: UepText.mono(
-                              size: 8.5,
+                              size: 10,
                               letterSpacing: 1.2,
                               // 金＝人、藍＝卡，與訊息裡的 chip 同一套語意
                               color: names.isNotEmpty
                                   ? UepColors.gold
-                                  : UepColors.info,
-                            ),
+                                  : UepColors.info),
                           );
                         },
                       ),
@@ -881,7 +888,7 @@ class _MessageComposerState extends State<MessageComposer> {
           ),
           const SizedBox(width: 12),
           UepButton(
-            label: '送出 →',
+            label: l10n.chatSendButton,
             onPressed: _canSend ? _send : null,
           ),
         ]),
@@ -943,7 +950,7 @@ class _MessageComposerState extends State<MessageComposer> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: UepText.sans(
-                                  size: 12.5,
+                                  size: 13.5,
                                   weight: FontWeight.w600,
                                   color: s.inkTitle)),
                         ),
@@ -953,11 +960,11 @@ class _MessageComposerState extends State<MessageComposer> {
                         else if (option.card case final c?)
                           Text(c.status,
                               style:
-                                  UepText.mono(size: 9.5, color: s.inkMute))
+                                  UepText.mono(size: 10.5, color: s.inkMute))
                         else
                           Text(option.description,
                               style:
-                                  UepText.serif(size: 11, color: s.inkMute)),
+                                  UepText.serif(size: 12, color: s.inkMute)),
                       ]),
                     ),
                   ),

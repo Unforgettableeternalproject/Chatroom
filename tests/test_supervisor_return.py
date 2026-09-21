@@ -132,7 +132,9 @@ async def test_stale_departed_is_cleared_on_upgrade(tmp_path):
     db = await open_db(db_path)
     row = await (await db.execute(
         "SELECT board_supervisor_left_at FROM room WHERE id='r1'")).fetchone()
-    assert row["board_supervisor_left_at"] == "", "人在房內就不該還掛著已離開"
+    # **NULL 不是空字串**：資格判準問的是 `IS NULL`（2026-09-19）。清成空
+    # 字串的話，畫面寫著他回來了，而他在確認週期與派工上照樣 403
+    assert row["board_supervisor_left_at"] is None, "人在房內就不該還掛著已離開"
     await db.close()
 
 
@@ -156,5 +158,5 @@ async def test_a_supervisor_who_really_left_keeps_the_mark(tmp_path):
     db = await open_db(db_path)
     row = await (await db.execute(
         "SELECT board_supervisor_left_at FROM room WHERE id='r1'")).fetchone()
-    assert row["board_supervisor_left_at"] != ""
+    assert row["board_supervisor_left_at"]
     await db.close()

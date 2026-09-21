@@ -31,13 +31,41 @@ class AppConfig {
     required this.themeMode,
     required this.preferredName,
     required this.deviceKey,
+    this.fontScale = FontScalePref.medium,
+    this.locale = LocalePref.system,
   });
+
+  /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
+  ///
+  /// token 與 deviceKey 要 await 才拿得到，所以仍由呼叫端傳進來；
+  /// 其餘偏好一律從這裡讀，新增欄位時不必再改一次啟動程式。
+  factory AppConfig.fromSettings(
+    SettingsRepository settings, {
+    required String token,
+    required String deviceKey,
+  }) =>
+      AppConfig(
+        serverUrl: settings.serverUrl,
+        token: token,
+        themeMode: settings.themeMode,
+        preferredName: settings.preferredName,
+        deviceKey: deviceKey,
+        fontScale: settings.fontScale,
+        locale: settings.locale,
+      );
 
   final String serverUrl;
   final String token;
   final ThemeModePref themeMode;
   final String preferredName;
   final String deviceKey;
+
+  /// 字級偏好；套用在 `app.dart` 的 MediaQuery textScaler。
+  final FontScalePref fontScale;
+
+  /// 語言偏好；套用在 `app.dart` 的 MaterialApp.locale
+  /// （`system` → 傳 null，交給 Flutter 依系統語言解析）。
+  final LocalePref locale;
 
   bool get isConfigured => serverUrl.isNotEmpty;
 
@@ -47,6 +75,8 @@ class AppConfig {
     ThemeModePref? themeMode,
     String? preferredName,
     String? deviceKey,
+    FontScalePref? fontScale,
+    LocalePref? locale,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -54,6 +84,8 @@ class AppConfig {
         themeMode: themeMode ?? this.themeMode,
         preferredName: preferredName ?? this.preferredName,
         deviceKey: deviceKey ?? this.deviceKey,
+        fontScale: fontScale ?? this.fontScale,
+        locale: locale ?? this.locale,
       );
 }
 
@@ -83,6 +115,16 @@ class AppConfigNotifier extends Notifier<AppConfig> {
       state.themeMode == ThemeModePref.dark
           ? ThemeModePref.light
           : ThemeModePref.dark);
+
+  Future<void> setFontScale(FontScalePref scale) async {
+    await _settings.setFontScale(scale);
+    state = state.copyWith(fontScale: scale);
+  }
+
+  Future<void> setLocale(LocalePref pref) async {
+    await _settings.setLocale(pref);
+    state = state.copyWith(locale: pref);
+  }
 
   Future<void> setPreferredName(String name) async {
     await _settings.setPreferredName(name);
@@ -146,12 +188,18 @@ final questionsApiProvider =
 final tokensApiProvider =
     Provider((ref) => TokensApi(ref.watch(dioProvider)));
 
-/// Hub 的版本資訊與本機 App 的比對結果。
+/// Hub 自報的 build 資訊（`{version, commit, built_at, source}`）。
 ///
 /// 這整套機制的用途只有一個：讓「手上跑的是哪一份程式碼」變成一個可以回答
 /// 的問題。今天的事故成本就是沒有人答得出來——測試端拿著 16 小時前的產物
 /// 驗收，而三個人用三種方法去猜，全都在猜。
-final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+///
+/// ⚠️ **原始的 build map 要留著，不能只留比對結果。**「對不上」這個結論
+/// 回答不了「哪一邊舊」，而回報問題的人需要的正是兩邊的 commit。
+///
+/// 連不上 Hub、或舊版 Hub 不回這一段時是 null——null **不等於相符**，由
+/// [BuildInfo.compare] 判成 [VersionMatch.unknown]。
+final hubBuildProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   // 🔴 **斷線重連之後要重新判斷。**
   //
   // 這個 provider 原本這輩子只算一次，沒有任何東西 invalidate 它——於是
@@ -175,11 +223,27 @@ final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
   final api = ref.watch(roomsApiProvider);
   try {
     final health = await api.health();
-    return BuildInfo.compare(BuildInfo.current, health.build);
+    return health.build;
   } on ApiException {
     // 連不上 Hub 是另一回事，不要偽裝成版本問題
-    return VersionMatch.unknown;
+    return null;
   }
+});
+
+/// 這份 App 自己的 build 識別。
+///
+/// 值在編譯期由 `--dart-define` 固定，執行期改不了——包成 provider 只是為了
+/// 讓測試餵得進一份有 commit 的產物（測試環境沒有那些 define，
+/// `BuildInfo.current.commit` 永遠是空的）。
+final appBuildProvider = Provider<BuildInfo>((ref) => BuildInfo.current);
+
+/// Hub 與本機 App 的比對結果。
+///
+/// 只做比對，不再自己去問 Hub——問的那一次在 [hubBuildProvider]，兩者共用
+/// 同一次 health 請求（重連時的重算也在那裡）。
+final versionMatchProvider = FutureProvider<VersionMatch>((ref) async {
+  final hubBuild = await ref.watch(hubBuildProvider.future);
+  return BuildInfo.compare(ref.watch(appBuildProvider), hubBuild);
 });
 
 // ---------- Realtime ----------

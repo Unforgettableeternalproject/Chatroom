@@ -41,6 +41,14 @@ class Config:
             return Path(self.tunnel_url_file_path)
         return Path(self.db_path).resolve().parent / ".tunnel-url"
 
+    # 隨機代稱的語言。`zh` 開頭走中文名單，其餘（含未知值）走
+    # `{Adjective}-{Noun}` 英文組合。只影響沒帶 preferred_name 的 join——
+    # 自報名是使用者挑的字，不該被 Hub 的語言設定改掉
+    locale: str = field(
+        # `CHATROOM_LOCALE=`（空值）也算沒設：envfile 會把空字串塞進環境，
+        # 空字串不以 zh 開頭會掉進英文池，選「預設」反而拿到英文代稱
+        default_factory=lambda: os.environ.get("CHATROOM_LOCALE") or "zh-TW"
+    )
     # agent 閒置多久後被自動移出房間（秒）
     idle_timeout: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_IDLE_TIMEOUT", "600"))
@@ -183,6 +191,32 @@ class Config:
         default_factory=lambda: os.environ.get(
             "CHATROOM_DEBUG_ENDPOINTS", "0").strip().lower()
         in ("1", "true", "yes", "on")
+    )
+    # ── 遠端派工（Remote Ops，REMOTE-OPS-PLAN §6.4）────────────────────
+    #
+    # 這四個是**系統層的硬限制**，不是建議值：派工的人不一定是這台 Hub 的
+    # 主持人，而「不能完全相信對方的人類」是 09/16 的裁決。
+    #
+    # 每個派工者每日可以建幾筆 run。日界線用 UTC 的當日（與 created_at 同
+    # 一個時區基準），不做本地時區——換算會讓兩端對「今天」的認知不一致
+    run_daily_quota: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_DAILY_QUOTA", "20"))
+    )
+    # 一間 ops 房同時排隊（queued）的 run 上限。排隊爆掉不是資源問題，
+    # 是「有人在亂按」的訊號——擋在建立那一刻才看得出因果
+    run_queue_cap: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_QUEUE_CAP", "5"))
+    )
+    # 交接鏈的深度上限。超過即 failed 並 mention 派工者——無上限的交接鏈
+    # 是一個會自己續命的迴圈，而遠端沒有人看著
+    run_handoff_max: int = field(
+        default_factory=lambda: int(os.environ.get("CHATROOM_RUN_HANDOFF_MAX", "5"))
+    )
+    # 執行器多久沒 heartbeat 就標 offline（秒）。取 heartbeat 週期的數倍
+    # 餘裕：偶爾一次網路抖動不該讓房裡收到一則「執行器離線」
+    runner_offline_after: float = field(
+        default_factory=lambda: float(
+            os.environ.get("CHATROOM_RUNNER_OFFLINE_AFTER", "180"))
     )
     # long-poll 最長掛起秒數上限
     max_poll_timeout: float = 55.0

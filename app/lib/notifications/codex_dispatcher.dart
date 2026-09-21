@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 
+import '../l10n/l10n.dart';
 import '../models/agent_session.dart';
 import '../models/assignment.dart';
 import '../models/message.dart';
@@ -453,7 +454,8 @@ class CodexDispatcher {
     // 一次是判斷板子的變動到底投出去了沒有，兩次都只能靠對方回報。
     _log.info('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq，'
         '${threads.length} 個 thread）');
-    _publish('board 變動已投遞（${_roomLabel(roomId)} seq $boardSeq）');
+    _publish(
+        L10n.current.notifyCodexBoardDelivered(_roomLabel(roomId), boardSeq));
     return _BoardOutcome.sent;
   }
 
@@ -640,8 +642,9 @@ class CodexDispatcher {
       _log.warning('codex queue 轉送失敗（thread=$thread）');
     }
     _publish(ok
-        ? '已投遞 ${msgs.length} 則到 ${_shortThread(thread)}'
-        : 'codex queue 失敗（${_shortThread(thread)}）');
+        ? L10n.current
+            .notifyCodexDelivered(msgs.length, _shortThread(thread))
+        : L10n.current.notifyCodexQueueFailed(_shortThread(thread)));
     return ok;
   }
 
@@ -686,7 +689,7 @@ class CodexDispatcher {
       _pending.remove(dropped);
       _log.warning('補投佇列已滿，丟棄最舊的一則 mention（$dropped）');
     }
-    _publish('等 Codex 空下來（${_pending.length} 則待補投）');
+    _publish(L10n.current.notifyCodexWaiting(_pending.length));
   }
 
   /// 重試補投。跟著 [pollAssignments] 的 10 秒輪詢走——指派靠這個節奏顯得
@@ -707,8 +710,8 @@ class CodexDispatcher {
         '${p.message.senderName} @ ${p.message.mentions.join('、')}'
         '——這則喚醒沒有送達任何本機 Codex',
       );
-      _publish('逾時放棄：${p.message.senderName} @ '
-          '${p.message.mentions.join('、')}');
+      _publish(L10n.current.notifyCodexGaveUp(
+          p.message.senderName ?? '', p.message.mentions.join('、')));
     }
     if (_pending.isEmpty) return;
 

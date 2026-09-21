@@ -7,6 +7,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 呼吸光暈框修正的驗收圖（09/09 房 seq 22 的對比用）。
 ///
@@ -36,6 +37,8 @@ void main() {
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: kTestLocalizationsDelegates,
+      supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Builder(
         builder: (context) => Scaffold(

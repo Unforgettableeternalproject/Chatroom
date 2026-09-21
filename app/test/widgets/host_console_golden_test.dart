@@ -7,10 +7,12 @@ import 'package:chatroom_app/screens/host/host_console_screen.dart';
 import 'package:chatroom_app/state/host_actions.dart';
 import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/host_probe.dart';
+import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/mcp_kit_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 主機控制台的驗收圖。
 ///
@@ -26,12 +28,18 @@ void main() {
     // 高度要容得下整頁：新增「資料與安全」那一區之後，1900 會把它
     // 推到畫面外——ListView 不會 overflow，所以那種漏拍**不會報錯**，
     // 只是驗收圖裡默默少了一塊
-    tester.view.physicalSize = const Size(760, 2250);
+    tester.view.physicalSize = const Size(760, 2100);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(ProviderScope(
       overrides: [
+        // 這張圖驗的是三盞燈與「不確定」怎麼畫，不是安裝入口：關掉安裝
+        // 分頁，版面就是加那個功能之前的樣子。**也擋住真網路**——
+        // kitReleaseProvider 沒覆寫的話，這支測試會去打 GitHub
+        kitInstallSupportedProvider.overrideWithValue(false),
+        kitReleaseProvider.overrideWith((ref) async => null),
+        kitPythonProvider.overrideWith((ref) async => null),
         hostKitProvider.overrideWith((ref) async => const HostKit(
               kitRoot: r'C:\kits\chatroom-host-kit',
               envFile: r'C:\kits\chatroom-host-kit\server\.env',
@@ -48,25 +56,34 @@ void main() {
               humanToken: 'demo-human-token-not-real',
             )),
         hostHealthProvider.overrideWith((ref) async => const HostHealth(
-              process: Probe(ProbeState.ok, 'Hub 正在這台機器上跑'),
-              reachable: Probe(ProbeState.ok, '綁定位址打得通',
-                  caveat: '這只證明本機打得到；別台機器還要防火牆放行與網路可達'),
-              auth: Probe(ProbeState.bad, 'server/.env 裡的 token 不被接受',
-                  caveat: 'Hub 可能還跑著舊的那份——改完 .env 要重啟才生效'),
+              process: Probe(ProbeState.ok, '執行中'),
+              reachable: Probe(ProbeState.ok, '26.176.231.43 打得通'),
+              auth: Probe(ProbeState.bad, 'token 不被接受'),
             )),
         tunnelStatusProvider.overrideWith((ref) async => const TunnelStatus(
               ProbeState.unknown,
               'https://demo-example.trycloudflare.com',
-              '有網址，但從這台機器打不通',
-              caveat: '兩種可能，本機分不出來：①隧道其實活著，只是這台機器繞不回自己的'
-                  '公網網址（很常見）②隧道已經關了、這個檔案是殘留的。'
-                  '請成員或手機開一次那個網址',
+              '有網址，但這台機器打不通',
             )),
         serviceStatusProvider.overrideWith((ref) async => const ServiceStatus(
               true,
-              '狀態：Ready　上次執行：2026/9/9 上午 10:12:00（結果 0）\n'
-              'Hub 進程：PID 24680',
+              '狀態：Ready',
             )),
+        // 設定區要畫出實際的表單，不是「讀不到」那一行——版面改了就是這裡
+        hostEnvRawProvider.overrideWith((ref) async => const {
+              'CHATROOM_HOST': '0.0.0.0',
+              'CHATROOM_PORT': '8787',
+              'CHATROOM_TOKEN': 'demo-agent-token-not-real',
+              'CHATROOM_IDLE_TIMEOUT': '600',
+              'CHATROOM_PURGE_ARCHIVED_DAYS': '30',
+              'CHATROOM_RUN_DAILY_QUOTA': '20',
+              'CHATROOM_RUN_QUEUE_CAP': '5',
+            }),
+        mcpEnvRawProvider.overrideWith((ref) async => const {
+              'CHATROOM_URL': 'http://26.176.231.43:8787',
+              'CHATROOM_TOKEN': 'demo-agent-token-not-real',
+              'CHATROOM_DEFAULT_NAME': 'Minka',
+            }),
         hostActionsProvider.overrideWith(
             (ref) => const HostActions(r'C:\kits\chatroom-host-kit')),
         // 同一台機器同時是主持人與成員——多半就是這樣，所以圖要涵蓋兩塊
@@ -82,11 +99,14 @@ void main() {
             .overrideWith((ref) async => '1.2.1+c123507f9c6f'),
         mcpStatusProvider.overrideWith((ref) async => const McpStatus(
               reach: Probe(ProbeState.ok, 'Hub 連得到'),
-              auth: Probe(ProbeState.ok, 'token 可以通過認證'),
+              auth: Probe(ProbeState.ok, '通過'),
               bridgeVersion: '1.2.1+c123507f9c6f',
             )),
       ],
       child: MaterialApp(
+        locale: kTestLocale,
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: const HostConsoleScreen(),
       ),

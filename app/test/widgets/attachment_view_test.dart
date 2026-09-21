@@ -4,6 +4,7 @@ import 'package:chatroom_app/widgets/attachment_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 const _image = Attachment(
   id: 'a1',
@@ -25,6 +26,8 @@ Widget _host({String? participantId, List<Attachment> attachments = const []}) =
     // ProviderScope：下載鈕要讀 attachmentsApiProvider
     ProviderScope(
         child: MaterialApp(
+          localizationsDelegates: kTestLocalizationsDelegates,
+          supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(
         body: AttachmentView(

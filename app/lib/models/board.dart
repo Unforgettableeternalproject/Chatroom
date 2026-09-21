@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import '../l10n/l10n.dart';
+import 'stage_file.dart';
+
 /// Board（共同任務板）的三層資料模型與本機增量快取。
 ///
 /// 契約見 Board 設計稿：Objective（一個週期）1—N Checklist
@@ -67,7 +70,19 @@ class BoardObjective {
   /// 成上面一層。
   ///
   /// 要加就先把週期打回 `active`（「打回」那顆按鈕就在旁邊）。
-  bool get acceptsNewChecklists => status == 'active';
+  bool get acceptsNewChecklists => !frozen;
+
+  /// 這個週期連同底下的一切現在是不是唯讀。
+  ///
+  /// 🔴 **判準只有這一個**：Hub 自 2026-09-21 起對非 `active` 週期底下的
+  /// 任何寫入回 409 `objective_closed`（週期自己的狀態轉移除外）。畫面上
+  /// 每顆會寫入的按鈕都要看這個 getter——各自寫一次 `status == 'done'`
+  /// 之類的比對，漏掉的那顆就是一顆按下去必然 409 的按鈕，而它跟能用的
+  /// 按鈕長得一模一樣。
+  ///
+  /// 解凍只有一條路：把週期「打回」（reopen，只有人類按得動；`cancelled`
+  /// 打不回）。
+  bool get frozen => status != 'active';
   bool get isVerified => status == 'verified' || status == 'done';
 
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(
@@ -114,6 +129,7 @@ class BoardChecklist {
     this.completedAt,
     this.deleted = false,
     this.createdAt = '',
+    this.files = const [],
   });
 
   final String id;
@@ -131,6 +147,14 @@ class BoardChecklist {
   final bool deleted;
   final int boardSeq;
   final String createdAt;
+
+  /// 掛在這個階段上的素材（共享附件）。
+  ///
+  /// 🔴 **缺鍵時是空列表，不是錯誤**：`files` 是 2026-09-17 才進契約的，
+  /// 舊 Hub 的 checklist 沒有這個鍵。那時畫面就是「這個階段還沒有素材」
+  /// ——與真的沒有掛任何東西長得一樣，而那正是對的：讀不到與沒有，在
+  /// 使用者要做的下一件事上沒有差別，但讓整塊板讀不出來有。
+  final List<StageFile> files;
 
   bool get isDone => status == 'done';
 
@@ -166,6 +190,7 @@ class BoardChecklist {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    files: StageFile.listFrom(json['files']),
   );
 }
 
@@ -192,16 +217,50 @@ const kTaskTransitions = <String, Set<String>>{
   'moved': {'todo'},
 };
 
+/// [TaskAction] 的標籤識別字。
+///
+/// 同一個目標狀態在不同來源狀態下是不同的一句話，所以這裡分得比 `target`
+/// 細：推去 `in_progress` 有 [start]、[unblock]、[reopen] 三種說法。
+enum TaskActionKind {
+  start,
+  finishDirectly,
+  markBlocked,
+  moveElsewhere,
+  cancelTask,
+  markDone,
+  unblock,
+  reopen,
+  restore,
+  takeBack,
+}
+
+/// 把 [TaskActionKind] 翻成按鈕上的字。
+String taskActionLabel(AppLocalizations l10n, TaskActionKind kind) =>
+    switch (kind) {
+      TaskActionKind.start => l10n.boardTaskActionStart,
+      TaskActionKind.finishDirectly => l10n.boardTaskActionFinishDirectly,
+      TaskActionKind.markBlocked => l10n.boardTaskActionMarkBlocked,
+      TaskActionKind.moveElsewhere => l10n.boardTaskActionMoveElsewhere,
+      TaskActionKind.cancelTask => l10n.boardTaskActionCancel,
+      TaskActionKind.markDone => l10n.boardTaskActionMarkDone,
+      TaskActionKind.unblock => l10n.boardTaskActionUnblock,
+      TaskActionKind.reopen => l10n.boardTaskActionReopen,
+      TaskActionKind.restore => l10n.boardTaskActionRestore,
+      TaskActionKind.takeBack => l10n.boardTaskActionTakeBack,
+    };
+
 /// 抽屜底部的一顆動作按鈕。
 ///
 /// 標籤依**來源狀態**而定，不是依目標狀態：同樣是推去 `in_progress`，
 /// 從 `todo` 是「開始」、從 `blocked` 是「解除卡住」、從 `done` 是
 /// 「重新開啟」。三句話講的是三件不同的事。
 class TaskAction {
-  const TaskAction(this.label, this.target,
+  const TaskAction(this.kind, this.target,
       {this.danger = false, this.trailing = false});
 
-  final String label;
+  /// 標籤的識別字。文字本身由 [taskActionLabel] 在畫面上查——模型裡不放
+  /// 已經翻好的字串。
+  final TaskActionKind kind;
 
   /// 要把 Task 推去的狀態。必在 [kTaskTransitions] 允許的集合裡。
   final String target;
@@ -233,31 +292,31 @@ const _kTaskActions = <String, List<TaskAction>>{
   // 只能繞路推去 `in_progress` 再推，**板上因此留下一段它從沒發生過的
   // 「曾經在動工」**。假的歷史比少一顆按鈕貴。
   'todo': [
-    TaskAction('開始', 'in_progress'),
-    TaskAction('直接完成', 'done'),
-    TaskAction('標記卡住', 'blocked', danger: true),
+    TaskAction(TaskActionKind.start, 'in_progress'),
+    TaskAction(TaskActionKind.finishDirectly, 'done'),
+    TaskAction(TaskActionKind.markBlocked, 'blocked', danger: true),
     // 「搬走了」不是破壞性動作，但它與取消一樣是離開這份清單，所以擺在
     // 同一區。標籤講的是**這件事去了別的地方**，不是「刪掉」
-    TaskAction('搬到別處', 'moved', trailing: true),
-    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+    TaskAction(TaskActionKind.moveElsewhere, 'moved', trailing: true),
+    TaskAction(TaskActionKind.cancelTask, 'cancelled', danger: true, trailing: true),
   ],
   'in_progress': [
-    TaskAction('標記完成', 'done'),
-    TaskAction('標記卡住', 'blocked', danger: true),
-    TaskAction('搬到別處', 'moved', trailing: true),
-    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+    TaskAction(TaskActionKind.markDone, 'done'),
+    TaskAction(TaskActionKind.markBlocked, 'blocked', danger: true),
+    TaskAction(TaskActionKind.moveElsewhere, 'moved', trailing: true),
+    TaskAction(TaskActionKind.cancelTask, 'cancelled', danger: true, trailing: true),
   ],
   'blocked': [
-    TaskAction('解除卡住', 'in_progress'),
-    TaskAction('搬到別處', 'moved', trailing: true),
-    TaskAction('取消任務', 'cancelled', danger: true, trailing: true),
+    TaskAction(TaskActionKind.unblock, 'in_progress'),
+    TaskAction(TaskActionKind.moveElsewhere, 'moved', trailing: true),
+    TaskAction(TaskActionKind.cancelTask, 'cancelled', danger: true, trailing: true),
   ],
   // 打回與復原限人類。這個畫面本身跑在人類的 App 上，所以按鈕在
-  'done': [TaskAction('重新開啟', 'in_progress')],
-  'cancelled': [TaskAction('復原', 'todo')],
+  'done': [TaskAction(TaskActionKind.reopen, 'in_progress')],
+  'cancelled': [TaskAction(TaskActionKind.restore, 'todo')],
   // 搬錯了收得回來。講「收回」不講「復原」——後者聽起來像撤銷一次取消，
   // 而這張卡沒有被取消過，它只是去了別的地方
-  'moved': [TaskAction('收回這裡', 'todo')],
+  'moved': [TaskAction(TaskActionKind.takeBack, 'todo')],
 };
 
 /// Task 卡片左側色軸的五種樣子（設計稿 artboard 02）。
@@ -430,10 +489,10 @@ class BoardTask {
   /// 孤兒的成因，給人讀的一句話。空字串表示 Hub 沒給（舊資料）——
   /// 那時只說「已不在房內」，不要猜。
   String get orphanedReasonLabel => switch (orphanedReason) {
-    'idle' => '因閒置移出',
-    'left' => 'session 已結束',
-    'kicked' => '被移出聊天室',
-    'subagent' => '子代理已回收',
+    'idle' => L10n.current.boardOrphanReasonIdle,
+    'left' => L10n.current.boardOrphanReasonLeft,
+    'kicked' => L10n.current.boardOrphanReasonKicked,
+    'subagent' => L10n.current.boardOrphanReasonSubagent,
     _ => '',
   };
 
@@ -720,7 +779,7 @@ class BoardDelta {
 class BoardEntryHint {
   const BoardEntryHint({this.label = '', this.needsYou = false});
 
-  /// 接在「❖ Board」後面的那一小段。空字串＝平常，板上沒有需要你的東西。
+  /// 接在「❖ 任務板」後面的那一小段。空字串＝平常，板上沒有需要你的東西。
   final String label;
 
   /// 點亮。**只給「需要你動手、而且只有你能動」的那一種。**
@@ -737,20 +796,18 @@ class BoardEntryHint {
 /// 用錯的症狀是**「可以追但收不到」**——按鈕亮著、追蹤也成立，然後那則
 /// 通知永遠不來，人要等到事情發生了才發現。
 String boardWatchBlockedReason(BoardSnapshot snap) {
-  if (snap.isArchived) return '這塊板已經封存，追蹤不會再有任何動靜';
+  if (snap.isArchived) return L10n.current.boardWatchBlockedArchived;
   if (snap.liveAttachedRooms > 0) return '';
   // 「一間都沒掛」與「掛的房全封存了」是兩件事，下一步也不同：前者去掛
   // 一間，後者要開一間新的（封存房不會再有動靜）。講成同一句的話，
   // 掛著兩間封存房的人會被告知他沒有掛任何房
   if (snap.liveRooms.isNotEmpty) {
-    return '這塊板掛著的聊天室都已經封存，通知送不進去。'
-        '掛一間還開著的房上來才追蹤得到';
+    return L10n.current.boardWatchBlockedRoomsArchived;
   }
   // ⚠️ 講的是「這塊板沒有聊天室」，**不是「你不在房裡」**。後者是另一件事
   // （人不在房裡時通知會留著，回來就知道），兩件事用同一句話講，
   // 人會以為自己離開房間就追蹤失效了
-  return '這塊板還沒有掛接任何聊天室，通知沒有地方可以送。'
-      '掛一間房上來就可以追蹤了';
+  return L10n.current.boardWatchBlockedNoRoom;
 }
 
 /// 本機的 board 快取。不可變——每次合併產生一份新的。
@@ -1121,15 +1178,17 @@ class BoardSnapshot {
     if (review + verified > 0) {
       return BoardEntryHint(
         label: switch ((review, verified)) {
-          (0, final v) => '$v 等你收尾',
-          (final r, 0) => '$r 等你確認',
-          _ => '${review + verified} 等你',
+          (0, final v) => L10n.current.boardEntryHintAwaitClose(v),
+          (final r, 0) => L10n.current.boardEntryHintAwaitVerify(r),
+          _ => L10n.current.boardEntryHintAwaitYou(review + verified),
         },
         needsYou: true,
       );
     }
     final orphans = live.where((t) => t.isOrphaned).length;
-    if (orphans > 0) return BoardEntryHint(label: '$orphans 孤兒');
+    if (orphans > 0) {
+      return BoardEntryHint(label: L10n.current.boardEntryHintOrphans(orphans));
+    }
     if (live.isEmpty) return const BoardEntryHint();
     final done = live.where((t) => t.isDone).length;
     return BoardEntryHint(label: '$done/${live.length}');

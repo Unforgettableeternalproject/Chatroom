@@ -4,6 +4,7 @@ import 'package:chatroom_app/models/message.dart';
 import 'package:chatroom_app/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 釘選訊息的**常駐**強調（09/08 卡 4f797666，艾斯維爾附圖）。
 ///
@@ -27,6 +28,8 @@ Message _msg({bool pinned = false}) => Message(
     );
 
 Widget _wrap(Widget child) => MaterialApp(
+  localizationsDelegates: kTestLocalizationsDelegates,
+  supportedLocales: kTestSupportedLocales,
       theme: buildUepTheme(Brightness.dark),
       home: Scaffold(body: SingleChildScrollView(child: child)),
     );

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
-import '../../widgets/kind_badge.dart';
+import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
 
 /// 建立 Objective / Checklist / Task 的對話框（設計稿 artboard 04）。
@@ -58,11 +58,6 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   final _description = TextEditingController();
   String _priority = 'normal';
 
-  static const _labels = {
-    'objective': ('新增週期', '一次可交付的成果。做完它就是一個段落。'),
-    'checklist': ('新增階段', '這個週期底下的一組事（「Hub 端」「測試與除錯」）。'),
-    'task': ('新增任務', '一件一個人做得完的事。'),
-  };
 
   @override
   void dispose() {
@@ -84,17 +79,22 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final (heading, hint) = _labels[widget.kind]!;
+    final l10n = AppLocalizations.of(context);
+    final heading = switch (widget.kind) {
+      'objective' => l10n.boardCreateObjectiveTitle,
+      'checklist' => l10n.boardCreateChecklistTitle,
+      _ => l10n.boardCreateTaskTitle,
+    };
 
     return AlertDialog(
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(heading, style: UepText.display(size: 22, color: s.inkTitle)),
+          Text(heading, style: UepText.pageTitle(color: s.inkTitle)),
           if (widget.parentTitle != null) ...[
             const SizedBox(height: 4),
             Text(widget.parentTitle!,
-                style: UepText.mono(size: 10, color: s.inkMute)),
+                style: UepText.mono(size: 10.5, color: s.inkMute)),
           ],
         ],
       ),
@@ -102,24 +102,23 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
         width: 420,
         child: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            _field('標題', _title, hint: hint),
+            _field(l10n.commonTitleField, _title),
             const SizedBox(height: 14),
-            _field('描述（可留白）', _description,
-                hint: '之後接手的人需要知道什麼？', lines: 3),
+            _field(l10n.boardCreateDescriptionField, _description, lines: 3),
             if (widget.kind == 'task') ...[
               const SizedBox(height: 14),
               Align(
                 alignment: Alignment.centerLeft,
-                child: MonoLabel('優先度', color: s.inkSoft,
-                    letterSpacing: 1.4),
+                child: Text(l10n.boardCreatePriority,
+                    style: UepText.fieldLabel(color: s.inkSoft)),
               ),
               const SizedBox(height: 7),
               Row(
                 children: [
-                  for (final p in const [
-                    ('low', '低'),
-                    ('normal', '中'),
-                    ('high', '高'),
+                  for (final p in [
+                    ('low', l10n.boardPriorityLow),
+                    ('normal', l10n.boardPriorityNormal),
+                    ('high', l10n.boardPriorityHigh),
                   ]) ...[
                     _PriorityChip(
                       label: p.$2,
@@ -136,11 +135,11 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       ),
       actions: [
         UepButton(
-          label: '取消',
+          label: l10n.commonCancel,
           variant: UepButtonVariant.outline,
           onPressed: () => Navigator.of(context).pop(),
         ),
-        UepButton(label: '建立', onPressed: _submit),
+        UepButton(label: l10n.commonCreate, onPressed: _submit),
       ],
     );
   }
@@ -149,7 +148,8 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       {String? hint, int lines = 1}) {
     final s = context.uep;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      MonoLabel(label, color: s.inkSoft, letterSpacing: 1.4),
+      Text(label,
+          style: UepText.fieldLabel(color: s.inkSoft)),
       const SizedBox(height: 7),
       Container(
         decoration: BoxDecoration(
@@ -163,12 +163,12 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
           maxLines: lines,
           autofocus: lines == 1,
           onSubmitted: lines == 1 ? (_) => _submit() : null,
-          style: UepText.serif(size: 13, color: s.ink, height: 1.6),
+          style: UepText.serif(size: 14, color: s.ink, height: 1.6),
           decoration: InputDecoration(
             isDense: true,
             border: InputBorder.none,
             hintText: hint,
-            hintStyle: UepText.serif(size: 12, color: s.inkMute),
+            hintStyle: UepText.serif(size: 13, color: s.inkMute),
             contentPadding: const EdgeInsets.symmetric(vertical: 12),
           ),
         ),
@@ -203,7 +203,7 @@ class _PriorityChip extends StatelessWidget {
         ),
         child: Text(label,
             style: UepText.mono(
-                size: 11, color: selected ? UepColors.gold : s.ink)),
+                size: 11.5, color: selected ? UepColors.gold : s.ink)),
       ),
     );
   }

@@ -1,3 +1,5 @@
+import 'package:chatroom_app/l10n/l10n.dart';
+import 'package:flutter/widgets.dart';
 import 'package:chatroom_app/models/scratchpad.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -5,6 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// 三條都是**靜默**的：沒有例外、沒有紅字，只是存錯段落、或者剛打的字
 /// 不見了。這裡測的是它們共同的那個核心——**畫面上的字什麼時候才可以丟掉**。
+/// 模板 locale 的字串。文案本身就是用繁中寫定的，所以斷言照原樣比對。
+final _l10n = lookupAppLocalizations(const Locale('zh', 'TW'));
+
 void main() {
   group('段落身分', () {
     test('block id 就是 key，內容一樣的兩段仍然是兩段', () {
@@ -41,14 +46,14 @@ void main() {
     // `delivery_degraded`（app.py:6839）；`delivery_restored` 我根本沒接。
     // 差一個字的結果是收件匣掉進 default 文案——**看得見，但講不清楚**。
     test('delivery_degraded 認得出來', () {
-      final s = watchNoticeLabel('delivery_degraded', 'Board V2');
+      final s = watchNoticeLabel(_l10n, 'delivery_degraded', 'Board V2');
       expect(s, contains('Board V2'));
       expect(s, contains('不再有聊天室'));
       expect(s, isNot(contains('delivery_degraded')));
     });
 
     test('delivery_restored 也要有——只講壞消息的話他會一直回來看', () {
-      final s = watchNoticeLabel('delivery_restored', 'Board V2');
+      final s = watchNoticeLabel(_l10n, 'delivery_restored', 'Board V2');
       expect(s, contains('又有聊天室'));
       expect(s, isNot(contains('delivery_restored')));
     });
@@ -56,12 +61,12 @@ void main() {
     test('這兩個的 item_title 是板名，不套卡片的句型', () {
       // Hub 寫的是 item_kind='board'。套成卡片句型會生出
       // 「「某某板」完成了」那種讀不通的句子
-      expect(watchNoticeLabel('delivery_degraded', ''), contains('你追蹤的板'));
+      expect(watchNoticeLabel(_l10n, 'delivery_degraded', ''), contains('你追蹤的板'));
     });
 
     test('我沒接過的事件仍然說得出來', () {
       // 這條是上面兩條的保險：下次 Hub 再加一種，收件匣不會少一筆
-      expect(watchNoticeLabel('something_new', 'A'), contains('something_new'));
+      expect(watchNoticeLabel(_l10n, 'something_new', 'A'), contains('something_new'));
     });
   });
 

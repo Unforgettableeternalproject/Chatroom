@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/util/env_file.dart';
 import '../models/host_kit.dart';
 
 /// 註冊檔的位置。`host-kit/install.py` 寫，App 讀。
@@ -71,6 +72,24 @@ final hostEnvProvider = FutureProvider<HostEnv?>((ref) async {
       token: values['CHATROOM_TOKEN'] ?? '',
       humanToken: values['CHATROOM_HUMAN_TOKEN'] ?? '',
     );
+  } on Object {
+    return null;
+  }
+});
+
+/// Hub 那份 `.env` 的**原始鍵值**，給可編輯的設定表單用。
+///
+/// 與 `hostEnvProvider` 分開：那個只挑四個欄位組成 `HostEnv`（畫面要的
+/// 「發給成員的東西」），表單要的是每一個 key 現在寫著什麼。讀不到檔案時
+/// 回 `null`（表單改畫成「讀不到」），檔案存在但沒有那個 key 就是空字串
+/// ——那代表「沒設，用預設值」。
+final hostEnvRawProvider = FutureProvider<Map<String, String>?>((ref) async {
+  final kit = await ref.watch(hostKitProvider.future);
+  if (kit == null) return null;
+  try {
+    final file = File(kit.envFile);
+    if (!await file.exists()) return null;
+    return parseEnvText(await file.readAsString());
   } on Object {
     return null;
   }

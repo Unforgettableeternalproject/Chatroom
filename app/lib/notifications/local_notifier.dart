@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:logging/logging.dart';
 
+import '../l10n/l10n.dart';
 import 'notification_center.dart';
 
 final _log = Logger('notifier');
@@ -26,7 +27,7 @@ class LocalNotifier {
   Future<void> init() async {
     if (_ready) return;
     try {
-      const settings = InitializationSettings(
+      final settings = InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         windows: WindowsInitializationSettings(
           appName: 'Chatroom',
@@ -61,17 +62,19 @@ class LocalNotifier {
     try {
       await _plugin.show(
         _nextId++,
-        n.mentioned ? '${n.roomName}（有人提及你）' : n.roomName,
+        n.mentioned
+            ? L10n.current.notifyMentionedTitle(n.roomName)
+            : n.roomName,
         n.body,
-        const NotificationDetails(
+        NotificationDetails(
           android: AndroidNotificationDetails(
             'chatroom_messages',
-            '聊天室訊息',
-            channelDescription: '聊天室新訊息與提及通知',
+            L10n.current.notifyChannelName,
+            channelDescription: L10n.current.notifyChannelDesc,
             importance: Importance.high,
             priority: Priority.high,
           ),
-          windows: WindowsNotificationDetails(),
+          windows: const WindowsNotificationDetails(),
         ),
         payload: n.roomId,
       );

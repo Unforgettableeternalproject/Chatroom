@@ -299,9 +299,9 @@ async def test_a_human_opening_a_container_wakes_the_agents(tmp_path):
             (rid,))).fetchall()
         texts = {r["system_event"]: r["content"] for r in rows}
         assert texts["board_objective_created"] == (
-            "Bernie 開了新的週期「新週期」，可以往裡面加任務了。")
+            "Bernie 建立了週期「新週期」。")
         assert texts["board_checklist_created"] == (
-            "Bernie 在「新週期」底下開了新的階段「新階段」，可以往裡面加任務了。")
+            "Bernie 在「新週期」底下建立了階段「新階段」。")
 
 
 async def test_an_agent_opening_a_container_stays_quiet(tmp_path):

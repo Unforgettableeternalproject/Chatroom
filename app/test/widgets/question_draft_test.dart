@@ -7,6 +7,7 @@ import 'package:chatroom_app/widgets/question_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-04：**答題打到一半，卡片捲出視窗就沒了**
 /// （@開發Novia (除錯) #414 系統性排查抓到的）。
@@ -28,6 +29,8 @@ Question _q(String id) => Question.fromJson({
 Widget _wrap(ProviderContainer c, Widget child) => UncontrolledProviderScope(
       container: c,
       child: MaterialApp(
+        localizationsDelegates: kTestLocalizationsDelegates,
+        supportedLocales: kTestSupportedLocales,
         theme: buildUepTheme(Brightness.dark),
         home: Scaffold(body: child),
       ),
