@@ -245,6 +245,78 @@ async def test_chatroom_mcp_never_connects_fails_with_a_named_error(
     assert attempts == "3", "首次 + 兩次重試"
 
 
+async def test_chatroom_mcp_pending_kills_a_still_talking_child(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """開場 pending 中止時，子進程要是**正在動**的，不是恰好在睡的（埃里爾
+    09/21 除錯）。
+
+    `mcp_pending` 情境驗的是「殺的時候它剛好在睡」，睡眠中的進程被殺與沒被
+    殺、外部都看不出差別。這裡用 `mcp_pending_noisy`：init 之後**持續吐事件**
+    直到被殺——殺乾淨的話，`_spawn` 回來之後 stream.jsonl 不會再變大；沒殺乾
+    淨的話，它會一直長到 `FAKE_CLAUDE_SLEEP` 的長睡上限（實測 09/20 run
+    5ba6caa5、09/21 run 57c3ae48 的除錯起點）。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "mcp_pending_noisy")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "10")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-mcp-noisy")
+    cfg = make_config(tmp_path, work_repo,
+                      mcp_retries=0, mcp_retry_backoff_seconds=[])
+    killed: list[int] = []
+    real_kill = run_module.kill_tree
+    monkeypatch.setattr(run_module, "kill_tree",
+                        lambda pid: (killed.append(pid), real_kill(pid))[1])
+
+    outcome = await asyncio.wait_for(
+        _executor(cfg, runner_hub).execute(run), timeout=30)
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "chatroom_mcp_unavailable")
+    assert killed, "子進程沒被殺：它會照 FAKE_CLAUDE_SLEEP 一直吐到上限"
+    stream = cfg.runs_dir / run["id"] / "stream.jsonl"
+    size_at_return = stream.stat().st_size
+    # 給任何還活著的殘留進程一點時間，如果它還在吐，這裡會抓到成長
+    await asyncio.sleep(1.0)
+    assert stream.stat().st_size == size_at_return, (
+        "execute() 回來之後 stream 還在長大：子進程沒有真的死")
+
+
+async def test_chatroom_mcp_retry_report_does_not_hit_run_bad_transition(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """重試中的 running 回報要落在 Hub 的同狀態白名單裡（`stalled`／
+    `resumed`），不能再用 `mcp_retry_N` 這種撞 409 的 reason（埃里爾 09/21
+    除錯：09/20 run 5ba6caa5、09/21 run 57c3ae48 兩筆都撞了這個 409——雖然
+    `hub.report` 把它當成已套用處理、不影響最終結果，但每次重試都留一則看
+    起來像失敗的警告，混淆了真正的根因）。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "mcp_pending_then_ok")
+    monkeypatch.setenv("FAKE_CLAUDE_MCP_OK_AT", "2")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-mcp-resumed-reason")
+    cfg = make_config(tmp_path, work_repo,
+                      mcp_retries=2, mcp_retry_backoff_seconds=[1, 2])
+    reported: list[tuple[str, str]] = []
+    real_report = runner_hub.report
+
+    async def spy_report(run_id, status, **kw):
+        reported.append((status, kw.get("reason", "")))
+        return await real_report(run_id, status, **kw)
+
+    monkeypatch.setattr(runner_hub, "report", spy_report)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done"
+    running_reasons = [reason for status, reason in reported
+                       if status == "running"]
+    assert "resumed" in running_reasons
+    assert not any(r.startswith("mcp_retry_") for r in running_reasons), \
+        "mcp_retry_N 不在 Hub 的同狀態白名單裡，會撞 409 run_bad_transition"
+
+
 async def test_chatroom_mcp_connected_runs_without_any_retry(
         hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
     """connected 的開場一切照舊——前置條件檢查不該動到正常路徑。"""

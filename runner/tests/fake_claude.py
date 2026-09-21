@@ -18,6 +18,7 @@
 | `not_logged_in` | result subtype=success 但 is_error、exit 1（實測形狀） | 1 |
 | `big_line` | 一行 300 KB 的 tool_result（模擬 Read 一張圖） | 0 |
 | `mcp_pending` | init 裡 chatroom 是 pending，然後長睡等著被殺 | 0 |
+| `mcp_pending_noisy` | init 裡 chatroom 是 pending，接著**持續吐事件**直到被殺——驗「殺了就不再長」，不是「殺了它剛好也在睡」 | 0 |
 | `mcp_pending_then_ok` | 前 N-1 次 pending，第 N 次 connected 並成功 | 0 |
 | `mcp_connected` | init 裡 chatroom 是 connected，正常成功 | 0 |
 
@@ -81,6 +82,21 @@ def sleep_until_killed() -> None:
         time.sleep(0.1)
 
 
+def keep_talking_until_killed() -> None:
+    """吐完 pending 的 init 就不停講話，直到真的被殺。
+
+    `sleep_until_killed` 驗的是「殺的時候它剛好在睡」；這個驗的是「殺的時候
+    它正在動」——真的 claude 在 pending 之後不會乖乖睡著，它會繼續做事。
+    只有持續吐東西才測得出「殺了之後 stream 真的不再長」，不是巧合地不長。
+    """
+    deadline = time.time() + float(os.environ.get("FAKE_CLAUDE_SLEEP", "30"))
+    n = 0
+    while time.time() < deadline:
+        n += 1
+        assistant(f"盲做第 {n} 步。", tokens=100)
+        time.sleep(0.05)
+
+
 def bump_attempt() -> int:
     """這是第幾次被起（跨進程，所以記在 run 目錄的檔案裡）。"""
     run_dir = os.environ.get("CHATROOM_RUNNER_RUN_DIR", ".")
@@ -101,6 +117,11 @@ def main(argv: list[str]) -> int:
     resuming = "--resume" in argv
     if "--version" in argv:
         print("2.1.273 (fake)")
+        return 0
+    if scenario == "mcp_pending_noisy":
+        init([{"name": "chatroom", "status": "pending"}])
+        keep_talking_until_killed()
+        result("success", False, "盲做了一輪。", turns=99)
         return 0
     if scenario in ("mcp_pending", "mcp_pending_then_ok", "mcp_connected"):
         ok_at = int(os.environ.get("FAKE_CLAUDE_MCP_OK_AT", "3"))

@@ -509,16 +509,25 @@ def kill_tree(pid: int) -> None:
     """
     if os.name == "nt":
         try:
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, timeout=20, check=False,
-                           **no_window_kwargs())
+            res = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                 capture_output=True, timeout=20, check=False,
+                                 **no_window_kwargs())
+            # 🚨 失敗不能悄悄吞掉：呼叫端只等到 `proc.wait()`（只追蹤最上層
+            # 那一個 PID），taskkill 沒殺乾淨子孫的話不會有任何例外，
+            # 下一輪重試會在還有殘留進程的狀況下起跑而沒有人知道
+            if res.returncode != 0:
+                log.warning("taskkill /PID %s /T /F 沒有乾淨結束"
+                           "（returncode=%s）：%s", pid, res.returncode,
+                           (res.stderr or res.stdout or b"")
+                           .decode("utf-8", "replace").strip())
             return
-        except (OSError, subprocess.SubprocessError):  # pragma: no cover
-            pass
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("taskkill /PID %s 起不來：%s", pid, exc)
+            return
     try:  # pragma: no cover - 非 Windows 路徑
         os.kill(pid, 9)
-    except OSError:
-        pass
+    except OSError as exc:
+        log.warning("os.kill(%s, 9) 失敗：%s", pid, exc)
 
 
 class RunExecutor:
@@ -813,6 +822,10 @@ class RunExecutor:
         backoffs = list(self.cfg.backoff_minutes)
         attempt = 0
         mcp_attempt = 0
+        # 最後一次 bridge 探測的附註。重試耗盡時的收工附註要帶這句，不然只
+        # 看得到「pending」，看不到「為什麼」（探測到的 import 錯誤、連線
+        # 被拒等）——見 09/21 run 57c3ae48 的除錯
+        last_mcp_probe = ""
         outcome = RunOutcome("failed", reason="never_ran")
         while True:
             # 每一輪（含退避後的 --resume）重新起算：剛起的進程還沒吐東西，
@@ -846,8 +859,16 @@ class RunExecutor:
                 mcp_attempt += 1
                 wait_seconds = self._mcp_backoff(mcp_attempt)
                 probe = await self._probe_bridge(env)
+                last_mcp_probe = probe
+                # 🚨 reason 一定要落在 Hub 的同狀態白名單（`stalled`／
+                # `resumed`）：這裡是 running→running 的同狀態回報，帶別的
+                # reason（曾經是 `mcp_retry_N`）一律撞 409 run_bad_transition
+                # （實測 09/20 run 5ba6caa5、09/21 run 57c3ae48）。回報本身
+                # 無害（`hub.report` 早就把這種 409 當成已套用），但每次重試
+                # 都在 log 裡留一則看起來像失敗的警告，混淆了真正的根因
+                # ——重試細節照樣寫在 result 裡，房裡看得到
                 await self._report(run_id, RunOutcome(
-                    "running", reason=f"mcp_retry_{mcp_attempt}",
+                    "running", reason="resumed",
                     result=f"chatroom MCP 開場未連上"
                            f"（{self._mcp_status_text(state)}），"
                            f"{wait_seconds:g} 秒後重起，"
@@ -872,8 +893,14 @@ class RunExecutor:
                     f"chatroom MCP 在 {mcp_attempt + 1} 次嘗試內都沒有連上"
                     f"（{self._mcp_status_text(state)}）。"
                     "進房是這筆 run 的前置條件——沒有進房就讀不到卡與階段素材，"
-                    "整輪只會是盲做，因此已中止，沒有執行任何工作。\n\n"
-                    + outcome.result)
+                    "整輪只會是盲做，因此已中止，沒有執行任何工作。"
+                    # pending 多半是 bridge 冷啟動比 MCP 逾時慢，跟「進房被拒」
+                    # 是兩回事：join 403 發生在 agent 自己呼叫 chatroom_join
+                    # 的那一步，早於這裡看到的 init 快照，這裡探不到那句話。
+                    # 能帶出來的只有 bridge 起得來起不來——一樣要講，不然只
+                    # 看得到 pending，看不到「為什麼」
+                    + (f"（{last_mcp_probe}）" if last_mcp_probe else "")
+                    + "\n\n" + outcome.result)
             if outcome.reason != "rate_limit" or not backoffs:
                 break
             wait_minutes = backoffs.pop(0)

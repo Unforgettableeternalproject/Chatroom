@@ -1547,6 +1547,30 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         return invited is not None
 
+    async def _room_run_for_session(room_id: str,
+                                    session_key: str | None) -> tuple[str, str]:
+        """把 `claude-run-<run_id>` 這把 session_key 對回本房的一筆 run。
+
+        執行器把子進程的 session_key 設成 `claude-run-<run_id>`
+        （REMOTE-OPS-PLAN §5.4）。**要對得上一筆屬於這間房的 run 才算數**
+        ——這個前綴只是一串字，任何人都打得出來。
+
+        回傳 `(run_id, status)`；對不上就是 `("", "")`。join 流程有兩個地方
+        要用它（私人房豁免、`participant.run_id` 標記），共用這一次查詢。
+        """
+        if not session_key or not session_key.startswith(_RUN_SESSION_PREFIX):
+            return "", ""
+        candidate = session_key[len(_RUN_SESSION_PREFIX):]
+        hit = await (
+            await app.state.db.execute(
+                "SELECT status FROM agent_run WHERE id=? AND room_id=?",
+                (candidate, room_id),
+            )
+        ).fetchone()
+        if hit is None:
+            return "", ""
+        return candidate, hit["status"]
+
     async def _admin_or_403(room, participant_id: str | None,
                             session_key: str | None,
                             what: str = "變更鎖定狀態",
@@ -3276,7 +3300,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 邀請或既有成員紀錄裡，照查一定 403——結果是私人房永遠派不出
         # subagent。父層已在上面通過驗證且仍是 active 成員，它的可見性就是
         # 這個子代理的可見性（Codex review #2）
-        if (parent is None and room["visibility"] == "private"
+        # run 例外：run 是這間房自己派出去的，房主派工那一刻就是邀請。它的
+        # session key（`claude-run-<id>`）不在任何邀請或既有成員紀錄裡，照查
+        # 一定 403——結果是私人房派得出工、進不來房，也就回報不了。
+        # 只豁免對得上**本房**且還在進行中（claimed／running／limited）的 run：
+        # queued 還沒有人認領，已收場的更不該再進來，對不上就照舊 403。
+        run_tag, run_status = await _room_run_for_session(room_id, session_key)
+        run_may_join = bool(run_tag) and run_status in _RUN_JOINABLE
+        if (parent is None and not run_may_join
+                and room["visibility"] == "private"
                 and not await _invited_to_private(room, session_key,
                                                   _party(request))):
             raise _err(403, "room_is_private",
@@ -3358,22 +3390,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, my_parent),
             )
         ).fetchall()
-        # 派工帶進來的身分：執行器把子進程的 session_key 設成
-        # `claude-run-<run_id>`（REMOTE-OPS-PLAN §5.4）。**要對得上一筆屬於
-        # 這間房的 run 才算數**——這個前綴只是一串字，任何人都打得出來，
-        # 而認錯的代價是那個成員會在某筆 run 結束時被請出房間。
-        # 對不上就當一般成員，不報錯：名字長得像不是加入失敗的理由
-        run_tag = ""
-        if session_key.startswith(_RUN_SESSION_PREFIX):
-            candidate = session_key[len(_RUN_SESSION_PREFIX):]
-            hit = await (
-                await db.execute(
-                    "SELECT 1 FROM agent_run WHERE id=? AND room_id=?",
-                    (candidate, room_id),
-                )
-            ).fetchone()
-            if hit is not None:
-                run_tag = candidate
+        # 派工帶進來的身分：`run_tag` 在私人房檢查那裡就已經解析過了（見
+        # `_room_run_for_session`），這裡直接沿用。對不上就當一般成員，
+        # 不報錯：名字長得像不是加入失敗的理由
         # 指派者預先取的名字優先於 agent 自取名與名字池（取最新一筆非空）
         if assignment is not None and assignment["assigned_name"]:
             assigned = assignment
@@ -12991,6 +13010,12 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     # 還佔著這個 ref 的狀態。handoff 也算——交接鏈還在跑，那張卡沒有空出來
     _RUN_ACTIVE = ("queued", "claimed", "running", "limited", "handoff")
+
+    # 這筆 run 的子進程可以憑 `claude-run-<id>` 進私人房的狀態：真的有人在跑
+    # 它的那段時間。queued 還沒被認領（沒有子進程），handoff 與其他收場狀態
+    # 這一棒已經結束——接手的是**另一筆** run，它自己會對上自己的 id
+    _RUN_JOINABLE = tuple(st for st in _RUN_ACTIVE
+                          if st not in ("queued", "handoff"))
 
     # 收場的四個狀態。run 走到這裡就沒有下一步了——它帶進房的那個身分
     # 也跟著結束（`_depart_run_participants`）

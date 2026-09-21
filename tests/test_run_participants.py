@@ -46,9 +46,11 @@ async def _bind_workspace(client, rid, workspace="ai-website"):
     await db.commit()
 
 
-async def _ops_room(client, key="human-a", workspace="ai-website"):
+async def _ops_room(client, key="human-a", workspace="ai-website",
+                    visibility="public"):
     r = await client.post("/api/rooms", json={"name": "工作房", "kind": "ops",
-                                              "session_key": key})
+                                              "session_key": key,
+                                              "visibility": visibility})
     assert r.status_code == 200, r.text
     rid = r.json()["id"]
     await _bind_workspace(client, rid, workspace)
@@ -600,3 +602,95 @@ async def test_a_subagent_does_not_take_over_the_title(tmp_path):
         await app.state.db.commit()
 
         assert (await _run_body(client, run_id, hdr))["agent_name"] == name
+
+
+# ── 私人工作房 ───────────────────────────────────────────────────────
+
+async def _try_join(client, rid, key, name="Runner"):
+    return await client.post(f"/api/rooms/{rid}/join",
+                             json={"kind": "claude", "role": "agent",
+                                   "session_key": key, "preferred_name": name})
+
+
+async def test_a_run_can_enter_the_private_room_that_dispatched_it(tmp_path):
+    """私人工作房派出去的 run 進得來——房主派工那一刻就是邀請。
+
+    擋掉的話，私人房派得出工卻收不到回報：那個 run 一路跑完，房裡的人
+    只看得到一張永遠停在 running 的卡。
+    """
+    app, client = await _client(tmp_path, "private-run")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, visibility="private")
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+
+        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        assert r.status_code == 200, r.text
+        assert (await _row(app, r.json()["participant_id"]))["run_id"] == run_id
+
+
+async def test_a_run_from_another_room_still_cannot_enter(tmp_path):
+    """豁免只給**這間房自己派出去的** run。
+
+    前綴誰都打得出來；只認前綴的話，一個真實的 run id 就是任何私人房的鑰匙。
+    """
+    app, client = await _client(tmp_path, "private-run-crossroom")
+    async with app.router.lifespan_context(app), client:
+        other = await _ops_room(client)
+        hdr = await _join_human(client, other)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, other, hdr, runner)
+
+        rid = await _ops_room(client, key="human-b", visibility="private")
+        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "room_is_private"
+
+
+async def test_a_finished_run_cannot_enter_the_private_room(tmp_path):
+    """收場的 run 不再是這間房派出去的人。
+
+    豁免綁在「還在跑」上；已結束還放行，等於那把 key 永久有效。
+    """
+    app, client = await _client(tmp_path, "private-run-done")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, visibility="private")
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        await _report(client, run_id, runner, "done", summary="做完了")
+
+        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "room_is_private"
+
+
+async def test_a_queued_run_cannot_enter_the_private_room_yet(tmp_path):
+    """排隊中的 run 還沒有人認領，也就還沒有那個子進程。"""
+    app, client = await _client(tmp_path, "private-run-queued")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, visibility="private")
+        hdr = await _join_human(client, rid)
+        await _register_runner(client)
+        run_id = (await client.post(
+            f"/api/rooms/{rid}/runs",
+            json={"kind": "investigate", "project": "ai-website",
+                  "ref": "T-9", "brief": "等一下"},
+            headers=hdr)).json()["run"]["id"]
+
+        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "room_is_private"
+
+
+async def test_an_ordinary_agent_still_needs_an_invitation(tmp_path):
+    """私人房對一般 agent 的門沒有因此變鬆。"""
+    app, client = await _client(tmp_path, "private-run-ordinary")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, visibility="private")
+        await _join_human(client, rid)
+
+        r = await _try_join(client, rid, "claude-someone", name="路人")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"]["code"] == "room_is_private"
