@@ -1444,5 +1444,16 @@
   "opsDispatchProjectLocked": "已绑定，不可更改",
   "opsErrorWorkspaceNotBound": "这个房间还没绑定工作区，请房主先绑。",
   "opsErrorWorkspaceMismatch": "这个房间只派工到「{key}」。",
-  "opsErrorWorkspacePrivateRoomRequired": "这是私人工作区，只能绑到私人房间。"
+  "opsErrorWorkspacePrivateRoomRequired": "这是私人工作区，只能绑到私人房间。",
+  "opsExceptionFieldTime": "发生时间",
+  "opsExceptionFieldRoom": "房间",
+  "opsExceptionFieldKind": "分类",
+  "opsExceptionFieldReason": "原因代码",
+  "opsExceptionFieldSeverity": "严重度",
+  "opsExceptionFieldTarget": "目标",
+  "opsExceptionFieldRunId": "派工 ID",
+  "opsExceptionFieldRunner": "执行器",
+  "opsExceptionReportLabel": "最后回报",
+  "opsExceptionGotoRoom": "前往聊天室",
+  "opsExceptionReportFailed": "读不到回报：{error}"
 }

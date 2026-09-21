@@ -1443,5 +1443,16 @@
   "opsDispatchProjectLocked": "Bound; can't be changed",
   "opsErrorWorkspaceNotBound": "This room has no workspace bound yet. Ask the owner to bind one.",
   "opsErrorWorkspaceMismatch": "This room only dispatches to “{key}”.",
-  "opsErrorWorkspacePrivateRoomRequired": "This is a private workspace; it can only be bound to a private room."
+  "opsErrorWorkspacePrivateRoomRequired": "This is a private workspace; it can only be bound to a private room.",
+  "opsExceptionFieldTime": "Occurred",
+  "opsExceptionFieldRoom": "Room",
+  "opsExceptionFieldKind": "Kind",
+  "opsExceptionFieldReason": "Reason",
+  "opsExceptionFieldSeverity": "Severity",
+  "opsExceptionFieldTarget": "Target",
+  "opsExceptionFieldRunId": "Run ID",
+  "opsExceptionFieldRunner": "Runner",
+  "opsExceptionReportLabel": "Last report",
+  "opsExceptionGotoRoom": "Go to room",
+  "opsExceptionReportFailed": "Can't load report: {error}"
 }

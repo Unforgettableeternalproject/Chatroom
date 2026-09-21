@@ -9,7 +9,6 @@ import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
-import 'screens/ops/exceptions_panel.dart';
 import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
@@ -49,12 +48,6 @@ GoRouter buildRouter(bool Function() isConfigured) {
       // 主機控制台。**只在裝了 host-kit 的那台機器上有意義**——入口本身
       // 會依偵測結果出現或消失，這條路由留著是為了讓它能被直接開啟
       // （見 kit UI 設計簡報 §6.0）
-      // 監控器：跨房的派工例外。**不掛在任何一間房底下**——它的重點正是
-      // 「我的哪一間房出事了」，掛進房裡等於要先知道答案才找得到入口
-      GoRoute(
-        path: '/ops/exceptions',
-        builder: (context, state) => const OpsExceptionsScreen(),
-      ),
       GoRoute(
         path: '/host',
         builder: (context, state) => const HostConsoleScreen(),

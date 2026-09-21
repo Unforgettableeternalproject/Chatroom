@@ -7238,5 +7238,54 @@
   "opsErrorWorkspacePrivateRoomRequired": "這是私人工作區，只能綁到私人房間。",
   "@opsErrorWorkspacePrivateRoomRequired": {
     "description": "綁定被退：私人工作區要私人房間"
+  },
+  "opsExceptionFieldTime": "發生時間",
+  "@opsExceptionFieldTime": {
+    "description": "異常詳情欄位：事件時間"
+  },
+  "opsExceptionFieldRoom": "房間",
+  "@opsExceptionFieldRoom": {
+    "description": "異常詳情欄位：房間"
+  },
+  "opsExceptionFieldKind": "分類",
+  "@opsExceptionFieldKind": {
+    "description": "異常詳情欄位：事件分類"
+  },
+  "opsExceptionFieldReason": "原因代碼",
+  "@opsExceptionFieldReason": {
+    "description": "異常詳情欄位：執行器給的 reason"
+  },
+  "opsExceptionFieldSeverity": "嚴重度",
+  "@opsExceptionFieldSeverity": {
+    "description": "異常詳情欄位：嚴重度"
+  },
+  "opsExceptionFieldTarget": "目標",
+  "@opsExceptionFieldTarget": {
+    "description": "異常詳情欄位：run kind／ref"
+  },
+  "opsExceptionFieldRunId": "派工 ID",
+  "@opsExceptionFieldRunId": {
+    "description": "異常詳情欄位：run id"
+  },
+  "opsExceptionFieldRunner": "執行器",
+  "@opsExceptionFieldRunner": {
+    "description": "異常詳情欄位：執行器名稱與 id"
+  },
+  "opsExceptionReportLabel": "最後回報",
+  "@opsExceptionReportLabel": {
+    "description": "異常詳情：對應 run 的回報區標題"
+  },
+  "opsExceptionGotoRoom": "前往聊天室",
+  "@opsExceptionGotoRoom": {
+    "description": "異常詳情裡的次要按鈕：跳到那間房"
+  },
+  "opsExceptionReportFailed": "讀不到回報：{error}",
+  "@opsExceptionReportFailed": {
+    "description": "異常詳情：run 撈不到時的訊息",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   }
 }

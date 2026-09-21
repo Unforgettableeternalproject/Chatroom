@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/ops_exceptions_api.dart';
 import '../notifications/local_notifier.dart';
 import '../notifications/ops_exception_notifier.dart';
+import '../models/agent_run.dart';
 import '../models/ops_exception.dart';
 import 'app_providers.dart';
+import 'runs_providers.dart';
 
 /// 監控器（跨房派工例外）的狀態層。整條功能線收在自己的檔案裡，
 /// 既有檔案不必為它改（同 `runs_providers` 的慣例）。
@@ -72,4 +74,35 @@ final opsExceptionNotifierProvider = Provider<OpsExceptionNotifier>((ref) {
   );
   ref.onDispose(notifier.dispose);
   return notifier;
+});
+
+/// 異常面板開著沒有：面板是疊在畫面上的側欄（同回報面板），開關狀態要
+/// 跟入口那顆按鈕共用，所以放在 state 層而不是某個 widget 的 `setState`。
+class OpsExceptionsPanelOpen extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+
+  void close() {
+    if (state) state = false;
+  }
+}
+
+final opsExceptionsPanelOpenProvider =
+    NotifierProvider<OpsExceptionsPanelOpen, bool>(OpsExceptionsPanelOpen.new);
+
+/// 一筆異常對應的 run（`GET /api/runs/{run_id}`）。
+///
+/// **異常清單只回事件摘要**：真正寫著「發生什麼事」的 `result`／`reason`
+/// 在 run 上。詳情展開時才撈（`autoDispose` + 只在展開的那一筆上 watch），
+/// 沒有展開就不打。
+final opsExceptionRunProvider = FutureProvider.autoDispose
+    .family<AgentRun?, (String roomId, String runId)>((ref, key) async {
+  final (roomId, runId) = key;
+  if (runId.isEmpty) return null;
+  final api = ref.watch(runsApiProvider);
+  final pid = ref.watch(settingsRepoProvider).participantId(roomId);
+  final detail = await api.get(runId, participantId: pid);
+  return detail.run;
 });

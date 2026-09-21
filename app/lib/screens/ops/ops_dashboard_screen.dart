@@ -123,7 +123,10 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
 
     return Scaffold(
       backgroundColor: s.bg,
-      body: Column(children: [
+      // 異常面板疊在儀表板上方（不是換一整頁）：看一下哪裡出事不該付出
+      // 離開當下畫面的代價。疊法與聊天室的回報面板同一套
+      body: Stack(children: [
+        Column(children: [
         Container(
           padding: const EdgeInsets.fromLTRB(24, 14, 18, 12),
           decoration: BoxDecoration(
@@ -197,6 +200,8 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                   ),
                 ),
         ),
+        ]),
+        const Positioned.fill(child: OpsExceptionsOverlay()),
       ]),
     );
   }
