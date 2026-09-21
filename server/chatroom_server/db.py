@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS room (
     -- 一次性：綁定後不提供解綁——run 的歷史都掛在這間房下，中途換工作區
     -- 等於讓同一串稽核記錄橫跨兩份工作樹，而回頭看時分不出哪筆是哪邊的。
     -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
-    workspace_key TEXT
+    workspace_key TEXT,
+    -- 同一個工作區一次只允許一個寫入者（ops 房專用開關，預設開）。
+    -- 關掉＝這間房的 run 容許併行動同一份工作樹，由房主自己負責。
+    -- 預設 1（開）：安全的那一邊要是預設值，舊房升級後行為不變。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    single_writer INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -925,6 +930,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 工作房綁定的工作區。舊 ops 房一律 NULL＝未綁定：派工前要先綁，
     # 而猜一個 key 填進去的話，派出去的工作會落在別人的工作樹上
     ("room", "workspace_key", "workspace_key TEXT"),
+    # 同一個工作區一次只跑一筆。舊房一律補 1（開）：預設值要落在安全的
+    # 那一邊，補成 0 的話升級一次就讓所有既有工作房開始併行動同一份工作樹
+    ("room", "single_writer", "single_writer INTEGER NOT NULL DEFAULT 1"),
     # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
     # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
     ("runner", "private_projects",

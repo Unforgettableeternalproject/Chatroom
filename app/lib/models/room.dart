@@ -19,6 +19,7 @@ class Room {
     this.archivedAt,
     this.workspaceKey,
     this.workspaceServed = false,
+    this.singleWriter = true,
   });
 
   final String id;
@@ -78,6 +79,13 @@ class Room {
   /// 沒有人領單，等於一顆按下去只會排隊到天亮的按鈕。
   final bool workspaceServed;
 
+  /// 同一專案一次只跑一筆（Hub 的寫入鎖）。
+  ///
+  /// 舊版 Hub 不回這個欄位一律 true：那正是這個開關存在之前的實際行為
+  /// （Hub 一直都在鎖）。缺鍵猜 false 會讓畫面說「多筆派工會同時改同一個
+  /// repo」，而 Hub 其實還是一筆一筆跑——那句話是假的。
+  final bool singleWriter;
+
   bool get isArchived => status == 'archived';
 
   /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
@@ -116,6 +124,7 @@ class Room {
         archivedAt: json['archived_at'] as String?,
         workspaceKey: _workspaceKey(json['workspace_key']),
         workspaceServed: (json['workspace_served'] as bool?) ?? false,
+        singleWriter: (json['single_writer'] as bool?) ?? true,
       );
 
   Room copyWith({
@@ -127,6 +136,7 @@ class Room {
     bool? youAreAdmin,
     String? workspaceKey,
     bool? workspaceServed,
+    bool? singleWriter,
   }) =>
       Room(
         id: id,
@@ -145,6 +155,7 @@ class Room {
         archivedAt: archivedAt,
         workspaceKey: workspaceKey ?? this.workspaceKey,
         workspaceServed: workspaceServed ?? this.workspaceServed,
+        singleWriter: singleWriter ?? this.singleWriter,
       );
 
   @override

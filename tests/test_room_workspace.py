@@ -409,3 +409,128 @@ async def test_a_runner_that_never_heard_of_private_projects_still_works(
             "SELECT private_projects FROM runner WHERE id=?",
             (str(runner),))).fetchone()
         assert row["private_projects"] == "[]"
+
+
+# ── 同一專案一次只跑一筆（房間層開關） ───────────────────────────────
+
+async def _set_single_writer(client, rid, enabled, session_key=OWNER):
+    return await client.patch(f"/api/rooms/{rid}/single-writer",
+                              json={"enabled": enabled},
+                              headers={"X-Session-Key": session_key})
+
+
+async def test_single_writer_defaults_to_on(tmp_path):
+    """新房預設**開**：安全的那一邊要是預設值。
+
+    預設關的話，兩筆工會同時動同一份工作樹，而症狀是互相覆蓋的檔案——
+    沒有任何一個畫面會說「這是併行造成的」。
+    """
+    app, client = await _client(tmp_path, "swdefault")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join_human(client, rid)
+        assert (await _room_view(client, rid, hdr))["single_writer"] is True
+
+
+async def test_owner_toggles_single_writer_and_the_room_says_so(tmp_path):
+    """來回切得動，每一次都留一則系統訊息。
+
+    只改欄位不留訊息的話，「這間房現在容許併行」是一個只存在於面板的
+    事實——房裡正在做事的人不會知道自己旁邊多了一個人。
+    """
+    app, client = await _client(tmp_path, "swtoggle")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join_human(client, rid)
+
+        off = await _set_single_writer(client, rid, False)
+        assert off.status_code == 200, off.text
+        assert off.json()["room"]["single_writer"] is False
+        assert (await _room_view(client, rid, hdr))["single_writer"] is False
+
+        # 一次性的是綁定工作區，不是這個開關：關得掉就要開得回來
+        on = await _set_single_writer(client, rid, True)
+        assert on.status_code == 200, on.text
+        assert on.json()["room"]["single_writer"] is True
+        assert (await _room_view(client, rid, hdr))["single_writer"] is True
+
+        msgs = (await client.get(f"/api/rooms/{rid}/messages",
+                                 headers=hdr)).json()["messages"]
+        said = [m["content"] for m in msgs
+                if m["system_event"] == "single_writer_changed"]
+        assert said == ["艾斯維爾 已關閉同一專案一次只跑一筆的限制",
+                        "艾斯維爾 已開啟同一專案一次只跑一筆的限制"], msgs
+
+
+async def test_only_the_owner_can_toggle_single_writer(tmp_path):
+    """房裡的其他人切不動，而且欄位一個字都不會變。"""
+    app, client = await _client(tmp_path, "swnotowner")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join_human(client, rid)
+        await _join_human(client, rid, key="human-b", name="米絲媞")
+
+        r = await _set_single_writer(client, rid, False, session_key="human-b")
+        assert r.status_code == 403, r.text
+        assert _code(r) == "room_owner_required"
+        assert (await _room_view(client, rid, hdr))["single_writer"] is True
+
+
+async def test_chat_room_has_no_single_writer_switch(tmp_path):
+    """一般房沒有工作區可言 ⇒ 409 `room_not_ops`，與綁定同一道判準。"""
+    app, client = await _client(tmp_path, "swchat")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client, kind="chat", name="一般房")
+        await _join_human(client, rid)
+
+        r = await _set_single_writer(client, rid, False)
+        assert r.status_code == 409, r.text
+        assert _code(r) == "room_not_ops"
+
+
+async def test_claimed_run_carries_the_rooms_single_writer(tmp_path):
+    """領到的單要帶著房間的開關，而且與房間當下一致。
+
+    執行器就是靠這一欄決定要不要等別人先收工。沒有它的話，遠端只能自己
+    猜一個預設——而兩邊猜得不一樣時，症狀是兩個 agent 同時動一份工作樹。
+    """
+    app, client = await _client(tmp_path, "swclaim")
+    async with app.router.lifespan_context(app), client:
+        rid = await _room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        assert (await _bind(client, rid)).status_code == 200
+
+        created = await client.post(
+            f"/api/rooms/{rid}/runs",
+            json={"kind": "investigate", "project": PROJECT,
+                  "ref": "task-1", "brief": "查一下"}, headers=hdr)
+        assert created.status_code == 200, created.text
+        run_id = created.json()["run"]["id"]
+        assert created.json()["run"]["single_writer"] is True
+
+        claimed = await client.post(f"/api/runners/{runner}/claim",
+                                    headers=runner.headers)
+        assert claimed.status_code == 200, claimed.text
+        assert claimed.json()["run"]["single_writer"] is True
+
+        # 關掉之後，之後領到的單也要跟著改——執行器讀的是這一欄，不是
+        # 它自己記得的那個值
+        assert (await _set_single_writer(client, rid, False)).status_code == 200
+        one = await client.get(f"/api/runs/{run_id}", headers=hdr)
+        assert one.status_code == 200, one.text
+        assert one.json()["run"]["single_writer"] is False
+
+        listed = await client.get(f"/api/rooms/{rid}/runs", headers=hdr)
+        assert listed.status_code == 200, listed.text
+        assert [r["single_writer"] for r in listed.json()["runs"]] == [False]
+
+        second = await client.post(
+            f"/api/rooms/{rid}/runs",
+            json={"kind": "investigate", "project": PROJECT,
+                  "ref": "task-2", "brief": "再查一下"}, headers=hdr)
+        assert second.status_code == 200, second.text
+        again = await client.post(f"/api/runners/{runner}/claim",
+                                  headers=runner.headers)
+        assert again.status_code == 200, again.text
+        assert again.json()["run"]["single_writer"] is False

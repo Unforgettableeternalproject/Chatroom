@@ -66,6 +66,18 @@ DOWNLOADS_DIR_NAME = "downloads"
 STREAM_LINE_LIMIT = 64 * 1024 * 1024
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push"}
+# run 物件的 `single_writer`：房間要不要守「同一個 repo 同時只有一個寫入型
+# run」。**缺鍵一律當 True**（現行行為）——這個欄位由 Hub 從房間帶出來，
+# 舊的 Hub 與舊的 run 都不會有它，預設放寬等於默默取消一條安全規則
+SINGLE_WRITER_KEY = "single_writer"
+# 關掉時給人看的那一句。log 與第一次 running 回報的附註共用同一份文字，
+# 面板上看到的與 log 裡寫的才是同一件事
+PARALLEL_WRITE_NOTE = "房間已關閉單一寫入者限制，與其他 run 並行。"
+
+
+def single_writer(run: dict) -> bool:
+    """這筆 run 要不要守 repo 的單一寫入者鎖。缺鍵 ＝ 要（現行行為）。"""
+    return run.get(SINGLE_WRITER_KEY, True) is not False
 # 🚨 進房是 run 的**前置條件**（艾斯維爾裁決 09/19）。實測 run 401a66ab：
 # `system/init` 的 mcp_servers 裡 chatroom 是 `pending`（bridge 起得比 Claude
 # Code 的 MCP 連線逾時慢），整份 stream 零筆 chatroom 工具呼叫——agent 自己
@@ -681,6 +693,23 @@ class RunExecutor:
             keys = [f"{project.key}/{item.name}"
                     for item in project_repos(project, repo)]
 
+            if not single_writer(run):
+                # 房間自己關掉了單一寫入者限制（Hub 從房間帶出這個欄位）：
+                # claude 進程並行跑，不排隊。守衛（PreToolUse 的 git 與寫入
+                # 範圍）一點都沒有變鬆，鬆掉的只有排隊這條規則。
+                # 🚨 **派工前的同步仍然要序列化**（敏卡裁決 09/21）：兩筆同時
+                # 在同一份工作樹上 `git pull --ff-only` 會對撞（實測
+                # `fatal: Cannot fast-forward to multiple branches.`），輸的
+                # 那筆以 sync_not_fast_forward 收場——那是並行的副作用，不是
+                # 它自己的問題。同步完就放鎖，之後兩筆並行
+                log.warning("run %s：%s", run_id, PARALLEL_WRITE_NOTE)
+                try:
+                    return await self._claude_run(run, project, repo, cancel,
+                                                  sync_keys=keys)
+                except RepoLockTimeout as exc:
+                    return await self._report_lock_timeout(run_id, project,
+                                                           exc)
+
             async def _on_wait(held_keys: list[str],
                                holders: dict[str, str]) -> None:
                 blockers = "、".join(
@@ -698,18 +727,24 @@ class RunExecutor:
                         on_wait=_on_wait):
                     return await self._claude_run(run, project, repo, cancel)
             except RepoLockTimeout as exc:
-                blockers = "、".join(
-                    exc.holders.get(k) or k for k in exc.keys) or "未知"
-                log.error("run %s 等 repo 鎖逾時（%s 秒），卡在：%s",
-                         run_id, int(project.wall_clock_seconds), blockers)
-                outcome = RunOutcome(
-                    "failed", reason="repo_lock_timeout",
-                    result=f"等待同一 repo 的 run {blockers} 完成，"
-                           f"超過 {int(project.wall_clock_seconds)} 秒仍未"
-                           "取得鎖，已收場。")
-                await self._report(run_id, outcome)
-                return outcome
+                return await self._report_lock_timeout(run_id, project, exc)
         return await self._claude_run(run, project, repo, cancel)
+
+    async def _report_lock_timeout(self, run_id: str,
+                                   project: WorkspaceConfig,
+                                   exc: RepoLockTimeout) -> RunOutcome:
+        """等 repo 鎖逾時的收場。整筆鎖與並行分支的同步鎖共用同一份訊息。"""
+        blockers = "、".join(
+            exc.holders.get(k) or k for k in exc.keys) or "未知"
+        log.error("run %s 等 repo 鎖逾時（%s 秒），卡在：%s",
+                  run_id, int(project.wall_clock_seconds), blockers)
+        outcome = RunOutcome(
+            "failed", reason="repo_lock_timeout",
+            result=f"等待同一 repo 的 run {blockers} 完成，"
+                   f"超過 {int(project.wall_clock_seconds)} 秒仍未"
+                   "取得鎖，已收場。")
+        await self._report(run_id, outcome)
+        return outcome
 
     # ---------- push（不經模型，§5.6）----------
 
@@ -829,7 +864,8 @@ class RunExecutor:
         return pulled.summary
 
     async def _claude_run(self, run: dict, project: WorkspaceConfig, repo,
-                          cancel: asyncio.Event) -> RunOutcome:
+                          cancel: asyncio.Event,
+                          sync_keys: list[str] | None = None) -> RunOutcome:
         run_id = run["id"]
         run_dir = self.cfg.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -853,15 +889,34 @@ class RunExecutor:
         # 🚨 同步要在快照**之前**：pull 帶進來的變更不是 agent 改的，
         # 先拍快照的話那些檔案會被算進「這一輪動了什麼」
         sync_notes: dict[str, str] = {}
-        for item in repos:
-            try:
-                sync_notes[item.name] = await self._sync_worktree(item)
-            except _SyncBlocked as exc:
-                detail = (f"{item.name}：{exc}" if len(repos) > 1 else str(exc))
-                outcome = RunOutcome("failed", reason="sync_not_fast_forward",
-                                     result=detail)
-                await self._report(run_id, outcome)
-                return outcome
+
+        async def _sync_all() -> str:
+            """全部 repo 同步一輪。回傳空字串或要收場的失敗說明。"""
+            for item in repos:
+                try:
+                    sync_notes[item.name] = await self._sync_worktree(item)
+                except _SyncBlocked as exc:
+                    return (f"{item.name}：{exc}" if len(repos) > 1
+                            else str(exc))
+            return ""
+
+        # `sync_keys` 有值 ＝ 這筆 run 不排整筆的 repo 鎖（房間關掉了單一寫入
+        # 者限制），但**同步這一段仍然要獨佔**：兩筆同時 `git pull --ff-only`
+        # 會對撞。拿完就放，claude 進程照樣並行。等這一段不回報 running
+        # （通常只有幾秒，報了反而多一筆雜訊），但 log 要留得到
+        if sync_keys:
+            if any(self.locks.is_held(k) for k in set(sync_keys)):
+                log.info("run %s 等 repo 鎖以完成派工前同步（並行模式）", run_id)
+            async with self.locks.hold(sync_keys, run_id=short_id(run_id),
+                                       timeout=project.wall_clock_seconds):
+                detail = await _sync_all()
+        else:
+            detail = await _sync_all()
+        if detail:
+            outcome = RunOutcome("failed", reason="sync_not_fast_forward",
+                                 result=detail)
+            await self._report(run_id, outcome)
+            return outcome
 
         before = {item.name: await gitops.snapshot(item.path)
                   for item in repos}
@@ -895,7 +950,12 @@ class RunExecutor:
         # 會是 running→running 且 reason 不在 Hub 的同狀態白名單裡，
         # 送出去只換一句無害但誤導人的 409 警告
         if not self._pre_reported_running:
-            await self._report(run_id, RunOutcome("running", reason="spawn"))
+            # 並行寫入時附註要帶一句：面板上只看得到回報，看不到執行器的 log，
+            # 而「這筆 run 沒有獨佔工作樹」是看結果的人需要知道的前提
+            note = ("" if single_writer(run) or run["kind"] not in WRITE_KINDS
+                    else PARALLEL_WRITE_NOTE)
+            await self._report(run_id, RunOutcome("running", reason="spawn",
+                                                  result=note))
 
         resume: str = ""
         backoffs = list(self.cfg.backoff_minutes)

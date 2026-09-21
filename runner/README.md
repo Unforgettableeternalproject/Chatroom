@@ -101,6 +101,14 @@
 4. 都不成立 ⇒ 這筆 run 直接 failed。**執行器不猜**：猜錯等於在錯的工作樹上
    commit，而遠端沒有人看得到。
 
+同一個 repo 預設同時只有一個寫入型 run（`ticket`／`stage`／`push`），其餘的
+排隊等鎖。房間把 run 的 `single_writer` 設成 `false` 時（欄位由 Hub 從房間
+帶出，缺鍵當 `true`）就不排隊，直接與其他 run 並行——log 與第一次 running
+回報的附註都會講出這件事。放寬的只有排隊規則，`PreToolUse` 的硬限制不變；
+共用工作樹的代價（互相覆蓋、commit 帶走別人的 index）也還在。並行時**派工
+前的同步（fetch ＋ `pull --ff-only`）仍然一次一筆**——兩筆同時 pull 同一份
+工作樹會 fatal，同步完就放鎖，之後 claude 進程並行。
+
 ## 檔案位置
 
 | 東西 | 位置 |

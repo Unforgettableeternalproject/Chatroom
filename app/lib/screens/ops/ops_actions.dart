@@ -145,6 +145,39 @@ Future<bool> bindRoomWorkspace(
   }
 }
 
+/// 切換「同一專案一次只跑一筆」。
+///
+/// 回傳**有沒有真的改成功**：失敗時開關要回到原來那一邊（呼叫端據此回復），
+/// 停在一個 Hub 沒有答應的位置比顯示錯誤還糟——下一個人會以為鎖關了。
+///
+/// 成功之後只重抓 [roomDetailProvider]：這個開關不改「誰在服務哪個工作區」，
+/// 面板那份資料沒有跟著變。
+Future<bool> setRoomSingleWriter(
+  BuildContext context,
+  WidgetRef ref, {
+  required String roomId,
+  required bool enabled,
+}) async {
+  final api = ref.read(roomsApiProvider);
+  // 送出要用的東西在畫面還在的時候就抓好——這一趟結束時這一列可能已經
+  // 被重建（房間詳情重抓）
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final pid = ref.read(settingsRepoProvider).participantId(roomId);
+  final deviceKey = ref.read(appConfigProvider).deviceKey;
+  try {
+    _log.info('切換寫入鎖送出：room=$roomId enabled=$enabled');
+    await api.setSingleWriter(roomId,
+        enabled: enabled, sessionKey: deviceKey, participantId: pid);
+    ref.invalidate(roomDetailProvider(roomId));
+    return true;
+  } on ApiException catch (e) {
+    _log.warning('切換寫入鎖被退回：${e.code} ${e.message}');
+    // Hub 那兩句話（不是房主／這不是工作房）已經夠清楚，原樣用
+    _notify(messenger, e.message);
+    return false;
+  }
+}
+
 /// 儀表板上的「推送」。
 ///
 /// brief 由 [buildPushBrief] 組——**把面板上當下那份 sha 原樣帶上**，

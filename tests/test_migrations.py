@@ -83,6 +83,13 @@ async def test_legacy_db_gains_new_columns_without_losing_rows(tmp_path):
         ).fetchone()
         assert row["content"] == "舊訊息"
         assert row["reply_to_seq"] is None
+        # 舊房一律補成「開」：這個開關管的是同一個工作區能不能同時跑兩筆，
+        # 補成 0 等於升級一次就讓所有既有工作房開始併行動同一份工作樹
+        assert "single_writer" in await _columns(db, "room")
+        row = await (
+            await db.execute("SELECT single_writer FROM room WHERE id='r1'")
+        ).fetchone()
+        assert row["single_writer"] == 1
     finally:
         await db.close()
 

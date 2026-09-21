@@ -524,6 +524,81 @@ async def test_one_writer_per_repo(hub_app, ops_room, runner_hub, work_repo,
     assert first["id"] and second["id"]
 
 
+async def test_single_writer_off_runs_in_parallel(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """房間關掉單一寫入者限制時，同 repo 的兩筆寫入型 run 同時開跑。
+
+    `single_writer=False` 由 Hub 從房間帶出來。關掉的只有排隊規則：兩筆都要
+    真的起進程、都要報 running，而且**不能**出現 `repo_lock_wait`——那代表
+    其中一筆還是排在鎖後面，等於這個開關沒有作用。
+
+    派工前的同步（fetch ＋ ff-only）仍然序列化（敏卡裁決 09/21）：兩筆同時
+    在同一份工作樹上 pull 會 fatal，輸的那筆會以 `sync_not_fast_forward`
+    收場——那是並行的副作用，不是它自己的問題。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "1.5")
+    await runner_hub.register("test-host", "test", ["ai-website"], 2, "0.1")
+    await create_run(client, room_id, headers, kind="ticket",
+                     ref="task-parallel-1")
+    await create_run(client, room_id, headers, kind="ticket",
+                     ref="task-parallel-2")
+    a = await runner_hub.claim()
+    b = await runner_hub.claim()
+    # Hub 端的欄位另一位在加；這裡模擬領到的 run 物件已經帶著它
+    a["single_writer"] = False
+    b["single_writer"] = False
+    cfg = make_config(tmp_path, work_repo)
+    locks = RepoLocks()
+    reported: list[tuple[str, str, str, str]] = []
+    real_report = runner_hub.report
+
+    async def spy_report(run_id, status, **kw):
+        reported.append((run_id, status, kw.get("reason", ""),
+                         kw.get("result") or ""))
+        return await real_report(run_id, status, **kw)
+
+    monkeypatch.setattr(runner_hub, "report", spy_report)
+
+    cancel_a, cancel_b = asyncio.Event(), asyncio.Event()
+    task_a = asyncio.ensure_future(
+        _executor(cfg, runner_hub, locks=locks).execute(a, cancel_a))
+    task_b = asyncio.ensure_future(
+        _executor(cfg, runner_hub, locks=locks).execute(b, cancel_b))
+    try:
+        started: list[dict] = []
+        for _ in range(200):
+            started = [r for r in (a, b)
+                       if (cfg.runs_dir / r["id"] / "stream.jsonl").exists()]
+            if len(started) == 2:
+                break
+            await asyncio.sleep(0.05)
+        assert len(started) == 2, "關掉限制後兩筆都該起進程，不該有人在排隊"
+        outcome_a, outcome_b = await asyncio.wait_for(
+            asyncio.gather(task_a, task_b), timeout=90)
+    except BaseException:
+        cancel_a.set()
+        cancel_b.set()
+        await asyncio.wait_for(
+            asyncio.gather(task_a, task_b, return_exceptions=True),
+            timeout=90)
+        raise
+    assert outcome_a.status == "done" and outcome_b.status == "done",         "派工前的同步仍走鎖，兩筆都不該以 sync_not_fast_forward 收場"
+    assert not [r for r in (outcome_a, outcome_b)
+                if r.reason == "sync_not_fast_forward"]
+    reasons = {(run_id, reason) for run_id, _s, reason, _r in reported}
+    assert not [r for r in reasons if r[1] == "repo_lock_wait"], \
+        "關掉限制後不該有人等 repo 鎖"
+    for run in (a, b):
+        assert (run["id"], "running", "spawn") in {
+            (rid, status, reason) for rid, status, reason, _r in reported}
+        notes = [result for rid, status, reason, result in reported
+                 if rid == run["id"] and reason == "spawn"]
+        assert any("並行" in n for n in notes), "第一次 running 要講出是並行的"
+
+
 async def test_repo_lock_wait_timeout_reports_failed(
         hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
     """等 repo 鎖等過牆鐘上限就收成 failed，不能永遠空等。"""

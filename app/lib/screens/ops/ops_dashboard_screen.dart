@@ -86,6 +86,13 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
         roomId: widget.roomId, workspaceKey: key);
   }
 
+  Future<bool> _setSingleWriter(bool enabled) => setRoomSingleWriter(
+        context,
+        ref,
+        roomId: widget.roomId,
+        enabled: enabled,
+      );
+
   Future<void> _push(AgentRunner runner, RepoView repo) async {
     final ok = await pushRepo(context, ref,
         roomId: widget.roomId,
@@ -191,6 +198,10 @@ class _OpsDashboardScreenState extends ConsumerState<OpsDashboardScreen>
                     // 或讓真正的房主找不到入口
                     youAreAdmin: detail?.youAreAdmin ?? false,
                     onBindWorkspace: _bindWorkspace,
+                    // 缺鍵是 true（Hub 一直都在鎖）——這裡也不自己補一份
+                    // 預設，由 Room 那一層決定
+                    singleWriter: room?.singleWriter ?? true,
+                    onSetSingleWriter: _setSingleWriter,
                     finished: finished,
                     busyRunnerId: _busyRunnerId,
                     onCommand: _command,

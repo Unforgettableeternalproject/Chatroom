@@ -1455,6 +1455,8 @@
   "opsWorkspaceUnbound": "房主尚未绑定工作区。",
   "opsWorkspaceBindConfirmBody": "绑定后这个房间只能派工到「{key}」，不可再更改。",
   "opsWorkspaceBindDone": "已绑定「{key}」。",
+  "opsSingleWriter": "同一专案一次只跑一笔",
+  "opsSingleWriterHint": "关闭后多笔派工会同时改同一个 repo，可能互相冲突。",
   "opsDispatchProjectLocked": "已绑定，不可更改",
   "opsErrorWorkspaceNotBound": "这个房间还没绑定工作区，请房主先绑。",
   "opsErrorWorkspaceMismatch": "这个房间只派工到「{key}」。",

@@ -7289,6 +7289,14 @@
       }
     }
   },
+  "opsSingleWriter": "同一專案一次只跑一筆",
+  "@opsSingleWriter": {
+    "description": "儀表板工作區區塊下方的開關：同一專案的寫入鎖"
+  },
+  "opsSingleWriterHint": "關閉後多筆派工會同時改同一個 repo，可能互相衝突。",
+  "@opsSingleWriterHint": {
+    "description": "寫入鎖開關的副標，講關掉之後會發生什麼"
+  },
   "opsDispatchProjectLocked": "已綁定，不可更改",
   "@opsDispatchProjectLocked": {
     "description": "派工對話框：專案由房間綁定，唯讀"

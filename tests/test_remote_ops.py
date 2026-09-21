@@ -1463,6 +1463,8 @@ RUN_KEYS = {
     "usage", "result", "reason",
     # 這一輪是誰做的（participant.run_id 反查）。還沒進房時為 None
     "agent_name",
+    # 所屬房間的「同一專案一次只跑一筆」開關，領單時執行器要看它
+    "single_writer",
     "created_at", "claimed_at", "started_at", "ended_at", "updated_at",
 }
 RUNNER_KEYS = {

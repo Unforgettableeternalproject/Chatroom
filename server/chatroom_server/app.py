@@ -296,6 +296,15 @@ class WorkspaceBind(BaseModel):
     workspace_key: str = Field(min_length=1, max_length=64)
 
 
+class SingleWriterToggle(BaseModel):
+    """房間層開關：同一個工作區一次只允許一個寫入者。
+
+    可以來回切（不像綁定是一次性）：它管的是「現在要不要併行」，
+    而不是這間房的稽核串掛在哪份工作樹上。
+    """
+    enabled: bool
+
+
 class RunnerRegister(BaseModel):
     host: str = Field(min_length=1, max_length=128)
     label: str = Field(default="", max_length=64)
@@ -1312,6 +1321,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         """room row → 對外回應；管理員 session key 不外流。"""
         d = dict(row)
         d.pop("creator_session_key", None)
+        # SQLite 存 0/1，契約是 bool：client 直接拿去當開關的狀態，
+        # 整數會讓三端各自 truthy 判斷一次（Dart 的 1 不是 true）
+        d["single_writer"] = bool(d.get("single_writer", 1))
         return d
 
     async def _participant(participant_id: str | None, room_id: str | None = None):
@@ -13119,7 +13131,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     RUN_SELECT_SQL = (
         "SELECT r.*, (SELECT p.display_name FROM participant p"
         " WHERE p.run_id = r.id AND p.parent_id IS NULL"
-        " ORDER BY p.joined_at, p.rowid LIMIT 1) AS agent_name"
+        " ORDER BY p.joined_at, p.rowid LIMIT 1) AS agent_name,"
+        " (SELECT rm.single_writer FROM room rm WHERE rm.id = r.room_id)"
+        " AS single_writer"
         " FROM agent_run r"
     )
 
@@ -13134,6 +13148,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         # `requester_*` 是「誰動的手」。Supervisor 代派時兩者不同
         d["requester_kind"] = d.get("requester_kind") or "human"
         d["requester_name"] = d.get("requester_name") or ""
+        # 執行器領到單之後靠這一欄決定要不要等別人先收工。沒帶到（NULL 或
+        # 這一欄不在 SELECT 裡）一律當**開**：預設值要落在安全的那一邊
+        sw = d.get("single_writer")
+        d["single_writer"] = True if sw is None else bool(sw)
         return d
 
     def _runner_public(row) -> dict:
@@ -13299,6 +13317,58 @@ def create_app(config: Config | None = None) -> FastAPI:
         await events.notify(room_id)
         updated = await _room_or_404(room_id, allow_archived=True)
         return {"room": {**_room_public(updated), "workspace_served": True}}
+
+    async def _room_single_writer(room_id: str) -> bool:
+        """這間房現在允不允許同一個工作區併行。查不到房當**開**。"""
+        row = await (await app.state.db.execute(
+            "SELECT single_writer FROM room WHERE id=?", (room_id,))).fetchone()
+        return True if row is None else bool(row["single_writer"])
+
+    @app.patch("/api/rooms/{room_id}/single-writer",
+               dependencies=[Depends(require_auth)])
+    async def set_room_single_writer(
+        room_id: str,
+        body: SingleWriterToggle,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """開關「同一個專案一次只跑一筆」（**可以來回切**）。
+
+        規則與錯誤碼（**契約，client 可比對 code**）：
+
+        - 房間必須是 `kind=ops` ⇒ 否則 409 `room_not_ops`
+        - 只有建房的人做得到 ⇒ 否則 403 `room_owner_required`
+
+        與綁定工作區不同，這一個不是一次性的：它管的是「現在要不要併行」，
+        而那個答案會隨著手上的工作換來換去。房主關掉之後仍隨時能再打開。
+
+        切換會發一則 system 訊息——它改變的是「這間房的工會不會互相踩」，
+        房裡的人得從對話本身看得到，不能只在面板上悄悄換一個欄位。
+        """
+        room = await _ops_room_or_409(room_id)
+        # 房主判定與綁定工作區同一套：比 header 的 session key，
+        # creator 為空（欄位存在之前建的房）一律不算房主
+        if (not room["creator_session_key"]
+                or x_session_key != room["creator_session_key"]):
+            raise _err(403, "room_owner_required",
+                       "只有建立這間工作房的人能改這個開關")
+        db = app.state.db
+        await db.execute("UPDATE room SET single_writer=? WHERE id=?",
+                         (1 if body.enabled else 0, room_id))
+        await _commit_with_retry(db)
+        owner = await (await db.execute(
+            "SELECT display_name FROM participant WHERE room_id=? AND"
+            " session_key=? AND status='active' ORDER BY joined_at LIMIT 1",
+            (room_id, room["creator_session_key"]))).fetchone()
+        who = (owner["display_name"] if owner is not None
+               and owner["display_name"] else "房主")
+        verb = "開啟" if body.enabled else "關閉"
+        await _post_message(
+            room_id, None,
+            f"{who} 已{verb}同一專案一次只跑一筆的限制",
+            kind="system", system_event="single_writer_changed")
+        await events.notify(room_id)
+        updated = await _room_or_404(room_id, allow_archived=True)
+        return {"room": _room_public(updated)}
 
     async def _room_human_names(room_id: str) -> list[str]:
         """房內所有 active 人類的顯示名。
@@ -14118,7 +14188,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 "claimed")
         await _commit_with_retry(db)
         await events.notify(got["room_id"])
-        return {"run": _run_public(got)}
+        # 領單走的是 `RETURNING *`（agent_run 自己的欄位），帶不出房間的
+        # `single_writer`——而這正是執行器拿到單之後第一件要看的事。
+        # 為了它去改那句 CAS 不值得，這裡補一次查詢
+        run = _run_public(got)
+        run["single_writer"] = await _room_single_writer(got["room_id"])
+        return {"run": run}
 
     @app.post("/api/runs/{run_id}/report", dependencies=[Depends(require_auth)])
     async def report_run(

@@ -30,6 +30,8 @@ class OpsDashboardView extends StatelessWidget {
     this.workspaceServed = false,
     this.youAreAdmin = false,
     this.onBindWorkspace,
+    this.singleWriter = true,
+    this.onSetSingleWriter,
   });
 
   final RoomRunnerBoard board;
@@ -73,6 +75,13 @@ class OpsDashboardView extends StatelessWidget {
   /// 送出綁定。null ＝這個畫面不給綁（唯讀的預覽）。
   final void Function(String workspaceKey)? onBindWorkspace;
 
+  /// 同一專案是不是一次只跑一筆（Hub 的寫入鎖）。
+  final bool singleWriter;
+
+  /// 切換寫入鎖。回傳**有沒有真的改成功**——失敗時開關要回到原來那一邊，
+  /// 不然畫面會停在一個 Hub 沒有答應的狀態。null ＝這個畫面不給切。
+  final Future<bool> Function(bool enabled)? onSetSingleWriter;
+
   @override
   Widget build(BuildContext context) {
     final workspace = OpsWorkspaceSection(
@@ -82,6 +91,17 @@ class OpsDashboardView extends StatelessWidget {
       youAreAdmin: youAreAdmin,
       onBind: onBindWorkspace,
     );
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        workspace,
+        OpsSingleWriterRow(
+          enabled: singleWriter,
+          youAreAdmin: youAreAdmin,
+          onChanged: onSetSingleWriter,
+        ),
+      ],
+    );
     if (board.runners.isEmpty) {
       final l10n = AppLocalizations.of(context);
       // 工作區那一段照畫：沒有執行器在線的時候，「這個房綁到哪裡」正是
@@ -89,7 +109,7 @@ class OpsDashboardView extends StatelessWidget {
       return Column(children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 18, 24, 0),
-          child: workspace,
+          child: header,
         ),
         Expanded(
           child: _Empty(
@@ -102,7 +122,7 @@ class OpsDashboardView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 32),
       children: [
-        workspace,
+        header,
         OpsStatusBar(board: board, now: now),
         for (final runner in board.runners) ...[
           _RunnerSection(
@@ -274,6 +294,96 @@ class _OpsWorkspaceSectionState extends State<OpsWorkspaceSection> {
                 onPressed: picked == null ? null : () => _confirm(picked),
               ),
             ]),
+        ],
+      ),
+    );
+  }
+}
+
+/// 「同一專案一次只跑一筆」那一列。
+///
+/// **樂觀切換，失敗回復**：切下去就先動，因為等一趟往返的開關看起來像壞的；
+/// 但 Hub 退回來時要退回原值——停在一個 Hub 沒有答應的位置，下一個人看畫面
+/// 會以為鎖已經關了，然後兩筆 run 同時改同一份 repo。
+///
+/// 非房主只看得到狀態：Hub 對他的 PATCH 是 403 `room_owner_required`，
+/// 給一顆必定失敗的開關跟不給一樣。
+class OpsSingleWriterRow extends StatefulWidget {
+  const OpsSingleWriterRow({
+    super.key,
+    this.enabled = true,
+    this.youAreAdmin = false,
+    this.onChanged,
+  });
+
+  final bool enabled;
+  final bool youAreAdmin;
+
+  /// 回傳有沒有真的改成功。null ＝這個畫面不給切。
+  final Future<bool> Function(bool enabled)? onChanged;
+
+  @override
+  State<OpsSingleWriterRow> createState() => _OpsSingleWriterRowState();
+}
+
+class _OpsSingleWriterRowState extends State<OpsSingleWriterRow> {
+  /// 切下去還沒定案的那個值。null ＝照 Hub 說的那個。
+  bool? _optimistic;
+  bool _busy = false;
+
+  bool get _value => _optimistic ?? widget.enabled;
+
+  @override
+  void didUpdateWidget(covariant OpsSingleWriterRow old) {
+    super.didUpdateWidget(old);
+    // Hub 那邊的值換了（重抓回來的房間詳情），樂觀值就讓位
+    if (old.enabled != widget.enabled) _optimistic = null;
+  }
+
+  Future<void> _toggle(bool next) async {
+    final send = widget.onChanged;
+    if (send == null || _busy) return;
+    setState(() {
+      _optimistic = next;
+      _busy = true;
+    });
+    final ok = await send(next);
+    if (!mounted) return;
+    setState(() {
+      // 失敗就回到 Hub 說的那個值；成功之後由重抓的房間詳情接手
+      _optimistic = ok ? next : null;
+      _busy = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final canToggle = widget.youAreAdmin && widget.onChanged != null && !_busy;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 36,
+            child: Row(children: [
+              Expanded(
+                child: Text(l10n.opsSingleWriter,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+              ),
+              Switch(
+                value: _value,
+                activeThumbColor: UepColors.gold,
+                activeTrackColor: UepColors.gold.withValues(alpha: .28),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: canToggle ? _toggle : null,
+              ),
+            ]),
+          ),
+          Text(l10n.opsSingleWriterHint,
+              style: UepText.serif(size: 12.5, color: s.inkMute, height: 1.5)),
         ],
       ),
     );

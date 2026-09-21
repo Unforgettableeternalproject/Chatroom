@@ -1454,6 +1454,8 @@
   "opsWorkspaceUnbound": "The room owner hasn't bound a workspace yet.",
   "opsWorkspaceBindConfirmBody": "Once bound, this room can only dispatch to “{key}”, and it can't be changed.",
   "opsWorkspaceBindDone": "Bound to “{key}”.",
+  "opsSingleWriter": "One run at a time per project",
+  "opsSingleWriterHint": "Turn this off and several runs will touch the same repo at once, which may conflict.",
   "opsDispatchProjectLocked": "Bound; can't be changed",
   "opsErrorWorkspaceNotBound": "This room has no workspace bound yet. Ask the owner to bind one.",
   "opsErrorWorkspaceMismatch": "This room only dispatches to “{key}”.",
