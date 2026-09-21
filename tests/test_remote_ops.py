@@ -1255,6 +1255,68 @@ async def test_commands_are_taken_once(tmp_path):
             assert hb["commands"] == []
 
 
+async def test_runner_commands_only_from_a_room_the_runner_serves(tmp_path):
+    """執行器命令的**範圍**：人類憑證只說「你是人」，不說你是哪間房的人。
+
+    缺了這一道，任何一間房的人類都能 pause／drain／restart 別人的執行器，
+    而被停掉的那間房只看得到工作卡在排隊——沒有任何一處說得出是誰按的。
+    """
+    app, client = await _client(tmp_path, "cmdscope")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(client)
+            hdr = await _join_human(client, rid)
+            runner = await _register_runner(client)
+
+            # 不帶身分：以前只驗憑證就放行
+            r = await client.post(f"/api/runners/{runner}/commands",
+                                  json={"command": "pause", "room_id": rid})
+            assert r.status_code == 401, r.text
+            assert r.json()["detail"]["code"] == "participant_header_required"
+
+            # 房內的 agent 成員：憑證過得了，身分過不了
+            agent = (await client.post(
+                f"/api/rooms/{rid}/join",
+                json={"kind": "claude", "session_key": "agent-a"})).json()
+            r = await client.post(
+                f"/api/runners/{runner}/commands",
+                json={"command": "pause", "room_id": rid},
+                headers={"X-Participant-Id": agent["participant_id"],
+                         "X-Session-Key": "agent-a"})
+            assert r.status_code == 403, r.text
+            assert (r.json()["detail"]["code"]
+                    == "human_actor_required_for_runner_command")
+
+            # 別間工作房的人類：那間房綁的工作區這台執行器不服務
+            other = await _ops_room(client, key="human-b", name="別間工作房",
+                                    workspace="other-project")
+            other_hdr = await _join_human(client, other, key="human-b",
+                                          name="別人")
+            r = await client.post(f"/api/runners/{runner}/commands",
+                                  json={"command": "drain", "room_id": other},
+                                  headers=other_hdr)
+            assert r.status_code == 403, r.text
+            assert r.json()["detail"]["code"] == "runner_not_serving_room"
+
+            # 對照組：面板列得出這台執行器的那間房，照樣下得了命令
+            r = await client.post(f"/api/runners/{runner}/commands",
+                                  json={"command": "pause", "room_id": rid},
+                                  headers=hdr)
+            assert r.status_code == 200, r.text
+
+            # 主持人視角是**唯一**的豁免：執行器分頁的 reload 不從任何一
+            # 間房發出，主持人也不必為了改設定先加入一個房
+            r = await client.post(f"/api/runners/{runner}/commands",
+                                  json={"command": "reload"},
+                                  headers={"X-Host-View": "1"})
+            assert r.status_code == 200, r.text
+            # 少了明示的 X-Host-View，同一把主 token 走的是一般路徑
+            r = await client.post(f"/api/runners/{runner}/commands",
+                                  json={"command": "reload"})
+            assert r.status_code == 401, r.text
+            assert r.json()["detail"]["code"] == "participant_header_required"
+
+
 async def test_the_command_feedback_chain_reaches_the_dashboard(tmp_path):
     """§5.7：命令從「按下」到「生效」每一段都要在面板上看得到。
 

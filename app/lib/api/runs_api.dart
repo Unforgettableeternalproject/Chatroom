@@ -15,10 +15,20 @@ class RunsApi {
   final Dio _dio;
 
   /// 房內身分。派工與取消都要 Hub 認得出「你是這間房的人類成員」。
-  static Options _auth(String? participantId, [String? sessionKey]) => Options(
+  ///
+  /// [hostView] 為 true 時**這一個請求**明示帶 `X-Host-View: 1`，不動全域的
+  /// `hostViewProvider`。給的是「沒有房內身分、但確實是主機在操作自己那台」
+  /// 的路徑用——Hub 端仍會驗這把 token 是不是主 token，帶了不代表過得了。
+  static Options _auth(
+    String? participantId, [
+    String? sessionKey,
+    bool hostView = false,
+  ]) =>
+      Options(
         headers: {
           'X-Participant-Id': ?participantId,
           'X-Session-Key': ?sessionKey,
+          if (hostView) 'X-Host-View': '1',
         },
       );
 
@@ -133,18 +143,24 @@ class RunsApi {
   ///
   /// **命令是存下來等 heartbeat 取的，不是即時推送**——按下去之後畫面要說
   /// 「已送出，執行器下次回報時生效」，不能說「已暫停」。
+  ///
+  /// Hub 要求這支帶 `X-Participant-Id`（且是該服務 ops 房的人類 active 成員），
+  /// 缺就是 401 `participant_header_required`；唯一的豁免是主持人視角
+  /// （`X-Host-View: 1` ＋ 主 token）。主機頁那條路徑沒有房內身分，所以要
+  /// [hostView]＝true 明示帶標頭——**這一個請求**帶，不動全域開關。
   Future<void> command(
     String runnerId, {
     required String command,
     String roomId = '',
     String? participantId,
     String? sessionKey,
+    bool hostView = false,
   }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/runners/$runnerId/commands',
           data: {'command': command, 'room_id': roomId},
-          options: _auth(participantId, sessionKey),
+          options: _auth(participantId, sessionKey, hostView),
         );
       });
 }

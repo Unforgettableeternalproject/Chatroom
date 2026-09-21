@@ -34,7 +34,7 @@ from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
                      SOFT_STOP_TIMEOUT_FLAG_NAME, ConfigError, RunnerConfig,
                      load_config, private_project_keys,
                      public_project_keys)
-from .hub import HubError, save_identity
+from .hub import HubError, bad_transition_from, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
                   RunExecutor, parse_mcp_list, remember_mcp_servers)
@@ -57,6 +57,11 @@ RESTART_HEARTBEAT_TIMEOUT = 15.0
 # 命令會永遠停在一片空白，而執行器這邊其實早就套用完了（實測：reload 失敗
 # 時把整串 ConfigError 連路徑塞進 note）
 MAX_ACK_NOTE = 200
+
+# Hub 那邊已經收場、落地回報再也送不進去的狀態（裁決 09/22）。`handoff`
+# 不在裡面：它在 Hub 的狀態機上同樣沒有下一步，但交接鏈要不要一起作廢是
+# 人的決定，執行器不在重送迴圈裡替他決定
+_HUB_SETTLED_STATUSES = frozenset({"done", "failed", "cancelled"})
 
 
 @dataclass
@@ -528,6 +533,15 @@ class RunnerLoop:
         """把送不出去、落地在 run 目錄的回報再送一次（審查 09/16）。
 
         送成功才刪檔：刪了又沒送到的話，那筆 run 的結果就真的不見了。
+
+        🚨 **只有一種例外**（裁決 09/22）：Hub 回 409 ``run_bad_transition``
+        而且它那邊已經收場（``done``／``failed``／``cancelled``）。那份落地
+        回報沒有地方可以去了——留著它，每一次 heartbeat 都會再撞一次同一個
+        409、再寫一行看起來像故障的 warning，而那筆 run 的結局早就定了。刪掉
+        前先把 Hub 的結局寫進 log：作廢的是**什麼**，事後要查得到。
+
+        ``handoff`` 不在這個名單裡（Hub 那邊它也沒有下一步）：交接鏈是另一
+        條路上的事，要不要一起作廢由人裁決，不在這裡自作主張。
         """
         runs_dir = self.cfg.runs_dir
         if not runs_dir.is_dir():
@@ -549,6 +563,16 @@ class RunnerLoop:
                     usage=payload.get("usage") or None,
                     git=payload.get("git") or None)
             except HubError as exc:
+                settled = bad_transition_from(exc)
+                if settled in _HUB_SETTLED_STATUSES:
+                    log.warning("run %s 的落地回報作廢：Hub 已經收場為 %s，"
+                                "這一筆 %s 沒有地方可以去了", run_id, settled,
+                                payload.get("status"))
+                    try:
+                        path.unlink()
+                    except OSError:  # pragma: no cover
+                        pass
+                    continue
                 log.warning("run %s 的落地回報重送失敗：%s", run_id, exc)
                 continue
             log.info("run %s 的落地回報已補送", run_id)

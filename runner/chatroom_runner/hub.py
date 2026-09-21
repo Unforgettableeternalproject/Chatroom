@@ -122,6 +122,19 @@ def translate(status: int, detail: Any) -> HubError:
                     status=status, code=code or "", detail=detail)
 
 
+def bad_transition_from(exc: HubError) -> str | None:
+    """這個錯誤是 409 ``run_bad_transition`` 嗎；是的話 Hub 現在在哪一格。
+
+    回 ``None`` 表示「不是這種錯」。Hub 一定會帶 ``from_status``（兩條 raise
+    都帶），但**帶不到時回空字串而不是 None**：那時只知道被狀態機擋下，不
+    知道擋在哪裡，由呼叫端當成「不可判斷」處理。
+    """
+    if exc.status != 409 or exc.code != "run_bad_transition":
+        return None
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    return str(detail.get("from_status") or "")
+
+
 class RunnerHub:
     """薄客戶端。``client`` 供測試注入 in-process ASGI transport。"""
 
@@ -276,17 +289,12 @@ class RunnerHub:
             "POST", f"/api/runners/{self.identity.runner_id}/claim")
         return body["run"] if body else None
 
-    async def report(self, run_id: str, status: str, *, result: str = "",
-                     reason: str = "", claude_session_id: str = "",
-                     usage: dict | None = None,
-                     stalled_seconds: int = 0,
-                     git: dict | None = None) -> dict | None:
-        """回報狀態轉移。``runner_id`` 是**必填**（Hub 契約 09/16 修正）。
-
-        🚨 409 ``run_bad_transition`` 當成「這一步已經套用過」而不是錯誤：
-        回報遲到或重送時，Hub 那邊的狀態早就是我們要的那個了，把它當失敗
-        重試會變成無限迴圈，而那台執行器同時什麼單都不領。
-        """
+    async def _post_report(self, run_id: str, status: str, *,
+                           result: str = "", reason: str = "",
+                           claude_session_id: str = "",
+                           usage: dict | None = None,
+                           stalled_seconds: int = 0,
+                           git: dict | None = None) -> dict | None:
         payload: dict = {"status": status, "runner_id": self.identity.runner_id,
                          "result": result, "reason": reason,
                          "claude_session_id": claude_session_id}
@@ -302,18 +310,66 @@ class RunnerHub:
         # 的欄位不會炸（pydantic 預設忽略未知欄位）
         if git:
             payload["git"] = git
+        return await self._json("POST", f"/api/runs/{run_id}/report",
+                                json_body=payload)
+
+    async def report(self, run_id: str, status: str, *, result: str = "",
+                     reason: str = "", claude_session_id: str = "",
+                     usage: dict | None = None,
+                     stalled_seconds: int = 0,
+                     git: dict | None = None) -> dict | None:
+        """回報狀態轉移。``runner_id`` 是**必填**（Hub 契約 09/16 修正）。
+
+        409 ``run_bad_transition`` 有三種，**不能混成同一種**（審查 09/22）：
+
+        1. ``from_status == status``：Hub 已經在我們要報的那一格 ⇒ 這是遲到
+           或重送的回報，當成「已套用」回 ``None``。把它當失敗重試會變成無限
+           迴圈，而那台執行器在重試期間什麼單都不領。
+        2. ``from_status == "claimed"`` 而我們要報的不是 ``running``：中間那
+           一步（``claimed → running``）在斷線期間重試耗盡掉了，Hub 於是擋下
+           終局回報。**先補送一次 ``running`` 再重送原本的回報**，只補一次、
+           不遞迴。全部當成冪等成功的話，這筆 run 會永遠停在 claimed，而這一
+           輪的結果沒有任何地方留得下來。
+        3. 其他：真正的非法轉移（例如 Hub 那邊已經 cancelled）。往上丟，讓
+           呼叫端的重試與落地機制接手——吞掉它等於把結果丟進黑洞。
+
+        補送用的理由是 ``resumed``：Hub 真的已經在 running 時，那是同狀態回報
+        的白名單理由，不會再撞一次 409。
+        """
+        kwargs = {"result": result, "reason": reason,
+                  "claude_session_id": claude_session_id, "usage": usage,
+                  "stalled_seconds": stalled_seconds, "git": git}
         try:
-            return await self._json("POST", f"/api/runs/{run_id}/report",
-                                    json_body=payload)
+            return await self._post_report(run_id, status, **kwargs)
         except HubError as exc:
-            if exc.status == 409 and exc.code == "run_bad_transition":
-                detail = exc.detail if isinstance(exc.detail, dict) else {}
-                # 回傳值照舊（當成已套用），但**要留痕**：真正的非法轉移與
-                # 「遲到的重送」長得一模一樣，無聲吞掉的話只剩 Hub 上一個停住
-                # 的狀態，沒有任何線索指向是哪一步被擋掉
+            from_status = bad_transition_from(exc)
+            if from_status is None:
+                raise
+            if from_status == status:
                 log.warning("回報被 Hub 擋下（409 run_bad_transition）："
-                            "run %s 想報 %s，Hub 說 %s → %s",
-                            run_id, status, detail.get("from_status"),
-                            detail.get("to_status"))
+                            "run %s 想報 %s，Hub 已經在 %s ⇒ 當成已套用",
+                            run_id, status, from_status)
+                return None
+            if from_status != "claimed" or status == "running":
+                log.error("回報被 Hub 擋下（409 run_bad_transition）："
+                          "run %s 想報 %s，Hub 說 %s ⇒ 這是真的非法轉移，"
+                          "往上丟給重試／落地", run_id, status, from_status)
+                raise
+        # claimed → 終局：先補上漏掉的 running 那一步，再重送一次原回報
+        log.warning("run %s 要報 %s，但 Hub 還停在 claimed："
+                    "`claimed → running` 那一次回報掉了，先補送一次 running",
+                    run_id, status)
+        await self._post_report(
+            run_id, "running", reason="resumed",
+            claude_session_id=claude_session_id,
+            result="執行器補送：`claimed → running` 的回報在斷線期間掉了，"
+                   "這一筆是為了讓終局回報接得上。")
+        try:
+            return await self._post_report(run_id, status, **kwargs)
+        except HubError as exc:
+            from_status = bad_transition_from(exc)
+            if from_status is not None and from_status == status:
+                log.warning("run %s 補送 running 後重送 %s：Hub 已經在 %s",
+                            run_id, status, from_status)
                 return None
             raise

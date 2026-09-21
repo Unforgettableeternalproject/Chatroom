@@ -10,6 +10,7 @@ clone，每條測試盯著一個會安靜失敗的地方——合併方式沒照
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 
 import pytest
@@ -532,3 +533,136 @@ async def test_nothing_to_merge_still_tags(tmp_path, release_repo):
     assert "已打 tag v2.0.0" in second.result
     assert "refs/tags/v2.0.0" in git(release_repo, "ls-remote", "--tags",
                                      "origin"), "沒推上去等於只有本機看得到"
+
+
+# ── 取消（審查 09/22）────────────────────────────────────────────
+
+class _CancelAfter(asyncio.Event):
+    """被問到第 ``after`` 次之後才說「已取消」。
+
+    模擬的是人類在第一個 repo 上板完之後才按下取消——用真的 heartbeat 去設
+    這個 event 會變成一條賭時序的測試，而它會在別人的機器上隨機轉綠。
+    """
+
+    def __init__(self, after: int) -> None:
+        super().__init__()
+        self.after = after
+        self.asked = 0
+
+    def is_set(self) -> bool:  # type: ignore[override]
+        self.asked += 1
+        return self.asked > self.after
+
+
+async def test_cancel_stops_the_remaining_repos(tmp_path):
+    """取消之後**剩下的 repo 一個都不能動**。
+
+    多 repo 的上板是逐 repo 的 merge／push。迴圈不看取消的話，人類按下取消
+    只停住了畫面，後面幾個照樣被推上 origin——而 push 收不回來。
+    """
+    first, _ = make_repo(tmp_path, "JSAI-Api")   # 依名稱排序，這個先做
+    second, _ = make_repo(tmp_path, "JSAI-Web")
+    second_before = git(second, "rev-parse", "main")
+    cfg = make_config(tmp_path, {"JSAI-Api": first, "JSAI-Web": second})
+    hub = _RecordingHub()
+    cancel = _CancelAfter(1)
+
+    outcome = await executor(cfg, hub).execute(
+        make_run([entry("JSAI-Api"), entry("JSAI-Web")]), cancel)
+
+    assert (outcome.status, outcome.reason) == ("cancelled",
+                                                "cancel_requested"), \
+        outcome.result
+    # 前面那個照做完（已經推上去的不回滾）
+    assert git(first, "rev-parse", "main") == git(first, "rev-parse",
+                                                  "origin/main")
+    assert git(first, "log", "-1", "--format=%s", "main").startswith("release:")
+    # 後面那個**完全沒動**：本機與 origin 都停在原來那一顆
+    assert git(second, "rev-parse", "main") == second_before
+    assert git(second, "rev-parse", "origin/main") == second_before
+    # 結果要講得出「動到哪裡為止」
+    assert "JSAI-Api" in outcome.result and "收到取消" in outcome.result
+    assert "JSAI-Web" in outcome.result and "完全沒動" in outcome.result
+    assert "不會回滾" in outcome.result
+    assert outcome.git["repo"] == "JSAI-Api", "沒動到的 repo 不該列進 git 欄位"
+    assert [s for s, _ in hub.reports] == ["running", "cancelled"]
+
+
+async def test_cancel_before_the_first_repo_touches_nothing(tmp_path):
+    """取消在第一個 repo 之前就到了 ⇒ 一個 git 寫入動作都不做。"""
+    repo, _ = make_repo(tmp_path, "JSAI-Web")
+    before = git(repo, "rev-parse", "main")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    hub = _RecordingHub()
+    cancel = asyncio.Event()
+    cancel.set()
+
+    outcome = await executor(cfg, hub).execute(make_run([entry()]), cancel)
+
+    assert outcome.status == "cancelled", outcome.result
+    assert git(repo, "rev-parse", "main") == before
+    assert git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+
+
+# ── 來源分支：本機 vs origin（審查 09/22）──────────────────────
+
+async def test_source_behind_origin_merges_the_remote_tip(tmp_path,
+                                                          release_repo):
+    """本機的來源分支落後 origin ⇒ 要合 ``origin/<source>`` 的那一顆。
+
+    無條件用本機 tip 的話，會併進一份**舊的**來源然後回報成功——人類看到
+    綠燈，而遠端上那幾顆根本沒上板。
+    """
+    (release_repo / "遠端那顆.txt").write_text("後來推上去的\n",
+                                               encoding="utf-8")
+    git(release_repo, "add", "遠端那顆.txt")
+    git(release_repo, "commit", "-m", "只在 origin 上的那顆")
+    git(release_repo, "push", "origin", "develop")
+    # 本機退回去：local develop 是 origin/develop 的祖先
+    git(release_repo, "reset", "--hard", "HEAD~1")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo},
+                      release={"merge_method": "merge",
+                               "merge_message": "release: 併入 {source}"})
+    hub = _RecordingHub()
+
+    outcome = await executor(cfg, hub).execute(make_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    subjects = git(release_repo, "log", "main", "--format=%s")
+    assert "只在 origin 上的那顆" in subjects, \
+        "合的是本機那顆舊的 tip，origin 上的成果沒上板"
+    assert git(release_repo, "rev-parse", "main") == \
+        git(release_repo, "rev-parse", "origin/main")
+
+
+async def test_source_diverged_from_origin_is_refused(tmp_path,
+                                                      release_repo):
+    """本機與 origin 分岔 ⇒ `release_source_diverged`，兩邊的 sha 都要寫出來。
+
+    挑哪一邊都會漏掉另一邊的成果，而漏掉的那幾顆在報告上與「成功上板」長得
+    一模一樣。
+    """
+    (release_repo / "遠端那顆.txt").write_text("遠端\n", encoding="utf-8")
+    git(release_repo, "add", "遠端那顆.txt")
+    git(release_repo, "commit", "-m", "只在 origin 上的那顆")
+    git(release_repo, "push", "origin", "develop")
+    git(release_repo, "reset", "--hard", "HEAD~1")
+    (release_repo / "本機那顆.txt").write_text("本機\n", encoding="utf-8")
+    git(release_repo, "add", "本機那顆.txt")
+    git(release_repo, "commit", "-m", "只在本機的那顆")
+    local = git(release_repo, "rev-parse", "develop")
+    remote = git(release_repo, "rev-parse", "origin/develop")
+    before = git(release_repo, "rev-parse", "main")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    hub = _RecordingHub()
+
+    outcome = await executor(cfg, hub).execute(make_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("failed", "release_partial")
+    assert "release_source_diverged" in outcome.result
+    assert local[:8] in outcome.result and remote[:8] in outcome.result
+    # 一顆都不能併進去
+    assert git(release_repo, "rev-parse", "main") == before
+    assert git(release_repo, "rev-parse", "origin/main") == before
+    assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"

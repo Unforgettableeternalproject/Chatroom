@@ -14986,27 +14986,54 @@ def create_app(config: Config | None = None) -> FastAPI:
         命令**存下來等 heartbeat 取**，不是即時推送：執行器可能正卡在一個
         子進程上，而「已送達」與「已生效」在畫面上長得一樣的話，人會以為
         按了沒反應而再按五次。
+
+        權限（**契約，client 可比對 code**）：
+
+        - 人類憑證 ⇒ 否則 403 `human_token_required_for_runner_command`
+        - `X-Participant-Id` **必填** ⇒ 缺 401 `participant_header_required`
+        - 該身分要 active、`role=human`，帶了 `room_id` 就要屬於那間房
+        - 那間房要是 ops 房，且這台執行器服務它的工作區
+          ⇒ 否則 403 `runner_not_serving_room`
+
+        **唯一的豁免是主持人視角**（`X-Host-View: 1` ＋ `.env` 的主
+        token，見 `host_view`）：執行器分頁的 `reload` 不從任何一間房發出，
+        主持人也不必為了改設定先加入一個房。這個豁免沒有第二個入口——少了
+        明示的 `X-Host-View`，主 token 走的是上面那條一般路徑。
         """
-        await _runner_or_404(runner_id)
+        runner_row = await _runner_or_404(runner_id)
         if not _is_human_credential(request, host):
             raise _err(403, "human_token_required_for_runner_command",
                        "暫停／恢復／重啟執行器只認人類憑證。")
-        name = ""
-        if x_participant_id:
-            me = await (await app.state.db.execute(
-                "SELECT display_name, role FROM participant WHERE id=?",
-                (x_participant_id,))).fetchone()
-            if me is not None:
-                if (me["role"] or "") != "human":
-                    raise _err(403, "human_actor_required_for_runner_command",
-                               "只有人類成員能下執行器命令。")
-                name = me["display_name"]
+        if host:
+            # 主持人視角：命令不屬於任何一間房，房／工作區那幾道沒有對象
+            # 可驗。他握有 `.env` 就握有 `chatroom.db`，與 `host_view` 同一
+            # 個理由
+            name = "主持人"
+            room_id = body.room_id or ""
+        else:
+            # **身分必填，而且要驗到房。** 人類憑證只說「你是人」，不說你是
+            # 哪間房的人：少了這一段，任何一間房的人類都能 pause／drain／
+            # restart 別人的執行器，而被停掉那間房只看得到工作卡在排隊。
+            me = await _participant(x_participant_id, body.room_id or None)
+            if (me["role"] or "") != "human":
+                raise _err(403, "human_actor_required_for_runner_command",
+                           "只有人類成員能下執行器命令。")
+            name = me["display_name"]
+            room = await _room_or_404(me["room_id"], allow_archived=True)
+            workspace = room["workspace_key"] or ""
+            if ((room["kind"] or "") != "ops" or not workspace
+                    or not _runner_serves(room, runner_row, workspace)):
+                # 與面板同一條可見性規則（`_runner_serves`）：面板列不出來的
+                # 執行器，也不該按得動
+                raise _err(403, "runner_not_serving_room",
+                           "這台執行器沒有服務你所在的工作房")
+            room_id = room["id"]
         cmd_id = _uid()
         await app.state.db.execute(
             "INSERT INTO runner_command (id, runner_id, command, issued_by,"
             " issued_by_name, room_id, created_at) VALUES (?,?,?,?,?,?,?)",
             (cmd_id, runner_id, body.command, actor_key(x_session_key), name,
-             body.room_id, _now()))
+             room_id, _now()))
         await _commit_with_retry(app.state.db)
         return {"command": {"id": cmd_id, "runner_id": runner_id,
                             "command": body.command, "acked_at": None}}

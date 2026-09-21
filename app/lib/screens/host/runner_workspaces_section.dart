@@ -130,6 +130,11 @@ Future<String> runnerApplyReload(WidgetRef ref, AppLocalizations l10n) async {
           runnerId,
           command: 'reload',
           sessionKey: ref.read(appConfigProvider).deviceKey,
+          // 這一支 Hub 要求房內人類身分，而這裡沒有房 ID 也沒有 participant
+          // ——這頁只有持主 token 的主機進得來，reload 的又是本機自己那台
+          // 執行器，所以走主持人視角的豁免。明示帶標頭而不是靠全域開關：
+          // 開關沒開的人按下去只會拿 401，而他什麼設定都不必改
+          hostView: true,
         );
     return l10n.hostRunnerSavedReloadSent;
   } on ApiException catch (e) {

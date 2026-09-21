@@ -5,7 +5,9 @@
 1. 註冊回的 `runner_token` 要落地，之後每個請求都帶 `X-Runner-Token`。
 2. `report` 的 `runner_id` 必填——沒帶的話 Hub 認不出是誰在收工。
 3. claim 的 204 是「沒事做」，不是錯誤。
-4. `run_bad_transition` 是「這一步已經套用過」，不是要重試的失敗。
+4. `run_bad_transition` 有三種，不能混成同一種（審查 09/22）：Hub 已經在
+   我們要報的那一格＝已套用；卡在 `claimed`＝中間那一步掉了，補送再重送；
+   其餘是真的非法轉移，要往上丟。
 """
 
 from __future__ import annotations
@@ -98,17 +100,98 @@ async def test_claim_204_means_nothing_to_do():
     await hub.aclose()
 
 
+def _bad_transition(from_status: str, to_status: str) -> httpx.Response:
+    return httpx.Response(
+        409, json={"detail": {"code": "run_bad_transition",
+                              "message": f"派工不能從 {from_status} 變成"
+                                         f" {to_status}。",
+                              "from_status": from_status,
+                              "to_status": to_status}})
+
+
 async def test_bad_transition_on_report_is_treated_as_already_applied():
-    """🚨 遲到的回報不是錯誤。
+    """🚨 遲到的回報不是錯誤——**但只有 Hub 已經在那一格時才是**。
 
     重試那一步只會再撞一次同一個 409，而執行器在重試迴圈裡的那段時間
     什麼單都不領——一個已經成功的回報就這樣把整台機器停住。
     """
-    hub = _hub(lambda request: httpx.Response(
-        409, json={"detail": {"code": "run_bad_transition",
-                              "message": "派工不能從 done 變成 done。"}}),
-        RunnerIdentity("run-1", "secret-1"))
+    hub = _hub(lambda request: _bad_transition("done", "done"),
+               RunnerIdentity("run-1", "secret-1"))
     assert await hub.report("r-1", "done") is None
+    await hub.aclose()
+
+
+async def test_stuck_at_claimed_resends_running_then_the_final_report():
+    """🚨 卡在 `claimed` 的終局回報要補一步，不能當成冪等成功。
+
+    `claimed → running` 那次回報在斷線期間重試耗盡掉了，於是 Hub 擋下
+    `claimed → done`。把它吞成「已套用」的話，這筆 run 永遠停在 claimed，
+    而這一輪的結果沒有任何地方留得下來。
+    """
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if body["status"] == "running":
+            return httpx.Response(200, json={"run": {"status": "running"},
+                                             "child_run": None})
+        if len([b for b in sent if b["status"] == "running"]) == 0:
+            return _bad_transition("claimed", body["status"])
+        return httpx.Response(200, json={"run": {"status": body["status"]},
+                                         "child_run": None})
+
+    hub = _hub(handler, RunnerIdentity("run-1", "secret-1"))
+
+    body = await hub.report("r-1", "done", result="做完了")
+
+    assert body is not None, "補送之後的重送結果被丟掉了"
+    assert [b["status"] for b in sent] == ["done", "running", "done"]
+    # 補送的那一筆用 `resumed`：Hub 真的已經在 running 時那是同狀態白名單
+    assert sent[1]["reason"] == "resumed"
+    # 原本的回報內容要原樣重送，不能只補一個空殼
+    assert sent[2]["result"] == "做完了"
+    await hub.aclose()
+
+
+async def test_bad_transition_from_another_status_still_raises():
+    """其他來源狀態＝真的非法轉移：往上丟，讓重試與落地機制接手。
+
+    吞掉它等於把這一輪的結果丟進黑洞——落地檔是最後一道防線。
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content)["status"])
+        return _bad_transition("cancelled", "done")
+
+    hub = _hub(handler, RunnerIdentity("run-1", "secret-1"))
+    with pytest.raises(HubError) as exc:
+        await hub.report("r-1", "done")
+    assert exc.value.code == "run_bad_transition"
+    assert calls == ["done"], "非法轉移不該再補送 running"
+    await hub.aclose()
+
+
+async def test_claimed_recovery_gives_up_after_one_retry():
+    """補送只補一次。第二次還是被擋就往上丟，不遞迴。"""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = json.loads(request.content)["status"]
+        calls.append(status)
+        if status == "running":
+            return httpx.Response(200, json={"run": {"status": "running"},
+                                             "child_run": None})
+        if calls.count("done") == 1:
+            return _bad_transition("claimed", status)
+        # 補送之後那筆 run 已經被人類取消了：第二次擋下就是真的走不通
+        return _bad_transition("cancelled", status)
+
+    hub = _hub(handler, RunnerIdentity("run-1", "secret-1"))
+    with pytest.raises(HubError):
+        await hub.report("r-1", "done")
+    assert calls == ["done", "running", "done"]
     await hub.aclose()
 
 

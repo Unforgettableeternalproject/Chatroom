@@ -85,6 +85,13 @@ async def _register(loop):
 
 # ── 自檢 ────────────────────────────────────────────────────────
 
+def _host(headers: dict) -> dict:
+    """執行器命令現在要驗「執行器服務的 ops 房人類成員」；這裡的房沒綁
+    工作區，走主持人視角（主 token ＋ X-Host-View）這條唯一豁免。這些
+    測試測的是 loop 對命令的反應，不是命令的授權。"""
+    return {**headers, "X-Host-View": "1"}
+
+
 async def test_selfcheck_failure_goes_offline_and_never_claims(
         hub_app, ops_room, runner_hub, work_repo, tmp_path):
     """🚨 自檢沒過就**不領單**。
@@ -322,14 +329,14 @@ async def test_pause_stops_claiming_and_resume_restores_it(
 
     r = await client.post(f"/api/runners/{runner_id}/commands",
                           json={"command": "pause", "room_id": room_id},
-                          headers=headers)
+                          headers=_host(headers))
     assert r.status_code == 200, r.text
     await loop.tick()
     assert loop.state.status == "paused"
     assert StubExecutor.seen == [], "暫停中還在領單"
 
     await client.post(f"/api/runners/{runner_id}/commands",
-                      json={"command": "resume"}, headers=headers)
+                      json={"command": "resume"}, headers=_host(headers))
     await loop.tick()
     assert loop.state.status == "online"
     assert len(StubExecutor.seen) == 1
@@ -351,7 +358,7 @@ async def test_drain_stops_claiming_without_restarting(
     assert await loop.start()
     await create_run(client, room_id, headers)
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "drain"}, headers=headers)
+                      json={"command": "drain"}, headers=_host(headers))
 
     await loop.tick()
 
@@ -372,7 +379,7 @@ async def test_restart_command_waits_for_runs_then_exits_75(
     assert len(loop.active) == 1
 
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "restart"}, headers=headers)
+                      json={"command": "restart"}, headers=_host(headers))
     await loop.tick()
     assert loop.exit_code == 0, "還有 run 在跑就重啟＝把它殺在半路"
 
@@ -391,7 +398,7 @@ async def test_commands_are_taken_once(hub_app, ops_room, runner_hub,
     loop = _loop(cfg, runner_hub)
     assert await loop.start()
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "pause"}, headers=headers)
+                      json={"command": "pause"}, headers=_host(headers))
     first = await loop.heartbeat()
     second = await loop.heartbeat()
     assert [c["command"] for c in first["commands"]] == ["pause"]
@@ -419,7 +426,7 @@ async def test_pause_is_reported_back_without_waiting_a_heartbeat(
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
         json={"command": "pause", "room_id": room_id},
-        headers=headers)).json()["command"]
+        headers=_host(headers))).json()["command"]
 
     await loop.heartbeat()
 
@@ -452,7 +459,7 @@ async def test_restart_reports_waiting_then_restarting(
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
         json={"command": "restart", "room_id": room_id},
-        headers=headers)).json()["command"]
+        headers=_host(headers))).json()["command"]
 
     await loop.tick()
     row = await _command_row(app, cmd["id"])
@@ -492,7 +499,7 @@ async def test_a_waiting_restart_keeps_updating_its_count(
     assert len(loop.active) == 2
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
-        json={"command": "restart"}, headers=headers)).json()["command"]
+        json={"command": "restart"}, headers=_host(headers))).json()["command"]
     await loop.tick()
     assert (await _command_row(app, cmd["id"]))["note"] ==         "等 2 筆 run 結束後重啟"
 
@@ -522,7 +529,7 @@ async def test_the_exit_path_does_not_hang_on_an_unreachable_hub(
     loop = _loop(cfg, runner_hub)
     assert await loop.start()
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "restart"}, headers=headers)
+                      json={"command": "restart"}, headers=_host(headers))
     await loop.heartbeat()
     assert loop.state.restart_pending
 
@@ -697,6 +704,76 @@ async def test_failed_report_on_disk_is_resent_on_the_next_heartbeat(
                               headers=headers)).json()["run"]
     assert final["status"] == "failed"
     assert "沒送出去的那一筆" in (final["result"] or "")
+
+
+def _land(cfg, run_id: str, status: str, result: str) -> "object":
+    """在 run 目錄放一份送不出去的回報，回那個檔案的路徑。"""
+    run_dir = cfg.runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / "report_failed.json"
+    path.write_text(json.dumps(
+        {"run_id": run_id, "status": status, "reason": "boom",
+         "result": result, "claude_session_id": "", "usage": None},
+        ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+async def test_landed_report_is_discarded_when_the_hub_already_settled(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, caplog):
+    """Hub 已經收場（這裡是 cancelled）⇒ 落地回報作廢並刪檔（裁決 09/22）。
+
+    留著它的話，每一次 heartbeat 都會再撞一次同一個 409、再寫一行看起來像
+    故障的 warning，而那筆 run 的結局早就定了，這一筆送不進去也送不出新的
+    意義。
+    """
+    import logging
+
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    run = await create_run(client, room_id, headers)
+    assert await runner_hub.claim() is not None
+    # 人類按了取消，執行器先把它收成 cancelled——Hub 從此沒有下一步
+    await runner_hub.report(run["id"], "cancelled", reason="cancel_requested")
+    path = _land(cfg, run["id"], "done", "來不及送出去的收工")
+
+    with caplog.at_level(logging.WARNING, logger="chatroom_runner.loop"):
+        await loop.heartbeat()
+
+    assert not path.exists(), "Hub 已收場的落地回報要作廢，不能每次心跳重撞"
+    assert any("已經收場為 cancelled" in r.getMessage()
+               for r in caplog.records
+               if r.name == "chatroom_runner.loop"), "作廢要留一行可查的紀錄"
+    # 作廢的是那份檔案，不是 Hub 上的結局
+    final = (await client.get(f"/api/runs/{run['id']}",
+                              headers=headers)).json()["run"]
+    assert final["status"] == "cancelled"
+
+
+async def test_landed_report_is_kept_when_the_hub_has_not_settled(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """Hub 還沒收場（這裡是 queued）的 409 ⇒ **保留**，等下一次心跳再送。
+
+    非終局的 409 多半是這台執行器與 Hub 的狀態暫時對不上（run 被重排回
+    queued、換了一台執行器領走）。把它當成作廢就是把這一輪的結果丟掉。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert await loop.start()
+    # 不領走：Hub 停在 queued，而 `queued → done` 是非法轉移
+    run = await create_run(client, room_id, headers)
+    path = _land(cfg, run["id"], "done", "送不進去的收工")
+
+    await loop.heartbeat()
+
+    assert path.exists(), "非終局的 409 把結果刪掉了"
+    final = (await client.get(f"/api/runs/{run['id']}",
+                              headers=headers)).json()["run"]
+    assert final["status"] == "queued"
 
 
 # ── 維護窗（審查 09/16 Major）───────────────────────────────────
@@ -1242,7 +1319,7 @@ async def test_reload_rereads_the_config_without_touching_running_runs(
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
         json={"command": "reload", "room_id": room_id},
-        headers=headers)).json()["command"]
+        headers=_host(headers))).json()["command"]
     await loop.heartbeat()
 
     assert set(loop.cfg.workspaces) == {"ai-website", "chatroom"}
@@ -1286,7 +1363,7 @@ async def test_reload_reports_the_new_public_projects_to_the_hub(
         "chatroom": {"projects": repos},
     })
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "reload"}, headers=headers)
+                      json={"command": "reload"}, headers=_host(headers))
     await loop.heartbeat()
 
     assert await _hub_projects() == ["chatroom"]
@@ -1310,7 +1387,7 @@ async def test_a_broken_config_is_rejected_and_the_old_one_stays(
     path.write_text("{ 這不是 JSON", encoding="utf-8")
     cmd = (await client.post(
         f"/api/runners/{runner_hub.identity.runner_id}/commands",
-        json={"command": "reload"}, headers=headers)).json()["command"]
+        json={"command": "reload"}, headers=_host(headers))).json()["command"]
     await loop.heartbeat()
 
     assert loop.cfg is before, "重讀失敗還換掉設定＝把執行器弄啞"
@@ -1410,7 +1487,7 @@ async def test_reload_reports_both_lists_again(
         "chatroom": {"projects": repos},
     })
     await client.post(f"/api/runners/{runner_hub.identity.runner_id}/commands",
-                      json={"command": "reload"}, headers=headers)
+                      json={"command": "reload"}, headers=_host(headers))
     await loop.heartbeat()
 
     assert registers[-1] == {"projects": ["chatroom"],

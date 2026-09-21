@@ -392,6 +392,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "不要走派工佇列。",
                 status=status, detail=detail,
             )
+        if code == "runner_not_serving_room":
+            # **不是身分問題**：你確實是人類、確實在房裡，只是這台執行器
+            # 不服務你這間工作房。翻成「請重新加入」會讓人在自己房裡繞，
+            # 而要做的是回到面板列得出這台執行器的那間房
+            return HubError(
+                _detail_text(detail)
+                or "這台執行器沒有服務你所在的工作房——"
+                   "執行器命令只能從面板列得出它的那間工作房下。"
+                   "請確認你帶的 room_id 是綁了這台執行器工作區的 ops 房。",
+                status=status, detail=detail,
+            )
         if code == "kind_not_allowed_for_supervisor":
             # 這一支**不是**「你沒有權限」：呼叫者確實是監督者，只是這個
             # kind 不在它那份清單裡。壓成同一句話會讓它去重新確認身分，

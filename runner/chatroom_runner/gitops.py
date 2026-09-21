@@ -192,18 +192,76 @@ async def ref_exists(repo: Path, ref: str) -> bool:
     return res.ok and bool(res.out)
 
 
-async def resolve_branch(repo: Path, branch: str) -> str:
-    """分支在本機或 origin 上的名字。兩邊都沒有回空字串。
+async def rev_parse(repo: Path, ref: str) -> str:
+    """一個 ref 指到哪一顆。讀不到回空字串。"""
+    res = await git(repo, "rev-parse", "--verify", "--quiet",
+                    f"{ref}^{{commit}}")
+    return res.out if res.ok else ""
 
-    回傳的是**可以直接拿去 merge 的 ref**：本機有就用本機的，只有遠端有就
-    用 ``origin/<b>``。分不開的話，「這條分支不存在」會被寫成「合不起來」。
+
+async def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    """``ancestor`` 是不是 ``descendant`` 的祖先（同一顆也算）。
+
+    ``merge-base --is-ancestor`` 用離開碼回答：0 是、1 不是。其他碼（壞掉的
+    ref、git 起不來）一律當成「不是」——這裡的呼叫端拿它決定要不要合，答不
+    出來時保守處理比猜一個方向安全。
     """
-    if await ref_exists(repo, branch):
-        return branch
-    remote = f"origin/{branch}"
-    if await ref_exists(repo, remote):
-        return remote
-    return ""
+    res = await git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    return res.code == 0
+
+
+@dataclass
+class BranchRef:
+    """``resolve_branch`` 的結果。
+
+    ``ref`` 是**可以直接拿去 merge 的那一條**；兩邊都沒有、或本機與 origin
+    已經分岔時它是空字串，那兩種要靠 ``exists``／``diverged`` 分開——「這條
+    分支不存在」與「兩邊各走各的」的處置完全不同。
+    """
+
+    ref: str = ""
+    local_sha: str = ""
+    remote_sha: str = ""
+    diverged: bool = False
+
+    @property
+    def exists(self) -> bool:
+        """本機或 origin 至少有一邊看得到這條分支。"""
+        return bool(self.ref) or self.diverged
+
+
+async def resolve_branch(repo: Path, branch: str) -> BranchRef:
+    """挑出這條分支**該拿去合的那一顆**（fetch 之後呼叫才有意義）。
+
+    🚨 不能無條件優先本機（審查 09/22）：fetch 回來的 ``origin/<b>`` 比本機
+    新時，用本機的 tip 去合會併進一份**舊的**來源，然後回報成功——人類看到
+    綠燈，而遠端上的那幾顆根本沒上板。所以兩邊都在時比祖先關係：
+
+    - 本機是 ``origin/<b>`` 的祖先（含相同）→ 用 ``origin/<b>``。
+    - ``origin/<b>`` 是本機的祖先 → 用本機（本機領先，多半是剛 commit 完）。
+    - 互不是祖先 ⇒ **分岔**：不挑，回 ``diverged``，由呼叫端收成錯誤。
+      這裡不做判斷（見模組開頭），但「挑哪一邊」在分岔時沒有安全的答案。
+    """
+    local_sha = await rev_parse(repo, branch) if branch else ""
+    remote = f"origin/{branch}" if branch else ""
+    remote_sha = await rev_parse(repo, remote) if branch else ""
+    if not local_sha and not remote_sha:
+        return BranchRef()
+    if not remote_sha:
+        return BranchRef(ref=branch, local_sha=local_sha)
+    if not local_sha:
+        return BranchRef(ref=remote, remote_sha=remote_sha)
+    if local_sha == remote_sha:
+        return BranchRef(ref=branch, local_sha=local_sha,
+                         remote_sha=remote_sha)
+    if await is_ancestor(repo, local_sha, remote_sha):
+        return BranchRef(ref=remote, local_sha=local_sha,
+                         remote_sha=remote_sha)
+    if await is_ancestor(repo, remote_sha, local_sha):
+        return BranchRef(ref=branch, local_sha=local_sha,
+                         remote_sha=remote_sha)
+    return BranchRef(local_sha=local_sha, remote_sha=remote_sha,
+                     diverged=True)
 
 
 async def checkout(repo: Path, branch: str) -> GitResult:

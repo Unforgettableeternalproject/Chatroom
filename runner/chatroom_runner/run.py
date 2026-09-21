@@ -942,8 +942,17 @@ class RunExecutor:
                 result="這筆上板沒有帶 repo 清單（spec.repos 是空的），"
                        "什麼都沒有做。")
         results: list[RepoReleaseResult] = []
-        for entry in entries:
+        skipped_by_cancel: list[str] = []
+        for index, entry in enumerate(entries):
             name = str(entry.get("name"))
+            # 🚨 每個 repo 開工**之前**看一次取消（審查 09/22）：人類按下取消
+            # 的那一刻 heartbeat 會把這個 event 設起來，而上板是逐 repo 的
+            # merge／push。不看的話，剩下的 repo 照樣一個一個被推上 origin——
+            # 按取消的人以為自己停住了它，實際上只停住了畫面
+            if cancel.is_set():
+                skipped_by_cancel = [str(e.get("name"))
+                                     for e in entries[index:]]
+                break
             repo = project.projects.get(name)
             if repo is None:
                 results.append(RepoReleaseResult(
@@ -956,16 +965,29 @@ class RunExecutor:
 
         failed = [r for r in results if r.status == "failed"]
         lines = [self._release_line(r) for r in results]
-        # 報告是「不論成敗」都要派的：上板失敗時房裡更需要一份說明白的紀錄
-        note = await self._release_report(run, project, results, tag,
-                                          objective, cancel)
-        if note:
-            lines.append(note)
         git_fields = {
             # 契約 C3：release 的 repo 是逗號串，head 欄位留空（多個 repo
             # 擠不進一組 sha，逐 repo 的 sha 寫在 result 裡）
             "repo": ",".join(r.name for r in results),
             "branch": "", "head_before": "", "head_after": ""}
+        if skipped_by_cancel:
+            # 已經推上 origin 的**不回滾**：推送不可逆，替人反推比停在這裡
+            # 危險得多。如實寫「動到哪裡為止」
+            lines.append(
+                f"⚠️ 處理完 {len(results)} 個 repo 之後收到取消："
+                f"上面那 {len(results)} 個已經照結果動過（成功的已經推上"
+                " origin，不會回滾），後面的 "
+                + "、".join(skipped_by_cancel)
+                + f" 共 {len(skipped_by_cancel)} 個完全沒動。")
+            lines.append("- 週期報告：這一輪被取消，沒有派報告。")
+            return RunOutcome(
+                "cancelled", reason="cancel_requested",
+                result="\n".join(lines), git=git_fields)
+        # 報告是「不論成敗」都要派的：上板失敗時房裡更需要一份說明白的紀錄
+        note = await self._release_report(run, project, results, tag,
+                                          objective, cancel)
+        if note:
+            lines.append(note)
         if failed:
             return RunOutcome(
                 "failed", reason="release_partial",
@@ -1079,7 +1101,18 @@ class RunExecutor:
                 return
         res.head_before = await gitops.head_sha(repo.path)
 
-        source_ref = await gitops.resolve_branch(repo.path, source)
+        resolved = await gitops.resolve_branch(repo.path, source)
+        if resolved.diverged:
+            # 本機與 origin 各有對方沒有的 commit。挑哪一邊都會漏掉另一邊的
+            # 成果，而漏掉的那幾顆在報告上與「成功上板」長得一模一樣
+            res.reason = "release_source_diverged"
+            res.detail = (
+                f"{source} 的本機與 origin 已經分岔，沒有上板："
+                f"本機 {resolved.local_sha[:8]}、"
+                f"origin/{source} {resolved.remote_sha[:8]}。"
+                "先在本機把兩邊對齊（rebase 或合併並推上去）再重跑上板。")
+            return
+        source_ref = resolved.ref
         if not source_ref:
             res.reason = "release_source_missing"
             res.detail = f"本機與 origin 都沒有分支 {source}，沒有上板。"

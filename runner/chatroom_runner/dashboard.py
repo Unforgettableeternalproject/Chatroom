@@ -78,8 +78,8 @@ async def repo_view(path: Path, push_branches: list[str],
     dirty = await gitops.status_porcelain(path)
     # 上板的目標分支在不在。本機或 origin 有一邊就算——本機還沒有那條分支
     # 是正常的（上板時會從 `origin/<b>` 建），「兩邊都沒有」才是不能上板
-    stable_exists = bool(stable_branch) and bool(
-        await gitops.resolve_branch(path, stable_branch))
+    stable_exists = bool(stable_branch) and (
+        await gitops.resolve_branch(path, stable_branch)).exists
     return {
         "path": str(path),
         "branch": branch,
