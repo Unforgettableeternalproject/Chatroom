@@ -8,10 +8,22 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .procs import no_window_kwargs
+
+# git ref 名的白名單：不以 `-` 開頭、不含空白與 `..`，只放行 `A-Za-z0-9._/-`。
+# 與 Hub 端 `_GIT_REF_PATTERN` 同一條（PM 記憶：一條規則三端實作，有一端不
+# 一樣就湊出死局）；這些值會原樣進 git argv，`-` 開頭就是一個 git 參數。
+_GIT_REF_PATTERN = re.compile(r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]+$")
+
+
+def valid_ref_name(value: str) -> bool:
+    """這個分支名／tag 名能不能安全地放進 git argv。"""
+    return bool(_GIT_REF_PATTERN.match(value or ""))
+
 
 # 未推送清單的格式：sha \x1f 標題 \x1f ISO 時間
 _LOG_FORMAT = "%H%x1f%s%x1f%cI"
@@ -163,3 +175,117 @@ def diff_snapshots(before: RepoSnapshot, after: RepoSnapshot) -> dict:
         "new_dirty": sorted(after_set - before_set),
         "resolved_dirty": sorted(before_set - after_set),
     }
+
+
+# ---------- 上板（release）用的薄包裝 ----------
+#
+# 一樣**不做判斷**：要不要合、合不合得起來由 `run._release` 決定，這裡只負責
+# 把指令跑出來、把輸出切成結構。`extra` 是要插在子指令前的 `-c key=value`
+# 之類的全域參數（推送憑證走這條，見 `run.RunExecutor._push_credential_args`）。
+
+
+async def ref_exists(repo: Path, ref: str) -> bool:
+    """本機看得到這個 ref 嗎。``origin/<b>`` 也走同一條。"""
+    if not ref:
+        return False
+    res = await git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return res.ok and bool(res.out)
+
+
+async def resolve_branch(repo: Path, branch: str) -> str:
+    """分支在本機或 origin 上的名字。兩邊都沒有回空字串。
+
+    回傳的是**可以直接拿去 merge 的 ref**：本機有就用本機的，只有遠端有就
+    用 ``origin/<b>``。分不開的話，「這條分支不存在」會被寫成「合不起來」。
+    """
+    if await ref_exists(repo, branch):
+        return branch
+    remote = f"origin/{branch}"
+    if await ref_exists(repo, remote):
+        return remote
+    return ""
+
+
+async def checkout(repo: Path, branch: str) -> GitResult:
+    """切到既有的本機分支。"""
+    return await git(repo, "checkout", branch)
+
+
+async def checkout_tracking(repo: Path, branch: str) -> GitResult:
+    """本機還沒有這條分支時，從 ``origin/<b>`` 建一條出來並切過去。"""
+    return await git(repo, "checkout", "-b", branch, f"origin/{branch}")
+
+
+async def pull_ff_branch(repo: Path, branch: str,
+                         extra: list[str] | None = None) -> GitResult:
+    return await git(repo, *(extra or []), "pull", "--ff-only", "origin",
+                     branch)
+
+
+async def merge_no_ff(repo: Path, ref: str, message: str) -> GitResult:
+    return await git(repo, "merge", "--no-ff", ref, "-m", message)
+
+
+async def merge_squash(repo: Path, ref: str) -> GitResult:
+    """``merge --squash`` **只把變更放進索引**，commit 要另外下（見 `commit`）。"""
+    return await git(repo, "merge", "--squash", ref)
+
+
+async def merge_ff_only(repo: Path, ref: str) -> GitResult:
+    return await git(repo, "merge", "--ff-only", ref)
+
+
+async def commit(repo: Path, message: str) -> GitResult:
+    return await git(repo, "commit", "-m", message)
+
+
+async def merge_abort(repo: Path) -> GitResult:
+    """把合到一半的狀態收掉。沒有在合併中時 git 會失敗，呼叫端不必在意。"""
+    return await git(repo, "merge", "--abort")
+
+
+async def reset_hard(repo: Path, ref: str) -> GitResult:
+    """``merge --squash`` 撞衝突時沒有 MERGE_HEAD，``merge --abort`` 收不掉，
+    只能硬退回合併前的位置。"""
+    return await git(repo, "reset", "--hard", ref)
+
+
+async def conflicted_files(repo: Path) -> list[str]:
+    res = await git(repo, "diff", "--name-only", "--diff-filter=U")
+    return [line for line in res.out.splitlines() if line.strip()]
+
+
+async def count_commits(repo: Path, base: str, head: str) -> int:
+    """``base..head`` 有幾顆。算不出來回 ``-1``，與「零顆」分得開。"""
+    res = await git(repo, "rev-list", "--count", f"{base}..{head}")
+    if not res.ok or not res.out.isdigit():
+        return -1
+    return int(res.out)
+
+
+async def log_oneline(repo: Path, base: str, head: str,
+                      limit: int = 50) -> list[str]:
+    res = await git(repo, "log", f"-{limit}", "--oneline", f"{base}..{head}")
+    if not res.ok:
+        return []
+    return [line for line in res.out.splitlines() if line.strip()]
+
+
+async def tag_annotated(repo: Path, tag: str, message: str) -> GitResult:
+    return await git(repo, "tag", "-a", tag, "-m", message)
+
+
+async def tag_exists(repo: Path, tag: str) -> bool:
+    res = await git(repo, "tag", "--list", tag)
+    return res.ok and bool(res.out.strip())
+
+
+async def push_ref(repo: Path, ref: str,
+                   extra: list[str] | None = None) -> GitResult:
+    """推一條分支或一個 tag。憑證參數由呼叫端給（push run 那一套）。"""
+    return await git(repo, *(extra or []), "push", "origin", ref)
+
+
+async def fetch_origin(repo: Path, extra: list[str] | None = None
+                       ) -> GitResult:
+    return await git(repo, *(extra or []), "fetch", "origin")

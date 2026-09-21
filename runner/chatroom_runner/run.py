@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -32,7 +33,8 @@ from . import gitops, prompts
 # ＝本機的**工作區**（`WorkspaceConfig`），`repo` 是工作區底下的一個 git
 # **專案**（`ProjectConfig`）。Hub／DB／bridge 的欄位名沒有跟著換
 from .config import (SOFT_STOP_FLAG_NAME, SOFT_STOP_TIMEOUT_FLAG_NAME,
-                     ProjectConfig, RunnerConfig, WorkspaceConfig)
+                     ProjectConfig, RunnerConfig, WorkspaceConfig,
+                     render_template)
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
 from .procs import no_window_kwargs
@@ -65,7 +67,11 @@ DOWNLOADS_DIR_NAME = "downloads"
 # 裡的一份字串，比「一筆 run 從此無人收屍」便宜太多
 STREAM_LINE_LIMIT = 64 * 1024 * 1024
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
-WRITE_KINDS = {"ticket", "stage", "push"}
+WRITE_KINDS = {"ticket", "stage", "push", "release"}
+# 上板之後那一支只做報告的子進程用的 kind。**不是 Hub 的 run kind**：Hub 上
+# 那筆 run 一直是 `release`，這個名字只決定要載哪一份 prompt 模板、以及要給
+# 哪一組工具（不在 WRITE_KINDS 裡 ⇒ 唯讀）
+RELEASE_REPORT_KIND = "release_report"
 # run 物件的 `single_writer`：房間要不要守「同一個 repo 同時只有一個寫入型
 # run」。**缺鍵一律當 True**（現行行為）——這個欄位由 Hub 從房間帶出來，
 # 舊的 Hub 與舊的 run 都不會有它，預設放寬等於默默取消一條安全規則
@@ -393,6 +399,9 @@ class RunOutcome:
     result: str = ""
     usage: dict = field(default_factory=dict)
     claude_session_id: str = ""
+    # 終局回報要帶的結構化 git 欄位（契約 C3）：`repo`／`branch`／
+    # `head_before`／`head_after`。空 dict ＝這筆 run 沒有 repo，不送這一鍵
+    git: dict = field(default_factory=dict)
     # 這一輪要不要順手把整台執行器標成 limited（weekly limit 用）
     runner_limit_reason: str = ""
 
@@ -490,6 +499,53 @@ def project_repos(project: WorkspaceConfig,
     return ordered
 
 
+@dataclass
+class RepoReleaseResult:
+    """一個 repo 的上板結果。
+
+    ``status``：``ok``（併了）／``skipped``（沒東西可併）／``failed``。
+    **跳過不算失敗**——來源分支已經整個在穩定分支裡是個正常結局，把它算成
+    失敗的話，整筆 run 會因為「沒事發生」而變紅。
+    """
+
+    name: str
+    stable: str = ""
+    source: str = ""
+    status: str = "failed"
+    reason: str = ""
+    detail: str = ""
+    head_before: str = ""
+    head_after: str = ""
+    tag: str = ""
+    commits: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "stable": self.stable,
+                "source": self.source, "status": self.status,
+                "reason": self.reason, "detail": self.detail,
+                "head_before": self.head_before,
+                "head_after": self.head_after, "tag": self.tag,
+                "commits": list(self.commits)}
+
+
+def release_entries(run: dict) -> list[dict]:
+    """上板要動的 repo（``spec.repos``），**依名稱排序**。
+
+    順序固定是為了鎖：兩筆上板以不同順序拿同一組 repo 的鎖就是一個死鎖，
+    而它在面板上與「兩筆都在跑」長得一模一樣（同 `RepoLocks.hold` 的理由）。
+    """
+    spec = run.get("spec") or {}
+    entries = [e for e in (spec.get("repos") or [])
+               if isinstance(e, dict) and str(e.get("name") or "").strip()]
+    return sorted(entries, key=lambda e: str(e.get("name")))
+
+
+def release_repo_names(run: dict, project: WorkspaceConfig) -> list[str]:
+    """上板要鎖哪幾個 repo。spec 裡不存在的名字**照樣列**——鎖一個不存在的
+    key 無害，而少鎖一個的代價是別的 run 同時在動它。"""
+    return [str(e.get("name")) for e in release_entries(run)]
+
+
 def _repo_touched(diff: dict) -> bool:
     """這個 repo 這一輪有沒有被動過（新 commit、未提交變更或換分支）。"""
     return bool(diff["head_changed"] or diff["new_dirty"]
@@ -528,6 +584,11 @@ def resolve_repo(run: dict, project: WorkspaceConfig) -> ProjectConfig:
     4. 以上都不成立 ⇒ 失敗。**不猜**：猜錯的代價是在錯的工作樹上 commit。
     """
     repos = project.projects
+    if run.get("kind") == "release":
+        # 上板動的是 `spec.repos` 列的那幾個，不是單一個——落到這裡代表
+        # 呼叫端走錯路徑了，猜一個出來會把整個週期併進錯的 repo
+        raise RunSetupError(
+            "release 的 repo 由 spec.repos 決定，不走單一 repo 解析。")
     if run.get("kind") == "push":
         name = (run.get("ref") or "").strip()
         repo = repos.get(name)
@@ -668,10 +729,31 @@ class RunExecutor:
         try:
             # run["project"] 是 Hub 的 project key ＝ 本機工作區 key
             project = self.cfg.workspace(run["project"])
-            repo = resolve_repo(run, project)
+            # 上板的 repo 清單在 `spec.repos` 裡，不是單一個（契約 C5）
+            repo = (None if run["kind"] == "release"
+                    else resolve_repo(run, project))
         except Exception as exc:
             outcome = RunOutcome("failed", reason="setup_error",
                                  result=str(exc))
+            await self._report(run_id, outcome)
+            return outcome
+
+        if run["kind"] == "release":
+            # 同 push：先回報 running，不然終局的 done／failed 會被 Hub 的
+            # 狀態機擋成 409，而 409 在客戶端是「當成已套用」——上板做完了，
+            # 面板上卻停在領走的樣子
+            await self._report(run_id, RunOutcome("running",
+                                                  reason="release_start"))
+            keys = sorted(
+                f"{project.key}/{name}"
+                for name in release_repo_names(run, project))
+            try:
+                async with self.locks.hold(
+                        keys, run_id=short_id(run_id),
+                        timeout=project.wall_clock_seconds):
+                    outcome = await self._release(run, project, cancel)
+            except RepoLockTimeout as exc:
+                return await self._report_lock_timeout(run_id, project, exc)
             await self._report(run_id, outcome)
             return outcome
 
@@ -787,13 +869,20 @@ class RunExecutor:
                         "請重新整理儀表板再按一次。"))
         res = await gitops.git(repo.path, *self._push_credential_args(),
                                "push", "origin", branch)
+        head = await gitops.head_sha(repo.path)
+        # push 不動 HEAD，但 `git` 欄位的形狀對所有 kind 一致（契約 C3）：
+        # 兩端填同一個 sha，讀的人看得出「這一步沒有產生新 commit」
+        git_fields = {"repo": repo.name, "branch": branch,
+                      "head_before": head, "head_after": head}
         if not res.ok:
             return RunOutcome("failed", reason="push_failed",
-                              result=f"git push 失敗：{res.err or res.out}")
+                              result=f"git push 失敗：{res.err or res.out}",
+                              git=git_fields)
         return RunOutcome(
             "done", reason="pushed",
             result=f"已推送 {repo.name} 的 {branch}，"
-                   f"共 {len(actual)} 顆 commit。")
+                   f"共 {len(actual)} 顆 commit。",
+            git=git_fields)
 
     @staticmethod
     def _push_credential_args() -> list[str]:
@@ -832,6 +921,336 @@ class RunExecutor:
             if not any(a.startswith(want) for a in lowered):
                 return False
         return True
+
+    # ---------- release（git 不經模型，契約 C5）----------
+
+    async def _release(self, run: dict, project: WorkspaceConfig,
+                       cancel: asyncio.Event) -> RunOutcome:
+        """把週期的成果併進各 repo 的穩定分支，然後派一支 agent 做週期報告。
+
+        🚨 **一個 repo 失敗不影響其他 repo**：上板是逐 repo 的動作，第一個
+        撞衝突就整批不做的話，人類要重跑一次已經成功的那幾個。但整筆 run
+        只要有一個失敗就是 `failed`（`release_partial`）——全綠才算全綠。
+        """
+        entries = release_entries(run)
+        spec = run.get("spec") or {}
+        tag = str(spec.get("tag") or "").strip()
+        objective = str(spec.get("objective_title") or "")
+        if not entries:
+            return RunOutcome(
+                "failed", reason="release_spec_missing",
+                result="這筆上板沒有帶 repo 清單（spec.repos 是空的），"
+                       "什麼都沒有做。")
+        results: list[RepoReleaseResult] = []
+        for entry in entries:
+            name = str(entry.get("name"))
+            repo = project.projects.get(name)
+            if repo is None:
+                results.append(RepoReleaseResult(
+                    name=name, status="failed",
+                    reason="release_repo_unknown",
+                    detail=f"{name} 不在工作區 {project.key} 的專案清單裡。"))
+                continue
+            results.append(await self._release_repo(repo, entry, project,
+                                                    tag, objective))
+
+        failed = [r for r in results if r.status == "failed"]
+        lines = [self._release_line(r) for r in results]
+        # 報告是「不論成敗」都要派的：上板失敗時房裡更需要一份說明白的紀錄
+        note = await self._release_report(run, project, results, tag,
+                                          objective, cancel)
+        if note:
+            lines.append(note)
+        git_fields = {
+            # 契約 C3：release 的 repo 是逗號串，head 欄位留空（多個 repo
+            # 擠不進一組 sha，逐 repo 的 sha 寫在 result 裡）
+            "repo": ",".join(r.name for r in results),
+            "branch": "", "head_before": "", "head_after": ""}
+        if failed:
+            return RunOutcome(
+                "failed", reason="release_partial",
+                result="\n".join(lines), git=git_fields)
+        return RunOutcome("done", reason="released",
+                          result="\n".join(lines), git=git_fields)
+
+    @staticmethod
+    def _release_line(r: RepoReleaseResult) -> str:
+        label = {"ok": "成功", "skipped": "跳過", "failed": "失敗"}.get(
+            r.status, r.status)
+        head = f"- {r.name}：{label}"
+        if r.reason:
+            head += f"（{r.reason}）"
+        head += (f"，{r.source} → {r.stable}，"
+                 f"{(r.head_before or '?')[:8]} → {(r.head_after or '?')[:8]}")
+        if r.tag:
+            head += f"，tag {r.tag}"
+        if r.detail:
+            head += f"\n    - {r.detail}"
+        return head
+
+    async def _release_repo(self, repo: ProjectConfig, entry: dict,
+                            project: WorkspaceConfig, tag: str,
+                            objective: str) -> RepoReleaseResult:
+        """一個 repo 的上板。**切回原分支放在 finally**：中途失敗時工作樹
+        留在穩定分支上，下一輪 run 會在一條沒有人打算工作的分支上動工。"""
+        stable = str(entry.get("stable_branch")
+                     or repo.stable_branch or "").strip()
+        source = str(entry.get("source_branch") or "").strip()
+        res = RepoReleaseResult(name=repo.name, stable=stable, source=source)
+        if not stable:
+            res.reason = "release_stable_not_set"
+            res.detail = f"{repo.name} 沒有設穩定分支，沒有上板。"
+            return res
+        if not source:
+            res.reason = "release_source_not_set"
+            res.detail = f"{repo.name} 沒有指定來源分支，沒有上板。"
+            return res
+        if source == stable:
+            res.reason = "release_source_is_stable"
+            res.detail = f"來源分支與穩定分支同為 {stable}，沒有上板。"
+            return res
+        # 🚨 這三個值會原樣進 git argv（merge／tag／push／rev-parse），前面
+        # 沒有 `--` 擋著：`-` 開頭的值就是一個 git 參數。組任何 git 指令
+        # **之前**先擋掉，白名單與 Hub 端 `_GIT_REF_PATTERN` 同一條
+        bad = [(label, value)
+               for label, value in (("stable_branch", stable),
+                                    ("source_branch", source),
+                                    ("tag", tag))
+               if value and not gitops.valid_ref_name(value)]
+        if bad:
+            res.reason = "release_ref_invalid"
+            res.detail = ("名稱不合法（不能以 `-` 開頭、不能含 `..` 或"
+                          "其他字元），沒有上板：" + "、".join(
+                              f"{label}＝{value}" for label, value in bad))
+            return res
+
+        cred = self._push_credential_args()
+        fetched = await gitops.fetch_origin(repo.path, cred)
+        if not fetched.ok:
+            res.reason = "release_fetch_failed"
+            res.detail = f"git fetch origin 失敗：{fetched.err or fetched.out}"
+            return res
+        dirty = await gitops.status_porcelain(repo.path)
+        if dirty:
+            res.reason = "release_dirty"
+            res.detail = (f"工作樹有 {len(dirty)} 個未提交的變更，沒有上板。"
+                          "未提交的東西不是這次週期的成果，不能替人決定。")
+            return res
+
+        original = await gitops.current_branch(repo.path)
+        if await gitops.ref_exists(repo.path, stable):
+            co = await gitops.checkout(repo.path, stable)
+        elif await gitops.ref_exists(repo.path, f"origin/{stable}"):
+            co = await gitops.checkout_tracking(repo.path, stable)
+        else:
+            res.reason = "release_stable_missing"
+            res.detail = f"本機與 origin 都沒有分支 {stable}，沒有上板。"
+            return res
+        if not co.ok:
+            res.reason = "release_checkout_failed"
+            res.detail = f"git checkout {stable} 失敗：{co.err or co.out}"
+            return res
+        try:
+            await self._release_on_stable(repo, project, res, tag, objective,
+                                          cred)
+        finally:
+            if original and original != stable:
+                back = await gitops.checkout(repo.path, original)
+                if not back.ok:
+                    # 切不回去要**寫進結果**：下一輪 run 會在穩定分支上開工，
+                    # 而那個症狀離這裡很遠
+                    res.detail = (res.detail + "\n" if res.detail else "") + (
+                        f"⚠️ 切回原分支 {original} 失敗："
+                        f"{back.err or back.out}")
+        return res
+
+    async def _release_on_stable(self, repo: ProjectConfig,
+                                 project: WorkspaceConfig,
+                                 res: RepoReleaseResult, tag: str,
+                                 objective: str, cred: list[str]) -> None:
+        """已經站在穩定分支上之後的步驟。結果寫回 ``res``。"""
+        stable, source = res.stable, res.source
+        if await gitops.ref_exists(repo.path, f"origin/{stable}"):
+            pulled = await gitops.pull_ff_branch(repo.path, stable, cred)
+            if not pulled.ok:
+                res.reason = "release_pull_failed"
+                res.detail = (f"git pull --ff-only origin {stable} 失敗："
+                              f"{pulled.err or pulled.out}")
+                return
+        res.head_before = await gitops.head_sha(repo.path)
+
+        source_ref = await gitops.resolve_branch(repo.path, source)
+        if not source_ref:
+            res.reason = "release_source_missing"
+            res.detail = f"本機與 origin 都沒有分支 {source}，沒有上板。"
+            return
+        values = {"source": source, "stable": stable, "objective": objective,
+                  "date": datetime.now().strftime("%m/%d"), "tag": tag,
+                  "repo": repo.name}
+        ahead = await gitops.count_commits(repo.path, "HEAD", source_ref)
+        if ahead == 0:
+            # 🚨 這不是失敗：來源分支已經整個在穩定分支裡，沒有東西可併
+            res.status = "skipped"
+            res.reason = "release_nothing_to_merge"
+            res.head_after = res.head_before
+            landed = f"{source} 沒有 {stable} 以外的新 commit"
+            res.detail = landed + "。"
+            if not tag:
+                return
+            # 穩定分支的 HEAD 已經包含來源分支了 ⇒ tag 照打。沒有東西可併
+            # 不代表這個週期不需要一個指得回去的名字
+            if await self._release_tag(repo, project, res, tag, values,
+                                       objective, cred, landed):
+                res.reason = "release_nothing_to_merge"
+                res.detail = f"{landed}，已打 tag {tag}。"
+            else:
+                res.status = "failed"
+            return
+        commits = await gitops.log_oneline(repo.path, "HEAD", source_ref)
+
+        method = project.release.merge_method
+        message = render_template(project.release.merge_message, values)
+        if method == "squash":
+            merged = await gitops.merge_squash(repo.path, source_ref)
+            if merged.ok:
+                merged = await gitops.commit(repo.path, message)
+        elif method == "ff_only":
+            merged = await gitops.merge_ff_only(repo.path, source_ref)
+        else:
+            merged = await gitops.merge_no_ff(repo.path, source_ref, message)
+        if not merged.ok:
+            conflicts = await gitops.conflicted_files(repo.path)
+            if method == "squash":
+                # squash 撞衝突時沒有 MERGE_HEAD，`merge --abort` 收不掉
+                await gitops.reset_hard(repo.path, res.head_before)
+            else:
+                await gitops.merge_abort(repo.path)
+            if method == "ff_only":
+                res.reason = "release_ff_not_possible"
+                res.detail = (f"{source} 沒辦法快轉進 {stable}："
+                              f"{merged.err or merged.out}")
+                return
+            res.reason = ("release_merge_conflict" if conflicts
+                          else "release_merge_failed")
+            res.detail = (f"合併失敗，已還原 {stable}："
+                          f"{merged.err or merged.out}")
+            if conflicts:
+                res.detail += "\n    - 衝突檔案：" + "、".join(conflicts[:20])
+            return
+        res.head_after = await gitops.head_sha(repo.path)
+        res.commits = commits
+
+        pushed = await gitops.push_ref(repo.path, stable, cred)
+        if not pushed.ok:
+            res.reason = "release_push_failed"
+            res.detail = (f"已在本機併進 {stable}，但 git push 失敗："
+                          f"{pushed.err or pushed.out}")
+            return
+        if not tag:
+            res.status = "ok"
+            return
+        if await self._release_tag(repo, project, res, tag, values, objective,
+                                   cred, f"已併進 {stable} 並推送"):
+            res.status = "ok"
+
+    async def _release_tag(self, repo: ProjectConfig,
+                           project: WorkspaceConfig, res: RepoReleaseResult,
+                           tag: str, values: dict, objective: str,
+                           cred: list[str], landed: str) -> bool:
+        """打 tag 並推 tag。成功回 ``True``，失敗把原因寫進 ``res`` 回 False。
+
+        ``landed`` 是「git 這邊已經做完什麼」的一句話：tag 的失敗要**如實**
+        寫出穩定分支被動過了沒，只報「失敗」的話，看報告的人會以為什麼都
+        沒發生。
+        """
+        if await gitops.tag_exists(repo.path, tag):
+            res.reason = "release_tag_exists"
+            res.detail = f"{landed}，但 tag {tag} 早就存在，沒有重打。"
+            return False
+        tag_message = render_template(
+            project.release.tag_message, values) or objective
+        tagged = await gitops.tag_annotated(repo.path, tag, tag_message)
+        if not tagged.ok:
+            res.reason = "release_tag_failed"
+            res.detail = f"{landed}，但打 tag 失敗：{tagged.err or tagged.out}"
+            return False
+        tag_pushed = await gitops.push_ref(repo.path, tag, cred)
+        if not tag_pushed.ok:
+            res.tag = tag
+            res.reason = "release_tag_push_failed"
+            res.detail = (f"{landed}，tag {tag} 也打了，但推 tag 失敗："
+                          f"{tag_pushed.err or tag_pushed.out}")
+            return False
+        res.tag = tag
+        return True
+
+    async def _release_report(self, run: dict, project: WorkspaceConfig,
+                              results: list[RepoReleaseResult], tag: str,
+                              objective: str,
+                              cancel: asyncio.Event) -> str:
+        """上板之後派一支 agent 做週期報告。回一句要接在 result 後面的附註。
+
+        **報告失敗不改變上板的成敗**：git 已經做完了，報告只是把它說給房裡
+        聽。把它算進 run 的狀態的話，一個沒連上的 MCP 會讓一次成功的上板
+        看起來像失敗。
+        """
+        run_id = run["id"]
+        spec = run.get("spec") or {}
+        repo = next((project.projects[r.name] for r in results
+                     if r.name in project.projects), None)
+        if repo is None:
+            return "- 週期報告：沒有可用的 repo 當工作目錄，沒有派報告。"
+        run_dir = self.cfg.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self._write_run_files(run_dir, run, repo, project)
+        env = self._child_env(run, run_dir)
+        branch = await gitops.current_branch(repo.path)
+        repos = project_repos(project, repo)
+        fields = {
+            "run_id": run_id,
+            "room_id": str(spec.get("room_id") or run.get("room_id", "")),
+            "kind": RELEASE_REPORT_KIND, "project": project.key,
+            "ref": run.get("ref", ""), "repo": repo.name,
+            "cwd": str(repo.path), "branch": branch,
+            "allowed_branches": "、".join(repo.allowed_branches),
+            "repos_block": prompts.repos_block([
+                {"name": item.name, "path": str(item.path),
+                 "branch": "", "allowed_branches": list(item.allowed_branches),
+                 "primary": item.name == repo.name}
+                for item in repos]),
+            "repo_names": "、".join(item.name for item in repos),
+            "objective_title": objective or run.get("ref", ""),
+            "release_results": prompts.release_results_block(
+                [r.to_dict() for r in results]),
+            "release_tag": tag or "無",
+            "skills_block": "",
+            "primary_skill_block": prompts.primary_skill_block(
+                project.primary_skill),
+            "livetest_block": "",
+        }
+        try:
+            prompt = prompts.build(RELEASE_REPORT_KIND, fields,
+                                   run.get("brief", ""), self.prompt_dir)
+            contract = prompts.build_contract(fields, self.prompt_dir)
+        except FileNotFoundError as exc:
+            log.error("run %s 的週期報告模板讀不到：%s", run_id, exc)
+            return f"- 週期報告：模板讀不到，沒有派報告（{exc}）。"
+        argv = self._argv(prompt, contract, project, run_dir, "",
+                          RELEASE_REPORT_KIND)
+        watcher = StreamWatcher(
+            project.context_soft_limit_tokens,
+            rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
+            monotonic=self.monotonic, on_event=self.mark_activity)
+        code, stop = await self._spawn(argv, repo.path, env, watcher,
+                                       run_dir, project.wall_clock_seconds,
+                                       cancel)
+        state = watcher.state
+        self.context_peak = max(self.context_peak, state.peak_context_tokens)
+        self._record_usage(run_id, state)
+        if code != 0 or stop != "exited" or state.is_error:
+            return (f"- 週期報告：agent 沒有正常收工（exit {code}、{stop}），"
+                    "房裡可能沒有那份報告。")
+        return "- 週期報告：已派 agent 發到房裡。"
 
     # ---------- claude run ----------
 
@@ -1027,6 +1446,14 @@ class RunExecutor:
                      for item in repos}
             outcome.result = self._compose_result(state, run_dir, before,
                                                   after, sync_notes)
+            # 契約 C3：終局回報帶結構化的 git 欄位。主工作目錄那一個——
+            # 「本週期 commit 過的 repo」是 Hub 用這組欄位判的，多 repo 的
+            # 細節照舊寫在 result 的附註裡
+            outcome.git = {
+                "repo": repo.name,
+                "branch": after[repo.name].branch,
+                "head_before": before[repo.name].head,
+                "head_after": after[repo.name].head}
             if outcome.reason == MCP_UNAVAILABLE_REASON:
                 outcome.result = (
                     f"chatroom MCP 在 {mcp_attempt + 1} 次嘗試內都沒有連上"
@@ -1438,7 +1865,8 @@ class RunExecutor:
                     run_id, outcome.status, result=outcome.result,
                     reason=outcome.reason,
                     claude_session_id=outcome.claude_session_id,
-                    usage=outcome.usage or None)
+                    usage=outcome.usage or None,
+                    git=outcome.git or None)
                 return True
             except HubError as exc:
                 last = exc
@@ -1456,6 +1884,9 @@ class RunExecutor:
                    "reason": outcome.reason, "result": outcome.result,
                    "claude_session_id": outcome.claude_session_id,
                    "usage": outcome.usage or None,
+                   # 落地的回報補送時也要帶 git 欄位，不然重送回去的那一筆
+                   # 會把 Hub 上的欄位洗成空的
+                   "git": outcome.git or None,
                    "error": str(error) if error else ""}
         try:
             run_dir.mkdir(parents=True, exist_ok=True)

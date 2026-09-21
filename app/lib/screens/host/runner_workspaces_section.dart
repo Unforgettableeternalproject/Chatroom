@@ -145,6 +145,16 @@ String runnerErrorText(Object error, AppLocalizations l10n) {
   return l10n.hostRunnerWriteFailed('$error');
 }
 
+/// 合併方式 → 看得懂的名字。契約值（`merge`／`squash`／`ff_only`）不翻，
+/// 翻的是給人看的那一層；認不得的原樣顯示。
+String runnerMergeMethodLabel(AppLocalizations l10n, String method) =>
+    switch (method) {
+      'merge' => l10n.hostRunnerMergeMerge,
+      'squash' => l10n.hostRunnerMergeSquash,
+      'ff_only' => l10n.hostRunnerMergeFfOnly,
+      _ => method,
+    };
+
 /// 路徑的最後一段，拿來當專案的預設名稱。
 String _lastSegment(String path) {
   final parts = path
@@ -197,6 +207,20 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
   /// 分支都不允許」**：只顯示規則的話，被擋住的人在畫面上找不到能改的地方。
   final _branchFields = <String, TextEditingController>{};
 
+  /// 專案名 → 那一列的穩定分支欄（`stable_branch`）。
+  ///
+  /// 空的意思是**這個 repo 不參與上板**，不是「用預設分支」——所以它與
+  /// `allowed_branches` 一樣要在畫面上編得到，不然人只會看到週期確認時
+  /// 那個 repo 不可勾，而找不到能改的地方。
+  final _stableFields = <String, TextEditingController>{};
+
+  /// 上板設定（工作區層）。
+  late String _mergeMethod = widget.workspace.release.mergeMethod;
+  late final _mergeMessage =
+      TextEditingController(text: widget.workspace.release.mergeMessage);
+  late final _tagMessage =
+      TextEditingController(text: widget.workspace.release.tagMessage);
+
   /// 0 ＝ 沒設，欄位就留空（空的意思是「沿用執行器的預設」，不是 0）。
   static String _num(num value) {
     if (value <= 0) return '';
@@ -216,6 +240,11 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
     for (final c in _branchFields.values) {
       c.dispose();
     }
+    for (final c in _stableFields.values) {
+      c.dispose();
+    }
+    _mergeMessage.dispose();
+    _tagMessage.dispose();
     super.dispose();
   }
 
@@ -225,6 +254,36 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
           name,
           () => TextEditingController(
               text: project.allowedBranches.join(', ')));
+
+  /// 某一列的穩定分支欄。
+  TextEditingController _stableField(String name, RunnerProject project) =>
+      _stableFields.putIfAbsent(
+          name, () => TextEditingController(text: project.stableBranch));
+
+  /// 穩定分支欄被改過的專案：名稱 → 新的值。沒動過的不在裡面。
+  Map<String, String> get _stableEdits {
+    final edits = <String, String>{};
+    for (final e in widget.workspace.projects.entries) {
+      final field = _stableFields[e.key];
+      if (field == null) continue;
+      final next = field.text.trim();
+      if (next != e.value.stableBranch) edits[e.key] = next;
+    }
+    return edits;
+  }
+
+  RunnerRelease get _releaseValue => RunnerRelease(
+        mergeMethod: _mergeMethod,
+        mergeMessage: _mergeMessage.text.trim(),
+        tagMessage: _tagMessage.text.trim(),
+      );
+
+  bool get _releaseDirty {
+    final now = widget.workspace.release;
+    return _mergeMethod != now.mergeMethod ||
+        _mergeMessage.text.trim() != now.mergeMessage ||
+        _tagMessage.text.trim() != now.tagMessage;
+  }
 
   /// 分支欄被改過的專案：名稱 → 新的清單。沒動過的不在裡面。
   Map<String, List<String>> get _branchEdits {
@@ -260,7 +319,9 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
       _wallClockValue != widget.workspace.wallClockSeconds ||
       _contextWindowValue != widget.workspace.contextWindowTokens ||
       !_sameList(_skillDirs, widget.workspace.skillDirs) ||
-      _branchEdits.isNotEmpty;
+      _branchEdits.isNotEmpty ||
+      _stableEdits.isNotEmpty ||
+      _releaseDirty;
 
   static bool _sameList(List<String> a, List<String> b) {
     if (a.length != b.length) return false;
@@ -291,6 +352,7 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
         wallClockSeconds: _wallClockValue,
         contextWindowTokens: _contextWindowValue,
         skillDirs: _skillDirs,
+        release: _releaseDirty ? _releaseValue : null,
       );
       if (_primarySkill != widget.workspace.primarySkill) {
         await setRunnerPrimarySkill(
@@ -299,12 +361,16 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
           skill: _primarySkill,
         );
       }
-      for (final e in _branchEdits.entries) {
+      // 同一個專案的兩欄一起寫，省掉一次重讀（每次寫入都要拿剛寫完的那份）
+      final branchEdits = _branchEdits;
+      final stableEdits = _stableEdits;
+      for (final name in {...branchEdits.keys, ...stableEdits.keys}) {
         await saveRunnerProject(
           await _reread(),
           workspaceKey: widget.workspace.key,
-          name: e.key,
-          allowedBranches: e.value,
+          name: name,
+          allowedBranches: branchEdits[name],
+          stableBranch: stableEdits[name],
         );
       }
     } on Object catch (e) {
@@ -437,6 +503,7 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
                           _projects(s, l10n, widget.workspace)),
                       _block(s, l10n.hostRunnerSkillDirs, _skills(s, l10n)),
                       _block(s, l10n.settingsTitle, _settings(s, l10n)),
+                      _block(s, l10n.hostRunnerRelease, _release(s, l10n)),
                       Align(
                         alignment: Alignment.centerRight,
                         child: UepButton(
@@ -626,6 +693,15 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
                   trailingSlots: 0,
                   onChanged: (_) => setState(() {}),
                 ),
+                const SizedBox(height: 6),
+                EditRow(
+                  label: l10n.hostRunnerStableBranch,
+                  controller: _stableField(name, project),
+                  enabled: !_saving,
+                  hint: l10n.hostRunnerStableBranchHint,
+                  trailingSlots: 0,
+                  onChanged: (_) => setState(() {}),
+                ),
                 // 🔴 空著不是「不限制」：執行器會判定目前分支不在清單裡而
                 // 退出，而那件事發生在畫面看不到的地方
                 if (_parseBranches(branches.text).isEmpty) ...[
@@ -811,6 +887,55 @@ class _RunnerWorkspaceCardState extends ConsumerState<_RunnerWorkspaceCard> {
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  /// 上板設定：合併方式＋兩個訊息模板。
+  ///
+  /// 穩定分支不在這裡——那是**每個專案**自己的事，在專案子卡上。
+  Widget _release(UepSurface s, AppLocalizations l10n) {
+    const fields = '{source} {stable} {objective} {date} {tag} {repo}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            SizedBox(
+              width: 140,
+              child: Text(l10n.hostRunnerMergeMethod,
+                  style: UepText.fieldLabel(color: s.inkMute)),
+            ),
+            Expanded(
+              child: DropdownButton<String>(
+                value: _mergeMethod,
+                isExpanded: true,
+                underline: const SizedBox.shrink(),
+                style: UepText.serif(size: 14, color: s.ink),
+                dropdownColor: s.bgSoft,
+                items: [
+                  for (final m in kRunnerMergeMethods)
+                    DropdownMenuItem(
+                      value: m,
+                      child: Text(runnerMergeMethodLabel(l10n, m),
+                          style: UepText.serif(size: 14, color: s.ink)),
+                    ),
+                ],
+                onChanged: _saving
+                    ? null
+                    : (v) => setState(
+                        () => _mergeMethod = v ?? kRunnerMergeMethods.first),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        // 僅快轉不產生合併 commit，訊息模板對它沒有作用
+        if (_mergeMethod != 'ff_only')
+          _field(l10n.hostRunnerMergeMessage, _mergeMessage),
+        _field(l10n.hostRunnerTagMessage, _tagMessage),
+        Text(l10n.hostRunnerReleaseTemplateHint(fields),
+            style: UepText.serif(size: 12, color: s.inkMute, height: 1.5)),
       ],
     );
   }

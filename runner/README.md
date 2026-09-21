@@ -82,6 +82,8 @@
 | `workspaces.<key>.projects.<name>.path` | 專案（git 工作樹）路徑。**cwd 由這裡決定，brief 說了不算**；不是 git repo（找不到 `.git`）的專案在載入時被排除，並在自檢與 log 點名 |
 | `workspaces.<key>.projects.<name>.allowed_branches` | 可以停留／切換的分支 |
 | `workspaces.<key>.projects.<name>.push_branches` | `push` run 可以推的分支 |
+| `workspaces.<key>.projects.<name>.stable_branch` | 上板（release）要併進去的穩定分支，通常 `main`／`master`。**留空＝這個 repo 不參與上板**，不是「預設用 main」——猜一個出來的代價是把一個週期併進一條沒有人打算上板的分支 |
+| `workspaces.<key>.release` | 這個工作區怎麼上板（每個工作區自己一套）。`merge_method` 只吃 `merge`（`--no-ff`）／`squash`／`ff_only`，不認得的值載入時退回 `merge` 並記 log；`merge_message` 是合併 commit 的訊息模板（`ff_only` 不用）；`tag_message` 是 `git tag -a` 的訊息模板，留空時用週期標題。模板的佔位符：`{source}`、`{stable}`、`{objective}`、`{date}`（`MM/DD`）、`{tag}`、`{repo}`，**不認得的佔位符渲染成空字串**（模板是人在 App 上打的，打錯一個鍵不該讓上板炸在渲染那一步） |
 | `workspaces.<key>.default_project` | 沒指名專案時用哪一個 |
 | `workspaces.<key>.primary_skill` | 這個工作區**不分 kind**都要開工先載入的 skill（至多一個）。驗證與 `skills` 同一套（缺 `SKILL.md` 就是設定錯誤），名字一樣進 `--allowedTools` 的 `Skill(<name>)`，並寫進契約 |
 | `workspaces.<key>.skill_dirs` | 起 claude 時每個加一個 `--add-dir`。專案的 skill 放在 cwd 的**上一層**時（cwd 自己是子 repo，skill 發現只往上找到 git root），沒有這個設定就掃不到。啟動自檢驗目錄存在 |

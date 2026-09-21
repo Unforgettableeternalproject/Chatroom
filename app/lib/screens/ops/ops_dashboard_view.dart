@@ -1120,13 +1120,18 @@ class _RunStatusChip extends StatelessWidget {
       _ => runStatusLabel(context, run),
     };
 
-/// kind → 中文。沿用派工模板那一份對照；`push` 不在模板裡（它是儀表板按出來
-/// 的，見 [kRunTemplates]），所以單獨補。認不得的原樣顯示。
+/// kind → 中文。沿用派工模板那一份對照；`push` 與 `release` 不在模板裡
+/// （一個是儀表板按出來的、一個是週期確認按出來的，見 [kRunTemplates]），
+/// 所以單獨補。認不得的原樣顯示。
 String runKindLabel(String kind) {
   for (final t in kRunTemplates) {
     if (t.kind == kind) return t.label;
   }
-  return kind == 'push' ? L10n.current.opsPush : kind;
+  return switch (kind) {
+    'push' => L10n.current.opsPush,
+    'release' => L10n.current.opsRelease,
+    _ => kind,
+  };
 }
 
 /// 最近結束卡片上的摘要節錄：去掉標題行，最多 [maxLines] 行、[maxChars] 字。

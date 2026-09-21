@@ -21,6 +21,7 @@ import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
 import '../ops/ops_actions.dart';
 import 'board_outcome_dialog.dart';
+import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_task_drawer.dart';
 import 'board_task_edit_dialog.dart';
@@ -1187,8 +1188,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveVerify,
               accent: true,
-              onTap: () => runBoardAction(
-                  context, () => actions.verifyObjective(o.id)),
+              // 確認走對話框：這一步可以順便上板，而「能不能上板」要先問過
+              // Hub（見 showObjectiveVerifyDialog）。失敗的話在對話框裡講，
+              // 不用 runBoardAction 那層 snackbar
+              onTap: () => showObjectiveVerifyDialog(context,
+                  actions: actions, objectiveId: o.id),
             ),
           ] else if (o.status == 'verified')
             _BarButton(

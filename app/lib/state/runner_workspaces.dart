@@ -24,6 +24,7 @@ class RunnerProject {
     required this.path,
     this.allowedBranches = const [],
     this.pushBranches = const [],
+    this.stableBranch = '',
   });
 
   /// repo 的絕對路徑。
@@ -35,6 +36,15 @@ class RunnerProject {
   /// 允許推上去的分支；空＝不允許推。
   final List<String> pushBranches;
 
+  /// 上板要併進去的那條分支（通常 main／master）。
+  ///
+  /// **空＝這個 repo 不參與上板**，不是「用預設分支」：週期確認時它會列在
+  /// 候選裡但不可勾，畫面上寫「未設穩定分支」。
+  final String stableBranch;
+
+  /// 這個 repo 上不上得了板。判準就是穩定分支有沒有設。
+  bool get eligibleForRelease => stableBranch.isNotEmpty;
+
   factory RunnerProject.fromJson(Object? json) {
     // 舊設定有人把值直接寫成路徑字串，不是物件
     if (json is String) return RunnerProject(path: json);
@@ -43,6 +53,7 @@ class RunnerProject {
       path: json['path']?.toString() ?? '',
       allowedBranches: _stringList(json['allowed_branches']),
       pushBranches: _stringList(json['push_branches']),
+      stableBranch: json['stable_branch']?.toString() ?? '',
     );
   }
 
@@ -50,8 +61,55 @@ class RunnerProject {
         'path': path,
         if (allowedBranches.isNotEmpty) 'allowed_branches': allowedBranches,
         if (pushBranches.isNotEmpty) 'push_branches': pushBranches,
+        if (stableBranch.isNotEmpty) 'stable_branch': stableBranch,
       };
 }
+
+/// 工作區層級的上板設定（`config.json` 的 `release`）。
+///
+/// 合併方式與訊息模板**每個工作區自己設**（艾斯維爾 09/21 裁決）：同一台
+/// 執行器上兩個工作區的流程本來就可以不一樣。
+@immutable
+class RunnerRelease {
+  const RunnerRelease({
+    // 預設就是 kRunnerMergeMethods 的第一個；const 建構子取不到 `.first`
+    this.mergeMethod = 'merge',
+    this.mergeMessage = '',
+    this.tagMessage = '',
+  });
+
+  /// `merge`（`--no-ff`）／`squash`／`ff_only`。
+  final String mergeMethod;
+
+  /// 合併 commit 的訊息模板；空＝用執行器的預設。`ff_only` 用不到它。
+  final String mergeMessage;
+
+  /// `git tag -a` 的訊息模板；空＝用週期標題。
+  final String tagMessage;
+
+  /// 不合法的 `merge_method` 退回預設——執行器那側也是同一條規則，
+  /// 兩邊不一樣的話，畫面顯示的合併方式與實際跑的會是兩件事。
+  factory RunnerRelease.fromJson(Object? json) {
+    if (json is! Map) return const RunnerRelease();
+    final method = json['merge_method']?.toString() ?? '';
+    return RunnerRelease(
+      mergeMethod: kRunnerMergeMethods.contains(method)
+          ? method
+          : kRunnerMergeMethods.first,
+      mergeMessage: json['merge_message']?.toString() ?? '',
+      tagMessage: json['tag_message']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'merge_method': mergeMethod,
+        if (mergeMessage.isNotEmpty) 'merge_message': mergeMessage,
+        if (tagMessage.isNotEmpty) 'tag_message': tagMessage,
+      };
+}
+
+/// 合併方式的契約值。第一個是預設。
+const List<String> kRunnerMergeMethods = ['merge', 'squash', 'ff_only'];
 
 /// `config.json` 裡的一個工作區。
 ///
@@ -75,6 +133,7 @@ class RunnerWorkspace {
     this.defaultProject = '',
     this.projects = const {},
     this.extraWriteDirs = const [],
+    this.release = const RunnerRelease(),
   });
 
   final String key;
@@ -108,6 +167,9 @@ class RunnerWorkspace {
 
   final List<String> extraWriteDirs;
 
+  /// 上板設定（`release`）。檔案裡沒寫就是一組預設值。
+  final RunnerRelease release;
+
   /// 新鍵優先、舊鍵退回：`projects`←`repos`、`default_project`←`default_repo`。
   factory RunnerWorkspace.fromJson(String key, Map<String, dynamic> json) {
     final projectsRaw = json['projects'] ?? json['repos'];
@@ -135,6 +197,7 @@ class RunnerWorkspace {
           (json['default_project'] ?? json['default_repo'])?.toString() ?? '',
       projects: projects,
       extraWriteDirs: _stringList(json['extra_write_dirs']),
+      release: RunnerRelease.fromJson(json['release']),
     );
   }
 
@@ -156,6 +219,7 @@ class RunnerWorkspace {
           for (final e in projects.entries) e.key: e.value.toJson(),
         },
         if (extraWriteDirs.isNotEmpty) 'extra_write_dirs': extraWriteDirs,
+        'release': release.toJson(),
       };
 }
 
@@ -368,6 +432,7 @@ Future<void> saveRunnerWorkspace(
   List<String>? skillDirs,
   List<String>? extraWriteDirs,
   String? defaultProject,
+  RunnerRelease? release,
 }) async {
   await _mutate(cfg, (raw) async {
     final ws = _workspaceRaw(raw, workspaceKey);
@@ -396,6 +461,19 @@ Future<void> saveRunnerWorkspace(
     }
     if (skillDirs != null) ws['skill_dirs'] = skillDirs;
     if (extraWriteDirs != null) ws['extra_write_dirs'] = extraWriteDirs;
+    if (release != null) {
+      // 同一條規矩：只動被碰到的鍵。`release` 底下這一版還不認得的欄位
+      // （執行器之後加的）原樣留著
+      final entry = ws['release'] is Map
+          ? (ws['release'] as Map).cast<String, dynamic>()
+          : <String, dynamic>{};
+      entry['merge_method'] = release.mergeMethod;
+      _put(entry, 'merge_message',
+          release.mergeMessage.isEmpty ? null : release.mergeMessage);
+      _put(entry, 'tag_message',
+          release.tagMessage.isEmpty ? null : release.tagMessage);
+      ws['release'] = entry;
+    }
     if (defaultProject != null) {
       if (defaultProject.isEmpty) {
         ws.remove('default_project');
@@ -600,6 +678,7 @@ Future<void> saveRunnerProject(
   required String name,
   List<String>? allowedBranches,
   List<String>? pushBranches,
+  String? stableBranch,
 }) async {
   await _mutate(cfg, (raw) async {
     final ws = _workspaceRaw(raw, workspaceKey);
@@ -618,6 +697,11 @@ Future<void> saveRunnerProject(
     }
     if (pushBranches != null) {
       _put(entry, 'push_branches', pushBranches.isEmpty ? null : pushBranches);
+    }
+    if (stableBranch != null) {
+      // 空字串＝不參與上板，那就把鍵清掉（回到「檔案裡沒寫」）
+      _put(entry, 'stable_branch',
+          stableBranch.trim().isEmpty ? null : stableBranch.trim());
     }
     projects[name] = entry;
   });

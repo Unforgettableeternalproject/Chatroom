@@ -7378,5 +7378,142 @@
         "type": "String"
       }
     }
+  },
+  "hostRunnerRelease": "上板",
+  "@hostRunnerRelease": {
+    "description": "執行器工作區卡的上板設定區塊標題"
+  },
+  "hostRunnerMergeMethod": "合併方式",
+  "@hostRunnerMergeMethod": {
+    "description": "上板時怎麼把來源分支併進穩定分支"
+  },
+  "hostRunnerMergeMerge": "合併 commit",
+  "@hostRunnerMergeMerge": {
+    "description": "merge_method = merge"
+  },
+  "hostRunnerMergeSquash": "squash",
+  "@hostRunnerMergeSquash": {
+    "description": "merge_method = squash"
+  },
+  "hostRunnerMergeFfOnly": "僅快轉",
+  "@hostRunnerMergeFfOnly": {
+    "description": "merge_method = ff_only"
+  },
+  "hostRunnerMergeMessage": "合併訊息",
+  "@hostRunnerMergeMessage": {
+    "description": "合併 commit 的訊息模板"
+  },
+  "hostRunnerTagMessage": "tag 訊息",
+  "@hostRunnerTagMessage": {
+    "description": "git tag -a 的訊息模板"
+  },
+  "hostRunnerReleaseTemplateHint": "可用：{fields}",
+  "@hostRunnerReleaseTemplateHint": {
+    "description": "訊息模板的佔位符清單",
+    "placeholders": {
+      "fields": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerStableBranch": "穩定分支",
+  "@hostRunnerStableBranch": {
+    "description": "專案子卡上的穩定分支欄"
+  },
+  "hostRunnerStableBranchHint": "例如 main；留空＝不上板",
+  "@hostRunnerStableBranchHint": {
+    "description": "穩定分支欄的提示"
+  },
+  "boardVerifyTitle": "確認週期",
+  "@boardVerifyTitle": {
+    "description": "週期確認對話框標題"
+  },
+  "boardVerifyExplain": "確認代表這個週期已經驗過了。",
+  "@boardVerifyExplain": {
+    "description": "週期確認對話框的說明"
+  },
+  "boardReleaseToggle": "同時上板",
+  "@boardReleaseToggle": {
+    "description": "確認週期時一併上板的開關"
+  },
+  "boardReleaseSourceLabel": "來源分支",
+  "@boardReleaseSourceLabel": {
+    "description": "上板要併進穩定分支的那條分支"
+  },
+  "boardReleaseStableLabel": "併進 {branch}",
+  "@boardReleaseStableLabel": {
+    "description": "候選 repo 的穩定分支",
+    "placeholders": {
+      "branch": {
+        "type": "String"
+      }
+    }
+  },
+  "boardReleaseNoStable": "未設穩定分支",
+  "@boardReleaseNoStable": {
+    "description": "這個 repo 不能上板的原因"
+  },
+  "boardReleaseCommits": "{count} 筆變更",
+  "@boardReleaseCommits": {
+    "description": "本週期動過這個 repo 的 run 筆數（Hub 只有 head 前後值，不是 commit 顆數）",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardReleaseStableMissing": "穩定分支不存在",
+  "@boardReleaseStableMissing": {
+    "description": "stable_branch_exists 為 false"
+  },
+  "boardReleaseMergeMethod": "合併方式：{method}",
+  "@boardReleaseMergeMethod": {
+    "description": "工作區的合併方式，唯讀",
+    "placeholders": {
+      "method": {
+        "type": "String"
+      }
+    }
+  },
+  "boardReleaseTag": "tag（選填）",
+  "@boardReleaseTag": {
+    "description": "上板時要不要打 tag"
+  },
+  "boardReleaseTagHint": "例如 v1.3.0",
+  "@boardReleaseTagHint": {
+    "description": "tag 欄的提示"
+  },
+  "boardReleaseCandidatesFailed": "取不到上板候選：{error}",
+  "@boardReleaseCandidatesFailed": {
+    "description": "candidates 端點失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "boardReleaseNoRepo": "至少要選一個 repo",
+  "@boardReleaseNoRepo": {
+    "description": "開了上板卻一個都沒勾"
+  },
+  "boardReleaseNotVerified": "這個週期還沒確認",
+  "@boardReleaseNotVerified": {
+    "description": "409 objective_not_verified"
+  },
+  "boardReleaseInProgress": "這個週期已經有一筆上板在跑",
+  "@boardReleaseInProgress": {
+    "description": "409 release_in_progress"
+  },
+  "boardReleaseRepoNotEligible": "有 repo 不能上板了，重開一次對話框",
+  "@boardReleaseRepoNotEligible": {
+    "description": "409 release_repo_not_eligible"
+  },
+  "errorReleaseRequiresHuman": "上板只有人類按得動",
+  "@errorReleaseRequiresHuman": {
+    "description": "403 release_requires_human"
+  },
+  "opsRelease": "上板",
+  "@opsRelease": {
+    "description": "run.kind = release 的顯示名稱"
   }
 }

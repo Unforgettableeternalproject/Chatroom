@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../models/board.dart';
+import '../models/release.dart';
 import '../models/stage_file.dart';
 import 'api_client.dart';
 
@@ -311,9 +312,42 @@ class BoardApi {
           {String? participantId, String? sessionKey}) =>
       _objectiveAction(objectiveId, 'review', participantId, sessionKey);
 
+  /// [release] 非 null 時：先 verify，成功後同一筆請求裡建立 release run。
+  /// 任一道閘沒過就整筆 4xx，**週期不會被 verify**——兩件事要嘛一起成立，
+  /// 要嘛都不發生，不然人會看到一個已確認卻沒上板的週期而不知道缺了哪一步。
   Future<void> verifyObjective(String objectiveId,
+          {String? participantId,
+          String? sessionKey,
+          ReleaseRequest? release}) =>
+      _objectiveAction(objectiveId, 'verify', participantId, sessionKey,
+          data: release == null ? null : {'release': release.toJson()});
+
+  /// 這個週期能不能上板、有哪些候選 repo。
+  ///
+  /// **按下確認之前先問一次**：候選是「本週期 commit 過的 repo」，那份清單
+  /// 只有 Hub 算得出來；穩定分支則來自線上執行器回報的 dashboard。
+  Future<ReleaseCandidates> releaseCandidates(String objectiveId,
           {String? participantId, String? sessionKey}) =>
-      _objectiveAction(objectiveId, 'verify', participantId, sessionKey);
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId/release/candidates',
+          options: _auth(participantId, sessionKey),
+        );
+        return ReleaseCandidates.fromJson(res.data ?? const {});
+      });
+
+  /// 已經 verify 過的週期補一次上板（不再動狀態）。
+  Future<void> createRelease(String objectiveId,
+          {String? participantId,
+          String? sessionKey,
+          required ReleaseRequest release}) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId/release',
+          data: release.toJson(),
+          options: _auth(participantId, sessionKey),
+        );
+      });
 
   Future<void> completeObjective(String objectiveId,
           {String? participantId, String? sessionKey}) =>
@@ -331,11 +365,13 @@ class BoardApi {
     String id,
     String action,
     String? pid,
-    String? sessionKey,
-  ) =>
+    String? sessionKey, {
+    Map<String, dynamic>? data,
+  }) =>
       unwrap(() async {
         await _dio.post<Map<String, dynamic>>(
           '/api/board/objectives/$id/$action',
+          data: data,
           options: _auth(pid, sessionKey),
         );
       });

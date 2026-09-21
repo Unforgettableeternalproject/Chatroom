@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/board_api.dart';
 import '../core/errors/api_exception.dart';
 import '../models/board.dart';
+import '../models/release.dart';
 import '../models/stage_file.dart';
 import 'app_providers.dart';
 import 'messages_providers.dart';
@@ -496,8 +497,20 @@ class BoardActions {
   Future<void> reviewObjective(String id) async =>
       _objective(id, (api, pid) => api.reviewObjective(id, participantId: pid, sessionKey: _sk));
 
-  Future<void> verifyObjective(String id) async =>
-      _objective(id, (api, pid) => api.verifyObjective(id, participantId: pid, sessionKey: _sk));
+  /// [release] 帶著的話，確認的同時對這個工作區的 repo 上板（C6）。
+  /// 候選與閘都在 Hub：這裡不預先判斷哪些 repo 上得了。
+  Future<void> verifyObjective(String id, {ReleaseRequest? release}) async =>
+      _objective(
+          id,
+          (api, pid) => api.verifyObjective(id,
+              participantId: pid, sessionKey: _sk, release: release));
+
+  /// 這個週期能不能上板、有哪些候選 repo。拿不到身分時回 null。
+  Future<ReleaseCandidates?> releaseCandidates(String id) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    return _api.releaseCandidates(id, participantId: pid, sessionKey: _sk);
+  }
 
   Future<void> completeObjective(String id) async => _objective(
       id, (api, pid) => api.completeObjective(id, participantId: pid, sessionKey: _sk));

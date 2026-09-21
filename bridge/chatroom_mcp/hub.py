@@ -399,8 +399,18 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             return HubError(
                 _detail_text(detail)
                 or "你是這塊板的監督者，但這個 kind 不開放給監督者派。"
-                   "investigate／ticket／stage 可以，push 是不經模型的固定"
+                   "investigate／ticket／stage 可以，push／release 是不經模型的固定"
                    "腳本，只有人類按得下去。",
+                status=status, detail=detail,
+            )
+        if code == "release_requires_human":
+            # 上板（把分支併進穩定分支並推送）只有人類按得下去，監督者也
+            # 不行。agent 該做的是把週期送審，讓人類在確認時決定要不要上板
+            return HubError(
+                _detail_text(detail)
+                or "上板只能由人類觸發，agent 與監督者都不行。"
+                   "把週期送審（status=review）後，由人類在確認時決定"
+                   "要不要一併上板。",
                 status=status, detail=detail,
             )
         if code == "not_your_run":

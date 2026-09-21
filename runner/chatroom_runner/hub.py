@@ -279,7 +279,8 @@ class RunnerHub:
     async def report(self, run_id: str, status: str, *, result: str = "",
                      reason: str = "", claude_session_id: str = "",
                      usage: dict | None = None,
-                     stalled_seconds: int = 0) -> dict | None:
+                     stalled_seconds: int = 0,
+                     git: dict | None = None) -> dict | None:
         """回報狀態轉移。``runner_id`` 是**必填**（Hub 契約 09/16 修正）。
 
         🚨 409 ``run_bad_transition`` 當成「這一步已經套用過」而不是錯誤：
@@ -295,6 +296,12 @@ class RunnerHub:
             payload["stalled_seconds"] = stalled_seconds
         if usage is not None:
             payload["usage_json"] = usage
+        # 結構化的 git 欄位（契約 C3）。**沒有 repo 的 run 不送這一鍵**：
+        # 送一組空字串進去，Hub 會把它當成「這一輪什麼都沒動」寫進欄位，
+        # 而那與「這筆 run 根本沒有 repo」不是同一件事。舊 Hub 收到多出來
+        # 的欄位不會炸（pydantic 預設忽略未知欄位）
+        if git:
+            payload["git"] = git
         try:
             return await self._json("POST", f"/api/runs/{run_id}/report",
                                     json_body=payload)

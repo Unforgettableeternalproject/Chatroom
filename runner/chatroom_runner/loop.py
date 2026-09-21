@@ -546,7 +546,8 @@ class RunnerLoop:
                     reason=str(payload.get("reason") or ""),
                     claude_session_id=str(payload.get("claude_session_id")
                                           or ""),
-                    usage=payload.get("usage") or None)
+                    usage=payload.get("usage") or None,
+                    git=payload.get("git") or None)
             except HubError as exc:
                 log.warning("run %s 的落地回報重送失敗：%s", run_id, exc)
                 continue

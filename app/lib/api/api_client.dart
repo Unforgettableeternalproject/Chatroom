@@ -83,6 +83,11 @@ ApiException translateError(DioException e) {
               code.startsWith('human_actor_required'))) {
         return HumanCredentialRequiredException(_detailMessage(res.data));
       }
+      // 上板只有人類按得了（含 Supervisor 也不行）。同一個道理：被擋的是
+      // 「這不是人類」，re-join 換不掉憑證的身分
+      if (code == 'release_requires_human') {
+        return ReleaseRequiresHumanException(_detailMessage(res.data));
+      }
       // Supervisor 代派的 kind 白名單。與上面那組同一個道理：被擋的是
       // 「這不是人類」，而 re-join 換不掉憑證的身分
       if (code == 'kind_not_allowed_for_supervisor') {

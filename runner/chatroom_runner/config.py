@@ -130,6 +130,54 @@ def branch_allowed(branch: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(branch, p) for p in patterns)
 
 
+# 上板（release）的預設值。每個工作區自己設（艾斯維爾裁決 09/21）：
+# 合併方式與訊息模板是「這個工作區怎麼上板」的事，不是全機器一套
+DEFAULT_MERGE_METHOD = "merge"
+# 合法的合併方式。不在清單裡的值載入時退回預設並記 log——靜默沿用一個
+# 打錯的字串，症狀是上板用了不是人類選的那種合併
+MERGE_METHODS = ("merge", "squash", "ff_only")
+DEFAULT_MERGE_MESSAGE = "release: 併入 {source}（週期：{objective}）. {date}"
+DEFAULT_TAG_MESSAGE = "{objective}"
+
+
+class _BlankMap(dict):
+    """``format_map`` 用：模板寫了不認得的佔位符就當空字串。
+
+    模板是人在 App 上打的，打錯一個鍵不該讓整筆上板炸在渲染那一步。
+    """
+
+    def __missing__(self, key: str) -> str:  # noqa: D105
+        return ""
+
+
+def render_template(template: str, values: dict) -> str:
+    """渲染上板的訊息模板。未知佔位符 ⇒ 空字串；括號不成對 ⇒ 原樣回傳。
+
+    渲染失敗**不丟例外**：這條字串只是 commit／tag 的訊息，讓它難看總比
+    讓一次已經合併完的上板在寫訊息時整個失敗好。
+    """
+    try:
+        return (template or "").format_map(_BlankMap(values))
+    except (ValueError, IndexError, KeyError):
+        log.warning("上板訊息模板渲染失敗，原樣使用：%s", template)
+        return template or ""
+
+
+@dataclass(frozen=True)
+class ReleaseConfig:
+    """一個工作區的上板設定（config.json 的 ``release``）。"""
+
+    merge_method: str = DEFAULT_MERGE_METHOD
+    merge_message: str = DEFAULT_MERGE_MESSAGE
+    # 空字串時 `git tag -a` 用週期標題（見 run._release）
+    tag_message: str = DEFAULT_TAG_MESSAGE
+
+    def to_dict(self) -> dict:
+        return {"merge_method": self.merge_method,
+                "merge_message": self.merge_message,
+                "tag_message": self.tag_message}
+
+
 @dataclass(frozen=True)
 class ProjectConfig:
     """一個**專案**＝一個 git 工作樹（舊名 ``RepoConfig``）。
@@ -143,6 +191,10 @@ class ProjectConfig:
     path: Path
     allowed_branches: list[str] = field(default_factory=list)
     push_branches: list[str] = field(default_factory=list)
+    # 這個 repo 的穩定分支（通常 main／master）。**空字串＝不參與上板**：
+    # 沒設的 repo 在候選清單裡是灰的，不是「預設用 main」——猜錯的代價是
+    # 把一個週期併進一條沒有人打算上板的分支
+    stable_branch: str = ""
 
     def allows(self, branch: str) -> bool:
         return branch_allowed(branch, self.allowed_branches)
@@ -194,6 +246,10 @@ class WorkspaceConfig:
     # `projects` 清單，不影響本機白名單語意：非公開的工作區照樣能被直接
     # 指名派工，只是不會出現在別人的選單裡
     public: bool = True
+    # 這個工作區怎麼上板（合併方式與訊息模板）。**每個工作區自己一套**：
+    # 同一台執行器底下的工作區合併習慣不一樣，共用一份的話改給 A 的設定會
+    # 悄悄套到 B 身上
+    release: ReleaseConfig = field(default_factory=ReleaseConfig)
     # 這個工作區的 run 可不可以開瀏覽器做實機測試。True 時 ticket 模板會多
     # 一句「能做就做」；False 時整句不出現（模板預設的「不是交付門檻」照舊）
     allow_browser_livetest: bool = False
@@ -321,6 +377,7 @@ def _project_from(name: str, raw: dict) -> ProjectConfig:
         path=Path(path),
         allowed_branches=list(raw.get("allowed_branches", [])),
         push_branches=list(raw.get("push_branches", [])),
+        stable_branch=str(raw.get("stable_branch") or "").strip(),
     )
 
 
@@ -396,6 +453,34 @@ def _primary_skill_from(key: str, raw: dict, skill_dirs: list[Path]) -> str:
     return name
 
 
+def _release_from(key: str, raw: dict) -> ReleaseConfig:
+    """``release`` 的解析。不合法的值**退回預設並記 log**，不讓整台起不來。
+
+    上板設定打錯不是「這台機器不能用」，而是「這個工作區的上板要照預設走」
+    ——靜默沿用一個不認得的合併方式才是危險的那一種。
+    """
+    release_raw = raw.get("release") or {}
+    if not isinstance(release_raw, dict):
+        log.warning("工作區「%s」的 release 要是物件，已改用預設", key)
+        release_raw = {}
+    method = (str(release_raw.get("merge_method") or "").strip()
+              or DEFAULT_MERGE_METHOD)
+    if method not in MERGE_METHODS:
+        log.warning("工作區「%s」的 merge_method「%s」不在 %s 裡，已退回「%s」",
+                    key, method, "、".join(MERGE_METHODS),
+                    DEFAULT_MERGE_METHOD)
+        method = DEFAULT_MERGE_METHOD
+    merge_message = release_raw.get("merge_message")
+    if merge_message is None:
+        merge_message = DEFAULT_MERGE_MESSAGE
+    tag_message = release_raw.get("tag_message")
+    if tag_message is None:
+        tag_message = DEFAULT_TAG_MESSAGE
+    return ReleaseConfig(merge_method=method,
+                         merge_message=str(merge_message),
+                         tag_message=str(tag_message))
+
+
 def _workspace_from(key: str, raw: dict) -> WorkspaceConfig:
     where = f"工作區「{key}」"
     projects_raw = _alias_get(raw, "projects", "repos", where) or {}
@@ -449,6 +534,7 @@ def _workspace_from(key: str, raw: dict) -> WorkspaceConfig:
         extra_write_dirs=[Path(str(p))
                           for p in raw.get("extra_write_dirs", [])],
         public=bool(raw.get("public", True)),
+        release=_release_from(key, raw),
         allow_browser_livetest=bool(raw.get("allow_browser_livetest", False)),
         invalid_projects=invalid,
     )

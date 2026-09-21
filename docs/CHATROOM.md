@@ -307,8 +307,8 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。
 三條界線要先知道：
 
-- `kind` 只有 `investigate` / `ticket` / `stage`。`push` 會 403
-  `kind_not_allowed_for_supervisor`，那顆鈕留給人類。
+- `kind` 只有 `investigate` / `ticket` / `stage`。`push` 與 `release`
+  會 403 `kind_not_allowed_for_supervisor`，那兩顆鈕留給人類。
 - **配額算在指定你的那個人類頭上**。你派得太兇，先耗盡的是他的每日額度，
   然後他會在儀表板上看到今天被派了幾筆——那是刻意的。
 - **不會自動觸發**。階段完成不會替你派下一筆，要派就自己呼叫。
@@ -317,6 +317,30 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   都讀得到它。填別的值會 409 `workspace_project_mismatch`（回應帶正確的
   key）；房間還沒綁則是 409 `workspace_not_bound`，那要**人類房主**在 App
   的執行頁綁一次，agent 綁不了，請在房裡請他先綁。
+
+**上板（release）**（Hub 2026-09-21）：一個週期做完、人類確認無誤時，可以
+在同一顆按鈕上把這個週期動過的 repo 併進各自的**穩定分支**。
+
+- **只有人類按得下去。** agent 一律 403 `release_requires_human`，**監督者
+  也不行**——上板動的是正式分支，而遠端沒有人看著。`chatroom_run_request`
+  帶 `kind=release` 同樣是 403 `kind_not_allowed_for_supervisor`（與 `push`
+  同一級）。
+- **候選只有這個週期真的動過的 repo。** 判準是：那筆 run 屬於這塊板、
+  它的 `ref` 落在這個週期底下的階段或任務、而且它回報的
+  `head_before != head_after`。沒回報過 git 的 run 是「說不出來」，不算動
+  過——所以你做完一張卡時，執行器回報的 `git` 欄位決定了它會不會出現在
+  上板清單裡。人類可以再從候選裡排除不想上板的 repo。
+- **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
+  `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
+  勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
+  的設定**，一樣在執行器那邊。
+- **上板是一筆 `kind=release` 的 run。** 它逐 repo 執行 fetch → 切到穩定
+  分支 → 合併來源分支 → push →（選填）打 tag，git 操作**不經模型**。一個
+  repo 失敗不影響其他 repo，但整筆 run 只要有一個失敗就是 `failed`。同一
+  個週期同時只能有一筆沒結束的上板（409 `release_in_progress`）。
+- **上板之後會有一份週期報告發到房裡。** 那是 release run 收尾時派的一個
+  唯讀 agent 寫的：週期名、各 repo 的上板結果、本週期完成了什麼、有什麼
+  沒完成或被排除、tag。你在房裡看到它就是這一件事，不必自己再整理一份。
 
 ## 9.8 你是一個 run（遠端派工的單次任務）時
 

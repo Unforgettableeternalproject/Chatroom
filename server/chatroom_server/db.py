@@ -765,7 +765,8 @@ CREATE TABLE IF NOT EXISTS agent_run (
     id            TEXT PRIMARY KEY,
     room_id       TEXT NOT NULL REFERENCES room(id),
     board_id      TEXT NOT NULL DEFAULT '',
-    -- investigate | ticket | stage | push（scheduled 留給 P2 的排程）
+    -- investigate | ticket | stage | push | release
+    -- （scheduled 留給 P2 的排程）
     kind          TEXT NOT NULL,
     project       TEXT NOT NULL DEFAULT '',
     -- checklist_id / task_id，push 時是 repo key
@@ -802,6 +803,19 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- 只把它補到房內現況、不送任何訊息——把歷史上所有 @ 一次灌進去，等於
     -- 讓一筆剛起跑的 run 先收到一疊跟它無關的話
     mention_cursor_seq INTEGER NOT NULL DEFAULT 0,
+    -- 這一輪實際動到的 git 狀態（執行器終局回報時帶上來）。空字串＝
+    -- 說不出來（沒有 repo 的 run、或舊版執行器沒回報），不是「沒動過」。
+    -- 「本週期 commit 過」的判準靠 head_before != head_after，所以兩欄
+    -- 一起留空的 run 一律不算動過——猜著回填會把沒碰過的 repo 送上板。
+    -- release run 的 repo 是逗號串起的 repo 名，head 兩欄留空
+    -- ⚠️ 這五欄在 MIGRATIONS 也有一份，兩邊都要改
+    repo          TEXT NOT NULL DEFAULT '',
+    branch        TEXT NOT NULL DEFAULT '',
+    head_before   TEXT NOT NULL DEFAULT '',
+    head_after    TEXT NOT NULL DEFAULT '',
+    -- 這一筆 run 的結構化輸入（目前只有 release 用）。JSON 字串，Hub 寫、
+    -- 執行器讀（`_run_public` 解成 `spec`）。空字串＝沒有 spec
+    spec_json     TEXT NOT NULL DEFAULT '',
     usage_json    TEXT NOT NULL DEFAULT '{}',
     result        TEXT NOT NULL DEFAULT '',
     reason        TEXT NOT NULL DEFAULT '',
@@ -1165,6 +1179,16 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 人寫成動手的人，而這兩件事正是這一欄要分開的
     ("agent_run", "requester_name",
      "requester_name TEXT NOT NULL DEFAULT ''"),
+    # 結構化 git 欄位（上板 2026-09-21）。既有 run 一律空字串＝說不出來，
+    # 那正是這四欄存在之前的事實。回填得出來的只有 runner 日誌，而 Hub
+    # 手上沒有；猜一個 sha 進去會讓「本週期 commit 過」的判準開始把沒碰過
+    # 的 repo 列成上板候選
+    ("agent_run", "repo", "repo TEXT NOT NULL DEFAULT ''"),
+    ("agent_run", "branch", "branch TEXT NOT NULL DEFAULT ''"),
+    ("agent_run", "head_before", "head_before TEXT NOT NULL DEFAULT ''"),
+    ("agent_run", "head_after", "head_after TEXT NOT NULL DEFAULT ''"),
+    # release run 的結構化輸入。既有 run 一律空字串＝沒有 spec
+    ("agent_run", "spec_json", "spec_json TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

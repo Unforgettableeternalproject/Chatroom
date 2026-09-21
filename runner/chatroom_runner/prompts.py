@@ -108,6 +108,41 @@ def repos_block(repos: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def release_results_block(results: list[dict]) -> str:
+    """上板結果的條列（給 release 報告的模板）。
+
+    這份文字是報告 agent **唯一**的事實來源：它不重跑 git，所以每個 repo 的
+    成敗、原因與 sha 都要在這裡講完。空清單時留一句話，模板不會出現一段
+    看起來像漏掉的空白。
+    """
+    if not results:
+        return "（沒有任何 repo 被上板。）"
+    lines = []
+    for item in results:
+        status = {"ok": "成功", "skipped": "跳過",
+                  "failed": "失敗"}.get(item.get("status", ""), "未知")
+        head = f"- `{item.get('name', '')}`：{status}"
+        reason = item.get("reason") or ""
+        if reason:
+            head += f"（{reason}）"
+        lines.append(head)
+        lines.append(f"    - 穩定分支 `{item.get('stable', '')}`，"
+                     f"來源分支 `{item.get('source', '')}`")
+        before = (item.get("head_before") or "")[:8]
+        after = (item.get("head_after") or "")[:8]
+        if before or after:
+            lines.append(f"    - 穩定分支 HEAD：{before or '?'} → "
+                         f"{after or '?'}")
+        detail = (item.get("detail") or "").strip()
+        if detail:
+            lines.append(f"    - {detail}")
+        commits = item.get("commits") or []
+        if commits:
+            lines.append("    - 併進來的 commit：")
+            lines.extend(f"        - {c}" for c in commits)
+    return "\n".join(lines)
+
+
 def load_template(kind: str, prompt_dir: Path | None = None) -> str:
     path = (prompt_dir or PROMPT_DIR) / f"{kind}.md"
     if not path.is_file():

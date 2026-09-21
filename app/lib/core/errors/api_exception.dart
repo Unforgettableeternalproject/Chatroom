@@ -148,6 +148,20 @@ class SupervisorKindNotAllowedException extends ApiException {
           kind.isEmpty ? L10n.current.commonUnknown : kind);
 }
 
+/// 403 + release_requires_human — 上板只有人類觸發得了，Supervisor agent
+/// 也不行。
+///
+/// 🔴 同樣不可以走 [ParticipantInvalidException]：那個會觸發自動 re-join，
+/// 而重新加入一百次也不會讓一張 agent 憑證變成人類憑證。上板會直接推上
+/// 穩定分支，那個決定要有人負責。
+class ReleaseRequiresHumanException extends ApiException {
+  const ReleaseRequiresHumanException([String? message])
+      : super('release_requires_human', message);
+
+  @override
+  String get defaultMessage => L10n.current.errorReleaseRequiresHuman;
+}
+
 /// 403 — 你不是這塊板的成員（`not_board_member` / `not_board_owner` /
 /// `not_board_supervisor`）。
 ///

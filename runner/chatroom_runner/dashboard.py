@@ -56,14 +56,19 @@ class RunnerRuntime:
                 "selfcheck_problems": list(self.selfcheck)}
 
 
-async def repo_view(path: Path, push_branches: list[str]) -> dict:
+async def repo_view(path: Path, push_branches: list[str],
+                    stable_branch: str = "") -> dict:
     """一個 repo 的現況。git 壞掉時把錯誤**放進欄位**而不是丟例外——
     儀表板少一格與「這台機器上的 repo 讀不到了」不是同一件事。"""
     branch = await gitops.current_branch(path)
     if not branch:
+        # 讀不到分支時形狀也要**完整**：少一格的話，App 那邊「沒設穩定分支」
+        # 與「這個 repo 讀不到」會長成同一個樣子
         return {"path": str(path), "branch": "", "error": "無法讀取分支",
                 "dirty": False, "unpushed_count": 0, "unpushed": [],
-                "pushable": False, "fetch_stale": True}
+                "pushable": False, "fetch_stale": True,
+                "stable_branch": stable_branch,
+                "stable_branch_exists": False}
     # 🚨 先 fetch 再算未推送：不 fetch 的話 `origin/<b>..<b>` 用的是上次
     # fetch 時的遠端位置，面板上那份清單與 push run 的比對基準會一起過期。
     # fetch 失敗**只標記不擋**——連不上遠端與「這台機器讀不到 repo」不是同
@@ -71,6 +76,10 @@ async def repo_view(path: Path, push_branches: list[str]) -> dict:
     fetched = await gitops.git(path, "fetch", "origin", branch)
     commits = await gitops.unpushed(path, branch)
     dirty = await gitops.status_porcelain(path)
+    # 上板的目標分支在不在。本機或 origin 有一邊就算——本機還沒有那條分支
+    # 是正常的（上板時會從 `origin/<b>` 建），「兩邊都沒有」才是不能上板
+    stable_exists = bool(stable_branch) and bool(
+        await gitops.resolve_branch(path, stable_branch))
     return {
         "path": str(path),
         "branch": branch,
@@ -81,6 +90,9 @@ async def repo_view(path: Path, push_branches: list[str]) -> dict:
         "unpushed": [c.to_dict() for c in commits],
         # 面板上的「推送」鈕要不要亮：分支不在可推清單裡就不該亮
         "pushable": branch_allowed(branch, push_branches),
+        # 上板（release）用：空字串＝這個 repo 不參與上板
+        "stable_branch": stable_branch,
+        "stable_branch_exists": stable_exists,
     }
 
 
@@ -94,10 +106,14 @@ async def build(cfg: RunnerConfig, usage_window: dict, status: str,
     for workspace in cfg.workspaces.values():
         for name, project in workspace.projects.items():
             repos[f"{workspace.key}/{name}"] = await repo_view(
-                project.path, project.push_branches)
+                project.path, project.push_branches, project.stable_branch)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "repos": repos,
+        # 工作區層級的設定（目前只有上板）。**`repos` 的形狀不動**：那是
+        # 既有的契約，多一格工作區設定掛在這裡，Hub 照樣原樣存
+        "workspaces": {ws.key: {"release": ws.release.to_dict()}
+                       for ws in cfg.workspaces.values()},
         "usage": usage_window,
         "limits": {"status": status, "limited_until": limited_until,
                    "limit_reason": limit_reason},

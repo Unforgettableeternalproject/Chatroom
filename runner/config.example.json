@@ -40,6 +40,12 @@
       "context_window_tokens": 1000000,
       "context_soft_limit_ratio": 0.7,
       "default_project": "JSAI-Web",
+      "_release說明": "上板（把週期成果併進穩定分支）怎麼合、commit 與 tag 的訊息長什麼樣。merge_method 只吃 merge（--no-ff）／squash／ff_only，不認得的值會退回 merge。訊息模板的佔位符：{source} {stable} {objective} {date}（MM/DD）{tag} {repo}，不認得的佔位符會變成空字串。tag_message 留空時用週期標題。",
+      "release": {
+        "merge_method": "merge",
+        "merge_message": "release: 併入 {source}（週期：{objective}）. {date}",
+        "tag_message": "{objective}"
+      },
       "primary_skill": "",
       "skill_dirs": ["C:/path/to/AI-Website"],
       "skills": {
@@ -53,17 +59,21 @@
         "JSAI-Web": {
           "path": "C:/path/to/AI-Website/JSAI-Web",
           "allowed_branches": ["jsai_dev", "feature/*"],
-          "push_branches": ["jsai_dev", "feature/*"]
+          "push_branches": ["jsai_dev", "feature/*"],
+          "_stable_branch說明": "上板要併進去的穩定分支（通常 main／master）。留空＝這個 repo 不參與上板，不是「預設用 main」。",
+          "stable_branch": "main"
         },
         "JSAI-API": {
           "path": "C:/path/to/AI-Website/JSAI-API",
           "allowed_branches": ["jsai_dev", "feature/*"],
-          "push_branches": ["jsai_dev", "feature/*"]
+          "push_branches": ["jsai_dev", "feature/*"],
+          "stable_branch": "main"
         },
         "JSAI-Functions": {
           "path": "C:/path/to/AI-Website/JSAI-Functions",
           "allowed_branches": ["jsai_dev", "feature/*"],
-          "push_branches": ["jsai_dev", "feature/*"]
+          "push_branches": ["jsai_dev", "feature/*"],
+          "stable_branch": ""
         }
       }
     }

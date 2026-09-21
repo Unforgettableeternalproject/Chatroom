@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import sqlite3
 import time
@@ -277,14 +278,72 @@ class RunCreate(BaseModel):
     長度沒有上限等於把「模板化」這件事整個讓掉。
     """
     # investigate（只讀）/ ticket（實作到 commit）/ stage（整個階段）/
-    # push（固定腳本，不經模型，§5.6）
-    kind: str = Field(pattern="^(investigate|ticket|stage|push)$")
+    # push（固定腳本，不經模型，§5.6）/ release（上板，§9.7）
+    # release 走 `/api/board/objectives/{id}/release`，這裡列出來是為了讓
+    # `_enqueue_run` 與佇列共用同一組 kind 名——兩邊各一份的話，放寬其中
+    # 一邊的那一天不會有任何地方報錯
+    kind: str = Field(pattern="^(investigate|ticket|stage|push|release)$")
     project: str = Field(min_length=1, max_length=64)
     # checklist_id / task_id；push 時是 repo key
     ref: str = Field(min_length=1, max_length=128)
     brief: str = Field(default="", max_length=2000)
     board_id: str = Field(default="", max_length=64)
     priority: int = Field(default=0, ge=0, le=9)
+
+
+# git ref 名的白名單：不以 `-` 開頭、不含空白與 `..`，只放行 `A-Za-z0-9._/-`
+# （pydantic 的 regex 引擎不支援 look-ahead，所以用函式驗，不用 `pattern=`）
+_GIT_REF_PATTERN = r"^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]+$"
+
+
+def _git_ref_or_raise(value: str) -> str:
+    if not re.match(_GIT_REF_PATTERN, value):
+        raise ValueError("不是合法的 git 分支／tag 名：不能以 - 開頭、"
+                         "不能含空白或 ..，只放行英數與 . _ / -")
+    return value
+
+
+class ReleaseRepo(BaseModel):
+    """要上板的一個 repo（契約 C4）。
+
+    **沒有 `stable_branch`**：那一欄由 Hub 從執行器儀表板查出來，不吃
+    client 給的。讓呼叫端指定的話，「哪一條是正式分支」就變成按鈕旁邊的一
+    個輸入框，而執行器設定裡那一份從此只是建議。
+    """
+
+    name: str = Field(min_length=1, max_length=255)
+    # 🚨 這個值會原樣進執行器的 git argv（merge／tag／push）。開頭不能是
+    # `-`（否則就是一個 git 參數），不含空白、`..`、控制字元；只放行
+    # git 分支名常見字元，其餘 422。執行器那側另有一道同樣的檢查
+    source_branch: str = Field(min_length=1, max_length=255)
+
+    @field_validator("source_branch")
+    @classmethod
+    def _check_source_branch(cls, v: str) -> str:
+        return _git_ref_or_raise(v)
+
+
+class ReleaseRequest(BaseModel):
+    """上板請求。`repos` 是**人類勾選後**的清單，不是候選全集。"""
+
+    repos: list[ReleaseRepo] = Field(min_length=1)
+    # 同 `ReleaseRepo.source_branch`：進 `git tag -a <tag>` 的 argv
+    tag: str = Field(default="", max_length=128)
+
+    @field_validator("tag")
+    @classmethod
+    def _check_tag(cls, v: str) -> str:
+        return v if v == "" else _git_ref_or_raise(v)
+
+
+class ObjectiveVerify(BaseModel):
+    """確認週期的（選填）body。帶 `release` 就在確認成功後順手上板。
+
+    整個 body 可以不帶——確認這顆鈕在 release 之前就沒有 body，舊 client
+    一律不帶，必填的話升級一次 Hub 就讓他們全部 422。
+    """
+
+    release: ReleaseRequest | None = None
 
 
 class WorkspaceBind(BaseModel):
@@ -351,6 +410,20 @@ class RunnerHeartbeat(BaseModel):
     private_projects: list[str] | None = None
 
 
+class RunGit(BaseModel):
+    """終局回報時的 git 現況（上板契約 C3，2026-09-21）。
+
+    四欄都選填：沒有 repo 的 run（investigate 在非 git 目錄）回報不了，
+    而「說不出來」與「沒動過」必須分得開——判準是
+    `head_before != head_after`，兩欄一起留空的 run 一律不算動過。
+    """
+
+    repo: str = Field(default="", max_length=255)
+    branch: str = Field(default="", max_length=255)
+    head_before: str = Field(default="", max_length=64)
+    head_after: str = Field(default="", max_length=64)
+
+
 class RunReport(BaseModel):
     status: str = Field(
         pattern="^(running|limited|handoff|done|failed|cancelled)$")
@@ -365,6 +438,10 @@ class RunReport(BaseModel):
     # 同狀態回報（`running` → `running` 帶 reason=stalled）用的秒數。
     # 只在那條路徑上有意義，其餘回報忽略它
     stalled_seconds: int = Field(default=0, ge=0)
+    # 這一輪動到的 git（上板契約 C3）。**沒帶＝不改**（None），不是清空：
+    # 舊執行器的每一次回報都不帶，預設空物件的話會把先前寫進去的 sha
+    # 抹掉，而畫面上看不出發生過什麼
+    git: RunGit | None = None
 
 
 class StageFileAdd(BaseModel):
@@ -6327,8 +6404,11 @@ def create_app(config: Config | None = None) -> FastAPI:
               dependencies=[Depends(require_auth)])
     async def verify_objective(
         objective_id: str,
+        request: Request,
+        body: ObjectiveVerify | None = None,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
     ):
         """確認無誤（閘 2、閘 4）。**人類 ∪ 該板任一掛接房的 supervisor**。
 
@@ -6343,9 +6423,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         閘 4 的前提「送審者是 agent 時」不可以省：人類房裡只有一個人時，
         **他自己送審的週期就再也沒有人能確認**，那條週期會永遠卡在 review。
         閘 4 存在的目的是擋 agent 自己確認自己，不是擋人。
+
+        **body 選填**：帶 `release` 就在確認成功後順手上板（契約 C4）。
+        上板的每一道閘**在確認之前先驗過一次**——閘沒過就整筆 4xx，週期
+        維持 review。反過來（先確認再驗）的話，人按下「確認並上板」看到
+        一個 409，而週期其實已經被確認掉了，畫面與錯誤說的是兩件事。
         """
         row, me = await _objective_write(objective_id, x_participant_id,
                                          x_session_key)
+        rel = body.release if body is not None else None
+        if rel is not None:
+            # 這時週期還在 review，狀態那一關要跳過——它**正要**變成
+            # verified，在這裡檢查等於讓「確認並上板」永遠過不了第一關
+            await _release_plan(row, me, request, host, rel,
+                                check_status=False)
         if not _is_human(me) and not await _is_board_supervisor(row, me):
             raise _err(403, "human_only",
                        "確認週期無誤只有人類成員或這塊板的 supervisor 做得到")
@@ -6387,8 +6478,258 @@ def create_app(config: Config | None = None) -> FastAPI:
             row,
             f"週期「{row['title']}」已確認無誤，還差最後一步：按下完成。",
             "board_objective_verified", humans_only=True)
+        release_run = None
+        if rel is not None:
+            # 閘上面已經驗過一次，但計畫要**重算**：兩次之間有 await，
+            # 候選與儀表板都可能變了，而寫進 spec 的穩定分支必須是現在
+            # 這一刻的那一條
+            room, spec = await _release_plan(row, me, request, host, rel,
+                                             check_status=False)
+            run_id = await _release_enqueue(row, me, room, spec)
+            await _commit_with_retry(app.state.db)
+            await events.notify(room["id"])
+            release_run = _run_public(await _run_or_404(run_id))
         return {"ok": True, "id": objective_id, "status": "verified",
-                "board_seq": seq}
+                "board_seq": seq, "release_run": release_run}
+
+    # ---------- 上板（release）：契約 C4、docs/CHATROOM.md §9.7 ----------
+
+    # 上板的前提狀態。`done` 也算：人可能先按完成才想起要上板，而那時
+    # 週期已經確認過了——擋掉等於逼他把週期打回去再走一次
+    _RELEASE_READY = ("verified", "done")
+
+    async def _release_objective_refs(objective_id: str) -> list[str]:
+        """這個週期底下的 checklist_id ∪ task_id（run.ref 的值域）。"""
+        db = app.state.db
+        cids = [r["id"] for r in await (await db.execute(
+            "SELECT id FROM board_checklist WHERE objective_id=? AND deleted=0",
+            (objective_id,))).fetchall()]
+        refs = list(cids)
+        if cids:
+            marks = ",".join("?" for _ in cids)
+            refs += [r["id"] for r in await (await db.execute(
+                f"SELECT id FROM board_task WHERE checklist_id IN ({marks})"
+                " AND deleted=0", cids)).fetchall()]
+        return refs
+
+    async def _release_touched_repos(obj_row) -> dict:
+        """本週期真的動過的 repo → `{branches, last_branch, commits}`。
+
+        判準（契約 C3）：run 屬於這塊板、`ref` 落在這個週期底下的
+        checklist ∪ task、且 `head_before != head_after`。
+
+        **兩個 head 都要非空**：空字串是「說不出來」（舊執行器、或沒有
+        repo 的 run），不是「動過」。只比不等的話，一筆從來沒回報過 git 的
+        investigate 會把整個 repo 送進上板候選，而它連檔案都沒改。
+        """
+        board_id = (obj_row["board_id"] or "").strip()
+        if not board_id:
+            # 換軸前的存量週期沒有 board_id。拿空字串當條件會把所有同樣
+            # 沒有 board_id 的 run 一起撈進來——那是別間房的歷史
+            return {}
+        refs = await _release_objective_refs(obj_row["id"])
+        if not refs:
+            return {}
+        marks = ",".join("?" for _ in refs)
+        rows = await (await app.state.db.execute(
+            "SELECT repo, branch FROM agent_run WHERE board_id=?"
+            f" AND ref IN ({marks}) AND repo<>'' AND head_before<>''"
+            " AND head_after<>'' AND head_before<>head_after"
+            " ORDER BY created_at, rowid", (board_id, *refs))).fetchall()
+        facts: dict[str, dict] = {}
+        for r in rows:
+            f = facts.setdefault(r["repo"], {"branches": [], "commits": 0,
+                                             "last_branch": ""})
+            # `commits` 是**動過這個 repo 的 run 筆數**，不是 git 的 commit
+            # 顆數——Hub 手上只有 head 的前後值，數不出中間有幾顆
+            f["commits"] += 1
+            b = (r["branch"] or "").strip()
+            if b:
+                if b in f["branches"]:
+                    f["branches"].remove(b)
+                f["branches"].insert(0, b)
+                f["last_branch"] = b
+        return facts
+
+    async def _release_workspace_view(workspace_key: str) -> tuple[dict, dict]:
+        """這個工作區的 repo 儀表板與上板設定（取任一非 offline 的執行器）。
+
+        回 `({repo_name: repo_view}, release_settings)`。找不到就兩個空的
+        ——「查不到穩定分支」與「這個 repo 不參與上板」在候選裡是同一種
+        顯示（`stable_branch` 空），人看到的都是「未設穩定分支」。
+
+        非 offline 的判準與 `_declared_workspaces` 同一道：offline 的執行器
+        領不到單，它的儀表板是上一次心跳的快照。
+        """
+        if not workspace_key:
+            return {}, {}
+        rows = await (await app.state.db.execute(
+            "SELECT projects, private_projects, dashboard_json FROM runner"
+            " WHERE status != 'offline' ORDER BY last_seen_at DESC")).fetchall()
+        prefix = f"{workspace_key}/"
+        for r in rows:
+            keys = set(_loads_or(r["projects"], [])) | set(
+                _loads_or(r["private_projects"], []))
+            if workspace_key not in keys:
+                continue
+            dash = _loads_or(r["dashboard_json"], {})
+            raw = dash.get("repos")
+            repos = {k[len(prefix):]: v for k, v in raw.items()
+                     if isinstance(v, dict) and k.startswith(prefix)
+                     } if isinstance(raw, dict) else {}
+            if not repos:
+                continue
+            wss = dash.get("workspaces")
+            one = wss.get(workspace_key) if isinstance(wss, dict) else None
+            settings = one.get("release") if isinstance(one, dict) else None
+            return repos, settings if isinstance(settings, dict) else {}
+        return {}, {}
+
+    async def _release_candidates(obj_row) -> dict:
+        """候選清單的完整形狀。GET 端點與 POST 的閘共用這一份。
+
+        兩邊各算一次的話，畫面上勾得到的 repo 可以在送出時被判定不合格，
+        而人看到的只是一個沒有理由的 409。
+        """
+        room = await _room_or_404(obj_row["room_id"])
+        ws = room["workspace_key"] or ""
+        facts = await _release_touched_repos(obj_row)
+        dash_repos, settings = await _release_workspace_view(ws)
+        repos = []
+        for name in sorted(facts):
+            f = facts[name]
+            view = dash_repos.get(name) or {}
+            repos.append({
+                "name": name,
+                "stable_branch": str(view.get("stable_branch") or ""),
+                "stable_branch_exists": bool(view.get("stable_branch_exists")),
+                "branches": f["branches"],
+                "last_branch": f["last_branch"],
+                "commits": f["commits"],
+                # 儀表板裡這一欄叫 `branch`（repo 的現行分支），
+                # 契約對 App 叫 `current_branch`
+                "current_branch": str(view.get("branch") or ""),
+            })
+        return {"workspace_key": ws,
+                "possible": any(r["stable_branch"] for r in repos),
+                "repos": repos,
+                "release_settings": settings}
+
+    async def _release_plan(obj_row, me, request, host, rel,
+                            *, check_status: bool):
+        """把上板請求驗成一份可以直接寫進 `spec_json` 的計畫。
+
+        回 `(room, spec)`。`check_status` 只在 verify 那條路上是 False——
+        那時週期還在 `review`，而它**正要**變成 verified；在那裡檢查狀態
+        等於讓「確認並上板」永遠過不了第一關。
+        """
+        # 只有人類。Supervisor 也不行：上板動的是穩定分支，而遠端沒有人
+        # 看著（艾斯維爾 2026-09-21）
+        if not _is_human(me) or not _is_human_credential(request, host):
+            raise _err(403, "release_requires_human",
+                       "上板只有人類成員按得下去，"
+                       "包含監督者在內的 agent 一律不行。")
+        room = await _ops_room_or_409(obj_row["room_id"])
+        if not (room["workspace_key"] or ""):
+            raise _err(409, "workspace_not_bound",
+                       "這個週期所在的工作房還沒綁定工作區，上不了板。")
+        if check_status and obj_row["status"] not in _RELEASE_READY:
+            raise _err(409, "objective_not_verified",
+                       "週期要先確認無誤才能上板，目前是"
+                       f"「{obj_row['status']}」",
+                       from_status=obj_row["status"])
+        marks = ",".join("?" for _ in _RUN_ACTIVE)
+        dup = await (await app.state.db.execute(
+            "SELECT id FROM agent_run WHERE kind='release' AND ref=?"
+            f" AND status IN ({marks}) LIMIT 1",
+            (obj_row["id"], *_RUN_ACTIVE))).fetchone()
+        if dup is not None:
+            raise _err(409, "release_in_progress",
+                       "這個週期已經有一筆還沒結束的上板。",
+                       run_id=dup["id"])
+        cand = await _release_candidates(obj_row)
+        by_name = {r["name"]: r for r in cand["repos"]}
+        plan = []
+        for item in rel.repos:
+            c = by_name.get(item.name)
+            if c is None or not c["stable_branch"]:
+                raise _err(409, "release_repo_not_eligible",
+                           f"`{item.name}` 不在這個週期的上板候選裡，"
+                           "或它沒有設定穩定分支。", repo=item.name)
+            if item.source_branch == c["stable_branch"]:
+                raise _err(409, "release_source_is_stable",
+                           f"`{item.name}` 的來源分支就是穩定分支"
+                           f"「{c['stable_branch']}」，沒有東西可以併。",
+                           repo=item.name,
+                           stable_branch=c["stable_branch"])
+            plan.append({"name": item.name,
+                         "source_branch": item.source_branch,
+                         "stable_branch": c["stable_branch"]})
+        spec = {"objective_id": obj_row["id"],
+                "objective_title": obj_row["title"],
+                "room_id": obj_row["room_id"],
+                "repos": plan,
+                "tag": rel.tag}
+        return room, spec
+
+    async def _release_enqueue(obj_row, me, room, spec) -> str:
+        """建立 kind=release 的 run。**不 commit**，由呼叫端收尾。"""
+        return await _enqueue_run(
+            room, me, kind="release", project=room["workspace_key"],
+            ref=obj_row["id"], board_id=obj_row["board_id"] or "",
+            brief=f"上板：{obj_row['title']}", spec=spec)
+
+    @app.get("/api/board/objectives/{objective_id}/release/candidates",
+             dependencies=[Depends(require_auth)])
+    async def release_candidates(
+        objective_id: str,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+    ):
+        """這個週期能上板的 repo 有哪些。
+
+        App 在按下「確認」之前打這一支：`possible` 為 false 就連開關都不
+        顯示。**不報錯**——沒綁工作區、沒有執行器在線、這個週期什麼都沒
+        commit 過，在畫面上都是同一件事（沒有東西可以上板），而確認週期
+        本身不該因為上板不成立而被擋下來。
+        """
+        row, _me = await _objective_write(objective_id, x_participant_id,
+                                          x_session_key)
+        return await _release_candidates(row)
+
+    @app.post("/api/board/objectives/{objective_id}/release",
+              dependencies=[Depends(require_auth)])
+    async def release_objective(
+        objective_id: str,
+        body: ReleaseRequest,
+        request: Request,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """上板：把本週期動過的 repo 併進各自的穩定分支（契約 C4）。
+
+        錯誤碼（**契約，client 可比對 code**）：
+
+        - agent 憑證或 agent 成員（含 Supervisor）⇒ 403 `release_requires_human`
+        - 房不是工作房 ⇒ 409 `room_not_ops`
+        - 房沒綁工作區 ⇒ 409 `workspace_not_bound`
+        - 週期還沒確認 ⇒ 409 `objective_not_verified`
+        - 同一週期還有沒結束的上板 ⇒ 409 `release_in_progress`
+        - repo 不在候選裡、或沒設穩定分支 ⇒ 409 `release_repo_not_eligible`
+        - 來源分支就是穩定分支 ⇒ 409 `release_source_is_stable`
+
+        其餘（工作區不符、專案沒人服務、配額、佇列上限）與一般派工完全
+        相同——走的是同一個 `_enqueue_run`。
+        """
+        row, me = await _objective_write(objective_id, x_participant_id,
+                                         x_session_key)
+        room, spec = await _release_plan(row, me, request, host, body,
+                                         check_status=True)
+        run_id = await _release_enqueue(row, me, room, spec)
+        await _commit_with_retry(app.state.db)
+        await events.notify(room["id"])
+        return {"run": _run_public(await _run_or_404(run_id))}
 
     @app.post("/api/board/objectives/{objective_id}/complete",
               dependencies=[Depends(require_auth)])
@@ -13140,6 +13481,9 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _run_public(row) -> dict:
         d = dict(row)
         d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
+        # 結構化輸入（目前只有 release 有）。沒有 spec 的 run 回空物件——
+        # 執行器那邊只要 `run["spec"]` 一路取得到鍵就不必分兩種寫法
+        d["spec"] = _loads_or(d.pop("spec_json", "") or "{}", {})
         # 沒帶到這一欄的路徑（例如領單當下的 RETURNING *）一律 None：
         # 那時候確實還沒有人進房
         d["agent_name"] = d.get("agent_name") or None
@@ -13566,6 +13910,128 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 mentions=humans)
             await events.notify(r["room_id"])
 
+    async def _enqueue_run(room, me, *, kind: str, project: str, ref: str,
+                           brief: str = "", board_id: str = "",
+                           priority: int = 0, sup_room=None,
+                           spec: dict | None = None) -> str:
+        """把一筆 run 排進佇列（工作區／專案／重複／配額四道閘 ＋ INSERT）。
+
+        **憑證那一關不在這裡**：`create_run` 與上板（`release_objective`）
+        放行的條件不同（前者是人類∪Supervisor，後者只有人類），而排進佇列
+        之後的每一件事——配額算誰的、重複派工怎麼擋、稽核串記什麼——必須
+        完全一樣。各複製一份 INSERT 的話，兩邊會從加欄位的那一天開始分岔，
+        而分岔出來的 run 在畫面上與正常的一模一樣。
+
+        回傳 run_id。**不 commit、不 notify**：呼叫端可能還要在同一段裡做
+        別的事（verify 順手上板），收尾由它決定。
+        """
+        db = app.state.db
+        room_id = room["id"]
+        # project 要有人服務。沒有任何非 offline 的執行器宣告過這個 key 的
+        # 話，這筆 run 會安靜地排在佇列裡等一台永遠不會來的執行器——打錯一個
+        # 字與「執行器還沒開機」在畫面上長得一模一樣
+        # 工作區先於專案：這間房綁在哪，就只能派那一個 key 的工。沒有這
+        # 一關的話，一間房可以同時派工到好幾份工作樹，而 run 的歷史全部
+        # 混在同一串裡——回頭看時分不出哪一筆動的是哪邊的檔案
+        workspace = room["workspace_key"] or ""
+        if not workspace:
+            raise _err(409, "workspace_not_bound",
+                       "這間工作房還沒綁定工作區，請房主先綁定再派工。")
+        if project != workspace:
+            raise _err(409, "workspace_project_mismatch",
+                       f"這間房綁在工作區「{workspace}」，"
+                       f"派不了 `{project}` 的工。",
+                       project=project, workspace_key=workspace)
+        if not await _project_is_served(room, project):
+            raise _err(409, "project_not_served",
+                       f"沒有執行器服務 `{project}` 這個專案，"
+                       "請確認專案 key，或讓對應的執行器上線。",
+                       project=project)
+        # 重複檢查**不含 handoff**：交接的父 run 永遠停在 handoff（它同時
+        # 在 _RUN_TERMINAL 裡），把它算成「還沒結束」的話，一張卡只要交接過
+        # 一次就再也派不了工——子 run 早就 done、人也離房了（2026-09-18 實測）。
+        # 子 run 若仍在跑，它自己就在 queued/claimed/running 裡，擋得住。
+        open_statuses = tuple(st for st in _RUN_ACTIVE if st != "handoff")
+        marks = ",".join("?" for _ in open_statuses)
+        dup = await (await db.execute(
+            "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
+            f" AND status IN ({marks}) LIMIT 1",
+            (room_id, ref, *open_statuses))).fetchone()
+        if dup is not None:
+            raise _err(409, "run_ref_already_active",
+                       "這個目標已經有一筆還沒結束的派工。",
+                       run_id=dup["id"])
+        # 配額歸屬。Supervisor 代派算在**指定它的那個人類**頭上：濫用時
+        # 那個人自己的每日上限會先耗盡，而他是唯一看得到、也該負責的人。
+        # `board_supervisor_set_by` 是 participant id，反查得到 session_key
+        # 才算數——那一列被刪掉的話退回 agent 自己，沒有人的配額憑空變多
+        actor = actor_key(me["session_key"])
+        quota_name = me["display_name"]
+        if sup_room is not None and sup_room["board_supervisor_set_by"]:
+            setter = await (await db.execute(
+                "SELECT session_key, display_name FROM participant WHERE id=?",
+                (sup_room["board_supervisor_set_by"],))).fetchone()
+            if setter is not None:
+                actor = actor_key(setter["session_key"])
+                quota_name = (sup_room["board_supervisor_set_by_name"]
+                              or setter["display_name"])
+        day = _now()[:10]
+        used = (await (await db.execute(
+            "SELECT COUNT(*) AS n FROM agent_run"
+            " WHERE requested_by_actor_key=? AND created_at >= ?",
+            (actor, day))).fetchone())["n"]
+        if cfg.run_daily_quota > 0 and used >= cfg.run_daily_quota:
+            raise _err(429, "run_daily_quota_exceeded",
+                       f"今天已經派了 {used} 筆，達到每日上限"
+                       f" {cfg.run_daily_quota}。請明天再派，"
+                       "或請主持人調整 CHATROOM_RUN_DAILY_QUOTA。",
+                       used=used, quota=cfg.run_daily_quota)
+        queued = (await (await db.execute(
+            "SELECT COUNT(*) AS n FROM agent_run WHERE room_id=?"
+            " AND status='queued'", (room_id,))).fetchone())["n"]
+        if cfg.run_queue_cap > 0 and queued >= cfg.run_queue_cap:
+            raise _err(429, "run_queue_cap_exceeded",
+                       f"這間房已經有 {queued} 筆在排隊，達到上限"
+                       f" {cfg.run_queue_cap}。請等前面的做完，或先取消幾筆。",
+                       queued=queued, cap=cfg.run_queue_cap)
+        pos = (await (await db.execute(
+            "SELECT COALESCE(MAX(position), 0) AS p FROM agent_run"
+            " WHERE room_id=?", (room_id,))).fetchone())["p"] + 1
+        run_id = _uid()
+        now = _now()
+        requester_kind = "agent" if sup_room is not None else "human"
+        try:
+            await db.execute(
+                "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
+                " ref, brief, requested_by, requested_by_actor_key,"
+                " requested_by_name, requester_kind, requester_name, spec_json,"
+                " status, priority, position, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
+                (run_id, room_id, board_id, kind, project,
+                 ref, brief, me["id"], actor, quota_name,
+                 requester_kind, me["display_name"],
+                 json.dumps(spec, ensure_ascii=False) if spec else "",
+                 priority, pos, now, now),
+            )
+        except sqlite3.IntegrityError:
+            # `idx_agent_run_ref_active` 擋下來了：上面那條 SELECT 與這句
+            # INSERT 之間有 await，兩個併發請求都會通過快速路徑，真正的
+            # 唯一性只有資料庫說了算。這裡重查一次拿既有的 run_id——先前
+            # 查到的是「沒有」，手上沒有任何 id 可以回給對方。
+            marks = ",".join("?" for _ in open_statuses)
+            other = await (await db.execute(
+                "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
+                f" AND status IN ({marks}) LIMIT 1",
+                (room_id, ref, *open_statuses))).fetchone()
+            raise _err(409, "run_ref_already_active",
+                       "這個目標已經有一筆還沒結束的派工。",
+                       run_id=other["id"] if other is not None else "")
+        await _record_run_event(run_id, room_id, "", "queued",
+                                actor, me["display_name"], "created",
+                                detail={"requester_kind": requester_kind,
+                                        "requester_name": me["display_name"]})
+        return run_id
+
     @app.post("/api/rooms/{room_id}/runs", dependencies=[Depends(require_auth)])
     async def create_run(
         room_id: str,
@@ -13585,8 +14051,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         同一道（經 `_board_supervisor_room`），不另寫一份——Supervisor 已經被
         賦予「這塊板我負責」的角色，派工是那個角色的延伸。伴隨的三條界線：
 
-        - **`kind` 不含 `push`** ⇒ 403 `kind_not_allowed_for_supervisor`。
-          push 是不經模型的固定腳本，那顆鈕留給人類。
+        - **`kind` 不含 `push`／`release`** ⇒ 403
+          `kind_not_allowed_for_supervisor`。這兩種都是不經模型的固定
+          腳本，那顆鈕留給人類。
         - **配額算在「指定這位 Supervisor 的人類」頭上**（那間房的
           `board_supervisor_set_by`），查不到才退回 agent 自己。不開獨立
           配額池：那等於給 agent 一個不受人類每日上限牽制的派工池。
@@ -13637,114 +14104,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(403, "human_actor_required_for_run",
                            "只有房內的人類成員或這塊板的監督者能派工，"
                            "agent 請改用任務板")
-        elif body.kind == "push":
-            # 身分邊界不是狀態衝突，所以是 403 不是 409
+        elif body.kind in ("push", "release"):
+            # 身分邊界不是狀態衝突，所以是 403 不是 409。
+            # release 與 push 同一級：兩者都是不經模型的固定腳本，而上板
+            # 動的是穩定分支——那顆鈕留給人類（艾斯維爾 2026-09-21）
             raise _err(403, "kind_not_allowed_for_supervisor",
                        "監督者派得了 investigate／ticket／stage，"
-                       "push 是不經模型的固定腳本，只有人類按得下去。",
+                       "push 與 release 是不經模型的固定腳本，"
+                       "只有人類按得下去。",
                        kind=body.kind)
-        # project 要有人服務。沒有任何非 offline 的執行器宣告過這個 key 的
-        # 話，這筆 run 會安靜地排在佇列裡等一台永遠不會來的執行器——打錯一個
-        # 字與「執行器還沒開機」在畫面上長得一模一樣
-        # 工作區先於專案：這間房綁在哪，就只能派那一個 key 的工。沒有這
-        # 一關的話，一間房可以同時派工到好幾份工作樹，而 run 的歷史全部
-        # 混在同一串裡——回頭看時分不出哪一筆動的是哪邊的檔案
-        workspace = room["workspace_key"] or ""
-        if not workspace:
-            raise _err(409, "workspace_not_bound",
-                       "這間工作房還沒綁定工作區，請房主先綁定再派工。")
-        if body.project != workspace:
-            raise _err(409, "workspace_project_mismatch",
-                       f"這間房綁在工作區「{workspace}」，"
-                       f"派不了 `{body.project}` 的工。",
-                       project=body.project, workspace_key=workspace)
-        if not await _project_is_served(room, body.project):
-            raise _err(409, "project_not_served",
-                       f"沒有執行器服務 `{body.project}` 這個專案，"
-                       "請確認專案 key，或讓對應的執行器上線。",
-                       project=body.project)
-        # 重複檢查**不含 handoff**：交接的父 run 永遠停在 handoff（它同時
-        # 在 _RUN_TERMINAL 裡），把它算成「還沒結束」的話，一張卡只要交接過
-        # 一次就再也派不了工——子 run 早就 done、人也離房了（2026-09-18 實測）。
-        # 子 run 若仍在跑，它自己就在 queued/claimed/running 裡，擋得住。
-        open_statuses = tuple(st for st in _RUN_ACTIVE if st != "handoff")
-        marks = ",".join("?" for _ in open_statuses)
-        dup = await (await db.execute(
-            "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
-            f" AND status IN ({marks}) LIMIT 1",
-            (room_id, body.ref, *open_statuses))).fetchone()
-        if dup is not None:
-            raise _err(409, "run_ref_already_active",
-                       "這個目標已經有一筆還沒結束的派工。",
-                       run_id=dup["id"])
-        # 配額歸屬。Supervisor 代派算在**指定它的那個人類**頭上：濫用時
-        # 那個人自己的每日上限會先耗盡，而他是唯一看得到、也該負責的人。
-        # `board_supervisor_set_by` 是 participant id，反查得到 session_key
-        # 才算數——那一列被刪掉的話退回 agent 自己，沒有人的配額憑空變多
-        actor = actor_key(me["session_key"])
-        quota_name = me["display_name"]
-        if sup_room is not None and sup_room["board_supervisor_set_by"]:
-            setter = await (await db.execute(
-                "SELECT session_key, display_name FROM participant WHERE id=?",
-                (sup_room["board_supervisor_set_by"],))).fetchone()
-            if setter is not None:
-                actor = actor_key(setter["session_key"])
-                quota_name = (sup_room["board_supervisor_set_by_name"]
-                              or setter["display_name"])
-        day = _now()[:10]
-        used = (await (await db.execute(
-            "SELECT COUNT(*) AS n FROM agent_run"
-            " WHERE requested_by_actor_key=? AND created_at >= ?",
-            (actor, day))).fetchone())["n"]
-        if cfg.run_daily_quota > 0 and used >= cfg.run_daily_quota:
-            raise _err(429, "run_daily_quota_exceeded",
-                       f"今天已經派了 {used} 筆，達到每日上限"
-                       f" {cfg.run_daily_quota}。請明天再派，"
-                       "或請主持人調整 CHATROOM_RUN_DAILY_QUOTA。",
-                       used=used, quota=cfg.run_daily_quota)
-        queued = (await (await db.execute(
-            "SELECT COUNT(*) AS n FROM agent_run WHERE room_id=?"
-            " AND status='queued'", (room_id,))).fetchone())["n"]
-        if cfg.run_queue_cap > 0 and queued >= cfg.run_queue_cap:
-            raise _err(429, "run_queue_cap_exceeded",
-                       f"這間房已經有 {queued} 筆在排隊，達到上限"
-                       f" {cfg.run_queue_cap}。請等前面的做完，或先取消幾筆。",
-                       queued=queued, cap=cfg.run_queue_cap)
-        pos = (await (await db.execute(
-            "SELECT COALESCE(MAX(position), 0) AS p FROM agent_run"
-            " WHERE room_id=?", (room_id,))).fetchone())["p"] + 1
-        run_id = _uid()
-        now = _now()
-        requester_kind = "agent" if sup_room is not None else "human"
-        try:
-            await db.execute(
-                "INSERT INTO agent_run (id, room_id, board_id, kind, project,"
-                " ref, brief, requested_by, requested_by_actor_key,"
-                " requested_by_name, requester_kind, requester_name,"
-                " status, priority, position, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,?,?)",
-                (run_id, room_id, body.board_id, body.kind, body.project,
-                 body.ref, body.brief, me["id"], actor, quota_name,
-                 requester_kind, me["display_name"],
-                 body.priority, pos, now, now),
-            )
-        except sqlite3.IntegrityError:
-            # `idx_agent_run_ref_active` 擋下來了：上面那條 SELECT 與這句
-            # INSERT 之間有 await，兩個併發請求都會通過快速路徑，真正的
-            # 唯一性只有資料庫說了算。這裡重查一次拿既有的 run_id——先前
-            # 查到的是「沒有」，手上沒有任何 id 可以回給對方。
-            marks = ",".join("?" for _ in open_statuses)
-            other = await (await db.execute(
-                "SELECT id FROM agent_run WHERE room_id=? AND ref=?"
-                f" AND status IN ({marks}) LIMIT 1",
-                (room_id, body.ref, *open_statuses))).fetchone()
-            raise _err(409, "run_ref_already_active",
-                       "這個目標已經有一筆還沒結束的派工。",
-                       run_id=other["id"] if other is not None else "")
-        await _record_run_event(run_id, room_id, "", "queued",
-                                actor, me["display_name"], "created",
-                                detail={"requester_kind": requester_kind,
-                                        "requester_name": me["display_name"]})
+        run_id = await _enqueue_run(
+            room, me, kind=body.kind, project=body.project, ref=body.ref,
+            brief=body.brief, board_id=body.board_id, priority=body.priority,
+            sup_room=sup_room)
         await _commit_with_retry(db)
         await events.notify(room_id)
         return {"run": _run_public(await _run_or_404(run_id))}
@@ -14276,6 +14648,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         if body.usage_json is not None:
             sets.append("usage_json=?")
             params.append(json.dumps(body.usage_json, ensure_ascii=False))
+        # git 現況（上板契約 C3）。整組一起寫：四欄描述的是**同一次**執行，
+        # 逐欄「非空才寫」的話，一次沒帶 head 的回報會留下新 branch 配舊 sha
+        if body.git is not None:
+            sets.extend(["repo=?", "branch=?", "head_before=?",
+                         "head_after=?"])
+            params.extend([body.git.repo, body.git.branch,
+                           body.git.head_before, body.git.head_after])
         if new == "running" and row["started_at"] is None:
             sets.append("started_at=?")
             params.append(now)
