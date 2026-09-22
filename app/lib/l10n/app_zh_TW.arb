@@ -4700,7 +4700,7 @@
   "@inviteHumanTitle": {
     "description": "邀請人類進房的對話框標題"
   },
-  "inviteHumanHint": "只列得出與你用同一張邀請碼連進來、而且正連著 Hub 的人。",
+  "inviteHumanHint": "只列得出正連著 Hub 的人。",
   "@inviteHumanHint": {
     "description": "邀請人類進房的範圍說明"
   },
@@ -7556,5 +7556,53 @@
   "boardReleaseOpsRoomOnly": "上板要從掛著這塊板的工作房進行",
   "@boardReleaseOpsRoomOnly": {
     "description": "possible=false 且 reason 為 board_axis／not_ops_room_member，以及 403 release_requires_ops_room"
+  },
+  "fontFamilyLabel": "字體",
+  "@fontFamilyLabel": {
+    "description": "視覺分頁：字體區塊標題"
+  },
+  "fontFamilyHint": "選了立刻套用，標題與內文一起換。",
+  "@fontFamilyHint": {
+    "description": "視覺分頁：字體區塊說明"
+  },
+  "fontFamilyStandard": "預設",
+  "@fontFamilyStandard": {
+    "description": "字體選項：預設"
+  },
+  "fontFamilyIansui": "芫荽",
+  "@fontFamilyIansui": {
+    "description": "字體選項：芫荽"
+  },
+  "fontFamilyOpenhuninn": "粉圓",
+  "@fontFamilyOpenhuninn": {
+    "description": "字體選項：jf open 粉圓"
+  },
+  "fontFamilyChenyuluoyan": "辰宇落雁體",
+  "@fontFamilyChenyuluoyan": {
+    "description": "字體選項：辰宇落雁體"
+  },
+  "fontFamilyGlowsans": "Glow Sans",
+  "@fontFamilyGlowsans": {
+    "description": "字體選項：Glow Sans TC"
+  },
+  "settingsCloseToTrayLabel": "關閉視窗時縮到系統匣",
+  "@settingsCloseToTrayLabel": {
+    "description": "設定 → 個人化：關閉視窗改成隱藏到系統匣的開關"
+  },
+  "settingsCloseToTrayHint": "從系統匣圖示可再開啟或結束",
+  "@settingsCloseToTrayHint": {
+    "description": "上述開關的說明"
+  },
+  "trayMenuOpen": "開啟 Chatroom",
+  "@trayMenuOpen": {
+    "description": "系統匣右鍵選單：叫回視窗"
+  },
+  "trayMenuExit": "結束",
+  "@trayMenuExit": {
+    "description": "系統匣右鍵選單：真的結束程式"
+  },
+  "trayMenuNotifySection": "通知",
+  "@trayMenuNotifySection": {
+    "description": "系統匣右鍵選單：通知模式那三項的標題"
   }
 }

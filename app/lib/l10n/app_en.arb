@@ -926,7 +926,7 @@
   "inviteShowCode": "Show the invite code again",
   "inviteAddAgentToken": "Issue an extra agent token for this person",
   "inviteHumanTitle": "Invite someone to the room",
-  "inviteHumanHint": "Only people who joined with the same invite code and are currently connected are listed.",
+  "inviteHumanHint": "Only people currently connected to the Hub are listed.",
   "inviteScanFailed": "Scan failed — try again later",
   "inviteNobodyToInvite": "Nobody to invite",
   "inviteAllAlreadyHere": "Everyone listed is already in this room",
@@ -1510,5 +1510,17 @@
   "boardErrorObjectiveClosed": "This objective is closed — send it back first.",
   "boardObjectiveFrozenDone": "Objective completed — no changes possible",
   "boardReleaseNoWorkspaceRoom": "This board is not attached to a room bound to a workspace",
-  "boardReleaseOpsRoomOnly": "Release must be started from the work room this board is attached to"
+  "boardReleaseOpsRoomOnly": "Release must be started from the work room this board is attached to",
+  "fontFamilyLabel": "Font",
+  "fontFamilyHint": "Applies immediately to headings and body text.",
+  "fontFamilyStandard": "Default",
+  "fontFamilyIansui": "Iansui",
+  "fontFamilyOpenhuninn": "Huninn",
+  "fontFamilyChenyuluoyan": "ChenYuluoyan",
+  "fontFamilyGlowsans": "Glow Sans",
+  "settingsCloseToTrayLabel": "Minimize to tray on close",
+  "settingsCloseToTrayHint": "Reopen or quit from the tray icon",
+  "trayMenuOpen": "Open Chatroom",
+  "trayMenuExit": "Quit",
+  "trayMenuNotifySection": "Notifications"
 }

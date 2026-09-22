@@ -15,6 +15,7 @@ class SettingsRepository {
   static const _kServerUrl = 'chatroom.server_url';
   static const _kThemeMode = 'chatroom.theme_mode';
   static const _kFontScale = 'chatroom.font_scale';
+  static const _kFontFamily = 'chatroom.font_family';
   static const _kLocale = 'chatroom.locale';
   static const _kPreferredName = 'chatroom.preferred_name';
   static const _kToken = 'chatroom.api_token';
@@ -34,6 +35,7 @@ class SettingsRepository {
   static const _kHighlightedMembersPrefix = 'chatroom.highlighted_members.';
   static const _kPendingMentionPrefix = 'chatroom.pending_mention.';
   static const _kNotifyMode = 'chatroom.notify_mode';
+  static const _kCloseToTray = 'chatroom.close_to_tray';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
   static const _kOpsExceptionSeen = 'ops.exceptions.seenAt';
@@ -80,6 +82,14 @@ class SettingsRepository {
   Future<void> setFontScale(FontScalePref scale) =>
       _prefs.setString(_kFontScale, scale.name);
 
+  /// 字體偏好：標題與內文用哪一套字，預設 Noto Serif TC。
+  FontFamilyPref get fontFamily => FontFamilyPref.values.firstWhere(
+        (f) => f.name == _prefs.getString(_kFontFamily),
+        orElse: () => FontFamilyPref.standard,
+      );
+  Future<void> setFontFamily(FontFamilyPref family) =>
+      _prefs.setString(_kFontFamily, family.name);
+
   /// 語言偏好，預設跟隨系統。
   ///
   /// 只存偏好本身；`system` 要對應到哪個 locale 由套用端（`app.dart`）交給
@@ -103,6 +113,13 @@ class SettingsRepository {
       );
   Future<void> setNotifyMode(NotifyModePref mode) =>
       _prefs.setString(_kNotifyMode, mode.name);
+
+  /// 關閉視窗時縮到系統匣而不是結束程式（Windows 專用），預設開。
+  ///
+  /// 預設開是因為這個 App 的用途是等訊息：關掉視窗多半是「不想看了」，
+  /// 不是「不要再通知我」。關掉開關後關閉鍵就是結束，沒有第二種行為。
+  bool get closeToTray => _prefs.getBool(_kCloseToTray) ?? true;
+  Future<void> setCloseToTray(bool v) => _prefs.setBool(_kCloseToTray, v);
 
   /// Codex 轉送：app 收到的新訊息經 codex queue 喚醒本機 Codex session。
   /// 每台裝置各自設定，預設關閉（多裝置同開會重複轉送）。
@@ -236,6 +253,14 @@ enum ThemeModePref { dark, light }
 /// 落盤的是 `enum.name`，所以加新檔不會動到舊值：存過 small／medium／large
 /// 的裝置照樣讀得回來。
 enum FontScalePref { tiny, small, medium, large, xlarge }
+
+/// 字體偏好：standard 預設（Noto Serif TC）、iansui 芫荽、openhuninn 粉圓、
+/// chenyuluoyan 辰宇落雁體、glowsans Glow Sans TC。
+///
+/// 與 [FontScalePref] 同樣只存 `enum.name`；實際字族名寫在 `uep_theme.dart`，
+/// 那是打包進 assets 的家族字串，會隨字體檔換版而變，不該落盤。
+/// `standard` 而不是 `default`——後者是 Dart 保留字。
+enum FontFamilyPref { standard, iansui, openhuninn, chenyuluoyan, glowsans }
 
 /// 通知模式：off 不通知、mentions 僅被 @mention、all 所有新訊息。
 enum NotifyModePref { off, mentions, all }

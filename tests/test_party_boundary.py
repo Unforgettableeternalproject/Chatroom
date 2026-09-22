@@ -241,3 +241,195 @@ async def test_adding_under_a_token_that_does_not_exist_is_an_error(tmp_path):
             "parent_token": "沒有這張"})
         assert r.status_code == 404, r.text
         assert r.json()["detail"]["code"] == "parent_token_not_found"
+
+
+# ---------- 人類不受這條界線 ----------
+#
+# party 是 **agent 的界線**。人與人本來就分屬不同群（各拿一張邀請碼），而
+# 「邀請成員加入」要找的正是別群的那個人——把 party 套到人類身上的話，兩個
+# 人連同一個 Hub（一個走 LAN、一個走 tunnel）會在對話框裡互相看不見，於是
+# 誰也邀不了誰（艾斯維爾 2026-09-22 實測）。
+
+
+async def _human_seen(client, token, key):
+    """人進名錄的實際路徑：App 開著就會列房間。"""
+    r = await client.get("/api/rooms", headers={
+        **_auth(token), "X-Session-Key": key}, params={"kind": "human"})
+    assert r.status_code == 200, r.text
+
+
+async def _keys_with_humans(client, token):
+    r = await client.get("/api/sessions", headers=_auth(token),
+                         params={"include_human": "true"})
+    assert r.status_code == 200, r.text
+    return {s["session_key"] for s in r.json()["sessions"]}
+
+
+async def test_you_see_other_humans_but_not_their_agents(tmp_path):
+    app, host = await _hub(tmp_path, "party-human-list")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+        await _heartbeat(host, b, "claude-b1")
+
+        listed = await _keys_with_humans(host, a)
+        assert "human-b" in listed
+        # 對照組：別人的 agent 仍然看不到
+        assert "claude-b1" not in listed
+
+
+async def test_you_can_invite_another_human(tmp_path):
+    app, host = await _hub(tmp_path, "party-human-assign")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+        await _heartbeat(host, b, "claude-b1")
+        rid = await _room(host)
+
+        ok = await host.post(f"/api/rooms/{rid}/assignments", headers=_auth(a),
+                             json={"target_session_key": "human-b"})
+        assert ok.status_code == 200, ok.text
+        # 對照組：他的 agent 仍然指派不動
+        deny = await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "claude-b1"})
+        assert deny.status_code == 403, deny.text
+        assert deny.json()["detail"]["code"] == "not_your_agent"
+
+
+async def test_the_invited_human_redeems_it_into_a_private_room(tmp_path):
+    """邀請要真的走得完：建立 → 對方用自己的憑證兌換 → 進得了私人房。
+
+    只驗到建立 200 的話，兌換那一關的群比對仍然會把人擋在門外。
+    """
+    app, host = await _hub(tmp_path, "party-human-redeem")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        b_agent = await _invite(host, "B 的 Claude", audience="agent",
+                                parent=b)
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+
+        rid = (await host.post("/api/rooms", headers={
+            **_auth(a), "X-Session-Key": "human-a"},
+            json={"name": "私人", "visibility": "private",
+                  "session_key": "human-a"})).json()["id"]
+        aid = (await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "human-b"}
+                               )).json()["id"]
+
+        # 對照組：拿 agent 憑證兌換「發給人的」邀請不成立
+        bad = await host.post(f"/api/rooms/{rid}/join", headers=_auth(b_agent),
+                              json={"kind": "claude", "role": "agent",
+                                    "session_key": "human-b",
+                                    "assignment_id": aid})
+        assert bad.status_code == 403, bad.text
+        assert bad.json()["detail"]["code"] == "human_token_required"
+
+        ok = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(b), "X-Session-Key": "human-b"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-b", "assignment_id": aid})
+        assert ok.status_code == 200, ok.text
+async def _names(client, token, rid, key):
+    r = await client.get(f"/api/rooms/{rid}", headers={
+        **_auth(token), "X-Session-Key": key})
+    assert r.status_code == 200, r.text
+    return {p["display_name"] for p in r.json()["participants"]}
+
+
+async def test_someone_elses_human_invitation_is_not_yours(tmp_path):
+    """第三人拿不走發給別人的邀請。
+
+    兌換成功的話 participant 會綁到 `target_session_key`——也就是**變成那個
+    人**。所以「發給人的邀請跨群成立」不能單獨存在：跨群是為了讓 A 邀得動
+    別群的 B，不是讓任何持人類憑證的 C 都兌換得了那張碼。
+
+    兩道各擋一半，缺一不可：
+    - session_key 是呼叫端自報的字串，C 填自己的就對不上本人
+    - 填「human-b」冒名的話，憑證推出來的群仍是 C 自己那一張邀請碼的群
+    """
+    app, host = await _hub(tmp_path, "party-human-steal")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        c = await _invite(host, "C")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+        await _human_seen(host, c, "human-c")
+
+        rid = (await host.post("/api/rooms", headers={
+            **_auth(a), "X-Session-Key": "human-a"},
+            json={"name": "私人", "visibility": "private",
+                  "session_key": "human-a"})).json()["id"]
+        aid = (await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "human-b"}
+                               )).json()["id"]
+
+        # C 用自己的 session_key 兌換：不是本人
+        mine = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(c), "X-Session-Key": "human-c"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-c", "assignment_id": aid})
+        assert mine.status_code == 403, mine.text
+        assert mine.json()["detail"]["code"] == "not_your_invitation"
+
+        # C 冒名填 B 的 session_key：本人比對過得了（那是自報的字串），
+        # 擋下它的是憑證推出來的群
+        spoof = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(c), "X-Session-Key": "human-b"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-b", "assignment_id": aid})
+        assert spoof.status_code == 403, spoof.text
+        assert spoof.json()["detail"]["code"] == "not_your_invitation"
+
+        # 沒有半個成員被建出來（A 只是建立者，還沒 join）——被擋的兌換若
+        # 留下 participant，B 的名字就被占走，本人之後進來只會拿到改過的名字
+        assert await _names(host, a, rid, "human-a") == set()
+
+        ok = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(b), "X-Session-Key": "human-b"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-b", "assignment_id": aid})
+        assert ok.status_code == 200, ok.text
+        # 本人拿到的是乾淨的名字，而不是被 C 占掉之後改寫過的那一個
+        assert await _names(host, a, rid, "human-a") == {
+            ok.json()["display_name"]}
+
+
+async def test_the_same_person_on_a_second_device_needs_a_new_invitation(tmp_path):
+    """同一個人、同一張邀請碼，但第二台裝置用的是另一個 session_key → 403。
+
+    邀請綁的是 `target_session_key`（兌換後 participant 就綁到它），所以
+    「同群」不足以構成本人：放行的話同一個人會在房裡變成一筆共用成員紀錄，
+    兩台裝置互相收掉對方的身分。第二台裝置該另外發一張（敏卡裁 2026-09-22）。
+    """
+    app, host = await _hub(tmp_path, "party-human-second-device")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+
+        rid = (await host.post("/api/rooms", headers={
+            **_auth(a), "X-Session-Key": "human-a"},
+            json={"name": "私人", "visibility": "private",
+                  "session_key": "human-a"})).json()["id"]
+        aid = (await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "human-b"}
+                               )).json()["id"]
+
+        second = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(b), "X-Session-Key": "human-b2"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-b2", "assignment_id": aid})
+        assert second.status_code == 403, second.text
+        assert second.json()["detail"]["code"] == "not_your_invitation"

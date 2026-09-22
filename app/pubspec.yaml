@@ -63,6 +63,12 @@ dependencies:
   pasteboard: ^0.5.0
   windows_taskbar: ^1.1.2
   url_launcher: ^6.3.2
+  # 關閉視窗時縮到系統匣（Windows）。window_manager 攔關閉事件，
+  # tray_manager 管匣圖示與右鍵選單；兩者都是純平台通道，不額外拉工具鏈。
+  # tray_manager 卡在 0.5.x：0.7.0 整個改寫到 nativeapi（FFI 原生庫）上，
+  # 舊 API 只剩 deprecated 的相容層——那是另一條工具鏈風險，不順手換。
+  window_manager: ^0.5.2
+  tray_manager: ^0.5.0
 
 dev_dependencies:
   flutter_test:
@@ -96,6 +102,9 @@ flutter:
     # App logo。同一張圖餵三個地方：左上角標示、Windows 的 app_icon.ico
     # （由 scripts/png-to-app-icon.ps1 轉出，不在執行期讀）、未來的關於頁
     - assets/logo.png
+    # 系統匣圖示。tray_manager 在 Windows 只吃 .ico，所以 logo.png 另轉一份
+    # （scripts/png-to-app-icon.ps1 -Out app/assets/tray.ico）
+    - assets/tray.ico
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -127,3 +136,21 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+  # 內建中文字體（設定 → 視覺 → 字體）。每套只收必要字重，體積換選擇；
+  # 授權一律 OFL 1.1，出處見 assets/fonts/LICENSES.md
+  fonts:
+    - family: Iansui
+      fonts:
+        - asset: assets/fonts/Iansui/Iansui-Regular.ttf
+    - family: jf-openhuninn
+      fonts:
+        - asset: assets/fonts/jf-openhuninn/jf-openhuninn-2.1.ttf
+    - family: ChenYuluoyan
+      fonts:
+        - asset: assets/fonts/ChenYuluoyan/ChenYuluoyan-2.0-Thin.ttf
+    - family: GlowSansTC
+      fonts:
+        - asset: assets/fonts/GlowSansTC/GlowSansTC-Compressed-Regular.otf
+        - asset: assets/fonts/GlowSansTC/GlowSansTC-Compressed-Bold.otf
+          weight: 700

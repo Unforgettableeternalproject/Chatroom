@@ -13,6 +13,7 @@ import '../core/config/app_settings.dart';
 import '../core/config/build_info.dart';
 import '../core/errors/api_exception.dart';
 import '../core/identity/device_identity.dart';
+import '../core/window/window_tray.dart';
 import '../ws/realtime_service.dart';
 import '../ws/ws_protocol.dart';
 
@@ -32,7 +33,10 @@ class AppConfig {
     required this.preferredName,
     required this.deviceKey,
     this.fontScale = FontScalePref.medium,
+    this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
+    this.closeToTray = true,
+    this.notifyModeRevision = 0,
   });
 
   /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
@@ -51,7 +55,9 @@ class AppConfig {
         preferredName: settings.preferredName,
         deviceKey: deviceKey,
         fontScale: settings.fontScale,
+        fontFamily: settings.fontFamily,
         locale: settings.locale,
+        closeToTray: settings.closeToTray,
       );
 
   final String serverUrl;
@@ -63,9 +69,21 @@ class AppConfig {
   /// 字級偏好；套用在 `app.dart` 的 MediaQuery textScaler。
   final FontScalePref fontScale;
 
+  /// 字體偏好；套用在 `app.dart`（寫進 `UepText.family`）。
+  final FontFamilyPref fontFamily;
+
   /// 語言偏好；套用在 `app.dart` 的 MaterialApp.locale
   /// （`system` → 傳 null，交給 Flutter 依系統語言解析）。
   final LocalePref locale;
+
+  /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
+  final bool closeToTray;
+
+  /// 通知模式改過幾次。**這裡不放模式本身**——它的權威在
+  /// `SettingsRepository.notifyMode`，設定頁也直接讀那裡；在這邊再存一份
+  /// 只會多出一個會過期的值。這個計數的用途只有一個：讓 widget 樹**之外**
+  /// 改的通知模式（系統匣選單）也能觸發畫面重繪。要當前值請讀倉庫。
+  final int notifyModeRevision;
 
   bool get isConfigured => serverUrl.isNotEmpty;
 
@@ -76,7 +94,10 @@ class AppConfig {
     String? preferredName,
     String? deviceKey,
     FontScalePref? fontScale,
+    FontFamilyPref? fontFamily,
     LocalePref? locale,
+    bool? closeToTray,
+    int? notifyModeRevision,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -85,7 +106,10 @@ class AppConfig {
         preferredName: preferredName ?? this.preferredName,
         deviceKey: deviceKey ?? this.deviceKey,
         fontScale: fontScale ?? this.fontScale,
+        fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
+        closeToTray: closeToTray ?? this.closeToTray,
+        notifyModeRevision: notifyModeRevision ?? this.notifyModeRevision,
       );
 }
 
@@ -96,7 +120,13 @@ final initialConfigProvider = Provider<AppConfig>(
 
 class AppConfigNotifier extends Notifier<AppConfig> {
   @override
-  AppConfig build() => ref.watch(initialConfigProvider);
+  AppConfig build() {
+    // 系統匣選單也能改通知模式，而它活在 widget 樹之外拿不到 ref
+    WindowTray.instance
+      ..notifyModeReader = (() => _settings.notifyMode)
+      ..notifyModeWriter = setNotifyMode;
+    return ref.watch(initialConfigProvider);
+  }
 
   SettingsRepository get _settings => ref.read(settingsRepoProvider);
 
@@ -121,6 +151,31 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     state = state.copyWith(fontScale: scale);
   }
 
+  Future<void> setFontFamily(FontFamilyPref family) async {
+    await _settings.setFontFamily(family);
+    state = state.copyWith(fontFamily: family);
+  }
+
+  /// 關閉視窗→縮到系統匣。落盤之後**立刻套用**到 WindowTray：這個開關
+  /// 改的是關閉鍵的行為，等下次啟動才生效等於這一次關掉會關錯。
+  Future<void> setCloseToTray(bool v) async {
+    await _settings.setCloseToTray(v);
+    await WindowTray.instance.setEnabled(v);
+    state = state.copyWith(closeToTray: v);
+  }
+
+  /// 通知模式。只寫倉庫並推一次 revision——**這裡不碰通知中心**：它經
+  /// realtime 反過來依賴這顆 provider，從這裡讀會是循環相依。真正讓它
+  /// 立刻生效的是 `notificationBootstrapProvider` 對 revision 的 listen。
+  ///
+  /// 設定頁自己那顆下拉目前仍直接寫倉庫（那個檔案這輪不歸我動），所以
+  /// 兩條路都會經過倉庫；revision 只讓樹外改的那條能重繪。
+  Future<void> setNotifyMode(NotifyModePref mode) async {
+    await _settings.setNotifyMode(mode);
+    state = state.copyWith(
+        notifyModeRevision: state.notifyModeRevision + 1);
+  }
+
   Future<void> setLocale(LocalePref pref) async {
     await _settings.setLocale(pref);
     state = state.copyWith(locale: pref);
@@ -139,6 +194,13 @@ class AppConfigNotifier extends Notifier<AppConfig> {
 
 final appConfigProvider =
     NotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);
+
+/// 「關閉視窗縮到系統匣」在這台機器上有沒有意義（只有 Windows 有）。
+///
+/// 做成 provider 而不是直接讀 `Platform`：理由同 `kitInstallSupportedProvider`
+/// ——測試要能兩邊都測，而跑測試那台機器的作業系統不是被測的條件。
+final closeToTraySupportedProvider =
+    Provider<bool>((ref) => WindowTray.instance.supported);
 
 // ---------- API ----------
 

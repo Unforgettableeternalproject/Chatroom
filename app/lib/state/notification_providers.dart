@@ -105,6 +105,11 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   final settings = ref.read(settingsRepoProvider);
 
   center.mode = settings.notifyMode;
+  // 系統匣選單改的通知模式走 AppConfigNotifier（它碰不到這裡：通知中心
+  // 經 realtime 反過來依賴 appConfigProvider），所以由這邊接住那次變更
+  ref.listen(appConfigProvider.select((c) => c.notifyModeRevision), (_, _) {
+    center.mode = settings.notifyMode;
+  });
 
   // Codex 轉送：同一條事件流的第二個出口（app 即本機 agent 的通知樞紐）。
   // 宣告提前到 followJoined 之前——房名要在跟房的當下就餵給它，

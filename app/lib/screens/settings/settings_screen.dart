@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../api/api_client.dart';
 import '../../api/rooms_api.dart';
@@ -464,6 +465,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 26),
         Divider(color: s.line, height: 1),
         const SizedBox(height: 22),
+        // 字體。每個選項用自己那套字渲染名稱——字體要看過才選得出來，
+        // 列出名字等於要人先記住哪個是哪個
+        Text(l10n.fontFamilyLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text(l10n.fontFamilyHint,
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          for (final (pref, label) in [
+            (FontFamilyPref.standard, l10n.fontFamilyStandard),
+            (FontFamilyPref.iansui, l10n.fontFamilyIansui),
+            (FontFamilyPref.openhuninn, l10n.fontFamilyOpenhuninn),
+            (FontFamilyPref.chenyuluoyan, l10n.fontFamilyChenyuluoyan),
+            (FontFamilyPref.glowsans, l10n.fontFamilyGlowsans),
+          ])
+            _fontFamilyChip(s, pref, label, config.fontFamily == pref),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
         // 語言。選中即存（跟字級同一個手勢），沒有「套用」按鈕——
         // 整個 App 立刻換掉，看得到就是套用了
         Text(l10n.languageLabel,
@@ -592,6 +614,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             },
           ),
         ]),
+        if (ref.watch(closeToTraySupportedProvider)) ...[
+          const SizedBox(height: 22),
+          Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l10n.settingsCloseToTrayLabel,
+                      style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                  const SizedBox(height: 3),
+                  Text(l10n.settingsCloseToTrayHint,
+                      style: UepText.serif(size: 12, color: s.inkMute)),
+                ],
+              ),
+            ),
+            Switch(
+              value: config.closeToTray,
+              activeThumbColor: UepColors.gold,
+              activeTrackColor: UepColors.gold.withValues(alpha: .28),
+              onChanged: (v) =>
+                  ref.read(appConfigProvider.notifier).setCloseToTray(v),
+            ),
+          ]),
+        ],
         if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
           const SizedBox(height: 22),
           Row(children: [
@@ -640,6 +686,67 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         ],
       ],
     );
+  }
+
+  /// 字體選項鈕。UepButton 一律 mono ＋ 全大寫，這裡要的是預覽，
+  /// 所以照它 small 的規格（padding、圓角、邊框、選中配色）自己畫一顆，
+  /// 只換掉字。
+  ///
+  /// 行高用字級那排的 strut 鎖住（`forceStrutHeight`）：中文字體的 metrics
+  /// 各不相同，不鎖的話這排會比字級那排高，而且每換一個字體高度都在跳。
+  Widget _fontFamilyChip(
+      UepSurface s, FontFamilyPref pref, String label, bool selected) {
+    final name = UepText.familyName(pref);
+    final color = selected ? UepColors.goldInkOn : s.inkSoft;
+    // 字面大小各家差很多：辰宇落雁體是手寫細體、Glow Sans 是壓縮體，
+    // 照同一個 fontSize 排會一大一小。只動字級不動行高，整排不會被撐高
+    final size = switch (pref) {
+      FontFamilyPref.chenyuluoyan => 14.0,
+      FontFamilyPref.glowsans => 13.0,
+      _ => 12.5,
+    };
+    final base = name == null
+        ? GoogleFonts.notoSerifTc(fontSize: size, color: color)
+        : TextStyle(fontFamily: name, fontSize: size, color: color);
+    // 字級 chip 的字：UepButton small 用 mono(10.5, w500, ls 1.6)
+    final ruler = UepText.mono(size: 10.5, weight: FontWeight.w500);
+    final child = Text(
+      label,
+      style: base.copyWith(
+        fontFamilyFallback: name == null ? null : UepText.sansFallback,
+      ),
+      strutStyle: StrutStyle.fromTextStyle(ruler, forceStrutHeight: true),
+    );
+    final pad = const EdgeInsets.symmetric(horizontal: 18, vertical: 10);
+    final shape =
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(999));
+    return selected
+        ? FilledButton(
+            onPressed: () =>
+                ref.read(appConfigProvider.notifier).setFontFamily(pref),
+            style: FilledButton.styleFrom(
+              backgroundColor: UepColors.gold,
+              foregroundColor: UepColors.goldInkOn,
+              padding: pad,
+              shape: shape,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: child,
+          )
+        : OutlinedButton(
+            onPressed: () =>
+                ref.read(appConfigProvider.notifier).setFontFamily(pref),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: s.lineStrong),
+              foregroundColor: s.inkSoft,
+              padding: pad,
+              shape: shape,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: child,
+          );
   }
 
   /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口

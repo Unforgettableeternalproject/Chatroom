@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
+import 'core/window/window_tray.dart';
 import 'l10n/l10n.dart';
 import 'notifications/local_notifier.dart';
 import 'screens/assignments/assignment_screen.dart';
@@ -203,6 +204,8 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
         () => ref.read(settingsRepoProvider).hasServerConfig);
     // OS 通知：初始化失敗不致命（僅無系統通知）；點擊 → 導頁到該房間
     LocalNotifier.instance.onSelectRoom = (roomId) {
+      // 視窗可能正縮在系統匣裡——那時候導頁本身是看不見的，得先把它叫回來
+      WindowTray.instance.showWindow();
       _router.go('/rooms/$roomId');
     };
     LocalNotifier.instance.init();
@@ -249,6 +252,11 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
     final scale = fontScaleFactor(
         ref.watch(appConfigProvider.select((c) => c.fontScale)));
     final localePref = ref.watch(appConfigProvider.select((c) => c.locale));
+    // 字體是 UepText 的靜態值（那些 style 函式沒有 context），在這裡同步；
+    // 真正讓畫面換字的是下面 KeyedSubtree 的 key
+    final fontFamily =
+        ref.watch(appConfigProvider.select((c) => c.fontFamily));
+    UepText.family = fontFamily;
     return MaterialApp.router(
       title: 'Chatroom',
       debugShowCheckedModeBanner: false,
@@ -269,7 +277,12 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
             .copyWith(textScaler: TextScaler.linear(scale)),
         // 沒有 context 的程式碼（模型、通知、API 例外）從 L10n.current 拿字，
         // 這裡讓它跟著 MaterialApp 的 locale 走
-        child: L10nSync(child: child ?? const SizedBox.shrink()),
+        child: KeyedSubtree(
+          // 換字體只動到一個靜態值，沒有 widget 會因此失效——換 key 把整棵
+          // 重建掉，選了就立刻看得到（代價是頁內暫態，如捲動位置，會重來）
+          key: ValueKey(fontFamily),
+          child: L10nSync(child: child ?? const SizedBox.shrink()),
+        ),
       ),
       theme: buildUepTheme(Brightness.light),
       darkTheme: buildUepTheme(Brightness.dark),

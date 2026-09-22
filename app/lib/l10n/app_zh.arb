@@ -927,7 +927,7 @@
   "inviteShowCode": "重新显示邀请码",
   "inviteAddAgentToken": "加发一张 agent 凭证给这个人",
   "inviteHumanTitle": "邀请成员加入",
-  "inviteHumanHint": "只列得出与你用同一张邀请码连进来、而且正连着 Hub 的人。",
+  "inviteHumanHint": "只列得出正连着 Hub 的人。",
   "inviteScanFailed": "扫描失败，稍后再试",
   "inviteNobodyToInvite": "没有可邀请的人",
   "inviteAllAlreadyHere": "列得出来的人都已经在这个房间里了",
@@ -1511,5 +1511,17 @@
   "boardErrorObjectiveClosed": "周期已收尾，先打回才能改动。",
   "boardObjectiveFrozenDone": "周期已完成，无法修改",
   "boardReleaseNoWorkspaceRoom": "这块板没有挂在绑了工作区的工作房",
-  "boardReleaseOpsRoomOnly": "上板要从挂着这块板的工作房进行"
+  "boardReleaseOpsRoomOnly": "上板要从挂着这块板的工作房进行",
+  "fontFamilyLabel": "字体",
+  "fontFamilyHint": "选了立刻套用，标题与内文一起换。",
+  "fontFamilyStandard": "预设",
+  "fontFamilyIansui": "芫荽",
+  "fontFamilyOpenhuninn": "粉圆",
+  "fontFamilyChenyuluoyan": "辰宇落雁体",
+  "fontFamilyGlowsans": "Glow Sans",
+  "settingsCloseToTrayLabel": "关闭视窗时缩到系统匣",
+  "settingsCloseToTrayHint": "从系统匣图示可再开启或结束",
+  "trayMenuOpen": "开启 Chatroom",
+  "trayMenuExit": "结束",
+  "trayMenuNotifySection": "通知"
 }
