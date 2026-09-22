@@ -119,7 +119,7 @@ void main() {
         'Iansui');
   });
 
-  test('mono 與 code 不受字體選擇影響', () {
+  test('mono 與 code 的 primary 永遠是 JetBrains Mono', () {
     final monoBefore = UepText.mono().fontFamily;
     final codeBefore = UepText.code().fontFamily;
 
@@ -127,6 +127,28 @@ void main() {
 
     expect(UepText.mono().fontFamily, monoBefore);
     expect(UepText.code().fontFamily, codeBefore);
-    expect(monoBefore, GoogleFonts.jetBrainsMono().fontFamily);
+    expect(monoBefore, startsWith('JetBrainsMono'));
+  });
+
+  test('預設時 mono 的 fallback 不含任何自訂字族', () {
+    final fallback = UepText.mono().fontFamilyFallback ?? const <String>[];
+
+    for (final pref in FontFamilyPref.values) {
+      final name = UepText.familyName(pref);
+      if (name != null) expect(fallback, isNot(contains(name)));
+    }
+  });
+
+  test('選了字體後 mono／code 的中文落到自訂字族，拉丁與數字不變', () {
+    UepText.family = FontFamilyPref.iansui;
+
+    // primary 沒有 CJK，中文自然往下找——第一個就是選的那套
+    for (final style in [UepText.mono(), UepText.code(), UepText.label(),
+        UepText.fieldLabel()]) {
+      expect(style.fontFamily, startsWith('JetBrainsMono'));
+      expect(style.fontFamilyFallback!.first, 'Iansui');
+      expect(style.fontFamilyFallback!, contains(
+          GoogleFonts.notoSerifTc().fontFamily));
+    }
   });
 }

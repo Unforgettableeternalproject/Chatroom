@@ -129,6 +129,17 @@ class UepText {
     );
   }
 
+  /// mono 的中文退路。JetBrains Mono 沒有 CJK，中文本來就落到別的字型上；
+  /// 選了自訂字體時把它排在最前面，「成員 3」的中文就跟著換，而拉丁字母
+  /// 與數字仍由 primary 的 JetBrains Mono 畫——等寬對齊不能丟。
+  ///
+  /// 預設回 null＝`copyWith` 不動原值，維持 google_fonts 原本那套。
+  static List<String>? get _monoFallback {
+    final custom = familyName(family);
+    if (custom == null) return null;
+    return [custom, ?GoogleFonts.notoSerifTc().fontFamily];
+  }
+
   /// mono 小字 uppercase 標籤——設計稿最鮮明的識別元素。
   static TextStyle mono({
     double size = 10,
@@ -143,7 +154,7 @@ class UepText {
         color: color,
         letterSpacing: letterSpacing,
         height: height,
-      );
+      ).copyWith(fontFamilyFallback: _monoFallback);
 
   /// 程式碼區塊 / 行內 code 用（不加 letterSpacing）。
   static TextStyle code({
@@ -151,8 +162,8 @@ class UepText {
     Color? color,
     double height = 1.7,
   }) =>
-      GoogleFonts.jetBrainsMono(
-        fontSize: size, color: color, height: height);
+      GoogleFonts.jetBrainsMono(fontSize: size, color: color, height: height)
+          .copyWith(fontFamilyFallback: _monoFallback);
 }
 
 /// 字級五檔對應的整體縮放倍率——套在 MediaQuery 的 textScaler 上，
