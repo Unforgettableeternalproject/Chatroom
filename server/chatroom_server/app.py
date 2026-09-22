@@ -3327,10 +3327,28 @@ def create_app(config: Config | None = None) -> FastAPI:
             #
             # 空字串放行：這一欄之前建立的指派仍然有效——升級一次資料庫就讓
             # 所有待處理的指派作廢，沒有人會預期
+            #
+            # 目標是**人類**的指派同樣不比對群：party 是 agent 的界線，人的
+            # 邀請本來就是跨群的。但換來的條件是兌換的人自己得是人類——不然
+            # 「發給人的邀請」就成了 agent 憑證繞過群界線的通道。
+            # 查不到那把 key（從沒上線過）就退回既有比對：判不了是不是人，
+            # 保守當 agent 處理。
             a_party = assignment["party"] if "party" in assignment.keys() else ""
             if a_party and a_party != _party(request):
-                raise _err(403, "not_your_agent",
-                           "這筆指派不是發給你手上這張憑證的")
+                target_row = await (
+                    await db.execute(
+                        "SELECT kind FROM session WHERE session_key=?",
+                        (assignment["target_session_key"],))
+                ).fetchone()
+                if target_row is None or target_row["kind"] != "human":
+                    raise _err(403, "not_your_agent",
+                               "這筆指派不是發給你手上這張憑證的")
+                if body.role != "human":
+                    # role=human 在上面已經驗過憑證，所以這一條等於「要有
+                    # 人類憑證」——拿 agent 憑證兌換給人的邀請不成立
+                    raise _err(403, "human_token_required",
+                               "這筆指派是發給人的，要以人類身分（role=human）"
+                               "用人類憑證兌換")
             # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
             # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
             session_key = assignment["target_session_key"]
@@ -12158,11 +12176,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 目標還沒上線時判不了群（名錄裡沒有它），那種指派照樣建立——派給
         # 稍後才上線的 key 是正常用法。界線移到兌換那一刻（join 帶
         # assignment_id 時比對 `assignment.party`），所以這裡記下發起人的群。
+        #
+        # 目標是**人類**時不比對：party 是 agent 的界線，人的邀請本來就是
+        # 跨群的（各拿一張邀請碼＝各自一群）。比對下去的話「邀請成員加入」
+        # 對同一個 Hub 上的另一個人永遠 403。
         target = await (
-            await db.execute("SELECT party FROM session WHERE session_key=?",
-                             (target_key,))
+            await db.execute(
+                "SELECT party, kind FROM session WHERE session_key=?",
+                (target_key,))
         ).fetchone()
-        if target is not None and target["party"] and target["party"] != party:
+        target_is_human = target is not None and target["kind"] == "human"
+        if (target is not None and not target_is_human
+                and target["party"] and target["party"] != party):
             raise _err(403, "not_your_agent",
                        "這個 agent 不屬於你手上這張憑證")
         aid = _uid()
@@ -13147,6 +13172,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         ⚠️ 過濾在 **server** 做，不是在 App 做。前端過濾只擋得住誤點——
         繞過 App 直接打 REST 的那條路仍然全開，而那正是要擋的東西。
 
+        🚪 **人類不受這條界線**（`include_human=True` 時 `kind='human'` 一律
+        列出）。party 是 agent 的界線；人的邀請本來就是跨群的——兩個人各拿
+        一張邀請碼＝各自一群，而「邀請成員加入」要找的正是別群的那個人。
+
         ⚠️ `party=''` 是「還沒回報過」，一律列出。那一欄是後加的，既有
         session 要等下一次心跳（最長 65 秒）才補得上；當成「別群」排掉的話，
         升級的那一瞬間每個人的指派清單都會變空，而那看起來像 agent 全死了。
@@ -13156,10 +13185,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         now = datetime.now(timezone.utc)
         ttl_cutoff = (now - timedelta(seconds=cfg.session_ttl)).isoformat()
         active_cutoff = (now - timedelta(seconds=cfg.session_active_window)).isoformat()
-        cond = "last_seen_at >= ? AND (party=? OR party='')"
+        # party 是 **agent 的界線**，不是人的：人與人本來就分屬不同群（各自
+        # 一張邀請碼），而「邀請成員加入」要列的正是別群的人。把 party 套到
+        # 人類身上的話，兩個人連同一個 Hub 會互相看不見——彼此的名字都不在
+        # 候選清單裡，於是誰也邀不了誰（艾斯維爾 2026-09-22 實測）。
+        if include_human:
+            cond = ("last_seen_at >= ? AND ((party=? OR party='')"
+                    " OR kind='human')")
+        else:
+            cond = ("last_seen_at >= ? AND (party=? OR party='')"
+                    " AND kind != 'human'")
         params: list = [ttl_cutoff, _party(request)]
-        if not include_human:
-            cond += " AND kind != 'human'"
         if exclude_room:
             # 以 session_key 排除，不是 participant_id——同一個 session 重新
             # 加入會換一個 participant_id，比對後者等於沒排除

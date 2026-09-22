@@ -241,3 +241,99 @@ async def test_adding_under_a_token_that_does_not_exist_is_an_error(tmp_path):
             "parent_token": "沒有這張"})
         assert r.status_code == 404, r.text
         assert r.json()["detail"]["code"] == "parent_token_not_found"
+
+
+# ---------- 人類不受這條界線 ----------
+#
+# party 是 **agent 的界線**。人與人本來就分屬不同群（各拿一張邀請碼），而
+# 「邀請成員加入」要找的正是別群的那個人——把 party 套到人類身上的話，兩個
+# 人連同一個 Hub（一個走 LAN、一個走 tunnel）會在對話框裡互相看不見，於是
+# 誰也邀不了誰（艾斯維爾 2026-09-22 實測）。
+
+
+async def _human_seen(client, token, key):
+    """人進名錄的實際路徑：App 開著就會列房間。"""
+    r = await client.get("/api/rooms", headers={
+        **_auth(token), "X-Session-Key": key}, params={"kind": "human"})
+    assert r.status_code == 200, r.text
+
+
+async def _keys_with_humans(client, token):
+    r = await client.get("/api/sessions", headers=_auth(token),
+                         params={"include_human": "true"})
+    assert r.status_code == 200, r.text
+    return {s["session_key"] for s in r.json()["sessions"]}
+
+
+async def test_you_see_other_humans_but_not_their_agents(tmp_path):
+    app, host = await _hub(tmp_path, "party-human-list")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+        await _heartbeat(host, b, "claude-b1")
+
+        listed = await _keys_with_humans(host, a)
+        assert "human-b" in listed
+        # 對照組：別人的 agent 仍然看不到
+        assert "claude-b1" not in listed
+
+
+async def test_you_can_invite_another_human(tmp_path):
+    app, host = await _hub(tmp_path, "party-human-assign")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+        await _heartbeat(host, b, "claude-b1")
+        rid = await _room(host)
+
+        ok = await host.post(f"/api/rooms/{rid}/assignments", headers=_auth(a),
+                             json={"target_session_key": "human-b"})
+        assert ok.status_code == 200, ok.text
+        # 對照組：他的 agent 仍然指派不動
+        deny = await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "claude-b1"})
+        assert deny.status_code == 403, deny.text
+        assert deny.json()["detail"]["code"] == "not_your_agent"
+
+
+async def test_the_invited_human_redeems_it_into_a_private_room(tmp_path):
+    """邀請要真的走得完：建立 → 對方用自己的憑證兌換 → 進得了私人房。
+
+    只驗到建立 200 的話，兌換那一關的群比對仍然會把人擋在門外。
+    """
+    app, host = await _hub(tmp_path, "party-human-redeem")
+    async with app.router.lifespan_context(app), host:
+        a = await _invite(host, "A")
+        b = await _invite(host, "B")
+        b_agent = await _invite(host, "B 的 Claude", audience="agent",
+                                parent=b)
+        await _human_seen(host, a, "human-a")
+        await _human_seen(host, b, "human-b")
+
+        rid = (await host.post("/api/rooms", headers={
+            **_auth(a), "X-Session-Key": "human-a"},
+            json={"name": "私人", "visibility": "private",
+                  "session_key": "human-a"})).json()["id"]
+        aid = (await host.post(f"/api/rooms/{rid}/assignments",
+                               headers=_auth(a),
+                               json={"target_session_key": "human-b"}
+                               )).json()["id"]
+
+        # 對照組：拿 agent 憑證兌換「發給人的」邀請不成立
+        bad = await host.post(f"/api/rooms/{rid}/join", headers=_auth(b_agent),
+                              json={"kind": "claude", "role": "agent",
+                                    "session_key": "human-b",
+                                    "assignment_id": aid})
+        assert bad.status_code == 403, bad.text
+        assert bad.json()["detail"]["code"] == "human_token_required"
+
+        ok = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(b), "X-Session-Key": "human-b"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-b", "assignment_id": aid})
+        assert ok.status_code == 200, ok.text
