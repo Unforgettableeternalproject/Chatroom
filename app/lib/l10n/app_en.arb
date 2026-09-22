@@ -1526,5 +1526,11 @@
   "trayMenuNotifySection": "Notifications",
   "opsReportExport": "Export",
   "opsReportExportAll": "Export all",
-  "opsReportExported": "Exported"
+  "opsReportExported": "Exported",
+  "chatTransferAdminTitle": "Transfer admin",
+  "chatTransferAdminBody": "After transferring to {who}, you become a regular member.",
+  "chatTransferAdminAction": "Transfer",
+  "chatTransferAdminDone": "Admin transferred to {who}",
+  "chatMemberTransferAdmin": "Transfer admin",
+  "errorHeirNotFound": "That member is no longer in this room"
 }

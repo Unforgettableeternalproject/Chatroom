@@ -7620,5 +7620,39 @@
   "opsReportExported": "已匯出",
   "@opsReportExported": {
     "description": "回報匯出完成的提示"
+  },
+  "chatTransferAdminTitle": "移交管理權",
+  "@chatTransferAdminTitle": {
+    "description": "移交管理權確認框的標題"
+  },
+  "chatTransferAdminBody": "移交給 {who} 後，你會變成一般成員。",
+  "@chatTransferAdminBody": {
+    "description": "移交管理權確認框的內文",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "chatTransferAdminAction": "移交",
+  "@chatTransferAdminAction": {
+    "description": "移交管理權確認框的確認鈕"
+  },
+  "chatTransferAdminDone": "已把管理權移交給 {who}",
+  "@chatTransferAdminDone": {
+    "description": "移交管理權成功後的提示",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "chatMemberTransferAdmin": "移交管理權",
+  "@chatMemberTransferAdmin": {
+    "description": "成員列動作選單：把管理權交給這個人"
+  },
+  "errorHeirNotFound": "找不到這個成員，或他已經不在聊天室裡",
+  "@errorHeirNotFound": {
+    "description": "移交管理權時目標成員已不在房內（heir_not_found）"
   }
 }

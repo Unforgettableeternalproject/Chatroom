@@ -537,6 +537,34 @@ class RoomsApi {
         return (res.data?['changed'] as bool?) ?? true;
       });
 
+  /// 現任管理員把管理權交給房內另一個人類成員。
+  ///
+  /// 與 [claimAdmin] 相反的方向：那個是主持人從外面接管，這個是房主自己
+  /// 交出去。**交出去就是交出去了**——原房主留在房裡，但降為一般成員。
+  ///
+  /// [participantId] 是呼叫者自己的 participant id（Hub 拿它比對
+  /// `creator_session_key`），[targetParticipantId] 是接手的人。
+  ///
+  /// Hub 的退法是契約（`ApiException.code`）：`not_room_admin`（403）、
+  /// `heir_not_found`（404）、`admin_must_be_human`（422）、
+  /// `admin_already_changed`（409）。
+  ///
+  /// 回傳 Hub 認定的新管理員名字——用回應而不是本機那份成員資料，
+  /// 因為對方可能剛改過名，而確認框上的名字是打開選單那一刻的快照。
+  Future<String> transferAdmin(
+    String roomId, {
+    required String targetParticipantId,
+    required String participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/admin',
+          data: {'target_participant_id': targetParticipantId},
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        return (res.data?['admin_display_name'] as String?) ?? '';
+      });
+
   /// 建立者拍板：核准就封存，婉拒留紀錄。
   Future<void> resolveArchiveRequest(
     String requestId, {

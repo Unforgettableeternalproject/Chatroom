@@ -1527,5 +1527,11 @@
   "trayMenuNotifySection": "通知",
   "opsReportExport": "汇出",
   "opsReportExportAll": "全部汇出",
-  "opsReportExported": "已汇出"
+  "opsReportExported": "已汇出",
+  "chatTransferAdminTitle": "移交管理权",
+  "chatTransferAdminBody": "移交给 {who} 后，你会变成一般成员。",
+  "chatTransferAdminAction": "移交",
+  "chatTransferAdminDone": "已把管理权移交给 {who}",
+  "chatMemberTransferAdmin": "移交管理权",
+  "errorHeirNotFound": "找不到这个成员，或他已经不在聊天室里"
 }

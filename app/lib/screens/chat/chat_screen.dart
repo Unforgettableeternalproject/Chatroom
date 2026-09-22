@@ -2409,6 +2409,68 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     }
   }
 
+  /// 現任房主把管理權交給房內另一個人類成員。
+  ///
+  /// 與 [_claimAdmin] 相反的方向——那個是主持人從外面接管，這個是自己交
+  /// 出去。交出去之後**自己就是一般成員**，所以確認框要把這句講出來。
+  Future<void> _transferAdmin(BuildContext context, Participant p) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.chatTransferAdminTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        content: Text(
+          l10n.chatTransferAdminBody(p.displayName),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6),
+        ),
+        actions: [
+          UepButton(
+            label: l10n.commonCancel,
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: l10n.chatTransferAdminAction,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    final myId = widget.myId;
+    if (!(confirmed ?? false) || myId == null) return;
+    try {
+      final who = await ref.read(roomsApiProvider).transferAdmin(
+            widget.roomId,
+            targetParticipantId: p.id,
+            participantId: myId,
+          );
+      // 房主換人會同時改掉這個房的動作列（自己少掉一批權限）與房列表上
+      // 的標記，兩份都要重讀
+      ref.invalidate(roomDetailProvider(widget.roomId));
+      ref.invalidate(roomListProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(l10n.chatTransferAdminDone(
+              who.isEmpty ? p.displayName : who)),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        // 404 的 Hub 原話被 NotFoundException 丟掉了（它只留 code），
+        // 照著 code 轉述——不要對 message 做字串比對
+        final text = e.code == 'heir_not_found'
+            ? l10n.errorHeirNotFound
+            : e.message;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(text)));
+      }
+    }
+  }
+
   /// 主持人接管管理權。
   ///
   /// 要確認：這會讓現任管理員降為一般成員，而他可能正在用這個房。
@@ -2551,6 +2613,16 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                   onClaimAdmin: hostMode && p.isAdmin && p.id != myId
                       ? () => _claimAdmin(context, p)
                       : null,
+                  // 移交只有現任房主按得到，且只能交給房內 active 的人類。
+                  // agent 會被閒置掃掉，交給它等於把管理權丟掉（Hub 端同樣擋）
+                  onTransferAdmin: widget.youAreAdmin &&
+                          p.id != myId &&
+                          p.isHuman &&
+                          p.isActive &&
+                          !p.ephemeral &&
+                          !widget.archived
+                      ? () => _transferAdmin(context, p)
+                      : null,
                   // 自己隱藏自己只會讓人以為出了問題
                   onHide: p.id == myId ? null : () => _setHidden(p, true),
                   // 標記只給別人：不會有人在等自己回話
@@ -2685,6 +2757,7 @@ class _MemberTile extends StatelessWidget {
     this.nested = false,
     this.onKick,
     this.onClaimAdmin,
+    this.onTransferAdmin,
     this.onReinvite,
     this.onHide,
     this.onUnhide,
@@ -2722,6 +2795,10 @@ class _MemberTile extends StatelessWidget {
   /// Hub 主持人接管這個房間的管理權。只掛在**現任管理員**身上，
   /// 與移交同一個位置——那是使用者找這個動作時會去看的地方。
   final VoidCallback? onClaimAdmin;
+
+  /// 現任房主把管理權交給這一位成員；null 表示不顯示該動作。
+  /// 與 [onClaimAdmin] 相反的方向：那個是主持人從外面接管。
+  final VoidCallback? onTransferAdmin;
 
   /// 從**我這台裝置**的列表隱藏／取消隱藏；null 表示不顯示該動作。
   /// 與 [onKick] 完全不同：那個動到所有人，這個只動我的視圖。
@@ -2785,6 +2862,10 @@ class _MemberTile extends StatelessWidget {
       if (onClaimAdmin != null)
         _MemberAction(l10n.chatMemberClaimAdmin,
             Icons.admin_panel_settings_outlined, onClaimAdmin!,
+            color: UepColors.gold),
+      if (onTransferAdmin != null)
+        _MemberAction(l10n.chatMemberTransferAdmin, Icons.swap_horiz,
+            onTransferAdmin!,
             color: UepColors.gold),
       if (onKick != null)
         _MemberAction(
