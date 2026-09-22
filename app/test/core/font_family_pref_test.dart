@@ -1,0 +1,108 @@
+import 'package:chatroom_app/core/config/app_settings.dart';
+import 'package:chatroom_app/core/theme/uep_theme.dart';
+import 'package:chatroom_app/state/app_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// 字體偏好落盤、快照同步，以及套到 UepText 之後哪些字會換。
+///
+/// mono 要一起驗：程式碼與 seq 靠等寬對齊，換成中文字體會散掉——
+/// 「serif 換了」本身證明不了 mono 沒被順手換掉。
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late SettingsRepository settings;
+
+  setUpAll(() => GoogleFonts.config.allowRuntimeFetching = false);
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    settings = SettingsRepository(await SharedPreferences.getInstance());
+    UepText.family = FontFamilyPref.standard;
+  });
+
+  tearDown(() => UepText.family = FontFamilyPref.standard);
+
+  test('沒設定過時是預設字體', () {
+    expect(settings.fontFamily, FontFamilyPref.standard);
+  });
+
+  test('寫進去的值會落盤，key 是 chatroom.font_family', () async {
+    await settings.setFontFamily(FontFamilyPref.iansui);
+
+    expect(settings.fontFamily, FontFamilyPref.iansui);
+    expect(settings.prefs.getString('chatroom.font_family'), 'iansui');
+  });
+
+  test('prefs 裡是壞值時回預設，不丟例外', () async {
+    SharedPreferences.setMockInitialValues(
+        {'chatroom.font_family': 'comic-sans'});
+    final repo = SettingsRepository(await SharedPreferences.getInstance());
+
+    expect(repo.fontFamily, FontFamilyPref.standard);
+  });
+
+  test('setFontFamily 同步快照，重建時從 prefs 讀回來', () async {
+    final container = ProviderContainer(overrides: [
+      settingsRepoProvider.overrideWithValue(settings),
+      initialConfigProvider.overrideWithValue(
+        AppConfig.fromSettings(settings, token: '', deviceKey: 'dev-1'),
+      ),
+    ]);
+    addTearDown(container.dispose);
+
+    expect(container.read(appConfigProvider).fontFamily,
+        FontFamilyPref.standard);
+
+    await container
+        .read(appConfigProvider.notifier)
+        .setFontFamily(FontFamilyPref.glowsans);
+    expect(container.read(appConfigProvider).fontFamily,
+        FontFamilyPref.glowsans);
+
+    // 下次啟動走的是這條路：快照由倉庫重建
+    expect(
+        AppConfig.fromSettings(settings, token: '', deviceKey: 'dev-1')
+            .fontFamily,
+        FontFamilyPref.glowsans);
+  });
+
+  test('每個選項對到 pubspec 宣告的家族名，預設沒有自訂家族', () {
+    expect(UepText.familyName(FontFamilyPref.standard), isNull);
+    expect(UepText.familyName(FontFamilyPref.iansui), 'Iansui');
+    expect(UepText.familyName(FontFamilyPref.openhuninn), 'jf-openhuninn');
+    expect(UepText.familyName(FontFamilyPref.chenyuluoyan), 'ChenYuluoyan');
+    expect(UepText.familyName(FontFamilyPref.glowsans), 'GlowSansTC');
+  });
+
+  test('預設時 serif 與 display 維持 google_fonts 那套', () {
+    // google_fonts 的家族名帶字重後綴（CormorantGaramond_600），比前綴
+    expect(UepText.serif().fontFamily, startsWith('NotoSerifTC'));
+    expect(UepText.pageTitle().fontFamily, startsWith('CormorantGaramond'));
+  });
+
+  test('選了字體後 serif／display 換家族，且補 Noto Serif TC fallback', () {
+    UepText.family = FontFamilyPref.chenyuluoyan;
+
+    final serif = UepText.serif(size: 15);
+    expect(serif.fontFamily, 'ChenYuluoyan');
+    expect(serif.fontSize, 15);
+    expect(serif.fontFamilyFallback,
+        contains(GoogleFonts.notoSerifTc().fontFamily));
+
+    expect(UepText.pageTitle().fontFamily, 'ChenYuluoyan');
+  });
+
+  test('mono 與 code 不受字體選擇影響', () {
+    final monoBefore = UepText.mono().fontFamily;
+    final codeBefore = UepText.code().fontFamily;
+
+    UepText.family = FontFamilyPref.glowsans;
+
+    expect(UepText.mono().fontFamily, monoBefore);
+    expect(UepText.code().fontFamily, codeBefore);
+    expect(monoBefore, GoogleFonts.jetBrainsMono().fontFamily);
+  });
+}

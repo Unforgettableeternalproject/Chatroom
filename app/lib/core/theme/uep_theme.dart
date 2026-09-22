@@ -10,14 +10,50 @@ import 'uep_tokens.dart';
 class UepText {
   UepText._();
 
+  /// 全域字體選擇；由 `app.dart` 依 AppConfig 寫入。
+  ///
+  /// 放靜態而不是吃 context：UepText 是一組無 context 的純函式，整個 App 的
+  /// 每個呼叫點都改成要 context 的代價太大。代價是換字體不會自動觸發重建，
+  /// 由 `app.dart` 用 key 重建整棵樹補上。
+  static FontFamilyPref family = FontFamilyPref.standard;
+
+  /// 打包在 assets 的家族名，對應 pubspec 的 `fonts:` 宣告。
+  /// `standard` 沒有對應檔案，回 null＝走 google_fonts 原本那套。
+  static String? familyName(FontFamilyPref pref) => switch (pref) {
+        FontFamilyPref.standard => null,
+        FontFamilyPref.iansui => 'Iansui',
+        FontFamilyPref.openhuninn => 'jf-openhuninn',
+        FontFamilyPref.chenyuluoyan => 'ChenYuluoyan',
+        FontFamilyPref.glowsans => 'GlowSansTC',
+      };
+
+  /// 自訂字體缺字時退回 Noto Serif TC——這幾套的字數各不相同，
+  /// 沒有 fallback 的話罕用字會變成方塊。
+  static List<String> get _fallback {
+    final tc = GoogleFonts.notoSerifTc().fontFamily;
+    return tc == null ? const [] : [tc];
+  }
+
   static TextStyle display({
     double size = 26,
     FontWeight weight = FontWeight.w600,
     Color? color,
     double? height,
-  }) =>
-      GoogleFonts.cormorantGaramond(
-        fontSize: size, fontWeight: weight, color: color, height: height);
+  }) {
+    final custom = familyName(family);
+    if (custom == null) {
+      return GoogleFonts.cormorantGaramond(
+          fontSize: size, fontWeight: weight, color: color, height: height);
+    }
+    return TextStyle(
+      fontFamily: custom,
+      fontFamilyFallback: _fallback,
+      fontSize: size,
+      fontWeight: weight,
+      color: color,
+      height: height,
+    );
+  }
 
   /// 頁面主標：AppBar 標題、頁內大標、對話框標題。
   static TextStyle pageTitle({Color? color, double? height}) =>
@@ -48,9 +84,21 @@ class UepText {
     FontWeight weight = FontWeight.w400,
     Color? color,
     double height = 1.85,
-  }) =>
-      GoogleFonts.notoSerifTc(
-        fontSize: size, fontWeight: weight, color: color, height: height);
+  }) {
+    final custom = familyName(family);
+    if (custom == null) {
+      return GoogleFonts.notoSerifTc(
+          fontSize: size, fontWeight: weight, color: color, height: height);
+    }
+    return TextStyle(
+      fontFamily: custom,
+      fontFamilyFallback: _fallback,
+      fontSize: size,
+      fontWeight: weight,
+      color: color,
+      height: height,
+    );
+  }
 
   static TextStyle sans({
     double size = 14.5,

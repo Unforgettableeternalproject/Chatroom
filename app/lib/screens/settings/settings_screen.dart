@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../api/api_client.dart';
 import '../../api/rooms_api.dart';
@@ -464,6 +465,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         const SizedBox(height: 26),
         Divider(color: s.line, height: 1),
         const SizedBox(height: 22),
+        // 字體。每個選項用自己那套字渲染名稱——字體要看過才選得出來，
+        // 列出名字等於要人先記住哪個是哪個
+        Text(l10n.fontFamilyLabel,
+            style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        const SizedBox(height: 3),
+        Text(l10n.fontFamilyHint,
+            style: UepText.serif(size: 12, color: s.inkMute)),
+        const SizedBox(height: 12),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          for (final (pref, label) in [
+            (FontFamilyPref.standard, l10n.fontFamilyStandard),
+            (FontFamilyPref.iansui, l10n.fontFamilyIansui),
+            (FontFamilyPref.openhuninn, l10n.fontFamilyOpenhuninn),
+            (FontFamilyPref.chenyuluoyan, l10n.fontFamilyChenyuluoyan),
+            (FontFamilyPref.glowsans, l10n.fontFamilyGlowsans),
+          ])
+            _fontFamilyChip(s, pref, label, config.fontFamily == pref),
+        ]),
+        const SizedBox(height: 26),
+        Divider(color: s.line, height: 1),
+        const SizedBox(height: 22),
         // 語言。選中即存（跟字級同一個手勢），沒有「套用」按鈕——
         // 整個 App 立刻換掉，看得到就是套用了
         Text(l10n.languageLabel,
@@ -592,6 +614,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             },
           ),
         ]),
+        if (ref.watch(closeToTraySupportedProvider)) ...[
+          const SizedBox(height: 22),
+          Row(children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l10n.settingsCloseToTrayLabel,
+                      style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                  const SizedBox(height: 3),
+                  Text(l10n.settingsCloseToTrayHint,
+                      style: UepText.serif(size: 12, color: s.inkMute)),
+                ],
+              ),
+            ),
+            Switch(
+              value: config.closeToTray,
+              activeThumbColor: UepColors.gold,
+              activeTrackColor: UepColors.gold.withValues(alpha: .28),
+              onChanged: (v) =>
+                  ref.read(appConfigProvider.notifier).setCloseToTray(v),
+            ),
+          ]),
+        ],
         if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
           const SizedBox(height: 22),
           Row(children: [
@@ -644,6 +690,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
 
   /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
   /// （`_save` 本來就一次寫三個欄位）。
+  /// 字體選項鈕。UepButton 一律 mono ＋ 全大寫，這裡要的是預覽，
+  /// 所以自己畫一顆同樣形狀的。
+  Widget _fontFamilyChip(
+      UepSurface s, FontFamilyPref pref, String label, bool selected) {
+    final name = UepText.familyName(pref);
+    final color = selected ? UepColors.goldInkOn : s.inkSoft;
+    final style = name == null
+        ? GoogleFonts.notoSerifTc(fontSize: 14, color: color)
+        : TextStyle(fontFamily: name, fontSize: 14, color: color);
+    return Material(
+      color: selected ? UepColors.gold : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(999),
+        side: BorderSide(color: selected ? UepColors.gold : s.lineStrong),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () =>
+            ref.read(appConfigProvider.notifier).setFontFamily(pref),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+          child: Text(label, style: style),
+        ),
+      ),
+    );
+  }
+
   Widget _saveRow(UepSurface s) {
     final l10n = AppLocalizations.of(context);
     return Row(children: [

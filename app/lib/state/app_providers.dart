@@ -13,6 +13,7 @@ import '../core/config/app_settings.dart';
 import '../core/config/build_info.dart';
 import '../core/errors/api_exception.dart';
 import '../core/identity/device_identity.dart';
+import '../core/window/window_tray.dart';
 import '../ws/realtime_service.dart';
 import '../ws/ws_protocol.dart';
 
@@ -32,7 +33,9 @@ class AppConfig {
     required this.preferredName,
     required this.deviceKey,
     this.fontScale = FontScalePref.medium,
+    this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
+    this.closeToTray = true,
   });
 
   /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
@@ -51,7 +54,9 @@ class AppConfig {
         preferredName: settings.preferredName,
         deviceKey: deviceKey,
         fontScale: settings.fontScale,
+        fontFamily: settings.fontFamily,
         locale: settings.locale,
+        closeToTray: settings.closeToTray,
       );
 
   final String serverUrl;
@@ -63,9 +68,15 @@ class AppConfig {
   /// 字級偏好；套用在 `app.dart` 的 MediaQuery textScaler。
   final FontScalePref fontScale;
 
+  /// 字體偏好；套用在 `app.dart`（寫進 `UepText.family`）。
+  final FontFamilyPref fontFamily;
+
   /// 語言偏好；套用在 `app.dart` 的 MaterialApp.locale
   /// （`system` → 傳 null，交給 Flutter 依系統語言解析）。
   final LocalePref locale;
+
+  /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
+  final bool closeToTray;
 
   bool get isConfigured => serverUrl.isNotEmpty;
 
@@ -76,7 +87,9 @@ class AppConfig {
     String? preferredName,
     String? deviceKey,
     FontScalePref? fontScale,
+    FontFamilyPref? fontFamily,
     LocalePref? locale,
+    bool? closeToTray,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -85,7 +98,9 @@ class AppConfig {
         preferredName: preferredName ?? this.preferredName,
         deviceKey: deviceKey ?? this.deviceKey,
         fontScale: fontScale ?? this.fontScale,
+        fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
+        closeToTray: closeToTray ?? this.closeToTray,
       );
 }
 
@@ -121,6 +136,19 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     state = state.copyWith(fontScale: scale);
   }
 
+  Future<void> setFontFamily(FontFamilyPref family) async {
+    await _settings.setFontFamily(family);
+    state = state.copyWith(fontFamily: family);
+  }
+
+  /// 關閉視窗→縮到系統匣。落盤之後**立刻套用**到 WindowTray：這個開關
+  /// 改的是關閉鍵的行為，等下次啟動才生效等於這一次關掉會關錯。
+  Future<void> setCloseToTray(bool v) async {
+    await _settings.setCloseToTray(v);
+    await WindowTray.instance.setEnabled(v);
+    state = state.copyWith(closeToTray: v);
+  }
+
   Future<void> setLocale(LocalePref pref) async {
     await _settings.setLocale(pref);
     state = state.copyWith(locale: pref);
@@ -139,6 +167,13 @@ class AppConfigNotifier extends Notifier<AppConfig> {
 
 final appConfigProvider =
     NotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);
+
+/// 「關閉視窗縮到系統匣」在這台機器上有沒有意義（只有 Windows 有）。
+///
+/// 做成 provider 而不是直接讀 `Platform`：理由同 `kitInstallSupportedProvider`
+/// ——測試要能兩邊都測，而跑測試那台機器的作業系統不是被測的條件。
+final closeToTraySupportedProvider =
+    Provider<bool>((ref) => WindowTray.instance.supported);
 
 // ---------- API ----------
 

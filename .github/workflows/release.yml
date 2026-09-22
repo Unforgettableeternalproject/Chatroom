@@ -51,6 +51,9 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           WANT="${TAG#v}"
+          # 熱修 tag 長 `v1.2.4-hotfix1`：版號不動、只重發 Release，
+          # 比對時把 `-hotfix<n>` 剝掉，三端的版本字串仍然是 1.2.4
+          WANT="${WANT%%-hotfix*}"
           for f in server/chatroom_server/version.py bridge/chatroom_mcp/version.py; do
             # 用 sed 不用 `grep -oP`：PCRE 在 Windows runner 的 Git Bash 上
             # 不保證有，缺了會變成「檢查沒跑但看起來跑過」
