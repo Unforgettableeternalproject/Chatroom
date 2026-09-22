@@ -1,6 +1,7 @@
 import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/state/app_providers.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -93,6 +94,29 @@ void main() {
         contains(GoogleFonts.notoSerifTc().fontFamily));
 
     expect(UepText.pageTitle().fontFamily, 'ChenYuluoyan');
+  });
+
+  test('選了字體後 sans 也換家族，fallback 先 Inter 再 Noto Serif TC', () {
+    expect(UepText.sans().fontFamily, startsWith('Inter'));
+
+    UepText.family = FontFamilyPref.openhuninn;
+
+    final sans = UepText.sans(size: 14.5);
+    expect(sans.fontFamily, 'jf-openhuninn');
+    expect(sans.fontSize, 14.5);
+    // 拉丁字母要退回 Inter，不然西文會變成中文字體附的那套
+    expect(sans.fontFamilyFallback!.first, startsWith('Inter'));
+    expect(sans.fontFamilyFallback!.last, startsWith('NotoSerifTC'));
+  });
+
+  test('ThemeData 的預設字族也跟著換——沒經過 UepText 的 Text 靠它', () {
+    expect(buildUepTheme(Brightness.dark).textTheme.bodyMedium?.fontFamily,
+        startsWith('Inter'));
+
+    UepText.family = FontFamilyPref.iansui;
+
+    expect(buildUepTheme(Brightness.dark).textTheme.bodyMedium?.fontFamily,
+        'Iansui');
   });
 
   test('mono 與 code 不受字體選擇影響', () {

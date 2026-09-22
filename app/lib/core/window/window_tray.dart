@@ -6,6 +6,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../l10n/l10n.dart';
+import '../config/app_settings.dart';
 
 final _log = Logger('tray');
 
@@ -33,6 +34,14 @@ class WindowTray with WindowListener, TrayListener {
   bool _trayVisible = false;
 
   bool get enabled => _enabled;
+
+  /// 通知模式的讀寫接點：選單要顯示當前值、點下去要寫回去，而系統匣活在
+  /// widget 樹之外拿不到 `ref`。由 `AppConfigNotifier` 在建立時接上。
+  ///
+  /// 沒接上時選單照畫（勾在預設的「所有訊息」），點了不做事——這是啟動
+  /// 途中的短暫狀態，不該讓右鍵直接炸掉。
+  NotifyModePref Function()? notifyModeReader;
+  Future<void> Function(NotifyModePref mode)? notifyModeWriter;
 
   /// 啟動時呼叫一次。[enabled] 是偏好的當前值。
   Future<void> init({required bool enabled}) async {
@@ -87,13 +96,11 @@ class WindowTray with WindowListener, TrayListener {
     _trayVisible = false;
   }
 
-  /// 選單每次要彈之前重建：標籤跟著 App 語言走，而語言可以在執行期換。
+  /// 選單每次要彈之前重建：標籤跟著 App 語言走，勾選跟著當前通知模式走，
+  /// 而兩者都可以在執行期變。
   Future<void> _applyMenu() async {
-    await trayManager.setContextMenu(Menu(items: [
-      MenuItem(key: 'show', label: L10n.current.trayMenuOpen),
-      MenuItem.separator(),
-      MenuItem(key: 'exit', label: L10n.current.trayMenuExit),
-    ]));
+    await trayManager.setContextMenu(
+        buildTrayMenu(notifyModeReader?.call() ?? NotifyModePref.all));
   }
 
   /// 真的結束：先把攔截拆掉，否則 `destroy()` 會被自己擋下來。
@@ -126,10 +133,58 @@ class WindowTray with WindowListener, TrayListener {
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
     switch (menuItem.key) {
-      case 'show':
+      case kTrayMenuShow:
         showWindow();
-      case 'exit':
+      case kTrayMenuExit:
         _quit();
+      case final String key when trayNotifyModeOf(key) != null:
+        notifyModeWriter?.call(trayNotifyModeOf(key)!);
     }
   }
+}
+
+// ---------- 選單本身 ----------
+
+const kTrayMenuShow = 'show';
+const kTrayMenuExit = 'exit';
+
+/// 通知模式那三項的鍵；值是 `NotifyModePref.name`，所以加模式不必改對照表。
+String trayNotifyKey(NotifyModePref mode) => 'notify.${mode.name}';
+
+/// 反查：不是通知那三項就回 null。
+NotifyModePref? trayNotifyModeOf(String key) {
+  if (!key.startsWith('notify.')) return null;
+  final name = key.substring('notify.'.length);
+  for (final mode in NotifyModePref.values) {
+    if (mode.name == name) return mode;
+  }
+  return null;
+}
+
+/// 系統匣右鍵選單。純函式——給什麼模式就畫出什麼勾選，方便單測。
+///
+/// 三個通知模式做成 checkbox 而不是子選單：從匣上改通知是「現在很吵」
+/// 當下的動作，多一層展開就等於要人先找得到它。
+///
+/// 「通知」那行是**停用的標題**，不是可點的項目：少了它，選單上會同時
+/// 出現「關閉」與「結束」兩個看起來都像在關程式的字。
+Menu buildTrayMenu(NotifyModePref mode) {
+  final l10n = L10n.current;
+  return Menu(items: [
+    MenuItem(key: kTrayMenuShow, label: l10n.trayMenuOpen),
+    MenuItem.separator(),
+    MenuItem(label: l10n.trayMenuNotifySection, disabled: true),
+    for (final (m, label) in [
+      (NotifyModePref.off, l10n.settingsNotifyOff),
+      (NotifyModePref.mentions, l10n.settingsNotifyMentions),
+      (NotifyModePref.all, l10n.settingsNotifyAll),
+    ])
+      MenuItem.checkbox(
+        key: trayNotifyKey(m),
+        label: label,
+        checked: m == mode,
+      ),
+    MenuItem.separator(),
+    MenuItem(key: kTrayMenuExit, label: l10n.trayMenuExit),
+  ]);
 }

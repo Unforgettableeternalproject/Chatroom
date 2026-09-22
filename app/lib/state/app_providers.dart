@@ -36,6 +36,7 @@ class AppConfig {
     this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
     this.closeToTray = true,
+    this.notifyModeRevision = 0,
   });
 
   /// 從已載入的設定倉庫組一份初始快照（啟動路徑用）。
@@ -78,6 +79,12 @@ class AppConfig {
   /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
   final bool closeToTray;
 
+  /// 通知模式改過幾次。**這裡不放模式本身**——它的權威在
+  /// `SettingsRepository.notifyMode`，設定頁也直接讀那裡；在這邊再存一份
+  /// 只會多出一個會過期的值。這個計數的用途只有一個：讓 widget 樹**之外**
+  /// 改的通知模式（系統匣選單）也能觸發畫面重繪。要當前值請讀倉庫。
+  final int notifyModeRevision;
+
   bool get isConfigured => serverUrl.isNotEmpty;
 
   AppConfig copyWith({
@@ -90,6 +97,7 @@ class AppConfig {
     FontFamilyPref? fontFamily,
     LocalePref? locale,
     bool? closeToTray,
+    int? notifyModeRevision,
   }) =>
       AppConfig(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -101,6 +109,7 @@ class AppConfig {
         fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
         closeToTray: closeToTray ?? this.closeToTray,
+        notifyModeRevision: notifyModeRevision ?? this.notifyModeRevision,
       );
 }
 
@@ -111,7 +120,13 @@ final initialConfigProvider = Provider<AppConfig>(
 
 class AppConfigNotifier extends Notifier<AppConfig> {
   @override
-  AppConfig build() => ref.watch(initialConfigProvider);
+  AppConfig build() {
+    // 系統匣選單也能改通知模式，而它活在 widget 樹之外拿不到 ref
+    WindowTray.instance
+      ..notifyModeReader = (() => _settings.notifyMode)
+      ..notifyModeWriter = setNotifyMode;
+    return ref.watch(initialConfigProvider);
+  }
 
   SettingsRepository get _settings => ref.read(settingsRepoProvider);
 
@@ -147,6 +162,18 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     await _settings.setCloseToTray(v);
     await WindowTray.instance.setEnabled(v);
     state = state.copyWith(closeToTray: v);
+  }
+
+  /// 通知模式。只寫倉庫並推一次 revision——**這裡不碰通知中心**：它經
+  /// realtime 反過來依賴這顆 provider，從這裡讀會是循環相依。真正讓它
+  /// 立刻生效的是 `notificationBootstrapProvider` 對 revision 的 listen。
+  ///
+  /// 設定頁自己那顆下拉目前仍直接寫倉庫（那個檔案這輪不歸我動），所以
+  /// 兩條路都會經過倉庫；revision 只讓樹外改的那條能重繪。
+  Future<void> setNotifyMode(NotifyModePref mode) async {
+    await _settings.setNotifyMode(mode);
+    state = state.copyWith(
+        notifyModeRevision: state.notifyModeRevision + 1);
   }
 
   Future<void> setLocale(LocalePref pref) async {

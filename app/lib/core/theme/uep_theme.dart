@@ -27,12 +27,20 @@ class UepText {
         FontFamilyPref.glowsans => 'GlowSansTC',
       };
 
-  /// 自訂字體缺字時退回 Noto Serif TC——這幾套的字數各不相同，
-  /// 沒有 fallback 的話罕用字會變成方塊。
-  static List<String> get _fallback {
-    final tc = GoogleFonts.notoSerifTc().fontFamily;
-    return tc == null ? const [] : [tc];
-  }
+  /// 自訂字體缺字時的退路。這幾套的字數各不相同，沒有 fallback 的話
+  /// 罕用字會變成方塊。
+  ///
+  /// serif／display 退到 Noto Serif TC；sans 先退 Inter（拉丁字母才不會
+  /// 跟著變成中文字體的西文）再退 Noto Serif TC。
+  static List<String> get _serifFallback =>
+      [?GoogleFonts.notoSerifTc().fontFamily];
+
+  static List<String> get sansFallback => _sansFallback;
+
+  static List<String> get _sansFallback => [
+        ?GoogleFonts.inter().fontFamily,
+        ?GoogleFonts.notoSerifTc().fontFamily,
+      ];
 
   static TextStyle display({
     double size = 26,
@@ -47,7 +55,7 @@ class UepText {
     }
     return TextStyle(
       fontFamily: custom,
-      fontFamilyFallback: _fallback,
+      fontFamilyFallback: _serifFallback,
       fontSize: size,
       fontWeight: weight,
       color: color,
@@ -92,7 +100,7 @@ class UepText {
     }
     return TextStyle(
       fontFamily: custom,
-      fontFamilyFallback: _fallback,
+      fontFamilyFallback: _serifFallback,
       fontSize: size,
       fontWeight: weight,
       color: color,
@@ -105,9 +113,21 @@ class UepText {
     FontWeight weight = FontWeight.w400,
     Color? color,
     double? height,
-  }) =>
-      GoogleFonts.inter(
-        fontSize: size, fontWeight: weight, color: color, height: height);
+  }) {
+    final custom = familyName(family);
+    if (custom == null) {
+      return GoogleFonts.inter(
+          fontSize: size, fontWeight: weight, color: color, height: height);
+    }
+    return TextStyle(
+      fontFamily: custom,
+      fontFamilyFallback: _sansFallback,
+      fontSize: size,
+      fontWeight: weight,
+      color: color,
+      height: height,
+    );
+  }
 
   /// mono 小字 uppercase 標籤——設計稿最鮮明的識別元素。
   static TextStyle mono({
@@ -174,10 +194,13 @@ ThemeData buildUepTheme(Brightness brightness) {
   return base.copyWith(
     extensions: [s],
     dividerColor: s.line,
+    // 沒經過 UepText 的 Text（第三方 widget、Material 內建元件）從這裡拿字族。
+    // 讀 UepText.family 而不是加參數：判準只有一個，呼叫端不必各自傳
     textTheme: base.textTheme.apply(
       bodyColor: s.ink,
       displayColor: s.inkTitle,
-      fontFamily: GoogleFonts.inter().fontFamily,
+      fontFamily: UepText.sans().fontFamily,
+      fontFamilyFallback: UepText.sans().fontFamilyFallback,
     ),
     textSelectionTheme: TextSelectionThemeData(
       cursorColor: UepColors.gold,

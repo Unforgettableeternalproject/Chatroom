@@ -1521,5 +1521,6 @@
   "settingsCloseToTrayLabel": "Minimize to tray on close",
   "settingsCloseToTrayHint": "Reopen or quit from the tray icon",
   "trayMenuOpen": "Open Chatroom",
-  "trayMenuExit": "Quit"
+  "trayMenuExit": "Quit",
+  "trayMenuNotifySection": "Notifications"
 }

@@ -688,35 +688,69 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     );
   }
 
-  /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
-  /// （`_save` 本來就一次寫三個欄位）。
   /// 字體選項鈕。UepButton 一律 mono ＋ 全大寫，這裡要的是預覽，
-  /// 所以自己畫一顆同樣形狀的。
+  /// 所以照它 small 的規格（padding、圓角、邊框、選中配色）自己畫一顆，
+  /// 只換掉字。
+  ///
+  /// 行高用字級那排的 strut 鎖住（`forceStrutHeight`）：中文字體的 metrics
+  /// 各不相同，不鎖的話這排會比字級那排高，而且每換一個字體高度都在跳。
   Widget _fontFamilyChip(
       UepSurface s, FontFamilyPref pref, String label, bool selected) {
     final name = UepText.familyName(pref);
     final color = selected ? UepColors.goldInkOn : s.inkSoft;
-    final style = name == null
-        ? GoogleFonts.notoSerifTc(fontSize: 14, color: color)
-        : TextStyle(fontFamily: name, fontSize: 14, color: color);
-    return Material(
-      color: selected ? UepColors.gold : Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(999),
-        side: BorderSide(color: selected ? UepColors.gold : s.lineStrong),
+    // 字面大小各家差很多：辰宇落雁體是手寫細體、Glow Sans 是壓縮體，
+    // 照同一個 fontSize 排會一大一小。只動字級不動行高，整排不會被撐高
+    final size = switch (pref) {
+      FontFamilyPref.chenyuluoyan => 14.0,
+      FontFamilyPref.glowsans => 13.0,
+      _ => 12.5,
+    };
+    final base = name == null
+        ? GoogleFonts.notoSerifTc(fontSize: size, color: color)
+        : TextStyle(fontFamily: name, fontSize: size, color: color);
+    // 字級 chip 的字：UepButton small 用 mono(10.5, w500, ls 1.6)
+    final ruler = UepText.mono(size: 10.5, weight: FontWeight.w500);
+    final child = Text(
+      label,
+      style: base.copyWith(
+        fontFamilyFallback: name == null ? null : UepText.sansFallback,
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () =>
-            ref.read(appConfigProvider.notifier).setFontFamily(pref),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-          child: Text(label, style: style),
-        ),
-      ),
+      strutStyle: StrutStyle.fromTextStyle(ruler, forceStrutHeight: true),
     );
+    final pad = const EdgeInsets.symmetric(horizontal: 18, vertical: 10);
+    final shape =
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(999));
+    return selected
+        ? FilledButton(
+            onPressed: () =>
+                ref.read(appConfigProvider.notifier).setFontFamily(pref),
+            style: FilledButton.styleFrom(
+              backgroundColor: UepColors.gold,
+              foregroundColor: UepColors.goldInkOn,
+              padding: pad,
+              shape: shape,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: child,
+          )
+        : OutlinedButton(
+            onPressed: () =>
+                ref.read(appConfigProvider.notifier).setFontFamily(pref),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: s.lineStrong),
+              foregroundColor: s.inkSoft,
+              padding: pad,
+              shape: shape,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: child,
+          );
   }
 
+  /// 儲存／復原：欄位散在連線與個人化兩頁，兩頁都要有同一組出口
+  /// （`_save` 本來就一次寫三個欄位）。
   Widget _saveRow(UepSurface s) {
     final l10n = AppLocalizations.of(context);
     return Row(children: [

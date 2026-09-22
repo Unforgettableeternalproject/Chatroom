@@ -1522,5 +1522,6 @@
   "settingsCloseToTrayLabel": "关闭视窗时缩到系统匣",
   "settingsCloseToTrayHint": "从系统匣图示可再开启或结束",
   "trayMenuOpen": "开启 Chatroom",
-  "trayMenuExit": "结束"
+  "trayMenuExit": "结束",
+  "trayMenuNotifySection": "通知"
 }

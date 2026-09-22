@@ -7600,5 +7600,9 @@
   "trayMenuExit": "結束",
   "@trayMenuExit": {
     "description": "系統匣右鍵選單：真的結束程式"
+  },
+  "trayMenuNotifySection": "通知",
+  "@trayMenuNotifySection": {
+    "description": "系統匣右鍵選單：通知模式那三項的標題"
   }
 }

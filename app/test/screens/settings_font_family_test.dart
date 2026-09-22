@@ -5,6 +5,7 @@ import 'package:chatroom_app/l10n/app_localizations.dart';
 import 'package:chatroom_app/screens/settings/settings_screen.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/assignments_providers.dart';
+import 'package:chatroom_app/widgets/uep_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,5 +86,30 @@ void main() {
     await tester.pump();
 
     expect(settings.fontFamily, FontFamilyPref.iansui);
+  });
+
+  testWidgets('字體 chip 與字級 chip 同高', (tester) async {
+    await tester.pumpWidget(_host(settings));
+    await tester.pump();
+
+    await tester.tap(find.text('視覺').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.dragUntilVisible(
+        find.text('字體'), find.byType(ListView), const Offset(0, -80));
+    await tester.pump();
+
+    // 字級那排的「大」（UepButton small）當基準；字體那排每一顆都要一樣高，
+    // 不然兩排並排看起來像兩種控制項
+    final ruler = tester.getSize(find.widgetWithText(UepButton, '大')).height;
+    for (final label in ['預設', '芫荽', '粉圓', '辰宇落雁體', 'Glow Sans']) {
+      final chip = find.ancestor(
+        of: find.descendant(
+            of: find.byType(Wrap), matching: find.text(label)),
+        matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+      );
+      expect(tester.getSize(chip.first).height, ruler, reason: label);
+    }
   });
 }
