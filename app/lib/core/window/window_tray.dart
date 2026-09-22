@@ -10,6 +10,63 @@ import '../config/app_settings.dart';
 
 final _log = Logger('tray');
 
+/// 系統匣的原生接點。抽出來只為了一件事：讓測試能讓它失敗。
+abstract class TrayBackend {
+  Future<void> setIcon(String path);
+  Future<void> setToolTip(String tooltip);
+  Future<void> setContextMenu(Menu menu);
+  Future<void> popUpContextMenu();
+  Future<void> destroy();
+}
+
+/// 視窗的原生接點，同上。
+abstract class WindowBackend {
+  Future<void> setPreventClose(bool value);
+  Future<void> show();
+  Future<void> focus();
+  Future<void> hide();
+  Future<void> destroy();
+}
+
+class _RealTrayBackend implements TrayBackend {
+  const _RealTrayBackend();
+
+  @override
+  Future<void> setIcon(String path) => trayManager.setIcon(path);
+
+  @override
+  Future<void> setToolTip(String tooltip) => trayManager.setToolTip(tooltip);
+
+  @override
+  Future<void> setContextMenu(Menu menu) => trayManager.setContextMenu(menu);
+
+  @override
+  Future<void> popUpContextMenu() => trayManager.popUpContextMenu();
+
+  @override
+  Future<void> destroy() => trayManager.destroy();
+}
+
+class _RealWindowBackend implements WindowBackend {
+  const _RealWindowBackend();
+
+  @override
+  Future<void> setPreventClose(bool value) =>
+      windowManager.setPreventClose(value);
+
+  @override
+  Future<void> show() => windowManager.show();
+
+  @override
+  Future<void> focus() => windowManager.focus();
+
+  @override
+  Future<void> hide() => windowManager.hide();
+
+  @override
+  Future<void> destroy() => windowManager.destroy();
+}
+
 /// 關閉視窗時縮到系統匣（Windows），行為仿 Line。
 ///
 /// **開關關著時這裡什麼都不做**：不註冊攔截、不放匣圖示，關閉鍵就是結束。
@@ -28,6 +85,13 @@ class WindowTray with WindowListener, TrayListener {
   static bool supportedOverride = !kIsWeb && Platform.isWindows;
 
   bool get supported => supportedOverride;
+
+  /// 原生接點。測試可換成假的，藉此模擬匣裝不上去。
+  @visibleForTesting
+  static TrayBackend tray = const _RealTrayBackend();
+
+  @visibleForTesting
+  static WindowBackend window = const _RealWindowBackend();
 
   bool _enabled = false;
   bool _listening = false;
@@ -55,19 +119,53 @@ class WindowTray with WindowListener, TrayListener {
   }
 
   /// 開關切換時呼叫；關掉會把攔截與匣圖示一起收回去。
+  ///
+  /// 開啟時**先把匣放上去再裝攔截**，而且任何一步失敗都把 [enabled] 與
+  /// `preventClose` 一起退回關閉狀態。順序反過來的話，匣放不上去（圖示裝
+  /// 不了、原生匣服務不在）就會留下一個關不掉也叫不回來的視窗。
   Future<void> setEnabled(bool value) async {
     if (!supported) return;
-    _enabled = value;
-    try {
-      await windowManager.setPreventClose(value);
-      if (value) {
-        await _ensureTray();
-      } else {
+    if (!value) {
+      _enabled = false;
+      try {
+        await window.setPreventClose(false);
         await _removeTray();
+      } catch (e) {
+        _log.warning('系統匣設定失敗（closeToTray=false）：$e');
       }
-    } catch (e) {
-      _log.warning('系統匣設定失敗（closeToTray=$value）：$e');
+      return;
     }
+    try {
+      await _ensureTray();
+    } catch (e) {
+      _log.warning('系統匣建立失敗，closeToTray 維持關閉：$e');
+      await _disableAfterTrayFailure();
+      return;
+    }
+    try {
+      await window.setPreventClose(true);
+      _enabled = true;
+    } catch (e) {
+      _log.warning('關閉攔截安裝失敗，closeToTray 維持關閉：$e');
+      await _disableAfterTrayFailure();
+    }
+  }
+
+  /// 失敗回滾：攔截拆掉、狀態退回關閉、半套的匣圖示也收掉。
+  /// 每一步都自己吞例外——回滾本身再丟，就沒有第二次機會了。
+  Future<void> _disableAfterTrayFailure() async {
+    _enabled = false;
+    try {
+      await window.setPreventClose(false);
+    } catch (e) {
+      _log.warning('回滾關閉攔截失敗：$e');
+    }
+    try {
+      await tray.destroy();
+    } catch (e) {
+      _log.warning('回滾系統匣失敗：$e');
+    }
+    _trayVisible = false;
   }
 
   /// 把視窗叫回前景。點通知時也走這裡——視窗藏在匣裡時，導頁本身
@@ -75,8 +173,8 @@ class WindowTray with WindowListener, TrayListener {
   Future<void> showWindow() async {
     if (!supported) return;
     try {
-      await windowManager.show();
-      await windowManager.focus();
+      await window.show();
+      await window.focus();
     } catch (e) {
       _log.warning('顯示視窗失敗：$e');
     }
@@ -84,31 +182,31 @@ class WindowTray with WindowListener, TrayListener {
 
   Future<void> _ensureTray() async {
     if (_trayVisible) return;
-    await trayManager.setIcon('assets/tray.ico');
-    await trayManager.setToolTip('Chatroom');
+    await tray.setIcon('assets/tray.ico');
+    await tray.setToolTip('Chatroom');
     await _applyMenu();
     _trayVisible = true;
   }
 
   Future<void> _removeTray() async {
     if (!_trayVisible) return;
-    await trayManager.destroy();
+    await tray.destroy();
     _trayVisible = false;
   }
 
   /// 選單每次要彈之前重建：標籤跟著 App 語言走，勾選跟著當前通知模式走，
   /// 而兩者都可以在執行期變。
   Future<void> _applyMenu() async {
-    await trayManager.setContextMenu(
+    await tray.setContextMenu(
         buildTrayMenu(notifyModeReader?.call() ?? NotifyModePref.all));
   }
 
   /// 真的結束：先把攔截拆掉，否則 `destroy()` 會被自己擋下來。
   Future<void> _quit() async {
     try {
-      await windowManager.setPreventClose(false);
+      await window.setPreventClose(false);
       await _removeTray();
-      await windowManager.destroy();
+      await window.destroy();
     } catch (e) {
       _log.warning('結束程式失敗：$e');
     }
@@ -117,7 +215,7 @@ class WindowTray with WindowListener, TrayListener {
   @override
   void onWindowClose() {
     if (!_enabled) return; // 開關關著＝照常結束，preventClose 也沒裝
-    windowManager.hide();
+    window.hide();
   }
 
   @override
@@ -127,7 +225,7 @@ class WindowTray with WindowListener, TrayListener {
 
   @override
   void onTrayIconRightMouseDown() {
-    _applyMenu().then((_) => trayManager.popUpContextMenu());
+    _applyMenu().then((_) => tray.popUpContextMenu());
   }
 
   @override

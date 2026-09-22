@@ -175,6 +175,17 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "要嘛向主持人要一張掛在你名下的 agent 憑證。",
                 status=status, detail=detail,
             )
+        if code == "not_your_invitation":
+            # 發給**人**的邀請綁在對方那把 session_key 上。兌換的人不是
+            # 本人（或用的是別群的憑證）就不成立——重新 join 沒有用，
+            # 要的是請對方去兌換，或請房內成員另外發一張給你
+            return HubError(
+                _detail_text(detail)
+                or "這張邀請是發給別人的——它綁在對方的 session_key 上，"
+                "兌換得由本人來。重新加入沒有用；請房內的成員另外發一張"
+                "給你。",
+                status=status, detail=detail,
+            )
         if code == "kicked":
             # join 端點的「被踢過所以不能自己回來」。與 participant_kicked
             # 不同：那是手上的身分失效，這是根本不讓你取得新身分

@@ -3334,21 +3334,41 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 查不到那把 key（從沒上線過）就退回既有比對：判不了是不是人，
             # 保守當 agent 處理。
             a_party = assignment["party"] if "party" in assignment.keys() else ""
-            if a_party and a_party != _party(request):
-                target_row = await (
-                    await db.execute(
-                        "SELECT kind FROM session WHERE session_key=?",
-                        (assignment["target_session_key"],))
-                ).fetchone()
-                if target_row is None or target_row["kind"] != "human":
-                    raise _err(403, "not_your_agent",
-                               "這筆指派不是發給你手上這張憑證的")
+            target_row = await (
+                await db.execute(
+                    "SELECT kind, party FROM session WHERE session_key=?",
+                    (assignment["target_session_key"],))
+            ).fetchone()
+            if target_row is not None and target_row["kind"] == "human":
                 if body.role != "human":
-                    # role=human 在上面已經驗過憑證，所以這一條等於「要有
-                    # 人類憑證」——拿 agent 憑證兌換給人的邀請不成立
+                    # role=human 在進門那一刻已經驗過憑證，所以這一條等於
+                    # 「要有人類憑證」——拿 agent 憑證兌換給人的邀請不成立
                     raise _err(403, "human_token_required",
                                "這筆指派是發給人的，要以人類身分（role=human）"
                                "用人類憑證兌換")
+                # 發給人的邀請跨群成立（party 是 agent 的界線），但換來的
+                # 條件是**本人**：兌換後 participant 會綁到
+                # `target_session_key`，等於直接變成那個人。少了這一條，任何
+                # 持人類憑證的第三人都能兌換發給別人的邀請並頂替其身分。
+                #
+                # 兩道一起看才擋得住：session_key 是呼叫端自報的字串（填別人
+                # 的就過了本人比對），群則來自憑證本身，冒名者拿的是自己那張
+                # 邀請碼，群對不上。
+                if session_key != actor_key(assignment["target_session_key"]):
+                    raise _err(403, "not_your_invitation",
+                               "這張邀請不是發給你的")
+                # 群跟著**憑證**走，不是裝置：同一個人在第二台裝置貼同一張
+                # 邀請碼仍是同群，過得了這一關（被上面的 session_key 比對擋下
+                # 是另一回事——邀請綁 session_key，第二台裝置該另發一張）。
+                # 空字串放行：目標從沒回報過群（舊資料或還沒上線）就判不了，
+                # 保守維持既有行為，不讓升級一次資料庫就作廢所有待處理邀請。
+                t_party = target_row["party"] if "party" in target_row.keys() else ""
+                if t_party and t_party != _party(request):
+                    raise _err(403, "not_your_invitation",
+                               "這張邀請不是發給你的")
+            elif a_party and a_party != _party(request):
+                raise _err(403, "not_your_agent",
+                           "這筆指派不是發給你手上這張憑證的")
             # 指派目標是權威身分。這讓 App 能以 Codex 自己的 thread id 指派，
             # 即使 MCP 進程只能帶臨時 bridge key，participant 仍綁到正確 session。
             session_key = assignment["target_session_key"]
