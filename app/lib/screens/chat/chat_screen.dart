@@ -10,6 +10,7 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -45,6 +46,7 @@ import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/pane_divider.dart';
 import '../../widgets/question_card.dart';
 import '../../widgets/run_report_panel.dart';
 import '../../widgets/system_message_tile.dart';
@@ -60,7 +62,6 @@ import '../board/board_screen.dart';
 
 /// 成員側欄的寬度。回報面板要貼著它的左緣，所以這個數字有第二個讀者，
 /// 不能再寫死在 `Container` 裡。
-const double _sidebarWidth = 288;
 
 /// 跳轉粗跳的落點估計。
 ///
@@ -1312,51 +1313,69 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
     final isOps = room?.isOps ?? false;
-    final columns = Row(
-      children: [
-        Expanded(child: chatColumn),
-        Container(
-          width: _sidebarWidth,
-          decoration: BoxDecoration(
-            color: s.bgSoft,
-            border: Border(left: BorderSide(color: s.line)),
-          ),
-          child: _MembersPanel(
-            roomId: roomId,
-            members: members,
-            myId: myId,
-            archived: archived,
-            limits: detailAsync.value?.limits ?? const ServerLimits(),
-            youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-            isOps: isOps,
-          ),
-        ),
-      ],
-    );
     return Scaffold(
       backgroundColor: s.bg,
-      // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
-      // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
-      body: !isOps
-          ? columns
-          : CallbackShortcuts(
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.escape): () => ref
-                    .read(selectedRunIdProvider.notifier)
-                    .clear(roomId),
-              },
-              child: Stack(
-                children: [
-                  columns,
-                  Positioned.fill(
-                    child: RunReportOverlay(
-                      roomId: roomId,
-                      sidebarWidth: _sidebarWidth,
-                    ),
-                  ),
-                ],
+      // 側欄寬度是拖出來的偏好，但**版面有最後決定權**：落盤的值可能是在
+      // 更寬的視窗上拖的，直接用會把訊息區擠沒，所以依當下可用寬再夾一次。
+      body: LayoutBuilder(builder: (context, box) {
+        final sidebarWidth = clampRightPaneWidth(
+          ref.watch(appConfigProvider.select((c) => c.rightPaneWidth)),
+          available: box.maxWidth - kPaneDividerWidth - kMainPaneMinWidth,
+        );
+        final columns = Row(
+          children: [
+            Expanded(child: chatColumn),
+            PaneDivider(
+              tooltip: AppLocalizations.of(context).shellPaneResizeHint,
+              // 往左拖是加寬：分隔線在側欄左邊，位移方向與寬度相反
+              onDelta: (dx) => ref
+                  .read(appConfigProvider.notifier)
+                  .setRightPaneWidth(sidebarWidth - dx),
+              onReset: () => ref
+                  .read(appConfigProvider.notifier)
+                  .setRightPaneWidth(kRightPaneDefaultWidth),
+            ),
+            Container(
+              width: sidebarWidth,
+              decoration: BoxDecoration(
+                color: s.bgSoft,
+                border: Border(left: BorderSide(color: s.line)),
+              ),
+              child: _MembersPanel(
+                roomId: roomId,
+                members: members,
+                myId: myId,
+                archived: archived,
+                limits: detailAsync.value?.limits ?? const ServerLimits(),
+                youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+                isOps: isOps,
               ),
             ),
+          ],
+        );
+        // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
+        // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
+        return !isOps
+            ? columns
+            : CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.escape): () => ref
+                      .read(selectedRunIdProvider.notifier)
+                      .clear(roomId),
+                },
+                child: Stack(
+                  children: [
+                    columns,
+                    Positioned.fill(
+                      child: RunReportOverlay(
+                        roomId: roomId,
+                        sidebarWidth: sidebarWidth,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+      }),
     );
   }
 
@@ -2803,13 +2822,19 @@ class _MemberTile extends StatelessWidget {
                   Row(
                     children: [
                       Flexible(
-                        child: Text(
-                          p.displayName,
-                          overflow: TextOverflow.ellipsis,
-                          style: UepText.sans(
-                            size: 14,
-                            weight: FontWeight.w600,
-                            color: inactive ? s.ink : s.inkTitle),
+                        // 側欄再怎麼拖都有拖不夠寬的時候（名字長、字級大），
+                        // 截掉的那半要有地方讀得到
+                        child: Tooltip(
+                          message: p.displayName,
+                          waitDuration: const Duration(milliseconds: 500),
+                          child: Text(
+                            p.displayName,
+                            overflow: TextOverflow.ellipsis,
+                            style: UepText.sans(
+                              size: 14,
+                              weight: FontWeight.w600,
+                              color: inactive ? s.ink : s.inkTitle),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 7),

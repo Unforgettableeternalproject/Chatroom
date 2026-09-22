@@ -86,6 +86,7 @@
   "shellTabRooms": "聊天室",
   "shellTabBoards": "任务板",
   "shellNoRoomSelected": "选择一个聊天室开始",
+  "shellPaneResizeHint": "拖曳调整宽度，双击还原",
   "hostProbeChecking": "检查中…",
   "hostProbeWaitingHub": "等 Hub 启动",
   "hostProbeStopped": "已停止",
@@ -1523,5 +1524,8 @@
   "settingsCloseToTrayHint": "从系统匣图示可再开启或结束",
   "trayMenuOpen": "开启 Chatroom",
   "trayMenuExit": "结束",
-  "trayMenuNotifySection": "通知"
+  "trayMenuNotifySection": "通知",
+  "opsReportExport": "汇出",
+  "opsReportExportAll": "全部汇出",
+  "opsReportExported": "已汇出"
 }

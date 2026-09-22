@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
+import '../export/run_report_export.dart';
 import '../l10n/l10n.dart';
 import '../models/agent_run.dart';
 import '../state/runs_providers.dart';
@@ -106,6 +108,23 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
     );
   }
 
+  /// 把**目前列出的**幾筆合成一份存下來。
+  ///
+  /// 匯出的範圍就是畫面上看得到的那些（含「更多」按下去之後載入的），不是
+  /// 全部歷史——按鈕在清單上方，人會以為它匯出的是下面那一份。
+  Future<void> _exportAll(List<AgentRun> runs) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final saver = ref.read(runReportSaverProvider);
+    final saved = await saver(
+      fileName: runReportsFileName(),
+      text: formatRunReports(runs),
+      dialogTitle: l10n.opsReportExportAll,
+    );
+    if (saved == null) return; // 按了取消，不是錯誤
+    messenger.showSnackBar(SnackBar(content: Text(l10n.opsReportExported)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -128,7 +147,20 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MonoLabel(l10n.opsReportLabel, size: 8.5, letterSpacing: 2.2),
+        Row(
+          children: [
+            MonoLabel(l10n.opsReportLabel, size: 8.5, letterSpacing: 2.2),
+            const Spacer(),
+            // 沒有回報時不給這顆鈕：按下去只會存出一份空檔
+            if (runs != null && runs.isNotEmpty)
+              UepButton(
+                label: l10n.opsReportExportAll,
+                variant: UepButtonVariant.outline,
+                small: true,
+                onPressed: () => _exportAll(runs.take(_limit).toList()),
+              ),
+          ],
+        ),
         const SizedBox(height: 8),
         // 讀不到與「沒有」講成兩句話：前者是這一區壞了，後者是真的沒有派過
         if (runs == null && async.hasError)
@@ -260,7 +292,11 @@ class RunReportOverlay extends ConsumerWidget {
 }
 
 /// 一筆 run 的完整回報：標題列（狀態、kind、ref、結束時間、用量）＋可捲內容。
-class RunReportDetailPanel extends StatelessWidget {
+///
+/// **內容要帶得走**：回報是拿去貼進 issue、交給下一個人接手的東西，只能
+/// 在這塊面板裡看的話，等於每次都要重打一遍。所以標題列給整段複製與存成
+/// `.md` 兩條路，內文再包一層 [SelectionArea] 讓人拖選其中一段。
+class RunReportDetailPanel extends ConsumerWidget {
   const RunReportDetailPanel({
     super.key,
     required this.run,
@@ -270,9 +306,33 @@ class RunReportDetailPanel extends StatelessWidget {
   final AgentRun run;
   final VoidCallback onClose;
 
+  /// 複製的是**原文**：面板上是渲染過的 Markdown，選取會漏掉標題符號與
+  /// 清單記號，貼到別處就不是同一份東西了。
+  String get _text => run.result.isEmpty ? run.reason : run.result;
+
+  Future<void> _copy(BuildContext context) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: _text));
+    messenger.showSnackBar(SnackBar(content: Text(l10n.commonCopied)));
+  }
+
+  Future<void> _export(BuildContext context, WidgetRef ref) async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final saved = await ref.read(runReportSaverProvider)(
+      fileName: runReportFileName(run),
+      text: formatRunReport(run),
+      dialogTitle: l10n.opsReportExport,
+    );
+    if (saved == null) return; // 按了取消，不是錯誤
+    messenger.showSnackBar(SnackBar(content: Text(l10n.opsReportExported)));
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
+    final l10n = AppLocalizations.of(context);
     final (label, color) = runStatusLabel(context, run);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -299,7 +359,7 @@ class RunReportDetailPanel extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  tooltip: AppLocalizations.of(context).commonClose,
+                  tooltip: l10n.commonClose,
                   visualDensity: VisualDensity.compact,
                   onPressed: onClose,
                   icon: Icon(Icons.close, size: 16, color: s.inkMute),
@@ -317,21 +377,39 @@ class RunReportDetailPanel extends StatelessWidget {
                 '${run.ref.isEmpty ? '' : ' · ${run.ref}'}',
                 style: UepText.mono(size: 10.5, color: s.inkMute),
               ),
+              const SizedBox(height: 8),
+              Row(children: [
+                UepButton(
+                  label: l10n.commonCopy,
+                  variant: UepButtonVariant.outline,
+                  small: true,
+                  // 連 reason 都沒有時沒東西可複製
+                  onPressed: _text.isEmpty ? null : () => _copy(context),
+                ),
+                const SizedBox(width: 8),
+                UepButton(
+                  label: l10n.opsReportExport,
+                  variant: UepButtonVariant.outline,
+                  small: true,
+                  onPressed: () => _export(context, ref),
+                ),
+              ]),
             ],
           ),
         ),
         Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-            child: run.result.isEmpty
-                ? Text(
-                    run.reason.isEmpty
-                        ? AppLocalizations.of(context).opsRunNoReport
-                        : run.reason,
-                    style:
-                        UepText.serif(size: 13.5, color: s.inkMute, height: 1.6),
-                  )
-                : UepMarkdownBody(data: run.result, baseColor: s.inkSoft),
+          // 拖選其中一段：整段複製走上面那顆鈕，這裡是「只要這幾行」
+          child: SelectionArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+              child: run.result.isEmpty
+                  ? Text(
+                      run.reason.isEmpty ? l10n.opsRunNoReport : run.reason,
+                      style: UepText.serif(
+                          size: 13.5, color: s.inkMute, height: 1.6),
+                    )
+                  : UepMarkdownBody(data: run.result, baseColor: s.inkSoft),
+            ),
           ),
         ),
       ],

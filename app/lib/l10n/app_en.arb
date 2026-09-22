@@ -85,6 +85,7 @@
   "shellTabRooms": "Rooms",
   "shellTabBoards": "Boards",
   "shellNoRoomSelected": "Pick a room to start",
+  "shellPaneResizeHint": "Drag to resize, double-click to reset",
   "hostProbeChecking": "Checking…",
   "hostProbeWaitingHub": "Waiting for the Hub to start",
   "hostProbeStopped": "Stopped",
@@ -1522,5 +1523,8 @@
   "settingsCloseToTrayHint": "Reopen or quit from the tray icon",
   "trayMenuOpen": "Open Chatroom",
   "trayMenuExit": "Quit",
-  "trayMenuNotifySection": "Notifications"
+  "trayMenuNotifySection": "Notifications",
+  "opsReportExport": "Export",
+  "opsReportExportAll": "Export all",
+  "opsReportExported": "Exported"
 }

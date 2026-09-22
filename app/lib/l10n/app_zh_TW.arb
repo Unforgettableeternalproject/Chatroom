@@ -396,6 +396,10 @@
   "@shellNoRoomSelected": {
     "description": "桌機模式沒選房間時的占位文字"
   },
+  "shellPaneResizeHint": "拖曳調整寬度，雙擊還原",
+  "@shellPaneResizeHint": {
+    "description": "側邊欄分隔線的提示：可拖曳、雙擊還原預設寬"
+  },
   "hostProbeChecking": "檢查中…",
   "@hostProbeChecking": {
     "description": "燈號：檢查中"
@@ -7604,5 +7608,17 @@
   "trayMenuNotifySection": "通知",
   "@trayMenuNotifySection": {
     "description": "系統匣右鍵選單：通知模式那三項的標題"
+  },
+  "opsReportExport": "匯出",
+  "@opsReportExport": {
+    "description": "回報面板：把這一筆回報存成 .md"
+  },
+  "opsReportExportAll": "全部匯出",
+  "@opsReportExportAll": {
+    "description": "回報面板：把目前列出的回報合成一份 .md"
+  },
+  "opsReportExported": "已匯出",
+  "@opsReportExported": {
+    "description": "回報匯出完成的提示"
   }
 }

@@ -39,6 +39,8 @@ class SettingsRepository {
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
   static const _kOpsExceptionSeen = 'ops.exceptions.seenAt';
+  static const _kLeftPaneWidth = 'chatroom.left_pane_width';
+  static const _kRightPaneWidth = 'chatroom.right_pane_width';
 
   static Future<SettingsRepository> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -131,6 +133,21 @@ class SettingsRepository {
   String get codexDispatchThread => _prefs.getString(_kCodexThread) ?? '';
   Future<void> setCodexDispatchThread(String id) =>
       _prefs.setString(_kCodexThread, id.trim());
+
+  /// 左欄（房間／Board 列表）寬度，單位 px。
+  ///
+  /// 讀出來就夾在合法範圍內：落盤的值可能來自上一版的上下限，而版面拿到
+  /// 一個超界的數字只會把主內容擠掉。
+  double get leftPaneWidth => clampLeftPaneWidth(
+      _prefs.getDouble(_kLeftPaneWidth) ?? kLeftPaneDefaultWidth);
+  Future<void> setLeftPaneWidth(double width) =>
+      _prefs.setDouble(_kLeftPaneWidth, clampLeftPaneWidth(width));
+
+  /// 右欄（成員／回報）寬度，單位 px。
+  double get rightPaneWidth => clampRightPaneWidth(
+      _prefs.getDouble(_kRightPaneWidth) ?? kRightPaneDefaultWidth);
+  Future<void> setRightPaneWidth(double width) =>
+      _prefs.setDouble(_kRightPaneWidth, clampRightPaneWidth(width));
 
   /// 監控器（派工異常）看到哪裡了：最後一筆看過的事件時間（ISO）。
   ///
@@ -270,3 +287,46 @@ enum NotifyModePref { off, mentions, all }
 /// 落盤的是 `enum.name`（`system` / `zhTW` / `en`），不是 BCP-47 字串——
 /// 選項是一份有限清單，而 locale 字串的寫法（`zh_TW`／`zh-Hant-TW`）會變。
 enum LocalePref { system, zhTW, en }
+
+/// 側邊欄寬度的預設與夾取範圍（px）。
+///
+/// 放在這裡而不是各自的畫面檔：落盤端（讀回來要夾）與版面端（拖曳時要夾）
+/// 必須用同一份數字，分兩處寫遲早會各改各的。
+const double kLeftPaneDefaultWidth = 272;
+const double kLeftPaneMinWidth = 200;
+const double kLeftPaneMaxWidth = 480;
+const double kRightPaneDefaultWidth = 288;
+const double kRightPaneMinWidth = 240;
+const double kRightPaneMaxWidth = 560;
+
+/// 主內容（訊息區）不論側欄怎麼拖都要留下的寬度。
+const double kMainPaneMinWidth = 420;
+
+/// 分隔線的可拖曳寬度。細到看不見就抓不到，粗到會被誤觸。
+const double kPaneDividerWidth = 6;
+
+/// 夾在 [min]、[max] 之間；[max] 比 [min] 還小時以 [min] 為準
+/// （視窗窄到連下限都放不下時，寧可讓側欄超出也不要回一個負數）。
+double clampPaneWidth(double width, {required double min, required double max}) {
+  final hi = max < min ? min : max;
+  return width.clamp(min, hi).toDouble();
+}
+
+/// 左欄夾取。[available] 是當下版面還能給側欄的最大寬（已扣掉主內容下限與
+/// 分隔線）；沒傳就只用固定上限。
+double clampLeftPaneWidth(double width, {double? available}) => clampPaneWidth(
+      width,
+      min: kLeftPaneMinWidth,
+      max: available == null || available > kLeftPaneMaxWidth
+          ? kLeftPaneMaxWidth
+          : available,
+    );
+
+/// 右欄夾取；語意同 [clampLeftPaneWidth]。
+double clampRightPaneWidth(double width, {double? available}) => clampPaneWidth(
+      width,
+      min: kRightPaneMinWidth,
+      max: available == null || available > kRightPaneMaxWidth
+          ? kRightPaneMaxWidth
+          : available,
+    );

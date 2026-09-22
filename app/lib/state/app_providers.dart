@@ -36,6 +36,8 @@ class AppConfig {
     this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
     this.closeToTray = true,
+    this.leftPaneWidth = kLeftPaneDefaultWidth,
+    this.rightPaneWidth = kRightPaneDefaultWidth,
     this.notifyModeRevision = 0,
   });
 
@@ -58,6 +60,8 @@ class AppConfig {
         fontFamily: settings.fontFamily,
         locale: settings.locale,
         closeToTray: settings.closeToTray,
+        leftPaneWidth: settings.leftPaneWidth,
+        rightPaneWidth: settings.rightPaneWidth,
       );
 
   final String serverUrl;
@@ -79,6 +83,14 @@ class AppConfig {
   /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
   final bool closeToTray;
 
+  /// 左欄（房間／Board 列表）寬度；套用在 `app_shell.dart`。
+  /// 已經是夾過的值，但版面端仍要依當下視窗再夾一次——這份快照不知道
+  /// 視窗現在多寬。
+  final double leftPaneWidth;
+
+  /// 右欄（成員／回報）寬度；套用在 `chat_screen.dart`。
+  final double rightPaneWidth;
+
   /// 通知模式改過幾次。**這裡不放模式本身**——它的權威在
   /// `SettingsRepository.notifyMode`，設定頁也直接讀那裡；在這邊再存一份
   /// 只會多出一個會過期的值。這個計數的用途只有一個：讓 widget 樹**之外**
@@ -97,6 +109,8 @@ class AppConfig {
     FontFamilyPref? fontFamily,
     LocalePref? locale,
     bool? closeToTray,
+    double? leftPaneWidth,
+    double? rightPaneWidth,
     int? notifyModeRevision,
   }) =>
       AppConfig(
@@ -109,6 +123,8 @@ class AppConfig {
         fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
         closeToTray: closeToTray ?? this.closeToTray,
+        leftPaneWidth: leftPaneWidth ?? this.leftPaneWidth,
+        rightPaneWidth: rightPaneWidth ?? this.rightPaneWidth,
         notifyModeRevision: notifyModeRevision ?? this.notifyModeRevision,
       );
 }
@@ -162,6 +178,22 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     await _settings.setCloseToTray(v);
     await WindowTray.instance.setEnabled(v);
     state = state.copyWith(closeToTray: v);
+  }
+
+  /// 側邊欄寬度。**先改畫面再落盤**：拖曳時這支每一格都會被叫到，
+  /// 等 prefs 寫完才更新的話，側欄會跟不上游標。
+  Future<void> setLeftPaneWidth(double width) async {
+    final w = clampLeftPaneWidth(width);
+    if (w == state.leftPaneWidth) return;
+    state = state.copyWith(leftPaneWidth: w);
+    await _settings.setLeftPaneWidth(w);
+  }
+
+  Future<void> setRightPaneWidth(double width) async {
+    final w = clampRightPaneWidth(width);
+    if (w == state.rightPaneWidth) return;
+    state = state.copyWith(rightPaneWidth: w);
+    await _settings.setRightPaneWidth(w);
   }
 
   /// 通知模式。只寫倉庫並推一次 revision——**這裡不碰通知中心**：它經
