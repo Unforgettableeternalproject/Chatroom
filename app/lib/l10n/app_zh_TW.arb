@@ -7654,5 +7654,108 @@
   "errorHeirNotFound": "找不到這個成員，或他已經不在聊天室裡",
   "@errorHeirNotFound": {
     "description": "移交管理權時目標成員已不在房內（heir_not_found）"
+  },
+  "roomsMenuSettings": "設定",
+  "@roomsMenuSettings": {
+    "description": "房間選單：開房間設定頁"
+  },
+  "roomsMenuTransfer": "轉移所有權",
+  "@roomsMenuTransfer": {
+    "description": "房間選單：把房主交給別人（僅房主可見）"
+  },
+  "roomSettingsTitle": "房間設定",
+  "@roomSettingsTitle": {
+    "description": "房間設定頁標題"
+  },
+  "roomSettingsSaved": "已儲存",
+  "@roomSettingsSaved": {
+    "description": "房間設定頁：儲存成功"
+  },
+  "roomSettingsOwnerOnly": "只有房主能修改",
+  "@roomSettingsOwnerOnly": {
+    "description": "房間設定頁：非房主看到的唯讀提示"
+  },
+  "roomSettingsArchivedReadOnly": "已封存，唯讀",
+  "@roomSettingsArchivedReadOnly": {
+    "description": "房間設定頁：封存房的唯讀提示"
+  },
+  "roomSettingsBoard": "任務板",
+  "@roomSettingsBoard": {
+    "description": "房間設定頁：任務板區塊標題"
+  },
+  "roomSettingsArchiveSection": "封存",
+  "@roomSettingsArchiveSection": {
+    "description": "房間設定頁：封存區塊標題"
+  },
+  "roomsTransferPickBody": "選擇新的房主。轉移後你會變成一般成員。",
+  "@roomsTransferPickBody": {
+    "description": "轉移所有權對話框說明"
+  },
+  "roomsTransferAction": "轉移",
+  "@roomsTransferAction": {
+    "description": "轉移所有權對話框的確認鈕"
+  },
+  "roomsTransferNoCandidates": "房內沒有其他人類成員",
+  "@roomsTransferNoCandidates": {
+    "description": "轉移所有權：沒有可選的人"
+  },
+  "roomsLeaveArchiveTitle": "離開並封存？",
+  "@roomsLeaveArchiveTitle": {
+    "description": "房主是最後一位人類時離開的確認框標題"
+  },
+  "roomsLeaveArchiveBody": "你是房內最後一位人類成員。離開後聊天室會封存。",
+  "@roomsLeaveArchiveBody": {
+    "description": "房主是最後一位人類時離開的確認框內文"
+  },
+  "roomsLeaveArchiveAction": "離開並封存",
+  "@roomsLeaveArchiveAction": {
+    "description": "房主是最後一位人類時離開的確認鈕"
+  },
+  "roomsLeftArchived": "已離開，聊天室已封存",
+  "@roomsLeftArchived": {
+    "description": "房主離開並封存後的提示"
+  },
+  "roomsLeftHandedOver": "已離開，房主改為 {who}",
+  "@roomsLeftHandedOver": {
+    "description": "房主離開、自動轉移後的提示",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "boardMenuDelete": "永久刪除…",
+  "@boardMenuDelete": {
+    "description": "任務板選單：永久刪除（僅已封存的板）"
+  },
+  "boardDeleteTitle": "永久刪除任務板？",
+  "@boardDeleteTitle": {
+    "description": "刪除任務板確認框標題"
+  },
+  "boardDeleteBody": "「{name}」和板上所有卡片會被刪除，無法復原。",
+  "@boardDeleteBody": {
+    "description": "刪除任務板確認框內文",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDeleteAction": "永久刪除",
+  "@boardDeleteAction": {
+    "description": "刪除任務板確認鈕"
+  },
+  "boardDeletedDone": "已刪除「{name}」",
+  "@boardDeletedDone": {
+    "description": "刪除任務板後的提示",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roomSettingsMembersOnly": "只有房間成員能查看設定",
+  "@roomSettingsMembersOnly": {
+    "description": "房間設定頁：非成員直接打開時的提示"
   }
 }

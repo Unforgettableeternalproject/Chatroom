@@ -766,6 +766,8 @@ async def test_deleting_a_board_is_never_triggered_by_deleting_a_room(tmp_path):
             await _join(client, rb, "claude-a", "A")
             await client.post(f"/api/boards/{bid}/rooms/{rb}", headers=owner)
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{rid}/archive", headers=owner)
             r = await client.delete(f"/api/rooms/{rid}", headers=owner)
             assert r.status_code == 200, r.text
             assert r.json()["deleted"]["board_items_kept"] >= 1

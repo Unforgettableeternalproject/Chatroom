@@ -18,6 +18,7 @@ import 'screens/chat/chat_screen.dart';
 import 'screens/help/help_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
+import 'screens/rooms/room_settings_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
@@ -140,6 +141,12 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   GoRoute(
                     path: 'assign',
                     builder: (context, state) => AssignmentScreen(
+                        roomId: state.pathParameters['roomId']!),
+                  ),
+                  // 房間設定：名稱、主題、說話方式、可見度等，原本散在選單裡
+                  GoRoute(
+                    path: 'settings',
+                    builder: (context, state) => RoomSettingsScreen(
                         roomId: state.pathParameters['roomId']!),
                   ),
                   // Board 與釘選牆／指派同一層：它是這個房間底下的東西，

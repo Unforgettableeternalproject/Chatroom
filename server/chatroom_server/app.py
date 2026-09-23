@@ -522,6 +522,24 @@ class RoomStyle(BaseModel):
     style_instructions: str = Field(default="", max_length=2000)
 
 
+class RoomTopic(BaseModel):
+    """改主題。空字串＝清掉主題（主題本來就是選填）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(default="", max_length=500)
+
+
+class LeaveOptions(BaseModel):
+    """離開時的選項。**可省**——POST 不帶 body 時整個模型是 None。
+
+    ``archive_if_last``：房主是房內最後一個人類時，確認「離開就封存」。
+    只在沒有人可以接手時生效；有人可接就照常移交，不封存。
+    """
+
+    archive_if_last: bool = False
+
+
 class JoinRequest(BaseModel):
     kind: str = Field(pattern="^(claude|codex|human|other)$")
     # ⚠️ 選填是因為多了 `X-Session-Key`（09/07 卡 87ec8297），不是因為
@@ -2566,6 +2584,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
         await _post_message(room_id, None, reason, kind="system",
                             system_event="archive")
+        await _archive_mark(room_id, approved_request)
+        await _commit_with_retry(db)
+        await _archive_settle_boards(room_id)
+
+    async def _archive_mark(room_id: str,
+                            approved_request: str | None = None) -> None:
+        """封存的資料庫寫入。**不 commit**——房主離開那條路要把它與離開
+        放進同一次 commit。"""
+        db = app.state.db
         await db.execute(
             "UPDATE room SET status='archived', archived_at=?,"
             " archive_pending_since=NULL WHERE id=?",
@@ -2582,7 +2609,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             sql += " AND id!=?"
             params.append(approved_request)
         await db.execute(sql, tuple(params))
-        await _commit_with_retry(db)
+
+    async def _archive_settle_boards(room_id: str) -> None:
+        """封存 commit 之後的善後：掛著的板與訂閱端。"""
+        db = app.state.db
         # 封存這間房，可能讓它掛著的板失去**最後一個叫得醒人的地方**。
         # detach 那條路已經在處理，這條沒有的話追蹤者會安靜地降級——而
         # `board_room` 的列還在，從計數上看起來完全正常
@@ -2780,7 +2810,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         body: ArchiveRequestCreate | None = None,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         """手動封存。**只有建立者執行得了**；房內成員提得出請求。
 
@@ -2798,14 +2827,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         去戳房主或乾等自動封存，等於把最有判斷力的人排除在外。
         """
         room = await _room_or_404(room_id)
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
         me = await _active_creator_or_member(room, x_participant_id,
-                                             x_session_key, host)
-        # 主持人視角在這裡等同建立者——他要封的正是那些**沒有人管得動**的房
-        # （建立者不在、或建立時根本沒帶 session_key）。走提案那條路的話，
-        # 提案會掛在一個永遠不會出現的人身上
-        is_admin = host or (bool(room["creator_session_key"]) and (
+                                             x_session_key)
+        is_admin = bool(room["creator_session_key"]) and (
             x_session_key == room["creator_session_key"]
-        ))
+        )
         if not is_admin and me is not None:
             # 走 participant 自報的建立者也算數——他 join 之後手上仍只有
             # 那把 session key，不該因為換了自報方式就被降級成一般成員
@@ -2953,7 +2981,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
         # 封存與解封是同一道門的兩面，一寬一嚴會讓人猜不出這道門管什麼。
@@ -2963,10 +2990,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # ⚠️ 已知代價（艾斯維爾 08/31 裁決時確認過）：建立者不在、或換掉了
         # deviceKey，那個房就永遠是唯讀的。目前沒有管理權回收機制，只有
         # 建立者主動移交（POST /admin）。封存房唯讀而非消失，代價可承受
-        # 主持人視角是這條路的**唯一救援**：上面那個代價（建立者不在，房就
-        # 永遠唯讀）就是靠這裡補的
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
+        # 上面那個代價（建立者不在，房就永遠唯讀）改由 claim 補
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            what="解除封存", host=host)
+                            what="解除封存")
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db
@@ -3006,7 +3034,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str, body: Rename,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         """改房名。限房間管理者（09/07 卡 c271c7ff，契約見決策裁定）。
 
@@ -3018,8 +3045,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         兩邊都不會報錯——只有記得舊名的人才看得出哪裡怪。
         """
         room = await _room_or_404(room_id)
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            "改聊天室的名字", host)
+                            "改聊天室的名字")
         if room["name"] == body.name:
             return {"ok": True, "id": room_id, "name": body.name,
                     "changed": False}
@@ -3130,6 +3159,33 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "style": body.style,
                 "style_instructions": instructions,
                 "style_prompt": prompt, "changed": True}
+
+    @app.post("/api/rooms/{room_id}/topic", dependencies=[Depends(require_auth)])
+    async def set_topic(
+        room_id: str,
+        body: RoomTopic,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改聊天室主題。只有建立者能改；空字串＝清掉主題。
+
+        與改名同一個理由要留痕：主題是加入的人讀到的第一句說明。
+        同值不發訊息。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key, "變更主題")
+        topic = body.topic.strip()
+        if (room["topic"] or "") == topic:
+            return {"ok": True, "id": room_id, "topic": topic,
+                    "changed": False}
+        db = app.state.db
+        await db.execute("UPDATE room SET topic=? WHERE id=?", (topic, room_id))
+        await _commit_with_retry(db)
+        await _post_message(
+            room_id, None,
+            f"聊天室主題已改為「{topic}」" if topic else "聊天室主題已清除",
+            kind="system", system_event="topic")
+        return {"ok": True, "id": room_id, "topic": topic, "changed": True}
 
     # room_id 是外鍵的那幾張表。順序照依賴關係由內往外，最後才是 room 本身。
     #
@@ -3266,7 +3322,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         """永久刪除一個聊天室。建立者或 Hub 主持人，**不可復原**。
 
-        封存的房間也能刪（其實那才是主要用途）。刪完之後，手上還握著舊身分的
+        只有封存的房間能刪（未封存回 409 `room_not_archived`）。刪完之後，手上還握著舊身分的
         agent 會在下一次呼叫拿到 404 `room_not_found`——那條路徑不是身分問題，
         重新 join 也救不回來，bridge 對它有專屬的說明。
 
@@ -3282,6 +3338,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id, allow_archived=True)
         await _admin_or_403(room, x_participant_id, x_session_key,
                             "刪除這個聊天室", host=host)
+        # 🔴 **前置：房必須已經封存**（艾斯維爾 2026-09-23 裁定，與任務板
+        # `board_not_archived` 同一條規則）。刪除不可復原，封存是它的緩衝。
+        # 主持人也不例外——他要清的本來就是封存房
+        if room["status"] != "archived":
+            raise _err(409, "room_not_archived",
+                       "要先封存這個聊天室才能刪除。",
+                       room_status=room["status"])
         counts = await _purge_room(room_id)
         logger.warning(
             "永久刪除聊天室「%s」（%s）：%s", room["name"], room_id, counts,
@@ -4047,7 +4110,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return names
 
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
-    async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
+    async def leave_room(room_id: str,
+                         body: LeaveOptions | None = None,
+                         x_participant_id: str | None = Header(default=None)):
         # 封存房也允許離開（唯讀例外），故不檢查房間狀態
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
@@ -4057,20 +4122,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await (
             await db.execute("SELECT * FROM room WHERE id=?", (room_id,))
         ).fetchone()
-        # **只擋人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
-        # 可以回答「移轉還是封存」——擋下它只會讓它卡在一個答不出來的問題上。
+        # **只管人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
+        # 可以回答「封存嗎」——擋下它只會讓它卡在一個答不出來的問題上。
         # 那種房空了會由 presence sweeper 自動封存，既有機制已經涵蓋。
-        # 這條規則服務的是「人類在 App 上按下離開」那個情境。
+        #
+        # 人類房主離開（艾斯維爾 2026-09-23 裁定）：
+        # - 房內還有別的 active 人類 → 管理權自動交給**最早加入**的那位
+        # - 沒有 → 離開就封存；要 App 先問過人（`archive_if_last`），
+        #   否則 409 `leave_will_archive`，什麼都不動
+        # 移交／封存與離開放在**同一次 commit**：中間失敗不會留下「管理員
+        # 走了卻沒交出去」或「房封了人卻還在」的半套狀態
+        heir = None
+        archive_on_leave = False
+        admin_key = room["creator_session_key"] if room is not None else None
         if (room is not None and room["status"] == "active"
-                and room["creator_session_key"]
+                and admin_key
                 and p["role"] == "human"
-                and p["session_key"] == room["creator_session_key"]):
-            candidates = await _human_heirs(room_id, p["id"])
-            raise _err(
-                409, "admin_must_hand_over",
-                "你是這個聊天室的管理員，離開前要先移交管理權或封存聊天室。",
-                human_candidates=candidates,
-            )
+                and p["session_key"] == admin_key):
+            heir = await (await db.execute(
+                "SELECT id, display_name, session_key FROM participant"
+                " WHERE room_id=? AND status='active' AND role='human'"
+                " AND id!=? AND session_key!=? ORDER BY joined_at, id LIMIT 1",
+                (room_id, p["id"], admin_key),
+            )).fetchone()
+            if heir is None:
+                if not (body and body.archive_if_last):
+                    raise _err(
+                        409, "leave_will_archive",
+                        "你是這個聊天室最後一位人類成員，離開會封存聊天室。",
+                    )
+                archive_on_leave = True
+            else:
+                # 與 transfer_admin 同一個 CAS：帶舊 key 當條件，沒寫到＝
+                # 有人搶先改了管理權。**不 rollback**（共用連線，見該處說明）
+                cur = await db.execute(
+                    "UPDATE room SET creator_session_key=? WHERE id=?"
+                    " AND creator_session_key=?",
+                    (heir["session_key"], room_id, admin_key),
+                )
+                if cur.rowcount == 0:
+                    raise _err(409, "admin_already_changed",
+                               "管理權已經被移交給別人，請重新讀取聊天室狀態")
+        if archive_on_leave:
+            await _archive_mark(room_id)
         # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
         orphans = await _depart_with_subagents(
             room_id, p["id"], "left", "left", "父層離開"
@@ -4086,6 +4180,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             },
         )
         await _commit_with_retry(db)
+        if heir is not None:
+            logger.info(
+                "房主離開，管理權交給 %s（%s）", heir["display_name"], room_id,
+                extra={"event": "admin_transferred", "room_id": room_id,
+                       "from_participant_id": p["id"],
+                       "to_participant_id": heir["id"], "on_leave": True},
+            )
+            await _post_message(
+                room_id, None,
+                f"{p['display_name']} 離開，管理權移交給 {heir['display_name']}",
+                kind="system", system_event="admin_transferred",
+            )
+        if archive_on_leave:
+            await _post_message(
+                room_id, None,
+                f"{p['display_name']} 是最後一位人類成員，離開後聊天室已封存",
+                kind="system", system_event="archive")
+            await _archive_settle_boards(room_id)
         # 走了就沒有人在等答案了。留著只會讓人去回答一個沒有讀者的問題
         cancelled = await _cancel_questions(
             p["id"], room_id, "發問者已離開聊天室", p["display_name"]
@@ -4106,7 +4218,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 kind="system", system_event="leave")
         return {"ok": True, "cancelled_questions": len(cancelled),
                 "cascaded_subagents": orphans,
-                "orphaned_tasks": [r["id"] for r in released]}
+                "orphaned_tasks": [r["id"] for r in released],
+                "admin_transferred_to": (
+                    {"participant_id": heir["id"],
+                     "display_name": heir["display_name"]}
+                    if heir is not None else None),
+                "archived": archive_on_leave}
 
     @app.post(
         "/api/rooms/{room_id}/participants/{target_id}/kick",
@@ -11421,7 +11538,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         import_members: bool = False,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
-        host: bool = Depends(host_view),
     ):
         """把一塊板掛到一間房上。要同時是板的 owner/editor 與房的管理者。
 
@@ -11434,7 +11550,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id)
         await _board_member_or_403(board_id, actor, need_write=True)
-        if not host and actor_key(room["creator_session_key"]) != actor:
+        # 房這一側不給主持人豁免：掛什麼板是房間設定，只有房主能決定
+        #（艾斯維爾 2026-09-23）
+        if actor_key(room["creator_session_key"]) != actor:
             raise _err(403, "not_room_admin",
                        "掛接要同時是這個聊天室的管理者")
         _private_board_needs_private_room(board["visibility"], room)

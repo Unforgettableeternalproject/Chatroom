@@ -1671,6 +1671,9 @@ async def test_deleting_an_ops_room_takes_its_runs_with_it(tmp_path):
                               headers=hdr)
             assert await app.state.room_owned_tables_gap() == []
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{rid}/archive",
+                              headers={"X-Session-Key": "human-a"})
             r = await client.delete(f"/api/rooms/{rid}",
                                     headers={"X-Session-Key": "human-a"})
             assert r.status_code == 200, r.text

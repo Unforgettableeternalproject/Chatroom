@@ -590,6 +590,15 @@ class BoardsApi {
             archivedStatusFallback(archive: false);
       });
 
+  /// 永久刪除這塊板。**不可復原**，限板 owner。
+  ///
+  /// 只有已封存的板刪得掉；未封存時 Hub 回 409 `board_not_archived`。
+  Future<void> delete(String boardId, {required String sessionKey}) =>
+      unwrap(() => _dio.delete(
+            '/api/boards/$boardId',
+            options: Options(headers: {'X-Session-Key': sessionKey}),
+          ));
+
   /// 宣告這塊板的結局：`completed` / `abandoned`，或空字串把它重新打開。
   ///
   /// **一支端點三個轉換**（Hub 刻意不拆成三支：一個欄位多條寫入路徑，遲早

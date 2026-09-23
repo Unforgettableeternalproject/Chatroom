@@ -50,6 +50,21 @@ class ArchiveResult {
   final ArchiveRequest? request;
 }
 
+/// 離開之後 Hub 順手做了什麼。
+///
+/// 房主離開時 Hub 會把管理權交給加入順位下一位人類（[handedOverTo]），
+/// 沒有人可接而呼叫端確認過的話則封存（[archived]）。一般成員兩者皆空。
+@immutable
+class LeaveResult {
+  const LeaveResult({this.handedOverTo, this.archived = false});
+
+  /// 接手的新房主名字；沒有轉移時為 null。
+  final String? handedOverTo;
+
+  /// 離開時房間一併封存了。
+  final bool archived;
+}
+
 /// 成員提出、等建立者拍板的封存請求。
 ///
 /// **對所有成員可見**——提議者要看得到自己提的還在等，其他人才不會重複提。
@@ -288,6 +303,8 @@ class RoomsApi {
       });
 
   /// 永久刪除聊天室。只有建立者做得到，**不可復原**。
+  ///
+  /// 只有已封存的房刪得掉；未封存時 Hub 回 409 `room_not_archived`。
   ///
   /// 回傳各表刪掉幾筆，讓 UI 有東西可以講（「刪掉了 42 則訊息」比
   /// 「已刪除」誠實得多）。
@@ -638,11 +655,50 @@ class RoomsApi {
         );
       });
 
-  Future<void> leave(String roomId, {required String participantId}) =>
-      unwrap(() => _dio.post(
-            '/api/rooms/$roomId/leave',
-            options: Options(headers: {'X-Participant-Id': participantId}),
-          ));
+  /// 離開房間。
+  ///
+  /// 房主是房內最後一位人類時，Hub 回 409 `leave_will_archive` 而且什麼都
+  /// 不動；呼叫端問過人之後帶 [archiveIfLast] 再送一次，離開與封存同時發生。
+  Future<LeaveResult> leave(
+    String roomId, {
+    required String participantId,
+    bool archiveIfLast = false,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/leave',
+          data: archiveIfLast ? {'archive_if_last': true} : null,
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        final data = res.data ?? const {};
+        final heir = data['admin_transferred_to'];
+        return LeaveResult(
+          handedOverTo: heir is Map ? heir['display_name'] as String? : null,
+          archived: (data['archived'] as bool?) ?? false,
+        );
+      });
+
+  /// 改聊天室主題。只有房主做得到；空字串＝清掉主題。
+  ///
+  /// 兩個身分標頭都帶，與 [setVisibility]／[setStyle] 同一套理由。
+  /// 回傳 Hub 落庫的主題（它會修掉前後空白）。
+  Future<String> setTopic(
+    String roomId, {
+    required String topic,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/topic',
+          data: {'topic': topic.trim()},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        return (res.data?['topic'] as String?) ?? topic.trim();
+      });
 
   Future<void> heartbeat(String roomId, {required String participantId}) =>
       unwrap(() => _dio.post(
