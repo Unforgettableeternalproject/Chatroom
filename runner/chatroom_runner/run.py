@@ -59,6 +59,13 @@ REPORT_FAILED_NAME = "report_failed.json"
 # cwd 的 `.chatroom/downloads/`，把人類的工作樹弄髒，而那些檔案跟這次改動
 # 一點關係也沒有。跟著 run 目錄留著，事後還查得到
 DOWNLOADS_DIR_NAME = "downloads"
+# 子 claude 進程的 CLAUDE_CODE_* 旗標（`_child_env` 蓋上）
+CHILD_CLAUDE_ENV = {
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+}
 # stream-json 的單行上限。asyncio 的 StreamReader 預設只有 64 KiB，而一行
 # `tool_result` 只要含一張圖的 base64 就會超過——實測 2026-09-17：模型 Read
 # 了一張 141 KB 的 PNG，`readline()` 丟 `ValueError: Separator is not found,
@@ -400,7 +407,8 @@ class RunOutcome:
     usage: dict = field(default_factory=dict)
     claude_session_id: str = ""
     # 終局回報要帶的結構化 git 欄位（契約 C3）：`repo`／`branch`／
-    # `head_before`／`head_after`。空 dict ＝這筆 run 沒有 repo，不送這一鍵
+    # `head_before`／`head_after`（主 repo），一般 run 另帶 `repos`（工作區
+    # 每個 repo 一格，同樣四鍵）。空 dict ＝這筆 run 沒有 repo，不送這一鍵
     git: dict = field(default_factory=dict)
     # 這一輪要不要順手把整台執行器標成 limited（weekly limit 用）
     runner_limit_reason: str = ""
@@ -1479,14 +1487,19 @@ class RunExecutor:
                      for item in repos}
             outcome.result = self._compose_result(state, run_dir, before,
                                                   after, sync_notes)
-            # 契約 C3：終局回報帶結構化的 git 欄位。主工作目錄那一個——
-            # 「本週期 commit 過的 repo」是 Hub 用這組欄位判的，多 repo 的
-            # 細節照舊寫在 result 的附註裡
+            # 契約 C3：終局回報帶結構化的 git 欄位。單一那組是主工作目錄
+            # （舊 Hub 只讀它）；`repos` 是工作區每個 repo 各一格——一輪可以
+            # 在好幾個 repo 各做 commit，Hub 用它逐 repo 算上板候選
             outcome.git = {
                 "repo": repo.name,
                 "branch": after[repo.name].branch,
                 "head_before": before[repo.name].head,
-                "head_after": after[repo.name].head}
+                "head_after": after[repo.name].head,
+                "repos": [{"repo": item.name,
+                           "branch": after[item.name].branch,
+                           "head_before": before[item.name].head,
+                           "head_after": after[item.name].head}
+                          for item in repos]}
             if outcome.reason == MCP_UNAVAILABLE_REASON:
                 outcome.result = (
                     f"chatroom MCP 在 {mcp_attempt + 1} 次嘗試內都沒有連上"
@@ -1586,6 +1599,9 @@ class RunExecutor:
             "CHATROOM_RUNNER_RUN_DIR": str(run_dir),
             "CHATROOM_DOWNLOAD_DIR": str(run_dir / DOWNLOADS_DIR_NAME),
         })
+        # 子 claude 的執行旗標。放進程環境：啟動當下就在，不必依賴 run 的
+        # settings.json `env` 何時套用。一律蓋掉執行器本身環境帶進來的同名值
+        env.update(CHILD_CLAUDE_ENV)
         if self.cfg.mcp_startup_timeout_ms > 0:
             # MCP 伺服器的啟動／連線逾時（docs/en/mcp「Timeouts &
             # Performance」，單位毫秒，stdio 也適用）。第一道防線：bridge

@@ -1560,6 +1560,8 @@ RUN_KEYS = {
     # 這一輪動到的 git（上板契約 C3 2026-09-21）。候選計算讀的是這四欄，
     # 只存不帶出去的話，App 與 Hub 會各讀各的
     "repo", "branch", "head_before", "head_after",
+    # 逐 repo 的 git 現況（2026-09-23）。沒帶的舊回報是空陣列
+    "git_repos",
     # 結構化輸入（目前只有 release 有）。沒有 spec 的 run 是空物件，
     # 不是少一個鍵——執行器那邊只寫一種取法
     "spec",

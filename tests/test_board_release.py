@@ -180,7 +180,8 @@ async def _board_id(client, oid):
 
 
 async def _ran(human, agent, rid, hdr, runner, *, ref, board_id,
-               repo="hub", branch="develop", before="aaa", after="bbb"):
+               repo="hub", branch="develop", before="aaa", after="bbb",
+               repos=None):
     """派一筆 ticket、讓執行器領走、終局回報時帶 `git`。
 
     走完整條路而不是直接寫 agent_run：候選的判準吃的是 report 寫進去的那
@@ -195,12 +196,14 @@ async def _ran(human, agent, rid, hdr, runner, *, ref, board_id,
     c = await agent.post(f"/api/runners/{runner}/claim", headers=runner.headers)
     assert c.status_code == 200, c.text
     assert c.json()["run"]["id"] == run_id
+    git = {"repo": repo, "branch": branch,
+           "head_before": before, "head_after": after}
+    if repos is not None:
+        git["repos"] = repos
     for status in ("running", "done"):
         rep = await agent.post(
             f"/api/runs/{run_id}/report",
-            json={"status": status, "runner_id": str(runner),
-                  "git": {"repo": repo, "branch": branch,
-                          "head_before": before, "head_after": after}},
+            json={"status": status, "runner_id": str(runner), "git": git},
             headers=runner.headers)
         assert rep.status_code == 200, rep.text
     return run_id
@@ -278,6 +281,50 @@ async def test_candidates_list_only_repos_this_cycle_actually_touched(tmp_path):
             assert body["possible"] is True
             # C1 的工作區設定順便帶出來給 App 顯示
             assert body["release_settings"]["merge_method"] == "squash"
+
+
+async def test_candidates_count_every_repo_a_multi_repo_run_touched(tmp_path):
+    """🚨 一筆 run 在工作區多個 repo 各做了 commit，每個 repo 都要進候選。
+
+    主 repo 那組單一欄位只描述得了一個 repo；只靠它算候選的話，同一輪
+    在副 repo 做的 commit 會從上板對話框消失（JSAI-2392：Web 與 API 都動了，
+    候選只列出 Web）。逐 repo 的 `git.repos` 裡沒變的 repo 照舊不列。
+    """
+    app, human, agent = _clients(tmp_path, "multirepo")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, cid, tids = await _tree(human, rid, hdr, tasks=2)
+            bid = await _board_id(human, oid)
+            await _ran(human, agent, rid, hdr, runner, ref=tids[0],
+                       board_id=bid, repo="hub", branch="feature/a",
+                       before="w1", after="w2",
+                       repos=[
+                           {"repo": "hub", "branch": "feature/a",
+                            "head_before": "w1", "head_after": "w2"},
+                           {"repo": "docs", "branch": "feature/b",
+                            "head_before": "p1", "head_after": "p2"},
+                           {"repo": "app", "branch": "feature/a",
+                            "head_before": "q1", "head_after": "q2"},
+                           {"repo": "lib", "branch": "main",
+                            "head_before": "same", "head_after": "same"}])
+            # 另一筆只動主 repo docs 的舊式回報：兩種回報要一起計數
+            await _ran(human, agent, rid, hdr, runner, ref=tids[1],
+                       board_id=bid, repo="docs", branch="feature/c",
+                       before="p2", after="p3")
+            body = (await human.get(
+                f"/api/board/objectives/{oid}/release/candidates",
+                headers=hdr)).json()
+            assert sorted(x["name"] for x in body["repos"]) == [
+                "app", "docs", "hub"]
+            assert _cand(body, "hub")["last_branch"] == "feature/a"
+            docs = _cand(body, "docs")
+            assert docs["commits"] == 2
+            assert docs["branches"] == ["feature/c", "feature/b"]
+            assert docs["last_branch"] == "feature/c"
 
 
 async def test_candidates_ignore_runs_from_another_cycle(tmp_path):
@@ -605,6 +652,8 @@ async def test_report_writes_the_git_columns(tmp_path):
             assert got["head_after"] == "d2"
             # 沒有 spec 的 run 也要有這個鍵：執行器那邊只寫一種取法
             assert got["spec"] == {}
+            # 沒帶逐 repo 清單的舊式回報：一樣有這個鍵，空陣列
+            assert got["git_repos"] == []
 
 
 # ── 觸發閘 ───────────────────────────────────────────────────────────
@@ -877,7 +926,7 @@ async def test_legacy_agent_run_gains_the_git_and_spec_columns(tmp_path):
         cols = {r[1] for r in await (
             await db.execute("PRAGMA table_info(agent_run)")).fetchall()}
         assert {"repo", "branch", "head_before", "head_after",
-                "spec_json"} <= cols
+                "spec_json", "git_repos_json"} <= cols
         row = await (await db.execute(
             "SELECT repo, branch, head_before, head_after, spec_json"
             " FROM agent_run WHERE id='r1'")).fetchone()

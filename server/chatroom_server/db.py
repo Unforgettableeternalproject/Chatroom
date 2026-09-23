@@ -816,6 +816,11 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- 這一筆 run 的結構化輸入（目前只有 release 用）。JSON 字串，Hub 寫、
     -- 執行器讀（`_run_public` 解成 `spec`）。空字串＝沒有 spec
     spec_json     TEXT NOT NULL DEFAULT '',
+    -- 逐 repo 的 git 現況（JSON 陣列，每格 repo/branch/head_before/
+    -- head_after）。一筆 run 可在工作區多個 repo 各做 commit，上面那組只
+    -- 描述主 repo。空字串＝沒帶（舊執行器），候選退回只看上面那組
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    git_repos_json TEXT NOT NULL DEFAULT '',
     usage_json    TEXT NOT NULL DEFAULT '{}',
     result        TEXT NOT NULL DEFAULT '',
     reason        TEXT NOT NULL DEFAULT '',
@@ -1189,6 +1194,10 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("agent_run", "head_after", "head_after TEXT NOT NULL DEFAULT ''"),
     # release run 的結構化輸入。既有 run 一律空字串＝沒有 spec
     ("agent_run", "spec_json", "spec_json TEXT NOT NULL DEFAULT ''"),
+    # 逐 repo 的 git 現況（2026-09-23）。既有 run 一律空字串＝沒帶，候選
+    # 照舊只看主 repo 那組——回填不出副 repo 動過什麼，猜了就是假候選
+    ("agent_run", "git_repos_json",
+     "git_repos_json TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。

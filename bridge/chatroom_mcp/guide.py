@@ -368,9 +368,13 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   裡面——確認週期本身不該因為上板不成立而被擋下來。
 - **候選只有這個週期真的動過的 repo。** 判準是：那筆 run 屬於這塊板、
   它的 `ref` 落在這個週期底下的階段或任務、而且它回報的
-  `head_before != head_after`。沒回報過 git 的 run 是「說不出來」，不算動
-  過——所以你做完一張卡時，執行器回報的 `git` 欄位決定了它會不會出現在
-  上板清單裡。人類可以再從候選裡排除不想上板的 repo。
+  `head_before != head_after`。**逐 repo 計算**：一筆 run 可以在工作區好幾
+  個 repo 各做 commit，執行器的 `git.repos`（每個 repo 一格
+  `{repo, branch, head_before, head_after}`）裡每個有變動的 repo 都各自列進
+  候選；沒帶 `git.repos` 的舊回報才只看主 repo 那組 `git.repo`／`head_*`。
+  沒回報過 git 的 run 是「說不出來」，不算動過——所以你做完一張卡時，
+  執行器回報的 `git` 欄位決定了它會不會出現在上板清單裡。人類可以再從
+  候選裡排除不想上板的 repo。
 - **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
   `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
   勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級

@@ -422,6 +422,22 @@ class RunGit(BaseModel):
     branch: str = Field(default="", max_length=255)
     head_before: str = Field(default="", max_length=64)
     head_after: str = Field(default="", max_length=64)
+    # 逐 repo 的 git 現況（2026-09-23）。一筆 run 可以在工作區好幾個 repo
+    # 各做 commit，上面那組只描述得了主 repo。**None＝沒帶**（舊執行器）：
+    # 候選照舊只看上面那組；帶了就以這份清單為準（含主 repo）
+    repos: list["RunGitRepo"] | None = Field(default=None, max_length=64)
+
+
+class RunGitRepo(BaseModel):
+    """`RunGit.repos` 的一格：一個 repo 在這一輪的前後 HEAD。"""
+
+    repo: str = Field(default="", max_length=255)
+    branch: str = Field(default="", max_length=255)
+    head_before: str = Field(default="", max_length=64)
+    head_after: str = Field(default="", max_length=64)
+
+
+RunGit.model_rebuild()
 
 
 class RunReport(BaseModel):
@@ -6641,7 +6657,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         """本週期真的動過的 repo → `{branches, last_branch, commits}`。
 
         判準（契約 C3）：run 屬於這塊板、`ref` 落在這個週期底下的
-        checklist ∪ task、且 `head_before != head_after`。
+        checklist ∪ task、且 `head_before != head_after`。**逐 repo 判**：
+        run 帶了 `git_repos_json`（多 repo 清單）就清單裡每個 repo 各自算，
+        沒帶（舊執行器）才退回主 repo 那組單一欄位。
 
         **兩個 head 都要非空**：空字串是「說不出來」（舊執行器、或沒有
         repo 的 run），不是「動過」。只比不等的話，一筆從來沒回報過 git 的
@@ -6657,23 +6675,38 @@ def create_app(config: Config | None = None) -> FastAPI:
             return {}
         marks = ",".join("?" for _ in refs)
         rows = await (await app.state.db.execute(
-            "SELECT repo, branch FROM agent_run WHERE board_id=?"
-            f" AND ref IN ({marks}) AND repo<>'' AND head_before<>''"
-            " AND head_after<>'' AND head_before<>head_after"
+            "SELECT repo, branch, head_before, head_after, git_repos_json"
+            " FROM agent_run WHERE board_id=?"
+            f" AND ref IN ({marks}) AND repo<>''"
             " ORDER BY created_at, rowid", (board_id, *refs))).fetchall()
         facts: dict[str, dict] = {}
         for r in rows:
-            f = facts.setdefault(r["repo"], {"branches": [], "commits": 0,
-                                             "last_branch": ""})
-            # `commits` 是**動過這個 repo 的 run 筆數**，不是 git 的 commit
-            # 顆數——Hub 手上只有 head 的前後值，數不出中間有幾顆
-            f["commits"] += 1
-            b = (r["branch"] or "").strip()
-            if b:
-                if b in f["branches"]:
-                    f["branches"].remove(b)
-                f["branches"].insert(0, b)
-                f["last_branch"] = b
+            entries = _loads_or(r["git_repos_json"] or "", [])
+            if not entries:
+                entries = [{"repo": r["repo"], "branch": r["branch"],
+                            "head_before": r["head_before"],
+                            "head_after": r["head_after"]}]
+            seen: set[str] = set()
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                name = (e.get("repo") or "").strip()
+                hb = e.get("head_before") or ""
+                ha = e.get("head_after") or ""
+                if not name or not hb or not ha or hb == ha or name in seen:
+                    continue
+                seen.add(name)
+                f = facts.setdefault(name, {"branches": [], "commits": 0,
+                                            "last_branch": ""})
+                # `commits` 是**動過這個 repo 的 run 筆數**，不是 git 的
+                # commit 顆數——Hub 手上只有 head 的前後值，數不出中間有幾顆
+                f["commits"] += 1
+                b = (e.get("branch") or "").strip()
+                if b:
+                    if b in f["branches"]:
+                        f["branches"].remove(b)
+                    f["branches"].insert(0, b)
+                    f["last_branch"] = b
         return facts
 
     async def _release_workspace_view(workspace_key: str) -> tuple[dict, dict]:
@@ -13735,6 +13768,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 結構化輸入（目前只有 release 有）。沒有 spec 的 run 回空物件——
         # 執行器那邊只要 `run["spec"]` 一路取得到鍵就不必分兩種寫法
         d["spec"] = _loads_or(d.pop("spec_json", "") or "{}", {})
+        # 逐 repo 的 git 現況（契約 C3）。空陣列＝沒帶（舊執行器、或沒有
+        # repo 的 run），此時只有主 repo 那組單一欄位
+        d["git_repos"] = _loads_or(d.pop("git_repos_json", "") or "[]", [])
         # 沒帶到這一欄的路徑（例如領單當下的 RETURNING *）一律 None：
         # 那時候確實還沒有人進房
         d["agent_name"] = d.get("agent_name") or None
@@ -14911,10 +14947,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         # git 現況（上板契約 C3）。整組一起寫：四欄描述的是**同一次**執行，
         # 逐欄「非空才寫」的話，一次沒帶 head 的回報會留下新 branch 配舊 sha
         if body.git is not None:
+            # 逐 repo 清單跟著同一組寫：沒帶＝空字串（舊執行器），不留上一次
+            # 回報的清單配這一次的主 repo
+            repos_json = ("" if body.git.repos is None else json.dumps(
+                [g.model_dump() for g in body.git.repos],
+                ensure_ascii=False))
             sets.extend(["repo=?", "branch=?", "head_before=?",
-                         "head_after=?"])
+                         "head_after=?", "git_repos_json=?"])
             params.extend([body.git.repo, body.git.branch,
-                           body.git.head_before, body.git.head_after])
+                           body.git.head_before, body.git.head_after,
+                           repos_json])
         if new == "running" and row["started_at"] is None:
             sets.append("started_at=?")
             params.append(now)

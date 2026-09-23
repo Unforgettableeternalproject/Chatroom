@@ -1339,6 +1339,20 @@ def test_child_env_strips_git_credentials(tmp_path, work_repo):
     assert env["GIT_ASKPASS"] == str(run_mod.ASKPASS_SCRIPT)
 
 
+def test_child_env_sets_claude_code_run_flags(tmp_path, work_repo,
+                                             monkeypatch):
+    """子 claude 的四個 CLAUDE_CODE_* 旗標一律由執行器蓋上，不沿用外層的值。"""
+    monkeypatch.setenv("CLAUDE_CODE_SUBAGENT_MODEL", "haiku")
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    env = ex._child_env({"id": "r-env"}, tmp_path)
+
+    assert env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] == "1"
+    assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "opus"
+    assert env["CLAUDE_CODE_ATTRIBUTION_HEADER"] == "0"
+    assert env["CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT"] == "1"
+
+
 def test_child_env_does_not_hand_the_run_a_name(tmp_path, work_repo, monkeypatch):
     """run 的名字由 Hub 的名字池發，執行器不塞。
 
@@ -1698,6 +1712,56 @@ async def test_every_repo_of_the_project_is_synced_and_snapshotted(
         assert (name, ("fetch",)) in calls, f"{name} 沒有 fetch：{calls}"
         assert (name, ("pull", "--ff-only")) in calls, f"{name} 沒有 pull"
         assert (name, ("rev-parse", "HEAD")) in calls, f"{name} 沒有快照"
+
+
+async def test_final_report_carries_git_for_every_repo(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 終局回報要逐 repo 帶 git：主 repo 那組只描述得了一個 repo，
+    副 repo 在同一輪做的 commit 不帶上去的話，上板候選看不到它。"""
+    from chatroom_runner import run as run_mod
+
+    app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    api = _extra_repo(tmp_path, "JSAI-API")
+    api_before = git(api, "rev-parse", "HEAD")
+    web_before = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-multi-git")
+    cfg = _multi_config(tmp_path, work_repo, api)
+    real = run_mod.gitops.snapshot
+    seen: dict[str, int] = {}
+
+    async def snap(repo):
+        name = Path(repo).name
+        seen[name] = seen.get(name, 0) + 1
+        # 收工那一張快照前，在副 repo 做一顆真的 commit（模擬 agent 動了它）
+        if name == "JSAI-API" and seen[name] == 2:
+            (Path(repo) / "api.txt").write_text("x", encoding="utf-8")
+            git(repo, "add", "api.txt")
+            git(repo, "commit", "-m", "副 repo 的 commit")
+        return await real(repo)
+
+    monkeypatch.setattr(run_mod.gitops, "snapshot", snap)
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    api_after = git(api, "rev-parse", "HEAD")
+    assert api_after != api_before
+    by_name = {g["repo"]: g for g in outcome.git["repos"]}
+    assert set(by_name) == {"JSAI-Web", "JSAI-API"}
+    assert (by_name["JSAI-API"]["head_before"],
+            by_name["JSAI-API"]["head_after"]) == (api_before, api_after)
+    assert by_name["JSAI-Web"]["head_before"] == web_before
+    # 主 repo 那組單一欄位照舊（舊 Hub 只讀它）
+    assert outcome.git["repo"] == "JSAI-Web"
+    assert outcome.git["head_before"] == web_before
+    # Hub 真的存下來了
+    row = await (await app.state.db.execute(
+        "SELECT git_repos_json FROM agent_run WHERE id=?",
+        (run["id"],))).fetchone()
+    stored = {g["repo"]: g for g in json.loads(row["git_repos_json"])}
+    assert stored["JSAI-API"]["head_after"] == api_after
 
 
 async def test_a_second_repo_on_a_forbidden_branch_stops_the_run(
