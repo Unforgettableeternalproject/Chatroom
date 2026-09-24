@@ -10,14 +10,6 @@ on:
   # 接在 master 的 CI 之後：CI 整條（python＋flutter）綠了才發，
   # 不再自己重跑一次 pytest／flutter test（原本 tag 推上去時兩條並行各跑一次）。
   # ⚠️ workflow_run 只讀預設分支（master）上的這支檔案。
-  #
-  # 🏷️ 打 tag 的時機（tag 仍是人手動打的簽章 tag，`git tag -s`，不由 CI 產生）：
-  #   1. develop → master 的 squash PR 合併後，**立刻**對 master 的 squash
-  #      commit 打 tag 並推上去——要趕在 master 的 CI 跑完之前（CI 約 20–40 分）。
-  #   2. CI 綠燈時這裡找得到指向那顆 commit 的 v* tag，就自動打包成 Release 草稿。
-  #   3. CI 跑完之後才打的 tag 不會自動觸發：到 Actions 手動跑這支
-  #      （workflow_dispatch，填 tag），它會先確認那顆 commit 的 CI 綠過。
-  #   4. 草稿先不發布：本機三端換版、實機驗證過，才改成正式並設 Latest。
   workflow_run:
     workflows: [CI]
     types: [completed]
