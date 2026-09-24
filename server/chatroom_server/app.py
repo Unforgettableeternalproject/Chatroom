@@ -76,6 +76,18 @@ def actor_key(session_key: str | None) -> str:
     return (session_key or "").strip()
 
 
+def _me_kind(me) -> str:
+    """操作者的種類（human / claude / codex / other）。
+
+    `me` 可能是 participant 列（欄位叫 `kind`），也可能是板軸退路組出來的
+    dict（同樣帶 `kind`）；兩者都沒有時回空字串＝說不出來，不猜。
+    """
+    try:
+        return (me["kind"] or "").strip().lower()
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 async def _commit_with_retry(db) -> None:
     """commit，撞到別人的交易就等一下再試。
 
@@ -422,6 +434,22 @@ class RunGit(BaseModel):
     branch: str = Field(default="", max_length=255)
     head_before: str = Field(default="", max_length=64)
     head_after: str = Field(default="", max_length=64)
+    # 逐 repo 的 git 現況（2026-09-23）。一筆 run 可以在工作區好幾個 repo
+    # 各做 commit，上面那組只描述得了主 repo。**None＝沒帶**（舊執行器）：
+    # 候選照舊只看上面那組；帶了就以這份清單為準（含主 repo）
+    repos: list["RunGitRepo"] | None = Field(default=None, max_length=64)
+
+
+class RunGitRepo(BaseModel):
+    """`RunGit.repos` 的一格：一個 repo 在這一輪的前後 HEAD。"""
+
+    repo: str = Field(default="", max_length=255)
+    branch: str = Field(default="", max_length=255)
+    head_before: str = Field(default="", max_length=64)
+    head_after: str = Field(default="", max_length=64)
+
+
+RunGit.model_rebuild()
 
 
 class RunReport(BaseModel):
@@ -504,6 +532,24 @@ class ArchiveRequestResolve(BaseModel):
 class RoomStyle(BaseModel):
     style: str = Field(pattern=STYLE_PATTERN)
     style_instructions: str = Field(default="", max_length=2000)
+
+
+class RoomTopic(BaseModel):
+    """改主題。空字串＝清掉主題（主題本來就是選填）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    topic: str = Field(default="", max_length=500)
+
+
+class LeaveOptions(BaseModel):
+    """離開時的選項。**可省**——POST 不帶 body 時整個模型是 None。
+
+    ``archive_if_last``：房主是房內最後一個人類時，確認「離開就封存」。
+    只在沒有人可以接手時生效；有人可接就照常移交，不封存。
+    """
+
+    archive_if_last: bool = False
 
 
 class JoinRequest(BaseModel):
@@ -2550,6 +2596,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 先留時間軸標記再封存（封存房唯讀，之後就寫不進去了）
         await _post_message(room_id, None, reason, kind="system",
                             system_event="archive")
+        await _archive_mark(room_id, approved_request)
+        await _commit_with_retry(db)
+        await _archive_settle_boards(room_id)
+
+    async def _archive_mark(room_id: str,
+                            approved_request: str | None = None) -> None:
+        """封存的資料庫寫入。**不 commit**——房主離開那條路要把它與離開
+        放進同一次 commit。"""
+        db = app.state.db
         await db.execute(
             "UPDATE room SET status='archived', archived_at=?,"
             " archive_pending_since=NULL WHERE id=?",
@@ -2566,7 +2621,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             sql += " AND id!=?"
             params.append(approved_request)
         await db.execute(sql, tuple(params))
-        await _commit_with_retry(db)
+
+    async def _archive_settle_boards(room_id: str) -> None:
+        """封存 commit 之後的善後：掛著的板與訂閱端。"""
+        db = app.state.db
         # 封存這間房，可能讓它掛著的板失去**最後一個叫得醒人的地方**。
         # detach 那條路已經在處理，這條沒有的話追蹤者會安靜地降級——而
         # `board_room` 的列還在，從計數上看起來完全正常
@@ -2764,7 +2822,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         body: ArchiveRequestCreate | None = None,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         """手動封存。**只有建立者執行得了**；房內成員提得出請求。
 
@@ -2782,14 +2839,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         去戳房主或乾等自動封存，等於把最有判斷力的人排除在外。
         """
         room = await _room_or_404(room_id)
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
         me = await _active_creator_or_member(room, x_participant_id,
-                                             x_session_key, host)
-        # 主持人視角在這裡等同建立者——他要封的正是那些**沒有人管得動**的房
-        # （建立者不在、或建立時根本沒帶 session_key）。走提案那條路的話，
-        # 提案會掛在一個永遠不會出現的人身上
-        is_admin = host or (bool(room["creator_session_key"]) and (
+                                             x_session_key)
+        is_admin = bool(room["creator_session_key"]) and (
             x_session_key == room["creator_session_key"]
-        ))
+        )
         if not is_admin and me is not None:
             # 走 participant 自報的建立者也算數——他 join 之後手上仍只有
             # 那把 session key，不該因為換了自報方式就被降級成一般成員
@@ -2937,7 +2993,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         room = await _room_or_404(room_id, allow_archived=True)
         # 封存與解封是同一道門的兩面，一寬一嚴會讓人猜不出這道門管什麼。
@@ -2947,10 +3002,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # ⚠️ 已知代價（艾斯維爾 08/31 裁決時確認過）：建立者不在、或換掉了
         # deviceKey，那個房就永遠是唯讀的。目前沒有管理權回收機制，只有
         # 建立者主動移交（POST /admin）。封存房唯讀而非消失，代價可承受
-        # 主持人視角是這條路的**唯一救援**：上面那個代價（建立者不在，房就
-        # 永遠唯讀）就是靠這裡補的
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
+        # 上面那個代價（建立者不在，房就永遠唯讀）改由 claim 補
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            what="解除封存", host=host)
+                            what="解除封存")
         if room["status"] == "active":
             return {"ok": True, "already_active": True}
         db = app.state.db
@@ -2990,7 +3046,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id: str, body: Rename,
         x_participant_id: str | None = Header(default=None),
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        host: bool = Depends(host_view),
     ):
         """改房名。限房間管理者（09/07 卡 c271c7ff，契約見決策裁定）。
 
@@ -3002,8 +3057,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         兩邊都不會報錯——只有記得舊名的人才看得出哪裡怪。
         """
         room = await _room_or_404(room_id)
+        # 🔴 **主持人視角不豁免房間設定**（艾斯維爾 2026-09-23）：主持人是
+        # 旁觀者，不是房間的實質成員。要管別人的房先走 `admin/claim`
         await _admin_or_403(room, x_participant_id, x_session_key,
-                            "改聊天室的名字", host)
+                            "改聊天室的名字")
         if room["name"] == body.name:
             return {"ok": True, "id": room_id, "name": body.name,
                     "changed": False}
@@ -3114,6 +3171,33 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "style": body.style,
                 "style_instructions": instructions,
                 "style_prompt": prompt, "changed": True}
+
+    @app.post("/api/rooms/{room_id}/topic", dependencies=[Depends(require_auth)])
+    async def set_topic(
+        room_id: str,
+        body: RoomTopic,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """改聊天室主題。只有建立者能改；空字串＝清掉主題。
+
+        與改名同一個理由要留痕：主題是加入的人讀到的第一句說明。
+        同值不發訊息。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key, "變更主題")
+        topic = body.topic.strip()
+        if (room["topic"] or "") == topic:
+            return {"ok": True, "id": room_id, "topic": topic,
+                    "changed": False}
+        db = app.state.db
+        await db.execute("UPDATE room SET topic=? WHERE id=?", (topic, room_id))
+        await _commit_with_retry(db)
+        await _post_message(
+            room_id, None,
+            f"聊天室主題已改為「{topic}」" if topic else "聊天室主題已清除",
+            kind="system", system_event="topic")
+        return {"ok": True, "id": room_id, "topic": topic, "changed": True}
 
     # room_id 是外鍵的那幾張表。順序照依賴關係由內往外，最後才是 room 本身。
     #
@@ -3250,7 +3334,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         """永久刪除一個聊天室。建立者或 Hub 主持人，**不可復原**。
 
-        封存的房間也能刪（其實那才是主要用途）。刪完之後，手上還握著舊身分的
+        只有封存的房間能刪（未封存回 409 `room_not_archived`）。刪完之後，手上還握著舊身分的
         agent 會在下一次呼叫拿到 404 `room_not_found`——那條路徑不是身分問題，
         重新 join 也救不回來，bridge 對它有專屬的說明。
 
@@ -3266,6 +3350,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id, allow_archived=True)
         await _admin_or_403(room, x_participant_id, x_session_key,
                             "刪除這個聊天室", host=host)
+        # 🔴 **前置：房必須已經封存**（艾斯維爾 2026-09-23 裁定，與任務板
+        # `board_not_archived` 同一條規則）。刪除不可復原，封存是它的緩衝。
+        # 主持人也不例外——他要清的本來就是封存房
+        if room["status"] != "archived":
+            raise _err(409, "room_not_archived",
+                       "要先封存這個聊天室才能刪除。",
+                       room_status=room["status"])
         counts = await _purge_room(room_id)
         logger.warning(
             "永久刪除聊天室「%s」（%s）：%s", room["name"], room_id, counts,
@@ -4031,7 +4122,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         return names
 
     @app.post("/api/rooms/{room_id}/leave", dependencies=[Depends(require_auth)])
-    async def leave_room(room_id: str, x_participant_id: str | None = Header(default=None)):
+    async def leave_room(room_id: str,
+                         body: LeaveOptions | None = None,
+                         x_participant_id: str | None = Header(default=None)):
         # 封存房也允許離開（唯讀例外），故不檢查房間狀態
         p = await _participant(x_participant_id, room_id)
         db = app.state.db
@@ -4041,20 +4134,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await (
             await db.execute("SELECT * FROM room WHERE id=?", (room_id,))
         ).fetchone()
-        # **只擋人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
-        # 可以回答「移轉還是封存」——擋下它只會讓它卡在一個答不出來的問題上。
+        # **只管人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
+        # 可以回答「封存嗎」——擋下它只會讓它卡在一個答不出來的問題上。
         # 那種房空了會由 presence sweeper 自動封存，既有機制已經涵蓋。
-        # 這條規則服務的是「人類在 App 上按下離開」那個情境。
+        #
+        # 人類房主離開（艾斯維爾 2026-09-23 裁定）：
+        # - 房內還有別的 active 人類 → 管理權自動交給**最早加入**的那位
+        # - 沒有 → 離開就封存；要 App 先問過人（`archive_if_last`），
+        #   否則 409 `leave_will_archive`，什麼都不動
+        # 移交／封存與離開放在**同一次 commit**：中間失敗不會留下「管理員
+        # 走了卻沒交出去」或「房封了人卻還在」的半套狀態
+        heir = None
+        archive_on_leave = False
+        admin_key = room["creator_session_key"] if room is not None else None
         if (room is not None and room["status"] == "active"
-                and room["creator_session_key"]
+                and admin_key
                 and p["role"] == "human"
-                and p["session_key"] == room["creator_session_key"]):
-            candidates = await _human_heirs(room_id, p["id"])
-            raise _err(
-                409, "admin_must_hand_over",
-                "你是這個聊天室的管理員，離開前要先移交管理權或封存聊天室。",
-                human_candidates=candidates,
-            )
+                and p["session_key"] == admin_key):
+            heir = await (await db.execute(
+                "SELECT id, display_name, session_key FROM participant"
+                " WHERE room_id=? AND status='active' AND role='human'"
+                " AND id!=? AND session_key!=? ORDER BY joined_at, id LIMIT 1",
+                (room_id, p["id"], admin_key),
+            )).fetchone()
+            if heir is None:
+                if not (body and body.archive_if_last):
+                    raise _err(
+                        409, "leave_will_archive",
+                        "你是這個聊天室最後一位人類成員，離開會封存聊天室。",
+                    )
+                archive_on_leave = True
+            else:
+                # 與 transfer_admin 同一個 CAS：帶舊 key 當條件，沒寫到＝
+                # 有人搶先改了管理權。**不 rollback**（共用連線，見該處說明）
+                cur = await db.execute(
+                    "UPDATE room SET creator_session_key=? WHERE id=?"
+                    " AND creator_session_key=?",
+                    (heir["session_key"], room_id, admin_key),
+                )
+                if cur.rowcount == 0:
+                    raise _err(409, "admin_already_changed",
+                               "管理權已經被移交給別人，請重新讀取聊天室狀態")
+        if archive_on_leave:
+            await _archive_mark(room_id)
         # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
         orphans = await _depart_with_subagents(
             room_id, p["id"], "left", "left", "父層離開"
@@ -4070,6 +4192,24 @@ def create_app(config: Config | None = None) -> FastAPI:
             },
         )
         await _commit_with_retry(db)
+        if heir is not None:
+            logger.info(
+                "房主離開，管理權交給 %s（%s）", heir["display_name"], room_id,
+                extra={"event": "admin_transferred", "room_id": room_id,
+                       "from_participant_id": p["id"],
+                       "to_participant_id": heir["id"], "on_leave": True},
+            )
+            await _post_message(
+                room_id, None,
+                f"{p['display_name']} 離開，管理權移交給 {heir['display_name']}",
+                kind="system", system_event="admin_transferred",
+            )
+        if archive_on_leave:
+            await _post_message(
+                room_id, None,
+                f"{p['display_name']} 是最後一位人類成員，離開後聊天室已封存",
+                kind="system", system_event="archive")
+            await _archive_settle_boards(room_id)
         # 走了就沒有人在等答案了。留著只會讓人去回答一個沒有讀者的問題
         cancelled = await _cancel_questions(
             p["id"], room_id, "發問者已離開聊天室", p["display_name"]
@@ -4090,7 +4230,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 kind="system", system_event="leave")
         return {"ok": True, "cancelled_questions": len(cancelled),
                 "cascaded_subagents": orphans,
-                "orphaned_tasks": [r["id"] for r in released]}
+                "orphaned_tasks": [r["id"] for r in released],
+                "admin_transferred_to": (
+                    {"participant_id": heir["id"],
+                     "display_name": heir["display_name"]}
+                    if heir is not None else None),
+                "archived": archive_on_leave}
 
     @app.post(
         "/api/rooms/{room_id}/participants/{target_id}/kick",
@@ -5355,12 +5500,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
             " title, description, created_by, created_by_name,"
-            " created_by_actor_key, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " created_by_actor_key, created_by_kind, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (cid, parent["room_id"], me["board_id"], objective_id,
              body.title.strip(),
              body.description, me["id"], me["display_name"],
-             actor_key(me["session_key"]), seq, _now()),
+             actor_key(me["session_key"]), _me_kind(me), seq, _now()),
         )
         await _record_board_event(
             me["board_id"], seq, "checklist_created",
@@ -5527,12 +5672,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             cur = await db.execute(
                 "INSERT INTO board_checklist (id, room_id, board_id,"
                 " objective_id, title, description, created_by,"
-                " created_by_name, created_by_actor_key, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " created_by_name, created_by_actor_key, created_by_kind,"
+                " board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT DO NOTHING RETURNING id",
                 (cid, room_id, me["board_id"], oid, UNCATEGORISED, "",
                  me["id"], me["display_name"], actor_key(me["session_key"]),
-                 seq, now),
+                 _me_kind(me), seq, now),
             )
             if await cur.fetchone() is None:
                 continue   # 同上，不 commit
@@ -6641,7 +6787,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         """本週期真的動過的 repo → `{branches, last_branch, commits}`。
 
         判準（契約 C3）：run 屬於這塊板、`ref` 落在這個週期底下的
-        checklist ∪ task、且 `head_before != head_after`。
+        checklist ∪ task、且 `head_before != head_after`。**逐 repo 判**：
+        run 帶了 `git_repos_json`（多 repo 清單）就清單裡每個 repo 各自算，
+        沒帶（舊執行器）才退回主 repo 那組單一欄位。
 
         **兩個 head 都要非空**：空字串是「說不出來」（舊執行器、或沒有
         repo 的 run），不是「動過」。只比不等的話，一筆從來沒回報過 git 的
@@ -6657,23 +6805,38 @@ def create_app(config: Config | None = None) -> FastAPI:
             return {}
         marks = ",".join("?" for _ in refs)
         rows = await (await app.state.db.execute(
-            "SELECT repo, branch FROM agent_run WHERE board_id=?"
-            f" AND ref IN ({marks}) AND repo<>'' AND head_before<>''"
-            " AND head_after<>'' AND head_before<>head_after"
+            "SELECT repo, branch, head_before, head_after, git_repos_json"
+            " FROM agent_run WHERE board_id=?"
+            f" AND ref IN ({marks}) AND repo<>''"
             " ORDER BY created_at, rowid", (board_id, *refs))).fetchall()
         facts: dict[str, dict] = {}
         for r in rows:
-            f = facts.setdefault(r["repo"], {"branches": [], "commits": 0,
-                                             "last_branch": ""})
-            # `commits` 是**動過這個 repo 的 run 筆數**，不是 git 的 commit
-            # 顆數——Hub 手上只有 head 的前後值，數不出中間有幾顆
-            f["commits"] += 1
-            b = (r["branch"] or "").strip()
-            if b:
-                if b in f["branches"]:
-                    f["branches"].remove(b)
-                f["branches"].insert(0, b)
-                f["last_branch"] = b
+            entries = _loads_or(r["git_repos_json"] or "", [])
+            if not entries:
+                entries = [{"repo": r["repo"], "branch": r["branch"],
+                            "head_before": r["head_before"],
+                            "head_after": r["head_after"]}]
+            seen: set[str] = set()
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                name = (e.get("repo") or "").strip()
+                hb = e.get("head_before") or ""
+                ha = e.get("head_after") or ""
+                if not name or not hb or not ha or hb == ha or name in seen:
+                    continue
+                seen.add(name)
+                f = facts.setdefault(name, {"branches": [], "commits": 0,
+                                            "last_branch": ""})
+                # `commits` 是**動過這個 repo 的 run 筆數**，不是 git 的
+                # commit 顆數——Hub 手上只有 head 的前後值，數不出中間有幾顆
+                f["commits"] += 1
+                b = (e.get("branch") or "").strip()
+                if b:
+                    if b in f["branches"]:
+                        f["branches"].remove(b)
+                    f["branches"].insert(0, b)
+                    f["last_branch"] = b
         return facts
 
     async def _release_workspace_view(workspace_key: str) -> tuple[dict, dict]:
@@ -9887,6 +10050,213 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "migrated_from_seq": board["migrated_from_seq"],
                 "after_board_seq": after_board_seq}
 
+    # 貢獻紀錄收的事件。**只收「做了一件事」的那幾種**：建立、完成、週期的
+    # 四個轉折。編輯、認領、排序、衝突這些不算貢獻——算進來的話，拖來拖去
+    # 排順序的人會在統計上比做完十張卡的人還多
+    _CONTRIBUTION_EVENTS = (
+        "objective_created", "checklist_created", "task_created",
+        "task_done", "checklist_status", "objective_review",
+        "objective_verified", "objective_done", "objective_reopened",
+    )
+
+    @app.get("/api/boards/{board_id}/contributions",
+             dependencies=[Depends(require_auth)])
+    async def board_contributions(
+        board_id: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """這塊板上誰做了什麼（設定頁的貢獻紀錄）。成員才看得到。
+
+        **不另立事件表**：來源是既有的 `board_event`（稽核串），加上兩個補充
+
+        - **卡片／階段／週期自己的欄位**：`board_event` 是 2026-09-03 才補齊
+          的，更早的建立與完成只留在 `created_by_*`／`completed_by_*`／
+          `reviewed_by_*`／`verified_by_*` 上。稽核串裡已經有同一件事
+          （同一種動作、同一個 item）的就不再推，推出來的標 `derived: true`。
+          欄位只留最後一次（打回再完成只剩後一次），所以推得出來的就是那些，
+          推不出來的不補。
+        - **上板**：`agent_run` 的 `kind='release'`、`status='done'`，算在
+          派工者頭上。
+
+        `entries` 新的在前，`limit`／`offset` 分頁；`stats` 是全部紀錄的每人
+        統計，不受分頁影響。`board` 附上名稱、描述與我的角色——設定頁一次
+        拿齊，不必為了一個名字再讀一整塊板。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        role = await _board_member_or_403(board_id, actor, board=board,
+                                          host=host)
+        db = app.state.db
+
+        members = {
+            m["actor_key"]: m for m in await (await db.execute(
+                "SELECT actor_key, display_name, actor_kind FROM board_member"
+                " WHERE board_id=?", (board_id,))).fetchall()}
+
+        entries: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        marks = ",".join("?" for _ in _CONTRIBUTION_EVENTS)
+        for e in await (await db.execute(
+                "SELECT board_seq, event_type, actor_key, actor_name,"
+                " item_kind, item_id, payload_json, created_at"
+                " FROM board_event WHERE board_id=?"
+                f" AND event_type IN ({marks})",
+                (board_id, *_CONTRIBUTION_EVENTS))).fetchall():
+            payload = _loads_or(e["payload_json"], {}) or {}
+            action = e["event_type"]
+            if action == "checklist_status":
+                # 階段只有「推到完成」算收尾；打開、取消是另一回事
+                if payload.get("to") != "done":
+                    continue
+                action = "checklist_done"
+            key = actor_key(e["actor_key"])
+            seen.add((action, e["item_id"]))
+            if not key:
+                continue
+            entries.append({
+                "at": e["created_at"], "board_seq": e["board_seq"],
+                "action": action, "actor_key": key,
+                "actor_name": e["actor_name"] or "",
+                "item_kind": e["item_kind"], "item_id": e["item_id"],
+                "title": payload.get("title", "") or "", "derived": False})
+
+        titles: dict[str, str] = {}
+
+        def _derive(action: str, item_kind: str, row, key: str, at,
+                    name: str = "") -> None:
+            key = actor_key(key)
+            if not key or not at or (action, row["id"]) in seen:
+                return
+            seen.add((action, row["id"]))
+            entries.append({
+                "at": at, "board_seq": 0, "action": action, "actor_key": key,
+                "actor_name": name, "item_kind": item_kind,
+                "item_id": row["id"], "title": row["title"], "derived": True})
+
+        # v1 存量列只有 participant id 沒有 actor_key：從 participant 反查
+        # session_key（那是它建立當下的紀錄），查不到就不推
+        def _pk(col: str, alias: str) -> str:
+            return (f"COALESCE(NULLIF(x.{col}_actor_key, ''), {alias}.session_key,"
+                    f" '') AS {col}_key")
+
+        for x in await (await db.execute(
+                "SELECT x.id, x.title, x.status, x.created_at, x.created_by_name,"
+                f" {_pk('created_by', 'pc')}, x.reviewed_at, {_pk('reviewed_by', 'pr')},"
+                f" x.verified_at, {_pk('verified_by', 'pv')},"
+                f" x.completed_at, {_pk('completed_by', 'pd')}"
+                " FROM board_objective x"
+                " LEFT JOIN participant pc ON pc.id = x.created_by"
+                " LEFT JOIN participant pr ON pr.id = x.reviewed_by"
+                " LEFT JOIN participant pv ON pv.id = x.verified_by"
+                " LEFT JOIN participant pd ON pd.id = x.completed_by"
+                " WHERE x.board_id=?", (board_id,))).fetchall():
+            titles[x["id"]] = x["title"]
+            if x["title"] == "未分類":
+                continue   # 隨手記一張卡時自動長出來的容器，不是誰建的
+            _derive("objective_created", "objective", x, x["created_by_key"],
+                    x["created_at"], x["created_by_name"])
+            _derive("objective_review", "objective", x, x["reviewed_by_key"],
+                    x["reviewed_at"])
+            _derive("objective_verified", "objective", x,
+                    x["verified_by_key"], x["verified_at"])
+            if x["status"] == "done":
+                _derive("objective_done", "objective", x,
+                        x["completed_by_key"], x["completed_at"])
+        for table, kind in (("board_checklist", "checklist"),
+                            ("board_task", "task")):
+            for x in await (await db.execute(
+                    "SELECT x.id, x.title, x.status, x.created_at,"
+                    f" x.created_by_name, {_pk('created_by', 'pc')},"
+                    f" x.completed_at, {_pk('completed_by', 'pd')}"
+                    f" FROM {table} x"
+                    " LEFT JOIN participant pc ON pc.id = x.created_by"
+                    " LEFT JOIN participant pd ON pd.id = x.completed_by"
+                    " WHERE x.board_id=?", (board_id,))).fetchall():
+                titles[x["id"]] = x["title"]
+                if kind == "checklist" and x["title"] == "未分類":
+                    continue
+                _derive(f"{kind}_created", kind, x, x["created_by_key"],
+                        x["created_at"], x["created_by_name"])
+                if x["status"] == "done":
+                    _derive(f"{kind}_done", kind, x, x["completed_by_key"],
+                            x["completed_at"])
+
+        # 上板：只算真的做完的那幾次
+        for r in await (await db.execute(
+                "SELECT id, ref, requested_by_actor_key, requested_by_name,"
+                " ended_at, updated_at FROM agent_run"
+                " WHERE board_id=? AND kind='release' AND status='done'",
+                (board_id,))).fetchall():
+            key = actor_key(r["requested_by_actor_key"])
+            if not key:
+                continue
+            entries.append({
+                "at": r["ended_at"] or r["updated_at"], "board_seq": 0,
+                "action": "released", "actor_key": key,
+                "actor_name": r["requested_by_name"] or "",
+                "item_kind": "objective", "item_id": r["ref"],
+                "title": "", "derived": False})
+
+        # 名字與種類：板上的定案名優先（同一個人在不同房叫不同名字，統計
+        # 要合成一列）；不在成員列上的退回他最後一次 join 的紀錄
+        missing = sorted({e["actor_key"] for e in entries} - set(members))
+        others: dict[str, tuple[str, str]] = {}
+        if missing:
+            qs = ",".join("?" for _ in missing)
+            for p in await (await db.execute(
+                    "SELECT session_key, display_name, kind FROM participant"
+                    f" WHERE session_key IN ({qs}) ORDER BY joined_at",
+                    missing)).fetchall():
+                others[p["session_key"]] = (p["display_name"], p["kind"])
+
+        def _ident(key: str, fallback: str) -> tuple[str, str]:
+            m = members.get(key)
+            if m is not None:
+                return (m["display_name"] or fallback, m["actor_kind"] or "")
+            name, kind = others.get(key, ("", ""))
+            return (fallback or name, kind or "")
+
+        stats: dict[str, dict] = {}
+        for e in entries:
+            name, kind = _ident(e["actor_key"], e["actor_name"])
+            e["actor_name"] = e["actor_name"] or name
+            e["actor_kind"] = kind
+            if not e["title"]:
+                e["title"] = titles.get(e["item_id"], "")
+            st = stats.setdefault(e["actor_key"], {
+                "actor_key": e["actor_key"],
+                "actor_name": _ident(e["actor_key"], e["actor_name"])[0],
+                "actor_kind": kind, "total": 0, "counts": {}, "last_at": ""})
+            st["total"] += 1
+            st["counts"][e["action"]] = st["counts"].get(e["action"], 0) + 1
+            st["last_at"] = max(st["last_at"], e["at"] or "")
+
+        entries.sort(key=lambda e: (e["at"] or "", e["board_seq"]),
+                     reverse=True)
+        ranked = sorted(stats.values(),
+                        key=lambda st: (st["total"], st["last_at"]),
+                        reverse=True)
+        owner_key = board["owner_actor_key"]
+        return {
+            "board_id": board_id,
+            "board": {
+                "name": board["name"], "description": board["description"],
+                "status": board["status"], "my_role": role,
+                "owner_name": _ident(owner_key, "")[0] if owner_key else "",
+            },
+            "entries": entries[offset:offset + limit],
+            "total": len(entries),
+            "has_more": offset + limit < len(entries),
+            "offset": offset, "limit": limit,
+            "stats": ranked,
+        }
+
     async def _commit() -> None:
         await _commit_with_retry(app.state.db)
 
@@ -11388,7 +11758,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         import_members: bool = False,
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
-        host: bool = Depends(host_view),
     ):
         """把一塊板掛到一間房上。要同時是板的 owner/editor 與房的管理者。
 
@@ -11401,7 +11770,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await _room_or_404(room_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id)
         await _board_member_or_403(board_id, actor, need_write=True)
-        if not host and actor_key(room["creator_session_key"]) != actor:
+        # 房這一側不給主持人豁免：掛什麼板是房間設定，只有房主能決定
+        #（艾斯維爾 2026-09-23）
+        if actor_key(room["creator_session_key"]) != actor:
             raise _err(403, "not_room_admin",
                        "掛接要同時是這個聊天室的管理者")
         _private_board_needs_private_room(board["visibility"], room)
@@ -13735,6 +14106,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 結構化輸入（目前只有 release 有）。沒有 spec 的 run 回空物件——
         # 執行器那邊只要 `run["spec"]` 一路取得到鍵就不必分兩種寫法
         d["spec"] = _loads_or(d.pop("spec_json", "") or "{}", {})
+        # 逐 repo 的 git 現況（契約 C3）。空陣列＝沒帶（舊執行器、或沒有
+        # repo 的 run），此時只有主 repo 那組單一欄位
+        d["git_repos"] = _loads_or(d.pop("git_repos_json", "") or "[]", [])
         # 沒帶到這一欄的路徑（例如領單當下的 RETURNING *）一律 None：
         # 那時候確實還沒有人進房
         d["agent_name"] = d.get("agent_name") or None
@@ -13748,6 +14122,111 @@ def create_app(config: Config | None = None) -> FastAPI:
         sw = d.get("single_writer")
         d["single_writer"] = True if sw is None else bool(sw)
         return d
+
+    async def _run_ask_human(run) -> dict:
+        """派工的 agent 要問人時該問誰（stage／ticket 才有）。
+
+        問的對象**必須是人類**，而且 `chatroom_ask_human` 只問得到房內成員
+        的顯示名，所以這裡回的是依序的候選：
+
+        - 創建者是人類：**階段創建者 → 板 owner → 派工者**。階段是他開的，
+          前提與取捨在他手上。
+        - 創建者是 agent：**派工者 → 板 owner**（艾斯維爾 2026-09-24 裁決）。
+          派工者是按下這一筆的人，對這一輪要做什麼最清楚。
+        - 沒有創建者紀錄（存量資料，種類是空的）：**板 owner → 派工者**。
+
+        派工者是 `requested_by_actor_key`——Supervisor 代派時那是指定它的
+        人類，所以這一欄恆為人類。
+
+        非人類一律略過，**種類說不出來的也略過**：猜成人類會讓 agent 去問
+        一個 agent，而那一題永遠不會有人回。同一個人只列一次。
+
+        `in_room` 是領單當下的事實，agent 進房時可能已經變了——所以回整串
+        讓它依序退，而不是只給一個名字。
+        """
+        db = app.state.db
+        ref = (run["ref"] or "").strip()
+        checklist_id = ""
+        if run["kind"] == "stage":
+            checklist_id = ref
+        elif run["kind"] == "ticket" and ref:
+            task = await (await db.execute(
+                "SELECT checklist_id FROM board_task WHERE id=?",
+                (ref,))).fetchone()
+            checklist_id = task["checklist_id"] if task is not None else ""
+        stage = None
+        if checklist_id:
+            stage = await (await db.execute(
+                "SELECT title, board_id, created_by_name, created_by_actor_key,"
+                " created_by_kind FROM board_checklist WHERE id=?",
+                (checklist_id,))).fetchone()
+        board_id = (run["board_id"] or "").strip() or (
+            (stage["board_id"] or "") if stage is not None else "")
+        board = (await (await db.execute(
+            "SELECT owner_actor_key FROM board WHERE id=?",
+            (board_id,))).fetchone() if board_id else None)
+
+        async def _who(key: str) -> tuple[str, str]:
+            """(板上的名字, 種類)。板成員列優先，再退回任何一次 join 的紀錄。"""
+            if board_id:
+                who = await _board_identity(board_id, key)
+                if who is not None and (who["actor_kind"] or ""):
+                    return who["display_name"] or "", who["actor_kind"]
+            row = await (await db.execute(
+                "SELECT display_name, kind FROM participant"
+                " WHERE session_key=? ORDER BY joined_at DESC LIMIT 1",
+                (key,))).fetchone()
+            return ((row["display_name"], row["kind"]) if row is not None
+                    else ("", ""))
+
+        creator = None
+        candidates: list[tuple[str, str, str, str]] = []
+        if stage is not None:
+            ckey = actor_key(stage["created_by_actor_key"])
+            cname = stage["created_by_name"] or ""
+            ckind = (stage["created_by_kind"] or "").strip().lower()
+            if ckey and not ckind:
+                ckind = (await _who(ckey))[1].strip().lower()
+            creator = {"name": cname, "kind": ckind,
+                       "stage_title": stage["title"]}
+            if ckey:
+                candidates.append(("stage_creator", ckey, cname, ckind))
+        owner = (("board_owner", board["owner_actor_key"], "", "")
+                 if board is not None and board["owner_actor_key"] else None)
+        requester = (("requester", run["requested_by_actor_key"],
+                      run["requested_by_name"] or "", "")
+                     if run["requested_by_actor_key"] else None)
+        agent_made = bool(creator and creator["kind"]
+                          and creator["kind"] != "human")
+        for c in ((requester, owner) if agent_made else (owner, requester)):
+            if c is not None:
+                candidates.append(c)
+        targets: list[dict] = []
+        seen: set[str] = set()
+        for source, key, fallback, kind in candidates:
+            key = actor_key(key)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            # 房內顯示名才問得到（`target_name` 比對的是它），所以先找房內
+            here = await (await db.execute(
+                "SELECT display_name, kind FROM participant"
+                " WHERE room_id=? AND session_key=? AND status='active'"
+                "   AND parent_id IS NULL"
+                " ORDER BY last_seen_at DESC LIMIT 1",
+                (run["room_id"], key))).fetchone()
+            name = here["display_name"] if here is not None else ""
+            if not kind and here is not None:
+                kind = here["kind"] or ""
+            if not name or not kind:
+                bname, bkind = await _who(key)
+                name = name or bname or fallback
+                kind = kind or bkind
+            if (kind or "").strip().lower() != "human" or not name:
+                continue
+            targets.append({"name": name, "source": source,
+                            "in_room": here is not None})
+        return {"stage_creator": creator, "targets": targets}
 
     def _runner_public(row) -> dict:
         d = dict(row)
@@ -14839,6 +15318,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 為了它去改那句 CAS 不值得，這裡補一次查詢
         run = _run_public(got)
         run["single_writer"] = await _room_single_writer(got["room_id"])
+        # 要問人時問誰（`_run_ask_human`）。**查不出來不能讓領單失敗**：
+        # 單已經 commit 成 claimed，這裡拋例外的話執行器拿到 500、手上沒有
+        # 這筆 run，而 Hub 那邊它永遠停在 claimed
+        if got["kind"] in ("stage", "ticket"):
+            try:
+                run["ask_human"] = await _run_ask_human(got)
+            except Exception:  # noqa: BLE001
+                logger.warning("run %s 的提問對象查不出來", got["id"],
+                               exc_info=True)
         return {"run": run}
 
     @app.post("/api/runs/{run_id}/report", dependencies=[Depends(require_auth)])
@@ -14911,10 +15399,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         # git 現況（上板契約 C3）。整組一起寫：四欄描述的是**同一次**執行，
         # 逐欄「非空才寫」的話，一次沒帶 head 的回報會留下新 branch 配舊 sha
         if body.git is not None:
+            # 逐 repo 清單跟著同一組寫：沒帶＝空字串（舊執行器），不留上一次
+            # 回報的清單配這一次的主 repo
+            repos_json = ("" if body.git.repos is None else json.dumps(
+                [g.model_dump() for g in body.git.repos],
+                ensure_ascii=False))
             sets.extend(["repo=?", "branch=?", "head_before=?",
-                         "head_after=?"])
+                         "head_after=?", "git_repos_json=?"])
             params.extend([body.git.repo, body.git.branch,
-                           body.git.head_before, body.git.head_after])
+                           body.git.head_before, body.git.head_after,
+                           repos_json])
         if new == "running" and row["started_at"] is None:
             sets.append("started_at=?")
             params.append(now)

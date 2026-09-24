@@ -153,28 +153,22 @@ async def test_cannot_hand_over_to_someone_who_left(tmp_path):
         assert r.json()["detail"]["code"] == "heir_not_found"
 
 
-async def test_admin_leaving_is_refused_until_they_decide(tmp_path):
-    """管理員不能就這樣走掉。
+async def test_admin_leaving_hands_over_to_a_human(tmp_path):
+    """管理員離開時，管理權自動交給房內最早加入的人類（2026-09-23 改）。
 
-    走掉的話房間永遠沒有人能封存、踢人或收回邀請——而那個狀態沒有任何地方
-    會報錯，只會在下次有人需要管理員時才發現。
-
-    回應要附上可以接手的人，App 才跳得出「移轉給誰」那個選項；候選是空的
-    時候，UI 只剩封存那條路可走。
+    原本是擋下來要他先決定；現在 Hub 直接交出去——不變量照樣成立：
+    active 的房永遠有一個管理員。agent 不算候選——它不能當管理員。
     """
     app, client = await _make(tmp_path, "leave")
     async with app.router.lifespan_context(app), client:
         room_id = await _room(client)
         admin = await _join(client, room_id, "owner", "Xavier")
-        await _join(client, room_id, "guest", "Guest")
+        guest = await _join(client, room_id, "guest", "Guest")
         await _join(client, room_id, "a1", "Novia", role="agent", kind="claude")
 
         r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(admin))
-        assert r.status_code == 409
-        detail = r.json()["detail"]
-        assert detail["code"] == "admin_must_hand_over"
-        # agent 不算候選——它不能當管理員
-        assert [c["display_name"] for c in detail["human_candidates"]] == ["Guest"]
+        assert r.status_code == 200, r.text
+        assert r.json()["admin_transferred_to"]["participant_id"] ==             guest["participant_id"]
 
 
 async def test_the_last_human_admin_can_leave_by_archiving_first(tmp_path):
@@ -191,7 +185,7 @@ async def test_the_last_human_admin_can_leave_by_archiving_first(tmp_path):
 
         r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(admin))
         assert r.status_code == 409
-        assert r.json()["detail"]["human_candidates"] == []
+        assert r.json()["detail"]["code"] == "leave_will_archive"
 
         await client.post(f"/api/rooms/{room_id}/archive", headers=_pid(admin))
         r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(admin))
@@ -213,6 +207,8 @@ async def test_after_handing_over_the_old_admin_can_leave(tmp_path):
         r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(admin))
         assert r.status_code == 200, r.text
 
-        # 新管理員真的握得住權：他自己要走時也會被同一條規則擋下
+        # 新管理員真的握得住權：他自己要走時也會被同一條規則攔下
+        # （房裡已沒有別的人類，離開會封存）
         r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(heir))
         assert r.status_code == 409
+        assert r.json()["detail"]["code"] == "leave_will_archive"

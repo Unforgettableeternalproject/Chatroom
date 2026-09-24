@@ -60,6 +60,9 @@ async def test_only_the_creator_can_delete(tmp_path):
             assert r.json()["detail"]["code"] == "not_admin"
             assert "刪除" in r.json()["detail"]["message"]
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -81,6 +84,9 @@ async def test_delete_removes_everything_and_the_room_is_gone(tmp_path):
                 headers={"X-Participant-Id": pid}, json={"content": "留下點東西"},
             )
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -142,6 +148,9 @@ async def test_shared_attachment_blob_survives_when_one_room_is_deleted(tmp_path
             up_a = await _upload(client, a["id"], pa, same)
             up_b = await _upload(client, b["id"], pb, same)
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{a['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             await client.delete(
                 f"/api/rooms/{a['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -170,6 +179,9 @@ async def test_orphan_blob_is_reclaimed_after_the_grace(tmp_path):
             room = await _room(client)
             pid = (await _join(client, room["id"]))["participant_id"]
             up = await _upload(client, room["id"], pid, b"lonely")
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -197,6 +209,9 @@ async def test_fresh_blob_is_kept_during_the_grace(tmp_path):
             room = await _room(client)
             pid = (await _join(client, room["id"]))["participant_id"]
             await _upload(client, room["id"], pid, b"just uploaded")
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -300,6 +315,9 @@ async def test_long_poll_wakes_up_when_the_room_is_deleted(tmp_path):
 
             task = asyncio.create_task(_poll())
             await asyncio.sleep(0.2)
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -410,6 +428,9 @@ async def test_every_path_says_room_not_found_after_deletion(
         async with app.router.lifespan_context(app):
             room = await _room(client)
             pid = (await _join(client, room["id"]))["participant_id"]
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -487,6 +508,9 @@ async def test_delete_a_room_that_has_board_data(tmp_path):
             me = await _join(client, room["id"])
             await _board_tree(client, room["id"], me["participant_id"])
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -539,6 +563,9 @@ async def test_delete_a_room_that_has_an_archive_request(tmp_path):
             assert r.status_code == 200, r.text
             assert r.json()["archived"] is False, "應該是提案不是直接封存"
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )
@@ -571,6 +598,9 @@ async def test_delete_a_room_where_a_subagent_is_present(tmp_path):
             )
             assert r.status_code == 200, r.text
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room['id']}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room['id']}", headers={"X-Session-Key": "admin"}
             )

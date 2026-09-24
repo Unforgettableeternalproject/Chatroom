@@ -14,6 +14,7 @@ import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
+import '../../widgets/pane_divider.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
@@ -315,21 +316,44 @@ class _AppShellState extends ConsumerState<AppShell>
         ),
         Expanded(
           child: wide
-              ? Row(children: [
-                  SizedBox(
-                    width: 272,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: Border(right: BorderSide(color: s.line)),
-                      ),
-                      child: _LeftPane(
-                        selectedRoomId: widget.selectedRoomId,
-                        selectedBoardId: widget.selectedBoardId,
+              // 側欄寬度是使用者拖出來的，但**版面仍有最後決定權**：落盤的
+              // 值可能是在更寬的視窗上拖的，直接用會把主內容擠沒。
+              ? LayoutBuilder(builder: (context, box) {
+                  final width = clampLeftPaneWidth(
+                    ref.watch(
+                        appConfigProvider.select((c) => c.leftPaneWidth)),
+                    available: box.maxWidth -
+                        kPaneDividerWidth -
+                        kMainPaneMinWidth,
+                  );
+                  return Row(children: [
+                    SizedBox(
+                      width: width,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border(right: BorderSide(color: s.line)),
+                        ),
+                        child: _LeftPane(
+                          selectedRoomId: widget.selectedRoomId,
+                          selectedBoardId: widget.selectedBoardId,
+                        ),
                       ),
                     ),
-                  ),
-                  Expanded(child: widget.child),
-                ])
+                    PaneDivider(
+                      tooltip: l10n.shellPaneResizeHint,
+                      // 以**當下畫出來的寬度**為基準加位移，不是以偏好值：
+                      // 被視窗夾住時那兩個值不一樣，拿偏好值當基準會讓第一格
+                      // 拖曳跳回夾住前的寬度
+                      onDelta: (dx) => ref
+                          .read(appConfigProvider.notifier)
+                          .setLeftPaneWidth(width + dx),
+                      onReset: () => ref
+                          .read(appConfigProvider.notifier)
+                          .setLeftPaneWidth(kLeftPaneDefaultWidth),
+                    ),
+                    Expanded(child: widget.child),
+                  ]);
+                })
               : widget.child,
         ),
       ]),

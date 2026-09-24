@@ -396,6 +396,10 @@
   "@shellNoRoomSelected": {
     "description": "桌機模式沒選房間時的占位文字"
   },
+  "shellPaneResizeHint": "拖曳調整寬度，雙擊還原",
+  "@shellPaneResizeHint": {
+    "description": "側邊欄分隔線的提示：可拖曳、雙擊還原預設寬"
+  },
   "hostProbeChecking": "檢查中…",
   "@hostProbeChecking": {
     "description": "燈號：檢查中"
@@ -7604,5 +7608,265 @@
   "trayMenuNotifySection": "通知",
   "@trayMenuNotifySection": {
     "description": "系統匣右鍵選單：通知模式那三項的標題"
+  },
+  "opsReportExport": "匯出",
+  "@opsReportExport": {
+    "description": "回報面板：把這一筆回報存成 .md"
+  },
+  "opsReportExportAll": "全部匯出",
+  "@opsReportExportAll": {
+    "description": "回報面板：把目前列出的回報合成一份 .md"
+  },
+  "opsReportExported": "已匯出",
+  "@opsReportExported": {
+    "description": "回報匯出完成的提示"
+  },
+  "chatTransferAdminTitle": "移交管理權",
+  "@chatTransferAdminTitle": {
+    "description": "移交管理權確認框的標題"
+  },
+  "chatTransferAdminBody": "移交給 {who} 後，你會變成一般成員。",
+  "@chatTransferAdminBody": {
+    "description": "移交管理權確認框的內文",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "chatTransferAdminAction": "移交",
+  "@chatTransferAdminAction": {
+    "description": "移交管理權確認框的確認鈕"
+  },
+  "chatTransferAdminDone": "已把管理權移交給 {who}",
+  "@chatTransferAdminDone": {
+    "description": "移交管理權成功後的提示",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "chatMemberTransferAdmin": "移交管理權",
+  "@chatMemberTransferAdmin": {
+    "description": "成員列動作選單：把管理權交給這個人"
+  },
+  "errorHeirNotFound": "找不到這個成員，或他已經不在聊天室裡",
+  "@errorHeirNotFound": {
+    "description": "移交管理權時目標成員已不在房內（heir_not_found）"
+  },
+  "roomsMenuSettings": "設定",
+  "@roomsMenuSettings": {
+    "description": "房間選單：開房間設定頁"
+  },
+  "roomsMenuTransfer": "轉移所有權",
+  "@roomsMenuTransfer": {
+    "description": "房間選單：把房主交給別人（僅房主可見）"
+  },
+  "roomSettingsTitle": "房間設定",
+  "@roomSettingsTitle": {
+    "description": "房間設定頁標題"
+  },
+  "roomSettingsSaved": "已儲存",
+  "@roomSettingsSaved": {
+    "description": "房間設定頁：儲存成功"
+  },
+  "roomSettingsOwnerOnly": "只有房主能修改",
+  "@roomSettingsOwnerOnly": {
+    "description": "房間設定頁：非房主看到的唯讀提示"
+  },
+  "roomSettingsArchivedReadOnly": "已封存，唯讀",
+  "@roomSettingsArchivedReadOnly": {
+    "description": "房間設定頁：封存房的唯讀提示"
+  },
+  "roomSettingsBoard": "任務板",
+  "@roomSettingsBoard": {
+    "description": "房間設定頁：任務板區塊標題"
+  },
+  "roomSettingsArchiveSection": "封存",
+  "@roomSettingsArchiveSection": {
+    "description": "房間設定頁：封存區塊標題"
+  },
+  "roomsTransferPickBody": "選擇新的房主。轉移後你會變成一般成員。",
+  "@roomsTransferPickBody": {
+    "description": "轉移所有權對話框說明"
+  },
+  "roomsTransferAction": "轉移",
+  "@roomsTransferAction": {
+    "description": "轉移所有權對話框的確認鈕"
+  },
+  "roomsTransferNoCandidates": "房內沒有其他人類成員",
+  "@roomsTransferNoCandidates": {
+    "description": "轉移所有權：沒有可選的人"
+  },
+  "roomsLeaveArchiveTitle": "離開並封存？",
+  "@roomsLeaveArchiveTitle": {
+    "description": "房主是最後一位人類時離開的確認框標題"
+  },
+  "roomsLeaveArchiveBody": "你是房內最後一位人類成員。離開後聊天室會封存。",
+  "@roomsLeaveArchiveBody": {
+    "description": "房主是最後一位人類時離開的確認框內文"
+  },
+  "roomsLeaveArchiveAction": "離開並封存",
+  "@roomsLeaveArchiveAction": {
+    "description": "房主是最後一位人類時離開的確認鈕"
+  },
+  "roomsLeftArchived": "已離開，聊天室已封存",
+  "@roomsLeftArchived": {
+    "description": "房主離開並封存後的提示"
+  },
+  "roomsLeftHandedOver": "已離開，房主改為 {who}",
+  "@roomsLeftHandedOver": {
+    "description": "房主離開、自動轉移後的提示",
+    "placeholders": {
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "boardMenuDelete": "永久刪除…",
+  "@boardMenuDelete": {
+    "description": "任務板選單：永久刪除（僅已封存的板）"
+  },
+  "boardDeleteTitle": "永久刪除任務板？",
+  "@boardDeleteTitle": {
+    "description": "刪除任務板確認框標題"
+  },
+  "boardDeleteBody": "「{name}」和板上所有卡片會被刪除，無法復原。",
+  "@boardDeleteBody": {
+    "description": "刪除任務板確認框內文",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDeleteAction": "永久刪除",
+  "@boardDeleteAction": {
+    "description": "刪除任務板確認鈕"
+  },
+  "boardDeletedDone": "已刪除「{name}」",
+  "@boardDeletedDone": {
+    "description": "刪除任務板後的提示",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "roomSettingsMembersOnly": "只有房間成員能查看設定",
+  "@roomSettingsMembersOnly": {
+    "description": "房間設定頁：非成員直接打開時的提示"
+  },
+  "boardSettingsTitle": "任務板設定",
+  "@boardSettingsTitle": {
+    "description": "任務板設定頁標題，也是頁首設定鈕的提示"
+  },
+  "boardSettingsDescription": "描述",
+  "@boardSettingsDescription": {
+    "description": "任務板設定頁：描述欄位標籤（板的 description，與建板對話框同名）"
+  },
+  "boardSettingsDescriptionHint": "一句話說明這塊板在做什麼…",
+  "@boardSettingsDescriptionHint": {
+    "description": "任務板設定頁：描述欄位提示"
+  },
+  "boardSettingsOwnerOnly": "只有板 owner 能修改",
+  "@boardSettingsOwnerOnly": {
+    "description": "任務板設定頁：非 owner 的唯讀提示"
+  },
+  "boardSettingsOwner": "Owner：{name}",
+  "@boardSettingsOwner": {
+    "description": "任務板設定頁：板 owner 是誰",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardContribTitle": "貢獻紀錄",
+  "@boardContribTitle": {
+    "description": "任務板設定頁：貢獻紀錄區塊標題"
+  },
+  "boardContribStats": "每人統計",
+  "@boardContribStats": {
+    "description": "任務板設定頁：每人統計小標"
+  },
+  "boardContribLog": "紀錄",
+  "@boardContribLog": {
+    "description": "任務板設定頁：時間序列表小標"
+  },
+  "boardContribEmpty": "還沒有紀錄",
+  "@boardContribEmpty": {
+    "description": "任務板設定頁：貢獻紀錄是空的"
+  },
+  "boardContribCount": "{count} 件",
+  "@boardContribCount": {
+    "description": "任務板設定頁：某人的貢獻總數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardContribMore": "載入更多",
+  "@boardContribMore": {
+    "description": "任務板設定頁：紀錄分頁"
+  },
+  "boardContribDerived": "由卡片欄位回推",
+  "@boardContribDerived": {
+    "description": "任務板設定頁：這筆紀錄不在稽核串裡，是從卡片欄位推出來的（提示）"
+  },
+  "boardContribObjectiveCreated": "建立週期",
+  "@boardContribObjectiveCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribChecklistCreated": "建立階段",
+  "@boardContribChecklistCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribTaskCreated": "建立卡片",
+  "@boardContribTaskCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribTaskDone": "完成卡片",
+  "@boardContribTaskDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribChecklistDone": "完成階段",
+  "@boardContribChecklistDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveReview": "送審週期",
+  "@boardContribObjectiveReview": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveVerified": "確認週期",
+  "@boardContribObjectiveVerified": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveDone": "完成週期",
+  "@boardContribObjectiveDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveReopened": "打回週期",
+  "@boardContribObjectiveReopened": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribReleased": "上板",
+  "@boardContribReleased": {
+    "description": "貢獻紀錄動作：週期上板完成"
+  },
+  "boardChecklistCreatedBy": "由 {name} 建立",
+  "@boardChecklistCreatedBy": {
+    "description": "階段標題的提示：階段創建者",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardChecklistCreatorUnknown": "建立者不明",
+  "@boardChecklistCreatorUnknown": {
+    "description": "階段標題的提示：存量階段沒有創建者紀錄"
   }
 }

@@ -12,12 +12,14 @@ import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
 import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
+import 'screens/board/board_settings_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/help/help_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
+import 'screens/rooms/room_settings_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
@@ -91,6 +93,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
                   padId: state.pathParameters['padId']!,
                 ),
               ),
+              // 任務板設定（名稱、主題、貢獻紀錄）
+              GoRoute(
+                path: 'settings',
+                builder: (context, state) => BoardSettingsScreen(
+                  boardId: state.pathParameters['boardId']!,
+                ),
+              ),
             ],
           ),
           // 追蹤收件匣**跨板**——「我在等的東西完成了嗎」不分板，
@@ -142,6 +151,12 @@ GoRouter buildRouter(bool Function() isConfigured) {
                     builder: (context, state) => AssignmentScreen(
                         roomId: state.pathParameters['roomId']!),
                   ),
+                  // 房間設定：名稱、主題、說話方式、可見度等，原本散在選單裡
+                  GoRoute(
+                    path: 'settings',
+                    builder: (context, state) => RoomSettingsScreen(
+                        roomId: state.pathParameters['roomId']!),
+                  ),
                   // Board 與釘選牆／指派同一層：它是這個房間底下的東西，
                   // 跟著房間的成員、權限與封存狀態走
                   // 相容入口。**不 redirect 到 /boards/:id**：要 redirect 就得
@@ -174,6 +189,15 @@ GoRouter buildRouter(bool Function() isConfigured) {
                         path: 'track',
                         builder: (context, state) => SupervisorTrackScreen(
                             roomId: state.pathParameters['roomId']!),
+                      ),
+                      // 任務板設定的房軸入口：與想法板同一個理由，從聊天室
+                      // 進來的人留在 ROOMS 分頁上，返回回到這間房的板
+                      GoRoute(
+                        path: 'settings',
+                        builder: (context, state) => BoardSettingsScreen(
+                          boardId: state.uri.queryParameters['board'] ?? '',
+                          roomId: state.pathParameters['roomId']!,
+                        ),
                       ),
                     ],
                   ),

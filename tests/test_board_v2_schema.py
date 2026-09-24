@@ -150,6 +150,9 @@ async def test_deleting_a_room_detaches_the_board_but_keeps_it(tmp_path):
                 (room_id, now))
             await db.commit()
 
+            # 只有封存的房刪得掉（room_not_archived）
+            await client.post(f"/api/rooms/{room_id}/archive",
+                              headers={"X-Session-Key": "admin"})
             r = await client.delete(
                 f"/api/rooms/{room_id}", headers={"X-Session-Key": "admin"})
             assert r.status_code == 200, r.text

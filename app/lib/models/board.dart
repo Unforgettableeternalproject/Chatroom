@@ -125,6 +125,8 @@ class BoardChecklist {
     this.status = 'open',
     this.orderIndex = 0,
     this.createdBy,
+    this.createdByName = '',
+    this.createdByKind = '',
     this.completedBy,
     this.completedAt,
     this.deleted = false,
@@ -142,6 +144,12 @@ class BoardChecklist {
   final String status;
   final int orderIndex;
   final String? createdBy;
+
+  /// 階段創建者（名字快照與種類 human／claude／codex／other）。派工的 agent
+  /// 要問人時先問他。**空字串＝存量階段沒有紀錄**，畫面寫「建立者不明」，
+  /// 不拿別的名字補。
+  final String createdByName;
+  final String createdByKind;
   final String? completedBy;
   final String? completedAt;
   final bool deleted;
@@ -185,6 +193,8 @@ class BoardChecklist {
     status: (json['status'] as String?) ?? 'open',
     orderIndex: (json['order_index'] as int?) ?? 0,
     createdBy: json['created_by'] as String?,
+    createdByName: (json['created_by_name'] as String?) ?? '',
+    createdByKind: (json['created_by_kind'] as String?) ?? '',
     completedBy: json['completed_by'] as String?,
     completedAt: json['completed_at'] as String?,
     deleted: (json['deleted'] as bool?) ?? false,

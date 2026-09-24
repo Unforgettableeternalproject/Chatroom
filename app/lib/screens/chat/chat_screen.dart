@@ -10,6 +10,7 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -23,10 +24,10 @@ import '../../api/attachments_api.dart';
 import '../../api/messages_api.dart';
 import '../../api/rooms_api.dart';
 import '../../models/participant.dart';
-import '../../models/room_style.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../board/board_attach_dialog.dart';
+import '../rooms/room_actions.dart';
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
@@ -37,14 +38,11 @@ import '../../widgets/archive_request_banner.dart';
 import '../../widgets/composer_attachments.dart';
 import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
-import '../../widgets/delete_room_confirm.dart';
-import '../../widgets/rename_dialog.dart';
-import '../board/board_switch.dart';
-import '../../widgets/room_style_picker.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/pane_divider.dart';
 import '../../widgets/question_card.dart';
 import '../../widgets/run_report_panel.dart';
 import '../../widgets/system_message_tile.dart';
@@ -60,7 +58,6 @@ import '../board/board_screen.dart';
 
 /// 成員側欄的寬度。回報面板要貼著它的左緣，所以這個數字有第二個讀者，
 /// 不能再寫死在 `Container` 裡。
-const double _sidebarWidth = 288;
 
 /// 跳轉粗跳的落點估計。
 ///
@@ -1312,51 +1309,69 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
     }
     final isOps = room?.isOps ?? false;
-    final columns = Row(
-      children: [
-        Expanded(child: chatColumn),
-        Container(
-          width: _sidebarWidth,
-          decoration: BoxDecoration(
-            color: s.bgSoft,
-            border: Border(left: BorderSide(color: s.line)),
-          ),
-          child: _MembersPanel(
-            roomId: roomId,
-            members: members,
-            myId: myId,
-            archived: archived,
-            limits: detailAsync.value?.limits ?? const ServerLimits(),
-            youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
-            isOps: isOps,
-          ),
-        ),
-      ],
-    );
     return Scaffold(
       backgroundColor: s.bg,
-      // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
-      // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
-      body: !isOps
-          ? columns
-          : CallbackShortcuts(
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.escape): () => ref
-                    .read(selectedRunIdProvider.notifier)
-                    .clear(roomId),
-              },
-              child: Stack(
-                children: [
-                  columns,
-                  Positioned.fill(
-                    child: RunReportOverlay(
-                      roomId: roomId,
-                      sidebarWidth: _sidebarWidth,
-                    ),
-                  ),
-                ],
+      // 側欄寬度是拖出來的偏好，但**版面有最後決定權**：落盤的值可能是在
+      // 更寬的視窗上拖的，直接用會把訊息區擠沒，所以依當下可用寬再夾一次。
+      body: LayoutBuilder(builder: (context, box) {
+        final sidebarWidth = clampRightPaneWidth(
+          ref.watch(appConfigProvider.select((c) => c.rightPaneWidth)),
+          available: box.maxWidth - kPaneDividerWidth - kMainPaneMinWidth,
+        );
+        final columns = Row(
+          children: [
+            Expanded(child: chatColumn),
+            PaneDivider(
+              tooltip: AppLocalizations.of(context).shellPaneResizeHint,
+              // 往左拖是加寬：分隔線在側欄左邊，位移方向與寬度相反
+              onDelta: (dx) => ref
+                  .read(appConfigProvider.notifier)
+                  .setRightPaneWidth(sidebarWidth - dx),
+              onReset: () => ref
+                  .read(appConfigProvider.notifier)
+                  .setRightPaneWidth(kRightPaneDefaultWidth),
+            ),
+            Container(
+              width: sidebarWidth,
+              decoration: BoxDecoration(
+                color: s.bgSoft,
+                border: Border(left: BorderSide(color: s.line)),
+              ),
+              child: _MembersPanel(
+                roomId: roomId,
+                members: members,
+                myId: myId,
+                archived: archived,
+                limits: detailAsync.value?.limits ?? const ServerLimits(),
+                youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
+                isOps: isOps,
               ),
             ),
+          ],
+        );
+        // 回報面板疊在訊息區上方（不是側欄裡向下展開），所以掛在整列之上。
+        // Esc 關閉：綁在這一層，輸入框那邊自己吃掉的 Esc（候選選單）先處理
+        return !isOps
+            ? columns
+            : CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.escape): () => ref
+                      .read(selectedRunIdProvider.notifier)
+                      .clear(roomId),
+                },
+                child: Stack(
+                  children: [
+                    columns,
+                    Positioned.fill(
+                      child: RunReportOverlay(
+                        roomId: roomId,
+                        sidebarWidth: sidebarWidth,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+      }),
     );
   }
 
@@ -1842,98 +1857,16 @@ class _OverflowMenu extends ConsumerWidget {
 
   final String roomId;
 
-  /// 更換任務板：**先解除、再挑一塊**（618da61b）。
-  ///
-  /// 中途停下來是這條路的一部分，不是失敗——`attach` 那端有
-  /// `room_already_has_board` 擋著，順序不能反，所以「舊的解除了、新的還
-  /// 沒掛上」必然會經過。四種結果各講各的話（`boardSwitchStatusMessage`）。
-  Future<void> _switchBoard(BuildContext context, WidgetRef ref) async {
-    final board = ref.read(boardProvider(roomId)).value;
-    final boardId = board?.boardId ?? '';
-    if (boardId.isEmpty) return;
-    if (!await confirmBoardSwitch(context, boardName: board?.name ?? '')) {
-      return;
-    }
-    final api = ref.read(boardsApiProvider);
-    final key = ref.read(appConfigProvider).deviceKey;
-
-    // 第一步：解除。失敗時什麼都沒變——**要說原本那塊還在**，
-    // 否則人會以為房間空了而去做一件不必做的事
-    try {
-      await api.detachRoom(boardId, roomId, sessionKey: key);
-    } on ApiException catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(boardSwitchStatusMessage(
-            detached: false, attached: false, error: e.message)),
-      ));
-      return;
-    }
-    ref.invalidate(boardProvider(roomId));
-    ref.invalidate(boardLibraryProvider);
-    if (!context.mounted) return;
-
-    // 第二步：挑一塊新的。取消也是一種結果，而且是**要講出來**的那種：
-    // 這間房現在沒有板
-    final result = await showBoardAttachDialog(context,
-        roomName:
-            ref.read(roomDetailProvider(roomId)).value?.room.name ?? '');
-    if (result == null) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            boardSwitchStatusMessage(detached: true, attached: false)),
-        duration: const Duration(seconds: 6),
-      ));
-      return;
-    }
-    try {
-      final newId = result.isCreate
-          ? await api.create(
-              name: result.name!, sessionKey: key, originRoomId: roomId)
-          : result.boardId!;
-      if (!result.isCreate || result.importMembers) {
-        await api.attachRoom(newId, roomId,
-            sessionKey: key, importMembers: result.importMembers);
-      }
-      ref.invalidate(boardProvider(roomId));
-      ref.invalidate(boardLibraryProvider);
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text(boardSwitchStatusMessage(detached: true, attached: true)),
-      ));
-    } on ApiException catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(boardSwitchStatusMessage(
-            detached: true, attached: false, error: e.message)),
-        duration: const Duration(seconds: 8),
-      ));
-    }
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = context.uep;
-    // 鎖定是管理員限定的動作，非建立者連選項都不該看到——列出來再擋，
-    // 只是把一個必然失敗的按鈕擺在那裡
+    final l10n = AppLocalizations.of(context);
+    // 選單只放三項（艾斯維爾 09/23）：設定類的東西集中到房間設定頁，
+    // 永久刪除只在「已封存」分頁的房間上給
     final detail = ref.watch(roomDetailProvider(roomId)).value;
     final youAreAdmin = detail?.youAreAdmin ?? false;
-    // 這間房現在掛著板嗎。**判準是 board_id 有值**，不是快照非空——
-    // 一塊剛掛上、還沒有任何卡的板照樣是「有板」
-    final board = ref.watch(boardProvider(roomId)).value;
-    final hasBoard = (board?.boardId ?? '').isNotEmpty;
-    // 主持人模式**只加開刪除**，不加開說話方式與鎖定狀態。
-    //
-    // Hub 那邊也是這樣分的：主持人視角放行「清掉這台 Hub 上的東西」
-    // （封存／解封／刪除），不放行「以別人的房主身分行事」（改別人房間
-    // 的說話方式、鎖定狀態、踢別人房裡的人）。UI 多給一顆按鈕，按下去
-    // 只會拿到 403——把必然失敗的按鈕擺出來，跟不給一樣糟
-    final canDelete = youAreAdmin || ref.watch(hostViewProvider);
-    final isPrivate = detail?.room.isPrivate ?? false;
-    final style = detail?.room.style ?? kRoomStyles.first.value;
-    final styleInstructions = detail?.room.styleInstructions ?? '';
+    final archived = detail?.room.isArchived ?? false;
+    final myId = ref.watch(identityProvider(roomId)).value?.participantId;
     return PopupMenuButton<String>(
       color: s.bgCard,
       shape: RoundedRectangleBorder(
@@ -1942,225 +1875,38 @@ class _OverflowMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
-          case 'switch_board':
-            await _switchBoard(context, ref);
-          case 'rename':
-            // 對話框只負責問出名字：取消與「沒改」都回 null，
-            // 那時**不要打 API**——送一個相同的名字會在房裡留下一則
-            // 「X 將房間改名為 Y」的系統訊息，而什麼都沒變
-            final name = await showRenameDialog(
-              context,
-              title: AppLocalizations.of(context).roomsRenameTitle,
-              current: detail?.room.name ?? '',
-              hint: AppLocalizations.of(context).roomsRenameHint,
-            );
-            if (name == null || !context.mounted) return;
-            try {
-              await ref.read(roomsApiProvider).rename(
-                    roomId,
-                    name: name,
-                    sessionKey: ref.read(appConfigProvider).deviceKey,
-                    participantId:
-                        ref.read(identityProvider(roomId)).value?.participantId,
-                  );
-              ref.invalidate(roomDetailProvider(roomId));
-              ref.invalidate(roomListProvider);
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
-          case 'style':
-            final picked = await showDialog<({String style, String text})>(
-              context: context,
-              builder: (_) =>
-                  _StyleDialog(style: style, instructions: styleInstructions),
-            );
-            if (picked == null) return;
-            try {
-              await ref
-                  .read(roomsApiProvider)
-                  .setStyle(
-                    roomId,
-                    style: picked.style,
-                    instructions: picked.text,
-                    sessionKey: ref.read(appConfigProvider).deviceKey,
-                    participantId: ref
-                        .read(identityProvider(roomId))
-                        .value
-                        ?.participantId,
-                  );
-              ref.invalidate(roomDetailProvider(roomId));
-              ref.invalidate(roomListProvider);
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
-          case 'visibility':
-            try {
-              await ref
-                  .read(roomsApiProvider)
-                  .setVisibility(
-                    roomId,
-                    visibility: isPrivate ? 'public' : 'private',
-                    sessionKey: ref.read(appConfigProvider).deviceKey,
-                    participantId: ref
-                        .read(identityProvider(roomId))
-                        .value
-                        ?.participantId,
-                  );
-              ref.invalidate(roomDetailProvider(roomId));
-              ref.invalidate(roomListProvider);
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
-          case 'delete':
-            final name = detail?.room.name ?? '';
-            final ok = await showDialog<bool>(
-              context: context,
-              builder: (_) => DeleteRoomConfirm(name: name),
-            );
-            if (ok != true) return;
-            try {
-              final counts = await ref
-                  .read(roomsApiProvider)
-                  .deleteRoom(
-                    roomId,
-                    sessionKey: ref.read(appConfigProvider).deviceKey,
-                    participantId: ref
-                        .read(identityProvider(roomId))
-                        .value
-                        ?.participantId,
-                  );
-              await ref
-                  .read(settingsRepoProvider)
-                  .setParticipantId(roomId, null);
-              ref.invalidate(roomListProvider);
-              if (context.mounted) {
-                context.go('/rooms');
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      AppLocalizations.of(context).roomsDeletedSummary(name,
-                          counts['message'] ?? 0, counts['attachment'] ?? 0),
-                    ),
-                  ),
-                );
-              }
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
-          case 'archive':
-            try {
-              final result = await ref.read(roomsApiProvider).archive(
-                    roomId,
-                    sessionKey: ref.read(appConfigProvider).deviceKey,
-                    participantId:
-                        ref.read(settingsRepoProvider).participantId(roomId),
-                  );
-              ref.invalidate(roomDetailProvider(roomId));
-              ref.invalidate(roomListProvider);
-              // 成員按下去是提議不是封存。不講清楚的話畫面毫無動靜，
-              // 看起來像按鈕壞了
-              if (!result.archived && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(result.alreadyPending
-                      ? AppLocalizations.of(context).roomsArchiveAlreadyPending
-                      : AppLocalizations.of(context).roomsArchiveRequestSent),
-                ));
-              }
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
+          case 'settings':
+            context.go('/rooms/$roomId/settings');
+          case 'transfer':
+            if (myId == null) return;
+            await transferOwnershipFlow(context, ref, roomId,
+                participantId: myId);
           case 'leave':
-            final identity = ref.read(identityProvider(roomId)).value;
-            if (identity == null) return;
-            try {
-              await ref
-                  .read(roomsApiProvider)
-                  .leave(roomId, participantId: identity.participantId);
-              await ref
-                  .read(settingsRepoProvider)
-                  .setParticipantId(roomId, null);
-              ref.invalidate(identityProvider(roomId));
-              ref.invalidate(roomDetailProvider(roomId));
-              if (context.mounted) context.go('/rooms');
-            } on ApiException catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.message)));
-              }
-            }
+            if (myId == null) return;
+            await leaveRoomFlow(context, ref, roomId, participantId: myId);
         }
       },
       itemBuilder: (context) => [
-        // 換板只在**已經有板**時出現：沒有板的時候該走的是「掛接任務板」
-        // 那條路（在 Board 入口按鈕上），兩個入口同時存在只會讓人猶豫
-        if (youAreAdmin && hasBoard)
-          PopupMenuItem(
-            value: 'switch_board',
-            height: 36,
-            child: Text(AppLocalizations.of(context).boardSwitchMenu,
-                style: UepText.sans(size: 13.5, color: s.ink)),
-          ),
-        if (youAreAdmin)
-          PopupMenuItem(
-            value: 'rename',
-            height: 36,
-            child: Text(AppLocalizations.of(context).roomsRenameMenu,
-                style: UepText.sans(size: 13.5, color: s.ink)),
-          ),
-        if (youAreAdmin)
-          PopupMenuItem(
-            value: 'style',
-            height: 36,
-            child: Text(
-              AppLocalizations.of(context).roomsStyleMenu(roomStyleLabel(style)),
-              style: UepText.sans(size: 13.5, color: s.ink),
-            ),
-          ),
-        if (youAreAdmin)
-          PopupMenuItem(
-            value: 'visibility',
-            height: 36,
-            child: Text(
-              isPrivate ? AppLocalizations.of(context).roomsUnlockPublic : AppLocalizations.of(context).roomsLockPrivate,
-              style: UepText.sans(size: 13.5, color: s.ink),
-            ),
-          ),
         PopupMenuItem(
-          value: 'archive',
+          value: 'settings',
           height: 36,
-          child: Text(AppLocalizations.of(context).roomsArchiveMenu,
+          child: Text(l10n.roomsMenuSettings,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ),
-        PopupMenuItem(
-          value: 'leave',
-          height: 36,
-          child: Text(
-            AppLocalizations.of(context).roomsLeaveMenu,
-            style: UepText.sans(size: 13.5, color: UepColors.errorText),
-          ),
-        ),
-        // 刪除排在最後、與其他項目隔開：它是這個選單裡唯一不可復原的動作
-        if (canDelete)
+        // 轉移只給房主；封存房不行（Hub 對封存房的 transfer_admin 回 409）
+        if (youAreAdmin && !archived && myId != null)
           PopupMenuItem(
-            value: 'delete',
+            value: 'transfer',
+            height: 36,
+            child: Text(l10n.roomsMenuTransfer,
+                style: UepText.sans(size: 13.5, color: s.ink)),
+          ),
+        if (myId != null)
+          PopupMenuItem(
+            value: 'leave',
             height: 36,
             child: Text(
-              AppLocalizations.of(context).roomsDeleteMenu,
+              l10n.roomsLeaveMenu,
               style: UepText.sans(size: 13.5, color: UepColors.errorText),
             ),
           ),
@@ -2390,6 +2136,68 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     }
   }
 
+  /// 現任房主把管理權交給房內另一個人類成員。
+  ///
+  /// 與 [_claimAdmin] 相反的方向——那個是主持人從外面接管，這個是自己交
+  /// 出去。交出去之後**自己就是一般成員**，所以確認框要把這句講出來。
+  Future<void> _transferAdmin(BuildContext context, Participant p) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.chatTransferAdminTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        content: Text(
+          l10n.chatTransferAdminBody(p.displayName),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6),
+        ),
+        actions: [
+          UepButton(
+            label: l10n.commonCancel,
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: l10n.chatTransferAdminAction,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    final myId = widget.myId;
+    if (!(confirmed ?? false) || myId == null) return;
+    try {
+      final who = await ref.read(roomsApiProvider).transferAdmin(
+            widget.roomId,
+            targetParticipantId: p.id,
+            participantId: myId,
+          );
+      // 房主換人會同時改掉這個房的動作列（自己少掉一批權限）與房列表上
+      // 的標記，兩份都要重讀
+      ref.invalidate(roomDetailProvider(widget.roomId));
+      ref.invalidate(roomListProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(l10n.chatTransferAdminDone(
+              who.isEmpty ? p.displayName : who)),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        // 404 的 Hub 原話被 NotFoundException 丟掉了（它只留 code），
+        // 照著 code 轉述——不要對 message 做字串比對
+        final text = e.code == 'heir_not_found'
+            ? l10n.errorHeirNotFound
+            : e.message;
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(text)));
+      }
+    }
+  }
+
   /// 主持人接管管理權。
   ///
   /// 要確認：這會讓現任管理員降為一般成員，而他可能正在用這個房。
@@ -2532,6 +2340,16 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
                   onClaimAdmin: hostMode && p.isAdmin && p.id != myId
                       ? () => _claimAdmin(context, p)
                       : null,
+                  // 移交只有現任房主按得到，且只能交給房內 active 的人類。
+                  // agent 會被閒置掃掉，交給它等於把管理權丟掉（Hub 端同樣擋）
+                  onTransferAdmin: widget.youAreAdmin &&
+                          p.id != myId &&
+                          p.isHuman &&
+                          p.isActive &&
+                          !p.ephemeral &&
+                          !widget.archived
+                      ? () => _transferAdmin(context, p)
+                      : null,
                   // 自己隱藏自己只會讓人以為出了問題
                   onHide: p.id == myId ? null : () => _setHidden(p, true),
                   // 標記只給別人：不會有人在等自己回話
@@ -2666,6 +2484,7 @@ class _MemberTile extends StatelessWidget {
     this.nested = false,
     this.onKick,
     this.onClaimAdmin,
+    this.onTransferAdmin,
     this.onReinvite,
     this.onHide,
     this.onUnhide,
@@ -2703,6 +2522,10 @@ class _MemberTile extends StatelessWidget {
   /// Hub 主持人接管這個房間的管理權。只掛在**現任管理員**身上，
   /// 與移交同一個位置——那是使用者找這個動作時會去看的地方。
   final VoidCallback? onClaimAdmin;
+
+  /// 現任房主把管理權交給這一位成員；null 表示不顯示該動作。
+  /// 與 [onClaimAdmin] 相反的方向：那個是主持人從外面接管。
+  final VoidCallback? onTransferAdmin;
 
   /// 從**我這台裝置**的列表隱藏／取消隱藏；null 表示不顯示該動作。
   /// 與 [onKick] 完全不同：那個動到所有人，這個只動我的視圖。
@@ -2767,6 +2590,10 @@ class _MemberTile extends StatelessWidget {
         _MemberAction(l10n.chatMemberClaimAdmin,
             Icons.admin_panel_settings_outlined, onClaimAdmin!,
             color: UepColors.gold),
+      if (onTransferAdmin != null)
+        _MemberAction(l10n.chatMemberTransferAdmin, Icons.swap_horiz,
+            onTransferAdmin!,
+            color: UepColors.gold),
       if (onKick != null)
         _MemberAction(
             l10n.chatMemberKick, Icons.person_remove_outlined, onKick!),
@@ -2803,13 +2630,19 @@ class _MemberTile extends StatelessWidget {
                   Row(
                     children: [
                       Flexible(
-                        child: Text(
-                          p.displayName,
-                          overflow: TextOverflow.ellipsis,
-                          style: UepText.sans(
-                            size: 14,
-                            weight: FontWeight.w600,
-                            color: inactive ? s.ink : s.inkTitle),
+                        // 側欄再怎麼拖都有拖不夠寬的時候（名字長、字級大），
+                        // 截掉的那半要有地方讀得到
+                        child: Tooltip(
+                          message: p.displayName,
+                          waitDuration: const Duration(milliseconds: 500),
+                          child: Text(
+                            p.displayName,
+                            overflow: TextOverflow.ellipsis,
+                            style: UepText.sans(
+                              size: 14,
+                              weight: FontWeight.w600,
+                              color: inactive ? s.ink : s.inkTitle),
+                          ),
                         ),
                       ),
                       const SizedBox(width: 7),
@@ -3128,118 +2961,6 @@ class _PendingQuestionsState extends ConsumerState<_PendingQuestions> {
 ///
 /// 自訂的內容**留在對話框裡**而不是選了才問：切到自訂再跳出第二個視窗，
 /// 使用者會先失去剛剛看的那四個說明。
-class _StyleDialog extends StatefulWidget {
-  const _StyleDialog({required this.style, required this.instructions});
-
-  final String style;
-  final String instructions;
-
-  @override
-  State<_StyleDialog> createState() => _StyleDialogState();
-}
-
-class _StyleDialogState extends State<_StyleDialog> {
-  late String _style = widget.style;
-  late final _text = TextEditingController(text: widget.instructions);
-  String? _error;
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final text = _text.text.trim();
-    if (_style == kRoomStyleCustom && text.isEmpty) {
-      setState(() =>
-          _error = AppLocalizations.of(context).roomsStyleCustomRequired);
-      return;
-    }
-    Navigator.of(context).pop((style: _style, text: text));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.uep;
-    return AlertDialog(
-      title: Text(AppLocalizations.of(context).roomsStyleTitle,
-          style: UepText.pageTitle(color: s.inkTitle)),
-      content: SizedBox(
-        width: 420,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  AppLocalizations.of(context).roomsStyleHint,
-                  style: UepText.serif(size: 13, color: s.inkMute, height: 1.5),
-                ),
-              ),
-              const SizedBox(height: 12),
-              RoomStylePicker(
-                value: _style,
-                onChanged: (v) => setState(() {
-                  _style = v;
-                  _error = null;
-                }),
-              ),
-              if (_style == kRoomStyleCustom) ...[
-                const SizedBox(height: 8),
-                Container(
-                  decoration: BoxDecoration(
-                    color: s.bgSunken,
-                    border: Border.all(color: s.lineStrong),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: TextField(
-                    controller: _text,
-                    maxLines: 4,
-                    style: UepText.serif(size: 14, color: s.ink, height: 1.7),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      hintText: AppLocalizations.of(context).roomsStyleCustomHint,
-                      hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    ),
-                  ),
-                ),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _error!,
-                    style: UepText.serif(
-                      size: 13.5,
-                      color: UepColors.errorText,
-                      height: 1.5),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        UepButton(
-          label: AppLocalizations.of(context).commonCancel,
-          variant: UepButtonVariant.outline,
-          small: true,
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        UepButton(
-            label: AppLocalizations.of(context).commonApply, small: true, onPressed: _submit),
-      ],
-    );
-  }
-}
-
 /// 成員列的「更多動作」選單項。
 class _MemberAction {
   const _MemberAction(this.label, this.icon, this.onTap, {this.color});

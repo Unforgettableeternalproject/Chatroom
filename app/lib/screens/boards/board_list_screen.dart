@@ -71,6 +71,53 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     }
   }
 
+  /// 永久刪除一塊板。**只有已封存的板**（Hub 對未封存的回 409
+  /// `board_not_archived`），限 owner，不可復原。
+  Future<void> _delete(BoardSummary board) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.boardDeleteTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        content: Text(l10n.boardDeleteBody(board.name),
+            style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6)),
+        actions: [
+          UepButton(
+            label: l10n.commonCancel,
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: l10n.boardDeleteAction,
+            variant: UepButtonVariant.danger,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await ref.read(boardsApiProvider).delete(board.id,
+          sessionKey: ref.read(appConfigProvider).deviceKey);
+      for (final v in ['active', 'archived', 'settled']) {
+        ref.invalidate(boardLibraryProvider(v));
+      }
+      if (!mounted) return;
+      // 開著的正是這塊板的話，它的頁面已經沒有東西可以畫
+      if (widget.selectedBoardId == board.id) context.go('/rooms');
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(l10n.boardDeletedDone(board.name))));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   /// 改板的名字（c271c7ff）。限 owner——Hub 那邊也是。
   ///
   /// 對話框回 null＝取消或沒改，那時**不打 API**：送一個相同的名字上去
@@ -256,6 +303,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                     onRename: boards[i].myRole == 'owner'
                         ? () => _rename(boards[i])
                         : null,
+                    // 刪除只給已封存的板（Hub `board_not_archived`）
+                    onDelete: boards[i].myRole == 'owner' &&
+                            boards[i].isArchived
+                        ? () => _delete(boards[i])
+                        : null,
                   ),
                 );
               },
@@ -365,11 +417,13 @@ class _BoardMenu extends StatelessWidget {
     required this.archived,
     required this.onToggleArchive,
     required this.onRename,
+    this.onDelete,
   });
 
   final bool archived;
   final VoidCallback onToggleArchive;
   final VoidCallback onRename;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -389,6 +443,7 @@ class _BoardMenu extends StatelessWidget {
       // 而且不會有任何地方報錯
       onSelected: (v) => switch (v) {
         'rename' => onRename(),
+        'delete' => onDelete?.call(),
         _ => onToggleArchive(),
       },
       itemBuilder: (context) => [
@@ -408,6 +463,13 @@ class _BoardMenu extends StatelessWidget {
               : AppLocalizations.of(context).boardMenuArchive,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ),
+        if (onDelete != null)
+          PopupMenuItem(
+            value: 'delete',
+            height: 36,
+            child: Text(AppLocalizations.of(context).boardMenuDelete,
+                style: UepText.sans(size: 13.5, color: UepColors.errorText)),
+          ),
       ],
     );
   }
@@ -420,6 +482,7 @@ class _BoardTile extends StatelessWidget {
     required this.onTap,
     this.onToggleArchive,
     this.onRename,
+    this.onDelete,
   });
 
   final BoardSummary board;
@@ -435,6 +498,9 @@ class _BoardTile extends StatelessWidget {
 
   /// 改名。與封存同一個判準（owner），所以兩者一起有、一起沒有。
   final VoidCallback? onRename;
+
+  /// 永久刪除。owner 且板已封存才有。
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -511,6 +577,7 @@ class _BoardTile extends StatelessWidget {
                   archived: board.isArchived,
                   onToggleArchive: onToggleArchive!,
                   onRename: onRename ?? () {},
+                  onDelete: onDelete,
                 ),
               ],
             ]),

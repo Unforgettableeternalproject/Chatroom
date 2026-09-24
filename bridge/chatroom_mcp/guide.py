@@ -152,6 +152,9 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 
 - `chatroom_ask_human(room_id, prompt, target_name, options=[...])`
   對象**必須明確指定**，而且必須是人類。附選項讓對方點一下就好，比要他打字快。
+- 任務板上的工作要問誰：先問**階段創建者**（`chatroom_board` 回的階段上
+  `created_by_name`，`created_by_kind` 是 `human` 時）。創建者是 agent 就問
+  派工的人，再問板 owner；沒有紀錄就問板 owner。
 - 這個呼叫會**阻塞等待**答案，`timeout`（**你等多久**，預設 60 秒）到了
   就返回。那與 `question_ttl`（**這題活多久**，0＝伺服器預設，目前 3 分鐘）
   是兩件事：**你不等了不代表題目死了**。所以「只等 30 秒、題目留著」是
@@ -244,6 +247,12 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 - **封存**：唯讀。歷史還讀得到，人可以決定解封。你會看到「聊天室已封存」
 - **刪除**：沒了。訊息與附件一起永久刪除，不可復原，重新 join 也沒有東西可以
   加入。你會拿到 404 `room_not_found`
+
+**只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）；任務板
+也一樣，要先封存才刪得掉（409 `board_not_archived`）。封存是刪除的緩衝。
+
+房間設定（名稱、主題、說話方式、可見度、封存與解除封存、掛接任務板）**只有房主
+能改**，Hub 主持人視角也不例外——主持人是旁觀者，不是房間成員。
 
 Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 天，
 `CHATROOM_PURGE_ARCHIVED_DAYS`），所以「上次那個房間」過一陣子真的會不見。
@@ -368,9 +377,13 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   裡面——確認週期本身不該因為上板不成立而被擋下來。
 - **候選只有這個週期真的動過的 repo。** 判準是：那筆 run 屬於這塊板、
   它的 `ref` 落在這個週期底下的階段或任務、而且它回報的
-  `head_before != head_after`。沒回報過 git 的 run 是「說不出來」，不算動
-  過——所以你做完一張卡時，執行器回報的 `git` 欄位決定了它會不會出現在
-  上板清單裡。人類可以再從候選裡排除不想上板的 repo。
+  `head_before != head_after`。**逐 repo 計算**：一筆 run 可以在工作區好幾
+  個 repo 各做 commit，執行器的 `git.repos`（每個 repo 一格
+  `{repo, branch, head_before, head_after}`）裡每個有變動的 repo 都各自列進
+  候選；沒帶 `git.repos` 的舊回報才只看主 repo 那組 `git.repo`／`head_*`。
+  沒回報過 git 的 run 是「說不出來」，不算動過——所以你做完一張卡時，
+  執行器回報的 `git` 欄位決定了它會不會出現在上板清單裡。人類可以再從
+  候選裡排除不想上板的 repo。
 - **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
   `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
   勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
@@ -408,7 +421,9 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 - 工作只在派給你的那個工作樹裡。分支規則、commit 格式、GPG 簽章、**不 push**、
   不 `git add -A`、commit 前看 index——沿用那個 repo 的 CLAUDE.md。
 - 卡住就 `chatroom_ask_human`，**timeout 一定要設**。沒人答就把現況寫進卡
-  然後結束，不要空等到被殺掉。
+  然後結束，不要空等到被殺掉。問誰照契約「要問人時問誰」那段的順序，
+  只列人類：創建者是人類時「階段創建者 → 板 owner → 派工者」，是 agent 時
+  「派工者 → 板 owner」，沒有紀錄時「板 owner → 派工者」。
 - 結束前寫收工摘要，四段都要有：**做了什麼／驗證了什麼／沒驗證什麼／
   未 commit 的東西與下一步**。「測試過了」與「實際跑過了」分開講。
 - 摘要發完就 `chatroom_leave`。**工作房是常駐的**——它不會因為沒人而封存，

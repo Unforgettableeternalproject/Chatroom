@@ -102,59 +102,79 @@ async def test_host_view_sees_and_reads_everything(tmp_path):
             assert any(m["content"] == "祕密" for m in msgs["messages"])
 
 
-async def test_host_can_rescue_an_ownerless_archived_room(tmp_path):
-    """**這條是整個功能的理由**：沒有建立者紀錄的房被封存後，原本永遠解不開。
+async def test_host_view_cannot_change_room_settings(tmp_path):
+    """**主持人是旁觀者**（艾斯維爾 2026-09-23）：不是房間的實質成員，
+    房間設定一律只有房主改得動——連房名都不行。
 
-    `_admin_or_403` 對這種房回 409 room_has_no_admin——那個 409 擋在 host
-    判定前面的話，唯一的救援路徑就被關在門外了。
+    封存／解除封存、掛接任務板（更換板的後半段）同屬房間設定。要管一間
+    別人的房，走 `admin/claim` 把管理權收過來，之後就是房主本人在操作。
     """
+    app, client = await _client(tmp_path, "bystander")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "someone-else"})).json()["id"]
+
+            r = await client.patch(f"/api/rooms/{rid}", json={"name": "改"},
+                                   headers=HOST)
+            assert r.status_code == 403, r.text
+            r = await client.post(f"/api/rooms/{rid}/topic",
+                                  json={"topic": "改"}, headers=HOST)
+            assert r.status_code == 403, r.text
+            # 封存：主持人不是成員，不能直接封，也不能提案
+            r = await client.post(f"/api/rooms/{rid}/archive", headers=HOST)
+            assert r.status_code in (401, 403), r.text
+            det = (await client.get(f"/api/rooms/{rid}", headers=HOST)).json()
+            assert det["room"]["status"] == "active"
+            assert det["room"]["name"] == "房"
+
+            # 解除封存也一樣
+            await client.post(f"/api/rooms/{rid}/archive",
+                              headers={"X-Session-Key": "someone-else"})
+            r = await client.post(f"/api/rooms/{rid}/unarchive", headers=HOST)
+            assert r.status_code in (401, 403), r.text
+
+
+async def test_host_cannot_attach_a_board_to_someone_elses_room(tmp_path):
+    """掛接要同時是房主——主持人視角不再豁免房這一側。"""
+    app, client = await _client(tmp_path, "bystander-board")
+    async with client:
+        async with app.router.lifespan_context(app):
+            rid = (await client.post("/api/rooms", json={
+                "name": "房", "session_key": "someone-else"})).json()["id"]
+            bid = (await client.post("/api/boards", json={"name": "板"},
+                                     headers={"X-Session-Key": "host-device"})
+                   ).json()["board_id"]
+            r = await client.post(
+                f"/api/boards/{bid}/rooms/{rid}",
+                headers={**HOST, "X-Session-Key": "host-device"})
+            assert r.status_code == 403, r.text
+            assert r.json()["detail"]["code"] == "not_room_admin"
+
+
+async def test_ownerless_room_is_rescued_by_claiming_it(tmp_path):
+    """沒有建立者紀錄的房：主持人先 claim，之後以房主身分封存／解封。"""
     app, client = await _client(tmp_path, "rescue")
     async with client:
         async with app.router.lifespan_context(app):
-            # 沒有建立者紀錄的房（舊房就長這樣）。09/06 起建房必須帶
-            # session_key（卡 48da086a），這種房**再也建不出來**——但存量
-            # 還在，主持人視角要救的正是它們，所以改用清欄位重現
             rid = (await client.post(
                 "/api/rooms", json={"session_key": "creator",
                                     "name": "沒人管的房"})).json()["id"]
             await app.state.db.execute(
                 "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
             await app.state.db.commit()
-            # 對照組：一般身分連封存都做不到
-            nobody = await client.post(f"/api/rooms/{rid}/archive")
-            assert nobody.status_code in (401, 403, 409)
-
+            # 主持人視角本身不再能封存
             assert (await client.post(f"/api/rooms/{rid}/archive",
-                                      headers=HOST)).status_code == 200
-            det = (await client.get(f"/api/rooms/{rid}",
-                                    headers=HOST)).json()
-            assert det["room"]["status"] == "archived"
-
-            # 沒有主持人視角就解不開——這正是那個「已知代價」
-            stuck = await client.post(f"/api/rooms/{rid}/unarchive")
-            assert stuck.status_code in (401, 403, 409)
-            # 有了就解得開
+                                      headers=HOST)).status_code != 200
+            assert (await client.post(
+                f"/api/rooms/{rid}/admin/claim",
+                headers={**HOST, "X-Session-Key": "my-device"})
+            ).status_code == 200
+            me = {"X-Session-Key": "my-device"}
+            assert (await client.post(f"/api/rooms/{rid}/archive",
+                                      headers=me)).json()["archived"] is True
             assert (await client.post(f"/api/rooms/{rid}/unarchive",
-                                      headers=HOST)).status_code == 200
-            det = (await client.get(f"/api/rooms/{rid}", headers=HOST)).json()
-            assert det["room"]["status"] == "active"
-
-
-async def test_host_archive_is_direct_not_a_request(tmp_path):
-    """主持人按封存是**直接封**，不是提案。
-
-    走提案那條路的話，提案會掛在一個永遠不會出現的建立者身上——那正是
-    這個房需要被救援的原因。
-    """
-    app, client = await _client(tmp_path, "direct")
-    async with client:
-        async with app.router.lifespan_context(app):
-            rid = (await client.post("/api/rooms", json={
-                "name": "房", "session_key": "someone-else"})).json()["id"]
-            r = (await client.post(f"/api/rooms/{rid}/archive",
-                                   headers=HOST)).json()
-            assert r["archived"] is True
-            assert "request" not in r
+                                      headers=me)).status_code == 200
 
 
 # ---------- 成員列表的 host badge ----------
@@ -249,6 +269,11 @@ async def test_host_can_delete_an_ownerless_room(tmp_path):
             assert stuck.status_code == 409
             assert stuck.json()["detail"]["code"] == "room_has_no_admin"
 
+            # 只有封存的房刪得掉（room_not_archived），主持人也一樣。
+            # 主持人不能替別人封存，這裡模擬存量的「已封存無主房」
+            await app.state.db.execute(
+                "UPDATE room SET status='archived' WHERE id=?", (rid,))
+            await app.state.db.commit()
             r = await client.delete(f"/api/rooms/{rid}", headers=HOST)
             assert r.status_code == 200, r.text
             assert (await client.get(f"/api/rooms/{rid}",
@@ -263,12 +288,15 @@ async def test_host_can_delete_someone_elses_room(tmp_path):
             rid = (await client.post("/api/rooms", json={
                 "name": "房", "session_key": "old-device-key"})).json()["id"]
             assert (await client.delete(f"/api/rooms/{rid}")).status_code == 403
+            # 房主自己封存；主持人負責清掉
+            await client.post(f"/api/rooms/{rid}/archive",
+                              headers={"X-Session-Key": "old-device-key"})
             assert (await client.delete(f"/api/rooms/{rid}",
                                         headers=HOST)).status_code == 200
 
 
 async def test_host_view_still_refuses_room_owner_actions(tmp_path):
-    """刪除是主持人視角唯一涵蓋的破壞性動作。
+    """刪除（已封存的房）是主持人視角唯一涵蓋的房間動作。
 
     「清掉這台 Hub 上的東西」是主持人的份內事；「以別人的房主身分行事」
     （改說話方式、改鎖定狀態、踢別人房裡的人）不是。這條界線一鬆，

@@ -1641,6 +1641,11 @@ def chatroom_board(room_id: str = "", full: bool = False,
       指派給你——不要等這個欄位
     - ``board_seq``——目前的水位，下次自動沿用
 
+    階段（checklist）帶著創建者：``created_by_name`` 與 ``created_by_kind``
+    （``human`` / ``claude`` / ``codex`` / ``other``，空＝沒有紀錄）。
+    要問人時先問創建者；他是 agent 就問派工的人再問板 owner，沒有紀錄時
+    問板 owner。
+
     ⚠️ 一張卡的**狀態**（做到哪）與**認領**（誰在上面）是兩件事。
     ``claim_state`` 為 ``orphaned`` 表示原本領走它的人已經不在房裡了——
     那張卡看起來有人在做，實際上沒有，是最值得你接手的一種。
