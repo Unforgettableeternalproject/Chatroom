@@ -10083,6 +10083,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         - **上板**：`agent_run` 的 `kind='release'`、`status='done'`，算在
           派工者頭上。
 
+        派工 agent（run 帶進房的成員）做的事三個來源都不收，`total`、
+        `stats` 以排除後為準。
+
         `entries` 新的在前，`limit`／`offset` 分頁；`stats` 是全部紀錄的每人
         統計，不受分頁影響。`board` 附上名稱、描述與我的角色——設定頁一次
         拿齊，不必為了一個名字再讀一整塊板。
@@ -10098,6 +10101,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             m["actor_key"]: m for m in await (await db.execute(
                 "SELECT actor_key, display_name, actor_kind FROM board_member"
                 " WHERE board_id=?", (board_id,))).fetchall()}
+
+        # 🔴 **派工 agent 不是任何事的貢獻者**（艾斯維爾 2026-09-24）：它是
+        # 暫時身分，日誌類一律不追蹤。認法：actor_key 以 `claude-run-`
+        # （`_RUN_SESSION_PREFIX`）開頭就排除——**不看 agent_run 或房間還在
+        # 不在**：房被清除後 participant 與 agent_run 一起刪掉，板上只剩
+        # actor_key。`participant.run_id` 非空的列一併排除，當補充
+        run_keys = {
+            actor_key(r["session_key"]) for r in await (await db.execute(
+                "SELECT DISTINCT session_key FROM participant"
+                " WHERE run_id != ''")).fetchall()}
+
+        def _is_run(key: str) -> bool:
+            return key.startswith(_RUN_SESSION_PREFIX) or key in run_keys
 
         entries: list[dict] = []
         seen: set[tuple[str, str]] = set()
@@ -10116,8 +10132,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                     continue
                 action = "checklist_done"
             key = actor_key(e["actor_key"])
+            # 先記 seen 再濾：run agent 的事件也要擋住欄位回推，不然同一件
+            # 事會從卡片欄位那一側再被推回來
             seen.add((action, e["item_id"]))
-            if not key:
+            if not key or _is_run(key):
                 continue
             entries.append({
                 "at": e["created_at"], "board_seq": e["board_seq"],
@@ -10131,7 +10149,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         def _derive(action: str, item_kind: str, row, key: str, at,
                     name: str = "") -> None:
             key = actor_key(key)
-            if not key or not at or (action, row["id"]) in seen:
+            if (not key or _is_run(key) or not at
+                    or (action, row["id"]) in seen):
                 return
             seen.add((action, row["id"]))
             entries.append({
@@ -10194,7 +10213,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " WHERE board_id=? AND kind='release' AND status='done'",
                 (board_id,))).fetchall():
             key = actor_key(r["requested_by_actor_key"])
-            if not key:
+            if not key or _is_run(key):
                 continue
             entries.append({
                 "at": r["ended_at"] or r["updated_at"], "board_seq": 0,

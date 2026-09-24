@@ -21,6 +21,7 @@ import '../../core/logging/redacting_logger.dart';
 import '../../notifications/codex_dispatcher.dart';
 import '../../state/notification_providers.dart';
 import '../../widgets/kind_badge.dart';
+import '../../widgets/settings_form.dart';
 import '../../widgets/invite_manager.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
@@ -291,25 +292,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           onPressed: _pasteInvite,
         ),
         const SizedBox(height: 18),
-        _FieldLabel(l10n.fieldHubUrl),
-        _box(
-          context,
-          TextField(
+        SettingsFieldLabel(l10n.fieldHubUrl),
+        SettingsInputBox(
+          child: TextField(
             controller: _urlController,
             style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
-            decoration: _inputDecoration('http://127.0.0.1:8787', s),
+            decoration: settingsInputDecoration('http://127.0.0.1:8787', s),
           ),
         ),
         const SizedBox(height: 18),
-        _FieldLabel(l10n.fieldApiToken),
-        _box(
-          context,
-          TextField(
+        SettingsFieldLabel(l10n.fieldApiToken),
+        SettingsInputBox(
+          child: TextField(
             controller: _tokenController,
             obscureText: !_showToken,
             style: UepText.code(size: 12.5, color: s.ink, height: 1.4),
             decoration:
-                _inputDecoration(l10n.settingsTokenHint, s).copyWith(
+                settingsInputDecoration(l10n.settingsTokenHint, s).copyWith(
               suffixIcon: IconButton(
                 icon: Icon(
                   _showToken
@@ -527,20 +526,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         Text(l10n.personalSectionTitle,
             style: UepText.pageTitle(color: s.inkTitle)),
         const SizedBox(height: 22),
-        _FieldLabel(l10n.fieldDisplayName),
-        _box(
-          context,
-          TextField(
+        SettingsFieldLabel(l10n.fieldDisplayName),
+        SettingsInputBox(
+          child: TextField(
             controller: _nameController,
             style: UepText.sans(size: 13, color: s.ink),
-            decoration: _inputDecoration(l10n.settingsDisplayNameHint, s),
+            decoration: settingsInputDecoration(l10n.settingsDisplayNameHint, s),
             onSubmitted: (_) => _save(),
           ),
         ),
         const SizedBox(height: 20),
         _saveRow(s),
         const SizedBox(height: 22),
-        _FieldLabel(l10n.fieldDeviceKey),
+        SettingsFieldLabel(l10n.fieldDeviceKey),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: BoxDecoration(
@@ -666,12 +664,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           ]),
           if (ref.watch(settingsRepoProvider).codexDispatchEnabled) ...[
             const SizedBox(height: 8),
-            _box(
-              context,
-              TextField(
+            SettingsInputBox(
+              child: TextField(
                 controller: _codexThreadController,
                 style: UepText.sans(size: 13, color: s.ink),
-                decoration: _inputDecoration(l10n.settingsCodexThreadHint, s),
+                decoration: settingsInputDecoration(l10n.settingsCodexThreadHint, s),
                 onSubmitted: (v) async {
                   await ref
                       .read(settingsRepoProvider)
@@ -776,49 +773,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             style: UepText.serif(
                 size: 12.5, color: UepColors.success, height: 1.4)),
     ]);
-  }
-
-  Widget _box(BuildContext context, Widget child) {
-    final s = context.uep;
-    return Container(
-      decoration: BoxDecoration(
-        color: s.bgSunken,
-        border: Border.all(color: s.lineStrong),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 2),
-      child: child,
-    );
-  }
-
-  InputDecoration _inputDecoration(String hint, UepSurface s) =>
-      InputDecoration(
-        isDense: true,
-        border: InputBorder.none,
-        hintText: hint,
-        hintStyle: UepText.serif(size: 12.5, color: s.inkMute),
-        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-      );
-}
-
-/// 欄位小標。
-///
-/// 不用 [MonoLabel]：它會把文字轉大寫，而這裡的標籤已經是中文與
-/// 大小寫有意義的專有名詞（`API token`），轉過去就回不來了。
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 7),
-      child: Text(
-        text,
-        style: UepText.fieldLabel(color: context.uep.inkSoft),
-      ),
-    );
   }
 }
 
