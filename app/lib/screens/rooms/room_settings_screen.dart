@@ -352,14 +352,13 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                     Divider(color: s.line, height: 1),
                     const SizedBox(height: 22),
                     Text(l10n.roomSettingsBoard,
-                        style: UepText.pageTitle(color: s.inkTitle)),
-                    const SizedBox(height: 16),
+                        style: UepText.itemTitle(color: s.inkTitle)),
+                    const SizedBox(height: 14),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: UepButton(
                         label: l10n.boardSwitchMenu,
                         variant: UepButtonVariant.outline,
-                        small: true,
                         onPressed: () =>
                             switchRoomBoard(context, ref, widget.roomId),
                       ),
@@ -372,8 +371,8 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                     Divider(color: s.line, height: 1),
                     const SizedBox(height: 22),
                     Text(l10n.roomSettingsArchiveSection,
-                        style: UepText.pageTitle(color: s.inkTitle)),
-                    const SizedBox(height: 16),
+                        style: UepText.itemTitle(color: s.inkTitle)),
+                    const SizedBox(height: 14),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: UepButton(
@@ -381,7 +380,6 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                             ? l10n.roomsMenuUnarchive
                             : l10n.roomsMenuArchive,
                         variant: UepButtonVariant.outline,
-                        small: true,
                         onPressed: () => _toggleArchive(room),
                       ),
                     ),

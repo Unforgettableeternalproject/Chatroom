@@ -29,7 +29,7 @@ const double _loadMoreThreshold = 120;
 /// 409 `board_archived`）。改名與描述是板本身的事，不受週期凍結影響。
 ///
 /// 版面、字級與區段標題沿用設定頁（`settings_screen.dart`）：頁寬
-/// [kPageMaxWidth]、區段標題 [UepText.pageTitle]、欄位用
+/// [kPageMaxWidth]、區段標題 [UepText.itemTitle]、欄位用
 /// [SettingsFieldLabel]／[SettingsInputBox]。字級一律跟著 App 的字級設定
 /// （MediaQuery 的 textScaler），這裡不寫死任何徽章級的小字。
 ///
@@ -305,8 +305,8 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
             Divider(color: s.line, height: 1),
             const SizedBox(height: 22),
             Text(l10n.boardContribTitle,
-                style: UepText.pageTitle(color: s.inkTitle)),
-            const SizedBox(height: 22),
+                style: UepText.itemTitle(color: s.inkTitle)),
+            const SizedBox(height: 16),
             if (data.total == 0)
               Text(l10n.boardContribEmpty,
                   style: UepText.serif(size: 13.5, color: s.inkMute))

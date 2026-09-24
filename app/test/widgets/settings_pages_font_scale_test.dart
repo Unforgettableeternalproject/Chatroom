@@ -13,6 +13,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:chatroom_app/state/rooms_providers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
@@ -163,6 +164,32 @@ void _setView(WidgetTester tester, double width) {
 double _fontSize(WidgetTester tester, Finder f) =>
     tester.widget<Text>(f).style!.fontSize!;
 
+/// 畫面上實際的字級：樣式字級乘上這段文字吃到的 textScaler。
+double _rendered(WidgetTester tester, Finder f) {
+  final p = tester.renderObject<RenderParagraph>(
+      find.descendant(of: f, matching: find.byType(RichText)).first);
+  return p.textScaler.scale(_fontSize(tester, f));
+}
+
+/// 區段標題對「選項標題」（私人對話、每人統計那一級，sans 13.5）的比值。
+/// 下限 1.1：再小就跟選項分不出層級；上限 1.5：pageTitle（26／13.5≈1.93）
+/// 那種頁面級大標會把同頁的選項與按鈕襯得過小（艾斯維爾 2026-09-24 截圖）。
+const _minSectionRatio = 1.1;
+const _maxSectionRatio = 1.5;
+
+void _expectBalanced(WidgetTester tester, FontScalePref pref,
+    {required Finder section,
+    required Finder option,
+    required Finder button,
+    required Finder hint}) {
+  final ratio = _rendered(tester, section) / _rendered(tester, option);
+  expect(ratio, inInclusiveRange(_minSectionRatio, _maxSectionRatio),
+      reason: '$pref: 區段標題／選項標題 = $ratio');
+  expect(_rendered(tester, button),
+      greaterThanOrEqualTo(_rendered(tester, hint)),
+      reason: '$pref: 按鈕文字不小於選項說明');
+}
+
 void main() {
   group('任務板設定頁', () {
     for (final width in [900.0, 560.0]) {
@@ -189,6 +216,12 @@ void main() {
               greaterThanOrEqualTo(_fontSize(tester, detail)));
           expect(_fontSize(tester, find.text('名稱')),
               greaterThanOrEqualTo(12));
+          _expectBalanced(tester, pref,
+              section: title,
+              option: find.text('每人統計'),
+              // 這頁沒有選項說明，拿同級的欄位標籤（fieldLabel 12）當下限
+              button: find.text('儲存'),
+              hint: find.text('名稱'));
           heights.add(tester.getSize(title).height);
 
           // 名字（省略號）與件數不重疊，件數也不壓到明細
@@ -289,7 +322,7 @@ void main() {
               ...base,
               roomDetailProvider('r1').overrideWith((ref) async => detail()),
               boardProvider('r1')
-                  .overrideWith((ref) async => const BoardSnapshot()),
+                  .overrideWith((ref) async => const BoardSnapshot(boardId: 'b1')),
             ],
           ));
           await tester.pumpAndSettle();
@@ -304,6 +337,17 @@ void main() {
               greaterThanOrEqualTo(_fontSize(tester, hint)));
           expect(_fontSize(tester, find.text('說話方式')),
               greaterThanOrEqualTo(12));
+          for (final button in [
+            find.text('儲存'),
+            find.text('更換任務板…'),
+            find.text('封存').last,
+          ]) {
+            _expectBalanced(tester, pref,
+                section: section,
+                option: find.text('私人對話'),
+                button: button,
+                hint: hint);
+          }
           heights.add(tester.getSize(section).height);
         }
         for (var i = 1; i < heights.length; i++) {
