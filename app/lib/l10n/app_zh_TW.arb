@@ -7757,5 +7757,116 @@
   "roomSettingsMembersOnly": "只有房間成員能查看設定",
   "@roomSettingsMembersOnly": {
     "description": "房間設定頁：非成員直接打開時的提示"
+  },
+  "boardSettingsTitle": "任務板設定",
+  "@boardSettingsTitle": {
+    "description": "任務板設定頁標題，也是頁首設定鈕的提示"
+  },
+  "boardSettingsDescription": "描述",
+  "@boardSettingsDescription": {
+    "description": "任務板設定頁：描述欄位標籤（板的 description，與建板對話框同名）"
+  },
+  "boardSettingsDescriptionHint": "一句話說明這塊板在做什麼…",
+  "@boardSettingsDescriptionHint": {
+    "description": "任務板設定頁：描述欄位提示"
+  },
+  "boardSettingsOwnerOnly": "只有板 owner 能修改",
+  "@boardSettingsOwnerOnly": {
+    "description": "任務板設定頁：非 owner 的唯讀提示"
+  },
+  "boardSettingsOwner": "Owner：{name}",
+  "@boardSettingsOwner": {
+    "description": "任務板設定頁：板 owner 是誰",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardContribTitle": "貢獻紀錄",
+  "@boardContribTitle": {
+    "description": "任務板設定頁：貢獻紀錄區塊標題"
+  },
+  "boardContribStats": "每人統計",
+  "@boardContribStats": {
+    "description": "任務板設定頁：每人統計小標"
+  },
+  "boardContribLog": "紀錄",
+  "@boardContribLog": {
+    "description": "任務板設定頁：時間序列表小標"
+  },
+  "boardContribEmpty": "還沒有紀錄",
+  "@boardContribEmpty": {
+    "description": "任務板設定頁：貢獻紀錄是空的"
+  },
+  "boardContribCount": "{count} 件",
+  "@boardContribCount": {
+    "description": "任務板設定頁：某人的貢獻總數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardContribMore": "載入更多",
+  "@boardContribMore": {
+    "description": "任務板設定頁：紀錄分頁"
+  },
+  "boardContribDerived": "由卡片欄位回推",
+  "@boardContribDerived": {
+    "description": "任務板設定頁：這筆紀錄不在稽核串裡，是從卡片欄位推出來的（提示）"
+  },
+  "boardContribObjectiveCreated": "建立週期",
+  "@boardContribObjectiveCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribChecklistCreated": "建立階段",
+  "@boardContribChecklistCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribTaskCreated": "建立卡片",
+  "@boardContribTaskCreated": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribTaskDone": "完成卡片",
+  "@boardContribTaskDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribChecklistDone": "完成階段",
+  "@boardContribChecklistDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveReview": "送審週期",
+  "@boardContribObjectiveReview": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveVerified": "確認週期",
+  "@boardContribObjectiveVerified": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveDone": "完成週期",
+  "@boardContribObjectiveDone": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribObjectiveReopened": "打回週期",
+  "@boardContribObjectiveReopened": {
+    "description": "貢獻紀錄動作"
+  },
+  "boardContribReleased": "上板",
+  "@boardContribReleased": {
+    "description": "貢獻紀錄動作：週期上板完成"
+  },
+  "boardChecklistCreatedBy": "由 {name} 建立",
+  "@boardChecklistCreatedBy": {
+    "description": "階段標題的提示：階段創建者",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardChecklistCreatorUnknown": "建立者不明",
+  "@boardChecklistCreatorUnknown": {
+    "description": "階段標題的提示：存量階段沒有創建者紀錄"
   }
 }

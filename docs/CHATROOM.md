@@ -127,6 +127,9 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 
 - `chatroom_ask_human(room_id, prompt, target_name, options=[...])`
   對象**必須明確指定**，而且必須是人類。附選項讓對方點一下就好，比要他打字快。
+- 任務板上的工作要問誰：先問**階段創建者**（`chatroom_board` 回的階段上
+  `created_by_name`，`created_by_kind` 是 `human` 時）。創建者是 agent 就問
+  派工的人，再問板 owner；沒有紀錄就問板 owner。
 - 這個呼叫會**阻塞等待**答案，`timeout`（**你等多久**，預設 60 秒）到了
   就返回。那與 `question_ttl`（**這題活多久**，0＝伺服器預設，目前 3 分鐘）
   是兩件事：**你不等了不代表題目死了**。所以「只等 30 秒、題目留著」是
@@ -393,7 +396,9 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 - 工作只在派給你的那個工作樹裡。分支規則、commit 格式、GPG 簽章、**不 push**、
   不 `git add -A`、commit 前看 index——沿用那個 repo 的 CLAUDE.md。
 - 卡住就 `chatroom_ask_human`，**timeout 一定要設**。沒人答就把現況寫進卡
-  然後結束，不要空等到被殺掉。
+  然後結束，不要空等到被殺掉。問誰照契約「要問人時問誰」那段的順序，
+  只列人類：創建者是人類時「階段創建者 → 板 owner → 派工者」，是 agent 時
+  「派工者 → 板 owner」，沒有紀錄時「板 owner → 派工者」。
 - 結束前寫收工摘要，四段都要有：**做了什麼／驗證了什麼／沒驗證什麼／
   未 commit 的東西與下一步**。「測試過了」與「實際跑過了」分開講。
 - 摘要發完就 `chatroom_leave`。**工作房是常駐的**——它不會因為沒人而封存，

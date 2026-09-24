@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../models/board.dart';
+import '../models/board_contributions.dart';
 import '../models/release.dart';
 import '../models/stage_file.dart';
 import 'api_client.dart';
@@ -875,6 +876,41 @@ class BoardsApi {
         // 形狀。⚠️ 沒有實際變更時（`changed: []`）Hub **不回 name**，
         // 那時退回送出的值才是對的
         return (res.data?['name'] as String?) ?? name.trim();
+      });
+
+  /// 改板的名稱與描述（任務板設定頁）。權限是**板 owner**，只送有變的欄位。
+  ///
+  /// 週期凍結管不到這裡：它改的是板本身，
+  /// 不是任何一個週期底下的東西。
+  Future<void> updateSettings(
+    String boardId, {
+    required String sessionKey,
+    String? name,
+    String? description,
+  }) =>
+      unwrap(() async {
+        await _dio.patch<Map<String, dynamic>>(
+          '/api/boards/$boardId',
+          data: {'name': ?name?.trim(), 'description': ?description},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+      });
+
+  /// 設定頁的資料：板的名稱／描述／我的角色，加上貢獻紀錄與每人統計。
+  /// 板成員才讀得到（403 `not_board_member`）。
+  Future<BoardContributions> contributions(
+    String boardId, {
+    required String sessionKey,
+    int limit = 50,
+    int offset = 0,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/boards/$boardId/contributions',
+          queryParameters: {'limit': limit, 'offset': offset},
+          options: Options(headers: {'X-Session-Key': sessionKey}),
+        );
+        return BoardContributions.fromJson(res.data ?? const {});
       });
 
   /// 把 owner 交給別人。**限現任 owner。**

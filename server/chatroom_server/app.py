@@ -76,6 +76,18 @@ def actor_key(session_key: str | None) -> str:
     return (session_key or "").strip()
 
 
+def _me_kind(me) -> str:
+    """操作者的種類（human / claude / codex / other）。
+
+    `me` 可能是 participant 列（欄位叫 `kind`），也可能是板軸退路組出來的
+    dict（同樣帶 `kind`）；兩者都沒有時回空字串＝說不出來，不猜。
+    """
+    try:
+        return (me["kind"] or "").strip().lower()
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
 async def _commit_with_retry(db) -> None:
     """commit，撞到別人的交易就等一下再試。
 
@@ -5488,12 +5500,12 @@ def create_app(config: Config | None = None) -> FastAPI:
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
             " title, description, created_by, created_by_name,"
-            " created_by_actor_key, board_seq, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " created_by_actor_key, created_by_kind, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (cid, parent["room_id"], me["board_id"], objective_id,
              body.title.strip(),
              body.description, me["id"], me["display_name"],
-             actor_key(me["session_key"]), seq, _now()),
+             actor_key(me["session_key"]), _me_kind(me), seq, _now()),
         )
         await _record_board_event(
             me["board_id"], seq, "checklist_created",
@@ -5660,12 +5672,13 @@ def create_app(config: Config | None = None) -> FastAPI:
             cur = await db.execute(
                 "INSERT INTO board_checklist (id, room_id, board_id,"
                 " objective_id, title, description, created_by,"
-                " created_by_name, created_by_actor_key, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " created_by_name, created_by_actor_key, created_by_kind,"
+                " board_seq, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT DO NOTHING RETURNING id",
                 (cid, room_id, me["board_id"], oid, UNCATEGORISED, "",
                  me["id"], me["display_name"], actor_key(me["session_key"]),
-                 seq, now),
+                 _me_kind(me), seq, now),
             )
             if await cur.fetchone() is None:
                 continue   # 同上，不 commit
@@ -10037,6 +10050,213 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "migrated_from_seq": board["migrated_from_seq"],
                 "after_board_seq": after_board_seq}
 
+    # 貢獻紀錄收的事件。**只收「做了一件事」的那幾種**：建立、完成、週期的
+    # 四個轉折。編輯、認領、排序、衝突這些不算貢獻——算進來的話，拖來拖去
+    # 排順序的人會在統計上比做完十張卡的人還多
+    _CONTRIBUTION_EVENTS = (
+        "objective_created", "checklist_created", "task_created",
+        "task_done", "checklist_status", "objective_review",
+        "objective_verified", "objective_done", "objective_reopened",
+    )
+
+    @app.get("/api/boards/{board_id}/contributions",
+             dependencies=[Depends(require_auth)])
+    async def board_contributions(
+        board_id: str,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """這塊板上誰做了什麼（設定頁的貢獻紀錄）。成員才看得到。
+
+        **不另立事件表**：來源是既有的 `board_event`（稽核串），加上兩個補充
+
+        - **卡片／階段／週期自己的欄位**：`board_event` 是 2026-09-03 才補齊
+          的，更早的建立與完成只留在 `created_by_*`／`completed_by_*`／
+          `reviewed_by_*`／`verified_by_*` 上。稽核串裡已經有同一件事
+          （同一種動作、同一個 item）的就不再推，推出來的標 `derived: true`。
+          欄位只留最後一次（打回再完成只剩後一次），所以推得出來的就是那些，
+          推不出來的不補。
+        - **上板**：`agent_run` 的 `kind='release'`、`status='done'`，算在
+          派工者頭上。
+
+        `entries` 新的在前，`limit`／`offset` 分頁；`stats` 是全部紀錄的每人
+        統計，不受分頁影響。`board` 附上名稱、描述與我的角色——設定頁一次
+        拿齊，不必為了一個名字再讀一整塊板。
+        """
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        role = await _board_member_or_403(board_id, actor, board=board,
+                                          host=host)
+        db = app.state.db
+
+        members = {
+            m["actor_key"]: m for m in await (await db.execute(
+                "SELECT actor_key, display_name, actor_kind FROM board_member"
+                " WHERE board_id=?", (board_id,))).fetchall()}
+
+        entries: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        marks = ",".join("?" for _ in _CONTRIBUTION_EVENTS)
+        for e in await (await db.execute(
+                "SELECT board_seq, event_type, actor_key, actor_name,"
+                " item_kind, item_id, payload_json, created_at"
+                " FROM board_event WHERE board_id=?"
+                f" AND event_type IN ({marks})",
+                (board_id, *_CONTRIBUTION_EVENTS))).fetchall():
+            payload = _loads_or(e["payload_json"], {}) or {}
+            action = e["event_type"]
+            if action == "checklist_status":
+                # 階段只有「推到完成」算收尾；打開、取消是另一回事
+                if payload.get("to") != "done":
+                    continue
+                action = "checklist_done"
+            key = actor_key(e["actor_key"])
+            seen.add((action, e["item_id"]))
+            if not key:
+                continue
+            entries.append({
+                "at": e["created_at"], "board_seq": e["board_seq"],
+                "action": action, "actor_key": key,
+                "actor_name": e["actor_name"] or "",
+                "item_kind": e["item_kind"], "item_id": e["item_id"],
+                "title": payload.get("title", "") or "", "derived": False})
+
+        titles: dict[str, str] = {}
+
+        def _derive(action: str, item_kind: str, row, key: str, at,
+                    name: str = "") -> None:
+            key = actor_key(key)
+            if not key or not at or (action, row["id"]) in seen:
+                return
+            seen.add((action, row["id"]))
+            entries.append({
+                "at": at, "board_seq": 0, "action": action, "actor_key": key,
+                "actor_name": name, "item_kind": item_kind,
+                "item_id": row["id"], "title": row["title"], "derived": True})
+
+        # v1 存量列只有 participant id 沒有 actor_key：從 participant 反查
+        # session_key（那是它建立當下的紀錄），查不到就不推
+        def _pk(col: str, alias: str) -> str:
+            return (f"COALESCE(NULLIF(x.{col}_actor_key, ''), {alias}.session_key,"
+                    f" '') AS {col}_key")
+
+        for x in await (await db.execute(
+                "SELECT x.id, x.title, x.status, x.created_at, x.created_by_name,"
+                f" {_pk('created_by', 'pc')}, x.reviewed_at, {_pk('reviewed_by', 'pr')},"
+                f" x.verified_at, {_pk('verified_by', 'pv')},"
+                f" x.completed_at, {_pk('completed_by', 'pd')}"
+                " FROM board_objective x"
+                " LEFT JOIN participant pc ON pc.id = x.created_by"
+                " LEFT JOIN participant pr ON pr.id = x.reviewed_by"
+                " LEFT JOIN participant pv ON pv.id = x.verified_by"
+                " LEFT JOIN participant pd ON pd.id = x.completed_by"
+                " WHERE x.board_id=?", (board_id,))).fetchall():
+            titles[x["id"]] = x["title"]
+            if x["title"] == "未分類":
+                continue   # 隨手記一張卡時自動長出來的容器，不是誰建的
+            _derive("objective_created", "objective", x, x["created_by_key"],
+                    x["created_at"], x["created_by_name"])
+            _derive("objective_review", "objective", x, x["reviewed_by_key"],
+                    x["reviewed_at"])
+            _derive("objective_verified", "objective", x,
+                    x["verified_by_key"], x["verified_at"])
+            if x["status"] == "done":
+                _derive("objective_done", "objective", x,
+                        x["completed_by_key"], x["completed_at"])
+        for table, kind in (("board_checklist", "checklist"),
+                            ("board_task", "task")):
+            for x in await (await db.execute(
+                    "SELECT x.id, x.title, x.status, x.created_at,"
+                    f" x.created_by_name, {_pk('created_by', 'pc')},"
+                    f" x.completed_at, {_pk('completed_by', 'pd')}"
+                    f" FROM {table} x"
+                    " LEFT JOIN participant pc ON pc.id = x.created_by"
+                    " LEFT JOIN participant pd ON pd.id = x.completed_by"
+                    " WHERE x.board_id=?", (board_id,))).fetchall():
+                titles[x["id"]] = x["title"]
+                if kind == "checklist" and x["title"] == "未分類":
+                    continue
+                _derive(f"{kind}_created", kind, x, x["created_by_key"],
+                        x["created_at"], x["created_by_name"])
+                if x["status"] == "done":
+                    _derive(f"{kind}_done", kind, x, x["completed_by_key"],
+                            x["completed_at"])
+
+        # 上板：只算真的做完的那幾次
+        for r in await (await db.execute(
+                "SELECT id, ref, requested_by_actor_key, requested_by_name,"
+                " ended_at, updated_at FROM agent_run"
+                " WHERE board_id=? AND kind='release' AND status='done'",
+                (board_id,))).fetchall():
+            key = actor_key(r["requested_by_actor_key"])
+            if not key:
+                continue
+            entries.append({
+                "at": r["ended_at"] or r["updated_at"], "board_seq": 0,
+                "action": "released", "actor_key": key,
+                "actor_name": r["requested_by_name"] or "",
+                "item_kind": "objective", "item_id": r["ref"],
+                "title": "", "derived": False})
+
+        # 名字與種類：板上的定案名優先（同一個人在不同房叫不同名字，統計
+        # 要合成一列）；不在成員列上的退回他最後一次 join 的紀錄
+        missing = sorted({e["actor_key"] for e in entries} - set(members))
+        others: dict[str, tuple[str, str]] = {}
+        if missing:
+            qs = ",".join("?" for _ in missing)
+            for p in await (await db.execute(
+                    "SELECT session_key, display_name, kind FROM participant"
+                    f" WHERE session_key IN ({qs}) ORDER BY joined_at",
+                    missing)).fetchall():
+                others[p["session_key"]] = (p["display_name"], p["kind"])
+
+        def _ident(key: str, fallback: str) -> tuple[str, str]:
+            m = members.get(key)
+            if m is not None:
+                return (m["display_name"] or fallback, m["actor_kind"] or "")
+            name, kind = others.get(key, ("", ""))
+            return (fallback or name, kind or "")
+
+        stats: dict[str, dict] = {}
+        for e in entries:
+            name, kind = _ident(e["actor_key"], e["actor_name"])
+            e["actor_name"] = e["actor_name"] or name
+            e["actor_kind"] = kind
+            if not e["title"]:
+                e["title"] = titles.get(e["item_id"], "")
+            st = stats.setdefault(e["actor_key"], {
+                "actor_key": e["actor_key"],
+                "actor_name": _ident(e["actor_key"], e["actor_name"])[0],
+                "actor_kind": kind, "total": 0, "counts": {}, "last_at": ""})
+            st["total"] += 1
+            st["counts"][e["action"]] = st["counts"].get(e["action"], 0) + 1
+            st["last_at"] = max(st["last_at"], e["at"] or "")
+
+        entries.sort(key=lambda e: (e["at"] or "", e["board_seq"]),
+                     reverse=True)
+        ranked = sorted(stats.values(),
+                        key=lambda st: (st["total"], st["last_at"]),
+                        reverse=True)
+        owner_key = board["owner_actor_key"]
+        return {
+            "board_id": board_id,
+            "board": {
+                "name": board["name"], "description": board["description"],
+                "status": board["status"], "my_role": role,
+                "owner_name": _ident(owner_key, "")[0] if owner_key else "",
+            },
+            "entries": entries[offset:offset + limit],
+            "total": len(entries),
+            "has_more": offset + limit < len(entries),
+            "offset": offset, "limit": limit,
+            "stats": ranked,
+        }
+
     async def _commit() -> None:
         await _commit_with_retry(app.state.db)
 
@@ -13903,6 +14123,111 @@ def create_app(config: Config | None = None) -> FastAPI:
         d["single_writer"] = True if sw is None else bool(sw)
         return d
 
+    async def _run_ask_human(run) -> dict:
+        """派工的 agent 要問人時該問誰（stage／ticket 才有）。
+
+        問的對象**必須是人類**，而且 `chatroom_ask_human` 只問得到房內成員
+        的顯示名，所以這裡回的是依序的候選：
+
+        - 創建者是人類：**階段創建者 → 板 owner → 派工者**。階段是他開的，
+          前提與取捨在他手上。
+        - 創建者是 agent：**派工者 → 板 owner**（艾斯維爾 2026-09-24 裁決）。
+          派工者是按下這一筆的人，對這一輪要做什麼最清楚。
+        - 沒有創建者紀錄（存量資料，種類是空的）：**板 owner → 派工者**。
+
+        派工者是 `requested_by_actor_key`——Supervisor 代派時那是指定它的
+        人類，所以這一欄恆為人類。
+
+        非人類一律略過，**種類說不出來的也略過**：猜成人類會讓 agent 去問
+        一個 agent，而那一題永遠不會有人回。同一個人只列一次。
+
+        `in_room` 是領單當下的事實，agent 進房時可能已經變了——所以回整串
+        讓它依序退，而不是只給一個名字。
+        """
+        db = app.state.db
+        ref = (run["ref"] or "").strip()
+        checklist_id = ""
+        if run["kind"] == "stage":
+            checklist_id = ref
+        elif run["kind"] == "ticket" and ref:
+            task = await (await db.execute(
+                "SELECT checklist_id FROM board_task WHERE id=?",
+                (ref,))).fetchone()
+            checklist_id = task["checklist_id"] if task is not None else ""
+        stage = None
+        if checklist_id:
+            stage = await (await db.execute(
+                "SELECT title, board_id, created_by_name, created_by_actor_key,"
+                " created_by_kind FROM board_checklist WHERE id=?",
+                (checklist_id,))).fetchone()
+        board_id = (run["board_id"] or "").strip() or (
+            (stage["board_id"] or "") if stage is not None else "")
+        board = (await (await db.execute(
+            "SELECT owner_actor_key FROM board WHERE id=?",
+            (board_id,))).fetchone() if board_id else None)
+
+        async def _who(key: str) -> tuple[str, str]:
+            """(板上的名字, 種類)。板成員列優先，再退回任何一次 join 的紀錄。"""
+            if board_id:
+                who = await _board_identity(board_id, key)
+                if who is not None and (who["actor_kind"] or ""):
+                    return who["display_name"] or "", who["actor_kind"]
+            row = await (await db.execute(
+                "SELECT display_name, kind FROM participant"
+                " WHERE session_key=? ORDER BY joined_at DESC LIMIT 1",
+                (key,))).fetchone()
+            return ((row["display_name"], row["kind"]) if row is not None
+                    else ("", ""))
+
+        creator = None
+        candidates: list[tuple[str, str, str, str]] = []
+        if stage is not None:
+            ckey = actor_key(stage["created_by_actor_key"])
+            cname = stage["created_by_name"] or ""
+            ckind = (stage["created_by_kind"] or "").strip().lower()
+            if ckey and not ckind:
+                ckind = (await _who(ckey))[1].strip().lower()
+            creator = {"name": cname, "kind": ckind,
+                       "stage_title": stage["title"]}
+            if ckey:
+                candidates.append(("stage_creator", ckey, cname, ckind))
+        owner = (("board_owner", board["owner_actor_key"], "", "")
+                 if board is not None and board["owner_actor_key"] else None)
+        requester = (("requester", run["requested_by_actor_key"],
+                      run["requested_by_name"] or "", "")
+                     if run["requested_by_actor_key"] else None)
+        agent_made = bool(creator and creator["kind"]
+                          and creator["kind"] != "human")
+        for c in ((requester, owner) if agent_made else (owner, requester)):
+            if c is not None:
+                candidates.append(c)
+        targets: list[dict] = []
+        seen: set[str] = set()
+        for source, key, fallback, kind in candidates:
+            key = actor_key(key)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            # 房內顯示名才問得到（`target_name` 比對的是它），所以先找房內
+            here = await (await db.execute(
+                "SELECT display_name, kind FROM participant"
+                " WHERE room_id=? AND session_key=? AND status='active'"
+                "   AND parent_id IS NULL"
+                " ORDER BY last_seen_at DESC LIMIT 1",
+                (run["room_id"], key))).fetchone()
+            name = here["display_name"] if here is not None else ""
+            if not kind and here is not None:
+                kind = here["kind"] or ""
+            if not name or not kind:
+                bname, bkind = await _who(key)
+                name = name or bname or fallback
+                kind = kind or bkind
+            if (kind or "").strip().lower() != "human" or not name:
+                continue
+            targets.append({"name": name, "source": source,
+                            "in_room": here is not None})
+        return {"stage_creator": creator, "targets": targets}
+
     def _runner_public(row) -> dict:
         d = dict(row)
         d["projects"] = _loads_or(d.pop("projects", "[]"), [])
@@ -14993,6 +15318,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 為了它去改那句 CAS 不值得，這裡補一次查詢
         run = _run_public(got)
         run["single_writer"] = await _room_single_writer(got["room_id"])
+        # 要問人時問誰（`_run_ask_human`）。**查不出來不能讓領單失敗**：
+        # 單已經 commit 成 claimed，這裡拋例外的話執行器拿到 500、手上沒有
+        # 這筆 run，而 Hub 那邊它永遠停在 claimed
+        if got["kind"] in ("stage", "ticket"):
+            try:
+                run["ask_human"] = await _run_ask_human(got)
+            except Exception:  # noqa: BLE001
+                logger.warning("run %s 的提問對象查不出來", got["id"],
+                               exc_info=True)
         return {"run": run}
 
     @app.post("/api/runs/{run_id}/report", dependencies=[Depends(require_auth)])

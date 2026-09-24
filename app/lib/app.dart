@@ -12,6 +12,7 @@ import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
 import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
+import 'screens/board/board_settings_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
 import 'screens/board/watch_notices_screen.dart';
 import 'screens/chat/chat_screen.dart';
@@ -90,6 +91,13 @@ GoRouter buildRouter(bool Function() isConfigured) {
                 builder: (context, state) => ScratchpadPage(
                   boardId: state.pathParameters['boardId']!,
                   padId: state.pathParameters['padId']!,
+                ),
+              ),
+              // 任務板設定（名稱、主題、貢獻紀錄）
+              GoRoute(
+                path: 'settings',
+                builder: (context, state) => BoardSettingsScreen(
+                  boardId: state.pathParameters['boardId']!,
                 ),
               ),
             ],
@@ -181,6 +189,15 @@ GoRouter buildRouter(bool Function() isConfigured) {
                         path: 'track',
                         builder: (context, state) => SupervisorTrackScreen(
                             roomId: state.pathParameters['roomId']!),
+                      ),
+                      // 任務板設定的房軸入口：與想法板同一個理由，從聊天室
+                      // 進來的人留在 ROOMS 分頁上，返回回到這間房的板
+                      GoRoute(
+                        path: 'settings',
+                        builder: (context, state) => BoardSettingsScreen(
+                          boardId: state.uri.queryParameters['board'] ?? '',
+                          roomId: state.pathParameters['roomId']!,
+                        ),
                       ),
                     ],
                   ),

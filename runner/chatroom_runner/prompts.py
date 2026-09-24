@@ -81,6 +81,47 @@ def skills_block(names: list[str] | None) -> str:
     return SKILLS_FRAME.format(names=listed)
 
 
+_ASK_SOURCE = {"stage_creator": "階段創建者", "board_owner": "任務板 owner",
+               "requester": "派工者"}
+
+
+def ask_human_block(ask: dict | None) -> str:
+    """「要問人時問誰」那一段（Hub 領單時給的 `run["ask_human"]`）。
+
+    順序由 Hub 排好：創建者是人類時「創建者 → 板 owner → 派工者」，是 agent
+    時「派工者 → 板 owner」，沒有紀錄時「板 owner → 派工者」。這裡只負責
+    照順序講出來。舊 Hub 不給這一欄時回空字串，契約不留怪句子。
+    """
+    if not ask:
+        return ""
+    creator = ask.get("stage_creator") or {}
+    targets = ask.get("targets") or []
+    title = (creator.get("stage_title") or "").strip()
+    stage = f"這個階段「{title}」" if title else "這個階段"
+    name = (creator.get("name") or "").strip()
+    kind = (creator.get("kind") or "").strip().lower()
+    if name and kind == "human":
+        head = f"{stage}是 `{name}` 建的，前提與取捨在他手上。"
+    elif name:
+        head = (f"{stage}是 agent `{name}` 建的——問題不要問它，"
+                "先問派工者，再問板 owner。")
+    else:
+        head = f"{stage}沒有創建者紀錄。"
+    lines = ["## 要問人時問誰", "", head]
+    if targets:
+        lines += ["", "需要人類決定時，`chatroom_ask_human` 的 `target_name` "
+                  "依序用：", ""]
+        for i, t in enumerate(targets, 1):
+            role = _ASK_SOURCE.get(t.get("source", ""), "")
+            away = "" if t.get("in_room") else "，派工當下不在房裡"
+            lines.append(f"{i}. `{t.get('name', '')}`（{role}{away}）")
+        lines += ["", "前一位問不到（不在房裡）才換下一位；都問不到就問房裡"
+                  "其他人類。"]
+    else:
+        lines += ["", "查不到可以問的人類：需要人類決定時問房裡任一位人類。"]
+    return "\n".join(lines)
+
+
 # 專案設定允許瀏覽器實機測試時，模板多這一句。**預設不加**：模板本文已經
 # 說「實機／瀏覽器測試不是交付門檻」，只有這台機器的設定說可以時才翻案
 LIVETEST_LINE = "這個專案允許瀏覽器實機測試，能做就做。"
@@ -199,5 +240,6 @@ def build_contract(fields: dict[str, str],
     merged.setdefault("skills_block", "")
     merged.setdefault("primary_skill_block", "")
     merged.setdefault("livetest_block", "")
+    merged.setdefault("ask_human_block", "")
     _fill_repo_defaults(merged)
     return render(load_template("contract", prompt_dir), merged)

@@ -324,6 +324,11 @@ CREATE TABLE IF NOT EXISTS board_checklist (
     order_index  INTEGER NOT NULL DEFAULT 0,
     created_by   TEXT REFERENCES participant(id),
     created_by_name TEXT NOT NULL DEFAULT '',
+    -- 建立者的種類快照（human / claude / codex / other）。派工的 agent 要問
+    -- 問題時問的是「階段創建者」，而那個人必須是人類——建立者是 agent 就要
+    -- 換人問，這一欄是分辨的依據。⚠️ 同時列在 MIGRATIONS 與重建用的
+    -- `board_checklist__v2`，三處都要有
+    created_by_kind TEXT NOT NULL DEFAULT '',
     completed_by TEXT REFERENCES participant(id),
     completed_at TEXT,
     deleted      INTEGER NOT NULL DEFAULT 0,
@@ -1198,6 +1203,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 照舊只看主 repo 那組——回填不出副 repo 動過什麼，猜了就是假候選
     ("agent_run", "git_repos_json",
      "git_repos_json TEXT NOT NULL DEFAULT ''"),
+    # 階段建立者的種類（2026-09-24）。存量一律空字串，由 `_migrate_data`
+    # 版次 7 從板成員列／participant 回推一次；兩邊都查不到的留空＝說不出來，
+    # 讀的一方退回板 owner——猜成 human 會讓 agent 去問一個 agent
+    ("board_checklist", "created_by_kind",
+     "created_by_kind TEXT NOT NULL DEFAULT ''"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1291,6 +1301,7 @@ REBUILT_TABLES: dict[str, str] = {
             created_by   TEXT,
             created_by_name TEXT NOT NULL DEFAULT '',
             created_by_actor_key TEXT NOT NULL DEFAULT '',
+            created_by_kind TEXT NOT NULL DEFAULT '',
             completed_by TEXT,
             completed_by_actor_key TEXT NOT NULL DEFAULT '',
             completed_at TEXT,
@@ -1467,7 +1478,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 6
+DATA_VERSION = 7
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1552,6 +1563,21 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         await db.execute(
             "UPDATE room SET board_supervisor_left_at=NULL"
             " WHERE board_supervisor_left_at=''")
+    if version < 7:
+        # `board_checklist.created_by_kind` 是後來才加的。回推只用**記錄過的
+        # 事實**：先看這塊板的成員列（actor_kind），再看建立當下的 participant
+        # （created_by）。兩邊都查不到的留空——那些階段的創建者種類就是說不
+        # 出來，猜一個值會讓派工的 agent 把問題送錯人
+        await db.execute(
+            "UPDATE board_checklist SET created_by_kind = COALESCE("
+            "  (SELECT m.actor_kind FROM board_member m"
+            "   WHERE m.board_id = board_checklist.board_id"
+            "     AND m.actor_key = board_checklist.created_by_actor_key"
+            "     AND board_checklist.created_by_actor_key != ''"
+            "     AND m.actor_kind != ''),"
+            "  (SELECT p.kind FROM participant p"
+            "   WHERE p.id = board_checklist.created_by), '')"
+            " WHERE created_by_kind = ''")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

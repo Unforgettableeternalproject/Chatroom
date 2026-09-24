@@ -722,6 +722,20 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 boardId: _boardIdOrNull!, roomId: widget.roomId),
           ),
         ],
+        // 設定鈕固定在最右：上面那排徽章（聊天室、Supervisor）排在它左邊。
+        // 所有成員都進得去——非 owner 看到的是唯讀與貢獻紀錄
+        if (_boardIdOrNull != null) ...[
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: AppLocalizations.of(context).boardSettingsTitle,
+            visualDensity: VisualDensity.compact,
+            icon: Icon(Icons.settings_outlined, size: 18, color: s.inkSoft),
+            onPressed: () => context.go(widget.roomId != null
+                ? '/rooms/${widget.roomId}/board/settings'
+                    '?board=${_boardIdOrNull!}'
+                : '/boards/${_boardIdOrNull!}/settings'),
+          ),
+        ],
       ]),
     );
   }
@@ -1499,11 +1513,18 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       style: UepText.mono(size: 10, color: s.inkMute)),
                 ),
               ),
-              Text(c.title,
-                  style: UepText.sans(
-                      size: 15,
-                      weight: FontWeight.w600,
-                      color: s.inkTitle)),
+              // 創建者放在提示裡：派工的 agent 問問題時問的就是他
+              Tooltip(
+                message: c.createdByName.isEmpty
+                    ? AppLocalizations.of(context).boardChecklistCreatorUnknown
+                    : AppLocalizations.of(context)
+                        .boardChecklistCreatedBy(c.createdByName),
+                child: Text(c.title,
+                    style: UepText.sans(
+                        size: 15,
+                        weight: FontWeight.w600,
+                        color: s.inkTitle)),
+              ),
               const SizedBox(width: 12),
               Text('$done / $total DONE',
                   style: UepText.mono(
