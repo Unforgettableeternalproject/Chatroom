@@ -14,8 +14,8 @@ import '../../state/board_providers.dart';
 import '../../state/messages_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/empty_error_states.dart';
-import '../../widgets/kind_badge.dart';
 import '../../widgets/room_style_picker.dart';
+import '../../widgets/settings_form.dart';
 import '../../widgets/uep_button.dart';
 import 'room_actions.dart';
 
@@ -258,31 +258,31 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
               : l10n.roomSettingsOwnerOnly;
           return Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 640),
+              constraints: const BoxConstraints(maxWidth: kPageMaxWidth),
               child: ListView(
-                padding: const EdgeInsets.all(22),
+                padding: const EdgeInsets.all(32),
                 children: [
                   if (note != null) ...[
-                    MonoLabel(note, size: 9, letterSpacing: 1.2),
-                    const SizedBox(height: 14),
+                    Text(note,
+                        style: UepText.serif(
+                            size: 12.5, color: UepColors.gold, height: 1.4)),
+                    const SizedBox(height: 18),
                   ],
-                  _Label(l10n.roomsFieldName),
-                  _Field(
-                    controller: _name,
-                    enabled: editable,
-                    onChanged: (_) => _markDirty(),
-                  ),
+                  Text(l10n.settingsSectionBasics,
+                      style: UepText.itemTitle(color: s.inkTitle)),
+                  const SizedBox(height: 14),
+                  SettingsFieldLabel(l10n.roomsFieldName),
+                  _field(controller: _name, enabled: editable),
                   const SizedBox(height: 18),
-                  _Label(l10n.roomsFieldTopic),
-                  _Field(
+                  SettingsFieldLabel(l10n.roomsFieldTopic),
+                  _field(
                     controller: _topic,
                     enabled: editable,
                     maxLines: 3,
                     hint: l10n.roomsFieldTopicHint,
-                    onChanged: (_) => _markDirty(),
                   ),
                   const SizedBox(height: 18),
-                  _Label(l10n.roomsStyleTitle),
+                  SettingsFieldLabel(l10n.roomsStyleTitle),
                   RoomStylePicker(
                     value: _style,
                     enabled: editable,
@@ -293,21 +293,35 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                   ),
                   if (_style == kRoomStyleCustom) ...[
                     const SizedBox(height: 4),
-                    _Field(
+                    _field(
                       controller: _instructions,
                       enabled: editable,
                       maxLines: 4,
                       hint: l10n.roomsStyleCustomHint,
-                      onChanged: (_) => _markDirty(),
                     ),
                   ],
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 22),
+                  // 開關列：設定頁「深色主題」那一列的寫法
                   Row(
                     children: [
-                      Expanded(child: _Label(l10n.roomsPrivateTitle)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(l10n.roomsPrivateTitle,
+                                style: UepText.sans(
+                                    size: 13.5, color: s.inkTitle)),
+                            const SizedBox(height: 3),
+                            Text(l10n.roomsPrivateSubtitle,
+                                style: UepText.serif(
+                                    size: 12, color: s.inkMute)),
+                          ],
+                        ),
+                      ),
                       Switch(
                         value: _private,
                         activeThumbColor: UepColors.gold,
+                        activeTrackColor: UepColors.gold.withValues(alpha: .28),
                         onChanged: editable
                             ? (v) => setState(() {
                                 _private = v;
@@ -318,27 +332,36 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                     ],
                   ),
                   if (admin && !room.isArchived) ...[
-                    const SizedBox(height: 14),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: UepButton(
+                    const SizedBox(height: 20),
+                    Row(children: [
+                      UepButton(
                         label: l10n.commonSave,
-                        small: true,
-                        onPressed: editable && _dirty
-                            ? () => _save(room)
-                            : null,
+                        onPressed:
+                            editable && _dirty ? () => _save(room) : null,
                       ),
-                    ),
+                      const SizedBox(width: 14),
+                      if (_dirty)
+                        Flexible(
+                          child: Text(l10n.settingsUnsavedChanges,
+                              style: UepText.serif(
+                                  size: 12.5,
+                                  color: UepColors.gold,
+                                  height: 1.4)),
+                        ),
+                    ]),
                   ],
                   if (admin && !room.isArchived && hasBoard) ...[
                     const SizedBox(height: 26),
-                    _Label(l10n.roomSettingsBoard),
+                    Divider(color: s.line, height: 1),
+                    const SizedBox(height: 22),
+                    Text(l10n.roomSettingsBoard,
+                        style: UepText.itemTitle(color: s.inkTitle)),
+                    const SizedBox(height: 14),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: UepButton(
                         label: l10n.boardSwitchMenu,
                         variant: UepButtonVariant.outline,
-                        small: true,
                         onPressed: () =>
                             switchRoomBoard(context, ref, widget.roomId),
                       ),
@@ -348,7 +371,11 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                   // 只給房主——其他人（包括主持人）按了只會拿到 403
                   if (!room.isArchived || admin) ...[
                     const SizedBox(height: 26),
-                    _Label(l10n.roomSettingsArchiveSection),
+                    Divider(color: s.line, height: 1),
+                    const SizedBox(height: 22),
+                    Text(l10n.roomSettingsArchiveSection,
+                        style: UepText.itemTitle(color: s.inkTitle)),
+                    const SizedBox(height: 14),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: UepButton(
@@ -356,7 +383,6 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                             ? l10n.roomsMenuUnarchive
                             : l10n.roomsMenuArchive,
                         variant: UepButtonVariant.outline,
-                        small: true,
                         onPressed: () => _toggleArchive(room),
                       ),
                     ),
@@ -369,59 +395,23 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
       ),
     );
   }
-}
 
-class _Label extends StatelessWidget {
-  const _Label(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: MonoLabel(text, size: 9.5, letterSpacing: 1.6),
-  );
-}
-
-class _Field extends StatelessWidget {
-  const _Field({
-    required this.controller,
-    required this.enabled,
-    required this.onChanged,
-    this.maxLines = 1,
-    this.hint,
-  });
-
-  final TextEditingController controller;
-  final bool enabled;
-  final ValueChanged<String> onChanged;
-  final int maxLines;
-  final String? hint;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _field({
+    required TextEditingController controller,
+    required bool enabled,
+    int maxLines = 1,
+    String? hint,
+  }) {
     final s = context.uep;
-    return Container(
-      decoration: BoxDecoration(
-        color: s.bgSunken,
-        border: Border.all(color: s.lineStrong),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+    return SettingsInputBox(
       child: TextField(
         controller: controller,
         enabled: enabled,
         maxLines: maxLines,
         minLines: 1,
-        onChanged: onChanged,
-        style: UepText.serif(size: 14, color: s.ink, height: 1.6),
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: hint,
-          hintStyle: UepText.serif(size: 13.5, color: s.inkMute),
-          contentPadding: const EdgeInsets.symmetric(vertical: 10),
-        ),
+        onChanged: (_) => _markDirty(),
+        style: UepText.sans(size: 13, color: s.ink),
+        decoration: settingsInputDecoration(hint, s),
       ),
     );
   }

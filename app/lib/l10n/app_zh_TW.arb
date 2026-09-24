@@ -7868,5 +7868,9 @@
   "boardChecklistCreatorUnknown": "建立者不明",
   "@boardChecklistCreatorUnknown": {
     "description": "階段標題的提示：存量階段沒有創建者紀錄"
+  },
+  "settingsSectionBasics": "基本資料",
+  "@settingsSectionBasics": {
+    "description": "房間設定頁與任務板設定頁：名稱、描述等基本欄位的區段標題"
   }
 }
