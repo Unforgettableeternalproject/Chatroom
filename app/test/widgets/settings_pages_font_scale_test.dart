@@ -216,12 +216,14 @@ void main() {
               greaterThanOrEqualTo(_fontSize(tester, detail)));
           expect(_fontSize(tester, find.text('名稱')),
               greaterThanOrEqualTo(12));
-          _expectBalanced(tester, pref,
-              section: title,
-              option: find.text('每人統計'),
-              // 這頁沒有選項說明，拿同級的欄位標籤（fieldLabel 12）當下限
-              button: find.text('儲存'),
-              hint: find.text('名稱'));
+          for (final section in [title, find.text('基本資料')]) {
+            _expectBalanced(tester, pref,
+                section: section,
+                option: find.text('每人統計'),
+                // 這頁沒有選項說明，拿同級的欄位標籤（fieldLabel 12）當下限
+                button: find.text('儲存'),
+                hint: find.text('名稱'));
+          }
           heights.add(tester.getSize(title).height);
 
           // 名字（省略號）與件數不重疊，件數也不壓到明細
@@ -337,6 +339,11 @@ void main() {
               greaterThanOrEqualTo(_fontSize(tester, hint)));
           expect(_fontSize(tester, find.text('說話方式')),
               greaterThanOrEqualTo(12));
+          _expectBalanced(tester, pref,
+              section: find.text('基本資料'),
+              option: find.text('私人對話'),
+              button: find.text('儲存'),
+              hint: hint);
           for (final button in [
             find.text('儲存'),
             find.text('更換任務板…'),

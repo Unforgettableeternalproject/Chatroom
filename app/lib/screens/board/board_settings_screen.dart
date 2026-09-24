@@ -268,6 +268,9 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
                       size: 12.5, color: UepColors.gold, height: 1.4)),
               const SizedBox(height: 18),
             ],
+            Text(l10n.settingsSectionBasics,
+                style: UepText.itemTitle(color: s.inkTitle)),
+            const SizedBox(height: 16),
             SettingsFieldLabel(l10n.roomsFieldName),
             SettingsInputBox(
               child: TextField(

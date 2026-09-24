@@ -1578,5 +1578,6 @@
   "boardContribObjectiveReopened": "Reopened cycle",
   "boardContribReleased": "Released",
   "boardChecklistCreatedBy": "Created by {name}",
-  "boardChecklistCreatorUnknown": "Creator unknown"
+  "boardChecklistCreatorUnknown": "Creator unknown",
+  "settingsSectionBasics": "Basics"
 }

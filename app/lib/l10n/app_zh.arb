@@ -1579,5 +1579,6 @@
   "boardContribObjectiveReopened": "打回周期",
   "boardContribReleased": "上板",
   "boardChecklistCreatedBy": "由 {name} 建立",
-  "boardChecklistCreatorUnknown": "建立者不明"
+  "boardChecklistCreatorUnknown": "建立者不明",
+  "settingsSectionBasics": "基本资料"
 }
