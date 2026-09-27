@@ -2563,7 +2563,12 @@ class _MemberTile extends StatelessWidget {
         'kicked' => l10n.chatMemberKicked,
         _ => l10n.chatMembersGone,
       };
-    } else if (isSelf) {
+    } else if (isSelf && p.isAdmin) {
+      // 「管控權」是真的有管理權才能講的話——`p.isAdmin` 來自
+      // server 的 `creator_session_key` 比對（`is_admin`），不是「是自己」
+      // 就自動成立。建立者離開後這個房可能誰都不是管理員，這一列不能
+      // 替沒有的權限背書（2026-09-27 線上事故：兩個人類都顯示「你 ·
+      // 管控權」，但誰都核准不了封存請求）
       subtitle = l10n.chatMemberSelf;
     } else if (isIdle) {
       // 超過一小時要進位——掛了兩天的 agent 顯示「閒置 3120 分」等於要讀的人
