@@ -1337,6 +1337,71 @@ def test_child_env_strips_git_credentials(tmp_path, work_repo):
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert Path(env["GIT_ASKPASS"]).is_file()
     assert env["GIT_ASKPASS"] == str(run_mod.ASKPASS_SCRIPT)
+    # 沒設 agent_signing_key：不碰簽章設定
+    assert not any(v.startswith(("gpg.", "user.signingkey"))
+                   for k, v in env.items() if k.startswith("GIT_CONFIG_KEY_"))
+
+
+def _config_pairs(env: dict) -> list[tuple[str, str]]:
+    count = int(env["GIT_CONFIG_COUNT"])
+    return [(env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"])
+            for i in range(count)]
+
+
+def test_child_env_signs_with_ssh_key_when_configured(tmp_path, work_repo,
+                                                      monkeypatch):
+    """暫時措施：設了 agent_signing_key，run 的 commit 改用 SSH key 簽章。
+
+    簽章設定排在前面，`credential.helper` 清空仍是最後一條。
+    """
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    cfg = make_config(tmp_path, work_repo,
+                      agent_signing_key="D:/keys/agent_ed25519",
+                      agent_allowed_signers="D:/keys/allowed_signers",
+                      ssh_keygen_bin="D:/git/usr/bin/ssh-keygen.exe")
+    env = _executor(cfg, _NullHub())._child_env({"id": "r-env"}, tmp_path)
+
+    assert _config_pairs(env) == [
+        ("gpg.format", "ssh"),
+        ("user.signingkey", "D:/keys/agent_ed25519"),
+        ("gpg.ssh.program", "D:/git/usr/bin/ssh-keygen.exe"),
+        ("gpg.ssh.allowedSignersFile", "D:/keys/allowed_signers"),
+        ("credential.helper", ""),
+    ]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_child_env_ssh_signing_without_allowed_signers(tmp_path, work_repo,
+                                                       monkeypatch):
+    """allowedSigners 沒設就不覆寫；ssh-keygen 沒設走 PATH。"""
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    cfg = make_config(tmp_path, work_repo,
+                      agent_signing_key="D:/keys/agent_ed25519")
+    env = _executor(cfg, _NullHub())._child_env({"id": "r-env"}, tmp_path)
+
+    assert _config_pairs(env) == [
+        ("gpg.format", "ssh"),
+        ("user.signingkey", "D:/keys/agent_ed25519"),
+        ("gpg.ssh.program", "ssh-keygen"),
+        ("credential.helper", ""),
+    ]
+
+
+def test_child_env_ssh_signing_appends_after_existing_config(
+        tmp_path, work_repo, monkeypatch):
+    """外層已經有 GIT_CONFIG_COUNT 時接在後面，不吃掉前面那幾條。"""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    cfg = make_config(tmp_path, work_repo,
+                      agent_signing_key="D:/keys/agent_ed25519")
+    env = _executor(cfg, _NullHub())._child_env({"id": "r-env"}, tmp_path)
+
+    pairs = _config_pairs(env)
+    assert pairs[0] == ("core.autocrlf", "false")
+    assert pairs[1] == ("gpg.format", "ssh")
+    assert pairs[-1] == ("credential.helper", "")
+    assert env["GIT_CONFIG_COUNT"] == "5"
 
 
 def test_child_env_sets_claude_code_run_flags(tmp_path, work_repo,
