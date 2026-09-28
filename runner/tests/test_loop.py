@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from chatroom_runner import gitops
-from chatroom_runner.config import load_config
+from chatroom_runner.config import ConfigError, load_config
 from chatroom_runner.hub import HubError, RunnerHub, load_identity
 from chatroom_runner.loop import (EXIT_RESTART, EXIT_SELFCHECK_FAILED,
                                   RunnerLoop)
@@ -310,18 +310,29 @@ async def test_signing_check_probes_ssh_keygen_when_agent_key_set(
                          "-n", "git")
 
 
-async def test_signing_check_rejects_key_outside_sensitive_dir(
-        runner_hub, work_repo, tmp_path, monkeypatch):
-    """私鑰不在 .ssh／.gnupg 底下：guard 擋不住 run 讀它，自檢直接不過。"""
-    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
-                             agent_signing_key="D:/keys/agent_ed25519"),
-                 runner_hub)
-    calls = _fake_ssh_keygen(monkeypatch)
+@pytest.mark.parametrize("require_gpg", [True, False])
+def test_config_rejects_signing_key_outside_sensitive_dir(
+        tmp_path, work_repo, require_gpg):
+    """私鑰不在 .ssh／.gnupg 底下：guard 擋不住 run 讀它，設定直接不收。
 
-    problems = await loop._check_signing()
+    不能只放在自檢裡——`require_gpg=false` 與重讀設定都不跑自檢。
+    """
+    with pytest.raises(ConfigError, match=r"\.ssh"):
+        make_config(tmp_path, work_repo, require_gpg=require_gpg,
+                    agent_signing_key="D:/keys/agent_ed25519")
 
-    assert calls == []
-    assert problems and ".ssh" in problems[0]
+
+def test_reload_keeps_old_config_when_signing_key_outside_sensitive_dir(
+        runner_hub, work_repo, tmp_path):
+    cfg_path = write_config(tmp_path / "runner.json", tmp_path, work_repo)
+    loop = _loop(load_config(cfg_path), runner_hub, config_path=cfg_path)
+    write_config(cfg_path, tmp_path, work_repo,
+                 agent_signing_key="D:/keys/agent_ed25519")
+
+    ok, _ = loop._reload_config()
+
+    assert ok is False
+    assert loop.cfg.agent_signing_key == ""
 
 
 async def test_signing_check_reports_ssh_failure(

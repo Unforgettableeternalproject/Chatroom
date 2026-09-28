@@ -71,7 +71,7 @@
 | `usage_window_hours` / `usage_soft_cap_tokens` / `usage_soft_cap_usd` | 近 N 小時的軟上限，到了就停收新單。**這是自我約束，不是真實額度** |
 | `require_gpg` | 自檢要不要驗簽章（預設 true） |
 | `gpg_bin` | 自檢用哪一支 gpg。留空＝跟 git 同源（`git config --get gpg.program`），再退回 PATH 上的 `gpg`。排程工作的 PATH 跟互動 shell 不一樣 |
-| `agent_signing_key` | **暫時措施，清空即停用**（預設空）。SSH 私鑰路徑：有值時 run 進程的 commit 改用這把 key 做 SSH 簽章（以 `GIT_CONFIG_*` 覆寫 `gpg.format=ssh`、`user.signingkey`、`gpg.ssh.program`），自檢也改驗 `ssh-keygen -Y sign`、不跑 gpg 探針。本機 git 設定與互動 session 不受影響，仍是 GPG。給 GPG passphrase 快取會過期、又沒有人能按 pinentry 的期間用。私鑰**必須放在 `.ssh` 或 `.gnupg` 目錄下**（例如 `~/.ssh/chatroom_agent_signing`），否則自檢不過：路徑會交給 run，guard 只對這類目錄擋 Read 與 shell 參數。guard 是指令層的防護，擋不住經環境變數或腳本的間接讀取；GitHub 上只登記為 Signing Key，不要登記成 Authentication Key |
+| `agent_signing_key` | **暫時措施，清空即停用**（預設空）。SSH 私鑰路徑：有值時 run 進程的 commit 改用這把 key 做 SSH 簽章（以 `GIT_CONFIG_*` 覆寫 `gpg.format=ssh`、`user.signingkey`、`gpg.ssh.program`），自檢也改驗 `ssh-keygen -Y sign`、不跑 gpg 探針。本機 git 設定與互動 session 不受影響，仍是 GPG。給 GPG passphrase 快取會過期、又沒有人能按 pinentry 的期間用。私鑰**必須放在 `.ssh` 或 `.gnupg` 目錄下**（例如 `~/.ssh/chatroom_agent_signing`），否則設定載入失敗（啟動不起來；重讀時維持舊設定）：路徑會交給 run，guard 只對這類目錄擋 Read 與 shell 參數。guard 是指令層的防護，擋不住經環境變數或腳本的間接讀取；GitHub 上只登記為 Signing Key，不要登記成 Authentication Key |
 | `agent_allowed_signers` | 搭配 `agent_signing_key`：`gpg.ssh.allowedSignersFile` 的路徑。可空，空＝不覆寫 |
 | `ssh_keygen_bin` | 搭配 `agent_signing_key`：簽章與自檢用的 `ssh-keygen`。留空＝PATH 上的 `ssh-keygen`（排程工作的 PATH 可能沒有，Git for Windows 自帶一支） |
 | `claude_bin` | `claude` 的路徑。要帶參數請給陣列 |
