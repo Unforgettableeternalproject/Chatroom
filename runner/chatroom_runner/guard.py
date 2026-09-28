@@ -23,7 +23,7 @@ import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import branch_allowed
+from .config import SENSITIVE_DIR_NAMES, branch_allowed
 
 SYSTEM_LIMIT = "這是系統限制"
 
@@ -31,7 +31,6 @@ SYSTEM_LIMIT = "這是系統限制"
 SENSITIVE_NAME_PATTERNS = (".env", ".env*", "*.pem", "*.key", "*.p12",
                            "*.pfx", "id_rsa*", "id_ed25519*", ".claude.json",
                            "credentials*")
-SENSITIVE_DIR_NAMES = (".claude", ".gnupg", ".ssh")
 
 # git 的白名單。**沒列出來的一律擋**
 GIT_ALLOWED = {

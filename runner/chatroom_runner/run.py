@@ -2057,7 +2057,11 @@ class RunExecutor:
             allowed_branches=list(repo.allowed_branches),
             allowed_domains=list(self.cfg.allowed_domains),
             protected_paths=[self.cfg.state_dir, self.cfg.claude_config_dir,
-                             HOOKS_DIR.parent],
+                             HOOKS_DIR.parent,
+                             # SSH 簽章私鑰（暫時措施）：路徑經 GIT_CONFIG_*
+                             # 交給了 run，Read／Write 要精確擋下
+                             *([Path(self.cfg.agent_signing_key)]
+                               if self.cfg.agent_signing_key else [])],
             # run 目錄整個在 state_dir 底下，本來會被「執行器自己的目錄」擋掉。
             # 附件是 agent 自己要來的，讀得到才有意義——只鑿這一個洞
             downloads_dir=downloads,
