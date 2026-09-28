@@ -297,7 +297,7 @@ async def test_signing_check_probes_ssh_keygen_when_agent_key_set(
 
     monkeypatch.setattr(gitops, "git", fake_git)
     loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
-                             agent_signing_key="D:/keys/agent_ed25519",
+                             agent_signing_key="D:/home/.ssh/agent_ed25519",
                              ssh_keygen_bin="D:/git/ssh-keygen.exe"),
                  runner_hub)
     calls = _fake_ssh_keygen(monkeypatch)
@@ -306,14 +306,28 @@ async def test_signing_check_probes_ssh_keygen_when_agent_key_set(
     assert len(calls) == 1
     argv = calls[0]
     assert argv[0] == "D:/git/ssh-keygen.exe"
-    assert argv[1:7] == ("-Y", "sign", "-f", "D:/keys/agent_ed25519",
+    assert argv[1:7] == ("-Y", "sign", "-f", "D:/home/.ssh/agent_ed25519",
                          "-n", "git")
+
+
+async def test_signing_check_rejects_key_outside_sensitive_dir(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """私鑰不在 .ssh／.gnupg 底下：guard 擋不住 run 讀它，自檢直接不過。"""
+    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
+                             agent_signing_key="D:/keys/agent_ed25519"),
+                 runner_hub)
+    calls = _fake_ssh_keygen(monkeypatch)
+
+    problems = await loop._check_signing()
+
+    assert calls == []
+    assert problems and ".ssh" in problems[0]
 
 
 async def test_signing_check_reports_ssh_failure(
         runner_hub, work_repo, tmp_path, monkeypatch):
     loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
-                             agent_signing_key="D:/keys/agent_ed25519"),
+                             agent_signing_key="D:/home/.ssh/agent_ed25519"),
                  runner_hub)
     calls = _fake_ssh_keygen(monkeypatch, returncode=255,
                              stderr=b"Load key: No such file")
@@ -328,7 +342,7 @@ async def test_signing_check_reports_ssh_failure(
 async def test_signing_check_reports_missing_ssh_keygen(
         runner_hub, work_repo, tmp_path, monkeypatch):
     loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
-                             agent_signing_key="D:/keys/agent_ed25519"),
+                             agent_signing_key="D:/home/.ssh/agent_ed25519"),
                  runner_hub)
 
     async def fake_exec(*argv, **kwargs):

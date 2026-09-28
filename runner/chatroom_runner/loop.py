@@ -35,6 +35,7 @@ from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
                      SOFT_STOP_TIMEOUT_FLAG_NAME, ConfigError, RunnerConfig,
                      load_config, private_project_keys,
                      public_project_keys)
+from .guard import SENSITIVE_DIR_NAMES
 from .hub import HubError, bad_transition_from, save_identity
 from .procs import no_window_kwargs
 from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
@@ -338,6 +339,12 @@ class RunnerLoop:
         """
         program = self.cfg.ssh_keygen_program
         key = self.cfg.agent_signing_key
+        # 私鑰路徑經 GIT_CONFIG_* 交給了 run。guard 對 Read 與 shell 參數
+        # 都會擋 .ssh／.gnupg 這類目錄，放在別處的話 run 讀得到私鑰本身
+        sensitive = {d.lower() for d in SENSITIVE_DIR_NAMES}
+        if not sensitive & {p.lower() for p in Path(key).parts}:
+            return [f"SSH 簽章私鑰（{key}）必須放在 .ssh 或 .gnupg 目錄下，"
+                    "run 的 guard 才擋得住讀取"]
         with tempfile.TemporaryDirectory(prefix="runner-sshsign-") as tmp:
             probe = Path(tmp) / "probe.txt"
             probe.write_text("chatroom-runner probe\n", encoding="utf-8")
