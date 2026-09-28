@@ -10,6 +10,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -258,6 +259,108 @@ async def test_gpg_bin_overrides_git(runner_hub, work_repo, tmp_path,
                  runner_hub)
 
     assert await _probe_gpg(loop, monkeypatch) == "D:/gnupg/gpg.exe"
+
+
+# ── 暫時措施：SSH key 簽章 ──────────────────────────────────────
+
+class _SignProc:
+    def __init__(self, returncode: int, stderr: bytes = b"") -> None:
+        self.returncode = returncode
+        self._stderr = stderr
+
+    async def communicate(self, *_a):
+        return b"", self._stderr
+
+    def kill(self):  # pragma: no cover
+        pass
+
+
+def _fake_ssh_keygen(monkeypatch, returncode=0, stderr=b"", write_sig=True):
+    calls: list[tuple] = []
+
+    async def fake_exec(*argv, **kwargs):
+        calls.append(argv)
+        if write_sig and returncode == 0:
+            (Path(argv[-1]).parent / (Path(argv[-1]).name + ".sig")
+             ).write_text("-----BEGIN SSH SIGNATURE-----\n", encoding="utf-8")
+        return _SignProc(returncode, stderr)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return calls
+
+
+async def test_signing_check_probes_ssh_keygen_when_agent_key_set(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """設了 agent_signing_key：驗 SSH 簽章，不跑 gpg 探針。"""
+    async def fake_git(repo, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("SSH 簽章模式還去問 gpg.program")
+
+    monkeypatch.setattr(gitops, "git", fake_git)
+    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
+                             agent_signing_key="D:/keys/agent_ed25519",
+                             ssh_keygen_bin="D:/git/ssh-keygen.exe"),
+                 runner_hub)
+    calls = _fake_ssh_keygen(monkeypatch)
+
+    assert await loop._check_signing() == []
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[0] == "D:/git/ssh-keygen.exe"
+    assert argv[1:7] == ("-Y", "sign", "-f", "D:/keys/agent_ed25519",
+                         "-n", "git")
+
+
+async def test_signing_check_reports_ssh_failure(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
+                             agent_signing_key="D:/keys/agent_ed25519"),
+                 runner_hub)
+    calls = _fake_ssh_keygen(monkeypatch, returncode=255,
+                             stderr=b"Load key: No such file")
+
+    problems = await loop._check_signing()
+
+    assert calls[0][0] == "ssh-keygen"
+    assert problems and "SSH 簽章不可用" in problems[0]
+    assert "No such file" in problems[0]
+
+
+async def test_signing_check_reports_missing_ssh_keygen(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True,
+                             agent_signing_key="D:/keys/agent_ed25519"),
+                 runner_hub)
+
+    async def fake_exec(*argv, **kwargs):
+        raise OSError("找不到")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    problems = await loop._check_signing()
+
+    assert problems and "ssh-keygen 叫不起來" in problems[0]
+
+
+async def test_signing_check_stays_on_gpg_without_agent_key(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """沒設 agent_signing_key：照舊跑 gpg 探針。"""
+    async def fake_git(repo, *args, **kwargs):
+        return gitops.GitResult(0, "", "")
+
+    monkeypatch.setattr(gitops, "git", fake_git)
+    loop = _loop(make_config(tmp_path, work_repo, require_gpg=True),
+                 runner_hub)
+    seen = {}
+
+    async def fake_exec(program, *args, **kwargs):
+        seen["argv"] = (program, *args)
+        raise OSError("探針不真的起 gpg")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    problems = await loop._check_signing()
+
+    assert seen["argv"][:2] == ("gpg", "--clearsign")
+    assert problems and "gpg 叫不起來" in problems[0]
 
 
 async def test_selfcheck_catches_a_repo_on_a_forbidden_branch(

@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -164,7 +165,7 @@ class RunnerLoop:
         if not claude_problems:
             problems += await self._check_claude_login()
         if self.cfg.require_gpg:
-            problems += await self._check_gpg()
+            problems += await self._check_signing()
         problems += await self._check_projects()
         problems += self._check_skill_dirs()
         await self._probe_mcp_servers()
@@ -316,6 +317,49 @@ class RunnerLoop:
         if proc.returncode != 0 or b"BEGIN PGP SIGNED MESSAGE" not in out:
             return [f"GPG 簽章不可用："
                     f"{err.decode('utf-8', 'replace').strip()[:200]}"]
+        return []
+
+    async def _check_signing(self) -> list[str]:
+        """run 的 commit 用哪種簽章就驗哪種。
+
+        設了 `agent_signing_key`（暫時措施）時 run 用 SSH key 簽，gpg 探針
+        驗不到那條路；沒設就照舊驗 GPG。
+        """
+        if self.cfg.agent_signing_key:
+            return await self._check_ssh_signing()
+        return await self._check_gpg()
+
+    async def _check_ssh_signing(self) -> list[str]:
+        """SSH 簽章探針：對暫存檔跑一次 `ssh-keygen -Y sign`，跟 git 簽
+        commit 用的是同一支程式、同一把 key、同一個 namespace。
+
+        key 有 passphrase 又沒有 agent 時會停在提示上——stdin 給空，
+        逾時就當作簽不了。
+        """
+        program = self.cfg.ssh_keygen_program
+        key = self.cfg.agent_signing_key
+        with tempfile.TemporaryDirectory(prefix="runner-sshsign-") as tmp:
+            probe = Path(tmp) / "probe.txt"
+            probe.write_text("chatroom-runner probe\n", encoding="utf-8")
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    program, "-Y", "sign", "-f", key, "-n", "git", str(probe),
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
+            except (OSError, ValueError) as exc:
+                return [f"ssh-keygen 叫不起來（{program}）：{exc}"]
+            try:
+                _out, err = await asyncio.wait_for(
+                    proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                proc.kill()
+                return ["ssh-keygen -Y sign 逾時（多半卡在 passphrase 提示；"
+                        "遠端沒有人能回答）"]
+            sig = probe.with_name(probe.name + ".sig")
+            if proc.returncode != 0 or not sig.is_file():
+                return [f"SSH 簽章不可用（{key}）："
+                        f"{(err or b'').decode('utf-8', 'replace').strip()[:200]}"]
         return []
 
     async def _check_projects(self) -> list[str]:

@@ -329,7 +329,20 @@ class RunnerConfig:
     # 再退回 PATH 上的 `gpg`。排程工作的 PATH 跟互動 shell 不一樣，
     # 「commit 簽得起來」與「自檢叫得到 gpg」必須指同一支才有意義
     gpg_bin: str = ""
+    # **暫時措施**：run 的 commit 改用 SSH key 簽章（艾斯維爾外出期間 GPG
+    # passphrase 快取會過期，commit 會卡在 pinentry）。只作用在 run 進程的
+    # `GIT_CONFIG_*` 覆寫，本機 git 設定與互動 session 仍是 GPG。
+    # 空字串＝關閉（預設）；清空即停用
+    agent_signing_key: str = ""
+    # `gpg.ssh.allowedSignersFile`。可空：不設就不覆寫
+    agent_allowed_signers: str = ""
+    # 簽章用的 ssh-keygen。空＝PATH 上的 `ssh-keygen`
+    ssh_keygen_bin: str = ""
     version: str = "0.1.0"
+
+    @property
+    def ssh_keygen_program(self) -> str:
+        return self.ssh_keygen_bin or "ssh-keygen"
 
     @property
     def log_dir(self) -> Path:
@@ -651,5 +664,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         else None,
         require_gpg=bool(raw.get("require_gpg", True)),
         gpg_bin=str(raw.get("gpg_bin") or ""),
+        agent_signing_key=str(raw.get("agent_signing_key") or ""),
+        agent_allowed_signers=str(raw.get("agent_allowed_signers") or ""),
+        ssh_keygen_bin=str(raw.get("ssh_keygen_bin") or ""),
         version=raw.get("version") or "0.1.0",
     )
