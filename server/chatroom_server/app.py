@@ -4134,14 +4134,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         room = await (
             await db.execute("SELECT * FROM room WHERE id=?", (room_id,))
         ).fetchone()
-        # **只管人類管理員。** agent 建的房由 agent 自己管，而 agent 沒有 UI
-        # 可以回答「封存嗎」——擋下它只會讓它卡在一個答不出來的問題上。
-        # 那種房空了會由 presence sweeper 自動封存，既有機制已經涵蓋。
+        # 建立者離開（艾斯維爾 2026-09-23 裁定；2026-09-28 補：建立者本身
+        # 也可能是 agent——任何憑證都建得了房，見 `POST /api/rooms`）：
+        # - 房內還有 active 人類 → 管理權自動交給**最早加入**的那位，
+        #   不論離開的建立者本人是人類還是 agent
+        # - 沒有人類接手，且離開的是人類本人 → 離開就封存；要 App 先問過人
+        #   （`archive_if_last`），否則 409 `leave_will_archive`，什麼都不動
+        # - 沒有人類接手，但離開的是 agent 建立者 → **不擋**。agent 沒有 UI
+        #   可以回答「封存嗎」，那種空房交給 presence sweeper 自動封存即可
+        #   （既有機制已經涵蓋）——這是唯一還留著的「只管人類」豁免
         #
-        # 人類房主離開（艾斯維爾 2026-09-23 裁定）：
-        # - 房內還有別的 active 人類 → 管理權自動交給**最早加入**的那位
-        # - 沒有 → 離開就封存；要 App 先問過人（`archive_if_last`），
-        #   否則 409 `leave_will_archive`，什麼都不動
+        # 2026-09-27 線上事故：房是 agent（Minka）開的，她離開時房內還有
+        # 兩個人類，但原本的判斷只在「離開的人是人類」才觸發移交，agent
+        # 建立者離開時完全沒有這段判斷，於是管理權永遠卡在她那個已經離場的
+        # session_key 上——兩個人類的 `is_admin` 都是 False，誰也核准不了
+        # 封存請求。「agent 建的房由 agent 自己管」那個理由只在房裡沒有
+        # 人類時成立，不能因為離開的人是 agent 就整段跳過人類接手的判斷。
+        #
         # 移交／封存與離開放在**同一次 commit**：中間失敗不會留下「管理員
         # 走了卻沒交出去」或「房封了人卻還在」的半套狀態
         heir = None
@@ -4149,7 +4158,6 @@ def create_app(config: Config | None = None) -> FastAPI:
         admin_key = room["creator_session_key"] if room is not None else None
         if (room is not None and room["status"] == "active"
                 and admin_key
-                and p["role"] == "human"
                 and p["session_key"] == admin_key):
             heir = await (await db.execute(
                 "SELECT id, display_name, session_key FROM participant"
@@ -4158,12 +4166,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, p["id"], admin_key),
             )).fetchone()
             if heir is None:
-                if not (body and body.archive_if_last):
-                    raise _err(
-                        409, "leave_will_archive",
-                        "你是這個聊天室最後一位人類成員，離開會封存聊天室。",
-                    )
-                archive_on_leave = True
+                if p["role"] == "human":
+                    if not (body and body.archive_if_last):
+                        raise _err(
+                            409, "leave_will_archive",
+                            "你是這個聊天室最後一位人類成員，離開會封存聊天室。",
+                        )
+                    archive_on_leave = True
+                # else：agent 建立者離開、房內沒有人類——維持既有行為，
+                # 不擋這次離開，交給 sweeper
             else:
                 # 與 transfer_admin 同一個 CAS：帶舊 key 當條件，沒寫到＝
                 # 有人搶先改了管理權。**不 rollback**（共用連線，見該處說明）
@@ -14143,7 +14154,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return d
 
     async def _run_ask_human(run) -> dict:
-        """派工的 agent 要問人時該問誰（stage／ticket 才有）。
+        """派工的 agent 要問人時該問誰（stage／ticket／investigate 才有）。
 
         問的對象**必須是人類**，而且 `chatroom_ask_human` 只問得到房內成員
         的顯示名，所以這裡回的是依序的候選：
@@ -14168,11 +14179,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         checklist_id = ""
         if run["kind"] == "stage":
             checklist_id = ref
-        elif run["kind"] == "ticket" and ref:
+        elif run["kind"] in ("ticket", "investigate") and ref:
+            # ref 可以是卡（task id），也可以是整個階段（checklist id）——
+            # App 的階段列派工鈕就是送 checklist id、kind 選 ticket 或
+            # investigate。先當卡查，查不到再當階段查
             task = await (await db.execute(
                 "SELECT checklist_id FROM board_task WHERE id=?",
                 (ref,))).fetchone()
-            checklist_id = task["checklist_id"] if task is not None else ""
+            if task is not None:
+                checklist_id = task["checklist_id"] or ""
+            else:
+                hit = await (await db.execute(
+                    "SELECT id FROM board_checklist WHERE id=?",
+                    (ref,))).fetchone()
+                checklist_id = ref if hit is not None else ""
         stage = None
         if checklist_id:
             stage = await (await db.execute(
@@ -15340,7 +15360,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 要問人時問誰（`_run_ask_human`）。**查不出來不能讓領單失敗**：
         # 單已經 commit 成 claimed，這裡拋例外的話執行器拿到 500、手上沒有
         # 這筆 run，而 Hub 那邊它永遠停在 claimed
-        if got["kind"] in ("stage", "ticket"):
+        if got["kind"] in ("stage", "ticket", "investigate"):
             try:
                 run["ask_human"] = await _run_ask_human(got)
             except Exception:  # noqa: BLE001

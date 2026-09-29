@@ -197,12 +197,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 這是「不進訊息流」這個決定的直接代價，不是 App 少寫了什麼——訊息流
   /// 本來就是成員列唯一的更新訊號，抽掉它就要另外給一個。
   ///
-  /// 20 秒是刻意的：它要明顯短於 subagent 的 TTL（`CHATROOM_SUBAGENT_TIMEOUT`，
-  /// 預設 900 秒），「已經被回收的成員」才不會在畫面上留超過一個輪詢週期。
-  /// 這裡不重述那個秒數——它改過一次（120 → 900），而散文裡的複本不會跟著改。
+  /// 60 秒（艾斯維爾 09/29，原為 20 秒）：仍要明顯短於 subagent 的 TTL
+  /// （`CHATROOM_SUBAGENT_TIMEOUT`），「已經被回收的成員」才不會在畫面上留
+  /// 超過一個輪詢週期。這裡不重述那個 TTL 秒數——它改過一次（120 → 900），
+  /// 而散文裡的複本不會跟著改。
+  ///
+  /// 這個輪詢不可以帶著任務板重拉：`boardParticipantIdProvider` 只 select
+  /// 房間的封存狀態，詳情重抓而狀態沒變時不會通知 board。
   void _startMemberPoll() {
     _memberPoll?.cancel();
-    _memberPoll = Timer.periodic(const Duration(seconds: 20), (_) {
+    _memberPoll = Timer.periodic(const Duration(seconds: 60), (_) {
       if (!mounted) return;
       ref.invalidate(roomDetailProvider(widget.roomId));
     });
@@ -2563,7 +2567,12 @@ class _MemberTile extends StatelessWidget {
         'kicked' => l10n.chatMemberKicked,
         _ => l10n.chatMembersGone,
       };
-    } else if (isSelf) {
+    } else if (isSelf && p.isAdmin) {
+      // 「管控權」是真的有管理權才能講的話——`p.isAdmin` 來自
+      // server 的 `creator_session_key` 比對（`is_admin`），不是「是自己」
+      // 就自動成立。建立者離開後這個房可能誰都不是管理員，這一列不能
+      // 替沒有的權限背書（2026-09-27 線上事故：兩個人類都顯示「你 ·
+      // 管控權」，但誰都核准不了封存請求）
       subtitle = l10n.chatMemberSelf;
     } else if (isIdle) {
       // 超過一小時要進位——掛了兩天的 agent 顯示「閒置 3120 分」等於要讀的人

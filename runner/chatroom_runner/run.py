@@ -1399,7 +1399,7 @@ class RunExecutor:
                 project.primary_skill),
             "livetest_block": prompts.livetest_block(
                 project.allow_browser_livetest),
-            # 要問人時問誰（Hub 領單時算好，stage／ticket 才有）
+            # 要問人時問誰（Hub 領單時算好，stage／ticket／investigate 才有）
             "ask_human_block": prompts.ask_human_block(
                 run.get("ask_human")),
         }
@@ -1610,16 +1610,40 @@ class RunExecutor:
             # Performance」，單位毫秒，stdio 也適用）。第一道防線：bridge
             # 冷啟動比預設的等待久時，拉長等待比事後重起便宜
             env["MCP_TIMEOUT"] = str(self.cfg.mcp_startup_timeout_ms)
-        env.update(self._git_credential_isolation(env))
+        env.update(self._git_credential_isolation(
+            env, self._ssh_signing_config()))
         return env
 
+    def _ssh_signing_config(self) -> list[tuple[str, str]]:
+        """暫時措施：run 的 commit 改用 SSH key 簽章。
+
+        艾斯維爾外出期間 GPG passphrase 快取會過期，run 的 commit 會卡在
+        pinentry。只在 `agent_signing_key` 有值時產生；清空即停用。本機 git
+        設定與互動 session 不受影響。
+        """
+        if not self.cfg.agent_signing_key:
+            return []
+        pairs = [
+            ("gpg.format", "ssh"),
+            ("user.signingkey", self.cfg.agent_signing_key),
+            ("gpg.ssh.program", self.cfg.ssh_keygen_program),
+        ]
+        if self.cfg.agent_allowed_signers:
+            pairs.append(("gpg.ssh.allowedSignersFile",
+                          self.cfg.agent_allowed_signers))
+        return pairs
+
     @staticmethod
-    def _git_credential_isolation(env: dict[str, str]) -> dict[str, str]:
+    def _git_credential_isolation(
+            env: dict[str, str],
+            extra: list[tuple[str, str]] | None = None) -> dict[str, str]:
         """把推送憑證擋在 run 進程外（艾斯維爾裁決 09/16）。
 
         ``GIT_CONFIG_*`` 是**這個進程**的覆寫，本機 git 設定一個字都沒動：
         helper 清單被清空，run 裡的 push／fetch 對私有遠端拿不到憑證就失敗。
         再關掉終端提示與 askpass，否則它會停在一個沒有人能回答的問句上。
+
+        ``extra`` 是要排在 ``credential.helper`` 之前的其他覆寫（SSH 簽章）。
 
         ⚠️ 已經有別的 ``GIT_CONFIG_COUNT`` 用途時**接在後面**，不是覆蓋：
         直接寫 1 會把前面那幾條設定連號一起吃掉。
@@ -1629,14 +1653,18 @@ class RunExecutor:
         except ValueError:
             count = 0
         count = max(count, 0)
-        return {
-            f"GIT_CONFIG_KEY_{count}": "credential.helper",
-            f"GIT_CONFIG_VALUE_{count}": "",
-            "GIT_CONFIG_COUNT": str(count + 1),
+        out: dict[str, str] = {}
+        for key, value in [*(extra or []), ("credential.helper", "")]:
+            out[f"GIT_CONFIG_KEY_{count}"] = key
+            out[f"GIT_CONFIG_VALUE_{count}"] = value
+            count += 1
+        out.update({
+            "GIT_CONFIG_COUNT": str(count),
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": str(ASKPASS_SCRIPT),
             "SSH_ASKPASS": str(ASKPASS_SCRIPT),
-        }
+        })
+        return out
 
     def _bridge_dir(self) -> Path:
         """bridge（`chatroom_mcp`）的模組路徑。run 的 mcp.json 也用同一份。"""
@@ -2029,7 +2057,11 @@ class RunExecutor:
             allowed_branches=list(repo.allowed_branches),
             allowed_domains=list(self.cfg.allowed_domains),
             protected_paths=[self.cfg.state_dir, self.cfg.claude_config_dir,
-                             HOOKS_DIR.parent],
+                             HOOKS_DIR.parent,
+                             # SSH 簽章私鑰（暫時措施）：路徑經 GIT_CONFIG_*
+                             # 交給了 run，Read／Write 要精確擋下
+                             *([Path(self.cfg.agent_signing_key)]
+                               if self.cfg.agent_signing_key else [])],
             # run 目錄整個在 state_dir 底下，本來會被「執行器自己的目錄」擋掉。
             # 附件是 agent 自己要來的，讀得到才有意義——只鑿這一個洞
             downloads_dir=downloads,

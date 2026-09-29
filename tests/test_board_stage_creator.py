@@ -6,7 +6,7 @@
 - 建階段時記下創建者的**種類**（名字與 actor_key 早就有）。
 - 存量階段的種類從記錄過的事實回推（板成員列、建立當下的 participant），
   兩邊都查不到的**留空**——猜成 human 會讓 agent 去問一個 agent。
-- 領單時 Hub 給 stage／ticket run 一串依序的提問對象：階段創建者 → 板
+- 領單時 Hub 給 stage／ticket／investigate run 一串依序的提問對象：階段創建者 → 板
   owner → 派工者，**只列人類**。創建者是 agent 就從下一位開始。
 """
 
@@ -179,6 +179,43 @@ async def test_a_ticket_run_follows_its_card_up_to_the_stage(tmp_path):
 
         run = await _dispatch_and_claim(client, rid, owner, "ticket", tid)
         assert run["ask_human"]["targets"][0]["name"] == "戴爾"
+
+
+@pytest.mark.parametrize("kind", ["ticket", "investigate"])
+async def test_a_run_aimed_at_a_whole_stage_asks_its_creator(tmp_path, kind):
+    """App 的階段列派工鈕送的 ref 是 checklist id，kind 可選 ticket／investigate。
+
+    2026-09-29 線上實例：ticket 的 ref 是階段 id，被當成 task id 查不到，
+    名單退成「板 owner → 派工者」，agent 去問了板 owner 而不是開階段的人。
+    """
+    app, client = await _client(tmp_path, f"ask-stage-ref-{kind}")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, app)
+        owner = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        maker = await _join(client, rid, "human-b", "戴爾", role="human")
+        cid = await _stage(client, rid, owner, maker)
+
+        run = await _dispatch_and_claim(client, rid, owner, kind, cid)
+        ask = run["ask_human"]
+        assert ask["stage_creator"]["name"] == "戴爾"
+        assert [(t["name"], t["source"]) for t in ask["targets"]] == [
+            ("戴爾", "stage_creator"), ("艾斯維爾", "board_owner")]
+
+
+async def test_an_investigate_run_follows_its_card_up_to_the_stage(tmp_path):
+    app, client = await _client(tmp_path, "ask-investigate-task")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client, app)
+        owner = await _join(client, rid, "human-a", "艾斯維爾", role="human")
+        maker = await _join(client, rid, "human-b", "戴爾", role="human")
+        cid = await _stage(client, rid, owner, maker)
+        tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                 json={"title": "卡"},
+                                 headers=owner)).json()["id"]
+
+        run = await _dispatch_and_claim(client, rid, owner, "investigate", tid)
+        assert [t["source"] for t in run["ask_human"]["targets"]] == [
+            "stage_creator", "board_owner"]
 
 
 async def test_an_agent_made_stage_sends_questions_to_a_human_instead(

@@ -192,6 +192,58 @@ async def test_the_last_human_admin_can_leave_by_archiving_first(tmp_path):
         assert r.status_code == 200, r.text
 
 
+async def test_agent_creator_leaving_hands_over_to_a_human(tmp_path):
+    """建立者是 agent 時，離開一樣要交給房內最早加入的人類。
+
+    2026-09-27 線上事故：房是 agent（Minka）開的，`creator_session_key` 綁在
+    她的 session 上；她離開時房內還有兩個人類，但既有邏輯只在「離開的人是
+    人類」才觸發移交（見上面「只管人類管理員」那段註解）——agent 建立者離開
+    時完全沒有這段判斷，於是管理權永遠卡在一個已經離場的 session_key 上，
+    兩個人類的 `you_are_admin`／`is_admin` 都是 False，誰也核准不了封存
+    請求。「agent 建的房由 agent 自己管」那個理由只在房裡沒有人類時成立；
+    這裡房內明明還有人類在，不該被那條理由擋住。
+    """
+    app, client = await _make(tmp_path, "agent_creator")
+    async with app.router.lifespan_context(app), client:
+        room_id = await _room(client, key="minka")
+        bot = await _join(client, room_id, "minka", "Minka",
+                          role="agent", kind="claude")
+        first = await _join(client, room_id, "bernie", "Bernie")
+        second = await _join(client, room_id, "clock", "Bernie (Clock)")
+
+        r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(bot))
+        assert r.status_code == 200, r.text
+        # 最早加入的人類（Bernie）接手，不是隨便一個
+        assert r.json()["admin_transferred_to"]["participant_id"] ==             first["participant_id"]
+
+        members = await _members(client, room_id, first)
+        assert members["Bernie"]["is_admin"] is True
+        assert members["Bernie (Clock)"]["is_admin"] is False
+
+        # `you_are_admin` 只認 X-Session-Key（見 `_admin_or_403` 旁的裁定），
+        # 不像 `is_admin`／`_admin_or_403` 那樣還有 X-Participant-Id 的後路
+        detail = await client.get(f"/api/rooms/{room_id}",
+                                  headers={"X-Session-Key": "bernie"})
+        assert detail.json()["you_are_admin"] is True
+
+
+async def test_agent_creator_leaving_alone_is_not_blocked(tmp_path):
+    """房裡沒有人類時，agent 建立者離開不該被「離開會封存」擋下來。
+
+    agent 沒有 UI 可以回答 `archive_if_last` 那個問題——那種空房交給
+    presence sweeper 自動封存即可，這條路徑不能因為新增的移交邏輯被卡住。
+    """
+    app, client = await _make(tmp_path, "agent_alone")
+    async with app.router.lifespan_context(app), client:
+        room_id = await _room(client, key="minka")
+        bot = await _join(client, room_id, "minka", "Minka",
+                          role="agent", kind="claude")
+
+        r = await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(bot))
+        assert r.status_code == 200, r.text
+        assert r.json()["admin_transferred_to"] is None
+
+
 async def test_after_handing_over_the_old_admin_can_leave(tmp_path):
     app, client = await _make(tmp_path, "then_leave")
     async with app.router.lifespan_context(app), client:

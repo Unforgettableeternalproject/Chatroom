@@ -81,6 +81,10 @@ INJECT_FILE_NAME = "inject.jsonl"
 # 「房裡跟它講過什麼」的東西
 INJECT_CURSOR_NAME = "inject.cursor"
 
+# 登入憑證與簽章金鑰所在的目錄。guard 據此擋讀寫；設定載入據此檢查
+# agent_signing_key 的位置（放這裡而非 guard，guard 本身 import config）
+SENSITIVE_DIR_NAMES = (".claude", ".gnupg", ".ssh")
+
 
 class ConfigError(Exception):
     """設定檔缺漏或形狀不對。啟動時就該炸，不要帶著半套設定去領單。"""
@@ -329,7 +333,20 @@ class RunnerConfig:
     # 再退回 PATH 上的 `gpg`。排程工作的 PATH 跟互動 shell 不一樣，
     # 「commit 簽得起來」與「自檢叫得到 gpg」必須指同一支才有意義
     gpg_bin: str = ""
+    # **暫時措施**：run 的 commit 改用 SSH key 簽章（艾斯維爾外出期間 GPG
+    # passphrase 快取會過期，commit 會卡在 pinentry）。只作用在 run 進程的
+    # `GIT_CONFIG_*` 覆寫，本機 git 設定與互動 session 仍是 GPG。
+    # 空字串＝關閉（預設）；清空即停用
+    agent_signing_key: str = ""
+    # `gpg.ssh.allowedSignersFile`。可空：不設就不覆寫
+    agent_allowed_signers: str = ""
+    # 簽章用的 ssh-keygen。空＝PATH 上的 `ssh-keygen`
+    ssh_keygen_bin: str = ""
     version: str = "0.1.0"
+
+    @property
+    def ssh_keygen_program(self) -> str:
+        return self.ssh_keygen_bin or "ssh-keygen"
 
     @property
     def log_dir(self) -> Path:
@@ -588,6 +605,22 @@ def load_config(path: str | os.PathLike[str] | None = None) -> RunnerConfig:
     return config_from_dict(raw, base_dir=cfg_path.parent)
 
 
+def _signing_key_from(raw: dict) -> str:
+    """暫時措施的 SSH 簽章私鑰。**只收 .ssh／.gnupg 底下的路徑**。
+
+    路徑經 `GIT_CONFIG_*` 交給了 run，guard 對這類目錄的 Read 與 shell 參數
+    都會擋；放在別處的話 run 讀得到私鑰本身。放在載入這一層而不是自檢：
+    `require_gpg=false` 與重讀設定都不跑自檢。
+    """
+    key = str(raw.get("agent_signing_key") or "")
+    if key and not ({d.lower() for d in SENSITIVE_DIR_NAMES}
+                    & {p.lower() for p in Path(key).parts}):
+        raise ConfigError(
+            f"agent_signing_key（{key}）必須放在 .ssh 或 .gnupg 目錄下，"
+            "run 的 guard 才擋得住讀取私鑰。")
+    return key
+
+
 def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
     workspaces_raw = _alias_get(raw, "workspaces", "projects", "設定檔") or {}
     if not workspaces_raw:
@@ -651,5 +684,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         else None,
         require_gpg=bool(raw.get("require_gpg", True)),
         gpg_bin=str(raw.get("gpg_bin") or ""),
+        agent_signing_key=_signing_key_from(raw),
+        agent_allowed_signers=str(raw.get("agent_allowed_signers") or ""),
+        ssh_keygen_bin=str(raw.get("ssh_keygen_bin") or ""),
         version=raw.get("version") or "0.1.0",
     )

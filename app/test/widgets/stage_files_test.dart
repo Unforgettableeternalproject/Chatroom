@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:chatroom_app/api/attachments_api.dart';
@@ -8,8 +9,10 @@ import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/stage_file.dart';
 import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/state/board_providers.dart';
+import 'package:chatroom_app/state/messages_providers.dart';
 import 'package:chatroom_app/widgets/stage_files.dart';
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -411,4 +414,159 @@ void main() {
       expect(find.byTooltip('從階段卸除'), findsNothing);
     });
   });
+
+  group('加素材', () {
+    testWidgets(
+        '🔴 選檔期間畫面重建過一次，選好的檔照樣上傳並掛上——不可以靜默丟掉',
+        (tester) async {
+      final uploads = _RecordingAttachmentsApi();
+      final boards = _RecordingBoardsApi();
+      final picking = Completer<List<PlatformFile>>();
+      // 按鈕所在的那一層：切成 false 就是「板重拉、底下整棵樹換掉」
+      final showButton = ValueNotifier(true);
+      addTearDown(showButton.dispose);
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          boardsApiProvider.overrideWithValue(boards),
+          attachmentsApiProvider.overrideWithValue(uploads),
+          identityProvider.overrideWith((ref, roomId) async =>
+              (participantId: 'p-$roomId', displayName: '艾斯維爾')),
+          initialConfigProvider.overrideWithValue(const AppConfig(
+            serverUrl: 'http://hub.test',
+            token: 'tok',
+            themeMode: ThemeModePref.dark,
+            preferredName: 'Bernie',
+            deviceKey: 'device-key',
+          )),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: kTestLocalizationsDelegates,
+          supportedLocales: kTestSupportedLocales,
+          theme: buildUepTheme(Brightness.dark),
+          home: Scaffold(
+            body: Consumer(
+              builder: (context, ref, _) => ValueListenableBuilder<bool>(
+                valueListenable: showButton,
+                builder: (_, show, _) => show
+                    ? Builder(
+                        builder: (buttonContext) => TextButton(
+                          onPressed: () => pickAndAttachStageFile(
+                            buttonContext,
+                            boardId: 'b1',
+                            checklistId: 'c1',
+                            roomId: 'r1',
+                            actions: ref.read(_roomActionsProvider),
+                            pickFiles: () => picking.future,
+                          ),
+                          child: const Text('加'),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('加'));
+      await tester.pump();
+
+      // 檔案對話框還開著時板重拉了一次
+      showButton.value = false;
+      await tester.pump();
+      expect(find.text('加'), findsNothing);
+
+      // 選兩個檔：多檔不問備註，走的是逐檔上傳那條迴圈
+      picking.complete([
+        _PickedFile('a.log', r'C:\tmp\a.log'),
+        _PickedFile('b.png', r'C:\tmp\b.png'),
+      ]);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
+
+      expect(uploads.uploaded, ['a.log', 'b.png'],
+          reason: '選好的檔在重建之後沒被送出去');
+      expect(boards.attached, [('b1', 'c1', 'up-a.log'), ('b1', 'c1', 'up-b.png')]);
+    });
+  });
+}
+
+/// 房軸的動作——「加素材」只有房軸有（附件要上傳到一間房）。
+final _roomActionsProvider =
+    Provider<BoardActions>((ref) => BoardActions(ref, 'r1'));
+
+/// 測試用的選檔結果。只有名字與路徑是這條路會讀的。
+final class _PickedFile extends PlatformFile {
+  _PickedFile(this.name, this._path);
+
+  @override
+  final String name;
+  final String _path;
+
+  @override
+  String? get path => _path;
+
+  @override
+  Uri get uri => Uri.file(_path, windows: true);
+
+  @override
+  get xFile => throw UnimplementedError();
+
+  @override
+  Future<int> length() async => 0;
+
+  @override
+  Future<Uint8List> readAsBytes() async => Uint8List(0);
+
+  @override
+  Stream<Uint8List> readAsByteStream() => const Stream.empty();
+}
+
+class _RecordingAttachmentsApi extends AttachmentsApi {
+  _RecordingAttachmentsApi() : super(Dio());
+
+  final uploaded = <String>[];
+
+  @override
+  Future<UploadedAttachment> uploadPath(
+    String roomId, {
+    required String participantId,
+    required String path,
+    required String filename,
+    String? mime,
+    ProgressCallback? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    uploaded.add(filename);
+    return UploadedAttachment(
+        id: 'up-$filename', filename: filename, mime: mime ?? '', size: 0);
+  }
+}
+
+class _RecordingBoardsApi extends BoardsApi {
+  _RecordingBoardsApi() : super(Dio());
+
+  final attached = <(String, String, String)>[];
+
+  @override
+  Future<StageFile> addStageFile(
+    String boardId,
+    String checklistId, {
+    required String attachmentId,
+    String note = '',
+    String? participantId,
+    String? sessionKey,
+  }) async {
+    attached.add((boardId, checklistId, attachmentId));
+    return StageFile(
+      id: 'sf-$attachmentId',
+      checklistId: checklistId,
+      attachmentId: attachmentId,
+      filename: '',
+      mime: '',
+      size: 0,
+    );
+  }
 }
