@@ -197,12 +197,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 這是「不進訊息流」這個決定的直接代價，不是 App 少寫了什麼——訊息流
   /// 本來就是成員列唯一的更新訊號，抽掉它就要另外給一個。
   ///
-  /// 20 秒是刻意的：它要明顯短於 subagent 的 TTL（`CHATROOM_SUBAGENT_TIMEOUT`，
-  /// 預設 900 秒），「已經被回收的成員」才不會在畫面上留超過一個輪詢週期。
-  /// 這裡不重述那個秒數——它改過一次（120 → 900），而散文裡的複本不會跟著改。
+  /// 60 秒（艾斯維爾 09/29，原為 20 秒）：仍要明顯短於 subagent 的 TTL
+  /// （`CHATROOM_SUBAGENT_TIMEOUT`），「已經被回收的成員」才不會在畫面上留
+  /// 超過一個輪詢週期。這裡不重述那個 TTL 秒數——它改過一次（120 → 900），
+  /// 而散文裡的複本不會跟著改。
+  ///
+  /// 這個輪詢不可以帶著任務板重拉：`boardParticipantIdProvider` 只 select
+  /// 房間的封存狀態，詳情重抓而狀態沒變時不會通知 board。
   void _startMemberPoll() {
     _memberPoll?.cancel();
-    _memberPoll = Timer.periodic(const Duration(seconds: 20), (_) {
+    _memberPoll = Timer.periodic(const Duration(seconds: 60), (_) {
       if (!mounted) return;
       ref.invalidate(roomDetailProvider(widget.roomId));
     });

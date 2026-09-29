@@ -132,9 +132,16 @@ final boardParticipantIdProvider =
   // ⚠️ 一定要 await，**不能讀 `.value`**：房間詳情還在載入時 `.value` 是
   // null，那會把封存房判成 active 而去 join，拿一個 409 回來並被快取——
   // 也就是這個 provider 存在的理由本身。第一次進房正是它還在載入的時候
-  final detail = await ref.watch(roomDetailProvider(roomId).future);
+  //
+  // 🔴 **用 selectAsync 只取「封存與否」，不 watch 整份詳情的 `.future`**：
+  // 聊天室的成員輪詢會定期 invalidate 房間詳情，watch `.future` 的話每次都
+  // 讓這裡重建 ⇒ [boardProvider] 跟著重拉一次 board。selectAsync 在重抓期間
+  // 不通知、結果相同時也不通知；第一次載入時仍會等到真正的值才回，上面那條
+  // 「不能讀 `.value`」的理由照樣成立。
+  final archived = await ref.watch(roomDetailProvider(roomId)
+      .selectAsync((d) => d.room.status == 'archived'));
   final saved = savedIdentityForBoard(
-    archived: detail.room.status == 'archived',
+    archived: archived,
     saved: ref.read(settingsRepoProvider).participantId(roomId),
   );
   return saved ??

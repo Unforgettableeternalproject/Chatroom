@@ -43,15 +43,23 @@ String stageFileErrorText(AppLocalizations l10n, ApiException e) {
 Future<T?> runStageFileAction<T>(
   BuildContext context,
   Future<T> Function() body,
+) =>
+    _runStageFileAction(ScaffoldMessenger.maybeOf(context), body);
+
+/// [runStageFileAction] 的本體，**不拿呼叫端的 context**：錯誤訊息走事先
+/// 抓好的 [messenger]。body 跑的那段時間裡呼叫端的 widget 可能已經被重建
+/// 掉了，而 ScaffoldMessenger 在 App 那一層，活得比它久。
+Future<T?> _runStageFileAction<T>(
+  ScaffoldMessengerState? messenger,
+  Future<T> Function() body,
 ) async {
   try {
     return await body();
   } on ApiException catch (e) {
-    if (!context.mounted) return null;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(
-            content: Text(
-                stageFileErrorText(AppLocalizations.of(context), e))));
+    if (messenger == null || !messenger.mounted) return null;
+    messenger.showSnackBar(SnackBar(
+        content: Text(
+            stageFileErrorText(AppLocalizations.of(messenger.context), e))));
     return null;
   }
 }
@@ -356,24 +364,34 @@ class _StageFileRow extends ConsumerWidget {
 /// 🔴 **要有房才做得到**：附件是房內資源（`POST /api/rooms/{rid}/attachments`），
 /// 而 Board Library 那條路徑上連上傳到哪間房都答不出來。呼叫端在沒有房時
 /// 不要畫這顆按鈕。
+///
+/// 🔴 **選好檔之後就不再依賴 [context] 還活著。** 板的 provider 依賴一動
+/// （WS 水位、房間詳情每 20 秒刷新）就會重拉，呼叫端那一層可能在檔案對話框
+/// 開著時被整個換掉。這裡原本每一步都 `if (!context.mounted) return`——
+/// 結果是使用者選好的檔**靜默消失**，連一句失敗都沒有（2026-09-29）。
+/// 所以要用的東西（provider 容器、訊息列）在選檔前先拿好。
 Future<void> pickAndAttachStageFile(
-  BuildContext context,
-  WidgetRef ref, {
+  BuildContext context, {
   required String boardId,
   required String checklistId,
   required String roomId,
   required BoardActions actions,
+  @visibleForTesting Future<List<PlatformFile>> Function()? pickFiles,
 }) async {
   // file_picker 12 起 pickFiles 是靜態方法，取消時回空 list 而不是 null，
   // 而且預設就是多選——選了三個檔案，這裡就要問三次、掛三次
-  final picked = await FilePicker.pickFiles();
-  if (picked.isEmpty || !context.mounted) return;
+  final container = ProviderScope.containerOf(context, listen: false);
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final picked = await (pickFiles ?? FilePicker.pickFiles)();
+  if (picked.isEmpty) return;
 
   String note = '';
-  if (shouldAskStageNote(picked.length)) {
+  // 備註對話框要 context。呼叫端已經不在時**跳過備註、照樣掛上**：備註
+  // 之後在清單上補得回來（編輯鈕），選好的檔丟了就只能重選
+  if (shouldAskStageNote(picked.length) && context.mounted) {
     final answer = await showStageNoteDialog(context, filename: picked.first.name);
     // 取消就是整批都反悔了
-    if (answer == null || !context.mounted) return;
+    if (answer == null) return;
     note = answer;
   }
 
@@ -382,14 +400,13 @@ Future<void> pickAndAttachStageFile(
   for (final file in picked) {
     final path = file.path;
     if (path == null) continue;
-    if (!context.mounted) return;
 
     // 這一份失敗（重複、沒權限……）[runStageFileAction] 已經說過話了，
     // 不能讓它擋住其餘檔案——選了五個檔案，其中一個已經掛過，不該讓剩下
     // 四個因此連送都沒送出去
-    await runStageFileAction(context, () async {
-      final identity = await ref.read(identityProvider(roomId).future);
-      final uploaded = await ref.read(attachmentsApiProvider).uploadPath(
+    await _runStageFileAction(messenger, () async {
+      final identity = await container.read(identityProvider(roomId).future);
+      final uploaded = await container.read(attachmentsApiProvider).uploadPath(
             roomId,
             participantId: identity.participantId,
             path: path,
