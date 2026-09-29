@@ -270,6 +270,19 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           if (_archived) _archivedNotice(context),
           Expanded(
             child: async.when(
+              // 🔴 **重算時不要把整棵樹換成轉圈圈**（想法板
+              // scratchpad_screen 修過同一件事）。
+              //
+              // `boardProvider` watch 了 WS 水位（`boardSignalProvider`）與
+              // `boardParticipantIdProvider`（只在封存狀態變了才通知，成員
+              // 輪詢不會再牽動它）。依賴一動就是 reload，
+              // `skipLoadingOnReload` 預設 false ⇒ 畫面真的閃過 loading，底下
+              // 所有 State 一起 dispose。
+              //
+              // 使用者看到的是「**按了加素材、選好檔，畫面自己刷新一下，
+              // 檔案就不見了**」（2026-09-29）——選檔對話框開著的那段時間
+              // 剛好夠碰上一次。
+              skipLoadingOnReload: true,
               loading: () => const Center(child: CircularProgressIndicator()),
               // 「你還不是這塊板的成員」**不是錯誤，是狀態**——房裡的人本來
               // 就不自動是板成員（艾斯維爾裁決 A+）。畫成紅色的錯誤 + 重試
@@ -1655,7 +1668,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   ? null
                   : () => pickAndAttachStageFile(
                         context,
-                        ref,
                         boardId: _boardIdOrNull!,
                         checklistId: c.id,
                         roomId: widget.roomId!,

@@ -143,4 +143,70 @@ void main() {
 
     expect(s.tasksOf('c1').map((t) => t.id).toList(), ['a', 'b', 'c']);
   });
+
+  group('🔴 先發後至的舊回應不可以蓋掉較新的列', () {
+    // boardProvider 的依賴一動就重拉一次增量，兩次 fetch 可能並發：先發的
+    // 那次帶的是舊水位、內容也舊，卻可能比較晚回來。以 id 整列覆寫的話，
+    // 剛改好的標題會在下一秒被倒回去
+    Map<String, dynamic> obj(String id, {int seq = 1, String title = 'O'}) =>
+        {'id': id, 'title': title, 'board_seq': seq};
+    Map<String, dynamic> list(String id, {int seq = 1, String title = 'C'}) =>
+        {'id': id, 'objective_id': 'o1', 'title': title, 'board_seq': seq};
+
+    BoardDelta delta(int seq,
+            {List<Map<String, dynamic>> objectives = const [],
+            List<Map<String, dynamic>> checklists = const [],
+            List<Map<String, dynamic>> tasks = const [],
+            bool full = false}) =>
+        BoardDelta.fromJson({
+          'board_seq': seq,
+          'full': full,
+          'objectives': objectives,
+          'checklists': checklists,
+          'tasks': tasks,
+        });
+
+    test('Objective', () {
+      var s = const BoardSnapshot()
+          .merge(delta(5, objectives: [obj('o1', seq: 5, title: '新')]));
+      s = s.merge(delta(3, objectives: [obj('o1', seq: 3, title: '舊')]));
+      expect(s.objectives['o1']!.title, '新');
+    });
+
+    test('Checklist', () {
+      var s = const BoardSnapshot()
+          .merge(delta(5, checklists: [list('c1', seq: 5, title: '新')]));
+      s = s.merge(delta(3, checklists: [list('c1', seq: 3, title: '舊')]));
+      expect(s.checklists['c1']!.title, '新');
+    });
+
+    test('Task', () {
+      var s = const BoardSnapshot()
+          .merge(delta(5, tasks: [_task('t1', seq: 5, title: '新')]));
+      s = s.merge(delta(3, tasks: [_task('t1', seq: 3, title: '舊')]));
+      expect(s.tasks['t1']!.title, '新');
+    });
+
+    test('同一個 seq 照樣覆蓋——舊 Hub 不送 board_seq 時全是 0', () {
+      var s = const BoardSnapshot()
+          .merge(delta(0, tasks: [_task('t1', seq: 0, title: '一')]));
+      s = s.merge(delta(0, tasks: [_task('t1', seq: 0, title: '二')]));
+      expect(s.tasks['t1']!.title, '二');
+    });
+
+    test('比既有列舊的 tombstone 不移除那一列', () {
+      var s = const BoardSnapshot()
+          .merge(delta(5, tasks: [_task('t1', seq: 5, title: '新')]));
+      s = s.merge(delta(3, tasks: [_task('t1', seq: 3, deleted: true)]));
+      expect(s.tasks.containsKey('t1'), isTrue);
+    });
+
+    test('全量回應照舊整份取代，不逐列比 seq', () {
+      var s = const BoardSnapshot()
+          .merge(delta(5, tasks: [_task('t1', seq: 5, title: '新')]));
+      s = s.merge(
+          delta(3, tasks: [_task('t1', seq: 3, title: '全量')], full: true));
+      expect(s.tasks['t1']!.title, '全量');
+    });
+  });
 }

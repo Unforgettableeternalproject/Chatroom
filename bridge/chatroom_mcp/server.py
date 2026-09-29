@@ -2363,7 +2363,7 @@ def chatroom_run_request(room_id: str, kind: str, project: str, ref: str,
     - ``push``——固定腳本，不經模型（由人類從儀表板按）
 
     ``ref`` 是目標：``stage`` 給 checklist id、``ticket`` / ``investigate``
-    給 task id、``push`` 給 repo key。``project`` 要是**某台在線執行器宣告過
+    給 task id（單張卡）或 checklist id（整個階段）、``push`` 給 repo key。``project`` 要是**某台在線執行器宣告過
     的 key**，否則當場 409 ``project_not_served``——打錯一個字與「那台還沒
     開機」在佇列上長得一模一樣，都是一筆永遠排著的 queued。
 

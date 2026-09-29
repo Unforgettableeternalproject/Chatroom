@@ -987,7 +987,8 @@ class BoardSnapshot {
 
   /// 套用一次增量。三種變更各有各的處理：
   ///
-  /// - **新增／修改**——直接以 id 覆蓋（Hub 回的永遠是該列的現況，不是 patch）
+  /// - **新增／修改**——以 id 整列覆蓋（Hub 回的永遠是該列的現況，不是 patch），
+  ///   但**只在該列的 board_seq 不比手上那份舊時**
   /// - **刪除**——`deleted: true` 是 tombstone，**從快取移除**。留著會讓
   ///   board 上出現一張已經不存在的卡；忽略它則那張卡永遠不會消失
   ///
@@ -1007,7 +1008,20 @@ class BoardSnapshot {
         ? <int, BoardDirective>{}
         : Map<int, BoardDirective>.from(directives);
 
+    // 🔴 **比該列自己的 board_seq，舊的不蓋新的。** 兩次 fetch 可能並發
+    // （依賴一動就重拉），先發的那次內容較舊卻可能較晚回來——以 id 整列
+    // 覆寫的話，剛改好的列會被倒回去。同 seq 照樣覆蓋：舊 Hub 不送
+    // board_seq 時全是 0，那時只能退回「後到的算數」。
+    //
+    // tombstone 也照同一條比：比既有列舊的刪除不是這一列的現況。
+    //
+    // ⚠️ 擋不住的另一個方向：新的 tombstone 先到、列已移除，之後舊回應
+    // 才把活著的列帶回來——那時手上沒有東西可比，它會被放回去。要擋得
+    // 在快照裡留 tombstone，這裡沒有做。
+    bool fresh(int? held, int incoming) => held == null || incoming >= held;
+
     for (final o in delta.objectives) {
+      if (!fresh(objs[o.id]?.boardSeq, o.boardSeq)) continue;
       if (o.deleted) {
         objs.remove(o.id);
       } else {
@@ -1015,6 +1029,7 @@ class BoardSnapshot {
       }
     }
     for (final c in delta.checklists) {
+      if (!fresh(lists[c.id]?.boardSeq, c.boardSeq)) continue;
       if (c.deleted) {
         lists.remove(c.id);
       } else {
@@ -1022,6 +1037,7 @@ class BoardSnapshot {
       }
     }
     for (final t in delta.tasks) {
+      if (!fresh(tsks[t.id]?.boardSeq, t.boardSeq)) continue;
       if (t.deleted) {
         tsks.remove(t.id);
       } else {

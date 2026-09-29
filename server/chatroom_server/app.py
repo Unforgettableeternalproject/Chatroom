@@ -14154,7 +14154,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return d
 
     async def _run_ask_human(run) -> dict:
-        """派工的 agent 要問人時該問誰（stage／ticket 才有）。
+        """派工的 agent 要問人時該問誰（stage／ticket／investigate 才有）。
 
         問的對象**必須是人類**，而且 `chatroom_ask_human` 只問得到房內成員
         的顯示名，所以這裡回的是依序的候選：
@@ -14179,11 +14179,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         checklist_id = ""
         if run["kind"] == "stage":
             checklist_id = ref
-        elif run["kind"] == "ticket" and ref:
+        elif run["kind"] in ("ticket", "investigate") and ref:
+            # ref 可以是卡（task id），也可以是整個階段（checklist id）——
+            # App 的階段列派工鈕就是送 checklist id、kind 選 ticket 或
+            # investigate。先當卡查，查不到再當階段查
             task = await (await db.execute(
                 "SELECT checklist_id FROM board_task WHERE id=?",
                 (ref,))).fetchone()
-            checklist_id = task["checklist_id"] if task is not None else ""
+            if task is not None:
+                checklist_id = task["checklist_id"] or ""
+            else:
+                hit = await (await db.execute(
+                    "SELECT id FROM board_checklist WHERE id=?",
+                    (ref,))).fetchone()
+                checklist_id = ref if hit is not None else ""
         stage = None
         if checklist_id:
             stage = await (await db.execute(
@@ -15351,7 +15360,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 要問人時問誰（`_run_ask_human`）。**查不出來不能讓領單失敗**：
         # 單已經 commit 成 claimed，這裡拋例外的話執行器拿到 500、手上沒有
         # 這筆 run，而 Hub 那邊它永遠停在 claimed
-        if got["kind"] in ("stage", "ticket"):
+        if got["kind"] in ("stage", "ticket", "investigate"):
             try:
                 run["ask_human"] = await _run_ask_human(got)
             except Exception:  # noqa: BLE001
