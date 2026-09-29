@@ -1399,7 +1399,7 @@ class RunExecutor:
                 project.primary_skill),
             "livetest_block": prompts.livetest_block(
                 project.allow_browser_livetest),
-            # 要問人時問誰（Hub 領單時算好，stage／ticket 才有）
+            # 要問人時問誰（Hub 領單時算好，stage／ticket／investigate 才有）
             "ask_human_block": prompts.ask_human_block(
                 run.get("ask_human")),
         }
