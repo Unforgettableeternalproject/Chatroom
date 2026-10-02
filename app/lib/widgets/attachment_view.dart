@@ -15,8 +15,11 @@ import '../models/attachment.dart';
 import 'stage_files.dart';
 
 /// 附件的取檔網址。`GET /api/attachments/{id}`——用的是附件 id。
+///
+/// 伺服器網址結尾的 `/` 要先去掉：設定裡填 `http://host:8787/` 的人會組出
+/// `//api/attachments/...`，Hub 對那條路徑回 404，圖片只剩空白。
 String attachmentUrl(String serverUrl, String attachmentId) =>
-    '$serverUrl/api/attachments/$attachmentId';
+    '${serverUrl.replaceAll(RegExp(r'/+$'), '')}/api/attachments/$attachmentId';
 
 /// 取附件要帶的標頭。房內身分是 Hub 的讀取邊界。
 ///
