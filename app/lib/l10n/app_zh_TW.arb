@@ -1803,6 +1803,10 @@
   "@opsLimitReasonManual": {
     "description": "受限原因：人工暫停"
   },
+  "opsLimitReasonLoginExpired": "登入已過期",
+  "@opsLimitReasonLoginExpired": {
+    "description": "受限原因：執行器的 claude 登入過期（login_expired）"
+  },
   "opsTemplateInvestigateLabel": "調查（只讀）",
   "@opsTemplateInvestigateLabel": {
     "description": "派工模板：調查"
@@ -6585,13 +6589,75 @@
   "@hostRunnerLoginMissing": {
     "description": "執行器的設定目錄底下沒有憑證"
   },
-  "hostRunnerLoginHint": "在 PowerShell 執行這一行：",
+  "hostRunnerLoginHint": "或在 PowerShell 執行這一行：",
   "@hostRunnerLoginHint": {
     "description": "登入指令前的一句話"
   },
   "hostRunnerLoginCommand": "登入指令",
   "@hostRunnerLoginCommand": {
     "description": "可複製的登入指令那一列的標籤"
+  },
+  "hostRunnerLoginExpired": "登入已過期",
+  "@hostRunnerLoginExpired": {
+    "description": "執行器的設定目錄有憑證，但 claude 說不能用（OAuth 過期）"
+  },
+  "hostRunnerLoginAction": "登入",
+  "@hostRunnerLoginAction": {
+    "description": "開新終端視窗跑 claude auth login 的按鈕"
+  },
+  "hostRunnerLoginRecheck": "重新檢查",
+  "@hostRunnerLoginRecheck": {
+    "description": "重新判斷執行器登入狀態的按鈕"
+  },
+  "hostRunnerTerminalFailed": "開不了終端機：{error}",
+  "@hostRunnerTerminalFailed": {
+    "description": "開新終端視窗失敗時的提示",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "hostRunnerTokenLabel": "長效 token",
+  "@hostRunnerTokenLabel": {
+    "description": "執行器長效 token（claude setup-token）設定列的標籤"
+  },
+  "hostRunnerTokenNote": "登入常過期時改用它：產生後貼進來。",
+  "@hostRunnerTokenNote": {
+    "description": "長效 token 那一列的一行說明"
+  },
+  "hostRunnerTokenGenerate": "產生",
+  "@hostRunnerTokenGenerate": {
+    "description": "開新終端視窗跑 claude setup-token 的按鈕"
+  },
+  "hostRunnerTokenSet": "已設定",
+  "@hostRunnerTokenSet": {
+    "description": "長效 token 檔存在（不顯示內容）"
+  },
+  "hostRunnerTokenUnset": "未設定",
+  "@hostRunnerTokenUnset": {
+    "description": "長效 token 檔不存在"
+  },
+  "hostRunnerTokenHint": "貼上 token",
+  "@hostRunnerTokenHint": {
+    "description": "長效 token 輸入框的提示字"
+  },
+  "hostRunnerTokenClear": "清除",
+  "@hostRunnerTokenClear": {
+    "description": "刪除長效 token 檔的按鈕"
+  },
+  "hostRunnerTokenInvalid": "這不像 token",
+  "@hostRunnerTokenInvalid": {
+    "description": "貼上的內容是空的或中間有空白"
+  },
+  "hostRunnerTokenSaveFailed": "存不了：{error}",
+  "@hostRunnerTokenSaveFailed": {
+    "description": "寫入或刪除長效 token 檔失敗",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   },
   "hostRunnerServiceTitle": "執行器狀態",
   "@hostRunnerServiceTitle": {
@@ -6981,6 +7047,10 @@
         "type": "String"
       }
     }
+  },
+  "hostRunnerMcpAuthExpired": "執行器登入已過期，請在上方重新登入。",
+  "@hostRunnerMcpAuthExpired": {
+    "description": "claude mcp list 說 OAuth 過期時，取代原文的說明"
   },
   "hostRunnerPanelWorkspaces": "工作區",
   "@hostRunnerPanelWorkspaces": {

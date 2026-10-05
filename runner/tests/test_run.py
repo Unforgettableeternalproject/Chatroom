@@ -2003,3 +2003,90 @@ async def test_lock_keys_are_taken_in_a_fixed_order(tmp_path):
     async with locks.hold(["p/JSAI-API", "p/JSAI-Web"]):
         pass
     assert taken == ["p/JSAI-API", "p/JSAI-Web"] * 2
+
+
+# ── 登入失效與長效 token ────────────────────────────────────────
+
+async def test_expired_login_fails_the_run_and_stops_the_runner(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 OAuth 過期又 refresh 不了：這筆 failed，**整台也要停收**。
+
+    訊息只印在 stderr（2026-10-05 實測 `mcp list` 的形狀），stream 裡沒有
+    線索——以前 stderr 沒人讀，這一筆只會是一張沒有原因的 failed，佇列裡
+    的下一張接著撞同一面牆。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "oauth_expired")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             ref="task-oauth")
+    cfg = make_config(tmp_path, work_repo)
+    limited: list[str] = []
+
+    outcome = await _executor(cfg, runner_hub,
+                              on_runner_limited=limited.append).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed", "login_expired")
+    assert limited == ["login_expired"]
+    final, _ = await _trail(client, run["id"], headers)
+    assert final["status"] == "failed"
+
+
+async def test_not_logged_in_also_stops_the_runner(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "not_logged_in")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             ref="task-notlogin2")
+    cfg = make_config(tmp_path, work_repo)
+    limited: list[str] = []
+
+    outcome = await _executor(cfg, runner_hub,
+                              on_runner_limited=limited.append).execute(run)
+
+    assert (outcome.status, outcome.reason) == ("failed", "login_expired")
+    assert limited == ["login_expired"]
+
+
+async def test_oauth_token_file_reaches_the_child_claude(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """token 檔有內容就以 `CLAUDE_CODE_OAUTH_TOKEN` 交給子 claude。
+
+    子進程只回報「有沒有、多長」，測試裡不留 token 的值。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "token_check")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-token")
+    cfg = make_config(tmp_path, work_repo)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    cfg.claude_oauth_token_file.write_text("  " + "t" * 32 + "\n",
+                                           encoding="utf-8")
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    seen = json.loads((cfg.runs_dir / run["id"] / "token.json")
+                      .read_text(encoding="utf-8"))
+    assert seen == {"present": True, "length": 32}
+
+
+async def test_without_a_token_file_the_child_gets_no_token(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "token_check")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-notoken")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    seen = json.loads((cfg.runs_dir / run["id"] / "token.json")
+                      .read_text(encoding="utf-8"))
+    assert seen == {"present": False, "length": 0}

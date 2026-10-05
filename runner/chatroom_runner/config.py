@@ -49,6 +49,10 @@ DEFAULT_HEARTBEAT_SECONDS = 30
 #（牆鐘上限照舊管終止）——遠端看不到 shell，一個安靜的 run 與一個掛住的 run
 # 在面板上長得一模一樣
 DEFAULT_STALL_WARN_SECONDS = 600
+# 執行中多久重驗一次 claude 登入（秒）。啟動自檢只驗一次，OAuth 過期又
+# refresh 失敗時，之後每一筆單都只會是一張 failed（2026-10-05 實測）。
+# 0 ＝只在啟動時驗
+DEFAULT_LOGIN_CHECK_SECONDS = 900
 # 退避階梯（分鐘）。撞到 rate limit 之後用 `--resume` 續跑，每一階報一次
 DEFAULT_BACKOFF_MINUTES = (5, 15, 30, 60)
 # stream 裡連續看到幾次 rate_limit 的 api_retry 就把執行器標 limited
@@ -81,9 +85,38 @@ INJECT_FILE_NAME = "inject.jsonl"
 # 「房裡跟它講過什麼」的東西
 INJECT_CURSOR_NAME = "inject.cursor"
 
+# 長效 OAuth token 檔（`claude setup-token` 產的那種），放在 state_dir 下、
+# 與 `claude-config` 同層。**檔名是與 App 的契約**：App 寫、執行器讀，不可改名。
+# 有內容就以 `CLAUDE_CODE_OAUTH_TOKEN` 注入執行器起的 claude 子進程
+CLAUDE_OAUTH_TOKEN_FILE_NAME = "claude-oauth-token"
+CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+
 # 登入憑證與簽章金鑰所在的目錄。guard 據此擋讀寫；設定載入據此檢查
 # agent_signing_key 的位置（放這裡而非 guard，guard 本身 import config）
 SENSITIVE_DIR_NAMES = (".claude", ".gnupg", ".ssh")
+
+
+def apply_oauth_token(env: dict[str, str], state_dir: Path) -> dict[str, str]:
+    """token 檔有內容就把它放進 ``env``（就地改、也回傳同一份）。
+
+    **每次起進程都重讀**：人換了 token 不必重啟執行器。檔案不在、空的或
+    讀不到就不動 ``env``——維持原本靠 `CLAUDE_CONFIG_DIR` 憑證的行為。
+
+    🚨 token 本身**絕不進 log 或例外訊息**：這裡只會講路徑。
+    """
+    path = Path(state_dir) / CLAUDE_OAUTH_TOKEN_FILE_NAME
+    try:
+        token = path.read_text(encoding="utf-8-sig").strip()
+    except FileNotFoundError:
+        return env
+    except (OSError, UnicodeDecodeError) as exc:
+        # 只記例外型別：OSError 的字串只帶路徑，但解碼錯誤會夾帶內容片段
+        log.warning("長效 token 檔讀不到（%s，%s）；沿用設定目錄的登入",
+                    path, exc.__class__.__name__)
+        return env
+    if token:
+        env[CLAUDE_OAUTH_TOKEN_ENV] = token
+    return env
 
 
 class ConfigError(Exception):
@@ -301,6 +334,8 @@ class RunnerConfig:
     maintenance_hour: int = DEFAULT_MAINTENANCE_HOUR
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     stall_warn_seconds: float = DEFAULT_STALL_WARN_SECONDS
+    # 執行中重驗 claude 登入的間隔（秒）。0 ＝只在啟動時驗
+    login_check_seconds: float = DEFAULT_LOGIN_CHECK_SECONDS
     # 收尾請求後等進程自己結束的上限（秒）
     soft_stop_timeout: float = DEFAULT_SOFT_STOP_TIMEOUT_SECONDS
     allowed_domains: list[str] = field(default_factory=list)
@@ -351,6 +386,11 @@ class RunnerConfig:
     @property
     def log_dir(self) -> Path:
         return self.state_dir / "logs"
+
+    @property
+    def claude_oauth_token_file(self) -> Path:
+        """長效 token 檔的位置（見 `CLAUDE_OAUTH_TOKEN_FILE_NAME`）。"""
+        return self.state_dir / CLAUDE_OAUTH_TOKEN_FILE_NAME
 
     @property
     def runs_dir(self) -> Path:
@@ -660,6 +700,8 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
                                         DEFAULT_HEARTBEAT_SECONDS)),
         stall_warn_seconds=float(raw.get("stall_warn_seconds",
                                          DEFAULT_STALL_WARN_SECONDS)),
+        login_check_seconds=float(raw.get("login_check_seconds",
+                                          DEFAULT_LOGIN_CHECK_SECONDS)),
         soft_stop_timeout=float(raw.get(
             "soft_stop_timeout", DEFAULT_SOFT_STOP_TIMEOUT_SECONDS)),
         allowed_domains=list(raw.get("allowed_domains", [])),

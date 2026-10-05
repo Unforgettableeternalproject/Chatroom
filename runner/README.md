@@ -58,6 +58,10 @@
 
    搬過位置或換了 venv 就重跑一次（加 `-Force`）——`.pth` 裡是絕對路徑。
 
+## 長效 OAuth token
+
+state_dir 下（與 `claude-config` 同層）放一個 `claude-oauth-token` 檔、內容是 `claude setup-token` 產的 token，執行器起的每一支 claude（run、`auth status`、`mcp list`）都會以 `CLAUDE_CODE_OAUTH_TOKEN` 帶上它，不再依賴設定目錄裡會過期的 OAuth 憑證。每次起進程都重讀，換 token 不必重啟；檔案不在或是空的就照舊用 `claude-config` 的登入。**檔名是與 App 的契約，不要改。** 注意 token 會在 run 的進程環境裡，run 內的 shell 與 MCP 子進程讀得到。
+
 ## 設定檔欄位
 
 | 欄位 | 說明 |
@@ -67,6 +71,7 @@
 | `max_parallel` | 同時幾個 run（預設 3）。本地與 Hub 兩端都守 |
 | `heartbeat_seconds` | 心跳間隔（預設 30） |
 | `stall_warn_seconds` | 進行中的 run 多久沒吐出任何 stream 事件就標成停滯（預設 600，`0` ＝關掉）。**只標記、不殺進程**，數字出現在 `dashboard_json.runs.running[].stalled_seconds`；牆鐘上限照舊管終止 |
+| `login_check_seconds` | 執行中多久重驗一次 claude 登入（預設 900，`0` ＝不定期驗，只有啟動自檢與 resume 排的那一次）。沒過就停收新單：status 報 `limited`、`limit_reason=login_expired`，原因放在 `dashboard_json.runner.selfcheck_problems`；重驗通過自動恢復領單。run 本身撞到登入失效（OAuth 過期、refresh 失敗、未登入）時，該筆以 `failed`／`login_expired` 收場並立即走同一條路 |
 | `maintenance_hour` | 每日維護窗（預設 4 點）。到點且無 run 時自我重啟 |
 | `usage_window_hours` / `usage_soft_cap_tokens` / `usage_soft_cap_usd` | 近 N 小時的軟上限，到了就停收新單。**這是自我約束，不是真實額度** |
 | `require_gpg` | 自檢要不要驗簽章（預設 true） |

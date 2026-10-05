@@ -185,6 +185,17 @@ void main() {
       expect(find.textContaining('速率限制'), findsOneWidget);
     });
 
+    testWidgets('🔴 limited 因為登入過期：說「登入已過期」，不顯示原字串',
+        (tester) async {
+      await tester.pumpWidget(_wrap(OpsDashboardView(
+        board: _board(runners: [
+          _runner(status: 'limited', limitReason: 'login_expired')
+        ]),
+      )));
+      expect(find.textContaining('登入已過期'), findsOneWidget);
+      expect(find.textContaining('login_expired'), findsNothing);
+    });
+
     testWidgets('limited 但沒有 limited_until：說「未知」，不編一個倒數',
         (tester) async {
       await tester.pumpWidget(_wrap(OpsDashboardView(

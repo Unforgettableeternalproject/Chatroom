@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -325,12 +326,25 @@ String? runnerClaudeConfigDirFor(RunnerConfigFile cfg,
 /// 執行器那個設定目錄底下，claude 登入了沒。
 @immutable
 class RunnerClaudeLogin {
-  const RunnerClaudeLogin({required this.configDir, required this.loggedIn});
+  const RunnerClaudeLogin({
+    required this.configDir,
+    required this.loggedIn,
+    this.expired = false,
+    this.tokenSet = false,
+  });
 
   /// 執行器起 claude 時用的 `CLAUDE_CONFIG_DIR`。
   final String configDir;
 
   final bool loggedIn;
+
+  /// 登入過、但現在不能用（憑證還在而 claude 說沒登入，或 `mcp list` 說
+  /// OAuth 過期）。只有 `loggedIn` 為 false 時有意義。
+  final bool expired;
+
+  /// 狀態目錄下有沒有長效 token 檔（[kRunnerOAuthTokenFileName]）。
+  /// **只有有／沒有**：token 本身不進這個物件，畫面也就拿不到它。
+  final bool tokenSet;
 
   /// 沒登入時要人去打的那一行。`CLAUDE_CONFIG_DIR` **一定要帶**：執行器用
   /// 的是自己的設定目錄，在別的目錄登入等於沒登入。
@@ -347,6 +361,9 @@ class RunnerClaudeLogin {
 ///
 /// 只是痕跡偵測：讀不到就回 `false`——**寧可多叫一次登入**，也不要顯示
 /// 「已登入」而執行器第一筆單就因為沒登入而炸掉。
+///
+/// ⚠️ 痕跡在不代表能用：OAuth 過期且 refresh 失敗時檔案照樣在。所以這只是
+/// [probeClaudeAuthStatus] 問不到時的退路，見 [resolveRunnerClaudeLogin]。
 Future<bool> hasClaudeLogin(String claudeConfigDir) async {
   if (claudeConfigDir.isEmpty) return false;
   final sep = Platform.pathSeparator;
@@ -365,16 +382,222 @@ Future<bool> hasClaudeLogin(String claudeConfigDir) async {
   }
 }
 
+/// 長效 token 檔名。🔴 **與執行器的契約**：執行器讀 `<state_dir>` 底下這個
+/// 檔，有的話把內容當 `CLAUDE_CODE_OAUTH_TOKEN` 帶給 claude。不可改名。
+const String kRunnerOAuthTokenFileName = 'claude-oauth-token';
+
+/// 長效 token 檔的位置：與 `claude-config` 同層，在執行器的狀態目錄下。
+/// 推不出狀態目錄就回 `null`。
+File? runnerOAuthTokenFileFor(RunnerConfigFile cfg,
+    [Map<String, String>? environment]) {
+  final dir = runnerStateDirFor(cfg, environment);
+  if (dir == null || dir.isEmpty) return null;
+  return File('$dir${Platform.pathSeparator}$kRunnerOAuthTokenFileName');
+}
+
+/// 讀長效 token：第一個非空行、去頭尾空白。沒有檔、讀不到或是空的都回
+/// `null`。🔴 回傳值只拿去當環境變數，**不得顯示、不得進 log**。
+Future<String?> readRunnerOAuthToken(File file) async {
+  try {
+    if (!await file.exists()) return null;
+    for (final line in await file.readAsLines()) {
+      final t = line.trim();
+      if (t.isNotEmpty) return t;
+    }
+  } on Object {
+    return null;
+  }
+  return null;
+}
+
+/// 寫入長效 token。內容只有 token 一行（去頭尾空白，**不帶結尾換行**）。
+///
+/// 貼上時常夾帶換行或前後空白；去掉之後中間還有空白的不是 token，丟
+/// [FormatException]——訊息裡**不放 token 本身**。
+Future<void> writeRunnerOAuthToken(File file, String token) async {
+  final t = token.trim();
+  if (t.isEmpty || RegExp(r'\s').hasMatch(t)) {
+    throw const FormatException('invalid token');
+  }
+  await file.parent.create(recursive: true);
+  await file.writeAsString(t, flush: true);
+}
+
+/// 清除長效 token。沒有檔就當已清除。
+Future<void> clearRunnerOAuthToken(File file) async {
+  if (await file.exists()) await file.delete();
+}
+
+/// 從 `claude auth status --json` 的輸出取 `loggedIn`。
+///
+/// 沒登入時 claude 的 exit code 是 1，但 stdout 照樣是 JSON——**不看 exit
+/// code，只看內容**。看不懂（不是 JSON、沒有布林的 `loggedIn`）回 `null`，
+/// 讓呼叫端退回檔案判準。
+bool? parseClaudeAuthStatus(String text) {
+  final start = text.indexOf('{');
+  final end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    final json = jsonDecode(text.substring(start, end + 1));
+    if (json is! Map) return null;
+    final v = json['loggedIn'];
+    return v is bool ? v : null;
+  } on Object {
+    return null;
+  }
+}
+
+/// claude 說 OAuth 過期、refresh 不回來的那幾句。
+///
+/// 這時 `auth status` 不一定會說沒登入（憑證檔還在），問題只在真的要用的
+/// 時候冒出來——`mcp list` 就是其中之一。
+bool isClaudeAuthExpiredText(String text) {
+  final t = text.toLowerCase();
+  return t.contains('oauth session expired') ||
+      t.contains('could not be refreshed');
+}
+
+/// `claude auth status` 的上限。只問本機狀態，不必等 `mcp list` 那麼久。
+const Duration kAuthStatusTimeout = Duration(seconds: 20);
+
+/// 問 claude 自己：在執行器的設定目錄下（有 token 也帶上）登入了沒。
+///
+/// 叫法與 [listMachineMcpServers] 相同。叫不起來、逾時、看不懂都回 `null`。
+Future<bool?> probeClaudeAuthStatus(RunnerConfigFile cfg,
+    {String? oauthToken}) async {
+  final argv = cfg.claudeBin.isEmpty ? const ['claude'] : cfg.claudeBin;
+  final configDir = runnerClaudeConfigDirFor(cfg) ?? '';
+  try {
+    final result = await Process.run(
+      argv.first,
+      [...argv.skip(1), 'auth', 'status', '--json'],
+      environment: {
+        if (configDir.isNotEmpty) 'CLAUDE_CONFIG_DIR': configDir,
+        if (oauthToken != null && oauthToken.isNotEmpty)
+          'CLAUDE_CODE_OAUTH_TOKEN': oauthToken,
+      },
+      runInShell: true,
+    ).timeout(kAuthStatusTimeout);
+    return parseClaudeAuthStatus('${result.stdout}');
+  } on Object {
+    return null;
+  }
+}
+
+typedef ClaudeAuthProbe = Future<bool?> Function(RunnerConfigFile cfg,
+    {String? oauthToken});
+
+/// 實際去問 claude 的那一支。測試覆寫它，免得在測試裡叫這台機器的 claude。
+final claudeAuthProbeProvider =
+    Provider<ClaudeAuthProbe>((ref) => probeClaudeAuthStatus);
+
+/// 綜合判斷執行器的登入狀態。
+///
+/// 1. 問 `claude auth status`（[probe]）；問得到就以它為準。
+/// 2. 問不到才退回檔案判準 [hasClaudeLogin]，有 token 檔也算。
+/// 3. `mcp list` 說 OAuth 過期（[mcpAuthExpired]）時判為失效——但**有 token
+///    檔時不降級**：執行器跑單用的是 token，設定目錄裡那份 OAuth 過期不影響
+///    它接單（MCP 區塊仍會自己顯示過期）。
+///
+/// 判為失效而設定目錄裡有憑證痕跡時標 `expired`，畫面說「已過期」而不是
+/// 「尚未登入」。
+Future<RunnerClaudeLogin> resolveRunnerClaudeLogin({
+  required RunnerConfigFile cfg,
+  required String configDir,
+  required ClaudeAuthProbe probe,
+  File? tokenFile,
+  bool mcpAuthExpired = false,
+}) async {
+  final token = tokenFile == null ? null : await readRunnerOAuthToken(tokenFile);
+  final tokenSet = token != null;
+  final probed = await probe(cfg, oauthToken: token);
+  final traces = await hasClaudeLogin(configDir);
+  var loggedIn = probed ?? (traces || tokenSet);
+  if (mcpAuthExpired && !tokenSet) loggedIn = false;
+  return RunnerClaudeLogin(
+    configDir: configDir,
+    loggedIn: loggedIn,
+    expired: !loggedIn && (traces || mcpAuthExpired),
+    tokenSet: tokenSet,
+  );
+}
+
 /// 執行器的 claude 登入狀態。推不出設定目錄就回 `null`（畫面少一列，
 /// 而不是對著一個猜出來的路徑說「尚未登入」）。
+///
+/// 重新判斷要**連同 [machineMcpServersProvider] 一起 invalidate**，否則上一次
+/// `mcp list` 的過期旗標會一直把結果壓成失效。
 final runnerClaudeLoginProvider =
     FutureProvider<RunnerClaudeLogin?>((ref) async {
+  // 不 await `mcp list`（最長 90 秒）：它晚到時這裡再算一次。重讀中不算——
+  // 重讀時 AsyncValue 還留著上一次的值，登入完按重新檢查會被舊旗標壓住
+  final mcpExpired = ref.watch(machineMcpServersProvider
+      .select((v) => !v.isLoading && (v.value?.authExpired ?? false)));
+  final probe = ref.watch(claudeAuthProbeProvider);
   final cfg = await ref.watch(runnerConfigProvider.future);
   if (cfg == null) return null;
   final dir = runnerClaudeConfigDirFor(cfg) ?? '';
   if (dir.isEmpty) return null;
-  return RunnerClaudeLogin(configDir: dir, loggedIn: await hasClaudeLogin(dir));
+  return resolveRunnerClaudeLogin(
+    cfg: cfg,
+    configDir: dir,
+    probe: probe,
+    tokenFile: runnerOAuthTokenFileFor(cfg),
+    mcpAuthExpired: mcpExpired,
+  );
 });
+
+/// 在新的終端視窗裡跑 claude 的 PowerShell 指令稿。
+///
+/// 路徑用單引號字串（PowerShell 單引號裡只有 `'` 要變成 `''`）。
+String claudeTerminalScript(String configDir, List<String> claudeArgs) {
+  final dir = configDir.replaceAll("'", "''");
+  return "\$env:CLAUDE_CONFIG_DIR = '$dir'; claude ${claudeArgs.join(' ')}";
+}
+
+/// 開新終端視窗的 argv：
+/// `cmd /c start "" /wait powershell -NoExit -EncodedCommand <base64>`。
+///
+/// 指令稿走 `-EncodedCommand`（UTF-16LE 的 base64），避開 cmd、start、
+/// powershell 三層各自的引號規則。`/wait` 讓 cmd 等到那個視窗關掉才結束，
+/// 呼叫端才知道什麼時候該重新判斷。
+List<String> claudeTerminalArgv(String script) {
+  final bytes = <int>[];
+  for (final u in script.codeUnits) {
+    bytes
+      ..add(u & 0xFF)
+      ..add(u >> 8);
+  }
+  return [
+    'cmd',
+    '/c',
+    'start',
+    '',
+    '/wait',
+    'powershell',
+    '-NoExit',
+    '-EncodedCommand',
+    base64.encode(bytes),
+  ];
+}
+
+/// 開一個看得到的終端視窗跑 `claude <claudeArgs>`，等視窗關掉才回來。
+///
+/// 不用 detached：detached 拿不到結束時機，而「視窗關了就重新判斷」要靠它。
+Future<void> openClaudeTerminal(
+    String configDir, List<String> claudeArgs) async {
+  final argv = claudeTerminalArgv(claudeTerminalScript(configDir, claudeArgs));
+  final process = await Process.start(argv.first, argv.sublist(1));
+  // cmd 本身沒有輸出；照樣放掉，免得管線塞住
+  unawaited(process.stdout.drain<void>());
+  unawaited(process.stderr.drain<void>());
+  await process.exitCode;
+}
+
+/// 開終端視窗的那一支。測試覆寫它，免得真的開出視窗。
+final claudeTerminalLauncherProvider =
+    Provider<Future<void> Function(String configDir, List<String> claudeArgs)>(
+        (ref) => openClaudeTerminal);
 
 /// 本機執行器在 Hub 上的 `runner_id`，從 `state.json` 現讀。
 ///
@@ -433,6 +656,7 @@ class MachineMcpServers {
     this.origins = const {},
     this.globalError = '',
     this.complete = true,
+    this.authExpired = false,
   });
 
   /// 本機列到的伺服器；`null` ＝這次沒問到（不是「一台都沒有」）。
@@ -450,6 +674,10 @@ class MachineMcpServers {
   /// 兩邊都問到了。🔴 只有這時候畫面才能說某個名字「本機找不到」——
   /// 少問到一邊時，缺的那些很可能就在沒問到的那一邊。
   final bool complete;
+
+  /// `claude mcp list` 說執行器的 OAuth 過期、refresh 不回來。這時 [error]
+  /// 是 claude 的原文，畫面改講「執行器登入已過期」。
+  final bool authExpired;
 }
 
 /// 一台 MCP 伺服器是從哪裡來的。
@@ -524,14 +752,18 @@ Future<MachineMcpServers> listMachineMcpServers(RunnerConfigFile cfg) async {
   }
   final text = '${result.stdout}\n${result.stderr}';
   final names = parseClaudeMcpList(text);
+  // 過期那句不一定在最後一行（後面常接著 "No MCP servers configured"），
+  // 要對全文找
+  final expired = isClaudeAuthExpiredText(text);
   if (names.isEmpty) {
     // 健康檢查逾時、沒登入、claude 版本對不上都長這樣
     return MachineMcpServers(
+        authExpired: expired,
         error: text.trim().isEmpty
             ? 'claude mcp list exit ${result.exitCode}'
             : text.trim().split('\n').last.trim());
   }
-  return MachineMcpServers(names: names);
+  return MachineMcpServers(names: names, authExpired: expired);
 }
 
 /// 兩邊合併成一份清單：連接器（執行器設定目錄）＋全域 `.claude.json`。
@@ -542,7 +774,9 @@ MachineMcpServers mergeMcpServers(
     MachineMcpServers connectors, MachineMcpServers global) {
   if (connectors.names == null && global.names == null) {
     return MachineMcpServers(
-        error: connectors.error, globalError: global.globalError);
+        error: connectors.error,
+        globalError: global.globalError,
+        authExpired: connectors.authExpired);
   }
   final origins = <String, McpServerOrigin>{};
   for (final name in connectors.names ?? const <String>[]) {
@@ -556,7 +790,8 @@ MachineMcpServers mergeMcpServers(
       origins: origins,
       error: connectors.error,
       globalError: global.globalError,
-      complete: connectors.names != null && global.names != null);
+      complete: connectors.names != null && global.names != null,
+      authExpired: connectors.authExpired);
 }
 
 /// 這台機器現在看得到的 MCP 伺服器。重讀＝`ref.invalidate`。

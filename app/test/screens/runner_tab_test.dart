@@ -71,6 +71,9 @@ void main() {
           runnerKitProvider.overrideWith((ref) async => runner),
           runnerConfigProvider.overrideWith((ref) async => config),
           runnerIdProvider.overrideWith((ref) async => null),
+          // 不覆寫的話這支測試會去跑 `claude auth status`
+          claudeAuthProbeProvider
+              .overrideWithValue((cfg, {oauthToken}) async => null),
           // 不覆寫的話這支測試會去跑 `claude mcp list`
           machineMcpServersProvider.overrideWith(
               (ref) async => const MachineMcpServers(names: ['chatroom'])),
