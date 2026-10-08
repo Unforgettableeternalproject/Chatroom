@@ -123,19 +123,32 @@ WRITE_ALLOWED_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 def allowed_tools(kind: str, extra: list[str] | None = None,
-                  skills: list[str] | None = None) -> list[str]:
+                  skills: list[str] | None = None,
+                  mcp_servers: list[str] | None = None) -> list[str]:
     """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。
 
     ``skills`` 是這一輪要授權的 skill 名：工作區的 `primary_skill`（不分
     kind）加上這種 kind 必須遵守的那些（見 `WorkspaceConfig.all_skills_for`）。
     headless 下 skill 一樣要預授權（`Skill(<name>)`），不然模型一叫它就停在
     一個沒有人能按的權限提示。
+
+    ``mcp_servers`` 是 App 那顆「允許派工使用的 MCP」勾選清單
+    （``RunnerConfig.allowed_mcp_servers``）。🚨 **只讓伺服器不被 deny
+    （`blocked_mcp_servers`）不夠**：`--permission-mode auto` 不會自動放行
+    MCP 工具（見 `BASE_ALLOWED_TOOLS` 上面那段實測），沒被列進這裡的伺服器，
+    它的工具一樣會停在權限提示——這正是 chatroom 以外的勾選伺服器（fff、
+    lore-vault）明明沒被擋、呼叫卻還是「沒有授權」的原因。``chatroom`` 已經
+    在 `BASE_ALLOWED_TOOLS` 裡，重複加入會被下面的去重擋掉，無害。
     """
     tools = list(BASE_ALLOWED_TOOLS)
     if kind in WRITE_KINDS:
         tools += list(WRITE_ALLOWED_TOOLS)
     for name in skills or []:
         entry = f"Skill({name})"
+        if name and entry not in tools:
+            tools.append(entry)
+    for name in mcp_servers or []:
+        entry = f"mcp__{server_slug(name)}__*"
         if name and entry not in tools:
             tools.append(entry)
     for name in extra or []:
@@ -212,7 +225,12 @@ MCP_LIST_TIMEOUT_SECONDS = 90
 #（`C:/python.exe -m chatroom_mcp`），`\S+` 只吃到執行檔就對不上後面的
 # ` - `，整行會被當成沒有伺服器而靜默跳過。改成非貪婪吃到狀態符號為止
 _MCP_LIST_RE = re.compile(r"^(?P<name>\S.*?): (?P<target>.+?) - [✔!✘]")
-_NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
+# 🚨 `-` 不能被取代：本機 stdio 伺服器的名字就是工具名裡的那一段，原樣帶著
+# 連字號（實測 `mcp__lore-vault__ask`）。只有連接器那種帶空格／句點的顯示名
+# 才需要正規化。這條正規式之前把 `-` 也換成 `_`，`lore-vault` 會被算成
+# `lore_vault`——`allowed_tools()` 用它組出來的 `mcp__lore_vault__*` 對不上
+# 實際的 `mcp__lore-vault__*`，勾選的伺服器因此卡在權限提示（而不是被擋）
+_NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_-]")
 # 自檢探到的 MCP 伺服器（顯示名 → URL；本機 stdio 伺服器的 URL 是空字串）。
 # 保底名單之外多出來的那些
 _discovered_servers: dict[str, str] = {}
@@ -1555,7 +1573,8 @@ class RunExecutor:
               run_dir: Path, resume: str, kind: str = "") -> list[str]:
         # 優先載入的 skill 不分 kind 都要授權，否則契約叫它就卡權限提示
         tools = allowed_tools(kind, self.cfg.extra_allowed_tools,
-                              project.all_skills_for(kind))
+                              project.all_skills_for(kind),
+                              self.cfg.allowed_mcp_servers)
         denied = disallowed_tools(self.cfg.allowed_mcp_servers,
                                   self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [

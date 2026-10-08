@@ -980,6 +980,31 @@ def test_allowed_mcp_servers_opens_exactly_what_it_names(tmp_path, work_repo):
     assert "mcp__claude_ai_Canva__*" in denied
 
 
+def test_allowed_mcp_servers_also_land_in_allowed_tools(tmp_path, work_repo):
+    """勾選清單只讓伺服器不被 deny 不夠——沒被列進 `--allowedTools` 的話，
+    `--permission-mode auto` 不會自動放行，工具呼叫停在權限提示（而不是被
+    擋）。這正是「MCP server 有載入、工具呼叫卻說沒授權」的症狀。"""
+    cfg = make_config(tmp_path, work_repo,
+                      allowed_mcp_servers=["chatroom", "fff", "lore-vault"])
+    ex = _executor(cfg, _NullHub())
+    tools = _allowed(ex._argv("p", "c", cfg.workspace("ai-website"),
+                              tmp_path, "", "ticket"))
+    assert "mcp__fff__*" in tools
+    # 連字號要原樣保留：實際工具名是 `mcp__lore-vault__ask`，不是
+    # `mcp__lore_vault__ask`（見 server_slug 的修正）
+    assert "mcp__lore-vault__*" in tools
+    assert "mcp__lore_vault__*" not in tools
+    # chatroom 已經在 BASE_ALLOWED_TOOLS 裡，重複列出不該疊出第二個
+    assert tools.count("mcp__chatroom__*") == 1
+
+
+def test_server_slug_keeps_hyphens(tmp_path, work_repo):
+    """`server_slug` 只正規化連接器那種帶空格／句點的顯示名；本機 stdio
+    伺服器的名字本身就是工具名的一段，連字號不能被換成底線。"""
+    assert run_module.server_slug("lore-vault") == "lore-vault"
+    assert run_module.server_slug("claude.ai Gmail") == "claude_ai_Gmail"
+
+
 def test_selfcheck_probe_adds_newly_seen_connectors(tmp_path, work_repo):
     """保底名單沒有的連接器，自檢探到之後也要被擋。"""
     cfg = make_config(tmp_path, work_repo)
