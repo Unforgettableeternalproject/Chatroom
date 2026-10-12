@@ -1278,6 +1278,8 @@ String _limitReason(String reason) => switch (reason) {
       'rate_limit' => L10n.current.opsLimitReasonRate,
       'weekly_limit' => L10n.current.opsLimitReasonWeekly,
       'manual' => L10n.current.opsLimitReasonManual,
+      // 執行器的 claude 登入過期：要人去重新登入，等多久都不會自己好
+      'login_expired' => L10n.current.opsLimitReasonLoginExpired,
       _ => reason,
     };
 

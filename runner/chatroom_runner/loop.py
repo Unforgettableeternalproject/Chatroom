@@ -33,12 +33,13 @@ from typing import Awaitable, Callable
 from . import dashboard, gitops
 from .config import (INJECT_FILE_NAME, SOFT_STOP_FLAG_NAME,
                      SOFT_STOP_TIMEOUT_FLAG_NAME, ConfigError, RunnerConfig,
-                     load_config, private_project_keys,
+                     apply_oauth_token, load_config, private_project_keys,
                      public_project_keys)
 from .hub import HubError, bad_transition_from, save_identity
 from .procs import no_window_kwargs
-from .run import (MCP_LIST_TIMEOUT_SECONDS, REPORT_FAILED_NAME, RepoLocks,
-                  RunExecutor, parse_mcp_list, remember_mcp_servers)
+from .run import (LOGIN_EXPIRED_REASON, MCP_LIST_TIMEOUT_SECONDS,
+                  REPORT_FAILED_NAME, RepoLocks, RunExecutor, parse_mcp_list,
+                  remember_mcp_servers)
 from .usage import UsageStore
 
 log = logging.getLogger(__name__)
@@ -108,6 +109,10 @@ class LoopState:
     # reload 換過設定之後要再 register 一次：公開專案清單是在 register 送的，
     # 不重報的話 Hub 手上會一直是舊的那一份
     reregister_pending: bool = False
+    # 執行中的登入檢查沒過（定期重驗或 run 撞到登入失效）。**獨立於
+    # status 擋領單**：人按 resume 會把 status 改回 online，但登入沒好之前
+    # 領到的單只會一張張 failed。只有 `_check_claude_login` 通過才清掉
+    login_failed: bool = False
 
 
 class RunnerLoop:
@@ -148,6 +153,9 @@ class RunnerLoop:
         # **放記憶體不落檔**：它只在「這個執行器進程手上還有那筆 run」
         # 期間有意義，進程重啟之後那個 run 已經被 `reconcile` 收掉了
         self._soft_stop_deadline: dict[str, float] = {}
+        # 下一次定期重驗登入的時刻（monotonic 秒）。None ＝還沒排：`start()`
+        # 或第一次 `tick()` 才從那一刻起算，不在建構時就叫 claude
+        self._next_login_check: float | None = None
         self._restore_maintenance_day()
 
     def _default_executor(self) -> RunExecutor:
@@ -185,6 +193,8 @@ class RunnerLoop:
         argv = list(self.cfg.claude_bin) + ["mcp", "list"]
         env = dict(os.environ)
         env["CLAUDE_CONFIG_DIR"] = str(self.cfg.claude_config_dir)
+        # 連接器跟著帳號走：登入要跟 run 用同一份（長效 token 優先）
+        apply_oauth_token(env, self.cfg.state_dir)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, stdout=asyncio.subprocess.PIPE,
@@ -241,15 +251,17 @@ class RunnerLoop:
         **`claude --version` 沒登入也回 0**——自檢一片綠，然後第一筆真單才
         炸，而炸點在 agent 那邊，房裡只看得到一張 failed。
 
-        判準是 `claude auth status --json` 的 `loggedIn`。那支叫不起來、
-        非零退出或輸出看不懂時，退回看憑證檔（安裝器用的同一個判準）：
+        判準是 `claude auth status --json` 的 `loggedIn`（不看退出碼）。
+        那支叫不起來或輸出看不懂時，退回看憑證檔（安裝器用的同一個判準）：
         **寧可多叫一次登入**，也不要放一台沒登入的執行器去領單。
         """
-        hint = ('登入：$env:CLAUDE_CONFIG_DIR = '
-                f'"{self.cfg.claude_config_dir}"; claude auth login')
+        hint = self._login_hint()
         argv = list(self.cfg.claude_bin) + ["auth", "status", "--json"]
         env = dict(os.environ)
         env["CLAUDE_CONFIG_DIR"] = str(self.cfg.claude_config_dir)
+        # 🚨 要帶長效 token：驗的是「run 起得來嗎」，而 run 會帶它。不帶的話
+        # 設定目錄的 OAuth 過期時，一份有效的 token 也救不回這一台
+        apply_oauth_token(env, self.cfg.state_dir)
         logged_in: bool | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -264,12 +276,20 @@ class RunnerLoop:
             except asyncio.TimeoutError:
                 proc.kill()
                 return [f"claude auth status 逾時。{hint}"]
-            if proc.returncode == 0:
-                try:
-                    data = json.loads(out.decode("utf-8", "replace"))
-                    logged_in = bool(data.get("loggedIn"))
-                except (ValueError, AttributeError):
-                    log.warning("claude auth status 的輸出看不懂；改看憑證檔")
+            # 🚨 不看退出碼：沒登入時 claude 回 1，JSON 照樣印在 stdout
+            #（實測 2026-10-12）。只在 0 才讀的話，「沒登入」會被當成看不懂
+            # 而退回憑證檔——檔案還在就判成已登入。與 App 的
+            # `parseClaudeAuthStatus` 同一份判準
+            try:
+                data = json.loads(out.decode("utf-8", "replace"))
+                value = data.get("loggedIn")
+            except (ValueError, AttributeError):
+                value = None
+            if isinstance(value, bool):
+                logged_in = value
+            else:
+                log.warning("claude auth status 的輸出看不懂（退出碼 %s）；"
+                            "改看憑證檔", proc.returncode)
         if logged_in is None:
             logged_in = self._has_claude_credentials()
         if not logged_in:
@@ -535,6 +555,7 @@ class RunnerLoop:
             self.state.limit_reason = "selfcheck_failed"
         else:
             self.state.status = "online"
+        self._next_login_check = self._login_check_deadline()
         # 對帳要在領新單之前，而且**自檢沒過也要做**：孤兒掛在 Hub 上跟這台
         # 起不起得來無關，不收的話它會一直是一筆正在做事的 run。
         # 取消清單只有 heartbeat 拿得到，所以先敲一次心跳再對帳
@@ -567,9 +588,77 @@ class RunnerLoop:
             self.state.last_maintenance_day = today
 
     def mark_limited(self, reason: str) -> None:
-        """撞到額度：停收新單。``weekly_limit`` 要等人類解除（§5.3）。"""
+        """撞到額度：停收新單。``weekly_limit`` 要等人類解除（§5.3）。
+
+        ``login_expired``（run 撞到登入失效）走登入檢查的同一條路：停收、
+        把原因放進自檢欄位，等下一次定期重驗通過才自動恢復。
+        """
+        if reason == LOGIN_EXPIRED_REASON:
+            self._mark_login_failed(
+                ["run 撞到 claude 登入失效（OAuth 過期或未登入）。"
+                 + self._login_hint()])
+            # 從現在起算一個完整間隔再驗：剛失敗就驗，`auth status` 若沒
+            # 看出過期，會立刻放行下一筆去撞同一面牆
+            self._next_login_check = self._login_check_deadline()
+            return
         self.state.status = "limited"
         self.state.limit_reason = reason
+
+    # ---------- 執行中的登入檢查 ----------
+
+    def _login_hint(self) -> str:
+        return ('登入：$env:CLAUDE_CONFIG_DIR = '
+                f'"{self.cfg.claude_config_dir}"; claude auth login')
+
+    def _login_check_deadline(self) -> float | None:
+        interval = self.cfg.login_check_seconds
+        return self.monotonic() + interval if interval > 0 else None
+
+    def _mark_login_failed(self, problems: list[str]) -> None:
+        """登入失效：停收新單，原因走自檢欄位（App 面板的自檢那一行）。
+
+        🚨 **status 報 limited，不報 offline**：活著的執行器心跳帶 offline 的
+        話，Hub 每一次心跳都會判成「從離線恢復」，在 ops 房講一次「已上線」。
+        status 只在 online 時才改：paused／draining 是人下的，不要蓋掉。
+        """
+        if not self.state.login_failed:
+            for problem in problems:
+                log.error("登入檢查：%s", problem)
+        self.state.login_failed = True
+        self.state.selfcheck_problems = list(problems)
+        if self.state.status == "online":
+            self.state.status = "limited"
+            self.state.limit_reason = LOGIN_EXPIRED_REASON
+
+    def _clear_login_failed(self) -> None:
+        log.info("登入檢查通過，恢復領單")
+        self.state.login_failed = False
+        self.state.selfcheck_problems = []
+        if (self.state.status == "limited"
+                and self.state.limit_reason == LOGIN_EXPIRED_REASON):
+            self.state.status = "online"
+            self.state.limit_reason = ""
+
+    async def check_login_periodically(self) -> None:
+        """到點就重跑 `_check_claude_login`。沒過停收，過了自動恢復。
+
+        間隔設 0 時不定期驗，但 resume 排進來的那一次照樣驗：不然 run 撞到
+        登入失效之後，只有重啟才解得開。
+        """
+        interval = self.cfg.login_check_seconds
+        now = self.monotonic()
+        if self._next_login_check is None:
+            if interval > 0:
+                self._next_login_check = now + interval
+            return
+        if now < self._next_login_check:
+            return
+        self._next_login_check = now + interval if interval > 0 else None
+        problems = await self._check_claude_login()
+        if problems:
+            self._mark_login_failed(problems)
+        elif self.state.login_failed:
+            self._clear_login_failed()
 
     # ---------- 心跳與命令 ----------
 
@@ -767,6 +856,10 @@ class RunnerLoop:
             self.state.limit_reason = ""
             self.state.limited_until = None
             self.state.draining = False
+            if self.state.login_failed:
+                # 登入沒好之前照樣不領單；下一輪就重驗，不讓人等滿一個間隔
+                self._next_login_check = self.monotonic()
+                return True, "已恢復；登入檢查未通過，重驗通過後才領單"
             return True, "已恢復"
         if command == "restart":
             self.state.restart_pending = True
@@ -952,7 +1045,8 @@ class RunnerLoop:
 
     def can_claim(self) -> bool:
         return (self.state.status == "online" and not self.state.draining
-                and not self.state.restart_pending and self.slots_free > 0)
+                and not self.state.restart_pending
+                and not self.state.login_failed and self.slots_free > 0)
 
     async def claim_once(self) -> dict | None:
         if not self.can_claim():
@@ -1033,6 +1127,11 @@ class RunnerLoop:
             await self._restarting_heartbeat()
             self._request_exit(EXIT_RESTART, "maintenance_window")
             return
+        await self.check_login_periodically()
+        if self.state.status != self._sent_status:
+            # 登入檢查改了狀態也要立刻報：恢復時 Hub 手上還是 limited，
+            # 這一輪的 claim 會被它擋掉；停收時面板也不該晚一個心跳才知道
+            await self.heartbeat()
         while self.can_claim():
             if await self.claim_once() is None:
                 break

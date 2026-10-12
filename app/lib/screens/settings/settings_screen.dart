@@ -27,6 +27,7 @@ import '../../widgets/uep_button.dart';
 import '../../widgets/uep_tab_bar.dart';
 import '../../ws/ws_client.dart';
 import '../../ws/ws_protocol.dart';
+import 'app_update_row.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -392,6 +393,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           SelectableText(BuildInfo.current.label,
               style: UepText.code(size: 11, color: s.inkSoft)),
         ]),
+        const AppUpdateRow(),
         const SizedBox(height: 26),
         Divider(color: s.line, height: 1),
         const SizedBox(height: 22),

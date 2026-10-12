@@ -15,6 +15,11 @@ from chatroom_runner.stream import (StreamWatcher, context_tokens_of,
                                     looks_like_weekly_limit, parse_line)
 from chatroom_runner.usage import UsageStore
 
+from chatroom_runner.config import (CLAUDE_OAUTH_TOKEN_ENV,
+                                    CLAUDE_OAUTH_TOKEN_FILE_NAME,
+                                    apply_oauth_token)
+from chatroom_runner.stream import looks_like_login_expired
+
 from ._fixtures import git, make_config
 
 
@@ -563,3 +568,110 @@ def test_livetest_line_only_shows_up_when_the_project_allows_it():
 def test_the_ticket_template_carries_the_livetest_slot():
     """模板裡沒有這個欄位的話，設定開了也不會有人看到那句話。"""
     assert "{{livetest_block}}" in prompts.load_template("ticket")
+
+
+# ── 長效 OAuth token 檔 ─────────────────────────────────────────
+
+def test_oauth_token_file_name_is_the_app_contract():
+    """檔名是與 App 的契約：App 寫這個名字，改了就沒有人讀得到。"""
+    assert CLAUDE_OAUTH_TOKEN_FILE_NAME == "claude-oauth-token"
+    assert CLAUDE_OAUTH_TOKEN_ENV == "CLAUDE_CODE_OAUTH_TOKEN"
+
+
+def test_oauth_token_is_stripped_and_reread_every_time(tmp_path, work_repo):
+    """每次起進程都重讀：人換了 token 不必重啟執行器。"""
+    cfg = make_config(tmp_path, work_repo)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    assert cfg.claude_oauth_token_file == (cfg.state_dir
+                                           / "claude-oauth-token")
+    cfg.claude_oauth_token_file.write_text("  first-value \n",
+                                           encoding="utf-8")
+    assert apply_oauth_token({}, cfg.state_dir) == {
+        CLAUDE_OAUTH_TOKEN_ENV: "first-value"}
+
+    cfg.claude_oauth_token_file.write_text("second-value", encoding="utf-8")
+    assert apply_oauth_token({}, cfg.state_dir) == {
+        CLAUDE_OAUTH_TOKEN_ENV: "second-value"}
+
+
+def test_missing_or_blank_token_file_keeps_the_old_behaviour(tmp_path):
+    """檔案不在、或只有空白：env 原封不動（繼承來的值也不碰）。"""
+    inherited = {CLAUDE_OAUTH_TOKEN_ENV: "inherited", "OTHER": "1"}
+    assert apply_oauth_token(dict(inherited), tmp_path) == inherited
+
+    (tmp_path / CLAUDE_OAUTH_TOKEN_FILE_NAME).write_text(" \n",
+                                                         encoding="utf-8")
+    assert apply_oauth_token(dict(inherited), tmp_path) == inherited
+
+
+def test_unreadable_token_file_never_leaks_its_content(tmp_path, caplog):
+    """讀不到就照舊，log 只講路徑——**token 的任何片段都不進 log**。"""
+    path = tmp_path / CLAUDE_OAUTH_TOKEN_FILE_NAME
+    path.write_bytes(b"secret-fragment-\xff\xfe")
+    with caplog.at_level("WARNING", logger="chatroom_runner.config"):
+        assert apply_oauth_token({}, tmp_path) == {}
+    assert str(path) in caplog.text
+    assert "secret-fragment" not in caplog.text
+
+    path.unlink()
+    path.mkdir()
+    with caplog.at_level("WARNING", logger="chatroom_runner.config"):
+        assert apply_oauth_token({}, tmp_path) == {}
+
+
+def test_login_check_interval_has_a_default_and_can_be_turned_off(
+        tmp_path, work_repo):
+    assert make_config(tmp_path, work_repo).login_check_seconds == 900
+    assert make_config(tmp_path, work_repo,
+                       login_check_seconds=0).login_check_seconds == 0
+
+
+# ── 登入失效的判定 ──────────────────────────────────────────────
+
+def test_login_expired_strings():
+    assert looks_like_login_expired(
+        "Failed to authenticate: OAuth session expired and could not be "
+        "refreshed")
+    assert looks_like_login_expired("Not logged in · Please run /login")
+    assert not looks_like_login_expired("rate limited, retrying")
+
+
+def test_an_mcp_connector_auth_failure_is_not_a_login_failure():
+    """MCP 連接器自己的認證失敗也印 "Failed to authenticate"——那是一個
+    連接器壞掉，不是執行器登入失效，不能讓整台停收。"""
+    line = ('MCP server "claude.ai Atlassian Rovo": Failed to authenticate: '
+            "HTTP 401 invalid_token")
+    assert not looks_like_login_expired(line)
+    w = StreamWatcher(0)
+    w.feed_stderr(line + "\n")
+    w.feed({"type": "system", "subtype": "mcp_error", "error": line})
+    w.feed({"type": "result", "subtype": "error_during_execution",
+            "is_error": True, "result": line})
+    assert not w.state.login_expired
+
+
+def test_login_expired_is_read_from_error_fields_and_stderr():
+    w = StreamWatcher(0)
+    w.feed({"type": "system", "subtype": "api_retry",
+            "error": "OAuth token has expired"})
+    assert w.state.login_expired
+
+    w = StreamWatcher(0)
+    w.feed_stderr("Failed to authenticate: OAuth session expired\n")
+    assert w.state.login_expired
+
+
+def test_a_successful_summary_mentioning_oauth_is_not_a_login_failure():
+    """🚨 成功的 result 是 agent 的摘要：修這個問題的 run 會在摘要裡寫出
+    「OAuth session expired」，那不是登入失效。助理文字也一樣不看。"""
+    w = StreamWatcher(0)
+    w.feed({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "OAuth session expired 的偵測已補上"}]}})
+    w.feed({"type": "result", "subtype": "success", "is_error": False,
+            "result": "修好了 OAuth session expired could not be refreshed"})
+    assert not w.state.login_expired
+
+    w = StreamWatcher(0)
+    w.feed({"type": "result", "subtype": "success", "is_error": True,
+            "result": "Not logged in"})
+    assert w.state.login_expired

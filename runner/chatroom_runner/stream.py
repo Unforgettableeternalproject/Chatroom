@@ -36,6 +36,26 @@ def looks_like_weekly_limit(text: str) -> bool:
     return bool(text) and bool(_WEEKLY_RE.search(text))
 
 
+# 登入失效的錯誤字串。`OAuth session expired`／`could not be refreshed` 是
+# 2026-10-05 `claude --debug mcp list` 印的；`Not logged in` 是未登入的實測
+# 形狀（見 fake_claude 的 not_logged_in）。撞到就整台停收，不是只把這筆標 failed。
+# 🚨 不收單獨的 "Failed to authenticate"：MCP 連接器自己的認證失敗也印這句，
+# 收了會把一個連接器壞掉判成整台登入失效
+LOGIN_EXPIRED_PATTERNS = (
+    "oauth session expired",
+    "could not be refreshed",
+    "oauth token has expired",
+    "not logged in",
+    "please run /login",
+)
+_LOGIN_RE = re.compile("|".join(re.escape(p) for p in LOGIN_EXPIRED_PATTERNS),
+                       re.IGNORECASE)
+
+
+def looks_like_login_expired(text: str) -> bool:
+    return bool(text) and bool(_LOGIN_RE.search(text))
+
+
 def parse_line(line: str) -> dict | None:
     """一行一事件。**不合法的行安靜略過**。
 
@@ -81,6 +101,9 @@ class StreamState:
     is_error: bool = False
     result_text: str = ""
     weekly_limit: bool = False
+    # 登入失效（OAuth 過期且 refresh 失敗、未登入）。來源同 weekly_limit：
+    # system／assistant 的 error 欄位、**is_error 時**的 result，以及 stderr
+    login_expired: bool = False
     soft_limit_hit: bool = False
     saw_result: bool = False
     # init 事件裡狀態不是 `connected` 的 MCP 伺服器名。外部 MCP（claude.ai
@@ -142,6 +165,11 @@ class StreamWatcher:
             self.feed(event)
         return event
 
+    def feed_stderr(self, line: str) -> None:
+        """stderr 的一行。只看登入失效：CLI 的認證錯誤有時只印在這裡。"""
+        if looks_like_login_expired(line):
+            self.state.login_expired = True
+
     def feed(self, event: dict) -> None:
         # 先記時間再分派：不管這是什麼事件、看不看得懂，收到就代表 run 還活著
         self.state.last_event_at = self.monotonic()
@@ -165,6 +193,8 @@ class StreamWatcher:
             self.state.rate_limit_retries += 1
         if looks_like_weekly_limit(str(event.get("message") or err)):
             self.state.weekly_limit = True
+        if looks_like_login_expired(str(event.get("message") or err)):
+            self.state.login_expired = True
         if event.get("subtype") == "init":
             self._init_mcp(event)
 
@@ -212,6 +242,8 @@ class StreamWatcher:
         err = str(event.get("error") or msg.get("error") or "")
         if looks_like_weekly_limit(err):
             self.state.weekly_limit = True
+        if looks_like_login_expired(err):
+            self.state.login_expired = True
         for block in msg.get("content") or []:
             if isinstance(block, dict) and block.get("type") == "text":
                 self.state.texts.append(str(block.get("text") or ""))
@@ -234,3 +266,7 @@ class StreamWatcher:
         st.result_text = str(event.get("result") or "")
         if looks_like_weekly_limit(st.result_text):
             st.weekly_limit = True
+        # 🚨 **只在 is_error 時看**：成功的 result 是 agent 的摘要，一筆在修
+        # 這個問題的 run 會在摘要裡寫出「OAuth session expired」
+        if st.is_error and looks_like_login_expired(st.result_text):
+            st.login_expired = True

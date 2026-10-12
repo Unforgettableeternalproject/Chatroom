@@ -212,6 +212,10 @@ class WindowTray with WindowListener, TrayListener {
     }
   }
 
+  /// 結束程式，與匣選單的「結束」同一條路。給自我更新用：closeToTray
+  /// 開著時關閉視窗只會藏起來，進程不會走。
+  Future<void> quit() => _quit();
+
   @override
   void onWindowClose() {
     if (!_enabled) return; // 開關關著＝照常結束，preventClose 也沒裝

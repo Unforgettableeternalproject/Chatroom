@@ -22,6 +22,7 @@ class BuildInfo {
     required this.version,
     required this.commit,
     required this.builtAt,
+    this.hotfix = 0,
   });
 
   /// 人看的「這是哪一版設計」。
@@ -34,6 +35,10 @@ class BuildInfo {
   /// 任何一個 commit。
   final String commit;
   final String builtAt;
+
+  /// 熱修序號：tag `v1.2.5-hotfix2` 的 2，沒有後綴就是 0。
+  /// 熱修不動 [version]，檢查更新時要靠它分辨新舊。
+  final int hotfix;
 
   /// 這份 App 講不講得出自己是哪一份程式碼。
   bool get isKnown => commit.isNotEmpty;
@@ -53,10 +58,15 @@ class BuildInfo {
   );
   static const _commit = String.fromEnvironment('CHATROOM_COMMIT');
   static const _builtAt = String.fromEnvironment('CHATROOM_BUILT_AT');
+  static const _hotfix = int.fromEnvironment('CHATROOM_HOTFIX');
 
   /// 這份 build 的識別。`--dart-define` 的值在編譯期就固定，執行期改不了。
-  static const current =
-      BuildInfo(version: _version, commit: _commit, builtAt: _builtAt);
+  static const current = BuildInfo(
+    version: _version,
+    commit: _commit,
+    builtAt: _builtAt,
+    hotfix: _hotfix,
+  );
 
   /// 與 Hub `/api/health` 回的 `build` 比對。
   ///

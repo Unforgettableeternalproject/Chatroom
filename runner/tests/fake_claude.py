@@ -21,6 +21,8 @@
 | `mcp_pending_noisy` | init 裡 chatroom 是 pending，接著**持續吐事件**直到被殺——驗「殺了就不再長」，不是「殺了它剛好也在睡」 | 0 |
 | `mcp_pending_then_ok` | 前 N-1 次 pending，第 N 次 connected 並成功 | 0 |
 | `mcp_connected` | init 裡 chatroom 是 connected，正常成功 | 0 |
+| `oauth_expired` | 認證錯誤**只印在 stderr**（2026-10-05 的字串），result is_error 但文字不帶線索 | 1 |
+| `token_check` | 把「有沒有拿到 `CLAUDE_CODE_OAUTH_TOKEN`、長度多少」寫進 run 目錄的 `token.json`（**不寫值**） | 0 |
 
 `mcp_pending_then_ok` 第幾次才連上由 `FAKE_CLAUDE_MCP_OK_AT` 決定
 （預設 3），次數記在 run 目錄的 `mcp_attempts`——跨進程的計數只能落檔。
@@ -200,6 +202,22 @@ def main(argv: list[str]) -> int:
                        "data": blob}}]}]}})
         assistant("圖我看過了。")
         result("success", False, "已完成：附件讀得進來。", turns=2)
+        return 0
+    if scenario == "oauth_expired":
+        print("Failed to authenticate: OAuth session expired and could not "
+              "be refreshed", file=sys.stderr)
+        sys.stderr.flush()
+        result("success", True, "", turns=0, cost=0.0)
+        return 1
+    if scenario == "token_check":
+        run_dir = os.environ.get("CHATROOM_RUNNER_RUN_DIR", ".")
+        token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+        with open(os.path.join(run_dir, "token.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"present": token is not None,
+                       "length": len(token or "")}, fh)
+        assistant("token 狀態已落檔。")
+        result("success", False, "token 狀態已落檔。", turns=1)
         return 0
     if scenario == "not_logged_in":
         # 實測 2.1.273：加 --bare 未登入時 subtype 照樣是 success。
