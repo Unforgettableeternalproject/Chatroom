@@ -80,6 +80,8 @@ class HostConsoleScreen extends ConsumerWidget {
               ref.invalidate(runnerIdProvider);
               ref.invalidate(kitReleaseProvider);
               ref.invalidate(runnerBusyProvider);
+              // 登入狀態也看 `mcp list` 的過期旗標，兩個一起重讀
+              ref.invalidate(machineMcpServersProvider);
               ref.invalidate(runnerClaudeLoginProvider);
               // 前置條件那幾列也跟著重查（含 kitPythonProvider）
               recheckKitPrereqs(ref);

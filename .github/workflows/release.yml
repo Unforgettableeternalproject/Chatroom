@@ -149,7 +149,10 @@ jobs:
 
       # ⚠️ 這裡刻意不用管線。`python build-app.py | tee log` 會讓 exit code
       # 變成 tee 的，build 失敗照樣綠燈——2026-09-11 在本機實際踩過一次。
+      # tag 帶進去，App 才知道自己是第幾個熱修（`-hotfix<n>`）
       - name: Build App
+        env:
+          CHATROOM_RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: python scripts/build-app.py
 
       # App 不是單一檔案：exe 只是 C++ runner 殼，Dart 程式碼在 data/app.so。

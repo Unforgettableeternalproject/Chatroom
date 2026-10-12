@@ -248,6 +248,10 @@ def _fake_stage(inst, kit_src: Path, monkeypatch, *, version="1.2.3",
     monkeypatch.setattr(inst, "ensure_venv",
                         lambda target: target / ".venv" / "python.exe")
     monkeypatch.setattr(inst, "write_pth", lambda python, target: True)
+    # 不起真的 `claude auth status`：這台機器的 claude 對暫存設定目錄說什麼
+    # 不是這裡要驗的事。「問不出來」＝退回憑證檔判準
+    monkeypatch.setattr(inst, "claude_auth_status",
+                        lambda *_args, **_kwargs: None)
 
 
 def test_runner_kit_yes_is_silent_and_reports(tmp_path, monkeypatch, capsys,
@@ -376,6 +380,78 @@ def test_runner_kit_incomplete_package_fails_loudly(tmp_path, monkeypatch,
     captured = capsys.readouterr()
     assert "不完整" in captured.err
     assert result_line(captured.out)["ok"] is False
+
+
+def test_runner_kit_login_asks_claude_first(tmp_path, monkeypatch):
+    """`claude auth status` 問得出來就以它為準（比照執行器自檢）。
+
+    憑證檔在、但 OAuth 過期又 refresh 不了時，只有它說得出「沒登入」。
+    """
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_as")
+    claude_config = tmp_path / "claude-config"
+    claude_config.mkdir()
+    (claude_config / ".credentials.json").write_text(
+        '{"claudeAiOauth":{"accessToken":"x"}}', encoding="utf-8")
+
+    monkeypatch.setattr(inst, "claude_auth_status", lambda *_a, **_k: False)
+    assert inst.has_claude_login(claude_config) is False
+
+    monkeypatch.setattr(inst, "claude_auth_status", lambda *_a, **_k: None)
+    assert inst.has_claude_login(claude_config) is True
+
+    (claude_config / ".credentials.json").unlink()
+    monkeypatch.setattr(inst, "claude_auth_status", lambda *_a, **_k: True)
+    assert inst.has_claude_login(claude_config) is True
+
+
+def test_runner_kit_auth_status_carries_the_oauth_token(tmp_path,
+                                                        monkeypatch):
+    """token 檔在 state_dir（與 claude-config 同層）就注入；值不進任何輸出。"""
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_tok")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "claude-oauth-token").write_text(" probe-value \n",
+                                              encoding="utf-8")
+    seen = {}
+
+    class Done:
+        returncode = 0
+        stdout = b'{"loggedIn": true, "authMethod": "oauth_token"}'
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv[1:]
+        seen["has_token"] = (kwargs["env"].get("CLAUDE_CODE_OAUTH_TOKEN")
+                             == "probe-value")
+        seen["config_dir"] = kwargs["env"]["CLAUDE_CONFIG_DIR"]
+        assert kwargs.get("timeout"), "App 以 --yes 跑，卡住就是整個安裝卡住"
+        return Done()
+
+    monkeypatch.setattr(inst.shutil, "which", lambda _name: "claude")
+    monkeypatch.setattr(inst.subprocess, "run", fake_run)
+
+    assert inst.claude_auth_status(tmp_path / "cc", state) is True
+    assert seen == {"argv": ["auth", "status", "--json"], "has_token": True,
+                    "config_dir": str(tmp_path / "cc")}
+
+    (state / "claude-oauth-token").unlink()
+    inst.claude_auth_status(tmp_path / "cc", state)
+    assert seen["has_token"] is False
+
+    Done.stdout = b"not json"
+    assert inst.claude_auth_status(tmp_path / "cc", state) is None
+    Done.returncode = 1
+    assert inst.claude_auth_status(tmp_path / "cc", state) is None
+
+
+def test_runner_kit_state_dir_follows_the_config(tmp_path):
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_sd")
+    config = tmp_path / "state" / "config.json"
+    assert inst.state_dir_for(config) == config.parent
+
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"state_dir": str(tmp_path / "elsewhere")}),
+                      encoding="utf-8")
+    assert inst.state_dir_for(config) == tmp_path / "elsewhere"
 
 
 # ---------- 三包一致 ----------

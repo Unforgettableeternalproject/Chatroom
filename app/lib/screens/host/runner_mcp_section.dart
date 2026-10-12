@@ -156,7 +156,12 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
             // 設定裡的名字，但**不**在它們旁邊標「本機找不到」
             data: (found) => _rows(s, l10n,
                 machine: found.names,
-                error: found.error,
+                // 過期時 claude 的原文（常是 "No MCP servers configured"）
+                // 指錯方向，改講真正的原因
+                error: found.authExpired
+                    ? l10n.hostRunnerMcpAuthExpired
+                    : found.error,
+                rawError: found.authExpired,
                 origins: found.origins,
                 globalError: found.globalError,
                 complete: found.complete),
@@ -179,6 +184,7 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
   Widget _rows(UepSurface s, AppLocalizations l10n,
       {required List<String>? machine,
       required String error,
+      bool rawError = false,
       Map<String, McpServerOrigin> origins = const {},
       String globalError = '',
       bool complete = true}) {
@@ -197,7 +203,7 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
         if (error.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
-            child: Text(l10n.hostRunnerMcpListFailed(error),
+            child: Text(rawError ? error : l10n.hostRunnerMcpListFailed(error),
                 style: UepText.serif(size: 12.5, color: UepColors.error)),
           ),
         if (globalError.isNotEmpty)

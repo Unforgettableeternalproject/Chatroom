@@ -34,7 +34,7 @@ from . import gitops, prompts
 # **專案**（`ProjectConfig`）。Hub／DB／bridge 的欄位名沒有跟著換
 from .config import (SOFT_STOP_FLAG_NAME, SOFT_STOP_TIMEOUT_FLAG_NAME,
                      ProjectConfig, RunnerConfig, WorkspaceConfig,
-                     render_template)
+                     apply_oauth_token, render_template)
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
 from .procs import no_window_kwargs
@@ -73,6 +73,9 @@ CHILD_CLAUDE_ENV = {
 # 而 Hub 上那筆 run 永遠停在 running。放大到 64 MiB：一行事件再大也是記憶體
 # 裡的一份字串，比「一筆 run 從此無人收屍」便宜太多
 STREAM_LINE_LIMIT = 64 * 1024 * 1024
+# 子 claude 撞到登入失效時 run 與執行器共用的 reason。執行器標 limited 時
+# 也用這個字串當 `limit_reason`（App 依它顯示）
+LOGIN_EXPIRED_REASON = "login_expired"
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
 WRITE_KINDS = {"ticket", "stage", "push", "release"}
 # 上板之後那一支只做報告的子進程用的 kind。**不是 Hub 的 run kind**：Hub 上
@@ -120,19 +123,32 @@ WRITE_ALLOWED_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 def allowed_tools(kind: str, extra: list[str] | None = None,
-                  skills: list[str] | None = None) -> list[str]:
+                  skills: list[str] | None = None,
+                  mcp_servers: list[str] | None = None) -> list[str]:
     """這筆 run 要預先授權哪些工具。順序穩定，方便測試與 log 比對。
 
     ``skills`` 是這一輪要授權的 skill 名：工作區的 `primary_skill`（不分
     kind）加上這種 kind 必須遵守的那些（見 `WorkspaceConfig.all_skills_for`）。
     headless 下 skill 一樣要預授權（`Skill(<name>)`），不然模型一叫它就停在
     一個沒有人能按的權限提示。
+
+    ``mcp_servers`` 是 App 那顆「允許派工使用的 MCP」勾選清單
+    （``RunnerConfig.allowed_mcp_servers``）。🚨 **只讓伺服器不被 deny
+    （`blocked_mcp_servers`）不夠**：`--permission-mode auto` 不會自動放行
+    MCP 工具（見 `BASE_ALLOWED_TOOLS` 上面那段實測），沒被列進這裡的伺服器，
+    它的工具一樣會停在權限提示——這正是 chatroom 以外的勾選伺服器（fff、
+    lore-vault）明明沒被擋、呼叫卻還是「沒有授權」的原因。``chatroom`` 已經
+    在 `BASE_ALLOWED_TOOLS` 裡，重複加入會被下面的去重擋掉，無害。
     """
     tools = list(BASE_ALLOWED_TOOLS)
     if kind in WRITE_KINDS:
         tools += list(WRITE_ALLOWED_TOOLS)
     for name in skills or []:
         entry = f"Skill({name})"
+        if name and entry not in tools:
+            tools.append(entry)
+    for name in mcp_servers or []:
+        entry = f"mcp__{server_slug(name)}__*"
         if name and entry not in tools:
             tools.append(entry)
     for name in extra or []:
@@ -209,7 +225,12 @@ MCP_LIST_TIMEOUT_SECONDS = 90
 #（`C:/python.exe -m chatroom_mcp`），`\S+` 只吃到執行檔就對不上後面的
 # ` - `，整行會被當成沒有伺服器而靜默跳過。改成非貪婪吃到狀態符號為止
 _MCP_LIST_RE = re.compile(r"^(?P<name>\S.*?): (?P<target>.+?) - [✔!✘]")
-_NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
+# 🚨 `-` 不能被取代：本機 stdio 伺服器的名字就是工具名裡的那一段，原樣帶著
+# 連字號（實測 `mcp__lore-vault__ask`）。只有連接器那種帶空格／句點的顯示名
+# 才需要正規化。這條正規式之前把 `-` 也換成 `_`，`lore-vault` 會被算成
+# `lore_vault`——`allowed_tools()` 用它組出來的 `mcp__lore_vault__*` 對不上
+# 實際的 `mcp__lore-vault__*`，勾選的伺服器因此卡在權限提示（而不是被擋）
+_NON_TOOL_CHAR_RE = re.compile(r"[^A-Za-z0-9_-]")
 # 自檢探到的 MCP 伺服器（顯示名 → URL；本機 stdio 伺服器的 URL 是空字串）。
 # 保底名單之外多出來的那些
 _discovered_servers: dict[str, str] = {}
@@ -1552,7 +1573,8 @@ class RunExecutor:
               run_dir: Path, resume: str, kind: str = "") -> list[str]:
         # 優先載入的 skill 不分 kind 都要授權，否則契約叫它就卡權限提示
         tools = allowed_tools(kind, self.cfg.extra_allowed_tools,
-                              project.all_skills_for(kind))
+                              project.all_skills_for(kind),
+                              self.cfg.allowed_mcp_servers)
         denied = disallowed_tools(self.cfg.allowed_mcp_servers,
                                   self.cfg.extra_allowed_tools)
         argv = list(self.cfg.claude_bin) + [
@@ -1736,12 +1758,16 @@ class RunExecutor:
                      mcp_not_ready: asyncio.Event | None = None
                      ) -> tuple[int, str]:
         """起進程並逐行吃 stream。回 ``(exit_code, 停止原因)``。"""
+        # 長效 token 每起一次進程就重讀一次：同一筆 run 的 --resume／MCP
+        # 重試也吃得到人剛換上的 token。複製一份，不改呼叫端那份 env
+        env = apply_oauth_token(dict(env), self.cfg.state_dir)
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(cwd), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=STREAM_LINE_LIMIT, **no_window_kwargs())
         self.live_proc = proc
         pump = asyncio.create_task(self._pump(proc, watcher, run_dir))
+        err_pump = asyncio.create_task(self._pump_stderr(proc, watcher))
         waiter = asyncio.create_task(proc.wait())
         canceller = asyncio.create_task(cancel.wait())
         # chatroom 開場沒連上時由這一條把進程叫停（見 REQUIRED_MCP_SERVER）
@@ -1779,8 +1805,30 @@ class RunExecutor:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 # pragma: no cover - 讀不完就算了，狀態已經夠判斷
                 pump.cancel()
+            try:
+                await asyncio.wait_for(err_pump, timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # pragma: no cover - 同上
+                err_pump.cancel()
             self.live_proc = None
         return proc.returncode or 0, stop
+
+    async def _pump_stderr(self, proc, watcher: StreamWatcher) -> None:
+        """stderr 逐行交給 watcher 看登入失效，**不落檔**。
+
+        以前 stderr 開了 PIPE 卻沒人讀：CLI 的認證錯誤只印在這裡時看不到，
+        印得多的話管線塞滿還會把子進程卡住。例外一律吞掉（理由同 `_pump`）。
+        """
+        try:
+            while True:
+                raw = await proc.stderr.readline()
+                if not raw:
+                    break
+                watcher.feed_stderr(raw.decode("utf-8", "replace"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("stderr 讀取中斷（%s）", exc.__class__.__name__)
 
     async def _pump(self, proc, watcher: StreamWatcher, run_dir: Path) -> None:
         """stdout 逐行進 watcher，同時原樣落檔（事後要有得看）。
@@ -1839,11 +1887,17 @@ class RunExecutor:
             # 重試已經在 `_claude_run` 用完了；走到這裡就是前置條件不成立
             return RunOutcome("failed", reason=MCP_UNAVAILABLE_REASON,
                               usage=usage, claude_session_id=sid)
+        failed = code != 0 or state.is_error or not state.saw_result
+        if failed and state.login_expired:
+            # 登入失效：這筆 failed，**整台也停收**（`runner_limit_reason`
+            # 交給主迴圈）。不然佇列裡的票會一張接一張變成同樣的 failed
+            return RunOutcome("failed", reason=LOGIN_EXPIRED_REASON,
+                              usage=usage, claude_session_id=sid,
+                              runner_limit_reason=LOGIN_EXPIRED_REASON)
         if state.weekly_limit:
             return RunOutcome("limited", reason="weekly_limit", usage=usage,
                               claude_session_id=sid,
                               runner_limit_reason="weekly_limit")
-        failed = code != 0 or state.is_error or not state.saw_result
         if failed and (rate_limited
                        or state.subtype == "error_during_execution"
                        and state.rate_limit_retries > 0):

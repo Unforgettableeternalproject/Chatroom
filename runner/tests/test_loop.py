@@ -185,6 +185,24 @@ async def test_selfcheck_fails_when_claude_is_not_logged_in(
     assert str(cfg.claude_config_dir) in problems[0]
 
 
+async def test_not_logged_in_exit_code_does_not_fall_back_to_credentials(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 沒登入時 `claude auth status` 的退出碼是 1，JSON 照樣印在 stdout
+    （實測 2026-10-12）。
+
+    只在退出碼 0 才讀 `loggedIn` 的話，這一句會被當成「看不懂」而退回
+    憑證檔——檔案還在（裡面只剩 plugin 的 OAuth 項目），就判成已登入。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert (cfg.claude_config_dir / ".credentials.json").is_file()
+    _fake_auth_status(monkeypatch, b'{"loggedIn": false}', returncode=1)
+
+    problems = await loop._check_claude_login()
+
+    assert problems and "沒登入" in problems[0]
+
+
 async def test_login_check_falls_back_to_the_credentials_file(
         runner_hub, work_repo, tmp_path, monkeypatch):
     """`claude auth status` 叫不起來時退回憑證檔（安裝器的判準）。"""
@@ -1623,3 +1641,168 @@ async def test_reload_reports_both_lists_again(
     assert loop.state.reregister_pending is False
     await loop.heartbeat()
     assert beats[-1]["private_projects"] == ["ai-website"]
+
+
+# ── 執行中的登入檢查 ────────────────────────────────────────────
+
+def _login_probe(loop, verdict: dict):
+    """把 `_check_claude_login` 換成看 ``verdict["problems"]`` 的假探針。"""
+    calls = []
+
+    async def fake():
+        calls.append(1)
+        return list(verdict["problems"])
+
+    loop._check_claude_login = fake
+    return calls
+
+
+async def test_periodic_login_check_stops_and_resumes_claiming(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """🚨 OAuth 中途過期：到點重驗沒過就停收，過了自動恢復。
+
+    啟動自檢只驗一次；之後過期的話，每一筆單都只會是一張 failed。
+    status 報 limited（**不是 offline**：活著的執行器報 offline，Hub 每個
+    心跳都會在 ops 房講一次「已上線」），原因走自檢欄位給 App 顯示。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    cfg = make_config(tmp_path, work_repo, login_check_seconds=900)
+    clock = {"t": 1000.0}
+    gate = asyncio.Event()
+    loop = _loop(cfg, runner_hub, monotonic=lambda: clock["t"],
+                 executor_factory=lambda: StubExecutor(gate))
+    assert await loop.start()
+    verdict = {"problems": ["claude 在執行器設定目錄下沒登入"]}
+    calls = _login_probe(loop, verdict)
+    await create_run(client, room_id, headers, ref="task-login-a")
+
+    clock["t"] += 899
+    await loop.tick()
+    assert calls == [], "還沒到點就重驗了"
+    assert len(StubExecutor.seen) == 1
+    gate.set()
+    await asyncio.gather(*[a.task for a in loop.active.values()])
+
+    await create_run(client, room_id, headers, ref="task-login-b")
+    clock["t"] += 2
+    await loop.tick()
+    assert calls == [1]
+    assert loop.state.status == "limited"
+    assert loop.state.limit_reason == "login_expired"
+    assert loop.state.selfcheck_problems == verdict["problems"]
+    assert len(StubExecutor.seen) == 1, "登入失效還在領單"
+
+    # 下一次心跳把原因帶到 Hub：App 從 runner 列與 dashboard 讀
+    await loop.tick()
+    row = await (await _app.state.db.execute(
+        "SELECT status, limit_reason, dashboard_json FROM runner WHERE id=?",
+        (runner_hub.identity.runner_id,))).fetchone()
+    assert row["status"] == "limited"
+    assert row["limit_reason"] == "login_expired"
+    board = json.loads(row["dashboard_json"])
+    assert board["runner"]["selfcheck_problems"] == verdict["problems"]
+
+    verdict["problems"] = []
+    clock["t"] += 901
+    await loop.tick()
+    assert loop.state.status == "online"
+    assert loop.state.limit_reason == ""
+    assert loop.state.selfcheck_problems == []
+    assert len(StubExecutor.seen) == 2, "登入恢復後沒有自動恢復領單"
+    await asyncio.gather(*[a.task for a in loop.active.values()])
+
+
+async def test_login_check_interval_zero_never_rechecks(
+        runner_hub, work_repo, tmp_path):
+    cfg = make_config(tmp_path, work_repo, login_check_seconds=0)
+    clock = {"t": 0.0}
+    loop = _loop(cfg, runner_hub, monotonic=lambda: clock["t"])
+    calls = _login_probe(loop, {"problems": ["x"]})
+    for _ in range(3):
+        clock["t"] += 10_000
+        await loop.check_login_periodically()
+    assert calls == []
+
+    # run 撞到登入失效之後，resume 排進來的那一次照樣驗（只驗一次）
+    loop.mark_limited("login_expired")
+    loop.apply_command("resume")
+    await loop.check_login_periodically()
+    clock["t"] += 10_000
+    await loop.check_login_periodically()
+    assert calls == [1]
+
+
+async def test_a_run_hitting_an_expired_login_stops_claiming_at_once(
+        runner_hub, work_repo, tmp_path):
+    """run 撞到登入失效（`runner_limit_reason=login_expired`）走同一條路。"""
+    cfg = make_config(tmp_path, work_repo)
+    clock = {"t": 0.0}
+    loop = _loop(cfg, runner_hub, monotonic=lambda: clock["t"])
+
+    loop.mark_limited("login_expired")
+
+    assert loop.state.login_failed
+    assert loop.state.status == "limited"
+    assert loop.state.limit_reason == "login_expired"
+    assert loop.state.selfcheck_problems
+    assert "claude auth login" in loop.state.selfcheck_problems[0]
+    assert not loop.can_claim()
+
+
+async def test_resume_does_not_bypass_a_failed_login(
+        runner_hub, work_repo, tmp_path):
+    """人按 resume 會把 status 改回 online，但登入沒好之前照樣不領單；
+    下一輪就重驗，不讓人等滿一個間隔。"""
+    cfg = make_config(tmp_path, work_repo, login_check_seconds=900)
+    clock = {"t": 0.0}
+    loop = _loop(cfg, runner_hub, monotonic=lambda: clock["t"])
+    loop.mark_limited("login_expired")
+    verdict = {"problems": ["還是沒登入"]}
+    calls = _login_probe(loop, verdict)
+
+    applied, note = loop.apply_command("resume")
+
+    assert applied and "登入" in note
+    assert loop.state.status == "online"
+    assert not loop.can_claim()
+    await loop.check_login_periodically()
+    assert calls == [1]
+    assert loop.state.status == "limited"
+
+    verdict["problems"] = []
+    loop.apply_command("resume")
+    await loop.check_login_periodically()
+    assert loop.can_claim()
+
+
+async def test_a_failed_login_does_not_overwrite_a_human_pause(
+        runner_hub, work_repo, tmp_path):
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub, monotonic=lambda: 0.0)
+    loop.apply_command("pause")
+
+    loop.mark_limited("login_expired")
+
+    assert loop.state.status == "paused"
+    assert loop.state.limit_reason == "paused_by_human"
+    assert loop.state.login_failed
+
+
+async def test_login_probes_carry_the_oauth_token(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """`auth status` 也要帶長效 token：驗的是「run 起得來嗎」。"""
+    cfg = make_config(tmp_path, work_repo)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    cfg.claude_oauth_token_file.write_text("probe-value", encoding="utf-8")
+    loop = _loop(cfg, runner_hub)
+    seen = {}
+
+    async def fake_exec(*argv, **kwargs):
+        seen["has_token"] = (kwargs["env"].get("CLAUDE_CODE_OAUTH_TOKEN")
+                             == "probe-value")
+        return _FakeProc(b'{"loggedIn": true}')
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    assert await loop._check_claude_login() == []
+    assert seen["has_token"] is True

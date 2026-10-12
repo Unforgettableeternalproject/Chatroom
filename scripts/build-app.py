@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,16 @@ def app_version() -> str:
             # `1.1.0+1` → `1.1.0`；build number 由 commit 短碼擔任
             return line.split(":", 1)[1].strip().split("+", 1)[0]
     raise SystemExit("✕ app/pubspec.yaml 裡找不到 version:——無法判定版本")
+
+
+def hotfix_number(tag: str) -> int:
+    """Release tag 的熱修序號：`v1.2.5-hotfix2` → 2，沒有後綴就是 0。
+
+    熱修不動版號（見 release.yml 的版本一致性檢查），App 要另外知道自己是
+    第幾個熱修，檢查更新時才分得出 `v1.2.5` 與 `v1.2.5-hotfix2`。
+    """
+    m = re.search(r"-hotfix(\d+)$", tag.strip())
+    return int(m.group(1)) if m else 0
 
 
 def git(*args: str) -> str:
@@ -173,11 +184,14 @@ def main() -> int:
               f"這份產物對不回任何一個 commit（{commit}）。", file=sys.stderr)
 
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Release 流程帶進來的 tag；本機 build 沒設就是 0
+    hotfix = hotfix_number(os.environ.get("CHATROOM_RELEASE_TAG", ""))
     cmd = [
         flutter_cmd(), "build", "windows", "--release",
         f"--dart-define=CHATROOM_VERSION={version}",
         f"--dart-define=CHATROOM_COMMIT={commit}",
         f"--dart-define=CHATROOM_BUILT_AT={built_at}",
+        f"--dart-define=CHATROOM_HOTFIX={hotfix}",
     ]
     print(f"→ {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=APP)

@@ -62,6 +62,15 @@ DISCLAIMER = """⚠️ 支援範圍
 # 登入子命令（`claude auth login`，見 `claude auth --help`）。
 CLAUDE_LOGIN_ARGS = ("auth", "login")
 
+# 長效 OAuth token 檔，在執行器 state_dir 下、與 `claude-config` 同層。
+# **與執行器 `chatroom_runner.config.CLAUDE_OAUTH_TOKEN_FILE_NAME`、App 三方
+# 共用的檔名**（安裝器只用標準庫，import 不到那一份，所以抄一份）。改名＝
+# App 寫的 token 沒人讀
+CLAUDE_OAUTH_TOKEN_FILE_NAME = "claude-oauth-token"
+CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+# `claude auth status` 的上限。App 以 `--yes` 跑安裝器，卡住就是整個安裝卡住
+AUTH_STATUS_TIMEOUT_SECONDS = 60
+
 # 執行器本身只用到 httpx（其餘是標準庫）；bridge 另外要 mcp。
 # 版本界線沿用 bridge/pyproject.toml——**兩邊一定要一致**，不然這包裡的
 # bridge 與 install-kit 發出去的那包會是不同的東西。
@@ -404,20 +413,90 @@ def claude_config_dir_for(config_path: Path) -> Path:
     return config_path.parent / "claude-config"
 
 
+def state_dir_for(config_path: Path) -> Path:
+    """執行器實際會用的 state_dir（長效 token 檔就在這裡）。
+
+    同 `claude_config_dir_for`：設定檔已經有 `state_dir` 就以它為準。
+    """
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        value = data.get("state_dir") if isinstance(data, dict) else ""
+        if value:
+            return Path(str(value)).expanduser()
+    except (OSError, ValueError):
+        pass
+    return config_path.parent
+
+
+def claude_auth_env(claude_config_dir: Path,
+                    state_dir: Path | None = None) -> dict[str, str]:
+    """問 claude 登入狀態用的環境。token 檔有內容就注入（同執行器）。
+
+    🚨 token 本身不印、不進例外訊息。
+    """
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
+    if state_dir is not None:
+        try:
+            token = (state_dir / CLAUDE_OAUTH_TOKEN_FILE_NAME).read_text(
+                encoding="utf-8-sig").strip()
+        except (OSError, UnicodeDecodeError):
+            token = ""
+        if token:
+            env[CLAUDE_OAUTH_TOKEN_ENV] = token
+    return env
+
+
+def claude_auth_status(claude_config_dir: Path,
+                       state_dir: Path | None = None) -> bool | None:
+    """`claude auth status --json` 的 `loggedIn`。問不出來回 None。
+
+    叫不起來、逾時、非零退出、輸出看不懂都算「問不出來」，交給呼叫端退回
+    憑證檔判準。
+    """
+    claude = shutil.which("claude")
+    if claude is None:
+        return None
+    try:
+        done = subprocess.run(
+            [claude, "auth", "status", "--json"],
+            env=claude_auth_env(claude_config_dir, state_dir),
+            capture_output=True, timeout=AUTH_STATUS_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        data = json.loads(done.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or "loggedIn" not in data:
+        return None
+    return bool(data.get("loggedIn"))
+
+
 def login_hint(claude_config_dir: Path) -> str:
     """一行 PowerShell：設好 CLAUDE_CONFIG_DIR 再叫登入。"""
     return (f'$env:CLAUDE_CONFIG_DIR = "{claude_config_dir}"; '
             f'claude {" ".join(CLAUDE_LOGIN_ARGS)}')
 
 
-def has_claude_login(claude_config_dir: Path) -> bool:
-    """這個設定目錄底下看不看得到登入憑證。
+def has_claude_login(claude_config_dir: Path,
+                     state_dir: Path | None = None) -> bool:
+    """這個設定目錄到底有沒有登入。
 
-    ⚠️ 只是**痕跡偵測**：憑證檔在 `.credentials.json`（Claude Code 寫在
+    判準比照執行器的自檢：先問 `claude auth status --json`（帶長效 token），
+    問得出來就以它為準——憑證檔在、但 OAuth 過期又 refresh 不了時，只有它
+    說得出「沒登入」。
+
+    問不出來才退回**痕跡偵測**：憑證檔在 `.credentials.json`（Claude Code 寫在
     `CLAUDE_CONFIG_DIR` 根下），舊一點的版本把帳號記在 `.claude.json` 的
     `oauthAccount`。兩個都看不到就回 False——**寧可多叫一次登入**，也不要
     讓 App 顯示「已登入」而執行器第一筆單就因為沒登入而炸掉。
     """
+    status = claude_auth_status(claude_config_dir, state_dir)
+    if status is not None:
+        return status
     cred = claude_config_dir / ".credentials.json"
     try:
         if cred.is_file() and cred.stat().st_size > 2:
@@ -624,8 +703,9 @@ def main(argv: list[str] | None = None) -> None:
     registry = write_registry(target, python, config_path)
 
     claude_config = claude_config_dir_for(config_path)
+    state_dir = state_dir_for(config_path)
     hint = login_hint(claude_config)
-    logged_in = has_claude_login(claude_config)
+    logged_in = has_claude_login(claude_config, state_dir)
 
     config_note = "" if wrote else (
         "\n   （設定檔原本就在，這次沒有動它——上面問的 Hub 位址與 token "
@@ -666,7 +746,7 @@ def main(argv: list[str] | None = None) -> None:
     if not args.yes and not logged_in:
         if ask_yes_no("現在就登入 Claude Code？", True):
             if run_login(claude_config):
-                logged_in = has_claude_login(claude_config)
+                logged_in = has_claude_login(claude_config, state_dir)
                 print("✅ 已登入。" if logged_in else
                       "登入流程結束了，但這個設定目錄下看不到憑證——"
                       f"自檢前請再確認一次：\n   {hint}")

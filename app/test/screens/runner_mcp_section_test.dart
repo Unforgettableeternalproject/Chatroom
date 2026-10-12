@@ -48,6 +48,7 @@ void main() {
     Map<String, McpServerOrigin> origins = const {},
     String globalError = '',
     bool complete = true,
+    bool authExpired = false,
   }) =>
       ProviderScope(
         overrides: [
@@ -59,7 +60,8 @@ void main() {
                   error: machineError,
                   origins: origins,
                   globalError: globalError,
-                  complete: complete)),
+                  complete: complete,
+                  authExpired: authExpired)),
         ],
         child: MaterialApp(
           locale: kTestLocale,
@@ -108,6 +110,18 @@ void main() {
     expect(find.text('正在讀這台機器的 MCP 清單…'), findsNothing,
         reason: '一直停在「正在讀」＝「讀不到」永遠不會被說出來');
     expect(find.text('claude.ai Atlassian Rovo'), findsOneWidget);
+  });
+
+  testWidgets('🔴 OAuth 過期：不貼 claude 的原文，改說執行器登入已過期',
+      (tester) async {
+    await tester.pumpWidget(wrap(await load(tester),
+        machineError: 'No MCP servers configured', authExpired: true));
+    await tester.pumpAndSettle();
+
+    expect(find.text('執行器登入已過期，請在上方重新登入。'), findsOneWidget);
+    expect(find.textContaining('No MCP servers configured'), findsNothing,
+        reason: '原文指向「沒設定 MCP」，真正的原因是登入過期');
+    expect(find.text('本機找不到'), findsNothing);
   });
 
   testWidgets('🔴 兩邊的伺服器都列得出來，而且各標各的來源', (tester) async {
