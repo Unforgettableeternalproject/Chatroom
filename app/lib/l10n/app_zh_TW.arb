@@ -7942,5 +7942,72 @@
   "settingsSectionBasics": "基本資料",
   "@settingsSectionBasics": {
     "description": "房間設定頁與任務板設定頁：名稱、描述等基本欄位的區段標題"
+  },
+  "settingsUpdateCheck": "檢查更新",
+  "@settingsUpdateCheck": {
+    "description": "連線分頁：檢查 App 更新的按鈕"
+  },
+  "settingsUpdateUpToDate": "已是最新版本",
+  "@settingsUpdateUpToDate": {
+    "description": "檢查更新：沒有較新的版本"
+  },
+  "settingsUpdateAvailable": "有新版本 {tag}",
+  "@settingsUpdateAvailable": {
+    "description": "檢查更新：查到較新的版本",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsUpdateCheckFailed": "查不到更新資訊",
+  "@settingsUpdateCheckFailed": {
+    "description": "檢查更新：查詢失敗"
+  },
+  "settingsUpdateDownload": "下載並更新",
+  "@settingsUpdateDownload": {
+    "description": "檢查更新：下載新版的按鈕"
+  },
+  "settingsUpdateDownloading": "下載中 {percent}%",
+  "@settingsUpdateDownloading": {
+    "description": "檢查更新：下載進度",
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsUpdateReady": "{tag} 已下載",
+  "@settingsUpdateReady": {
+    "description": "檢查更新：新版已下載，等重新啟動",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "settingsUpdateRestart": "重新啟動並更新",
+  "@settingsUpdateRestart": {
+    "description": "檢查更新：套用新版並重新啟動的按鈕"
+  },
+  "settingsUpdateFailNotWritable": "安裝目錄沒有寫入權限",
+  "@settingsUpdateFailNotWritable": {
+    "description": "更新失敗：安裝目錄寫不進去"
+  },
+  "settingsUpdateFailDownload": "下載失敗",
+  "@settingsUpdateFailDownload": {
+    "description": "更新失敗：下載出錯"
+  },
+  "settingsUpdateFailVerify": "下載的檔案驗證失敗",
+  "@settingsUpdateFailVerify": {
+    "description": "更新失敗：大小、雜湊或內容不符"
+  },
+  "settingsUpdateFailExtract": "解壓失敗",
+  "@settingsUpdateFailExtract": {
+    "description": "更新失敗：解壓出錯"
+  },
+  "settingsUpdateFailLaunch": "無法啟動更新",
+  "@settingsUpdateFailLaunch": {
+    "description": "更新失敗：更新腳本起不來"
   }
 }

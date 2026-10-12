@@ -1595,5 +1595,18 @@
   "boardContribReleased": "上板",
   "boardChecklistCreatedBy": "由 {name} 建立",
   "boardChecklistCreatorUnknown": "建立者不明",
-  "settingsSectionBasics": "基本资料"
+  "settingsSectionBasics": "基本资料",
+  "settingsUpdateCheck": "检查更新",
+  "settingsUpdateUpToDate": "已是最新版本",
+  "settingsUpdateAvailable": "有新版本 {tag}",
+  "settingsUpdateCheckFailed": "查不到更新资讯",
+  "settingsUpdateDownload": "下载并更新",
+  "settingsUpdateDownloading": "下载中 {percent}%",
+  "settingsUpdateReady": "{tag} 已下载",
+  "settingsUpdateRestart": "重新启动并更新",
+  "settingsUpdateFailNotWritable": "安装目录没有写入权限",
+  "settingsUpdateFailDownload": "下载失败",
+  "settingsUpdateFailVerify": "下载的档案验证失败",
+  "settingsUpdateFailExtract": "解压失败",
+  "settingsUpdateFailLaunch": "无法启动更新"
 }

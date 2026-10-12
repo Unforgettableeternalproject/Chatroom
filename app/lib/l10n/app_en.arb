@@ -1594,5 +1594,18 @@
   "boardContribReleased": "Released",
   "boardChecklistCreatedBy": "Created by {name}",
   "boardChecklistCreatorUnknown": "Creator unknown",
-  "settingsSectionBasics": "Basics"
+  "settingsSectionBasics": "Basics",
+  "settingsUpdateCheck": "Check for updates",
+  "settingsUpdateUpToDate": "Up to date",
+  "settingsUpdateAvailable": "New version {tag}",
+  "settingsUpdateCheckFailed": "Couldn't check for updates",
+  "settingsUpdateDownload": "Download and update",
+  "settingsUpdateDownloading": "Downloading {percent}%",
+  "settingsUpdateReady": "{tag} downloaded",
+  "settingsUpdateRestart": "Restart and update",
+  "settingsUpdateFailNotWritable": "No write access to the install folder",
+  "settingsUpdateFailDownload": "Download failed",
+  "settingsUpdateFailVerify": "The download failed verification",
+  "settingsUpdateFailExtract": "Couldn't extract the update",
+  "settingsUpdateFailLaunch": "Couldn't start the update"
 }
