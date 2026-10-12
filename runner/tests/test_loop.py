@@ -185,6 +185,24 @@ async def test_selfcheck_fails_when_claude_is_not_logged_in(
     assert str(cfg.claude_config_dir) in problems[0]
 
 
+async def test_not_logged_in_exit_code_does_not_fall_back_to_credentials(
+        runner_hub, work_repo, tmp_path, monkeypatch):
+    """🚨 沒登入時 `claude auth status` 的退出碼是 1，JSON 照樣印在 stdout
+    （實測 2026-10-12）。
+
+    只在退出碼 0 才讀 `loggedIn` 的話，這一句會被當成「看不懂」而退回
+    憑證檔——檔案還在（裡面只剩 plugin 的 OAuth 項目），就判成已登入。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    assert (cfg.claude_config_dir / ".credentials.json").is_file()
+    _fake_auth_status(monkeypatch, b'{"loggedIn": false}', returncode=1)
+
+    problems = await loop._check_claude_login()
+
+    assert problems and "沒登入" in problems[0]
+
+
 async def test_login_check_falls_back_to_the_credentials_file(
         runner_hub, work_repo, tmp_path, monkeypatch):
     """`claude auth status` 叫不起來時退回憑證檔（安裝器的判準）。"""

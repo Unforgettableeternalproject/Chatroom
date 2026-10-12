@@ -251,8 +251,8 @@ class RunnerLoop:
         **`claude --version` 沒登入也回 0**——自檢一片綠，然後第一筆真單才
         炸，而炸點在 agent 那邊，房裡只看得到一張 failed。
 
-        判準是 `claude auth status --json` 的 `loggedIn`。那支叫不起來、
-        非零退出或輸出看不懂時，退回看憑證檔（安裝器用的同一個判準）：
+        判準是 `claude auth status --json` 的 `loggedIn`（不看退出碼）。
+        那支叫不起來或輸出看不懂時，退回看憑證檔（安裝器用的同一個判準）：
         **寧可多叫一次登入**，也不要放一台沒登入的執行器去領單。
         """
         hint = self._login_hint()
@@ -276,12 +276,20 @@ class RunnerLoop:
             except asyncio.TimeoutError:
                 proc.kill()
                 return [f"claude auth status 逾時。{hint}"]
-            if proc.returncode == 0:
-                try:
-                    data = json.loads(out.decode("utf-8", "replace"))
-                    logged_in = bool(data.get("loggedIn"))
-                except (ValueError, AttributeError):
-                    log.warning("claude auth status 的輸出看不懂；改看憑證檔")
+            # 🚨 不看退出碼：沒登入時 claude 回 1，JSON 照樣印在 stdout
+            #（實測 2026-10-12）。只在 0 才讀的話，「沒登入」會被當成看不懂
+            # 而退回憑證檔——檔案還在就判成已登入。與 App 的
+            # `parseClaudeAuthStatus` 同一份判準
+            try:
+                data = json.loads(out.decode("utf-8", "replace"))
+                value = data.get("loggedIn")
+            except (ValueError, AttributeError):
+                value = None
+            if isinstance(value, bool):
+                logged_in = value
+            else:
+                log.warning("claude auth status 的輸出看不懂（退出碼 %s）；"
+                            "改看憑證檔", proc.returncode)
         if logged_in is None:
             logged_in = self._has_claude_credentials()
         if not logged_in:
