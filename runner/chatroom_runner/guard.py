@@ -26,6 +26,11 @@ from pathlib import Path
 from .config import SENSITIVE_DIR_NAMES, branch_allowed
 
 SYSTEM_LIMIT = "這是系統限制"
+# 擋 `.env` 時要接的那句。🚨 守的是「密鑰不進模型的 context」，不是「不准用
+# 資料庫」：只寫「請寫進卡裡請人類設定」的話，agent 會把它讀成連不上、整輪
+# 放棄查證（實測 10/13 run a2216311）。讓程式自己載入設定才是正路
+USE_CONFIG_VIA_SCRIPT = ("要用既有設定連資料庫或外部服務，就寫腳本讓程式自己載入"
+                         "設定（dotenv 這類），只印查詢結果、不要印出設定值。")
 
 # 讀寫都不准碰的東西。`.env` 類與私鑰在任何 repo 裡都一樣敏感
 SENSITIVE_NAME_PATTERNS = (".env", ".env*", "*.pem", "*.key", "*.p12",
@@ -352,7 +357,8 @@ def check_path(raw_path: str, ctx: GuardContext) -> Decision:
     if _is_sensitive_name(resolved.name):
         return _deny("path_sensitive",
                      "設定檔與金鑰（.env、*.pem 這類）不能讀也不能寫。"
-                     "需要新的環境變數請寫進卡裡請人類設定。")
+                     + USE_CONFIG_VIA_SCRIPT
+                     + "需要新的環境變數請寫進卡裡請人類設定。")
     parts = {p.lower() for p in resolved.parts}
     hit = parts & {d.lower() for d in SENSITIVE_DIR_NAMES}
     if hit:
@@ -377,8 +383,7 @@ def check_read_path(raw_path: str, ctx: GuardContext) -> Decision:
         if _sensitive_segment(seg):
             return _deny("read_sensitive",
                          f"「{seg}」屬於設定檔或金鑰（.env、*.pem、*.key、"
-                         "id_rsa 這類），不能讀。需要環境變數請寫進卡裡請"
-                         "人類設定。")
+                         "id_rsa 這類），不能讀。" + USE_CONFIG_VIA_SCRIPT)
     dirs = {d.lower() for d in SENSITIVE_DIR_NAMES}
     for seg in segments:
         if seg.lower() in dirs:
@@ -732,7 +737,7 @@ def _check_segment(segment: str, ctx: GuardContext) -> Decision:
         if _is_sensitive_name(name):
             return _deny("path_sensitive",
                          f"「{name}」屬於設定檔或金鑰，不能讀也不能寫。"
-                         "需要環境變數請寫進卡裡請人類設定。")
+                         + USE_CONFIG_VIA_SCRIPT)
         parts = {p.lower() for p in Path(_unquote(tok)).parts}
         hit = parts & {d.lower() for d in SENSITIVE_DIR_NAMES}
         if hit:
