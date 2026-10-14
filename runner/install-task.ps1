@@ -83,7 +83,10 @@ $triggers = @(
         -RepetitionInterval (New-TimeSpan -Minutes 5))
 )
 
-$settings = New-ScheduledTaskSettingsSet `
+# 🚨 -Priority 4：不給的話工作排程器預設 7（BelowNormal＋低 I/O 優先權），
+# 而且整棵子進程樹都繼承——機器一忙，git fetch 掛滿 60 秒逾時、心跳斷到被
+# Hub 判離線，claude 起的 MCP bridge 也趕不上開場（實測 10/13）
+$settings = New-ScheduledTaskSettingsSet -Priority 4 `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -RestartInterval (New-TimeSpan -Minutes 1) `
     -RestartCount 999 -ExecutionTimeLimit ([TimeSpan]::Zero) `
