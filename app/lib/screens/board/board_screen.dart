@@ -323,7 +323,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                             Expanded(child: detail),
                           ],
                         )
-                      : detail;
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _objectiveSwitcher(context, objectives, selected),
+                            Expanded(child: detail),
+                          ],
+                        );
 
                   // 🔑 **抽屜是浮起來的，不是版面裡的一欄。**
                   //
@@ -820,7 +826,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   // ---------- 左：Objective 清單 ----------
 
   Widget _objectiveList(BuildContext context, BoardSnapshot snap,
-      List<BoardObjective> objectives, BoardObjective selected) {
+      List<BoardObjective> objectives, BoardObjective selected,
+      {VoidCallback? onPicked}) {
     final s = context.uep;
     final active = objectives.where((o) => o.status != 'done').toList();
     final done = objectives.where((o) => o.status == 'done').toList();
@@ -843,7 +850,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               if (!_readOnly && (_actions?.canAddObjective ?? false))
                 _BarButton(
                     label: AppLocalizations.of(context).boardNewObjective,
-                    onTap: () => _create('objective')),
+                    onTap: () {
+                      // 窄版在底部面板裡：先收面板再開對話框，
+                      // 不然建立完面板還停在舊的清單上
+                      onPicked?.call();
+                      _create('objective');
+                    }),
             ]),
           ),
           if (_canReorder && active.length > 1)
@@ -874,13 +886,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     key: ValueKey(active[i].id),
                     index: i,
                     child: _objectiveTile(
-                        context, snap, active[i], active[i].id == selected.id),
+                        context, snap, active[i], active[i].id == selected.id,
+                        onPicked: onPicked),
                   ),
               ],
             )
           else
             for (final o in active)
-              _objectiveTile(context, snap, o, o.id == selected.id),
+              _objectiveTile(context, snap, o, o.id == selected.id,
+                  onPicked: onPicked),
           // 完成的週期退成一份名單：它們不再需要被點開，但要看得到做過什麼
           if (done.isNotEmpty) ...[
             Padding(
@@ -897,8 +911,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 children: [
                   for (final o in done)
                     InkWell(
-                      onTap: () =>
-                          setState(() => _selectedObjectiveId = o.id),
+                      onTap: () {
+                        setState(() => _selectedObjectiveId = o.id);
+                        onPicked?.call();
+                      },
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 3, 16, 3),
                         child: Text(o.title,
@@ -932,12 +948,78 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
+  /// 窄版的週期切換列：左欄收掉之後唯一的入口。點開底部面板，
+  /// 裡面就是寬版左欄的同一份清單（選取走同一條 `_selectedObjectiveId`）。
+  Widget _objectiveSwitcher(BuildContext context,
+      List<BoardObjective> objectives, BoardObjective selected) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    return Material(
+      color: s.bgSoft,
+      child: InkWell(
+        key: const ValueKey('board-objective-switcher'),
+        onTap: () => _openObjectivePicker(context, selected),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: s.hairline)),
+          ),
+          child: Row(children: [
+            MonoLabel(l10n.boardObjectiveLabel,
+                color: s.inkMute, letterSpacing: 2.2),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(selected.title,
+                  overflow: TextOverflow.ellipsis,
+                  style: UepText.sans(
+                      size: 14.5,
+                      weight: FontWeight.w600,
+                      color: s.inkTitle)),
+            ),
+            Icon(Icons.arrow_drop_down, color: s.inkMute),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openObjectivePicker(
+      BuildContext context, BoardObjective fallback) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * .8),
+      builder: (sheetContext) => Consumer(builder: (_, sheetRef, _) {
+        // 面板開著時板會重算（建立、排序），用自己的 ref 跟著看，
+        // 不停在開啟當下的快照
+        final snap = (widget.roomId != null
+                ? sheetRef.watch(boardProvider(widget.roomId!))
+                : sheetRef.watch(boardByIdProvider(widget.boardId!)))
+            .value;
+        if (snap == null) return const SizedBox.shrink();
+        final objectives = snap.sortedObjectives;
+        if (objectives.isEmpty) return const SizedBox.shrink();
+        final selected = objectives.firstWhere(
+            (o) => o.id == _selectedObjectiveId,
+            orElse: () => objectives.any((o) => o.id == fallback.id)
+                ? fallback
+                : objectives.first);
+        return _objectiveList(context, snap, objectives, selected,
+            onPicked: () => Navigator.of(sheetContext).pop());
+      }),
+    );
+  }
+
   Widget _objectiveTile(BuildContext context, BoardSnapshot snap,
-      BoardObjective o, bool selected) {
+      BoardObjective o, bool selected, {VoidCallback? onPicked}) {
     final s = context.uep;
     final stats = _statsOf(snap, o);
     return InkWell(
-      onTap: () => setState(() => _selectedObjectiveId = o.id),
+      onTap: () {
+        setState(() => _selectedObjectiveId = o.id);
+        onPicked?.call();
+      },
       child: Container(
         padding: const EdgeInsets.fromLTRB(14, 13, 15, 14),
         decoration: BoxDecoration(
