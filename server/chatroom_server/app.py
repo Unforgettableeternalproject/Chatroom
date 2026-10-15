@@ -8292,6 +8292,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        await _annotate_release(objectives, scope_sql, scope_params,
+                                after_board_seq)
         # 階段素材**兩軸都要有**：房裡的 agent 多半是拿 room_id 讀板的，
         # 只加在板軸的話，它讀得到階段卻永遠看不到掛在上面的素材——而那
         # 正是「這輪的附件」要問的東西
@@ -9074,6 +9076,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        await _annotate_release(objectives, "board_id=?", [board_id],
+                                after_board_seq)
         # 階段素材跟著階段一起回，**不是只給一個數字**：agent 讀板就要看得到
         # 這個階段有哪些素材，否則它得為每一個階段再打一次 files 端點，而它
         # 多半不會——沒有人會為了一個計數去猜那裡面是什麼
@@ -11426,6 +11430,46 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (uuid.uuid4().hex, board_id, k, "objective", row["id"],
                  row["title"], event_type, seq, actor_name, now))
         return sorted(who)
+
+    async def _annotate_release(objectives: list, scope_sql: str,
+                                scope_params: list,
+                                after_board_seq: int) -> None:
+        """把每個週期最近一次上板（kind=release）run 的摘要補到 `release`。
+
+        沒有就是 None。**只回摘要**（run_id／status／reason）：client 要的
+        是「這個週期還要不要顯示上板入口」，不是整筆 run。
+
+        ⚠️ 上板 run 的狀態變化不會動到週期的 `board_seq`，所以增量讀取
+        （`after_board_seq > 0`）撈不到它——狀態停在「進行中」的週期永遠不會
+        再被送來。這裡把已確認／已完成、且有過上板 run 的週期補進增量結果
+        （重送同一列無妨：client 以 id 合併）。
+        """
+        db = app.state.db
+        if after_board_seq > 0:
+            have = {o["id"] for o in objectives}
+            cur = await db.execute(
+                f"SELECT * FROM board_objective WHERE {scope_sql}"
+                " AND deleted=0 AND status IN ('verified','done')"
+                " AND id IN (SELECT ref FROM agent_run WHERE kind='release')",
+                tuple(scope_params))
+            for r in await cur.fetchall():
+                if r["id"] not in have:
+                    objectives.append(_board_row(r))
+        ids = [o["id"] for o in objectives]
+        latest: dict[str, dict] = {}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            marks = ",".join("?" for _ in chunk)
+            rows = await (await db.execute(
+                "SELECT id, ref, status, reason FROM agent_run"
+                f" WHERE kind='release' AND ref IN ({marks})"
+                " ORDER BY created_at DESC, rowid DESC", chunk)).fetchall()
+            for r in rows:
+                latest.setdefault(r["ref"], {
+                    "run_id": r["id"], "status": r["status"],
+                    "reason": r["reason"]})
+        for o in objectives:
+            o["release"] = latest.get(o["id"])
 
     async def _annotate_watches(board_id: str, actor: str,
                                 *groups: list) -> None:

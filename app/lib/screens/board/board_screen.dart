@@ -1358,6 +1358,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 onTap: () => runBoardAction(
                     context, () => actions.reopenObjective(o.id))),
             const SizedBox(width: 8),
+            // 上板失敗後週期已是 verified，這是唯一能再來一次的入口
+            ..._releaseEntry(context, o, actions),
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveComplete,
               accent: true,
@@ -1365,6 +1367,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   context, () => actions.completeObjective(o.id)),
             ),
           ],
+          // 已完成的週期也能補上板（Hub 對 verified／done 放行）
+          if (o.status == 'done') ..._releaseEntry(context, o, actions),
         ]),
         const SizedBox(height: 10),
         // 凍結的理由排在收尾提示前面：它回答的是「為什麼下面的東西都動
@@ -1379,6 +1383,28 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             style: UepText.mono(size: 10, color: s.inkMute)),
       ],
     );
+  }
+
+  /// 「上板」入口：只在從沒上板過、或上次沒成功時出現。上板成功或還在跑
+  /// 的週期不畫——再按一次不是多餘就是必然 409。
+  List<Widget> _releaseEntry(
+      BuildContext context, BoardObjective o, BoardActions actions) {
+    if (!o.canOfferRelease) return const [];
+    final l10n = AppLocalizations.of(context);
+    return [
+      if (o.lastReleaseFailed) ...[
+        Text(l10n.boardReleaseLastFailed,
+            style: UepText.mono(size: 10, color: UepColors.error)),
+        const SizedBox(width: 8),
+      ],
+      _BarButton(
+        label: l10n.opsRelease,
+        onTap: () => showObjectiveReleaseDialog(context,
+            actions: actions, objectiveId: o.id),
+      ),
+      // done 之後沒有別的按鈕，尾端間距只在 verified 需要
+      if (o.status == 'verified') const SizedBox(width: 8),
+    ];
   }
 
   String _closeoutHint(

@@ -512,6 +512,13 @@ class BoardActions {
           (api, pid) => api.verifyObjective(id,
               participantId: pid, sessionKey: _sk, release: release));
 
+  /// 已確認的週期補一次上板（不動週期狀態）。閘都在 Hub。
+  Future<void> createRelease(String id, ReleaseRequest release) async =>
+      _objective(
+          id,
+          (api, pid) => api.createRelease(id,
+              participantId: pid, sessionKey: _sk, release: release));
+
   /// 這個週期能不能上板、有哪些候選 repo。拿不到身分時回 null。
   Future<ReleaseCandidates?> releaseCandidates(String id) async {
     final pid = await _pid();
