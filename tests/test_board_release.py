@@ -959,3 +959,244 @@ def test_release_request_rejects_argument_looking_branch_and_tag():
         with _pytest.raises(ValueError):
             ReleaseRequest(repos=[{"name": "hub", "source_branch": "dev"}],
                            tag=bad)
+
+
+# ── snapshot 上的最近一次上板摘要 ────────────────────────────────────
+
+async def _verified_with_release(human, agent, rid, hdr, runner, *, release):
+    oid, cid, tids = await _tree(human, rid, hdr)
+    bid = await _board_id(human, oid)
+    await _ran(human, agent, rid, hdr, runner, ref=tids[0], board_id=bid,
+               repo="hub", before="s1", after="s2")
+    await _to_review(human, agent, rid, oid, cid, tids, hdr)
+    body = ({"release": {"repos": [{"name": "hub",
+                                    "source_branch": "develop"}]}}
+            if release else {})
+    r = await human.post(f"/api/board/objectives/{oid}/verify",
+                         json=body, headers=hdr)
+    assert r.status_code == 200, r.text
+    return oid, bid, r.json().get("release_run")
+
+
+def _obj(snapshot, oid):
+    return next(o for o in snapshot["objectives"] if o["id"] == oid)
+
+
+async def _set_run(client, run_id, status, reason=""):
+    db = client.hub_app.state.db
+    await db.execute("UPDATE agent_run SET status=?, reason=? WHERE id=?",
+                     (status, reason, run_id))
+    await db.commit()
+
+
+async def test_snapshot_release_is_null_when_never_released(tmp_path):
+    app, human, agent = _clients(tmp_path, "relnull")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=False)
+            assert run is None
+            for url in (f"/api/rooms/{rid}/board", f"/api/boards/{bid}"):
+                snap = (await human.get(url, headers=hdr)).json()
+                assert "release" in _obj(snap, oid)
+                assert _obj(snap, oid)["release"] is None
+
+
+async def test_snapshot_release_follows_the_latest_run(tmp_path):
+    """failed → 摘要帶 reason；重新上板後看最新那筆；done 就是 done。"""
+    app, human, agent = _clients(tmp_path, "relsummary")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"] == {
+                "run_id": run["id"], "status": "queued", "reason": ""}
+
+            await _set_run(human, run["id"], "failed", "release_partial")
+            for url in (f"/api/rooms/{rid}/board", f"/api/boards/{bid}"):
+                snap = (await human.get(url, headers=hdr)).json()
+                assert _obj(snap, oid)["release"] == {
+                    "run_id": run["id"], "status": "failed",
+                    "reason": "release_partial"}
+
+            # 失敗後補上板：摘要換成較新的那筆
+            again = await human.post(
+                f"/api/board/objectives/{oid}/release",
+                json={"repos": [{"name": "hub", "source_branch": "develop"}]},
+                headers=hdr)
+            assert again.status_code == 200, again.text
+            new_id = again.json()["run"]["id"] if "run" in again.json()                 else again.json()["release_run"]["id"]
+            await _set_run(human, new_id, "done")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"]["run_id"] == new_id
+            assert _obj(snap, oid)["release"]["status"] == "done"
+
+
+async def _report(agent, runner, run_id, status, reason=""):
+    r = await agent.post(f"/api/runs/{run_id}/report",
+                         json={"status": status, "runner_id": str(runner),
+                               "reason": reason},
+                         headers=runner.headers)
+    assert r.status_code == 200, r.text
+
+
+async def _room_board_seq(client, rid):
+    """WS pump 推的就是 room.board_seq（`_board_seq`）。"""
+    row = await (await client.hub_app.state.db.execute(
+        "SELECT board_seq FROM room WHERE id=?", (rid,))).fetchone()
+    return row["board_seq"]
+
+
+async def test_release_run_transitions_advance_board_seq_and_delta(tmp_path):
+    """上板 run 回報 failed ⇒ 週期自己的號與板水位前進，兩條讀板路徑的
+    增量（after_board_seq=舊值）都帶到新的 release.status；WS 看的
+    room.board_seq 也跟著動，才會發 board 水位讓 client 去要增量。"""
+    app, human, agent = _clients(tmp_path, "reldelta")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            rurl, burl = f"/api/rooms/{rid}/board", f"/api/boards/{bid}"
+
+            async def seqs():
+                return ((await human.get(rurl, headers=hdr)).json()
+                        ["board_seq"],
+                        (await human.get(burl, headers=hdr)).json()
+                        ["board_seq"])
+
+            for step, status in (("claim", None), ("running", "running"),
+                                 ("failed", "failed")):
+                before_room, before_board = await seqs()
+                ws_before = await _room_board_seq(human, rid)
+                if step == "claim":
+                    c = await agent.post(f"/api/runners/{runner}/claim",
+                                         headers=runner.headers)
+                    assert c.status_code == 200, c.text
+                    assert c.json()["run"]["id"] == run["id"]
+                    expect = "claimed"
+                else:
+                    await _report(agent, runner, run["id"], status,
+                                  "release_partial" if status == "failed"
+                                  else "")
+                    expect = status
+                assert (await _room_board_seq(human, rid)) > ws_before, step
+                for url, before in ((rurl, before_room), (burl, before_board)):
+                    delta = (await human.get(
+                        f"{url}?after_board_seq={before}",
+                        headers=hdr)).json()
+                    assert delta["board_seq"] > before, (step, url)
+                    assert _obj(delta, oid)["release"]["status"] == expect, (
+                        step, url)
+            assert _obj(delta, oid)["release"]["reason"] == "release_partial"
+
+
+async def test_release_enqueue_and_cancel_also_advance_board_seq(tmp_path):
+    """建立（queued）與 queued 取消都要讓增量帶到該週期。"""
+    app, human, agent = _clients(tmp_path, "relcancel")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=False)
+            before = (await human.get(f"/api/rooms/{rid}/board",
+                                      headers=hdr)).json()["board_seq"]
+            r = await human.post(
+                f"/api/board/objectives/{oid}/release",
+                json={"repos": [{"name": "hub",
+                                 "source_branch": "develop"}]},
+                headers=hdr)
+            assert r.status_code == 200, r.text
+            run_id = r.json()["run"]["id"]
+            delta = (await human.get(
+                f"/api/rooms/{rid}/board?after_board_seq={before}",
+                headers=hdr)).json()
+            assert _obj(delta, oid)["release"]["status"] == "queued"
+
+            mid = delta["board_seq"]
+            c = await human.post(f"/api/runs/{run_id}/cancel", headers=hdr)
+            assert c.status_code == 200, c.text
+            delta = (await human.get(
+                f"/api/boards/{bid}?after_board_seq={mid}",
+                headers=hdr)).json()
+            assert _obj(delta, oid)["release"]["status"] == "cancelled"
+
+
+async def _failed_release_then_retry(tmp_path, tag, repos):
+    """走完整條路：確認並上板 → 執行器領走、回報 failed（帶 git.repos）→
+    再按一次上板，回傳第二筆 run 的 spec。"""
+    app, human, agent = _clients(tmp_path, tag)
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, cid, tids = await _tree(human, rid, hdr)
+            bid = await _board_id(human, oid)
+            await _ran(human, agent, rid, hdr, runner, ref=tids[0],
+                       board_id=bid, repo="hub", branch="develop",
+                       before="k1", after="k2")
+            await _to_review(human, agent, rid, oid, cid, tids, hdr)
+            payload = {"repos": [{"name": "hub",
+                                  "source_branch": "develop"}]}
+            first = await human.post(f"/api/board/objectives/{oid}/verify",
+                                     json={"release": payload}, headers=hdr)
+            assert first.status_code == 200, first.text
+            run_id = first.json()["release_run"]["id"]
+            # 第一次沒有前一筆可參照 ⇒ 不帶 resume_head
+            assert "resume_head" not in first.json()["release_run"][
+                "spec"]["repos"][0]
+            c = await agent.post(f"/api/runners/{runner}/claim",
+                                 headers=runner.headers)
+            assert c.json()["run"]["id"] == run_id
+            git = {"repo": "hub", "branch": "", "head_before": "",
+                   "head_after": ""}
+            if repos is not None:
+                git["repos"] = repos
+            for status in ("running", "failed"):
+                rep = await agent.post(
+                    f"/api/runs/{run_id}/report",
+                    json={"status": status, "runner_id": str(runner),
+                          "reason": "release_partial", "git": git},
+                    headers=runner.headers)
+                assert rep.status_code == 200, rep.text
+            second = await human.post(f"/api/board/objectives/{oid}/release",
+                                      json=payload, headers=hdr)
+            assert second.status_code == 200, second.text
+            return second.json()["run"]["spec"]
+
+
+async def test_retry_after_push_failed_carries_resume_head(tmp_path):
+    """上一筆 failed 且 hub 是 push 失敗 ⇒ 新 run 的 repo 帶 resume_head。"""
+    spec = await _failed_release_then_retry(
+        tmp_path, "resumehead",
+        [{"repo": "hub", "branch": "main", "head_before": "m1",
+          "head_after": "m2"}])
+    assert spec["repos"] == [{"name": "hub", "source_branch": "develop",
+                              "stable_branch": "main",
+                              "resume_head": "m2"}]
+
+
+async def test_retry_without_push_failure_has_no_resume_head(tmp_path):
+    """上一筆 failed 但沒有 push 失敗的 repo（git.repos 沒帶）⇒ 不帶。"""
+    spec = await _failed_release_then_retry(tmp_path, "noresume", None)
+    assert "resume_head" not in spec["repos"][0]

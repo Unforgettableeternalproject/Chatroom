@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../l10n/l10n.dart';
+import 'agent_run.dart' show kRunActiveStatuses;
 import 'stage_file.dart';
 
 /// Board（共同任務板）的三層資料模型與本機增量快取。
@@ -12,6 +13,33 @@ import 'stage_file.dart';
 /// 增量讀取的 client 若把它們當成一般資料塞進快取，board 上會留著一批已經
 /// 不存在的卡；若直接忽略，那些卡同樣不會消失。正確作法是**收到就從快取
 /// 移除**，見 [BoardSnapshot.merge]。
+
+/// 週期最近一次上板（kind=release）run 的摘要。沒上板過＝[BoardObjective.release]
+/// 為 null；舊 Hub 不回這一欄時也是 null。
+@immutable
+class ObjectiveRelease {
+  const ObjectiveRelease({this.runId = '', this.status = '', this.reason = ''});
+
+  final String runId;
+
+  /// run 的狀態：queued／claimed／running／limited／handoff／done／failed／cancelled
+  final String status;
+  final String reason;
+
+  /// 還在跑（Hub 對這些狀態回 409 `release_in_progress`）。
+  bool get inProgress => kRunActiveStatuses.contains(status);
+  bool get succeeded => status == 'done';
+
+  /// 結束了但沒成功（failed／cancelled 等）。
+  bool get failed => !inProgress && !succeeded;
+
+  factory ObjectiveRelease.fromJson(Map<String, dynamic> json) =>
+      ObjectiveRelease(
+        runId: (json['run_id'] as String?) ?? '',
+        status: (json['status'] as String?) ?? '',
+        reason: (json['reason'] as String?) ?? '',
+      );
+}
 
 /// Objective：一個週期。可以有多條並行。
 @immutable
@@ -33,12 +61,16 @@ class BoardObjective {
     this.completedAt,
     this.deleted = false,
     this.createdAt = '',
+    this.release,
   });
 
   final String id;
   final String roomId;
   final String title;
   final String description;
+
+  /// 最近一次上板 run 的摘要；沒上板過為 null。
+  final ObjectiveRelease? release;
 
   /// active / review / verified / done / cancelled
   ///
@@ -85,6 +117,15 @@ class BoardObjective {
   bool get frozen => status != 'active';
   bool get isVerified => status == 'verified' || status == 'done';
 
+  /// 要不要顯示「上板」入口：已確認／完成，且從沒上板過或上次沒成功。
+  /// 上板成功、或還在跑的都不顯示。
+  bool get canOfferRelease =>
+      isVerified &&
+      (release == null || release!.failed);
+
+  /// 上次上板失敗（入口旁的提示用）。
+  bool get lastReleaseFailed => isVerified && (release?.failed ?? false);
+
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(
     id: json['id'] as String,
     roomId: (json['room_id'] as String?) ?? '',
@@ -102,6 +143,10 @@ class BoardObjective {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    release: json['release'] is Map
+        ? ObjectiveRelease.fromJson(
+            Map<String, dynamic>.from(json['release'] as Map))
+        : null,
   );
 }
 

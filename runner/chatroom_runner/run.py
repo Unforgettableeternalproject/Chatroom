@@ -924,6 +924,18 @@ class RunExecutor:
         """
         return ["-c", f"credential.helper={PUSH_CREDENTIAL_HELPER}"]
 
+    def _signing_args(self) -> list[str]:
+        """release 的 git 簽章參數（`-c` 前綴，比照 `_push_credential_args`）。
+
+        release 由 runner 進程自己跑 git，merge commit 與 annotated tag 會
+        用本機設定的 GPG，遠端沒人按 pinentry 就卡死。`agent_signing_key`
+        有值時改用 SSH 簽章；沒設就是空清單，行為不變。
+        """
+        args: list[str] = []
+        for key, value in self._ssh_signing_config():
+            args += ["-c", f"{key}={value}"]
+        return args
+
     @staticmethod
     def _push_branch(brief: str) -> str:
         for raw in (brief or "").splitlines():
@@ -999,6 +1011,17 @@ class RunExecutor:
             # 擠不進一組 sha，逐 repo 的 sha 寫在 result 裡）
             "repo": ",".join(r.name for r in results),
             "branch": "", "head_before": "", "head_after": ""}
+        # push 失敗的 repo 把「失敗當下本機穩定分支的 HEAD」結構化帶回去：
+        # 下一次重試要靠它證明本機領先 origin 的那幾顆就是這次留下的
+        # （Hub 轉成 spec.repos[].resume_head）。沒有失敗就不帶這個鍵
+        push_failed = [{"repo": r.name, "branch": r.stable,
+                        "head_before": r.head_before,
+                        "head_after": r.head_after}
+                       for r in results
+                       if r.reason == "release_push_failed"
+                       and r.head_after]
+        if push_failed:
+            git_fields["repos"] = push_failed
         if skipped_by_cancel:
             # 已經推上 origin 的**不回滾**：推送不可逆，替人反推比停在這裡
             # 危險得多。如實寫「動到哪裡為止」
@@ -1048,6 +1071,7 @@ class RunExecutor:
                      or repo.stable_branch or "").strip()
         source = str(entry.get("source_branch") or "").strip()
         res = RepoReleaseResult(name=repo.name, stable=stable, source=source)
+        resume_head = str(entry.get("resume_head") or "").strip()
         if not stable:
             res.reason = "release_stable_not_set"
             res.detail = f"{repo.name} 沒有設穩定分支，沒有上板。"
@@ -1103,7 +1127,7 @@ class RunExecutor:
             return res
         try:
             await self._release_on_stable(repo, project, res, tag, objective,
-                                          cred)
+                                          cred, resume_head)
         finally:
             if original and original != stable:
                 back = await gitops.checkout(repo.path, original)
@@ -1118,8 +1142,13 @@ class RunExecutor:
     async def _release_on_stable(self, repo: ProjectConfig,
                                  project: WorkspaceConfig,
                                  res: RepoReleaseResult, tag: str,
-                                 objective: str, cred: list[str]) -> None:
-        """已經站在穩定分支上之後的步驟。結果寫回 ``res``。"""
+                                 objective: str, cred: list[str],
+                                 resume_head: str = "") -> None:
+        """已經站在穩定分支上之後的步驟。結果寫回 ``res``。
+
+        ``resume_head``：上一次 push 失敗時本機穩定分支的 HEAD（Hub 從同一
+        週期最近一筆 failed 的上板帶來）。補推只認這個。
+        """
         stable, source = res.stable, res.source
         if await gitops.ref_exists(repo.path, f"origin/{stable}"):
             pulled = await gitops.pull_ff_branch(repo.path, stable, cred)
@@ -1149,6 +1178,21 @@ class RunExecutor:
         values = {"source": source, "stable": stable, "objective": objective,
                   "date": datetime.now().strftime("%m/%d"), "tag": tag,
                   "repo": repo.name}
+        # 🚨 本機穩定分支領先 origin ＝ 有東西會被這次的 push 一起帶出去（補推
+        # 或合併後的推送都是）。領先不等於「是這個週期上次留下的」：可能是人
+        # 手動 commit 的，或別的週期推送失敗留下的 merge。只有本機 HEAD 恰好
+        # 等於上次失敗時記下的那顆才放行，其餘一律不合併、不推
+        leftover = await gitops.count_unpushed(repo.path, stable)
+        if leftover > 0 and (not resume_head
+                             or res.head_before != resume_head):
+            res.reason = "release_unpushed_unrelated"
+            res.detail = (
+                f"{stable} 在本機領先 origin {leftover} 顆，"
+                "但不能證明是這個週期上次沒推上去的上板成果"
+                f"（本機 {res.head_before[:8]}、上次記錄 "
+                f"{resume_head[:8] or '無'}）。沒有合併也沒有推送，"
+                "請人工確認這些 commit 後處理。")
+            return
         ahead = await gitops.count_commits(repo.path, "HEAD", source_ref)
         if ahead == 0:
             # 🚨 這不是失敗：來源分支已經整個在穩定分支裡，沒有東西可併
@@ -1157,6 +1201,32 @@ class RunExecutor:
             res.head_after = res.head_before
             landed = f"{source} 沒有 {stable} 以外的新 commit"
             res.detail = landed + "。"
+            # 🚨 上一次「已併進本機但 push 失敗」的殘留：本機穩定分支領先
+            # origin，來源分支卻已經整個在裡面，ahead 永遠是 0。不補推的話
+            # 重試只會回報「沒東西可併」，那幾顆永遠到不了 origin
+            if leftover > 0:
+                pushed = await gitops.push_ref(repo.path, stable, cred)
+                if not pushed.ok:
+                    res.status = "failed"
+                    res.reason = "release_push_failed"
+                    res.detail = (f"{stable} 在本機領先 origin {leftover} 顆"
+                                  f"（上次沒推上去），補推失敗："
+                                  f"{pushed.err or pushed.out}")
+                    return
+                landed = (f"{stable} 在本機領先 origin {leftover} 顆"
+                          "（上次沒推上去），已補推")
+                res.status = "ok"
+                res.reason = ""
+                res.detail = landed + "。"
+                if not tag:
+                    return
+                if not await self._release_tag(repo, project, res, tag,
+                                               values, objective, cred,
+                                               landed):
+                    res.status = "failed"
+                    return
+                res.detail = f"{landed}，已打 tag {tag}。"
+                return
             if not tag:
                 return
             # 穩定分支的 HEAD 已經包含來源分支了 ⇒ tag 照打。沒有東西可併
@@ -1170,16 +1240,18 @@ class RunExecutor:
             return
         commits = await gitops.log_oneline(repo.path, "HEAD", source_ref)
 
+        sign = self._signing_args()
         method = project.release.merge_method
         message = render_template(project.release.merge_message, values)
         if method == "squash":
-            merged = await gitops.merge_squash(repo.path, source_ref)
+            merged = await gitops.merge_squash(repo.path, source_ref, sign)
             if merged.ok:
-                merged = await gitops.commit(repo.path, message)
+                merged = await gitops.commit(repo.path, message, sign)
         elif method == "ff_only":
-            merged = await gitops.merge_ff_only(repo.path, source_ref)
+            merged = await gitops.merge_ff_only(repo.path, source_ref, sign)
         else:
-            merged = await gitops.merge_no_ff(repo.path, source_ref, message)
+            merged = await gitops.merge_no_ff(repo.path, source_ref, message,
+                                              sign)
         if not merged.ok:
             conflicts = await gitops.conflicted_files(repo.path)
             if method == "squash":
@@ -1226,16 +1298,24 @@ class RunExecutor:
         沒發生。
         """
         if await gitops.tag_exists(repo.path, tag):
-            res.reason = "release_tag_exists"
-            res.detail = f"{landed}，但 tag {tag} 早就存在，沒有重打。"
-            return False
-        tag_message = render_template(
-            project.release.tag_message, values) or objective
-        tagged = await gitops.tag_annotated(repo.path, tag, tag_message)
-        if not tagged.ok:
-            res.reason = "release_tag_failed"
-            res.detail = f"{landed}，但打 tag 失敗：{tagged.err or tagged.out}"
-            return False
+            # 已存在且指向現在的 HEAD ＝ 上次打了但沒推成（或整個已完成）：
+            # 不重打、只補推（對 origin 已有的同一顆是 no-op）。指到別處才
+            # 是真的撞名
+            head = await gitops.rev_parse(repo.path, "HEAD")
+            if not head or await gitops.rev_parse(repo.path, tag) != head:
+                res.reason = "release_tag_exists"
+                res.detail = f"{landed}，但 tag {tag} 早就存在，沒有重打。"
+                return False
+        else:
+            tag_message = render_template(
+                project.release.tag_message, values) or objective
+            tagged = await gitops.tag_annotated(
+                repo.path, tag, tag_message, self._signing_args())
+            if not tagged.ok:
+                res.reason = "release_tag_failed"
+                res.detail = (f"{landed}，但打 tag 失敗："
+                              f"{tagged.err or tagged.out}")
+                return False
         tag_pushed = await gitops.push_ref(repo.path, tag, cred)
         if not tag_pushed.ok:
             res.tag = tag

@@ -198,6 +198,22 @@ def test_downloads_dir_still_refuses_secrets(ctx, tmp_path):
     assert not d.allowed and d.rule == "read_sensitive"
 
 
+@pytest.mark.parametrize("tool,payload", [
+    ("Bash", {"command": "grep -o '^COSMOS[A-Z_]*=' .env"}),
+    ("Read", {"file_path": "../server/.env"}),
+    ("Write", {"file_path": ".env", "content": "X=1"}),
+])
+def test_env_denial_points_to_a_script_not_a_human(ctx, tool, payload):
+    """🔴 擋 `.env` 時要指出正路：讓腳本自己載入設定。
+
+    只說「請寫進卡裡請人類設定」的話，agent 把它讀成「連不上資料庫」而整輪
+    放棄查證（實測 10/13 run a2216311）。
+    """
+    d = check_tool(tool, payload, ctx)
+    assert not d.allowed
+    assert "寫腳本讓程式自己載入" in d.reason
+
+
 @pytest.mark.parametrize("name", [".env", ".env.local", "key.pem"])
 def test_write_sensitive_names_denied(ctx, name):
     d = check_path(name, ctx)

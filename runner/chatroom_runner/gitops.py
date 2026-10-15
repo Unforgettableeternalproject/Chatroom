@@ -280,21 +280,26 @@ async def pull_ff_branch(repo: Path, branch: str,
                      branch)
 
 
-async def merge_no_ff(repo: Path, ref: str, message: str) -> GitResult:
-    return await git(repo, "merge", "--no-ff", ref, "-m", message)
+async def merge_no_ff(repo: Path, ref: str, message: str,
+                      extra: list[str] | None = None) -> GitResult:
+    return await git(repo, *(extra or []), "merge", "--no-ff", ref, "-m",
+                     message)
 
 
-async def merge_squash(repo: Path, ref: str) -> GitResult:
+async def merge_squash(repo: Path, ref: str,
+                       extra: list[str] | None = None) -> GitResult:
     """``merge --squash`` **只把變更放進索引**，commit 要另外下（見 `commit`）。"""
-    return await git(repo, "merge", "--squash", ref)
+    return await git(repo, *(extra or []), "merge", "--squash", ref)
 
 
-async def merge_ff_only(repo: Path, ref: str) -> GitResult:
-    return await git(repo, "merge", "--ff-only", ref)
+async def merge_ff_only(repo: Path, ref: str,
+                        extra: list[str] | None = None) -> GitResult:
+    return await git(repo, *(extra or []), "merge", "--ff-only", ref)
 
 
-async def commit(repo: Path, message: str) -> GitResult:
-    return await git(repo, "commit", "-m", message)
+async def commit(repo: Path, message: str,
+                 extra: list[str] | None = None) -> GitResult:
+    return await git(repo, *(extra or []), "commit", "-m", message)
 
 
 async def merge_abort(repo: Path) -> GitResult:
@@ -329,8 +334,14 @@ async def log_oneline(repo: Path, base: str, head: str,
     return [line for line in res.out.splitlines() if line.strip()]
 
 
-async def tag_annotated(repo: Path, tag: str, message: str) -> GitResult:
-    return await git(repo, "tag", "-a", tag, "-m", message)
+async def tag_annotated(repo: Path, tag: str, message: str,
+                        extra: list[str] | None = None) -> GitResult:
+    return await git(repo, *(extra or []), "tag", "-a", tag, "-m", message)
+
+
+async def count_unpushed(repo: Path, branch: str) -> int:
+    """``origin/<branch>..<branch>`` 有幾顆。遠端沒有這條分支或算不出來回 ``-1``。"""
+    return await count_commits(repo, f"origin/{branch}", branch)
 
 
 async def tag_exists(repo: Path, tag: str) -> bool:

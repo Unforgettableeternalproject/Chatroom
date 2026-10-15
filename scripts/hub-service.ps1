@@ -50,7 +50,8 @@ switch ($Action) {
             $mode = '登入時自啟（要開機層級請以系統管理員重跑 install）'
         }
         # 失敗每分鐘重試、無限次；不限執行時長（常駐進程）
-        $taskSettings = New-ScheduledTaskSettingsSet `
+        # -Priority 4：預設 7 是 BelowNormal＋低 I/O 優先權，機器忙時會被餓到
+        $taskSettings = New-ScheduledTaskSettingsSet -Priority 4 `
             -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
             -ExecutionTimeLimit ([TimeSpan]::Zero) `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

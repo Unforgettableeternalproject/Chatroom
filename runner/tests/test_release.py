@@ -84,10 +84,10 @@ def release_repo(tmp_path):
 
 
 def make_config(tmp_path, repos: dict, *, release: dict | None = None,
-                stable: str = "main"):
+                stable: str = "main", **top):
     """指向這些 repo 的執行器設定。``repos`` 是 名稱 → 路徑。"""
     first = next(iter(repos.values()))
-    raw = config_raw(tmp_path, first)
+    raw = config_raw(tmp_path, first, **top)
     ws = raw["workspaces"]["ai-website"]
     ws["projects"] = {
         name: {"path": str(path),
@@ -673,3 +673,278 @@ async def test_source_diverged_from_origin_is_refused(tmp_path,
     assert git(release_repo, "rev-parse", "main") == before
     assert git(release_repo, "rev-parse", "origin/main") == before
     assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+
+
+# ── 簽章（SSH）與失敗後重試 ──────────────────────────────────────
+
+
+def _ssh_key(tmp_path) -> str:
+    """真的 ed25519 金鑰，放在 `.ssh` 底下（設定載入只收這種路徑）。"""
+    ssh_dir = tmp_path / "home" / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    key = ssh_dir / "agent_ed25519"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f",
+                    str(key)], check=True, capture_output=True)
+    return str(key)
+
+
+def _break_gpg(repo, *, commits: bool = True, tags: bool = True) -> None:
+    """本機設定要求簽章、程式卻不存在：沒有 `-c` 蓋掉就一定失敗。"""
+    git(repo, "config", "gpg.program", "no-such-gpg-program")
+    git(repo, "config", "commit.gpgsign", "true" if commits else "false")
+    git(repo, "config", "tag.gpgsign", "true" if tags else "false")
+
+
+def _fix_gpg(repo) -> None:
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "config", "tag.gpgsign", "false")
+
+
+def _reject_hook(bare, body: str) -> None:
+    hook = bare / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8",
+                    newline="\n")
+    hook.chmod(0o755)
+
+
+@pytest.mark.parametrize("method", ["merge", "squash"])
+async def test_release_signs_commit_and_tag_with_ssh_key(tmp_path, method):
+    """設了 agent_signing_key：release 的 merge／squash commit 與 annotated
+    tag 都走 SSH 簽章，不碰本機的 GPG（那在無人時會卡 pinentry）。"""
+    repo, _bare = make_repo(tmp_path, "JSAI-Web")
+    _break_gpg(repo)
+    cfg = make_config(tmp_path, {"JSAI-Web": repo},
+                      release={"merge_method": method},
+                      agent_signing_key=_ssh_key(tmp_path))
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0"))
+
+    assert outcome.status == "done", outcome.result
+    assert "BEGIN SSH SIGNATURE" in git(repo, "cat-file", "-p", "main")
+    assert "BEGIN SSH SIGNATURE" in git(repo, "cat-file", "-p", "v1.0.0")
+
+
+async def test_release_without_signing_key_keeps_local_config(tmp_path):
+    """沒設 key：不加任何 -c，本機簽章設定壞了就照樣失敗（行為不變）。"""
+    repo, _bare = make_repo(tmp_path, "JSAI-Web")
+    _break_gpg(repo)
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    ex = executor(cfg, _RecordingHub())
+
+    assert ex._signing_args() == []
+    outcome = await ex.execute(make_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("failed", "release_partial")
+    assert "release_merge_failed" in outcome.result
+
+
+async def test_retry_after_failed_signing_rolls_back_then_lands(tmp_path):
+    """merge commit 簽章失敗 ⇒ 還原；修好之後同樣參數再上一次要成功。"""
+    repo, _bare = make_repo(tmp_path, "JSAI-Web")
+    before = git(repo, "rev-parse", "main")
+    _break_gpg(repo, tags=False)
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "failed"
+    assert git(repo, "rev-parse", "main") == before
+    assert git(repo, "status", "--porcelain") == ""
+
+    _fix_gpg(repo)
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], run_id="r-rel-2"))
+
+    assert second.status == "done", second.result
+    assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
+                                                 "origin/main")
+
+
+async def test_retry_after_push_failed_pushes_the_leftover_merge(tmp_path):
+    """release_push_failed：本機已併、沒推。重試不能判成「沒東西可併」。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo},
+                      release={"merge_method": "merge"})
+    _reject_hook(bare, "exit 1")
+
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "failed"
+    assert "release_push_failed" in first.result
+    assert git(repo, "rev-parse", "main") != git(repo, "rev-parse",
+                                                 "origin/main")
+    resume = first.git["repos"][0]["head_after"]
+
+    (bare / "hooks" / "pre-receive").unlink()
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(), "resume_head": resume}], tag="v1.0.0",
+                 run_id="r-rel-2"))
+
+    assert (second.status, second.reason) == ("done", "released"), \
+        second.result
+    assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
+                                                 "origin/main")
+    assert "refs/tags/v1.0.0" in git(repo, "ls-remote", "--tags", "origin")
+
+
+async def test_retry_after_push_failed_without_tag(tmp_path):
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    _reject_hook(bare, "exit 1")
+    first = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()]))
+    (bare / "hooks" / "pre-receive").unlink()
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(),
+                   "resume_head": first.git["repos"][0]["head_after"]}],
+                 run_id="r-rel-2"))
+
+    assert second.status == "done", second.result
+    assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
+                                                 "origin/main")
+
+
+async def test_retry_after_tag_push_failed_only_pushes_the_tag(tmp_path):
+    """release_tag_push_failed：tag 在本機、沒推。重試補推，不能卡在 tag_exists。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    _reject_hook(bare, 'while read o n r; do case "$r" in refs/tags/*) '
+                       'exit 1;; esac; done')
+
+    first = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0"))
+    assert first.status == "failed"
+    assert "release_tag_push_failed" in first.result
+    tag_sha = git(repo, "rev-parse", "v1.0.0^{commit}")
+
+    (bare / "hooks" / "pre-receive").unlink()
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0", run_id="r-rel-2"))
+
+    assert second.status == "done", second.result
+    assert git(repo, "rev-parse", "v1.0.0^{commit}") == tag_sha, "不能重打"
+    assert "refs/tags/v1.0.0" in git(repo, "ls-remote", "--tags", "origin")
+
+
+async def test_retry_after_tag_failed_creates_the_tag(tmp_path):
+    """release_tag_failed（例如簽章失敗）：合併已完成，重試只補打 tag。"""
+    repo, _bare = make_repo(tmp_path, "JSAI-Web")
+    _break_gpg(repo, commits=False)
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+
+    first = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0"))
+    assert first.status == "failed"
+    assert "release_tag_failed" in first.result
+
+    _fix_gpg(repo)
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0", run_id="r-rel-2"))
+
+    assert second.status == "done", second.result
+    assert "refs/tags/v1.0.0" in git(repo, "ls-remote", "--tags", "origin")
+
+
+async def test_tag_pointing_elsewhere_still_fails_as_exists(tmp_path):
+    """tag 已存在但指到別的 commit：仍是 release_tag_exists，不改寫。"""
+    repo, _bare = make_repo(tmp_path, "JSAI-Web")
+    git(repo, "tag", "-a", "v1.0.0", "main", "-m", "舊的")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], tag="v1.0.0"))
+
+    assert "release_tag_exists" in outcome.result
+
+
+# ── 補推只認「上次失敗那一顆」（resume_head）──────────────────
+
+async def _push_failed_once(tmp_path):
+    """第一次上板 push 被擋：回傳 (repo, bare, first)，hook 還在。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo},
+                      release={"merge_method": "merge"})
+    _reject_hook(bare, "exit 1")
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "failed"
+    return repo, bare, cfg, first
+
+
+def _manual_commit_on_stable(repo) -> None:
+    """人手動在穩定分支上 commit 一顆，然後回到工作分支。"""
+    git(repo, "checkout", "main")
+    (repo / "manual.txt").write_text("手動" + chr(10), encoding="utf-8")
+    git(repo, "add", "manual.txt")
+    git(repo, "commit", "-m", "手動 commit")
+    git(repo, "checkout", "develop")
+
+
+async def test_push_failed_report_carries_the_local_stable_head(tmp_path):
+    repo, _bare, _cfg, first = await _push_failed_once(tmp_path)
+
+    assert first.git["repos"] == [{
+        "repo": "JSAI-Web", "branch": "main",
+        "head_before": first.git["repos"][0]["head_before"],
+        "head_after": git(repo, "rev-parse", "main")}]
+
+
+async def test_retry_pushes_leftover_when_resume_head_matches(tmp_path):
+    repo, bare, cfg, first = await _push_failed_once(tmp_path)
+    resume = first.git["repos"][0]["head_after"]
+    (bare / "hooks" / "pre-receive").unlink()
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(), "resume_head": resume}], run_id="r-rel-2"))
+
+    assert (second.status, second.reason) == ("done", "released"), (
+        second.result)
+    assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
+                                                 "origin/main")
+
+
+async def test_retry_refuses_unrelated_local_commit(tmp_path):
+    """本機穩定分支多了手動 commit（HEAD ≠ 上次失敗的那顆）⇒ 不推。"""
+    repo, bare, cfg, first = await _push_failed_once(tmp_path)
+    resume = first.git["repos"][0]["head_after"]
+    _manual_commit_on_stable(repo)
+    (bare / "hooks" / "pre-receive").unlink()
+    origin_before = git(repo, "rev-parse", "origin/main")
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(), "resume_head": resume}], run_id="r-rel-2"))
+
+    assert second.status == "failed"
+    assert "release_unpushed_unrelated" in second.result
+    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
+
+
+async def test_retry_without_resume_head_refuses_unpushed_commits(tmp_path):
+    repo, bare, cfg, _first = await _push_failed_once(tmp_path)
+    (bare / "hooks" / "pre-receive").unlink()
+    origin_before = git(repo, "rev-parse", "origin/main")
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], run_id="r-rel-2"))
+
+    assert second.status == "failed"
+    assert "release_unpushed_unrelated" in second.result
+    assert git(bare, "rev-parse", "main") == origin_before
+
+
+async def test_merge_path_refuses_unrelated_unpushed_commit(tmp_path):
+    """來源有新 commit、本機穩定分支卻有手動未推 commit ⇒ 不合併不推。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    _manual_commit_on_stable(repo)
+    local_main = git(repo, "rev-parse", "main")
+    origin_before = git(bare, "rev-parse", "main")
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()]))
+
+    assert outcome.status == "failed"
+    assert "release_unpushed_unrelated" in outcome.result
+    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
+    assert git(repo, "rev-parse", "main") == local_main, "不能合併"
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "branch", "--show-current") == "develop"
