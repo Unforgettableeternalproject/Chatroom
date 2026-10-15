@@ -7578,6 +7578,10 @@
   "@boardReleaseInProgress": {
     "description": "409 release_in_progress"
   },
+  "boardReleaseLastFailed": "上次上板失敗",
+  "@boardReleaseLastFailed": {
+    "description": "已確認的週期上次上板失敗，顯示在上板按鈕旁"
+  },
   "boardReleaseRepoNotEligible": "有 repo 不能上板了，重開一次對話框",
   "@boardReleaseRepoNotEligible": {
     "description": "409 release_repo_not_eligible"

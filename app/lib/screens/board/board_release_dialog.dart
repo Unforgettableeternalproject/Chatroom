@@ -37,11 +37,33 @@ Future<void> showObjectiveVerifyDialog(
           _VerifyDialog(actions: actions, objectiveId: objectiveId),
     );
 
+/// 已確認（verified／done）的週期補上板。
+///
+/// 重用確認對話框的候選清單與表單，但送出走 `createRelease`、不動週期
+/// 狀態：上一次上板失敗後週期已經是 verified，沒有別的入口能再來一次。
+Future<void> showObjectiveReleaseDialog(
+  BuildContext context, {
+  required BoardActions actions,
+  required String objectiveId,
+}) =>
+    showDialog<void>(
+      context: context,
+      builder: (_) => _VerifyDialog(
+          actions: actions, objectiveId: objectiveId, releaseOnly: true),
+    );
+
 class _VerifyDialog extends StatefulWidget {
-  const _VerifyDialog({required this.actions, required this.objectiveId});
+  const _VerifyDialog({
+    required this.actions,
+    required this.objectiveId,
+    this.releaseOnly = false,
+  });
 
   final BoardActions actions;
   final String objectiveId;
+
+  /// true＝只上板：不確認週期，開關固定開著。
+  final bool releaseOnly;
 
   @override
   State<_VerifyDialog> createState() => _VerifyDialogState();
@@ -58,7 +80,7 @@ class _VerifyDialogState extends State<_VerifyDialog> {
   String? _error;
 
   /// 上板總開關。預設關——確認週期是常態，上板是額外決定。
-  bool _release = false;
+  late bool _release = widget.releaseOnly;
 
   /// repo 名 → 有沒有勾。
   final _picked = <String, bool>{};
@@ -161,8 +183,20 @@ class _VerifyDialogState extends State<_VerifyDialog> {
       _error = null;
     });
     try {
-      await widget.actions
-          .verifyObjective(widget.objectiveId, release: release);
+      if (widget.releaseOnly) {
+        if (release == null) {
+          // 沒有候選可送（_request 為 null）：沒東西能上板
+          setState(() {
+            _busy = false;
+            _error = l10n.boardReleaseNoRepo;
+          });
+          return;
+        }
+        await widget.actions.createRelease(widget.objectiveId, release);
+      } else {
+        await widget.actions
+            .verifyObjective(widget.objectiveId, release: release);
+      }
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -190,9 +224,10 @@ class _VerifyDialogState extends State<_VerifyDialog> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
+    final only = widget.releaseOnly;
     return AlertDialog(
       backgroundColor: s.bgCard,
-      title: Text(l10n.boardVerifyTitle,
+      title: Text(only ? l10n.opsRelease : l10n.boardVerifyTitle,
           style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
@@ -201,9 +236,10 @@ class _VerifyDialogState extends State<_VerifyDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(l10n.boardVerifyExplain,
-                  style:
-                      UepText.serif(size: 13, color: s.inkMute, height: 1.55)),
+              if (!only)
+                Text(l10n.boardVerifyExplain,
+                    style: UepText.serif(
+                        size: 13, color: s.inkMute, height: 1.55)),
               if (_loading) ...[
                 const SizedBox(height: 12),
                 Text(l10n.commonLoading,
@@ -222,7 +258,8 @@ class _VerifyDialogState extends State<_VerifyDialog> {
                     style:
                         UepText.serif(size: 13, color: s.inkMute, height: 1.5)),
               ],
-              if (_releasable) ...[
+              if (_releasable && only) ..._releaseBody(s, l10n),
+              if (_releasable && !only) ...[
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -264,9 +301,11 @@ class _VerifyDialogState extends State<_VerifyDialog> {
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
         ),
         UepButton(
-          label: l10n.boardObjectiveVerify,
+          label: only ? l10n.opsRelease : l10n.boardObjectiveVerify,
           small: true,
-          onPressed: (_busy || _loading) ? null : _submit,
+          // 只上板時沒有候選就沒東西可送
+          onPressed:
+              (_busy || _loading || (only && !_releasable)) ? null : _submit,
         ),
       ],
     );

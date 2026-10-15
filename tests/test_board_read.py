@@ -209,6 +209,8 @@ async def test_response_shape_is_pinned(tmp_path):
             # 先給出去只會讓 client 拿空值去打 /api/boards/{board_id}
             "created_by_actor_key", "reviewed_by_actor_key",
             "verified_by_actor_key", "completed_by_actor_key",
+            # 最近一次上板 run 的摘要 {run_id,status,reason}；沒上板過是 null
+            "release",
         }
         assert set(body["checklists"][0]) == {
             "id", "room_id", "objective_id", "title", "description", "status",

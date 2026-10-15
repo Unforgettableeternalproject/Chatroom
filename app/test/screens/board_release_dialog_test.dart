@@ -1,5 +1,6 @@
 import 'package:chatroom_app/api/board_api.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
+import 'package:chatroom_app/core/errors/api_exception.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/release.dart';
 import 'package:chatroom_app/screens/board/board_release_dialog.dart';
@@ -26,6 +27,8 @@ class _FakeBoardApi extends BoardApi {
 
   ReleaseRequest? sent;
   int verifyCalls = 0;
+  int createCalls = 0;
+  ApiException? createError;
 
   @override
   Future<ReleaseCandidates> releaseCandidates(String objectiveId,
@@ -40,6 +43,17 @@ class _FakeBoardApi extends BoardApi {
     verifyCalls++;
     sent = release;
   }
+
+  @override
+  Future<void> createRelease(String objectiveId,
+      {String? participantId,
+      String? sessionKey,
+      required ReleaseRequest release}) async {
+    createCalls++;
+    sent = release;
+    final e = createError;
+    if (e != null) throw e;
+  }
 }
 
 void main() {
@@ -51,7 +65,7 @@ void main() {
     deviceKey: 'device-key',
   );
 
-  Widget wrap(_FakeBoardApi api) => ProviderScope(
+  Widget wrap(_FakeBoardApi api, {bool releaseOnly = false}) => ProviderScope(
         overrides: [
           initialConfigProvider.overrideWithValue(config),
           boardApiProvider.overrideWithValue(api),
@@ -65,7 +79,9 @@ void main() {
             builder: (context, ref, _) => Scaffold(
               body: Center(
                 child: TextButton(
-                  onPressed: () => showObjectiveVerifyDialog(
+                  onPressed: () => (releaseOnly
+                      ? showObjectiveReleaseDialog
+                      : showObjectiveVerifyDialog)(
                     context,
                     actions: ref.read(boardActionsByIdProvider('b1')),
                     objectiveId: 'o1',
@@ -78,11 +94,12 @@ void main() {
         ),
       );
 
-  Future<void> open(WidgetTester tester, _FakeBoardApi api) async {
+  Future<void> open(WidgetTester tester, _FakeBoardApi api,
+      {bool releaseOnly = false}) async {
     tester.view.physicalSize = const Size(900, 1600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(wrap(api));
+    await tester.pumpWidget(wrap(api, releaseOnly: releaseOnly));
     await tester.tap(find.text('開'));
     await tester.pumpAndSettle();
   }
@@ -216,5 +233,62 @@ void main() {
 
     expect(api.verifyCalls, 0);
     expect(find.text('至少要選一個 repo'), findsOneWidget);
+  });
+
+  group('補上板（verified／done 週期）', () {
+    testWidgets('🔴 送出走 createRelease、不走 verifyObjective，內容照表單',
+        (tester) async {
+      final api = _FakeBoardApi(twoRepos);
+      await open(tester, api, releaseOnly: true);
+
+      // 不需要開關，表單直接在；也沒有確認週期的說明
+      expect(find.byType(Switch), findsNothing);
+      expect(find.text('合併方式：squash'), findsOneWidget);
+      expect(find.text('確認代表這個週期已經驗過了。'), findsNothing);
+
+      await tester.enterText(
+          find.widgetWithText(TextField, 'tag（選填）'), 'v1.3.1');
+      await tester.tap(find.widgetWithText(FilledButton, '上板').first);
+      await tester.pumpAndSettle();
+
+      expect(api.createCalls, 1);
+      expect(api.verifyCalls, 0);
+      expect(api.sent!.tag, 'v1.3.1');
+      expect(api.sent!.repos.single.name, 'Chatroom');
+      expect(api.sent!.repos.single.sourceBranch, 'develop');
+    });
+
+    testWidgets('🔴 409 release_in_progress：留在對話框並顯示對應訊息',
+        (tester) async {
+      final api = _FakeBoardApi(twoRepos)
+        ..createError = const ConflictException(
+            'release_in_progress', '這個週期已經有一筆還沒結束的上板。');
+      await open(tester, api, releaseOnly: true);
+
+      await tester.tap(find.widgetWithText(FilledButton, '上板').first);
+      await tester.pumpAndSettle();
+
+      expect(api.createCalls, 1);
+      expect(find.text('這個週期已經有一筆上板在跑'), findsOneWidget);
+      // 失敗不關對話框，可以再按
+      expect(find.byType(AlertDialog), findsOneWidget);
+    });
+
+    testWidgets('候選不成立（possible 為 false）：沒有可送的東西，按鈕是死的',
+        (tester) async {
+      final api = _FakeBoardApi(ReleaseCandidates.fromJson(const {
+        'workspace_key': 'chatroom',
+        'possible': false,
+        'reason': 'board_axis',
+        'repos': [],
+      }));
+      await open(tester, api, releaseOnly: true);
+
+      expect(find.text('上板要從掛著這塊板的工作房進行'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '上板').first,
+          warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(api.createCalls, 0);
+    });
   });
 }

@@ -1516,6 +1516,7 @@
   "boardReleaseNoRepo": "至少要选一个 repo",
   "boardReleaseNotVerified": "这个周期还没确认",
   "boardReleaseInProgress": "这个周期已经有一笔上板在跑",
+  "boardReleaseLastFailed": "上次上板失败",
   "boardReleaseRepoNotEligible": "有 repo 不能上板了，重开一次对话框",
   "errorReleaseRequiresHuman": "上板只有人类按得动",
   "opsRelease": "上板",
