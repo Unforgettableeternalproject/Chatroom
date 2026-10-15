@@ -6979,6 +6979,31 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "release_settings": settings,
                 "reason": ""}
 
+    async def _release_resume_heads(objective_id: str) -> dict[str, str]:
+        """同一週期最近一筆上板若是 failed，其中 push 失敗的 repo → 失敗當下
+        本機穩定分支的 HEAD。
+
+        只看**最近一筆**：之後若有成功或別的結局，上次的殘留就不再是這次
+        的出處。執行器補推前拿它證明「本機領先 origin 的就是上次留下的」，
+        沒有就不推（`release_unpushed_unrelated`）。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT status, git_repos_json FROM agent_run"
+            " WHERE kind='release' AND ref=?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (objective_id,))).fetchone()
+        if row is None or row["status"] != "failed":
+            return {}
+        heads: dict[str, str] = {}
+        for e in _loads_or(row["git_repos_json"] or "", []):
+            if not isinstance(e, dict):
+                continue
+            name = (e.get("repo") or "").strip()
+            head = (e.get("head_after") or "").strip()
+            if name and head:
+                heads[name] = head
+        return heads
+
     async def _release_plan(obj_row, me, request, host, rel,
                             *, check_status: bool):
         """把上板請求驗成一份可以直接寫進 `spec_json` 的計畫。
@@ -7016,6 +7041,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        run_id=dup["id"])
         cand = await _release_candidates(obj_row, me, room=room)
         by_name = {r["name"]: r for r in cand["repos"]}
+        resume = await _release_resume_heads(obj_row["id"])
         plan = []
         for item in rel.repos:
             c = by_name.get(item.name)
@@ -7029,9 +7055,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                            f"「{c['stable_branch']}」，沒有東西可以併。",
                            repo=item.name,
                            stable_branch=c["stable_branch"])
-            plan.append({"name": item.name,
-                         "source_branch": item.source_branch,
-                         "stable_branch": c["stable_branch"]})
+            planned = {"name": item.name,
+                       "source_branch": item.source_branch,
+                       "stable_branch": c["stable_branch"]}
+            if resume.get(item.name):
+                planned["resume_head"] = resume[item.name]
+            plan.append(planned)
         spec = {"objective_id": obj_row["id"],
                 "objective_title": obj_row["title"],
                 # 上板跑在**板現在掛著的那間工作房**，不是建卡那間
@@ -11439,22 +11468,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         沒有就是 None。**只回摘要**（run_id／status／reason）：client 要的
         是「這個週期還要不要顯示上板入口」，不是整筆 run。
 
-        ⚠️ 上板 run 的狀態變化不會動到週期的 `board_seq`，所以增量讀取
-        （`after_board_seq > 0`）撈不到它——狀態停在「進行中」的週期永遠不會
-        再被送來。這裡把已確認／已完成、且有過上板 run 的週期補進增量結果
-        （重送同一列無妨：client 以 id 合併）。
+        上板 run 轉態時 `_touch_release_objective` 會推進週期的 `board_seq`，
+        所以增量讀取自然會帶到該週期，這裡只負責補摘要。
         """
         db = app.state.db
-        if after_board_seq > 0:
-            have = {o["id"] for o in objectives}
-            cur = await db.execute(
-                f"SELECT * FROM board_objective WHERE {scope_sql}"
-                " AND deleted=0 AND status IN ('verified','done')"
-                " AND id IN (SELECT ref FROM agent_run WHERE kind='release')",
-                tuple(scope_params))
-            for r in await cur.fetchall():
-                if r["id"] not in have:
-                    objectives.append(_board_row(r))
         ids = [o["id"] for o in objectives]
         latest: dict[str, dict] = {}
         for i in range(0, len(ids), 500):
@@ -14556,6 +14573,40 @@ def create_app(config: Config | None = None) -> FastAPI:
              actor_name, reason,
              json.dumps(detail or {}, ensure_ascii=False), _now()),
         )
+        if from_status != to_status:
+            await _touch_release_objective(run_id, from_status, to_status)
+
+    async def _touch_release_objective(run_id: str, from_status: str,
+                                       to_status: str) -> None:
+        """上板 run 轉態時，推進被上板那個週期的 `board_seq`。
+
+        週期卡上帶著 `release` 摘要（`_annotate_release`），而那份摘要來自
+        agent_run。run 的狀態一變、週期卡的號卻沒動的話，WS 不會發 board
+        水位、增量讀取也撈不到那一列——開著的板就停在「進行中」，重試入口
+        一直藏著。所以建立／領單／running／終局這些轉態都要走這裡：
+        領號、更新週期自己的號、記一筆 event（號與 event 共用）。
+        **不 commit**，跟著呼叫端的交易走。
+        """
+        db = app.state.db
+        run = await (await db.execute(
+            "SELECT kind, ref FROM agent_run WHERE id=?",
+            (run_id,))).fetchone()
+        if run is None or run["kind"] != "release" or not run["ref"]:
+            return
+        obj = await (await db.execute(
+            "SELECT id, room_id, board_id FROM board_objective"
+            " WHERE id=? AND deleted=0", (run["ref"],))).fetchone()
+        if obj is None:
+            return
+        seq = await _item_seq(obj)
+        await db.execute("UPDATE board_objective SET board_seq=? WHERE id=?",
+                         (seq, obj["id"]))
+        await _record_board_event(
+            _row_board_id(obj), seq, "objective_release",
+            origin_room_id=obj["room_id"], item_kind="objective",
+            item_id=obj["id"],
+            payload={"run_id": run_id, "from": from_status,
+                     "to": to_status})
 
     async def _run_or_404(run_id: str):
         row = await (await app.state.db.execute(
@@ -15043,6 +15094,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             final = await _run_or_404(run_id)
             await _announce_run(final, "cancelled")
             await events.notify(row["room_id"])
+            if row["kind"] == "release" and row["board_id"]:
+                await _notify_board_rooms(row["board_id"])
             return {"run": _run_public(final), "cancelled": True}
         await app.state.db.execute(
             "UPDATE agent_run SET cancel_requested=1, updated_at=? WHERE id=?",
@@ -15396,6 +15449,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 "claimed")
         await _commit_with_retry(db)
         await events.notify(got["room_id"])
+        if got["kind"] == "release" and got["board_id"]:
+            await _notify_board_rooms(got["board_id"])
         # 領單走的是 `RETURNING *`（agent_run 自己的欄位），帶不出房間的
         # `single_writer`——而這正是執行器拿到單之後第一件要看的事。
         # 為了它去改那句 CAS 不值得，這裡補一次查詢
@@ -15596,6 +15651,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         final = await _run_or_404(run_id)
         await _announce_run(final, new)
         await events.notify(row["room_id"])
+        if row["kind"] == "release" and row["board_id"]:
+            # 板掛著的其他房也要醒，不然它們的 WS 要等下一次說話才看到
+            await _notify_board_rooms(row["board_id"])
         return {"run": _run_public(final),
                 "child_run": (_run_public(await _run_or_404(child_id))
                               if child_id else None)}
