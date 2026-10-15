@@ -772,10 +772,12 @@ async def test_retry_after_push_failed_pushes_the_leftover_merge(tmp_path):
     assert "release_push_failed" in first.result
     assert git(repo, "rev-parse", "main") != git(repo, "rev-parse",
                                                  "origin/main")
+    resume = first.git["repos"][0]["head_after"]
 
     (bare / "hooks" / "pre-receive").unlink()
     second = await executor(cfg, _RecordingHub()).execute(
-        make_run([entry()], tag="v1.0.0", run_id="r-rel-2"))
+        make_run([{**entry(), "resume_head": resume}], tag="v1.0.0",
+                 run_id="r-rel-2"))
 
     assert (second.status, second.reason) == ("done", "released"), \
         second.result
@@ -788,11 +790,14 @@ async def test_retry_after_push_failed_without_tag(tmp_path):
     repo, bare = make_repo(tmp_path, "JSAI-Web")
     cfg = make_config(tmp_path, {"JSAI-Web": repo})
     _reject_hook(bare, "exit 1")
-    await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    first = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()]))
     (bare / "hooks" / "pre-receive").unlink()
 
     second = await executor(cfg, _RecordingHub()).execute(
-        make_run([entry()], run_id="r-rel-2"))
+        make_run([{**entry(),
+                   "resume_head": first.git["repos"][0]["head_after"]}],
+                 run_id="r-rel-2"))
 
     assert second.status == "done", second.result
     assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
@@ -850,3 +855,96 @@ async def test_tag_pointing_elsewhere_still_fails_as_exists(tmp_path):
         make_run([entry()], tag="v1.0.0"))
 
     assert "release_tag_exists" in outcome.result
+
+
+# ── 補推只認「上次失敗那一顆」（resume_head）──────────────────
+
+async def _push_failed_once(tmp_path):
+    """第一次上板 push 被擋：回傳 (repo, bare, first)，hook 還在。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo},
+                      release={"merge_method": "merge"})
+    _reject_hook(bare, "exit 1")
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "failed"
+    return repo, bare, cfg, first
+
+
+def _manual_commit_on_stable(repo) -> None:
+    """人手動在穩定分支上 commit 一顆，然後回到工作分支。"""
+    git(repo, "checkout", "main")
+    (repo / "manual.txt").write_text("手動" + chr(10), encoding="utf-8")
+    git(repo, "add", "manual.txt")
+    git(repo, "commit", "-m", "手動 commit")
+    git(repo, "checkout", "develop")
+
+
+async def test_push_failed_report_carries_the_local_stable_head(tmp_path):
+    repo, _bare, _cfg, first = await _push_failed_once(tmp_path)
+
+    assert first.git["repos"] == [{
+        "repo": "JSAI-Web", "branch": "main",
+        "head_before": first.git["repos"][0]["head_before"],
+        "head_after": git(repo, "rev-parse", "main")}]
+
+
+async def test_retry_pushes_leftover_when_resume_head_matches(tmp_path):
+    repo, bare, cfg, first = await _push_failed_once(tmp_path)
+    resume = first.git["repos"][0]["head_after"]
+    (bare / "hooks" / "pre-receive").unlink()
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(), "resume_head": resume}], run_id="r-rel-2"))
+
+    assert (second.status, second.reason) == ("done", "released"), (
+        second.result)
+    assert git(repo, "rev-parse", "main") == git(repo, "rev-parse",
+                                                 "origin/main")
+
+
+async def test_retry_refuses_unrelated_local_commit(tmp_path):
+    """本機穩定分支多了手動 commit（HEAD ≠ 上次失敗的那顆）⇒ 不推。"""
+    repo, bare, cfg, first = await _push_failed_once(tmp_path)
+    resume = first.git["repos"][0]["head_after"]
+    _manual_commit_on_stable(repo)
+    (bare / "hooks" / "pre-receive").unlink()
+    origin_before = git(repo, "rev-parse", "origin/main")
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([{**entry(), "resume_head": resume}], run_id="r-rel-2"))
+
+    assert second.status == "failed"
+    assert "release_unpushed_unrelated" in second.result
+    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
+
+
+async def test_retry_without_resume_head_refuses_unpushed_commits(tmp_path):
+    repo, bare, cfg, _first = await _push_failed_once(tmp_path)
+    (bare / "hooks" / "pre-receive").unlink()
+    origin_before = git(repo, "rev-parse", "origin/main")
+
+    second = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()], run_id="r-rel-2"))
+
+    assert second.status == "failed"
+    assert "release_unpushed_unrelated" in second.result
+    assert git(bare, "rev-parse", "main") == origin_before
+
+
+async def test_merge_path_refuses_unrelated_unpushed_commit(tmp_path):
+    """來源有新 commit、本機穩定分支卻有手動未推 commit ⇒ 不合併不推。"""
+    repo, bare = make_repo(tmp_path, "JSAI-Web")
+    cfg = make_config(tmp_path, {"JSAI-Web": repo})
+    _manual_commit_on_stable(repo)
+    local_main = git(repo, "rev-parse", "main")
+    origin_before = git(bare, "rev-parse", "main")
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()]))
+
+    assert outcome.status == "failed"
+    assert "release_unpushed_unrelated" in outcome.result
+    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
+    assert git(repo, "rev-parse", "main") == local_main, "不能合併"
+    assert git(repo, "status", "--porcelain") == ""
+    assert git(repo, "branch", "--show-current") == "develop"
