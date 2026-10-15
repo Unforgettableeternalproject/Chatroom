@@ -1011,6 +1011,17 @@ class RunExecutor:
             # 擠不進一組 sha，逐 repo 的 sha 寫在 result 裡）
             "repo": ",".join(r.name for r in results),
             "branch": "", "head_before": "", "head_after": ""}
+        # push 失敗的 repo 把「失敗當下本機穩定分支的 HEAD」結構化帶回去：
+        # 下一次重試要靠它證明本機領先 origin 的那幾顆就是這次留下的
+        # （Hub 轉成 spec.repos[].resume_head）。沒有失敗就不帶這個鍵
+        push_failed = [{"repo": r.name, "branch": r.stable,
+                        "head_before": r.head_before,
+                        "head_after": r.head_after}
+                       for r in results
+                       if r.reason == "release_push_failed"
+                       and r.head_after]
+        if push_failed:
+            git_fields["repos"] = push_failed
         if skipped_by_cancel:
             # 已經推上 origin 的**不回滾**：推送不可逆，替人反推比停在這裡
             # 危險得多。如實寫「動到哪裡為止」
@@ -1060,6 +1071,7 @@ class RunExecutor:
                      or repo.stable_branch or "").strip()
         source = str(entry.get("source_branch") or "").strip()
         res = RepoReleaseResult(name=repo.name, stable=stable, source=source)
+        resume_head = str(entry.get("resume_head") or "").strip()
         if not stable:
             res.reason = "release_stable_not_set"
             res.detail = f"{repo.name} 沒有設穩定分支，沒有上板。"
@@ -1115,7 +1127,7 @@ class RunExecutor:
             return res
         try:
             await self._release_on_stable(repo, project, res, tag, objective,
-                                          cred)
+                                          cred, resume_head)
         finally:
             if original and original != stable:
                 back = await gitops.checkout(repo.path, original)
@@ -1130,8 +1142,13 @@ class RunExecutor:
     async def _release_on_stable(self, repo: ProjectConfig,
                                  project: WorkspaceConfig,
                                  res: RepoReleaseResult, tag: str,
-                                 objective: str, cred: list[str]) -> None:
-        """已經站在穩定分支上之後的步驟。結果寫回 ``res``。"""
+                                 objective: str, cred: list[str],
+                                 resume_head: str = "") -> None:
+        """已經站在穩定分支上之後的步驟。結果寫回 ``res``。
+
+        ``resume_head``：上一次 push 失敗時本機穩定分支的 HEAD（Hub 從同一
+        週期最近一筆 failed 的上板帶來）。補推只認這個。
+        """
         stable, source = res.stable, res.source
         if await gitops.ref_exists(repo.path, f"origin/{stable}"):
             pulled = await gitops.pull_ff_branch(repo.path, stable, cred)
@@ -1161,6 +1178,21 @@ class RunExecutor:
         values = {"source": source, "stable": stable, "objective": objective,
                   "date": datetime.now().strftime("%m/%d"), "tag": tag,
                   "repo": repo.name}
+        # 🚨 本機穩定分支領先 origin ＝ 有東西會被這次的 push 一起帶出去（補推
+        # 或合併後的推送都是）。領先不等於「是這個週期上次留下的」：可能是人
+        # 手動 commit 的，或別的週期推送失敗留下的 merge。只有本機 HEAD 恰好
+        # 等於上次失敗時記下的那顆才放行，其餘一律不合併、不推
+        leftover = await gitops.count_unpushed(repo.path, stable)
+        if leftover > 0 and (not resume_head
+                             or res.head_before != resume_head):
+            res.reason = "release_unpushed_unrelated"
+            res.detail = (
+                f"{stable} 在本機領先 origin {leftover} 顆，"
+                "但不能證明是這個週期上次沒推上去的上板成果"
+                f"（本機 {res.head_before[:8]}、上次記錄 "
+                f"{resume_head[:8] or '無'}）。沒有合併也沒有推送，"
+                "請人工確認這些 commit 後處理。")
+            return
         ahead = await gitops.count_commits(repo.path, "HEAD", source_ref)
         if ahead == 0:
             # 🚨 這不是失敗：來源分支已經整個在穩定分支裡，沒有東西可併
@@ -1172,7 +1204,6 @@ class RunExecutor:
             # 🚨 上一次「已併進本機但 push 失敗」的殘留：本機穩定分支領先
             # origin，來源分支卻已經整個在裡面，ahead 永遠是 0。不補推的話
             # 重試只會回報「沒東西可併」，那幾顆永遠到不了 origin
-            leftover = await gitops.count_unpushed(repo.path, stable)
             if leftover > 0:
                 pushed = await gitops.push_ref(repo.path, stable, cred)
                 if not pushed.ok:
