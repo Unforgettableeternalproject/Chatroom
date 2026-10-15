@@ -18,9 +18,10 @@ import 'kit_prereq_rows.dart';
 ///
 /// ## 只有對得上 Release 的 App 才裝得了東西
 ///
-/// 查的是 `releases/tags/v<這份 App 的版本>`。dev build 查不到，那時按鈕
-/// **停用並說明白**——不退到 latest：退過去的話，一份沒發布過的 App 會裝上
-/// 一包與它不同源的 kit，而出事時沒有人分得出那兩邊差在哪。
+/// 查的是 `releases/tags/v<這份 App 的版本>`（熱修版為 `v<版本>-hotfix<n>`）。
+/// dev build 查不到，那時按鈕**停用並說明白**——不退到 latest：退過去的話，
+/// 一份沒發布過的 App 會裝上一包與它不同源的 kit，而出事時沒有人分得出那兩邊
+/// 差在哪。
 ///
 /// ## 這裡不判斷安裝本身成不成功
 ///
@@ -392,6 +393,8 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
   static bool _sameVersion(String installed, String release) {
     if (installed.isEmpty || release.isEmpty) return false;
     final at = installed.indexOf('+');
-    return (at < 0 ? installed : installed.substring(0, at)) == release;
+    // kit 內的版本字串不帶 `-hotfix<n>`（release.yml 會剝掉），比對時也剝掉
+    final base = release.replaceFirst(RegExp(r'-hotfix\d+$'), '');
+    return (at < 0 ? installed : installed.substring(0, at)) == base;
   }
 }
