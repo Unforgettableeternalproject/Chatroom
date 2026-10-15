@@ -18,9 +18,13 @@ class _FakeHttp implements KitHttpClient {
   Future<void> Function(String url, String savePath)? onDownload;
 
   final downloaded = <String>[];
+  String? lastUrl;
 
   @override
-  Future<(int, Object?)> getJson(String url) async => (status, body);
+  Future<(int, Object?)> getJson(String url) async {
+    lastUrl = url;
+    return (status, body);
+  }
 
   @override
   Future<void> download(String url, String savePath,
@@ -127,6 +131,20 @@ void main() {
       final installer = make(http, _FakeRunner());
 
       expect(await installer.fetchRelease('9.9.9'), isNull);
+    });
+
+    test('hotfix>0 查 v<版本>-hotfix<n>，hotfix=0 查 v<版本>', () {
+      const base = 'https://api.github.com/repos/'
+          'Unforgettableeternalproject/Chatroom/releases/tags/';
+      expect(kitReleaseApiUrl('1.2.5'), '${base}v1.2.5');
+      expect(kitReleaseApiUrl('1.2.5', hotfix: 0), '${base}v1.2.5');
+      expect(kitReleaseApiUrl('1.2.5', hotfix: 1), '${base}v1.2.5-hotfix1');
+    });
+
+    test('fetchRelease 帶 hotfix 時實際請求熱修 tag', () async {
+      final http = _FakeHttp(status: 404, body: {'message': 'Not Found'});
+      await make(http, _FakeRunner()).fetchRelease('1.2.5', hotfix: 1);
+      expect(http.lastUrl, endsWith('/releases/tags/v1.2.5-hotfix1'));
     });
 
     test('查的是自己那一版的 tag', () {
