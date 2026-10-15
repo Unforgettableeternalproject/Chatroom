@@ -340,7 +340,7 @@ class RunnerLoop:
         return []
 
     async def _check_signing(self) -> list[str]:
-        """run 的 commit 用哪種簽章就驗哪種。
+        """run 與 release 的簽章用哪種就驗哪種。
 
         設了 `agent_signing_key`（暫時措施）時 run 用 SSH key 簽，gpg 探針
         驗不到那條路；沒設就照舊驗 GPG。
