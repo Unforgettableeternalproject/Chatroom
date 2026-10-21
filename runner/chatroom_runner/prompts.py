@@ -174,6 +174,8 @@ def release_results_block(results: list[dict]) -> str:
         if before or after:
             lines.append(f"    - 穩定分支 HEAD：{before or '?'} → "
                          f"{after or '?'}")
+        for action in item.get("actions") or []:
+            lines.append(f"    - 執行器自主動作：{action}")
         detail = (item.get("detail") or "").strip()
         if detail:
             lines.append(f"    - {detail}")

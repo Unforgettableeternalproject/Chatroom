@@ -22,6 +22,11 @@
 | `mcp_pending_then_ok` | 前 N-1 次 pending，第 N 次 connected 並成功 | 0 |
 | `mcp_connected` | init 裡 chatroom 是 connected，正常成功 | 0 |
 | `oauth_expired` | 認證錯誤**只印在 stderr**（2026-10-05 的字串），result is_error 但文字不帶線索 | 1 |
+| `conflict_resolve` | 在 cwd 的 repo 解掉所有衝突檔、`git add`、`git commit --no-edit`（上板解衝突 agent） | 0 |
+| `conflict_markers` | 衝突標記原樣 `git add` 後 commit | 0 |
+| `conflict_nocommit` | 解掉衝突、`git add`，但不 commit | 0 |
+| `conflict_orig` | 只留下一個未追蹤的 `.orig` 檔，不 commit |
+| `conflict_unsigned` | 解掉衝突、`git commit --no-gpg-sign` | 0 |
 | `token_check` | 把「有沒有拿到 `CLAUDE_CODE_OAUTH_TOKEN`、長度多少」寫進 run 目錄的 `token.json`（**不寫值**） | 0 |
 
 `mcp_pending_then_ok` 第幾次才連上由 `FAKE_CLAUDE_MCP_OK_AT` 決定
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -114,6 +120,44 @@ def bump_attempt() -> int:
     return n
 
 
+def _git(*args: str) -> str:
+    out = subprocess.run(["git", *args], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", check=True)
+    return out.stdout
+
+
+def conflict_scenario(scenario: str) -> int:
+    """上板解衝突 agent：cwd 是停在衝突狀態的 repo。"""
+    files = [f for f in _git("diff", "--name-only",
+                             "--diff-filter=U").splitlines() if f.strip()]
+    if scenario == "conflict_orig" and not files:
+        # 之後的報告 agent 也吃同一個情境：沒有衝突就正常收工
+        result("success", False, "沒有衝突。", turns=1)
+        return 0
+    if scenario == "conflict_orig":
+        # 留下一個未追蹤的暫存檔就收工，不 add、不 commit
+        with open("agent-scratch.orig.txt", "w", encoding="utf-8") as fh:
+            fh.write("備份" + chr(10))
+        assistant("留了暫存檔。")
+        result("success", False, "留了暫存檔。", turns=2)
+        return 0
+    if scenario != "conflict_markers":
+        for name in files:
+            with open(name, "w", encoding="utf-8") as fh:
+                fh.write("兩邊都保留\n")
+    for name in files:
+        _git("add", name)
+    if scenario == "conflict_nocommit":
+        pass
+    elif scenario == "conflict_unsigned":
+        _git("commit", "--no-edit", "--no-gpg-sign")
+    else:
+        _git("commit", "--no-edit")
+    assistant(f"解了 {len(files)} 個衝突檔。")
+    result("success", False, f"已解 {len(files)} 個衝突檔。", turns=4)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     scenario = os.environ.get("FAKE_CLAUDE_SCENARIO", "success")
     resuming = "--resume" in argv
@@ -143,6 +187,8 @@ def main(argv: list[str]) -> int:
         return 0
     init()
 
+    if scenario.startswith("conflict_"):
+        return conflict_scenario(scenario)
     if scenario == "success":
         assistant("我看過卡了，開始做。")
         result("success", False, "已完成：改了兩個檔，跑過既有測試。", turns=5)
