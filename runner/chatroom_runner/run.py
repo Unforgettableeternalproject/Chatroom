@@ -420,6 +420,12 @@ class _SyncBlocked(Exception):
     """工作樹沒辦法更新到最新，這一輪不該起跑。訊息直接當 run 的 result。"""
 
 
+def _tail(text: str, limit: int = 600) -> str:
+    """git 輸出摘要：太長只留尾巴（錯誤原因通常在最後）。"""
+    text = (text or "").strip()
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
 @dataclass
 class RunOutcome:
     status: str
@@ -1400,12 +1406,17 @@ class RunExecutor:
         """派工前把常駐工作樹更新到最新，回一句要寫進收工摘要的 note。
 
         run 之間共用同一份工作樹，不先同步的話 agent 會在上一輪留下的舊基礎
-        上動工。三種情況各自有代價，所以分開處理：
+        上動工。幾種情況各自有代價，所以分開處理：
 
         - 工作樹髒：**不 pull**。別人（或上一輪）未提交的東西比「最新」重要，
           照常執行，只在摘要裡講清楚這一輪沒同步。
         - fetch 失敗：多半是網路，不值得擋掉整筆 run。
-        - 不能快轉：分支已經分岔，往下跑等於在錯的基礎上做事，直接失敗。
+        - 不能快轉但確實分岔（本機領先又落後）：自動 merge upstream。上一輪
+          在本機 commit 了、runner 不會自動推送，別人又推了新的上去，就會
+          走到這裡。merge commit 與 agent 的 commit 走同一套簽章
+          （`_signing_args`），不繞過 hooks。**失敗**（衝突、hook、簽章…）就
+          `merge --abort` 還原到原 HEAD，再以 `sync_not_fast_forward` 失敗。
+        - 其他原因的不能快轉：維持失敗，往下跑等於在錯的基礎上做事。
         """
         dirty = await gitops.status_porcelain(repo.path)
         if dirty:
@@ -1418,11 +1429,26 @@ class RunExecutor:
                         fetched.err or fetched.out)
             return "fetch 失敗，於本機現況執行。"
         pulled = await gitops.pull_ff(repo.path)
-        if not pulled.ok:
+        if pulled.ok:
+            return pulled.summary
+        counts = await gitops.ahead_behind(repo.path)
+        if counts is None or counts[0] <= 0 or counts[1] <= 0:
             raise _SyncBlocked(
                 "分支落後遠端且無法快轉，請先手動處理。\n"
                 f"git pull --ff-only：{pulled.summary}")
-        return pulled.summary
+        ahead, behind = counts
+        merged = await gitops.merge_upstream(repo.path, self._signing_args())
+        if not merged.ok:
+            detail = _tail(merged.summary)
+            raise _SyncBlocked(
+                f"分支與遠端分岔（本機 {ahead} 顆未推送、遠端新增 {behind} "
+                "顆），自動合併失敗，請先手動處理。\n"
+                + ("" if merged.restored
+                   else "⚠️ 還原合併前狀態也失敗，工作樹可能不乾淨。\n")
+                + f"git merge：{detail}")
+        head = await gitops.short_head(repo.path)
+        return (f"分支與遠端分岔，已自動合併遠端 {behind} 顆（本機 {ahead} "
+                f"顆未推送），合併後 HEAD {head}。")
 
     async def _claude_run(self, run: dict, project: WorkspaceConfig, repo,
                           cancel: asyncio.Event,
@@ -1447,7 +1473,7 @@ class RunExecutor:
                 return outcome
         branch = branches[repo.name]
 
-        # 🚨 同步要在快照**之前**：pull 帶進來的變更不是 agent 改的，
+        # 🚨 同步要在快照**之前**：pull／merge 帶進來的變更不是 agent 改的，
         # 先拍快照的話那些檔案會被算進「這一輪動了什麼」
         sync_notes: dict[str, str] = {}
 
@@ -1463,8 +1489,8 @@ class RunExecutor:
 
         # `sync_keys` 有值 ＝ 這筆 run 不排整筆的 repo 鎖（房間關掉了單一寫入
         # 者限制），但**同步這一段仍然要獨佔**：兩筆同時 `git pull --ff-only`
-        # 會對撞。拿完就放，claude 進程照樣並行。等這一段不回報 running
-        # （通常只有幾秒，報了反而多一筆雜訊），但 log 要留得到
+        # （或分岔時的 merge）會對撞。拿完就放，claude 進程照樣並行。等這一段
+        # 不回報 running（通常只有幾秒，報了反而多一筆雜訊），但 log 要留得到
         if sync_keys:
             if any(self.locks.is_held(k) for k in set(sync_keys)):
                 log.info("run %s 等 repo 鎖以完成派工前同步（並行模式）", run_id)

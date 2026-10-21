@@ -116,8 +116,8 @@ state_dir 下（與 `claude-config` 同層）放一個 `claude-oauth-token` 檔�
 帶出，缺鍵當 `true`）就不排隊，直接與其他 run 並行——log 與第一次 running
 回報的附註都會講出這件事。放寬的只有排隊規則，`PreToolUse` 的硬限制不變；
 共用工作樹的代價（互相覆蓋、commit 帶走別人的 index）也還在。並行時**派工
-前的同步（fetch ＋ `pull --ff-only`）仍然一次一筆**——兩筆同時 pull 同一份
-工作樹會 fatal，同步完就放鎖，之後 claude 進程並行。
+前的同步（fetch ＋ `pull --ff-only`，分岔時自動 merge upstream）仍然一次一筆**
+——兩筆同時 pull 同一份工作樹會 fatal，同步完就放鎖，之後 claude 進程並行。
 
 ## 檔案位置
 
