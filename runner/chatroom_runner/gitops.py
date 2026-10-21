@@ -113,6 +113,68 @@ async def pull_ff(repo: Path) -> PullOutcome:
     return PullOutcome(True, f"已快轉 {n} 個 commit")
 
 
+async def ahead_behind(repo: Path) -> tuple[int, int] | None:
+    """目前分支相對 upstream 的 (本機領先, 本機落後)。讀不到回 ``None``。"""
+    res = await git(repo, "rev-list", "--left-right", "--count", "HEAD...@{u}")
+    parts = res.out.split() if res.ok else []
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+async def short_head(repo: Path) -> str:
+    res = await git(repo, "rev-parse", "--short", "HEAD")
+    return res.out if res.ok else ""
+
+
+@dataclass
+class MergeOutcome:
+    """``merge_upstream`` 的結果。
+
+    ``ok`` 為假時工作樹已經還原到合併前（``restored`` 為真）；``restored``
+    為假代表連還原都失敗，呼叫端要把這件事講出來，不能假裝乾淨。
+    """
+
+    ok: bool
+    summary: str
+    restored: bool = True
+
+
+async def merge_upstream(repo: Path,
+                         extra: list[str] | None = None) -> MergeOutcome:
+    """把 upstream 合進目前分支（分岔時用；呼叫端確認過工作樹乾淨）。
+
+    merge commit 走呼叫端給的 ``extra``（`-c` 簽章參數），**不**帶
+    ``--no-verify``／``--no-gpg-sign``。任何原因失敗都先還原：``merge --abort``，
+    收不掉（例如合併根本沒開始）就硬退回合併前的 HEAD，再驗 HEAD、
+    MERGE_HEAD 與工作樹。還原放 finally，取消時也會跑。
+    """
+    before = await head_sha(repo)
+    merged = False
+    res = GitResult(1, "", "")
+    try:
+        res = await git(repo, *(extra or []), "merge", "--no-edit", "@{u}")
+        merged = res.ok
+    finally:
+        if not merged:
+            restored = await _restore_after_failed_merge(repo, before)
+    if merged:
+        return MergeOutcome(True, "已合併")
+    return MergeOutcome(False, res.err or res.out or f"git 結束碼 {res.code}",
+                        restored)
+
+
+async def _restore_after_failed_merge(repo: Path, before: str) -> bool:
+    await merge_abort(repo)
+    if before and await head_sha(repo) != before:
+        await reset_hard(repo, before)
+    still_merging = (await git(repo, "rev-parse", "-q", "--verify",
+                               "MERGE_HEAD")).ok
+    return (not still_merging
+            and (not before or await head_sha(repo) == before)
+            and not await status_porcelain(repo))
+
+
 @dataclass
 class Commit:
     sha: str
