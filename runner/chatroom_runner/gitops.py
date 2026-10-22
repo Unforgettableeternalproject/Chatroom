@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -420,3 +421,145 @@ async def push_ref(repo: Path, ref: str,
 async def fetch_origin(repo: Path, extra: list[str] | None = None
                        ) -> GitResult:
     return await git(repo, *(extra or []), "fetch", "origin")
+
+
+# ---------- 上板自癒用的薄包裝 ----------
+#
+# 一樣不做判斷：哪些 commit 算冗餘、驗證不過要不要還原，由 `run` 決定。
+
+BACKUP_REF_PREFIX = "refs/runner-backup"
+_MARKER_RE = re.compile(r"^(<<<<<<<|>>>>>>>)")
+
+
+async def rev_list(repo: Path, *specs: str) -> list[str] | None:
+    """``git rev-list <specs>`` 的 sha 清單。git 失敗回 ``None``，與「空清單」
+    分得開——拿它決定要不要丟 commit 時，答不出來不能當成「沒有」。"""
+    res = await git(repo, "rev-list", *specs)
+    if not res.ok:
+        return None
+    return [line for line in res.out.splitlines() if line.strip()]
+
+
+async def commit_subjects(repo: Path, shas: list[str]) -> list[str]:
+    """``<短 sha> 標題``，給訊息列出是哪幾顆。讀不到的 sha 只留短碼。"""
+    out: list[str] = []
+    for sha in shas:
+        res = await git(repo, "log", "-1", "--format=%h %s", sha)
+        out.append(res.out if res.ok and res.out else sha[:8])
+    return out
+
+
+async def backup_ref(repo: Path, branch: str, sha: str) -> str:
+    """把 ``sha`` 存成 ``refs/runner-backup/<branch>/<UTC 時間戳>``，回 ref 名。
+    建不起來回空字串。同一秒已有同名 ref 時加序號，不覆蓋舊備份。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = f"{BACKUP_REF_PREFIX}/{branch}/{stamp}"
+    ref = base
+    for n in range(2, 12):
+        if not await ref_exists(repo, ref):
+            break
+        ref = f"{base}-{n}"
+    else:
+        return ""
+    res = await git(repo, "update-ref", ref, sha)
+    return ref if res.ok else ""
+
+
+async def merge_in_progress(repo: Path) -> bool:
+    res = await git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+    return res.ok and bool(res.out)
+
+
+async def restore_head(repo: Path, before: str) -> bool:
+    """任何 merge／commit 失敗、逾時之後把 HEAD 硬退回 ``before``，並驗證。
+
+    不能只靠 ``merge --abort``：merge commit 已經產生（例如簽章逾時才被殺）
+    時它沒有東西可收，commit 會殘留在本機分支上。``reset --hard`` 一律跑，
+    squash 留在索引裡的變更也一併收掉。回 ``True`` ＝ HEAD 確實回去、
+    沒有 MERGE_HEAD、追蹤檔乾淨。
+    """
+    await merge_abort(repo)
+    if before:
+        await reset_hard(repo, before)
+    # 開工前工作樹已確認乾淨，所以這時的非忽略未追蹤檔只可能是這一輪
+    # 產生的（agent 的 .orig 之類）。不加 -x：被忽略的檔案不動
+    await git(repo, "clean", "-fd")
+    if await merge_in_progress(repo):
+        return False
+    if before and await head_sha(repo) != before:
+        return False
+    return not await status_porcelain(repo)
+
+
+async def checkout_detach(repo: Path, ref: str) -> GitResult:
+    return await git(repo, "checkout", "--detach", ref)
+
+
+async def commit_parents(repo: Path, ref: str = "HEAD") -> list[str]:
+    res = await git(repo, "rev-list", "--parents", "-n", "1", ref)
+    parts = res.out.split() if res.ok else []
+    return parts[1:]
+
+
+async def commit_is_signed(repo: Path, ref: str = "HEAD") -> bool:
+    """commit 物件有沒有簽章。看 ``gpgsig`` 標頭，不看 ``%G?``：SSH 簽章在沒設
+    ``gpg.ssh.allowedSignersFile`` 時 ``%G?`` 一律是 ``N``（驗不了不等於沒簽）。
+    ``%G?`` 回報 ``B``（壞簽章）時仍算沒簽好。"""
+    res = await git(repo, "cat-file", "commit", ref)
+    if not res.ok:
+        return False
+    header = res.out.split("\n\n", 1)[0]
+    if not any(line.startswith("gpgsig") for line in header.splitlines()):
+        return False
+    status = await git(repo, "log", "-1", "--format=%G?", ref)
+    return status.out.strip() != "B"
+
+
+async def signing_enabled(repo: Path) -> bool:
+    """repo 的 ``commit.gpgsign`` 是不是開的（開了，這次的 commit 就該有簽章）。"""
+    res = await git(repo, "config", "--get", "--type=bool", "commit.gpgsign")
+    return res.ok and res.out.strip() == "true"
+
+
+async def _added_lines(repo: Path, base: str) -> set[tuple[str, str]]:
+    res = await git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", base,
+                    "HEAD")
+    found: set[tuple[str, str]] = set()
+    path = ""
+    for line in res.out.splitlines():
+        if line.startswith("+++ "):
+            path = line[4:].removeprefix("b/")
+        elif line.startswith("+") and not line.startswith("+++"):
+            if _MARKER_RE.match(line[1:]):
+                found.add((path, line[1:]))
+    return found
+
+
+async def introduced_conflict_markers(repo: Path,
+                                      bases: list[str]) -> list[str]:
+    """HEAD 的追蹤檔裡**這次合併新帶進來**的衝突標記，回 ``路徑``。
+
+    只算「相對每一個合併前的來源都是新增」的標記：兩邊原本就有的（文件、
+    測試資料裡講衝突標記的那種）不算，否則一個合法檔案會讓每次上板都卡住。
+    """
+    common: set[tuple[str, str]] | None = None
+    for base in bases:
+        added = await _added_lines(repo, base)
+        common = added if common is None else common & added
+    return sorted({path for path, _ in (common or set())})
+
+
+async def changed_paths(repo: Path, base: str, head: str) -> list[str]:
+    res = await git(repo, "diff", "--name-only", base, head)
+    return [line for line in res.out.splitlines() if line.strip()]
+
+
+async def merge_base(repo: Path, a: str, b: str) -> str:
+    res = await git(repo, "merge-base", a, b)
+    return res.out if res.ok else ""
+
+
+async def blob_id(repo: Path, ref: str, path: str) -> str:
+    """``<ref>:<path>`` 的 blob；檔案在那一邊不存在回空字串。"""
+    res = await git(repo, "rev-parse", "--verify", "--quiet", f"{ref}:{path}")
+    return res.out if res.ok else ""
