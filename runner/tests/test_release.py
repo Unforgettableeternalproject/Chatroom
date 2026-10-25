@@ -643,13 +643,11 @@ async def test_source_behind_origin_merges_the_remote_tip(tmp_path,
         git(release_repo, "rev-parse", "origin/main")
 
 
-async def test_source_diverged_from_origin_is_refused(tmp_path,
-                                                      release_repo):
-    """本機與 origin 分岔 ⇒ `release_source_diverged`，兩邊的 sha 都要寫出來。
-
-    挑哪一邊都會漏掉另一邊的成果，而漏掉的那幾顆在報告上與「成功上板」長得
-    一模一樣。
-    """
+async def test_source_diverged_from_origin_is_merged_not_refused(
+        tmp_path, release_repo):
+    """本機與 origin 分岔 ⇒ 自動把 origin 併進來再上板（不再是
+    `release_source_diverged`）：兩邊的成果都要進穩定分支，本機的來源分支
+    不動、也不推送。"""
     (release_repo / "遠端那顆.txt").write_text("遠端\n", encoding="utf-8")
     git(release_repo, "add", "遠端那顆.txt")
     git(release_repo, "commit", "-m", "只在 origin 上的那顆")
@@ -660,19 +658,21 @@ async def test_source_diverged_from_origin_is_refused(tmp_path,
     git(release_repo, "commit", "-m", "只在本機的那顆")
     local = git(release_repo, "rev-parse", "develop")
     remote = git(release_repo, "rev-parse", "origin/develop")
-    before = git(release_repo, "rev-parse", "main")
     cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
     hub = _RecordingHub()
 
     outcome = await executor(cfg, hub).execute(make_run([entry()]))
 
-    assert (outcome.status, outcome.reason) == ("failed", "release_partial")
-    assert "release_source_diverged" in outcome.result
-    assert local[:8] in outcome.result and remote[:8] in outcome.result
-    # 一顆都不能併進去
-    assert git(release_repo, "rev-parse", "main") == before
-    assert git(release_repo, "rev-parse", "origin/main") == before
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert "release_source_diverged" not in outcome.result
+    subjects = git(release_repo, "log", "main", "--format=%s")
+    assert "只在 origin 上的那顆" in subjects and "只在本機的那顆" in subjects
+    assert git(release_repo, "rev-parse", "develop") == local, "本機來源分支被動了"
+    assert git(release_repo, "rev-parse", "origin/develop") == remote, \
+        "來源分支不該被推送"
     assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+    assert "自主動作" in outcome.result and "分岔" in outcome.result
 
 
 # ── 簽章（SSH）與失敗後重試 ──────────────────────────────────────
@@ -902,49 +902,58 @@ async def test_retry_pushes_leftover_when_resume_head_matches(tmp_path):
                                                  "origin/main")
 
 
-async def test_retry_refuses_unrelated_local_commit(tmp_path):
-    """本機穩定分支多了手動 commit（HEAD ≠ 上次失敗的那顆）⇒ 不推。"""
+async def test_retry_keeps_and_pushes_unrelated_local_commit(tmp_path):
+    """本機穩定分支多了手動 commit（HEAD ≠ 上次失敗的那顆）：內容不在來源
+    分支，不能當冗餘丟掉 ⇒ 保留並隨上板一起推（不再 `release_unpushed_unrelated`）。
+    """
     repo, bare, cfg, first = await _push_failed_once(tmp_path)
     resume = first.git["repos"][0]["head_after"]
     _manual_commit_on_stable(repo)
     (bare / "hooks" / "pre-receive").unlink()
-    origin_before = git(repo, "rev-parse", "origin/main")
 
     second = await executor(cfg, _RecordingHub()).execute(
         make_run([{**entry(), "resume_head": resume}], run_id="r-rel-2"))
 
-    assert second.status == "failed"
-    assert "release_unpushed_unrelated" in second.result
-    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
+    assert (second.status, second.reason) == ("done", "released"), \
+        second.result
+    assert "release_unpushed_unrelated" not in second.result
+    assert "手動 commit" in second.result, "保留了哪一顆要寫出來"
+    assert git(bare, "rev-parse", "main") == git(repo, "rev-parse", "main")
+    assert "手動 commit" in git(bare, "log", "main", "--format=%s")
 
 
-async def test_retry_without_resume_head_refuses_unpushed_commits(tmp_path):
-    repo, bare, cfg, _first = await _push_failed_once(tmp_path)
+async def test_retry_without_resume_head_rebuilds_redundant_leftover(tmp_path):
+    """沒有 resume_head：本機領先的只有「已經在來源分支裡」的內容（殘留的
+    merge commit）⇒ 備份後重建自 origin，再重新合併並推送。"""
+    repo, bare, cfg, first = await _push_failed_once(tmp_path)
+    leftover = git(repo, "rev-parse", "main")
     (bare / "hooks" / "pre-receive").unlink()
-    origin_before = git(repo, "rev-parse", "origin/main")
 
     second = await executor(cfg, _RecordingHub()).execute(
         make_run([entry()], run_id="r-rel-2"))
 
-    assert second.status == "failed"
-    assert "release_unpushed_unrelated" in second.result
-    assert git(bare, "rev-parse", "main") == origin_before
+    assert (second.status, second.reason) == ("done", "released"), \
+        second.result
+    assert "重建自 origin" in second.result and "備份 ref" in second.result
+    backups = git(repo, "for-each-ref", "refs/runner-backup/main/",
+                  "--format=%(objectname)").split()
+    assert backups == [leftover], "備份 ref 要指向重建前的本機 HEAD"
+    assert git(bare, "rev-parse", "main") == git(repo, "rev-parse", "main")
 
 
-async def test_merge_path_refuses_unrelated_unpushed_commit(tmp_path):
-    """來源有新 commit、本機穩定分支卻有手動未推 commit ⇒ 不合併不推。"""
+async def test_merge_path_keeps_unrelated_unpushed_commit(tmp_path):
+    """來源有新 commit、本機穩定分支有手動未推 commit ⇒ 保留它、把來源併上去、
+    一起推（不再拒絕）。"""
     repo, bare = make_repo(tmp_path, "JSAI-Web")
     cfg = make_config(tmp_path, {"JSAI-Web": repo})
     _manual_commit_on_stable(repo)
-    local_main = git(repo, "rev-parse", "main")
-    origin_before = git(bare, "rev-parse", "main")
 
     outcome = await executor(cfg, _RecordingHub()).execute(
         make_run([entry()]))
 
-    assert outcome.status == "failed"
-    assert "release_unpushed_unrelated" in outcome.result
-    assert git(bare, "rev-parse", "main") == origin_before, "不能推出去"
-    assert git(repo, "rev-parse", "main") == local_main, "不能合併"
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    subjects = git(bare, "log", "main", "--format=%s")
+    assert "手動 commit" in subjects and "功能一" in subjects
     assert git(repo, "status", "--porcelain") == ""
     assert git(repo, "branch", "--show-current") == "develop"

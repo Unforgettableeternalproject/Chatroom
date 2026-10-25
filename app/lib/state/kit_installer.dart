@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/config/build_info.dart';
+import 'app_updater.dart';
 import 'host_kit_providers.dart';
 import 'mcp_kit_providers.dart';
 import 'runner_kit_providers.dart';
@@ -96,8 +97,20 @@ bool isAbsoluteKitPath(String path) {
 /// App 手上那個 token 是 Hub 的，送到 GitHub 等於把它交給一個無關的服務。
 const String kKitReleaseRepo = 'Unforgettableeternalproject/Chatroom';
 
-String kitReleaseApiUrl(String version) =>
-    'https://api.github.com/repos/$kKitReleaseRepo/releases/tags/v$version';
+/// 這份 App 對應的 Release tag：`v1.2.5`，熱修版為 `v1.2.5-hotfix1`。
+///
+/// 組法與 App 自更新共用 [AppVersion.toString]；認不得的版號（dev build）
+/// 照原樣加 `v`，維持查不到的行為。
+String kitReleaseTag(String version, {int hotfix = 0}) {
+  final parsed = AppVersion.tryParse(version);
+  if (parsed == null) return 'v$version';
+  return AppVersion(parsed.major, parsed.minor, parsed.patch, hotfix)
+      .toString();
+}
+
+String kitReleaseApiUrl(String version, {int hotfix = 0}) =>
+    'https://api.github.com/repos/$kKitReleaseRepo/releases/tags/'
+    '${kitReleaseTag(version, hotfix: hotfix)}';
 
 /// 一份 Release。
 @immutable
@@ -353,8 +366,9 @@ class KitInstaller {
 
   /// 查這一版的 Release。**404 回 `null`**——那是「這份 App 沒有對應的
   /// Release」，不是錯誤，也不退到 latest。
-  Future<KitRelease?> fetchRelease(String version) async {
-    final (status, body) = await http.getJson(kitReleaseApiUrl(version));
+  Future<KitRelease?> fetchRelease(String version, {int hotfix = 0}) async {
+    final (status, body) =
+        await http.getJson(kitReleaseApiUrl(version, hotfix: hotfix));
     if (status != 200) return null;
     return KitRelease.fromJson(body);
   }
@@ -569,7 +583,8 @@ final kitReleaseProvider = FutureProvider<KitRelease?>((ref) async {
   try {
     return await ref
         .watch(kitInstallerProvider)
-        .fetchRelease(BuildInfo.current.version);
+        .fetchRelease(BuildInfo.current.version,
+            hotfix: BuildInfo.current.hotfix);
   } on Object {
     // 連不到 GitHub 與「沒有這一版」在畫面上是同一件事：按鈕按不得。
     return null;

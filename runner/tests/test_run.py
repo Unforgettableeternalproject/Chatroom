@@ -1589,14 +1589,15 @@ async def test_an_unexpected_exception_still_reports_and_kills_the_child(
 
 # ── 派工前同步工作樹（諾薇亞 09/18）────────────────────────────
 
-def _remote_commit(tmp_path, work_repo, name: str = "遠端那顆") -> str:
+def _remote_commit(tmp_path, work_repo, name: str = "遠端那顆",
+                   filename: str = "remote.txt") -> str:
     """從另一份 clone 推一顆上去，模擬「別人先動了」。"""
     other = tmp_path / "other-clone"
     origin = git(work_repo, "remote", "get-url", "origin")
     subprocess.run(["git", "clone", "-b", "jsai_dev", origin, str(other)],
                    capture_output=True, check=True)
-    (other / "remote.txt").write_text(name, encoding="utf-8")
-    git(other, "add", "remote.txt")
+    (other / filename).write_text(name, encoding="utf-8")
+    git(other, "add", filename)
     git(other, "commit", "-m", name)
     git(other, "push", "origin", "jsai_dev")
     return git(other, "rev-parse", "HEAD")
@@ -1664,16 +1665,31 @@ async def test_dirty_worktree_skips_pull_and_says_so(
     assert "工作樹有未提交變更，未同步遠端。" in final["result"]
 
 
-async def test_diverged_branch_fails_before_spawning(
+def _unsigned_local_identity(repo) -> None:
+    """測試機的**全域** git 設定可能開了 `commit.gpgsign`，runner 的 merge
+    commit 會真的去簽、卡在 pinentry。只改這個測試 repo 的 local config
+    （不碰全域）：關簽章、補作者身分。"""
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "config", "user.email", "runner@test")
+    git(repo, "config", "user.name", "runner")
+
+
+def _local_commit(repo, filename: str, text: str) -> None:
+    (repo / filename).write_text(text, encoding="utf-8")
+    git(repo, "add", filename)
+    git(repo, "commit", "-m", f"本機 {filename}")
+
+
+async def test_diverged_branch_auto_merges_upstream(
         hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
-    """不能快轉＝分支已分岔。往下跑等於在錯的基礎上做事。"""
+    """分岔（本機領先又落後）、無衝突：自動 merge，run 照常跑。"""
     _app, client = hub_app
     room_id, headers = ops_room
     monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
-    _remote_commit(tmp_path, work_repo)
-    (work_repo / "local.txt").write_text("本機那顆", encoding="utf-8")
-    git(work_repo, "add", "local.txt")
-    git(work_repo, "commit", "-m", "本機那顆")
+    _unsigned_local_identity(work_repo)
+    remote_head = _remote_commit(tmp_path, work_repo)
+    _local_commit(work_repo, "local1.txt", "本機一")
+    _local_commit(work_repo, "local2.txt", "本機二")
     local_head = git(work_repo, "rev-parse", "HEAD")
     run = await _claimed_run(client, room_id, headers, runner_hub,
                              kind="ticket", ref="task-diverged")
@@ -1681,11 +1697,44 @@ async def test_diverged_branch_fails_before_spawning(
 
     outcome = await _executor(cfg, runner_hub).execute(run)
 
+    assert outcome.status == "done", outcome.result
+    head = git(work_repo, "rev-parse", "HEAD")
+    parents = git(work_repo, "rev-list", "--parents", "-n", "1",
+                  "HEAD").split()[1:]
+    assert sorted(parents) == sorted([local_head, remote_head]),         "HEAD 要是同時含本機與遠端兩邊的 merge commit"
+    assert git(work_repo, "status", "--porcelain") == ""
+    final, _ = await _trail(client, run["id"], headers)
+    note = ("分支與遠端分岔，已自動合併遠端 1 顆（本機 2 顆未推送），"
+            f"合併後 HEAD {head[:7]}。")
+    assert note in final["result"], final["result"]
+    assert "remote.txt" not in final["result"],         "merge 帶進來的變更不能算成 agent 改的"
+
+
+async def test_diverged_branch_merge_conflict_restores_and_fails(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """分岔且衝突：還原到原 HEAD、工作樹乾淨、沒有 MERGE_HEAD，run 失敗。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    _unsigned_local_identity(work_repo)
+    _remote_commit(tmp_path, work_repo, name="遠端改的", filename="README.md")
+    _local_commit(work_repo, "README.md", "本機改的")
+    local_head = git(work_repo, "rev-parse", "HEAD")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-conflict")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
     assert (outcome.status, outcome.reason) == ("failed",
                                                 "sync_not_fast_forward")
-    assert "無法快轉" in outcome.result
-    assert git(work_repo, "rev-parse", "HEAD") == local_head, \
-        "擋下的這一輪不該動到工作樹"
+    assert "自動合併失敗" in outcome.result
+    assert "本機 1 顆未推送" in outcome.result
+    assert "git merge：" in outcome.result
+    assert git(work_repo, "rev-parse", "HEAD") == local_head,         "合併失敗要退回原 HEAD"
+    assert git(work_repo, "status", "--porcelain") == ""
+    assert not (work_repo / ".git" / "MERGE_HEAD").exists()
+    assert (work_repo / "README.md").read_text(encoding="utf-8") == "本機改的"
     final, _ = await _trail(client, run["id"], headers)
     assert final["status"] == "failed"
 

@@ -82,6 +82,19 @@ WRITE_KINDS = {"ticket", "stage", "push", "release"}
 # 那筆 run 一直是 `release`，這個名字只決定要載哪一份 prompt 模板、以及要給
 # 哪一組工具（不在 WRITE_KINDS 裡 ⇒ 唯讀）
 RELEASE_REPORT_KIND = "release_report"
+# 上板時 merge 撞衝突、或本機分支與 origin 分岔要併回去時派的解衝突 agent。
+# 同樣**不是 Hub 的 run kind**。它要改檔，所以給編輯工具（`allowed_tools`），
+# 但不進 WRITE_KINDS：那一組決定 repo 鎖與並行附註，只看 Hub 的 run["kind"]
+RELEASE_CONFLICT_KIND = "release_conflict"
+# 解衝突 agent 的系統提示。**不用 contract.md**：那份第一步叫 agent 進房讀卡，
+# 而這一支沒有房、沒有卡，進不了房的規則還會叫它什麼都不做
+RELEASE_CONFLICT_CONTRACT = (
+    "你是一次性的上板解衝突執行者。只做 prompt 裡寫的三件事：解衝突、完成"
+    "簽章 commit、跑便宜的檢查。不 push、不切換或建立分支、不 reset、不用 "
+    "--no-verify 或 --no-gpg-sign；被 PreToolUse 擋下時不要找替代指令繞過，"
+    "把卡住的地方寫在最後的輸出裡然後結束。")
+# push 被拒（origin 前進了）時最多推幾次：每次被拒就 fetch、合併 origin 再推
+PUSH_ATTEMPTS = 3
 # run 物件的 `single_writer`：房間要不要守「同一個 repo 同時只有一個寫入型
 # run」。**缺鍵一律當 True**（現行行為）——這個欄位由 Hub 從房間帶出來，
 # 舊的 Hub 與舊的 run 都不會有它，預設放寬等於默默取消一條安全規則
@@ -141,7 +154,7 @@ def allowed_tools(kind: str, extra: list[str] | None = None,
     在 `BASE_ALLOWED_TOOLS` 裡，重複加入會被下面的去重擋掉，無害。
     """
     tools = list(BASE_ALLOWED_TOOLS)
-    if kind in WRITE_KINDS:
+    if kind in WRITE_KINDS or kind == RELEASE_CONFLICT_KIND:
         tools += list(WRITE_ALLOWED_TOOLS)
     for name in skills or []:
         entry = f"Skill({name})"
@@ -420,6 +433,12 @@ class _SyncBlocked(Exception):
     """工作樹沒辦法更新到最新，這一輪不該起跑。訊息直接當 run 的 result。"""
 
 
+def _tail(text: str, limit: int = 600) -> str:
+    """git 輸出摘要：太長只留尾巴（錯誤原因通常在最後）。"""
+    text = (text or "").strip()
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
 @dataclass
 class RunOutcome:
     status: str
@@ -547,6 +566,9 @@ class RepoReleaseResult:
     head_after: str = ""
     tag: str = ""
     commits: list[str] = field(default_factory=list)
+    # 執行器自主做的動作（重建本機穩定分支、自動合併、agent 解衝突、push
+    # 重試…）。看結果的人靠這一欄知道無人值守時它替他動了什麼
+    actions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "stable": self.stable,
@@ -554,7 +576,22 @@ class RepoReleaseResult:
                 "reason": self.reason, "detail": self.detail,
                 "head_before": self.head_before,
                 "head_after": self.head_after, "tag": self.tag,
-                "commits": list(self.commits)}
+                "commits": list(self.commits),
+                "actions": list(self.actions)}
+
+
+@dataclass
+class MergeStep:
+    """`_merge_into_head` 的結果。失敗時 ``restored`` 說明 HEAD 有沒有確實
+    退回去（為假要講出來，不能假裝乾淨）。"""
+
+    ok: bool = False
+    reason: str = ""      # merge_failed／agent_failed／verify_failed
+    detail: str = ""
+    head: str = ""
+    conflicts: list[str] = field(default_factory=list)
+    agent: str = ""       # 有派 agent 解衝突時的一句追溯
+    restored: bool = True
 
 
 def release_entries(run: dict) -> list[dict]:
@@ -1001,8 +1038,8 @@ class RunExecutor:
                     reason="release_repo_unknown",
                     detail=f"{name} 不在工作區 {project.key} 的專案清單裡。"))
                 continue
-            results.append(await self._release_repo(repo, entry, project,
-                                                    tag, objective))
+            results.append(await self._release_repo(
+                repo, entry, project, tag, objective, run, cancel))
 
         failed = [r for r in results if r.status == "failed"]
         lines = [self._release_line(r) for r in results]
@@ -1058,13 +1095,17 @@ class RunExecutor:
                  f"{(r.head_before or '?')[:8]} → {(r.head_after or '?')[:8]}")
         if r.tag:
             head += f"，tag {r.tag}"
+        for action in r.actions:
+            head += f"\n    - 自主動作：{action}"
         if r.detail:
             head += f"\n    - {r.detail}"
         return head
 
     async def _release_repo(self, repo: ProjectConfig, entry: dict,
                             project: WorkspaceConfig, tag: str,
-                            objective: str) -> RepoReleaseResult:
+                            objective: str, run: dict | None = None,
+                            cancel: asyncio.Event | None = None
+                            ) -> RepoReleaseResult:
         """一個 repo 的上板。**切回原分支放在 finally**：中途失敗時工作樹
         留在穩定分支上，下一輪 run 會在一條沒有人打算工作的分支上動工。"""
         stable = str(entry.get("stable_branch")
@@ -1127,8 +1168,10 @@ class RunExecutor:
             return res
         try:
             await self._release_on_stable(repo, project, res, tag, objective,
-                                          cred, resume_head)
+                                          cred, resume_head, run, cancel)
         finally:
+            # 每一條離開路徑都要確保沒有 MERGE_HEAD，才切回原分支
+            await self._clear_merge_state(repo, res)
             if original and original != stable:
                 back = await gitops.checkout(repo.path, original)
                 if not back.ok:
@@ -1143,56 +1186,52 @@ class RunExecutor:
                                  project: WorkspaceConfig,
                                  res: RepoReleaseResult, tag: str,
                                  objective: str, cred: list[str],
-                                 resume_head: str = "") -> None:
+                                 resume_head: str = "",
+                                 run: dict | None = None,
+                                 cancel: asyncio.Event | None = None) -> None:
         """已經站在穩定分支上之後的步驟。結果寫回 ``res``。
 
         ``resume_head``：上一次 push 失敗時本機穩定分支的 HEAD（Hub 從同一
-        週期最近一筆 failed 的上板帶來）。補推只認這個。
+        週期最近一筆 failed 的上板帶來）。本機只領先、HEAD 又等於它時照舊
+        補推；其餘本機與 origin 不一致的情況走 `_reconcile_stable`。
+
+        🚨 無人值守時上板要自己收斂：每一個自主動作（重建本機穩定分支、
+        自動合併、agent 解衝突、push 重試）都寫進 ``res.actions``，事後看
+        結果的人才知道執行器替他做了什麼。
         """
         stable, source = res.stable, res.source
-        if await gitops.ref_exists(repo.path, f"origin/{stable}"):
-            pulled = await gitops.pull_ff_branch(repo.path, stable, cred)
-            if not pulled.ok:
-                res.reason = "release_pull_failed"
-                res.detail = (f"git pull --ff-only origin {stable} 失敗："
-                              f"{pulled.err or pulled.out}")
-                return
-        res.head_before = await gitops.head_sha(repo.path)
+        run = run or {"id": "release"}
+        cancel = cancel or asyncio.Event()
+        sign = self._signing_args()
+        values = {"source": source, "stable": stable, "objective": objective,
+                  "date": datetime.now().strftime("%m/%d"), "tag": tag,
+                  "repo": repo.name}
 
+        # 先記一次：後面任何一步失敗，結果裡的 sha 都不會是空的
+        res.head_before = await gitops.head_sha(repo.path)
+        # 1. 來源分支：本機與 origin 分岔時先併成一顆暫時的合併結果
         resolved = await gitops.resolve_branch(repo.path, source)
-        if resolved.diverged:
-            # 本機與 origin 各有對方沒有的 commit。挑哪一邊都會漏掉另一邊的
-            # 成果，而漏掉的那幾顆在報告上與「成功上板」長得一模一樣
-            res.reason = "release_source_diverged"
-            res.detail = (
-                f"{source} 的本機與 origin 已經分岔，沒有上板："
-                f"本機 {resolved.local_sha[:8]}、"
-                f"origin/{source} {resolved.remote_sha[:8]}。"
-                "先在本機把兩邊對齊（rebase 或合併並推上去）再重跑上板。")
-            return
         source_ref = resolved.ref
+        if resolved.diverged:
+            source_ref = await self._heal_diverged_source(
+                repo, project, run, cancel, res, resolved, sign)
+            if not source_ref:
+                return
         if not source_ref:
             res.reason = "release_source_missing"
             res.detail = f"本機與 origin 都沒有分支 {source}，沒有上板。"
             return
-        values = {"source": source, "stable": stable, "objective": objective,
-                  "date": datetime.now().strftime("%m/%d"), "tag": tag,
-                  "repo": repo.name}
-        # 🚨 本機穩定分支領先 origin ＝ 有東西會被這次的 push 一起帶出去（補推
-        # 或合併後的推送都是）。領先不等於「是這個週期上次留下的」：可能是人
-        # 手動 commit 的，或別的週期推送失敗留下的 merge。只有本機 HEAD 恰好
-        # 等於上次失敗時記下的那顆才放行，其餘一律不合併、不推
-        leftover = await gitops.count_unpushed(repo.path, stable)
-        if leftover > 0 and (not resume_head
-                             or res.head_before != resume_head):
-            res.reason = "release_unpushed_unrelated"
-            res.detail = (
-                f"{stable} 在本機領先 origin {leftover} 顆，"
-                "但不能證明是這個週期上次沒推上去的上板成果"
-                f"（本機 {res.head_before[:8]}、上次記錄 "
-                f"{resume_head[:8] or '無'}）。沒有合併也沒有推送，"
-                "請人工確認這些 commit 後處理。")
+
+        # 2. 本機穩定分支與 origin 對齊
+        if not await self._reconcile_stable(repo, project, run, cancel, res,
+                                            cred, source_ref, resume_head,
+                                            sign):
             return
+        res.head_before = await gitops.head_sha(repo.path)
+
+        # 本機穩定分支領先 origin ＝ 有東西會被這次的 push 一起帶出去（補推、
+        # 保留下來的非冗餘 commit、對齊時產生的合併，或合併後的推送）
+        leftover = await gitops.count_unpushed(repo.path, stable)
         ahead = await gitops.count_commits(repo.path, "HEAD", source_ref)
         if ahead == 0:
             # 🚨 這不是失敗：來源分支已經整個在穩定分支裡，沒有東西可併
@@ -1205,13 +1244,13 @@ class RunExecutor:
             # origin，來源分支卻已經整個在裡面，ahead 永遠是 0。不補推的話
             # 重試只會回報「沒東西可併」，那幾顆永遠到不了 origin
             if leftover > 0:
-                pushed = await gitops.push_ref(repo.path, stable, cred)
-                if not pushed.ok:
+                err = await self._push_stable(repo, project, run, cancel, res,
+                                              cred, sign)
+                if err:
                     res.status = "failed"
                     res.reason = "release_push_failed"
                     res.detail = (f"{stable} 在本機領先 origin {leftover} 顆"
-                                  f"（上次沒推上去），補推失敗："
-                                  f"{pushed.err or pushed.out}")
+                                  f"（上次沒推上去），補推失敗：{err}")
                     return
                 landed = (f"{stable} 在本機領先 origin {leftover} 顆"
                           "（上次沒推上去），已補推")
@@ -1240,45 +1279,46 @@ class RunExecutor:
             return
         commits = await gitops.log_oneline(repo.path, "HEAD", source_ref)
 
-        sign = self._signing_args()
         method = project.release.merge_method
         message = render_template(project.release.merge_message, values)
-        if method == "squash":
-            merged = await gitops.merge_squash(repo.path, source_ref, sign)
-            if merged.ok:
-                merged = await gitops.commit(repo.path, message, sign)
-        elif method == "ff_only":
+        if method == "ff_only":
             merged = await gitops.merge_ff_only(repo.path, source_ref, sign)
-        else:
-            merged = await gitops.merge_no_ff(repo.path, source_ref, message,
-                                              sign)
-        if not merged.ok:
-            conflicts = await gitops.conflicted_files(repo.path)
-            if method == "squash":
-                # squash 撞衝突時沒有 MERGE_HEAD，`merge --abort` 收不掉
-                await gitops.reset_hard(repo.path, res.head_before)
-            else:
-                await gitops.merge_abort(repo.path)
-            if method == "ff_only":
+            if not merged.ok:
+                restored = await gitops.restore_head(repo.path,
+                                                     res.head_before)
                 res.reason = "release_ff_not_possible"
                 res.detail = (f"{source} 沒辦法快轉進 {stable}："
-                              f"{merged.err or merged.out}")
+                              f"{merged.err or merged.out}"
+                              + ("" if restored else self._restore_warning(
+                                  res.head_before)))
                 return
-            res.reason = ("release_merge_conflict" if conflicts
-                          else "release_merge_failed")
-            res.detail = (f"合併失敗，已還原 {stable}："
-                          f"{merged.err or merged.out}")
-            if conflicts:
-                res.detail += "\n    - 衝突檔案：" + "、".join(conflicts[:20])
-            return
+        else:
+            step = await self._merge_into_head(
+                repo, project, run, cancel, theirs=source_ref,
+                message=message, squash=method == "squash",
+                purpose=f"把來源分支 {source} 合進穩定分支 {stable}",
+                restore_to=res.head_before, sign=sign)
+            if not step.ok:
+                res.reason = ("release_merge_failed"
+                              if step.reason == "merge_failed"
+                              else "release_merge_conflict")
+                res.detail = f"合併失敗，已還原 {stable}：{step.detail}"
+                if step.conflicts:
+                    res.detail += ("\n    - 衝突檔案："
+                                   + "、".join(step.conflicts[:20]))
+                if not step.restored:
+                    res.detail += self._restore_warning(res.head_before)
+                return
+            if step.agent:
+                res.actions.append(step.agent)
         res.head_after = await gitops.head_sha(repo.path)
         res.commits = commits
 
-        pushed = await gitops.push_ref(repo.path, stable, cred)
-        if not pushed.ok:
+        err = await self._push_stable(repo, project, run, cancel, res, cred,
+                                      sign)
+        if err:
             res.reason = "release_push_failed"
-            res.detail = (f"已在本機併進 {stable}，但 git push 失敗："
-                          f"{pushed.err or pushed.out}")
+            res.detail = f"已在本機併進 {stable}，但 git push 失敗：{err}"
             return
         if not tag:
             res.status = "ok"
@@ -1286,6 +1326,451 @@ class RunExecutor:
         if await self._release_tag(repo, project, res, tag, values, objective,
                                    cred, f"已併進 {stable} 並推送"):
             res.status = "ok"
+
+    @staticmethod
+    def _restore_warning(expected: str) -> str:
+        return (f"\n    - ⚠️ 還原失敗：HEAD 沒有確實回到 {expected[:8] or '?'}"
+                "，或還留著合併狀態／未提交變更，請人工檢查這個 repo。")
+
+    async def _clear_merge_state(self, repo: ProjectConfig,
+                                 res: RepoReleaseResult) -> None:
+        """離開 repo 之前保證沒有 MERGE_HEAD（每一條離開路徑都走這裡）。"""
+        if not await gitops.merge_in_progress(repo.path):
+            return
+        await gitops.merge_abort(repo.path)
+        if await gitops.merge_in_progress(repo.path):
+            res.detail = (res.detail + "\n" if res.detail else "") + (
+                "⚠️ 離開時 repo 仍停在合併狀態（merge --abort 沒收掉），"
+                "請人工處理。")
+
+    async def _heal_diverged_source(self, repo: ProjectConfig,
+                                    project: WorkspaceConfig, run: dict,
+                                    cancel: asyncio.Event,
+                                    res: RepoReleaseResult, resolved,
+                                    sign: list[str]) -> str:
+        """來源分支本機與 origin 分岔：把 origin 併進本機那一顆，回合併結果的 sha。
+
+        做法是在**分離 HEAD**上合併（暫時的合併結果），再切回穩定分支：
+        本機的來源分支不動（人的開發分支不該被上板偷偷多一顆 commit），也不
+        推送；那顆結果只被穩定分支的合併拿去當 source_ref。失敗回空字串，
+        原因已寫進 ``res``。
+        """
+        source, stable = res.source, res.stable
+        co = await gitops.checkout_detach(repo.path, resolved.local_sha)
+        if not co.ok:
+            res.reason = "release_source_merge_failed"
+            res.detail = (f"{source} 的本機與 origin 已分岔，切不到本機那一顆"
+                          f"做合併：{co.err or co.out}")
+            return ""
+        merged_sha = ""
+        step = None
+        back_failed = ""
+        try:
+            step = await self._merge_into_head(
+                repo, project, run, cancel, theirs=resolved.remote_sha,
+                message=f"Merge remote-tracking branch 'origin/{source}' "
+                        f"into {source}",
+                squash=False,
+                purpose=f"來源分支 {source} 的本機與 origin 分岔，"
+                        f"把 origin/{source} 併進本機 {source}（暫時結果，"
+                        "不會推送）",
+                restore_to=resolved.local_sha, sign=sign)
+            if step.ok:
+                merged_sha = step.head
+        finally:
+            back = await gitops.checkout(repo.path, stable)
+            if not back.ok:
+                back_failed = (f"⚠️ 切回 {stable} 失敗："
+                               f"{back.err or back.out}")
+                merged_sha = ""
+        if not merged_sha:
+            res.reason = "release_source_merge_failed"
+            why = (step.detail if step is not None and not step.ok
+                   else back_failed)
+            res.detail = (
+                f"{source} 的本機與 origin 已分岔（本機 "
+                f"{resolved.local_sha[:8]}、origin/{source} "
+                f"{resolved.remote_sha[:8]}），自動合併失敗，沒有上板：{why}")
+            if step is not None and step.conflicts:
+                res.detail += ("\n    - 衝突檔案："
+                               + "、".join(step.conflicts[:20]))
+            if step is not None and not step.restored:
+                res.detail += self._restore_warning(resolved.local_sha)
+            if back_failed and why != back_failed:
+                res.detail += "\n    - " + back_failed
+            return ""
+        res.actions.append(
+            f"來源分支 {source} 的本機與 origin 分岔，已自動合併 "
+            f"origin/{source}，用暫時結果 {merged_sha[:8]} 上板"
+            f"（本機 {source} 沒動、不推送）")
+        if step.agent:
+            res.actions.append(step.agent)
+        return merged_sha
+
+    async def _reconcile_stable(self, repo: ProjectConfig,
+                                project: WorkspaceConfig, run: dict,
+                                cancel: asyncio.Event,
+                                res: RepoReleaseResult, cred: list[str],
+                                source_ref: str, resume_head: str,
+                                sign: list[str]) -> bool:
+        """本機穩定分支與 origin/<stable> 對齊。成功回 True，失敗寫 ``res`` 回 False。
+
+        - 落後：快轉。
+        - 只領先且 HEAD 就是 ``resume_head``：上次這個週期沒推上去的成果，
+          保留（補推）。
+        - 其餘（分岔，或領先卻不能證明出處）：先把本機存成備份 ref，再看
+          ``<stable> ^origin/<stable> ^<source_ref> --no-merges``——
+          - 空：本機獨有的全是已經在來源分支裡的內容（例如簽章逾時留下的殘留
+            merge commit），``reset --hard origin/<stable>`` 重建。
+          - 非空：有來源分支沒有的內容。只領先時沒有東西要合，原樣保留、
+            隨上板一併推送；分岔時以 origin 為基礎把本機那一邊併進來
+            （衝突交給解衝突 agent），失敗才還原並以失敗收場。
+        """
+        stable, source = res.stable, res.source
+        path = repo.path
+        origin = f"origin/{stable}"
+        if not await gitops.ref_exists(path, origin):
+            return True
+        local = await gitops.head_sha(path)
+        remote = await gitops.rev_parse(path, origin)
+        if local == remote:
+            return True
+        if await gitops.is_ancestor(path, local, remote):
+            pulled = await gitops.pull_ff_branch(path, stable, cred)
+            if not pulled.ok:
+                res.reason = "release_pull_failed"
+                res.detail = (f"git pull --ff-only origin {stable} 失敗："
+                              f"{pulled.err or pulled.out}")
+                return False
+            return True
+        ahead_only = await gitops.is_ancestor(path, remote, local)
+        if ahead_only and resume_head and local == resume_head:
+            return True
+
+        def fail(detail: str) -> bool:
+            res.reason = "release_stable_reconcile_failed"
+            res.detail = detail
+            return False
+
+        backup = await gitops.backup_ref(path, stable, local)
+        if not backup:
+            return fail(f"本機 {stable} 與 origin 不一致，但備份 ref 建不起來，"
+                        "沒有動本機。")
+        unique = await gitops.rev_list(path, local, f"^{remote}",
+                                       f"^{source_ref}", "--no-merges")
+        total = await gitops.rev_list(path, local, f"^{remote}")
+        if unique is None or total is None:
+            return fail(f"本機 {stable} 與 origin 不一致，但 git rev-list "
+                        f"算不出差異，沒有動本機（備份 ref {backup}）。")
+        if not unique:
+            reset = await gitops.reset_hard(path, remote)
+            if not reset.ok or await gitops.head_sha(path) != remote:
+                await gitops.restore_head(path, local)
+                return fail(f"本機 {stable} 重建自 origin 失敗："
+                            f"{reset.err or reset.out}（備份 ref {backup}）")
+            res.actions.append(
+                f"本機穩定分支重建自 origin，捨棄本機 {len(total)} 顆 commit"
+                f"（內容皆已在 {source}）（備份 ref {backup}）")
+            return True
+        listed = "；".join(await gitops.commit_subjects(path, unique))
+        if ahead_only:
+            res.actions.append(
+                f"本機 {stable} 領先 origin {len(total)} 顆，其中 "
+                f"{len(unique)} 顆內容不在 {source}（{listed}），已保留並隨"
+                f"這次上板一起推送（備份 ref {backup}）")
+            return True
+        reset = await gitops.reset_hard(path, remote)
+        step = None
+        if reset.ok:
+            step = await self._merge_into_head(
+                repo, project, run, cancel, theirs=local,
+                message=f"Merge local {stable} into {origin}",
+                squash=False,
+                purpose=f"本機 {stable} 與 {origin} 分岔，本機有 "
+                        f"{len(unique)} 顆內容不在 {source}；以 {origin} "
+                        "為基礎把本機那一邊併進來",
+                restore_to=local, sign=sign)
+        if step is None or not step.ok:
+            restored = await gitops.restore_head(path, local)
+            why = (step.detail if step is not None
+                   else f"reset --hard {origin} 失敗：{reset.err or reset.out}")
+            detail = (f"本機 {stable} 與 {origin} 分岔，本機獨有 "
+                      f"{len(unique)} 顆內容不在 {source}（{listed}），"
+                      f"自動合併失敗，已還原本機（備份 ref {backup}）：{why}")
+            if step is not None and step.conflicts:
+                detail += ("\n    - 衝突檔案："
+                           + "、".join(step.conflicts[:20]))
+            if not restored or (step is not None and not step.restored):
+                detail += self._restore_warning(local)
+            return fail(detail)
+        res.actions.append(
+            f"本機 {stable} 與 origin 分岔，已自動合併（本機獨有 "
+            f"{len(unique)} 顆內容不在 {source}：{listed}；合併結果 "
+            f"{step.head[:8]}；備份 ref {backup}）")
+        if step.agent:
+            res.actions.append(step.agent)
+        return True
+
+    @staticmethod
+    def _is_non_fast_forward(text: str) -> bool:
+        """push 被拒是不是因為 origin 比本機新（可以 fetch 合併後重推）。
+
+        遠端 hook 擋下（`remote rejected`）重推也一樣會被擋，不算。
+        """
+        low = (text or "").lower()
+        if "remote rejected" in low:
+            return False
+        return any(key in low for key in (
+            "non-fast-forward", "fetch first",
+            "tip of your current branch is behind"))
+
+    async def _push_stable(self, repo: ProjectConfig,
+                           project: WorkspaceConfig, run: dict,
+                           cancel: asyncio.Event, res: RepoReleaseResult,
+                           cred: list[str], sign: list[str]) -> str:
+        """推穩定分支。成功回空字串，失敗回錯誤文字。
+
+        被拒（origin 在這段時間前進了）時 fetch、把 origin/<stable> 合進本機
+        （衝突交給解衝突 agent）再推，最多 ``PUSH_ATTEMPTS`` 次。每次合併後
+        ``res.head_after`` 跟著更新：推失敗時 Hub 記下的就是這一顆。
+        """
+        stable = res.stable
+        last = ""
+        for attempt in range(1, PUSH_ATTEMPTS + 1):
+            pushed = await gitops.push_ref(repo.path, stable, cred)
+            if pushed.ok:
+                if attempt > 1:
+                    res.actions.append(
+                        f"push 被拒後 fetch 並合併 origin/{stable}，"
+                        f"重試後成功（共推送 {attempt} 次）")
+                return ""
+            last = pushed.err or pushed.out
+            if not self._is_non_fast_forward(last):
+                return last
+            if attempt == PUSH_ATTEMPTS:
+                break
+            fetched = await gitops.fetch_origin(repo.path, cred)
+            if not fetched.ok:
+                return (f"push 被拒，重抓 origin 也失敗："
+                        f"{fetched.err or fetched.out}")
+            err = await self._integrate_origin(repo, project, run, cancel, res,
+                                               sign)
+            if err:
+                return err
+        return f"推送 {PUSH_ATTEMPTS} 次都被拒（origin 一直在前進）：{last}"
+
+    async def _integrate_origin(self, repo: ProjectConfig,
+                                project: WorkspaceConfig, run: dict,
+                                cancel: asyncio.Event,
+                                res: RepoReleaseResult,
+                                sign: list[str]) -> str:
+        """push 被拒之後把 origin/<stable> 併進本機。成功回空字串。"""
+        path, stable = repo.path, res.stable
+        origin = f"origin/{stable}"
+        local = await gitops.head_sha(path)
+        remote = await gitops.rev_parse(path, origin)
+        if not remote or local == remote or await gitops.is_ancestor(
+                path, remote, local):
+            return ""
+        if await gitops.is_ancestor(path, local, remote):
+            ff = await gitops.merge_ff_only(path, origin, sign)
+            if not ff.ok:
+                return f"push 被拒後快轉到 {origin} 失敗：{ff.err or ff.out}"
+            res.head_after = await gitops.head_sha(path)
+            res.actions.append(f"push 被拒，已快轉到 {origin}（"
+                               f"{res.head_after[:8]}）")
+            return ""
+        step = await self._merge_into_head(
+            repo, project, run, cancel, theirs=remote,
+            message=f"Merge remote-tracking branch '{origin}' into {stable}",
+            squash=False,
+            purpose=f"push 被拒（origin 在上板途中前進了），"
+                    f"把 {origin} 併進本機 {stable}",
+            restore_to=local, sign=sign)
+        if not step.ok:
+            return (f"push 被拒後自動合併 {origin} 失敗，已還原到推送前："
+                    f"{step.detail}"
+                    + ("" if step.restored else self._restore_warning(local))
+                    + ("\n    - 衝突檔案：" + "、".join(step.conflicts[:20])
+                       if step.conflicts else ""))
+        res.head_after = step.head
+        res.actions.append(
+            f"push 被拒，已自動合併 {origin}（合併結果 {step.head[:8]}）")
+        if step.agent:
+            res.actions.append(step.agent)
+        return ""
+
+    async def _merge_into_head(self, repo: ProjectConfig,
+                               project: WorkspaceConfig, run: dict,
+                               cancel: asyncio.Event, *, theirs: str,
+                               message: str, squash: bool, purpose: str,
+                               restore_to: str,
+                               sign: list[str]) -> "MergeStep":
+        """把 ``theirs`` 合進目前的 HEAD；撞衝突時派 agent 解。
+
+        🚨 任何一條失敗路徑（merge／commit 失敗或逾時、agent 失敗、被取消、
+        機械驗證不過）都在 finally 裡 ``reset --hard`` 回 ``restore_to`` 並驗證
+        HEAD 確實回去。只靠 `merge --abort` 不夠：commit 已經產生（例如簽章
+        逾時才被殺）時它沒有東西可收，那顆 commit 會殘留在本機分支上。
+        """
+        path = repo.path
+        pre = await gitops.head_sha(path)
+        step = MergeStep(False)
+        ok = False
+        try:
+            if squash:
+                merged = await gitops.merge_squash(path, theirs, sign)
+                if merged.ok:
+                    merged = await gitops.commit(path, message, sign)
+            else:
+                merged = await gitops.merge_no_ff(path, theirs, message, sign)
+            if merged.ok:
+                ok = True
+                step.ok = True
+                step.head = await gitops.head_sha(path)
+                return step
+            conflicts = await gitops.conflicted_files(path)
+            step.conflicts = conflicts
+            if not conflicts:
+                step.reason = "merge_failed"
+                step.detail = f"{merged.err or merged.out}"
+                return step
+            agent_ok, why = await self._run_conflict_agent(
+                repo, project, run, cancel, theirs=theirs, message=message,
+                squash=squash, purpose=purpose, pre=pre, conflicts=conflicts)
+            if not agent_ok:
+                step.reason = "agent_failed"
+                step.detail = f"解衝突 agent 沒有完成：{why}"
+                return step
+            problems = await self._verify_resolved_merge(
+                path, pre, theirs, squash, conflicts)
+            if problems:
+                step.reason = "verify_failed"
+                step.detail = ("agent 解完衝突，但機械驗證不過："
+                               + "；".join(problems))
+                return step
+            ok = True
+            step.ok = True
+            step.head = await gitops.head_sha(path)
+            step.agent = (f"agent 解衝突（{purpose}）：commit "
+                          f"{step.head[:8]}，衝突檔案 "
+                          + "、".join(conflicts[:20]))
+            return step
+        finally:
+            if not ok:
+                step.restored = await gitops.restore_head(path, restore_to)
+
+    async def _run_conflict_agent(self, repo: ProjectConfig,
+                                  project: WorkspaceConfig, run: dict,
+                                  cancel: asyncio.Event, *, theirs: str,
+                                  message: str, squash: bool, purpose: str,
+                                  pre: str,
+                                  conflicts: list[str]) -> tuple[bool, str]:
+        """起解衝突 agent（cwd 是該 repo）。回 ``(正常收工, 沒收工的原因)``。
+
+        起法比照 `_release_report`：同一份工具白名單、wall clock、預算與
+        `_child_env`（簽章環境）。取消與逾時都由 `_spawn` 殺進程，這裡只把
+        原因講出來；還原由呼叫端的 finally 做。
+        """
+        run_id = run["id"]
+        run_dir = self.cfg.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self._write_run_files(run_dir, run, repo, project)
+        env = self._child_env(run, run_dir)
+        branch = await gitops.current_branch(repo.path)
+        fields = {
+            "run_id": run_id, "kind": RELEASE_CONFLICT_KIND,
+            "project": project.key, "repo": repo.name,
+            "cwd": str(repo.path),
+            "branch": (f"`{branch}`" if branch and branch != "HEAD"
+                       else "分離 HEAD（暫時的合併，不要切換分支）"),
+            "allowed_branches": "、".join(repo.allowed_branches),
+            "purpose": purpose, "mode": "squash" if squash else "merge",
+            "theirs": theirs, "pre_head": pre, "message": message,
+            "conflicts": "\n".join(f"- `{name}`" for name in conflicts),
+        }
+        try:
+            prompt = prompts.build(RELEASE_CONFLICT_KIND, fields, "",
+                                   self.prompt_dir)
+        except FileNotFoundError as exc:
+            log.error("run %s 的解衝突模板讀不到：%s", run_id, exc)
+            return False, f"模板讀不到（{exc}）"
+        argv = self._argv(prompt, RELEASE_CONFLICT_CONTRACT, project, run_dir,
+                          "", RELEASE_CONFLICT_KIND)
+        watcher = StreamWatcher(
+            project.context_soft_limit_tokens,
+            rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
+            monotonic=self.monotonic, on_event=self.mark_activity)
+        code, stop = await self._spawn(argv, repo.path, env, watcher,
+                                       run_dir, project.wall_clock_seconds,
+                                       cancel)
+        state = watcher.state
+        self.context_peak = max(self.context_peak, state.peak_context_tokens)
+        self._record_usage(run_id, state)
+        if stop == "cancelled":
+            return False, "收到取消"
+        if stop == "wall_clock":
+            return False, f"超過 wall clock（{project.wall_clock_seconds:g} 秒）"
+        if code != 0 or state.is_error:
+            return False, f"沒有正常收工（exit {code}）"
+        return True, ""
+
+    async def _verify_resolved_merge(self, path, pre: str, theirs: str,
+                                     squash: bool,
+                                     conflicts: list[str]) -> list[str]:
+        """agent 收工後的機械驗證，回「不過的項目」（空清單＝全過）。
+
+        1. 沒有 MERGE_HEAD；2. 工作樹乾淨；3. 追蹤檔沒有這次新帶進來的衝突
+        標記；4. HEAD 是這次合併的 commit：merge 模式兩個 parent 正好是
+        合併前的 HEAD 與 ``theirs``；squash 模式單一 parent 是合併前的 HEAD，
+        而且 ``theirs`` 相對共同祖先改過的檔案（衝突檔除外）都有進到 HEAD；
+        5. repo 開了 ``commit.gpgsign`` 時 commit 要有簽章。
+        """
+        problems: list[str] = []
+        if await gitops.merge_in_progress(path):
+            problems.append("還留著 MERGE_HEAD（合併沒有完成）")
+        dirty = await gitops.status_porcelain(path)
+        if dirty:
+            problems.append(f"工作樹不乾淨（{len(dirty)} 項："
+                            + "、".join(d.strip() for d in dirty[:5]) + "）")
+        head = await gitops.head_sha(path)
+        if head == pre:
+            problems.append("沒有產生合併 commit（HEAD 沒動）")
+            return problems
+        theirs_sha = await gitops.rev_parse(path, theirs)
+        parents = await gitops.commit_parents(path)
+        if squash:
+            if parents != [pre]:
+                problems.append("squash commit 的 parent 不是單一一顆合併前的 HEAD")
+            else:
+                base = await gitops.merge_base(path, pre, theirs_sha)
+                missing = []
+                for name in await gitops.changed_paths(path, base or pre,
+                                                       theirs_sha):
+                    if name in conflicts:
+                        continue
+                    pre_blob = await gitops.blob_id(path, pre, name)
+                    theirs_blob = await gitops.blob_id(path, theirs_sha, name)
+                    if (theirs_blob != pre_blob
+                            and await gitops.blob_id(path, head, name)
+                            == pre_blob):
+                        missing.append(name)
+                if missing:
+                    problems.append("來源分支的變更沒有進到 commit："
+                                    + "、".join(missing[:10]))
+        elif parents != [pre, theirs_sha]:
+            problems.append(
+                "HEAD 不是這次合併的 merge commit（parent 應為合併前的 HEAD "
+                f"{pre[:8]} 與 {theirs_sha[:8]}，實際 "
+                f"{'、'.join(p[:8] for p in parents) or '無'}）")
+        marked = await gitops.introduced_conflict_markers(path,
+                                                          [pre, theirs_sha])
+        if marked:
+            problems.append("追蹤檔內有衝突標記：" + "、".join(marked[:10]))
+        if (await gitops.signing_enabled(path)
+                and not await gitops.commit_is_signed(path)):
+            problems.append("commit 沒有簽章")
+        return problems
 
     async def _release_tag(self, repo: ProjectConfig,
                            project: WorkspaceConfig, res: RepoReleaseResult,
@@ -1400,12 +1885,17 @@ class RunExecutor:
         """派工前把常駐工作樹更新到最新，回一句要寫進收工摘要的 note。
 
         run 之間共用同一份工作樹，不先同步的話 agent 會在上一輪留下的舊基礎
-        上動工。三種情況各自有代價，所以分開處理：
+        上動工。幾種情況各自有代價，所以分開處理：
 
         - 工作樹髒：**不 pull**。別人（或上一輪）未提交的東西比「最新」重要，
           照常執行，只在摘要裡講清楚這一輪沒同步。
         - fetch 失敗：多半是網路，不值得擋掉整筆 run。
-        - 不能快轉：分支已經分岔，往下跑等於在錯的基礎上做事，直接失敗。
+        - 不能快轉但確實分岔（本機領先又落後）：自動 merge upstream。上一輪
+          在本機 commit 了、runner 不會自動推送，別人又推了新的上去，就會
+          走到這裡。merge commit 與 agent 的 commit 走同一套簽章
+          （`_signing_args`），不繞過 hooks。**失敗**（衝突、hook、簽章…）就
+          `merge --abort` 還原到原 HEAD，再以 `sync_not_fast_forward` 失敗。
+        - 其他原因的不能快轉：維持失敗，往下跑等於在錯的基礎上做事。
         """
         dirty = await gitops.status_porcelain(repo.path)
         if dirty:
@@ -1418,11 +1908,26 @@ class RunExecutor:
                         fetched.err or fetched.out)
             return "fetch 失敗，於本機現況執行。"
         pulled = await gitops.pull_ff(repo.path)
-        if not pulled.ok:
+        if pulled.ok:
+            return pulled.summary
+        counts = await gitops.ahead_behind(repo.path)
+        if counts is None or counts[0] <= 0 or counts[1] <= 0:
             raise _SyncBlocked(
                 "分支落後遠端且無法快轉，請先手動處理。\n"
                 f"git pull --ff-only：{pulled.summary}")
-        return pulled.summary
+        ahead, behind = counts
+        merged = await gitops.merge_upstream(repo.path, self._signing_args())
+        if not merged.ok:
+            detail = _tail(merged.summary)
+            raise _SyncBlocked(
+                f"分支與遠端分岔（本機 {ahead} 顆未推送、遠端新增 {behind} "
+                "顆），自動合併失敗，請先手動處理。\n"
+                + ("" if merged.restored
+                   else "⚠️ 還原合併前狀態也失敗，工作樹可能不乾淨。\n")
+                + f"git merge：{detail}")
+        head = await gitops.short_head(repo.path)
+        return (f"分支與遠端分岔，已自動合併遠端 {behind} 顆（本機 {ahead} "
+                f"顆未推送），合併後 HEAD {head}。")
 
     async def _claude_run(self, run: dict, project: WorkspaceConfig, repo,
                           cancel: asyncio.Event,
@@ -1447,7 +1952,7 @@ class RunExecutor:
                 return outcome
         branch = branches[repo.name]
 
-        # 🚨 同步要在快照**之前**：pull 帶進來的變更不是 agent 改的，
+        # 🚨 同步要在快照**之前**：pull／merge 帶進來的變更不是 agent 改的，
         # 先拍快照的話那些檔案會被算進「這一輪動了什麼」
         sync_notes: dict[str, str] = {}
 
@@ -1463,8 +1968,8 @@ class RunExecutor:
 
         # `sync_keys` 有值 ＝ 這筆 run 不排整筆的 repo 鎖（房間關掉了單一寫入
         # 者限制），但**同步這一段仍然要獨佔**：兩筆同時 `git pull --ff-only`
-        # 會對撞。拿完就放，claude 進程照樣並行。等這一段不回報 running
-        # （通常只有幾秒，報了反而多一筆雜訊），但 log 要留得到
+        # （或分岔時的 merge）會對撞。拿完就放，claude 進程照樣並行。等這一段
+        # 不回報 running（通常只有幾秒，報了反而多一筆雜訊），但 log 要留得到
         if sync_keys:
             if any(self.locks.is_held(k) for k in set(sync_keys)):
                 log.info("run %s 等 repo 鎖以完成派工前同步（並行模式）", run_id)

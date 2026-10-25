@@ -116,8 +116,33 @@ state_dir 下（與 `claude-config` 同層）放一個 `claude-oauth-token` 檔�
 帶出，缺鍵當 `true`）就不排隊，直接與其他 run 並行——log 與第一次 running
 回報的附註都會講出這件事。放寬的只有排隊規則，`PreToolUse` 的硬限制不變；
 共用工作樹的代價（互相覆蓋、commit 帶走別人的 index）也還在。並行時**派工
-前的同步（fetch ＋ `pull --ff-only`）仍然一次一筆**——兩筆同時 pull 同一份
-工作樹會 fatal，同步完就放鎖，之後 claude 進程並行。
+前的同步（fetch ＋ `pull --ff-only`，分岔時自動 merge upstream）仍然一次一筆**
+——兩筆同時 pull 同一份工作樹會 fatal，同步完就放鎖，之後 claude 進程並行。
+
+### 上板的自癒（無人值守時自己收斂）
+
+上板（release）要在沒有人看著時也能推上 origin，所以以下情況**不再直接失敗**，
+而是由執行器自己處理，並把每個自主動作寫進結果（`自主動作：…`）：
+
+| 情況 | 做法 |
+|---|---|
+| 本機穩定分支與 origin 分岔（或領先卻不是上次殘留） | 先把本機存成備份 ref `refs/runner-backup/<穩定分支>/<UTC 時間戳>`。`git rev-list <穩定分支> ^origin/<穩定分支> ^<來源> --no-merges` 為空（本機獨有的都已在來源分支裡）⇒ `reset --hard origin/<穩定分支>` 重建；不為空 ⇒ 分岔時以 origin 為基礎併進本機那一邊（衝突交給解衝突 agent），只領先時原樣保留並隨上板一起推 |
+| 本機只領先、HEAD == `resume_head` | 照舊補推（不重建、不留備份） |
+| 來源分支本機與 origin 分岔 | 在分離 HEAD 上把 origin 併進本機那一顆當暫時的合併結果上板；本機來源分支不動、不推送 |
+| 來源 → 穩定分支合併衝突（`merge`／`squash`） | merge 停在衝突狀態，起一支解衝突 agent（`prompts/release_conflict.md`，cwd 是該 repo，工具白名單、網域、預算、wall clock 與簽章環境沿用專案設定）。agent 只解衝突、做簽章 commit、跑便宜的檢查，**不 push**。收工後執行器機械驗證：沒有 MERGE_HEAD、工作樹乾淨、追蹤檔沒有新帶進來的衝突標記、HEAD 的 parent 正確（`squash` 驗單一 parent 且來源的變更都在）、repo 開了 `commit.gpgsign` 時 commit 有簽章（看 `gpgsig` 標頭；SSH 簽章沒設 `allowedSignersFile` 時 `%G?` 一律是 `N`，不能拿來判斷）。不過 ⇒ `reset --hard` 回合併前的 HEAD 並失敗 |
+| push 被拒（origin 前進了） | fetch、把 origin/<穩定分支> 併進本機（衝突一樣交給 agent）再推，最多 3 次。遠端 hook 擋下（`remote rejected`）不重試 |
+| `ff_only` | 維持不合併，不起 agent |
+
+任何 merge／commit 失敗、逾時、agent 失敗、逾時或被取消，都會 `reset --hard`
+回合併前並驗證 HEAD 確實回去，每條離開路徑都保證沒有 MERGE_HEAD 才切回原分支。
+還原本身失敗會在結果裡寫「⚠️ 還原失敗」。
+
+結果的失敗代碼：`release_pull_failed`（只剩落後卻快轉不了）、
+`release_stable_reconcile_failed`（本機穩定分支對齊失敗）、
+`release_source_merge_failed`（來源分支合併 origin 失敗）、
+`release_merge_conflict`（agent 沒解掉或驗證不過）、`release_merge_failed`
+（非衝突的合併失敗）、`release_push_failed`（含重試 3 次仍被拒）。
+`release_source_diverged`、`release_unpushed_unrelated` 已移除。
 
 ## 檔案位置
 
