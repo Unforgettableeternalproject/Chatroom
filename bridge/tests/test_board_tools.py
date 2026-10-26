@@ -247,6 +247,77 @@ def test_update_fields_uses_patch(fake_hub):
     assert fake_hub.calls[-1].method == "PATCH"
 
 
+def test_update_status_and_fields_sends_patch_then_status(fake_hub):
+    """同時給 status 與欄位：兩個都要送，欄位先、狀態後，不能丟掉任何一邊。"""
+    _join(fake_hub)
+    fake_hub.json("PATCH", "/api/board/tasks/t1", {"patched": True})
+    fake_hub.json("POST", "/api/board/tasks/t1/status", {"status_set": True})
+    before = len(fake_hub.calls)
+
+    result = srv.chatroom_board_update(
+        ROOM, "t1", status="done", title="新標題", priority="high")
+
+    calls = fake_hub.calls[before:]
+    assert [(c.method, c.url.path) for c in calls] == [
+        ("PATCH", "/api/board/tasks/t1"),
+        ("POST", "/api/board/tasks/t1/status"),
+    ]
+    patch_body = calls[0].read().decode()
+    assert "新標題" in patch_body or "\\u65b0" in patch_body
+    assert "high" in patch_body
+    assert "status" not in patch_body
+    assert '"done"' in calls[1].read().decode()
+    assert result["ok"] is True
+    assert result["patched"] is True and result["status_set"] is True
+
+
+def test_update_objective_review_and_fields_sends_patch_then_review(fake_hub):
+    _join(fake_hub)
+    fake_hub.json("PATCH", "/api/board/objectives/o1", {"patched": True})
+    fake_hub.json("POST", "/api/board/objectives/o1/review", {"ok": True})
+    before = len(fake_hub.calls)
+
+    result = srv.chatroom_board_update(
+        ROOM, "o1", kind="objective", status="review", title="新標題")
+
+    calls = fake_hub.calls[before:]
+    assert [(c.method, c.url.path) for c in calls] == [
+        ("PATCH", "/api/board/objectives/o1"),
+        ("POST", "/api/board/objectives/o1/review"),
+    ]
+    assert result["ok"] is True
+
+
+def test_update_objective_verified_with_fields_sends_nothing(fake_hub):
+    """狀態驗證失敗時，欄位也不可以先寫進去。"""
+    _join(fake_hub)
+    before = len(fake_hub.calls)
+
+    result = srv.chatroom_board_update(
+        ROOM, "o1", kind="objective", status="verified", title="新標題")
+
+    assert result["ok"] is False
+    assert len(fake_hub.calls) == before
+
+
+def test_update_status_failure_says_fields_were_already_written(fake_hub):
+    _join(fake_hub)
+    fake_hub.json("PATCH", "/api/board/tasks/t1", {"ok": True})
+    fake_hub.error("POST", "/api/board/tasks/t1/status", 409,
+                   {"code": "bad_transition", "message": "不能這樣轉",
+                    "allowed": ["todo"]})
+
+    result = srv.chatroom_board_update(
+        ROOM, "t1", status="done", title="新標題")
+
+    assert result["ok"] is False
+    assert "已更新" in result["reason"]
+    assert "狀態沒變" in result["reason"]
+    assert "不能這樣轉" in result["reason"]
+    # Hub 附的機器可讀欄位仍要送到
+    assert result["allowed"] == ["todo"]
+
+
 def test_update_with_nothing_to_change_says_so(fake_hub):
     _join(fake_hub)
     result = srv.chatroom_board_update(ROOM, "t1")
