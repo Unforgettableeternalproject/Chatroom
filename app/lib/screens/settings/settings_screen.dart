@@ -42,6 +42,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   late final TextEditingController _urlController;
   late final TextEditingController _tokenController;
   late final TextEditingController _nameController;
+  late final TextEditingController _splashController;
   late final TextEditingController _codexThreadController;
   bool _showToken = false;
   String? _testResult;
@@ -60,10 +61,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     _urlController = TextEditingController(text: config.serverUrl);
     _tokenController = TextEditingController(text: config.token);
     _nameController = TextEditingController(text: config.preferredName);
+    _splashController = TextEditingController(text: config.splashText);
     _codexThreadController = TextEditingController(
         text: ref.read(settingsRepoProvider).codexDispatchThread);
     // 髒狀態驅動儲存/復原按鈕的啟用與提示
-    for (final c in [_urlController, _tokenController, _nameController]) {
+    for (final c in [
+      _urlController,
+      _tokenController,
+      _nameController,
+      _splashController,
+    ]) {
       c.addListener(() => setState(() => _justSaved = false));
     }
   }
@@ -73,7 +80,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     final config = ref.read(appConfigProvider);
     return _urlController.text.trim() != config.serverUrl ||
         _tokenController.text.trim() != config.token ||
-        _nameController.text.trim() != config.preferredName;
+        _nameController.text.trim() != config.preferredName ||
+        _splashController.text.trim() != config.splashText;
   }
 
   /// 套用一份邀請碼：一次填好網址與 token。
@@ -108,6 +116,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     await notifier.setServer(
         url: _urlController.text.trim(), token: _tokenController.text.trim());
     await notifier.setPreferredName(_nameController.text);
+    await notifier.setSplashText(_splashController.text);
     if (mounted) setState(() => _justSaved = true);
   }
 
@@ -116,6 +125,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     _urlController.text = config.serverUrl;
     _tokenController.text = config.token;
     _nameController.text = config.preferredName;
+    _splashController.text = config.splashText;
     setState(() {});
   }
 
@@ -125,6 +135,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     _urlController.dispose();
     _tokenController.dispose();
     _nameController.dispose();
+    _splashController.dispose();
     _codexThreadController.dispose();
     super.dispose();
   }
@@ -535,6 +546,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             style: UepText.sans(size: 13, color: s.ink),
             decoration: settingsInputDecoration(l10n.settingsDisplayNameHint, s),
             onSubmitted: (_) => _save(),
+          ),
+        ),
+        const SizedBox(height: 20),
+        SettingsFieldLabel(l10n.fieldSplashText),
+        SettingsInputBox(
+          child: TextField(
+            controller: _splashController,
+            minLines: 2,
+            maxLines: 5,
+            keyboardType: TextInputType.multiline,
+            style: UepText.sans(size: 13, color: s.ink),
+            decoration: settingsInputDecoration(l10n.settingsSplashTextHint, s),
           ),
         ),
         const SizedBox(height: 20),

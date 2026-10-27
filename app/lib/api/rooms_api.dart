@@ -302,6 +302,26 @@ class RoomsApi {
         return (res.data?['visibility'] as String?) ?? visibility;
       });
 
+  /// 開關「沒有 agent 時自動封存」。只有建立者做得到，標頭與
+  /// [setVisibility] 同一套理由。
+  Future<bool> setAutoArchive(
+    String roomId, {
+    required bool enabled,
+    String? sessionKey,
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/rooms/$roomId/auto-archive',
+          data: {'enabled': enabled},
+          options: Options(headers: {
+            'X-Session-Key': ?sessionKey,
+            'X-Participant-Id': ?participantId,
+          }),
+        );
+        return (res.data?['auto_archive'] as bool?) ?? enabled;
+      });
+
   /// 永久刪除聊天室。只有建立者做得到，**不可復原**。
   ///
   /// 只有已封存的房刪得掉；未封存時 Hub 回 409 `room_not_archived`。

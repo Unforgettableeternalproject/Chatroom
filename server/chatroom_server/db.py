@@ -49,7 +49,11 @@ CREATE TABLE IF NOT EXISTS room (
     -- 關掉＝這間房的 run 容許併行動同一份工作樹，由房主自己負責。
     -- 預設 1（開）：安全的那一邊要是預設值，舊房升級後行為不變。
     -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
-    single_writer INTEGER NOT NULL DEFAULT 1
+    single_writer INTEGER NOT NULL DEFAULT 1,
+    -- 沒有 agent 時要不要自動封存（每房開關，預設開）。
+    -- 預設 1：舊房升級後行為不變（加欄的 DEFAULT 會讓既有列一律是 1）。
+    -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    auto_archive INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -939,6 +943,21 @@ CREATE TABLE IF NOT EXISTS runner_command (
 );
 CREATE INDEX IF NOT EXISTS idx_runner_command_pending
     ON runner_command(runner_id, acked_at);
+
+-- 訊息的表情回應。**不是訊息**：不佔房內 seq、不碰 update_seq，因此不會
+-- 喚醒 long-poll 與 watcher。同一人對同一訊息同時只有一個表情（主鍵保證；換表情＝upsert 替換）。
+-- 成員離房後這些列保留，顯示名稱走 participant 的歷史列。
+-- 新表，CREATE TABLE IF NOT EXISTS 即是遷移，不需要列進 MIGRATIONS
+CREATE TABLE IF NOT EXISTS message_reaction (
+    message_id     TEXT NOT NULL REFERENCES message(id),
+    participant_id TEXT NOT NULL REFERENCES participant(id),
+    emoji          TEXT NOT NULL,
+    room_id        TEXT NOT NULL REFERENCES room(id),
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (message_id, participant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_message_reaction_room
+    ON message_reaction(room_id, message_id);
 """
 
 # 既有 DB 的欄位補齊：CREATE TABLE IF NOT EXISTS 對已存在的表不會加新欄，
@@ -966,6 +985,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 同一個工作區一次只跑一筆。舊房一律補 1（開）：預設值要落在安全的
     # 那一邊，補成 0 的話升級一次就讓所有既有工作房開始併行動同一份工作樹
     ("room", "single_writer", "single_writer INTEGER NOT NULL DEFAULT 1"),
+    # 自動封存開關。既有房一律補 1（開）：那正是這個欄位存在之前所有房間
+    # 的實際行為，補成 0 會讓升級一次就停掉所有房的自動封存
+    ("room", "auto_archive", "auto_archive INTEGER NOT NULL DEFAULT 1"),
     # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
     # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
     ("runner", "private_projects",

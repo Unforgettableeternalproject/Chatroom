@@ -303,6 +303,43 @@ def _sibling_states(session_key: str, room_id: str) -> list[tuple[str, str]]:
     return found
 
 
+def _cursor_path(session_key: str) -> Path:
+    """watcher 自己的游標檔，與 bridge state 分開（bridge state 絕不寫入）。
+
+    不叫 ``state-*.json``：``_state_candidates`` 會掃那個樣式當身分檔。
+    """
+    base = identity.state_path(session_key)
+    return base.with_name(f"watch-cursor-{base.name}")
+
+
+def _read_watch_cursor(session_key: str, room_id: str) -> int:
+    """上一個 watcher 推到哪。讀不到／壞檔一律當 0（退回 bridge 游標）。"""
+    try:
+        raw = json.loads(_cursor_path(session_key).read_text(encoding="utf-8"))
+        seq = (raw.get("rooms") or {}).get(room_id)
+    except (OSError, ValueError, AttributeError):
+        return 0
+    return seq if isinstance(seq, int) and not isinstance(seq, bool) else 0
+
+
+def _write_watch_cursor(session_key: str, room_id: str, seq: int) -> None:
+    """記下推到哪。失敗只記 log：寧可重掛時重推，也不讓 watcher 死掉。"""
+    path = _cursor_path(session_key)
+    try:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            rooms = dict(raw.get("rooms") or {})
+        except (OSError, ValueError, AttributeError):
+            rooms = {}
+        rooms[room_id] = seq
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"version": 1, "rooms": rooms}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        _log(f"游標寫入失敗（重掛時可能重推）：{exc}")
+
+
 class Watcher:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -318,7 +355,14 @@ class Watcher:
         if self.room_id:
             pid, name, state_seq = _read_bridge_state(self.session_key, self.room_id)
             self.participant_id, self.display_name = pid, name
-            self.after_seq = args.after_seq if args.after_seq is not None else state_seq
+            # 起點＝max(bridge 讀取游標, 上一個 watcher 推到哪)。只看前者的話，
+            # agent 沒 chatroom_read 過的已推事件，每次重掛（Monitor 到期）
+            # 都會再推一次；只看後者又會漏掉 agent 已讀過但 watcher 沒掛時
+            # 就有的歷史。顯式 --after-seq 仍是最高優先
+            self.after_seq = (
+                args.after_seq if args.after_seq is not None
+                else max(state_seq, _read_watch_cursor(self.session_key, self.room_id))
+            )
         # 掛上後的第一輪：進出事件在這一輪不發。
         #
         # 進出與 mention 的補發語意不同，這是刻意分開的：
@@ -501,6 +545,9 @@ class Watcher:
                     ]} if (atts := m.get("attachments") or []) else {}),
                 }
             )
+        if self.after_seq > prev:
+            # 事件都已 emit 完才記：中途崩潰最多重推，不會漏
+            _write_watch_cursor(self.session_key, self.room_id, self.after_seq)
         if self.first_poll:
             self.first_poll = False
             if self.suppressed_presence:

@@ -21,6 +21,7 @@ import 'screens/pinned/pinned_wall_screen.dart';
 import 'screens/rooms/room_list_screen.dart';
 import 'screens/rooms/room_settings_screen.dart';
 import 'screens/settings/settings_screen.dart';
+import 'screens/startup/startup_splash.dart';
 import 'screens/shell/app_shell.dart';
 import 'state/app_providers.dart';
 import 'state/notification_providers.dart';
@@ -301,11 +302,14 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
             .copyWith(textScaler: TextScaler.linear(scale)),
         // 沒有 context 的程式碼（模型、通知、API 例外）從 L10n.current 拿字，
         // 這裡讓它跟著 MaterialApp 的 locale 走
-        child: KeyedSubtree(
-          // 換字體只動到一個靜態值，沒有 widget 會因此失效——換 key 把整棵
-          // 重建掉，選了就立刻看得到（代價是頁內暫態，如捲動位置，會重來）
-          key: ValueKey(fontFamily),
-          child: L10nSync(child: child ?? const SizedBox.shrink()),
+        // 啟動 Loading 放在 KeyedSubtree 外面：換字體重建時不能讓它重跑
+        child: StartupSplashGate(
+          child: KeyedSubtree(
+            // 換字體只動到一個靜態值，沒有 widget 會因此失效——換 key 把整棵
+            // 重建掉，選了就立刻看得到（代價是頁內暫態，如捲動位置，會重來）
+            key: ValueKey(fontFamily),
+            child: L10nSync(child: child ?? const SizedBox.shrink()),
+          ),
         ),
       ),
       theme: buildUepTheme(Brightness.light),

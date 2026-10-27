@@ -33,6 +33,7 @@ void main() {
 
   _atSemantics();
   _partialOrder();
+  _stageAndMoveTargets();
 }
 
 /// `onReorderItem` 那條路。索引語意與上面那組不同——**這裡的 newIndex
@@ -128,5 +129,85 @@ void _reorderPayload() {
     expect(sent, hasLength(3));
     // 被取消的 b 留在原位，不被這次拖曳擠走
     expect(sent[1], 'b');
+  });
+}
+
+/// 階段拖曳排序的母體，與拖放搬卡的落點判斷。
+void _stageAndMoveTargets() {
+  final s = const BoardSnapshot().merge(BoardDelta.fromJson({
+    'board_seq': 1,
+    'full': true,
+    'board_id': 'b1',
+    'objectives': [
+      {'id': 'o1', 'title': 'O1', 'status': 'active'},
+      {'id': 'o2', 'title': 'O2', 'status': 'done'},
+      {'id': 'o3', 'title': 'O3', 'status': 'review'},
+    ],
+    'checklists': [
+      {'id': 'u', 'objective_id': 'o1', 'title': '未分類', 'order_index': 0},
+      {'id': 'a', 'objective_id': 'o1', 'title': 'A', 'order_index': 1},
+      {
+        'id': 'x',
+        'objective_id': 'o1',
+        'title': 'X',
+        'order_index': 2,
+        'status': 'cancelled'
+      },
+      {'id': 'b', 'objective_id': 'o1', 'title': 'B', 'order_index': 3},
+      {
+        'id': 'd',
+        'objective_id': 'o1',
+        'title': 'D',
+        'order_index': 4,
+        'status': 'done'
+      },
+      {'id': 'z', 'objective_id': 'o3', 'title': 'Z', 'order_index': 0},
+    ],
+    'tasks': [
+      {'id': 't1', 'checklist_id': 'a', 'title': 'T1'},
+      {'id': 't2', 'checklist_id': 'a', 'title': 'T2', 'status': 'done'},
+    ],
+  }));
+
+  group('階段拖曳的完整母體', () {
+    test('含被取消的、未分類的，且只含該週期', () {
+      expect(s.allChecklistIdsInOrder('o1'), ['u', 'a', 'x', 'b', 'd']);
+      // checklistsOf 濾掉 cancelled——送那份會 409 reorder_incomplete
+      expect(s.checklistsOf('o1').map((c) => c.id), ['u', 'a', 'b', 'd']);
+    });
+
+    test('拖 B 到 A 前面：未分類與被取消的階段留在原位', () {
+      final movable = ['a', 'b', 'd'];
+      final sent = spliceOrder(
+          s.allChecklistIdsInOrder('o1'), reorderedIdsAt(movable, 1, 0));
+      expect(sent, ['u', 'b', 'x', 'a', 'd']);
+      expect(sent.toSet(), s.allChecklistIdsInOrder('o1').toSet());
+    });
+  });
+
+  group('搬卡落點', () {
+    BoardChecklist cl(String id) => s.checklists[id]!;
+    BoardTask tk(String id) => s.tasks[id]!;
+
+    test('開著的、非原地的階段可放', () {
+      expect(canMoveTaskInto(tk('t1'), cl('b')), isTrue);
+      expect(canMoveTaskInto(tk('t1'), cl('u')), isTrue);
+    });
+
+    test('原階段、已收尾、已取消的階段不可放', () {
+      expect(canMoveTaskInto(tk('t1'), cl('a')), isFalse);
+      expect(canMoveTaskInto(tk('t1'), cl('d')), isFalse);
+      expect(canMoveTaskInto(tk('t1'), cl('x')), isFalse);
+    });
+
+    test('已完成的卡搬不動', () {
+      expect(tk('t2').isMovable, isFalse);
+      expect(canMoveTaskInto(tk('t2'), cl('b')), isFalse);
+    });
+
+    test('落點週期只有進行中與送審中的', () {
+      expect(s.moveTargetObjectives.map((o) => o.id), ['o1', 'o3']);
+      expect(s.moveTargetChecklists('o1', 'a').map((c) => c.id), ['u', 'b']);
+    });
   });
 }

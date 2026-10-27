@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import Config
 from .db import open_db
-from .events import RoomEvents
+from .events import ReactionBus, RoomEvents
 from .logging_setup import setup_file_logging, token_hint
 from .naming import RESERVED_NAMES, generate_name
 from .version import APP_VERSION, build_info, version_string
@@ -138,6 +138,31 @@ def _err(status: int, code: str, message: str, **extra) -> HTTPException:
     不必為了畫一個選單再打一次別的端點。
     """
     return HTTPException(status, {"code": code, "message": message, **extra})
+
+
+# ---------- 表情回應 ----------
+
+# 可用的表情。**唯一定義處**：server 白名單驗證與 client 快選列都以這一份為準
+# （client 另有一份鏡像，改這裡要一起改 app/lib/models/reaction.dart）
+REACTION_EMOJIS: tuple[str, ...] = (
+    "\U0001F44D", "\u2764\ufe0f", "\U0001F602", "\U0001F62E",
+    "\U0001F622", "\U0001F64F", "\U0001F440", "\u2705",
+)
+# 彙總裡最多列出幾個名字（tooltip 用）；count 永遠是真實總數
+REACTION_NAMES_CAP = 20
+
+
+def _canon_reaction(raw: str) -> str | None:
+    """把輸入對到白名單裡的標準寫法；不在白名單回 None。
+
+    ❤ 有帶與不帶 variation selector（U+FE0F）兩種寫法，不同平台輸入的不一樣，
+    比對時忽略它，儲存一律用白名單那一份
+    """
+    key = (raw or "").replace("\ufe0f", "")
+    for e in REACTION_EMOJIS:
+        if e.replace("\ufe0f", "") == key:
+            return e
+    return None
 
 
 # ---------- 說話方式 ----------
@@ -279,6 +304,8 @@ class RoomCreate(BaseModel):
     # 房內 agent 的說話方式。custom 時 style_instructions 必填
     style: str = Field(default="verbose", pattern=STYLE_PATTERN)
     style_instructions: str = Field(default="", max_length=2000)
+    # 沒有 agent 時是否自動封存。預設開（舊 client 不帶此欄位＝原行為）
+    auto_archive: bool = True
 
 
 # ---------- 遠端派工（Remote Ops）的請求模型 ----------
@@ -515,6 +542,10 @@ class Rename(BaseModel):
 
 class RoomVisibility(BaseModel):
     visibility: str = Field(pattern="^(public|private)$")
+
+
+class RoomAutoArchive(BaseModel):
+    enabled: bool
 
 
 class ArchiveRequestCreate(BaseModel):
@@ -1039,6 +1070,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="Chatroom Hub", version=APP_VERSION, lifespan=lifespan)
     events = RoomEvents()
+    # 表情回應的即時通道。刻意不走 events：events.notify 會喚醒 long-poll
+    reaction_bus = ReactionBus()
 
     @app.exception_handler(HTTPException)
     async def denial_logged(request: Request, exc: HTTPException):
@@ -1195,7 +1228,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "ip": _client_ip(request),
                 },
             )
-            raise _err(401, "invalid_token", "token 無效或未提供")
+            # 被撤銷／換發的 token 另外講清楚：持有者看到「無效」會去查自己
+            # 的設定，實際上要做的是向主持人要新的
+            revoked_msg = "token 無效或未提供"
+            if token:
+                gone = await (
+                    await app.state.db.execute(
+                        "SELECT 1 FROM access_token WHERE token=?"
+                        " AND revoked_at IS NOT NULL", (token,))
+                ).fetchone()
+                if gone is not None:
+                    revoked_msg = "這張 token 已被撤銷或換發，請向主持人索取新的"
+            raise _err(401, "invalid_token", revoked_msg)
         request.state.token_label = row["label"]
         request.state.party = _party_of(token, row)
         if cfg.human_api_token:
@@ -1447,6 +1491,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # SQLite 存 0/1，契約是 bool：client 直接拿去當開關的狀態，
         # 整數會讓三端各自 truthy 判斷一次（Dart 的 1 不是 true）
         d["single_writer"] = bool(d.get("single_writer", 1))
+        d["auto_archive"] = bool(d.get("auto_archive", 1))
         return d
 
     async def _participant(participant_id: str | None, room_id: str | None = None):
@@ -2159,7 +2204,42 @@ def create_app(config: Config | None = None) -> FastAPI:
             out.append(item)
         return out
 
-    async def _message_rows_to_json(rows, db) -> list[dict]:
+    async def _reaction_summaries(db, message_ids, viewer_id: str) -> dict:
+        """message_id → [{emoji, count, mine, names}]。
+
+        一批查一次（同 `_message_rows_to_json` 的 N+1 教訓）。名字走 participant
+        的歷史列，離房的人仍在表裡，所以他按過的表情與名字都保留。
+        """
+        ids = list(dict.fromkeys(message_ids))
+        out: dict[str, list] = {}
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            marks = ",".join("?" for _ in chunk)
+            rows = await (await db.execute(
+                "SELECT r.message_id, r.emoji, r.participant_id,"
+                " p.display_name FROM message_reaction r"
+                " LEFT JOIN participant p ON p.id=r.participant_id"
+                f" WHERE r.message_id IN ({marks})"
+                " ORDER BY r.created_at, r.rowid",
+                tuple(chunk),
+            )).fetchall()
+            grouped: dict[str, dict[str, dict]] = {}
+            for r in rows:
+                e = grouped.setdefault(r["message_id"], {}).setdefault(
+                    r["emoji"], {"emoji": r["emoji"], "count": 0,
+                                 "mine": False, "names": []})
+                e["count"] += 1
+                if viewer_id and r["participant_id"] == viewer_id:
+                    e["mine"] = True
+                if len(e["names"]) < REACTION_NAMES_CAP:
+                    e["names"].append(r["display_name"] or "")
+            for mid, by_emoji in grouped.items():
+                out[mid] = list(by_emoji.values())
+        return out
+
+    async def _message_rows_to_json(rows, db, reactions_viewer=False) -> list[dict]:
+        """``reactions_viewer``：False＝不附表情彙總（agent 讀取路徑，預設）；
+        字串（可為空）＝附上，並以該 participant id 算 ``mine``。"""
         out = []
         attachments = await _attachments_for([r["id"] for r in rows], db)
         # **一批查一次，不要逐則查。** 逐則查 sender 與 reply 原文會讓序列化
@@ -2278,6 +2358,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "attachments": [] if r["deleted"] else attachments.get(r["id"], []),
                 "created_at": r["created_at"],
             })
+        if reactions_viewer is not False:
+            sums = await _reaction_summaries(
+                db, [m["id"] for m in out if not m["deleted"]],
+                reactions_viewer or "")
+            for m in out:
+                m["reactions"] = sums.get(m["id"], [])
         return out
 
     async def _touch_message(message_id: str, room_id: str, kind: str) -> None:
@@ -2341,15 +2427,18 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "建立工作房需要人類憑證或 Hub 主持人身分")
         await db.execute(
             "INSERT INTO room (id, name, topic, kind, created_at, activated_at,"
-            " creator_session_key, visibility, style, style_instructions)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " creator_session_key, visibility, style, style_instructions,"
+            " auto_archive)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (room_id, body.name, body.topic, body.kind, now, now, creator_key,
-             body.visibility, body.style, instructions),
+             body.visibility, body.style, instructions,
+             1 if body.auto_archive else 0),
         )
         await _commit_with_retry(db)
         return {"id": room_id, "name": body.name, "topic": body.topic,
                 "status": "active", "kind": body.kind,
                 "visibility": body.visibility,
+                "auto_archive": body.auto_archive,
                 "style": body.style, "style_instructions": instructions}
 
     @app.get("/api/rooms", dependencies=[Depends(require_auth)])
@@ -3131,6 +3220,49 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
         return {"ok": True, "visibility": body.visibility, "changed": True}
 
+    @app.post("/api/rooms/{room_id}/auto-archive",
+              dependencies=[Depends(require_auth)])
+    async def set_auto_archive(
+        room_id: str,
+        body: RoomAutoArchive,
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+    ):
+        """開關「沒有 agent 時自動封存」。只有建立者能改（同鎖定／說話方式）。
+
+        關閉時順手清掉進行中的倒數：sweeper 對關閉的房不再評估，不清的話
+        `archive_pending_since` 會一直掛著，重新開啟後直接被當成「倒數已經
+        走完」而立刻封存。變更會在房內留一則系統訊息。
+        """
+        room = await _room_or_404(room_id)
+        await _admin_or_403(room, x_participant_id, x_session_key,
+                            "變更自動封存")
+        enabled = bool(body.enabled)
+        if bool(room["auto_archive"]) == enabled:
+            return {"ok": True, "auto_archive": enabled, "changed": False}
+        db = app.state.db
+        if enabled:
+            await db.execute(
+                "UPDATE room SET auto_archive=1 WHERE id=?", (room_id,))
+        else:
+            await db.execute(
+                "UPDATE room SET auto_archive=0, archive_pending_since=NULL"
+                " WHERE id=?", (room_id,))
+        await _commit_with_retry(db)
+        logger.info(
+            "變更自動封存 %s → %s（%s）", bool(room["auto_archive"]), enabled,
+            room_id,
+            extra={"event": "auto_archive", "room_id": room_id,
+                   "auto_archive": enabled},
+        )
+        await _post_message(
+            room_id, None,
+            ("這個對話已開啟自動封存，沒有 agent 時會自動封存"
+             if enabled else "這個對話已關閉自動封存"),
+            kind="system", system_event="auto_archive",
+        )
+        return {"ok": True, "auto_archive": enabled, "changed": True}
+
     @app.post("/api/rooms/{room_id}/style", dependencies=[Depends(require_auth)])
     async def set_style(
         room_id: str,
@@ -3215,6 +3347,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     #   agent_run → room                                run 帶著房的外鍵
     _ROOM_OWNED_TABLES = ("runner_event", "agent_run_event", "agent_run",
                           "attachment", "archive_request", "question",
+                          "message_reaction",
                           "message", "assignment", "participant")
 
     # 帶 room_id 卻**刻意不隨房刪除**的表。這份清單存在的唯一理由是：
@@ -4458,14 +4591,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         radius: int = Query(default=25, ge=1, le=250),
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
+        include_reactions: bool = False,
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         around_seq 錨定讀取（以某一則為中心取前後各 radius 則）；三者互斥。
-        回傳一律以 seq 遞增排列。"""
+        回傳一律以 seq 遞增排列。
+
+        ``include_reactions=true`` 才附每則的表情彙總（App 用）。預設不附：
+        bridge 把這份 JSON 原樣交給 agent，agent 不需要知道別人按了什麼。"""
         room = await _room_or_404(room_id, allow_archived=True)
         await _member_or_403(room_id, x_participant_id, host)
+        rv = (x_participant_id or "") if include_reactions else False
         # 三方互斥要三方都擋。只擋兩兩組合的話，同時給三個參數會從某一條
         # 分支溜過去，而回傳的內容看起來像是其中一種模式的正常結果
         if around_seq is not None and (
@@ -4498,7 +4636,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (room_id, around_seq, radius + 1),
             )).fetchall()
             rows = list(reversed(older)) + list(newer)
-            msgs = await _message_rows_to_json(rows, db)
+            msgs = await _message_rows_to_json(rows, db, rv)
             out: dict = {
                 "messages": msgs,
                 # 錨定讀取沒有「下一頁」的語意；要往兩邊續讀用 next_* 游標
@@ -4528,7 +4666,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         rows = rows[:limit]
         if before_seq is not None:
             rows = list(reversed(rows))
-        msgs = await _message_rows_to_json(rows, db)
+        msgs = await _message_rows_to_json(rows, db, rv)
         # 每次讀都帶一行風格提醒：加入時給過的完整指示會隨著對話變長而被
         # 稀釋，語氣接著一則一則飄回 agent 的預設。一行的成本幾乎為零
         out: dict = {"messages": msgs, "has_more": has_more,
@@ -7551,15 +7689,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         拖得動，板上寫著這個週期已經結束而它的內容還在變（與 09/21
         「週期凍結」同一個漏洞）。
 
-        同一個父週期只查一次：`objective` 就是它自己，`checklist` 反查
+        同一個父週期只查一次：`checklist` 反查
         `objective_id`，`task` 反查 `checklist_id`（再由
         `_assert_objective_writable` 往上一層）。
+
+        `objective` 本身的重排不查：凍結守的是週期的**內容**，週期之間的
+        先後是板的排序。逐個查的話，板上只要有一個送審／收尾的週期，送完整
+        母體的重排就整批 409，週期拖曳等於不能用。
         """
+        if kind == "objective":
+            return
         seen: set[str] = set()
         for item_id in ids:
             row = await _board_item_or_404(kind, item_id)
-            parent = (row["id"] if kind == "objective"
-                      else row["objective_id"] if kind == "checklist"
+            parent = (row["objective_id"] if kind == "checklist"
                       else row["checklist_id"])
             if parent in seen:
                 continue
@@ -12410,6 +12553,132 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _touch_message(message_id, room_id, "unpin")
         return {"ok": True}
 
+    async def _react(message_id: str, emoji: str,
+                     x_participant_id: str | None, add: bool) -> dict:
+        """加／替換／取消表情回應。每人對同一則訊息同時只有一個表情：加另一個＝替換。
+        冪等：同一個再加、不存在再取消都不報錯（changed=false）。
+
+        **不領 seq、不呼叫 events.notify**：表情回應不是訊息，叫醒 agent 或推進
+        游標都是錯的。即時同步走 reaction_bus，只有 WS 連線收得到。
+
+        誰能按：人類可以按任何未刪除的一般訊息（自己發的除外）；agent 只能按**人類**發的訊息
+        （表示「已看過」），不能按 agent 或 system 訊息。
+        """
+        canon = _canon_reaction(emoji)
+        if canon is None:
+            raise _err(400, "invalid_reaction",
+                       "不支援這個表情，請從可用清單挑選",
+                       allowed=list(REACTION_EMOJIS))
+        room_id = await _message_room(message_id)
+        await _room_or_404(room_id)  # 封存房唯讀
+        me = await _participant(x_participant_id, room_id)
+        db = app.state.db
+        msg = await (await db.execute(
+            "SELECT sender_id, kind, deleted FROM message WHERE id=?",
+            (message_id,))).fetchone()
+        if msg is None:
+            raise _err(404, "message_not_found", "找不到這則訊息")
+        if msg["kind"] != "chat":
+            raise _err(422, "not_a_chat_message", "系統訊息不能回應")
+        if msg["deleted"]:
+            raise _err(422, "message_deleted", "這則訊息已經被撤回，不能回應")
+        # 不能對自己的訊息按表情；只擋新增，取消不擋（讓舊資料能移除）
+        if add and msg["sender_id"] == me["id"]:
+            raise _err(403, "reaction_own_message",
+                       "不能對自己發的訊息按表情")
+        if me["role"] != "human":
+            sender = None
+            if msg["sender_id"]:
+                sender = await (await db.execute(
+                    "SELECT role FROM participant WHERE id=?",
+                    (msg["sender_id"],))).fetchone()
+            if sender is None or sender["role"] != "human":
+                raise _err(403, "reaction_human_message_only",
+                           "agent 只能對人類發的訊息按表情")
+        if add:
+            # 每人每則只有一個表情：單一 upsert 語句完成「新增或替換」，
+            # 不存在先刪後加的中間狀態。同表情再加＝WHERE 不成立，rowcount 0
+            cur = await db.execute(
+                "INSERT INTO message_reaction"
+                " (message_id, participant_id, emoji, room_id, created_at)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(message_id, participant_id) DO UPDATE SET"
+                " emoji=excluded.emoji, created_at=excluded.created_at"
+                " WHERE message_reaction.emoji != excluded.emoji",
+                (message_id, me["id"], canon, room_id, _now()))
+        else:
+            cur = await db.execute(
+                "DELETE FROM message_reaction WHERE message_id=?"
+                " AND participant_id=? AND emoji=?",
+                (message_id, me["id"], canon))
+        changed = cur.rowcount > 0
+        await _commit_with_retry(db)
+        if changed:
+            reaction_bus.publish(room_id, message_id)
+        sums = await _reaction_summaries(db, [message_id], me["id"])
+        return {"ok": True, "message_id": message_id, "emoji": canon,
+                "changed": changed, "reactions": sums.get(message_id, [])}
+
+    @app.put("/api/messages/{message_id}/reactions/{emoji}",
+             dependencies=[Depends(require_auth)])
+    async def add_reaction(message_id: str, emoji: str,
+                           x_participant_id: str | None = Header(default=None)):
+        return await _react(message_id, emoji, x_participant_id, True)
+
+    @app.delete("/api/messages/{message_id}/reactions/{emoji}",
+                dependencies=[Depends(require_auth)])
+    async def remove_reaction(message_id: str, emoji: str,
+                              x_participant_id: str | None = Header(default=None)):
+        return await _react(message_id, emoji, x_participant_id, False)
+
+    @app.get("/api/messages/{message_id}/reactions",
+             dependencies=[Depends(require_auth)])
+    async def list_reactors(
+        message_id: str,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """這則訊息所有人的表情名單（名單面板用，不截斷）。"""
+        room_id = await _message_room(message_id)
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        rows = await (await app.state.db.execute(
+            "SELECT r.emoji, r.participant_id, r.created_at,"
+            " p.display_name, p.role, p.kind FROM message_reaction r"
+            " LEFT JOIN participant p ON p.id=r.participant_id"
+            " WHERE r.message_id=? ORDER BY r.created_at, r.rowid",
+            (message_id,))).fetchall()
+        return {"reactors": [
+            {"participant_id": r["participant_id"], "name": r["display_name"] or "",
+             "role": r["role"] or "agent", "kind": r["kind"] or "",
+             "emoji": r["emoji"], "created_at": r["created_at"],
+             "mine": bool(x_participant_id) and r["participant_id"] == x_participant_id}
+            for r in rows]}
+
+    @app.get("/api/rooms/{room_id}/reactions",
+             dependencies=[Depends(require_auth)])
+    async def room_reactions(
+        room_id: str,
+        min_seq: int = 0,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """房內有表情回應的訊息的彙總（seq >= min_seq）。
+
+        WS 斷線期間錯過的 reaction 事件靠它補：訊息增量游標看不到表情變動，
+        client 重連後用已載入視窗的最小 seq 呼叫一次。"""
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        db = app.state.db
+        rows = await (await db.execute(
+            "SELECT DISTINCT r.message_id FROM message_reaction r"
+            " JOIN message m ON m.id=r.message_id"
+            " WHERE r.room_id=? AND m.seq>=? AND m.deleted=0",
+            (room_id, min_seq))).fetchall()
+        sums = await _reaction_summaries(
+            db, [r["message_id"] for r in rows], x_participant_id or "")
+        return {"reactions": sums}
+
     def _refuse_write_if_not_active(me) -> None:
         """不在房裡就不能改動房內的訊息（編輯／撤回共用）。
 
@@ -13825,6 +14094,44 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _commit_with_retry(db)
         return {"ok": True}
 
+    @app.post("/api/tokens/{token}/rotate", dependencies=[Depends(require_auth)])
+    async def rotate_token(token: str, request: Request):
+        """換發一張 token：舊的立刻失效，新的沿用同一個身分。
+
+        權限與撤銷相同（只有 root）。保留不變的：label、audience、所屬的群
+        （party）、建立時間，以及目前以舊 token 加入的成員（join_token 跟著
+        換，踢出時才撤得到新的那張）。
+
+        ⚠️ 群 id 沒存的 token 是由 token 的 hash 推出來的——直接換 token 會
+        讓它變成另一個人，指派與私人房的可見性都跟著斷。所以先把群寫實再換。
+        舊列不刪，標 revoked_at（與撤銷一致，留紀錄）。
+        """
+        require_root(request)
+        db = app.state.db
+        old = await (
+            await db.execute(
+                "SELECT * FROM access_token WHERE token=? AND revoked_at IS NULL",
+                (token,))
+        ).fetchone()
+        if old is None:
+            raise _err(404, "token_not_found", "找不到這張 token，或它已經被撤銷")
+        party = _party_of(token, old)
+        new_token = uuid.uuid4().hex + uuid.uuid4().hex
+        now = _now()
+        await db.execute(
+            "UPDATE access_token SET revoked_at=?, party=? WHERE token=?",
+            (now, party, token))
+        await db.execute(
+            "INSERT INTO access_token (token, label, audience, party,"
+            " created_at) VALUES (?,?,?,?,?)",
+            (new_token, old["label"], old["audience"], party, old["created_at"]))
+        await db.execute(
+            "UPDATE participant SET join_token=? WHERE join_token=?",
+            (new_token, token))
+        await _commit_with_retry(db)
+        return {"token": new_token, "label": old["label"],
+                "audience": old["audience"], "party": party}
+
     # ---------- WebSocket（UI 即時通道） ----------
 
     @app.websocket("/ws")
@@ -13840,7 +14147,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             {"type": "messages", "room_id", "room_status", "messages": [...]}
             {"type": "questions", "room_id", "questions": [...]}
             {"type": "board", "room_id", "board_seq"}
+            {"type": "reaction", "room_id", "message_id", "reactions": [...]}
             {"type": "pong"}
+
+        ``reaction`` 不佔 seq、不進 ``messages``：表情回應不是訊息，
+        不能推進任何游標（reactions 是以這條連線的 participant_id 算的 mine）。
 
         ``participant_id`` 選填，帶了才會收到 ``questions``——提問是定向的，
         只推給被問的那個人。沒帶就只是個看訊息的連線。
@@ -13971,7 +14282,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     )
                 ).fetchall()
                 if rows:
-                    msgs = await _message_rows_to_json(rows, db)
+                    msgs = await _message_rows_to_json(
+                        rows, db, participant_id)
                     last = max(max(m["seq"], m["update_seq"]) for m in msgs)
                     room = await (
                         await db.execute(
@@ -13986,6 +14298,33 @@ def create_app(config: Config | None = None) -> FastAPI:
                         })
                 else:
                     await events.wait(room_id, 30.0)
+
+        async def reaction_pump(room_id: str, participant_id: str) -> None:
+            """轉送表情回應變動。不碰 seq 游標，也不經過 events。"""
+            q = reaction_bus.subscribe(room_id)
+            try:
+                while True:
+                    ids = {await q.get()}
+                    while not q.empty():
+                        ids.add(q.get_nowait())
+                    sums = await _reaction_summaries(db, ids, participant_id)
+                    for mid in ids:
+                        async with send_lock:
+                            await ws.send_json({
+                                "type": "reaction", "room_id": room_id,
+                                "message_id": mid,
+                                "reactions": sums.get(mid, []),
+                            })
+            finally:
+                reaction_bus.unsubscribe(room_id, q)
+
+        async def room_pump(room_id: str, after_seq: int,
+                            participant_id: str) -> None:
+            rp = asyncio.create_task(reaction_pump(room_id, participant_id))
+            try:
+                await pump(room_id, after_seq, participant_id)
+            finally:
+                rp.cancel()
 
         try:
             while True:
@@ -14023,7 +14362,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     if rid not in pumps:
                         pump_ids[rid] = pid
                         pumps[rid] = asyncio.create_task(
-                            pump(rid, int(data.get("after_seq", 0)), pid)
+                            room_pump(rid, int(data.get("after_seq", 0)), pid)
                         )
                 elif kind == "unsubscribe":
                     rid = data.get("room_id", "")
@@ -14634,6 +14973,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         mentions: list[str] = []
         if to_status == "running":
             text = f"{head} 開始執行。"
+        elif to_status == "waiting":
+            # 領單後卡在執行器的 repo 鎖上（單一寫入者）：還沒開始跑。
+            # 只在進入等待那一刻發一次，位置變化不發
+            text = f"{head} 排隊中，等前一個派工完成後開始。"
         elif to_status == "done":
             # 只講「完成」，不附收工摘要——全文已經收在右側回報面板裡，
             # 貼進房內等於同一份報告出現兩次，把訊息流洗掉
@@ -15518,6 +15861,26 @@ def create_app(config: Config | None = None) -> FastAPI:
             await events.notify(row["room_id"])
             return {"run": _run_public(await _run_or_404(run_id)),
                     "child_run": None}
+        # 排隊等 repo 鎖的 run 拿到鎖、真的開始跑：`running → running` 帶
+        # `lock_acquired`。只認「上一次回報是 repo_lock_wait」的 run，CAS
+        # 帶著那個 reason，重送或沒排過隊的 run 一律落到下面的 409
+        if (new == old == "running" and body.reason == "lock_acquired"
+                and row["reason"] == "repo_lock_wait"):
+            now = _now()
+            cur = await db.execute(
+                "UPDATE agent_run SET started_at=?, updated_at=?, reason=?"
+                " WHERE id=? AND status='running' AND reason='repo_lock_wait'"
+                " RETURNING id", (now, now, "spawn", run_id))
+            if await cur.fetchone() is not None:
+                await _record_run_event(
+                    run_id, row["room_id"], old, new, row["runner_id"], "",
+                    "lock_acquired")
+                await _extend_run_hold(row["room_id"], run_id)
+                await _commit_with_retry(db)
+                final = await _run_or_404(run_id)
+                await _announce_run(final, "running")
+                await events.notify(row["room_id"])
+                return {"run": _run_public(final), "child_run": None}
         if new not in _RUN_TRANSITIONS.get(old, set()):
             raise _err(409, "run_bad_transition",
                        f"派工不能從 {old} 變成 {new}。",
@@ -15547,7 +15910,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             params.extend([body.git.repo, body.git.branch,
                            body.git.head_before, body.git.head_after,
                            repos_json])
-        if new == "running" and row["started_at"] is None:
+        # 等 repo 鎖不算開始：started_at 留到 `lock_acquired` 才起算
+        if (new == "running" and row["started_at"] is None
+                and body.reason != "repo_lock_wait"):
             sets.append("started_at=?")
             params.append(now)
         if new in _RUN_TERMINAL:
@@ -15649,7 +16014,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             await _announce_orphans(row["room_id"], released)
             await _check_supervisor_departed(row["room_id"])
         final = await _run_or_404(run_id)
-        await _announce_run(final, new)
+        await _announce_run(
+            final, "waiting" if (new == "running"
+                                 and body.reason == "repo_lock_wait") else new)
         await events.notify(row["room_id"])
         if row["kind"] == "release" and row["board_id"]:
             # 板掛著的其他房也要醒，不然它們的 WS 要等下一次說話才看到
@@ -16220,6 +16587,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 連 `archive_pending_since` 的倒數都不啟動——先發一則
                 # 「即將封存」再取消，在畫面上與真的要封存一模一樣
                 " AND COALESCE(r.kind, 'chat') != 'ops'"
+                # 房主關掉自動封存的房同樣不倒數、不宣告：進行中的倒數
+                # 會在下面「條件已解除」那段被清掉；重新開啟後照常重新判斷
+                " AND COALESCE(r.auto_archive, 1) != 0"
                 # ephemeral 兩邊都排除：subagent 是父層的臨時分身，不是
                 # 「房裡有人在做事」的證據。級聯移除（§3.5）讓「只剩 subagent」
                 # 在設計上不可達，這裡是縱深防禦——判定條件不該依賴另一個

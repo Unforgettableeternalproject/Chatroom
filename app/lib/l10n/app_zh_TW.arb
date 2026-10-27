@@ -221,6 +221,18 @@
   "@settingsDisplayNameHint": {
     "description": "顯示名稱欄位的提示文字"
   },
+  "fieldSplashText": "啟動字樣",
+  "@fieldSplashText": {
+    "description": "個人化分頁：啟動 Loading 字樣欄位標籤"
+  },
+  "settingsSplashTextHint": "每行一則，多則時隨機挑選；留空使用預設",
+  "@settingsSplashTextHint": {
+    "description": "啟動字樣輸入框的提示文字"
+  },
+  "splashDefaultText": "正在進入聊天室",
+  "@splashDefaultText": {
+    "description": "啟動 Loading 的預設字樣（使用者沒設定時）"
+  },
   "settingsNotifyLabel": "系統通知",
   "@settingsNotifyLabel": {
     "description": "個人化分頁：系統通知標題"
@@ -2579,203 +2591,103 @@
   "@helpSecRunnerTitle": {
     "description": "說明頁分節標題：執行器"
   },
-  "helpChat1a": " 提及成員，",
-  "@helpChat1a": {
-    "description": "說明：@名字 與 #[標題] 之間的文字"
-  },
-  "helpChat1b": " 指涉任務卡。",
-  "@helpChat1b": {
-    "description": "說明：#[標題] 後面的文字"
-  },
-  "helpChat2a": "、",
-  "@helpChat2a": {
-    "description": "說明：群組提及三個代號之間的頓號"
-  },
-  "helpChat2c": " 一次提及一整群，送出時展開成當下在房裡的實名。",
-  "@helpChat2c": {
-    "description": "說明：群組提及的行為"
-  },
-  "helpChat3": "那一類人不在房裡時會展開成空，App 會講出來——沒有人被通知到，訊息還是送出去了。",
+  "helpChat3": "如果房裡沒有那一類成員，提及會是空的，App 會提醒你；訊息還是會送出，只是沒有人收到通知。",
   "@helpChat3": {
     "description": "說明：群組提及展開成空"
-  },
-  "helpChat4a": " 送出，",
-  "@helpChat4a": {
-    "description": "說明：Enter 之後的文字"
-  },
-  "helpChat4b": " 換行，",
-  "@helpChat4b": {
-    "description": "說明：Shift+Enter 之後的文字"
-  },
-  "helpChat4c": " 叫回歷史。",
-  "@helpChat4c": {
-    "description": "說明：上下鍵之後的文字"
-  },
-  "helpChat5": "檔案可以拖進輸入框，也可以直接貼上截圖。",
-  "@helpChat5": {
-    "description": "說明：附件輸入方式"
   },
   "helpChat6": "私人聊天室不會出現在別人的列表裡，必須受邀才能加入。",
   "@helpChat6": {
     "description": "說明：私人聊天室"
   },
-  "helpChat7": "釘選是整間房共用的：誰釘的所有人都看得到，取消釘選也一樣。釘選牆只收還在的訊息，原訊息被刪就不在牆上。",
+  "helpChat7": "釘選是整間房共用的：誰釘的，所有人都看得到，取消釘選也一樣。釘選牆只收還在的訊息，原訊息被刪，就不會在牆上。",
   "@helpChat7": {
     "description": "說明：釘選"
   },
-  "helpChat8": "「匯出對話紀錄」把整間房存成一個檔，包含全部訊息與附件資訊——那是一次外流，存到哪裡自己負責。",
+  "helpChat8": "「匯出對話紀錄」會把整間房存成一個檔，包含全部訊息與附件資訊。這等於資料被帶出去了，存到哪裡要自己負責。",
   "@helpChat8": {
     "description": "說明：匯出對話紀錄"
   },
-  "helpChat9": "匯出要有這間房的成員身分；時間一律是 Hub 給的 UTC 原字串，不轉本地時間。",
+  "helpChat9": "匯出要是這間房的成員才行。時間直接用 Hub 給的 UTC 原字串，不會轉成本地時間。",
   "@helpChat9": {
     "description": "說明：匯出的條件與時間格式"
   },
-  "helpChat10": "封存後只能看不能寫；封存一段時間後 Hub 會把房間連同訊息與附件永久刪除。要留底就在刪除前匯出。",
+  "helpChat10": "封存後只能看，不能寫。封存一段時間後，Hub 會把房間連同訊息與附件永久刪除，要留底就先匯出。",
   "@helpChat10": {
     "description": "說明：封存與永久刪除"
-  },
-  "helpMember1": "名字旁的「派工中」＝這個成員是某一筆派工帶進房的。Hub 不會把它當閒置掃掉，所以那一列沒有倒數。",
-  "@helpMember1": {
-    "description": "說明：派工中的成員"
-  },
-  "helpMember2": "派工結束它會自己離房；沒離開的話 Hub 也會在 run 收場時把它移出——不必自己去踢。",
-  "@helpMember2": {
-    "description": "說明：派工結束後成員離房"
-  },
-  "helpMember3": "一般 agent 超過兩分鐘沒動作，那一列會印閒置多久、最快多久後被移出。被移出的人重新指派一次就會回來。",
-  "@helpMember3": {
-    "description": "說明：閒置 agent 的倒數"
-  },
-  "helpMember4a": "agent 要做一件很久的事時可以自己掛 ",
-  "@helpMember4a": {
-    "description": "說明：chatroom_hold 之前的文字"
-  },
-  "helpMember4b": " 免掃，但 hold 有到期時間，不是無限期。",
-  "@helpMember4b": {
-    "description": "說明：chatroom_hold 之後的文字"
-  },
-  "helpMember5": "隱藏與重點標記只動我這台裝置的視圖，移出成員才是動到所有人。",
-  "@helpMember5": {
-    "description": "說明：隱藏、重點標記與移出的差別"
   },
   "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。",
   "@helpBoard1": {
     "description": "說明：板與房的關係"
   },
-  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段收尾後才能送審，未分類的卡也要先收尾。",
+  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段都收尾後才能送審，未分類的卡也要先收尾。",
   "@helpBoard2": {
     "description": "說明：任務板結構"
-  },
-  "helpBoard3": "「搬到別處」會在目標階段建立一張新卡，原本那張標成「已搬走」。",
-  "@helpBoard3": {
-    "description": "說明：搬到別處"
   },
   "helpBoard4a": "想法板（",
   "@helpBoard4a": {
     "description": "說明：SCRATCHPAD 之前的文字"
   },
-  "helpBoard4b": "）放還沒拆成卡的東西；agent 讀得到、也能留意見，但改不動你寫的內容。",
+  "helpBoard4b": "）放還沒拆成卡的東西。agent 讀得到，也能留意見，但改不動你寫的內容。",
   "@helpBoard4b": {
     "description": "說明：SCRATCHPAD 之後的文字"
   },
-  "helpBoard5": "板的 owner 決定誰能編輯。在同一間房裡不會自動成為板的協作者。",
+  "helpBoard5": "誰能編輯，由板的 owner 決定。兩個人在同一間房，不代表會自動成為板的協作者。",
   "@helpBoard5": {
     "description": "說明：板的編輯權"
   },
-  "helpAsset1": "素材掛在「階段」上，那個階段底下的每一張卡與每一筆派工共用，所以入口在階段標題列，不在某一張卡裡面。",
+  "helpAsset1": "素材是掛在「階段」上的，該階段底下每一張卡、每一筆派工都共用。所以入口在階段標題列，不在某一張卡裡面。",
   "@helpAsset1": {
     "description": "說明：素材掛在階段上"
   },
-  "helpAsset2": "階段標題列上的「素材 N」點開才是清單；沒有素材時那個數字整個不顯示。",
+  "helpAsset2": "點階段標題列上的「素材 N」才會看到清單；沒有素材時，那個數字不會顯示。",
   "@helpAsset2": {
     "description": "說明：素材清單入口"
   },
-  "helpAsset3": "「新增素材」會把檔案上傳到目前這間聊天室再掛上階段——沒有房的時候掛不了。",
+  "helpAsset3": "「新增素材」會先把檔案上傳到目前這間聊天室，再掛到階段上。沒有房間的時候沒辦法掛。",
   "@helpAsset3": {
     "description": "說明：新增素材"
   },
-  "helpAsset4": "一次選多個檔不問備註，直接整批掛上去；只選一個檔才會問一句「這份素材是什麼」，可以留白。",
+  "helpAsset4": "一次選多個檔，不會問備註，直接整批掛上去。只選一個檔時，才會問「這份素材是什麼」，這一欄可以留白。",
   "@helpAsset4": {
     "description": "說明：多檔與單檔上傳的差別"
   },
-  "helpAsset5": "備註之後在清單上逐列編輯，改成空字串就是把備註清掉。",
+  "helpAsset5": "備註之後可以在清單上逐列編輯，改成空字串就是清掉備註。",
   "@helpAsset5": {
     "description": "說明：編輯素材備註"
   },
-  "helpAsset6": "點檔名開檢視：圖片在 App 內看，其餘交給系統預設程式開。",
+  "helpAsset6": "點檔名開啟檢視：圖片直接在 App 裡看，其他檔案交給系統預設程式開。",
   "@helpAsset6": {
     "description": "說明：檢視素材"
   },
-  "helpAsset7": "「卸除」只把這份素材從這個階段拿掉，聊天室裡原本那則附件還在。別人可能正在用，所以會問一次。",
+  "helpAsset7": "「卸除」只是把這份素材從這個階段拿掉，聊天室裡原本那則附件還在。別人可能正在用，所以會先問你一次。",
   "@helpAsset7": {
     "description": "說明：卸除素材"
   },
-  "helpAsset8": "agent 讀得到素材列表與備註——要它看的規格、截圖、草稿放這裡，比貼在聊天裡讓它自己翻可靠。",
+  "helpAsset8": "agent 看得到素材列表與備註。想讓它看的規格、截圖、草稿放這裡，比貼在聊天裡讓它自己翻更可靠。",
   "@helpAsset8": {
     "description": "說明：agent 讀得到素材"
   },
-  "helpOps1a": "派工要有執行器在線，而且目標專案在它的 ",
-  "@helpOps1a": {
-    "description": "說明：projects 之前的文字"
-  },
-  "helpOps1b": " 白名單裡，否則 Hub 會擋下建單。",
-  "@helpOps1b": {
-    "description": "說明：projects 之後的文字"
-  },
-  "helpOps2a": "開工前執行器會先 ",
-  "@helpOps2a": {
-    "description": "說明：fetch 之前的文字"
-  },
-  "helpOps2b": " 並用 ",
-  "@helpOps2b": {
-    "description": "說明：fetch 與 pull --ff-only 之間的文字"
-  },
-  "helpOps2c": " 把常駐工作樹快轉到最新——工作樹是跨 run 共用的，不同步就等於在上一輪的舊基礎上動工。",
-  "@helpOps2c": {
-    "description": "說明：工作樹快轉"
-  },
-  "helpOps3": "工作樹有未提交變更時不同步，照現況執行並在收工摘要裡講明；分支已經分岔而快轉不了則整筆派工直接失敗，要先自己處理。",
-  "@helpOps3": {
-    "description": "說明：未提交變更與分岔分支"
-  },
-  "helpOps4": "一次派工動得到那個專案底下的所有 repo，不只你選的那個。每個 repo 都必須停在自己的允許分支上，有一個不合就不開工。",
-  "@helpOps4": {
-    "description": "說明：派工的 repo 範圍"
-  },
-  "helpOps5": "agent 每完成一個可交付的小步驟就在房裡回報一次——看回報就知道它走到哪，不必去翻卡。",
-  "@helpOps5": {
-    "description": "說明：agent 的階段回報"
-  },
-  "helpOps6": "在房裡 @ 它就能補指示，但訊息是在它下一次工具呼叫之前才送到，不會打斷手上那一步。",
-  "@helpOps6": {
-    "description": "說明：中途補指示"
-  },
-  "helpOps7": "軟停止：它把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束才會被硬取消。",
+  "helpOps7": "軟停止：它會把目前這一步做完、寫完摘要再結束。五分鐘內還沒結束，才會被硬取消。",
   "@helpOps7": {
     "description": "說明：請收尾"
   },
-  "helpOps8": "執行器直接殺進程，寫到一半的東西就停在那裡。趕時間才用它，否則用請收尾。",
+  "helpOps8": "執行器會直接殺掉進程，寫到一半的東西就停在那裡。趕時間才用，否則請用請收尾。",
   "@helpOps8": {
     "description": "說明：取消派工"
   },
-  "helpOps9": "上下文用滿就交接：它把已做／未做／下一步寫在卡上並釋放認領，下一輪的 brief 接上那份摘要。",
+  "helpOps9": "上下文用滿時就交接：它會把已做、未做、下一步寫在卡上並釋放認領，下一輪的 brief 會接著那份摘要。",
   "@helpOps9": {
     "description": "說明：上下文交接"
   },
-  "helpOps10": "瀏覽器實機測試除非派工簡述明確要求，否則不是交付門檻——沒跑不影響這一輪算不算完成。",
+  "helpOps10": "瀏覽器實機測試除非派工簡述明確要求，否則不算交付門檻，沒跑也不影響這一輪算不算完成。",
   "@helpOps10": {
     "description": "說明：瀏覽器實機測試"
   },
-  "helpOps11": "推送會先比對待推的 commit 與畫面上看到的是否一致，不一致就不推並回報。",
+  "helpOps11": "推送前會先比對待推的 commit 和畫面上看到的是否一致。不一致就不推，並回報。",
   "@helpOps11": {
     "description": "說明：推送前的比對"
   },
-  "helpNotify1": "系統通知只在 App 開著時發，關閉期間的訊息不會補發，回來後靠未讀紅點找。",
-  "@helpNotify1": {
-    "description": "說明：系統通知的限制"
-  },
-  "helpConn1": "拿到邀請碼就按「貼上邀請碼」，Hub 位址與 token 會一起填好——手動兩個欄位各填一次容易配錯對。",
+  "helpConn1": "拿到邀請碼就按「貼上邀請碼」，Hub 位址和 token 會一起填好。兩個欄位自己各填一次，很容易配錯。",
   "@helpConn1": {
     "description": "說明：貼上邀請碼"
   },
@@ -2791,15 +2703,7 @@
   "@helpConn2c": {
     "description": "說明：0.0.0.0 之後的文字"
   },
-  "helpConn3": "API token 填人類 token；沒設 token 的 Hub 才留空。改完要按「儲存設定」，連線與個人化兩頁共用同一顆。",
-  "@helpConn3": {
-    "description": "說明：API token 欄位"
-  },
-  "helpConn4": "「測試連線」只驗這台機器到 Hub 這一段：它綠了不代表別人連得到，那是主持人那邊的事。",
-  "@helpConn4": {
-    "description": "說明：測試連線"
-  },
-  "helpConn5": "「App 版本」那串在這頁最底下，回報問題時先附上它。",
+  "helpConn5": "「App 版本」在這頁最底下，回報問題時請附上。",
   "@helpConn5": {
     "description": "說明：App 版本在哪"
   },
@@ -2807,51 +2711,23 @@
   "@helpInvite1": {
     "description": "說明：邀請成員入口"
   },
-  "helpInvite2": "邀請碼等同密碼，用私訊給，不要貼在公開頻道。",
-  "@helpInvite2": {
-    "description": "說明：邀請碼要保密"
-  },
-  "helpInvite3": "人類 token 與 Agent token 是兩把：只有人類 token 開得了主持人模式、發得了邀請。",
-  "@helpInvite3": {
-    "description": "說明：兩種 token 的差別"
-  },
-  "helpInvite4a": "Agent token 填進 mcp-kit 安裝器的「",
-  "@helpInvite4a": {
-    "description": "說明：Agent token 欄位名稱之前的文字"
-  },
-  "helpInvite4b": "」欄位。",
-  "@helpInvite4b": {
-    "description": "說明：Agent token 欄位名稱之後的文字"
-  },
-  "helpInvite5": "把成員移出聊天室會撤銷他當初用的那張邀請碼，與他共用同一張的人會一起斷線。",
-  "@helpInvite5": {
-    "description": "說明：移出成員會撤銷邀請碼"
-  },
-  "helpVisual1": "深色主題這裡與標題列那顆切的是同一個開關。",
-  "@helpVisual1": {
-    "description": "說明：深色主題開關"
-  },
-  "helpVisual2": "字級五檔（極小／小／中 (預設)／大／特大）選了立刻套用到整個 App，不必重開。",
-  "@helpVisual2": {
-    "description": "說明：字級五檔"
-  },
-  "helpVisual3": "「極小」是半個字級，實際上讀不了——它留著是個玩笑，要縮小從「小」開始試。",
+  "helpVisual3": "「極小」只有半個字級，實際上讀不了，是留著開玩笑的。想縮小請從「小」開始試。",
   "@helpVisual3": {
     "description": "說明：極小字級"
   },
-  "helpPersonal1": "顯示名稱是進房時用的名字，留空則由 Hub 隨機指派代稱。房內名字不能重複。",
+  "helpPersonal1": "顯示名稱是進房時用的名字。留空的話，Hub 會隨機給你一個代稱。房內名字不能重複。",
   "@helpPersonal1": {
     "description": "說明：顯示名稱"
   },
-  "helpPersonal2": "本機裝置識別是這台機器的身分。「重新產生」等於換一個人：原本的成員身分、未讀與管控權都接不回來。",
+  "helpPersonal2": "本機裝置識別代表這台機器的身分。按「重新產生」等於換成另一個人：原本的成員身分、未讀和管控權都接不回來。",
   "@helpPersonal2": {
     "description": "說明：本機裝置識別"
   },
-  "helpPersonal3": "系統通知分「所有訊息／僅提及我時／關閉」，改完立刻生效，但仍然只在 App 開著時才會發。",
+  "helpPersonal3": "系統通知有「所有訊息／僅提及我時／關閉」三種。改完馬上生效，但還是只有 App 開著時才會發。",
   "@helpPersonal3": {
     "description": "說明：系統通知三檔"
   },
-  "helpPersonal4": "「轉送通知給 Codex」會把提及與 Board 變動送到本機 Codex session；thread id 留空就用預設那條。",
+  "helpPersonal4": "「轉送通知給 Codex」會把提及和 Board 變動送到本機的 Codex session；thread id 留空就用預設那條。",
   "@helpPersonal4": {
     "description": "說明：轉送通知給 Codex"
   },
@@ -2859,15 +2735,15 @@
   "@helpVersionApp1": {
     "description": "說明：App 版本較舊的處理"
   },
-  "helpVersionApp2": "兩邊的 commit 在設定頁與橫幅的 tooltip 上，回報問題時附上。",
+  "helpVersionApp2": "兩邊的 commit 在設定頁，以及橫幅的 tooltip 上。回報問題時請附上。",
   "@helpVersionApp2": {
     "description": "說明：commit 在哪裡看"
   },
-  "helpVersionApp3a": "要確認 agent 用的是哪一份 bridge，讓它呼叫 ",
+  "helpVersionApp3a": "要確認 agent 用的是哪一份 bridge，請它呼叫 ",
   "@helpVersionApp3a": {
     "description": "說明：chatroom_join 之前的文字"
   },
-  "helpVersionApp3b": "，比對回傳的 ",
+  "helpVersionApp3b": "，再比對回傳的 ",
   "@helpVersionApp3b": {
     "description": "說明：chatroom_join 與 bridge.commit 之間的文字"
   },
@@ -2875,29 +2751,25 @@
   "@helpVersionApp3c": {
     "description": "說明：bridge.commit 之後的句點"
   },
-  "helpVersionApp4": "不要看工具說明結尾那個版本：宿主端會快取，同一刻三支工具可能報三個不同的數字。",
+  "helpVersionApp4": "不要看工具說明結尾的版本號。宿主端會快取，同一時間三支工具可能報出三個不同的數字。",
   "@helpVersionApp4": {
     "description": "說明：工具說明結尾的版本不可信"
   },
-  "helpMachine1": "只有裝了 host-kit、mcp-kit 或執行器的機器看得到這個入口。裝了幾種就分成幾頁：「Hub 主持」「Agent 接入」「執行器」。",
+  "helpMachine1": "只有裝了 host-kit、mcp-kit 或執行器的機器才看得到這個入口。裝了哪幾種，就分成哪幾頁：「Hub 主持」「Agent 接入」「執行器」。",
   "@helpMachine1": {
     "description": "說明：主控台入口條件"
   },
-  "helpMachine2": "狀態那三盞燈是進程、對外綁定、認證。空心灰圈＝沒有資訊，不是警告，不用去修。",
+  "helpMachine2": "狀態有三盞燈：進程、對外綁定、認證。空心灰圈代表沒有資訊，不是警告，不用去修。",
   "@helpMachine2": {
     "description": "說明：三盞狀態燈"
   },
-  "helpMachine3": "「本機打得到」不等於別台機器連得到——綠燈底下的那句備註要讀。",
+  "helpMachine3": "「本機打得到」不代表別台機器也連得到。綠燈下面那句備註要讀。",
   "@helpMachine3": {
     "description": "說明：本機打得到的意義"
   },
-  "helpMachine4": "這一區是要發給成員的東西：Hub 位址、人類 token、Agent token。",
+  "helpMachine4": "這一區放的是要發給成員的東西：Hub 位址、人類 token、Agent token。",
   "@helpMachine4": {
     "description": "說明：連線資訊區"
-  },
-  "helpMachine5": "別發錯：Agent token 開不了主持人模式也發不了邀請，人類拿到它會看到像「這台 Hub 不是你主持的」的錯誤。",
-  "@helpMachine5": {
-    "description": "說明：別把 token 發錯"
   },
   "helpMachine6a": "綁在 ",
   "@helpMachine6a": {
@@ -2907,23 +2779,23 @@
   "@helpMachine6b": {
     "description": "說明：0.0.0.0 之後的文字"
   },
-  "helpMachine7": "Hub 是本機的伺服器進程，關掉 App 不會停 Hub。「停止 Hub」殺掉所有 Hub 進程，包含自己在前景視窗開的那個。",
+  "helpMachine7": "Hub 是本機的伺服器進程，關掉 App 不會停掉 Hub。「停止 Hub」會殺掉所有 Hub 進程，包含你自己在前景視窗開的那個。",
   "@helpMachine7": {
     "description": "說明：Hub 進程與停止"
   },
-  "helpMachine8": "自動啟動：一般權限註冊＝登入時自啟；以系統管理員執行 App 再註冊＝開機自啟。",
+  "helpMachine8": "自動啟動：用一般權限註冊，是登入時自動啟動；用系統管理員身分執行 App 再註冊，是開機時自動啟動。",
   "@helpMachine8": {
     "description": "說明：自動啟動"
   },
-  "helpMachine9": "「安裝位置」是 kit 的根目錄，要手動改設定或看 log 時從那裡進去。",
+  "helpMachine9": "「安裝位置」是 kit 的根目錄。要手動改設定或看 log，從那裡進去。",
   "@helpMachine9": {
     "description": "說明：安裝位置"
   },
-  "helpTunnel1": "隧道：把這台 Hub 放到公網上，擋在前面的只有 token。",
+  "helpTunnel1": "隧道：把這台 Hub 放到公網上，前面只有 token 擋著。",
   "@helpTunnel1": {
     "description": "說明：隧道是什麼"
   },
-  "helpTunnel2": "一次只能有一條，要換網址先關閉再開。網址每次重開都會變，換過之後邀請碼要重發。",
+  "helpTunnel2": "一次只能開一條。要換網址，先關閉再重開。網址每次重開都會變，換了之後邀請碼要重發。",
   "@helpTunnel2": {
     "description": "說明：隧道數量與網址"
   },
@@ -2935,27 +2807,27 @@
   "@helpTunnel3b": {
     "description": "說明：attachments/ 與 backups 之間的文字"
   },
-  "helpTunnel3c": "。還原前 Hub 必須先停止，而且會自動先備份現況。",
+  "helpTunnel3c": "。還原前 Hub 必須先停止，也會自動先備份現況。",
   "@helpTunnel3c": {
     "description": "說明：還原前要停 Hub"
   },
-  "helpTunnel4": "換 token：重啟 Hub 後才生效，之後每個成員都要換成新的，agent 那邊的 kit 也要一起換。",
+  "helpTunnel4": "換 token：重啟 Hub 後才生效。之後每個成員都要換成新的，agent 那邊的 kit 也要一起換。",
   "@helpTunnel4": {
     "description": "說明：換 token"
   },
-  "helpLink1": "接入狀態的兩盞燈只回答「這台機器連不連得到 Hub」與「這把 token 認不認得」。",
+  "helpLink1": "接入狀態的兩盞燈，只回答「這台機器連不連得到 Hub」和「這把 token 認不認得」。",
   "@helpLink1": {
     "description": "說明：接入狀態兩盞燈"
   },
-  "helpLink2": "它答不了「agent 認得那些工具了嗎」——那要看 agent 進程載了哪一份 bridge，App 看不到。",
+  "helpLink2": "它回答不了「agent 認得那些工具了嗎」。那要看 agent 進程載入的是哪一份 bridge，App 看不到。",
   "@helpLink2": {
     "description": "說明：接入燈答不了的事"
   },
-  "helpLink3a": "要確認跑著的是哪一份，讓 agent 呼叫 ",
+  "helpLink3a": "要確認跑的是哪一份，請 agent 呼叫 ",
   "@helpLink3a": {
     "description": "說明：chatroom_join 之前的文字（接入）"
   },
-  "helpLink3b": " 並看回傳的 ",
+  "helpLink3b": "，看回傳的 ",
   "@helpLink3b": {
     "description": "說明：chatroom_join 與 bridge.commit 之間的文字（接入）"
   },
@@ -2963,7 +2835,7 @@
   "@helpLink3c": {
     "description": "說明：bridge.commit 對不上時"
   },
-  "helpRunner1": "執行器是替派工跑 agent 的那個常駐程式，在「這台機器」有自己的分頁：裝與更新在那裡按，參數仍然只能改設定檔。",
+  "helpRunner1": "執行器是替派工跑 agent 的常駐程式，在「這台機器」有自己的分頁。安裝和更新在那裡按，參數還是只能改設定檔。",
   "@helpRunner1": {
     "description": "說明：執行器是什麼"
   },
@@ -2979,31 +2851,7 @@
   "@helpRunner2c": {
     "description": "說明：範例設定檔之後的文字"
   },
-  "helpRunner3a": " 是白名單：沒列在裡面的專案派不了工，Hub 會在建單時就擋下來。",
-  "@helpRunner3a": {
-    "description": "說明：projects 設定"
-  },
-  "helpRunner4a": " 列這個專案底下每一個 repo 的本機路徑。一次派工動得到全部，所以漏掉的那個 agent 碰不到。",
-  "@helpRunner4a": {
-    "description": "說明：repos 設定"
-  },
-  "helpRunner5a": " 是這個 repo 准許動工的分支。工作樹停在清單外的分支時整筆派工直接失敗，而不是幫你切過去。",
-  "@helpRunner5a": {
-    "description": "說明：allowed_branches 設定"
-  },
-  "helpRunner6a": " 是建單沒指定時的主工作目錄，必須是 ",
-  "@helpRunner6a": {
-    "description": "說明：default_repo 設定前半"
-  },
-  "helpRunner6b": " 裡真的有的那個名字，否則設定讀不起來。",
-  "@helpRunner6b": {
-    "description": "說明：default_repo 設定後半"
-  },
-  "helpRunner7a": " 是判斷何時該交接的依據（預設 1000000）。填得比模型實際的視窗大，交接會來不及。",
-  "@helpRunner7a": {
-    "description": "說明：context_window_tokens 設定"
-  },
-  "helpRunner8": "設定檔是啟動時讀的：改完要重啟執行器才算數。",
+  "helpRunner8": "設定檔是啟動時讀的，改完要重啟執行器才會生效。",
   "@helpRunner8": {
     "description": "說明：改設定檔要重啟"
   },
@@ -3172,6 +3020,14 @@
   "roomsPrivateSubtitle": "必須受邀才能加入",
   "@roomsPrivateSubtitle": {
     "description": "建房對話框：私人對話的說明"
+  },
+  "roomsAutoArchiveTitle": "自動封存",
+  "@roomsAutoArchiveTitle": {
+    "description": "房間設定：自動封存開關的標題"
+  },
+  "roomsAutoArchiveSubtitle": "沒有 agent 時自動封存這個房間",
+  "@roomsAutoArchiveSubtitle": {
+    "description": "房間設定：自動封存開關的說明"
   },
   "roomsFieldBoard": "任務板（可不掛）",
   "@roomsFieldBoard": {
@@ -4654,6 +4510,32 @@
   "@inviteRevokeAction": {
     "description": "撤銷邀請的按鈕"
   },
+  "inviteRotateAction": "重發憑證",
+  "@inviteRotateAction": {
+    "description": "換發憑證的按鈕提示與確認按鈕"
+  },
+  "inviteRotateTitle": "重發這張憑證？",
+  "@inviteRotateTitle": {
+    "description": "換發憑證的確認標題"
+  },
+  "inviteRotateBody": "{label}的舊憑證會立刻失效，對方要用新的重新連線。",
+  "@inviteRotateBody": {
+    "description": "換發邀請憑證的後果",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "inviteRotateAgentBody": "{label}的舊 agent 憑證會立刻失效，該 agent 需要換上新憑證才能連線。",
+  "@inviteRotateAgentBody": {
+    "description": "換發 agent 憑證的後果",
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
   "inviteSectionTitle": "邀請成員",
   "@inviteSectionTitle": {
     "description": "設定頁邀請區塊標題"
@@ -4744,10 +4626,6 @@
         "type": "String"
       }
     }
-  },
-  "helpVisualLanguage": "語言在這裡選：跟隨系統／繁體中文／English，選了立刻套用。",
-  "@helpVisualLanguage": {
-    "description": "說明：視覺頁的語言選項"
   },
   "helpChatMentionSyntax": "@名字",
   "@helpChatMentionSyntax": {
@@ -5456,6 +5334,10 @@
   "boardTaskMovedToast": "已搬走。新的那張卡在你選的階段上，這張指向它。",
   "@boardTaskMovedToast": {
     "description": "搬卡成功的回饋"
+  },
+  "boardStageDragHandle": "拖曳調整階段順序",
+  "@boardStageDragHandle": {
+    "description": "階段標題列拖曳把手的提示"
   },
   "boardTaskAssignCleared": "已取消指派",
   "@boardTaskAssignCleared": {
@@ -6794,22 +6676,6 @@
   "@hostEnvErrorUrl": {
     "description": ".env 欄位驗證：網址格式"
   },
-  "helpGroupBefore": "開工前",
-  "@helpGroupBefore": {
-    "description": "說明頁派工節的分組小標"
-  },
-  "helpGroupDuring": "進行中",
-  "@helpGroupDuring": {
-    "description": "說明頁派工節的分組小標"
-  },
-  "helpGroupWrap": "收尾與推送",
-  "@helpGroupWrap": {
-    "description": "說明頁派工節的分組小標"
-  },
-  "helpGroupConfig": "設定檔",
-  "@helpGroupConfig": {
-    "description": "說明頁執行器節的分組小標"
-  },
   "helpGroupInstall": "安裝與更新",
   "@helpGroupInstall": {
     "description": "說明頁主機節的分組小標"
@@ -6818,7 +6684,7 @@
   "@helpChatStyleLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpChatStyle": "頂欄選單決定 agent 在這間房怎麼說話：詳細、精確、親和，或自訂一段指示。只有房間管理者改得動。",
+  "helpChatStyle": "頂欄選單決定 agent 在這間房怎麼說話：詳細、精確、親和，或自訂一段指示。只有房間管理者能改。",
   "@helpChatStyle": {
     "description": "說明：房間說話方式"
   },
@@ -6834,7 +6700,7 @@
   "@helpBoardSupDispatchLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpBoardSup2": "Supervisor 身分的 agent 可以自己對這塊板派工：調查、實作一張票、做完整個階段。推送只有人類按得動。",
+  "helpBoardSup2": "Supervisor 身分的 agent 可以自己對這塊板派工：調查、實作一張票、做完整個階段。推送只有人類能按。",
   "@helpBoardSup2": {
     "description": "說明：Supervisor 自派工"
   },
@@ -6842,7 +6708,7 @@
   "@helpBoardSupQuotaLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpBoardSup3": "它派的工算在指定它的那個人類的額度上，而且不會自動觸發——階段做完不會替它派下一筆。",
+  "helpBoardSup3": "它派的工，算在指定它的那位人類的額度上，也不會自動觸發。階段做完，不會替它派下一筆。",
   "@helpBoardSup3": {
     "description": "說明：Supervisor 派工的額度與觸發"
   },
@@ -6850,7 +6716,7 @@
   "@helpBoardDirectiveLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpBoardDirective": "Supervisor 與 owner 在板上下的判斷會寫進稽核串，可以發給全體或點名一個人，板上的人都看得到。",
+  "helpBoardDirective": "Supervisor 與 owner 在板上下的判斷會寫進稽核串。可以發給全體，也可以點名一個人，板上的人都看得到。",
   "@helpBoardDirective": {
     "description": "說明：板上的判斷與稽核串"
   },
@@ -6858,49 +6724,17 @@
   "@helpBoardOwnerLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpBoardOwner": "owner 可以把板交給板上另一個人；只有沒有 owner 的板才接管得了。",
+  "helpBoardOwner": "owner 可以把板交給板上另一個人；只有沒有 owner 的板，才能被接管。",
   "@helpBoardOwner": {
     "description": "說明：板 owner 移交與接管"
-  },
-  "helpOpsStartLead": "怎麼開始一筆派工",
-  "@helpOpsStartLead": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpOpsStart": "選一個模板、選目標專案、寫一段簡述，簡述最多 2000 字。",
-  "@helpOpsStart": {
-    "description": "說明：派工怎麼開始"
-  },
-  "helpOpsTemplatesLead": "三個模板",
-  "@helpOpsTemplatesLead": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpOpsTemplates": "調查只讀不改檔；實作一張票會 commit 到允許的分支但不推送；做完整個階段由 agent 自己拆卡做到底。",
-  "@helpOpsTemplates": {
-    "description": "說明：三種派工模板的差別"
-  },
-  "helpOpsPushLead": "推送",
-  "@helpOpsPushLead": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpOpsPush": "推送不是模板，是儀表板上按鈕組出來的那一筆，只有房內的人類按得動——agent 自己派不了。",
-  "@helpOpsPush": {
-    "description": "說明：推送只有人類能建"
   },
   "helpOpsDashboardLead": "儀表板在哪",
   "@helpOpsDashboardLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpOpsDashboard": "工作房裡的執行儀表板：未推送的 commit、近幾小時的用量、進行中與排隊中的派工、執行器狀態都在那裡看。",
+  "helpOpsDashboard": "工作房裡的執行儀表板可以看：未推送的 commit、近幾小時的用量、進行中與排隊中的派工，還有執行器狀態。",
   "@helpOpsDashboard": {
     "description": "說明：執行儀表板的位置"
-  },
-  "helpOpsLead2": "同步工作樹",
-  "@helpOpsLead2": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpOpsLead3": "同步不了的時候",
-  "@helpOpsLead3": {
-    "description": "說明條目的粗體小標"
   },
   "helpOpsLead7": "請收尾",
   "@helpOpsLead7": {
@@ -6914,31 +6748,11 @@
   "@helpOpsLead9": {
     "description": "說明條目的粗體小標"
   },
-  "helpNotifyExcLead": "派工異常",
-  "@helpNotifyExcLead": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpNotifyExc1": "頂欄的鈴鐺收跨房的派工異常：停滯與恢復、逾時、額度受限、執行器上下線。",
-  "@helpNotifyExc1": {
-    "description": "說明：派工異常鈴鐺"
-  },
-  "helpNotifyExc2": "未讀數字只算比你上次看過更新的那幾筆，點一筆會跳到出事的那間房。",
-  "@helpNotifyExc2": {
-    "description": "說明：派工異常未讀計數"
-  },
-  "helpMachineLead4": "連線資訊",
-  "@helpMachineLead4": {
-    "description": "說明條目的粗體小標"
-  },
-  "helpMachineLead5": "兩把 token",
-  "@helpMachineLead5": {
-    "description": "說明條目的粗體小標"
-  },
   "helpInstallLead": "從 Release 安裝",
   "@helpInstallLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpInstall1": "每個分頁底下都有「安裝與更新」：從 GitHub Release 抓對應版本，下載、解壓、跑安裝器。",
+  "helpInstall1": "每個分頁底下都有「安裝與更新」：從 GitHub Release 抓對應版本，下載、解壓，再跑安裝器。",
   "@helpInstall1": {
     "description": "說明：從 Release 安裝 kit"
   },
@@ -6954,7 +6768,7 @@
   "@helpInstallBlockedLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpInstall3": "四種理由：已經是 Release 那一版、這個版本沒有 Release、找不到 Python 3.12、執行器手上還有 run（先到儀表板按 drain）。",
+  "helpInstall3": "有四種原因：已經是 Release 那一版、這個版本沒有 Release、找不到 Python 3.12、執行器手上還有 run（先到儀表板按 drain）。",
   "@helpInstall3": {
     "description": "說明：安裝鈕停用的理由"
   },
@@ -6970,7 +6784,7 @@
   "@helpInstallConfigLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpInstall5": "設定檔原本就在的話不會被覆寫，安裝完會講一句。",
+  "helpInstall5": "設定檔本來就存在的話不會被覆寫，裝完會提醒一句。",
   "@helpInstall5": {
     "description": "說明：安裝不覆寫設定檔"
   },
@@ -6978,7 +6792,7 @@
   "@helpEnvLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpEnv1": "Hub 主持與 Agent 接入兩頁可以直接編那一包的 .env：Hub 改完要重啟才生效，MCP 是下次連線才生效。",
+  "helpEnv1": "Hub 主持與 Agent 接入兩頁，可以直接編那一包的 .env。Hub 改完要重啟才生效，MCP 則是下次連線才生效。",
   "@helpEnv1": {
     "description": "說明：分頁上直接改 .env"
   },
@@ -7733,6 +7547,14 @@
   "@roomsMenuSettings": {
     "description": "房間選單：開房間設定頁"
   },
+  "commonPin": "關注",
+  "@commonPin": {
+    "description": "清單項目選單：關注（置頂）"
+  },
+  "commonUnpin": "取消關注",
+  "@commonUnpin": {
+    "description": "清單項目選單：取消關注"
+  },
   "roomsMenuTransfer": "轉移所有權",
   "@roomsMenuTransfer": {
     "description": "房間選單：把房主交給別人（僅房主可見）"
@@ -8013,5 +7835,1017 @@
   "settingsUpdateFailLaunch": "無法啟動更新",
   "@settingsUpdateFailLaunch": {
     "description": "更新失敗：更新腳本起不來"
+  },
+  "helpCalloutTip": "提示",
+  "@helpCalloutTip": {
+    "description": "說明頁文案"
+  },
+  "helpCalloutWarn": "注意",
+  "@helpCalloutWarn": {
+    "description": "說明頁文案"
+  },
+  "helpTblAction": "操作",
+  "@helpTblAction": {
+    "description": "說明頁文案"
+  },
+  "helpTblHow": "怎麼做",
+  "@helpTblHow": {
+    "description": "說明頁文案"
+  },
+  "helpTblEffect": "效果",
+  "@helpTblEffect": {
+    "description": "說明頁文案"
+  },
+  "helpTblState": "狀態",
+  "@helpTblState": {
+    "description": "說明頁文案"
+  },
+  "helpTblSee": "看到什麼",
+  "@helpTblSee": {
+    "description": "說明頁文案"
+  },
+  "helpTblHandle": "怎麼處理",
+  "@helpTblHandle": {
+    "description": "說明頁文案"
+  },
+  "helpTblConcept": "概念",
+  "@helpTblConcept": {
+    "description": "說明頁文案"
+  },
+  "helpTblDo": "做法",
+  "@helpTblDo": {
+    "description": "說明頁文案"
+  },
+  "helpTblMeaning": "意義",
+  "@helpTblMeaning": {
+    "description": "說明頁文案"
+  },
+  "helpTblTemplate": "模板",
+  "@helpTblTemplate": {
+    "description": "說明頁文案"
+  },
+  "helpTblWhat": "做什麼",
+  "@helpTblWhat": {
+    "description": "說明頁文案"
+  },
+  "helpTblDeliver": "交付",
+  "@helpTblDeliver": {
+    "description": "說明頁文案"
+  },
+  "helpTblSituation": "狀況",
+  "@helpTblSituation": {
+    "description": "說明頁文案"
+  },
+  "helpTblRunnerDoes": "執行器怎麼做",
+  "@helpTblRunnerDoes": {
+    "description": "說明頁文案"
+  },
+  "helpTblKey": "設定鍵",
+  "@helpTblKey": {
+    "description": "說明頁文案"
+  },
+  "helpTblPurpose": "作用",
+  "@helpTblPurpose": {
+    "description": "說明頁文案"
+  },
+  "helpTblEntry": "入口",
+  "@helpTblEntry": {
+    "description": "說明頁文案"
+  },
+  "helpTblReceives": "收什麼",
+  "@helpTblReceives": {
+    "description": "說明頁文案"
+  },
+  "helpTblTips": "小技巧",
+  "@helpTblTips": {
+    "description": "說明頁文案"
+  },
+  "helpTblSetting": "設定",
+  "@helpTblSetting": {
+    "description": "說明頁文案"
+  },
+  "helpTblNote": "說明",
+  "@helpTblNote": {
+    "description": "說明頁文案"
+  },
+  "helpTblToken": "憑證",
+  "@helpTblToken": {
+    "description": "說明頁文案"
+  },
+  "helpTblCan": "能做什麼",
+  "@helpTblCan": {
+    "description": "說明頁文案"
+  },
+  "helpTblGiveTo": "發給誰",
+  "@helpTblGiveTo": {
+    "description": "說明頁文案"
+  },
+  "helpTblTab": "分頁",
+  "@helpTblTab": {
+    "description": "說明頁文案"
+  },
+  "helpTblShows": "看什麼",
+  "@helpTblShows": {
+    "description": "說明頁文案"
+  },
+  "helpTblOption": "選項",
+  "@helpTblOption": {
+    "description": "說明頁文案"
+  },
+  "helpSecOverviewLabel": "總覽",
+  "@helpSecOverviewLabel": {
+    "description": "說明頁文案"
+  },
+  "helpSecOverviewTitle": "總覽",
+  "@helpSecOverviewTitle": {
+    "description": "說明頁文案"
+  },
+  "helpSecOverviewIntro": "三塊功能：聊天、任務板、派工。先看這一節，再從導覽跳到細節。",
+  "@helpSecOverviewIntro": {
+    "description": "說明頁文案"
+  },
+  "helpOvChatTitle": "聊天室",
+  "@helpOvChatTitle": {
+    "description": "說明頁文案"
+  },
+  "helpOvChatSub": "人與 agent 同一間房",
+  "@helpOvChatSub": {
+    "description": "說明頁文案"
+  },
+  "helpOvChatBody": "用 `@名字` 提及成員、`#[標題]` 指涉任務卡；釘選、匯出、封存都在這裡。",
+  "@helpOvChatBody": {
+    "description": "說明頁文案"
+  },
+  "helpOvBoardTitle": "任務板",
+  "@helpOvBoardTitle": {
+    "description": "說明頁文案"
+  },
+  "helpOvBoardSub": "週期 → 階段 → 任務",
+  "@helpOvBoardSub": {
+    "description": "說明頁文案"
+  },
+  "helpOvBoardBody": "一塊板可以掛在多間房。階段全部收尾後送審、確認，再決定要不要上板。",
+  "@helpOvBoardBody": {
+    "description": "說明頁文案"
+  },
+  "helpOvOpsTitle": "派工",
+  "@helpOvOpsTitle": {
+    "description": "說明頁文案"
+  },
+  "helpOvOpsSub": "執行器在你的機器上跑 agent",
+  "@helpOvOpsSub": {
+    "description": "說明頁文案"
+  },
+  "helpOvOpsBody": "選模板、選專案、寫簡述。結果回到房裡，推送與上板由人類按。",
+  "@helpOvOpsBody": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow1A": "關注",
+  "@helpOvRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow1B": "房間或板的清單項目選單 → 「關注」",
+  "@helpOvRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow1C": "置頂在清單最前面；只存在這台裝置，不影響別人",
+  "@helpOvRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow2A": "自動封存",
+  "@helpOvRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow2B": "房間設定裡的開關，預設開",
+  "@helpOvRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow2C": "房裡沒有 agent 時自動封存；關掉就不會",
+  "@helpOvRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow3A": "工作房",
+  "@helpOvRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow3B": "建房時選「工作房」並綁定工作區",
+  "@helpOvRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow3C": "常駐房間，專門用來派工與看結果",
+  "@helpOvRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow4A": "週期",
+  "@helpOvRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow4B": "板上最外層的一輪工作",
+  "@helpOvRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpOvRow4C": "只有進行中能編輯；送審之後整個凍結",
+  "@helpOvRow4C": {
+    "description": "說明頁文案"
+  },
+  "helpSecChatIntro": "房間是對話的容器，人類與 agent 都在裡面說話。",
+  "@helpSecChatIntro": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow1A": "提及成員",
+  "@helpChatRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow1C": "被提及的人會收到通知",
+  "@helpChatRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow2A": "指涉任務卡",
+  "@helpChatRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow2C": "訊息裡帶出卡片參照",
+  "@helpChatRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow3A": "提及一群人",
+  "@helpChatRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow3C": "送出時會換成當下在房裡的成員名字",
+  "@helpChatRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow4A": "送出與換行",
+  "@helpChatRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow4B": "`Enter` 送出、`Shift+Enter` 換行",
+  "@helpChatRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow4C": "`↑` `↓` 叫回歷史",
+  "@helpChatRow4C": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow5A": "附檔案",
+  "@helpChatRow5A": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow5B": "拖進輸入框，或直接貼上截圖",
+  "@helpChatRow5B": {
+    "description": "說明頁文案"
+  },
+  "helpChatRow5C": "成為這間房的附件",
+  "@helpChatRow5C": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardPrivateTitle": "私人聊天室",
+  "@helpChatCardPrivateTitle": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardPrivateSub": "必須受邀",
+  "@helpChatCardPrivateSub": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardPinTitle": "釘選",
+  "@helpChatCardPinTitle": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardPinSub": "整間房共用",
+  "@helpChatCardPinSub": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardFollowTitle": "關注",
+  "@helpChatCardFollowTitle": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardFollowSub": "只存在這台裝置",
+  "@helpChatCardFollowSub": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardFollowBody": "房間清單項目選單的「關注」會把房間置頂，標題前多一顆圖釘；再按一次「取消關注」。任務板清單一樣。",
+  "@helpChatCardFollowBody": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardArchiveTitle": "自動封存",
+  "@helpChatCardArchiveTitle": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardArchiveSub": "房間設定的開關，預設開",
+  "@helpChatCardArchiveSub": {
+    "description": "說明頁文案"
+  },
+  "helpChatCardArchiveBody": "開著時，房裡沒有 agent 就自動封存；關掉就不會自動封存。",
+  "@helpChatCardArchiveBody": {
+    "description": "說明頁文案"
+  },
+  "helpSecMemberIntro": "名字旁的標記告訴你這個成員現在是什麼狀態。",
+  "@helpSecMemberIntro": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow1A": "派工中",
+  "@helpMemberRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow1B": "名字旁標「派工中」，沒有倒數",
+  "@helpMemberRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow1C": "run 結束後會自己離房；沒離開的話，Hub 也會移出，不用手動踢",
+  "@helpMemberRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow2A": "閒置",
+  "@helpMemberRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow2B": "一般 agent 超過兩分鐘沒動作，會顯示已閒置多久、最快多久後被移出",
+  "@helpMemberRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow2C": "被移出的人重新指派一次就會回來",
+  "@helpMemberRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow3A": "免掃",
+  "@helpMemberRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow3B": "agent 要做很久的事時，會自己掛上 `chatroom_hold`",
+  "@helpMemberRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow3C": "有到期時間，不是無限期",
+  "@helpMemberRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow4A": "隱藏與重點標記",
+  "@helpMemberRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow4B": "只動我這台裝置的視圖",
+  "@helpMemberRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpMemberRow4C": "移出成員才會影響到所有人",
+  "@helpMemberRow4C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardCycleTitle": "週期",
+  "@helpBoardCardCycleTitle": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardCycleSub": "一輪工作",
+  "@helpBoardCardCycleSub": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardCycleBody": "進行中才能編輯。送審、確認之後凍結，底下任何寫入都會被擋。",
+  "@helpBoardCardCycleBody": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardStageTitle": "階段",
+  "@helpBoardCardStageTitle": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardStageSub": "週期裡的一段",
+  "@helpBoardCardStageSub": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardStageBody": "所有階段收尾後週期才能送審；素材與派工都掛在階段上。",
+  "@helpBoardCardStageBody": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardTaskTitle": "任務",
+  "@helpBoardCardTaskTitle": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardTaskSub": "最小單位的卡",
+  "@helpBoardCardTaskSub": {
+    "description": "說明頁文案"
+  },
+  "helpBoardCardTaskBody": "可以認領、指派、搬移。未分類的卡也要先收尾，週期才能送審。",
+  "@helpBoardCardTaskBody": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow1A": "調整階段順序",
+  "@helpBoardMoveRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow1B": "拖階段標題列的拖曳把手",
+  "@helpBoardMoveRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow1C": "階段重新排序",
+  "@helpBoardMoveRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow2A": "同一階段內重排",
+  "@helpBoardMoveRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow2B": "在卡上按下就拖",
+  "@helpBoardMoveRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow2C": "卡在清單裡換位置",
+  "@helpBoardMoveRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow3A": "跨階段或跨週期搬卡",
+  "@helpBoardMoveRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow3B": "在卡上按住約 0.3 秒再拖，可放到同週期其他開著的階段，或左欄某個進行中的週期",
+  "@helpBoardMoveRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow3C": "卡搬到目標處",
+  "@helpBoardMoveRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow4A": "選單「搬到別處」",
+  "@helpBoardMoveRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow4B": "卡的選單",
+  "@helpBoardMoveRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow4C": "在目標階段建一張新卡，原本那張標成「已搬走」",
+  "@helpBoardMoveRow4C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow5A": "紅字項目（刪除等）",
+  "@helpBoardMoveRow5A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow5B": "任務選單",
+  "@helpBoardMoveRow5B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow5C": "一律排在最下面，一般項目排前面",
+  "@helpBoardMoveRow5C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardFrozenCallout": "凍結的週期、唯讀的板，以及目前狀態不能搬動的卡，都拖不動。",
+  "@helpBoardFrozenCallout": {
+    "description": "說明頁文案"
+  },
+  "helpBoardNarrowCallout": "視窗寬度不到 900 時，左欄會收起來，內容上方改成週期切換列。",
+  "@helpBoardNarrowCallout": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep1": "打開素材清單",
+  "@helpAssetStep1": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep2": "新增素材",
+  "@helpAssetStep2": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep3": "一次選幾個檔",
+  "@helpAssetStep3": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep4": "編輯備註",
+  "@helpAssetStep4": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep5": "檢視",
+  "@helpAssetStep5": {
+    "description": "說明頁文案"
+  },
+  "helpAssetStep6": "卸除",
+  "@helpAssetStep6": {
+    "description": "說明頁文案"
+  },
+  "helpSecOpsIntro": "派工需要執行器在線，而且目標專案要在它的 `workspaces` 白名單裡，否則 Hub 會擋下建單。",
+  "@helpSecOpsIntro": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep1": "選模板",
+  "@helpOpsStep1": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep1Body": "調查、實作一張票、做完整個階段，三選一。",
+  "@helpOpsStep1Body": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep2": "選目標專案",
+  "@helpOpsStep2": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep2Body": "專案清單每次都會重新撈；送出被擋下時，理由會當場顯示。",
+  "@helpOpsStep2Body": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep3": "寫簡述",
+  "@helpOpsStep3": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep3Body": "最多 2000 字。",
+  "@helpOpsStep3Body": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep4": "送出，看房裡回報",
+  "@helpOpsStep4": {
+    "description": "說明頁文案"
+  },
+  "helpOpsStep4Body": "agent 每完成一個可交付的小步驟，就會在房裡回報一次。看回報就知道它做到哪，不用去翻卡。",
+  "@helpOpsStep4Body": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow1A": "調查",
+  "@helpOpsTplRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow1B": "只讀，不改檔",
+  "@helpOpsTplRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow1C": "房裡的回報",
+  "@helpOpsTplRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow2A": "實作一張票",
+  "@helpOpsTplRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow2B": "在允許的分支上動工",
+  "@helpOpsTplRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow2C": "commit 到分支，不推送",
+  "@helpOpsTplRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow3A": "做完整個階段",
+  "@helpOpsTplRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow3B": "agent 自己拆卡，做到底",
+  "@helpOpsTplRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow3C": "不推送，推送另按",
+  "@helpOpsTplRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow4A": "推送",
+  "@helpOpsTplRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow4B": "儀表板上按鈕組合出來的一筆，不算模板",
+  "@helpOpsTplRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsTplRow4C": "只有房內的人類能按，agent 派不了",
+  "@helpOpsTplRow4C": {
+    "description": "說明頁文案"
+  },
+  "helpOpsAllReposCallout": "一次派工能動到那個專案底下的所有 repo，不只你選的那個。每個 repo 都必須停在自己的允許分支上，只要有一個不合，就不會開工。",
+  "@helpOpsAllReposCallout": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow1A": "遠端有新 commit，本機沒分岔",
+  "@helpOpsSyncRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow1B": "先 `fetch`，再用 `pull --ff-only` 快轉",
+  "@helpOpsSyncRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow2A": "本機有未推送的 commit，遠端也前進（分岔）",
+  "@helpOpsSyncRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow2B": "自動合併遠端，沿用執行器的簽章設定，不繞過 hooks；收工摘要會寫明合併了幾顆、本機未推送幾顆",
+  "@helpOpsSyncRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow3A": "合併失敗",
+  "@helpOpsSyncRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow3B": "還原到合併前，整筆派工以失敗收場",
+  "@helpOpsSyncRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow4A": "工作樹有未提交變更",
+  "@helpOpsSyncRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncRow4B": "不同步，照現況執行，並在收工摘要裡說明",
+  "@helpOpsSyncRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpOpsSyncIntro": "開工前，執行器會先同步常駐工作樹。它是跨 run 共用的，不同步的話，就會在上一輪的舊基礎上動工。",
+  "@helpOpsSyncIntro": {
+    "description": "說明頁文案"
+  },
+  "helpOpsCtlRow1A": "補指示",
+  "@helpOpsCtlRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpOpsCtlRow1B": "在房裡 @ 它，訊息會在它下一次呼叫工具之前送到，不會打斷手上那一步",
+  "@helpOpsCtlRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpSecReleaseLabel": "上板",
+  "@helpSecReleaseLabel": {
+    "description": "說明頁文案"
+  },
+  "helpSecReleaseTitle": "上板",
+  "@helpSecReleaseTitle": {
+    "description": "說明頁文案"
+  },
+  "helpSecReleaseIntro": "把本週期的來源分支併進各 repo 的穩定分支並推送，也可以選擇打 tag。",
+  "@helpSecReleaseIntro": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep1": "確認週期時一併上板",
+  "@helpReleaseStep1": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep1Body": "候選 repo 只列本週期內有 run 動過 HEAD、而且設了穩定分支的。已確認的週期也可以事後單獨上板。",
+  "@helpReleaseStep1Body": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep2": "看結果",
+  "@helpReleaseStep2": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep2Body": "結果會列出每個自動執行的動作：重建、備份 ref、自動合併、解衝突 agent 的 commit 與衝突檔案、推送重試次數。",
+  "@helpReleaseStep2Body": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep3": "失敗了就重試",
+  "@helpReleaseStep3": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseStep3Body": "週期是 verified／done，而且沒上板過或上次沒成功時，會顯示「上板」。上次失敗會另外標示「上次上板失敗」。上板成功或進行中時不顯示。",
+  "@helpReleaseStep3Body": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseFixIntro": "遇到下面這些狀況，執行器會自己處理，不必停下來等人：",
+  "@helpReleaseFixIntro": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow1A": "本機穩定分支與 origin 不一致",
+  "@helpReleaseRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow1B": "先備份到 `refs/runner-backup/<穩定分支>/<時間>`。如果本機獨有的內容都已經在來源分支，就以 origin 重建；否則以 origin 為基礎，把本機合併進來",
+  "@helpReleaseRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow2A": "來源分支本機與 origin 分岔",
+  "@helpReleaseRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow2B": "合併 origin 後當作上板來源，本機的來源分支不動",
+  "@helpReleaseRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow3A": "來源併進穩定分支時衝突",
+  "@helpReleaseRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow3B": "起一支解衝突 agent，只解衝突、做簽章 commit，不推送。執行器確認沒有衝突標記、parent 正確、有簽章之後才推送，否則還原並以失敗收場",
+  "@helpReleaseRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow4A": "推送被拒",
+  "@helpReleaseRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow4B": "合併 origin 後重推，最多 3 次；被遠端 hook 擋下的不重試",
+  "@helpReleaseRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseWho": "只有掛著這塊板的工作房裡的人類成員能上板。agent 與 Supervisor 一律會被拒絕。",
+  "@helpReleaseWho": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseSign": "設了 `agent_signing_key` 就改用 SSH key 簽章，這樣上板時人不在電腦前，也不會卡在 GPG 的密碼輸入。",
+  "@helpReleaseSign": {
+    "description": "說明頁文案"
+  },
+  "helpSecNotifyIntro": "三個入口，各收不同的東西。",
+  "@helpSecNotifyIntro": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow1A": "系統通知",
+  "@helpNotifyRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow1B": "依「個人化」的設定：所有訊息／僅提及我時／關閉",
+  "@helpNotifyRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow1C": "只在 App 開著時發。關閉期間不補發，回來後請靠未讀紅點找",
+  "@helpNotifyRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow2A": "頂欄鈴鐺",
+  "@helpNotifyRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow2B": "跨房的派工異常：停滯與恢復、逾時、額度受限、執行器上下線",
+  "@helpNotifyRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow2C": "未讀數字只算比你上次看過更新的幾筆；點一筆會跳到出事的那間房",
+  "@helpNotifyRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow3A": "板列表的通知鈴鐺",
+  "@helpNotifyRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow3B": "你在等的、追蹤的板的動態",
+  "@helpNotifyRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyRow3C": "右鍵（行動裝置長按）→「全部標為已讀」；沒有未讀時這一項會停用",
+  "@helpNotifyRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpConnStep1": "貼上邀請碼",
+  "@helpConnStep1": {
+    "description": "說明頁文案"
+  },
+  "helpConnStep2": "確認 token",
+  "@helpConnStep2": {
+    "description": "說明頁文案"
+  },
+  "helpConnStep2Body": "API token 填人類 token；沒設 token 的 Hub 才留空。",
+  "@helpConnStep2Body": {
+    "description": "說明頁文案"
+  },
+  "helpConnStep3": "儲存並測試",
+  "@helpConnStep3": {
+    "description": "說明頁文案"
+  },
+  "helpConnStep3Body": "改完要按「儲存設定」，連線和個人化兩頁共用同一顆。「測試連線」只驗證這台機器到 Hub 這一段，綠燈不代表別人也連得到。",
+  "@helpConnStep3Body": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardHumanTitle": "人類 token",
+  "@helpInviteCardHumanTitle": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardHumanSub": "主持人與成員",
+  "@helpInviteCardHumanSub": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardHumanBody": "只有它能開主持人模式、發邀請。",
+  "@helpInviteCardHumanBody": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardAgentTitle": "Agent token",
+  "@helpInviteCardAgentTitle": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardAgentSub": "給 agent 連線",
+  "@helpInviteCardAgentSub": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardAgentBody": "填進 mcp-kit 安裝器的「Agent token」欄位；開不了主持人模式。",
+  "@helpInviteCardAgentBody": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardCodeTitle": "邀請碼",
+  "@helpInviteCardCodeTitle": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardCodeSub": "等同密碼",
+  "@helpInviteCardCodeSub": {
+    "description": "說明頁文案"
+  },
+  "helpInviteCardCodeBody": "用私訊給對方，不要貼在公開頻道。可以單獨撤銷，不必換掉所有人的 token。",
+  "@helpInviteCardCodeBody": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow1A": "產生邀請碼",
+  "@helpInviteRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow1B": "給對方一份專屬的邀請碼",
+  "@helpInviteRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow2A": "撤銷",
+  "@helpInviteRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow2B": "只讓那一張失效，其他人不受影響",
+  "@helpInviteRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow3A": "重發憑證",
+  "@helpInviteRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow3B": "舊憑證立刻失效，成員身分不變，對方要用新的重新連線。agent 的憑證則要讓 agent 換上新的",
+  "@helpInviteRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow4A": "移出成員",
+  "@helpInviteRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpInviteRow4B": "撤銷他當初用的那張邀請碼；和他共用同一張的人會一起斷線",
+  "@helpInviteRow4B": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow1A": "深色主題",
+  "@helpVisualRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow1B": "開／關",
+  "@helpVisualRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow1C": "與標題列那顆是同一個開關",
+  "@helpVisualRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow2A": "字級",
+  "@helpVisualRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow2B": "極小／小／中（預設）／大／特大",
+  "@helpVisualRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow2C": "選了立刻套用到整個 App，不用重開",
+  "@helpVisualRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow3A": "語言",
+  "@helpVisualRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow3B": "跟隨系統／繁體中文／English",
+  "@helpVisualRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpVisualRow3C": "選了立刻套用",
+  "@helpVisualRow3C": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow1A": "顯示名稱",
+  "@helpPersonalRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow2A": "本機裝置識別",
+  "@helpPersonalRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow3A": "系統通知",
+  "@helpPersonalRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow4A": "轉送通知給 Codex",
+  "@helpPersonalRow4A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow5A": "啟動字樣",
+  "@helpPersonalRow5A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow5B": "App 啟動時 Loading 頁顯示的字。每行一則，有多則時每次啟動隨機挑一則；留空就用預設的「正在進入聊天室」。",
+  "@helpPersonalRow5B": {
+    "description": "說明頁文案"
+  },
+  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。",
+  "@helpVersionUpdate": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow1A": "Hub 主持",
+  "@helpMachineTabRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow1B": "Hub 進程與三盞燈、連線資訊、隧道與備份",
+  "@helpMachineTabRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow2A": "Agent 接入",
+  "@helpMachineTabRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow2B": "這台機器連不連得到 Hub、token 認不認得",
+  "@helpMachineTabRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow3A": "執行器",
+  "@helpMachineTabRow3A": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTabRow3B": "啟停、登入狀態、工作區與專案設定",
+  "@helpMachineTabRow3B": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow1A": "人類 token",
+  "@helpMachineTokenRow1A": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow1B": "開主持人模式、發邀請",
+  "@helpMachineTokenRow1B": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow1C": "人類成員",
+  "@helpMachineTokenRow1C": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow2A": "Agent token",
+  "@helpMachineTokenRow2A": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow2B": "只供 agent 連線，開不了主持人模式，也發不了邀請",
+  "@helpMachineTokenRow2B": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenRow2C": "agent 的 mcp-kit",
+  "@helpMachineTokenRow2C": {
+    "description": "說明頁文案"
+  },
+  "helpMachineTokenWarn": "別發錯：人類拿到 Agent token，會看到類似「這台 Hub 不是你主持的」的錯誤。",
+  "@helpMachineTokenWarn": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerLoginCallout": "登入：執行器分頁的登入列分得出已登入、已過期、未登入三種狀態。可以開新終端登入，也可以貼上長效 token（畫面只顯示已設定或未設定）。登入過期時，整台執行器都會停止領單，不只失敗的那一筆；恢復後會自動續領。",
+  "@helpRunnerLoginCallout": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow1": "工作區白名單。沒列進來的，派不了工，Hub 建單時就會擋下。",
+  "@helpRunnerRow1": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow2": "工作區底下的專案，每個都必須是 git repo，填本機路徑。一次派工能動到全部，漏掉的 agent 碰不到。",
+  "@helpRunnerRow2": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow3": "這個 repo 准許動工的分支。工作樹停在清單外時，整筆派工會直接失敗，不會幫你切過去。",
+  "@helpRunnerRow3": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow4": "建單沒指定時使用的主工作目錄，必須是 `projects` 裡真的有的名字，否則設定讀不起來。",
+  "@helpRunnerRow4": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow5": "上板的目標分支；留空代表這個 repo 不參與上板。",
+  "@helpRunnerRow5": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow6": "上板的合併方式（`merge_method`：merge／squash／ff_only）與 merge、tag 訊息樣板。",
+  "@helpRunnerRow6": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow7": "設了就用 SSH key 簽章（派工 agent 與上板的 commit、tag），不會卡在 GPG 密碼輸入。",
+  "@helpRunnerRow7": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow8": "定期重驗 Claude 登入的間隔，預設 900 秒。",
+  "@helpRunnerRow8": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow9": "用來判斷何時該交接（預設 1000000）。填得比模型實際的視窗大，交接就會來不及。",
+  "@helpRunnerRow9": {
+    "description": "說明頁文案"
+  },
+  "helpRunnerRow10": "預設只放行 chatroom MCP；專案需要其他 MCP 伺服器就要在這裡補上。",
+  "@helpRunnerRow10": {
+    "description": "說明頁文案"
+  },
+  "msgMenuReact": "☺　加入表情",
+  "@msgMenuReact": {
+    "description": "訊息選單：加入表情"
+  },
+  "reactionAddTooltip": "加入表情",
+  "@reactionAddTooltip": {
+    "description": "訊息上的加表情按鈕提示"
+  },
+  "reactionPanelTitle": "表情回應",
+  "@reactionPanelTitle": {
+    "description": "表情名單面板標題"
+  },
+  "reactionPanelAll": "全部",
+  "@reactionPanelAll": {
+    "description": "表情名單面板：全部分頁"
+  },
+  "reactionRemoveMine": "移除我的表情",
+  "@reactionRemoveMine": {
+    "description": "表情名單面板：移除我的表情"
+  },
+  "reactionLoadFailed": "無法載入名單",
+  "@reactionLoadFailed": {
+    "description": "表情名單載入失敗"
+  },
+  "reactionFailed": "表情送出失敗，已還原",
+  "@reactionFailed": {
+    "description": "表情送出失敗並已還原"
   }
 }

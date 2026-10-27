@@ -75,3 +75,9 @@ def fake_hub(tmp_path):
 def bridge_state():
     """取得目前綁定的狀態物件。"""
     return srv.state()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_watcher_state(tmp_path, monkeypatch):
+    """watcher 游標檔跟著 state 路徑走，預設導到 tmp，不碰使用者家目錄。"""
+    monkeypatch.setenv("CHATROOM_STATE_PATH", str(tmp_path / "state.json"))

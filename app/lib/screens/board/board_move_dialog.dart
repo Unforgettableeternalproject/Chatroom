@@ -28,25 +28,37 @@ Future<String?> showBoardMoveDialog(
   required BoardTask task,
   required String boardId,
   String? roomId,
+  String? initialObjectiveId,
 }) =>
     showDialog<String>(
       context: context,
-      builder: (_) => _MoveDialog(task: task, boardId: boardId, roomId: roomId),
+      builder: (_) => _MoveDialog(
+          task: task,
+          boardId: boardId,
+          roomId: roomId,
+          initialObjectiveId: initialObjectiveId),
     );
 
 class _MoveDialog extends ConsumerStatefulWidget {
-  const _MoveDialog({required this.task, required this.boardId, this.roomId});
+  const _MoveDialog(
+      {required this.task,
+      required this.boardId,
+      this.roomId,
+      this.initialObjectiveId});
 
   final BoardTask task;
   final String boardId;
   final String? roomId;
+
+  /// 拖到左欄某個週期上放下時預選的週期。
+  final String? initialObjectiveId;
 
   @override
   ConsumerState<_MoveDialog> createState() => _MoveDialogState();
 }
 
 class _MoveDialogState extends ConsumerState<_MoveDialog> {
-  String? _objectiveId;
+  late String? _objectiveId = widget.initialObjectiveId;
   String? _checklistId;
   bool _busy = false;
   String? _error;
@@ -55,16 +67,13 @@ class _MoveDialogState extends ConsumerState<_MoveDialog> {
   ///
   /// `done` / `verified` 的週期收掉了，把活的工作丟進去等於讓一個已經結案的
   /// 東西重新長出待辦；`cancelled` 由 [BoardSnapshot.sortedObjectives] 擋掉。
-  List<BoardObjective> _targets(BoardSnapshot snap) => snap.sortedObjectives
-      .where((o) => o.status == 'active' || o.status == 'review')
-      .toList();
+  List<BoardObjective> _targets(BoardSnapshot snap) =>
+      snap.moveTargetObjectives;
 
   /// 目標清單：那個週期底下**還開著**的，而且不是這張卡現在待的那一份。
   /// 搬到自己原地不是一個搬法，留著只會讓人按下去才發現什麼都沒發生。
-  List<BoardChecklist> _lists(BoardSnapshot snap, String objectiveId) => snap
-      .checklistsOf(objectiveId)
-      .where((c) => c.status == 'open' && c.id != widget.task.checklistId)
-      .toList();
+  List<BoardChecklist> _lists(BoardSnapshot snap, String objectiveId) =>
+      snap.moveTargetChecklists(objectiveId, widget.task.checklistId);
 
   Future<void> _submit(BoardActions actions) async {
     final target = _checklistId;

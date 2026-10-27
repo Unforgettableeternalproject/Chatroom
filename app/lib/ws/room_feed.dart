@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/foundation.dart' show listEquals;
+
 import '../models/message.dart';
 import '../models/question.dart';
+import '../models/reaction.dart';
 
 /// 單一房間的訊息 store。REST 與 WS 都走同一條 upsert 路徑——
 /// 重連補訊、冷啟動載入、往上捲歷史共用同一份合併邏輯。
@@ -114,6 +117,32 @@ class RoomFeed {
     }
     if (changed) _notify();
     return added;
+  }
+
+  /// 覆蓋某則訊息的表情彙總。**不碰 cursor**：表情不是訊息。
+  /// 訊息還沒載入（捲出視窗）就忽略——之後載入時 REST 自帶彙總。
+  void setReactions(String messageId, List<ReactionSummary> reactions) {
+    final seq = _idToSeq[messageId];
+    final existing = seq == null ? null : _bySeq[seq];
+    if (seq == null || existing == null) return;
+    if (listEquals(existing.reactions, reactions)) return;
+    _bySeq[seq] = existing.withReactions(List.unmodifiable(reactions));
+    _notify();
+  }
+
+  /// 以 Hub 的彙總整批校正已載入訊息（重連後補回斷線期間錯過的變動）。
+  /// 沒出現在 [byMessageId] 的訊息視為沒有表情；只動 seq >= [minSeq] 的。
+  void replaceReactions(
+      Map<String, List<ReactionSummary>> byMessageId, int minSeq) {
+    var changed = false;
+    for (final e in _bySeq.entries.toList()) {
+      if (e.key < minSeq) continue;
+      final next = byMessageId[e.value.id] ?? const <ReactionSummary>[];
+      if (listEquals(e.value.reactions, next)) continue;
+      _bySeq[e.key] = e.value.withReactions(List.unmodifiable(next));
+      changed = true;
+    }
+    if (changed) _notify();
   }
 
   /// 往上捲載入的歷史批次（before_seq 分頁的結果）。

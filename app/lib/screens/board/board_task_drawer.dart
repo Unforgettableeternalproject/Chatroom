@@ -827,14 +827,19 @@ extension on _TaskActionBarState {
     final assigned = (widget.task.assigneeParticipantId ?? '').isNotEmpty;
     final entries = <PopupMenuEntry<VoidCallback>>[];
 
-    for (final a in rest) {
-      entries.add(PopupMenuItem<VoidCallback>(
-        value: () => run(a),
-        height: 38,
-        child: Text(taskActionLabel(AppLocalizations.of(context), a.kind),
-            style: UepText.sans(
-                size: 13.5, color: a.danger ? UepColors.error : s.ink)),
-      ));
+    // 紅字（破壞性）項目一律排最下面，相對順序不變；一般項目在前。
+    PopupMenuItem<VoidCallback> actionItem(TaskAction a) =>
+        PopupMenuItem<VoidCallback>(
+          value: () => run(a),
+          height: 38,
+          child: Text(taskActionLabel(AppLocalizations.of(context), a.kind),
+              style: UepText.sans(
+                  size: 13.5, color: a.danger ? UepColors.error : s.ink)),
+        );
+    final dangerRest = rest.where((a) => a.danger).toList();
+
+    for (final a in rest.where((a) => !a.danger)) {
+      entries.add(actionItem(a));
     }
 
     // 「派工」：把這張卡交給遠端的執行器（REMOTE-OPS-PLAN §6.2）。
@@ -913,6 +918,13 @@ extension on _TaskActionBarState {
           child: Text(AppLocalizations.of(context).boardTaskAssignClear,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ));
+      }
+    }
+
+    if (dangerRest.isNotEmpty) {
+      if (entries.isNotEmpty) entries.add(const PopupMenuDivider());
+      for (final a in dangerRest) {
+        entries.add(actionItem(a));
       }
     }
 

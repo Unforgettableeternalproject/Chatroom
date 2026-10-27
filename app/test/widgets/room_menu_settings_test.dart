@@ -185,7 +185,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('進行中的房：只有轉移所有權、離開房間——沒有設定、沒有刪除', (tester) async {
+    testWidgets('進行中的房：只有關注、轉移所有權、離開房間——沒有設定、沒有刪除', (tester) async {
       await pumpList(tester, active: [_room(status: 'active')]);
       await tester.tap(find.byIcon(Icons.more_horiz));
       await tester.pumpAndSettle();
@@ -198,7 +198,9 @@ void main() {
       // 設定類與封存都搬進設定頁了
       expect(find.text('封存'), findsNothing);
       expect(find.text('指派'), findsNothing);
-      expect(find.byType(PopupMenuItem<String>), findsNWidgets(2));
+      // 轉移、離開，加上「關注」
+      expect(find.text('關注'), findsOneWidget);
+      expect(find.byType(PopupMenuItem<String>), findsNWidgets(3));
     });
 
     testWidgets('非房主看不到轉移所有權', (tester) async {

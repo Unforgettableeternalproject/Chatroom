@@ -36,6 +36,7 @@ class AppConfig {
     this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
     this.closeToTray = true,
+    this.splashText = '',
     this.leftPaneWidth = kLeftPaneDefaultWidth,
     this.rightPaneWidth = kRightPaneDefaultWidth,
     this.notifyModeRevision = 0,
@@ -60,6 +61,7 @@ class AppConfig {
         fontFamily: settings.fontFamily,
         locale: settings.locale,
         closeToTray: settings.closeToTray,
+        splashText: settings.splashText,
         leftPaneWidth: settings.leftPaneWidth,
         rightPaneWidth: settings.rightPaneWidth,
       );
@@ -82,6 +84,9 @@ class AppConfig {
 
   /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
   final bool closeToTray;
+
+  /// 啟動 Loading 字樣（一行一則，空＝預設）；啟動時讀一次，下次啟動生效。
+  final String splashText;
 
   /// 左欄（房間／Board 列表）寬度；套用在 `app_shell.dart`。
   /// 已經是夾過的值，但版面端仍要依當下視窗再夾一次——這份快照不知道
@@ -109,6 +114,7 @@ class AppConfig {
     FontFamilyPref? fontFamily,
     LocalePref? locale,
     bool? closeToTray,
+    String? splashText,
     double? leftPaneWidth,
     double? rightPaneWidth,
     int? notifyModeRevision,
@@ -123,6 +129,7 @@ class AppConfig {
         fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
         closeToTray: closeToTray ?? this.closeToTray,
+        splashText: splashText ?? this.splashText,
         leftPaneWidth: leftPaneWidth ?? this.leftPaneWidth,
         rightPaneWidth: rightPaneWidth ?? this.rightPaneWidth,
         notifyModeRevision: notifyModeRevision ?? this.notifyModeRevision,
@@ -218,6 +225,11 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     state = state.copyWith(preferredName: name.trim());
   }
 
+  Future<void> setSplashText(String text) async {
+    await _settings.setSplashText(text);
+    state = state.copyWith(splashText: text.trim());
+  }
+
   Future<void> regenerateDeviceKey() async {
     final key = await DeviceIdentity(_settings).regenerate();
     state = state.copyWith(deviceKey: key);
@@ -253,6 +265,31 @@ class HostViewNotifier extends Notifier<bool> {
 
   void set(bool on) => state = on;
   void toggle() => state = !state;
+}
+
+/// 側欄「關注」名單（房間／Board 各一份，依 Hub 位址分開存）。
+///
+/// 只存本機偏好；換 Hub 時 serverUrl 變動會讓它重建並讀另一份。
+final pinnedIdsProvider =
+    NotifierProvider.family<PinnedIdsNotifier, Set<String>, PinKind>(
+        PinnedIdsNotifier.new);
+
+class PinnedIdsNotifier extends Notifier<Set<String>> {
+  PinnedIdsNotifier(this.kind);
+
+  final PinKind kind;
+
+  @override
+  Set<String> build() {
+    ref.watch(appConfigProvider.select((c) => c.serverUrl));
+    return ref.read(settingsRepoProvider).pinnedIds(kind);
+  }
+
+  Future<void> toggle(String id) async {
+    final pinned = !state.contains(id);
+    await ref.read(settingsRepoProvider).setPinned(kind, id, pinned);
+    state = ref.read(settingsRepoProvider).pinnedIds(kind);
+  }
 }
 
 final dioProvider = Provider((ref) {

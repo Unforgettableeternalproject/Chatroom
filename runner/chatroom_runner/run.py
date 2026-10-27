@@ -743,6 +743,9 @@ class RunExecutor:
         # `_claude_run` 起跑前不用再報一次「running/spawn」——那會撞上
         # Hub 的 running→running 白名單，變成一句無害但誤導人的 409 警告
         self._pre_reported_running = False
+        # 正在排隊等 repo 鎖：還沒起進程，不是「執行中沒輸出」。停滯偵測看
+        # 這個旗標跳過；拿到鎖時清掉並 `mark_activity()`，無輸出從那刻起算
+        self.waiting_for_lock = False
 
     def mark_activity(self) -> None:
         """記一次「這個 run 還活著」。stream 有事件、或退避睡完要續跑時呼叫。"""
@@ -867,12 +870,20 @@ class RunExecutor:
                     "running", reason="repo_lock_wait",
                     result=f"等待同一 repo 的 run {blockers} 完成。"))
                 self._pre_reported_running = True
+                self.waiting_for_lock = True
 
             try:
                 async with self.locks.hold(
                         keys, run_id=short_id(run_id),
                         timeout=project.wall_clock_seconds,
                         on_wait=_on_wait):
+                    if self.waiting_for_lock:
+                        # 排隊結束、真的要開始了：無輸出計時從這刻起算，
+                        # 並讓 Hub 起算 started_at、發「開始執行」
+                        self.waiting_for_lock = False
+                        self.mark_activity()
+                        await self._report(run_id, RunOutcome(
+                            "running", reason="lock_acquired"))
                     return await self._claude_run(run, project, repo, cancel)
             except RepoLockTimeout as exc:
                 return await self._report_lock_timeout(run_id, project, exc)

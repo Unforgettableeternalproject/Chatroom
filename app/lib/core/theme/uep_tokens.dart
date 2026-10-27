@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
-/// 單欄頁面（設定、這台機器、說明）的內容最大寬度。
-/// 三頁共用一個值——寬視窗上各頁一邊寬一邊窄比留白本身更礙眼。
-const double kPageMaxWidth = 760;
+/// 單欄表單頁（設定、這台機器、房間設定、任務板設定）的內容最大寬度。
+/// 這幾頁共用一個值，寬視窗上各頁一邊寬一邊窄比留白本身更礙眼；
+/// 輸入框拉太長不好讀，所以只小幅放寬。閱讀型的說明頁另用 [kHelpContentMaxWidth]。
+const double kPageMaxWidth = 840;
+
+/// 說明頁內容欄的最大寬度（不含左側導覽）。表格與卡片格線需要較多橫向空間。
+const double kHelpContentMaxWidth = 1000;
 
 /// U.E.P Imaginary Space 設計系統 token。
 /// 值逐字對照 design system 的 tokens/colors.css 與 tokens/zones.css，

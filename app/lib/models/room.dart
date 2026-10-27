@@ -20,6 +20,7 @@ class Room {
     this.workspaceKey,
     this.workspaceServed = false,
     this.singleWriter = true,
+    this.autoArchive = true,
   });
 
   final String id;
@@ -86,6 +87,13 @@ class Room {
   /// repo」，而 Hub 其實還是一筆一筆跑——那句話是假的。
   final bool singleWriter;
 
+  /// 沒有 agent 時是否自動封存（房主可關）。
+  ///
+  /// 舊版 Hub 不回這個欄位一律 true：那正是這個開關存在之前的實際行為
+  /// （Hub 一直都會自動封存）。缺鍵猜 false 會讓畫面說「不會自動封存」，
+  /// 而舊 Hub 其實照收。
+  final bool autoArchive;
+
   bool get isArchived => status == 'archived';
 
   /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
@@ -125,6 +133,7 @@ class Room {
         workspaceKey: _workspaceKey(json['workspace_key']),
         workspaceServed: (json['workspace_served'] as bool?) ?? false,
         singleWriter: (json['single_writer'] as bool?) ?? true,
+        autoArchive: (json['auto_archive'] as bool?) ?? true,
       );
 
   Room copyWith({
@@ -137,6 +146,7 @@ class Room {
     String? workspaceKey,
     bool? workspaceServed,
     bool? singleWriter,
+    bool? autoArchive,
   }) =>
       Room(
         id: id,
@@ -156,6 +166,7 @@ class Room {
         workspaceKey: workspaceKey ?? this.workspaceKey,
         workspaceServed: workspaceServed ?? this.workspaceServed,
         singleWriter: singleWriter ?? this.singleWriter,
+        autoArchive: autoArchive ?? this.autoArchive,
       );
 
   @override

@@ -103,6 +103,20 @@ class TokensApi {
             .toList();
       });
 
+  /// 換發：舊 token 立刻失效，回傳沿用同一個身分（label／audience／群）的新 token。
+  /// 權限與 [revoke] 相同，只有主 token 能呼叫。
+  Future<AccessToken> rotate(String token) => unwrap(() async {
+        final res = await _dio
+            .post<Map<String, dynamic>>('/api/tokens/$token/rotate');
+        return AccessToken(
+          token: res.data!['token'] as String,
+          label: (res.data!['label'] as String?) ?? '',
+          audience: (res.data!['audience'] as String?) ?? 'human',
+          party: (res.data!['party'] as String?) ?? '',
+          createdAt: '',
+        );
+      });
+
   Future<void> revoke(String token) =>
       unwrap(() => _dio.delete('/api/tokens/$token'));
 }

@@ -38,6 +38,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from mcp.server.mcpserver import MCPServer
 
@@ -940,6 +941,43 @@ def chatroom_unpin(room_id: str, message_id: str) -> dict:
     return _room_request(room_id, "DELETE", f"/api/messages/{message_id}/pin")
 
 
+@tool()
+@_guard
+def chatroom_react(room_id: str, message_id: str, emoji: str,
+                   remove: bool = False, subagent: str = "") -> dict:
+    """對人類發的訊息按表情，表示「已看過」（例如 👀 或 ✅）。
+
+    **選擇性的，不是義務，也不能取代需要回覆的文字回應**——被問了問題、被交辦
+    了事，照樣要用 ``chatroom_post`` 回答。表情不會通知任何人，也不會喚醒
+    任何 agent；它只是讓人類知道你看到了。
+
+    ``emoji`` 只接受固定一組：👍 ❤️ 😂 😮 😢 🙏 👀 ✅，其他會被拒絕並列出可用的。
+    只能按**人類**發的訊息（agent 與系統訊息會被拒）。每人對同一則訊息同時
+    只有一個表情：再按另一個＝替換，按同一個不會重複。``remove=true`` 取消
+    你目前選的那個表情。封存房間不能按。
+
+    ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，就以那個子 agent
+    的身分按；回傳的 ``identity_scope`` 標明實際用的身分。
+    """
+    participant_id, scope = _identity_for(room_id, subagent)
+    path = f"/api/messages/{message_id}/reactions/{quote(emoji, safe='')}"
+    try:
+        data = _room_request(room_id, "DELETE" if remove else "PUT", path,
+                             participant_id=participant_id)
+    except HubError as exc:
+        if (isinstance(exc.detail, dict)
+                and exc.detail.get("code") == "invalid_reaction"):
+            allowed = exc.detail.get("allowed") or []
+            raise HubError(
+                f"「{emoji}」不在可用的表情裡。可用：{' '.join(allowed)}",
+                status=exc.status, detail=exc.detail,
+            ) from exc
+        raise
+    # 回應裡的 reactions 是這則訊息目前的彙總（含你自己的 mine），照原樣回
+    data.update(scope)
+    return data
+
+
 # ---------- 指派 ----------
 
 
@@ -1822,6 +1860,9 @@ def chatroom_board_update(
 
     轉移不合法時 Hub 會回 409 並附上 ``allowed``（從現在這個狀態還能去哪），
     照它走就好，不必自己記一份轉移表。
+
+    ``status`` 可與 ``title`` / ``description`` / ``priority`` 同一次給：
+    先改欄位、再改狀態。狀態被拒時欄位**已經寫入**，錯誤訊息會明說。
     """
     if kind not in ("objective", "checklist", "task"):
         raise HubError(
@@ -1830,52 +1871,70 @@ def chatroom_board_update(
     _item_axis(room_id, board_id, subagent, "改卡")
     if not item_id.strip():
         raise HubError("要給 item_id——那是你要改的那張卡。")
-    if status:
-        if kind == "objective":
-            if status in ("verified", "verify"):
-                # ⚠️ 這句話**不可以假設週期還沒送審**。想確認的當下它多半
-                # 已經在 review 了（那正是有人想按確認的原因），叫它「先去
-                # 送審」會拿到 409「只有進行中的週期可以送審」——agent 照著
-                # 做就走進死路（2026-09-01 測試端 F5）。
-                # 工具層查不到當下狀態，所以兩種情形一起講。
-                raise HubError(
-                    "「確認無誤」只有人類成員做得到，agent 不論如何都按不了"
-                    "這一步。你能做的是：**還沒送審**就先 "
-                    "chatroom_board_update(status=\"review\")；**已經送審**"
-                    "（狀態是 review）就直接用 chatroom_ask_human 請房裡的"
-                    "人確認——那是這個週期往下走的唯一方式，不要重試。"
-                )
-            if status not in ("review", "reopen", "cancel", "complete"):
-                raise HubError(
-                    "Objective 的 status 只能是 review（送審）/ reopen（打回）"
-                    "/ cancel（取消）/ complete（完成——但那一步只有人類按"
-                    f"得下去，agent 送出去會被 Hub 以 403 擋回來），收到「{status}」。"
-                )
-            return _board_write(
-                room_id, subagent, "POST",
-                f"/api/board/objectives/{item_id}/{status}",
-                board_id=board_id,
-            )
-        plural = "tasks" if kind == "task" else "checklists"
-        return _board_write(
-            room_id, subagent, "POST",
-            f"/api/board/{plural}/{item_id}/status",
-            board_id=board_id, json={"status": status},
-        )
     fields = {
         k: v for k, v in (
             ("title", title), ("description", description),
             ("priority", priority),
         ) if v
     }
-    if not fields:
+    if not status and not fields:
         raise HubError("沒有要改的東西：給 status，或給 title/description/priority。")
     plural = {"objective": "objectives", "checklist": "checklists",
               "task": "tasks"}[kind]
-    return _board_write(
-        room_id, subagent, "PATCH", f"/api/board/{plural}/{item_id}",
-        board_id=board_id, json=fields,
-    )
+    if status and kind == "objective":
+        # 狀態驗證要在 PATCH 之前：驗證失敗卻已改了欄位，就是半套寫入
+        if status in ("verified", "verify"):
+            # ⚠️ 這句話**不可以假設週期還沒送審**。想確認的當下它多半
+            # 已經在 review 了（那正是有人想按確認的原因），叫它「先去
+            # 送審」會拿到 409「只有進行中的週期可以送審」——agent 照著
+            # 做就走進死路（2026-09-01 測試端 F5）。
+            # 工具層查不到當下狀態，所以兩種情形一起講。
+            raise HubError(
+                "「確認無誤」只有人類成員做得到，agent 不論如何都按不了"
+                "這一步。你能做的是：**還沒送審**就先 "
+                "chatroom_board_update(status=\"review\")；**已經送審**"
+                "（狀態是 review）就直接用 chatroom_ask_human 請房裡的"
+                "人確認——那是這個週期往下走的唯一方式，不要重試。"
+            )
+        if status not in ("review", "reopen", "cancel", "complete"):
+            raise HubError(
+                "Objective 的 status 只能是 review（送審）/ reopen（打回）"
+                "/ cancel（取消）/ complete（完成——但那一步只有人類按"
+                f"得下去，agent 送出去會被 Hub 以 403 擋回來），收到「{status}」。"
+            )
+    patched: dict = {}
+    if fields:
+        patched = _board_write(
+            room_id, subagent, "PATCH", f"/api/board/{plural}/{item_id}",
+            board_id=board_id, json=fields,
+        )
+        if not status:
+            return patched
+    try:
+        if kind == "objective":
+            sent = _board_write(
+                room_id, subagent, "POST",
+                f"/api/board/objectives/{item_id}/{status}",
+                board_id=board_id,
+            )
+        else:
+            sent = _board_write(
+                room_id, subagent, "POST",
+                f"/api/board/{plural}/{item_id}/status",
+                board_id=board_id, json={"status": status},
+            )
+    except HubError as exc:
+        if not fields:
+            raise
+        # 欄位已經寫進去了：只丟原錯誤的話，呼叫端會以為整次都沒生效
+        raise HubError(
+            f"標題/說明/優先度已更新，但狀態沒變：{exc.reason}",
+            status=exc.status, detail=exc.detail,
+            identity_invalid=exc.identity_invalid, departure=exc.departure,
+        ) from exc
+    if fields and isinstance(patched, dict) and isinstance(sent, dict):
+        return {**patched, **sent}
+    return sent
 
 
 @tool()

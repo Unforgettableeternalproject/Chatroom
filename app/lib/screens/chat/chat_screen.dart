@@ -20,6 +20,8 @@ import '../../core/util/relative_time.dart';
 import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../models/message.dart';
+import '../../models/reaction.dart';
+import '../../state/reaction_actions.dart';
 import '../../api/attachments_api.dart';
 import '../../api/messages_api.dart';
 import '../../api/rooms_api.dart';
@@ -42,6 +44,7 @@ import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/mention_field.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/message_reactions.dart';
 import '../../widgets/pane_divider.dart';
 import '../../widgets/question_card.dart';
 import '../../widgets/run_report_panel.dart';
@@ -782,6 +785,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  /// 加／換／取消我的表情。樂觀更新：先改畫面，失敗再還原並提示。
+  /// 選到自己目前那個＝取消，選別的＝替換（每人每則只有一個）。
+  Future<void> _react(Message m, String emoji) async {
+    final feed = ref.read(realtimeServiceProvider).feed(widget.roomId);
+    final identity = await ref.read(identityProvider(widget.roomId).future);
+    final api = ref.read(messagesApiProvider);
+    final ok = await reactOptimistic(
+      feed: feed,
+      messageId: m.id,
+      fallbackBefore: m.reactions,
+      emoji: emoji,
+      myName: identity.displayName,
+      send: (cancel) => cancel
+          ? api.unreact(m.id, emoji, participantId: identity.participantId)
+          : api.react(m.id, emoji, participantId: identity.participantId),
+    );
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppLocalizations.of(context).reactionFailed)));
+    }
+  }
+
+  Future<void> _showReactors(Message m, bool archived) async {
+    final identity = await ref.read(identityProvider(widget.roomId).future);
+    if (!mounted) return;
+    await showReactorsPanel(
+      context,
+      canRemove: !archived,
+      load: () => ref
+          .read(messagesApiProvider)
+          .reactors(m.id, participantId: identity.participantId),
+      onRemoveMine: () async {
+        final cur = ref
+                .read(realtimeServiceProvider)
+                .feed(widget.roomId)
+                ?.byId(m.id)
+                ?.reactions ??
+            m.reactions;
+        final mine = myReactionOf(cur);
+        if (mine != null) await _react(m, mine);
+      },
+    );
+  }
+
   Future<void> _togglePin(Message m) async {
     try {
       final identity = await ref.read(identityProvider(widget.roomId).future);
@@ -998,8 +1045,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .toList(growable: false);
     final myId = identityAsync.value?.participantId;
     final room = detailAsync.value?.room;
-    final zone = zoneForRoomId(roomId);
-    final palette = uepZonePalettes[zone]!;
 
     final pinnedMessages = feed.messages
         .where((m) => m.pinned && !m.deleted)
@@ -1017,6 +1062,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       onTogglePin: _togglePin,
       onDelete: _delete,
       onCreateTask: _createTaskFrom,
+      onReact: _react,
+      onShowReactors: (m) => _showReactors(m, archived),
       enabled: !archived,
     );
 
@@ -1061,9 +1108,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             roomName: room?.name ?? '…',
             topic: room?.topic ?? '',
             archived: archived,
-            zoneLabel: zone.name.toUpperCase(),
-            zoneColor: palette.soft,
-            zoneStroke: palette.stroke(Theme.of(context).brightness),
             pinnedCount: pinnedMessages.length,
             memberCount: activeMembers.length,
             showMembersButton: !wide,
@@ -1478,9 +1522,6 @@ class RoomHeader extends ConsumerWidget {
     required this.roomName,
     required this.topic,
     required this.archived,
-    required this.zoneLabel,
-    required this.zoneColor,
-    required this.zoneStroke,
     required this.pinnedCount,
     required this.memberCount,
     required this.showMembersButton,
@@ -1491,9 +1532,6 @@ class RoomHeader extends ConsumerWidget {
   final String roomName;
   final String topic;
   final bool archived;
-  final String zoneLabel;
-  final Color zoneColor;
-  final Color zoneStroke;
   final int pinnedCount;
   final int memberCount;
   final bool showMembersButton;
@@ -1529,24 +1567,26 @@ class RoomHeader extends ConsumerWidget {
                         style: UepText.pageTitle(color: archived ? s.inkSoft : s.inkTitle),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: archived ? s.lineStrong : zoneStroke,
+                    // zone 徽章（VISUALS 之類）拿掉了：常被誤讀成房間類型。
+                    // 區域色只留在側欄的房間底色
+                    if (archived) ...[
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: s.lineStrong),
+                        ),
+                        child: MonoLabel(
+                          AppLocalizations.of(context).roomsArchivedBadge,
+                          size: 9,
+                          color: s.inkMute,
+                          letterSpacing: 1.4,
                         ),
                       ),
-                      child: MonoLabel(
-                        archived ? AppLocalizations.of(context).roomsArchivedBadge : zoneLabel,
-                        size: 9,
-                        color: archived ? s.inkMute : zoneColor,
-                        letterSpacing: 1.4,
-                      ),
-                    ),
+                    ],
                   ],
                 ),
                 if (topic.isNotEmpty) ...[

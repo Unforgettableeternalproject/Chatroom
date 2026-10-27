@@ -30,3 +30,31 @@ class RoomEvents:
                 return True
             except asyncio.TimeoutError:
                 return False
+
+
+class ReactionBus:
+    """表情回應的即時通道，**刻意與 RoomEvents 分開**。
+
+    RoomEvents 的 notify 會喚醒 long-poll 與 watcher；表情回應不是訊息，
+    不能叫醒任何 agent。這裡只有 WS 連線訂閱，payload 是被動到的 message_id，
+    訂閱端自己去 DB 重算彙總（DB 仍是唯一真相）。
+    """
+
+    def __init__(self) -> None:
+        self._subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
+
+    def subscribe(self, room_id: str) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self._subs[room_id].add(q)
+        return q
+
+    def unsubscribe(self, room_id: str, q: asyncio.Queue) -> None:
+        subs = self._subs.get(room_id)
+        if subs is not None:
+            subs.discard(q)
+            if not subs:
+                self._subs.pop(room_id, None)
+
+    def publish(self, room_id: str, message_id: str) -> None:
+        for q in list(self._subs.get(room_id, ())):
+            q.put_nowait(message_id)

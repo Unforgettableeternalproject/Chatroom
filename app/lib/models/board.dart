@@ -584,6 +584,9 @@ class BoardTask {
   /// 填不滿，就是分母沒扣的結果（艾斯維爾 2026-09-02）。
   bool get leftThisList => status == 'cancelled' || status == 'moved';
 
+  /// 這張卡現在能不能被搬走：看 [kTaskTransitions]，不另抄一份狀態表。
+  bool get isMovable => kTaskTransitions[status]?.contains('moved') ?? false;
+
   factory BoardTask.fromJson(Map<String, dynamic> json) => BoardTask(
     id: json['id'] as String,
     roomId: (json['room_id'] as String?) ?? '',
@@ -1324,6 +1327,36 @@ class BoardSnapshot {
     return [for (final o in out) o.id];
   }
 
+  /// 排序要送的那一份：**這個週期底下每一個沒被刪掉的階段**，照目前順序。
+  ///
+  /// ⚠️ 與 [checklistsOf] 差在**含被取消的**，理由同 [allObjectiveIdsInOrder]：
+  /// Hub 的全集檢查把 cancelled 當 sibling，少送就是 409 `reorder_incomplete`。
+  List<String> allChecklistIdsInOrder(String objectiveId) {
+    final out = checklists.values
+        .where((c) => c.objectiveId == objectiveId && !c.deleted)
+        .toList()
+      ..sort(
+        (a, b) => a.orderIndex != b.orderIndex
+            ? a.orderIndex.compareTo(b.orderIndex)
+            : a.createdAt.compareTo(b.createdAt),
+      );
+    return [for (final c in out) c.id];
+  }
+
+  /// 搬卡進得去的週期：**還在跑的**（active / review）。
+  /// 「搬到別處」對話框與拖放共用這一條，兩邊不會各自演化。
+  List<BoardObjective> get moveTargetObjectives => sortedObjectives
+      .where((o) => o.status == 'active' || o.status == 'review')
+      .toList();
+
+  /// 搬卡進得去的階段：該週期底下**還開著**、而且不是卡現在待的那一份。
+  /// 搬到自己原地不是一個搬法。
+  List<BoardChecklist> moveTargetChecklists(
+          String objectiveId, String fromChecklistId) =>
+      checklistsOf(objectiveId)
+          .where((c) => c.status == 'open' && c.id != fromChecklistId)
+          .toList();
+
   List<BoardChecklist> checklistsOf(String objectiveId) {
     final out =
         checklists.values
@@ -2015,6 +2048,16 @@ bool boardUnattached({
   required bool hasObjectives,
 }) =>
     loaded && boardId.isEmpty && !hasObjectives;
+
+/// 這張卡能不能拖進 [target] 這個階段（拖放搬卡的落點判斷）。
+///
+/// 與 [BoardSnapshot.moveTargetChecklists] 同一條規則（開著、不是原地），
+/// 再加上卡本身要搬得動。週期有沒有凍結由呼叫端看——那是週期的屬性。
+bool canMoveTaskInto(BoardTask task, BoardChecklist target) =>
+    task.isMovable &&
+    !target.deleted &&
+    target.status == 'open' &&
+    target.id != task.checklistId;
 
 /// 把 [ids] 依 Flutter `ReorderableListView.onReorder` 的語意搬一格。
 ///

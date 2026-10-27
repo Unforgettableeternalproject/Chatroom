@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../models/message.dart';
 import '../models/question.dart';
+import '../models/reaction.dart';
 import '../models/ws_event.dart';
 
 /// WS 協定的唯一定義處。server 的 /ws 是純 JSON text frame：
@@ -57,6 +58,12 @@ class WsProtocol {
         return WsBoardEvent(
           roomId: (data['room_id'] as String?) ?? '',
           boardSeq: (data['board_seq'] as int?) ?? 0,
+        );
+      case 'reaction':
+        return WsReactionEvent(
+          roomId: (data['room_id'] as String?) ?? '',
+          messageId: (data['message_id'] as String?) ?? '',
+          reactions: ReactionSummary.listFromJson(data['reactions']),
         );
       case 'pong':
         return const WsPongEvent();

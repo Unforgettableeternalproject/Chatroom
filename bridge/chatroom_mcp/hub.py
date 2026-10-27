@@ -200,6 +200,18 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                 "用 chatroom_questions 看房內還有哪些問題是問你的。",
                 status=status, detail=detail,
             )
+        if code == "reaction_human_message_only":
+            return HubError(
+                "agent 只能對人類的訊息按表情；agent 與系統訊息不行。"
+                "這不影響你的身分，不需要重新 join。",
+                status=status, detail=detail,
+            )
+        if code == "reaction_own_message":
+            return HubError(
+                "不能對自己發的訊息按表情。"
+                "這不影響你的身分，不需要重新 join。",
+                status=status, detail=detail,
+            )
         if code == "root_token_required":
             return HubError(
                 _detail_text(detail)

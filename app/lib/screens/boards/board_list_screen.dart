@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config/app_settings.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../core/errors/api_exception.dart';
+import '../../core/util/pin_sort.dart';
 import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
@@ -183,6 +185,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
     final boardsAsync = ref.watch(boardLibraryProvider(_status));
+    final pinnedBoards = ref.watch(pinnedIdsProvider(PinKind.board));
     final hostOn = ref.watch(hostViewProvider);
 
     return Container(
@@ -272,7 +275,9 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                   ? const _LibraryNotReady()
                   : ErrorState(error: e, onRetry: _refresh),
               data: (lib) {
-                final boards = lib.boards;
+                // 關注的板置頂，其餘維持 Hub 給的順序
+                final boards =
+                    pinnedFirst(lib.boards, (b) => pinnedBoards.contains(b.id));
                 if (boards.isEmpty) {
                   return ListView(children: [
                     const SizedBox(height: 120),
@@ -294,6 +299,10 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                   itemBuilder: (_, i) => _BoardTile(
                     board: boards[i],
                     selected: boards[i].id == widget.selectedBoardId,
+                    pinned: pinnedBoards.contains(boards[i].id),
+                    onTogglePin: () => ref
+                        .read(pinnedIdsProvider(PinKind.board).notifier)
+                        .toggle(boards[i].id),
                     onTap: () => context.go('/boards/${boards[i].id}'),
                     // 只有 owner 給得到這顆——Hub 那邊 `_board_owner_or_403`
                     // 擋著，畫一顆必然拿 403 的按鈕比不畫更難懂
@@ -415,14 +424,20 @@ class _BoardStatusToggle extends StatelessWidget {
 class _BoardMenu extends StatelessWidget {
   const _BoardMenu({
     required this.archived,
-    required this.onToggleArchive,
-    required this.onRename,
+    required this.pinned,
+    required this.onTogglePin,
+    this.onToggleArchive,
+    this.onRename,
     this.onDelete,
   });
 
   final bool archived;
-  final VoidCallback onToggleArchive;
-  final VoidCallback onRename;
+  final bool pinned;
+  final VoidCallback onTogglePin;
+
+  /// 封存與改名只有 owner 給得到（null ＝不畫）；關注是純本機偏好，人人都有。
+  final VoidCallback? onToggleArchive;
+  final VoidCallback? onRename;
   final VoidCallback? onDelete;
 
   @override
@@ -442,17 +457,29 @@ class _BoardMenu extends StatelessWidget {
       // 只有一個項目時那樣寫沒事，多一個項目就會變成「按改名結果封存了」，
       // 而且不會有任何地方報錯
       onSelected: (v) => switch (v) {
-        'rename' => onRename(),
+        'pin' => onTogglePin(),
+        'rename' => onRename?.call(),
         'delete' => onDelete?.call(),
-        _ => onToggleArchive(),
+        _ => onToggleArchive?.call(),
       },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pin',
+          height: 36,
+          child: Text(
+              pinned
+                  ? AppLocalizations.of(context).commonUnpin
+                  : AppLocalizations.of(context).commonPin,
+              style: UepText.sans(size: 13.5, color: s.ink)),
+        ),
+        if (onRename != null)
         PopupMenuItem(
           value: 'rename',
           height: 36,
           child: Text(AppLocalizations.of(context).boardMenuRename,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ),
+        if (onToggleArchive != null)
         PopupMenuItem(
           value: 'archive',
           height: 36,
@@ -480,6 +507,8 @@ class _BoardTile extends StatelessWidget {
     required this.board,
     required this.selected,
     required this.onTap,
+    required this.pinned,
+    required this.onTogglePin,
     this.onToggleArchive,
     this.onRename,
     this.onDelete,
@@ -488,6 +517,10 @@ class _BoardTile extends StatelessWidget {
   final BoardSummary board;
   final bool selected;
   final VoidCallback onTap;
+
+  /// 已關注：標題前畫金色圖釘。選中是底色＋左邊條，兩者可並存。
+  final bool pinned;
+  final VoidCallback onTogglePin;
 
   /// 封存／解除封存。`null` = 不是 owner，不畫那顆選單。
   ///
@@ -523,6 +556,12 @@ class _BoardTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
+              if (pinned) ...[
+                Icon(Icons.push_pin,
+                    size: 12,
+                    color: board.isArchived ? s.inkMute : UepColors.gold),
+                const SizedBox(width: 5),
+              ],
               Expanded(
                 child: Text(
                   board.name.isEmpty
@@ -571,15 +610,15 @@ class _BoardTile extends StatelessWidget {
               // 封存入口。**與 ROOMS 那顆對齊**（同樣的 more_horiz、同樣的
               // 尺寸與選單樣式）——兩個清單做同一件事，長得不一樣只會讓人
               // 以為它們是不同的東西
-              if (onToggleArchive != null) ...[
-                const SizedBox(width: 4),
-                _BoardMenu(
-                  archived: board.isArchived,
-                  onToggleArchive: onToggleArchive!,
-                  onRename: onRename ?? () {},
-                  onDelete: onDelete,
-                ),
-              ],
+              const SizedBox(width: 4),
+              _BoardMenu(
+                archived: board.isArchived,
+                pinned: pinned,
+                onTogglePin: onTogglePin,
+                onToggleArchive: onToggleArchive,
+                onRename: onRename,
+                onDelete: onDelete,
+              ),
             ]),
             // 別人的板：**說出是誰的**。
             //
@@ -676,28 +715,91 @@ class _NoticesButton extends ConsumerWidget {
           data: (d) => d.unread,
           orElse: () => 0,
         );
-    return IconButton(
-      tooltip: unread == 0
-          ? AppLocalizations.of(context).boardWatchNoticesTitle
-          : AppLocalizations.of(context).boardWatchNoticesTitleUnread(unread),
-      visualDensity: VisualDensity.compact,
-      onPressed: () => context.go('/notices'),
-      icon: Stack(clipBehavior: Clip.none, children: [
-        Icon(Icons.notifications_none,
-            size: 15, color: unread == 0 ? s.inkMute : UepColors.gold),
-        if (unread > 0)
-          Positioned(
-            right: -3,
-            top: -3,
-            child: Container(
-              width: 7,
-              height: 7,
-              decoration: const BoxDecoration(
-                  color: UepColors.gold, shape: BoxShape.circle),
-            ),
-          ),
-      ]),
+    // 右鍵（桌面）／長按（行動）開選單。長按在行動端會同時觸發 Tooltip，
+    // 兩者搶同一個手勢，所以 tooltip 改由外層 Tooltip 以 manual 模式提供
+    // （hover 照常顯示，長按留給選單）
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onSecondaryTapUp: (d) => _showMenu(context, ref, d.globalPosition, unread),
+      onLongPressStart: (d) => _showMenu(context, ref, d.globalPosition, unread),
+      child: Tooltip(
+        message: unread == 0
+            ? AppLocalizations.of(context).boardWatchNoticesTitle
+            : AppLocalizations.of(context).boardWatchNoticesTitleUnread(unread),
+        triggerMode: TooltipTriggerMode.manual,
+        child: IconButton(
+          visualDensity: VisualDensity.compact,
+          onPressed: () => context.go('/notices'),
+          icon: Stack(clipBehavior: Clip.none, children: [
+            Icon(Icons.notifications_none,
+                size: 15, color: unread == 0 ? s.inkMute : UepColors.gold),
+            if (unread > 0)
+              Positioned(
+                right: -3,
+                top: -3,
+                child: Container(
+                  width: 7,
+                  height: 7,
+                  decoration: const BoxDecoration(
+                      color: UepColors.gold, shape: BoxShape.circle),
+                ),
+              ),
+          ]),
+        ),
+      ),
     );
+  }
+
+  /// 右鍵選單。座標處理同 message_bubble 的 `_showMenu`（root overlay 與
+  /// root navigator 成對指定，選單才會落在游標上）。
+  Future<void> _showMenu(
+      BuildContext context, WidgetRef ref, Offset globalPos, int unread) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final overlay = Overlay.of(context, rootOverlay: true)
+        .context
+        .findRenderObject()! as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      useRootNavigator: true,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(globalPos, globalPos),
+        Offset.zero & overlay.size,
+      ),
+      color: s.bgCard,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: s.lineStrong),
+      ),
+      items: [
+        // 沒有未讀就停用，不隱藏——選單形狀固定，使用者知道有這個動作
+        PopupMenuItem(
+          value: 'markAllRead',
+          enabled: unread > 0,
+          height: 36,
+          child: Text(l10n.boardWatchMarkAllRead,
+              style: UepText.sans(
+                  size: 13.5, color: unread > 0 ? s.ink : s.inkMute)),
+        ),
+      ],
+    );
+    if (choice != 'markAllRead' || !context.mounted) return;
+    // 沿用通知頁「全部標為已讀」的同一支 API（Hub 端 all=true，單次請求）
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final n = await ref.read(watchApiProvider).markRead(
+            sessionKey: ref.read(appConfigProvider).deviceKey,
+            all: true,
+          );
+      ref.invalidate(watchNoticesProvider);
+      messenger.showSnackBar(SnackBar(
+        content: Text(n == 0
+            ? l10n.boardWatchNoUnread
+            : l10n.boardWatchMarkedRead(n)),
+      ));
+    } on ApiException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 }
 
