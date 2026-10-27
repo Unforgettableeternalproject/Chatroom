@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -95,8 +93,8 @@ class _StartupSplashGateState extends ConsumerState<StartupSplashGate> {
   }
 }
 
-/// Loading 畫面本體：字樣淡入後緩慢呼吸，下方一條細金線同步明滅。
-/// [reduceMotion] 時不做任何動畫，直接靜態顯示。
+/// Loading 畫面本體：上方 App Logo 緩速連續旋轉，下方是字樣。
+/// 整體淡入；[reduceMotion] 時 Logo 靜止、不做淡入。
 class StartupSplash extends StatefulWidget {
   const StartupSplash({
     super.key,
@@ -120,7 +118,7 @@ class _StartupSplashState extends State<StartupSplash>
     super.initState();
     _c = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2400),
+      duration: const Duration(milliseconds: 1800),
     );
     if (!widget.reduceMotion) _c.repeat();
   }
@@ -144,54 +142,51 @@ class _StartupSplashState extends State<StartupSplash>
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    return ColoredBox(
+    final content = _content(s);
+    // splash 掛在 MaterialApp.builder 內、不在 Scaffold 底下，沒有 Material 祖先時
+    // Text 會退回預設樣式（黃色雙底線）；這裡自己補上
+    return Material(
+      type: MaterialType.canvas,
       color: s.bg,
       child: Center(
         child: widget.reduceMotion
-            ? _content(s, 1, 1)
-            : AnimatedBuilder(
-                animation: _c,
-                builder: (context, _) {
-                  // 前 0.35 個週期從 0 淡入，之後在 0.65~1 之間呼吸
-                  final t = _c.value;
-                  final breathe = 0.82 + 0.18 * math.sin(t * 2 * math.pi);
-                  return TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 0, end: 1),
-                    duration: const Duration(milliseconds: 700),
-                    curve: Curves.easeOut,
-                    builder: (context, fadeIn, _) =>
-                        _content(s, fadeIn, breathe),
-                  );
-                },
+            ? content
+            : TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.easeOut,
+                builder: (context, v, child) =>
+                    Opacity(opacity: v, child: child),
+                child: content,
               ),
       ),
     );
   }
 
-  Widget _content(UepSurface s, double fadeIn, double breathe) {
-    return Opacity(
-      opacity: (fadeIn * breathe).clamp(0.0, 1.0),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              widget.text,
-              textAlign: TextAlign.center,
-              style: UepText.display(size: 28, color: s.inkTitle),
-            ),
-            const SizedBox(height: 18),
-            Container(
-              width: 36,
-              height: 2,
-              decoration: BoxDecoration(
-                color: UepColors.gold,
-                borderRadius: BorderRadius.circular(1),
-              ),
-            ),
-          ],
-        ),
+  Widget _content(UepSurface s) {
+    const logoSize = 72.0;
+    Widget logo = Image.asset(
+      'assets/logo.png',
+      width: logoSize,
+      height: logoSize,
+      filterQuality: FilterQuality.medium,
+    );
+    if (!widget.reduceMotion) {
+      logo = RotationTransition(turns: _c, child: logo);
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          logo,
+          const SizedBox(height: 28),
+          Text(
+            widget.text,
+            textAlign: TextAlign.center,
+            style: UepText.display(size: 17, color: s.inkSoft),
+          ),
+        ],
       ),
     );
   }

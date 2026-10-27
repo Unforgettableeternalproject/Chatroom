@@ -85,4 +85,54 @@ void main() {
     await tester.pump();
     expect(find.text('正在進入聊天室'), findsNothing);
   });
+
+  testWidgets('Logo 在旋轉；字樣無 fallback 樣式（無底線、有 Material 祖先）', (tester) async {
+    await _mount(tester, inits: [
+      () => Future<void>.delayed(const Duration(seconds: 3)),
+    ]);
+    final logo = find.descendant(
+      of: find.byType(StartupSplash),
+      matching: find.byType(Image),
+    );
+    expect(logo, findsOneWidget);
+    expect((tester.widget<Image>(logo).image as AssetImage).assetName,
+        'assets/logo.png');
+
+    double turns() =>
+        tester.widget<RotationTransition>(find.byType(RotationTransition))
+            .turns
+            .value;
+    final t0 = turns();
+    await tester.pump(const Duration(milliseconds: 450));
+    expect(turns(), isNot(t0));
+
+    final textFinder = find.text('正在進入聊天室');
+    final style = tester
+        .widget<RichText>(find
+            .descendant(of: textFinder, matching: find.byType(RichText))
+            .first)
+        .text
+        .style!;
+    expect(style.decoration, anyOf(isNull, TextDecoration.none));
+    expect(
+      find.ancestor(of: textFinder, matching: find.byType(Material)),
+      findsWidgets,
+    );
+    // 實際生效的樣式（含 DefaultTextStyle）也不能有底線
+    final effective = DefaultTextStyle.of(tester.element(textFinder)).style;
+    expect(effective.decoration, anyOf(isNull, TextDecoration.none));
+
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('減少動態效果：Logo 靜止、沒有旋轉', (tester) async {
+    await _mount(tester, disableAnimations: true);
+    expect(find.byType(RotationTransition), findsNothing);
+    expect(
+      find.descendant(
+          of: find.byType(StartupSplash), matching: find.byType(Image)),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 2));
+  });
 }
