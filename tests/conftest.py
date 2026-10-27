@@ -35,3 +35,15 @@ def _no_ambient_chatroom_env():
         yield
     finally:
         os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_watcher_state(request, tmp_path, monkeypatch):
+    """watcher 的游標檔跟著 state 路徑走；不導開的話會寫進真實家目錄，
+    測試之間互相污染（上一個測試推進的游標讓下一個測試收不到事件）。
+
+    只套在 watcher 的測試檔：其餘測試要的是「沒有任何 `CHATROOM_*`」
+    （見 test_env_isolation），不能為了 watcher 一律塞一個進去。
+    """
+    if "watch" in request.node.module.__name__:
+        monkeypatch.setenv("CHATROOM_STATE_PATH", str(tmp_path / "state.json"))
