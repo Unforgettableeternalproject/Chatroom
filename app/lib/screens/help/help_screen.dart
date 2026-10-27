@@ -897,7 +897,8 @@ class _HelpScreenState extends State<HelpScreen> {
           if (!wide) return content;
           return Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: kPageMaxWidth + 200),
+              constraints:
+                  const BoxConstraints(maxWidth: kHelpContentMaxWidth + 200),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -907,8 +908,8 @@ class _HelpScreenState extends State<HelpScreen> {
                   ),
                   Expanded(
                     child: ConstrainedBox(
-                      constraints:
-                          const BoxConstraints(maxWidth: kPageMaxWidth),
+                      constraints: const BoxConstraints(
+                          maxWidth: kHelpContentMaxWidth),
                       child: content,
                     ),
                   ),
