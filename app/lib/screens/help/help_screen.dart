@@ -873,26 +873,32 @@ class _HelpScreenState extends State<HelpScreen> {
         builder: (context, constraints) {
           // 寬視窗左邊擺一欄分節導覽；窄的時候收成頂部一列水平 chip
           final wide = constraints.maxWidth >= 900;
-          final content = ListView(
+          // 不能用 ListView：它只建視窗附近的子項，導覽點到還沒建出來的節
+          // 時 key.currentContext 是 null，點了就靜默不動。說明文件是固定的
+          // 靜態內容，整份建出來的成本可忽略，換來任何捲動位置都捲得到。
+          final content = SingleChildScrollView(
             padding: const EdgeInsets.all(32),
-            children: [
-              MonoLabel(l10n.helpTooltip),
-              const SizedBox(height: 6),
-              Text(doc.title,
-                  style: UepText.pageTitle(color: s.inkTitle)),
-              const SizedBox(height: 22),
-              if (!wide) ...[
-                _NavChips(doc: doc, onTap: _jumpTo),
-                const SizedBox(height: 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                MonoLabel(l10n.helpTooltip),
+                const SizedBox(height: 6),
+                Text(doc.title,
+                    style: UepText.pageTitle(color: s.inkTitle)),
+                const SizedBox(height: 22),
+                if (!wide) ...[
+                  _NavChips(doc: doc, onTap: _jumpTo),
+                  const SizedBox(height: 18),
+                ],
+                for (var i = 0; i < doc.sections.length; i++) ...[
+                  _SectionView(
+                    key: _sectionKeys[i],
+                    section: doc.sections[i],
+                  ),
+                  if (i != doc.sections.length - 1) const SizedBox(height: 36),
+                ],
               ],
-              for (var i = 0; i < doc.sections.length; i++) ...[
-                _SectionView(
-                  key: _sectionKeys[i],
-                  section: doc.sections[i],
-                ),
-                if (i != doc.sections.length - 1) const SizedBox(height: 36),
-              ],
-            ],
+            ),
           );
           if (!wide) return content;
           return Center(
@@ -942,6 +948,7 @@ class _NavColumn extends StatelessWidget {
           const SizedBox(height: 10),
           for (var i = 0; i < doc.sections.length; i++)
             InkWell(
+              key: ValueKey('help-nav-$i'),
               onTap: () => onTap(i),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7),
@@ -979,6 +986,7 @@ class _NavChips extends StatelessWidget {
       children: [
         for (var i = 0; i < doc.sections.length; i++)
           InkWell(
+            key: ValueKey('help-nav-$i'),
             onTap: () => onTap(i),
             child: Container(
               padding:
