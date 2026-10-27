@@ -1109,6 +1109,11 @@ class _RunStatusChip extends StatelessWidget {
 /// 兩種——同一個狀態在兩個畫面上長不一樣的話，人會以為那是兩件事。
 (String, Color) opsRunStatusLabel(BuildContext context, AgentRun run) =>
     switch (run.status) {
+      // 領單後卡在 repo 鎖上、前一筆還沒結束：還沒開始跑，顯示排隊
+      'running' when run.reason == 'repo_lock_wait' => (
+          AppLocalizations.of(context).opsRunStatusQueued,
+          context.uep.inkMute
+        ),
       'running' || 'claimed' => (
           AppLocalizations.of(context).opsRunStatusRunning,
           UepColors.gold

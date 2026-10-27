@@ -1087,6 +1087,52 @@ async def test_stall_marking_is_off_when_the_threshold_is_zero(
     await loop.shutdown()
 
 
+async def test_a_run_queued_on_the_repo_lock_is_not_marked_stalled(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path):
+    """排隊等 repo 鎖的 run 超過門檻也不能被判「沒有輸出」。
+
+    它還沒起進程（單一寫入者的房間裡等前一筆結束），沒有輸出是正常的。
+    無輸出計時要從拿到鎖、真的開始跑才起算。
+    """
+    clock = {"t": 0.0}
+    cfg = make_config(tmp_path, work_repo, stall_warn_seconds=600)
+    gate = asyncio.Event()
+    stub = StubExecutor(gate)
+    stub.last_event_at = 0.0
+    stub.waiting_for_lock = True
+    loop = RunnerLoop(cfg, runner_hub, monotonic=lambda: clock["t"],
+                      executor_factory=lambda: stub)
+    await _register(loop)
+    _app, client = hub_app
+    room_id, headers = ops_room
+    await create_run(client, room_id, headers, ref="task-queued")
+    await loop.tick()
+    active = next(iter(loop.active.values()))
+
+    clock["t"] = 1200.0
+    for _ in range(3):
+        await loop.heartbeat()
+    assert not active.stalled and active.stall_marks == 0, \
+        "排隊中被當成沒有輸出"
+    msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                             headers=headers)).json()["messages"]
+    assert not [m for m in msgs if m["system_event"] == "run_stalled"]
+
+    # 拿到鎖：旗標清掉、活動時間重設（執行器做的事），從這刻起才開始算
+    stub.waiting_for_lock = False
+    stub.last_event_at = clock["t"]
+    clock["t"] = 1200.0 + 599.0
+    await loop.heartbeat()
+    assert not active.stalled, "開始執行不到門檻就被判停滯"
+    clock["t"] = 1200.0 + 601.0
+    await loop.heartbeat()
+    assert active.stalled and active.stall_marks == 1
+    assert active.stalled_seconds == 601, "要從開始執行起算，不含排隊的時間"
+
+    gate.set()
+    await loop.shutdown()
+
+
 # ── 身分落地（審查 09/21 P1）────────────────────────────────────
 
 async def test_registration_is_persisted_before_any_run(

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../l10n/l10n.dart';
 import 'attachment.dart';
+import 'reaction.dart';
 
 @immutable
 class ReplyPreview {
@@ -127,6 +128,7 @@ class Message {
     this.deleted = false,
     this.systemEvent,
     this.attachments = const [],
+    this.reactions = const [],
   });
 
   final String id;
@@ -190,6 +192,35 @@ class Message {
 
   /// 夾帶的檔案（內容在 Hub 的磁碟上，這裡只有 metadata）。
   final List<Attachment> attachments;
+
+  /// 表情回應彙總。**不是訊息內容、不推進 cursor**：變動走 WS 的 `reaction`
+  /// 事件（[RoomFeed.setReactions]）。舊版 Hub 不回這個欄位，缺了就是空。
+  final List<ReactionSummary> reactions;
+
+  /// 換掉表情彙總，其餘原樣。
+  Message withReactions(List<ReactionSummary> next) => Message(
+        id: id,
+        seq: seq,
+        updateSeq: updateSeq,
+        kind: kind,
+        content: content,
+        createdAt: createdAt,
+        senderId: senderId,
+        senderName: senderName,
+        senderKind: senderKind,
+        mentions: mentions,
+        mentionGroups: mentionGroups,
+        cardRefs: cardRefs,
+        editedAt: editedAt,
+        replyTo: replyTo,
+        replyToSeq: replyToSeq,
+        replyPreview: replyPreview,
+        pinned: pinned,
+        deleted: deleted,
+        systemEvent: systemEvent,
+        attachments: attachments,
+        reactions: next,
+      );
 
   /// 有人加入房間。dispatcher 據此喚醒房內的本機 agent。
   bool get isMemberJoined => systemEvent == 'join';
@@ -258,12 +289,16 @@ class Message {
         attachments: ((json['attachments'] as List?) ?? const [])
             .map((e) => Attachment.fromJson(e as Map<String, dynamic>))
             .toList(),
+        reactions: ReactionSummary.listFromJson(json['reactions']),
       );
 
   @override
   bool operator ==(Object other) =>
-      other is Message && other.id == id && other.cursor == cursor;
+      other is Message &&
+      other.id == id &&
+      other.cursor == cursor &&
+      listEquals(other.reactions, reactions);
 
   @override
-  int get hashCode => Object.hash(id, cursor);
+  int get hashCode => Object.hash(id, cursor, Object.hashAll(reactions));
 }

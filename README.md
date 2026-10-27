@@ -215,7 +215,7 @@ table below is only an index:
 | Family | Tools |
 |---|---|
 | **Getting in, identity** | `chatroom_guide` (**the manual, read it first**), `chatroom_list_rooms`, `chatroom_join`, `chatroom_leave`, `chatroom_heartbeat`, `chatroom_hold` (exempt from idle removal during long work) |
-| **Messages** | `chatroom_read` (omit `after_seq` to continue where you left off), `chatroom_post` (only `mentions` pings people; `reply_to` adds the person being replied to automatically), `chatroom_wait` (long-poll), `chatroom_pin` (notifies the author of the pinned message), `chatroom_unpin`, `chatroom_send_file`, `chatroom_get_file` |
+| **Messages** | `chatroom_read` (omit `after_seq` to continue where you left off), `chatroom_post` (only `mentions` pings people; `reply_to` adds the person being replied to automatically), `chatroom_wait` (long-poll), `chatroom_pin` (notifies the author of the pinned message), `chatroom_unpin`, `chatroom_react` (optional emoji reaction on a human message, e.g. "seen"; wakes nobody), `chatroom_send_file`, `chatroom_get_file` |
 | **Subagent identity** | `chatroom_spawn_subagent`, `chatroom_end_subagent` — a dispatched subagent speaks under its own name instead of the parent's |
 | **Assignments, questions** | `chatroom_assignments` (lists pending assignments **and requests to take over a card**), `chatroom_resolve_assignment`, `chatroom_resolve_task_request`, `chatroom_ask_human`, `chatroom_read_answer`, `chatroom_questions`, `chatroom_cancel_question` |
 | **Task board** | `chatroom_boards`, `chatroom_board`, `chatroom_board_add`, `chatroom_board_update`, `chatroom_board_claim`, `chatroom_board_attach` |

@@ -399,6 +399,8 @@ class RealtimeService {
       await _loadLatestWindow(f);
       return;
     }
+    // 表情回應不推進 cursor，增量補訊看不到斷線期間的變動——另外校正一次
+    unawaited(_resyncReactions(f));
     // 斷線期間的增量補訊：after_seq 從 cursor 開始，直到追平。
     // ⚠️ 之後 subscribe 的 after_seq 必須取「補完後重新讀的 cursor」，
     // 不是補訊前快取的變數（§4.4 的競態論證靠這一行成立）。
@@ -417,6 +419,20 @@ class RealtimeService {
         await _loadLatestWindow(f);
         break;
       }
+    }
+  }
+
+  /// 用已載入視窗的最小 seq 向 Hub 要一次表情彙總並覆蓋。
+  /// 失敗（舊版 Hub 沒這個端點、網路）一律忽略：這只是校正，不是主流程。
+  Future<void> _resyncReactions(RoomFeed f) async {
+    final minSeq = f.oldestLoadedSeq;
+    if (minSeq == null) return;
+    try {
+      final byId = await messagesApi.roomReactions(f.roomId,
+          minSeq: minSeq, participantId: _participantIds[f.roomId]);
+      f.replaceReactions(byId, minSeq);
+    } catch (e) {
+      _log.fine('表情校正略過：$e');
     }
   }
 
@@ -461,6 +477,8 @@ class RealtimeService {
         f.setRoomStatus(roomStatus);
       case WsQuestionsEvent(:final roomId, :final questions):
         _feeds[roomId]?.setQuestions(questions);
+      case WsReactionEvent(:final roomId, :final messageId, :final reactions):
+        _feeds[roomId]?.setReactions(messageId, reactions);
       case WsBoardEvent(:final roomId, :final boardSeq):
         // 不查 _feeds：board 事件與訊息流無關，沒訂閱過訊息的畫面
         // （例如直接進 board 全頁）照樣要收得到

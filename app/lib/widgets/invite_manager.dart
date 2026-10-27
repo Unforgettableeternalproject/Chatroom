@@ -34,6 +34,12 @@ String inviteErrorText(Object error) => switch (error) {
       _ => L10n.current.inviteErrorListFailed,
     };
 
+/// 邀請清單最多自然展開幾列，超過就固定高度改成捲動。
+const inviteListMaxRows = 4;
+
+/// 清單一列的高度（單行名稱＋副標＋緊湊圖示鈕，含分隔線）。
+const inviteRowHeight = 60.0;
+
 /// 設定頁的「邀請成員」區塊：發一份邀請給還沒連上 Hub 的人，以及收回已發出的。
 ///
 /// 只有持主憑證的人能用；其他人拿到 403，這裡把它畫成說明而不是錯誤
@@ -47,6 +53,7 @@ class InviteManager extends ConsumerStatefulWidget {
 
 class _InviteManagerState extends ConsumerState<InviteManager> {
   final _label = TextEditingController();
+  final _scroll = ScrollController();
   bool _busy = false;
 
   /// 主持人上次手填的對外位址。隧道網址每次重啟都會變，但內網／VPN 的 IP
@@ -56,6 +63,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
   @override
   void dispose() {
     _label.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -338,6 +346,79 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
     }
   }
 
+  /// 換發憑證：舊的立刻失效，成員身分不變。確認後把新的憑證交給主持人。
+  Future<void> _rotate(AccessToken t) async {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final who = t.label.isEmpty ? l10n.inviteThisToken : t.label;
+    final isAgent = t.audience == 'agent';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: s.bgCard,
+        title: Text(l10n.inviteRotateTitle,
+            style: UepText.pageTitle(color: s.inkTitle)),
+        content: Text(
+          isAgent
+              ? l10n.inviteRotateAgentBody(who)
+              : l10n.inviteRotateBody(who),
+          style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.7),
+        ),
+        actions: [
+          UepButton(
+            label: l10n.commonCancel,
+            variant: UepButtonVariant.outline,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          UepButton(
+            label: l10n.inviteRotateAction,
+            variant: UepButtonVariant.danger,
+            small: true,
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (!(ok ?? false)) return;
+    setState(() => _busy = true);
+    try {
+      final fresh = await ref.read(tokensApiProvider).rotate(t.token);
+      ref.invalidate(accessTokensProvider);
+      if (!mounted) return;
+      if (isAgent) {
+        await _showAgentToken(fresh.token, fresh.label);
+      } else {
+        await _showCode(fresh.token, fresh.label);
+      }
+    } on ApiException catch (e) {
+      ref.invalidate(accessTokensProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(inviteErrorText(e))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 超過 [inviteListMaxRows] 筆時固定高度並可捲動；以內維持自然高度。
+  Widget _limited(List<Widget> rows) {
+    if (rows.length <= inviteListMaxRows) return Column(children: rows);
+    return SizedBox(
+      key: const ValueKey('invite-list-scroll'),
+      height: inviteListMaxRows * inviteRowHeight,
+      child: Scrollbar(
+        controller: _scroll,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          controller: _scroll,
+          child: Column(children: rows),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -403,7 +484,7 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
         data: (tokens) => tokens.isEmpty
             ? Text(l10n.inviteNoneIssued,
                 style: UepText.serif(size: 13, color: s.inkMute))
-            : Column(children: [
+            : _limited([
                 for (final t in tokens)
                   Container(
                     padding: const EdgeInsets.symmetric(vertical: 9),
@@ -475,6 +556,13 @@ class _InviteManagerState extends ConsumerState<InviteManager> {
                               size: 15, color: s.inkMute),
                         ),
                       ],
+                      IconButton(
+                        tooltip: l10n.inviteRotateAction,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: _busy ? null : () => _rotate(t),
+                        icon: Icon(Icons.autorenew,
+                            size: 15, color: s.inkMute),
+                      ),
                       IconButton(
                         tooltip: l10n.inviteRevokeAction,
                         visualDensity: VisualDensity.compact,

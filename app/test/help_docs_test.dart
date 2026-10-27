@@ -21,11 +21,13 @@ void main() {
     test('分組小標指得到真的存在的條目（$locale）', () {
       for (final entry in docs.entries) {
         for (final section in entry.value.sections) {
-          for (final at in section.groups.entries) {
-            expect(at.key, inInclusiveRange(0, section.items.length - 1),
-                reason: '${entry.key} 的「${section.title}」分組指到第 ${at.key} 條，'
-                    '但那一節只有 ${section.items.length} 條');
-            expect(at.value, isNotEmpty);
+          for (final block in section.blocks.whereType<HelpItemsBlock>()) {
+            for (final at in block.groups.entries) {
+              expect(at.key, inInclusiveRange(0, block.items.length - 1),
+                  reason: '${entry.key} 的「${section.title}」分組指到第 ${at.key} 條，'
+                      '但那個清單只有 ${block.items.length} 條');
+              expect(at.value, isNotEmpty);
+            }
           }
         }
       }
@@ -35,17 +37,19 @@ void main() {
     test('粗體小標後面要有內文（$locale）', () {
       for (final entry in docs.entries) {
         for (final section in entry.value.sections) {
-          for (final item in section.items) {
-            if (!item.hasLead) continue;
-            expect(item.chunks.length, greaterThan(1),
-                reason: '${entry.key} 的「${section.title}」有一條只有小標'
-                    '「${item.chunks.first.text}」');
+          for (final block in section.blocks.whereType<HelpItemsBlock>()) {
+            for (final item in block.items) {
+              if (!item.hasLead) continue;
+              expect(item.chunks.length, greaterThan(1),
+                  reason: '${entry.key} 的「${section.title}」有一條只有小標'
+                      '「${item.chunks.first.text}」');
+            }
           }
         }
       }
     });
 
-    test('每一節都有標題與至少一條說明（$locale）', () {
+    test('每一節都有標題與至少一個區塊（$locale）', () {
       for (final entry in docs.entries) {
         final doc = entry.value;
         expect(doc.title, isNotEmpty);
@@ -53,12 +57,59 @@ void main() {
         for (final section in doc.sections) {
           expect(section.label, isNotEmpty);
           expect(section.title, isNotEmpty);
-          expect(section.items, isNotEmpty,
+          expect(section.blocks, isNotEmpty,
               reason: '${entry.key} 的「${section.title}」是空的');
-          for (final item in section.items) {
-            expect(item.chunks, isNotEmpty);
-            for (final chunk in item.chunks) {
-              expect(chunk.text, isNotEmpty);
+          if (section.intro != null) expect(section.intro, isNotEmpty);
+        }
+      }
+    });
+
+    // 鍵漏翻、翻成空字串，在畫面上是一格空白——每種區塊的每個字串都驗。
+    test('各區塊的文字都不是空的、表格欄數對得上（$locale）', () {
+      for (final entry in docs.entries) {
+        for (final section in entry.value.sections) {
+          final where = '${entry.key} 的「${section.title}」';
+          for (final block in section.blocks) {
+            switch (block) {
+              case HelpItemsBlock():
+                expect(block.items, isNotEmpty, reason: where);
+                for (final item in block.items) {
+                  expect(item.chunks, isNotEmpty, reason: where);
+                  for (final chunk in item.chunks) {
+                    expect(chunk.text, isNotEmpty, reason: where);
+                  }
+                }
+              case HelpCardsBlock():
+                expect(block.cards, isNotEmpty, reason: where);
+                for (final c in block.cards) {
+                  expect(c.title, isNotEmpty, reason: where);
+                  expect(c.body, isNotEmpty, reason: where);
+                  expect(c.subtitle, isNotEmpty, reason: where);
+                }
+              case HelpTableBlock():
+                expect(block.rows, isNotEmpty, reason: where);
+                for (final h in block.headers) {
+                  expect(h, isNotEmpty, reason: where);
+                }
+                for (final row in block.rows) {
+                  expect(row.length, block.headers.length,
+                      reason: '$where 有一列欄數與表頭不同：$row');
+                  for (final cell in row) {
+                    expect(cell, isNotEmpty, reason: '$where 有空白儲存格：$row');
+                  }
+                }
+              case HelpCalloutBlock():
+                expect(block.text, isNotEmpty, reason: where);
+              case HelpStepsBlock():
+                expect(block.steps, isNotEmpty, reason: where);
+                for (final step in block.steps) {
+                  expect(step.title, isNotEmpty, reason: where);
+                  if (step.body != null) {
+                    expect(step.body, isNotEmpty, reason: where);
+                  }
+                }
+              case HelpParagraphBlock():
+                expect(block.text, isNotEmpty, reason: where);
             }
           }
         }

@@ -385,6 +385,7 @@ def test_all_tools_registered_with_chinese_docstrings():
         "chatroom_list_rooms", "chatroom_join", "chatroom_leave", "chatroom_read",
         "chatroom_post", "chatroom_wait", "chatroom_pin", "chatroom_unpin",
         "chatroom_heartbeat", "chatroom_assignments", "chatroom_resolve_assignment",
+        "chatroom_react",
     }
     for name in expected:
         fn = getattr(srv, name)

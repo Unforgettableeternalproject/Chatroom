@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
+import '../../core/util/pin_sort.dart';
 import '../../core/util/relative_time.dart';
 import '../../l10n/l10n.dart';
 import '../../models/room.dart';
@@ -118,6 +120,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
     final roomsAsync = ref.watch(roomListProvider(_status));
+    final pinnedRooms = ref.watch(pinnedIdsProvider(PinKind.room));
 
     return Container(
       color: s.bgSoft,
@@ -215,7 +218,7 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                 data: (result) {
                   final allRooms = result.rooms;
                   final query = _search.text.trim().toLowerCase();
-                  final rooms = query.isEmpty
+                  final filtered = query.isEmpty
                       ? allRooms
                       : allRooms
                             .where(
@@ -224,6 +227,11 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
                                   r.topic.toLowerCase().contains(query),
                             )
                             .toList();
+                  // 關注的房間置頂（在搜尋／分頁過濾之後，其餘順序不變）
+                  final rooms = pinnedFirst(
+                    filtered,
+                    (r) => pinnedRooms.contains(r.id),
+                  );
                   if (rooms.isEmpty) {
                     return ListView(
                       children: [
@@ -350,6 +358,7 @@ class _RoomTile extends ConsumerWidget {
     final unread =
         ref.watch(settingsRepoProvider).lastReadSeq(room.id) < room.lastSeq &&
         !selected;
+    final pinned = ref.watch(pinnedIdsProvider(PinKind.room)).contains(room.id);
 
     return InkWell(
       onTap: onTap,
@@ -373,6 +382,16 @@ class _RoomTile extends ConsumerWidget {
                 Expanded(
                   child: Row(
                     children: [
+                      // 關注標記：金色圖釘。選中是整張卡的底色＋左邊條，
+                      // 關注只在標題前加這顆小圖示，兩者互不覆蓋
+                      if (pinned) ...[
+                        Icon(
+                          Icons.push_pin,
+                          size: 12,
+                          color: room.isArchived ? s.inkMute : UepColors.gold,
+                        ),
+                        const SizedBox(width: 5),
+                      ],
                       Flexible(
                         child: Text(
                           room.name,
@@ -504,6 +523,7 @@ class _RoomMenu extends ConsumerWidget {
     // 09/23）——這裡只剩轉移、離開，封存房另有永久刪除。
     // 轉移與離開要房內身分——沒加入過的房兩個都沒有意義
     final myId = ref.watch(settingsRepoProvider).participantId(room.id);
+    final pinned = ref.watch(pinnedIdsProvider(PinKind.room)).contains(room.id);
     return PopupMenuButton<String>(
       icon: Icon(Icons.more_horiz, size: 14, color: s.inkMute),
       iconSize: 14,
@@ -515,6 +535,8 @@ class _RoomMenu extends ConsumerWidget {
       ),
       onSelected: (v) async {
         switch (v) {
+          case 'pin':
+            await ref.read(pinnedIdsProvider(PinKind.room).notifier).toggle(room.id);
           case 'transfer':
             if (myId == null) return;
             await transferOwnershipFlow(
@@ -531,6 +553,14 @@ class _RoomMenu extends ConsumerWidget {
         }
       },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'pin',
+          height: 36,
+          child: Text(
+            pinned ? l10n.commonUnpin : l10n.commonPin,
+            style: UepText.sans(size: 13.5, color: s.ink),
+          ),
+        ),
         // 封存房不給轉移：Hub 對封存房的 transfer_admin 回 409
         if (room.youAreAdmin && !room.isArchived && myId != null)
           PopupMenuItem(

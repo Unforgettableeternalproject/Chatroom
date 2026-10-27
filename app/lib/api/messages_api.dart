@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../models/message.dart';
+import '../models/reaction.dart';
 import 'api_client.dart';
 
 class MessagePage {
@@ -93,6 +94,8 @@ class MessagesApi {
             if (aroundSeq != null) 'radius': radius,
             'limit': limit,
             if (pinnedOnly) 'pinned_only': true,
+            // App 才要表情彙總；bridge 不帶，agent 讀不到
+            'include_reactions': true,
           },
           options: Options(headers: {'X-Participant-Id': ?participantId}),
         );
@@ -194,6 +197,58 @@ class MessagesApi {
             '/api/messages/$messageId/pin',
             options: Options(headers: {'X-Participant-Id': participantId}),
           ));
+
+  /// 加入或**替換**我在這則訊息上的表情（每人每則只有一個）。
+  /// 回傳這則目前的彙總（以我的身分算 mine）。
+  Future<List<ReactionSummary>> react(String messageId, String emoji,
+          {required String participantId}) =>
+      unwrap(() async {
+        final res = await _dio.put<Map<String, dynamic>>(
+          '/api/messages/$messageId/reactions/${Uri.encodeComponent(emoji)}',
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        return ReactionSummary.listFromJson(res.data?['reactions']);
+      });
+
+  /// 取消我目前選的那個表情。
+  Future<List<ReactionSummary>> unreact(String messageId, String emoji,
+          {required String participantId}) =>
+      unwrap(() async {
+        final res = await _dio.delete<Map<String, dynamic>>(
+          '/api/messages/$messageId/reactions/${Uri.encodeComponent(emoji)}',
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        return ReactionSummary.listFromJson(res.data?['reactions']);
+      });
+
+  /// 這則訊息所有人的表情名單（名單面板用）。
+  Future<List<Reactor>> reactors(String messageId,
+          {required String participantId}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/messages/$messageId/reactions',
+          options: Options(headers: {'X-Participant-Id': participantId}),
+        );
+        return ((res.data?['reactors'] as List?) ?? const [])
+            .map((e) => Reactor.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(growable: false);
+      });
+
+  /// 房內有表情的訊息彙總（seq >= [minSeq]），重連後校正用。
+  Future<Map<String, List<ReactionSummary>>> roomReactions(String roomId,
+          {int minSeq = 0, String? participantId}) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/rooms/$roomId/reactions',
+          queryParameters: {'min_seq': minSeq},
+          options: Options(headers: {'X-Participant-Id': ?participantId}),
+        );
+        final raw = (res.data?['reactions'] as Map?) ?? const {};
+        return {
+          for (final e in raw.entries)
+            e.key.toString(): ReactionSummary.listFromJson(e.value),
+        };
+      });
 
   Future<void> unpin(String messageId, {required String participantId}) =>
       unwrap(() => _dio.delete(

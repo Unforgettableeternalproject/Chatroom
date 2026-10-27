@@ -524,6 +524,84 @@ async def test_one_writer_per_repo(hub_app, ops_room, runner_hub, work_repo,
     assert first["id"] and second["id"]
 
 
+async def test_queued_run_announces_wait_once_then_start(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """排隊的那一筆：房裡一則「排隊中」，前一筆結束、它真的起跑才有「開始執行」。
+
+    等鎖期間 `waiting_for_lock` 為真（停滯偵測據此跳過）；拿到鎖後清掉、
+    重設活動時間，並回報 `lock_acquired`。
+    """
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "1.5")
+    await runner_hub.register("test-host", "test", ["ai-website"], 2, "0.1")
+    await create_run(client, room_id, headers, kind="ticket", ref="task-q-1")
+    await create_run(client, room_id, headers, kind="ticket", ref="task-q-2")
+    a = await runner_hub.claim()
+    b = await runner_hub.claim()
+    cfg = make_config(tmp_path, work_repo)
+    locks = RepoLocks()
+    reported: list[tuple[str, str, str]] = []
+    real_report = runner_hub.report
+
+    async def spy_report(run_id, status, **kw):
+        reported.append((run_id, status, kw.get("reason", "")))
+        return await real_report(run_id, status, **kw)
+
+    monkeypatch.setattr(runner_hub, "report", spy_report)
+    exec_a = _executor(cfg, runner_hub, locks=locks)
+    exec_b = _executor(cfg, runner_hub, locks=locks)
+    task_a = asyncio.ensure_future(exec_a.execute(a, asyncio.Event()))
+    # 先讓 a 握住鎖，b 才是後送、要排隊的那筆
+    for _ in range(200):
+        if (cfg.runs_dir / a["id"] / "stream.jsonl").exists():
+            break
+        await asyncio.sleep(0.05)
+    task_b = asyncio.ensure_future(exec_b.execute(b, asyncio.Event()))
+    try:
+        blocked = {}
+        for _ in range(200):
+            blocked = (await client.get(f"/api/runs/{b['id']}",
+                                        headers=headers)).json()["run"]
+            if blocked["status"] != "claimed":
+                break
+            await asyncio.sleep(0.05)
+        assert blocked["reason"] == "repo_lock_wait"
+        assert exec_b.waiting_for_lock, "排隊中要標記，停滯偵測才會跳過"
+        assert blocked["started_at"] is None, "排隊中不算開始執行"
+        msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                                 headers=headers)).json()["messages"]
+        ref_b = "task-q-2"
+        assert len([m for m in msgs if m["system_event"] == "run_waiting"
+                    and ref_b in m["content"]]) == 1
+        assert not [m for m in msgs if m["system_event"] == "run_running"
+                    and ref_b in m["content"]], "還在排隊就說開始執行"
+        outcome_a, outcome_b = await asyncio.wait_for(
+            asyncio.gather(task_a, task_b), timeout=90)
+    except BaseException:
+        task_a.cancel()
+        task_b.cancel()
+        await asyncio.gather(task_a, task_b, return_exceptions=True)
+        raise
+    assert outcome_a.status == "done" and outcome_b.status == "done"
+    assert not exec_b.waiting_for_lock
+    b_reports = [(s, r) for rid, s, r in reported if rid == b["id"]]
+    assert b_reports.count(("running", "repo_lock_wait")) == 1
+    assert b_reports.count(("running", "lock_acquired")) == 1
+    assert (b_reports.index(("running", "repo_lock_wait"))
+            < b_reports.index(("running", "lock_acquired")))
+    msgs = (await client.get(f"/api/rooms/{room_id}/messages",
+                             headers=headers)).json()["messages"]
+    assert len([m for m in msgs if m["system_event"] == "run_waiting"
+                and "task-q-2" in m["content"]]) == 1, "排隊訊息只能一次"
+    assert len([m for m in msgs if m["system_event"] == "run_running"
+                and "task-q-2" in m["content"]]) == 1
+    # 第一筆沒排隊：不該有 lock_acquired
+    assert ("running", "lock_acquired") not in [
+        (s, r) for rid, s, r in reported if rid == a["id"]]
+
+
 async def test_single_writer_off_runs_in_parallel(
         hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
     """房間關掉單一寫入者限制時，同 repo 的兩筆寫入型 run 同時開跑。
@@ -591,6 +669,8 @@ async def test_single_writer_off_runs_in_parallel(
     reasons = {(run_id, reason) for run_id, _s, reason, _r in reported}
     assert not [r for r in reasons if r[1] == "repo_lock_wait"], \
         "關掉限制後不該有人等 repo 鎖"
+    assert not [r for r in reasons if r[1] == "lock_acquired"], \
+        "並行模式沒有排隊，不該有排隊結束的回報"
     for run in (a, b):
         assert (run["id"], "running", "spawn") in {
             (rid, status, reason) for rid, status, reason, _r in reported}

@@ -733,6 +733,9 @@ class RunnerLoop:
         now = self.monotonic()
         notices: list[tuple[str, str, int]] = []
         for run_id, active in self.active.items():
+            # 排隊等 repo 鎖的 run 還沒開始執行，不算「沒有輸出」
+            if getattr(active.executor, "waiting_for_lock", False):
+                continue
             idle = now - active.executor.last_event_at
             if idle >= threshold:
                 active.stalled_seconds = int(idle)

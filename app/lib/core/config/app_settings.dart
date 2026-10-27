@@ -18,6 +18,7 @@ class SettingsRepository {
   static const _kFontFamily = 'chatroom.font_family';
   static const _kLocale = 'chatroom.locale';
   static const _kPreferredName = 'chatroom.preferred_name';
+  static const _kSplashText = 'chatroom.splash_text';
   static const _kToken = 'chatroom.api_token';
   static const _kDeviceKey = 'chatroom.device_session_key';
   static const _kLastReadPrefix = 'chatroom.last_read.';
@@ -32,6 +33,7 @@ class SettingsRepository {
   static const _kDisplayNamePrefix = 'chatroom.display_name.';
   static const _kSeenSessionKeys = 'chatroom.seen_session_keys';
   static const _kHiddenMembersPrefix = 'chatroom.hidden_members.';
+  static const _kPinnedPrefix = 'chatroom.pinned.';
   static const _kHighlightedMembersPrefix = 'chatroom.highlighted_members.';
   static const _kPendingMentionPrefix = 'chatroom.pending_mention.';
   static const _kNotifyMode = 'chatroom.notify_mode';
@@ -107,6 +109,12 @@ class SettingsRepository {
   String get preferredName => _prefs.getString(_kPreferredName) ?? '';
   Future<void> setPreferredName(String name) =>
       _prefs.setString(_kPreferredName, name.trim());
+
+  /// 啟動 Loading 的字樣：一行一則。一則＝固定，多則＝每次啟動隨機挑；
+  /// 空字串＝用預設字樣（預設字樣在 l10n，不落盤，才會跟著語言走）。
+  String get splashText => _prefs.getString(_kSplashText) ?? '';
+  Future<void> setSplashText(String text) =>
+      _prefs.setString(_kSplashText, text.trim());
 
   /// 通知模式：預設通知所有新訊息（被 @mention 一律通知）。
   NotifyModePref get notifyMode => NotifyModePref.values.firstWhere(
@@ -248,6 +256,32 @@ class SettingsRepository {
     }
   }
 
+  /// 側欄「關注」的項目 id（房間或 Board）。
+  ///
+  /// **純本機視圖**，不送 Hub。key 含 Hub 位址：同一台機器接多個 Hub 時，
+  /// 各自的關注名單不互相污染。
+  Set<String> pinnedIds(PinKind kind) =>
+      (_prefs.getStringList(pinnedKey(kind, serverUrl)) ?? const []).toSet();
+
+  Future<void> setPinned(PinKind kind, String id, bool pinned) async {
+    final key = pinnedKey(kind, serverUrl);
+    final next = pinnedIds(kind);
+    if (pinned ? !next.add(id) : !next.remove(id)) return;
+    if (next.isEmpty) {
+      await _prefs.remove(key);
+    } else {
+      await _prefs.setStringList(key, next.toList());
+    }
+  }
+
+  /// 關注名單的儲存 key：`chatroom.pinned.<kind>.<hub 位址>`。
+  /// 位址去掉空白、結尾斜線並轉小寫，同一個 Hub 的不同寫法落在同一份。
+  @visibleForTesting
+  static String pinnedKey(PinKind kind, String serverUrl) {
+    final hub = serverUrl.trim().replaceAll(RegExp(r'/+$'), '').toLowerCase();
+    return '$_kPinnedPrefix${kind.name}.$hub';
+  }
+
   /// 最近見過的 agent session_key（指派畫面的快選來源）。
   List<String> get seenSessionKeys =>
       _prefs.getStringList(_kSeenSessionKeys) ?? const [];
@@ -261,6 +295,9 @@ class SettingsRepository {
 }
 
 enum ThemeModePref { dark, light }
+
+/// 可被關注的清單種類；落盤 key 用 `enum.name`。
+enum PinKind { room, board }
 
 /// 字級偏好：tiny 極小、small 小、medium 中（預設）、large 大、xlarge 特大。
 ///

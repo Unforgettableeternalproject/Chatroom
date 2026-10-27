@@ -6,9 +6,11 @@ import '../core/theme/uep_tokens.dart';
 import '../core/util/relative_time.dart';
 import '../l10n/l10n.dart';
 import '../models/message.dart';
+import '../models/reaction.dart';
 import 'attachment_view.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
+import 'message_reactions.dart';
 
 /// 訊息操作回呼（由 ChatScreen 提供實作）。
 class MessageActions {
@@ -18,6 +20,8 @@ class MessageActions {
     required this.onDelete,
     required this.onEdit,
     required this.onCreateTask,
+    this.onReact,
+    this.onShowReactors,
     this.enabled = true,
   });
 
@@ -35,6 +39,13 @@ class MessageActions {
   /// 來源訊息可指，而一張卡最後總會變成一句沒有上下文的話。決定它的討論
   /// 還在聊天室裡，那個 seq 就是回去的路。
   final void Function(Message) onCreateTask;
+
+  /// 加／換／取消我的表情：傳入選到的表情，「同一個」由呼叫端解讀成取消。
+  /// null＝這個情境不給加表情的入口（例如以 agent 身分操作）。
+  final Future<void> Function(Message, String emoji)? onReact;
+
+  /// 點表情 chip：開名單。**不是 toggle**。
+  final void Function(Message)? onShowReactors;
 
   /// 封存房間：釘選 / 刪除 / 回覆停用（P3-08 條件 4）。
   final bool enabled;
@@ -298,6 +309,14 @@ class MessageBubble extends StatelessWidget {
             child: pulsed,
           );
 
+    final canReact = actions != null &&
+        actions!.enabled &&
+        actions!.onReact != null &&
+        !message.deleted &&
+        !message.isSystem;
+    final showChips =
+        !message.deleted && !message.isSystem && message.reactions.isNotEmpty;
+
     final column = Column(
       crossAxisAlignment:
           isSelf ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -309,6 +328,18 @@ class MessageBubble extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         focused,
+        if (showChips) ...[
+          const SizedBox(height: 6),
+          // 對齊各自的泡泡：別人的訊息有左軸＋內距，chip 跟著縮進同樣的量
+          Padding(
+            padding: EdgeInsets.only(left: isSelf ? 0 : 14),
+            child: ReactionChipRow(
+              reactions: message.reactions,
+              alignEnd: isSelf,
+              onTapChip: (_) => actions?.onShowReactors?.call(message),
+            ),
+          ),
+        ],
       ],
     );
 
@@ -320,8 +351,89 @@ class MessageBubble extends StatelessWidget {
           message: message,
           actions: actions,
           isSelf: isSelf,
-          child: column,
+          child: canReact
+              ? _HoverAddReaction(
+                  alignStart: isSelf,
+                  current: myReactionOf(message.reactions),
+                  onPick: (e) => actions!.onReact!(message, e),
+                  child: column,
+                )
+              : column,
         ),
+      ),
+    );
+  }
+}
+
+/// 桌面 hover 訊息時，在標題列那一側浮出「加表情」小按鈕。
+///
+/// 按鈕疊在 header 那一行的**空白端**（別人的訊息在右、自己的在左），
+/// 不佔版面，所以出現／消失不會讓訊息跳動。觸控裝置沒有 hover，走長按選單。
+class _HoverAddReaction extends StatefulWidget {
+  const _HoverAddReaction({
+    required this.child,
+    required this.onPick,
+    required this.alignStart,
+    this.current,
+  });
+
+  final Widget child;
+  final void Function(String emoji) onPick;
+  final bool alignStart;
+  final String? current;
+
+  @override
+  State<_HoverAddReaction> createState() => _HoverAddReactionState();
+}
+
+class _HoverAddReactionState extends State<_HoverAddReaction> {
+  bool _hover = false;
+
+  Future<void> _open(BuildContext btnContext) async {
+    final box = btnContext.findRenderObject()! as RenderBox;
+    final pos = box.localToGlobal(Offset(0, box.size.height));
+    final picked = await showReactionPicker(btnContext, pos,
+        current: widget.current);
+    if (picked != null) widget.onPick(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Stack(
+        children: [
+          widget.child,
+          if (_hover)
+            Positioned(
+              top: 0,
+              left: widget.alignStart ? 0 : null,
+              right: widget.alignStart ? null : 0,
+              child: Builder(
+                builder: (btnContext) => Tooltip(
+                  message: l10n.reactionAddTooltip,
+                  child: InkWell(
+                    key: const Key('reaction-add-button'),
+                    borderRadius: BorderRadius.circular(999),
+                    onTap: () => _open(btnContext),
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: s.bgCard,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: s.line),
+                      ),
+                      child: Icon(Icons.add_reaction_outlined,
+                          size: 15, color: s.inkMute),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -473,6 +585,13 @@ class _ContextMenuRegion extends StatelessWidget {
                 Text(l10n.msgMenuCreateTask,
                     style: UepText.sans(size: 13.5, color: s.ink)),
           ),
+          if (a.onReact != null)
+            PopupMenuItem(
+              value: 'react',
+              height: 36,
+              child: Text(l10n.msgMenuReact,
+                  style: UepText.sans(size: 13.5, color: s.ink)),
+            ),
           if (isSelf)
             PopupMenuItem(
               value: 'edit',
@@ -509,6 +628,11 @@ class _ContextMenuRegion extends StatelessWidget {
         a.onCreateTask(message);
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.content));
+      case 'react':
+        if (!context.mounted) return;
+        final picked = await showReactionPicker(context, globalPos,
+            current: myReactionOf(message.reactions));
+        if (picked != null) await a.onReact!(message, picked);
       case 'edit':
         a.onEdit(message);
       case 'delete':

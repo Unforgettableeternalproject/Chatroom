@@ -43,6 +43,7 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
   final _instructions = TextEditingController();
   String _style = kRoomStyles.first.value;
   bool _private = false;
+  bool _autoArchive = true;
 
   /// 表單是從哪一份房間資料填的。資料更新（別人改了、自己存了）時重填，
   /// 但只在使用者還沒動過欄位時——打到一半的字不能被輪詢蓋掉。
@@ -68,6 +69,7 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
     _style = room.style;
     _instructions.text = room.styleInstructions;
     _private = room.isPrivate;
+    _autoArchive = room.autoArchive;
   }
 
   void _markDirty() {
@@ -128,6 +130,14 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
         await api.setVisibility(
           widget.roomId,
           visibility: _private ? 'private' : 'public',
+          sessionKey: sessionKey,
+          participantId: pid,
+        );
+      }
+      if (_autoArchive != room.autoArchive) {
+        await api.setAutoArchive(
+          widget.roomId,
+          enabled: _autoArchive,
           sessionKey: sessionKey,
           participantId: pid,
         );
@@ -325,6 +335,36 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
                         onChanged: editable
                             ? (v) => setState(() {
                                 _private = v;
+                                _dirty = true;
+                              })
+                            : null,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(l10n.roomsAutoArchiveTitle,
+                                style: UepText.sans(
+                                    size: 13.5, color: s.inkTitle)),
+                            const SizedBox(height: 3),
+                            Text(l10n.roomsAutoArchiveSubtitle,
+                                style: UepText.serif(
+                                    size: 12, color: s.inkMute)),
+                          ],
+                        ),
+                      ),
+                      Switch(
+                        value: _autoArchive,
+                        activeThumbColor: UepColors.gold,
+                        activeTrackColor: UepColors.gold.withValues(alpha: .28),
+                        onChanged: editable
+                            ? (v) => setState(() {
+                                _autoArchive = v;
                                 _dirty = true;
                               })
                             : null,

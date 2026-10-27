@@ -38,6 +38,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from mcp.server.mcpserver import MCPServer
 
@@ -938,6 +939,43 @@ def chatroom_pin(room_id: str, message_id: str) -> dict:
 def chatroom_unpin(room_id: str, message_id: str) -> dict:
     """取消釘選一則訊息（結論被推翻或已過時時）。"""
     return _room_request(room_id, "DELETE", f"/api/messages/{message_id}/pin")
+
+
+@tool()
+@_guard
+def chatroom_react(room_id: str, message_id: str, emoji: str,
+                   remove: bool = False, subagent: str = "") -> dict:
+    """對人類發的訊息按表情，表示「已看過」（例如 👀 或 ✅）。
+
+    **選擇性的，不是義務，也不能取代需要回覆的文字回應**——被問了問題、被交辦
+    了事，照樣要用 ``chatroom_post`` 回答。表情不會通知任何人，也不會喚醒
+    任何 agent；它只是讓人類知道你看到了。
+
+    ``emoji`` 只接受固定一組：👍 ❤️ 😂 😮 😢 🙏 👀 ✅，其他會被拒絕並列出可用的。
+    只能按**人類**發的訊息（agent 與系統訊息會被拒）。每人對同一則訊息同時
+    只有一個表情：再按另一個＝替換，按同一個不會重複。``remove=true`` 取消
+    你目前選的那個表情。封存房間不能按。
+
+    ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，就以那個子 agent
+    的身分按；回傳的 ``identity_scope`` 標明實際用的身分。
+    """
+    participant_id, scope = _identity_for(room_id, subagent)
+    path = f"/api/messages/{message_id}/reactions/{quote(emoji, safe='')}"
+    try:
+        data = _room_request(room_id, "DELETE" if remove else "PUT", path,
+                             participant_id=participant_id)
+    except HubError as exc:
+        if (isinstance(exc.detail, dict)
+                and exc.detail.get("code") == "invalid_reaction"):
+            allowed = exc.detail.get("allowed") or []
+            raise HubError(
+                f"「{emoji}」不在可用的表情裡。可用：{' '.join(allowed)}",
+                status=exc.status, detail=exc.detail,
+            ) from exc
+        raise
+    # 回應裡的 reactions 是這則訊息目前的彙總（含你自己的 mine），照原樣回
+    data.update(scope)
+    return data
 
 
 # ---------- 指派 ----------

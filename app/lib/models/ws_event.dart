@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'message.dart';
 import 'question.dart';
+import 'reaction.dart';
 
 /// WS 伺服器事件。協定唯一定義處在 ws/ws_protocol.dart，
 /// 這裡只放解碼後的資料形。
@@ -51,6 +52,24 @@ class WsBoardEvent extends WsEvent {
 
   final String roomId;
   final int boardSeq;
+}
+
+/// {"type": "reaction", "room_id", "message_id", "reactions": [...]}
+///
+/// 某則訊息的表情回應變了。**不是訊息、不帶 seq**——不能推進任何 cursor，
+/// 所以走獨立事件而不是夾在 `messages` 裡。`reactions` 是 Hub 以這條連線的
+/// 身分算好的完整彙總（含 mine），直接覆蓋該則的表情。
+@immutable
+class WsReactionEvent extends WsEvent {
+  const WsReactionEvent({
+    required this.roomId,
+    required this.messageId,
+    required this.reactions,
+  });
+
+  final String roomId;
+  final String messageId;
+  final List<ReactionSummary> reactions;
 }
 
 /// {"type": "pong"}

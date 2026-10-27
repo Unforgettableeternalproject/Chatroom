@@ -23,6 +23,7 @@ import '../ops/ops_actions.dart';
 import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
+import 'board_move_dialog.dart';
 import 'board_task_drawer.dart';
 import 'board_task_edit_dialog.dart';
 import 'supervisor_panel.dart';
@@ -143,6 +144,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   /// 收起來的階段。同樣不持久化：它是這一次的閱讀動作。
   final Set<String> _collapsed = {};
+
+  /// 正被拖著走的卡（長按拖曳＝搬到別的階段／週期）。只用來讓合法的落點
+  /// 先亮起來；拖曳結束一律清掉。
+  BoardTask? _draggingTask;
 
   /// 開著詳情抽屜的那張卡。
   late String? _openTaskId = widget.focusTaskId;
@@ -431,7 +436,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     if (!_canReorder || frozen || tasks.length < 2) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [for (final t in tasks) _taskCard(snap, t, frozen: frozen)],
+        children: [for (final t in tasks) _movableCard(snap, t, frozen)],
       );
     }
     return ReorderableListView(
@@ -445,10 +450,129 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ReorderableDragStartListener(
             key: ValueKey(tasks[i].id),
             index: i,
-            child: _taskCard(snap, tasks[i], frozen: frozen),
+            child: _movableCard(snap, tasks[i], frozen),
           ),
       ],
     );
+  }
+
+  // ---------- 拖曳搬卡 ----------
+  //
+  // 互動：同一張卡上**按下就拖＝清單內重排**（ReorderableDragStartListener，
+  // 立即起拖）；**按住不動約 0.3 秒再拖＝搬家**（LongPressDraggable），可放到
+  // 同週期的其他開著的階段，或左欄某個進行中的週期。兩者在手勢競技場裡
+  // 互斥：先位移的是重排，先計時到的是搬家，不會同時觸發。
+
+  /// 這張卡現在拖得走嗎。凍結的週期底下任何寫入都 409，所以不給。
+  bool _canMoveByDrag(BoardTask t, bool frozen) =>
+      !_readOnly && !frozen && _boardIdOrNull != null && t.isMovable;
+
+  Widget _movableCard(BoardSnapshot snap, BoardTask t, bool frozen) {
+    final card = _taskCard(snap, t, frozen: frozen);
+    if (!_canMoveByDrag(t, frozen)) return card;
+    final s = context.uep;
+    return LongPressDraggable<BoardTask>(
+      data: t,
+      delay: const Duration(milliseconds: 300),
+      onDragStarted: () => setState(() => _draggingTask = t),
+      onDragEnd: (_) {
+        if (mounted) setState(() => _draggingTask = null);
+      },
+      childWhenDragging: Opacity(opacity: .35, child: card),
+      feedback: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 300,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: s.bgCard,
+            border: Border.all(color: UepColors.gold),
+            boxShadow: const [
+              BoxShadow(blurRadius: 12, color: Color(0x33000000)),
+            ],
+          ),
+          child: Text(t.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: UepText.sans(size: 13.5, color: s.inkTitle)),
+        ),
+      ),
+      child: card,
+    );
+  }
+
+  /// 把 [child]（一個階段區段）做成搬卡的落點。只有合法的目標接受放下：
+  /// 開著的階段、不是這張卡原本待的那份（[canMoveTaskInto]）、週期沒凍結。
+  /// 拖曳中合法的落點先淡淡描邊，游標移上去再加亮。
+  Widget _stageDropTarget(BoardChecklist c, bool frozen, Widget child) {
+    if (_readOnly || frozen) return child;
+    bool ok(BoardTask? t) => t != null && canMoveTaskInto(t, c);
+    return DragTarget<BoardTask>(
+      onWillAcceptWithDetails: (d) => ok(d.data),
+      onAcceptWithDetails: (d) => _moveTaskTo(d.data, c.id),
+      builder: (_, candidate, _) {
+        final hot = candidate.isNotEmpty;
+        final armed = ok(_draggingTask);
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: hot
+                  ? UepColors.gold
+                  : armed
+                      ? UepColors.gold.withValues(alpha: .35)
+                      : Colors.transparent,
+              width: hot ? 2 : 1,
+            ),
+          ),
+          child: child,
+        );
+      },
+    );
+  }
+
+  /// 拖到階段上放下：等同「搬到別處」，只是目標已經由落點決定。
+  /// 新卡接在目標階段最後面——Hub 沒有「建卡時指定位置」，要放到放下的位置
+  /// 得再等重拉後補一次 reorder，那條路失敗時會留下半套順序，所以不做。
+  Future<void> _moveTaskTo(BoardTask t, String targetChecklistId) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final newId = await runBoardAction(
+      context,
+      () => actions.moveTask(
+        t.id,
+        targetChecklistId: targetChecklistId,
+        title: t.title,
+        description: t.description,
+        priority: t.priority,
+      ),
+    );
+    if (!mounted) return;
+    // newId 為 null：失敗（runBoardAction 已經說過）或沒有可用身分
+    if (newId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context).boardTaskMovedToast)));
+    }
+    _reloadBoard();
+  }
+
+  /// 拖到左欄某個週期上放下：問要掛到那個週期的哪個階段（同「搬到別處」
+  /// 對話框，週期已預選）。
+  Future<void> _dropOnObjective(BoardTask t, BoardObjective o) async {
+    final boardId = _boardIdOrNull;
+    if (boardId == null) return;
+    final newId = await showBoardMoveDialog(
+      context,
+      task: t,
+      boardId: boardId,
+      roomId: widget.roomId,
+      initialObjectiveId: o.id,
+    );
+    if (!mounted) return;
+    if (newId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context).boardTaskMovedToast)));
+    }
+    _reloadBoard();
   }
 
   /// 這塊板是不是唯讀的歷史。
@@ -577,7 +701,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 頁首（設計稿 artboard 01，56px）。
   ///
   /// **「← 回到聊天室」是這條列存在的主要理由**：board 是全頁，沒有這個入口
-  /// 就只剩系統返回鍵。房名與 zone 徽章跟著，讓人知道自己在哪個房間的板上
+  /// 就只剩系統返回鍵。房名跟著，讓人知道自己在哪個房間的板上
   /// ——桌面版同時開著好幾個房間時，光看板子是分不出來的。
   Widget _header(BuildContext context, BoardSnapshot? snap) {
     final s = context.uep;
@@ -588,10 +712,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ? null
         : ref.watch(roomDetailProvider(widget.roomId!)).value?.room;
     final attached = snap?.liveRooms.toList() ?? const [];
-    final zone = zoneForRoomId(widget.roomId ?? widget.boardId!);
-    final palette = uepZonePalettes[zone]!;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-
     return Container(
       height: 56,
       padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -624,19 +744,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             style: UepText.pageTitle(color: s.inkTitle),
           ),
         ),
-        if (room != null) ...[
-          const SizedBox(width: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              border: Border.all(
-                  color: dark ? palette.strokeDark : palette.strokeLight),
-            ),
-            child: Text(zone.name.toUpperCase(),
-                style: UepText.mono(
-                    size: 10, color: palette.soft, letterSpacing: 1.2)),
-          ),
-        ],
         const SizedBox(width: 12),
         Text(AppLocalizations.of(context).boardLibraryTitle,
             style:
@@ -1015,7 +1122,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       BoardObjective o, bool selected, {VoidCallback? onPicked}) {
     final s = context.uep;
     final stats = _statsOf(snap, o);
-    return InkWell(
+    // 搬卡的落點：只有進行中（active / review）的週期接受，同
+    // [BoardSnapshot.moveTargetObjectives] 與「搬到別處」對話框
+    final accepts = !_readOnly &&
+        _boardIdOrNull != null &&
+        (o.status == 'active' || o.status == 'review');
+    final tile = InkWell(
       onTap: () {
         setState(() => _selectedObjectiveId = o.id);
         onPicked?.call();
@@ -1106,6 +1218,25 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ),
       ),
     );
+    if (!accepts) return tile;
+    return DragTarget<BoardTask>(
+      onWillAcceptWithDetails: (d) => d.data.isMovable,
+      onAcceptWithDetails: (d) => _dropOnObjective(d.data, o),
+      builder: (_, candidate, _) => DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: candidate.isNotEmpty
+                ? UepColors.gold
+                : _draggingTask != null
+                    ? UepColors.gold.withValues(alpha: .35)
+                    : Colors.transparent,
+            width: candidate.isNotEmpty ? 2 : 1,
+          ),
+        ),
+        child: tile,
+      ),
+    );
   }
 
   // ---------- 右：單一 Objective 展開 ----------
@@ -1130,11 +1261,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 凍結沿著三層往下傳：Hub 擋的是「這個週期底下的任何寫入」，
               // 所以階段與任務的入口也要一起收（判準在 `o.frozen`，不在
               // 這裡各自比對狀態）
+              // 未分類是 Hub 墊的一格、不是使用者排出來的階段：固定排在最前面、
+              // 沒有把手；拖曳只重排其餘階段，送出去的仍是含它與被取消階段的
+              // 完整順序（見 [_reorderStages]）
               for (final c in checklists)
                 if (c.isUncategorised)
-                  _looseTasks(context, snap, c, frozen: o.frozen)
-                else
-                  _checklistSection(context, snap, c, frozen: o.frozen),
+                  _looseTasks(context, snap, c, frozen: o.frozen),
+              _stageList(context, snap, o,
+                  [for (final c in checklists) if (!c.isUncategorised) c]),
               // 空的時候才在這裡再給一次入口——抬頭那顆已經在了，
               // 兩顆一樣的按鈕只會讓人懷疑它們是不是不同的東西
               if (checklists.isEmpty) ...[
@@ -1161,6 +1295,46 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       ],
     );
   }
+
+  /// 階段清單。可以拖就是 ReorderableListView（把手在每段標題列最前面），
+  /// 否則退回 Column——不留拖不動的把手。凍結的週期連 `reorder` 都 409，
+  /// 所以也不給。
+  Widget _stageList(BuildContext context, BoardSnapshot snap, BoardObjective o,
+      List<BoardChecklist> stages) {
+    if (!_canReorder || o.frozen || stages.length < 2) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final c in stages)
+            _checklistSection(context, snap, c, frozen: o.frozen),
+        ],
+      );
+    }
+    return ReorderableListView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      onReorderItem: (from, to) => _reorderStages(
+          snap.allChecklistIdsInOrder(o.id),
+          [for (final c in stages) c.id],
+          from,
+          to),
+      children: [
+        for (var i = 0; i < stages.length; i++)
+          KeyedSubtree(
+            key: ValueKey('stage-${stages[i].id}'),
+            child: _checklistSection(context, snap, stages[i],
+                frozen: o.frozen, reorderIndex: i),
+          ),
+      ],
+    );
+  }
+
+  /// 母體是**這個週期底下每一個沒刪掉的階段**，含被取消的與未分類；畫面上
+  /// 只有 [movable] 這幾個拖得動，其餘留在原位（同 `_reorderPartial`）。
+  Future<void> _reorderStages(
+          List<String> all, List<String> movable, int from, int to) =>
+      _reorderPartial('checklist', all, movable, from, to);
 
   /// 週期抬頭（設計稿 artboard 01 右上）：標題、描述、收尾動作、進度。
   ///
@@ -1563,7 +1737,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     if (tasks.isEmpty) return const SizedBox.shrink();
 
     final loose = tasks.where((t) => !t.isSettled).length;
-    return Padding(
+    return _stageDropTarget(c, frozen, Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1592,11 +1766,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             ),
         ],
       ),
-    );
+    ));
   }
 
   Widget _checklistSection(BuildContext context, BoardSnapshot snap,
-      BoardChecklist c, {required bool frozen}) {
+      BoardChecklist c, {required bool frozen, int? reorderIndex}) {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
@@ -1611,13 +1785,29 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
     final collapsed = _collapsed.contains(c.id);
 
-    return Padding(
+    return _stageDropTarget(c, frozen, Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              // 階段拖曳把手（只有可重排時才有）
+              if (reorderIndex != null)
+                ReorderableDragStartListener(
+                  index: reorderIndex,
+                  child: Tooltip(
+                    message: AppLocalizations.of(context).boardStageDragHandle,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.grab,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Icon(Icons.drag_indicator,
+                            size: 16, color: s.inkMute),
+                      ),
+                    ),
+                  ),
+                ),
               // 摺疊控制。三層樹在一個週期有五、六個階段時就會超過一屏，
               // 沒有它就只能一直捲
               InkWell(
@@ -1791,7 +1981,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           ],
         ],
       ),
-    );
+    ));
   }
 
   /// 空板（設計稿 artboard 08）。要邀請人開始，而不是看起來壞掉。
