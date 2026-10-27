@@ -7551,15 +7551,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         拖得動，板上寫著這個週期已經結束而它的內容還在變（與 09/21
         「週期凍結」同一個漏洞）。
 
-        同一個父週期只查一次：`objective` 就是它自己，`checklist` 反查
+        同一個父週期只查一次：`checklist` 反查
         `objective_id`，`task` 反查 `checklist_id`（再由
         `_assert_objective_writable` 往上一層）。
+
+        `objective` 本身的重排不查：凍結守的是週期的**內容**，週期之間的
+        先後是板的排序。逐個查的話，板上只要有一個送審／收尾的週期，送完整
+        母體的重排就整批 409，週期拖曳等於不能用。
         """
+        if kind == "objective":
+            return
         seen: set[str] = set()
         for item_id in ids:
             row = await _board_item_or_404(kind, item_id)
-            parent = (row["id"] if kind == "objective"
-                      else row["objective_id"] if kind == "checklist"
+            parent = (row["objective_id"] if kind == "checklist"
                       else row["checklist_id"])
             if parent in seen:
                 continue
