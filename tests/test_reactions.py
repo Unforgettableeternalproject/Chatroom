@@ -61,6 +61,11 @@ async def _setup(client):
     return room_id, alice, bob, bot
 
 
+async def _zed(client, room_id):
+    """第四個人類，專門當發話者——自己不能對自己的訊息按表情。"""
+    return await _join(client, room_id, "zed-k", "Zed")
+
+
 async def _msgs(client, room_id, viewer, reactions=True):
     params = {"include_reactions": "true"} if reactions else {}
     return (await client.get(f"/api/rooms/{room_id}/messages", params=params,
@@ -82,7 +87,7 @@ async def test_add_replace_cancel_and_idempotent(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, _ = await _setup(client)
-        m = await _say(client, room_id, alice, "早安")
+        m = await _say(client, room_id, await _zed(client, room_id), "早安")
 
         r = await client.put(_url(m["id"], THUMB), headers=_pid(alice))
         assert r.status_code == 200 and r.json()["changed"] is True
@@ -118,7 +123,7 @@ async def test_unique_key_is_per_person_per_message(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, _, _ = await _setup(client)
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
         await client.put(_url(m["id"], THUMB), headers=_pid(alice))
         await client.put(_url(m["id"], HEART), headers=_pid(alice))
         con = sqlite3.connect(str(tmp_path / "rx.db"))
@@ -139,7 +144,7 @@ async def test_whitelist_and_variation_selector(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, _, _ = await _setup(client)
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
         r = await client.put(_url(m["id"], "\U0001F4A9"), headers=_pid(alice))
         assert r.status_code == 400
         d = r.json()["detail"]
@@ -153,8 +158,10 @@ async def test_agent_may_react_only_to_human_messages(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, bot = await _setup(client)
-        human_msg = await _say(client, room_id, alice, "請看")
-        bot_msg = await _say(client, room_id, bot, "好")
+        human_msg = await _say(client, room_id, await _zed(client, room_id), "請看")
+        other_bot = await _join(client, room_id, "bot2-k", "Bot2",
+                                role="agent", kind="claude")
+        bot_msg = await _say(client, room_id, other_bot, "好")
         r = await client.put(_url(human_msg["id"], EYES), headers=_pid(bot))
         assert r.status_code == 200
         r = await client.put(_url(bot_msg["id"], EYES), headers=_pid(bot))
@@ -178,7 +185,7 @@ async def test_refusals(tmp_path):
         other = (await client.post(
             "/api/rooms", json={"name": "別房", "session_key": "o2"})).json()["id"]
         stranger = await _join(client, other, "s", "Stranger")
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
 
         # 非成員（身分屬於別的房）
         r = await client.put(_url(m["id"], THUMB), headers=_pid(stranger))
@@ -202,7 +209,7 @@ async def test_refusals(tmp_path):
         assert r.json()["detail"]["code"] == "message_deleted"
 
         # 封存房
-        m2 = await _say(client, room_id, alice, "y")
+        m2 = await _say(client, room_id, await _zed(client, room_id), "y")
         await client.post(f"/api/rooms/{room_id}/archive",
                           headers={"X-Session-Key": "owner"})
         r = await client.put(_url(m2["id"], THUMB), headers=_pid(alice))
@@ -215,7 +222,7 @@ async def test_reaction_does_not_touch_seq_or_updates(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, bot = await _setup(client)
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
         cursor = (await client.get(
             f"/api/rooms/{room_id}/updates",
             params={"after_seq": 0, "timeout": 1},
@@ -246,7 +253,7 @@ async def test_agent_reads_do_not_include_reactions(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, bot = await _setup(client)
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
         await client.put(_url(m["id"], THUMB), headers=_pid(bob))
         plain = await _msgs(client, room_id, bot, reactions=False)
         assert all("reactions" not in x for x in plain)
@@ -260,7 +267,7 @@ async def test_departed_member_reaction_is_kept_with_name(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, _ = await _setup(client)
-        m = await _say(client, room_id, alice, "x")
+        m = await _say(client, room_id, await _zed(client, room_id), "x")
         await client.put(_url(m["id"], THUMB), headers=_pid(bob))
         await client.post(f"/api/rooms/{room_id}/leave", headers=_pid(bob))
         got = await _rx(client, room_id, alice, m["id"])
@@ -271,8 +278,8 @@ async def test_room_reactions_resync_endpoint(tmp_path):
     app, client = await _make(tmp_path)
     async with app.router.lifespan_context(app), client:
         room_id, alice, bob, _ = await _setup(client)
-        m1 = await _say(client, room_id, alice, "a")
-        m2 = await _say(client, room_id, alice, "b")
+        m1 = await _say(client, room_id, await _zed(client, room_id), "a")
+        m2 = await _say(client, room_id, await _zed(client, room_id), "b")
         await client.put(_url(m1["id"], THUMB), headers=_pid(bob))
         await client.put(_url(m2["id"], EYES), headers=_pid(bob))
         r = (await client.get(f"/api/rooms/{room_id}/reactions",
@@ -300,8 +307,11 @@ def test_ws_pushes_reaction_event_without_messages_event(tmp_path):
         bob = tc.post(f"/api/rooms/{room_id}/join", json={
             "kind": "human", "role": "human", "session_key": "b",
             "preferred_name": "Bob"}).json()
+        zed = tc.post(f"/api/rooms/{room_id}/join", json={
+            "kind": "human", "role": "human", "session_key": "z",
+            "preferred_name": "Zed"}).json()
         mid = tc.post(f"/api/rooms/{room_id}/messages", json={"content": "hi"},
-                      headers=_pid(alice)).json()["id"]
+                      headers=_pid(zed)).json()["id"]
         with tc.websocket_connect("/ws") as ws:
             ws.send_json({"type": "subscribe", "room_id": room_id,
                           "after_seq": 0,
@@ -346,3 +356,35 @@ async def test_table_created_on_existing_db(tmp_path):
                         "created_at"]
     finally:
         con.close()
+
+
+async def test_cannot_react_to_own_message_but_can_remove_old_one(tmp_path):
+    """對自己的訊息 PUT 被拒（403 reaction_own_message）；DELETE 不擋，
+    讓舊資料能移除。"""
+    app, client = await _make(tmp_path)
+    async with app.router.lifespan_context(app), client:
+        room_id, alice, bob, bot = await _setup(client)
+        m = await _say(client, room_id, alice, "我說的")
+        r = await client.put(_url(m["id"], THUMB), headers=_pid(alice))
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "reaction_own_message"
+        assert await _rx(client, room_id, alice, m["id"]) == []
+        # agent 對自己的訊息同樣不行
+        bm = await _say(client, room_id, bot, "好")
+        r = await client.put(_url(bm["id"], EYES), headers=_pid(bot))
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "reaction_own_message"
+        # 別人仍可按
+        r = await client.put(_url(m["id"], THUMB), headers=_pid(bob))
+        assert r.status_code == 200
+        # 舊資料：直接塞一筆自己對自己的表情，DELETE 仍能移除
+        con = sqlite3.connect(str(tmp_path / "rx.db"))
+        try:
+            con.execute(
+                "INSERT INTO message_reaction VALUES (?,?,?,?,?)",
+                (m["id"], alice["participant_id"], HEART, room_id, "t"))
+            con.commit()
+        finally:
+            con.close()
+        r = await client.delete(_url(m["id"], HEART), headers=_pid(alice))
+        assert r.status_code == 200 and r.json()["changed"] is True

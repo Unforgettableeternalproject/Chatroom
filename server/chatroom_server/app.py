@@ -12561,7 +12561,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         **不領 seq、不呼叫 events.notify**：表情回應不是訊息，叫醒 agent 或推進
         游標都是錯的。即時同步走 reaction_bus，只有 WS 連線收得到。
 
-        誰能按：人類可以按任何未刪除的一般訊息；agent 只能按**人類**發的訊息
+        誰能按：人類可以按任何未刪除的一般訊息（自己發的除外）；agent 只能按**人類**發的訊息
         （表示「已看過」），不能按 agent 或 system 訊息。
         """
         canon = _canon_reaction(emoji)
@@ -12582,6 +12582,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(422, "not_a_chat_message", "系統訊息不能回應")
         if msg["deleted"]:
             raise _err(422, "message_deleted", "這則訊息已經被撤回，不能回應")
+        # 不能對自己的訊息按表情；只擋新增，取消不擋（讓舊資料能移除）
+        if add and msg["sender_id"] == me["id"]:
+            raise _err(403, "reaction_own_message",
+                       "不能對自己發的訊息按表情")
         if me["role"] != "human":
             sender = None
             if msg["sender_id"]:

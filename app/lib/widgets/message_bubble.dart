@@ -312,6 +312,8 @@ class MessageBubble extends StatelessWidget {
     final canReact = actions != null &&
         actions!.enabled &&
         actions!.onReact != null &&
+        // 不能對自己的訊息按表情
+        !isSelf &&
         !message.deleted &&
         !message.isSystem;
     final showChips =
@@ -327,7 +329,14 @@ class MessageBubble extends StatelessWidget {
           child: header,
         ),
         const SizedBox(height: 6),
-        focused,
+        if (canReact)
+          _HoverAddReactionSlot(
+            bubble: focused,
+            current: myReactionOf(message.reactions),
+            onPick: (e) => actions!.onReact!(message, e),
+          )
+        else
+          focused,
         if (showChips) ...[
           const SizedBox(height: 6),
           // 對齊各自的泡泡：別人的訊息有左軸＋內距，chip 跟著縮進同樣的量
@@ -351,90 +360,112 @@ class MessageBubble extends StatelessWidget {
           message: message,
           actions: actions,
           isSelf: isSelf,
-          child: canReact
-              ? _HoverAddReaction(
-                  alignStart: isSelf,
-                  current: myReactionOf(message.reactions),
-                  onPick: (e) => actions!.onReact!(message, e),
-                  child: column,
-                )
-              : column,
+          child: canReact ? _HoverScope(child: column) : column,
         ),
       ),
     );
   }
 }
 
-/// 桌面 hover 訊息時，在標題列那一側浮出「加表情」小按鈕。
+/// 桌面 hover 訊息時，讓整則訊息（標題、泡泡、chip）共用一個 hover 狀態。
+class _HoverScope extends StatefulWidget {
+  const _HoverScope({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_HoverScope> createState() => _HoverScopeState();
+}
+
+class _HoverScopeState extends State<_HoverScope> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: _HoverState(hover: _hover, child: widget.child),
+      );
+}
+
+class _HoverState extends InheritedWidget {
+  const _HoverState({required this.hover, required super.child});
+
+  final bool hover;
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_HoverState>()?.hover ?? false;
+
+  @override
+  bool updateShouldNotify(_HoverState old) => hover != old.hover;
+}
+
+/// 泡泡右側預留一格固定寬度，hover 時按鈕畫在這一格裡、與泡泡底部對齊。
 ///
-/// 按鈕疊在 header 那一行的**空白端**（別人的訊息在右、自己的在左），
-/// 不佔版面，所以出現／消失不會讓訊息跳動。觸控裝置沒有 hover，走長按選單。
-class _HoverAddReaction extends StatefulWidget {
-  const _HoverAddReaction({
-    required this.child,
+/// 預留的是固定空間（hover 前後都在），所以泡泡與訊息列的版面不會跳動；
+/// 按鈕在泡泡外側，不遮擋泡泡內容、標題列與時間，也在 chip 列上方。
+/// 只用於別人的訊息（自己的訊息不能加表情）。觸控裝置沒有 hover，走長按選單。
+class _HoverAddReactionSlot extends StatelessWidget {
+  const _HoverAddReactionSlot({
+    required this.bubble,
     required this.onPick,
-    required this.alignStart,
     this.current,
   });
 
-  final Widget child;
+  static const double slotWidth = 30;
+
+  final Widget bubble;
   final void Function(String emoji) onPick;
-  final bool alignStart;
   final String? current;
-
-  @override
-  State<_HoverAddReaction> createState() => _HoverAddReactionState();
-}
-
-class _HoverAddReactionState extends State<_HoverAddReaction> {
-  bool _hover = false;
 
   Future<void> _open(BuildContext btnContext) async {
     final box = btnContext.findRenderObject()! as RenderBox;
     final pos = box.localToGlobal(Offset(0, box.size.height));
-    final picked = await showReactionPicker(btnContext, pos,
-        current: widget.current);
-    if (picked != null) widget.onPick(picked);
+    final picked =
+        await showReactionPicker(btnContext, pos, current: current);
+    if (picked != null) onPick(picked);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Stack(
-        children: [
-          widget.child,
-          if (_hover)
-            Positioned(
-              top: 0,
-              left: widget.alignStart ? 0 : null,
-              right: widget.alignStart ? null : 0,
-              child: Builder(
-                builder: (btnContext) => Tooltip(
-                  message: l10n.reactionAddTooltip,
-                  child: InkWell(
-                    key: const Key('reaction-add-button'),
-                    borderRadius: BorderRadius.circular(999),
-                    onTap: () => _open(btnContext),
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        color: s.bgCard,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: s.line),
+    final hover = _HoverState.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Flexible(child: bubble),
+        SizedBox(
+          width: slotWidth,
+          height: 24,
+          child: hover
+              ? Align(
+                  alignment: Alignment.bottomRight,
+                  child: Builder(
+                    builder: (btnContext) => Tooltip(
+                      message: l10n.reactionAddTooltip,
+                      child: InkWell(
+                        key: const Key('reaction-add-button'),
+                        borderRadius: BorderRadius.circular(999),
+                        onTap: () => _open(btnContext),
+                        child: Container(
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: s.bgCard,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: s.line),
+                          ),
+                          child: Icon(Icons.add_reaction_outlined,
+                              size: 15, color: s.inkMute),
+                        ),
                       ),
-                      child: Icon(Icons.add_reaction_outlined,
-                          size: 15, color: s.inkMute),
                     ),
                   ),
-                ),
-              ),
-            ),
-        ],
-      ),
+                )
+              : null,
+        ),
+      ],
     );
   }
 }
@@ -585,7 +616,7 @@ class _ContextMenuRegion extends StatelessWidget {
                 Text(l10n.msgMenuCreateTask,
                     style: UepText.sans(size: 13.5, color: s.ink)),
           ),
-          if (a.onReact != null)
+          if (a.onReact != null && !isSelf)
             PopupMenuItem(
               value: 'react',
               height: 36,

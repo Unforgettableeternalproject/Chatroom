@@ -136,6 +136,92 @@ void main() {
     expect(picked, heart);
   });
 
+  Future<TestGesture> hoverOn(WidgetTester tester, Finder f) async {
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(tester.getCenter(f));
+    await tester.pump();
+    return mouse;
+  }
+
+  testWidgets('按鈕在泡泡右下角外側、不壓時間、hover 前後泡泡不動', (tester) async {
+    for (final reactions in [const <ReactionSummary>[], _two]) {
+      await tester.pumpWidget(_app(SizedBox(
+        width: 500,
+        child: MessageBubble(
+          message: _msg(reactions: reactions),
+          isSelf: false,
+          senderKind: 'human',
+          actions: _actions(onReact: (_, _) async {}),
+        ),
+      )));
+      final bubbleBefore = tester.getRect(find.byKey(const Key('bubble-body')));
+      final mouse = await hoverOn(tester, find.text('內容'));
+      final bubble = tester.getRect(find.byKey(const Key('bubble-body')));
+      expect(bubble, bubbleBefore);
+
+      final btn = tester.getRect(find.byKey(const Key('reaction-add-button')));
+      expect(btn.bottom, closeTo(bubble.bottom, 1));
+      expect(btn.left, greaterThanOrEqualTo(bubble.right));
+      expect(btn.left - bubble.right, lessThan(12));
+      // 時間戳：header 裡的 mono 小字
+      final time = tester.getRect(find.textContaining(RegExp(r'\d\d:\d\d')));
+      expect(btn.overlaps(time), isFalse);
+      if (reactions.isNotEmpty) {
+        final chip = tester.getRect(find.byKey(const Key('reaction-chip-$thumb')));
+        expect(btn.overlaps(chip), isFalse);
+      }
+      await mouse.removePointer();
+    }
+  });
+
+  testWidgets('長訊息與窄寬度：按鈕仍貼泡泡右下、不溢出', (tester) async {
+    final m = Message(
+      id: 'm2',
+      seq: 4,
+      updateSeq: 0,
+      kind: 'chat',
+      content: '很長的一行文字' * 12,
+      senderName: '某人',
+      createdAt: '2026-10-27T00:00:00+00:00',
+    );
+    await tester.pumpWidget(_app(SizedBox(
+      width: 320,
+      child: MessageBubble(
+        message: m,
+        isSelf: false,
+        senderKind: 'human',
+        actions: _actions(onReact: (_, _) async {}),
+      ),
+    )));
+    await hoverOn(tester, find.byKey(const Key('bubble-body')));
+    final bubble = tester.getRect(find.byKey(const Key('bubble-body')));
+    final btn = tester.getRect(find.byKey(const Key('reaction-add-button')));
+    expect(btn.bottom, closeTo(bubble.bottom, 1));
+    expect(btn.left, greaterThanOrEqualTo(bubble.right));
+    expect(btn.right, lessThanOrEqualTo(tester.getRect(find.byType(SizedBox).first).right + 0.5));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('自己的訊息沒有加表情入口（hover 與右鍵選單），別人按的 chip 仍在',
+      (tester) async {
+    await tester.pumpWidget(_app(MessageBubble(
+      message: _msg(reactions: _two),
+      isSelf: true,
+      senderKind: 'human',
+      actions: _actions(onReact: (_, _) async {}),
+    )));
+    await hoverOn(tester, find.text('內容'));
+    expect(find.byKey(const Key('reaction-add-button')), findsNothing);
+    expect(find.byKey(const Key('reaction-chip-$thumb')), findsOneWidget);
+
+    await tester.tap(find.text('內容'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('MESSAGE #'), findsOneWidget);
+    expect(find.textContaining('加入表情'), findsNothing);
+  });
+
   testWidgets('快選列：目前自己選的有高亮，點它回傳同一個（呼叫端解讀為取消）',
       (tester) async {
     String? picked;
