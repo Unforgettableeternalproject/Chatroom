@@ -93,3 +93,17 @@ def test_a_missing_session_key_is_not_a_rejoin():
     err = translate_status(
         401, {"code": "session_key_header_required", "message": "x"}, "u")
     assert err.identity_invalid is False
+
+
+def test_revoked_or_rotated_token_keeps_the_hubs_explanation():
+    """被撤銷／換發的 token：Hub 的說明要原樣交給 agent。
+
+    「請向主持人索取新的」才是正確的下一步；翻成泛用的「檢查 CHATROOM_TOKEN
+    設定」會讓持有者去查一把本來就沒設錯的設定。其他 invalid_token 維持原訊息。
+    """
+    hub_msg = "這張 token 已被撤銷或換發，請向主持人索取新的"
+    err = translate_status(401, {"code": "invalid_token", "message": hub_msg}, "u")
+    assert hub_msg in err.reason
+    plain = translate_status(
+        401, {"code": "invalid_token", "message": "token 無效或未提供"}, "u")
+    assert "CHATROOM_TOKEN" in plain.reason

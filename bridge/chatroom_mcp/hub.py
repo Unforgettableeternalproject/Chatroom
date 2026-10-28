@@ -103,6 +103,12 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
                    "但請求沒有帶 X-Session-Key。",
                 status=status, detail=detail,
             )
+        if code == "invalid_token" and any(
+                k in text for k in ("撤銷", "換發")):
+            # token 被主持人撤銷或換發：Hub 已經講清楚「請索取新的」。
+            # 翻成泛用的「檢查 CHATROOM_TOKEN 設定」會讓持有者去查一把
+            # 沒設錯的設定
+            return HubError(text, status=status, detail=detail)
         # 走到這裡的 401 一律被當成 token 問題——**那個假設只對
         # `invalid_token` 成立**。Hub 之後新增的「你沒帶某個身分標頭」類
         # code 若掉進來，agent 會被指去查一把好好的 token，然後在那裡繞很久。
