@@ -93,6 +93,10 @@ class WindowTray with WindowListener, TrayListener {
   @visibleForTesting
   static WindowBackend window = const _RealWindowBackend();
 
+  /// 結束進程的接點。測試換掉它，免得 `exit(0)` 把測試進程一起殺了。
+  @visibleForTesting
+  static void Function(int code) exitProcess = exit;
+
   bool _enabled = false;
   bool _listening = false;
   bool _trayVisible = false;
@@ -202,11 +206,17 @@ class WindowTray with WindowListener, TrayListener {
   }
 
   /// 真的結束：先把攔截拆掉，否則 `destroy()` 會被自己擋下來。
+  ///
+  /// 先 `hide()` 讓視窗立刻消失：`destroy()` 只是送出 PostQuitMessage，之後
+  /// runner 同步收掉引擎，期間視窗還掛著卻不處理訊息，會顯示「沒有回應」。
+  /// 最後 `exit(0)` 跳過那段慢收尾；log 是同步寫入並 flush，沒有待寫狀態。
   Future<void> _quit() async {
     try {
+      await window.hide();
       await window.setPreventClose(false);
       await _removeTray();
       await window.destroy();
+      exitProcess(0);
     } catch (e) {
       _log.warning('結束程式失敗：$e');
     }
