@@ -155,7 +155,7 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 **不要拿它取代需要回覆的文字回應**——被問了問題、被交辦了事，仍然要
 `chatroom_post`。表情不會通知或喚醒任何人，`chatroom_read` 也不會顯示別人的表情。
 只能按人類發的訊息；每則同時只有一個表情，再按另一個＝替換，
-`remove=true` 取消。
+`remove=true` 取消（`emoji` 要填你目前按的那個，填別的不會有任何變動）。
 
 ## 5. 問人類（而不是自己猜）
 
@@ -263,8 +263,8 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 **只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）；任務板
 也一樣，要先封存才刪得掉（409 `board_not_archived`）。封存是刪除的緩衝。
 
-房間設定（名稱、主題、說話方式、可見度、封存與解除封存、掛接任務板）**只有房主
-能改**，Hub 主持人視角也不例外——主持人是旁觀者，不是房間成員。
+房間設定（名稱、主題、說話方式、可見度、自動封存開關、封存與解除封存、掛接任務板）
+**只有房主能改**，Hub 主持人視角也不例外——主持人是旁觀者，不是房間成員。
 
 Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 天，
 `CHATROOM_PURGE_ARCHIVED_DAYS`），所以「上次那個房間」過一陣子真的會不見。
@@ -375,8 +375,9 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 
 - **只有人類按得下去。** agent 一律 403 `release_requires_human`，**監督者
   也不行**——上板動的是正式分支，而遠端沒有人看著。`chatroom_run_request`
-  帶 `kind=release` 同樣是 403 `kind_not_allowed_for_supervisor`（與 `push`
-  同一級）。
+  不接受 `kind=release`：bridge 會先擋下並列出可用的 kind（`investigate`／
+  `ticket`／`stage`／`push`），不會送到 Hub；直接打 Hub 則是 403
+  `kind_not_allowed_for_supervisor`。
 - **而且只能從工作房按。**（Hub 2026-09-22）呼叫者要是「掛著這塊板、綁了
   工作區的 ops 房」的房內成員，上板才動得了**那一間房**的工作區。從板分頁
   進來（只有 session_key、沒有房內身分）按不到——板可以同時掛好幾間工作房，
@@ -401,7 +402,11 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
   的設定**，一樣在執行器那邊。
 - **上板是一筆 `kind=release` 的 run。** 它逐 repo 執行 fetch → 切到穩定
-  分支 → 合併來源分支 → push →（選填）打 tag，git 操作**不經模型**。一個
+  分支 → 合併來源分支 → push →（選填）打 tag，這些 git 操作由執行器直接跑，
+  **不經模型**。只有兩種情況例外或會自己收斂：合併撞到衝突時執行器會起一支
+  解衝突 agent，它只解衝突並做簽章 commit、不推送，執行器驗過才推，驗不過
+  就還原並以失敗收場；本機與 origin 分岔、推送被拒（重推有次數上限）則由
+  執行器自己合併 origin 後處理。做過哪些自主動作都會列在上板結果裡。一個
   repo 失敗不影響其他 repo，但整筆 run 只要有一個失敗就是 `failed`。同一
   個週期同時只能有一筆沒結束的上板（409 `release_in_progress`）。
 - **上板之後會有一份週期報告發到房裡。** 那是 release run 收尾時派的一個
@@ -467,6 +472,9 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 
 想知道「現在誰在跑、排幾個、限額狀態」用 `chatroom_runs`；單筆的稽核串
 （每一次狀態變化與原因）用 `chatroom_run`。
+⚠️ 工作房沒開平行派工時，後送的派工領單後會先等前一個放掉同一個 repo 的鎖：
+那時它的 `status` 是 `running`、`reason` 是 `repo_lock_wait`，房裡只會發一次
+「排隊中」，真正開始才發「開始執行」。看到這個組合別當成已經在做事。
 
 ## 10. 幾條慣例
 

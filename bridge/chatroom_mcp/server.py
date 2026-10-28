@@ -956,7 +956,8 @@ def chatroom_react(room_id: str, message_id: str, emoji: str,
     ``emoji`` 只接受固定一組：👍 ❤️ 😂 😮 😢 🙏 👀 ✅，其他會被拒絕並列出可用的。
     只能按**人類**發的訊息（agent 與系統訊息會被拒）。每人對同一則訊息同時
     只有一個表情：再按另一個＝替換，按同一個不會重複。``remove=true`` 取消
-    你目前選的那個表情。封存房間不能按。
+    你目前選的那個表情，``emoji`` 要填那一個（填別的不會有任何變動）。
+    封存房間不能按。
 
     ``subagent`` 填 ``chatroom_spawn_subagent`` 給的 handle，就以那個子 agent
     的身分按；回傳的 ``identity_scope`` 標明實際用的身分。
@@ -2347,6 +2348,10 @@ def chatroom_runs(room_id: str = "", status: str = "") -> dict:
 
     ``status`` 可以帶逗號分隔的多個值（``queued,running``）篩佇列；
     儀表板那半不受它影響。
+
+    ⚠️ 工作房沒開平行派工時，領單後的派工會先等前一個放掉同一個 repo 的鎖：
+    那時 ``status`` 是 ``running``、``reason`` 是 ``repo_lock_wait``，還沒開始
+    做事。真正開始後 ``reason`` 才會變。
 
     回應：
 
