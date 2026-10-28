@@ -33,6 +33,8 @@ class _FakeTray implements TrayBackend {
 class _FakeWindow implements WindowBackend {
   bool preventClose = false;
   int hideCount = 0;
+  int destroyCount = 0;
+  final List<String> calls = [];
   final List<bool> preventCloseCalls = [];
 
   @override
@@ -48,10 +50,16 @@ class _FakeWindow implements WindowBackend {
   Future<void> focus() async {}
 
   @override
-  Future<void> hide() async => hideCount++;
+  Future<void> hide() async {
+    hideCount++;
+    calls.add('hide');
+  }
 
   @override
-  Future<void> destroy() async {}
+  Future<void> destroy() async {
+    destroyCount++;
+    calls.add('destroy');
+  }
 }
 
 void main() {
@@ -103,6 +111,24 @@ void main() {
 
     WindowTray.instance.onWindowClose();
     expect(window.hideCount, 1);
+  });
+
+  test('quit：先 hide、再 destroy，最後才 exit', () async {
+    final realExit = WindowTray.exitProcess;
+    final exitCodes = <int>[];
+    WindowTray.exitProcess = (code) {
+      window.calls.add('exit');
+      exitCodes.add(code);
+    };
+    addTearDown(() => WindowTray.exitProcess = realExit);
+    WindowTray.tray = _FakeTray();
+    await WindowTray.instance.setEnabled(true);
+
+    await WindowTray.instance.quit();
+
+    expect(window.calls, ['hide', 'destroy', 'exit']);
+    expect(exitCodes, [0]);
+    expect(window.preventClose, isFalse);
   });
 
   test('攔截安裝失敗也退回關閉', () async {

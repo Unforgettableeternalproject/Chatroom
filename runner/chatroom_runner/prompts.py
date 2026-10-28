@@ -40,7 +40,7 @@ SKILLS_FRAME = """## 這個專案必須遵守的 skill
 步驟做。以下幾點**以本契約為準**，skill 與它衝突時聽契約的：
 
 - headless 沒有 Plan Mode。skill 要你進 Plan Mode 等使用者核准的那一步，改成
-  把計畫寫進卡的 note，然後**自己繼續做**——這裡沒有人能按核准。
+  把計畫寫進卡的敘述（`chatroom_board_update` 的 `description`），然後**自己繼續做**——這裡沒有人能按核准。
 - skill 說「使用者會 commit 與 push」的地方，改成**你自己 commit、不 push**。
   推送是房內人類從儀表板按的。
 - skill 要求的 Jira 留言與狀態轉換**在你的工作範圍內，要做**（Atlassian MCP
