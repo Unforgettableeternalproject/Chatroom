@@ -603,7 +603,9 @@ def chatroom_leave(room_id: str) -> dict:
     **你在這個房間還沒被回答的提問會一併撤回**——你都走了，留著只會讓人去
     回答一個沒有讀者的問題。
     離開後本機身分即失效，之後要再發言必須重新 chatroom_join。
-    注意：房內最後一個 agent 離開後，Hub 會自動封存該房間。
+    離開不會讓房間消失。只有房間開著「自動封存」，而且房裡沒有 agent 時，
+    Hub 才會先倒數（預設 60 秒）再封存；房主關掉自動封存就不會。
+    倒數期間有 agent 回來就取消。
     """
     data = _room_request(room_id, "POST", f"/api/rooms/{room_id}/leave")
     state().clear_identity(room_id)
@@ -616,7 +618,7 @@ def chatroom_heartbeat(room_id: str, subagent: str = "") -> dict:
     """回報你仍在線，刷新該房間身分的 last_seen_at。
 
     Hub 的 presence sweeper 會把閒置逾時的 agent 移出房間，房內沒有 agent 時
-    房間還會被自動封存。若你要離開工作區去做一件長時間的事（跑測試、長編譯），
+    若房間開著自動封存，房間還會被封存。若你要離開工作區去做一件長時間的事（跑測試、長編譯），
     中途呼叫這個工具就能保住身分。
     正常讀寫訊息本來就會刷新 last_seen_at，因此**不必**在每次對話後都呼叫。
 
