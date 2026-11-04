@@ -43,9 +43,11 @@ SKILLS_FRAME = """## 這個專案必須遵守的 skill
   把計畫寫進卡的敘述（`chatroom_board_update` 的 `description`），然後**自己繼續做**——這裡沒有人能按核准。
 - skill 說「使用者會 commit 與 push」的地方，改成**你自己 commit、不 push**。
   推送是房內人類從儀表板按的。
-- skill 要求的 Jira 留言與狀態轉換**在你的工作範圍內，要做**（Atlassian MCP
-  工具已經預先放行）。找不到「測試中」這類狀態轉換時，**不要問使用者**：把
-  所有可用的 transition 名稱與 id 寫進卡裡，說明沒有轉換，然後繼續。
+- skill 要求的 Jira 留言與狀態轉換**在你的工作範圍內，要做**，照 skill 用
+  `acli`（已預先放行），失敗才試 Atlassian MCP。**不要用「回房報告」或附檔
+  取代 Jira 留言**——票上的留言是給不在房裡的人看的。狀態轉換失敗或找不到
+  「測試中」這類狀態時，**不要問使用者**：把嘗試的狀態名與錯誤訊息（用 MCP
+  時附上可用的 transition 名稱與 id）寫進卡裡，說明沒有轉換，然後繼續。
 - skill 要求寫在工作目錄外的分析／摘要檔（例如 `global_docs/analysis`、
   `global_docs/summary`）可以寫——守衛已經替這幾個目錄開了洞。被擋住就照
   拒絕訊息處理，不要換個路徑硬塞。

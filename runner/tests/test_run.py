@@ -12,6 +12,7 @@ import contextlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1658,13 +1659,69 @@ async def test_an_unexpected_exception_still_reports_and_kills_the_child(
     monkeypatch.setattr(run_module, "kill_tree",
                         lambda pid: (killed.append(pid), real_kill(pid))[1])
 
+    started = time.monotonic()
     outcome = await asyncio.wait_for(ex.execute(run), timeout=120)
+    elapsed = time.monotonic() - started
 
     assert outcome.status == "failed"
     assert outcome.reason.startswith("runner_error: ValueError"), outcome.reason
+    # pump 一炸就要立刻殺：不能等子進程自己睡完 FAKE_CLAUDE_SLEEP（60 秒）
+    assert elapsed < 20, f"例外後 {elapsed:.0f} 秒才收場：沒有立刻殺子進程"
     final, _ = await _trail(client, run["id"], headers)
     assert final["status"] == "failed", "Hub 上不能留一筆沒有人在跑的 running"
     assert killed, "子進程沒被殺：它會一直跑到牆鐘上限，而沒有人在看它"
+
+
+async def test_a_swallowed_pump_failure_kills_the_child_at_once(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """真實路徑：`_pump` 吞掉例外只記 `pump_error`——沒人讀 stream 了，
+    子進程要立刻被殺並分類成 pump_failed，不能睡到牆鐘上限。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "long")
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "60")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-pump-swallowed")
+    ex = _executor(make_config(tmp_path, work_repo), runner_hub)
+
+    async def swallowed(self, proc, watcher, run_dir):
+        self.pump_error = "ValueError: chunk exceed the limit"
+
+    monkeypatch.setattr(RunExecutor, "_pump", swallowed)
+    killed: list[int] = []
+    real_kill = run_module.kill_tree
+    monkeypatch.setattr(run_module, "kill_tree",
+                        lambda pid: (killed.append(pid), real_kill(pid))[1])
+
+    started = time.monotonic()
+    outcome = await asyncio.wait_for(ex.execute(run), timeout=120)
+    elapsed = time.monotonic() - started
+
+    assert killed, "子進程沒被殺"
+    assert elapsed < 20, f"{elapsed:.0f} 秒才收場"
+    assert outcome.status == "failed"
+    assert outcome.reason.startswith("pump_failed"), outcome.reason
+    assert "chunk exceed the limit" in outcome.reason
+
+
+async def test_a_stale_pump_error_does_not_kill_the_next_spawn(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    """上一輪留下的 `pump_error` 不能讓下一輪正常 EOF 的進程被誤殺。"""
+    _app, client = hub_app
+    room_id, headers = ops_room
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="ticket", ref="task-pump-stale")
+    ex = _executor(make_config(tmp_path, work_repo), runner_hub)
+    ex.pump_error = "ValueError: 上一輪留下來的"
+    killed: list[int] = []
+    real_kill = run_module.kill_tree
+    monkeypatch.setattr(run_module, "kill_tree",
+                        lambda pid: (killed.append(pid), real_kill(pid))[1])
+
+    outcome = await asyncio.wait_for(ex.execute(run), timeout=120)
+
+    assert not killed, "正常收工的進程被誤殺"
+    assert outcome.status == "done", (outcome.status, outcome.reason)
 
 
 # ── 派工前同步工作樹（諾薇亞 09/18）────────────────────────────

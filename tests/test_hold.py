@@ -5,6 +5,8 @@ heartbeat 得中途反覆打，長測試／長編譯期間 agent 根本不會回
 crash 的 agent：沒有人會來解除，無上限等於永遠掃不掉的殘影。
 """
 
+import asyncio
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -102,6 +104,9 @@ async def test_expired_hold_no_longer_protects(tmp_path):
 
             assert (await _hold(client, room_id, p["participant_id"]))["held"] is True
 
+            # sweeper 比的是 hold_until < now（嚴格小於）；同一個時鐘刻度內
+            # 掃描會看到相等的時間戳而不算過期，先讓時間確實往前走
+            await asyncio.sleep(0.05)
             await app.state.sweep_once()
             r = await client.post(
                 f"/api/rooms/{room_id}/heartbeat",
