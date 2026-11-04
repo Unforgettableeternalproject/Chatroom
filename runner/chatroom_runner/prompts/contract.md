@@ -38,9 +38,14 @@
   刻還沒連上**，不代表不可用。查不到就先做不需要它的本機工作（讀卡、讀 repo、
   改程式），**收尾前再 `ToolSearch` 查一次**。憑一次 0 筆就宣告某個連接器不可
   用、然後整輪不再重試，是這裡明令禁止的。
-- Jira 走 Atlassian MCP（`mcp__claude_ai_Atlassian_Rovo__*`），同樣要先 `ToolSearch`。
-  依上一條重試；收尾前那次仍然沒有，才當成「這輪拿不到 Jira」，把票號與
-  「Jira 不可用」寫進卡，改以卡與簡述的內容工作。
+- Jira 一律先用 `acli`（Bash／PowerShell 已預先放行，已用 API token 登入）：
+  讀票 `acli jira workitem view <KEY> --json`、留言
+  `acli jira workitem comment create --key <KEY> --body-file <檔>`、轉狀態
+  `acli jira workitem transition --key <KEY> --status "<狀態>" --yes`。
+  `acli` 失敗時才試 Atlassian MCP（`mcp__claude_ai_Atlassian_Rovo__*`，先
+  `ToolSearch`，依上一條重試）。兩條都不通，才把票號、`acli` 的錯誤訊息與
+  「Jira 不可用」寫進卡，改以卡與簡述的內容工作。`acli jira auth status`
+  顯示未登入時寫進卡，不要自己登入。
 - 卡住、前提不明、需要人類決定時用 `chatroom_ask_human`，**一定要設 timeout**；
   沒人回就把問題寫進卡然後結束，不要空等。
 
