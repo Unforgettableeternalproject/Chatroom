@@ -262,3 +262,31 @@ async def test_run_ref_unique_index_exists_on_a_clean_db(tmp_path):
         assert "queued" in idx[0] and "handoff" not in idx[0]
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_open_db_closes_connection_when_migration_fails(tmp_path, monkeypatch):
+    """migration 中途丟例外時，連線要關掉，不能留著開啟的交易。"""
+    import chatroom_server.db as db_mod
+
+    opened = []
+    real_connect = aiosqlite.connect
+
+    async def spy_connect(*args, **kwargs):
+        conn = await real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    async def boom(_db):
+        raise RuntimeError("migrate failed")
+
+    monkeypatch.setattr(db_mod.aiosqlite, "connect", spy_connect)
+    monkeypatch.setattr(db_mod, "_migrate", boom)
+
+    with pytest.raises(RuntimeError, match="migrate failed"):
+        await open_db(str(tmp_path / "fail.db"))
+
+    assert len(opened) == 1
+    # aiosqlite 關閉後，再執行任何語句都會丟 ValueError
+    with pytest.raises(ValueError):
+        await opened[0].execute("SELECT 1")

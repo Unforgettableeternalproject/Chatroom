@@ -8,9 +8,6 @@ import aiosqlite
 logger = logging.getLogger("chatroom")
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
-
 CREATE TABLE IF NOT EXISTS room (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -1486,11 +1483,16 @@ async def _ensure_run_ref_unique(db: aiosqlite.Connection) -> None:
 
 async def _migrate(db: aiosqlite.Connection) -> None:
     """為舊版 DB 補上後續版本新增的欄位（冪等）。"""
+    # 每張表只查一次欄位（原本每條 migration 各查一次，新庫上白跑 ~200 次往返）；
+    # 補欄後把新欄位記回快取，同表後續的條目看得到
+    columns: dict[str, set[str]] = {}
     for table, column, ddl in MIGRATIONS:
-        rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
-        existing = {r["name"] for r in rows}
-        if column not in existing:
+        if table not in columns:
+            rows = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+            columns[table] = {r["name"] for r in rows}
+        if column not in columns[table]:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+            columns[table].add(column)
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
     await _ensure_run_ref_unique(db)
@@ -1607,11 +1609,22 @@ async def open_db(path: str) -> aiosqlite.Connection:
     """開啟資料庫並確保 schema 存在（含舊版 DB 的欄位升級）。"""
     db = await aiosqlite.connect(path)
     db.row_factory = aiosqlite.Row
-    await db.executescript(SCHEMA)
-    await _migrate(db)
-    await db.commit()
-    # 換表放在補欄位**之後**：新表的欄位清單含了所有 migration 加過的欄位，
-    # 先換的話那些欄位還不存在，複製時會整批漏掉
-    if await _needs_room_fk_rebuild(db):
-        await _rebuild_board_tables(db)
+    try:
+        # PRAGMA 不能在交易內改 journal_mode，所以拆出來先跑
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+        # 整份 schema 與 migration 各包成一筆交易：DDL 預設一條一次 fsync，
+        # 新庫上光這點就佔開庫時間的大半
+        await db.executescript("BEGIN;" + SCHEMA + "COMMIT;")
+        await db.execute("BEGIN")
+        await _migrate(db)
+        await db.commit()
+        # 換表放在補欄位**之後**：新表的欄位清單含了所有 migration 加過的欄位，
+        # 先換的話那些欄位還不存在，複製時會整批漏掉
+        if await _needs_room_fk_rebuild(db):
+            await _rebuild_board_tables(db)
+    except BaseException:
+        # 中途失敗不留著開啟的連線與未完成的交易
+        await db.close()
+        raise
     return db
