@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,14 +61,18 @@ def runner_hub(hub_app):
     return RunnerHub("http://test", ROOT_TOKEN, client=client)
 
 
-@pytest.fixture
-def work_repo(tmp_path):
-    """一個掛著 origin 的工作樹，停在 ``jsai_dev``。"""
-    bare = tmp_path / "origin.git"
+@pytest.fixture(scope="session")
+def _work_repo_template(tmp_path_factory):
+    """session 級範本：bare origin + 停在 ``jsai_dev`` 的工作樹，只建一次。
+
+    每個測試的 ``work_repo`` 都從這裡複製，不共用可變狀態。
+    """
+    root = tmp_path_factory.mktemp("work_repo_template")
+    bare = root / "origin.git"
     bare.mkdir()
     subprocess.run(["git", "init", "--bare", "-b", "jsai_dev", str(bare)],
                    capture_output=True, check=True)
-    repo = tmp_path / "JSAI-Web"
+    repo = root / "JSAI-Web"
     repo.mkdir()
     git(repo, "init", "-b", "jsai_dev")
     git(repo, "remote", "add", "origin", str(bare))
@@ -75,4 +80,18 @@ def work_repo(tmp_path):
     git(repo, "add", "README.md")
     git(repo, "commit", "-m", "init")
     git(repo, "push", "-u", "origin", "jsai_dev")
+    return root
+
+
+@pytest.fixture
+def work_repo(tmp_path, _work_repo_template):
+    """一個掛著 origin 的工作樹，停在 ``jsai_dev``。
+
+    由 session 範本複製而來；複製後把 origin 改指回這個測試自己的 bare 副本。
+    """
+    bare = tmp_path / "origin.git"
+    repo = tmp_path / "JSAI-Web"
+    shutil.copytree(_work_repo_template / "origin.git", bare)
+    shutil.copytree(_work_repo_template / "JSAI-Web", repo)
+    git(repo, "remote", "set-url", "origin", str(bare))
     return repo

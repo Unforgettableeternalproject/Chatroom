@@ -8847,5 +8847,26 @@
   "reactionFailed": "表情送出失敗，已還原",
   "@reactionFailed": {
     "description": "表情送出失敗並已還原"
+  },
+  "opsSoftCapUsd": "軟上限 {usd}",
+  "@opsSoftCapUsd": {
+    "description": "執行器面板：USD 軟上限（沒有用量時）",
+    "placeholders": {
+      "usd": {
+        "type": "String"
+      }
+    }
+  },
+  "opsSoftCapUsdRemaining": "軟上限 {usd}，剩 {remaining}",
+  "@opsSoftCapUsdRemaining": {
+    "description": "執行器面板：USD 軟上限與剩餘額度",
+    "placeholders": {
+      "usd": {
+        "type": "String"
+      },
+      "remaining": {
+        "type": "String"
+      }
+    }
   }
 }

@@ -2362,6 +2362,8 @@ class RunExecutor:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             limit=STREAM_LINE_LIMIT, **no_window_kwargs())
         self.live_proc = proc
+        # 每次起進程重新起算：上一輪（resume／重試）的失敗不能算到這一輪
+        self.pump_error = ""
         pump = asyncio.create_task(self._pump(proc, watcher, run_dir))
         err_pump = asyncio.create_task(self._pump_stderr(proc, watcher))
         waiter = asyncio.create_task(proc.wait())
@@ -2371,21 +2373,37 @@ class RunExecutor:
                       if mcp_not_ready is not None else None)
         stop = "exited"
         try:
-            waits = {waiter, canceller}
+            waits = {waiter, canceller, pump}
             if mcp_waiter is not None:
                 waits.add(mcp_waiter)
-            done, _ = await asyncio.wait(
-                waits,
-                timeout=wall_clock if wall_clock > 0 else None,
-                return_when=asyncio.FIRST_COMPLETED)
-            if waiter not in done:
+            deadline = (time.monotonic() + wall_clock
+                        if wall_clock > 0 else None)
+            while True:
+                done, _ = await asyncio.wait(
+                    waits,
+                    timeout=(max(0.0, deadline - time.monotonic())
+                             if deadline is not None else None),
+                    return_when=asyncio.FIRST_COMPLETED)
+                if waiter in done:
+                    break
                 if canceller in done:
                     # 取消優先：人按了取消就是取消，即使 MCP 也沒連上
                     stop = "cancelled"
                 elif mcp_waiter is not None and mcp_waiter in done:
                     stop = "mcp_not_ready"
+                elif pump in done:
+                    # pump 正常讀到 EOF 不代表要殺（進程可能還在收尾）；
+                    # 但它丟了例外、或自己吞掉並記了 pump_error，就是
+                    # 沒人在看 stream 了——不能讓進程自己睡到牆鐘上限
+                    if pump.cancelled() or (
+                            pump.exception() is None and not self.pump_error):
+                        waits.discard(pump)
+                        continue
+                    stop = "pump_failed"
                 else:
                     stop = "wall_clock"
+                break
+            if waiter not in done:
                 kill_tree(proc.pid)
                 try:
                     await asyncio.wait_for(waiter, timeout=30)
@@ -2479,6 +2497,11 @@ class RunExecutor:
         if stop_reason == "wall_clock":
             return RunOutcome("failed", reason="wall_clock", usage=usage,
                               claude_session_id=sid)
+        if stop_reason == "pump_failed":
+            return RunOutcome("failed",
+                              reason=f"pump_failed: {self.pump_error}"
+                                     if self.pump_error else "pump_failed",
+                              usage=usage, claude_session_id=sid)
         if stop_reason == "mcp_not_ready":
             # 重試已經在 `_claude_run` 用完了；走到這裡就是前置條件不成立
             return RunOutcome("failed", reason=MCP_UNAVAILABLE_REASON,

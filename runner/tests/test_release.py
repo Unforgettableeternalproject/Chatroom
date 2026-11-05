@@ -11,7 +11,14 @@ clone，每條測試盯著一個會安靜失敗的地方——合併方式沒照
 from __future__ import annotations
 
 import asyncio
+import atexit
+import os
+import shutil
+import stat
 import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -44,17 +51,39 @@ class _RecordingHub:
         return self.reports[-1]
 
 
-def make_repo(tmp_path, name: str, *, stable: str = "main",
-              source: str = "develop"):
-    """一份掛著 bare origin 的 clone：``stable`` 一顆、``source`` 多一顆。
+_TEMPLATE_ROOT: Path | None = None
+_TEMPLATES: dict[tuple[str, str], tuple] = {}
 
-    回傳 ``(repo, bare)``；工作樹停在 ``source`` 上（上板要切走再切回來）。
-    """
-    bare = tmp_path / f"{name}.git"
-    bare.mkdir()
+
+def _force_rmtree(path: Path) -> None:
+    """刪範本目錄；Windows 上 git 物件是唯讀檔，遇到先改成可寫再重試。"""
+    def _retry(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_retry)
+    else:
+        shutil.rmtree(path, onerror=lambda f, p, e: _retry(f, p, e))
+
+
+def _template_root() -> Path:
+    """範本放的暫存目錄；test_release_selfheal 也 import make_repo，所以不綁 fixture。"""
+    global _TEMPLATE_ROOT
+    if _TEMPLATE_ROOT is None:
+        _TEMPLATE_ROOT = Path(tempfile.mkdtemp(prefix="release_repo_tpl_"))
+        atexit.register(_force_rmtree, _TEMPLATE_ROOT)
+    return _TEMPLATE_ROOT
+
+
+def _build_template(stable: str, source: str):
+    """真的跑一次 git：bare origin + 一份 clone，回傳兩者的範本路徑。"""
+    root = _template_root() / f"{len(_TEMPLATES)}"
+    bare = root / "origin.git"
+    bare.mkdir(parents=True)
     subprocess.run(["git", "init", "--bare", "-b", stable, str(bare)],
                    capture_output=True, check=True)
-    repo = tmp_path / name
+    repo = root / "work"
     repo.mkdir()
     git(repo, "init", "-b", stable)
     # 被測的 gitops 用的是 repo 自己的設定，不是測試 helper 塞的 -c：CI 的
@@ -74,6 +103,26 @@ def make_repo(tmp_path, name: str, *, stable: str = "main",
     git(repo, "add", "feature.txt")
     git(repo, "commit", "-m", "功能一")
     git(repo, "push", "-u", "origin", source)
+    return bare, repo
+
+
+def make_repo(tmp_path, name: str, *, stable: str = "main",
+              source: str = "develop"):
+    """一份掛著 bare origin 的 clone：``stable`` 一顆、``source`` 多一顆。
+
+    回傳 ``(repo, bare)``；工作樹停在 ``source`` 上（上板要切走再切回來）。
+    範本整個 session 建一次，每次呼叫複製一份獨立副本，origin 改指回副本自己
+    的 bare。
+    """
+    key = (stable, source)
+    if key not in _TEMPLATES:
+        _TEMPLATES[key] = _build_template(stable, source)
+    tpl_bare, tpl_repo = _TEMPLATES[key]
+    bare = tmp_path / f"{name}.git"
+    repo = tmp_path / name
+    shutil.copytree(tpl_bare, bare)
+    shutil.copytree(tpl_repo, repo)
+    git(repo, "remote", "set-url", "origin", str(bare))
     return repo, bare
 
 
