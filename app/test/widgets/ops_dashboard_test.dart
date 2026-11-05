@@ -494,6 +494,75 @@ void main() {
       expect(find.textContaining('剩 380000'), findsOneWidget);
     });
 
+    Future<void> pumpUsage(WidgetTester tester, Map<String, dynamic> usage) =>
+        tester.pumpWidget(_wrap(OpsDashboardView(
+          board: _board(runners: [
+            _runner(dashboardOverride: {
+              'repos': const <String, dynamic>{},
+              'usage': usage,
+              'runs': const <String, dynamic>{},
+              'runner': const {'version': '0.1.0'},
+            }),
+          ]),
+        )));
+
+    testWidgets('🔴 只設 USD 上限且已超過：不說「未設定」，寫出 USD 上限',
+        (tester) async {
+      await pumpUsage(tester, const {
+        'window_hours': 5.0,
+        'tokens': 900000,
+        'cost_usd': 66.35,
+        'soft_cap_tokens': 0,
+        'soft_cap_usd': 60.0,
+        'over_soft_cap': true,
+        'remaining_tokens': null,
+      });
+      expect(find.textContaining('未設定'), findsNothing);
+      expect(find.textContaining('軟上限 \$60.00'), findsOneWidget);
+      expect(find.textContaining('已達軟上限'), findsOneWidget);
+    });
+
+    testWidgets('只設 USD 上限、未超過：顯示剩餘 USD', (tester) async {
+      await pumpUsage(tester, const {
+        'window_hours': 5.0,
+        'tokens': 1000,
+        'cost_usd': 12.5,
+        'soft_cap_tokens': 0,
+        'soft_cap_usd': 60.0,
+        'over_soft_cap': false,
+        'remaining_tokens': null,
+      });
+      expect(find.textContaining('未設定'), findsNothing);
+      expect(find.textContaining('軟上限 \$60.00，剩 \$47.50'), findsOneWidget);
+    });
+
+    testWidgets('tokens 與 USD 都設：兩行都寫', (tester) async {
+      await pumpUsage(tester, const {
+        'window_hours': 5.0,
+        'tokens': 120000,
+        'cost_usd': 3.5,
+        'soft_cap_tokens': 500000,
+        'soft_cap_usd': 20.0,
+        'over_soft_cap': false,
+        'remaining_tokens': 380000,
+      });
+      expect(find.textContaining('剩 380000'), findsOneWidget);
+      expect(find.textContaining('軟上限 \$20.00，剩 \$16.50'), findsOneWidget);
+    });
+
+    testWidgets('兩者都是 0：才說未設定', (tester) async {
+      await pumpUsage(tester, const {
+        'window_hours': 5.0,
+        'tokens': 1000,
+        'cost_usd': 1.0,
+        'soft_cap_tokens': 0,
+        'soft_cap_usd': 0.0,
+        'over_soft_cap': false,
+        'remaining_tokens': null,
+      });
+      expect(find.text('軟上限：未設定'), findsOneWidget);
+    });
+
     testWidgets('沒回報：說「尚未回報」，不端出一排 0', (tester) async {
       await tester.pumpWidget(_wrap(OpsDashboardView(
         board: _board(runners: [

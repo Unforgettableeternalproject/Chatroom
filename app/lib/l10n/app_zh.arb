@@ -1836,5 +1836,7 @@
   "reactionFailed": "表情发送失败，已还原",
   "@reactionFailed": {
     "description": "表情送出失敗並已還原"
-  }
+  },
+  "opsSoftCapUsd": "软上限 {usd}",
+  "opsSoftCapUsdRemaining": "软上限 {usd}，剩 {remaining}"
 }

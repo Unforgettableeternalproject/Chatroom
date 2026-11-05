@@ -615,6 +615,14 @@ class _UsageRow extends StatelessWidget {
 
   final RunnerUsage usage;
 
+  static String _usd(num v) => r'$' + v.toStringAsFixed(2);
+
+  static Widget _capLine(String text, RunnerUsage usage, UepSurface s) => Text(
+        text,
+        style: UepText.mono(
+            size: 10.5, color: usage.overSoftCap ? UepColors.error : s.inkMute),
+      );
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -637,22 +645,32 @@ class _UsageRow extends StatelessWidget {
           style: UepText.sans(size: 13.5, color: s.ink),
         ),
         const SizedBox(height: 3),
-        Text(
-          // 沒回報軟上限就說沒回報。0 在執行器那端是「不設上限」，
-          // 兩者都不能畫成「剩 0」——那會讓人以為額度用完了
-          usage.softCapTokens == null
-              ? l10n.opsSoftCapNotReported
-              : usage.softCapTokens == 0
-                  ? l10n.opsSoftCapUnset
-                  : usage.remainingTokens == null
-                      ? l10n.opsSoftCapTokens('${usage.softCapTokens}')
-                      : l10n.opsSoftCapTokensRemaining(
-                          '${usage.softCapTokens}',
-                          '${usage.remainingTokens}'),
-          style: UepText.mono(
-              size: 10.5,
-              color: usage.overSoftCap ? UepColors.error : s.inkMute),
-        ),
+        // 沒回報軟上限就說沒回報。0 在執行器那端是「不設上限」，兩者都不能
+        // 畫成「剩 0」——那會讓人以為額度用完了。tokens 與 USD 任一有設就
+        // 各寫一行，兩者都沒設才說未設定
+        if (usage.softCapTokens == null && usage.softCapUsd == null)
+          _capLine(l10n.opsSoftCapNotReported, usage, s)
+        else if ((usage.softCapTokens ?? 0) <= 0 &&
+            (usage.softCapUsd ?? 0) <= 0)
+          _capLine(l10n.opsSoftCapUnset, usage, s)
+        else ...[
+          if ((usage.softCapTokens ?? 0) > 0)
+            _capLine(
+                usage.remainingTokens == null
+                    ? l10n.opsSoftCapTokens('${usage.softCapTokens}')
+                    : l10n.opsSoftCapTokensRemaining(
+                        '${usage.softCapTokens}', '${usage.remainingTokens}'),
+                usage,
+                s),
+          if ((usage.softCapUsd ?? 0) > 0)
+            _capLine(
+                l10n.opsSoftCapUsdRemaining(
+                    _usd(usage.softCapUsd!),
+                    _usd((usage.softCapUsd! - usage.costUsd)
+                        .clamp(0, double.infinity))),
+                usage,
+                s),
+        ],
         if (usage.overSoftCap)
           Text(l10n.opsOverSoftCap,
               style: UepText.mono(size: 10.5, color: UepColors.error)),

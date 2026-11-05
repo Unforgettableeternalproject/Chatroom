@@ -1835,5 +1835,7 @@
   "reactionFailed": "Reaction failed, reverted",
   "@reactionFailed": {
     "description": "表情送出失敗並已還原"
-  }
+  },
+  "opsSoftCapUsd": "Soft cap {usd}",
+  "opsSoftCapUsdRemaining": "Soft cap {usd}, {remaining} left"
 }
