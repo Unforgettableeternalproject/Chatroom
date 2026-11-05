@@ -42,6 +42,9 @@
   讀票 `acli jira workitem view <KEY> --json`、留言
   `acli jira workitem comment create --key <KEY> --body-file <檔>`、轉狀態
   `acli jira workitem transition --key <KEY> --status "<狀態>" --yes`。
+  **`acli` 指令要單獨執行**，不要接 `2>&1`、`| head` 等 pipe／重導，也不要用
+  `&&` 串其他指令：執行器是以精確前綴放行 `acli`，複合指令比對不到，會改交
+  auto mode 分類器，可能被擋。
   `acli` 失敗時才試 Atlassian MCP（`mcp__claude_ai_Atlassian_Rovo__*`，先
   `ToolSearch`，依上一條重試）。兩條都不通，才把票號、`acli` 的錯誤訊息與
   「Jira 不可用」寫進卡，改以卡與簡述的內容工作。`acli jira auth status`
