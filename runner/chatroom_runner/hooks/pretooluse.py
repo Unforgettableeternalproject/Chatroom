@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -103,6 +104,48 @@ def injection_text(items: list[dict]) -> str:
     return "\n".join([head, *body])
 
 
+# `cd <路徑> && acli jira workitem|auth ...`：模型照串 `cd` 的話，複合指令比對
+# 不到 `Bash(acli jira workitem ...:*)` 的窄規則，會改交 auto mode 分類器而被擋
+_CD_ACLI = re.compile(
+    r"""^\s*(?:cd|sl|chdir|set-location)\s+(?:/d\s+|-path\s+|-literalpath\s+)?
+        (?P<path>"[^"]+"|'[^']+'|[^\s"';&|]+)
+        \s*(?:&&|;)\s*
+        (?P<acli>acli\s+jira\s+(?:workitem|auth)\b[^\n]*)$""",
+    re.IGNORECASE | re.VERBOSE)
+# 剩下的部分只要出現這些就不是「單一 acli 指令」：pipe、重導、串接、替換、換行
+_COMPOUND_MARKS = re.compile(r"[|&;<>`\n\r]|\$\(")
+
+
+def _norm_dir(raw: str) -> str:
+    text = raw.strip().strip("\"'").replace("\\", "/")
+    msys = re.match(r"^/([a-zA-Z])(/|$)", text)  # Git Bash 的 /c/Users/...
+    if msys:
+        text = f"{msys.group(1)}:/" + text[msys.end():]
+    return os.path.normcase(os.path.normpath(text)) if text else ""
+
+
+def strip_cd_before_acli(tool_name: str, command: str,
+                         event_cwd: str) -> str | None:
+    """``cd <cwd> && acli jira ...`` 回傳只剩 acli 的指令；其他一律回 None。
+
+    只在 cd 的目標正規化後**等於**這次 run 的工作目錄（hook 輸入的 ``cwd``）、
+    且剩下的是單一 ``acli jira workitem|auth`` 指令時才改寫：cd 到別處會改變
+    相對路徑（``--body-file``）的意義，那種情況不動。
+    """
+    if tool_name not in ("Bash", "PowerShell") or not event_cwd:
+        return None
+    match = _CD_ACLI.match(command)
+    if not match:
+        return None
+    acli = match.group("acli").strip()
+    if _COMPOUND_MARKS.search(acli):
+        return None
+    target = _norm_dir(match.group("path"))
+    if not target or target != _norm_dir(event_cwd):
+        return None
+    return acli
+
+
 def main(argv: list[str] | None = None) -> int:
     # Claude Code 把 hook 的 stdout／stderr 當 UTF-8 讀，而 Windows 上 Python 的
     # 預設是 CP950：不設這兩行，additionalContext 與交接／收尾的提示到模型手上
@@ -154,6 +197,16 @@ def main(argv: list[str] | None = None) -> int:
         _append_tool_log(run_dir, tool_name, tool_input, "allow")
         # 被擋下來的那條路**不消費**轉達訊息：那次呼叫的回饋是 deny 的理由，
         # 附上去的話模型看到的是一段跟拒絕理由混在一起的話，而它已經被消費了
+        # 守衛已過（原指令的每一段都合法）才改寫；改寫只刪掉前面的 cd，
+        # 結果是原指令的子集。**不帶 permissionDecision**：只讓既有的窄規則去
+        # 比對改寫後的指令，不繞過分類器
+        out: dict = {"hookEventName": "PreToolUse"}
+        stripped = strip_cd_before_acli(
+            tool_name, str(tool_input.get("command") or ""),
+            str(event.get("cwd") or ""))
+        if stripped is not None:
+            # updatedInput 會整個取代 input，其他欄位（description 等）要帶著
+            out["updatedInput"] = {**tool_input, "command": stripped}
         items, cursor = pending_injections(run_dir)
         if items:
             try:
@@ -162,12 +215,12 @@ def main(argv: list[str] | None = None) -> int:
             except OSError:
                 # 游標寫不進去就**不送**：送了而沒記下來的話，下一次呼叫會
                 # 把同一段話再講一次，而模型分不出那是新的還是舊的
-                return 0
-            sys.stdout.write(json.dumps(
-                {"hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "additionalContext": injection_text(items)}},
-                ensure_ascii=False))
+                items = []
+            if items:
+                out["additionalContext"] = injection_text(items)
+        if len(out) > 1:
+            sys.stdout.write(json.dumps({"hookSpecificOutput": out},
+                                        ensure_ascii=False))
         return 0
     _append_tool_log(run_dir, tool_name, tool_input, decision.rule)
     sys.stderr.write(decision.reason)
