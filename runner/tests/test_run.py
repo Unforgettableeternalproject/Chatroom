@@ -969,6 +969,33 @@ def test_argv_preauthorizes_tools(tmp_path, work_repo):
         assert name not in investigate, "investigate 是唯讀的"
 
 
+def test_argv_allows_acli_by_narrow_prefix(tmp_path, work_repo):
+    """auto mode 進入時會丟掉裸名 `Bash`／`PowerShell`，只剩窄規則會在分類器
+    之前放行。`acli jira ... comment create` 因此必須以子指令前綴明列，
+    Bash 與 PowerShell 各一份；唯讀 kind 不給寫入那兩條。"""
+    cfg = make_config(tmp_path, work_repo)
+    ex = _executor(cfg, _NullHub())
+    proj = cfg.workspace("ai-website")
+
+    ticket = _allowed(ex._argv("p", "c", proj, tmp_path, "", "ticket"))
+    for tool in ("Bash", "PowerShell"):
+        for rule in ("acli jira workitem comment create:*",
+                     "acli jira workitem transition:*",
+                     "acli jira workitem view:*"):
+            assert f"{tool}({rule})" in ticket
+    # 不是萬用：只放契約點名的子指令，別的對外寫入不放寬
+    assert not [t for t in ticket if t.startswith(("Bash(", "PowerShell("))
+                and not t[t.index("(") + 1:].startswith("acli jira ")]
+    assert "Bash(acli:*)" not in ticket
+    assert "Bash(acli *)" not in ticket
+
+    investigate = _allowed(ex._argv("p", "c", proj, tmp_path, "",
+                                    "investigate"))
+    assert "Bash(acli jira workitem view:*)" in investigate
+    assert "Bash(acli jira workitem comment create:*)" not in investigate
+    assert "PowerShell(acli jira workitem transition:*)" not in investigate
+
+
 def test_extra_allowed_tools_merges_in(tmp_path, work_repo):
     """設定檔的 `extra_allowed_tools` 要併進 `--allowedTools`。"""
     cfg = make_config(
@@ -2301,3 +2328,71 @@ async def test_without_a_token_file_the_child_gets_no_token(
     seen = json.loads((cfg.runs_dir / run["id"] / "token.json")
                       .read_text(encoding="utf-8"))
     assert seen == {"present": False, "length": 0}
+
+
+# ── push 被拒（origin 前進）自動合併後重推 ─────────────────────
+
+def _advance_origin_on_first_push(monkeypatch, tmp_path, work_repo,
+                                  filename: str, text: str) -> dict:
+    """第一次 push 之前，另一份 clone 先推一顆上去：模擬 sha 核對之後 origin 前進。"""
+    state = {"done": False, "sha": ""}
+    real = run_module.gitops.git
+
+    async def spy(repo, *args, **kw):
+        if "push" in args and not state["done"]:
+            state["done"] = True
+            state["sha"] = _remote_commit(tmp_path, work_repo, text, filename)
+        return await real(repo, *args, **kw)
+
+    monkeypatch.setattr(run_module.gitops, "git", spy)
+    return state
+
+
+async def test_push_run_merges_origin_and_retries_when_rejected(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    _app, client = hub_app
+    room_id, headers = ops_room
+    _unsigned_local_identity(work_repo)
+    _local_commit(work_repo, "local.txt", "本機")
+    sha = git(work_repo, "rev-parse", "HEAD")
+    state = _advance_origin_on_first_push(monkeypatch, tmp_path, work_repo,
+                                          "remote.txt", "遠端")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "done", outcome.result
+    assert state["done"]
+    head = git(work_repo, "rev-parse", "HEAD")
+    assert git(work_repo, "rev-parse", "origin/jsai_dev") == head
+    assert head not in (sha, state["sha"]), "應該產生合併 commit"
+    assert outcome.git["head_before"] == sha
+    assert outcome.git["head_after"] == head
+    assert "自動合併" in outcome.result
+
+
+async def test_push_run_restores_head_when_merge_conflicts(
+        hub_app, ops_room, runner_hub, work_repo, tmp_path, monkeypatch):
+    _app, client = hub_app
+    room_id, headers = ops_room
+    _unsigned_local_identity(work_repo)
+    _local_commit(work_repo, "same.txt", "本機版")
+    sha = git(work_repo, "rev-parse", "HEAD")
+    _advance_origin_on_first_push(monkeypatch, tmp_path, work_repo,
+                                  "same.txt", "遠端版")
+    run = await _claimed_run(client, room_id, headers, runner_hub,
+                             kind="push", ref="JSAI-Web",
+                             brief=f"branch: jsai_dev\n{sha}")
+    cfg = make_config(tmp_path, work_repo)
+
+    outcome = await _executor(cfg, runner_hub).execute(run)
+
+    assert outcome.status == "failed"
+    assert outcome.reason == "push_merge_failed"
+    assert "已還原到推送前" in outcome.result and "same.txt" in outcome.result
+    assert git(work_repo, "rev-parse", "HEAD") == sha
+    assert outcome.git["head_after"] == sha
+    assert git(work_repo, "status", "--porcelain") == ""
