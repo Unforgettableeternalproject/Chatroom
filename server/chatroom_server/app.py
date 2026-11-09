@@ -5292,7 +5292,59 @@ def create_app(config: Config | None = None) -> FastAPI:
         key = actor_key(me["session_key"] or "")
         if await _board_role(_row_board_id(row), key, host) == "owner":
             return True
-        return await _is_board_supervisor(row, me)
+        if await _is_board_supervisor(row, me):
+            return True
+        return await _run_covers_card(row, me)
+
+    async def _run_covers_card(row, me) -> bool:
+        """派工 agent 能不能改這張**他人建立**的卡：卡**現在**仍在 run 的階段裡。
+
+        艾斯維爾 2026-11-09：執行器派出的 agent 改別人卡的 description 被
+        `not_board_editor` 擋下。三軸（owner／supervisor／建立者）它一軸都不
+        佔，而它正是被派去處理那個階段的人。
+
+        範圍刻意很窄，其餘權限不放寬：
+        - 只限**卡**（有 `checklist_id` 的列）；階段、週期本身不放寬
+        - 身分只認 `participant.run_id`——join 時已驗過
+          `claude-run-<id>` 屬於本房一筆 run，自報的 session_key 前綴不算
+        - run 要還在跑（claimed／running／limited／handoff），收場後失效
+        - run 若記了 board_id，要是這塊板
+        - 階段看卡**現在**的 `checklist_id`；卡被移到別的階段就不在範圍內
+
+        run 的階段怎麼解析與 `_run_ask_human` 同一份約定：`stage` 的 ref
+        是階段；`ticket`／`investigate` 的 ref 先當卡查（取其所屬階段），
+        查不到再當階段。push／release 的 ref 是 repo key，不涉及階段。
+        """
+        keys = row.keys() if hasattr(row, "keys") else ()
+        if "checklist_id" not in keys or not row["checklist_id"]:
+            return False
+        run_id = (me.get("run_id") or "").strip()
+        if not run_id:
+            return False
+        db = app.state.db
+        run = await (await db.execute(
+            "SELECT kind, ref, board_id, status FROM agent_run WHERE id=?",
+            (run_id,))).fetchone()
+        if run is None or run["status"] not in (
+                "claimed", "running", "limited", "handoff"):
+            return False
+        # 房軸建的 run `board_id` 是空的（看板掛接前的存量一樣）——空的時候
+        # 靠下面「階段 id ＝ 卡所屬階段」自然落在同一塊板；有值才要對得上
+        if (run["board_id"] or "") not in ("", _row_board_id(row)):
+            return False
+        ref = (run["ref"] or "").strip()
+        if not ref:
+            return False
+        if run["kind"] == "stage":
+            stage_id = ref
+        elif run["kind"] in ("ticket", "investigate"):
+            task = await (await db.execute(
+                "SELECT checklist_id FROM board_task WHERE id=?",
+                (ref,))).fetchone()
+            stage_id = task["checklist_id"] if task is not None else ref
+        else:
+            return False
+        return stage_id == row["checklist_id"]
 
     async def _board_item_writer(row, participant_id: str | None,
                                  session_key: str | None = None,

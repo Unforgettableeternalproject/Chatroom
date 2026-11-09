@@ -134,6 +134,24 @@ BASE_ALLOWED_TOOLS = (
 # 只有會寫東西的 kind 才給編輯工具；`investigate` 是唯讀的
 WRITE_ALLOWED_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
+# Jira 的 `acli` 精確前綴放行。🚨 auto mode 進入時會**丟棄**寬鬆的 allow 規則
+#（裸名 `Bash`／`PowerShell` 等同 `(*)`，docs/en/permission-modes：「broad allow
+# rules that grant arbitrary code execution are dropped」），丟掉之後所有 shell
+# 指令都交給分類器，`acli ... comment create` 會被當成「對外部系統寫入」擋下。
+# 窄規則則保留，而且「resolved before the classifier runs」——所以要明列到
+# 子指令為止。只放契約（prompts/contract.md）點名的那幾條，其他對外寫入不放寬。
+# 規則只比對指令文字：必須單獨執行，接 pipe／`&&` 會比對不到（見契約）
+ACLI_READ_RULES = ("acli jira workitem view:*", "acli jira auth status:*")
+ACLI_WRITE_RULES = ("acli jira workitem comment create:*",
+                    "acli jira workitem transition:*")
+
+
+def acli_allow_rules(write: bool) -> list[str]:
+    """Bash 與 PowerShell 各一份（Windows 上模型常選 PowerShell）。"""
+    names = ACLI_READ_RULES + (ACLI_WRITE_RULES if write else ())
+    return [f"{tool}({rule})" for rule in names
+            for tool in ("Bash", "PowerShell")]
+
 
 def allowed_tools(kind: str, extra: list[str] | None = None,
                   skills: list[str] | None = None,
@@ -156,6 +174,7 @@ def allowed_tools(kind: str, extra: list[str] | None = None,
     tools = list(BASE_ALLOWED_TOOLS)
     if kind in WRITE_KINDS or kind == RELEASE_CONFLICT_KIND:
         tools += list(WRITE_ALLOWED_TOOLS)
+    tools += acli_allow_rules(kind in WRITE_KINDS)
     for name in skills or []:
         entry = f"Skill({name})"
         if name and entry not in tools:
@@ -944,22 +963,89 @@ class RunExecutor:
                         f"派工時是 {len(expected)} 顆："
                         f"{', '.join(sorted(s[:8] for s in expected))}\n"
                         "請重新整理儀表板再按一次。"))
-        res = await gitops.git(repo.path, *self._push_credential_args(),
-                               "push", "origin", branch)
-        head = await gitops.head_sha(repo.path)
-        # push 不動 HEAD，但 `git` 欄位的形狀對所有 kind 一致（契約 C3）：
-        # 兩端填同一個 sha，讀的人看得出「這一步沒有產生新 commit」
+        cred = self._push_credential_args()
+        sign = self._signing_args()
+        head_before = await gitops.head_sha(repo.path)
+        actions: list[str] = []
+        res = None
+        failure = ""
+        merge_failed = False
+        for attempt in range(1, PUSH_ATTEMPTS + 1):
+            res = await gitops.git(repo.path, *cred, "push", "origin", branch)
+            if res.ok:
+                break
+            last = res.err or res.out
+            if not self._is_non_fast_forward(last) \
+                    or attempt == PUSH_ATTEMPTS:
+                if self._is_non_fast_forward(last):
+                    failure = (f"推送 {PUSH_ATTEMPTS} 次都被拒"
+                               f"（origin 一直在前進）：{last}")
+                break
+            # 被拒＝origin 在 sha 清單核對之後前進了：fetch、併進來再推。
+            # 不經模型——撞衝突直接還原失敗，不叫 agent 解
+            err = await self._integrate_origin_for_push(
+                repo.path, branch, cred, sign, actions)
+            if err:
+                failure = err
+                merge_failed = True
+                break
+        head_after = await gitops.head_sha(repo.path)
         git_fields = {"repo": repo.name, "branch": branch,
-                      "head_before": head, "head_after": head}
-        if not res.ok:
-            return RunOutcome("failed", reason="push_failed",
-                              result=f"git push 失敗：{res.err or res.out}",
-                              git=git_fields)
+                      "head_before": head_before, "head_after": head_after}
+        note = ("\n" + "\n".join(f"- {a}" for a in actions)) if actions else ""
+        if failure or res is None or not res.ok:
+            reason = merge_failed and "push_merge_failed" or "push_failed"
+            text = failure or f"git push 失敗：{res.err or res.out}"
+            return RunOutcome("failed", reason=reason,
+                              result=text + note, git=git_fields)
         return RunOutcome(
             "done", reason="pushed",
             result=f"已推送 {repo.name} 的 {branch}，"
-                   f"共 {len(actual)} 顆 commit。",
+                   f"共 {len(actual)} 顆 commit。" + note,
             git=git_fields)
+
+    async def _integrate_origin_for_push(self, path, branch: str,
+                                         cred: list[str], sign: list[str],
+                                         actions: list[str]) -> str:
+        """push 被拒後 fetch 並把 origin/<branch> 併進本機。成功回空字串。
+
+        能快轉就快轉，否則簽章 merge commit；衝突或任何失敗都還原到
+        推送前 HEAD（不叫 agent）。
+        """
+        origin = f"origin/{branch}"
+        fetched = await gitops.git(path, *cred, "fetch", "origin", branch)
+        if not fetched.ok:
+            return (f"push 被拒，重抓 {origin} 也失敗："
+                    f"{fetched.err or fetched.out}")
+        local = await gitops.head_sha(path)
+        remote = await gitops.rev_parse(path, origin)
+        if not remote or local == remote or await gitops.is_ancestor(
+                path, remote, local):
+            return ""
+        if await gitops.is_ancestor(path, local, remote):
+            ff = await gitops.merge_ff_only(path, origin, sign)
+            if not ff.ok:
+                return f"push 被拒後快轉到 {origin} 失敗：{ff.err or ff.out}"
+            actions.append(f"push 被拒（origin 前進了），已快轉到 {origin}"
+                           f"（{(await gitops.head_sha(path))[:8]}）")
+            return ""
+        merged = await gitops.merge_no_ff(
+            path, origin,
+            f"Merge remote-tracking branch '{origin}' into {branch}", sign)
+        if merged.ok:
+            actions.append(f"push 被拒（origin 前進了），已自動合併 {origin}"
+                           f"（合併結果 {(await gitops.head_sha(path))[:8]}）")
+            return ""
+        conflicts = await gitops.conflicted_files(path)
+        restored = await gitops.restore_head(path, local)
+        text = (f"push 被拒，自動合併 {origin} 失敗，已還原到推送前"
+                f"（{local[:8]}），沒有推送："
+                f"{merged.err or merged.out}")
+        if conflicts:
+            text += "\n衝突檔案：" + "、".join(conflicts[:20])
+        if not restored:
+            text += "\n" + self._restore_warning(local)
+        return text
 
     @staticmethod
     def _push_credential_args() -> list[str]:
