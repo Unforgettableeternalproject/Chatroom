@@ -586,3 +586,68 @@ def test_hook_does_not_consume_mentions_when_it_blocks(run_dir):
                                   "tool_input": {"command": "git status"}})
     assert "停在這" in json.loads(allowed.stdout)["hookSpecificOutput"][
         "additionalContext"]
+
+
+# ── cd <cwd> && acli ... 的改寫（updatedInput）──────────────────
+
+ACLI_TAIL = ("acli jira workitem comment create --key JSAI-2494 "
+             "--body-file .claude-tmp/comment-JSAI-2494.txt")
+
+
+def _hook_output(proc):
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)["hookSpecificOutput"] if proc.stdout.strip() else {}
+
+
+def _cd_event(tool, command, cwd, **extra):
+    return {"tool_name": tool, "cwd": cwd,
+            "tool_input": {"command": command, **extra}}
+
+
+REPO = "C:/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-API"
+
+
+def test_hook_strips_cd_to_cwd_before_acli(run_dir):
+    """run d690aff8 的實際指令：改寫成只剩 acli，不帶 permissionDecision。"""
+    proc = _run_hook(run_dir, _cd_event(
+        "Bash", f'cd "{REPO}" && {ACLI_TAIL}', REPO, description="留言"))
+    out = _hook_output(proc)
+    assert out["updatedInput"] == {"command": ACLI_TAIL, "description": "留言"}
+    assert "permissionDecision" not in out
+
+
+@pytest.mark.parametrize("tool,command,cwd", [
+    ("Bash", f"cd {REPO} && {ACLI_TAIL}", REPO),
+    ("Bash", f"cd '{REPO}'; {ACLI_TAIL}", REPO),
+    ("Bash", f'cd "/c/Users/Bernie/source/repos/mind-door/AI-Website/JSAI-API/" && {ACLI_TAIL}', REPO),
+    ("Bash", f'cd "{REPO}" && {ACLI_TAIL}', REPO.replace("/", "\\")),
+    ("PowerShell", f'cd /d "{REPO}" && {ACLI_TAIL}', REPO),
+    ("PowerShell", f'Set-Location "{REPO}"; acli jira auth status', REPO),
+])
+def test_hook_strips_cd_variants(run_dir, tool, command, cwd):
+    out = _hook_output(_run_hook(run_dir, _cd_event(tool, command, cwd)))
+    assert out["updatedInput"]["command"].startswith("acli jira ")
+
+
+@pytest.mark.parametrize("command,cwd", [
+    (f'cd "{REPO}/other" && {ACLI_TAIL}', REPO),               # cwd 不同
+    (f'cd "{REPO}" && {ACLI_TAIL} | head', REPO),              # pipe
+    (f'cd "{REPO}" && {ACLI_TAIL} 2>&1', REPO),                # 重導
+    (f'cd "{REPO}" && {ACLI_TAIL} && git status', REPO),       # 再串別的
+    (f'cd "{REPO}" && git status', REPO),                      # 非 acli
+    (f'cd "{REPO}" && acli jira project list', REPO),          # 非 workitem|auth
+    (f'cd "{REPO}" && {ACLI_TAIL}', ""),                       # 沒有 cwd
+])
+def test_hook_leaves_other_cd_commands_alone(run_dir, command, cwd):
+    proc = _run_hook(run_dir, _cd_event("Bash", command, cwd))
+    assert "updatedInput" not in _hook_output(proc)
+
+
+def test_hook_rewrite_coexists_with_mentions(run_dir):
+    (run_dir / "inject.jsonl").write_text(
+        json.dumps({"seq": 1, "from": "艾斯維爾", "text": "看這"},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    out = _hook_output(_run_hook(run_dir, _cd_event(
+        "Bash", f'cd "{REPO}" && {ACLI_TAIL}', REPO)))
+    assert out["updatedInput"]["command"] == ACLI_TAIL
+    assert "看這" in out["additionalContext"]
