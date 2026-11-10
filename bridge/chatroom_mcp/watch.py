@@ -152,19 +152,31 @@ def _who_joined(content: str) -> str:
     return name if tail else content
 
 
-def _who_left(sender_name: Any, content: str) -> str:
+# 舊 Hub（沒有 subject_name）的三種離場句尾。名字可含空白，所以要從句尾倒著切
+_DEPARTURE_TAILS = (
+    " 離開了聊天室",
+    " 已被管理員移出聊天室",
+    " 因閒置逾時被移出聊天室",
+)
+
+
+def _who_left(sender_name: Any, content: str, subject_name: Any = None) -> str:
     """從離場訊息取出名字。
 
-    離場的三種 system 訊息（leave / kick / idle_removed）在 Hub 都以
-    ``sender_id=None`` 發出，所以 ``sender_name`` 是空的，只能從內容取。
-
-    但**不比對整句措辭**——那三句話各不相同（「離開了」「已被管理員移出」
-    「因閒置逾時被移出」），逐句比對等於把三份中文文案變成契約，改一個字
-    就無聲失效。這裡只依賴一個假設：**名字在最前面，後面接一個空白**。
-    三句話共用這個形狀，未來新增第四種離場也多半照樣成立。
+    優先序：
+    1. ``subject_name``：Hub 結構化記錄的離場者，名字含空白也正確。
+    2. ``sender_name``：離場的三種 system 訊息（leave / kick / idle_removed）
+       都以 ``sender_id=None`` 發出，通常是空的，但有就用。
+    3. 舊 Hub 的退路，只從 ``content`` 猜：先比對已知的三種句尾，名字取句尾
+       之前的整段（含空白）；句尾都不符（措辭改了）才退回「第一個空白之前」，
+       取不出就回原字串。
     """
-    if isinstance(sender_name, str) and sender_name:
-        return sender_name
+    for known in (subject_name, sender_name):
+        if isinstance(known, str) and known:
+            return known
+    for tail in _DEPARTURE_TAILS:
+        if content.endswith(tail) and len(content) > len(tail):
+            return content[: -len(tail)]
     head = content.split(" ", 1)[0]
     return head or content
 
@@ -492,7 +504,8 @@ class Watcher:
                         "room_id": self.room_id,
                         "seq": m.get("seq"),
                         "who": _who_left(m.get("sender_name"),
-                                         m.get("content", "")),
+                                         m.get("content", ""),
+                                         m.get("subject_name")),
                         "reason": DEPARTURE_EVENTS[event],
                     })
                 if not self.args.include_system and not _mentions_me(

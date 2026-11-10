@@ -2073,8 +2073,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         system_event: str = "",
         reply_mentions_author: bool = True,
         card_refs: list[str] | None = None,
+        subject: tuple[str, str] | None = None,
     ) -> dict:
         db = app.state.db
+        subject_id, subject_name = subject or ("", "")
         # 系統訊息不做反向檢查：它的內文是 Hub 自己組的，而使用者的話
         # （例如被引用的訊息摘要）可能剛好含著某張卡的字面
         refs = await _resolve_card_refs(room_id, content, card_refs,
@@ -2141,11 +2143,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "INSERT INTO message (id, room_id, seq, sender_id, sender_kind,"
             " kind, content,"
             " mentions, mention_groups, card_refs, reply_to, reply_to_seq,"
-            " system_event, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " system_event, subject_id, subject_name, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, sender_kind, kind, content,
              json.dumps(effective), json.dumps(groups),
              json.dumps(refs, ensure_ascii=False), reply_to, reply_to_seq,
-             system_event, _now()),
+             system_event, subject_id, subject_name, _now()),
         )
         await _commit_with_retry(db)
         await events.notify(room_id)
@@ -2333,6 +2336,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # system 訊息的機器可讀型別；client 要精確過濾（例如只在
                 # 有人加入時通知）就不必去比對中文內容
                 "system_event": r["system_event"] or None,
+                # 離場訊息的離場者（結構化）。名字含空白時從 content 切不出來；
+                # 空＝非離場訊息或舊訊息，client 退回解析 content
+                "subject_id": (r["subject_id"] if "subject_id" in r.keys() else "") or None,
+                "subject_name": (r["subject_name"] if "subject_name" in r.keys() else "") or None,
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 # 發話當下的 kind 快照。run 成員結束後不進成員名冊，client
                 # 反查名冊只會拿到 other——這個欄位就是為了不必反查。
@@ -4371,7 +4378,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             await events.notify(room_id)
         else:
             await _post_message(room_id, None, f"{p['display_name']} 離開了聊天室",
-                                kind="system", system_event="leave")
+                                kind="system", system_event="leave",
+                                subject=(p["id"], p["display_name"]))
         return {"ok": True, "cancelled_questions": len(cancelled),
                 "cascaded_subagents": orphans,
                 "orphaned_tasks": [r["id"] for r in released],
@@ -4465,6 +4473,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             room_id, None,
             f"{target['display_name']} 已被管理員移出聊天室", kind="system",
             system_event="kick",
+            subject=(target["id"], target["display_name"]),
         )
         return {
             "ok": True,
@@ -16587,6 +16596,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 p["room_id"], None,
                 f"{p['display_name']} 因閒置逾時被移出聊天室", kind="system",
                 system_event="idle_removed",
+                subject=(p["id"], p["display_name"]),
             )
         # Supervisor 摘要。掛在既有 sweeper 上，不另開一條背景迴圈——
         # 多一條迴圈就多一個要各自處理停機、例外與時鐘的地方

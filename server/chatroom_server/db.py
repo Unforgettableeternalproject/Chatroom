@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS message (
     -- archive / archive_pending / unarchive）。內容是給人看的中文，client
     -- 要精確過濾就只能解析字串——那會在改一個字時無聲壞掉
     system_event TEXT NOT NULL DEFAULT '',
+    -- 離場類 system 訊息（leave / kick / idle_removed）的離場者。sender_id 這時是 NULL，
+    -- 名字含空白時從內容切不出來；空字串＝非離場訊息或舊訊息。
+    -- ⚠️ 這兩欄在 MIGRATIONS 也有一份，兩邊都要改
+    subject_id TEXT NOT NULL DEFAULT '',
+    subject_name TEXT NOT NULL DEFAULT '',
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
     -- 發話者原本打的群組標籤（all / agents / humans），JSON list。
@@ -991,6 +996,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
      "private_projects TEXT NOT NULL DEFAULT '[]'"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
+    ("message", "subject_id", "subject_id TEXT NOT NULL DEFAULT ''"),
+    ("message", "subject_name", "subject_name TEXT NOT NULL DEFAULT ''"),
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
     # 來源位址是唯一分得開的線索
     ("session", "last_ip", "last_ip TEXT"),
