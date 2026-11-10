@@ -37,6 +37,7 @@ class AppConfig {
     this.locale = LocalePref.system,
     this.closeToTray = true,
     this.devMode = false,
+    this.celebrationMode = false,
     this.splashText = '',
     this.leftPaneWidth = kLeftPaneDefaultWidth,
     this.rightPaneWidth = kRightPaneDefaultWidth,
@@ -63,6 +64,7 @@ class AppConfig {
         locale: settings.locale,
         closeToTray: settings.closeToTray,
         devMode: settings.devMode,
+        celebrationMode: settings.celebrationMode,
         splashText: settings.splashText,
         leftPaneWidth: settings.leftPaneWidth,
         rightPaneWidth: settings.rightPaneWidth,
@@ -87,6 +89,9 @@ class AppConfig {
   /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
   final bool closeToTray;
   final bool devMode;
+
+  /// 慶祝模式：即時事件發生時放彩花與音效。
+  final bool celebrationMode;
 
   /// 啟動 Loading 字樣（一行一則，空＝預設）；啟動時讀一次，下次啟動生效。
   final String splashText;
@@ -118,6 +123,7 @@ class AppConfig {
     LocalePref? locale,
     bool? closeToTray,
     bool? devMode,
+    bool? celebrationMode,
     String? splashText,
     double? leftPaneWidth,
     double? rightPaneWidth,
@@ -134,6 +140,7 @@ class AppConfig {
         locale: locale ?? this.locale,
         closeToTray: closeToTray ?? this.closeToTray,
         devMode: devMode ?? this.devMode,
+        celebrationMode: celebrationMode ?? this.celebrationMode,
         splashText: splashText ?? this.splashText,
         leftPaneWidth: leftPaneWidth ?? this.leftPaneWidth,
         rightPaneWidth: rightPaneWidth ?? this.rightPaneWidth,
@@ -196,6 +203,12 @@ class AppConfigNotifier extends Notifier<AppConfig> {
   Future<void> setDevMode(bool v) async {
     await _settings.setDevMode(v);
     state = state.copyWith(devMode: v);
+  }
+
+  /// 慶祝模式。落盤後更新快照，觸發端即時讀快照判斷。
+  Future<void> setCelebrationMode(bool v) async {
+    await _settings.setCelebrationMode(v);
+    state = state.copyWith(celebrationMode: v);
   }
 
   /// 側邊欄寬度。**先改畫面再落盤**：拖曳時這支每一格都會被叫到，

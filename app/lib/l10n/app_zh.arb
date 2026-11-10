@@ -1491,6 +1491,8 @@
   "settingsCloseToTrayHint": "从系统匣图示可再开启或结束",
   "settingsDevModeLabel": "开发者模式",
   "settingsDevModeHint": "显示房间、任务与讯息的 ID，方便沟通",
+  "settingsCelebrationLabel": "庆祝模式",
+  "settingsCelebrationHint": "成员加入、任务完成或派工成功时放彩花",
   "devCopyMessageId": "复制讯息 ID",
   "trayMenuOpen": "开启 Chatroom",
   "trayMenuExit": "结束",

@@ -19,6 +19,18 @@ class RoomFreshBatch {
   final List<Message> messages;
 }
 
+/// 一則即時到達的 system 訊息（見 [NotificationCenter.liveSystemEvents]）。
+class LiveSystemEvent {
+  const LiveSystemEvent({required this.roomId, required this.message});
+
+  final String roomId;
+  final Message message;
+
+  /// 會觸發慶祝的 Hub system_event：加入、任務卡完成、派工成功結束。
+  /// 派工失敗／取消是 run_failed／run_cancelled，不在內。
+  static const celebratory = {'join', 'board_task_done', 'run_done'};
+}
+
 /// 要送到 OS 的一則通知（一個房間的一批新訊息合併成一則，避免轟炸）。
 class RoomNotification {
   const RoomNotification({
@@ -80,6 +92,14 @@ class NotificationCenter {
   final _activity = StreamController<String>.broadcast();
   final _fresh = StreamController<RoomFreshBatch>.broadcast();
   final _mentionsOfMe = StreamController<String>.broadcast();
+  final _liveSystemEvents = StreamController<LiveSystemEvent>.broadcast();
+
+  /// 即時到達的 system 事件（加入／任務完成／派工結束），供慶祝特效用。
+  ///
+  /// 與 [fresh] 分開：[fresh] 的內容會被 Codex 轉送消費，多塞幾種 system
+  /// 訊息進去會多喚醒 agent。這裡同樣只含首批快照之後的增量，且「這台裝置
+  /// 自己的加入」（含補投路徑）不會出現。
+  Stream<LiveSystemEvent> get liveSystemEvents => _liveSystemEvents.stream;
 
   /// 該送去 OS 的通知（已套用模式與抑制規則）。
   Stream<RoomNotification> get notifications => _notifications.stream;
@@ -221,8 +241,14 @@ class NotificationCenter {
         // 那裡才分得出哪個 thread 對應哪個加入者。
         if (m.isMemberJoined) {
           // 走正常增量路徑送到了，登記作廢，免得補投機制再送一次
+          final mine = _expectedJoins[roomId] == m.id ||
+              (room.myParticipantId != null &&
+                  m.senderId == room.myParticipantId);
           if (_expectedJoins[roomId] == m.id) _expectedJoins.remove(roomId);
           everything.add(m);
+          if (!mine) _emitLiveSystem(roomId, m);
+        } else if (LiveSystemEvent.celebratory.contains(m.systemEvent)) {
+          _emitLiveSystem(roomId, m);
         }
         continue;
       }
@@ -262,6 +288,11 @@ class NotificationCenter {
     }
   }
 
+  void _emitLiveSystem(String roomId, Message m) {
+    if (_liveSystemEvents.isClosed) return;
+    _liveSystemEvents.add(LiveSystemEvent(roomId: roomId, message: m));
+  }
+
   static String _composeBody(List<Message> fresh) {
     final l10n = L10n.current;
     final last = fresh.last;
@@ -284,6 +315,7 @@ class NotificationCenter {
     _activity.close();
     _fresh.close();
     _mentionsOfMe.close();
+    _liveSystemEvents.close();
   }
 }
 

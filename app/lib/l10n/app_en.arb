@@ -1490,6 +1490,8 @@
   "settingsCloseToTrayHint": "Reopen or quit from the tray icon",
   "settingsDevModeLabel": "Developer mode",
   "settingsDevModeHint": "Show IDs for rooms, tasks and messages",
+  "settingsCelebrationLabel": "Celebration mode",
+  "settingsCelebrationHint": "Confetti when someone joins, a task is done or a run succeeds",
   "devCopyMessageId": "Copy message ID",
   "trayMenuOpen": "Open Chatroom",
   "trayMenuExit": "Quit",

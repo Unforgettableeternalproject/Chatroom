@@ -7493,6 +7493,14 @@
   "@settingsDevModeHint": {
     "description": "上述開關的說明"
   },
+  "settingsCelebrationLabel": "慶祝模式",
+  "@settingsCelebrationLabel": {
+    "description": "設定 → 個人化：事件發生時放彩花與音效的開關"
+  },
+  "settingsCelebrationHint": "成員加入、任務完成或派工成功時放彩花",
+  "@settingsCelebrationHint": {
+    "description": "上述開關的說明"
+  },
   "devCopyMessageId": "複製訊息 ID",
   "@devCopyMessageId": {
     "description": "開發者模式：訊息右鍵選單，複製 Message.id"

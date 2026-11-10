@@ -30,6 +30,8 @@ import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../board/board_attach_dialog.dart';
 import '../rooms/room_actions.dart';
+import '../../celebration/celebration_highlight.dart';
+import '../../notifications/notification_center.dart' show LiveSystemEvent;
 import '../../notifications/taskbar_badge.dart';
 import '../../state/messages_providers.dart';
 import '../../state/notification_providers.dart';
@@ -1195,7 +1197,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 ? KeyedSubtree(key: _focusKey, child: tile)
                                 : tile;
                             if (m.isSystem) {
-                              return keyed(SystemMessageTile(message: m));
+                              final tile = SystemMessageTile(message: m);
+                              return keyed(
+                                  LiveSystemEvent.celebratory
+                                          .contains(m.systemEvent)
+                                      ? CelebrationHighlight(
+                                          messageId: m.id, child: tile)
+                                      : tile);
                             }
                             // 訊息自帶的 kind 快照優先，名冊只是備援：
                             // run 成員結束後不在名冊裡，反查會把它們的發言

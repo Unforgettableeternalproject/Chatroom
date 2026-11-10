@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../celebration/celebration_controller.dart';
+import '../celebration/celebration_highlight.dart';
+import '../celebration/celebration_logic.dart';
 import '../notifications/codex_dispatcher.dart';
 import '../core/config/app_settings.dart';
 import '../core/util/local_host.dart';
@@ -168,6 +171,23 @@ final notificationBootstrapProvider = Provider<void>((ref) {
   });
 
   final codexSub = center.fresh.listen(dispatcher.handle);
+
+  // 慶祝：加入／任務完成／派工成功。開關與派工房都在事件到達當下才讀，
+  // 設定改了或房間列表更新後不必重建這條管線。
+  final celebrationSub = center.liveSystemEvents.listen((e) {
+    final rooms = ref.read(roomListProvider('active')).value?.rooms;
+    final roomIsOps = rooms?.any((r) => r.id == e.roomId && r.isOps) ?? false;
+    if (shouldCelebrate(
+      e.message,
+      enabled: ref.read(appConfigProvider).celebrationMode,
+      roomIsOps: roomIsOps,
+    )) {
+      // 只標示真的放出去的那一則；被節流丟掉的不標
+      if (ref.read(celebrationControllerProvider).celebrate()) {
+        ref.read(celebrationHighlightsProvider.notifier).mark(e.message.id);
+      }
+    }
+  });
   // board 變動走 WS 的獨立事件，不在訊息流裡——沒接這條的話，agent 只有在
   // 自己呼叫 chatroom_wait 時才知道板子動了，而它正是醒不過來才需要被通知。
   final codexBoardSub = ref
@@ -197,6 +217,7 @@ final notificationBootstrapProvider = Provider<void>((ref) {
     notifSub.cancel();
     mentionSub.cancel();
     codexSub.cancel();
+    celebrationSub.cancel();
     codexBoardSub.cancel();
     // board 的 debounce／max-wait 計時器要收掉，否則它們會在一個已經沒有
     // 人在聽的 dispatcher 上繼續燒

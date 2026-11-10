@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'celebration/confetti_overlay.dart';
 import 'core/config/app_settings.dart';
 import 'core/theme/uep_theme.dart';
 import 'core/window/window_tray.dart';
@@ -308,7 +309,9 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
             // 換字體只動到一個靜態值，沒有 widget 會因此失效——換 key 把整棵
             // 重建掉，選了就立刻看得到（代價是頁內暫態，如捲動位置，會重來）
             key: ValueKey(fontFamily),
-            child: L10nSync(child: child ?? const SizedBox.shrink()),
+            child: CelebrationOverlay(
+              child: L10nSync(child: child ?? const SizedBox.shrink()),
+            ),
           ),
         ),
       ),
