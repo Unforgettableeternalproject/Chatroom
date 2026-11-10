@@ -1,3 +1,4 @@
+import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/screens/board/board_screen.dart';
@@ -5,6 +6,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 週期凍結（Hub 2026-09-21）：週期只有 `active` 時，它自己與底下的階段、
@@ -48,6 +50,7 @@ Widget _app(Widget child) => MaterialApp(
 
 Widget _wrap(BoardSnapshot snap) => ProviderScope(
       overrides: [
+        initialConfigProvider.overrideWithValue(kTestInitialConfig),
         boardByIdProvider('b1').overrideWith((ref) async => snap),
       ],
       child: _app(const BoardScreen(boardId: 'b1')),
@@ -121,6 +124,7 @@ void main() {
     // 從 `verified` 起算——`done` 打不回，那條路不存在
     var status = 'verified';
     final container = ProviderContainer(overrides: [
+      initialConfigProvider.overrideWithValue(kTestInitialConfig),
       boardByIdProvider('b1').overrideWith((ref) async => _snap(status)),
     ]);
     addTearDown(container.dispose);

@@ -7485,6 +7485,18 @@
   "@settingsCloseToTrayHint": {
     "description": "上述開關的說明"
   },
+  "settingsDevModeLabel": "開發者模式",
+  "@settingsDevModeLabel": {
+    "description": "設定 → 個人化：顯示可複製 ID 的開關"
+  },
+  "settingsDevModeHint": "顯示房間、任務與訊息的 ID，方便溝通",
+  "@settingsDevModeHint": {
+    "description": "上述開關的說明"
+  },
+  "devCopyMessageId": "複製訊息 ID",
+  "@devCopyMessageId": {
+    "description": "開發者模式：訊息右鍵選單，複製 Message.id"
+  },
   "trayMenuOpen": "開啟 Chatroom",
   "@trayMenuOpen": {
     "description": "系統匣右鍵選單：叫回視窗"

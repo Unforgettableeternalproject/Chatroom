@@ -1,3 +1,4 @@
+import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/screens/board/board_screen.dart';
@@ -5,6 +6,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 🔴 2026-09-07（Bernie 想法板 e86dd552）：**從 Board 分頁進板看不到
@@ -38,6 +40,7 @@ BoardSnapshot _snap() => const BoardSnapshot().merge(BoardDelta.fromJson({
 Widget _wrap(Widget child, {required BoardSnapshot snap, String? boardId}) =>
     ProviderScope(
       overrides: [
+        initialConfigProvider.overrideWithValue(kTestInitialConfig),
         if (boardId != null)
           boardByIdProvider(boardId).overrideWith((ref) async => snap),
       ],

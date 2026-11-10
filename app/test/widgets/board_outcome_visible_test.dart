@@ -1,3 +1,4 @@
+import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/screens/board/board_screen.dart';
@@ -5,6 +6,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 🔴 Bernie 2026-09-07（想法板 #13 段）：已結局的板，從**封存的聊天室**
@@ -34,6 +36,7 @@ BoardSnapshot _snap({required String role, String outcome = ''}) =>
 Future<void> _pump(WidgetTester tester, BoardSnapshot snap) async {
   await tester.pumpWidget(ProviderScope(
     overrides: [
+      initialConfigProvider.overrideWithValue(kTestInitialConfig),
       boardByIdProvider('b1').overrideWith((ref) async => snap),
     ],
     child: MaterialApp(

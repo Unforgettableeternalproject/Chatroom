@@ -38,6 +38,7 @@ class SettingsRepository {
   static const _kPendingMentionPrefix = 'chatroom.pending_mention.';
   static const _kNotifyMode = 'chatroom.notify_mode';
   static const _kCloseToTray = 'chatroom.close_to_tray';
+  static const _kDevMode = 'chatroom.dev_mode';
   static const _kCodexDispatch = 'chatroom.codex_dispatch';
   static const _kCodexThread = 'chatroom.codex_thread';
   static const _kOpsExceptionSeen = 'ops.exceptions.seenAt';
@@ -130,6 +131,10 @@ class SettingsRepository {
   /// 不是「不要再通知我」。關掉開關後關閉鍵就是結束，沒有第二種行為。
   bool get closeToTray => _prefs.getBool(_kCloseToTray) ?? true;
   Future<void> setCloseToTray(bool v) => _prefs.setBool(_kCloseToTray, v);
+
+  /// 開發者模式：在房間、任務板、訊息、想法板上顯示可複製的 ID。預設關。
+  bool get devMode => _prefs.getBool(_kDevMode) ?? false;
+  Future<void> setDevMode(bool v) => _prefs.setBool(_kDevMode, v);
 
   /// Codex 轉送：app 收到的新訊息經 codex queue 喚醒本機 Codex session。
   /// 每台裝置各自設定，預設關閉（多裝置同開會重複轉送）。

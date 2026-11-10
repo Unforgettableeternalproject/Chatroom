@@ -12,6 +12,7 @@ import '../../state/scratchpad_providers.dart';
 import 'scratchpad_screen.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/board_task_card.dart';
+import '../../widgets/copyable_id.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
 import '../../widgets/kind_badge.dart';
@@ -72,6 +73,18 @@ const List<double> _desaturate35 = <double>[
   0.2126 - 0.2126 * .35, 0.7152 - 0.7152 * .35, 0.0722 + 0.9278 * .35, 0, 0, //
   0, 0, 0, 1, 0, //
 ];
+
+/// `task_already_claimed` 的現任持有者：讀結構化欄位 `detail['claim_name']`，
+/// 不對訊息文字做比對（code 才是契約）。不是 [ApiException] 或名字是空的就退回
+/// [fallback]。
+@visibleForTesting
+String claimHolderFrom(Object e, String fallback) {
+  if (e is ApiException) {
+    final name = e.detail['claim_name'];
+    if (name is String && name.trim().isNotEmpty) return name;
+  }
+  return fallback;
+}
 
 class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 這個畫面是從 Board Library（`/boards/:id`）進來的，手上沒有房間。
@@ -173,11 +186,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     }
   }
 
-  /// 從 409 的訊息裡取出現任持有者。取不到就講一句誠實的話，不要留白。
-  String _holderFrom(Object e) {
-    final m = RegExp(r'「(.+?)」').firstMatch('$e');
-    return m?.group(1) ?? AppLocalizations.of(context).boardClaimConflictOther;
-  }
+  /// 從 409 取出現任持有者。取不到就講一句誠實的話，不要留白。
+  String _holderFrom(Object e) =>
+      claimHolderFrom(e, AppLocalizations.of(context).boardClaimConflictOther);
 
   /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
   Future<void> _create(String kind,
@@ -744,6 +755,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             style: UepText.pageTitle(color: s.inkTitle),
           ),
         ),
+        if (ref.watch(appConfigProvider.select((c) => c.devMode)) &&
+            snap != null &&
+            snap.boardId.isNotEmpty) ...[
+          const SizedBox(width: 10),
+          CopyableId(value: snap.boardId),
+        ],
         const SizedBox(width: 12),
         Text(AppLocalizations.of(context).boardLibraryTitle,
             style:
@@ -1361,6 +1378,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     Text(o.title,
                         style: UepText.pageTitle(color: s.inkTitle,
                             height: 1.25)),
+                    if (ref.watch(appConfigProvider.select((c) => c.devMode)))
+                      CopyableId(value: o.id),
                     if (o.description.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       ConstrainedBox(
@@ -1668,6 +1687,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 卡片自己退回快照——舊 Hub 與 v1 路徑都沒有 members[]
         holder: snap.memberOf(
             t.claimActorKey.isEmpty ? null : t.claimActorKey),
+        devMode: ref.watch(appConfigProvider.select((c) => c.devMode)),
         onTap: () => setState(() => _openTaskId = t.id),
         isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
         // 認領／釋出同樣是這個週期底下的寫入。**追蹤不算**：watch 寫的是
@@ -1836,6 +1856,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         weight: FontWeight.w600,
                         color: s.inkTitle)),
               ),
+              if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
+                const SizedBox(width: 8),
+                CopyableId(value: c.id),
+              ],
               const SizedBox(width: 12),
               Text('$done / $total DONE',
                   style: UepText.mono(

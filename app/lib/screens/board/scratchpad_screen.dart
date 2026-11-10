@@ -12,6 +12,7 @@ import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
+import '../../widgets/copyable_id.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/reveal.dart';
@@ -170,6 +171,10 @@ class _PadBodyState extends ConsumerState<_PadBody> {
             child: Text(pad.title,
                 style: UepText.pageTitle(color: s.inkTitle)),
           ),
+          if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
+            CopyableId(value: pad.id),
+            const SizedBox(width: 8),
+          ],
           MonoLabel(
               AppLocalizations.of(context).boardPadBlockCount(
                   pad.blocks.length),
@@ -264,6 +269,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         // （@審核用Codex-2 2026-09-03）
         key: ValueKey(b.id),
         block: b,
+        devMode: ref.watch(appConfigProvider.select((c) => c.devMode)),
         editing: _editing == b.id,
         onEdit: pad.canEdit && b.canEdit
             ? () => setState(() => _editing = b.id)
@@ -831,7 +837,11 @@ class _BlockCard extends StatefulWidget {
     this.allowedTags = const [],
     this.onSetTag,
     this.onSetState,
+    this.devMode = false,
   });
+
+  /// 開發者模式：作者列顯示可複製的段落 ID。
+  final bool devMode;
 
   final ScratchpadBlock block;
   final bool editing;
@@ -926,6 +936,7 @@ class _BlockCardState extends State<_BlockCard> {
                   color: s.inkMute),
             ),
           ),
+          if (widget.devMode) CopyableId(value: b.id),
           // 標籤放在動作按鈕之前：它是這一段「是什麼」，不是能對它做什麼
           ScratchpadTagChip(
             tag: b.tag,

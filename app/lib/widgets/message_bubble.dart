@@ -11,6 +11,7 @@ import 'attachment_view.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
 import 'message_reactions.dart';
+import 'copyable_id.dart';
 
 /// 訊息操作回呼（由 ChatScreen 提供實作）。
 class MessageActions {
@@ -68,7 +69,11 @@ class MessageBubble extends StatelessWidget {
     this.roomId,
     this.subagentOf,
     this.onTapCard,
+    this.devMode = false,
   });
+
+  /// 開發者模式：時間後面顯示 `#seq`（點擊複製），右鍵選單多「複製訊息 ID」。
+  final bool devMode;
 
   /// 點了內文裡的卡片指涉 chip。往上傳到畫面層去導覽——氣泡不知道路由
   /// 這回事，就像它不知道 Hub 在哪一樣。
@@ -125,6 +130,7 @@ class MessageBubble extends StatelessWidget {
       children: [
         if (isSelf) ...[
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
+          if (devMode) CopyableId(value: '${message.seq}', label: '#${message.seq}'),
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
@@ -147,6 +153,7 @@ class MessageBubble extends StatelessWidget {
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
+          if (devMode) CopyableId(value: '${message.seq}', label: '#${message.seq}'),
           if (isSub) ...[
             const SizedBox(width: 8),
             Text(l10n.msgSubagentOf(subagentOf!),
@@ -360,6 +367,7 @@ class MessageBubble extends StatelessWidget {
           message: message,
           actions: actions,
           isSelf: isSelf,
+          devMode: devMode,
           child: canReact ? _HoverScope(child: column) : column,
         ),
       ),
@@ -542,8 +550,10 @@ class _ContextMenuRegion extends StatelessWidget {
     required this.message,
     required this.actions,
     required this.isSelf,
+    this.devMode = false,
   });
 
+  final bool devMode;
   final Widget child;
   final Message message;
   final MessageActions? actions;
@@ -639,6 +649,13 @@ class _ContextMenuRegion extends StatelessWidget {
               Text(l10n.msgMenuCopy,
                   style: UepText.sans(size: 13.5, color: s.ink)),
         ),
+        if (devMode)
+          PopupMenuItem(
+            value: 'copy_id',
+            height: 36,
+            child: Text(l10n.devCopyMessageId,
+                style: UepText.sans(size: 13.5, color: s.ink)),
+          ),
         if (a.enabled) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
@@ -659,6 +676,9 @@ class _ContextMenuRegion extends StatelessWidget {
         a.onCreateTask(message);
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.content));
+      case 'copy_id':
+        if (!context.mounted) return;
+        await copyIdToClipboard(context, message.id);
       case 'react':
         if (!context.mounted) return;
         final picked = await showReactionPicker(context, globalPos,

@@ -38,6 +38,7 @@ import '../../state/rooms_providers.dart';
 import '../../state/runs_providers.dart';
 import '../../widgets/archive_request_banner.dart';
 import '../../widgets/composer_attachments.dart';
+import '../../widgets/copyable_id.dart';
 import '../../widgets/export_room_button.dart';
 import '../../widgets/invite_human_dialog.dart';
 import '../../widgets/empty_error_states.dart';
@@ -1220,6 +1221,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     ? null
                                     : subagentParentById[m.senderId],
                                 onTapCard: _openCardRef,
+                                devMode: config.devMode,
                               ),
                             ));
                           },
@@ -1567,6 +1569,10 @@ class RoomHeader extends ConsumerWidget {
                         style: UepText.pageTitle(color: archived ? s.inkSoft : s.inkTitle),
                       ),
                     ),
+                    if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
+                      const SizedBox(width: 10),
+                      CopyableId(value: roomId),
+                    ],
                     // zone 徽章（VISUALS 之類）拿掉了：常被誤讀成房間類型。
                     // 區域色只留在側欄的房間底色
                     if (archived) ...[

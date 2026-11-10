@@ -36,6 +36,7 @@ class AppConfig {
     this.fontFamily = FontFamilyPref.standard,
     this.locale = LocalePref.system,
     this.closeToTray = true,
+    this.devMode = false,
     this.splashText = '',
     this.leftPaneWidth = kLeftPaneDefaultWidth,
     this.rightPaneWidth = kRightPaneDefaultWidth,
@@ -61,6 +62,7 @@ class AppConfig {
         fontFamily: settings.fontFamily,
         locale: settings.locale,
         closeToTray: settings.closeToTray,
+        devMode: settings.devMode,
         splashText: settings.splashText,
         leftPaneWidth: settings.leftPaneWidth,
         rightPaneWidth: settings.rightPaneWidth,
@@ -84,6 +86,7 @@ class AppConfig {
 
   /// 關閉視窗時縮到系統匣（Windows 專用）；套用在 `WindowTray`。
   final bool closeToTray;
+  final bool devMode;
 
   /// 啟動 Loading 字樣（一行一則，空＝預設）；啟動時讀一次，下次啟動生效。
   final String splashText;
@@ -114,6 +117,7 @@ class AppConfig {
     FontFamilyPref? fontFamily,
     LocalePref? locale,
     bool? closeToTray,
+    bool? devMode,
     String? splashText,
     double? leftPaneWidth,
     double? rightPaneWidth,
@@ -129,6 +133,7 @@ class AppConfig {
         fontFamily: fontFamily ?? this.fontFamily,
         locale: locale ?? this.locale,
         closeToTray: closeToTray ?? this.closeToTray,
+        devMode: devMode ?? this.devMode,
         splashText: splashText ?? this.splashText,
         leftPaneWidth: leftPaneWidth ?? this.leftPaneWidth,
         rightPaneWidth: rightPaneWidth ?? this.rightPaneWidth,
@@ -185,6 +190,12 @@ class AppConfigNotifier extends Notifier<AppConfig> {
     await _settings.setCloseToTray(v);
     await WindowTray.instance.setEnabled(v);
     state = state.copyWith(closeToTray: v);
+  }
+
+  /// 開發者模式。純顯示開關，落盤後直接更新快照。
+  Future<void> setDevMode(bool v) async {
+    await _settings.setDevMode(v);
+    state = state.copyWith(devMode: v);
   }
 
   /// 側邊欄寬度。**先改畫面再落盤**：拖曳時這支每一格都會被叫到，
