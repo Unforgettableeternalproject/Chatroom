@@ -315,6 +315,16 @@ class BoardActions {
     _reload();
   }
 
+  /// 把「未分類」的一頁拆成獨立週期。成功回結果（含 Hub 補的新空白頁）。
+  Future<SplitInboxResult?> splitInbox(String objectiveId, String title) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    final r = await _api.splitInbox(objectiveId,
+        participantId: pid, sessionKey: _sk, title: title);
+    _reload();
+    return r;
+  }
+
   /// 改一個階段的標題與敘述。與 [updateObjective] 同一組規則。
   Future<void> updateChecklist(String checklistId,
       {String? title, String? description}) async {

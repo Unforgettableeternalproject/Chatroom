@@ -15,6 +15,8 @@ import '../../widgets/board_task_card.dart';
 import '../../widgets/copyable_id.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
+import '../../core/host_reason.dart';
+import '../../api/board_api.dart' show SplitInboxResult;
 import '../../widgets/kind_badge.dart';
 import '../../widgets/reveal.dart';
 import '../../widgets/stage_files.dart';
@@ -25,6 +27,7 @@ import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_move_dialog.dart';
+import 'board_split_inbox_dialog.dart';
 import 'board_task_drawer.dart';
 import 'board_task_edit_dialog.dart';
 import 'supervisor_panel.dart';
@@ -1010,8 +1013,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       List<BoardObjective> objectives, BoardObjective selected,
       {VoidCallback? onPicked}) {
     final s = context.uep;
-    final active = objectives.where((o) => o.status != 'done').toList();
-    final done = objectives.where((o) => o.status == 'done').toList();
+    // 未分類在左欄只出現一次：使用中的那頁。已完成的未分類頁是歷史，
+    // 從週期內的頁面切換進去，不混進「已完成」名單
+    final inboxId = snap.currentInbox?.id;
+    final active = objectives
+        .where((o) => o.status != 'done' && (!o.isInbox || o.id == inboxId))
+        .toList();
+    final done =
+        objectives.where((o) => o.status == 'done' && !o.isInbox).toList();
+    // 看著未分類的任何一頁，左欄都亮「未分類」那一列
+    bool isSelected(BoardObjective o) =>
+        o.id == selected.id || (o.isInbox && selected.isInbox);
 
     // 左欄的底色比主區暗一階——它是索引不是內容，退後一層才不會跟右邊搶
     return Container(
@@ -1067,14 +1079,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     key: ValueKey(active[i].id),
                     index: i,
                     child: _objectiveTile(
-                        context, snap, active[i], active[i].id == selected.id,
+                        context, snap, active[i], isSelected(active[i]),
                         onPicked: onPicked),
                   ),
               ],
             )
           else
             for (final o in active)
-              _objectiveTile(context, snap, o, o.id == selected.id,
+              _objectiveTile(context, snap, o, isSelected(o),
                   onPicked: onPicked),
           // 完成的週期退成一份名單：它們不再需要被點開，但要看得到做過什麼
           if (done.isNotEmpty) ...[
@@ -1333,7 +1345,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _objectiveHeader(context, o, stats),
+        _objectiveHeader(context, snap, o, stats),
         if (o.status == 'active' && (o.release?.blockedReopened ?? false))
           Padding(
             padding: const EdgeInsets.fromLTRB(26, 8, 26, 0),
@@ -1427,8 +1439,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// 收尾動作放在**標題右邊**而不是另外框一塊——它是這個週期的動作，
   /// 跟標題同一層；獨立成框會變成第四個層級。
-  Widget _objectiveHeader(
-      BuildContext context, BoardObjective o, _Stats stats) {
+  Widget _objectiveHeader(BuildContext context, BoardSnapshot snap,
+      BoardObjective o, _Stats stats) {
     final s = context.uep;
     return Container(
       padding: const EdgeInsets.fromLTRB(26, 22, 26, 18),
@@ -1450,6 +1462,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                             height: 1.25)),
                     if (ref.watch(appConfigProvider.select((c) => c.devMode)))
                       CopyableId(value: o.id),
+                    if (o.isInbox) _inboxPageBar(context, snap, o),
                     if (o.description.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       ConstrainedBox(
@@ -1497,6 +1510,93 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ],
       ),
     );
+  }
+
+  /// 未分類的頁面切換列：目前頁／歷史頁的下拉，與「拆成獨立週期」的選單。
+  ///
+  /// 順序號依完成時間排（[BoardSnapshot.inboxHistory]），不用 `page_no`——
+  /// 拆頁之後它會有缺號。歷史頁由新到舊，「目前」排最前。
+  Widget _inboxPageBar(
+      BuildContext context, BoardSnapshot snap, BoardObjective o) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final history = snap.inboxHistory;
+    final current = snap.currentInbox;
+    final canSplit = !_readOnly && _actions != null;
+
+    String labelOf(BoardObjective page) {
+      final n = history.indexWhere((h) => h.id == page.id) + 1;
+      final date = _monthDay(page.completedAt);
+      return date == null
+          ? l10n.boardInboxPageLabelNoDate(n)
+          : l10n.boardInboxPageLabel(n, date);
+    }
+
+    final selectedLabel =
+        history.any((h) => h.id == o.id) ? labelOf(o) : l10n.boardInboxCurrentPage;
+    if (history.isEmpty && !canSplit) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (history.isNotEmpty)
+          PopupMenuButton<String>(
+            key: const ValueKey('inbox-page-switcher'),
+            tooltip: l10n.boardInboxPagesTooltip,
+            onSelected: (id) => setState(() => _selectedObjectiveId = id),
+            itemBuilder: (_) => [
+              if (current != null)
+                PopupMenuItem(
+                    value: current.id,
+                    child: Text(l10n.boardInboxCurrentPage)),
+              for (final h in history.reversed)
+                PopupMenuItem(value: h.id, child: Text(labelOf(h))),
+            ],
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(selectedLabel,
+                  style: UepText.mono(size: 11.5, color: s.inkSoft)),
+              Icon(Icons.arrow_drop_down, size: 20, color: s.inkMute),
+            ]),
+          ),
+        if (canSplit)
+          PopupMenuButton<String>(
+            key: const ValueKey('inbox-page-menu'),
+            icon: Icon(Icons.more_horiz, size: 18, color: s.inkMute),
+            padding: EdgeInsets.zero,
+            onSelected: (_) => _splitInbox(o),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                  value: 'split', child: Text(l10n.boardInboxSplit)),
+            ],
+          ),
+      ]),
+    );
+  }
+
+  /// ISO 時間 → `MM/DD`（本地時區）；解析不了回 null。
+  String? _monthDay(String? iso) {
+    final t = DateTime.tryParse(iso ?? '')?.toLocal();
+    if (t == null) return null;
+    return '${t.month.toString().padLeft(2, '0')}/'
+        '${t.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 把一頁未分類拆成獨立週期，成功後選到拆出來的那個。
+  ///
+  /// Hub 回 `new_inbox_objective` 表示拆的是使用中頁、已補一張新空白頁；
+  /// 那張頁由板重拉帶回，不在這裡另外處理。
+  Future<void> _splitInbox(BoardObjective o) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final input = await showSplitInboxDialog(context);
+    if (input == null || !mounted) return;
+    final r = await runBoardAction<SplitInboxResult?>(
+      context,
+      () => runWithHostReason(
+          input.reason, () => actions.splitInbox(o.id, input.title)),
+    );
+    if (r == null || !mounted) return;
+    setState(() => _selectedObjectiveId = r.objectiveId);
   }
 
   /// 改週期的標題與敘述（09/08 卡 32f26b75）。
@@ -1569,7 +1669,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           // ——那條在 Hub 收緊之前成立（2026-09-21 起非 active 的週期一律
           // 409 `objective_closed`）。留著的話它是一顆按下去必然失敗的
           // 按鈕，而旁邊那行提示已經說了要先打回
-          if (!o.frozen) ...[
+          // 未分類不能改名（Hub 回 `inbox_rename_forbidden`），改名的入口是
+          // 頁面切換旁的「拆成獨立週期」
+          if (!o.frozen && !o.isInbox) ...[
             _BarButton(
               label: AppLocalizations.of(context).commonEdit,
               onTap: () => _editObjective(o),
@@ -1685,7 +1787,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return switch (o.status) {
       // 說的是**擋住送審的那件事**。原本寫「N 張未完成」，而真正擋著的是
       // 清單沒收尾——照著它做完所有卡，按鈕依然不會亮
-      'active' when stats.stages == 0 => l10n.boardCloseoutNoStage,
+      'active' when o.isInbox && stats.stagesOpen + stats.stagesDone == 0 =>
+        l10n.boardCloseoutInboxEmpty,
+      // 未分類的階段是 Hub 墊的那一格（畫面上數不到），不叫人去開階段
+      'active' when stats.stages == 0 && !o.isInbox =>
+        l10n.boardCloseoutNoStage,
       'active' when stats.stagesOpen > 0 => [
           l10n.boardCloseoutStagesOpen(stats.stagesOpen),
           if (stats.remaining > 0) l10n.boardCloseoutRemaining(stats.remaining),

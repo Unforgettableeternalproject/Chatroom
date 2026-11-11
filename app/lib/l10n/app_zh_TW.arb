@@ -2619,7 +2619,7 @@
   "@helpBoard1": {
     "description": "說明：板與房的關係"
   },
-  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段都收尾後才能送審，未分類的卡也要先收尾。",
+  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段都收尾後才能送審。",
   "@helpBoard2": {
     "description": "說明：任務板結構"
   },
@@ -4097,6 +4097,18 @@
         "type": "String"
       }
     }
+  },
+  "chatTagGroupAll": "所有人",
+  "@chatTagGroupAll": {
+    "description": "「會 tag 到」預覽：@all"
+  },
+  "chatTagGroupAgents": "全部 agent",
+  "@chatTagGroupAgents": {
+    "description": "「會 tag 到」預覽：@agents"
+  },
+  "chatTagGroupHumans": "全部人類",
+  "@chatTagGroupHumans": {
+    "description": "「會 tag 到」預覽：@humans"
   },
   "chatTagFromReply": "{name}（回覆）",
   "@chatTagFromReply": {
@@ -5976,6 +5988,71 @@
   "@boardShowOrphansOnly": {
     "description": "孤兒橫幅：只看孤兒"
   },
+  "boardInboxCurrentPage": "目前",
+  "@boardInboxCurrentPage": {
+    "description": "未分類週期的頁面切換：目前使用中的那頁"
+  },
+  "boardInboxPageLabel": "第 {n} 頁 · {date} 完成",
+  "@boardInboxPageLabel": {
+    "description": "未分類歷史頁：順序號與完成日期（MM/DD）",
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "boardInboxPageLabelNoDate": "第 {n} 頁",
+  "@boardInboxPageLabelNoDate": {
+    "description": "未分類歷史頁：只有順序號（沒有完成時間）",
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "boardInboxPagesTooltip": "切換頁面",
+  "@boardInboxPagesTooltip": {
+    "description": "未分類頁面切換鈕的提示"
+  },
+  "boardInboxSplit": "拆成獨立週期",
+  "@boardInboxSplit": {
+    "description": "把未分類的一頁拆成獨立週期（按鈕與對話框標題）"
+  },
+  "boardInboxSplitNameLabel": "週期名稱",
+  "@boardInboxSplitNameLabel": {
+    "description": "拆頁對話框的名稱欄"
+  },
+  "boardInboxSplitConfirm": "拆出",
+  "@boardInboxSplitConfirm": {
+    "description": "拆頁對話框的確認鈕"
+  },
+  "boardErrorTitleRequired": "請填週期名稱。",
+  "@boardErrorTitleRequired": {
+    "description": "Hub 回 title_required 時的轉述，也用於拆頁對話框的欄位檢查"
+  },
+  "boardErrorInboxTitleReserved": "「未分類」是保留名稱，請換一個。",
+  "@boardErrorInboxTitleReserved": {
+    "description": "Hub 回 inbox_title_reserved 時的轉述，也用於拆頁對話框的欄位檢查"
+  },
+  "boardErrorNotInboxPage": "這個週期不是未分類頁。",
+  "@boardErrorNotInboxPage": {
+    "description": "Hub 回 not_inbox_page 時的轉述"
+  },
+  "boardErrorInboxPageNotCancellable": "未分類頁不能取消。",
+  "@boardErrorInboxPageNotCancellable": {
+    "description": "Hub 回 inbox_page_not_cancellable 時的轉述"
+  },
+  "boardErrorInboxRenameForbidden": "未分類不能改名，請拆成獨立週期。",
+  "@boardErrorInboxRenameForbidden": {
+    "description": "Hub 回 inbox_rename_forbidden 時的轉述"
+  },
+  "boardCloseoutInboxEmpty": "這一頁還沒有事項",
+  "@boardCloseoutInboxEmpty": {
+    "description": "送審提示：未分類頁沒有任何階段"
+  },
   "boardCloseUncategorised": "收尾未分類",
   "@boardCloseUncategorised": {
     "description": "收尾未分類那一格"
@@ -6587,6 +6664,26 @@
   "helpChatJumpFar": "跳到還沒載入、或離最新很遠的訊息時，不會一路往回載，而是顯示它前後各 6 則的預覽。按「回到最新」回到底部；離開底部就會出現，有新訊息時會顯示有幾則。",
   "@helpChatJumpFar": {
     "description": "說明頁文案"
+  },
+  "helpBoardInboxLead": "未分類",
+  "@helpBoardInboxLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardInbox1": "每塊板只有一個「未分類」，以分頁運作，同一時間只有一頁使用中。沒指定階段的卡都落在這一頁。",
+  "@helpBoardInbox1": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox2": "使用中的頁和一般週期一樣收尾、送審、確認、完成。完成後立刻開下一頁。",
+  "@helpBoardInbox2": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。",
+  "@helpBoardInbox3": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox4": "任一頁都可以「拆成獨立週期」：填名稱即可，狀態沿用該頁。拆走使用中的頁會自動補一個新頁。一般週期不能取名「未分類」。",
+  "@helpBoardInbox4": {
+    "description": "說明頁文案：未分類分頁"
   },
   "helpBoardSupLead": "Supervisor",
   "@helpBoardSupLead": {
@@ -8037,7 +8134,7 @@
   "@helpChatRow3A": {
     "description": "說明頁文案"
   },
-  "helpChatRow3C": "送出時會換成當下在房裡的成員名字",
+  "helpChatRow3C": "送出時會換成當下在房裡的成員名字。預覽只顯示「全部 agent」「全部人類」「所有人」，不另列被涵蓋的成員",
   "@helpChatRow3C": {
     "description": "說明頁文案"
   },
@@ -8189,7 +8286,7 @@
   "@helpBoardCardTaskSub": {
     "description": "說明頁文案"
   },
-  "helpBoardCardTaskBody": "可以認領、指派、搬移。認領時若已被別人領走，會顯示是誰。未分類的卡也要先收尾，週期才能送審。",
+  "helpBoardCardTaskBody": "可以認領、指派、搬移。認領時若已被別人領走，會顯示是誰。",
   "@helpBoardCardTaskBody": {
     "description": "說明頁文案"
   },

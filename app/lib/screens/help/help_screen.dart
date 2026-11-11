@@ -321,6 +321,15 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) {
                 tone: HelpCalloutTone.warn),
             HelpCalloutBlock(l10n.helpBoardNarrowCallout),
             HelpItemsBlock([
+              HelpItem([
+                HelpChunk.bold(l10n.helpBoardInboxLead),
+                HelpChunk.text(l10n.helpBoardInbox1),
+              ]),
+              HelpItem([HelpChunk.text(l10n.helpBoardInbox2)]),
+              HelpItem([HelpChunk.text(l10n.helpBoardInbox3)]),
+              HelpItem([HelpChunk.text(l10n.helpBoardInbox4)]),
+            ]),
+            HelpItemsBlock([
               HelpItem([HelpChunk.text(l10n.helpBoard1)]),
               HelpItem([
                 HelpChunk.text(l10n.helpBoard4a),

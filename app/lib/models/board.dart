@@ -82,12 +82,30 @@ class BoardObjective {
     this.deleted = false,
     this.createdAt = '',
     this.release,
+    this.kind,
+    this.pageNo = 0,
   });
 
   final String id;
   final String roomId;
   final String title;
   final String description;
+
+  /// Hub 的週期種類：`''` 一般週期、`'inbox'` 未分類的一頁。
+  ///
+  /// **null＝Hub 沒回這個欄位**（舊 Hub），與 `''` 是兩件事：前者退回標題
+  /// 判斷（[isInbox]），後者是 Hub 明說「這不是未分類」。
+  final String? kind;
+
+  /// 未分類頁的流水號。拆頁之後會有缺號，畫面上的順序號不用它，
+  /// 依完成時間重新編（見 [BoardSnapshot.inboxHistory]）。
+  final int pageNo;
+
+  /// 這是不是「未分類」的一頁。
+  ///
+  /// 新 Hub 以 `kind` 為準；舊 Hub 沒有 `kind`，退回標題 [kUncategorisedTitle]。
+  bool get isInbox =>
+      kind == null ? title == kUncategorisedTitle : kind == 'inbox';
 
   /// 最近一次上板 run 的摘要；沒上板過為 null。
   final ObjectiveRelease? release;
@@ -167,6 +185,8 @@ class BoardObjective {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    kind: json['kind'] as String?,
+    pageNo: (json['page_no'] as int?) ?? 0,
     release: json['release'] is Map
         ? ObjectiveRelease.fromJson(
             Map<String, dynamic>.from(json['release'] as Map))
@@ -1312,6 +1332,33 @@ class BoardSnapshot {
             ? a.orderIndex.compareTo(b.orderIndex)
             : a.createdAt.compareTo(b.createdAt),
       );
+    return out;
+  }
+
+  /// 「未分類」目前使用中的那一頁（未完成的 inbox）。沒有回 null。
+  ///
+  /// 同一塊板任何時候只該有一頁；Hub 若多回了，取排序最前的那頁。
+  BoardObjective? get currentInbox {
+    for (final o in sortedObjectives) {
+      if (o.isInbox && o.status != 'done') return o;
+    }
+    return null;
+  }
+
+  /// 「未分類」已完成的歷史頁，依完成時間由舊到新。
+  ///
+  /// 顯示的順序號是這份清單的位置 + 1，**不是 `page_no`**：拆頁之後
+  /// `page_no` 會有缺號。完成時間相同或缺漏時退回 `page_no`、建立時間。
+  List<BoardObjective> get inboxHistory {
+    final out = sortedObjectives
+        .where((o) => o.isInbox && o.status == 'done')
+        .toList()
+      ..sort((a, b) {
+        final c = (a.completedAt ?? '').compareTo(b.completedAt ?? '');
+        if (c != 0) return c;
+        final p = a.pageNo.compareTo(b.pageNo);
+        return p != 0 ? p : a.createdAt.compareTo(b.createdAt);
+      });
     return out;
   }
 

@@ -6,6 +6,17 @@ import '../models/release.dart';
 import '../models/stage_file.dart';
 import 'api_client.dart';
 
+/// [BoardApi.splitInbox] 的結果。
+class SplitInboxResult {
+  const SplitInboxResult({required this.objectiveId, this.newInboxObjectiveId});
+
+  /// 拆出來的獨立週期。
+  final String objectiveId;
+
+  /// Hub 補開的新空白頁；沒補（拆的是歷史頁）為 null。
+  final String? newInboxObjectiveId;
+}
+
 /// Board REST。契約見 Board 設計稿 §6。
 ///
 /// 子資源路徑不帶 room_id（`/api/board/tasks/{id}`）是刻意的：id 是全域唯一
@@ -197,6 +208,31 @@ class BoardApi {
           '/api/board/objectives/$objectiveId',
           data: {'title': ?title, 'description': ?description},
           options: _auth(participantId, sessionKey),
+        );
+      });
+
+  /// 把「未分類」的一頁拆成獨立週期（`POST /api/board/objectives/{id}/split_inbox`）。
+  ///
+  /// 目前頁或歷史頁都可以拆。拆的是使用中頁時 Hub 會補一張新的空白頁，
+  /// 回應帶 `new_inbox_objective`。會被退回的 code：`not_inbox_page`、
+  /// `inbox_title_reserved`、`title_required`。
+  Future<SplitInboxResult> splitInbox(
+    String objectiveId, {
+    String? participantId,
+    String? sessionKey,
+    required String title,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/api/board/objectives/$objectiveId/split_inbox',
+          data: {'title': title},
+          options: _auth(participantId, sessionKey),
+        );
+        final data = res.data ?? const <String, dynamic>{};
+        final fresh = data['new_inbox_objective'];
+        return SplitInboxResult(
+          objectiveId: (data['id'] as String?) ?? objectiveId,
+          newInboxObjectiveId: fresh is Map ? fresh['id'] as String? : null,
         );
       });
 

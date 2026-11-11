@@ -85,6 +85,16 @@ String boardActionMessage(BuildContext context, ApiException e) =>
         AppLocalizations.of(context).boardErrorMoveSameObjective,
       'move_cross_board' =>
         AppLocalizations.of(context).boardErrorMoveCrossBoard,
+      // 未分類頁的拆頁、改名、取消
+      'not_inbox_page' => AppLocalizations.of(context).boardErrorNotInboxPage,
+      'inbox_title_reserved' =>
+        AppLocalizations.of(context).boardErrorInboxTitleReserved,
+      'title_required' =>
+        AppLocalizations.of(context).boardErrorTitleRequired,
+      'inbox_page_not_cancellable' =>
+        AppLocalizations.of(context).boardErrorInboxPageNotCancellable,
+      'inbox_rename_forbidden' =>
+        AppLocalizations.of(context).boardErrorInboxRenameForbidden,
       _ => e.message,
     };
 
