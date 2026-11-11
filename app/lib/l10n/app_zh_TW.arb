@@ -4679,22 +4679,17 @@
   "@chatMessageGone": {
     "description": "跳轉目標訊息已不存在"
   },
-  "chatFocusTooOld": "那則訊息太舊了，已載入 {count} 則仍沒跳到——再往上捲一段後重試",
-  "@chatFocusTooOld": {
-    "description": "往回載仍找不到目標訊息",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
-  },
-  "chatFocusNotFound": "找不到那則訊息",
-  "@chatFocusNotFound": {
-    "description": "找不到目標訊息"
-  },
   "chatFocusMisaligned": "跳轉沒對準那則訊息，再往上捲一段後重試",
   "@chatFocusMisaligned": {
     "description": "跳轉沒對準"
+  },
+  "chatFocusLoadFailed": "載入歷史訊息失敗，請重試",
+  "@chatFocusLoadFailed": {
+    "description": "跳轉往回載入歷史時出錯"
+  },
+  "chatJumpLatest": "回到最新",
+  "@chatJumpLatest": {
+    "description": "聊天列表離開底部時的按鈕；遠距跳轉預覽中點它回到最新"
   },
   "chatDropIsFolder": "{name} 是資料夾，未加入",
   "@chatDropIsFolder": {
@@ -6688,6 +6683,14 @@
   "@helpChatStyle": {
     "description": "說明：房間說話方式"
   },
+  "helpChatJumpReport": "點回報清單的一筆，會跳到該 agent 的最後一則訊息（沒有就跳到對應的系統訊息），並呼吸高亮一下。",
+  "@helpChatJumpReport": {
+    "description": "說明頁文案"
+  },
+  "helpChatJumpFar": "跳到還沒載入、或離最新很遠的訊息時，不會一路往回載，而是顯示它前後各 6 則的預覽。按「回到最新」回到底部；離開底部就會出現，有新訊息時會顯示有幾則。",
+  "@helpChatJumpFar": {
+    "description": "說明頁文案"
+  },
   "helpBoardSupLead": "Supervisor",
   "@helpBoardSupLead": {
     "description": "說明條目的粗體小標"
@@ -7392,9 +7395,17 @@
   "@boardReleaseInProgress": {
     "description": "409 release_in_progress"
   },
-  "boardReleaseLastFailed": "上次上板失敗",
+  "boardReleaseLastFailed": "上板失敗，打回後重新送審即可再次上板",
   "@boardReleaseLastFailed": {
     "description": "已確認的週期上次上板失敗，顯示在上板按鈕旁"
+  },
+  "boardReleaseBlockedReopened": "上板受阻，已打回",
+  "@boardReleaseBlockedReopened": {
+    "description": "上板 agent 遇嚴重阻擋，已把週期打回 active"
+  },
+  "boardCompleteNeedsRelease": "上板成功後才能結束",
+  "@boardCompleteNeedsRelease": {
+    "description": "週期有上板記錄但最近一筆沒成功時，結束週期按鈕停用的說明；也是 409 release_not_done 的轉述"
   },
   "boardReleaseRepoNotEligible": "有 repo 不能上板了，重開一次對話框",
   "@boardReleaseRepoNotEligible": {
@@ -7436,6 +7447,43 @@
   "boardErrorObjectiveClosed": "週期已收尾，先打回才能改動。",
   "@boardErrorObjectiveClosed": {
     "description": "Hub 回 409 objective_closed 時的轉述"
+  },
+  "boardErrorObjectiveAlreadyDone": "週期已經結束了。",
+  "@boardErrorObjectiveAlreadyDone": {
+    "description": "Hub 回 ObjectiveAlreadyDone 類錯誤碼時的轉述"
+  },
+  "boardErrorReleaseInProgress": "上板進行中，等它結束。",
+  "@boardErrorReleaseInProgress": {
+    "description": "Hub 回 ReleaseInProgress 類錯誤碼時的轉述"
+  },
+  "boardChecklistMoved": "已移到〈{name}〉",
+  "@boardChecklistMoved": {
+    "description": "階段拖到其他週期成功",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardErrorChecklistHasActiveRun": "派工進行中，先等它結束。",
+  "@boardErrorChecklistHasActiveRun": {
+    "description": "Hub 回 ChecklistHasActiveRun 類錯誤碼時的轉述"
+  },
+  "boardErrorChecklistUncategorisedImmovable": "「未分類」不能移動。",
+  "@boardErrorChecklistUncategorisedImmovable": {
+    "description": "Hub 回 ChecklistUncategorisedImmovable 類錯誤碼時的轉述"
+  },
+  "boardErrorMoveSameObjective": "階段已經在這個週期了。",
+  "@boardErrorMoveSameObjective": {
+    "description": "Hub 回 MoveSameObjective 類錯誤碼時的轉述"
+  },
+  "boardErrorMoveCrossBoard": "不能移到其他看板的週期。",
+  "@boardErrorMoveCrossBoard": {
+    "description": "Hub 回 MoveCrossBoard 類錯誤碼時的轉述"
+  },
+  "boardErrorReleaseLegacyClosed": "這個週期的舊上板紀錄已結案",
+  "@boardErrorReleaseLegacyClosed": {
+    "description": "Hub 回 409 release_legacy_closed 的轉述"
   },
   "boardObjectiveFrozenDone": "週期已完成，無法修改",
   "@boardObjectiveFrozenDone": {
@@ -8244,7 +8292,7 @@
   "@helpBoardCardTaskSub": {
     "description": "說明頁文案"
   },
-  "helpBoardCardTaskBody": "可以認領、指派、搬移。未分類的卡也要先收尾，週期才能送審。",
+  "helpBoardCardTaskBody": "可以認領、指派、搬移。認領時若已被別人領走，會顯示是誰。未分類的卡也要先收尾，週期才能送審。",
   "@helpBoardCardTaskBody": {
     "description": "說明頁文案"
   },
@@ -8306,6 +8354,18 @@
   },
   "helpBoardMoveRow5C": "一律排在最下面，一般項目排前面",
   "@helpBoardMoveRow5C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6A": "把階段移到其他週期",
+  "@helpBoardMoveRow6A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6B": "在階段標題列按住約 0.3 秒再拖，放到左欄某個進行中的週期",
+  "@helpBoardMoveRow6B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6C": "階段連同旗下的卡與附件一起搬過去；派工進行中的階段不能搬",
+  "@helpBoardMoveRow6C": {
     "description": "說明頁文案"
   },
   "helpBoardFrozenCallout": "凍結的週期、唯讀的板，以及目前狀態不能搬動的卡，都拖不動。",
@@ -8488,7 +8548,7 @@
   "@helpReleaseStep1": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep1Body": "候選 repo 只列本週期內有 run 動過 HEAD、而且設了穩定分支的。已確認的週期也可以事後單獨上板。",
+  "helpReleaseStep1Body": "候選 repo 只列本週期內有 run 動過 HEAD、而且設了穩定分支的。已確認、還沒結束的週期也可以補上板。",
   "@helpReleaseStep1Body": {
     "description": "說明頁文案"
   },
@@ -8500,11 +8560,11 @@
   "@helpReleaseStep2Body": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep3": "失敗了就重試",
+  "helpReleaseStep3": "失敗了",
   "@helpReleaseStep3": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep3Body": "週期是 verified／done，而且沒上板過或上次沒成功時，會顯示「上板」。上次失敗會另外標示「上次上板失敗」。上板成功或進行中時不顯示。",
+  "helpReleaseStep3Body": "沒有「重新上板」按鈕：把週期打回、重新送審，確認時就會再上板。有上板記錄的週期，要上板成功才能結束。",
   "@helpReleaseStep3Body": {
     "description": "說明頁文案"
   },
@@ -8544,12 +8604,32 @@
   "@helpReleaseRow4B": {
     "description": "說明頁文案"
   },
+  "helpReleaseRow5A": "合併方式設成僅快轉，但快轉不了",
+  "@helpReleaseRow5A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow5B": "自動改用合併 commit，並在結果裡註明原因，不放棄",
+  "@helpReleaseRow5B": {
+    "description": "說明頁文案"
+  },
   "helpReleaseWho": "只有掛著這塊板的工作房裡的人類成員能上板。agent 與 Supervisor 一律會被拒絕。",
   "@helpReleaseWho": {
     "description": "說明頁文案"
   },
   "helpReleaseSign": "設了 `agent_signing_key` 就改用 SSH key 簽章，這樣上板時人不在電腦前，也不會卡在 GPG 的密碼輸入。",
   "@helpReleaseSign": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseWorktree": "上板在獨立的暫存 worktree 進行，不動你的工作樹。有未提交的變更也照常上板，只上已提交的；worktree 沒清掉就算失敗。",
+  "@helpReleaseWorktree": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseAgent": "每次上板都會派一個專用 agent 收尾：成功就在房裡發上板報告；失敗就自己合併、解衝突、推送。真的上不去時，週期會被打回 active，並新增「上板阻擋」階段，提及人類。",
+  "@helpReleaseAgent": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseDone": "已結束的週期不能上板。舊版本留下的上板紀錄視為已結案，不再計入。",
+  "@helpReleaseDone": {
     "description": "說明頁文案"
   },
   "helpSecNotifyIntro": "三個入口，各收不同的東西。",
@@ -8738,6 +8818,22 @@
   },
   "helpPersonalRow5B": "App 啟動時 Loading 頁顯示的字。每行一則，有多則時每次啟動隨機挑一則；留空就用預設的「正在進入聊天室」。",
   "@helpPersonalRow5B": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow6A": "開發者模式",
+  "@helpPersonalRow6A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow6B": "顯示並可複製房間、任務板、卡片、階段、週期、想法板與條目的 ID。訊息時間後會多一個 #序號，右鍵點訊息可複製訊息 ID。",
+  "@helpPersonalRow6B": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow7A": "慶祝模式",
+  "@helpPersonalRow7A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow7B": "成員加入、任務卡完成、派工房派工成功時放彩花並有音效，觸發的系統訊息文字會變成金色呼吸。只對即時發生的事件，翻舊訊息不會放。",
+  "@helpPersonalRow7B": {
     "description": "說明頁文案"
   },
   "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。",

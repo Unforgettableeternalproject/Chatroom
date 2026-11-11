@@ -40,7 +40,7 @@ Future<void> showObjectiveVerifyDialog(
 /// 已確認（verified／done）的週期補上板。
 ///
 /// 重用確認對話框的候選清單與表單，但送出走 `createRelease`、不動週期
-/// 狀態：上一次上板失敗後週期已經是 verified，沒有別的入口能再來一次。
+/// 狀態：給 verified 但從沒上板過的週期補一次上板。
 Future<void> showObjectiveReleaseDialog(
   BuildContext context, {
   required BoardActions actions,
@@ -49,7 +49,9 @@ Future<void> showObjectiveReleaseDialog(
     showDialog<void>(
       context: context,
       builder: (_) => _VerifyDialog(
-          actions: actions, objectiveId: objectiveId, releaseOnly: true),
+          actions: actions,
+          objectiveId: objectiveId,
+          releaseOnly: true),
     );
 
 class _VerifyDialog extends StatefulWidget {

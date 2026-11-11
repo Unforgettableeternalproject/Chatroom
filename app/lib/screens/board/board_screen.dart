@@ -161,6 +161,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 正被拖著走的卡（長按拖曳＝搬到別的階段／週期）。只用來讓合法的落點
   /// 先亮起來；拖曳結束一律清掉。
   BoardTask? _draggingTask;
+  BoardChecklist? _draggingChecklist;
 
   /// 開著詳情抽屜的那張卡。
   late String? _openTaskId = widget.focusTaskId;
@@ -564,6 +565,65 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           content: Text(AppLocalizations.of(context).boardTaskMovedToast)));
     }
     _reloadBoard();
+  }
+
+  /// 左欄週期這個落點收不收 [data]（卡或階段）。
+  bool _objectiveAccepts(Object? data, BoardObjective o) => switch (data) {
+        BoardTask t => t.isMovable,
+        BoardChecklist c => canMoveChecklistInto(c, o),
+        _ => false,
+      };
+
+  /// 階段拖到左欄某個週期上放下：整段（連底下的卡）搬過去。
+  Future<void> _dropChecklistOnObjective(
+      BoardChecklist c, BoardObjective o) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final done = await runBoardAction<bool>(context, () async {
+      await actions.moveChecklist(c.id, objectiveId: o.id);
+      return true;
+    });
+    if (!mounted) return;
+    if (done == true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(AppLocalizations.of(context).boardChecklistMoved(o.title))));
+    }
+    _reloadBoard();
+  }
+
+  /// 把 [handle]（階段標題列上的一塊）做成長按拖曳的起點。
+  /// 與卡一致：按住約 0.3 秒再拖；立即位移則仍是把手的同週期重排。
+  Widget _stageDragSource(BoardChecklist c, Widget handle) {
+    final s = context.uep;
+    return LongPressDraggable<BoardChecklist>(
+      data: c,
+      delay: const Duration(milliseconds: 300),
+      onDragStarted: () => setState(() => _draggingChecklist = c),
+      onDragEnd: (_) {
+        if (mounted) setState(() => _draggingChecklist = null);
+      },
+      feedback: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 260,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: s.bgCard,
+            border: Border.all(color: UepColors.gold),
+            boxShadow: const [
+              BoxShadow(blurRadius: 12, color: Color(0x33000000)),
+            ],
+          ),
+          child: Text(c.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: UepText.sans(
+                  size: 14, weight: FontWeight.w600, color: s.inkTitle)),
+        ),
+      ),
+      child: handle,
+    );
   }
 
   /// 拖到左欄某個週期上放下：問要掛到那個週期的哪個階段（同「搬到別處」
@@ -1236,16 +1296,23 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       ),
     );
     if (!accepts) return tile;
-    return DragTarget<BoardTask>(
-      onWillAcceptWithDetails: (d) => d.data.isMovable,
-      onAcceptWithDetails: (d) => _dropOnObjective(d.data, o),
+    // 同一個落點收兩種東西：卡（active／review 的週期）與階段（只收 active）
+    return DragTarget<Object>(
+      onWillAcceptWithDetails: (d) => _objectiveAccepts(d.data, o),
+      onAcceptWithDetails: (d) {
+        final data = d.data;
+        if (data is BoardTask) _dropOnObjective(data, o);
+        if (data is BoardChecklist) _dropChecklistOnObjective(data, o);
+      },
       builder: (_, candidate, _) => DecoratedBox(
         position: DecorationPosition.foreground,
         decoration: BoxDecoration(
           border: Border.all(
             color: candidate.isNotEmpty
                 ? UepColors.gold
-                : _draggingTask != null
+                : (_draggingTask != null ||
+                        (_draggingChecklist != null &&
+                            canMoveChecklistInto(_draggingChecklist!, o)))
                     ? UepColors.gold.withValues(alpha: .35)
                     : Colors.transparent,
             width: candidate.isNotEmpty ? 2 : 1,
@@ -1270,6 +1337,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _objectiveHeader(context, o, stats),
+        if (o.status == 'active' && (o.release?.blockedReopened ?? false))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(26, 8, 26, 0),
+            child: Text(AppLocalizations.of(context).boardReleaseBlockedReopened,
+                style: UepText.mono(size: 11, color: UepColors.error)),
+          ),
         if (stats.orphans > 0) _orphanBanner(context, snap, o, stats),
         Expanded(
           child: ListView(
@@ -1556,12 +1629,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveComplete,
               accent: true,
-              onTap: () => runBoardAction(
-                  context, () => actions.completeObjective(o.id)),
+              // 有上板記錄而最近一筆沒成功：Hub 回 409 `release_not_done`，
+              // 按鈕先停用，原因寫在底下的提示
+              onTap: o.completeBlockedByRelease
+                  ? null
+                  : () => runBoardAction(
+                      context, () => actions.completeObjective(o.id)),
             ),
           ],
-          // 已完成的週期也能補上板（Hub 對 verified／done 放行）
-          if (o.status == 'done') ..._releaseEntry(context, o, actions),
         ]),
         const SizedBox(height: 10),
         // 凍結的理由排在收尾提示前面：它回答的是「為什麼下面的東西都動
@@ -1578,25 +1653,26 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
-  /// 「上板」入口：只在從沒上板過、或上次沒成功時出現。上板成功或還在跑
-  /// 的週期不畫——再按一次不是多餘就是必然 409。
+  /// 「上板」入口：只在 verified 且從沒上板過（補上板）時出現。上板失敗
+  /// 不給入口，只提示打回重新送審；成功、還在跑、done 的週期都不畫。
   List<Widget> _releaseEntry(
       BuildContext context, BoardObjective o, BoardActions actions) {
-    if (!o.canOfferRelease) return const [];
     final l10n = AppLocalizations.of(context);
-    return [
-      if (o.lastReleaseFailed) ...[
+    if (o.lastReleaseFailed) {
+      return [
         Text(l10n.boardReleaseLastFailed,
             style: UepText.mono(size: 10, color: UepColors.error)),
         const SizedBox(width: 8),
-      ],
+      ];
+    }
+    if (!o.canOfferRelease) return const [];
+    return [
       _BarButton(
         label: l10n.opsRelease,
         onTap: () => showObjectiveReleaseDialog(context,
             actions: actions, objectiveId: o.id),
       ),
-      // done 之後沒有別的按鈕，尾端間距只在 verified 需要
-      if (o.status == 'verified') const SizedBox(width: 8),
+      const SizedBox(width: 8),
     ];
   }
 
@@ -1615,6 +1691,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       'active' when stats.stagesDone == 0 => l10n.boardCloseoutAllCancelled,
       'active' => l10n.boardCloseoutReadyForReview,
       'review' => l10n.boardCloseoutInReview,
+      'verified' when o.completeBlockedByRelease =>
+        l10n.boardCompleteNeedsRelease,
       'verified' => l10n.boardCloseoutVerified,
       'done' => l10n.boardCloseoutDone,
       _ => '',
@@ -1805,6 +1883,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
     final collapsed = _collapsed.contains(c.id);
 
+    // 階段能不能長按拖去別的週期（未分類、凍結都不行）
+    final owner = snap.objectives[c.objectiveId];
+    final draggable = !_readOnly &&
+        _boardIdOrNull != null &&
+        owner != null &&
+        canDragChecklist(c, owner);
+    Widget dragSource(Widget w) => draggable ? _stageDragSource(c, w) : w;
+
     return _stageDropTarget(c, frozen, Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
@@ -1822,8 +1908,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       cursor: SystemMouseCursors.grab,
                       child: Padding(
                         padding: const EdgeInsets.only(right: 6),
-                        child: Icon(Icons.drag_indicator,
-                            size: 16, color: s.inkMute),
+                        child: dragSource(Icon(Icons.drag_indicator,
+                            size: 16, color: s.inkMute)),
                       ),
                     ),
                   ),
@@ -1850,11 +1936,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     ? AppLocalizations.of(context).boardChecklistCreatorUnknown
                     : AppLocalizations.of(context)
                         .boardChecklistCreatedBy(c.createdByName),
-                child: Text(c.title,
+                child: dragSource(Text(c.title,
                     style: UepText.sans(
                         size: 15,
                         weight: FontWeight.w600,
-                        color: s.inkTitle)),
+                        color: s.inkTitle))),
               ),
               if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
                 const SizedBox(width: 8),

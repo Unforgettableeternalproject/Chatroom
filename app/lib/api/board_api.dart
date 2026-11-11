@@ -259,6 +259,25 @@ class BoardApi {
         );
       });
 
+  /// 把階段搬到另一個週期（`POST /api/board/checklists/{id}/move`）。
+  ///
+  /// 會被退回的 code（409）：`checklist_has_active_run`、
+  /// `checklist_uncategorised_immovable`、`objective_closed`、
+  /// `move_same_objective`、`move_cross_board`。
+  Future<void> moveChecklist(
+    String checklistId, {
+    String? participantId,
+    String? sessionKey,
+    required String objectiveId,
+  }) =>
+      unwrap(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/api/board/checklists/$checklistId/move',
+          data: {'objective_id': objectiveId},
+          options: _auth(participantId, sessionKey),
+        );
+      });
+
   /// 認領一張 Task。
   ///
   /// ⚠️ **會失敗，而且失敗是正常結果**——Hub 端是條件式 UPDATE（CAS），

@@ -405,6 +405,16 @@ class BoardActions {
     _reload();
   }
 
+  /// 把階段（連同底下的卡）搬到另一個週期。
+  Future<void> moveChecklist(String checklistId,
+      {required String objectiveId}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.moveChecklist(checklistId,
+        participantId: pid, sessionKey: _sk, objectiveId: objectiveId);
+    _reload();
+  }
+
   Future<void> completeChecklist(String checklistId) =>
       setChecklistStatus(checklistId, 'done');
 
@@ -517,7 +527,9 @@ class BoardActions {
       _objective(
           id,
           (api, pid) => api.createRelease(id,
-              participantId: pid, sessionKey: _sk, release: release));
+              participantId: pid,
+              sessionKey: _sk,
+              release: release));
 
   /// 這個週期能不能上板、有哪些候選 repo。拿不到身分時回 null。
   Future<ReleaseCandidates?> releaseCandidates(String id) async {

@@ -53,6 +53,27 @@ String boardActionMessage(BuildContext context, ApiException e) =>
       // 下一步：打回那顆按鈕就在週期抬頭右邊
       'objective_closed' => AppLocalizations.of(context)
           .boardErrorObjectiveClosed,
+      // 409 — 最近一筆上板還沒成功，週期不能結束
+      'release_not_done' =>
+        AppLocalizations.of(context).boardCompleteNeedsRelease,
+      // 409 — 週期已經 done，上板／再上板都沒有意義
+      'objective_already_done' =>
+        AppLocalizations.of(context).boardErrorObjectiveAlreadyDone,
+      // 409 — 上板（含修復 agent）還在跑
+      'release_in_progress' =>
+        AppLocalizations.of(context).boardErrorReleaseInProgress,
+      // 409 — 本版前的舊上板紀錄已結案，不再上板
+      'release_legacy_closed' =>
+        AppLocalizations.of(context).boardErrorReleaseLegacyClosed,
+      // 409 — 階段搬到其他週期
+      'checklist_has_active_run' =>
+        AppLocalizations.of(context).boardErrorChecklistHasActiveRun,
+      'checklist_uncategorised_immovable' =>
+        AppLocalizations.of(context).boardErrorChecklistUncategorisedImmovable,
+      'move_same_objective' =>
+        AppLocalizations.of(context).boardErrorMoveSameObjective,
+      'move_cross_board' =>
+        AppLocalizations.of(context).boardErrorMoveCrossBoard,
       _ => e.message,
     };
 
