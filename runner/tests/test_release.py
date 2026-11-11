@@ -223,8 +223,10 @@ async def test_merge_method_ff_only_fast_forwards(tmp_path, release_repo):
         git(release_repo, "rev-parse", "develop"), "快轉後兩邊要同一顆"
 
 
-async def test_ff_only_fails_when_branches_diverged(tmp_path, release_repo):
-    """穩定分支自己有新 commit 時 `ff_only` 快轉不了——那要說出來，不是默默合。"""
+async def test_ff_only_falls_back_to_a_merge_commit_when_diverged(
+        tmp_path, release_repo):
+    """穩定分支自己有新 commit 時 `ff_only` 快轉不了——不再放棄，退回簽章
+    merge commit 照樣上板，並在結果裡註記為什麼不是快轉。"""
     git(release_repo, "checkout", "main")
     (release_repo / "hotfix.txt").write_text("急修\n", encoding="utf-8")
     git(release_repo, "add", "hotfix.txt")
@@ -237,8 +239,16 @@ async def test_ff_only_fails_when_branches_diverged(tmp_path, release_repo):
 
     outcome = await executor(cfg, hub).execute(make_run([entry()]))
 
-    assert (outcome.status, outcome.reason) == ("failed", "release_partial")
-    assert "release_ff_not_possible" in outcome.result
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert "release_ff_not_possible" not in outcome.result
+    assert "退回簽章 merge commit" in outcome.result, "要註記不是快轉"
+    parents = git(release_repo, "log", "-1", "--format=%P", "main").split()
+    assert len(parents) == 2, "快轉不了就該留下一顆合併 commit"
+    subjects = git(release_repo, "log", "main", "--format=%s")
+    assert "急修" in subjects and "功能一" in subjects
+    assert git(release_repo, "rev-parse", "main") == \
+        git(release_repo, "rev-parse", "origin/main")
 
 
 # ── 訊息模板 ────────────────────────────────────────────────────
@@ -357,17 +367,137 @@ async def test_squash_conflict_resets_back_to_stable(tmp_path, release_repo):
     assert git(release_repo, "status", "--porcelain") == ""
 
 
-async def test_dirty_worktree_blocks_the_release(tmp_path, release_repo):
-    """未提交的變更不是這次週期的成果，不能替人決定要不要一起上板。"""
+def _worktree_count(repo) -> int:
+    return git(repo, "worktree", "list", "--porcelain").count("worktree ")
+
+
+async def test_dirty_worktree_does_not_block_and_is_left_untouched(
+        tmp_path, release_repo):
+    """髒工作樹不再中斷上板：只上已提交的變更，使用者未提交的修改與未追蹤的
+    檔案原樣保留，暫存 worktree 事後清得乾乾淨淨。"""
+    (release_repo / "README.md").write_text("改到一半\n", encoding="utf-8")
     (release_repo / "草稿.txt").write_text("寫到一半\n", encoding="utf-8")
+    status_before = git(release_repo, "status", "--porcelain")
     cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
     hub = _RecordingHub()
 
     outcome = await executor(cfg, hub).execute(make_run([entry()]))
 
-    assert (outcome.status, outcome.reason) == ("failed", "release_partial")
-    assert "release_dirty" in outcome.result
-    assert (release_repo / "草稿.txt").exists(), "別人的未提交變更不能被動到"
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert "release_dirty" not in outcome.result
+    # 上板真的上去了（只含已提交的）
+    assert git(release_repo, "rev-parse", "main") == \
+        git(release_repo, "rev-parse", "origin/main")
+    assert "功能一" in git(release_repo, "log", "origin/main", "--format=%s")
+    assert "改到一半" not in git(release_repo, "show", "origin/main:README.md")
+    # 使用者的東西一個字都沒動
+    assert (release_repo / "README.md").read_text(encoding="utf-8") == \
+        "改到一半\n"
+    assert (release_repo / "草稿.txt").read_text(encoding="utf-8") == \
+        "寫到一半\n"
+    assert git(release_repo, "status", "--porcelain") == status_before
+    assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+    # worktree 已清除
+    assert _worktree_count(release_repo) == 1, "暫存 worktree 沒有清掉"
+
+
+async def test_release_while_user_is_on_the_stable_branch_leaves_that_tree(
+        tmp_path, release_repo):
+    """使用者的工作樹正停在穩定分支上、而且有未提交的修改：同一條分支不能在
+    兩個 worktree 同時檢出，所以暫存 worktree 用分離 HEAD；origin 照樣更新，
+    使用者那條本機分支與工作樹不被移動。"""
+    git(release_repo, "checkout", "main")
+    (release_repo / "README.md").write_text("在 main 上改到一半\n",
+                                            encoding="utf-8")
+    main_before = git(release_repo, "rev-parse", "main")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    hub = _RecordingHub()
+
+    outcome = await executor(cfg, hub).execute(make_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert "功能一" in git(release_repo, "log", "origin/main", "--format=%s")
+    assert git(release_repo, "rev-parse", "main") == main_before, \
+        "正被檢出的本機穩定分支不該被移動"
+    assert "沒有移動它" in outcome.result
+    assert (release_repo / "README.md").read_text(encoding="utf-8") == \
+        "在 main 上改到一半\n"
+    assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert _worktree_count(release_repo) == 1
+
+
+async def test_worktree_cleanup_failure_fails_the_repo(tmp_path, release_repo,
+                                                       monkeypatch):
+    """worktree 清不掉 ＝ 這個 repo 的結果是失敗（明確 reason），但上板本身
+    做完了什麼要留在 detail。"""
+    from chatroom_runner import gitops
+
+    async def stuck(repo, path):
+        return gitops.GitResult(1, "", "locked by another process")
+
+    async def no_prune(repo):
+        return gitops.GitResult(0, "", "")
+
+    # remove 失敗、prune 也沒效：登記真的還留在 repo 的 worktree 清單裡
+    monkeypatch.setattr(gitops, "worktree_remove", stuck)
+    monkeypatch.setattr(gitops, "worktree_prune", no_prune)
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    hub = _RecordingHub()
+
+    outcome = await executor(cfg, hub).execute(make_run([entry()]))
+
+    try:
+        assert (outcome.status, outcome.reason) == ("failed",
+                                                    "release_partial")
+        assert "release_worktree_cleanup_failed" in outcome.result
+        assert "locked by another process" in outcome.result
+        assert "上板本身已完成" in outcome.result
+        # 推送其實已經成功：failed 只是因為清不乾淨
+        assert "功能一" in git(release_repo, "log", "origin/main",
+                              "--format=%s")
+    finally:
+        # 收拾測試自己造成的殘留，免得污染 tmp 目錄的清理
+        subprocess.run(["git", "worktree", "prune"], cwd=str(release_repo),
+                       capture_output=True)
+
+
+async def test_failed_remove_that_is_cleaned_up_anyway_is_not_a_failure(
+        tmp_path, release_repo, monkeypatch):
+    """`worktree remove` 失敗，但強制刪目錄＋prune 已經收乾淨：以最終狀態為
+    準，不能把一次成功的上板誤判成失敗（那會擋住週期完成、逼人重新上板）。"""
+    from chatroom_runner import gitops
+
+    async def stuck(repo, path):
+        return gitops.GitResult(1, "", "locked by another process")
+
+    monkeypatch.setattr(gitops, "worktree_remove", stuck)
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert _worktree_count(release_repo) == 1
+
+
+async def test_hooks_still_run_inside_the_release_worktree(tmp_path,
+                                                           release_repo):
+    """hooks 在 worktree 下仍然生效（`.git/hooks` 由所有 worktree 共用）：
+    pre-push 留下記號，證明 push 時 hook 真的跑了。"""
+    marker = tmp_path / "pre-push-ran.txt"
+    hook = release_repo / ".git" / "hooks" / "pre-push"
+    hook.write_text(f'#!/bin/sh\necho ran > "{marker.as_posix()}"\nexit 0\n',
+                    encoding="utf-8", newline="\n")
+    hook.chmod(0o755)
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+
+    outcome = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+
+    assert outcome.status == "done", outcome.result
+    assert marker.exists(), "worktree 下 pre-push hook 沒有被執行"
 
 
 async def test_missing_stable_branch_fails(tmp_path, release_repo):
@@ -403,15 +533,14 @@ async def test_one_repo_failing_makes_the_run_partial(tmp_path):
     """一個 repo 失敗不影響另一個，但整筆 run 是 `release_partial`。"""
     good, _ = make_repo(tmp_path, "JSAI-Web")
     bad, _ = make_repo(tmp_path, "JSAI-Api")
-    (bad / "草稿.txt").write_text("寫到一半\n", encoding="utf-8")
     cfg = make_config(tmp_path, {"JSAI-Web": good, "JSAI-Api": bad})
     hub = _RecordingHub()
 
     outcome = await executor(cfg, hub).execute(
-        make_run([entry("JSAI-Web"), entry("JSAI-Api")]))
+        make_run([entry("JSAI-Web"), entry("JSAI-Api", stable="no-such")]))
 
     assert (outcome.status, outcome.reason) == ("failed", "release_partial")
-    assert "release_dirty" in outcome.result
+    assert "release_stable_missing" in outcome.result
     # 失敗的那個擋住了，成功的那個照樣上板
     assert git(good, "rev-parse", "main") == git(good, "rev-parse",
                                                  "origin/main")
@@ -1006,3 +1135,185 @@ async def test_merge_path_keeps_unrelated_unpushed_commit(tmp_path):
     assert "手動 commit" in subjects and "功能一" in subjects
     assert git(repo, "status", "--porcelain") == ""
     assert git(repo, "branch", "--show-current") == "develop"
+
+
+# ── release_fix（每次上板都派的報告＋修復 agent）──────────────────
+
+def make_fix_run(repos: list[dict], *, tag: str = "", run_id: str = "r-fix"):
+    """直接構造一筆 release_fix（Hub 端點是另一半的事）。"""
+    return {"id": run_id, "kind": "release_fix", "project": "ai-website",
+            "ref": "obj-1:fix", "brief": "上板修復：第一週期",
+            "room_id": "room-1",
+            "spec": {"objective_id": "obj-1", "objective_title": "第一週期",
+                     "room_id": "room-1", "repos": repos, "tag": tag,
+                     "release_run_id": "r-rel"},
+            # Hub 領單時附上的同批 release 結果
+            "release_result": {
+                "run_id": "r-rel", "status": "failed",
+                "reason": "release_partial",
+                "result": "- JSAI-Web：失敗（release_merge_conflict）"}}
+
+
+def _fix_env(monkeypatch, scenario: str, *, source="develop", stable="main",
+             tag: str = "") -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", scenario)
+    monkeypatch.setenv("FAKE_FIX_SOURCE", source)
+    monkeypatch.setenv("FAKE_FIX_STABLE", stable)
+    monkeypatch.setenv("FAKE_FIX_TAG", tag)
+
+
+def _fix_info(tmp_path, run_id="r-fix") -> dict:
+    import json
+    return json.loads((tmp_path / "state" / "runs" / run_id
+                       / "release_fix_info.json").read_text(encoding="utf-8"))
+
+
+async def test_release_fix_lands_the_release_from_an_isolated_worktree(
+        tmp_path, release_repo, monkeypatch):
+    """上板修復在 runner 建的獨立 worktree 裡動工、真的推上 origin；成功與否
+    由收工後的機械驗證決定。使用者的髒工作樹完全不受影響。"""
+    _fix_env(monkeypatch, "release_fix_push", tag="v1.2.0")
+    (release_repo / "草稿.txt").write_text("寫到一半\n", encoding="utf-8")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    hub = _RecordingHub()
+
+    outcome = await executor(cfg, hub).execute(
+        make_fix_run([entry()], tag="v1.2.0"))
+
+    assert (outcome.status, outcome.reason) == ("done", "release_verified"), \
+        outcome.result
+    assert "功能一" in git(release_repo, "log", "origin/main", "--format=%s")
+    assert "refs/tags/v1.2.0" in git(release_repo, "ls-remote", "--tags",
+                                     "origin")
+    info = _fix_info(tmp_path)
+    cwd = Path(info["cwd"]).resolve()
+    assert cwd != release_repo.resolve()
+    assert release_repo.resolve() not in cwd.parents, "agent 不在使用者的 repo 裡"
+    assert info["helper"] == ["manager"], "release_fix 才帶推送憑證"
+    assert (release_repo / "草稿.txt").read_text(encoding="utf-8") == \
+        "寫到一半\n"
+    assert git(release_repo, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+    assert _worktree_count(release_repo) == 1, "暫存 worktree 沒有清掉"
+    assert not cwd.exists()
+    assert [s for s, _ in hub.reports] == ["running", "done"]
+
+
+async def test_release_fix_fails_when_the_agent_did_not_actually_land(
+        tmp_path, release_repo, monkeypatch):
+    """agent 說完了但沒推上去 ⇒ failed，不信嘴巴信 origin。"""
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "success")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_fix_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "release_fix_incomplete")
+    assert "JSAI-Web" in outcome.result and "未上板" in outcome.result
+    assert "功能一" not in git(release_repo, "log", "origin/main",
+                              "--format=%s")
+    assert _worktree_count(release_repo) == 1
+
+
+async def test_release_fix_report_only_when_the_release_already_landed(
+        tmp_path, release_repo, monkeypatch):
+    """剛才那次上板已經成功：agent 只報告，origin 不多出任何 commit，
+    驗證通過 ⇒ done。"""
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "done", first.result
+    origin_before = git(release_repo, "rev-parse", "origin/main")
+    _fix_env(monkeypatch, "release_fix_report_only")
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_fix_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("done", "release_verified"), \
+        outcome.result
+    assert git(release_repo, "rev-parse", "origin/main") == origin_before
+
+
+async def test_release_fix_verifies_a_squash_release_by_content(
+        tmp_path, release_repo, monkeypatch):
+    """squash 上板的來源 tip 不是穩定分支的祖先，驗證要認「合進去沒有變更」，
+    否則 squash 的專案每次 release_fix 都會被誤判成沒上去。"""
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo},
+                      release={"merge_method": "squash"})
+    first = await executor(cfg, _RecordingHub()).execute(make_run([entry()]))
+    assert first.status == "done", first.result
+    assert " " not in git(release_repo, "log", "-1", "--format=%P", "main"), \
+        "前提：這是 squash（單一 parent）"
+    _fix_env(monkeypatch, "release_fix_report_only")
+
+    outcome = await executor(cfg, _RecordingHub()).execute(
+        make_fix_run([entry()]))
+
+    assert (outcome.status, outcome.reason) == ("done", "release_verified"), \
+        outcome.result
+
+
+async def test_release_fix_fails_when_its_worktree_cannot_be_removed(
+        tmp_path, release_repo, monkeypatch):
+    from chatroom_runner import gitops
+    _fix_env(monkeypatch, "release_fix_push")
+
+    async def stuck(repo, path):
+        return gitops.GitResult(1, "", "locked by another process")
+
+    async def no_prune(repo):
+        return gitops.GitResult(0, "", "")
+
+    monkeypatch.setattr(gitops, "worktree_remove", stuck)
+    monkeypatch.setattr(gitops, "worktree_prune", no_prune)
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    try:
+        outcome = await executor(cfg, _RecordingHub()).execute(
+            make_fix_run([entry()]))
+    finally:
+        subprocess.run(["git", "worktree", "prune"], cwd=str(release_repo),
+                       capture_output=True)
+
+    assert (outcome.status, outcome.reason) == (
+        "failed", "release_worktree_cleanup_failed")
+    assert "locked by another process" in outcome.result
+
+
+async def test_release_fix_waits_for_the_repo_lock_held_by_the_release(
+        tmp_path, release_repo, monkeypatch):
+    """release_fix 鎖同一組 repo：release run 還握著鎖時它不會開工。"""
+    _fix_env(monkeypatch, "release_fix_report_only")
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    ex = executor(cfg, _RecordingHub())
+
+    async with ex.locks.hold(["ai-website/JSAI-Web"], run_id="r-rel",
+                             timeout=30):
+        task = asyncio.create_task(ex.execute(make_fix_run([entry()])))
+        await asyncio.sleep(1.0)
+        assert not task.done(), "鎖還被上板握著，release_fix 就開工了"
+        assert not (tmp_path / "state" / "runs" / "r-fix"
+                    / "release_fix_info.json").exists()
+    outcome = await task
+    assert outcome.reason in ("release_verified", "release_fix_incomplete")
+
+
+async def test_release_fix_without_repos_fails_cleanly(tmp_path, release_repo):
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+
+    outcome = await executor(cfg, _RecordingHub()).execute(make_fix_run([]))
+
+    assert (outcome.status, outcome.reason) == ("failed",
+                                                "release_spec_missing")
+
+
+async def test_merge_is_noop_distinguishes_landed_squash_from_pending(
+        tmp_path, release_repo):
+    """gitops.merge_is_noop：還沒併的不算；squash 後 tip 不是祖先但內容相同，
+    算已上去。"""
+    from chatroom_runner import gitops
+    assert await gitops.merge_is_noop(release_repo, "main", "develop") is False
+    git(release_repo, "checkout", "main")
+    git(release_repo, "merge", "--squash", "develop")
+    git(release_repo, "commit", "-m", "squash 上板")
+    git(release_repo, "checkout", "develop")
+    assert not await gitops.is_ancestor(release_repo, "develop", "main")
+    assert await gitops.merge_is_noop(release_repo, "main", "develop") is True

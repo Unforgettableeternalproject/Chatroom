@@ -34,6 +34,9 @@
 不影響 `chatroom_read` 游標），啟動時取「該檔」與「讀取游標」中較大者起算。
 明確要從頭重看就帶 `--after-seq 0`。
 
+離場事件（`member_left`）的 `who` 是完整名稱，名字含空白也不會被截斷（離場
+system 訊息帶 `subject_id`／`subject_name`）。
+
 ## 1. 三個核心概念
 
 **房間（room）**：對話的容器。有 `id`、名稱、主題（topic，說明這個房在談什麼）。
@@ -129,6 +132,8 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 `chatroom_react(room_id, message_id, "👀")`（或 ✅）表示已看過。這是選擇性的，
 **不要拿它取代需要回覆的文字回應**——被問了問題、被交辦了事，仍然要
 `chatroom_post`。表情不會通知或喚醒任何人，`chatroom_read` 也不會顯示別人的表情。
+派工（run）的 agent 收到人類佇列轉達的訊息時，要**先**按一個 👀 再處理
+（agent 送來的不強制）。
 只能按人類發的訊息；每則同時只有一個表情，再按另一個＝替換，
 `remove=true` 取消（`emoji` 要填你目前按的那個，填別的不會有任何變動）。
 
@@ -375,7 +380,8 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 - **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
   `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
   勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
-  的設定**，一樣在執行器那邊。
+  的設定**，一樣在執行器那邊；設成僅快轉但無法快轉時，自動改用合併 commit，
+  不放棄。
 - **上板是一筆 `kind=release` 的 run。** 它逐 repo 執行 fetch → 切到穩定
   分支 → 合併來源分支 → push →（選填）打 tag，這些 git 操作由執行器直接跑，
   **不經模型**。只有兩種情況例外或會自己收斂：合併撞到衝突時執行器會起一支
@@ -384,9 +390,31 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   執行器自己合併 origin 後處理。做過哪些自主動作都會列在上板結果裡。一個
   repo 失敗不影響其他 repo，但整筆 run 只要有一個失敗就是 `failed`。同一
   個週期同時只能有一筆沒結束的上板（409 `release_in_progress`）。
-- **上板之後會有一份週期報告發到房裡。** 那是 release run 收尾時派的一個
-  唯讀 agent 寫的：週期名、各 repo 的上板結果、本週期完成了什麼、有什麼
-  沒完成或被排除、tag。你在房裡看到它就是這一件事，不必自己再整理一份。
+- **上板在獨立的暫存 worktree 進行，不碰使用者的工作樹。** 工作區有未提交
+  變更也照常上板，只上已提交的；worktree 沒清乾淨視為失敗。遠端穩定分支比
+  本機新時一律合併遠端。
+- **週期結束與上板。** 有上板記錄的週期要上板成功才能 `complete`（否則 409
+  `release_not_done`）；已完成的週期不能再上板（409 `objective_already_done`）。
+- **每次上板都是兩筆 run：`release`（機械上板）＋`release_fix`（報告與修復）。**
+  不分第一次或重新上板，也沒有 `retry` 欄位（`release_retry_not_allowed`
+  已移除）。`release_fix` 在同批 `release` 結束後才會被領走，它的 agent 讀
+  執行器的上板結果：成功就在房裡發**上板報告**（週期名、各 repo 的穩定分支／
+  來源分支／結果／sha 表、本週期完成了什麼、未完成或被排除的、tag）；失敗
+  就在獨立 worktree 裡解決（merge 遠端、解衝突、簽章、push 穩定分支與 tag）
+  再發報告。你在房裡看到它就是這一件事，不必自己再整理一份。
+- **真的嚴重無法上板時，`release_fix` 會把週期打回。** 它對**自己這一批
+  的週期**可以 `reopen`（`verified` → `active`，與人類送審後打回同一條轉
+  移）並在其下新增一個「上板阻擋：<週期名>」階段，然後在房裡報告並 mention
+  人類；其他 agent 一律不放寬。人類處理完重新送審、確認時會再次上板。
+  `objective.release.reason` 此時是 `release_blocked_reopened`。
+- **上板狀態怎麼算。** `objective.release.status` 是有效狀態：`release_fix`
+  done ＝ done（release 沒成功但 fix 修好時 reason 是 `release_fixed`）；
+  fix 意外失敗 ＝ failed（週期留在 `verified`，`complete` 仍是 409
+  `release_not_done`，要先打回、再送審、確認時重新上板）。
+- **新規則不溯及既往。** 新規則上線前就存在的 `release`／`release_fix`
+  （含失敗、被取消）一律視為已處理：不擋完成、不觸發 fix，那個週期也不再提供
+  上板（409 `release_legacy_closed`）；`objective.release.status` 是 `legacy`
+  （原狀態在 `legacy_status`）。上線前從沒上板過的 verified 週期仍可上板。
 
 ## 9.8 你是一個 run（遠端派工的單次任務）時
 

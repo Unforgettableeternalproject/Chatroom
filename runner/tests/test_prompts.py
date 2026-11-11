@@ -25,6 +25,16 @@ def _build_contract() -> str:
     return prompts.build_contract(fields)
 
 
+def test_contract_asks_for_an_ack_reaction_on_human_messages():
+    """人類送來的佇列訊息：先 `chatroom_react` 一個表情再處理。"""
+    contract = _build_contract()
+    assert "chatroom_react" in contract
+    assert "👀" in contract
+    assert "先加表情再處理" in contract
+    assert "room-test" in contract[contract.index("chatroom_react"):][:80]
+    assert "agent 送來的訊息不強制" in contract
+
+
 def test_join_failure_rule_is_present():
     contract = _build_contract()
     for marker in _JOIN_FAILURE_MARKERS:
@@ -103,3 +113,62 @@ def test_old_hub_without_ask_human_leaves_no_placeholder():
     contract = _contract_with(None)
     assert "{{ask_human_block}}" not in contract
     assert "要問人時問誰" not in contract
+
+
+# ── release_fix 模板（上板報告與修復）───────────────────────────
+
+def _release_fix_prompt() -> str:
+    items = [{"name": "JSAI-Web", "worktree": "/tmp/wt/JSAI-Web",
+              "stable": "main", "source": "develop",
+              "origin_stable": "a" * 40, "source_local": "b" * 40,
+              "source_remote": "c" * 40, "resume_head": "d" * 40,
+              "merge_message": "release: 併入 develop", "tag_message": "週期"}]
+    fields = {
+        "run_id": "run-fix", "room_id": "room-1", "kind": "release_fix",
+        "project": "proj", "ref": "obj-1", "repo": "JSAI-Web",
+        "cwd": "/tmp/wt/JSAI-Web", "branch": "分離 HEAD",
+        "allowed_branches": "main", "repo_names": "JSAI-Web",
+        "objective_title": "第一週期", "release_run_id": "rel-2",
+        "release_status": "failed",
+        "release_reason": "release_partial",
+        "release_result": "- JSAI-Web：失敗（release_merge_conflict）",
+        "release_tag": "v1.2.0",
+        "release_fix_repos": prompts.release_fix_repos_block(items),
+    }
+    return prompts.build("release_fix", fields, "")
+
+
+def test_release_fix_template_renders_without_leftover_placeholders():
+    text = _release_fix_prompt()
+    assert "{{" not in text, "模板留著沒填的欄位"
+    for expected in ("第一週期", "rel-2", "release_merge_conflict",
+                     "/tmp/wt/JSAI-Web", "v1.2.0", "release: 併入 develop"):
+        assert expected in text
+
+
+def test_release_fix_template_states_the_duties_and_the_limits():
+    text = _release_fix_prompt()
+    # 職責：讀機械結果、成功發報告、失敗修復（merge 不 rebase）、嚴重
+    # 無法上板時打回週期＋在其下開阻擋階段＋mention 人類
+    assert "不動任何 git 指令的" in text
+    assert "不 rebase" in text and "不 force push" in text
+    assert "git push origin HEAD:" in text
+    assert 'status="reopen"' in text
+    assert "chatroom_board_add" in text and "階段" in text
+    assert "不要另開" in text
+    assert "mentions" in text
+    assert "不論結果，都在房裡發一份報告" in text
+    # 上板報告格式（原 release_report 模板）併進來
+    for part in ("上板結果表", "本週期完成了什麼", "未完成或被排除的"):
+        assert part in text
+
+
+def test_release_fix_contract_still_requires_joining_first():
+    """release_fix 走一般契約：進房失敗就什麼都不做這條不能被模板蓋掉。"""
+    fields = {"run_id": "run-fix", "room_id": "room-1", "kind": "release_fix",
+              "project": "proj", "ref": "obj-1", "cwd": "/tmp/wt",
+              "branch": "HEAD", "allowed_branches": "main",
+              "repo_names": "repo"}
+    contract = prompts.build_contract(fields)
+    for marker in _JOIN_FAILURE_MARKERS:
+        assert marker in contract

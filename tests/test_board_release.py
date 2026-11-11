@@ -1007,7 +1007,7 @@ async def test_snapshot_release_is_null_when_never_released(tmp_path):
 
 
 async def test_snapshot_release_follows_the_latest_run(tmp_path):
-    """failed → 摘要帶 reason；重新上板後看最新那筆；done 就是 done。"""
+    """failed → 摘要帶 reason 與 fix 的進度；再上板後看最新那批；done 就是 done。"""
     app, human, agent = _clients(tmp_path, "relsummary")
     async with human, agent:
         async with app.router.lifespan_context(app):
@@ -1017,27 +1017,35 @@ async def test_snapshot_release_follows_the_latest_run(tmp_path):
             await _heartbeat(agent, runner)
             oid, bid, run = await _verified_with_release(
                 human, agent, rid, hdr, runner, release=True)
+            fix = next(x for x in await _kinds(human, oid)
+                       if x["kind"] == "release_fix")
 
             snap = (await human.get(f"/api/rooms/{rid}/board",
                                     headers=hdr)).json()
             assert _obj(snap, oid)["release"] == {
-                "run_id": run["id"], "status": "queued", "reason": ""}
+                "run_id": run["id"], "status": "queued", "reason": "",
+                "fix_run_id": fix["id"], "fix_status": "queued"}
 
             await _set_run(human, run["id"], "failed", "release_partial")
             for url in (f"/api/rooms/{rid}/board", f"/api/boards/{bid}"):
                 snap = (await human.get(url, headers=hdr)).json()
                 assert _obj(snap, oid)["release"] == {
                     "run_id": run["id"], "status": "failed",
-                    "reason": "release_partial"}
+                    "reason": "release_partial",
+                    "fix_run_id": fix["id"], "fix_status": "queued"}
 
-            # 失敗後補上板：摘要換成較新的那筆
+            # fix 也收場後才能再上板
+            await _set_run(human, fix["id"], "failed",
+                           "release_fix_incomplete")
             again = await human.post(
                 f"/api/board/objectives/{oid}/release",
                 json={"repos": [{"name": "hub", "source_branch": "develop"}]},
                 headers=hdr)
             assert again.status_code == 200, again.text
-            new_id = again.json()["run"]["id"] if "run" in again.json()                 else again.json()["release_run"]["id"]
+            new_id = again.json()["run"]["id"]
+            new_fix = again.json()["fix_run"]["id"]
             await _set_run(human, new_id, "done")
+            await _set_run(human, new_fix, "done", "release_verified")
             snap = (await human.get(f"/api/rooms/{rid}/board",
                                     headers=hdr)).json()
             assert _obj(snap, oid)["release"]["run_id"] == new_id
@@ -1142,7 +1150,7 @@ async def test_release_enqueue_and_cancel_also_advance_board_seq(tmp_path):
 
 async def _failed_release_then_retry(tmp_path, tag, repos):
     """走完整條路：確認並上板 → 執行器領走、回報 failed（帶 git.repos）→
-    再按一次上板，回傳第二筆 run 的 spec。"""
+    再按一次上板（fix 已收場），回傳第二筆 run 的 spec。"""
     app, human, agent = _clients(tmp_path, tag)
     async with human, agent:
         async with app.router.lifespan_context(app):
@@ -1179,6 +1187,9 @@ async def _failed_release_then_retry(tmp_path, tag, repos):
                           "reason": "release_partial", "git": git},
                     headers=runner.headers)
                 assert rep.status_code == 200, rep.text
+            # 同批的 fix 也收場，才能再上板
+            fix_id = first.json()["release_fix_run"]["id"]
+            await _set_run(human, fix_id, "failed", "release_fix_incomplete")
             second = await human.post(f"/api/board/objectives/{oid}/release",
                                       json=payload, headers=hdr)
             assert second.status_code == 200, second.text
@@ -1200,3 +1211,247 @@ async def test_retry_without_push_failure_has_no_resume_head(tmp_path):
     """上一筆 failed 但沒有 push 失敗的 repo（git.repos 沒帶）⇒ 不帶。"""
     spec = await _failed_release_then_retry(tmp_path, "noresume", None)
     assert "resume_head" not in spec["repos"][0]
+
+
+# ── 完成要等上板成功、done 不能再上板、重新上板（release_fix）──────────
+
+PAYLOAD = {"repos": [{"name": "hub", "source_branch": "develop"}]}
+
+
+async def _released_objective(human, agent, rid, hdr, runner, *, status,
+                              reason=""):
+    """verified 的週期 ＋ 一筆已經走到 ``status`` 的 release run。
+
+    每次上板都會同時建 release_fix；終局狀態（done／failed／cancelled）
+    把 fix 也一併收到同一個狀態，進行中的狀態（queued／running）fix 留著。
+    """
+    oid, bid, run = await _verified_with_release(
+        human, agent, rid, hdr, runner, release=True)
+    await _set_run(human, run["id"], status, reason)
+    if status in ("done", "failed", "cancelled"):
+        fix = next(x for x in await _kinds(human, oid)
+                   if x["kind"] == "release_fix")
+        await _set_run(human, fix["id"], status,
+                       "release_verified" if status == "done" else reason)
+    return oid, bid, run
+
+
+async def _kinds(client, ref_prefix):
+    rows = await (await client.hub_app.state.db.execute(
+        "SELECT id, kind, ref, status FROM agent_run WHERE ref LIKE ?"
+        " ORDER BY created_at, rowid", (ref_prefix + "%",))).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def test_release_is_refused_while_a_fix_is_still_running(tmp_path):
+    app, human, agent = _clients(tmp_path, "busyfix")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, first = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            fix = next(x for x in await _kinds(human, oid)
+                       if x["kind"] == "release_fix")
+            await _set_run(human, first["id"], "failed", "release_partial")
+
+            again = await human.post(
+                f"/api/board/objectives/{oid}/release",
+                json=PAYLOAD, headers=hdr)
+
+            assert again.status_code == 409, again.text
+            assert again.json()["detail"]["code"] == "release_in_progress"
+            assert again.json()["detail"]["run_id"] == fix["id"]
+
+
+async def test_release_fix_waits_for_its_release_before_it_can_be_claimed(
+        tmp_path):
+    """同一批的 release 還沒結束，release_fix 就不能被領走；release 一結束
+    才輪到它，而且領到時帶著那筆 release 的結果。靠 claim 的條件，不靠
+    position 碰巧排在後面。"""
+    app, human, agent = _clients(tmp_path, "fixorder")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, rel = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            release_id = rel["id"]
+            fix_id = next(x["id"] for x in await _kinds(human, oid)
+                          if x["kind"] == "release_fix")
+            # 讓 fix 的 position 與優先度都排在前面：只剩 claim 條件擋它
+            await app.state.db.execute(
+                "UPDATE agent_run SET priority=9, position=0 WHERE id=?",
+                (fix_id,))
+            await app.state.db.commit()
+
+            c1 = await agent.post(f"/api/runners/{runner}/claim",
+                                  headers=runner.headers)
+            assert c1.status_code == 200, c1.text
+            assert c1.json()["run"]["id"] == release_id, \
+                "fix 搶在 release 前面被領走了"
+            c2 = await agent.post(f"/api/runners/{runner}/claim",
+                                  headers=runner.headers)
+            assert c2.status_code == 204, "release 還沒結束，fix 不該被領"
+
+            await _report(agent, runner, release_id, "running")
+            r = await agent.post(
+                f"/api/runs/{release_id}/report",
+                json={"status": "failed", "runner_id": str(runner),
+                      "reason": "release_partial",
+                      "result": "- hub：失敗（release_merge_conflict）"},
+                headers=runner.headers)
+            assert r.status_code == 200, r.text
+            c3 = await agent.post(f"/api/runners/{runner}/claim",
+                                  headers=runner.headers)
+            assert c3.status_code == 200, c3.text
+            claimed = c3.json()["run"]
+            assert claimed["id"] == fix_id
+            assert claimed["kind"] == "release_fix"
+            # 領到時才有 release 的結果：fix 的第一步就是讀它
+            assert claimed["release_result"]["run_id"] == release_id
+            assert claimed["release_result"]["status"] == "failed"
+            assert claimed["release_result"]["reason"] == "release_partial"
+            assert "release_merge_conflict" in claimed["release_result"][
+                "result"]
+
+
+async def test_a_successful_fix_makes_the_release_count_as_done(tmp_path):
+    """release 沒成功、但同一批的 release_fix 成功（runner 驗過來源已在
+    origin 穩定分支）⇒ 摘要是 done、週期可以完成。release 成功但 fix 還沒
+    收工（報告沒發完）時還不算完成。"""
+    app, human, agent = _clients(tmp_path, "fixcounts")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            rel = run["id"]
+            fix = next(x["id"] for x in await _kinds(human, oid)
+                       if x["kind"] == "release_fix")
+            await _set_run(human, rel, "failed", "release_partial")
+
+            # fix 還沒收工：摘要仍是 failed，但看得到 fix 在跑；不能完成
+            await _set_run(human, fix, "running")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"] == {
+                "run_id": rel, "status": "failed",
+                "reason": "release_partial",
+                "fix_run_id": fix, "fix_status": "running"}
+            blocked = await human.post(
+                f"/api/board/objectives/{oid}/complete", headers=hdr)
+            assert blocked.status_code == 409, blocked.text
+            assert blocked.json()["detail"]["code"] == "release_not_done"
+
+            await _set_run(human, fix, "done", "release_verified")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"] == {
+                "run_id": fix, "status": "done", "reason": "release_fixed",
+                "fix_run_id": fix, "fix_status": "done"}
+            done = await human.post(
+                f"/api/board/objectives/{oid}/complete", headers=hdr)
+            assert done.status_code == 200, done.text
+
+
+async def test_release_done_but_report_not_finished_does_not_count_yet(
+        tmp_path):
+    app, human, agent = _clients(tmp_path, "reportpending")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            await _set_run(human, run["id"], "done", "released")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"]["status"] == "queued"
+            blocked = await human.post(
+                f"/api/board/objectives/{oid}/complete", headers=hdr)
+            assert blocked.status_code == 409, blocked.text
+            assert blocked.json()["detail"]["code"] == "release_not_done"
+
+
+async def test_a_failed_fix_does_not_count_and_an_old_fix_is_not_paired(
+        tmp_path):
+    app, human, agent = _clients(tmp_path, "fixfails")
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=True)
+            rel = run["id"]
+            fix = next(x["id"] for x in await _kinds(human, oid)
+                       if x["kind"] == "release_fix")
+            # release 成功但 fix 意外失敗：上板狀態 failed，週期留在 verified
+            await _set_run(human, rel, "done", "released")
+            await _set_run(human, fix, "failed", "release_fix_incomplete")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"] == {
+                "run_id": fix, "status": "failed",
+                "reason": "release_fix_incomplete",
+                "fix_run_id": fix, "fix_status": "failed"}
+
+            blocked = await human.post(
+                f"/api/board/objectives/{oid}/complete", headers=hdr)
+            assert blocked.status_code == 409, blocked.text
+            assert blocked.json()["detail"]["code"] == "release_not_done"
+
+            # 之後再上板一次：舊的 fix 不屬於這一批
+            again = await human.post(f"/api/board/objectives/{oid}/release",
+                                     json=PAYLOAD, headers=hdr)
+            assert again.status_code == 200, again.text
+            new_run = again.json()["run"]["id"]
+            new_fix = again.json()["fix_run"]["id"]
+            await _set_run(human, new_run, "failed", "release_partial")
+            snap = (await human.get(f"/api/rooms/{rid}/board",
+                                    headers=hdr)).json()
+            assert _obj(snap, oid)["release"] == {
+                "run_id": new_run, "status": "failed",
+                "reason": "release_partial",
+                "fix_run_id": new_fix, "fix_status": "queued"}
+
+
+async def test_a_release_whose_fix_cannot_enqueue_leaves_no_half_release(
+        tmp_path):
+    """第二筆（fix）被配額擋下時，剛建的 release 要一併撤掉，不留半套。"""
+    app, human, agent = _clients(tmp_path, "fixquota", run_daily_quota=2)
+    async with human, agent:
+        async with app.router.lifespan_context(app):
+            rid = await _ops_room(human)
+            hdr = await _join_human(human, rid)
+            runner = await _register_runner(agent)
+            await _heartbeat(agent, runner)
+            oid, _bid, _run = await _verified_with_release(
+                human, agent, rid, hdr, runner, release=False)
+
+            r = await human.post(
+                f"/api/board/objectives/{oid}/release",
+                json=PAYLOAD, headers=hdr)
+
+            assert r.status_code == 429, r.text
+            assert await _kinds(human, oid) == []
+            rows = await (await app.state.db.execute(
+                "SELECT payload_json FROM board_event"
+                " WHERE event_type='objective_release' AND item_id=?",
+                (oid,))).fetchall()
+            alive = {x["id"] for x in await _kinds(human, oid)}
+            assert all(any(i in row["payload_json"] for i in alive)
+                       for row in rows), "留下了指向已撤銷 run 的稽核列"
+
+

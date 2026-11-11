@@ -20,10 +20,13 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -77,11 +80,11 @@ STREAM_LINE_LIMIT = 64 * 1024 * 1024
 # 也用這個字串當 `limit_reason`（App 依它顯示）
 LOGIN_EXPIRED_REASON = "login_expired"
 # 會寫檔的 kind。investigate 只讀，不必排隊等 repo 鎖
-WRITE_KINDS = {"ticket", "stage", "push", "release"}
-# 上板之後那一支只做報告的子進程用的 kind。**不是 Hub 的 run kind**：Hub 上
-# 那筆 run 一直是 `release`，這個名字只決定要載哪一份 prompt 模板、以及要給
-# 哪一組工具（不在 WRITE_KINDS 裡 ⇒ 唯讀）
-RELEASE_REPORT_KIND = "release_report"
+WRITE_KINDS = {"ticket", "stage", "push", "release", "release_fix"}
+# 重新上板時另外派的審查＋修復 agent（Hub 的 run kind）。走一般 agent 派工
+# （contract.md ＋ prompts/release_fix.md），但 cwd 是 runner 建的暫存 worktree，
+# 守衛只對它放寬「push 到穩定分支／建 tag／merge」（見 guard.release_push）
+RELEASE_FIX_KIND = "release_fix"
 # 上板時 merge 撞衝突、或本機分支與 origin 分岔要併回去時派的解衝突 agent。
 # 同樣**不是 Hub 的 run kind**。它要改檔，所以給編輯工具（`allowed_tools`），
 # 但不進 WRITE_KINDS：那一組決定 repo 鎖與並行附註，只看 Hub 的 run["kind"]
@@ -669,7 +672,7 @@ def resolve_repo(run: dict, project: WorkspaceConfig) -> ProjectConfig:
     4. 以上都不成立 ⇒ 失敗。**不猜**：猜錯的代價是在錯的工作樹上 commit。
     """
     repos = project.projects
-    if run.get("kind") == "release":
+    if run.get("kind") in ("release", RELEASE_FIX_KIND):
         # 上板動的是 `spec.repos` 列的那幾個，不是單一個——落到這裡代表
         # 呼叫端走錯路徑了，猜一個出來會把整個週期併進錯的 repo
         raise RunSetupError(
@@ -818,7 +821,7 @@ class RunExecutor:
             # run["project"] 是 Hub 的 project key ＝ 本機工作區 key
             project = self.cfg.workspace(run["project"])
             # 上板的 repo 清單在 `spec.repos` 裡，不是單一個（契約 C5）
-            repo = (None if run["kind"] == "release"
+            repo = (None if run["kind"] in ("release", RELEASE_FIX_KIND)
                     else resolve_repo(run, project))
         except Exception as exc:
             outcome = RunOutcome("failed", reason="setup_error",
@@ -840,6 +843,24 @@ class RunExecutor:
                         keys, run_id=short_id(run_id),
                         timeout=project.wall_clock_seconds):
                     outcome = await self._release(run, project, cancel)
+            except RepoLockTimeout as exc:
+                return await self._report_lock_timeout(run_id, project, exc)
+            await self._report(run_id, outcome)
+            return outcome
+
+        if run["kind"] == RELEASE_FIX_KIND:
+            # 同 release：先回報 running，終局的 done／failed 才不會被 Hub 的
+            # 狀態機擋成 409。鎖同一組 repo ⇒ 與同批的 release run 序列化
+            await self._report(run_id, RunOutcome("running",
+                                                  reason="release_fix_start"))
+            keys = sorted(
+                f"{project.key}/{name}"
+                for name in release_repo_names(run, project))
+            try:
+                async with self.locks.hold(
+                        keys, run_id=short_id(run_id),
+                        timeout=project.wall_clock_seconds):
+                    outcome = await self._release_fix(run, project, cancel)
             except RepoLockTimeout as exc:
                 return await self._report_lock_timeout(run_id, project, exc)
             await self._report(run_id, outcome)
@@ -1101,7 +1122,10 @@ class RunExecutor:
 
     async def _release(self, run: dict, project: WorkspaceConfig,
                        cancel: asyncio.Event) -> RunOutcome:
-        """把週期的成果併進各 repo 的穩定分支，然後派一支 agent 做週期報告。
+        """把週期的成果併進各 repo 的穩定分支（機械步驟，不經模型）。
+
+        報告不在這裡發：每次上板 Hub 都會另外建一筆 `release_fix`，在這筆
+        結束後被領走，由它讀結果、發報告，失敗時修復。
 
         🚨 **一個 repo 失敗不影響其他 repo**：上板是逐 repo 的動作，第一個
         撞衝突就整批不做的話，人類要重跑一次已經成功的那幾個。但整筆 run
@@ -1165,21 +1189,251 @@ class RunExecutor:
                 " origin，不會回滾），後面的 "
                 + "、".join(skipped_by_cancel)
                 + f" 共 {len(skipped_by_cancel)} 個完全沒動。")
-            lines.append("- 週期報告：這一輪被取消，沒有派報告。")
             return RunOutcome(
                 "cancelled", reason="cancel_requested",
                 result="\n".join(lines), git=git_fields)
-        # 報告是「不論成敗」都要派的：上板失敗時房裡更需要一份說明白的紀錄
-        note = await self._release_report(run, project, results, tag,
-                                          objective, cancel)
-        if note:
-            lines.append(note)
         if failed:
             return RunOutcome(
                 "failed", reason="release_partial",
                 result="\n".join(lines), git=git_fields)
         return RunOutcome("done", reason="released",
                           result="\n".join(lines), git=git_fields)
+
+    # ---------- release_fix（每次上板都派的報告＋修復 agent）----------
+
+    async def _release_fix(self, run: dict, project: WorkspaceConfig,
+                           cancel: asyncio.Event) -> RunOutcome:
+        """每次上板都另外派的 agent：讀同一批 release 的機械結果——成功就發
+        上板報告；失敗就在獨立 worktree 裡解決（merge 遠端、解衝突、簽章、
+        push 穩定分支與 tag）後發報告；真的嚴重無法上板時把週期打回、在其下
+        開阻擋階段、在房裡報告並 mention 人類。
+
+        順序由 Hub 保證（`claim_run` 讓它等同一批的 release run 結束才領），
+        repo 鎖是第二道（兩者鎖同一組 repo）。
+
+        🚨 **成功與否不由 agent 說了算**：收工後逐 repo 機械驗證——來源分支
+        的內容已經在 origin 的穩定分支裡（祖先，或合併進去不再有變更，後者
+        涵蓋 squash）、tag 已在 origin。全部過才回 done；Hub 把 done 的
+        release_fix 視為上板成功（`_release_state`）。agent 報告寫「已推送」
+        但實際沒推上去，這裡會是 failed。
+        """
+        works: list[tuple[ProjectConfig, Path, Path]] = []
+        try:
+            outcome = await self._release_fix_run(run, project, cancel, works)
+        finally:
+            # 🚨 暫存 worktree 一律清掉；清不掉＝這筆 run 失敗
+            leftovers = []
+            for repo, wt, root in works:
+                left = await self._remove_release_worktree(repo, wt, root)
+                if left:
+                    leftovers.append(f"{repo.name}：{left}")
+        if leftovers:
+            outcome = RunOutcome(
+                "failed", reason="release_worktree_cleanup_failed",
+                result="暫存 worktree 清除失敗，請人工清理："
+                       + "；".join(leftovers)
+                       + f"\n（修復本身的結果：{outcome.status}／"
+                         f"{outcome.reason}）\n{outcome.result}")
+        return outcome
+
+    async def _release_fix_run(self, run: dict, project: WorkspaceConfig,
+                               cancel: asyncio.Event,
+                               works: list) -> RunOutcome:
+        run_id = run["id"]
+        entries = release_entries(run)
+        spec = run.get("spec") or {}
+        tag = str(spec.get("tag") or "").strip()
+        objective = str(spec.get("objective_title") or "")
+        objective_id = str(spec.get("objective_id") or "")
+        if not entries:
+            return RunOutcome(
+                "failed", reason="release_spec_missing",
+                result="這筆上板修復沒有帶 repo 清單（spec.repos 是空的），"
+                       "什麼都沒有做。")
+        cred = self._push_credential_args()
+        items: list[dict] = []
+        problems: list[str] = []
+        roots: list[Path] = []
+        for entry in entries:
+            name = str(entry.get("name"))
+            repo = project.projects.get(name)
+            stable = str(entry.get("stable_branch")
+                         or (repo.stable_branch if repo else "")).strip()
+            source = str(entry.get("source_branch") or "").strip()
+            if repo is None:
+                problems.append(f"{name}：不在工作區 {project.key} 的專案清單裡")
+                continue
+            bad = [v for v in (stable, source, tag)
+                   if v and not gitops.valid_ref_name(v)]
+            if not stable or not source or bad:
+                problems.append(f"{name}：穩定分支／來源分支／tag 沒設或名稱不合法")
+                continue
+            fetched = await gitops.fetch_origin(repo.path, cred)
+            if not fetched.ok:
+                problems.append(
+                    f"{name}：git fetch origin 失敗：{fetched.err or fetched.out}")
+                continue
+            start = (await gitops.rev_parse(repo.path, f"origin/{stable}")
+                     or await gitops.rev_parse(
+                         repo.path, f"refs/heads/{stable}"))
+            if not start:
+                problems.append(f"{name}：本機與 origin 都沒有分支 {stable}")
+                continue
+            await gitops.worktree_prune(repo.path)
+            root = Path(tempfile.mkdtemp(prefix="chatroom-release-fix-"))
+            wt = root / name
+            # 先登記再建：建到一半失敗，finally 也找得到要清的目錄
+            works.append((repo, wt, root))
+            added = await gitops.worktree_add_detached(repo.path, wt, start)
+            if not added.ok:
+                problems.append(
+                    f"{name}：建立暫存 worktree 失敗：{added.err or added.out}")
+                continue
+            roots.append(wt)
+            values = {"source": source, "stable": stable,
+                      "objective": objective,
+                      "date": datetime.now().strftime("%m/%d"),
+                      "tag": tag, "repo": name}
+            items.append({
+                "name": name, "worktree": str(wt), "stable": stable,
+                "source": source, "tag": tag,
+                "origin_stable": await gitops.rev_parse(
+                    repo.path, f"origin/{stable}"),
+                "source_local": await gitops.rev_parse(
+                    repo.path, f"refs/heads/{source}"),
+                "source_remote": await gitops.rev_parse(
+                    repo.path, f"origin/{source}"),
+                "resume_head": str(entry.get("resume_head") or ""),
+                "merge_message": render_template(
+                    project.release.merge_message, values),
+                "tag_message": render_template(
+                    project.release.tag_message, values) or objective,
+            })
+        if problems or not items:
+            return RunOutcome(
+                "failed", reason="release_fix_setup_failed",
+                result="上板修復沒有開始：\n"
+                       + "\n".join(f"- {p}" for p in problems))
+
+        agent_note = await self._release_fix_agent(
+            run, project, items, roots, works[0][0], spec, tag,
+            objective, objective_id, cancel)
+        if cancel.is_set():
+            return RunOutcome("cancelled", reason="cancel_requested",
+                              result="上板修復被取消。" + agent_note)
+        # 驗證要在 worktree 清掉之前或之後都行（看的是 origin）；先驗，
+        # 這樣清不掉時 result 仍然有驗證結果
+        lines = []
+        ok_all = True
+        for item in items:
+            repo = project.projects[item["name"]]
+            good, why = await self._verify_release_landed(
+                repo, item, tag, cred)
+            ok_all = ok_all and good
+            lines.append(f"- {item['name']}：{'已上板' if good else '未上板'}"
+                         f"（{why}）")
+        result = "\n".join(lines) + ("\n" + agent_note if agent_note else "")
+        if not ok_all:
+            return RunOutcome(
+                "failed", reason="release_fix_incomplete",
+                result="修復後驗證仍有 repo 沒上板：\n" + result)
+        return RunOutcome("done", reason="release_verified", result=result)
+
+    async def _verify_release_landed(self, repo: ProjectConfig, item: dict,
+                                     tag: str, cred: list[str]
+                                     ) -> tuple[bool, str]:
+        """一個 repo 的來源內容是否已在 origin 的穩定分支（與 tag 是否在 origin）。"""
+        stable, source = item["stable"], item["source"]
+        fetched = await gitops.fetch_origin(repo.path, cred)
+        if not fetched.ok:
+            return False, f"驗證前 fetch 失敗：{fetched.err or fetched.out}"
+        target = f"origin/{stable}"
+        if not await gitops.ref_exists(repo.path, target):
+            return False, f"origin 沒有 {stable}"
+        tips = [t for t in (
+            await gitops.rev_parse(repo.path, f"refs/heads/{source}"),
+            await gitops.rev_parse(repo.path, f"origin/{source}")) if t]
+        if not tips:
+            return False, f"本機與 origin 都沒有來源分支 {source}"
+        for tip in dict.fromkeys(tips):
+            if not await gitops.merge_is_noop(repo.path, target, tip):
+                return False, (f"來源 {source}（{tip[:8]}）的內容還沒進 "
+                               f"origin/{stable}")
+        if tag:
+            exists = await gitops.remote_tag_exists(repo.path, tag, cred)
+            if exists is None:
+                return False, f"查不到 origin 的 tag {tag}（網路？）"
+            if not exists:
+                return False, f"來源已在 origin/{stable}，但 tag {tag} 不在 origin"
+        return True, f"origin/{stable} 已含 {source}" + (
+            f"，tag {tag} 在 origin" if tag else "")
+
+    async def _release_fix_agent(self, run: dict, project: WorkspaceConfig,
+                                 items: list[dict], roots: list[Path],
+                                 primary: ProjectConfig, spec: dict,
+                                 tag: str, objective: str, objective_id: str,
+                                 cancel: asyncio.Event) -> str:
+        """起審查＋修復 agent（cwd 是第一個 repo 的暫存 worktree）。
+        回一句要接在 result 後面的附註。"""
+        run_id = run["id"]
+        run_dir = self.cfg.runs_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        first = Path(items[0]["worktree"])
+        work = replace(primary, path=first)
+        stables = sorted({i["stable"] for i in items})
+        self._write_run_files(
+            run_dir, run, work, project, repo_roots=roots,
+            release_push={"branches": stables,
+                          "tags": [tag] if tag else []})
+        env = self._child_env(run, run_dir)
+        room_id = str(spec.get("room_id") or run.get("room_id", ""))
+        release_result = run.get("release_result") or {}
+        fields = {
+            "run_id": run_id, "room_id": room_id, "kind": RELEASE_FIX_KIND,
+            "project": project.key, "ref": objective_id,
+            "repo": primary.name, "cwd": str(first),
+            "branch": "分離 HEAD（暫時的 worktree）",
+            "allowed_branches": "、".join(primary.allowed_branches),
+            "repos_block": prompts.repos_block([
+                {"name": i["name"], "path": i["worktree"],
+                 "branch": "", "allowed_branches": [i["stable"]],
+                 "primary": i["name"] == primary.name} for i in items]),
+            "repo_names": "、".join(i["name"] for i in items),
+            "objective_title": objective or objective_id,
+            "release_run_id": str(spec.get("release_run_id") or ""),
+            # 同批 release 的機械結果（Hub 在領單時附上 `release_result`）
+            "release_status": str(release_result.get("status") or "?"),
+            "release_reason": str(release_result.get("reason") or "?"),
+            "release_result": (str(release_result.get("result") or "").strip()
+                               or "（執行器沒有留下結果文字。）"),
+            "release_tag": tag or "無",
+            "release_fix_repos": prompts.release_fix_repos_block(items),
+            "skills_block": "",
+            "primary_skill_block": prompts.primary_skill_block(
+                project.primary_skill),
+            "livetest_block": "",
+        }
+        try:
+            prompt = prompts.build(RELEASE_FIX_KIND, fields,
+                                   run.get("brief", ""), self.prompt_dir)
+            contract = prompts.build_contract(fields, self.prompt_dir)
+        except FileNotFoundError as exc:
+            log.error("run %s 的上板修復模板讀不到：%s", run_id, exc)
+            return f"（模板讀不到，agent 沒有啟動：{exc}）"
+        argv = self._argv(prompt, contract, project, run_dir, "",
+                          RELEASE_FIX_KIND)
+        watcher = StreamWatcher(
+            project.context_soft_limit_tokens,
+            rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
+            monotonic=self.monotonic, on_event=self.mark_activity)
+        code, stop = await self._spawn(argv, first, env, watcher, run_dir,
+                                       project.wall_clock_seconds, cancel)
+        state = watcher.state
+        self.context_peak = max(self.context_peak, state.peak_context_tokens)
+        self._record_usage(run_id, state)
+        if code != 0 or stop != "exited" or state.is_error:
+            return (f"修復 agent 沒有正常收工（exit {code}、{stop}）。")
+        return "修復 agent 已收工，細節在房裡的報告。"
 
     @staticmethod
     def _release_line(r: RepoReleaseResult) -> str:
@@ -1243,41 +1497,177 @@ class RunExecutor:
             res.reason = "release_fetch_failed"
             res.detail = f"git fetch origin 失敗：{fetched.err or fetched.out}"
             return res
-        dirty = await gitops.status_porcelain(repo.path)
-        if dirty:
-            res.reason = "release_dirty"
-            res.detail = (f"工作樹有 {len(dirty)} 個未提交的變更，沒有上板。"
-                          "未提交的東西不是這次週期的成果，不能替人決定。")
-            return res
 
-        original = await gitops.current_branch(repo.path)
-        if await gitops.ref_exists(repo.path, stable):
-            co = await gitops.checkout(repo.path, stable)
-        elif await gitops.ref_exists(repo.path, f"origin/{stable}"):
-            co = await gitops.checkout_tracking(repo.path, stable)
-        else:
+        # 🚨 上板在 runner 自己建的暫存 worktree 裡做，使用者的工作樹一個字
+        # 都不碰（未提交與未追蹤的檔案原樣留著，只上已提交的變更）。
+        # worktree 停在分離 HEAD：穩定分支常常正被使用者的工作樹檢出，同一條
+        # 分支不能同時在兩個 worktree 裡。起點是本機穩定分支（沒有就用
+        # origin 的）——與過去「checkout 穩定分支」的起點相同，後面的對齊
+        # （`_reconcile_stable`、resume_head、備份 ref）因此原樣沿用
+        base = await self._release_base(repo, stable, resume_head)
+        if not base:
             res.reason = "release_stable_missing"
             res.detail = f"本機與 origin 都沒有分支 {stable}，沒有上板。"
             return res
-        if not co.ok:
-            res.reason = "release_checkout_failed"
-            res.detail = f"git checkout {stable} 失敗：{co.err or co.out}"
-            return res
+        local_before = await gitops.rev_parse(repo.path,
+                                              f"refs/heads/{stable}")
+        await gitops.worktree_prune(repo.path)
+        root = Path(tempfile.mkdtemp(prefix="chatroom-release-"))
+        wt_path = root / "wt"
         try:
-            await self._release_on_stable(repo, project, res, tag, objective,
-                                          cred, resume_head, run, cancel)
+            added = await gitops.worktree_add_detached(repo.path, wt_path,
+                                                       base)
+            if not added.ok:
+                res.reason = "release_worktree_failed"
+                res.detail = ("建立上板用的暫存 worktree 失敗，沒有上板："
+                              f"{added.err or added.out}")
+                return res
+            work = replace(repo, path=wt_path)
+            try:
+                await self._release_on_stable(work, project, res, tag,
+                                              objective, cred, resume_head,
+                                              run, cancel)
+            finally:
+                # 每一條離開路徑都要確保沒有 MERGE_HEAD
+                await self._clear_merge_state(work, res)
+                await self._align_local_stable(repo, work, res, local_before)
         finally:
-            # 每一條離開路徑都要確保沒有 MERGE_HEAD，才切回原分支
-            await self._clear_merge_state(repo, res)
-            if original and original != stable:
-                back = await gitops.checkout(repo.path, original)
-                if not back.ok:
-                    # 切不回去要**寫進結果**：下一輪 run 會在穩定分支上開工，
-                    # 而那個症狀離這裡很遠
-                    res.detail = (res.detail + "\n" if res.detail else "") + (
-                        f"⚠️ 切回原分支 {original} 失敗："
-                        f"{back.err or back.out}")
+            # 🚨 worktree 清不掉＝這個 repo 算失敗：留著的 worktree 會佔著
+            # 磁碟、也會讓 repo 的 worktree 清單越積越多
+            left = await self._remove_release_worktree(repo, wt_path, root)
+            if left:
+                self._fail_for_leftover(res, left)
         return res
+
+    async def _release_base(self, repo: ProjectConfig, stable: str,
+                            resume_head: str) -> str:
+        """暫存 worktree 的起點 sha；本機與 origin 都沒有穩定分支回空字串。
+
+        ``resume_head`` 是上次 push 失敗時本機穩定分支的 HEAD。本機穩定分支
+        正被使用者檢出時，上次沒辦法把它移到那一顆（見 `_align_local_stable`），
+        所以這裡在它是本機的後代時改從它起算，補推才接得上。
+        """
+        local = await gitops.rev_parse(repo.path, f"refs/heads/{stable}")
+        base = local or await gitops.rev_parse(repo.path, f"origin/{stable}")
+        if base and resume_head:
+            resumed = await gitops.rev_parse(repo.path, resume_head)
+            if (resumed and resumed != base
+                    and await gitops.is_ancestor(repo.path, base, resumed)):
+                return resumed
+        return base
+
+    async def _align_local_stable(self, repo: ProjectConfig,
+                                  work: ProjectConfig, res: RepoReleaseResult,
+                                  local_before: str) -> None:
+        """worktree 收工後，把本機穩定分支對齊到它的 HEAD。
+
+        只在有東西值得留時才動：成功／跳過，或已併進來但 push 失敗（下次
+        補推要靠本機領先的那幾顆，語義同過去）。合併失敗等已還原的情況不動。
+        用 compare-and-swap：本機穩定分支在上板途中被別人動過就不覆蓋。
+        穩定分支正被某個工作樹檢出時**不移動它**（移動會讓那邊的工作樹看起來
+        被反向修改）；push 失敗的殘留改存成備份 ref，補推時由 resume_head
+        找回來。
+        """
+        stable = res.stable
+        keep = (res.status in ("ok", "skipped")
+                or (res.status == "failed" and bool(res.head_after)))
+        if not keep:
+            return
+        target = await gitops.head_sha(work.path)
+        if not target:
+            return
+        current = await gitops.rev_parse(repo.path, f"refs/heads/{stable}")
+        if current == target:
+            return
+        push_failed = res.reason == "release_push_failed"
+        if current and await gitops.branch_checked_out_elsewhere(repo.path,
+                                                                 stable):
+            note = (f"本機 {stable} 正被工作樹檢出，沒有移動它"
+                    f"（上板結果在 {target[:8]}）")
+            if push_failed:
+                backup = await gitops.backup_ref(repo.path, stable, target)
+                note += f"；未推送的結果存在備份 ref {backup or '（建立失敗）'}"
+            res.actions.append(note)
+            return
+        if current != local_before:
+            res.actions.append(
+                f"上板途中本機 {stable} 被別人動過，沒有覆蓋它"
+                f"（上板結果在 {target[:8]}）")
+            if push_failed:
+                await gitops.backup_ref(repo.path, stable, target)
+            return
+        moved = await gitops.update_ref_cas(
+            repo.path, f"refs/heads/{stable}", target, current)
+        if not moved.ok:
+            res.actions.append(
+                f"本機 {stable} 對齊失敗：{moved.err or moved.out}")
+            return
+        if not current:
+            # 本機原本沒有穩定分支：比照過去的 `checkout -b … origin/…`
+            await gitops.git(repo.path, "branch",
+                             f"--set-upstream-to=origin/{stable}", stable)
+
+    async def _remove_release_worktree(self, repo: ProjectConfig, wt: Path,
+                                       root: Path) -> str:
+        """清掉暫存 worktree（`worktree remove --force` ＋ prune ＋ 刪目錄）。
+        成功回空字串，清不掉回原因。"""
+        problems: list[str] = []
+        remove_error = ""
+        if wt.exists() or await gitops.worktree_registered(repo.path, wt):
+            removed = await gitops.worktree_remove(repo.path, wt)
+            if not removed.ok:
+                remove_error = (
+                    f"git worktree remove 失敗：{removed.err or removed.out}")
+        await gitops.worktree_prune(repo.path)
+
+        def _retry(func, path, _exc):
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+
+        for _ in range(3):
+            if not root.exists():
+                break
+            try:
+                if sys.version_info >= (3, 12):
+                    shutil.rmtree(root, onexc=_retry)
+                else:
+                    shutil.rmtree(root, onerror=lambda f, p, e: _retry(f, p, e))
+            except OSError:
+                await self.sleep(0.2)
+        # 目錄被強制刪掉之後登記才會變成殘留，再 prune 一次收掉它
+        await gitops.worktree_prune(repo.path)
+        # 只看**最終狀態**：remove 失敗但後面的強制刪目錄＋prune 已經收乾淨，
+        # 就不算清除失敗——否則一次成功的上板會被誤判成失敗，擋住週期完成
+        if root.exists():
+            problems.append(f"暫存目錄 {root} 刪不掉")
+        if await gitops.worktree_registered(repo.path, wt):
+            problems.append("worktree 仍登記在 repo 的清單裡")
+        if problems and remove_error:
+            problems.insert(0, remove_error)
+        if not problems and remove_error:
+            log.warning("暫存 worktree %s：%s，但已用強制刪除收乾淨", wt,
+                        remove_error)
+        return "；".join(problems)
+
+    @staticmethod
+    def _fail_for_leftover(res: RepoReleaseResult, left: str) -> None:
+        """worktree 清不掉：這個 repo 的結果改成失敗。
+
+        已經是失敗的保留原本的 reason（尤其是 `release_push_failed`，Hub 靠
+        它記 resume_head），只在 detail 補一句；成功／跳過的才改 reason，
+        並把「上板本身做完了什麼」留在 detail。
+        """
+        text = f"暫存 worktree 清除失敗：{left}，請人工清理。"
+        if res.status != "failed":
+            done = res.detail
+            res.status = "failed"
+            res.reason = "release_worktree_cleanup_failed"
+            res.detail = ("上板本身已完成"
+                          + (f"（{done}）" if done else "")
+                          + f"，但{text}")
+        else:
+            res.detail = (res.detail + "\n" if res.detail else "") \
+                + f"⚠️ {text}"
 
     async def _release_on_stable(self, repo: ProjectConfig,
                                  project: WorkspaceConfig,
@@ -1328,7 +1718,8 @@ class RunExecutor:
 
         # 本機穩定分支領先 origin ＝ 有東西會被這次的 push 一起帶出去（補推、
         # 保留下來的非冗餘 commit、對齊時產生的合併，或合併後的推送）
-        leftover = await gitops.count_unpushed(repo.path, stable)
+        leftover = await gitops.count_commits(repo.path, f"origin/{stable}",
+                                              "HEAD")
         ahead = await gitops.count_commits(repo.path, "HEAD", source_ref)
         if ahead == 0:
             # 🚨 這不是失敗：來源分支已經整個在穩定分支裡，沒有東西可併
@@ -1378,18 +1769,24 @@ class RunExecutor:
 
         method = project.release.merge_method
         message = render_template(project.release.merge_message, values)
+        ff_note = ""
         if method == "ff_only":
             merged = await gitops.merge_ff_only(repo.path, source_ref, sign)
             if not merged.ok:
+                # 快轉不了（穩定分支自己前進過）不再放棄：退回簽章 merge
+                # commit 照樣上板，並把「為什麼不是快轉」註記在結果裡
                 restored = await gitops.restore_head(repo.path,
                                                      res.head_before)
-                res.reason = "release_ff_not_possible"
-                res.detail = (f"{source} 沒辦法快轉進 {stable}："
-                              f"{merged.err or merged.out}"
-                              + ("" if restored else self._restore_warning(
-                                  res.head_before)))
-                return
-        else:
+                if not restored:
+                    res.reason = "release_merge_failed"
+                    res.detail = (f"{source} 沒辦法快轉進 {stable}，退回合併"
+                                  "前還原失敗：" + (merged.err or merged.out)
+                                  + self._restore_warning(res.head_before))
+                    return
+                ff_note = (f"merge_method 是 ff_only，但 {source} 無法快轉進 "
+                           f"{stable}，已退回簽章 merge commit 上板")
+                method = "merge"
+        if method != "ff_only":
             step = await self._merge_into_head(
                 repo, project, run, cancel, theirs=source_ref,
                 message=message, squash=method == "squash",
@@ -1408,6 +1805,9 @@ class RunExecutor:
                 return
             if step.agent:
                 res.actions.append(step.agent)
+        if ff_note:
+            res.actions.append(ff_note)
+            res.detail = ff_note + "。"
         res.head_after = await gitops.head_sha(repo.path)
         res.commits = commits
 
@@ -1453,6 +1853,7 @@ class RunExecutor:
         原因已寫進 ``res``。
         """
         source, stable = res.source, res.stable
+        start = await gitops.head_sha(repo.path)
         co = await gitops.checkout_detach(repo.path, resolved.local_sha)
         if not co.ok:
             res.reason = "release_source_merge_failed"
@@ -1475,9 +1876,9 @@ class RunExecutor:
             if step.ok:
                 merged_sha = step.head
         finally:
-            back = await gitops.checkout(repo.path, stable)
+            back = await gitops.checkout_detach(repo.path, start)
             if not back.ok:
-                back_failed = (f"⚠️ 切回 {stable} 失敗："
+                back_failed = (f"⚠️ 切回 {stable} 的起點失敗："
                                f"{back.err or back.out}")
                 merged_sha = ""
         if not merged_sha:
@@ -1533,10 +1934,11 @@ class RunExecutor:
         if local == remote:
             return True
         if await gitops.is_ancestor(path, local, remote):
-            pulled = await gitops.pull_ff_branch(path, stable, cred)
+            # 暫存 worktree 是分離 HEAD，沒有分支可 pull；fetch 已在上板開頭做過
+            pulled = await gitops.merge_ff_only(path, origin, sign)
             if not pulled.ok:
                 res.reason = "release_pull_failed"
-                res.detail = (f"git pull --ff-only origin {stable} 失敗："
+                res.detail = (f"快轉到 origin/{stable} 失敗："
                               f"{pulled.err or pulled.out}")
                 return False
             return True
@@ -1634,7 +2036,7 @@ class RunExecutor:
         stable = res.stable
         last = ""
         for attempt in range(1, PUSH_ATTEMPTS + 1):
-            pushed = await gitops.push_ref(repo.path, stable, cred)
+            pushed = await gitops.push_head(repo.path, stable, cred)
             if pushed.ok:
                 if attempt > 1:
                     res.actions.append(
@@ -1765,14 +2167,17 @@ class RunExecutor:
                                   conflicts: list[str]) -> tuple[bool, str]:
         """起解衝突 agent（cwd 是該 repo）。回 ``(正常收工, 沒收工的原因)``。
 
-        起法比照 `_release_report`：同一份工具白名單、wall clock、預算與
+        同一份工具白名單、wall clock、預算與
         `_child_env`（簽章環境）。取消與逾時都由 `_spawn` 殺進程，這裡只把
         原因講出來；還原由呼叫端的 finally 做。
         """
         run_id = run["id"]
         run_dir = self.cfg.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        self._write_run_files(run_dir, run, repo, project)
+        # 解衝突 agent 的 cwd 是上板用的暫存 worktree（repo.path 已指向它），
+        # 可寫範圍也只有它——使用者的真工作樹不在白名單裡
+        self._write_run_files(run_dir, run, repo, project,
+                              repo_roots=[repo.path])
         env = self._child_env(run, run_dir)
         branch = await gitops.current_branch(repo.path)
         fields = {
@@ -1907,74 +2312,6 @@ class RunExecutor:
             return False
         res.tag = tag
         return True
-
-    async def _release_report(self, run: dict, project: WorkspaceConfig,
-                              results: list[RepoReleaseResult], tag: str,
-                              objective: str,
-                              cancel: asyncio.Event) -> str:
-        """上板之後派一支 agent 做週期報告。回一句要接在 result 後面的附註。
-
-        **報告失敗不改變上板的成敗**：git 已經做完了，報告只是把它說給房裡
-        聽。把它算進 run 的狀態的話，一個沒連上的 MCP 會讓一次成功的上板
-        看起來像失敗。
-        """
-        run_id = run["id"]
-        spec = run.get("spec") or {}
-        repo = next((project.projects[r.name] for r in results
-                     if r.name in project.projects), None)
-        if repo is None:
-            return "- 週期報告：沒有可用的 repo 當工作目錄，沒有派報告。"
-        run_dir = self.cfg.runs_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        self._write_run_files(run_dir, run, repo, project)
-        env = self._child_env(run, run_dir)
-        branch = await gitops.current_branch(repo.path)
-        repos = project_repos(project, repo)
-        fields = {
-            "run_id": run_id,
-            "room_id": str(spec.get("room_id") or run.get("room_id", "")),
-            "kind": RELEASE_REPORT_KIND, "project": project.key,
-            "ref": run.get("ref", ""), "repo": repo.name,
-            "cwd": str(repo.path), "branch": branch,
-            "allowed_branches": "、".join(repo.allowed_branches),
-            "repos_block": prompts.repos_block([
-                {"name": item.name, "path": str(item.path),
-                 "branch": "", "allowed_branches": list(item.allowed_branches),
-                 "primary": item.name == repo.name}
-                for item in repos]),
-            "repo_names": "、".join(item.name for item in repos),
-            "objective_title": objective or run.get("ref", ""),
-            "release_results": prompts.release_results_block(
-                [r.to_dict() for r in results]),
-            "release_tag": tag or "無",
-            "skills_block": "",
-            "primary_skill_block": prompts.primary_skill_block(
-                project.primary_skill),
-            "livetest_block": "",
-        }
-        try:
-            prompt = prompts.build(RELEASE_REPORT_KIND, fields,
-                                   run.get("brief", ""), self.prompt_dir)
-            contract = prompts.build_contract(fields, self.prompt_dir)
-        except FileNotFoundError as exc:
-            log.error("run %s 的週期報告模板讀不到：%s", run_id, exc)
-            return f"- 週期報告：模板讀不到，沒有派報告（{exc}）。"
-        argv = self._argv(prompt, contract, project, run_dir, "",
-                          RELEASE_REPORT_KIND)
-        watcher = StreamWatcher(
-            project.context_soft_limit_tokens,
-            rate_limit_threshold=self.cfg.rate_limit_retry_threshold,
-            monotonic=self.monotonic, on_event=self.mark_activity)
-        code, stop = await self._spawn(argv, repo.path, env, watcher,
-                                       run_dir, project.wall_clock_seconds,
-                                       cancel)
-        state = watcher.state
-        self.context_peak = max(self.context_peak, state.peak_context_tokens)
-        self._record_usage(run_id, state)
-        if code != 0 or stop != "exited" or state.is_error:
-            return (f"- 週期報告：agent 沒有正常收工（exit {code}、{stop}），"
-                    "房裡可能沒有那份報告。")
-        return "- 週期報告：已派 agent 發到房裡。"
 
     # ---------- claude run ----------
 
@@ -2315,7 +2652,9 @@ class RunExecutor:
             # 冷啟動比預設的等待久時，拉長等待比事後重起便宜
             env["MCP_TIMEOUT"] = str(self.cfg.mcp_startup_timeout_ms)
         env.update(self._git_credential_isolation(
-            env, self._ssh_signing_config()))
+            env, self._ssh_signing_config(),
+            PUSH_CREDENTIAL_HELPER if run.get("kind") == RELEASE_FIX_KIND
+            else ""))
         return env
 
     def _ssh_signing_config(self) -> list[tuple[str, str]]:
@@ -2340,7 +2679,8 @@ class RunExecutor:
     @staticmethod
     def _git_credential_isolation(
             env: dict[str, str],
-            extra: list[tuple[str, str]] | None = None) -> dict[str, str]:
+            extra: list[tuple[str, str]] | None = None,
+            push_helper: str = "") -> dict[str, str]:
         """把推送憑證擋在 run 進程外（艾斯維爾裁決 09/16）。
 
         ``GIT_CONFIG_*`` 是**這個進程**的覆寫，本機 git 設定一個字都沒動：
@@ -2348,6 +2688,10 @@ class RunExecutor:
         再關掉終端提示與 askpass，否則它會停在一個沒有人能回答的問句上。
 
         ``extra`` 是要排在 ``credential.helper`` 之前的其他覆寫（SSH 簽章）。
+
+        ``push_helper`` 只給 release_fix：它要自己 push 到穩定分支，所以把
+        執行器的 helper 加回來；能推到哪裡由守衛限制（只有
+        `HEAD:<穩定分支>` 與該次的 tag，見 guard.release_push）。
 
         ⚠️ 已經有別的 ``GIT_CONFIG_COUNT`` 用途時**接在後面**，不是覆蓋：
         直接寫 1 會把前面那幾條設定連號一起吃掉。
@@ -2358,7 +2702,8 @@ class RunExecutor:
             count = 0
         count = max(count, 0)
         out: dict[str, str] = {}
-        for key, value in [*(extra or []), ("credential.helper", "")]:
+        for key, value in [*(extra or []),
+                           ("credential.helper", push_helper)]:
             out[f"GIT_CONFIG_KEY_{count}"] = key
             out[f"GIT_CONFIG_VALUE_{count}"] = value
             count += 1
@@ -2741,7 +3086,9 @@ class RunExecutor:
     # ---------- run 目錄 ----------
 
     def _write_run_files(self, run_dir: Path, run: dict, repo,
-                         project: WorkspaceConfig | None = None) -> None:
+                         project: WorkspaceConfig | None = None,
+                         *, repo_roots: list[Path] | None = None,
+                         release_push: dict | None = None) -> None:
         python = sys.executable
         hook = str(HOOKS_DIR / "pretooluse.py")
         precompact = str(HOOKS_DIR / "precompact.py")
@@ -2811,7 +3158,8 @@ class RunExecutor:
         ctx = GuardContext(
             cwd=repo.path,
             # 專案底下所有 repo 都可以動，主工作目錄只是其中一個
-            repo_roots=([r.path for r in project_repos(project, repo)]
+            repo_roots=(list(repo_roots) if repo_roots
+                        else [r.path for r in project_repos(project, repo)]
                         if project else [repo.path]),
             allowed_branches=list(repo.allowed_branches),
             allowed_domains=list(self.cfg.allowed_domains),
@@ -2828,6 +3176,8 @@ class RunExecutor:
             # 外面時）。敏感檔名的檢查照走
             extra_write_dirs=list(project.extra_write_dirs) if project
             else [],
+            # 只有 release_fix 會帶：push／tag／merge 的放寬範圍
+            release_push=dict(release_push or {}),
         )
         (run_dir / "guard.json").write_text(
             json.dumps(ctx.to_dict(), ensure_ascii=False, indent=2),

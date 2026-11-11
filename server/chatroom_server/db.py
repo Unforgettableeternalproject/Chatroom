@@ -117,6 +117,10 @@ CREATE TABLE IF NOT EXISTS message (
     -- ⚠️ 這兩欄在 MIGRATIONS 也有一份，兩邊都要改
     subject_id TEXT NOT NULL DEFAULT '',
     subject_name TEXT NOT NULL DEFAULT '',
+    -- 這則訊息屬於哪一筆派工（run）：run 成員的發言，以及該 run 的 system
+    -- 訊息。空字串＝一般訊息或這一欄存在之前的舊訊息。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    run_id TEXT NOT NULL DEFAULT '',
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
     -- 發話者原本打的群組標籤（all / agents / humans），JSON list。
@@ -776,7 +780,7 @@ CREATE TABLE IF NOT EXISTS agent_run (
     id            TEXT PRIMARY KEY,
     room_id       TEXT NOT NULL REFERENCES room(id),
     board_id      TEXT NOT NULL DEFAULT '',
-    -- investigate | ticket | stage | push | release
+    -- investigate | ticket | stage | push | release | release_fix
     -- （scheduled 留給 P2 的排程）
     kind          TEXT NOT NULL,
     project       TEXT NOT NULL DEFAULT '',
@@ -827,6 +831,9 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- 這一筆 run 的結構化輸入（目前只有 release 用）。JSON 字串，Hub 寫、
     -- 執行器讀（`_run_public` 解成 `spec`）。空字串＝沒有 spec
     spec_json     TEXT NOT NULL DEFAULT '',
+    -- 新上板規則上線前就存在的 release／release_fix（見 DATA_VERSION 8）。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    legacy        INTEGER NOT NULL DEFAULT 0,
     -- 逐 repo 的 git 現況（JSON 陣列，每格 repo/branch/head_before/
     -- head_after）。一筆 run 可在工作區多個 repo 各做 commit，上面那組只
     -- 描述主 repo。空字串＝沒帶（舊執行器），候選退回只看上面那組
@@ -998,6 +1005,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
     ("message", "subject_id", "subject_id TEXT NOT NULL DEFAULT ''"),
     ("message", "subject_name", "subject_name TEXT NOT NULL DEFAULT ''"),
+    ("message", "run_id", "run_id TEXT NOT NULL DEFAULT ''"),
+    # 新上板規則（每次上板都建 release＋release_fix）上線前就存在的
+    # release／release_fix run，一律視為已處理（DATA_VERSION 8 回填）。
+    # ⚠️ CREATE TABLE 也有一份，兩邊都要改
+    ("agent_run", "legacy", "legacy INTEGER NOT NULL DEFAULT 0"),
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
     # 來源位址是唯一分得開的線索
     ("session", "last_ip", "last_ip TEXT"),
@@ -1509,7 +1521,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 7
+DATA_VERSION = 8
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1609,6 +1621,15 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             "  (SELECT p.kind FROM participant p"
             "   WHERE p.id = board_checklist.created_by), '')"
             " WHERE created_by_kind = ''")
+    if version < 8:
+        # 新上板規則不溯及既往：這個版本之前已存在的 release／release_fix
+        # run（含 failed／cancelled）標成 legacy。失敗或取消的 legacy 不再
+        # 擋完成、不再讓週期可重新上板、不觸發 release_fix。
+        # 只標既有的列；之後新建的 run 預設 0，所以重跑也不會誤標（版次
+        # 只前進，且 UPDATE 本身只動 kind 為 release／release_fix 的列）
+        await db.execute(
+            "UPDATE agent_run SET legacy=1"
+            " WHERE kind IN ('release','release_fix')")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

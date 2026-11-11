@@ -317,11 +317,13 @@ class RunCreate(BaseModel):
     長度沒有上限等於把「模板化」這件事整個讓掉。
     """
     # investigate（只讀）/ ticket（實作到 commit）/ stage（整個階段）/
-    # push（固定腳本，不經模型，§5.6）/ release（上板，§9.7）
+    # push（固定腳本，不經模型，§5.6）/ release（上板，§9.7）/
+    # release_fix（重新上板時另外派的審查＋修復 agent，只由 release 端點建）
     # release 走 `/api/board/objectives/{id}/release`，這裡列出來是為了讓
     # `_enqueue_run` 與佇列共用同一組 kind 名——兩邊各一份的話，放寬其中
     # 一邊的那一天不會有任何地方報錯
-    kind: str = Field(pattern="^(investigate|ticket|stage|push|release)$")
+    kind: str = Field(
+        pattern="^(investigate|ticket|stage|push|release|release_fix)$")
     project: str = Field(min_length=1, max_length=64)
     # checklist_id / task_id；push 時是 repo key
     ref: str = Field(min_length=1, max_length=128)
@@ -368,7 +370,6 @@ class ReleaseRequest(BaseModel):
     repos: list[ReleaseRepo] = Field(min_length=1)
     # 同 `ReleaseRepo.source_branch`：進 `git tag -a <tag>` 的 argv
     tag: str = Field(default="", max_length=128)
-
     @field_validator("tag")
     @classmethod
     def _check_tag(cls, v: str) -> str:
@@ -821,6 +822,12 @@ class BoardChecklistPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     order_index: int | None = None
+
+
+class BoardChecklistMove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    objective_id: str = Field(min_length=1, max_length=64)
 
 
 class BoardTaskCreate(BaseModel):
@@ -2074,6 +2081,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         reply_mentions_author: bool = True,
         card_refs: list[str] | None = None,
         subject: tuple[str, str] | None = None,
+        run_id: str = "",
     ) -> dict:
         db = app.state.db
         subject_id, subject_name = subject or ("", "")
@@ -2135,20 +2143,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         sender_kind = ""
         if sender_id:
             krow = await (await db.execute(
-                "SELECT kind FROM participant WHERE id=?", (sender_id,)
+                "SELECT kind, run_id FROM participant WHERE id=?", (sender_id,)
             )).fetchone()
             if krow is not None:
                 sender_kind = krow["kind"] or ""
+                # run 成員的發言自動帶上那筆 run；system 訊息由呼叫端明傳
+                run_id = run_id or (krow["run_id"] or "")
         await db.execute(
             "INSERT INTO message (id, room_id, seq, sender_id, sender_kind,"
             " kind, content,"
             " mentions, mention_groups, card_refs, reply_to, reply_to_seq,"
-            " system_event, subject_id, subject_name, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " system_event, subject_id, subject_name, run_id, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (msg_id, room_id, seq, sender_id, sender_kind, kind, content,
              json.dumps(effective), json.dumps(groups),
              json.dumps(refs, ensure_ascii=False), reply_to, reply_to_seq,
-             system_event, subject_id, subject_name, _now()),
+             system_event, subject_id, subject_name, run_id, _now()),
         )
         await _commit_with_retry(db)
         await events.notify(room_id)
@@ -2340,6 +2350,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 空＝非離場訊息或舊訊息，client 退回解析 content
                 "subject_id": (r["subject_id"] if "subject_id" in r.keys() else "") or None,
                 "subject_name": (r["subject_name"] if "subject_name" in r.keys() else "") or None,
+                # 這則訊息屬於哪一筆派工；舊訊息與一般訊息是 null
+                "run_id": (r["run_id"] if "run_id" in r.keys() else "") or None,
                 "sender_id": r["sender_id"], "sender_name": sender_name,
                 # 發話當下的 kind 快照。run 成員結束後不進成員名冊，client
                 # 反查名冊只會拿到 other——這個欄位就是為了不必反查。
@@ -4591,6 +4603,27 @@ def create_app(config: Config | None = None) -> FastAPI:
                 result["active_names"] = sorted(active_names)
         return result
 
+    @app.get("/api/rooms/{room_id}/runs/{run_id}/last_message",
+             dependencies=[Depends(require_auth)])
+    async def run_last_message(
+        room_id: str, run_id: str,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """某筆 run 在這間房的最後一則訊息：優先 agent 發言（kind=chat），
+        沒有才退到最後一則 system 訊息。權限同讀訊息。"""
+        await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, x_participant_id, host)
+        db = app.state.db
+        for kind_cond in ("kind='chat'", "kind='system'"):
+            row = await (await db.execute(
+                "SELECT seq, id, kind FROM message WHERE room_id=? AND run_id=?"
+                f" AND deleted=0 AND {kind_cond} ORDER BY seq DESC LIMIT 1",
+                (room_id, run_id))).fetchone()
+            if row is not None:
+                return {"seq": row["seq"], "id": row["id"], "kind": row["kind"]}
+        raise _err(404, "run_message_not_found", "這筆派工在這間房沒有訊息")
+
     @app.get("/api/rooms/{room_id}/messages", dependencies=[Depends(require_auth)])
     async def read_messages(
         room_id: str,
@@ -5752,6 +5785,88 @@ def create_app(config: Config | None = None) -> FastAPI:
     ):
         return await _board_soft_delete("checklist", checklist_id,
                                         x_participant_id, x_session_key)
+
+    @app.post("/api/board/checklists/{checklist_id}/move",
+              dependencies=[Depends(require_auth)])
+    async def move_checklist(
+        checklist_id: str, body: BoardChecklistMove,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """把階段搬到同一塊板的另一個週期（放到目標週期最後）。
+
+        階段旗下的任務以 `checklist_id` 掛著、素材掛在階段上，所以只改
+        `objective_id` 它們就整包跟著走。**不同步 `room_id`**：板範圍的讀取
+        （掛板的房）以 `board_id` 篩，不看 `room_id`；v1 房軸（`board_id`
+        空）只允許同房搬，`room_id` 本來就相同。任務的 `room_id` 也不動——
+        離房孤兒化（`t.room_id`）靠它找人。
+        """
+        row = await _board_item_or_404("checklist", checklist_id)
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
+        if not await _board_can_edit(row, me, host):
+            raise _err(403, "not_board_editor",
+                       "只有這塊板的 owner、聊天室的 supervisor 或"
+                       "建立者可以改它")
+        if row["title"] == UNCATEGORISED:
+            raise _err(409, "checklist_uncategorised_immovable",
+                       "「未分類」階段不能搬到別的週期")
+        target_id = body.objective_id.strip()
+        if target_id == row["objective_id"]:
+            raise _err(400, "move_same_objective",
+                       "階段已經在這個週期底下")
+        target = await _board_item_or_404("objective", target_id)
+        src_board, dst_board = _row_board_id(row), _row_board_id(target)
+        if (src_board != dst_board
+                or (not src_board and row["room_id"] != target["room_id"])):
+            raise _err(409, "move_cross_board",
+                       "階段只能在同一塊板的週期之間搬動")
+        await _assert_objective_writable(row, "checklist")
+        await _assert_objective_writable(target, "objective")
+        await _assert_container_open("objective", target_id)
+        db = app.state.db
+        # 階段本身或旗下任務還有未結束的 run ⇒ 不能搬：run 的範圍是依階段
+        # 算的，搬走等於把它腳下的工作區換掉
+        ids = [checklist_id] + [t["id"] for t in await (await db.execute(
+            "SELECT id FROM board_task WHERE checklist_id=? AND deleted=0",
+            (checklist_id,))).fetchall()]
+        busy = None
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            marks = ",".join("?" for _ in chunk)
+            busy = await (await db.execute(
+                "SELECT id FROM agent_run WHERE status IN"
+                f" ('queued','claimed','running','limited') AND ref IN ({marks})"
+                " LIMIT 1", tuple(chunk))).fetchone()
+            if busy is not None:
+                break
+        if busy is not None:
+            raise _err(409, "checklist_has_active_run",
+                       "這個階段還有未結束的派工，結束後才能搬動",
+                       run_id=busy["id"])
+        last = await (await db.execute(
+            "SELECT COALESCE(MAX(order_index), -1) AS m FROM board_checklist"
+            " WHERE objective_id=? AND deleted=0", (target_id,))).fetchone()
+        seq = await _item_seq(row)
+        await db.execute(
+            "UPDATE board_checklist SET objective_id=?, order_index=?,"
+            " board_seq=? WHERE id=?",
+            (target_id, last["m"] + 1, seq, checklist_id))
+        await _record_board_event(
+            src_board, seq, "checklist_moved",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=row["room_id"], item_kind="checklist",
+            item_id=checklist_id,
+            payload={"from_objective_id": row["objective_id"],
+                     "to_objective_id": target_id})
+        await _commit_with_retry(db)
+        await _item_notify(row)
+        moved = _board_row(await (await db.execute(
+            "SELECT * FROM board_checklist WHERE id=?",
+            (checklist_id,))).fetchone())
+        moved["files"] = (await _stage_files([checklist_id])).get(
+            checklist_id, [])
+        return moved
 
     # Q2 定案：三層強制，但「隨手記一件事」不該逼人先蓋兩層。缺的那兩層由
     # Hub 自動備妥，名字固定是「未分類」——**固定名字才找得回同一個**，
@@ -6960,6 +7075,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             f"週期「{row['title']}」已確認無誤，還差最後一步：按下完成。",
             "board_objective_verified", humans_only=True)
         release_run = None
+        release_fix_run = None
         if rel is not None:
             # 閘上面已經驗過一次，但計畫要**重算**：兩次之間有 await，
             # 候選與儀表板都可能變了，而寫進 spec 的穩定分支必須是現在
@@ -6967,17 +7083,104 @@ def create_app(config: Config | None = None) -> FastAPI:
             room, spec = await _release_plan(row, me, request, host, rel,
                                              check_status=False)
             run_id = await _release_enqueue(row, me, room, spec)
+            fix_id = await _release_fix_enqueue(row, me, room, spec, run_id)
             await _commit_with_retry(app.state.db)
             await events.notify(room["id"])
             release_run = _run_public(await _run_or_404(run_id))
+            release_fix_run = _run_public(await _run_or_404(fix_id))
         return {"ok": True, "id": objective_id, "status": "verified",
-                "board_seq": seq, "release_run": release_run}
+                "board_seq": seq, "release_run": release_run,
+                "release_fix_run": release_fix_run}
 
     # ---------- 上板（release）：契約 C4、docs/CHATROOM.md §9.7 ----------
 
-    # 上板的前提狀態。`done` 也算：人可能先按完成才想起要上板，而那時
-    # 週期已經確認過了——擋掉等於逼他把週期打回去再走一次
-    _RELEASE_READY = ("verified", "done")
+    # 上板的前提狀態。🔒 `done` 不算（艾斯維爾 2026-11-11）：完成要等上板
+    # 成功（`complete_objective` 驗 `_release_state`），已完成的週期是終局，
+    # 不能再上板
+    _RELEASE_READY = ("verified",)
+
+    # 新上板規則上線前就存在、且已失敗或被取消的 release／release_fix：
+    # 視為已處理（DATA_VERSION 8），任何判斷都跳過它們
+    _LEGACY_CLOSED_SQL = ("NOT (legacy=1 AND status IN ('failed','cancelled'))")
+    _RUN_RUNNING = ("queued", "claimed", "running", "limited")
+
+    async def _fix_reopened(fix_id: str, objective_id: str) -> bool:
+        """這筆 release_fix 的 agent 有沒有把週期打回（嚴重無法上板）。
+
+        打回走的是一般的 reopen，事件的 actor 是 run 成員的 session_key
+        （`claude-run-<run_id>`），所以不需要另存旗標。
+        """
+        row = await (await app.state.db.execute(
+            "SELECT 1 FROM board_event WHERE item_id=?"
+            " AND event_type='objective_reopened' AND actor_key=? LIMIT 1",
+            (objective_id, f"claude-run-{fix_id}"))).fetchone()
+        return row is not None
+
+    def _effective_release(run, fix, reopened: bool) -> dict:
+        """release 與同一批 release_fix 合成「有效上板狀態」。
+
+        每次上板都會建 release＋release_fix，報告與修復由 fix 負責，所以：
+
+        - fix done ＝ done（runner 在 fix 收工後逐 repo 驗過來源分支已在
+          origin 穩定分支；release 本身沒成功時 reason 為 `release_fixed`）
+        - fix failed／cancelled ＝ 該狀態（agent 把週期打回時 reason 為
+          `release_blocked_reopened`）
+        - fix 還在跑 ＝ release 沒成功就照 release 的狀態（修復中），release
+          已成功就是 fix 的進行狀態（報告還沒發完，尚不算完成）
+        - 沒有 fix ＝ release 本身的狀態
+        """
+        fixed = (run["status"] != "done" and fix is not None
+                 and fix["status"] == "done")
+        run_id, reason = run["id"], run["reason"]
+        if fix is None:
+            status = run["status"]
+        elif fix["status"] == "done":
+            status = "done"
+            if fixed:
+                reason, run_id = "release_fixed", fix["id"]
+        elif fix["status"] in ("failed", "cancelled"):
+            status, run_id = fix["status"], fix["id"]
+            reason = ("release_blocked_reopened" if reopened
+                      else (fix["reason"] or run["reason"]))
+        else:
+            status = (run["status"] if run["status"] != "done"
+                      else fix["status"])
+        return {"status": status, "reason": reason, "run_id": run_id,
+                "fixed": fixed}
+
+    async def _release_state(objective_id: str) -> dict | None:
+        """週期的上板狀態：最近一筆 kind=release 的 run，與同一批建出的
+        release_fix（`created_at` 不早於那筆 release 的那一筆）。
+
+        從沒上板過（或只有已視為處理的 legacy 失敗）回 None。回傳：
+
+        - `run`／`fix`：上述兩列（沒有 fix 時 `fix` 是 None）
+        - `status`／`reason`／`run_id`：**有效狀態**，見 `_effective_release`
+        - `reopened`：fix 的 agent 把週期打回了
+        - `active`：release 或配對的 fix 還沒結束
+        """
+        db = app.state.db
+        run = await (await db.execute(
+            "SELECT id, status, reason, result, created_at, legacy"
+            " FROM agent_run WHERE kind='release' AND ref=?"
+            f" AND {_LEGACY_CLOSED_SQL}"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (objective_id,))).fetchone()
+        if run is None:
+            return None
+        fix = await (await db.execute(
+            "SELECT id, status, reason, result, created_at FROM agent_run"
+            " WHERE kind='release_fix' AND ref=? AND created_at >= ?"
+            f" AND {_LEGACY_CLOSED_SQL}"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (f"{objective_id}:fix", run["created_at"]))).fetchone()
+        reopened = (fix is not None and fix["status"] == "failed"
+                    and await _fix_reopened(fix["id"], objective_id))
+        eff = _effective_release(run, fix, reopened)
+        return {"run": run, "fix": fix, "reopened": reopened, **eff,
+                "active": (run["status"] in _RUN_RUNNING
+                           or (fix is not None
+                               and fix["status"] in _RUN_RUNNING))}
 
     async def _release_objective_refs(objective_id: str) -> list[str]:
         """這個週期底下的 checklist_id ∪ task_id（run.ref 的值域）。"""
@@ -7188,7 +7391,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         row = await (await app.state.db.execute(
             "SELECT status, git_repos_json FROM agent_run"
-            " WHERE kind='release' AND ref=?"
+            f" WHERE kind='release' AND ref=? AND {_LEGACY_CLOSED_SQL}"
             " ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (objective_id,))).fetchone()
         if row is None or row["status"] != "failed":
@@ -7224,6 +7427,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "release_requires_ops_room",
                        "上板只能由掛著這塊板的工作房人類成員觸發。",
                        reason=reason)
+        if check_status and obj_row["status"] == "done":
+            raise _err(409, "objective_already_done",
+                       "這個週期已經完成，不能再上板。要繼續請開新的週期。",
+                       from_status="done")
         if check_status and obj_row["status"] not in _RELEASE_READY:
             raise _err(409, "objective_not_verified",
                        "週期要先確認無誤才能上板，目前是"
@@ -7238,6 +7445,32 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "release_in_progress",
                        "這個週期已經有一筆還沒結束的上板。",
                        run_id=dup["id"])
+        # 修復 agent 還在動時也算上板進行中：它正在另一個 worktree 裡推
+        # 同一條穩定分支，這時再開一筆上板只會兩邊互相搶
+        fix_dup = await (await app.state.db.execute(
+            "SELECT id FROM agent_run WHERE kind='release_fix' AND ref=?"
+            f" AND status IN ({marks}) LIMIT 1",
+            (f"{obj_row['id']}:fix", *_RUN_ACTIVE))).fetchone()
+        if fix_dup is not None:
+            raise _err(409, "release_in_progress",
+                       "這個週期的上板修復還沒結束。",
+                       run_id=fix_dup["id"])
+        # 新規則上線前就失敗／取消的上板視為已處理：不再提供上板。只擋「那筆
+        # 發生在這次確認之後」的（週期被打回再確認，`verified_at` 會更新，
+        # 就是一輪新的）；確認並上板（verify）時 `verified_at` 還是空的，不受影響
+        last = await (await app.state.db.execute(
+            "SELECT status, legacy, created_at FROM agent_run"
+            " WHERE kind='release' AND ref=?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (obj_row["id"],))).fetchone()
+        verified_at = obj_row["verified_at"] or ""
+        if (last is not None and last["legacy"]
+                and last["status"] in ("failed", "cancelled")
+                and verified_at and last["created_at"] >= verified_at):
+            raise _err(409, "release_legacy_closed",
+                       "這個週期在新上板規則之前的上板已經視為處理完畢，"
+                       "不再提供上板。",
+                       release_status=last["status"])
         cand = await _release_candidates(obj_row, me, room=room)
         by_name = {r["name"]: r for r in cand["repos"]}
         resume = await _release_resume_heads(obj_row["id"])
@@ -7274,6 +7507,51 @@ def create_app(config: Config | None = None) -> FastAPI:
             room, me, kind="release", project=room["workspace_key"],
             ref=obj_row["id"], board_id=obj_row["board_id"] or "",
             brief=f"上板：{obj_row['title']}", spec=spec)
+
+    async def _release_fix_enqueue(obj_row, me, room, spec,
+                                   release_run_id) -> str:
+        """每次上板都建的 kind=release_fix。**不 commit**。
+
+        ref 用 `<objective_id>:fix` 避開 `idx_agent_run_ref_active`（同房同
+        ref 只能有一筆進行中）。spec 帶週期、repo 清單（含 resume_head）與
+        同批的 release run id；release 的結果在 fix 被領走時由 `claim_run`
+        附在 `release_result`（那時 release 才結束）。fix 在同一批的 release
+        run 結束後才會被領走（`claim_run` 的排序條件）。
+
+        fix 負責：讀機械上板結果；成功就發報告，失敗就在獨立 worktree 解決；
+        真的無法上板時把週期打回、在其下開阻擋階段並通知人類。
+
+        enqueue 失敗（配額、佇列上限）時**把剛建的 release run 一併撤掉**：
+        共用連線上不能 rollback（會連累別的請求），而只剩 release 沒有 fix
+        的話，這次上板就悄悄少了一半。
+        """
+        fix_spec = {
+            "objective_id": spec["objective_id"],
+            "objective_title": spec["objective_title"],
+            "room_id": spec["room_id"],
+            "repos": spec["repos"],
+            "tag": spec["tag"],
+            "release_run_id": release_run_id,
+        }
+        try:
+            return await _enqueue_run(
+                room, me, kind="release_fix", project=room["workspace_key"],
+                ref=f"{obj_row['id']}:fix",
+                board_id=obj_row["board_id"] or "",
+                brief=f"上板修復：{obj_row['title']}", spec=fix_spec)
+        except BaseException:
+            db = app.state.db
+            await db.execute("DELETE FROM agent_run_event WHERE run_id=?",
+                             (release_run_id,))
+            # `_touch_release_objective` 在建立當下留的 objective_release 稽核
+            # 列（payload 帶 run_id）也一併撤掉，不留指向不存在 run 的紀錄
+            await db.execute(
+                "DELETE FROM board_event WHERE event_type='objective_release'"
+                " AND item_id=? AND payload_json LIKE ?",
+                (obj_row["id"], f"%{release_run_id}%"))
+            await db.execute("DELETE FROM agent_run WHERE id=?",
+                             (release_run_id,))
+            raise
 
     @app.get("/api/board/objectives/{objective_id}/release/candidates",
              dependencies=[Depends(require_auth)])
@@ -7312,7 +7590,10 @@ def create_app(config: Config | None = None) -> FastAPI:
           那條沒有 participant 的路）⇒ 403 `release_requires_ops_room`
           （`detail.reason` 說明是哪一種）
         - 週期還沒確認 ⇒ 409 `objective_not_verified`
-        - 同一週期還有沒結束的上板 ⇒ 409 `release_in_progress`
+        - 週期已完成 ⇒ 409 `objective_already_done`（完成是終局，不能再上板）
+        - 同一週期還有沒結束的上板（含上板修復）⇒ 409 `release_in_progress`
+        - 新規則上線前就失敗／取消的上板（legacy）已視為處理完畢，該週期
+          ⇒ 409 `release_legacy_closed`
         - repo 不在候選裡、或沒設穩定分支 ⇒ 409 `release_repo_not_eligible`
         - 來源分支就是穩定分支 ⇒ 409 `release_source_is_stable`
 
@@ -7323,10 +7604,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                                          x_session_key)
         room, spec = await _release_plan(row, me, request, host, body,
                                          check_status=True)
+        # 每次上板都建兩筆：release（機械上板）＋release_fix（讀結果、
+        # 發報告，失敗時修復，嚴重時打回週期）
         run_id = await _release_enqueue(row, me, room, spec)
+        fix_id = await _release_fix_enqueue(row, me, room, spec, run_id)
         await _commit_with_retry(app.state.db)
         await events.notify(room["id"])
-        return {"run": _run_public(await _run_or_404(run_id))}
+        return {"run": _run_public(await _run_or_404(run_id)),
+                "fix_run": _run_public(await _run_or_404(fix_id))}
 
     @app.post("/api/board/objectives/{objective_id}/complete",
               dependencies=[Depends(require_auth)])
@@ -7344,6 +7629,21 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "objective_not_verified",
                        f"這個週期還沒被確認無誤，目前是「{row['status']}」",
                        from_status=row["status"])
+        # 🔒 週期若上過板，最近一次必須成功才能完成（艾斯維爾 2026-11-11）。
+        # 從沒上板過的週期不受影響。「成功」含重新上板時 release_fix 修好的
+        state = await _release_state(objective_id)
+        if state is not None and state["status"] != "done":
+            run = state["run"]
+            if state["active"]:
+                msg = "這個週期的上板還在進行中，需要先上板成功才能完成。"
+            else:
+                why = run["reason"] or run["status"]
+                msg = (f"這個週期最近一次上板沒有成功（{state['status']}／"
+                       f"{state['reason'] or why}），"
+                       "需要先打回再送審、確認時重新上板成功才能完成。")
+            raise _err(409, "release_not_done", msg,
+                       release_status=state["status"],
+                       release_run_id=state["run_id"])
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
             "completed_by_actor_key": actor_key(me["session_key"]),
@@ -7358,6 +7658,32 @@ def create_app(config: Config | None = None) -> FastAPI:
             "board_objective_done")
         return {"ok": True, "id": objective_id, "status": "done",
                 "board_seq": seq}
+
+    async def _is_release_fix_of(obj_row, me) -> bool:
+        """這個身分是不是「這個週期」進行中的上板修復（release_fix）run。
+
+        嚴重無法上板時，修復 agent 要能把 `verified` 的週期打回（比照人類
+        送審後打回）。比照 `_run_covers_card` 的窄法，其餘 agent 不放寬：
+
+        - 身分只認 `participant.run_id`（join 時已驗過屬於本房一筆 run）
+        - run 要是 `release_fix`、還在跑，且 `spec.objective_id` 就是這個週期
+        - 只限 `verified`（上板發生在確認之後）
+        """
+        if obj_row["status"] != "verified":
+            return False
+        run_id = (me.get("run_id") or "").strip()
+        if not run_id:
+            return False
+        run = await (await app.state.db.execute(
+            "SELECT kind, status, spec_json FROM agent_run WHERE id=?",
+            (run_id,))).fetchone()
+        if (run is None or run["kind"] != "release_fix"
+                or run["status"] not in ("claimed", "running", "limited",
+                                         "handoff")):
+            return False
+        spec = _loads_or(run["spec_json"] or "", {})
+        return (isinstance(spec, dict)
+                and spec.get("objective_id") == obj_row["id"])
 
     @app.post("/api/board/objectives/{objective_id}/reopen",
               dependencies=[Depends(require_auth)])
@@ -7379,7 +7705,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         row, me = await _objective_write(objective_id, x_participant_id,
                                          x_session_key)
-        if not _is_human(me):
+        if not _is_human(me) and not await _is_release_fix_of(row, me):
             raise _err(403, "human_only", "只有人類成員可以把週期打回")
         if row["status"] not in ("review", "verified"):
             raise _err(409, "invalid_transition",
@@ -11682,13 +12008,56 @@ def create_app(config: Config | None = None) -> FastAPI:
             chunk = ids[i:i + 500]
             marks = ",".join("?" for _ in chunk)
             rows = await (await db.execute(
-                "SELECT id, ref, status, reason FROM agent_run"
-                f" WHERE kind='release' AND ref IN ({marks})"
+                "SELECT id, ref, status, reason, created_at, legacy"
+                f" FROM agent_run WHERE kind='release' AND ref IN ({marks})"
                 " ORDER BY created_at DESC, rowid DESC", chunk)).fetchall()
+            newest: dict[str, object] = {}
             for r in rows:
-                latest.setdefault(r["ref"], {
-                    "run_id": r["id"], "status": r["status"],
-                    "reason": r["reason"]})
+                newest.setdefault(r["ref"], r)
+            fixes = await (await db.execute(
+                "SELECT id, ref, status, reason, created_at, legacy"
+                f" FROM agent_run WHERE kind='release_fix' AND ref IN ({marks})"
+                " ORDER BY created_at DESC, rowid DESC",
+                [f"{x}:fix" for x in chunk])).fetchall()
+            fix_of: dict[str, object] = {}
+            for f in fixes:
+                oid = f["ref"][:-len(":fix")]
+                run = newest.get(oid)
+                if (oid in fix_of or run is None
+                        or f["created_at"] < run["created_at"]):
+                    continue
+                fix_of[oid] = f
+            # 打回的判斷：release_fix 的 agent 發出的 objective_reopened
+            reopened_by: set[str] = set()
+            if fix_of:
+                ev_marks = ",".join("?" for _ in fix_of)
+                evs = await (await db.execute(
+                    "SELECT item_id, actor_key FROM board_event"
+                    " WHERE event_type='objective_reopened'"
+                    f" AND item_id IN ({ev_marks})", list(fix_of))).fetchall()
+                reopened_by = {(e["item_id"], e["actor_key"]) for e in evs}
+            for oid, run in newest.items():
+                # 新規則之前就失敗／取消的上板：回 `status="legacy"`（原狀態
+                # 放 `legacy_status`），App 不顯示失敗、也不擋完成
+                if run["legacy"] and run["status"] in ("failed", "cancelled"):
+                    latest[oid] = {"run_id": run["id"], "status": "legacy",
+                                   "reason": run["reason"],
+                                   "legacy_status": run["status"]}
+                    continue
+                fix = fix_of.get(oid)
+                if fix is not None and fix["legacy"] and fix["status"] in (
+                        "failed", "cancelled"):
+                    fix = None
+                reopened = (fix is not None and fix["status"] == "failed"
+                            and (oid, f"claude-run-{fix['id']}")
+                            in reopened_by)
+                eff = _effective_release(run, fix, reopened)
+                entry = {"run_id": eff["run_id"], "status": eff["status"],
+                         "reason": eff["reason"]}
+                if fix is not None:
+                    entry["fix_run_id"] = fix["id"]
+                    entry["fix_status"] = fix["status"]
+                latest[oid] = entry
         for o in objectives:
             o["release"] = latest.get(o["id"])
 
@@ -14594,6 +14963,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _run_public(row) -> dict:
         d = dict(row)
         d["usage"] = _loads_or(d.pop("usage_json", "{}"), {})
+        # 內部標記（新上板規則之前的 release 系列 run），不對外
+        d.pop("legacy", None)
         # 結構化輸入（目前只有 release 有）。沒有 spec 的 run 回空物件——
         # 執行器那邊只要 `run["spec"]` 一路取得到鍵就不必分兩種寫法
         d["spec"] = _loads_or(d.pop("spec_json", "") or "{}", {})
@@ -14991,11 +15362,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         run = await (await db.execute(
             "SELECT kind, ref FROM agent_run WHERE id=?",
             (run_id,))).fetchone()
-        if run is None or run["kind"] != "release" or not run["ref"]:
+        if (run is None or run["kind"] not in ("release", "release_fix")
+                or not run["ref"]):
             return
+        # release_fix 的 ref 是 `<objective_id>:fix`
+        obj_ref = (run["ref"][:-len(":fix")]
+                   if run["kind"] == "release_fix" else run["ref"])
         obj = await (await db.execute(
             "SELECT id, room_id, board_id FROM board_objective"
-            " WHERE id=? AND deleted=0", (run["ref"],))).fetchone()
+            " WHERE id=? AND deleted=0", (obj_ref,))).fetchone()
         if obj is None:
             return
         seq = await _item_seq(obj)
@@ -15066,7 +15441,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             text = f"{text}（由 Supervisor {who} 派工）"
         await _post_message(room_id, None, text, kind="system",
                             system_event=f"run_{to_status}",
-                            mentions=mentions)
+                            mentions=mentions, run_id=row["id"])
 
     async def _announce_run_note(row, reason: str,
                                  stalled_seconds: int) -> None:
@@ -15084,7 +15459,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         else:
             return
         await _post_message(row["room_id"], None, text, kind="system",
-                            system_event=f"run_{reason}")
+                            system_event=f"run_{reason}", run_id=row["id"])
 
     # 「執行器失去連線」的節流（實機 2026-09-18）。**放記憶體不進 DB**：
     # 它只在「現在這一段掉線」裡有意義，Hub 自己重啟過就該重新講一次（那時
@@ -15381,7 +15756,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(403, "human_actor_required_for_run",
                            "只有房內的人類成員或這塊板的監督者能派工，"
                            "agent 請改用任務板")
-        elif body.kind in ("push", "release"):
+        elif body.kind in ("push", "release", "release_fix"):
             # 身分邊界不是狀態衝突，所以是 403 不是 409。
             # release 與 push 同一級：兩者都是不經模型的固定腳本，而上板
             # 動的是穩定分支——那顆鈕留給人類（艾斯維爾 2026-09-21）
@@ -15498,7 +15873,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             final = await _run_or_404(run_id)
             await _announce_run(final, "cancelled")
             await events.notify(row["room_id"])
-            if row["kind"] == "release" and row["board_id"]:
+            if (row["kind"] in ("release", "release_fix")
+                    and row["board_id"]):
                 await _notify_board_rooms(row["board_id"])
             return {"run": _run_public(final), "cancelled": True}
         await app.state.db.execute(
@@ -15551,7 +15927,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         head = f"派工 {row['kind']}／{row['ref'] or '(未指定)'}"
         await _post_message(row["room_id"], None, f"{head} 收到收尾請求。",
                             kind="system",
-                            system_event="run_soft_stop_requested")
+                            system_event="run_soft_stop_requested",
+                            run_id=run_id)
         await _commit_with_retry(app.state.db)
         await events.notify(row["room_id"])
         return {"run": _run_public(await _run_or_404(run_id)),
@@ -15672,8 +16049,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                         " WHERE id=?", (int(top["s"]), run["id"]))
                 continue
             rows = await (await db.execute(
-                "SELECT m.seq AS seq, m.content AS content,"
-                " m.mentions AS mentions, p.display_name AS sender"
+                "SELECT m.seq AS seq, m.id AS id, m.content AS content,"
+                " m.mentions AS mentions, p.display_name AS sender,"
+                " COALESCE(NULLIF(m.sender_kind, ''), p.kind, '') AS sender_kind"
                 " FROM message m LEFT JOIN participant p ON p.id = m.sender_id"
                 " WHERE m.room_id=? AND m.seq>? AND m.deleted=0"
                 "   AND m.kind='chat' ORDER BY m.seq",
@@ -15685,8 +16063,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 mentioned = _loads_or(r["mentions"], [])
                 if not names.intersection(mentioned):
                     continue
-                items.append({"seq": int(r["seq"]),
+                # id＋from_kind：agent 要對人類送來的那則 `chatroom_react`
+                # 表示收到，需要訊息 id 與「是不是人類」
+                items.append({"seq": int(r["seq"]), "id": r["id"],
                               "from": r["sender"] or "系統",
+                              "from_kind": r["sender_kind"] or "",
                               "text": r["content"]})
             if top_seq != cursor:
                 await db.execute(
@@ -15839,9 +16220,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         cur = await db.execute(
             "UPDATE agent_run SET status='claimed', runner_id=?, claimed_at=?,"
             " updated_at=?, attempt=attempt+1 WHERE id = ("
-            "  SELECT id FROM agent_run WHERE status='queued'"
-            f"  AND project IN ({marks})"
-            "  ORDER BY priority DESC, position ASC LIMIT 1"
+            "  SELECT q.id FROM agent_run q WHERE q.status='queued'"
+            f"  AND q.project IN ({marks})"
+            # 🔒 release_fix 要等同一批的 release 結束才領：它的第一步是
+            # 檢查剛才那次上板有沒有成功，搶在前面的話檢查的是還沒發生的事
+            "  AND NOT (q.kind='release_fix' AND EXISTS ("
+            "    SELECT 1 FROM agent_run p WHERE p.kind='release'"
+            "    AND p.ref = substr(q.ref, 1, length(q.ref) - 4)"
+            "    AND p.status IN ('queued','claimed','running','limited')))"
+            "  ORDER BY q.priority DESC, q.position ASC LIMIT 1"
             ") RETURNING *",
             (runner_id, now, now, *projects))
         got = await cur.fetchone()
@@ -15853,7 +16240,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 "claimed")
         await _commit_with_retry(db)
         await events.notify(got["room_id"])
-        if got["kind"] == "release" and got["board_id"]:
+        if got["kind"] in ("release", "release_fix") and got["board_id"]:
             await _notify_board_rooms(got["board_id"])
         # 領單走的是 `RETURNING *`（agent_run 自己的欄位），帶不出房間的
         # `single_writer`——而這正是執行器拿到單之後第一件要看的事。
@@ -15863,6 +16250,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 要問人時問誰（`_run_ask_human`）。**查不出來不能讓領單失敗**：
         # 單已經 commit 成 claimed，這裡拋例外的話執行器拿到 500、手上沒有
         # 這筆 run，而 Hub 那邊它永遠停在 claimed
+        if got["kind"] == "release_fix":
+            # release_fix 要等同批 release 結束才領得到（上面的 NOT EXISTS），
+            # 此刻結果才有。fix 的第一步就是讀它：成功發報告、失敗去修
+            fix_spec = _loads_or(got["spec_json"] or "", {})
+            rel_id = (fix_spec.get("release_run_id")
+                      if isinstance(fix_spec, dict) else "") or ""
+            rel = await (await db.execute(
+                "SELECT id, status, reason, result FROM agent_run"
+                " WHERE id=?", (rel_id,))).fetchone() if rel_id else None
+            run["release_result"] = ({
+                "run_id": rel["id"], "status": rel["status"],
+                "reason": rel["reason"],
+                "result": (rel["result"] or "")[:6000]} if rel else None)
         if got["kind"] in ("stage", "ticket", "investigate"):
             try:
                 run["ask_human"] = await _run_ask_human(got)
@@ -16079,7 +16479,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             final, "waiting" if (new == "running"
                                  and body.reason == "repo_lock_wait") else new)
         await events.notify(row["room_id"])
-        if row["kind"] == "release" and row["board_id"]:
+        if row["kind"] in ("release", "release_fix") and row["board_id"]:
             # 板掛著的其他房也要醒，不然它們的 WS 要等下一次說話才看到
             await _notify_board_rooms(row["board_id"])
         return {"run": _run_public(final),

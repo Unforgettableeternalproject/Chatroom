@@ -1849,6 +1849,9 @@ def chatroom_board_update(
     ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``
     / ``complete``（完成）。
 
+    ``reopen``（打回）原則上只有人類按得下去；唯一的例外是派工的 release_fix
+    agent 對**自己這一批的週期**（上板嚴重無法完成時）。
+
     ⚠️ ``complete`` 這條 bridge 放行，但**只有人類按得下去**——送過去會被
     Hub 以 403 擋回來。週期收尾的兩道閘（確認無誤、完成）都是人類的，
     agent 這邊的終點是 ``review``。
