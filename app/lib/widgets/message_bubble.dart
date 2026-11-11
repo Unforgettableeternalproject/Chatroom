@@ -219,7 +219,7 @@ class MessageBubble extends StatelessWidget {
             // 聚焦」那個強度。
             //
             // ⚠️ 跳轉聚焦**不再參與這條鏈**：它改成疊在外圈的呼吸效果
-            // （見 [_FocusPulse]）。兩者都用金色卻是兩件事——一個是「這則
+            // （見 [FocusPulse]）。兩者都用金色卻是兩件事——一個是「這則
             // 很重要」，一個是「你剛剛跳到這裡」，共用同一個強度就分不出來。
             //
             // 標記成員仍壓過釘選：釘選在 header 已有「❖ 已釘選」字樣，
@@ -296,7 +296,7 @@ class MessageBubble extends StatelessWidget {
     // 就是「光暈沒有貼合氣泡」。自己的訊息沒有那一層，所以同一份程式碼在
     // 自己的訊息上是準的，只有別人的偏——「有時候準」正是它被當成小瑕疵
     // 放過的原因（艾斯維爾 09/09 房 seq 22 附圖）
-    final pulsed = highlighted ? _FocusPulse(child: body) : body;
+    final pulsed = highlighted ? FocusPulse(child: body) : body;
 
     // 標記的成員左軸加粗到 5px，與整圈邊框、淡底一起構成強調。自己的
     // 訊息沒有左軸也不需要標記——不會有人在等自己回話
@@ -708,18 +708,20 @@ class _ContextMenuRegion extends StatelessWidget {
 /// 那個顏色，兩件事就會互相覆蓋：跳到一則沒釘選的訊息看起來像它被釘了，
 /// 跳到一則釘選訊息則什麼都看不出來。
 ///
+/// 公開是因為 system 訊息（run 的完成通知）的跳轉也要播同一個呼吸。
+///
 /// ⚠️ **只在 `highlighted` 為真時才建這個 widget**（呼叫端已經這樣做）。
 /// 無條件建立的話，畫面上每一則訊息都掛著一個永遠在跑的 ticker。
-class _FocusPulse extends StatefulWidget {
-  const _FocusPulse({required this.child});
+class FocusPulse extends StatefulWidget {
+  const FocusPulse({super.key, required this.child});
 
   final Widget child;
 
   @override
-  State<_FocusPulse> createState() => _FocusPulseState();
+  State<FocusPulse> createState() => FocusPulseState();
 }
 
-class _FocusPulseState extends State<_FocusPulse>
+class FocusPulseState extends State<FocusPulse>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,

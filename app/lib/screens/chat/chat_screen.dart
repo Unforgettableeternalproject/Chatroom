@@ -19,7 +19,9 @@ import '../../core/util/member_nesting.dart';
 import '../../core/util/relative_time.dart';
 import '../../l10n/l10n.dart';
 import '../../models/board.dart';
+import '../../models/agent_run.dart';
 import '../../models/message.dart';
+import '../../models/run_message_target.dart';
 import '../../models/reaction.dart';
 import '../../state/reaction_actions.dart';
 import '../../api/attachments_api.dart';
@@ -29,6 +31,8 @@ import '../../models/participant.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../board/board_attach_dialog.dart';
+import 'focus_loader.dart';
+import 'focus_preview.dart';
 import '../rooms/room_actions.dart';
 import '../../celebration/celebration_highlight.dart';
 import '../../notifications/notification_center.dart' show LiveSystemEvent;
@@ -115,6 +119,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final GlobalKey _focusKey = GlobalKey();
   Timer? _highlightTimer;
   bool _loadingOlder = false;
+
+  /// 跳轉進行中。期間 [_onScroll] 不自動載入歷史（見 [shouldAutoLoadOlder]）。
+  bool _focusing = false;
+
+  /// 遠距跳轉的預覽（目標前後各幾則）。非 null 時訊息區改畫預覽，主列表
+  /// 卸下、不會觸發往回載；「回到最新」＝清掉它。
+  ({int seq, List<Message> messages})? _preview;
+
+  /// 離底是否超過 [kJumpLatestThreshold]（「回到最新」按鈕用）。
+  bool _awayFromBottom = false;
   Timer? _memberPoll;
   DateTime? _lastMemberFetch;
 
@@ -142,7 +156,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _dragging = false;
   int _localSeq = 0;
 
-  bool get _atBottom => !_scroll.hasClients || _scroll.position.pixels < 60;
+  bool get _atBottom =>
+      _preview == null &&
+      (!_scroll.hasClients || _scroll.position.pixels < 60);
 
   @override
   void initState() {
@@ -244,10 +260,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (_atBottom && _newWhileAway != 0) {
       setState(() => _newWhileAway = 0);
     }
+    final away = shouldShowJumpLatest(
+      previewing: false,
+      hasClients: _scroll.hasClients,
+      pixels: _scroll.hasClients ? _scroll.position.pixels : 0,
+    );
+    if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
     // reverse list：接近 maxScrollExtent = 視窗頂端 → 載入更舊的歷史
-    if (!_loadingOlder &&
-        _scroll.hasClients &&
-        _scroll.position.pixels > _scroll.position.maxScrollExtent - 400) {
+    if (shouldAutoLoadOlder(
+      loading: _loadingOlder,
+      focusing: _focusing,
+      hasClients: _scroll.hasClients,
+      pixels: _scroll.hasClients ? _scroll.position.pixels : 0,
+      maxScrollExtent:
+          _scroll.hasClients ? _scroll.position.maxScrollExtent : 0,
+    )) {
       _loadOlder();
     }
   }
@@ -306,6 +333,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _scrollToBottom() {
+    // 預覽中：關掉預覽，主列表重新掛上時本來就在最新
+    if (_preview != null) {
+      setState(() {
+        _preview = null;
+        _awayFromBottom = false;
+        _newWhileAway = 0;
+      });
+      return;
+    }
     // 送出成功時也會走這裡，而那條路徑不保證 list 已經 attach（剛進房就
     // 發言、或畫面正在重建）。沒有 clients 時安靜跳過捲動即可——reverse
     // list 的初始位置本來就是底部，不捲也在對的地方
@@ -319,27 +355,34 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() => _newWhileAway = 0);
   }
 
-  /// 那一則還在不在？用錨定讀取問 Hub 一次，不動 feed。
-  ///
-  /// **只用來判斷，不把結果灌進 store**：`around_seq` 回的是「錨點前後」，
-  /// 而 feed 是單一連續視窗——灌進去會在中間留一段沒載入的洞，畫面上卻連續
-  /// 顯示（既有註解說的「時間軸假連續」）。真正要跳到很舊的訊息得改成錨定
-  /// 視窗模式，那是另一張票。
-  ///
-  /// 拿不到答案時回 `true`（照原本的逐頁流程走）——網路不穩不該讓一個
-  /// 存在的訊息被說成不存在。
-  Future<bool> _messageStillExists(int seq) async {
+  /// 遠距跳轉：用 `around_seq` 取目標前後各 [kFocusPreviewRadius] 則開預覽，
+  /// 不動 feed（回來的是「錨點前後」，灌進 feed 會在中間留洞）。
+  Future<void> _openPreview(int seq) async {
+    void say(String text) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+      }
+    }
+
     try {
       final identity = await ref.read(identityProvider(widget.roomId).future);
       final page = await ref.read(messagesApiProvider).read(
             widget.roomId,
             aroundSeq: seq,
-            radius: 1,
+            radius: kFocusPreviewRadius,
             participantId: identity.participantId,
           );
-      return page.messages.any((m) => m.seq == seq);
+      if (!mounted) return;
+      final list = page.messages.toList()..sort((a, b) => a.seq.compareTo(b.seq));
+      if (!list.any((m) => m.seq == seq)) {
+        say(AppLocalizations.of(context).chatMessageGone);
+        return;
+      }
+      setState(() => _preview = (seq: seq, messages: list));
+    } on NotFoundException {
+      say(AppLocalizations.of(context).chatMessageGone);
     } catch (_) {
-      return true;
+      say(AppLocalizations.of(context).chatFocusLoadFailed);
     }
   }
 
@@ -393,41 +436,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _focusOn(int seq) async {
+    _focusing = true;
+    try {
+      await _focusOnImpl(seq);
+    } finally {
+      _focusing = false;
+    }
+  }
+
+  Future<void> _focusOnImpl(int seq) async {
     var feed = ref.read(roomFeedProvider(widget.roomId));
-    // 先問一次「那則還在不在」，再決定要不要往回翻。一次請求換掉最多 30 輪
-    // 的白跑，而且**「已經不存在」與「太舊還沒載到」從此分得開**——原本
-    // 兩者都是安靜地什麼都不做
-    if (feed.bySeq(seq) == null && !await _messageStillExists(seq)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(AppLocalizations.of(context).chatMessageGone)),
-        );
-      }
+    final at = feed.messages.toList().indexWhere((m) => m.seq == seq);
+    final mode = decideFocusMode(
+      inFeed: at >= 0,
+      fromBottom: at < 0 ? 0 : feed.length - 1 - at,
+    );
+    if (mode == FocusMode.preview) {
+      await _openPreview(seq);
       return;
     }
-    if (!mounted) return;
-    // 目標不在視窗內就持續往回載，直到載到或沒有更多歷史
-    var guard = 0;
-    while (feed.bySeq(seq) == null && feed.hasMoreHistory && guard < 30) {
-      await ref.read(realtimeServiceProvider).loadOlder(widget.roomId);
-      feed = ref.read(roomFeedProvider(widget.roomId));
-      guard++;
+    // 近距真跳轉：先離開預覽，等主列表掛回來
+    if (_preview != null) {
+      setState(() => _preview = null);
+      await WidgetsBinding.instance.endOfFrame;
     }
     if (!mounted) return;
-    if (feed.bySeq(seq) == null) {
-      // **跳不到要說出來。** 原本這裡是安靜 return，使用者按了「跳回原文」
-      // 卻什麼都沒發生，分不出是當掉了還是訊息不見了
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            feed.hasMoreHistory
-                ? AppLocalizations.of(context).chatFocusTooOld(feed.length)
-                : AppLocalizations.of(context).chatFocusNotFound,
-          ),
-        ),
-      );
-      return;
-    }
+    feed = ref.read(roomFeedProvider(widget.roomId));
     final list = feed.messages.toList();
     final index = list.indexWhere((m) => m.seq == seq);
     if (index < 0) return;
@@ -518,6 +552,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
       if (mounted) setState(() => _highlightSeq = null);
     });
+  }
+
+  /// 回報卡點下去：跳到那一輪對應的訊息（對應規則見
+  /// [resolveRunMessageSeq]）。
+  ///
+  /// 先看已載入 feed 的 `run_id`，找不到問 Hub，Hub 答不出來才退回時間窗；
+  /// 遠的由 [_focusOn] 開預覽。**對不上就安靜結束**：回報面板已經開了，
+  /// 這一步只是順手，不該為它跳錯誤。
+  Future<void> _focusRunReport(AgentRun run) async {
+    final feed = ref.read(roomFeedProvider(widget.roomId));
+    final participantId = ref.read(identityProvider(widget.roomId)).value?.participantId;
+    final seq = await resolveRunMessageSeqRemote(
+      run,
+      feed.messages,
+      fetchLastSeq: (runId) => ref
+          .read(messagesApiProvider)
+          .runLastMessageSeq(widget.roomId, runId,
+              participantId: participantId),
+    );
+    if (seq == null || !mounted) return;
+    await _focusOn(seq);
   }
 
   // ---------- 附件 ----------
@@ -1100,6 +1155,57 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           p.id: nameById[p.parentId!] ?? AppLocalizations.of(context).commonUnknownParen,
     };
 
+    // 主列表與遠距預覽共用的單則訊息畫法。[isTarget]＝這則是跳轉目標
+    // （掛 _focusKey 給真跳轉量位置、播金色呼吸）
+    Widget buildItem(Message m, {required bool isTarget}) {
+                    // 跳轉目標掛上 _focusKey。system 訊息也可能是
+                    // 目標（釘選收據就是 system），只掛 chat 分支
+                    // 會讓那些跳轉安靜地退回粗跳的誤差
+                    Widget keyed(Widget tile) => isTarget
+                        ? KeyedSubtree(key: _focusKey, child: tile)
+                        : tile;
+                    if (m.isSystem) {
+                      final tile = SystemMessageTile(message: m);
+                      final shown = LiveSystemEvent.celebratory
+                              .contains(m.systemEvent)
+                          ? CelebrationHighlight(
+                              messageId: m.id, child: tile)
+                          : tile;
+                      // 跳轉目標是 system 訊息（回報卡的 push 通知）
+                      // 時，播與一般訊息同一個金色呼吸
+                      return keyed(isTarget
+                          ? FocusPulse(child: shown)
+                          : shown);
+                    }
+                    // 訊息自帶的 kind 快照優先，名冊只是備援：
+                    // run 成員結束後不在名冊裡，反查會把它們的發言
+                    // 退成 other
+                    final kind = m.resolveSenderKind(kindById);
+                    return keyed(Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      child: MessageBubble(
+                        message: m,
+                        isSelf: myId != null && m.senderId == myId,
+                        senderKind: kind,
+                        actions: actions,
+                        highlighted: isTarget,
+                        memberHighlighted: m.senderId != null &&
+                            highlightedIds.contains(m.senderId),
+                        serverUrl: config.serverUrl,
+                        token: config.token,
+                        // 附件下載也在讀取邊界內（Hub 側 3605638）
+                        participantId: myId,
+                        // 附件的「加到階段」要知道是哪間房
+                        roomId: widget.roomId,
+                        subagentOf: m.senderId == null
+                            ? null
+                            : subagentParentById[m.senderId],
+                        onTapCard: _openCardRef,
+                        devMode: config.devMode,
+                      ),
+                    ));
+    }
+
     final wide = MediaQuery.sizeOf(context).width >= 1200;
 
     final chatColumn = _withDropTarget(
@@ -1154,6 +1260,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     if (messages.isEmpty) {
                       return EmptyState(title: AppLocalizations.of(context).chatNoMessages);
                     }
+                    final preview = _preview;
+                    if (preview != null) {
+                      return _desaturateIfArchived(
+                        archived,
+                        SelectionArea(
+                          contextMenuBuilder: (_, _) => const SizedBox.shrink(),
+                          child: FocusPreview(
+                            messages: preview.messages,
+                            targetSeq: preview.seq,
+                            itemBuilder: (m, {required isTarget}) =>
+                                buildItem(m, isTarget: isTarget),
+                          ),
+                        ),
+                      );
+                    }
                     // SelectionArea 取代各訊息自己的 SelectableText：右鍵留給訊息
                     // 選單，而選取可以跨訊息（要複製一整段對話時差很多）
                     final list = _desaturateIfArchived(
@@ -1190,48 +1311,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               );
                             }
                             final m = messages[messages.length - 1 - i];
-                            // 跳轉目標掛上 _focusKey。system 訊息也可能是
-                            // 目標（釘選收據就是 system），只掛 chat 分支
-                            // 會讓那些跳轉安靜地退回粗跳的誤差
-                            Widget keyed(Widget tile) => m.seq == _highlightSeq
-                                ? KeyedSubtree(key: _focusKey, child: tile)
-                                : tile;
-                            if (m.isSystem) {
-                              final tile = SystemMessageTile(message: m);
-                              return keyed(
-                                  LiveSystemEvent.celebratory
-                                          .contains(m.systemEvent)
-                                      ? CelebrationHighlight(
-                                          messageId: m.id, child: tile)
-                                      : tile);
-                            }
-                            // 訊息自帶的 kind 快照優先，名冊只是備援：
-                            // run 成員結束後不在名冊裡，反查會把它們的發言
-                            // 退成 other
-                            final kind = m.resolveSenderKind(kindById);
-                            return keyed(Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 9),
-                              child: MessageBubble(
-                                message: m,
-                                isSelf: myId != null && m.senderId == myId,
-                                senderKind: kind,
-                                actions: actions,
-                                highlighted: _highlightSeq == m.seq,
-                                memberHighlighted: m.senderId != null &&
-                                    highlightedIds.contains(m.senderId),
-                                serverUrl: config.serverUrl,
-                                token: config.token,
-                                // 附件下載也在讀取邊界內（Hub 側 3605638）
-                                participantId: myId,
-                                // 附件的「加到階段」要知道是哪間房
-                                roomId: widget.roomId,
-                                subagentOf: m.senderId == null
-                                    ? null
-                                    : subagentParentById[m.senderId],
-                                onTapCard: _openCardRef,
-                                devMode: config.devMode,
-                              ),
-                            ));
+                            return buildItem(m, isTarget: m.seq == _highlightSeq);
                           },
                         ),
                       ),
@@ -1239,57 +1319,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     return list;
                   },
                 ),
-                if (_newWhileAway > 0)
-                  Positioned(
-                    bottom: 16,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(999),
-                        onTap: _scrollToBottom,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: s.bgCard,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                              color: UepColors.gold.withValues(alpha: .35),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: .45),
-                                blurRadius: 30,
-                                offset: const Offset(0, 12),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                AppLocalizations.of(context).chatNewMessages(_newWhileAway),
-                                style: UepText.mono(
-                                  size: 10.5,
-                                  color: UepColors.gold,
-                                  letterSpacing: 1.2),
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                '↓',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: UepColors.gold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                if (_preview != null || _awayFromBottom || _newWhileAway > 0)
+                  JumpLatestButton(
+                    unread: _newWhileAway,
+                    onTap: _scrollToBottom,
                   ),
               ],
             ),
@@ -1360,6 +1393,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               limits: detailAsync.value?.limits ?? const ServerLimits(),
               youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
               isOps: room?.isOps ?? false,
+              onFocusRun: _focusRunReport,
             ),
           ),
         ),
@@ -1403,6 +1437,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 limits: detailAsync.value?.limits ?? const ServerLimits(),
                 youAreAdmin: detailAsync.value?.youAreAdmin ?? false,
                 isOps: isOps,
+                onFocusRun: _focusRunReport,
               ),
             ),
           ],
@@ -2046,6 +2081,7 @@ class _MembersPanel extends ConsumerStatefulWidget {
     required this.youAreAdmin,
     this.limits = const ServerLimits(),
     this.isOps = false,
+    this.onFocusRun,
   });
 
   final String roomId;
@@ -2060,6 +2096,9 @@ class _MembersPanel extends ConsumerStatefulWidget {
   /// 這是工作房（`room.kind == 'ops'`）。回報區只在這種房出現——其他房
   /// 沒有 run，掛一個永遠空的區塊只是佔位。
   final bool isOps;
+
+  /// 點回報卡時，請聊天列表跳到那一輪對應的訊息。
+  final ValueChanged<AgentRun>? onFocusRun;
 
   @override
   ConsumerState<_MembersPanel> createState() => _MembersPanelState();
@@ -2475,7 +2514,10 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
               decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: s.line)),
               ),
-              child: RunReportPanel(roomId: widget.roomId),
+              child: RunReportPanel(
+                roomId: widget.roomId,
+                onFocusRun: widget.onFocusRun,
+              ),
             ),
           ),
         // 沒有任何管理員的房（creator_session_key 為 NULL 的舊房）——
