@@ -23,6 +23,7 @@ import '../../widgets/stage_files.dart';
 import '../../widgets/uep_button.dart';
 import 'board_action_feedback.dart';
 import '../ops/ops_actions.dart';
+import 'board_objective_description.dart';
 import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
@@ -1465,12 +1466,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     if (o.isInbox) _inboxPageBar(context, snap, o),
                     if (o.description.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 620),
-                        child: Text(o.description,
-                            style: UepText.serif(
-                                size: 14, color: s.inkSoft, height: 1.85)),
-                      ),
+                      ObjectiveDescription(text: o.description),
                     ],
                   ],
                 ),
