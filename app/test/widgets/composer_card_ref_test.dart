@@ -248,7 +248,8 @@ void main() {
       // 用群組 tag 的那次會看起來像沒 tag 到
       await tester.pumpWidget(wrap(cards: cards));
       await type(tester, '@agents 開工');
-      expect(find.textContaining('會 tag 到：agents'), findsOneWidget);
+      // 群組以中文顯示（艾斯維爾 11/11）
+      expect(find.textContaining('會 tag 到：全部 agent'), findsOneWidget);
     });
   });
 }
