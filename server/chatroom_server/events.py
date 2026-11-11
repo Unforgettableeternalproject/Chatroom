@@ -32,6 +32,36 @@ class RoomEvents:
                 return False
 
 
+class InboxBus:
+    """通知收件匣的即時通道（`/ws/inbox`）。
+
+    與 `RoomEvents`／`ReactionBus` 分開：收件匣跨房、綁收件人（session_key
+    或 `__host__`），不屬於任何一間房。payload 只放「哪個收件人有動靜」，
+    訂閱端自己去 DB 算未讀數（DB 仍是唯一真相）。
+    """
+
+    def __init__(self) -> None:
+        self._subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
+
+    def subscribe(self, keys: set[str]) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        for k in keys:
+            self._subs[k].add(q)
+        return q
+
+    def unsubscribe(self, keys: set[str], q: asyncio.Queue) -> None:
+        for k in keys:
+            subs = self._subs.get(k)
+            if subs is not None:
+                subs.discard(q)
+                if not subs:
+                    self._subs.pop(k, None)
+
+    def publish(self, recipient_key: str, latest_id: int | None) -> None:
+        for q in list(self._subs.get(recipient_key, ())):
+            q.put_nowait((recipient_key, latest_id))
+
+
 class ReactionBus:
     """表情回應的即時通道，**刻意與 RoomEvents 分開**。
 

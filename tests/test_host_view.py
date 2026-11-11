@@ -102,12 +102,11 @@ async def test_host_view_sees_and_reads_everything(tmp_path):
             assert any(m["content"] == "祕密" for m in msgs["messages"])
 
 
-async def test_host_view_cannot_change_room_settings(tmp_path):
-    """**主持人是旁觀者**（艾斯維爾 2026-09-23）：不是房間的實質成員，
-    房間設定一律只有房主改得動——連房名都不行。
-
-    封存／解除封存、掛接任務板（更換板的後半段）同屬房間設定。要管一間
-    別人的房，走 `admin/claim` 把管理權收過來，之後就是房主本人在操作。
+async def test_host_view_overrides_room_settings(tmp_path):
+    """**主持人 override 所有管理操作**（艾斯維爾 2026-11-11，推翻
+    2026-09-23 的「主持人是旁觀者」）：改名、主題、封存、解除封存都不必
+    先 `admin/claim`。不開放的只有編輯他人訊息與以他人身分發言
+    （見 `test_host_override.py`）。
     """
     app, client = await _client(tmp_path, "bystander")
     async with client:
@@ -117,26 +116,31 @@ async def test_host_view_cannot_change_room_settings(tmp_path):
 
             r = await client.patch(f"/api/rooms/{rid}", json={"name": "改"},
                                    headers=HOST)
-            assert r.status_code == 403, r.text
+            assert r.status_code == 200, r.text
             r = await client.post(f"/api/rooms/{rid}/topic",
                                   json={"topic": "改"}, headers=HOST)
+            assert r.status_code == 200, r.text
+            # 對照組：沒帶主持人標頭的路人照舊 403
+            r = await client.patch(f"/api/rooms/{rid}", json={"name": "路人"},
+                                   headers={"X-Session-Key": "stranger"})
             assert r.status_code == 403, r.text
-            # 封存：主持人不是成員，不能直接封，也不能提案
+            # 封存：主持人直接封，不再變成提案
             r = await client.post(f"/api/rooms/{rid}/archive", headers=HOST)
-            assert r.status_code in (401, 403), r.text
+            assert r.status_code == 200, r.text
+            assert r.json()["archived"] is True
             det = (await client.get(f"/api/rooms/{rid}", headers=HOST)).json()
-            assert det["room"]["status"] == "active"
-            assert det["room"]["name"] == "房"
+            assert det["room"]["status"] == "archived"
+            assert det["room"]["name"] == "改"
 
             # 解除封存也一樣
-            await client.post(f"/api/rooms/{rid}/archive",
-                              headers={"X-Session-Key": "someone-else"})
             r = await client.post(f"/api/rooms/{rid}/unarchive", headers=HOST)
-            assert r.status_code in (401, 403), r.text
+            assert r.status_code == 200, r.text
+            det = (await client.get(f"/api/rooms/{rid}", headers=HOST)).json()
+            assert det["room"]["status"] == "active"
 
 
-async def test_host_cannot_attach_a_board_to_someone_elses_room(tmp_path):
-    """掛接要同時是房主——主持人視角不再豁免房這一側。"""
+async def test_host_can_attach_a_board_to_someone_elses_room(tmp_path):
+    """掛接的房這一側也由主持人 override（2026-11-11 推翻 2026-09-23）。"""
     app, client = await _client(tmp_path, "bystander-board")
     async with client:
         async with app.router.lifespan_context(app):
@@ -148,6 +152,13 @@ async def test_host_cannot_attach_a_board_to_someone_elses_room(tmp_path):
             r = await client.post(
                 f"/api/boards/{bid}/rooms/{rid}",
                 headers={**HOST, "X-Session-Key": "host-device"})
+            assert r.status_code == 200, r.text
+            # 對照組：沒帶主持人標頭的人（雖是板 owner）仍不是房主
+            rid2 = (await client.post("/api/rooms", json={
+                "name": "房2", "session_key": "someone-else"})).json()["id"]
+            r = await client.post(
+                f"/api/boards/{bid}/rooms/{rid2}",
+                headers={"X-Session-Key": "host-device"})
             assert r.status_code == 403, r.text
             assert r.json()["detail"]["code"] == "not_room_admin"
 
@@ -163,9 +174,9 @@ async def test_ownerless_room_is_rescued_by_claiming_it(tmp_path):
             await app.state.db.execute(
                 "UPDATE room SET creator_session_key='' WHERE id=?", (rid,))
             await app.state.db.commit()
-            # 主持人視角本身不再能封存
-            assert (await client.post(f"/api/rooms/{rid}/archive",
-                                      headers=HOST)).status_code != 200
+            # 主持人視角可直接改（2026-11-11），claim 則是把房「真的收成自己的」
+            assert (await client.patch(f"/api/rooms/{rid}", json={"name": "收"},
+                                       headers=HOST)).status_code == 200
             assert (await client.post(
                 f"/api/rooms/{rid}/admin/claim",
                 headers={**HOST, "X-Session-Key": "my-device"})
@@ -295,12 +306,11 @@ async def test_host_can_delete_someone_elses_room(tmp_path):
                                         headers=HOST)).status_code == 200
 
 
-async def test_host_view_still_refuses_room_owner_actions(tmp_path):
-    """刪除（已封存的房）是主持人視角唯一涵蓋的房間動作。
+async def test_host_view_may_act_as_room_owner(tmp_path):
+    """主持人 override 房主動作（2026-11-11，推翻先前「只涵蓋刪除」的界線）。
 
-    「清掉這台 Hub 上的東西」是主持人的份內事；「以別人的房主身分行事」
-    （改說話方式、改鎖定狀態、踢別人房裡的人）不是。這條界線一鬆，
-    主持人就從「機器的擁有者」變成「所有房間的房主」。
+    改說話方式、改鎖定狀態、踢別人房裡的人都放行；沒帶主持人標頭的路人
+    照舊被擋（見 `test_host_override.py` 的對照組）。
     """
     app, client = await _client(tmp_path, "no-owner-acts")
     async with client:
@@ -314,14 +324,14 @@ async def test_host_view_still_refuses_room_owner_actions(tmp_path):
 
             r = await client.post(f"/api/rooms/{rid}/visibility",
                                   json={"visibility": "private"}, headers=HOST)
-            assert r.status_code == 403, r.text
+            assert r.status_code == 200, r.text
             r = await client.post(f"/api/rooms/{rid}/style",
                                   json={"style": "concise"}, headers=HOST)
-            assert r.status_code == 403, r.text
+            assert r.status_code == 200, r.text
             r = await client.post(
                 f"/api/rooms/{rid}/participants/{me['participant_id']}/kick",
                 headers=HOST)
-            assert r.status_code in (401, 403), r.text
+            assert r.status_code == 200, r.text
 
 
 # ---------- 接管管理權 ----------

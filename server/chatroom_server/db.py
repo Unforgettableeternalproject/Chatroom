@@ -50,7 +50,12 @@ CREATE TABLE IF NOT EXISTS room (
     -- 沒有 agent 時要不要自動封存（每房開關，預設開）。
     -- 預設 1：舊房升級後行為不變（加欄的 DEFAULT 會讓既有列一律是 1）。
     -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
-    auto_archive INTEGER NOT NULL DEFAULT 1
+    auto_archive INTEGER NOT NULL DEFAULT 1,
+    -- 主持人封存的記錄（艾斯維爾 2026-11-11 裁決：主持人可 override 所有
+    -- 管理操作）。被主持人封存的房，建立者仍可解封，但解封會寄通知到主持人
+    -- 收件匣。⚠️ **這兩欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    archived_by_host INTEGER NOT NULL DEFAULT 0,
+    archive_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -768,6 +773,40 @@ CREATE INDEX IF NOT EXISTS idx_watch_notice_inbox
 CREATE INDEX IF NOT EXISTS idx_board_watch_actor
     ON board_watch(actor_key, board_id);
 
+-- ── 通知中心（統一收件匣）──────────────────────────────────────────
+-- 取代 `board_watch_notice`（DATA_VERSION 9 把舊資料搬進來，舊表保留但不再
+-- 寫入）。收件人綁 session_key（actor_key），`__host__` 是 Hub 全域主持人
+-- 收件匣的特殊值。
+--
+-- 🔑 **刻意沒有外鍵**：主持人刪房、刪板的通知就是要在房／板消失之後還讀得
+-- 到，所以名稱快照在 payload_json（room_name / board_name），讀取時優先用
+-- 現存的名字。id 用遞增整數：`before_id` 分頁需要可排序的游標。
+CREATE TABLE IF NOT EXISTS notification (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_key TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    room_id       TEXT NOT NULL DEFAULT '',
+    board_id      TEXT NOT NULL DEFAULT '',
+    item_kind     TEXT NOT NULL DEFAULT '',
+    item_id       TEXT NOT NULL DEFAULT '',
+    item_title    TEXT NOT NULL DEFAULT '',
+    actor_key     TEXT NOT NULL DEFAULT '',
+    actor_name    TEXT NOT NULL DEFAULT '',
+    -- human / host / agent / system；舊資料遷移進來的留空字串（說不出來）
+    actor_kind    TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    payload_json  TEXT NOT NULL DEFAULT '{}',
+    count         INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    read_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notification_inbox
+    ON notification(recipient_key, read_at, id);
+CREATE INDEX IF NOT EXISTS idx_notification_merge
+    ON notification(recipient_key, kind, item_kind, item_id)
+    WHERE read_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 
@@ -997,6 +1036,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 自動封存開關。既有房一律補 1（開）：那正是這個欄位存在之前所有房間
     # 的實際行為，補成 0 會讓升級一次就停掉所有房的自動封存
     ("room", "auto_archive", "auto_archive INTEGER NOT NULL DEFAULT 1"),
+    ("room", "archived_by_host",
+     "archived_by_host INTEGER NOT NULL DEFAULT 0"),
+    ("room", "archive_reason", "archive_reason TEXT NOT NULL DEFAULT ''"),
     # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
     # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
     ("runner", "private_projects",
@@ -1521,7 +1563,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 8
+DATA_VERSION = 9
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1630,6 +1672,24 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         await db.execute(
             "UPDATE agent_run SET legacy=1"
             " WHERE kind IN ('release','release_fix')")
+    if version < 9:
+        # 追蹤收件匣搬進統一的 notification 表。舊表保留（刪板時照舊會清它），
+        # 只是不再寫入。`board_seq` 與「這是追蹤通知」的標記收在 payload_json，
+        # 舊的 `/api/board/notices` 相容端點靠它還原原本的欄位。
+        # 重跑不會重複：版次只前進，且 payload 帶 migrated_from 當去重鍵。
+        await db.execute(
+            "INSERT INTO notification (recipient_key, kind, board_id,"
+            " item_kind, item_id, item_title, actor_name, actor_kind,"
+            " payload_json, count, created_at, updated_at, read_at)"
+            " SELECT n.actor_key, n.event_type, n.board_id, n.item_kind,"
+            " n.item_id, n.item_title, n.actor_name, '',"
+            " json_object('src','watch','board_seq',n.board_seq,"
+            "             'migrated_from',n.id),"
+            " 1, n.created_at, n.created_at, n.read_at"
+            " FROM board_watch_notice n"
+            " WHERE NOT EXISTS (SELECT 1 FROM notification x"
+            "   WHERE json_extract(x.payload_json,'$.migrated_from') = n.id)"
+            " ORDER BY n.created_at, n.rowid")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 
