@@ -5815,6 +5815,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                 raise _err(500, "seq_without_scope",
                            "領號時既沒有房也沒有板，這是呼叫端的錯")
             return await _next_seq_for_board(board_id)
+        # 🔴 **有 board_id 就走板軸，不看 room_id 現在掛不掛板。** 卡與階段的
+        # `room_id` 只是建立當時的 provenance：那間房之後解除掛接、甚至整列
+        # 被刪，`_board_for_room` 都會回 None，退到下面的房軸就找不到 room 列
+        # ⇒ `row` 是 None ⇒ 500（開卡 500，線上 traceback）。
+        if (board_id or "").strip():
+            return await _next_seq_for_board(board_id)
         board = await _board_for_room(room_id)
         if board is None:
             # 還沒換軸的房（沒有人在它的板上動過任何東西）：維持 v1 的房內水位
@@ -5822,6 +5828,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE room SET board_seq=board_seq+1 WHERE id=?"
                 " RETURNING board_seq", (room_id,))
             row = await cur.fetchone()   # ⚠️ 不是 rowcount：RETURNING 在 fetch 前是 0
+            if row is None:
+                # 無板（呼叫端沒帶 board_id）、房列也不在：沒有任何軸可領號。
+                # 回明確的 4xx，不要讓 TypeError 變成 500
+                raise _err(409, "room_gone",
+                           "這間聊天室已經不存在，也沒有板可以依附，無法寫入")
             return row["board_seq"]
         return await _next_seq_for_board(board["id"])
 
