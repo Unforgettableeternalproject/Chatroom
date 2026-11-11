@@ -2060,6 +2060,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         me = actor_key(actor)
         db = app.state.db
         rn, bn = await _names_for(room_id, board_id)
+        if room_id and not rn and item_kind != "room":
+            # 板物件的 provenance 房已被刪除：通知指向一間不存在的房，點進去
+            # 只有 404。改指板目前的掛接房，沒有就清空（板層級通知本來就沒有房）
+            live = (await _active_rooms_of_board(board_id)
+                    if (board_id or "").strip() else [])
+            room_id = live[0] if live else ""
+            rn, _bn = await _names_for(room_id, "")
         data = dict(payload or {})
         if rn:
             data.setdefault("room_name", rn)
@@ -4166,6 +4173,44 @@ def create_app(config: Config | None = None) -> FastAPI:
             " detached_at IS NULL", (_now(), room_id))
         counts: dict[str, int] = {"board_room_detached": cur.rowcount,
                                   "board_items_kept": moved}
+        # 階段素材掛的附件若屬於這間房，附件列一刪就撞
+        # `board_checklist_file.attachment_id` 的外鍵（整個刪房失敗）。附件
+        # 本體隨房消失，素材掛接沒有東西可指，先摘掉；受影響的階段推進水位
+        # 並留 event（只寫 event，不走通知——這不是某個人動手）
+        gone_files = await (await db.execute(
+            "SELECT f.id AS fid, f.checklist_id AS cid, c.board_id AS bid"
+            " FROM board_checklist_file f"
+            " JOIN attachment a ON a.id = f.attachment_id"
+            " JOIN board_checklist c ON c.id = f.checklist_id"
+            " WHERE a.room_id=?", (room_id,))).fetchall()
+        if gone_files:
+            await db.execute(
+                "DELETE FROM board_checklist_file WHERE id IN (%s)"
+                % ",".join("?" for _ in gone_files),
+                tuple(g["fid"] for g in gone_files))
+            by_board: dict[str, set[str]] = {}
+            for g in gone_files:
+                by_board.setdefault((g["bid"] or "").strip(),
+                                    set()).add(g["cid"])
+            for bid, cids in by_board.items():
+                if not bid:
+                    continue
+                seq = await _next_seq_for_board(bid)
+                for cid in sorted(cids):
+                    await db.execute(
+                        "UPDATE board_checklist SET board_seq=? WHERE id=?",
+                        (seq, cid))
+                await db.execute(
+                    "INSERT INTO board_event (board_id, board_seq,"
+                    " event_type, origin_room_id, item_kind, item_id,"
+                    " payload_json, created_at) VALUES (?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT DO NOTHING",
+                    (bid, seq, "stage_file_removed", room_id, "checklist",
+                     sorted(cids)[0],
+                     json.dumps({"reason": "room_purged",
+                                 "checklists": sorted(cids)},
+                                ensure_ascii=False), _now()))
+            counts["board_checklist_file"] = len(gone_files)
         for table in _ROOM_OWNED_TABLES:
             # 表名是模組內的常數清單，不是外來輸入
             cur = await db.execute(f"DELETE FROM {table} WHERE room_id=?", (room_id,))
@@ -4849,13 +4894,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         held = await (
             await db.execute(
-                "SELECT t.id, t.title, t.claim_name, p.status, p.ephemeral,"
-                " p.role"
+                "SELECT t.id, t.title, t.claim_name, t.board_id, p.status,"
+                " p.ephemeral, p.role"
                 " FROM board_task t JOIN participant p"
                 "   ON p.id = t.claim_participant_id"
                 " JOIN board_checklist c ON c.id = t.checklist_id"
                 " JOIN board_objective o ON o.id = c.objective_id"
-                " WHERE t.room_id=? AND t.claim_state='held' AND p.status!='active'"
+                # 卡的 `t.room_id` 只是建立當時的房。它若已不是這塊板 active
+                # 的掛接房（解除掛接或整間被刪），光比 `t.room_id` 永遠找不到
+                # 這張卡——持有者離開的是**他自己所在的房**（`p.room_id`）
+                " WHERE (t.room_id=? OR (COALESCE(t.board_id,'')<>''"
+                "   AND p.room_id=? AND NOT EXISTS ("
+                "     SELECT 1 FROM board_room br0"
+                "     WHERE br0.board_id=t.board_id AND br0.room_id=t.room_id"
+                "       AND br0.detached_at IS NULL)))"
+                "   AND t.claim_state='held' AND p.status!='active'"
                 # 🔴 已收尾的卡不孤兒化。孤兒的意思是「這件事沒人做了」，
                 # 而 done／cancelled 的事**已經沒有人需要做**——把它標成
                 # orphaned 會產生一個自相矛盾的組合：完成了、而且沒人在做。
@@ -4892,15 +4945,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "           COALESCE(NULLIF(TRIM(t.claim_actor_key), ''),"
                 "                    TRIM(t.claim_session_key))"
                 "   )",
-                (room_id,),
+                (room_id, room_id),
             )
         ).fetchall()
         if not held:
             return []
-        seq = await _next_board_seq(room_id)
         now = _now()
         out = []
+        seqs: dict[str, int] = {}
         for r in held:
+            # 一塊板一個號；沒有板的舊卡走房軸
+            bkey = (r["board_id"] or "").strip()
+            if bkey not in seqs:
+                seqs[bkey] = (await _next_seq_for_board(bkey) if bkey
+                              else await _next_board_seq(room_id))
+            seq = seqs[bkey]
             # subagent 的回收不是「它自己決定離開」，措辭要分開——它掛在
             # 父層底下，父層走了它就跟著走，那不是它的 session 結束
             reason = ("subagent 已回收" if r["ephemeral"]
@@ -6315,6 +6374,47 @@ def create_app(config: Config | None = None) -> FastAPI:
         else:
             await events.notify(row["room_id"])
 
+    async def _active_rooms_of_board(board_id: str) -> list[str]:
+        """這塊板目前 active 的掛接房（依掛上的先後）。
+
+        「目前」＝ `detached_at IS NULL` 且 room 列還在、`status='active'`。
+        房被永久刪除時 `_purge_room` 會標 `detached_at`，所以刪掉的房不會出現。
+        """
+        rows = await (await app.state.db.execute(
+            "SELECT br.room_id FROM board_room br"
+            " JOIN room r ON r.id = br.room_id"
+            " WHERE br.board_id=? AND br.detached_at IS NULL"
+            "   AND r.status='active' ORDER BY br.attached_at",
+            ((board_id or "").strip(),))).fetchall()
+        return [r["room_id"] for r in rows]
+
+    async def _item_home_room(row, me=None) -> str:
+        """板物件需要「一間房」發訊息、驗成員、叫醒時該用哪一間。
+
+        `row["room_id"]` 只是建立當時的 provenance：那間房之後可能解除掛接、
+        封存、甚至被永久刪除（`_purge_room` 只標 `board_room.detached_at`，
+        卡上的 `room_id` 不動）。把它當成「存在的房」去 post 系統訊息會撞
+        `message.room_id` 的外鍵（500），去驗 assignee 會把 B 房的人判成
+        「不是這個聊天室的成員」，去叫醒只會叫到沒人在聽的房。
+
+        順序：provenance 房若仍是這塊板 active 的掛接房就用它（行為不變）→
+        請求者自己所在的房（若也是掛接房）→ 板上第一間 active 掛接房。
+        都沒有回空字串，呼叫端略過而不是 500。還沒換軸的舊卡（沒有
+        `board_id`）沒有板可依附，原樣回 provenance。
+        """
+        rid = (row["room_id"] or "") if "room_id" in row.keys() else ""
+        bid = _row_board_id(row)
+        if not bid:
+            return rid
+        live = await _active_rooms_of_board(bid)
+        if rid in live:
+            return rid
+        mine = (me.get("room_id") or "") if (me is not None and me.get("id")) \
+            else ""
+        if mine in live:
+            return mine
+        return live[0] if live else ""
+
     async def _board_patch(kind: str, item_id: str, fields: dict,
                            participant_id: str | None,
                            session_key: str | None = None,
@@ -6493,12 +6593,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         seq = await _item_seq(parent)
         cid = uuid.uuid4().hex
+        # provenance 房已刪／已解除掛接時，改用板目前的掛接房
+        home = await _item_home_room(parent, me) or parent["room_id"]
         await db.execute(
             "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
             " title, description, created_by, created_by_name,"
             " created_by_actor_key, created_by_kind, board_seq, created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (cid, parent["room_id"], me["board_id"], objective_id,
+            (cid, home, me["board_id"], objective_id,
              body.title.strip(),
              body.description, me["id"], me["display_name"],
              actor_key(me["session_key"]), _me_kind(me), seq, _now()),
@@ -6506,13 +6608,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _record_board_event(
             me["board_id"], seq, "checklist_created",
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
-            origin_room_id=parent["room_id"], item_kind="checklist",
+            origin_room_id=home, item_kind="checklist",
             item_id=cid, payload={"title": body.title.strip()})
         await _commit_with_retry(db)
         await _announce_human_container(
-            parent["room_id"], me, "階段", body.title.strip(),
+            home, me, "階段", body.title.strip(),
             "board_checklist_created", within=parent["title"])
-        await events.notify(parent["room_id"])
+        await _item_notify(parent)
+        await events.notify(home)
         return {"ok": True, "id": cid, "board_seq": seq}
 
     @app.patch("/api/board/checklists/{checklist_id}",
@@ -6854,7 +6957,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 房間身分，完全對不上真正的原因（@測試Novia T11／審核用Codex-2 2026-09-02）
         me = await _board_item_writer(parent, x_participant_id, x_session_key)
         await _assert_container_open("checklist", checklist_id)
-        return await _insert_task(checklist_id, parent["room_id"], body, me)
+        home = await _item_home_room(parent, me) or parent["room_id"]
+        return await _insert_task(checklist_id, home, body, me)
 
     SETTLED = ("done", "cancelled")
 
@@ -7014,6 +7118,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             item_kind="task", item_id=tid,
             payload={"title": body.title.strip()})
         await _commit_with_retry(db)
+        if (me.get("board_id") or "").strip():
+            await _notify_board_rooms(me["board_id"])
         await events.notify(room_id)
         return {"ok": True, "id": tid, "checklist_id": checklist_id,
                 "board_seq": seq}
@@ -7041,8 +7147,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 「某某指定」要寫得出來，就得在指定的當下記——事後從 id 反推不出
             row = await _board_item_or_404("task", task_id)
             me = await _board_item_writer(row, x_participant_id, x_session_key)
-            await _assert_assignee_in_room(body.assignee_participant_id,
-                                           row["room_id"])
+            await _assert_assignee_in_room(
+                body.assignee_participant_id,
+                await _item_home_room(row, me) or row["room_id"])
             fields["assigned_by"] = me["id"]
             fields["assigned_by_name"] = me["display_name"]
         return await _board_patch("task", task_id, fields, x_participant_id,
@@ -7469,16 +7576,19 @@ def create_app(config: Config | None = None) -> FastAPI:
                 keys |= await _board_supervisor_keys(bid, row["room_id"])
             keys.discard(actor_key(me["session_key"]))
 
+            # 來源房已刪／已解除掛接時，留痕改發板目前的掛接房（見
+            # `_item_home_room`）；沒有任何掛接房才真的沒有地方可發
+            src = await _item_home_room(row, me)
             alive = await (await db.execute(
                 "SELECT 1 FROM room WHERE id=? AND status='active'",
-                (row["room_id"],))).fetchone()
+                (src,))).fetchone()
             present: set[str] = set()
             if alive:
                 here = await (await db.execute(
                     "SELECT display_name, TRIM(session_key) AS sk FROM"
                     " participant WHERE room_id=? AND status='active'"
                     "   AND ephemeral=0",
-                    (row["room_id"],))).fetchall()
+                    (src,))).fetchall()
                 present = {actor_key(p["sk"]) for p in here}
                 names = [p["display_name"] for p in here
                          if actor_key(p["sk"]) in keys]
@@ -7486,7 +7596,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # reply_to，`_post_message` 會把被回覆者自動補進 mentions，
                 # 把「排除執行者」這條規則從下游繞掉。pin 收據踩過同一個坑
                 await _post_message(
-                    row["room_id"], None,
+                    src, None,
                     f"{me['display_name']} 完成了任務「{row['title']}」",
                     kind="system", system_event="board_task_done",
                     mentions=names, reply_mentions_author=False,
@@ -7507,7 +7617,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                     " WHERE br.board_id=? AND br.detached_at IS NULL"
                     "   AND r.status='active' AND br.room_id<>?"
                     " ORDER BY br.attached_at",
-                    (bid, row["room_id"]))).fetchall()
+                    (bid, src))).fetchall()
                 for other in others:
                     if not remaining:
                         break
@@ -7533,7 +7643,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await _inbox_add(
                     sorted(missing), kind="task_done",
                     actor=me["session_key"], actor_name=me["display_name"],
-                    room_id=row["room_id"], board_id=bid, item_kind="task",
+                    room_id=src, board_id=bid, item_kind="task",
                     item_id=task_id, item_title=row["title"],
                     payload={"src": "watch", "board_seq": seq},
                     skip_agents=False)
@@ -8458,7 +8568,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 「未分類」永遠存在：這一頁收掉的同一個交易裡就開下一頁。
             # 撞到 partial unique（別人剛開了）回 None，不需要再做什麼
             if row["kind"] == "inbox":
-                await _new_inbox_page(row["room_id"], _row_board_id(row), me)
+                await _new_inbox_page(
+                    await _item_home_room(row, me) or row["room_id"],
+                    _row_board_id(row), me)
 
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
@@ -8641,7 +8753,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                      "reason": (body.reason or "").strip()})
         new_page = None
         if was_active:
-            made = await _new_inbox_page(row["room_id"], board_id, me)
+            made = await _new_inbox_page(
+                await _item_home_room(row, me) or row["room_id"],
+                board_id, me)
             if made is not None:
                 new_page = made[0]
         await _commit_with_retry(db)
@@ -8846,13 +8960,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         room_id = room["id"]
         counts = {}
         titles = []
+        # 範圍是板不是 `room_id=本房`：卡的 `room_id` 只是建立當時的房
+        attached = await _board_for_room(room_id)
+        scope_sql, scope_args = (
+            ("(board_id=? OR ((board_id='' OR board_id IS NULL)"
+             " AND room_id=?))", (attached["id"], room_id))
+            if attached is not None else ("room_id=?", (room_id,)))
         for kind, table in (("週期", "board_objective"), ("階段", "board_checklist"),
                             ("任務", "board_task")):
             rows = await (
                 await db.execute(
-                    f"SELECT title FROM {table} WHERE room_id=? AND board_seq>?"
-                    " ORDER BY board_seq",
-                    (room_id, room["board_digest_seq"]),
+                    f"SELECT title FROM {table} WHERE {scope_sql}"
+                    " AND board_seq>? ORDER BY board_seq",
+                    (*scope_args, room["board_digest_seq"]),
                 )
             ).fetchall()
             if rows:
@@ -9007,8 +9127,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         ids = [i.id for i in body.items]
         # 兩條 reorder 走**同一個守門**。分別寫的話會漂移，而漂移的那一半
         # 沒有人在看——v1 與 v2 排的是同一批卡
+        # 母體範圍與 v1 讀取（`read_board`）同一份：掛了板就是**板**，不是
+        # `room_id=本房`——卡的 `room_id` 只是建立當時的房，可能是別間甚至已刪
+        attached = await _board_for_room(room_id)
+        scope_sql, scope_args = (
+            ("(board_id=? OR ((board_id='' OR board_id IS NULL)"
+             " AND room_id=?))", (attached["id"], room_id))
+            if attached is not None else ("room_id=?", (room_id,)))
         await _assert_reorder_fullset(table, body.kind, ids,
-                                      "room_id=?", (room_id,))
+                                      scope_sql, scope_args)
         await _assert_reorder_writable(body.kind, ids)
         seq = await _next_board_seq(room_id)
         for item in body.items:
@@ -9195,14 +9322,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "取消指派只有板 owner 或這個聊天室的建立者做得到")
             seq = await _apply_assignment(row, None, "", "", me)
             await _commit_with_retry(db)
-            await events.notify(row["room_id"])
+            await _item_notify(row)
             return {"ok": True, "assigned": False, "cleared": True,
                     "task_id": task_id, "board_seq": seq, "request": None}
         if await _can_assign_directly(row, me, host):
             seq = await _apply_assignment(row, target_pid, target_key,
                                           target_name, me)
             await _commit_with_retry(db)
-            await events.notify(row["room_id"])
+            await _item_notify(row)
             return {"ok": True, "assigned": True, "cleared": False,
                     "task_id": task_id, "board_seq": seq, "request": None}
 
@@ -9233,14 +9360,27 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT * FROM board_task_request WHERE id=?", (rid,))).fetchone()
         # 對方要被叫醒——請求躺在那裡沒有人看，與沒有請求是同一回事
         if target_pid:
-            await _post_message(
-                row["room_id"], None,
-                f"{me['display_name']} 請你接手「{row['title']}」"
-                + (f"：{body.note.strip()}" if body.note.strip() else ""),
-                kind="system", system_event="board_task_requested",
-                mentions=[target_name] if target_name else None,
-                reply_mentions_author=False)
-            await events.notify(row["room_id"])
+            # 訊息發到對方所在的掛接房（mention 比對的是房內名稱）；對方不在
+            # 任何掛接房就退回卡的 home 房。卡的 provenance 房可能早就沒了
+            msg_room = await _item_home_room(row, me)
+            prow = await (await db.execute(
+                "SELECT room_id FROM participant WHERE id=?"
+                " AND status='active'", (target_pid,))).fetchone()
+            if prow is not None:
+                bid = _row_board_id(row)
+                if (bid and prow["room_id"]
+                        in await _active_rooms_of_board(bid)) \
+                        or (not bid and prow["room_id"] == msg_room):
+                    msg_room = prow["room_id"]
+            if msg_room:
+                await _post_message(
+                    msg_room, None,
+                    f"{me['display_name']} 請你接手「{row['title']}」"
+                    + (f"：{body.note.strip()}" if body.note.strip() else ""),
+                    kind="system", system_event="board_task_requested",
+                    mentions=[target_name] if target_name else None,
+                    reply_mentions_author=False)
+            await _item_notify(row)
         return {"ok": True, "assigned": False, "task_id": task_id,
                 "request": _task_request_public(created)}
 
@@ -9288,7 +9428,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             seq = await _apply_assignment(
                 row, me["id"], me["session_key"], me["display_name"], me)
         await _commit_with_retry(db)
-        await events.notify(row["room_id"])
+        await _item_notify(row)
         return {"ok": True, "accepted": bool(body.accept),
                 "task_id": req["task_id"], "board_seq": seq}
 
