@@ -2619,7 +2619,7 @@
   "@helpBoard1": {
     "description": "說明：板與房的關係"
   },
-  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段都收尾後才能送審，未分類的卡也要先收尾。",
+  "helpBoard2": "結構是週期 → 階段 → 任務。所有階段都收尾後才能送審。",
   "@helpBoard2": {
     "description": "說明：任務板結構"
   },
@@ -3409,71 +3409,6 @@
       }
     }
   },
-  "boardWatchNoticeSomeCard": "一張卡",
-  "@boardWatchNoticeSomeCard": {
-    "description": "追蹤通知：沒有卡名時的代稱"
-  },
-  "boardWatchNoticeWatchedBoard": "你追蹤的板",
-  "@boardWatchNoticeWatchedBoard": {
-    "description": "追蹤通知：沒有板名時的代稱"
-  },
-  "boardWatchNoticeTaskDone": "{target} 完成了",
-  "@boardWatchNoticeTaskDone": {
-    "description": "追蹤通知：卡完成",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeTaskCancelled": "{target} 被取消了",
-  "@boardWatchNoticeTaskCancelled": {
-    "description": "追蹤通知：卡被取消",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeTaskReopened": "{target} 又重新打開了",
-  "@boardWatchNoticeTaskReopened": {
-    "description": "追蹤通知：卡重新打開",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeDeliveryDegraded": "{target} 不再有聊天室，通知改為只能自己回來看",
-  "@boardWatchNoticeDeliveryDegraded": {
-    "description": "追蹤通知：板沒有掛接房了",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeDeliveryRestored": "{target} 又有聊天室了，會重新叫醒你",
-  "@boardWatchNoticeDeliveryRestored": {
-    "description": "追蹤通知：板又有掛接房了",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeOther": "{target} 有變動（{event}）",
-  "@boardWatchNoticeOther": {
-    "description": "追蹤通知：不認得的事件",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      },
-      "event": {
-        "type": "String"
-      }
-    }
-  },
   "boardAttachTitle": "這間房要掛哪塊任務板",
   "@boardAttachTitle": {
     "description": "掛接任務板對話框標題"
@@ -3719,31 +3654,6 @@
   "boardTaskEditDescription": "敘述",
   "@boardTaskEditDescription": {
     "description": "編輯任務卡：敘述欄位"
-  },
-  "boardWatchNoticesTitle": "我在等的東西",
-  "@boardWatchNoticesTitle": {
-    "description": "追蹤收件匣標題"
-  },
-  "boardWatchMarkAllRead": "全部標為已讀",
-  "@boardWatchMarkAllRead": {
-    "description": "追蹤收件匣：全部標為已讀"
-  },
-  "boardWatchNoticesEmpty": "沒有在等的東西。",
-  "@boardWatchNoticesEmpty": {
-    "description": "追蹤收件匣：空狀態"
-  },
-  "boardWatchNoUnread": "沒有可以標記的未讀",
-  "@boardWatchNoUnread": {
-    "description": "追蹤收件匣：沒有未讀"
-  },
-  "boardWatchMarkedRead": "{count} 筆標為已讀",
-  "@boardWatchMarkedRead": {
-    "description": "追蹤收件匣：標記了幾筆",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
   },
   "boardTrackTitle": "誰在做什麼",
   "@boardTrackTitle": {
@@ -4187,6 +4097,18 @@
         "type": "String"
       }
     }
+  },
+  "chatTagGroupAll": "所有人",
+  "@chatTagGroupAll": {
+    "description": "「會 tag 到」預覽：@all"
+  },
+  "chatTagGroupAgents": "全部 agent",
+  "@chatTagGroupAgents": {
+    "description": "「會 tag 到」預覽：@agents"
+  },
+  "chatTagGroupHumans": "全部人類",
+  "@chatTagGroupHumans": {
+    "description": "「會 tag 到」預覽：@humans"
   },
   "chatTagFromReply": "{name}（回覆）",
   "@chatTagFromReply": {
@@ -4679,22 +4601,17 @@
   "@chatMessageGone": {
     "description": "跳轉目標訊息已不存在"
   },
-  "chatFocusTooOld": "那則訊息太舊了，已載入 {count} 則仍沒跳到——再往上捲一段後重試",
-  "@chatFocusTooOld": {
-    "description": "往回載仍找不到目標訊息",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
-  },
-  "chatFocusNotFound": "找不到那則訊息",
-  "@chatFocusNotFound": {
-    "description": "找不到目標訊息"
-  },
   "chatFocusMisaligned": "跳轉沒對準那則訊息，再往上捲一段後重試",
   "@chatFocusMisaligned": {
     "description": "跳轉沒對準"
+  },
+  "chatFocusLoadFailed": "載入歷史訊息失敗，請重試",
+  "@chatFocusLoadFailed": {
+    "description": "跳轉往回載入歷史時出錯"
+  },
+  "chatJumpLatest": "回到最新",
+  "@chatJumpLatest": {
+    "description": "聊天列表離開底部時的按鈕；遠距跳轉預覽中點它回到最新"
   },
   "chatDropIsFolder": "{name} 是資料夾，未加入",
   "@chatDropIsFolder": {
@@ -5681,22 +5598,9 @@
       }
     }
   },
-  "boardInboxOnly": "通知要自己來看",
-  "@boardInboxOnly": {
-    "description": "板沒有活的掛接房"
-  },
   "boardTaskClaimedCount": "{count} 進行中",
   "@boardTaskClaimedCount": {
     "description": "板卡上進行中的卡數",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
-  },
-  "boardWatchNoticesTitleUnread": "我在等的東西（{count} 筆新的）",
-  "@boardWatchNoticesTitleUnread": {
-    "description": "追蹤收件匣入口（有未讀）",
     "placeholders": {
       "count": {
         "type": "int"
@@ -6083,6 +5987,71 @@
   "boardShowOrphansOnly": "只看孤兒 →",
   "@boardShowOrphansOnly": {
     "description": "孤兒橫幅：只看孤兒"
+  },
+  "boardInboxCurrentPage": "目前",
+  "@boardInboxCurrentPage": {
+    "description": "未分類週期的頁面切換：目前使用中的那頁"
+  },
+  "boardInboxPageLabel": "第 {n} 頁 · {date} 完成",
+  "@boardInboxPageLabel": {
+    "description": "未分類歷史頁：順序號與完成日期（MM/DD）",
+    "placeholders": {
+      "n": {
+        "type": "int"
+      },
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "boardInboxPageLabelNoDate": "第 {n} 頁",
+  "@boardInboxPageLabelNoDate": {
+    "description": "未分類歷史頁：只有順序號（沒有完成時間）",
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "boardInboxPagesTooltip": "切換頁面",
+  "@boardInboxPagesTooltip": {
+    "description": "未分類頁面切換鈕的提示"
+  },
+  "boardInboxSplit": "拆成獨立週期",
+  "@boardInboxSplit": {
+    "description": "把未分類的一頁拆成獨立週期（按鈕與對話框標題）"
+  },
+  "boardInboxSplitNameLabel": "週期名稱",
+  "@boardInboxSplitNameLabel": {
+    "description": "拆頁對話框的名稱欄"
+  },
+  "boardInboxSplitConfirm": "拆出",
+  "@boardInboxSplitConfirm": {
+    "description": "拆頁對話框的確認鈕"
+  },
+  "boardErrorTitleRequired": "請填週期名稱。",
+  "@boardErrorTitleRequired": {
+    "description": "Hub 回 title_required 時的轉述，也用於拆頁對話框的欄位檢查"
+  },
+  "boardErrorInboxTitleReserved": "「未分類」是保留名稱，請換一個。",
+  "@boardErrorInboxTitleReserved": {
+    "description": "Hub 回 inbox_title_reserved 時的轉述，也用於拆頁對話框的欄位檢查"
+  },
+  "boardErrorNotInboxPage": "這個週期不是未分類頁。",
+  "@boardErrorNotInboxPage": {
+    "description": "Hub 回 not_inbox_page 時的轉述"
+  },
+  "boardErrorInboxPageNotCancellable": "未分類頁不能取消。",
+  "@boardErrorInboxPageNotCancellable": {
+    "description": "Hub 回 inbox_page_not_cancellable 時的轉述"
+  },
+  "boardErrorInboxRenameForbidden": "未分類不能改名，請拆成獨立週期。",
+  "@boardErrorInboxRenameForbidden": {
+    "description": "Hub 回 inbox_rename_forbidden 時的轉述"
+  },
+  "boardCloseoutInboxEmpty": "這一頁還沒有事項",
+  "@boardCloseoutInboxEmpty": {
+    "description": "送審提示：未分類頁沒有任何階段"
   },
   "boardCloseUncategorised": "收尾未分類",
   "@boardCloseUncategorised": {
@@ -6687,6 +6656,34 @@
   "helpChatStyle": "頂欄選單決定 agent 在這間房怎麼說話：詳細、精確、親和，或自訂一段指示。只有房間管理者能改。",
   "@helpChatStyle": {
     "description": "說明：房間說話方式"
+  },
+  "helpChatJumpReport": "點回報清單的一筆，會跳到該 agent 的最後一則訊息（沒有就跳到對應的系統訊息），並呼吸高亮一下。",
+  "@helpChatJumpReport": {
+    "description": "說明頁文案"
+  },
+  "helpChatJumpFar": "跳到還沒載入、或離最新很遠的訊息時，不會一路往回載，而是顯示它前後各 6 則的預覽。按「回到最新」回到底部；離開底部就會出現，有新訊息時會顯示有幾則。",
+  "@helpChatJumpFar": {
+    "description": "說明頁文案"
+  },
+  "helpBoardInboxLead": "未分類",
+  "@helpBoardInboxLead": {
+    "description": "說明條目的粗體小標"
+  },
+  "helpBoardInbox1": "每塊板只有一個「未分類」，以分頁運作，同一時間只有一頁使用中。沒指定階段的卡都落在這一頁。",
+  "@helpBoardInbox1": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox2": "使用中的頁和一般週期一樣收尾、送審、確認、完成。完成後立刻開下一頁。",
+  "@helpBoardInbox2": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。",
+  "@helpBoardInbox3": {
+    "description": "說明頁文案：未分類分頁"
+  },
+  "helpBoardInbox4": "任一頁都可以「拆成獨立週期」：填名稱即可，狀態沿用該頁。拆走使用中的頁會自動補一個新頁。一般週期不能取名「未分類」。",
+  "@helpBoardInbox4": {
+    "description": "說明頁文案：未分類分頁"
   },
   "helpBoardSupLead": "Supervisor",
   "@helpBoardSupLead": {
@@ -7392,9 +7389,17 @@
   "@boardReleaseInProgress": {
     "description": "409 release_in_progress"
   },
-  "boardReleaseLastFailed": "上次上板失敗",
+  "boardReleaseLastFailed": "上板失敗，打回後重新送審即可再次上板",
   "@boardReleaseLastFailed": {
     "description": "已確認的週期上次上板失敗，顯示在上板按鈕旁"
+  },
+  "boardReleaseBlockedReopened": "上板受阻，已打回",
+  "@boardReleaseBlockedReopened": {
+    "description": "上板 agent 遇嚴重阻擋，已把週期打回 active"
+  },
+  "boardCompleteNeedsRelease": "上板成功後才能結束",
+  "@boardCompleteNeedsRelease": {
+    "description": "週期有上板記錄但最近一筆沒成功時，結束週期按鈕停用的說明；也是 409 release_not_done 的轉述"
   },
   "boardReleaseRepoNotEligible": "有 repo 不能上板了，重開一次對話框",
   "@boardReleaseRepoNotEligible": {
@@ -7436,6 +7441,43 @@
   "boardErrorObjectiveClosed": "週期已收尾，先打回才能改動。",
   "@boardErrorObjectiveClosed": {
     "description": "Hub 回 409 objective_closed 時的轉述"
+  },
+  "boardErrorObjectiveAlreadyDone": "週期已經結束了。",
+  "@boardErrorObjectiveAlreadyDone": {
+    "description": "Hub 回 ObjectiveAlreadyDone 類錯誤碼時的轉述"
+  },
+  "boardErrorReleaseInProgress": "上板進行中，等它結束。",
+  "@boardErrorReleaseInProgress": {
+    "description": "Hub 回 ReleaseInProgress 類錯誤碼時的轉述"
+  },
+  "boardChecklistMoved": "已移到〈{name}〉",
+  "@boardChecklistMoved": {
+    "description": "階段拖到其他週期成功",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "boardErrorChecklistHasActiveRun": "派工進行中，先等它結束。",
+  "@boardErrorChecklistHasActiveRun": {
+    "description": "Hub 回 ChecklistHasActiveRun 類錯誤碼時的轉述"
+  },
+  "boardErrorChecklistUncategorisedImmovable": "「未分類」不能移動。",
+  "@boardErrorChecklistUncategorisedImmovable": {
+    "description": "Hub 回 ChecklistUncategorisedImmovable 類錯誤碼時的轉述"
+  },
+  "boardErrorMoveSameObjective": "階段已經在這個週期了。",
+  "@boardErrorMoveSameObjective": {
+    "description": "Hub 回 MoveSameObjective 類錯誤碼時的轉述"
+  },
+  "boardErrorMoveCrossBoard": "不能移到其他看板的週期。",
+  "@boardErrorMoveCrossBoard": {
+    "description": "Hub 回 MoveCrossBoard 類錯誤碼時的轉述"
+  },
+  "boardErrorReleaseLegacyClosed": "這個週期的舊上板紀錄已結案",
+  "@boardErrorReleaseLegacyClosed": {
+    "description": "Hub 回 409 release_legacy_closed 的轉述"
   },
   "boardObjectiveFrozenDone": "週期已完成，無法修改",
   "@boardObjectiveFrozenDone": {
@@ -7484,6 +7526,26 @@
   "settingsCloseToTrayHint": "從系統匣圖示可再開啟或結束",
   "@settingsCloseToTrayHint": {
     "description": "上述開關的說明"
+  },
+  "settingsDevModeLabel": "開發者模式",
+  "@settingsDevModeLabel": {
+    "description": "設定 → 個人化：顯示可複製 ID 的開關"
+  },
+  "settingsDevModeHint": "顯示房間、任務與訊息的 ID，方便溝通",
+  "@settingsDevModeHint": {
+    "description": "上述開關的說明"
+  },
+  "settingsCelebrationLabel": "慶祝模式",
+  "@settingsCelebrationLabel": {
+    "description": "設定 → 個人化：事件發生時放彩花與音效的開關"
+  },
+  "settingsCelebrationHint": "成員加入、任務完成或派工成功時放彩花",
+  "@settingsCelebrationHint": {
+    "description": "上述開關的說明"
+  },
+  "devCopyMessageId": "複製訊息 ID",
+  "@devCopyMessageId": {
+    "description": "開發者模式：訊息右鍵選單，複製 Message.id"
   },
   "trayMenuOpen": "開啟 Chatroom",
   "@trayMenuOpen": {
@@ -8072,7 +8134,7 @@
   "@helpChatRow3A": {
     "description": "說明頁文案"
   },
-  "helpChatRow3C": "送出時會換成當下在房裡的成員名字",
+  "helpChatRow3C": "送出時會換成當下在房裡的成員名字。預覽只顯示「全部 agent」「全部人類」「所有人」，不另列被涵蓋的成員",
   "@helpChatRow3C": {
     "description": "說明頁文案"
   },
@@ -8224,7 +8286,7 @@
   "@helpBoardCardTaskSub": {
     "description": "說明頁文案"
   },
-  "helpBoardCardTaskBody": "可以認領、指派、搬移。未分類的卡也要先收尾，週期才能送審。",
+  "helpBoardCardTaskBody": "可以認領、指派、搬移。認領時若已被別人領走，會顯示是誰。",
   "@helpBoardCardTaskBody": {
     "description": "說明頁文案"
   },
@@ -8286,6 +8348,18 @@
   },
   "helpBoardMoveRow5C": "一律排在最下面，一般項目排前面",
   "@helpBoardMoveRow5C": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6A": "把階段移到其他週期",
+  "@helpBoardMoveRow6A": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6B": "在階段標題列按住約 0.3 秒再拖，放到左欄某個進行中的週期",
+  "@helpBoardMoveRow6B": {
+    "description": "說明頁文案"
+  },
+  "helpBoardMoveRow6C": "階段連同旗下的卡與附件一起搬過去；派工進行中的階段不能搬",
+  "@helpBoardMoveRow6C": {
     "description": "說明頁文案"
   },
   "helpBoardFrozenCallout": "凍結的週期、唯讀的板，以及目前狀態不能搬動的卡，都拖不動。",
@@ -8468,7 +8542,7 @@
   "@helpReleaseStep1": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep1Body": "候選 repo 只列本週期內有 run 動過 HEAD、而且設了穩定分支的。已確認的週期也可以事後單獨上板。",
+  "helpReleaseStep1Body": "候選 repo 只列本週期內有 run 動過 HEAD、而且設了穩定分支的。已確認、還沒結束的週期也可以補上板。",
   "@helpReleaseStep1Body": {
     "description": "說明頁文案"
   },
@@ -8480,11 +8554,11 @@
   "@helpReleaseStep2Body": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep3": "失敗了就重試",
+  "helpReleaseStep3": "失敗了",
   "@helpReleaseStep3": {
     "description": "說明頁文案"
   },
-  "helpReleaseStep3Body": "週期是 verified／done，而且沒上板過或上次沒成功時，會顯示「上板」。上次失敗會另外標示「上次上板失敗」。上板成功或進行中時不顯示。",
+  "helpReleaseStep3Body": "沒有「重新上板」按鈕：把週期打回、重新送審，確認時就會再上板。有上板記錄的週期，要上板成功才能結束。",
   "@helpReleaseStep3Body": {
     "description": "說明頁文案"
   },
@@ -8524,6 +8598,14 @@
   "@helpReleaseRow4B": {
     "description": "說明頁文案"
   },
+  "helpReleaseRow5A": "合併方式設成僅快轉，但快轉不了",
+  "@helpReleaseRow5A": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseRow5B": "自動改用合併 commit，並在結果裡註明原因，不放棄",
+  "@helpReleaseRow5B": {
+    "description": "說明頁文案"
+  },
   "helpReleaseWho": "只有掛著這塊板的工作房裡的人類成員能上板。agent 與 Supervisor 一律會被拒絕。",
   "@helpReleaseWho": {
     "description": "說明頁文案"
@@ -8532,8 +8614,60 @@
   "@helpReleaseSign": {
     "description": "說明頁文案"
   },
-  "helpSecNotifyIntro": "三個入口，各收不同的東西。",
+  "helpReleaseWorktree": "上板在獨立的暫存 worktree 進行，不動你的工作樹。有未提交的變更也照常上板，只上已提交的；worktree 沒清掉就算失敗。",
+  "@helpReleaseWorktree": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseAgent": "每次上板都會派一個專用 agent 收尾：成功就在房裡發上板報告；失敗就自己合併、解衝突、推送。真的上不去時，週期會被打回 active，並新增「上板阻擋」階段，提及人類。",
+  "@helpReleaseAgent": {
+    "description": "說明頁文案"
+  },
+  "helpReleaseDone": "已結束的週期不能上板。舊版本留下的上板紀錄視為已結案，不再計入。",
+  "@helpReleaseDone": {
+    "description": "說明頁文案"
+  },
+  "helpSecNotifyIntro": "兩個入口，各收不同的東西。",
   "@helpSecNotifyIntro": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyAgentCallout": "agent 自己的修改不會發通知，派工完成時才通知。",
+  "@helpNotifyAgentCallout": {
+    "description": "說明頁文案"
+  },
+  "helpSecModLabel": "主持人",
+  "@helpSecModLabel": {
+    "description": "說明頁分節小標：主持人"
+  },
+  "helpSecModTitle": "主持人模式",
+  "@helpSecModTitle": {
+    "description": "說明頁分節標題：主持人模式"
+  },
+  "helpSecModIntro": "用主持人憑證開啟後，可以代為處理別人的房間與板。",
+  "@helpSecModIntro": {
+    "description": "說明頁分節簡介：主持人模式"
+  },
+  "helpMod1": "可以處理：封存（直接執行）、解封、改名與房間設定、踢人、刪訊息、處理封存請求、建立與掛接板、工作區綁定，以及任務板與想法板的所有操作。",
+  "@helpMod1": {
+    "description": "說明頁文案"
+  },
+  "helpMod2": "不能編輯別人訊息的內容，也不能用別人的身分發言。",
+  "@helpMod2": {
+    "description": "說明頁文案"
+  },
+  "helpMod3": "刪除房間仍要先封存。",
+  "@helpMod3": {
+    "description": "說明頁文案"
+  },
+  "helpMod4": "每個操作可以填理由（選填，500 字內）。理由會寫進房內的系統訊息，也會通知對方。",
+  "@helpMod4": {
+    "description": "說明頁文案"
+  },
+  "helpMod5": "被主持人封存的房間，建立者仍可以解封，解封時會通知主持人。",
+  "@helpMod5": {
+    "description": "說明頁文案"
+  },
+  "helpMod6": "房主換人時，還沒處理的封存請求會自動取消。",
+  "@helpMod6": {
     "description": "說明頁文案"
   },
   "helpNotifyRow1A": "系統通知",
@@ -8552,24 +8686,12 @@
   "@helpNotifyRow2A": {
     "description": "說明頁文案"
   },
-  "helpNotifyRow2B": "跨房的派工異常：停滯與恢復、逾時、額度受限、執行器上下線",
+  "helpNotifyRow2B": "追蹤的任務與週期；別人改了你建的週期、階段、卡；別人在你的階段加素材或派工、在你的想法板留言或切換狀態；主持人動了你的東西（附理由）；你的階段派工完成、失敗、取消",
   "@helpNotifyRow2B": {
     "description": "說明頁文案"
   },
-  "helpNotifyRow2C": "未讀數字只算比你上次看過更新的幾筆；點一筆會跳到出事的那間房",
+  "helpNotifyRow2C": "數字是未讀數。每則標明來源與觸發者；同一物件 5 分鐘內合併；已讀滿 30 天清除，最多留 500 則",
   "@helpNotifyRow2C": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3A": "板列表的通知鈴鐺",
-  "@helpNotifyRow3A": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3B": "你在等的、追蹤的板的動態",
-  "@helpNotifyRow3B": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3C": "右鍵（行動裝置長按）→「全部標為已讀」；沒有未讀時這一項會停用",
-  "@helpNotifyRow3C": {
     "description": "說明頁文案"
   },
   "helpConnStep1": "貼上邀請碼",
@@ -8720,6 +8842,22 @@
   "@helpPersonalRow5B": {
     "description": "說明頁文案"
   },
+  "helpPersonalRow6A": "開發者模式",
+  "@helpPersonalRow6A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow6B": "顯示並可複製房間、任務板、卡片、階段、週期、想法板與條目的 ID。訊息時間後會多一個 #序號，右鍵點訊息可複製訊息 ID。",
+  "@helpPersonalRow6B": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow7A": "慶祝模式",
+  "@helpPersonalRow7A": {
+    "description": "說明頁文案"
+  },
+  "helpPersonalRow7B": "成員加入、任務卡完成、派工房派工成功時放彩花並有音效，觸發的系統訊息文字會變成金色呼吸。只對即時發生的事件，翻舊訊息不會放。",
+  "@helpPersonalRow7B": {
+    "description": "說明頁文案"
+  },
   "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。",
   "@helpVersionUpdate": {
     "description": "說明頁文案"
@@ -8868,5 +9006,140 @@
         "type": "String"
       }
     }
+  },
+  "notificationsTitle": "通知",
+  "@notificationsTitle": {
+    "description": "通知中心：頁面標題與鈴鐺提示"
+  },
+  "notificationsTitleUnread": "通知（{count} 則未讀）",
+  "@notificationsTitleUnread": {
+    "description": "鈴鐺提示（有未讀）",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "notificationsEmpty": "沒有通知。",
+  "@notificationsEmpty": {
+    "description": "通知中心：空狀態"
+  },
+  "notificationsMarkAllRead": "全部已讀",
+  "@notificationsMarkAllRead": {
+    "description": "通知中心：全部已讀"
+  },
+  "notificationsLoadMore": "載入更多",
+  "@notificationsLoadMore": {
+    "description": "通知中心：載入更舊的通知"
+  },
+  "notificationsActorHuman": "成員",
+  "@notificationsActorHuman": {
+    "description": "通知觸發者種類：人類成員"
+  },
+  "notificationsActorHost": "主持人",
+  "@notificationsActorHost": {
+    "description": "通知觸發者種類：主持人"
+  },
+  "notificationsActorAgent": "Agent",
+  "@notificationsActorAgent": {
+    "description": "通知觸發者種類：agent"
+  },
+  "notificationsActorSystem": "系統",
+  "@notificationsActorSystem": {
+    "description": "通知觸發者種類：系統"
+  },
+  "notificationsForHost": "主持人收件",
+  "@notificationsForHost": {
+    "description": "通知標籤：這則是以主持人身分收到的"
+  },
+  "notificationsReason": "理由：{reason}",
+  "@notificationsReason": {
+    "description": "通知中的操作理由",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "hostReasonLabel": "理由（選填）",
+  "@hostReasonLabel": {
+    "description": "主持人操作：理由欄位"
+  },
+  "hostReasonConfirm": "確定",
+  "@hostReasonConfirm": {
+    "description": "主持人操作：理由對話框的確定鈕"
+  },
+  "hostReasonRoomSettingsTitle": "儲存聊天室設定",
+  "@hostReasonRoomSettingsTitle": {
+    "description": "主持人操作：儲存房間設定的理由對話框標題"
+  },
+  "hostReasonArchiveRoomTitle": "封存聊天室",
+  "@hostReasonArchiveRoomTitle": {
+    "description": "主持人操作：封存房間的理由對話框標題"
+  },
+  "hostReasonUnarchiveRoomTitle": "解除封存",
+  "@hostReasonUnarchiveRoomTitle": {
+    "description": "主持人操作：解封房間的理由對話框標題"
+  },
+  "hostReasonApproveArchiveTitle": "核准封存請求",
+  "@hostReasonApproveArchiveTitle": {
+    "description": "主持人操作：核准封存請求的理由對話框標題"
+  },
+  "hostReasonDeclineArchiveTitle": "婉拒封存請求",
+  "@hostReasonDeclineArchiveTitle": {
+    "description": "主持人操作：婉拒封存請求的理由對話框標題"
+  },
+  "hostReasonArchiveBoardTitle": "封存任務板",
+  "@hostReasonArchiveBoardTitle": {
+    "description": "主持人操作：封存任務板的理由對話框標題"
+  },
+  "hostReasonUnarchiveBoardTitle": "解除封存任務板",
+  "@hostReasonUnarchiveBoardTitle": {
+    "description": "主持人操作：解封任務板的理由對話框標題"
+  },
+  "hostReasonRenameBoardTitle": "任務板改名",
+  "@hostReasonRenameBoardTitle": {
+    "description": "主持人操作：任務板改名的理由對話框標題"
+  },
+  "hostReasonReopenObjectiveTitle": "打回週期",
+  "@hostReasonReopenObjectiveTitle": {
+    "description": "主持人操作：打回週期的理由對話框標題"
+  },
+  "hostReasonCompleteObjectiveTitle": "完成週期",
+  "@hostReasonCompleteObjectiveTitle": {
+    "description": "主持人操作：完成週期的理由對話框標題"
+  },
+  "hostReasonChecklistStatusTitle": "變更階段狀態",
+  "@hostReasonChecklistStatusTitle": {
+    "description": "主持人操作：變更階段狀態的理由對話框標題"
+  },
+  "hostReasonTaskStatusTitle": "變更任務狀態",
+  "@hostReasonTaskStatusTitle": {
+    "description": "主持人操作：變更任務狀態的理由對話框標題"
+  },
+  "hostReasonBoardOutcomeTitle": "收尾任務板",
+  "@hostReasonBoardOutcomeTitle": {
+    "description": "主持人操作：設定任務板結果的理由對話框標題"
+  },
+  "hostReasonDeleteBlockTitle": "刪除想法板段落",
+  "@hostReasonDeleteBlockTitle": {
+    "description": "主持人操作：刪除想法板段落的理由對話框標題"
+  },
+  "roomsArchivedByHost": "由主持人封存",
+  "@roomsArchivedByHost": {
+    "description": "封存房標頭：被主持人封存的說明"
+  },
+  "roomsArchivedByHostReason": "由主持人封存：{reason}",
+  "@roomsArchivedByHostReason": {
+    "description": "封存房標頭：被主持人封存並附理由",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "hostReasonVerifyObjectiveTitle": "確認週期",
+  "@hostReasonVerifyObjectiveTitle": {
+    "description": "主持人操作：確認週期的理由對話框標題"
   }
 }

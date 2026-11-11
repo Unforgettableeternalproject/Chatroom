@@ -242,10 +242,11 @@ async def _objective(app, oid):
 
 
 async def test_a_done_objective_refuses_a_loose_task(tmp_path):
-    """完成的週期底下，隨手記要被擋——**而且週期不能被動到**。
+    """完成的「未分類」頁不能被隨手記打回——**而且週期不能被動到**。
 
-    斷言不只看 409：真正的損害是那一句 UPDATE，它會把 status 打回 active
-    並清掉 completed_at。只驗狀態碼的話，「擋下來但還是改了」照樣綠。
+    2026-11-11 起「未分類」是分頁：頁完成的同一交易就開下一頁，隨手記不再
+    409 `objective_closed`，而是落在新頁。完成的舊頁仍然一動不動——真正的
+    損害是那一句 UPDATE（打回 active、清掉 completed_at），所以斷言看舊頁。
     """
     app, client = await _client(tmp_path, "uncat_done")
     async with app.router.lifespan_context(app), client:
@@ -261,11 +262,9 @@ async def test_a_done_objective_refuses_a_loose_task(tmp_path):
         r = await client.post(f"/api/rooms/{rid}/board/tasks",
                               json={"title": "完成之後又想到一件"},
                               headers=hdr)
-        assert r.status_code == 409, r.text
-        detail = r.json()["detail"]
-        assert detail["code"] == "objective_closed", detail
-        assert detail["objective_id"] == oid
-        assert detail["objective_status"] == "done"
+        assert r.status_code == 200, r.text
+        new_cid = r.json()["checklist_id"]
+        assert new_cid != cid, "新卡不該掛回完成的舊頁"
 
         obj = await _objective(app, oid)
         assert obj["status"] == "done", "週期被隨手記打回了"
@@ -273,25 +272,20 @@ async def test_a_done_objective_refuses_a_loose_task(tmp_path):
         n = await (await app.state.db.execute(
             "SELECT COUNT(*) AS n FROM board_task WHERE checklist_id=?"
             " AND deleted=0", (cid,))).fetchone()
-        assert n["n"] == 1, "擋下來就不該留下那張卡"
+        assert n["n"] == 1, "舊頁不該多出卡"
 
 
-async def test_a_cancelled_objective_refuses_a_loose_task(tmp_path):
-    """取消同樣是終局：打不回來，隨手記也不例外。"""
+async def test_an_inbox_page_cannot_be_cancelled(tmp_path):
+    """「未分類」頁不可取消（取消會讓隨手記失去落腳處）。"""
     app, client = await _client(tmp_path, "uncat_cancelled")
     async with app.router.lifespan_context(app), client:
         rid, hdr, _, _ = await _setup(client)
         tid, cid, oid = await _uncategorised(app, client, hdr, rid)
         r = await client.post(f"/api/board/objectives/{oid}/cancel",
                               headers=hdr)
-        assert r.status_code == 200, r.text
-
-        r = await client.post(f"/api/rooms/{rid}/board/tasks",
-                              json={"title": "取消之後又想到一件"},
-                              headers=hdr)
         assert r.status_code == 409, r.text
-        assert r.json()["detail"]["code"] == "objective_closed"
-        assert (await _objective(app, oid))["status"] == "cancelled"
+        assert r.json()["detail"]["code"] == "inbox_page_not_cancellable"
+        assert (await _objective(app, oid))["status"] == "active"
 
 
 async def test_a_reviewed_objective_still_takes_a_loose_task(tmp_path):

@@ -299,6 +299,49 @@ void main() {
     expect(picked, heart);
   });
 
+  testWidgets('快選列：emoji 不透明不灰化，子元素數與 emoji 數一致，尾端無空白',
+      (tester) async {
+    await tester.pumpWidget(_app(MessageBubble(
+      message: _msg(),
+      isSelf: false,
+      senderKind: 'human',
+      actions: _actions(onReact: (_, _) async {}),
+    )));
+    await tester.tap(find.text('內容'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('加入表情'));
+    await tester.pumpAndSettle();
+
+    final items = [
+      for (final e in kReactionEmojis) find.byKey(Key('reaction-picker-$e')),
+    ];
+    for (var i = 0; i < items.length; i++) {
+      final e = kReactionEmojis[i];
+      final text = tester.widget<Text>(
+          find.descendant(of: items[i], matching: find.text(e)));
+      final ctx = tester.element(find.descendant(of: items[i], matching: find.text(e)));
+      final color = DefaultTextStyle.of(ctx).style.merge(text.style).color!;
+      expect(color.a, 1.0, reason: '$e 文字色不得帶透明度');
+      final opacity = find.ancestor(of: items[i], matching: find.byType(Opacity));
+      for (final o in tester.widgetList<Opacity>(opacity)) {
+        expect(o.opacity, 1.0);
+      }
+    }
+
+    final row = tester.widget<Row>(find
+        .ancestor(of: items.first, matching: find.byType(Row))
+        .first);
+    expect(row.children.length, kReactionEmojis.length);
+
+    // 尾端不留空白：最後一顆右緣 + 內距 = 選單內容右緣
+    final menuItem = find.ancestor(
+        of: items.first, matching: find.byType(PopupMenuItem<String>)).first;
+    final itemRect = tester.getRect(menuItem);
+    final lastRight = tester.getRect(items.last).right;
+    final firstLeft = tester.getRect(items.first).left;
+    expect(itemRect.right - lastRight, closeTo(firstLeft - itemRect.left, 0.5));
+  });
+
   group('名單面板', () {
     const reactors = [
       Reactor(

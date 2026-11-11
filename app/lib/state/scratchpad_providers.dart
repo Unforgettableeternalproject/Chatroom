@@ -33,36 +33,3 @@ final scratchpadProvider =
 });
 
 String scratchpadKey(String boardId, String padId) => '$boardId/$padId';
-
-/// 我的追蹤收件匣。**跨板**。
-///
-/// 這個 provider 是那顆紅點唯一的來源。裁決 #392 ②A 是「離線通知留著，
-/// 回來就知道」——**知道的管道就是它**，少了它，通知留著了但沒有任何
-/// 地方會告訴人有東西留著。
-final watchNoticesProvider =
-    FutureProvider<({List<WatchNotice> notices, int unread})>((ref) {
-  final key = ref.watch(appConfigProvider).deviceKey;
-  // ⚠️ **要已讀的也拿回來**（`unreadOnly: false`）。只拿未讀的話，點開一筆
-  // 標記已讀之後它會從清單上**消失**——而人剛剛才在那裡看到它，會懷疑
-  // 自己是不是看錯了。讀過的該留著、只是不再喊
-  // （@審核用Codex-2 2026-09-03；我自己在 _NoticeRow 的註解裡寫了這條規則，
-  //  卻在這一行做了相反的事）。
-  //
-  // 紅點的數字不受影響：Hub 的 `unread_count` 是獨立算的，不跟著這個
-  // 篩選走，所以拿全部回來不會讓那個數字變大。
-  return ref.watch(watchApiProvider).notices(sessionKey: key, unreadOnly: false);
-});
-
-/// 每一塊板各有幾筆未讀。
-///
-/// Hub 沒有 per-board 的 `unread_notice_count`，但收件匣每一筆都帶 `board_id`
-/// ——**一次呼叫就能算出全部**，比一塊板打一支 API 便宜，也不會有某塊板
-/// 忘了打的問題。
-Map<String, int> unreadByBoard(List<WatchNotice> notices) {
-  final out = <String, int>{};
-  for (final n in notices) {
-    if (!n.unread || n.boardId.isEmpty) continue;
-    out[n.boardId] = (out[n.boardId] ?? 0) + 1;
-  }
-  return out;
-}

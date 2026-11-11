@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
+import '../celebration/celebration_highlight.dart';
 import '../core/util/relative_time.dart';
 import '../l10n/l10n.dart';
 import '../models/message.dart';
@@ -45,7 +46,7 @@ class SystemMessageTile extends StatelessWidget {
         Expanded(child: Container(height: 1, color: s.hairline)),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
+          child: CelebrationGlowText(
             '${message.content} · ${clockTime(message.createdAt)}',
             style: UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4),
             textAlign: TextAlign.center,

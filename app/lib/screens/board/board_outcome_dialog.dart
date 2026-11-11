@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -49,16 +51,22 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
 
   Future<void> _set(String outcome) async {
     if (_busy) return;
+    final reason = await askHostReason(context,
+        title: AppLocalizations.of(context).hostReasonBoardOutcomeTitle);
+    if (reason == null || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await ref.read(boardsApiProvider).setOutcome(
-            widget.boardId,
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-            outcome: outcome,
-          );
+      await runWithHostReason(
+        reason,
+        () => ref.read(boardsApiProvider).setOutcome(
+              widget.boardId,
+              sessionKey: ref.read(appConfigProvider).deviceKey,
+              outcome: outcome,
+            ),
+      );
       ref.invalidate(boardByIdProvider(widget.boardId));
       // 清單那三頁的內容都會變（收尾的板會從「進行中」移到「已收尾」），
       // 三頁各自是一個 family instance，**一頁一頁 invalidate**

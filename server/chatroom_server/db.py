@@ -2,6 +2,8 @@
 
 import logging
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -50,7 +52,12 @@ CREATE TABLE IF NOT EXISTS room (
     -- 沒有 agent 時要不要自動封存（每房開關，預設開）。
     -- 預設 1：舊房升級後行為不變（加欄的 DEFAULT 會讓既有列一律是 1）。
     -- ⚠️ **這一欄同時列在 MIGRATIONS 裡，兩邊都要有**
-    auto_archive INTEGER NOT NULL DEFAULT 1
+    auto_archive INTEGER NOT NULL DEFAULT 1,
+    -- 主持人封存的記錄（艾斯維爾 2026-11-11 裁決：主持人可 override 所有
+    -- 管理操作）。被主持人封存的房，建立者仍可解封，但解封會寄通知到主持人
+    -- 收件匣。⚠️ **這兩欄同時列在 MIGRATIONS 裡，兩邊都要有**
+    archived_by_host INTEGER NOT NULL DEFAULT 0,
+    archive_reason TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS participant (
@@ -112,6 +119,15 @@ CREATE TABLE IF NOT EXISTS message (
     -- archive / archive_pending / unarchive）。內容是給人看的中文，client
     -- 要精確過濾就只能解析字串——那會在改一個字時無聲壞掉
     system_event TEXT NOT NULL DEFAULT '',
+    -- 離場類 system 訊息（leave / kick / idle_removed）的離場者。sender_id 這時是 NULL，
+    -- 名字含空白時從內容切不出來；空字串＝非離場訊息或舊訊息。
+    -- ⚠️ 這兩欄在 MIGRATIONS 也有一份，兩邊都要改
+    subject_id TEXT NOT NULL DEFAULT '',
+    subject_name TEXT NOT NULL DEFAULT '',
+    -- 這則訊息屬於哪一筆派工（run）：run 成員的發言，以及該 run 的 system
+    -- 訊息。空字串＝一般訊息或這一欄存在之前的舊訊息。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    run_id TEXT NOT NULL DEFAULT '',
     content    TEXT NOT NULL,
     mentions   TEXT NOT NULL DEFAULT '[]',        -- JSON list of display_name
     -- 發話者原本打的群組標籤（all / agents / humans），JSON list。
@@ -430,12 +446,13 @@ CREATE INDEX IF NOT EXISTS idx_btask_claim
 -- 於是一個房間長出好幾組「未分類」（審核用 Codex 實測 12 路建出 12 組）。
 -- 每一組都是永久留在板上的空殼。約束寫進資料庫，那條路才真的走不通。
 --
--- 🚨 這兩條與 idx_btask_claim **不同**：那個能直接放 schema 是因為
--- board_task 是同一份 executescript 裡建的全新表；這兩條加在**既有**表上，
--- 現存資料只要已經違反就會建立失敗、連帶 DB 開不起來。
--- 先跑 `scripts/dedupe-uncategorised.py`（預設 dry-run）。
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised
-    ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類';
+-- 🚨 2026-11-11 起「未分類」改成**分頁**：每一頁是一個 objective（kind='inbox'），
+-- 同一塊板（v1 為同一房）同時只有一個使用中的頁。objective 這一層的唯一性
+-- 改由 POST_MIGRATION_INDEXES 的 idx_bobjective_inbox_active_* 保證（它們
+-- 依賴後來才補的 kind 欄位，不能放進 SCHEMA）；舊的以標題為鍵的
+-- idx_bobjective_uncategorised／idx_bobjective_uncat_board／
+-- idx_bchecklist_uncat_board 會在 `_migrate` 裡 DROP——留著的話第二頁建不出來。
+-- 這條 checklist 的仍保留：一個 objective（一頁）底下只會有一個「未分類」階段。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised
     ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類';
 
@@ -759,6 +776,40 @@ CREATE INDEX IF NOT EXISTS idx_watch_notice_inbox
 CREATE INDEX IF NOT EXISTS idx_board_watch_actor
     ON board_watch(actor_key, board_id);
 
+-- ── 通知中心（統一收件匣）──────────────────────────────────────────
+-- 取代 `board_watch_notice`（DATA_VERSION 9 把舊資料搬進來，舊表保留但不再
+-- 寫入）。收件人綁 session_key（actor_key），`__host__` 是 Hub 全域主持人
+-- 收件匣的特殊值。
+--
+-- 🔑 **刻意沒有外鍵**：主持人刪房、刪板的通知就是要在房／板消失之後還讀得
+-- 到，所以名稱快照在 payload_json（room_name / board_name），讀取時優先用
+-- 現存的名字。id 用遞增整數：`before_id` 分頁需要可排序的游標。
+CREATE TABLE IF NOT EXISTS notification (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_key TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    room_id       TEXT NOT NULL DEFAULT '',
+    board_id      TEXT NOT NULL DEFAULT '',
+    item_kind     TEXT NOT NULL DEFAULT '',
+    item_id       TEXT NOT NULL DEFAULT '',
+    item_title    TEXT NOT NULL DEFAULT '',
+    actor_key     TEXT NOT NULL DEFAULT '',
+    actor_name    TEXT NOT NULL DEFAULT '',
+    -- human / host / agent / system；舊資料遷移進來的留空字串（說不出來）
+    actor_kind    TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    payload_json  TEXT NOT NULL DEFAULT '{}',
+    count         INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    read_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notification_inbox
+    ON notification(recipient_key, read_at, id);
+CREATE INDEX IF NOT EXISTS idx_notification_merge
+    ON notification(recipient_key, kind, item_kind, item_id)
+    WHERE read_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_question_room ON question(room_id, status);
 CREATE INDEX IF NOT EXISTS idx_question_target ON question(target_id, status);
 
@@ -771,7 +822,7 @@ CREATE TABLE IF NOT EXISTS agent_run (
     id            TEXT PRIMARY KEY,
     room_id       TEXT NOT NULL REFERENCES room(id),
     board_id      TEXT NOT NULL DEFAULT '',
-    -- investigate | ticket | stage | push | release
+    -- investigate | ticket | stage | push | release | release_fix
     -- （scheduled 留給 P2 的排程）
     kind          TEXT NOT NULL,
     project       TEXT NOT NULL DEFAULT '',
@@ -822,6 +873,9 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- 這一筆 run 的結構化輸入（目前只有 release 用）。JSON 字串，Hub 寫、
     -- 執行器讀（`_run_public` 解成 `spec`）。空字串＝沒有 spec
     spec_json     TEXT NOT NULL DEFAULT '',
+    -- 新上板規則上線前就存在的 release／release_fix（見 DATA_VERSION 8）。
+    -- ⚠️ 這一欄在 MIGRATIONS 也有一份，兩邊都要改
+    legacy        INTEGER NOT NULL DEFAULT 0,
     -- 逐 repo 的 git 現況（JSON 陣列，每格 repo/branch/head_before/
     -- head_after）。一筆 run 可在工作區多個 repo 各做 commit，上面那組只
     -- 描述主 repo。空字串＝沒帶（舊執行器），候選退回只看上面那組
@@ -985,12 +1039,22 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 自動封存開關。既有房一律補 1（開）：那正是這個欄位存在之前所有房間
     # 的實際行為，補成 0 會讓升級一次就停掉所有房的自動封存
     ("room", "auto_archive", "auto_archive INTEGER NOT NULL DEFAULT 1"),
+    ("room", "archived_by_host",
+     "archived_by_host INTEGER NOT NULL DEFAULT 0"),
+    ("room", "archive_reason", "archive_reason TEXT NOT NULL DEFAULT ''"),
     # 私人工作區。舊執行器一律空陣列——把舊的 `projects` 往這一欄搬
     # 的話，升級一次就讓所有公開工作房的工作區消失（綁不了也派不了）
     ("runner", "private_projects",
      "private_projects TEXT NOT NULL DEFAULT '[]'"),
     ("assignment", "assigned_name", "assigned_name TEXT NOT NULL DEFAULT ''"),
     ("message", "system_event", "system_event TEXT NOT NULL DEFAULT ''"),
+    ("message", "subject_id", "subject_id TEXT NOT NULL DEFAULT ''"),
+    ("message", "subject_name", "subject_name TEXT NOT NULL DEFAULT ''"),
+    ("message", "run_id", "run_id TEXT NOT NULL DEFAULT ''"),
+    # 新上板規則（每次上板都建 release＋release_fix）上線前就存在的
+    # release／release_fix run，一律視為已處理（DATA_VERSION 8 回填）。
+    # ⚠️ CREATE TABLE 也有一份，兩邊都要改
+    ("agent_run", "legacy", "legacy INTEGER NOT NULL DEFAULT 0"),
     # 邀請 UI 要能認出「這是誰」——共用一把 token 時 Hub 眼中所有人長得一樣，
     # 來源位址是唯一分得開的線索
     ("session", "last_ip", "last_ip TEXT"),
@@ -1227,6 +1291,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 讀的一方退回板 owner——猜成 human 會讓 agent 去問一個 agent
     ("board_checklist", "created_by_kind",
      "created_by_kind TEXT NOT NULL DEFAULT ''"),
+    # 「未分類」分頁（2026-11-11）。kind：'' 一般週期／'inbox' 未分類頁；
+    # page_no：未分類頁的頁碼（同一塊板遞增，一般週期為 0）。存量由
+    # `_migrate_data` 版次 10 回填
+    ("board_objective", "kind", "kind TEXT NOT NULL DEFAULT ''"),
+    ("board_objective", "page_no", "page_no INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1247,18 +1316,29 @@ POST_MIGRATION_INDEXES: list[str] = [
     # 孤兒判定 v2 改看 actor 在**所有掛接房**的 presence，撈的是 actor_key
     "CREATE INDEX IF NOT EXISTS idx_btask_claim_actor"
     " ON board_task(claim_actor_key) WHERE claim_state = 'held'",
-    # 「未分類」的去重換軸：**一塊板一組**，不是一間房一組。
+    # 「未分類」分頁：**同一塊板任何時候只有一個使用中的頁**。
     #
-    # 舊的 idx_bobjective_uncategorised 以 room_id 為軸，而 H9 之後板可以
-    # 沒有房 ⇒ 所有無房的板共用 `room_id=''` ⇒ 第二塊板會查到第一塊的未分類。
-    # 兩條並存：舊的還在保護未換軸的卡（它們的 room_id 一定有值），
-    # 新的用 `board_id != ''` 排除掉那些，兩者不會互相擋到。
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncat_board"
+    # 使用中＝kind='inbox' 且 status 不是 done／cancelled 且未刪除。
+    # （cancelled 也排除：未分類頁現在不可取消，但存量裡可能有被取消的舊頁，
+    # 它們是已結束的頁，不能佔住「使用中」的位置，否則補不了新頁。）
+    # 板軸（board_id 非空）與房軸（v1，board_id 空，以 room_id 為軸）各一條。
+    # 取代舊的以標題為鍵的 idx_bobjective_uncat_board／idx_bobjective_uncategorised
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_inbox_active_board"
     " ON board_objective(board_id)"
-    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncat_board"
-    " ON board_checklist(board_id)"
-    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
+    " WHERE kind = 'inbox' AND deleted = 0"
+    " AND status NOT IN ('done','cancelled') AND board_id != ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_inbox_active_room"
+    " ON board_objective(room_id)"
+    " WHERE kind = 'inbox' AND deleted = 0"
+    " AND status NOT IN ('done','cancelled') AND board_id = ''",
+]
+
+# 「未分類」改成分頁之後必須拿掉的舊標題 index（冪等）。要在建新 index 與
+# 資料遷移**之前**丟：它們以標題為鍵，留著的話第二頁（同標題）建不出來
+DROPPED_INDEXES: list[str] = [
+    "idx_bobjective_uncategorised",
+    "idx_bobjective_uncat_board",
+    "idx_bchecklist_uncat_board",
 ]
 
 
@@ -1303,7 +1383,9 @@ REBUILT_TABLES: dict[str, str] = {
             completed_at TEXT,
             deleted     INTEGER NOT NULL DEFAULT 0,
             board_seq   INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL
+            created_at  TEXT NOT NULL,
+            kind        TEXT NOT NULL DEFAULT '',
+            page_no     INTEGER NOT NULL DEFAULT 0
         )
     """,
     "board_checklist": """
@@ -1384,8 +1466,6 @@ REBUILT_INDEXES: list[str] = [
     " ON board_task(checklist_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_btask_claim"
     " ON board_task(claim_participant_id) WHERE claim_state = 'held'",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised"
-    " ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類'",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised"
     " ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類'",
 ]
@@ -1493,6 +1573,8 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         if column not in columns[table]:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
             columns[table].add(column)
+    for name in DROPPED_INDEXES:
+        await db.execute(f"DROP INDEX IF EXISTS {name}")
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
     await _ensure_run_ref_unique(db)
@@ -1502,7 +1584,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 7
+DATA_VERSION = 10
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1602,7 +1684,101 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             "  (SELECT p.kind FROM participant p"
             "   WHERE p.id = board_checklist.created_by), '')"
             " WHERE created_by_kind = ''")
+    if version < 8:
+        # 新上板規則不溯及既往：這個版本之前已存在的 release／release_fix
+        # run（含 failed／cancelled）標成 legacy。失敗或取消的 legacy 不再
+        # 擋完成、不再讓週期可重新上板、不觸發 release_fix。
+        # 只標既有的列；之後新建的 run 預設 0，所以重跑也不會誤標（版次
+        # 只前進，且 UPDATE 本身只動 kind 為 release／release_fix 的列）
+        await db.execute(
+            "UPDATE agent_run SET legacy=1"
+            " WHERE kind IN ('release','release_fix')")
+    if version < 9:
+        # 追蹤收件匣搬進統一的 notification 表。舊表保留（刪板時照舊會清它），
+        # 只是不再寫入。`board_seq` 與「這是追蹤通知」的標記收在 payload_json，
+        # 舊的 `/api/board/notices` 相容端點靠它還原原本的欄位。
+        # 重跑不會重複：版次只前進，且 payload 帶 migrated_from 當去重鍵。
+        await db.execute(
+            "INSERT INTO notification (recipient_key, kind, board_id,"
+            " item_kind, item_id, item_title, actor_name, actor_kind,"
+            " payload_json, count, created_at, updated_at, read_at)"
+            " SELECT n.actor_key, n.event_type, n.board_id, n.item_kind,"
+            " n.item_id, n.item_title, n.actor_name, '',"
+            " json_object('src','watch','board_seq',n.board_seq,"
+            "             'migrated_from',n.id),"
+            " 1, n.created_at, n.created_at, n.read_at"
+            " FROM board_watch_notice n"
+            " WHERE NOT EXISTS (SELECT 1 FROM notification x"
+            "   WHERE json_extract(x.payload_json,'$.migrated_from') = n.id)"
+            " ORDER BY n.created_at, n.rowid")
+    if version < 10:
+        await _migrate_inbox_pages(db)
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
+
+
+async def _migrate_inbox_pages(db: aiosqlite.Connection) -> None:
+    """版次 10：「未分類」改成分頁。
+
+    1. 既有標題「未分類」的 objective 補 kind='inbox'、page_no=1。
+    2. 某板（v1 為某房）沒有使用中的頁——最後一頁已 done，或是被取消的舊頁
+       （存量裡可能有；未分類頁之後不可取消，視同已結束）——就補建
+       page_no=最大+1 的使用中頁（含「未分類」checklist）。
+
+    版次只前進，重跑不會發生；就算被重跑，第 2 步只在「沒有使用中的頁」時
+    才補，第 1 步只動 kind 為空的列，也不會多長出頁來。
+    """
+    await db.execute(
+        "UPDATE board_objective SET kind='inbox', page_no=1"
+        " WHERE title='未分類' AND deleted=0 AND kind=''")
+    rows = await (await db.execute(
+        "SELECT id, room_id, board_id, status, page_no FROM board_objective"
+        " WHERE kind='inbox' AND deleted=0 ORDER BY page_no, created_at, id"
+    )).fetchall()
+    axes: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        board_id = (r["board_id"] or "").strip()
+        key = ("b", board_id) if board_id else ("r", r["room_id"] or "")
+        a = axes.setdefault(key, {"active": False, "max": 0, "room_id":
+                                  r["room_id"] or "", "board_id": board_id})
+        a["max"] = max(a["max"], r["page_no"] or 0)
+        if r["status"] not in ("done", "cancelled"):
+            a["active"] = True
+    now = datetime.now(timezone.utc).isoformat()
+    for a in axes.values():
+        if a["active"]:
+            continue
+        seq = 0
+        if a["board_id"]:
+            cur = await db.execute(
+                "UPDATE board SET board_seq=board_seq+1 WHERE id=?"
+                " RETURNING board_seq", (a["board_id"],))
+            hit = await cur.fetchone()
+            if hit is not None:
+                seq = hit["board_seq"]
+                await db.execute(
+                    "UPDATE room SET board_seq=? WHERE id IN"
+                    " (SELECT room_id FROM board_room WHERE board_id=?"
+                    "  AND detached_at IS NULL)", (seq, a["board_id"]))
+        elif a["room_id"]:
+            cur = await db.execute(
+                "UPDATE room SET board_seq=board_seq+1 WHERE id=?"
+                " RETURNING board_seq", (a["room_id"],))
+            hit = await cur.fetchone()
+            if hit is not None:
+                seq = hit["board_seq"]
+        oid, cid = uuid.uuid4().hex, uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_objective (id, room_id, board_id, title,"
+            " description, created_by_name, board_seq, created_at, kind,"
+            " page_no) VALUES (?,?,?,?,?,?,?,?,'inbox',?)",
+            (oid, a["room_id"], a["board_id"], "未分類",
+             "還沒歸進任何週期的東西", "Hub", seq, now, a["max"] + 1))
+        await db.execute(
+            "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
+            " title, description, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, a["room_id"], a["board_id"], oid, "未分類", "", "Hub", seq,
+             now))
 
 
 async def open_db(path: str) -> aiosqlite.Connection:

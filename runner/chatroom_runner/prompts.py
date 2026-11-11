@@ -151,40 +151,30 @@ def repos_block(repos: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def release_results_block(results: list[dict]) -> str:
-    """上板結果的條列（給 release 報告的模板）。
-
-    這份文字是報告 agent **唯一**的事實來源：它不重跑 git，所以每個 repo 的
-    成敗、原因與 sha 都要在這裡講完。空清單時留一句話，模板不會出現一段
-    看起來像漏掉的空白。
-    """
-    if not results:
-        return "（沒有任何 repo 被上板。）"
+def release_fix_repos_block(items: list[dict]) -> str:
+    """release_fix 的 repo 條列：每個 repo 的 worktree、穩定／來源分支與
+    來源 tip、合併訊息。agent 只在這些 worktree 裡動工。"""
+    if not items:
+        return "（沒有要處理的 repo。）"
     lines = []
-    for item in results:
-        status = {"ok": "成功", "skipped": "跳過",
-                  "failed": "失敗"}.get(item.get("status", ""), "未知")
-        head = f"- `{item.get('name', '')}`：{status}"
-        reason = item.get("reason") or ""
-        if reason:
-            head += f"（{reason}）"
-        lines.append(head)
-        lines.append(f"    - 穩定分支 `{item.get('stable', '')}`，"
-                     f"來源分支 `{item.get('source', '')}`")
-        before = (item.get("head_before") or "")[:8]
-        after = (item.get("head_after") or "")[:8]
-        if before or after:
-            lines.append(f"    - 穩定分支 HEAD：{before or '?'} → "
-                         f"{after or '?'}")
-        for action in item.get("actions") or []:
-            lines.append(f"    - 執行器自主動作：{action}")
-        detail = (item.get("detail") or "").strip()
-        if detail:
-            lines.append(f"    - {detail}")
-        commits = item.get("commits") or []
-        if commits:
-            lines.append("    - 併進來的 commit：")
-            lines.extend(f"        - {c}" for c in commits)
+    for item in items:
+        lines.append(f"- `{item.get('name', '')}`：worktree "
+                     f"`{item.get('worktree', '')}`")
+        lines.append(f"    - 穩定分支 `{item.get('stable', '')}`"
+                     f"（origin 目前 `{(item.get('origin_stable') or '?')[:8]}`）")
+        lines.append(f"    - 來源分支 `{item.get('source', '')}`：本機 "
+                     f"`{(item.get('source_local') or '無')[:8]}`、origin "
+                     f"`{(item.get('source_remote') or '無')[:8]}`")
+        resume = (item.get("resume_head") or "")[:8]
+        if resume:
+            lines.append(f"    - 上次沒推上去的結果 `{resume}`（若該 commit "
+                         "還在可以參考，不要直接當基礎）")
+        message = (item.get("merge_message") or "").strip()
+        if message:
+            lines.append(f"    - 合併訊息：`{message}`")
+        tag_message = (item.get("tag_message") or "").strip()
+        if tag_message:
+            lines.append(f"    - tag 訊息：`{tag_message}`")
     return "\n".join(lines)
 
 

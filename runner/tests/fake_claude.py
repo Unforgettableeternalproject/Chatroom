@@ -27,6 +27,8 @@
 | `conflict_nocommit` | 解掉衝突、`git add`，但不 commit | 0 |
 | `conflict_orig` | 只留下一個未追蹤的 `.orig` 檔，不 commit |
 | `conflict_unsigned` | 解掉衝突、`git commit --no-gpg-sign` | 0 |
+| `release_fix_push` | 上板修復 agent：記下 cwd 與推送憑證設定，在 cwd（暫存 worktree）把 `FAKE_FIX_SOURCE` 合併進去並 `git push origin HEAD:$FAKE_FIX_STABLE`，有 `FAKE_FIX_TAG` 時打 tag 並推 | 0 |
+| `release_fix_report_only` | 上板修復 agent：只記下 cwd，不動 git（上板已成功時的行為） | 0 |
 | `token_check` | 把「有沒有拿到 `CLAUDE_CODE_OAUTH_TOKEN`、長度多少」寫進 run 目錄的 `token.json`（**不寫值**） | 0 |
 
 `mcp_pending_then_ok` 第幾次才連上由 `FAKE_CLAUDE_MCP_OK_AT` 決定
@@ -158,6 +160,32 @@ def conflict_scenario(scenario: str) -> int:
     return 0
 
 
+def release_fix_scenario(scenario: str) -> int:
+    """上板修復 agent：cwd 是 runner 建的暫存 worktree。"""
+    run_dir = os.environ.get("CHATROOM_RUNNER_RUN_DIR", ".")
+    info = {"cwd": os.getcwd(),
+            "helper": [os.environ.get(f"GIT_CONFIG_VALUE_{i}")
+                       for i in range(int(os.environ.get("GIT_CONFIG_COUNT",
+                                                         "0")))
+                       if os.environ.get(f"GIT_CONFIG_KEY_{i}")
+                       == "credential.helper"]}
+    with open(os.path.join(run_dir, "release_fix_info.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(info, fh)
+    if scenario == "release_fix_push":
+        source = os.environ["FAKE_FIX_SOURCE"]
+        stable = os.environ["FAKE_FIX_STABLE"]
+        _git("merge", "--no-ff", source, "-m", "release fix merge")
+        _git("push", "origin", f"HEAD:{stable}")
+        tag = os.environ.get("FAKE_FIX_TAG", "")
+        if tag:
+            _git("tag", "-a", tag, "-m", "fix tag")
+            _git("push", "origin", tag)
+    assistant("修復完成。")
+    result("success", False, "修復 agent 已收工。", turns=3)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     scenario = os.environ.get("FAKE_CLAUDE_SCENARIO", "success")
     resuming = "--resume" in argv
@@ -189,6 +217,8 @@ def main(argv: list[str]) -> int:
 
     if scenario.startswith("conflict_"):
         return conflict_scenario(scenario)
+    if scenario.startswith("release_fix_"):
+        return release_fix_scenario(scenario)
     if scenario == "success":
         assistant("我看過卡了，開始做。")
         result("success", False, "已完成：改了兩個檔，跑過既有測試。", turns=5)

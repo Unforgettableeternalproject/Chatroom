@@ -1,3 +1,4 @@
+import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/screens/board/board_screen.dart';
@@ -5,6 +6,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 週期凍結（Hub 2026-09-21）：週期只有 `active` 時，它自己與底下的階段、
@@ -48,6 +50,7 @@ Widget _app(Widget child) => MaterialApp(
 
 Widget _wrap(BoardSnapshot snap) => ProviderScope(
       overrides: [
+        initialConfigProvider.overrideWithValue(kTestInitialConfig),
         boardByIdProvider('b1').overrideWith((ref) async => snap),
       ],
       child: _app(const BoardScreen(boardId: 'b1')),
@@ -121,6 +124,7 @@ void main() {
     // 從 `verified` 起算——`done` 打不回，那條路不存在
     var status = 'verified';
     final container = ProviderContainer(overrides: [
+      initialConfigProvider.overrideWithValue(kTestInitialConfig),
       boardByIdProvider('b1').overrideWith((ref) async => _snap(status)),
     ]);
     addTearDown(container.dispose);
@@ -153,31 +157,59 @@ void main() {
   Map<String, dynamic> run(String status, [String reason = '']) =>
       {'run_id': 'r1', 'status': status, 'reason': reason};
 
-  testWidgets('上板入口：從沒上板過（release 為 null）→ 有按鈕、沒有失敗字樣',
+  testWidgets('上板入口：verified 且從沒上板過（release 為 null）→ 有按鈕、沒有失敗字樣',
       (tester) async {
-    for (final status in ['verified', 'done']) {
-      await pumpFresh(tester, _snap(status));
-      expect(find.text('上板'), findsOneWidget, reason: status);
-      expect(find.text('上次上板失敗'), findsNothing, reason: status);
+    await pumpFresh(tester, _snap('verified'));
+    expect(find.text('上板'), findsOneWidget);
+    expect(find.text('重新上板'), findsNothing);
+    expect(find.text('上板失敗，打回後重新送審即可再次上板'), findsNothing);
+  });
+
+  testWidgets('🔴 上板入口：done 的週期不再有任何上板按鈕（Hub 回 409）',
+      (tester) async {
+    for (final release in [
+      null,
+      run('failed', 'release_partial'),
+      run('cancelled'),
+      run('done'),
+    ]) {
+      await pumpFresh(tester, _snap('done', release: release));
+      expect(find.text('上板'), findsNothing, reason: '$release');
+      expect(find.text('重新上板'), findsNothing, reason: '$release');
+      expect(find.text('上板失敗，打回後重新送審即可再次上板'), findsNothing, reason: '$release');
     }
   });
 
-  testWidgets('上板入口：上次失敗／取消 → 有按鈕＋失敗字樣', (tester) async {
-    for (final status in ['verified', 'done']) {
-      for (final r in ['failed', 'cancelled']) {
-        await pumpFresh(
-            tester, _snap(status, release: run(r, 'release_partial')));
-        expect(find.text('上板'), findsOneWidget, reason: '$status/$r');
-        expect(find.text('上次上板失敗'), findsOneWidget, reason: '$status/$r');
-      }
+  testWidgets('🔴 上板入口：verified 上次失敗／取消 → 沒有任何上板按鈕，只提示打回重新送審',
+      (tester) async {
+    for (final r in ['failed', 'cancelled']) {
+      await pumpFresh(
+          tester, _snap('verified', release: run(r, 'release_partial')));
+      expect(find.text('重新上板'), findsNothing, reason: r);
+      expect(find.text('上板'), findsNothing, reason: r);
+      expect(find.text('上板失敗，打回後重新送審即可再次上板'), findsOneWidget, reason: r);
+      expect(find.text('打回'), findsOneWidget, reason: r);
     }
+  });
+
+  testWidgets('週期被上板 agent 打回（active＋release_blocked_reopened）→ 顯示「上板受阻，已打回」',
+      (tester) async {
+    await pumpFresh(
+        tester, _snap('active', release: run('failed', 'release_blocked_reopened')));
+    expect(find.text('上板受阻，已打回'), findsOneWidget);
+    await pumpFresh(tester, _snap('active', release: run('failed', 'release_partial')));
+    expect(find.text('上板受阻，已打回'), findsNothing);
+    await pumpFresh(
+        tester, _snap('verified', release: run('failed', 'release_blocked_reopened')));
+    expect(find.text('上板受阻，已打回'), findsNothing);
   });
 
   testWidgets('🔴 上板入口：已上板成功（done）→ 沒有按鈕', (tester) async {
     for (final status in ['verified', 'done']) {
       await pumpFresh(tester, _snap(status, release: run('done')));
       expect(find.text('上板'), findsNothing, reason: status);
-      expect(find.text('上次上板失敗'), findsNothing, reason: status);
+      expect(find.text('重新上板'), findsNothing, reason: status);
+      expect(find.text('上板失敗，打回後重新送審即可再次上板'), findsNothing, reason: status);
     }
   });
 
@@ -185,7 +217,7 @@ void main() {
     for (final r in ['queued', 'claimed', 'running', 'limited', 'handoff']) {
       await pumpFresh(tester, _snap('verified', release: run(r)));
       expect(find.text('上板'), findsNothing, reason: r);
-      expect(find.text('上次上板失敗'), findsNothing, reason: r);
+      expect(find.text('上板失敗，打回後重新送審即可再次上板'), findsNothing, reason: r);
     }
   });
 

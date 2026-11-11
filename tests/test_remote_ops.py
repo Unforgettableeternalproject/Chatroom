@@ -1811,6 +1811,8 @@ async def test_mentions_reach_the_runner_exactly_once(tmp_path):
             assert [i["text"] for i in items] == [f"@{name} 先停一下"]
             assert items[0]["from"] == "艾斯維爾"
             assert items[0]["seq"] > 0
+            assert items[0]["id"]
+            assert items[0]["from_kind"] == "human"
 
             hb = (await client.post(f"/api/runners/{runner}/heartbeat",
                                     headers=runner.headers,

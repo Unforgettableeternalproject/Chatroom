@@ -268,3 +268,52 @@ async def test_mentioning_someone_who_left_is_reported(tmp_path):
             )
             assert "unresolved_mentions" not in r.json()
             assert live["display_name"] == "Novia-2"
+
+
+@pytest.mark.asyncio
+async def test_departure_messages_carry_subject(tmp_path):
+    """離場訊息帶結構化的離場者；名字含空白時不必（也不能）從 content 切。"""
+    name = "Core 開發 (工具層)"
+    app, client = await _make(tmp_path, "subject", idle_timeout=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room_id = (
+                await client.post(
+                    "/api/rooms", json={"name": "房", "session_key": "admin-key"}
+                )
+            ).json()["id"]
+            admin = await _join(client, room_id, "admin-key", "Xavier",
+                                kind="human", role="human")
+            leaver = await _join(client, room_id, "k-leave", name + "1")
+            kicked = await _join(client, room_id, "k-kick", name + "2")
+            idle = await _join(client, room_id, "k-idle", name + "3")
+            await client.post(
+                f"/api/rooms/{room_id}/leave",
+                headers={"X-Participant-Id": leaver["participant_id"]})
+            await client.post(
+                f"/api/rooms/{room_id}/participants/{kicked['participant_id']}/kick",
+                headers={"X-Participant-Id": admin["participant_id"]})
+            await app.state.sweep_once()
+
+            msgs = (
+                await client.get(
+                    f"/api/rooms/{room_id}/messages",
+                    headers={"X-Participant-Id": admin["participant_id"]})
+            ).json()["messages"]
+            got = {m["system_event"]: m for m in msgs if m["kind"] == "system"
+                   and m["system_event"] in ("leave", "kick", "idle_removed")}
+            assert got["leave"]["subject_name"] == name + "1"
+            assert got["leave"]["subject_id"] == leaver["participant_id"]
+            assert got["kick"]["subject_name"] == name + "2"
+            assert got["kick"]["subject_id"] == kicked["participant_id"]
+            idle_msgs = [m for m in msgs if m["system_event"] == "idle_removed"]
+            assert idle_msgs
+            for m in idle_msgs:
+                assert m["subject_name"]
+                assert m["content"] == f"{m['subject_name']} 因閒置逾時被移出聊天室"
+                assert m["subject_id"]
+            # sender_id 不能借用：watcher 會把自己發的訊息當成自己的
+            assert all(m["sender_id"] is None for m in got.values())
+            # 非離場訊息沒有 subject
+            join = next(m for m in msgs if m["system_event"] == "join")
+            assert join["subject_name"] is None and join["subject_id"] is None

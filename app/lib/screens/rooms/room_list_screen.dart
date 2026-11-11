@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -77,21 +78,22 @@ class _RoomListPaneState extends ConsumerState<RoomListPane> {
   }
 
   Future<void> _deleteRoom(Room room) async {
+    final reason = ref.read(hostViewProvider) ? TextEditingController() : null;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => DeleteRoomConfirm(name: room.name),
+      builder: (_) => DeleteRoomConfirm(name: room.name, reason: reason),
     );
     if (ok != true) return;
     try {
-      final counts = await ref
-          .read(roomsApiProvider)
-          .deleteRoom(
-            room.id,
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-            participantId: ref
-                .read(settingsRepoProvider)
-                .participantId(room.id),
-          );
+      final counts = await runWithHostReason(
+        reason?.text,
+        () => ref.read(roomsApiProvider).deleteRoom(
+              room.id,
+              sessionKey: ref.read(appConfigProvider).deviceKey,
+              participantId:
+                  ref.read(settingsRepoProvider).participantId(room.id),
+            ),
+      );
       await ref.read(settingsRepoProvider).setParticipantId(room.id, null);
       ref.invalidate(roomListProvider);
       if (mounted) {

@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-import '../l10n/l10n.dart';
 
 /// 想法板：**一串有 id 的段落**，不是一份自由文字。
 ///
@@ -279,82 +278,6 @@ class Scratchpad {
         ScratchpadBlock.fromJson(b as Map<String, dynamic>),
     ],
   );
-}
-
-/// 追蹤收件匣裡的一筆。**跨板**——「我在等的東西完成了嗎」不分板。
-@immutable
-class WatchNotice {
-  const WatchNotice({
-    required this.id,
-    this.boardId = '',
-    this.boardName = '',
-    this.itemKind = '',
-    this.itemId = '',
-    this.itemTitle = '',
-    this.eventType = '',
-    this.actorName = '',
-    this.createdAt,
-    this.readAt,
-  });
-
-  final String id;
-  final String boardId;
-  final String boardName;
-  final String itemKind;
-  final String itemId;
-  final String itemTitle;
-
-  /// Hub 實際會寫進來的（`app.py` 4321 與 6839／6872）：
-  /// `task_done` / `task_cancelled` / `task_reopened` /
-  /// `delivery_degraded` / `delivery_restored`。
-  ///
-  /// **「你等的那張卡又打開了」跟完成一樣重要**——漏掉它等於讓人以為
-  /// 可以動工了。
-  final String eventType;
-
-  final String actorName;
-  final String? createdAt;
-  final String? readAt;
-
-  bool get unread => (readAt ?? '').isEmpty;
-
-  factory WatchNotice.fromJson(Map<String, dynamic> json) => WatchNotice(
-    id: (json['id'] as String?) ?? '',
-    boardId: (json['board_id'] as String?) ?? '',
-    boardName: (json['board_name'] as String?) ?? '',
-    itemKind: (json['item_kind'] as String?) ?? '',
-    itemId: (json['item_id'] as String?) ?? '',
-    itemTitle: (json['item_title'] as String?) ?? '',
-    eventType: (json['event_type'] as String?) ?? '',
-    actorName: (json['actor_name'] as String?) ?? '',
-    createdAt: json['created_at'] as String?,
-    readAt: json['read_at'] as String?,
-  );
-}
-
-/// 把 [eventType] 講成人看得懂的一句話。
-///
-/// ⚠️ 不認得的事件**照樣要說出來**，不要吞掉——收件匣裡少一筆，使用者不會
-/// 知道少了，而他正在等的可能就是那一筆。所以 default 分支印出原始事件名，
-/// 難看，但看得見。
-String watchNoticeLabel(
-    AppLocalizations l10n, String eventType, String itemTitle) {
-  final t = itemTitle.isEmpty
-      ? l10n.boardWatchNoticeSomeCard
-      : l10n.commonQuoted(itemTitle);
-  // ⚠️ 這兩個的 item_title 是**板名**，不是卡名（Hub 寫 item_kind='board'）。
-  // 套上面那個 `t` 的話會變成「「某某板」完成了」那種句子
-  final b = itemTitle.isEmpty
-      ? l10n.boardWatchNoticeWatchedBoard
-      : l10n.commonQuoted(itemTitle);
-  return switch (eventType) {
-    'task_done' => l10n.boardWatchNoticeTaskDone(t),
-    'task_cancelled' => l10n.boardWatchNoticeTaskCancelled(t),
-    'task_reopened' => l10n.boardWatchNoticeTaskReopened(t),
-    'delivery_degraded' => l10n.boardWatchNoticeDeliveryDegraded(b),
-    'delivery_restored' => l10n.boardWatchNoticeDeliveryRestored(b),
-    _ => l10n.boardWatchNoticeOther(t, eventType),
-  };
 }
 
 /// 這一則註解，現在這個人能不能把它標成已處理。

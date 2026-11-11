@@ -6,6 +6,8 @@ import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../models/release.dart';
 import '../../state/board_providers.dart';
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../widgets/uep_button.dart';
 
 /// 確認週期，順便上板（C6）。
@@ -40,7 +42,7 @@ Future<void> showObjectiveVerifyDialog(
 /// 已確認（verified／done）的週期補上板。
 ///
 /// 重用確認對話框的候選清單與表單，但送出走 `createRelease`、不動週期
-/// 狀態：上一次上板失敗後週期已經是 verified，沒有別的入口能再來一次。
+/// 狀態：給 verified 但從沒上板過的週期補一次上板。
 Future<void> showObjectiveReleaseDialog(
   BuildContext context, {
   required BoardActions actions,
@@ -49,7 +51,9 @@ Future<void> showObjectiveReleaseDialog(
     showDialog<void>(
       context: context,
       builder: (_) => _VerifyDialog(
-          actions: actions, objectiveId: objectiveId, releaseOnly: true),
+          actions: actions,
+          objectiveId: objectiveId,
+          releaseOnly: true),
     );
 
 class _VerifyDialog extends StatefulWidget {
@@ -178,6 +182,14 @@ class _VerifyDialogState extends State<_VerifyDialog> {
       setState(() => _error = l10n.boardReleaseNoRepo);
       return;
     }
+    // 主持人模式：確認週期前問一次理由（補上板不問）
+    var reason = '';
+    if (!widget.releaseOnly) {
+      final asked = await askHostReason(context,
+          title: l10n.hostReasonVerifyObjectiveTitle);
+      if (asked == null || !mounted) return;
+      reason = asked;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -194,8 +206,11 @@ class _VerifyDialogState extends State<_VerifyDialog> {
         }
         await widget.actions.createRelease(widget.objectiveId, release);
       } else {
-        await widget.actions
-            .verifyObjective(widget.objectiveId, release: release);
+        await runWithHostReason(
+          reason,
+          () => widget.actions
+              .verifyObjective(widget.objectiveId, release: release),
+        );
       }
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {

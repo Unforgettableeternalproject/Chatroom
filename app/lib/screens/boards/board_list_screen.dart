@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
@@ -11,7 +13,6 @@ import '../../l10n/l10n.dart';
 import '../../models/board.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
-import '../../state/scratchpad_providers.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/host_mode_toggle.dart';
 import '../../widgets/kind_badge.dart';
@@ -51,12 +52,20 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   Future<void> _toggleArchive(BoardSummary board) async {
     final api = ref.read(boardsApiProvider);
     final key = ref.read(appConfigProvider).deviceKey;
+    final l10n = AppLocalizations.of(context);
+    final reason = await askHostReason(context,
+        title: board.isArchived
+            ? l10n.hostReasonUnarchiveBoardTitle
+            : l10n.hostReasonArchiveBoardTitle);
+    if (reason == null || !mounted) return;
     try {
-      if (board.isArchived) {
-        await api.unarchive(board.id, sessionKey: key);
-      } else {
-        await api.archive(board.id, sessionKey: key);
-      }
+      await runWithHostReason(reason, () async {
+        if (board.isArchived) {
+          await api.unarchive(board.id, sessionKey: key);
+        } else {
+          await api.archive(board.id, sessionKey: key);
+        }
+      });
       for (final v in ['active', 'archived', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
       }
@@ -78,13 +87,24 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
   Future<void> _delete(BoardSummary board) async {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
+    final reasonCtl = ref.read(hostViewProvider) ? TextEditingController() : null;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(l10n.boardDeleteTitle,
             style: UepText.pageTitle(color: s.inkTitle)),
-        content: Text(l10n.boardDeleteBody(board.name),
-            style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(l10n.boardDeleteBody(board.name),
+                style:
+                    UepText.serif(size: 14.5, color: s.inkSoft, height: 1.6)),
+          ),
+          if (reasonCtl != null) ...[
+            const SizedBox(height: 12),
+            HostReasonField(controller: reasonCtl),
+          ],
+        ]),
         actions: [
           UepButton(
             label: l10n.commonCancel,
@@ -103,8 +123,11 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     );
     if (ok != true || !mounted) return;
     try {
-      await ref.read(boardsApiProvider).delete(board.id,
-          sessionKey: ref.read(appConfigProvider).deviceKey);
+      await runWithHostReason(
+        reasonCtl?.text,
+        () => ref.read(boardsApiProvider).delete(board.id,
+            sessionKey: ref.read(appConfigProvider).deviceKey),
+      );
       for (final v in ['active', 'archived', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
       }
@@ -132,12 +155,18 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
       hint: AppLocalizations.of(context).boardRenameHint,
     );
     if (name == null || !mounted) return;
+    final reason = await askHostReason(context,
+        title: AppLocalizations.of(context).hostReasonRenameBoardTitle);
+    if (reason == null || !mounted) return;
     try {
-      await ref.read(boardsApiProvider).rename(
-            board.id,
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-            name: name,
-          );
+      await runWithHostReason(
+        reason,
+        () => ref.read(boardsApiProvider).rename(
+              board.id,
+              sessionKey: ref.read(appConfigProvider).deviceKey,
+              name: name,
+            ),
+      );
       // 三頁都重拉：改過名的板可能出現在任何一頁，而清單上的名字是快照
       for (final v in ['active', 'archived', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
@@ -197,11 +226,6 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
             Row(children: [
               MonoLabel(l10n.boardLibraryTitle, letterSpacing: 2.0),
               const Spacer(),
-              // 追蹤收件匣的入口。**紅點在這裡是必要的**，不是裝飾：
-              // 裁決 #392 ②A 是「離線通知留著，回來就知道」，而知道的
-              // 管道只有這一個——沒有它，通知留著了，但沒有任何地方會
-              // 告訴他有東西留著，②A 在使用上就等於「不通知」
-              const _NoticesButton(),
               // 開一塊新的板。**這個入口從前不存在**——板只能靠「在房裡寫
               // 第一張卡」長出來（lazy 建立），於是 BOARDS 分頁只看得到板、
               // 開不了板，而「先開一塊板再決定掛去哪」根本走不通
@@ -649,18 +673,6 @@ class _BoardTile extends StatelessWidget {
                     .boardAttachedRoomCount(board.attachedRoomCount),
                 color: s.inkMute,
               ),
-              // ⚠️ **「掛 1 房」與「掛 1 房但沒有一間活著」在畫面上不能長得
-              // 一樣。** 後者表示追蹤者不會再被叫醒，只能自己回來看，而那是
-              // 一個會持續下去的狀態（裁決 #431），不是一個閃過去的提示。
-              // 封存最後一間活房正是製造這個狀態的路徑
-              if (board.inboxOnly) ...[
-                const SizedBox(width: 10),
-                _Meta(
-                  glyph: '⚑',
-                  text: AppLocalizations.of(context).boardInboxOnly,
-                  color: UepColors.gold,
-                ),
-              ],
               const SizedBox(width: 10),
               _Meta(
                 glyph: '✓',
@@ -702,105 +714,6 @@ class _Meta extends StatelessWidget {
           Text(text, style: UepText.mono(size: 10.5, color: color)),
         ],
       );
-}
-
-/// 「我在等的東西」入口，帶未讀數。
-class _NoticesButton extends ConsumerWidget {
-  const _NoticesButton();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final s = context.uep;
-    final unread = ref.watch(watchNoticesProvider).maybeWhen(
-          data: (d) => d.unread,
-          orElse: () => 0,
-        );
-    // 右鍵（桌面）／長按（行動）開選單。長按在行動端會同時觸發 Tooltip，
-    // 兩者搶同一個手勢，所以 tooltip 改由外層 Tooltip 以 manual 模式提供
-    // （hover 照常顯示，長按留給選單）
-    return GestureDetector(
-      behavior: HitTestBehavior.deferToChild,
-      onSecondaryTapUp: (d) => _showMenu(context, ref, d.globalPosition, unread),
-      onLongPressStart: (d) => _showMenu(context, ref, d.globalPosition, unread),
-      child: Tooltip(
-        message: unread == 0
-            ? AppLocalizations.of(context).boardWatchNoticesTitle
-            : AppLocalizations.of(context).boardWatchNoticesTitleUnread(unread),
-        triggerMode: TooltipTriggerMode.manual,
-        child: IconButton(
-          visualDensity: VisualDensity.compact,
-          onPressed: () => context.go('/notices'),
-          icon: Stack(clipBehavior: Clip.none, children: [
-            Icon(Icons.notifications_none,
-                size: 15, color: unread == 0 ? s.inkMute : UepColors.gold),
-            if (unread > 0)
-              Positioned(
-                right: -3,
-                top: -3,
-                child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: const BoxDecoration(
-                      color: UepColors.gold, shape: BoxShape.circle),
-                ),
-              ),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  /// 右鍵選單。座標處理同 message_bubble 的 `_showMenu`（root overlay 與
-  /// root navigator 成對指定，選單才會落在游標上）。
-  Future<void> _showMenu(
-      BuildContext context, WidgetRef ref, Offset globalPos, int unread) async {
-    final s = context.uep;
-    final l10n = AppLocalizations.of(context);
-    final overlay = Overlay.of(context, rootOverlay: true)
-        .context
-        .findRenderObject()! as RenderBox;
-    final choice = await showMenu<String>(
-      context: context,
-      useRootNavigator: true,
-      position: RelativeRect.fromRect(
-        Rect.fromPoints(globalPos, globalPos),
-        Offset.zero & overlay.size,
-      ),
-      color: s.bgCard,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: s.lineStrong),
-      ),
-      items: [
-        // 沒有未讀就停用，不隱藏——選單形狀固定，使用者知道有這個動作
-        PopupMenuItem(
-          value: 'markAllRead',
-          enabled: unread > 0,
-          height: 36,
-          child: Text(l10n.boardWatchMarkAllRead,
-              style: UepText.sans(
-                  size: 13.5, color: unread > 0 ? s.ink : s.inkMute)),
-        ),
-      ],
-    );
-    if (choice != 'markAllRead' || !context.mounted) return;
-    // 沿用通知頁「全部標為已讀」的同一支 API（Hub 端 all=true，單次請求）
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final n = await ref.read(watchApiProvider).markRead(
-            sessionKey: ref.read(appConfigProvider).deviceKey,
-            all: true,
-          );
-      ref.invalidate(watchNoticesProvider);
-      messenger.showSnackBar(SnackBar(
-        content: Text(n == 0
-            ? l10n.boardWatchNoUnread
-            : l10n.boardWatchMarkedRead(n)),
-      ));
-    } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(e.message)));
-    }
-  }
 }
 
 /// 開一塊板時只問名字。

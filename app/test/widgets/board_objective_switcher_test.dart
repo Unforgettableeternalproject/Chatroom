@@ -1,3 +1,4 @@
+import 'package:chatroom_app/state/app_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/models/board.dart';
 import 'package:chatroom_app/screens/board/board_screen.dart';
@@ -5,6 +6,7 @@ import 'package:chatroom_app/state/board_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 窄版（< 900）左欄收掉後，切換週期要有入口；寬版維持左欄。
@@ -26,6 +28,7 @@ final _snap = const BoardSnapshot().merge(BoardDelta.fromJson({
 
 Widget _wrap() => ProviderScope(
       overrides: [
+        initialConfigProvider.overrideWithValue(kTestInitialConfig),
         boardByIdProvider('b1').overrideWith((ref) async => _snap),
       ],
       child: MaterialApp(

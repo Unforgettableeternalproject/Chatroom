@@ -1001,7 +1001,9 @@ class RunnerLoop:
                     for item in items:
                         fh.write(json.dumps(
                             {"seq": item.get("seq"),
+                             "id": item.get("id", ""),
                              "from": item.get("from", ""),
+                             "from_kind": item.get("from_kind", ""),
                              "text": item.get("text", "")},
                             ensure_ascii=False) + "\n")
             except OSError as exc:

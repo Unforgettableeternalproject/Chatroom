@@ -21,6 +21,8 @@ class Room {
     this.workspaceServed = false,
     this.singleWriter = true,
     this.autoArchive = true,
+    this.archivedByHost = false,
+    this.archiveReason = '',
   });
 
   final String id;
@@ -94,6 +96,12 @@ class Room {
   /// 而舊 Hub 其實照收。
   final bool autoArchive;
 
+  /// 是不是被 Hub 主持人封存的（建立者仍可解封）。
+  final bool archivedByHost;
+
+  /// 封存理由；Hub 沒回就是空字串。
+  final String archiveReason;
+
   bool get isArchived => status == 'archived';
 
   /// 工作房。派工入口與執行儀表板只在這種房出現——Hub 對非 ops 房的建單
@@ -134,6 +142,8 @@ class Room {
         workspaceServed: (json['workspace_served'] as bool?) ?? false,
         singleWriter: (json['single_writer'] as bool?) ?? true,
         autoArchive: (json['auto_archive'] as bool?) ?? true,
+        archivedByHost: (json['archived_by_host'] as bool?) ?? false,
+        archiveReason: (json['archive_reason'] as String?) ?? '',
       );
 
   Room copyWith({
@@ -147,6 +157,8 @@ class Room {
     bool? workspaceServed,
     bool? singleWriter,
     bool? autoArchive,
+    bool? archivedByHost,
+    String? archiveReason,
   }) =>
       Room(
         id: id,
@@ -167,6 +179,8 @@ class Room {
         workspaceServed: workspaceServed ?? this.workspaceServed,
         singleWriter: singleWriter ?? this.singleWriter,
         autoArchive: autoArchive ?? this.autoArchive,
+        archivedByHost: archivedByHost ?? this.archivedByHost,
+        archiveReason: archiveReason ?? this.archiveReason,
       );
 
   @override

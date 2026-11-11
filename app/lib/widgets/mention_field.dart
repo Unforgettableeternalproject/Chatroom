@@ -844,11 +844,16 @@ class _MessageComposerState extends State<MessageComposer> {
                           // 回覆帶的那個人也要算進來——他不是打出來的，
                           // 但他一樣會被通知
                           final fromReply = _replyMentionName();
-                          final names = [
-                            ...typed,
-                            if (fromReply != null && !typed.contains(fromReply))
-                              fromReply,
-                          ];
+                          final names = mentionPreviewNames(
+                            [
+                              ...typed,
+                              if (fromReply != null &&
+                                  !typed.contains(fromReply))
+                                fromReply,
+                            ],
+                            widget.members,
+                            selfParticipantId: widget.selfParticipantId,
+                          );
                           final refs =
                               extractCardRefs(value.text, widget.cards);
                           if (names.isEmpty && refs.isEmpty) {

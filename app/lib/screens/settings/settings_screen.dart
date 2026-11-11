@@ -661,6 +661,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
           ]),
         ],
+        const SizedBox(height: 22),
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.settingsDevModeLabel,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text(l10n.settingsDevModeHint,
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          Switch(
+            value: config.devMode,
+            activeThumbColor: UepColors.gold,
+            activeTrackColor: UepColors.gold.withValues(alpha: .28),
+            onChanged: (v) =>
+                ref.read(appConfigProvider.notifier).setDevMode(v),
+          ),
+        ]),
+        const SizedBox(height: 22),
+        Row(children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.settingsCelebrationLabel,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                const SizedBox(height: 3),
+                Text(l10n.settingsCelebrationHint,
+                    style: UepText.serif(size: 12, color: s.inkMute)),
+              ],
+            ),
+          ),
+          Switch(
+            value: config.celebrationMode,
+            activeThumbColor: UepColors.gold,
+            activeTrackColor: UepColors.gold.withValues(alpha: .28),
+            onChanged: (v) =>
+                ref.read(appConfigProvider.notifier).setCelebrationMode(v),
+          ),
+        ]),
         if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) ...[
           const SizedBox(height: 22),
           Row(children: [

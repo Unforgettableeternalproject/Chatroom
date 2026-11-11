@@ -133,6 +133,31 @@ class TestNameExtraction:
         assert _who_left(None, "無法解析") == "無法解析"
 
 
+SPACED = "Core 開發 (工具層)"
+
+
+@pytest.mark.parametrize("event,reason,content", [
+    ("leave", "left", f"{SPACED} 離開了聊天室"),
+    ("kick", "kicked", f"{SPACED} 已被管理員移出聊天室"),
+    ("idle_removed", "idle_removed", f"{SPACED} 因閒置逾時被移出聊天室"),
+])
+class TestNameWithSpaces:
+    """名字含空白時 who 不能只剩第一段（曾經只剩「Core」）。"""
+
+    def test_structured_subject_name_wins(self, monkeypatch, event, reason, content):
+        msg = _system(1, event, content)
+        msg["subject_name"] = SPACED
+        left = [e for e in _run(monkeypatch, [msg]) if e["event"] == "member_left"]
+        assert [e["who"] for e in left] == [SPACED]
+        assert left[0]["reason"] == reason
+
+    def test_old_hub_fallback_reads_known_tail(self, monkeypatch, event, reason, content):
+        """舊 Hub 沒有 subject_name：靠已知句尾切，名字保留空白。"""
+        left = [e for e in _run(monkeypatch, [_system(1, event, content)])
+                if e["event"] == "member_left"]
+        assert [e["who"] for e in left] == [SPACED]
+
+
 class TestFirstPollSuppression:
     """掛上後的第一輪不發進出事件——那些是歷史，不是現在發生的事。
 

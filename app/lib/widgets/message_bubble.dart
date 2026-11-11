@@ -11,6 +11,7 @@ import 'attachment_view.dart';
 import 'kind_badge.dart';
 import 'markdown_body.dart';
 import 'message_reactions.dart';
+import 'copyable_id.dart';
 
 /// 訊息操作回呼（由 ChatScreen 提供實作）。
 class MessageActions {
@@ -68,7 +69,11 @@ class MessageBubble extends StatelessWidget {
     this.roomId,
     this.subagentOf,
     this.onTapCard,
+    this.devMode = false,
   });
+
+  /// 開發者模式：時間後面顯示 `#seq`（點擊複製），右鍵選單多「複製訊息 ID」。
+  final bool devMode;
 
   /// 點了內文裡的卡片指涉 chip。往上傳到畫面層去導覽——氣泡不知道路由
   /// 這回事，就像它不知道 Hub 在哪一樣。
@@ -125,6 +130,10 @@ class MessageBubble extends StatelessWidget {
       children: [
         if (isSelf) ...[
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
+          if (devMode) ...[
+            const SizedBox(width: 6),
+            CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          ],
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
@@ -147,6 +156,10 @@ class MessageBubble extends StatelessWidget {
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
+          if (devMode) ...[
+            const SizedBox(width: 6),
+            CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          ],
           if (isSub) ...[
             const SizedBox(width: 8),
             Text(l10n.msgSubagentOf(subagentOf!),
@@ -212,7 +225,7 @@ class MessageBubble extends StatelessWidget {
             // 聚焦」那個強度。
             //
             // ⚠️ 跳轉聚焦**不再參與這條鏈**：它改成疊在外圈的呼吸效果
-            // （見 [_FocusPulse]）。兩者都用金色卻是兩件事——一個是「這則
+            // （見 [FocusPulse]）。兩者都用金色卻是兩件事——一個是「這則
             // 很重要」，一個是「你剛剛跳到這裡」，共用同一個強度就分不出來。
             //
             // 標記成員仍壓過釘選：釘選在 header 已有「❖ 已釘選」字樣，
@@ -289,7 +302,7 @@ class MessageBubble extends StatelessWidget {
     // 就是「光暈沒有貼合氣泡」。自己的訊息沒有那一層，所以同一份程式碼在
     // 自己的訊息上是準的，只有別人的偏——「有時候準」正是它被當成小瑕疵
     // 放過的原因（艾斯維爾 09/09 房 seq 22 附圖）
-    final pulsed = highlighted ? _FocusPulse(child: body) : body;
+    final pulsed = highlighted ? FocusPulse(child: body) : body;
 
     // 標記的成員左軸加粗到 5px，與整圈邊框、淡底一起構成強調。自己的
     // 訊息沒有左軸也不需要標記——不會有人在等自己回話
@@ -360,6 +373,7 @@ class MessageBubble extends StatelessWidget {
           message: message,
           actions: actions,
           isSelf: isSelf,
+          devMode: devMode,
           child: canReact ? _HoverScope(child: column) : column,
         ),
       ),
@@ -542,8 +556,10 @@ class _ContextMenuRegion extends StatelessWidget {
     required this.message,
     required this.actions,
     required this.isSelf,
+    this.devMode = false,
   });
 
+  final bool devMode;
   final Widget child;
   final Message message;
   final MessageActions? actions;
@@ -639,6 +655,13 @@ class _ContextMenuRegion extends StatelessWidget {
               Text(l10n.msgMenuCopy,
                   style: UepText.sans(size: 13.5, color: s.ink)),
         ),
+        if (devMode)
+          PopupMenuItem(
+            value: 'copy_id',
+            height: 36,
+            child: Text(l10n.devCopyMessageId,
+                style: UepText.sans(size: 13.5, color: s.ink)),
+          ),
         if (a.enabled) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
@@ -659,6 +682,9 @@ class _ContextMenuRegion extends StatelessWidget {
         a.onCreateTask(message);
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.content));
+      case 'copy_id':
+        if (!context.mounted) return;
+        await copyIdToClipboard(context, message.id);
       case 'react':
         if (!context.mounted) return;
         final picked = await showReactionPicker(context, globalPos,
@@ -688,18 +714,20 @@ class _ContextMenuRegion extends StatelessWidget {
 /// 那個顏色，兩件事就會互相覆蓋：跳到一則沒釘選的訊息看起來像它被釘了，
 /// 跳到一則釘選訊息則什麼都看不出來。
 ///
+/// 公開是因為 system 訊息（run 的完成通知）的跳轉也要播同一個呼吸。
+///
 /// ⚠️ **只在 `highlighted` 為真時才建這個 widget**（呼叫端已經這樣做）。
 /// 無條件建立的話，畫面上每一則訊息都掛著一個永遠在跑的 ticker。
-class _FocusPulse extends StatefulWidget {
-  const _FocusPulse({required this.child});
+class FocusPulse extends StatefulWidget {
+  const FocusPulse({super.key, required this.child});
 
   final Widget child;
 
   @override
-  State<_FocusPulse> createState() => _FocusPulseState();
+  State<FocusPulse> createState() => FocusPulseState();
 }
 
-class _FocusPulseState extends State<_FocusPulse>
+class FocusPulseState extends State<FocusPulse>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,

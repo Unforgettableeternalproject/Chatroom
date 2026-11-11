@@ -104,6 +104,18 @@ async def test_every_board_seq_has_exactly_one_event(tmp_path):
             # ── 軟刪除
             await client.delete(f"/api/board/tasks/{loose}", headers=hdr)
 
+            # ── 階段搬到另一個週期
+            oid2 = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                                      json={"title": "另一個週期"},
+                                      headers=hdr)).json()["id"]
+            mv = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                                    json={"title": "要搬的階段"},
+                                    headers=hdr)).json()["id"]
+            moved = await client.post(f"/api/board/checklists/{mv}/move",
+                                      json={"objective_id": oid2},
+                                      headers=hdr)
+            assert moved.status_code == 200, moved.text
+
             # ── 週期收尾的四步
             await client.post(f"/api/board/checklists/{cid}/status",
                               json={"status": "done"}, headers=hdr)

@@ -1,8 +1,11 @@
+import 'package:chatroom_app/state/app_providers.dart';
+import 'package:chatroom_app/state/messages_providers.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/screens/chat/chat_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../helpers/app_config.dart';
 import '../helpers/l10n.dart';
 
 /// 聊天室頂端那一排入口，分的是**檢視／寫入**，不是活著／封存。
@@ -13,6 +16,12 @@ import '../helpers/l10n.dart';
 ///
 /// 這排從來沒有被 widget 測試蓋到，所以兩次都要等人在實機上撞見。
 Widget _wrap({required bool archived}) => ProviderScope(
+      overrides: [
+        initialConfigProvider.overrideWithValue(kTestInitialConfig),
+        // 選單會 watch identityProvider；有了 config 它就真的去 join，這裡擋掉
+        identityProvider('r1').overrideWith(
+            (ref) async => (participantId: 'p1', displayName: '測試')),
+      ],
       child: MaterialApp(
         localizationsDelegates: kTestLocalizationsDelegates,
         supportedLocales: kTestSupportedLocales,

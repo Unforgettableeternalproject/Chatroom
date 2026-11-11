@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/host_reason.dart';
 import '../api/rooms_api.dart';
 import '../core/errors/api_exception.dart';
 import '../core/theme/uep_theme.dart';
@@ -8,6 +9,7 @@ import '../core/theme/uep_tokens.dart';
 import '../l10n/l10n.dart';
 import '../state/app_providers.dart';
 import '../state/rooms_providers.dart';
+import 'host_reason.dart';
 import 'kind_badge.dart';
 import 'uep_button.dart';
 
@@ -61,13 +63,24 @@ class _ArchiveRequestBannerState extends ConsumerState<ArchiveRequestBanner> {
   }
 
   Future<void> _resolve(bool approve) => _run(() async {
-        await ref.read(roomsApiProvider).resolveArchiveRequest(
-              widget.request.id,
-              approve: approve,
-              sessionKey: ref.read(appConfigProvider).deviceKey,
-              participantId:
-                  ref.read(settingsRepoProvider).participantId(widget.roomId),
-            );
+        final l10n = AppLocalizations.of(context);
+        // 主持人模式：核准／婉拒前問一次理由（一般模式不彈框）
+        final reason = await askHostReason(context,
+            title: approve
+                ? l10n.hostReasonApproveArchiveTitle
+                : l10n.hostReasonDeclineArchiveTitle);
+        if (reason == null) return;
+        await runWithHostReason(
+          reason,
+          () => ref.read(roomsApiProvider).resolveArchiveRequest(
+                widget.request.id,
+                approve: approve,
+                sessionKey: ref.read(appConfigProvider).deviceKey,
+                participantId: ref
+                    .read(settingsRepoProvider)
+                    .participantId(widget.roomId),
+              ),
+        );
       });
 
   Future<void> _cancel() => _run(() async {

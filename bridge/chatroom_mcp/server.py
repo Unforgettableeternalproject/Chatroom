@@ -1766,8 +1766,8 @@ def chatroom_board_add(
     - ``checklist``——週期底下的**階段**（「Hub 端」「App 端」「測試」）。
       ``parent_id`` 給 objective 的 id
     - ``task``——**一個人做得完的一件事**。``parent_id`` 給 checklist 的 id；
-      **想隨手記一件事就別給**，Hub 會把它放進「未分類」（那兩層會重用，
-      不會每次長出新的）。事後再搬即可——為了記一件事先蓋兩層，
+      **想隨手記一件事就別給**，Hub 會把它放進「未分類」使用中的那一頁
+      （同時只有一頁；那頁完成後 Hub 會自動開下一頁）。事後再搬即可——為了記一件事先蓋兩層，
       實際的結果是根本不記
 
     ``source_seq`` 填房內訊息的 seq，卡片就會指回長出它的那則討論——
@@ -1848,6 +1848,9 @@ def chatroom_board_update(
     / ``done`` / ``cancelled``；Checklist 走 ``open`` / ``done`` /
     ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``
     / ``complete``（完成）。
+
+    ``reopen``（打回）原則上只有人類按得下去；唯一的例外是派工的 release_fix
+    agent 對**自己這一批的週期**（上板嚴重無法完成時）。
 
     ⚠️ ``complete`` 這條 bridge 放行，但**只有人類按得下去**——送過去會被
     Hub 以 403 擋回來。週期收尾的兩道閘（確認無誤、完成）都是人類的，

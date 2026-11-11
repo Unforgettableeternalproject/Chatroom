@@ -13,6 +13,7 @@ import dataclasses
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -319,19 +320,28 @@ async def test_bad_agent_result_is_rolled_back_and_fails(
     _assert_clean_and_home(repo)
 
 
-async def test_ff_only_never_merges_or_calls_the_agent(tmp_path, monkeypatch):
+async def test_ff_only_falls_back_to_merge_and_conflict_goes_to_the_agent(
+        tmp_path, monkeypatch):
+    """ff_only 快轉不了不再放棄：退回 merge，之後與一般上板同一條路——撞衝突
+    就交給解衝突 agent。"""
     _scenario(monkeypatch, "conflict_resolve")
     repo, bare = make_repo(tmp_path, "JSAI-Web")
     before = _stable_conflict(repo, bare)
+    develop = git(repo, "rev-parse", "develop")
     cfg = make_config(tmp_path, {"JSAI-Web": repo},
                       release={"merge_method": "ff_only"})
 
     outcome = await executor(cfg, _RecordingHub()).execute(
         make_run([entry()]))
 
-    assert "release_ff_not_possible" in outcome.result
-    assert "解衝突" not in outcome.result
-    assert git(repo, "rev-parse", "main") == before
+    assert (outcome.status, outcome.reason) == ("done", "released"), \
+        outcome.result
+    assert "release_ff_not_possible" not in outcome.result
+    assert "退回簽章 merge commit" in outcome.result
+    assert "agent 解衝突" in outcome.result
+    parents = git(repo, "rev-list", "--parents", "-n", "1", "main").split()[1:]
+    assert parents == [before, develop]
+    assert git(bare, "rev-parse", "main") == git(repo, "rev-parse", "main")
     _assert_clean_and_home(repo)
 
 
@@ -339,7 +349,7 @@ async def test_ff_only_never_merges_or_calls_the_agent(tmp_path, monkeypatch):
 
 def _race_on_push(monkeypatch, tmp_path, bare, *, times: int):
     """前 ``times`` 次推 main 之前，先讓別人往 origin 塞一顆（非快轉）。"""
-    real = gitops.push_ref
+    real = gitops.push_head
     state = {"calls": 0, "raced": 0}
 
     async def racing(path, ref, extra=None):
@@ -352,7 +362,7 @@ def _race_on_push(monkeypatch, tmp_path, bare, *, times: int):
                                f"別人搶先推的 {state['raced']}")
         return await real(path, ref, extra)
 
-    monkeypatch.setattr(gitops, "push_ref", racing)
+    monkeypatch.setattr(gitops, "push_head", racing)
     return state
 
 
@@ -400,14 +410,14 @@ async def test_hook_rejection_is_not_retried(tmp_path, monkeypatch):
     from .test_release import _reject_hook
     repo, bare = make_repo(tmp_path, "JSAI-Web")
     _reject_hook(bare, "exit 1")
-    real = gitops.push_ref
+    real = gitops.push_head
     calls = []
 
     async def counting(path, ref, extra=None):
         calls.append(ref)
         return await real(path, ref, extra)
 
-    monkeypatch.setattr(gitops, "push_ref", counting)
+    monkeypatch.setattr(gitops, "push_head", counting)
     cfg = make_config(tmp_path, {"JSAI-Web": repo})
 
     outcome = await executor(cfg, _RecordingHub()).execute(
@@ -491,7 +501,13 @@ async def test_cancel_while_agent_runs_restores(tmp_path, monkeypatch):
         if stream.exists() and stream.stat().st_size > 0:
             break
         await asyncio.sleep(0.1)
-    assert _merging(repo), "agent 起來的時候合併應該停在衝突狀態"
+    # 合併停在衝突狀態的是 runner 的暫存 worktree，不是使用者的工作樹
+    worktrees = [line[len("worktree "):] for line in
+                 git(repo, "worktree", "list", "--porcelain").splitlines()
+                 if line.startswith("worktree ")]
+    assert len(worktrees) == 2, "agent 起來的時候應該有一個暫存 worktree"
+    assert _merging(Path(worktrees[1])), "agent 起來的時候合併應該停在衝突狀態"
+    assert not _merging(repo), "使用者的工作樹不該進入合併狀態"
     cancel.set()
     outcome = await asyncio.wait_for(task, timeout=60)
 
@@ -499,6 +515,8 @@ async def test_cancel_while_agent_runs_restores(tmp_path, monkeypatch):
     assert "收到取消" in outcome.result
     assert git(repo, "rev-parse", "main") == before
     _assert_clean_and_home(repo)
+    assert git(repo, "worktree", "list", "--porcelain").count(
+        "worktree ") == 1, "取消後暫存 worktree 要清掉"
 
 
 async def test_untracked_leftover_from_agent_is_cleaned_on_restore(

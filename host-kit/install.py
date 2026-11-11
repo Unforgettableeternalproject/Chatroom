@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -305,6 +307,9 @@ def register_service() -> bool:
 
     **失敗不中止安裝**：Hub 本體已經可用，手跑一次腳本就補得回來。
     """
+    if _no_system():
+        print("  UEP_KIT_NO_SYSTEM 已設定——略過註冊排程工作")
+        return False
     script = KIT / "scripts" / "hub-service.ps1"
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if not script.exists() or shell is None:
@@ -318,6 +323,128 @@ def register_service() -> bool:
               f"可之後手動執行：pwsh -File {script} install")
         return False
     return True
+
+
+# `scripts/hub-service.ps1 install` 註冊的工作設定。升級時 install.py 不會重新
+# 註冊既有工作，舊版註冊的值（例如 Priority 7）會一直留著，所以這裡比對、修正。
+# ⚠️ 要與 hub-service.ps1 的 New-ScheduledTaskSettingsSet 同步（有測試守著）
+SERVICE_TASK = "ChatroomHub"
+SERVICE_WANT = {
+    "priority": 4,
+    "restart_count": 999,
+    "restart_interval_s": 60,
+    "time_limit_s": 0,
+}
+
+
+def _iso_seconds(value) -> int | None:
+    """把工作排程器回報的 ISO 8601 時長（PT1M、PT0S、P1DT2H）轉成秒；讀不懂回 None。"""
+    m = re.fullmatch(
+        r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?",
+        str(value or "").strip())
+    if not m:
+        return None
+    d, h, mi, sec = (float(x) if x else 0 for x in m.groups())
+    return int(d * 86400 + h * 3600 + mi * 60 + sec)
+
+
+def _norm_path(value) -> str:
+    return str(value or "").strip().strip('"').replace("/", "\\").lower()
+
+
+def _no_system() -> bool:
+    """測試用總開關：設了 UEP_KIT_NO_SYSTEM 就不執行任何 PowerShell／排程指令。"""
+    return bool(os.environ.get("UEP_KIT_NO_SYSTEM"))
+
+
+def _ps_run(shell: str, script: str) -> "subprocess.CompletedProcess":
+    if _no_system():
+        return subprocess.CompletedProcess([shell], 1, "", "UEP_KIT_NO_SYSTEM")
+    return subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", script],
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace")
+
+
+def service_drift(current: dict, wrapper: str) -> dict:
+    """比對現有工作與期望設定，回傳 {欄位: (現值, 期望值)}；一致時為空。"""
+    want = dict(SERVICE_WANT)
+    drift: dict = {}
+    if current.get("priority") != want["priority"]:
+        drift["priority"] = (current.get("priority"), want["priority"])
+    if _norm_path(current.get("execute")) != _norm_path(wrapper):
+        drift["execute"] = (current.get("execute"), wrapper)
+    if current.get("restart_count") != want["restart_count"]:
+        drift["restart_count"] = (current.get("restart_count"), want["restart_count"])
+    got = _iso_seconds(current.get("restart_interval"))
+    if got != want["restart_interval_s"]:
+        drift["restart_interval"] = (current.get("restart_interval"), "PT1M")
+    got = _iso_seconds(current.get("time_limit"))
+    if got != want["time_limit_s"]:
+        drift["time_limit"] = (current.get("time_limit"), "PT0S")
+    return drift
+
+
+def sync_service_settings() -> dict:
+    """既有的 ChatroomHub 排程工作若設定漂移就就地更新。
+
+    只改 Priority／Action／Restart／ExecutionTimeLimit；觸發器、principal、
+    Enabled 狀態都沿用既有的（`stop` 會停用工作，不可被這裡順手啟用），
+    也不啟動或停止正在跑的 Hub。非 Windows、沒有工作、讀不到都回
+    `updated: False` 並維持現行行為。失敗不中止安裝。
+    """
+    result: dict = {"updated": False}
+    if sys.platform != "win32":
+        return result
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if shell is None:
+        return result
+    wrapper = str(KIT / "scripts" / "run-hub.cmd")
+    if not Path(wrapper).exists():
+        return result  # 這包沒有 wrapper：不拿不存在的路徑去改別人的工作
+    task = SERVICE_TASK
+    try:
+        got = _ps_run(shell, (
+            f"$t = Get-ScheduledTask -TaskName '{task}' -ErrorAction SilentlyContinue; "
+            "if (-not $t) { 'null'; exit 0 }; "
+            "[pscustomobject]@{ priority = [int]$t.Settings.Priority; "
+            "execute = [string]$t.Actions[0].Execute; "
+            "restart_count = [int]$t.Settings.RestartCount; "
+            "restart_interval = [string]$t.Settings.RestartInterval; "
+            "time_limit = [string]$t.Settings.ExecutionTimeLimit } | "
+            "ConvertTo-Json -Compress"))
+        if got.returncode != 0:
+            return result
+        current = json.loads(got.stdout.strip().splitlines()[-1])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return result
+    if not isinstance(current, dict):
+        return result  # 沒有這個工作
+    drift = service_drift(current, wrapper)
+    if not drift:
+        return result
+    print(f"  排程工作「{task}」設定與目前版本不一致"
+          f"（{', '.join(drift)}），更新中…", flush=True)
+    wrapper_q = wrapper.replace("'", "''")
+    done = _ps_run(shell, (
+        f"$t = Get-ScheduledTask -TaskName '{task}'; "
+        "$s = $t.Settings; "
+        f"$s.Priority = {SERVICE_WANT['priority']}; "
+        f"$s.RestartCount = {SERVICE_WANT['restart_count']}; "
+        "$s.RestartInterval = 'PT1M'; $s.ExecutionTimeLimit = 'PT0S'; "
+        f"$a = New-ScheduledTaskAction -Execute '{wrapper_q}'; "
+        f"Set-ScheduledTask -TaskName '{task}' -Action $a -Settings $s | Out-Null"))
+    result["before_priority"] = current.get("priority")
+    result["after_priority"] = SERVICE_WANT["priority"]
+    result["drift"] = sorted(drift)
+    if done.returncode != 0:
+        result["error"] = (done.stderr or "").strip()[:300] or f"退出碼 {done.returncode}"
+        print(f"⚠️ 排程工作更新失敗：{result['error']}。"
+              f"可手動執行：pwsh -File scripts/hub-service.ps1 install")
+        return result
+    result["updated"] = True
+    print(f"  已更新（Priority {current.get('priority')} → "
+          f"{SERVICE_WANT['priority']}；Hub 若在跑不受影響，下次啟動才生效）")
+    return result
 
 
 def main() -> None:
@@ -435,6 +562,9 @@ def main() -> None:
     if not args.register_service and not want_tunnel:
         print("  這次兩項都不做。")
     service_ok = register_service() if args.register_service else False
+    # 升級不重新註冊：既有工作若是舊設定（例如 Priority 7）在這裡修正
+    service_sync = ({"updated": False} if args.register_service
+                    else sync_service_settings())
     tunnel_ready = prepare_tunnel() if want_tunnel else False
     step(5, "整理啟動方式與連線資訊…")
 
@@ -508,6 +638,8 @@ Hub 位址：http://{shown}:{port}
         "host": host,
         "port": port,
         "service_registered": service_ok,
+        "service_updated": service_sync["updated"],
+        **({"service_update": service_sync} if service_sync.get("drift") else {}),
         "tunnel_ready": tunnel_ready,
     })
 

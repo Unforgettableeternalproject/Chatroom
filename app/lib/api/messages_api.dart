@@ -109,6 +109,23 @@ class MessagesApi {
         );
       });
 
+  /// 某一筆派工在房內的最後一則訊息（agent 發言優先，沒有則 system 訊息）。
+  ///
+  /// 404 `run_message_not_found` 或舊版 Hub 的 404 都以 [NotFoundException]
+  /// 丟出，呼叫端據此退回時間窗比對。
+  Future<int> runLastMessageSeq(
+    String roomId,
+    String runId, {
+    String? participantId,
+  }) =>
+      unwrap(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/api/rooms/$roomId/runs/$runId/last_message',
+          options: Options(headers: {'X-Participant-Id': ?participantId}),
+        );
+        return res.data!['seq'] as int;
+      });
+
   /// long-poll：有 MAX(seq, update_seq) > after_seq 的訊息立即返回，
   /// 否則掛起到 timeout 秒（Hub 上限 55）。WS 之外的補訊備援通道。
   /// 帶 participantId 時回應才會計算 you_were_mentioned。

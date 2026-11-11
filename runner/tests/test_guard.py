@@ -570,6 +570,29 @@ def test_hook_hands_mentions_to_the_model_without_blocking(run_dir):
     assert again.stdout.strip() == "", "同一則被送了第二次"
 
 
+def test_hook_injection_carries_message_id_and_asks_ack_for_humans(run_dir):
+    """遞送內容帶 message_id；只有人類來的才要求先 react。"""
+    (run_dir / "inject.jsonl").write_text(
+        json.dumps({"seq": 7, "id": "msg-human-1", "from": "艾斯維爾",
+                    "from_kind": "human", "text": "看一下"},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    ctx = json.loads(_run_hook(run_dir, {
+        "tool_name": "Bash", "tool_input": {"command": "git status"},
+    }).stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "msg-human-1" in ctx
+    assert "chatroom_react" in ctx and "👀" in ctx
+
+    with (run_dir / "inject.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"seq": 8, "id": "msg-agent-1",
+                             "from": "另一個 agent", "from_kind": "claude",
+                             "text": "ping"}, ensure_ascii=False) + "\n")
+    ctx = json.loads(_run_hook(run_dir, {
+        "tool_name": "Bash", "tool_input": {"command": "git status"},
+    }).stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "msg-agent-1" in ctx
+    assert "chatroom_react" not in ctx
+
+
 def test_hook_does_not_consume_mentions_when_it_blocks(run_dir):
     """被擋下來的那一次**不消費**轉達訊息。
 
@@ -651,3 +674,108 @@ def test_hook_rewrite_coexists_with_mentions(run_dir):
         "Bash", f'cd "{REPO}" && {ACLI_TAIL}', REPO)))
     assert out["updatedInput"]["command"] == ACLI_TAIL
     assert "看這" in out["additionalContext"]
+
+
+# ── release_fix：只放寬 push 到穩定分支與 tag ─────────────────────
+
+@pytest.fixture
+def fix_ctx(tmp_path):
+    """release_fix 的守衛：cwd 是暫存 worktree，另一個 repo 也有 worktree。"""
+    wt_a = tmp_path / "wt-a"
+    wt_b = tmp_path / "wt-b"
+    wt_a.mkdir()
+    wt_b.mkdir()
+    return GuardContext(
+        cwd=wt_a, repo_roots=[wt_a, wt_b],
+        allowed_branches=["main"], allowed_domains=["github.com"],
+        release_push={"branches": ["main", "master"], "tags": ["v1.2.0"]})
+
+
+FIX_ALLOWED = [
+    ("git push origin HEAD:main", "推到穩定分支"),
+    ("git push origin HEAD:refs/heads/master", "完整 ref 名"),
+    ("git push origin v1.2.0", "推這次的 tag"),
+    ("git push origin refs/tags/v1.2.0", "完整 tag ref"),
+    ("git push origin HEAD:main v1.2.0", "分支加 tag 一次推"),
+    ('git tag -a v1.2.0 -m "第一週期"', "建這次的 annotated tag"),
+    ("git tag -l", "列 tag"),
+    ("git merge --no-ff develop -m x", "merge"),
+    ("git merge --abort", "放棄合併"),
+    ("git merge-base origin/main develop", "唯讀"),
+    ("git ls-remote --tags origin v1.2.0", "確認 tag 在遠端"),
+    ("git fetch origin", "抓遠端"),
+    ("git commit -m x", "簽章 commit"),
+]
+
+FIX_DENIED = [
+    ("git push --force origin HEAD:main", "git_push_flag", "force push"),
+    ("git push -f origin HEAD:main", "git_push_flag", "force push 短旗標"),
+    ("git push --force-with-lease origin HEAD:main", "git_push_flag",
+     "force-with-lease"),
+    ("git push origin +HEAD:main", "git_push_force", "+ 前綴就是 force"),
+    ("git push origin :main", "git_push_force", "冒號開頭是刪遠端分支"),
+    ("git push --delete origin main", "git_push_flag", "刪遠端分支"),
+    ("git push origin --delete main", "git_push_flag", "刪遠端分支（旗標在後）"),
+    ("git push origin HEAD:develop", "git_push", "不是穩定分支"),
+    ("git push origin main", "git_push", "裸分支名會把使用者本機的 commit 帶出去"),
+    ("git push origin HEAD:v9.9.9", "git_push", "別的 ref"),
+    ("git push origin v9.9.9", "git_push", "不是這次的 tag"),
+    ("git push --all origin", "git_push_flag", "--all"),
+    ("git push --tags origin", "git_push_flag", "--tags"),
+    ("git push", "git_push", "裸 push"),
+    ("git push upstream HEAD:main", "git_push", "不是 origin"),
+    ("git tag -d v1.2.0", "git_tag_flag", "刪 tag"),
+    ("git tag -f v1.2.0", "git_tag_flag", "覆蓋 tag"),
+    ("git tag v9.9.9", "git_tag", "不是這次的 tag"),
+    ("git reset --hard HEAD~1", "git_not_allowed", "reset 照樣擋"),
+    ("git rebase main", "git_not_allowed", "rebase 照樣擋"),
+    ("git branch -D feature/old", "git_branch_destructive", "刪分支照樣擋"),
+    ("git commit --no-verify -m x", "bypass_hooks", "繞過 hooks 照樣擋"),
+    ("git -c commit.gpgsign=false commit -m x", "git_config_override",
+     "關簽章照樣擋"),
+    ("git --git-dir=/x push origin HEAD:main", "git_global_path", "換 git-dir"),
+]
+
+
+@pytest.mark.parametrize("command, why", FIX_ALLOWED)
+def test_release_fix_allowed(fix_ctx, command, why):
+    decision = check_command(command, fix_ctx)
+    assert decision.allowed, f"{why}：被擋了（{decision.rule}）"
+
+
+@pytest.mark.parametrize("command, rule, why", FIX_DENIED)
+def test_release_fix_still_denied(fix_ctx, command, rule, why):
+    decision = check_command(command, fix_ctx)
+    assert not decision.allowed, f"{why}：沒擋住"
+    assert decision.rule == rule
+    assert "這是系統限制" in decision.reason or rule == "bypass_hooks"
+
+
+def test_release_fix_git_dash_c_only_into_its_worktrees(fix_ctx, tmp_path):
+    inside = tmp_path / "wt-b"
+    assert check_command(f"git -C {inside} status", fix_ctx).allowed
+    outside = tmp_path / "users-real-repo"
+    outside.mkdir()
+    d = check_command(f"git -C {outside} status", fix_ctx)
+    assert not d.allowed and d.rule == "git_global_path"
+
+
+def test_release_fix_relaxation_is_off_for_ordinary_runs(ctx):
+    """一般 run 的 push／tag／merge 完全沒有被放寬。"""
+    assert not ctx.release_push
+    for command in ("git push origin HEAD:main", "git tag -a v1 -m x",
+                    "git merge develop", "git -C . status"):
+        assert not check_command(command, ctx).allowed, command
+
+
+def test_release_fix_still_cannot_write_outside_its_worktrees(fix_ctx,
+                                                              tmp_path):
+    d = check_path(str(tmp_path / "users-real-repo" / "x.ts"), fix_ctx)
+    assert not d.allowed and d.rule == "path_outside_cwd"
+    assert check_path(str(tmp_path / "wt-b" / "x.ts"), fix_ctx).allowed
+
+
+def test_release_push_survives_the_guard_json_round_trip(fix_ctx):
+    again = GuardContext.from_dict(fix_ctx.to_dict())
+    assert again.release_push == fix_ctx.release_push
+    assert GuardContext.from_dict({"cwd": "."}).release_push == {}

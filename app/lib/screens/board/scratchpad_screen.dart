@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../api/board_api.dart' show BoardsApi;
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -12,6 +14,7 @@ import '../../models/scratchpad.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
+import '../../widgets/copyable_id.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/reveal.dart';
@@ -166,10 +169,19 @@ class _PadBodyState extends ConsumerState<_PadBody> {
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
       children: [
         Row(children: [
+          // 標題優先：ID 排在標題後面，放不下就換到下一行，不擠標題
           Expanded(
-            child: Text(pad.title,
-                style: UepText.pageTitle(color: s.inkTitle)),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 10,
+              children: [
+                Text(pad.title, style: UepText.pageTitle(color: s.inkTitle)),
+                if (ref.watch(appConfigProvider.select((c) => c.devMode)))
+                  CopyableId(value: pad.id),
+              ],
+            ),
           ),
+          const SizedBox(width: 8),
           MonoLabel(
               AppLocalizations.of(context).boardPadBlockCount(
                   pad.blocks.length),
@@ -264,6 +276,7 @@ class _PadBodyState extends ConsumerState<_PadBody> {
         // （@審核用Codex-2 2026-09-03）
         key: ValueKey(b.id),
         block: b,
+        devMode: ref.watch(appConfigProvider.select((c) => c.devMode)),
         editing: _editing == b.id,
         onEdit: pad.canEdit && b.canEdit
             ? () => setState(() => _editing = b.id)
@@ -550,13 +563,19 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   }
 
   Future<void> _delete(ScratchpadBlock b) async {
+    final reason = await askHostReason(context,
+        title: AppLocalizations.of(context).hostReasonDeleteBlockTitle);
+    if (reason == null || !mounted) return;
     try {
-      await ref.read(scratchpadApiProvider).deleteBlock(
-            widget.boardId,
-            widget.pad.id,
-            b.id,
-            sessionKey: _sessionKey,
-          );
+      await runWithHostReason(
+        reason,
+        () => ref.read(scratchpadApiProvider).deleteBlock(
+              widget.boardId,
+              widget.pad.id,
+              b.id,
+              sessionKey: _sessionKey,
+            ),
+      );
       _reload();
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -831,7 +850,11 @@ class _BlockCard extends StatefulWidget {
     this.allowedTags = const [],
     this.onSetTag,
     this.onSetState,
+    this.devMode = false,
   });
+
+  /// 開發者模式：作者列顯示可複製的段落 ID。
+  final bool devMode;
 
   final ScratchpadBlock block;
   final bool editing;
@@ -926,6 +949,7 @@ class _BlockCardState extends State<_BlockCard> {
                   color: s.inkMute),
             ),
           ),
+          if (widget.devMode) CopyableId(value: b.id),
           // 標籤放在動作按鈕之前：它是這一段「是什麼」，不是能對它做什麼
           ScratchpadTagChip(
             tag: b.tag,

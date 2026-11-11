@@ -315,6 +315,16 @@ class BoardActions {
     _reload();
   }
 
+  /// 把「未分類」的一頁拆成獨立週期。成功回結果（含 Hub 補的新空白頁）。
+  Future<SplitInboxResult?> splitInbox(String objectiveId, String title) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return null;
+    final r = await _api.splitInbox(objectiveId,
+        participantId: pid, sessionKey: _sk, title: title);
+    _reload();
+    return r;
+  }
+
   /// 改一個階段的標題與敘述。與 [updateObjective] 同一組規則。
   Future<void> updateChecklist(String checklistId,
       {String? title, String? description}) async {
@@ -402,6 +412,16 @@ class BoardActions {
     final pid = await _pid();
     if (pid == null && _sk == null) return;
     await _api.completeTask(taskId, participantId: pid, sessionKey: _sk);
+    _reload();
+  }
+
+  /// 把階段（連同底下的卡）搬到另一個週期。
+  Future<void> moveChecklist(String checklistId,
+      {required String objectiveId}) async {
+    final pid = await _pid();
+    if (pid == null && _sk == null) return;
+    await _api.moveChecklist(checklistId,
+        participantId: pid, sessionKey: _sk, objectiveId: objectiveId);
     _reload();
   }
 
@@ -517,7 +537,9 @@ class BoardActions {
       _objective(
           id,
           (api, pid) => api.createRelease(id,
-              participantId: pid, sessionKey: _sk, release: release));
+              participantId: pid,
+              sessionKey: _sk,
+              release: release));
 
   /// 這個週期能不能上板、有哪些候選 repo。拿不到身分時回 null。
   Future<ReleaseCandidates?> releaseCandidates(String id) async {
