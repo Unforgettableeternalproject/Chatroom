@@ -230,7 +230,7 @@ class ScratchpadApi {
       });
 }
 
-/// 卡片追蹤與跨板收件匣。
+/// 卡片追蹤。
 class WatchApi {
   WatchApi(this._dio);
 
@@ -272,73 +272,5 @@ class WatchApi {
           options: _h(sessionKey),
         );
         return (res.data?['watcher_count'] as int?) ?? 0;
-      });
-
-  /// 我的追蹤收件匣。**跨板**——「我在等的東西完成了嗎」不分板。
-  Future<({List<WatchNotice> notices, int unread})> notices({
-    required String sessionKey,
-    bool unreadOnly = true,
-    String boardId = '',
-  }) =>
-      unwrap(() async {
-        final res = await _dio.get<Map<String, dynamic>>(
-          '/api/board/notices',
-          queryParameters: {
-            'unread_only': unreadOnly,
-            if (boardId.isNotEmpty) 'board_id': boardId,
-          },
-          options: _h(sessionKey),
-        );
-        final raw = res.data?['notices'] as List<dynamic>? ?? const [];
-        return (
-          notices: [
-            for (final n in raw)
-              WatchNotice.fromJson(n as Map<String, dynamic>),
-          ],
-          // ⚠️ 是 `unread_count` 不是 `unread`。差一個字的話這裡永遠讀到
-          // 0，紅點永遠不亮——**而畫面看起來完全正常，就是「沒有未讀」**
-          unread: (res.data?['unread_count'] as int?) ?? 0,
-        );
-      });
-
-  /// 標記已讀。[noticeIds] 空的要配 `all: true`，否則 Hub 回 400。
-  ///
-  /// ⚠️ **兩個參數的位置不一樣，這是實測出來的**（8788 @ `982abe0`）：
-  ///
-  /// ```
-  /// all_notices   query    POST .../read?all_notices=true
-  /// notice_ids    body     POST .../read   ["id1","id2"]   ← 裸陣列，不是物件
-  /// ```
-  ///
-  /// FastAPI 對 POST 上沒有 `Query()` 標註的 `list[str]` 當成 **body**，
-  /// 而原始型別（`bool`）才是 query。同一個端點上兩種待遇。
-  ///
-  /// 🔴 我一度把兩個都改成 query——因為早上剛被 `import_members` 教過
-  /// 「這種參數走 query」。**那是把一次教訓套得太寬**：結果 notice_ids
-  /// 永遠送不到，Hub 回 400 `nothing_to_mark`。這次至少會報錯，
-  /// 但錯誤訊息說的是「你沒給 ids」，而我明明給了。
-  ///
-  /// 沒有這個動作的話，那顆紅點會永遠亮著——**而永遠亮著的紅點，
-  /// 第三天就等於不存在了。**
-  Future<int> markRead({
-    required String sessionKey,
-    List<String> noticeIds = const [],
-    bool all = false,
-  }) =>
-      unwrap(() async {
-        final res = await _dio.post<Map<String, dynamic>>(
-          '/api/board/notices/read',
-          data: noticeIds.isEmpty ? null : noticeIds,
-          queryParameters: {if (all) 'all_notices': true},
-          // ⚠️ **明寫 contentType。** body 是一個裸的 JSON 陣列，不是物件；
-          // 不明寫的話 dio 不會替它挑 application/json，Hub 那端就解不出
-          // 這個 list，回 422「請求內容不合法」——而 curl 打同一個 payload
-          // 是通的，所以很容易誤判成 Hub 的問題
-          options: _h(sessionKey)
-              .copyWith(contentType: Headers.jsonContentType),
-        );
-        // 回傳實際標了幾筆。**要用它**——送出去卻標了 0 筆，
-        // 與「本來就沒有未讀」在畫面上長得一模一樣
-        return (res.data?['marked'] as int?) ?? 0;
       });
 }

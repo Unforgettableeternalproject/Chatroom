@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../api/rooms_api.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -96,8 +98,14 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
     final api = ref.read(roomsApiProvider);
     final sessionKey = ref.read(appConfigProvider).deviceKey;
     final pid = _participantId;
+    // 主持人模式：存之前問一次理由，這次送出的每一項變更都帶同一個
+    final reason = await askHostReason(context,
+        title: l10n.hostReasonRoomSettingsTitle,
+        confirmLabel: l10n.commonSave);
+    if (reason == null || !mounted) return;
     setState(() => _saving = true);
     try {
+      await runWithHostReason(reason, () async {
       // 只送改過的欄位：每一項變更都會在房裡留一則系統訊息，
       // 沒變的也送的話會留下「改成原本那樣」的噪音
       if (name != room.name) {
@@ -142,6 +150,7 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
           participantId: pid,
         );
       }
+      });
       _dirty = false;
       ref.invalidate(roomDetailProvider(widget.roomId));
       ref.invalidate(roomListProvider);
@@ -167,7 +176,13 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
     final api = ref.read(roomsApiProvider);
     final sessionKey = ref.read(appConfigProvider).deviceKey;
     final pid = ref.read(settingsRepoProvider).participantId(widget.roomId);
+    final reason = await askHostReason(context,
+        title: room.isArchived
+            ? l10n.hostReasonUnarchiveRoomTitle
+            : l10n.hostReasonArchiveRoomTitle);
+    if (reason == null || !mounted) return;
     try {
+      await runWithHostReason(reason, () async {
       if (room.isArchived) {
         await api.unarchive(
           widget.roomId,
@@ -193,6 +208,7 @@ class _RoomSettingsScreenState extends ConsumerState<RoomSettingsScreen> {
           );
         }
       }
+      });
       ref.invalidate(roomDetailProvider(widget.roomId));
       ref.invalidate(identityProvider(widget.roomId));
       ref.invalidate(roomListProvider);

@@ -12,6 +12,7 @@ import '../../notifications/taskbar_badge.dart';
 import '../../core/diagnostics/input_diagnostics.dart';
 import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
+import '../../state/notification_inbox_providers.dart';
 import '../../state/notification_providers.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/pane_divider.dart';
@@ -282,6 +283,8 @@ class _AppShellState extends ConsumerState<AppShell>
                   ref.read(appConfigProvider.notifier).toggleTheme(),
             ),
             const SizedBox(width: 8),
+            const NotificationBell(),
+            const SizedBox(width: 8),
             // 主機控制台的入口。**沒有 host-kit 時整個不存在**，不是變灰
             // ——絕大多數使用者是成員不是主持人，他們機器上本來就沒有那包，
             // 而一個永遠按不動的按鈕比沒有這個功能更糟
@@ -478,6 +481,56 @@ class _TopIconButton extends StatelessWidget {
               : Icon(icon, size: 14, color: s.inkSoft),
         ),
       ),
+    );
+  }
+}
+
+/// 頂欄的通知鈴鐺：未讀數徽章＋點開通知中心。
+class NotificationBell extends ConsumerWidget {
+  const NotificationBell({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unread = ref.watch(inboxUnreadProvider);
+    final l10n = AppLocalizations.of(context);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        _TopIconButton(
+          tooltip: unread == 0
+              ? l10n.notificationsTitle
+              : l10n.notificationsTitleUnread(unread),
+          icon: unread == 0
+              ? Icons.notifications_none
+              : Icons.notifications_active_outlined,
+          onTap: () => context.go('/notices'),
+        ),
+        if (unread > 0)
+          Positioned(
+            right: -6,
+            top: -6,
+            child: IgnorePointer(
+              child: Container(
+                key: const Key('notificationBadge'),
+                constraints: const BoxConstraints(minWidth: 16),
+                height: 16,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: UepColors.gold,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  unread > 99 ? '99+' : '$unread',
+                  style: UepText.mono(
+                      size: 9.5,
+                      weight: FontWeight.w600,
+                      color: UepColors.goldInkOn),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

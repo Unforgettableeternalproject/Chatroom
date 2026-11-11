@@ -10,6 +10,8 @@ import 'package:pasteboard/pasteboard.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../core/config/app_settings.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -907,6 +909,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _delete(Message m) async {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
+    final reasonCtl = ref.read(hostViewProvider) ? TextEditingController() : null;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -938,6 +941,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               l10n.commonIrreversible,
               style: UepText.serif(size: 14.5, color: s.inkSoft),
             ),
+            if (reasonCtl != null) ...[
+              const SizedBox(height: 12),
+              HostReasonField(controller: reasonCtl),
+            ],
           ],
         ),
         actions: [
@@ -959,9 +966,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (confirmed ?? false) {
       try {
         final identity = await ref.read(identityProvider(widget.roomId).future);
-        await ref
-            .read(messagesApiProvider)
-            .delete(m.id, participantId: identity.participantId);
+        await runWithHostReason(
+          reasonCtl?.text,
+          () => ref
+              .read(messagesApiProvider)
+              .delete(m.id, participantId: identity.participantId),
+        );
       } on ApiException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context)
@@ -1221,6 +1231,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             memberCount: activeMembers.length,
             showMembersButton: !wide,
             isOps: room?.isOps ?? false,
+            archivedByHost: room?.archivedByHost ?? false,
+            archiveReason: room?.archiveReason ?? '',
           ),
           if (pinnedMessages.isNotEmpty && !archived)
             _PinnedStrip(roomId: roomId, latest: pinnedMessages.last),
@@ -1571,7 +1583,13 @@ class RoomHeader extends ConsumerWidget {
     required this.memberCount,
     required this.showMembersButton,
     this.isOps = false,
+    this.archivedByHost = false,
+    this.archiveReason = '',
   });
+
+  /// 被 Hub 主持人封存的房，標頭多一行短字（有理由就帶出來）。
+  final bool archivedByHost;
+  final String archiveReason;
 
   final String roomId;
   final String roomName;
@@ -1637,6 +1655,18 @@ class RoomHeader extends ConsumerWidget {
                     ],
                   ],
                 ),
+                if (archived && archivedByHost) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    key: const Key('archivedByHostNote'),
+                    archiveReason.isEmpty
+                        ? AppLocalizations.of(context).roomsArchivedByHost
+                        : AppLocalizations.of(context)
+                            .roomsArchivedByHostReason(archiveReason),
+                    style: UepText.mono(
+                        size: 10.5, letterSpacing: 1.0, color: s.inkMute),
+                  ),
+                ],
                 if (topic.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
@@ -1688,14 +1718,21 @@ class RoomHeader extends ConsumerWidget {
             _HeaderAction(
               label: AppLocalizations.of(context).roomsUnarchive,
               onTap: () async {
+                final reason = await askHostReason(context,
+                    title: AppLocalizations.of(context)
+                        .hostReasonUnarchiveRoomTitle);
+                if (reason == null || !context.mounted) return;
                 try {
-                  await ref.read(roomsApiProvider).unarchive(
-                        roomId,
-                        sessionKey: ref.read(appConfigProvider).deviceKey,
-                        participantId: ref
-                            .read(settingsRepoProvider)
-                            .participantId(roomId),
-                      );
+                  await runWithHostReason(
+                    reason,
+                    () => ref.read(roomsApiProvider).unarchive(
+                          roomId,
+                          sessionKey: ref.read(appConfigProvider).deviceKey,
+                          participantId: ref
+                              .read(settingsRepoProvider)
+                              .participantId(roomId),
+                        ),
+                  );
                 } on ApiException catch (e) {
                   // 解封是有門檻的動作，會被 Hub 擋。沒有這個 catch 的話
                   // 失敗只會拋進 framework，畫面上什麼都不會發生
@@ -2210,6 +2247,7 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
   Future<void> _kick(BuildContext context, Participant p) async {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
+    final reasonCtl = ref.read(hostViewProvider) ? TextEditingController() : null;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -2217,10 +2255,19 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
           l10n.chatKickTitle(p.displayName),
           style: UepText.pageTitle(color: s.inkTitle),
         ),
-        content: Text(
-          '${l10n.chatKickBody}${l10n.commonIrreversible}',
-          style: UepText.serif(size: 14.5, color: s.inkSoft),
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '${l10n.chatKickBody}${l10n.commonIrreversible}',
+              style: UepText.serif(size: 14.5, color: s.inkSoft),
+            ),
+          ),
+          if (reasonCtl != null) ...[
+            const SizedBox(height: 12),
+            HostReasonField(controller: reasonCtl),
+          ],
+        ]),
         actions: [
           UepButton(
             label: l10n.commonCancel,
@@ -2240,9 +2287,12 @@ class _MembersPanelState extends ConsumerState<_MembersPanel> {
     final myId = widget.myId;
     if (!(confirmed ?? false) || myId == null) return;
     try {
-      await ref
-          .read(roomsApiProvider)
-          .kick(widget.roomId, targetId: p.id, participantId: myId);
+      await runWithHostReason(
+        reasonCtl?.text,
+        () => ref
+            .read(roomsApiProvider)
+            .kick(widget.roomId, targetId: p.id, participantId: myId),
+      );
       ref.invalidate(roomDetailProvider(widget.roomId));
     } on ApiException catch (e) {
       if (context.mounted) {

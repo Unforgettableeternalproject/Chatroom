@@ -8,6 +8,7 @@ import 'core/theme/uep_theme.dart';
 import 'core/window/window_tray.dart';
 import 'l10n/l10n.dart';
 import 'notifications/local_notifier.dart';
+import 'notifications/notification_center.dart' show notificationTargetPath;
 import 'screens/assignments/assignment_screen.dart';
 import 'screens/board/board_screen.dart';
 import 'screens/host/host_console_screen.dart';
@@ -15,7 +16,7 @@ import 'screens/ops/ops_dashboard_screen.dart';
 import 'screens/board/scratchpad_screen.dart';
 import 'screens/board/board_settings_screen.dart';
 import 'screens/board/supervisor_track_screen.dart';
-import 'screens/board/watch_notices_screen.dart';
+import 'screens/notifications/notifications_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/help/help_screen.dart';
 import 'screens/pinned/pinned_wall_screen.dart';
@@ -104,11 +105,10 @@ GoRouter buildRouter(bool Function() isConfigured) {
               ),
             ],
           ),
-          // 追蹤收件匣**跨板**——「我在等的東西完成了嗎」不分板，
-          // 所以它不掛在任何一塊板底下
+          // 通知中心**跨房跨板**，不掛在任何一個房或板底下
           GoRoute(
             path: '/notices',
-            builder: (context, state) => const WatchNoticesScreen(),
+            builder: (context, state) => const NotificationsScreen(),
           ),
           GoRoute(
             path: '/rooms',
@@ -229,10 +229,10 @@ class _ChatroomAppState extends ConsumerState<ChatroomApp> {
     _router = buildRouter(
         () => ref.read(settingsRepoProvider).hasServerConfig);
     // OS 通知：初始化失敗不致命（僅無系統通知）；點擊 → 導頁到該房間
-    LocalNotifier.instance.onSelectRoom = (roomId) {
+    LocalNotifier.instance.onSelectRoom = (target) {
       // 視窗可能正縮在系統匣裡——那時候導頁本身是看不見的，得先把它叫回來
       WindowTray.instance.showWindow();
-      _router.go('/rooms/$roomId');
+      _router.go(notificationTargetPath(target));
     };
     LocalNotifier.instance.init();
     // 派工例外的通知：掉線與逾時要有人立刻知道，而那兩件事不會出現在

@@ -1597,7 +1597,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
                 label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
-                    context, () => actions.reopenObjective(o.id))),
+                    context, () => actions.reopenObjective(o.id),
+                    hostReasonTitle: AppLocalizations.of(context)
+                        .hostReasonReopenObjectiveTitle)),
             const SizedBox(width: 8),
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveVerify,
@@ -1619,7 +1621,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
                 label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
-                    context, () => actions.reopenObjective(o.id))),
+                    context, () => actions.reopenObjective(o.id),
+                    hostReasonTitle: AppLocalizations.of(context)
+                        .hostReasonReopenObjectiveTitle)),
             const SizedBox(width: 8),
             // 上板失敗後週期已是 verified，這是唯一能再來一次的入口
             ..._releaseEntry(context, o, actions),
@@ -1631,7 +1635,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               onTap: o.completeBlockedByRelease
                   ? null
                   : () => runBoardAction(
-                      context, () => actions.completeObjective(o.id)),
+                      context, () => actions.completeObjective(o.id),
+                      hostReasonTitle: AppLocalizations.of(context)
+                          .hostReasonCompleteObjectiveTitle),
             ),
           ],
         ]),
@@ -1807,7 +1813,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       // 正確的 watching 與 watcher_count——自己先改的話，失敗時畫面會
       // 停在一個「看起來成功了」的狀態
       _reloadBoard();
-      ref.invalidate(watchNoticesProvider);
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -1848,7 +1853,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   onTap: () => runBoardAction(
                       context,
                       () => _actions!
-                          .completeChecklist(c.id)),
+                          .completeChecklist(c.id),
+                      hostReasonTitle: AppLocalizations.of(context)
+                          .hostReasonChecklistStatusTitle),
                 ),
               ),
             )
@@ -2012,7 +2019,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .completeChecklist(c.id)),
+                            .completeChecklist(c.id),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                   _BarButton(
@@ -2020,7 +2029,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .setChecklistStatus(c.id, 'cancelled')),
+                            .setChecklistStatus(c.id, 'cancelled'),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                 ] else if (c.status == 'done') ...[
@@ -2029,7 +2040,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .setChecklistStatus(c.id, 'open')),
+                            .setChecklistStatus(c.id, 'open'),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                 ],

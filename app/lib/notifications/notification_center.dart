@@ -38,13 +38,24 @@ class RoomNotification {
     required this.roomName,
     required this.body,
     required this.mentioned,
+    this.target,
   });
 
   final String roomId;
   final String roomName;
   final String body;
   final bool mentioned;
+
+  /// 點通知要去的站內路徑（通知中心的通知可能指向任務板）。
+  /// null＝去 [roomId] 那個房間。
+  final String? target;
 }
+
+/// 通知 payload → 站內路徑。`path:` 開頭的是完整路徑，其餘視為 roomId。
+String notificationTargetPath(String payload) =>
+    payload.startsWith('path:')
+        ? payload.substring(5)
+        : '/rooms/$payload';
 
 /// 通知中心：跟隨「已加入的房間」的 feed，把新訊息轉成通知事件。
 ///

@@ -6,6 +6,8 @@ import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../models/release.dart';
 import '../../state/board_providers.dart';
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../widgets/uep_button.dart';
 
 /// 確認週期，順便上板（C6）。
@@ -180,6 +182,14 @@ class _VerifyDialogState extends State<_VerifyDialog> {
       setState(() => _error = l10n.boardReleaseNoRepo);
       return;
     }
+    // 主持人模式：確認週期前問一次理由（補上板不問）
+    var reason = '';
+    if (!widget.releaseOnly) {
+      final asked = await askHostReason(context,
+          title: l10n.hostReasonVerifyObjectiveTitle);
+      if (asked == null || !mounted) return;
+      reason = asked;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -196,8 +206,11 @@ class _VerifyDialogState extends State<_VerifyDialog> {
         }
         await widget.actions.createRelease(widget.objectiveId, release);
       } else {
-        await widget.actions
-            .verifyObjective(widget.objectiveId, release: release);
+        await runWithHostReason(
+          reason,
+          () => widget.actions
+              .verifyObjective(widget.objectiveId, release: release),
+        );
       }
       if (mounted) Navigator.of(context).pop();
     } on ApiException catch (e) {

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/errors/api_exception.dart';
+import '../../core/host_reason.dart';
 import '../../l10n/l10n.dart';
+import '../../widgets/host_reason.dart';
 
 /// Board 畫面所有「按下去會打 API」的動作共用的執行殼。
 ///
@@ -22,8 +24,17 @@ Future<T?> runBoardAction<T>(
   /// 告訴你從現在這個狀態還能去哪，呼叫端可以拿去校正畫面而不只是報錯。
   /// 不給的話走一般錯誤呈現。
   void Function(ConflictException e)? onConflict,
+
+  /// 主持人模式下，這個動作要先問一次「理由」（對話框標題）。
+  /// 取消就不執行、回 null；一般模式不彈框，行為不變。
+  String? hostReasonTitle,
 }) async {
   try {
+    if (hostReasonTitle != null) {
+      final reason = await askHostReason(context, title: hostReasonTitle);
+      if (reason == null || !context.mounted) return null;
+      return await runWithHostReason(reason, body);
+    }
     return await body();
   } on ConflictException catch (e) {
     // ⚠️ `objective_closed` 不走 [onConflict]：呼叫端拿它沒有第二條路可走

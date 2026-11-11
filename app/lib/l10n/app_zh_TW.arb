@@ -3409,71 +3409,6 @@
       }
     }
   },
-  "boardWatchNoticeSomeCard": "一張卡",
-  "@boardWatchNoticeSomeCard": {
-    "description": "追蹤通知：沒有卡名時的代稱"
-  },
-  "boardWatchNoticeWatchedBoard": "你追蹤的板",
-  "@boardWatchNoticeWatchedBoard": {
-    "description": "追蹤通知：沒有板名時的代稱"
-  },
-  "boardWatchNoticeTaskDone": "{target} 完成了",
-  "@boardWatchNoticeTaskDone": {
-    "description": "追蹤通知：卡完成",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeTaskCancelled": "{target} 被取消了",
-  "@boardWatchNoticeTaskCancelled": {
-    "description": "追蹤通知：卡被取消",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeTaskReopened": "{target} 又重新打開了",
-  "@boardWatchNoticeTaskReopened": {
-    "description": "追蹤通知：卡重新打開",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeDeliveryDegraded": "{target} 不再有聊天室，通知改為只能自己回來看",
-  "@boardWatchNoticeDeliveryDegraded": {
-    "description": "追蹤通知：板沒有掛接房了",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeDeliveryRestored": "{target} 又有聊天室了，會重新叫醒你",
-  "@boardWatchNoticeDeliveryRestored": {
-    "description": "追蹤通知：板又有掛接房了",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      }
-    }
-  },
-  "boardWatchNoticeOther": "{target} 有變動（{event}）",
-  "@boardWatchNoticeOther": {
-    "description": "追蹤通知：不認得的事件",
-    "placeholders": {
-      "target": {
-        "type": "String"
-      },
-      "event": {
-        "type": "String"
-      }
-    }
-  },
   "boardAttachTitle": "這間房要掛哪塊任務板",
   "@boardAttachTitle": {
     "description": "掛接任務板對話框標題"
@@ -3719,31 +3654,6 @@
   "boardTaskEditDescription": "敘述",
   "@boardTaskEditDescription": {
     "description": "編輯任務卡：敘述欄位"
-  },
-  "boardWatchNoticesTitle": "我在等的東西",
-  "@boardWatchNoticesTitle": {
-    "description": "追蹤收件匣標題"
-  },
-  "boardWatchMarkAllRead": "全部標為已讀",
-  "@boardWatchMarkAllRead": {
-    "description": "追蹤收件匣：全部標為已讀"
-  },
-  "boardWatchNoticesEmpty": "沒有在等的東西。",
-  "@boardWatchNoticesEmpty": {
-    "description": "追蹤收件匣：空狀態"
-  },
-  "boardWatchNoUnread": "沒有可以標記的未讀",
-  "@boardWatchNoUnread": {
-    "description": "追蹤收件匣：沒有未讀"
-  },
-  "boardWatchMarkedRead": "{count} 筆標為已讀",
-  "@boardWatchMarkedRead": {
-    "description": "追蹤收件匣：標記了幾筆",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
   },
   "boardTrackTitle": "誰在做什麼",
   "@boardTrackTitle": {
@@ -5676,22 +5586,9 @@
       }
     }
   },
-  "boardInboxOnly": "通知要自己來看",
-  "@boardInboxOnly": {
-    "description": "板沒有活的掛接房"
-  },
   "boardTaskClaimedCount": "{count} 進行中",
   "@boardTaskClaimedCount": {
     "description": "板卡上進行中的卡數",
-    "placeholders": {
-      "count": {
-        "type": "int"
-      }
-    }
-  },
-  "boardWatchNoticesTitleUnread": "我在等的東西（{count} 筆新的）",
-  "@boardWatchNoticesTitleUnread": {
-    "description": "追蹤收件匣入口（有未讀）",
     "placeholders": {
       "count": {
         "type": "int"
@@ -8632,8 +8529,48 @@
   "@helpReleaseDone": {
     "description": "說明頁文案"
   },
-  "helpSecNotifyIntro": "三個入口，各收不同的東西。",
+  "helpSecNotifyIntro": "兩個入口，各收不同的東西。",
   "@helpSecNotifyIntro": {
+    "description": "說明頁文案"
+  },
+  "helpNotifyAgentCallout": "agent 自己的修改不會發通知，派工完成時才通知。",
+  "@helpNotifyAgentCallout": {
+    "description": "說明頁文案"
+  },
+  "helpSecModLabel": "主持人",
+  "@helpSecModLabel": {
+    "description": "說明頁分節小標：主持人"
+  },
+  "helpSecModTitle": "主持人模式",
+  "@helpSecModTitle": {
+    "description": "說明頁分節標題：主持人模式"
+  },
+  "helpSecModIntro": "用主持人憑證開啟後，可以代為處理別人的房間與板。",
+  "@helpSecModIntro": {
+    "description": "說明頁分節簡介：主持人模式"
+  },
+  "helpMod1": "可以處理：封存（直接執行）、解封、改名與房間設定、踢人、刪訊息、處理封存請求、建立與掛接板、工作區綁定，以及任務板與想法板的所有操作。",
+  "@helpMod1": {
+    "description": "說明頁文案"
+  },
+  "helpMod2": "不能編輯別人訊息的內容，也不能用別人的身分發言。",
+  "@helpMod2": {
+    "description": "說明頁文案"
+  },
+  "helpMod3": "刪除房間仍要先封存。",
+  "@helpMod3": {
+    "description": "說明頁文案"
+  },
+  "helpMod4": "每個操作可以填理由（選填，500 字內）。理由會寫進房內的系統訊息，也會通知對方。",
+  "@helpMod4": {
+    "description": "說明頁文案"
+  },
+  "helpMod5": "被主持人封存的房間，建立者仍可以解封，解封時會通知主持人。",
+  "@helpMod5": {
+    "description": "說明頁文案"
+  },
+  "helpMod6": "房主換人時，還沒處理的封存請求會自動取消。",
+  "@helpMod6": {
     "description": "說明頁文案"
   },
   "helpNotifyRow1A": "系統通知",
@@ -8652,24 +8589,12 @@
   "@helpNotifyRow2A": {
     "description": "說明頁文案"
   },
-  "helpNotifyRow2B": "跨房的派工異常：停滯與恢復、逾時、額度受限、執行器上下線",
+  "helpNotifyRow2B": "追蹤的任務與週期；別人改了你建的週期、階段、卡；別人在你的階段加素材或派工、在你的想法板留言或切換狀態；主持人動了你的東西（附理由）；你的階段派工完成、失敗、取消",
   "@helpNotifyRow2B": {
     "description": "說明頁文案"
   },
-  "helpNotifyRow2C": "未讀數字只算比你上次看過更新的幾筆；點一筆會跳到出事的那間房",
+  "helpNotifyRow2C": "數字是未讀數。每則標明來源與觸發者；同一物件 5 分鐘內合併；已讀滿 30 天清除，最多留 500 則",
   "@helpNotifyRow2C": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3A": "板列表的通知鈴鐺",
-  "@helpNotifyRow3A": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3B": "你在等的、追蹤的板的動態",
-  "@helpNotifyRow3B": {
-    "description": "說明頁文案"
-  },
-  "helpNotifyRow3C": "右鍵（行動裝置長按）→「全部標為已讀」；沒有未讀時這一項會停用",
-  "@helpNotifyRow3C": {
     "description": "說明頁文案"
   },
   "helpConnStep1": "貼上邀請碼",
@@ -8984,5 +8909,140 @@
         "type": "String"
       }
     }
+  },
+  "notificationsTitle": "通知",
+  "@notificationsTitle": {
+    "description": "通知中心：頁面標題與鈴鐺提示"
+  },
+  "notificationsTitleUnread": "通知（{count} 則未讀）",
+  "@notificationsTitleUnread": {
+    "description": "鈴鐺提示（有未讀）",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "notificationsEmpty": "沒有通知。",
+  "@notificationsEmpty": {
+    "description": "通知中心：空狀態"
+  },
+  "notificationsMarkAllRead": "全部已讀",
+  "@notificationsMarkAllRead": {
+    "description": "通知中心：全部已讀"
+  },
+  "notificationsLoadMore": "載入更多",
+  "@notificationsLoadMore": {
+    "description": "通知中心：載入更舊的通知"
+  },
+  "notificationsActorHuman": "成員",
+  "@notificationsActorHuman": {
+    "description": "通知觸發者種類：人類成員"
+  },
+  "notificationsActorHost": "主持人",
+  "@notificationsActorHost": {
+    "description": "通知觸發者種類：主持人"
+  },
+  "notificationsActorAgent": "Agent",
+  "@notificationsActorAgent": {
+    "description": "通知觸發者種類：agent"
+  },
+  "notificationsActorSystem": "系統",
+  "@notificationsActorSystem": {
+    "description": "通知觸發者種類：系統"
+  },
+  "notificationsForHost": "主持人收件",
+  "@notificationsForHost": {
+    "description": "通知標籤：這則是以主持人身分收到的"
+  },
+  "notificationsReason": "理由：{reason}",
+  "@notificationsReason": {
+    "description": "通知中的操作理由",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "hostReasonLabel": "理由（選填）",
+  "@hostReasonLabel": {
+    "description": "主持人操作：理由欄位"
+  },
+  "hostReasonConfirm": "確定",
+  "@hostReasonConfirm": {
+    "description": "主持人操作：理由對話框的確定鈕"
+  },
+  "hostReasonRoomSettingsTitle": "儲存聊天室設定",
+  "@hostReasonRoomSettingsTitle": {
+    "description": "主持人操作：儲存房間設定的理由對話框標題"
+  },
+  "hostReasonArchiveRoomTitle": "封存聊天室",
+  "@hostReasonArchiveRoomTitle": {
+    "description": "主持人操作：封存房間的理由對話框標題"
+  },
+  "hostReasonUnarchiveRoomTitle": "解除封存",
+  "@hostReasonUnarchiveRoomTitle": {
+    "description": "主持人操作：解封房間的理由對話框標題"
+  },
+  "hostReasonApproveArchiveTitle": "核准封存請求",
+  "@hostReasonApproveArchiveTitle": {
+    "description": "主持人操作：核准封存請求的理由對話框標題"
+  },
+  "hostReasonDeclineArchiveTitle": "婉拒封存請求",
+  "@hostReasonDeclineArchiveTitle": {
+    "description": "主持人操作：婉拒封存請求的理由對話框標題"
+  },
+  "hostReasonArchiveBoardTitle": "封存任務板",
+  "@hostReasonArchiveBoardTitle": {
+    "description": "主持人操作：封存任務板的理由對話框標題"
+  },
+  "hostReasonUnarchiveBoardTitle": "解除封存任務板",
+  "@hostReasonUnarchiveBoardTitle": {
+    "description": "主持人操作：解封任務板的理由對話框標題"
+  },
+  "hostReasonRenameBoardTitle": "任務板改名",
+  "@hostReasonRenameBoardTitle": {
+    "description": "主持人操作：任務板改名的理由對話框標題"
+  },
+  "hostReasonReopenObjectiveTitle": "打回週期",
+  "@hostReasonReopenObjectiveTitle": {
+    "description": "主持人操作：打回週期的理由對話框標題"
+  },
+  "hostReasonCompleteObjectiveTitle": "完成週期",
+  "@hostReasonCompleteObjectiveTitle": {
+    "description": "主持人操作：完成週期的理由對話框標題"
+  },
+  "hostReasonChecklistStatusTitle": "變更階段狀態",
+  "@hostReasonChecklistStatusTitle": {
+    "description": "主持人操作：變更階段狀態的理由對話框標題"
+  },
+  "hostReasonTaskStatusTitle": "變更任務狀態",
+  "@hostReasonTaskStatusTitle": {
+    "description": "主持人操作：變更任務狀態的理由對話框標題"
+  },
+  "hostReasonBoardOutcomeTitle": "收尾任務板",
+  "@hostReasonBoardOutcomeTitle": {
+    "description": "主持人操作：設定任務板結果的理由對話框標題"
+  },
+  "hostReasonDeleteBlockTitle": "刪除想法板段落",
+  "@hostReasonDeleteBlockTitle": {
+    "description": "主持人操作：刪除想法板段落的理由對話框標題"
+  },
+  "roomsArchivedByHost": "由主持人封存",
+  "@roomsArchivedByHost": {
+    "description": "封存房標頭：被主持人封存的說明"
+  },
+  "roomsArchivedByHostReason": "由主持人封存：{reason}",
+  "@roomsArchivedByHostReason": {
+    "description": "封存房標頭：被主持人封存並附理由",
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "hostReasonVerifyObjectiveTitle": "確認週期",
+  "@hostReasonVerifyObjectiveTitle": {
+    "description": "主持人操作：確認週期的理由對話框標題"
   }
 }

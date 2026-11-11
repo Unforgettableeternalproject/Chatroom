@@ -685,6 +685,8 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       runBoardAction(
         context,
         () => actions.setTaskStatus(widget.task.id, a.target),
+        hostReasonTitle:
+            AppLocalizations.of(context).hostReasonTaskStatusTitle,
         onConflict: (e) {
           // 拒絕本身要說出來，順手把按鈕修正成 Hub 認的那幾顆
           ScaffoldMessenger.of(context)

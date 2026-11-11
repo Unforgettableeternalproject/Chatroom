@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/host_reason.dart';
+import '../../widgets/host_reason.dart';
 import '../../api/board_api.dart' show BoardsApi;
 import '../../core/errors/api_exception.dart';
 import '../../core/theme/uep_theme.dart';
@@ -561,13 +563,19 @@ class _PadBodyState extends ConsumerState<_PadBody> {
   }
 
   Future<void> _delete(ScratchpadBlock b) async {
+    final reason = await askHostReason(context,
+        title: AppLocalizations.of(context).hostReasonDeleteBlockTitle);
+    if (reason == null || !mounted) return;
     try {
-      await ref.read(scratchpadApiProvider).deleteBlock(
-            widget.boardId,
-            widget.pad.id,
-            b.id,
-            sessionKey: _sessionKey,
-          );
+      await runWithHostReason(
+        reason,
+        () => ref.read(scratchpadApiProvider).deleteBlock(
+              widget.boardId,
+              widget.pad.id,
+              b.id,
+              sessionKey: _sessionKey,
+            ),
+      );
       _reload();
     } on ApiException catch (e) {
       if (!mounted) return;
