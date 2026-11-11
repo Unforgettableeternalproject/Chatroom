@@ -53,7 +53,7 @@ def test_not_passing_it_sends_an_empty_value(fake_hub):
     fake_hub.json("GET", f"/api/boards/{BOARD}",
                   {"board_id": BOARD, "board_seq": 9, "full": True,
                    "tasks": [], "filtered": None})
-    srv.chatroom_board(board_id=BOARD)
+    srv.chatroom_board(board_id=BOARD, full=True)
     assert fake_hub.calls[-1].url.params["checklist_id"] == ""
 
 

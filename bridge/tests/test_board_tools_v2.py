@@ -41,7 +41,7 @@ def test_reading_by_board_id_needs_no_room(fake_hub):
     fake_hub.json("GET", f"/api/boards/{BOARD}",
                   {"board_id": BOARD, "board_seq": 5, "full": True,
                    "tasks": [], "name": "Board V2"})
-    out = srv.chatroom_board(board_id=BOARD)
+    out = srv.chatroom_board(board_id=BOARD, full=True)
     assert out["resolved_board_id"] == BOARD
     assert fake_hub.calls[-1].url.path == f"/api/boards/{BOARD}"
     # 水位記在板上，下次接著讀
@@ -58,7 +58,7 @@ def test_reading_by_room_id_says_which_board_it_was(fake_hub):
     fake_hub.json("GET", f"/api/rooms/{ROOM}/board",
                   {"board_id": BOARD, "board_seq": 3, "full": True,
                    "tasks": []})
-    assert srv.chatroom_board(ROOM)["resolved_board_id"] == BOARD
+    assert srv.chatroom_board(ROOM, full=True)["resolved_board_id"] == BOARD
 
     fake_hub.json("GET", f"/api/rooms/{ROOM}/board",
                   {"board_id": None, "board_seq": 0, "full": True,

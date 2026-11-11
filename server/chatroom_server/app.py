@@ -5414,12 +5414,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         limit: int = Query(default=100, ge=1, le=500),
         pinned_only: bool = False,
         include_reactions: bool = False,
+        since: str | None = None,
+        until: str | None = None,
+        sender: str | None = None,
+        sender_kind: str | None = None,
+        has_card_refs: bool = False,
+        tail: bool = False,
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
         """讀訊息。after_seq 正向翻頁（新訊息）、before_seq 反向翻頁（載入歷史），
         around_seq 錨定讀取（以某一則為中心取前後各 radius 則）；三者互斥。
         回傳一律以 seq 遞增排列。
+
+        篩選（可與 after_seq / before_seq / pinned_only 組合，around_seq 除外）：
+        ``since`` / ``until`` 以 created_at 篩時間範圍（ISO 8601，含 since、
+        不含 until；無時區視為 UTC）；``sender`` 為發言者顯示名稱；
+        ``sender_kind`` 為 human / agent / system；``has_card_refs=true`` 只留
+        帶卡片參照的訊息。時間只是篩選條件，翻頁游標仍是房內 seq。
+
+        ``tail=true``：在 seq>after_seq 的範圍內取**最新** limit 則（仍以
+        seq 遞增排列），``has_more`` 表示更早還有訊息。不帶時行為與舊版相同。
 
         ``include_reactions=true`` 才附每則的表情彙總（App 用）。預設不附：
         bridge 把這份 JSON 原樣交給 agent，agent 不需要知道別人按了什麼。"""
@@ -5436,6 +5451,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "pinned_only 併用")
         if before_seq is not None and after_seq:
             raise _err(422, "conflicting_cursors", "after_seq 與 before_seq 不可同時使用")
+        has_filter = bool(since or until or sender or sender_kind or has_card_refs)
+        if around_seq is not None and (has_filter or tail):
+            raise _err(422, "conflicting_cursors",
+                       "around_seq 不能與篩選條件或 tail 併用")
+        if tail and before_seq is not None:
+            raise _err(422, "conflicting_cursors", "tail 不可與 before_seq 併用")
         db = app.state.db
         if around_seq is not None:
             # **兩段各自 LIMIT，不能用算術範圍。** seq 與 update_seq 共用
@@ -5474,6 +5495,43 @@ def create_app(config: Config | None = None) -> FastAPI:
         params: list = [room_id]
         if pinned_only:
             cond += " AND pinned=1"
+        # 篩選條件。時間用 julianday 比較：created_at 有的帶微秒有的不帶，
+        # 直接比字串會在同一秒內排錯
+        for label, bound, op in (("since", since, ">="), ("until", until, "<")):
+            if not bound:
+                continue
+            try:
+                dt = datetime.fromisoformat(bound.strip().replace("Z", "+00:00"))
+            except ValueError:
+                raise _err(422, "invalid_time_filter",
+                           f"{label} 不是有效的 ISO 8601 時間：{bound}")
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            cond += f" AND julianday(created_at){op}julianday(?)"
+            params.append(dt.astimezone(timezone.utc).isoformat())
+        if sender:
+            cond += (" AND sender_id IN (SELECT id FROM participant"
+                     " WHERE room_id=? AND display_name=?)")
+            params.extend((room_id, sender))
+        if sender_kind:
+            sk = sender_kind.strip().lower()
+            if sk == "system":
+                cond += " AND (kind='system' OR sender_id IS NULL)"
+            elif sk == "human":
+                cond += (" AND kind!='system' AND (sender_kind='human' OR"
+                         " (sender_kind='' AND sender_id IN (SELECT id FROM"
+                         " participant WHERE kind='human')))")
+            elif sk == "agent":
+                # agent＝有發話者、非人類。快照為空的舊訊息退回名冊現況
+                cond += (" AND kind!='system' AND sender_id IS NOT NULL AND"
+                         " ((sender_kind!='' AND sender_kind!='human') OR"
+                         " (sender_kind='' AND sender_id IN (SELECT id FROM"
+                         " participant WHERE kind!='human')))")
+            else:
+                raise _err(422, "invalid_sender_kind",
+                           "sender_kind 只能是 human、agent 或 system")
+        if has_card_refs:
+            cond += " AND card_refs NOT IN ('', '[]')"
         if before_seq is not None:
             cond += " AND seq<?"
             params.append(before_seq)
@@ -5481,12 +5539,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         else:
             cond += " AND seq>?"
             params.append(after_seq)
-            sql = f"SELECT * FROM message WHERE {cond} ORDER BY seq LIMIT ?"
+            # tail：取游標之後最新的 limit 則，翻回遞增排列
+            sql = (f"SELECT * FROM message WHERE {cond} ORDER BY seq"
+                   f"{' DESC' if tail else ''} LIMIT ?")
         # 多取一筆判斷 has_more，避免第二次 COUNT 查詢
         rows = await (await db.execute(sql, (*params, limit + 1))).fetchall()
         has_more = len(rows) > limit
         rows = rows[:limit]
-        if before_seq is not None:
+        if before_seq is not None or tail:
             rows = list(reversed(rows))
         msgs = await _message_rows_to_json(rows, db, rv)
         # 每次讀都帶一行風格提醒：加入時給過的完整指示會隨著對話變長而被
@@ -7384,15 +7444,20 @@ def create_app(config: Config | None = None) -> FastAPI:
                                              x_participant_id, x_session_key,
                                              host)
         old = row["status"]
-        if body.status == old:
+        # 已經 moved 的卡再推一次 moved 並帶不同的 moved_to ＝ 補上／更正去向
+        # （agent 先收舊卡、之後才建新卡是常態；沒有這條就只能請人類打回重推）
+        redirect = (old == "moved" and body.status == "moved"
+                    and body.moved_to.strip()
+                    and body.moved_to.strip() != (row["moved_to"] or ""))
+        if body.status == old and not redirect:
             return {"ok": True, "id": task_id, "status": old, "unchanged": True}
-        if body.status not in TASK_TRANSITIONS.get(old, set()):
+        if not redirect and body.status not in TASK_TRANSITIONS.get(old, set()):
             raise _err(409, "invalid_transition",
                        f"Task 不能從「{old}」直接變成「{body.status}」",
                        from_status=old, to_status=body.status,
                        allowed=sorted(TASK_TRANSITIONS.get(old, set())))
         human = _is_human(me)
-        if old in ("done", "cancelled", "moved") and not human:
+        if old in ("done", "cancelled", "moved") and not human                 and not redirect:
             raise _err(403, "human_only",
                        "只有人類成員可以把已完成、已取消或已搬走的任務"
                        "重新打開")
@@ -8981,8 +9046,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not counts:
             return
         head = "、".join(f"{k} {v} 項" for k, v in counts.items())
-        sample = "／".join(f"「{x}」" for x in titles[:3])
-        more = f" 等 {len(titles)} 項" if len(titles) > 3 else ""
+        # 每項獨立一行（"- " 開頭）：標題可能很長，併成單行會溢出 App 畫面；
+        # 含換行的 system 訊息在 App 走區塊渲染，agent 讀純文字也一目了然
+        sample = "\n".join(f"- 「{x}」" for x in titles[:3])
+        more = f"\n等 {len(titles)} 項" if len(titles) > 3 else ""
         # 🔑 **收件人以 session_key 即時反查，不用設定當下的名字快照。**
         #
         # supervisor 常常在被指定的當下還沒進房（那正是要用指派把他叫進來的
@@ -9013,7 +9080,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _commit_with_retry(db)
         await _post_message(
             room_id, None,
-            f"任務板摘要：{head}有變動：{sample}{more}",
+            f"任務板摘要：{head}有變動：\n{sample}{more}",
             kind="system", system_event="board_digest",
             mentions=[supervisor] if supervisor else None,
             reply_mentions_author=False,
@@ -10752,6 +10819,382 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 一次 session_key：多一個來源就多一個會漂移的地方
                 actor),
         }
+
+    # ── 分層讀取：週期清單 → 週期綱要 → 單一項目詳細 ──────────────────
+    # 起因：新進 agent 一讀整塊板就被炸滿（`include_settled` 收窄之後，單一
+    # 進行中的週期照樣可能上百張卡，每張帶描述與認領欄位）。
+    #
+    # 🔑 **這一組是新增的端點，不動 `GET /board`／`GET /boards/{id}` 的預設
+    # 回應**：App 是那兩支的客戶端（board_api.dart 的 `fetch`），改它們的
+    # 預設值等於替 App 改契約。分層讀取只給 bridge 用。
+    #
+    # 三層各自只回該層需要的欄位：
+    # - `cycles`：每個週期一列（狀態、頁碼、卡數、最近修改號）
+    # - `outline`：一個週期的階段與卡的**綱要**（id／標題／狀態／負責人），
+    #   不含描述；描述長度另給，讀的人知道哪些卡值得再展開
+    # - `items/{id}`：單一週期／階段／卡的完整內容（描述、素材、事件）
+
+    BOARD_TASK_STATES = ("todo", "in_progress", "blocked", "done",
+                         "cancelled", "moved")
+
+    async def _cycle_summaries(scope_sql: str, scope_params: list) -> list[dict]:
+        """範圍內所有週期的一列摘要，**最近修改的在前**。
+
+        「最近修改」＝該週期自己、它底下的階段、階段底下的卡，三者
+        `board_seq` 的最大值。board_seq 是板的單調水位，每一次寫入（改
+        標題、推狀態、認領、新增）都會把被動到的那一列推到最新號，所以
+        最大值大的就是最近有動靜的——不依賴時間戳（週期/階段/卡沒有
+        `updated_at` 欄位）。軟刪除的列不算：刪卡不該讓週期看起來「剛
+        被動過」。
+        """
+        db = app.state.db
+        params = tuple(scope_params)
+        cur = await db.execute(
+            "SELECT id, title, status, kind, page_no, board_seq,"
+            " created_by_name, created_at, completed_at"
+            f" FROM board_objective WHERE {scope_sql} AND deleted=0", params)
+        cycles = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT objective_id, COUNT(*) AS n, MAX(board_seq) AS mx"
+            f" FROM board_checklist WHERE {scope_sql} AND deleted=0"
+            " GROUP BY objective_id", params)
+        stages = {r["objective_id"]: r for r in await cur.fetchall()}
+        cur = await db.execute(
+            "SELECT c.objective_id AS oid, t.status AS st, COUNT(*) AS n,"
+            " MAX(t.board_seq) AS mx FROM board_task t"
+            " JOIN (SELECT id, objective_id FROM board_checklist"
+            f"       WHERE {scope_sql} AND deleted=0) c"
+            "   ON c.id = t.checklist_id"
+            " WHERE t.deleted=0 GROUP BY c.objective_id, t.status", params)
+        counts: dict[str, dict] = {}
+        task_mx: dict[str, int] = {}
+        for r in await cur.fetchall():
+            counts.setdefault(r["oid"], {})[r["st"]] = r["n"]
+            task_mx[r["oid"]] = max(task_mx.get(r["oid"], 0), r["mx"] or 0)
+        out = []
+        for o in cycles:
+            by_status = counts.get(o["id"], {})
+            st = stages.get(o["id"])
+            out.append({
+                "id": o["id"], "title": o["title"], "status": o["status"],
+                # '' ＝一般週期；'inbox' ＝「未分類」頁（page_no 才有意義）
+                "kind": o["kind"] or "",
+                "is_inbox": o["kind"] == "inbox",
+                "page_no": o["page_no"] or 0,
+                "stage_count": st["n"] if st else 0,
+                "task_counts": {
+                    "total": sum(by_status.values()),
+                    **{s: by_status.get(s, 0) for s in BOARD_TASK_STATES}},
+                "last_modified_seq": max(
+                    o["board_seq"] or 0, (st["mx"] or 0) if st else 0,
+                    task_mx.get(o["id"], 0)),
+                "created_by_name": o["created_by_name"],
+                "created_at": o["created_at"],
+                "completed_at": o["completed_at"],
+            })
+        out.sort(key=lambda c: c["last_modified_seq"], reverse=True)
+        return out
+
+    async def _cycles_view(scope_sql: str, scope_params: list,
+                           limit: int) -> dict:
+        cycles = await _cycle_summaries(scope_sql, scope_params)
+        return {
+            "view": "cycles",
+            "cycles": cycles[:limit],
+            "cycles_total": len(cycles),
+            "truncated": len(cycles) > limit,
+            "order": "last_modified_seq 由大到小（最近修改的在前）",
+        }
+
+    async def _outline_view(scope_sql: str, scope_params: list,
+                            objective_id: str) -> dict:
+        """一個週期的階段與卡綱要。沒指定週期＝最近修改的那一個。"""
+        db = app.state.db
+        cycles = await _cycle_summaries(scope_sql, scope_params)
+        base = {"view": "outline", "full": False,
+                "cycles_total": len(cycles)}
+        if not cycles:
+            return {**base, "cycle": None, "checklists": [], "tasks": []}
+        if objective_id:
+            cycle = next((c for c in cycles if c["id"] == objective_id), None)
+            if cycle is None:
+                # 是別的層（階段／卡）就講「它是別的層」，不是「找不到」
+                try:
+                    await _board_item_or_404("objective", objective_id)
+                except HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise
+                raise _err(404, "objective_not_found", "這塊板上沒有這個週期")
+        else:
+            cycle = cycles[0]
+        params = tuple(scope_params)
+        cur = await db.execute(
+            "SELECT id, title, status, created_by_name, created_by_kind,"
+            " LENGTH(description) AS description_chars"
+            f" FROM board_checklist WHERE objective_id=? AND deleted=0"
+            f" AND {scope_sql} ORDER BY order_index, created_at",
+            (cycle["id"], *params))
+        checklists = [dict(r) for r in await cur.fetchall()]
+        files: dict[str, int] = {}
+        if checklists:
+            marks = ",".join("?" for _ in checklists)
+            cur = await db.execute(
+                "SELECT checklist_id, COUNT(*) AS n FROM board_checklist_file"
+                f" WHERE checklist_id IN ({marks}) GROUP BY checklist_id",
+                tuple(c["id"] for c in checklists))
+            files = {r["checklist_id"]: r["n"] for r in await cur.fetchall()}
+        for c in checklists:
+            c["file_count"] = files.get(c["id"], 0)
+        cur = await db.execute(
+            "SELECT id, checklist_id, title, status, priority, claim_state,"
+            " claim_name, claim_kind, moved_to,"
+            " LENGTH(description) AS description_chars"
+            " FROM board_task WHERE deleted=0 AND checklist_id IN"
+            "  (SELECT id FROM board_checklist WHERE objective_id=?"
+            f"   AND deleted=0 AND {scope_sql})"
+            " ORDER BY checklist_id, order_index, created_at",
+            (cycle["id"], *params))
+        tasks = [dict(r) for r in await cur.fetchall()]
+        return {
+            **base,
+            "cycle": cycle,
+            "is_latest": cycle["id"] == cycles[0]["id"],
+            "checklists": checklists,
+            "tasks": tasks,
+            "more": "只有綱要，沒有描述／素材／事件。要某張卡或某個階段的"
+                    "完整內容：chatroom_board_item(item_id=<id>)。"
+                    "其他週期：chatroom_board_cycles() 列出，再用 "
+                    "chatroom_board_outline(objective_id=<id>)。",
+        }
+
+    async def _item_view(scope_sql: str, scope_params: list, item_id: str,
+                         board_id: str) -> dict:
+        """單一週期／階段／卡的完整內容。id 是哪一層由 Hub 判斷。"""
+        db = app.state.db
+        params = tuple(scope_params)
+        for kind, table in (("task", "board_task"),
+                            ("checklist", "board_checklist"),
+                            ("objective", "board_objective")):
+            row = await (await db.execute(
+                f"SELECT * FROM {table} WHERE id=? AND deleted=0"
+                f" AND {scope_sql}", (item_id, *params))).fetchone()
+            if row is not None:
+                break
+        else:
+            raise _err(404, "item_not_found",
+                       "這塊板上找不到這個週期／階段／卡（或已被刪除）")
+        item = _board_row(row)
+        out: dict = {"view": "item", "kind": kind, "item": item}
+        stage_id = (item["id"] if kind == "checklist"
+                    else item.get("checklist_id") if kind == "task" else "")
+        objective = None
+        if kind == "task":
+            stage = await (await db.execute(
+                "SELECT id, title, status, objective_id FROM board_checklist"
+                " WHERE id=?", (stage_id,))).fetchone()
+            out["stage"] = dict(stage) if stage else None
+            oid = stage["objective_id"] if stage else ""
+        elif kind == "checklist":
+            oid = item["objective_id"]
+        else:
+            oid = ""
+        if oid:
+            objective = await (await db.execute(
+                "SELECT id, title, status, kind, page_no FROM board_objective"
+                " WHERE id=?", (oid,))).fetchone()
+            out["objective"] = dict(objective) if objective else None
+        if stage_id:
+            # 素材掛在階段上，卡共用（見 `_stage_files`）
+            out["files"] = (await _stage_files([stage_id])).get(stage_id, [])
+        if kind == "checklist":
+            cur = await db.execute(
+                "SELECT id, title, status, priority, claim_state, claim_name,"
+                " claim_kind, moved_to,"
+                " LENGTH(description) AS description_chars FROM board_task"
+                " WHERE checklist_id=? AND deleted=0"
+                " ORDER BY order_index, created_at", (item_id,))
+            out["tasks"] = [dict(r) for r in await cur.fetchall()]
+        events: list[dict] = []
+        if board_id:
+            # 最近 30 筆，由舊到新。board_event 以 (board_id, board_seq)
+            # 為主鍵，這裡靠 board_id 前綴縮小掃描範圍
+            cur = await db.execute(
+                "SELECT board_seq, event_type, actor_name, payload_json,"
+                " created_at FROM board_event WHERE board_id=? AND item_id=?"
+                " ORDER BY board_seq DESC LIMIT 30", (board_id, item_id))
+            for e in reversed(await cur.fetchall()):
+                try:
+                    payload = json.loads(e["payload_json"]) or {}
+                except (TypeError, ValueError):
+                    payload = {}
+                events.append({
+                    "board_seq": e["board_seq"],
+                    "event_type": e["event_type"],
+                    "actor_name": e["actor_name"],
+                    "created_at": e["created_at"], "payload": payload})
+        out["events"] = events
+        return out
+
+    async def _reclaimable_in_scope(scope_sql: str, scope_params: list,
+                                    actor: str) -> list[dict]:
+        """你這一世領走、但中間變成孤兒的卡（與完整讀取同一份判準）。"""
+        if not actor:
+            return []
+        cur = await app.state.db.execute(
+            "SELECT id, title, orphaned_at, claim_name FROM board_task"
+            f" WHERE {scope_sql} AND claim_state='orphaned'"
+            " AND COALESCE(NULLIF(TRIM(claim_actor_key), ''),"
+            "              TRIM(claim_session_key)) = ?"
+            " AND deleted=0 ORDER BY board_seq", (*scope_params, actor))
+        return [dict(r) for r in await cur.fetchall()]
+
+    async def _room_board_scope(room_id: str, participant_id: str | None,
+                                host: bool):
+        """房軸讀板的門檻與範圍，與 `read_board` 同一份判準。
+
+        回 (房, 掛接的板或 None, scope_sql, scope_params, 我的 session_key)。
+        """
+        room = await _room_or_404(room_id, allow_archived=True)
+        await _member_or_403(room_id, participant_id, host)
+        db = app.state.db
+        attached = await _board_for_room(room_id)
+        prow = await (await db.execute(
+            "SELECT session_key FROM participant WHERE id=? AND room_id=?",
+            (participant_id, room_id))).fetchone() if participant_id else None
+        me_key = actor_key(prow["session_key"]) if prow else ""
+        if attached is not None and not host:
+            # 與 `read_board` 同一個理由：房內身分進得了房，不代表進得了
+            # 它掛的那塊板
+            await _board_member_or_403(attached["id"], me_key, board=attached)
+        scope_sql, scope_params = (
+            ("(board_id=? OR ((board_id='' OR board_id IS NULL) AND room_id=?))",
+             [attached["id"], room_id]) if attached is not None
+            else ("room_id=?", [room_id]))
+        return room, attached, scope_sql, scope_params, me_key
+
+    @app.get("/api/rooms/{room_id}/board/cycles",
+             dependencies=[Depends(require_auth)])
+    async def read_board_cycles(
+        room_id: str, limit: int = Query(default=30, ge=1, le=200),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """列出週期（含「未分類」頁），最近修改的在前。只有摘要。"""
+        _, attached, scope_sql, scope_params, _ = await _room_board_scope(
+            room_id, x_participant_id, host)
+        return {"board_id": attached["id"] if attached else None,
+                **await _cycles_view(scope_sql, scope_params, limit)}
+
+    @app.get("/api/rooms/{room_id}/board/outline",
+             dependencies=[Depends(require_auth)])
+    async def read_board_outline(
+        room_id: str, objective_id: str = "",
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。"""
+        room, attached, scope_sql, scope_params, me_key = \
+            await _room_board_scope(room_id, x_participant_id, host)
+        out = await _outline_view(scope_sql, scope_params, objective_id)
+        return {
+            "board_id": attached["id"] if attached else None,
+            "board_seq": await _board_seq(room_id),
+            **out,
+            "reclaimable_tasks": await _reclaimable_in_scope(
+                scope_sql, scope_params, me_key),
+            "supervisor": _supervisor_obj(
+                room["board_supervisor_session_key"],
+                room["board_supervisor_name"],
+                room["board_supervisor_kind"],
+                room["board_supervisor_left_at"]),
+            "attached_rooms": (await _attached_rooms(attached["id"])
+                               if attached is not None else []),
+            "outcome": (attached["outcome"] if attached is not None
+                        and "outcome" in attached.keys() else ""),
+            "task_requests": await _my_task_requests(
+                scope_sql.replace("board_id", "t.board_id")
+                         .replace("room_id", "t.room_id"),
+                scope_params, me_key, me_key),
+        }
+
+    @app.get("/api/rooms/{room_id}/board/items/{item_id}",
+             dependencies=[Depends(require_auth)])
+    async def read_board_item(
+        room_id: str, item_id: str,
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """單一週期／階段／卡的完整內容（描述、素材、事件）。"""
+        _, attached, scope_sql, scope_params, _ = await _room_board_scope(
+            room_id, x_participant_id, host)
+        return {"board_id": attached["id"] if attached else None,
+                **await _item_view(scope_sql, scope_params, item_id,
+                                   attached["id"] if attached else "")}
+
+    @app.get("/api/boards/{board_id}/cycles",
+             dependencies=[Depends(require_auth)])
+    async def read_board_cycles_v2(
+        board_id: str, limit: int = Query(default=30, ge=1, le=200),
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """列出週期（含「未分類」頁），最近修改的在前。只有摘要。"""
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, host=host)
+        return {"board_id": board_id,
+                **await _cycles_view("board_id=?", [board_id], limit)}
+
+    @app.get("/api/boards/{board_id}/outline",
+             dependencies=[Depends(require_auth)])
+    async def read_board_outline_v2(
+        board_id: str, objective_id: str = "",
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。"""
+        board = await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        my_role = await _board_member_or_403(board_id, actor, host=host)
+        out = await _outline_view("board_id=?", [board_id], objective_id)
+        return {
+            "board_id": board_id,
+            "name": board["name"],
+            "status": board["status"],
+            "my_role": my_role,
+            "outcome": board["outcome"] if "outcome" in board.keys() else "",
+            "board_seq": board["board_seq"],
+            **out,
+            "reclaimable_tasks": await _reclaimable_in_scope(
+                "board_id=?", [board_id], actor),
+            "attached_rooms": await _attached_rooms(board_id),
+            "task_requests": await _my_task_requests(
+                "t.board_id=?", [board_id], actor, actor),
+        }
+
+    @app.get("/api/boards/{board_id}/items/{item_id}",
+             dependencies=[Depends(require_auth)])
+    async def read_board_item_v2(
+        board_id: str, item_id: str,
+        session_key: str = "",
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        x_participant_id: str | None = Header(default=None),
+        host: bool = Depends(host_view),
+    ):
+        """單一週期／階段／卡的完整內容（描述、素材、事件）。"""
+        await _board_or_404(board_id)
+        actor = await _actor_from_headers(x_session_key, x_participant_id,
+                                          session_key)
+        await _board_member_or_403(board_id, actor, host=host)
+        return {"board_id": board_id,
+                **await _item_view("board_id=?", [board_id], item_id,
+                                   board_id)}
 
     async def _board_writer_v2(board_id: str, session_key: str | None,
                                participant_id: str | None,

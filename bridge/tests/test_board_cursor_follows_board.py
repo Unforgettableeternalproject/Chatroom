@@ -33,7 +33,9 @@ def _read_board(fake_hub, room, seq, board_id=BOARD):
     if board_id is not _OMIT:
         payload["board_id"] = board_id
     fake_hub.json("GET", f"/api/rooms/{room}/board", payload)
-    return srv.chatroom_board(room)
+    # 還不認識這塊板的第一次讀取用 full=True（不帶參數會走分層綱要）；
+    # 水位已知時不帶參數 ＝ 增量
+    return srv.chatroom_board(room, full=not srv._known_board(room))
 
 
 def _wait(fake_hub, room, board_seq, board_id=BOARD):
