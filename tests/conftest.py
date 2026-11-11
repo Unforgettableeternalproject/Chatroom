@@ -37,6 +37,18 @@ def _no_ambient_chatroom_env():
         os.environ.update(saved)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _kit_installers_never_touch_system():
+    """安裝器在測試中一律不得執行 PowerShell／排程指令。
+
+    曾因測試用的暫存 kit 讓 install.py 真的改到線上的 ChatroomHub 排程工作。
+    host-kit/install.py 見到這個變數就略過 _ps_run 與 register_service。
+    """
+    os.environ["UEP_KIT_NO_SYSTEM"] = "1"
+    yield
+    os.environ.pop("UEP_KIT_NO_SYSTEM", None)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_watcher_state(request, tmp_path, monkeypatch):
     """watcher 的游標檔跟著 state 路徑走；不導開的話會寫進真實家目錄，
