@@ -102,6 +102,18 @@ void main() {
       expect(find.text('#42'), findsNothing);
     });
 
+    testWidgets('#seq 與時間之間有間距', (tester) async {
+      for (final self in [true, false]) {
+        await tester.pumpWidget(_wrap(MessageBubble(
+            message: _msg(), isSelf: self, senderKind: 'codex', devMode: true)));
+        final seq = tester.getRect(find.text('#42'));
+        final time = tester.getRect(find.byWidgetPredicate(
+            (w) => w is Text && RegExp(r'\d\d:\d\d$').hasMatch(w.data ?? '')));
+        // 兩種排法都是「時間 → #seq」，中間不能貼在一起
+        expect(seq.left - time.right, greaterThanOrEqualTo(6));
+      }
+    });
+
     testWidgets('點 #seq 複製 seq', (tester) async {
       String? copied;
       tester.binding.defaultBinaryMessenger

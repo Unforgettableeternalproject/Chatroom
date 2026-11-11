@@ -1596,26 +1596,25 @@ class RoomHeader extends ConsumerWidget {
         color: archived ? s.bgSoft : null,
         border: Border(bottom: BorderSide(color: s.line)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Column(
+      child: LayoutBuilder(builder: (context, box) {
+        // 開發者模式下窄到按鈕列會把標題擠光時，按鈕改排到標題下面（可橫向捲動）
+        final narrow = ref.watch(appConfigProvider.select((c) => c.devMode)) &&
+            box.maxWidth < 520;
+        final titleCol = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     Flexible(
-                      child: Text(
-                        roomName,
-                        overflow: TextOverflow.ellipsis,
-                        style: UepText.pageTitle(color: archived ? s.inkSoft : s.inkTitle),
+                      child: TitleWithId(
+                        title: roomName,
+                        titleStyle: UepText.pageTitle(
+                            color: archived ? s.inkSoft : s.inkTitle),
+                        id: roomId,
+                        showId: ref
+                            .watch(appConfigProvider.select((c) => c.devMode)),
                       ),
                     ),
-                    if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
-                      const SizedBox(width: 10),
-                      CopyableId(value: roomId),
-                    ],
                     // zone 徽章（VISUALS 之類）拿掉了：常被誤讀成房間類型。
                     // 區域色只留在側欄的房間底色
                     if (archived) ...[
@@ -1651,9 +1650,8 @@ class RoomHeader extends ConsumerWidget {
                   ),
                 ],
               ],
-            ),
-          ),
-          const SizedBox(width: 16),
+            );
+        final actions = <Widget>[
           // 🔴 **封存只禁止寫入，不禁止查看**——所以這排按鈕分的是
           // 「檢視／寫入」，不是「活著／封存」。
           //
@@ -1732,8 +1730,29 @@ class RoomHeader extends ConsumerWidget {
               ),
             ),
           ],
-        ],
-      ),
+        ];
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              titleCol,
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: actions),
+              ),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(child: titleCol),
+            const SizedBox(width: 16),
+            ...actions,
+          ],
+        );
+      }),
     );
   }
 }

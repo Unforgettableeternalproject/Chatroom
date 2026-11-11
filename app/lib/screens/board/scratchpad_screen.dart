@@ -167,14 +167,19 @@ class _PadBodyState extends ConsumerState<_PadBody> {
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
       children: [
         Row(children: [
+          // 標題優先：ID 排在標題後面，放不下就換到下一行，不擠標題
           Expanded(
-            child: Text(pad.title,
-                style: UepText.pageTitle(color: s.inkTitle)),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 10,
+              children: [
+                Text(pad.title, style: UepText.pageTitle(color: s.inkTitle)),
+                if (ref.watch(appConfigProvider.select((c) => c.devMode)))
+                  CopyableId(value: pad.id),
+              ],
+            ),
           ),
-          if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
-            CopyableId(value: pad.id),
-            const SizedBox(width: 8),
-          ],
+          const SizedBox(width: 8),
           MonoLabel(
               AppLocalizations.of(context).boardPadBlockCount(
                   pad.blocks.length),

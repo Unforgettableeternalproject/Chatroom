@@ -803,24 +803,21 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           const SizedBox(width: 16),
         ],
         Flexible(
-          child: Text(
+          child: TitleWithId(
             // 板有自己的名字了（Hub c72c92d）。房名只是它還沒送到時的退路
-            snap?.name.isNotEmpty == true
+            title: snap?.name.isNotEmpty == true
                 ? snap!.name
                 : (room?.name ??
                     (attached.isEmpty
                         ? AppLocalizations.of(context).boardLibraryTitle
                         : attached.first.name)),
-            overflow: TextOverflow.ellipsis,
-            style: UepText.pageTitle(color: s.inkTitle),
+            titleStyle: UepText.pageTitle(color: s.inkTitle),
+            id: snap?.boardId ?? '',
+            showId: ref.watch(appConfigProvider.select((c) => c.devMode)) &&
+                snap != null &&
+                snap.boardId.isNotEmpty,
           ),
         ),
-        if (ref.watch(appConfigProvider.select((c) => c.devMode)) &&
-            snap != null &&
-            snap.boardId.isNotEmpty) ...[
-          const SizedBox(width: 10),
-          CopyableId(value: snap.boardId),
-        ],
         const SizedBox(width: 12),
         Text(AppLocalizations.of(context).boardLibraryTitle,
             style:
@@ -1931,21 +1928,30 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 ),
               ),
               // 創建者放在提示裡：派工的 agent 問問題時問的就是他
-              Tooltip(
-                message: c.createdByName.isEmpty
-                    ? AppLocalizations.of(context).boardChecklistCreatorUnknown
-                    : AppLocalizations.of(context)
-                        .boardChecklistCreatedBy(c.createdByName),
-                child: dragSource(Text(c.title,
-                    style: UepText.sans(
+              Builder(builder: (context) {
+                final dev =
+                    ref.watch(appConfigProvider.select((c) => c.devMode));
+                final tip = Tooltip(
+                  message: c.createdByName.isEmpty
+                      ? AppLocalizations.of(context)
+                          .boardChecklistCreatorUnknown
+                      : AppLocalizations.of(context)
+                          .boardChecklistCreatedBy(c.createdByName),
+                  child: dragSource(TitleWithId(
+                    title: c.title,
+                    titleStyle: UepText.sans(
                         size: 15,
                         weight: FontWeight.w600,
-                        color: s.inkTitle))),
-              ),
-              if (ref.watch(appConfigProvider.select((c) => c.devMode))) ...[
-                const SizedBox(width: 8),
-                CopyableId(value: c.id),
-              ],
+                        color: s.inkTitle),
+                    id: c.id,
+                    gap: 8,
+                    showId: dev,
+                    plainOverflow: null,
+                  )),
+                );
+                // 關閉時與原本一致：標題不加 Flexible
+                return dev ? Flexible(child: tip) : tip;
+              }),
               const SizedBox(width: 12),
               Text('$done / $total DONE',
                   style: UepText.mono(

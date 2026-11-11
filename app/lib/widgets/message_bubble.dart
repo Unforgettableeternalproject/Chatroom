@@ -130,7 +130,10 @@ class MessageBubble extends StatelessWidget {
       children: [
         if (isSelf) ...[
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
-          if (devMode) CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          if (devMode) ...[
+            const SizedBox(width: 6),
+            CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          ],
           const SizedBox(width: 8),
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
@@ -153,7 +156,10 @@ class MessageBubble extends StatelessWidget {
           KindBadge(kind: senderKind),
           const SizedBox(width: 8),
           Text(time, style: UepText.mono(size: 10, color: s.inkMute)),
-          if (devMode) CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          if (devMode) ...[
+            const SizedBox(width: 6),
+            CopyableId(value: '${message.seq}', label: '#${message.seq}'),
+          ],
           if (isSub) ...[
             const SizedBox(width: 8),
             Text(l10n.msgSubagentOf(subagentOf!),
