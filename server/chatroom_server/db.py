@@ -2,6 +2,8 @@
 
 import logging
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 
 import aiosqlite
 
@@ -444,12 +446,13 @@ CREATE INDEX IF NOT EXISTS idx_btask_claim
 -- 於是一個房間長出好幾組「未分類」（審核用 Codex 實測 12 路建出 12 組）。
 -- 每一組都是永久留在板上的空殼。約束寫進資料庫，那條路才真的走不通。
 --
--- 🚨 這兩條與 idx_btask_claim **不同**：那個能直接放 schema 是因為
--- board_task 是同一份 executescript 裡建的全新表；這兩條加在**既有**表上，
--- 現存資料只要已經違反就會建立失敗、連帶 DB 開不起來。
--- 先跑 `scripts/dedupe-uncategorised.py`（預設 dry-run）。
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised
-    ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類';
+-- 🚨 2026-11-11 起「未分類」改成**分頁**：每一頁是一個 objective（kind='inbox'），
+-- 同一塊板（v1 為同一房）同時只有一個使用中的頁。objective 這一層的唯一性
+-- 改由 POST_MIGRATION_INDEXES 的 idx_bobjective_inbox_active_* 保證（它們
+-- 依賴後來才補的 kind 欄位，不能放進 SCHEMA）；舊的以標題為鍵的
+-- idx_bobjective_uncategorised／idx_bobjective_uncat_board／
+-- idx_bchecklist_uncat_board 會在 `_migrate` 裡 DROP——留著的話第二頁建不出來。
+-- 這條 checklist 的仍保留：一個 objective（一頁）底下只會有一個「未分類」階段。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised
     ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類';
 
@@ -1288,6 +1291,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 讀的一方退回板 owner——猜成 human 會讓 agent 去問一個 agent
     ("board_checklist", "created_by_kind",
      "created_by_kind TEXT NOT NULL DEFAULT ''"),
+    # 「未分類」分頁（2026-11-11）。kind：'' 一般週期／'inbox' 未分類頁；
+    # page_no：未分類頁的頁碼（同一塊板遞增，一般週期為 0）。存量由
+    # `_migrate_data` 版次 10 回填
+    ("board_objective", "kind", "kind TEXT NOT NULL DEFAULT ''"),
+    ("board_objective", "page_no", "page_no INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # 依賴「欄位補齊之後」才能建立的索引。
@@ -1308,18 +1316,29 @@ POST_MIGRATION_INDEXES: list[str] = [
     # 孤兒判定 v2 改看 actor 在**所有掛接房**的 presence，撈的是 actor_key
     "CREATE INDEX IF NOT EXISTS idx_btask_claim_actor"
     " ON board_task(claim_actor_key) WHERE claim_state = 'held'",
-    # 「未分類」的去重換軸：**一塊板一組**，不是一間房一組。
+    # 「未分類」分頁：**同一塊板任何時候只有一個使用中的頁**。
     #
-    # 舊的 idx_bobjective_uncategorised 以 room_id 為軸，而 H9 之後板可以
-    # 沒有房 ⇒ 所有無房的板共用 `room_id=''` ⇒ 第二塊板會查到第一塊的未分類。
-    # 兩條並存：舊的還在保護未換軸的卡（它們的 room_id 一定有值），
-    # 新的用 `board_id != ''` 排除掉那些，兩者不會互相擋到。
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncat_board"
+    # 使用中＝kind='inbox' 且 status 不是 done／cancelled 且未刪除。
+    # （cancelled 也排除：未分類頁現在不可取消，但存量裡可能有被取消的舊頁，
+    # 它們是已結束的頁，不能佔住「使用中」的位置，否則補不了新頁。）
+    # 板軸（board_id 非空）與房軸（v1，board_id 空，以 room_id 為軸）各一條。
+    # 取代舊的以標題為鍵的 idx_bobjective_uncat_board／idx_bobjective_uncategorised
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_inbox_active_board"
     " ON board_objective(board_id)"
-    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncat_board"
-    " ON board_checklist(board_id)"
-    " WHERE deleted = 0 AND title = '未分類' AND board_id != ''",
+    " WHERE kind = 'inbox' AND deleted = 0"
+    " AND status NOT IN ('done','cancelled') AND board_id != ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_inbox_active_room"
+    " ON board_objective(room_id)"
+    " WHERE kind = 'inbox' AND deleted = 0"
+    " AND status NOT IN ('done','cancelled') AND board_id = ''",
+]
+
+# 「未分類」改成分頁之後必須拿掉的舊標題 index（冪等）。要在建新 index 與
+# 資料遷移**之前**丟：它們以標題為鍵，留著的話第二頁（同標題）建不出來
+DROPPED_INDEXES: list[str] = [
+    "idx_bobjective_uncategorised",
+    "idx_bobjective_uncat_board",
+    "idx_bchecklist_uncat_board",
 ]
 
 
@@ -1364,7 +1383,9 @@ REBUILT_TABLES: dict[str, str] = {
             completed_at TEXT,
             deleted     INTEGER NOT NULL DEFAULT 0,
             board_seq   INTEGER NOT NULL DEFAULT 0,
-            created_at  TEXT NOT NULL
+            created_at  TEXT NOT NULL,
+            kind        TEXT NOT NULL DEFAULT '',
+            page_no     INTEGER NOT NULL DEFAULT 0
         )
     """,
     "board_checklist": """
@@ -1445,8 +1466,6 @@ REBUILT_INDEXES: list[str] = [
     " ON board_task(checklist_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_btask_claim"
     " ON board_task(claim_participant_id) WHERE claim_state = 'held'",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_bobjective_uncategorised"
-    " ON board_objective(room_id) WHERE deleted = 0 AND title = '未分類'",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_bchecklist_uncategorised"
     " ON board_checklist(objective_id) WHERE deleted = 0 AND title = '未分類'",
 ]
@@ -1554,6 +1573,8 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         if column not in columns[table]:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
             columns[table].add(column)
+    for name in DROPPED_INDEXES:
+        await db.execute(f"DROP INDEX IF EXISTS {name}")
     for stmt in POST_MIGRATION_INDEXES:
         await db.execute(stmt)
     await _ensure_run_ref_unique(db)
@@ -1563,7 +1584,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 9
+DATA_VERSION = 10
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1690,7 +1711,74 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             " WHERE NOT EXISTS (SELECT 1 FROM notification x"
             "   WHERE json_extract(x.payload_json,'$.migrated_from') = n.id)"
             " ORDER BY n.created_at, n.rowid")
+    if version < 10:
+        await _migrate_inbox_pages(db)
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
+
+
+async def _migrate_inbox_pages(db: aiosqlite.Connection) -> None:
+    """版次 10：「未分類」改成分頁。
+
+    1. 既有標題「未分類」的 objective 補 kind='inbox'、page_no=1。
+    2. 某板（v1 為某房）沒有使用中的頁——最後一頁已 done，或是被取消的舊頁
+       （存量裡可能有；未分類頁之後不可取消，視同已結束）——就補建
+       page_no=最大+1 的使用中頁（含「未分類」checklist）。
+
+    版次只前進，重跑不會發生；就算被重跑，第 2 步只在「沒有使用中的頁」時
+    才補，第 1 步只動 kind 為空的列，也不會多長出頁來。
+    """
+    await db.execute(
+        "UPDATE board_objective SET kind='inbox', page_no=1"
+        " WHERE title='未分類' AND deleted=0 AND kind=''")
+    rows = await (await db.execute(
+        "SELECT id, room_id, board_id, status, page_no FROM board_objective"
+        " WHERE kind='inbox' AND deleted=0 ORDER BY page_no, created_at, id"
+    )).fetchall()
+    axes: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        board_id = (r["board_id"] or "").strip()
+        key = ("b", board_id) if board_id else ("r", r["room_id"] or "")
+        a = axes.setdefault(key, {"active": False, "max": 0, "room_id":
+                                  r["room_id"] or "", "board_id": board_id})
+        a["max"] = max(a["max"], r["page_no"] or 0)
+        if r["status"] not in ("done", "cancelled"):
+            a["active"] = True
+    now = datetime.now(timezone.utc).isoformat()
+    for a in axes.values():
+        if a["active"]:
+            continue
+        seq = 0
+        if a["board_id"]:
+            cur = await db.execute(
+                "UPDATE board SET board_seq=board_seq+1 WHERE id=?"
+                " RETURNING board_seq", (a["board_id"],))
+            hit = await cur.fetchone()
+            if hit is not None:
+                seq = hit["board_seq"]
+                await db.execute(
+                    "UPDATE room SET board_seq=? WHERE id IN"
+                    " (SELECT room_id FROM board_room WHERE board_id=?"
+                    "  AND detached_at IS NULL)", (seq, a["board_id"]))
+        elif a["room_id"]:
+            cur = await db.execute(
+                "UPDATE room SET board_seq=board_seq+1 WHERE id=?"
+                " RETURNING board_seq", (a["room_id"],))
+            hit = await cur.fetchone()
+            if hit is not None:
+                seq = hit["board_seq"]
+        oid, cid = uuid.uuid4().hex, uuid.uuid4().hex
+        await db.execute(
+            "INSERT INTO board_objective (id, room_id, board_id, title,"
+            " description, created_by_name, board_seq, created_at, kind,"
+            " page_no) VALUES (?,?,?,?,?,?,?,?,'inbox',?)",
+            (oid, a["room_id"], a["board_id"], "未分類",
+             "還沒歸進任何週期的東西", "Hub", seq, now, a["max"] + 1))
+        await db.execute(
+            "INSERT INTO board_checklist (id, room_id, board_id, objective_id,"
+            " title, description, created_by_name, board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (cid, a["room_id"], a["board_id"], oid, "未分類", "", "Hub", seq,
+             now))
 
 
 async def open_db(path: str) -> aiosqlite.Connection:

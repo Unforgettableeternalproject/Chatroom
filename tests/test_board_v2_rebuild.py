@@ -75,7 +75,9 @@ async def test_indexes_are_recreated_on_the_first_start(tmp_path):
     first = {r["name"] for r in rows}
     for want in ("idx_btask_room", "idx_btask_checklist", "idx_btask_claim",
                  "idx_bobjective_room", "idx_bchecklist_room",
-                 "idx_bobjective_uncategorised", "idx_bchecklist_uncategorised",
+                 "idx_bobjective_inbox_active_board",
+                 "idx_bobjective_inbox_active_room",
+                 "idx_bchecklist_uncategorised",
                  # 換軸之後的增量查詢走這三條，孤兒判定走 claim_actor
                  "idx_bobjective_board", "idx_bchecklist_board",
                  "idx_btask_board", "idx_btask_claim_actor"):

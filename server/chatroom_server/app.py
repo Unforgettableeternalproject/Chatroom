@@ -855,6 +855,14 @@ class BoardObjectivePatch(BaseModel):
     order_index: int | None = None
 
 
+class BoardSplitInbox(BaseModel):
+    """把「未分類」的一頁拆成獨立週期。title 預設空字串：空的由端點回
+    `title_required`，不讓 pydantic 的 422 蓋掉那個明確的 code"""
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(default="", max_length=200)
+    reason: str = Field(default="", max_length=500)
+
+
 class BoardChecklistCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
@@ -6323,6 +6331,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "只有這塊板的 owner、聊天室的 supervisor 或"
                        "建立者可以改它")
         await _assert_objective_writable(row, kind)
+        if kind == "objective" and fields.get("title") is not None:
+            new_title = fields["title"]
+            if row["kind"] == "inbox":
+                # 未分類頁的標題固定：要改名等於把它變成一般週期，走 split_inbox
+                if new_title != row["title"]:
+                    raise _err(409, "inbox_rename_forbidden",
+                               "「未分類」頁不能改名；要把它拆成獨立週期"
+                               "請用拆出功能")
+            elif new_title == UNCATEGORISED:
+                raise _err(409, "inbox_title_reserved",
+                           "「未分類」是系統保留的名稱，請換一個週期名稱")
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
         seq = await _item_seq(row)
@@ -6410,6 +6429,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         x_participant_id: str | None = Header(default=None),
     ):
         me = await _board_writer(room_id, x_participant_id)
+        _assert_not_inbox_title(body.title)
         db = app.state.db
         seq = await _next_board_seq(room_id)
         oid = uuid.uuid4().hex
@@ -6541,7 +6561,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_board_editor",
                        "只有這塊板的 owner、聊天室的 supervisor 或"
                        "建立者可以改它")
-        if row["title"] == UNCATEGORISED:
+        parent_kind = await (await app.state.db.execute(
+            "SELECT kind FROM board_objective WHERE id=?",
+            (row["objective_id"],))).fetchone()
+        if (row["title"] == UNCATEGORISED
+                or (parent_kind is not None and parent_kind["kind"] == "inbox")):
             raise _err(409, "checklist_uncategorised_immovable",
                        "「未分類」階段不能搬到別的週期")
         target_id = body.objective_id.strip()
@@ -6604,20 +6628,96 @@ def create_app(config: Config | None = None) -> FastAPI:
     # Q2 定案：三層強制，但「隨手記一件事」不該逼人先蓋兩層。缺的那兩層由
     # Hub 自動備妥，名字固定是「未分類」——**固定名字才找得回同一個**，
     # 每次新建一個的話板上會長出一排一模一樣的空殼
+    #
+    # 2026-11-11：「未分類」改成**分頁**。每一頁是一個 objective
+    # （`kind='inbox'`、`page_no` 遞增，標題一律「未分類」），同一塊板（v1
+    # 為同一房）任何時候只有一個使用中的頁（DB partial unique index 保證）。
+    # 這一頁照一般週期流程收尾，**完成的同一個交易裡開下一頁**；所以「未分類」
+    # 永遠存在，不會再因為頁已 done 而讓不指定階段的卡 409 `objective_closed`。
     UNCATEGORISED = "未分類"
 
-    async def _uncategorised_checklist(room_id: str, me) -> str:
-        """取得（必要時建立）這個房的「未分類」Checklist，回傳它的 id。
+    def _assert_not_inbox_title(title: str) -> None:
+        """一般週期不能叫「未分類」——那個名字是分頁的，留著會讓人分不出
+        哪個是 Hub 自己的收納頁。"""
+        if (title or "").strip() == UNCATEGORISED:
+            raise _err(409, "inbox_title_reserved",
+                       "「未分類」是系統保留的名稱，請換一個週期名稱")
 
-        兩層都可能要建：Checklist 掛在 Objective 底下，三層是嚴格的樹。
+    async def _insert_inbox_checklist(oid: str, room_id: str, board_id: str,
+                                      me, seq: int, now: str):
+        """在這一頁底下建「未分類」階段。`ON CONFLICT DO NOTHING`：撞到
+        `idx_bchecklist_uncategorised` 表示別人剛建好，回 None。"""
+        cid = uuid.uuid4().hex
+        cur = await app.state.db.execute(
+            "INSERT INTO board_checklist (id, room_id, board_id,"
+            " objective_id, title, description, created_by,"
+            " created_by_name, created_by_actor_key, created_by_kind,"
+            " board_seq, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT DO NOTHING RETURNING id",
+            (cid, room_id, board_id, oid, UNCATEGORISED, "",
+             me["id"], me["display_name"], actor_key(me["session_key"]),
+             _me_kind(me), seq, now),
+        )
+        return cid if await cur.fetchone() is not None else None
+
+    async def _new_inbox_page(room_id: str, board_id: str, me
+                              ) -> tuple[str, str | None] | None:
+        """開一頁新的「未分類」（含「未分類」階段），回 `(objective_id,
+        checklist_id)`；已經有使用中的頁（撞 partial unique）回 None。
+
+        `page_no` 在 INSERT 當下用子查詢取「這塊板最大頁碼 + 1」，與插入是
+        同一個語句，不會讀到過期的最大值。**不 commit**：呼叫端決定交易邊界
+        （完成／拆出要和自己的狀態變更同一個交易）。checklist 若被並行的
+        對手搶先建好，第二個值為 None（頁本身是我建的）。
+        """
+        db = app.state.db
+        board_id = (board_id or "").strip()
+        seq = await _next_board_seq(room_id, board_id)
+        now = _now()
+        oid = uuid.uuid4().hex
+        axis, arg = (("board_id=?", board_id) if board_id
+                     else ("room_id=? AND board_id=''", room_id))
+        cur = await db.execute(
+            "INSERT INTO board_objective (id, room_id, board_id, title,"
+            " description, created_by, created_by_name,"
+            " created_by_actor_key, board_seq, created_at, kind, page_no)"
+            " SELECT ?,?,?,?,?,?,?,?,?,?,'inbox', COALESCE(MAX(page_no),0)+1"
+            # 不篩 kind：拆出去的頁仍留著 page_no，頁碼不回頭重用
+            f" FROM board_objective WHERE page_no>0 AND {axis}"
+            " ON CONFLICT DO NOTHING RETURNING page_no",
+            (oid, room_id, board_id, UNCATEGORISED,
+             "還沒歸進任何週期的東西", me["id"], me["display_name"],
+             actor_key(me["session_key"]), seq, now, arg),
+        )
+        made = await cur.fetchone()
+        if made is None:
+            # ⚠️ 不要 commit（共用連線上別的語句可能正在進行中）。領走的號
+            # 讓它空著——空號只讓增量 client 多空轉一次
+            return None
+        cid = await _insert_inbox_checklist(oid, room_id, board_id, me, seq,
+                                            now)
+        await _record_board_event(
+            board_id, seq, "uncategorised_created",
+            actor=actor_key(me["session_key"]),
+            actor_name=me["display_name"], origin_room_id=room_id,
+            item_kind="objective", item_id=oid,
+            payload={"page_no": made["page_no"]})
+        return oid, cid
+
+    async def _uncategorised_checklist(room_id: str, me) -> str:
+        """取得（必要時建立）這塊板「使用中那一頁」的「未分類」Checklist，
+        回傳它的 id。
+
+        兩層都可能要建：Checklist 掛在 Objective（頁）底下，三層是嚴格的樹。
         **與這次新增 Task 共用同一個 board_seq**——它們是同一個動作的三個
         後果，拆成三個號會讓增量流看起來像有人連做了三件事。
 
         ⚠️ **這裡是 SELECT-then-INSERT，而中間每一步都會讓出。** 並行呼叫會
-        各自讀到空、各自建一組，於是板上長出好幾組「未分類」——每一組都是
-        永久留在那裡的空殼（審核用 Codex 實測 12 路建出 12 組）。
-        去重真正的保證是 `idx_bobjective_uncategorised` / `idx_bchecklist_
-        uncategorised` 兩條 partial unique index，這裡的 INSERT 一律
+        各自讀到空、各自建一頁。去重真正的保證是
+        `idx_bobjective_inbox_active_board／_room` 兩條 partial unique index
+        （同一塊板只有一個使用中的頁）與 `idx_bchecklist_uncategorised`
+        （一頁只有一個「未分類」階段），這裡的 INSERT 一律
         `ON CONFLICT DO NOTHING`：撞到就表示別人剛建好，回頭讀他那一份。
         """
         db = app.state.db
@@ -6634,17 +6734,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_key = (me.get("board_id") or "").strip()
 
         async def _lookup():
-            where, arg = (("c.board_id=?", board_key) if board_key
-                          else ("c.room_id=?", room_id))
+            """使用中的那一頁（kind='inbox'、未收尾），連同它的「未分類」
+            階段（可能還沒建好，`id` 為 None）。已 done／cancelled 的歷史頁
+            不看。"""
+            where, arg = (("o.board_id=?", board_key) if board_key
+                          else ("o.room_id=?", room_id))
             return await (
                 await db.execute(
-                    "SELECT c.id, c.status AS c_status, o.id AS o_id,"
-                    "       o.status AS o_status"
-                    " FROM board_checklist c JOIN board_objective o"
-                    "   ON o.id = c.objective_id"
-                    f" WHERE {where} AND c.deleted=0 AND o.deleted=0"
-                    "   AND c.title=? AND o.title=? LIMIT 1",
-                    (arg, UNCATEGORISED, UNCATEGORISED),
+                    "SELECT o.id AS o_id, o.status AS o_status,"
+                    "       c.id AS id, c.status AS c_status"
+                    " FROM board_objective o LEFT JOIN board_checklist c"
+                    "   ON c.objective_id = o.id AND c.deleted=0"
+                    "  AND c.title=?"
+                    f" WHERE {where} AND o.kind='inbox' AND o.deleted=0"
+                    "   AND o.status NOT IN ('done','cancelled') LIMIT 1",
+                    (UNCATEGORISED, arg),
                 )
             ).fetchone()
 
@@ -6652,7 +6756,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             """🔑 **「未分類」不受「收尾的容器拒收新卡」那道閘限制。**
 
             那道閘擋的是「人決定收掉的容器」，而未分類不是任何人選的容器
-            ——它是 Hub 自己的收納格，靠**固定名字**找回同一格、不看狀態。
+            ——它是 Hub 自己的收納格，靠 `kind='inbox'` 找回使用中的那一頁。
 
             而它一定會被收尾：**週期要送審就得先把它收掉**（送審閘要求所有
             Checklist ∈ done/cancelled）。所以純拒收的後果是「隨手記一件事」
@@ -6664,13 +6768,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             打回會推 board_seq，畫面自己會反應，不另發系統訊息（隨手記一件
             事是很輕的動作，不值得在房裡響一聲）。
 
-            🔒 **但 `done` 與 `cancelled` 打不回來。** 判準與
-            `reopen_objective` 同一份：解凍只在 `review`／`verified`，終局的
-            兩個狀態永久唯讀（艾斯維爾 2026-09-21 裁決）。原本這裡寫的是
-            `!= "active"`，於是「隨手記一件事」會把一個已完成的週期打回
-            active 並清掉 completed／reviewed／verified——**完成被一個最輕的
-            動作收回**，而按下完成的人不會收到任何提示。那時就回 409
-            `objective_closed`，卡不建、週期不動。
+            🔒 **只作用在使用中的頁。** `done`／`cancelled` 的頁是歷史，打不
+            回來（艾斯維爾 2026-09-21 裁決）——它們根本不會被 `_lookup` 選到，
+            新卡落在新開的那一頁。這裡保留的 `_assert_objective_writable`
+            只是防線：正常不會觸發。
 
             ⚠️ **解凍 review／verified 只要房內成員、而 `reopen_objective`
             限人類，這個不對稱是刻意的**：隨手記本來就是低門檻的動作，它
@@ -6678,8 +6779,6 @@ def create_app(config: Config | None = None) -> FastAPI:
             了。要收緊的話該連「隨手記」一起收，不是只在這裡補一道人類閘。
             """
             if row["o_status"] in ("done", "cancelled"):
-                # 訊息形狀共用那一份，不另寫——兩處說法漂移的話，client 分不出
-                # 是同一道閘
                 await _assert_objective_writable(row["o_id"], "objective")
             if row["o_status"] != "active":
                 await db.execute(
@@ -6698,59 +6797,29 @@ def create_app(config: Config | None = None) -> FastAPI:
                     (await _next_board_seq(room_id, me.get("board_id", "")), row["id"]),
                 )
 
-        # 三輪：讀不到就建，建不成表示別人贏了，回去讀他的。兩層各有一條
-        # index，所以「objective 我建的、checklist 對方建的」這種交錯也收得住
+        # 三輪：讀不到就建，建不成表示別人贏了，回去讀他的。頁與階段各有一條
+        # index，所以「頁我建的、階段對方建的」這種交錯也收得住
         for _ in range(3):
             row = await _lookup()
             if row is not None:
+                if row["id"] is None:
+                    # 頁在、階段還沒有（對方剛建好頁，或階段被軟刪了）：補
+                    # 一個。撞到 index 表示對方補好了，回去重讀
+                    seq = await _next_board_seq(room_id, board_key)
+                    if await _insert_inbox_checklist(
+                            row["o_id"], room_id, board_key, me, seq,
+                            _now()) is None:
+                        continue
+                    continue
                 await _reopen_if_settled(row)
                 return row["id"]
-            seq = await _next_board_seq(room_id, me.get("board_id", ""))
-            now = _now()
-            oid = uuid.uuid4().hex
-            cur = await db.execute(
-                "INSERT INTO board_objective (id, room_id, board_id, title,"
-                " description, created_by, created_by_name,"
-                " created_by_actor_key, board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT DO NOTHING RETURNING id",
-                (oid, room_id, me["board_id"], UNCATEGORISED,
-                 "還沒歸進任何週期的東西",
-                 me["id"], me["display_name"], actor_key(me["session_key"]),
-                 seq, now),
-            )
-            if await cur.fetchone() is None:
-                # 對方剛建好那個週期。他的 checklist 可能還在路上，回去重讀。
-                # ⚠️ 這裡**不要 commit**：共用連線上別的語句可能正在進行中
-                # （"cannot commit transaction - SQL statements in progress"）。
-                # 領走的號就讓它空著——空號只讓某個增量 client 多空轉一次，
-                # 而在這條路徑上 commit 會直接把請求打掛
-                continue
-            cid = uuid.uuid4().hex
-            cur = await db.execute(
-                "INSERT INTO board_checklist (id, room_id, board_id,"
-                " objective_id, title, description, created_by,"
-                " created_by_name, created_by_actor_key, created_by_kind,"
-                " board_seq, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT DO NOTHING RETURNING id",
-                (cid, room_id, me["board_id"], oid, UNCATEGORISED, "",
-                 me["id"], me["display_name"], actor_key(me["session_key"]),
-                 _me_kind(me), seq, now),
-            )
-            if await cur.fetchone() is None:
-                continue   # 同上，不 commit
-            # 那兩層共用這一個號（它們是同一個動作的兩個後果），所以
-            # **一筆 event**——記兩筆會讓稽核串看起來像做了兩件事
-            await _record_board_event(
-                me.get("board_id", ""), seq, "uncategorised_created",
-                actor=actor_key(me["session_key"]),
-                actor_name=me["display_name"], origin_room_id=room_id,
-                item_kind="checklist", item_id=cid)
-            return cid
+            made = await _new_inbox_page(room_id, board_key, me)
+            if made is None or made[1] is None:
+                continue   # 別人贏了（或階段被別人搶先建好），回去讀他的
+            return made[1]
         # 三輪都沒收斂：讓呼叫者拿到明確的失敗，而不是默默再建一組空殼
         row = await _lookup()
-        if row is not None:
+        if row is not None and row["id"] is not None:
             await _reopen_if_settled(row)
             return row["id"]
         raise _err(503, "uncategorised_contended",
@@ -7580,7 +7649,8 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _objective_set(row, fields: dict,
                              expect_status: str | None = None,
-                             event: str = "", actor=None) -> int:
+                             event: str = "", actor=None,
+                             in_tx=None) -> int:
         """把 Objective 推到新狀態。**CAS 是預設行為，不是選項。**
 
         五個呼叫端（送審／確認／完成／打回／取消）全都先讀 `row`、依它的
@@ -7590,6 +7660,10 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         `expect_status` 留給「判斷依據不是自己的 status」的未來呼叫端；
         目前沒有人用，也不該為了繞過守門而用它。
+
+        `in_tx`：CAS 贏了之後、commit 之前要在**同一個交易**裡做的事（無參數
+        的 async callable）。輸掉 CAS 的一路不會呼叫它。「未分類」頁完成時
+        靠它在同一交易內開下一頁。
         """
         db = app.state.db
         expect = row["status"] if expect_status is None else expect_status
@@ -7634,6 +7708,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                        f"這個週期的狀態在你送出的同時被改成"
                        f"「{current['status']}」了",
                        from_status=current["status"])
+        if in_tx is not None:
+            await in_tx()
         await _commit_with_retry(db)
         await _item_notify(row)
         return seq
@@ -8378,10 +8454,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(409, "release_not_done", msg,
                        release_status=state["status"],
                        release_run_id=state["run_id"])
+        async def _open_next_inbox_page():
+            # 「未分類」永遠存在：這一頁收掉的同一個交易裡就開下一頁。
+            # 撞到 partial unique（別人剛開了）回 None，不需要再做什麼
+            if row["kind"] == "inbox":
+                await _new_inbox_page(row["room_id"], _row_board_id(row), me)
+
         seq = await _objective_set(row, {
             "status": "done", "completed_by": me["id"], "completed_at": _now(),
             "completed_by_actor_key": actor_key(me["session_key"]),
-        }, event="objective_done", actor=me)
+        }, event="objective_done", actor=me, in_tx=_open_next_inbox_page)
         # 做過事的人——含已經離開的、含 agent、跨掛接房——走收件匣
         await _settlement_notices(row, "objective_done", seq,
                                   me["session_key"], me["display_name"])
@@ -8480,6 +8562,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         if not _is_human(me) and not _is_creator(row, me):
             raise _err(403, "human_only",
                        "只有建立者或人類成員可以取消這個週期")
+        if row["kind"] == "inbox":
+            raise _err(409, "inbox_page_not_cancellable",
+                       "「未分類」頁不能取消；收尾請走完成，"
+                       "想獨立出來請用拆出功能")
         if row["status"] not in ("active", "review"):
             raise _err(409, "invalid_transition",
                        f"「{row['status']}」的週期不能取消",
@@ -8495,6 +8581,79 @@ def create_app(config: Config | None = None) -> FastAPI:
             "board_objective_cancelled", exclude_session_key=me["session_key"])
         return {"ok": True, "id": objective_id, "status": "cancelled",
                 "board_seq": seq}
+
+    @app.post("/api/board/objectives/{objective_id}/split_inbox",
+              dependencies=[Depends(require_auth)])
+    async def split_inbox(
+        objective_id: str, body: BoardSplitInbox,
+        x_participant_id: str | None = Header(default=None),
+        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
+        host: bool = Depends(host_view),
+    ):
+        """把「未分類」的一頁（使用中或已完成皆可）拆成獨立的一般週期。
+
+        - `kind` 清成 ''、標題改成給定名稱（不可空、不可是「未分類」）；
+          **狀態維持該頁最後的狀態**——已完成的頁拆出來就是已完成的週期。
+        - 該頁底下的「未分類」階段改名為「一般」：留著原名的話，它在一般週期
+          底下仍會被 `move_checklist` 當成不可搬的未分類階段、被稽核回填
+          略過，而且名稱和分頁的保留字撞在一起。階段與其下的卡原樣保留。
+        - 拆的是使用中的頁 ⇒ 同一個交易內開新的空白使用中頁（「未分類」
+          永遠存在）；拆的是已結束的頁則不補（板上本來就有使用中的頁）。
+        - 權限比照週期編輯（`_board_can_edit`）。
+        回更新後的 objective；有補新頁時另帶 `new_inbox_objective`。
+        """
+        row = await _board_item_or_404("objective", objective_id)
+        me = await _board_item_writer(row, x_participant_id, x_session_key)
+        if not await _board_can_edit(row, me, host):
+            raise _err(403, "not_board_editor",
+                       "只有這塊板的 owner、聊天室的 supervisor 或"
+                       "建立者可以改它")
+        if row["kind"] != "inbox":
+            raise _err(409, "not_inbox_page", "這個週期不是「未分類」頁")
+        title = (body.title or "").strip()
+        if not title:
+            raise _err(400, "title_required", "請給這個週期一個名稱")
+        if title == UNCATEGORISED:
+            raise _err(409, "inbox_title_reserved",
+                       "「未分類」是系統保留的名稱，請換一個週期名稱")
+        db = app.state.db
+        was_active = row["status"] not in ("done", "cancelled")
+        board_id = _row_board_id(row)
+        seq = await _item_seq(row)
+        # CAS 在 kind 上：兩個人同時拆同一頁，輸的一路回 not_inbox_page
+        cur = await db.execute(
+            "UPDATE board_objective SET kind='', title=?, board_seq=?"
+            " WHERE id=? AND kind='inbox' RETURNING id",
+            (title, seq, objective_id))
+        if await cur.fetchone() is None:
+            raise _err(409, "not_inbox_page", "這個週期不是「未分類」頁")
+        await db.execute(
+            "UPDATE board_checklist SET title='一般', board_seq=?"
+            " WHERE objective_id=? AND title=?",
+            (seq, objective_id, UNCATEGORISED))
+        await _record_board_event(
+            board_id, seq, "objective_split_from_inbox",
+            actor=actor_key(me["session_key"]), actor_name=me["display_name"],
+            origin_room_id=row["room_id"], item_kind="objective",
+            item_id=objective_id,
+            payload={"title": title, "page_no": row["page_no"],
+                     "status": row["status"],
+                     "reason": (body.reason or "").strip()})
+        new_page = None
+        if was_active:
+            made = await _new_inbox_page(row["room_id"], board_id, me)
+            if made is not None:
+                new_page = made[0]
+        await _commit_with_retry(db)
+        await _item_notify(row)
+        out = _board_row(await (await db.execute(
+            "SELECT * FROM board_objective WHERE id=?",
+            (objective_id,))).fetchone())
+        if new_page is not None:
+            out["new_inbox_objective"] = _board_row(await (await db.execute(
+                "SELECT * FROM board_objective WHERE id=?",
+                (new_page,))).fetchone())
+        return out
 
     # ---------- Supervisor（T-07）----------
 
@@ -10510,6 +10669,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         """從板上直接建一個週期。權限看 board_member，不看房。"""
         board, room_id, me = await _board_writer_v2(
             board_id, x_session_key, x_participant_id, host)
+        _assert_not_inbox_title(body.title)
         db = app.state.db
         seq = await _next_seq_for_board(board_id)
         oid = uuid.uuid4().hex
@@ -11494,7 +11654,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     f" '') AS {col}_key")
 
         for x in await (await db.execute(
-                "SELECT x.id, x.title, x.status, x.created_at, x.created_by_name,"
+                "SELECT x.id, x.title, x.kind, x.status, x.created_at,"
+                " x.created_by_name,"
                 f" {_pk('created_by', 'pc')}, x.reviewed_at, {_pk('reviewed_by', 'pr')},"
                 f" x.verified_at, {_pk('verified_by', 'pv')},"
                 f" x.completed_at, {_pk('completed_by', 'pd')}"
@@ -11505,8 +11666,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 " LEFT JOIN participant pd ON pd.id = x.completed_by"
                 " WHERE x.board_id=?", (board_id,))).fetchall():
             titles[x["id"]] = x["title"]
-            if x["title"] == "未分類":
-                continue   # 隨手記一張卡時自動長出來的容器，不是誰建的
+            if x["kind"] == "inbox" or x["title"] == "未分類":
+                continue   # 隨手記一張卡時自動長出來的容器（分頁），不是誰建的
             _derive("objective_created", "objective", x, x["created_by_key"],
                     x["created_at"], x["created_by_name"])
             _derive("objective_review", "objective", x, x["reviewed_by_key"],

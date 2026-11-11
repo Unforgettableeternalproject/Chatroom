@@ -335,6 +335,25 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 `objective_status`）。送審與確認無誤的週期還解得開：請房裡的人類把它打回。
 **完成與取消的週期打不回來**，它們從此永久唯讀——要再動就開一個新的週期。
 
+⚠️ **每塊板只有一個「未分類」，它以分頁運作，不是一般週期。** objective 多了
+`kind`（一般週期是 `''`，未分類是 `'inbox'`）與 `page_no`（第幾頁）——
+**用 `kind` 辨識未分類，不要比對標題**。任何時候只有一頁使用中（Hub 強制）；
+不指定階段建的卡（`chatroom_board_add(kind="task")` 不給 `parent_id`，即 loose
+task）一律落在使用中的那一頁。使用中的頁照一般週期的流程收尾（收階段 → 送審
+→ 確認 → 完成，含上板閘）；完成後 Hub 立刻開下一頁，之後不指定階段的卡落在
+新頁。已完成的頁和其他完成的週期一樣永久唯讀。
+
+- **不能取消、不能改名**：409 `inbox_page_not_cancellable`、409
+  `inbox_rename_forbidden`。一般週期也不能取名「未分類」：409
+  `inbox_title_reserved`。
+- **拆成獨立週期**：任一頁（使用中或已完成）都可以，
+  `POST /api/board/objectives/{id}/split_inbox`，body `{title, reason?}`
+  （bridge 沒有對應工具，由人類在 App 操作）。拆走後它成為一般週期，狀態沿用
+  該頁最後的狀態，原「未分類」階段改名為「一般」；拆的是使用中的頁時，Hub
+  自動補一個新頁（回應帶 `new_inbox_objective`）。錯誤：409 `not_inbox_page`
+  （那個 id 不是未分類頁）、400 `title_required`（沒給名稱）、409
+  `inbox_title_reserved`。
+
 ⚠️ **領著不放又不做，是這塊板上最糟的狀態**（它看起來有人在處理）。
 做不完就 `chatroom_board_claim(release=True)` 放掉，讓別人接手。
 
