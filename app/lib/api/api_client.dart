@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:logging/logging.dart';
 
 import '../core/errors/api_exception.dart';
+import '../core/host_reason.dart';
 import '../core/logging/redacting_logger.dart';
 import '../l10n/l10n.dart';
 
@@ -31,6 +32,7 @@ Dio createApiDio({
       // 主 token，帶了不代表過得了
       if (hostView != null && hostView()) {
         options.headers['X-Host-View'] = '1';
+        _attachHostReason(options);
       }
       handler.next(options);
     },
@@ -41,6 +43,28 @@ Dio createApiDio({
     },
   ));
   return dio;
+}
+
+/// 主持人操作的理由（見 [runWithHostReason]）：寫入請求才帶，
+/// body 已有非空的 `reason` 就不蓋掉。DELETE 沒有 body，走 query。
+void _attachHostReason(RequestOptions options) {
+  final reason = currentHostReason();
+  if (reason == null) return;
+  final method = options.method.toUpperCase();
+  if (method == 'GET' || method == 'HEAD') return;
+  if (method == 'DELETE') {
+    options.queryParameters = {...options.queryParameters, 'reason': reason};
+    return;
+  }
+  final data = options.data;
+  if (data == null) {
+    options.data = <String, dynamic>{'reason': reason};
+  } else if (data is Map<String, dynamic>) {
+    final existing = data['reason'];
+    if (existing is String && existing.isNotEmpty) return;
+    options.data = {...data, 'reason': reason};
+  }
+  // 裸陣列或 FormData：沒有放理由的位置，不送
 }
 
 /// DioException → app 層例外（UI-DESIGN §3.4 的轉譯表）。

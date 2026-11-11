@@ -65,7 +65,9 @@ void main() {
     deviceKey: 'device-key',
   );
 
-  Widget wrap(_FakeBoardApi api, {bool releaseOnly = false}) => ProviderScope(
+  Widget wrap(_FakeBoardApi api,
+          {bool releaseOnly = false}) =>
+      ProviderScope(
         overrides: [
           initialConfigProvider.overrideWithValue(config),
           boardApiProvider.overrideWithValue(api),
@@ -79,13 +81,17 @@ void main() {
             builder: (context, ref, _) => Scaffold(
               body: Center(
                 child: TextButton(
-                  onPressed: () => (releaseOnly
-                      ? showObjectiveReleaseDialog
-                      : showObjectiveVerifyDialog)(
-                    context,
-                    actions: ref.read(boardActionsByIdProvider('b1')),
-                    objectiveId: 'o1',
-                  ),
+                  onPressed: () => releaseOnly
+                      ? showObjectiveReleaseDialog(
+                          context,
+                          actions: ref.read(boardActionsByIdProvider('b1')),
+                          objectiveId: 'o1',
+                        )
+                      : showObjectiveVerifyDialog(
+                          context,
+                          actions: ref.read(boardActionsByIdProvider('b1')),
+                          objectiveId: 'o1',
+                        ),
                   child: const Text('開'),
                 ),
               ),
@@ -256,6 +262,16 @@ void main() {
       expect(api.sent!.tag, 'v1.3.1');
       expect(api.sent!.repos.single.name, 'Chatroom');
       expect(api.sent!.repos.single.sourceBranch, 'develop');
+    });
+
+    testWidgets('補上板：走 createRelease、不重複確認', (tester) async {
+      final api = _FakeBoardApi(twoRepos);
+      await open(tester, api, releaseOnly: true);
+
+      await tester.tap(find.widgetWithText(FilledButton, '上板').first);
+      await tester.pumpAndSettle();
+
+      expect(api.createCalls, 1);
     });
 
     testWidgets('🔴 409 release_in_progress：留在對話框並顯示對應訊息',

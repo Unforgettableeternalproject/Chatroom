@@ -17,7 +17,8 @@ class LocalNotifier {
 
   static final LocalNotifier instance = LocalNotifier._();
 
-  /// 點擊通知時的處理（payload = roomId）。app 建好 router 後指定。
+  /// 點擊通知時的處理（payload = roomId，或 `path:` 開頭的站內路徑）。
+  /// app 建好 router 後指定。
   void Function(String roomId)? onSelectRoom;
 
   final _plugin = FlutterLocalNotificationsPlugin();
@@ -76,7 +77,7 @@ class LocalNotifier {
           ),
           windows: const WindowsNotificationDetails(),
         ),
-        payload: n.roomId,
+        payload: n.target ?? n.roomId,
       );
     } catch (e) {
       _log.warning('通知送出失敗：$e');

@@ -99,9 +99,22 @@ def injection_text(items: list[dict]) -> str:
     """把轉達的訊息排成一段給模型看的文字。"""
     head = (f"房裡有 {len(items)} 則訊息指名給你（在這次工具呼叫之前送到）。"
             "看完照它說的調整，需要回話就用 `chatroom_post`：")
-    body = [f"- #{it.get('seq', '?')} {it.get('from', '？')}："
-            f"{it.get('text', '')}" for it in items]
-    return "\n".join([head, *body])
+    body = []
+    for it in items:
+        line = (f"- #{it.get('seq', '?')} {it.get('from', '？')}："
+                f"{it.get('text', '')}")
+        mid = it.get("id") or ""
+        if mid:
+            line += f"（message_id: {mid}）"
+        body.append(line)
+    out = [head, *body]
+    # 人類送來的話先回一個表情表示收到，再處理（agent 送來的不強制）
+    if any(it.get("from_kind") == "human" and it.get("id") for it in items):
+        out.append(
+            "其中來自人類的訊息，請在處理之前先用 `chatroom_react(room_id, "
+            "message_id, \"👀\")` 對那則加表情表示收到（message_id 見上），"
+            "再開始處理。需要回話時仍要 `chatroom_post`，表情不能取代回覆。")
+    return "\n".join(out)
 
 
 # `cd <路徑> && acli jira workitem|auth ...`：模型照串 `cd` 的話，複合指令比對

@@ -119,6 +119,11 @@ class GuardContext:
     # skill 要求產出的分析／摘要資料夾落在 repo 外面時。放行的是**位置**，
     # 敏感檔名與敏感目錄的檢查照走
     extra_write_dirs: list[Path] = field(default_factory=list)
+    # 🚨 只有 release_fix 會帶：放寬 `git push`（只到這些穩定分支，且來源要是
+    # `HEAD`）、`git tag`（只建這些 tag）、`git merge`，與 `git -C <worktree>`。
+    # 形狀 `{"branches": [...], "tags": [...]}`；空 ＝ 完全不放寬（現行行為）。
+    # force push、刪分支、刪 tag、reset 與一切 worktree 外的操作照樣擋
+    release_push: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: dict) -> "GuardContext":
@@ -132,6 +137,7 @@ class GuardContext:
                            if raw.get("downloads_dir") else None),
             extra_write_dirs=[Path(p)
                               for p in raw.get("extra_write_dirs", [])],
+            release_push=dict(raw.get("release_push") or {}),
         )
 
     def to_dict(self) -> dict:
@@ -142,7 +148,8 @@ class GuardContext:
                 "protected_paths": [str(p) for p in self.protected_paths],
                 "downloads_dir": (str(self.downloads_dir)
                                   if self.downloads_dir else ""),
-                "extra_write_dirs": [str(p) for p in self.extra_write_dirs]}
+                "extra_write_dirs": [str(p) for p in self.extra_write_dirs],
+                "release_push": dict(self.release_push)}
 
 
 @dataclass
@@ -402,8 +409,8 @@ def check_read_path(raw_path: str, ctx: GuardContext) -> Decision:
 
 # ── git ─────────────────────────────────────────────────────────
 
-def _check_git_globals(args: list[str]) -> tuple[Decision | None, str,
-                                                 list[str]]:
+def _check_git_globals(args: list[str], ctx: "GuardContext | None" = None
+                       ) -> tuple[Decision | None, str, list[str]]:
     """剝掉子命令前的全域選項，順便擋掉會換工作樹／換設定的那幾個。
 
     🚨 ``-C``、``--git-dir``、``--work-tree`` 會把整條命令搬到別的 repo 去做，
@@ -416,6 +423,14 @@ def _check_git_globals(args: list[str]) -> tuple[Decision | None, str,
         tok = args[i]
         low = tok.lower()
         base = low.split("=", 1)[0]
+        if (tok == "-C" and ctx is not None and ctx.release_push
+                and i + 1 < len(args)
+                and _within_cwd(args[i + 1], ctx)):
+            # release_fix：多個 repo 各有一個暫存 worktree，agent 要能用
+            # `git -C <worktree>` 在它們之間切換。只放行落在可寫範圍
+            # （worktree）以內的路徑，真工作樹仍然是「別的 repo」
+            i += 2
+            continue
         if tok == "-C" or (tok.startswith("-C") and len(tok) > 2) \
                 or base in ("--git-dir", "--work-tree"):
             return (_deny("git_global_path",
@@ -460,9 +475,16 @@ def _check_git_config_kv(kv: str) -> Decision | None:
 
 
 def _check_git(tokens: list[str], ctx: GuardContext) -> Decision:
-    decision, sub, rest = _check_git_globals([t for t in tokens[1:]])
+    decision, sub, rest = _check_git_globals([t for t in tokens[1:]], ctx)
     if decision is not None:
         return decision
+    if ctx.release_push:
+        if sub == "push":
+            return _check_release_push(rest, ctx)
+        if sub == "tag":
+            return _check_release_tag(rest, ctx)
+        if sub in ("merge", "merge-base", "ls-remote"):
+            return ALLOW
     if sub == "push":
         return _deny("git_push",
                      "push 不由 agent 做。本機沒有人類看著，推送要房內人類從"
@@ -491,6 +513,86 @@ def _check_git(tokens: list[str], ctx: GuardContext) -> Decision:
         return _check_git_config(rest)
     if sub == "remote":
         return _check_git_remote(rest)
+    return ALLOW
+
+
+RELEASE_PUSH_FLAGS = {"-v", "--verbose", "-q", "--quiet", "--porcelain"}
+RELEASE_TAG_FLAGS = {"-a", "--annotate", "-s", "--sign", "-l", "--list",
+                     "-n", "-v", "--verify"}
+
+
+def _check_release_push(rest: list[str], ctx: GuardContext) -> Decision:
+    """release_fix 的 `git push`：只能 `git push origin HEAD:<穩定分支>` 或推
+    允許的 tag。其餘（force、刪除、--all／--tags／--mirror、`+` 前綴、裸
+    `git push`、推本機分支名）一律擋——裸分支名會把使用者本機同名分支上
+    還沒推的 commit 一起帶出去。"""
+    branches = set(ctx.release_push.get("branches") or [])
+    tags = set(ctx.release_push.get("tags") or [])
+    why = ("release_fix 只能 `git push origin HEAD:<穩定分支>`"
+           f"（{'、'.join(sorted(branches)) or '無'}）或推 tag"
+           f"（{'、'.join(sorted(tags)) or '無'}）；"
+           "force push、刪除與其他推送一律不開放。")
+    positional: list[str] = []
+    for tok in rest:
+        tok = _unquote(tok)
+        if tok.startswith("-"):
+            if tok.lower() not in RELEASE_PUSH_FLAGS:
+                return _deny("git_push_flag", why)
+            continue
+        positional.append(tok)
+    if len(positional) < 2 or positional[0] != "origin":
+        return _deny("git_push", why)
+    for spec in positional[1:]:
+        if spec.startswith("+") or spec.startswith(":"):
+            return _deny("git_push_force", why)
+        src, sep, dest = spec.partition(":")
+        if not sep:
+            name = src.removeprefix("refs/tags/")
+            if name in tags and (src == name or src.startswith("refs/tags/")):
+                continue
+            return _deny("git_push", why)
+        if src != "HEAD" or not dest:
+            return _deny("git_push", why)
+        if dest.removeprefix("refs/heads/") in branches:
+            continue
+        if dest.startswith("refs/tags/") and dest[len("refs/tags/"):] in tags:
+            continue
+        return _deny("git_push", why)
+    return ALLOW
+
+
+def _check_release_tag(rest: list[str], ctx: GuardContext) -> Decision:
+    """release_fix 的 `git tag`：只能建（或列出）允許的 tag，不能刪、不能
+    強制覆蓋既有的。"""
+    tags = set(ctx.release_push.get("tags") or [])
+    why = ("release_fix 只能建立這次上板的 tag"
+           f"（{'、'.join(sorted(tags)) or '無'}）；刪除與覆蓋都不開放。")
+    listing = False
+    names: list[str] = []
+    skip = False
+    for tok in rest:
+        if skip:
+            skip = False
+            continue
+        tok = _unquote(tok)
+        low = tok.lower()
+        if low in ("-m", "--message"):
+            skip = True
+            continue
+        if low in ("-l", "--list", "-n", "-v", "--verify"):
+            listing = True
+            continue
+        if tok.startswith("-m") and len(tok) > 2:
+            continue
+        if tok.startswith("-"):
+            if low not in RELEASE_TAG_FLAGS:
+                return _deny("git_tag_flag", why)
+            continue
+        names.append(tok)
+    if listing:
+        return ALLOW
+    if not names or any(n not in tags for n in names):
+        return _deny("git_tag", why)
     return ALLOW
 
 

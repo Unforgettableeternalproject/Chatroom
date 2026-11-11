@@ -59,6 +59,9 @@ GUIDE = """\
 不影響 `chatroom_read` 游標），啟動時取「該檔」與「讀取游標」中較大者起算。
 明確要從頭重看就帶 `--after-seq 0`。
 
+離場事件（`member_left`）的 `who` 是完整名稱，名字含空白也不會被截斷（離場
+system 訊息帶 `subject_id`／`subject_name`）。
+
 ## 1. 三個核心概念
 
 **房間（room）**：對話的容器。有 `id`、名稱、主題（topic，說明這個房在談什麼）。
@@ -154,6 +157,8 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 `chatroom_react(room_id, message_id, "👀")`（或 ✅）表示已看過。這是選擇性的，
 **不要拿它取代需要回覆的文字回應**——被問了問題、被交辦了事，仍然要
 `chatroom_post`。表情不會通知或喚醒任何人，`chatroom_read` 也不會顯示別人的表情。
+派工（run）的 agent 收到人類佇列轉達的訊息時，要**先**按一個 👀 再處理
+（agent 送來的不強制）。
 只能按人類發的訊息；每則同時只有一個表情，再按另一個＝替換，
 `remove=true` 取消（`emoji` 要填你目前按的那個，填別的不會有任何變動）。
 
@@ -264,7 +269,15 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 也一樣，要先封存才刪得掉（409 `board_not_archived`）。封存是刪除的緩衝。
 
 房間設定（名稱、主題、說話方式、可見度、自動封存開關、封存與解除封存、掛接任務板）
-**只有房主能改**，Hub 主持人視角也不例外——主持人是旁觀者，不是房間成員。
+房主能改。**Hub 主持人視角（主持人模式）可以 override 所有管理操作**（2026-11-11）：
+封存（直接執行）、解封、改名與所有房間設定、踢人、刪訊息、處理封存請求、建立與
+掛接板、工作區綁定，以及任務板與想法板的所有操作。有兩件事不開放：不能編輯他人
+訊息的內容、不能以他人身分發言。刪房仍須先封存。
+
+主持人的操作可以帶選填的 `reason`（500 字內），理由會寫進房內的 system 訊息，
+也會出現在通知裡。`reason` 放在 request body；DELETE 沒有 body，改用 query
+`?reason=`。被主持人封存的房，建立者仍可解封，解封會通知主持人。房主變更時，
+待處理的封存請求會自動取消。
 
 Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 天，
 `CHATROOM_PURGE_ARCHIVED_DAYS`），所以「上次那個房間」過一陣子真的會不見。
@@ -347,6 +360,25 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 `objective_status`）。送審與確認無誤的週期還解得開：請房裡的人類把它打回。
 **完成與取消的週期打不回來**，它們從此永久唯讀——要再動就開一個新的週期。
 
+⚠️ **每塊板只有一個「未分類」，它以分頁運作，不是一般週期。** objective 多了
+`kind`（一般週期是 `''`，未分類是 `'inbox'`）與 `page_no`（第幾頁）——
+**用 `kind` 辨識未分類，不要比對標題**。任何時候只有一頁使用中（Hub 強制）；
+不指定階段建的卡（`chatroom_board_add(kind="task")` 不給 `parent_id`，即 loose
+task）一律落在使用中的那一頁。使用中的頁照一般週期的流程收尾（收階段 → 送審
+→ 確認 → 完成，含上板閘）；完成後 Hub 立刻開下一頁，之後不指定階段的卡落在
+新頁。已完成的頁和其他完成的週期一樣永久唯讀。
+
+- **不能取消、不能改名**：409 `inbox_page_not_cancellable`、409
+  `inbox_rename_forbidden`。一般週期也不能取名「未分類」：409
+  `inbox_title_reserved`。
+- **拆成獨立週期**：任一頁（使用中或已完成）都可以，
+  `POST /api/board/objectives/{id}/split_inbox`，body `{title, reason?}`
+  （bridge 沒有對應工具，由人類在 App 操作）。拆走後它成為一般週期，狀態沿用
+  該頁最後的狀態，原「未分類」階段改名為「一般」；拆的是使用中的頁時，Hub
+  自動補一個新頁（回應帶 `new_inbox_objective`）。錯誤：409 `not_inbox_page`
+  （那個 id 不是未分類頁）、400 `title_required`（沒給名稱）、409
+  `inbox_title_reserved`。
+
 ⚠️ **領著不放又不做，是這塊板上最糟的狀態**（它看起來有人在處理）。
 做不完就 `chatroom_board_claim(release=True)` 放掉，讓別人接手。
 
@@ -400,7 +432,8 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 - **穩定分支不是呼叫端指定的**，由執行器設定（每個 repo 的
   `stable_branch`）說了算；沒設的 repo 在對話框上顯示「未設穩定分支」且
   勾不動。合併方式（合併 commit／squash／僅快轉）與訊息模板是**工作區層級
-  的設定**，一樣在執行器那邊。
+  的設定**，一樣在執行器那邊；設成僅快轉但無法快轉時，自動改用合併 commit，
+  不放棄。
 - **上板是一筆 `kind=release` 的 run。** 它逐 repo 執行 fetch → 切到穩定
   分支 → 合併來源分支 → push →（選填）打 tag，這些 git 操作由執行器直接跑，
   **不經模型**。只有兩種情況例外或會自己收斂：合併撞到衝突時執行器會起一支
@@ -409,9 +442,31 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
   執行器自己合併 origin 後處理。做過哪些自主動作都會列在上板結果裡。一個
   repo 失敗不影響其他 repo，但整筆 run 只要有一個失敗就是 `failed`。同一
   個週期同時只能有一筆沒結束的上板（409 `release_in_progress`）。
-- **上板之後會有一份週期報告發到房裡。** 那是 release run 收尾時派的一個
-  唯讀 agent 寫的：週期名、各 repo 的上板結果、本週期完成了什麼、有什麼
-  沒完成或被排除、tag。你在房裡看到它就是這一件事，不必自己再整理一份。
+- **上板在獨立的暫存 worktree 進行，不碰使用者的工作樹。** 工作區有未提交
+  變更也照常上板，只上已提交的；worktree 沒清乾淨視為失敗。遠端穩定分支比
+  本機新時一律合併遠端。
+- **週期結束與上板。** 有上板記錄的週期要上板成功才能 `complete`（否則 409
+  `release_not_done`）；已完成的週期不能再上板（409 `objective_already_done`）。
+- **每次上板都是兩筆 run：`release`（機械上板）＋`release_fix`（報告與修復）。**
+  不分第一次或重新上板，也沒有 `retry` 欄位（`release_retry_not_allowed`
+  已移除）。`release_fix` 在同批 `release` 結束後才會被領走，它的 agent 讀
+  執行器的上板結果：成功就在房裡發**上板報告**（週期名、各 repo 的穩定分支／
+  來源分支／結果／sha 表、本週期完成了什麼、未完成或被排除的、tag）；失敗
+  就在獨立 worktree 裡解決（merge 遠端、解衝突、簽章、push 穩定分支與 tag）
+  再發報告。你在房裡看到它就是這一件事，不必自己再整理一份。
+- **真的嚴重無法上板時，`release_fix` 會把週期打回。** 它對**自己這一批
+  的週期**可以 `reopen`（`verified` → `active`，與人類送審後打回同一條轉
+  移）並在其下新增一個「上板阻擋：<週期名>」階段，然後在房裡報告並 mention
+  人類；其他 agent 一律不放寬。人類處理完重新送審、確認時會再次上板。
+  `objective.release.reason` 此時是 `release_blocked_reopened`。
+- **上板狀態怎麼算。** `objective.release.status` 是有效狀態：`release_fix`
+  done ＝ done（release 沒成功但 fix 修好時 reason 是 `release_fixed`）；
+  fix 意外失敗 ＝ failed（週期留在 `verified`，`complete` 仍是 409
+  `release_not_done`，要先打回、再送審、確認時重新上板）。
+- **新規則不溯及既往。** 新規則上線前就存在的 `release`／`release_fix`
+  （含失敗、被取消）一律視為已處理：不擋完成、不觸發 fix，那個週期也不再提供
+  上板（409 `release_legacy_closed`）；`objective.release.status` 是 `legacy`
+  （原狀態在 `legacy_status`）。上線前從沒上板過的 verified 週期仍可上板。
 
 ## 9.8 你是一個 run（遠端派工的單次任務）時
 
@@ -475,6 +530,31 @@ chatroom_stage_file_note(checklist_id, file_id, note="改成這句", room_id=…
 ⚠️ 工作房沒開平行派工時，後送的派工領單後會先等前一個放掉同一個 repo 的鎖：
 那時它的 `status` 是 `running`、`reason` 是 `repo_lock_wait`，房裡只會發一次
 「排隊中」，真正開始才發「開始執行」。看到這個組合別當成已經在做事。
+
+## 9.9 通知中心（收件匣）
+
+人類在 App 右上角（主題切換右側）有一顆鈴鐺，顯示未讀數。收件匣會收到：
+
+- 你追蹤的任務、週期有動靜
+- 別人（人類，含 supervisor 與主持人）修改你建立的週期、階段、卡
+- 別人在你的階段加素材或派工
+- 別人在你的想法板留言或切換狀態
+- 主持人動了你的東西（附理由）
+- 派工房中，涉及你的階段的派工完成、失敗或取消
+
+每則通知帶來源房間或任務板與觸發者。同一個物件 5 分鐘內的通知會合併成一則；
+已讀滿 30 天後清除，每人最多留 500 則。新通知即時推送，App 依通知模式設定跳
+系統通知。agent 的修改不另發通知（由派工完成涵蓋），但 agent 仍會收到追蹤類通知。
+
+**給 agent 的 API**：
+
+- `GET /api/notifications`：我的通知（`unread_only`、`limit`、`before_id`），
+  回傳帶整個收件匣的 `unread_count`。
+- `POST /api/notifications/read`：標已讀，body 為 `{"ids": [整數, ...]}` 或
+  `{"all": true}`。`ids` 是整數，不是字串。
+- `WS /ws/inbox?session_key=`：即時推送未讀數的變化。
+- 舊的 `GET /api/board/notices` 保留相容，**只回追蹤類**通知；bridge 的
+  `chatroom_notices` 照舊可用，不必改。
 
 ## 10. 幾條慣例
 

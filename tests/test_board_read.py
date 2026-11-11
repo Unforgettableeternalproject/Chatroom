@@ -203,6 +203,8 @@ async def test_response_shape_is_pinned(tmp_path):
             "created_by", "created_by_name", "reviewed_by", "reviewed_at",
             "verified_by", "verified_at", "completed_by", "completed_at",
             "deleted", "board_seq", "created_at",
+            # v1.2.8：未分類分頁。kind 為 '' 或 'inbox'，page_no 為頁碼
+            "kind", "page_no",
             # v2：身分改記持久的 actor_key（participant 隨離房消失）。
             # 舊欄位並存不刪，等所有 client 升級後才 rebuild 清掉。
             # `board_id` 刻意**不在**這份清單裡——它換軸前恆為空字串，

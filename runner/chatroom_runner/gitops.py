@@ -563,3 +563,111 @@ async def blob_id(repo: Path, ref: str, path: str) -> str:
     """``<ref>:<path>`` 的 blob；檔案在那一邊不存在回空字串。"""
     res = await git(repo, "rev-parse", "--verify", "--quiet", f"{ref}:{path}")
     return res.out if res.ok else ""
+
+
+# ---------- 暫存 worktree（上板不碰使用者工作樹）----------
+#
+# 一樣不做判斷：worktree 放哪、什麼時候清、清不掉算什麼，由 `run` 決定。
+
+async def worktree_prune(repo: Path) -> GitResult:
+    """清掉目錄已經不在的 worktree 登記（執行器上次當掉時留下的）。"""
+    return await git(repo, "worktree", "prune")
+
+
+async def worktree_add_detached(repo: Path, path: Path,
+                                ref: str) -> GitResult:
+    """在 ``path`` 建一個分離 HEAD 的 worktree，停在 ``ref``。
+
+    分離 HEAD 是刻意的：穩定分支常常正被使用者的工作樹檢出，同一條分支
+    不能同時在兩個 worktree 裡，`worktree add <path> <stable>` 會直接失敗。
+    """
+    return await git(repo, "worktree", "add", "--detach", str(path), ref,
+                     timeout=300.0)
+
+
+async def worktree_remove(repo: Path, path: Path) -> GitResult:
+    return await git(repo, "worktree", "remove", "--force", str(path),
+                     timeout=120.0)
+
+
+def _norm_path(value: str) -> str:
+    import os
+    return os.path.normcase(os.path.realpath(value.strip()))
+
+
+async def worktree_list(repo: Path) -> list[dict]:
+    """``git worktree list --porcelain`` 切成 ``{path, branch, detached}``。
+    git 失敗回空清單。"""
+    res = await git(repo, "worktree", "list", "--porcelain")
+    if not res.ok:
+        return []
+    items: list[dict] = []
+    cur: dict = {}
+    for line in res.out.splitlines() + [""]:
+        if not line.strip():
+            if cur:
+                items.append(cur)
+                cur = {}
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            cur["path"] = value
+        elif key == "branch":
+            cur["branch"] = value
+        elif key == "detached":
+            cur["detached"] = True
+    return items
+
+
+async def worktree_registered(repo: Path, path: Path) -> bool:
+    """``path`` 還登記在 repo 的 worktree 清單裡嗎。"""
+    want = _norm_path(str(path))
+    return any(_norm_path(item.get("path", "")) == want
+               for item in await worktree_list(repo))
+
+
+async def branch_checked_out_elsewhere(repo: Path, branch: str) -> bool:
+    """本機分支正被某個 worktree（含 repo 本身）檢出。"""
+    want = f"refs/heads/{branch}"
+    return any(item.get("branch") == want for item in await worktree_list(repo))
+
+
+async def update_ref_cas(repo: Path, ref: str, new: str,
+                         old: str) -> GitResult:
+    """把 ``ref`` 移到 ``new``，且只在它目前正是 ``old`` 時（空＝不存在）。"""
+    return await git(repo, "update-ref", ref, new, old or "0" * 40)
+
+
+async def push_head(repo: Path, branch: str,
+                    extra: list[str] | None = None) -> GitResult:
+    """把目前（可能是分離的）HEAD 推成 origin 的 ``branch``。"""
+    return await git(repo, *(extra or []), "push", "origin",
+                     f"HEAD:refs/heads/{branch}")
+
+
+async def remote_tag_exists(repo: Path, tag: str,
+                            extra: list[str] | None = None) -> bool | None:
+    """origin 上有沒有這個 tag。查不到（網路等）回 ``None``，與「沒有」分開。"""
+    res = await git(repo, *(extra or []), "ls-remote", "--tags", "origin",
+                    f"refs/tags/{tag}")
+    if not res.ok:
+        return None
+    return bool(res.out.strip())
+
+
+async def merge_is_noop(repo: Path, base: str, other: str) -> bool:
+    """把 ``other`` 併進 ``base`` 會不會什麼都不改（內容已經在 ``base`` 裡）。
+
+    ``other`` 是 ``base`` 的祖先當然算；squash 合併進去的來源分支 tip 不是
+    祖先，但合併結果的 tree 與 ``base`` 相同，一樣算已經上去了。用
+    ``merge-tree --write-tree``（git 2.38+，不碰工作樹與索引）；衝突或
+    git 太舊回 False。
+    """
+    if await is_ancestor(repo, other, base):
+        return True
+    res = await git(repo, "merge-tree", "--write-tree", base, other)
+    if not res.ok:
+        return False
+    tree = res.out.splitlines()[0].strip() if res.out else ""
+    cur = await git(repo, "rev-parse", f"{base}^{{tree}}")
+    return bool(tree) and cur.ok and tree == cur.out.strip()

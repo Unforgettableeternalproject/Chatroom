@@ -18,7 +18,13 @@ import 'stage_file.dart';
 /// 為 null；舊 Hub 不回這一欄時也是 null。
 @immutable
 class ObjectiveRelease {
-  const ObjectiveRelease({this.runId = '', this.status = '', this.reason = ''});
+  const ObjectiveRelease({
+    this.runId = '',
+    this.status = '',
+    this.reason = '',
+    this.fixRunId = '',
+    this.fixStatus = '',
+  });
 
   final String runId;
 
@@ -26,18 +32,32 @@ class ObjectiveRelease {
   final String status;
   final String reason;
 
+  /// 修復 agent 的 run／狀態；沒有修復為空字串。修復成功時 Hub 會把
+  /// [status] 一併改成 done（reason `release_fixed`）。
+  final String fixRunId;
+  final String fixStatus;
+
   /// 還在跑（Hub 對這些狀態回 409 `release_in_progress`）。
   bool get inProgress => kRunActiveStatuses.contains(status);
   bool get succeeded => status == 'done';
 
   /// 結束了但沒成功（failed／cancelled 等）。
-  bool get failed => !inProgress && !succeeded;
+  bool get failed => !inProgress && !succeeded && !legacy;
+
+  /// 新上板規則之前的舊紀錄（Hub 標成 legacy）：不算失敗、不擋結束、
+  /// 不給上板入口。
+  bool get legacy => status == 'legacy';
+
+  /// 上板 agent 遇到嚴重阻擋，已把週期打回 active 並補了階段。
+  bool get blockedReopened => reason == 'release_blocked_reopened';
 
   factory ObjectiveRelease.fromJson(Map<String, dynamic> json) =>
       ObjectiveRelease(
         runId: (json['run_id'] as String?) ?? '',
         status: (json['status'] as String?) ?? '',
         reason: (json['reason'] as String?) ?? '',
+        fixRunId: (json['fix_run_id'] as String?) ?? '',
+        fixStatus: (json['fix_status'] as String?) ?? '',
       );
 }
 
@@ -62,12 +82,30 @@ class BoardObjective {
     this.deleted = false,
     this.createdAt = '',
     this.release,
+    this.kind,
+    this.pageNo = 0,
   });
 
   final String id;
   final String roomId;
   final String title;
   final String description;
+
+  /// Hub 的週期種類：`''` 一般週期、`'inbox'` 未分類的一頁。
+  ///
+  /// **null＝Hub 沒回這個欄位**（舊 Hub），與 `''` 是兩件事：前者退回標題
+  /// 判斷（[isInbox]），後者是 Hub 明說「這不是未分類」。
+  final String? kind;
+
+  /// 未分類頁的流水號。拆頁之後會有缺號，畫面上的順序號不用它，
+  /// 依完成時間重新編（見 [BoardSnapshot.inboxHistory]）。
+  final int pageNo;
+
+  /// 這是不是「未分類」的一頁。
+  ///
+  /// 新 Hub 以 `kind` 為準；舊 Hub 沒有 `kind`，退回標題 [kUncategorisedTitle]。
+  bool get isInbox =>
+      kind == null ? title == kUncategorisedTitle : kind == 'inbox';
 
   /// 最近一次上板 run 的摘要；沒上板過為 null。
   final ObjectiveRelease? release;
@@ -117,14 +155,18 @@ class BoardObjective {
   bool get frozen => status != 'active';
   bool get isVerified => status == 'verified' || status == 'done';
 
-  /// 要不要顯示「上板」入口：已確認／完成，且從沒上板過或上次沒成功。
-  /// 上板成功、或還在跑的都不顯示。
-  bool get canOfferRelease =>
-      isVerified &&
-      (release == null || release!.failed);
+  /// 要不要顯示「上板」入口：只有已確認（verified）且從沒上板過（補上板）。
+  /// 沒有「重新上板」：失敗後打回、重新送審→確認時由 Hub 再次上板。
+  bool get canOfferRelease => status == 'verified' && release == null;
 
-  /// 上次上板失敗（入口旁的提示用）。
-  bool get lastReleaseFailed => isVerified && (release?.failed ?? false);
+  /// 上次上板失敗、週期停在 verified（提示用：打回後重新送審即可再次上板）。
+  bool get lastReleaseFailed =>
+      status == 'verified' && (release?.failed ?? false);
+
+  /// 有上板記錄、而最近一筆不是成功：Hub 對 complete 回 409
+  /// `release_not_done`，完成按鈕要停用。從沒上板過的週期不受影響。
+  bool get completeBlockedByRelease =>
+      release != null && release!.status != 'done' && !release!.legacy;
 
   factory BoardObjective.fromJson(Map<String, dynamic> json) => BoardObjective(
     id: json['id'] as String,
@@ -143,6 +185,8 @@ class BoardObjective {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    kind: json['kind'] as String?,
+    pageNo: (json['page_no'] as int?) ?? 0,
     release: json['release'] is Map
         ? ObjectiveRelease.fromJson(
             Map<String, dynamic>.from(json['release'] as Map))
@@ -1291,6 +1335,33 @@ class BoardSnapshot {
     return out;
   }
 
+  /// 「未分類」目前使用中的那一頁（未完成的 inbox）。沒有回 null。
+  ///
+  /// 同一塊板任何時候只該有一頁；Hub 若多回了，取排序最前的那頁。
+  BoardObjective? get currentInbox {
+    for (final o in sortedObjectives) {
+      if (o.isInbox && o.status != 'done') return o;
+    }
+    return null;
+  }
+
+  /// 「未分類」已完成的歷史頁，依完成時間由舊到新。
+  ///
+  /// 顯示的順序號是這份清單的位置 + 1，**不是 `page_no`**：拆頁之後
+  /// `page_no` 會有缺號。完成時間相同或缺漏時退回 `page_no`、建立時間。
+  List<BoardObjective> get inboxHistory {
+    final out = sortedObjectives
+        .where((o) => o.isInbox && o.status == 'done')
+        .toList()
+      ..sort((a, b) {
+        final c = (a.completedAt ?? '').compareTo(b.completedAt ?? '');
+        if (c != 0) return c;
+        final p = a.pageNo.compareTo(b.pageNo);
+        return p != 0 ? p : a.createdAt.compareTo(b.createdAt);
+      });
+    return out;
+  }
+
   /// 手上一張卡都沒有。
   ///
   /// ⚠️ 與「水位是 0」**不是同一件事**，而那個差別正是空白畫面的來源：
@@ -2058,6 +2129,17 @@ bool canMoveTaskInto(BoardTask task, BoardChecklist target) =>
     !target.deleted &&
     target.status == 'open' &&
     target.id != task.checklistId;
+
+/// 這個階段現在拖得走嗎（長按拖到別的週期）。
+///
+/// 「未分類」是 Hub 墊的一格、搬不動；週期凍結時任何寫入都 409。
+bool canDragChecklist(BoardChecklist c, BoardObjective owner) =>
+    !c.deleted && !c.isUncategorised && !owner.frozen;
+
+/// 這個階段能不能放進 [target] 這個週期：只收 active、不是原週期。
+/// （比搬卡嚴：卡可以放進 review 的週期，階段不行。）
+bool canMoveChecklistInto(BoardChecklist c, BoardObjective target) =>
+    !target.deleted && target.status == 'active' && target.id != c.objectiveId;
 
 /// 把 [ids] 依 Flutter `ReorderableListView.onReorder` 的語意搬一格。
 ///

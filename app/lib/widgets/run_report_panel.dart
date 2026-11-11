@@ -30,9 +30,13 @@ import 'uep_button.dart';
 /// 輪詢與儀表板同頻（10 秒）：run 的狀態變化刻意不進 `/updates`，沒有
 /// notify 可以用。定時器掛在這個 widget 上——側欄不在畫面上就不打。
 class RunReportPanel extends ConsumerStatefulWidget {
-  const RunReportPanel({super.key, required this.roomId});
+  const RunReportPanel({super.key, required this.roomId, this.onFocusRun});
 
   final String roomId;
+
+  /// 點卡片（開報告面板的同時）通知聊天列表跳到那一輪對應的訊息。
+  /// null ＝不跳（儀表板等沒有訊息列表的掛法）。
+  final ValueChanged<AgentRun>? onFocusRun;
 
   @override
   ConsumerState<RunReportPanel> createState() => _RunReportPanelState();
@@ -87,6 +91,7 @@ class _RunReportPanelState extends ConsumerState<RunReportPanel>
   /// 寬版把「打開哪一筆」寫進 provider，由 [RunReportOverlay] 在訊息區上方
   /// 畫出來；窄版沒有那塊空間，改開全寬的 bottom sheet。
   void _open(BuildContext context, AgentRun run) {
+    widget.onFocusRun?.call(run);
     final notifier = ref.read(selectedRunIdProvider.notifier);
     if (MediaQuery.sizeOf(context).width >= 1200) {
       // 再點同一張＝收起來，跟原本的展開／收合一致

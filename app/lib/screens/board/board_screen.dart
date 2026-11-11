@@ -12,8 +12,11 @@ import '../../state/scratchpad_providers.dart';
 import 'scratchpad_screen.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/board_task_card.dart';
+import '../../widgets/copyable_id.dart';
 import '../../widgets/empty_error_states.dart';
 import '../../core/errors/api_exception.dart';
+import '../../core/host_reason.dart';
+import '../../api/board_api.dart' show SplitInboxResult;
 import '../../widgets/kind_badge.dart';
 import '../../widgets/reveal.dart';
 import '../../widgets/stage_files.dart';
@@ -24,6 +27,7 @@ import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_move_dialog.dart';
+import 'board_split_inbox_dialog.dart';
 import 'board_task_drawer.dart';
 import 'board_task_edit_dialog.dart';
 import 'supervisor_panel.dart';
@@ -72,6 +76,18 @@ const List<double> _desaturate35 = <double>[
   0.2126 - 0.2126 * .35, 0.7152 - 0.7152 * .35, 0.0722 + 0.9278 * .35, 0, 0, //
   0, 0, 0, 1, 0, //
 ];
+
+/// `task_already_claimed` 的現任持有者：讀結構化欄位 `detail['claim_name']`，
+/// 不對訊息文字做比對（code 才是契約）。不是 [ApiException] 或名字是空的就退回
+/// [fallback]。
+@visibleForTesting
+String claimHolderFrom(Object e, String fallback) {
+  if (e is ApiException) {
+    final name = e.detail['claim_name'];
+    if (name is String && name.trim().isNotEmpty) return name;
+  }
+  return fallback;
+}
 
 class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 這個畫面是從 Board Library（`/boards/:id`）進來的，手上沒有房間。
@@ -148,6 +164,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 正被拖著走的卡（長按拖曳＝搬到別的階段／週期）。只用來讓合法的落點
   /// 先亮起來；拖曳結束一律清掉。
   BoardTask? _draggingTask;
+  BoardChecklist? _draggingChecklist;
 
   /// 開著詳情抽屜的那張卡。
   late String? _openTaskId = widget.focusTaskId;
@@ -173,11 +190,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     }
   }
 
-  /// 從 409 的訊息裡取出現任持有者。取不到就講一句誠實的話，不要留白。
-  String _holderFrom(Object e) {
-    final m = RegExp(r'「(.+?)」').firstMatch('$e');
-    return m?.group(1) ?? AppLocalizations.of(context).boardClaimConflictOther;
-  }
+  /// 從 409 取出現任持有者。取不到就講一句誠實的話，不要留白。
+  String _holderFrom(Object e) =>
+      claimHolderFrom(e, AppLocalizations.of(context).boardClaimConflictOther);
 
   /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
   Future<void> _create(String kind,
@@ -555,6 +570,65 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     _reloadBoard();
   }
 
+  /// 左欄週期這個落點收不收 [data]（卡或階段）。
+  bool _objectiveAccepts(Object? data, BoardObjective o) => switch (data) {
+        BoardTask t => t.isMovable,
+        BoardChecklist c => canMoveChecklistInto(c, o),
+        _ => false,
+      };
+
+  /// 階段拖到左欄某個週期上放下：整段（連底下的卡）搬過去。
+  Future<void> _dropChecklistOnObjective(
+      BoardChecklist c, BoardObjective o) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final done = await runBoardAction<bool>(context, () async {
+      await actions.moveChecklist(c.id, objectiveId: o.id);
+      return true;
+    });
+    if (!mounted) return;
+    if (done == true) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(AppLocalizations.of(context).boardChecklistMoved(o.title))));
+    }
+    _reloadBoard();
+  }
+
+  /// 把 [handle]（階段標題列上的一塊）做成長按拖曳的起點。
+  /// 與卡一致：按住約 0.3 秒再拖；立即位移則仍是把手的同週期重排。
+  Widget _stageDragSource(BoardChecklist c, Widget handle) {
+    final s = context.uep;
+    return LongPressDraggable<BoardChecklist>(
+      data: c,
+      delay: const Duration(milliseconds: 300),
+      onDragStarted: () => setState(() => _draggingChecklist = c),
+      onDragEnd: (_) {
+        if (mounted) setState(() => _draggingChecklist = null);
+      },
+      feedback: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: 260,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: s.bgCard,
+            border: Border.all(color: UepColors.gold),
+            boxShadow: const [
+              BoxShadow(blurRadius: 12, color: Color(0x33000000)),
+            ],
+          ),
+          child: Text(c.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: UepText.sans(
+                  size: 14, weight: FontWeight.w600, color: s.inkTitle)),
+        ),
+      ),
+      child: handle,
+    );
+  }
+
   /// 拖到左欄某個週期上放下：問要掛到那個週期的哪個階段（同「搬到別處」
   /// 對話框，週期已預選）。
   Future<void> _dropOnObjective(BoardTask t, BoardObjective o) async {
@@ -732,16 +806,19 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           const SizedBox(width: 16),
         ],
         Flexible(
-          child: Text(
+          child: TitleWithId(
             // 板有自己的名字了（Hub c72c92d）。房名只是它還沒送到時的退路
-            snap?.name.isNotEmpty == true
+            title: snap?.name.isNotEmpty == true
                 ? snap!.name
                 : (room?.name ??
                     (attached.isEmpty
                         ? AppLocalizations.of(context).boardLibraryTitle
                         : attached.first.name)),
-            overflow: TextOverflow.ellipsis,
-            style: UepText.pageTitle(color: s.inkTitle),
+            titleStyle: UepText.pageTitle(color: s.inkTitle),
+            id: snap?.boardId ?? '',
+            showId: ref.watch(appConfigProvider.select((c) => c.devMode)) &&
+                snap != null &&
+                snap.boardId.isNotEmpty,
           ),
         ),
         const SizedBox(width: 12),
@@ -936,8 +1013,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       List<BoardObjective> objectives, BoardObjective selected,
       {VoidCallback? onPicked}) {
     final s = context.uep;
-    final active = objectives.where((o) => o.status != 'done').toList();
-    final done = objectives.where((o) => o.status == 'done').toList();
+    // 未分類在左欄只出現一次：使用中的那頁。已完成的未分類頁是歷史，
+    // 從週期內的頁面切換進去，不混進「已完成」名單
+    final inboxId = snap.currentInbox?.id;
+    final active = objectives
+        .where((o) => o.status != 'done' && (!o.isInbox || o.id == inboxId))
+        .toList();
+    final done =
+        objectives.where((o) => o.status == 'done' && !o.isInbox).toList();
+    // 看著未分類的任何一頁，左欄都亮「未分類」那一列
+    bool isSelected(BoardObjective o) =>
+        o.id == selected.id || (o.isInbox && selected.isInbox);
 
     // 左欄的底色比主區暗一階——它是索引不是內容，退後一層才不會跟右邊搶
     return Container(
@@ -993,14 +1079,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     key: ValueKey(active[i].id),
                     index: i,
                     child: _objectiveTile(
-                        context, snap, active[i], active[i].id == selected.id,
+                        context, snap, active[i], isSelected(active[i]),
                         onPicked: onPicked),
                   ),
               ],
             )
           else
             for (final o in active)
-              _objectiveTile(context, snap, o, o.id == selected.id,
+              _objectiveTile(context, snap, o, isSelected(o),
                   onPicked: onPicked),
           // 完成的週期退成一份名單：它們不再需要被點開，但要看得到做過什麼
           if (done.isNotEmpty) ...[
@@ -1219,16 +1305,23 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       ),
     );
     if (!accepts) return tile;
-    return DragTarget<BoardTask>(
-      onWillAcceptWithDetails: (d) => d.data.isMovable,
-      onAcceptWithDetails: (d) => _dropOnObjective(d.data, o),
+    // 同一個落點收兩種東西：卡（active／review 的週期）與階段（只收 active）
+    return DragTarget<Object>(
+      onWillAcceptWithDetails: (d) => _objectiveAccepts(d.data, o),
+      onAcceptWithDetails: (d) {
+        final data = d.data;
+        if (data is BoardTask) _dropOnObjective(data, o);
+        if (data is BoardChecklist) _dropChecklistOnObjective(data, o);
+      },
       builder: (_, candidate, _) => DecoratedBox(
         position: DecorationPosition.foreground,
         decoration: BoxDecoration(
           border: Border.all(
             color: candidate.isNotEmpty
                 ? UepColors.gold
-                : _draggingTask != null
+                : (_draggingTask != null ||
+                        (_draggingChecklist != null &&
+                            canMoveChecklistInto(_draggingChecklist!, o)))
                     ? UepColors.gold.withValues(alpha: .35)
                     : Colors.transparent,
             width: candidate.isNotEmpty ? 2 : 1,
@@ -1252,7 +1345,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _objectiveHeader(context, o, stats),
+        _objectiveHeader(context, snap, o, stats),
+        if (o.status == 'active' && (o.release?.blockedReopened ?? false))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(26, 8, 26, 0),
+            child: Text(AppLocalizations.of(context).boardReleaseBlockedReopened,
+                style: UepText.mono(size: 11, color: UepColors.error)),
+          ),
         if (stats.orphans > 0) _orphanBanner(context, snap, o, stats),
         Expanded(
           child: ListView(
@@ -1340,8 +1439,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// 收尾動作放在**標題右邊**而不是另外框一塊——它是這個週期的動作，
   /// 跟標題同一層；獨立成框會變成第四個層級。
-  Widget _objectiveHeader(
-      BuildContext context, BoardObjective o, _Stats stats) {
+  Widget _objectiveHeader(BuildContext context, BoardSnapshot snap,
+      BoardObjective o, _Stats stats) {
     final s = context.uep;
     return Container(
       padding: const EdgeInsets.fromLTRB(26, 22, 26, 18),
@@ -1361,6 +1460,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     Text(o.title,
                         style: UepText.pageTitle(color: s.inkTitle,
                             height: 1.25)),
+                    if (ref.watch(appConfigProvider.select((c) => c.devMode)))
+                      CopyableId(value: o.id),
+                    if (o.isInbox) _inboxPageBar(context, snap, o),
                     if (o.description.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       ConstrainedBox(
@@ -1408,6 +1510,93 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         ],
       ),
     );
+  }
+
+  /// 未分類的頁面切換列：目前頁／歷史頁的下拉，與「拆成獨立週期」的選單。
+  ///
+  /// 順序號依完成時間排（[BoardSnapshot.inboxHistory]），不用 `page_no`——
+  /// 拆頁之後它會有缺號。歷史頁由新到舊，「目前」排最前。
+  Widget _inboxPageBar(
+      BuildContext context, BoardSnapshot snap, BoardObjective o) {
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    final history = snap.inboxHistory;
+    final current = snap.currentInbox;
+    final canSplit = !_readOnly && _actions != null;
+
+    String labelOf(BoardObjective page) {
+      final n = history.indexWhere((h) => h.id == page.id) + 1;
+      final date = _monthDay(page.completedAt);
+      return date == null
+          ? l10n.boardInboxPageLabelNoDate(n)
+          : l10n.boardInboxPageLabel(n, date);
+    }
+
+    final selectedLabel =
+        history.any((h) => h.id == o.id) ? labelOf(o) : l10n.boardInboxCurrentPage;
+    if (history.isEmpty && !canSplit) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (history.isNotEmpty)
+          PopupMenuButton<String>(
+            key: const ValueKey('inbox-page-switcher'),
+            tooltip: l10n.boardInboxPagesTooltip,
+            onSelected: (id) => setState(() => _selectedObjectiveId = id),
+            itemBuilder: (_) => [
+              if (current != null)
+                PopupMenuItem(
+                    value: current.id,
+                    child: Text(l10n.boardInboxCurrentPage)),
+              for (final h in history.reversed)
+                PopupMenuItem(value: h.id, child: Text(labelOf(h))),
+            ],
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(selectedLabel,
+                  style: UepText.mono(size: 11.5, color: s.inkSoft)),
+              Icon(Icons.arrow_drop_down, size: 20, color: s.inkMute),
+            ]),
+          ),
+        if (canSplit)
+          PopupMenuButton<String>(
+            key: const ValueKey('inbox-page-menu'),
+            icon: Icon(Icons.more_horiz, size: 18, color: s.inkMute),
+            padding: EdgeInsets.zero,
+            onSelected: (_) => _splitInbox(o),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                  value: 'split', child: Text(l10n.boardInboxSplit)),
+            ],
+          ),
+      ]),
+    );
+  }
+
+  /// ISO 時間 → `MM/DD`（本地時區）；解析不了回 null。
+  String? _monthDay(String? iso) {
+    final t = DateTime.tryParse(iso ?? '')?.toLocal();
+    if (t == null) return null;
+    return '${t.month.toString().padLeft(2, '0')}/'
+        '${t.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 把一頁未分類拆成獨立週期，成功後選到拆出來的那個。
+  ///
+  /// Hub 回 `new_inbox_objective` 表示拆的是使用中頁、已補一張新空白頁；
+  /// 那張頁由板重拉帶回，不在這裡另外處理。
+  Future<void> _splitInbox(BoardObjective o) async {
+    final actions = _actions;
+    if (actions == null) return;
+    final input = await showSplitInboxDialog(context);
+    if (input == null || !mounted) return;
+    final r = await runBoardAction<SplitInboxResult?>(
+      context,
+      () => runWithHostReason(
+          input.reason, () => actions.splitInbox(o.id, input.title)),
+    );
+    if (r == null || !mounted) return;
+    setState(() => _selectedObjectiveId = r.objectiveId);
   }
 
   /// 改週期的標題與敘述（09/08 卡 32f26b75）。
@@ -1480,7 +1669,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
           // ——那條在 Hub 收緊之前成立（2026-09-21 起非 active 的週期一律
           // 409 `objective_closed`）。留著的話它是一顆按下去必然失敗的
           // 按鈕，而旁邊那行提示已經說了要先打回
-          if (!o.frozen) ...[
+          // 未分類不能改名（Hub 回 `inbox_rename_forbidden`），改名的入口是
+          // 頁面切換旁的「拆成獨立週期」
+          if (!o.frozen && !o.isInbox) ...[
             _BarButton(
               label: AppLocalizations.of(context).commonEdit,
               onTap: () => _editObjective(o),
@@ -1508,7 +1699,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
                 label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
-                    context, () => actions.reopenObjective(o.id))),
+                    context, () => actions.reopenObjective(o.id),
+                    hostReasonTitle: AppLocalizations.of(context)
+                        .hostReasonReopenObjectiveTitle)),
             const SizedBox(width: 8),
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveVerify,
@@ -1530,19 +1723,25 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             _BarButton(
                 label: AppLocalizations.of(context).boardObjectiveReopen,
                 onTap: () => runBoardAction(
-                    context, () => actions.reopenObjective(o.id))),
+                    context, () => actions.reopenObjective(o.id),
+                    hostReasonTitle: AppLocalizations.of(context)
+                        .hostReasonReopenObjectiveTitle)),
             const SizedBox(width: 8),
             // 上板失敗後週期已是 verified，這是唯一能再來一次的入口
             ..._releaseEntry(context, o, actions),
             _BarButton(
               label: AppLocalizations.of(context).boardObjectiveComplete,
               accent: true,
-              onTap: () => runBoardAction(
-                  context, () => actions.completeObjective(o.id)),
+              // 有上板記錄而最近一筆沒成功：Hub 回 409 `release_not_done`，
+              // 按鈕先停用，原因寫在底下的提示
+              onTap: o.completeBlockedByRelease
+                  ? null
+                  : () => runBoardAction(
+                      context, () => actions.completeObjective(o.id),
+                      hostReasonTitle: AppLocalizations.of(context)
+                          .hostReasonCompleteObjectiveTitle),
             ),
           ],
-          // 已完成的週期也能補上板（Hub 對 verified／done 放行）
-          if (o.status == 'done') ..._releaseEntry(context, o, actions),
         ]),
         const SizedBox(height: 10),
         // 凍結的理由排在收尾提示前面：它回答的是「為什麼下面的東西都動
@@ -1559,25 +1758,26 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     );
   }
 
-  /// 「上板」入口：只在從沒上板過、或上次沒成功時出現。上板成功或還在跑
-  /// 的週期不畫——再按一次不是多餘就是必然 409。
+  /// 「上板」入口：只在 verified 且從沒上板過（補上板）時出現。上板失敗
+  /// 不給入口，只提示打回重新送審；成功、還在跑、done 的週期都不畫。
   List<Widget> _releaseEntry(
       BuildContext context, BoardObjective o, BoardActions actions) {
-    if (!o.canOfferRelease) return const [];
     final l10n = AppLocalizations.of(context);
-    return [
-      if (o.lastReleaseFailed) ...[
+    if (o.lastReleaseFailed) {
+      return [
         Text(l10n.boardReleaseLastFailed,
             style: UepText.mono(size: 10, color: UepColors.error)),
         const SizedBox(width: 8),
-      ],
+      ];
+    }
+    if (!o.canOfferRelease) return const [];
+    return [
       _BarButton(
         label: l10n.opsRelease,
         onTap: () => showObjectiveReleaseDialog(context,
             actions: actions, objectiveId: o.id),
       ),
-      // done 之後沒有別的按鈕，尾端間距只在 verified 需要
-      if (o.status == 'verified') const SizedBox(width: 8),
+      const SizedBox(width: 8),
     ];
   }
 
@@ -1587,7 +1787,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     return switch (o.status) {
       // 說的是**擋住送審的那件事**。原本寫「N 張未完成」，而真正擋著的是
       // 清單沒收尾——照著它做完所有卡，按鈕依然不會亮
-      'active' when stats.stages == 0 => l10n.boardCloseoutNoStage,
+      'active' when o.isInbox && stats.stagesOpen + stats.stagesDone == 0 =>
+        l10n.boardCloseoutInboxEmpty,
+      // 未分類的階段是 Hub 墊的那一格（畫面上數不到），不叫人去開階段
+      'active' when stats.stages == 0 && !o.isInbox =>
+        l10n.boardCloseoutNoStage,
       'active' when stats.stagesOpen > 0 => [
           l10n.boardCloseoutStagesOpen(stats.stagesOpen),
           if (stats.remaining > 0) l10n.boardCloseoutRemaining(stats.remaining),
@@ -1596,6 +1800,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       'active' when stats.stagesDone == 0 => l10n.boardCloseoutAllCancelled,
       'active' => l10n.boardCloseoutReadyForReview,
       'review' => l10n.boardCloseoutInReview,
+      'verified' when o.completeBlockedByRelease =>
+        l10n.boardCompleteNeedsRelease,
       'verified' => l10n.boardCloseoutVerified,
       'done' => l10n.boardCloseoutDone,
       _ => '',
@@ -1668,6 +1874,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 卡片自己退回快照——舊 Hub 與 v1 路徑都沒有 members[]
         holder: snap.memberOf(
             t.claimActorKey.isEmpty ? null : t.claimActorKey),
+        devMode: ref.watch(appConfigProvider.select((c) => c.devMode)),
         onTap: () => setState(() => _openTaskId = t.id),
         isMineToReclaim: snap.reclaimable.any((r) => r.id == t.id),
         // 認領／釋出同樣是這個週期底下的寫入。**追蹤不算**：watch 寫的是
@@ -1712,7 +1919,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       // 正確的 watching 與 watcher_count——自己先改的話，失敗時畫面會
       // 停在一個「看起來成功了」的狀態
       _reloadBoard();
-      ref.invalidate(watchNoticesProvider);
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -1753,7 +1959,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   onTap: () => runBoardAction(
                       context,
                       () => _actions!
-                          .completeChecklist(c.id)),
+                          .completeChecklist(c.id),
+                      hostReasonTitle: AppLocalizations.of(context)
+                          .hostReasonChecklistStatusTitle),
                 ),
               ),
             )
@@ -1785,6 +1993,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
     final collapsed = _collapsed.contains(c.id);
 
+    // 階段能不能長按拖去別的週期（未分類、凍結都不行）
+    final owner = snap.objectives[c.objectiveId];
+    final draggable = !_readOnly &&
+        _boardIdOrNull != null &&
+        owner != null &&
+        canDragChecklist(c, owner);
+    Widget dragSource(Widget w) => draggable ? _stageDragSource(c, w) : w;
+
     return _stageDropTarget(c, frozen, Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
@@ -1802,8 +2018,8 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       cursor: SystemMouseCursors.grab,
                       child: Padding(
                         padding: const EdgeInsets.only(right: 6),
-                        child: Icon(Icons.drag_indicator,
-                            size: 16, color: s.inkMute),
+                        child: dragSource(Icon(Icons.drag_indicator,
+                            size: 16, color: s.inkMute)),
                       ),
                     ),
                   ),
@@ -1825,17 +2041,30 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 ),
               ),
               // 創建者放在提示裡：派工的 agent 問問題時問的就是他
-              Tooltip(
-                message: c.createdByName.isEmpty
-                    ? AppLocalizations.of(context).boardChecklistCreatorUnknown
-                    : AppLocalizations.of(context)
-                        .boardChecklistCreatedBy(c.createdByName),
-                child: Text(c.title,
-                    style: UepText.sans(
+              Builder(builder: (context) {
+                final dev =
+                    ref.watch(appConfigProvider.select((c) => c.devMode));
+                final tip = Tooltip(
+                  message: c.createdByName.isEmpty
+                      ? AppLocalizations.of(context)
+                          .boardChecklistCreatorUnknown
+                      : AppLocalizations.of(context)
+                          .boardChecklistCreatedBy(c.createdByName),
+                  child: dragSource(TitleWithId(
+                    title: c.title,
+                    titleStyle: UepText.sans(
                         size: 15,
                         weight: FontWeight.w600,
-                        color: s.inkTitle)),
-              ),
+                        color: s.inkTitle),
+                    id: c.id,
+                    gap: 8,
+                    showId: dev,
+                    plainOverflow: null,
+                  )),
+                );
+                // 關閉時與原本一致：標題不加 Flexible
+                return dev ? Flexible(child: tip) : tip;
+              }),
               const SizedBox(width: 12),
               Text('$done / $total DONE',
                   style: UepText.mono(
@@ -1896,7 +2125,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .completeChecklist(c.id)),
+                            .completeChecklist(c.id),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                   _BarButton(
@@ -1904,7 +2135,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .setChecklistStatus(c.id, 'cancelled')),
+                            .setChecklistStatus(c.id, 'cancelled'),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                 ] else if (c.status == 'done') ...[
@@ -1913,7 +2146,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     onTap: () => runBoardAction(
                         context,
                         () => _actions!
-                            .setChecklistStatus(c.id, 'open')),
+                            .setChecklistStatus(c.id, 'open'),
+                        hostReasonTitle: AppLocalizations.of(context)
+                            .hostReasonChecklistStatusTitle),
                   ),
                   const SizedBox(width: 8),
                 ],

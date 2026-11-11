@@ -1471,6 +1471,10 @@ async def test_mentions_are_appended_once_for_the_hook_to_pick_up(
              if ln.strip()]
     assert len(lines) == 1
     assert json.loads(lines[0])["text"] == f"@{name} 先停一下"
+    # 遞送內容帶 message id 與寄件者種類，agent 才能對人類那則 react
+    entry = json.loads(lines[0])
+    assert entry["id"]
+    assert entry["from_kind"] == "human"
 
     await loop.tick()
     again = [ln for ln in inject.read_text(encoding="utf-8").splitlines()

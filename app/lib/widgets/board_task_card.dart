@@ -6,6 +6,7 @@ import '../core/util/relative_time.dart';
 import '../l10n/l10n.dart';
 import '../models/board.dart';
 import 'actor_name.dart';
+import 'copyable_id.dart';
 import 'kind_badge.dart';
 
 /// Board 的 Task 卡片。
@@ -30,7 +31,11 @@ class BoardTaskCard extends StatelessWidget {
     this.onRelease,
     this.onToggleWatch,
     this.watchBlockedReason = '',
+    this.devMode = false,
   });
+
+  /// 開發者模式：卡片上顯示可複製的卡片 ID。
+  final bool devMode;
 
   final BoardTask task;
 
@@ -132,13 +137,19 @@ class BoardTaskCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: Text(
-            task.title,
-            style: UepText.sans(
-              size: 14.5,
-              weight: FontWeight.w600,
-              color: s.inkTitle,
-              height: 1.5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                task.title,
+                style: UepText.sans(
+                  size: 14.5,
+                  weight: FontWeight.w600,
+                  color: s.inkTitle,
+                  height: 1.5),
+              ),
+              if (devMode) CopyableId(value: task.id),
+            ],
           ),
         ),
         const SizedBox(width: 8),
@@ -400,6 +411,10 @@ class BoardTaskCard extends StatelessWidget {
                             const SizedBox(width: 12),
                             _KindText(kind: task.claimKind, muted: true),
                           ],
+                        ],
+                        if (devMode) ...[
+                          const SizedBox(width: 12),
+                          CopyableId(value: task.id),
                         ],
                         const SizedBox(width: 12),
                         _StatusBadge(status: task.status),

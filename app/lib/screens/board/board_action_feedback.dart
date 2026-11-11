@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/errors/api_exception.dart';
+import '../../core/host_reason.dart';
 import '../../l10n/l10n.dart';
+import '../../widgets/host_reason.dart';
 
 /// Board 畫面所有「按下去會打 API」的動作共用的執行殼。
 ///
@@ -22,8 +24,17 @@ Future<T?> runBoardAction<T>(
   /// 告訴你從現在這個狀態還能去哪，呼叫端可以拿去校正畫面而不只是報錯。
   /// 不給的話走一般錯誤呈現。
   void Function(ConflictException e)? onConflict,
+
+  /// 主持人模式下，這個動作要先問一次「理由」（對話框標題）。
+  /// 取消就不執行、回 null；一般模式不彈框，行為不變。
+  String? hostReasonTitle,
 }) async {
   try {
+    if (hostReasonTitle != null) {
+      final reason = await askHostReason(context, title: hostReasonTitle);
+      if (reason == null || !context.mounted) return null;
+      return await runWithHostReason(reason, body);
+    }
     return await body();
   } on ConflictException catch (e) {
     // ⚠️ `objective_closed` 不走 [onConflict]：呼叫端拿它沒有第二條路可走
@@ -53,6 +64,37 @@ String boardActionMessage(BuildContext context, ApiException e) =>
       // 下一步：打回那顆按鈕就在週期抬頭右邊
       'objective_closed' => AppLocalizations.of(context)
           .boardErrorObjectiveClosed,
+      // 409 — 最近一筆上板還沒成功，週期不能結束
+      'release_not_done' =>
+        AppLocalizations.of(context).boardCompleteNeedsRelease,
+      // 409 — 週期已經 done，上板／再上板都沒有意義
+      'objective_already_done' =>
+        AppLocalizations.of(context).boardErrorObjectiveAlreadyDone,
+      // 409 — 上板（含修復 agent）還在跑
+      'release_in_progress' =>
+        AppLocalizations.of(context).boardErrorReleaseInProgress,
+      // 409 — 本版前的舊上板紀錄已結案，不再上板
+      'release_legacy_closed' =>
+        AppLocalizations.of(context).boardErrorReleaseLegacyClosed,
+      // 409 — 階段搬到其他週期
+      'checklist_has_active_run' =>
+        AppLocalizations.of(context).boardErrorChecklistHasActiveRun,
+      'checklist_uncategorised_immovable' =>
+        AppLocalizations.of(context).boardErrorChecklistUncategorisedImmovable,
+      'move_same_objective' =>
+        AppLocalizations.of(context).boardErrorMoveSameObjective,
+      'move_cross_board' =>
+        AppLocalizations.of(context).boardErrorMoveCrossBoard,
+      // 未分類頁的拆頁、改名、取消
+      'not_inbox_page' => AppLocalizations.of(context).boardErrorNotInboxPage,
+      'inbox_title_reserved' =>
+        AppLocalizations.of(context).boardErrorInboxTitleReserved,
+      'title_required' =>
+        AppLocalizations.of(context).boardErrorTitleRequired,
+      'inbox_page_not_cancellable' =>
+        AppLocalizations.of(context).boardErrorInboxPageNotCancellable,
+      'inbox_rename_forbidden' =>
+        AppLocalizations.of(context).boardErrorInboxRenameForbidden,
       _ => e.message,
     };
 

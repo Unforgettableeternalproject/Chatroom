@@ -105,7 +105,9 @@ Future<String?> showReactionPicker(
       PopupMenuItem<String>(
         enabled: false,
         height: 44,
-        padding: const EdgeInsets.symmetric(horizontal: 6),
+        // 8 顆 × 32 + 左右各 12 = 280（56 的倍數）：選單寬度以 56 為階，
+        // 不是整數倍會在尾端多出一段空白。
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Builder(
           builder: (ctx) => Row(
             mainAxisSize: MainAxisSize.min,
@@ -116,8 +118,8 @@ Future<String?> showReactionPicker(
                   borderRadius: BorderRadius.circular(6),
                   onTap: () => Navigator.of(ctx, rootNavigator: true).pop(e),
                   child: Container(
-                    width: 30,
-                    height: 30,
+                    width: 32,
+                    height: 32,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(6),
@@ -131,7 +133,10 @@ Future<String?> showReactionPicker(
                           ? UepColors.gold.withValues(alpha: .12)
                           : null,
                     ),
-                    child: Text(e, style: const TextStyle(fontSize: 18)),
+                    // enabled:false 的 PopupMenuItem 會把文字染成 disabledColor（半透明灰），
+                    // 這裡必須明確給不透明色，emoji 才不會被灰化。
+                    child: Text(e,
+                        style: TextStyle(fontSize: 18, color: s.inkTitle)),
                   ),
                 ),
             ],

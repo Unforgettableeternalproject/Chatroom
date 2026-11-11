@@ -74,17 +74,21 @@ class WsProtocol {
 
   /// http(s) base URL → ws(s) /ws URL（token 走 query string，
   /// ⚠️ 這條 URL 絕不可進 log——redacting_logger 會遮，但別依賴它）。
-  static Uri wsUri(String baseUrl, String? token, {bool hostView = false}) {
+  static Uri wsUri(String baseUrl, String? token,
+      {bool hostView = false, String path = '/ws', String? sessionKey}) {
     final base = Uri.parse(baseUrl);
     return base.replace(
       scheme: base.scheme == 'https' ? 'wss' : 'ws',
-      path: '/ws',
+      path: path,
       queryParameters: {
         if (token != null && token.isNotEmpty) 'token': token,
         // 主持人視角要跟著走 WS——這是主要的讀取通道，REST 那半開了而
         // 這裡沒開，主持人打開別人的房會看到歷史但收不到任何新訊息，
         // 那比看不到更難查
         if (hostView) 'host_view': '1',
+        // /ws/inbox 必須帶：沒有 session_key 且非主持人會被關 4400
+        if (sessionKey != null && sessionKey.isNotEmpty)
+          'session_key': sessionKey,
       },
     );
   }

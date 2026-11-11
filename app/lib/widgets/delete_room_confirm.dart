@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/uep_theme.dart';
 import '../core/theme/uep_tokens.dart';
 import '../l10n/l10n.dart';
+import 'host_reason.dart';
 import 'uep_button.dart';
 
 /// 刪除房間的確認。要把房名打一次才刪得掉。
@@ -14,9 +15,12 @@ import 'uep_button.dart';
 /// 就在那裡）與聊天畫面的選單。兩份各自維護的話遲早會漂移，而漂移的方向
 /// 通常是「其中一份忘了要求打字」。
 class DeleteRoomConfirm extends StatefulWidget {
-  const DeleteRoomConfirm({super.key, required this.name});
+  const DeleteRoomConfirm({super.key, required this.name, this.reason});
 
   final String name;
+
+  /// 主持人模式才傳：確認框多一欄選填理由，文字由呼叫端從這個 controller 讀。
+  final TextEditingController? reason;
 
   @override
   State<DeleteRoomConfirm> createState() => _DeleteRoomConfirmState();
@@ -73,6 +77,10 @@ class _DeleteRoomConfirmState extends State<DeleteRoomConfirm> {
                 ),
               ),
             ),
+            if (widget.reason != null) ...[
+              const SizedBox(height: 12),
+              HostReasonField(controller: widget.reason!),
+            ],
           ]),
         ),
       ),
