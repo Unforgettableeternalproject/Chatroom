@@ -265,7 +265,7 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
           // 「安裝」比沒有那顆按鈕更糟
           if (widget.canInstall) ...[
             if (kit != null) _sep(s),
-            KitInstallSection(kit: KitId.hub, installed: kit != null),
+            _HubInstallSection(installed: kit != null),
           ],
         ],
       );
@@ -326,6 +326,20 @@ class _HostConsoleBodyState extends State<_HostConsoleBody>
             _RunnerInstallSection(installed: runner != null),
           ],
         ],
+      );
+}
+
+/// Hub 主持包的安裝區塊。已裝版本現讀 `hostKitVersionProvider`。
+class _HubInstallSection extends ConsumerWidget {
+  const _HubInstallSection({required this.installed});
+
+  final bool installed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => KitInstallSection(
+        kit: KitId.hub,
+        installed: installed,
+        installedVersion: ref.watch(hostKitVersionProvider).value ?? '',
       );
 }
 
