@@ -26,6 +26,14 @@ async def _client(tmp_path, name):
                             headers={"Authorization": f"Bearer {ROOT}"})
 
 
+async def _settle_directly(app, bid, outcome="completed"):
+    """直接寫結局。板沒有封存了，「唯讀」由結局承接；這裡要的是一塊已收尾的板，
+    不是宣告結局的前置條件（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
+
+
 async def _room(client, name="房", session_key="claude-a"):
     return (await client.post("/api/rooms", json={
         "name": name, "session_key": session_key})).json()["id"]
@@ -644,8 +652,9 @@ async def test_create_a_board_from_the_library_and_from_a_room(tmp_path):
                 "沒有房的板", "掛在房上的板"}
 
 
-async def test_patch_archive_and_unarchive(tmp_path):
-    """改名／封存／解除封存。**板封存與房封存是兩件事**（§3.2）。"""
+async def test_patch_and_settle_readonly(tmp_path):
+    """改名／收尾唯讀／重開。板沒有封存狀態了，收尾（結局）才唯讀；
+    **板收尾與房封存是兩件事**（§3.2）。"""
     app, client = await _client(tmp_path, "v2_admin")
     async with client:
         async with app.router.lifespan_context(app):
@@ -661,26 +670,26 @@ async def test_patch_archive_and_unarchive(tmp_path):
                                      headers=owner)).json()
             assert body["name"] == "改過的名字"
 
-            r = await client.post(f"/api/boards/{bid}/archive", headers=owner)
-            assert r.status_code == 200, r.text
+            await _settle_directly(app, bid)
             body = (await client.get(f"/api/boards/{bid}",
                                      headers=owner)).json()
-            assert body["status"] == "archived"
+            assert body["status"] == "active"
+            assert body["outcome"] == "completed"
 
-            # 板封存了，房照樣進得去、寫得動——兩件事不能綁在一起
+            # 板收尾了，房照樣進得去、寫得動——兩件事不能綁在一起
             r = await client.post(f"/api/rooms/{rid}/messages",
-                                  json={"content": "板封了但話還講得動"},
+                                  json={"content": "板收了但話還講得動"},
                                   headers=owner)
             assert r.status_code == 200, r.text
 
-            # 封存的板不能從板上建卡
+            # 已收尾的板不能從板上建卡
             r = await client.post(f"/api/boards/{bid}/objectives",
                                   json={"title": "還想寫"}, headers=owner)
             assert r.status_code == 409
             assert r.json()["detail"]["code"] == "board_archived"
 
-            r = await client.post(f"/api/boards/{bid}/unarchive", headers=owner)
-            assert r.status_code == 200, r.text
+            # 清掉結局（重開）才能再寫
+            await _settle_directly(app, bid, outcome="")
             r = await client.post(f"/api/boards/{bid}/objectives",
                                   json={"title": "解封之後"}, headers=owner)
             assert r.status_code == 200, r.text
@@ -777,10 +786,9 @@ async def test_deleting_a_board_is_never_triggered_by_deleting_a_room(tmp_path):
             # provenance 留著：那間房已經不在了，快照是唯一講得出來的東西
             assert body["tasks"][0]["source_room_id"] in ("", rid)
 
-            # 刪除前置：板要先封存（09/07 艾斯維爾裁定，卡 029e24f6）——
-            # 刪除不可復原，封存是它的緩衝
-            assert (await client.post(f"/api/boards/{bid}/archive",
-                                      headers=owner)).status_code == 200
+            # 刪除前置：板要先收尾（艾斯維爾 2026-11-12，取代 09/07 的先封存）
+            # ——刪除不可復原，收尾是它的緩衝
+            await _settle_directly(app, bid)
             r = await client.delete(f"/api/boards/{bid}", headers=owner)
             assert r.status_code == 200, r.text
             assert r.json()["deleted"]["board"] == 1
@@ -802,7 +810,8 @@ async def test_board_admin_actions_require_owner(tmp_path):
 
             for method, path, payload in [
                 ("patch", f"/api/boards/{bid}", {"name": "我要改名"}),
-                ("post", f"/api/boards/{bid}/archive", None),
+                ("post", f"/api/boards/{bid}/outcome",
+                 {"outcome": "completed"}),
                 ("post", f"/api/boards/{bid}/members",
                  {"actor_key": "claude-c"}),
                 ("delete", f"/api/boards/{bid}", None),
@@ -981,10 +990,10 @@ async def test_editing_a_detached_card_does_not_conjure_a_new_board(tmp_path):
             assert row["board_seq"] == seq_after
 
 
-async def test_an_archived_board_is_read_only_from_the_room_path_too(tmp_path):
-    """封存的板一律唯讀，**v1 的 room 路徑也不例外**。
+async def test_a_settled_board_is_read_only_from_the_room_path_too(tmp_path):
+    """已收尾的板一律唯讀，**v1 的 room 路徑也不例外**。
 
-    漏了這道閘，那條路就成了繞過封存的後門——而封存在畫面上看起來是生效的。
+    漏了這道閘，那條路就成了繞過唯讀的後門——而收尾在畫面上看起來是生效的。
     """
     app, client = await _client(tmp_path, "v2_archived_room_path")
     async with client:
@@ -993,8 +1002,7 @@ async def test_an_archived_board_is_read_only_from_the_room_path_too(tmp_path):
             hdr = await _join(client, rid, "claude-a", "A")
             tid = await _first_card(client, rid, hdr)
             bid = await _board_id(client, rid, hdr)
-            r = await client.post(f"/api/boards/{bid}/archive", headers=hdr)
-            assert r.status_code == 200, r.text
+            await _settle_directly(app, bid)
 
             for method, path, payload in [
                 ("patch", f"/api/board/tasks/{tid}", {"title": "還想改"}),
@@ -1006,7 +1014,7 @@ async def test_an_archived_board_is_read_only_from_the_room_path_too(tmp_path):
                 call = getattr(client, method)
                 r = (await call(path, json=payload, headers=hdr)
                      if payload is not None else await call(path, headers=hdr))
-                assert r.status_code == 409, f"{method} {path} 繞過了封存"
+                assert r.status_code == 409, f"{method} {path} 繞過了唯讀"
                 assert r.json()["detail"]["code"] == "board_archived"
                 # 被擋下的回應裡要講得出是哪塊板——那是唯一還拿得到的線索
                 assert r.json()["detail"]["board_id"] == bid
@@ -1113,7 +1121,7 @@ async def test_import_never_downgrades_an_existing_member(tmp_path):
 
 
 async def test_library_can_filter_by_status(tmp_path):
-    """`?status=`：App 的「進行中／已封存」切換一直有送它。
+    """`?status=`：板沒有封存了，只認 active；archived 要明確擋下。
 
     Hub 從來沒宣告這個參數 ⇒ FastAPI 靜默忽略、SQL 也沒有 WHERE ⇒
     **兩邊都不報錯，篩選就是沒有作用**（審核用Codex 2026-09-02）。
@@ -1126,15 +1134,17 @@ async def test_library_can_filter_by_status(tmp_path):
                                       headers=key)).json()["id"]
             gone = (await client.post("/api/boards", json={"name": "收工了"},
                                       headers=key)).json()["id"]
-            await client.post(f"/api/boards/{gone}/archive", headers=key)
+            await _settle_directly(app, gone)
 
-            both = (await client.get("/api/boards", headers=key)).json()
+            both = (await client.get("/api/boards?outcome=any",
+                                     headers=key)).json()
             assert {b["id"] for b in both["boards"]} == {live, gone}
 
             r = await client.get("/api/boards?status=active", headers=key)
             assert [b["id"] for b in r.json()["boards"]] == [live]
             r = await client.get("/api/boards?status=archived", headers=key)
-            assert [b["id"] for b in r.json()["boards"]] == [gone]
+            assert r.status_code == 422
+            assert r.json()["detail"]["code"] == "invalid_status"
 
             # 打錯字要擋下來——默默回全部會讓人以為「那塊板不見了」
             r = await client.get("/api/boards?status=活著的", headers=key)

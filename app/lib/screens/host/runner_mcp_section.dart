@@ -121,6 +121,9 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
     final machine = ref.watch(machineMcpServersProvider);
+    // 登入狀態沿用執行器登入列那一份判斷；還沒算出來（null）時退回 mcp list 自己的旗標
+    final login = ref.watch(runnerClaudeLoginProvider).value;
+    final viaToken = login?.tokenSet ?? false;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -144,6 +147,12 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
               ),
             ],
           ),
+          if (viaToken)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(l10n.hostRunnerMcpViaToken,
+                  style: UepText.serif(size: 12.5, color: s.inkMute)),
+            ),
           const SizedBox(height: 4),
           machine.when(
             loading: () => Padding(
@@ -154,17 +163,26 @@ class _RunnerMcpCardState extends ConsumerState<_RunnerMcpCard> {
             error: (e, _) => _rows(s, l10n, machine: null, error: '$e'),
             // 🔴 問不到不等於「本機沒有這些」：`names` 是 null 時照樣列出
             // 設定裡的名字，但**不**在它們旁邊標「本機找不到」
-            data: (found) => _rows(s, l10n,
-                machine: found.names,
-                // 過期時 claude 的原文（常是 "No MCP servers configured"）
-                // 指錯方向，改講真正的原因
-                error: found.authExpired
-                    ? l10n.hostRunnerMcpAuthExpired
-                    : found.error,
-                rawError: found.authExpired,
-                origins: found.origins,
-                globalError: found.globalError,
-                complete: found.complete),
+            data: (found) {
+              // 用 token 時 mcp list 空著是常態（上方已說明），不當錯誤
+              final hideEmpty = viaToken && found.listedNothing;
+              // 沒 token 且設定目錄登入失效：claude 的原文（常是 "No MCP servers
+              // configured"）指錯方向，改講真正的原因
+              final expired = !viaToken &&
+                  found.error.isNotEmpty &&
+                  (found.authExpired || (login != null && !login.loggedIn));
+              return _rows(s, l10n,
+                  machine: found.names,
+                  error: hideEmpty
+                      ? ''
+                      : expired
+                          ? l10n.hostRunnerMcpAuthExpired
+                          : found.error,
+                  rawError: expired,
+                  origins: found.origins,
+                  globalError: found.globalError,
+                  complete: found.complete);
+            },
           ),
           const SizedBox(height: 8),
           Align(

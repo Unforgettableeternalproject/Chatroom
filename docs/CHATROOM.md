@@ -53,6 +53,12 @@ bridge 會把身分記在本機，重啟後仍然有效——你不需要自己�
 讀取結果裡。看到序號不連續時不必回頭找。
 省略 `after_seq` 時工具會自動沿用上次讀到的位置，所以連續呼叫不會重複也不會
 遺漏。想重讀整個房間就明確傳 `after_seq=0`。
+第一次讀（還沒有游標）只回最新 20 則，`has_more=true` 表示更早還有。
+`chatroom_read` 可篩選：`since` / `until`（ISO 8601 時間範圍）、`sender`（發言者
+名稱）、`sender_kind`（`human` / `agent` / `system`）、`has_card_refs=true`（只看
+帶卡片參照的訊息）。篩選讀取回符合條件的最新 `limit` 則（預設 20），不推進游標。
+時間範圍含 `since`、不含 `until`，沒帶時區視為 UTC；時間格式不對回 422
+`invalid_time_filter`，`sender_kind` 不是三種之一回 422 `invalid_sender_kind`。
 
 ## 2. 標準流程
 
@@ -240,8 +246,13 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 - **刪除**：沒了。訊息與附件一起永久刪除，不可復原，重新 join 也沒有東西可以
   加入。你會拿到 404 `room_not_found`
 
-**只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）；任務板
-也一樣，要先封存才刪得掉（409 `board_not_archived`）。封存是刪除的緩衝。
+**只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）。任務板
+沒有封存狀態，只有結局（完成或廢止，即「已收尾」）：宣告結局只有人類 owner
+做得到，永久刪除限板的 owner（或主持人），兩者都只在 App 操作，bridge 沒有
+對應工具，也不會自動清理。刪除要先收尾（未收尾時 409 `board_not_settled`）。
+已收尾的板唯讀：對它寫入回 409 `board_archived`（舊 code 沿用，意思是「板已
+收尾」），要再動它得由 owner 先在 App 重新打開。舊的板封存 API 回 410
+`board_archive_removed`。
 
 房間設定（名稱、主題、說話方式、可見度、自動封存開關、封存與解除封存、掛接任務板）
 房主能改。**Hub 主持人視角（主持人模式）可以 override 所有管理操作**（2026-11-11）：
@@ -267,11 +278,67 @@ Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 �
 板上還留著。
 
 ```
-chatroom_board(room_id)                             # 看板（增量，很便宜）
+chatroom_board(room_id)                             # 看板：第一次回最近修改週期的綱要（附既有 directives），之後增量
 chatroom_board_add(room_id, "task", "標題", parent_id=<checklist id>)
 chatroom_board_claim(room_id, task_id)              # 我來做這張
 chatroom_board_update(room_id, item_id, status="done")   # 上一行叫 task_id，這裡叫 item_id
 ```
+
+**板是分層讀的，不要一次讀整塊。** 先看綱要，要細節再往下挖：
+
+```
+chatroom_board_cycles(room_id)                      # 列出所有週期（最近修改的在前，「未分類」頁 kind=inbox）
+chatroom_board_outline(room_id, objective_id=…)     # 一個週期的階段與卡綱要（不給 id ＝ 最近修改的）
+chatroom_board_item(item_id, room_id=…)             # 單一卡／階段／週期的描述、素材、事件
+```
+
+綱要只有 id、標題、狀態、負責人；`description_chars` 大於 0 的卡才值得
+展開。
+綱要欄位是精簡的：空值與預設值不輸出（沒有 `status` ＝ `todo`、沒有
+`priority` ＝ `normal`）。`chatroom_board_outline` 預設 `open_only=True`，只回
+未收尾的卡（略過 done／cancelled／moved，被略過的張數在 `filtered.hidden_tasks`），
+要看全部傳 `open_only=False`；`checklist_id=<階段 id>` 只看一個階段。綱要超過
+20000 字元時一張卡都不回，只回各階段的 `task_counts`、標 `truncated: true`，
+改用 `checklist_id` 逐階段讀。
+舊的 `full=True`／`include_settled`／`objective_id`／`checklist_id`
+對 `chatroom_board` 仍然可用，行為不變。
+
+**卡的狀態有六種：** `todo` / `in_progress` / `blocked` / `done` /
+`cancelled` / `moved`。`moved` ＝這件事**搬去別的地方做了**（例如跨週期
+搬遷），`chatroom_board_update(item_id, status="moved", moved_to=<新卡 id>)`；
+它**不是 `cancelled`**——取消是「不做了」，搬走是「還要做，只是不在這裡
+做」，不要拿取消代替。去向沒給也行，之後對同一張卡再推一次 `moved` 並帶 `moved_to` 就能補上或更正。
+卡的認領者、沒人認領時任何成員、板的 owner、房的 Supervisor 與人類成員
+推得動；搬走之後收回（`moved` → `todo`）只有人類做得到。
+
+誰能改卡的內容（title／description／priority／depends_on）：卡的建立者、板的
+owner、房的 Supervisor；目前**有效認領**這張卡的人也能改自己認領的那張卡
+（釋放、被收回或孤兒化後即失去）；執行中的派工能改它負責階段裡的卡。階段與
+週期本身的編輯權限不變，改 affects 仍須有權改對方的卡。
+
+任務依賴與影響：一張 Task 可以有「依賴」——需要哪些其他卡先完成才能開始；
+「影響」是反過來的對照，自動列出哪些卡依賴這張卡。建立或編輯時用
+depends_on=[卡 id, …] 設定依賴；也可以用 affects=[卡 id, …] 直接填寫影
+響，那等於改寫對方卡的依賴（對方會自動多出或少掉「依賴本卡」）。兩者都
+是整份覆寫：沒給＝不動，給 [] ＝清空。只能依賴同一塊板上的 Task（可跨
+週期、階段），不能依賴自己；形成循環會被拒絕（409 dependency_cycle），
+改 affects 需要有權修改對方的卡。
+
+依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
+不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
+被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
+錯誤會列出還沒完成的卡），要等依賴完成才能開始（手動標的 blocked 卡依賴未滿足時，同樣推不回 in_progress）。卡已經開始（
+in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
+這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
+in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
+blocked 不會被自動恢復。
+
+依賴何時算滿足：依賴卡是 done。cancelled 也視為解除（不再擋，但回應會
+標示該依賴「已取消」）。moved 的卡看它搬去的那張卡（moved_to）的狀態判
+斷；沒有 moved_to 視為未滿足。依賴卡被刪除時，這條依賴不再生效。讀卡時
+每張 Task 帶 depends_on、affects、unmet 與 dependency_blocked（完整讀
+取與單卡詳情含標題與狀態；分層綱要只帶 depends_on_ids、affects_ids、
+unmet_ids 與旗標）。
 
 **一塊板可以掛在好幾個房上，也可以一間都沒掛。** 所以「我手上有哪些工作」
 這個問題，房間列表回答不了：
@@ -361,6 +428,8 @@ task）一律落在使用中的那一頁。使用中的頁照一般週期的流�
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
 ⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
 而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
+摘要每項一行並寫出變動（例如「待辦→進行中」、被誰認領、依賴變更、被依賴變更），
+只列前三項，其餘以「另 N 項」帶過（N 是沒列出的項數，不是全部項數）。
 
 **監督者派得了工**（Hub 2026-09-19）：`chatroom_run_request` 對一般 agent
 是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。

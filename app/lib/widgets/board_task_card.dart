@@ -72,6 +72,9 @@ class BoardTaskCard extends StatelessWidget {
   /// 而不是「可以追但收不到」：後者要等到卡完成才發現，而那時他已經在等了。
   final String watchBlockedReason;
 
+  /// 被依賴擋住（阻擋）的卡不能認領：按鈕不畫，改在卡上講為什麼。
+  VoidCallback? get _claim => task.dependencyBlocked ? null : onClaim;
+
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
@@ -118,6 +121,14 @@ class BoardTaskCard extends StatelessWidget {
                               size: 13, color: s.inkSoft, height: 1.7),
                         ),
                       ],
+                      if (task.dependencyBlocked) ...[
+                        const SizedBox(height: 7),
+                        Text(
+                          AppLocalizations.of(context)
+                              .boardDependencyWaiting(task.unmet.length),
+                          style: UepText.mono(size: 10, color: UepColors.info),
+                        ),
+                      ],
                       const SizedBox(height: 7),
                       _footer(context),
                     ],
@@ -160,8 +171,21 @@ class BoardTaskCard extends StatelessWidget {
           blockedReason: watchBlockedReason,
         ),
         const SizedBox(width: 8),
+        // 「阻擋」＝依賴還沒完成。用 info 色與紅色的「卡住」分開：兩者不是
+        // 同一件事（卡住是人標的，阻擋是 Hub 算出來的）
+        if (task.dependencyBlocked) ...[
+          _DependencyBadge(
+              label: AppLocalizations.of(context).boardDependencyBlockedBadge),
+          const SizedBox(width: 6),
+        ],
         // 狀態徽章。⚠️ 孤兒不改它——變的是人不是進度
         _StatusBadge(status: task.status),
+        // 卡住是依賴造成的：註明，免得被讀成有人手動標了「做不下去」
+        if (task.status == 'blocked' && task.blockedByDependency) ...[
+          const SizedBox(width: 6),
+          _DependencyBadge(
+              label: AppLocalizations.of(context).boardDependencyCausedBadge),
+        ],
       ],
     );
   }
@@ -222,20 +246,20 @@ class BoardTaskCard extends StatelessWidget {
               _Notice(
                 background: UepColors.gold.withValues(alpha: .09),
                 edge: UepColors.gold,
-                trailing: onClaim == null
+                trailing: _claim == null
                     ? null
                     : _TinyAction(
                         label: l10n.boardTaskReclaim,
-                        onTap: onClaim!,
+                        onTap: _claim!,
                         color: UepColors.gold),
                 child: Text(l10n.boardTaskReclaimHint,
                     style: UepText.serif(size: 13, color: UepColors.gold)),
               ),
-            ] else if (onClaim != null) ...[
+            ] else if (_claim != null) ...[
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerRight,
-                child: _TinyAction(label: l10n.boardTaskTakeOver, onTap: onClaim!),
+                child: _TinyAction(label: l10n.boardTaskTakeOver, onTap: _claim!),
               ),
             ],
           ],
@@ -255,8 +279,8 @@ class BoardTaskCard extends StatelessWidget {
                 style: UepText.mono(size: 10, color: s.inkMute)),
           ),
           const Spacer(),
-          if (onClaim != null)
-            _TinyAction(label: l10n.boardTaskIllDoIt, onTap: onClaim!),
+          if (_claim != null)
+            _TinyAction(label: l10n.boardTaskIllDoIt, onTap: _claim!),
         ]),
       _ => Row(children: [
           Text(l10n.boardTaskUnclaimed,
@@ -269,8 +293,8 @@ class BoardTaskCard extends StatelessWidget {
                 style: UepText.mono(size: 10, color: s.inkTitle)),
           ],
           const Spacer(),
-          if (onClaim != null)
-            _TinyAction(label: l10n.boardTaskClaim, onTap: onClaim!),
+          if (_claim != null)
+            _TinyAction(label: l10n.boardTaskClaim, onTap: _claim!),
         ]),
     };
   }
@@ -561,6 +585,25 @@ class _Dot extends StatelessWidget {
         width: 3,
         height: 3,
         decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      );
+}
+
+/// 依賴相關的小徽章（阻擋、依賴造成）。info 色，與紅色的「卡住」區分。
+class _DependencyBadge extends StatelessWidget {
+  const _DependencyBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: UepColors.info.withValues(alpha: .1),
+          border: Border.all(color: UepColors.info.withValues(alpha: .5)),
+        ),
+        child: Text(label,
+            style: UepText.mono(
+                size: 10, color: UepColors.info, letterSpacing: 1.1)),
       );
 }
 

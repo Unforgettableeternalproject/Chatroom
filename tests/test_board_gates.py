@@ -27,6 +27,14 @@ async def _client(tmp_path, name):
                             headers={"Authorization": f"Bearer {ROOT}"})
 
 
+async def _settle_directly(app, bid, outcome="completed"):
+    """直接寫結局。板沒有封存了，「唯讀」由結局承接；這裡要的是一塊已收尾的板，
+    不是宣告結局的前置條件（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
+
+
 async def _join(client, rid, session_key, name, role="agent"):
     kind = "human" if role == "human" else "claude"
     r = await client.post(f"/api/rooms/{rid}/join", json={
@@ -573,8 +581,8 @@ async def test_an_active_objective_can_still_be_reordered(tmp_path):
             assert r.status_code == 200, r.text
 
 
-async def test_an_archived_board_is_read_only_on_the_room_axis(tmp_path):
-    """封存的板在 v1（房軸）也唯讀。
+async def test_a_settled_board_is_read_only_on_the_room_axis(tmp_path):
+    """已收尾（有結局）的板在 v1（房軸）也唯讀。
 
     `_board_item_writer` 與 `_board_writer_v2` 本來就擋，只有建卡／排序共用的
     `_board_writer` 沒擋——那條路就是繞過封存的後門。
@@ -584,8 +592,7 @@ async def test_an_archived_board_is_read_only_on_the_room_axis(tmp_path):
         rid, human, agent = await _room(client)
         oid, cid, tids = await _tree(client, rid, human)
         bid = await _board_id(client, rid, human)
-        r = await client.post(f"/api/boards/{bid}/archive", headers=human)
-        assert r.status_code == 200, r.text
+        await _settle_directly(app, bid)
 
         r = await _reorder(client, f"/api/rooms/{rid}/board/reorder", "task",
                            tids, human)

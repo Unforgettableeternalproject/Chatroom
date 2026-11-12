@@ -638,3 +638,149 @@ async def test_appointment_notice_has_no_mention_when_appointee_is_absent(
         notices = await _events(client, rid, owner, "board_supervisor_set")
         assert len(notices) == 1, notices
         assert notices[0]["mentions"] == [], notices[0]
+
+
+async def _digest_world(client, rid, owner):
+    """supervisor Nova 在房、一個週期／階段／任務，並把「新增」那則摘要收掉。"""
+    await _join(client, rid, "agent-sup", "Nova")
+    await client.post(f"/api/rooms/{rid}/board/supervisor",
+                      json={"session_key": "agent-sup"}, headers=owner)
+    oid = (await client.post(f"/api/rooms/{rid}/board/objectives",
+                             json={"title": "週期甲"}, headers=owner)).json()["id"]
+    cid = (await client.post(f"/api/board/objectives/{oid}/checklists",
+                             json={"title": "階段乙"}, headers=owner)).json()["id"]
+    tid = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                             json={"title": "卡丙"}, headers=owner)).json()["id"]
+    return oid, cid, tid
+
+
+def _digest_lines(msg):
+    return msg["content"].split("\n")[1:]
+
+
+async def test_digest_says_what_changed_for_new_items(tmp_path):
+    app, client = await _client(tmp_path, "digest-new",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        await _digest_world(client, rid, owner)
+        await app.state.sweep_once()
+        (msg,) = await _events(client, rid, owner, "board_digest")
+        assert _digest_lines(msg) == [
+            "- 「週期甲」：新增", "- 「階段乙」：新增", "- 「卡丙」：新增"]
+
+
+async def test_digest_merges_claim_and_status_change_into_one_phrase(tmp_path):
+    app, client = await _client(tmp_path, "digest-merge",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, _, tid = await _digest_world(client, rid, owner)
+        await app.state.sweep_once()                      # 收掉「新增」
+        worker = await _join(client, rid, "agent-w", "Minka")
+        r = await client.post(f"/api/board/tasks/{tid}/claim", headers=worker)
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/board/tasks/{tid}/status",
+                              json={"status": "in_progress"}, headers=worker)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        assert _digest_lines(msgs[-1]) == [
+            "- 「卡丙」：被 Minka 認領、待辦→進行中"]
+
+        # 之後只動狀態：前狀態取自事件，不是猜的
+        for st in ("blocked", "in_progress", "done"):
+            r = await client.post(f"/api/board/tasks/{tid}/status",
+                                  json={"status": st}, headers=worker)
+            assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        assert len(msgs) == 3
+        assert _digest_lines(msgs[-1]) == ["- 「卡丙」：進行中→完成"]
+
+
+async def test_digest_status_change_and_field_edit(tmp_path):
+    app, client = await _client(tmp_path, "digest-edit",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        oid, cid, tid = await _digest_world(client, rid, owner)
+        await app.state.sweep_once()
+        r = await client.patch(f"/api/board/tasks/{tid}",
+                               json={"title": "卡丙改名"}, headers=owner)
+        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/board/checklists/{cid}/status",
+                              json={"status": "cancelled"}, headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        lines = _digest_lines(msgs[-1])
+        assert "- 「階段乙」：開啟→取消" in lines
+        assert "- 「卡丙改名」：改了標題" in lines
+
+
+async def test_digest_deleted_item(tmp_path):
+    app, client = await _client(tmp_path, "digest-del",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, _, tid = await _digest_world(client, rid, owner)
+        await app.state.sweep_once()
+        r = await client.delete(f"/api/board/tasks/{tid}", headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        assert _digest_lines(msgs[-1]) == ["- 「卡丙」：刪除"]
+
+
+async def test_digest_describes_both_ends_of_a_dependency_change(tmp_path):
+    """依賴邊的另一端只被推進 board_seq、自己沒有事件——摘要要把它也講清楚：
+    依賴方「依賴變更」、被依賴方「被依賴變更」。"""
+    app, client = await _client(tmp_path, "digest-dep",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, cid, tid = await _digest_world(client, rid, owner)
+        other = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                   json={"title": "卡丁"},
+                                   headers=owner)).json()["id"]
+        await app.state.sweep_once()                      # 收掉「新增」
+        r = await client.patch(f"/api/board/tasks/{tid}",
+                               json={"depends_on": [other]}, headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        lines = _digest_lines(msgs[-1])
+        assert "- 「卡丙」：依賴變更" in lines
+        assert "- 「卡丁」：被依賴變更" in lines
+
+        # 從被依賴那一端改（affects）：卡丙變成依賴卡戊，卡戊是被依賴方
+        third = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                   json={"title": "卡戊"},
+                                   headers=owner)).json()["id"]
+        await app.state.sweep_once()
+        r = await client.patch(f"/api/board/tasks/{third}",
+                               json={"affects": [other]}, headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        lines = _digest_lines((await _events(
+            client, rid, owner, "board_digest"))[-1])
+        assert "- 「卡戊」：依賴變更" in lines
+        assert "- 「卡丁」：依賴變更" in lines
+
+
+async def test_digest_tail_counts_only_the_items_not_listed(tmp_path):
+    """列了三項、總共九項 → 「另 6 項」，不是總數 9（那讀起來像還有 9 項沒列）。"""
+    app, client = await _client(tmp_path, "digest-tail",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, cid, _ = await _digest_world(client, rid, owner)
+        for i in range(6):
+            await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": f"另一張{i}"}, headers=owner)
+        await app.state.sweep_once()
+        (msg,) = await _events(client, rid, owner, "board_digest")
+        lines = _digest_lines(msg)
+        assert len(lines) == 4 and lines[-1] == "另 6 項", lines
+        assert "等 " not in msg["content"]

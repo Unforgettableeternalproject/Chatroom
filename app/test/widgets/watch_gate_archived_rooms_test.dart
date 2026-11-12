@@ -9,12 +9,12 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// **「可以追但收不到」比「不能追」糟得多**：後者當場就知道，前者要等到
 /// 事情發生、通知沒來才發現，而那時人已經在等了。
-BoardSnapshot _snap(List<Map<String, dynamic>> rooms, {String status = 'active'}) =>
+BoardSnapshot _snap(List<Map<String, dynamic>> rooms, {String outcome = ''}) =>
     const BoardSnapshot().merge(BoardDelta.fromJson({
       'board_seq': 10,
       'full': true,
       'board_id': 'b1',
-      'status': status,
+      'outcome': outcome,
       'attached_rooms': rooms,
     }));
 
@@ -42,12 +42,12 @@ void main() {
         isEmpty);
   });
 
-  test('板自己封存了壓過一切——那時連「掛哪間房」都不必問', () {
+  test('板已收尾（有結局）壓過一切——那時連「掛哪間房」都不必問', () {
     expect(
         boardWatchBlockedReason(_snap([
           {'id': 'r1', 'name': '開發 09/07', 'status': 'active'},
-        ], status: 'archived')),
-        contains('這塊板已經封存'));
+        ], outcome: 'completed')),
+        contains('這塊板已經收尾'));
   });
 
   test('Hub 說有活著的房就聽它的——本地推算只是退路', () {

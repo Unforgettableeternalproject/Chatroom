@@ -2615,7 +2615,7 @@
   "@helpChat10": {
     "description": "說明：封存與永久刪除"
   },
-  "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。",
+  "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。板沒有封存，只有收尾（完成或廢止）：已收尾的板唯讀，owner 可以重新打開；永久刪除限 owner（或主持人），而且要先收尾。",
   "@helpBoard1": {
     "description": "說明：板與房的關係"
   },
@@ -3361,7 +3361,7 @@
   "@boardOrphanReasonSubagent": {
     "description": "孤兒卡成因：子代理回收"
   },
-  "boardWatchBlockedArchived": "這塊板已經封存，追蹤不會再有任何動靜",
+  "boardWatchBlockedArchived": "這塊板已經收尾，追蹤不會再有任何動靜",
   "@boardWatchBlockedArchived": {
     "description": "不能追蹤的理由：板已封存"
   },
@@ -5521,10 +5521,6 @@
   "@boardRenameOwnerOnly": {
     "description": "改名失敗：限 owner"
   },
-  "boardArchiveOwnerOnly": "只有這塊板的 owner 能封存它。",
-  "@boardArchiveOwnerOnly": {
-    "description": "封存失敗：限 owner"
-  },
   "boardLibraryTitle": "任務板",
   "@boardLibraryTitle": {
     "description": "BOARDS 分頁抬頭"
@@ -5540,10 +5536,6 @@
   "boardLibraryEmptyActive": "目前沒有進行中的任務板",
   "@boardLibraryEmptyActive": {
     "description": "板清單空：進行中"
-  },
-  "boardLibraryEmptyArchived": "沒有已封存的任務板",
-  "@boardLibraryEmptyArchived": {
-    "description": "板清單空：已封存"
   },
   "boardLibraryEmptySettled": "還沒有板被宣告完成或廢止",
   "@boardLibraryEmptySettled": {
@@ -5572,14 +5564,6 @@
   "boardMenuRename": "重新命名…",
   "@boardMenuRename": {
     "description": "板卡選單：重新命名"
-  },
-  "boardMenuUnarchive": "解除封存",
-  "@boardMenuUnarchive": {
-    "description": "板卡選單：解除封存"
-  },
-  "boardMenuArchive": "封存",
-  "@boardMenuArchive": {
-    "description": "板卡選單：封存"
   },
   "boardBadgeArchived": "封存",
   "@boardBadgeArchived": {
@@ -5804,10 +5788,6 @@
   "@boardReopenAndRetry": {
     "description": "容器已收尾時的補救動作"
   },
-  "boardArchivedNotice": "這塊板已封存，只能看不能改。",
-  "@boardArchivedNotice": {
-    "description": "封存板的橫幅"
-  },
   "boardBackToRoom": "← 回到聊天室",
   "@boardBackToRoom": {
     "description": "板畫面：回到聊天室"
@@ -5992,7 +5972,7 @@
   "@boardInboxCurrentPage": {
     "description": "未分類週期的頁面切換：目前使用中的那頁"
   },
-  "boardInboxPageLabel": "第 {n} 頁 · {date} 完成",
+  "boardInboxPageLabel": "第 {n} 頁 · 完成於 {date}",
   "@boardInboxPageLabel": {
     "description": "未分類歷史頁：順序號與完成日期（MM/DD）",
     "placeholders": {
@@ -6101,10 +6081,6 @@
   "boardEmpty": "這塊板還是空的。",
   "@boardEmpty": {
     "description": "空板"
-  },
-  "boardArchivedReadOnly": "封存 · 唯讀",
-  "@boardArchivedReadOnly": {
-    "description": "封存徽章"
   },
   "boardNoAttachedRoomTooltip": "這塊板沒有掛任何聊天室",
   "@boardNoAttachedRoomTooltip": {
@@ -6432,6 +6408,10 @@
   "@hostRunnerLoginTitle": {
     "description": "執行器分頁的登入狀態區塊"
   },
+  "hostRunnerLoginViaToken": "使用 token",
+  "@hostRunnerLoginViaToken": {
+    "description": "有設定長效 token 時，執行器登入列的狀態（取代已登入）"
+  },
   "hostRunnerLoginOk": "已登入",
   "@hostRunnerLoginOk": {
     "description": "執行器的設定目錄底下有憑證"
@@ -6677,7 +6657,7 @@
   "@helpBoardInbox2": {
     "description": "說明頁文案：未分類分頁"
   },
-  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。",
+  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。完成頁的頁籤標示「完成於 月/日」。",
   "@helpBoardInbox3": {
     "description": "說明頁文案：未分類分頁"
   },
@@ -6859,9 +6839,13 @@
       }
     }
   },
-  "hostRunnerMcpAuthExpired": "執行器登入已過期，請在上方重新登入。",
+  "hostRunnerMcpAuthExpired": "執行器的 Claude 登入已過期，重新登入後才讀得到連接器。",
   "@hostRunnerMcpAuthExpired": {
-    "description": "claude mcp list 說 OAuth 過期時，取代原文的說明"
+    "description": "沒有長效 token 且設定目錄登入失效時，取代 claude mcp list 原文的說明"
+  },
+  "hostRunnerMcpViaToken": "使用 token 時只能用全域 .claude.json 設定的 MCP，線上連接器與其他來源的 MCP 無法使用。",
+  "@hostRunnerMcpViaToken": {
+    "description": "有設定長效 token 時，MCP 清單區塊的提示"
   },
   "hostRunnerPanelWorkspaces": "工作區",
   "@hostRunnerPanelWorkspaces": {
@@ -7684,7 +7668,7 @@
   },
   "boardMenuDelete": "永久刪除…",
   "@boardMenuDelete": {
-    "description": "任務板選單：永久刪除（僅已封存的板）"
+    "description": "任務板選單：永久刪除（僅已收尾的板）"
   },
   "boardDeleteTitle": "永久刪除任務板？",
   "@boardDeleteTitle": {
@@ -7727,6 +7711,10 @@
   "boardSettingsDescriptionHint": "一句話說明這塊板在做什麼…",
   "@boardSettingsDescriptionHint": {
     "description": "任務板設定頁：描述欄位提示"
+  },
+  "boardSettingsSettledReadOnly": "已收尾，唯讀",
+  "@boardSettingsSettledReadOnly": {
+    "description": "任務板設定頁：已收尾的板整頁唯讀"
   },
   "boardSettingsOwnerOnly": "只有板 owner 能修改",
   "@boardSettingsOwnerOnly": {
@@ -7897,6 +7885,59 @@
   "settingsUpdateFailLaunch": "無法啟動更新",
   "@settingsUpdateFailLaunch": {
     "description": "更新失敗：更新腳本起不來"
+  },
+  "reconnectUpdateAppBody": "有新版本 {tag}，要更新並重新啟動嗎？",
+  "@reconnectUpdateAppBody": {
+    "description": "重連後發現 App 比 Hub 舊、且有較新的 Release：問要不要更新 App",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "reconnectUpdateHubBody": "本機 Hub 有新版本 {tag}，要更新嗎？",
+  "@reconnectUpdateHubBody": {
+    "description": "重連後發現本機 Hub 比 App 舊：問要不要更新本機 Hub",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "hubRunsBusy": "Hub 上有 {count} 個工作進行中，完成後再更新",
+  "@hubRunsBusy": {
+    "description": "更新本機 Hub 前發現有進行中的 run，擋下更新",
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "hubRunsUnconfirmed": "無法確認是否有進行中的工作",
+  "@hubRunsUnconfirmed": {
+    "description": "更新本機 Hub 的提示附註：查不出 Hub 上有沒有進行中的 run"
+  },
+  "reconnectUpdateAction": "更新",
+  "@reconnectUpdateAction": {
+    "description": "重連後更新提示的確認按鈕"
+  },
+  "reconnectUpdateAppDownloading": "正在下載 {tag}，完成後會自動重新啟動",
+  "@reconnectUpdateAppDownloading": {
+    "description": "選了更新之後的提示",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "reconnectUpdateHubRunning": "正在更新本機 Hub {tag}",
+  "@reconnectUpdateHubRunning": {
+    "description": "選了更新之後的提示",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
   },
   "helpCalloutTip": "提示",
   "@helpCalloutTip": {
@@ -8858,7 +8899,7 @@
   "@helpPersonalRow7B": {
     "description": "說明頁文案"
   },
-  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。",
+  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。斷線後重新連上時，若 App 或本機 Hub 有新版，會問你要不要更新；Hub 上還有進行中的工作就等它結束再問，測試版不會被提示，選「稍後」後這次執行期間不再問同一版。",
   "@helpVersionUpdate": {
     "description": "說明頁文案"
   },
@@ -8914,7 +8955,7 @@
   "@helpMachineTokenWarn": {
     "description": "說明頁文案"
   },
-  "helpRunnerLoginCallout": "登入：執行器分頁的登入列分得出已登入、已過期、未登入三種狀態。可以開新終端登入，也可以貼上長效 token（畫面只顯示已設定或未設定）。登入過期時，整台執行器都會停止領單，不只失敗的那一筆；恢復後會自動續領。",
+  "helpRunnerLoginCallout": "登入：執行器分頁的登入列分得出已登入、已過期、未登入三種狀態。可以開新終端登入，也可以貼上長效 token（畫面只顯示已設定或未設定）。登入過期時，整台執行器都會停止領單，不只失敗的那一筆；恢復後會自動續領。有設定長效 token 時登入列顯示「使用 token」，不再看登入狀態；此時允許派工的 MCP 只能用全域 .claude.json 設定的，線上連接器與其他來源的 MCP 無法使用。",
   "@helpRunnerLoginCallout": {
     "description": "說明頁文案"
   },
@@ -9089,14 +9130,6 @@
   "@hostReasonDeclineArchiveTitle": {
     "description": "主持人操作：婉拒封存請求的理由對話框標題"
   },
-  "hostReasonArchiveBoardTitle": "封存任務板",
-  "@hostReasonArchiveBoardTitle": {
-    "description": "主持人操作：封存任務板的理由對話框標題"
-  },
-  "hostReasonUnarchiveBoardTitle": "解除封存任務板",
-  "@hostReasonUnarchiveBoardTitle": {
-    "description": "主持人操作：解封任務板的理由對話框標題"
-  },
   "hostReasonRenameBoardTitle": "任務板改名",
   "@hostReasonRenameBoardTitle": {
     "description": "主持人操作：任務板改名的理由對話框標題"
@@ -9141,5 +9174,173 @@
   "hostReasonVerifyObjectiveTitle": "確認週期",
   "@hostReasonVerifyObjectiveTitle": {
     "description": "主持人操作：確認週期的理由對話框標題"
+  },
+  "boardDependencyBlockedBadge": "阻擋",
+  "@boardDependencyBlockedBadge": {
+    "description": "卡片：被依賴擋住的徽章（與「卡住」不同）"
+  },
+  "boardDependencyCausedBadge": "依賴造成",
+  "@boardDependencyCausedBadge": {
+    "description": "卡片：卡住是依賴造成的註記"
+  },
+  "boardDependencyWaiting": "等 {count} 項依賴完成",
+  "@boardDependencyWaiting": {
+    "description": "卡片：阻擋中，還剩幾項依賴",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardDependencyUnmetReason": "依賴還沒完成",
+  "@boardDependencyUnmetReason": {
+    "description": "依賴未滿足時按鈕的原因與 dependencies_unmet 的轉述"
+  },
+  "boardDependsOnLabel": "依賴",
+  "@boardDependsOnLabel": {
+    "description": "卡片編輯與抽屜：依賴欄"
+  },
+  "boardAffectsLabel": "影響",
+  "@boardAffectsLabel": {
+    "description": "卡片編輯與抽屜：影響欄"
+  },
+  "boardDependencyNone": "無",
+  "@boardDependencyNone": {
+    "description": "依賴／影響欄沒有項目"
+  },
+  "boardDependencyDone": "已完成",
+  "@boardDependencyDone": {
+    "description": "依賴項狀態：已完成"
+  },
+  "boardDependencyCancelled": "已取消",
+  "@boardDependencyCancelled": {
+    "description": "依賴項狀態：已取消（視為解除）"
+  },
+  "boardDependencyMovedTo": "搬走 → {title}",
+  "@boardDependencyMovedTo": {
+    "description": "依賴項狀態：搬走並跟隨到去向",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDependencyMovedBlank": "搬走，未寫去向",
+  "@boardDependencyMovedBlank": {
+    "description": "依賴項狀態：搬走但沒寫去向（視為未滿足）"
+  },
+  "boardDependencyUnmet": "未完成",
+  "@boardDependencyUnmet": {
+    "description": "依賴項狀態：未完成"
+  },
+  "boardDependencyPickTitle": "選擇卡片",
+  "@boardDependencyPickTitle": {
+    "description": "依賴／影響選擇器標題"
+  },
+  "boardDependencyPickSearch": "搜尋卡片",
+  "@boardDependencyPickSearch": {
+    "description": "依賴／影響選擇器搜尋欄"
+  },
+  "boardDependencyPickEmpty": "沒有可選的卡",
+  "@boardDependencyPickEmpty": {
+    "description": "依賴／影響選擇器：沒有候選"
+  },
+  "boardDependencyPickDone": "完成",
+  "@boardDependencyPickDone": {
+    "description": "依賴／影響選擇器：確定"
+  },
+  "boardErrorDependencyCycle": "會形成循環依賴",
+  "@boardErrorDependencyCycle": {
+    "description": "Hub 回 dependency_cycle 的轉述"
+  },
+  "boardErrorDependencySelf": "不能依賴自己",
+  "@boardErrorDependencySelf": {
+    "description": "Hub 回 dependency_self 的轉述"
+  },
+  "boardErrorDependencyOtherBoard": "只能依賴同一塊板的卡",
+  "@boardErrorDependencyOtherBoard": {
+    "description": "Hub 回 dependency_other_board 的轉述"
+  },
+  "boardErrorDependencyNotFound": "找不到那張卡",
+  "@boardErrorDependencyNotFound": {
+    "description": "Hub 回 dependency_not_found 的轉述"
+  },
+  "boardErrorDependencyNoBoard": "這張卡不在任何板上，不能設定依賴",
+  "@boardErrorDependencyNoBoard": {
+    "description": "Hub 回 dependency_no_board 的轉述"
+  },
+  "boardErrorNotCardEditor": "這張卡你沒有權限改",
+  "@boardErrorNotCardEditor": {
+    "description": "改影響時對方卡 not_board_editor 的轉述"
+  },
+  "boardDependencyAutoBlockedToast": "{count} 張卡因依賴自動卡住",
+  "@boardDependencyAutoBlockedToast": {
+    "description": "狀態變更後：自動卡住的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardDependencyAutoResumedToast": "{count} 張卡依賴已完成，自動恢復",
+  "@boardDependencyAutoResumedToast": {
+    "description": "狀態變更後：自動恢復的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "helpSecDepLabel": "依賴",
+  "@helpSecDepLabel": {
+    "description": "說明頁：任務依賴節導覽標籤"
+  },
+  "helpSecDepTitle": "任務依賴與影響",
+  "@helpSecDepTitle": {
+    "description": "說明頁：任務依賴節標題"
+  },
+  "helpSecDepIntro": "一張任務卡可以有「依賴」——需要哪些其他卡先完成才能開始；「影響」是反過來的對照，自動列出哪些卡依賴這張卡。",
+  "@helpSecDepIntro": {
+    "description": "說明頁：任務依賴節導語"
+  },
+  "helpDepSetLead": "設定",
+  "@helpDepSetLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepSet": "建立或編輯卡片時設定依賴；也可以直接填寫影響，那等於改寫對方卡的依賴（對方會自動多出或少掉「依賴本卡」）。",
+  "@helpDepSet": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepScopeLead": "範圍",
+  "@helpDepScopeLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepScope": "只能依賴同一塊板上的卡（可跨週期、階段），不能依賴自己；形成循環會被拒絕，改影響需要有權修改對方的卡。",
+  "@helpDepScope": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepBlockedLead": "阻擋不是卡住",
+  "@helpDepBlockedLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepBlocked": "依賴未滿足叫「阻擋」，和卡住不同：卡住是人手動標的「做不下去」；阻擋是依依賴算出來的，不改寫狀態。被阻擋的待辦卡不能認領、不能開始或完成，要等依賴完成。",
+  "@helpDepBlocked": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepStartedLead": "開始後才多出依賴",
+  "@helpDepStartedLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepStarted": "卡已經開始才多出未滿足的依賴時，會自動改成卡住，並標記這是依賴造成的；這種卡住不能手動推回進行中，所有依賴都滿足時自動恢復為進行中。人手動設的卡住不會被自動恢復。",
+  "@helpDepStarted": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepMetLead": "何時算滿足",
+  "@helpDepMetLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepMet": "依賴卡完成。已取消也視為解除（不再擋，但會標示「已取消」）。搬走的卡看它搬去的那張卡的狀態；沒寫去向視為未滿足。依賴卡被刪除時，這條依賴不再生效。",
+  "@helpDepMet": {
+    "description": "說明頁：任務依賴節"
   }
 }

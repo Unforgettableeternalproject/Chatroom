@@ -142,9 +142,13 @@ class EditRow extends StatelessWidget {
     this.onChanged,
     this.errorText,
     this.trailingSlots = 2,
+    this.showLabel = true,
   });
 
   final String label;
+
+  /// false 就不留標籤欄，輸入框靠左（錯誤句也跟著靠左）。
+  final bool showLabel;
 
   /// 滑過去才看得到的東西（例如這一格在 `.env` 裡叫什麼）。
   final String? tooltip;
@@ -191,7 +195,7 @@ class EditRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          _RowLabel(label: label, tooltip: tooltip),
+          if (showLabel) _RowLabel(label: label, tooltip: tooltip),
           Expanded(
             child: _ValueBox(
               child: child ??
@@ -219,8 +223,8 @@ class EditRow extends StatelessWidget {
         ]),
         if (errorText != null)
           Padding(
-            padding: const EdgeInsets.only(
-                left: kValueRowLabelWidth, top: 4, bottom: 2),
+            padding: EdgeInsets.only(
+                left: showLabel ? kValueRowLabelWidth : 0, top: 4, bottom: 2),
             child: Text(errorText!,
                 style: UepText.serif(size: 12.5, color: UepColors.error)),
           ),

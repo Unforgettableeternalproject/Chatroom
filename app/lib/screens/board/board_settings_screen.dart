@@ -25,7 +25,7 @@ const double _loadMoreThreshold = 120;
 /// 任務板設定頁：名稱、描述，以及這塊板的貢獻紀錄。
 ///
 /// 從任務板頁首最右側的設定鈕進來。權限比照房間設定：**只有板 owner 改得
-/// 動名稱與描述**，其他成員唯讀；封存的板整頁唯讀（Hub 對封存板的修改回
+/// 動名稱與描述**，其他成員唯讀；已收尾（有結局）的板整頁唯讀（Hub 對已收尾板的修改回
 /// 409 `board_archived`）。改名與描述是板本身的事，不受週期凍結影響。
 ///
 /// 版面、字級與區段標題沿用設定頁（`settings_screen.dart`）：頁寬
@@ -250,9 +250,9 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
   Widget _body(BuildContext context, BoardContributions data) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
-    final editable = data.isOwner && !data.isArchived && !_saving;
-    final note = data.isArchived
-        ? l10n.roomSettingsArchivedReadOnly
+    final editable = data.isOwner && !data.isSettled && !_saving;
+    final note = data.isSettled
+        ? l10n.boardSettingsSettledReadOnly
         : data.isOwner
             ? null
             : l10n.boardSettingsOwnerOnly;
@@ -300,7 +300,7 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
               Text(l10n.boardSettingsOwner(data.ownerName),
                   style: UepText.sans(size: 13.5, color: s.inkSoft)),
             ],
-            if (data.isOwner && !data.isArchived) ...[
+            if (data.isOwner && !data.isSettled) ...[
               const SizedBox(height: 20),
               _saveRow(data),
             ],
@@ -333,7 +333,7 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
   /// 儲存：設定頁的主要按鈕（非 small），旁邊是「未儲存」提示。
   Widget _saveRow(BoardContributions data) {
     final l10n = AppLocalizations.of(context);
-    final editable = data.isOwner && !data.isArchived && !_saving;
+    final editable = data.isOwner && !data.isSettled && !_saving;
     return Row(children: [
       UepButton(
         label: l10n.commonSave,

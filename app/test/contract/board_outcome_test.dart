@@ -63,18 +63,13 @@ void main() {
       expect(s.isSettled, isFalse);
     });
 
-    test('🔴 archived 與 outcome 是正交的兩個軸', () {
-      final archivedButUnsettled =
-          _summary({'status': 'archived', 'outcome': ''});
-      expect(archivedButUnsettled.isArchived, isTrue);
-      expect(archivedButUnsettled.isSettled, isFalse,
-          reason: '收起來了不等於做完了——把封存畫成完成，'
-              '會把「還沒做完就收起來」講成做完了');
+    test('🔴 已收尾只看結局，不看 status', () {
+      final open = _summary({'status': 'active', 'outcome': ''});
+      expect(open.isSettled, isFalse);
 
-      final doneButOpen = _summary({'status': 'active', 'outcome': 'completed'});
-      expect(doneButOpen.isArchived, isFalse);
-      expect(doneButOpen.isCompleted, isTrue,
-          reason: '做完了也可以還開著——結局不強迫收納');
+      final done = _summary({'status': 'active', 'outcome': 'completed'});
+      expect(done.isSettled, isTrue);
+      expect(done.isCompleted, isTrue);
     });
 
     test('🔴 completed 與 abandoned 分得出來，不是都叫「已收尾」', () {

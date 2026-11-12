@@ -657,6 +657,7 @@ class MachineMcpServers {
     this.globalError = '',
     this.complete = true,
     this.authExpired = false,
+    this.listedNothing = false,
   });
 
   /// 本機列到的伺服器；`null` ＝這次沒問到（不是「一台都沒有」）。
@@ -678,6 +679,11 @@ class MachineMcpServers {
   /// `claude mcp list` 說執行器的 OAuth 過期、refresh 不回來。這時 [error]
   /// 是 claude 的原文，畫面改講「執行器登入已過期」。
   final bool authExpired;
+
+  /// `claude mcp list` 跑成功了、只是一台都沒列到。用長效 token 時這是常態
+  /// （token 讀不到 claude.ai 連接器），畫面不把它當錯誤。叫不起來、逾時這種
+  /// 真的失敗不算。
+  final bool listedNothing;
 }
 
 /// 一台 MCP 伺服器是從哪裡來的。
@@ -759,6 +765,7 @@ Future<MachineMcpServers> listMachineMcpServers(RunnerConfigFile cfg) async {
     // 健康檢查逾時、沒登入、claude 版本對不上都長這樣
     return MachineMcpServers(
         authExpired: expired,
+        listedNothing: true,
         error: text.trim().isEmpty
             ? 'claude mcp list exit ${result.exitCode}'
             : text.trim().split('\n').last.trim());
@@ -776,7 +783,8 @@ MachineMcpServers mergeMcpServers(
     return MachineMcpServers(
         error: connectors.error,
         globalError: global.globalError,
-        authExpired: connectors.authExpired);
+        authExpired: connectors.authExpired,
+        listedNothing: connectors.listedNothing);
   }
   final origins = <String, McpServerOrigin>{};
   for (final name in connectors.names ?? const <String>[]) {
@@ -791,7 +799,8 @@ MachineMcpServers mergeMcpServers(
       error: connectors.error,
       globalError: global.globalError,
       complete: connectors.names != null && global.names != null,
-      authExpired: connectors.authExpired);
+      authExpired: connectors.authExpired,
+      listedNothing: connectors.listedNothing);
 }
 
 /// 這台機器現在看得到的 MCP 伺服器。重讀＝`ref.invalidate`。

@@ -4,6 +4,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
+import 'board_dependency_picker.dart';
 
 /// 一張卡改完之後的樣子：標題與敘述。
 ///
@@ -12,7 +13,7 @@ import '../../widgets/uep_button.dart';
 /// 個東西的話，只改標題的人會發現敘述不見了，而且沒有任何地方報錯。
 @immutable
 class TaskEdit {
-  const TaskEdit({this.title, this.description});
+  const TaskEdit({this.title, this.description, this.dependsOn, this.affects});
 
   /// 新標題；沒改回 null。
   final String? title;
@@ -20,7 +21,17 @@ class TaskEdit {
   /// 新敘述；沒改回 null。**空字串是「清空」，是使用者真的做了那件事。**
   final String? description;
 
-  bool get isEmpty => title == null && description == null;
+  /// 新的依賴（task id，整份覆寫）；沒改回 null，**空清單是「清空」**。
+  final List<String>? dependsOn;
+
+  /// 新的影響（task id，整份覆寫）；規則同 [dependsOn]。
+  final List<String>? affects;
+
+  bool get isEmpty =>
+      title == null &&
+      description == null &&
+      dependsOn == null &&
+      affects == null;
 }
 
 /// 改一張卡的標題與敘述（艾斯維爾 09/08）。
@@ -33,21 +44,28 @@ class TaskEdit {
 /// 身分來源不同，與 `showRenameDialog` 同一個理由）。
 ///
 /// 使用者取消、或什麼都沒改時回 null。
+///
+/// 給了 [dependencies] 才會多出「依賴」「影響」兩欄（只有卡片有；週期與階段
+/// 沒有這兩個欄位，所以不給）。
 Future<TaskEdit?> showTaskEditDialog(
   BuildContext context, {
   required String title,
   required String description,
+  DependencyEditSpec? dependencies,
 }) =>
     showDialog<TaskEdit>(
       context: context,
-      builder: (_) => _TaskEditDialog(title: title, description: description),
+      builder: (_) => _TaskEditDialog(
+          title: title, description: description, dependencies: dependencies),
     );
 
 class _TaskEditDialog extends StatefulWidget {
-  const _TaskEditDialog({required this.title, required this.description});
+  const _TaskEditDialog(
+      {required this.title, required this.description, this.dependencies});
 
   final String title;
   final String description;
+  final DependencyEditSpec? dependencies;
 
   @override
   State<_TaskEditDialog> createState() => _TaskEditDialogState();
@@ -56,6 +74,8 @@ class _TaskEditDialog extends StatefulWidget {
 class _TaskEditDialogState extends State<_TaskEditDialog> {
   late final _title = TextEditingController(text: widget.title);
   late final _desc = TextEditingController(text: widget.description);
+  late List<String> _dependsOn = [...?widget.dependencies?.dependsOn];
+  late List<String> _affects = [...?widget.dependencies?.affects];
   String? _error;
 
   @override
@@ -76,11 +96,18 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
       return;
     }
     final desc = _desc.text;
+    final dep = widget.dependencies;
     Navigator.of(context).pop(TaskEdit(
       title: title == widget.title.trim() ? null : title,
       // 敘述**不 trim 掉整段**：使用者故意留的換行是內容的一部分。
       // 但與原值相同就是沒改
       description: desc == widget.description ? null : desc,
+      // 與原值同一組就是沒改：不送，Hub 就不會多寫一次
+      dependsOn: dep != null && !sameIdSet(_dependsOn, dep.dependsOn)
+          ? _dependsOn
+          : null,
+      affects:
+          dep != null && !sameIdSet(_affects, dep.affects) ? _affects : null,
     ));
   }
 
@@ -94,7 +121,8 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
           style: UepText.sectionTitle(color: s.inkTitle)),
       content: SizedBox(
         width: 460,
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
           Align(
             alignment: Alignment.centerLeft,
             child: Text(l10n.boardTaskEditNoTrace,
@@ -128,6 +156,24 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
               hintStyle: UepText.sans(size: 13.5, color: s.inkMute),
             ),
           ),
+          if (widget.dependencies != null) ...[
+            const SizedBox(height: 14),
+            DependencyField(
+              label: l10n.boardDependsOnLabel,
+              selected: _dependsOn,
+              spec: widget.dependencies!,
+              excluded: _affects,
+              onChanged: (v) => setState(() => _dependsOn = v),
+            ),
+            const SizedBox(height: 12),
+            DependencyField(
+              label: l10n.boardAffectsLabel,
+              selected: _affects,
+              spec: widget.dependencies!,
+              excluded: _dependsOn,
+              onChanged: (v) => setState(() => _affects = v),
+            ),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 10),
             Align(
@@ -137,6 +183,7 @@ class _TaskEditDialogState extends State<_TaskEditDialog> {
             ),
           ],
         ]),
+        ),
       ),
       actions: [
         UepButton(

@@ -96,11 +96,17 @@ class _RunnerLoginRowState extends ConsumerState<RunnerLoginRow> {
     // 人照著那行指令去登也登不到執行器會讀的地方
     if (login == null) return const SizedBox.shrink();
 
-    final status = login.loggedIn
-        ? l10n.hostRunnerLoginOk
-        : login.expired
-            ? l10n.hostRunnerLoginExpired
-            : l10n.hostRunnerLoginMissing;
+    // 有長效 token 時執行器用 token 接單，設定目錄的登入狀態不相干：
+    // 顯示「使用 token」，不提示重新登入。token 被移除後才看設定目錄
+    final viaToken = login.tokenSet;
+    final needLogin = !viaToken && !login.loggedIn;
+    final status = viaToken
+        ? l10n.hostRunnerLoginViaToken
+        : login.loggedIn
+            ? l10n.hostRunnerLoginOk
+            : login.expired
+                ? l10n.hostRunnerLoginExpired
+                : l10n.hostRunnerLoginMissing;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -109,14 +115,14 @@ class _RunnerLoginRowState extends ConsumerState<RunnerLoginRow> {
             style: UepText.fieldLabel(color: s.inkMute)),
         const SizedBox(height: 10),
         Row(children: [
-          Icon(login.loggedIn ? Icons.check : Icons.close,
+          Icon(needLogin ? Icons.close : Icons.check,
               size: 15,
-              color: login.loggedIn ? UepColors.success : UepColors.error),
+              color: needLogin ? UepColors.error : UepColors.success),
           const SizedBox(width: 8),
           Expanded(
             child: Text(status, style: UepText.serif(size: 13.5, color: s.ink)),
           ),
-          if (!login.loggedIn) ...[
+          if (needLogin) ...[
             UepButton(
               label: l10n.hostRunnerLoginAction,
               small: true,
@@ -132,7 +138,7 @@ class _RunnerLoginRowState extends ConsumerState<RunnerLoginRow> {
             icon: Icon(Icons.refresh, size: 18, color: s.inkMute),
           ),
         ]),
-        if (!login.loggedIn) ...[
+        if (needLogin) ...[
           const SizedBox(height: 8),
           Text(l10n.hostRunnerLoginHint,
               style: UepText.serif(size: 13, color: s.inkSoft)),
@@ -180,8 +186,9 @@ class _RunnerLoginRowState extends ConsumerState<RunnerLoginRow> {
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
             child: EditRow(
-              // 標題列已經寫了是什麼；這裡只留對齊用的標籤欄
+              // 標題列已經寫了是什麼；不留標籤欄，輸入框與上方說明左緣對齊
               label: '',
+              showLabel: false,
               controller: _token,
               fieldKey: const ValueKey('runner-oauth-token'),
               hint: l10n.hostRunnerTokenHint,

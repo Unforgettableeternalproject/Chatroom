@@ -4,6 +4,7 @@ import 'package:chatroom_app/l10n/l10n.dart';
 import 'package:chatroom_app/screens/help/help_screen.dart';
 import 'package:chatroom_app/widgets/help_blocks.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +16,13 @@ import '../helpers/l10n.dart';
 /// 第一屏，後面的卡片與表格從沒被排版過。
 
 Widget _app(HelpTopic topic, FontScalePref pref, Locale locale) =>
+    ProviderScope(
+      // 版面測試要把主持人模式那節也排進去
+      overrides: [helpShowHostModeProvider.overrideWithValue(true)],
+      child: _appBody(topic, pref, locale),
+    );
+
+Widget _appBody(HelpTopic topic, FontScalePref pref, Locale locale) =>
     MaterialApp.router(
       // 返回鈕靠 GoRouter 判斷能不能 pop，所以要掛在 router 底下
       routerConfig: GoRouter(routes: [

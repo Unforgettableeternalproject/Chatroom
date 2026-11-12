@@ -38,7 +38,7 @@ class AppUpdateRow extends ConsumerWidget {
       AppUpdatePhase.downloading => l10n
           .settingsUpdateDownloading('${(state.progress * 100).round()}'),
       AppUpdatePhase.ready => l10n.settingsUpdateReady(state.tag),
-      AppUpdatePhase.failed => _failureText(l10n, state.failure),
+      AppUpdatePhase.failed => appUpdateFailureText(l10n, state.failure),
       _ => '',
     };
     final failed = state.phase == AppUpdatePhase.failed ||
@@ -74,16 +74,17 @@ class AppUpdateRow extends ConsumerWidget {
       ]),
     );
   }
-
-  String _failureText(AppLocalizations l10n, AppUpdateFailure? failure) =>
-      switch (failure) {
-        AppUpdateFailure.notWritable => l10n.settingsUpdateFailNotWritable,
-        AppUpdateFailure.sizeMismatch ||
-        AppUpdateFailure.digestMismatch ||
-        AppUpdateFailure.incomplete =>
-          l10n.settingsUpdateFailVerify,
-        AppUpdateFailure.extract => l10n.settingsUpdateFailExtract,
-        AppUpdateFailure.launch => l10n.settingsUpdateFailLaunch,
-        AppUpdateFailure.download || null => l10n.settingsUpdateFailDownload,
-      };
 }
+
+/// 更新失敗時講「這一種」失敗。設定頁與重連後的更新提示共用。
+String appUpdateFailureText(AppLocalizations l10n, AppUpdateFailure? failure) =>
+    switch (failure) {
+      AppUpdateFailure.notWritable => l10n.settingsUpdateFailNotWritable,
+      AppUpdateFailure.sizeMismatch ||
+      AppUpdateFailure.digestMismatch ||
+      AppUpdateFailure.incomplete =>
+        l10n.settingsUpdateFailVerify,
+      AppUpdateFailure.extract => l10n.settingsUpdateFailExtract,
+      AppUpdateFailure.launch => l10n.settingsUpdateFailLaunch,
+      AppUpdateFailure.download || null => l10n.settingsUpdateFailDownload,
+    };

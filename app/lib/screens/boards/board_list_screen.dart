@@ -41,49 +41,8 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
     await ref.read(boardLibraryProvider(_status).future);
   }
 
-  /// 封存／解除封存一塊板。
-  ///
-  /// ⚠️ **封存不是結局**（`947deba7` 與 N-2 的分界）：這裡只改「還能不能
-  /// 改」，`outcome` 那一軸完全不動。一塊板可以是「封存了但沒做完」，也可以
-  /// 是「做完了還開著」——把兩者綁在一起會把前者講成後者。
-  ///
-  /// 送出後三頁都要重拉：封存的板會從「進行中」移到「已封存」，而
-  /// **「已收尾」那頁與這兩頁是正交的**（收尾的板可能在任一邊）。
-  Future<void> _toggleArchive(BoardSummary board) async {
-    final api = ref.read(boardsApiProvider);
-    final key = ref.read(appConfigProvider).deviceKey;
-    final l10n = AppLocalizations.of(context);
-    final reason = await askHostReason(context,
-        title: board.isArchived
-            ? l10n.hostReasonUnarchiveBoardTitle
-            : l10n.hostReasonArchiveBoardTitle);
-    if (reason == null || !mounted) return;
-    try {
-      await runWithHostReason(reason, () async {
-        if (board.isArchived) {
-          await api.unarchive(board.id, sessionKey: key);
-        } else {
-          await api.archive(board.id, sessionKey: key);
-        }
-      });
-      for (final v in ['active', 'archived', 'settled']) {
-        ref.invalidate(boardLibraryProvider(v));
-      }
-      ref.invalidate(boardByIdProvider(board.id));
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-        // 403 在這裡幾乎不會發生（只對 owner 畫那顆選單），但真的發生時
-        // 要說得出為什麼，而不是一句「操作失敗」
-        e.code == 'board_owner_required' || e.code == 'forbidden'
-            ? AppLocalizations.of(context).boardArchiveOwnerOnly
-            : e.message,
-      )));
-    }
-  }
-
-  /// 永久刪除一塊板。**只有已封存的板**（Hub 對未封存的回 409
-  /// `board_not_archived`），限 owner，不可復原。
+  /// 永久刪除一塊板。**只有已收尾的板**（Hub 對未收尾的回 409
+  /// `board_not_settled`），限 owner，不可復原。
   Future<void> _delete(BoardSummary board) async {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
@@ -128,7 +87,7 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
         () => ref.read(boardsApiProvider).delete(board.id,
             sessionKey: ref.read(appConfigProvider).deviceKey),
       );
-      for (final v in ['active', 'archived', 'settled']) {
+      for (final v in ['active', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
       }
       if (!mounted) return;
@@ -167,8 +126,8 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
               name: name,
             ),
       );
-      // 三頁都重拉：改過名的板可能出現在任何一頁，而清單上的名字是快照
-      for (final v in ['active', 'archived', 'settled']) {
+      // 兩頁都重拉：改過名的板可能出現在任何一頁，而清單上的名字是快照
+      for (final v in ['active', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
       }
       ref.invalidate(boardByIdProvider(board.id));
@@ -308,7 +267,6 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                     EmptyState(
                       title: switch (_status) {
                         'active' => l10n.boardLibraryEmptyActive,
-                        'archived' => l10n.boardLibraryEmptyArchived,
                         _ => l10n.boardLibraryEmptySettled,
                       },
                       // 舊文案寫「在聊天室裡建立一塊板」——那在有了上面
@@ -328,17 +286,14 @@ class _BoardListPaneState extends ConsumerState<BoardListPane> {
                         .read(pinnedIdsProvider(PinKind.board).notifier)
                         .toggle(boards[i].id),
                     onTap: () => context.go('/boards/${boards[i].id}'),
-                    // 只有 owner 給得到這顆——Hub 那邊 `_board_owner_or_403`
+                    // 只有 owner 給得到——Hub 那邊 `_board_owner_or_403`
                     // 擋著，畫一顆必然拿 403 的按鈕比不畫更難懂
-                    onToggleArchive: boards[i].myRole == 'owner'
-                        ? () => _toggleArchive(boards[i])
-                        : null,
                     onRename: boards[i].myRole == 'owner'
                         ? () => _rename(boards[i])
                         : null,
-                    // 刪除只給已封存的板（Hub `board_not_archived`）
+                    // 刪除只給已收尾的板（Hub `board_not_settled`）
                     onDelete: boards[i].myRole == 'owner' &&
-                            boards[i].isArchived
+                            boards[i].isSettled
                         ? () => _delete(boards[i])
                         : null,
                   ),
@@ -430,9 +385,7 @@ class _BoardStatusToggle extends StatelessWidget {
         ),
         child: Row(children: [
           segment('active', AppLocalizations.of(context).commonActive),
-          segment('archived', AppLocalizations.of(context).commonArchived),
-          // 第三個軸。**不是 status**－—收尾與封存正交，做完的板可能
-          // 還開著也可能已封存，所以這一頁不能綁在某一個 status 上
+          // 已收尾＝有結局（完成或廢止）。板沒有封存狀態
           segment('settled', AppLocalizations.of(context).boardStatusSettled),
         ]),
       ),
@@ -443,24 +396,21 @@ class _BoardStatusToggle extends StatelessWidget {
 /// 板卡上的操作選單。**刻意與 ROOMS 那顆長得一樣**（`_RoomMenu`）——
 /// 兩個清單做同一件事，外觀不一致只會讓人以為它們是不同的東西。
 ///
-/// 目前是封存／解除封存與改名。刪除沒有放進來：板的刪除語意（連同卡、
-/// 想法板、掛接關係）比房重得多，**在清單上一按就沒**不是這件事該有的份量。
+/// 關注、改名與永久刪除。刪除只給已收尾的板，且要二次確認：板的刪除語意
+/// （連同卡、想法板、掛接關係）比房重得多，**在清單上一按就沒**不是這件事
+/// 該有的份量。
 class _BoardMenu extends StatelessWidget {
   const _BoardMenu({
-    required this.archived,
     required this.pinned,
     required this.onTogglePin,
-    this.onToggleArchive,
     this.onRename,
     this.onDelete,
   });
 
-  final bool archived;
   final bool pinned;
   final VoidCallback onTogglePin;
 
-  /// 封存與改名只有 owner 給得到（null ＝不畫）；關注是純本機偏好，人人都有。
-  final VoidCallback? onToggleArchive;
+  /// 改名與刪除只有 owner 給得到（null ＝不畫）；關注是純本機偏好，人人都有。
   final VoidCallback? onRename;
   final VoidCallback? onDelete;
 
@@ -484,7 +434,7 @@ class _BoardMenu extends StatelessWidget {
         'pin' => onTogglePin(),
         'rename' => onRename?.call(),
         'delete' => onDelete?.call(),
-        _ => onToggleArchive?.call(),
+        _ => null,
       },
       itemBuilder: (context) => [
         PopupMenuItem(
@@ -501,17 +451,6 @@ class _BoardMenu extends StatelessWidget {
           value: 'rename',
           height: 36,
           child: Text(AppLocalizations.of(context).boardMenuRename,
-              style: UepText.sans(size: 13.5, color: s.ink)),
-        ),
-        if (onToggleArchive != null)
-        PopupMenuItem(
-          value: 'archive',
-          height: 36,
-          // 同一個項目切換文字，不是兩個項目——與 ROOMS 一致，也避免
-          // 「封存」與「解除封存」同時出現時要人自己判斷現在是哪個狀態
-          child: Text(archived
-              ? AppLocalizations.of(context).boardMenuUnarchive
-              : AppLocalizations.of(context).boardMenuArchive,
               style: UepText.sans(size: 13.5, color: s.ink)),
         ),
         if (onDelete != null)
@@ -533,7 +472,6 @@ class _BoardTile extends StatelessWidget {
     required this.onTap,
     required this.pinned,
     required this.onTogglePin,
-    this.onToggleArchive,
     this.onRename,
     this.onDelete,
   });
@@ -546,17 +484,10 @@ class _BoardTile extends StatelessWidget {
   final bool pinned;
   final VoidCallback onTogglePin;
 
-  /// 封存／解除封存。`null` = 不是 owner，不畫那顆選單。
-  ///
-  /// **入口在清單上而不是板頁裡**（艾斯維爾 2026-09-06，推翻 #260 的膠囊
-  /// 提案）：與 ROOMS 的封存入口對齊。封存的操作場景本來就在清單——沒有人
-  /// 會為了封存一塊板而先點進去，而封存過的板更是如此。
-  final VoidCallback? onToggleArchive;
-
-  /// 改名。與封存同一個判準（owner），所以兩者一起有、一起沒有。
+  /// 改名。`null` = 不是 owner，不畫。
   final VoidCallback? onRename;
 
-  /// 永久刪除。owner 且板已封存才有。
+  /// 永久刪除。owner 且板已收尾才有。
   final VoidCallback? onDelete;
 
   @override
@@ -583,7 +514,7 @@ class _BoardTile extends StatelessWidget {
               if (pinned) ...[
                 Icon(Icons.push_pin,
                     size: 12,
-                    color: board.isArchived ? s.inkMute : UepColors.gold),
+                    color: board.isSettled ? s.inkMute : UepColors.gold),
                 const SizedBox(width: 5),
               ],
               Expanded(
@@ -595,8 +526,8 @@ class _BoardTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: UepText.serif(
                     size: 14.5,
-                    // 封存的板去飽和，與封存的房同一套語彙
-                    color: board.isArchived ? s.inkMute : s.ink),
+                    // 已收尾的板去飽和，與封存的房同一套語彙
+                    color: board.isSettled ? s.inkMute : s.ink),
                 ),
               ),
               // 私人板要看得出來。**這是「別人看不看得到」的唯一線索**——
@@ -607,16 +538,7 @@ class _BoardTile extends StatelessWidget {
                 MonoLabel(AppLocalizations.of(context).boardVisibilityPrivate,
                     size: 8.5, letterSpacing: 1.0),
               ],
-              if (board.isArchived) ...[
-                const SizedBox(width: 6),
-                MonoLabel(AppLocalizations.of(context).boardBadgeArchived,
-                    size: 8.5, letterSpacing: 1.0),
-              ],
-              // 🔴 **結局是另一個軸，與「封存」並排而不是取代它。**
-              //
-              // 封存說的是「還能不能改」（可逆的收納），這裡說的是「這件事
-              // 後來怎麼了」。合成一個徽章的話，**收起來但沒做完**會被畫成
-              // 做完了——那是這兩個軸交叉出來最不該弄錯的一格。
+              // 結局：「這件事後來怎麼了」。板沒有封存狀態，只有結局。
               //
               // 完成與廢止也分開講：都畫成「已收尾」的話，清單就回答不了
               // 「後來怎麼了」，而那正是人回頭翻它的唯一理由
@@ -631,15 +553,13 @@ class _BoardTile extends StatelessWidget {
                   color: board.isCompleted ? UepColors.gold : s.inkMute,
                 ),
               ],
-              // 封存入口。**與 ROOMS 那顆對齊**（同樣的 more_horiz、同樣的
+              // 選單。**與 ROOMS 那顆對齊**（同樣的 more_horiz、同樣的
               // 尺寸與選單樣式）——兩個清單做同一件事，長得不一樣只會讓人
               // 以為它們是不同的東西
               const SizedBox(width: 4),
               _BoardMenu(
-                archived: board.isArchived,
                 pinned: pinned,
                 onTogglePin: onTogglePin,
-                onToggleArchive: onToggleArchive,
                 onRename: onRename,
                 onDelete: onDelete,
               ),

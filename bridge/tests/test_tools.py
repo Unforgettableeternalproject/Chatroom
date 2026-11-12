@@ -273,6 +273,52 @@ def test_explicit_after_seq_can_reread_without_rewinding_cursor(fake_hub):
     assert srv.state().last_seq(ROOM) == 3  # 重讀歷史不把游標倒退
 
 
+def test_first_read_without_cursor_is_tail_of_20(fake_hub):
+    """新進者第一次讀只拿最新 20 則；之後有游標就回到增量讀（limit 100）。"""
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"messages": [{"seq": 30}]})
+
+    fake_hub.on("GET", f"/api/rooms/{ROOM}/messages", handler)
+    srv.chatroom_read(ROOM)
+    srv.chatroom_read(ROOM)
+    assert seen[0]["tail"] == "true" and seen[0]["limit"] == "20"
+    assert seen[0]["after_seq"] == "0"
+    assert "tail" not in seen[1] and seen[1]["limit"] == "100"
+    assert seen[1]["after_seq"] == "30"
+    # 明確 after_seq=0 仍是舊的正向重讀
+    srv.chatroom_read(ROOM, after_seq=0)
+    assert "tail" not in seen[2] and seen[2]["limit"] == "100"
+
+
+def test_filters_are_passed_and_do_not_advance_cursor(fake_hub):
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"messages": [{"seq": 40}]})
+
+    fake_hub.on("GET", f"/api/rooms/{ROOM}/messages", handler)
+    srv.state().set_last_seq(ROOM, 9)
+    result = srv.chatroom_read(
+        ROOM, since="2026-01-01T00:00:00Z", until="2026-02-01T00:00:00Z",
+        sender="Novia", sender_kind="agent", has_card_refs=True)
+    p = seen[0]
+    assert p["since"] == "2026-01-01T00:00:00Z" and p["until"] == "2026-02-01T00:00:00Z"
+    assert p["sender"] == "Novia" and p["sender_kind"] == "agent"
+    assert p["has_card_refs"] == "true" and p["tail"] == "true"
+    assert p["after_seq"] == "0" and p["limit"] == "20"
+    assert srv.state().last_seq(ROOM) == 9  # 篩選讀取不推進游標
+    assert result["next_after_seq"] == 0
+
+    # 篩選與明確 after_seq 組合：正向翻頁，不用 tail
+    srv.chatroom_read(ROOM, after_seq=5, sender="Novia")
+    assert seen[1]["after_seq"] == "5" and "tail" not in seen[1]
+    assert srv.state().last_seq(ROOM) == 9
+
+
 def test_pinned_only_does_not_advance_cursor(fake_hub):
     fake_hub.json(
         "GET", f"/api/rooms/{ROOM}/messages", {"messages": [{"seq": 9, "pinned": True}]}

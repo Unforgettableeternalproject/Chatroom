@@ -33,6 +33,14 @@ async def _client(tmp_path, name):
                             headers={"Authorization": f"Bearer {ROOT}"})
 
 
+async def _settle_directly(app, bid, outcome="completed"):
+    """直接寫結局。板沒有封存了，「唯讀」由結局承接；這裡要的是一塊已收尾的板，
+    不是宣告結局的前置條件（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
+
+
 async def _room(client, name="房", who="claude-a", visibility="public"):
     return (await client.post("/api/rooms", json={
         "name": name, "session_key": who,
@@ -710,8 +718,7 @@ async def test_host_view_still_honours_the_status_filter(tmp_path):
             mine = {"X-Session-Key": "claude-owner"}
             live = await _board(client, mine, "還在跑的板", "private")
             done = await _board(client, mine, "已封存的板", "private")
-            r = await client.post(f"/api/boards/{done}/archive", headers=mine)
-            assert r.status_code == 200, r.text
+            await _settle_directly(app, done)
 
             host = {"X-Session-Key": "claude-stranger", "X-Host-View": "1"}
             got = (await client.get("/api/boards?status=active",

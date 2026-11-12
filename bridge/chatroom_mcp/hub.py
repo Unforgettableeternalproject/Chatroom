@@ -268,8 +268,8 @@ def translate_status(status: int, detail: Any, hub_url: str) -> HubError:
             # 落進 fallback 會叫他重新 join——而重新加入不會讓他變成建立者
             return HubError(
                 _detail_text(detail)
-                or "改標題與敘述只有這塊板的 owner、房間的 supervisor "
-                "或建立者做得到。請他們代為修改。",
+                or "改標題與敘述只有這塊板的 owner、房間的 supervisor、"
+                "建立者或這張卡目前的認領者做得到。請他們代為修改。",
                 status=status, detail=detail,
             )
         if code == "not_board_member":
