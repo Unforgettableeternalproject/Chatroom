@@ -7878,6 +7878,46 @@
   "@settingsUpdateFailLaunch": {
     "description": "更新失敗：更新腳本起不來"
   },
+  "reconnectUpdateAppBody": "有新版本 {tag}，要更新並重新啟動嗎？",
+  "@reconnectUpdateAppBody": {
+    "description": "重連後發現 App 比 Hub 舊、且有較新的 Release：問要不要更新 App",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "reconnectUpdateHubBody": "本機 Hub 有新版本 {tag}，要更新嗎？",
+  "@reconnectUpdateHubBody": {
+    "description": "重連後發現本機 Hub 比 App 舊：問要不要更新本機 Hub",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "reconnectUpdateAction": "更新",
+  "@reconnectUpdateAction": {
+    "description": "重連後更新提示的確認按鈕"
+  },
+  "reconnectUpdateAppDownloading": "正在下載 {tag}，完成後會自動重新啟動",
+  "@reconnectUpdateAppDownloading": {
+    "description": "選了更新之後的提示",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
+  "reconnectUpdateHubRunning": "正在更新本機 Hub {tag}",
+  "@reconnectUpdateHubRunning": {
+    "description": "選了更新之後的提示",
+    "placeholders": {
+      "tag": {
+        "type": "String"
+      }
+    }
+  },
   "helpCalloutTip": "提示",
   "@helpCalloutTip": {
     "description": "說明頁文案"

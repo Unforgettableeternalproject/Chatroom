@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/config/build_info.dart';
 import 'app_updater.dart';
+import 'host_actions.dart';
 import 'host_kit_providers.dart';
 import 'mcp_kit_providers.dart';
 import 'runner_kit_providers.dart';
@@ -704,6 +705,34 @@ class KitInstalls extends Notifier<Map<KitId, KitInstallState>> {
         ),
       );
     }
+  }
+
+  /// Hub 的安裝／更新。
+  ///
+  /// Hub 的更新要**先停再裝**：覆蓋一個正在跑的 Hub 的檔案，壞的是所有
+  /// 連著它的人。停完才裝，裝成功才起回來——失敗時那一包可能是半份的，
+  /// 起它只會多一個壞掉的進程。
+  ///
+  /// 🔴 一律 `--no-tunnel`：預設會去抓 40MB 的 cloudflared，而那是「要不要
+  /// 讓內網外連進來」這個**另一個決定**的工具。
+  Future<void> installHub({
+    required KitRelease release,
+    required String targetDir,
+    required bool restart,
+  }) async {
+    if (of(KitId.hub).busy) return;
+    final actions = restart ? ref.read(hostActionsProvider) : null;
+    if (actions != null) await actions.stopHub();
+
+    await install(KitId.hub,
+        release: release,
+        targetDir: targetDir,
+        extraArgs: const ['--no-tunnel']);
+
+    if (!restart) return;
+    if (of(KitId.hub).phase != KitInstallPhase.done) return;
+    final after = ref.read(hostActionsProvider);
+    if (after != null) await after.service('start');
   }
 
   void _refresh(KitId kit) {

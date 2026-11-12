@@ -14,8 +14,10 @@ import '../../l10n/l10n.dart';
 import '../../state/app_providers.dart';
 import '../../state/notification_inbox_providers.dart';
 import '../../state/notification_providers.dart';
+import '../../state/reconnect_update.dart';
 import '../../state/rooms_providers.dart';
 import '../../widgets/pane_divider.dart';
+import '../../widgets/reconnect_update_dialog.dart';
 import '../../widgets/uep_button.dart';
 import '../../widgets/version_banner.dart';
 import '../../state/host_kit_providers.dart';
@@ -239,6 +241,14 @@ class _AppShellState extends ConsumerState<AppShell>
   Widget build(BuildContext context) {
     // 啟動通知管線（跟隨已加入房間 → OS 通知 / 未讀刷新）
     ref.watch(notificationBootstrapProvider);
+    // 斷線重連後若 App／本機 Hub 有可更新的版本就問一次（問題在 state 裡，
+    // 這裡負責彈 Dialog）
+    ref.listen(reconnectUpdateProvider, (previous, next) {
+      if (next != null && previous == null) {
+        unawaited(askReconnectUpdate(context, ref, next));
+      }
+    });
+    ref.watch(reconnectUpdateProvider);
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
     final wide = MediaQuery.sizeOf(context).width >= 900;

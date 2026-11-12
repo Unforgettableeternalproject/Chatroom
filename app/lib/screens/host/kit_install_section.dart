@@ -259,14 +259,18 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
     setState(() => _problem = problem);
     if (problem != null) return;
 
+    // Hub 的「先停再裝再起」在 KitInstalls 裡，重連後的更新提示走同一條
+    if (kit == KitId.hub) {
+      await ref.read(kitInstallsProvider.notifier).installHub(
+          release: release, targetDir: target, restart: installed);
+      return;
+    }
+
     final config = ref.read(appConfigProvider);
     final extra = <String>[];
     switch (kit) {
       case KitId.hub:
-        // 🔴 一律 `--no-tunnel`：預設會去抓 40MB 的 cloudflared，而那是
-        // 「要不要讓內網外連進來」這個**另一個決定**的工具。裝 Hub 的人
-        // 沒有按過那個決定，不該在他按「安裝」時替他下載。
-        extra.add('--no-tunnel');
+        break;
       case KitId.mcp:
         if (config.serverUrl.isNotEmpty) extra.addAll(['--url', config.serverUrl]);
         if (config.token.isNotEmpty) extra.addAll(['--token', config.token]);
@@ -277,22 +281,9 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
         if (config.token.isNotEmpty) extra.addAll(['--token', config.token]);
     }
 
-    final restartHub = kit == KitId.hub && installed;
-    final actions = restartHub ? ref.read(hostActionsProvider) : null;
-    if (actions != null) await actions.stopHub();
-
     await ref
         .read(kitInstallsProvider.notifier)
         .install(kit, release: release, targetDir: target, extraArgs: extra);
-
-    if (!restartHub) return;
-    final done = (ref.read(kitInstallsProvider)[kit] ?? const KitInstallState())
-            .phase ==
-        KitInstallPhase.done;
-    if (!done) return;
-    // 安裝成功才起回來：失敗時那一包可能是半份的，起它只會多一個壞掉的進程
-    final after = ref.read(hostActionsProvider);
-    if (after != null) await after.service('start');
   }
 
   Widget _statusLine(BuildContext context, KitInstallState state) {
