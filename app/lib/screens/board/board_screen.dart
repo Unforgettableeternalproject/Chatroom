@@ -27,6 +27,7 @@ import 'board_objective_description.dart';
 import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
+import 'board_dependency_picker.dart';
 import 'board_move_dialog.dart';
 import 'board_split_inbox_dialog.dart';
 import 'board_task_drawer.dart';
@@ -185,8 +186,14 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 Text(AppLocalizations.of(context).boardTaskReclaimedToast)));
       }
     } catch (e) {
-      // 領不到是正常結果，不是錯誤畫面：把「誰贏了」畫回卡片上
       if (!mounted) return;
+      // 依賴還沒完成不是「被別人搶先」：講原因，不要畫成有人贏了
+      if (e is ApiException && e.code == 'dependencies_unmet') {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(boardActionMessage(context, e))));
+        return;
+      }
+      // 領不到是正常結果，不是錯誤畫面：把「誰贏了」畫回卡片上
       setState(() => _conflicts[taskId] = _holderFrom(e));
     }
   }
@@ -198,8 +205,17 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 開一張新卡。三層共用同一個對話框，差別只在它會長在哪。
   Future<void> _create(String kind,
       {String? parentId, String? parentTitle}) async {
-    final result = await showBoardCreateDialog(
-        context, kind: kind, parentTitle: parentTitle);
+    // 只有卡片有依賴／影響；板還沒載到就沒有候選，不出這兩欄
+    final snap = kind != 'task'
+        ? null
+        : (widget.roomId != null
+            ? ref.read(boardProvider(widget.roomId!)).value
+            : ref.read(boardByIdProvider(widget.boardId!)).value);
+    final result = await showBoardCreateDialog(context,
+        kind: kind,
+        parentTitle: parentTitle,
+        dependencies:
+            snap == null ? null : DependencyEditSpec.fromSnapshot(snap));
     if (result == null) return;
     await _submitCreate(kind, parentId, result);
   }
@@ -221,7 +237,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               description: result.description);
         case 'task':
           await actions.addTask(parentId!, result.title,
-              description: result.description, priority: result.priority);
+              description: result.description,
+              priority: result.priority,
+              dependsOn: result.dependsOn,
+              affects: result.affects,
+              onDependencyChanges: (changes) {
+                if (mounted) showDependencyChangesToast(context, changes);
+              });
       }
     } on ConflictException catch (e) {
       if (!mounted) return;
@@ -728,6 +750,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             checklistTitle: snap.checklists[task.checklistId]?.title ?? '',
             assigneeName: _assigneeName(task),
             readOnly: _readOnly || frozen,
+            // 點依賴／影響裡的卡：切換抽屜，並把背景帶到那張卡所屬的週期
+            onOpenTask: (id) => setState(() {
+              _openTaskId = id;
+              final o = objectiveOfTask(snap, id);
+              if (o != null) _selectedObjectiveId = o.id;
+            }),
             // 唯讀的兩個來源要講不同的話：封存是「這塊板結束了」，凍結是
             // 「這個週期收尾了，打回就能再改」——後者有下一步
             readOnlyReason:

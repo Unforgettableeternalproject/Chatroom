@@ -440,6 +440,169 @@ enum ClaimAxis {
   completed,
 }
 
+/// 一張卡依賴的另一張卡（`depends_on[]` 的一項）。
+///
+/// ⚠️ [status] 是 Hub 讀取當下的**快照**；顯示時以 App 手上那張卡的最新資料為準
+/// （[BoardSnapshot.tasks]），查不到才用這份。
+@immutable
+class TaskDependency {
+  const TaskDependency({
+    required this.id,
+    this.title = '',
+    this.status = 'todo',
+    this.movedTo = '',
+    this.met = false,
+    this.cancelled = false,
+    this.via = '',
+  });
+
+  final String id;
+  final String title;
+  final String status;
+
+  /// 這張依賴卡搬去哪（空字串＝沒搬走或沒寫去向）。
+  final String movedTo;
+
+  /// 這條依賴滿足了嗎。判準在 Hub（完成、取消、搬走後看去向）。
+  final bool met;
+
+  /// 依賴卡已取消：視為解除，但要標示。
+  final bool cancelled;
+
+  /// 搬走後跟隨到的最終卡 id；沒跟隨為空字串。
+  final String via;
+
+  factory TaskDependency.fromJson(Map<String, dynamic> json) => TaskDependency(
+        id: json['id'] as String,
+        title: (json['title'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'todo',
+        movedTo: (json['moved_to'] as String?) ?? '',
+        met: (json['met'] as bool?) ?? false,
+        cancelled: (json['cancelled'] as bool?) ?? false,
+        via: (json['via'] as String?) ?? '',
+      );
+}
+
+/// 一張卡影響的另一張卡（`affects[]` 的一項：依賴這張卡的卡）。
+@immutable
+class TaskAffect {
+  const TaskAffect({required this.id, this.title = '', this.status = 'todo'});
+
+  final String id;
+  final String title;
+  final String status;
+
+  factory TaskAffect.fromJson(Map<String, dynamic> json) => TaskAffect(
+        id: json['id'] as String,
+        title: (json['title'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'todo',
+      );
+}
+
+/// 一次寫入造成的依賴連動（回應的 `dependency_changes[]` 的一項）。
+@immutable
+class DependencyChange {
+  const DependencyChange({
+    required this.id,
+    this.title = '',
+    this.from = '',
+    this.to = '',
+    this.reason = '',
+  });
+
+  final String id;
+  final String title;
+  final String from;
+  final String to;
+
+  /// `dependency_unmet`（自動卡住）或 `dependency_met`（自動恢復）。
+  final String reason;
+
+  bool get isAutoBlocked => reason == 'dependency_unmet';
+  bool get isAutoResumed => reason == 'dependency_met';
+
+  factory DependencyChange.fromJson(Map<String, dynamic> json) =>
+      DependencyChange(
+        id: (json['id'] as String?) ?? '',
+        title: (json['title'] as String?) ?? '',
+        from: (json['from'] as String?) ?? '',
+        to: (json['to'] as String?) ?? '',
+        reason: (json['reason'] as String?) ?? '',
+      );
+
+  /// 解析回應裡的 `dependency_changes`。缺欄位（舊 Hub）視為空。
+  static List<DependencyChange> listFrom(Object? raw) => raw is List
+      ? [
+          for (final e in raw)
+            if (e is Map<String, dynamic>) DependencyChange.fromJson(e),
+        ]
+      : const [];
+}
+
+/// 一條依賴現在該怎麼顯示。
+enum DependencyState {
+  /// 依賴卡已完成。
+  done,
+
+  /// 依賴卡已取消：視為解除，但要標示。
+  cancelled,
+
+  /// 依賴卡搬走了，跟隨到它的去向。是否滿足看 [DependencyView.met]。
+  movedFollowing,
+
+  /// 搬走了但沒寫去向：視為未滿足。
+  movedBlank,
+
+  /// 還沒完成。
+  unmet,
+}
+
+@immutable
+class DependencyView {
+  const DependencyView(this.state, {required this.met, this.targetTitle = ''});
+
+  final DependencyState state;
+  final bool met;
+
+  /// [DependencyState.movedFollowing] 時跟隨到的那張卡的標題；查不到為空。
+  final String targetTitle;
+}
+
+/// 依賴項的顯示狀態。**以 App 手上該卡的最新資料為準**（[lookup]），查不到才用
+/// Hub 回應裡那份讀取當下的快照——快照在別人改了狀態後就過期了。
+DependencyView dependencyView(
+    TaskDependency dep, BoardTask? Function(String id) lookup) {
+  final live = lookup(dep.id);
+  final status = live?.status ?? dep.status;
+  switch (status) {
+    case 'done':
+      return const DependencyView(DependencyState.done, met: true);
+    case 'cancelled':
+      return const DependencyView(DependencyState.cancelled, met: true);
+    case 'moved':
+      var targetId = dep.via.isNotEmpty ? dep.via : (live?.movedTo ?? dep.movedTo);
+      if (targetId.isEmpty) {
+        return const DependencyView(DependencyState.movedBlank, met: false);
+      }
+      // 跟著去向走到底（有上限，避免壞資料繞圈）
+      BoardTask? target = lookup(targetId);
+      for (var hop = 0;
+          hop < 8 && target != null && target.status == 'moved';
+          hop++) {
+        if (target.movedTo.isEmpty) break;
+        targetId = target.movedTo;
+        target = lookup(targetId);
+      }
+      final met = target == null
+          ? dep.met
+          : (target.status == 'done' || target.status == 'cancelled');
+      return DependencyView(DependencyState.movedFollowing,
+          met: met, targetTitle: target?.title ?? '');
+    default:
+      return const DependencyView(DependencyState.unmet, met: false);
+  }
+}
+
 /// Task：葉節點，一個人做得完的一件事。
 ///
 /// **認領與狀態是兩個獨立維度**：[status] 描述「這件事進行到哪」，
@@ -479,6 +642,11 @@ class BoardTask {
     this.completedAt,
     this.deleted = false,
     this.createdAt = '',
+    this.dependsOn = const [],
+    this.affects = const [],
+    this.unmet = const [],
+    this.dependencyBlocked = false,
+    this.blockedByDependency = false,
   });
 
   final String id;
@@ -557,6 +725,22 @@ class BoardTask {
   final int boardSeq;
   final String createdAt;
 
+  /// 這張卡依賴的卡（需要它們先完成才能開始）。缺欄位（舊 Hub）為空。
+  final List<TaskDependency> dependsOn;
+
+  /// 依賴這張卡的卡（自動推導）。
+  final List<TaskAffect> affects;
+
+  /// [dependsOn] 裡尚未滿足的子集。
+  final List<TaskDependency> unmet;
+
+  /// 「阻擋」：待辦且還有未滿足的依賴。**不是卡住（blocked）**——卡住是人手動標的，
+  /// 阻擋是 Hub 依依賴算出來的，不改寫狀態。
+  final bool dependencyBlocked;
+
+  /// 這張卡的「卡住」是依賴造成的（Hub 自動標的）。這種卡住不能手動推回進行中。
+  final bool blockedByDependency;
+
   /// 卡片左側色軸該畫成哪一種。
   ///
   /// 設計的核心是**「色軸講誰，徽章講到哪」**——認領與狀態是兩個正交的維度，
@@ -604,6 +788,14 @@ class BoardTask {
   /// 還能不能被認領。`orphaned` 也算——持有者已經不在房內，就不算「同時」。
   bool get isClaimable =>
       (claimState.isEmpty || isOrphaned) && !isSettled;
+
+  /// 被依賴擋住時不能認領、不能開始或完成（Hub 也會擋；這裡讓人按之前就看得出來）。
+  bool get isDependencyLocked => dependencyBlocked || blockedByDependency;
+
+  /// 這張卡被依賴擋住時，推去 [target] 會被 Hub 拒絕嗎（開始、完成、
+  /// 從依賴造成的卡住推回進行中）。卡住 / 取消 / 搬走不受影響。
+  bool blocksTransitionTo(String target) =>
+      isDependencyLocked && (target == 'in_progress' || target == 'done');
 
   bool get isDone => status == 'done';
 
@@ -663,7 +855,22 @@ class BoardTask {
     deleted: (json['deleted'] as bool?) ?? false,
     boardSeq: (json['board_seq'] as int?) ?? 0,
     createdAt: (json['created_at'] as String?) ?? '',
+    dependsOn: _listOf(json['depends_on'], TaskDependency.fromJson),
+    affects: _listOf(json['affects'], TaskAffect.fromJson),
+    unmet: _listOf(json['unmet'], TaskDependency.fromJson),
+    dependencyBlocked: (json['dependency_blocked'] as bool?) ?? false,
+    blockedByDependency: (json['blocked_by_dependency'] as bool?) ?? false,
   );
+
+  /// 解析依賴相關的清單；缺欄位或型別不對一律視為空（相容舊 Hub）。
+  static List<T> _listOf<T>(
+          Object? raw, T Function(Map<String, dynamic>) parse) =>
+      raw is List
+          ? [
+              for (final e in raw)
+                if (e is Map<String, dynamic>) parse(e),
+            ]
+          : const [];
 }
 
 /// 可以撿回來的孤兒 Task（同一把 session_key 上一世領走的）。

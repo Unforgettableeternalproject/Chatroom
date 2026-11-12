@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/errors/api_exception.dart';
 import '../../core/host_reason.dart';
 import '../../l10n/l10n.dart';
+import '../../models/board.dart';
 import '../../widgets/host_reason.dart';
 
 /// Board 畫面所有「按下去會打 API」的動作共用的執行殼。
@@ -95,8 +96,40 @@ String boardActionMessage(BuildContext context, ApiException e) =>
         AppLocalizations.of(context).boardErrorInboxPageNotCancellable,
       'inbox_rename_forbidden' =>
         AppLocalizations.of(context).boardErrorInboxRenameForbidden,
+      // 任務依賴與影響。判準一律是 code
+      'dependency_cycle' =>
+        AppLocalizations.of(context).boardErrorDependencyCycle,
+      'dependency_self' => AppLocalizations.of(context).boardErrorDependencySelf,
+      'dependency_other_board' =>
+        AppLocalizations.of(context).boardErrorDependencyOtherBoard,
+      'dependency_not_found' =>
+        AppLocalizations.of(context).boardErrorDependencyNotFound,
+      'dependency_no_board' =>
+        AppLocalizations.of(context).boardErrorDependencyNoBoard,
+      'dependencies_unmet' =>
+        AppLocalizations.of(context).boardDependencyUnmetReason,
+      // `not_board_editor` 也用在週期／階段的編輯；只有帶 item_id（指的是
+      // 改影響時對方的那張卡）才講「這張卡」，否則維持 Hub 的原話
+      'not_board_editor' when e.detail['item_id'] != null =>
+        AppLocalizations.of(context).boardErrorNotCardEditor,
       _ => e.message,
     };
+
+/// 一次寫入造成依賴連動時，簡短告知（例如「2 張卡因依賴自動卡住」）。
+/// 沒有連動就什麼都不顯示。
+void showDependencyChangesToast(
+    BuildContext context, List<DependencyChange> changes) {
+  if (changes.isEmpty || !context.mounted) return;
+  final l10n = AppLocalizations.of(context);
+  final blocked = changes.where((c) => c.isAutoBlocked).length;
+  final resumed = changes.where((c) => c.isAutoResumed).length;
+  final lines = [
+    if (blocked > 0) l10n.boardDependencyAutoBlockedToast(blocked),
+    if (resumed > 0) l10n.boardDependencyAutoResumedToast(resumed),
+  ];
+  if (lines.isEmpty) return;
+  _say(context, lines.join('\n'));
+}
 
 void _say(BuildContext context, String message) {
   if (!context.mounted) return;

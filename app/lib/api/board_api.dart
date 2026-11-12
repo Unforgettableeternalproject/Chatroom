@@ -145,6 +145,9 @@ class BoardApi {
     String priority = 'normal',
     int? sourceSeq,
     String? assigneeParticipantId,
+    List<String>? dependsOn,
+    List<String>? affects,
+    void Function(List<DependencyChange> changes)? onDependencyChanges,
   }) =>
       unwrap(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -155,9 +158,14 @@ class BoardApi {
             'priority': priority,
             'source_seq': ?sourceSeq,
             'assignee_participant_id': ?assigneeParticipantId,
+            // 不送＝不動；空清單＝清空。建立時沒設定就整個欄位不送
+            'depends_on': ?dependsOn,
+            'affects': ?affects,
           },
           options: _auth(participantId, sessionKey),
         );
+        onDependencyChanges
+            ?.call(DependencyChange.listFrom(res.data?['dependency_changes']));
         return res.data!['id'] as String;
       });
 
@@ -166,7 +174,10 @@ class BoardApi {
   /// Hub 的 PATCH model 是 `extra="forbid"`，多塞 `status` 會回 422 而不是
   /// 安靜忽略（那正是它該有的行為：一個欄位兩條寫入路徑，遲早有一條漏掉
   /// 守門檢查）。
-  Future<void> updateTask(
+  ///
+  /// `dependsOn`／`affects` 是整份覆寫：null＝不動，空清單＝清空。回傳這次寫入
+  /// 造成的依賴連動（`dependency_changes`），沒有就是空清單。
+  Future<List<DependencyChange>> updateTask(
     String taskId, {
     String? participantId,
     String? sessionKey,
@@ -174,18 +185,23 @@ class BoardApi {
     String? description,
     String? priority,
     String? assigneeParticipantId,
+    List<String>? dependsOn,
+    List<String>? affects,
   }) =>
       unwrap(() async {
-        await _dio.patch<Map<String, dynamic>>(
+        final res = await _dio.patch<Map<String, dynamic>>(
           '/api/board/tasks/$taskId',
           data: {
             'title': ?title,
             'description': ?description,
             'priority': ?priority,
             'assignee_participant_id': ?assigneeParticipantId,
+            'depends_on': ?dependsOn,
+            'affects': ?affects,
           },
           options: _auth(participantId, sessionKey),
         );
+        return DependencyChange.listFrom(res.data?['dependency_changes']);
       });
 
   /// 改一個**週期**的標題／敘述（09/08 卡 32f26b75）。
@@ -258,7 +274,9 @@ class BoardApi {
   /// [ConflictException.allowed] 裡告訴你從現在這個狀態還能去哪——
   /// **拿它畫按鈕，不要在 App 這側複製一份轉移表**：那份副本會與 Hub 各自
   /// 演化，而畫面上多一顆按不動的按鈕不會有任何地方報錯。
-  Future<void> setTaskStatus(
+  ///
+  /// 回傳這次狀態變更造成的依賴連動（`dependency_changes`）。
+  Future<List<DependencyChange>> setTaskStatus(
     String taskId, {
     String? participantId,
     String? sessionKey,
@@ -266,7 +284,7 @@ class BoardApi {
     String movedTo = '',
   }) =>
       unwrap(() async {
-        await _dio.post<Map<String, dynamic>>(
+        final res = await _dio.post<Map<String, dynamic>>(
           '/api/board/tasks/$taskId/status',
           // 去向只在 `moved` 時有意義，而且 Hub 那側是**選填**：空字串等於
           // 「搬走了但還沒說去哪」，那是它認得的中間狀態。所以空的時候
@@ -278,6 +296,7 @@ class BoardApi {
           },
           options: _auth(participantId, sessionKey),
         );
+        return DependencyChange.listFrom(res.data?['dependency_changes']);
       });
 
   /// 推 Checklist 的狀態（open / done / cancelled）。

@@ -9174,5 +9174,173 @@
   "hostReasonVerifyObjectiveTitle": "確認週期",
   "@hostReasonVerifyObjectiveTitle": {
     "description": "主持人操作：確認週期的理由對話框標題"
+  },
+  "boardDependencyBlockedBadge": "阻擋",
+  "@boardDependencyBlockedBadge": {
+    "description": "卡片：被依賴擋住的徽章（與「卡住」不同）"
+  },
+  "boardDependencyCausedBadge": "依賴造成",
+  "@boardDependencyCausedBadge": {
+    "description": "卡片：卡住是依賴造成的註記"
+  },
+  "boardDependencyWaiting": "等 {count} 項依賴完成",
+  "@boardDependencyWaiting": {
+    "description": "卡片：阻擋中，還剩幾項依賴",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardDependencyUnmetReason": "依賴還沒完成",
+  "@boardDependencyUnmetReason": {
+    "description": "依賴未滿足時按鈕的原因與 dependencies_unmet 的轉述"
+  },
+  "boardDependsOnLabel": "依賴",
+  "@boardDependsOnLabel": {
+    "description": "卡片編輯與抽屜：依賴欄"
+  },
+  "boardAffectsLabel": "影響",
+  "@boardAffectsLabel": {
+    "description": "卡片編輯與抽屜：影響欄"
+  },
+  "boardDependencyNone": "無",
+  "@boardDependencyNone": {
+    "description": "依賴／影響欄沒有項目"
+  },
+  "boardDependencyDone": "已完成",
+  "@boardDependencyDone": {
+    "description": "依賴項狀態：已完成"
+  },
+  "boardDependencyCancelled": "已取消",
+  "@boardDependencyCancelled": {
+    "description": "依賴項狀態：已取消（視為解除）"
+  },
+  "boardDependencyMovedTo": "搬走 → {title}",
+  "@boardDependencyMovedTo": {
+    "description": "依賴項狀態：搬走並跟隨到去向",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "boardDependencyMovedBlank": "搬走，未寫去向",
+  "@boardDependencyMovedBlank": {
+    "description": "依賴項狀態：搬走但沒寫去向（視為未滿足）"
+  },
+  "boardDependencyUnmet": "未完成",
+  "@boardDependencyUnmet": {
+    "description": "依賴項狀態：未完成"
+  },
+  "boardDependencyPickTitle": "選擇卡片",
+  "@boardDependencyPickTitle": {
+    "description": "依賴／影響選擇器標題"
+  },
+  "boardDependencyPickSearch": "搜尋卡片",
+  "@boardDependencyPickSearch": {
+    "description": "依賴／影響選擇器搜尋欄"
+  },
+  "boardDependencyPickEmpty": "沒有可選的卡",
+  "@boardDependencyPickEmpty": {
+    "description": "依賴／影響選擇器：沒有候選"
+  },
+  "boardDependencyPickDone": "完成",
+  "@boardDependencyPickDone": {
+    "description": "依賴／影響選擇器：確定"
+  },
+  "boardErrorDependencyCycle": "會形成循環依賴",
+  "@boardErrorDependencyCycle": {
+    "description": "Hub 回 dependency_cycle 的轉述"
+  },
+  "boardErrorDependencySelf": "不能依賴自己",
+  "@boardErrorDependencySelf": {
+    "description": "Hub 回 dependency_self 的轉述"
+  },
+  "boardErrorDependencyOtherBoard": "只能依賴同一塊板的卡",
+  "@boardErrorDependencyOtherBoard": {
+    "description": "Hub 回 dependency_other_board 的轉述"
+  },
+  "boardErrorDependencyNotFound": "找不到那張卡",
+  "@boardErrorDependencyNotFound": {
+    "description": "Hub 回 dependency_not_found 的轉述"
+  },
+  "boardErrorDependencyNoBoard": "這張卡不在任何板上，不能設定依賴",
+  "@boardErrorDependencyNoBoard": {
+    "description": "Hub 回 dependency_no_board 的轉述"
+  },
+  "boardErrorNotCardEditor": "這張卡你沒有權限改",
+  "@boardErrorNotCardEditor": {
+    "description": "改影響時對方卡 not_board_editor 的轉述"
+  },
+  "boardDependencyAutoBlockedToast": "{count} 張卡因依賴自動卡住",
+  "@boardDependencyAutoBlockedToast": {
+    "description": "狀態變更後：自動卡住的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "boardDependencyAutoResumedToast": "{count} 張卡依賴已完成，自動恢復",
+  "@boardDependencyAutoResumedToast": {
+    "description": "狀態變更後：自動恢復的卡數",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "helpSecDepLabel": "依賴",
+  "@helpSecDepLabel": {
+    "description": "說明頁：任務依賴節導覽標籤"
+  },
+  "helpSecDepTitle": "任務依賴與影響",
+  "@helpSecDepTitle": {
+    "description": "說明頁：任務依賴節標題"
+  },
+  "helpSecDepIntro": "一張任務卡可以有「依賴」——需要哪些其他卡先完成才能開始；「影響」是反過來的對照，自動列出哪些卡依賴這張卡。",
+  "@helpSecDepIntro": {
+    "description": "說明頁：任務依賴節導語"
+  },
+  "helpDepSetLead": "設定",
+  "@helpDepSetLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepSet": "建立或編輯卡片時設定依賴；也可以直接填寫影響，那等於改寫對方卡的依賴（對方會自動多出或少掉「依賴本卡」）。",
+  "@helpDepSet": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepScopeLead": "範圍",
+  "@helpDepScopeLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepScope": "只能依賴同一塊板上的卡（可跨週期、階段），不能依賴自己；形成循環會被拒絕，改影響需要有權修改對方的卡。",
+  "@helpDepScope": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepBlockedLead": "阻擋不是卡住",
+  "@helpDepBlockedLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepBlocked": "依賴未滿足叫「阻擋」，和卡住不同：卡住是人手動標的「做不下去」；阻擋是依依賴算出來的，不改寫狀態。被阻擋的待辦卡不能認領、不能開始或完成，要等依賴完成。",
+  "@helpDepBlocked": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepStartedLead": "開始後才多出依賴",
+  "@helpDepStartedLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepStarted": "卡已經開始才多出未滿足的依賴時，會自動改成卡住，並標記這是依賴造成的；這種卡住不能手動推回進行中，所有依賴都滿足時自動恢復為進行中。人手動設的卡住不會被自動恢復。",
+  "@helpDepStarted": {
+    "description": "說明頁：任務依賴節"
+  },
+  "helpDepMetLead": "何時算滿足",
+  "@helpDepMetLead": {
+    "description": "說明頁：任務依賴節小標"
+  },
+  "helpDepMet": "依賴卡完成。已取消也視為解除（不再擋，但會標示「已取消」）。搬走的卡看它搬去的那張卡的狀態；沒寫去向視為未滿足。依賴卡被刪除時，這條依賴不再生效。",
+  "@helpDepMet": {
+    "description": "說明頁：任務依賴節"
   }
 }

@@ -367,6 +367,36 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n,
           ],
         ),
         HelpSection(
+          label: l10n.helpSecDepLabel,
+          title: l10n.helpSecDepTitle,
+          icon: Icons.account_tree_outlined,
+          intro: l10n.helpSecDepIntro,
+          blocks: [
+            HelpItemsBlock([
+              HelpItem([
+                HelpChunk.bold(l10n.helpDepSetLead),
+                HelpChunk.text(l10n.helpDepSet),
+              ]),
+              HelpItem([
+                HelpChunk.bold(l10n.helpDepScopeLead),
+                HelpChunk.text(l10n.helpDepScope),
+              ]),
+              HelpItem([
+                HelpChunk.bold(l10n.helpDepBlockedLead),
+                HelpChunk.text(l10n.helpDepBlocked),
+              ]),
+              HelpItem([
+                HelpChunk.bold(l10n.helpDepStartedLead),
+                HelpChunk.text(l10n.helpDepStarted),
+              ]),
+              HelpItem([
+                HelpChunk.bold(l10n.helpDepMetLead),
+                HelpChunk.text(l10n.helpDepMet),
+              ]),
+            ]),
+          ],
+        ),
+        HelpSection(
           label: l10n.helpSecAssetLabel,
           title: l10n.helpSecAssetTitle,
           icon: Icons.attachment_outlined,
