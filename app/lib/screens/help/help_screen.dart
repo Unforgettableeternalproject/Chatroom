@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
+import '../../state/rooms_providers.dart';
 import '../../widgets/help_blocks.dart';
 import '../../widgets/kind_badge.dart';
 
@@ -134,7 +136,11 @@ class HelpDoc {
 
 /// 三份說明文件。文案全部走 l10n，所以這裡是函式而不是 const map——
 /// 語言換了要跟著換，內容就不能在編譯期定死。
-Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) {
+///
+/// [showHostMode] 為 false 時整節「主持人模式」不放進文件（導覽項一併消失）。
+/// 條件與主持人模式開關相同，見 [HelpScreen]。
+Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n,
+    {bool showHostMode = true}) {
   HelpCardData card(String tag, String title, String sub, String body) =>
       HelpCardData(tag: tag, title: title, subtitle: sub, body: body);
 
@@ -522,6 +528,7 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) {
             HelpCalloutBlock(l10n.helpNotifyAgentCallout),
           ],
         ),
+        if (showHostMode)
         HelpSection(
           label: l10n.helpSecModLabel,
           title: l10n.helpSecModTitle,
@@ -840,16 +847,22 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n) {
   };
 }
 
-class HelpScreen extends StatefulWidget {
+/// 主持人模式說明該不該出現——與房間列表上主持人模式開關的條件相同
+/// （手上的 token 是 Hub 的主 token，即 `RoomListResult.youAreHost`）。
+/// 還沒撈到或撈失敗一律當 false：開關也是這樣，沒確認前不顯示。
+final helpShowHostModeProvider = Provider<bool>((ref) =>
+    ref.watch(roomListProvider('active')).value?.youAreHost ?? false);
+
+class HelpScreen extends ConsumerStatefulWidget {
   const HelpScreen({super.key, this.topic = HelpTopic.main});
 
   final HelpTopic topic;
 
   @override
-  State<HelpScreen> createState() => _HelpScreenState();
+  ConsumerState<HelpScreen> createState() => _HelpScreenState();
 }
 
-class _HelpScreenState extends State<HelpScreen> {
+class _HelpScreenState extends ConsumerState<HelpScreen> {
   /// 每個 section 一把 key，導覽靠它捲過去。
   late List<GlobalKey> _sectionKeys;
 
@@ -868,7 +881,8 @@ class _HelpScreenState extends State<HelpScreen> {
   }
 
   void _rebuildKeys() {
-    final doc = helpDocs(AppLocalizations.of(context))[widget.topic]!;
+    final doc = helpDocs(AppLocalizations.of(context),
+        showHostMode: ref.read(helpShowHostModeProvider))[widget.topic]!;
     _sectionKeys = List.generate(doc.sections.length, (_) => GlobalKey());
   }
 
@@ -887,7 +901,10 @@ class _HelpScreenState extends State<HelpScreen> {
   Widget build(BuildContext context) {
     final s = context.uep;
     final l10n = AppLocalizations.of(context);
-    final doc = helpDocs(l10n)[widget.topic]!;
+    final showHostMode = ref.watch(helpShowHostModeProvider);
+    final doc = helpDocs(l10n, showHostMode: showHostMode)[widget.topic]!;
+    // 節數會隨條件變動，key 數量要跟上
+    if (_sectionKeys.length != doc.sections.length) _rebuildKeys();
     return Scaffold(
       backgroundColor: s.bg,
       appBar: AppBar(

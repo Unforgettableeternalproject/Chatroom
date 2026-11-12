@@ -49,11 +49,17 @@ void main() {
     String globalError = '',
     bool complete = true,
     bool authExpired = false,
+    bool listedNothing = false,
+    RunnerClaudeLogin? login,
   }) =>
       ProviderScope(
         overrides: [
           runnerConfigProvider.overrideWith((ref) async => config),
           runnerIdProvider.overrideWith((ref) async => null),
+          // 登入判斷不真的叫 claude：預設是設定目錄已登入、沒有 token
+          runnerClaudeLoginProvider.overrideWith((ref) async =>
+              login ??
+              const RunnerClaudeLogin(configDir: 'cfg', loggedIn: true)),
           machineMcpServersProvider.overrideWith((ref) async =>
               MachineMcpServers(
                   names: machine,
@@ -61,7 +67,8 @@ void main() {
                   origins: origins,
                   globalError: globalError,
                   complete: complete,
-                  authExpired: authExpired)),
+                  authExpired: authExpired,
+                  listedNothing: listedNothing)),
         ],
         child: MaterialApp(
           locale: kTestLocale,
@@ -118,10 +125,50 @@ void main() {
         machineError: 'No MCP servers configured', authExpired: true));
     await tester.pumpAndSettle();
 
-    expect(find.text('執行器登入已過期，請在上方重新登入。'), findsOneWidget);
+    expect(find.text('執行器的 Claude 登入已過期，重新登入後才讀得到連接器。'), findsOneWidget);
     expect(find.textContaining('No MCP servers configured'), findsNothing,
         reason: '原文指向「沒設定 MCP」，真正的原因是登入過期');
     expect(find.text('本機找不到'), findsNothing);
+  });
+
+  testWidgets('🔴 有長效 token：顯示提示，mcp list 空結果不當紅字錯誤', (tester) async {
+    await tester.pumpWidget(wrap(await load(tester),
+        machineError: 'No MCP servers configured',
+        listedNothing: true,
+        login: const RunnerClaudeLogin(
+            configDir: 'cfg', loggedIn: false, tokenSet: true)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('使用 token 時只能用全域 .claude.json'),
+        findsOneWidget);
+    expect(find.textContaining('No MCP servers configured'), findsNothing);
+    expect(find.textContaining('讀不到本機 MCP 清單'), findsNothing);
+    expect(find.textContaining('登入已過期'), findsNothing,
+        reason: '用 token 時設定目錄的登入狀態不相干');
+  });
+
+  testWidgets('有長效 token 但 claude 真的叫不起來：仍然說讀不到', (tester) async {
+    await tester.pumpWidget(wrap(await load(tester),
+        machineError: 'claude mcp list 逾時',
+        login: const RunnerClaudeLogin(
+            configDir: 'cfg', loggedIn: true, tokenSet: true)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('讀不到本機 MCP 清單'), findsOneWidget);
+  });
+
+  testWidgets('🔴 沒有 token 且設定目錄登入失效：紅字講原因，不貼英文原文', (tester) async {
+    await tester.pumpWidget(wrap(await load(tester),
+        machineError: 'No MCP servers configured',
+        listedNothing: true,
+        login: const RunnerClaudeLogin(
+            configDir: 'cfg', loggedIn: false, expired: true)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('執行器的 Claude 登入已過期，重新登入後才讀得到連接器。'),
+        findsOneWidget);
+    expect(find.textContaining('No MCP servers configured'), findsNothing);
+    expect(find.textContaining('使用 token 時只能用'), findsNothing);
   });
 
   testWidgets('🔴 兩邊的伺服器都列得出來，而且各標各的來源', (tester) async {

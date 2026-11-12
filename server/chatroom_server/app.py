@@ -18481,6 +18481,34 @@ def create_app(config: Config | None = None) -> FastAPI:
              session_key, session_key),
         )
 
+    # 「進行中」＝派工執行器還握著、有明確結束的 run。handoff 不算：那一棒
+    # 已經結束，接手的是另一筆 run（它自己會以 queued 出現在這裡）。
+    # 聊天訊息、任務板、WS 連線都不是 agent_run，不在此列。
+    _RUN_IN_PROGRESS = ("queued", "claimed", "running", "limited")
+
+    @app.get("/api/ops/active-runs", dependencies=[Depends(require_auth)])
+    async def ops_active_runs():
+        """全 Hub 進行中／排隊中的 agent run。給「停掉 Hub 之前」的檢查用。
+
+        不依房間可見性過濾：停 Hub 影響所有房，數量必須是全部。只回 id、
+        房、狀態、種類；`count` 是完整數量，`runs` 最多列 50 筆。
+        """
+        marks = ",".join("?" for _ in _RUN_IN_PROGRESS)
+        rows = await (await app.state.db.execute(
+            "SELECT id, room_id, status, kind FROM agent_run"
+            f" WHERE status IN ({marks}) ORDER BY created_at, rowid",
+            _RUN_IN_PROGRESS)).fetchall()
+        counts = {st: 0 for st in _RUN_IN_PROGRESS}
+        for r in rows:
+            counts[r["status"]] += 1
+        return {
+            "count": len(rows),
+            "counts": counts,
+            "runs": [{"id": r["id"], "room_id": r["room_id"],
+                      "status": r["status"], "kind": r["kind"]}
+                     for r in rows[:50]],
+        }
+
     @app.get("/api/ops/exceptions", dependencies=[Depends(require_auth)])
     async def ops_exceptions(
         request: Request,

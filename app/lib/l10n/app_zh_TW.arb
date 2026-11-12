@@ -6408,6 +6408,10 @@
   "@hostRunnerLoginTitle": {
     "description": "執行器分頁的登入狀態區塊"
   },
+  "hostRunnerLoginViaToken": "使用 token",
+  "@hostRunnerLoginViaToken": {
+    "description": "有設定長效 token 時，執行器登入列的狀態（取代已登入）"
+  },
   "hostRunnerLoginOk": "已登入",
   "@hostRunnerLoginOk": {
     "description": "執行器的設定目錄底下有憑證"
@@ -6835,9 +6839,13 @@
       }
     }
   },
-  "hostRunnerMcpAuthExpired": "執行器登入已過期，請在上方重新登入。",
+  "hostRunnerMcpAuthExpired": "執行器的 Claude 登入已過期，重新登入後才讀得到連接器。",
   "@hostRunnerMcpAuthExpired": {
-    "description": "claude mcp list 說 OAuth 過期時，取代原文的說明"
+    "description": "沒有長效 token 且設定目錄登入失效時，取代 claude mcp list 原文的說明"
+  },
+  "hostRunnerMcpViaToken": "使用 token 時只能用全域 .claude.json 設定的 MCP，線上連接器與其他來源的 MCP 無法使用。",
+  "@hostRunnerMcpViaToken": {
+    "description": "有設定長效 token 時，MCP 清單區塊的提示"
   },
   "hostRunnerPanelWorkspaces": "工作區",
   "@hostRunnerPanelWorkspaces": {
@@ -7895,6 +7903,19 @@
         "type": "String"
       }
     }
+  },
+  "hubRunsBusy": "Hub 上有 {count} 個工作進行中，完成後再更新",
+  "@hubRunsBusy": {
+    "description": "更新本機 Hub 前發現有進行中的 run，擋下更新",
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "hubRunsUnconfirmed": "無法確認是否有進行中的工作",
+  "@hubRunsUnconfirmed": {
+    "description": "更新本機 Hub 的提示附註：查不出 Hub 上有沒有進行中的 run"
   },
   "reconnectUpdateAction": "更新",
   "@reconnectUpdateAction": {

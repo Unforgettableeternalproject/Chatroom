@@ -30,7 +30,10 @@ Future<void> askReconnectUpdate(
           child: Text(
             prompt.kind == ReconnectUpdateKind.app
                 ? l10n.reconnectUpdateAppBody(prompt.tag)
-                : l10n.reconnectUpdateHubBody(prompt.tag),
+                : prompt.unconfirmed
+                    ? '${l10n.reconnectUpdateHubBody(prompt.tag)}'
+                        '\n${l10n.hubRunsUnconfirmed}'
+                    : l10n.reconnectUpdateHubBody(prompt.tag),
             style: UepText.serif(size: 14.5, color: s.inkSoft, height: 1.7),
           ),
         ),
@@ -68,8 +71,10 @@ Future<void> askReconnectUpdate(
   if (prompt.kind == ReconnectUpdateKind.app) {
     message = appUpdateFailureText(l10n, ref.read(appUpdateProvider).failure);
   } else {
-    message = l10n.hostKitInstallFailed(
-        ref.read(kitInstallsProvider)[KitId.hub]?.detail ?? '');
+    final st = ref.read(kitInstallsProvider)[KitId.hub];
+    message = st?.failure == KitInstallFailure.hubBusy
+        ? l10n.hubRunsBusy(st!.detail)
+        : l10n.hostKitInstallFailed(st?.detail ?? '');
   }
   messenger.showSnackBar(SnackBar(content: Text(message)));
 }

@@ -311,6 +311,7 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
   String _failureText(AppLocalizations l10n, KitInstallState state) =>
       switch (state.failure) {
         KitInstallFailure.pythonMissing => l10n.hostKitInstallNoPython,
+        KitInstallFailure.hubBusy => l10n.hubRunsBusy(state.detail),
         KitInstallFailure.assetMissing =>
           l10n.hostKitInstallAssetMissing(kit.assetName),
         _ => l10n.hostKitInstallFailed(state.detail),

@@ -5,7 +5,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/hub_active_runs_api.dart';
 import '../core/config/build_info.dart';
+import 'app_providers.dart' show dioProvider;
 import 'app_updater.dart';
 import 'host_actions.dart';
 import 'host_kit_providers.dart';
@@ -116,7 +118,11 @@ String kitReleaseApiUrl(String version, {int hotfix = 0}) =>
 /// 一份 Release。
 @immutable
 class KitRelease {
-  const KitRelease({required this.tag, required this.assets});
+  const KitRelease(
+      {required this.tag, required this.assets, this.publishedAt});
+
+  /// Release 的發布時間；取不到是 `null`。
+  final DateTime? publishedAt;
 
   /// `v1.2.3`。
   final String tag;
@@ -145,7 +151,8 @@ class KitRelease {
         assets[name] = url;
       }
     }
-    return KitRelease(tag: tag, assets: assets);
+    return KitRelease(
+        tag: tag, assets: assets, publishedAt: parseReleaseTime(json));
   }
 }
 
@@ -254,6 +261,9 @@ enum KitInstallFailure {
 
   /// 安裝器跑了但沒有回報成功（含「沒印 RESULT」）。
   installer,
+
+  /// Hub 上還有進行中的 run，沒有停 Hub。`detail` 是 run 數量。
+  hubBusy,
 }
 
 @immutable
@@ -622,6 +632,10 @@ final runnerBusyProvider = FutureProvider<bool>((ref) async {
   }
 });
 
+/// 查 Hub 進行中 run 的 API。測試換成 fake。
+final hubActiveRunsApiProvider =
+    Provider((ref) => HubActiveRunsApi(ref.watch(dioProvider)));
+
 /// 一包 kit 現在的安裝狀態。
 @immutable
 class KitInstallState {
@@ -721,6 +735,25 @@ class KitInstalls extends Notifier<Map<KitId, KitInstallState>> {
     required bool restart,
   }) async {
     if (of(KitId.hub).busy) return;
+
+    // 🔴 進行中工作的保護：停 Hub 之前先問。有 run 就不動，講出原因；
+    // 問不出來（`null`）照常繼續——重連提示已經在內文警告過，手動更新是
+    // 使用者自己按的。
+    _set(KitId.hub, const KitInstallState(phase: KitInstallPhase.checking));
+    final runs = await checkHubActiveRuns();
+    if (runs != null && runs.busy) {
+      _set(
+        KitId.hub,
+        KitInstallState(
+          phase: KitInstallPhase.failed,
+          failure: KitInstallFailure.hubBusy,
+          detail: '${runs.count}',
+        ),
+      );
+      return;
+    }
+    _set(KitId.hub, const KitInstallState());
+
     final actions = restart ? ref.read(hostActionsProvider) : null;
     if (actions != null) await actions.stopHub();
 
@@ -734,6 +767,11 @@ class KitInstalls extends Notifier<Map<KitId, KitInstallState>> {
     final after = ref.read(hostActionsProvider);
     if (after != null) await after.service('start');
   }
+
+  /// Hub 上進行中的 run。`null`＝無法確認。重連提示與 [installHub]
+  /// 共用這一個入口。
+  Future<HubActiveRuns?> checkHubActiveRuns() =>
+      ref.read(hubActiveRunsApiProvider).check();
 
   void _refresh(KitId kit) {
     switch (kit) {

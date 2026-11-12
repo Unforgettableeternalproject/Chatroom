@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:chatroom_app/api/hub_active_runs_api.dart';
 import 'package:chatroom_app/api/rooms_api.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/core/config/build_info.dart';
@@ -49,8 +50,32 @@ class _FakeRoomsApi extends RoomsApi {
   }
 }
 
+class _FakeRunsApi extends HubActiveRunsApi {
+  _FakeRunsApi() : super(Dio());
+
+  /// null＝無法確認。
+  HubActiveRuns? result = const HubActiveRuns(0);
+  int calls = 0;
+
+  @override
+  Future<HubActiveRuns?> check() async {
+    calls++;
+    return result;
+  }
+}
+
 class _FakeAppUpdate extends AppUpdate {
   String? latestTag;
+  DateTime? publishedAt;
+
+  @override
+  AppRelease? get availableRelease => latestTag == null
+      ? null
+      : AppRelease(
+          tag: latestTag!,
+          assetName: 'a.zip',
+          downloadUrl: 'https://example.invalid/a.zip',
+          publishedAt: publishedAt);
   int checks = 0;
   int downloads = 0;
   int restarts = 0;
@@ -107,8 +132,10 @@ void main() {
   late _FakeRoomsApi api;
   late _FakeAppUpdate appUpdate;
   late _FakeKitInstalls kits;
+  late _FakeRunsApi runs;
 
   setUp(() {
+    runs = _FakeRunsApi();
     status = StreamController<RealtimeStatus>.broadcast();
     api = _FakeRoomsApi('1.2.8');
     appUpdate = _FakeAppUpdate();
@@ -141,6 +168,9 @@ void main() {
         connectionStatusProvider.overrideWith((ref) => status.stream),
         appUpdateProvider.overrideWith(() => appUpdate),
         kitInstallsProvider.overrideWith(() => kits),
+        hubActiveRunsApiProvider.overrideWithValue(runs),
+        reconnectUpdateRecheckIntervalProvider
+            .overrideWithValue(const Duration(milliseconds: 20)),
         hostKitProvider.overrideWith((ref) async => localKit
             ? const HostKit(kitRoot: r'C:\hub-kit', envFile: '')
             : null),
@@ -346,6 +376,151 @@ void main() {
     });
   });
 
+  group('Hub 上有進行中的 run', () {
+    setUp(() => api.hubVersion = '1.2.7');
+
+    Future<void> wait([int ms = 120]) =>
+        Future<void>.delayed(Duration(milliseconds: ms));
+
+    test('有 run → 不問；歸零後才問', () async {
+      runs.result = const HubActiveRuns(2);
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      await wait();
+      expect(c.read(reconnectUpdateProvider), isNull);
+      expect(runs.calls, greaterThan(1), reason: '延緩期間要定期重查');
+      expect(kits.hubInstalls, isEmpty);
+
+      runs.result = const HubActiveRuns(0);
+      await wait();
+      final p = c.read(reconnectUpdateProvider);
+      expect(p?.kind, ReconnectUpdateKind.hub);
+      expect(p?.unconfirmed, isFalse);
+    });
+
+    test('延緩中又斷線 → 放棄，不再重查也不問', () async {
+      runs.result = const HubActiveRuns(1);
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      await wait(60);
+      await send(const Disconnected(reason: 'background'));
+      final before = runs.calls;
+      runs.result = const HubActiveRuns(0);
+      await wait();
+      expect(runs.calls, before, reason: '斷線後不能再重查');
+      expect(c.read(reconnectUpdateProvider), isNull);
+    });
+
+    test('延緩後下次重連重新評估', () async {
+      runs.result = const HubActiveRuns(1);
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      await send(const Disconnected(reason: 'background'));
+      runs.result = const HubActiveRuns(0);
+      await send(Connected());
+      expect(c.read(reconnectUpdateProvider)?.kind, ReconnectUpdateKind.hub);
+    });
+
+    test('無法確認 → 照問，標記 unconfirmed', () async {
+      runs.result = null;
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      final p = c.read(reconnectUpdateProvider);
+      expect(p?.kind, ReconnectUpdateKind.hub);
+      expect(p?.unconfirmed, isTrue);
+    });
+  });
+
+  group('測試版不被提示「更新」回已發布的 Release', () {
+    final published = DateTime.utc(2026, 11, 10);
+    final hubRel = KitRelease(
+        tag: 'v1.2.8-hotfix1',
+        assets: const {'chatroom-hub-kit.zip': 'https://example.invalid/h.zip'},
+        publishedAt: published);
+
+    BuildInfo app(String builtAt, {int hotfix = 0}) => BuildInfo(
+        version: '1.2.8', commit: 'abc1234', builtAt: builtAt, hotfix: hotfix);
+
+    test('App：本機是 develop 測試版（hotfix 0、built_at 晚於 release）→ 不跳', () async {
+      appBuild = app('2026-11-12T00:00:00Z');
+      api.hubBuiltAt = '2026-11-13T00:00:00Z'; // Hub 較新 → 判 App 較舊
+      appUpdate
+        ..latestTag = 'v1.2.8-hotfix1'
+        ..publishedAt = published;
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      expect(appUpdate.checks, 1);
+      expect(c.read(reconnectUpdateProvider), isNull);
+    });
+
+    test('App：本機是正式 v1.2.8（built_at 早於 release）→ 跳', () async {
+      appBuild = app('2026-11-01T00:00:00Z');
+      api.hubBuiltAt = '2026-11-13T00:00:00Z';
+      appUpdate
+        ..latestTag = 'v1.2.8-hotfix1'
+        ..publishedAt = published;
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider)?.kind, ReconnectUpdateKind.app);
+    });
+
+    test('App：release 與本機同一個 build（版本相同）→ 不跳', () async {
+      appBuild = app('2026-11-09T00:00:00Z', hotfix: 1);
+      api.hubBuiltAt = '2026-11-13T00:00:00Z';
+      appUpdate.latestTag = null; // check() 判 upToDate
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider), isNull);
+    });
+
+    test('App：本機 built_at 取不到 → 退回只比版本（跳）', () async {
+      appBuild = app('');
+      api.hubVersion = '1.3.0'; // 無 build 時間可比 → 退回比 x.y.z
+      appUpdate
+        ..latestTag = 'v1.3.0'
+        ..publishedAt = published;
+      final c = make();
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider)?.kind, ReconnectUpdateKind.app);
+    });
+
+    test('Hub：本機 Hub 是 develop 測試版（built_at 晚於 release）→ 不跳', () async {
+      appBuild = app('2026-11-14T00:00:00Z', hotfix: 1);
+      api.hubBuiltAt = '2026-11-12T00:00:00Z'; // Hub 較舊於 App，但晚於 release
+      final c = make(overrides(release: hubRel));
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider), isNull);
+    });
+
+    test('Hub：本機是正式 v1.2.8（built_at 早於 release）→ 跳', () async {
+      appBuild = app('2026-11-14T00:00:00Z', hotfix: 1);
+      api.hubBuiltAt = '2026-11-01T00:00:00Z';
+      final c = make(overrides(release: hubRel));
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider)?.kind, ReconnectUpdateKind.hub);
+    });
+
+    test('Hub：release 與本機同一個 build（commit 相同）→ 不跳', () async {
+      appBuild = app('2026-11-09T00:00:00Z', hotfix: 1);
+      api.hubCommit = 'abc1234ffff';
+      api.hubBuiltAt = '2026-11-09T00:00:00Z';
+      final c = make(overrides(release: hubRel));
+      await send(Connected());
+      await reconnect();
+      expect(c.read(reconnectUpdateProvider), isNull);
+    });
+  });
+
   group('同 x.y.z 靠建置時間判斷（熱修）', () {
     BuildInfo app(String builtAt) => BuildInfo(
         version: '1.2.8', commit: 'abc1234', builtAt: builtAt, hotfix: 1);
@@ -433,6 +608,20 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(appUpdate.downloads, 0);
       expect(c.read(reconnectUpdateProvider), isNull);
+    });
+
+    testWidgets('Hub 較舊且無法確認：內文多一句警告', (tester) async {
+      api.hubVersion = '1.2.7';
+      runs.result = null;
+      final c = make();
+      await tester.runAsync(
+          () => c.read(reconnectUpdateProvider.notifier).evaluate());
+      final p = c.read(reconnectUpdateProvider)!;
+
+      await tester.pumpWidget(host(c, p));
+      await tester.tap(find.text('go'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('無法確認是否有進行中的工作'), findsOneWidget);
     });
 
     testWidgets('Hub 較舊：選更新 → 觸發 Hub 更新', (tester) async {
