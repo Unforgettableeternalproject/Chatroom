@@ -12,6 +12,7 @@ class BoardContributions {
     this.name = '',
     this.description = '',
     this.status = 'active',
+    this.outcome = '',
     this.myRole = '',
     this.ownerName = '',
     this.entries = const [],
@@ -25,6 +26,9 @@ class BoardContributions {
 
   final String description;
   final String status;
+
+  /// 結局：`''` / `completed` / `abandoned`。有結局就是已收尾，整頁唯讀。
+  final String outcome;
 
   /// owner / editor / viewer。只有 owner 改得動名稱與描述。
   final String myRole;
@@ -41,7 +45,7 @@ class BoardContributions {
   final List<ContributorStat> stats;
 
   bool get isOwner => myRole == 'owner';
-  bool get isArchived => status == 'archived';
+  bool get isSettled => outcome.isNotEmpty;
 
   /// 接上一頁：紀錄累加，統計與中繼資料用新的。
   BoardContributions appendPage(BoardContributions next) => BoardContributions(
@@ -49,6 +53,7 @@ class BoardContributions {
     name: next.name,
     description: next.description,
     status: next.status,
+    outcome: next.outcome,
     myRole: next.myRole,
     ownerName: next.ownerName,
     entries: [...entries, ...next.entries],
@@ -64,6 +69,7 @@ class BoardContributions {
       name: (board['name'] as String?) ?? '',
       description: (board['description'] as String?) ?? '',
       status: (board['status'] as String?) ?? 'active',
+      outcome: (board['outcome'] as String?) ?? '',
       myRole: (board['my_role'] as String?) ?? '',
       ownerName: (board['owner_name'] as String?) ?? '',
       entries: [

@@ -3361,7 +3361,7 @@
   "@boardOrphanReasonSubagent": {
     "description": "孤兒卡成因：子代理回收"
   },
-  "boardWatchBlockedArchived": "這塊板已經封存，追蹤不會再有任何動靜",
+  "boardWatchBlockedArchived": "這塊板已經收尾，追蹤不會再有任何動靜",
   "@boardWatchBlockedArchived": {
     "description": "不能追蹤的理由：板已封存"
   },
@@ -5521,10 +5521,6 @@
   "@boardRenameOwnerOnly": {
     "description": "改名失敗：限 owner"
   },
-  "boardArchiveOwnerOnly": "只有這塊板的 owner 能封存它。",
-  "@boardArchiveOwnerOnly": {
-    "description": "封存失敗：限 owner"
-  },
   "boardLibraryTitle": "任務板",
   "@boardLibraryTitle": {
     "description": "BOARDS 分頁抬頭"
@@ -5540,10 +5536,6 @@
   "boardLibraryEmptyActive": "目前沒有進行中的任務板",
   "@boardLibraryEmptyActive": {
     "description": "板清單空：進行中"
-  },
-  "boardLibraryEmptyArchived": "沒有已封存的任務板",
-  "@boardLibraryEmptyArchived": {
-    "description": "板清單空：已封存"
   },
   "boardLibraryEmptySettled": "還沒有板被宣告完成或廢止",
   "@boardLibraryEmptySettled": {
@@ -5572,14 +5564,6 @@
   "boardMenuRename": "重新命名…",
   "@boardMenuRename": {
     "description": "板卡選單：重新命名"
-  },
-  "boardMenuUnarchive": "解除封存",
-  "@boardMenuUnarchive": {
-    "description": "板卡選單：解除封存"
-  },
-  "boardMenuArchive": "封存",
-  "@boardMenuArchive": {
-    "description": "板卡選單：封存"
   },
   "boardBadgeArchived": "封存",
   "@boardBadgeArchived": {
@@ -5804,10 +5788,6 @@
   "@boardReopenAndRetry": {
     "description": "容器已收尾時的補救動作"
   },
-  "boardArchivedNotice": "這塊板已封存，只能看不能改。",
-  "@boardArchivedNotice": {
-    "description": "封存板的橫幅"
-  },
   "boardBackToRoom": "← 回到聊天室",
   "@boardBackToRoom": {
     "description": "板畫面：回到聊天室"
@@ -5992,7 +5972,7 @@
   "@boardInboxCurrentPage": {
     "description": "未分類週期的頁面切換：目前使用中的那頁"
   },
-  "boardInboxPageLabel": "第 {n} 頁 · {date} 完成",
+  "boardInboxPageLabel": "第 {n} 頁 · 完成於 {date}",
   "@boardInboxPageLabel": {
     "description": "未分類歷史頁：順序號與完成日期（MM/DD）",
     "placeholders": {
@@ -6101,10 +6081,6 @@
   "boardEmpty": "這塊板還是空的。",
   "@boardEmpty": {
     "description": "空板"
-  },
-  "boardArchivedReadOnly": "封存 · 唯讀",
-  "@boardArchivedReadOnly": {
-    "description": "封存徽章"
   },
   "boardNoAttachedRoomTooltip": "這塊板沒有掛任何聊天室",
   "@boardNoAttachedRoomTooltip": {
@@ -7728,6 +7704,10 @@
   "@boardSettingsDescriptionHint": {
     "description": "任務板設定頁：描述欄位提示"
   },
+  "boardSettingsSettledReadOnly": "已收尾，唯讀",
+  "@boardSettingsSettledReadOnly": {
+    "description": "任務板設定頁：已收尾的板整頁唯讀"
+  },
   "boardSettingsOwnerOnly": "只有板 owner 能修改",
   "@boardSettingsOwnerOnly": {
     "description": "任務板設定頁：非 owner 的唯讀提示"
@@ -9088,14 +9068,6 @@
   "hostReasonDeclineArchiveTitle": "婉拒封存請求",
   "@hostReasonDeclineArchiveTitle": {
     "description": "主持人操作：婉拒封存請求的理由對話框標題"
-  },
-  "hostReasonArchiveBoardTitle": "封存任務板",
-  "@hostReasonArchiveBoardTitle": {
-    "description": "主持人操作：封存任務板的理由對話框標題"
-  },
-  "hostReasonUnarchiveBoardTitle": "解除封存任務板",
-  "@hostReasonUnarchiveBoardTitle": {
-    "description": "主持人操作：解封任務板的理由對話框標題"
   },
   "hostReasonRenameBoardTitle": "任務板改名",
   "@hostReasonRenameBoardTitle": {

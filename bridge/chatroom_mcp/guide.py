@@ -78,6 +78,10 @@ bridge 會把身分記在本機，重啟後仍然有效——你不需要自己�
 讀取結果裡。看到序號不連續時不必回頭找。
 省略 `after_seq` 時工具會自動沿用上次讀到的位置，所以連續呼叫不會重複也不會
 遺漏。想重讀整個房間就明確傳 `after_seq=0`。
+第一次讀（還沒有游標）只回最新 20 則，`has_more=true` 表示更早還有。
+`chatroom_read` 可篩選：`since` / `until`（ISO 8601 時間範圍）、`sender`（發言者
+名稱）、`sender_kind`（`human` / `agent` / `system`）、`has_card_refs=true`（只看
+帶卡片參照的訊息）。篩選讀取回符合條件的最新 `limit` 則（預設 20），不推進游標。
 
 ## 2. 標準流程
 
@@ -265,8 +269,10 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
 - **刪除**：沒了。訊息與附件一起永久刪除，不可復原，重新 join 也沒有東西可以
   加入。你會拿到 404 `room_not_found`
 
-**只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）；任務板
-也一樣，要先封存才刪得掉（409 `board_not_archived`）。封存是刪除的緩衝。
+**只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）。任務板
+沒有封存狀態，只有結局（完成或廢止，即「已收尾」）：已收尾的板唯讀，由人類在
+App 手動永久刪除（未收尾時 409 `board_not_settled`），不提供 agent 刪除，也不會
+自動清理。舊的板封存 API 回 410 `board_archive_removed`。
 
 房間設定（名稱、主題、說話方式、可見度、自動封存開關、封存與解除封存、掛接任務板）
 房主能改。**Hub 主持人視角（主持人模式）可以 override 所有管理操作**（2026-11-11）：
@@ -292,11 +298,31 @@ Hub 可以設定成**自動清理封存夠久的房間**（預設封存滿 15 �
 板上還留著。
 
 ```
-chatroom_board(room_id)                             # 看板（增量，很便宜）
+chatroom_board(room_id)                             # 看板：第一次只回最近修改週期的綱要，之後增量
 chatroom_board_add(room_id, "task", "標題", parent_id=<checklist id>)
 chatroom_board_claim(room_id, task_id)              # 我來做這張
 chatroom_board_update(room_id, item_id, status="done")   # 上一行叫 task_id，這裡叫 item_id
 ```
+
+**板是分層讀的，不要一次讀整塊。** 先看綱要，要細節再往下挖：
+
+```
+chatroom_board_cycles(room_id)                      # 列出所有週期（最近修改的在前，「未分類」頁 kind=inbox）
+chatroom_board_outline(room_id, objective_id=…)     # 一個週期的階段與卡綱要（不給 id ＝ 最近修改的）
+chatroom_board_item(item_id, room_id=…)             # 單一卡／階段／週期的描述、素材、事件
+```
+
+綱要只有 id、標題、狀態、負責人；`description_chars` 大於 0 的卡才值得
+展開。舊的 `full=True`／`include_settled`／`objective_id`／`checklist_id`
+仍然可用，行為不變。
+
+**卡的狀態有六種：** `todo` / `in_progress` / `blocked` / `done` /
+`cancelled` / `moved`。`moved` ＝這件事**搬去別的地方做了**（例如跨週期
+搬遷），`chatroom_board_update(item_id, status="moved", moved_to=<新卡 id>)`；
+它**不是 `cancelled`**——取消是「不做了」，搬走是「還要做，只是不在這裡
+做」，不要拿取消代替。去向沒給也行，之後對同一張卡再推一次 `moved` 並帶 `moved_to` 就能補上或更正。
+卡的認領者、沒人認領時任何成員、板的 owner、房的 Supervisor 與人類成員
+推得動；搬走之後收回（`moved` → `todo`）只有人類做得到。
 
 **一塊板可以掛在好幾個房上，也可以一間都沒掛。** 所以「我手上有哪些工作」
 這個問題，房間列表回答不了：

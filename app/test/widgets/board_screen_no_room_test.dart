@@ -14,18 +14,18 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('進入路徑不決定能不能改', () {
     test('🔴 從 Library 進來＝editable，不是唯讀', () {
-      expect(boardEditability(archived: false), BoardEditability.editable);
+      expect(boardEditability(settled: false), BoardEditability.editable);
     });
 
     test('viewer 是 role 的事——它與「從哪裡進來」無關', () {
       // viewer 要板的 owner 升你。與進入路徑混為一談的話，
       // 人會一直重試「換一條路進去」，而那條路不存在
-      expect(boardEditability(archived: false, role: 'viewer'),
+      expect(boardEditability(settled: false, role: 'viewer'),
           BoardEditability.viewer);
     });
 
     test('封存壓過一切', () {
-      expect(boardEditability(archived: true), BoardEditability.archived);
+      expect(boardEditability(settled: true), BoardEditability.settled);
     });
   });
 

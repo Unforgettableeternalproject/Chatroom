@@ -674,7 +674,7 @@ final reclaimableTasksProvider =
 
 final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 
-/// Board Library 清單，依狀態分（active / archived）。
+/// Board Library 清單，分進行中（active）與已收尾（settled）。
 ///
 /// ⚠️ **Hub 還沒有 `/api/boards` 之前這支會回 404**，畫面必須把它呈現成
 /// 「這個功能還沒開」而不是一片空白——空清單與端點不存在看起來一模一樣，
@@ -685,11 +685,10 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// 漏了）。漏掉的後果有兩層：清單不會多出東西（功能等於沒作用），而且沿用
 /// 的舊回應 `host_view` 是 false ⇒ banner 亮起「伺服器沒有照做」，
 /// **指著一個完全無辜的方向**（2026-09-05）。
-/// [view] 是**分頁**不是 status：`active` / `archived` / `settled`。
+/// [view] 是**分頁**：`active` / `settled`。
 ///
-/// 前兩個直接對應 Hub 的 `status`；`settled`（已收尾）是第三個軸——
-/// **收尾與封存正交**，一塊做完的板可能還開著、也可能已經封存，所以那一頁
-/// 不能綁在某一個 status 上。
+/// `active` 對應 Hub 的 `status`（板沒有封存狀態了）；`settled`（已收尾，
+/// 有結局）是以 `outcome` 篩出來的。
 final boardLibraryProvider =
     FutureProvider.autoDispose.family<BoardListResult, String>(
   (ref, view) async {

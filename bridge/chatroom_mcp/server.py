@@ -673,41 +673,74 @@ def chatroom_hold(room_id: str, subagent: str = "") -> dict:
 def chatroom_read(
     room_id: str,
     after_seq: int | None = None,
-    limit: int = 100,
+    limit: int | None = None,
     subagent: str = "",
     pinned_only: bool = False,
+    since: str = "",
+    until: str = "",
+    sender: str = "",
+    sender_kind: str = "",
+    has_card_refs: bool = False,
 ) -> dict:
-    """讀取聊天室訊息（增量）。
+    """讀取聊天室訊息（增量，可篩選）。
 
     ``after_seq`` 省略時自動沿用本機記住的讀取游標，連續呼叫不重複也不遺漏；
-    想重讀歷史時明確傳 0。``pinned_only=true`` 只看釘選訊息——這種讀取預設從
-    頭掃整個房間（釘選牆語意，不從游標起算），也**不會**推進游標
+    想重讀歷史時明確傳 0。**第一次讀（還沒有游標）只回最新 20 則**，不會把整段
+    歷史倒給你；``has_more=true`` 表示更早還有，要看就傳 ``after_seq=0`` 與
+    ``limit``。有游標時 ``limit`` 預設 100。``pinned_only=true`` 只看釘選訊息——
+    這種讀取預設從頭掃整個房間（釘選牆語意，不從游標起算），也**不會**推進游標
     （否則會跳過未釘選的訊息）。
+    篩選（可彼此組合，也可與 ``after_seq`` 併用）：``since`` / ``until`` 時間範圍
+    （ISO 8601，含 since、不含 until，無時區視為 UTC）；``sender`` 發言者名稱；
+    ``sender_kind`` 為 human / agent / system；``has_card_refs=true`` 只看帶
+    卡片參照的訊息。時間只是篩選，游標仍是房內 seq。帶篩選又省略 ``after_seq``
+    時，回傳符合條件的最新 ``limit`` 則（預設 20），且**不會**推進游標。
     回傳 ``messages`` 與 ``next_after_seq``（下次可用的游標位置）。
     """
     participant_id, scope = _identity_for(room_id, subagent)
+    filtered = bool(since or until or sender or sender_kind or has_card_refs)
+    tail = False
     if after_seq is not None:
         effective = after_seq
-    elif pinned_only:
-        # 釘選牆要看整房的釘選；游標只服務一般增量讀取
+    elif pinned_only or filtered:
+        # 釘選牆／篩選要看整房；游標只服務一般增量讀取
         effective = 0
-    elif subagent:
-        effective = _subagents.cursor(subagent)
+        tail = filtered and not pinned_only
     else:
-        effective = state().last_seq(room_id)
+        effective = (_subagents.cursor(subagent) if subagent
+                     else state().last_seq(room_id))
+        # 還沒有游標＝新進者：只回最新幾則，不倒整段歷史
+        tail = effective == 0
+    if limit is None:
+        limit = 20 if tail else 100
+    params: dict[str, Any] = {
+        "after_seq": effective, "limit": limit, "pinned_only": pinned_only}
+    if tail:
+        params["tail"] = True
+    if since:
+        params["since"] = since
+    if until:
+        params["until"] = until
+    if sender:
+        params["sender"] = sender
+    if sender_kind:
+        params["sender_kind"] = sender_kind
+    if has_card_refs:
+        params["has_card_refs"] = True
     data = _room_request(
         room_id,
         "GET",
         f"/api/rooms/{room_id}/messages",
         require_identity=False,
         participant_id=participant_id,
-        params={"after_seq": effective, "limit": limit, "pinned_only": pinned_only},
+        params=params,
     )
     messages = data.get("messages", [])
     # **子代理讀訊息不推進父層的游標，但要推進自己那一份。** 父層的游標是
     # 「父層讀到哪裡」的紀錄，被臨時分身推著跑，父層會靜靜跳過沒讀過的訊息；
     # 而子代理若完全不記位置，連續呼叫就會永遠拿到同一批
-    if messages and not pinned_only:
+    # 篩選讀取同釘選牆：只看到子集，推進游標會跳過中間沒被篩到的訊息
+    if messages and not pinned_only and not filtered:
         # P1-06 後 Hub 回傳權威 next_after_seq；缺欄位時（舊版 Hub）退回自算
         head = data.get("next_after_seq", messages[-1]["seq"])
         if subagent:
@@ -715,7 +748,7 @@ def chatroom_read(
         else:
             state().set_last_seq(room_id, head)
     data["after_seq"] = effective
-    if pinned_only:
+    if pinned_only or filtered:
         data["next_after_seq"] = effective
     elif subagent:
         data["next_after_seq"] = _subagents.cursor(subagent)
@@ -1614,14 +1647,109 @@ def chatroom_boards() -> dict:
     板已經不屬於任何一間聊天室了——**一塊板可以掛在好幾個房上，也可以一間
     都沒掛**。所以「我手上有哪些工作」這個問題，房間列表回答不了它。
 
-    每一塊回：``id`` / ``name`` / ``status``（active／archived）/
-    ``attached_room_count`` / ``task_counts``（total、done、claimed）/
+    每一塊回：``id`` / ``name`` / ``status``（active）/ ``outcome``（空字串＝進行中；completed／abandoned＝
+    已收尾，唯讀）/ ``attached_room_count`` / ``task_counts``（total、done、claimed）/
     ``updated_at`` / ``my_role``（owner／editor／viewer）。
 
     拿到 ``id`` 之後，底下的 board 工具都可以改用 ``board_id=`` 呼叫，
     不必先進某一間房。
     """
     return _board_scoped_request("GET", "/api/boards")
+
+
+def _layered_board_read(room_id: str, board_id: str, subagent: str,
+                        suffix: str, params: dict | None = None) -> dict:
+    """分層讀取（cycles／outline／items）的共同入口。
+
+    Hub 側是**新增**的端點，不動 App 讀的那兩支（``GET /board``、
+    ``GET /boards/{id}``）。這裡只負責選軸與標上 ``resolved_board_id``，
+    **不碰讀取水位**——要不要推進水位由呼叫端決定（只有預設的第一次
+    讀取推進，看別的週期／單一項目不算「讀過這塊板」）。
+    """
+    kind, target = _board_target(room_id, board_id)
+    if kind == "board":
+        data = _board_scoped_request(
+            "GET", f"/api/boards/{target}/{suffix}", params=params or {})
+        data["resolved_board_id"] = target
+        return data
+    participant_id, scope = _identity_for(room_id, subagent)
+    data = _room_request(
+        room_id, "GET", f"/api/rooms/{room_id}/board/{suffix}",
+        require_identity=False, participant_id=participant_id,
+        params=params or {})
+    data["resolved_board_id"] = data.get("board_id")
+    data.update(scope)
+    return data
+
+
+@tool()
+@_guard
+def chatroom_board_cycles(room_id: str = "", board_id: str = "",
+                          limit: int = 30, subagent: str = "") -> dict:
+    """列出一塊板的所有週期（含「未分類」頁），**最近修改的在前**。
+
+    只回每個週期一列的摘要，不帶階段與卡：``id`` / ``title`` / ``status``
+    / ``kind``（``inbox`` ＝「未分類」頁，``page_no`` 是它的頁碼；一般
+    週期 ``kind`` 是空字串）/ ``stage_count`` / ``task_counts``（total
+    與各狀態張數）/ ``last_modified_seq`` / ``created_at`` /
+    ``completed_at``。
+
+    ``room_id`` 與 ``board_id`` 只能給一個。``limit`` 預設 30；超過時
+    ``truncated`` 為 true、``cycles_total`` 是總數。
+
+    拿到週期 id 之後用 ``chatroom_board_outline(objective_id=…)`` 看它的
+    階段與卡綱要。
+    """
+    return _layered_board_read(room_id, board_id, subagent, "cycles",
+                               {"limit": limit})
+
+
+@tool()
+@_guard
+def chatroom_board_outline(room_id: str = "", board_id: str = "",
+                           objective_id: str = "",
+                           subagent: str = "") -> dict:
+    """看一個週期的**綱要**：階段與卡的 id／標題／狀態／負責人，沒有描述。
+
+    不給 ``objective_id`` ＝ **最近修改的那個週期**（「最近修改」＝週期、
+    它的階段、階段底下的卡這三者裡最新的一次寫入；「未分類」頁也算）。
+    ``room_id`` 與 ``board_id`` 只能給一個。
+
+    回應：``cycle``（這個週期的摘要，同 ``chatroom_board_cycles`` 的一列）
+    / ``checklists``（``id`` / ``title`` / ``status`` / ``file_count``
+    素材數 / ``created_by_name``）/ ``tasks``（``id`` / ``checklist_id``
+    / ``title`` / ``status`` / ``priority`` / ``claim_state`` /
+    ``claim_name`` / ``moved_to`` / ``description_chars``）/
+    ``is_latest`` / ``cycles_total``。另附 ``reclaimable_tasks``、
+    ``attached_rooms``、``task_requests`` 等板層資訊。
+
+    ``description_chars`` 是描述的字數，不是描述本身——大於 0 的卡才值得
+    用 ``chatroom_board_item`` 展開。
+    """
+    return _layered_board_read(
+        room_id, board_id, subagent, "outline",
+        {"objective_id": objective_id})
+
+
+@tool()
+@_guard
+def chatroom_board_item(item_id: str, room_id: str = "", board_id: str = "",
+                        subagent: str = "") -> dict:
+    """看單一週期／階段／卡的**完整內容**（描述、素材、事件）。
+
+    ``item_id`` 給卡、階段或週期的 id 都行，Hub 會判斷是哪一層（回應的
+    ``kind``：``task`` / ``checklist`` / ``objective``）。``room_id`` 與
+    ``board_id`` 只能給一個。
+
+    回應：``item``（完整的一列，含描述、認領、``moved_to`` 等）/
+    ``stage``、``objective``（卡所在的階段與週期）/ ``files``（階段素材，
+    卡共用）/ ``events``（最近 30 筆動靜，由舊到新）；階段另附 ``tasks``
+    （卡的綱要）。找不到（或已刪除）回 ``item_not_found``。
+    """
+    if not item_id.strip():
+        raise HubError("要給 item_id——卡、階段或週期的 id。")
+    return _layered_board_read(
+        room_id, board_id, subagent, f"items/{item_id.strip()}")
 
 
 @tool()
@@ -1642,8 +1770,16 @@ def chatroom_board(room_id: str = "", full: bool = False,
     **鼓勵常看**：板上是「誰在做什麼、做到哪、哪些卡沒人接手」，那是聊天
     記錄裡撈不出來的東西——三百則訊息之後，講定的事只有板上還留著。
 
-    讀取是**增量**的：預設只回上次之後的變動，所以連著呼叫很便宜，不會把
-    你的上下文塞滿。想重看整塊板傳 ``full=True``。
+    🔭 **分層讀取：不帶任何讀取參數、而且這是你第一次讀這塊板時，只回
+    「最近修改的那個週期」的綱要**（回應 ``view`` 為 ``outline``：階段與
+    卡的 id／標題／狀態／負責人，沒有描述），不會一次把整塊板倒給你。
+    往下看用這三支：``chatroom_board_cycles``（列出所有週期）、
+    ``chatroom_board_outline(objective_id=…)``（指定週期的綱要）、
+    ``chatroom_board_item(item_id=…)``（單一卡／階段／週期的描述、素材、
+    事件）。子代理（``subagent``）沒有自己的水位，不帶參數也是綱要。
+
+    之後再讀是**增量**：只回上次之後的變動（連著呼叫很便宜）。
+    想重看整塊板傳 ``full=True``（舊行為：回完整內容）。
 
     ⚠️ **全量讀取預設只回「還在進行中的週期」。** 一塊做了幾個月的板全量
     回傳會超過你單次讀得下的量（本專案實測 274,701 字元），那時你拿到的是
@@ -1692,6 +1828,33 @@ def chatroom_board(room_id: str = "", full: bool = False,
     那張卡看起來有人在做，實際上沒有，是最值得你接手的一種。
     """
     kind, target = _board_target(room_id, board_id)
+    # 🔭 分層讀取的預設：沒帶任何舊的讀取參數、而且手上沒有這塊板的水位
+    # （第一次讀，或子代理——它沒有自己的水位）⇒ 只回最近修改週期的綱要。
+    # 一帶 full／include_settled／objective_id／checklist_id 就是明確要舊行為，
+    # 原樣走下面。水位已知時不走這裡：增量讀取本來就只回變動，比綱要更小。
+    legacy_requested = bool(
+        full or include_settled or objective_id or checklist_id)
+    if not legacy_requested:
+        if kind == "board":
+            first_read = bool(subagent) or not state().board_cursor(target)
+        else:
+            first_read = bool(subagent) or not _known_board(room_id)
+        if first_read:
+            data = _layered_board_read(room_id, board_id, subagent, "outline")
+            seq = data.get("board_seq")
+            if not subagent:
+                # 綱要算「讀過這塊板」：水位推進之後，後續的變動才會以
+                # board_changed 通知你，再用增量讀取拿
+                if kind == "room":
+                    _remember_board(room_id, data.get("board_id"))
+                if isinstance(seq, int):
+                    bid = target if kind == "board" else data.get("board_id")
+                    if isinstance(bid, str) and bid:
+                        state().set_board_cursor(bid, seq)
+                    elif kind == "room":
+                        state().set_board_seq(room_id, seq)
+            data["after_board_seq"] = 0
+            return data
     if kind == "board":
         # **子代理一律讀全量**（理由同下）；board-scoped 沒有房，水位直接
         # 記在板上
@@ -1841,13 +2004,30 @@ def chatroom_board_update(
     priority: str = "",
     subagent: str = "",
     board_id: str = "",
+    moved_to: str = "",
 ) -> dict:
     """改一張卡的狀態或內容。
 
     ``status`` 是最常用的：Task 走 ``todo`` / ``in_progress`` / ``blocked``
-    / ``done`` / ``cancelled``；Checklist 走 ``open`` / ``done`` /
-    ``cancelled``；Objective 走 ``review``（送審）/ ``reopen`` / ``cancel``
-    / ``complete``（完成）。
+    / ``done`` / ``cancelled`` / ``moved``；Checklist 走 ``open`` /
+    ``done`` / ``cancelled``；Objective 走 ``review``（送審）/ ``reopen``
+    / ``cancel`` / ``complete``（完成）。``priority`` 只能是 ``low`` /
+    ``normal`` / ``high``。
+
+    🚚 **``moved`` ＝這件事搬去別的地方做了**（例如跨週期搬遷），**不是
+    ``cancelled``**：取消是「不做了」，搬走是「還要做，只是不在這裡做」；
+    不要把搬走的卡取消掉，否則板上的紀錄會說謊。``moved_to`` 選填，給新卡
+    的 id（必須是存在的 Task、不能是自己）；去向還沒建好可以先不給，
+    之後對同一張卡再推一次 ``status="moved"`` 並帶 ``moved_to`` 就能補上
+    或更正。``moved`` 與
+    ``done`` / ``cancelled`` 一樣算「收尾」：不再擋著所屬階段的完成。
+    誰能推：這張卡**目前的認領者**、沒人認領時任何成員、被別人認領時
+    則是**這塊板的 owner、房的 Supervisor 或人類成員**。搬走之後要收回
+    （``moved`` → ``todo``）只有人類做得到。
+
+    ``done`` / ``cancelled`` / ``moved`` 這三種收尾狀態，agent 自己推出去
+    之後就不能再打開；``blocked`` 不能直接跳 ``done``（先回
+    ``in_progress``）。
 
     ``reopen``（打回）原則上只有人類按得下去；唯一的例外是派工的 release_fix
     agent 對**自己這一批的週期**（上板嚴重無法完成時）。
@@ -1877,6 +2057,11 @@ def chatroom_board_update(
     _item_axis(room_id, board_id, subagent, "改卡")
     if not item_id.strip():
         raise HubError("要給 item_id——那是你要改的那張卡。")
+    if moved_to.strip() and not (kind == "task" and status == "moved"):
+        raise HubError(
+            "moved_to 只能跟 status=\"moved\" 一起給（而且是 Task）："
+            "它是「這件事搬去哪張卡了」，其他狀態沒有去向可言。"
+        )
     fields = {
         k: v for k, v in (
             ("title", title), ("description", description),
@@ -1927,7 +2112,10 @@ def chatroom_board_update(
             sent = _board_write(
                 room_id, subagent, "POST",
                 f"/api/board/{plural}/{item_id}/status",
-                board_id=board_id, json={"status": status},
+                board_id=board_id,
+                json={"status": status,
+                      **({"moved_to": moved_to.strip()}
+                         if moved_to.strip() else {})},
             )
     except HubError as exc:
         if not fields:

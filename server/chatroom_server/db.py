@@ -466,7 +466,7 @@ CREATE TABLE IF NOT EXISTS board (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     description     TEXT NOT NULL DEFAULT '',
-    status          TEXT NOT NULL DEFAULT 'active',      -- active / archived
+    status          TEXT NOT NULL DEFAULT 'active',      -- active（archived 已於 DATA_VERSION 11 移除；deleted 為軟刪）
     -- **結局**，與 status 正交（艾斯維爾 2026-09-05 裁定 A）。
     -- status 回答「現在還能不能編輯」（可逆），這一欄回答「這份工作的結局
     -- 是什麼」。塞成同一欄的四個值就表達不出「完成**且**收起來」，而那是
@@ -1584,7 +1584,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 10
+DATA_VERSION = 11
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1713,6 +1713,14 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             " ORDER BY n.created_at, n.rowid")
     if version < 10:
         await _migrate_inbox_pages(db)
+    if version < 11:
+        # 板的「封存」狀態移除，只留結局（艾斯維爾 2026-11-12）。
+        # 已封存且有結局 → 清掉封存、只留結局（已收尾）；
+        # 已封存但無結局 → 清掉封存、回到進行中。
+        # 兩種都是 status='archived' → 'active'，結局欄位原樣保留，所以
+        # 一句 UPDATE 就涵蓋；版次只前進，不會重跑。
+        await db.execute(
+            "UPDATE board SET status='active' WHERE status='archived'")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

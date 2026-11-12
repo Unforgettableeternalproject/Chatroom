@@ -42,18 +42,26 @@ class SystemMessageTile extends StatelessWidget {
     final s = context.uep;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(children: [
-        Expanded(child: Container(height: 1, color: s.hairline)),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: CelebrationGlowText(
-            '${message.content} · ${clockTime(message.createdAt)}',
-            style: UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4),
-            textAlign: TextAlign.center,
+      // 文字寬度上限留給兩側髮絲線一點空間：超過就在框內換行，
+      // 不會像無限寬的 Row 子項那樣溢出右緣
+      child: LayoutBuilder(
+        builder: (context, box) => Row(children: [
+          Expanded(child: Container(height: 1, color: s.hairline)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth * 0.8),
+              child: CelebrationGlowText(
+                '${message.content} · ${clockTime(message.createdAt)}',
+                style: UepText.mono(
+                    size: 10, color: s.inkMute, letterSpacing: 1.4),
+                textAlign: TextAlign.center,
+              ),
+            ),
           ),
-        ),
-        Expanded(child: Container(height: 1, color: s.hairline)),
-      ]),
+          Expanded(child: Container(height: 1, color: s.hairline)),
+        ]),
+      ),
     );
   }
 }

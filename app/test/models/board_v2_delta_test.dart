@@ -147,7 +147,7 @@ void main() {
       final s = BoardSummary.fromJson({
         'id': 'b1',
         'name': 'Board V2',
-        'status': 'archived',
+        'status': 'active',
         'attached_room_count': 3,
         'task_counts': {'total': 10, 'done': 4, 'claimed': 2},
         'my_role': 'editor',
@@ -156,7 +156,7 @@ void main() {
       expect(s.taskDone, 4);
       expect(s.taskClaimed, 2);
       expect(s.attachedRoomCount, 3);
-      expect(s.isArchived, isTrue);
+      expect(s.isSettled, isFalse);
       expect(s.canEdit, isTrue);
     });
 
@@ -209,7 +209,7 @@ void _realShapeTests() {
       expect(snap.status, 'active');
       expect(snap.myRole, 'owner');
       expect(snap.canEdit, isTrue);
-      expect(snap.isArchived, isFalse);
+      expect(snap.isSettled, isFalse);
     });
 
     test('members 以 actor_key 建索引，卡片靠它查名字', () {
@@ -236,7 +236,7 @@ void _realShapeTests() {
       // 前者要板的 owner 升你，後者從房間進去就解決了。
       // 講成同一句話的人會一直重試同一條路
       expect(
-        boardEditability(archived: false, role: 'viewer'),
+        boardEditability(settled: false, role: 'viewer'),
         BoardEditability.viewer,
       );
     });
@@ -246,15 +246,15 @@ void _realShapeTests() {
       // 而使用者找不到任何可以改的地方。真的沒權限時 Hub 會回 403，
       // 那是誠實的失敗；預設鎖住則是無聲的
       expect(
-        boardEditability(archived: false, role: ''),
+        boardEditability(settled: false, role: ''),
         BoardEditability.editable,
       );
     });
 
-    test('封存壓過角色', () {
+    test('已收尾壓過角色', () {
       expect(
-        boardEditability(archived: true, role: 'owner'),
-        BoardEditability.archived,
+        boardEditability(settled: true, role: 'owner'),
+        BoardEditability.settled,
       );
     });
   });
