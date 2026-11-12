@@ -898,7 +898,7 @@ class BoardEntryHint {
 /// 用錯的症狀是**「可以追但收不到」**——按鈕亮著、追蹤也成立，然後那則
 /// 通知永遠不來，人要等到事情發生了才發現。
 String boardWatchBlockedReason(BoardSnapshot snap) {
-  if (snap.isArchived) return L10n.current.boardWatchBlockedArchived;
+  if (snap.isSettled) return L10n.current.boardWatchBlockedArchived;
   if (snap.liveAttachedRooms > 0) return '';
   // 「一間都沒掛」與「掛的房全封存了」是兩件事，下一步也不同：前者去掛
   // 一間，後者要開一間新的（封存房不會再有動靜）。講成同一句的話，
@@ -1025,7 +1025,6 @@ class BoardSnapshot {
   /// 漂移的那一半沒有人在看。
   int get liveAttachedRooms => liveAttachedRoomCount ?? activeRooms.length;
 
-  bool get isArchived => status == 'archived';
   bool get canEdit => myRole == 'owner' || myRole == 'editor';
 
   /// 我是不是**任何一間**掛接房的 supervisor。
@@ -1716,7 +1715,7 @@ class BoardSummary {
   final String id;
   final String name;
 
-  /// active / archived。**Board 的封存與 room 的封存是兩件事。**
+  /// 板沒有封存狀態了（2026-11-12），這裡只會是 active。已收尾看 [outcome]。
   final String status;
 
   final int attachedRoomCount;
@@ -1772,10 +1771,8 @@ class BoardSummary {
 
   /// 這件事的**結局**：`''` / `completed` / `abandoned`（N-2）。
   ///
-  /// 🔴 **與 [status] 是兩個正交的軸，不可以合成一個徽章。**
-  /// `archived` 說的是「還能不能編輯」（可逆的收納），這裡說的是「這件事
-  /// 後來怎麼了」。把封存畫成「完成」，等於把**收起來但沒做完**講成做完
-  /// 了——那是最不該弄錯的一格。
+  /// 板沒有「封存」狀態了（2026-11-12）：有結局＝已收尾＝唯讀，清掉結局
+  /// 才能再改；完成與廢止要分開講。
   ///
   /// ⚠️ Hub 的 `_library_row` 一度沒有回這欄（2026-09-05 UI 側發現，當天
   /// 第三次「加到單板回應與房軸、漏了清單列」）。拿不到時是空字串，畫面
@@ -1793,8 +1790,6 @@ class BoardSummary {
   bool get canDeclareOutcome => isSettled || outcomeEligible != false;
 
   bool get isPrivate => visibility == 'private';
-
-  bool get isArchived => status == 'archived';
 
   bool get isCompleted => outcome == 'completed';
   bool get isAbandoned => outcome == 'abandoned';
@@ -1977,7 +1972,7 @@ class BoardListResult {
 /// 這塊板現在為什麼不能改（或可以改）。
 ///
 /// - [editable]：正常
-/// - [archived]：這段歷史結束了，誰都改不了
+/// - [settled]：已收尾（有結局），這段歷史結束了，誰都改不了
 /// - [viewer]：這塊板上你只能看
 ///
 /// ⚠️ 曾經有第四種 `noRoom`——「從 Board Library 進來」，而它會讓整塊板
@@ -1988,20 +1983,20 @@ class BoardListResult {
 /// 那正是艾斯維爾說的「我不認為 Board 沒有綁房間就必定是唯讀」
 /// （2026-09-03）——**server 從來沒有這條規則，它長在這裡。**
 /// 卡片端點認 `X-Session-Key` 之後這個狀態就沒有存在的理由了。
-enum BoardEditability { editable, archived, viewer }
+enum BoardEditability { editable, settled, viewer }
 
-/// [archived] 優先於其餘：封存的板從哪裡進來、你是誰都改不了，
-/// 而「從聊天室進來就能寫」這句話在封存的板上是假的。
+/// [settled] 優先於其餘：已收尾的板從哪裡進來、你是誰都改不了，
+/// 而「從聊天室進來就能寫」這句話在已收尾的板上是假的。
 ///
 /// [role] 空字串代表 **Hub 沒說**（舊 Hub 不回 `my_role`）。那時當作可以寫
 /// ——舊 Hub 上本來就沒有 Board 權限這回事，判成 viewer 會讓整塊板無故
 /// 唯讀，而使用者找不到任何可以改的地方。真的沒權限時 Hub 會回 403，
 /// 那是誠實的失敗；預設鎖住則是無聲的。
 BoardEditability boardEditability({
-  required bool archived,
+  required bool settled,
   String role = '',
 }) {
-  if (archived) return BoardEditability.archived;
+  if (settled) return BoardEditability.settled;
   if (role == 'viewer') return BoardEditability.viewer;
   // 從哪條網址進來**不再是判準**——擋不擋得住由 Hub 的權限說了算，
   // 而那會以 role 的形式回到這裡

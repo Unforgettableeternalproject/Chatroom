@@ -129,10 +129,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 這塊板現在能不能改。
   ///
   /// **從 Library 進來不再是唯讀的理由**（卡片端點認 `X-Session-Key` 之後）。
-  /// 剩下的兩個來源是封存與 viewer 角色，兩者要講不同的話：前者是這段歷史
+  /// 剩下的兩個來源是已收尾與 viewer 角色，兩者要講不同的話：前者是這段歷史
   /// 結束了，後者是這塊板上你只能看。
   BoardEditability get _editability => boardEditability(
-        archived: _archived,
+        settled: _settled,
         role: _watchBoard().value?.myRole ?? '',
       );
 
@@ -288,7 +288,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _header(context, async.value),
-          if (_archived) _archivedNotice(context),
           Expanded(
             child: async.when(
               // 🔴 **重算時不要把整棵樹換成轉圈圈**（想法板
@@ -380,9 +379,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
     return Scaffold(
       backgroundColor: s.bg,
-      // 封存的板整塊降飽和——顏色在這塊板上都是「誰在上面、還要做什麼」，
+      // 已收尾的板整塊降飽和——顏色在這塊板上都是「誰在上面、還要做什麼」，
       // 而這裡兩件事都已經結束了。它是歷史，不是待辦
-      body: _archived
+      body: _settled
           ? ColorFiltered(
               colorFilter: const ColorFilter.matrix(_desaturate35),
               child: body,
@@ -665,15 +664,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   ///
   /// ⇒ Hub 一有 `board.status` 就改看它。§11 的遷移八步沒有一步會撞到這裡，
   /// 所以這段註解是它唯一的守衛。
-  /// 板自己的封存狀態。
+  /// 板自己是不是已收尾（有結局）。
   ///
   /// ⚠️ **不是房間的。** 曾經看的是 `roomDetailProvider` 的房狀態，那在 v2
   /// 是錯的軸：一塊板掛在 A（已封存）與 B（活著）兩間房時，從 A 進來的人
   /// 會看到一塊整片變灰、動作全收的板——**而那塊板是活的**。畫面說了一件
   /// 不成立的事，沒有任何測試或例外抓得到。
   ///
-  /// 現在看 delta 的 `board.status`（Hub 在 c72c92d 補上）。
-  bool get _archived => _watchBoard().value?.isArchived ?? false;
+  /// 看 delta 的 `board.outcome`；板沒有封存狀態了。
+  bool get _settled => _watchBoard().value?.isSettled ?? false;
 
   /// 週期凍結時那一行短提示。沒凍結就是空字串。
   ///
@@ -691,19 +690,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       'cancelled' => l10n.boardObjectiveFrozenCancelled,
       _ => '',
     };
-  }
-
-  Widget _archivedNotice(BuildContext context) {
-    final s = context.uep;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-      decoration: BoxDecoration(
-        color: s.bgSoft,
-        border: Border(bottom: BorderSide(color: s.hairline)),
-      ),
-      child: Text(AppLocalizations.of(context).boardArchivedNotice,
-          style: UepText.serif(size: 13, color: s.inkMute)),
-    );
   }
 
   /// 詳情抽屜。**卡不在了就自己關掉**——它可能被刪掉、或被別人移走，
@@ -834,10 +820,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 而它作用的對象（Objective 清單）在畫面的最左邊。
         //
         // 移到左欄 `OBJECTIVES` 那一行——**動作要靠近它會產生結果的地方**。
-        if (_archived) ...[
-          const _ArchivedBadge(),
-          const SizedBox(width: 8),
-        ],
         // 從 Library 進來時改不了東西。**要講出來而且要講對原因**——
         // 不講的話按鈕都在卻按不動；講成「沒有權限」的話人會去找一個
         // 不存在的權限問題
@@ -849,7 +831,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
         // 從前那個徽章寫「唯讀 · 未從聊天室進入」，用 `_boardOnly` 判剛好
         // 成立；文案改成「未掛接聊天室」之後條件沒跟著改，它就變成一句
         // 事實上錯誤的話：板掛著兩間房，從 BOARDS 分頁進去照樣說沒掛。
-        if (!_archived)
+        if (!_settled)
           _AttachedRoomsBadge(
             count: attached.length,
             onTap: attached.isEmpty
@@ -2313,29 +2295,11 @@ class _Stats {
       AppLocalizations.of(context).boardObjectiveSummary(stages, total);
 }
 
-/// 封存徽章。它站在「＋ 新週期」原本的位置——**那個動作沒有了，
-/// 取而代之的是為什麼沒有**。
-class _ArchivedBadge extends StatelessWidget {
-  const _ArchivedBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = context.uep;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(border: Border.all(color: s.hairline)),
-      child: Text(AppLocalizations.of(context).boardArchivedReadOnly,
-          style:
-              UepText.mono(size: 10, color: s.inkMute, letterSpacing: 1.4)),
-    );
-  }
-}
-
 /// 從 Board Library 進來、手上沒有房內身分。
 ///
-/// 與封存徽章分開是刻意的：**同樣是不能改，原因不一樣，處置也不一樣。**
-/// 封存是「這段歷史結束了」，這個是「你要從掛著它的某間房進去才能動手」。
-/// 講成同一句話的人會去找一個不存在的封存狀態。
+/// 與已收尾的狀態分開是刻意的：**同樣是不能改，原因不一樣，處置也不一樣。**
+/// 已收尾是「這段歷史結束了」，這個是「你要從掛著它的某間房進去才能動手」。
+/// 講成同一句話的人會去找一個不存在的狀態。
 class _AttachedRoomsBadge extends StatelessWidget {
   const _AttachedRoomsBadge({required this.count, this.onTap});
 

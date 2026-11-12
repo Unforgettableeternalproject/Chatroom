@@ -13,11 +13,10 @@ import '../../widgets/uep_button.dart';
 
 /// 宣告一塊板的**結局**：完成／廢止，或把它重新打開（N-2 / N-3）。
 ///
-/// ## 為什麼不是「封存」
+/// ## 沒有「封存」
 ///
-/// `archived` 說的是「還能不能編輯」——那是收納，可逆，與這件事做完了沒有
-/// 無關。`outcome` 說的是**這件事後來怎麼了**。兩個軸都存在，因為「做完了
-/// 但先留著」與「還沒做完就收起來」都是真實的狀態。
+/// 板的封存狀態已移除（2026-11-12），只剩結局。已收尾的板唯讀，重新打開
+/// 才能再改；已收尾的板可以從清單選單永久刪除。
 ///
 /// ## 為什麼只有人類按得到
 ///
@@ -68,9 +67,9 @@ class _OutcomeDialogState extends ConsumerState<_OutcomeDialog> {
             ),
       );
       ref.invalidate(boardByIdProvider(widget.boardId));
-      // 清單那三頁的內容都會變（收尾的板會從「進行中」移到「已收尾」），
-      // 三頁各自是一個 family instance，**一頁一頁 invalidate**
-      for (final v in ['active', 'archived', 'settled']) {
+      // 清單兩頁的內容都會變（收尾的板會從「進行中」移到「已收尾」），
+      // 兩頁各自是一個 family instance，**一頁一頁 invalidate**
+      for (final v in ['active', 'settled']) {
         ref.invalidate(boardLibraryProvider(v));
       }
       if (mounted) Navigator.of(context).pop();

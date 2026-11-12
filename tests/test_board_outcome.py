@@ -114,21 +114,35 @@ async def test_an_agent_cannot_declare_the_work_finished(tmp_path):
         assert r.json()["detail"]["code"] == "human_only"
 
 
-async def test_outcome_and_archived_are_independent(tmp_path):
-    """「完成**且**收起來」要表達得出來——那正是四值互斥做不到的事。"""
-    app, client = await _client(tmp_path, "oc_orthogonal")
+async def test_a_settled_board_is_read_only_until_reopened(tmp_path):
+    """板沒有封存了（2026-11-12）：原本封存帶來的唯讀由結局承接。
+
+    收尾 → 寫入 409 `board_archived`（code 沿用，舊 client 不用改）；
+    清掉結局（reopen）→ 又能寫。
+    """
+    app, client = await _client(tmp_path, "oc_readonly")
     async with client, app.router.lifespan_context(app):
         rid = await _room(client)
         hdr = await _join(client, rid, "human-1", "艾斯維爾", role="human")
         bid, _ = await _settleable(client, hdr, room_name="工作房")
 
         assert (await _settle(client, bid, hdr, "completed")).status_code == 200
-        r = await client.post(f"/api/boards/{bid}/archive", headers=hdr)
-        assert r.status_code == 200, r.text
+        r = await client.post(f"/api/boards/{bid}/objectives",
+                              json={"title": "收尾後還想寫"}, headers=hdr)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "board_archived"
+        r = await client.patch(f"/api/boards/{bid}", json={"name": "改名"},
+                               headers=hdr)
+        assert r.status_code == 409, r.text
 
         body = (await client.get(f"/api/boards/{bid}", headers=hdr)).json()
-        assert body["status"] == "archived"
-        assert body["outcome"] == "completed", "封存把結局洗掉了"
+        assert body["status"] == "active"
+        assert body["outcome"] == "completed"
+
+        assert (await _settle(client, bid, hdr, "")).status_code == 200
+        r = await client.post(f"/api/boards/{bid}/objectives",
+                              json={"title": "重開之後"}, headers=hdr)
+        assert r.status_code == 200, r.text
 
 
 async def test_settled_boards_leave_the_library_but_can_be_asked_for(tmp_path):
@@ -339,8 +353,15 @@ async def test_reopening_is_never_blocked_by_the_precondition(tmp_path):
         bid, room_id = await _settleable(client, hdr)
         assert (await _settle(client, bid, hdr, "completed")).status_code == 200
 
-        # 又掛回去了（於是它「還被綁定著」）
-        await _attach(client, bid, room_id, hdr)
+        # 又掛回去了（於是它「還被綁定著」）。已收尾的板 API 不再讓人掛接，
+        # 這個狀態只會從舊資料來（例如遷移前就已封存、同時掛著房的板），
+        # 所以直接寫列
+        r = await client.post(f"/api/boards/{bid}/rooms/{room_id}",
+                              headers=hdr)
+        assert r.status_code == 409, r.text
+        await app.state.db.execute(
+            "UPDATE board_room SET detached_at=NULL WHERE board_id=?", (bid,))
+        await app.state.db.commit()
 
         r = await _settle(client, bid, hdr, "")
         assert r.status_code == 200, r.text

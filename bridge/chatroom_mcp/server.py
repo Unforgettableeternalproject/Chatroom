@@ -1647,8 +1647,8 @@ def chatroom_boards() -> dict:
     板已經不屬於任何一間聊天室了——**一塊板可以掛在好幾個房上，也可以一間
     都沒掛**。所以「我手上有哪些工作」這個問題，房間列表回答不了它。
 
-    每一塊回：``id`` / ``name`` / ``status``（active／archived）/
-    ``attached_room_count`` / ``task_counts``（total、done、claimed）/
+    每一塊回：``id`` / ``name`` / ``status``（active）/ ``outcome``（空字串＝進行中；completed／abandoned＝
+    已收尾，唯讀）/ ``attached_room_count`` / ``task_counts``（total、done、claimed）/
     ``updated_at`` / ``my_role``（owner／editor／viewer）。
 
     拿到 ``id`` 之後，底下的 board 工具都可以改用 ``board_id=`` 呼叫，

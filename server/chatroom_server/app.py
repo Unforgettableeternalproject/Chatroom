@@ -4247,7 +4247,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _admin_or_403(room, x_participant_id, x_session_key,
                             "刪除這個聊天室", host=host)
         # 🔴 **前置：房必須已經封存**（艾斯維爾 2026-09-23 裁定，與任務板
-        # `board_not_archived` 同一條規則）。刪除不可復原，封存是它的緩衝。
+        # 的同款規則現為 `board_not_settled`）。刪除不可復原，封存是它的緩衝。
         # 主持人也不例外——他要清的本來就是封存房
         if room["status"] != "archived":
             raise _err(409, "room_not_archived",
@@ -6103,10 +6103,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 封存的板一律唯讀，房軸這條路也不例外——漏了這道閘，v1 的建卡
             # 與 reorder 就成了繞過封存的後門（`_board_writer_v2` 與
             # `_board_item_writer` 本來就擋，只有這裡沒擋）
-            if existing["status"] != "active":
-                raise _err(409, "board_archived",
-                           "這塊板已經封存，唯讀", board_id=existing["id"],
-                           board_name=existing["name"])
+            if _board_locked(existing):
+                raise _board_locked_error(existing)
             await _board_member_or_403(
                 existing["id"], actor_key(me["session_key"]), need_write=True,
                 board=existing)
@@ -6265,10 +6263,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         board_id = (row["board_id"] or "").strip()
         if board_id:
             board = await _board_or_404(board_id)
-            if board["status"] != "active":
-                raise _err(409, "board_archived",
-                           "這塊板已經封存，唯讀", board_id=board_id,
-                           board_name=board["name"])
+            if _board_locked(board):
+                raise _board_locked_error(board)
         # 🔴 **身分不綁房**：一塊板掛 A、B 兩房，卡建在 A，持有者用他在 B 房
         # 的 participant_id 推狀態時，`_participant(pid, row["room_id"])` 會回
         # `participant_wrong_room` ——而他明明是這塊板的成員、也正是持卡人。
@@ -10090,6 +10086,22 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "board_not_found", "找不到這塊板")
         return row
 
+    def _board_locked(board) -> bool:
+        """這塊板現在是不是唯讀：**有結局（已收尾）就是唯讀**。
+
+        板沒有「封存」狀態了（艾斯維爾 2026-11-12）；原本封存帶來的唯讀由
+        結局承接。要再動它，owner 先把結局清掉（`board_reopened`）。
+        判準只有這一份——寫入門檻、掛接、追蹤、can_edit 都問它。
+        """
+        return board["status"] != "active" or bool(
+            board["outcome"] if "outcome" in board.keys() else "")
+
+    def _board_locked_error(board, message: str = "") -> HTTPException:
+        """唯讀板的 409。code 維持 `board_archived`，舊 client 的處理不用動。"""
+        return _err(409, "board_archived",
+                    message or "這塊板已經收尾，唯讀",
+                    board_id=board["id"], board_name=board["name"])
+
     async def _board_role(board_id: str, actor: str,
                           host: bool = False) -> str:
         """這個 actor 在板上的角色。不是成員回空字串。
@@ -10406,10 +10418,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # **兩邊都不報錯，篩選就是沒有作用**（審核用Codex 2026-09-02）。
         # 值不合法時明確擋下：默默回全部會讓打錯字的人以為「這個板不存在」
         want = status.strip()
-        if want and want not in ("active", "archived"):
+        if want and want != "active":
             raise _err(422, "invalid_status",
-                       "status 只能是 active 或 archived",
-                       allowed=["active", "archived"])
+                       "板沒有封存狀態了，status 只能是 active；"
+                       "已收尾的板用 outcome=settled 篩選",
+                       allowed=["active"])
         # 分頁常駐 ＝ **自己 owner 的板** ∪ **別人的公開板（且我在某個現存
         # 掛接房裡）**（艾斯維爾 2026-09-03）。
         #
@@ -10768,8 +10781,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # （@開發Novia (除錯) 2026-09-03）。同一個東西的兩個讀取端點
             # 給不同欄位，差別要等有人做那件事才看得見
             "visibility": board["visibility"],
-            # 結局與 status 分開回：少了它，UI 只能拿 status 猜，而
-            # 「封存」與「做完了」是兩件事——收起來的板可能只是暫時擱置
+            # 結局與 status 分開回：板沒有封存狀態了，「已收尾」就是看這一欄
             "outcome": board["outcome"] if "outcome" in board.keys() else "",
             # **宣告入口畫在詳情頁上，所以判準也要在這裡回。** 清單有、詳情
             # 沒有的話，UI 只能回頭撈一整份 Library 才知道這一塊能不能收尾
@@ -11211,8 +11223,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         host = _host_ctx_on(host)
         board = await _board_or_404(board_id)
-        if board["status"] != "active":
-            raise _err(409, "board_archived", "這塊板已經封存，唯讀")
+        if _board_locked(board):
+            raise _board_locked_error(board)
         actor = await _actor_from_headers(session_key, participant_id)
         await _board_member_or_403(board_id, actor, need_write=True, host=host)
         member = await _board_identity(board_id, actor)
@@ -11309,8 +11321,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         editor 能改卡但不能改板本身叫什麼。
         """
         board = await _board_or_404(board_id)
-        if board["status"] != "active":
-            raise _err(409, "board_archived", "封存的板不能改")
+        if _board_locked(board):
+            raise _board_locked_error(board, "已收尾的板不能改")
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
         await _board_owner_or_403(board_id, actor, host)
@@ -11406,56 +11418,17 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "board_id": board_id, "outcome": body.outcome,
                 "board_seq": seq}
 
+    # 板的「封存」已移除（艾斯維爾 2026-11-12）：只剩結局（已收尾）。
+    # 路由留著，是為了讓還沒更新的舊 client 拿到一個說得清楚的錯誤，
+    # 而不是 404／405 這種看不出原因的失敗。
     @app.post("/api/boards/{board_id}/archive",
               dependencies=[Depends(require_auth)])
-    async def archive_board(
-        board_id: str,
-        session_key: str = "",
-        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        x_participant_id: str | None = Header(default=None),
-        host: bool = Depends(host_view),
-    ):
-        """封存一塊板：板變唯讀，**掛接的房照樣聊天**（§3.2）。
-
-        兩件事分開是重點——房封存與板封存在畫面上必須長得不一樣，否則
-        使用者分不出「這個對話結束了」與「這份工作收尾了」。
-        """
-        await _board_or_404(board_id)
-        actor = await _actor_from_headers(x_session_key, x_participant_id,
-                                          session_key)
-        await _board_owner_or_403(board_id, actor, host)
-        seq = await _next_seq_for_board(board_id)
-        await app.state.db.execute(
-            "UPDATE board SET status='archived' WHERE id=?", (board_id,))
-        await _record_board_event(board_id, seq, "board_archived", actor=actor)
-        await _commit_with_retry(app.state.db)
-        await _notify_board_rooms(board_id)
-        return {"ok": True, "board_id": board_id, "status": "archived",
-                "board_seq": seq}
-
     @app.post("/api/boards/{board_id}/unarchive",
               dependencies=[Depends(require_auth)])
-    async def unarchive_board(
-        board_id: str,
-        session_key: str = "",
-        x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
-        x_participant_id: str | None = Header(default=None),
-        host: bool = Depends(host_view),
-    ):
-        """解除封存。封存是可逆的決定，刪除才不是。"""
-        await _board_or_404(board_id)
-        actor = await _actor_from_headers(x_session_key, x_participant_id,
-                                          session_key)
-        await _board_owner_or_403(board_id, actor, host)
-        seq = await _next_seq_for_board(board_id)
-        await app.state.db.execute(
-            "UPDATE board SET status='active' WHERE id=?", (board_id,))
-        await _record_board_event(board_id, seq, "board_unarchived",
-                                  actor=actor)
-        await _commit_with_retry(app.state.db)
-        await _notify_board_rooms(board_id)
-        return {"ok": True, "board_id": board_id, "status": "active",
-                "board_seq": seq}
+    async def board_archive_removed(board_id: str):
+        raise _err(410, "board_archive_removed",
+                   "任務板不再有封存狀態，請改用「完成」或「廢止」收尾；"
+                   "已收尾的板可以永久刪除。")
 
     # 板刪除要清的表。與 _ROOM_OWNED_TABLES 同一個理由手寫，也同一個理由
     # 危險：漏一張表會撞 FK 而**刪到一半**，而共用連線上已執行的 DELETE
@@ -11489,9 +11462,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         板的刪除必須是一個獨立的、對著板本身下的決定——否則使用者刪掉一間
         聊完的對話，會連同整份工作紀錄一起消失。
 
-        🔴 **前置：板必須已經封存**（艾斯維爾 2026-09-07 裁定）。刪除不可
-        復原，封存是它的緩衝——要先按過一次「這份工作收尾了」，才輪得到
-        「這塊板不該存在」。兩個決定合成一步的話，中間沒有任何地方可以反悔。
+        🔴 **前置：板必須已收尾（有結局）**（艾斯維爾 2026-11-12，取代
+        2026-09-07 的「要先封存」——板沒有封存狀態了）。刪除不可復原，收尾
+        是它的緩衝：要先按過一次「完成／廢止」，才輪得到「這塊板不該存在」。
+        兩個決定合成一步的話，中間沒有任何地方可以反悔。不做任何自動清理，
+        只有人手動刪（owner，或主持人 override）。
 
         刪掉之後**掛接的房要說得出實話**：進行中的房變回「沒綁板」（硬刪
         連 `board_room` 的列一起帶走，那正是要的，房主可以再綁一塊），
@@ -11502,9 +11477,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
         await _board_owner_or_403(board_id, actor, host)
-        if board["status"] != "archived":
-            raise _err(409, "board_not_archived",
-                       "要先封存這塊板才能刪除。",
+        if not (board["outcome"] or ""):
+            raise _err(409, "board_not_settled",
+                       "只有已收尾的板才能刪除。",
                        board_status=board["status"])
         db = app.state.db
         rooms = [r["room_id"] for r in await (await db.execute(
@@ -12340,6 +12315,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "board": {
                 "name": board["name"], "description": board["description"],
                 "status": board["status"], "my_role": role,
+                "outcome": board["outcome"] if "outcome" in board.keys() else "",
                 "owner_name": _ident(owner_key, "")[0] if owner_key else "",
             },
             "entries": entries[offset:offset + limit],
@@ -12603,7 +12579,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 兩次獨立的裁定（先 state、稍後才 tags），共用一個欄位的話，下一次
         # 只改其中一邊時 UI 會靜默地跟錯——而入口多一個或少一個不會有任何
         # 地方報錯。判準的**實作**仍只有一份，對外投影成兩個欄位而已。
-        can_annotate = board["status"] == "active" and role != "viewer"
+        can_annotate = not _board_locked(board) and role != "viewer"
         can_set_state = can_annotate
         can_set_tags = can_annotate
         for b in blocks:
@@ -12647,7 +12623,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 判準必須跟寫入端點的門檻同源（`_board_writer_v2`）：
                 # 板要 active，角色不能是 viewer。只看角色的話，封存板會給
                 # owner 一個編輯框，按下去才 409
-                "can_edit": board["status"] == "active" and role != "viewer",
+                "can_edit": not _board_locked(board) and role != "viewer",
                 "blocks": out}
 
     # ── 想法板標籤（觀察 ④）─────────────────────────────────────────
@@ -13696,13 +13672,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         都不影響。綁 participant 的話，agent 重啟一次追蹤就靜靜地斷了。
         """
         board = await _board_or_404(board_id)
-        if board["status"] != "active":
-            # 封存的板是唯讀的，而追蹤現在會推進水位、寫 event、改動卡的號
-            # ——那是寫入。漏掉這道檢查的話，封存就有一個側門
+        if _board_locked(board):
+            # 已收尾的板是唯讀的，而追蹤現在會推進水位、寫 event、改動卡的號
+            # ——那是寫入。漏掉這道檢查的話，唯讀就有一個側門
             # （審核用Codex-2 2026-09-02）
-            raise _err(409, "board_archived",
-                       "這塊板已經封存，不能追蹤",
-                       board_id=board_id, board_name=board["name"])
+            raise _board_locked_error(board, "這塊板已經收尾，不能追蹤")
         actor = await _actor_from_headers(x_session_key, x_participant_id)
         # viewer 也能追蹤：追蹤不改板上的內容，它只改「誰想知道」
         await _board_member_or_403(board_id, actor, board=board)
@@ -14095,8 +14069,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         一邊的話，任一方都能單方面把對方拉進來。
         """
         board = await _board_or_404(board_id)
-        if board["status"] != "active":
-            raise _err(409, "board_archived", "封存的板不能掛接新的聊天室")
+        if _board_locked(board):
+            raise _board_locked_error(board, "已收尾的板不能掛接新的聊天室")
         room = await _room_or_404(room_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id)
         await _board_member_or_403(board_id, actor, need_write=True)
