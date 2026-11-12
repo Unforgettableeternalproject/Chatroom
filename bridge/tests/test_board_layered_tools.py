@@ -145,3 +145,47 @@ def test_first_read_hands_back_the_outline_directives(fake_hub):
     out = srv.chatroom_board(ROOM)
     assert out["directives"] == d
     assert srv.state().board_cursor(BOARD) == 9
+
+
+def test_first_read_asks_the_outline_for_open_cards_only(fake_hub):
+    _join(fake_hub)
+    fake_hub.json("GET", f"/api/rooms/{ROOM}/board/outline", _outline(9))
+    srv.chatroom_board(ROOM)
+    assert fake_hub.calls[-1].url.params["open_only"] == "true"
+
+
+def test_first_read_by_board_id_also_asks_for_open_cards_only(fake_hub):
+    fake_hub.json("GET", f"/api/boards/{BOARD}/outline", _outline(5))
+    srv.chatroom_board(board_id=BOARD)
+    assert fake_hub.calls[-1].url.params["open_only"] == "true"
+
+
+def test_outline_tool_defaults_to_open_only_and_can_see_everything(fake_hub):
+    fake_hub.json("GET", f"/api/boards/{BOARD}/outline", _outline(8))
+    srv.chatroom_board_outline(board_id=BOARD)
+    params = fake_hub.calls[-1].url.params
+    assert params["open_only"] == "true" and "checklist_id" not in params
+    srv.chatroom_board_outline(board_id=BOARD, open_only=False,
+                               checklist_id="c-1")
+    params = fake_hub.calls[-1].url.params
+    assert params["open_only"] == "false" and params["checklist_id"] == "c-1"
+
+
+def test_outline_truncation_note_is_identical_in_docstring_guide_and_doc():
+    from pathlib import Path
+    import inspect
+    from chatroom_mcp.guide import GUIDE
+    doc = (Path(__file__).resolve().parents[2] / "docs"
+           / "CHATROOM.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    para = ("綱要欄位是精簡的：空值與預設值不輸出（沒有 `status` ＝ `todo`、沒有\n"
+            "`priority` ＝ `normal`）。`chatroom_board_outline` 預設 `open_only=True`，只回\n"
+            "未收尾的卡（略過 done／cancelled／moved，被略過的張數在 `filtered.hidden_tasks`），\n"
+            "要看全部傳 `open_only=False`；`checklist_id=<階段 id>` 只看一個階段。綱要超過\n"
+            "20000 字元時一張卡都不回，只回各階段的 `task_counts`、標 `truncated: true`，\n"
+            "改用 `checklist_id` 逐階段讀。\n")
+    # 工具說明尾端會被附上版本行，縮排不一；逐行去掉前導空白再比
+    docstring = "\n".join(
+        l.strip() for l in (srv.chatroom_board_outline.__doc__ or "").splitlines())
+    assert para in GUIDE.replace("\r\n", "\n")
+    assert para in doc
+    assert para in docstring + "\n"

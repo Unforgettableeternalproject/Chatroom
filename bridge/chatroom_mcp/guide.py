@@ -318,8 +318,15 @@ chatroom_board_item(item_id, room_id=…)             # 單一卡／階段／週
 ```
 
 綱要只有 id、標題、狀態、負責人；`description_chars` 大於 0 的卡才值得
-展開。舊的 `full=True`／`include_settled`／`objective_id`／`checklist_id`
-仍然可用，行為不變。
+展開。
+綱要欄位是精簡的：空值與預設值不輸出（沒有 `status` ＝ `todo`、沒有
+`priority` ＝ `normal`）。`chatroom_board_outline` 預設 `open_only=True`，只回
+未收尾的卡（略過 done／cancelled／moved，被略過的張數在 `filtered.hidden_tasks`），
+要看全部傳 `open_only=False`；`checklist_id=<階段 id>` 只看一個階段。綱要超過
+20000 字元時一張卡都不回，只回各階段的 `task_counts`、標 `truncated: true`，
+改用 `checklist_id` 逐階段讀。
+舊的 `full=True`／`include_settled`／`objective_id`／`checklist_id`
+對 `chatroom_board` 仍然可用，行為不變。
 
 **卡的狀態有六種：** `todo` / `in_progress` / `blocked` / `done` /
 `cancelled` / `moved`。`moved` ＝這件事**搬去別的地方做了**（例如跨週期
@@ -441,8 +448,8 @@ task）一律落在使用中的那一頁。使用中的頁照一般週期的流�
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
 ⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
 而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
-摘要每項一行並寫出變動（例如「待辦→進行中」、被誰認領、依賴變更），只列前三項，
-其餘以「等 N 項」帶過（N 是全部項數）。
+摘要每項一行並寫出變動（例如「待辦→進行中」、被誰認領、依賴變更、被依賴變更），
+只列前三項，其餘以「另 N 項」帶過（N 是沒列出的項數，不是全部項數）。
 
 **監督者派得了工**（Hub 2026-09-19）：`chatroom_run_request` 對一般 agent
 是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。

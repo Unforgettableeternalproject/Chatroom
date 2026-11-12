@@ -1712,7 +1712,8 @@ def chatroom_board_cycles(room_id: str = "", board_id: str = "",
 @tool()
 @_guard
 def chatroom_board_outline(room_id: str = "", board_id: str = "",
-                           objective_id: str = "",
+                           objective_id: str = "", checklist_id: str = "",
+                           open_only: bool = True,
                            subagent: str = "") -> dict:
     """看一個週期的**綱要**：階段與卡的 id／標題／狀態／負責人，沒有描述。
 
@@ -1731,10 +1732,18 @@ def chatroom_board_outline(room_id: str = "", board_id: str = "",
 
     ``description_chars`` 是描述的字數，不是描述本身——大於 0 的卡才值得
     用 ``chatroom_board_item`` 展開。
+
+    綱要欄位是精簡的：空值與預設值不輸出（沒有 `status` ＝ `todo`、沒有
+    `priority` ＝ `normal`）。`chatroom_board_outline` 預設 `open_only=True`，只回
+    未收尾的卡（略過 done／cancelled／moved，被略過的張數在 `filtered.hidden_tasks`），
+    要看全部傳 `open_only=False`；`checklist_id=<階段 id>` 只看一個階段。綱要超過
+    20000 字元時一張卡都不回，只回各階段的 `task_counts`、標 `truncated: true`，
+    改用 `checklist_id` 逐階段讀。
     """
-    return _layered_board_read(
-        room_id, board_id, subagent, "outline",
-        {"objective_id": objective_id})
+    params: dict = {"objective_id": objective_id, "open_only": open_only}
+    if checklist_id:
+        params["checklist_id"] = checklist_id
+    return _layered_board_read(room_id, board_id, subagent, "outline", params)
 
 
 @tool()
@@ -1784,7 +1793,9 @@ def chatroom_board(room_id: str = "", full: bool = False,
     ``chatroom_board_item(item_id=…)``（單一卡／階段／週期的描述、素材、
     事件）。綱要回應附 ``directives``（板上既有的 Supervisor 指示，最近 50 筆，
     與全量讀取同一份規則）——水位推進後增量讀取不會再給，首讀就要看。
-    子代理（``subagent``）沒有自己的水位，不帶參數也是綱要。
+    子代理（``subagent``）沒有自己的水位，不帶參數也是綱要。首讀的綱要同樣
+    只回未收尾的卡、超過上限時只回階段統計（規則見
+    ``chatroom_board_outline``）。
 
     之後再讀是**增量**：只回上次之後的變動（連著呼叫很便宜）。
     想重看整塊板傳 ``full=True``（舊行為：回完整內容）。
@@ -1850,7 +1861,9 @@ def chatroom_board(room_id: str = "", full: bool = False,
         else:
             first_read = bool(subagent) or not _known_board(room_id)
         if first_read:
-            data = _layered_board_read(room_id, board_id, subagent, "outline")
+            # 首讀只看未收尾的卡（規則見 chatroom_board_outline）
+            data = _layered_board_read(room_id, board_id, subagent, "outline",
+                                       {"open_only": True})
             seq = data.get("board_seq")
             if not subagent:
                 # 綱要算「讀過這塊板」：水位推進之後，後續的變動才會以

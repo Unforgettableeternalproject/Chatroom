@@ -731,3 +731,56 @@ async def test_digest_deleted_item(tmp_path):
         await app.state.sweep_once()
         msgs = await _events(client, rid, owner, "board_digest")
         assert _digest_lines(msgs[-1]) == ["- 「卡丙」：刪除"]
+
+
+async def test_digest_describes_both_ends_of_a_dependency_change(tmp_path):
+    """依賴邊的另一端只被推進 board_seq、自己沒有事件——摘要要把它也講清楚：
+    依賴方「依賴變更」、被依賴方「被依賴變更」。"""
+    app, client = await _client(tmp_path, "digest-dep",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, cid, tid = await _digest_world(client, rid, owner)
+        other = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                   json={"title": "卡丁"},
+                                   headers=owner)).json()["id"]
+        await app.state.sweep_once()                      # 收掉「新增」
+        r = await client.patch(f"/api/board/tasks/{tid}",
+                               json={"depends_on": [other]}, headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        msgs = await _events(client, rid, owner, "board_digest")
+        lines = _digest_lines(msgs[-1])
+        assert "- 「卡丙」：依賴變更" in lines
+        assert "- 「卡丁」：被依賴變更" in lines
+
+        # 從被依賴那一端改（affects）：卡丙變成依賴卡戊，卡戊是被依賴方
+        third = (await client.post(f"/api/board/checklists/{cid}/tasks",
+                                   json={"title": "卡戊"},
+                                   headers=owner)).json()["id"]
+        await app.state.sweep_once()
+        r = await client.patch(f"/api/board/tasks/{third}",
+                               json={"affects": [other]}, headers=owner)
+        assert r.status_code == 200, r.text
+        await app.state.sweep_once()
+        lines = _digest_lines((await _events(
+            client, rid, owner, "board_digest"))[-1])
+        assert "- 「卡戊」：依賴變更" in lines
+        assert "- 「卡丁」：依賴變更" in lines
+
+
+async def test_digest_tail_counts_only_the_items_not_listed(tmp_path):
+    """列了三項、總共九項 → 「另 6 項」，不是總數 9（那讀起來像還有 9 項沒列）。"""
+    app, client = await _client(tmp_path, "digest-tail",
+                                board_digest_interval=0.0, sweep_interval=3600)
+    async with app.router.lifespan_context(app), client:
+        rid, owner = await _room(client)
+        _, cid, _ = await _digest_world(client, rid, owner)
+        for i in range(6):
+            await client.post(f"/api/board/checklists/{cid}/tasks",
+                              json={"title": f"另一張{i}"}, headers=owner)
+        await app.state.sweep_once()
+        (msg,) = await _events(client, rid, owner, "board_digest")
+        lines = _digest_lines(msg)
+        assert len(lines) == 4 and lines[-1] == "另 6 項", lines
+        assert "等 " not in msg["content"]

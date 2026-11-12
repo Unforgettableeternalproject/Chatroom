@@ -9473,6 +9473,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 phrases["assign"] = f"指派給 {p.get('target_name') or '某人'}"
             elif et == "checklist_moved":
                 phrases["moved"] = "搬走"
+            elif et == "task_dependency_touched":
+                # 依賴邊的另一端：自己沒有事件，由 `_flush_board_digest` 從
+                # 對方的 `dependencies` 反推（見那邊的說明）
+                if p.get("role") == "depended":
+                    phrases.setdefault("deps_by", "被依賴變更")
+                else:
+                    phrases.setdefault("deps", "依賴變更")
             elif et.endswith("_updated"):
                 for f in p.get("fields") or []:
                     if f in ("depends_on", "affects"):
@@ -9552,6 +9559,26 @@ def create_app(config: Config | None = None) -> FastAPI:
                 key = (e["item_kind"], e["item_id"])
                 if key in wanted:
                     events_by_item.setdefault(key, []).append(e)
+                # 改依賴時只有「被編輯的那張卡」有事件；邊另一端的卡只被推進
+                # board_seq（所以列在清單裡），自己沒有任何事件可描述。從
+                # 編輯方記的 `dependencies.added／removed` 反推：邊是
+                # (依賴方, 被依賴方)，被依賴方記「被依賴變更」。
+                try:
+                    dep = (json.loads(e["payload_json"] or "{}")
+                           .get("dependencies") or {})
+                except (ValueError, AttributeError):
+                    continue
+                for edge in (dep.get("added") or []) + (dep.get("removed") or []):
+                    if not isinstance(edge, (list, tuple)) or len(edge) != 2:
+                        continue
+                    for role, other in (("dependent", edge[0]),
+                                        ("depended", edge[1])):
+                        okey = ("task", other)
+                        if other != e["item_id"] and okey in wanted:
+                            events_by_item.setdefault(okey, []).append({
+                                "event_type": "task_dependency_touched",
+                                "actor_name": "",
+                                "payload_json": json.dumps({"role": role})})
         head = "、".join(f"{k} {v} 項" for k, v in counts.items())
         # 每項獨立一行（"- " 開頭）：標題可能很長，併成單行會溢出 App 畫面；
         # 含換行的 system 訊息在 App 走區塊渲染，agent 讀純文字也一目了然
@@ -9559,7 +9586,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             f"- 「{t}」" + (f"：{d}" if (d := _digest_describe(
                 events_by_item.get((k, i), []))) else "")
             for k, i, t in titles[:3])
-        more = f"\n等 {len(titles)} 項" if len(titles) > 3 else ""
+        # 剩下沒列的數量（總數－已列數），不是總數
+        more = f"\n另 {len(titles) - 3} 項" if len(titles) > 3 else ""
         # 🔑 **收件人以 session_key 即時反查，不用設定當下的名字快照。**
         #
         # supervisor 常常在被指定的當下還沒進房（那正是要用指派把他叫進來的
@@ -11458,15 +11486,50 @@ def create_app(config: Config | None = None) -> FastAPI:
             "order": "last_modified_seq 由大到小（最近修改的在前）",
         }
 
+    # 綱要裡 checklists＋tasks 的緊湊 JSON 字元上限。超過就不回卡，改回各階段
+    # 的統計並標 `truncated`——寧可明講「太大了，請逐階段讀」，也不靜默截斷。
+    OUTLINE_MAX_CHARS = 20000
+    _OUTLINE_SETTLED = ("done", "cancelled", "moved")
+
+    def _outline_slim(row: dict, defaults: dict) -> dict:
+        """省略空值與預設值：空字串、空清單、0、false、None 都不輸出，
+        `defaults` 裡列的欄位值等於預設也不輸出（status 省略＝todo）。"""
+        out = {}
+        for k, v in row.items():
+            if k in defaults:
+                if v == defaults[k]:
+                    continue
+            elif v in (None, "", 0, False, [], {}):
+                continue
+            out[k] = v
+        return out
+
     async def _outline_view(scope_sql: str, scope_params: list,
-                            objective_id: str) -> dict:
-        """一個週期的階段與卡綱要。沒指定週期＝最近修改的那一個。"""
+                            objective_id: str, checklist_id: str = "",
+                            open_only: bool = False) -> dict:
+        """一個週期的階段與卡綱要。沒指定週期＝最近修改的那一個。
+
+        `checklist_id` 只看那一個階段（週期由它推出，優先於 objective_id）；
+        `open_only` 只回未收尾的卡（略過 done／cancelled／moved，被略過的
+        張數寫在 `filtered` 與各階段的 `tasks_hidden`）。精簡後仍超過
+        `OUTLINE_MAX_CHARS` 就只回階段統計並標 `truncated`。
+        """
         db = app.state.db
         cycles = await _cycle_summaries(scope_sql, scope_params)
         base = {"view": "outline", "full": False,
-                "cycles_total": len(cycles)}
+                "cycles_total": len(cycles), "truncated": False}
         if not cycles:
             return {**base, "cycle": None, "checklists": [], "tasks": []}
+        checklist_id = (checklist_id or "").strip()
+        if checklist_id:
+            srow = await (await db.execute(
+                "SELECT objective_id FROM board_checklist WHERE id=?"
+                f" AND deleted=0 AND {scope_sql}",
+                (checklist_id, *scope_params))).fetchone()
+            if srow is None:
+                raise _err(404, "checklist_not_found",
+                           "這塊板上找不到這個階段（或已被刪除）")
+            objective_id = srow["objective_id"]
         if objective_id:
             cycle = next((c for c in cycles if c["id"] == objective_id), None)
             if cycle is None:
@@ -11514,17 +11577,73 @@ def create_app(config: Config | None = None) -> FastAPI:
                                 []).append(t)
         for bid, group in by_board.items():
             await _dep_annotate(group, bid, light=True)
-        return {
+        if checklist_id:
+            checklists = [c for c in checklists if c["id"] == checklist_id]
+            tasks = [t for t in tasks if t["checklist_id"] == checklist_id]
+        counts: dict[str, dict] = {}
+        for t in tasks:
+            c = counts.setdefault(t["checklist_id"], {"total": 0})
+            c["total"] += 1
+            c[t["status"]] = c.get(t["status"], 0) + 1
+        hidden: dict[str, int] = {}
+        if open_only:
+            kept = []
+            for t in tasks:
+                if t["status"] in _OUTLINE_SETTLED:
+                    hidden[t["checklist_id"]] = (
+                        hidden.get(t["checklist_id"], 0) + 1)
+                else:
+                    kept.append(t)
+            tasks = kept
+        for c in checklists:
+            c["tasks_hidden"] = hidden.get(c["id"], 0)
+        slim_checklists = [_outline_slim(c, {"status": "open"})
+                           for c in checklists]
+        slim_tasks = [_outline_slim(t, {"status": "todo",
+                                        "priority": "normal"})
+                      for t in tasks]
+        filtered = ({"checklist_id": checklist_id or None,
+                     "open_only": open_only,
+                     "hidden_tasks": sum(hidden.values())}
+                    if (checklist_id or open_only) else None)
+        more = ("只有綱要，沒有描述／素材／事件；欄位省略＝預設值或空"
+                "（沒有 status ＝ todo、沒有 priority ＝ normal）。"
+                "要某張卡或某個階段的完整內容：chatroom_board_item"
+                "(item_id=<id>)。其他週期：chatroom_board_cycles() 列出，"
+                "再用 chatroom_board_outline(objective_id=<id>)。")
+        size = len(json.dumps([slim_checklists, slim_tasks],
+                              ensure_ascii=False, separators=(",", ":")))
+        out = {
             **base,
             "cycle": cycle,
             "is_latest": cycle["id"] == cycles[0]["id"],
-            "checklists": checklists,
-            "tasks": tasks,
-            "more": "只有綱要，沒有描述／素材／事件。要某張卡或某個階段的"
-                    "完整內容：chatroom_board_item(item_id=<id>)。"
-                    "其他週期：chatroom_board_cycles() 列出，再用 "
-                    "chatroom_board_outline(objective_id=<id>)。",
+            "filtered": filtered,
         }
+        if size > OUTLINE_MAX_CHARS:
+            # 不靜默截斷：卡一張都不回，只給各階段的狀態統計
+            return {
+                **out, "truncated": True,
+                "checklists": [
+                    _outline_slim({"id": c["id"], "title": c["title"],
+                                   "status": c["status"],
+                                   "task_counts": counts.get(
+                                       c["id"], {"total": 0})},
+                                  {"status": "open"})
+                    for c in checklists],
+                "tasks": [], "tasks_total": sum(
+                    v["total"] for v in counts.values()),
+                "more": "這個週期的綱要超過 "
+                        f"{OUTLINE_MAX_CHARS} 字元上限，只回各階段的統計"
+                        "（task_counts）。"
+                        + ("這個階段單獨就超過上限：加 open_only=true，或用 "
+                           "chatroom_board_item(item_id=<階段 id>) 看。"
+                           if checklist_id else
+                           "用 checklist_id=<階段 id> 逐階段讀卡"
+                           "（chatroom_board_outline(checklist_id=…)），"
+                           "加 open_only=true 可略過已收尾的卡。"),
+            }
+        return {**out, "checklists": slim_checklists, "tasks": slim_tasks,
+                "more": more}
 
     async def _item_view(scope_sql: str, scope_params: list, item_id: str,
                          board_id: str) -> dict:
@@ -11651,14 +11770,20 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/rooms/{room_id}/board/outline",
              dependencies=[Depends(require_auth)])
     async def read_board_outline(
-        room_id: str, objective_id: str = "",
+        room_id: str, objective_id: str = "", checklist_id: str = "",
+        open_only: bool = False,
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
-        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。"""
+        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。
+
+        checklist_id 只看一個階段；open_only 略過已收尾的卡；太大時只回
+        階段統計並標 truncated。
+        """
         room, attached, scope_sql, scope_params, me_key = \
             await _room_board_scope(room_id, x_participant_id, host)
-        out = await _outline_view(scope_sql, scope_params, objective_id)
+        out = await _outline_view(scope_sql, scope_params, objective_id,
+                                  checklist_id, open_only)
         # 指示掛在板上；房沒掛板就沒有
         directives, directives_more = (
             await _board_directives(attached["id"], 0)
@@ -11720,18 +11845,24 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/boards/{board_id}/outline",
              dependencies=[Depends(require_auth)])
     async def read_board_outline_v2(
-        board_id: str, objective_id: str = "",
+        board_id: str, objective_id: str = "", checklist_id: str = "",
+        open_only: bool = False,
         session_key: str = "",
         x_session_key: str | None = Header(default=None, alias="X-Session-Key"),
         x_participant_id: str | None = Header(default=None),
         host: bool = Depends(host_view),
     ):
-        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。"""
+        """一個週期的階段與卡綱要；不給 objective_id ＝ 最近修改的週期。
+
+        checklist_id 只看一個階段；open_only 略過已收尾的卡；太大時只回
+        階段統計並標 truncated。
+        """
         board = await _board_or_404(board_id)
         actor = await _actor_from_headers(x_session_key, x_participant_id,
                                           session_key)
         my_role = await _board_member_or_403(board_id, actor, host=host)
-        out = await _outline_view("board_id=?", [board_id], objective_id)
+        out = await _outline_view("board_id=?", [board_id], objective_id,
+                                  checklist_id, open_only)
         directives, directives_more = await _board_directives(board_id, 0)
         return {
             "board_id": board_id,

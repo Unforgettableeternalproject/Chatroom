@@ -360,3 +360,168 @@ async def test_room_without_board_has_no_directives(tmp_path):
         body = (await client.get(f"/api/rooms/{rid}/board", headers={
             **OWNER, "X-Participant-Id": pid})).json()
         assert body["directives"] == [] and body["directives_has_more"] is False
+
+
+# ---------------------------------------------------------------------------
+# 綱要的大小：精簡欄位、checklist_id／open_only 篩選、超過上限只回統計
+# ---------------------------------------------------------------------------
+
+
+async def _big_cycle(client, stages=10, per_stage=14, done_every=5):
+    """一個 140 張卡的週期；每 `done_every` 張有 3 張完成（約六成已收尾）。"""
+    bid = (await client.post("/api/boards", headers=OWNER,
+                             json={"name": "大板"})).json()["id"]
+    oid = (await client.post(f"/api/boards/{bid}/objectives", headers=OWNER,
+                             json={"title": "大週期"})).json()["id"]
+    stage_ids, n, done = [], 0, 0
+    for s in range(stages):
+        sid = (await client.post(
+            f"/api/board/objectives/{oid}/checklists", headers=OWNER,
+            json={"title": f"階段 {s}：整理與驗證流程"})).json()["id"]
+        stage_ids.append(sid)
+        for _ in range(per_stage):
+            tid = (await client.post(
+                f"/api/board/checklists/{sid}/tasks", headers=OWNER,
+                json={"title": f"實作第 {n} 項功能並補齊測試與說明文件",
+                      "description": "描述" * 30})).json()["id"]
+            if n % done_every < 3:
+                for st in ("in_progress", "done"):
+                    r = await client.post(f"/api/board/tasks/{tid}/status",
+                                          headers=OWNER, json={"status": st})
+                    assert r.status_code == 200, r.text
+                done += 1
+            n += 1
+    return bid, oid, stage_ids, n, done
+
+
+def _core_chars(body):
+    import json
+    return len(json.dumps([body["checklists"], body["tasks"]],
+                          ensure_ascii=False, separators=(",", ":")))
+
+
+async def test_outline_omits_empty_and_default_fields(tmp_path):
+    app, client = await _client(tmp_path, "outline-slim")
+    async with app.router.lifespan_context(app), client:
+        bid, _, _, ids = await _setup(client)
+        body = (await client.get(f"/api/boards/{bid}/outline",
+                                 headers=OWNER)).json()
+        assert body["truncated"] is False and body["filtered"] is None
+        task = body["tasks"][0]
+        # 辨識與決策需要的欄位留著；空值／預設值不輸出
+        assert set(task) == {"id", "checklist_id", "title", "status",
+                             "description_chars"}
+        stage = body["checklists"][0]
+        assert set(stage) <= {"id", "title", "created_by_name",
+                              "created_by_kind"}, stage
+        assert "status" not in stage and "file_count" not in stage
+
+
+async def test_outline_of_a_140_card_cycle_stays_within_the_cap(tmp_path):
+    app, client = await _client(tmp_path, "outline-140")
+    async with app.router.lifespan_context(app), client:
+        bid, oid, stage_ids, n, done = await _big_cycle(client)
+        assert n == 140
+        # 預設（bridge 帶 open_only）：只剩未收尾的卡，在上限內
+        body = (await client.get(f"/api/boards/{bid}/outline",
+                                 params={"open_only": "true"},
+                                 headers=OWNER)).json()
+        assert body["truncated"] is False
+        assert len(body["tasks"]) == n - done
+        assert _core_chars(body) <= 20000
+        assert body["filtered"] == {"checklist_id": None, "open_only": True,
+                                    "hidden_tasks": done}
+        assert all(t.get("status", "todo") not in ("done", "cancelled",
+                                                   "moved")
+                   for t in body["tasks"])
+        assert sum(c.get("tasks_hidden", 0)
+                   for c in body["checklists"]) == done
+
+
+async def test_outline_over_the_cap_returns_stage_stats_not_a_silent_cut(
+        tmp_path):
+    app, client = await _client(tmp_path, "outline-cap")
+    async with app.router.lifespan_context(app), client:
+        bid, oid, stage_ids, n, done = await _big_cycle(client)
+        body = (await client.get(f"/api/boards/{bid}/outline",
+                                 headers=OWNER)).json()
+        assert body["truncated"] is True and body["tasks"] == []
+        assert body["tasks_total"] == n
+        assert [c["id"] for c in body["checklists"]] == stage_ids
+        counts = body["checklists"][0]["task_counts"]
+        assert counts["total"] == 14 and counts["done"] + counts["todo"] == 14
+        assert sum(c["task_counts"]["total"] for c in body["checklists"]) == n
+        assert "checklist_id" in body["more"]
+        assert len(__import__("json").dumps(body, ensure_ascii=False)) < 6000
+
+
+async def test_outline_checklist_id_reads_one_stage(tmp_path):
+    app, client = await _client(tmp_path, "outline-stage")
+    async with app.router.lifespan_context(app), client:
+        bid, oid, stage_ids, n, done = await _big_cycle(client)
+        sid = stage_ids[3]
+        body = (await client.get(f"/api/boards/{bid}/outline",
+                                 params={"checklist_id": sid},
+                                 headers=OWNER)).json()
+        assert body["truncated"] is False
+        assert body["cycle"]["id"] == oid
+        assert [c["id"] for c in body["checklists"]] == [sid]
+        assert len(body["tasks"]) == 14
+        assert {t["checklist_id"] for t in body["tasks"]} == {sid}
+        assert body["filtered"]["checklist_id"] == sid
+        # checklist_id 優先於 objective_id
+        other = (await client.post(f"/api/boards/{bid}/objectives",
+                                   headers=OWNER,
+                                   json={"title": "別的週期"})).json()["id"]
+        body = (await client.get(
+            f"/api/boards/{bid}/outline",
+            params={"checklist_id": sid, "objective_id": other},
+            headers=OWNER)).json()
+        assert body["cycle"]["id"] == oid
+        r = await client.get(f"/api/boards/{bid}/outline",
+                             params={"checklist_id": "nope"}, headers=OWNER)
+        assert r.status_code == 404
+        assert r.json()["detail"]["code"] == "checklist_not_found"
+
+
+async def test_outline_open_only_hides_settled_cards_and_says_so(tmp_path):
+    app, client = await _client(tmp_path, "outline-open")
+    async with app.router.lifespan_context(app), client:
+        bid = (await _setup(client))[0]
+        # _setup 的 A 卡是 in_progress；再加一張完成的與一張取消的
+        full = (await client.get(f"/api/boards/{bid}/outline",
+                                 headers=OWNER)).json()
+        stage = full["checklists"][0]["id"]
+        for st, title in (("done", "收尾卡"), ("cancelled", "取消卡")):
+            tid = (await client.post(f"/api/board/checklists/{stage}/tasks",
+                                     headers=OWNER,
+                                     json={"title": title})).json()["id"]
+            if st == "done":
+                await client.post(f"/api/board/tasks/{tid}/status",
+                                  headers=OWNER,
+                                  json={"status": "in_progress"})
+            r = await client.post(f"/api/board/tasks/{tid}/status",
+                                  headers=OWNER, json={"status": st})
+            assert r.status_code == 200, r.text
+        allv = (await client.get(f"/api/boards/{bid}/outline",
+                                 headers=OWNER)).json()
+        opn = (await client.get(f"/api/boards/{bid}/outline",
+                                params={"open_only": "true"},
+                                headers=OWNER)).json()
+        assert len(allv["tasks"]) == 3 and allv["filtered"] is None
+        assert [t["title"] for t in opn["tasks"]] == ["A 的卡"]
+        assert opn["filtered"]["hidden_tasks"] == 2
+        assert opn["checklists"][0]["tasks_hidden"] == 2
+
+
+async def test_room_axis_outline_takes_the_same_filters(tmp_path):
+    app, client = await _client(tmp_path, "outline-room-filters")
+    async with app.router.lifespan_context(app), client:
+        bid, rid, me, ids = await _setup(client)
+        body = (await client.get(
+            f"/api/rooms/{rid}/board/outline",
+            params={"checklist_id": ids["a_stage"], "open_only": "true"},
+            headers=me)).json()
+        assert [t["id"] for t in body["tasks"]] == [ids["a_task"]]
+        assert body["filtered"]["checklist_id"] == ids["a_stage"]
+        assert body["truncated"] is False
