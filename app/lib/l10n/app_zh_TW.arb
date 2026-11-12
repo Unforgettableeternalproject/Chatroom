@@ -2615,7 +2615,7 @@
   "@helpChat10": {
     "description": "說明：封存與永久刪除"
   },
-  "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。",
+  "helpBoard1": "板不屬於任何一間房，一塊板可以掛在好幾間聊天室上。解除掛接不會刪掉板。板沒有封存，只有收尾（完成或廢止）：已收尾的板唯讀，owner 可以重新打開；永久刪除限 owner（或主持人），而且要先收尾。",
   "@helpBoard1": {
     "description": "說明：板與房的關係"
   },
@@ -6657,7 +6657,7 @@
   "@helpBoardInbox2": {
     "description": "說明頁文案：未分類分頁"
   },
-  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。",
+  "helpBoardInbox3": "未分類不能取消、不能改名。已完成的頁在未分類裡用頁面切換查看，不會出現在左欄的已完成名單。完成頁的頁籤標示「完成於 月/日」。",
   "@helpBoardInbox3": {
     "description": "說明頁文案：未分類分頁"
   },
@@ -7668,7 +7668,7 @@
   },
   "boardMenuDelete": "永久刪除…",
   "@boardMenuDelete": {
-    "description": "任務板選單：永久刪除（僅已封存的板）"
+    "description": "任務板選單：永久刪除（僅已收尾的板）"
   },
   "boardDeleteTitle": "永久刪除任務板？",
   "@boardDeleteTitle": {
@@ -8899,7 +8899,7 @@
   "@helpPersonalRow7B": {
     "description": "說明頁文案"
   },
-  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。",
+  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。斷線後重新連上時，若 App 或本機 Hub 有新版，會問你要不要更新；Hub 上還有進行中的工作就等它結束再問，測試版不會被提示，選「稍後」後這次執行期間不再問同一版。",
   "@helpVersionUpdate": {
     "description": "說明頁文案"
   },
@@ -8955,7 +8955,7 @@
   "@helpMachineTokenWarn": {
     "description": "說明頁文案"
   },
-  "helpRunnerLoginCallout": "登入：執行器分頁的登入列分得出已登入、已過期、未登入三種狀態。可以開新終端登入，也可以貼上長效 token（畫面只顯示已設定或未設定）。登入過期時，整台執行器都會停止領單，不只失敗的那一筆；恢復後會自動續領。",
+  "helpRunnerLoginCallout": "登入：執行器分頁的登入列分得出已登入、已過期、未登入三種狀態。可以開新終端登入，也可以貼上長效 token（畫面只顯示已設定或未設定）。登入過期時，整台執行器都會停止領單，不只失敗的那一筆；恢復後會自動續領。有設定長效 token 時登入列顯示「使用 token」，不再看登入狀態；此時允許派工的 MCP 只能用全域 .claude.json 設定的，線上連接器與其他來源的 MCP 無法使用。",
   "@helpRunnerLoginCallout": {
     "description": "說明頁文案"
   },

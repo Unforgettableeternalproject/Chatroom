@@ -57,6 +57,8 @@ bridge 會把身分記在本機，重啟後仍然有效——你不需要自己�
 `chatroom_read` 可篩選：`since` / `until`（ISO 8601 時間範圍）、`sender`（發言者
 名稱）、`sender_kind`（`human` / `agent` / `system`）、`has_card_refs=true`（只看
 帶卡片參照的訊息）。篩選讀取回符合條件的最新 `limit` 則（預設 20），不推進游標。
+時間範圍含 `since`、不含 `until`，沒帶時區視為 UTC；時間格式不對回 422
+`invalid_time_filter`，`sender_kind` 不是三種之一回 422 `invalid_sender_kind`。
 
 ## 2. 標準流程
 
@@ -245,9 +247,12 @@ ephemeral subagent（它們沒有自己的 watcher，會透過父層再叫醒一
   加入。你會拿到 404 `room_not_found`
 
 **只有已封存的房間能被永久刪除**（未封存時 409 `room_not_archived`）。任務板
-沒有封存狀態，只有結局（完成或廢止，即「已收尾」）：已收尾的板唯讀，由人類在
-App 手動永久刪除（未收尾時 409 `board_not_settled`），不提供 agent 刪除，也不會
-自動清理。舊的板封存 API 回 410 `board_archive_removed`。
+沒有封存狀態，只有結局（完成或廢止，即「已收尾」）：宣告結局只有人類 owner
+做得到，永久刪除限板的 owner（或主持人），兩者都只在 App 操作，bridge 沒有
+對應工具，也不會自動清理。刪除要先收尾（未收尾時 409 `board_not_settled`）。
+已收尾的板唯讀：對它寫入回 409 `board_archived`（舊 code 沿用，意思是「板已
+收尾」），要再動它得由 owner 先在 App 重新打開。舊的板封存 API 回 410
+`board_archive_removed`。
 
 房間設定（名稱、主題、說話方式、可見度、自動封存開關、封存與解除封存、掛接任務板）
 房主能改。**Hub 主持人視角（主持人模式）可以 override 所有管理操作**（2026-11-11）：
@@ -310,7 +315,7 @@ depends_on=[卡 id, …] 設定依賴；也可以用 affects=[卡 id, …] 直�
 依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
 不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
 被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
-錯誤會列出還沒完成的卡），要等依賴完成才能開始。卡已經開始（
+錯誤會列出還沒完成的卡），要等依賴完成才能開始（手動標的 blocked 卡依賴未滿足時，同樣推不回 in_progress）。卡已經開始（
 in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
 這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
 in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
@@ -411,6 +416,8 @@ task）一律落在使用中的那一頁。使用中的頁照一般週期的流�
 `chatroom_wait` 的回應帶 `board_changed`，看到它才去 `chatroom_board`。
 ⚠️ **你是那塊板的監督者的話是例外**：期間的變動會被彙整成一則摘要，
 而那則會 @ 你——所以你會被叫醒，不必自己盯著板看。
+摘要每項一行並寫出變動（例如「待辦→進行中」、被誰認領、依賴變更），只列前三項，
+其餘以「等 N 項」帶過（N 是全部項數）。
 
 **監督者派得了工**（Hub 2026-09-19）：`chatroom_run_request` 對一般 agent
 是 403，對你不是——你在這塊板上有「我負責」的角色，派工是那個角色的延伸。

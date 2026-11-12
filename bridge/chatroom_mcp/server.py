@@ -693,7 +693,9 @@ def chatroom_read(
     篩選（可彼此組合，也可與 ``after_seq`` 併用）：``since`` / ``until`` 時間範圍
     （ISO 8601，含 since、不含 until，無時區視為 UTC）；``sender`` 發言者名稱；
     ``sender_kind`` 為 human / agent / system；``has_card_refs=true`` 只看帶
-    卡片參照的訊息。時間只是篩選，游標仍是房內 seq。帶篩選又省略 ``after_seq``
+    卡片參照的訊息。時間只是篩選，游標仍是房內 seq（時間格式不對回 422
+    ``invalid_time_filter``，``sender_kind`` 不合法回 422 ``invalid_sender_kind``）。
+    帶篩選又省略 ``after_seq``
     時，回傳符合條件的最新 ``limit`` 則（預設 20），且**不會**推進游標。
     回傳 ``messages`` 與 ``next_after_seq``（下次可用的游標位置）。
     """
@@ -1647,8 +1649,11 @@ def chatroom_boards() -> dict:
     板已經不屬於任何一間聊天室了——**一塊板可以掛在好幾個房上，也可以一間
     都沒掛**。所以「我手上有哪些工作」這個問題，房間列表回答不了它。
 
-    每一塊回：``id`` / ``name`` / ``status``（active）/ ``outcome``（空字串＝進行中；completed／abandoned＝
-    已收尾，唯讀）/ ``attached_room_count`` / ``task_counts``（total、done、claimed）/
+    **只列進行中的板**：已收尾（完成或廢止）的板不在這份清單裡，也沒有參數可以
+    列出來。
+
+    每一塊回：``id`` / ``name`` / ``status``（恆為 active）/ ``outcome``（這份清單
+    裡恆為空字串）/ ``attached_room_count`` / ``task_counts``（total、done、claimed）/
     ``updated_at`` / ``my_role``（owner／editor／viewer）。
 
     拿到 ``id`` 之後，底下的 board 工具都可以改用 ``board_id=`` 呼叫，
@@ -1720,8 +1725,9 @@ def chatroom_board_outline(room_id: str = "", board_id: str = "",
     素材數 / ``created_by_name``）/ ``tasks``（``id`` / ``checklist_id``
     / ``title`` / ``status`` / ``priority`` / ``claim_state`` /
     ``claim_name`` / ``moved_to`` / ``description_chars``）/
-    ``is_latest`` / ``cycles_total``。另附 ``reclaimable_tasks``、
-    ``attached_rooms``、``task_requests`` 等板層資訊。
+    ``is_latest`` / ``cycles_total``。另附 ``directives``（Supervisor 指示，
+    最近 50 筆）、``reclaimable_tasks``、``attached_rooms``、``task_requests`` 等
+    板層資訊。
 
     ``description_chars`` 是描述的字數，不是描述本身——大於 0 的卡才值得
     用 ``chatroom_board_item`` 展開。
@@ -1818,6 +1824,8 @@ def chatroom_board(room_id: str = "", full: bool = False,
       前一個 session 留下的卡，在房裡請原持有者
       `chatroom_board_claim(release=True)` 放掉讓你重領，或請人類用 App
       指派給你——不要等這個欄位
+    - ``directives`` / ``directives_has_more``——板上的 Supervisor 指示（水位之後
+      新增的，最近 50 筆，由舊到新；``directives_has_more`` 為 true 表示更早還有）
     - ``board_seq``——目前的水位，下次自動沿用
 
     階段（checklist）帶著創建者：``created_by_name`` 與 ``created_by_kind``
@@ -1953,7 +1961,7 @@ def chatroom_board_add(
     依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
     不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
     被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
-    錯誤會列出還沒完成的卡），要等依賴完成才能開始。卡已經開始（
+    錯誤會列出還沒完成的卡），要等依賴完成才能開始（手動標的 blocked 卡依賴未滿足時，同樣推不回 in_progress）。卡已經開始（
     in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
     這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
     in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
@@ -2076,7 +2084,7 @@ def chatroom_board_update(
     依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
     不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
     被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
-    錯誤會列出還沒完成的卡），要等依賴完成才能開始。卡已經開始（
+    錯誤會列出還沒完成的卡），要等依賴完成才能開始（手動標的 blocked 卡依賴未滿足時，同樣推不回 in_progress）。卡已經開始（
     in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
     這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
     in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
@@ -2217,6 +2225,9 @@ def chatroom_board_claim(room_id: str = "", task_id: str = "",
 
     ``reclaimed: true`` 表示這張是**你上一世領走的**——你這一輪對它沒有任何
     記憶，先讀它的描述與那則來源訊息，再決定從哪裡接下去。
+
+    依賴還沒滿足的 todo 卡被「阻擋」，不能認領：回 409 ``dependencies_unmet``，
+    錯誤會列出還沒完成的卡（說明見 ``chatroom_board_update``）。
 
     做完事情記得 ``chatroom_board_update(status="done")``；做不完就
     ``release=True`` 放掉，讓別人接手。**領著不放又不做**是這塊板上最糟的
