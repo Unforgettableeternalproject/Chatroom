@@ -6200,6 +6200,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             return True
         return await _run_covers_card(row, me)
 
+    def _claimant_may_edit(row, me, fields: dict) -> bool:
+        """有效認領者可以改**自己認領的那張卡**的內容（v1.2.8-hotfix1）。
+
+        實測：認領者改不了自己卡的描述，只能請監督代寫。範圍刻意很窄：
+        - 只限卡（有 `claim_state` 的列）；階段、週期不放寬
+        - 認領要有效：`claim_state='held'` 且身分對得上（沿用
+          `_is_claim_holder`）；釋放、孤兒化、被收回後立刻失效
+        - 只放行內容欄位 title／description／priority；排序、指派等其餘
+          欄位仍走原本的三軸
+        - 依賴（depends_on）屬於自己這張卡；改 affects 等於改別人的卡，
+          對方卡的權限由 `_dep_plan` 照 `_board_can_edit` 另行檢查
+        """
+        if "claim_state" not in row.keys() or row["claim_state"] != "held":
+            return False
+        if any(v is not None for k, v in fields.items()
+               if k not in ("title", "description", "priority")):
+            return False
+        return _is_claim_holder(row, me)
+
     async def _run_covers_card(row, me) -> bool:
         """派工 agent 能不能改這張**他人建立**的卡：卡**現在**仍在 run 的階段裡。
 
@@ -6490,10 +6509,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         row = await _board_item_or_404(kind, item_id)
         me = await _board_item_writer(row, participant_id, session_key)
-        if not await _board_can_edit(row, me, host):
+        if not await _board_can_edit(row, me, host)                 and not (kind == "task" and _claimant_may_edit(row, me, fields)):
             raise _err(403, "not_board_editor",
-                       "只有這塊板的 owner、聊天室的 supervisor 或"
-                       "建立者可以改它")
+                       "只有這塊板的 owner、聊天室的 supervisor、"
+                       "建立者或這張卡目前的認領者可以改它")
         await _assert_objective_writable(row, kind)
         if kind == "objective" and fields.get("title") is not None:
             new_title = fields["title"]

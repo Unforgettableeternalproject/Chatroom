@@ -2086,6 +2086,11 @@ def chatroom_board_update(
     之後就不能再打開；``blocked`` 不能直接跳 ``done``（先回
     ``in_progress``）。
 
+    誰能改卡的內容（title／description／priority／depends_on）：卡的建立者、板的
+    owner、房的 Supervisor；目前**有效認領**這張卡的人也能改自己認領的那張卡
+    （釋放、被收回或孤兒化後即失去）；執行中的派工能改它負責階段裡的卡。階段與
+    週期本身的編輯權限不變，改 affects 仍須有權改對方的卡。
+
     任務依賴與影響：一張 Task 可以有「依賴」——需要哪些其他卡先完成才能開始；
     「影響」是反過來的對照，自動列出哪些卡依賴這張卡。建立或編輯時用
     depends_on=[卡 id, …] 設定依賴；也可以用 affects=[卡 id, …] 直接填寫影
