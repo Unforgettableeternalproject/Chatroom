@@ -134,3 +134,14 @@ def test_the_update_docstring_lists_moved_and_how_it_differs_from_cancel():
     # 要講出「搬走 ≠ 取消」，不然 agent 照樣走取消
     assert doc.index("moved") < doc.index("cancelled", doc.index("moved"))
     assert "不是" in doc
+
+
+def test_first_read_hands_back_the_outline_directives(fake_hub):
+    """水位推到 board_seq 之後增量讀取不會再給既有指示，首讀必須帶出來。"""
+    _join(fake_hub)
+    d = [{"board_seq": 4, "text": "先修查詢", "to_actor_key": ""}]
+    fake_hub.json("GET", f"/api/rooms/{ROOM}/board/outline",
+                  _outline(9, directives=d, directives_has_more=False))
+    out = srv.chatroom_board(ROOM)
+    assert out["directives"] == d
+    assert srv.state().board_cursor(BOARD) == 9

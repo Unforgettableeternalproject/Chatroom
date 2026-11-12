@@ -197,6 +197,8 @@ async def test_response_shape_is_pinned(tmp_path):
             # 全量讀取預設只回進行中的週期（09/07 卡 659e9ff0）——**篩掉了
             # 什麼一定要說出來**，否則讀的人會把手上這份當成整塊板
             "filtered",
+            # v1.2.8-hotfix1：房軸也回 Supervisor 指示，依水位增量
+            "directives", "directives_has_more",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",
@@ -243,6 +245,10 @@ async def test_response_shape_is_pinned(tmp_path):
             # 這件事搬去哪張卡了（`status='moved'`，09/07 卡 73fe4d94）。
             # 空字串＝沒搬走，或搬走了但去向還沒說
             "moved_to",
+            # v1.2.8-hotfix1：任務依賴與影響。dependency_blocked 是衍生的
+            # 「阻擋」，blocked_by_dependency 標記依賴造成的卡住
+            "depends_on", "affects", "unmet",
+            "dependency_blocked", "blocked_by_dependency",
         }
         assert set(body["reclaimable_tasks"][0]) == {
             "id", "title", "orphaned_at", "claim_name",

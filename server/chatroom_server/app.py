@@ -894,6 +894,10 @@ class BoardTaskCreate(BaseModel):
     source_seq: int | None = None
     # 指定執行者是**建議不是鎖**：認領仍要對方自己來
     assignee_participant_id: str | None = Field(default=None, max_length=64)
+    # 依賴（需要哪些卡先完成才能開始）與影響（哪些卡依賴本卡；寫入等同改寫
+    # 對方卡的依賴）。task id 清單、整份覆寫；沒送＝不動
+    depends_on: list[str] | None = Field(default=None, max_length=50)
+    affects: list[str] | None = Field(default=None, max_length=50)
 
 
 class BoardTaskPatch(BaseModel):
@@ -906,6 +910,9 @@ class BoardTaskPatch(BaseModel):
     priority: str | None = Field(default=None, pattern="^(low|normal|high)$")
     order_index: int | None = None
     assignee_participant_id: str | None = Field(default=None, max_length=64)
+    # 與 BoardTaskCreate 同義：整份覆寫；沒送＝不動、送 []＝清空
+    depends_on: list[str] | None = Field(default=None, max_length=50)
+    affects: list[str] | None = Field(default=None, max_length=50)
 
 
 class BoardTaskAssign(BaseModel):
@@ -6474,7 +6481,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def _board_patch(kind: str, item_id: str, fields: dict,
                            participant_id: str | None,
                            session_key: str | None = None,
-                           host: bool = False) -> dict:
+                           host: bool = False,
+                           deps: tuple | None = None) -> dict:
         """PATCH 的共同實作：只寫有給的欄位，然後領一個號。
 
         ⚠️ **三種物件共用這一條路**，所以守門也只有這一道——漏掉的話
@@ -6500,6 +6508,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                            "「未分類」是系統保留的名稱，請換一個週期名稱")
         table = BOARD_TABLES[kind]
         sets = {k: v for k, v in fields.items() if v is not None}
+        # 依賴／影響（只有 task）先驗：驗不過就什麼都沒寫、沒領號
+        plan = (await _dep_plan(_row_board_id(row), item_id, deps[0], deps[1],
+                                me, host)
+                if (deps is not None and kind == "task") else None)
         seq = await _item_seq(row)
         params: list = [seq]
         sql = f"UPDATE {table} SET board_seq=?"
@@ -6510,14 +6522,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         params.append(item_id)
         db = app.state.db
         await db.execute(sql, params)
+        dep_changes = await _dep_execute(plan, seq, me) if plan else []
+        names = sorted(sets)
+        payload: dict = {"fields": names}
+        if plan:
+            payload["fields"] = sorted(
+                names + [k for k, v in (("depends_on", deps[0]),
+                                        ("affects", deps[1])) if v is not None])
+            payload["dependencies"] = {"added": plan["added"],
+                                       "removed": plan["removed"]}
         await _record_board_event(
             _row_board_id(row), seq, f"{kind}_updated",
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
             origin_room_id=row["room_id"], item_kind=kind, item_id=item_id,
-            payload={"fields": sorted(sets)})
+            payload=payload)
         await _commit_with_retry(db)
         await _item_notify(row)
-        return {"ok": True, "id": item_id, "board_seq": seq}
+        await _dep_announce(dep_changes)
+        out = {"ok": True, "id": item_id, "board_seq": seq}
+        if kind == "task":
+            out["dependency_changes"] = dep_changes
+        return out
 
     async def _board_soft_delete(kind: str, item_id: str,
                                  participant_id: str | None,
@@ -6538,6 +6563,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         seq = await _item_seq(row)
         table = BOARD_TABLES[kind]
+        gone: list[str] = []
+        if kind == "checklist":
+            gone = [r["id"] for r in await (await db.execute(
+                "SELECT id FROM board_task WHERE checklist_id=? AND deleted=0",
+                (item_id,))).fetchall()]
+        elif kind == "objective":
+            gone = [r["id"] for r in await (await db.execute(
+                "SELECT id FROM board_task WHERE deleted=0 AND checklist_id IN"
+                " (SELECT id FROM board_checklist WHERE objective_id=?)",
+                (item_id,))).fetchall()]
         await db.execute(
             f"UPDATE {table} SET deleted=1, board_seq=? WHERE id=?", (seq, item_id)
         )
@@ -6569,6 +6604,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "UPDATE board_task SET deleted=1, board_seq=? WHERE checklist_id=?",
                 (seq, item_id),
             )
+        # 被刪的卡其依賴關係不再生效：依賴它們的卡要重算（阻擋解除、
+        # 自動卡住的恢復）。刪除前就把「會一起消失的 task」列出來
+        dep_changes: list[dict] = []
+        if kind == "task":
+            dep_changes = await _dep_after_change(
+                _row_board_id(row), seq, [item_id])
+        elif kind in ("checklist", "objective"):
+            dep_changes = await _dep_after_change(
+                _row_board_id(row), seq, gone)
         await _record_board_event(
             _row_board_id(row), seq, f"{kind}_deleted",
             actor=actor_key(me["session_key"]), actor_name=me["display_name"],
@@ -6576,6 +6620,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             payload={"title": row["title"]})
         await _commit_with_retry(db)
         await _item_notify(row)
+        await _dep_announce(dep_changes)
         return {"ok": True, "id": item_id, "board_seq": seq}
 
     @app.post("/api/rooms/{room_id}/board/objectives",
@@ -7141,13 +7186,361 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "指定的對象不是這個聊天室的成員，或已經離開了")
         return actor_key(row["session_key"])
 
+    # ---------- 任務依賴 ----------
+    #
+    # 「依賴」＝這張卡需要哪些其他卡先完成才能開始；「影響」是反向查詢
+    # （哪些卡依賴我），不另存。與 `blocked`（卡住）是兩件事：
+    #   - 依賴未滿足 ＝ **阻擋**，衍生狀態，不改寫 status：todo 的卡不能認領、
+    #     不能推到 in_progress／done。
+    #   - blocked ＝ 人手動標的「做不下去」。已開始的卡（in_progress）事後
+    #     多出未滿足的依賴時，Hub 自動把它改成 blocked 並標
+    #     `blocked_by_dependency=1`；依賴全數滿足時**只恢復這一種**。
+    # 滿足的判準：依賴卡 done；cancelled 也視為解除（回應標 cancelled）；
+    # moved 有 moved_to 就跟隨目標卡（鏈狀，防環），沒有 moved_to 視為未滿足。
+    DEP_MAX = 50
+
+    async def _dep_graph(board_id: str, full: bool = False) -> dict:
+        """載入一塊板的依賴圖：{tasks, deps, rev}。
+
+        只含**未刪除**的卡與兩端都未刪除的邊（卡被軟刪除時其依賴關係不再
+        生效）。板上沒有任何依賴時（且不要求完整）直接回空圖，省下讀取
+        每次都多掃一次卡表。`full=True` 給 reconcile：沒有邊也要看得到卡，
+        才清得掉過期的 blocked_by_dependency。
+        """
+        empty = {"tasks": {}, "deps": {}, "rev": {}}
+        bid = (board_id or "").strip()
+        if not bid:
+            return empty
+        db = app.state.db
+        if not full:
+            has = await (await db.execute(
+                "SELECT 1 FROM task_dependency WHERE board_id=? LIMIT 1",
+                (bid,))).fetchone()
+            if has is None:
+                return empty
+        cur = await db.execute(
+            "SELECT id, title, status, moved_to, blocked_by_dependency,"
+            " checklist_id FROM board_task WHERE board_id=? AND deleted=0",
+            (bid,))
+        tasks = {r["id"]: dict(r) for r in await cur.fetchall()}
+        cur = await db.execute(
+            "SELECT task_id, depends_on_id FROM task_dependency"
+            " WHERE board_id=? ORDER BY created_at, rowid", (bid,))
+        deps: dict[str, list[str]] = {}
+        rev: dict[str, list[str]] = {}
+        for r in await cur.fetchall():
+            a, b = r["task_id"], r["depends_on_id"]
+            if a in tasks and b in tasks:
+                deps.setdefault(a, []).append(b)
+                rev.setdefault(b, []).append(a)
+        return {"tasks": tasks, "deps": deps, "rev": rev}
+
+    def _dep_chain(tasks: dict, dep_id: str) -> list[str]:
+        """依賴卡本身，加上 moved 一路跟隨的目標卡（防環、斷在不存在處）。"""
+        chain = [dep_id]
+        seen = {dep_id}
+        cur = tasks.get(dep_id)
+        while cur is not None and cur["status"] == "moved":
+            nxt = (cur["moved_to"] or "").strip()
+            if not nxt or nxt in seen or nxt not in tasks:
+                break
+            seen.add(nxt)
+            chain.append(nxt)
+            cur = tasks[nxt]
+        return chain
+
+    def _dep_entry(tasks: dict, dep_id: str) -> dict:
+        chain = _dep_chain(tasks, dep_id)
+        t, end = tasks[dep_id], tasks[chain[-1]]
+        return {"id": dep_id, "title": t["title"], "status": t["status"],
+                "moved_to": t["moved_to"] or "",
+                "met": end["status"] in ("done", "cancelled"),
+                "cancelled": end["status"] == "cancelled",
+                # moved 跟隨到的最終那張卡；沒有跟隨就是空字串
+                "via": chain[-1] if chain[-1] != dep_id else ""}
+
+    def _dep_unmet(graph: dict, task_id: str) -> list[dict]:
+        tasks = graph["tasks"]
+        return [e for e in (_dep_entry(tasks, d)
+                            for d in graph["deps"].get(task_id, []))
+                if not e["met"]]
+
+    def _dep_fields(graph: dict, t: dict, light: bool) -> None:
+        """把依賴欄位寫進一張卡的回應 dict。light＝綱要（只有 id 清單）。"""
+        tid, tasks = t["id"], graph["tasks"]
+        entries = [_dep_entry(tasks, d) for d in graph["deps"].get(tid, [])]
+        unmet = [e for e in entries if not e["met"]]
+        rev = [r for r in graph["rev"].get(tid, []) if r in tasks]
+        t["dependency_blocked"] = (t.get("status") == "todo" and bool(unmet))
+        t["blocked_by_dependency"] = bool(t.get("blocked_by_dependency"))
+        if light:
+            t["depends_on_ids"] = [e["id"] for e in entries]
+            t["affects_ids"] = rev
+            t["unmet_ids"] = [e["id"] for e in unmet]
+        else:
+            t["depends_on"] = entries
+            t["affects"] = [{"id": r, "title": tasks[r]["title"],
+                             "status": tasks[r]["status"]} for r in rev]
+            t["unmet"] = unmet
+
+    async def _dep_annotate(tasks: list[dict], board_id: str,
+                            light: bool = False) -> None:
+        if not tasks:
+            return
+        graph = await _dep_graph(board_id)
+        for t in tasks:
+            _dep_fields(graph, t, light)
+
+    async def _dep_reconcile(board_id: str) -> list[dict]:
+        """依賴狀態重算（寫入，不 commit）：回傳自動改狀態的卡。
+
+        in_progress ∧ 有未滿足依賴 → blocked（標 blocked_by_dependency）；
+        blocked ∧ 依賴造成的 ∧ 依賴全滿足 → in_progress。人手動設的 blocked
+        （旗標 0）不會被恢復。每張被自動改的卡各領一個號、各留一筆 event。
+        """
+        graph = await _dep_graph(board_id, full=True)
+        db = app.state.db
+        changes: list[dict] = []
+        for tid, t in graph["tasks"].items():
+            unmet = bool(_dep_unmet(graph, tid))
+            flag, st = bool(t["blocked_by_dependency"]), t["status"]
+            to = None
+            if st == "in_progress" and unmet:
+                to = "blocked"
+            elif st == "blocked" and flag and not unmet:
+                to = "in_progress"
+            elif flag and st != "blocked":
+                # 狀態已被別的路徑改走：清掉過期的標記，不改狀態
+                await db.execute(
+                    "UPDATE board_task SET blocked_by_dependency=0 WHERE id=?",
+                    (tid,))
+                continue
+            if to is None:
+                continue
+            seq = await _next_seq_for_board(board_id)
+            cur = await db.execute(
+                "UPDATE board_task SET status=?, blocked_by_dependency=?,"
+                " board_seq=? WHERE id=? AND status=? RETURNING id",
+                (to, 1 if to == "blocked" else 0, seq, tid, st))
+            if await cur.fetchone() is None:
+                continue
+            reason = ("dependency_unmet" if to == "blocked"
+                      else "dependency_met")
+            await _record_board_event(
+                board_id, seq, "task_dependency_status", actor="",
+                actor_name="Hub", item_kind="task", item_id=tid,
+                payload={"from": st, "to": to, "title": t["title"],
+                         "reason": reason})
+            changes.append({"id": tid, "title": t["title"], "from": st,
+                            "to": to, "reason": reason})
+        return changes
+
+    async def _dep_after_change(board_id: str, seq: int,
+                                changed_ids: list[str]) -> list[dict]:
+        """某些卡的狀態改了（或被刪了）：依賴它們的卡要重算。
+
+        依賴這些卡的卡（含 moved 鏈上經過它們的）board_seq 一併推進——
+        增量 client 才拿得到「阻擋」旗標的變化。然後 reconcile。
+        """
+        bid = (board_id or "").strip()
+        if not bid:
+            return []
+        db = app.state.db
+        graph = await _dep_graph(bid)
+        if not graph["tasks"]:
+            # 這塊板從來沒有依賴：不用掃卡表
+            return []
+        changed = set(changed_ids)
+        touched: set[str] = set()
+        for tid, dl in graph["deps"].items():
+            if any(changed & set(_dep_chain(graph["tasks"], d)) for d in dl):
+                touched.add(tid)
+        if changed:
+            marks = ",".join("?" for _ in changed)
+            cur = await db.execute(
+                f"SELECT task_id FROM task_dependency WHERE board_id=?"
+                f" AND depends_on_id IN ({marks})", (bid, *changed))
+            touched |= {r["task_id"] for r in await cur.fetchall()
+                        if r["task_id"] in graph["tasks"]}
+        touched -= changed
+        if touched:
+            marks = ",".join("?" for _ in touched)
+            await db.execute(
+                f"UPDATE board_task SET board_seq=? WHERE id IN ({marks})",
+                (seq, *touched))
+        return await _dep_reconcile(bid)
+
+    def _dep_find_cycle(edges: set, added: set) -> list[str] | None:
+        adj: dict[str, list[str]] = {}
+        for a, b in edges:
+            adj.setdefault(a, []).append(b)
+        for a, b in sorted(added):
+            # a 依賴 b；b 往下依賴能走回 a 就是循環
+            stack = [(b, [a, b])]
+            seen = {b}
+            while stack:
+                n, path = stack.pop()
+                for m in adj.get(n, []):
+                    if m == a:
+                        return path + [a]
+                    if m not in seen:
+                        seen.add(m)
+                        stack.append((m, path + [m]))
+        return None
+
+    async def _dep_plan(board_id: str, task_id: str, depends_on, affects,
+                        me, host: bool = False) -> dict | None:
+        """驗證依賴／影響的整份覆寫並算出邊的變更（不寫入）。
+
+        affects 的覆寫＝改寫對方卡的依賴，所以權限沿用「改卡」：對方卡要
+        過 `_board_can_edit`，且所在週期可寫。
+        """
+        if depends_on is None and affects is None:
+            return None
+        bid = (board_id or "").strip()
+        if not bid:
+            raise _err(409, "dependency_no_board",
+                       "這張卡還沒有掛在板上，無法設定依賴")
+
+        def norm(ids):
+            out: list[str] = []
+            for i in ids or []:
+                i = (i or "").strip()
+                if i and i not in out:
+                    out.append(i)
+            return out
+
+        dep_ids = norm(depends_on) if depends_on is not None else None
+        aff_ids = norm(affects) if affects is not None else None
+        graph = await _dep_graph(bid, full=True)
+        tasks = graph["tasks"]
+        for i in (dep_ids or []) + (aff_ids or []):
+            if i == task_id:
+                raise _err(409, "dependency_self", "一張卡不能依賴自己")
+            if i not in tasks:
+                other = await (await app.state.db.execute(
+                    "SELECT board_id FROM board_task WHERE id=? AND deleted=0",
+                    (i,))).fetchone()
+                if other is not None and (other["board_id"] or "").strip() != bid:
+                    raise _err(409, "dependency_other_board",
+                               "只能依賴同一塊板上的任務", item_id=i)
+                raise _err(404, "dependency_not_found",
+                           "找不到要設為依賴／影響的那張卡（或它已被刪除）",
+                           item_id=i)
+        before = {(t, d) for t, dl in graph["deps"].items() for d in dl}
+        after = set(before)
+        if dep_ids is not None:
+            after = {e for e in after if e[0] != task_id}
+            after |= {(task_id, d) for d in dep_ids}
+        if aff_ids is not None:
+            after = {e for e in after if e[1] != task_id}
+            after |= {(a, task_id) for a in aff_ids}
+        added, removed = after - before, before - after
+        cycle = _dep_find_cycle(after, added)
+        if cycle:
+            def name(i):
+                return (tasks[i]["title"] if i in tasks else "（這張卡）")
+            raise _err(409, "dependency_cycle",
+                       "會形成循環依賴：" + " → ".join(
+                           f"「{name(i)}」" for i in cycle),
+                       cycle=cycle)
+        others = sorted({a for a, b in added | removed
+                         if b == task_id and a != task_id})
+        for a in others:
+            row = await _board_item_or_404("task", a)
+            if not await _board_can_edit(row, me, host):
+                raise _err(403, "not_board_editor",
+                           f"你沒有權限修改「{row['title']}」的依賴",
+                           item_id=a)
+            await _assert_objective_writable(row, "task")
+        touched = sorted({x for e in added | removed for x in e} - {task_id})
+        # 新增的邊照呼叫端給的順序寫入，讀回來的清單順序才可預期
+        ordered = ([(task_id, d) for d in dep_ids or []]
+                   + [(a, task_id) for a in aff_ids or []])
+        return {"task_id": task_id, "board_id": bid,
+                "added": [e for e in ordered if e in added],
+                "removed": sorted(removed), "touched": touched,
+                "depends_on": dep_ids, "affects": aff_ids}
+
+    async def _dep_execute(plan: dict, seq: int, me) -> list[dict]:
+        """套用 `_dep_plan` 的結果（不 commit），回傳自動改狀態的卡。"""
+        db = app.state.db
+        who = actor_key(me["session_key"]) if me.get("session_key") else ""
+        for a, b in plan["removed"]:
+            await db.execute(
+                "DELETE FROM task_dependency WHERE task_id=? AND"
+                " depends_on_id=?", (a, b))
+        now = _now()
+        for a, b in plan["added"]:
+            await db.execute(
+                "INSERT OR IGNORE INTO task_dependency (task_id,"
+                " depends_on_id, board_id, created_at, created_by)"
+                " VALUES (?,?,?,?,?)", (a, b, plan["board_id"], now, who))
+        if plan["touched"]:
+            marks = ",".join("?" for _ in plan["touched"])
+            await db.execute(
+                f"UPDATE board_task SET board_seq=? WHERE id IN ({marks})",
+                (seq, *plan["touched"]))
+        return await _dep_reconcile(plan["board_id"])
+
+    async def _dep_announce(changes: list[dict]) -> None:
+        """依賴全數完成而自動恢復的卡：在卡的房裡留一則 system 訊息，
+        持有者在房內就 mention 他。commit 之後呼叫。"""
+        for c in changes:
+            if c["to"] != "in_progress":
+                continue
+            try:
+                row = await _board_item_or_404("task", c["id"])
+            except HTTPException:
+                continue
+            room = await _item_home_room(row)
+            if not room:
+                continue
+            alive = await (await app.state.db.execute(
+                "SELECT 1 FROM room WHERE id=? AND status='active'",
+                (room,))).fetchone()
+            if not alive:
+                continue
+            names: list[str] = []
+            holder = actor_key((row["claim_actor_key"] or "").strip()
+                               or (row["claim_session_key"] or "").strip())
+            if holder and row["claim_state"] == "held":
+                here = await (await app.state.db.execute(
+                    "SELECT display_name, TRIM(session_key) AS sk FROM"
+                    " participant WHERE room_id=? AND status='active'"
+                    " AND ephemeral=0", (room,))).fetchall()
+                names = [p["display_name"] for p in here
+                         if actor_key(p["sk"]) == holder]
+            await _post_message(
+                room, None,
+                f"任務「{row['title']}」的依賴都已完成，已自動從卡住恢復為"
+                "進行中。", kind="system",
+                system_event="board_task_dependency_met", mentions=names,
+                reply_mentions_author=False)
+
+    def _dep_unmet_error(unmet: list[dict], row, action: str):
+        """todo／blocked 的卡有未滿足的依賴時不給開始或認領。"""
+        names = "、".join(f"「{e['title']}」" for e in unmet)
+        if row["blocked_by_dependency"]:
+            msg = (f"這張卡因依賴未完成而被卡住（{names}），"
+                   "依賴完成後會自動恢復，不能手動推回進行中")
+        else:
+            msg = f"這張卡的依賴還沒完成（{names}），完成前不能{action}"
+        return _err(409, "dependencies_unmet", msg, unmet=unmet,
+                    blocked_by_dependency=bool(row["blocked_by_dependency"]),
+                    task_status=row["status"])
+
     async def _insert_task(checklist_id: str, room_id: str, body, me) -> dict:
         await _assert_objective_writable(checklist_id, "checklist")
         assignee_actor = await _assert_assignee_in_room(
             body.assignee_participant_id, room_id)
         db = app.state.db
-        seq = await _next_board_seq(room_id, me.get("board_id", ""))
         tid = uuid.uuid4().hex
+        # 依賴／影響先驗（循環、跨板、權限），驗不過就什麼都沒寫、沒領號
+        plan = await _dep_plan(me.get("board_id", ""), tid,
+                               getattr(body, "depends_on", None),
+                               getattr(body, "affects", None), me)
+        seq = await _next_board_seq(room_id, me.get("board_id", ""))
         mine = actor_key(me["session_key"])
         await db.execute(
             "INSERT INTO board_task (id, room_id, board_id, checklist_id,"
@@ -7168,17 +7561,22 @@ def create_app(config: Config | None = None) -> FastAPI:
              mine if body.assignee_participant_id else "",
              me["id"], me["display_name"], mine, seq, _now()),
         )
+        dep_changes = await _dep_execute(plan, seq, me) if plan else []
+        payload = {"title": body.title.strip()}
+        if plan:
+            payload["dependencies"] = {"added": plan["added"],
+                                       "removed": plan["removed"]}
         await _record_board_event(
             me["board_id"], seq, "task_created", actor=mine,
             actor_name=me["display_name"], origin_room_id=room_id,
-            item_kind="task", item_id=tid,
-            payload={"title": body.title.strip()})
+            item_kind="task", item_id=tid, payload=payload)
         await _commit_with_retry(db)
         if (me.get("board_id") or "").strip():
             await _notify_board_rooms(me["board_id"])
         await events.notify(room_id)
+        await _dep_announce(dep_changes)
         return {"ok": True, "id": tid, "checklist_id": checklist_id,
-                "board_seq": seq}
+                "board_seq": seq, "dependency_changes": dep_changes}
 
     @app.patch("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def patch_task(
@@ -7208,8 +7606,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await _item_home_room(row, me) or row["room_id"])
             fields["assigned_by"] = me["id"]
             fields["assigned_by_name"] = me["display_name"]
+        deps = ((body.depends_on, body.affects)
+                if (body.depends_on is not None
+                    or body.affects is not None) else None)
         return await _board_patch("task", task_id, fields, x_participant_id,
-                                  x_session_key, host)
+                                  x_session_key, host, deps=deps)
 
     @app.delete("/api/board/tasks/{task_id}", dependencies=[Depends(require_auth)])
     async def delete_task(
@@ -7512,6 +7913,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                        held_by_same_name=same_name,
                        claim_name=row["claim_name"] or "")
         await _assert_objective_writable(row, "task")
+        # 依賴未滿足 ＝ 阻擋：不能開始（in_progress）也不能完成（done）。
+        # 依賴造成的 blocked 不能手動推回，等依賴完成會自動恢復
+        if body.status in ("in_progress", "done"):
+            unmet = _dep_unmet(await _dep_graph(_row_board_id(row)), task_id)
+            if unmet:
+                raise _dep_unmet_error(
+                    unmet, row, "開始" if body.status == "in_progress"
+                    else "完成")
         db = app.state.db
         seq = await _item_seq(row)
         done = body.status == "done"
@@ -7534,7 +7943,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 領的），與「現在誰在做」是兩件事
         settling = body.status in ("done", "cancelled", "moved")
         cur = await db.execute(
-            "UPDATE board_task SET status=?, completed_by=?,"
+            "UPDATE board_task SET status=?, blocked_by_dependency=0,"
+            " completed_by=?,"
             " completed_by_actor_key=?, completed_at=?,"
             " claim_state=CASE WHEN ? AND claim_state='orphaned'"
             "   THEN (CASE WHEN claim_participant_id IS NOT NULL"
@@ -7593,6 +8003,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 actor_name=me["display_name"], origin_room_id=row["room_id"],
                 item_kind="task", item_id=task_id,
                 payload={"title": row["title"]})
+        # 依賴這張卡的卡要重算（阻擋解除／自動卡住與恢復），board_seq 一併推進
+        dep_changes = await _dep_after_change(
+            _row_board_id(row), seq, [task_id])
         # 追蹤者的收件匣。**只有這三種轉移發**——每一次狀態變動都發的話，
         # 追蹤就跟訂閱整塊板沒有差別，而艾斯維爾要的正是「不需要通知所有人」。
         # reopen 與完成一樣重要：**「你等的那張卡又打開了」漏掉的話，等的人
@@ -7709,9 +8122,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                     payload={"src": "watch", "board_seq": seq},
                     skip_agents=False)
                 await _commit_with_retry(db)
+        await _dep_announce(dep_changes)
         await _item_notify(row)
         return {"ok": True, "id": task_id, "status": body.status,
-                "board_seq": seq, "notified_watchers": watched}
+                "board_seq": seq, "notified_watchers": watched,
+                "dependency_changes": dep_changes}
 
     @app.post("/api/board/checklists/{checklist_id}/status",
               dependencies=[Depends(require_auth)])
@@ -9009,6 +9424,81 @@ def create_app(config: Config | None = None) -> FastAPI:
                 mentions=humans,
             )
 
+    _DIGEST_FIELD_ZH = {"title": "標題", "description": "描述",
+                        "priority": "優先度"}
+    _DIGEST_OBJECTIVE_ZH = {"objective_review": "送審",
+                            "objective_verified": "已確認",
+                            "objective_done": "完成",
+                            "objective_reopened": "重新開啟",
+                            "objective_cancelled": "取消"}
+
+    def _digest_describe(events) -> str:
+        """把同一項在摘要區間內的 board_event 併成一句「發生了什麼」。
+
+        狀態變動只留「最初的前狀態→最後的狀態」，往返回原點就不報；認領、
+        指派取最後一次。種類超過三種時列前兩種加「等」。
+        """
+        def zh(s: str) -> str:
+            return "搬走" if s == "moved" else _STATUS_ZH.get(s, s)
+
+        phrases: dict[str, str] = {}
+        st_from = st_to = None
+        fields: list[str] = []
+        for e in events:
+            et = e["event_type"]
+            try:
+                p = json.loads(e["payload_json"] or "{}")
+            except ValueError:
+                p = {}
+            if not isinstance(p, dict):
+                p = {}
+            if et.endswith("_deleted"):
+                return "刪除"
+            if et.endswith("_created"):
+                phrases.setdefault("created", "新增")
+            elif et in ("task_status", "checklist_status",
+                        "task_dependency_status"):
+                if st_to is None:
+                    st_from = zh(p["from"]) if p.get("from") else None
+                st_to = zh(p.get("to") or "")
+                phrases.setdefault("status", "")
+            elif et == "task_done" or et in _DIGEST_OBJECTIVE_ZH:
+                st_to = "完成" if et == "task_done" else _DIGEST_OBJECTIVE_ZH[et]
+                phrases.setdefault("status", "")
+            elif et == "task_claimed":
+                phrases["claim"] = f"被 {e['actor_name'] or '有人'} 認領"
+            elif et == "task_released":
+                phrases["claim"] = "取消認領"
+            elif et == "task_assigned":
+                phrases["assign"] = f"指派給 {p.get('target_name') or '某人'}"
+            elif et == "checklist_moved":
+                phrases["moved"] = "搬走"
+            elif et.endswith("_updated"):
+                for f in p.get("fields") or []:
+                    if f in ("depends_on", "affects"):
+                        phrases.setdefault("deps", "依賴變更")
+                    elif f not in fields:
+                        fields.append(f)
+                dep = p.get("dependencies") or {}
+                if dep.get("added") or dep.get("removed"):
+                    phrases.setdefault("deps", "依賴變更")
+        if "status" in phrases:
+            if st_from == st_to or not st_to:
+                del phrases["status"]
+            else:
+                phrases["status"] = f"{st_from}→{st_to}" if st_from else st_to
+        if fields:
+            names = []
+            for f in fields:
+                n = _DIGEST_FIELD_ZH.get(f, "內容")
+                if n not in names:
+                    names.append(n)
+            phrases["fields"] = "改了" + "、".join(names)
+        parts = list(phrases.values())
+        if len(parts) > 3:
+            return "、".join(parts[:2]) + " 等"
+        return "、".join(parts)
+
     async def _flush_board_digest(room) -> None:
         """把上次摘要之後的 board 變動彙整成一則，mention supervisor。
 
@@ -9020,31 +9510,55 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         room_id = room["id"]
         counts = {}
-        titles = []
+        titles = []          # (item_kind, id, title)
         # 範圍是板不是 `room_id=本房`：卡的 `room_id` 只是建立當時的房
         attached = await _board_for_room(room_id)
         scope_sql, scope_args = (
             ("(board_id=? OR ((board_id='' OR board_id IS NULL)"
              " AND room_id=?))", (attached["id"], room_id))
             if attached is not None else ("room_id=?", (room_id,)))
-        for kind, table in (("週期", "board_objective"), ("階段", "board_checklist"),
-                            ("任務", "board_task")):
+        for kind, table, item_kind in (
+                ("週期", "board_objective", "objective"),
+                ("階段", "board_checklist", "checklist"),
+                ("任務", "board_task", "task")):
             rows = await (
                 await db.execute(
-                    f"SELECT title FROM {table} WHERE {scope_sql}"
+                    f"SELECT id, title FROM {table} WHERE {scope_sql}"
                     " AND board_seq>? ORDER BY board_seq",
                     (*scope_args, room["board_digest_seq"]),
                 )
             ).fetchall()
             if rows:
                 counts[kind] = len(rows)
-                titles.extend(r["title"] for r in rows)
+                titles.extend((item_kind, r["id"], r["title"]) for r in rows)
         if not counts:
             return
+        # 「變了什麼」取自 board_event（每次變更本來就會記，含前後狀態），
+        # 不另存摘要專用的緩衝。沒有板（未換軸的房）不記 event ⇒ 只列標題。
+        events_by_item: dict[tuple[str, str], list] = {}
+        if attached is not None:
+            wanted = {(k, i) for k, i, _ in titles[:3]}
+            ev_rows = await (
+                await db.execute(
+                    "SELECT item_kind, item_id, event_type, actor_name,"
+                    " payload_json FROM board_event"
+                    " WHERE board_id=? AND board_seq>? AND item_id != ''"
+                    " AND item_kind IN ('objective','checklist','task')"
+                    " ORDER BY board_seq",
+                    (attached["id"], room["board_digest_seq"]),
+                )
+            ).fetchall()
+            for e in ev_rows:
+                key = (e["item_kind"], e["item_id"])
+                if key in wanted:
+                    events_by_item.setdefault(key, []).append(e)
         head = "、".join(f"{k} {v} 項" for k, v in counts.items())
         # 每項獨立一行（"- " 開頭）：標題可能很長，併成單行會溢出 App 畫面；
         # 含換行的 system 訊息在 App 走區塊渲染，agent 讀純文字也一目了然
-        sample = "\n".join(f"- 「{x}」" for x in titles[:3])
+        sample = "\n".join(
+            f"- 「{t}」" + (f"：{d}" if (d := _digest_describe(
+                events_by_item.get((k, i), []))) else "")
+            for k, i, t in titles[:3])
         more = f"\n等 {len(titles)} 項" if len(titles) > 3 else ""
         # 🔑 **收件人以 session_key 即時反查，不用設定當下的名字快照。**
         #
@@ -9548,6 +10062,11 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 就把「你上一世領的卡」判成別人的
         was_mine = (row["claim_state"] == "orphaned"
                     and actor_key(row["claim_session_key"]) == mine)
+        # 依賴未滿足的 todo 卡被阻擋，不能認領
+        if row["status"] == "todo":
+            unmet = _dep_unmet(await _dep_graph(_row_board_id(row)), task_id)
+            if unmet:
+                raise _dep_unmet_error(unmet, row, "認領")
         seq = await _item_seq(row)
         cur = await db.execute(
             "UPDATE board_task SET claim_participant_id=?, claim_session_key=?,"
@@ -9944,9 +10463,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 「你讀的其實是這塊板」，它才有辦法改走 /api/boards/{bid}。
         # 沒掛板時回 null 而**不自動建一塊**——建房不自動建空板
         attached = attached_board   # 上面已經查過，不重查
+        directives, directives_more = (
+            await _board_directives(attached["id"], after_board_seq)
+            if attached is not None else ([], False))
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        await _dep_annotate(tasks, attached_board["id"] if attached_board
+                            is not None else "")
         await _annotate_release(objectives, scope_sql, scope_params,
                                 after_board_seq)
         # 階段素材**兩軸都要有**：房裡的 agent 多半是拿 room_id 讀板的，
@@ -9990,6 +10514,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             "checklists": checklists,
             "tasks": tasks,
             "reclaimable_tasks": reclaimable,
+            # Supervisor 指示掛在板上，規則與板軸讀取同一份（見
+            # `_board_directives`）；房沒掛板就沒有
+            "directives": directives,
+            "directives_has_more": directives_more,
             # **本房的 supervisor**，形狀與 `attached_rooms[].supervisor`
             # 完全一致（09/05 卡 3a518cbe）。這裡以前回 v1 的
             # **session_key 字串**，而那邊回物件——同一個鍵名兩種型別，
@@ -10721,34 +11249,13 @@ def create_app(config: Config | None = None) -> FastAPI:
 
         # directive 稽核串。**只回最近 50 筆**：長跑的板會把回應撐爆，
         # 而畫面上一次也讀不完那麼多
-        cur = await db.execute(
-            "SELECT board_seq, actor_key, actor_name, target_actor_key,"
-            " origin_room_id, item_kind, item_id, payload_json, created_at"
-            " FROM board_event WHERE board_id=? AND event_type='directive'"
-            "   AND board_seq > ? ORDER BY board_seq DESC LIMIT 51",
-            (board_id, after_board_seq))
-        rows = list(await cur.fetchall())
-        directives_more = len(rows) > 50
-        directives = []
-        for d in reversed(rows[:50]):
-            try:
-                payload = json.loads(d["payload_json"]) or {}
-            except (TypeError, ValueError):
-                payload = {}
-            directives.append({
-                "board_seq": d["board_seq"],
-                "from_actor_key": d["actor_key"],
-                "from_name": d["actor_name"],
-                "to_actor_key": d["target_actor_key"],
-                "origin_room_id": d["origin_room_id"],
-                "item_kind": d["item_kind"], "item_id": d["item_id"],
-                "text": payload.get("text", ""),
-                "created_at": d["created_at"],
-            })
+        directives, directives_more = await _board_directives(
+            board_id, after_board_seq)
 
         objectives = await _rows("board_objective")
         checklists = await _rows("board_checklist")
         tasks = await _rows("board_task")
+        await _dep_annotate(tasks, board_id)
         await _annotate_release(objectives, "board_id=?", [board_id],
                                 after_board_seq)
         # 階段素材跟著階段一起回，**不是只給一個數字**：agent 讀板就要看得到
@@ -10848,6 +11355,39 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     BOARD_TASK_STATES = ("todo", "in_progress", "blocked", "done",
                          "cancelled", "moved")
+
+    async def _board_directives(board_id: str,
+                                after_board_seq: int) -> tuple[list, bool]:
+        """Supervisor 指示（directive）稽核串：水位之後的最近 50 筆，由舊到新。
+
+        完整讀取與兩個 outline 端點共用同一份規則——outline 首讀會把水位
+        推到 board_seq，沒在這裡一併回的指示之後的增量讀取不會再給。
+        回 (清單, 是否還有更早的)。
+        """
+        cur = await app.state.db.execute(
+            "SELECT board_seq, actor_key, actor_name, target_actor_key,"
+            " origin_room_id, item_kind, item_id, payload_json, created_at"
+            " FROM board_event WHERE board_id=? AND event_type='directive'"
+            "   AND board_seq > ? ORDER BY board_seq DESC LIMIT 51",
+            (board_id, after_board_seq))
+        rows = list(await cur.fetchall())
+        out = []
+        for d in reversed(rows[:50]):
+            try:
+                payload = json.loads(d["payload_json"]) or {}
+            except (TypeError, ValueError):
+                payload = {}
+            out.append({
+                "board_seq": d["board_seq"],
+                "from_actor_key": d["actor_key"],
+                "from_name": d["actor_name"],
+                "to_actor_key": d["target_actor_key"],
+                "origin_room_id": d["origin_room_id"],
+                "item_kind": d["item_kind"], "item_id": d["item_id"],
+                "text": payload.get("text", ""),
+                "created_at": d["created_at"],
+            })
+        return out, len(rows) > 50
 
     async def _cycle_summaries(scope_sql: str, scope_params: list) -> list[dict]:
         """範圍內所有週期的一列摘要，**最近修改的在前**。
@@ -10958,8 +11498,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         for c in checklists:
             c["file_count"] = files.get(c["id"], 0)
         cur = await db.execute(
-            "SELECT id, checklist_id, title, status, priority, claim_state,"
-            " claim_name, claim_kind, moved_to,"
+            "SELECT id, board_id, checklist_id, title, status, priority,"
+            " claim_state, claim_name, claim_kind, moved_to,"
+            " blocked_by_dependency,"
             " LENGTH(description) AS description_chars"
             " FROM board_task WHERE deleted=0 AND checklist_id IN"
             "  (SELECT id FROM board_checklist WHERE objective_id=?"
@@ -10967,6 +11508,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             " ORDER BY checklist_id, order_index, created_at",
             (cycle["id"], *params))
         tasks = [dict(r) for r in await cur.fetchall()]
+        by_board: dict[str, list[dict]] = {}
+        for t in tasks:
+            by_board.setdefault((t.pop("board_id", "") or "").strip(),
+                                []).append(t)
+        for bid, group in by_board.items():
+            await _dep_annotate(group, bid, light=True)
         return {
             **base,
             "cycle": cycle,
@@ -10996,6 +11543,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(404, "item_not_found",
                        "這塊板上找不到這個週期／階段／卡（或已被刪除）")
         item = _board_row(row)
+        if kind == "task":
+            await _dep_annotate([item], (row["board_id"] or "").strip())
         out: dict = {"view": "item", "kind": kind, "item": item}
         stage_id = (item["id"] if kind == "checklist"
                     else item.get("checklist_id") if kind == "task" else "")
@@ -11021,11 +11570,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         if kind == "checklist":
             cur = await db.execute(
                 "SELECT id, title, status, priority, claim_state, claim_name,"
-                " claim_kind, moved_to,"
+                " claim_kind, moved_to, blocked_by_dependency,"
                 " LENGTH(description) AS description_chars FROM board_task"
                 " WHERE checklist_id=? AND deleted=0"
                 " ORDER BY order_index, created_at", (item_id,))
             out["tasks"] = [dict(r) for r in await cur.fetchall()]
+            await _dep_annotate(out["tasks"], (row["board_id"] or "").strip(),
+                                light=True)
         events: list[dict] = []
         if board_id:
             # 最近 30 筆，由舊到新。board_event 以 (board_id, board_seq)
@@ -11108,10 +11659,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         room, attached, scope_sql, scope_params, me_key = \
             await _room_board_scope(room_id, x_participant_id, host)
         out = await _outline_view(scope_sql, scope_params, objective_id)
+        # 指示掛在板上；房沒掛板就沒有
+        directives, directives_more = (
+            await _board_directives(attached["id"], 0)
+            if attached is not None else ([], False))
         return {
             "board_id": attached["id"] if attached else None,
             "board_seq": await _board_seq(room_id),
             **out,
+            "directives": directives,
+            "directives_has_more": directives_more,
             "reclaimable_tasks": await _reclaimable_in_scope(
                 scope_sql, scope_params, me_key),
             "supervisor": _supervisor_obj(
@@ -11175,6 +11732,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                                           session_key)
         my_role = await _board_member_or_403(board_id, actor, host=host)
         out = await _outline_view("board_id=?", [board_id], objective_id)
+        directives, directives_more = await _board_directives(board_id, 0)
         return {
             "board_id": board_id,
             "name": board["name"],
@@ -11183,6 +11741,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             "outcome": board["outcome"] if "outcome" in board.keys() else "",
             "board_seq": board["board_seq"],
             **out,
+            "directives": directives,
+            "directives_has_more": directives_more,
             "reclaimable_tasks": await _reclaimable_in_scope(
                 "board_id=?", [board_id], actor),
             "attached_rooms": await _attached_rooms(board_id),

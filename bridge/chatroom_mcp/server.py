@@ -1776,7 +1776,9 @@ def chatroom_board(room_id: str = "", full: bool = False,
     往下看用這三支：``chatroom_board_cycles``（列出所有週期）、
     ``chatroom_board_outline(objective_id=…)``（指定週期的綱要）、
     ``chatroom_board_item(item_id=…)``（單一卡／階段／週期的描述、素材、
-    事件）。子代理（``subagent``）沒有自己的水位，不帶參數也是綱要。
+    事件）。綱要回應附 ``directives``（板上既有的 Supervisor 指示，最近 50 筆，
+    與全量讀取同一份規則）——水位推進後增量讀取不會再給，首讀就要看。
+    子代理（``subagent``）沒有自己的水位，不帶參數也是綱要。
 
     之後再讀是**增量**：只回上次之後的變動（連著呼叫很便宜）。
     想重看整塊板傳 ``full=True``（舊行為：回完整內容）。
@@ -1920,6 +1922,8 @@ def chatroom_board_add(
     priority: str = "normal",
     subagent: str = "",
     board_id: str = "",
+    depends_on: list[str] | None = None,
+    affects: list[str] | None = None,
 ) -> dict:
     """在板上新增一個 Objective／Checklist／Task。
 
@@ -1937,6 +1941,30 @@ def chatroom_board_add(
     之後看板的人不必回頭翻三百則訊息去找當初為什麼要做這件事。
 
     ⚠️ 新增的 Task **不會自動掛在你身上**，要自己 ``chatroom_board_claim``。
+
+    任務依賴與影響：一張 Task 可以有「依賴」——需要哪些其他卡先完成才能開始；
+    「影響」是反過來的對照，自動列出哪些卡依賴這張卡。建立或編輯時用
+    depends_on=[卡 id, …] 設定依賴；也可以用 affects=[卡 id, …] 直接填寫影
+    響，那等於改寫對方卡的依賴（對方會自動多出或少掉「依賴本卡」）。兩者都
+    是整份覆寫：沒給＝不動，給 [] ＝清空。只能依賴同一塊板上的 Task（可跨
+    週期、階段），不能依賴自己；形成循環會被拒絕（409 dependency_cycle），
+    改 affects 需要有權修改對方的卡。
+
+    依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
+    不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
+    被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
+    錯誤會列出還沒完成的卡），要等依賴完成才能開始。卡已經開始（
+    in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
+    這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
+    in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
+    blocked 不會被自動恢復。
+
+    依賴何時算滿足：依賴卡是 done。cancelled 也視為解除（不再擋，但回應會
+    標示該依賴「已取消」）。moved 的卡看它搬去的那張卡（moved_to）的狀態判
+    斷；沒有 moved_to 視為未滿足。依賴卡被刪除時，這條依賴不再生效。讀卡時
+    每張 Task 帶 depends_on、affects、unmet 與 dependency_blocked（完整讀
+    取與單卡詳情含標題與狀態；分層綱要只帶 depends_on_ids、affects_ids、
+    unmet_ids 與旗標）。
     """
     if kind not in ("objective", "checklist", "task"):
         raise HubError(
@@ -1949,8 +1977,14 @@ def chatroom_board_add(
         )
     if not title.strip():
         raise HubError("title 不能是空的——卡片沒有標題，板上就只剩一個編號。")
+    if (depends_on is not None or affects is not None) and kind != "task":
+        raise HubError("depends_on / affects 只有 Task 能設定。")
     kind_target, target = _board_target(room_id, board_id)
     body: dict[str, Any] = {"title": title, "description": description}
+    if depends_on is not None:
+        body["depends_on"] = list(depends_on)
+    if affects is not None:
+        body["affects"] = list(affects)
     if kind == "objective":
         path = f"/api/rooms/{room_id}/board/objectives"
     elif kind == "checklist":
@@ -2005,6 +2039,8 @@ def chatroom_board_update(
     subagent: str = "",
     board_id: str = "",
     moved_to: str = "",
+    depends_on: list[str] | None = None,
+    affects: list[str] | None = None,
 ) -> dict:
     """改一張卡的狀態或內容。
 
@@ -2028,6 +2064,30 @@ def chatroom_board_update(
     ``done`` / ``cancelled`` / ``moved`` 這三種收尾狀態，agent 自己推出去
     之後就不能再打開；``blocked`` 不能直接跳 ``done``（先回
     ``in_progress``）。
+
+    任務依賴與影響：一張 Task 可以有「依賴」——需要哪些其他卡先完成才能開始；
+    「影響」是反過來的對照，自動列出哪些卡依賴這張卡。建立或編輯時用
+    depends_on=[卡 id, …] 設定依賴；也可以用 affects=[卡 id, …] 直接填寫影
+    響，那等於改寫對方卡的依賴（對方會自動多出或少掉「依賴本卡」）。兩者都
+    是整份覆寫：沒給＝不動，給 [] ＝清空。只能依賴同一塊板上的 Task（可跨
+    週期、階段），不能依賴自己；形成循環會被拒絕（409 dependency_cycle），
+    改 affects 需要有權修改對方的卡。
+
+    依賴未滿足叫「阻擋」，和 blocked（卡住）不同：blocked 是人手動標的「做
+    不下去」；阻擋是 Hub 依依賴算出來的衍生狀態，不改寫 status。todo 的卡
+    被阻擋時不能認領、不能推到 in_progress 或 done（409 dependencies_unmet，
+    錯誤會列出還沒完成的卡），要等依賴完成才能開始。卡已經開始（
+    in_progress）才多出未滿足的依賴時，Hub 會自動把它改成 blocked，並標記
+    這是依賴造成的卡住（blocked_by_dependency）；這種卡住不能手動推回
+    in_progress，所有依賴都滿足時 Hub 自動恢復為 in_progress。人手動設的
+    blocked 不會被自動恢復。
+
+    依賴何時算滿足：依賴卡是 done。cancelled 也視為解除（不再擋，但回應會
+    標示該依賴「已取消」）。moved 的卡看它搬去的那張卡（moved_to）的狀態判
+    斷；沒有 moved_to 視為未滿足。依賴卡被刪除時，這條依賴不再生效。讀卡時
+    每張 Task 帶 depends_on、affects、unmet 與 dependency_blocked（完整讀
+    取與單卡詳情含標題與狀態；分層綱要只帶 depends_on_ids、affects_ids、
+    unmet_ids 與旗標）。
 
     ``reopen``（打回）原則上只有人類按得下去；唯一的例外是派工的 release_fix
     agent 對**自己這一批的週期**（上板嚴重無法完成時）。
@@ -2062,14 +2122,23 @@ def chatroom_board_update(
             "moved_to 只能跟 status=\"moved\" 一起給（而且是 Task）："
             "它是「這件事搬去哪張卡了」，其他狀態沒有去向可言。"
         )
-    fields = {
+    fields: dict[str, Any] = {
         k: v for k, v in (
             ("title", title), ("description", description),
             ("priority", priority),
         ) if v
     }
+    if depends_on is not None or affects is not None:
+        if kind != "task":
+            raise HubError("depends_on / affects 只有 Task 能設定。")
+        # 整份覆寫：[] 是「清空」，不是「沒給」
+        if depends_on is not None:
+            fields["depends_on"] = list(depends_on)
+        if affects is not None:
+            fields["affects"] = list(affects)
     if not status and not fields:
-        raise HubError("沒有要改的東西：給 status，或給 title/description/priority。")
+        raise HubError("沒有要改的東西：給 status，或給 title/description/priority/"
+                       "depends_on/affects。")
     plural = {"objective": "objectives", "checklist": "checklists",
               "task": "tasks"}[kind]
     if status and kind == "objective":

@@ -264,3 +264,99 @@ async def test_moved_destination_is_stored_and_can_be_filled_in_later(tmp_path):
         r = await client.post(url, headers=OWNER, json={
             "status": "moved", "moved_to": "nope"})
         assert r.status_code == 404
+
+
+async def _send_directive(client, bid, text, target=""):
+    r = await client.post(f"/api/boards/{bid}/directives", headers=OWNER,
+                          json={"target_actor_key": target, "text": text})
+    assert r.status_code == 200, r.text
+
+
+async def test_outline_carries_existing_directives_on_both_axes(tmp_path):
+    """首讀回綱要並把水位推到 board_seq——板上既有的 Supervisor 指示若不在
+    綱要裡，之後的增量讀取（只回水位之後）就永遠漏掉它們。"""
+    app, client = await _client(tmp_path, "outline_directives")
+    async with app.router.lifespan_context(app), client:
+        bid, rid, me, _ = await _setup(client)
+        await _send_directive(client, bid, "先修漏掉的查詢")
+        await _send_directive(client, bid, "再補測試")
+
+        for path, headers in ((f"/api/boards/{bid}/outline", OWNER),
+                              (f"/api/rooms/{rid}/board/outline", me)):
+            r = await client.get(path, headers=headers)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert [d["text"] for d in body["directives"]] == [
+                "先修漏掉的查詢", "再補測試"], path
+            assert body["directives_has_more"] is False
+
+
+async def test_directives_in_outline_are_not_repeated_incrementally(tmp_path):
+    app, client = await _client(tmp_path, "outline_directives_inc")
+    async with app.router.lifespan_context(app), client:
+        bid, _, _, _ = await _setup(client)
+        await _send_directive(client, bid, "舊指示")
+        outline = (await client.get(f"/api/boards/{bid}/outline",
+                                    headers=OWNER)).json()
+        seq = outline["board_seq"]
+        assert [d["text"] for d in outline["directives"]] == ["舊指示"]
+
+        inc = (await client.get(f"/api/boards/{bid}", headers=OWNER,
+                                params={"after_board_seq": seq})).json()
+        assert inc["directives"] == []
+
+        await _send_directive(client, bid, "新指示")
+        inc = (await client.get(f"/api/boards/{bid}", headers=OWNER,
+                                params={"after_board_seq": seq})).json()
+        assert [d["text"] for d in inc["directives"]] == ["新指示"]
+
+
+async def test_outline_directives_follow_the_full_read_cap(tmp_path):
+    """上限與全量讀取同一條：最近 50 筆、由舊到新，`directives_has_more`。"""
+    app, client = await _client(tmp_path, "outline_directives_cap")
+    async with app.router.lifespan_context(app), client:
+        bid, _, _, _ = await _setup(client)
+        for i in range(51):
+            await _send_directive(client, bid, f"指示 {i}")
+        body = (await client.get(f"/api/boards/{bid}/outline",
+                                 headers=OWNER)).json()
+        full = (await client.get(f"/api/boards/{bid}", headers=OWNER)).json()
+        assert len(body["directives"]) == 50
+        assert body["directives_has_more"] is True
+        assert body["directives"][0]["text"] == "指示 1"
+        assert body["directives"] == full["directives"]
+
+
+async def test_room_axis_full_read_carries_directives_by_watermark(tmp_path):
+    """房軸完整讀取原本完全不回 directives：首讀之後新增的指示，增量讀取
+    也拿不到。規則與板軸一致（水位之後、最近 50 筆）。"""
+    app, client = await _client(tmp_path, "room_axis_directives")
+    async with app.router.lifespan_context(app), client:
+        bid, rid, me, _ = await _setup(client)
+        await _send_directive(client, bid, "舊指示")
+        full = (await client.get(f"/api/rooms/{rid}/board", headers=me)).json()
+        assert [d["text"] for d in full["directives"]] == ["舊指示"]
+        assert full["directives_has_more"] is False
+        seq = full["board_seq"]
+
+        inc = (await client.get(f"/api/rooms/{rid}/board", headers=me,
+                                params={"after_board_seq": seq})).json()
+        assert inc["directives"] == []
+
+        await _send_directive(client, bid, "新指示")
+        inc = (await client.get(f"/api/rooms/{rid}/board", headers=me,
+                                params={"after_board_seq": seq})).json()
+        assert [d["text"] for d in inc["directives"]] == ["新指示"]
+
+
+async def test_room_without_board_has_no_directives(tmp_path):
+    app, client = await _client(tmp_path, "room_axis_no_board")
+    async with app.router.lifespan_context(app), client:
+        rid = (await client.post("/api/rooms", json={
+            "name": "空房", "session_key": "human-1"})).json()["id"]
+        pid = (await client.post(f"/api/rooms/{rid}/join", json={
+            "kind": "human", "role": "human", "session_key": "human-1",
+            "preferred_name": "Bernie"})).json()["participant_id"]
+        body = (await client.get(f"/api/rooms/{rid}/board", headers={
+            **OWNER, "X-Participant-Id": pid})).json()
+        assert body["directives"] == [] and body["directives_has_more"] is False
