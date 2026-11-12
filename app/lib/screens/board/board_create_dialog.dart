@@ -4,6 +4,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
+import 'board_dependency_picker.dart';
 
 /// 建立 Objective / Checklist / Task 的對話框（設計稿 artboard 04）。
 ///
@@ -14,11 +15,17 @@ class BoardCreateResult {
     required this.title,
     this.description = '',
     this.priority = 'normal',
+    this.dependsOn,
+    this.affects,
   });
 
   final String title;
   final String description;
   final String priority;
+
+  /// 建立時設定的依賴／影響（task id）；沒設定為 null（不送）。
+  final List<String>? dependsOn;
+  final List<String>? affects;
 }
 
 Future<BoardCreateResult?> showBoardCreateDialog(
@@ -26,16 +33,26 @@ Future<BoardCreateResult?> showBoardCreateDialog(
   required String kind,
   String? parentTitle,
   String? initialTitle,
+  DependencyEditSpec? dependencies,
 }) =>
     showDialog<BoardCreateResult>(
       context: context,
       builder: (_) => _BoardCreateDialog(
-          kind: kind, parentTitle: parentTitle, initialTitle: initialTitle),
+          kind: kind,
+          parentTitle: parentTitle,
+          initialTitle: initialTitle,
+          dependencies: dependencies),
     );
 
 class _BoardCreateDialog extends StatefulWidget {
   const _BoardCreateDialog(
-      {required this.kind, this.parentTitle, this.initialTitle});
+      {required this.kind,
+      this.parentTitle,
+      this.initialTitle,
+      this.dependencies});
+
+  /// 只有建立卡片時給：多出「依賴」「影響」兩欄。
+  final DependencyEditSpec? dependencies;
 
   /// objective / checklist / task
   final String kind;
@@ -57,7 +74,8 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
   late final _title = TextEditingController(text: widget.initialTitle ?? '');
   final _description = TextEditingController();
   String _priority = 'normal';
-
+  List<String> _dependsOn = [];
+  List<String> _affects = [];
 
   @override
   void dispose() {
@@ -73,6 +91,8 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
       title: title,
       description: _description.text.trim(),
       priority: _priority,
+      dependsOn: _dependsOn.isEmpty ? null : _dependsOn,
+      affects: _affects.isEmpty ? null : _affects,
     ));
   }
 
@@ -129,6 +149,24 @@ class _BoardCreateDialogState extends State<_BoardCreateDialog> {
                   ],
                 ],
               ),
+              if (widget.dependencies != null) ...[
+                const SizedBox(height: 14),
+                DependencyField(
+                  label: l10n.boardDependsOnLabel,
+                  selected: _dependsOn,
+                  spec: widget.dependencies!,
+                  excluded: _affects,
+                  onChanged: (v) => setState(() => _dependsOn = v),
+                ),
+                const SizedBox(height: 12),
+                DependencyField(
+                  label: l10n.boardAffectsLabel,
+                  selected: _affects,
+                  spec: widget.dependencies!,
+                  excluded: _dependsOn,
+                  onChanged: (v) => setState(() => _affects = v),
+                ),
+              ],
             ],
           ]),
         ),

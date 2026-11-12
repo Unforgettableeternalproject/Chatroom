@@ -285,16 +285,25 @@ class BoardActions {
   ///
   /// 兩個欄位都是選填：只改標題時不要把敘述一起送成空字串，那會**清掉**它
   /// （`_board_patch` 只跳過 null，空字串是一個真的值）。
-  Future<void> updateTask(String taskId,
-      {String? title, String? description}) async {
+  ///
+  /// `dependsOn`／`affects` 同一條規則：null＝沒動，空清單＝清空。回傳這次
+  /// 寫入造成的依賴連動，呼叫端用 [showDependencyChangesToast] 告知。
+  Future<List<DependencyChange>> updateTask(String taskId,
+      {String? title,
+      String? description,
+      List<String>? dependsOn,
+      List<String>? affects}) async {
     final pid = await _pid();
-    if (pid == null && _sk == null) return;
-    await _api.updateTask(taskId,
+    if (pid == null && _sk == null) return const [];
+    final changes = await _api.updateTask(taskId,
         participantId: pid,
         sessionKey: _sk,
         title: title,
-        description: description);
+        description: description,
+        dependsOn: dependsOn,
+        affects: affects);
     _reload();
+    return changes;
   }
 
   /// 改一個週期的標題與敘述（09/08 卡 32f26b75）。規則與 [updateTask]
@@ -340,13 +349,15 @@ class BoardActions {
 
   /// 推 Task 的狀態。轉移不合法時丟 [ConflictException]，其 `allowed`
   /// 會說出從現在這裡還能去哪——呼叫端拿它畫按鈕，不要自己複製轉移表。
-  Future<void> setTaskStatus(String taskId, String status,
+  /// 回傳這次狀態變更造成的依賴連動。
+  Future<List<DependencyChange>> setTaskStatus(String taskId, String status,
       {String movedTo = ''}) async {
     final pid = await _pid();
-    if (pid == null && _sk == null) return;
-    await _api.setTaskStatus(taskId, participantId: pid,
+    if (pid == null && _sk == null) return const [];
+    final changes = await _api.setTaskStatus(taskId, participantId: pid,
           sessionKey: _sk, status: status, movedTo: movedTo);
     _reload();
+    return changes;
   }
 
   /// 把一張卡搬去別的地方做：**先在目標清單建一張新卡，再把舊卡推成
@@ -502,6 +513,9 @@ class BoardActions {
     String priority = 'normal',
     int? sourceSeq,
     String? assigneeParticipantId,
+    List<String>? dependsOn,
+    List<String>? affects,
+    void Function(List<DependencyChange> changes)? onDependencyChanges,
   }) async {
     final pid = await _pid();
     if (pid == null && _sk == null) return null;
@@ -514,6 +528,9 @@ class BoardActions {
       priority: priority,
       sourceSeq: sourceSeq,
       assigneeParticipantId: assigneeParticipantId,
+      dependsOn: dependsOn,
+      affects: affects,
+      onDependencyChanges: onDependencyChanges,
     );
     _reload();
     return id;
@@ -674,7 +691,7 @@ final reclaimableTasksProvider =
 
 final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 
-/// Board Library 清單，依狀態分（active / archived）。
+/// Board Library 清單，分進行中（active）與已收尾（settled）。
 ///
 /// ⚠️ **Hub 還沒有 `/api/boards` 之前這支會回 404**，畫面必須把它呈現成
 /// 「這個功能還沒開」而不是一片空白——空清單與端點不存在看起來一模一樣，
@@ -685,11 +702,10 @@ final boardsApiProvider = Provider((ref) => BoardsApi(ref.watch(dioProvider)));
 /// 漏了）。漏掉的後果有兩層：清單不會多出東西（功能等於沒作用），而且沿用
 /// 的舊回應 `host_view` 是 false ⇒ banner 亮起「伺服器沒有照做」，
 /// **指著一個完全無辜的方向**（2026-09-05）。
-/// [view] 是**分頁**不是 status：`active` / `archived` / `settled`。
+/// [view] 是**分頁**：`active` / `settled`。
 ///
-/// 前兩個直接對應 Hub 的 `status`；`settled`（已收尾）是第三個軸——
-/// **收尾與封存正交**，一塊做完的板可能還開著、也可能已經封存，所以那一頁
-/// 不能綁在某一個 status 上。
+/// `active` 對應 Hub 的 `status`（板沒有封存狀態了）；`settled`（已收尾，
+/// 有結局）是以 `outcome` 篩出來的。
 final boardLibraryProvider =
     FutureProvider.autoDispose.family<BoardListResult, String>(
   (ref, view) async {

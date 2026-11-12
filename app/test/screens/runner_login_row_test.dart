@@ -147,6 +147,41 @@ void main() {
     expect(find.text('登入已過期'), findsOneWidget);
   });
 
+  testWidgets('🔴 有長效 token：顯示「使用 token」，不提示重新登入', (tester) async {
+    sizeUp(tester);
+    File(path('claude-oauth-token')).writeAsStringSync('sk-ant-oat01-x');
+
+    // 設定目錄的登入失效（auth status 說沒登入、mcp list 說過期）也不相干
+    await tester.pumpWidget(wrap(probed: false, mcpExpired: true));
+    await settle(tester);
+
+    expect(find.text('使用 token'), findsOneWidget);
+    expect(find.text('已登入'), findsNothing);
+    expect(find.text('登入已過期'), findsNothing);
+    expect(find.text('尚未登入'), findsNothing);
+    expect(find.text('登入'), findsNothing);
+    expect(find.byIcon(Icons.copy), findsNothing);
+  });
+
+  testWidgets('🔴 token 被移除後依設定目錄實際狀態：登入失效 → 登入已過期',
+      (tester) async {
+    sizeUp(tester);
+    File(path('.credentials.json'))
+        .writeAsStringSync('{"claudeAiOauth": {"accessToken": "x"}}');
+    File(path('claude-oauth-token')).writeAsStringSync('sk-ant-oat01-x');
+
+    await tester.pumpWidget(wrap(probed: false));
+    await settle(tester);
+    expect(find.text('使用 token'), findsOneWidget);
+
+    await tester.tap(find.text('清除'));
+    await settle(tester);
+
+    expect(find.text('使用 token'), findsNothing);
+    expect(find.text('登入已過期'), findsOneWidget);
+    expect(find.text('登入'), findsOneWidget);
+  });
+
   testWidgets('按登入 → 以執行器的設定目錄開終端跑 claude auth login',
       (tester) async {
     sizeUp(tester);
@@ -202,6 +237,18 @@ void main() {
 
     expect(file.existsSync(), isFalse);
     expect(find.text('未設定'), findsOneWidget);
+  });
+
+  testWidgets('token 輸入框靠左，與上方說明左緣對齊（不留標籤欄）', (tester) async {
+    sizeUp(tester);
+    await tester.pumpWidget(wrap(probed: true));
+    await settle(tester);
+
+    final note = tester.getTopLeft(find.textContaining('登入常過期時改用它')).dx;
+    final field =
+        tester.getTopLeft(find.byKey(const ValueKey('runner-oauth-token'))).dx;
+    // 輸入框外框有內距，但不能再多出一整欄標籤的寬度
+    expect(field - note, lessThan(24));
   });
 
   testWidgets('中間有空白的不是 token：不寫檔，說一句', (tester) async {

@@ -413,6 +413,10 @@ CREATE TABLE IF NOT EXISTS board_task (
     -- 補欄，而 `board_task__v2` 的重建路徑是照這份 CREATE TABLE 建的——
     -- 只加 migration 的話，重建之後 INSERT 會找不到這個欄位
     moved_to             TEXT NOT NULL DEFAULT '',
+    -- 1＝目前的 blocked 是「依賴未滿足」造成的（Hub 自動卡住）；0＝人手動
+    -- 設的 blocked 或不在 blocked。只有 1 的會在依賴全數滿足時自動恢復成
+    -- in_progress。⚠️ **這一欄同時列在 MIGRATIONS 與 board_task__v2 裡**
+    blocked_by_dependency INTEGER NOT NULL DEFAULT 0,
 
     -- 來源訊息的房內 seq。**存 seq 不存 message_id**，與 reply_to_seq 同一個
     -- 理由：訊息可以被軟刪除，seq 不會
@@ -434,6 +438,20 @@ CREATE TABLE IF NOT EXISTS board_task (
 );
 CREATE INDEX IF NOT EXISTS idx_btask_room ON board_task(room_id, board_seq);
 CREATE INDEX IF NOT EXISTS idx_btask_checklist ON board_task(checklist_id, status);
+-- 任務依賴：`task_id` 需要 `depends_on_id` 先完成才能開始。**只存這一個方向**
+-- ——「影響」是反向查詢（誰依賴我），不另存，兩邊才不會漂移。
+-- 新表，CREATE TABLE IF NOT EXISTS 即是遷移。刻意不加外鍵：卡是軟刪除，
+-- 被刪的卡其依賴關係在查詢時排除即可，不靠 cascade。
+CREATE TABLE IF NOT EXISTS task_dependency (
+    task_id       TEXT NOT NULL,
+    depends_on_id TEXT NOT NULL,
+    board_id      TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    created_by    TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (task_id, depends_on_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_dep_on ON task_dependency(depends_on_id);
+CREATE INDEX IF NOT EXISTS idx_task_dep_board ON task_dependency(board_id);
 -- 孤兒釋放要靠這條：成員離場時以 participant_id 一次撈出他領走的全部。
 -- 這條 partial index 放在 SCHEMA 沒問題——board_task 是全新的表，同一份
 -- executescript 裡就建好了，不像 idx_participant_parent 要等 ALTER 補欄位
@@ -466,7 +484,7 @@ CREATE TABLE IF NOT EXISTS board (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     description     TEXT NOT NULL DEFAULT '',
-    status          TEXT NOT NULL DEFAULT 'active',      -- active / archived
+    status          TEXT NOT NULL DEFAULT 'active',      -- active（archived 已於 DATA_VERSION 11 移除；deleted 為軟刪）
     -- **結局**，與 status 正交（艾斯維爾 2026-09-05 裁定 A）。
     -- status 回答「現在還能不能編輯」（可逆），這一欄回答「這份工作的結局
     -- 是什麼」。塞成同一欄的四個值就表達不出「完成**且**收起來」，而那是
@@ -1227,6 +1245,9 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 還沒說去向，那是真實的中間狀態：跨週期搬遷常常是先把舊卡收掉、新週期
     # 開起來才建新卡。存量一律空——這一欄存在之前沒有 moved 這個狀態
     ("board_task", "moved_to", "moved_to TEXT NOT NULL DEFAULT ''"),
+    # 依賴造成的 blocked（見 SCHEMA）。舊卡一律 0＝沒有任何卡是依賴造成的卡住
+    ("board_task", "blocked_by_dependency",
+     "blocked_by_dependency INTEGER NOT NULL DEFAULT 0"),
     # 這間房原先掛的板被**刪掉**了（09/07 卡 029e24f6）。刪板是硬刪，
     # `board_room` 的列跟著消失 ⇒ 進行中的房自然變回「沒綁板」（那正是要的），
     # 但**封存房從此說不出自己曾經有過板**——那間房不會再綁新的，「沒綁板」
@@ -1432,6 +1453,7 @@ REBUILT_TABLES: dict[str, str] = {
             orphaned_at          TEXT,
             orphaned_reason      TEXT NOT NULL DEFAULT '',
             moved_to             TEXT NOT NULL DEFAULT '',
+            blocked_by_dependency INTEGER NOT NULL DEFAULT 0,
             source_seq        INTEGER,
             source_room_id    TEXT NOT NULL DEFAULT '',
             source_room_name  TEXT NOT NULL DEFAULT '',
@@ -1584,7 +1606,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 10
+DATA_VERSION = 12
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1713,6 +1735,20 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
             " ORDER BY n.created_at, n.rowid")
     if version < 10:
         await _migrate_inbox_pages(db)
+    if version < 11:
+        # 板的「封存」狀態移除，只留結局（艾斯維爾 2026-11-12）。
+        # 已封存且有結局 → 清掉封存、只留結局（已收尾）；
+        # 已封存但無結局 → 清掉封存、回到進行中。
+        # 兩種都是 status='archived' → 'active'，結局欄位原樣保留，所以
+        # 一句 UPDATE 就涵蓋；版次只前進，不會重跑。
+        await db.execute(
+            "UPDATE board SET status='active' WHERE status='archived'")
+    if version < 12:
+        # 任務依賴（task_dependency 表與 board_task.blocked_by_dependency 欄）
+        # 都是新結構，由 SCHEMA／MIGRATIONS 建立；存量卡沒有任何依賴，
+        # 不需要回填資料。這一版只是把版次往前推，讓「已有依賴功能」的庫
+        # 與舊庫可以分辨。
+        pass
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

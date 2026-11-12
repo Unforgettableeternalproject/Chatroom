@@ -33,7 +33,7 @@ def test_board_starts_at_zero_and_remembers_the_watermark(fake_hub):
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 12, "full": True, "tasks": []})
 
-    result = srv.chatroom_board(ROOM)
+    result = srv.chatroom_board(ROOM, full=True)
 
     assert result["ok"] is True
     assert result["after_board_seq"] == 0
@@ -44,7 +44,7 @@ def test_board_starts_at_zero_and_remembers_the_watermark(fake_hub):
 def test_second_call_is_incremental(fake_hub):
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 12, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
 
     _board(fake_hub, {"board_seq": 15, "tasks": []})
     srv.chatroom_board(ROOM)
@@ -55,7 +55,7 @@ def test_second_call_is_incremental(fake_hub):
 def test_full_rereads_everything_without_rewinding(fake_hub):
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 12, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
 
     _board(fake_hub, {"board_seq": 12, "full": True, "tasks": []})
     srv.chatroom_board(ROOM, full=True)
@@ -75,7 +75,7 @@ def test_board_watermark_is_separate_from_message_cursor(fake_hub):
     srv.state().set_last_seq(ROOM, 300)
     _board(fake_hub, {"board_seq": 7, "tasks": []})
 
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
 
     assert srv.state().board_seq(ROOM) == 7
     assert srv.state().last_seq(ROOM) == 300
@@ -102,7 +102,7 @@ def test_wait_omits_after_board_seq_until_board_has_been_read(fake_hub):
 def test_wait_sends_watermark_once_board_is_known(fake_hub):
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 9, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
     fake_hub.json("GET", f"/api/rooms/{ROOM}/updates",
                   {"messages": [], "last_seq": 0, "board_seq": 9})
 
@@ -119,7 +119,7 @@ def test_wait_reports_board_changed_but_does_not_move_the_watermark(fake_hub):
     """
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 9, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
     fake_hub.json("GET", f"/api/rooms/{ROOM}/updates",
                   {"messages": [], "last_seq": 0, "board_seq": 14})
 
@@ -149,7 +149,7 @@ def test_unread_board_is_not_reported_as_a_change(fake_hub):
 def test_read_board_then_no_change_reports_neither(fake_hub):
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 42, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
     fake_hub.json("GET", f"/api/rooms/{ROOM}/updates",
                   {"messages": [], "last_seq": 0, "board_seq": 42})
 
@@ -163,7 +163,7 @@ def test_board_change_does_not_count_as_being_mentioned(fake_hub):
     """被 board 叫醒 ≠ 被 @。"""
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 1, "tasks": []})
-    srv.chatroom_board(ROOM)
+    srv.chatroom_board(ROOM, full=True)
     fake_hub.json("GET", f"/api/rooms/{ROOM}/updates", {
         "messages": [], "last_seq": 0, "board_seq": 5,
         "you_were_mentioned": False,
@@ -492,13 +492,30 @@ def test_subagent_reads_full_board_and_leaves_the_parent_cursor_alone(fake_hub):
     """
     _join(fake_hub)
     _board(fake_hub, {"board_seq": 5, "tasks": []})
-    srv.chatroom_board(ROOM)          # 父層水位 → 5
+    srv.chatroom_board(ROOM, full=True)          # 父層水位 → 5
 
     spawned = _spawn(fake_hub)
     _board(fake_hub, {"board_seq": 30, "tasks": []})
-    srv.chatroom_board(ROOM, subagent=spawned["handle"])
+    srv.chatroom_board(ROOM, subagent=spawned["handle"], full=True)
 
     assert fake_hub.calls[-1].url.params["after_board_seq"] == "0"
+    assert srv.state().board_seq(ROOM) == 5
+
+
+def test_subagent_default_read_is_the_outline_and_leaves_the_cursor_alone(
+        fake_hub):
+    """子代理不帶參數 ＝ 綱要（它沒有水位，舊行為是整塊板倒給它）。"""
+    _join(fake_hub)
+    _board(fake_hub, {"board_seq": 5, "tasks": []})
+    srv.chatroom_board(ROOM, full=True)          # 父層水位 → 5
+
+    spawned = _spawn(fake_hub)
+    fake_hub.json("GET", f"/api/rooms/{ROOM}/board/outline",
+                  {"board_seq": 30, "view": "outline", "tasks": []})
+    out = srv.chatroom_board(ROOM, subagent=spawned["handle"])
+
+    assert fake_hub.calls[-1].url.path.endswith("/board/outline")
+    assert out["view"] == "outline"
     assert srv.state().board_seq(ROOM) == 5
 
 

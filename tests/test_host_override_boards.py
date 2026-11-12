@@ -27,6 +27,14 @@ async def _client(tmp_path, name):
                             headers={"Authorization": f"Bearer {ROOT}"})
 
 
+async def _settle_directly(app, bid, outcome="completed"):
+    """直接寫結局。板沒有封存了，「唯讀」由結局承接；這裡要的是一塊已收尾的板，
+    不是宣告結局的前置條件（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
+
+
 async def _join(client, rid, key, name, role="human"):
     r = await client.post(f"/api/rooms/{rid}/join", json={
         "kind": "human" if role == "human" else "claude", "role": role,
@@ -267,8 +275,11 @@ async def test_host_changes_the_board_itself_and_deletes_it(tmp_path):
                                json={"name": "新板名", "reason": "改名"},
                                headers=HOST)
         assert r.status_code == 200, r.text
-        r = await client.post(f"/api/boards/{bid}/archive", headers=HOST)
-        assert r.status_code == 200, r.text
+        # 未收尾的板主持人也刪不掉；收尾（結局）後才行
+        r = await client.delete(f"/api/boards/{bid}", headers=HOST)
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["code"] == "board_not_settled"
+        await _settle_directly(app, bid)
         r = await client.delete(f"/api/boards/{bid}", headers=HOST,
                                 params={"reason": "不需要的板"})
         assert r.status_code == 200, r.text

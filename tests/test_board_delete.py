@@ -5,7 +5,8 @@
 09/07 的裁定改成三件事：
 
 1. 硬刪保留
-2. **板必須先封存才刪得掉**——刪除是不可復原的決定，封存是它的緩衝
+2. **板必須先收尾（有結局）才刪得掉**——刪除是不可復原的決定，收尾是它的
+   緩衝（2026-11-12 起板沒有「封存」狀態，原本的「先封存」改成「先收尾」）
 3. 板被刪掉之後，房間要說得出實話：
    - 進行中的房 → 就是「沒綁板」，而且房主可以重新綁一塊
    - 已封存的房 → 「此房間原先的任務板已刪除」
@@ -48,9 +49,11 @@ async def _board(client, name="板"):
                               json={"name": name})).json()["id"]
 
 
-async def _archive_board(client, bid):
-    r = await client.post(f"/api/boards/{bid}/archive", headers=OWNER)
-    assert r.status_code == 200, r.text
+async def _settle_board(app, bid, outcome="completed"):
+    """直接寫結局：這裡測的是刪除，不是宣告結局的前置（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
 
 
 async def _delete(client, bid, headers=OWNER):
@@ -64,23 +67,23 @@ async def _room_board(client, rid, headers):
     return r.json()
 
 
-# ---------- 前置：先封存才刪得掉 ----------
+# ---------- 前置：先收尾才刪得掉 ----------
 
 async def test_an_active_board_cannot_be_deleted(tmp_path):
-    """刪除不可復原，封存是它的緩衝——**要先按過一次「這份工作收尾了」**。"""
-    app, client = await _client(tmp_path, "delete-needs-archive")
+    """刪除不可復原，收尾是它的緩衝——**要先按過一次「這份工作收尾了」**。"""
+    app, client = await _client(tmp_path, "delete-needs-settled")
     async with app.router.lifespan_context(app), client:
         bid = await _board(client)
         r = await _delete(client, bid)
         assert r.status_code == 409, r.text
-        assert r.json()["detail"]["code"] == "board_not_archived"
+        assert r.json()["detail"]["code"] == "board_not_settled"
 
 
-async def test_an_archived_board_can_be_deleted(tmp_path):
-    app, client = await _client(tmp_path, "delete-after-archive")
+async def test_a_settled_board_can_be_deleted(tmp_path):
+    app, client = await _client(tmp_path, "delete-after-settled")
     async with app.router.lifespan_context(app), client:
         bid = await _board(client)
-        await _archive_board(client, bid)
+        await _settle_board(app, bid)
         r = await _delete(client, bid)
         assert r.status_code == 200, r.text
         assert r.json()["deleted"]["board"] == 1
@@ -101,7 +104,7 @@ async def test_a_live_room_simply_has_no_board_again(tmp_path):
         rid, me = await _room(client)
         bid = await _board(client)
         await client.post(f"/api/boards/{bid}/rooms/{rid}", headers=OWNER)
-        await _archive_board(client, bid)
+        await _settle_board(app, bid)
         assert (await _delete(client, bid)).status_code == 200
 
         body = await _room_board(client, rid, me)
@@ -121,7 +124,7 @@ async def test_a_live_room_can_bind_a_new_board(tmp_path):
         rid, me = await _room(client)
         old = await _board(client, "舊板")
         await client.post(f"/api/boards/{old}/rooms/{rid}", headers=OWNER)
-        await _archive_board(client, old)
+        await _settle_board(app, old)
         await _delete(client, old)
 
         new = await _board(client, "新板")
@@ -142,7 +145,7 @@ async def test_an_archived_room_keeps_a_headstone(tmp_path):
         bid = await _board(client, "09/06 週期")
         await client.post(f"/api/boards/{bid}/rooms/{rid}", headers=OWNER)
         await client.post(f"/api/rooms/{rid}/archive", headers=me)
-        await _archive_board(client, bid)
+        await _settle_board(app, bid)
         assert (await _delete(client, bid)).status_code == 200
 
         body = await _room_board(client, rid, me)
@@ -159,7 +162,7 @@ async def test_binding_a_new_board_clears_the_headstone(tmp_path):
         rid, me = await _room(client)
         old = await _board(client, "舊板")
         await client.post(f"/api/boards/{old}/rooms/{rid}", headers=OWNER)
-        await _archive_board(client, old)
+        await _settle_board(app, old)
         await _delete(client, old)
 
         new = await _board(client, "新板")
@@ -173,3 +176,38 @@ async def test_a_room_that_never_had_a_board_has_no_headstone(tmp_path):
     async with app.router.lifespan_context(app), client:
         rid, me = await _room(client)
         assert (await _room_board(client, rid, me))["previous_board"] is None
+
+
+async def test_an_abandoned_board_can_be_deleted_too(tmp_path):
+    """結局不分完成或廢止：兩種都是「收尾」。"""
+    app, client = await _client(tmp_path, "delete-abandoned")
+    async with app.router.lifespan_context(app), client:
+        bid = await _board(client)
+        await _settle_board(app, bid, "abandoned")
+        assert (await _delete(client, bid)).status_code == 200
+
+
+async def test_only_the_owner_can_delete_a_settled_board(tmp_path):
+    """權限沿用 owner 判準：別人刪不掉，板仍在。"""
+    app, client = await _client(tmp_path, "delete-not-owner")
+    async with app.router.lifespan_context(app), client:
+        bid = await _board(client)
+        await _settle_board(app, bid)
+        r = await _delete(client, bid, headers={"X-Session-Key": "stranger"})
+        assert r.status_code in (403, 404), r.text
+        assert (await client.get(f"/api/boards/{bid}",
+                                 headers=OWNER)).status_code == 200
+
+
+async def test_the_archive_endpoints_are_gone(tmp_path):
+    """舊 client 打封存／解除封存：410 + 明確 code，板不動。"""
+    app, client = await _client(tmp_path, "delete-archive-gone")
+    async with app.router.lifespan_context(app), client:
+        bid = await _board(client)
+        for verb in ("archive", "unarchive"):
+            r = await client.post(f"/api/boards/{bid}/{verb}", headers=OWNER)
+            assert r.status_code == 410, r.text
+            assert r.json()["detail"]["code"] == "board_archive_removed"
+        detail = (await client.get(f"/api/boards/{bid}",
+                                   headers=OWNER)).json()
+        assert detail["status"] == "active"

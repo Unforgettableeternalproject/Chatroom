@@ -204,7 +204,7 @@ class RunnerLoop:
                         "MCP 封鎖只用保底名單", argv[0], exc)
             return
         try:
-            out, _ = await asyncio.wait_for(
+            out, err = await asyncio.wait_for(
                 proc.communicate(), timeout=MCP_LIST_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             proc.kill()
@@ -213,7 +213,26 @@ class RunnerLoop:
             return
         servers = parse_mcp_list(out.decode("utf-8", "replace"))
         remember_mcp_servers(servers)
-        log.info("claude mcp list 探到 %d 台 MCP 伺服器", len(servers))
+        if servers:
+            log.info("claude mcp list 探到 %d 台 MCP 伺服器", len(servers))
+            return
+        # 0 台不一定是真的沒有：用 token 時讀不到 claude.ai 連接器、設定目錄的
+        # 登入過期時也是空的。stderr / stdout 最後一句一起留下來，才找得到原因
+        token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        if token:
+            reason = ("目前使用長效 token，token 讀不到 claude.ai 連接器，"
+                      "只看得到全域 .claude.json 的 MCP")
+        else:
+            reason = "設定目錄的 Claude 登入可能已過期，重新登入後才讀得到連接器"
+        text = (err.decode("utf-8", "replace") + "\n"
+                + out.decode("utf-8", "replace")).strip()
+        if token:
+            # 🚨 token 絕不進 log：輸出若夾帶就先遮掉
+            text = text.replace(token, "***")
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        said = lines[-1][:200] if lines else "（無輸出）"
+        log.warning("claude mcp list 探到 0 台 MCP 伺服器；可能原因：%s；"
+                    "claude 輸出：%s；MCP 封鎖只用保底名單", reason, said)
 
     async def _check_claude(self) -> list[str]:
         argv = list(self.cfg.claude_bin) + ["--version"]

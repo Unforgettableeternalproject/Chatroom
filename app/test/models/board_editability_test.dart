@@ -12,32 +12,32 @@ import 'package:flutter_test/flutter_test.dart';
 /// 沒有這條規則——它長在 UI。卡片端點認 `X-Session-Key` 之後它退場了。
 void main() {
   test('未封存、不是 viewer＝可以改', () {
-    expect(boardEditability(archived: false), BoardEditability.editable);
+    expect(boardEditability(settled: false), BoardEditability.editable);
   });
 
   test('🔴 從 Library 進來（沒有房）**不再**是唯讀的理由', () {
     // 這條測試在 2026-09-03 之前是反過來寫的。改它就是這次修的內容本身：
     // 板軸的動作帶 session key，擋不擋得住由 Hub 說了算
-    expect(boardEditability(archived: false, role: 'owner'),
+    expect(boardEditability(settled: false, role: 'owner'),
         BoardEditability.editable);
-    expect(boardEditability(archived: false, role: 'editor'),
+    expect(boardEditability(settled: false, role: 'editor'),
         BoardEditability.editable);
   });
 
   test('viewer 只能看——這是 role 的事，不是進入路徑的事', () {
-    expect(boardEditability(archived: false, role: 'viewer'),
+    expect(boardEditability(settled: false, role: 'viewer'),
         BoardEditability.viewer);
   });
 
   test('封存壓過角色。封存的板從哪裡進來、你是誰都改不了', () {
-    expect(boardEditability(archived: true, role: 'owner'),
-        BoardEditability.archived);
-    expect(boardEditability(archived: true, role: 'viewer'),
-        BoardEditability.archived);
+    expect(boardEditability(settled: true, role: 'owner'),
+        BoardEditability.settled);
+    expect(boardEditability(settled: true, role: 'viewer'),
+        BoardEditability.settled);
   });
 
   test('Hub 沒說 role 時當可以改——真的沒權限時它會回 403，那是誠實的失敗；'
       '預設鎖住則是無聲的', () {
-    expect(boardEditability(archived: false), BoardEditability.editable);
+    expect(boardEditability(settled: false), BoardEditability.editable);
   });
 }

@@ -75,6 +75,32 @@ void main() {
     expect(find.textContaining('諾薇亞 加入了聊天室 ·'), findsOneWidget);
   });
 
+  testWidgets('不到 200 字的單行長 system 訊息在窄寬度下換行而不溢出', (tester) async {
+    const longLine = '任務板摘要：週期 2 項、階段 1 項、任務 5 項有變動：'
+        '「週期 2：Core 骨架（P1 實作、P2、P3）」／「週期 3：平台擴展（Part H、P4、P5）」'
+        '／「核心系統補完（11/11 自週期三／四拉回）」';
+    expect(systemMessageNeedsBlock(longLine), isFalse);
+    await tester.pumpWidget(_wrap(SystemMessageTile(message: _msg(longLine))));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    final text = tester.getRect(find.textContaining('任務板摘要'));
+    expect(text.width, lessThanOrEqualTo(320));
+  });
+
+  testWidgets('Hub 的任務板摘要（換行清單）走區塊樣式且不溢出', (tester) async {
+    const digest = '任務板摘要：週期 2 項、階段 1 項有變動：\n'
+        '- 「週期 2：Core 骨架（P1 實作、P2、P3）」\n'
+        '- 「週期 3：平台擴展（Part H、P4、P5）」\n'
+        '- 「核心系統補完（11/11 自週期三／四拉回）」\n'
+        '等 5 項';
+    await tester.pumpWidget(_wrap(SystemMessageTile(message: _msg(digest))));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('核心系統補完', findRichText: true), findsWidgets);
+  });
+
   test('判定：有換行、有標題、或夠長就當成一段內容', () {
     expect(systemMessageNeedsBlock('諾薇亞 加入了聊天室'), isFalse);
     expect(systemMessageNeedsBlock('第一行\n第二行'), isTrue);

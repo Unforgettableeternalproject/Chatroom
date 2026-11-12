@@ -3,6 +3,7 @@ import 'package:chatroom_app/l10n/l10n.dart';
 import 'package:chatroom_app/screens/help/help_screen.dart';
 import 'package:chatroom_app/widgets/help_blocks.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -13,7 +14,11 @@ import '../helpers/l10n.dart';
 /// 視窗高度刻意用一般尺寸（不像 layout 測試開 40000）——高視窗會把整份
 /// 文件都建出來，正好遮掉「目標節沒被建出來所以點了沒反應」這個問題。
 
-Widget _app() => MaterialApp.router(
+Widget _app() => ProviderScope(
+    overrides: [helpShowHostModeProvider.overrideWithValue(true)],
+    child: _appBody());
+
+Widget _appBody() => MaterialApp.router(
       routerConfig: GoRouter(routes: [
         GoRoute(
             path: '/', builder: (_, _) => const HelpScreen(topic: HelpTopic.main)),

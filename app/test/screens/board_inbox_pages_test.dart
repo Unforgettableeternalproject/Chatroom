@@ -206,9 +206,11 @@ void main() {
       await tester.pumpAndSettle();
 
       // i1（page_no 1）最早完成 → 第 1 頁；i2（page_no 3）→ 第 2 頁
-      expect(find.text('第 1 頁 · 11/08 完成'), findsOneWidget);
-      expect(find.text('第 2 頁 · 11/10 完成'), findsOneWidget);
+      expect(find.text('第 1 頁 · 完成於 11/08'), findsOneWidget);
+      expect(find.text('第 2 頁 · 完成於 11/10'), findsOneWidget);
       expect(find.text('目前'), findsWidgets);
+      // 完成日期不可長得像進度「11/11 完成」（會被讀成 11 / 11 張完成）
+      expect(find.textContaining(RegExp(r'\d+/\d+ 完成')), findsNothing);
     });
 
     testWidgets('切到歷史頁顯示該頁自己的內容，且唯讀', (tester) async {
@@ -219,7 +221,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('inbox-page-switcher')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('第 2 頁 · 11/10 完成'));
+      await tester.tap(find.text('第 2 頁 · 完成於 11/10'));
       await tester.pumpAndSettle();
 
       expect(find.text('第二頁的卡'), findsOneWidget);
@@ -324,7 +326,7 @@ void main() {
       await _openInbox(tester);
       await tester.tap(find.byKey(const ValueKey('inbox-page-switcher')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('第 1 頁 · 11/08 完成'));
+      await tester.tap(find.text('第 1 頁 · 完成於 11/08'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const ValueKey('inbox-page-menu')));

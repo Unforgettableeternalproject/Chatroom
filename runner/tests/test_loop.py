@@ -140,14 +140,16 @@ async def test_selfcheck_failure_is_written_to_the_local_log(
 # ── claude 有沒有登入 ──────────────────────────────────────────
 
 class _FakeProc:
-    """假的 `claude auth status`：只回一段 stdout 與退出碼。"""
+    """假的 `claude auth status`：只回一段 stdout（可帶 stderr）與退出碼。"""
 
-    def __init__(self, stdout: bytes, returncode: int = 0) -> None:
+    def __init__(self, stdout: bytes, returncode: int = 0,
+                 stderr: bytes = b"") -> None:
         self._stdout = stdout
+        self._stderr = stderr
         self.returncode = returncode
 
     async def communicate(self):
-        return self._stdout, b""
+        return self._stdout, self._stderr
 
 
 def _fake_auth_status(monkeypatch, stdout: bytes, returncode: int = 0):
@@ -219,6 +221,58 @@ async def test_login_check_falls_back_to_the_credentials_file(
     (cfg.claude_config_dir / ".credentials.json").write_text(
         '{"claudeAiOauth": {}}', encoding="utf-8")
     assert await loop._check_claude_login() == []
+
+
+# ── MCP 探測 ──────────────────────────────────────────────────
+
+async def _probe_with(loop, monkeypatch, stdout: bytes, stderr: bytes):
+    async def fake_exec(*argv, **kwargs):
+        assert argv[-2:] == ("mcp", "list")
+        return _FakeProc(stdout, 0, stderr)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await loop._probe_mcp_servers()
+
+
+async def test_probe_zero_servers_logs_the_reason_without_token(
+        runner_hub, work_repo, tmp_path, monkeypatch, caplog):
+    """🔴 探到 0 台不能只留「0 台」：要寫出可能原因與 stderr 的最後一句。
+
+    有 token 時原因是「token 讀不到連接器」，而且 token 本身不得進 log。
+    """
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    secret = "sk-ant-oat01-top-secret"
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.state_dir / "claude-oauth-token").write_text(secret, encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="chatroom_runner.loop"):
+        await _probe_with(loop, monkeypatch, b"",
+                          f"No MCP servers configured {secret}".encode())
+
+    warns = [r.getMessage() for r in caplog.records
+             if r.levelname == "WARNING"]
+    assert warns and "0 台" in warns[0]
+    assert "長效 token" in warns[0] and "claude.ai 連接器" in warns[0]
+    assert "No MCP servers configured" in warns[0]
+    assert secret not in caplog.text
+
+
+async def test_probe_zero_servers_without_token_points_at_login(
+        runner_hub, work_repo, tmp_path, monkeypatch, caplog):
+    cfg = make_config(tmp_path, work_repo)
+    loop = _loop(cfg, runner_hub)
+    (cfg.state_dir / "claude-oauth-token").unlink(missing_ok=True)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    with caplog.at_level("WARNING", logger="chatroom_runner.loop"):
+        await _probe_with(loop, monkeypatch, b"",
+                          b"OAuth session expired\n")
+
+    warns = [r.getMessage() for r in caplog.records
+             if r.levelname == "WARNING"]
+    assert warns and "登入可能已過期" in warns[0]
+    assert "OAuth session expired" in warns[0]
 
 
 # ── gpg 的來源 ──────────────────────────────────────────────────

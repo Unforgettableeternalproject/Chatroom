@@ -38,11 +38,11 @@ class VersionBanner extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final app = ref.watch(appBuildProvider);
     final hub = ref.watch(hubBuildProvider).value;
-    final older = _olderSide(app, hub);
+    final older = olderVersionSide(app, hub);
     final color = older == null ? UepColors.gold : UepColors.error;
     final text = switch (older) {
-      _Side.app => l10n.commonVersionAppOlder,
-      _Side.hub => l10n.commonVersionHubOlder,
+      VersionSide.app => l10n.commonVersionAppOlder,
+      VersionSide.hub => l10n.commonVersionHubOlder,
       null => l10n.commonVersionUnconfirmed,
     };
 
@@ -71,16 +71,16 @@ class VersionBanner extends ConsumerWidget {
 
 /// 哪一邊比較舊。**判準是建置時間，不是 hash**——hash 只說得出「不一樣」，
 /// 說不出誰要更新。任一邊講不出建置時間（或兩邊同時）就回 null。
-_Side? _olderSide(BuildInfo app, Map<String, dynamic>? hubBuild) {
+VersionSide? olderVersionSide(BuildInfo app, Map<String, dynamic>? hubBuild) {
   final appAt = DateTime.tryParse(app.builtAt);
   final hubAt = DateTime.tryParse((hubBuild?['built_at'] as String?) ?? '');
   if (appAt == null || hubAt == null) return null;
-  if (appAt.isBefore(hubAt)) return _Side.app;
-  if (hubAt.isBefore(appAt)) return _Side.hub;
+  if (appAt.isBefore(hubAt)) return VersionSide.app;
+  if (hubAt.isBefore(appAt)) return VersionSide.hub;
   return null;
 }
 
-enum _Side { app, hub }
+enum VersionSide { app, hub }
 
 /// commit 截短成看得完的長度，但**不動 `-dirty`**：那個後綴的意思是
 /// 「這份產物對不回任何一個 commit」，截掉它等於把最該看見的事藏起來。

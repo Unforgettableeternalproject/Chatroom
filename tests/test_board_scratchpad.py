@@ -31,6 +31,14 @@ async def _client(tmp_path, name):
                             headers={"Authorization": f"Bearer {ROOT}"})
 
 
+async def _settle_directly(app, bid, outcome="completed"):
+    """直接寫結局。板沒有封存了，「唯讀」由結局承接；這裡要的是一塊已收尾的板，
+    不是宣告結局的前置條件（那在 test_board_outcome）。"""
+    await app.state.db.execute(
+        "UPDATE board SET outcome=? WHERE id=?", (outcome, bid))
+    await app.state.db.commit()
+
+
 def _key(who):
     return {"X-Session-Key": who}
 
@@ -538,20 +546,18 @@ async def test_the_pad_says_whether_i_may_write_into_it(tmp_path):
             assert as_viewer["can_edit"] is False
 
 
-async def test_an_archived_board_is_read_only_for_its_owner_too(tmp_path):
-    """板封存之後連 owner 都只能看——`can_edit` 要跟著寫入門檻走。
+async def test_a_settled_board_is_read_only_for_its_owner_too(tmp_path):
+    """板收尾（有結局）之後連 owner 都只能看——`can_edit` 要跟著寫入門檻走。
 
-    寫入端點擋的是 `status != 'active'`（409 board_archived）。`can_edit`
-    只看角色的話，封存板會給 owner 一個編輯框，按下去才 409。
+    寫入端點擋的是 `_board_locked`（409 board_archived）。`can_edit`
+    只看角色的話，已收尾的板會給 owner 一個編輯框，按下去才 409。
     """
     app, client = await _client(tmp_path, "pad-archived")
     async with client:
         async with app.router.lifespan_context(app):
             bid, hdr = await _human_board(client)
             pid, _ = await _pad(client, bid, hdr)
-            archived = await client.post(f"/api/boards/{bid}/archive",
-                                         headers=hdr)
-            assert archived.status_code == 200, archived.text
+            await _settle_directly(app, bid)
             body = (await client.get(f"/api/boards/{bid}/scratchpads/{pid}",
                                      headers=hdr)).json()
             assert body["can_edit"] is False
@@ -1016,14 +1022,13 @@ async def test_a_viewer_may_not_mark_anything(tmp_path):
         assert row["can_edit"] is False and row["can_set_state"] is False
 
 
-async def test_an_archived_board_lets_nobody_mark(tmp_path):
-    """封存的板整份唯讀——只看角色的話會給 owner 一個按下去才 409 的入口。"""
+async def test_a_settled_board_lets_nobody_mark(tmp_path):
+    """已收尾的板整份唯讀——只看角色的話會給 owner 一個按下去才 409 的入口。"""
     app, client = await _client(tmp_path, "pad_archived_no_state")
     async with client, app.router.lifespan_context(app):
         bid, hdr = await _human_board(client)
         pad, blk = await _pad(client, bid, hdr)
-        assert (await client.post(f"/api/boards/{bid}/archive",
-                                  headers=hdr)).status_code == 200
+        await _settle_directly(app, bid)
 
         row = await _block(client, bid, pad, blk, hdr)
         assert row["can_set_state"] is False

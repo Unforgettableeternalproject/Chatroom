@@ -17,7 +17,9 @@ import '../../widgets/kind_badge.dart';
 import '../../widgets/markdown_body.dart';
 import '../ops/ops_actions.dart';
 import 'board_action_feedback.dart';
+import 'board_dependency_picker.dart';
 import 'board_move_dialog.dart';
+import 'board_screen.dart' show cardRoute;
 import 'board_task_edit_dialog.dart';
 
 /// Task 詳情抽屜（設計稿 artboard 03，420px）。
@@ -40,7 +42,12 @@ class BoardTaskDrawer extends ConsumerWidget {
     this.readOnly = false,
     this.readOnlyReason = '',
     this.width = 420,
+    this.onOpenTask,
   });
+
+  /// 點依賴／影響裡的一張卡：由板畫面把抽屜切到那張卡。沒給就改走
+  /// [cardRoute]（與 `#[標題]` 指涉同一條跳卡路徑）。
+  final void Function(String taskId)? onOpenTask;
 
   /// 從哪一間房打開的。**板軸（Board Library）進來時是 null**——那時沒有
   /// 房內身分，也沒有訊息流可以跳回去。
@@ -121,6 +128,7 @@ class BoardTaskDrawer extends ConsumerWidget {
                   UepMarkdownBody(
                       data: task.description, baseColor: s.inkSoft),
                 ],
+                _dependencySection(context, snap),
                 const SizedBox(height: 18),
                 _meta(context, ref, requests),
                 // 來源訊息只有房軸看得到——板軸沒有房，就沒有那條路。
@@ -165,16 +173,126 @@ class BoardTaskDrawer extends ConsumerWidget {
   /// supervisor／建立者）。**入口照樣畫出來**：資格判斷在 Hub，複製一份到
   /// client 就是第二份會漂移的真相，而按下去讓 server 回答比先猜可靠。
   Future<void> _edit(BuildContext context, WidgetRef ref) async {
+    final snap = roomId != null
+        ? ref.read(boardProvider(roomId!)).value
+        : ref.read(boardByIdProvider(boardId)).value;
     final edit = await showTaskEditDialog(context,
-        title: task.title, description: task.description);
+        title: task.title,
+        description: task.description,
+        // 板還沒載到就不出依賴／影響兩欄：沒有候選可選
+        dependencies: snap == null
+            ? null
+            : DependencyEditSpec.fromSnapshot(snap, task: task));
     if (edit == null || edit.isEmpty || !context.mounted) return;
     final actions = roomId != null
         ? ref.read(boardActionsProvider(roomId!))
         : ref.read(boardActionsByIdProvider(boardId));
-    await runBoardAction(
+    final changes = await runBoardAction(
         context,
         () => actions.updateTask(task.id,
-            title: edit.title, description: edit.description));
+            title: edit.title,
+            description: edit.description,
+            dependsOn: edit.dependsOn,
+            affects: edit.affects));
+    if (changes != null && context.mounted) {
+      showDependencyChangesToast(context, changes);
+    }
+  }
+
+  void _openTask(BuildContext context, String id) {
+    if (onOpenTask != null) {
+      onOpenTask!(id);
+      return;
+    }
+    context.go(cardRoute(boardId: boardId, taskId: id, roomId: roomId));
+  }
+
+  /// 依賴與影響。兩邊都空就整段不畫（不佔位）。
+  ///
+  /// 每一項的狀態**以手上該卡的最新資料為準**（[dependencyView]），Hub 回的
+  /// 那份是讀取當下的快照，別人改了狀態之後就舊了。
+  Widget _dependencySection(BuildContext context, BoardSnapshot? snap) {
+    if (task.dependsOn.isEmpty && task.affects.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final s = context.uep;
+    final l10n = AppLocalizations.of(context);
+    BoardTask? lookup(String id) => snap?.tasks[id];
+
+    Widget row(String id, String title, Widget trailing) => InkWell(
+          key: ValueKey('dep-row-$id'),
+          onTap: () => _openTask(context, id),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: [
+              Expanded(
+                child: Text(title.isEmpty ? l10n.commonUnknownParenthesised : title,
+                    overflow: TextOverflow.ellipsis,
+                    style: UepText.sans(size: 13.5, color: s.inkTitle)),
+              ),
+              const SizedBox(width: 10),
+              trailing,
+            ]),
+          ),
+        );
+
+    Widget header(String label) => Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text(label,
+              style: UepText.mono(
+                  size: 10, color: s.inkMute, letterSpacing: 1.6)),
+        );
+
+    final children = <Widget>[];
+    if (task.dependsOn.isNotEmpty) {
+      children.add(header(l10n.boardDependsOnLabel));
+      for (final d in task.dependsOn) {
+        final v = dependencyView(d, lookup);
+        final text = switch (v.state) {
+          DependencyState.done => l10n.boardDependencyDone,
+          DependencyState.cancelled => l10n.boardDependencyCancelled,
+          DependencyState.movedFollowing => l10n.boardDependencyMovedTo(
+              v.targetTitle.isEmpty
+                  ? l10n.commonUnknownParenthesised
+                  : v.targetTitle),
+          DependencyState.movedBlank => l10n.boardDependencyMovedBlank,
+          DependencyState.unmet => l10n.boardDependencyUnmet,
+        };
+        children.add(row(
+          d.id,
+          lookup(d.id)?.title ?? d.title,
+          Text(text,
+              key: ValueKey('dep-state-${d.id}'),
+              style: UepText.mono(
+                  size: 10,
+                  color: v.met ? UepColors.success : UepColors.info)),
+        ));
+      }
+    }
+    if (task.affects.isNotEmpty) {
+      children.add(header(l10n.boardAffectsLabel));
+      for (final a in task.affects) {
+        children.add(row(
+          a.id,
+          lookup(a.id)?.title ?? a.title,
+          _StatusChip(status: lookup(a.id)?.status ?? a.status),
+        ));
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: s.hairline),
+            bottom: BorderSide(color: s.hairline),
+          ),
+        ),
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: children),
+      ),
+    );
   }
 
   Widget _header(BuildContext context, WidgetRef ref) {
@@ -246,6 +364,20 @@ class BoardTaskDrawer extends ConsumerWidget {
                 const SizedBox(height: 9),
                 Row(children: [
                   _StatusChip(status: task.status),
+                  // 阻擋（依賴未滿足）與卡住是兩件事：用 info 色的徽章分開
+                  if (task.dependencyBlocked) ...[
+                    const SizedBox(width: 8),
+                    _DependencyChip(
+                        label: AppLocalizations.of(context)
+                            .boardDependencyBlockedBadge),
+                  ],
+                  if (task.status == 'blocked' &&
+                      task.blockedByDependency) ...[
+                    const SizedBox(width: 8),
+                    _DependencyChip(
+                        label: AppLocalizations.of(context)
+                            .boardDependencyCausedBadge),
+                  ],
                   if (task.priority == 'high') ...[
                     const SizedBox(width: 8),
                     Text(AppLocalizations.of(context).boardPriorityHighMark,
@@ -676,6 +808,13 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
     // 一個動作實際上怎麼跑。**按鈕與選單共用同一條路**——分兩份寫的話，
     // 收進選單的那幾顆會慢慢長出與外露那顆不同的行為，而沒有地方會報錯。
     void run(TaskAction a) {
+      // 被依賴擋住：Hub 也會拒，這裡在按下去時就講原因，不必等 409
+      if (widget.task.blocksTransitionTo(a.target)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(AppLocalizations.of(context).boardDependencyUnmetReason)));
+        return;
+      }
       if (a.target == 'moved') {
         // 「搬到別處」不是單純推一次狀態：去向要在同一個動作裡定下來，
         // 否則留下的是一張「搬走了、不知道去哪」的卡
@@ -684,13 +823,16 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
       }
       runBoardAction(
         context,
-        () => actions.setTaskStatus(widget.task.id, a.target),
+        () async {
+          final changes = await actions.setTaskStatus(widget.task.id, a.target);
+          if (context.mounted) showDependencyChangesToast(context, changes);
+        },
         hostReasonTitle:
             AppLocalizations.of(context).hostReasonTaskStatusTitle,
         onConflict: (e) {
           // 拒絕本身要說出來，順手把按鈕修正成 Hub 認的那幾顆
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(e.message)));
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(boardActionMessage(context, e))));
           if (e.allowed.isNotEmpty && mounted) {
             setState(() => _allowed = e.allowed.toSet());
           }
@@ -791,6 +933,8 @@ class _TaskActionBarState extends ConsumerState<_TaskActionBar> {
                   // 「先回答那件事」這個順序在畫面上消失
                   bordered: pending != null,
                   accent: primary.danger ? UepColors.error : null,
+                  // 被依賴擋住時看起來停用，但仍可點——點了講原因
+                  muted: widget.task.blocksTransitionTo(primary.target),
                   onTap: () => run(primary),
                 ),
             ],
@@ -836,7 +980,10 @@ extension on _TaskActionBarState {
           height: 38,
           child: Text(taskActionLabel(AppLocalizations.of(context), a.kind),
               style: UepText.sans(
-                  size: 13.5, color: a.danger ? UepColors.error : s.ink)),
+                  size: 13.5,
+                  color: widget.task.blocksTransitionTo(a.target)
+                      ? s.inkMute
+                      : (a.danger ? UepColors.error : s.ink))),
         );
     final dangerRest = rest.where((a) => a.danger).toList();
 
@@ -1066,13 +1213,36 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
+/// 抽屜標題下的依賴徽章（阻擋、依賴造成）。info 色，與紅色的「卡住」區分。
+class _DependencyChip extends StatelessWidget {
+  const _DependencyChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: UepColors.info.withValues(alpha: .1),
+          border: Border.all(color: UepColors.info.withValues(alpha: .5)),
+        ),
+        child: Text(label,
+            style: UepText.mono(
+                size: 10, color: UepColors.info, letterSpacing: 1.1)),
+      );
+}
+
 class _DrawerAction extends StatelessWidget {
   const _DrawerAction({
     required this.label,
     required this.onTap,
     this.bordered = true,
     this.accent,
+    this.muted = false,
   });
+
+  /// 看起來停用、但仍可點（點了由呼叫端講原因）。
+  final bool muted;
 
   final String label;
 
@@ -1086,7 +1256,7 @@ class _DrawerAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.uep;
-    final disabled = onTap == null;
+    final disabled = onTap == null || muted;
     return InkWell(
       onTap: onTap,
       child: Container(

@@ -18,6 +18,16 @@ void main() {
       }
     });
 
+    // 任務依賴與影響：規則（阻擋不是卡住、何時算滿足）一條都不能少
+    test('主文件有「任務依賴與影響」一節，五條規則都在（$locale）', () {
+      final sections = docs[HelpTopic.main]!.sections;
+      final dep = sections.where((s) => s.title == l10n.helpSecDepTitle);
+      expect(dep, hasLength(1), reason: '找不到「${l10n.helpSecDepTitle}」');
+      final items = dep.single.blocks.whereType<HelpItemsBlock>().single.items;
+      expect(items, hasLength(5));
+      expect(items.every((i) => i.hasLead), isTrue);
+    });
+
     test('分組小標指得到真的存在的條目（$locale）', () {
       for (final entry in docs.entries) {
         for (final section in entry.value.sections) {

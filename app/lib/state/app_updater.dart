@@ -106,6 +106,18 @@ AppVersionOrder _order(AppVersion latest, AppVersion current) {
   return c == 0 ? AppVersionOrder.same : AppVersionOrder.older;
 }
 
+/// GitHub Release JSON 的發布時間：`published_at`，沒有就 `created_at`。
+DateTime? parseReleaseTime(Map<dynamic, dynamic> json) {
+  for (final key in const ['published_at', 'created_at']) {
+    final v = json[key];
+    if (v is String) {
+      final t = DateTime.tryParse(v);
+      if (t != null) return t;
+    }
+  }
+  return null;
+}
+
 /// latest Release 裡的 App 資產。
 @immutable
 class AppRelease {
@@ -116,7 +128,12 @@ class AppRelease {
     this.htmlUrl = '',
     this.size,
     this.sha256,
+    this.publishedAt,
   });
+
+  /// Release 的發布時間（GitHub `published_at`，沒有退 `created_at`）。
+  /// 取不到是 `null`。
+  final DateTime? publishedAt;
 
   /// `v1.2.6` 或 `v1.2.6-hotfix1`。
   final String tag;
@@ -151,6 +168,7 @@ class AppRelease {
         downloadUrl: url,
         size: size is int && size > 0 ? size : null,
         sha256: _sha256Of(item['digest']),
+        publishedAt: parseReleaseTime(json),
       );
     }
     return null;
@@ -752,6 +770,9 @@ final appUpdaterProvider = Provider<AppUpdater>((ref) => AppUpdater(
 class AppUpdate extends Notifier<AppUpdateState> {
   AppRelease? _release;
   AppUpdatePackage? _package;
+
+  /// 剛查到、比本機新的那一份 Release（沒有就 `null`）。
+  AppRelease? get availableRelease => _release;
 
   @override
   AppUpdateState build() => const AppUpdateState();

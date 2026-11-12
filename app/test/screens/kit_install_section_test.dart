@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:chatroom_app/api/hub_active_runs_api.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/screens/host/kit_install_section.dart';
@@ -8,6 +9,7 @@ import 'package:chatroom_app/state/host_kit_providers.dart';
 import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:chatroom_app/state/kit_prereq.dart';
 import 'package:chatroom_app/widgets/uep_button.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,6 +17,16 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../helpers/fake_kit_backend.dart';
 import '../helpers/l10n.dart';
+
+class _FakeRunsApi extends HubActiveRunsApi {
+  _FakeRunsApi(this.result) : super(Dio());
+
+  /// null＝無法確認。
+  final HubActiveRuns? result;
+
+  @override
+  Future<HubActiveRuns?> check() async => result;
+}
 
 /// 安裝／更新區塊上那顆按鈕**什麼時候按得動**。
 ///
@@ -35,6 +47,7 @@ void main() {
     PythonExe? python = const PythonExe(executable: 'py', prefixArgs: ['-3.12']),
     bool runnerBusy = false,
     KitInstaller? installer,
+    HubActiveRuns? hubRuns = const HubActiveRuns(0),
     List<KitPrereq> prereqs = const [KitPrereq(KitPrereqKind.python)],
   }) =>
       ProviderScope(
@@ -48,6 +61,7 @@ void main() {
             deviceKey: 'k',
           )),
           if (installer != null) kitInstallerProvider.overrideWithValue(installer),
+          hubActiveRunsApiProvider.overrideWithValue(_FakeRunsApi(hubRuns)),
           kitReleaseProvider.overrideWith((ref) async => found),
           kitPythonProvider.overrideWith((ref) async => python),
           runnerBusyProvider.overrideWith((ref) async => runnerBusy),
@@ -213,6 +227,22 @@ void main() {
 
       expect(backend.extractedTo, expected);
       expect(backend.installScript, startsWith(expected));
+    });
+
+    testWidgets('🔴 Hub 上有進行中的 run → 不安裝，講出數量', (tester) async {
+      sizeUp(tester);
+      await tester.pumpWidget(wrap(
+        const KitInstallSection(kit: KitId.hub, installed: false),
+        installer: installer,
+        hubRuns: const HubActiveRuns(2),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('安裝'));
+      await settleIo(tester, () => false);
+
+      expect(find.text('Hub 上有 2 個工作進行中，完成後再更新'), findsOneWidget);
+      expect(backend.extractedTo, isNull, reason: '有 run 時不能動 Hub');
     });
 
     testWidgets('🔴 自訂位置：解壓與安裝器參數都走那一個', (tester) async {
