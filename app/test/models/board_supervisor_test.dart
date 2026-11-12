@@ -22,7 +22,6 @@ AttachedRoom _room(
   String id, {
   String name = '',
   String? supervisorKey,
-  bool departed = false,
   bool detached = false,
 }) =>
     AttachedRoom(
@@ -32,7 +31,6 @@ AttachedRoom _room(
       supervisor: supervisorKey == null
           ? null
           : BoardActorRef(actorKey: supervisorKey, displayName: supervisorKey),
-      supervisorDeparted: departed,
     );
 
 void main() {
@@ -55,14 +53,6 @@ void main() {
       expect(s.supervisesAnyRoom('me'), isFalse);
     });
 
-    test('🔴 `departed` 仍然算', () {
-      // departed 是 presence（他離開過那間房），不是卸任。人回來了、旗標
-      // 還沒清的那一刻若不給按，就是把權限判給了一個時間差。真正的守門在
-      // server，UI 這裡只決定畫不畫——**該給不給比畫了被拒更貴**
-      final s = _snap([_room('r1', supervisorKey: 'me', departed: true)]);
-      expect(s.supervisesAnyRoom('me'), isTrue);
-    });
-
     test('空字串不算任何人——沒有身分的時候不可以碰巧變成 supervisor', () {
       final s = _snap([_room('r1', supervisorKey: null)]);
       expect(s.supervisesAnyRoom(''), isFalse);
@@ -73,13 +63,12 @@ void main() {
     test('每間掛接房各一筆，帶得出來源房', () {
       final s = _snap([
         _room('r1', name: '09/05 開發', supervisorKey: 'a'),
-        _room('r2', name: '09/02 開發', supervisorKey: 'b', departed: true),
+        _room('r2', name: '09/02 開發', supervisorKey: 'b'),
       ]);
       final sup = s.roomSupervisors;
       expect(sup, hasLength(2));
       expect(sup.first.roomName, '09/05 開發');
       expect(sup.first.actor.displayName, 'a');
-      expect(sup.last.departed, isTrue, reason: '已離開要畫得出來，不是當成沒人');
     });
 
     test('🔴 沒指派 supervisor 的房不列——空白就是空白，不要編一個出來', () {

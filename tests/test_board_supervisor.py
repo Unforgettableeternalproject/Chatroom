@@ -5,8 +5,8 @@
 1. **設定的當下對方多半還沒進房**——那正是要用指派把它叫進來的情形。
    所以退場判定只能接在離場路徑上，做成定期檢查的話設定完的下一輪掃描
    就會把它自己清掉，而且清得完全合乎規則。
-2. **退場是標記不是清空**。清空連名字都不留，畫面上與「從來沒有指定過」
-   一模一樣——連「本來有人在看」這件事都消失了。
+2. **離場即卸任**（艾斯維爾 2026-11-12）：欄位直接清空並公告，同 key
+   重進不恢復，要重新指定。
 3. **摘要不逐筆**。supervisor 也是一個會被塞滿的 agent。
 """
 
@@ -92,8 +92,8 @@ async def test_only_the_creator_can_appoint(tmp_path):
         assert r.json()["detail"]["code"] == "not_admin"
 
 
-async def test_departure_marks_and_announces_but_does_not_erase(tmp_path):
-    """清空會讓畫面與「從來沒有指定過」一模一樣，那是同一個病更嚴重的版本。"""
+async def test_departure_unseats_and_announces(tmp_path):
+    """離場即卸任：欄位清空，房內公告並 mention 人類。"""
     app, client = await _client(tmp_path, "left")
     async with app.router.lifespan_context(app), client:
         rid, owner = await _room(client)
@@ -105,15 +105,15 @@ async def test_departure_marks_and_announces_but_does_not_erase(tmp_path):
 
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=owner)).json()
-        sup = _room_supervisor(board, rid)
-        assert sup is not None and sup["actor_key"] == "agent-sup", "名字不能被抹掉"
+        assert _room_supervisor(board, rid) is None
         (msg,) = await _events(client, rid, owner, "board_supervisor_left")
         assert "Nova" in msg["content"]
-        assert "重新指定" in msg["content"]
+        assert "已卸任" in msg["content"] and "重新指定" in msg["content"]
+        assert "Bernie" in (msg["mentions"] or [])
 
 
 async def test_departure_is_announced_once_not_every_time(tmp_path):
-    """已經標記過就不再公告——否則每次有人離開都會再喊一次同一件事。"""
+    """卸任只公告一次——之後有人離開不會再喊一次。"""
     app, client = await _client(tmp_path, "once")
     async with app.router.lifespan_context(app), client:
         rid, owner = await _room(client)
@@ -127,8 +127,8 @@ async def test_departure_is_announced_once_not_every_time(tmp_path):
                                  "board_supervisor_left")) == 1
 
 
-async def test_appointment_survives_a_restart_of_the_agent(tmp_path):
-    """supervisor 是角色不是身分：換一個 participant 回來，角色還在。"""
+async def test_a_restarted_agent_must_be_reappointed(tmp_path):
+    """離場即卸任：同 key 換一個 participant 回來也不恢復，要重新指定。"""
     app, client = await _client(tmp_path, "role")
     async with app.router.lifespan_context(app), client:
         rid, owner = await _room(client)
@@ -139,8 +139,13 @@ async def test_appointment_survives_a_restart_of_the_agent(tmp_path):
         again = await _join(client, rid, "agent-sup", "Nova")
         board = (await client.get(f"/api/rooms/{rid}/board",
                                   headers=again)).json()
-        sup = _room_supervisor(board, rid)
-        assert sup is not None and sup["actor_key"] == "agent-sup"
+        assert _room_supervisor(board, rid) is None
+        await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"participant_id": again["X-Participant-Id"]},
+                          headers=owner)
+        board = (await client.get(f"/api/rooms/{rid}/board",
+                                  headers=again)).json()
+        assert _room_supervisor(board, rid)["actor_key"] == "agent-sup"
 
 
 async def test_cancelling_leaves_a_record(tmp_path):
@@ -465,14 +470,8 @@ async def test_the_rooms_supervisor_can_verify_even_as_an_agent(tmp_path):
         assert r.status_code == 200, r.text
 
 
-async def test_a_supervisor_who_came_back_can_verify_again(tmp_path):
-    """離開過一次再回來，資格要跟著回來。
-
-    `board_supervisor_left_at` 在離場被設、在回房被清，而清的那一半原本寫的
-    是**空字串**，資格判準問的卻是 `IS NULL`——於是畫面上寫著「監督者回來
-    了」、房裡也公告過了，他卻在確認週期與派工上永遠 403，而沒有任何地方
-    說得出為什麼。兩邊對同一件事用不同的寫法，就是這個形狀。
-    """
+async def test_a_reappointed_supervisor_can_verify_again(tmp_path):
+    """離開即卸任；重新指定之後資格要回來。"""
     app, client = await _client(tmp_path, "sup-return-verify")
     async with app.router.lifespan_context(app), client:
         rid, owner = await _room(client)
@@ -486,6 +485,9 @@ async def test_a_supervisor_who_came_back_can_verify_again(tmp_path):
         assert (await client.post(f"/api/rooms/{rid}/leave",
                                   headers=agent)).status_code == 200
         agent = await _join(client, rid, "agent-sup", "監察者")
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"session_key": "agent-sup"}, headers=owner)
+        assert r.status_code == 200, r.text
 
         oid = await _objective_ready_for_verify(client, rid, worker)
         assert (await client.post(f"/api/board/objectives/{oid}/review",

@@ -58,6 +58,9 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
   BoardContributions? _data;
   Object? _error;
   bool _dirty = false;
+
+  /// 摘要間隔的選擇（秒）；null＝預設。載入後由 Hub 的值初始化。
+  int? _digestSec;
   bool _saving = false;
   bool _loadingMore = false;
 
@@ -110,6 +113,7 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
         if (!_dirty) {
           _name.text = data.name;
           _description.text = data.description;
+          _digestSec = data.digestIntervalSec;
         }
       });
       _fillLogIfShort();
@@ -184,6 +188,10 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
             sessionKey: _sessionKey,
             name: name != data.name ? name : null,
             description: topic != data.description ? topic : null,
+            digestIntervalSec:
+                _digestSec != data.digestIntervalSec ? _digestSec : null,
+            resetDigestInterval:
+                _digestSec == null && data.digestIntervalSec != null,
           );
       _dirty = false;
       _snack(l10n.roomSettingsSaved);
@@ -295,6 +303,35 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
                 onChanged: (_) => _markDirty(),
               ),
             ),
+            const SizedBox(height: 18),
+            SettingsFieldLabel(l10n.boardSettingsDigestInterval),
+            SettingsInputBox(
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<int?>(
+                  key: const ValueKey('board-digest-interval'),
+                  value: _digestSec,
+                  isExpanded: true,
+                  style: UepText.sans(size: 13, color: s.ink),
+                  dropdownColor: s.bgCard,
+                  items: [
+                    DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text(l10n.boardSettingsDigestDefault)),
+                    for (final sec in _digestChoices(_digestSec))
+                      DropdownMenuItem<int?>(
+                          value: sec,
+                          child: Text(l10n.boardSettingsDigestMinutes(
+                              (sec / 60).round()))),
+                  ],
+                  onChanged: editable
+                      ? (v) => setState(() {
+                            _digestSec = v;
+                            _dirty = true;
+                          })
+                      : null,
+                ),
+              ),
+            ),
             if (data.ownerName.isNotEmpty) ...[
               const SizedBox(height: 18),
               Text(l10n.boardSettingsOwner(data.ownerName),
@@ -384,6 +421,13 @@ class _BoardSettingsScreenState extends ConsumerState<BoardSettingsScreen> {
         },
       ),
     );
+  }
+
+  /// 固定選項（分鐘）；目前值若不在其中（API 設的），補進去避免下拉出錯。
+  static List<int> _digestChoices(int? current) {
+    const base = [300, 900, 1800, 3600];
+    if (current == null || base.contains(current)) return base;
+    return ([...base, current]..sort());
   }
 
   void _markDirty() {

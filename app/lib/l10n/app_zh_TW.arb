@@ -5428,10 +5428,6 @@
   "@boardSupervisorNobodyWatching": {
     "description": "掛接房沒有 supervisor"
   },
-  "boardSupervisorDeparted": "已離開",
-  "@boardSupervisorDeparted": {
-    "description": "supervisor 已離開"
-  },
   "boardRoomSupervisorPickTitle": "這間房的 Supervisor",
   "@boardRoomSupervisorPickTitle": {
     "description": "指派 supervisor 對話框標題"
@@ -5443,10 +5439,6 @@
   "boardSupervisorNone": "還沒有指派 Supervisor。",
   "@boardSupervisorNone": {
     "description": "沒有指派 supervisor"
-  },
-  "boardSupervisorLeftRoom": "已離開這間房",
-  "@boardSupervisorLeftRoom": {
-    "description": "supervisor 已離開這間房"
   },
   "boardSupervisorAssign": "指派",
   "@boardSupervisorAssign": {
@@ -6143,15 +6135,6 @@
   "boardSupervisorPillNone": "SUPERVISOR · 未指派",
   "@boardSupervisorPillNone": {
     "description": "supervisor 膠囊：未指派"
-  },
-  "boardSupervisorPillDeparted": "SUPERVISOR · {name}（已離開）",
-  "@boardSupervisorPillDeparted": {
-    "description": "supervisor 膠囊：已離開",
-    "placeholders": {
-      "name": {
-        "type": "String"
-      }
-    }
   },
   "boardSupervisorPill": "SUPERVISOR · {name}",
   "@boardSupervisorPill": {
@@ -7707,6 +7690,23 @@
   "boardSettingsDescription": "描述",
   "@boardSettingsDescription": {
     "description": "任務板設定頁：描述欄位標籤（板的 description，與建板對話框同名）"
+  },
+  "boardSettingsDigestInterval": "摘要間隔",
+  "@boardSettingsDigestInterval": {
+    "description": "任務板設定頁：supervisor 摘要間隔欄位標籤"
+  },
+  "boardSettingsDigestDefault": "預設",
+  "@boardSettingsDigestDefault": {
+    "description": "任務板設定頁：摘要間隔用 Hub 預設值"
+  },
+  "boardSettingsDigestMinutes": "{minutes} 分鐘",
+  "@boardSettingsDigestMinutes": {
+    "description": "任務板設定頁：摘要間隔選項（分鐘）",
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
   },
   "boardSettingsDescriptionHint": "一句話說明這塊板在做什麼…",
   "@boardSettingsDescriptionHint": {

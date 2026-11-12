@@ -43,16 +43,11 @@ Map<String, dynamic> _hubShape() => {
         },
         {
           'id': 'r3',
-          'name': '監察者走了的房',
+          'name': '還沒指定的房',
           'status': 'archived',
           'visibility': 'public',
           'detached': false,
-          'supervisor': {
-            'actor_key': 'claude-gone',
-            'display_name': '某人',
-            'actor_kind': 'claude',
-            'departed': true,
-          },
+          'supervisor': null,
         },
       ],
     };
@@ -80,12 +75,9 @@ void main() {
     expect(s.attachedRooms['r2']!.supervisor, isNull);
   });
 
-  test('🔴 「他走了」與「沒有人」是兩種狀態，不可以塌成同一個', () {
-    // 退場是標記不是清空：名字還在，departed 才是那個差別
+  test('沒有指派的房 supervisor 是空的（離場即卸任，沒有「已離開」狀態）', () {
     final r3 = _snap().attachedRooms['r3']!;
-    expect(r3.supervisor, isNotNull);
-    expect(r3.supervisorDeparted, isTrue);
-    expect(_snap().attachedRooms['r1']!.supervisorDeparted, isFalse);
+    expect(r3.supervisor, isNull);
   });
 
   test('沒有這個欄位時是空的，不是炸掉——舊 Hub 仍要能連', () {

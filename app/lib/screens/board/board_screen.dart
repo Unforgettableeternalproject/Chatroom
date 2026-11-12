@@ -929,9 +929,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             // 東西——留著只會讓人以為板層級還有一份 supervisor 可以退。
             // 板軸的彙整在 supervisor 面板裡，唯讀（`roomSupervisors`）
             name: _roomSupervisor(snap)?.displayName ?? '',
-            departed: widget.roomId != null &&
-                (snap?.attachedRooms[widget.roomId!]?.supervisorDeparted ??
-                    false),
             onTap: () => showSupervisorPanel(context,
                 boardId: _boardIdOrNull!, roomId: widget.roomId),
           ),
@@ -2612,16 +2609,10 @@ class _SupervisorPill extends StatelessWidget {
   const _SupervisorPill({
     required this.name,
     required this.onTap,
-    this.departed = false,
   });
 
   /// 現任 Supervisor 的名字。空字串＝還沒指定。
   final String name;
-
-  /// 那個人已經離開這間房了。**退場是標記不是清空**，所以膠囊上要說得出
-  /// 第三種狀態——只有「有人」與「沒人」兩種畫法時，這個情況會被畫成
-  /// 「有人在看」，而實際上沒有。
-  final bool departed;
 
   final VoidCallback onTap;
 
@@ -2647,18 +2638,11 @@ class _SupervisorPill extends StatelessWidget {
             // 後者看起來像名字讀不出來，而那是完全不同的一件事
             empty
                 ? AppLocalizations.of(context).boardSupervisorPillNone
-                : departed
-                    ? AppLocalizations.of(context)
-                        .boardSupervisorPillDeparted(name.toUpperCase())
-                    : AppLocalizations.of(context)
-                        .boardSupervisorPill(name.toUpperCase()),
+                : AppLocalizations.of(context)
+                    .boardSupervisorPill(name.toUpperCase()),
             style: UepText.mono(
                 size: 10,
-                color: empty
-                    ? s.inkMute
-                    : departed
-                        ? UepColors.gold
-                        : s.inkSoft,
+                color: empty ? s.inkMute : s.inkSoft,
                 letterSpacing: 1.2),
           ),
         ]),

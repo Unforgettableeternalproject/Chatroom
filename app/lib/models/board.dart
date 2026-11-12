@@ -1250,9 +1250,8 @@ class BoardSnapshot {
   /// 成立——而那正是把 per-room 的東西放進板層級欄位造成的混淆。現在一律
   /// 問 `attached_rooms[].supervisor`，沒有這個歧義。
   ///
-  /// ⚠️ **`departed` 仍然算**：那是 presence（他離開過那間房），不是卸任。
-  /// 人回來了而旗標還沒清的那一刻若不給按，等於把權限判給了一個時間差。
-  /// 真正的守門在 server，這裡只決定畫不畫——該給不給比畫了被拒更貴。
+  /// supervisor 離場即卸任（欄位由 server 清空），所以這裡不再有「已離開」
+  /// 的狀態。真正的守門在 server，這裡只決定畫不畫。
   bool supervisesAnyRoom(String actorKey) =>
       actorKey.isNotEmpty &&
       liveRooms.any((r) => r.supervisor?.actorKey == actorKey);
@@ -1271,7 +1270,6 @@ class BoardSnapshot {
               roomId: r.id,
               roomName: r.name,
               actor: r.supervisor!,
-              departed: r.supervisorDeparted,
             ),
       ];
 
@@ -1753,7 +1751,6 @@ class AttachedRoom {
     this.status = 'active',
     this.detached = false,
     this.supervisor,
-    this.supervisorDeparted = false,
   });
 
   final String id;
@@ -1769,12 +1766,6 @@ class AttachedRoom {
   /// 「他不再是 per board 而是 per room」），所以它長在這裡而不是板上。
   final BoardActorRef? supervisor;
 
-  /// 那個人已經離開這間房了。
-  ///
-  /// **退場是標記不是清空**——少了這個旗標，畫面只能二選一地畫成「有人在看」
-  /// 或「沒有人」，而真相是第三種：本來是誰在看，但他已經走了。
-  final bool supervisorDeparted;
-
   factory AttachedRoom.fromJson(Map<String, dynamic> json) {
     final sup = json['supervisor'] as Map<String, dynamic>?;
     return AttachedRoom(
@@ -1783,7 +1774,6 @@ class AttachedRoom {
       status: (json['status'] as String?) ?? 'active',
       detached: (json['detached'] as bool?) ?? false,
       supervisor: sup == null ? null : BoardActorRef.fromJson(sup),
-      supervisorDeparted: (sup?['departed'] as bool?) ?? false,
     );
   }
 }
@@ -1799,16 +1789,11 @@ class RoomSupervisor {
     required this.roomId,
     required this.roomName,
     required this.actor,
-    this.departed = false,
   });
 
   final String roomId;
   final String roomName;
   final BoardActorRef actor;
-
-  /// 那個人已經離開那間房了。**三種狀態要分開畫**：未指派／在任／已離開——
-  /// 只有兩種畫法時，人走了會被畫成「還有人在看」。
-  final bool departed;
 }
 
 /// 掛接的結果。

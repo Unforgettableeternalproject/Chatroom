@@ -779,6 +779,10 @@ class BoardPatch(BaseModel):
     # 兩者混為一談的話，使用者永遠刪不掉一段寫錯的描述
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    # Supervisor 摘要間隔（秒）。**有送這個鍵、值為 null ＝改回 Hub 預設**，
+    # 沒送＝不動（用 `model_fields_set` 分辨）。範圍在端點驗證（400），
+    # 不用 pydantic 約束（那會回 422）
+    digest_interval_sec: int | None = None
 
 
 class BoardMemberAdd(BaseModel):
@@ -4643,44 +4647,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             (name, body.kind, room_id, session_key),
         )
         await _commit_with_retry(db)
-        # supervisor 回來了就把「已離開」解除。
-        #
-        # 標記只接在離場路徑上（見 `_check_supervisor_departed`），而**回來
-        # 的那一半原本不存在**——於是被閒置移出過一次的 supervisor 即使重新
-        # 加入，畫面永遠寫著「已離開・需要重新指定」，除非有人重新指定一次
-        # （2026-09-14 艾斯維爾在畫面上抓到）。
-        #
-        # 比對 session_key 而不是 participant_id：supervisor 是一個**角色**，
-        # 對方重啟之後 participant 會換一個，而角色應該還在——那正是當初存
-        # session_key 的理由。ephemeral 不算：subagent 回來不代表它的父層在。
-        if parent is None:
-            room_sup = await (
-                await db.execute(
-                    "SELECT board_supervisor_name, board_supervisor_left_at"
-                    " FROM room WHERE id=? AND board_supervisor_session_key=?",
-                    (room_id, session_key),
-                )
-            ).fetchone()
-            if room_sup is not None and room_sup["board_supervisor_left_at"]:
-                # 🔑 清成 **NULL**，不是空字串：資格判準
-                # （`_board_supervisor_room`）問的是 `IS NULL`。寫成空字串的
-                # 那段時間裡，畫面說他回來了、房裡也公告了，而他在確認週期
-                # 與派工上照樣 403——兩邊各自看都完全正確，所以沒有任何地方
-                # 會報錯（2026-09-19 修）。
-                await db.execute(
-                    "UPDATE room SET board_supervisor_left_at=NULL WHERE id=?",
-                    (room_id,),
-                )
-                await _commit_with_retry(db)
-                # 離開會公告「需要重新指定」，回來不公告的話，看過那則的人
-                # 不會知道它已經解決了——而畫面上那個提示也不再對得上任何
-                # 東西。標記與解除要同一個規格
-                await _post_message(
-                    room_id, None,
-                    f"任務板的監督者 {room_sup['board_supervisor_name'] or name}"
-                    " 已回到聊天室。",
-                    kind="system", system_event="board_supervisor_returned",
-                )
+        # supervisor 離場即卸任（艾斯維爾 2026-11-12）：離開時欄位已清空，
+        # 同 key 重進不自動恢復，須重新指定，所以這裡不再有「回來」的處理。
         # ephemeral 不進 session 名錄：那份名錄是指派 UI 的掃描來源，而
         # subagent 不可被指派（§3.7）。登記進去只會在清單上長出一堆
         # 看起來可以指派、實際上指派不到的鬼影
@@ -5153,7 +5121,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "room_id": room_id, "count": len(cancelled)},
             )
         await _announce_orphans(room_id, released)
-        await _check_supervisor_departed(room_id)
+        await _check_supervisor_departed(room_id, [p["session_key"]])
         # subagent 的離開不進訊息流（§2）。成員列變了仍要叫醒訂閱端
         if p["ephemeral"]:
             await events.notify(room_id)
@@ -5220,7 +5188,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         kicked_orphans = await _orphan_claims(room_id)
         await _commit_with_retry(db)
         await _announce_orphans(room_id, kicked_orphans)
-        await _check_supervisor_departed(room_id)
+        await _check_supervisor_departed(room_id, [target["session_key"]])
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
         # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
         # 要回來必須由管理員重新指派一次。
@@ -5687,16 +5655,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchone()
         return (row["board_seq"] or 0) if row else 0
 
-    def _supervisor_obj(session_key, name, kind, left_at):
+    def _supervisor_obj(session_key, name, kind):
         """supervisor 的對外形狀。**房軸與 attached_rooms 共用這一份。**
 
         分兩份寫的話，漂移的那一半沒有人在看——而這個鍵剛好就是因為兩處
         形狀不同才開了一張卡（09/05 `3a518cbe`：一邊字串一邊物件）。
 
         `actor_key` 而不是 `session_key`：對外一律用板上那套稱呼。
-        `departed` 是**標記不是清空**，所以要說得出「本來是誰在看，但他
-        走了」——少了它，畫面只能二選一地畫成「有人在看」或「沒有人」，
-        而真相是第三種。
+        `departed` 保留只為相容舊 client：supervisor 離場即卸任（欄位直接
+        清空），所以永遠是 False。
         """
         key = session_key or ""
         if not key:
@@ -5705,7 +5672,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "actor_key": key,
             "display_name": name or key,
             "actor_kind": kind or "",
-            "departed": bool(left_at),
+            "departed": False,
         }
 
     async def _attached_rooms(board_id: str) -> list[dict]:
@@ -5723,7 +5690,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "SELECT br.room_id, br.room_name, br.detached_at, r.status,"
             " r.visibility AS room_visibility,"
             " r.board_supervisor_session_key, r.board_supervisor_name,"
-            " r.board_supervisor_kind, r.board_supervisor_left_at"
+            " r.board_supervisor_kind"
             " FROM board_room br LEFT JOIN room r ON r.id = br.room_id"
             " WHERE br.board_id=? ORDER BY br.attached_at", (board_id,))
         out = []
@@ -5743,8 +5710,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 # 兩個名字指同一個東西時，總有一邊的比對會寫錯
                 "supervisor": _supervisor_obj(
                     sup_key, r["board_supervisor_name"],
-                    r["board_supervisor_kind"],
-                    r["board_supervisor_left_at"]),
+                    r["board_supervisor_kind"]),
             })
         return out
 
@@ -9381,60 +9347,75 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {"ok": True, "supervisor": key, "display_name": name,
                 "in_room": who is not None}
 
-    async def _check_supervisor_departed(room_id: str) -> None:
-        """supervisor 的 session 在房內已無 active 身分時**標記**，不清空。
+    async def _check_supervisor_departed(
+        room_id: str, left_keys: "list[str] | set[str] | tuple[str, ...]",
+    ) -> None:
+        """supervisor 離場即卸任（艾斯維爾 2026-11-12，取代「標記不清空」）。
+
+        只有**離開的正是 supervisor 的 session_key**、且房內已無同 key 的
+        active 成員時才卸任：欄位直接清空（不留 left_at 快照），公告
+        「已離開，已卸任；需要重新指定」並 mention 房內人類。同 key 重進
+        不會恢復，一律重新指定。
 
         🔴 只接在離場路徑上，**不可以做成定期檢查**：`session_key` 存的是
-        房外身分，被指定的 agent 在設定當下多半還沒進房，做成定期檢查的話
-        設定完的下一輪掃描就會把它自己清掉，而且清得完全合乎規則。
-        接在離場路徑上天然帶有「他曾經進來過」這個前提，不必另存旗標。
+        房外身分，被指定的 agent 在設定當下多半還沒進房。也因此必須帶
+        `left_keys`——他人離場不得影響「已指定、尚未進房」的 supervisor。
         """
+        keys = {(k or "").strip() for k in left_keys}
+        keys.discard("")
+        if not keys:
+            return
         db = app.state.db
         room = await (
             await db.execute(
-                "SELECT board_supervisor_session_key, board_supervisor_name,"
-                " board_supervisor_left_at FROM room WHERE id=?", (room_id,)
+                "SELECT board_supervisor_session_key, board_supervisor_name"
+                " FROM room WHERE id=?", (room_id,)
             )
         ).fetchone()
         if room is None or not room["board_supervisor_session_key"]:
             return
-        if room["board_supervisor_left_at"]:
-            return                      # 已經標記過，不重複公告
+        sup_key = room["board_supervisor_session_key"]
+        if sup_key not in keys:
+            return                      # 走的不是 supervisor
         still = await (
             await db.execute(
                 "SELECT 1 FROM participant WHERE room_id=? AND session_key=?"
                 " AND status='active' LIMIT 1",
-                (room_id, room["board_supervisor_session_key"]),
+                (room_id, sup_key),
             )
         ).fetchone()
         if still is not None:
             return
         await db.execute(
-            "UPDATE room SET board_supervisor_left_at=? WHERE id=?",
-            (_now(), room_id),
+            "UPDATE room SET board_supervisor_session_key='',"
+            " board_supervisor_name='', board_supervisor_kind='',"
+            " board_supervisor_set_by=NULL, board_supervisor_set_by_name='',"
+            " board_supervisor_set_at=NULL, board_supervisor_left_at=NULL"
+            " WHERE id=?", (room_id,),
         )
-        name = room["board_supervisor_name"] or room["board_supervisor_session_key"]
-        # **不可以安靜地標記**——那會變成「沒有人在監督，而且沒有人知道」
+        await _commit_with_retry(db)
+        name = room["board_supervisor_name"] or sup_key
+        humans = await _room_human_names(room_id)
+        # **不可以安靜地卸任**——那會變成「沒有人在監督，而且沒有人知道」
         await _post_message(
             room_id, None,
-            f"任務板的監督者 {name} 已不在聊天室內，需要重新指定。",
+            f"監督者 {name} 已離開，已卸任；需要重新指定",
             kind="system", system_event="board_supervisor_left",
+            mentions=humans,
         )
         # 它派過的還在排隊的 run **不自動取消**（艾斯維爾 2026-09-19：取消
         # 只有人類或主持人下得了，見 §6.1）。但也不能就這樣留著不講：那幾筆
         # 會照常被領走、照常跑，而當初決定要派它們的那個身分已經不在房裡了。
-        # 指名 mention 房內人類——不帶 mention 的 system 訊息等於貼在牆上。
         pending = await (
             await db.execute(
                 "SELECT COUNT(*) AS n FROM agent_run"
                 " WHERE room_id=? AND status='queued' AND requester_kind='agent'"
                 " AND requested_by IN (SELECT id FROM participant"
                 "   WHERE room_id=? AND session_key=?)",
-                (room_id, room_id, room["board_supervisor_session_key"]),
+                (room_id, room_id, sup_key),
             )
         ).fetchone()
         if pending and pending["n"]:
-            humans = await _room_human_names(room_id)
             await _post_message(
                 room_id, None,
                 f"監督者 {name} 還有 {pending['n']} 筆派工在排隊，"
@@ -10579,8 +10560,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "supervisor": _supervisor_obj(
                 room["board_supervisor_session_key"],
                 room["board_supervisor_name"],
-                room["board_supervisor_kind"],
-                room["board_supervisor_left_at"]),
+                room["board_supervisor_kind"]),
             # 從聊天室進板的畫面靠這個畫「掛了哪幾間房」的徽章。少了它，
             # 那個徽章只能顯示預設值「未掛接聊天室」——而板明明就掛在你正
             # 看著的這間房上（艾斯維爾想法板觀察 ①）。與板軸**同一份**：
@@ -10605,6 +10585,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 第二份判準
             "custom_tags": (_board_custom_tags(attached)
                             if attached is not None else []),
+            **(_digest_fields(attached) if attached is not None
+               else {"digest_interval_sec": None,
+                     "digest_interval_default": int(cfg.board_digest_interval)}),
             # 房軸也要有——從聊天室進板的人看不出這塊板已經收尾的話，
             # 他會在一塊「結束了」的板上繼續加卡
             "outcome": (attached["outcome"]
@@ -11379,6 +11362,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             # 一份預設集合去反推，而那正是 `allowed_tags` 當初要消除的
             # 第二份判準
             "custom_tags": _board_custom_tags(board),
+            **_digest_fields(board),
             "task_requests": await _my_task_requests(
                 "t.board_id=?", [board_id], actor,
                 # `actor_key()` 現階段只做去空白 ⇒ 兩者同值。這裡不另外取
@@ -11818,8 +11802,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "supervisor": _supervisor_obj(
                 room["board_supervisor_session_key"],
                 room["board_supervisor_name"],
-                room["board_supervisor_kind"],
-                room["board_supervisor_left_at"]),
+                room["board_supervisor_kind"]),
             "attached_rooms": (await _attached_rooms(attached["id"])
                                if attached is not None else []),
             "outcome": (attached["outcome"] if attached is not None
@@ -12017,6 +12000,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise _err(403, "not_board_owner",
                        "這個動作只有這塊板的 owner 做得到")
 
+    _DIGEST_INTERVAL_MIN = 60
+    _DIGEST_INTERVAL_MAX = 86400
+
+    def _digest_fields(board) -> dict:
+        """該板的 supervisor 摘要間隔：`digest_interval_sec` 為 null 代表用
+        Hub 預設，預設值一起回，client 才畫得出「預設是多久」。"""
+        raw = board["digest_interval_sec"] if "digest_interval_sec" in board.keys() else None
+        return {"digest_interval_sec": raw,
+                "digest_interval_default": int(cfg.board_digest_interval)}
+
     @app.patch("/api/boards/{board_id}", dependencies=[Depends(require_auth)])
     async def patch_board(
         board_id: str, body: BoardPatch,
@@ -12039,6 +12032,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         sets = {k: v for k, v in
                 {"name": body.name.strip() if body.name else None,
                  "description": body.description}.items() if v is not None}
+        digest_changed = "digest_interval_sec" in body.model_fields_set
+        if digest_changed:
+            sec = body.digest_interval_sec
+            if sec is not None and not (
+                    _DIGEST_INTERVAL_MIN <= sec <= _DIGEST_INTERVAL_MAX):
+                raise _err(400, "invalid_digest_interval",
+                           f"摘要間隔需介於 {_DIGEST_INTERVAL_MIN} 到 "
+                           f"{_DIGEST_INTERVAL_MAX} 秒")
+            sets["digest_interval_sec"] = sec
         if not sets:
             return {"ok": True, "board_id": board_id, "changed": []}
         seq = await _next_seq_for_board(board_id)
@@ -12070,7 +12072,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 什麼——回傳生效後的值才分得出「送出去的」與「真的存下來的」
         return {"ok": True, "board_id": board_id, "board_seq": seq,
                 "name": sets.get("name", board["name"]),
-                "changed": sorted(sets)}
+                "changed": sorted(sets),
+                **_digest_fields(
+                    {**dict(board), **sets} if digest_changed else board)}
 
     @app.post("/api/boards/{board_id}/outcome",
               dependencies=[Depends(require_auth)])
@@ -13027,6 +13031,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "status": board["status"], "my_role": role,
                 "outcome": board["outcome"] if "outcome" in board.keys() else "",
                 "owner_name": _ident(owner_key, "")[0] if owner_key else "",
+                **_digest_fields(board),
             },
             "entries": entries[offset:offset + limit],
             "total": len(entries),
@@ -17330,6 +17335,17 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         return [r["display_name"] for r in rows], await _orphan_claims(room_id)
 
+    async def _run_session_keys(room_id: str, run_id: str) -> list[str]:
+        """某個 run 帶進房的成員的 session_key（離場判定用，不濾 status）。"""
+        rows = await (
+            await app.state.db.execute(
+                "SELECT session_key FROM participant"
+                " WHERE room_id=? AND run_id=? AND run_id!=''",
+                (room_id, run_id),
+            )
+        ).fetchall()
+        return [r["session_key"] for r in rows]
+
     def _requester_kind(row) -> str:
         """這一筆是誰動的手：`human`／`agent`（Supervisor 代派）。
 
@@ -18936,7 +18952,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await _commit_with_retry(db)
                 if gone:
                     await _announce_orphans(row["room_id"], released)
-                    await _check_supervisor_departed(row["room_id"])
+                    await _check_supervisor_departed(
+                        row["room_id"],
+                        await _run_session_keys(row["room_id"], run_id))
                 final = await _run_or_404(run_id)
                 await _announce_run(
                     final, "failed",
@@ -18986,7 +19004,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         await _commit_with_retry(db)
         if gone:
             await _announce_orphans(row["room_id"], released)
-            await _check_supervisor_departed(row["room_id"])
+            await _check_supervisor_departed(
+                row["room_id"],
+                await _run_session_keys(row["room_id"], run_id))
         final = await _run_or_404(run_id)
         await _announce_run(
             final, "waiting" if (new == "running"
@@ -19524,7 +19544,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             released = await _orphan_claims(p["room_id"])
             await _commit_with_retry(db)
             await _announce_orphans(p["room_id"], released)
-            await _check_supervisor_departed(p["room_id"])
+            await _check_supervisor_departed(p["room_id"], [p["session_key"]])
             logger.info(
                 "sweep: 移除閒置 agent %s（room=%s）",
                 p["display_name"], p["room_id"], extra={
@@ -19541,22 +19561,46 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         # Supervisor 摘要。掛在既有 sweeper 上，不另開一條背景迴圈——
         # 多一條迴圈就多一個要各自處理停機、例外與時鐘的地方
-        due = (now - timedelta(seconds=cfg.board_digest_interval)).isoformat()
         rooms = await (
             await db.execute(
                 "SELECT * FROM room WHERE status='active'"
                 " AND board_supervisor_session_key!=''"
                 " AND board_supervisor_left_at IS NULL"
-                " AND board_seq > board_digest_seq"
-                # 滿間隔**或**滿筆數就發，先到先送：只看時間會讓一場大改動
-                # 延遲整個間隔才被看見，只看筆數會讓零星變動永遠湊不滿
-                " AND (board_digest_at IS NULL OR board_digest_at < ?"
-                "      OR board_seq - board_digest_seq >= ?)",
-                (due, cfg.board_digest_max),
+                " AND board_seq > board_digest_seq",
             )
         ).fetchall()
+        # 間隔從「第一筆未送的變動」起算，不是從上次摘要起算：後者在安靜
+        # 一段時間後，下一筆零星變動會在一輪 sweep 內單獨送出，摘要就變成
+        # 一兩筆一則。時間點只存在記憶體——Hub 重啟只會讓那一批多等一個間隔
+        pending_since = getattr(app.state, "board_digest_pending_since", None)
+        if pending_since is None:
+            pending_since = app.state.board_digest_pending_since = {}
+        live = {r["id"] for r in rooms}
+        for rid in list(pending_since):
+            if rid not in live:
+                del pending_since[rid]
+        # 房有掛板就用該板自訂的間隔（多塊板取最短），沒設＝Hub 預設
+        digest_override: dict[str, float] = {}
+        if rooms:
+            ph = ",".join("?" * len(rooms))
+            for r in await (await db.execute(
+                    "SELECT br.room_id AS rid, MIN(b.digest_interval_sec) AS sec"
+                    " FROM board_room br JOIN board b ON b.id = br.board_id"
+                    " WHERE br.detached_at IS NULL"
+                    "   AND b.digest_interval_sec IS NOT NULL"
+                    f"   AND br.room_id IN ({ph}) GROUP BY br.room_id",
+                    [r["id"] for r in rooms])).fetchall():
+                digest_override[r["rid"]] = float(r["sec"])
         for room in rooms:
-            await _flush_board_digest(room)
+            first = pending_since.setdefault(room["id"], now)
+            # 滿間隔**或**滿筆數就發，先到先送：只看時間會讓一場大改動
+            # 延遲整個間隔才被看見，只看筆數會讓零星變動永遠湊不滿
+            full = room["board_seq"] - room["board_digest_seq"] >= cfg.board_digest_max
+            interval = digest_override.get(room["id"], cfg.board_digest_interval)
+            waited = (now - first).total_seconds() >= interval
+            if full or waited:
+                await _flush_board_digest(room)
+                pending_since.pop(room["id"], None)
 
         # 封存夠久的房間永久刪除，然後回收沒人引用的附件實體。
         # 順序不能反——先刪 row 才看得出哪些實體變成孤兒。

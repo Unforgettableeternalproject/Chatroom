@@ -334,6 +334,6 @@ async def test_migration_adds_table_and_column_to_old_db(tmp_path):
         assert {"task_id", "depends_on_id", "board_id", "created_at",
                 "created_by"} <= tcols
         assert (await (await db.execute(
-            "PRAGMA user_version")).fetchone())[0] == DATA_VERSION == 12
+            "PRAGMA user_version")).fetchone())[0] == DATA_VERSION
     finally:
         await db.close()
