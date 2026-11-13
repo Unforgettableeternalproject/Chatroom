@@ -19533,7 +19533,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         not_held = not_held + not_claiming + not_in_active_run
         stale_subs = await (
             await db.execute(
-                "SELECT id, room_id, display_name, parent_id FROM participant"
+                "SELECT id, room_id, display_name, parent_id, session_key"
+                " FROM participant"
                 " WHERE status='active' AND ephemeral=1 AND last_seen_at < ?"
                 + not_held,
                 (sub_cutoff, now_iso, *_RUN_ACTIVE),
@@ -19545,6 +19546,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 (_now(), s["id"]),
             )
             await _commit_with_retry(db)
+            # subagent 自己逾時也是離場：它若是 supervisor 要卸任並公告。
+            # 後面的父層閒置迴圈只抓 active 成員，這裡漏掉就沒有人會補
+            await _check_supervisor_departed(s["room_id"], [s["session_key"]])
             logger.info(
                 "sweep: 回收逾時的 subagent %s（room=%s）",
                 s["display_name"], s["room_id"], extra={

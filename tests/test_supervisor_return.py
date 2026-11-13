@@ -215,3 +215,59 @@ async def test_parent_kicked_unseats_a_subagent_supervisor(client):
                           headers={"X-Participant-Id": me})
     assert r.status_code == 200, r.text
     assert await _supervisor(client, room, me) is None
+
+
+async def _sweep_client(tmp_path, **cfg_kw):
+    cfg = Config(db_path=str(tmp_path / "t.db"), api_token="", **cfg_kw)
+    app = create_app(cfg)
+    return app, AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+async def test_subagent_reclaimed_by_sweep_unseats_a_subagent_supervisor(tmp_path):
+    """subagent 自己逾時被回收，擔任的 supervisor 要卸任並公告。"""
+    app, client = await _sweep_client(tmp_path, subagent_timeout=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, parent, me = await _setup_subagent_supervisor(client)
+            await app.state.sweep_once()
+            assert await _supervisor(client, room, me) is None
+            events = [m["system_event"] for m in await _messages(client, room, me)]
+            assert events.count("board_supervisor_left") == 1
+
+
+async def test_parent_and_subagent_both_timed_out_still_unseats(tmp_path):
+    """父子都逾時：subagent 先被收，父層那輪抓不到它，卸任要在 subagent 那步發生。"""
+    app, client = await _sweep_client(tmp_path, subagent_timeout=0.0, idle_timeout=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, parent, me = await _setup_subagent_supervisor(client)
+            await app.state.sweep_once()
+            assert await _supervisor(client, room, me) is None
+            events = [m["system_event"] for m in await _messages(client, room, me)]
+            assert events.count("board_supervisor_left") == 1
+
+
+async def test_reclaiming_another_subagent_keeps_the_supervisor(tmp_path):
+    """被回收的不是 supervisor 的 key 時，不產生任何卸任副作用。"""
+    app, client = await _sweep_client(tmp_path, subagent_timeout=0.0)
+    async with client:
+        async with app.router.lifespan_context(app):
+            room, parent, me = await _setup_subagent_supervisor(client)
+            # supervisor 那位先被續命成「不逾時」不容易，改以 hold 豁免它
+            db = app.state.db
+            await db.execute(
+                "UPDATE participant SET hold_until='9999-01-01T00:00:00+00:00'"
+                " WHERE session_key='parent-key#Sub-abc123'")
+            await db.commit()
+            r = await client.post(f"/api/rooms/{room}/join",
+                                  json={"kind": "claude",
+                                        "session_key": "parent-key#Other-def456",
+                                        "preferred_name": "Other",
+                                        "parent_participant_id": parent})
+            assert r.status_code == 200, r.text
+            other = r.json()["participant_id"]
+            await app.state.sweep_once()
+            row = await (await db.execute(
+                "SELECT status FROM participant WHERE id=?", (other,))).fetchone()
+            assert row["status"] == "removed"
+            assert (await _supervisor(client, room, me))["actor_key"] == "parent-key#Sub-abc123"
