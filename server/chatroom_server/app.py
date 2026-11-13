@@ -264,17 +264,11 @@ EXPORT_BATCH = 500
 # `CHATROOM_HUMAN_TOKEN`）同屬這一群，未設 token 的開放模式也是。
 # 一「群」＝一個人連同他的 agent，見 `_party_of`。
 #
-# 🚨 **這一群是唯一一個不等於「一個人」的群**，而那個差別是不對稱的：
-#
-# - **指派**看它：`.env` 的兩把就是「這台機器上的我和我的 agent」，這正是
-#   要放行的東西（而且共用主 token 的人本來就互相指派得動，不是新開的口）
-# - **私人房可見度**不看它：legacy 模式下主 token 是**所有人共用的那一把**，
-#   把它當成「同一個人」等於讓每個拿到它的人（包含被踢出去的）看見所有
-#   私人房——kick 會就此失效（`test_kick_is_the_one_thing_that_removes_access`
-#   在 2026-09-12 當場抓到這件事）
-#
-# 「同一個人的另一台裝置」這個放寬，只有在群真的**發給某一個人**時才成立，
-# 也就是 access_token 那些。
+# 這一群在指派與私人房可見度上都算同一個人（艾斯維爾裁 2026-11-13）：
+# 主 token 已經換過，現在 `.env` 這批只有他本人在用，「舊的主 token 是大家
+# 共用的一把」那個前提不再成立。他用 human token 在 App 建的私人房，本機
+# agent token 的 session 不必指派就看得到、進得去。被踢的人仍由 join 的
+# kicked 檢查擋下。
 HOST_PARTY = "host"
 
 # 執行器給 run 子進程的 session_key 前綴（`claude-run-<run_id>`，
@@ -1830,7 +1824,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         db = app.state.db
         # 同群的另一台裝置。`party!=''` 是必要的：空字串是「還沒回報過」，
         # 當成一群的話所有還沒心跳的 session 會互相看見對方的私人房
-        if party and party != HOST_PARTY and room["creator_session_key"]:
+        if party and room["creator_session_key"]:
             same = await (
                 await db.execute(
                     "SELECT 1 FROM session WHERE session_key=? AND party=?"
@@ -3129,13 +3123,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "             AND a.target_session_key=?"
                     "             AND a.status IN ('pending','accepted'))"
                     " ) ORDER BY last_activity_at DESC")
-            # HOST_PARTY 不算「同一個人」（見那個常數的註解）。這裡傳空
-            # 字串進去，SQL 的 `s.party!=''` 就讓那一條自然不成立——**不要
-            # 在 SQL 裡再寫一次判斷**，兩份判準遲早會分岔
             party = _party(request)
-            params = (status, session_key,
-                      "" if party == HOST_PARTY else party,
-                      session_key, session_key)
+            params = (status, session_key, party, session_key, session_key)
         rows = await (await db.execute(sql, params)).fetchall()
         # you_are_admin：列表上要不要顯示「刪除」這種管理員動作，client 得
         # 自己判斷得出來。creator_session_key 不外流（`_room_public` 會拿掉），
@@ -19207,8 +19196,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             f" OR EXISTS (SELECT 1 FROM assignment g WHERE g.room_id={alias}.id"
             f"            AND g.target_session_key=?"
             f"            AND g.status IN ('pending','accepted')))",
-            (session_key, "" if party == HOST_PARTY else party,
-             session_key, session_key),
+            (session_key, party, session_key, session_key),
         )
 
     # 「進行中」＝派工執行器還握著、有明確結束的 run。handoff 不算：那一棒
