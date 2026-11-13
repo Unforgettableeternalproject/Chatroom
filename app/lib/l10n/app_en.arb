@@ -1959,5 +1959,6 @@
   "boardFilterClaimed": "Claimed",
   "boardFilterUnclaimed": "Unclaimed",
   "boardFilterClear": "Clear",
+  "boardFilterToggle": "Filter",
   "boardFilterNoMatch": "No matching cards"
 }

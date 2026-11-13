@@ -1960,5 +1960,6 @@
   "boardFilterClaimed": "已认领",
   "boardFilterUnclaimed": "未认领",
   "boardFilterClear": "清除",
+  "boardFilterToggle": "筛选",
   "boardFilterNoMatch": "没有符合的卡"
 }

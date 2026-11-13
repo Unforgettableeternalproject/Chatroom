@@ -9383,6 +9383,10 @@
   "@boardFilterClear": {
     "description": "篩選列：清除全部條件"
   },
+  "boardFilterToggle": "篩選",
+  "@boardFilterToggle": {
+    "description": "任務板：展開／收合篩選列的按鈕"
+  },
   "boardFilterNoMatch": "沒有符合的卡",
   "@boardFilterNoMatch": {
     "description": "篩選後沒有任何卡"

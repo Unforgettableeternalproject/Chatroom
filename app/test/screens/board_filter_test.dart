@@ -56,11 +56,18 @@ Widget _wrap() => ProviderScope(
       ),
     );
 
-Future<void> _pump(WidgetTester tester) async {
+Future<void> _pump(WidgetTester tester, {bool open = true}) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(_wrap());
+  await tester.pumpAndSettle();
+  // 篩選列預設收合；先點開才能操作條件
+  if (open) await _toggle(tester);
+}
+
+Future<void> _toggle(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('board-filter-toggle')));
   await tester.pumpAndSettle();
 }
 
@@ -123,5 +130,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('board-filter-no-match')), findsOneWidget);
     expect(find.text('Alpha 卡'), findsNothing);
+  });
+
+  testWidgets('預設收合：只有按鈕；收合後條件仍然生效', (tester) async {
+    await _pump(tester, open: false);
+    expect(find.byKey(keyword), findsNothing);
+    expect(find.text('Alpha 卡'), findsOneWidget);
+
+    await _toggle(tester);
+    expect(find.byKey(keyword), findsOneWidget);
+    await tester.enterText(find.byKey(keyword), 'beta');
+    await tester.pumpAndSettle();
+    expect(find.text('Alpha 卡'), findsNothing);
+
+    await _toggle(tester); // 收合
+    expect(find.byKey(keyword), findsNothing);
+    expect(find.text('Alpha 卡'), findsNothing);
+    expect(find.text('Beta 卡'), findsOneWidget);
+    expect(find.text('篩選 · 1'), findsOneWidget);
+
+    await _toggle(tester); // 再展開：輸入框還原、可清除
+    expect(tester.widget<TextField>(find.byKey(keyword)).controller!.text,
+        'beta');
+    await tester.tap(find.byKey(const ValueKey('board-filter-clear')));
+    await tester.pumpAndSettle();
+    expect(find.text('Alpha 卡'), findsOneWidget);
   });
 }
