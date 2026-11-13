@@ -216,6 +216,55 @@ void main() {
       expect(ids.toSet(), {'ok', 'done'});
     });
 
+    test('🔴 只列活躍（active）週期的卡：審核中、已確認、已完成、已取消的週期都不列', () {
+      final snap = const BoardSnapshot().merge(BoardDelta.fromJson({
+        'board_seq': 1,
+        'full': true,
+        'board_id': 'b1',
+        'objectives': [
+          {'id': 'oa', 'title': '活躍', 'status': 'active'},
+          {'id': 'or', 'title': '審核中', 'status': 'review'},
+          {'id': 'ov', 'title': '已確認', 'status': 'verified'},
+          {'id': 'od', 'title': '已完成', 'status': 'done'},
+          {'id': 'oc', 'title': '已取消', 'status': 'cancelled'},
+        ],
+        'checklists': [
+          {'id': 'ca', 'objective_id': 'oa', 'title': 'A'},
+          {'id': 'cr', 'objective_id': 'or', 'title': 'R'},
+          {'id': 'cv', 'objective_id': 'ov', 'title': 'V'},
+          {'id': 'cd', 'objective_id': 'od', 'title': 'D'},
+          {'id': 'cc', 'objective_id': 'oc', 'title': 'C'},
+        ],
+        'tasks': [
+          {'id': 'ta', 'checklist_id': 'ca', 'title': 'ta', 'status': 'todo'},
+          {'id': 'ta-done', 'checklist_id': 'ca', 'title': 'x', 'status': 'done'},
+          {'id': 'ta-cancel', 'checklist_id': 'ca', 'title': 'x', 'status': 'cancelled'},
+          {'id': 'tr', 'checklist_id': 'cr', 'title': 'tr', 'status': 'todo'},
+          {'id': 'tv', 'checklist_id': 'cv', 'title': 'tv', 'status': 'todo'},
+          {'id': 'td', 'checklist_id': 'cd', 'title': 'td', 'status': 'todo'},
+          {'id': 'tc', 'checklist_id': 'cc', 'title': 'tc', 'status': 'todo'},
+          {'id': 'orphan', 'checklist_id': 'missing', 'title': 'x', 'status': 'todo'},
+        ],
+      }));
+      final ids = dependencyCandidates(snap).map((c) => c.taskId).toSet();
+      expect(ids, {'ta', 'ta-done'});
+    });
+
+    test('已存在的依賴就算不在候選裡，仍留在已選清單與標題表（不會因過濾消失）', () {
+      final snap = _snap([
+        _task('me', extra: {
+          'depends_on': [
+            {'id': 'old', 'title': '舊依賴', 'status': 'cancelled', 'met': true, 'cancelled': true, 'via': ''}
+          ],
+        }),
+        _task('old', status: 'cancelled'),
+      ]);
+      final spec = DependencyEditSpec.fromSnapshot(snap, task: snap.tasks['me']);
+      expect(spec.candidates.map((c) => c.taskId), isNot(contains('old')));
+      expect(spec.dependsOn, ['old']);
+      expect(spec.titles['old'], isNotEmpty);
+    });
+
     test('sameIdSet 不看順序', () {
       expect(sameIdSet(['a', 'b'], ['b', 'a']), isTrue);
       expect(sameIdSet(['a'], ['a', 'b']), isFalse);

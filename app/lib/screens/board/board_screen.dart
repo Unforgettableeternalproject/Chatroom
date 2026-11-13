@@ -6,6 +6,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../models/board.dart';
+import '../../models/board_task_filter.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
@@ -28,6 +29,7 @@ import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_dependency_picker.dart';
+import 'board_filter_bar.dart';
 import 'board_move_dialog.dart';
 import 'board_split_inbox_dialog.dart';
 import 'board_task_drawer.dart';
@@ -159,6 +161,9 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   /// 只看孤兒。**不持久化**——它是「我現在要處理這批」，不是一個偏好。
   bool _orphansOnly = false;
+
+  /// 卡片篩選（關鍵字／狀態／依賴／認領）。同樣不持久化。
+  BoardTaskFilter _filter = const BoardTaskFilter();
 
   /// 收起來的階段。同樣不持久化：它是這一次的閱讀動作。
   final Set<String> _collapsed = {};
@@ -431,7 +436,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 同時守住了另一件事：**篩選過的清單送出去就是子集合**，而 Hub 依收到
   /// 的順序寫 order_index，沒送的保留舊值 ⇒ 兩批號碼交錯，順序變成未定義
   /// （@審核用Codex-2 #411 第 3 條）。拿掉這個條件的人要先解決那一半。
-  bool get _canReorder => !_readOnly && !_orphansOnly && _boardIdOrNull != null;
+  ///
+  /// 卡片篩選（[_filter]）是同一個理由：篩過的清單就是子集合。
+  bool get _canReorder =>
+      !_readOnly &&
+      !_orphansOnly &&
+      !_filter.isActive &&
+      _boardIdOrNull != null;
 
   /// 把 [ids] 依 Flutter 的 old/new index 語意搬一格，然後整批送出。
   ///
@@ -1361,10 +1372,22 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                 style: UepText.mono(size: 11, color: UepColors.error)),
           ),
         if (stats.orphans > 0) _orphanBanner(context, snap, o, stats),
+        BoardFilterBar(
+          filter: _filter,
+          onChanged: (f) => setState(() => _filter = f),
+        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.fromLTRB(26, 20, 26, 48),
             children: [
+              if (_filter.isActive &&
+                  _filter.apply(_tasksOf(snap, o)).isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(AppLocalizations.of(context).boardFilterNoMatch,
+                      key: const ValueKey('board-filter-no-match'),
+                      style: UepText.mono(size: 11.5, color: s.inkMute)),
+                ),
               // 凍結沿著三層往下傳：Hub 擋的是「這個週期底下的任何寫入」，
               // 所以階段與任務的入口也要一起收（判準在 `o.frozen`，不在
               // 這裡各自比對狀態）
@@ -1943,6 +1966,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
+    tasks = _filter.apply(tasks);
     if (tasks.isEmpty) return const SizedBox.shrink();
 
     final loose = tasks.where((t) => !t.isSettled).length;
@@ -1985,7 +2009,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
-    if (_orphansOnly && tasks.isEmpty) return const SizedBox.shrink();
+    tasks = _filter.apply(tasks);
+    if ((_orphansOnly || _filter.isActive) && tasks.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     // 取消或搬走的卡不進分母——它已經不在這份清單的帳上
     // （同 BoardSnapshot.countableTasks）

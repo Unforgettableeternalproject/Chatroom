@@ -9342,5 +9342,49 @@
   "helpDepMet": "依賴卡完成。已取消也視為解除（不再擋，但會標示「已取消」）。搬走的卡看它搬去的那張卡的狀態；沒寫去向視為未滿足。依賴卡被刪除時，這條依賴不再生效。",
   "@helpDepMet": {
     "description": "說明頁：任務依賴節"
+  },
+  "boardFilterSearch": "搜尋標題或內容",
+  "@boardFilterSearch": {
+    "description": "篩選列搜尋欄"
+  },
+  "boardFilterStatus": "狀態",
+  "@boardFilterStatus": {
+    "description": "篩選列：狀態"
+  },
+  "boardFilterDependency": "依賴",
+  "@boardFilterDependency": {
+    "description": "篩選列：依賴"
+  },
+  "boardFilterClaim": "認領",
+  "@boardFilterClaim": {
+    "description": "篩選列：認領"
+  },
+  "boardFilterAny": "不限",
+  "@boardFilterAny": {
+    "description": "篩選列：不限制該項"
+  },
+  "boardFilterHasDependency": "有依賴",
+  "@boardFilterHasDependency": {
+    "description": "篩選列：有依賴"
+  },
+  "boardFilterNoDependency": "無依賴",
+  "@boardFilterNoDependency": {
+    "description": "篩選列：沒有依賴"
+  },
+  "boardFilterClaimed": "已認領",
+  "@boardFilterClaimed": {
+    "description": "篩選列：已被認領"
+  },
+  "boardFilterUnclaimed": "未認領",
+  "@boardFilterUnclaimed": {
+    "description": "篩選列：未被認領"
+  },
+  "boardFilterClear": "清除",
+  "@boardFilterClear": {
+    "description": "篩選列：清除全部條件"
+  },
+  "boardFilterNoMatch": "沒有符合的卡",
+  "@boardFilterNoMatch": {
+    "description": "篩選後沒有任何卡"
   }
 }

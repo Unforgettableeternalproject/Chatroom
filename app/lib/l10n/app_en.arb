@@ -1948,5 +1948,16 @@
   "helpDepStartedLead": "Added after starting",
   "helpDepStarted": "If an unmet dependency appears after a card has started, it is set to Blocked automatically and marked as caused by a dependency. That Blocked can't be pushed back to In progress by hand; it resumes automatically once every dependency is met. A Blocked set by a person is never resumed automatically.",
   "helpDepMetLead": "When it counts as met",
-  "helpDepMet": "The dependency card is done. Cancelled also counts as released (it stops gating, but is marked Cancelled). A moved card follows the card it moved to; with no target it counts as unmet. When a dependency card is deleted, that dependency no longer applies."
+  "helpDepMet": "The dependency card is done. Cancelled also counts as released (it stops gating, but is marked Cancelled). A moved card follows the card it moved to; with no target it counts as unmet. When a dependency card is deleted, that dependency no longer applies.",
+  "boardFilterSearch": "Search title or description",
+  "boardFilterStatus": "Status",
+  "boardFilterDependency": "Dependency",
+  "boardFilterClaim": "Claim",
+  "boardFilterAny": "Any",
+  "boardFilterHasDependency": "Has dependency",
+  "boardFilterNoDependency": "No dependency",
+  "boardFilterClaimed": "Claimed",
+  "boardFilterUnclaimed": "Unclaimed",
+  "boardFilterClear": "Clear",
+  "boardFilterNoMatch": "No matching cards"
 }

@@ -1949,5 +1949,16 @@
   "helpDepStartedLead": "开始后才多出依赖",
   "helpDepStarted": "卡已经开始才多出未满足的依赖时，会自动改成卡住，并标记这是依赖造成的；这种卡住不能手动推回进行中，所有依赖都满足时自动恢复为进行中。人手动设的卡住不会被自动恢复。",
   "helpDepMetLead": "何时算满足",
-  "helpDepMet": "依赖卡完成。已取消也视为解除（不再挡，但会标示“已取消”）。搬走的卡看它搬去的那张卡的状态；没写去向视为未满足。依赖卡被删除时，这条依赖不再生效。"
+  "helpDepMet": "依赖卡完成。已取消也视为解除（不再挡，但会标示“已取消”）。搬走的卡看它搬去的那张卡的状态；没写去向视为未满足。依赖卡被删除时，这条依赖不再生效。",
+  "boardFilterSearch": "搜索标题或内容",
+  "boardFilterStatus": "状态",
+  "boardFilterDependency": "依赖",
+  "boardFilterClaim": "认领",
+  "boardFilterAny": "不限",
+  "boardFilterHasDependency": "有依赖",
+  "boardFilterNoDependency": "无依赖",
+  "boardFilterClaimed": "已认领",
+  "boardFilterUnclaimed": "未认领",
+  "boardFilterClear": "清除",
+  "boardFilterNoMatch": "没有符合的卡"
 }
