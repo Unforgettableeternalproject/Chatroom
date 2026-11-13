@@ -172,3 +172,46 @@ async def test_migration_clears_supervisors_that_had_left(tmp_path):
         assert rows["r1"]["l"] is None
         assert rows["r2"]["k"] == "agent-key", "沒離開的不動"
         await db.close()
+
+
+async def _setup_subagent_supervisor(client):
+    """supervisor 是某個 agent 旗下的 subagent（set_board_supervisor 允許）。"""
+    r = await client.post("/api/rooms",
+                          json={"name": "房", "session_key": "owner-key"})
+    room = r.json()["id"]
+    r = await client.post(f"/api/rooms/{room}/join",
+                          json={"kind": "human", "role": "human",
+                                "session_key": "owner-key",
+                                "preferred_name": "Bernie"})
+    me = r.json()["participant_id"]
+    parent = await _join_agent(client, room, "parent-key", "Parent")
+    r = await client.post(f"/api/rooms/{room}/join",
+                          json={"kind": "claude", "session_key": "parent-key#Sub-abc123",
+                                "preferred_name": "Sub",
+                                "parent_participant_id": parent})
+    assert r.status_code == 200, r.text
+    sub = r.json()["participant_id"]
+    r = await client.post(f"/api/rooms/{room}/board/supervisor",
+                          json={"participant_id": sub},
+                          headers={"X-Session-Key": "owner-key"})
+    assert r.status_code == 200, r.text
+    assert (await _supervisor(client, room, me))["actor_key"] == "parent-key#Sub-abc123"
+    return room, parent, me
+
+
+async def test_parent_leaving_unseats_a_subagent_supervisor(client):
+    room, parent, me = await _setup_subagent_supervisor(client)
+    r = await client.post(f"/api/rooms/{room}/leave",
+                          headers={"X-Participant-Id": parent})
+    assert r.status_code == 200, r.text
+    assert await _supervisor(client, room, me) is None, "subagent 已隨父層離開"
+    events = [m["system_event"] for m in await _messages(client, room, me)]
+    assert "board_supervisor_left" in events
+
+
+async def test_parent_kicked_unseats_a_subagent_supervisor(client):
+    room, parent, me = await _setup_subagent_supervisor(client)
+    r = await client.post(f"/api/rooms/{room}/participants/{parent}/kick",
+                          headers={"X-Participant-Id": me})
+    assert r.status_code == 200, r.text
+    assert await _supervisor(client, room, me) is None

@@ -606,10 +606,21 @@ async def test_a_subagent_does_not_take_over_the_title(tmp_path):
 
 # ── 私人工作房 ───────────────────────────────────────────────────────
 
-async def _try_join(client, rid, key, name="Runner"):
-    return await client.post(f"/api/rooms/{rid}/join",
+async def _try_join(client, rid, key, name="Runner", headers=None):
+    return await client.post(f"/api/rooms/{rid}/join", headers=headers,
                              json={"kind": "claude", "role": "agent",
                                    "session_key": key, "preferred_name": name})
+
+
+async def _outsider_headers(client):
+    """另一個人的憑證（自成一群）。
+
+    私人房可見度：`.env` 的 host 群算同一個人（艾斯維爾裁 2026-11-13），
+    所以「進不來的人」得是 host 群之外的人，不能再用同一把 root token 冒充。
+    """
+    r = await client.post("/api/tokens", json={"label": "outsider"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 async def test_a_run_can_enter_the_private_room_that_dispatched_it(tmp_path):
@@ -661,7 +672,9 @@ async def test_a_finished_run_cannot_enter_the_private_room(tmp_path):
         run_id = await _dispatch_running(client, rid, hdr, runner)
         await _report(client, run_id, runner, "done", summary="做完了")
 
-        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        # 新規則：host 群內的 session 本來就進得來，豁免邊界要用 host 群之外的人驗
+        r = await _try_join(client, rid, f"claude-run-{run_id}",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"
 
@@ -679,7 +692,9 @@ async def test_a_queued_run_cannot_enter_the_private_room_yet(tmp_path):
                   "ref": "T-9", "brief": "等一下"},
             headers=hdr)).json()["run"]["id"]
 
-        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        # 新規則：host 群內的 session 本來就進得來，豁免邊界要用 host 群之外的人驗
+        r = await _try_join(client, rid, f"claude-run-{run_id}",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"
 
@@ -691,6 +706,8 @@ async def test_an_ordinary_agent_still_needs_an_invitation(tmp_path):
         rid = await _ops_room(client, visibility="private")
         await _join_human(client, rid)
 
-        r = await _try_join(client, rid, "claude-someone", name="路人")
+        # 新規則：host 群內的 agent 不必邀請，一般 agent 指 host 群之外的人
+        r = await _try_join(client, rid, "claude-someone", name="路人",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"

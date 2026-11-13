@@ -269,6 +269,11 @@ EXPORT_BATCH = 500
 # 共用的一把」那個前提不再成立。他用 human token 在 App 建的私人房，本機
 # agent token 的 session 不必指派就看得到、進得去。被踢的人仍由 join 的
 # kicked 檢查擋下。
+#
+# ⚠️ 例外：**開放模式（未設 `CHATROOM_TOKEN`）host 群不算同一個人**。開放
+# 模式沒有身分，每個 session 都落在 host 群，放寬的話所有人互相看得到私人房。
+# 只有 Hub 設了 token，這一群才適用上面的同群放寬——判準在
+# `_visibility_party`，三處可見度規則共用它。
 HOST_PARTY = "host"
 
 # 執行器給 run 子進程的 session_key 前綴（`claude-run-<run_id>`，
@@ -1449,6 +1454,18 @@ def create_app(config: Config | None = None) -> FastAPI:
         """
         return getattr(request.state, "party", HOST_PARTY) or HOST_PARTY
 
+    def _visibility_party(party: str) -> str:
+        """拿來比「同群」的 party；空字串＝不套同群放寬。
+
+        開放模式（未設 `CHATROOM_TOKEN`、API 驗證停用）下沒有身分，每個
+        session 都是 host 群，不能當成同一個人。`_invited_to_private`、
+        `list_rooms`、`_visible_rooms_clause` 都經過這支，不要各寫一份。
+        三處比對本來就帶 `party!=''` 防線，空字串自然不會命中。
+        """
+        if party == HOST_PARTY and not cfg.api_token:
+            return ""
+        return party
+
     def _party_of(token: str, row=None) -> str:
         """這把憑證屬於哪一群人。
 
@@ -1822,6 +1839,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         if room["creator_session_key"] and session_key == room["creator_session_key"]:
             return True
         db = app.state.db
+        party = _visibility_party(party)
         # 同群的另一台裝置。`party!=''` 是必要的：空字串是「還沒回報過」，
         # 當成一群的話所有還沒心跳的 session 會互相看見對方的私人房
         if party and room["creator_session_key"]:
@@ -3123,7 +3141,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "             AND a.target_session_key=?"
                     "             AND a.status IN ('pending','accepted'))"
                     " ) ORDER BY last_activity_at DESC")
-            party = _party(request)
+            # 沒帶 session_key 的匿名請求證明不了自己屬於哪一群，只看公開房
+            party = _visibility_party(_party(request)) if session_key else ""
             params = (status, session_key, party, session_key, session_key)
         rows = await (await db.execute(sql, params)).fetchall()
         # you_are_admin：列表上要不要顯示「刪除」這種管理員動作，client 得
@@ -4972,6 +4991,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                 kind="system", system_event="board_orphaned",
             )
 
+    async def _departing_keys(room_id: str, participant_id: str) -> list[str]:
+        """父層退場前，父層與旗下 active subagent 的 session_key（離場判定用）。
+
+        必須在 `_depart_with_subagents` **之前**取：之後 status 已變，查不到。
+        """
+        rows = await (
+            await app.state.db.execute(
+                "SELECT session_key FROM participant"
+                " WHERE room_id=? AND status='active'"
+                "   AND (id=? OR parent_id=?)",
+                (room_id, participant_id, participant_id),
+            )
+        ).fetchall()
+        return [r["session_key"] for r in rows]
+
     async def _depart_with_subagents(
         room_id: str, participant_id: str, own_status: str,
         sub_status: str, reason: str,
@@ -5066,6 +5100,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 await _cancel_pending_archive_requests(room_id)
         if archive_on_leave:
             await _archive_mark(room_id)
+        left_keys = await _departing_keys(room_id, p["id"])
         # 父層與它的 subagent 在同一個 statement 裡一起消失，中間不留窗口
         orphans = await _depart_with_subagents(
             room_id, p["id"], "left", "left", "父層離開"
@@ -5110,7 +5145,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                        "room_id": room_id, "count": len(cancelled)},
             )
         await _announce_orphans(room_id, released)
-        await _check_supervisor_departed(room_id, [p["session_key"]])
+        await _check_supervisor_departed(room_id, left_keys)
         # subagent 的離開不進訊息流（§2）。成員列變了仍要叫醒訂閱端
         if p["ephemeral"]:
             await events.notify(room_id)
@@ -5170,6 +5205,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         # 被踢者與旗下 subagent 同一個 statement。子代理標 removed 不標
         # kicked——kicked 是對一個 session 的人為封鎖決定，而 subagent 只是
         # 被父層帶走，沒有人針對它做過決定
+        left_keys = await _departing_keys(room_id, target_id)
         await _depart_with_subagents(
             room_id, target_id, "kicked", "removed", "父層被移出"
         )
@@ -5177,7 +5213,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         kicked_orphans = await _orphan_claims(room_id)
         await _commit_with_retry(db)
         await _announce_orphans(room_id, kicked_orphans)
-        await _check_supervisor_departed(room_id, [target["session_key"]])
+        await _check_supervisor_departed(room_id, left_keys)
         # 移出等同撤銷授權。舊指派若留著 pending/accepted，被踢的 agent 拿它
         # 就能繞過重加限制——而那筆指派是踢出**之前**的決定，早已被推翻。
         # 要回來必須由管理員重新指派一次。
@@ -9495,13 +9531,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             return "、".join(parts[:2]) + " 等"
         return "、".join(parts)
 
-    async def _flush_board_digest(room) -> None:
+    async def _flush_board_digest(room) -> bool:
         """把上次摘要之後的 board 變動彙整成一則，mention supervisor。
 
         **從 board 反查**（`board_seq > board_digest_seq`），不在十幾個變動點
         各自累積——插樁漏一處的症狀是靜靜地少報一件事，而摘要本來就是拿來
         「我沒在看的時候發生了什麼」的，少報等於沒有意義。
         反查還有一個好處：Hub 重啟不會掉，水位存在資料庫裡。
+
+        回傳是否**真的送出**（沒有變動、或 supervisor 還沒進房都是 False）；
+        呼叫端只在送出後才清掉間隔計時。
         """
         db = app.state.db
         room_id = room["id"]
@@ -9528,7 +9567,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 counts[kind] = len(rows)
                 titles.extend((item_kind, r["id"], r["title"]) for r in rows)
         if not counts:
-            return
+            return False
         # 「變了什麼」取自 board_event（每次變更本來就會記，含前後狀態），
         # 不另存摘要專用的緩衝。沒有板（未換軸的房）不記 event ⇒ 只列標題。
         events_by_item: dict[tuple[str, str], list] = {}
@@ -9597,7 +9636,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchone()
         if who is None:
-            return
+            return False
         supervisor = who["display_name"]
         await db.execute(
             "UPDATE room SET board_digest_seq=(SELECT board_seq FROM room WHERE id=?),"
@@ -9612,6 +9651,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             mentions=[supervisor] if supervisor else None,
             reply_mentions_author=False,
         )
+        return True
 
     _REORDER_PARENT = {"objective": None,
                        "checklist": "objective_id",
@@ -19185,6 +19225,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         （`_invited_to_private` 是第三份）。兩邊要一起改——一端放寬就是
         私人房從這個端點漏出去，而列表上看不出任何異狀。
         """
+        party = _visibility_party(party)
         return (
             f"({alias}.visibility='public' AND {alias}.status='active'"
             f" OR {alias}.creator_session_key=?"
@@ -19526,13 +19567,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         ).fetchall()
         for p in idle:
             # 閒置移除也是父層退場，同一個 statement 帶走旗下 subagent
+            left_keys = await _departing_keys(p["room_id"], p["id"])
             await _depart_with_subagents(
                 p["room_id"], p["id"], "removed", "removed", "父層閒置逾時"
             )
             released = await _orphan_claims(p["room_id"])
             await _commit_with_retry(db)
             await _announce_orphans(p["room_id"], released)
-            await _check_supervisor_departed(p["room_id"], [p["session_key"]])
+            await _check_supervisor_departed(p["room_id"], left_keys)
             logger.info(
                 "sweep: 移除閒置 agent %s（room=%s）",
                 p["display_name"], p["room_id"], extra={
@@ -19587,8 +19629,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             interval = digest_override.get(room["id"], cfg.board_digest_interval)
             waited = (now - first).total_seconds() >= interval
             if full or waited:
-                await _flush_board_digest(room)
-                pending_since.pop(room["id"], None)
+                # 沒送出（supervisor 還沒進房）就留著起算點：他加入後下一輪
+                # 就該送，不必再等一個完整間隔（板設定最長一天）
+                if await _flush_board_digest(room):
+                    pending_since.pop(room["id"], None)
 
         # 封存夠久的房間永久刪除，然後回收沒人引用的附件實體。
         # 順序不能反——先刪 row 才看得出哪些實體變成孤兒。

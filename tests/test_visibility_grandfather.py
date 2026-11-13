@@ -121,8 +121,11 @@ async def test_kick_is_the_one_thing_that_removes_access(tmp_path):
             headers={"X-Participant-Id": admin_pid})
         assert r.status_code == 200, r.text
 
-        # 開放模式下人人同屬 host 群，與建立者同群本來就看得到（艾斯維爾裁
-        # 2026-11-13），所以列表不再是出口；被踢的人由 join 的 kicked 擋下
+        # 開放模式（未設 token）host 群不算同一個人，所以列表仍是出口
+        assert rid not in await _room_ids(client, "sess-kicked"), (
+            "被踢之後私人房還在列表上——白名單沒有出口"
+        )
+        # 且 join 也被 kicked 擋下
         j = await client.post(f"/api/rooms/{rid}/join", json={
             "kind": "claude", "session_key": "sess-kicked",
             "preferred_name": "會被踢的人"})

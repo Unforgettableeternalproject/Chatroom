@@ -181,3 +181,31 @@ async def test_old_db_gets_the_column(tmp_path):
         assert "digest_interval_sec" in cols
     finally:
         await db.close()
+
+
+async def test_unsent_digest_keeps_its_pending_clock(tmp_path):
+    """supervisor 還沒進房 ⇒ 沒送出，起算點不能被清掉（否則加入後要重等一個間隔）。"""
+    app, client = await _client(tmp_path, "clock-kept",
+                                board_digest_interval=60.0)
+    async with app.router.lifespan_context(app), client:
+        rid = (await client.post("/api/rooms", json={
+            "name": "房", "session_key": "human-1"})).json()["id"]
+        owner = await _join(client, rid, "human-1", "Bernie", role="human")
+        await client.post("/api/boards",
+                          json={"name": "板", "origin_room_id": rid},
+                          headers=owner)
+        r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                              json={"session_key": "agent-late"},
+                              headers=owner)
+        assert r.status_code == 200, r.text
+        await client.post(f"/api/rooms/{rid}/board/objectives",
+                          json={"title": "週期"}, headers=owner)
+        await app.state.sweep_once()
+        pending = app.state.board_digest_pending_since
+        first = pending[rid] = pending[rid] - timedelta(seconds=120)
+        await app.state.sweep_once()      # 到期，但 supervisor 不在 ⇒ 不送
+        assert await _digests(client, rid, owner) == []
+        assert pending.get(rid) == first, "沒送出就不能清掉起算點"
+        await _join(client, rid, "agent-late", "Late")
+        await app.state.sweep_once()      # 加入後下一輪就該送，不必重等
+        assert len(await _digests(client, rid, owner)) == 1
