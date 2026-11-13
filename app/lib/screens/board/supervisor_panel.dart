@@ -412,21 +412,8 @@ class _AttachedSupervisorsSection extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 sup.actor.displayName,
-                // 走了的人名字劃掉——三種狀態要分得出來，只有「有人／
-                // 沒人」兩種畫法時，人走了會被畫成「還有人在看」
-                style: UepText.sans(
-                  size: 14,
-                  color: sup.departed ? s.inkMute : s.ink).copyWith(
-                  decoration:
-                      sup.departed ? TextDecoration.lineThrough : null,
-                ),
+                style: UepText.sans(size: 14, color: s.ink),
               ),
-              if (sup.departed) ...[
-                const SizedBox(width: 6),
-                Text(AppLocalizations.of(context).boardSupervisorDeparted,
-                    style: UepText.mono(
-                        size: 10, letterSpacing: 1.0, color: UepColors.error)),
-              ],
               const Spacer(),
               // 來源房。**這是這份清單唯一有意義的欄位**——少了它，多房時
               // 讀者分不出這幾個人是三間房各一個，還是同一間房有三個
@@ -448,7 +435,7 @@ class _AttachedSupervisorsSection extends StatelessWidget {
 /// 誰可以被指定為這間房的 supervisor。
 ///
 /// 兩道都不是美觀問題：
-/// - 已離開的人：指派完當場就是 departed 狀態。
+/// - 已離開的人（`status != active`）：不是房內成員，不能指定。
 /// - **派工跑起來的臨時成員（`run_id` 非空）**：Hub 直接以
 ///   `supervisor_cannot_be_run` 擋（run 當了 supervisor 就是 run 派 run）。
 ///   留在清單上等於請人選一個一定會被退的選項，而且那一筆做完就離房了。
@@ -555,10 +542,8 @@ class _RoomSupervisorSection extends ConsumerWidget {
         ref.watch(roomDetailProvider(roomId)).value?.youAreAdmin ?? false;
     final canAssign = !roomArchived && isRoomAdmin;
     final sup = attached?.supervisor;
-    final departed = attached?.supervisorDeparted ?? false;
     // 我是不是這間房的 supervisor。人類的 actor_key 就是 deviceKey
     final iAmSupervisor = sup != null &&
-        !departed &&
         sup.actorKey == ref.read(appConfigProvider).deviceKey;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -582,12 +567,6 @@ class _RoomSupervisorSection extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 ActorName(actor: sup, size: 13, showKind: false),
-                // 三種狀態的第三種：**本來是誰在看，但他已經走了**。
-                // 退場是標記不是清空，少了這一句，畫面就只能在「有人在看」
-                // 與「沒有人」之間二選一，而兩個都不是真的
-                if (departed)
-                  Text(l10n.boardSupervisorLeftRoom,
-                      style: UepText.serif(size: 12.5, color: UepColors.gold)),
               ],
             ),
           ),

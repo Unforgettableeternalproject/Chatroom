@@ -491,6 +491,9 @@ CREATE TABLE IF NOT EXISTS board (
     -- 最常見的收尾。同一個判斷在 Task 那裡做過：status 與 claim 正交。
     -- '' / completed / abandoned；可 reopen，不可逆的只有刪除
     outcome         TEXT NOT NULL DEFAULT '',
+    -- Supervisor 摘要間隔（秒）。NULL＝用 Hub 預設（`board_digest_interval`）。
+    -- 範圍 60～86400，由 PATCH /api/boards/{id} 驗證
+    digest_interval_sec INTEGER,
     -- ⚠️ 預設 **public**，與 room 那邊同一個判斷：把東西悄悄變成私人，等於
     -- 在使用者毫不知情的情況下讓它從別人的列表上消失。這個欄位在 2026-09-03
     -- 之前是死欄位（只有 schema、沒人讀），預設值原本寫的是 private——喚醒
@@ -1232,6 +1235,8 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # 板的結局。既有的板一律是 ''（還在做）——把存量悄悄標成「已完成」會讓
     # 它們一次從 BOARDS 分頁消失，與 visibility 當初的遷移是同一個判斷
     ("board", "outcome", "outcome TEXT NOT NULL DEFAULT ''"),
+    # 該板的 supervisor 摘要間隔（秒）；NULL＝用 Hub 預設
+    ("board", "digest_interval_sec", "digest_interval_sec INTEGER"),
     # 段落的結局。存量一律 ''（還沒標）——與 board.outcome 同一個判斷：
     # 把既有的東西悄悄標成某個結局，等於替沒人管的段落做了決定
     ("board_scratchpad_block", "state", "state TEXT NOT NULL DEFAULT ''"),
@@ -1606,7 +1611,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
 # 資料遷移的版次。**與欄位遷移分開**：補欄位靠「這個欄位在不在」判斷，
 # 天生冪等；改資料沒有那種自然的判準，跑第二次會把使用者後來的修改蓋回去，
 # 所以要一個只前進的版次擋著。用 SQLite 內建的 `user_version`，不另立表。
-DATA_VERSION = 12
+DATA_VERSION = 13
 
 
 async def _migrate_data(db: aiosqlite.Connection) -> None:
@@ -1749,6 +1754,17 @@ async def _migrate_data(db: aiosqlite.Connection) -> None:
         # 不需要回填資料。這一版只是把版次往前推，讓「已有依賴功能」的庫
         # 與舊庫可以分辨。
         pass
+    if version < 13:
+        # supervisor 離場即卸任（艾斯維爾 2026-11-12）：不再保留 left_at 快照。
+        # 既有 left_at 有值的房（已離開、尚未重新指定）直接清空 supervisor 欄位。
+        # 版次只前進；條件只看 left_at 有值，重跑也不會動到後來的指定。
+        await db.execute(
+            "UPDATE room SET board_supervisor_session_key='',"
+            " board_supervisor_name='', board_supervisor_kind='',"
+            " board_supervisor_set_by=NULL, board_supervisor_set_by_name='',"
+            " board_supervisor_set_at=NULL, board_supervisor_left_at=NULL"
+            " WHERE board_supervisor_left_at IS NOT NULL"
+            "   AND board_supervisor_left_at != ''")
     await db.execute(f"PRAGMA user_version={DATA_VERSION}")
 
 

@@ -69,28 +69,58 @@ async def test_my_other_device_sees_and_joins_my_private_room(tmp_path):
         assert j.status_code == 200, j.text
 
 
-async def test_sharing_the_root_token_does_not_make_you_the_same_person(tmp_path):
-    """🚨 **主 token 那一群不算「同一個人」。**
-
-    legacy 模式下 `.env` 的主 token 是所有人共用的那一把（每個 bridge、每個
-    還沒拿到邀請的人都用它）。把它當成一個人的話，拿到它的每一個人——**包含
-    被踢出去的**——都會看見所有私人房，kick 就此失效。
-
-    指派那一側則相反：`.env` 的兩把就是「這台機器上的我和我的 agent」，
-    那正是要放行的。同一個群 id，兩種用途，刻意不同（見 `HOST_PARTY`）。
-    """
-    app, host = await _hub(tmp_path, "party-root-shared")
+async def test_host_agent_sees_and_joins_room_made_with_human_token(tmp_path):
+    """`.env` 的兩把同群：human token 在 App 建的私人房，agent token 的
+    另一個 session 不經指派就看得到、進得去（艾斯維爾裁 2026-11-13）。"""
+    app, host = await _hub(tmp_path, "party-host-agent")
     async with app.router.lifespan_context(app), host:
-        # 兩個人都拿主 token（legacy 模式的實況）
-        await _rooms(host, ROOT, "human-one")
-        await _rooms(host, ROOT, "human-two")
+        await _rooms(host, HUMAN, "human-app")
+        await _rooms(host, ROOT, "claude-agent")
 
         rid = (await host.post("/api/rooms", headers={
-            **_auth(ROOT), "X-Session-Key": "human-one"},
+            **_auth(HUMAN), "X-Session-Key": "human-app"},
             json={"name": "私人", "visibility": "private",
-                  "session_key": "human-one"})).json()["id"]
+                  "session_key": "human-app"})).json()["id"]
 
-        assert rid not in await _rooms(host, ROOT, "human-two")
+        assert rid in await _rooms(host, ROOT, "claude-agent")
+        j = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(ROOT), "X-Session-Key": "claude-agent"},
+            json={"kind": "claude", "role": "agent",
+                  "session_key": "claude-agent"})
+        assert j.status_code == 200, j.text
+
+
+async def test_kicked_host_group_member_is_still_blocked_from_joining(tmp_path):
+    """同群放寬不蓋過踢出：被踢的 session 由 join 的 kicked 檢查擋下。"""
+    app, host = await _hub(tmp_path, "party-host-kicked")
+    async with app.router.lifespan_context(app), host:
+        await _rooms(host, HUMAN, "human-app")
+        await _rooms(host, ROOT, "claude-agent")
+        rid = (await host.post("/api/rooms", headers={
+            **_auth(HUMAN), "X-Session-Key": "human-app"},
+            json={"name": "私人", "visibility": "private",
+                  "session_key": "human-app"})).json()["id"]
+
+        admin_pid = (await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(HUMAN), "X-Session-Key": "human-app"},
+            json={"kind": "human", "role": "human",
+                  "session_key": "human-app"})).json()["participant_id"]
+        pid = (await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(ROOT), "X-Session-Key": "claude-agent"},
+            json={"kind": "claude", "role": "agent",
+                  "session_key": "claude-agent"})).json()["participant_id"]
+
+        k = await host.post(f"/api/rooms/{rid}/participants/{pid}/kick",
+                            headers={**_auth(HUMAN),
+                                     "X-Participant-Id": admin_pid})
+        assert k.status_code == 200, k.text
+
+        j = await host.post(f"/api/rooms/{rid}/join", headers={
+            **_auth(ROOT), "X-Session-Key": "claude-agent"},
+            json={"kind": "claude", "role": "agent",
+                  "session_key": "claude-agent"})
+        assert j.status_code == 403, j.text
+        assert j.json()["detail"]["code"] == "kicked"
 
 
 async def test_someone_elses_private_room_stays_invisible(tmp_path):

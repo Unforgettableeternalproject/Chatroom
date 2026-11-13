@@ -922,11 +922,19 @@ class BoardsApi {
     required String sessionKey,
     String? name,
     String? description,
+    int? digestIntervalSec,
+    bool resetDigestInterval = false,
   }) =>
       unwrap(() async {
         await _dio.patch<Map<String, dynamic>>(
           '/api/boards/$boardId',
-          data: {'name': ?name?.trim(), 'description': ?description},
+          data: {
+            'name': ?name?.trim(),
+            'description': ?description,
+            // 秒數；resetDigestInterval 明確送 null＝改回 Hub 預設
+            'digest_interval_sec': ?digestIntervalSec,
+            if (resetDigestInterval) 'digest_interval_sec': null,
+          },
           options: Options(headers: {'X-Session-Key': sessionKey}),
         );
       });

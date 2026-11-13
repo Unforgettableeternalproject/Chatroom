@@ -99,7 +99,7 @@ async def test_member_who_left_still_keeps_access_after_locking(tmp_path):
 
 
 async def test_kick_is_the_one_thing_that_removes_access(tmp_path):
-    """白名單的出口只有一個：被踢。"""
+    """白名單的出口只有一個：被踢（join 會被擋下）。"""
     app, client = await _make(tmp_path, "gf_kick")
     async with client, app.router.lifespan_context(app):
         rid = (await client.post("/api/rooms", json={
@@ -121,8 +121,17 @@ async def test_kick_is_the_one_thing_that_removes_access(tmp_path):
             headers={"X-Participant-Id": admin_pid})
         assert r.status_code == 200, r.text
 
+        # 開放模式（未設 token）host 群不算同一個人，所以列表仍是出口
         assert rid not in await _room_ids(client, "sess-kicked"), (
-            "被踢之後仍看得到私人房——白名單沒有出口"
+            "被踢之後私人房還在列表上——白名單沒有出口"
+        )
+        # 且 join 也被 kicked 擋下
+        j = await client.post(f"/api/rooms/{rid}/join", json={
+            "kind": "claude", "session_key": "sess-kicked",
+            "preferred_name": "會被踢的人"})
+        assert j.status_code == 403, j.text
+        assert j.json()["detail"]["code"] == "kicked", (
+            "被踢之後還進得了私人房——白名單沒有出口"
         )
 
 
