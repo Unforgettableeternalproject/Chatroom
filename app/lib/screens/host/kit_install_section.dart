@@ -40,7 +40,7 @@ class KitInstallSection extends ConsumerStatefulWidget {
   /// 這台機器上已經有這一包了嗎（有＝按鈕講「更新」）。
   final bool installed;
 
-  /// 已裝的版本，可能帶 `+commit`；比對時只看 `+` 前面那段。
+  /// 已裝的版本，帶 `+commit`；比對規則見 [isSameKitBuild]。
   final String installedVersion;
 
   @override
@@ -147,7 +147,7 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
     }
 
     // 已經是同一版就不必再裝一次——按鈕留著但按不動，理由寫在旁邊
-    final upToDate = installed && _sameVersion(installedVersion, release.version);
+    final upToDate = installed && isSameKitBuild(installedVersion, release);
     final python = ref.watch(kitPythonProvider);
     final missingPython = !python.isLoading && python.value == null;
     final busyRunner =
@@ -380,13 +380,4 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
         text,
         style: UepText.code(size: 11.5, color: context.uep.inkMute),
       );
-
-  /// 已裝的版本可能是 `1.2.3+abcdef`，Release 給的是 `1.2.3`。
-  static bool _sameVersion(String installed, String release) {
-    if (installed.isEmpty || release.isEmpty) return false;
-    final at = installed.indexOf('+');
-    // kit 內的版本字串不帶 `-hotfix<n>`（release.yml 會剝掉），比對時也剝掉
-    final base = release.replaceFirst(RegExp(r'-hotfix\d+$'), '');
-    return (at < 0 ? installed : installed.substring(0, at)) == base;
-  }
 }

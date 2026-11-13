@@ -40,14 +40,13 @@ void main() {
     });
   });
 
-  group('attached_rooms[].supervisor 三種狀態都讀得出來', () {
+  group('attached_rooms[].supervisor 兩種狀態都讀得出來', () {
     AttachedRoom parse(Map<String, dynamic> sup) =>
         AttachedRoom.fromJson({'id': 'r1', 'name': '房', 'supervisor': sup});
 
     test('沒有指派', () {
       final r = AttachedRoom.fromJson({'id': 'r1', 'supervisor': null});
       expect(r.supervisor, isNull);
-      expect(r.supervisorDeparted, isFalse);
     });
 
     test('在任', () {
@@ -58,20 +57,16 @@ void main() {
         'departed': false,
       });
       expect(r.supervisor?.displayName, '艾斯維爾');
-      expect(r.supervisorDeparted, isFalse);
     });
 
-    test('🔴 第三種：人走了但紀錄還在——退場是標記不是清空', () {
+    test('離場即卸任：舊 Hub 帶 departed 也照常讀，不再有已離開狀態', () {
       final r = parse({
         'actor_key': 'k1',
         'display_name': '艾斯維爾',
         'actor_kind': 'human',
         'departed': true,
       });
-      // 只有「有人／沒人」兩種畫法時，這個情況會被畫成「有人在看」，
-      // 而實際上沒有人在看
       expect(r.supervisor, isNotNull);
-      expect(r.supervisorDeparted, isTrue);
     });
   });
 }

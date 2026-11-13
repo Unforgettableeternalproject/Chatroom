@@ -9,17 +9,28 @@ import '../../widgets/uep_button.dart';
 
 /// 依賴／影響欄可以選的卡。
 ///
-/// 沿用 `#` 卡片指涉的候選型別 [CardCandidate]（同一塊板的卡），但條件更寬：
-/// 範圍是**整塊板**（可跨週期、階段），不是只有本房掛接的板。排除自己、已刪除、
-/// 已取消與已搬走的卡——後兩者不會再擋任何事，選了只是噪音。
+/// 沿用 `#` 卡片指涉的候選型別 [CardCandidate]（同一塊板的卡），但只列
+/// **還有意義的卡**：所屬週期是 `active`（`review`＝審核中、`verified`／`done`＝
+/// 已結束、`cancelled`＝已收場都排除）、卡本身沒有取消。另外排除自己、已刪除
+/// 與已搬走的卡——這些不會再擋任何事，選了只是噪音。
+///
+/// 只管「新選」的候選：已存在的依賴不看這裡，照常顯示與移除
+/// （見 [DependencyEditSpec.titles]）。
 List<CardCandidate> dependencyCandidates(BoardSnapshot snap,
     {String? excludeId}) {
+  bool objectiveActive(BoardTask t) {
+    final c = snap.checklists[t.checklistId];
+    final o = c == null ? null : snap.objectives[c.objectiveId];
+    return o != null && !o.deleted && o.status == 'active';
+  }
+
   return [
     for (final t in snap.tasks.values)
       if (t.id != excludeId &&
           !t.deleted &&
           t.status != 'cancelled' &&
-          t.status != 'moved')
+          t.status != 'moved' &&
+          objectiveActive(t))
         CardCandidate(
           boardId: snap.boardId,
           taskId: t.id,

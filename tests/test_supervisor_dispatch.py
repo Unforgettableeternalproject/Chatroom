@@ -202,14 +202,10 @@ async def test_the_supervisor_cannot_dispatch_push(tmp_path):
 
 
 async def test_a_departed_supervisor_can_no_longer_dispatch(tmp_path):
-    """離場之後這條路就關上——`_is_board_supervisor` 把離場排除在外。
-
-    走了就不算（`board_supervisor_left_at` 有值），直到他回來為止——見下面
-    那一條。
-    """
+    """離場即卸任：欄位清空，這條路就關上。"""
     async with _setup(tmp_path, "departed") as (human, agent, rid, owner, sup, runner):
         await agent.post(f"/api/rooms/{rid}/leave", headers=sup)
-        # 還沒回來，但要有一個活著的 participant 才走得到身分閘那一關
+        # 要有一個活著的 participant 才走得到身分閘那一關
         other, _ = await _join_agent(agent, rid, "claude-other", "路人")
         r = await agent.post(f"/api/rooms/{rid}/runs",
                              json=_run(ref="after-left"), headers=other)
@@ -217,17 +213,19 @@ async def test_a_departed_supervisor_can_no_longer_dispatch(tmp_path):
         assert r.json()["detail"]["code"] == "human_token_required_for_run"
 
 
-async def test_a_supervisor_who_came_back_can_dispatch_again(tmp_path):
-    """回來了資格就回來——房裡已經公告過「監督者回來了」。
-
-    回房那條路把 `board_supervisor_left_at` 清成空字串、資格判準問的卻是
-    `IS NULL` 的話，這一條會 403，而畫面上同時寫著他在。
-    """
+async def test_same_key_returning_is_not_the_supervisor_until_reappointed(tmp_path):
+    """同 key 重進不恢復；重新指定之後才又能派工。"""
     async with _setup(tmp_path, "returned") as (human, agent, rid, owner, sup, runner):
         await agent.post(f"/api/rooms/{rid}/leave", headers=sup)
         back, _ = await _join_agent(agent, rid, "claude-sup", "諾薇亞")
         r = await agent.post(f"/api/rooms/{rid}/runs",
                              json=_run(ref="after-return"), headers=back)
+        assert r.status_code == 403, r.text
+
+        r = await _set_supervisor(human, rid, owner, session_key="claude-sup")
+        assert r.status_code == 200, r.text
+        r = await agent.post(f"/api/rooms/{rid}/runs",
+                             json=_run(ref="after-reappoint"), headers=back)
         assert r.status_code == 200, r.text
         assert r.json()["run"]["requester_kind"] == "agent"
 

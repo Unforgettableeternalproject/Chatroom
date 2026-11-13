@@ -75,13 +75,13 @@ class Config:
     hold_max: float = field(
         default_factory=lambda: float(os.environ.get("CHATROOM_HOLD_MAX", "3600"))
     )
-    # Supervisor 摘要的最短間隔（秒）與筆數上限。逐筆 mention 與「喚醒是打擾」
-    # 直接衝突——supervisor 也是一個會被塞滿的 agent。滿間隔**或**滿筆數就發，
-    # 兩個條件先到先送：只看時間會讓一場大改動延遲五分鐘才被看見，只看筆數
-    # 會讓零星的變動永遠湊不滿而不發
+    # Supervisor 摘要的累積時間（秒，從第一筆未送的變動起算）與筆數上限。逐筆 mention 與「喚醒是打擾」直接衝突——
+    # supervisor 也是一個會被塞滿的 agent。滿時間**或**滿筆數就發，兩個條件
+    # 先到先送：只看時間會讓一場大改動延遲整段才被看見，只看筆數會讓零星的
+    # 變動永遠湊不滿而不發
     board_digest_interval: float = field(
         default_factory=lambda: float(
-            os.environ.get("CHATROOM_BOARD_DIGEST_INTERVAL", "300"))
+            os.environ.get("CHATROOM_BOARD_DIGEST_INTERVAL", "900"))
     )
     board_digest_max: int = field(
         default_factory=lambda: int(os.environ.get("CHATROOM_BOARD_DIGEST_MAX", "20"))

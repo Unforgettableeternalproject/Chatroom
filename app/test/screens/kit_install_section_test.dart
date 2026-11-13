@@ -134,6 +134,72 @@ void main() {
     expect(find.text('已經是 Release 上那一版'), findsOneWidget);
   });
 
+  group('已裝版本與 Release 的比對（熱修不能被當成同一版）', () {
+    const hotfix2 = KitRelease(tag: 'v1.2.8-hotfix2', commit: 'f000c9b8dced',
+        assets: {'chatroom-hub-kit.zip': 'https://example.invalid/hub.zip'});
+
+    Future<void> pumpHub(WidgetTester tester, String installed,
+        {KitRelease found = hotfix2}) async {
+      await tester.pumpWidget(wrap(
+        KitInstallSection(
+            kit: KitId.hub, installed: true, installedVersion: installed),
+        found: found,
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    for (final installed in [
+      '1.2.8',
+      '1.2.8+aaaaaaaaaaaa',
+      '1.2.8+bbbbbbbbbbbb', // hotfix1 的 commit
+      '1.2.8-hotfix1 bbbbbbbbbbbb',
+    ]) {
+      testWidgets('🔴 已裝 $installed、Release 是 hotfix2 → 不停用', (tester) async {
+        await pumpHub(tester, installed);
+        expect(buttonNamed(tester, '更新').onPressed, isNotNull,
+            reason: 'Hub 還沒有 hotfix2 的修正');
+      });
+    }
+
+    testWidgets('🔴 已裝 hotfix2（commit 相同）→ 停用', (tester) async {
+      await pumpHub(tester, '1.2.8+f000c9b8dced');
+      expect(buttonNamed(tester, '更新').onPressed, isNull);
+      expect(find.text('已經是 Release 上那一版'), findsOneWidget);
+    });
+
+    testWidgets('已裝 hotfix2（短 hash）→ 停用', (tester) async {
+      await pumpHub(tester, '1.2.8-hotfix2 f000c9b');
+      expect(buttonNamed(tester, '更新').onPressed, isNull);
+    });
+
+    testWidgets('🔴 commit 不同、版本字串相同 → 不停用', (tester) async {
+      await pumpHub(tester, '1.2.8+aaaaaaaaaaaa');
+      expect(buttonNamed(tester, '更新').onPressed, isNotNull);
+    });
+
+    testWidgets('🔴 已裝是 -dirty → 不停用', (tester) async {
+      await pumpHub(tester, '1.2.8+f000c9b8dced-dirty');
+      expect(buttonNamed(tester, '更新').onPressed, isNotNull);
+    });
+
+    testWidgets('🔴 資訊缺漏（已裝版本讀不到）→ 不停用', (tester) async {
+      await pumpHub(tester, '');
+      expect(buttonNamed(tester, '更新').onPressed, isNotNull);
+    });
+
+    testWidgets('Release 沒有 commit：只比完整版本字串，hotfix 不剝',
+        (tester) async {
+      const noCommit = KitRelease(tag: 'v1.2.8-hotfix2', assets: {
+        'chatroom-hub-kit.zip': 'https://example.invalid/hub.zip'
+      });
+      await pumpHub(tester, '1.2.8+f000c9b8dced', found: noCommit);
+      expect(buttonNamed(tester, '更新').onPressed, isNotNull,
+          reason: '1.2.8 與 1.2.8-hotfix2 不是同一個字串');
+      await pumpHub(tester, '1.2.8-hotfix2', found: noCommit);
+      expect(buttonNamed(tester, '更新').onPressed, isNull);
+    });
+  });
+
   testWidgets('🔴 這一版沒有對應的 Release → 沒有按鈕，只有說明', (tester) async {
     await tester.pumpWidget(wrap(
       const KitInstallSection(kit: KitId.hub, installed: false),

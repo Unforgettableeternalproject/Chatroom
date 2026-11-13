@@ -15,6 +15,8 @@ class BoardContributions {
     this.outcome = '',
     this.myRole = '',
     this.ownerName = '',
+    this.digestIntervalSec,
+    this.digestIntervalDefault = 900,
     this.entries = const [],
     this.total = 0,
     this.hasMore = false,
@@ -33,6 +35,12 @@ class BoardContributions {
   /// owner / editor / viewer。只有 owner 改得動名稱與描述。
   final String myRole;
   final String ownerName;
+
+  /// 該板的 supervisor 摘要間隔（秒）。`null`＝用 Hub 預設。
+  final int? digestIntervalSec;
+
+  /// Hub 預設的摘要間隔（秒），舊 Hub 沒說時當 900。
+  final int digestIntervalDefault;
 
   /// 這一頁的紀錄，新的在前。
   final List<ContributionEntry> entries;
@@ -56,6 +64,8 @@ class BoardContributions {
     outcome: next.outcome,
     myRole: next.myRole,
     ownerName: next.ownerName,
+    digestIntervalSec: next.digestIntervalSec,
+    digestIntervalDefault: next.digestIntervalDefault,
     entries: [...entries, ...next.entries],
     total: next.total,
     hasMore: next.hasMore,
@@ -72,6 +82,8 @@ class BoardContributions {
       outcome: (board['outcome'] as String?) ?? '',
       myRole: (board['my_role'] as String?) ?? '',
       ownerName: (board['owner_name'] as String?) ?? '',
+      digestIntervalSec: board['digest_interval_sec'] as int?,
+      digestIntervalDefault: (board['digest_interval_default'] as int?) ?? 900,
       entries: [
         for (final e in (json['entries'] as List?) ?? const [])
           ContributionEntry.fromJson(e as Map<String, dynamic>),

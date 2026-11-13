@@ -6,7 +6,7 @@ import '../../l10n/l10n.dart';
 import '../../widgets/uep_button.dart';
 
 /// 週期抬頭的敘述最多顯示幾行；超過就截斷，全文放進「展開」的對話框。
-const int kObjectiveDescriptionMaxLines = 4;
+const int kObjectiveDescriptionMaxLines = 2;
 
 /// 週期敘述的固定高度區塊（未分類與其他週期共用同一個抬頭）。
 ///
@@ -23,8 +23,8 @@ class ObjectiveDescription extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = _style(context);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
+    return SizedBox(
+      width: double.infinity,
       child: LayoutBuilder(builder: (context, box) {
         final painter = TextPainter(
           text: TextSpan(text: text, style: style),

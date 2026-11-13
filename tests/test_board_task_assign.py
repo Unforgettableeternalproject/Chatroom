@@ -450,14 +450,11 @@ async def test_the_supervisor_assigns_directly(tmp_path):
             assert card["assignee_participant_id"] ==                 worker["X-Participant-Id"]
 
 
-async def test_a_departed_supervisor_regains_the_privilege_on_return(tmp_path):
-    """**退場期間不算，回來就算。**
+async def test_a_departed_supervisor_needs_reappointment(tmp_path):
+    """**離場即卸任（艾斯維爾 2026-11-12）。**
 
-    監督者是綁在 session_key 上的角色（艾斯維爾 2026-09-14）：離場時
-    `board_supervisor_left_at` 標上，資格跟著停；同一把 key 回房就清成 NULL，
-    資格恢復。曾經只因回房寫成空字串而看似「退場了就永遠不算」，那是缺陷
-    不是規則（2026-09-19 修）。退場期間不算由 `_board_supervisor_room` 的
-    `IS NULL` 判準與 test_supervisor_dispatch 的對照組守著。
+    同一把 key 回房不恢復，只能當一般成員（降級成請求）；重新指定之後
+    才又能直接指派。
     """
     app, client = await _client(tmp_path, "assign_sup_left")
     async with client:
@@ -470,12 +467,17 @@ async def test_a_departed_supervisor_regains_the_privilege_on_return(tmp_path):
                                       headers=sup)).status_code == 200
 
             back = await _join(client, rid, "agent-sup", "監督者")
-            r = await client.post(
-                f"/api/board/tasks/{tid}/assign",
-                json={"target_participant_id": worker["X-Participant-Id"]},
-                headers=back)
+            body = {"target_participant_id": worker["X-Participant-Id"]}
+            r = await client.post(f"/api/board/tasks/{tid}/assign",
+                                  json=body, headers=back)
             assert r.status_code == 200, r.text
-            assert r.json()["assigned"] is True, "回房的監督者應該拿回直接指派的權限"
+            assert r.json()["assigned"] is False, "同 key 回房不該恢復直接指派"
+
+            await _make_supervisor(client, rid, boss, "agent-sup")
+            r = await client.post(f"/api/board/tasks/{tid}/assign",
+                                  json=body, headers=back)
+            assert r.status_code == 200, r.text
+            assert r.json()["assigned"] is True, "重新指定後應拿回直接指派"
 
 
 async def test_an_ordinary_member_still_only_asks(tmp_path):

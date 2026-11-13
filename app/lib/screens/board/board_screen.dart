@@ -6,6 +6,7 @@ import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../models/board.dart';
+import '../../models/board_task_filter.dart';
 import '../../state/app_providers.dart';
 import '../../state/board_providers.dart';
 import '../../state/scratchpad_providers.dart';
@@ -28,6 +29,7 @@ import 'board_outcome_dialog.dart';
 import 'board_release_dialog.dart';
 import 'board_create_dialog.dart';
 import 'board_dependency_picker.dart';
+import 'board_filter_bar.dart';
 import 'board_move_dialog.dart';
 import 'board_split_inbox_dialog.dart';
 import 'board_task_drawer.dart';
@@ -159,6 +161,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
 
   /// 只看孤兒。**不持久化**——它是「我現在要處理這批」，不是一個偏好。
   bool _orphansOnly = false;
+
+  /// 卡片篩選（關鍵字／狀態／依賴／認領）。同樣不持久化。
+  BoardTaskFilter _filter = const BoardTaskFilter();
+
+  /// 篩選列是否展開；預設收合，收合不影響已設的條件。
+  bool _filterOpen = false;
 
   /// 收起來的階段。同樣不持久化：它是這一次的閱讀動作。
   final Set<String> _collapsed = {};
@@ -431,7 +439,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
   /// 同時守住了另一件事：**篩選過的清單送出去就是子集合**，而 Hub 依收到
   /// 的順序寫 order_index，沒送的保留舊值 ⇒ 兩批號碼交錯，順序變成未定義
   /// （@審核用Codex-2 #411 第 3 條）。拿掉這個條件的人要先解決那一半。
-  bool get _canReorder => !_readOnly && !_orphansOnly && _boardIdOrNull != null;
+  ///
+  /// 卡片篩選（[_filter]）是同一個理由：篩過的清單就是子集合。
+  bool get _canReorder =>
+      !_readOnly &&
+      !_orphansOnly &&
+      !_filter.isActive &&
+      _boardIdOrNull != null;
 
   /// 把 [ids] 依 Flutter 的 old/new index 語意搬一格，然後整批送出。
   ///
@@ -929,9 +943,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
             // 東西——留著只會讓人以為板層級還有一份 supervisor 可以退。
             // 板軸的彙整在 supervisor 面板裡，唯讀（`roomSupervisors`）
             name: _roomSupervisor(snap)?.displayName ?? '',
-            departed: widget.roomId != null &&
-                (snap?.attachedRooms[widget.roomId!]?.supervisorDeparted ??
-                    false),
             onTap: () => showSupervisorPanel(context,
                 boardId: _boardIdOrNull!, roomId: widget.roomId),
           ),
@@ -1351,23 +1362,62 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final stats = _statsOf(snap, o);
     final checklists = snap.checklistsOf(o.id);
 
-    // 週期的抬頭與孤兒橫幅**不跟著捲**：橫幅講的是「這塊板現在有問題」，
-    // 捲下去看任務時它更該留著
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _objectiveHeader(context, snap, o, stats),
-        if (o.status == 'active' && (o.release?.blockedReopened ?? false))
-          Padding(
-            padding: const EdgeInsets.fromLTRB(26, 8, 26, 0),
-            child: Text(AppLocalizations.of(context).boardReleaseBlockedReopened,
-                style: UepText.mono(size: 11, color: UepColors.error)),
-          ),
-        if (stats.orphans > 0) _orphanBanner(context, snap, o, stats),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(26, 20, 26, 48),
+    // 「只看孤兒」只在橫幅（有孤兒）存在時有退出入口；孤兒歸零或切到沒有
+    // 孤兒的週期時橫幅會消失，所以這裡一併回到正常檢視，免得被困在空清單
+    if (_orphansOnly && stats.orphans == 0) _orphansOnly = false;
+
+    // 抬頭、說明、進度與孤兒橫幅跟著卡片一起捲（小視窗下它們會吃掉大半個
+    // 欄位）；只有篩選列釘在頂端
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              _objectiveHeader(context, snap, o, stats),
+              if (o.status == 'active' && (o.release?.blockedReopened ?? false))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(kBoardPaneGutter, 8, kBoardPaneGutter, 0),
+                  child: Text(
+                      AppLocalizations.of(context).boardReleaseBlockedReopened,
+                      style: UepText.mono(size: 11, color: UepColors.error)),
+                ),
+              if (stats.orphans > 0) _orphanBanner(context, snap, o, stats),
+            ],
+          ),
+        ),
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _PinnedBarDelegate(
+            height: kBoardFilterToggleHeight,
+            color: s.bg,
+            child: BoardFilterToggle(
+              filter: _filter,
+              open: _filterOpen,
+              onTap: () => setState(() => _filterOpen = !_filterOpen),
+            ),
+          ),
+        ),
+        // 收合時條件照樣生效（[_filter] 不動），只是不畫輸入列
+        if (_filterOpen)
+          SliverToBoxAdapter(
+            child: BoardFilterBar(
+              filter: _filter,
+              onChanged: (f) => setState(() => _filter = f),
+            ),
+          ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(kBoardPaneGutter, 8, kBoardPaneGutter, 48),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              if (_filter.isActive &&
+                  _filter.apply(_tasksOf(snap, o)).isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(AppLocalizations.of(context).boardFilterNoMatch,
+                      key: const ValueKey('board-filter-no-match'),
+                      style: UepText.mono(size: 11.5, color: s.inkMute)),
+                ),
               // 凍結沿著三層往下傳：Hub 擋的是「這個週期底下的任何寫入」，
               // 所以階段與任務的入口也要一起收（判準在 `o.frozen`，不在
               // 這裡各自比對狀態）
@@ -1399,12 +1449,21 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                     ),
                   ),
               ],
-            ],
+            ]),
           ),
         ),
       ],
     );
   }
+
+  /// 按鈕之間插固定間距，**尾端不留空**——尾端多一格就會讓這排的右緣
+  /// 比卡片列往內縮。
+  List<Widget> _gapped(List<Widget> items) => [
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          items[i],
+        ],
+      ];
 
   /// 階段清單。可以拖就是 ReorderableListView（把手在每段標題列最前面），
   /// 否則退回 Column——不留拖不動的把手。凍結的週期連 `reorder` 都 409，
@@ -1454,7 +1513,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
       BoardObjective o, _Stats stats) {
     final s = context.uep;
     return Container(
-      padding: const EdgeInsets.fromLTRB(26, 22, 26, 18),
+      padding: const EdgeInsets.fromLTRB(kBoardPaneGutter, 22, kBoardPaneGutter, 18),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: s.hairline)),
       ),
@@ -1469,15 +1528,13 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(o.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: UepText.pageTitle(color: s.inkTitle,
                             height: 1.25)),
                     if (ref.watch(appConfigProvider.select((c) => c.devMode)))
                       CopyableId(value: o.id),
                     if (o.isInbox) _inboxPageBar(context, snap, o),
-                    if (o.description.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      ObjectiveDescription(text: o.description),
-                    ],
                   ],
                 ),
               ),
@@ -1499,6 +1556,12 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               _closeoutActions(context, o, stats),
             ],
           ),
+          // 說明放在標題／按鈕那一列的下方、佔滿整個窗格寬度，
+          // 不被擠在左欄裡讓右半邊空著
+          if (o.description.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ObjectiveDescription(text: o.description),
+          ],
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
@@ -1833,7 +1896,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     // 橫貫整寬的一條帶，不是左邊框的方塊：它講的是整塊板的狀況，
     // 不從屬於底下任何一段
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 11),
+      padding: const EdgeInsets.symmetric(horizontal: kBoardPaneGutter, vertical: 11),
       decoration: BoxDecoration(
         color: UepColors.error.withValues(alpha: .07),
         border: Border(
@@ -1849,13 +1912,15 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   size: 10, color: UepColors.error, letterSpacing: 1.4)),
           if (lines.isNotEmpty) ...[
             const SizedBox(width: 12),
-            Flexible(
+            // Expanded 而不是 Flexible + Spacer：兩者各分一半剩餘空間，
+            // 文字用不滿的那一半就變成按鈕右邊的空白，右緣對不齊卡片列
+            Expanded(
               child: Text(AppLocalizations.of(context).boardOrphanLines(lines),
                   overflow: TextOverflow.ellipsis,
                   style: UepText.serif(size: 13.5, color: s.inkSoft)),
             ),
-          ],
-          const Spacer(),
+          ] else
+            const Spacer(),
           const SizedBox(width: 12),
           _BarButton(
             label: _orphansOnly
@@ -1946,6 +2011,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
+    tasks = _filter.apply(tasks);
     if (tasks.isEmpty) return const SizedBox.shrink();
 
     final loose = tasks.where((t) => !t.isSettled).length;
@@ -1988,7 +2054,10 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
     final s = context.uep;
     var tasks = snap.tasksOf(c.id);
     if (_orphansOnly) tasks = tasks.where((t) => t.isOrphaned).toList();
-    if (_orphansOnly && tasks.isEmpty) return const SizedBox.shrink();
+    tasks = _filter.apply(tasks);
+    if ((_orphansOnly || _filter.isActive) && tasks.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     // 取消或搬走的卡不進分母——它已經不在這份清單的帳上
     // （同 BoardSnapshot.countableTasks）
@@ -2097,11 +2166,11 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
               // 取消／重新開啟）。Hub 對這些一律 409 `objective_closed`，
               // 而「重新開啟階段」尤其要收：它看起來正是那個解凍的動作，
               // 按下去卻打不開任何東西——真正的解凍在上面一層（打回週期）
+              ..._gapped([
               if (!_readOnly && !frozen) ...[
                 _BarButton(
                     label: AppLocalizations.of(context).commonEdit,
                     onTap: () => _editChecklist(c)),
-                const SizedBox(width: 8),
                 // 階段的收尾。**沒有這個入口，週期就送不出審**——Hub 的送審
                 // 閘驗的是 Checklist 收尾了沒，而 completeChecklist() 一直
                 // 有實作、一直沒有呼叫端，於是每一份清單都永遠停在 open
@@ -2121,7 +2190,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                       boardId: _boardIdOrNull ?? '',
                     ),
                   ),
-                  const SizedBox(width: 8),
                 ],
                 // 加素材的入口在素材清單底部（見 StageFilesList.onAdd）：
                 // 要加東西的人是先看過已經有什麼才決定加的
@@ -2135,7 +2203,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         hostReasonTitle: AppLocalizations.of(context)
                             .hostReasonChecklistStatusTitle),
                   ),
-                  const SizedBox(width: 8),
                   _BarButton(
                     label: AppLocalizations.of(context).boardChecklistCancel,
                     onTap: () => runBoardAction(
@@ -2145,7 +2212,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         hostReasonTitle: AppLocalizations.of(context)
                             .hostReasonChecklistStatusTitle),
                   ),
-                  const SizedBox(width: 8),
                 ] else if (c.status == 'done') ...[
                   _BarButton(
                     label: AppLocalizations.of(context).boardChecklistReopen,
@@ -2156,7 +2222,6 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                         hostReasonTitle: AppLocalizations.of(context)
                             .hostReasonChecklistStatusTitle),
                   ),
-                  const SizedBox(width: 8),
                 ],
               ],
               // 🔴 **收尾了就不再收新卡。**
@@ -2178,6 +2243,7 @@ class _BoardScreenState extends ConsumerState<BoardScreen> {
                   onTap: () =>
                       _create('task', parentId: c.id, parentTitle: c.title),
                 ),
+            ]),
             ],
           ),
           if (collapsed) const SizedBox(height: 4),
@@ -2612,16 +2678,10 @@ class _SupervisorPill extends StatelessWidget {
   const _SupervisorPill({
     required this.name,
     required this.onTap,
-    this.departed = false,
   });
 
   /// 現任 Supervisor 的名字。空字串＝還沒指定。
   final String name;
-
-  /// 那個人已經離開這間房了。**退場是標記不是清空**，所以膠囊上要說得出
-  /// 第三種狀態——只有「有人」與「沒人」兩種畫法時，這個情況會被畫成
-  /// 「有人在看」，而實際上沒有。
-  final bool departed;
 
   final VoidCallback onTap;
 
@@ -2647,24 +2707,39 @@ class _SupervisorPill extends StatelessWidget {
             // 後者看起來像名字讀不出來，而那是完全不同的一件事
             empty
                 ? AppLocalizations.of(context).boardSupervisorPillNone
-                : departed
-                    ? AppLocalizations.of(context)
-                        .boardSupervisorPillDeparted(name.toUpperCase())
-                    : AppLocalizations.of(context)
-                        .boardSupervisorPill(name.toUpperCase()),
+                : AppLocalizations.of(context)
+                    .boardSupervisorPill(name.toUpperCase()),
             style: UepText.mono(
                 size: 10,
-                color: empty
-                    ? s.inkMute
-                    : departed
-                        ? UepColors.gold
-                        : s.inkSoft,
+                color: empty ? s.inkMute : s.inkSoft,
                 letterSpacing: 1.2),
           ),
         ]),
       ),
     );
   }
+}
+
+/// 釘在捲動清單頂端的固定高度列（篩選列）；要有底色，不然捲上來的卡會透出來。
+class _PinnedBarDelegate extends SliverPersistentHeaderDelegate {
+  _PinnedBarDelegate(
+      {required this.height, required this.color, required this.child});
+
+  final double height;
+  final Color color;
+  final Widget child;
+
+  @override
+  double get minExtent => height;
+  @override
+  double get maxExtent => height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
+      Material(color: color, child: child);
+
+  @override
+  bool shouldRebuild(_PinnedBarDelegate old) => true;
 }
 
 class _BarButton extends StatelessWidget {

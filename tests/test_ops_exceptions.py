@@ -96,9 +96,9 @@ async def _running_run(client, rid, hdr, runner, ref="task-1"):
     return run_id
 
 
-async def _exceptions(client, key="human-a", **params):
+async def _exceptions(client, key="human-a", headers=None, **params):
     r = await client.get("/api/ops/exceptions", params=params,
-                         headers={"X-Session-Key": key})
+                         headers={**(headers or {}), "X-Session-Key": key})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -219,7 +219,12 @@ async def test_private_room_events_need_standing(tmp_path):
             mine = await _exceptions(client, key="human-a")
             assert [e["run_ref"] for e in mine["exceptions"]] == ["secret-1"]
 
-            stranger = await _exceptions(client, key="human-zzz")
+            # 新規則：host 群（root token）算同一個人，陌生人得是群外的人
+            tok = (await client.post("/api/tokens",
+                                     json={"label": "stranger"})).json()["token"]
+            stranger = await _exceptions(
+                client, key="human-zzz",
+                headers={"Authorization": f"Bearer {tok}"})
             assert stranger["exceptions"] == []
 
             # 主持人視角：他要看的正是自己沒份的房

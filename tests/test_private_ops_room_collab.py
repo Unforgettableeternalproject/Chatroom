@@ -52,9 +52,17 @@ async def _room(client, kind="ops", key=OWNER, name="工作房",
     return r.json()["id"]
 
 
+async def _outsider_headers(client):
+    """另一個人的憑證（自成一群）。host 群算同一個人（艾斯維爾裁
+    2026-11-13），沒被邀請的路人得是 host 群之外的人。"""
+    r = await client.post("/api/tokens", json={"label": "outsider"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
 async def _join(client, rid, key, name, kind="human", role="human",
-               expect=200):
-    r = await client.post(f"/api/rooms/{rid}/join",
+               expect=200, headers=None):
+    r = await client.post(f"/api/rooms/{rid}/join", headers=headers,
                           json={"kind": kind, "role": role,
                                 "session_key": key, "preferred_name": name})
     assert r.status_code == expect, r.text
@@ -233,12 +241,15 @@ async def test_private_ops_room_full_collaboration_flow(tmp_path):
         assert prow["run_id"] == claimed_id
 
         # ---- 6a. 反向：沒被邀請的人類、agent 進不來 ----
+        outsider = await _outsider_headers(client)
         r = await _join(client, rid, OUTSIDER_HUMAN, "路人",
-                        kind="human", role="human", expect=403)
+                        kind="human", role="human", expect=403,
+                        headers=outsider)
         assert r.json()["detail"]["code"] == "room_is_private"
 
         r = await _join(client, rid, OUTSIDER_AGENT, "路過的agent",
-                        kind="claude", role="agent", expect=403)
+                        kind="claude", role="agent", expect=403,
+                        headers=outsider)
         assert r.json()["detail"]["code"] == "room_is_private"
 
         # ---- 6b. 被邀請者（非房主）動不了工作區 ----

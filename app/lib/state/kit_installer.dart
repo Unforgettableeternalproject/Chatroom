@@ -119,7 +119,17 @@ String kitReleaseApiUrl(String version, {int hotfix = 0}) =>
 @immutable
 class KitRelease {
   const KitRelease(
-      {required this.tag, required this.assets, this.publishedAt});
+      {required this.tag,
+      required this.assets,
+      this.publishedAt,
+      this.commit = ''});
+
+  /// 這個 tag 指向的 commit；**取不到就是空字串**，比對時退回版本字串。
+  /// Release 的 JSON 不帶它，由 `kitReleaseProvider` 補上。
+  final String commit;
+
+  KitRelease withCommit(String commit) => KitRelease(
+      tag: tag, assets: assets, publishedAt: publishedAt, commit: commit);
 
   /// Release 的發布時間；取不到是 `null`。
   final DateTime? publishedAt;
@@ -154,6 +164,47 @@ class KitRelease {
     return KitRelease(
         tag: tag, assets: assets, publishedAt: parseReleaseTime(json));
   }
+}
+
+/// 已裝的那包與 Release 是不是**同一個 build**。
+///
+/// - 兩邊都有 commit（且都不是 `-dirty`）：只比 commit，前綴相符即同一個。
+///   hotfix 不動 `APP_VERSION`，Hub／Runner 的 `_build.json` 版本字串在 1.2.8
+///   與 1.2.8-hotfix2 之間完全相同，只有 commit 分得出來。
+/// - 缺任何一邊的 commit：比完整版本字串（含 `-hotfix<n>`，不剝）。
+/// - 判不出來（任一邊空、含 `-dirty`）一律回 `false`：寧可多給一次更新，
+///   也不擋住真正需要的更新。
+///
+/// 已裝字串可以是 `1.2.8+f000c9b8dced`（`_build.json` 組出來的）或
+/// `1.2.8-hotfix1 f000c9b8dced`（`VERSION.txt` 的格式）。
+bool isSameKitBuild(String installed, KitRelease release) {
+  final (installedVersion, installedCommit) = _splitBuildId(installed);
+  final releaseVersion = release.version.trim();
+  if (installedVersion.isEmpty || releaseVersion.isEmpty) return false;
+  final releaseCommit = release.commit.trim();
+  if (installedCommit.endsWith('-dirty') || releaseCommit.endsWith('-dirty')) {
+    return false;
+  }
+  if (installedCommit.isNotEmpty && releaseCommit.isNotEmpty) {
+    // 短 hash 長度不一，用前綴比；太短的前綴不可信
+    final short = installedCommit.length <= releaseCommit.length
+        ? installedCommit
+        : releaseCommit;
+    final long = identical(short, installedCommit) ? releaseCommit : installedCommit;
+    return short.length >= 7 && long.startsWith(short);
+  }
+  return installedVersion == releaseVersion;
+}
+
+(String, String) _splitBuildId(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return ('', '');
+  final plus = text.indexOf('+');
+  if (plus >= 0) {
+    return (text.substring(0, plus).trim(), text.substring(plus + 1).trim());
+  }
+  final parts = text.split(RegExp(r'\s+'));
+  return (parts.first, parts.length > 1 ? parts[1] : '');
 }
 
 /// HTTP 取用。測試換成 fake——**不打真網路**。
@@ -592,10 +643,18 @@ final kitInstallerProvider = Provider<KitInstaller>((ref) => KitInstaller(
 /// 今天的 kit，而兩邊的契約未必還相容。
 final kitReleaseProvider = FutureProvider<KitRelease?>((ref) async {
   try {
-    return await ref
+    final found = await ref
         .watch(kitInstallerProvider)
         .fetchRelease(BuildInfo.current.version,
             hotfix: BuildInfo.current.hotfix);
+    // 這份 App 就是從那個 tag 的 commit 打出來的（release.yml 四個產物同一顆
+    // commit），所以 tag 的 commit ＝ App 自己的 commit。-dirty 對不回任何
+    // commit，不當作身分
+    final appCommit = BuildInfo.current.commit;
+    if (found == null || appCommit.isEmpty || BuildInfo.current.isDirty) {
+      return found;
+    }
+    return found.withCommit(appCommit);
   } on Object {
     // 連不到 GitHub 與「沒有這一版」在畫面上是同一件事：按鈕按不得。
     return null;

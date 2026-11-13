@@ -199,6 +199,8 @@ async def test_response_shape_is_pinned(tmp_path):
             "filtered",
             # v1.2.8-hotfix1：房軸也回 Supervisor 指示，依水位增量
             "directives", "directives_has_more",
+            # 板的摘要間隔（null＝用 Hub 預設）與 Hub 預設值
+            "digest_interval_sec", "digest_interval_default",
         }
         assert set(body["objectives"][0]) == {
             "id", "room_id", "title", "description", "status", "order_index",

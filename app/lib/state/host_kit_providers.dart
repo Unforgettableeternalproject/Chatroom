@@ -45,6 +45,31 @@ final hostKitProvider = FutureProvider<HostKit?>((ref) async {
   }
 });
 
+/// 這台機器上 Hub 主持包的版本：`server/chatroom_server/_build.json`。
+/// 讀不到回空字串——安裝區塊就不會把它當成「已經是最新」。
+final hostKitVersionProvider = FutureProvider<String>((ref) async {
+  final kit = await ref.watch(hostKitProvider.future);
+  if (kit == null) return '';
+  return readHostKitVersion(kit.kitRoot);
+});
+
+Future<String> readHostKitVersion(String kitRoot) async {
+  final sep = Platform.pathSeparator;
+  try {
+    final build = File(
+        [kitRoot, 'server', 'chatroom_server', '_build.json'].join(sep));
+    if (!await build.exists()) return '';
+    final json = jsonDecode(await build.readAsString());
+    if (json is! Map) return '';
+    final version = (json['version'] as String?) ?? '';
+    final commit = (json['commit'] as String?) ?? '';
+    if (version.isEmpty) return '';
+    return commit.isEmpty ? version : '$version+$commit';
+  } on Object {
+    return '';
+  }
+}
+
 /// Hub 現在的設定，從 `server/.env` **現讀**。
 ///
 /// 不快取跨 session：主持人改完 `.env` 會期待畫面跟著變，而那正是他改它的

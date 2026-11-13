@@ -22,7 +22,7 @@ void main() {
 
     final textBox = tester.getSize(
         find.byKey(const ValueKey('objective-description-text')));
-    // 4 行 × 14 × 1.85 ≈ 104；40 行不截斷會超過 1000
+    // 2 行 × 14 × 1.85 ≈ 52；40 行不截斷會超過 1000
     expect(textBox.height, lessThan(130));
     expect(find.byKey(const ValueKey('objective-description-expand')),
         findsOneWidget);

@@ -339,6 +339,68 @@ async def test_a_subagent_of_the_run_member_goes_with_it(tmp_path):
         assert (await _row(app, sub_id))["status"] == "left"
 
 
+async def _run_member_subagent_supervisor(client, rid, hdr, run_id):
+    """run 成員旗下的 subagent 被指定為 supervisor；回 (父層, 子代理 id)。"""
+    parent_key = f"claude-run-{run_id}"
+    _, parent = await _join_agent(client, rid, parent_key, "Runner")
+    r = await client.post(f"/api/rooms/{rid}/join", json={
+        "kind": "claude", "role": "agent",
+        "session_key": f"{parent_key}#sub-1", "preferred_name": "worker",
+        "parent_participant_id": parent["participant_id"]})
+    assert r.status_code == 200, r.text
+    sub_id = r.json()["participant_id"]
+    r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"participant_id": sub_id},
+                          headers={"X-Session-Key": "human-a"})
+    assert r.status_code == 200, r.text
+    return parent["participant_id"], sub_id
+
+
+async def _supervisor_key(app, rid):
+    row = await (await app.state.db.execute(
+        "SELECT board_supervisor_session_key AS k FROM room WHERE id=?",
+        (rid,))).fetchone()
+    return row["k"]
+
+
+@pytest.mark.parametrize("final_status", ["done", "failed", "cancelled", "handoff"])
+async def test_run_ending_unseats_a_subagent_supervisor(tmp_path, final_status):
+    """run 成員的 subagent 是 supervisor：run 收場（含 handoff）要卸任。
+
+    subagent 的 session_key（`claude-run-<id>#sub-1`）對不上 run id、
+    `participant.run_id` 也是空的，只用 run_id 查 key 會漏掉它。
+    """
+    app, client = await _client(tmp_path, f"sup-{final_status}")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, sub_id = await _run_member_subagent_supervisor(
+            client, rid, hdr, run_id)
+        assert await _supervisor_key(app, rid) == f"claude-run-{run_id}#sub-1"
+
+        await _report(client, run_id, runner, final_status)
+
+        assert (await _row(app, sub_id))["status"] == "left"
+        assert await _supervisor_key(app, rid) == "", "subagent 已隨 run 離場"
+
+
+async def test_capped_handoff_unseats_a_subagent_supervisor(tmp_path):
+    """交接鏈撞上限那條 return 也要卸任。"""
+    app, client = await _client(tmp_path, "sup-capped", run_handoff_max=0)
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        await _run_member_subagent_supervisor(client, rid, hdr, run_id)
+
+        out = await _report(client, run_id, runner, "handoff")
+        assert out["run"]["status"] == "failed"
+        assert await _supervisor_key(app, rid) == ""
+
+
 # ── handoff：卡要空出來給下一棒 ──────────────────────────────────────
 
 async def _board_task(client, rid, hdr):
@@ -606,10 +668,21 @@ async def test_a_subagent_does_not_take_over_the_title(tmp_path):
 
 # ── 私人工作房 ───────────────────────────────────────────────────────
 
-async def _try_join(client, rid, key, name="Runner"):
-    return await client.post(f"/api/rooms/{rid}/join",
+async def _try_join(client, rid, key, name="Runner", headers=None):
+    return await client.post(f"/api/rooms/{rid}/join", headers=headers,
                              json={"kind": "claude", "role": "agent",
                                    "session_key": key, "preferred_name": name})
+
+
+async def _outsider_headers(client):
+    """另一個人的憑證（自成一群）。
+
+    私人房可見度：`.env` 的 host 群算同一個人（艾斯維爾裁 2026-11-13），
+    所以「進不來的人」得是 host 群之外的人，不能再用同一把 root token 冒充。
+    """
+    r = await client.post("/api/tokens", json={"label": "outsider"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
 async def test_a_run_can_enter_the_private_room_that_dispatched_it(tmp_path):
@@ -661,7 +734,9 @@ async def test_a_finished_run_cannot_enter_the_private_room(tmp_path):
         run_id = await _dispatch_running(client, rid, hdr, runner)
         await _report(client, run_id, runner, "done", summary="做完了")
 
-        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        # 新規則：host 群內的 session 本來就進得來，豁免邊界要用 host 群之外的人驗
+        r = await _try_join(client, rid, f"claude-run-{run_id}",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"
 
@@ -679,7 +754,9 @@ async def test_a_queued_run_cannot_enter_the_private_room_yet(tmp_path):
                   "ref": "T-9", "brief": "等一下"},
             headers=hdr)).json()["run"]["id"]
 
-        r = await _try_join(client, rid, f"claude-run-{run_id}")
+        # 新規則：host 群內的 session 本來就進得來，豁免邊界要用 host 群之外的人驗
+        r = await _try_join(client, rid, f"claude-run-{run_id}",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"
 
@@ -691,6 +768,8 @@ async def test_an_ordinary_agent_still_needs_an_invitation(tmp_path):
         rid = await _ops_room(client, visibility="private")
         await _join_human(client, rid)
 
-        r = await _try_join(client, rid, "claude-someone", name="路人")
+        # 新規則：host 群內的 agent 不必邀請，一般 agent 指 host 群之外的人
+        r = await _try_join(client, rid, "claude-someone", name="路人",
+                            headers=await _outsider_headers(client))
         assert r.status_code == 403, r.text
         assert r.json()["detail"]["code"] == "room_is_private"
