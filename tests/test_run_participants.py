@@ -339,6 +339,68 @@ async def test_a_subagent_of_the_run_member_goes_with_it(tmp_path):
         assert (await _row(app, sub_id))["status"] == "left"
 
 
+async def _run_member_subagent_supervisor(client, rid, hdr, run_id):
+    """run 成員旗下的 subagent 被指定為 supervisor；回 (父層, 子代理 id)。"""
+    parent_key = f"claude-run-{run_id}"
+    _, parent = await _join_agent(client, rid, parent_key, "Runner")
+    r = await client.post(f"/api/rooms/{rid}/join", json={
+        "kind": "claude", "role": "agent",
+        "session_key": f"{parent_key}#sub-1", "preferred_name": "worker",
+        "parent_participant_id": parent["participant_id"]})
+    assert r.status_code == 200, r.text
+    sub_id = r.json()["participant_id"]
+    r = await client.post(f"/api/rooms/{rid}/board/supervisor",
+                          json={"participant_id": sub_id},
+                          headers={"X-Session-Key": "human-a"})
+    assert r.status_code == 200, r.text
+    return parent["participant_id"], sub_id
+
+
+async def _supervisor_key(app, rid):
+    row = await (await app.state.db.execute(
+        "SELECT board_supervisor_session_key AS k FROM room WHERE id=?",
+        (rid,))).fetchone()
+    return row["k"]
+
+
+@pytest.mark.parametrize("final_status", ["done", "failed", "cancelled", "handoff"])
+async def test_run_ending_unseats_a_subagent_supervisor(tmp_path, final_status):
+    """run 成員的 subagent 是 supervisor：run 收場（含 handoff）要卸任。
+
+    subagent 的 session_key（`claude-run-<id>#sub-1`）對不上 run id、
+    `participant.run_id` 也是空的，只用 run_id 查 key 會漏掉它。
+    """
+    app, client = await _client(tmp_path, f"sup-{final_status}")
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        _, sub_id = await _run_member_subagent_supervisor(
+            client, rid, hdr, run_id)
+        assert await _supervisor_key(app, rid) == f"claude-run-{run_id}#sub-1"
+
+        await _report(client, run_id, runner, final_status)
+
+        assert (await _row(app, sub_id))["status"] == "left"
+        assert await _supervisor_key(app, rid) == "", "subagent 已隨 run 離場"
+
+
+async def test_capped_handoff_unseats_a_subagent_supervisor(tmp_path):
+    """交接鏈撞上限那條 return 也要卸任。"""
+    app, client = await _client(tmp_path, "sup-capped", run_handoff_max=0)
+    async with app.router.lifespan_context(app), client:
+        rid = await _ops_room(client)
+        hdr = await _join_human(client, rid)
+        runner = await _register_runner(client)
+        run_id = await _dispatch_running(client, rid, hdr, runner)
+        await _run_member_subagent_supervisor(client, rid, hdr, run_id)
+
+        out = await _report(client, run_id, runner, "handoff")
+        assert out["run"]["status"] == "failed"
+        assert await _supervisor_key(app, rid) == ""
+
+
 # ── handoff：卡要空出來給下一棒 ──────────────────────────────────────
 
 async def _board_task(client, rid, hdr):

@@ -17320,7 +17320,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     async def _depart_run_participants(
         room_id: str, run_id: str,
-    ) -> tuple[list[str], list[dict]]:
+    ) -> tuple[list[str], list[dict], list[str]]:
         """run 收場時，把它帶進這間房的成員標成離開。**不 commit。**
 
         📌 **不另發離場的系統訊息。** run 結束本來就有一則 `_announce_run`
@@ -17332,10 +17332,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         `handoff` 也算收場：這一棒的身分到此為止，它放掉的卡由子 run 重新
         認領（§5.4）——所以這裡照樣走既有的孤兒化流程，不為交接開特例。
 
-        回傳 (離場的名字, 被孤兒化的卡)。兩個都要：卡由呼叫端在 commit 之後
-        公告（與 `leave_room` 同形），而「有沒有人真的離場」決定要不要去查
-        supervisor——沒有人走的時候（run 的 agent 早就自己 `chatroom_leave`
-        了）不必為此多打一次資料庫。
+        回傳 (離場的名字, 被孤兒化的卡, 離場的 session_key)。卡由呼叫端在
+        commit 之後公告（與 `leave_room` 同形），而「有沒有人真的離場」決定
+        要不要去查 supervisor——沒有人走的時候（run 的 agent 早就自己
+        `chatroom_leave` 了）不必為此多打一次資料庫。
+
+        session_key 在這裡、離場**之前**收：包含旗下 subagent 的 key
+        （`claude-run-<id>#...`，對不上 run id、`participant.run_id` 也是
+        空的，事後以 run_id 反查會漏掉它們）。呼叫端 commit 後拿去
+        `_check_supervisor_departed`。
         """
         db = app.state.db
         rows = await (
@@ -17347,8 +17352,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
         ).fetchall()
         if not rows:
-            return [], []
+            return [], [], []
+        left_keys: list[str] = []
         for r in rows:
+            left_keys += await _departing_keys(room_id, r["id"])
             # 沿用既有的離場函式：run 的 agent 也派得出 subagent，而它們
             # 要跟著走。自己寫一句 UPDATE 的話會漏掉那一層
             await _depart_with_subagents(
@@ -17362,18 +17369,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                     "display_name": r["display_name"],
                 },
             )
-        return [r["display_name"] for r in rows], await _orphan_claims(room_id)
-
-    async def _run_session_keys(room_id: str, run_id: str) -> list[str]:
-        """某個 run 帶進房的成員的 session_key（離場判定用，不濾 status）。"""
-        rows = await (
-            await app.state.db.execute(
-                "SELECT session_key FROM participant"
-                " WHERE room_id=? AND run_id=? AND run_id!=''",
-                (room_id, run_id),
-            )
-        ).fetchall()
-        return [r["session_key"] for r in rows]
+        return ([r["display_name"] for r in rows],
+                await _orphan_claims(room_id), left_keys)
 
     def _requester_kind(row) -> str:
         """這一筆是誰動的手：`human`／`agent`（Supervisor 代派）。
@@ -18976,14 +18973,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                                         {"depth": depth,
                                          "max": cfg.run_handoff_max})
                 # 這一條也是收場（狀態已改成 failed），成員照樣要離房
-                gone, released = await _depart_run_participants(
+                gone, released, left_keys = await _depart_run_participants(
                     row["room_id"], run_id)
                 await _commit_with_retry(db)
                 if gone:
                     await _announce_orphans(row["room_id"], released)
                     await _check_supervisor_departed(
-                        row["room_id"],
-                        await _run_session_keys(row["room_id"], run_id))
+                        row["room_id"], left_keys)
                 final = await _run_or_404(run_id)
                 await _announce_run(
                     final, "failed",
@@ -19027,15 +19023,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                                     {"parent_run_id": run_id, "depth": depth})
         gone: list[str] = []
         released: list[dict] = []
+        left_keys: list[str] = []
         if new in _RUN_TERMINAL:
-            gone, released = await _depart_run_participants(row["room_id"],
-                                                            run_id)
+            gone, released, left_keys = await _depart_run_participants(
+                row["room_id"], run_id)
         await _commit_with_retry(db)
         if gone:
             await _announce_orphans(row["room_id"], released)
-            await _check_supervisor_departed(
-                row["room_id"],
-                await _run_session_keys(row["room_id"], run_id))
+            await _check_supervisor_departed(row["room_id"], left_keys)
         final = await _run_or_404(run_id)
         await _announce_run(
             final, "waiting" if (new == "running"
