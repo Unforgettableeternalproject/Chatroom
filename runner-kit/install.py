@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -652,9 +653,12 @@ def main(argv: list[str] | None = None) -> None:
             if _path.exists():
                 print(f"偵測到既有安裝：{_path}（{_label}），將沿用")
 
-    default_host = os.environ.get("COMPUTERNAME") or ""
-    if not default_host and hasattr(os, "uname"):
-        default_host = os.uname().nodename
+    # 與 bridge identity 的 host 同源（socket.gethostname）：COMPUTERNAME 是
+    # NetBIOS 名（大寫、截 15 字），兩邊不一致會被指派 UI 當成兩台機器
+    try:
+        default_host = (socket.gethostname() or "")[:200]
+    except OSError:
+        default_host = ""
     default_host = default_host or "runner"
 
     if args.yes:

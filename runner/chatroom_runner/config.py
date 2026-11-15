@@ -21,6 +21,7 @@ import fnmatch
 import json
 import logging
 import os
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -630,6 +631,18 @@ def _as_argv(raw) -> list[str]:
     return [str(raw)]
 
 
+def _default_host() -> str:
+    """設定沒填 host 時的預設值，與 bridge identity 同源（socket.gethostname）。
+
+    不用 COMPUTERNAME：它是 NetBIOS 名（大寫、截 15 字），與 bridge 自報的
+    host 不一致，指派 UI 會把同一台機器當成兩台。
+    """
+    try:
+        return (socket.gethostname() or "")[:200] or "localhost"
+    except OSError:
+        return "localhost"
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> RunnerConfig:
     """讀設定檔並套用環境變數覆寫。"""
     cfg_path = Path(path) if path else default_config_path()
@@ -683,7 +696,7 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         hub_url=(os.environ.get("CHATROOM_RUNNER_HUB_URL")
                  or raw.get("hub_url") or "http://127.0.0.1:8787"),
         agent_token=token,
-        host=raw.get("host") or os.environ.get("COMPUTERNAME") or "localhost",
+        host=raw.get("host") or _default_host(),
         label=raw.get("label") or "runner",
         workspaces=workspaces,
         claude_bin=_as_argv(raw.get("claude_bin")),

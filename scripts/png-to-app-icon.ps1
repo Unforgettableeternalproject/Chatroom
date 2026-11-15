@@ -1,4 +1,4 @@
-# PNG -> 多尺寸 ICO（app/windows/runner/resources/app_icon.ico）。
+﻿# PNG -> 多尺寸 ICO（app/windows/runner/resources/app_icon.ico）。
 #
 # 用法：pwsh scripts/png-to-app-icon.ps1 -Source logo.png [-Out <路徑>]
 #
