@@ -244,7 +244,9 @@ def package_app(platform: str, tag: str, dist: Path = DIST) -> Path:
     return out
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] = ()) -> int:
+    # 預設不讀 sys.argv：被當函式呼叫（測試、其他腳本）時不該吃到呼叫方的參數；
+    # 命令列入口在檔尾明確傳 sys.argv[1:]
     parser = argparse.ArgumentParser(description="Build Chatroom App")
     parser.add_argument("--platform", choices=PLATFORMS, default=host_platform(),
                         help="目標平台（預設依本機）")
@@ -344,4 +346,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
