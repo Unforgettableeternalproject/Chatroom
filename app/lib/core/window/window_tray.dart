@@ -1,18 +1,22 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:logging/logging.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../l10n/l10n.dart';
 import '../config/app_settings.dart';
+import '../platform/app_platform.dart';
 
 final _log = Logger('tray');
 
 /// 系統匣的原生接點。抽出來只為了一件事：讓測試能讓它失敗。
 abstract class TrayBackend {
-  Future<void> setIcon(String path);
+  /// [isTemplate] 只有 macOS 用：template 圖是黑色＋alpha 的剪影，系統會依
+  /// 淺／深色選單列自動反白。
+  Future<void> setIcon(String path, {bool isTemplate = false});
   Future<void> setToolTip(String tooltip);
   Future<void> setContextMenu(Menu menu);
   Future<void> popUpContextMenu();
@@ -32,16 +36,32 @@ class _RealTrayBackend implements TrayBackend {
   const _RealTrayBackend();
 
   @override
-  Future<void> setIcon(String path) => trayManager.setIcon(path);
+  Future<void> setIcon(String path, {bool isTemplate = false}) =>
+      trayManager.setIcon(path, isTemplate: isTemplate);
 
+  /// Linux 的 tray_manager 沒有實作 `setToolTip`（AppIndicator 沒有這個概念），
+  /// 會丟 [MissingPluginException]。那不是匣裝不上去，吞掉。
   @override
-  Future<void> setToolTip(String tooltip) => trayManager.setToolTip(tooltip);
+  Future<void> setToolTip(String tooltip) async {
+    try {
+      await trayManager.setToolTip(tooltip);
+    } on MissingPluginException {
+      // 此平台沒有 tooltip
+    }
+  }
 
   @override
   Future<void> setContextMenu(Menu menu) => trayManager.setContextMenu(menu);
 
+  /// Linux 的選單是永遠掛在圖示上的，沒有「彈出」這個動作；同上，吞掉。
   @override
-  Future<void> popUpContextMenu() => trayManager.popUpContextMenu();
+  Future<void> popUpContextMenu() async {
+    try {
+      await trayManager.popUpContextMenu();
+    } on MissingPluginException {
+      // 此平台沒有彈出選單
+    }
+  }
 
   @override
   Future<void> destroy() => trayManager.destroy();
@@ -67,22 +87,119 @@ class _RealWindowBackend implements WindowBackend {
   Future<void> destroy() => windowManager.destroy();
 }
 
-/// 關閉視窗時縮到系統匣（Windows），行為仿 Line。
+/// 匣圖示的資產與是否為 template：Windows 只吃 `.ico`；macOS 用黑色＋alpha
+/// 的 template PNG；Linux（AppIndicator）用彩色 PNG。
+({String asset, bool isTemplate}) trayIconFor(AppPlatform platform) =>
+    switch (platform) {
+      AppPlatform.windows => (asset: 'assets/tray.ico', isTemplate: false),
+      AppPlatform.macos => (asset: 'assets/tray_template.png', isTemplate: true),
+      AppPlatform.linux => (asset: 'assets/tray.png', isTemplate: false),
+    };
+
+/// 探測子進程的接點。測試換成 fake。
+typedef TrayProbeRun = Future<ProcessResult> Function(
+    String executable, List<String> arguments);
+
+/// Linux 上有沒有系統匣宿主：session bus 上 `org.kde.StatusNotifierWatcher`
+/// 有沒有人擁有。
+///
+/// 🔴 **這一步不能省。** tray_manager 在 Linux 用 AppIndicator：沒有宿主時
+/// `setIcon` 不會失敗（圖示只是沒有地方顯示），於是「匣裝不上去就回滾關閉
+/// 攔截」的保護完全不會觸發——關閉視窗會把它藏起來，而沒有任何東西能把它
+/// 叫回來（GNOME 沒裝 AppIndicator 擴充套件就是這樣）。
+///
+/// 依序用 `gdbus`、`dbus-send`、`busctl` 問，哪個在就用哪個；**全都問不到
+/// 一律當作沒有**——寧可關閉視窗直接結束，也不要留一個叫不回來的視窗。
+Future<bool> linuxTrayHostAvailable({TrayProbeRun? run}) async {
+  const watcher = 'org.kde.StatusNotifierWatcher';
+  final exec = run ??
+      (exe, args) => Process.run(exe, args).timeout(const Duration(seconds: 3));
+
+  /// 問得到答案回 true／false；工具不在或 bus 連不上回 null（換下一個）。
+  Future<bool?> ask(
+      String exe, List<String> args, bool Function(String out) owned) async {
+    try {
+      final r = await exec(exe, args);
+      if (r.exitCode != 0) return null;
+      return owned('${r.stdout}');
+    } on Object {
+      return null;
+    }
+  }
+
+  final viaGdbus = await ask(
+    'gdbus',
+    [
+      'call',
+      '--session',
+      '--dest',
+      'org.freedesktop.DBus',
+      '--object-path',
+      '/org/freedesktop/DBus',
+      '--method',
+      'org.freedesktop.DBus.NameHasOwner',
+      watcher,
+    ],
+    (out) => out.contains('true'),
+  );
+  if (viaGdbus != null) return viaGdbus;
+
+  final viaDbusSend = await ask(
+    'dbus-send',
+    [
+      '--session',
+      '--print-reply',
+      '--dest=org.freedesktop.DBus',
+      '/org/freedesktop/DBus',
+      'org.freedesktop.DBus.NameHasOwner',
+      'string:$watcher',
+    ],
+    (out) => out.contains('boolean true'),
+  );
+  if (viaDbusSend != null) return viaDbusSend;
+
+  // busctl status：名字有擁有者就是 0，沒有就非 0
+  try {
+    final r = await exec('busctl', ['--user', 'status', watcher]);
+    return r.exitCode == 0;
+  } on Object {
+    return false;
+  }
+}
+
+/// 關閉視窗時縮到系統匣（Windows、macOS、Linux），行為仿 Line。
 ///
 /// **開關關著時這裡什麼都不做**：不註冊攔截、不放匣圖示，關閉鍵就是結束。
 /// 這不是保守，是必要——`setPreventClose(true)` 一旦裝上去，關閉鍵就再也
 /// 不會結束程式，而使用者沒有第二個地方可以關掉它。
 ///
-/// 只有 Windows。其他平台一律靜默略過：不是失敗，是不適用。
+/// 桌面三平台。其他平台（手機）一律靜默略過：不是失敗，是不適用。
+///
+/// - macOS：紅燈＝縮到匣（`preventClose`＋`hide`）；Dock 圖示會叫回視窗
+///   （AppDelegate 的 `applicationShouldHandleReopen`）。
+/// - Linux：只有偵測到系統匣宿主才裝攔截（見 [linuxTrayHostAvailable]）；
+///   沒有宿主就維持關閉，關閉視窗直接結束。
 class WindowTray with WindowListener, TrayListener {
   WindowTray._();
 
   static final WindowTray instance = WindowTray._();
 
-  /// 只有 Windows 有這條路。`@visibleForTesting` 可覆寫——測試要能兩邊都測，
+  /// 桌面三平台有這條路。`@visibleForTesting` 可覆寫——測試要能兩邊都測，
   /// 而 `Platform.isWindows` 在測試裡是跑測試那台機器的事實，不是被測條件。
   @visibleForTesting
-  static bool supportedOverride = !kIsWeb && Platform.isWindows;
+  static bool supportedOverride = !kIsWeb &&
+      (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
+  /// 現在扮演哪個平台（選圖示、決定要不要探測匣宿主）。測試覆寫它。
+  @visibleForTesting
+  static AppPlatform platform = detectAppPlatform() ?? AppPlatform.windows;
+
+  /// 有沒有系統匣可以放圖示。只有 Linux 會真的探測；其他平台恆為真。
+  @visibleForTesting
+  static Future<bool> Function() trayHostAvailable = () =>
+      platform == AppPlatform.linux
+          ? linuxTrayHostAvailable()
+          : Future.value(true);
 
   bool get supported => supportedOverride;
 
@@ -139,6 +256,18 @@ class WindowTray with WindowListener, TrayListener {
       }
       return;
     }
+    if (!await trayHostAvailable()) {
+      // 沒有匣宿主：圖示放得上去也看不到。不裝攔截，關閉視窗就直接結束
+      _log.warning('找不到系統匣宿主（StatusNotifierWatcher），'
+          'closeToTray 維持關閉：關閉視窗會直接結束');
+      _enabled = false;
+      try {
+        await window.setPreventClose(false);
+      } catch (e) {
+        _log.warning('關閉攔截拆除失敗：$e');
+      }
+      return;
+    }
     try {
       await _ensureTray();
     } catch (e) {
@@ -186,7 +315,8 @@ class WindowTray with WindowListener, TrayListener {
 
   Future<void> _ensureTray() async {
     if (_trayVisible) return;
-    await tray.setIcon('assets/tray.ico');
+    final icon = trayIconFor(platform);
+    await tray.setIcon(icon.asset, isTemplate: icon.isTemplate);
     await tray.setToolTip('Chatroom');
     await _applyMenu();
     _trayVisible = true;

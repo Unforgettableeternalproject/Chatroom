@@ -13,7 +13,7 @@ class _FakeTray implements TrayBackend {
   int destroyCount = 0;
 
   @override
-  Future<void> setIcon(String path) async {
+  Future<void> setIcon(String path, {bool isTemplate = false}) async {
     if (failOnSetIcon) throw StateError('圖示裝不上');
   }
 
