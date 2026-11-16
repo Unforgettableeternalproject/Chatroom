@@ -254,6 +254,22 @@ def _path_segments(raw: str) -> list[str]:
             if s not in ("", ".", "..")]
 
 
+def _basename(tok: str) -> str:
+    """路徑的最後一段。**兩種分隔符都認**，不依賴執行平台的 pathlib。
+
+    模型在 Linux／macOS 上照樣可能寫出 `..\server\.env` 這類 Windows 形式
+    （PowerShell 習慣），用 `Path(...).name` 的話 POSIX 把整串當成一個檔名，
+    敏感檔名比對就漏了。
+    """
+    segs = [s for s in re.split(r"[\\/]+", _unquote(tok)) if s]
+    return segs[-1] if segs else ""
+
+
+def _path_parts(tok: str) -> set[str]:
+    """路徑的每一段（小寫），同樣不依賴平台的分隔符規則。"""
+    return {s.lower() for s in re.split(r"[\\/]+", _unquote(tok)) if s}
+
+
 def _domain_allowed(host: str, allowed: list[str]) -> bool:
     host = host.split("@")[-1].split(":")[0].lower()
     for pat in allowed:
@@ -760,7 +776,7 @@ def _check_wrapper(head: str, tokens: list[str],
         if lows & NPM_DENIED_SUBS:
             return _deny_wrapper()
         for tok in args:
-            name = Path(_unquote(tok)).name.lower()
+            name = _basename(tok).lower()
             name = name[:-4] if name.endswith(".exe") else name
             if name in SHELL_WRAPPER_HEADS or name in POSIX_SHELL_HEADS \
                     or name in INLINE_EXEC_HEADS:
@@ -790,7 +806,7 @@ def _check_segment(segment: str, ctx: GuardContext) -> Decision:
     tokens = tokenize(segment)
     if not tokens:
         return ALLOW
-    head = Path(_unquote(tokens[0])).name.lower()
+    head = _basename(tokens[0]).lower()
     head = head[:-4] if head.endswith(".exe") else head
 
     if "--no-verify" in low or "--no-gpg-sign" in low or "-n --amend" in low:
@@ -835,12 +851,12 @@ def _check_segment(segment: str, ctx: GuardContext) -> Decision:
     if head in NETWORK_COMMANDS:
         return _check_network(tokens, segment, ctx)
     for tok in tokens[1:]:
-        name = Path(_unquote(tok)).name
+        name = _basename(tok)
         if _is_sensitive_name(name):
             return _deny("path_sensitive",
                          f"「{name}」屬於設定檔或金鑰，不能讀也不能寫。"
                          + USE_CONFIG_VIA_SCRIPT)
-        parts = {p.lower() for p in Path(_unquote(tok)).parts}
+        parts = _path_parts(tok)
         hit = parts & {d.lower() for d in SENSITIVE_DIR_NAMES}
         if hit:
             return _deny("path_sensitive_dir",

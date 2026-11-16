@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -40,7 +41,7 @@ from .config import (SOFT_STOP_FLAG_NAME, SOFT_STOP_TIMEOUT_FLAG_NAME,
                      apply_oauth_token, render_template)
 from .guard import TOOL_MATCHER, GuardContext
 from .hub import HubError
-from .procs import no_window_kwargs
+from .procs import new_session_kwargs, no_window_kwargs
 from .stream import StreamWatcher
 
 log = logging.getLogger(__name__)
@@ -50,7 +51,9 @@ HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 ASKPASS_SCRIPT = HOOKS_DIR / ("askpass-deny.cmd" if os.name == "nt"
                               else "askpass-deny.sh")
 # push run 用的憑證 helper（艾斯維爾裁決 09/16：推送憑證隔離）。
-# 一般 run 的環境把 helper 清單清空，只有 push run 明確把它加回來
+# 一般 run 的環境把 helper 清單清空，只有 push run 明確把它加回來。
+# 這個常數是 **Windows 的預設值**；實際用哪個由
+# `RunnerConfig.push_credential_helper_name` 依平台與設定檔決定
 PUSH_CREDENTIAL_HELPER = "manager"
 # run 進程一律是 claude 執行器；bridge 沒拿到這個鍵會落回 other
 AGENT_KIND = "claude"
@@ -729,10 +732,42 @@ def kill_tree(pid: int) -> None:
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("taskkill /PID %s 起不來：%s", pid, exc)
             return
-    try:  # pragma: no cover - 非 Windows 路徑
-        os.kill(pid, 9)
+    _kill_posix_group(pid)
+
+
+def _kill_posix_group(pid: int) -> None:
+    """POSIX：SIGKILL 整個進程群組。
+
+    子進程是用 ``start_new_session=True`` 起的，所以它自己是組長、pgid 等於
+    pid，群組裡就是 claude 與它起的 MCP server 等所有子孫。
+
+    🚨 **只有確認 ``getpgid(pid) == pid`` 才打 killpg。** 不是組長的話（沒走
+    `new_session_kwargs` 起的進程）pgid 是執行器自己的群組，`killpg` 會連
+    執行器一起殺掉；那種情況退回只殺單一進程，並留下警告讓人看得到。
+
+    直接 SIGKILL、不先 SIGTERM：呼叫端都是逾時／取消／收尾，而且 claude 的
+    善後（寫回 session）不影響本次 run 的結果判定；先 TERM 再等的話這個同步
+    函式會卡住事件迴圈，且組長變殭屍時 ``kill(-pgid, 0)`` 永遠成功，沒有可靠的
+    「已退出」判準。Windows 的 `taskkill /F` 也是強制的，行為一致。
+    """
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return  # 已經不在了
     except OSError as exc:
-        log.warning("os.kill(%s, 9) 失敗：%s", pid, exc)
+        log.warning("getpgid(%s) 失敗：%s", pid, exc)
+        pgid = -1
+    try:
+        if pgid == pid:
+            os.killpg(pgid, signal.SIGKILL)
+        else:
+            log.warning("pid %s 不是進程群組組長（pgid=%s），只殺它自己；"
+                        "它的子孫可能殘留", pid, pgid)
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except OSError as exc:
+        log.warning("終止 pid %s 失敗：%s", pid, exc)
 
 
 class RunExecutor:
@@ -1068,8 +1103,7 @@ class RunExecutor:
             text += "\n" + self._restore_warning(local)
         return text
 
-    @staticmethod
-    def _push_credential_args() -> list[str]:
+    def _push_credential_args(self) -> list[str]:
         """push run 是唯一帶推送憑證的路徑（艾斯維爾裁決 09/16）。
 
         一般 run 的子進程環境把 ``credential.helper`` 清單清空，所以它對私有
@@ -1077,7 +1111,11 @@ class RunExecutor:
         URL、不存任何 token——URL 裡帶 token 會留在 `git remote -v` 與 reflog
         上，而那是誰都讀得到的地方。
         """
-        return ["-c", f"credential.helper={PUSH_CREDENTIAL_HELPER}"]
+        helper = self.cfg.push_credential_helper_name
+        if not helper:
+            # 沿用使用者既有的 git 設定：什麼都不加（見 config 的平台預設說明）
+            return []
+        return ["-c", f"credential.helper={helper}"]
 
     def _signing_args(self) -> list[str]:
         """release 的 git 簽章參數（`-c` 前綴，比照 `_push_credential_args`）。
@@ -2651,10 +2689,14 @@ class RunExecutor:
             # Performance」，單位毫秒，stdio 也適用）。第一道防線：bridge
             # 冷啟動比預設的等待久時，拉長等待比事後重起便宜
             env["MCP_TIMEOUT"] = str(self.cfg.mcp_startup_timeout_ms)
+        is_release_fix = run.get("kind") == RELEASE_FIX_KIND
+        helper = self.cfg.push_credential_helper_name
         env.update(self._git_credential_isolation(
             env, self._ssh_signing_config(),
-            PUSH_CREDENTIAL_HELPER if run.get("kind") == RELEASE_FIX_KIND
-            else ""))
+            helper if is_release_fix else "",
+            # release_fix 在「沿用使用者設定」的平台（helper 空）不能清空清單，
+            # 否則它推送時一個 helper 都沒有
+            inherit_helper=is_release_fix and not helper))
         return env
 
     def _ssh_signing_config(self) -> list[tuple[str, str]]:
@@ -2680,7 +2722,8 @@ class RunExecutor:
     def _git_credential_isolation(
             env: dict[str, str],
             extra: list[tuple[str, str]] | None = None,
-            push_helper: str = "") -> dict[str, str]:
+            push_helper: str = "",
+            inherit_helper: bool = False) -> dict[str, str]:
         """把推送憑證擋在 run 進程外（艾斯維爾裁決 09/16）。
 
         ``GIT_CONFIG_*`` 是**這個進程**的覆寫，本機 git 設定一個字都沒動：
@@ -2688,6 +2731,9 @@ class RunExecutor:
         再關掉終端提示與 askpass，否則它會停在一個沒有人能回答的問句上。
 
         ``extra`` 是要排在 ``credential.helper`` 之前的其他覆寫（SSH 簽章）。
+
+        ``inherit_helper``：release_fix 在沒有指定 helper 的平台（Linux 預設）
+        不清空 helper 清單，讓使用者既有的 git 設定照常生效。
 
         ``push_helper`` 只給 release_fix：它要自己 push 到穩定分支，所以把
         執行器的 helper 加回來；能推到哪裡由守衛限制（只有
@@ -2702,8 +2748,10 @@ class RunExecutor:
             count = 0
         count = max(count, 0)
         out: dict[str, str] = {}
-        for key, value in [*(extra or []),
-                           ("credential.helper", push_helper)]:
+        pairs = [*(extra or [])]
+        if not inherit_helper:
+            pairs.append(("credential.helper", push_helper))
+        for key, value in pairs:
             out[f"GIT_CONFIG_KEY_{count}"] = key
             out[f"GIT_CONFIG_VALUE_{count}"] = value
             count += 1
@@ -2764,7 +2812,8 @@ class RunExecutor:
                 sys.executable, "-c", "import chatroom_mcp",
                 env=probe_env,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, **no_window_kwargs())
+                stderr=asyncio.subprocess.PIPE, **no_window_kwargs(),
+                **new_session_kwargs())
         except OSError as exc:
             return f"（bridge 探測起不來：{exc}）"
         try:
@@ -2791,7 +2840,8 @@ class RunExecutor:
         proc = await asyncio.create_subprocess_exec(
             *argv, cwd=str(cwd), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            limit=STREAM_LINE_LIMIT, **no_window_kwargs())
+            limit=STREAM_LINE_LIMIT, **no_window_kwargs(),
+            **new_session_kwargs())
         self.live_proc = proc
         # 每次起進程重新起算：上一輪（resume／重試）的失敗不能算到這一輪
         self.pump_error = ""
