@@ -35,7 +35,7 @@ DIST = REPO / "dist"
 
 sys.path.insert(0, str(REPO / "scripts"))
 from buildstamp import (  # noqa: E402
-    read_app_version, report, require_commit, stamp,
+    read_app_version, report, require_commit, stamp, write_zip,
 )
 
 # ⚠️ 這裡漏掉任何一項，開發機的**實際派工現場**就會被打包發出去：
@@ -121,6 +121,13 @@ def build(dist: Path, expect: str = "") -> tuple[Path, dict, str]:
     # 中文說明在 install-help.txt（bat 本身必須純 ASCII，見它開頭的註解）。
     # 漏掉任何一支，拿到包的人就只剩「用命令列跑 install.py」這條路
     shutil.copy2(KIT_DIR / "install.bat", stage / "install.bat")
+    # macOS／Linux 的入口（單包跨平台：同一個 zip 同時有 .bat 與 .sh）
+    shutil.copy2(KIT_DIR / "install.sh", stage / "install.sh")
+    # 非 Windows 的服務管理（systemd user／LaunchAgent）。單一來源在
+    # repo 的 scripts/service.py，host-kit 打的是同一份
+    (stage / "scripts").mkdir()
+    shutil.copy2(REPO / "scripts" / "service.py",
+                 stage / "scripts" / "service.py")
     shutil.copy2(KIT_DIR / "install-help.txt", stage / "install-help.txt")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     shutil.copytree(REPO / "runner", stage / "runner", ignore=RUNNER_IGNORE)
@@ -144,10 +151,7 @@ def build(dist: Path, expect: str = "") -> tuple[Path, dict, str]:
     zip_path = dist / "chatroom-runner-kit.zip"
     if zip_path.exists():
         zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(stage.rglob("*")):
-            if f.is_file():
-                zf.write(f, f.relative_to(dist))
+    write_zip(zip_path, stage, dist)
     return zip_path, info, head
 
 

@@ -1,21 +1,25 @@
 """Chatroom 執行器安裝器（runner 端）。
 
-    install.bat                        # 雙擊入口：找 Python 後跑下面這支
+    install.bat                        # 雙擊入口（Windows）：找 Python 後跑下面這支
+    ./install.sh                       # macOS／Linux 的入口，同上
     python install.py                  # 互動式：Hub 位址 / token / 標籤
     python install.py --yes            # 不互動，全用預設／參數值
-    python install.py --uninstall      # 移除排程工作與註冊檔（設定與資料留著）
+    python install.py --uninstall      # 移除自啟服務與註冊檔（設定與資料留著）
 
 `--yes` 下**一個問題都不會問**（App 是以子進程跑這支的），而且 stdout 的
 最後一行固定是 `RESULT {"ok":true,...}`——三包安裝器同一個格式。失敗時
 退出碼非 0、原因走 stderr。
 
 做五件事：
-1. 把這一包搬到安裝目錄（預設 %LOCALAPPDATA%\\UEP\\Chatroom\\runner-kit）
+1. 把這一包搬到安裝目錄（預設 `<安裝根目錄>/runner-kit`；安裝根目錄 Windows 是
+   %LOCALAPPDATA%\\UEP\\Chatroom，macOS 是 ~/Library/Application Support/UEP/Chatroom，
+   Linux 是 ${XDG_DATA_HOME:-~/.local/share}/uep/chatroom）
 2. 在包內建立獨立 venv 並安裝執行器與 bridge 的相依（不污染系統 Python）
-3. 產生設定檔（預設 %LOCALAPPDATA%\\UEP\\Chatroom\\runner\\config.json）；
+3. 產生設定檔（預設 `<安裝根目錄>/runner/config.json`）；
    **已經存在就原樣不動**——那份是使用者自己調過的，重跑安裝器不該吃掉它
-4. 呼叫既有的 runner/install-task.ps1 註冊 Windows 排程工作（只建工作、
-   不啟動執行器）
+4. 註冊自啟（只建不啟動執行器）：Windows 呼叫既有的 runner/install-task.ps1 建
+   排程工作；macOS／Linux 呼叫 scripts/service.py 註冊 LaunchAgent／systemd
+   使用者服務
 5. 寫下註冊檔 ~/.chatroom/runner-kit.json，讓桌面 App 知道這台機器是執行器
 
 ⚠️ 裝完還**不能**直接開跑，還有兩件只有人做得到的事（README 有步驟）：
@@ -114,16 +118,30 @@ def build_info(root: Path) -> dict[str, str]:
             "commit": str(data.get("commit") or "")}
 
 
-def local_app_data() -> Path:
-    """Windows 的 `%LOCALAPPDATA%`；非 Windows 退回同構的路徑。"""
-    env = os.environ.get("LOCALAPPDATA")
-    if env:
-        return Path(env)
-    return Path.home() / "AppData" / "Local"
+def install_root() -> Path:
+    """安裝根目錄。
+
+    與 `chatroom_runner.config.default_install_root()`、`scripts/service.py` 的
+    `install_root()` 是同一個契約（有測試守著三處相等）：Windows
+    `%LOCALAPPDATA%\\UEP\\Chatroom`；macOS `~/Library/Application Support/UEP/Chatroom`；
+    Linux `${XDG_DATA_HOME:-~/.local/share}/uep/chatroom`。
+    """
+    if sys.platform == "win32":
+        env = os.environ.get("LOCALAPPDATA")
+        base = Path(env) if env else Path.home() / "AppData" / "Local"
+        return base / "UEP" / "Chatroom"
+    if sys.platform == "darwin":
+        return (Path.home() / "Library" / "Application Support"
+                / "UEP" / "Chatroom")
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    # XDG 規範：相對路徑視為無效
+    base = Path(xdg) if xdg and os.path.isabs(xdg) \
+        else Path.home() / ".local" / "share"
+    return base / "uep" / "chatroom"
 
 
 def default_install_dir() -> Path:
-    return local_app_data() / "UEP" / "Chatroom" / "runner-kit"
+    return install_root() / "runner-kit"
 
 
 def default_config_path() -> Path:
@@ -132,7 +150,7 @@ def default_config_path() -> Path:
     不是隨便挑的：執行器沒有 `--config` 時自己就去那裡找，排程工作也是用
     這個路徑當參數。改這裡等於改三個地方的預設值。
     """
-    return local_app_data() / "UEP" / "Chatroom" / "runner" / "config.json"
+    return install_root() / "runner" / "config.json"
 
 
 # 互動安裝共有幾步。印在每一步前面（`[2/5] …`）——雙擊進來的人需要知道
@@ -212,10 +230,17 @@ def stage_kit(target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     if KIT == target:
         return
-    for name in ("install.py", "install.bat", "install-help.txt", "README.md"):
+    for name in ("install.py", "install.bat", "install.sh",
+                 "install-help.txt", "README.md"):
         src = KIT / name
         if src.exists():
             shutil.copy2(src, target / name)
+    # scripts/（service.py：非 Windows 的服務管理）。舊包沒有就算了，
+    # 到註冊自啟那一步會講清楚找不到
+    if (KIT / "scripts").is_dir():
+        shutil.copytree(KIT / "scripts", target / "scripts",
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
     for name in ("runner", "bridge"):
         src = KIT / name
         if not src.exists():
@@ -326,9 +351,65 @@ def powershell() -> str | None:
     return shutil.which("pwsh") or shutil.which("powershell")
 
 
+def _no_system() -> bool:
+    """測試用總開關：設了 UEP_KIT_NO_SYSTEM 就不執行任何服務管理指令。"""
+    return bool(os.environ.get("UEP_KIT_NO_SYSTEM"))
+
+
+def service_label() -> str:
+    """給人看的「自啟機制」名稱，依平台。"""
+    if sys.platform == "win32":
+        return "Windows 排程工作"
+    if sys.platform == "darwin":
+        return "launchd LaunchAgent"
+    return "systemd 使用者服務"
+
+
+def service_script(target: Path) -> Path:
+    """`scripts/service.py`：優先用安裝目錄裡那份，沒有就用這一包自帶的。"""
+    for base in (target, KIT):
+        script = base / "scripts" / "service.py"
+        if script.exists():
+            return script
+    return target / "scripts" / "service.py"
+
+
+def posix_service(target: Path, python: Path, config_path: Path,
+                  action: str) -> tuple[bool, str]:
+    """非 Windows：呼叫 `scripts/service.py runner <action> --json`。
+
+    回傳 (成敗, 給人看的一句話)。服務腳本的 stdout 最後一行是 JSON；解析不了
+    就退回 stderr／退出碼，不要把「看不懂」當成成功。
+    """
+    script = service_script(target)
+    if not script.exists():
+        return False, f"找不到 {script}——這一包不完整，請重新解壓"
+    cmd = [str(python), str(script), "runner", action, "--json",
+           "--kit", str(target), "--python", str(python),
+           "--config", str(config_path)]
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"叫不起服務腳本：{exc}"
+    data: dict = {}
+    lines = (done.stdout or "").strip().splitlines()
+    if lines:
+        try:
+            parsed = json.loads(lines[-1])
+            data = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            data = {}
+    detail = str(data.get("detail") or (done.stderr or "").strip()
+                 or f"退出碼 {done.returncode}")
+    return done.returncode == 0 and data.get("ok", True) is not False, detail
+
+
 def register_task(target: Path, python: Path, config_path: Path,
                   task_name: str) -> bool:
-    """呼叫既有的 `runner/install-task.ps1` 建排程工作。
+    """註冊自啟。Windows 呼叫既有的 `runner/install-task.ps1` 建排程工作；
+    macOS／Linux 呼叫 `scripts/service.py`（LaunchAgent／systemd 使用者服務）。
 
     ⚠️ `-Python` 一定要顯式給：腳本的預設值是 `$RepoRoot\\.venv\\...`，
     在 kit 形態下那個路徑不存在（venv 在包的根目錄，而 `-RepoRoot` 也是
@@ -336,6 +417,17 @@ def register_task(target: Path, python: Path, config_path: Path,
 
     失敗不中止安裝：執行器本體已經可用，手跑一次腳本就補得回來。
     """
+    if sys.platform != "win32":
+        if _no_system():
+            print("  UEP_KIT_NO_SYSTEM 已設定——略過註冊自啟服務")
+            return False
+        print(f"註冊{service_label()}…")
+        ok, detail = posix_service(target, python, config_path, "install")
+        print(("  " if ok else "⚠️ ") + detail)
+        if not ok:
+            print("   可之後手動執行："
+                  f'"{python}" "{service_script(target)}" runner install')
+        return ok
     script = target / "runner" / "install-task.ps1"
     shell = powershell()
     if not script.exists() or shell is None:
@@ -477,9 +569,12 @@ def claude_auth_status(claude_config_dir: Path,
 
 
 def login_hint(claude_config_dir: Path) -> str:
-    """一行 PowerShell：設好 CLAUDE_CONFIG_DIR 再叫登入。"""
-    return (f'$env:CLAUDE_CONFIG_DIR = "{claude_config_dir}"; '
-            f'claude {" ".join(CLAUDE_LOGIN_ARGS)}')
+    """一行指令：設好 CLAUDE_CONFIG_DIR 再叫登入（Windows 是 PowerShell，
+    其餘平台是 POSIX shell）。"""
+    login = f'claude {" ".join(CLAUDE_LOGIN_ARGS)}'
+    if sys.platform == "win32":
+        return f'$env:CLAUDE_CONFIG_DIR = "{claude_config_dir}"; {login}'
+    return f'export CLAUDE_CONFIG_DIR="{claude_config_dir}"; {login}'
 
 
 def has_claude_login(claude_config_dir: Path,
@@ -542,14 +637,24 @@ def run_login(claude_config_dir: Path) -> bool:
     return True
 
 
-def uninstall(task_name: str) -> None:
-    """移除排程工作與註冊檔。
+def uninstall(task_name: str, target: Path | None = None) -> None:
+    """移除排程工作（非 Windows：自啟服務）與註冊檔。
 
     **不刪設定檔、不刪 state／log**：那些是使用者的資料，而「移除」最常見的
     下一步是重裝——把設定一起刪掉會讓重裝的人以為自己從來沒設定過。
     """
     shell = powershell()
-    if shell is None:
+    if sys.platform != "win32":
+        if _no_system():
+            print("  UEP_KIT_NO_SYSTEM 已設定——略過移除自啟服務")
+        else:
+            target = target or default_install_dir()
+            py = venv_python(target)
+            ok, detail = posix_service(
+                target, py if py.exists() else Path(sys.executable),
+                default_config_path(), "uninstall")
+            print(("" if ok else "⚠️ 移除自啟服務失敗：") + detail)
+    elif shell is None:
         print("⚠️ 找不到 PowerShell，排程工作請手動移除")
     else:
         # 先問在不在，再決定要不要移除：直接 Unregister 一個不存在的工作，
@@ -588,30 +693,33 @@ def main(argv: list[str] | None = None) -> None:
     # ⚠️ help 字串會被 argparse 拿去做 `%` 展開，所以 `%LOCALAPPDATA%` 必須
     # 寫成 `%%LOCALAPPDATA%%`。不跳脫的話 `--help` 直接拋 ValueError——
     # 而那是使用者（與 App 的作者）查得到參數清單的唯一入口
-    p.add_argument("--dir", help="安裝目錄，預設 "
-                                 "%%LOCALAPPDATA%%\\UEP\\Chatroom\\runner-kit")
+    p.add_argument("--dir", help="安裝目錄，預設 <安裝根目錄>/runner-kit"
+                                 "（Windows %%LOCALAPPDATA%%\\UEP\\Chatroom；"
+                                 "macOS ~/Library/Application Support/UEP/Chatroom；"
+                                 "Linux ~/.local/share/uep/chatroom）")
     p.add_argument("--hub-url", help="Hub 位址，例如 http://192.0.2.10:8787")
     p.add_argument("--token", help="Agent token（Hub 的 CHATROOM_TOKEN）")
     p.add_argument("--host", help="註冊用的機器名，預設本機名稱")
     p.add_argument("--label", help="註冊用的標籤（同 host+label 在 Hub 是同一台）")
-    p.add_argument("--config", help="設定檔路徑，預設 "
-                                    "%%LOCALAPPDATA%%\\UEP\\Chatroom\\runner\\config.json")
+    p.add_argument("--config", help="設定檔路徑，預設 <安裝根目錄>/runner/config.json")
     p.add_argument("--task-name", default=DEFAULT_TASK_NAME,
-                   help=f"排程工作名稱，預設 {DEFAULT_TASK_NAME}")
+                   help=f"排程工作名稱（僅 Windows），預設 {DEFAULT_TASK_NAME}")
     p.add_argument("--no-task", action="store_true",
-                   help="不註冊排程工作（之後可手動跑 runner/install-task.ps1）")
+                   help="不註冊自啟（之後可手動跑 runner/install-task.ps1，"
+                        "或 macOS／Linux 的 scripts/service.py runner install）")
     p.add_argument("--yes", action="store_true", help="不互動，全用預設／參數值")
     p.add_argument("--verbose", action="store_true",
                    help="失敗時印出完整技術細節（traceback）")
     p.add_argument("--uninstall", action="store_true",
-                   help="移除排程工作與註冊檔；設定與資料留著")
+                   help="移除自啟服務與註冊檔；設定與資料留著")
     args = p.parse_args(argv)
 
     # 走 stdout、不擋流程：`--yes` 下 App 也收得到，而它只解析最後那行 RESULT
     print(DISCLAIMER, flush=True)
 
     if args.uninstall:
-        uninstall(args.task_name)
+        uninstall(args.task_name, Path(args.dir).expanduser().resolve()
+                  if args.dir else None)
         emit_result({"ok": True, "kit": KIT_NAME, "action": "uninstall",
                      "registry": str(REGISTRY)})
         return
@@ -639,7 +747,7 @@ def main(argv: list[str] | None = None) -> None:
   [1/{TOTAL_STEPS}] 把這一包複製到安裝目錄
   [2/{TOTAL_STEPS}] 在那裡建獨立 Python 環境並裝上相依套件
   [3/{TOTAL_STEPS}] 產生設定檔（**已經有的話原樣不動**）
-  [4/{TOTAL_STEPS}] 註冊 Windows 排程工作（只建工作，不啟動執行器）
+  [4/{TOTAL_STEPS}] 註冊{service_label()}（只建工作，不啟動執行器）
   [5/{TOTAL_STEPS}] 寫註冊檔，並帶你把登入做掉
 
 安裝目錄：{target}
@@ -698,7 +806,7 @@ def main(argv: list[str] | None = None) -> None:
             f"   常見原因：網路連不到 PyPI、或安裝目錄沒有寫入權限。\n"
             f"   確認後重跑一次即可；要看完整技術細節請加上 --verbose。")
 
-    step(4, "註冊 Windows 排程工作…")
+    step(4, f"註冊{service_label()}…")
     task_ok = False if args.no_task else register_task(
         target, python, config_path, args.task_name)
     if args.no_task:
@@ -714,9 +822,16 @@ def main(argv: list[str] | None = None) -> None:
     config_note = "" if wrote else (
         "\n   （設定檔原本就在，這次沒有動它——上面問的 Hub 位址與 token "
         "**沒有**寫進去）")
-    task_note = ("排程工作「%s」已建立，但**還沒啟動**。" % args.task_name
+    if sys.platform == "win32":
+        start_hint = f"Start-ScheduledTask -TaskName {args.task_name}"
+        task_name_shown = f"「{args.task_name}」"
+    else:
+        start_hint = (f'"{python}" "{service_script(target)}" runner start')
+        task_name_shown = ""
+    task_note = (f"{service_label()}{task_name_shown}已建立，但**還沒啟動**。"
                  if task_ok else
-                 "排程工作沒建（--no-task 或註冊失敗），執行器不會自己啟動。")
+                 f"{service_label()}沒建（--no-task 或註冊失敗），"
+                 "執行器不會自己啟動。")
     print(f"""
 ✅ 安裝完成。
 
@@ -742,7 +857,7 @@ def main(argv: list[str] | None = None) -> None:
    "{python}" -m chatroom_runner --config "{config_path}" --selfcheck-only
 
 {task_note}
-自檢過了再 Start-ScheduledTask -TaskName {args.task_name}。
+自檢過了再啟動：{start_hint}
 """)
 
     # 互動模式順手把第 2 件事做掉；`--yes` 下**不起登入**——那條路上 stdin
