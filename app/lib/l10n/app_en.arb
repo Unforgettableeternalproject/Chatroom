@@ -1229,7 +1229,7 @@
   "hostKitInstallPythonLink": "Open python.org downloads",
   "hostKitInstallRunnerBusy": "The runner still has runs in flight; drain it from the dashboard first.",
   "hostKitInstallHubNote": "Updating the hub stops it first; start it again after the install.",
-  "hostKitInstallUacNote": "Windows may ask for permission during the install.",
+  "hostKitInstallUacNote": "On Windows, you may be asked for permission during the install.",
   "hostKitPrereqTitle": "Prerequisites",
   "hostKitPrereqRecheck": "Re-check",
   "hostKitPrereqChecking": "Checking…",
@@ -1329,7 +1329,7 @@
   "helpInstallBlockedLead": "When the button is disabled",
   "helpInstall3": "Four reasons: already on the release version, this version has no release, no Python 3.12 found, or the runner still has runs in hand (drain it from the dashboard first).",
   "helpInstallHubLead": "Updating the Hub",
-  "helpInstall4": "The Hub is stopped before it is reinstalled, and you start it again yourself afterwards. Windows may ask for permission along the way.",
+  "helpInstall4": "The Hub is stopped before it is reinstalled, and you start it again yourself afterwards. On Windows you may be asked for permission along the way.",
   "helpInstallConfigLead": "Config files",
   "helpInstall5": "An existing config file is not overwritten; the installer says so when it finishes.",
   "helpEnvLead": "Editing .env",
@@ -1826,7 +1826,7 @@
   "helpPersonalRow6B": "Shows and lets you copy the IDs of rooms, boards, cards, stages, cycles, scratchpads and entries. A #seq appears after the message time; right-click a message to copy its ID.",
   "helpPersonalRow7A": "Celebration mode",
   "helpPersonalRow7B": "Confetti and a sound when a member joins, a card is completed, or a dispatch succeeds in a work room; the system message that triggered it turns a pulsing gold. Only live events, never old messages.",
-  "helpVersionUpdate": "Under \"App version\" in Settings → Connection there is \"Check for updates\" (Windows only). It queries the latest GitHub Release and can download and apply it. Size and SHA-256 are verified, and a failed swap rolls back to the old version. If nothing can be fetched it says so instead of claiming you are up to date. After a dropped connection comes back, if the App or the local Hub has a newer release you are asked whether to update; if the Hub still has runs in progress it waits until they finish, test builds are not prompted, and choosing Later skips that version until the App is restarted.",
+  "helpVersionUpdate": "Under \"App version\" in Settings → Connection there is \"Check for updates\". It queries the latest GitHub Release and can download and apply it. Size and SHA-256 are verified, and a failed swap rolls back to the old version. If nothing can be fetched it says so instead of claiming you are up to date. After a dropped connection comes back, if the App or the local Hub has a newer release you are asked whether to update; if the Hub still has runs in progress it waits until they finish, test builds are not prompted, and choosing Later skips that version until the App is restarted.",
   "helpMachineTabRow1A": "Hub host",
   "helpMachineTabRow1B": "The Hub process and its three lights, connection info, tunnel and backups",
   "helpMachineTabRow2A": "Agent link",
@@ -1963,5 +1963,7 @@
   "boardFilterNoMatch": "No matching cards",
   "hostRunnerServiceNoKit": "Runner install location not found",
   "settingsUpdateFailTranslocated": "Move Chatroom to the Applications folder, reopen it, then update",
-  "settingsUpdateFailAppImage": "AppImage builds can't self-update; download the new version instead"
+  "settingsUpdateFailAppImage": "AppImage builds can't self-update; download the new version instead",
+  "hostRunnerLoginHintTerminal": "Or run this line in a terminal:",
+  "hostRunnerNoTerminal": "No terminal program found. Open a terminal yourself and run: {command}"
 }

@@ -6296,7 +6296,7 @@
   "@hostKitInstallHubNote": {
     "description": "Hub 更新的提示"
   },
-  "hostKitInstallUacNote": "安裝過程可能會跳出 Windows 授權視窗。",
+  "hostKitInstallUacNote": "在 Windows 上，安裝過程可能會跳出授權視窗。",
   "@hostKitInstallUacNote": {
     "description": "排程工作註冊可能觸發 UAC"
   },
@@ -6736,7 +6736,7 @@
   "@helpInstallHubLead": {
     "description": "說明條目的粗體小標"
   },
-  "helpInstall4": "會先停掉 Hub 再重裝，裝完要自己按啟動。過程中可能跳出 Windows 授權視窗。",
+  "helpInstall4": "會先停掉 Hub 再重裝，裝完要自己按啟動。在 Windows 上，過程中可能跳出授權視窗。",
   "@helpInstall4": {
     "description": "說明：Hub 更新流程"
   },
@@ -8899,7 +8899,7 @@
   "@helpPersonalRow7B": {
     "description": "說明頁文案"
   },
-  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」（僅 Windows）：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。斷線後重新連上時，若 App 或本機 Hub 有新版，會問你要不要更新；Hub 上還有進行中的工作就等它結束再問，測試版不會被提示，選「稍後」後這次執行期間不再問同一版。",
+  "helpVersionUpdate": "設定 → 連線的「App 版本」下方有「檢查更新」：它會查 GitHub 最新 Release，有新版就能直接下載更新。下載後會比對大小與 SHA-256，替換失敗會還原成舊版。查不到時會顯示「查不到更新資訊」，不會說成已是最新。斷線後重新連上時，若 App 或本機 Hub 有新版，會問你要不要更新；Hub 上還有進行中的工作就等它結束再問，測試版不會被提示，選「稍後」後這次執行期間不再問同一版。",
   "@helpVersionUpdate": {
     "description": "說明頁文案"
   },
@@ -9402,5 +9402,18 @@
   "settingsUpdateFailAppImage": "AppImage 版本不支援自動更新，請下載新版取代",
   "@settingsUpdateFailAppImage": {
     "description": "更新失敗（Linux）：以 AppImage 執行，檔案系統是唯讀掛載"
+  },
+  "hostRunnerLoginHintTerminal": "或在終端機執行這一行：",
+  "@hostRunnerLoginHintTerminal": {
+    "description": "macOS／Linux 的登入指令前的一句話（Windows 是 hostRunnerLoginHint）"
+  },
+  "hostRunnerNoTerminal": "找不到可用的終端機程式。請自己開一個終端機，執行：{command}",
+  "@hostRunnerNoTerminal": {
+    "description": "macOS／Linux 開不出終端機時的提示，帶著要自己執行的那一行",
+    "placeholders": {
+      "command": {
+        "type": "String"
+      }
+    }
   }
 }

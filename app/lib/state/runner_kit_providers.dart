@@ -6,7 +6,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/platform/app_platform.dart';
+import '../l10n/l10n.dart';
 import '../models/host_kit.dart' show KitSource;
+import 'posix_service.dart' show CommandLine;
 import 'runner_workspaces.dart';
 
 // 工作區／專案的模型與 CRUD 住在 runner_workspaces.dart；這裡轉出去，
@@ -74,6 +76,17 @@ String _runnerStateRoot(Map<String, String> env) {
 
 /// 組出來的路徑用哪個分隔：跟著安裝根的平台（POSIX 一律 `/`）。
 String _sepOf() => detectAppPlatform()?.sep ?? Platform.pathSeparator;
+
+/// 說明頁顯示的執行器設定檔預設位置。Windows 維持環境變數的寫法
+/// （使用者照著貼進檔案總管就能開），其他平台顯示實際路徑。
+/// 與 [runnerConfigPathFor] 同一條規則。
+String runnerConfigPathDisplay(AppPlatform? platform) => switch (platform) {
+      AppPlatform.macos =>
+        '~/Library/Application Support/UEP/Chatroom/runner/config.json',
+      AppPlatform.linux =>
+        r'${XDG_DATA_HOME:-~/.local/share}/uep/chatroom/runner/config.json',
+      _ => r'%LOCALAPPDATA%\UEP\Chatroom\runner\config.json',
+    };
 
 /// 這台機器上有沒有執行器。
 ///
@@ -342,8 +355,22 @@ class RunnerClaudeLogin {
 
   /// 沒登入時要人去打的那一行。`CLAUDE_CONFIG_DIR` **一定要帶**：執行器用
   /// 的是自己的設定目錄，在別的目錄登入等於沒登入。
-  String get loginCommand =>
-      '\$env:CLAUDE_CONFIG_DIR = "$configDir"; claude auth login';
+  ///
+  /// 跟著平台：Windows 是 PowerShell 的寫法，macOS／Linux 是 sh 的。
+  String get loginCommand => claudeLoginCommandFor(
+      detectAppPlatform() ?? AppPlatform.windows, configDir);
+}
+
+/// POSIX shell 的單引號字串：裡面的單引號寫成 `'\''`。
+String shellQuote(String value) => "'${value.replaceAll("'", r"'\''")}'";
+
+/// 在執行器的設定目錄下跑 `claude <args>` 的那一行，給人複製貼上。
+String claudeLoginCommandFor(AppPlatform platform, String configDir,
+    [List<String> args = const ['auth', 'login']]) {
+  final line = args.join(' ');
+  return platform.isPosix
+      ? 'CLAUDE_CONFIG_DIR=${shellQuote(configDir)} claude $line'
+      : '\$env:CLAUDE_CONFIG_DIR = "$configDir"; claude $line';
 }
 
 /// 這個設定目錄底下看不看得到登入憑證。
@@ -470,7 +497,7 @@ Future<bool?> probeClaudeAuthStatus(RunnerConfigFile cfg,
         if (oauthToken != null && oauthToken.isNotEmpty)
           'CLAUDE_CODE_OAUTH_TOKEN': oauthToken,
       },
-      runInShell: true,
+      runInShell: Platform.isWindows,
     ).timeout(kAuthStatusTimeout);
     return parseClaudeAuthStatus('${result.stdout}');
   } on Object {
@@ -575,11 +602,88 @@ List<String> claudeTerminalArgv(String script) {
   ];
 }
 
-/// 開一個看得到的終端視窗跑 `claude <claudeArgs>`，等視窗關掉才回來。
+/// macOS／Linux 開不出終端機時丟的例外。訊息已經帶著要執行的那一行，
+/// 畫面把它原樣顯示出來，使用者自己開終端機貼上去。
+class ClaudeTerminalUnavailable implements Exception {
+  ClaudeTerminalUnavailable(String command)
+      : message = L10n.current.hostRunnerNoTerminal(command);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// POSIX：在終端機裡跑的腳本。`CLAUDE_CONFIG_DIR` 先 export，再用使用者的
+/// 登入 shell 跑 claude——從 Dock 或桌面啟動的環境 PATH 很短，找不到使用者
+/// 自己裝的 claude。
+String claudeTerminalShellScript(String configDir, List<String> claudeArgs) {
+  final claude = ['claude', ...claudeArgs.map(shellQuote)].join(' ');
+  return [
+    '#!/bin/sh',
+    'export CLAUDE_CONFIG_DIR=${shellQuote(configDir)}',
+    '"\${SHELL:-/bin/sh}" -l -c ${shellQuote(claude)}',
+    'echo',
+    'printf "按 Enter 關閉 / Press Enter to close: "',
+    'read _',
+    '',
+  ].join('\n');
+}
+
+/// Linux 依序探測的終端機程式與「跑這支腳本」的參數。
+List<CommandLine> linuxTerminalCommands(String scriptPath) => [
+      CommandLine('x-terminal-emulator', ['-e', 'sh', scriptPath]),
+      CommandLine('gnome-terminal', ['--', 'sh', scriptPath]),
+      CommandLine('konsole', ['-e', 'sh', scriptPath]),
+      CommandLine('xterm', ['-e', 'sh', scriptPath]),
+    ];
+
+/// PATH 上有沒有這個可執行檔。
+bool commandOnPath(String name, [Map<String, String>? environment]) {
+  final env = environment ?? Platform.environment;
+  for (final dir in (env['PATH'] ?? '').split(':')) {
+    if (dir.isNotEmpty && File('$dir/$name').existsSync()) return true;
+  }
+  return false;
+}
+
+/// 開一個看得到的終端視窗跑 `claude <claudeArgs>`。
 ///
-/// 不用 detached：detached 拿不到結束時機，而「視窗關了就重新判斷」要靠它。
+/// Windows：等視窗關掉才回來，呼叫端才知道什麼時候該重新判斷。
+/// macOS／Linux：把腳本交給終端機就回來（`open -a Terminal` 與多數 Linux
+/// 終端機沒有「等視窗關掉」可用），登入完按列上的重新檢查。**找不到終端機
+/// 時丟 [ClaudeTerminalUnavailable]**，訊息帶著要自己執行的那一行。
 Future<void> openClaudeTerminal(
-    String configDir, List<String> claudeArgs) async {
+  String configDir,
+  List<String> claudeArgs, {
+  AppPlatform? platform,
+  bool Function(String name)? hasCommand,
+  Future<ProcessResult> Function(String exe, List<String> args)? run,
+  Directory? tempRoot,
+}) async {
+  final p = platform ?? detectAppPlatform() ?? AppPlatform.windows;
+  if (p.isPosix) {
+    final exec = run ?? (exe, args) => Process.run(exe, args);
+    final dir = await (tempRoot ?? Directory.systemTemp)
+        .createTemp('chatroom-claude-');
+    final script = File('${dir.path}/claude-login.command');
+    await script.writeAsString(claudeTerminalShellScript(configDir, claudeArgs));
+    final manual = claudeLoginCommandFor(p, configDir, claudeArgs);
+    if (p == AppPlatform.macos) {
+      // Terminal 只肯跑有執行位元的 .command
+      await exec('chmod', ['755', script.path]);
+      final r = await exec('open', ['-a', 'Terminal', script.path]);
+      if (r.exitCode != 0) throw ClaudeTerminalUnavailable(manual);
+      return;
+    }
+    final has = hasCommand ?? commandOnPath;
+    for (final c in linuxTerminalCommands(script.path)) {
+      if (!has(c.executable)) continue;
+      final r = await exec(c.executable, c.arguments);
+      if (r.exitCode == 0) return;
+    }
+    throw ClaudeTerminalUnavailable(manual);
+  }
   final argv = claudeTerminalArgv(claudeTerminalScript(configDir, claudeArgs));
   final process = await Process.start(argv.first, argv.sublist(1));
   // cmd 本身沒有輸出；照樣放掉，免得管線塞住
@@ -744,8 +848,8 @@ Future<MachineMcpServers> listMachineMcpServers(RunnerConfigFile cfg) async {
       environment: {
         if (configDir.isNotEmpty) 'CLAUDE_CONFIG_DIR': configDir,
       },
-      // Windows 上 claude 是 .cmd，不走 shell 叫不起來
-      runInShell: true,
+      // Windows 上 claude 是 .cmd，不走 shell 叫不起來；POSIX 直接 exec
+      runInShell: Platform.isWindows,
     ).timeout(kMcpListTimeout);
   } on Object catch (e) {
     return MachineMcpServers(error: '$e');
