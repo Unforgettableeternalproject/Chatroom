@@ -96,8 +96,23 @@ def test_release_workflow_keeps_rc_and_formal_apart():
     wf = _release_workflow()
     run = wf["jobs"]["resolve"]["steps"][1]["run"]
     assert 'RUN_BRANCH" = "develop"' in run
-    assert 'grep -E "$RC_RE"' in run
-    assert 'grep -Ev "$RC_RE"' in run
+    assert 'grep -E -e "$RC_RE"' in run
+    assert 'grep -Ev -e "$RC_RE"' in run
+
+
+def test_release_workflow_rc_pattern_is_not_parsed_as_grep_option():
+    """`RC_RE` 以 `-` 開頭，沒有 `-e` 時 grep 會把它當成選項，比對永遠失敗。
+
+    v1.2.9-rc1 就是這樣被發成非 prerelease、make_latest=true 的草稿。
+    """
+    import re
+
+    run = _release_workflow()["jobs"]["resolve"]["steps"][1]["run"]
+    assert "RC_RE='-rc[0-9]+$'" in run
+    uses = re.findall(r'grep[^|\n]*"\$RC_RE"', run)
+    assert uses, "resolve 裡應該有用 RC_RE 比對 tag"
+    for use in uses:
+        assert '-e "$RC_RE"' in use, use
 
 
 def test_release_workflow_strips_rc_suffix_in_version_check():

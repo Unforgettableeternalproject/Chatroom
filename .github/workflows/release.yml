@@ -70,7 +70,7 @@ jobs:
             SHA=$(git rev-parse "$TAG^{commit}")
             # RC tag 從 develop 發（也接受已進 master 的 commit）；
             # 正式／熱修 tag 一樣只看 CI 有沒有綠過，行為不變
-            if echo "$TAG" | grep -Eq "$RC_RE"; then
+            if echo "$TAG" | grep -Eq -e "$RC_RE"; then
               OK=$(gh run list --workflow CI --commit "$SHA" --event push \
                      --json conclusion,headBranch \
                      -q '[.[] | select(.conclusion=="success" and (.headBranch=="develop" or .headBranch=="master"))] | length')
@@ -89,16 +89,16 @@ jobs:
             # 同一顆 commit 有多個 tag 時取版本最新的那個。
             # develop 只認 RC tag、master 只認非 RC tag——兩邊不互發
             if [ "$RUN_BRANCH" = "develop" ]; then
-              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -E "$RC_RE" | sort -V | tail -n 1)
+              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -E -e "$RC_RE" | sort -V | tail -n 1)
             else
-              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -Ev "$RC_RE" | sort -V | tail -n 1)
+              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -Ev -e "$RC_RE" | sort -V | tail -n 1)
             fi
             if [ -z "$TAG" ]; then
               echo "這顆 commit（$SHA，$RUN_BRANCH）沒有符合的 v* tag，不發 release"
             fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          if echo "$TAG" | grep -Eq "$RC_RE"; then
+          if echo "$TAG" | grep -Eq -e "$RC_RE"; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
