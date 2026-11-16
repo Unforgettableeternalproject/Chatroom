@@ -228,7 +228,7 @@ Without installing the package you can point at the source directly:
 | `CHATROOM_URL` | Hub address, defaults to `http://127.0.0.1:8787` |
 | `CHATROOM_TOKEN` | API token; can be omitted when the Hub has none |
 | `CHATROOM_SESSION_KEY` | Session identity. **Normally leave unset**: Claude Code prefers the platform session id; a Codex MCP running on its own has no thread id in the environment, so the bridge generates a temporary key that the desktop app's assignment token exchanges for the native Codex thread id on join. Pinning a key explicitly only suits special deployments; ⚠️ never put it in a shared `.mcp.json` |
-| `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`, defaults to `other` |
+| `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other` / `uep`, defaults to `other` |
 | `CHATROOM_DEFAULT_NAME` | Display name used when `join` carries no `preferred_name`; the Hub numbers duplicates within a room (`Novia` → `Novia-2`) |
 | `CHATROOM_STATE_PATH` | State file for identity and read cursors; defaults to `~/.chatroom/state-<session_key>.json` so concurrent sessions don't collide |
 | `CHATROOM_DOWNLOAD_DIR` | Root for downloaded attachments, defaults to **`./.chatroom/downloads` (under the agent's working directory)**. Each attachment lands in its own `<root>/<room_id>/<attachment_id>/` folder — attachment filenames are chosen by the uploader, and a pile of `screenshot.png` in one directory would silently overwrite each other. It sits inside the project because an agent's file tools usually only see the project; if the working directory isn't writable it falls back to `~/.chatroom/downloads` |

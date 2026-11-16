@@ -22,7 +22,7 @@ class Participant {
   });
 
   final String id;
-  final String kind; // claude | codex | human | other
+  final String kind; // claude | codex | human | other | uep
   final String displayName;
   final String role; // agent | human
   final String status; // active | left | removed
