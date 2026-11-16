@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
@@ -18,7 +19,7 @@ import 'kit_prereq_rows.dart';
 ///
 /// ## 只有對得上 Release 的 App 才裝得了東西
 ///
-/// 查的是 `releases/tags/v<這份 App 的版本>`（熱修版為 `v<版本>-hotfix<n>`）。
+/// 查的是 `releases/tags/v<這份 App 的版本>`（熱修版為 `v<版本>-hotfix<n>`，RC 為 `v<版本>-rc<n>`）。
 /// dev build 查不到，那時按鈕**停用並說明白**——不退到 latest：退過去的話，
 /// 一份沒發布過的 App 會裝上一包與它不同源的 kit，而出事時沒有人分得出那兩邊
 /// 差在哪。
@@ -232,7 +233,9 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
       const SizedBox(height: 14),
       Row(children: [
         UepButton(
-          label: l10n.hostKitRegisterService,
+          label: ref.watch(appPlatformProvider)?.isPosix == true
+              ? l10n.hostKitRegisterServicePosix
+              : l10n.hostKitRegisterService,
           small: true,
           variant: UepButtonVariant.outline,
           onPressed: () async {

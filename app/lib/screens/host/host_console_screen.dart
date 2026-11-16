@@ -1,9 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
@@ -743,7 +742,7 @@ class _TunnelSection extends ConsumerWidget {
               const SizedBox(height: 12),
               CopyRow(label: l10n.hostFieldTunnelUrl, value: t.url),
             ],
-            if (actions != null && Platform.isWindows) ...[
+            if (actions != null && ref.watch(appPlatformProvider) != null) ...[
               const SizedBox(height: 14),
               Row(children: [
                 // 開隧道比啟動 Hub 更需要「進行中」：cloudflared 要先跟
@@ -949,9 +948,10 @@ class _ControlSection extends ConsumerWidget {
     final actions = ref.watch(hostActionsProvider);
     if (actions == null) return const SizedBox.shrink();
 
-    // 服務註冊是排程任務，只有 Windows 有。**藏起來而不是顯示為失敗**——
-    // 那不是壞掉，是這台機器沒有那個東西（設計稿 §6.3）
-    final windows = Platform.isWindows;
+    // 起停與自啟只有桌面三平台有（Windows 排程工作、macOS LaunchAgent、
+    // Linux systemd user）。**藏起來而不是顯示為失敗**——那不是壞掉，是這台
+    // 機器沒有那個東西（設計稿 §6.3）
+    final windows = ref.watch(appPlatformProvider) != null;
     final service = ref.watch(serviceStatusProvider).value;
     final health = ref.watch(hostHealthProvider).value;
     // 進行中與結果都從 provider 讀，不放 State——這個區塊是 ConsumerWidget，

@@ -8,7 +8,8 @@
 
 1. 環境變數 ``CHATROOM_RUNNER_CONFIG``
 2. ``%LOCALAPPDATA%/UEP/Chatroom/runner/config.json``（Windows）
-3. ``~/.local/share/uep/chatroom/runner/config.json``（其他平台）
+3. ``~/Library/Application Support/UEP/Chatroom/runner/config.json``（macOS）
+4. ``${XDG_DATA_HOME:-~/.local/share}/uep/chatroom/runner/config.json``（Linux）
 
 Hub 憑證（``agent_token``）可以三種來源，由近到遠：設定檔 ``agent_token``、
 環境變數 ``CHATROOM_TOKEN``、``token_env_file`` 指到的 ``.env``（沿用 bridge
@@ -21,6 +22,8 @@ import fnmatch
 import json
 import logging
 import os
+import socket
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -119,16 +122,43 @@ def apply_oauth_token(env: dict[str, str], state_dir: Path) -> dict[str, str]:
     return env
 
 
+# push 憑證 helper 的平台預設。Linux 刻意不在表裡：沒有一個放諸四海皆準的
+# 預設——使用者多半已經在全域 git 設定裡配好自己的（libsecret／store／cache），
+# 替他加一個 `store` 會把明文憑證寫進 ~/.git-credentials，那是他沒同意過的事
+DEFAULT_PUSH_CREDENTIAL_HELPERS = {
+    "win32": "manager",
+    "darwin": "osxkeychain",
+}
+
+
 class ConfigError(Exception):
     """設定檔缺漏或形狀不對。啟動時就該炸，不要帶著半套設定去領單。"""
 
 
+def default_install_root() -> Path:
+    """安裝根目錄。
+
+    ⚠️ 與 `scripts/service.py` 的 `install_root()`、`runner-kit/install.py` 的
+    同名函式是**同一個契約**（安裝器寫設定檔的位置、服務管理員的 log 位置、
+    執行器自己找設定的位置必須一致；有測試守著三處相等）。
+    """
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / "UEP" / "Chatroom"
+    if sys.platform == "darwin":
+        return (Path.home() / "Library" / "Application Support"
+                / "UEP" / "Chatroom")
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    # XDG 規範：相對路徑視為無效
+    base = Path(xdg) if xdg and os.path.isabs(xdg) \
+        else Path.home() / ".local" / "share"
+    return base / "uep" / "chatroom"
+
+
 def default_state_dir() -> Path:
     """執行器的本機狀態根目錄（設定、狀態檔、log、暫存 run 目錄）。"""
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        return Path(local) / "UEP" / "Chatroom" / "runner"
-    return Path.home() / ".local" / "share" / "uep" / "chatroom" / "runner"
+    return default_install_root() / "runner"
 
 
 def default_config_path() -> Path:
@@ -377,11 +407,22 @@ class RunnerConfig:
     agent_allowed_signers: str = ""
     # 簽章用的 ssh-keygen。空＝PATH 上的 `ssh-keygen`
     ssh_keygen_bin: str = ""
+    # push run 與 release_fix 推送時加回來的 git credential helper。
+    # 空＝依平台：Windows `manager`、macOS `osxkeychain`、其他平台**沿用使用者
+    # 既有的 git 設定**（不覆寫、也不新增 helper）。見 `push_credential_helper_name`
+    push_credential_helper: str = ""
     version: str = "0.1.0"
 
     @property
     def ssh_keygen_program(self) -> str:
         return self.ssh_keygen_bin or "ssh-keygen"
+
+    @property
+    def push_credential_helper_name(self) -> str:
+        """實際要用的 helper 名稱；空字串＝不覆寫，沿用使用者的 git 設定。"""
+        if self.push_credential_helper:
+            return self.push_credential_helper
+        return DEFAULT_PUSH_CREDENTIAL_HELPERS.get(sys.platform, "")
 
     @property
     def log_dir(self) -> Path:
@@ -630,6 +671,18 @@ def _as_argv(raw) -> list[str]:
     return [str(raw)]
 
 
+def _default_host() -> str:
+    """設定沒填 host 時的預設值，與 bridge identity 同源（socket.gethostname）。
+
+    不用 COMPUTERNAME：它是 NetBIOS 名（大寫、截 15 字），與 bridge 自報的
+    host 不一致，指派 UI 會把同一台機器當成兩台。
+    """
+    try:
+        return (socket.gethostname() or "")[:200] or "localhost"
+    except OSError:
+        return "localhost"
+
+
 def load_config(path: str | os.PathLike[str] | None = None) -> RunnerConfig:
     """讀設定檔並套用環境變數覆寫。"""
     cfg_path = Path(path) if path else default_config_path()
@@ -683,7 +736,7 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         hub_url=(os.environ.get("CHATROOM_RUNNER_HUB_URL")
                  or raw.get("hub_url") or "http://127.0.0.1:8787"),
         agent_token=token,
-        host=raw.get("host") or os.environ.get("COMPUTERNAME") or "localhost",
+        host=raw.get("host") or _default_host(),
         label=raw.get("label") or "runner",
         workspaces=workspaces,
         claude_bin=_as_argv(raw.get("claude_bin")),
@@ -729,5 +782,6 @@ def config_from_dict(raw: dict, base_dir: Path | None = None) -> RunnerConfig:
         agent_signing_key=_signing_key_from(raw),
         agent_allowed_signers=str(raw.get("agent_allowed_signers") or ""),
         ssh_keygen_bin=str(raw.get("ssh_keygen_bin") or ""),
+        push_credential_helper=str(raw.get("push_credential_helper") or ""),
         version=raw.get("version") or "0.1.0",
     )

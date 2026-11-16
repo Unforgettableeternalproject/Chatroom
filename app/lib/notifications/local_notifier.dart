@@ -8,7 +8,8 @@ import 'notification_center.dart';
 
 final _log = Logger('notifier');
 
-/// OS 層通知（Windows toast / Android notification）。
+/// OS 層通知（Windows toast／macOS 通知中心／Linux 的 freedesktop
+/// 通知／Android notification）。
 ///
 /// 點擊通知 → [onSelectRoom]（由 app 層設定成導頁到該房間）。
 /// 初始化失敗不致命：app 照常運作，只是沒有系統通知（記 log）。
@@ -34,6 +35,18 @@ class LocalNotifier {
           appName: 'Chatroom',
           appUserModelId: 'UEP.Chatroom.App',
           guid: '7ff7b54d-fe7a-42dd-9e2c-921a9206140c',
+        ),
+        // macOS：初始化時向系統要通知權限（拒絕＝安靜退化成沒有通知）。
+        // 角標只有 Windows 工作列有做，所以不要角標權限。
+        macOS: const DarwinInitializationSettings(
+          requestAlertPermission: true,
+          requestSoundPermission: true,
+          requestBadgePermission: false,
+        ),
+        // Linux：走 D-Bus 的 org.freedesktop.Notifications；沒有通知服務時
+        // initialize 會丟例外，由下面的 catch 接住（只是沒有系統通知）
+        linux: const LinuxInitializationSettings(
+          defaultActionName: 'Chatroom',
         ),
       );
       await _plugin.initialize(
@@ -76,6 +89,12 @@ class LocalNotifier {
             priority: Priority.high,
           ),
           windows: const WindowsNotificationDetails(),
+          macOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+            presentBadge: false,
+          ),
+          linux: const LinuxNotificationDetails(),
         ),
         payload: n.target ?? n.roomId,
       );

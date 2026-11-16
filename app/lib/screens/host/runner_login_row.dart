@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
@@ -140,7 +141,10 @@ class _RunnerLoginRowState extends ConsumerState<RunnerLoginRow> {
         ]),
         if (needLogin) ...[
           const SizedBox(height: 8),
-          Text(l10n.hostRunnerLoginHint,
+          Text(
+              ref.watch(appPlatformProvider)?.isPosix == true
+                  ? l10n.hostRunnerLoginHintTerminal
+                  : l10n.hostRunnerLoginHint,
               style: UepText.serif(size: 13, color: s.inkSoft)),
           const SizedBox(height: 6),
           CopyRow(

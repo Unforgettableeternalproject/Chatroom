@@ -1,5 +1,6 @@
 import 'package:chatroom_app/api/tokens_api.dart';
 import 'package:chatroom_app/core/config/app_settings.dart';
+import 'package:chatroom_app/core/platform/app_platform.dart';
 import 'package:chatroom_app/core/theme/uep_theme.dart';
 import 'package:chatroom_app/core/window/window_tray.dart';
 import 'package:chatroom_app/l10n/app_localizations.dart';
@@ -17,7 +18,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// 支援與否用 [closeToTraySupportedProvider] 覆寫——跑測試那台機器的
 /// 作業系統不是被測的條件。locale 寫死 zh_TW（測試平台是 en_US）。
-Widget _host(SettingsRepository settings, {required bool traySupported}) {
+Widget _host(SettingsRepository settings,
+    {required bool traySupported, bool trayHost = true, AppPlatform? platform}) {
   final router = GoRouter(
     initialLocation: '/settings',
     routes: [
@@ -31,6 +33,8 @@ Widget _host(SettingsRepository settings, {required bool traySupported}) {
     overrides: [
       settingsRepoProvider.overrideWithValue(settings),
       closeToTraySupportedProvider.overrideWithValue(traySupported),
+      closeToTrayHostProvider.overrideWith((ref) async => trayHost),
+      if (platform != null) appPlatformProvider.overrideWithValue(platform),
       // 邀請區塊會去打 Hub：不擋的話測試結束時 dio 的計時器還醒著
       accessTokensProvider.overrideWith((ref) async => const <AccessToken>[]),
       initialConfigProvider.overrideWithValue(
@@ -107,6 +111,30 @@ void main() {
     await tester.drag(find.byType(ListView).last, const Offset(0, -2000));
     await tester.pump();
 
+    expect(find.text(_label), findsNothing);
+  });
+
+  testWidgets('🔴 Linux 沒有匣宿主：開關停用，旁邊只講「此桌面環境不支援」', (tester) async {
+    await tester.pumpWidget(_host(settings, traySupported: true, trayHost: false));
+    await _openPersonalTab(tester);
+    await tester.dragUntilVisible(find.text(_label), find.byType(ListView),
+        const Offset(0, -80));
+    await tester.pump();
+
+    expect(find.text('此桌面環境不支援'), findsOneWidget);
+    final sw = tester.widget<Switch>(find.byType(Switch).first);
+    expect(sw.onChanged, isNull);
+    expect(sw.value, isFalse);
+  });
+
+  testWidgets('macOS：文案是選單列', (tester) async {
+    await tester.pumpWidget(
+        _host(settings, traySupported: true, platform: AppPlatform.macos));
+    await _openPersonalTab(tester);
+    await tester.dragUntilVisible(find.text('關閉視窗時縮到選單列'),
+        find.byType(ListView), const Offset(0, -80));
+
+    expect(find.text('關閉視窗時縮到選單列'), findsOneWidget);
     expect(find.text(_label), findsNothing);
   });
 }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/app_platform.dart';
 import '../core/util/env_file.dart';
 import '../l10n/l10n.dart';
 import '../models/host_kit.dart';
@@ -11,13 +12,8 @@ import 'host_probe.dart';
 import 'runner_kit_providers.dart';
 
 /// 登錄檔的位置。`install-kit/install.py` 寫，App 讀。
-File? mcpKitRegistryFile([Map<String, String>? environment]) {
-  final env = environment ?? Platform.environment;
-  final home = env['USERPROFILE'] ?? env['HOME'] ?? '';
-  if (home.isEmpty) return null;
-  return File('$home${Platform.pathSeparator}.chatroom'
-      '${Platform.pathSeparator}mcp-kit.json');
-}
+File? mcpKitRegistryFile([Map<String, String>? environment]) =>
+    chatroomRegistryFile('mcp-kit.json', environment: environment);
 
 /// 這台機器上有沒有接上 chatroom。
 ///
@@ -138,6 +134,9 @@ Future<List<String>> _bridgeCandidates(
   if (local != null && local.isNotEmpty) {
     add([local, 'UEP', 'Chatroom', 'bridge'].join(sep));
   }
+  // 其他平台的安裝根（macOS Application Support、Linux XDG_DATA_HOME）
+  final installRoot = chatroomInstallRoot(environment: env);
+  if (installRoot.isNotEmpty) add('$installRoot${sep}bridge');
   final programFiles = env['ProgramFiles'];
   if (programFiles != null && programFiles.isNotEmpty) {
     add([programFiles, 'Chatroom', 'bridge'].join(sep));

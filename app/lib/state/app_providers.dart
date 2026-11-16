@@ -270,6 +270,11 @@ final appConfigProvider =
 final closeToTraySupportedProvider =
     Provider<bool>((ref) => WindowTray.instance.supported);
 
+/// 這台機器有沒有系統匣宿主可以放圖示。只有 Linux 會是 false（GNOME 沒裝
+/// AppIndicator 擴充套件之類）；其他平台恆為 true。設定頁據此停用開關。
+final closeToTrayHostProvider =
+    FutureProvider<bool>((ref) => WindowTray.hostAvailable());
+
 // ---------- API ----------
 
 /// 主持人模式開關。**預設關**——持主 token 不等於隨時在用那個身分。
