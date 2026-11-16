@@ -86,6 +86,30 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 > correctly under a CP950 locale. Keep the BOM when editing that file, or
 > `pip install -r` raises `UnicodeDecodeError`.
 
+### Release candidates (RC)
+
+Branches flow `feature/* → develop → master`; master only takes squash PRs from develop.
+An RC is cut from **develop** so it can be tested on real machines before the formal release.
+
+1. Merge the feature branches into `develop` and wait for the develop CI to go green.
+2. Tag that commit `v<version>-rc<n>` (e.g. `v1.2.9-rc1`) and push the tag. The version files
+   stay at `1.2.9`. If the CI had already finished, the tag push starts the release; if not, the
+   release starts when the CI completes. A missed one can be started by hand with
+   `workflow_dispatch` (input: the tag).
+3. The Release workflow builds the same artifacts as a formal release (App on three platforms,
+   three kits) and creates a **draft prerelease** that is not marked latest — the App's
+   "check for updates" reads `releases/latest`, so ordinary users never see it. Publish the draft
+   once it looks right.
+4. Test on real machines. An RC App knows its own tag, so installing a kit from inside it looks up
+   `releases/tags/v1.2.9-rc1`. Another fix means another RC (`-rc2`).
+5. Open the `develop → master` squash PR and, once merged, tag the formal `v1.2.9` on master.
+
+Version order inside the App: `1.2.9-rc1` < `1.2.9-rc2` < `1.2.9` < `1.2.9-hotfix1`, so an RC
+install is offered the formal release when it ships. Branch rules in `release.yml`: develop only
+ever releases `-rc` tags, master never releases them.
+(`workflow_run` only reads the workflow file on the default branch, so changes to `release.yml`
+take effect for develop's CI only after they reach master.)
+
 ### Private rooms
 
 A room can be created as, or later switched to, `private`: it does not appear in the room

@@ -112,6 +112,16 @@ def hotfix_number(tag: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def rc_number(tag: str) -> int:
+    """Release tag 的 RC 序號：`v1.2.9-rc2` → 2，沒有後綴就是 0（非 RC）。
+
+    RC 從 develop 發，版號檔已經是正式版號（見 release.yml）。App 要另外知道
+    自己是第幾個 RC，檢查更新時才分得出 `1.2.9-rc1` 比 `1.2.9` 舊。
+    """
+    m = re.search(r"-rc(\d+)$", tag.strip())
+    return int(m.group(1)) if m else 0
+
+
 def git(*args: str) -> str:
     try:
         out = subprocess.run(
@@ -300,12 +310,14 @@ def main(argv: list[str] = ()) -> int:
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Release 流程帶進來的 tag；本機 build 沒設就是 0
     hotfix = hotfix_number(tag)
+    rc = rc_number(tag)
     cmd = [
         flutter_cmd(), "build", platform, "--release",
         f"--dart-define=CHATROOM_VERSION={version}",
         f"--dart-define=CHATROOM_COMMIT={commit}",
         f"--dart-define=CHATROOM_BUILT_AT={built_at}",
         f"--dart-define=CHATROOM_HOTFIX={hotfix}",
+        f"--dart-define=CHATROOM_RC={rc}",
     ]
     print(f"→ {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=APP)

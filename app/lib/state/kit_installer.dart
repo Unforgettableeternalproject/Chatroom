@@ -101,20 +101,21 @@ bool isAbsoluteKitPath(String path) {
 /// App 手上那個 token 是 Hub 的，送到 GitHub 等於把它交給一個無關的服務。
 const String kKitReleaseRepo = 'Unforgettableeternalproject/Chatroom';
 
-/// 這份 App 對應的 Release tag：`v1.2.5`，熱修版為 `v1.2.5-hotfix1`。
+/// 這份 App 對應的 Release tag：`v1.2.5`，熱修版為 `v1.2.5-hotfix1`，
+/// RC 為 `v1.2.9-rc1`。
 ///
 /// 組法與 App 自更新共用 [AppVersion.toString]；認不得的版號（dev build）
 /// 照原樣加 `v`，維持查不到的行為。
-String kitReleaseTag(String version, {int hotfix = 0}) {
+String kitReleaseTag(String version, {int hotfix = 0, int rc = 0}) {
   final parsed = AppVersion.tryParse(version);
   if (parsed == null) return 'v$version';
-  return AppVersion(parsed.major, parsed.minor, parsed.patch, hotfix)
+  return AppVersion(parsed.major, parsed.minor, parsed.patch, hotfix, rc)
       .toString();
 }
 
-String kitReleaseApiUrl(String version, {int hotfix = 0}) =>
+String kitReleaseApiUrl(String version, {int hotfix = 0, int rc = 0}) =>
     'https://api.github.com/repos/$kKitReleaseRepo/releases/tags/'
-    '${kitReleaseTag(version, hotfix: hotfix)}';
+    '${kitReleaseTag(version, hotfix: hotfix, rc: rc)}';
 
 /// 一份 Release。
 @immutable
@@ -499,9 +500,10 @@ class KitInstaller {
 
   /// 查這一版的 Release。**404 回 `null`**——那是「這份 App 沒有對應的
   /// Release」，不是錯誤，也不退到 latest。
-  Future<KitRelease?> fetchRelease(String version, {int hotfix = 0}) async {
+  Future<KitRelease?> fetchRelease(String version,
+      {int hotfix = 0, int rc = 0}) async {
     final (status, body) =
-        await http.getJson(kitReleaseApiUrl(version, hotfix: hotfix));
+        await http.getJson(kitReleaseApiUrl(version, hotfix: hotfix, rc: rc));
     if (status != 200) return null;
     return KitRelease.fromJson(body);
   }
@@ -717,7 +719,7 @@ final kitReleaseProvider = FutureProvider<KitRelease?>((ref) async {
     final found = await ref
         .watch(kitInstallerProvider)
         .fetchRelease(BuildInfo.current.version,
-            hotfix: BuildInfo.current.hotfix);
+            hotfix: BuildInfo.current.hotfix, rc: BuildInfo.current.rc);
     // 這份 App 就是從那個 tag 的 commit 打出來的（release.yml 四個產物同一顆
     // commit），所以 tag 的 commit ＝ App 自己的 commit。-dirty 對不回任何
     // commit，不當作身分

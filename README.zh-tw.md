@@ -83,6 +83,25 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 > `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
 > 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
 
+### 發版候選版（RC）
+
+分支流程是 `feature/* → develop → master`，master 只收 develop 的 squash PR。
+RC 從 **develop** 發，讓正式版之前先能在實機上測試。
+
+1. 把功能分支合進 `develop`，等 develop 的 CI 綠。
+2. 在那顆 commit 打 tag `v<版號>-rc<n>`（例：`v1.2.9-rc1`）並推送；版號檔仍是 `1.2.9`。
+   CI 已經跑完時由 tag 推送觸發發版；還沒跑完則在 CI 完成時自動發。漏掉的可用
+   `workflow_dispatch`（輸入該 tag）手動補發。
+3. Release workflow 打出與正式版相同的產物（App 三平台＋三包 kit），建立**草稿 prerelease**，
+   不設為 latest——App 的「檢查更新」查的是 `releases/latest`，一般使用者看不到。確認無誤後再發布草稿。
+4. 實機測試。RC 版 App 認得自己的 tag，從裡面安裝 kit 時查的是 `releases/tags/v1.2.9-rc1`。
+   要再修就再發一個 RC（`-rc2`）。
+5. 開 `develop → master` 的 squash PR，合併後在 master 打正式 tag `v1.2.9`。
+
+App 內的版本順序：`1.2.9-rc1` < `1.2.9-rc2` < `1.2.9` < `1.2.9-hotfix1`，所以裝了 RC 的人
+在正式版發出後，檢查更新會提示升級。`release.yml` 的分支規則：develop 只發 `-rc` tag，master 不發。
+（`workflow_run` 只讀預設分支上的 workflow 檔，`release.yml` 的修改要進 master 後，develop 的 CI 才會照新規則觸發。）
+
 ### 對話鎖定（私人房）
 
 房間可以建立成、或事後鎖成 `private`：不會出現在沒份的人的對話列表，也不能

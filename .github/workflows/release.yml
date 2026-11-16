@@ -7,19 +7,28 @@
 name: Release
 
 on:
-  # 接在 master 的 CI 之後：CI 整條（python＋flutter）綠了才發，
+  # 接在 master／develop 的 CI 之後：CI 整條（python＋flutter）綠了才發，
   # 不再自己重跑一次 pytest／flutter test（原本 tag 推上去時兩條並行各跑一次）。
-  # ⚠️ workflow_run 只讀預設分支（master）上的這支檔案。
+  # - master 只發正式與熱修 tag（`v1.2.9`、`v1.2.9-hotfix1`），絕不發 `-rc` tag。
+  # - develop 只發 RC tag（`v1.2.9-rc1`），絕不發正式 tag。
+  # ⚠️ workflow_run 只讀預設分支（master）上的這支檔案：要讓 develop 的 CI 觸發
+  #    RC 自動發版，這支檔案必須已經在 master 上（只改 develop 不會生效）。
   workflow_run:
     workflows: [CI]
     types: [completed]
-    branches: [master]
+    branches: [master, develop]
+  # RC tag 推上去時：develop 的 CI 若早已綠了，workflow_run 不會再觸發（它在
+  # tag 之前就跑完了），所以 RC tag 的推送本身也要能發。CI 還沒跑完時這條會因
+  # 「沒有綠的 CI」而失敗，之後由 workflow_run 在 CI 完成時補上。
+  push:
+    tags: ['v*-rc*']
   # 手動也能發（補發、或 tag 在 CI 跑完後才打時）。給的 tag 必須已經存在，
-  # 且它指向的 commit 在 master 上的 CI 必須是綠的。
+  # 且它指向的 commit 的 CI 必須是綠的：正式／熱修 tag 看 master，
+  # RC tag（`v*-rc<n>`）看 develop 或 master。
   workflow_dispatch:
     inputs:
       tag:
-        description: '要發的 tag（例：v1.2.1）'
+        description: '要發的 tag（例：v1.2.1；RC 例：v1.2.9-rc1）'
         required: true
 
 permissions:
@@ -33,10 +42,13 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
+      # RC tag 發 prerelease（不設為 latest，App 的 releases/latest 看不到）
+      prerelease: ${{ steps.pick.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,25 +57,52 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          RC_RE='-rc[0-9]+$'
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$EVENT" = "push" ]; then
+            TAG="$INPUT_TAG"
+            [ "$EVENT" = "push" ] && TAG="$PUSHED_TAG"
             SHA=$(git rev-parse "$TAG^{commit}")
-            OK=$(gh run list --workflow CI --commit "$SHA" --event push \
-                   --json conclusion -q '[.[] | select(.conclusion=="success")] | length')
+            # RC tag 從 develop 發（也接受已進 master 的 commit）；
+            # 正式／熱修 tag 一樣只看 CI 有沒有綠過，行為不變
+            if echo "$TAG" | grep -Eq "$RC_RE"; then
+              OK=$(gh run list --workflow CI --commit "$SHA" --event push \
+                     --json conclusion,headBranch \
+                     -q '[.[] | select(.conclusion=="success" and (.headBranch=="develop" or .headBranch=="master"))] | length')
+              WHERE="develop／master"
+            else
+              OK=$(gh run list --workflow CI --commit "$SHA" --event push \
+                     --json conclusion -q '[.[] | select(.conclusion=="success")] | length')
+              WHERE="master"
+            fi
             if [ "${OK:-0}" = "0" ]; then
-              echo "✕ $TAG（$SHA）在 master 上沒有綠的 CI，不發"
+              echo "✕ $TAG（$SHA）在 $WHERE 上沒有綠的 CI，不發"
               exit 1
             fi
           else
-            SHA="${{ github.event.workflow_run.head_sha }}"
-            # 同一顆 commit 有多個 tag 時取版本最新的那個
-            TAG=$(git tag --points-at "$SHA" --list 'v*' | sort -V | tail -n 1)
+            SHA="$RUN_SHA"
+            # 同一顆 commit 有多個 tag 時取版本最新的那個。
+            # develop 只認 RC tag、master 只認非 RC tag——兩邊不互發
+            if [ "$RUN_BRANCH" = "develop" ]; then
+              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -E "$RC_RE" | sort -V | tail -n 1)
+            else
+              TAG=$(git tag --points-at "$SHA" --list 'v*' | grep -Ev "$RC_RE" | sort -V | tail -n 1)
+            fi
             if [ -z "$TAG" ]; then
-              echo "這顆 commit（$SHA）沒有 v* tag，不發 release"
+              echo "這顆 commit（$SHA，$RUN_BRANCH）沒有符合的 v* tag，不發 release"
             fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if echo "$TAG" | grep -Eq "$RC_RE"; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
   release:
     needs: resolve
@@ -103,6 +142,8 @@ jobs:
           # 熱修 tag 長 `v1.2.4-hotfix1`：版號不動、只重發 Release，
           # 比對時把 `-hotfix<n>` 剝掉，三端的版本字串仍然是 1.2.4
           WANT="${WANT%%-hotfix*}"
+          # RC tag 長 `v1.2.9-rc1`：版號檔已經是 1.2.9，同樣剝掉後綴再比
+          WANT="${WANT%%-rc*}"
           for f in server/chatroom_server/version.py bridge/chatroom_mcp/version.py; do
             # 用 sed 不用 `grep -oP`：PCRE 在 Windows runner 的 Git Bash 上
             # 不保證有，缺了會變成「檢查沒跑但看起來跑過」
@@ -170,6 +211,12 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true  # 先出草稿，人看過再按發布
           generate_release_notes: true
+          # RC：prerelease 且不設為 latest（App 檢查更新查 releases/latest，看不到）；
+          # 正式版維持原行為（latest）。RC 沒有專屬說明檔，內文開頭標明是測試版，
+          # 後面接自動產生的變更清單
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body: ${{ needs.resolve.outputs.prerelease == 'true' && '⚠️ 這是測試版（Release Candidate），尚未正式發布，請勿用於正式環境。正式版發出後，檢查更新會提示升級。' || '' }}
           files: |
             dist/chatroom-mcp-kit.zip
             dist/chatroom-hub-kit.zip
@@ -289,6 +336,8 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: dist/chatroom-app-${{ env.RELEASE_TAG }}-macos-universal.zip
           fail_on_unmatched_files: true
 
@@ -338,5 +387,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: true
+          prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: dist/chatroom-app-${{ env.RELEASE_TAG }}-linux-x64.tar.gz
           fail_on_unmatched_files: true

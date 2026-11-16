@@ -174,6 +174,20 @@ void main() {
       expect(kitReleaseApiUrl('1.2.5', hotfix: 1), '${base}v1.2.5-hotfix1');
     });
 
+    test('rc>0 查 v<版本>-rc<n>', () {
+      const base = 'https://api.github.com/repos/'
+          'Unforgettableeternalproject/Chatroom/releases/tags/';
+      expect(kitReleaseApiUrl('1.2.9', rc: 1), '${base}v1.2.9-rc1');
+      expect(kitReleaseTag('1.2.9', rc: 2), 'v1.2.9-rc2');
+      expect(kitReleaseTag('1.2.9'), 'v1.2.9');
+    });
+
+    test('fetchRelease 帶 rc 時實際請求 RC tag', () async {
+      final http = _FakeHttp(status: 404, body: {'message': 'Not Found'});
+      await make(http, _FakeRunner()).fetchRelease('1.2.9', rc: 1);
+      expect(http.lastUrl, endsWith('/releases/tags/v1.2.9-rc1'));
+    });
+
     test('fetchRelease 帶 hotfix 時實際請求熱修 tag', () async {
       final http = _FakeHttp(status: 404, body: {'message': 'Not Found'});
       await make(http, _FakeRunner()).fetchRelease('1.2.5', hotfix: 1);

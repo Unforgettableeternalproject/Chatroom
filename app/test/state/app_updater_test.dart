@@ -151,12 +151,22 @@ void main() {
       expect(AppVersion.tryParse('v1.2.5')!.hotfix, 0);
     });
 
+    test('解析 rc 後綴', () {
+      expect(AppVersion.tryParse('v1.2.9-rc1'),
+          const AppVersion(1, 2, 9, 0, 1));
+      expect(AppVersion.tryParse('1.2.9-rc12')!.rc, 12);
+      expect(AppVersion.tryParse('v1.2.9')!.rc, 0);
+      expect(AppVersion.tryParse('v1.2.9-rc1').toString(), 'v1.2.9-rc1');
+    });
+
     test('解析不了回 null', () {
       for (final bad in [
         '',
         'latest',
         'v1.2',
-        'v1.2.5-rc1',
+        'v1.2.5-rc',
+        'v1.2.5-rc1-x',
+        'v1.2.5-rc1-hotfix1',
         'v1.2.5-hotfix',
         'v1.2.5-hotfix2-x',
         '1.2.5+1',
@@ -187,6 +197,27 @@ void main() {
           AppVersionOrder.newer);
     });
 
+    test('rc1 < rc2 < 正式 < hotfix1，且都比下一版舊', () {
+      const order = [
+        'v1.2.8-hotfix3',
+        'v1.2.9-rc1',
+        'v1.2.9-rc2',
+        'v1.2.9-rc10',
+        'v1.2.9',
+        'v1.2.9-hotfix1',
+        'v1.2.10-rc1',
+      ];
+      for (var i = 0; i < order.length; i++) {
+        for (var j = 0; j < order.length; j++) {
+          final expected = i == j
+              ? AppVersionOrder.same
+              : (i > j ? AppVersionOrder.newer : AppVersionOrder.older);
+          expect(compareAppVersions(order[i], order[j]), expected,
+              reason: '${order[i]} vs ${order[j]}');
+        }
+      }
+    });
+
     test('任一邊解析不了＝null，不是相同', () {
       expect(compareAppVersions('nightly', '1.2.5'), isNull);
       expect(compareAppVersions('v1.2.5', ''), isNull);
@@ -197,6 +228,12 @@ void main() {
           version: '1.2.5', commit: 'abc', builtAt: '', hotfix: 2);
       expect(AppVersion.ofBuild(info), const AppVersion(1, 2, 5, 2));
       expect(AppVersion.ofBuild(_release), const AppVersion(1, 2, 5));
+    });
+
+    test('App 自己的版本帶 BuildInfo 的 rc', () {
+      const info =
+          BuildInfo(version: '1.2.9', commit: 'abc', builtAt: '', rc: 1);
+      expect(AppVersion.ofBuild(info), const AppVersion(1, 2, 9, 0, 1));
     });
   });
 
@@ -356,6 +393,23 @@ void main() {
         const hotfix2 = BuildInfo(
             version: '1.2.5', commit: 'abc123', builtAt: '', hotfix: 2);
         expect((await check(info: hotfix2)).phase, AppUpdatePhase.upToDate);
+      });
+
+      test('RC 版 App：正式版算新版，更新的 RC 與自己同號的 RC 則否', () async {
+        const rc1 = BuildInfo(
+            version: '1.2.9', commit: 'abc123', builtAt: '', rc: 1);
+        http.body = _latest('v1.2.9');
+        expect((await check(info: rc1)).phase, AppUpdatePhase.available);
+
+        http.body = _latest('v1.2.9-rc1');
+        expect((await check(info: rc1)).phase, AppUpdatePhase.upToDate);
+      });
+
+      test('正式版 App 不會被舊 RC 蓋過', () async {
+        const formal = BuildInfo(
+            version: '1.2.9', commit: 'abc123', builtAt: '');
+        http.body = _latest('v1.2.9-rc2');
+        expect((await check(info: formal)).phase, AppUpdatePhase.upToDate);
       });
 
       // 以下每一種都是「查不到」。它們若被呈現成「已是最新」，使用者會

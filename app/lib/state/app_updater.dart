@@ -33,10 +33,14 @@ const List<String> kAppSoPath = ['data', 'app.so'];
 const String kAppLatestReleaseUrl =
     'https://api.github.com/repos/$kKitReleaseRepo/releases/latest';
 
-/// 可比較的版本：`v1.2.5-hotfix2` → (1, 2, 5, 2)。
+/// 可比較的版本：`v1.2.5-hotfix2` → (1, 2, 5, hotfix 2)；
+/// `v1.2.9-rc1` → (1, 2, 9, rc 1)。
+///
+/// 同一個 `x.y.z` 的順序：`-rc1` < `-rc2` < 正式 < `-hotfix1`。
 @immutable
 class AppVersion implements Comparable<AppVersion> {
-  const AppVersion(this.major, this.minor, this.patch, [this.hotfix = 0]);
+  const AppVersion(this.major, this.minor, this.patch,
+      [this.hotfix = 0, this.rc = 0]);
 
   final int major;
   final int minor;
@@ -45,10 +49,13 @@ class AppVersion implements Comparable<AppVersion> {
   /// 沒有 `-hotfix<n>` 後綴就是 0。
   final int hotfix;
 
-  static final _pattern =
-      RegExp(r'^v?(\d+)\.(\d+)\.(\d+)(?:-hotfix(\d+))?$');
+  /// 沒有 `-rc<n>` 後綴就是 0（非 RC）。RC 比同版號的正式版舊。
+  final int rc;
 
-  /// `v1.2.5`／`1.2.5`／`v1.2.5-hotfix2`。認不得回 `null`。
+  static final _pattern =
+      RegExp(r'^v?(\d+)\.(\d+)\.(\d+)(?:-(?:hotfix(\d+)|rc(\d+)))?$');
+
+  /// `v1.2.5`／`1.2.5`／`v1.2.5-hotfix2`／`v1.2.9-rc1`。認不得回 `null`。
   static AppVersion? tryParse(String text) {
     final m = _pattern.firstMatch(text.trim());
     if (m == null) return null;
@@ -57,14 +64,16 @@ class AppVersion implements Comparable<AppVersion> {
       int.parse(m.group(2)!),
       int.parse(m.group(3)!),
       m.group(4) == null ? 0 : int.parse(m.group(4)!),
+      m.group(5) == null ? 0 : int.parse(m.group(5)!),
     );
   }
 
-  /// 這份 App 的版本：版號來自 [BuildInfo.version]，熱修序號另外帶。
+  /// 這份 App 的版本：版號來自 [BuildInfo.version]，熱修與 RC 序號另外帶。
   static AppVersion? ofBuild(BuildInfo info) {
     final base = tryParse(info.version);
     if (base == null) return null;
-    return AppVersion(base.major, base.minor, base.patch, info.hotfix);
+    return AppVersion(
+        base.major, base.minor, base.patch, info.hotfix, info.rc);
   }
 
   @override
@@ -73,6 +82,9 @@ class AppVersion implements Comparable<AppVersion> {
       (major, other.major),
       (minor, other.minor),
       (patch, other.patch),
+      // RC 排在同版號的正式版與熱修之前
+      (rc > 0 ? 0 : 1, other.rc > 0 ? 0 : 1),
+      (rc, other.rc),
       (hotfix, other.hotfix),
     ]) {
       if (a != b) return a.compareTo(b);
@@ -85,11 +97,11 @@ class AppVersion implements Comparable<AppVersion> {
       other is AppVersion && compareTo(other) == 0;
 
   @override
-  int get hashCode => Object.hash(major, minor, patch, hotfix);
+  int get hashCode => Object.hash(major, minor, patch, hotfix, rc);
 
   @override
-  String toString() =>
-      'v$major.$minor.$patch${hotfix > 0 ? '-hotfix$hotfix' : ''}';
+  String toString() => 'v$major.$minor.$patch'
+      '${rc > 0 ? '-rc$rc' : hotfix > 0 ? '-hotfix$hotfix' : ''}';
 }
 
 /// [compareAppVersions] 的結果：`latest` 相對於 `current`。

@@ -19,7 +19,7 @@ import 'kit_prereq_rows.dart';
 ///
 /// ## 只有對得上 Release 的 App 才裝得了東西
 ///
-/// 查的是 `releases/tags/v<這份 App 的版本>`（熱修版為 `v<版本>-hotfix<n>`）。
+/// 查的是 `releases/tags/v<這份 App 的版本>`（熱修版為 `v<版本>-hotfix<n>`，RC 為 `v<版本>-rc<n>`）。
 /// dev build 查不到，那時按鈕**停用並說明白**——不退到 latest：退過去的話，
 /// 一份沒發布過的 App 會裝上一包與它不同源的 kit，而出事時沒有人分得出那兩邊
 /// 差在哪。
