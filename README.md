@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.8
+# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.9
 
 ### This project provides multilanguage README.md file
 
