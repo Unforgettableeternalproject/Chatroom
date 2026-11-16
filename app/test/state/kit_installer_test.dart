@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:chatroom_app/core/platform/app_platform.dart';
 import 'package:chatroom_app/state/kit_installer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -81,6 +82,35 @@ class _FakeRunner implements KitProcessRunner {
   }
 }
 
+/// POSIX 版的假子進程：只認 [versions] 裡列的執行檔；`-c` 的解壓程式
+/// 在磁碟上生出 `install.py`，其餘（跑安裝器）回成功。
+class _PosixRunner implements KitProcessRunner {
+  _PosixRunner({this.versions = const {}, this.extractFails});
+
+  final Map<String, String> versions;
+  final String? extractFails;
+  final calls = <List<String>>[];
+
+  @override
+  Future<ProcessResult> run(String executable, List<String> arguments,
+      {String? workingDirectory}) async {
+    calls.add([executable, ...arguments]);
+    if (arguments.contains('--version')) {
+      final v = versions[executable];
+      return v == null ? ProcessResult(0, 1, '', 'nf') : ProcessResult(0, 0, v, '');
+    }
+    if (arguments.contains('-c')) {
+      if (extractFails != null) return ProcessResult(0, 1, '', extractFails);
+      final target = arguments.last;
+      await Directory(target).create(recursive: true);
+      await File('$target${Platform.pathSeparator}install.py')
+          .writeAsString('#');
+      return ProcessResult(0, 0, '', '');
+    }
+    return ProcessResult(0, 0, 'RESULT {"ok": true, "version": "1.2.3"}', '');
+  }
+}
+
 void main() {
   late Directory root;
 
@@ -98,6 +128,9 @@ void main() {
         processRunner: runner,
         installRoot: root.path,
         clock: () => DateTime(2026, 9, 19, 10, 30, 5),
+        // 這份測試的 fake 是 Windows 形狀（py、powershell）；POSIX 的分支另有
+        // 一組在檔案最後
+        platform: AppPlatform.windows,
       );
 
   const releaseJson = {
@@ -332,6 +365,104 @@ void main() {
 
       final result = await make(http, runner).install(KitId.hub, release: release!);
       expect(result.ok, isTrue);
+    });
+  });
+  group('POSIX 平台', () {
+    KitInstaller makePosix(AppPlatform platform, _FakeHttp http,
+            _PosixRunner runner) =>
+        KitInstaller(
+          http: http,
+          processRunner: runner,
+          installRoot: root.path,
+          clock: () => DateTime(2026, 9, 19, 10, 30, 5),
+          platform: platform,
+        );
+
+    test('候選：Windows 順序不動；POSIX 有 python3.12 與 python3', () {
+      expect(pythonCandidatesFor(AppPlatform.windows).first.executable, 'py');
+      expect(pythonCandidatesFor(AppPlatform.windows).first.prefixArgs, ['-3']);
+      for (final p in [AppPlatform.macos, AppPlatform.linux]) {
+        final names = pythonCandidatesFor(p).map((c) => c.executable).toList();
+        expect(names, containsAllInOrder(['python3.12', 'python3']));
+        expect(names, isNot(contains('py')));
+      }
+    });
+
+    test('🔴 macOS 候選含 Homebrew／python.org 絕對路徑，排在裸名前面；'
+        '不碰 /usr/bin/python3 轉接殼', () {
+      final names = pythonCandidatesFor(AppPlatform.macos)
+          .map((c) => c.executable)
+          .toList();
+      expect(names, contains('/opt/homebrew/bin/python3.12'));
+      expect(names, contains('/usr/local/bin/python3'));
+      expect(
+          names.any((n) => n.startsWith('/Library/Frameworks/Python.framework')),
+          isTrue);
+      expect(names, isNot(contains('/usr/bin/python3')));
+      expect(names.indexOf('/opt/homebrew/bin/python3.12') <
+          names.indexOf('python3.12'), isTrue);
+    });
+
+    test('Linux：python3.12 不在就退到 python3', () async {
+      final runner = _PosixRunner(versions: {'python3': 'Python 3.13.1'});
+      final python = await makePosix(
+              AppPlatform.linux, _FakeHttp(body: releaseJson), runner)
+          .findPython();
+      expect(python!.executable, 'python3');
+    });
+
+    test('macOS：PATH 裡什麼都沒有，仍找得到 Homebrew 的 Python', () async {
+      final runner = _PosixRunner(
+          versions: {'/opt/homebrew/bin/python3.12': 'Python 3.12.7'});
+      final python = await makePosix(
+              AppPlatform.macos, _FakeHttp(body: releaseJson), runner)
+          .findPython();
+      expect(python!.executable, '/opt/homebrew/bin/python3.12');
+    });
+
+    test('🔴 POSIX 解壓走 Python 的 zipfile 程式、不叫 powershell；'
+        'install.py 也用同一支 Python 跑', () async {
+      final http = _FakeHttp(body: releaseJson);
+      final runner = _PosixRunner(versions: {'python3.12': 'Python 3.12.7'});
+      final installer = makePosix(AppPlatform.linux, http, runner);
+      final release = await installer.fetchRelease('1.2.3');
+
+      final result = await installer.install(KitId.hub,
+          release: release!, extraArgs: const ['--no-tunnel']);
+      expect(result.ok, isTrue);
+
+      expect(runner.calls.any((c) => c.first == 'powershell'), isFalse);
+      final extract = runner.calls.firstWhere((c) => c.contains('-c'));
+      expect(extract.first, 'python3.12');
+      expect(extract[extract.indexOf('-c') + 1], kZipExtractScript);
+      expect(extract.last, endsWith('hub-kit'));
+
+      final install = runner.calls.last;
+      expect(install.first, 'python3.12');
+      expect(install, containsAllInOrder(['--yes', '--no-tunnel']));
+      expect(install.any((a) => a.endsWith('install.py')), isTrue);
+    });
+
+    test('解壓程式：保留執行位元、擋 zip-slip', () {
+      expect(kZipExtractScript, contains('external_attr >> 16'));
+      expect(kZipExtractScript, contains('os.chmod'));
+      expect(kZipExtractScript, contains('unsafe path in zip'));
+    });
+
+    test('POSIX 解壓失敗 → extract，帶 stderr', () async {
+      final http = _FakeHttp(body: releaseJson);
+      final runner = _PosixRunner(
+          versions: {'python3.12': 'Python 3.12.7'},
+          extractFails: 'unsafe path in zip: ../x');
+      final installer = makePosix(AppPlatform.macos, http, runner);
+      final release = await installer.fetchRelease('1.2.3');
+
+      await expectLater(
+        installer.install(KitId.hub, release: release!),
+        throwsA(isA<KitInstallError>()
+            .having((e) => e.reason, 'reason', KitInstallFailure.extract)
+            .having((e) => e.detail, 'detail', contains('unsafe path'))),
+      );
     });
   });
 }

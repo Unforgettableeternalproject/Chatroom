@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/app_platform.dart';
 import '../models/host_kit.dart' show KitSource;
 import 'runner_workspaces.dart';
 
@@ -51,14 +52,7 @@ class RunnerKit {
 }
 
 /// 註冊檔的位置。`runner-kit` 的安裝器寫，App 讀。
-File? runnerKitRegistryFile() {
-  final home = Platform.environment['USERPROFILE'] ??
-      Platform.environment['HOME'] ??
-      '';
-  if (home.isEmpty) return null;
-  return File('$home${Platform.pathSeparator}.chatroom'
-      '${Platform.pathSeparator}runner-kit.json');
-}
+File? runnerKitRegistryFile() => chatroomRegistryFile('runner-kit.json');
 
 /// 執行器設定檔的預設位置，與 `chatroom_runner.config.default_state_dir()`
 /// 同一條規則。`CHATROOM_RUNNER_CONFIG` 可以指到別處。
@@ -66,16 +60,20 @@ String runnerConfigPathFor([Map<String, String>? environment]) {
   final env = environment ?? Platform.environment;
   final explicit = (env['CHATROOM_RUNNER_CONFIG'] ?? '').trim();
   if (explicit.isNotEmpty) return explicit;
-  final sep = Platform.pathSeparator;
-  final local = env['LOCALAPPDATA'] ?? '';
-  if (local.isNotEmpty) {
-    return [local, 'UEP', 'Chatroom', 'runner', 'config.json'].join(sep);
-  }
-  final home = env['HOME'] ?? '';
-  if (home.isEmpty) return '';
-  return [home, '.local', 'share', 'uep', 'chatroom', 'runner', 'config.json']
-      .join(sep);
+  final dir = _runnerStateRoot(env);
+  if (dir.isEmpty) return '';
+  return '$dir${_sepOf()}config.json';
 }
+
+/// 執行器預設狀態目錄：安裝根底下的 `runner`，與
+/// `chatroom_runner.config.default_state_dir()` 同一條規則。
+String _runnerStateRoot(Map<String, String> env) {
+  final root = chatroomInstallRoot(environment: env);
+  return root.isEmpty ? '' : '$root${_sepOf()}runner';
+}
+
+/// 組出來的路徑用哪個分隔：跟著安裝根的平台（POSIX 一律 `/`）。
+String _sepOf() => detectAppPlatform()?.sep ?? Platform.pathSeparator;
 
 /// 這台機器上有沒有執行器。
 ///
@@ -302,12 +300,8 @@ String? runnerStateDirFor(RunnerConfigFile cfg,
     [Map<String, String>? environment]) {
   if (cfg.stateDir.isNotEmpty) return cfg.stateDir;
   final env = environment ?? Platform.environment;
-  final sep = Platform.pathSeparator;
-  final local = env['LOCALAPPDATA'] ?? '';
-  if (local.isNotEmpty) return [local, 'UEP', 'Chatroom', 'runner'].join(sep);
-  final home = env['HOME'] ?? '';
-  if (home.isEmpty) return null;
-  return [home, '.local', 'share', 'uep', 'chatroom', 'runner'].join(sep);
+  final root = _runnerStateRoot(env);
+  return root.isEmpty ? null : root;
 }
 
 /// 執行器起 claude 時用的 `CLAUDE_CONFIG_DIR`。
