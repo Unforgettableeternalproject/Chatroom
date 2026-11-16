@@ -28,6 +28,7 @@ import socket
 import subprocess
 import ssl
 import sys
+import tarfile
 import threading
 import time
 import urllib.error
@@ -55,6 +56,9 @@ ASSETS = {
     ("Windows", "ARM64"): "cloudflared-windows-arm64.exe",
     ("Linux", "x86_64"): "cloudflared-linux-amd64",
     ("Linux", "aarch64"): "cloudflared-linux-arm64",
+    # macOS 的官方資產是 .tgz（裡面只有一個 `cloudflared`），下載後要解壓
+    ("Darwin", "x86_64"): "cloudflared-darwin-amd64.tgz",
+    ("Darwin", "arm64"): "cloudflared-darwin-arm64.tgz",
 }
 
 QUICK_URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
@@ -170,7 +174,9 @@ def find_cloudflared(auto_download: bool) -> str:
     try:
         with urllib.request.urlopen(url, timeout=120) as resp, tmp.open("wb") as fh:
             shutil.copyfileobj(resp, fh)
-    except OSError as exc:
+        if url.endswith(".tgz"):
+            _extract_binary_from_tgz(tmp, tmp)
+    except (OSError, tarfile.TarError) as exc:
         tmp.unlink(missing_ok=True)  # 半截檔留著會讓下次誤判為已下載
         raise SystemExit(f"下載失敗：{exc}") from exc
     tmp.replace(local)
@@ -178,6 +184,25 @@ def find_cloudflared(auto_download: bool) -> str:
         local.chmod(0o755)
     print(f"已存到 {local}")
     return str(local)
+
+
+def _extract_binary_from_tgz(archive: Path, dest: Path) -> None:
+    """從官方 .tgz 取出 `cloudflared` 單檔，覆寫到 ``dest``（可與 archive 同路徑）。
+
+    只認名為 `cloudflared` 的一般檔，不展開整包：壓縮檔裡的其他路徑
+    一律不碰，也就不會有路徑穿越的問題。
+    """
+    with tarfile.open(archive, "r:gz") as tar:
+        member = next(
+            (m for m in tar.getmembers()
+             if m.isfile() and Path(m.name).name == "cloudflared"), None)
+        if member is None:
+            raise tarfile.TarError("壓縮檔裡找不到 cloudflared")
+        src = tar.extractfile(member)
+        if src is None:
+            raise tarfile.TarError("壓縮檔裡的 cloudflared 讀不出來")
+        data = src.read()
+    dest.write_bytes(data)
 
 
 def isolation_args() -> list[str]:
