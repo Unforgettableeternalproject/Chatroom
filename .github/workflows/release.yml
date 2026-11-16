@@ -294,7 +294,9 @@ jobs:
 
   app-linux:
     needs: [resolve, release]
-    runs-on: ubuntu-latest
+    # 固定 LTS：產物連結的 glibc 版本由建置機決定，ubuntu-latest 升版後
+    # 建出的 App 會在較舊的發行版上無法執行。
+    runs-on: ubuntu-24.04
     env:
       RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
     steps:

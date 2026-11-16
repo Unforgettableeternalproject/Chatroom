@@ -160,7 +160,9 @@ jobs:
         run: flutter build macos --debug
 
   flutter-linux:
-    runs-on: ubuntu-latest
+    # 與 release 的 app-linux 相同版本：產物連結的 glibc 版本由建置機決定，
+    # 用較舊的 LTS 才能在 24.04 這類仍在支援期的發行版上執行。
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
