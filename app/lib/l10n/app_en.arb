@@ -1960,5 +1960,8 @@
   "boardFilterUnclaimed": "Unclaimed",
   "boardFilterClear": "Clear",
   "boardFilterToggle": "Filter",
-  "boardFilterNoMatch": "No matching cards"
+  "boardFilterNoMatch": "No matching cards",
+  "hostRunnerServiceNoKit": "Runner install location not found",
+  "settingsUpdateFailTranslocated": "Move Chatroom to the Applications folder, reopen it, then update",
+  "settingsUpdateFailAppImage": "AppImage builds can't self-update; download the new version instead"
 }

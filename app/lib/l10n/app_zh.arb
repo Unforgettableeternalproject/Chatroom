@@ -1961,5 +1961,8 @@
   "boardFilterUnclaimed": "未认领",
   "boardFilterClear": "清除",
   "boardFilterToggle": "筛选",
-  "boardFilterNoMatch": "没有符合的卡"
+  "boardFilterNoMatch": "没有符合的卡",
+  "hostRunnerServiceNoKit": "找不到执行器的安装位置",
+  "settingsUpdateFailTranslocated": "请先把 Chatroom 移到「应用程式」资料夹，重新开启后再更新",
+  "settingsUpdateFailAppImage": "AppImage 版本不支援自动更新，请下载新版取代"
 }

@@ -9390,5 +9390,17 @@
   "boardFilterNoMatch": "沒有符合的卡",
   "@boardFilterNoMatch": {
     "description": "篩選後沒有任何卡"
+  },
+  "hostRunnerServiceNoKit": "找不到執行器的安裝位置",
+  "@hostRunnerServiceNoKit": {
+    "description": "macOS／Linux 起停執行器時，找不到執行器 kit 的目錄"
+  },
+  "settingsUpdateFailTranslocated": "請先把 Chatroom 移到「應用程式」資料夾，重新開啟後再更新",
+  "@settingsUpdateFailTranslocated": {
+    "description": "更新失敗（macOS）：App 是從下載資料夾或磁碟映像直接開的（Gatekeeper 的隔離位置），沒辦法替換自己"
+  },
+  "settingsUpdateFailAppImage": "AppImage 版本不支援自動更新，請下載新版取代",
+  "@settingsUpdateFailAppImage": {
+    "description": "更新失敗（Linux）：以 AppImage 執行，檔案系統是唯讀掛載"
   }
 }

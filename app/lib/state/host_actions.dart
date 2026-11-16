@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/app_platform.dart';
 import '../l10n/l10n.dart';
 import 'host_kit_providers.dart';
 import 'host_probe.dart';
+import 'posix_service.dart';
 
 /// 隧道現在的樣子。
 @immutable
@@ -94,9 +96,14 @@ class ServiceStatus {
 }
 
 final serviceStatusProvider = FutureProvider<ServiceStatus?>((ref) async {
-  if (!Platform.isWindows) return null;
+  final platform = ref.watch(appPlatformProvider);
+  if (platform == null) return null;
   final kit = await ref.watch(hostKitProvider.future);
   if (kit == null) return null;
+  if (platform.isPosix) {
+    // 服務管理員（systemd／LaunchAgent）由 kit 自帶的 service.py 問
+    return posixHubServiceStatus(HostActions(kit.kitRoot, platform: platform));
+  }
   try {
     final r = await Process.run(
       'powershell',
@@ -122,17 +129,72 @@ final serviceStatusProvider = FutureProvider<ServiceStatus?>((ref) async {
 /// 主持人照著 README 用命令列仍然做得到同樣的事
 /// （kit UI 設計簡報 §5 最後一條）。
 class HostActions {
-  const HostActions(this._kitRoot);
+  const HostActions(this._kitRoot, {AppPlatform? platform, ProcessRun? run})
+      : _platformOverride = platform,
+        // 具名參數不能是私有的，所以不能用 initializing formal
+        // ignore: prefer_initializing_formals
+        _run = run;
 
   final String _kitRoot;
 
-  String _script(String name) =>
-      '$_kitRoot${Platform.pathSeparator}scripts${Platform.pathSeparator}$name';
+  /// 命令與路徑跟著它走。測試注入來覆蓋另一個平台的分支；省略就看這台機器。
+  final AppPlatform? _platformOverride;
+
+  AppPlatform get _platform =>
+      _platformOverride ?? detectAppPlatform() ?? AppPlatform.windows;
+
+  /// 測試換掉子進程。省略時真的跑。
+  final ProcessRun? _run;
+
+  bool get _posix => _platform.isPosix;
+
+  String get _sep => _platform.sep;
+
+  String _script(String name) => '$_kitRoot${_sep}scripts$_sep$name';
 
   /// kit 自帶的直譯器。**不是系統的 `python`**——kit 的依賴裝在這個 venv 裡，
   /// 走系統那支會 ModuleNotFoundError，而錯誤訊息指向的是使用者沒裝過的東西。
-  String get _python => '$_kitRoot${Platform.pathSeparator}.venv'
-      '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe';
+  String get _python => _posix
+      ? '$_kitRoot$_sep.venv${_sep}bin${_sep}python'
+      : '$_kitRoot$_sep.venv${_sep}Scripts${_sep}python.exe';
+
+  /// 跑一支腳本並等結果。**encoding 一定要設**（見 [service] 的說明）。
+  ///
+  /// `runInShell` 只在 Windows：那邊要靠 shell 解析 `powershell` 這類名字；
+  /// POSIX 上它只是把參數用空白接起來丟給 /bin/sh，路徑有空白
+  /// （`Application Support`）就會被拆開。
+  Future<ProcessResult> _exec(String executable, List<String> arguments) {
+    final run = _run;
+    if (run != null) return run(executable, arguments);
+    return Process.run(
+      executable,
+      arguments,
+      runInShell: !_posix,
+      stdoutEncoding: utf8,
+      stderrEncoding: utf8,
+    );
+  }
+
+  /// 服務管理員那支（`service.py hub <action>`）。
+  Future<ProcessResult> _posixService(String action) {
+    final c = posixServiceCommand(
+        kitRoot: _kitRoot, kind: ServiceKind.hub, action: action);
+    return _exec(c.executable, c.arguments).then(normalizeServiceResult);
+  }
+
+  /// 登入自啟（systemd／LaunchAgent）現在的樣子。
+  ///
+  /// service.py 沒印出可解析的 JSON 時丟 [StateError]（帶 stderr 第一行）。
+  Future<PosixServiceStatus> posixServiceStatus() async {
+    final c = posixServiceCommand(
+        kitRoot: _kitRoot, kind: ServiceKind.hub, action: 'status');
+    final r = await _exec(c.executable, c.arguments);
+    final parsed = parsePosixServiceStatus('${r.stdout}');
+    if (parsed != null) return parsed;
+    final err = '${r.stderr}'.trim();
+    final first = err.isNotEmpty ? const LineSplitter().convert(err).first : '';
+    throw StateError(first.isNotEmpty ? first : 'exit ${r.exitCode}');
+  }
 
   /// 無視窗啟動，而且**不綁這個 App**。
   ///
@@ -153,6 +215,30 @@ class HostActions {
         runInShell: true,
       );
 
+  /// POSIX 的背景啟動：沒有主控台視窗的問題，`detached` 就是「不綁這個 App」。
+  /// 用 `/bin/sh <腳本>` 起，不靠檔案的執行位元（腳本第一行就是 `#!/bin/sh`）。
+  /// 輸出由腳本自己導進 `logs/`——那條路徑與 Windows 一樣是唯一的診斷來源。
+  @visibleForTesting
+  ({String executable, List<String> arguments, Map<String, String> environment})
+      backgroundLaunch(String scriptName, {bool hidden = false}) => (
+            executable: '/bin/sh',
+            arguments: [_script(scriptName)],
+            // run-tunnel.sh 看這個決定「輸出進 log、不 pause」，
+            // 等同 Windows 上 hidden-launch.vbs 設的變數
+            environment: hidden ? const {'CHATROOM_HIDDEN': '1'} : const {},
+          );
+
+  Future<void> _launchBackground(String scriptName, {bool hidden = false}) {
+    final c = backgroundLaunch(scriptName, hidden: hidden);
+    return Process.start(
+      c.executable,
+      c.arguments,
+      workingDirectory: _kitRoot,
+      environment: c.environment,
+      mode: ProcessStartMode.detached,
+    );
+  }
+
   /// 前景啟動 Hub（無視窗）。
   ///
   /// 🔴 **不綁 App 是關鍵**：這個 App 只是遙控器，關掉它不能把伺服器一起帶走。
@@ -161,7 +247,9 @@ class HostActions {
   /// 停止入口不再依賴這個視窗——`7f56a8a` 之後「停止 Hub」就在「啟動 Hub」
   /// 旁邊。**順序很重要**：先隱藏視窗、後補停止鍵的話，中間會有一段
   /// Hub 關不掉的空窗。
-  Future<void> startHub() => _launchHidden(_script('run-hub.cmd'));
+  Future<void> startHub() => _posix
+      ? _launchBackground('run-hub.sh')
+      : _launchHidden(_script('run-hub.cmd'));
 
   /// 開隧道。同樣無視窗、同樣不綁 App。
   ///
@@ -169,7 +257,9 @@ class HostActions {
   /// 會寫 `server/.tunnel-url`，上面的隧道區塊讀的就是它；出錯時的細節在
   /// `logs\tunnel-YYYYMMDD.log`（`run-tunnel.cmd` 只在隱藏啟動時重導向，
   /// 雙擊執行仍然留在螢幕上並 pause）。
-  Future<void> startTunnel() => _launchHidden(_script('run-tunnel.cmd'));
+  Future<void> startTunnel() => _posix
+      ? _launchBackground('run-tunnel.sh', hidden: true)
+      : _launchHidden(_script('run-tunnel.cmd'));
 
   /// 關隧道。
   ///
@@ -181,47 +271,29 @@ class HostActions {
   ///
   /// 不做的代價是使用者只剩「去把那個黑視窗關掉」一條路——而那條路
   /// 從來沒有人告訴過他，跟「停止 Hub」原本的處境一模一樣。
-  Future<ProcessResult> stopTunnel() => Process.run(
-        _python,
-        [_script('stop-tunnel.py'), '--json'],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  Future<ProcessResult> stopTunnel() => _exec(_python, [_script('stop-tunnel.py'), '--json']);
 
   /// 有哪些備份可以還原。
-  Future<ProcessResult> listBackups() => Process.run(
-        _python,
-        [_script('restore.py'), '--list', '--json'],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  Future<ProcessResult> listBackups() => _exec(_python, [_script('restore.py'), '--list', '--json']);
 
   /// 從某一份備份還原。
   ///
   /// ⚠️ 腳本自己擋著三件事（Hub 還在跑、備份打不開、沒先備份現況），
   /// **UI 不重複實作那些判斷**——兩份判準會在某次改動後分岔，而分岔的那一刻
   /// 沒有任何地方報錯。這裡只負責把結果講給使用者聽。
-  Future<ProcessResult> restoreBackup(String path) => Process.run(
-        _python,
-        [_script('restore.py'), '--from', path, '--json'],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  Future<ProcessResult> restoreBackup(String path) => _exec(_python, [_script('restore.py'), '--from', path, '--json']);
 
   /// ⚠️ **encoding 一定要設。** 不設的話 Windows 上拿回來的是被系統碼頁
   /// 解讀過的位元組，腳本講的每一句中文都變成亂碼——而這支腳本的輸出
   /// 正是「停止到底成功了沒」的唯一來源。
   /// （backup／rotateToken／stopTunnel 都設了，只有這支漏掉。）
-  Future<ProcessResult> service(String action) => Process.run(
-        'powershell',
-        ['-NoProfile', '-File', _script('hub-service.ps1'), action],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  ///
+  /// POSIX 走 `service.py hub <action>`（systemd／LaunchAgent）。結果攤平成
+  /// 同一個形狀：成功＝exit 0、說明在 stdout；失敗＝非 0、原因在 stderr。
+  Future<ProcessResult> service(String action) => _posix
+      ? _posixService(action)
+      : _exec('powershell',
+          ['-NoProfile', '-File', _script('hub-service.ps1'), action]);
 
   /// 停止 Hub——**前景跑的那個也停得掉**。
   ///
@@ -238,39 +310,44 @@ class HostActions {
   /// 同步等結果（不是 detached）——**使用者需要知道備份到哪裡、有多大**。
   /// 一個「已開始備份」的提示對備份這種功能沒有意義：它的價值全在
   /// 「那份東西真的在磁碟上」，而那件事只有跑完才知道。
-  Future<ProcessResult> backup() => Process.run(
-        _python,
-        [_script('backup.py'), '--json'],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  Future<ProcessResult> backup() => _exec(_python, [_script('backup.py'), '--json']);
 
   /// 換掉 token。**換完還要重啟 Hub 才生效**，呼叫端要講清楚這件事。
-  Future<ProcessResult> rotateToken() => Process.run(
-        _python,
-        [_script('rotate-token.py'), '--json'],
-        runInShell: true,
-        stdoutEncoding: utf8,
-        stderrEncoding: utf8,
-      );
+  Future<ProcessResult> rotateToken() => _exec(_python, [_script('rotate-token.py'), '--json']);
 
   /// 開啟日誌資料夾。**不在 App 裡做 log 檢視器**——出事時要看的東西
   /// 千奇百怪，作業系統的檔案總管比我們做得好。
-  Future<void> openLogs() => Process.start(
-        'explorer',
-        ['$_kitRoot${Platform.pathSeparator}logs'],
-        mode: ProcessStartMode.detached,
-        runInShell: true,
-      );
+  Future<void> openLogs() => _openFolder('$_kitRoot${_sep}logs');
 
   /// 開啟備份資料夾。同上——還原是檔案總管的工作，不是這一頁的。
-  Future<void> openBackups() => Process.start(
-        'explorer',
-        ['$_kitRoot${Platform.pathSeparator}backups'],
-        mode: ProcessStartMode.detached,
-        runInShell: true,
-      );
+  Future<void> openBackups() => _openFolder('$_kitRoot${_sep}backups');
+
+  /// 用作業系統的檔案管理員開資料夾。命令見 [openFolderCommand]。
+  Future<void> _openFolder(String path) {
+    final c = openFolderCommand(_platform, path);
+    return Process.start(
+      c.executable,
+      c.arguments,
+      mode: ProcessStartMode.detached,
+      // explorer 在 Windows 要靠 shell 找；POSIX 的 open／xdg-open 直接 exec
+      runInShell: !_posix,
+    );
+  }
+}
+
+/// 測試用：換掉子進程。
+typedef ProcessRun = Future<ProcessResult> Function(
+    String executable, List<String> arguments);
+
+/// Hub 登入自啟的狀態（POSIX）。問不到（service.py 沒印 JSON、跑不起來）
+/// 回「沒註冊」並帶原因——與 Windows 那邊出錯時同一個形狀。
+Future<ServiceStatus> posixHubServiceStatus(HostActions actions) async {
+  try {
+    final st = await actions.posixServiceStatus();
+    return ServiceStatus(st.installed, st.detail);
+  } on Object catch (e) {
+    return ServiceStatus(false, L10n.current.hostServiceStatusError('$e'));
+  }
 }
 
 /// 把腳本的 `--json` 輸出解析回來。
@@ -303,5 +380,5 @@ Map<String, dynamic> parseScriptResult(ProcessResult result) {
 final hostActionsProvider = Provider<HostActions?>((ref) {
   final kit = ref.watch(hostKitProvider).value;
   if (kit == null) return null;
-  return HostActions(kit.kitRoot);
+  return HostActions(kit.kitRoot, platform: ref.watch(appPlatformProvider));
 });
