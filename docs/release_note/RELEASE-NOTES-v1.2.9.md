@@ -1,6 +1,6 @@
 # Chatroom v1.2.9
 
-v1.2.9：App、Hub、執行器與三包 kit 支援 macOS 與 Linux。內容涵蓋 v1.2.8 之後的所有變更。資料庫沒有變更。
+v1.2.9：App、Hub、執行器與三包 kit 支援 macOS 與 Linux。內容涵蓋 v1.2.8-hotfix2 之後的所有變更。資料庫沒有變更。
 
 ## 新增
 
@@ -23,7 +23,7 @@ v1.2.9：App、Hub、執行器與三包 kit 支援 macOS 與 Linux。內容涵�
 ## 升級注意
 
 - **macOS 版沒有經過 Apple 公證**：從瀏覽器下載後第一次開啟會被擋下，請在 Finder 對 App 按右鍵 >「打開」，或執行 `xattr -dr com.apple.quarantine Chatroom.app`。
-- **Linux 版在 Ubuntu 24.04 建置**：比 24.04 舊的發行版可能無法執行；系統需要有 GTK 3、libayatana-appindicator3、libsecret。
+- **Linux 版在 Ubuntu 24.04 建置**：比 24.04 舊的發行版可能無法執行；系統需要有 GTK 3、libayatana-appindicator3、libsecret，以及中文字型（例如 `fonts-noto-cjk`），否則標題與標籤的中文會顯示成方塊。
 - **Linux 版尚未在實體桌面驗證**：目前只在 WSL 與容器裡測過，GNOME、KDE 上的系統匣還沒有實機測試。
 - **macOS 與 Linux 的自我更新要到下一版才會第一次用到**：若「檢查更新」失敗，請到 Releases 頁面手動下載新版。
 - Windows 的行為沒有變更。

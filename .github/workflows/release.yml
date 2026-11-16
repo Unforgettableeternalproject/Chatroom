@@ -205,18 +205,64 @@ jobs:
           Compress-Archive -Path app/build/windows/x64/runner/Release/* `
                            -DestinationPath "dist/chatroom-app-$tag-windows-x64.zip"
 
+      # 公告內文：發版說明檔＋這一版的 PR 清單，格式與過去手寫的公告相同。
+      # - 說明檔先找 tag 專屬的 `RELEASE-NOTES-<tag>.md`（熱修可以自己寫一份），
+      #   沒有再找版號的 `RELEASE-NOTES-v<版號>.md`——但只有正式版與 RC 退到這份；
+      #   熱修沿用正式版的說明等於把整版內容再公告一次，寧可只放 PR 清單。
+      # - 第一行標題換成實際的 tag；RC 在標題下標明是測試版。
+      # - PR 清單用 GitHub 的 generate-notes，起點**明確指定**為上一個非 RC 的 tag
+      #   （依版本排序）。交給 GitHub 自己猜時，RC 從 develop 發，它會從 PR #1 一路列下來。
+      - name: 準備公告內文
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_RC: ${{ needs.resolve.outputs.prerelease }}
+        run: |
+          TAG="${{ env.RELEASE_TAG }}"
+          BASE="${TAG#v}"; BASE="${BASE%%-rc*}"; BASE="${BASE%%-hotfix*}"
+          NOTES=""
+          if [ -f "docs/release_note/RELEASE-NOTES-$TAG.md" ]; then
+            NOTES="docs/release_note/RELEASE-NOTES-$TAG.md"
+          elif [ "$TAG" = "v$BASE" ] || [ "$IS_RC" = "true" ]; then
+            [ -f "docs/release_note/RELEASE-NOTES-v$BASE.md" ] && NOTES="docs/release_note/RELEASE-NOTES-v$BASE.md"
+          fi
+
+          # 上一個非 RC 的 tag：把目前的 tag（RC 去掉後綴）放進非 RC tag 清單裡排序，取它前一個
+          KEY="${TAG%%-rc*}"
+          PREV=$( { git tag -l 'v*' | grep -Ev -e '-rc[0-9]+$' | grep -vx -e "$KEY"; echo "$KEY"; } \
+                  | sort -V | grep -B1 -x -e "$KEY" | head -n 1 )
+          [ "$PREV" = "$KEY" ] && PREV=""
+          echo "說明檔：${NOTES:-（無）}；PR 清單起點：${PREV:-（無）}"
+
+          OUT=release-body.md
+          : > "$OUT"
+          if [ -n "$NOTES" ]; then
+            echo "# Chatroom $TAG" >> "$OUT"
+            if [ "$IS_RC" = "true" ]; then
+              printf '\n> ⚠️ 這是 v%s 的測試版（Release Candidate），尚未正式發布，請勿用於正式環境。正式版發出後，「檢查更新」會提示升級。\n' "$BASE" >> "$OUT"
+            fi
+            tail -n +2 "$NOTES" >> "$OUT"
+            echo >> "$OUT"
+          else
+            echo "::warning::$TAG 沒有對應的發版說明檔，公告只有 PR 清單，發布前要手動補"
+          fi
+          ARGS=(-f "tag_name=$TAG")
+          [ -n "$PREV" ] && ARGS+=(-f "previous_tag_name=$PREV")
+          gh api "repos/${{ github.repository }}/releases/generate-notes" "${ARGS[@]}" --jq .body >> "$OUT"
+          echo "----- 公告內文 -----"; cat "$OUT"
+
       - name: 建立 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          name: Chatroom ${{ env.RELEASE_TAG }}
           draft: true  # 先出草稿，人看過再按發布
-          generate_release_notes: true
+          # 內文由上一步組好（說明檔＋指定起點的 PR 清單），不再讓 action 自己產生
+          body_path: release-body.md
           # RC：prerelease 且不設為 latest（App 檢查更新查 releases/latest，看不到）；
-          # 正式版維持原行為（latest）。RC 沒有專屬說明檔，內文開頭標明是測試版，
-          # 後面接自動產生的變更清單
+          # 正式版維持原行為（latest）
           prerelease: ${{ needs.resolve.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.resolve.outputs.prerelease == 'true' && 'false' || 'true' }}
-          body: ${{ needs.resolve.outputs.prerelease == 'true' && '⚠️ 這是測試版（Release Candidate），尚未正式發布，請勿用於正式環境。正式版發出後，檢查更新會提示升級。' || '' }}
           files: |
             dist/chatroom-mcp-kit.zip
             dist/chatroom-hub-kit.zip

@@ -131,3 +131,22 @@ def test_release_workflow_marks_rc_as_prerelease_everywhere():
         w = steps[0]["with"]
         assert "outputs.prerelease" in str(w["prerelease"]), job
         assert "'false'" in str(w["make_latest"]), job
+
+
+def test_release_body_comes_from_notes_file_with_explicit_previous_tag():
+    """公告＝發版說明檔＋PR 清單；清單起點要明確給，否則從 develop 發的 RC 會從 PR #1 列起。"""
+    wf = _release_workflow()
+    steps = wf["jobs"]["release"]["steps"]
+    prep = next(s for s in steps if s.get("name") == "準備公告內文")
+    run = prep["run"]
+    assert "RELEASE-NOTES-$TAG.md" in run
+    assert "RELEASE-NOTES-v$BASE.md" in run
+    assert "previous_tag_name=$PREV" in run
+    assert "-rc[0-9]+$" in run
+    create = next(s for s in steps
+                  if str(s.get("uses", "")).startswith("softprops/action-gh-release"))
+    w = create["with"]
+    assert w["name"] == "Chatroom ${{ env.RELEASE_TAG }}"
+    assert w["body_path"] == "release-body.md"
+    assert "generate_release_notes" not in w
+    assert steps.index(prep) < steps.index(create)
