@@ -9,7 +9,7 @@
                           （特殊部署用）；未設定時優先取 agent 平台的
                           session id（Claude Code 的 CLAUDE_CODE_SESSION_ID），
                           再退回每進程各自生成（多開 session 各自獨立）
-    CHATROOM_AGENT_KIND   claude / codex / human / other，預設 other
+    CHATROOM_AGENT_KIND   claude / codex / human / other / uep，預設 other
     CHATROOM_DEFAULT_NAME join 未帶 preferred_name 時的預設代稱；
                           房內重名由 Hub 自動編號（Novia → Novia-2）
     CHATROOM_HOST_NAME    自報給 Hub 的主機名，預設取作業系統的 hostname。

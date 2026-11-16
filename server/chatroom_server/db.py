@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS room (
 CREATE TABLE IF NOT EXISTS participant (
     id           TEXT PRIMARY KEY,
     room_id      TEXT NOT NULL REFERENCES room(id),
-    kind         TEXT NOT NULL,                   -- claude / codex / human / other
+    kind         TEXT NOT NULL,                   -- claude / codex / human / other / uep
     session_key  TEXT NOT NULL,
     display_name TEXT NOT NULL,
     role         TEXT NOT NULL DEFAULT 'agent',   -- agent / human
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS message (
     room_id    TEXT NOT NULL REFERENCES room(id),
     seq        INTEGER NOT NULL,
     sender_id  TEXT REFERENCES participant(id),   -- NULL = 系統訊息
-    -- 發話當下 participant.kind 的快照（claude / codex / human / other）。
+    -- 發話當下 participant.kind 的快照（claude / codex / human / other / uep）。
     -- run 成員結束後不進成員名冊，client 從名冊反查 kind 會查不到而退回
     -- other——一句 agent 說過的話，在他離開之後就長得跟系統雜訊一樣。
     -- 空字串＝這一欄存在之前的舊訊息或系統訊息。
@@ -178,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_assignment_target ON assignment(target_session_ke
 -- 指派 UI 據此列出「掃描到的 session」，不必使用者手抄 key。
 CREATE TABLE IF NOT EXISTS session (
     session_key   TEXT PRIMARY KEY,
-    kind          TEXT NOT NULL DEFAULT 'other',  -- claude / codex / human / other
+    kind          TEXT NOT NULL DEFAULT 'other',  -- claude / codex / human / other / uep
     label         TEXT NOT NULL DEFAULT '',       -- bridge 自報的代稱（CHATROOM_DEFAULT_NAME）
     -- 自報的主機名。指派 UI 靠它把「我這台機器上的 agent」與「別人機器上
     -- 的」分開——指派是私人房的入場券，把別人的 agent 指派進來等於把房裡

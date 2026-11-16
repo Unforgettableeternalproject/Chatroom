@@ -492,3 +492,19 @@ async def test_existing_rows_are_reset_not_grandfathered(tmp_path):
     assert row["label"] == "Codex-deadbeef", "名字本身不動——歸零的是旗標"
     await db.close()
     assert aiosqlite  # 用到才 import，避免 lint 抱怨
+
+
+async def test_uep_kind_can_join_and_is_reported_back(client):
+    """U.E.P Core 以 REST 直接 join：kind=uep 要被接受，並原樣回傳。"""
+    r = await client.post("/api/rooms", json={"session_key": "creator", "name": "UEP 房"})
+    room_id = r.json()["id"]
+    pid = (await _join(client, room_id, "uep-core", "Core", kind="uep"))["participant_id"]
+
+    room = (await client.get(
+        f"/api/rooms/{room_id}", headers={"X-Session-Key": "uep-core", "X-Participant-Id": pid})).json()
+    kinds = {p["display_name"]: p["kind"] for p in room["participants"]}
+    assert kinds["Core"] == "uep"
+
+    r = await client.get("/api/sessions")
+    s = next(x for x in r.json()["sessions"] if x["session_key"] == "uep-core")
+    assert s["kind"] == "uep"
