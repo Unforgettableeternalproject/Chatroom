@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Chatroom
+Comment=U.E.P Chatroom
+Exec=chatroom
+Icon=chatroom
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+StartupWMClass=dev.uep.chatroom_app

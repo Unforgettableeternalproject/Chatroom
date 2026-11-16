@@ -1,0 +1,17 @@
+// Application-level settings for the Runner target.
+//
+// This may be replaced with something auto-generated from metadata (e.g., pubspec.yaml) in the
+// future. If not, the values below would default to using the project name when this becomes a
+// 'flutter create' template.
+
+// The application's name. By default this is also the title of the Flutter window.
+// ⚠️ 這個值決定產物叫 `Chatroom.app`，也決定 Contents/MacOS 裡的執行檔名。
+// 發版資產（chatroom-app-<tag>-macos-universal.zip）與自更新都靠它對得上，
+// 不要改。bundle id 是偏好設定與 Keychain 的身分，同樣不能動。
+PRODUCT_NAME = Chatroom
+
+// The application's bundle identifier
+PRODUCT_BUNDLE_IDENTIFIER = dev.uep.chatroomApp
+
+// The copyright displayed in application information
+PRODUCT_COPYRIGHT = Copyright © 2026 dev.uep. All rights reserved.

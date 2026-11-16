@@ -7,7 +7,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// - shared_preferences：server_url、主題、各房 participant 快取等 UI 偏好
 class SettingsRepository {
   SettingsRepository(this._prefs, [FlutterSecureStorage? secure])
-      : _secure = secure ?? const FlutterSecureStorage();
+      : _secure = secure ?? defaultSecureStorage;
+
+  /// 預設的機密儲存。
+  ///
+  /// 🔴 macOS 要走傳統 Keychain（`usesDataProtectionKeychain: false`）。
+  /// 套件預設的 data protection keychain 需要 `keychain-access-groups`
+  /// entitlement，而那是受限 entitlement：沒有 Apple Developer 帳號的
+  /// provisioning profile 就拿不到，ad-hoc 簽章下寫入會回 -34018，
+  /// token 與 device key 都存不進去。傳統 Keychain 不需要任何 entitlement；
+  /// 日後改用 Developer ID 簽章時也照樣能用，所以這個選項不必跟著改。
+  /// 其他平台忽略 mOptions。
+  static const FlutterSecureStorage defaultSecureStorage = FlutterSecureStorage(
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+  );
 
   final SharedPreferences _prefs;
   final FlutterSecureStorage _secure;

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App 要跑 python、寫安裝目錄、連 Hub，所以關閉 App Sandbox。
+	     不辦 Apple Developer 帳號、ad-hoc 簽章，也不能宣告
+	     keychain-access-groups（那是受限 entitlement，沒有 provisioning
+	     profile 會讓 App 一啟動就被系統砍掉）。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>
