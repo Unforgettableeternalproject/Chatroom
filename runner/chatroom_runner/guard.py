@@ -257,7 +257,7 @@ def _path_segments(raw: str) -> list[str]:
 def _basename(tok: str) -> str:
     """路徑的最後一段。**兩種分隔符都認**，不依賴執行平台的 pathlib。
 
-    模型在 Linux／macOS 上照樣可能寫出 `..\server\.env` 這類 Windows 形式
+    模型在 Linux／macOS 上照樣可能寫出 `..\\server\\.env` 這類 Windows 形式
     （PowerShell 習慣），用 `Path(...).name` 的話 POSIX 把整串當成一個檔名，
     敏感檔名比對就漏了。
     """

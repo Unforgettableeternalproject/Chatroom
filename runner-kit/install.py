@@ -421,7 +421,7 @@ def register_task(target: Path, python: Path, config_path: Path,
         if _no_system():
             print("  UEP_KIT_NO_SYSTEM 已設定——略過註冊自啟服務")
             return False
-        print(f"註冊{service_label()}…")
+        print(f"註冊 {service_label()}…")
         ok, detail = posix_service(target, python, config_path, "install")
         print(("  " if ok else "⚠️ ") + detail)
         if not ok:
@@ -747,7 +747,7 @@ def main(argv: list[str] | None = None) -> None:
   [1/{TOTAL_STEPS}] 把這一包複製到安裝目錄
   [2/{TOTAL_STEPS}] 在那裡建獨立 Python 環境並裝上相依套件
   [3/{TOTAL_STEPS}] 產生設定檔（**已經有的話原樣不動**）
-  [4/{TOTAL_STEPS}] 註冊{service_label()}（只建工作，不啟動執行器）
+  [4/{TOTAL_STEPS}] 註冊 {service_label()}（只建工作，不啟動執行器）
   [5/{TOTAL_STEPS}] 寫註冊檔，並帶你把登入做掉
 
 安裝目錄：{target}
@@ -806,7 +806,7 @@ def main(argv: list[str] | None = None) -> None:
             f"   常見原因：網路連不到 PyPI、或安裝目錄沒有寫入權限。\n"
             f"   確認後重跑一次即可；要看完整技術細節請加上 --verbose。")
 
-    step(4, f"註冊{service_label()}…")
+    step(4, f"註冊 {service_label()}…")
     task_ok = False if args.no_task else register_task(
         target, python, config_path, args.task_name)
     if args.no_task:
