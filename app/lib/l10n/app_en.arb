@@ -1965,5 +1965,9 @@
   "settingsUpdateFailTranslocated": "Move Chatroom to the Applications folder, reopen it, then update",
   "settingsUpdateFailAppImage": "AppImage builds can't self-update; download the new version instead",
   "hostRunnerLoginHintTerminal": "Or run this line in a terminal:",
-  "hostRunnerNoTerminal": "No terminal program found. Open a terminal yourself and run: {command}"
+  "hostRunnerNoTerminal": "No terminal program found. Open a terminal yourself and run: {command}",
+  "hostKitRegisterServicePosix": "Start automatically at login",
+  "settingsCloseToTrayLabelMac": "Minimize to menu bar on close",
+  "settingsCloseToTrayHintMac": "Reopen or quit from the menu bar icon",
+  "settingsCloseToTrayUnsupported": "Not supported on this desktop"
 }

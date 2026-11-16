@@ -1966,5 +1966,9 @@
   "settingsUpdateFailTranslocated": "请先把 Chatroom 移到「应用程式」资料夹，重新开启后再更新",
   "settingsUpdateFailAppImage": "AppImage 版本不支援自动更新，请下载新版取代",
   "hostRunnerLoginHintTerminal": "或在终端机执行这一行：",
-  "hostRunnerNoTerminal": "找不到可用的终端机程式。请自己开一个终端机，执行：{command}"
+  "hostRunnerNoTerminal": "找不到可用的终端机程式。请自己开一个终端机，执行：{command}",
+  "hostKitRegisterServicePosix": "登入时自动启动",
+  "settingsCloseToTrayLabelMac": "关闭视窗时缩到选单列",
+  "settingsCloseToTrayHintMac": "从选单列图示可再开启或结束",
+  "settingsCloseToTrayUnsupported": "此桌面环境不支援"
 }

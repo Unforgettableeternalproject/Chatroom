@@ -9415,5 +9415,21 @@
         "type": "String"
       }
     }
+  },
+  "hostKitRegisterServicePosix": "登入時自動啟動",
+  "@hostKitRegisterServicePosix": {
+    "description": "macOS／Linux 的 Hub 登入自啟按鈕（Windows 是 hostKitRegisterService）"
+  },
+  "settingsCloseToTrayLabelMac": "關閉視窗時縮到選單列",
+  "@settingsCloseToTrayLabelMac": {
+    "description": "macOS 的關閉縮到匣開關（其他平台是 settingsCloseToTrayLabel）"
+  },
+  "settingsCloseToTrayHintMac": "從選單列圖示可再開啟或結束",
+  "@settingsCloseToTrayHintMac": {
+    "description": "macOS 的關閉縮到匣說明"
+  },
+  "settingsCloseToTrayUnsupported": "此桌面環境不支援",
+  "@settingsCloseToTrayUnsupported": {
+    "description": "Linux 偵測不到系統匣宿主時，開關旁的短句"
   }
 }

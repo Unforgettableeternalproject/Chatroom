@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
@@ -232,7 +233,9 @@ class _KitInstallSectionState extends ConsumerState<KitInstallSection> {
       const SizedBox(height: 14),
       Row(children: [
         UepButton(
-          label: l10n.hostKitRegisterService,
+          label: ref.watch(appPlatformProvider)?.isPosix == true
+              ? l10n.hostKitRegisterServicePosix
+              : l10n.hostKitRegisterService,
           small: true,
           variant: UepButtonVariant.outline,
           onPressed: () async {

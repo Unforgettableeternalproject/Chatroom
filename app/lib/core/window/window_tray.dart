@@ -218,6 +218,9 @@ class WindowTray with WindowListener, TrayListener {
   bool _listening = false;
   bool _trayVisible = false;
 
+  /// 有沒有系統匣可以放圖示（設定頁據此停用開關）。
+  static Future<bool> hostAvailable() => trayHostAvailable();
+
   bool get enabled => _enabled;
 
   /// 通知模式的讀寫接點：選單要顯示當前值、點下去要寫回去，而系統匣活在
