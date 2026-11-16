@@ -175,3 +175,166 @@ jobs:
             dist/chatroom-hub-kit.zip
             dist/chatroom-runner-kit.zip
             dist/chatroom-app-*.zip
+
+  # ──────────────────────────────────────────────────────────────────────
+  # macOS／Linux 的 App。**接在 `release` 之後**（needs）而不是並行：
+  # `release` 負責建立 draft release 與其他產物，這裡只往同一個 draft 補檔。
+  # 並行的話兩邊會同時建 draft，產生兩份同 tag 的草稿。
+  # Windows 產物流程不受影響；代價是 mac／Linux 失敗時 draft 仍存在但少那一包——
+  # 少了就不要按發布。
+  # sha256 不用另外產：App 驗的是 GitHub 在資產上自動附的 `digest`
+  # （見 `app_updater.dart` 的 `_sha256Of`），上傳後自動有。
+  # ──────────────────────────────────────────────────────────────────────
+  app-macos:
+    needs: [resolve, release]
+    runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      # 有這組 secrets 才走 Developer ID + notarization；沒有就 ad-hoc。
+      # 日後申請了 Apple Developer 只要補 secrets，不必改 workflow：
+      #   MACOS_SIGN_IDENTITY   例：Developer ID Application: Name (TEAMID)
+      #   MACOS_CERT_P12        .p12 憑證的 base64
+      #   MACOS_CERT_PASSWORD   .p12 密碼
+      #   MACOS_NOTARY_APPLE_ID / MACOS_NOTARY_TEAM_ID / MACOS_NOTARY_PASSWORD
+      #                         notarytool 用（Apple ID、Team ID、App 專用密碼）
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      APP_BUNDLE: app/build/macos/Build/Products/Release/Chatroom.app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      # 同樣不用管線，exit code 才不會被吃掉（見 release job 的說明）
+      - name: Build App
+        env:
+          CHATROOM_RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: python scripts/build-app.py --platform macos
+
+      # universal 是 App 自更新的約定（資產名 macos-universal）；少一個架構
+      # 的話另一種 Mac 上會裝得起來卻開不了
+      - name: 確認 universal
+        run: |
+          ARCHS=$(lipo -archs "$APP_BUNDLE/Contents/MacOS/Chatroom")
+          echo "架構：$ARCHS"
+          case "$ARCHS" in
+            *arm64*x86_64*|*x86_64*arm64*) ;;
+            *) echo "✕ 不是 universal（$ARCHS）"; exit 1 ;;
+          esac
+
+      - name: 簽章（ad-hoc）
+        if: env.MACOS_SIGN_IDENTITY == ''
+        run: |
+          codesign --force --deep -s - "$APP_BUNDLE"
+          codesign --verify --deep --strict "$APP_BUNDLE"
+
+      - name: 簽章（Developer ID）
+        if: env.MACOS_SIGN_IDENTITY != ''
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          codesign --force --deep --options runtime --timestamp \
+            -s "$MACOS_SIGN_IDENTITY" "$APP_BUNDLE"
+          codesign --verify --deep --strict "$APP_BUNDLE"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # notarization 要送 zip；staple 之後的 .app 才是要發的那份
+      - name: Notarize
+        if: env.MACOS_SIGN_IDENTITY != '' && env.MACOS_NOTARY_APPLE_ID != ''
+        run: |
+          ditto -c -k --keepParent "$APP_BUNDLE" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$MACOS_NOTARY_APPLE_ID" \
+            --team-id "$MACOS_NOTARY_TEAM_ID" \
+            --password "$MACOS_NOTARY_PASSWORD" \
+            --wait
+          xcrun stapler staple "$APP_BUNDLE"
+          xcrun stapler validate "$APP_BUNDLE"
+
+      - name: 打包
+        env:
+          CHATROOM_RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: python scripts/build-app.py --platform macos --package-only
+
+      - name: 附到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          files: dist/chatroom-app-${{ env.RELEASE_TAG }}-macos-universal.zip
+          fail_on_unmatched_files: true
+
+  app-linux:
+    needs: [resolve, release]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: 安裝 Linux 桌面建置依賴
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libayatana-appindicator3-dev libsecret-1-dev \
+            libjsoncpp-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            clang cmake ninja-build pkg-config liblzma-dev
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      # --package 會檢查執行檔存在且有執行位元才打 tar.gz
+      - name: Build App 並打包
+        env:
+          CHATROOM_RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: python scripts/build-app.py --platform linux --package
+
+      - name: 附到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          files: dist/chatroom-app-${{ env.RELEASE_TAG }}-linux-x64.tar.gz
+          fail_on_unmatched_files: true

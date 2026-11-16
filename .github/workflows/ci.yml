@@ -87,3 +87,101 @@ jobs:
           name: golden-failures
           path: app/test/**/failures/
           if-no-files-found: ignore
+
+  # ──────────────────────────────────────────────────────────────────────
+  # 以下是 v1.2.9 起的 macOS／Linux 驗證。**上面兩個 Windows job 不要動**：
+  # Hub 實際跑在 Windows，那兩條是既有的基準；這裡只是另外加平台，
+  # 而且加的是獨立 job——某個平台紅了看得出是哪一個，不會拖垮或掩蓋 Windows。
+  # ──────────────────────────────────────────────────────────────────────
+
+  # Linux 跑全量（基準已確認可綠）。同樣不指定 `tests/`，理由見上面 python job。
+  python-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安裝依賴
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: pytest
+        run: pytest -q
+
+  # macOS 只跑 POSIX／平台相關的子集，不跑全量：全量在 Windows 與 Linux 已各跑一次，
+  # macOS runner 又慢又貴（分鐘數 10 倍計費額度），重跑只會得到相同的邏輯結論。
+  # 子集是「在 macOS 才可能不一樣」的部分：runner（程序與信號）、服務註冊、
+  # 安裝器、bridge 下載隔離、build-app 打包。
+  # 明確給路徑會覆寫 pytest.ini 的 testpaths，這裡是刻意的。
+  python-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: 安裝依賴
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: pytest（POSIX 子集）
+        run: >-
+          pytest -q
+          runner/tests
+          tests/test_service_posix.py
+          tests/test_install_kit.py
+          tests/test_build_app_platform.py
+          bridge/tests/test_download_isolation.py
+
+  # 只驗「能建置」。flutter test／analyze 已在 Windows 跑，渲染相關的 golden
+  # 也只認那一個平台，這裡不重跑。debug 建置比 release 快，而且不需要簽章。
+  flutter-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: build macos（debug）
+        working-directory: app
+        run: flutter build macos --debug
+
+  flutter-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: 安裝 Linux 桌面建置依賴
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libayatana-appindicator3-dev libsecret-1-dev \
+            libjsoncpp-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            clang cmake ninja-build pkg-config liblzma-dev
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: build linux（debug）
+        working-directory: app
+        run: flutter build linux --debug

@@ -1,4 +1,4 @@
-"""Build Windows App，並把「這是哪一份程式碼」編進產物。
+"""Build App（Windows／macOS／Linux），並把「這是哪一份程式碼」編進產物。
 
 **一定要走這支，不要直接 `flutter build windows`。** 少帶 `--dart-define`
 的話 App 講不出自己是哪一份，而那正是這次事故的成因——版本資訊在 build
@@ -16,11 +16,14 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,8 +39,52 @@ for _stream in (sys.stdout, sys.stderr):
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
-# 這台機器的 SDK 位置；PATH 與 FLUTTER_ROOT 都沒有時的最後退路
+# 這台 Windows 開發機的 SDK 位置；PATH 與 FLUTTER_ROOT 都沒有時的最後退路。
+# 只給 Windows 用——macOS／Linux（含 CI）一律靠 PATH 或 FLUTTER_ROOT。
 _FALLBACK_SDK = r"C:\Users\Bernie\dev\flutter"
+
+PLATFORMS = ("windows", "macos", "linux")
+DIST = ROOT / "dist"
+
+# 各平台 build 產物的位置，相對於 `app/`。
+WINDOWS_RELEASE = Path("build/windows/x64/runner/Release")
+LINUX_BUNDLE = Path("build/linux/x64/release/bundle")
+MACOS_APP = Path("build/macos/Build/Products/Release/Chatroom.app")
+
+
+def host_platform() -> str:
+    """依 `sys.platform` 推斷預設目標平台。"""
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def asset_name(tag: str, platform: str) -> str:
+    """Release 資產檔名；與 `app_update_posix.dart` 的 `appAssetSuffixFor` 對齊。"""
+    suffix = {
+        "windows": "windows-x64.zip",
+        "macos": "macos-universal.zip",
+        "linux": "linux-x64.tar.gz",
+    }[platform]
+    return f"chatroom-app-{tag}-{suffix}"
+
+
+def aot_blob_path(platform: str) -> Path:
+    """AOT 產物（Dart 程式碼編譯後的檔案）的位置；版本字串驗的是它。
+
+    macOS 的 framework 版本目錄名不寫死，兩種佈局都找。
+    """
+    if platform == "windows":
+        return APP / WINDOWS_RELEASE / "data/app.so"
+    if platform == "linux":
+        return APP / LINUX_BUNDLE / "lib/libapp.so"
+    framework = APP / MACOS_APP / "Contents/Frameworks/App.framework"
+    for candidate in (framework / "Versions/A/App", framework / "App"):
+        if candidate.exists():
+            return candidate
+    return framework / "Versions/A/App"
 
 
 def app_version() -> str:
@@ -85,7 +132,10 @@ def flutter_cmd() -> str:
     found = shutil.which("flutter")
     if found:
         return found
-    for candidate in (os.environ.get("FLUTTER_ROOT", ""), _FALLBACK_SDK):
+    candidates = [os.environ.get("FLUTTER_ROOT", "")]
+    if sys.platform == "win32":
+        candidates.append(_FALLBACK_SDK)
+    for candidate in candidates:
         if not candidate:
             continue
         name = "flutter.bat" if os.name == "nt" else "flutter"
@@ -158,7 +208,69 @@ def commit_stamp() -> str:
     return commit
 
 
-def main() -> int:
+def package_app(platform: str, tag: str, dist: Path = DIST) -> Path:
+    """把 build 產物打成 Release 資產，回傳檔案路徑。
+
+    資產名與內容是跟 App 自更新的約定（見 `app_update_posix.dart`）：
+    - windows：`Release/` 目錄的內容（根目錄就是 `Chatroom.exe`）。
+    - macos：`Chatroom.app` 本身在根目錄（等同 `ditto -c -k --keepParent`）。
+    - linux：Flutter `bundle/` 的內容在根目錄，執行檔 `chatroom` 要保有執行位元。
+    """
+    dist.mkdir(parents=True, exist_ok=True)
+    out = dist / asset_name(tag, platform)
+    out.unlink(missing_ok=True)
+
+    if platform == "windows":
+        src = APP / WINDOWS_RELEASE
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(src.rglob("*")):
+                zf.write(path, path.relative_to(src).as_posix())
+    elif platform == "macos":
+        # ditto 保留 symlink 與簽章需要的屬性，zipfile 做不到
+        subprocess.run(
+            ["ditto", "-c", "-k", "--keepParent", str(APP / MACOS_APP), str(out)],
+            check=True,
+        )
+    else:
+        src = APP / LINUX_BUNDLE
+        exe = src / "chatroom"
+        if not exe.exists():
+            raise SystemExit(f"✕ 找不到 {exe}——不打包。")
+        if not os.access(exe, os.X_OK):
+            raise SystemExit(f"✕ {exe} 沒有執行位元——解壓後會跑不起來。")
+        with tarfile.open(out, "w:gz") as tf:
+            for path in sorted(src.iterdir()):
+                tf.add(path, arcname=path.name)
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build Chatroom App")
+    parser.add_argument("--platform", choices=PLATFORMS, default=host_platform(),
+                        help="目標平台（預設依本機）")
+    parser.add_argument("--package", action="store_true",
+                        help="build 後打成 Release 資產到 dist/"
+                             "（tag 取自 CHATROOM_RELEASE_TAG）")
+    parser.add_argument("--package-only", action="store_true",
+                        help="不 build，只把既有產物打包（簽章之後用）")
+    args = parser.parse_args(argv)
+    platform = args.platform
+    args.package = args.package or args.package_only
+
+    if platform != host_platform():
+        print(f"✕ flutter 無法在 {host_platform()} 上 build {platform}。",
+              file=sys.stderr)
+        return 1
+    tag = os.environ.get("CHATROOM_RELEASE_TAG", "").strip()
+    if args.package and not tag:
+        print("✕ --package 需要 CHATROOM_RELEASE_TAG（資產名含 tag）。",
+              file=sys.stderr)
+        return 1
+
+    if args.package_only:
+        print(f"✓ 已打包 {package_app(platform, tag)}")
+        return 0
+
     running = running_app_pids()
     if running:
         listed = "、".join(f"{name}（PID {pid}）" for name, pid in running)
@@ -185,9 +297,9 @@ def main() -> int:
 
     built_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Release 流程帶進來的 tag；本機 build 沒設就是 0
-    hotfix = hotfix_number(os.environ.get("CHATROOM_RELEASE_TAG", ""))
+    hotfix = hotfix_number(tag)
     cmd = [
-        flutter_cmd(), "build", "windows", "--release",
+        flutter_cmd(), "build", platform, "--release",
         f"--dart-define=CHATROOM_VERSION={version}",
         f"--dart-define=CHATROOM_COMMIT={commit}",
         f"--dart-define=CHATROOM_BUILT_AT={built_at}",
@@ -198,10 +310,11 @@ def main() -> int:
     if result.returncode != 0:
         return result.returncode
 
-    # 檢查的是 app.so 而不是 exe：純 Dart 變更不會重寫 exe
-    app_so = APP / "build/windows/x64/runner/Release/data/app.so"
+    # 檢查的是 AOT 產物而不是外殼：純 Dart 變更不會重寫 exe
+    app_so = aot_blob_path(platform)
     if not app_so.exists():
-        print("✕ 找不到 data/app.so——build 回報成功卻沒有產物。", file=sys.stderr)
+        print(f"✕ 找不到 {app_so.relative_to(APP).as_posix()}"
+              "——build 回報成功卻沒有產物。", file=sys.stderr)
         return 1
 
     # **驗產物，不要只印自己打算做的事。** 上面那行 print 印的是「要編進去
@@ -224,6 +337,9 @@ def main() -> int:
         timespec="seconds")
     print(f"✓ {version}+{commit or 'unknown'} · Dart 產物 {stamp}"
           f" · 版本字串已在產物中驗證")
+
+    if args.package:
+        print(f"✓ 已打包 {package_app(platform, tag)}")
     return 0
 
 
