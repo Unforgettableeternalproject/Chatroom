@@ -187,6 +187,8 @@ void main() {
       AppUpdateFailure.incomplete: l10n.settingsUpdateFailVerify,
       AppUpdateFailure.extract: l10n.settingsUpdateFailExtract,
       AppUpdateFailure.launch: l10n.settingsUpdateFailLaunch,
+      AppUpdateFailure.translocated: l10n.settingsUpdateFailTranslocated,
+      AppUpdateFailure.appImage: l10n.settingsUpdateFailAppImage,
     };
     expect(expected.keys.toSet(), AppUpdateFailure.values.toSet());
     for (final MapEntry(key: failure, value: text) in expected.entries) {

@@ -5,20 +5,24 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/config/build_info.dart';
+import '../core/platform/app_platform.dart';
 import '../core/window/window_tray.dart';
+import 'app_update_posix.dart';
 import 'kit_installer.dart';
 
-/// App 自己的檢查更新與自我更新（Windows 桌面）。
+/// App 自己的檢查更新與自我更新（Windows、macOS、Linux 桌面）。
 ///
 /// 與 kit 安裝分開：kit 錨在「App 這一版」的 Release，這裡問的是 latest。
 /// 共用的只有不帶 token 的 HTTP 取用與子進程介面。
 ///
 /// 流程：查 latest → 下載 zip 到 `.downloads\app-update\<tag>\` → 驗大小與
-/// SHA-256 → 解壓到 `staged\` → 交給獨立的 PowerShell 腳本，等 App 結束後
+/// SHA-256 → 解壓到 `staged\` → 交給獨立的腳本（Windows 是 PowerShell，
+/// macOS／Linux 是 `/bin/sh`，見 `app_update_posix.dart`），等 App 結束後
 /// 替換安裝目錄並重新啟動。**App 自己不碰安裝目錄**：執行中的 exe 與 dll
 /// 換不掉。
 
-/// Release 上 App 資產的檔名：`chatroom-app-<tag>-windows-x64.zip`。
+/// Release 上 App 資產的檔名：`chatroom-app-<tag>-windows-x64.zip`（Windows）。
+/// 其他平台的尾巴見 [appAssetSuffixFor]。
 const String kAppAssetPrefix = 'chatroom-app-';
 const String kAppAssetSuffix = '-windows-x64.zip';
 
@@ -148,7 +152,9 @@ class AppRelease {
   final String? sha256;
 
   /// GitHub 的 JSON → 這個。沒有 tag 或沒有對應的 App 資產就回 `null`。
-  static AppRelease? fromJson(Object? json) {
+  /// [platform] 決定認哪一個資產（預設 Windows）。
+  static AppRelease? fromJson(Object? json,
+      {AppPlatform platform = AppPlatform.windows}) {
     if (json is! Map) return null;
     final tag = json['tag_name'];
     if (tag is! String || tag.isEmpty) return null;
@@ -159,7 +165,7 @@ class AppRelease {
       final name = item['name'];
       final url = item['browser_download_url'];
       if (name is! String || url is! String || url.isEmpty) continue;
-      if (!_isAppAsset(name)) continue;
+      if (!_isAppAsset(name, platform)) continue;
       final size = item['size'];
       return AppRelease(
         tag: tag,
@@ -176,9 +182,9 @@ class AppRelease {
 
   /// 資產名會拿去組本機路徑、也會進 PowerShell 的指令字串：只認英數與
   /// `.`、`_`、`-`，其餘（路徑分隔、引號、`$`、空白…）一律不認。
-  static bool _isAppAsset(String name) =>
+  static bool _isAppAsset(String name, AppPlatform platform) =>
       name.startsWith(kAppAssetPrefix) &&
-      name.endsWith(kAppAssetSuffix) &&
+      name.endsWith(appAssetSuffixFor(platform)) &&
       RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(name);
 
   static String? _sha256Of(Object? digest) {
@@ -199,11 +205,18 @@ enum AppUpdateFailure {
   digestMismatch,
   extract,
 
-  /// 解出來的東西缺 `Chatroom.exe` 或 `data\app.so`。
+  /// 解出來的東西缺執行檔或 AOT 函式庫（Windows：`Chatroom.exe`、`data\app.so`）。
   incomplete,
 
   /// 更新腳本起不來。
   launch,
+
+  /// macOS：App 是從下載資料夾或磁碟映像直接開的（系統把它放在唯讀的隔離
+  /// 路徑），換不掉自己。要先移到「應用程式」。
+  translocated,
+
+  /// Linux：以 AppImage 執行，檔案在唯讀掛載裡。
+  appImage,
 }
 
 @immutable
@@ -244,7 +257,8 @@ class AppUpdater {
     required this.processRunner,
     required this.updateRoot,
     required this.installDir,
-  });
+    AppPlatform? platform,
+  }) : _platform = platform ?? detectAppPlatform() ?? AppPlatform.windows;
 
   final KitHttpClient http;
   final KitProcessRunner processRunner;
@@ -252,10 +266,13 @@ class AppUpdater {
   /// `.downloads` 的父目錄（正式環境是 [kitInstallRoot]）。
   final String updateRoot;
 
-  /// App 現在裝在哪。
+  /// App 現在裝在哪（要被替換的東西所在的資料夾；macOS 是 `.app` 的上一層）。
   final String installDir;
 
-  static final _sep = Platform.pathSeparator;
+  /// 資產名、解壓方式、完整性檢查與腳本都跟著它走。
+  final AppPlatform _platform;
+
+  String get _sep => _platform.sep;
 
   String get _updatesDir => [updateRoot, '.downloads', 'app-update'].join(_sep);
 
@@ -264,7 +281,7 @@ class AppUpdater {
   Future<AppRelease?> fetchLatest() async {
     final (status, body) = await http.getJson(kAppLatestReleaseUrl);
     if (status != 200) return null;
-    return AppRelease.fromJson(body);
+    return AppRelease.fromJson(body, platform: _platform);
   }
 
   /// 下載、驗證、解壓，並把更新腳本寫好。失敗丟 [AppUpdateError]，
@@ -320,15 +337,23 @@ class AppUpdater {
       }
 
       await _extract(zipPath, staged.path);
-      final exe = File('${staged.path}$_sep$kAppExeName');
-      final so = File([staged.path, ...kAppSoPath].join(_sep));
-      if (!await exe.exists() || !await so.exists()) {
-        throw const AppUpdateError(AppUpdateFailure.incomplete);
+      final stagedRoot = await _stagedRoot(staged.path);
+      for (final rel in requiredAppFilesFor(_platform)) {
+        if (!await File([stagedRoot, ...rel].join(_sep)).exists()) {
+          throw const AppUpdateError(AppUpdateFailure.incomplete);
+        }
       }
 
-      final script = File('${tagDir.path}$_sep' 'apply-update.ps1');
+      final script = File('${tagDir.path}$_sep'
+          '${_platform.isPosix ? 'apply-update.sh' : 'apply-update.ps1'}');
       try {
-        await script.writeAsString(kApplyUpdateScript);
+        // POSIX 腳本一律 LF：CRLF 會讓 `#!/bin/sh\r` 找不到直譯器
+        await script.writeAsString(switch (_platform) {
+          AppPlatform.windows => kApplyUpdateScript,
+          AppPlatform.macos => kApplyUpdateScriptMac,
+          AppPlatform.linux => kApplyUpdateScriptLinux,
+        }
+            .replaceAll('\r\n', '\n'));
       } on Object catch (e) {
         throw AppUpdateError(AppUpdateFailure.extract, '$e');
       }
@@ -336,7 +361,7 @@ class AppUpdater {
       return AppUpdatePackage(
         tag: release.tag,
         dir: tagDir.path,
-        stagedDir: staged.path,
+        stagedDir: stagedRoot,
         backupDir: '${tagDir.path}$_sep' 'backup',
         scriptPath: script.path,
       );
@@ -363,6 +388,20 @@ class AppUpdater {
   /// 函式，`PSModulePath` 被 PowerShell 7 的父進程帶歪時 5.1 會找不到它
   /// （實測 2026-10-12）。輸出形如 `AB-CD-…`。
   Future<String> _sha256(String path) async {
+    if (_platform.isPosix) {
+      // macOS 的 `shasum -a 256`、Linux 的 `sha256sum`：輸出都是
+      // `<hex>  <path>`，取第一欄
+      try {
+        final r = _platform == AppPlatform.macos
+            ? await processRunner.run('shasum', ['-a', '256', path])
+            : await processRunner.run('sha256sum', [path]);
+        if (r.exitCode != 0) return '';
+        final out = '${r.stdout}'.trim();
+        return out.isEmpty ? '' : out.split(RegExp(r'\s+')).first.toLowerCase();
+      } on Object {
+        return '';
+      }
+    }
     try {
       final r = await processRunner.run('powershell', [
         '-NoProfile',
@@ -377,15 +416,43 @@ class AppUpdater {
     }
   }
 
+  /// 完整的 App 解在哪一層。
+  ///
+  /// Linux 的 tar.gz 契約是「bundle 的內容」放在根，但多包一層資料夾
+  /// （`bundle/`）也很常見——根目錄認不得、而且底下只有一個資料夾時，
+  /// 往下一層找。Windows 與 macOS 的 zip 結構是固定的，不猜。
+  Future<String> _stagedRoot(String staged) async {
+    if (_platform != AppPlatform.linux) return staged;
+    final probe = requiredAppFilesFor(_platform).first;
+    if (await File([staged, ...probe].join(_sep)).exists()) return staged;
+    try {
+      final entries = await Directory(staged).list().toList();
+      if (entries.length == 1 && entries.single is Directory) {
+        return entries.single.path;
+      }
+    } on Object {
+      // 列不出來就照原樣，後面的完整性檢查會講話
+    }
+    return staged;
+  }
+
+  /// 解壓。Windows 用 `Expand-Archive`；macOS 用 `ditto -x -k`（保留符號連結
+  /// 與 xattr，framework 的 `Versions/Current` 靠它）；Linux 用 `tar -xzf`。
   Future<void> _extract(String zipPath, String target) async {
     try {
       await Directory(target).create(recursive: true);
-      final r = await processRunner.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        'Expand-Archive -LiteralPath "$zipPath" '
-            '-DestinationPath "$target" -Force',
-      ]);
+      final r = switch (_platform) {
+        AppPlatform.windows => await processRunner.run('powershell', [
+            '-NoProfile',
+            '-Command',
+            'Expand-Archive -LiteralPath "$zipPath" '
+                '-DestinationPath "$target" -Force',
+          ]),
+        AppPlatform.macos =>
+          await processRunner.run('ditto', ['-x', '-k', zipPath, target]),
+        AppPlatform.linux =>
+          await processRunner.run('tar', ['-xzf', zipPath, '-C', target]),
+      };
       if (r.exitCode != 0) {
         throw AppUpdateError(AppUpdateFailure.extract, '${r.stderr}'.trim());
       }
@@ -397,7 +464,8 @@ class AppUpdater {
   }
 }
 
-/// 起更新腳本的參數（`powershell` 之後的整串）。
+/// 起更新腳本的參數（`powershell` 之後的整串）。Windows 專用；
+/// macOS／Linux 見 [posixApplyUpdateCommand]。
 List<String> applyUpdateArguments({
   required AppUpdatePackage package,
   required String installDir,
@@ -503,6 +571,29 @@ class DetachedAppUpdateLauncher implements AppUpdateLauncher {
       ..write(r'\' * (slashes * 2))
       ..write('"');
     return out.toString();
+  }
+}
+
+/// macOS／Linux：直接把 `/bin/sh <腳本>` 起成 detached 進程。
+///
+/// 不需要 Windows 那一道 `Start-Process` 的繞路：那是為了給腳本一個隱藏的
+/// 主控台；POSIX 的 detached 進程不依賴父進程（獨立的 session），App 結束後
+/// 腳本照跑。腳本自己也 `trap '' HUP`。
+class PosixAppUpdateLauncher implements AppUpdateLauncher {
+  const PosixAppUpdateLauncher();
+
+  @override
+  Future<void> start(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+  }) async {
+    await Process.start(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      mode: ProcessStartMode.detached,
+    );
   }
 }
 
@@ -720,7 +811,12 @@ class AppUpdateState {
 
 /// 這個平台走不走得通自我更新。做成 provider 的理由同
 /// [kitInstallSupportedProvider]。
-final appUpdatePlatformProvider = Provider<bool>((ref) => Platform.isWindows);
+final appUpdatePlatformProvider =
+    Provider<bool>((ref) => ref.watch(appPlatformProvider) != null);
+
+/// 自更新要看的環境變數（`APPIMAGE`）。測試覆寫它。
+final appEnvironmentProvider =
+    Provider<Map<String, String>>((ref) => Platform.environment);
 
 /// 這份 App 的版本識別。測試覆寫它來扮演 Release 版。
 final appBuildInfoProvider = Provider<BuildInfo>((ref) => BuildInfo.current);
@@ -736,18 +832,31 @@ final appUpdateEnabledProvider = Provider<bool>((ref) {
 final appExePathProvider =
     Provider<String>((ref) => Platform.resolvedExecutable);
 
-/// 安裝目錄＝exe 所在的資料夾。
-final appInstallDirProvider = Provider<String>(
-    (ref) => File(ref.watch(appExePathProvider)).parent.path);
+/// 安裝目錄＝要被替換的東西所在的資料夾。Windows／Linux 是 exe 所在的
+/// 資料夾；macOS 替換的是整個 `.app`，所以是它的上一層（`/Applications`）
+/// ——可不可寫、備份能不能搬，看的都是那一層。
+final appInstallDirProvider = Provider<String>((ref) {
+  final exe = ref.watch(appExePathProvider);
+  if (ref.watch(appPlatformProvider) == AppPlatform.macos) {
+    final bundle = macBundlePath(exe);
+    if (bundle != null) return File(bundle).parent.path;
+  }
+  return File(exe).parent.path;
+});
 
 /// `.downloads` 的父目錄。
-final appUpdateRootProvider = Provider<String>((ref) => kitInstallRoot());
+final appUpdateRootProvider = Provider<String>(
+    (ref) => kitInstallRoot(null, ref.watch(appPlatformProvider)));
 
 /// 腳本要等它結束的那個進程。
 final appPidProvider = Provider<int>((ref) => pid);
 
-final appUpdateLauncherProvider = Provider<AppUpdateLauncher>(
-    (ref) => const DetachedAppUpdateLauncher());
+final appUpdateLauncherProvider = Provider<AppUpdateLauncher>((ref) {
+  final platform = ref.watch(appPlatformProvider);
+  return platform != null && platform.isPosix
+      ? const PosixAppUpdateLauncher()
+      : const DetachedAppUpdateLauncher();
+});
 
 /// 結束 App。走系統匣「結束」的同一條路——closeToTray 開著時，關閉視窗
 /// 只是藏起來。之後的 `exit` 是保險：腳本要等這個進程真的消失才會動手。
@@ -761,6 +870,7 @@ final appUpdaterProvider = Provider<AppUpdater>((ref) => AppUpdater(
       processRunner: ref.watch(kitProcessRunnerProvider),
       updateRoot: ref.watch(appUpdateRootProvider),
       installDir: ref.watch(appInstallDirProvider),
+      platform: ref.watch(appPlatformProvider),
     ));
 
 /// 檢查更新的狀態。不是 autoDispose：切分頁、離開設定頁都不該丟掉
@@ -815,6 +925,28 @@ class AppUpdate extends Notifier<AppUpdateState> {
     final release = _release;
     if (release == null || state.phase != AppUpdatePhase.available) return;
     final tag = release.tag;
+    // 做不到自我更新的情況，**下載之前**就講：macOS 的隔離路徑、AppImage
+    final platform = ref.read(appPlatformProvider);
+    final blocker = platform == null
+        ? null
+        : selfUpdateBlocker(
+            platform: platform,
+            exePath: ref.read(appExePathProvider),
+            environment: ref.read(appEnvironmentProvider),
+          );
+    if (blocker != null) {
+      state = AppUpdateState(
+        phase: AppUpdatePhase.failed,
+        tag: tag,
+        failure: switch (blocker) {
+          AppUpdateBlocker.appImage => AppUpdateFailure.appImage,
+          AppUpdateBlocker.translocated => AppUpdateFailure.translocated,
+          AppUpdateBlocker.notInBundle => AppUpdateFailure.notWritable,
+        },
+        detail: ref.read(appExePathProvider),
+      );
+      return;
+    }
     state = AppUpdateState(phase: AppUpdatePhase.downloading, tag: tag);
     try {
       _package = await ref.read(appUpdaterProvider).download(
@@ -850,14 +982,31 @@ class AppUpdate extends Notifier<AppUpdateState> {
     final tag = package.tag;
     state = AppUpdateState(phase: AppUpdatePhase.applying, tag: tag);
     try {
+      final platform = ref.read(appPlatformProvider) ?? AppPlatform.windows;
+      final installDir = ref.read(appInstallDirProvider);
+      final exePath = ref.read(appExePathProvider);
+      final waitPid = ref.read(appPidProvider);
+      final UpdateCommand command = platform.isPosix
+          ? posixApplyUpdateCommand(
+              platform: platform,
+              scriptPath: package.scriptPath,
+              stagedDir: package.stagedDir,
+              backupDir: package.backupDir,
+              installDir: installDir,
+              exePath: exePath,
+              waitPid: waitPid,
+            )
+          : UpdateCommand(
+              'powershell',
+              applyUpdateArguments(
+                package: package,
+                installDir: installDir,
+                exePath: exePath,
+                waitPid: waitPid,
+              ));
       await ref.read(appUpdateLauncherProvider).start(
-            'powershell',
-            applyUpdateArguments(
-              package: package,
-              installDir: ref.read(appInstallDirProvider),
-              exePath: ref.read(appExePathProvider),
-              waitPid: ref.read(appPidProvider),
-            ),
+            command.executable,
+            command.arguments,
             workingDirectory: package.dir,
           );
     } on Object catch (e) {

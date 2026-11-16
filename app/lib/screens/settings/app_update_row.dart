@@ -86,5 +86,7 @@ String appUpdateFailureText(AppLocalizations l10n, AppUpdateFailure? failure) =>
         l10n.settingsUpdateFailVerify,
       AppUpdateFailure.extract => l10n.settingsUpdateFailExtract,
       AppUpdateFailure.launch => l10n.settingsUpdateFailLaunch,
+      AppUpdateFailure.translocated => l10n.settingsUpdateFailTranslocated,
+      AppUpdateFailure.appImage => l10n.settingsUpdateFailAppImage,
       AppUpdateFailure.download || null => l10n.settingsUpdateFailDownload,
     };
