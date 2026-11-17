@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -64,6 +65,15 @@ MAX_ACK_NOTE = 200
 # 不在裡面：它在 Hub 的狀態機上同樣沒有下一步，但交接鏈要不要一起作廢是
 # 人的決定，執行器不在重送迴圈裡替他決定
 _HUB_SETTLED_STATUSES = frozenset({"done", "failed", "cancelled"})
+
+
+def login_hint_for(platform: str, claude_config_dir: Path) -> str:
+    """登入指令的提示。Windows 是 PowerShell 語法，其餘平台是 POSIX shell。"""
+    if platform == "win32":
+        return ('登入：$env:CLAUDE_CONFIG_DIR = '
+                f'"{claude_config_dir}"; claude auth login')
+    return ('登入：export CLAUDE_CONFIG_DIR='
+            f'"{claude_config_dir}"; claude auth login')
 
 
 @dataclass
@@ -124,7 +134,7 @@ class RunnerLoop:
                  config_path: str | os.PathLike[str] | None = None) -> None:
         self.cfg = cfg
         # `reload` 命令要重讀的那一份。留 None 就走 `load_config` 的預設解析
-        #（環境變數／`%LOCALAPPDATA%`），與啟動時同一條路
+        #（環境變數／各平台的預設安裝根目錄），與啟動時同一條路
         self.config_path = config_path
         self.hub = hub
         self.usage = usage_store
@@ -626,8 +636,7 @@ class RunnerLoop:
     # ---------- 執行中的登入檢查 ----------
 
     def _login_hint(self) -> str:
-        return ('登入：$env:CLAUDE_CONFIG_DIR = '
-                f'"{self.cfg.claude_config_dir}"; claude auth login')
+        return login_hint_for(sys.platform, self.cfg.claude_config_dir)
 
     def _login_check_deadline(self) -> float | None:
         interval = self.cfg.login_check_seconds

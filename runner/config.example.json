@@ -1,5 +1,5 @@
 {
-  "_說明": "複製到 %LOCALAPPDATA%/UEP/Chatroom/runner/config.json 再改。這個檔案裡不要放 token 以外的祕密，agent_token 建議留空改用 token_env_file。",
+  "_說明": "複製到執行器的設定檔位置再改（Windows：%LOCALAPPDATA%/UEP/Chatroom/runner/config.json；macOS：~/Library/Application Support/UEP/Chatroom/runner/config.json；Linux：${XDG_DATA_HOME:-~/.local/share}/uep/chatroom/runner/config.json）。路徑欄位 Windows 用 C:/path/to/... 的寫法，macOS／Linux 用 /path/to/...。這個檔案裡不要放 token 以外的祕密，agent_token 建議留空改用 token_env_file。",
   "hub_url": "http://127.0.0.1:8787",
   "agent_token": "",
   "token_env_file": "../server/.env",
@@ -36,7 +36,7 @@
   "allowed_mcp_servers": ["chatroom"],
   "workspaces": {
     "ai-website": {
-      "folder": "C:/path/to/AI-Website",
+      "folder": "/path/to/AI-Website",
       "public": true,
       "allow_browser_livetest": false,
       "model": "claude-opus-5",
@@ -52,30 +52,30 @@
         "tag_message": "{objective}"
       },
       "primary_skill": "",
-      "skill_dirs": ["C:/path/to/AI-Website"],
+      "skill_dirs": ["/path/to/AI-Website"],
       "skills": {
         "ticket": ["jira-ticket-workflow"]
       },
       "extra_write_dirs": [
-        "C:/path/to/AI-Website/global_docs/analysis",
-        "C:/path/to/AI-Website/global_docs/summary"
+        "/path/to/AI-Website/global_docs/analysis",
+        "/path/to/AI-Website/global_docs/summary"
       ],
       "projects": {
         "JSAI-Web": {
-          "path": "C:/path/to/AI-Website/JSAI-Web",
+          "path": "/path/to/AI-Website/JSAI-Web",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"],
           "_stable_branch說明": "上板要併進去的穩定分支（通常 main／master）。留空＝這個 repo 不參與上板，不是「預設用 main」。",
           "stable_branch": "main"
         },
         "JSAI-API": {
-          "path": "C:/path/to/AI-Website/JSAI-API",
+          "path": "/path/to/AI-Website/JSAI-API",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"],
           "stable_branch": "main"
         },
         "JSAI-Functions": {
-          "path": "C:/path/to/AI-Website/JSAI-Functions",
+          "path": "/path/to/AI-Website/JSAI-Functions",
           "allowed_branches": ["jsai_dev", "feature/*"],
           "push_branches": ["jsai_dev", "feature/*"],
           "stable_branch": ""

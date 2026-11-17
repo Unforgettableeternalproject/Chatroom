@@ -20,6 +20,7 @@ from __future__ import annotations
 import builtins
 import importlib.util
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -290,6 +291,46 @@ def test_runner_kit_yes_is_silent_and_reports(tmp_path, monkeypatch, capsys,
     assert cfg["agent_token"] == "agent-key"
     assert cfg["label"] == "runner-a"
     assert cfg["workspaces"] == {}
+
+
+def test_runner_kit_default_host_matches_bridge_gethostname(
+        tmp_path, monkeypatch, capsys, no_input):
+    """預設機器名要與 bridge identity 同源（socket.gethostname），不是 COMPUTERNAME。
+
+    COMPUTERNAME 是 NetBIOS 名（大寫、截 15 字），與 bridge 自報的 host 不同，
+    指派 UI 會把同一台機器當成兩台。
+    """
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_host")
+    monkeypatch.setattr(inst, "REGISTRY", tmp_path / "home" / "runner-kit.json")
+    _fake_stage(inst, REPO, monkeypatch)
+    monkeypatch.setenv("COMPUTERNAME", "NETBIOS-SHORT")
+    monkeypatch.setattr(socket, "gethostname",
+                        lambda: "Long-Host-Name-Beyond-Fifteen")
+    config = tmp_path / "state" / "config.json"
+
+    inst.main(["--yes", "--dir", str(tmp_path / "install"),
+               "--config", str(config), "--no-task",
+               "--hub-url", "http://127.0.0.1:8787", "--token", "k"])
+
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    assert cfg["host"] == "Long-Host-Name-Beyond-Fifteen"
+
+
+def test_runner_kit_default_host_empty_hostname_falls_back(
+        tmp_path, monkeypatch, capsys, no_input):
+    inst = load(REPO / "runner-kit" / "install.py", "runner_kit_installer_host0")
+    monkeypatch.setattr(inst, "REGISTRY", tmp_path / "home" / "runner-kit.json")
+    _fake_stage(inst, REPO, monkeypatch)
+    monkeypatch.setenv("COMPUTERNAME", "NETBIOS-SHORT")
+    monkeypatch.setattr(socket, "gethostname", lambda: "")
+    config = tmp_path / "state" / "config.json"
+
+    inst.main(["--yes", "--dir", str(tmp_path / "install"),
+               "--config", str(config), "--no-task",
+               "--hub-url", "http://127.0.0.1:8787", "--token", "k"])
+
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    assert cfg["host"] == "runner"
 
 
 def test_runner_kit_yes_reports_login_required_and_does_not_log_in(

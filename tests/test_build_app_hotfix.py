@@ -42,9 +42,111 @@ def test_hotfix_number(build_app, tag, expected):
     assert build_app.hotfix_number(tag) == expected
 
 
+@pytest.mark.parametrize(
+    ("tag", "expected"),
+    [
+        ("v1.2.9-rc1", 1),
+        ("v1.2.9-rc12", 12),
+        ("1.2.9-rc3", 3),
+        ("v1.2.9", 0),
+        ("v1.2.9-hotfix1", 0),
+        ("", 0),
+        # 不是結尾的 `-rc<n>` 不算
+        ("v1.2.9-rc1-hotfix1", 0),
+        ("v1.2.9-rc", 0),
+    ],
+)
+def test_rc_number(build_app, tag, expected):
+    assert build_app.rc_number(tag) == expected
+
+
+def test_rc_and_hotfix_numbers_do_not_overlap(build_app):
+    """RC tag 不會被當成熱修，熱修 tag 也不會被當成 RC。"""
+    assert build_app.hotfix_number("v1.2.9-rc1") == 0
+    assert build_app.rc_number("v1.2.9-hotfix1") == 0
+
+
 def test_release_workflow_passes_the_tag_to_the_app_build():
     """workflow 沒把 tag 傳進去的話，熱修版的 App 會自認是 hotfix 0。"""
     text = (REPO / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8")
     step = text.split("- name: Build App", 1)[1].split("- name:", 1)[0]
     assert "CHATROOM_RELEASE_TAG: ${{ env.RELEASE_TAG }}" in step
+
+
+def _release_workflow() -> dict:
+    import yaml
+
+    text = (REPO / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8")
+    return yaml.safe_load(text)
+
+
+def test_release_workflow_triggers_rc_from_develop():
+    """develop 的 CI 完成與 RC tag 推送都能觸發；YAML 能解析。"""
+    wf = _release_workflow()
+    on = wf[True]  # YAML 把 `on` 讀成布林 True
+    assert on["workflow_run"]["branches"] == ["master", "develop"]
+    assert on["push"]["tags"] == ["v*-rc*"]
+    assert "workflow_dispatch" in on
+
+
+def test_release_workflow_keeps_rc_and_formal_apart():
+    """develop 只發 -rc tag，master 絕不發 -rc tag。"""
+    wf = _release_workflow()
+    run = wf["jobs"]["resolve"]["steps"][1]["run"]
+    assert 'RUN_BRANCH" = "develop"' in run
+    assert 'grep -E -e "$RC_RE"' in run
+    assert 'grep -Ev -e "$RC_RE"' in run
+
+
+def test_release_workflow_rc_pattern_is_not_parsed_as_grep_option():
+    """`RC_RE` 以 `-` 開頭，沒有 `-e` 時 grep 會把它當成選項，比對永遠失敗。
+
+    v1.2.9-rc1 就是這樣被發成非 prerelease、make_latest=true 的草稿。
+    """
+    import re
+
+    run = _release_workflow()["jobs"]["resolve"]["steps"][1]["run"]
+    assert "RC_RE='-rc[0-9]+$'" in run
+    uses = re.findall(r'grep[^|\n]*"\$RC_RE"', run)
+    assert uses, "resolve 裡應該有用 RC_RE 比對 tag"
+    for use in uses:
+        assert '-e "$RC_RE"' in use, use
+
+
+def test_release_workflow_strips_rc_suffix_in_version_check():
+    text = (REPO / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8")
+    assert 'WANT="${WANT%%-rc*}"' in text
+
+
+def test_release_workflow_marks_rc_as_prerelease_everywhere():
+    """三個上傳 job 都要帶 prerelease／make_latest，少一個就會被蓋回 latest。"""
+    wf = _release_workflow()
+    for job in ("release", "app-macos", "app-linux"):
+        steps = [s for s in wf["jobs"][job]["steps"]
+                 if str(s.get("uses", "")).startswith("softprops/action-gh-release")]
+        assert len(steps) == 1, job
+        w = steps[0]["with"]
+        assert "outputs.prerelease" in str(w["prerelease"]), job
+        assert "'false'" in str(w["make_latest"]), job
+
+
+def test_release_body_comes_from_notes_file_with_explicit_previous_tag():
+    """公告＝發版說明檔＋PR 清單；清單起點要明確給，否則從 develop 發的 RC 會從 PR #1 列起。"""
+    wf = _release_workflow()
+    steps = wf["jobs"]["release"]["steps"]
+    prep = next(s for s in steps if s.get("name") == "準備公告內文")
+    run = prep["run"]
+    assert "RELEASE-NOTES-$TAG.md" in run
+    assert "RELEASE-NOTES-v$BASE.md" in run
+    assert "previous_tag_name=$PREV" in run
+    assert "-rc[0-9]+$" in run
+    create = next(s for s in steps
+                  if str(s.get("uses", "")).startswith("softprops/action-gh-release"))
+    w = create["with"]
+    assert w["name"] == "Chatroom ${{ env.RELEASE_TAG }}"
+    assert w["body_path"] == "release-body.md"
+    assert "generate_release_notes" not in w
+    assert steps.index(prep) < steps.index(create)

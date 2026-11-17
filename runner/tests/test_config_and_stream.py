@@ -20,7 +20,7 @@ from chatroom_runner.config import (CLAUDE_OAUTH_TOKEN_ENV,
                                     apply_oauth_token)
 from chatroom_runner.stream import looks_like_login_expired
 
-from ._fixtures import git, make_config
+from ._fixtures import config_raw, git, make_config
 
 
 # ── 設定 ────────────────────────────────────────────────────────
@@ -675,3 +675,17 @@ def test_a_successful_summary_mentioning_oauth_is_not_a_login_failure():
     w.feed({"type": "result", "subtype": "success", "is_error": True,
             "result": "Not logged in"})
     assert w.state.login_expired
+
+
+def test_default_host_uses_gethostname_not_computername(tmp_path, work_repo,
+                                                        monkeypatch):
+    """host 沒填時與 bridge identity 同源（socket.gethostname），不用 NetBIOS 名。"""
+    import socket
+    monkeypatch.setenv("COMPUTERNAME", "NETBIOS-SHORT")
+    monkeypatch.setattr(socket, "gethostname",
+                        lambda: "Long-Host-Name-Beyond-Fifteen")
+    raw = config_raw(tmp_path, work_repo)
+    raw.pop("host")
+    assert config_from_dict(raw, base_dir=tmp_path).host ==         "Long-Host-Name-Beyond-Fifteen"
+    monkeypatch.setattr(socket, "gethostname", lambda: "")
+    assert config_from_dict(raw, base_dir=tmp_path).host == "localhost"

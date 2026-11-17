@@ -612,7 +612,7 @@ class LeaveOptions(BaseModel):
 
 
 class JoinRequest(BaseModel):
-    kind: str = Field(pattern="^(claude|codex|human|other)$")
+    kind: str = Field(pattern="^(claude|codex|human|other|uep)$")
     # ⚠️ 選填是因為多了 `X-Session-Key`（09/07 卡 87ec8297），不是因為
     # 可以不給——兩個位置都沒有時端點層 422
     session_key: str = Field(default="", max_length=128)

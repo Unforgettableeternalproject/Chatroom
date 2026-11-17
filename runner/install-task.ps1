@@ -1,4 +1,4 @@
-# 建立執行器的 Windows 排程工作（REMOTE-OPS-PLAN §5.7）。
+﻿# 建立執行器的 Windows 排程工作（REMOTE-OPS-PLAN §5.7）。
 #
 # ⚠️ 這個腳本**只建工作，不啟動執行器**。第一次跑之前請先確認：
 #   1. 設定檔已就位（見 runner/README.md）

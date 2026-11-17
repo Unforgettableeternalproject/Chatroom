@@ -12,12 +12,14 @@ Color kindColor(String kind, {required BuildContext context}) {
       return UepColors.kindCodex;
     case 'human':
       return UepColors.kindHuman;
+    case 'uep':
+      return UepColors.kindUep;
     default:
       return UepColors.kindOther;
   }
 }
 
-/// mono 小字 uppercase 徽章：CLAUDE / CODEX / HUMAN / OTHER。
+/// mono 小字 uppercase 徽章：CLAUDE / CODEX / HUMAN / OTHER / UEP。
 class KindBadge extends StatelessWidget {
   const KindBadge({super.key, required this.kind, this.compact = false});
 

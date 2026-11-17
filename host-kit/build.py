@@ -27,7 +27,7 @@ DIST = REPO / "dist"
 
 sys.path.insert(0, str(REPO / "scripts"))
 from buildstamp import (  # noqa: E402
-    read_app_version, report, require_commit, stamp,
+    read_app_version, report, require_commit, stamp, write_zip,
 )
 
 # ⚠️ 這裡漏掉任何一項，主持人的**實際聊天內容**就會被打包發出去。
@@ -71,6 +71,8 @@ def main() -> None:
     # 中文說明在 install-help.txt（bat 本身必須純 ASCII，見它開頭的註解）。
     # 漏掉任何一支，拿到包的人就只剩「用命令列跑 install.py」這條路
     shutil.copy2(KIT_DIR / "install.bat", stage / "install.bat")
+    # macOS／Linux 的入口（單包跨平台：同一個 zip 同時有 .bat 與 .sh）
+    shutil.copy2(KIT_DIR / "install.sh", stage / "install.sh")
     shutil.copy2(KIT_DIR / "install-help.txt", stage / "install-help.txt")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     shutil.copytree(REPO / "server", stage / "server", ignore=SERVER_IGNORE)
@@ -80,6 +82,11 @@ def main() -> None:
         "hub-service.ps1",
         "run-tunnel.cmd",
         "tunnel.py",
+        # macOS／Linux：前景啟動、隧道與服務管理（systemd user／LaunchAgent）。
+        # service.py 是單一來源，runner-kit 也從 scripts/ 複製同一份
+        "run-hub.sh",
+        "run-tunnel.sh",
+        "service.py",
         # 「啟動 Hub」是透過它起的（無視窗）。漏了這支，按鈕會靜默什麼都不做
         "hidden-launch.vbs",
         # 主機控制台的「備份」與「換 token」呼叫的就是這兩支。漏掉它們的話
@@ -103,10 +110,7 @@ def main() -> None:
     zip_path = DIST / "chatroom-hub-kit.zip"
     if zip_path.exists():
         zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(stage.rglob("*")):
-            if f.is_file():
-                zf.write(f, f.relative_to(DIST))
+    write_zip(zip_path, stage, DIST)
     size_kb = zip_path.stat().st_size // 1024
     print(f"✅ {zip_path}（{size_kb} KB）")
     report(info)

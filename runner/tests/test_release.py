@@ -1174,7 +1174,9 @@ async def test_release_fix_lands_the_release_from_an_isolated_worktree(
     由收工後的機械驗證決定。使用者的髒工作樹完全不受影響。"""
     _fix_env(monkeypatch, "release_fix_push", tag="v1.2.0")
     (release_repo / "草稿.txt").write_text("寫到一半\n", encoding="utf-8")
-    cfg = make_config(tmp_path, {"JSAI-Web": release_repo})
+    # 明確指定 helper：預設依平台（Linux 沿用使用者設定，env 裡不會有 helper）
+    cfg = make_config(tmp_path, {"JSAI-Web": release_repo},
+                      push_credential_helper="manager")
     hub = _RecordingHub()
 
     outcome = await executor(cfg, hub).execute(

@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../core/theme/uep_theme.dart';
 import '../../core/theme/uep_tokens.dart';
 import '../../l10n/l10n.dart';
 import '../../state/rooms_providers.dart';
+import '../../state/runner_kit_providers.dart'
+    show runnerConfigPathDisplay;
 import '../../widgets/help_blocks.dart';
 import '../../widgets/kind_badge.dart';
 
@@ -794,7 +797,8 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n,
                 HelpChunk.text(l10n.helpTunnel3a),
                 const HelpChunk.code('attachments/'),
                 HelpChunk.text(l10n.helpTunnel3b),
-                const HelpChunk.code('backups\\'),
+                HelpChunk.code(
+                    'backups${(detectAppPlatform() ?? AppPlatform.windows).sep}'),
                 HelpChunk.text(l10n.helpTunnel3c),
               ]),
               HelpItem([HelpChunk.text(l10n.helpTunnel4)]),
@@ -837,8 +841,7 @@ Map<HelpTopic, HelpDoc> helpDocs(AppLocalizations l10n,
               ]),
               HelpItem([
                 HelpChunk.text(l10n.helpRunner2a),
-                const HelpChunk.code(
-                    '%LOCALAPPDATA%\\UEP\\Chatroom\\runner\\config.json'),
+                HelpChunk.code(runnerConfigPathDisplay(detectAppPlatform())),
                 HelpChunk.text(l10n.helpRunner2b),
                 const HelpChunk.code('runner/config.example.json'),
                 HelpChunk.text(l10n.helpRunner2c),

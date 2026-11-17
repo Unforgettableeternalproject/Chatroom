@@ -1436,7 +1436,10 @@ async def test_push_run_carries_the_push_credential_helper(
     run = await _claimed_run(client, room_id, headers, runner_hub,
                              kind="push", ref="JSAI-Web",
                              brief=f"branch: jsai_dev\n{sha}")
-    cfg = make_config(tmp_path, work_repo)
+    # 明確指定 helper：預設值依平台而異（Linux 沿用使用者設定、不加 -c），
+    # 這條驗的是「有指定時 fetch／push 都帶上它」
+    cfg = make_config(tmp_path, work_repo,
+                      push_credential_helper=run_mod.PUSH_CREDENTIAL_HELPER)
     calls: list[tuple] = []
     real = run_mod.gitops.git
 

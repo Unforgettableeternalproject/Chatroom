@@ -11,7 +11,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/app_platform.dart';
+import '../l10n/l10n.dart';
 import 'kit_installer.dart';
+import 'posix_service.dart';
 import 'runner_kit_providers.dart';
 
 /// 排程工作的預設名。安裝器的 `--task-name` 改得掉，所以要先問註冊檔。
@@ -92,13 +95,29 @@ final runnerActiveRunCountProvider = FutureProvider<int>((ref) async {
 /// PowerShell 的單引號字串：裡面的單引號要成雙。
 String _psQuote(String value) => "'${value.replaceAll("'", "''")}'";
 
+/// POSIX 上執行器 kit 的位置，給 `service.py` 用。
+@immutable
+class RunnerPosixTarget {
+  const RunnerPosixTarget({required this.kitDir, this.python = ''});
+
+  /// 執行器 kit 的根目錄（`scripts/service.py` 在它底下）。空字串＝找不到。
+  final String kitDir;
+
+  /// kit 自己那支 venv python；空字串就用 `<kitDir>/.venv/bin/python`。
+  final String python;
+}
+
 /// 起停執行器。子進程走 [KitProcessRunner]，測試換成 fake。
+///
+/// [posix] 非 null 就走 `service.py runner ...`（systemd／LaunchAgent），
+/// 否則走 PowerShell 的排程工作（Windows）。
 class RunnerServiceController {
   const RunnerServiceController(
-      {required this.processRunner, required this.taskName});
+      {required this.processRunner, required this.taskName, this.posix});
 
   final KitProcessRunner processRunner;
   final String taskName;
+  final RunnerPosixTarget? posix;
 
   String get _task => _psQuote(taskName);
 
@@ -109,7 +128,9 @@ class RunnerServiceController {
   /// 2. `Stop-ScheduledTask`——停掉現在這一次。
   /// 3. 殺掉命令列帶 `-m chatroom_runner` 的進程——排程停止收不掉手跑的
   ///    那一份，而「停止」的定義是這台機器上沒有執行器在動。
-  Future<String?> stop() => _runAll([
+  Future<String?> stop() => posix != null
+      ? _posixAction('stop')
+      : _runAll([
         'Disable-ScheduledTask -TaskName $_task '
             '-ErrorAction SilentlyContinue | Out-Null',
         'Stop-ScheduledTask -TaskName $_task '
@@ -122,11 +143,39 @@ class RunnerServiceController {
 
   /// 啟動。`Enable` 一定要在前面：停過一次之後觸發器是停用的，
   /// 不先啟用的話這一次起得來，下次開機不會。
-  Future<String?> start() => _runAll([
-        'Enable-ScheduledTask -TaskName $_task '
-            '-ErrorAction SilentlyContinue | Out-Null',
-        'Start-ScheduledTask -TaskName $_task',
-      ]);
+  Future<String?> start() => posix != null
+      ? _posixAction('start')
+      : _runAll([
+          'Enable-ScheduledTask -TaskName $_task '
+              '-ErrorAction SilentlyContinue | Out-Null',
+          'Start-ScheduledTask -TaskName $_task',
+        ]);
+
+  /// POSIX：`service.py runner <action> --json`。
+  ///
+  /// 用 exit code 與 JSON 的 `ok` 判成敗；停止＝停用＋停止，與 Windows 那條
+  /// 同一個語意（只停進程的話失敗自動重啟一分鐘內就把它拉回來）。
+  Future<String?> _posixAction(String action) async {
+    final target = posix!;
+    if (target.kitDir.isEmpty) return L10n.current.hostRunnerServiceNoKit;
+    final c = posixServiceCommand(
+      kitRoot: target.kitDir,
+      kind: ServiceKind.runner,
+      action: action,
+      python: target.python,
+    );
+    try {
+      final r = normalizeServiceResult(
+          await processRunner.run(c.executable, c.arguments));
+      if (r.exitCode != 0) {
+        final line = _firstLine('${r.stderr}${r.stdout}');
+        return line.isEmpty ? 'exit ${r.exitCode}' : line;
+      }
+    } on Object catch (e) {
+      return _firstLine('$e');
+    }
+    return null;
+  }
 
   /// 一步一步跑；哪一步失敗就停在那裡，把 stderr 的第一行帶回去。
   /// 回 `null` 代表整串都過了。
@@ -150,11 +199,24 @@ String _firstLine(String text) {
   return trimmed.split('\n').first.trim();
 }
 
+/// POSIX 時執行器 kit 在哪；Windows 回 `null`（走排程工作）。
+/// 找不到 kit 時 [RunnerPosixTarget.kitDir] 是空字串，動作會回說明而不是
+/// 去叫 PowerShell。
+final runnerPosixTargetProvider =
+    FutureProvider<RunnerPosixTarget?>((ref) async {
+  final platform = ref.watch(appPlatformProvider);
+  if (platform == null || !platform.isPosix) return null;
+  final kit = await ref.watch(runnerKitProvider.future);
+  return RunnerPosixTarget(
+      kitDir: kit?.kitDir ?? '', python: kit?.python ?? '');
+});
+
 final runnerServiceControllerProvider =
     FutureProvider<RunnerServiceController>((ref) async {
   return RunnerServiceController(
     processRunner: ref.watch(kitProcessRunnerProvider),
     taskName: await ref.watch(runnerTaskNameProvider.future),
+    posix: await ref.watch(runnerPosixTargetProvider.future),
   );
 });
 
@@ -172,9 +234,14 @@ final runnerServiceControllerProvider =
 final runnerServiceStatusProvider =
     FutureProvider<RunnerServiceStatus>((ref) async {
   final taskName = await ref.watch(runnerTaskNameProvider.future);
-  // 排程工作是 Windows 才有的東西；其他平台問不到，也不該畫一顆按不動的按鈕
+  // 手機沒有這回事；也不該畫一顆按不動的按鈕
   if (!ref.watch(kitInstallSupportedProvider)) {
     return RunnerServiceStatus(RunnerServiceState.unknown, taskName: taskName);
+  }
+  final posix = await ref.watch(runnerPosixTargetProvider.future);
+  if (posix != null) {
+    return _posixRunnerStatus(
+        posix, ref.watch(kitProcessRunnerProvider), taskName);
   }
   final script = '\$ErrorActionPreference = \'SilentlyContinue\'; '
       '\$t = Get-ScheduledTask -TaskName ${_psQuote(taskName)}; '
@@ -198,6 +265,51 @@ final runnerServiceStatusProvider =
         taskName: taskName, detail: _firstLine('$e'));
   }
 });
+
+/// POSIX：問 `service.py runner status --json`。
+/// 出錯回 unknown（理由同上：這一格只是一顆按鈕的旁白）。
+Future<RunnerServiceStatus> _posixRunnerStatus(
+  RunnerPosixTarget target,
+  KitProcessRunner runner,
+  String taskName,
+) async {
+  if (target.kitDir.isEmpty) {
+    return RunnerServiceStatus(RunnerServiceState.unknown,
+        taskName: taskName, detail: L10n.current.hostRunnerServiceNoKit);
+  }
+  final c = posixServiceCommand(
+    kitRoot: target.kitDir,
+    kind: ServiceKind.runner,
+    action: 'status',
+    python: target.python,
+  );
+  try {
+    final r = await runner.run(c.executable, c.arguments);
+    final parsed = parsePosixServiceStatus('${r.stdout}');
+    if (parsed == null) {
+      return RunnerServiceStatus(RunnerServiceState.unknown,
+          taskName: taskName,
+          detail: _firstLine('${r.stderr}${r.stdout}'));
+    }
+    return RunnerServiceStatus(runnerStateFromPosix(parsed),
+        taskName: taskName,
+        // 沒有服務管理員（manager=none）時 detail 說明了原因
+        detail: parsed.installed ? '' : parsed.detail);
+  } on Object catch (e) {
+    return RunnerServiceStatus(RunnerServiceState.unknown,
+        taskName: taskName, detail: _firstLine('$e'));
+  }
+}
+
+/// `status --json` → 畫面上的狀態。優先序與 Windows 那邊一致：
+/// 停用（下次登入不會回來）＞ 在跑 ＞ 已停止；沒註冊就是 unknown。
+@visibleForTesting
+RunnerServiceState runnerStateFromPosix(PosixServiceStatus s) {
+  if (!s.installed) return RunnerServiceState.unknown;
+  if (!s.enabled) return RunnerServiceState.disabled;
+  if (s.running) return RunnerServiceState.running;
+  return RunnerServiceState.stopped;
+}
 
 /// 解析上面那段腳本印回來的兩行。
 ///

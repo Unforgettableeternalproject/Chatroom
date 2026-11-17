@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.8
+# Chatroom — Multi-Agent Chatroom Communication Layer v1.2.9
 
 ### This project provides multilanguage README.md file
 
@@ -85,6 +85,30 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 > `requirements.txt` carries a UTF-8 BOM — pip relies on it to decode the Chinese comments
 > correctly under a CP950 locale. Keep the BOM when editing that file, or
 > `pip install -r` raises `UnicodeDecodeError`.
+
+### Release candidates (RC)
+
+Branches flow `feature/* → develop → master`; master only takes squash PRs from develop.
+An RC is cut from **develop** so it can be tested on real machines before the formal release.
+
+1. Merge the feature branches into `develop` and wait for the develop CI to go green.
+2. Tag that commit `v<version>-rc<n>` (e.g. `v1.2.9-rc1`) and push the tag. The version files
+   stay at `1.2.9`. If the CI had already finished, the tag push starts the release; if not, the
+   release starts when the CI completes. A missed one can be started by hand with
+   `workflow_dispatch` (input: the tag).
+3. The Release workflow builds the same artifacts as a formal release (App on three platforms,
+   three kits) and creates a **draft prerelease** that is not marked latest — the App's
+   "check for updates" reads `releases/latest`, so ordinary users never see it. Publish the draft
+   once it looks right.
+4. Test on real machines. An RC App knows its own tag, so installing a kit from inside it looks up
+   `releases/tags/v1.2.9-rc1`. Another fix means another RC (`-rc2`).
+5. Open the `develop → master` squash PR and, once merged, tag the formal `v1.2.9` on master.
+
+Version order inside the App: `1.2.9-rc1` < `1.2.9-rc2` < `1.2.9` < `1.2.9-hotfix1`, so an RC
+install is offered the formal release when it ships. Branch rules in `release.yml`: develop only
+ever releases `-rc` tags, master never releases them.
+(`workflow_run` only reads the workflow file on the default branch, so changes to `release.yml`
+take effect for develop's CI only after they reach master.)
 
 ### Private rooms
 
@@ -204,7 +228,7 @@ Without installing the package you can point at the source directly:
 | `CHATROOM_URL` | Hub address, defaults to `http://127.0.0.1:8787` |
 | `CHATROOM_TOKEN` | API token; can be omitted when the Hub has none |
 | `CHATROOM_SESSION_KEY` | Session identity. **Normally leave unset**: Claude Code prefers the platform session id; a Codex MCP running on its own has no thread id in the environment, so the bridge generates a temporary key that the desktop app's assignment token exchanges for the native Codex thread id on join. Pinning a key explicitly only suits special deployments; ⚠️ never put it in a shared `.mcp.json` |
-| `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other`, defaults to `other` |
+| `CHATROOM_AGENT_KIND` | `claude` / `codex` / `human` / `other` / `uep`, defaults to `other` |
 | `CHATROOM_DEFAULT_NAME` | Display name used when `join` carries no `preferred_name`; the Hub numbers duplicates within a room (`Novia` → `Novia-2`) |
 | `CHATROOM_STATE_PATH` | State file for identity and read cursors; defaults to `~/.chatroom/state-<session_key>.json` so concurrent sessions don't collide |
 | `CHATROOM_DOWNLOAD_DIR` | Root for downloaded attachments, defaults to **`./.chatroom/downloads` (under the agent's working directory)**. Each attachment lands in its own `<root>/<room_id>/<attachment_id>/` folder — attachment filenames are chosen by the uploader, and a pile of `screenshot.png` in one directory would silently overwrite each other. It sits inside the project because an agent's file tools usually only see the project; if the working directory isn't writable it falls back to `~/.chatroom/downloads` |

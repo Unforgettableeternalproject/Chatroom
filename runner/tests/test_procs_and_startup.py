@@ -26,6 +26,9 @@ RUNNER_DIR = Path(__file__).resolve().parents[1]
 
 def test_no_window_kwargs_on_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
+    # 非 Windows 的 subprocess 沒有這個常數（Windows 值 0x08000000）：補上才能偽裝
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000,
+                        raising=False)
     assert procs.no_window_kwargs() == {
         "creationflags": subprocess.CREATE_NO_WINDOW}
 

@@ -3,20 +3,14 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/platform/app_platform.dart';
 import '../core/util/env_file.dart';
 import '../models/host_kit.dart';
 
 /// 註冊檔的位置。`host-kit/install.py` 寫，App 讀。
 ///
 /// 拿不到家目錄時回 null——那時就是「這台沒有 Hub」，不是錯誤。
-File? hostKitRegistryFile() {
-  final home = Platform.environment['USERPROFILE'] ??
-      Platform.environment['HOME'] ??
-      '';
-  if (home.isEmpty) return null;
-  return File('$home${Platform.pathSeparator}.chatroom'
-      '${Platform.pathSeparator}host-kit.json');
-}
+File? hostKitRegistryFile() => chatroomRegistryFile('host-kit.json');
 
 /// 這台機器上有沒有裝 Hub 主持包。
 ///

@@ -1,4 +1,4 @@
-# Chatroom — Multi-Agent 聊天室通訊層 v1.2.8
+# Chatroom — Multi-Agent 聊天室通訊層 v1.2.9
 
 ### 本專案提供多語系 README
 
@@ -82,6 +82,25 @@ cd server && ../.venv/Scripts/python.exe -m chatroom_server
 
 > `requirements.txt` 帶 UTF-8 BOM——pip 靠它在中文語系（cp950）下正確解碼中文註解。
 > 編輯該檔時請保留 BOM，否則 `pip install -r` 會噴 `UnicodeDecodeError`。
+
+### 發版候選版（RC）
+
+分支流程是 `feature/* → develop → master`，master 只收 develop 的 squash PR。
+RC 從 **develop** 發，讓正式版之前先能在實機上測試。
+
+1. 把功能分支合進 `develop`，等 develop 的 CI 綠。
+2. 在那顆 commit 打 tag `v<版號>-rc<n>`（例：`v1.2.9-rc1`）並推送；版號檔仍是 `1.2.9`。
+   CI 已經跑完時由 tag 推送觸發發版；還沒跑完則在 CI 完成時自動發。漏掉的可用
+   `workflow_dispatch`（輸入該 tag）手動補發。
+3. Release workflow 打出與正式版相同的產物（App 三平台＋三包 kit），建立**草稿 prerelease**，
+   不設為 latest——App 的「檢查更新」查的是 `releases/latest`，一般使用者看不到。確認無誤後再發布草稿。
+4. 實機測試。RC 版 App 認得自己的 tag，從裡面安裝 kit 時查的是 `releases/tags/v1.2.9-rc1`。
+   要再修就再發一個 RC（`-rc2`）。
+5. 開 `develop → master` 的 squash PR，合併後在 master 打正式 tag `v1.2.9`。
+
+App 內的版本順序：`1.2.9-rc1` < `1.2.9-rc2` < `1.2.9` < `1.2.9-hotfix1`，所以裝了 RC 的人
+在正式版發出後，檢查更新會提示升級。`release.yml` 的分支規則：develop 只發 `-rc` tag，master 不發。
+（`workflow_run` 只讀預設分支上的 workflow 檔，`release.yml` 的修改要進 master 後，develop 的 CI 才會照新規則觸發。）
 
 ### 對話鎖定（私人房）
 
@@ -189,7 +208,7 @@ py -3.12 -m venv <somewhere>/.venv
 | `CHATROOM_URL`          | Hub 位址，預設`http://127.0.0.1:8787`                                                                                                                                                                                                                                                                                          |
 | `CHATROOM_TOKEN`        | API token；Hub 未設 token 時可省略                                                                                                                                                                                                                                                                                               |
 | `CHATROOM_SESSION_KEY`  | session 識別。**一般不設定**：Claude Code 優先使用平台 session id；Codex MCP 單獨運作時沒有 thread id 環境變數，會先產生 bridge 臨時 key，由桌面 App 的指派 token 在加入時兌換成 Codex 原生 thread id。顯式固定 key 只適合特殊部署；⚠️ 別寫進共用 `.mcp.json`                                                          |
-| `CHATROOM_AGENT_KIND`   | `claude` / `codex` / `human` / `other`，預設 `other`                                                                                                                                                                                                                                                                   |
+| `CHATROOM_AGENT_KIND`   | `claude` / `codex` / `human` / `other` / `uep`，預設 `other`                                                                                                                                                                                                                                                                   |
 | `CHATROOM_DEFAULT_NAME` | join 未帶`preferred_name` 時的預設代稱；同房重名由 Hub 自動編號（`Novia` → `Novia-2`）                                                                                                                                                                                                                                    |
 | `CHATROOM_STATE_PATH`   | 身分與讀取游標的狀態檔；預設`~/.chatroom/state-<session_key>.json`，並發 session 不互踩                                                                                                                                                                                                                                        |
 | `CHATROOM_DOWNLOAD_DIR` | 附件下載的根目錄，預設**`./.chatroom/downloads`（agent 工作目錄底下）**。每個附件落在 `<根>/<room_id>/<attachment_id>/` 自己的資料夾——附件檔名是上傳者取的，`screenshot.png` 這種名字堆在同一層會無聲互相覆蓋。放在專案裡是因為 agent 的檔案讀取工具通常只看得到專案範圍；工作目錄不可寫時退回 `~/.chatroom/downloads` |

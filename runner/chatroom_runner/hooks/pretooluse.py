@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -134,7 +135,12 @@ def _norm_dir(raw: str) -> str:
     msys = re.match(r"^/([a-zA-Z])(/|$)", text)  # Git Bash 的 /c/Users/...
     if msys:
         text = f"{msys.group(1)}:/" + text[msys.end():]
-    return os.path.normcase(os.path.normpath(text)) if text else ""
+    if not text:
+        return ""
+    # 不用 os.path：它的規則取決於執行平台，而這裡比的永遠是「同一台機器上的
+    # 兩個寫法」。有磁碟機代號的是 Windows 路徑（不分大小寫），其餘照字面比
+    norm = posixpath.normpath(text)
+    return norm.lower() if re.match(r"^[A-Za-z]:", norm) else norm
 
 
 def strip_cd_before_acli(tool_name: str, command: str,

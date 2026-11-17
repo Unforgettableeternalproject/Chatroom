@@ -26,7 +26,7 @@ DIST = REPO / "dist"
 
 sys.path.insert(0, str(REPO / "scripts"))
 from buildstamp import (  # noqa: E402
-    read_app_version, report, require_commit, stamp,
+    read_app_version, report, require_commit, stamp, write_zip,
 )
 
 
@@ -57,6 +57,8 @@ def main() -> None:
     # 中文說明在 install-help.txt（bat 本身必須純 ASCII，見它開頭的註解）。
     # 漏掉任何一支，拿到包的人就只剩「用命令列跑 install.py」這條路
     shutil.copy2(KIT_DIR / "install.bat", stage / "install.bat")
+    # macOS／Linux 的入口（單包跨平台：同一個 zip 同時有 .bat 與 .sh）
+    shutil.copy2(KIT_DIR / "install.sh", stage / "install.sh")
     shutil.copy2(KIT_DIR / "install-help.txt", stage / "install-help.txt")
     shutil.copy2(KIT_DIR / "README.md", stage / "README.md")
     # skill 樣板：install.py 會把 @@WATCHER@@ 換成該台機器的實際路徑。
@@ -79,10 +81,7 @@ def main() -> None:
     zip_path = DIST / "chatroom-mcp-kit.zip"
     if zip_path.exists():
         zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in sorted(stage.rglob("*")):
-            if f.is_file():
-                zf.write(f, f.relative_to(DIST))
+    write_zip(zip_path, stage, DIST)
     size_kb = zip_path.stat().st_size // 1024
     print(f"✅ {zip_path}（{size_kb} KB）")
     report(info)

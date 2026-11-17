@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/hub_active_runs_api.dart';
 import '../core/config/build_info.dart';
+import '../core/platform/app_platform.dart';
 import 'app_providers.dart' show dioProvider;
 import 'app_updater.dart';
 import 'host_actions.dart';
@@ -100,20 +101,21 @@ bool isAbsoluteKitPath(String path) {
 /// App 手上那個 token 是 Hub 的，送到 GitHub 等於把它交給一個無關的服務。
 const String kKitReleaseRepo = 'Unforgettableeternalproject/Chatroom';
 
-/// 這份 App 對應的 Release tag：`v1.2.5`，熱修版為 `v1.2.5-hotfix1`。
+/// 這份 App 對應的 Release tag：`v1.2.5`，熱修版為 `v1.2.5-hotfix1`，
+/// RC 為 `v1.2.9-rc1`。
 ///
 /// 組法與 App 自更新共用 [AppVersion.toString]；認不得的版號（dev build）
 /// 照原樣加 `v`，維持查不到的行為。
-String kitReleaseTag(String version, {int hotfix = 0}) {
+String kitReleaseTag(String version, {int hotfix = 0, int rc = 0}) {
   final parsed = AppVersion.tryParse(version);
   if (parsed == null) return 'v$version';
-  return AppVersion(parsed.major, parsed.minor, parsed.patch, hotfix)
+  return AppVersion(parsed.major, parsed.minor, parsed.patch, hotfix, rc)
       .toString();
 }
 
-String kitReleaseApiUrl(String version, {int hotfix = 0}) =>
+String kitReleaseApiUrl(String version, {int hotfix = 0, int rc = 0}) =>
     'https://api.github.com/repos/$kKitReleaseRepo/releases/tags/'
-    '${kitReleaseTag(version, hotfix: hotfix)}';
+    '${kitReleaseTag(version, hotfix: hotfix, rc: rc)}';
 
 /// 一份 Release。
 @immutable
@@ -272,7 +274,10 @@ class SystemKitProcessRunner implements KitProcessRunner {
         executable,
         arguments,
         workingDirectory: workingDirectory,
-        runInShell: true,
+        // Windows 要靠 shell 解析 `py`、`powershell` 這類名字；POSIX 直接 exec：
+        // `runInShell` 在那邊只是把參數用空白接起來丟給 /bin/sh，路徑有空白
+        // （`~/Library/Application Support/...`）就會被拆開
+        runInShell: Platform.isWindows,
         // ⚠️ encoding 一定要設：不設的話 Windows 上拿回來的是被系統碼頁
         // 解讀過的位元組，安裝器講的每一句中文都變成亂碼——而它的輸出
         // 正是「到底成功了沒」的唯一來源。
@@ -296,6 +301,72 @@ class PythonExe {
   @override
   String toString() => [executable, ...prefixArgs].join(' ');
 }
+
+/// 這個平台找 Python 3.12+ 要試的候選，依序。
+///
+/// Windows 的順序不動（`py` 啟動器優先）。POSIX 先試 3.12 專用名，再試
+/// `python3`／`python`；macOS 另外把常見的絕對路徑排在前面——從 Finder 或
+/// Dock 開的 App 拿到的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，找不到
+/// Homebrew 與 python.org 裝的直譯器。`/usr/bin/python3` 刻意不列：那是個
+/// 轉接殼，沒裝 Command Line Tools 時執行它會跳出安裝視窗。
+List<PythonExe> pythonCandidatesFor(AppPlatform platform) {
+  switch (platform) {
+    case AppPlatform.windows:
+      return const [
+        PythonExe(executable: 'py', prefixArgs: ['-3']),
+        PythonExe(executable: 'python3'),
+        PythonExe(executable: 'python'),
+      ];
+    case AppPlatform.macos:
+      return const [
+        PythonExe(executable: '/opt/homebrew/bin/python3.12'),
+        PythonExe(executable: '/opt/homebrew/bin/python3.13'),
+        PythonExe(executable: '/opt/homebrew/bin/python3'),
+        PythonExe(executable: '/usr/local/bin/python3.12'),
+        PythonExe(executable: '/usr/local/bin/python3.13'),
+        PythonExe(executable: '/usr/local/bin/python3'),
+        PythonExe(
+            executable:
+                '/Library/Frameworks/Python.framework/Versions/3.13/bin/python3'),
+        PythonExe(
+            executable:
+                '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3'),
+        PythonExe(executable: 'python3.12'),
+        PythonExe(executable: 'python3'),
+        PythonExe(executable: 'python'),
+      ];
+    case AppPlatform.linux:
+      return const [
+        PythonExe(executable: 'python3.12'),
+        PythonExe(executable: 'python3.13'),
+        PythonExe(executable: 'python3'),
+        PythonExe(executable: 'python'),
+      ];
+  }
+}
+
+/// 解 zip 的 Python 小程式（POSIX 用）。**要保留執行位元**：kit 的 `.sh` 是
+/// 以 `external_attr` 高 16 位記 0o755 打包的，`Expand-Archive` 與
+/// `zipfile.extractall` 都不會把它還原，解出來的 `.sh` 會沒有 x 權限。
+/// 也擋 zip-slip（解出路徑不在目標目錄內就整個放棄）。
+///
+/// 用 kit 安裝本來就必須有的 Python 來解，不另外依賴 `unzip` 或 `ditto`。
+const String kZipExtractScript = r'''
+import os, stat, sys, zipfile
+
+zip_path, target = sys.argv[1], sys.argv[2]
+root = os.path.realpath(target)
+os.makedirs(root, exist_ok=True)
+with zipfile.ZipFile(zip_path) as z:
+    for info in z.infolist():
+        dest = os.path.realpath(os.path.join(root, info.filename))
+        if dest != root and not dest.startswith(root + os.sep):
+            sys.exit("unsafe path in zip: " + info.filename)
+        z.extract(info, root)
+        mode = (info.external_attr >> 16) & 0o7777
+        if mode and not info.is_dir() and not stat.S_ISLNK(info.external_attr >> 16):
+            os.chmod(dest, mode | stat.S_IRUSR | stat.S_IWUSR)
+''';
 
 /// 安裝走到哪一步。
 enum KitInstallPhase { idle, checking, downloading, extracting, installing, done, failed }
@@ -393,15 +464,11 @@ KitInstallResult? parseInstallResult(String stdout) {
 }
 
 /// kit 解壓後的固定位置。
-String kitInstallRoot([Map<String, String>? environment]) {
-  final env = environment ?? Platform.environment;
-  final sep = Platform.pathSeparator;
-  final local = env['LOCALAPPDATA'] ?? '';
-  if (local.isNotEmpty) return [local, 'UEP', 'Chatroom'].join(sep);
-  final home = env['USERPROFILE'] ?? env['HOME'] ?? '';
-  if (home.isEmpty) return '';
-  return [home, '.chatroom', 'kits'].join(sep);
-}
+///
+/// 三個平台的位置見 [chatroomInstallRoot]，與 Python 端是同一個契約。
+String kitInstallRoot(
+        [Map<String, String>? environment, AppPlatform? platform]) =>
+    chatroomInstallRoot(platform: platform, environment: environment);
 
 /// 下載、解壓、呼叫 `install.py`。
 class KitInstaller {
@@ -410,7 +477,9 @@ class KitInstaller {
     required this.processRunner,
     required this.installRoot,
     DateTime Function()? clock,
-  }) : _clock = clock ?? DateTime.now;
+    AppPlatform? platform,
+  })  : _clock = clock ?? DateTime.now,
+        _platform = platform ?? detectAppPlatform() ?? AppPlatform.windows;
 
   final KitHttpClient http;
   final KitProcessRunner processRunner;
@@ -420,7 +489,10 @@ class KitInstaller {
 
   final DateTime Function() _clock;
 
-  static final _sep = Platform.pathSeparator;
+  /// 路徑、候選與解壓方式跟著它走。測試注入來覆蓋另一個平台的分支。
+  final AppPlatform _platform;
+
+  String get _sep => _platform.sep;
 
   /// 這一包預設裝在哪。安裝欄位的預設值就是它——**不另外算一份**，
   /// 兩邊各算一次的話，畫面上寫的位置與實際解壓的位置會分岔。
@@ -428,9 +500,10 @@ class KitInstaller {
 
   /// 查這一版的 Release。**404 回 `null`**——那是「這份 App 沒有對應的
   /// Release」，不是錯誤，也不退到 latest。
-  Future<KitRelease?> fetchRelease(String version, {int hotfix = 0}) async {
+  Future<KitRelease?> fetchRelease(String version,
+      {int hotfix = 0, int rc = 0}) async {
     final (status, body) =
-        await http.getJson(kitReleaseApiUrl(version, hotfix: hotfix));
+        await http.getJson(kitReleaseApiUrl(version, hotfix: hotfix, rc: rc));
     if (status != 200) return null;
     return KitRelease.fromJson(body);
   }
@@ -440,11 +513,7 @@ class KitInstaller {
   /// 三包安裝器的 `check_python()` 判的是下限（3.12+，3.13／3.14 實測可用），
   /// 這裡的判準要跟它一致，否則會出現「App 說沒有 Python，安裝器卻裝得動」。
   Future<PythonExe?> findPython() async {
-    for (final candidate in const [
-      PythonExe(executable: 'py', prefixArgs: ['-3']),
-      PythonExe(executable: 'python3'),
-      PythonExe(executable: 'python'),
-    ]) {
+    for (final candidate in pythonCandidatesFor(_platform)) {
       try {
         final r = await processRunner
             .run(candidate.executable, candidate.argsFor(['--version']));
@@ -514,7 +583,7 @@ class KitInstaller {
       final dir = (targetDir == null || targetDir.trim().isEmpty)
           ? defaultTargetFor(kit)
           : targetDir.trim();
-      final target = await _extract(dir, zipPath);
+      final target = await _extract(dir, zipPath, python);
       final dirArgs =
           kit == KitId.runner ? <String>['--dir', target] : const <String>[];
 
@@ -560,10 +629,10 @@ class KitInstaller {
 
   /// 解壓到指定的位置；已存在的先備份成 `.bak-<時間>`。
   ///
-  /// 用 PowerShell 的 `Expand-Archive` 而不是拉一個解壓套件進來：這條路
-  /// 本來就只在 Windows 上走得通（排程工作、`py` 啟動器都是），而少一個
-  /// 依賴就少一次 Windows build 出事的機會。
-  Future<String> _extract(String dir, String zipPath) async {
+  /// Windows 用 PowerShell 的 `Expand-Archive`，不拉一個解壓套件進來：少一個
+  /// 依賴就少一次 Windows build 出事的機會。POSIX 走 [kZipExtractScript]
+  /// （保留執行位元）。
+  Future<String> _extract(String dir, String zipPath, PythonExe python) async {
     final target = Directory(dir);
     try {
       if (await target.exists()) {
@@ -571,12 +640,15 @@ class KitInstaller {
         await target.rename('${target.path}.bak-$stamp');
       }
       await target.create(recursive: true);
-      final r = await processRunner.run('powershell', [
-        '-NoProfile',
-        '-Command',
-        'Expand-Archive -LiteralPath "$zipPath" '
-            '-DestinationPath "${target.path}" -Force',
-      ]);
+      final r = _platform.isPosix
+          ? await processRunner.run(python.executable,
+              python.argsFor(['-c', kZipExtractScript, zipPath, target.path]))
+          : await processRunner.run('powershell', [
+              '-NoProfile',
+              '-Command',
+              'Expand-Archive -LiteralPath "$zipPath" '
+                  '-DestinationPath "${target.path}" -Force',
+            ]);
       if (r.exitCode != 0) {
         throw KitInstallError(
             KitInstallFailure.extract, '${r.stderr}'.trim());
@@ -615,14 +687,14 @@ class KitInstaller {
   }
 }
 
-/// 這台機器裝不裝得了 kit。
+/// 這台機器裝不裝得了 kit：桌面三平台都行，手機不行——在手機上畫一顆
+/// 按不動的「安裝」，比沒有那顆按鈕更糟。
 ///
-/// 整條安裝路徑（`py` 啟動器、`Expand-Archive`、排程工作）都是 Windows 的
-/// 東西——在手機上畫一顆按不動的「安裝」，比沒有那顆按鈕更糟。
-///
+/// 要分辨是哪個平台的地方看 [appPlatformProvider]；這個只回答「有沒有」。
 /// 做成 provider 而不是直接讀 `Platform`：測試要能兩邊都測，而
 /// `Platform.isWindows` 在測試裡是跑測試那台機器的事實，不是被測的條件。
-final kitInstallSupportedProvider = Provider<bool>((ref) => Platform.isWindows);
+final kitInstallSupportedProvider =
+    Provider<bool>((ref) => ref.watch(appPlatformProvider) != null);
 
 final kitHttpClientProvider =
     Provider<KitHttpClient>((ref) => DioKitHttpClient());
@@ -633,7 +705,8 @@ final kitProcessRunnerProvider =
 final kitInstallerProvider = Provider<KitInstaller>((ref) => KitInstaller(
       http: ref.watch(kitHttpClientProvider),
       processRunner: ref.watch(kitProcessRunnerProvider),
-      installRoot: kitInstallRoot(),
+      installRoot: kitInstallRoot(null, ref.watch(appPlatformProvider)),
+      platform: ref.watch(appPlatformProvider),
     ));
 
 /// 這份 App 對應的 Release。
@@ -646,7 +719,7 @@ final kitReleaseProvider = FutureProvider<KitRelease?>((ref) async {
     final found = await ref
         .watch(kitInstallerProvider)
         .fetchRelease(BuildInfo.current.version,
-            hotfix: BuildInfo.current.hotfix);
+            hotfix: BuildInfo.current.hotfix, rc: BuildInfo.current.rc);
     // 這份 App 就是從那個 tag 的 commit 打出來的（release.yml 四個產物同一顆
     // commit），所以 tag 的 commit ＝ App 自己的 commit。-dirty 對不回任何
     // commit，不當作身分

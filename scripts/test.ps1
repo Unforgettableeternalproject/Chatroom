@@ -1,4 +1,4 @@
-# 一鍵測試：使用專案自帶 .venv（絕不使用 U.E.P Core 環境）
+﻿# 一鍵測試：使用專案自帶 .venv（絕不使用 U.E.P Core 環境）
 # 用法：pwsh scripts/test.ps1 [-Coverage]
 param([switch]$Coverage)
 

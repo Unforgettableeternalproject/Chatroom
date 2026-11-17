@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../core/platform/app_platform.dart';
 import '../../api/api_client.dart';
 import '../../api/rooms_api.dart';
 import '../../core/config/app_settings.dart';
@@ -639,27 +640,43 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         ]),
         if (ref.watch(closeToTraySupportedProvider)) ...[
           const SizedBox(height: 22),
-          Row(children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(l10n.settingsCloseToTrayLabel,
-                      style: UepText.sans(size: 13.5, color: s.inkTitle)),
-                  const SizedBox(height: 3),
-                  Text(l10n.settingsCloseToTrayHint,
-                      style: UepText.serif(size: 12, color: s.inkMute)),
-                ],
+          Builder(builder: (context) {
+            // 沒有匣宿主（Linux）：開關停用，旁邊只講一句
+            final hostMissing =
+                ref.watch(closeToTrayHostProvider).value == false;
+            final mac = ref.watch(appPlatformProvider) == AppPlatform.macos;
+            return Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        mac
+                            ? l10n.settingsCloseToTrayLabelMac
+                            : l10n.settingsCloseToTrayLabel,
+                        style: UepText.sans(size: 13.5, color: s.inkTitle)),
+                    const SizedBox(height: 3),
+                    Text(
+                        hostMissing
+                            ? l10n.settingsCloseToTrayUnsupported
+                            : mac
+                                ? l10n.settingsCloseToTrayHintMac
+                                : l10n.settingsCloseToTrayHint,
+                        style: UepText.serif(size: 12, color: s.inkMute)),
+                  ],
+                ),
               ),
-            ),
-            Switch(
-              value: config.closeToTray,
-              activeThumbColor: UepColors.gold,
-              activeTrackColor: UepColors.gold.withValues(alpha: .28),
-              onChanged: (v) =>
-                  ref.read(appConfigProvider.notifier).setCloseToTray(v),
-            ),
-          ]),
+              Switch(
+                value: hostMissing ? false : config.closeToTray,
+                activeThumbColor: UepColors.gold,
+                activeTrackColor: UepColors.gold.withValues(alpha: .28),
+                onChanged: hostMissing
+                    ? null
+                    : (v) =>
+                        ref.read(appConfigProvider.notifier).setCloseToTray(v),
+              ),
+            ]);
+          }),
         ],
         const SizedBox(height: 22),
         Row(children: [

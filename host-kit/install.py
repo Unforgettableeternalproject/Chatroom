@@ -1,6 +1,7 @@
 """Chatroom Hub 安裝器（host 端）。
 
-    install.bat                       # 雙擊入口：找 Python 後跑下面這支
+    install.bat                       # 雙擊入口（Windows）：找 Python 後跑下面這支
+    ./install.sh                      # macOS／Linux 的入口，同上
     python install.py                 # 互動式：host / port / token
     python install.py --yes           # 全用預設值（token 自動生成）
     python install.py --yes --no-tunnel --register-service   # 桌面 App 走的路
@@ -16,9 +17,11 @@
 4. 寫下註冊檔 ~/.chatroom/host-kit.json，讓桌面 App 找得到這包
 5. 印出啟動方式與要發給成員的連線資訊
 
-之後：前景試跑用 scripts\\run-hub.cmd；要開機/登入自啟用
-`pwsh -File scripts/hub-service.ps1 install`；要讓內網外的 agent 連進來用
-scripts\\run-tunnel.cmd（詳見 README）。
+之後：前景試跑用 scripts\\run-hub.cmd（macOS／Linux：scripts/run-hub.sh）；
+要開機/登入自啟，Windows 用 `pwsh -File scripts/hub-service.ps1 install`，
+macOS／Linux 用 `<python> scripts/service.py hub install`（systemd 使用者
+服務／LaunchAgent）；要讓內網外的 agent 連進來用 scripts\\run-tunnel.cmd
+（macOS／Linux：scripts/run-tunnel.sh，詳見 README）。
 """
 
 from __future__ import annotations
@@ -161,6 +164,13 @@ def venv_python() -> Path:
     return VENV / sub
 
 
+def _script(stem: str) -> str:
+    """給人看的腳本路徑：Windows 是 `scripts\\<stem>.cmd`，其餘 `scripts/<stem>.sh`。"""
+    if sys.platform == "win32":
+        return f"scripts\\{stem}.cmd"
+    return f"scripts/{stem}.sh"
+
+
 def ensure_venv() -> None:
     if not venv_python().exists():
         print("  建立 venv…", flush=True)
@@ -253,7 +263,7 @@ def prepare_tunnel() -> bool:
     )
     if done.returncode != 0:
         # 下載失敗不該讓整個安裝白跑——Hub 本身已經可用，隧道之後補即可
-        print("⚠️ 隧道工具準備失敗，之後可單獨執行 scripts\\run-tunnel.cmd 重試")
+        print(f"⚠️ 隧道工具準備失敗，之後可單獨執行 {_script('run-tunnel')} 重試")
         return False
     return True
 
@@ -299,7 +309,8 @@ def write_registry(host: str, port: str) -> dict:
 
 
 def register_service() -> bool:
-    """呼叫 `scripts/hub-service.ps1 install` 註冊登入／開機自啟。
+    """註冊登入自啟。Windows 呼叫 `scripts/hub-service.ps1 install`；
+    macOS／Linux 呼叫 `scripts/service.py hub install`（LaunchAgent／systemd 使用者服務）。
 
     腳本本身是無人值守的：非提權時走 AtLogOn + Interactive 分支，
     `Register-ScheduledTask -Force` 不問任何問題。提權與否只影響觸發器
@@ -310,6 +321,8 @@ def register_service() -> bool:
     if _no_system():
         print("  UEP_KIT_NO_SYSTEM 已設定——略過註冊排程工作")
         return False
+    if sys.platform != "win32":
+        return _register_posix_service()
     script = KIT / "scripts" / "hub-service.ps1"
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if not script.exists() or shell is None:
@@ -323,6 +336,40 @@ def register_service() -> bool:
               f"可之後手動執行：pwsh -File {script} install")
         return False
     return True
+
+
+def _register_posix_service() -> bool:
+    """非 Windows：`<venv python> scripts/service.py hub install --json`。"""
+    script = KIT / "scripts" / "service.py"
+    if not script.exists():
+        print(f"⚠️ 找不到 {script}——沒有註冊自啟服務")
+        return False
+    print("  註冊自啟服務（systemd 使用者服務／LaunchAgent）…", flush=True)
+    try:
+        done = subprocess.run(
+            [str(venv_python()), str(script), "hub", "install", "--json",
+             "--kit", str(KIT), "--python", str(venv_python())],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"⚠️ 叫不起服務腳本：{exc}")
+        return False
+    data: dict = {}
+    lines = (done.stdout or "").strip().splitlines()
+    if lines:
+        try:
+            parsed = json.loads(lines[-1])
+            data = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            data = {}
+    detail = str(data.get("detail") or (done.stderr or "").strip()
+                 or f"退出碼 {done.returncode}")
+    ok = done.returncode == 0 and data.get("ok", True) is not False
+    print(("  " if ok else "⚠️ ") + detail)
+    if not ok:
+        print("   可之後手動執行："
+              f'"{venv_python()}" "{script}" hub install')
+    return ok
 
 
 # `scripts/hub-service.ps1 install` 註冊的工作設定。升級時 install.py 不會重新
@@ -569,11 +616,30 @@ def main() -> None:
     step(5, "整理啟動方式與連線資訊…")
 
     shown = host if host != "0.0.0.0" else "<這台機器的 IP>"
+    run_tunnel = _script("run-tunnel")
     tunnel_hint = (
-        "對外協作（公網）：  scripts\\run-tunnel.cmd　← 起隧道後會印出要發的網址\n"
+        f"對外協作（公網）：  {run_tunnel}　← 起隧道後會印出要發的網址\n"
         if tunnel_ready
-        else "對外協作（公網）：  scripts\\run-tunnel.cmd　← 首次執行會下載 cloudflared\n"
+        else f"對外協作（公網）：  {run_tunnel}　← 首次執行會下載 cloudflared\n"
     )
+    if sys.platform == "win32":
+        start_step = ("啟動 Hub：雙擊 scripts\\run-hub.cmd"
+                      "（前景試跑，視窗關掉就停）")
+        autostart = "pwsh -File scripts/hub-service.ps1 install"
+        firewall = ("- Windows 防火牆需放行 TCP {port}（第一次啟動時同意跳窗，"
+                    "或手動加入規則）")
+        rotate = "scripts\\rotate-token.py"
+        backup = "scripts\\backup.py"
+    else:
+        start_step = ("啟動 Hub：在終端機執行 scripts/run-hub.sh"
+                      "（前景試跑，Ctrl-C 就停）")
+        autostart = (f'"{venv_python()}" scripts/service.py hub install'
+                     "（再 start 啟動）")
+        firewall = ("- 防火牆（ufw／firewalld／macOS 應用程式防火牆）需放行 "
+                    "TCP {port}，其他機器才連得進來")
+        rotate = "scripts/rotate-token.py"
+        backup = "scripts/backup.py"
+    firewall = firewall.format(port=port)
     # 升級到分離模式的那一刻要當場講。只寫進 README 的話，看到症狀的人
     # 不會知道那是自己剛做的事造成的——他會以為升級把功能弄壞了
     split_notice = "" if not newly_split else f"""
@@ -589,12 +655,12 @@ def main() -> None:
 
 === 接下來做什麼 ===
 
-1. 啟動 Hub：雙擊 scripts\\run-hub.cmd（前景試跑，視窗關掉就停）
+1. {start_step}
 2. 確認它活著：瀏覽器打開 http://{shown}:{port}/api/health
    （看到一行 JSON 就是好的；連不上多半是防火牆那一關）
 3. 把下面的 Hub 位址與**對應的那把鑰匙**發給要加入的人
 
-開機/登入自啟：    pwsh -File scripts/hub-service.ps1 install
+開機/登入自啟：    {autostart}
 {tunnel_hint}健康檢查（指令版）： curl http://{shown}:{port}/api/health
 
 Hub 位址：http://{shown}:{port}
@@ -613,10 +679,10 @@ Hub 位址：http://{shown}:{port}
   ——那等於把主持人的權力交出去。
 {split_notice}
 注意：
-- Windows 防火牆需放行 TCP {port}（第一次啟動時同意跳窗，或手動加入規則）
-- 要換 token 用 scripts\\rotate-token.py（會備份舊值並講明誰要重拿），
+{firewall}
+- 要換 token 用 {rotate}（會備份舊值並講明誰要重拿），
   不要重跑這個安裝器——它現在會沿用既有的 token，不再每次換一把
-- 資料庫檔 chatroom.db 會出現在 server/ 內，備份用 scripts\\backup.py
+- 資料庫檔 chatroom.db 會出現在 server/ 內，備份用 {backup}
   （它連 attachments 一起收；直接複製 chatroom.db 會拿到缺資料的空殼）
 - 隧道要 Hub 已經跑著才有意義（它只是轉發），且**網址每次重開都會變**，
   要固定網址請照 README 改用 named tunnel

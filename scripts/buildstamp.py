@@ -12,8 +12,38 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# 在 zip 裡要帶執行位元（0o755）的副檔名。kit 是單包跨平台（同時含 .bat 與
+# .sh），解壓到 macOS／Linux 後 install.sh 等要能直接執行
+EXECUTABLE_SUFFIXES = (".sh",)
+# 這些副檔名的檔案進 zip 前一律轉成 LF：Windows 上 git autocrlf 會把工作樹
+# 檢出成 CRLF，shebang 行尾帶著 CR 的腳本在 macOS／Linux 上直接跑不起來
+LF_ONLY_SUFFIXES = (".sh",)
+
+
+def write_zip(zip_path: Path, stage: Path, base: Path) -> None:
+    """把 ``stage`` 底下的檔案打成 zip，路徑相對於 ``base``。
+
+    與逐檔 `zf.write` 的差別只有一件事：每個檔案的 Unix 權限是**明確設定**的
+    （`*.sh` 為 0o755，其餘 0o644），而且 `create_system` 標成 Unix，否則在
+    Windows 上打出來的包會被 macOS／Linux 的解壓縮程式當成沒有權限資訊。
+    """
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(stage.rglob("*")):
+            if not f.is_file():
+                continue
+            data = f.read_bytes()
+            if f.suffix in LF_ONLY_SUFFIXES:
+                data = data.replace(b"\r\n", b"\n")
+            info = zipfile.ZipInfo.from_file(f, f.relative_to(base).as_posix())
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3  # Unix：external_attr 的高 16 位才會被採用
+            mode = 0o755 if f.suffix in EXECUTABLE_SUFFIXES else 0o644
+            info.external_attr = (0o100000 | mode) << 16
+            zf.writestr(info, data)
 
 
 def stamp(repo: Path, target: Path, version: str,

@@ -30,6 +30,7 @@ class UepColors {
   static const kindCodex = Color(0xFF5A98CC);
   static const kindHuman = gold;
   static const kindOther = Color(0xFFD98A3A);
+  static const kindUep = Color(0xFFB07CD9);
 }
 
 /// 依主題切換的表面／墨色組。以 ThemeExtension 掛進 ThemeData，
